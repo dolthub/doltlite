@@ -299,6 +299,8 @@ static struct TableEntry *addTable(BtShared *pBt, Pgno iTable, u8 flags);
 static void removeTable(BtShared *pBt, Pgno iTable);
 static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode);
 static int flushMutMap(BtCursor *pCur);
+static int flushIfNeeded(BtCursor *pCur);
+static int flushAllPending(BtShared *pBt, Pgno iTable);
 static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
@@ -385,6 +387,8 @@ static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
     if( iTable==0 || p->pgnoRoot==iTable ){
       p->eState = CURSOR_FAULT;
       p->skipNext = errCode;
+      /* Discard pending mutations — tree is being rolled back */
+      if( p->pMutMap ) prollyMutMapClear(p->pMutMap);
     }
   }
 }
@@ -1020,6 +1024,9 @@ int sqlite3BtreeCommitPhaseTwo(Btree *p, int bCleanup){
   (void)bCleanup;
 
   if( p->inTrans==TRANS_WRITE ){
+    /* Flush all pending mutations before committing */
+    rc = flushAllPending(pBt, 0);
+    if( rc!=SQLITE_OK ) return rc;
     chunkStoreSetRoot(&pBt->store, &pBt->root);
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
@@ -1063,6 +1070,13 @@ int sqlite3BtreeRollback(Btree *p, int tripCode, int writeOnly){
       pBt->nCommittedTables = 0;
     }
     pBt->root = pBt->committedRoot;
+    /* Clear all pending mutations (they're being rolled back) */
+    {
+      BtCursor *pC;
+      for(pC = pBt->pCursor; pC; pC = pC->pNext){
+        if( pC->pMutMap ) prollyMutMapClear(pC->pMutMap);
+      }
+    }
     invalidateCursors(pBt, 0, tripCode ? tripCode : SQLITE_ABORT);
     chunkStoreRollback(&pBt->store);
   }
@@ -1472,6 +1486,8 @@ int sqlite3BtreeClosesWithCursor(Btree *p, BtCursor *pCur){
 
 int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
   int rc;
+  rc = flushIfNeeded(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   refreshCursorRoot(pCur);
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc==SQLITE_OK ){
@@ -1483,6 +1499,8 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 
 int sqlite3BtreeLast(BtCursor *pCur, int *pRes){
   int rc;
+  rc = flushIfNeeded(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   refreshCursorRoot(pCur);
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc==SQLITE_OK ){
@@ -1590,6 +1608,8 @@ int sqlite3BtreeTableMoveto(
   pCur->nSeek++;
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
 
+  rc = flushIfNeeded(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   refreshCursorRoot(pCur);
 
   rc = prollyCursorSeekInt(&pCur->pCur, intKey, pRes);
@@ -1620,6 +1640,8 @@ int sqlite3BtreeIndexMoveto(
 
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
 
+  rc = flushIfNeeded(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   refreshCursorRoot(pCur);
 
   /*
@@ -1779,10 +1801,11 @@ int sqlite3BtreeInsert(
 
   if( rc!=SQLITE_OK ) return rc;
 
+  /* Flush immediately */
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Reinitialize cursor on the new tree root (flush invalidates pointers) */
+  /* Reinitialize cursor on the new tree root */
   {
     struct TableEntry *pTE2 = findTable(pCur->pBt, pCur->pgnoRoot);
     if( pTE2 ){
@@ -1807,14 +1830,49 @@ int sqlite3BtreeInsert(
     int res = 0;
     rc = prollyCursorSeekBlob(&pCur->pCur,
                                (const u8*)pPayload->pKey,
-                               (int)pPayload->nKey,
-                               &res);
-    if( rc==SQLITE_OK ){
-      pCur->eState = CURSOR_VALID;
-    }
+                               (int)pPayload->nKey, &res);
+    if( rc==SQLITE_OK ) pCur->eState = CURSOR_VALID;
   }
 
   return rc;
+}
+
+/*
+** Flush pending mutations for a cursor's table if needed.
+** Called before any read operation that needs consistent tree data.
+*/
+static int flushIfNeeded(BtCursor *pCur){
+  int rc;
+  struct TableEntry *pTE;
+  if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
+    return SQLITE_OK;
+  }
+  rc = flushMutMap(pCur);
+  if( rc!=SQLITE_OK ) return rc;
+  /* Reinitialize cursor on the new tree root */
+  pTE = findTable(pCur->pBt, pCur->pgnoRoot);
+  if( pTE ){
+    prollyCursorClose(&pCur->pCur);
+    prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
+                     &pTE->root, pTE->flags);
+  }
+  pCur->eState = CURSOR_INVALID;
+  return SQLITE_OK;
+}
+
+/*
+** Flush ALL cursors' pending mutations on a given table.
+** Called before reads or when we need consistent data.
+*/
+static int flushAllPending(BtShared *pBt, Pgno iTable){
+  BtCursor *p;
+  for(p = pBt->pCursor; p; p = p->pNext){
+    if( iTable==0 || p->pgnoRoot==iTable ){
+      int rc = flushIfNeeded(p);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
 }
 
 int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
