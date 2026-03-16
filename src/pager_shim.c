@@ -15,6 +15,15 @@
 #include "pager_shim.h"
 #include "sqliteInt.h"
 
+/* Globals expected by test code */
+int sqlite3_pager_writej_count = 0;
+int sqlite3_pager_readdb_count = 0;
+int sqlite3_pager_writedb_count = 0;
+int sqlite3_opentemp_count = 0;
+
+/* Shared cache list (empty — no shared cache in prolly) */
+BtShared *SQLITE_WSD sqlite3SharedCacheList = 0;
+
 #include <string.h>
 
 /*
@@ -521,11 +530,10 @@ sqlite3_file *sqlite3_database_file_object(const char *zName){
   return 0;
 }
 
-#if !defined(NDEBUG) || defined(SQLITE_TEST)
+/* Always provide these — test code links against libsqlite3.a which may
+** not have been compiled with SQLITE_TEST, but testfixture needs them. */
 Pgno sqlite3PagerPagenumber(DbPage *pPg){ (void)pPg; return 0; }
 int sqlite3PagerIswriteable(DbPage *pPg){ (void)pPg; return 1; }
-#endif
-#ifdef SQLITE_TEST
 int *sqlite3PagerStats(Pager *pPager){
   static int aStats[11];
   (void)pPager;
@@ -533,11 +541,12 @@ int *sqlite3PagerStats(Pager *pPager){
   return aStats;
 }
 void sqlite3PagerRefdump(Pager *pPager){ (void)pPager; }
-#endif
 
-#ifdef SQLITE_DEBUG
-int sqlite3PagerRefcount(Pager *pPager){ (void)pPager; return 0; }
-#endif
+/* Undef macros from pager.h so we can define actual functions */
+#undef disable_simulated_io_errors
+#undef enable_simulated_io_errors
+void disable_simulated_io_errors(void){}
+void enable_simulated_io_errors(void){}
 
 /* -----------------------------------------------------------------------
 ** Backup API stubs (backup.c excluded from prolly build)
