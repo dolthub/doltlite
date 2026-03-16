@@ -559,18 +559,18 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
          wal.o walker.o where.o wherecode.o whereexpr.o \
          window.o
 #
-# Prolly tree engine objects (when DOLTITE_PROLLY=1)
+# Prolly tree engine objects (when DOLTLITE_PROLLY=1)
 #
 PROLLY_OBJS = prolly_hash.o prolly_arena.o prolly_node.o prolly_cache.o \
               chunk_store.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_diff.o prolly_btree.o pager_shim.o
 
-DOLTITE_PROLLY ?= 0
-ifeq ($(DOLTITE_PROLLY),1)
-  # Replace btree.o/pager.o/wal.o with prolly engine
-  LIBOBJS0 := $(filter-out btree.o pager.o wal.o,$(LIBOBJS0))
+DOLTLITE_PROLLY ?= 0
+ifeq ($(DOLTLITE_PROLLY),1)
+  # Replace btree.o/pager.o/wal.o/btmutex.o/backup.o with prolly engine
+  LIBOBJS0 := $(filter-out btree.o pager.o wal.o btmutex.o backup.o,$(LIBOBJS0))
   LIBOBJS0 += $(PROLLY_OBJS)
-  OPT_FEATURE_FLAGS += -DDOLTITE_PROLLY=1
+  OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1
 endif
 
 LIBOBJS = $(LIBOBJS0)

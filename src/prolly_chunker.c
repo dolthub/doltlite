@@ -5,7 +5,7 @@
 ** using rolling hash to determine node boundaries, and recursing upward
 ** through levels to produce a content-addressed tree.
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "prolly_chunker.h"
 #include "prolly_cursor.h"  /* For PROLLY_CURSOR_MAX_DEPTH */
@@ -414,4 +414,4 @@ void prollyChunkerFree(ProllyChunker *ch){
   ch->nLevels = 0;
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */

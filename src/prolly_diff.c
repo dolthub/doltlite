@@ -5,7 +5,7 @@
 ** trees by walking two cursors in parallel, comparing keys in sorted
 ** order.  When the root hashes are identical the diff is trivially empty.
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "prolly_diff.h"
 
@@ -274,4 +274,4 @@ diff_cleanup:
   return rc;
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */

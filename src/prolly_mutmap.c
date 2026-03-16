@@ -2,7 +2,7 @@
 ** Mutable map implementation: skip list for buffering pending edits
 ** before tree flush. Supports insert, delete, and ordered iteration.
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "prolly_mutmap.h"
 #include <string.h>
@@ -395,4 +395,4 @@ void prollyMutMapFree(ProllyMutMap *mm){
   mm->pHeader = 0;
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */

@@ -1,4 +1,4 @@
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "prolly_arena.h"
 #include <string.h>
@@ -99,4 +99,4 @@ void prollyArenaFree(ProllyArena *a){
   memset(a, 0, sizeof(*a));
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */

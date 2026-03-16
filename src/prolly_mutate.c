@@ -11,7 +11,7 @@
 ** content-addressed nodes forming the updated tree. Unchanged subtrees
 ** are structurally shared with the old tree.
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "prolly_mutate.h"
 #include <string.h>
@@ -437,4 +437,4 @@ int prollyMutateDelete(
   return rc;
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */

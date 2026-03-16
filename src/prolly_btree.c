@@ -4,7 +4,7 @@
 **
 ** Part of the Doltite storage engine.
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
 #include "btree.h"
@@ -18,6 +18,9 @@
 #include "pager_shim.h"
 
 #include <string.h>
+
+/* Forward declarations */
+static void registerDoltiteFunctions(sqlite3 *db);
 #include <assert.h>
 
 /*
@@ -450,6 +453,9 @@ int sqlite3BtreeOpen(
   p->wantToLock = 0;
   p->nBackup = 0;
   p->iBDataVersion = 1;
+
+  /* Register doltite_engine() SQL function */
+  registerDoltiteFunctions(db);
 
   *ppBtree = p;
   return SQLITE_OK;
@@ -1880,4 +1886,25 @@ void sqlite3BtreeCursorList(Btree *p){
 */
 /* Already implemented above as sqlite3BtreeGetJournalname */
 
-#endif /* DOLTITE_PROLLY */
+/*
+** Register a SQL function so users can verify the storage engine at runtime:
+**   SELECT doltite_engine();  -->  'prolly'
+*/
+static void doltiteEngineFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  (void)argc; (void)argv;
+  sqlite3_result_text(context, "prolly", -1, SQLITE_STATIC);
+}
+
+/*
+** Called from sqlite3BtreeOpen to register the function on the db connection.
+*/
+static void registerDoltiteFunctions(sqlite3 *db){
+  sqlite3_create_function(db, "doltite_engine", 0, SQLITE_UTF8, 0,
+                          doltiteEngineFunc, 0, 0);
+}
+
+#endif /* DOLTLITE_PROLLY */

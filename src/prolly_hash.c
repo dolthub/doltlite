@@ -1,4 +1,4 @@
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 /*
 ** Prolly tree hashing implementation.
 ** Content-addressed hashing (xxHash32-based) and Buzhash rolling hash splitter.
@@ -259,4 +259,4 @@ void prollyRollingHashFree(ProllyRollingHash *rh){
   }
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */

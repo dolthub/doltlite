@@ -2,7 +2,7 @@
 ** Prolly tree node: binary serialization and deserialization for prolly
 ** map nodes. Content-addressed immutable nodes for the Doltite storage engine.
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "prolly_node.h"
 #include <string.h>
@@ -479,4 +479,4 @@ void prollyNodeComputeHash(const u8 *pData, int nData, ProllyHash *pOut){
   prollyHashCompute(pData, nData, pOut);
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */

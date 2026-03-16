@@ -3,7 +3,7 @@
 ** nodes. Uses open-chaining hash table keyed by content hash with a
 ** doubly-linked LRU eviction list.
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "prolly_cache.h"
 #include <string.h>
@@ -287,4 +287,4 @@ void prollyCacheFree(ProllyCache *cache){
   memset(cache, 0, sizeof(*cache));
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */

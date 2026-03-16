@@ -1,7 +1,7 @@
 /*
 ** Pager shim implementation.
 **
-** When DOLTITE_PROLLY is defined, the real pager.c is not linked.
+** When DOLTLITE_PROLLY is defined, the real pager.c is not linked.
 ** Instead, sqlite3BtreePager() returns a PagerShim* cast to Pager*.
 ** This file implements the subset of sqlite3Pager* functions that are
 ** actually called by the 18 files which use sqlite3BtreePager().
@@ -10,7 +10,7 @@
 ** receives a Pager* which is really a PagerShim*, so every function
 ** here casts its Pager* argument to PagerShim* before accessing fields.
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "pager_shim.h"
 #include "sqliteInt.h"
@@ -297,4 +297,271 @@ sqlite3_vfs *sqlite3PagerVfs(Pager *pPager){
   return SHIM(pPager)->pVfs;
 }
 
-#endif /* DOLTITE_PROLLY */
+/* -----------------------------------------------------------------------
+** Additional pager stubs needed by external modules (vacuum, backup,
+** dbpage, dbstat, pragma, main, etc.)
+** ----------------------------------------------------------------------- */
+
+i64 sqlite3PagerJournalSizeLimit(Pager *pPager, i64 iLimit){
+  (void)pPager; (void)iLimit;
+  return -1;
+}
+
+sqlite3_backup **sqlite3PagerBackupPtr(Pager *pPager){
+  static sqlite3_backup *pDummy = 0;
+  (void)pPager;
+  return &pDummy;
+}
+
+int sqlite3PagerGet(Pager *pPager, Pgno pgno, DbPage **ppPage, int clrFlag){
+  (void)pPager; (void)pgno; (void)clrFlag;
+  *ppPage = 0;
+  return SQLITE_OK;
+}
+
+void *sqlite3PagerGetData(DbPage *pPg){
+  (void)pPg;
+  return 0;
+}
+
+void *sqlite3PagerGetExtra(DbPage *pPg){
+  (void)pPg;
+  return 0;
+}
+
+void sqlite3PagerUnref(DbPage *pPg){ (void)pPg; }
+void sqlite3PagerUnrefNotNull(DbPage *pPg){ (void)pPg; }
+void sqlite3PagerUnrefPageOne(DbPage *pPg){ (void)pPg; }
+void sqlite3PagerRef(DbPage *pPg){ (void)pPg; }
+
+int sqlite3PagerWrite(DbPage *pPg){
+  (void)pPg;
+  return SQLITE_OK;
+}
+
+void sqlite3PagerDontWrite(DbPage *pPg){ (void)pPg; }
+
+int sqlite3PagerPageRefcount(DbPage *pPg){
+  (void)pPg;
+  return 0;
+}
+
+void sqlite3PagerPagecount(Pager *pPager, int *pnPage){
+  (void)pPager;
+  if( pnPage ) *pnPage = 0;
+}
+
+int sqlite3PagerSync(Pager *pPager, const char *zSuper){
+  (void)pPager; (void)zSuper;
+  return SQLITE_OK;
+}
+
+void sqlite3PagerTruncateImage(Pager *pPager, Pgno nPage){
+  (void)pPager; (void)nPage;
+}
+
+int sqlite3PagerMemUsed(Pager *pPager){
+  (void)pPager;
+  return 0;
+}
+
+sqlite3_file *sqlite3PagerJrnlFile(Pager *pPager){
+  (void)pPager;
+  return 0;
+}
+
+void sqlite3PagerClearCache(Pager *pPager){ (void)pPager; }
+
+int sqlite3PagerCommitPhaseOne(Pager *pPager, const char *zSuper, int noSync){
+  (void)pPager; (void)zSuper; (void)noSync;
+  return SQLITE_OK;
+}
+
+int sqlite3PagerCommitPhaseTwo(Pager *pPager){
+  (void)pPager;
+  return SQLITE_OK;
+}
+
+void sqlite3PagerSetBusyHandler(Pager *pPager, int(*xBusy)(void*), void *pCtx){
+  (void)pPager; (void)xBusy; (void)pCtx;
+}
+
+int sqlite3PagerSetPagesize(Pager *pPager, u32 *pPageSize, int nReserve){
+  (void)pPager; (void)pPageSize; (void)nReserve;
+  return SQLITE_OK;
+}
+
+Pgno sqlite3PagerMaxPageCount(Pager *pPager, Pgno mxPage){
+  (void)pPager; (void)mxPage;
+  return 0xFFFFFFFF;
+}
+
+void sqlite3PagerSetCachesize(Pager *pPager, int mxPage){
+  (void)pPager; (void)mxPage;
+}
+
+int sqlite3PagerSetSpillsize(Pager *pPager, int mxPage){
+  (void)pPager; (void)mxPage;
+  return 0;
+}
+
+void sqlite3PagerSetMmapLimit(Pager *pPager, sqlite3_int64 szMmap){
+  (void)pPager; (void)szMmap;
+}
+
+void sqlite3PagerSetFlags(Pager *pPager, unsigned flags){
+  (void)pPager; (void)flags;
+}
+
+int sqlite3PagerBegin(Pager *pPager, int exFlag, int subjInMemory){
+  (void)pPager; (void)exFlag; (void)subjInMemory;
+  return SQLITE_OK;
+}
+
+int sqlite3PagerRollback(Pager *pPager){
+  (void)pPager;
+  return SQLITE_OK;
+}
+
+int sqlite3PagerOpenSavepoint(Pager *pPager, int n){
+  (void)pPager; (void)n;
+  return SQLITE_OK;
+}
+
+int sqlite3PagerSavepoint(Pager *pPager, int op, int iSavepoint){
+  (void)pPager; (void)op; (void)iSavepoint;
+  return SQLITE_OK;
+}
+
+int sqlite3PagerSharedLock(Pager *pPager){
+  (void)pPager;
+  return SQLITE_OK;
+}
+
+int sqlite3PagerOpen(
+  sqlite3_vfs *pVfs,
+  Pager **ppPager,
+  const char *zFilename,
+  int nExtra,
+  int flags,
+  int vfsFlags,
+  void(*xReinit)(DbPage*)
+){
+  (void)pVfs; (void)zFilename; (void)nExtra;
+  (void)flags; (void)vfsFlags; (void)xReinit;
+  *ppPager = 0;
+  return SQLITE_OK;
+}
+
+int sqlite3PagerClose(Pager *pPager, sqlite3 *db){
+  (void)pPager; (void)db;
+  return SQLITE_OK;
+}
+
+int sqlite3PagerReadFileheader(Pager *pPager, int n, unsigned char *pDest){
+  (void)pPager;
+  memset(pDest, 0, n);
+  return SQLITE_OK;
+}
+
+int sqlite3PagerMovepage(Pager *pPager, DbPage *pPg, Pgno pgno, int isCommit){
+  (void)pPager; (void)pPg; (void)pgno; (void)isCommit;
+  return SQLITE_OK;
+}
+
+void *sqlite3PagerTempSpace(Pager *pPager){
+  static u8 aTmpSpace[65536];
+  (void)pPager;
+  return aTmpSpace;
+}
+
+void sqlite3PagerRekey(DbPage *pPg, Pgno pgno, u16 flags){
+  (void)pPg; (void)pgno; (void)flags;
+}
+
+DbPage *sqlite3PagerLookup(Pager *pPager, Pgno pgno){
+  (void)pPager; (void)pgno;
+  return 0;
+}
+
+int sqlite3SectorSize(sqlite3_file *pFile){
+  (void)pFile;
+  return 4096;
+}
+
+#ifndef SQLITE_OMIT_WAL
+int sqlite3PagerCheckpoint(Pager *pPager, sqlite3 *db, int eMode, int *pnLog, int *pnCkpt){
+  (void)pPager; (void)db; (void)eMode;
+  if( pnLog ) *pnLog = 0;
+  if( pnCkpt ) *pnCkpt = 0;
+  return SQLITE_OK;
+}
+int sqlite3PagerWalSupported(Pager *pPager){ (void)pPager; return 0; }
+int sqlite3PagerWalCallback(Pager *pPager){ (void)pPager; return SQLITE_OK; }
+int sqlite3PagerOpenWal(Pager *pPager, int *pisOpen){
+  (void)pPager;
+  if( pisOpen ) *pisOpen = 0;
+  return SQLITE_OK;
+}
+int sqlite3PagerCloseWal(Pager *pPager, sqlite3 *db){
+  (void)pPager; (void)db;
+  return SQLITE_OK;
+}
+#endif
+
+/* shared cache stub */
+int sqlite3_enable_shared_cache(int enable){
+  (void)enable;
+  return SQLITE_OK;
+}
+
+/* database_file_object stub */
+sqlite3_file *sqlite3_database_file_object(const char *zName){
+  (void)zName;
+  return 0;
+}
+
+#if !defined(NDEBUG) || defined(SQLITE_TEST)
+Pgno sqlite3PagerPagenumber(DbPage *pPg){ (void)pPg; return 0; }
+int sqlite3PagerIswriteable(DbPage *pPg){ (void)pPg; return 1; }
+#endif
+#ifdef SQLITE_TEST
+int *sqlite3PagerStats(Pager *pPager){
+  static int aStats[11];
+  (void)pPager;
+  memset(aStats, 0, sizeof(aStats));
+  return aStats;
+}
+void sqlite3PagerRefdump(Pager *pPager){ (void)pPager; }
+#endif
+
+#ifdef SQLITE_DEBUG
+int sqlite3PagerRefcount(Pager *pPager){ (void)pPager; return 0; }
+#endif
+
+/* -----------------------------------------------------------------------
+** Backup API stubs (backup.c excluded from prolly build)
+** ----------------------------------------------------------------------- */
+sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
+                                     sqlite3 *pSrc, const char *zSrcDb){
+  (void)pDest; (void)zDestDb; (void)pSrc; (void)zSrcDb;
+  return 0;
+}
+int sqlite3_backup_step(sqlite3_backup *p, int nPage){
+  (void)p; (void)nPage;
+  return SQLITE_DONE;
+}
+int sqlite3_backup_finish(sqlite3_backup *p){
+  (void)p;
+  return SQLITE_OK;
+}
+int sqlite3_backup_remaining(sqlite3_backup *p){
+  (void)p;
+  return 0;
+}
+int sqlite3_backup_pagecount(sqlite3_backup *p){
+  (void)p;
+  return 0;
+}
+
+#endif /* DOLTLITE_PROLLY */

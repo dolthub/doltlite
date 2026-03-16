@@ -18,7 +18,7 @@
 **   3. rename() temp over the original (atomic on POSIX)
 **   4. Reload in-memory state
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "chunk_store.h"
 #include "prolly_hash.h"
@@ -888,4 +888,4 @@ const char *chunkStoreFilename(ChunkStore *cs){
   return cs->zFilename;
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */

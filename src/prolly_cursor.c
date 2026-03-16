@@ -2,7 +2,7 @@
 ** Implementation of hierarchical cursor for prolly tree traversal.
 ** See prolly_cursor.h for interface documentation.
 */
-#ifdef DOLTITE_PROLLY
+#ifdef DOLTLITE_PROLLY
 
 #include "prolly_cursor.h"
 #include <string.h>
@@ -580,4 +580,4 @@ void prollyCursorClose(ProllyCursor *cur){
   cur->eState = PROLLY_CURSOR_INVALID;
 }
 
-#endif /* DOLTITE_PROLLY */
+#endif /* DOLTLITE_PROLLY */
