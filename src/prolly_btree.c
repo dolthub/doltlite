@@ -1412,6 +1412,9 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
   pBt = pCur->pBt;
   if( !pBt ) return SQLITE_OK;
 
+  /* Flush any pending mutations before closing */
+  flushIfNeeded(pCur);
+
   prollyCursorClose(&pCur->pCur);
 
   if( pCur->pMutMap ){
@@ -1801,11 +1804,20 @@ int sqlite3BtreeInsert(
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Flush immediately */
+  /* Defer flush for INTKEY data tables (bulk insert optimization).
+  ** For BLOBKEY (index) and master table (schema), flush immediately
+  ** because index reads and schema loading need consistent data.
+  ** Also flush if SAVEPOSITION is requested (UPDATE needs cursor valid). */
+  if( pCur->curIntKey && pCur->pgnoRoot > 1
+   && !(flags & BTREE_SAVEPOSITION) ){
+    /* Deferred: cursor is not positioned, mark as requiring seek */
+    pCur->eState = CURSOR_INVALID;
+    return SQLITE_OK;
+  }
+
+  /* Immediate flush for BLOBKEY and master table */
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
-
-  /* Reinitialize cursor on the new tree root */
   {
     struct TableEntry *pTE2 = findTable(pCur->pBt, pCur->pgnoRoot);
     if( pTE2 ){
@@ -1814,8 +1826,6 @@ int sqlite3BtreeInsert(
                        &pTE2->root, pTE2->flags);
     }
   }
-
-  /* Reposition cursor at the inserted entry */
   if( pCur->curIntKey ){
     int res = 0;
     rc = prollyCursorSeekInt(&pCur->pCur, pPayload->nKey, &res);
@@ -1844,19 +1854,39 @@ int sqlite3BtreeInsert(
 static int flushIfNeeded(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
-  if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
-    return SQLITE_OK;
+  int anyFlushed = 0;
+
+  /* First flush THIS cursor's pending mutations */
+  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    rc = flushMutMap(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+    anyFlushed = 1;
   }
-  rc = flushMutMap(pCur);
-  if( rc!=SQLITE_OK ) return rc;
-  /* Reinitialize cursor on the new tree root */
-  pTE = findTable(pCur->pBt, pCur->pgnoRoot);
-  if( pTE ){
-    prollyCursorClose(&pCur->pCur);
-    prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
-                     &pTE->root, pTE->flags);
+
+  /* Also flush any OTHER cursor on the same table with pending mutations */
+  {
+    BtCursor *p;
+    for(p = pCur->pBt->pCursor; p; p = p->pNext){
+      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
+       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
+        rc = flushMutMap(p);
+        if( rc!=SQLITE_OK ) return rc;
+        p->eState = CURSOR_INVALID;
+        anyFlushed = 1;
+      }
+    }
   }
-  pCur->eState = CURSOR_INVALID;
+
+  if( anyFlushed ){
+    /* Reinitialize this cursor on the updated tree root */
+    pTE = findTable(pCur->pBt, pCur->pgnoRoot);
+    if( pTE ){
+      prollyCursorClose(&pCur->pCur);
+      prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
+                       &pTE->root, pTE->flags);
+    }
+    pCur->eState = CURSOR_INVALID;
+  }
   return SQLITE_OK;
 }
 
