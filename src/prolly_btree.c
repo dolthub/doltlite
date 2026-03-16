@@ -578,9 +578,9 @@ Pgno sqlite3BtreeMaxPageCount(Btree *p, Pgno mxPage){
 }
 
 Pgno sqlite3BtreeLastPage(Btree *p){
-  (void)p;
-  /* Return a dummy value; prolly trees don't have page numbers */
-  return 1;
+  /* Return at least iNextTable so rootpage validation in prepare.c passes.
+  ** SQLite checks that rootpage <= LastPage when loading the schema. */
+  return p->pBt->iNextTable + 1000;
 }
 
 int sqlite3BtreeSecureDelete(Btree *p, int newFlag){
