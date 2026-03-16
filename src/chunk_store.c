@@ -563,10 +563,19 @@ int chunkStoreGet(
     return SQLITE_NOTFOUND;
   }
 
-  /* Read from file */
+  /* For in-memory stores, chunks in the index may reference pWriteBuf */
   if( cs->pFile == 0 ){
-    /* File not open (should not happen for committed data) */
-    return SQLITE_INTERNAL;
+    ChunkIndexEntry *e = &cs->aIndex[idx];
+    if( cs->pWriteBuf && e->offset >= 0
+     && (e->offset + 4 + e->size) <= cs->nWriteBuf ){
+      u8 *pCopy = (u8 *)sqlite3_malloc(e->size);
+      if( pCopy == 0 ) return SQLITE_NOMEM;
+      memcpy(pCopy, cs->pWriteBuf + e->offset + 4, e->size);
+      *ppData = pCopy;
+      *pnData = e->size;
+      return SQLITE_OK;
+    }
+    return SQLITE_NOTFOUND;
   }
 
   {
@@ -687,6 +696,28 @@ int chunkStoreCommit(ChunkStore *cs){
   i64 pendingFileBase;  /* file offset where pending chunks start */
 
   if( cs->readOnly ) return SQLITE_READONLY;
+
+  /* For in-memory databases (empty filename or ":memory:"), skip file I/O.
+  ** Just merge pending chunks into the in-memory index and clear the write
+  ** buffer. Chunks remain accessible from the aIndex + write buffer. */
+  if( cs->zFilename==0 || cs->zFilename[0]=='\0'
+   || strcmp(cs->zFilename, ":memory:")==0 ){
+    if( cs->nPending > 0 ){
+      ChunkIndexEntry *aMerged = 0;
+      int nMerged = 0;
+      int rc2 = csMergeIndex(cs, &aMerged, &nMerged);
+      if( rc2!=SQLITE_OK ) return rc2;
+      sqlite3_free(cs->aIndex);
+      cs->aIndex = aMerged;
+      cs->nIndex = nMerged;
+      /* Keep pWriteBuf — chunks are still referenced by aIndex offsets.
+      ** Mark pending as committed by clearing the pending count but not
+      ** the buffer itself. */
+      cs->nPending = 0;
+    }
+    return SQLITE_OK;
+  }
+
   if( cs->nPending == 0 && cs->pFile != 0 ){
     /* Nothing to write except possibly an updated root hash.
     ** We still need to rewrite the manifest if root changed. For

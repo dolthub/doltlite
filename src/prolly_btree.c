@@ -1,6 +1,39 @@
 /*
+** 2024-01-01
+**
+** The author disclaims copyright to this source code.  In place of
+** a legal notice, here is a blessing:
+**
+**    May you do good and not evil.
+**    May you find forgiveness for yourself and forgive others.
+**    May you share freely, never taking more than you give.
+**
+*************************************************************************
+**
 ** Prolly tree implementation of the btree.h API.
-** This replaces SQLite's B-tree with content-addressed prolly trees.
+**
+** This file replaces SQLite's traditional B-tree page-based storage with
+** content-addressed prolly trees. Instead of managing database pages via
+** the Pager, we store key-value entries in a prolly tree structure backed
+** by a ChunkStore.
+**
+** Architecture overview:
+**
+**   Btree       -- Per-connection handle (one per attached database)
+**   BtShared    -- Shared state: chunk store, cache, table registry
+**   BtCursor    -- Cursor over a single table's prolly tree
+**
+** Each "table" in the SQLite schema corresponds to a separate prolly tree
+** identified by a ProllyHash root. The BtShared.aTables registry maps
+** table numbers (Pgno) to their current root hashes.
+**
+** Write operations buffer edits in a ProllyMutMap (a skip list), then
+** flush them by merging with the existing tree to produce a new root.
+** This is the copy-on-write / structural sharing model used by Dolt.
+**
+** Transactions are lightweight: beginning a write transaction snapshots
+** the current root hash. Commit writes pending chunks and updates the
+** manifest. Rollback restores the snapshot.
 **
 ** Part of the Doltite storage engine.
 */
@@ -18,13 +51,19 @@
 #include "pager_shim.h"
 
 #include <string.h>
-
-/* Forward declarations */
-static void registerDoltiteFunctions(sqlite3 *db);
 #include <assert.h>
 
+/* Forward declaration for runtime engine detection */
+static void registerDoltiteFunctions(sqlite3 *db);
+
+/* --------------------------------------------------------------------------
+** Constants and macros
+** -------------------------------------------------------------------------- */
+
 /*
-** Transaction states
+** Transaction states.  These must match the TRANS_* values used by
+** the rest of the SQLite codebase (defined in sqliteInt.h for the
+** standard btree, but we define them here for the prolly tree build).
 */
 #ifndef TRANS_NONE
 #define TRANS_NONE  0
@@ -33,7 +72,23 @@ static void registerDoltiteFunctions(sqlite3 *db);
 #endif
 
 /*
-** Cursor states
+** Savepoint operation codes.  These are the values passed as the first
+** argument to sqlite3BtreeSavepoint().
+*/
+#ifndef SAVEPOINT_BEGIN
+#define SAVEPOINT_BEGIN    0
+#define SAVEPOINT_RELEASE  1
+#define SAVEPOINT_ROLLBACK 2
+#endif
+
+/*
+** Cursor states.  A cursor is in one of these states at all times.
+**
+** CURSOR_VALID:       Cursor points to a valid entry.
+** CURSOR_INVALID:     Cursor does not point to a valid entry.
+** CURSOR_SKIPNEXT:    Next call to Next or Previous should be skipped.
+** CURSOR_REQUIRESEEK: Cursor position was saved and needs to be restored.
+** CURSOR_FAULT:       An error has occurred; cursor is unusable.
 */
 #define CURSOR_VALID       0
 #define CURSOR_INVALID     1
@@ -42,111 +97,184 @@ static void registerDoltiteFunctions(sqlite3 *db);
 #define CURSOR_FAULT       4
 
 /*
-** Cursor flags
+** Cursor flags.  These are stored in BtCursor.curFlags.
 */
-#define BTCF_WriteFlag  0x01
-#define BTCF_ValidNKey  0x02
-#define BTCF_ValidOvfl  0x04
-#define BTCF_AtLast     0x08
-#define BTCF_Incrblob   0x10
-#define BTCF_Multiple   0x20
-#define BTCF_Pinned     0x40
+#define BTCF_WriteFlag  0x01   /* Cursor is open for writing */
+#define BTCF_ValidNKey  0x02   /* Cache of BtCursor.nKey is valid */
+#define BTCF_ValidOvfl  0x04   /* Overflow page cache is valid */
+#define BTCF_AtLast     0x08   /* Cursor is pointing at the last entry */
+#define BTCF_Incrblob   0x10   /* This is an incremental blob cursor */
+#define BTCF_Multiple   0x20   /* Multiple cursors on same btree */
+#define BTCF_Pinned     0x40   /* Cursor is pinned (cannot be moved by save) */
 
 /*
-** BtShared flags
+** BtShared flags (stored in BtShared.btsFlags).
 */
-#define BTS_READ_ONLY       0x0001
-#define BTS_INITIALLY_EMPTY 0x0010
+#define BTS_READ_ONLY       0x0001  /* Database is read-only */
+#define BTS_PAGESIZE_FIXED  0x0002  /* Page size cannot be changed */
+#define BTS_SECURE_DELETE   0x0004  /* Secure delete is enabled */
+#define BTS_OVERWRITE       0x0008  /* Overwrite deleted content with zeros */
+#define BTS_INITIALLY_EMPTY 0x0010  /* Database was empty at open time */
+#define BTS_NO_WAL          0x0020  /* WAL mode is not used */
 
 /*
-** BtLock structure (unused but needed for struct compat)
+** BtLock structure.  Not used by prolly trees (no shared cache) but
+** needed for struct compatibility with code that references Btree.lock.
 */
 typedef struct BtLock BtLock;
 struct BtLock {
-  Btree *pBtree;
-  Pgno iTable;
-  u8 eLock;
-  BtLock *pNext;
+  Btree *pBtree;        /* Btree handle holding this lock */
+  Pgno iTable;           /* Root page of the table being locked */
+  u8 eLock;              /* READ_LOCK or WRITE_LOCK */
+  BtLock *pNext;         /* Next in linked list of locks */
 };
 
-/*
-** Table entry in BtShared table registry
-*/
+/* Default cache capacity (number of nodes) */
+#define PROLLY_DEFAULT_CACHE_SIZE 1024
+
+/* Default page size for compatibility with SQLite callers */
+#define PROLLY_DEFAULT_PAGE_SIZE 4096
+
+/* Maximum record size (1 GB) */
+#define PROLLY_MAX_RECORD_SIZE ((sqlite3_int64)(1024*1024*1024))
+
+/* The empty hash (all zeros) represents an empty tree */
+static const ProllyHash emptyHash = {{0}};
+
+/* --------------------------------------------------------------------------
+** Table entry in BtShared table registry.
+**
+** Each entry maps a table number (Pgno, used as a logical identifier)
+** to its current prolly tree root hash and table flags.
+** -------------------------------------------------------------------------- */
 struct TableEntry {
-  Pgno iTable;
-  ProllyHash root;
-  u8 flags;             /* BTREE_INTKEY or BTREE_BLOBKEY */
+  Pgno iTable;           /* Logical table number (like SQLite's root page) */
+  ProllyHash root;       /* Current root hash of this table's prolly tree */
+  u8 flags;              /* BTREE_INTKEY or BTREE_BLOBKEY */
 };
 
+/* --------------------------------------------------------------------------
+** Core structure definitions.
+**
+** These are the prolly-tree versions of SQLite's Btree, BtShared, and
+** BtCursor structures. They are forward-declared in btree.h and fully
+** defined here.
+** -------------------------------------------------------------------------- */
+
 /*
-** The prolly-tree version of core structs
+** BtShared: Shared state for a single database file.
+** Contains the chunk store, node cache, table registry, and meta values.
+**
+** In standard SQLite, BtShared can be shared among multiple connections
+** (shared cache mode). In the prolly tree implementation, shared cache
+** is not supported, so there is always a 1:1 relationship between
+** Btree and BtShared.
 */
 struct BtShared {
-  ChunkStore store;       /* The chunk store */
-  ProllyCache cache;      /* Node cache */
-  ProllyHash root;        /* Current transaction root */
-  ProllyHash committedRoot; /* Last committed root */
+  ChunkStore store;          /* Content-addressed chunk store */
+  ProllyCache cache;         /* LRU cache for deserialized prolly nodes */
+  ProllyHash root;           /* Current root hash (may include uncommitted) */
+  ProllyHash committedRoot;  /* Root hash at last commit (for rollback) */
 
-  /* Table registry: maps table number (Pgno) to tree root hash */
+  /*
+  ** Table registry: maps table number (Pgno) to prolly tree root hash.
+  ** Table 1 is always the master schema table (sqlite_master).
+  */
   struct TableEntry *aTables;
-  int nTables;
-  int nTablesAlloc;
-  Pgno iNextTable;        /* Next table number to assign */
+  int nTables;               /* Number of tables in registry */
+  int nTablesAlloc;          /* Allocated capacity of aTables */
+  Pgno iNextTable;           /* Next table number to assign on CREATE */
 
-  /* Meta values (SQLITE_N_BTREE_META = 16) */
+  /* Meta values (SQLITE_N_BTREE_META = 16).
+  ** These correspond to the 16 meta-value slots in a standard SQLite
+  ** database header (bytes 36-99). */
   u32 aMeta[16];
 
-  /* Schema */
-  void *pSchema;
-  void (*xFreeSchema)(void*);
+  /* Schema management */
+  void *pSchema;             /* Pointer to Schema object */
+  void (*xFreeSchema)(void*); /* Destructor for pSchema */
 
-  /* Pager shim */
+  /* Pager shim: provides the Pager* interface for code that calls
+  ** sqlite3BtreePager() and then uses the result. */
   PagerShim *pPagerShim;
 
-  sqlite3 *db;
-  BtCursor *pCursor;      /* List of open cursors */
-  u8 openFlags;
-  u8 inTransaction;       /* TRANS_NONE/READ/WRITE */
-  u16 btsFlags;
-  u32 pageSize;           /* Dummy page size for compat (4096) */
-  int nRef;               /* Reference count */
+  sqlite3 *db;              /* Database connection (for error reporting) */
+  BtCursor *pCursor;        /* Linked list of all open cursors */
+  u8 openFlags;             /* Flags from sqlite3BtreeOpen() */
+  u8 inTransaction;         /* TRANS_NONE, TRANS_READ, or TRANS_WRITE */
+  u16 btsFlags;             /* BTS_* flags */
+  u32 pageSize;             /* Dummy page size for compatibility (4096) */
+  int nRef;                 /* Reference count from Btree handles */
 
-  /* Savepoint stack */
-  ProllyHash *aSavepoint;  /* Array of root snapshots */
-  int nSavepoint;
-  int nSavepointAlloc;
+  /*
+  ** Savepoint stack.  Each savepoint is a snapshot of the root hash
+  ** at the time the savepoint was created.  Rolling back to a savepoint
+  ** restores the root to that snapshot.
+  */
+  ProllyHash *aSavepoint;   /* Array of root hash snapshots */
+  int nSavepoint;            /* Number of active savepoints */
+  int nSavepointAlloc;       /* Allocated capacity of aSavepoint */
+
+  /*
+  ** Saved table registry for savepoints.  When we create a savepoint
+  ** we also need to save the table registry state so we can fully
+  ** rollback table creates/drops.
+  */
+  struct SavepointTableState {
+    struct TableEntry *aTables;
+    int nTables;
+    Pgno iNextTable;
+  } *aSavepointTables;
+  int nSavepointTablesAlloc;
+
+  /* Committed table registry for transaction rollback */
+  struct TableEntry *aCommittedTables;
+  int nCommittedTables;
+  Pgno iCommittedNextTable;
 };
 
+/*
+** Btree: Per-connection handle for an open database.
+*/
 struct Btree {
-  sqlite3 *db;
-  BtShared *pBt;
-  u8 inTrans;            /* TRANS_NONE, TRANS_READ, TRANS_WRITE */
-  u8 sharable;           /* Always 0 for prolly tree (no shared cache) */
-  int wantToLock;
-  int nBackup;
-  u32 iBDataVersion;
-  Btree *pNext;          /* List linkage for db->aDb */
+  sqlite3 *db;              /* The database connection holding this btree */
+  BtShared *pBt;            /* The underlying shared state */
+  u8 inTrans;               /* TRANS_NONE, TRANS_READ, TRANS_WRITE */
+  u8 sharable;              /* Always 0 for prolly tree (no shared cache) */
+  int wantToLock;            /* Number of nested calls to sqlite3BtreeEnter() */
+  int nBackup;               /* Number of backup operations reading this btree */
+  u32 iBDataVersion;         /* Combines with Pager iDataVersion */
+  Btree *pNext;              /* List linkage for db->aDb */
   Btree *pPrev;
-  BtLock lock;           /* Unused but needed for struct compat */
-  u64 nSeek;             /* Debug seek counter */
+  BtLock lock;               /* Unused but needed for struct compat */
+  u64 nSeek;                 /* Debug: count of seek operations */
 };
 
+/*
+** BtCursor: Cursor for iterating over entries in a single table.
+**
+** Each cursor references a specific table by pgnoRoot (the logical
+** table number) and maintains a ProllyCursor for tree traversal.
+** Write cursors also have a ProllyMutMap for buffering edits.
+*/
 struct BtCursor {
-  u8 eState;             /* CURSOR_VALID, CURSOR_INVALID, etc. */
-  u8 curFlags;
-  u8 curPagerFlags;
-  u8 hints;
-  int skipNext;
-  Btree *pBtree;
-  BtShared *pBt;
-  BtCursor *pNext;       /* Linked list of cursors */
-  Pgno pgnoRoot;         /* Table number this cursor is on */
-  u8 curIntKey;          /* True if INTKEY table */
-  struct KeyInfo *pKeyInfo;
+  u8 eState;                 /* CURSOR_VALID, CURSOR_INVALID, etc. */
+  u8 curFlags;               /* BTCF_* flags */
+  u8 curPagerFlags;          /* Copy of BtShared.btsFlags for cursor */
+  u8 hints;                  /* Hint flags from CursorHintFlags */
+  int skipNext;              /* Skip direction for CURSOR_SKIPNEXT, or error */
+  Btree *pBtree;             /* The Btree handle that opened this cursor */
+  BtShared *pBt;             /* The shared state */
+  BtCursor *pNext;           /* Linked list of all cursors on pBt */
+  Pgno pgnoRoot;             /* Table number (logical root page) */
+  u8 curIntKey;              /* True if this is an INTKEY table */
+  struct KeyInfo *pKeyInfo;  /* Key comparison info for index btrees */
 
-  /* Prolly cursor */
-  ProllyCursor pCur;     /* The actual tree cursor */
-  ProllyMutMap *pMutMap; /* Pending writes for this table (shared) */
+  /* Prolly cursor: actual tree traversal state */
+  ProllyCursor pCur;
+
+  /* Pending writes for this table */
+  ProllyMutMap *pMutMap;
 
   /* Cached payload */
   u8 *pCachedPayload;
@@ -156,29 +284,35 @@ struct BtCursor {
   /* Pinned state */
   u8 isPinned;
 
-  /* Save/restore */
-  i64 nKey;              /* Saved key for cursor restore */
-  void *pKey;            /* Saved blob key */
+  /* Save/restore state */
+  i64 nKey;                  /* Saved integer key or blob key length */
+  void *pKey;                /* Saved blob key (malloc'd) */
+  u64 nSeek;                 /* Debug seek counter (per-cursor) */
 };
 
-/* Default cache capacity */
-#define PROLLY_DEFAULT_CACHE_SIZE 1024
-
-/* Default page size for compatibility */
-#define PROLLY_DEFAULT_PAGE_SIZE 4096
-
-/* Max record size for prolly tree (1 GB) */
-#define PROLLY_MAX_RECORD_SIZE (1024*1024*1024)
-
-/* Empty hash constant */
-static const ProllyHash emptyHash = {{0}};
+/* --------------------------------------------------------------------------
+** Internal helper function prototypes
+** -------------------------------------------------------------------------- */
+static struct TableEntry *findTable(BtShared *pBt, Pgno iTable);
+static struct TableEntry *addTable(BtShared *pBt, Pgno iTable, u8 flags);
+static void removeTable(BtShared *pBt, Pgno iTable);
+static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode);
+static int flushMutMap(BtCursor *pCur);
+static int ensureMutMap(BtCursor *pCur);
+static int saveCursorPosition(BtCursor *pCur);
+static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
+static int pushSavepoint(BtShared *pBt);
+static void refreshCursorRoot(BtCursor *pCur);
+static int countTreeEntries(BtShared *pBt, Pgno iTable, i64 *pCount);
+static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept);
 
 /* --------------------------------------------------------------------------
-** Internal helpers
+** Internal helper implementations
 ** -------------------------------------------------------------------------- */
 
 /*
-** Find a table entry by table number. Returns NULL if not found.
+** Find a table entry by table number in the BtShared table registry.
+** Returns a pointer to the entry, or NULL if not found.
 */
 static struct TableEntry *findTable(BtShared *pBt, Pgno iTable){
   int i;
@@ -191,37 +325,49 @@ static struct TableEntry *findTable(BtShared *pBt, Pgno iTable){
 }
 
 /*
-** Add a new table entry. Returns pointer to the new entry or NULL on OOM.
+** Add a new table entry to the registry.  The new table starts with
+** an empty root hash (all zeros), meaning an empty tree.
+** Returns a pointer to the new entry, or NULL on allocation failure.
 */
 static struct TableEntry *addTable(BtShared *pBt, Pgno iTable, u8 flags){
   struct TableEntry *pEntry;
+
+  /* Check if table already exists */
+  pEntry = findTable(pBt, iTable);
+  if( pEntry ){
+    pEntry->flags = flags;
+    return pEntry;
+  }
+
+  /* Grow the array if needed */
   if( pBt->nTables>=pBt->nTablesAlloc ){
     int nNew = pBt->nTablesAlloc ? pBt->nTablesAlloc*2 : 16;
-    struct TableEntry *aNew = sqlite3_realloc(pBt->aTables,
-                                               nNew*sizeof(struct TableEntry));
+    struct TableEntry *aNew;
+    aNew = sqlite3_realloc(pBt->aTables, nNew*(int)sizeof(struct TableEntry));
     if( !aNew ) return 0;
     pBt->aTables = aNew;
     pBt->nTablesAlloc = nNew;
   }
-  pEntry = &pBt->aTables[pBt->nTables++];
+
+  pEntry = &pBt->aTables[pBt->nTables];
   memset(pEntry, 0, sizeof(*pEntry));
   pEntry->iTable = iTable;
   pEntry->flags = flags;
-  /* root hash is zero (empty tree) */
+  pBt->nTables++;
+
   return pEntry;
 }
 
 /*
-** Remove a table entry by table number.
+** Remove a table entry from the registry by table number.
 */
 static void removeTable(BtShared *pBt, Pgno iTable){
   int i;
   for(i=0; i<pBt->nTables; i++){
     if( pBt->aTables[i].iTable==iTable ){
-      /* Shift remaining entries down */
       if( i<pBt->nTables-1 ){
         memmove(&pBt->aTables[i], &pBt->aTables[i+1],
-                (pBt->nTables-i-1)*sizeof(struct TableEntry));
+                (pBt->nTables-i-1)*(int)sizeof(struct TableEntry));
       }
       pBt->nTables--;
       return;
@@ -230,7 +376,7 @@ static void removeTable(BtShared *pBt, Pgno iTable){
 }
 
 /*
-** Invalidate all cursors on a given table, or all cursors if iTable==0.
+** Invalidate all cursors on a given table (or all if iTable==0).
 */
 static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
   BtCursor *p;
@@ -243,8 +389,18 @@ static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
 }
 
 /*
-** Flush pending mutations from a cursor's MutMap into the table tree.
-** Updates the table's root hash.
+** Refresh a cursor's prolly cursor root from the table registry.
+*/
+static void refreshCursorRoot(BtCursor *pCur){
+  struct TableEntry *pTE = findTable(pCur->pBt, pCur->pgnoRoot);
+  if( pTE ){
+    pCur->pCur.root = pTE->root;
+  }
+}
+
+/*
+** Flush pending mutations from a cursor's MutMap into the table's
+** prolly tree.  Produces a new root hash and updates the table registry.
 */
 static int flushMutMap(BtCursor *pCur){
   int rc;
@@ -256,7 +412,9 @@ static int flushMutMap(BtCursor *pCur){
   }
 
   pTE = findTable(pCur->pBt, pCur->pgnoRoot);
-  if( !pTE ) return SQLITE_INTERNAL;
+  if( !pTE ){
+    return SQLITE_INTERNAL;
+  }
 
   memset(&mut, 0, sizeof(mut));
   mut.pStore = &pCur->pBt->store;
@@ -266,96 +424,230 @@ static int flushMutMap(BtCursor *pCur){
   mut.flags = pTE->flags;
 
   rc = prollyMutateFlush(&mut);
-  if( rc==SQLITE_OK ){
-    pTE->root = mut.newRoot;
-    /* Update cursor's root to match new tree */
-    pCur->pCur.root = mut.newRoot;
-    /* Clear the edit map */
-    prollyMutMapClear(pCur->pMutMap);
+  if( rc!=SQLITE_OK ){
+    return rc;
   }
-  return rc;
+
+  pTE->root = mut.newRoot;
+  pCur->pCur.root = mut.newRoot;
+  prollyMutMapClear(pCur->pMutMap);
+
+  return SQLITE_OK;
 }
 
 /*
-** Ensure the cursor has a MutMap allocated.
+** Ensure the cursor has a MutMap allocated for buffering writes.
 */
 static int ensureMutMap(BtCursor *pCur){
-  if( pCur->pMutMap ) return SQLITE_OK;
+  int rc;
+  if( pCur->pMutMap ){
+    return SQLITE_OK;
+  }
   pCur->pMutMap = sqlite3_malloc(sizeof(ProllyMutMap));
-  if( !pCur->pMutMap ) return SQLITE_NOMEM;
-  return prollyMutMapInit(pCur->pMutMap, pCur->curIntKey);
+  if( !pCur->pMutMap ){
+    return SQLITE_NOMEM;
+  }
+  rc = prollyMutMapInit(pCur->pMutMap, pCur->curIntKey);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pCur->pMutMap);
+    pCur->pMutMap = 0;
+    return rc;
+  }
+  return SQLITE_OK;
 }
 
 /*
-** Save cursor position if the cursor is valid.
+** Save the current cursor position so it can be restored later.
 */
 static int saveCursorPosition(BtCursor *pCur){
   int rc = SQLITE_OK;
-  if( pCur->eState==CURSOR_VALID ){
-    rc = prollyCursorSave(&pCur->pCur);
-    if( rc==SQLITE_OK ){
-      if( pCur->curIntKey ){
-        pCur->nKey = prollyCursorIntKey(&pCur->pCur);
-      } else {
-        const u8 *pKey;
-        int nKey;
-        prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-        if( nKey>0 ){
-          pCur->pKey = sqlite3_malloc(nKey);
-          if( !pCur->pKey ) return SQLITE_NOMEM;
-          memcpy(pCur->pKey, pKey, nKey);
-          pCur->nKey = nKey;
-        }
+
+  if( pCur->eState!=CURSOR_VALID ){
+    return SQLITE_OK;
+  }
+  if( pCur->isPinned ){
+    return SQLITE_OK;
+  }
+
+  rc = prollyCursorSave(&pCur->pCur);
+  if( rc!=SQLITE_OK ){
+    return rc;
+  }
+
+  if( pCur->curIntKey ){
+    pCur->nKey = prollyCursorIntKey(&pCur->pCur);
+    pCur->pKey = 0;
+  } else {
+    const u8 *pKey;
+    int nKey;
+    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+    if( nKey>0 ){
+      sqlite3_free(pCur->pKey);
+      pCur->pKey = sqlite3_malloc(nKey);
+      if( !pCur->pKey ){
+        return SQLITE_NOMEM;
       }
-      pCur->eState = CURSOR_REQUIRESEEK;
+      memcpy(pCur->pKey, pKey, nKey);
+      pCur->nKey = nKey;
+    } else {
+      pCur->pKey = 0;
+      pCur->nKey = 0;
     }
   }
-  return rc;
+
+  pCur->eState = CURSOR_REQUIRESEEK;
+  return SQLITE_OK;
 }
 
 /*
-** Restore cursor to its saved position.
+** Restore cursor to its previously saved position.
 */
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
   int rc = SQLITE_OK;
-  if( pCur->eState==CURSOR_REQUIRESEEK ){
-    int res = 0;
-    if( pCur->curIntKey ){
-      rc = prollyCursorSeekInt(&pCur->pCur, pCur->nKey, &res);
+  int res = 0;
+
+  if( pCur->eState!=CURSOR_REQUIRESEEK ){
+    if( pDifferentRow ) *pDifferentRow = 0;
+    return SQLITE_OK;
+  }
+
+  refreshCursorRoot(pCur);
+
+  if( pCur->curIntKey ){
+    rc = prollyCursorSeekInt(&pCur->pCur, pCur->nKey, &res);
+  } else {
+    if( pCur->pKey && pCur->nKey>0 ){
+      rc = prollyCursorSeekBlob(&pCur->pCur,
+                                 (const u8*)pCur->pKey, (int)pCur->nKey,
+                                 &res);
     } else {
-      if( pCur->pKey ){
-        rc = prollyCursorSeekBlob(&pCur->pCur,
-                                   (const u8*)pCur->pKey, (int)pCur->nKey,
-                                   &res);
-        sqlite3_free(pCur->pKey);
-        pCur->pKey = 0;
-      }
+      pCur->eState = CURSOR_INVALID;
+      if( pDifferentRow ) *pDifferentRow = 1;
+      return SQLITE_OK;
     }
-    if( rc==SQLITE_OK ){
-      pCur->eState = (res==0) ? CURSOR_VALID : CURSOR_INVALID;
-      if( pDifferentRow ) *pDifferentRow = (res!=0);
+  }
+
+  if( pCur->pKey ){
+    sqlite3_free(pCur->pKey);
+    pCur->pKey = 0;
+  }
+
+  if( rc==SQLITE_OK ){
+    if( res==0 ){
+      pCur->eState = CURSOR_VALID;
+      if( pDifferentRow ) *pDifferentRow = 0;
+    } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+      pCur->eState = CURSOR_VALID;
+      if( pDifferentRow ) *pDifferentRow = 1;
+    } else {
+      pCur->eState = CURSOR_INVALID;
+      if( pDifferentRow ) *pDifferentRow = 1;
     }
   } else {
-    if( pDifferentRow ) *pDifferentRow = 0;
+    pCur->eState = CURSOR_FAULT;
+    pCur->skipNext = rc;
+    if( pDifferentRow ) *pDifferentRow = 1;
   }
+
   return rc;
 }
 
 /*
-** Push current root snapshot onto savepoint stack.
+** Push the current state onto the savepoint stack.
 */
 static int pushSavepoint(BtShared *pBt){
+  struct SavepointTableState *pState;
+
   if( pBt->nSavepoint>=pBt->nSavepointAlloc ){
     int nNew = pBt->nSavepointAlloc ? pBt->nSavepointAlloc*2 : 8;
-    ProllyHash *aNew = sqlite3_realloc(pBt->aSavepoint,
-                                        nNew*sizeof(ProllyHash));
-    if( !aNew ) return SQLITE_NOMEM;
-    pBt->aSavepoint = aNew;
+    ProllyHash *aNewH;
+    struct SavepointTableState *aNewT;
+    aNewH = sqlite3_realloc(pBt->aSavepoint, nNew*(int)sizeof(ProllyHash));
+    if( !aNewH ) return SQLITE_NOMEM;
+    pBt->aSavepoint = aNewH;
+    aNewT = sqlite3_realloc(pBt->aSavepointTables, nNew*(int)sizeof(struct SavepointTableState));
+    if( !aNewT ) return SQLITE_NOMEM;
+    pBt->aSavepointTables = aNewT;
     pBt->nSavepointAlloc = nNew;
+    pBt->nSavepointTablesAlloc = nNew;
   }
-  /* Save all table roots — for simplicity we save the master root */
+
   pBt->aSavepoint[pBt->nSavepoint] = pBt->root;
+
+  /* Also snapshot the table registry */
+  pState = &pBt->aSavepointTables[pBt->nSavepoint];
+  pState->aTables = 0;
+  pState->nTables = 0;
+  pState->iNextTable = pBt->iNextTable;
+  if( pBt->nTables > 0 ){
+    pState->aTables = sqlite3_malloc(pBt->nTables * (int)sizeof(struct TableEntry));
+    if( !pState->aTables ) return SQLITE_NOMEM;
+    memcpy(pState->aTables, pBt->aTables,
+           pBt->nTables * sizeof(struct TableEntry));
+    pState->nTables = pBt->nTables;
+  }
+
   pBt->nSavepoint++;
+  return SQLITE_OK;
+}
+
+/*
+** Count all entries in a table's prolly tree by walking the tree.
+*/
+static int countTreeEntries(BtShared *pBt, Pgno iTable, i64 *pCount){
+  int rc;
+  int res;
+  i64 count = 0;
+  struct TableEntry *pTE;
+  ProllyCursor tempCur;
+
+  pTE = findTable(pBt, iTable);
+  if( !pTE || prollyHashIsEmpty(&pTE->root) ){
+    *pCount = 0;
+    return SQLITE_OK;
+  }
+
+  prollyCursorInit(&tempCur, &pBt->store, &pBt->cache,
+                    &pTE->root, pTE->flags);
+
+  rc = prollyCursorFirst(&tempCur, &res);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&tempCur);
+    *pCount = 0;
+    return rc;
+  }
+
+  if( res!=0 ){
+    prollyCursorClose(&tempCur);
+    *pCount = 0;
+    return SQLITE_OK;
+  }
+
+  while( tempCur.eState==PROLLY_CURSOR_VALID ){
+    count++;
+    rc = prollyCursorNext(&tempCur);
+    if( rc!=SQLITE_OK ) break;
+    if( tempCur.eState!=PROLLY_CURSOR_VALID ) break;
+  }
+
+  prollyCursorClose(&tempCur);
+  *pCount = count;
+  return SQLITE_OK;
+}
+
+/*
+** Save all cursor positions on a particular table before modifying it.
+*/
+static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept){
+  BtCursor *p;
+  for(p=pBt->pCursor; p; p=p->pNext){
+    if( p!=pExcept && (iRoot==0 || p->pgnoRoot==iRoot) ){
+      if( p->eState==CURSOR_VALID || p->eState==CURSOR_SKIPNEXT ){
+        int rc = saveCursorPosition(p);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+    }
+  }
   return SQLITE_OK;
 }
 
@@ -374,14 +666,16 @@ int sqlite3BtreeOpen(
   int flags,
   int vfsFlags
 ){
-  Btree *p;
-  BtShared *pBt;
-  int rc;
+  Btree *p = 0;
+  BtShared *pBt = 0;
+  int rc = SQLITE_OK;
 
   *ppBtree = 0;
 
   p = sqlite3_malloc(sizeof(Btree));
-  if( !p ) return SQLITE_NOMEM;
+  if( !p ){
+    return SQLITE_NOMEM;
+  }
   memset(p, 0, sizeof(*p));
 
   pBt = sqlite3_malloc(sizeof(BtShared));
@@ -391,16 +685,17 @@ int sqlite3BtreeOpen(
   }
   memset(pBt, 0, sizeof(*pBt));
 
-  /* Open the chunk store */
-  rc = chunkStoreOpen(&pBt->store, pVfs,
-                       zFilename ? zFilename : ":memory:", vfsFlags);
+  if( !zFilename || zFilename[0]=='\0' ){
+    zFilename = ":memory:";
+  }
+
+  rc = chunkStoreOpen(&pBt->store, pVfs, zFilename, vfsFlags);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pBt);
     sqlite3_free(p);
     return rc;
   }
 
-  /* Initialize the node cache */
   rc = prollyCacheInit(&pBt->cache, PROLLY_DEFAULT_CACHE_SIZE);
   if( rc!=SQLITE_OK ){
     chunkStoreClose(&pBt->store);
@@ -409,11 +704,9 @@ int sqlite3BtreeOpen(
     return rc;
   }
 
-  /* Load the current root from the store */
   chunkStoreGetRoot(&pBt->store, &pBt->root);
   pBt->committedRoot = pBt->root;
 
-  /* Create the pager shim */
   pBt->pPagerShim = pagerShimCreate(pVfs, zFilename, pBt->store.pFile);
   if( !pBt->pPagerShim ){
     prollyCacheFree(&pBt->cache);
@@ -423,7 +716,6 @@ int sqlite3BtreeOpen(
     return SQLITE_NOMEM;
   }
 
-  /* Initialize BtShared fields */
   pBt->db = db;
   pBt->pageSize = PROLLY_DEFAULT_PAGE_SIZE;
   pBt->nRef = 1;
@@ -437,15 +729,28 @@ int sqlite3BtreeOpen(
     pBt->btsFlags |= BTS_INITIALLY_EMPTY;
   }
 
-  /* Default meta: schema version = 0, file format = 4, encoding = SQLITE_UTF8 */
+  /* Initialize default meta values */
+  pBt->aMeta[BTREE_FREE_PAGE_COUNT] = 0;
+  pBt->aMeta[BTREE_SCHEMA_VERSION] = 0;
   pBt->aMeta[BTREE_FILE_FORMAT] = 4;
+  pBt->aMeta[BTREE_DEFAULT_CACHE_SIZE] = 0;
+  pBt->aMeta[BTREE_LARGEST_ROOT_PAGE] = 0;
   pBt->aMeta[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
+  pBt->aMeta[BTREE_USER_VERSION] = 0;
+  pBt->aMeta[BTREE_INCR_VACUUM] = 0;
+  pBt->aMeta[BTREE_APPLICATION_ID] = 0;
 
-  /* Initialize the table registry with table 1 (master schema table) */
+  /* Table 1 is always the master schema table */
   pBt->iNextTable = 2;
-  addTable(pBt, 1, BTREE_INTKEY);
+  if( !addTable(pBt, 1, BTREE_INTKEY) ){
+    pagerShimDestroy(pBt->pPagerShim);
+    prollyCacheFree(&pBt->cache);
+    chunkStoreClose(&pBt->store);
+    sqlite3_free(pBt);
+    sqlite3_free(p);
+    return SQLITE_NOMEM;
+  }
 
-  /* Link Btree to BtShared */
   p->db = db;
   p->pBt = pBt;
   p->inTrans = TRANS_NONE;
@@ -453,8 +758,9 @@ int sqlite3BtreeOpen(
   p->wantToLock = 0;
   p->nBackup = 0;
   p->iBDataVersion = 1;
+  p->nSeek = 0;
 
-  /* Register doltite_engine() SQL function */
+  /* Register doltite_engine() SQL function for runtime detection */
   registerDoltiteFunctions(db);
 
   *ppBtree = p;
@@ -462,45 +768,40 @@ int sqlite3BtreeOpen(
 }
 
 /*
-** Close a database connection.
+** Close a database connection and free all associated resources.
 */
 int sqlite3BtreeClose(Btree *p){
   BtShared *pBt;
-  if( !p ) return SQLITE_OK;
 
+  if( !p ) return SQLITE_OK;
   pBt = p->pBt;
   assert( pBt!=0 );
 
-  /* Close all open cursors */
   while( pBt->pCursor ){
     sqlite3BtreeCloseCursor(pBt->pCursor);
   }
 
   pBt->nRef--;
-  if( pBt->nRef==0 ){
-    /* Free schema */
+  if( pBt->nRef<=0 ){
     if( pBt->pSchema && pBt->xFreeSchema ){
       pBt->xFreeSchema(pBt->pSchema);
+      pBt->pSchema = 0;
     }
-
-    /* Destroy pager shim */
     if( pBt->pPagerShim ){
       pagerShimDestroy(pBt->pPagerShim);
+      pBt->pPagerShim = 0;
     }
-
-    /* Free cache */
     prollyCacheFree(&pBt->cache);
-
-    /* Close chunk store */
     chunkStoreClose(&pBt->store);
-
-    /* Free table registry */
     sqlite3_free(pBt->aTables);
-
-    /* Free savepoint stack */
     sqlite3_free(pBt->aSavepoint);
-
-    /* Free BtShared */
+    if( pBt->aSavepointTables ){
+      int i;
+      for(i=0; i<pBt->nSavepoint; i++){
+        sqlite3_free(pBt->aSavepointTables[i].aTables);
+      }
+      sqlite3_free(pBt->aSavepointTables);
+    }
     sqlite3_free(pBt);
   }
 
@@ -509,25 +810,25 @@ int sqlite3BtreeClose(Btree *p){
 }
 
 /*
-** Initialize a fresh (empty) database.
+** Initialize a fresh (empty) database with default meta values.
 */
 int sqlite3BtreeNewDb(Btree *p){
   BtShared *pBt = p->pBt;
 
-  /* Set default meta values */
   memset(pBt->aMeta, 0, sizeof(pBt->aMeta));
   pBt->aMeta[BTREE_FILE_FORMAT] = 4;
   pBt->aMeta[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
 
-  /* Reset root to empty */
   memset(&pBt->root, 0, sizeof(ProllyHash));
   memset(&pBt->committedRoot, 0, sizeof(ProllyHash));
 
-  /* Ensure table 1 exists (master schema) */
   if( !findTable(pBt, 1) ){
     if( !addTable(pBt, 1, BTREE_INTKEY) ){
       return SQLITE_NOMEM;
     }
+  } else {
+    struct TableEntry *pTE = findTable(pBt, 1);
+    memset(&pTE->root, 0, sizeof(ProllyHash));
   }
 
   return SQLITE_OK;
@@ -573,13 +874,11 @@ int sqlite3BtreeGetPageSize(Btree *p){
 
 Pgno sqlite3BtreeMaxPageCount(Btree *p, Pgno mxPage){
   (void)p; (void)mxPage;
-  /* Return a large dummy value */
   return (Pgno)0x7FFFFFFF;
 }
 
 Pgno sqlite3BtreeLastPage(Btree *p){
-  /* Return at least iNextTable so rootpage validation in prepare.c passes.
-  ** SQLite checks that rootpage <= LastPage when loading the schema. */
+  /* Must be >= iNextTable so rootpage validation in prepare.c passes */
   return p->pBt->iNextTable + 1000;
 }
 
@@ -638,7 +937,6 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   }
 
   if( p->inTrans==TRANS_WRITE ){
-    /* Already in a write transaction */
     return SQLITE_OK;
   }
 
@@ -646,7 +944,20 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     if( pBt->btsFlags & BTS_READ_ONLY ){
       return SQLITE_READONLY;
     }
-    /* Snapshot current root as the committed state */
+    /* Snapshot table registry for rollback */
+    sqlite3_free(pBt->aCommittedTables);
+    pBt->aCommittedTables = 0;
+    pBt->nCommittedTables = 0;
+    if( pBt->nTables > 0 ){
+      pBt->aCommittedTables = sqlite3_malloc(
+          pBt->nTables * (int)sizeof(struct TableEntry));
+      if( pBt->aCommittedTables ){
+        memcpy(pBt->aCommittedTables, pBt->aTables,
+               pBt->nTables * sizeof(struct TableEntry));
+        pBt->nCommittedTables = pBt->nTables;
+      }
+    }
+    pBt->iCommittedNextTable = pBt->iNextTable;
     pBt->committedRoot = pBt->root;
     p->inTrans = TRANS_WRITE;
     pBt->inTransaction = TRANS_WRITE;
@@ -664,7 +975,6 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
 
 int sqlite3BtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
   (void)p; (void)zSuperJrnl;
-  /* Prolly trees commit atomically in phase two */
   return SQLITE_OK;
 }
 
@@ -674,7 +984,6 @@ int sqlite3BtreeCommitPhaseTwo(Btree *p, int bCleanup){
   (void)bCleanup;
 
   if( p->inTrans==TRANS_WRITE ){
-    /* Commit all pending chunks to the store */
     chunkStoreSetRoot(&pBt->store, &pBt->root);
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
@@ -688,8 +997,6 @@ int sqlite3BtreeCommitPhaseTwo(Btree *p, int bCleanup){
 
   p->inTrans = TRANS_NONE;
   pBt->inTransaction = TRANS_NONE;
-
-  /* Clear savepoints */
   pBt->nSavepoint = 0;
 
   return rc;
@@ -709,13 +1016,18 @@ int sqlite3BtreeRollback(Btree *p, int tripCode, int writeOnly){
   (void)writeOnly;
 
   if( p->inTrans==TRANS_WRITE ){
-    /* Restore root from committed state */
+    /* Restore table registry from committed snapshot */
+    if( pBt->aCommittedTables ){
+      sqlite3_free(pBt->aTables);
+      pBt->aTables = pBt->aCommittedTables;
+      pBt->nTables = pBt->nCommittedTables;
+      pBt->nTablesAlloc = pBt->nCommittedTables;
+      pBt->iNextTable = pBt->iCommittedNextTable;
+      pBt->aCommittedTables = 0;
+      pBt->nCommittedTables = 0;
+    }
     pBt->root = pBt->committedRoot;
-
-    /* Restore all table roots - for now, invalidate all cursors */
     invalidateCursors(pBt, 0, tripCode ? tripCode : SQLITE_ABORT);
-
-    /* Discard pending chunks */
     chunkStoreRollback(&pBt->store);
   }
 
@@ -738,24 +1050,89 @@ int sqlite3BtreeBeginStmt(Btree *p, int iStatement){
 }
 
 int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
-  BtShared *pBt = p->pBt;
+  BtShared *pBt;
 
-  if( p->inTrans!=TRANS_WRITE ){
+  if( p==0 ) return SQLITE_OK;
+  pBt = p->pBt;
+  if( pBt==0 || p->inTrans!=TRANS_WRITE ){
     return SQLITE_OK;
   }
 
+  /* Ensure we have enough savepoints. SQLite may request savepoint
+  ** indices beyond what we've tracked. Grow the stack if needed. */
+  while( iSavepoint >= pBt->nSavepoint && op!=SAVEPOINT_ROLLBACK ){
+    int rc = pushSavepoint(pBt);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   if( op==SAVEPOINT_ROLLBACK ){
-    /* Rollback to savepoint: restore root from snapshot */
-    if( iSavepoint>=0 && iSavepoint<pBt->nSavepoint ){
+    if( iSavepoint>=0 && iSavepoint<pBt->nSavepoint
+     && pBt->aSavepointTables ){
+      struct SavepointTableState *pState = &pBt->aSavepointTables[iSavepoint];
       pBt->root = pBt->aSavepoint[iSavepoint];
-      /* Truncate savepoint stack */
+      /* Restore table registry */
+      if( pState->aTables ){
+        sqlite3_free(pBt->aTables);
+        pBt->aTables = pState->aTables;
+        pBt->nTables = pState->nTables;
+        pBt->nTablesAlloc = pState->nTables;
+        pBt->iNextTable = pState->iNextTable;
+        pState->aTables = 0; /* Ownership transferred */
+      }
+      /* Free savepoints above this one */
+      {
+        int j;
+        for(j=iSavepoint+1; j<pBt->nSavepoint; j++){
+          sqlite3_free(pBt->aSavepointTables[j].aTables);
+        }
+      }
       pBt->nSavepoint = iSavepoint;
-      /* Invalidate all cursors */
+      invalidateCursors(pBt, 0, SQLITE_ABORT);
+    } else if( iSavepoint>=0 && iSavepoint>=pBt->nSavepoint ){
+      /* SQLite asked to rollback to a savepoint we don't have.
+      ** Restore from committed state instead. */
+      if( pBt->aCommittedTables ){
+        sqlite3_free(pBt->aTables);
+        pBt->aTables = sqlite3_malloc(
+            pBt->nCommittedTables * (int)sizeof(struct TableEntry));
+        if( pBt->aTables ){
+          memcpy(pBt->aTables, pBt->aCommittedTables,
+                 pBt->nCommittedTables * sizeof(struct TableEntry));
+          pBt->nTables = pBt->nCommittedTables;
+          pBt->nTablesAlloc = pBt->nCommittedTables;
+          pBt->iNextTable = pBt->iCommittedNextTable;
+        }
+      }
+      pBt->root = pBt->committedRoot;
+      invalidateCursors(pBt, 0, SQLITE_ABORT);
+    } else if( iSavepoint<0 ){
+      int j;
+      for(j=0; j<pBt->nSavepoint; j++){
+        sqlite3_free(pBt->aSavepointTables[j].aTables);
+      }
+      pBt->root = pBt->committedRoot;
+      /* Restore from committed tables */
+      if( pBt->aCommittedTables ){
+        sqlite3_free(pBt->aTables);
+        pBt->aTables = sqlite3_malloc(pBt->nCommittedTables * (int)sizeof(struct TableEntry));
+        if( pBt->aTables ){
+          memcpy(pBt->aTables, pBt->aCommittedTables,
+                 pBt->nCommittedTables * sizeof(struct TableEntry));
+          pBt->nTables = pBt->nCommittedTables;
+          pBt->nTablesAlloc = pBt->nCommittedTables;
+          pBt->iNextTable = pBt->iCommittedNextTable;
+        }
+      }
+      pBt->nSavepoint = 0;
       invalidateCursors(pBt, 0, SQLITE_ABORT);
     }
   } else {
-    /* SAVEPOINT_RELEASE: just truncate the stack */
+    /* SAVEPOINT_RELEASE: free savepoints above this one */
     if( iSavepoint>=0 && iSavepoint<pBt->nSavepoint ){
+      int j;
+      for(j=iSavepoint; j<pBt->nSavepoint; j++){
+        sqlite3_free(pBt->aSavepointTables[j].aTables);
+      }
       pBt->nSavepoint = iSavepoint;
     }
   }
@@ -764,7 +1141,7 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
 }
 
 int sqlite3BtreeTxnState(Btree *p){
-  return p ? p->inTrans : TRANS_NONE;
+  return p ? (int)p->inTrans : TRANS_NONE;
 }
 
 /* --------------------------------------------------------------------------
@@ -780,7 +1157,13 @@ int sqlite3BtreeCreateTable(Btree *p, Pgno *piTable, int flags){
     return SQLITE_ERROR;
   }
 
-  iTable = pBt->iNextTable++;
+  iTable = pBt->iNextTable;
+  pBt->iNextTable++;
+
+  if( iTable > pBt->aMeta[BTREE_LARGEST_ROOT_PAGE] ){
+    pBt->aMeta[BTREE_LARGEST_ROOT_PAGE] = iTable;
+  }
+
   pTE = addTable(pBt, iTable, (u8)(flags & (BTREE_INTKEY|BTREE_BLOBKEY)));
   if( !pTE ){
     return SQLITE_NOMEM;
@@ -797,10 +1180,16 @@ int sqlite3BtreeDropTable(Btree *p, int iTable, int *piMoved){
     return SQLITE_ERROR;
   }
 
-  /* Invalidate cursors on this table */
-  invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
+  if( iTable==1 ){
+    struct TableEntry *pTE = findTable(pBt, 1);
+    if( pTE ){
+      memset(&pTE->root, 0, sizeof(ProllyHash));
+    }
+    if( piMoved ) *piMoved = 0;
+    return SQLITE_OK;
+  }
 
-  /* Remove the table entry */
+  invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
   removeTable(pBt, (Pgno)iTable);
 
   if( piMoved ) *piMoved = 0;
@@ -817,26 +1206,23 @@ int sqlite3BtreeClearTable(Btree *p, int iTable, i64 *pnChange){
 
   pTE = findTable(pBt, (Pgno)iTable);
   if( !pTE ){
-    return SQLITE_ERROR;
+    if( pnChange ) *pnChange = 0;
+    return SQLITE_OK;
   }
 
-  /* Count entries if requested */
   if( pnChange ){
-    /* For now, set to 0; a full count would require tree traversal */
-    *pnChange = 0;
+    int rc = countTreeEntries(pBt, (Pgno)iTable, pnChange);
+    if( rc!=SQLITE_OK ) return rc;
   }
 
-  /* Invalidate cursors on this table */
   invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
-
-  /* Reset the table's root to empty */
   memset(&pTE->root, 0, sizeof(ProllyHash));
 
   return SQLITE_OK;
 }
 
 int sqlite3BtreeClearTableOfCursor(BtCursor *pCur){
-  return sqlite3BtreeClearTable(pCur->pBtree, pCur->pgnoRoot, 0);
+  return sqlite3BtreeClearTable(pCur->pBtree, (int)pCur->pgnoRoot, 0);
 }
 
 /* --------------------------------------------------------------------------
@@ -848,9 +1234,10 @@ void sqlite3BtreeGetMeta(Btree *p, int idx, u32 *pValue){
   assert( idx>=0 && idx<SQLITE_N_BTREE_META );
 
   if( idx==BTREE_DATA_VERSION ){
-    *pValue = p->iBDataVersion;
     if( pBt->pPagerShim ){
       *pValue = pBt->pPagerShim->iDataVersion;
+    } else {
+      *pValue = p->iBDataVersion;
     }
   } else {
     *pValue = pBt->aMeta[idx];
@@ -859,13 +1246,23 @@ void sqlite3BtreeGetMeta(Btree *p, int idx, u32 *pValue){
 
 int sqlite3BtreeUpdateMeta(Btree *p, int idx, u32 value){
   BtShared *pBt = p->pBt;
-  assert( idx>=1 && idx<SQLITE_N_BTREE_META );
 
   if( p->inTrans!=TRANS_WRITE ){
     return SQLITE_ERROR;
   }
+  if( idx<1 || idx>=SQLITE_N_BTREE_META ){
+    return SQLITE_ERROR;
+  }
 
   pBt->aMeta[idx] = value;
+
+  if( idx==BTREE_SCHEMA_VERSION ){
+    p->iBDataVersion++;
+    if( pBt->pPagerShim ){
+      pBt->pPagerShim->iDataVersion++;
+    }
+  }
+
   return SQLITE_OK;
 }
 
@@ -919,18 +1316,17 @@ int sqlite3BtreeCursor(
   BtShared *pBt = p->pBt;
   struct TableEntry *pTE;
 
-  memset(pCur, 0, sizeof(BtCursor));
+  assert( p->inTrans>=TRANS_READ );
 
+  memset(pCur, 0, sizeof(BtCursor));
   pCur->pBtree = p;
   pCur->pBt = pBt;
   pCur->pgnoRoot = iTable;
   pCur->pKeyInfo = pKeyInfo;
   pCur->eState = CURSOR_INVALID;
 
-  /* Look up the table */
   pTE = findTable(pBt, iTable);
   if( !pTE ){
-    /* Table not found — create a placeholder for compat */
     u8 flags = pKeyInfo ? BTREE_BLOBKEY : BTREE_INTKEY;
     pTE = addTable(pBt, iTable, flags);
     if( !pTE ) return SQLITE_NOMEM;
@@ -938,16 +1334,13 @@ int sqlite3BtreeCursor(
 
   pCur->curIntKey = (pTE->flags & BTREE_INTKEY) ? 1 : 0;
 
-  /* Set cursor flags */
-  if( wrFlag ){
+  if( wrFlag & BTREE_WRCSR ){
     pCur->curFlags = BTCF_WriteFlag;
   }
 
-  /* Initialize the prolly cursor */
   prollyCursorInit(&pCur->pCur, &pBt->store, &pBt->cache,
                     &pTE->root, pTE->flags);
 
-  /* Link into cursor list */
   pCur->pNext = pBt->pCursor;
   pBt->pCursor = pCur;
 
@@ -962,29 +1355,25 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
   pBt = pCur->pBt;
   if( !pBt ) return SQLITE_OK;
 
-  /* Close the prolly cursor */
   prollyCursorClose(&pCur->pCur);
 
-  /* Free the mutation map */
   if( pCur->pMutMap ){
     prollyMutMapFree(pCur->pMutMap);
     sqlite3_free(pCur->pMutMap);
     pCur->pMutMap = 0;
   }
 
-  /* Free cached payload */
   if( pCur->pCachedPayload ){
     sqlite3_free(pCur->pCachedPayload);
     pCur->pCachedPayload = 0;
+    pCur->nCachedPayload = 0;
   }
 
-  /* Free saved key */
   if( pCur->pKey ){
     sqlite3_free(pCur->pKey);
     pCur->pKey = 0;
   }
 
-  /* Unlink from cursor list */
   for(pp=&pBt->pCursor; *pp; pp=&(*pp)->pNext){
     if( *pp==pCur ){
       *pp = pCur->pNext;
@@ -993,7 +1382,9 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
   }
 
   pCur->pBt = 0;
+  pCur->pBtree = 0;
   pCur->eState = CURSOR_INVALID;
+
   return SQLITE_OK;
 }
 
@@ -1009,8 +1400,11 @@ int sqlite3BtreeCursorRestore(BtCursor *pCur, int *pDifferentRow){
     return SQLITE_OK;
   }
 
-  if( pCur->eState>=CURSOR_REQUIRESEEK ){
+  if( pCur->eState==CURSOR_REQUIRESEEK ){
     rc = restoreCursorPosition(pCur, pDifferentRow);
+  } else if( pCur->eState==CURSOR_FAULT ){
+    rc = pCur->skipNext;
+    if( pDifferentRow ) *pDifferentRow = 1;
   } else {
     if( pDifferentRow ) *pDifferentRow = 1;
   }
@@ -1021,6 +1415,7 @@ int sqlite3BtreeCursorRestore(BtCursor *pCur, int *pDifferentRow){
 #ifdef SQLITE_DEBUG
 int sqlite3BtreeClosesWithCursor(Btree *p, BtCursor *pCur){
   BtCursor *pX;
+  if( !p || !p->pBt ) return 0;
   for(pX=p->pBt->pCursor; pX; pX=pX->pNext){
     if( pX==pCur ) return 1;
   }
@@ -1034,14 +1429,7 @@ int sqlite3BtreeClosesWithCursor(Btree *p, BtCursor *pCur){
 
 int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
   int rc;
-  struct TableEntry *pTE;
-
-  /* Refresh cursor root from table entry */
-  pTE = findTable(pCur->pBt, pCur->pgnoRoot);
-  if( pTE ){
-    pCur->pCur.root = pTE->root;
-  }
-
+  refreshCursorRoot(pCur);
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc==SQLITE_OK ){
     pCur->eState = (*pRes==0) ? CURSOR_VALID : CURSOR_INVALID;
@@ -1052,18 +1440,14 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 
 int sqlite3BtreeLast(BtCursor *pCur, int *pRes){
   int rc;
-  struct TableEntry *pTE;
-
-  pTE = findTable(pCur->pBt, pCur->pgnoRoot);
-  if( pTE ){
-    pCur->pCur.root = pTE->root;
-  }
-
+  refreshCursorRoot(pCur);
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc==SQLITE_OK ){
-    pCur->eState = (*pRes==0) ? CURSOR_VALID : CURSOR_INVALID;
     if( *pRes==0 ){
+      pCur->eState = CURSOR_VALID;
       pCur->curFlags |= BTCF_AtLast;
+    } else {
+      pCur->eState = CURSOR_INVALID;
     }
   }
   return rc;
@@ -1073,14 +1457,16 @@ int sqlite3BtreeNext(BtCursor *pCur, int flags){
   int rc;
   (void)flags;
 
-  assert( pCur->eState==CURSOR_VALID || pCur->eState==CURSOR_SKIPNEXT );
+  assert( pCur->eState==CURSOR_VALID
+       || pCur->eState==CURSOR_SKIPNEXT );
 
   if( pCur->eState==CURSOR_SKIPNEXT ){
     pCur->eState = CURSOR_VALID;
     if( pCur->skipNext>0 ){
-      /* Already pointing to correct next entry */
+      pCur->skipNext = 0;
       return SQLITE_OK;
     }
+    pCur->skipNext = 0;
   }
 
   rc = prollyCursorNext(&pCur->pCur);
@@ -1092,7 +1478,7 @@ int sqlite3BtreeNext(BtCursor *pCur, int flags){
       return SQLITE_DONE;
     }
   }
-  pCur->curFlags &= ~BTCF_AtLast;
+  pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
   return rc;
 }
 
@@ -1100,13 +1486,16 @@ int sqlite3BtreePrevious(BtCursor *pCur, int flags){
   int rc;
   (void)flags;
 
-  assert( pCur->eState==CURSOR_VALID || pCur->eState==CURSOR_SKIPNEXT );
+  assert( pCur->eState==CURSOR_VALID
+       || pCur->eState==CURSOR_SKIPNEXT );
 
   if( pCur->eState==CURSOR_SKIPNEXT ){
     pCur->eState = CURSOR_VALID;
     if( pCur->skipNext<0 ){
+      pCur->skipNext = 0;
       return SQLITE_OK;
     }
+    pCur->skipNext = 0;
   }
 
   rc = prollyCursorPrev(&pCur->pCur);
@@ -1118,7 +1507,7 @@ int sqlite3BtreePrevious(BtCursor *pCur, int flags){
       return SQLITE_DONE;
     }
   }
-  pCur->curFlags &= ~BTCF_AtLast;
+  pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
   return rc;
 }
 
@@ -1129,10 +1518,10 @@ int sqlite3BtreeEof(BtCursor *pCur){
 int sqlite3BtreeIsEmpty(BtCursor *pCur, int *pRes){
   struct TableEntry *pTE;
   pTE = findTable(pCur->pBt, pCur->pgnoRoot);
-  if( pTE ){
-    *pRes = prollyHashIsEmpty(&pTE->root);
-  } else {
+  if( !pTE ){
     *pRes = 1;
+  } else {
+    *pRes = prollyHashIsEmpty(&pTE->root) ? 1 : 0;
   }
   return SQLITE_OK;
 }
@@ -1148,16 +1537,14 @@ int sqlite3BtreeTableMoveto(
   int *pRes
 ){
   int rc;
-  struct TableEntry *pTE;
   (void)bias;
 
+  assert( pCur->curIntKey );
+
+  pCur->nSeek++;
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
 
-  /* Refresh cursor root */
-  pTE = findTable(pCur->pBt, pCur->pgnoRoot);
-  if( pTE ){
-    pCur->pCur.root = pTE->root;
-  }
+  refreshCursorRoot(pCur);
 
   rc = prollyCursorSeekInt(&pCur->pCur, intKey, pRes);
   if( rc==SQLITE_OK ){
@@ -1167,6 +1554,7 @@ int sqlite3BtreeTableMoveto(
       pCur->cachedIntKey = intKey;
     } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       pCur->eState = CURSOR_VALID;
+      pCur->curFlags &= ~BTCF_ValidNKey;
     } else {
       pCur->eState = CURSOR_INVALID;
     }
@@ -1180,59 +1568,46 @@ int sqlite3BtreeIndexMoveto(
   int *pRes
 ){
   int rc;
-  struct TableEntry *pTE;
+  int res;
+
+  assert( !pCur->curIntKey );
 
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
 
-  /* Refresh cursor root */
-  pTE = findTable(pCur->pBt, pCur->pgnoRoot);
-  if( pTE ){
-    pCur->pCur.root = pTE->root;
-  }
+  refreshCursorRoot(pCur);
 
   /*
   ** For index btrees, the prolly tree stores serialized record blobs as keys.
-  ** We need to do a linear scan with comparison against each key using
-  ** sqlite3VdbeRecordCompare, because we can't easily serialize an
-  ** UnpackedRecord back to its blob form.
-  **
-  ** Algorithm: seek to first entry, then scan forward comparing each key
-  ** with the UnpackedRecord until we find a match or go past it.
-  ** TODO: optimize with binary search using comparison callback.
+  ** We scan forward comparing each key with the UnpackedRecord using
+  ** sqlite3VdbeRecordCompare until we find a match or go past it.
   */
-  {
-    int res;
-    rc = prollyCursorFirst(&pCur->pCur, &res);
-    if( rc!=SQLITE_OK || res!=0 ){
-      /* Empty tree or error */
-      *pRes = -1;
-      pCur->eState = CURSOR_INVALID;
-      return rc;
-    }
-
-    while( prollyCursorIsValid(&pCur->pCur) ){
-      const u8 *pKey;
-      int nKey;
-      int cmp;
-      prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-      cmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
-      if( cmp==0 ){
-        *pRes = 0;
-        pCur->eState = CURSOR_VALID;
-        return SQLITE_OK;
-      }else if( cmp>0 ){
-        /* Current key is larger than target — cursor is at the right spot */
-        *pRes = -1;
-        pCur->eState = CURSOR_VALID;
-        return SQLITE_OK;
-      }
-      rc = prollyCursorNext(&pCur->pCur);
-      if( rc!=SQLITE_OK ) break;
-    }
-    /* Ran off the end */
-    *pRes = 1;
-    pCur->eState = prollyCursorIsValid(&pCur->pCur) ? CURSOR_VALID : CURSOR_INVALID;
+  rc = prollyCursorFirst(&pCur->pCur, &res);
+  if( rc!=SQLITE_OK || res!=0 ){
+    *pRes = -1;
+    pCur->eState = CURSOR_INVALID;
+    return rc;
   }
+
+  while( prollyCursorIsValid(&pCur->pCur) ){
+    const u8 *pKey;
+    int nKey;
+    int cmp;
+    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+    cmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
+    if( cmp==0 ){
+      *pRes = 0;
+      pCur->eState = CURSOR_VALID;
+      return SQLITE_OK;
+    }else if( cmp>0 ){
+      *pRes = -1;
+      pCur->eState = CURSOR_VALID;
+      return SQLITE_OK;
+    }
+    rc = prollyCursorNext(&pCur->pCur);
+    if( rc!=SQLITE_OK ) break;
+  }
+  *pRes = 1;
+  pCur->eState = prollyCursorIsValid(&pCur->pCur) ? CURSOR_VALID : CURSOR_INVALID;
   return rc;
 }
 
@@ -1246,38 +1621,50 @@ i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
   return prollyCursorIntKey(&pCur->pCur);
 }
 
+/*
+** For INTKEY tables: payload = the value (data stored in leaf)
+** For BLOBKEY (index) tables: payload = the key (entire record IS the key)
+*/
+static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
+  if( pCur->curIntKey ){
+    prollyCursorValue(&pCur->pCur, ppData, pnData);
+  }else{
+    prollyCursorKey(&pCur->pCur, ppData, pnData);
+  }
+}
+
 u32 sqlite3BtreePayloadSize(BtCursor *pCur){
-  const u8 *pVal;
-  int nVal;
+  const u8 *pData;
+  int nData;
   assert( pCur->eState==CURSOR_VALID );
-  prollyCursorValue(&pCur->pCur, &pVal, &nVal);
-  return (u32)nVal;
+  getCursorPayload(pCur, &pData, &nData);
+  return (u32)nData;
 }
 
 int sqlite3BtreePayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
-  const u8 *pVal;
-  int nVal;
+  const u8 *pData;
+  int nData;
 
   assert( pCur->eState==CURSOR_VALID );
-  prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+  getCursorPayload(pCur, &pData, &nData);
 
-  if( offset+amt > (u32)nVal ){
+  if( (i64)offset + (i64)amt > (i64)nData ){
     return SQLITE_CORRUPT_BKPT;
   }
 
-  memcpy(pBuf, pVal+offset, amt);
+  memcpy(pBuf, pData + offset, amt);
   return SQLITE_OK;
 }
 
 const void *sqlite3BtreePayloadFetch(BtCursor *pCur, u32 *pAmt){
-  const u8 *pVal;
-  int nVal;
+  const u8 *pData;
+  int nData;
 
   assert( pCur->eState==CURSOR_VALID );
-  prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+  getCursorPayload(pCur, &pData, &nData);
 
-  if( pAmt ) *pAmt = (u32)nVal;
-  return (const void*)pVal;
+  if( pAmt ) *pAmt = (u32)nData;
+  return (const void*)pData;
 }
 
 sqlite3_int64 sqlite3BtreeMaxRecordSize(BtCursor *pCur){
@@ -1287,7 +1674,6 @@ sqlite3_int64 sqlite3BtreeMaxRecordSize(BtCursor *pCur){
 
 i64 sqlite3BtreeOffset(BtCursor *pCur){
   (void)pCur;
-  /* No page offset concept in prolly trees */
   return 0;
 }
 
@@ -1308,22 +1694,25 @@ int sqlite3BtreeInsert(
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
 
+  rc = saveAllCursors(pCur->pBt, pCur->pgnoRoot, pCur);
+  if( rc!=SQLITE_OK ) return rc;
+
   rc = ensureMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
   if( pCur->curIntKey ){
-    /* Table btree: integer key + data value */
     const u8 *pData = (const u8*)pPayload->pData;
     int nData = pPayload->nData;
     int nTotal = nData + pPayload->nZero;
     u8 *pBuf = 0;
 
-    if( pPayload->nZero>0 ){
-      /* Need to append zeros */
+    if( pPayload->nZero > 0 && nTotal > nData ){
       pBuf = sqlite3_malloc(nTotal);
       if( !pBuf ) return SQLITE_NOMEM;
-      if( nData>0 ) memcpy(pBuf, pData, nData);
-      memset(pBuf+nData, 0, pPayload->nZero);
+      if( nData > 0 ){
+        memcpy(pBuf, pData, nData);
+      }
+      memset(pBuf + nData, 0, pPayload->nZero);
       pData = pBuf;
       nData = nTotal;
     }
@@ -1333,33 +1722,35 @@ int sqlite3BtreeInsert(
                              pData, nData);
     sqlite3_free(pBuf);
   } else {
-    /* Index btree: blob key, no data */
     rc = prollyMutMapInsert(pCur->pMutMap,
-                             (const u8*)pPayload->pKey, (int)pPayload->nKey,
+                             (const u8*)pPayload->pKey,
+                             (int)pPayload->nKey,
                              0, NULL, 0);
   }
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Flush mutations immediately to keep tree consistent */
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* After insert, try to position cursor at the inserted key */
+  /* Reposition cursor at the inserted entry */
   if( pCur->curIntKey ){
-    int res;
+    int res = 0;
     rc = prollyCursorSeekInt(&pCur->pCur, pPayload->nKey, &res);
-    if( rc==SQLITE_OK && res==0 ){
+    if( rc==SQLITE_OK ){
       pCur->eState = CURSOR_VALID;
-      pCur->curFlags |= BTCF_ValidNKey;
-      pCur->cachedIntKey = pPayload->nKey;
+      if( res==0 ){
+        pCur->curFlags |= BTCF_ValidNKey;
+        pCur->cachedIntKey = pPayload->nKey;
+      }
     }
   } else {
-    int res;
+    int res = 0;
     rc = prollyCursorSeekBlob(&pCur->pCur,
-                               (const u8*)pPayload->pKey, (int)pPayload->nKey,
+                               (const u8*)pPayload->pKey,
+                               (int)pPayload->nKey,
                                &res);
-    if( rc==SQLITE_OK && res==0 ){
+    if( rc==SQLITE_OK ){
       pCur->eState = CURSOR_VALID;
     }
   }
@@ -1369,11 +1760,13 @@ int sqlite3BtreeInsert(
 
 int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   int rc;
-  (void)flags;
 
   assert( pCur->eState==CURSOR_VALID );
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
+
+  rc = saveAllCursors(pCur->pBt, pCur->pgnoRoot, pCur);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = ensureMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
@@ -1390,23 +1783,28 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Flush the deletion */
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* After delete, cursor is invalid; caller may use SAVEPOSITION flag
-  ** to request we land on next/prev, but by default we invalidate. */
   if( flags & BTREE_SAVEPOSITION ){
-    /* Try to advance to next position */
-    if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-      pCur->eState = CURSOR_VALID;
+    if( prollyCursorIsValid(&pCur->pCur) ){
+      pCur->eState = CURSOR_SKIPNEXT;
+      pCur->skipNext = 1;
     } else {
-      pCur->eState = CURSOR_INVALID;
+      int res;
+      rc = prollyCursorLast(&pCur->pCur, &res);
+      if( rc==SQLITE_OK && res==0 ){
+        pCur->eState = CURSOR_SKIPNEXT;
+        pCur->skipNext = -1;
+      } else {
+        pCur->eState = CURSOR_INVALID;
+      }
     }
   } else {
     pCur->eState = CURSOR_INVALID;
   }
 
+  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
   return SQLITE_OK;
 }
 
@@ -1427,12 +1825,10 @@ int sqlite3BtreeTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   memset(&payload, 0, sizeof(payload));
 
   if( pDest->curIntKey ){
-    /* Table btree */
     payload.nKey = iKey;
     payload.pData = pVal;
     payload.nData = nVal;
   } else {
-    /* Index btree - the value from source is the key for dest */
     const u8 *pKey;
     int nKey;
     prollyCursorKey(&pSrc->pCur, &pKey, &nKey);
@@ -1505,18 +1901,20 @@ void sqlite3BtreeClearCursor(BtCursor *pCur){
   if( pCur->pKey ){
     sqlite3_free(pCur->pKey);
     pCur->pKey = 0;
+    pCur->nKey = 0;
   }
   if( pCur->pCachedPayload ){
     sqlite3_free(pCur->pCachedPayload);
     pCur->pCachedPayload = 0;
+    pCur->nCachedPayload = 0;
   }
   pCur->eState = CURSOR_INVALID;
   pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_ValidOvfl|BTCF_AtLast);
+  pCur->skipNext = 0;
 }
 
 void sqlite3BtreeClearCache(Btree *p){
   (void)p;
-  /* No-op: prolly cache management is handled internally */
 }
 
 /* --------------------------------------------------------------------------
@@ -1532,40 +1930,8 @@ struct Pager *sqlite3BtreePager(Btree *p){
 ** -------------------------------------------------------------------------- */
 
 int sqlite3BtreeCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
-  int rc;
-  i64 count = 0;
-  int res;
-  struct TableEntry *pTE;
-  ProllyCursor tempCur;
-
   (void)db;
-
-  pTE = findTable(pCur->pBt, pCur->pgnoRoot);
-  if( !pTE || prollyHashIsEmpty(&pTE->root) ){
-    *pnEntry = 0;
-    return SQLITE_OK;
-  }
-
-  /* Open a temporary cursor and walk the tree */
-  prollyCursorInit(&tempCur, &pCur->pBt->store, &pCur->pBt->cache,
-                    &pTE->root, pTE->flags);
-
-  rc = prollyCursorFirst(&tempCur, &res);
-  if( rc!=SQLITE_OK ){
-    prollyCursorClose(&tempCur);
-    return rc;
-  }
-
-  while( res==0 && tempCur.eState==PROLLY_CURSOR_VALID ){
-    count++;
-    rc = prollyCursorNext(&tempCur);
-    if( rc!=SQLITE_OK ) break;
-    if( tempCur.eState!=PROLLY_CURSOR_VALID ) break;
-  }
-
-  prollyCursorClose(&tempCur);
-  *pnEntry = count;
-  return rc;
+  return countTreeEntries(pCur->pBt, pCur->pgnoRoot, pnEntry);
 }
 
 i64 sqlite3BtreeRowCountEst(BtCursor *pCur){
@@ -1574,10 +1940,8 @@ i64 sqlite3BtreeRowCountEst(BtCursor *pCur){
   if( !pTE || prollyHashIsEmpty(&pTE->root) ){
     return 0;
   }
-  /* Estimate based on tree depth: assume average fanout of ~100 */
-  /* For a single-level tree, estimate ~50 entries */
-  /* This is a rough estimate; a better one would look at the root node */
-  return 100;
+  /* Default estimate for the query planner */
+  return 1000000;
 }
 
 /* --------------------------------------------------------------------------
@@ -1586,6 +1950,12 @@ i64 sqlite3BtreeRowCountEst(BtCursor *pCur){
 
 int sqlite3BtreeSetVersion(Btree *p, int iVersion){
   BtShared *pBt = p->pBt;
+
+  if( p->inTrans!=TRANS_WRITE ){
+    int rc = sqlite3BtreeBeginTrans(p, 2, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   pBt->aMeta[BTREE_FILE_FORMAT] = (u32)iVersion;
   return SQLITE_OK;
 }
@@ -1608,15 +1978,33 @@ int sqlite3BtreeIntegrityCheck(
   int *pnErr,
   char **pzOut
 ){
+  BtShared *pBt;
+  int i;
+  int nErr = 0;
+
   (void)db;
-  (void)p;
-  (void)aRoot;
   (void)aCnt;
-  (void)nRoot;
   (void)mxErr;
 
-  /* Basic validation: just report no errors */
-  if( pnErr ) *pnErr = 0;
+  if( !p || !p->pBt ){
+    if( pnErr ) *pnErr = 0;
+    if( pzOut ) *pzOut = 0;
+    return SQLITE_OK;
+  }
+  pBt = p->pBt;
+
+  for(i=0; i<nRoot && nErr<mxErr; i++){
+    struct TableEntry *pTE = findTable(pBt, aRoot[i]);
+    if( !pTE ) continue;
+
+    if( !prollyHashIsEmpty(&pTE->root) ){
+      if( !chunkStoreHas(&pBt->store, &pTE->root) ){
+        nErr++;
+      }
+    }
+  }
+
+  if( pnErr ) *pnErr = nErr;
   if( pzOut ) *pzOut = 0;
 
   return SQLITE_OK;
@@ -1647,7 +2035,6 @@ void sqlite3BtreeCursorHintFlags(BtCursor *pCur, unsigned x){
 #ifdef SQLITE_ENABLE_CURSOR_HINTS
 void sqlite3BtreeCursorHint(BtCursor *pCur, int eHintType, ...){
   (void)pCur; (void)eHintType;
-  /* No-op: prolly trees don't use cursor hints */
 }
 #endif
 
@@ -1659,10 +2046,6 @@ int sqlite3BtreeCursorHasHint(BtCursor *pCur, unsigned int mask){
 ** FakeValidCursor
 ** -------------------------------------------------------------------------- */
 
-/*
-** Return a static cursor that appears to be in the VALID state.
-** Used by some parts of the VDBE that need a non-null cursor pointer.
-*/
 BtCursor *sqlite3BtreeFakeValidCursor(void){
   static BtCursor fakeCursor;
   static int initialized = 0;
@@ -1683,14 +2066,13 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
   BtShared *pBtFrom = pFrom->pBt;
   int i;
 
-  /* Copy all tables from source to dest */
-  /* Free existing tables in dest */
+  invalidateCursors(pBtTo, 0, SQLITE_ABORT);
+
   sqlite3_free(pBtTo->aTables);
   pBtTo->aTables = 0;
   pBtTo->nTables = 0;
   pBtTo->nTablesAlloc = 0;
 
-  /* Copy table entries */
   for(i=0; i<pBtFrom->nTables; i++){
     struct TableEntry *pTE = addTable(pBtTo,
                                        pBtFrom->aTables[i].iTable,
@@ -1699,16 +2081,15 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
     pTE->root = pBtFrom->aTables[i].root;
   }
 
-  /* Copy meta values */
   memcpy(pBtTo->aMeta, pBtFrom->aMeta, sizeof(pBtTo->aMeta));
-
-  /* Copy root */
   pBtTo->root = pBtFrom->root;
   pBtTo->committedRoot = pBtFrom->committedRoot;
   pBtTo->iNextTable = pBtFrom->iNextTable;
 
-  /* Invalidate all cursors on dest */
-  invalidateCursors(pBtTo, 0, SQLITE_ABORT);
+  pTo->iBDataVersion++;
+  if( pBtTo->pPagerShim ){
+    pBtTo->pPagerShim->iDataVersion++;
+  }
 
   return SQLITE_OK;
 }
@@ -1739,6 +2120,7 @@ int sqlite3BtreeCheckpoint(Btree *p, int eMode, int *pnLog, int *pnCkpt){
 ** -------------------------------------------------------------------------- */
 
 #ifndef SQLITE_OMIT_INCRBLOB
+
 int sqlite3BtreePayloadChecked(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   const u8 *pVal;
   int nVal;
@@ -1749,11 +2131,11 @@ int sqlite3BtreePayloadChecked(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
 
   prollyCursorValue(&pCur->pCur, &pVal, &nVal);
 
-  if( offset+amt > (u32)nVal ){
+  if( (i64)offset + (i64)amt > (i64)nVal ){
     return SQLITE_CORRUPT_BKPT;
   }
 
-  memcpy(pBuf, pVal+offset, amt);
+  memcpy(pBuf, pVal + offset, amt);
   return SQLITE_OK;
 }
 
@@ -1772,23 +2154,20 @@ int sqlite3BtreePutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   }
   assert( pCur->curFlags & BTCF_Incrblob );
 
-  /* Read the current value */
   prollyCursorValue(&pCur->pCur, &pVal, &nVal);
 
-  if( offset+amt > (u32)nVal ){
+  if( (i64)offset + (i64)amt > (i64)nVal ){
     return SQLITE_CORRUPT_BKPT;
   }
 
-  /* Make a mutable copy */
   pNew = sqlite3_malloc(nVal);
   if( !pNew ) return SQLITE_NOMEM;
   memcpy(pNew, pVal, nVal);
 
-  /* Apply the modification */
-  memcpy(pNew+offset, pBuf, amt);
+  memcpy(pNew + offset, pBuf, amt);
 
-  /* Write back as a new insert with the same key */
   memset(&payload, 0, sizeof(payload));
+
   if( pCur->curIntKey ){
     payload.nKey = prollyCursorIntKey(&pCur->pCur);
     payload.pData = pNew;
@@ -1799,8 +2178,6 @@ int sqlite3BtreePutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
     prollyCursorKey(&pCur->pCur, &pKey, &nKey);
     payload.pKey = pKey;
     payload.nKey = nKey;
-    /* For blob key tables, the value is empty; put data in key? */
-    /* Actually for incrblob on tables, it's always INTKEY */
     payload.pData = pNew;
     payload.nData = nVal;
   }
@@ -1813,6 +2190,7 @@ int sqlite3BtreePutData(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
 void sqlite3BtreeIncrblobCursor(BtCursor *pCur){
   pCur->curFlags |= BTCF_Incrblob;
 }
+
 #endif /* SQLITE_OMIT_INCRBLOB */
 
 /* --------------------------------------------------------------------------
@@ -1832,22 +2210,27 @@ int sqlite3BtreeCursorIsValidNN(BtCursor *pCur){
 
 #ifdef SQLITE_DEBUG
 sqlite3_uint64 sqlite3BtreeSeekCount(Btree *p){
-  return p->nSeek;
+  return p ? p->nSeek : 0;
 }
 #endif
 
 #ifdef SQLITE_TEST
 int sqlite3BtreeCursorInfo(BtCursor *pCur, int *aResult, int upCnt){
   (void)pCur; (void)upCnt;
-  /* Return dummy values */
   if( aResult ){
-    aResult[0] = 0;  /* Page number */
-    aResult[1] = 0;  /* Cell number */
-    aResult[2] = 0;  /* Cell size */
-    aResult[3] = 0;  /* # free bytes on page */
-    aResult[4] = 0;  /* depth */
-    if( upCnt>=6 ){
-      aResult[5] = 0; /* nChild */
+    aResult[0] = 0;
+    aResult[1] = 0;
+    aResult[2] = 0;
+    aResult[3] = 0;
+    aResult[4] = 0;
+    if( upCnt >= 6 ){
+      aResult[5] = 0;
+    }
+    if( upCnt >= 10 ){
+      aResult[6] = 0;
+      aResult[7] = 0;
+      aResult[8] = 0;
+      aResult[9] = 0;
     }
   }
   return SQLITE_OK;
@@ -1856,14 +2239,28 @@ int sqlite3BtreeCursorInfo(BtCursor *pCur, int *aResult, int upCnt){
 void sqlite3BtreeCursorList(Btree *p){
 #ifndef SQLITE_OMIT_TRACE
   BtCursor *pCur;
-  BtShared *pBt = p->pBt;
+  BtShared *pBt;
+
+  if( !p || !p->pBt ) return;
+  pBt = p->pBt;
 
   for(pCur=pBt->pCursor; pCur; pCur=pCur->pNext){
+    const char *zState;
+    switch( pCur->eState ){
+      case CURSOR_VALID:       zState = "VALID";       break;
+      case CURSOR_INVALID:     zState = "INVALID";     break;
+      case CURSOR_SKIPNEXT:    zState = "SKIPNEXT";    break;
+      case CURSOR_REQUIRESEEK: zState = "REQUIRESEEK"; break;
+      case CURSOR_FAULT:       zState = "FAULT";       break;
+      default:                 zState = "UNKNOWN";     break;
+    }
     sqlite3DebugPrintf(
-      "CURSOR %p: table=%d wrFlag=%d state=%d\n",
-      (void*)pCur, (int)pCur->pgnoRoot,
+      "CURSOR %p: table=%d wrFlag=%d state=%s intKey=%d\n",
+      (void*)pCur,
+      (int)pCur->pgnoRoot,
       (pCur->curFlags & BTCF_WriteFlag) ? 1 : 0,
-      (int)pCur->eState
+      zState,
+      (int)pCur->curIntKey
     );
   }
 #else
@@ -1872,22 +2269,8 @@ void sqlite3BtreeCursorList(Btree *p){
 }
 #endif /* SQLITE_TEST */
 
-/* --------------------------------------------------------------------------
-** Remaining stubs for completeness
-** -------------------------------------------------------------------------- */
-
 /*
-** Return the filename associated with this btree.
-*/
-/* Already implemented above as sqlite3BtreeGetFilename */
-
-/*
-** Return the journal filename (empty for prolly tree).
-*/
-/* Already implemented above as sqlite3BtreeGetJournalname */
-
-/*
-** Register a SQL function so users can verify the storage engine at runtime:
+** Register doltite_engine() SQL function for runtime engine detection.
 **   SELECT doltite_engine();  -->  'prolly'
 */
 static void doltiteEngineFunc(
@@ -1899,9 +2282,6 @@ static void doltiteEngineFunc(
   sqlite3_result_text(context, "prolly", -1, SQLITE_STATIC);
 }
 
-/*
-** Called from sqlite3BtreeOpen to register the function on the db connection.
-*/
 static void registerDoltiteFunctions(sqlite3 *db){
   sqlite3_create_function(db, "doltite_engine", 0, SQLITE_UTF8, 0,
                           doltiteEngineFunc, 0, 0);
