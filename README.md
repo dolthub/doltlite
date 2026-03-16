@@ -62,6 +62,44 @@ Largest passing test files: select9 (36,716), e_expr (16,618), func (15,030),
 randexpr1 (2,600), in2 (1,999), date (1,683), printf (1,410), fkey2 (1,216),
 enc4 (1,114), expr (660), types2 (398), auth (376), trans (328), where (317).
 
+## Running Tests
+
+The test suite uses SQLite's `testfixture` (Tcl-based). You need Tcl dev libraries
+installed.
+
+```
+# Install Tcl (macOS)
+brew install tcl-tk
+
+# Configure with Tcl support
+cd build
+../configure --with-tcl=$(brew --prefix tcl-tk)/lib
+
+# Build testfixture
+make testfixture OPTS="-L$(brew --prefix)/lib"
+
+# Run a single test file
+./testfixture ../test/select1.test
+
+# Run a test file with timeout (some tests are slow)
+perl -e 'alarm(60); exec @ARGV' ./testfixture ../test/select1.test
+
+# Count passing tests in a file
+./testfixture ../test/func.test 2>&1 | grep -c "Ok$"
+
+# Run multiple test files and count passes
+for test in insert select1 delete update trans where expr func; do
+  echo -n "$test: "
+  perl -e 'alarm(60); exec @ARGV' ./testfixture ../test/${test}.test 2>&1 | grep -c "Ok$"
+done
+```
+
+To build stock SQLite's testfixture for comparison:
+
+```
+make testfixture DOLTLITE_PROLLY=0 USE_AMALGAMATION=1
+```
+
 ## Architecture
 
 Key source files in the prolly engine:
