@@ -30,6 +30,7 @@ static int randomLevel(ProllyMutMap *mm){
 **
 ** Returns negative if a < b, zero if a == b, positive if a > b.
 */
+int compareBlobKeys(const u8 *pKey1, int nKey1, const u8 *pKey2, int nKey2);
 static int compareEntries(
   u8 isIntKey,
   const u8 *pKeyA, int nKeyA, i64 intKeyA,
