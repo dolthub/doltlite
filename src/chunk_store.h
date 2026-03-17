@@ -21,8 +21,8 @@
 
 /* Manifest magic */
 #define CHUNK_STORE_MAGIC 0x444C5443  /* "DLTC" */
-#define CHUNK_STORE_VERSION 3
-#define CHUNK_MANIFEST_SIZE 104
+#define CHUNK_STORE_VERSION 4
+#define CHUNK_MANIFEST_SIZE 124
 #define CHUNK_INDEX_ENTRY_SIZE 32
 
 typedef struct ChunkStore ChunkStore;
@@ -42,6 +42,15 @@ struct ChunkStore {
   ProllyHash catalog;        /* Catalog hash (table registry + meta) */
   ProllyHash headCommit;     /* HEAD commit hash (linked list of commits) */
   ProllyHash stagedCatalog;  /* Staged catalog (tables added via dolt_add) */
+  ProllyHash refsHash;       /* Hash of refs chunk (branch mapping) */
+
+  /* Branch refs (in-memory, loaded from refs chunk) */
+  struct BranchRef {
+    char *zName;
+    ProllyHash commitHash;
+  } *aBranches;
+  int nBranches;
+  char *zDefaultBranch;      /* Default branch for new connections */
   int nChunks;               /* Number of chunks in store */
   i64 iIndexOffset;          /* File offset of chunk index */
   int nIndexSize;            /* Size of chunk index in bytes */
@@ -87,6 +96,15 @@ void chunkStoreSetHeadCommit(ChunkStore *cs, const ProllyHash *pHead);
 /* Get/set the staged catalog hash */
 void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged);
 void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged);
+
+/* Branch management */
+const char *chunkStoreGetDefaultBranch(ChunkStore *cs);
+int chunkStoreSetDefaultBranch(ChunkStore *cs, const char *zName);
+int chunkStoreAddBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);
+int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName);
+int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
+int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);
+int chunkStoreSerializeRefs(ChunkStore *cs);
 
 /* Check if a chunk exists */
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash);
