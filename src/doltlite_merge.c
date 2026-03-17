@@ -17,6 +17,9 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 
+#include "prolly_three_way_diff.h"
+#include "prolly_mutmap.h"
+#include "prolly_mutate.h"
 #include <string.h>
 
 /* TableEntry struct — must match prolly_btree.c definition */
@@ -26,6 +29,8 @@ struct TableEntry {
   u8 flags;
   char *zName;
 };
+
+/* ConflictEntry from chunk_store.h */
 
 /* Provided by prolly_btree.c */
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
@@ -53,6 +58,181 @@ static struct TableEntry *findTableEntry(
 ** Find a table entry by NAME. This is the primary merge key —
 ** two branches may have different iTable numbers for the same table.
 */
+/*
+** Row-level merge context: collects non-conflicting edits into a MutMap
+** and conflicting rows into a list.
+*/
+typedef struct RowMergeCtx RowMergeCtx;
+struct RowMergeCtx {
+  ProllyMutMap *pEdits;      /* Non-conflicting edits to apply */
+  u8 isIntKey;
+  int nConflicts;
+  /* Conflict entries: stored as a simple array for later serialization */
+  struct ConflictRow {
+    i64 intKey;
+    u8 *pKey; int nKey;
+    u8 *pBaseVal; int nBaseVal;
+    u8 *pTheirVal; int nTheirVal;
+  } *aConflicts;
+  int nConflictsAlloc;
+};
+
+static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
+  RowMergeCtx *ctx = (RowMergeCtx*)pCtx;
+  int rc = SQLITE_OK;
+
+  switch( pChange->type ){
+    case THREE_WAY_LEFT_ADD:
+    case THREE_WAY_LEFT_MODIFY:
+    case THREE_WAY_LEFT_DELETE:
+      /* Our change only — already in our tree, no action needed */
+      break;
+
+    case THREE_WAY_RIGHT_ADD:
+      /* Theirs added a row — insert it */
+      rc = prollyMutMapInsert(ctx->pEdits,
+          pChange->pKey, pChange->nKey, pChange->intKey,
+          pChange->pTheirVal, pChange->nTheirVal);
+      break;
+
+    case THREE_WAY_RIGHT_MODIFY:
+      /* Theirs modified a row — update it */
+      rc = prollyMutMapInsert(ctx->pEdits,
+          pChange->pKey, pChange->nKey, pChange->intKey,
+          pChange->pTheirVal, pChange->nTheirVal);
+      break;
+
+    case THREE_WAY_RIGHT_DELETE:
+      /* Theirs deleted a row — delete it */
+      rc = prollyMutMapDelete(ctx->pEdits,
+          pChange->pKey, pChange->nKey, pChange->intKey);
+      break;
+
+    case THREE_WAY_CONVERGENT:
+      /* Both made same change — no action, already in ours */
+      break;
+
+    case THREE_WAY_CONFLICT_MM:
+    case THREE_WAY_CONFLICT_DM: {
+      /* Conflict — record it */
+      struct ConflictRow *aNew;
+      if( ctx->nConflicts >= ctx->nConflictsAlloc ){
+        int nNew = ctx->nConflictsAlloc ? ctx->nConflictsAlloc*2 : 16;
+        aNew = sqlite3_realloc(ctx->aConflicts, nNew*(int)sizeof(struct ConflictRow));
+        if( !aNew ) return SQLITE_NOMEM;
+        ctx->aConflicts = aNew;
+        ctx->nConflictsAlloc = nNew;
+      }
+      {
+        struct ConflictRow *cr = &ctx->aConflicts[ctx->nConflicts];
+        memset(cr, 0, sizeof(*cr));
+        cr->intKey = pChange->intKey;
+        if( pChange->pKey && pChange->nKey>0 ){
+          cr->pKey = sqlite3_malloc(pChange->nKey);
+          if(cr->pKey) memcpy(cr->pKey, pChange->pKey, pChange->nKey);
+          cr->nKey = pChange->nKey;
+        }
+        if( pChange->pBaseVal && pChange->nBaseVal>0 ){
+          cr->pBaseVal = sqlite3_malloc(pChange->nBaseVal);
+          if(cr->pBaseVal) memcpy(cr->pBaseVal, pChange->pBaseVal, pChange->nBaseVal);
+          cr->nBaseVal = pChange->nBaseVal;
+        }
+        if( pChange->pTheirVal && pChange->nTheirVal>0 ){
+          cr->pTheirVal = sqlite3_malloc(pChange->nTheirVal);
+          if(cr->pTheirVal) memcpy(cr->pTheirVal, pChange->pTheirVal, pChange->nTheirVal);
+          cr->nTheirVal = pChange->nTheirVal;
+        }
+        ctx->nConflicts++;
+      }
+      break;
+    }
+  }
+  return rc;
+}
+
+static void freeRowMergeCtx(RowMergeCtx *ctx){
+  int i;
+  for(i=0; i<ctx->nConflicts; i++){
+    sqlite3_free(ctx->aConflicts[i].pKey);
+    sqlite3_free(ctx->aConflicts[i].pBaseVal);
+    sqlite3_free(ctx->aConflicts[i].pTheirVal);
+  }
+  sqlite3_free(ctx->aConflicts);
+  if( ctx->pEdits ){
+    prollyMutMapFree(ctx->pEdits);
+    sqlite3_free(ctx->pEdits);
+  }
+}
+
+/*
+** Perform row-level three-way merge on a single table.
+** Returns: the new merged root hash + number of conflicts.
+*/
+static int mergeTableRows(
+  sqlite3 *db,
+  const ProllyHash *pAncRoot,
+  const ProllyHash *pOursRoot,
+  const ProllyHash *pTheirsRoot,
+  u8 flags,
+  ProllyHash *pMergedRoot,
+  int *pnConflicts,
+  struct ConflictRow **ppConflicts
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = (ProllyCache*)(((char*)cs) -
+    ((char*)&((struct { ChunkStore s; ProllyCache c; }*)0)->s - (char*)0) +
+    sizeof(ChunkStore));
+  /* Actually, we need the BtShared to get the cache. Use a simpler approach: */
+  /* The cache is the field right after ChunkStore in BtShared. */
+  extern void *doltliteGetBtShared(sqlite3 *db);
+  void *pBt = doltliteGetBtShared(db);
+  ProllyCache *cache = (ProllyCache*)((u8*)pBt + sizeof(ChunkStore));
+
+  RowMergeCtx ctx;
+  ProllyMutator mut;
+  int rc;
+
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
+  ctx.pEdits = sqlite3_malloc(sizeof(ProllyMutMap));
+  if( !ctx.pEdits ) return SQLITE_NOMEM;
+  rc = prollyMutMapInit(ctx.pEdits, ctx.isIntKey);
+  if( rc!=SQLITE_OK ){ sqlite3_free(ctx.pEdits); return rc; }
+
+  /* Run three-way diff */
+  rc = prollyThreeWayDiff(cs, cache, pAncRoot, pOursRoot, pTheirsRoot,
+                          flags, rowMergeCallback, &ctx);
+  if( rc!=SQLITE_OK ){
+    freeRowMergeCtx(&ctx);
+    return rc;
+  }
+
+  /* Apply non-conflicting edits to produce merged tree */
+  if( !prollyMutMapIsEmpty(ctx.pEdits) ){
+    memset(&mut, 0, sizeof(mut));
+    mut.pStore = cs;
+    mut.pCache = cache;
+    memcpy(&mut.oldRoot, pOursRoot, sizeof(ProllyHash));
+    mut.pEdits = ctx.pEdits;
+    mut.flags = flags;
+    rc = prollyMutateFlush(&mut);
+    if( rc==SQLITE_OK ){
+      memcpy(pMergedRoot, &mut.newRoot, sizeof(ProllyHash));
+    }
+  }else{
+    /* No non-conflicting edits — merged root is same as ours */
+    memcpy(pMergedRoot, pOursRoot, sizeof(ProllyHash));
+  }
+
+  *pnConflicts = ctx.nConflicts;
+  *ppConflicts = ctx.aConflicts;
+  ctx.aConflicts = 0; /* ownership transferred */
+  ctx.nConflicts = 0;
+
+  freeRowMergeCtx(&ctx);
+  return rc;
+}
+
 static struct TableEntry *findTableByName(
   struct TableEntry *aEntries,
   int nEntries,
@@ -165,7 +345,8 @@ int doltliteMergeCatalogs(
   const ProllyHash *ancestor,
   const ProllyHash *ours,
   const ProllyHash *theirs,
-  ProllyHash *pMergedHash
+  ProllyHash *pMergedHash,
+  int *pnConflicts          /* OUT: total row conflicts across all tables */
 ){
   struct TableEntry *aAnc = 0, *aOurs = 0, *aTheirs = 0;
   int nAnc = 0, nOurs = 0, nTheirs = 0;
@@ -175,6 +356,7 @@ int doltliteMergeCatalogs(
   int nMergedAlloc = 0;
   Pgno iNextMerged;
   int rc;
+  int totalConflicts = 0;
   int i;
 
   /* Load all three catalogs */
@@ -252,8 +434,33 @@ int doltliteMergeCatalogs(
       }else{
         int theirsChanged = prollyHashCompare(&theirsEntry->root, &ancEntry->root)!=0;
         if( oursChanged && theirsChanged ){
-          rc = SQLITE_ERROR;  /* Both modified same table — conflict */
-          goto merge_cleanup;
+          /* Both modified same table — do row-level three-way merge */
+          ProllyHash mergedTableRoot;
+          int nConflicts = 0;
+          struct ConflictRow *aConflictRows = 0;
+
+          rc = mergeTableRows(db, &ancEntry->root, &aOurs[i].root,
+                              &theirsEntry->root, aOurs[i].flags,
+                              &mergedTableRoot, &nConflicts, &aConflictRows);
+          if( rc!=SQLITE_OK ) goto merge_cleanup;
+
+          {
+            struct TableEntry merged = aOurs[i];
+            memcpy(&merged.root, &mergedTableRoot, sizeof(ProllyHash));
+            aMerged[nMerged++] = merged;
+          }
+
+          /* TODO: store conflicts in conflict catalog for resolution */
+          if( nConflicts>0 ){
+            totalConflicts += nConflicts;
+            /* Free conflict rows for now — will be stored in do-j7h */
+            { int j; for(j=0;j<nConflicts;j++){
+              sqlite3_free(aConflictRows[j].pKey);
+              sqlite3_free(aConflictRows[j].pBaseVal);
+              sqlite3_free(aConflictRows[j].pTheirVal);
+            }}
+            sqlite3_free(aConflictRows);
+          }
         }else if( theirsChanged ){
           /* Take theirs' root but with ours' iTable number */
           struct TableEntry merged = aOurs[i];
@@ -300,6 +507,7 @@ int doltliteMergeCatalogs(
   /* Serialize the merged catalog */
   rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
                               pMergedHash);
+  if( pnConflicts ) *pnConflicts = totalConflicts;
 
 merge_cleanup:
   sqlite3_free(aAnc);

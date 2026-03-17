@@ -44,8 +44,8 @@ echo "UPDATE t SET v='main'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE 
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB3" > /dev/null 2>&1
-run_test_match "conflict" "SELECT dolt_merge('feature');" "merge conflict" "$DB3"
-run_test "conflict_unchanged" "SELECT v FROM t;" "main" "$DB3"
+run_test_match "conflict" "SELECT dolt_merge('feature');" "conflict" "$DB3"
+run_test "conflict_ours_preserved" "SELECT v FROM t;" "main" "$DB3"
 
 # Test 5: Nonexistent branch
 run_test_match "no_branch" "SELECT dolt_merge('nope');" "not found" "$DB3"
@@ -89,17 +89,50 @@ run_test_match "diff_ff_added" \
   "SELECT diff_type, to_value FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
   "added" "$DB2"
 
-# Test 10: dolt_diff between main and feature for conflict scenario (DB3 from Test 4)
-# Main is at HEAD, feature tip is its own commit. Compare ancestor (offset 1 on main = init) to main HEAD.
-# Main changed v from 'a' to 'main' - row id=1 was modified
-run_test "diff_conflict_main_type" \
-  "SELECT diff_type FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
+# Test 10: After merge with conflicts, dolt_diff between ancestor and merge commit
+# The merge commit is HEAD (offset 0), ancestor is init (offset 2 since merge added a commit)
+run_test_match "diff_conflict_shows_change" \
+  "SELECT diff_type FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
   "modified" "$DB3"
-run_test "diff_conflict_main_rowid" \
-  "SELECT rowid_val FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
-  "1" "$DB3"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5"
+# Test 11: Row-level auto-merge (both modify same table, different rows)
+DB6=/tmp/test_merge6_$$.db; rm -f "$DB6"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "UPDATE t SET v='MAIN' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "UPDATE t SET v='FEAT' WHERE id=3; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+run_test_match "row_merge_succeeds" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB6"
+run_test "row_merge_row1" "SELECT v FROM t WHERE id=1;" "MAIN" "$DB6"
+run_test "row_merge_row2" "SELECT v FROM t WHERE id=2;" "b" "$DB6"
+run_test "row_merge_row3" "SELECT v FROM t WHERE id=3;" "FEAT" "$DB6"
+
+# Test 12: Row-level conflict (same row modified on both branches)
+DB7=/tmp/test_merge7_$$.db; rm -f "$DB7"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'orig'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "UPDATE t SET v='main-val' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "UPDATE t SET v='feat-val' WHERE id=1; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+run_test_match "row_conflict_detected" "SELECT dolt_merge('feature');" "conflict" "$DB7"
+run_test "row_conflict_ours_kept" "SELECT v FROM t WHERE id=1;" "main-val" "$DB7"
+
+# Test 13: Mixed — some rows conflict, others auto-merge
+DB8=/tmp/test_merge8_$$.db; rm -f "$DB8"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "UPDATE t SET v='main1' WHERE id=1; INSERT INTO t VALUES(3,'main3'); SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "UPDATE t SET v='feat1' WHERE id=1; INSERT INTO t VALUES(4,'feat4'); SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+run_test_match "mixed_merge" "SELECT dolt_merge('feature');" "conflict" "$DB8"
+run_test "mixed_row2_unchanged" "SELECT v FROM t WHERE id=2;" "b" "$DB8"
+run_test "mixed_row3_from_main" "SELECT v FROM t WHERE id=3;" "main3" "$DB8"
+run_test "mixed_row4_from_feat" "SELECT v FROM t WHERE id=4;" "feat4" "$DB8"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

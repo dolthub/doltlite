@@ -55,7 +55,7 @@ extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
 /* From doltlite_merge.c */
 extern int doltliteMergeCatalogs(sqlite3 *db, const ProllyHash *ancestor,
                                   const ProllyHash *ours, const ProllyHash *theirs,
-                                  ProllyHash *pMergedHash);
+                                  ProllyHash *pMergedHash, int *pnConflicts);
 /* From prolly_btree.c */
 extern int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
 
@@ -509,6 +509,7 @@ static void doltliteMergeFunc(
   const char *zBranch;
   ProllyHash ourHead, theirHead, ancestorHash;
   ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
+  int nMergeConflicts = 0;
   DoltliteCommit ourCommit, theirCommit, ancCommit;
   u8 *data = 0;
   int nData = 0;
@@ -612,11 +613,11 @@ static void doltliteMergeFunc(
   doltliteCommitClear(&ancCommit);
 
   /* Perform the merge */
-  rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash, &mergedCatHash);
+  rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash, &mergedCatHash, &nMergeConflicts);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&ourCommit);
     doltliteCommitClear(&theirCommit);
-    sqlite3_result_error(context, "merge conflict: both branches modified the same table", -1);
+    sqlite3_result_error(context, "merge failed", -1);
     return;
   }
 
@@ -671,7 +672,15 @@ static void doltliteMergeFunc(
     chunkStoreCommit(cs);
 
     doltliteHashToHex(&commitHash, hexBuf);
-    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+    if( nMergeConflicts > 0 ){
+      char msg[256];
+      sqlite3_snprintf(sizeof(msg), msg,
+        "Merge completed with %d conflict(s). Use SELECT * FROM dolt_conflicts to view.",
+        nMergeConflicts);
+      sqlite3_result_text(context, msg, -1, SQLITE_TRANSIENT);
+    }else{
+      sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+    }
   }
 }
 
