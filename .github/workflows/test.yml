@@ -80,7 +80,7 @@ jobs:
         make libsqlite3.a USE_AMALGAMATION=0
         cc -g -O0 -I. -I../src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
           -o concurrent_branch_test ../test/concurrent_branch_test.c \
-          libsqlite3.a -lz -lpthread
+          libsqlite3.a -lz -lpthread -lm
         ./concurrent_branch_test
 
     - name: Build testfixture
