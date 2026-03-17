@@ -54,6 +54,7 @@ extern int doltliteGcRegister(sqlite3 *db);
 extern void doltliteRegisterDiffTables(sqlite3 *db);
 extern int doltliteAncestorRegister(sqlite3 *db);
 extern void doltliteRegisterHistoryTables(sqlite3 *db);
+extern int doltliteSchemaDiffRegister(sqlite3 *db);
 
 /* From doltlite_ancestor.c */
 extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
@@ -1073,6 +1074,7 @@ void doltliteRegister(sqlite3 *db){
   doltliteRegisterDiffTables(db);
   doltliteAncestorRegister(db);
   doltliteRegisterHistoryTables(db);
+  doltliteSchemaDiffRegister(db);
 }
 
 #endif /* DOLTLITE_PROLLY */

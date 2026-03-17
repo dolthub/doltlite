@@ -88,6 +88,18 @@ SELECT * FROM dolt_diff('users', 'abc123...', 'def456...');
 -- diff_type | rowid_val | from_value | to_value
 ```
 
+### Schema Diff
+
+Compare schemas between any two commits, branches, or tags:
+
+```sql
+SELECT * FROM dolt_schema_diff('v1.0', 'v2.0');
+-- table_name | from_create_stmt | to_create_stmt | diff_type
+
+-- Shows tables added, dropped, or modified (schema changed)
+-- Also detects new indexes and views
+```
+
 ### Audit Log (dolt_diff_&lt;table&gt;)
 
 Full history of every change to every row, across all commits:
