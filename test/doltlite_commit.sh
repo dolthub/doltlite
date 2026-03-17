@@ -48,7 +48,7 @@ rm -f "$DB"
 # --- dolt_commit basics ---
 
 run_test_match "commit_returns_hash" \
-  "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-m', 'init');" \
+  "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A', '-m', 'init');" \
   "^[0-9a-f]{40}$" "$DB"
 
 run_test "commit_requires_message" \
@@ -72,7 +72,7 @@ run_test_match "log_has_hash" \
 # --- Multiple commits ---
 
 run_test_match "second_commit" \
-  "INSERT INTO t VALUES(2); SELECT dolt_commit('-m', 'add row 2');" \
+  "INSERT INTO t VALUES(2); SELECT dolt_commit('-A', '-m', 'add row 2');" \
   "^[0-9a-f]{40}$" "$DB"
 
 run_test "log_count_two" \
@@ -86,7 +86,7 @@ run_test_match "log_order" \
 # --- Author flag ---
 
 run_test_match "commit_with_author" \
-  "INSERT INTO t VALUES(3); SELECT dolt_commit('-m', 'add 3', '--author', 'Alice <alice@test.com>');" \
+  "INSERT INTO t VALUES(3); SELECT dolt_commit('-A', '-m', 'add 3', '--author', 'Alice <alice@test.com>');" \
   "^[0-9a-f]{40}$" "$DB"
 
 run_test "author_name" \
@@ -106,7 +106,7 @@ run_test "log_count_three" \
 DB2=/tmp/test_dolt_persist_$$.db
 rm -f "$DB2"
 
-echo "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO items VALUES(1,'hat'),(2,'coat'); SELECT dolt_commit('-m', 'create items');" | $DOLTLITE "$DB2" > /dev/null 2>&1
+echo "CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO items VALUES(1,'hat'),(2,'coat'); SELECT dolt_commit('-A', '-m', 'create items');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 
 run_test "persist_data" \
   "SELECT name FROM items ORDER BY id;" \
@@ -120,7 +120,7 @@ run_test "persist_log" \
 # --- Commit after schema change ---
 
 run_test_match "commit_after_alter" \
-  "ALTER TABLE items ADD COLUMN price REAL DEFAULT 0; SELECT dolt_commit('-m', 'add price column');" \
+  "ALTER TABLE items ADD COLUMN price REAL DEFAULT 0; SELECT dolt_commit('-A', '-m', 'add price column');" \
   "^[0-9a-f]{40}$" "$DB2"
 
 run_test "log_after_alter" \
@@ -133,20 +133,20 @@ run_test "empty_log" \
   "SELECT count(*) FROM dolt_log;" \
   "0" ":memory:"
 
-# --- Commit with no changes (still works) ---
+# --- Commit with no changes (should fail) ---
 
 DB3=/tmp/test_dolt_nochange_$$.db
 rm -f "$DB3"
 
-echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-m', 'first');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A', '-m', 'first');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 
-run_test_match "commit_no_changes" \
+run_test "commit_no_changes" \
   "SELECT dolt_commit('-m', 'no changes');" \
-  "^[0-9a-f]{40}$" "$DB3"
+  "Error near line 1: nothing to commit, working tree clean (use dolt_add to stage changes)" "$DB3"
 
-run_test "two_commits_no_change" \
+run_test "one_commit_after_no_change" \
   "SELECT count(*) FROM dolt_log;" \
-  "2" "$DB3"
+  "1" "$DB3"
 
 # --- Multiple tables ---
 
@@ -154,7 +154,7 @@ DB4=/tmp/test_dolt_multi_$$.db
 rm -f "$DB4"
 
 run_test_match "multi_table_commit" \
-  "CREATE TABLE a(x); CREATE TABLE b(y); INSERT INTO a VALUES(1); INSERT INTO b VALUES(2); SELECT dolt_commit('-m', 'two tables');" \
+  "CREATE TABLE a(x); CREATE TABLE b(y); INSERT INTO a VALUES(1); INSERT INTO b VALUES(2); SELECT dolt_commit('-A', '-m', 'two tables');" \
   "^[0-9a-f]{40}$" "$DB4"
 
 run_test "multi_table_data_a" \
