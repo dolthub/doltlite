@@ -565,7 +565,7 @@ PROLLY_OBJS = prolly_hash.o prolly_arena.o prolly_node.o prolly_cache.o \
               chunk_store.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_btree.o pager_shim.o \
               doltlite.o doltlite_commit.o doltlite_log.o doltlite_status.o \
-              doltlite_diff.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_conflicts.o \
+              doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_conflicts.o \
               doltlite_gc.o
 
 DOLTLITE_PROLLY ?= 1
@@ -1327,6 +1327,9 @@ doltlite_conflicts.o:	$(TOP)/src/doltlite_conflicts.c $(DEPS_OBJ_COMMON)
 
 doltlite_gc.o:	$(TOP)/src/doltlite_gc.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_gc.c
+
+doltlite_diff_table.o:	$(TOP)/src/doltlite_diff_table.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_diff_table.c
 
 doltlite_merge.o:	$(TOP)/src/doltlite_merge.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge.c

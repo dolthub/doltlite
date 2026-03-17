@@ -89,6 +89,9 @@ jobs:
     - name: Dolt cherry-pick and revert tests
       run: cd build && bash ../test/doltlite_cherry_pick.sh
 
+    - name: Dolt diff audit log tests
+      run: cd build && bash ../test/doltlite_diff_table.sh
+
     - name: Dolt garbage collection tests
       run: cd build && bash ../test/doltlite_gc.sh
 

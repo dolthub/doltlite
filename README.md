@@ -73,6 +73,24 @@ SELECT * FROM dolt_diff('users', 'abc123...', 'def456...');
 -- diff_type | rowid_val | from_value | to_value
 ```
 
+### Audit Log (dolt_diff_&lt;table&gt;)
+
+Full history of every change to every row, across all commits:
+
+```sql
+SELECT * FROM dolt_diff_users;
+-- diff_type | rowid_val | from_value | to_value |
+--   from_commit | to_commit | from_commit_date | to_commit_date
+
+-- Every INSERT, UPDATE, DELETE that was ever committed is here
+SELECT diff_type, rowid_val, to_commit FROM dolt_diff_users
+  WHERE rowid_val = 42;
+```
+
+One `dolt_diff_<table>` virtual table is automatically created for each
+user table. The table walks the full commit history and diffs each
+consecutive pair of commits.
+
 ### Reset
 
 ```sql
