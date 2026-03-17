@@ -49,6 +49,7 @@
 #include "prolly_mutmap.h"
 #include "prolly_mutate.h"
 #include "pager_shim.h"
+#include "doltlite_commit.h"
 #include "vdbeInt.h"
 
 #include <string.h>
@@ -2727,6 +2728,156 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   rc = flushAllPending(pBt, 0);
   if( rc!=SQLITE_OK ) return rc;
   return serializeCatalog(pBt, ppOut, pnOut);
+}
+
+/*
+** Load a catalog snapshot from a catalog hash.
+** Returns an array of TableEntry and count. Caller must sqlite3_free(*ppTables).
+*/
+int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
+                        struct TableEntry **ppTables, int *pnTables,
+                        Pgno *piNextTable){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+  BtShared temp;
+
+  if( !cs ) return SQLITE_ERROR;
+  if( prollyHashIsEmpty(catHash) ){
+    *ppTables = 0;
+    *pnTables = 0;
+    if( piNextTable ) *piNextTable = 2;
+    return SQLITE_OK;
+  }
+
+  rc = chunkStoreGet(cs, catHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+
+  memset(&temp, 0, sizeof(temp));
+  rc = deserializeCatalog(&temp, data, nData);
+  sqlite3_free(data);
+  if( rc!=SQLITE_OK ) return rc;
+
+  *ppTables = temp.aTables;
+  *pnTables = temp.nTables;
+  if( piNextTable ) *piNextTable = temp.iNextTable;
+  return SQLITE_OK;
+}
+
+/*
+** Get the HEAD commit's catalog hash.
+*/
+int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash headHash;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+  DoltliteCommit commit;
+
+  if( !cs ) return SQLITE_ERROR;
+  chunkStoreGetHeadCommit(cs, &headHash);
+  if( prollyHashIsEmpty(&headHash) ){
+    memset(pCatHash, 0, sizeof(ProllyHash));
+    return SQLITE_OK;
+  }
+
+  rc = chunkStoreGet(cs, &headHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteCommitDeserialize(data, nData, &commit);
+  sqlite3_free(data);
+  if( rc!=SQLITE_OK ) return rc;
+
+  memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
+  doltliteCommitClear(&commit);
+  return SQLITE_OK;
+}
+
+/*
+** Resolve a table name to its rootpage (iTable number).
+*/
+int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  rc = sqlite3_prepare_v2(db,
+    "SELECT rootpage FROM sqlite_master WHERE type='table' AND name=?",
+    -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_bind_text(pStmt, 1, zTable, -1, SQLITE_STATIC);
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    *piTable = (Pgno)sqlite3_column_int(pStmt, 0);
+    rc = SQLITE_OK;
+  }else{
+    rc = SQLITE_ERROR;
+  }
+  sqlite3_finalize(pStmt);
+  return rc;
+}
+
+/*
+** Resolve a rootpage (iTable) to its table name.
+** Returns sqlite3_malloc'd string. Caller must sqlite3_free.
+*/
+char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
+  sqlite3_stmt *pStmt = 0;
+  char *zName = 0;
+  int rc;
+  rc = sqlite3_prepare_v2(db,
+    "SELECT name FROM sqlite_master WHERE type='table' AND rootpage=?",
+    -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return 0;
+  sqlite3_bind_int(pStmt, 1, (int)iTable);
+  if( sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *z = (const char*)sqlite3_column_text(pStmt, 0);
+    if( z ) zName = sqlite3_mprintf("%s", z);
+  }
+  sqlite3_finalize(pStmt);
+  return zName;
+}
+
+/*
+** Hard reset: reload a catalog into the live BtShared table registry.
+** This replaces the working state with the given catalog's state.
+** Also invalidates all cursors and clears the schema cache.
+*/
+int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
+  BtShared *pBt = doltliteGetBtShared(db);
+  ChunkStore *cs;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+
+  if( !pBt ) return SQLITE_ERROR;
+  cs = &pBt->store;
+
+  if( prollyHashIsEmpty(catHash) ) return SQLITE_OK;
+
+  rc = chunkStoreGet(cs, catHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Invalidate all cursors first */
+  invalidateCursors(pBt, 0, SQLITE_ABORT);
+
+  /* Replace table registry */
+  sqlite3_free(pBt->aTables);
+  pBt->aTables = 0;
+  pBt->nTables = 0;
+  pBt->nTablesAlloc = 0;
+
+  rc = deserializeCatalog(pBt, data, nData);
+  sqlite3_free(data);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Invalidate schema so SQLite re-reads sqlite_master */
+  invalidateSchema(pBt);
+
+  /* Persist the new working state */
+  chunkStoreSetCatalog(cs, catHash);
+  rc = chunkStoreCommit(cs);
+  return rc;
 }
 
 /* External registration for all dolt features */

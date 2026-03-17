@@ -21,8 +21,8 @@
 
 /* Manifest magic */
 #define CHUNK_STORE_MAGIC 0x444C5443  /* "DLTC" */
-#define CHUNK_STORE_VERSION 2
-#define CHUNK_MANIFEST_SIZE 84
+#define CHUNK_STORE_VERSION 3
+#define CHUNK_MANIFEST_SIZE 104
 #define CHUNK_INDEX_ENTRY_SIZE 32
 
 typedef struct ChunkStore ChunkStore;
@@ -41,6 +41,7 @@ struct ChunkStore {
   ProllyHash root;           /* Current root hash */
   ProllyHash catalog;        /* Catalog hash (table registry + meta) */
   ProllyHash headCommit;     /* HEAD commit hash (linked list of commits) */
+  ProllyHash stagedCatalog;  /* Staged catalog (tables added via dolt_add) */
   int nChunks;               /* Number of chunks in store */
   i64 iIndexOffset;          /* File offset of chunk index */
   int nIndexSize;            /* Size of chunk index in bytes */
@@ -82,6 +83,10 @@ void chunkStoreSetCatalog(ChunkStore *cs, const ProllyHash *pCat);
 /* Get/set the HEAD commit hash */
 void chunkStoreGetHeadCommit(ChunkStore *cs, ProllyHash *pHead);
 void chunkStoreSetHeadCommit(ChunkStore *cs, const ProllyHash *pHead);
+
+/* Get/set the staged catalog hash */
+void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged);
+void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged);
 
 /* Check if a chunk exists */
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash);
