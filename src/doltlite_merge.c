@@ -58,10 +58,6 @@ static struct TableEntry *findTableEntry(
 }
 
 /*
-** Find a table entry by NAME. This is the primary merge key —
-** two branches may have different iTable numbers for the same table.
-*/
-/*
 ** Row-level merge context: collects non-conflicting edits into a MutMap
 ** and conflicting rows into a list.
 */

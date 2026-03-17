@@ -25,7 +25,6 @@ extern const char *doltliteGetSessionBranch(sqlite3 *db);
 extern void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);
 extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 extern void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
-extern void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
 extern void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
 
 /* --------------------------------------------------------------------------
