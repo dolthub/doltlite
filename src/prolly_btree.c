@@ -2838,6 +2838,48 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
   return zName;
 }
 
+/*
+** Hard reset: reload a catalog into the live BtShared table registry.
+** This replaces the working state with the given catalog's state.
+** Also invalidates all cursors and clears the schema cache.
+*/
+int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
+  BtShared *pBt = doltliteGetBtShared(db);
+  ChunkStore *cs;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+
+  if( !pBt ) return SQLITE_ERROR;
+  cs = &pBt->store;
+
+  if( prollyHashIsEmpty(catHash) ) return SQLITE_OK;
+
+  rc = chunkStoreGet(cs, catHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Invalidate all cursors first */
+  invalidateCursors(pBt, 0, SQLITE_ABORT);
+
+  /* Replace table registry */
+  sqlite3_free(pBt->aTables);
+  pBt->aTables = 0;
+  pBt->nTables = 0;
+  pBt->nTablesAlloc = 0;
+
+  rc = deserializeCatalog(pBt, data, nData);
+  sqlite3_free(data);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Invalidate schema so SQLite re-reads sqlite_master */
+  invalidateSchema(pBt);
+
+  /* Persist the new working state */
+  chunkStoreSetCatalog(cs, catHash);
+  rc = chunkStoreCommit(cs);
+  return rc;
+}
+
 /* External registration for all dolt features */
 extern void doltliteRegister(sqlite3 *db);
 

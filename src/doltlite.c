@@ -385,6 +385,71 @@ static void doltliteCommitFunc(
 }
 
 /* --------------------------------------------------------------------------
+** dolt_reset('--soft') or dolt_reset('--hard')
+**
+** --soft: unstage everything (staged = HEAD catalog), keep working changes
+** --hard: reset working state to HEAD, discard all uncommitted changes
+** -------------------------------------------------------------------------- */
+
+extern int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
+
+static void doltliteResetFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash headCatHash;
+  int isHard = 0;
+  int rc;
+  int i;
+
+  if( !cs ){
+    sqlite3_result_error(context, "no database open", -1);
+    return;
+  }
+
+  /* Parse args */
+  for(i=0; i<argc; i++){
+    const char *arg = (const char*)sqlite3_value_text(argv[i]);
+    if( arg && strcmp(arg, "--hard")==0 ) isHard = 1;
+  }
+
+  /* Get HEAD catalog hash */
+  rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to read HEAD", -1);
+    return;
+  }
+
+  /* Soft reset: staged = HEAD catalog (unstage everything) */
+  chunkStoreSetStagedCatalog(cs, &headCatHash);
+
+  if( isHard ){
+    /* Hard reset: also reset working state to HEAD */
+    if( prollyHashIsEmpty(&headCatHash) ){
+      sqlite3_result_error(context, "no HEAD commit to reset to", -1);
+      return;
+    }
+    rc = doltliteHardReset(db, &headCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "hard reset failed", -1);
+      return;
+    }
+  }else{
+    /* Persist soft reset (just the staged catalog change) */
+    rc = chunkStoreCommit(cs);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
+  }
+
+  sqlite3_result_int(context, 0);
+}
+
+/* --------------------------------------------------------------------------
 ** Registration
 ** -------------------------------------------------------------------------- */
 
@@ -393,6 +458,8 @@ void doltliteRegister(sqlite3 *db){
                           doltliteCommitFunc, 0, 0);
   sqlite3_create_function(db, "dolt_add", -1, SQLITE_UTF8, 0,
                           doltliteAddFunc, 0, 0);
+  sqlite3_create_function(db, "dolt_reset", -1, SQLITE_UTF8, 0,
+                          doltliteResetFunc, 0, 0);
   doltliteLogRegister(db);
   doltliteStatusRegister(db);
   doltliteDiffRegister(db);
