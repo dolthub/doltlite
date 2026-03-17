@@ -74,6 +74,18 @@ jobs:
     - name: Dolt branch tests
       run: cd build && bash ../test/doltlite_branch.sh
 
+    - name: Dolt merge tests
+      run: cd build && bash ../test/doltlite_merge.sh
+
+    - name: Dolt tag tests
+      run: cd build && bash ../test/doltlite_tag.sh
+
+    - name: Dolt conflicts tests
+      run: cd build && bash ../test/doltlite_conflicts.sh
+
+    - name: End-to-end integration test
+      run: cd build && bash ../test/doltlite_e2e.sh
+
     - name: Concurrent branch test
       run: |
         cd build
