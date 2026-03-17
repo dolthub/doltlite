@@ -83,6 +83,9 @@ jobs:
     - name: Dolt conflicts tests
       run: cd build && bash ../test/doltlite_conflicts.sh
 
+    - name: Dolt per-row conflict resolution tests
+      run: cd build && bash ../test/doltlite_conflict_rows.sh
+
     - name: Dolt cherry-pick and revert tests
       run: cd build && bash ../test/doltlite_cherry_pick.sh
 

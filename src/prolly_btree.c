@@ -977,10 +977,13 @@ catalog_loaded:
     chunkStoreGetStagedCatalog(&pBt->store, &p->stagedCatalog);
   }
 
-  /* Register doltite_engine() SQL function for runtime detection */
+  *ppBtree = p;
+
+  /* Register doltite_engine() SQL function for runtime detection.
+  ** Must happen AFTER *ppBtree is set so that db->aDb[0].pBt is
+  ** accessible for functions that need the chunk store. */
   registerDoltiteFunctions(db);
 
-  *ppBtree = p;
   return SQLITE_OK;
 }
 

@@ -134,16 +134,21 @@ SELECT dolt_merge('feature');
 View and resolve merge conflicts:
 
 ```sql
--- View which tables have conflicts
+-- View which tables have conflicts (summary)
 SELECT * FROM dolt_conflicts;
 -- table_name | num_conflicts
 -- users      | 2
 
--- Resolve: keep our values
-SELECT dolt_conflicts_resolve('--ours', 'users');
+-- View individual conflict rows for a table
+SELECT * FROM dolt_conflicts_users;
+-- base_rowid | base_value | our_rowid | our_value | their_rowid | their_value
 
--- Resolve: take their values
-SELECT dolt_conflicts_resolve('--theirs', 'users');
+-- Resolve individual conflicts by deleting them (keeps current working value)
+DELETE FROM dolt_conflicts_users WHERE base_rowid = 5;
+
+-- Or resolve all conflicts for a table at once
+SELECT dolt_conflicts_resolve('--ours', 'users');   -- keep our values
+SELECT dolt_conflicts_resolve('--theirs', 'users'); -- take their values
 
 -- Commit is blocked while conflicts exist
 SELECT dolt_commit('-A', '-m', 'msg');

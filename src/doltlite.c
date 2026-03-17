@@ -48,6 +48,7 @@ extern int doltliteStatusRegister(sqlite3 *db);
 extern int doltliteDiffRegister(sqlite3 *db);
 extern int doltliteBranchRegister(sqlite3 *db);
 extern int doltliteConflictsRegister(sqlite3 *db);
+extern void doltliteRegisterConflictTables(sqlite3 *db);
 extern int doltliteTagRegister(sqlite3 *db);
 
 /* From doltlite_ancestor.c */
@@ -686,6 +687,8 @@ static void doltliteMergeFunc(
     doltliteHashToHex(&commitHash, hexBuf);
     if( nMergeConflicts > 0 ){
       char msg[256];
+      /* Register per-row conflict tables so user can query them */
+      doltliteRegisterConflictTables(db);
       sqlite3_snprintf(sizeof(msg), msg,
         "Merge completed with %d conflict(s). Use SELECT * FROM dolt_conflicts to view.",
         nMergeConflicts);
