@@ -565,7 +565,7 @@ PROLLY_OBJS = prolly_hash.o prolly_arena.o prolly_node.o prolly_cache.o \
               chunk_store.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_diff.o prolly_btree.o pager_shim.o \
               doltlite.o doltlite_commit.o doltlite_log.o doltlite_status.o \
-              doltlite_diff.o
+              doltlite_diff.o doltlite_branch.o
 
 DOLTLITE_PROLLY ?= 1
 ifeq ($(DOLTLITE_PROLLY),1)
@@ -1305,6 +1305,9 @@ doltlite_status.o:	$(TOP)/src/doltlite_status.c $(DEPS_OBJ_COMMON)
 
 doltlite_diff.o:	$(TOP)/src/doltlite_diff.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_diff.c
+
+doltlite_branch.o:	$(TOP)/src/doltlite_branch.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_branch.c
 
 build.o:	$(TOP)/src/build.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/build.c

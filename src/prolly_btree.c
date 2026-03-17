@@ -55,8 +55,9 @@
 #include <string.h>
 #include <assert.h>
 
-/* Forward declaration for runtime engine detection */
+/* Forward declarations */
 static void registerDoltiteFunctions(sqlite3 *db);
+void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 
 /* --------------------------------------------------------------------------
 ** Constants and macros
@@ -260,6 +261,15 @@ struct Btree {
   Btree *pPrev;
   BtLock lock;               /* Unused but needed for struct compat */
   u64 nSeek;                 /* Debug: count of seek operations */
+
+  /* Per-session branch state.
+  ** Each connection tracks its own active branch. When dolt_checkout is
+  ** called, the session updates its branch pointer AND reloads BtShared's
+  ** working state. Since SQLite serializes writers, only one session
+  ** modifies BtShared at a time. */
+  char *zBranch;             /* Current branch name (owned, NULL = "main") */
+  ProllyHash headCommit;     /* This session's HEAD commit hash */
+  ProllyHash stagedCatalog;  /* This session's staged catalog hash */
 };
 
 /*
@@ -919,6 +929,21 @@ catalog_loaded:
   p->iBDataVersion = 1;
   p->nSeek = 0;
 
+  /* Initialize per-session branch state from the default branch */
+  {
+    const char *defBranch = chunkStoreGetDefaultBranch(&pBt->store);
+    ProllyHash branchCommit;
+    p->zBranch = sqlite3_mprintf("%s", defBranch);
+    /* Try to resolve branch → commit from refs */
+    if( chunkStoreFindBranch(&pBt->store, defBranch, &branchCommit)==SQLITE_OK ){
+      memcpy(&p->headCommit, &branchCommit, sizeof(ProllyHash));
+    }else{
+      /* No refs yet — use manifest headCommit directly */
+      chunkStoreGetHeadCommit(&pBt->store, &p->headCommit);
+    }
+    chunkStoreGetStagedCatalog(&pBt->store, &p->stagedCatalog);
+  }
+
   /* Register doltite_engine() SQL function for runtime detection */
   registerDoltiteFunctions(db);
 
@@ -964,6 +989,7 @@ int sqlite3BtreeClose(Btree *p){
     sqlite3_free(pBt);
   }
 
+  sqlite3_free(p->zBranch);
   sqlite3_free(p);
   return SQLITE_OK;
 }
@@ -2777,7 +2803,8 @@ int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash){
   DoltliteCommit commit;
 
   if( !cs ) return SQLITE_ERROR;
-  chunkStoreGetHeadCommit(cs, &headHash);
+  /* Use session HEAD, not shared store */
+  doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ){
     memset(pCatHash, 0, sizeof(ProllyHash));
     return SQLITE_OK;
@@ -2878,6 +2905,53 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   chunkStoreSetCatalog(cs, catHash);
   rc = chunkStoreCommit(cs);
   return rc;
+}
+
+/*
+** Per-session branch accessors for dolt functions.
+*/
+const char *doltliteGetSessionBranch(sqlite3 *db){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    return p->zBranch ? p->zBranch : "main";
+  }
+  return "main";
+}
+
+void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    sqlite3_free(p->zBranch);
+    p->zBranch = sqlite3_mprintf("%s", zBranch);
+  }
+}
+
+void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    memcpy(pHead, &db->aDb[0].pBt->headCommit, sizeof(ProllyHash));
+  }else{
+    memset(pHead, 0, sizeof(ProllyHash));
+  }
+}
+
+void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    memcpy(&db->aDb[0].pBt->headCommit, pHead, sizeof(ProllyHash));
+  }
+}
+
+void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    memcpy(pStaged, &db->aDb[0].pBt->stagedCatalog, sizeof(ProllyHash));
+  }else{
+    memset(pStaged, 0, sizeof(ProllyHash));
+  }
+}
+
+void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    memcpy(&db->aDb[0].pBt->stagedCatalog, pStaged, sizeof(ProllyHash));
+  }
 }
 
 /* External registration for all dolt features */

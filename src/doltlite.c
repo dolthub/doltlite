@@ -24,6 +24,14 @@ extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut)
 extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 extern int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 
+/* Per-session branch state */
+extern const char *doltliteGetSessionBranch(sqlite3 *db);
+extern void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);
+extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
+extern void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
+extern void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
+extern void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
+
 /* TableEntry struct — must match prolly_btree.c definition */
 struct TableEntry {
   Pgno iTable;
@@ -34,10 +42,10 @@ extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                                struct TableEntry **ppTables, int *pnTables,
                                Pgno *piNextTable);
 
-/* Provided by doltlite_log.c, doltlite_status.c, doltlite_diff.c */
 extern int doltliteLogRegister(sqlite3 *db);
 extern int doltliteStatusRegister(sqlite3 *db);
 extern int doltliteDiffRegister(sqlite3 *db);
+extern int doltliteBranchRegister(sqlite3 *db);
 
 /* --------------------------------------------------------------------------
 ** dolt_add('tablename') or dolt_add('-A')
@@ -94,7 +102,7 @@ static void doltliteAddFunc(
 
     if( stageAll ){
       /* Stage everything: staged = working */
-      chunkStoreSetStagedCatalog(cs, &workingHash);
+      doltliteSetSessionStaged(db, &workingHash); chunkStoreSetStagedCatalog(cs, &workingHash);
     }else{
       /* Stage specific tables */
       struct TableEntry *aWorking = 0, *aStaged = 0;
@@ -108,7 +116,7 @@ static void doltliteAddFunc(
         return;
       }
 
-      chunkStoreGetStagedCatalog(cs, &stagedHash);
+      doltliteGetSessionStaged(db, &stagedHash);
       if( prollyHashIsEmpty(&stagedHash) ){
         /* No staged state yet — start from HEAD */
         ProllyHash headCat;
@@ -219,7 +227,7 @@ static void doltliteAddFunc(
           rc = chunkStorePut(cs, buf, sz, &newStagedHash);
           sqlite3_free(buf);
           if( rc==SQLITE_OK ){
-            chunkStoreSetStagedCatalog(cs, &newStagedHash);
+            doltliteSetSessionStaged(db, &newStagedHash); chunkStoreSetStagedCatalog(cs, &newStagedHash);
           }
         }
       }
@@ -304,11 +312,11 @@ static void doltliteCommitFunc(
       sqlite3_result_error_code(context, rc);
       return;
     }
-    chunkStoreSetStagedCatalog(cs, &catalogHash);
+    doltliteSetSessionStaged(db, &catalogHash); chunkStoreSetStagedCatalog(cs, &catalogHash);
   }
 
   /* Get the staged catalog hash — this is what we commit */
-  chunkStoreGetStagedCatalog(cs, &catalogHash);
+  doltliteGetSessionStaged(db, &catalogHash);
   if( prollyHashIsEmpty(&catalogHash) ){
     sqlite3_result_error(context,
       "nothing to commit (use dolt_add first, or dolt_commit('-A', '-m', 'msg'))", -1);
@@ -327,9 +335,9 @@ static void doltliteCommitFunc(
     }
   }
 
-  /* Build commit object */
+  /* Build commit object — use session HEAD as parent */
   memset(&commit, 0, sizeof(commit));
-  chunkStoreGetHeadCommit(cs, &commit.parentHash);
+  doltliteGetSessionHead(db, &commit.parentHash);
   chunkStoreGetRoot(cs, &rootHash);
   memcpy(&commit.rootHash, &rootHash, sizeof(ProllyHash));
   memcpy(&commit.catalogHash, &catalogHash, sizeof(ProllyHash));
@@ -370,10 +378,26 @@ static void doltliteCommitFunc(
     return;
   }
 
-  /* Update HEAD and staged. Do NOT overwrite the working catalog (cs->catalog)
-  ** — it represents the live database state which may have unstaged changes. */
+  /* Update session HEAD and staged */
+  doltliteSetSessionHead(db, &commitHash);
+  doltliteSetSessionStaged(db, &catalogHash); chunkStoreSetStagedCatalog(cs, &catalogHash);
+
+  /* Update shared state too (for manifest persistence) */
   chunkStoreSetHeadCommit(cs, &commitHash);
-  chunkStoreSetStagedCatalog(cs, &catalogHash); /* staged = HEAD after commit */
+  doltliteSetSessionStaged(db, &catalogHash); chunkStoreSetStagedCatalog(cs, &catalogHash);
+
+  /* Update branch refs — bootstrap "main" on first commit */
+  {
+    const char *branch = doltliteGetSessionBranch(db);
+    if( cs->nBranches==0 ){
+      chunkStoreAddBranch(cs, branch, &commitHash);
+      chunkStoreSetDefaultBranch(cs, branch);
+    }else{
+      chunkStoreUpdateBranch(cs, branch, &commitHash);
+    }
+    chunkStoreSerializeRefs(cs);
+  }
+
   rc = chunkStoreCommit(cs);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
@@ -424,7 +448,7 @@ static void doltliteResetFunc(
   }
 
   /* Soft reset: staged = HEAD catalog (unstage everything) */
-  chunkStoreSetStagedCatalog(cs, &headCatHash);
+  doltliteSetSessionStaged(db, &headCatHash); chunkStoreSetStagedCatalog(cs, &headCatHash);
 
   if( isHard ){
     /* Hard reset: also reset working state to HEAD */
@@ -463,6 +487,7 @@ void doltliteRegister(sqlite3 *db){
   doltliteLogRegister(db);
   doltliteStatusRegister(db);
   doltliteDiffRegister(db);
+  doltliteBranchRegister(db);
 }
 
 #endif /* DOLTLITE_PROLLY */

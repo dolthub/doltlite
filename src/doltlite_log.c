@@ -12,9 +12,10 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 
-/* Forward declarations for accessing BtShared internals */
+/* Forward declarations */
 typedef struct BtShared BtShared;
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 
 /* --------------------------------------------------------------------------
 ** Virtual table structure
@@ -166,7 +167,8 @@ static int doltliteLogFilter(
     return SQLITE_OK;
   }
 
-  chunkStoreGetHeadCommit(cs, &pCur->currentHash);
+  /* Use this session's HEAD, not the shared store's */
+  doltliteGetSessionHead(pVtab->db, &pCur->currentHash);
   if( prollyHashIsEmpty(&pCur->currentHash) ){
     pCur->eof = 1;
     return SQLITE_OK;
