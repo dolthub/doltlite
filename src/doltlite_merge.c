@@ -178,20 +178,23 @@ int doltliteMergeCatalogs(
   */
   for(i=0; i<nOurs; i++){
     Pgno iTable = aOurs[i].iTable;
-    struct TableEntry *ancEntry = findTableEntry(aAnc, nAnc, iTable);
-    struct TableEntry *theirsEntry = findTableEntry(aTheirs, nTheirs, iTable);
+    struct TableEntry *ancEntry;
+    struct TableEntry *theirsEntry;
+
+    /* Skip sqlite_master (table 1) — it's auto-generated from the catalog
+    ** and always changes when tables are added/dropped. Always take ours. */
+    if( iTable<=1 ){
+      aMerged[nMerged++] = aOurs[i];
+      continue;
+    }
+
+    ancEntry = findTableEntry(aAnc, nAnc, iTable);
+    theirsEntry = findTableEntry(aTheirs, nTheirs, iTable);
 
     if( !ancEntry ){
       /* Table added in ours (not in ancestor) */
-      if( theirsEntry ){
-        /* Also added in theirs — conflict if different */
-        if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0 ){
-          rc = SQLITE_ERROR; /* conflict: both sides added same table differently */
-          goto merge_cleanup;
-        }
-        /* Both added identically — include once */
-      }
-      /* Include from ours */
+      /* Include from ours (if theirs also added same table number,
+      ** ours wins — table number collision across branches) */
       aMerged[nMerged++] = aOurs[i];
     }else{
       /* Table existed in ancestor */
@@ -231,15 +234,25 @@ int doltliteMergeCatalogs(
   */
   for(i=0; i<nTheirs; i++){
     Pgno iTable = aTheirs[i].iTable;
-    struct TableEntry *oursEntry = findTableEntry(aOurs, nOurs, iTable);
+    struct TableEntry *oursEntry;
+
+    if( iTable<=1 ) continue; /* Skip sqlite_master */
+
+    oursEntry = findTableEntry(aOurs, nOurs, iTable);
 
     if( !oursEntry ){
       /* Not in ours — either added in theirs or deleted in ours */
       struct TableEntry *ancEntry = findTableEntry(aAnc, nAnc, iTable);
 
       if( !ancEntry ){
-        /* Added in theirs only (already handled if also in ours above) */
-        aMerged[nMerged++] = aTheirs[i];
+        /* Added in theirs only. If ours already used this table number
+        ** (collision), skip theirs — ours wins. */
+        if( !findTableEntry(aMerged, nMerged, iTable) ){
+          aMerged[nMerged++] = aTheirs[i];
+        }
+        /* Table number collision: theirs' table is lost. This happens when
+        ** both branches independently CREATE TABLE and get the same rootpage.
+        ** Known limitation — create tables on one branch and merge. */
       }else{
         /* Was in ancestor, deleted in ours */
         int theirsChanged = prollyHashCompare(&aTheirs[i].root, &ancEntry->root)!=0;

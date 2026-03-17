@@ -48,6 +48,16 @@ extern int doltliteDiffRegister(sqlite3 *db);
 extern int doltliteBranchRegister(sqlite3 *db);
 extern int doltliteTagRegister(sqlite3 *db);
 
+/* From doltlite_ancestor.c */
+extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
+                                 const ProllyHash *h2, ProllyHash *pAnc);
+/* From doltlite_merge.c */
+extern int doltliteMergeCatalogs(sqlite3 *db, const ProllyHash *ancestor,
+                                  const ProllyHash *ours, const ProllyHash *theirs,
+                                  ProllyHash *pMergedHash);
+/* From prolly_btree.c */
+extern int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
+
 /* --------------------------------------------------------------------------
 ** dolt_add('tablename') or dolt_add('-A')
 **
@@ -475,6 +485,190 @@ static void doltliteResetFunc(
 }
 
 /* --------------------------------------------------------------------------
+** dolt_merge('branch_name')
+**
+** Three-way merge of another branch into the current branch.
+** Finds common ancestor, merges catalogs, creates merge commit.
+** Fails if both branches modified the same table (conflict).
+** -------------------------------------------------------------------------- */
+
+static void doltliteMergeFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zBranch;
+  ProllyHash ourHead, theirHead, ancestorHash;
+  ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
+  DoltliteCommit ourCommit, theirCommit, ancCommit;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+
+  memset(&ourCommit, 0, sizeof(ourCommit));
+  memset(&theirCommit, 0, sizeof(theirCommit));
+  memset(&ancCommit, 0, sizeof(ancCommit));
+
+  if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
+  if( argc<1 ){ sqlite3_result_error(context, "usage: dolt_merge('branch')", -1); return; }
+
+  zBranch = (const char*)sqlite3_value_text(argv[0]);
+  if( !zBranch ){ sqlite3_result_error(context, "branch name required", -1); return; }
+
+  /* Get our HEAD */
+  doltliteGetSessionHead(db, &ourHead);
+  if( prollyHashIsEmpty(&ourHead) ){
+    sqlite3_result_error(context, "no commits on current branch", -1);
+    return;
+  }
+
+  /* Get their HEAD */
+  rc = chunkStoreFindBranch(cs, zBranch, &theirHead);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "branch not found", -1);
+    return;
+  }
+  if( prollyHashIsEmpty(&theirHead) ){
+    sqlite3_result_error(context, "target branch has no commits", -1);
+    return;
+  }
+
+  /* Already up to date? */
+  if( prollyHashCompare(&ourHead, &theirHead)==0 ){
+    sqlite3_result_text(context, "Already up to date", -1, SQLITE_STATIC);
+    return;
+  }
+
+  /* Find common ancestor */
+  rc = doltliteFindAncestor(db, &ourHead, &theirHead, &ancestorHash);
+  if( rc!=SQLITE_OK || prollyHashIsEmpty(&ancestorHash) ){
+    sqlite3_result_error(context, "no common ancestor found", -1);
+    return;
+  }
+
+  /* Fast-forward: if ancestor == our HEAD, just move to their HEAD */
+  if( prollyHashCompare(&ancestorHash, &ourHead)==0 ){
+    /* Load their commit's catalog and reset to it */
+    rc = chunkStoreGet(cs, &theirHead, &data, &nData);
+    if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load commit", -1); return; }
+    rc = doltliteCommitDeserialize(data, nData, &theirCommit);
+    sqlite3_free(data); data = 0;
+    if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "corrupt commit", -1); return; }
+
+    rc = doltliteHardReset(db, &theirCommit.catalogHash);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&theirCommit);
+      sqlite3_result_error(context, "fast-forward failed", -1);
+      return;
+    }
+
+    /* Update HEAD to their commit */
+    doltliteSetSessionHead(db, &theirHead);
+    doltliteSetSessionStaged(db, &theirCommit.catalogHash);
+    chunkStoreSetHeadCommit(cs, &theirHead);
+    chunkStoreSetStagedCatalog(cs, &theirCommit.catalogHash);
+    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &theirHead);
+    chunkStoreSerializeRefs(cs);
+    chunkStoreCommit(cs);
+
+    doltliteCommitClear(&theirCommit);
+
+    char hexBuf[PROLLY_HASH_SIZE*2+1];
+    doltliteHashToHex(&theirHead, hexBuf);
+    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+    return;
+  }
+
+  /* Three-way merge: load all three catalog hashes */
+  rc = chunkStoreGet(cs, &ourHead, &data, &nData);
+  if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load our commit", -1); return; }
+  rc = doltliteCommitDeserialize(data, nData, &ourCommit);
+  sqlite3_free(data); data = 0;
+  if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "corrupt commit", -1); return; }
+  memcpy(&ourCatHash, &ourCommit.catalogHash, sizeof(ProllyHash));
+
+  rc = chunkStoreGet(cs, &theirHead, &data, &nData);
+  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); sqlite3_result_error(context, "failed to load their commit", -1); return; }
+  rc = doltliteCommitDeserialize(data, nData, &theirCommit);
+  sqlite3_free(data); data = 0;
+  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); sqlite3_result_error(context, "corrupt commit", -1); return; }
+  memcpy(&theirCatHash, &theirCommit.catalogHash, sizeof(ProllyHash));
+
+  rc = chunkStoreGet(cs, &ancestorHash, &data, &nData);
+  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); doltliteCommitClear(&theirCommit); sqlite3_result_error(context, "failed to load ancestor", -1); return; }
+  rc = doltliteCommitDeserialize(data, nData, &ancCommit);
+  sqlite3_free(data); data = 0;
+  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); doltliteCommitClear(&theirCommit); sqlite3_result_error(context, "corrupt ancestor", -1); return; }
+  memcpy(&ancCatHash, &ancCommit.catalogHash, sizeof(ProllyHash));
+  doltliteCommitClear(&ancCommit);
+
+  /* Perform the merge */
+  rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash, &mergedCatHash);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&ourCommit);
+    doltliteCommitClear(&theirCommit);
+    sqlite3_result_error(context, "merge conflict: both branches modified the same table", -1);
+    return;
+  }
+
+  /* Hard reset to merged catalog */
+  rc = doltliteHardReset(db, &mergedCatHash);
+  doltliteCommitClear(&ourCommit);
+  doltliteCommitClear(&theirCommit);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "merge reset failed", -1);
+    return;
+  }
+
+  /* Create merge commit: stage merged catalog, then commit with -A */
+  doltliteSetSessionStaged(db, &mergedCatHash);
+  chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+
+  /* Build merge commit object */
+  {
+    DoltliteCommit mergeCommit;
+    u8 *commitData = 0;
+    int nCommitData = 0;
+    ProllyHash commitHash;
+    char hexBuf[PROLLY_HASH_SIZE*2+1];
+    char msg[256];
+
+    memset(&mergeCommit, 0, sizeof(mergeCommit));
+    memcpy(&mergeCommit.parentHash, &ourHead, sizeof(ProllyHash));
+    /* Note: second parent (theirHead) not stored yet — future enhancement */
+    memcpy(&mergeCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
+    mergeCommit.timestamp = (i64)time(0);
+    sqlite3_snprintf(sizeof(msg), msg, "Merge branch '%s'", zBranch);
+    mergeCommit.zName = sqlite3_mprintf("doltlite");
+    mergeCommit.zEmail = sqlite3_mprintf("");
+    mergeCommit.zMessage = sqlite3_mprintf("%s", msg);
+
+    rc = doltliteCommitSerialize(&mergeCommit, &commitData, &nCommitData);
+    if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, &commitHash);
+    sqlite3_free(commitData);
+    doltliteCommitClear(&mergeCommit);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "failed to create merge commit", -1);
+      return;
+    }
+
+    /* Update HEAD and branch ref */
+    doltliteSetSessionHead(db, &commitHash);
+    doltliteSetSessionStaged(db, &mergedCatHash);
+    chunkStoreSetHeadCommit(cs, &commitHash);
+    chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
+    chunkStoreSerializeRefs(cs);
+    chunkStoreCommit(cs);
+
+    doltliteHashToHex(&commitHash, hexBuf);
+    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+  }
+}
+
+/* --------------------------------------------------------------------------
 ** Registration
 ** -------------------------------------------------------------------------- */
 
@@ -485,6 +679,8 @@ void doltliteRegister(sqlite3 *db){
                           doltliteAddFunc, 0, 0);
   sqlite3_create_function(db, "dolt_reset", -1, SQLITE_UTF8, 0,
                           doltliteResetFunc, 0, 0);
+  sqlite3_create_function(db, "dolt_merge", -1, SQLITE_UTF8, 0,
+                          doltliteMergeFunc, 0, 0);
   doltliteLogRegister(db);
   doltliteStatusRegister(db);
   doltliteDiffRegister(db);
