@@ -166,8 +166,10 @@ static void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   CS_WRITE_U32(aBuf + 40, (u32)cs->nIndexSize);
   /* bytes 44..63: catalog hash (table registry + meta) */
   memcpy(aBuf + 44, cs->catalog.data, PROLLY_HASH_SIZE);
-  /* bytes 64..83: head commit hash (v2+) */
+  /* bytes 64..83: head commit hash */
   memcpy(aBuf + 64, cs->headCommit.data, PROLLY_HASH_SIZE);
+  /* bytes 84..103: staged catalog hash */
+  memcpy(aBuf + 84, cs->stagedCatalog.data, PROLLY_HASH_SIZE);
 }
 
 /* --------------------------------------------------------------------
@@ -216,6 +218,7 @@ static int csReadManifest(ChunkStore *cs){
   cs->nIndexSize = (int)CS_READ_U32(aBuf + 40);
   memcpy(cs->catalog.data, aBuf + 44, PROLLY_HASH_SIZE);
   memcpy(cs->headCommit.data, aBuf + 64, PROLLY_HASH_SIZE);
+  memcpy(cs->stagedCatalog.data, aBuf + 84, PROLLY_HASH_SIZE);
 
   return SQLITE_OK;
 }
@@ -529,6 +532,14 @@ void chunkStoreSetHeadCommit(ChunkStore *cs, const ProllyHash *pHead){
   memcpy(&cs->headCommit, pHead, sizeof(ProllyHash));
 }
 
+void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged){
+  memcpy(pStaged, &cs->stagedCatalog, sizeof(ProllyHash));
+}
+
+void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged){
+  memcpy(&cs->stagedCatalog, pStaged, sizeof(ProllyHash));
+}
+
 /*
 ** Check whether a chunk with the given hash exists in the store
 ** (committed index or pending buffer).  Returns 1 if found, 0 if not.
@@ -840,6 +851,7 @@ int chunkStoreCommit(ChunkStore *cs){
     memcpy(&tmp.root, &cs->root, sizeof(ProllyHash));
     memcpy(&tmp.catalog, &cs->catalog, sizeof(ProllyHash));
     memcpy(&tmp.headCommit, &cs->headCommit, sizeof(ProllyHash));
+    memcpy(&tmp.stagedCatalog, &cs->stagedCatalog, sizeof(ProllyHash));
     tmp.nChunks = nMerged;
     tmp.iIndexOffset = writePos;
     tmp.nIndexSize = indexBufSize;
