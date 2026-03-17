@@ -150,6 +150,32 @@ SELECT dolt_commit('-A', '-m', 'msg');
 -- Error: "cannot commit: unresolved merge conflicts"
 ```
 
+### Cherry-Pick
+
+Apply the changes from a specific commit onto the current branch:
+
+```sql
+SELECT dolt_cherry_pick('abc123...');
+-- Returns new commit hash, or "Cherry-pick completed with N conflict(s)"
+```
+
+Cherry-pick works by computing the diff between the target commit and its
+parent, then applying that diff to the current HEAD as a three-way merge.
+Conflicts are handled the same way as `dolt_merge`.
+
+### Revert
+
+Create a new commit that undoes the changes from a specific commit:
+
+```sql
+SELECT dolt_revert('abc123...');
+-- Returns new commit hash, or "Revert completed with N conflict(s)"
+```
+
+Revert computes the inverse of the target commit's changes and applies
+them to the current HEAD. The new commit message is
+`Revert '<original message>'`. Cannot revert the initial commit.
+
 ### Merge Base
 
 Find the common ancestor of two commits:

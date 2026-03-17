@@ -697,6 +697,346 @@ static void doltliteMergeFunc(
 }
 
 /* --------------------------------------------------------------------------
+** Helper: load a commit by hash, returning its deserialized form.
+** -------------------------------------------------------------------------- */
+static int loadCommitByHash(
+  ChunkStore *cs,
+  const ProllyHash *pHash,
+  DoltliteCommit *pCommit
+){
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+  memset(pCommit, 0, sizeof(*pCommit));
+  rc = chunkStoreGet(cs, pHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteCommitDeserialize(data, nData, pCommit);
+  sqlite3_free(data);
+  return rc;
+}
+
+/* --------------------------------------------------------------------------
+** Helper: resolve a commit reference (40-char hex hash) to a ProllyHash.
+** -------------------------------------------------------------------------- */
+static int resolveCommitRef(
+  ChunkStore *cs,
+  const char *zRef,
+  ProllyHash *pHash
+){
+  if( !zRef || strlen(zRef)!=40 ) return SQLITE_ERROR;
+  return doltliteHexToHash(zRef, pHash);
+}
+
+/* --------------------------------------------------------------------------
+** Helper: apply a three-way merge result and create a new commit.
+**
+** Performs doltliteMergeCatalogs, hard-resets, creates a commit object,
+** and updates HEAD/branch refs.  Used by cherry-pick and revert.
+**
+** Returns SQLITE_OK on success; sets *pnConflicts.
+** On success, writes the new commit hash hex to hexBuf (>= 41 bytes).
+** -------------------------------------------------------------------------- */
+static int applyMergedCatalogAndCommit(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const ProllyHash *ancCatHash,
+  const ProllyHash *ourCatHash,
+  const ProllyHash *theirCatHash,
+  const ProllyHash *ourHead,
+  const char *zMessage,
+  int *pnConflicts,
+  char *hexBuf
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash mergedCatHash;
+  int rc;
+
+  rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
+                              &mergedCatHash, pnConflicts);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteHardReset(db, &mergedCatHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Stage the merged catalog */
+  doltliteSetSessionStaged(db, &mergedCatHash);
+  chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+
+  /* Build and store the new commit */
+  {
+    DoltliteCommit newCommit;
+    u8 *commitData = 0;
+    int nCommitData = 0;
+    ProllyHash commitHash;
+
+    memset(&newCommit, 0, sizeof(newCommit));
+    memcpy(&newCommit.parentHash, ourHead, sizeof(ProllyHash));
+    memcpy(&newCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
+    newCommit.timestamp = (i64)time(0);
+    newCommit.zName = sqlite3_mprintf("doltlite");
+    newCommit.zEmail = sqlite3_mprintf("");
+    newCommit.zMessage = sqlite3_mprintf("%s", zMessage);
+
+    rc = doltliteCommitSerialize(&newCommit, &commitData, &nCommitData);
+    if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, &commitHash);
+    sqlite3_free(commitData);
+    doltliteCommitClear(&newCommit);
+    if( rc!=SQLITE_OK ) return rc;
+
+    /* Update HEAD and branch ref */
+    doltliteSetSessionHead(db, &commitHash);
+    doltliteSetSessionStaged(db, &mergedCatHash);
+    chunkStoreSetHeadCommit(cs, &commitHash);
+    chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
+    chunkStoreSerializeRefs(cs);
+    chunkStoreCommit(cs);
+
+    doltliteHashToHex(&commitHash, hexBuf);
+  }
+
+  return SQLITE_OK;
+}
+
+/* --------------------------------------------------------------------------
+** dolt_cherry_pick('commit_hash')
+**
+** Apply the changes from a specific commit onto the current branch.
+** This is a three-way merge where:
+**   ancestor = commit's parent catalog
+**   ours     = current HEAD catalog
+**   theirs   = the cherry-picked commit's catalog
+**
+** Creates a new commit with message "Cherry-pick: <original message>".
+** Returns the new commit hash, or conflict info if conflicts arise.
+** -------------------------------------------------------------------------- */
+
+static void doltliteCherryPickFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zRef;
+  ProllyHash pickHash, ourHead;
+  DoltliteCommit pickCommit, parentCommit, ourCommit;
+  int nConflicts = 0;
+  int rc;
+  char hexBuf[PROLLY_HASH_SIZE*2+1];
+
+  memset(&pickCommit, 0, sizeof(pickCommit));
+  memset(&parentCommit, 0, sizeof(parentCommit));
+  memset(&ourCommit, 0, sizeof(ourCommit));
+
+  if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
+  if( argc<1 ){
+    sqlite3_result_error(context, "usage: dolt_cherry_pick('commit_hash')", -1);
+    return;
+  }
+
+  zRef = (const char*)sqlite3_value_text(argv[0]);
+  if( !zRef ){
+    sqlite3_result_error(context, "commit hash required", -1);
+    return;
+  }
+
+  /* Resolve the commit hash */
+  rc = resolveCommitRef(cs, zRef, &pickHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "invalid commit hash", -1);
+    return;
+  }
+
+  /* Load the cherry-pick commit */
+  rc = loadCommitByHash(cs, &pickHash, &pickCommit);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "commit not found", -1);
+    return;
+  }
+
+  /* Load the cherry-pick commit's parent */
+  if( prollyHashIsEmpty(&pickCommit.parentHash) ){
+    doltliteCommitClear(&pickCommit);
+    sqlite3_result_error(context, "cannot cherry-pick the initial commit", -1);
+    return;
+  }
+
+  rc = loadCommitByHash(cs, &pickCommit.parentHash, &parentCommit);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&pickCommit);
+    sqlite3_result_error(context, "parent commit not found", -1);
+    return;
+  }
+
+  /* Load our HEAD */
+  doltliteGetSessionHead(db, &ourHead);
+  if( prollyHashIsEmpty(&ourHead) ){
+    doltliteCommitClear(&pickCommit);
+    doltliteCommitClear(&parentCommit);
+    sqlite3_result_error(context, "no commits on current branch", -1);
+    return;
+  }
+
+  rc = loadCommitByHash(cs, &ourHead, &ourCommit);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&pickCommit);
+    doltliteCommitClear(&parentCommit);
+    sqlite3_result_error(context, "failed to load HEAD commit", -1);
+    return;
+  }
+
+  /* Three-way merge: ancestor=parent, ours=HEAD, theirs=pick */
+  {
+    char msg[512];
+    sqlite3_snprintf(sizeof(msg), msg, "Cherry-pick: %s",
+                     pickCommit.zMessage ? pickCommit.zMessage : zRef);
+
+    rc = applyMergedCatalogAndCommit(db, context,
+        &parentCommit.catalogHash, &ourCommit.catalogHash,
+        &pickCommit.catalogHash, &ourHead, msg, &nConflicts, hexBuf);
+  }
+
+  doltliteCommitClear(&pickCommit);
+  doltliteCommitClear(&parentCommit);
+  doltliteCommitClear(&ourCommit);
+
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "cherry-pick failed", -1);
+    return;
+  }
+
+  if( nConflicts > 0 ){
+    char msg[256];
+    sqlite3_snprintf(sizeof(msg), msg,
+      "Cherry-pick completed with %d conflict(s). Use SELECT * FROM dolt_conflicts to view.",
+      nConflicts);
+    sqlite3_result_text(context, msg, -1, SQLITE_TRANSIENT);
+  }else{
+    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+  }
+}
+
+/* --------------------------------------------------------------------------
+** dolt_revert('commit_hash')
+**
+** Create a new commit that undoes the changes introduced by a specific
+** commit.  This is a three-way merge where:
+**   ancestor = the commit being reverted (its catalog)
+**   ours     = current HEAD catalog
+**   theirs   = the reverted commit's parent catalog
+**
+** Creates a new commit with message "Revert '<original message>'".
+** Returns the new commit hash, or conflict info if conflicts arise.
+** -------------------------------------------------------------------------- */
+
+static void doltliteRevertFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zRef;
+  ProllyHash revertHash, ourHead;
+  DoltliteCommit revertCommit, parentCommit, ourCommit;
+  int nConflicts = 0;
+  int rc;
+  char hexBuf[PROLLY_HASH_SIZE*2+1];
+
+  memset(&revertCommit, 0, sizeof(revertCommit));
+  memset(&parentCommit, 0, sizeof(parentCommit));
+  memset(&ourCommit, 0, sizeof(ourCommit));
+
+  if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
+  if( argc<1 ){
+    sqlite3_result_error(context, "usage: dolt_revert('commit_hash')", -1);
+    return;
+  }
+
+  zRef = (const char*)sqlite3_value_text(argv[0]);
+  if( !zRef ){
+    sqlite3_result_error(context, "commit hash required", -1);
+    return;
+  }
+
+  /* Resolve the commit hash */
+  rc = resolveCommitRef(cs, zRef, &revertHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "invalid commit hash", -1);
+    return;
+  }
+
+  /* Load the commit to revert */
+  rc = loadCommitByHash(cs, &revertHash, &revertCommit);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "commit not found", -1);
+    return;
+  }
+
+  /* Load the reverted commit's parent */
+  if( prollyHashIsEmpty(&revertCommit.parentHash) ){
+    doltliteCommitClear(&revertCommit);
+    sqlite3_result_error(context, "cannot revert the initial commit", -1);
+    return;
+  }
+
+  rc = loadCommitByHash(cs, &revertCommit.parentHash, &parentCommit);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&revertCommit);
+    sqlite3_result_error(context, "parent commit not found", -1);
+    return;
+  }
+
+  /* Load our HEAD */
+  doltliteGetSessionHead(db, &ourHead);
+  if( prollyHashIsEmpty(&ourHead) ){
+    doltliteCommitClear(&revertCommit);
+    doltliteCommitClear(&parentCommit);
+    sqlite3_result_error(context, "no commits on current branch", -1);
+    return;
+  }
+
+  rc = loadCommitByHash(cs, &ourHead, &ourCommit);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&revertCommit);
+    doltliteCommitClear(&parentCommit);
+    sqlite3_result_error(context, "failed to load HEAD commit", -1);
+    return;
+  }
+
+  /* Three-way merge: ancestor=revert commit, ours=HEAD, theirs=parent */
+  {
+    char msg[512];
+    sqlite3_snprintf(sizeof(msg), msg, "Revert '%s'",
+                     revertCommit.zMessage ? revertCommit.zMessage : zRef);
+
+    rc = applyMergedCatalogAndCommit(db, context,
+        &revertCommit.catalogHash, &ourCommit.catalogHash,
+        &parentCommit.catalogHash, &ourHead, msg, &nConflicts, hexBuf);
+  }
+
+  doltliteCommitClear(&revertCommit);
+  doltliteCommitClear(&parentCommit);
+  doltliteCommitClear(&ourCommit);
+
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "revert failed", -1);
+    return;
+  }
+
+  if( nConflicts > 0 ){
+    char msg[256];
+    sqlite3_snprintf(sizeof(msg), msg,
+      "Revert completed with %d conflict(s). Use SELECT * FROM dolt_conflicts to view.",
+      nConflicts);
+    sqlite3_result_text(context, msg, -1, SQLITE_TRANSIENT);
+  }else{
+    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+  }
+}
+
+/* --------------------------------------------------------------------------
 ** Registration
 ** -------------------------------------------------------------------------- */
 
@@ -709,6 +1049,10 @@ void doltliteRegister(sqlite3 *db){
                           doltliteResetFunc, 0, 0);
   sqlite3_create_function(db, "dolt_merge", -1, SQLITE_UTF8, 0,
                           doltliteMergeFunc, 0, 0);
+  sqlite3_create_function(db, "dolt_cherry_pick", -1, SQLITE_UTF8, 0,
+                          doltliteCherryPickFunc, 0, 0);
+  sqlite3_create_function(db, "dolt_revert", -1, SQLITE_UTF8, 0,
+                          doltliteRevertFunc, 0, 0);
   doltliteLogRegister(db);
   doltliteStatusRegister(db);
   doltliteDiffRegister(db);
