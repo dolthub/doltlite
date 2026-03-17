@@ -89,6 +89,9 @@ jobs:
     - name: Edge case tests
       run: cd build && bash ../test/doltlite_edge_cases.sh
 
+    - name: Advanced tests
+      run: cd build && bash ../test/doltlite_advanced.sh
+
     - name: Concurrent branch test
       run: |
         cd build
