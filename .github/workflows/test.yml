@@ -68,6 +68,9 @@ jobs:
     - name: Dolt diff tests
       run: cd build && bash ../test/doltlite_diff.sh
 
+    - name: Dolt reset tests
+      run: cd build && bash ../test/doltlite_reset.sh
+
     - name: Build testfixture
       run: cd build && make testfixture
 
