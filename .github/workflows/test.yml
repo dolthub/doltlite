@@ -107,6 +107,9 @@ jobs:
     - name: Deep feature coverage tests
       run: cd build && bash ../test/doltlite_feature_deep.sh
 
+    - name: Dolt getting-started demo test
+      run: cd build && bash ../test/doltlite_demo.sh
+
     - name: End-to-end integration test
       run: cd build && bash ../test/doltlite_e2e.sh
 
