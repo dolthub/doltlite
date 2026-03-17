@@ -2926,8 +2926,22 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   sqlite3_free(data);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Invalidate schema so SQLite re-reads sqlite_master */
-  invalidateSchema(pBtree);
+  /* Bump the schema version so SQLite detects the change and re-reads
+  ** sqlite_master on the next statement. Also bump data version. */
+  pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
+  pBtree->iBDataVersion++;
+  if( pBt->pPagerShim ){
+    pBt->pPagerShim->iDataVersion++;
+  }
+
+  /* Use SQLite's proper schema reset to clear all cached schema objects.
+  ** This ensures db->aDb[0].pSchema is properly cleaned up, not just
+  ** the Btree's copy. */
+  if( pBtree->db ){
+    sqlite3ResetAllSchemasOfConnection(pBtree->db);
+  }else{
+    invalidateSchema(pBtree);
+  }
 
   /* Persist the new working state */
   chunkStoreSetCatalog(cs, catHash);

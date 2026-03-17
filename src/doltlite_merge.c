@@ -409,8 +409,16 @@ int doltliteMergeCatalogs(
     struct TableEntry *ancEntry;
     struct TableEntry *theirsEntry;
 
-    /* Skip internal tables (no name, or table 1 = sqlite_master) */
-    if( aOurs[i].iTable<=1 || !zName ){
+    /* Table 1 (sqlite_master) has no zName but must be row-merged
+    ** so that CREATE TABLE statements from theirs appear after merge. */
+    if( aOurs[i].iTable==1 ){
+      ancEntry = findTableEntry(aAnc, nAnc, 1);
+      theirsEntry = findTableEntry(aTheirs, nTheirs, 1);
+      goto do_merge_entry;
+    }
+
+    /* Skip tables without names (internal bookkeeping, not real tables) */
+    if( !zName ){
       aMerged[nMerged++] = aOurs[i];
       continue;
     }
@@ -418,6 +426,8 @@ int doltliteMergeCatalogs(
     /* Find by NAME in ancestor and theirs */
     ancEntry = findTableByName(aAnc, nAnc, zName);
     theirsEntry = findTableByName(aTheirs, nTheirs, zName);
+
+do_merge_entry:
 
     if( !ancEntry ){
       /* Table added in ours (not in ancestor by name) */
@@ -509,9 +519,18 @@ int doltliteMergeCatalogs(
     {
       struct TableEntry *ancEntry = findTableByName(aAnc, nAnc, zName);
       if( !ancEntry ){
-        /* Added in theirs only — assign a new iTable number */
+        /* Added in theirs only — keep their iTable if no conflict,
+        ** otherwise assign a new one. Keeping the original iTable is
+        ** important so sqlite_master rootpage values stay consistent. */
         struct TableEntry newEntry = aTheirs[i];
-        newEntry.iTable = iNextMerged++;
+        {
+          int j, conflict = 0;
+          for(j=0; j<nMerged; j++){
+            if( aMerged[j].iTable==newEntry.iTable ){ conflict = 1; break; }
+          }
+          if( conflict ) newEntry.iTable = iNextMerged++;
+        }
+        if( newEntry.iTable >= iNextMerged ) iNextMerged = newEntry.iTable + 1;
         /* Copy name string */
         newEntry.zName = sqlite3_mprintf("%s", zName);
         aMerged[nMerged++] = newEntry;
