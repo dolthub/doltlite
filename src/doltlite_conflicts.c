@@ -17,20 +17,10 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
-#include "prolly_mutmap.h"
-#include "prolly_mutate.h"
 #include <string.h>
 
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern void *doltliteGetBtShared(sqlite3 *db);
-extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 extern int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
-extern int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
-
-struct TableEntry { Pgno iTable; ProllyHash root; u8 flags; char *zName; };
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
 
 /* --------------------------------------------------------------------------
 ** Conflict catalog serialization

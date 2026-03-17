@@ -25,7 +25,6 @@
 
 /* Provided by prolly_btree.c */
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern void *doltliteGetBtShared(sqlite3 *db);
 
 /* ----------------------------------------------------------------
 ** Hash set for the mark phase.
