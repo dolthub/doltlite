@@ -34,9 +34,10 @@ extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                                struct TableEntry **ppTables, int *pnTables,
                                Pgno *piNextTable);
 
-/* Provided by doltlite_log.c and doltlite_status.c */
+/* Provided by doltlite_log.c, doltlite_status.c, doltlite_diff.c */
 extern int doltliteLogRegister(sqlite3 *db);
 extern int doltliteStatusRegister(sqlite3 *db);
+extern int doltliteDiffRegister(sqlite3 *db);
 
 /* --------------------------------------------------------------------------
 ** dolt_add('tablename') or dolt_add('-A')
@@ -394,6 +395,7 @@ void doltliteRegister(sqlite3 *db){
                           doltliteAddFunc, 0, 0);
   doltliteLogRegister(db);
   doltliteStatusRegister(db);
+  doltliteDiffRegister(db);
 }
 
 #endif /* DOLTLITE_PROLLY */

@@ -65,6 +65,9 @@ jobs:
     - name: Dolt staging workflow tests
       run: cd build && bash ../test/doltlite_staging.sh
 
+    - name: Dolt diff tests
+      run: cd build && bash ../test/doltlite_diff.sh
+
     - name: Build testfixture
       run: cd build && make testfixture
 
