@@ -83,6 +83,9 @@ jobs:
     - name: Dolt conflicts tests
       run: cd build && bash ../test/doltlite_conflicts.sh
 
+    - name: Dolt cherry-pick and revert tests
+      run: cd build && bash ../test/doltlite_cherry_pick.sh
+
     - name: End-to-end integration test
       run: cd build && bash ../test/doltlite_e2e.sh
 
