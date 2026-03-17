@@ -119,14 +119,35 @@ SELECT * FROM dolt_tags;                  -- list tags
 
 ### Merge
 
-Three-way merge of another branch into the current branch. Finds the common
-ancestor via `dolt_merge_base`, merges catalogs, and creates a merge commit.
-Fast-forwards when possible. Fails with an error if both branches modified the
-same table (conflict).
+Three-way merge of another branch into the current branch. Merges at the
+**row level** — non-conflicting changes to different rows of the same table
+are auto-merged. Conflicts (same row modified on both branches) are detected
+and stored for resolution.
 
 ```sql
 SELECT dolt_merge('feature');
--- Returns the merge commit hash, or "Already up to date"
+-- Returns commit hash (clean merge), or "Merge completed with N conflict(s)"
+```
+
+### Conflicts
+
+View and resolve merge conflicts:
+
+```sql
+-- View which tables have conflicts
+SELECT * FROM dolt_conflicts;
+-- table_name | num_conflicts
+-- users      | 2
+
+-- Resolve: keep our values
+SELECT dolt_conflicts_resolve('--ours', 'users');
+
+-- Resolve: take their values
+SELECT dolt_conflicts_resolve('--theirs', 'users');
+
+-- Commit is blocked while conflicts exist
+SELECT dolt_commit('-A', '-m', 'msg');
+-- Error: "cannot commit: unresolved merge conflicts"
 ```
 
 ### Merge Base
@@ -135,7 +156,6 @@ Find the common ancestor of two commits:
 
 ```sql
 SELECT dolt_merge_base('abc123...', 'def456...');
--- Returns the ancestor commit hash
 ```
 
 ## Per-Session Branching Architecture
@@ -242,7 +262,8 @@ gcc -o concurrent_branch_test ../test/concurrent_branch_test.c \
 | `doltlite_diff.c` | `dolt_diff` table-valued function |
 | `doltlite_branch.c` | `dolt_branch`, `dolt_checkout`, `active_branch`, `dolt_branches` |
 | `doltlite_tag.c` | `dolt_tag`, `dolt_tags` |
-| `doltlite_merge.c` | Three-way catalog merge logic |
+| `doltlite_merge.c` | Three-way catalog and row-level merge |
+| `doltlite_conflicts.c` | `dolt_conflicts`, `dolt_conflicts_resolve` |
 | `doltlite_ancestor.c` | Common ancestor search, `dolt_merge_base` |
 | `doltlite_commit.h` | Commit object serialization/deserialization |
 | `doltlite_ancestor.h` | Ancestor-finding API |

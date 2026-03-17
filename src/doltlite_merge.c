@@ -30,7 +30,10 @@ struct TableEntry {
   char *zName;
 };
 
-/* ConflictEntry from chunk_store.h */
+/* From doltlite_conflicts.c */
+typedef struct ConflictTableInfo ConflictTableInfo;
+extern int doltliteSerializeConflicts(ChunkStore *cs, ConflictTableInfo *aTables,
+                                       int nTables, ProllyHash *pHash);
 
 /* Provided by prolly_btree.c */
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
@@ -357,6 +360,14 @@ int doltliteMergeCatalogs(
   Pgno iNextMerged;
   int rc;
   int totalConflicts = 0;
+
+  /* Collected conflicts for storage */
+  struct MergeConflictTable {
+    char *zName;
+    int nConflicts;
+    struct ConflictRow *aRows;
+  } *aConflictTables = 0;
+  int nConflictTables = 0;
   int i;
 
   /* Load all three catalogs */
@@ -450,16 +461,28 @@ int doltliteMergeCatalogs(
             aMerged[nMerged++] = merged;
           }
 
-          /* TODO: store conflicts in conflict catalog for resolution */
           if( nConflicts>0 ){
             totalConflicts += nConflicts;
-            /* Free conflict rows for now — will be stored in do-j7h */
-            { int j; for(j=0;j<nConflicts;j++){
-              sqlite3_free(aConflictRows[j].pKey);
-              sqlite3_free(aConflictRows[j].pBaseVal);
-              sqlite3_free(aConflictRows[j].pTheirVal);
-            }}
-            sqlite3_free(aConflictRows);
+            /* Collect conflicts for this table */
+            {
+              struct MergeConflictTable *aNew = sqlite3_realloc(aConflictTables,
+                (nConflictTables+1)*(int)sizeof(struct MergeConflictTable));
+              if( aNew ){
+                aConflictTables = aNew;
+                aNew[nConflictTables].zName = sqlite3_mprintf("%s", zName);
+                aNew[nConflictTables].nConflicts = nConflicts;
+                aNew[nConflictTables].aRows = aConflictRows;
+                nConflictTables++;
+                aConflictRows = 0; /* ownership transferred */
+              }else{
+                { int j; for(j=0;j<nConflicts;j++){
+                  sqlite3_free(aConflictRows[j].pKey);
+                  sqlite3_free(aConflictRows[j].pBaseVal);
+                  sqlite3_free(aConflictRows[j].pTheirVal);
+                }}
+                sqlite3_free(aConflictRows);
+              }
+            }
           }
         }else if( theirsChanged ){
           /* Take theirs' root but with ours' iTable number */
@@ -508,6 +531,37 @@ int doltliteMergeCatalogs(
   rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
                               pMergedHash);
   if( pnConflicts ) *pnConflicts = totalConflicts;
+
+  /* Store conflicts if any */
+  if( totalConflicts>0 && nConflictTables>0 && rc==SQLITE_OK ){
+    ProllyHash conflictsHash;
+    /* ConflictTableInfo has the same layout as MergeConflictTable */
+    int rc2 = doltliteSerializeConflicts(
+        doltliteGetChunkStore(db),
+        (ConflictTableInfo*)aConflictTables, nConflictTables,
+        &conflictsHash);
+    if( rc2==SQLITE_OK ){
+      ChunkStore *cs2 = doltliteGetChunkStore(db);
+      chunkStoreSetConflictsCatalog(cs2, &conflictsHash);
+      chunkStoreSetMergeState(cs2, 1, 0, &conflictsHash);
+    }
+  }
+
+  /* Free collected conflicts */
+  {
+    int ci;
+    for(ci=0; ci<nConflictTables; ci++){
+      int cj;
+      for(cj=0; cj<aConflictTables[ci].nConflicts; cj++){
+        sqlite3_free(aConflictTables[ci].aRows[cj].pKey);
+        sqlite3_free(aConflictTables[ci].aRows[cj].pBaseVal);
+        sqlite3_free(aConflictTables[ci].aRows[cj].pTheirVal);
+      }
+      sqlite3_free(aConflictTables[ci].aRows);
+      sqlite3_free(aConflictTables[ci].zName);
+    }
+    sqlite3_free(aConflictTables);
+  }
 
 merge_cleanup:
   sqlite3_free(aAnc);

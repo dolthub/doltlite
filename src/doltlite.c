@@ -47,6 +47,7 @@ extern int doltliteLogRegister(sqlite3 *db);
 extern int doltliteStatusRegister(sqlite3 *db);
 extern int doltliteDiffRegister(sqlite3 *db);
 extern int doltliteBranchRegister(sqlite3 *db);
+extern int doltliteConflictsRegister(sqlite3 *db);
 extern int doltliteTagRegister(sqlite3 *db);
 
 /* From doltlite_ancestor.c */
@@ -331,6 +332,17 @@ static void doltliteCommitFunc(
       return;
     }
     doltliteSetSessionStaged(db, &catalogHash); chunkStoreSetStagedCatalog(cs, &catalogHash);
+  }
+
+  /* Block commit while merge conflicts exist */
+  {
+    ProllyHash cfHash;
+    chunkStoreGetConflictsCatalog(cs, &cfHash);
+    if( !prollyHashIsEmpty(&cfHash) ){
+      sqlite3_result_error(context,
+        "cannot commit: unresolved merge conflicts. Use dolt_conflicts_resolve() first.", -1);
+      return;
+    }
   }
 
   /* Get the staged catalog hash — this is what we commit */
@@ -702,6 +714,7 @@ void doltliteRegister(sqlite3 *db){
   doltliteDiffRegister(db);
   doltliteBranchRegister(db);
   doltliteTagRegister(db);
+  doltliteConflictsRegister(db);
 }
 
 #endif /* DOLTLITE_PROLLY */
