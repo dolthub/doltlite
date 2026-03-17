@@ -98,6 +98,9 @@ jobs:
     - name: Dolt garbage collection tests
       run: cd build && bash ../test/doltlite_gc.sh
 
+    - name: Deep feature coverage tests
+      run: cd build && bash ../test/doltlite_feature_deep.sh
+
     - name: End-to-end integration test
       run: cd build && bash ../test/doltlite_e2e.sh
 
