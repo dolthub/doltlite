@@ -2,9 +2,11 @@
 ** Implementation of the file-backed content-addressed chunk store.
 **
 ** File layout:
-**   [Manifest header: 64 bytes]
+**   [Manifest header: 168 bytes]
 **     magic(4) + version(4) + root_hash(20) + chunk_count(4) +
-**     index_offset(8) + index_size(4) + reserved(20)
+**     index_offset(8) + index_size(4) + catalog_hash(20) +
+**     head_commit(20) + staged_catalog(20) + refs_hash(20) +
+**     is_merging(4) + merge_commit_hash(20) + conflicts_catalog_hash(20)
 **   [Chunk data region: variable]
 **     Chunks appended sequentially: length(4) + data(length) each
 **   [Chunk index: variable]
@@ -173,6 +175,12 @@ static void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memcpy(aBuf + 84, cs->stagedCatalog.data, PROLLY_HASH_SIZE);
   /* bytes 104..123: refs hash (branch mapping) */
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
+  /* bytes 124..127: isMerging flag (u32, 0 or 1) */
+  CS_WRITE_U32(aBuf + 124, (u32)cs->isMerging);
+  /* bytes 128..147: mergeCommitHash */
+  memcpy(aBuf + 128, cs->mergeCommitHash.data, PROLLY_HASH_SIZE);
+  /* bytes 148..167: conflictsCatalogHash */
+  memcpy(aBuf + 148, cs->conflictsCatalogHash.data, PROLLY_HASH_SIZE);
 }
 
 /* --------------------------------------------------------------------
@@ -210,10 +218,17 @@ static int csReadManifest(ChunkStore *cs){
   magic = CS_READ_U32(aBuf + 0);
   version = CS_READ_U32(aBuf + 4);
   if( magic != CHUNK_STORE_MAGIC ) return SQLITE_NOTADB;
-  if( version != CHUNK_STORE_VERSION ) return SQLITE_NOTADB;
+  if( version != CHUNK_STORE_VERSION && version != 4 ) return SQLITE_NOTADB;
 
-  rc = sqlite3OsRead(cs->pFile, aBuf, CHUNK_MANIFEST_SIZE, 0);
-  if( rc != SQLITE_OK ) return rc;
+  if( version == 4 ){
+    /* V4 manifest is 124 bytes — read that, zero-fill the rest */
+    rc = sqlite3OsRead(cs->pFile, aBuf, 124, 0);
+    if( rc != SQLITE_OK ) return rc;
+    memset(aBuf + 124, 0, CHUNK_MANIFEST_SIZE - 124);
+  }else{
+    rc = sqlite3OsRead(cs->pFile, aBuf, CHUNK_MANIFEST_SIZE, 0);
+    if( rc != SQLITE_OK ) return rc;
+  }
 
   memcpy(cs->root.data, aBuf + 8, PROLLY_HASH_SIZE);
   cs->nChunks = (int)CS_READ_U32(aBuf + 28);
@@ -223,6 +238,10 @@ static int csReadManifest(ChunkStore *cs){
   memcpy(cs->headCommit.data, aBuf + 64, PROLLY_HASH_SIZE);
   memcpy(cs->stagedCatalog.data, aBuf + 84, PROLLY_HASH_SIZE);
   memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
+  /* Merge state (v5+, zero for v4) */
+  cs->isMerging = (u8)CS_READ_U32(aBuf + 124);
+  memcpy(cs->mergeCommitHash.data, aBuf + 128, PROLLY_HASH_SIZE);
+  memcpy(cs->conflictsCatalogHash.data, aBuf + 148, PROLLY_HASH_SIZE);
 
   return SQLITE_OK;
 }
@@ -1070,6 +1089,9 @@ int chunkStoreCommit(ChunkStore *cs){
     memcpy(&tmp.headCommit, &cs->headCommit, sizeof(ProllyHash));
     memcpy(&tmp.stagedCatalog, &cs->stagedCatalog, sizeof(ProllyHash));
     memcpy(&tmp.refsHash, &cs->refsHash, sizeof(ProllyHash));
+    tmp.isMerging = cs->isMerging;
+    memcpy(&tmp.mergeCommitHash, &cs->mergeCommitHash, sizeof(ProllyHash));
+    memcpy(&tmp.conflictsCatalogHash, &cs->conflictsCatalogHash, sizeof(ProllyHash));
     tmp.nChunks = nMerged;
     tmp.iIndexOffset = writePos;
     tmp.nIndexSize = indexBufSize;
@@ -1170,6 +1192,63 @@ int chunkStoreIsEmpty(ChunkStore *cs){
 */
 const char *chunkStoreFilename(ChunkStore *cs){
   return cs->zFilename;
+}
+
+/* --- Merge state accessors --- */
+
+/*
+** Get the current merge state.  Any output pointer may be NULL.
+*/
+int chunkStoreGetMergeState(
+  ChunkStore *cs,
+  u8 *pIsMerging,
+  ProllyHash *pMergeCommit,
+  ProllyHash *pConflictsCatalog
+){
+  if( pIsMerging ) *pIsMerging = cs->isMerging;
+  if( pMergeCommit ) memcpy(pMergeCommit, &cs->mergeCommitHash, sizeof(ProllyHash));
+  if( pConflictsCatalog ) memcpy(pConflictsCatalog, &cs->conflictsCatalogHash, sizeof(ProllyHash));
+  return SQLITE_OK;
+}
+
+/*
+** Set the merge state.  Pass isMerging=1 to begin a merge, 0 to clear.
+** pMergeCommit and pConflictsCatalog may be NULL (treated as all-zeros).
+*/
+void chunkStoreSetMergeState(
+  ChunkStore *cs,
+  u8 isMerging,
+  const ProllyHash *pMergeCommit,
+  const ProllyHash *pConflictsCatalog
+){
+  cs->isMerging = isMerging;
+  if( pMergeCommit ){
+    memcpy(&cs->mergeCommitHash, pMergeCommit, sizeof(ProllyHash));
+  }else{
+    memset(&cs->mergeCommitHash, 0, sizeof(ProllyHash));
+  }
+  if( pConflictsCatalog ){
+    memcpy(&cs->conflictsCatalogHash, pConflictsCatalog, sizeof(ProllyHash));
+  }else{
+    memset(&cs->conflictsCatalogHash, 0, sizeof(ProllyHash));
+  }
+}
+
+/*
+** Clear all merge state (isMerging=0, hashes zeroed).
+*/
+void chunkStoreClearMergeState(ChunkStore *cs){
+  cs->isMerging = 0;
+  memset(&cs->mergeCommitHash, 0, sizeof(ProllyHash));
+  memset(&cs->conflictsCatalogHash, 0, sizeof(ProllyHash));
+}
+
+void chunkStoreGetConflictsCatalog(ChunkStore *cs, ProllyHash *pHash){
+  memcpy(pHash, &cs->conflictsCatalogHash, sizeof(ProllyHash));
+}
+
+void chunkStoreSetConflictsCatalog(ChunkStore *cs, const ProllyHash *pHash){
+  memcpy(&cs->conflictsCatalogHash, pHash, sizeof(ProllyHash));
 }
 
 #endif /* DOLTLITE_PROLLY */

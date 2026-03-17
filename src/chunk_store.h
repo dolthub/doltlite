@@ -2,9 +2,11 @@
 ** File-backed content-addressed chunk store.
 **
 ** File layout:
-**   [Manifest header: 64 bytes]
+**   [Manifest header: 168 bytes]
 **     magic(4) + version(4) + root_hash(20) + chunk_count(4) +
-**     index_offset(8) + index_size(4) + reserved(20)
+**     index_offset(8) + index_size(4) + catalog_hash(20) +
+**     head_commit(20) + staged_catalog(20) + refs_hash(20) +
+**     is_merging(4) + merge_commit_hash(20) + conflicts_catalog_hash(20)
 **   [Chunk data region: variable]
 **     Chunks are appended sequentially. Each chunk:
 **       length(4) + data(length)
@@ -21,12 +23,30 @@
 
 /* Manifest magic */
 #define CHUNK_STORE_MAGIC 0x444C5443  /* "DLTC" */
-#define CHUNK_STORE_VERSION 4
-#define CHUNK_MANIFEST_SIZE 124
+#define CHUNK_STORE_VERSION 5
+#define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32
 
 typedef struct ChunkStore ChunkStore;
 typedef struct ChunkIndexEntry ChunkIndexEntry;
+typedef struct ConflictEntry ConflictEntry;
+
+/*
+** A single row-level conflict from a three-way merge.
+** Stored inline: the key (rowid or PK blob), the base (ancestor) value,
+** and the "their" value.  "Ours" is already the working row.
+** Conflicts for each table are collected into a prolly tree keyed by
+** the conflict key.  The conflict catalog maps table name → conflict
+** tree root hash.
+*/
+struct ConflictEntry {
+  u8 *pKey;           /* Primary key blob */
+  int nKey;           /* Size of pKey */
+  u8 *pBaseVal;       /* Ancestor row value (NULL if row didn't exist) */
+  int nBaseVal;       /* Size of pBaseVal */
+  u8 *pTheirVal;      /* Their row value (NULL if row was deleted) */
+  int nTheirVal;      /* Size of pTheirVal */
+};
 
 struct ChunkIndexEntry {
   ProllyHash hash;
@@ -43,6 +63,11 @@ struct ChunkStore {
   ProllyHash headCommit;     /* HEAD commit hash (linked list of commits) */
   ProllyHash stagedCatalog;  /* Staged catalog (tables added via dolt_add) */
   ProllyHash refsHash;       /* Hash of refs chunk (branch mapping) */
+
+  /* Merge state — persisted in the manifest */
+  u8 isMerging;              /* 1 if a merge is in progress */
+  ProllyHash mergeCommitHash;     /* Commit hash being merged in */
+  ProllyHash conflictsCatalogHash; /* Hash of conflicts catalog (table name → conflict tree root) */
 
   /* Branch refs (in-memory, loaded from refs chunk) */
   struct BranchRef {
@@ -143,5 +168,18 @@ int chunkStoreIsEmpty(ChunkStore *cs);
 
 /* Get the filename */
 const char *chunkStoreFilename(ChunkStore *cs);
+
+/* Merge state accessors */
+int chunkStoreGetMergeState(ChunkStore *cs, u8 *pIsMerging,
+                            ProllyHash *pMergeCommit,
+                            ProllyHash *pConflictsCatalog);
+void chunkStoreSetMergeState(ChunkStore *cs, u8 isMerging,
+                             const ProllyHash *pMergeCommit,
+                             const ProllyHash *pConflictsCatalog);
+void chunkStoreClearMergeState(ChunkStore *cs);
+
+/* Get/set the conflicts catalog hash independently */
+void chunkStoreGetConflictsCatalog(ChunkStore *cs, ProllyHash *pHash);
+void chunkStoreSetConflictsCatalog(ChunkStore *cs, const ProllyHash *pHash);
 
 #endif /* SQLITE_CHUNK_STORE_H */
