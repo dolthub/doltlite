@@ -51,6 +51,13 @@ struct ChunkStore {
   } *aBranches;
   int nBranches;
   char *zDefaultBranch;      /* Default branch for new connections */
+
+  /* Tag refs (in-memory, loaded from refs chunk) */
+  struct TagRef {
+    char *zName;
+    ProllyHash commitHash;
+  } *aTags;
+  int nTags;
   int nChunks;               /* Number of chunks in store */
   i64 iIndexOffset;          /* File offset of chunk index */
   int nIndexSize;            /* Size of chunk index in bytes */
@@ -105,6 +112,11 @@ int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName);
 int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);
 int chunkStoreSerializeRefs(ChunkStore *cs);
+
+/* Tag management */
+int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);
+int chunkStoreDeleteTag(ChunkStore *cs, const char *zName);
+int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 
 /* Check if a chunk exists */
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash);

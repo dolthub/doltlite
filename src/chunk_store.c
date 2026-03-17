@@ -516,6 +516,8 @@ int chunkStoreClose(ChunkStore *cs){
   sqlite3_free(cs->zDefaultBranch);
   { int i; for(i=0; i<cs->nBranches; i++) sqlite3_free(cs->aBranches[i].zName); }
   sqlite3_free(cs->aBranches);
+  { int i; for(i=0; i<cs->nTags; i++) sqlite3_free(cs->aTags[i].zName); }
+  sqlite3_free(cs->aTags);
   memset(cs, 0, sizeof(*cs));
   return SQLITE_OK;
 }
@@ -618,25 +620,67 @@ int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName){
   return SQLITE_NOTFOUND;
 }
 
+/* --- Tag management --- */
+
+int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
+  int i;
+  for(i=0; i<cs->nTags; i++){
+    if( strcmp(cs->aTags[i].zName, zName)==0 ){
+      if( pCommit ) memcpy(pCommit, &cs->aTags[i].commitHash, sizeof(ProllyHash));
+      return SQLITE_OK;
+    }
+  }
+  return SQLITE_NOTFOUND;
+}
+
+int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
+  struct TagRef *aNew;
+  if( chunkStoreFindTag(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
+  aNew = sqlite3_realloc(cs->aTags, (cs->nTags+1)*(int)sizeof(struct TagRef));
+  if( !aNew ) return SQLITE_NOMEM;
+  cs->aTags = aNew;
+  aNew[cs->nTags].zName = sqlite3_mprintf("%s", zName);
+  if( !aNew[cs->nTags].zName ) return SQLITE_NOMEM;
+  memcpy(&aNew[cs->nTags].commitHash, pCommit, sizeof(ProllyHash));
+  cs->nTags++;
+  return SQLITE_OK;
+}
+
+int chunkStoreDeleteTag(ChunkStore *cs, const char *zName){
+  int i;
+  for(i=0; i<cs->nTags; i++){
+    if( strcmp(cs->aTags[i].zName, zName)==0 ){
+      sqlite3_free(cs->aTags[i].zName);
+      cs->aTags[i] = cs->aTags[cs->nTags-1];
+      cs->nTags--;
+      return SQLITE_OK;
+    }
+  }
+  return SQLITE_NOTFOUND;
+}
+
 /*
-** Serialize refs: [version:1][default_branch_len:2][default_branch:var]
-**                 [num:2] per branch: [name_len:2][name:var][hash:20]
+** Serialize refs v2: [version:1][default_branch_len:2][default_branch:var]
+**   [num_branches:2] per branch: [name_len:2][name:var][hash:20]
+**   [num_tags:2] per tag: [name_len:2][name:var][hash:20]
 */
 int chunkStoreSerializeRefs(ChunkStore *cs){
   const char *def = cs->zDefaultBranch ? cs->zDefaultBranch : "main";
   int defLen = (int)strlen(def);
-  int sz = 1 + 2 + defLen + 2;
+  int sz = 1 + 2 + defLen + 2 + 2;  /* version + default + num_branches + num_tags */
   int i, rc;
   u8 *buf, *p;
   ProllyHash refsHash;
 
   for(i=0; i<cs->nBranches; i++) sz += 2 + (int)strlen(cs->aBranches[i].zName) + PROLLY_HASH_SIZE;
+  for(i=0; i<cs->nTags; i++) sz += 2 + (int)strlen(cs->aTags[i].zName) + PROLLY_HASH_SIZE;
   buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
   p = buf;
-  *p++ = 1;
+  *p++ = 2;  /* version 2: branches + tags */
   p[0]=(u8)defLen; p[1]=(u8)(defLen>>8); p+=2;
   memcpy(p, def, defLen); p+=defLen;
+  /* Branches */
   p[0]=(u8)cs->nBranches; p[1]=(u8)(cs->nBranches>>8); p+=2;
   for(i=0; i<cs->nBranches; i++){
     int n = (int)strlen(cs->aBranches[i].zName);
@@ -644,18 +688,27 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
     memcpy(p, cs->aBranches[i].zName, n); p+=n;
     memcpy(p, cs->aBranches[i].commitHash.data, PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
   }
+  /* Tags */
+  p[0]=(u8)cs->nTags; p[1]=(u8)(cs->nTags>>8); p+=2;
+  for(i=0; i<cs->nTags; i++){
+    int n = (int)strlen(cs->aTags[i].zName);
+    p[0]=(u8)n; p[1]=(u8)(n>>8); p+=2;
+    memcpy(p, cs->aTags[i].zName, n); p+=n;
+    memcpy(p, cs->aTags[i].commitHash.data, PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
+  }
   rc = chunkStorePut(cs, buf, sz, &refsHash);
   sqlite3_free(buf);
-  /* Store refs hash in headCommit field (reusing manifest bytes 64-83) */
   if( rc==SQLITE_OK ) memcpy(&cs->refsHash, &refsHash, sizeof(ProllyHash));
   return rc;
 }
 
 static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   const u8 *p = data;
-  int defLen, nBranches, i;
+  int defLen, nBranches, nTags, i;
+  u8 version;
   if( nData<5 ) return SQLITE_CORRUPT;
-  if( *p++!=1 ) return SQLITE_CORRUPT;
+  version = *p++;
+  if( version!=1 && version!=2 ) return SQLITE_CORRUPT;
   defLen = p[0]|(p[1]<<8); p+=2;
   if( p+defLen>data+nData ) return SQLITE_CORRUPT;
   sqlite3_free(cs->zDefaultBranch);
@@ -679,6 +732,28 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
       cs->nBranches++;
     }
   }
+
+  /* Tags (version 2+) */
+  for(i=0;i<cs->nTags;i++) sqlite3_free(cs->aTags[i].zName);
+  sqlite3_free(cs->aTags); cs->aTags=0; cs->nTags=0;
+  if( version>=2 && p+2<=data+nData ){
+    nTags = p[0]|(p[1]<<8); p+=2;
+    if( nTags>0 ){
+      cs->aTags = sqlite3_malloc(nTags*(int)sizeof(struct TagRef));
+      if(!cs->aTags) return SQLITE_NOMEM;
+      for(i=0;i<nTags;i++){
+        int n; if(p+2>data+nData) break;
+        n=p[0]|(p[1]<<8); p+=2;
+        if(p+n+PROLLY_HASH_SIZE>data+nData) break;
+        cs->aTags[i].zName=sqlite3_malloc(n+1);
+        if(!cs->aTags[i].zName) return SQLITE_NOMEM;
+        memcpy(cs->aTags[i].zName,p,n); cs->aTags[i].zName[n]=0; p+=n;
+        memcpy(cs->aTags[i].commitHash.data,p,PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
+        cs->nTags++;
+      }
+    }
+  }
+
   return SQLITE_OK;
 }
 
