@@ -176,6 +176,19 @@ Revert computes the inverse of the target commit's changes and applies
 them to the current HEAD. The new commit message is
 `Revert '<original message>'`. Cannot revert the initial commit.
 
+### Garbage Collection
+
+Remove unreachable chunks from the store to reclaim space:
+
+```sql
+SELECT dolt_gc();
+-- "12 chunks removed, 45 chunks kept"
+```
+
+Stop-the-world mark-and-sweep: walks all branches, tags, commit
+history, catalogs, and prolly tree nodes to find reachable chunks,
+then rewrites the file with only live data. Safe and idempotent.
+
 ### Merge Base
 
 Find the common ancestor of two commits:
