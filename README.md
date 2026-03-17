@@ -78,6 +78,26 @@ SELECT count(*) FROM dolt_history_users WHERE rowid_val = 42;
 SELECT * FROM dolt_history_users WHERE commit_hash = 'abc123...';
 ```
 
+### Point-in-Time Queries (AS OF)
+
+Read a table as it existed at any commit, branch, or tag:
+
+```sql
+-- By commit hash
+SELECT * FROM dolt_at('users', 'abc123...');
+-- rowid_val | value
+
+-- By branch name
+SELECT * FROM dolt_at('users', 'feature');
+
+-- By tag
+SELECT * FROM dolt_at('users', 'v1.0');
+
+-- Compare current vs historical
+SELECT count(*) FROM users;                                    -- 100
+SELECT count(*) FROM dolt_at('users', 'v1.0');                -- 42
+```
+
 ### Diff
 
 Row-level diff between any two commits, or working state vs HEAD:
