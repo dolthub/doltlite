@@ -155,17 +155,134 @@ static int diffEmitModify(
 }
 
 /*
+** Read a SQLite-format varint from p, not reading past pEnd.
+** Returns the number of bytes consumed, or 0 on error.
+*/
+static int diffReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
+  u64 v = 0;
+  int i;
+  if( p >= pEnd ){ *pVal = 0; return 0; }
+  for(i=0; i<9 && p+i<pEnd; i++){
+    if( i<8 ){
+      v = (v << 7) | (p[i] & 0x7f);
+      if( (p[i] & 0x80)==0 ){ *pVal = v; return i+1; }
+    }else{
+      v = (v << 8) | p[i];
+      *pVal = v;
+      return 9;
+    }
+  }
+  *pVal = v;
+  return i ? i : 0;
+}
+
+/*
+** Return the data size in bytes for a given SQLite serial type.
+*/
+static int diffSerialTypeSize(u64 st){
+  if( st==0 ) return 0;
+  if( st==1 ) return 1;
+  if( st==2 ) return 2;
+  if( st==3 ) return 3;
+  if( st==4 ) return 4;
+  if( st==5 ) return 6;
+  if( st==6 ) return 8;
+  if( st==7 ) return 8;
+  if( st==8 || st==9 ) return 0;
+  if( st>=12 && (st&1)==0 ) return (int)(st-12)/2;
+  if( st>=13 && (st&1)==1 ) return (int)(st-13)/2;
+  return 0;
+}
+
+/*
+** Compare two SQLite record-format values field-by-field, treating
+** trailing NULL fields (serial type 0) in the longer record as equal
+** to missing fields in the shorter record.  This handles the case
+** where ALTER TABLE ADD COLUMN causes records to be rewritten with
+** extra trailing NULLs.
+**
+** Returns non-zero if the records are logically equal.
+** Returns 0 (not equal) if either record is malformed.
+*/
+static int diffRecordsEqualFieldwise(
+  const u8 *pA, int nA,
+  const u8 *pB, int nB
+){
+  const u8 *pEndA, *pEndB;
+  u64 hdrSizeA, hdrSizeB;
+  int hdrBytesA, hdrBytesB;
+  const u8 *hpA, *hpB;
+  const u8 *hdrEndA, *hdrEndB;
+  int offA, offB;
+
+  if( nA < 1 || nB < 1 ) return 0;
+
+  pEndA = pA + nA;
+  pEndB = pB + nB;
+
+  hdrBytesA = diffReadVarint(pA, pEndA, &hdrSizeA);
+  if( hdrBytesA == 0 ) return 0;
+  hdrBytesB = diffReadVarint(pB, pEndB, &hdrSizeB);
+  if( hdrBytesB == 0 ) return 0;
+
+  if( (int)hdrSizeA < hdrBytesA || (int)hdrSizeA > nA ) return 0;
+  if( (int)hdrSizeB < hdrBytesB || (int)hdrSizeB > nB ) return 0;
+
+  hpA = pA + hdrBytesA;
+  hpB = pB + hdrBytesB;
+  hdrEndA = pA + (int)hdrSizeA;
+  hdrEndB = pB + (int)hdrSizeB;
+  offA = (int)hdrSizeA;
+  offB = (int)hdrSizeB;
+
+  while( hpA < hdrEndA || hpB < hdrEndB ){
+    u64 stA = 0, stB = 0;
+    int szA, szB;
+
+    if( hpA < hdrEndA ){
+      int n = diffReadVarint(hpA, hdrEndA, &stA);
+      if( n == 0 ) return 0;
+      hpA += n;
+    }
+    if( hpB < hdrEndB ){
+      int n = diffReadVarint(hpB, hdrEndB, &stB);
+      if( n == 0 ) return 0;
+      hpB += n;
+    }
+
+    szA = diffSerialTypeSize(stA);
+    szB = diffSerialTypeSize(stB);
+
+    if( stA == 0 && stB == 0 ) continue;
+    if( stA != stB ) return 0;
+
+    if( offA + szA > nA || offB + szB > nB ) return 0;
+    if( szA > 0 && memcmp(pA + offA, pB + offB, szA) != 0 ) return 0;
+
+    offA += szA;
+    offB += szB;
+  }
+
+  return 1;
+}
+
+/*
 ** Return non-zero if the two values at the current cursor positions
-** are identical (same length and same bytes).
+** are identical.  Fast path: same length and same bytes.  Slow path:
+** parse SQLite record format to compare field-by-field, tolerating
+** trailing NULL differences from ALTER TABLE ADD COLUMN.
 */
 static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew){
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
   prollyCursorValue(pOld, &pOldVal, &nOldVal);
   prollyCursorValue(pNew, &pNewVal, &nNewVal);
-  if( nOldVal != nNewVal ) return 0;
-  if( nOldVal == 0 ) return 1;
-  return memcmp(pOldVal, pNewVal, nOldVal) == 0;
+  if( nOldVal == nNewVal ){
+    if( nOldVal == 0 ) return 1;
+    return memcmp(pOldVal, pNewVal, nOldVal) == 0;
+  }
+  if( nOldVal < 2 || nNewVal < 2 ) return 0;
+  return diffRecordsEqualFieldwise(pOldVal, nOldVal, pNewVal, nNewVal);
 }
 
 /*
