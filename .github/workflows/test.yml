@@ -107,6 +107,9 @@ jobs:
     - name: Dolt garbage collection tests
       run: cd build && bash ../test/doltlite_gc.sh
 
+    - name: Structural sharing and GC tests
+      run: cd build && bash ../test/doltlite_structural.sh
+
     - name: Performance tests
       run: cd build && bash ../test/doltlite_perf.sh
       timeout-minutes: 10
