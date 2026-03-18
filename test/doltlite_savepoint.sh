@@ -235,11 +235,9 @@ run_test "merge_in_txn_feature_row" \
   "SELECT v FROM t WHERE id=2;" \
   "feature-row" "$DB7"
 
-# Note: merge commit message is a known issue — fast-forward merges
-# currently show the source branch's commit message, not "Merge branch ..."
 run_test_match "merge_in_txn_log" \
   "SELECT message FROM dolt_log LIMIT 1;" \
-  "feature work" "$DB7"
+  "Merge branch" "$DB7"
 
 # ============================================================
 # Test 8: ROLLBACK after dolt_branch — does the branch creation persist?
