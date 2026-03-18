@@ -95,8 +95,8 @@ run_test "main_no_daylon" "SELECT count(*) FROM employees WHERE id=4;" "0" "$DB"
 # Phase 5: Point-in-time query — see modifications branch data
 # ============================================================
 
-run_test "asof_mod_count" "SELECT count(*) FROM dolt_at('employees','modifications');" "5" "$DB"
-run_test "asof_v1_count" "SELECT count(*) FROM dolt_at('employees','v1');" "4" "$DB"
+run_test "asof_mod_count" "SELECT count(*) FROM dolt_at_employees('modifications');" "5" "$DB"
+run_test "asof_v1_count" "SELECT count(*) FROM dolt_at_employees('v1');" "4" "$DB"
 
 # ============================================================
 # Phase 6: Merge modifications into main
@@ -179,7 +179,7 @@ run_test "tags_count" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
 run_test "tags_v1" "SELECT name FROM dolt_tags;" "v1" "$DB"
 
 # Data at v1: 4 employees
-run_test "tags_v1_data" "SELECT count(*) FROM dolt_at('employees','v1');" "4" "$DB"
+run_test "tags_v1_data" "SELECT count(*) FROM dolt_at_employees('v1');" "4" "$DB"
 
 # ============================================================
 # Phase 14: Persistence — reopen and verify

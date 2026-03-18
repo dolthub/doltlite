@@ -56,6 +56,7 @@ extern int doltliteGcRegister(sqlite3 *db);
 extern void doltliteRegisterDiffTables(sqlite3 *db);
 extern int doltliteAncestorRegister(sqlite3 *db);
 extern int doltliteAtRegister(sqlite3 *db);
+extern void doltliteRegisterAtTables(sqlite3 *db);
 extern void doltliteRegisterHistoryTables(sqlite3 *db);
 extern int doltliteSchemaDiffRegister(sqlite3 *db);
 
@@ -448,11 +449,10 @@ static void doltliteCommitFunc(
 
   doltliteHashToHex(&commitHash, hexBuf);
 
-  /* DISABLED: Register functions were opening cursors that interfered
-  ** with the deferred MutMap flush. Tables are registered at db open
-  ** and via doltliteRegister. */
-  /* doltliteRegisterDiffTables(db); */
-  /* doltliteRegisterHistoryTables(db); */
+  /* Register per-table modules for newly created tables */
+  doltliteRegisterDiffTables(db);
+  doltliteRegisterHistoryTables(db);
+  doltliteRegisterAtTables(db);
 
   sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
 }

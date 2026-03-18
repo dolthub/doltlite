@@ -80,22 +80,19 @@ SELECT * FROM dolt_history_users WHERE commit_hash = 'abc123...';
 
 ### Point-in-Time Queries (AS OF)
 
-Read a table as it existed at any commit, branch, or tag:
+Read a table as it existed at any commit, branch, or tag.
+Returns the real table columns (not generic blobs):
 
 ```sql
--- By commit hash
-SELECT * FROM dolt_at('users', 'abc123...');
--- rowid_val | value
+SELECT * FROM dolt_at_users('abc123...');
+-- id | name | email (same columns as the actual table)
 
--- By branch name
-SELECT * FROM dolt_at('users', 'feature');
-
--- By tag
-SELECT * FROM dolt_at('users', 'v1.0');
+SELECT * FROM dolt_at_users('feature');
+SELECT * FROM dolt_at_users('v1.0');
 
 -- Compare current vs historical
-SELECT count(*) FROM users;                                    -- 100
-SELECT count(*) FROM dolt_at('users', 'v1.0');                -- 42
+SELECT count(*) FROM users;                     -- 100
+SELECT count(*) FROM dolt_at_users('v1.0');    -- 42
 ```
 
 ### Diff
