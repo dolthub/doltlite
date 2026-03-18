@@ -320,6 +320,7 @@ static void invalidateSchema(Btree *pBtree);
 static int flushMutMap(BtCursor *pCur);
 static int flushIfNeeded(BtCursor *pCur);
 static int flushAllPending(BtShared *pBt, Pgno iTable);
+static int flushDeferredEdits(BtShared *pBt);
 static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
@@ -1610,6 +1611,12 @@ int sqlite3BtreeCursor(
     pCur->curFlags = BTCF_WriteFlag;
   }
 
+  /* Piece 2: pick up deferred edits from a previous cursor on this table */
+  if( pTE->pPending ){
+    pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+    pTE->pPending = 0;
+  }
+
   prollyCursorInit(&pCur->pCur, &pBt->store, &pBt->cache,
                     &pTE->root, pTE->flags);
 
@@ -1627,13 +1634,18 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
   pBt = pCur->pBt;
   if( !pBt ) return SQLITE_OK;
 
-  /* Transfer MutMap to table entry for deferred flush at commit time.
-  ** Only transfer if the table entry doesn't already have pending edits
-  ** (which would mean another cursor already stored edits — in that case
-  ** flush ours immediately to avoid needing a MutMap merge). */
-  /* Just flush immediately for now */
+  /* Piece 4: Transfer MutMap to table entry for deferred flush.
+  ** The MutMap will be picked up by the next cursor on this table,
+  ** or flushed at BtreeCommitPhaseTwo / BtreeFirst / BtreeLast. */
   if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    flushMutMap(pCur);
+    struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+    if( pTE && !pTE->pPending ){
+      pTE->pPending = pCur->pMutMap;
+      pCur->pMutMap = 0;
+    }else{
+      /* Table already has pending from another cursor — flush ours */
+      flushMutMap(pCur);
+    }
   }
 
   prollyCursorClose(&pCur->pCur);
@@ -1704,9 +1716,40 @@ int sqlite3BtreeClosesWithCursor(Btree *p, BtCursor *pCur){
 ** Cursor navigation
 ** -------------------------------------------------------------------------- */
 
+static int flushTablePending(BtCursor *pCur){
+  struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( pTE && pTE->pPending ){
+    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+    if( !prollyMutMapIsEmpty(pMap) ){
+      ProllyMutator mut;
+      int rc;
+      memset(&mut, 0, sizeof(mut));
+      mut.pStore = &pCur->pBt->store;
+      mut.pCache = &pCur->pBt->cache;
+      memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
+      mut.pEdits = pMap;
+      mut.flags = pTE->flags;
+      rc = prollyMutateFlush(&mut);
+      if( rc==SQLITE_OK ){
+        memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
+      }
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      pTE->pPending = 0;
+      return rc;
+    }
+    prollyMutMapFree(pMap);
+    sqlite3_free(pMap);
+    pTE->pPending = 0;
+  }
+  return SQLITE_OK;
+}
+
 int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
+  rc = flushTablePending(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   rc = flushIfNeeded(pCur);
   if( rc!=SQLITE_OK ) return rc;
   refreshCursorRoot(pCur);
@@ -1721,6 +1764,8 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 int sqlite3BtreeLast(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
+  rc = flushTablePending(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   rc = flushIfNeeded(pCur);
   if( rc!=SQLITE_OK ) return rc;
   refreshCursorRoot(pCur);
@@ -1875,18 +1920,9 @@ int sqlite3BtreeTableMoveto(
     /* Not in MutMap — fall through to check the tree without flushing */
   }
 
-  /* Flush other cursors' pending mutations on this table */
-  {
-    BtCursor *p;
-    for(p = pCur->pBt->pCursor; p; p = p->pNext){
-      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
-       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-        rc = flushMutMap(p);
-        if( rc!=SQLITE_OK ) return rc;
-        p->eState = CURSOR_INVALID;
-      }
-    }
-  }
+  /* Don't flush other cursors here — their edits are in pTE->pPending
+  ** and will be picked up by this cursor or flushed at commit/scan time.
+  ** This was the O(n²) bottleneck for bulk inserts. */
 
   refreshCursorRoot(pCur);
 
@@ -2205,35 +2241,43 @@ static int flushAllPending(BtShared *pBt, Pgno iTable){
     }
   }
 
-  /* Flush table-level deferred edits (from closed cursors).
-  ** DISABLED for debugging — re-enable after finding crash cause. */
-  if( 0 && pBt->db && pBt->db->nDb>0 && pBt->db->aDb[0].pBt ){
+  /* Also flush table-level deferred edits so data persists to disk.
+  ** This is called by both BtreeCommitPhaseTwo (SQLite autocommit)
+  ** and FlushAndSerializeCatalog (dolt functions). */
+  rc = flushDeferredEdits(pBt);
+  if( rc!=SQLITE_OK ) return rc;
+
+  return SQLITE_OK;
+}
+
+/* Flush table-level deferred edits. Called from FlushAndSerializeCatalog. */
+static int flushDeferredEdits(BtShared *pBt){
+  int rc = SQLITE_OK;
+  if( pBt->db && pBt->db->nDb>0 && pBt->db->aDb[0].pBt ){
     Btree *pBtree = pBt->db->aDb[0].pBt;
     int i;
     for(i=0; i<pBtree->nTables; i++){
       struct TableEntry *pTE = &pBtree->aTables[i];
-      if( (iTable==0 || pTE->iTable==iTable)
-       && pTE->pPending && !prollyMutMapIsEmpty(pTE->pPending) ){
+      if( pTE->pPending && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
         ProllyMutator mut;
         memset(&mut, 0, sizeof(mut));
         mut.pStore = &pBt->store;
         mut.pCache = &pBt->cache;
         memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
-        mut.pEdits = pTE->pPending;
+        mut.pEdits = (ProllyMutMap*)pTE->pPending;
         mut.flags = pTE->flags;
         rc = prollyMutateFlush(&mut);
         if( rc==SQLITE_OK ){
           memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
         }
-        prollyMutMapFree(pTE->pPending);
+        prollyMutMapFree((ProllyMutMap*)pTE->pPending);
         sqlite3_free(pTE->pPending);
         pTE->pPending = 0;
         if( rc!=SQLITE_OK ) return rc;
       }
     }
   }
-
-  return SQLITE_OK;
+  return rc;
 }
 
 int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
@@ -2444,6 +2488,9 @@ struct Pager *sqlite3BtreePager(Btree *p){
 
 int sqlite3BtreeCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
   (void)db;
+  /* Flush any deferred edits so the count reflects pending inserts/deletes */
+  flushTablePending(pCur);
+  flushIfNeeded(pCur);
   return countTreeEntries(pCur->pBtree, pCur->pgnoRoot, pnEntry);
 }
 
@@ -2866,8 +2913,10 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   pBtree = db->aDb[0].pBt;
   rc = flushAllPending(pBt, 0);
   if( rc!=SQLITE_OK ) return rc;
-  /* Update schema hashes before serializing — safe here because this is
-  ** called from SQL function context, not from BtreeCommitPhaseTwo. */
+  /* Flush table-level deferred edits (pPending from closed cursors) */
+  rc = flushDeferredEdits(pBt);
+  if( rc!=SQLITE_OK ) return rc;
+  /* Update schema hashes */
   doltliteUpdateSchemaHashes(db);
   return serializeCatalog(pBtree, ppOut, pnOut);
 }
