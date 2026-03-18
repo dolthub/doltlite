@@ -24,7 +24,7 @@ extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut)
 extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 extern int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 
-struct TableEntry { Pgno iTable; ProllyHash root; ProllyHash schemaHash; u8 flags; char *zName; };
+struct TableEntry { Pgno iTable; ProllyHash root; ProllyHash schemaHash; u8 flags; char *zName; void *pPending; };
 extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                                struct TableEntry **ppTables, int *pnTables,
                                Pgno *piNextTable);

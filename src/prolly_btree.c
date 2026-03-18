@@ -167,6 +167,9 @@ struct TableEntry {
   ProllyHash schemaHash; /* Hash of this table's CREATE TABLE SQL (schema) */
   u8 flags;              /* BTREE_INTKEY or BTREE_BLOBKEY */
   char *zName;           /* Table name (owned, NULL for internal tables) */
+  ProllyMutMap *pPending; /* Deferred edits from closed write cursors.
+                          ** Transferred here on cursor close, flushed at
+                          ** BtreeCommitPhaseTwo or BtreeFirst/BtreeLast. */
 };
 
 /* --------------------------------------------------------------------------
@@ -1624,8 +1627,14 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
   pBt = pCur->pBt;
   if( !pBt ) return SQLITE_OK;
 
-  /* Flush any pending mutations before closing */
-  flushIfNeeded(pCur);
+  /* Transfer MutMap to table entry for deferred flush at commit time.
+  ** Only transfer if the table entry doesn't already have pending edits
+  ** (which would mean another cursor already stored edits — in that case
+  ** flush ours immediately to avoid needing a MutMap merge). */
+  /* Just flush immediately for now */
+  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    flushMutMap(pCur);
+  }
 
   prollyCursorClose(&pCur->pCur);
 
@@ -2186,12 +2195,44 @@ static int flushIfNeeded(BtCursor *pCur){
 */
 static int flushAllPending(BtShared *pBt, Pgno iTable){
   BtCursor *p;
+  int rc;
+
+  /* Flush cursor-level MutMaps */
   for(p = pBt->pCursor; p; p = p->pNext){
     if( iTable==0 || p->pgnoRoot==iTable ){
-      int rc = flushIfNeeded(p);
+      rc = flushIfNeeded(p);
       if( rc!=SQLITE_OK ) return rc;
     }
   }
+
+  /* Flush table-level deferred edits (from closed cursors).
+  ** DISABLED for debugging — re-enable after finding crash cause. */
+  if( 0 && pBt->db && pBt->db->nDb>0 && pBt->db->aDb[0].pBt ){
+    Btree *pBtree = pBt->db->aDb[0].pBt;
+    int i;
+    for(i=0; i<pBtree->nTables; i++){
+      struct TableEntry *pTE = &pBtree->aTables[i];
+      if( (iTable==0 || pTE->iTable==iTable)
+       && pTE->pPending && !prollyMutMapIsEmpty(pTE->pPending) ){
+        ProllyMutator mut;
+        memset(&mut, 0, sizeof(mut));
+        mut.pStore = &pBt->store;
+        mut.pCache = &pBt->cache;
+        memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
+        mut.pEdits = pTE->pPending;
+        mut.flags = pTE->flags;
+        rc = prollyMutateFlush(&mut);
+        if( rc==SQLITE_OK ){
+          memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
+        }
+        prollyMutMapFree(pTE->pPending);
+        sqlite3_free(pTE->pPending);
+        pTE->pPending = 0;
+        if( rc!=SQLITE_OK ) return rc;
+      }
+    }
+  }
+
   return SQLITE_OK;
 }
 

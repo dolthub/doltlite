@@ -29,6 +29,7 @@ struct TableEntry {
   ProllyHash schemaHash;
   u8 flags;
   char *zName;
+  void *pPending;
 };
 
 /* From doltlite_conflicts.c */

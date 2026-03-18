@@ -25,6 +25,7 @@ struct TableEntry {
   ProllyHash schemaHash;
   u8 flags;
   char *zName;
+  void *pPending;
 };
 extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                                struct TableEntry **ppTables, int *pnTables,
