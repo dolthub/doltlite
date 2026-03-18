@@ -26,6 +26,8 @@
 #include "prolly_hash.h"
 #include <string.h>
 #include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 /* --------------------------------------------------------------------
 ** Little-endian helper macros for reading/writing integers from byte
@@ -952,7 +954,6 @@ int chunkStorePut(
 int chunkStoreCommit(ChunkStore *cs){
   int rc;
   char *zJournal = 0;
-  sqlite3_file *pNew = 0;
   ChunkIndexEntry *aMerged = 0;
   int nMerged = 0;
   i64 writePos;
@@ -1015,98 +1016,91 @@ int chunkStoreCommit(ChunkStore *cs){
   zJournal = csJournalPath(cs->zFilename);
   if( zJournal == 0 ){ rc = SQLITE_NOMEM; goto commit_error; }
 
-  /* Delete any stale journal file */
-  sqlite3OsDelete(cs->pVfs, zJournal, 0);
-
-  /* Open the temp file for writing */
+  /* Use raw POSIX I/O for the journal file to avoid SQLite VFS limits
+  ** (the VFS xWrite returns SQLITE_FULL for large writes on MAIN_DB files) */
   {
-    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
-                  | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_MAIN_DB;
-    rc = csOpenFile(cs->pVfs, zJournal, &pNew, openFlags);
-    if( rc != SQLITE_OK ) goto commit_error;
-  }
+    int fd;
+    unlink(zJournal);
+    fd = open(zJournal, O_RDWR | O_CREAT | O_EXCL, 0644);
+    if( fd < 0 ){ rc = SQLITE_CANTOPEN; goto commit_error; }
 
-  /* -- Write manifest placeholder (will rewrite at the end) -- */
-  writePos = 0;
-  memset(hdrBuf, 0, CHUNK_MANIFEST_SIZE);
-  rc = sqlite3OsWrite(pNew, hdrBuf, CHUNK_MANIFEST_SIZE, writePos);
-  if( rc != SQLITE_OK ) goto commit_error;
-  writePos += CHUNK_MANIFEST_SIZE;
+    /* Helper macro for writing to fd */
+    #define JOURNAL_WRITE(buf, len, off) do { \
+      ssize_t _n = pwrite(fd, (buf), (len), (off)); \
+      if( _n != (ssize_t)(len) ){ close(fd); unlink(zJournal); \
+        rc = SQLITE_IOERR_WRITE; goto commit_error; } \
+    } while(0)
 
-  /* -- Copy existing chunk data from old file -- */
-  if( cs->pFile && oldDataSize > 0 ){
-    /* Read and copy in chunks to limit memory usage */
-    i64 remaining = oldDataSize;
-    i64 srcOff = CHUNK_MANIFEST_SIZE;
-    int copyBufSize = 32768;
-    u8 *copyBuf = (u8 *)sqlite3_malloc(copyBufSize);
-    if( copyBuf == 0 ){ rc = SQLITE_NOMEM; goto commit_error; }
+    /* -- Write manifest placeholder -- */
+    writePos = 0;
+    memset(hdrBuf, 0, CHUNK_MANIFEST_SIZE);
+    JOURNAL_WRITE(hdrBuf, CHUNK_MANIFEST_SIZE, writePos);
+    writePos += CHUNK_MANIFEST_SIZE;
 
-    while( remaining > 0 ){
-      int toRead = (remaining > copyBufSize) ? copyBufSize : (int)remaining;
-      rc = sqlite3OsRead(cs->pFile, copyBuf, toRead, srcOff);
-      if( rc != SQLITE_OK ){
-        sqlite3_free(copyBuf);
-        goto commit_error;
+    /* -- Copy existing chunk data from old file -- */
+    if( cs->pFile && oldDataSize > 0 ){
+      i64 remaining = oldDataSize;
+      i64 srcOff = CHUNK_MANIFEST_SIZE;
+      int copyBufSize = 65536;
+      u8 *copyBuf = (u8 *)sqlite3_malloc(copyBufSize);
+      if( copyBuf == 0 ){ close(fd); unlink(zJournal); rc = SQLITE_NOMEM; goto commit_error; }
+
+      while( remaining > 0 ){
+        int toRead = (remaining > copyBufSize) ? copyBufSize : (int)remaining;
+        rc = sqlite3OsRead(cs->pFile, copyBuf, toRead, srcOff);
+        if( rc != SQLITE_OK ){
+          sqlite3_free(copyBuf); close(fd); unlink(zJournal);
+          goto commit_error;
+        }
+        JOURNAL_WRITE(copyBuf, toRead, writePos);
+        srcOff += toRead;
+        writePos += toRead;
+        remaining -= toRead;
       }
-      rc = sqlite3OsWrite(pNew, copyBuf, toRead, writePos);
-      if( rc != SQLITE_OK ){
-        sqlite3_free(copyBuf);
-        goto commit_error;
+      sqlite3_free(copyBuf);
+    }
+
+    /* -- Write pending chunk data -- */
+    if( cs->nWriteBuf > 0 ){
+      JOURNAL_WRITE(cs->pWriteBuf, cs->nWriteBuf, writePos);
+      writePos += cs->nWriteBuf;
+    }
+
+    /* -- Write merged index -- */
+    indexBufSize = nMerged * CHUNK_INDEX_ENTRY_SIZE;
+    if( indexBufSize > 0 ){
+      indexBuf = (u8 *)sqlite3_malloc(indexBufSize);
+      if( indexBuf == 0 ){ close(fd); unlink(zJournal); rc = SQLITE_NOMEM; goto commit_error; }
+      for( i = 0; i < nMerged; i++ ){
+        csSerializeIndexEntry(&aMerged[i], indexBuf + i * CHUNK_INDEX_ENTRY_SIZE);
       }
-      srcOff += toRead;
-      writePos += toRead;
-      remaining -= toRead;
+      JOURNAL_WRITE(indexBuf, indexBufSize, writePos);
     }
-    sqlite3_free(copyBuf);
-  }
 
-  /* -- Write pending chunk data -- */
-  if( cs->nWriteBuf > 0 ){
-    rc = sqlite3OsWrite(pNew, cs->pWriteBuf, cs->nWriteBuf, writePos);
-    if( rc != SQLITE_OK ) goto commit_error;
-    writePos += cs->nWriteBuf;
-  }
-
-  /* -- Write merged index -- */
-  indexBufSize = nMerged * CHUNK_INDEX_ENTRY_SIZE;
-  if( indexBufSize > 0 ){
-    indexBuf = (u8 *)sqlite3_malloc(indexBufSize);
-    if( indexBuf == 0 ){ rc = SQLITE_NOMEM; goto commit_error; }
-    for( i = 0; i < nMerged; i++ ){
-      csSerializeIndexEntry(&aMerged[i], indexBuf + i * CHUNK_INDEX_ENTRY_SIZE);
+    /* -- Rewrite manifest header -- */
+    {
+      ChunkStore tmp;
+      memset(&tmp, 0, sizeof(tmp));
+      memcpy(&tmp.root, &cs->root, sizeof(ProllyHash));
+      memcpy(&tmp.catalog, &cs->catalog, sizeof(ProllyHash));
+      memcpy(&tmp.headCommit, &cs->headCommit, sizeof(ProllyHash));
+      memcpy(&tmp.stagedCatalog, &cs->stagedCatalog, sizeof(ProllyHash));
+      memcpy(&tmp.refsHash, &cs->refsHash, sizeof(ProllyHash));
+      tmp.isMerging = cs->isMerging;
+      memcpy(&tmp.mergeCommitHash, &cs->mergeCommitHash, sizeof(ProllyHash));
+      memcpy(&tmp.conflictsCatalogHash, &cs->conflictsCatalogHash, sizeof(ProllyHash));
+      tmp.nChunks = nMerged;
+      tmp.iIndexOffset = writePos;
+      tmp.nIndexSize = indexBufSize;
+      csSerializeManifest(&tmp, hdrBuf);
     }
-    rc = sqlite3OsWrite(pNew, indexBuf, indexBufSize, writePos);
-    if( rc != SQLITE_OK ) goto commit_error;
+    JOURNAL_WRITE(hdrBuf, CHUNK_MANIFEST_SIZE, 0);
+
+    /* -- fsync and close -- */
+    fsync(fd);
+    close(fd);
+    #undef JOURNAL_WRITE
   }
-
-  /* -- Rewrite the manifest header with final values -- */
-  {
-    ChunkStore tmp;
-    memset(&tmp, 0, sizeof(tmp));
-    memcpy(&tmp.root, &cs->root, sizeof(ProllyHash));
-    memcpy(&tmp.catalog, &cs->catalog, sizeof(ProllyHash));
-    memcpy(&tmp.headCommit, &cs->headCommit, sizeof(ProllyHash));
-    memcpy(&tmp.stagedCatalog, &cs->stagedCatalog, sizeof(ProllyHash));
-    memcpy(&tmp.refsHash, &cs->refsHash, sizeof(ProllyHash));
-    tmp.isMerging = cs->isMerging;
-    memcpy(&tmp.mergeCommitHash, &cs->mergeCommitHash, sizeof(ProllyHash));
-    memcpy(&tmp.conflictsCatalogHash, &cs->conflictsCatalogHash, sizeof(ProllyHash));
-    tmp.nChunks = nMerged;
-    tmp.iIndexOffset = writePos;
-    tmp.nIndexSize = indexBufSize;
-    csSerializeManifest(&tmp, hdrBuf);
-  }
-  rc = sqlite3OsWrite(pNew, hdrBuf, CHUNK_MANIFEST_SIZE, 0);
-  if( rc != SQLITE_OK ) goto commit_error;
-
-  /* -- fsync -- */
-  rc = sqlite3OsSync(pNew, SQLITE_SYNC_NORMAL);
-  if( rc != SQLITE_OK ) goto commit_error;
-
-  /* -- Close the new file and the old file -- */
-  csCloseFile(pNew);
-  pNew = 0;
 
   if( cs->pFile ){
     csCloseFile(cs->pFile);
@@ -1159,9 +1153,8 @@ commit_error:
       cs->aPending[i].offset -= pendingFileBase;
     }
   }
-  if( pNew ) csCloseFile(pNew);
   if( zJournal ){
-    sqlite3OsDelete(cs->pVfs, zJournal, 0);
+    unlink(zJournal);
     sqlite3_free(zJournal);
   }
   sqlite3_free(aMerged);
