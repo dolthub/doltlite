@@ -799,25 +799,137 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     for(i=0; i<nTables; i++){
       if( !aTables[i].zName || strcmp(aTables[i].zName, zTable)!=0 ) continue;
 
-      /* Apply each conflict's theirVal */
-      for(j=0; j<aTables[i].nConflicts; j++){
-        struct ConflictRow *cr = &aTables[i].aRows[j];
-        if( cr->pTheirVal && cr->nTheirVal > 0 ){
-          /* Their value exists — decode the raw SQLite record and
-          ** apply it via INSERT OR REPLACE, which handles both the
-          ** deletion of our value and insertion of theirs atomically. */
-          rc = applyTheirRecord(db, zTable, cr->intKey,
-                                cr->pTheirVal, cr->nTheirVal);
+      /* Apply each conflict's theirVal using BtreeInsert directly.
+      ** The theirVal is already a raw SQLite record — exactly what
+      ** BtreeInsert expects as pData. */
+      {
+        Pgno iTable;
+        if( doltliteResolveTableName(db, zTable, &iTable)==SQLITE_OK ){
+          /* Apply theirVal via SQL — decode the record and build UPDATE */
+          for(j=0; j<aTables[i].nConflicts; j++){
+            struct ConflictRow *cr = &aTables[i].aRows[j];
+            if( cr->pTheirVal && cr->nTheirVal > 0 ){
+              /* Decode their record to get the text value and UPDATE */
+              char *decoded = doltliteDecodeRecord(cr->pTheirVal, cr->nTheirVal);
+              if( decoded ){
+                /* The decoded record is "NULL|theirs_val" for INTKEY tables
+                ** (field 0 = NULL rowid placeholder, field 1+ = columns).
+                ** Extract the non-PK values and build an UPDATE. */
+                /* For simplicity, use a direct approach: DELETE + INSERT
+                ** via SQL with the decoded values. Actually, even simpler:
+                ** just UPDATE using the column values from the record. */
+
+                /* Parse decoded string to get column values.
+                ** Format: "val1|val2|..." where val1 is NULL (PK placeholder).
+                ** For a table (id PK, v TEXT), decoded = "NULL|theirs_val". */
+                char *p = decoded;
+                int fieldIdx = 0;
+                char *zUpdate = 0;
+                char *zSql2;
+
+                /* Skip fields until we find non-PK columns, build SET clause */
+                /* Use PRAGMA table_info to get column names */
+                {
+                  sqlite3_stmt *pTI = 0;
+                  char *zTI = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTable);
+                  if( zTI && sqlite3_prepare_v2(db, zTI, -1, &pTI, 0)==SQLITE_OK ){
+                    /* Walk record fields in parallel with table_info */
+                    const u8 *pRec = cr->pTheirVal;
+                    const u8 *pRecEnd = pRec + cr->nTheirVal;
+                    u64 hdrSz;
+                    int hdrB = cfReadVarint(pRec, pRecEnd, &hdrSz);
+                    const u8 *pH = pRec + hdrB;
+                    const u8 *pHEnd = pRec + (int)hdrSz;
+                    const u8 *pBody = pRec + (int)hdrSz;
+                    int fIdx = 0;
+
+                    while( sqlite3_step(pTI)==SQLITE_ROW && pH < pHEnd ){
+                      const char *zCol = (const char*)sqlite3_column_text(pTI, 1);
+                      int pk = sqlite3_column_int(pTI, 5);
+                      const char *zType = (const char*)sqlite3_column_text(pTI, 2);
+                      u64 st;
+                      int stB = cfReadVarint(pH, pHEnd, &st);
+                      pH += stB;
+
+                      /* Skip INTEGER PRIMARY KEY — it's the rowid */
+                      int isPK = (pk==1 && zType && sqlite3_stricmp(zType,"INTEGER")==0);
+
+                      if( !isPK && zCol ){
+                        char *zVal = 0;
+                        /* Decode the field value */
+                        if( st==0 ) zVal = sqlite3_mprintf("NULL");
+                        else if( st==8 ) zVal = sqlite3_mprintf("0");
+                        else if( st==9 ) zVal = sqlite3_mprintf("1");
+                        else if( st>=1 && st<=6 ){
+                          static const int sizes[] = {0,1,2,3,4,6,8};
+                          int nB = sizes[st];
+                          if( pBody+nB <= pRecEnd ){
+                            i64 v = cfReadInt(pBody, nB);
+                            zVal = sqlite3_mprintf("%lld", v);
+                          }
+                        }else if( st>=13 && (st&1)==1 ){
+                          int len = ((int)st-13)/2;
+                          if( pBody+len <= pRecEnd ){
+                            char *zText = sqlite3_malloc(len+1);
+                            if(zText){memcpy(zText,pBody,len);zText[len]=0;}
+                            zVal = sqlite3_mprintf("%Q", zText);
+                            sqlite3_free(zText);
+                          }
+                        }else if( st==7 && pBody+8<=pRecEnd ){
+                          double v; u64 bits=0; int k;
+                          for(k=0;k<8;k++) bits=(bits<<8)|pBody[k];
+                          memcpy(&v,&bits,8);
+                          zVal = sqlite3_mprintf("%!.15g", v);
+                        }
+
+                        if( zVal ){
+                          if( zUpdate ){
+                            char *zOld = zUpdate;
+                            zUpdate = sqlite3_mprintf("%s,\"%w\"=%s", zOld, zCol, zVal);
+                            sqlite3_free(zOld);
+                          }else{
+                            zUpdate = sqlite3_mprintf("\"%w\"=%s", zCol, zVal);
+                          }
+                          sqlite3_free(zVal);
+                        }
+                      }
+
+                      /* Advance body pointer past this field */
+                      if(st==0||st==8||st==9){}
+                      else if(st>=1&&st<=6){static const int s[]={0,1,2,3,4,6,8};pBody+=s[st];}
+                      else if(st==7)pBody+=8;
+                      else if(st>=12&&(st&1)==0)pBody+=((int)st-12)/2;
+                      else if(st>=13&&(st&1)==1)pBody+=((int)st-13)/2;
+                      fIdx++;
+                    }
+                    sqlite3_finalize(pTI);
+                  }
+                  sqlite3_free(zTI);
+                }
+
+                if( zUpdate ){
+                  zSql2 = sqlite3_mprintf("UPDATE \"%w\" SET %s WHERE rowid=%lld",
+                                           zTable, zUpdate, cr->intKey);
+                  if( zSql2 ){
+                    sqlite3_exec(db, zSql2, 0, 0, 0);
+                    sqlite3_free(zSql2);
+                  }
+                  sqlite3_free(zUpdate);
+                }
+                sqlite3_free(decoded);
+              }
+            }else{
+              /* They deleted the row */
+              char *zDel = sqlite3_mprintf("DELETE FROM \"%w\" WHERE rowid=%lld",
+                                            zTable, cr->intKey);
+              if(zDel){ sqlite3_exec(db, zDel, 0, 0, 0); sqlite3_free(zDel); }
+            }
+          }
           if( rc!=SQLITE_OK ){
             freeConflictTables(aTables, nTables);
-            sqlite3_result_error(ctx, "failed to apply theirs value", -1);
+            sqlite3_result_error(ctx, "failed to apply theirs values", -1);
             return;
           }
-        }else{
-          /* Their value is NULL — they deleted the row. Delete ours. */
-          char *zSql = sqlite3_mprintf("DELETE FROM \"%w\" WHERE rowid=%lld",
-                                        zTable, cr->intKey);
-          if(zSql){ sqlite3_exec(db, zSql, 0, 0, 0); sqlite3_free(zSql); }
         }
       }
 
