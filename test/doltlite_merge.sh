@@ -32,6 +32,8 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 run_test "ff_before" "SELECT count(*) FROM t;" "1" "$DB2"
 run_test_match "ff_merge" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB2"
 run_test "ff_after" "SELECT count(*) FROM t;" "2" "$DB2"
+run_test "ff_merge_msg" "SELECT message FROM dolt_log LIMIT 1;" "Merge branch 'feature'" "$DB2"
+run_test "ff_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB2"
 
 # Test 3: Already up to date
 run_test "up_to_date" "SELECT dolt_merge('feature');" "Already up to date" "$DB2"
@@ -83,10 +85,10 @@ run_test_match "diff_3way_orders" \
   "added" "$DB"
 
 # Test 9: dolt_diff after fast-forward merge (DB2 from Test 2)
-# Old HEAD was "init" (offset 1), new HEAD is "feature" (offset 0)
-# Should show the added row (x=2)
+# Log now has 3 entries: merge commit (0), feature (1), init (2)
+# Compare init (offset 2) to merge commit (offset 0) to see the added row
 run_test_match "diff_ff_added" \
-  "SELECT diff_type, to_value FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
+  "SELECT diff_type, to_value FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
   "added" "$DB2"
 
 # Test 10: After merge with conflicts, dolt_diff between ancestor and merge commit
