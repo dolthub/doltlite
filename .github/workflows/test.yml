@@ -107,6 +107,10 @@ jobs:
     - name: Dolt garbage collection tests
       run: cd build && bash ../test/doltlite_gc.sh
 
+    - name: Performance tests
+      run: cd build && bash ../test/doltlite_perf.sh
+      timeout-minutes: 10
+
     - name: Deep feature coverage tests
       run: cd build && bash ../test/doltlite_feature_deep.sh
 
