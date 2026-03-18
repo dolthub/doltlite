@@ -66,6 +66,7 @@ struct DoltliteDiffCursor {
   DiffRow *aRows;
   int nRows;
   int iRow;
+  int iPkField;    /* Record field index of the user's PK, or -1 if rowid alias */
 };
 
 static const char *diffSchema =
@@ -78,6 +79,115 @@ static const char *diffSchema =
   "  from_commit TEXT HIDDEN,"
   "  to_commit   TEXT HIDDEN"
   ")";
+
+/* --------------------------------------------------------------------------
+** Detect whether a table's PK is a rowid alias (INTEGER PRIMARY KEY).
+** Returns -1 if it IS a rowid alias (intKey == user PK).
+** Returns the column index (0-based) if it's NOT (user PK is in the record).
+** -------------------------------------------------------------------------- */
+
+static int detectPkField(sqlite3 *db, const char *zTable){
+  char *zSql;
+  sqlite3_stmt *pStmt = 0;
+  int rc, pkField = -1, colIdx = 0;
+
+  zSql = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTable);
+  if( !zSql ) return -1;
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
+  sqlite3_free(zSql);
+  if( rc!=SQLITE_OK ) return -1;
+
+  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+    int pk = sqlite3_column_int(pStmt, 5);
+    if( pk==1 ){
+      const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
+      if( zType && sqlite3_stricmp(zType, "INTEGER")==0 ){
+        /* TRUE rowid alias — intKey IS the user's PK */
+        sqlite3_finalize(pStmt);
+        return -1;
+      }
+      /* NOT a rowid alias — PK is stored in record at this column index */
+      pkField = colIdx;
+    }
+    colIdx++;
+  }
+  sqlite3_finalize(pStmt);
+  return pkField;
+}
+
+/* --------------------------------------------------------------------------
+** Extract PK value from a record and set it as the result.
+** Uses the same varint/field parsing as doltlite_record.c.
+** -------------------------------------------------------------------------- */
+
+static void resultPkFromRecord(
+  sqlite3_context *ctx,
+  const u8 *pData, int nData,
+  int pkFieldIdx
+){
+  const u8 *p, *pEnd;
+  u64 hdrSize;
+  int hdrBytes, fieldIdx = 0, off;
+
+  if( !pData || nData<1 ){ sqlite3_result_null(ctx); return; }
+
+  p = pData; pEnd = pData + nData;
+  /* Read header size varint */
+  { u64 v=0; int i;
+    for(i=0; i<9 && p+i<pEnd; i++){
+      if(i<8){ v=(v<<7)|(p[i]&0x7f); if(!(p[i]&0x80)){hdrSize=v; hdrBytes=i+1; break;} }
+      else{ v=(v<<8)|p[i]; hdrSize=v; hdrBytes=9; }
+    }
+  }
+  p += hdrBytes;
+  off = (int)hdrSize;
+
+  /* Walk serial types to find the PK field */
+  while( p < pData+hdrSize && p < pEnd ){
+    u64 st; int stBytes;
+    { u64 v=0; int i;
+      for(i=0; i<9 && p+i<pEnd; i++){
+        if(i<8){ v=(v<<7)|(p[i]&0x7f); if(!(p[i]&0x80)){st=v; stBytes=i+1; break;} }
+        else{ v=(v<<8)|p[i]; st=v; stBytes=9; }
+      }
+    }
+    p += stBytes;
+
+    if( fieldIdx==pkFieldIdx ){
+      /* Found the PK field — decode and return its value */
+      if( st==0 ){ sqlite3_result_null(ctx); return; }
+      if( st==8 ){ sqlite3_result_int(ctx,0); return; }
+      if( st==9 ){ sqlite3_result_int(ctx,1); return; }
+      if( st>=1 && st<=6 ){
+        static const int sizes[]={0,1,2,3,4,6,8};
+        int nB=sizes[st];
+        if( off+nB<=nData ){
+          const u8 *q=pData+off; i64 v=(q[0]&0x80)?-1:0; int i;
+          for(i=0;i<nB;i++) v=(v<<8)|q[i];
+          sqlite3_result_int64(ctx,v);
+        }else sqlite3_result_null(ctx);
+        return;
+      }
+      if( st>=13 && (st&1)==1 ){
+        int len=((int)st-13)/2;
+        if(off+len<=nData) sqlite3_result_text(ctx,(const char*)(pData+off),len,SQLITE_TRANSIENT);
+        else sqlite3_result_null(ctx);
+        return;
+      }
+      sqlite3_result_null(ctx);
+      return;
+    }
+
+    /* Advance offset past this field's data */
+    if( st==0||st==8||st==9 ) {}
+    else if( st>=1&&st<=6 ){ static const int s[]={0,1,2,3,4,6,8}; off+=s[st]; }
+    else if( st==7 ) off+=8;
+    else if( st>=12&&(st&1)==0 ) off+=((int)st-12)/2;
+    else if( st>=13&&(st&1)==1 ) off+=((int)st-13)/2;
+    fieldIdx++;
+  }
+  sqlite3_result_null(ctx);
+}
 
 /* --------------------------------------------------------------------------
 ** Diff callback: collect changes into buffer
@@ -304,6 +414,9 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 
   if( !zTableName ) return SQLITE_OK;
 
+  /* Detect if table PK is a rowid alias or stored in the record */
+  pCur->iPkField = detectPkField(db, zTableName);
+
   /* Resolve table name to Pgno */
   rc = doltliteResolveTableName(db, zTableName, &iTable);
   if( rc!=SQLITE_OK ) return SQLITE_OK; /* Unknown table = empty diff */
@@ -390,8 +503,16 @@ static int diffColumn(sqlite3_vtab_cursor *pCursor,
         case PROLLY_DIFF_MODIFY: sqlite3_result_text(ctx,"modified",-1,SQLITE_STATIC); break;
       }
       break;
-    case 1: /* rowid_val */
-      sqlite3_result_int64(ctx, r->intKey);
+    case 1: /* rowid_val — show user's PK, not hidden rowid */
+      if( pCur->iPkField >= 0 ){
+        /* PK is NOT a rowid alias — extract from record */
+        const u8 *pRec = r->pNewVal ? r->pNewVal : r->pOldVal;
+        int nRec = r->pNewVal ? r->nNewVal : r->nOldVal;
+        resultPkFromRecord(ctx, pRec, nRec, pCur->iPkField);
+      }else{
+        /* PK IS the rowid (INTEGER PRIMARY KEY) */
+        sqlite3_result_int64(ctx, r->intKey);
+      }
       break;
     case 2: /* from_value */
       doltliteResultRecord(ctx, r->pOldVal, r->nOldVal);
