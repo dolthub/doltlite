@@ -748,6 +748,15 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
 */
 static int pushSavepoint(Btree *pBtree){
   struct SavepointTableState *pState;
+  int rc;
+
+  /* Flush all pending mutations (both cursor-level and table-level deferred
+  ** edits) so that the table-entry root hashes reflect the current state.
+  ** Without this, data inserted before the savepoint but not yet flushed
+  ** would be lost on ROLLBACK TO because the snapshot would capture stale
+  ** root hashes that don't include the pending edits. */
+  rc = flushAllPending(pBtree->pBt, 0);
+  if( rc!=SQLITE_OK ) return rc;
 
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
     int nNew = pBtree->nSavepointAlloc ? pBtree->nSavepointAlloc*2 : 8;
@@ -776,6 +785,15 @@ static int pushSavepoint(Btree *pBtree){
     memcpy(pState->aTables, pBtree->aTables,
            pBtree->nTables * sizeof(struct TableEntry));
     pState->nTables = pBtree->nTables;
+    /* Clear pPending pointers in the snapshot — the flush above ensures
+    ** all edits are reflected in the root hashes.  Leaving stale pointers
+    ** in the snapshot would risk double-free on rollback. */
+    {
+      int k;
+      for(k=0; k<pState->nTables; k++){
+        pState->aTables[k].pPending = 0;
+      }
+    }
   }
 
   pBtree->nSavepoint++;
@@ -1347,6 +1365,17 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
       p->root = p->aSavepoint[iSavepoint];
       /* Restore table registry */
       if( pState->aTables ){
+        /* Free pPending maps on current entries — these hold post-savepoint
+        ** edits that are being discarded by the rollback. */
+        {
+          int k;
+          for(k=0; k<p->nTables; k++){
+            if( p->aTables[k].pPending ){
+              prollyMutMapFree((ProllyMutMap*)p->aTables[k].pPending);
+              sqlite3_free(p->aTables[k].pPending);
+            }
+          }
+        }
         sqlite3_free(p->aTables);
         p->aTables = pState->aTables;
         p->nTables = pState->nTables;
@@ -1791,6 +1820,18 @@ int sqlite3BtreeNext(BtCursor *pCur, int flags){
     return SQLITE_DONE;
   }
 
+  /* Restore cursor position if it was saved (e.g. by saveAllCursors during
+  ** an insert on another cursor sharing the same ephemeral table). Without
+  ** this, window functions crash because the prolly cursor's internal node
+  ** pointers are NULL after a save. */
+  if( pCur->eState==CURSOR_REQUIRESEEK ){
+    rc = restoreCursorPosition(pCur, 0);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pCur->eState==CURSOR_INVALID ){
+      return SQLITE_DONE;
+    }
+  }
+
   if( pCur->eState==CURSOR_SKIPNEXT ){
     pCur->eState = CURSOR_VALID;
     if( pCur->skipNext>0 ){
@@ -1820,6 +1861,16 @@ int sqlite3BtreePrevious(BtCursor *pCur, int flags){
 
   if( pCur->eState==CURSOR_INVALID ){
     return SQLITE_DONE;
+  }
+
+  /* Restore cursor position if it was saved. See sqlite3BtreeNext for the
+  ** full explanation — this is the symmetric fix for backward traversal. */
+  if( pCur->eState==CURSOR_REQUIRESEEK ){
+    rc = restoreCursorPosition(pCur, 0);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pCur->eState==CURSOR_INVALID ){
+      return SQLITE_DONE;
+    }
   }
 
   if( pCur->eState==CURSOR_SKIPNEXT ){
@@ -2094,8 +2145,19 @@ int sqlite3BtreeInsert(
   int seekResult
 ){
   int rc;
-  (void)flags;
   (void)seekResult;
+
+  /*
+  ** BTREE_PREFORMAT means the data was already inserted by
+  ** sqlite3BtreeTransferRow() during OP_RowCell processing.
+  ** In stock SQLite's page-based btree, PREFORMAT means the cell
+  ** is already formatted in the page buffer and OP_Insert just
+  ** finalizes it. In the prolly tree, TransferRow calls BtreeInsert
+  ** directly, so the row is already stored. Skip the duplicate insert.
+  */
+  if( flags & BTREE_PREFORMAT ){
+    return SQLITE_OK;
+  }
 
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
@@ -2283,9 +2345,23 @@ static int flushDeferredEdits(BtShared *pBt){
 int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   int rc;
 
-  assert( pCur->eState==CURSOR_VALID );
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
+
+  /* Restore cursor position if it was saved by saveAllCursors during a
+  ** concurrent insert on another cursor sharing the same ephemeral table.
+  ** This matches stock SQLite's btree.c which handles CURSOR_REQUIRESEEK
+  ** at the top of sqlite3BtreeDelete. Without this, window functions like
+  ** PERCENT_RANK crash because the prolly cursor has NULL node pointers. */
+  if( pCur->eState!=CURSOR_VALID ){
+    if( pCur->eState>=CURSOR_REQUIRESEEK ){
+      rc = restoreCursorPosition(pCur, 0);
+      if( rc!=SQLITE_OK || pCur->eState!=CURSOR_VALID ) return rc;
+    }else{
+      return SQLITE_CORRUPT_BKPT;
+    }
+  }
+  assert( pCur->eState==CURSOR_VALID );
 
   rc = syncSavepoints(pCur);
   if( rc!=SQLITE_OK ) return rc;

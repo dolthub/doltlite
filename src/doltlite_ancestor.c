@@ -216,18 +216,23 @@ int doltliteFindAncestor(
 ** -------------------------------------------------------------------------- */
 
 extern int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
+extern int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 
 static int resolveCommitRef(sqlite3 *db, const char *zRef, ProllyHash *pHash){
+  ChunkStore *cs;
   /* Try as hex hash first */
   if( zRef && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
     if( doltliteHexToHash(zRef, pHash)==SQLITE_OK ) return SQLITE_OK;
   }
+  cs = doltliteGetChunkStore(db);
+  if( !cs ) return SQLITE_ERROR;
   /* Try as branch name */
-  {
-    ChunkStore *cs = doltliteGetChunkStore(db);
-    if( cs && chunkStoreFindBranch(cs, zRef, pHash)==SQLITE_OK ){
-      return SQLITE_OK;
-    }
+  if( chunkStoreFindBranch(cs, zRef, pHash)==SQLITE_OK ){
+    return SQLITE_OK;
+  }
+  /* Try as tag name */
+  if( chunkStoreFindTag(cs, zRef, pHash)==SQLITE_OK ){
+    return SQLITE_OK;
   }
   return SQLITE_ERROR;
 }
