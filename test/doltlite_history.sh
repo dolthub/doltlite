@@ -79,8 +79,8 @@ run_test "update_count" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=1;"
 # All are for the same rowid but with different commit hashes
 run_test "update_distinct" "SELECT count(DISTINCT commit_hash) FROM dolt_history_t;" "3" "$DB"
 
-# value column should be blob type
-run_test_match "update_type" "SELECT typeof(value) FROM dolt_history_t LIMIT 1;" "blob" "$DB"
+# value column should be decoded text
+run_test_match "update_type" "SELECT typeof(value) FROM dolt_history_t LIMIT 1;" "text" "$DB"
 
 rm -f "$DB"
 

@@ -18,6 +18,7 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 
+#include "doltlite_record.h"
 #include <string.h>
 #include <time.h>
 
@@ -229,7 +230,7 @@ static int htConnect(sqlite3 *db, void *pAux, int argc,
   rc = sqlite3_declare_vtab(db,
     "CREATE TABLE x("
     "  rowid_val INTEGER,"
-    "  value BLOB,"
+    "  value TEXT,"
     "  commit_hash TEXT,"
     "  committer TEXT,"
     "  commit_date TEXT"
@@ -316,10 +317,7 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       sqlite3_result_int64(ctx, r->intKey);
       break;
     case 1: /* value */
-      if( r->pVal )
-        sqlite3_result_blob(ctx, r->pVal, r->nVal, SQLITE_TRANSIENT);
-      else
-        sqlite3_result_null(ctx);
+      doltliteResultRecord(ctx, r->pVal, r->nVal);
       break;
     case 2: /* commit_hash */
       sqlite3_result_text(ctx, r->zCommit, -1, SQLITE_TRANSIENT);
