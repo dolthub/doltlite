@@ -30,9 +30,12 @@ make DOLTLITE_PROLLY=0 sqlite3
 
 ## Using as a C Library
 
-Doltlite builds `libdoltlite.a` (static) and `libdoltlite.dylib`/`.so` (shared)
-alongside the CLI. These include the full prolly tree engine and all Dolt
-functions — link against them exactly like you would `libsqlite3`.
+Doltlite is designed as a drop-in replacement for SQLite. It uses the same
+`sqlite3.h` header and `sqlite3_*` API, so existing C programs work without
+code changes — just link against `libdoltlite` instead of `libsqlite3` to get
+version control. The build produces `libdoltlite.a` (static) and
+`libdoltlite.dylib`/`.so` (shared) with the full prolly tree engine and all
+Dolt functions included.
 
 ```bash
 cd build
