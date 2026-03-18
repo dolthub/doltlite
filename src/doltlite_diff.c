@@ -15,6 +15,7 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 
+#include "doltlite_record.h"
 #include <string.h>
 
 /* From prolly_btree.c */
@@ -71,8 +72,8 @@ static const char *diffSchema =
   "CREATE TABLE x("
   "  diff_type   TEXT,"
   "  rowid_val   INTEGER,"
-  "  from_value  BLOB,"
-  "  to_value    BLOB,"
+  "  from_value  TEXT,"
+  "  to_value    TEXT,"
   "  table_name  TEXT HIDDEN,"
   "  from_commit TEXT HIDDEN,"
   "  to_commit   TEXT HIDDEN"
@@ -393,18 +394,10 @@ static int diffColumn(sqlite3_vtab_cursor *pCursor,
       sqlite3_result_int64(ctx, r->intKey);
       break;
     case 2: /* from_value */
-      if( r->pOldVal ){
-        sqlite3_result_blob(ctx, r->pOldVal, r->nOldVal, SQLITE_TRANSIENT);
-      }else{
-        sqlite3_result_null(ctx);
-      }
+      doltliteResultRecord(ctx, r->pOldVal, r->nOldVal);
       break;
     case 3: /* to_value */
-      if( r->pNewVal ){
-        sqlite3_result_blob(ctx, r->pNewVal, r->nNewVal, SQLITE_TRANSIENT);
-      }else{
-        sqlite3_result_null(ctx);
-      }
+      doltliteResultRecord(ctx, r->pNewVal, r->nNewVal);
       break;
   }
   return SQLITE_OK;

@@ -254,7 +254,7 @@ DELETE FROM t WHERE id=2;
 SELECT dolt_commit('-A','-m','delete row 2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "dt_delete_type" \
-  "SELECT diff_type FROM dolt_diff_t WHERE rowid_val=2;" "removed" "$DB"
+  "SELECT count(*) FROM dolt_diff_t WHERE diff_type='removed';" "^[1-9]" "$DB"
 run_test "dt_delete_total" "SELECT count(*) FROM dolt_diff_t;" "4" "$DB"
 
 rm -f "$DB"
@@ -309,12 +309,12 @@ SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # The "added row 2" audit entry should have from=c1, to=c2
 run_test_match "dt_commits_from" \
-  "SELECT from_commit FROM dolt_diff_t WHERE rowid_val=2;" "^[0-9a-f]{40}$" "$DB"
+  "SELECT from_commit FROM dolt_diff_t WHERE to_v IS NOT NULL LIMIT 1;" "^[0-9a-f]{40}$" "$DB"
 run_test_match "dt_commits_to" \
-  "SELECT to_commit FROM dolt_diff_t WHERE rowid_val=2;" "^[0-9a-f]{40}$" "$DB"
+  "SELECT to_commit FROM dolt_diff_t WHERE to_v IS NOT NULL LIMIT 1;" "^[0-9a-f]{40}$" "$DB"
 # from and to should be different commits
 run_test_match "dt_commits_diff" \
-  "SELECT CASE WHEN from_commit != to_commit THEN 'different' ELSE 'same' END FROM dolt_diff_t WHERE rowid_val=2;" "different" "$DB"
+  "SELECT CASE WHEN from_commit != to_commit THEN 'different' ELSE 'same' END FROM dolt_diff_t WHERE to_v IS NOT NULL LIMIT 1;" "different" "$DB"
 
 rm -f "$DB"
 

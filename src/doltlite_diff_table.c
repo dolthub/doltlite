@@ -1,18 +1,11 @@
 /*
-** dolt_diff_<tablename> — per-table audit log virtual tables.
+** dolt_diff_<tablename> — per-table audit log with Dolt-style column schema.
 **
-** Walks the full commit history and produces row-level diffs between
-** each consecutive pair of commits, annotated with commit context:
+** Schema mirrors Dolt:
+**   from_<col1>, from_<col2>, ..., to_<col1>, to_<col2>, ...,
+**   from_commit, to_commit, from_commit_date, to_commit_date, diff_type
 **
-**   SELECT * FROM dolt_diff_users;
-**   -- diff_type | rowid_val | from_value | to_value |
-**   --   from_commit | to_commit | from_commit_date | to_commit_date
-**
-** Filter on commit range:
-**   SELECT * FROM dolt_diff_users
-**   WHERE from_commit = 'abc...' AND to_commit = 'def...';
-**
-** These tables are dynamically registered for each user table.
+** Values are decoded from SQLite record format into native types.
 */
 #ifdef DOLTLITE_PROLLY
 
@@ -28,6 +21,7 @@
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 extern void *doltliteGetBtShared(sqlite3 *db);
 extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
+extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 
 struct TableEntry { Pgno iTable; ProllyHash root; u8 flags; char *zName; };
 extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
@@ -35,7 +29,245 @@ extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                                Pgno *piNextTable);
 
 /* --------------------------------------------------------------------------
-** Buffered audit row — one row-level change with commit context
+** Varint reader (big-endian SQLite format)
+** -------------------------------------------------------------------------- */
+
+static int dtReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
+  u64 v = 0;
+  int i;
+  for(i=0; i<9 && p+i<pEnd; i++){
+    if( i<8 ){
+      v = (v << 7) | (p[i] & 0x7f);
+      if( (p[i] & 0x80)==0 ){ *pVal = v; return i+1; }
+    }else{
+      v = (v << 8) | p[i];
+      *pVal = v;
+      return 9;
+    }
+  }
+  *pVal = v;
+  return i ? i : 1;
+}
+
+/* --------------------------------------------------------------------------
+** Parse record header to get serial types and body offsets
+** -------------------------------------------------------------------------- */
+
+#define DT_MAX_COLS 64
+
+typedef struct RecordInfo RecordInfo;
+struct RecordInfo {
+  int nField;
+  int aType[DT_MAX_COLS];
+  int aOffset[DT_MAX_COLS];
+  int bodyStart;
+};
+
+static void dtParseRecord(const u8 *pData, int nData, RecordInfo *pInfo){
+  const u8 *p = pData;
+  const u8 *pEnd = pData + nData;
+  u64 hdrSize;
+  int hdrBytes;
+  const u8 *pHdrEnd;
+  int off;
+
+  memset(pInfo, 0, sizeof(*pInfo));
+  if( !pData || nData < 1 ) return;
+
+  hdrBytes = dtReadVarint(p, pEnd, &hdrSize);
+  p += hdrBytes;
+  pHdrEnd = pData + (int)hdrSize;
+  off = (int)hdrSize;
+  pInfo->bodyStart = off;
+
+  while( p < pHdrEnd && p < pEnd && pInfo->nField < DT_MAX_COLS ){
+    u64 st;
+    int stBytes = dtReadVarint(p, pHdrEnd, &st);
+    p += stBytes;
+
+    pInfo->aType[pInfo->nField] = (int)st;
+    pInfo->aOffset[pInfo->nField] = off;
+
+    if( st==0 ) {}
+    else if( st==1 ) off += 1;
+    else if( st==2 ) off += 2;
+    else if( st==3 ) off += 3;
+    else if( st==4 ) off += 4;
+    else if( st==5 ) off += 6;
+    else if( st==6 ) off += 8;
+    else if( st==7 ) off += 8;
+    else if( st==8 || st==9 ) {}
+    else if( st>=12 && (st&1)==0 ) off += ((int)st-12)/2;
+    else if( st>=13 && (st&1)==1 ) off += ((int)st-13)/2;
+
+    pInfo->nField++;
+  }
+}
+
+/* Set a sqlite3_context result from a record field */
+static void dtResultField(
+  sqlite3_context *ctx,
+  const u8 *pData, int nData,
+  int fieldType, int fieldOffset
+){
+  int st = fieldType;
+
+  if( st==0 ){ sqlite3_result_null(ctx); return; }
+  if( st==8 ){ sqlite3_result_int(ctx, 0); return; }
+  if( st==9 ){ sqlite3_result_int(ctx, 1); return; }
+
+  if( st>=1 && st<=6 ){
+    static const int sizes[] = {0,1,2,3,4,6,8};
+    int nBytes = sizes[st];
+    if( fieldOffset + nBytes <= nData ){
+      const u8 *p = pData + fieldOffset;
+      i64 v = (p[0] & 0x80) ? -1 : 0;
+      int i;
+      for(i=0; i<nBytes; i++) v = (v<<8) | p[i];
+      sqlite3_result_int64(ctx, v);
+    }else{
+      sqlite3_result_null(ctx);
+    }
+    return;
+  }
+
+  if( st==7 ){
+    if( fieldOffset + 8 <= nData ){
+      const u8 *p = pData + fieldOffset;
+      double v;
+      u64 bits = 0;
+      int i;
+      for(i=0; i<8; i++) bits = (bits<<8) | p[i];
+      memcpy(&v, &bits, 8);
+      sqlite3_result_double(ctx, v);
+    }else{
+      sqlite3_result_null(ctx);
+    }
+    return;
+  }
+
+  if( st>=13 && (st&1)==1 ){
+    int len = (st-13)/2;
+    if( fieldOffset + len <= nData ){
+      sqlite3_result_text(ctx, (const char*)(pData+fieldOffset), len, SQLITE_TRANSIENT);
+    }else{
+      sqlite3_result_null(ctx);
+    }
+    return;
+  }
+
+  if( st>=12 && (st&1)==0 ){
+    int len = (st-12)/2;
+    if( fieldOffset + len <= nData ){
+      sqlite3_result_blob(ctx, pData+fieldOffset, len, SQLITE_TRANSIENT);
+    }else{
+      sqlite3_result_null(ctx);
+    }
+    return;
+  }
+
+  sqlite3_result_null(ctx);
+}
+
+/* --------------------------------------------------------------------------
+** Column name extraction from sqlite_master
+** -------------------------------------------------------------------------- */
+
+typedef struct ColInfo ColInfo;
+struct ColInfo {
+  char **azName;    /* Column names (owned) */
+  int nCol;         /* Number of columns (excluding rowid PK) */
+};
+
+static void freeColInfo(ColInfo *ci){
+  int i;
+  for(i=0; i<ci->nCol; i++) sqlite3_free(ci->azName[i]);
+  sqlite3_free(ci->azName);
+  ci->azName = 0;
+  ci->nCol = 0;
+}
+
+static int getColumnNames(sqlite3 *db, const char *zTable, ColInfo *ci){
+  char *zSql;
+  sqlite3_stmt *pStmt = 0;
+  int rc, i, nCol;
+
+  memset(ci, 0, sizeof(*ci));
+  zSql = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTable);
+  if( !zSql ) return SQLITE_NOMEM;
+
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
+  sqlite3_free(zSql);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Count columns first */
+  nCol = 0;
+  while( sqlite3_step(pStmt)==SQLITE_ROW ) nCol++;
+  sqlite3_reset(pStmt);
+
+  ci->azName = sqlite3_malloc(nCol * (int)sizeof(char*));
+  if( !ci->azName ){ sqlite3_finalize(pStmt); return SQLITE_NOMEM; }
+  memset(ci->azName, 0, nCol * (int)sizeof(char*));
+  ci->nCol = 0;
+
+  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
+    int pk = sqlite3_column_int(pStmt, 5);
+    /* Skip INTEGER PRIMARY KEY (it's the rowid, not in the record body) */
+    if( pk==1 ){
+      const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
+      if( zType && (sqlite3_stricmp(zType,"INTEGER")==0) ) continue;
+    }
+    ci->azName[ci->nCol] = sqlite3_mprintf("%s", zName ? zName : "");
+    ci->nCol++;
+  }
+
+  sqlite3_finalize(pStmt);
+  return SQLITE_OK;
+}
+
+/* --------------------------------------------------------------------------
+** Build the virtual table schema dynamically from column names
+** -------------------------------------------------------------------------- */
+
+static char *buildDiffSchema(ColInfo *ci){
+  /* Schema: from_<col1>, ..., to_<col1>, ...,
+  **         from_commit, to_commit, from_commit_date, to_commit_date, diff_type */
+  int i;
+  int sz = 256;
+  char *z;
+
+  for(i=0; i<ci->nCol; i++) sz += 2 * ((int)strlen(ci->azName[i]) + 20);
+
+  z = sqlite3_malloc(sz);
+  if( !z ) return 0;
+
+  strcpy(z, "CREATE TABLE x(");
+
+  /* from_<col> columns */
+  for(i=0; i<ci->nCol; i++){
+    if( i > 0 ) strcat(z, ", ");
+    strcat(z, "\"from_");
+    strcat(z, ci->azName[i]);
+    strcat(z, "\"");
+  }
+
+  /* to_<col> columns */
+  for(i=0; i<ci->nCol; i++){
+    strcat(z, ", \"to_");
+    strcat(z, ci->azName[i]);
+    strcat(z, "\"");
+  }
+
+  strcat(z, ", from_commit TEXT, to_commit TEXT"
+            ", from_commit_date INTEGER, to_commit_date INTEGER"
+            ", diff_type TEXT)");
+
+  return z;
+}
+
+/* --------------------------------------------------------------------------
+** Buffered audit row
 ** -------------------------------------------------------------------------- */
 
 typedef struct AuditRow AuditRow;
@@ -59,6 +291,7 @@ struct DiffTblVtab {
   sqlite3_vtab base;
   sqlite3 *db;
   char *zTableName;
+  ColInfo cols;       /* Column names for this table */
 };
 
 typedef struct DiffTblCursor DiffTblCursor;
@@ -71,7 +304,7 @@ struct DiffTblCursor {
 };
 
 /* --------------------------------------------------------------------------
-** Diff callback: collect rows into cursor
+** Diff callback
 ** -------------------------------------------------------------------------- */
 
 typedef struct CollectCtx CollectCtx;
@@ -134,7 +367,7 @@ static void freeAuditRows(DiffTblCursor *pCur){
 }
 
 /* --------------------------------------------------------------------------
-** Find table root hash by name in a catalog
+** Find table root by name
 ** -------------------------------------------------------------------------- */
 
 static int findTableRootByName(
@@ -155,33 +388,24 @@ static int findTableRootByName(
 }
 
 /* --------------------------------------------------------------------------
-** Walk commit history and diff each consecutive pair
+** Walk commit history and diff
 ** -------------------------------------------------------------------------- */
 
 static int walkHistoryAndDiff(
-  DiffTblCursor *pCur,
-  sqlite3 *db,
-  const char *zTableName,
-  const char *zFilterFrom,  /* Optional: only this commit pair */
-  const char *zFilterTo
+  DiffTblCursor *pCur, sqlite3 *db, const char *zTableName
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   void *pBt = doltliteGetBtShared(db);
   ProllyCache *pCache;
-  ProllyHash headHash;
   ProllyHash curHash;
   int rc;
 
   if( !cs || !pBt ) return SQLITE_OK;
   pCache = (ProllyCache*)(((char*)pBt) + sizeof(ChunkStore));
 
-  /* Get HEAD commit */
-  chunkStoreGetHeadCommit(cs, &headHash);
-  if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
+  chunkStoreGetHeadCommit(cs, &curHash);
+  if( prollyHashIsEmpty(&curHash) ) return SQLITE_OK;
 
-  memcpy(&curHash, &headHash, sizeof(ProllyHash));
-
-  /* Walk commit chain: cur → parent → parent → ... */
   while( !prollyHashIsEmpty(&curHash) ){
     u8 *data = 0; int nData = 0;
     DoltliteCommit commit;
@@ -191,7 +415,6 @@ static int walkHistoryAndDiff(
     char parentHex[PROLLY_HASH_SIZE*2+1];
 
     memset(&commit, 0, sizeof(commit));
-
     rc = chunkStoreGet(cs, &curHash, &data, &nData);
     if( rc!=SQLITE_OK ) break;
     rc = doltliteCommitDeserialize(data, nData, &commit);
@@ -200,7 +423,6 @@ static int walkHistoryAndDiff(
 
     doltliteHashToHex(&curHash, curHex);
 
-    /* Load table root from this commit's catalog */
     {
       struct TableEntry *aTables = 0; int nTables = 0;
       rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
@@ -212,7 +434,6 @@ static int walkHistoryAndDiff(
       }
     }
 
-    /* If this commit has a parent, diff parent→current */
     if( !prollyHashIsEmpty(&commit.parentHash) ){
       DoltliteCommit parentCommit;
       u8 *pdata = 0; int npdata = 0;
@@ -227,73 +448,48 @@ static int walkHistoryAndDiff(
       if( rc==SQLITE_OK ){
         doltliteHashToHex(&commit.parentHash, parentHex);
 
-        /* Load parent table root */
         {
-          struct TableEntry *aPTables = 0; int nPTables = 0;
-          rc = doltliteLoadCatalog(db, &parentCommit.catalogHash,
-                                    &aPTables, &nPTables, 0);
+          struct TableEntry *aPT = 0; int nPT = 0;
+          rc = doltliteLoadCatalog(db, &parentCommit.catalogHash, &aPT, &nPT, 0);
           if( rc==SQLITE_OK ){
-            findTableRootByName(aPTables, nPTables, zTableName,
-                                &parentRoot, 0);
-            sqlite3_free(aPTables);
+            findTableRootByName(aPT, nPT, zTableName, &parentRoot, 0);
+            sqlite3_free(aPT);
           }else{
             memset(&parentRoot, 0, sizeof(parentRoot));
           }
         }
 
-        /* Apply commit filter if specified */
-        {
-          int skip = 0;
-          if( zFilterFrom && zFilterTo ){
-            if( strcmp(parentHex, zFilterFrom)!=0
-             || strcmp(curHex, zFilterTo)!=0 ){
-              skip = 1;
-            }
-          }
-
-          if( !skip && prollyHashCompare(&parentRoot, &curRoot)!=0 ){
-            CollectCtx ctx;
-            ctx.pCur = pCur;
-            ctx.zFromCommit = parentHex;
-            ctx.zToCommit = curHex;
-            ctx.fromDate = parentCommit.timestamp;
-            ctx.toDate = commit.timestamp;
-
-            prollyDiff(cs, pCache, &parentRoot, &curRoot, flags,
-                       auditDiffCollect, &ctx);
-          }
+        if( prollyHashCompare(&parentRoot, &curRoot)!=0 ){
+          CollectCtx ctx;
+          ctx.pCur = pCur;
+          ctx.zFromCommit = parentHex;
+          ctx.zToCommit = curHex;
+          ctx.fromDate = parentCommit.timestamp;
+          ctx.toDate = commit.timestamp;
+          prollyDiff(cs, pCache, &parentRoot, &curRoot, flags,
+                     auditDiffCollect, &ctx);
         }
 
         doltliteCommitClear(&parentCommit);
       }
     }else{
-      /* Initial commit — diff from empty tree */
       if( !prollyHashIsEmpty(&curRoot) ){
         ProllyHash emptyRoot;
-        int skip = 0;
         memset(&emptyRoot, 0, sizeof(emptyRoot));
         memset(parentHex, '0', PROLLY_HASH_SIZE*2);
         parentHex[PROLLY_HASH_SIZE*2] = 0;
 
-        if( zFilterFrom && zFilterTo ){
-          if( strcmp(curHex, zFilterTo)!=0 ) skip = 1;
-        }
-
-        if( !skip ){
-          CollectCtx ctx;
-          ctx.pCur = pCur;
-          ctx.zFromCommit = parentHex;
-          ctx.zToCommit = curHex;
-          ctx.fromDate = 0;
-          ctx.toDate = commit.timestamp;
-
-          prollyDiff(cs, pCache, &emptyRoot, &curRoot, flags,
-                     auditDiffCollect, &ctx);
-        }
+        CollectCtx ctx;
+        ctx.pCur = pCur;
+        ctx.zFromCommit = parentHex;
+        ctx.zToCommit = curHex;
+        ctx.fromDate = 0;
+        ctx.toDate = commit.timestamp;
+        prollyDiff(cs, pCache, &emptyRoot, &curRoot, flags,
+                   auditDiffCollect, &ctx);
       }
     }
 
-    /* Move to parent */
     {
       ProllyHash nextHash;
       memcpy(&nextHash, &commit.parentHash, sizeof(ProllyHash));
@@ -314,20 +510,8 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
   DiffTblVtab *v;
   int rc;
   const char *zModName;
+  char *zSchema;
   (void)pAux; (void)pzErr;
-
-  rc = sqlite3_declare_vtab(db,
-    "CREATE TABLE x("
-    "  diff_type TEXT,"
-    "  rowid_val INTEGER,"
-    "  from_value BLOB,"
-    "  to_value BLOB,"
-    "  from_commit TEXT,"
-    "  to_commit TEXT,"
-    "  from_commit_date INTEGER,"
-    "  to_commit_date INTEGER"
-    ")");
-  if( rc!=SQLITE_OK ) return rc;
 
   v = sqlite3_malloc(sizeof(*v));
   if( !v ) return SQLITE_NOMEM;
@@ -344,6 +528,37 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
     v->zTableName = sqlite3_mprintf("");
   }
 
+  /* Get column names from the actual table */
+  getColumnNames(db, v->zTableName, &v->cols);
+
+  /* Build dynamic schema */
+  if( v->cols.nCol > 0 ){
+    zSchema = buildDiffSchema(&v->cols);
+  }else{
+    /* Fallback: generic schema */
+    zSchema = sqlite3_mprintf(
+      "CREATE TABLE x(from_value, to_value,"
+      " from_commit TEXT, to_commit TEXT,"
+      " from_commit_date INTEGER, to_commit_date INTEGER,"
+      " diff_type TEXT)");
+  }
+
+  if( !zSchema ){
+    sqlite3_free(v->zTableName);
+    freeColInfo(&v->cols);
+    sqlite3_free(v);
+    return SQLITE_NOMEM;
+  }
+
+  rc = sqlite3_declare_vtab(db, zSchema);
+  sqlite3_free(zSchema);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(v->zTableName);
+    freeColInfo(&v->cols);
+    sqlite3_free(v);
+    return rc;
+  }
+
   *ppVtab = &v->base;
   return SQLITE_OK;
 }
@@ -351,6 +566,7 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
 static int dtDisconnect(sqlite3_vtab *pVtab){
   DiffTblVtab *v = (DiffTblVtab*)pVtab;
   sqlite3_free(v->zTableName);
+  freeColInfo(&v->cols);
   sqlite3_free(v);
   return SQLITE_OK;
 }
@@ -358,13 +574,11 @@ static int dtDisconnect(sqlite3_vtab *pVtab){
 static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   (void)pVtab;
   pInfo->estimatedCost = 10000.0;
-  pInfo->estimatedRows = 1000;
   return SQLITE_OK;
 }
 
 static int dtOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
-  DiffTblCursor *c;
-  (void)pVtab;
+  DiffTblCursor *c; (void)pVtab;
   c = sqlite3_malloc(sizeof(*c));
   if( !c ) return SQLITE_NOMEM;
   memset(c, 0, sizeof(*c));
@@ -384,11 +598,9 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   DiffTblCursor *c = (DiffTblCursor*)cur;
   DiffTblVtab *v = (DiffTblVtab*)cur->pVtab;
   (void)idxNum; (void)idxStr; (void)argc; (void)argv;
-
   freeAuditRows(c);
   c->iRow = 0;
-
-  walkHistoryAndDiff(c, v->db, v->zTableName, 0, 0);
+  walkHistoryAndDiff(c, v->db, v->zTableName);
   return SQLITE_OK;
 }
 
@@ -404,44 +616,96 @@ static int dtEof(sqlite3_vtab_cursor *cur){
 
 static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   DiffTblCursor *c = (DiffTblCursor*)cur;
+  DiffTblVtab *v = (DiffTblVtab*)cur->pVtab;
   AuditRow *r = &c->aRows[c->iRow];
+  int nCols = v->cols.nCol;
 
-  switch( col ){
-    case 0: /* diff_type */
-      switch( r->diffType ){
-        case PROLLY_DIFF_ADD:    sqlite3_result_text(ctx,"added",-1,SQLITE_STATIC); break;
-        case PROLLY_DIFF_DELETE: sqlite3_result_text(ctx,"removed",-1,SQLITE_STATIC); break;
-        case PROLLY_DIFF_MODIFY: sqlite3_result_text(ctx,"modified",-1,SQLITE_STATIC); break;
+  /* Column layout:
+  ** 0..nCols-1         : from_<col> values
+  ** nCols..2*nCols-1   : to_<col> values
+  ** 2*nCols            : from_commit
+  ** 2*nCols+1          : to_commit
+  ** 2*nCols+2          : from_commit_date
+  ** 2*nCols+3          : to_commit_date
+  ** 2*nCols+4          : diff_type
+  */
+
+  if( nCols > 0 && col < nCols ){
+    /* from_<col> — decode from old record.
+    ** Record field 0 is the rowid placeholder (NULL for INTKEY tables),
+    ** so non-PK columns start at field index 1. */
+    if( r->pOldVal && r->nOldVal > 0 ){
+      RecordInfo ri;
+      int recIdx = col + 1;  /* skip rowid placeholder at field 0 */
+      dtParseRecord(r->pOldVal, r->nOldVal, &ri);
+      if( recIdx < ri.nField ){
+        dtResultField(ctx, r->pOldVal, r->nOldVal,
+                      ri.aType[recIdx], ri.aOffset[recIdx]);
+      }else{
+        sqlite3_result_null(ctx);
       }
-      break;
-    case 1: /* rowid_val */
-      sqlite3_result_int64(ctx, r->intKey);
-      break;
-    case 2: /* from_value */
-      if( r->pOldVal )
-        sqlite3_result_blob(ctx, r->pOldVal, r->nOldVal, SQLITE_TRANSIENT);
-      else
+    }else{
+      sqlite3_result_null(ctx);
+    }
+  }else if( nCols > 0 && col < 2*nCols ){
+    /* to_<col> — decode from new record */
+    int fieldIdx = col - nCols;
+    if( r->pNewVal && r->nNewVal > 0 ){
+      RecordInfo ri;
+      int recIdx = fieldIdx + 1;  /* skip rowid placeholder */
+      dtParseRecord(r->pNewVal, r->nNewVal, &ri);
+      if( recIdx < ri.nField ){
+        dtResultField(ctx, r->pNewVal, r->nNewVal,
+                      ri.aType[recIdx], ri.aOffset[recIdx]);
+      }else{
         sqlite3_result_null(ctx);
-      break;
-    case 3: /* to_value */
-      if( r->pNewVal )
-        sqlite3_result_blob(ctx, r->pNewVal, r->nNewVal, SQLITE_TRANSIENT);
-      else
-        sqlite3_result_null(ctx);
-      break;
-    case 4: /* from_commit */
-      sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);
-      break;
-    case 5: /* to_commit */
-      sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
-      break;
-    case 6: /* from_commit_date */
-      sqlite3_result_int64(ctx, r->fromDate);
-      break;
-    case 7: /* to_commit_date */
-      sqlite3_result_int64(ctx, r->toDate);
-      break;
+      }
+    }else{
+      sqlite3_result_null(ctx);
+    }
+  }else{
+    /* Fixed columns at the end */
+    int fixedCol = col - 2*nCols;
+    if( nCols == 0 ) fixedCol = col; /* fallback mode */
+
+    switch( fixedCol ){
+      case 0: /* from_commit */
+        if( nCols == 0 ){
+          /* fallback: from_value blob */
+          if( r->pOldVal )
+            sqlite3_result_blob(ctx, r->pOldVal, r->nOldVal, SQLITE_TRANSIENT);
+          else
+            sqlite3_result_null(ctx);
+        }else{
+          sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);
+        }
+        break;
+      case 1: /* to_commit */
+        if( nCols == 0 ){
+          if( r->pNewVal )
+            sqlite3_result_blob(ctx, r->pNewVal, r->nNewVal, SQLITE_TRANSIENT);
+          else
+            sqlite3_result_null(ctx);
+        }else{
+          sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
+        }
+        break;
+      case 2: /* from_commit_date */
+        sqlite3_result_int64(ctx, r->fromDate);
+        break;
+      case 3: /* to_commit_date */
+        sqlite3_result_int64(ctx, r->toDate);
+        break;
+      case 4: /* diff_type */
+        switch( r->diffType ){
+          case PROLLY_DIFF_ADD:    sqlite3_result_text(ctx,"added",-1,SQLITE_STATIC); break;
+          case PROLLY_DIFF_DELETE: sqlite3_result_text(ctx,"removed",-1,SQLITE_STATIC); break;
+          case PROLLY_DIFF_MODIFY: sqlite3_result_text(ctx,"modified",-1,SQLITE_STATIC); break;
+        }
+        break;
+    }
   }
+
   return SQLITE_OK;
 }
 
@@ -451,25 +715,13 @@ static int dtRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
 }
 
 static sqlite3_module diffTableModule = {
-  0,                /* iVersion */
-  dtConnect,        /* xCreate (eponymous) */
-  dtConnect,        /* xConnect */
-  dtBestIndex,      /* xBestIndex */
-  dtDisconnect,     /* xDisconnect */
-  dtDisconnect,     /* xDestroy */
-  dtOpen,           /* xOpen */
-  dtClose,          /* xClose */
-  dtFilter,         /* xFilter */
-  dtNext,           /* xNext */
-  dtEof,            /* xEof */
-  dtColumn,         /* xColumn */
-  dtRowid,          /* xRowid */
-  0,0,0,0,0,0,0,0,0,0,0,0  /* remaining */
+  0, dtConnect, dtConnect, dtBestIndex, dtDisconnect, dtDisconnect,
+  dtOpen, dtClose, dtFilter, dtNext, dtEof, dtColumn, dtRowid,
+  0,0,0,0,0,0,0,0,0,0,0,0
 };
 
 /* --------------------------------------------------------------------------
-** Registration: register dolt_diff_<tablename> for each user table.
-** Called at database open and after schema changes.
+** Registration
 ** -------------------------------------------------------------------------- */
 
 void doltliteRegisterDiffTables(sqlite3 *db){
@@ -481,7 +733,6 @@ void doltliteRegisterDiffTables(sqlite3 *db){
   int nTables = 0, i, rc;
 
   if( !cs ) return;
-
   chunkStoreGetHeadCommit(cs, &headCommit);
   if( prollyHashIsEmpty(&headCommit) ) return;
 

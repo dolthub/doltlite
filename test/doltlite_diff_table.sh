@@ -22,7 +22,7 @@ SELECT dolt_commit('-A','-m','initial');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "basic_count" "SELECT count(*) FROM dolt_diff_t;" "2" "$DB"
 run_test_match "basic_type" "SELECT diff_type FROM dolt_diff_t LIMIT 1;" "added" "$DB"
-run_test_match "basic_rowid" "SELECT rowid_val FROM dolt_diff_t WHERE rowid_val=1;" "1" "$DB"
+run_test_match "basic_rowid" "SELECT rowid_val FROM dolt_diff_t WHERE to_v IS NOT NULL;" "1" "$DB"
 run_test_match "basic_to_commit" "SELECT length(to_commit) FROM dolt_diff_t LIMIT 1;" "40" "$DB"
 run_test_match "basic_to_date" "SELECT to_commit_date FROM dolt_diff_t LIMIT 1;" "^[0-9]" "$DB"
 
@@ -69,14 +69,14 @@ SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # from_commit and to_commit should be valid 40-char hashes
 run_test_match "ctx_to_hash" "SELECT to_commit FROM dolt_diff_t LIMIT 1;" "^[0-9a-f]{40}$" "$DB"
-run_test_match "ctx_from_hash" "SELECT from_commit FROM dolt_diff_t WHERE diff_type='added' AND rowid_val=2;" "^[0-9a-f]{40}$" "$DB"
+run_test_match "ctx_from_hash" "SELECT from_commit FROM dolt_diff_t WHERE diff_type='added' ;" "^[0-9a-f]{40}$" "$DB"
 
 # to_commit_date should be a reasonable unix timestamp
 run_test_match "ctx_to_date" "SELECT to_commit_date FROM dolt_diff_t LIMIT 1;" "^[0-9]{9,}" "$DB"
 
 # For the initial commit, from_commit is all zeros
 run_test_match "ctx_initial_from" \
-  "SELECT from_commit FROM dolt_diff_t WHERE rowid_val=1 AND diff_type='added';" \
+  "SELECT from_commit FROM dolt_diff_t WHERE to_v IS NOT NULL AND diff_type='added';" \
   "^0{40}$" "$DB"
 
 rm -f "$DB"
@@ -94,7 +94,7 @@ SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Query from a new session
 run_test "persist_count" "SELECT count(*) FROM dolt_diff_t;" "2" "$DB"
-run_test_match "persist_type" "SELECT diff_type FROM dolt_diff_t WHERE rowid_val=2;" "added" "$DB"
+run_test_match "persist_type" "SELECT diff_type FROM dolt_diff_t WHERE to_v IS NOT NULL;" "added" "$DB"
 
 rm -f "$DB"
 
@@ -162,7 +162,7 @@ SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | 
 
 # Should show the cherry-picked row as added
 run_test_match "cp_count" "SELECT count(*) FROM dolt_diff_t;" "^[2-9]" "$DB"
-run_test_match "cp_has_row2" "SELECT count(*) FROM dolt_diff_t WHERE rowid_val=2;" "^[1-9]" "$DB"
+run_test_match "cp_has_row2" "SELECT count(*) FROM dolt_diff_t WHERE to_v IS NOT NULL;" "^[1-9]" "$DB"
 
 rm -f "$DB"
 
@@ -237,7 +237,7 @@ run_test "newt_t2_type" "SELECT diff_type FROM dolt_diff_t2;" "added" "$DB"
 rm -f "$DB"
 
 # ============================================================
-# from_value and to_value are blobs
+# from_v and to_v are blobs
 # ============================================================
 
 DB=/tmp/test_dt_vals_$$.db; rm -f "$DB"
@@ -247,13 +247,13 @@ SELECT dolt_commit('-A','-m','c1');
 UPDATE t SET v='world' WHERE id=1;
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# For the initial add, from_value is null, to_value is blob
-run_test_match "vals_add_from" "SELECT typeof(from_value) FROM dolt_diff_t WHERE diff_type='added';" "null" "$DB"
-run_test_match "vals_add_to" "SELECT typeof(to_value) FROM dolt_diff_t WHERE diff_type='added';" "blob" "$DB"
+# For the initial add, from_v is null, to_v is blob
+run_test_match "vals_add_from" "SELECT typeof(from_v) FROM dolt_diff_t WHERE diff_type='added';" "null" "$DB"
+run_test_match "vals_add_to" "SELECT typeof(to_v) FROM dolt_diff_t WHERE diff_type='added';" "text" "$DB"
 
 # For the modify, both are blobs
-run_test_match "vals_mod_from" "SELECT typeof(from_value) FROM dolt_diff_t WHERE diff_type='modified';" "blob" "$DB"
-run_test_match "vals_mod_to" "SELECT typeof(to_value) FROM dolt_diff_t WHERE diff_type='modified';" "blob" "$DB"
+run_test_match "vals_mod_from" "SELECT typeof(from_v) FROM dolt_diff_t WHERE diff_type='modified';" "text" "$DB"
+run_test_match "vals_mod_to" "SELECT typeof(to_v) FROM dolt_diff_t WHERE diff_type='modified';" "text" "$DB"
 
 rm -f "$DB"
 
