@@ -585,7 +585,8 @@ static void doltliteMergeFunc(
     return;
   }
 
-  /* Fast-forward: if ancestor == our HEAD, just move to their HEAD */
+  /* Fast-forward: if ancestor == our HEAD, use their catalog but still
+  ** create a merge commit so that dolt_log shows "Merge branch '...'" */
   if( prollyHashCompare(&ancestorHash, &ourHead)==0 ){
     /* Load their commit's catalog and reset to it */
     rc = chunkStoreGet(cs, &theirHead, &data, &nData);
@@ -601,20 +602,53 @@ static void doltliteMergeFunc(
       return;
     }
 
-    /* Update HEAD to their commit */
-    doltliteSetSessionHead(db, &theirHead);
-    doltliteSetSessionStaged(db, &theirCommit.catalogHash);
-    chunkStoreSetHeadCommit(cs, &theirHead);
-    chunkStoreSetStagedCatalog(cs, &theirCommit.catalogHash);
-    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &theirHead);
-    chunkStoreSerializeRefs(cs);
-    chunkStoreCommit(cs);
+    /* Create a merge commit instead of just moving HEAD */
+    {
+      DoltliteCommit mergeCommit;
+      u8 *commitData = 0;
+      int nCommitData = 0;
+      ProllyHash commitHash;
+      ProllyHash ffCatHash;
+      char hexBuf[PROLLY_HASH_SIZE*2+1];
+      char msg[256];
+      ProllyHash rootHash;
 
-    doltliteCommitClear(&theirCommit);
+      /* Save catalog hash before clearing theirCommit */
+      memcpy(&ffCatHash, &theirCommit.catalogHash, sizeof(ProllyHash));
+      doltliteCommitClear(&theirCommit);
 
-    char hexBuf[PROLLY_HASH_SIZE*2+1];
-    doltliteHashToHex(&theirHead, hexBuf);
-    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+      memset(&mergeCommit, 0, sizeof(mergeCommit));
+      memcpy(&mergeCommit.parentHash, &ourHead, sizeof(ProllyHash));
+      memcpy(&mergeCommit.catalogHash, &ffCatHash, sizeof(ProllyHash));
+      chunkStoreGetRoot(cs, &rootHash);
+      memcpy(&mergeCommit.rootHash, &rootHash, sizeof(ProllyHash));
+      mergeCommit.timestamp = (i64)time(0);
+      sqlite3_snprintf(sizeof(msg), msg, "Merge branch '%s'", zBranch);
+      mergeCommit.zName = sqlite3_mprintf("doltlite");
+      mergeCommit.zEmail = sqlite3_mprintf("");
+      mergeCommit.zMessage = sqlite3_mprintf("%s", msg);
+
+      rc = doltliteCommitSerialize(&mergeCommit, &commitData, &nCommitData);
+      if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, &commitHash);
+      sqlite3_free(commitData);
+      doltliteCommitClear(&mergeCommit);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(context, "failed to create merge commit", -1);
+        return;
+      }
+
+      /* Update HEAD and branch ref to the new merge commit */
+      doltliteSetSessionHead(db, &commitHash);
+      doltliteSetSessionStaged(db, &ffCatHash);
+      chunkStoreSetHeadCommit(cs, &commitHash);
+      chunkStoreSetStagedCatalog(cs, &ffCatHash);
+      chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
+      chunkStoreSerializeRefs(cs);
+      chunkStoreCommit(cs);
+
+      doltliteHashToHex(&commitHash, hexBuf);
+      sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+    }
     return;
   }
 
@@ -676,6 +710,11 @@ static void doltliteMergeFunc(
     memcpy(&mergeCommit.parentHash, &ourHead, sizeof(ProllyHash));
     /* Note: second parent (theirHead) not stored yet — future enhancement */
     memcpy(&mergeCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
+    {
+      ProllyHash rootHash;
+      chunkStoreGetRoot(cs, &rootHash);
+      memcpy(&mergeCommit.rootHash, &rootHash, sizeof(ProllyHash));
+    }
     mergeCommit.timestamp = (i64)time(0);
     sqlite3_snprintf(sizeof(msg), msg, "Merge branch '%s'", zBranch);
     mergeCommit.zName = sqlite3_mprintf("doltlite");
