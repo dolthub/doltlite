@@ -585,9 +585,15 @@ static void doltliteMergeFunc(
     return;
   }
 
-  /* Fast-forward: if ancestor == our HEAD, just move to their HEAD */
+
+  /* Already up to date: their HEAD is an ancestor of ours */
+  if( prollyHashCompare(&ancestorHash, &theirHead)==0 ){
+    sqlite3_result_text(context, "Already up to date", -1, SQLITE_STATIC);
+    return;
+  }
+
+  /* Fast-forward: ancestor == our HEAD, create merge commit on their tip */
   if( prollyHashCompare(&ancestorHash, &ourHead)==0 ){
-    /* Load their commit's catalog and reset to it */
     rc = chunkStoreGet(cs, &theirHead, &data, &nData);
     if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load commit", -1); return; }
     rc = doltliteCommitDeserialize(data, nData, &theirCommit);
@@ -601,21 +607,47 @@ static void doltliteMergeFunc(
       return;
     }
 
-    /* Update HEAD to their commit */
-    doltliteSetSessionHead(db, &theirHead);
-    doltliteSetSessionStaged(db, &theirCommit.catalogHash);
-    chunkStoreSetHeadCommit(cs, &theirHead);
-    chunkStoreSetStagedCatalog(cs, &theirCommit.catalogHash);
-    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &theirHead);
-    chunkStoreSerializeRefs(cs);
-    chunkStoreCommit(cs);
+    {
+      DoltliteCommit mc;
+      u8 *cd2 = 0;
+      int ncd2 = 0;
+      ProllyHash ch2, sc2;
+      char hx2[PROLLY_HASH_SIZE*2+1];
+      char mg2[256];
 
-    doltliteCommitClear(&theirCommit);
+      memcpy(&sc2, &theirCommit.catalogHash, sizeof(ProllyHash));
+      doltliteCommitClear(&theirCommit);
 
-    char hexBuf[PROLLY_HASH_SIZE*2+1];
-    doltliteHashToHex(&theirHead, hexBuf);
-    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
-    return;
+      memset(&mc, 0, sizeof(mc));
+      memcpy(&mc.parentHash, &theirHead, sizeof(ProllyHash));
+      memcpy(&mc.catalogHash, &sc2, sizeof(ProllyHash));
+      mc.timestamp = (i64)time(0);
+      sqlite3_snprintf(sizeof(mg2), mg2, "Merge branch '%s'", zBranch);
+      mc.zName = sqlite3_mprintf("doltlite");
+      mc.zEmail = sqlite3_mprintf("");
+      mc.zMessage = sqlite3_mprintf("%s", mg2);
+
+      rc = doltliteCommitSerialize(&mc, &cd2, &ncd2);
+      if( rc==SQLITE_OK ) rc = chunkStorePut(cs, cd2, ncd2, &ch2);
+      sqlite3_free(cd2);
+      doltliteCommitClear(&mc);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(context, "failed to create merge commit", -1);
+        return;
+      }
+
+      doltliteSetSessionHead(db, &ch2);
+      doltliteSetSessionStaged(db, &sc2);
+      chunkStoreSetHeadCommit(cs, &ch2);
+      chunkStoreSetStagedCatalog(cs, &sc2);
+      chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &ch2);
+      chunkStoreSerializeRefs(cs);
+      chunkStoreCommit(cs);
+
+      doltliteHashToHex(&ch2, hx2);
+      sqlite3_result_text(context, hx2, -1, SQLITE_TRANSIENT);
+      return;
+    }
   }
 
   /* Three-way merge: load all three catalog hashes */

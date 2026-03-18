@@ -186,7 +186,7 @@ run_test "tags_v1_data" "SELECT count(*) FROM dolt_at_employees('v1');" "4" "$DB
 # ============================================================
 
 run_test "persist_emp" "SELECT count(*) FROM employees;" "5" "$DB"
-run_test "persist_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "persist_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 run_test "persist_branch" "SELECT active_branch();" "main" "$DB"
 run_test "persist_tags" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
 
