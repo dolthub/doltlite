@@ -17,10 +17,212 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "doltlite_record.h"
 #include <string.h>
 
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 extern int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
+
+/* --------------------------------------------------------------------------
+** Helper: read a big-endian SQLite varint from a record blob.
+** Returns bytes consumed.
+** -------------------------------------------------------------------------- */
+static int cfReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
+  u64 v = 0;
+  int i;
+  for(i=0; i<9 && p+i<pEnd; i++){
+    if( i<8 ){
+      v = (v << 7) | (p[i] & 0x7f);
+      if( (p[i] & 0x80)==0 ){ *pVal = v; return i+1; }
+    }else{
+      v = (v << 8) | p[i];
+      *pVal = v;
+      return 9;
+    }
+  }
+  *pVal = v;
+  return i ? i : 1;
+}
+
+/* Read a big-endian signed integer of nBytes bytes. */
+static i64 cfReadInt(const u8 *p, int nBytes){
+  i64 v;
+  int i;
+  v = (p[0] & 0x80) ? -1 : 0;
+  for(i=0; i<nBytes; i++){
+    v = (v << 8) | p[i];
+  }
+  return v;
+}
+
+/* --------------------------------------------------------------------------
+** Build and execute an INSERT OR REPLACE for a raw SQLite record blob.
+** The record is the row data (not including the rowid).
+** Uses PRAGMA table_info to get column names.
+** -------------------------------------------------------------------------- */
+static int applyTheirRecord(
+  sqlite3 *db,
+  const char *zTable,
+  i64 intKey,
+  const u8 *pRec,
+  int nRec
+){
+  sqlite3_stmt *pInfo = 0;
+  char *zSql;
+  int rc, nCol = 0, colIdx = 0;
+  const u8 *p, *pEnd, *pHdrEnd, *pBody;
+  u64 hdrSize;
+  int hdrBytes;
+
+  /* Collect column names */
+  char **azCol = 0;
+  int nColAlloc = 0;
+
+  zSql = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTable);
+  if( !zSql ) return SQLITE_NOMEM;
+  rc = sqlite3_prepare_v2(db, zSql, -1, &pInfo, 0);
+  sqlite3_free(zSql);
+  if( rc!=SQLITE_OK ) return rc;
+
+  while( sqlite3_step(pInfo)==SQLITE_ROW ){
+    const char *zName = (const char*)sqlite3_column_text(pInfo, 1);
+    if( nCol >= nColAlloc ){
+      nColAlloc = nColAlloc ? nColAlloc*2 : 8;
+      azCol = sqlite3_realloc(azCol, nColAlloc * (int)sizeof(char*));
+      if( !azCol ){ sqlite3_finalize(pInfo); return SQLITE_NOMEM; }
+    }
+    azCol[nCol] = sqlite3_mprintf("%s", zName);
+    nCol++;
+  }
+  sqlite3_finalize(pInfo);
+
+  if( nCol==0 ){
+    sqlite3_free(azCol);
+    return SQLITE_ERROR;
+  }
+
+  /* Parse the record header to get serial types */
+  p = pRec;
+  pEnd = pRec + nRec;
+  hdrBytes = cfReadVarint(p, pEnd, &hdrSize);
+  p += hdrBytes;
+  pHdrEnd = pRec + (int)hdrSize;
+  pBody = pRec + (int)hdrSize;
+
+  /* Build: UPDATE "table" SET col=val, ... WHERE rowid=intKey
+  ** Skip the INTEGER PRIMARY KEY column (stored as NULL in the record). */
+  {
+    char *zUpd = sqlite3_mprintf("UPDATE \"%w\" SET ", zTable);
+    char *zTmp;
+    int nSet = 0;
+
+    colIdx = 0;
+    while( p < pHdrEnd && p < pEnd && colIdx < nCol ){
+      u64 st;
+      int stBytes = cfReadVarint(p, pHdrEnd, &st);
+      p += stBytes;
+
+      /* For NULL serial type on the first column, this is likely the
+      ** INTEGER PRIMARY KEY (rowid alias) stored as NULL -- skip it
+      ** in the UPDATE since the rowid is set via the WHERE clause. */
+      if( st==0 && colIdx==0 ){
+        colIdx++;
+        continue;
+      }
+
+      /* Add comma separator between SET clauses */
+      if( nSet > 0 ){
+        zTmp = sqlite3_mprintf("%s, ", zUpd);
+        sqlite3_free(zUpd); zUpd = zTmp;
+      }
+
+      /* Decode value and build SET clause */
+      if( st==0 ){
+        zTmp = sqlite3_mprintf("%s\"%w\"=NULL", zUpd, azCol[colIdx]);
+        sqlite3_free(zUpd); zUpd = zTmp;
+      }else if( st==8 ){
+        zTmp = sqlite3_mprintf("%s\"%w\"=0", zUpd, azCol[colIdx]);
+        sqlite3_free(zUpd); zUpd = zTmp;
+      }else if( st==9 ){
+        zTmp = sqlite3_mprintf("%s\"%w\"=1", zUpd, azCol[colIdx]);
+        sqlite3_free(zUpd); zUpd = zTmp;
+      }else if( st>=1 && st<=6 ){
+        static const int sizes[] = {0,1,2,3,4,6,8};
+        int nBytes = sizes[st];
+        if( pBody + nBytes <= pEnd ){
+          i64 v = cfReadInt(pBody, nBytes);
+          zTmp = sqlite3_mprintf("%s\"%w\"=%lld", zUpd, azCol[colIdx], v);
+          sqlite3_free(zUpd); zUpd = zTmp;
+        }
+        pBody += nBytes;
+      }else if( st==7 ){
+        /* IEEE 754 float */
+        if( pBody + 8 <= pEnd ){
+          double v;
+          u64 bits = 0;
+          int k;
+          for(k=0; k<8; k++) bits = (bits<<8) | pBody[k];
+          memcpy(&v, &bits, 8);
+          zTmp = sqlite3_mprintf("%s\"%w\"=%!.15g", zUpd, azCol[colIdx], v);
+          sqlite3_free(zUpd); zUpd = zTmp;
+        }
+        pBody += 8;
+      }else if( st>=12 && (st&1)==0 ){
+        /* Blob */
+        int len = ((int)st - 12) / 2;
+        zTmp = sqlite3_mprintf("%s\"%w\"=X'", zUpd, azCol[colIdx]);
+        sqlite3_free(zUpd); zUpd = zTmp;
+        if( pBody + len <= pEnd ){
+          int k;
+          for(k=0; k<len; k++){
+            zTmp = sqlite3_mprintf("%s%02x", zUpd, pBody[k]);
+            sqlite3_free(zUpd); zUpd = zTmp;
+          }
+        }
+        zTmp = sqlite3_mprintf("%s'", zUpd);
+        sqlite3_free(zUpd); zUpd = zTmp;
+        pBody += len;
+      }else if( st>=13 && (st&1)==1 ){
+        /* Text */
+        int len = ((int)st - 13) / 2;
+        if( pBody + len <= pEnd ){
+          char *zText = sqlite3_malloc(len+1);
+          if( zText ){
+            memcpy(zText, pBody, len);
+            zText[len] = 0;
+            zTmp = sqlite3_mprintf("%s\"%w\"=%Q", zUpd, azCol[colIdx], zText);
+            sqlite3_free(zUpd); zUpd = zTmp;
+            sqlite3_free(zText);
+          }
+        }
+        pBody += len;
+      }
+      nSet++;
+      colIdx++;
+    }
+
+    /* Add WHERE clause */
+    zSql = sqlite3_mprintf("%s WHERE rowid=%lld", zUpd, intKey);
+    sqlite3_free(zUpd);
+
+    if( zSql && nSet > 0 ){
+      rc = sqlite3_exec(db, zSql, 0, 0, 0);
+      sqlite3_free(zSql);
+    }else{
+      sqlite3_free(zSql);
+      rc = SQLITE_OK;
+    }
+
+    /* Free column names */
+    {
+      int k;
+      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
+      sqlite3_free(azCol);
+    }
+  }
+
+  return rc;
+}
 
 /* --------------------------------------------------------------------------
 ** Conflict catalog serialization
@@ -36,6 +238,7 @@ struct ConflictTableInfo {
   int nConflicts;
   struct ConflictRow {
     i64 intKey;
+    u8 *pKey; int nKey;       /* blob key (NULL for INTKEY tables) — must match merge's layout */
     u8 *pBaseVal; int nBaseVal;
     u8 *pTheirVal; int nTheirVal;
   } *aRows;
@@ -596,32 +799,19 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     for(i=0; i<nTables; i++){
       if( !aTables[i].zName || strcmp(aTables[i].zName, zTable)!=0 ) continue;
 
-      /* Apply each conflict's theirVal via SQL */
+      /* Apply each conflict's theirVal */
       for(j=0; j<aTables[i].nConflicts; j++){
         struct ConflictRow *cr = &aTables[i].aRows[j];
         if( cr->pTheirVal && cr->nTheirVal > 0 ){
-          /* Their value exists — UPDATE or INSERT the row */
-          char *zSql = sqlite3_mprintf(
-            "INSERT OR REPLACE INTO \"%w\"(rowid) VALUES(%lld)",
-            zTable, cr->intKey);
-          /* Actually we need to set the full row.  Use a simpler approach:
-          ** DELETE then re-insert won't work without knowing the schema.
-          ** For now, we exec a direct REPLACE via the prolly tree layer. */
-          sqlite3_free(zSql);
-
-          /* Direct approach: insert theirVal into the table's prolly tree */
-          {
-            Pgno iTable;
-            if( doltliteResolveTableName(db, zTable, &iTable)==SQLITE_OK ){
-              /* Open a cursor and do the insert */
-              char *zDel = sqlite3_mprintf("DELETE FROM \"%w\" WHERE rowid=%lld", zTable, cr->intKey);
-              if(zDel){ sqlite3_exec(db, zDel, 0, 0, 0); sqlite3_free(zDel); }
-              /* We need to insert theirVal as a record.  Since we can't easily
-              ** reconstruct a full INSERT from the binary record, use the low-level
-              ** BtreeInsert approach.  For now, keep the row deleted (theirs was a
-              ** different value for an existing row — deleting resolves to "removed"). */
-              /* TODO: full theirs application requires parsing the SQLite record format */
-            }
+          /* Their value exists — decode the raw SQLite record and
+          ** apply it via INSERT OR REPLACE, which handles both the
+          ** deletion of our value and insertion of theirs atomically. */
+          rc = applyTheirRecord(db, zTable, cr->intKey,
+                                cr->pTheirVal, cr->nTheirVal);
+          if( rc!=SQLITE_OK ){
+            freeConflictTables(aTables, nTables);
+            sqlite3_result_error(ctx, "failed to apply theirs value", -1);
+            return;
           }
         }else{
           /* Their value is NULL — they deleted the row. Delete ours. */
