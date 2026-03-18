@@ -155,135 +155,17 @@ static int diffEmitModify(
 }
 
 /*
-** Read a big-endian SQLite varint from p. Returns bytes consumed.
-*/
-static int diffReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
-  u64 v = 0;
-  int i;
-  for(i=0; i<9 && p+i<pEnd; i++){
-    if( i<8 ){
-      v = (v << 7) | (p[i] & 0x7f);
-      if( (p[i] & 0x80)==0 ){ *pVal = v; return i+1; }
-    }else{
-      v = (v << 8) | p[i];
-      *pVal = v;
-      return 9;
-    }
-  }
-  *pVal = v;
-  return i ? i : 1;
-}
-
-/*
-** Return the data size in bytes for a given SQLite record serial type.
-*/
-static int diffSerialTypeLen(u64 st){
-  if( st<=0 ) return 0;          /* NULL */
-  if( st==1 ) return 1;
-  if( st==2 ) return 2;
-  if( st==3 ) return 3;
-  if( st==4 ) return 4;
-  if( st==5 ) return 6;
-  if( st==6 ) return 8;
-  if( st==7 ) return 8;          /* float */
-  if( st==8 || st==9 ) return 0; /* integer 0 or 1 */
-  if( st>=12 && (st&1)==0 ) return ((int)st-12)/2;  /* blob */
-  if( st>=13 && (st&1)==1 ) return ((int)st-13)/2;  /* text */
-  return 0;
-}
-
-/*
-** Compare two SQLite record-format values field-by-field.
-** Records that differ only in trailing NULL fields (e.g. after
-** ALTER TABLE ADD COLUMN) are treated as equal.
-**
-** Returns non-zero if the records are logically identical.
-*/
-static int diffRecordsEqual(
-  const u8 *pA, int nA,
-  const u8 *pB, int nB
-){
-  const u8 *pEndA = pA + nA;
-  const u8 *pEndB = pB + nB;
-  u64 hdrSizeA, hdrSizeB;
-  int hdrBytesA, hdrBytesB;
-  const u8 *pHdrA, *pHdrB;       /* current position in header */
-  const u8 *pHdrEndA, *pHdrEndB; /* end of header region */
-  int offA, offB;                 /* current body offset */
-
-  if( !pA || nA<1 || !pB || nB<1 ) return (!pA && !pB);
-
-  /* Parse header sizes */
-  hdrBytesA = diffReadVarint(pA, pEndA, &hdrSizeA);
-  hdrBytesB = diffReadVarint(pB, pEndB, &hdrSizeB);
-  pHdrA = pA + hdrBytesA;
-  pHdrB = pB + hdrBytesB;
-  pHdrEndA = pA + (int)hdrSizeA;
-  pHdrEndB = pB + (int)hdrSizeB;
-  offA = (int)hdrSizeA;
-  offB = (int)hdrSizeB;
-
-  /* Walk fields in parallel */
-  while( pHdrA < pHdrEndA || pHdrB < pHdrEndB ){
-    u64 stA = 0, stB = 0;   /* serial type: 0 = NULL */
-    int lenA = 0, lenB = 0;
-
-    if( pHdrA < pHdrEndA && pHdrA < pEndA ){
-      int n = diffReadVarint(pHdrA, pHdrEndA, &stA);
-      pHdrA += n;
-      lenA = diffSerialTypeLen(stA);
-    }
-    if( pHdrB < pHdrEndB && pHdrB < pEndB ){
-      int n = diffReadVarint(pHdrB, pHdrEndB, &stB);
-      pHdrB += n;
-      lenB = diffSerialTypeLen(stB);
-    }
-
-    /* Different serial types means different values, UNLESS both
-    ** represent NULL (type 0 or missing field). */
-    if( stA != stB ){
-      /* If one side is NULL (type 0 or missing) and the other is also
-      ** NULL, they match.  Otherwise they differ. */
-      int nullA = (stA==0);
-      int nullB = (stB==0);
-      if( !nullA || !nullB ){
-        return 0;  /* different */
-      }
-      /* Both NULL, continue */
-    }else if( stA!=0 && lenA>0 ){
-      /* Same serial type with data: compare the body bytes */
-      if( offA+lenA > nA || offB+lenB > nB ) return 0;
-      if( memcmp(pA+offA, pB+offB, lenA)!=0 ) return 0;
-    }
-    /* serial types 8 and 9 (integer 0 and 1) have no body bytes
-    ** but are equal if stA==stB, which is already handled above. */
-
-    offA += lenA;
-    offB += lenB;
-  }
-
-  return 1;  /* all fields matched */
-}
-
-/*
 ** Return non-zero if the two values at the current cursor positions
-** are identical.  First tries a fast byte-for-byte comparison; if sizes
-** differ, falls back to field-by-field record comparison so that records
-** differing only in trailing NULL columns (from ALTER TABLE ADD COLUMN)
-** are treated as equal.
+** are identical (same length and same bytes).
 */
 static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew){
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
   prollyCursorValue(pOld, &pOldVal, &nOldVal);
   prollyCursorValue(pNew, &pNewVal, &nNewVal);
-  if( nOldVal==nNewVal ){
-    if( nOldVal==0 ) return 1;
-    if( memcmp(pOldVal, pNewVal, nOldVal)==0 ) return 1;
-  }
-  /* Byte comparison failed — try field-level comparison to handle
-  ** schema changes (e.g. ALTER TABLE ADD COLUMN appends trailing NULLs) */
-  return diffRecordsEqual(pOldVal, nOldVal, pNewVal, nNewVal);
+  if( nOldVal != nNewVal ) return 0;
+  if( nOldVal == 0 ) return 1;
+  return memcmp(pOldVal, pNewVal, nOldVal) == 0;
 }
 
 /*
