@@ -19,6 +19,7 @@
 #include "doltlite_commit.h"
 
 #include <string.h>
+#include <time.h>
 
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 extern void *doltliteGetBtShared(sqlite3 *db);
@@ -231,7 +232,7 @@ static int htConnect(sqlite3 *db, void *pAux, int argc,
     "  value BLOB,"
     "  commit_hash TEXT,"
     "  committer TEXT,"
-    "  commit_date INTEGER"
+    "  commit_date TEXT"
     ")");
   if( rc!=SQLITE_OK ) return rc;
 
@@ -327,7 +328,10 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       sqlite3_result_text(ctx, r->zCommitter, -1, SQLITE_TRANSIENT);
       break;
     case 4: /* commit_date */
-      sqlite3_result_int64(ctx, r->commitDate);
+      { time_t t = (time_t)r->commitDate; struct tm *tm = gmtime(&t);
+        if(tm){ char b[32]; strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",tm);
+          sqlite3_result_text(ctx,b,-1,SQLITE_TRANSIENT);
+        }else sqlite3_result_null(ctx); }
       break;
   }
   return SQLITE_OK;

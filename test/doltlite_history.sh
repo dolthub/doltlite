@@ -22,7 +22,7 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "basic_count" "SELECT count(*) FROM dolt_history_t;" "2" "$DB"
 run_test_match "basic_hash" "SELECT commit_hash FROM dolt_history_t LIMIT 1;" "^[0-9a-f]{40}$" "$DB"
-run_test_match "basic_date" "SELECT commit_date FROM dolt_history_t LIMIT 1;" "^[0-9]{9,}" "$DB"
+run_test_match "basic_date" "SELECT commit_date FROM dolt_history_t LIMIT 1;" "^[0-9]{4}-" "$DB"
 run_test "basic_committer" "SELECT committer FROM dolt_history_t LIMIT 1;" "doltlite" "$DB"
 
 rm -f "$DB"

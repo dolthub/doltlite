@@ -12,6 +12,8 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 
+#include <time.h>
+
 /* Forward declarations */
 typedef struct BtShared BtShared;
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
@@ -209,11 +211,16 @@ static int doltliteLogColumn(
                           -1, SQLITE_TRANSIENT);
       break;
     case 3: /* date */
-      /* Format as ISO-8601 */
       {
-        char buf[32];
-        sqlite3_snprintf(sizeof(buf), buf, "%lld", pCur->current.timestamp);
-        sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+        time_t t = (time_t)pCur->current.timestamp;
+        struct tm *tm = gmtime(&t);
+        if( tm ){
+          char buf[32];
+          strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+          sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+        }else{
+          sqlite3_result_null(ctx);
+        }
       }
       break;
     case 4: /* message */

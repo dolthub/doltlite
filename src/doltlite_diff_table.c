@@ -17,6 +17,7 @@
 #include "doltlite_commit.h"
 
 #include <string.h>
+#include <time.h>
 
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 extern void *doltliteGetBtShared(sqlite3 *db);
@@ -264,7 +265,7 @@ static char *buildDiffSchema(ColInfo *ci){
   }
 
   strcat(z, ", from_commit TEXT, to_commit TEXT"
-            ", from_commit_date INTEGER, to_commit_date INTEGER"
+            ", from_commit_date TEXT, to_commit_date TEXT"
             ", diff_type TEXT)");
 
   return z;
@@ -543,7 +544,7 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
     zSchema = sqlite3_mprintf(
       "CREATE TABLE x(from_value, to_value,"
       " from_commit TEXT, to_commit TEXT,"
-      " from_commit_date INTEGER, to_commit_date INTEGER,"
+      " from_commit_date TEXT, to_commit_date TEXT,"
       " diff_type TEXT)");
   }
 
@@ -714,10 +715,16 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
         }
         break;
       case 2: /* from_commit_date */
-        sqlite3_result_int64(ctx, r->fromDate);
+        { time_t t = (time_t)r->fromDate; struct tm *tm = gmtime(&t);
+          if(tm){ char b[32]; strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",tm);
+            sqlite3_result_text(ctx,b,-1,SQLITE_TRANSIENT);
+          }else sqlite3_result_null(ctx); }
         break;
       case 3: /* to_commit_date */
-        sqlite3_result_int64(ctx, r->toDate);
+        { time_t t = (time_t)r->toDate; struct tm *tm = gmtime(&t);
+          if(tm){ char b[32]; strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",tm);
+            sqlite3_result_text(ctx,b,-1,SQLITE_TRANSIENT);
+          }else sqlite3_result_null(ctx); }
         break;
       case 4: /* diff_type */
         switch( r->diffType ){
