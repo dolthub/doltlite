@@ -163,6 +163,13 @@ int chunkStoreCommit(ChunkStore *cs);
 /* Discard all pending chunks (rollback) */
 void chunkStoreRollback(ChunkStore *cs);
 
+/* Refresh in-memory state from disk.
+** Re-opens the file (to pick up atomic renames by other connections),
+** re-reads the manifest and chunk index.  Sets *pChanged to 1 if the
+** catalog hash differs from the previously loaded value.
+** No-op for in-memory databases. */
+int chunkStoreRefresh(ChunkStore *cs, int *pChanged);
+
 /* Return 1 if store is empty (no root) */
 int chunkStoreIsEmpty(ChunkStore *cs);
 

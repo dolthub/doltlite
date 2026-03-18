@@ -1244,4 +1244,95 @@ void chunkStoreSetConflictsCatalog(ChunkStore *cs, const ProllyHash *pHash){
   memcpy(&cs->conflictsCatalogHash, pHash, sizeof(ProllyHash));
 }
 
+/*
+** Refresh a chunk store's in-memory state from disk.
+**
+** When multiple connections open the same database file, one connection
+** may commit (writing a new file via atomic rename) while others still
+** hold the old file descriptor.  This function re-opens the file and
+** re-reads the manifest and chunk index so the caller sees the latest
+** state.
+**
+** Sets *pChanged to 1 if the on-disk catalog hash differs from the
+** previously loaded value (meaning another connection modified the
+** schema or data).  No-op for in-memory databases.
+*/
+int chunkStoreRefresh(ChunkStore *cs, int *pChanged){
+  ProllyHash oldCatalog;
+  int rc;
+
+  if( pChanged ) *pChanged = 0;
+
+  /* Skip for in-memory stores */
+  if( cs->zFilename==0 || cs->zFilename[0]=='\0'
+   || strcmp(cs->zFilename, ":memory:")==0 ){
+    return SQLITE_OK;
+  }
+
+  /* Remember old catalog hash */
+  memcpy(&oldCatalog, &cs->catalog, sizeof(ProllyHash));
+
+  /* Re-open the file to pick up atomic renames */
+  if( cs->pFile ){
+    csCloseFile(cs->pFile);
+    cs->pFile = 0;
+  }
+
+  {
+    int exists = 0;
+    rc = sqlite3OsAccess(cs->pVfs, cs->zFilename, SQLITE_ACCESS_EXISTS, &exists);
+    if( rc!=SQLITE_OK ) return rc;
+    if( !exists ){
+      /* File was removed — nothing to refresh */
+      return SQLITE_OK;
+    }
+  }
+
+  {
+    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
+    rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile, openFlags);
+    if( rc!=SQLITE_OK ){
+      openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
+      rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile, openFlags);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+
+  /* Re-read manifest */
+  rc = csReadManifest(cs);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Re-read chunk index */
+  sqlite3_free(cs->aIndex);
+  cs->aIndex = 0;
+  cs->nIndex = 0;
+  cs->nIndexAlloc = 0;
+  rc = csReadIndex(cs);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Reload refs if changed */
+  if( !prollyHashIsEmpty(&cs->refsHash) ){
+    u8 *refsData = 0; int nRefsData = 0;
+    rc = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
+    if( rc==SQLITE_OK ){
+      csDeserializeRefs(cs, refsData, nRefsData);
+      sqlite3_free(refsData);
+    }
+  }
+
+  /* Update append offset */
+  if( cs->iIndexOffset > 0 ){
+    cs->iAppendOffset = cs->iIndexOffset;
+  }else{
+    cs->iAppendOffset = CHUNK_MANIFEST_SIZE;
+  }
+
+  /* Check if catalog changed */
+  if( pChanged && prollyHashCompare(&oldCatalog, &cs->catalog)!=0 ){
+    *pChanged = 1;
+  }
+
+  return SQLITE_OK;
+}
+
 #endif /* DOLTLITE_PROLLY */
