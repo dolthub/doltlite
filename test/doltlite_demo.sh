@@ -156,10 +156,10 @@ run_test_match "audit_has_added" "SELECT count(*) FROM dolt_diff_employees WHERE
 # ============================================================
 
 # Employee 0 exists in multiple commits
-run_test_match "history_emp0" "SELECT count(*) FROM dolt_history_employees WHERE rowid_val=0;" "^[2-9]" "$DB"
+run_test_match "history_emp0" "SELECT count(*) FROM dolt_history_employees WHERE id=0;" "^[2-9]" "$DB"
 
 # Multiple distinct commits for employee 0
-run_test_match "history_commits" "SELECT count(DISTINCT commit_hash) FROM dolt_history_employees WHERE rowid_val=0;" "^[2-9]" "$DB"
+run_test_match "history_commits" "SELECT count(DISTINCT commit_hash) FROM dolt_history_employees WHERE id=0;" "^[2-9]" "$DB"
 
 # ============================================================
 # Phase 12: Schema diff

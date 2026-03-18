@@ -376,9 +376,9 @@ SELECT dolt_commit('-A','-m','c2: delete row 2');" | $DOLTLITE "$DB" > /dev/null
 # c1: rows 1,2 (2 rows), c2: row 1 only (1 row) → 3 total
 run_test "ht_deleted_total" "SELECT count(*) FROM dolt_history_t;" "3" "$DB"
 # Row 2 appears in 1 commit only (c1)
-run_test "ht_deleted_row2" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=2;" "1" "$DB"
+run_test "ht_deleted_row2" "SELECT count(*) FROM dolt_history_t WHERE id=2;" "1" "$DB"
 # Row 1 appears in both
-run_test "ht_deleted_row1" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=1;" "2" "$DB"
+run_test "ht_deleted_row1" "SELECT count(*) FROM dolt_history_t WHERE id=1;" "2" "$DB"
 
 rm -f "$DB"
 
@@ -396,13 +396,13 @@ UPDATE t SET v='version_3' WHERE id=1;
 SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # 3 versions of row 1
-run_test "ht_versions_count" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=1;" "3" "$DB"
+run_test "ht_versions_count" "SELECT count(*) FROM dolt_history_t WHERE id=1;" "3" "$DB"
 # Each has a different commit hash
 run_test "ht_versions_distinct" \
-  "SELECT count(DISTINCT commit_hash) FROM dolt_history_t WHERE rowid_val=1;" "3" "$DB"
+  "SELECT count(DISTINCT commit_hash) FROM dolt_history_t WHERE id=1;" "3" "$DB"
 # Values should be blobs (different at each commit)
 run_test "ht_versions_blobs" \
-  "SELECT count(DISTINCT value) FROM dolt_history_t WHERE rowid_val=1;" "3" "$DB"
+  "SELECT count(DISTINCT v) FROM dolt_history_t WHERE id=1;" "3" "$DB"
 
 rm -f "$DB"
 

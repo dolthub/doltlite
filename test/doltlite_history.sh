@@ -47,13 +47,13 @@ SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "multi_count" "SELECT count(*) FROM dolt_history_t;" "6" "$DB"
 
 # Row 1 appears in all 3 commits
-run_test "multi_row1" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=1;" "3" "$DB"
+run_test "multi_row1" "SELECT count(*) FROM dolt_history_t WHERE id=1;" "3" "$DB"
 
 # Row 2 appears in 2 commits
-run_test "multi_row2" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=2;" "2" "$DB"
+run_test "multi_row2" "SELECT count(*) FROM dolt_history_t WHERE id=2;" "2" "$DB"
 
 # Row 3 appears in 1 commit
-run_test "multi_row3" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=3;" "1" "$DB"
+run_test "multi_row3" "SELECT count(*) FROM dolt_history_t WHERE id=3;" "1" "$DB"
 
 # 3 distinct commits
 run_test "multi_commits" "SELECT count(DISTINCT commit_hash) FROM dolt_history_t;" "3" "$DB"
@@ -74,13 +74,13 @@ UPDATE t SET v='v3' WHERE id=1;
 SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Row 1 appears 3 times (once per commit), each with different value blob
-run_test "update_count" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=1;" "3" "$DB"
+run_test "update_count" "SELECT count(*) FROM dolt_history_t WHERE id=1;" "3" "$DB"
 
 # All are for the same rowid but with different commit hashes
 run_test "update_distinct" "SELECT count(DISTINCT commit_hash) FROM dolt_history_t;" "3" "$DB"
 
 # value column should be decoded text
-run_test_match "update_type" "SELECT typeof(value) FROM dolt_history_t LIMIT 1;" "text" "$DB"
+run_test_match "update_type" "SELECT typeof(v) FROM dolt_history_t LIMIT 1;" "text" "$DB"
 
 rm -f "$DB"
 
@@ -96,7 +96,7 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "persist_count" "SELECT count(*) FROM dolt_history_t;" "3" "$DB"
-run_test "persist_row1" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=1;" "2" "$DB"
+run_test "persist_row1" "SELECT count(*) FROM dolt_history_t WHERE id=1;" "2" "$DB"
 
 rm -f "$DB"
 
@@ -222,8 +222,8 @@ INSERT INTO t VALUES(3,'c');
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Filter by rowid
-run_test "filter_row1" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=1;" "2" "$DB"
-run_test "filter_row3" "SELECT count(*) FROM dolt_history_t WHERE rowid_val=3;" "1" "$DB"
+run_test "filter_row1" "SELECT count(*) FROM dolt_history_t WHERE id=1;" "2" "$DB"
+run_test "filter_row3" "SELECT count(*) FROM dolt_history_t WHERE id=3;" "1" "$DB"
 
 # Filter by commit
 run_test_match "filter_commit" \
