@@ -21,6 +21,7 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
+#include "doltlite_record.h"
 
 #include <string.h>
 
@@ -185,7 +186,7 @@ static int scanTree(
 static const char *atSchema =
   "CREATE TABLE x("
   "  rowid_val INTEGER,"
-  "  value BLOB,"
+  "  value TEXT,"
   "  table_name TEXT HIDDEN,"
   "  commit_ref TEXT HIDDEN"
   ")";
@@ -335,10 +336,7 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       sqlite3_result_int64(ctx, r->intKey);
       break;
     case 1: /* value */
-      if( r->pVal )
-        sqlite3_result_blob(ctx, r->pVal, r->nVal, SQLITE_TRANSIENT);
-      else
-        sqlite3_result_null(ctx);
+      doltliteResultRecord(ctx, r->pVal, r->nVal);
       break;
   }
   return SQLITE_OK;
