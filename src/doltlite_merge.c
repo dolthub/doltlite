@@ -26,6 +26,7 @@
 struct TableEntry {
   Pgno iTable;
   ProllyHash root;
+  ProllyHash schemaHash;
   u8 flags;
   char *zName;
 };
@@ -267,7 +268,7 @@ static int serializeMergedCatalog(
   int sz = 4 + 4 + 64;
   { int j; for(j=0;j<nMerged;j++){
     int nl = aMerged[j].zName ? (int)strlen(aMerged[j].zName) : 0;
-    sz += 4+1+PROLLY_HASH_SIZE+2+nl;
+    sz += 4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE+2+nl;
   }}
   u8 *buf;
   u8 *p;
@@ -304,7 +305,7 @@ static int serializeMergedCatalog(
 
   p += 72;
 
-  /* Write table entries: iTable(4) + flags(1) + root(20) + name_len(2) + name(var) */
+  /* Write table entries: iTable(4) + flags(1) + root(20) + schemaHash(20) + name_len(2) + name(var) */
   {
     int i;
     for(i=0; i<nMerged; i++){
@@ -317,6 +318,8 @@ static int serializeMergedCatalog(
       p += 4;
       *p++ = aMerged[i].flags;
       memcpy(p, aMerged[i].root.data, PROLLY_HASH_SIZE);
+      p += PROLLY_HASH_SIZE;
+      memcpy(p, aMerged[i].schemaHash.data, PROLLY_HASH_SIZE);
       p += PROLLY_HASH_SIZE;
       p[0]=(u8)nl; p[1]=(u8)(nl>>8); p+=2;
       if(nl>0) memcpy(p, aMerged[i].zName, nl);

@@ -23,7 +23,7 @@
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 extern void *doltliteGetBtShared(sqlite3 *db);
 
-struct TableEntry { Pgno iTable; ProllyHash root; u8 flags; char *zName; };
+struct TableEntry { Pgno iTable; ProllyHash root; ProllyHash schemaHash; u8 flags; char *zName; };
 extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                                struct TableEntry **ppTables, int *pnTables,
                                Pgno *piNextTable);

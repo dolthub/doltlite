@@ -296,8 +296,8 @@ static int gcMarkReachable(
         if( nTables >= 0 && nTables < 10000 ){
           const u8 *p = data + 72;
           for(i=0; i<nTables; i++){
-            /* Each entry: iTable(4) + flags(1) + root(20) + name_len(2) + name(var) */
-            if( p + 4 + 1 + PROLLY_HASH_SIZE + 2 > data + nData ) break;
+            /* Each entry: iTable(4) + flags(1) + root(20) + schemaHash(20) + name_len(2) + name(var) */
+            if( p + 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2 > data + nData ) break;
             {
               ProllyHash tableRoot;
               memcpy(tableRoot.data, p + 5, PROLLY_HASH_SIZE);
@@ -305,7 +305,7 @@ static int gcMarkReachable(
             }
             {
               int nameLen;
-              p += 4 + 1 + PROLLY_HASH_SIZE;
+              p += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
               nameLen = p[0] | (p[1]<<8);
               p += 2 + nameLen;
             }

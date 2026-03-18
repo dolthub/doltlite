@@ -36,6 +36,7 @@ extern void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
 struct TableEntry {
   Pgno iTable;
   ProllyHash root;
+  ProllyHash schemaHash;
   u8 flags;
   char *zName;
 };
@@ -173,6 +174,7 @@ static void doltliteAddFunc(
             for(k=0; k<nStaged; k++){
               if( aStaged[k].iTable==iTable ){
                 aStaged[k].root = aWorking[j].root;
+                aStaged[k].schemaHash = aWorking[j].schemaHash;
                 aStaged[k].flags = aWorking[j].flags;
                 updated = 1;
                 break;
@@ -213,7 +215,7 @@ static void doltliteAddFunc(
 
           for(j=0;j<nStaged;j++){
             int nl = aStaged[j].zName ? (int)strlen(aStaged[j].zName) : 0;
-            sz += 4+1+PROLLY_HASH_SIZE+2+nl;
+            sz += 4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE+2+nl;
           }
           buf = sqlite3_malloc(sz);
           if( !buf ){
@@ -244,6 +246,8 @@ static void doltliteAddFunc(
             p += 4;
             *p++ = aStaged[i].flags;
             memcpy(p, aStaged[i].root.data, PROLLY_HASH_SIZE);
+            p += PROLLY_HASH_SIZE;
+            memcpy(p, aStaged[i].schemaHash.data, PROLLY_HASH_SIZE);
             p += PROLLY_HASH_SIZE;
             p[0]=(u8)nl; p[1]=(u8)(nl>>8); p+=2;
             if(nl>0) memcpy(p, aStaged[i].zName, nl);
