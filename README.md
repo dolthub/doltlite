@@ -28,6 +28,46 @@ To build stock SQLite instead (for comparison):
 make DOLTLITE_PROLLY=0 sqlite3
 ```
 
+## Using as a C Library
+
+Doltlite builds `libdoltlite.a` (static) and `libdoltlite.dylib`/`.so` (shared)
+alongside the CLI. These include the full prolly tree engine and all Dolt
+functions — link against them exactly like you would `libsqlite3`.
+
+```bash
+cd build
+../configure
+make doltlite-lib   # builds libdoltlite.a and libdoltlite.dylib/.so
+```
+
+Compile and link your program:
+
+```bash
+# Static link (recommended — single binary, no runtime deps)
+gcc -o myapp myapp.c -I/path/to/build libdoltlite.a -lpthread -lz
+
+# Dynamic link
+gcc -o myapp myapp.c -I/path/to/build -L/path/to/build -ldoltlite -lpthread -lz
+```
+
+The API is the standard [SQLite C API](https://sqlite.org/cintro.html) —
+`sqlite3_open`, `sqlite3_exec`, `sqlite3_prepare_v2`, etc. Dolt features are
+called as SQL functions (`dolt_commit`, `dolt_branch`, `dolt_merge`, ...) and
+virtual tables (`dolt_log`, `dolt_diff_<table>`, `dolt_history_<table>`, ...).
+
+### Quickstart Example
+
+See [`examples/quickstart.c`](examples/quickstart.c) for a complete working
+program that demonstrates commits, branches, merges, point-in-time queries,
+diffs, and tags through the C API. Based on the
+[SQLite quickstart](https://sqlite.org/quickstart.html).
+
+```bash
+cd build
+gcc -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz
+./quickstart
+```
+
 ## Dolt Features
 
 Version control operations are exposed as SQL functions and virtual tables.

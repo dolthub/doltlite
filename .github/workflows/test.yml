@@ -141,6 +141,15 @@ jobs:
           libsqlite3.a -lz -lpthread -lm
         ./concurrent_branch_test
 
+    - name: Build libdoltlite
+      run: cd build && make doltlite-lib
+
+    - name: C library quickstart integration test
+      run: |
+        cd build
+        gcc -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
+        ./quickstart
+
     - name: Build testfixture
       run: cd build && make testfixture
 

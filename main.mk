@@ -2345,10 +2345,32 @@ doltlite$(T.exe):	shell.c $(LIBOBJS0)
 		$(CFLAGS.readline) $(SHELL_OPT) \
 		$(LDFLAGS.libsqlite3) $(LDFLAGS.readline)
 
+#
+# libdoltlite: static and shared libraries with prolly tree engine.
+# These use the non-amalgamation objects (LIBOBJS0) which include the
+# Dolt version control functions, unlike libsqlite3 which uses the
+# amalgamation.
+#
+libdoltlite$(T.lib):	$(LIBOBJS0)
+	$(AR) $(AR.flags) $@ $(LIBOBJS0)
+
+LDFLAGS.libdoltlite.os-specific = $(subst $(libsqlite3.DLL),libdoltlite$(T.dll),$(LDFLAGS.libsqlite3.os-specific))
+
+libdoltlite$(T.dll):	$(LIBOBJS0)
+	$(T.link.shared) -o $@ $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
+		$(LDFLAGS.libdoltlite.os-specific)
+
+doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll)
+all: doltlite-lib
+
+install-doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll) $(install-dir.lib)
+	$(INSTALL.noexec) libdoltlite$(T.lib) "$(install-dir.lib)"
+	$(INSTALL) libdoltlite$(T.dll) "$(install-dir.lib)"
+
 install-shell-0: doltlite$(T.exe) $(install-dir.bin)
 	$(INSTALL) doltlite$(T.exe) "$(install-dir.bin)"
 install-shell-1:
-install: install-shell-$(HAVE_WASI_SDK)
+install: install-shell-$(HAVE_WASI_SDK) install-doltlite-lib
 
 # How to build sqldiff$(T.exe) depends on $(LINK_TOOLS_DYNAMICALLY)
 #
