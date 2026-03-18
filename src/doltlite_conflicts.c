@@ -117,6 +117,21 @@ static int applyTheirRecord(
   pHdrEnd = pRec + (int)hdrSize;
   pBody = pRec + (int)hdrSize;
 
+  /* Skip the first record field (INTEGER PRIMARY KEY placeholder = NULL).
+  ** The column list already excludes the PK, so the record fields and
+  ** column names must be aligned by skipping this placeholder. */
+  if( p < pHdrEnd ){
+    u64 stSkip;
+    int skipBytes = cfReadVarint(p, pHdrEnd, &stSkip);
+    p += skipBytes;
+    /* Advance pBody past the PK field's data (usually 0 bytes for NULL) */
+    if( stSkip==0 || stSkip==8 || stSkip==9 ) {}
+    else if( stSkip>=1 && stSkip<=6 ){ static const int s[]={0,1,2,3,4,6,8}; pBody+=s[stSkip]; }
+    else if( stSkip==7 ) pBody+=8;
+    else if( stSkip>=12 && (stSkip&1)==0 ) pBody+=((int)stSkip-12)/2;
+    else if( stSkip>=13 && (stSkip&1)==1 ) pBody+=((int)stSkip-13)/2;
+  }
+
   /* Build: INSERT OR REPLACE INTO "table"(rowid, col1, col2, ...) VALUES(key, v1, v2, ...) */
   {
     /* Use a dynamic string buffer */
