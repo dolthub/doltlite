@@ -9,7 +9,7 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
     - uses: actions/checkout@v4
@@ -40,6 +40,9 @@ jobs:
 
     - name: Branding tests
       run: cd build && bash ../test/doltlite_branding.sh
+
+    - name: SQLite parity comparison tests
+      run: cd build && bash ../test/doltlite_parity.sh
 
     - name: File persistence tests
       run: cd build && bash ../test/doltlite_persistence.sh
@@ -83,6 +86,9 @@ jobs:
     - name: Dolt merge tests
       run: cd build && bash ../test/doltlite_merge.sh
 
+    - name: Savepoint and transaction interaction tests
+      run: cd build && bash ../test/doltlite_savepoint.sh
+
     - name: Dolt tag tests
       run: cd build && bash ../test/doltlite_tag.sh
 
@@ -107,8 +113,15 @@ jobs:
     - name: Dolt schema diff tests
       run: cd build && bash ../test/doltlite_schema_diff.sh
 
+    - name: ALTER TABLE merge tests
+      run: cd build && bash ../test/doltlite_alter_merge.sh
+
     - name: Dolt garbage collection tests
       run: cd build && bash ../test/doltlite_gc.sh
+
+    - name: Branch and GC stress tests
+      run: cd build && bash ../test/doltlite_branch_gc_stress.sh
+      timeout-minutes: 5
 
     - name: Structural sharing and GC tests
       run: cd build && bash ../test/doltlite_structural.sh
@@ -120,11 +133,18 @@ jobs:
     - name: Deep feature coverage tests
       run: cd build && bash ../test/doltlite_feature_deep.sh
 
+    - name: Deep commit history tests
+      run: cd build && bash ../test/doltlite_deep_history.sh
+      timeout-minutes: 5
+
     - name: Dolt getting-started demo test
       run: cd build && bash ../test/doltlite_demo.sh
 
     - name: End-to-end integration test
       run: cd build && bash ../test/doltlite_e2e.sh
+
+    - name: Unicode and BLOB edge case tests
+      run: cd build && bash ../test/doltlite_unicode_blob.sh
 
     - name: Edge case tests
       run: cd build && bash ../test/doltlite_edge_cases.sh
@@ -143,6 +163,13 @@ jobs:
 
     - name: Build libdoltlite
       run: cd build && make doltlite-lib
+
+    - name: Concurrent write test
+      run: |
+        cd build
+        gcc -g -O0 -I. -o concurrent_write_test ../test/concurrent_write_test.c \
+          libdoltlite.a -lz -lpthread -lm
+        ./concurrent_write_test
 
     - name: C library quickstart integration test
       run: |
@@ -228,3 +255,106 @@ jobs:
             echo "TIMEOUT: $test ($p passed)"
           fi
         done
+
+    - name: Run crash recovery tests
+      run: |
+        cd build
+        total=0
+        errors=0
+        for test in crash crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM; do
+          result=$(timeout 180 ./testfixture ../test/${test}.test 2>&1)
+          done_line=$(echo "$result" | grep "errors out of")
+          if [ -n "$done_line" ]; then
+            e=$(echo "$done_line" | awk '{print $1}')
+            t=$(echo "$done_line" | awk '{print $5}')
+            total=$((total + t))
+            errors=$((errors + e))
+            if [ "$e" != "0" ]; then
+              echo "FAIL: $test — $done_line"
+            fi
+          else
+            p=$(echo "$result" | grep -c "Ok$")
+            total=$((total + p))
+            echo "TIMEOUT: $test ($p passed)"
+          fi
+        done
+        echo ""
+        echo "=== Crash recovery results: $total tests, $errors errors ==="
+        if [ $errors -gt 0 ]; then
+          echo "::error::$errors crash recovery test errors detected"
+          exit 1
+        fi
+
+    - name: Run fuzz tests
+      run: |
+        cd build
+        total=0
+        errors=0
+        for test in fuzz fuzz2 fuzz3 fuzz4; do
+          result=$(timeout 120 ./testfixture ../test/${test}.test 2>&1)
+          done_line=$(echo "$result" | grep "errors out of")
+          if [ -n "$done_line" ]; then
+            e=$(echo "$done_line" | awk '{print $1}')
+            t=$(echo "$done_line" | awk '{print $5}')
+            total=$((total + t))
+            errors=$((errors + e))
+            if [ "$e" != "0" ]; then
+              echo "FAIL: $test — $done_line"
+            fi
+          else
+            p=$(echo "$result" | grep -c "Ok$")
+            total=$((total + p))
+            echo "TIMEOUT: $test ($p passed)"
+          fi
+        done
+        echo ""
+        echo "=== Fuzz test results: $total tests, $errors errors ==="
+        if [ $errors -gt 0 ]; then
+          echo "::error::$errors fuzz test errors detected"
+          exit 1
+        fi
+
+    - name: Run additional SQLite tests
+      run: |
+        cd build
+        total=0
+        errors=0
+        for test in window1 window2 window3 \
+                     json101 json102 json103 json104 json105 \
+                     aggnested aggorderby \
+                     affinity2 affinity3 \
+                     vacuum2 savepoint \
+                     between distinct distinctagg \
+                     e_createtable e_delete e_insert e_select e_update e_fkey \
+                     func2 func3 hexlit icu intarray \
+                     orderby1 orderby2 orderby3 orderby4 \
+                     pragma pragma2 printf2 \
+                     schema schema2 schema3 schema4 \
+                     shared shared2 shared3 \
+                     speed1 substr table tempdb \
+                     tkt-38cb5df375 tkt-9a8b09f8e6 tkt-99378177930f87bd \
+                     tkt-80e031a00f tkt-80ba201079 tkt-31338dca7e \
+                     tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
+                     tkt-f3e5abed55; do
+          result=$(timeout 120 ./testfixture ../test/${test}.test 2>&1)
+          done_line=$(echo "$result" | grep "errors out of")
+          if [ -n "$done_line" ]; then
+            e=$(echo "$done_line" | awk '{print $1}')
+            t=$(echo "$done_line" | awk '{print $5}')
+            total=$((total + t))
+            errors=$((errors + e))
+            if [ "$e" != "0" ]; then
+              echo "FAIL: $test — $done_line"
+            fi
+          else
+            p=$(echo "$result" | grep -c "Ok$")
+            total=$((total + p))
+            echo "TIMEOUT: $test ($p passed)"
+          fi
+        done
+        echo ""
+        echo "=== Additional SQLite test results: $total tests, $errors errors ==="
+        if [ $errors -gt 0 ]; then
+          echo "::error::$errors additional SQLite test errors detected"
+          exit 1
+        fi
