@@ -2389,9 +2389,23 @@ static int flushDeferredEdits(BtShared *pBt){
 int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   int rc;
 
-  assert( pCur->eState==CURSOR_VALID );
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
+
+  /* Restore cursor position if it was saved by saveAllCursors during a
+  ** concurrent insert on another cursor sharing the same ephemeral table.
+  ** This matches stock SQLite's btree.c which handles CURSOR_REQUIRESEEK
+  ** at the top of sqlite3BtreeDelete. Without this, window functions like
+  ** PERCENT_RANK crash because the prolly cursor has NULL node pointers. */
+  if( pCur->eState!=CURSOR_VALID ){
+    if( pCur->eState>=CURSOR_REQUIRESEEK ){
+      rc = restoreCursorPosition(pCur, 0);
+      if( rc!=SQLITE_OK || pCur->eState!=CURSOR_VALID ) return rc;
+    }else{
+      return SQLITE_CORRUPT_BKPT;
+    }
+  }
+  assert( pCur->eState==CURSOR_VALID );
 
   rc = syncSavepoints(pCur);
   if( rc!=SQLITE_OK ) return rc;
