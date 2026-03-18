@@ -494,8 +494,22 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
   }
 
-  /* Resolve "from" ref → catalog hash */
-  if( zFromRef ){
+  /* Single argument that's not a valid ref = table name filter.
+  ** In this mode, diff HEAD vs working for that specific table. */
+  {
+    const char *zTableFilter = 0;
+    if( zFromRef && !zToRef ){
+      ProllyHash testHash;
+      int resolved = sdResolveRef(cs, zFromRef, &testHash);
+      if( resolved!=SQLITE_OK ){
+        /* Not a valid commit/branch/tag — treat as table name */
+        zTableFilter = zFromRef;
+        zFromRef = 0;
+      }
+    }
+
+    /* Resolve "from" ref → catalog hash */
+    if( zFromRef ){
     rc = sdResolveRef(cs, zFromRef, &fromCommit);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
     memset(&commit, 0, sizeof(commit));
@@ -541,6 +555,24 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
 
   /* Compute diff */
   computeSchemaDiff(c, aFrom, nFrom, aTo, nTo);
+
+  /* If filtering by table name, remove rows that don't match */
+  if( zTableFilter ){
+    int j, k=0;
+    for(j=0; j<c->nRows; j++){
+      if( c->aRows[j].zName && strcmp(c->aRows[j].zName, zTableFilter)==0 ){
+        if( k!=j ) c->aRows[k] = c->aRows[j];
+        k++;
+      }else{
+        sqlite3_free(c->aRows[j].zName);
+        sqlite3_free(c->aRows[j].zFromSql);
+        sqlite3_free(c->aRows[j].zToSql);
+      }
+    }
+    c->nRows = k;
+  }
+
+  } /* end of zTableFilter scope */
 
   freeSchemaEntries(aFrom, nFrom);
   freeSchemaEntries(aTo, nTo);
