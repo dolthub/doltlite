@@ -640,7 +640,7 @@ static void run_benchmarks(void){
   int i;
   double t0;
 
-  remove("/tmp/sysbench_compare.db");
+  remove("/tmp/sysbench_compare.db"); remove("/tmp/sysbench_compare.db-wal");
   sqlite3_open("/tmp/sysbench_compare.db", &db);
 
   /* Prepare */
@@ -675,7 +675,7 @@ static void run_benchmarks(void){
   rng_seed(SEED + 23); bench_read_write(db);
 
   sqlite3_close(db);
-  remove("/tmp/sysbench_compare.db");
+  remove("/tmp/sysbench_compare.db"); remove("/tmp/sysbench_compare.db-wal");
 
   /* Output JSON */
   printf("{\"engine\":\"%s\",\"rows\":%d,\"results\":{", ENGINE_NAME, ROWS);

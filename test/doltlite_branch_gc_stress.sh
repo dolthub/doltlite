@@ -8,8 +8,16 @@ run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'ala
 run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(30);exec @ARGV' $DOLTLITE "$d" 2>&1); if echo "$r"|grep -qE "$p"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r"; fi; }
 
 file_size() {
-  stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null
+  local s=0
+  for f in "$1" "${1}-wal"; do
+    if [ -f "$f" ]; then
+      local fs=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null)
+      s=$((s + fs))
+    fi
+  done
+  echo $s
 }
+db_rm() { rm -f "$1" "${1}-wal"; }
 
 echo "=== Doltlite Branch & GC Stress Tests ==="
 echo ""
@@ -18,7 +26,7 @@ echo ""
 # Setup: create DB with table and initial commit
 # ============================================================
 
-DB=/tmp/test_branch_gc_stress_$$.db; rm -f "$DB"
+DB=/tmp/test_branch_gc_stress_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, branch_name TEXT, val INTEGER);
 INSERT INTO t VALUES(0,'main',0);
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -130,13 +138,13 @@ run_test "post_gc_at_b99" \
 run_test "post_gc_at_b99_val" \
   "SELECT val FROM dolt_at_t('b99') WHERE id=99;" "99" "$DB"
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # 10. Create branch, add 1000 rows, delete branch, GC — reclaim chunks
 # ============================================================
 
-DB=/tmp/test_gc_1000rows_$$.db; rm -f "$DB"
+DB=/tmp/test_gc_1000rows_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, data TEXT);
 INSERT INTO t VALUES(0,'base');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -177,13 +185,13 @@ fi
 run_test "gc_1000rows_main" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "gc_1000rows_val" "SELECT data FROM t WHERE id=0;" "base" "$DB"
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # 11. Structural sharing: 2 branches from same commit — minimal size increase
 # ============================================================
 
-DB=/tmp/test_struct_share_$$.db; rm -f "$DB"
+DB=/tmp/test_struct_share_$$.db; db_rm "$DB"
 
 # Create a table with enough data to make size meaningful
 SQL="CREATE TABLE t(id INTEGER PRIMARY KEY, data TEXT);"
@@ -240,13 +248,13 @@ else
   echo "  FAIL: struct_share_mods — increase=$MOD_INCREASE base=$SIZE_BASE"
 fi
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # 13. GC on database with no unreachable chunks — no-op
 # ============================================================
 
-DB=/tmp/test_gc_noop_$$.db; rm -f "$DB"
+DB=/tmp/test_gc_noop_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -269,13 +277,13 @@ else
   ERRORS="$ERRORS\nFAIL: gc_noop_size\n  before: $SIZE_BEFORE_NOOP\n  after:  $SIZE_AFTER_NOOP"
 fi
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # 14. GC immediately after first commit — should keep everything
 # ============================================================
 
-DB=/tmp/test_gc_first_$$.db; rm -f "$DB"
+DB=/tmp/test_gc_first_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'hello');
 SELECT dolt_commit('-A','-m','first');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -285,13 +293,13 @@ run_test "gc_first_data" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "gc_first_val" "SELECT v FROM t WHERE id=1;" "hello" "$DB"
 run_test "gc_first_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # 15. Create and delete same branch name repeatedly
 # ============================================================
 
-DB=/tmp/test_gc_recycle_$$.db; rm -f "$DB"
+DB=/tmp/test_gc_recycle_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'init');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -323,7 +331,7 @@ run_test "recycle_post_gc_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
 echo "SELECT dolt_branch('recycled');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "recycle_reuse_after_gc" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # Done

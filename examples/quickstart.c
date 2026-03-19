@@ -43,7 +43,10 @@ int main(int argc, char **argv){
   int rc;
   const char *dbpath = argc > 1 ? argv[1] : "quickstart.db";
 
-  remove(dbpath);  /* Start fresh */
+  /* Start fresh — remove DB, WAL, and journal files */
+  remove(dbpath);
+  { char walpath[256]; snprintf(walpath,sizeof(walpath),"%s-wal",dbpath); remove(walpath); }
+  { char jrnpath[256]; snprintf(jrnpath,sizeof(jrnpath),"%s-journal",dbpath); remove(jrnpath); }
 
   rc = sqlite3_open(dbpath, &db);
   if( rc ){
@@ -118,6 +121,8 @@ int main(int argc, char **argv){
   /* ---- Cleanup ---- */
   sqlite3_close(db);
   remove(dbpath);
+  { char walpath[256]; snprintf(walpath,sizeof(walpath),"%s-wal",dbpath); remove(walpath); }
+  { char jrnpath[256]; snprintf(jrnpath,sizeof(jrnpath),"%s-journal",dbpath); remove(jrnpath); }
   printf("Done.\n");
   return 0;
 }

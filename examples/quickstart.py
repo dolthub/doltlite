@@ -17,9 +17,10 @@ DB_PATH = sys.argv[1] if len(sys.argv) > 1 else "quickstart.db"
 
 
 def main():
-    # Start fresh
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
+    # Start fresh (remove DB, WAL, and journal files)
+    for f in [DB_PATH, DB_PATH + "-wal", DB_PATH + "-journal"]:
+        if os.path.exists(f):
+            os.remove(f)
 
     db = sqlite3.connect(DB_PATH)
     cur = db.cursor()
@@ -101,7 +102,10 @@ def main():
     print()
 
     db.close()
-    os.remove(DB_PATH)
+    # Clean up DB, WAL, and journal files
+    for f in [DB_PATH, DB_PATH + "-wal", DB_PATH + "-journal"]:
+        if os.path.exists(f):
+            os.remove(f)
     print("Done.")
 
 

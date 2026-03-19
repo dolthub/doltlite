@@ -112,7 +112,7 @@ int main(){
   int rc;
   const int RETRIES = 50;
 
-  remove(dbpath);
+  remove(dbpath); { char _w[256]; snprintf(_w,256,"%s-wal",dbpath); remove(_w); }
 
   printf("=== Concurrent Write Test ===\n\n");
 
@@ -295,7 +295,7 @@ int main(){
   sqlite3_close(db2);
   sqlite3_close(db3);
   sqlite3_close(db4);
-  remove(dbpath);
+  remove(dbpath); { char _w[256]; snprintf(_w,256,"%s-wal",dbpath); remove(_w); }
 
   printf("\nResults: %d passed, %d failed out of %d tests\n", nPass, nFail, nPass+nFail);
   return nFail > 0 ? 1 : 0;

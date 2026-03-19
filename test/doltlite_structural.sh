@@ -16,8 +16,16 @@ echo "=== Structural Sharing & GC Tests ==="
 echo ""
 
 file_size() {
-  stat -f%z "$1" 2>/dev/null || stat -c%s "$1" 2>/dev/null
+  local s=0
+  for f in "$1" "${1}-wal"; do
+    if [ -f "$f" ]; then
+      local fs=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null)
+      s=$((s + fs))
+    fi
+  done
+  echo $s
 }
+db_rm() { rm -f "$1" "${1}-wal"; }
 
 assert_less() {
   local name="$1" actual="$2" limit="$3"
@@ -49,7 +57,7 @@ assert_greater() {
 
 echo "--- Structural sharing: 1-row change on 1K table ---"
 
-DB=/tmp/test_ss_1k_$$.db; rm -f "$DB"
+DB=/tmp/test_ss_1k_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;$(for i in $(seq 0 999); do echo "INSERT INTO t VALUES($i,'row_$i');"; done)
 COMMIT;
@@ -75,7 +83,7 @@ assert_less "ss_1row_delta_small" "$DELTA" "$HALF_INIT"
 # Delta must be > 0 (new chunks were actually created)
 assert_greater "ss_1row_delta_nonzero" "$DELTA" "0"
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # Structural sharing: 1-row update on 10K table (same test, bigger)
@@ -84,7 +92,7 @@ rm -f "$DB"
 echo ""
 echo "--- Structural sharing: 1-row change on 10K table ---"
 
-DB=/tmp/test_ss_10k_$$.db; rm -f "$DB"
+DB=/tmp/test_ss_10k_$$.db; db_rm "$DB"
 python3 -c "
 print('CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);')
 print('BEGIN;')
@@ -109,7 +117,7 @@ TEN_PCT=$((SIZE_INIT_10K / 10))
 assert_less "ss_10k_1row_delta" "$DELTA_10K" "$TEN_PCT"
 assert_greater "ss_10k_1row_nonzero" "$DELTA_10K" "0"
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # Structural sharing across branches
@@ -118,7 +126,7 @@ rm -f "$DB"
 echo ""
 echo "--- Structural sharing: branch with 1 new row ---"
 
-DB=/tmp/test_ss_branch_$$.db; rm -f "$DB"
+DB=/tmp/test_ss_branch_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;$(for i in $(seq 0 999); do echo "INSERT INTO t VALUES($i,'row_$i');"; done)
 COMMIT;
@@ -141,7 +149,7 @@ echo "  After feat commit: ${SIZE_AFTER_BRANCH} bytes (delta: ${BRANCH_DELTA})"
 QUARTER=$((SIZE_BEFORE_BRANCH / 4))
 assert_less "ss_branch_small_delta" "$BRANCH_DELTA" "$QUARTER"
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # GC cleans orphaned branch chunks
@@ -150,7 +158,7 @@ rm -f "$DB"
 echo ""
 echo "--- GC: clean up deleted branch ---"
 
-DB=/tmp/test_gc_orphan_$$.db; rm -f "$DB"
+DB=/tmp/test_gc_orphan_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;$(for i in $(seq 0 999); do echo "INSERT INTO t VALUES($i,'row_$i');"; done)
 COMMIT;
@@ -194,7 +202,7 @@ else
   echo "  FAIL: gc_data_survives — expected 1000, got $MAIN_COUNT"
 fi
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # GC preserves shared chunks between branches
@@ -203,7 +211,7 @@ rm -f "$DB"
 echo ""
 echo "--- GC: preserve shared chunks ---"
 
-DB=/tmp/test_gc_shared_$$.db; rm -f "$DB"
+DB=/tmp/test_gc_shared_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;$(for i in $(seq 0 999); do echo "INSERT INTO t VALUES($i,'row_$i');"; done)
 COMMIT;
@@ -245,7 +253,7 @@ else
   echo "  FAIL: gc_both_branches_intact — main=$MAIN_COUNT feat=$FEAT_COUNT"
 fi
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # Multiple small commits don't bloat linearly
@@ -254,7 +262,7 @@ rm -f "$DB"
 echo ""
 echo "--- Sub-linear growth: 10 small commits ---"
 
-DB=/tmp/test_ss_commits_$$.db; rm -f "$DB"
+DB=/tmp/test_ss_commits_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;$(for i in $(seq 0 999); do echo "INSERT INTO t VALUES($i,'row_$i');"; done)
 COMMIT;
@@ -292,7 +300,7 @@ else
   echo "  FAIL: commit_data_intact — rows=$COUNT"
 fi
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # GC after many commits reclaims old tree nodes
@@ -301,7 +309,7 @@ rm -f "$DB"
 echo ""
 echo "--- GC after many commits ---"
 
-DB=/tmp/test_gc_commits_$$.db; rm -f "$DB"
+DB=/tmp/test_gc_commits_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;$(for i in $(seq 0 999); do echo "INSERT INTO t VALUES($i,'row_$i');"; done)
 COMMIT;
@@ -339,7 +347,7 @@ else
   echo "  FAIL: gc_commits_data_ok — expected 1000, got $COUNT"
 fi
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # GC idempotent: second run doesn't change size
@@ -348,7 +356,7 @@ rm -f "$DB"
 echo ""
 echo "--- GC idempotent ---"
 
-DB=/tmp/test_gc_idem_$$.db; rm -f "$DB"
+DB=/tmp/test_gc_idem_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;$(for i in $(seq 0 499); do echo "INSERT INTO t VALUES($i,'row_$i');"; done)
 COMMIT;
@@ -378,7 +386,7 @@ else
   echo "  FAIL: gc_idempotent — first=$SIZE_FIRST_GC second=$SIZE_SECOND_GC"
 fi
 
-rm -f "$DB"
+db_rm "$DB"
 
 # ============================================================
 # Done

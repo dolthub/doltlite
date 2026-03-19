@@ -57,7 +57,7 @@ int main(){
   const char *dbpath = "/tmp/test_concurrent_branch.db";
   int rc;
 
-  remove(dbpath);
+  remove(dbpath); { char _w[256]; snprintf(_w,256,"%s-wal",dbpath); remove(_w); }
 
   printf("=== Concurrent Branch Test ===\n\n");
 
@@ -121,7 +121,7 @@ int main(){
   /* --- Cleanup --- */
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove(dbpath);
+  remove(dbpath); { char _w[256]; snprintf(_w,256,"%s-wal",dbpath); remove(_w); }
 
   printf("\nResults: %d passed, %d failed out of %d tests\n", nPass, nFail, nPass+nFail);
   return nFail > 0 ? 1 : 0;

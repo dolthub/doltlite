@@ -1,24 +1,34 @@
 /*
 ** Implementation of the file-backed content-addressed chunk store.
 **
-** File layout:
+** Two-file architecture:
+**
+** Main file (filename):
 **   [Manifest header: 168 bytes]
-**     magic(4) + version(4) + root_hash(20) + chunk_count(4) +
-**     index_offset(8) + index_size(4) + catalog_hash(20) +
-**     head_commit(20) + staged_catalog(20) + refs_hash(20) +
-**     is_merging(4) + merge_commit_hash(20) + conflicts_catalog_hash(20)
-**   [Chunk data region: variable]
-**     Chunks appended sequentially: length(4) + data(length) each
-**   [Chunk index: variable]
-**     Sorted array of (hash(20) + offset(8) + size(4)) = 32 bytes each
+**   [Chunk data region: variable]  — chunks: length(4) + data(length) each
+**   [Chunk index: variable]        — sorted (hash(20) + offset(8) + size(4))
+**
+** Journal file (filename-wal):
+**   Append-only log of new chunks and root hash records.
+**   [Record]*  where each record is:
+**     Chunk record:  tag(1)=0x01 + hash(20) + length(4) + data(length)
+**     Root record:   tag(1)=0x02 + manifest(168)
+**
+** Commit protocol (O(new_chunks), not O(total_chunks)):
+**   1. Append new chunk records to journal
+**   2. Append root record with updated manifest
+**   3. fsync journal — this is the durability point
+**
+** Recovery (on open):
+**   1. Read main file (manifest + index)
+**   2. Replay journal: add chunk records to in-memory index,
+**      use last root record as the current manifest state
+**   3. If journal exists, main file manifest may be stale — that's OK
+**
+** GC / Checkpoint (future):
+**   Merge journal chunks into main file, rewrite main file, delete journal.
 **
 ** All multi-byte integers are little-endian.
-**
-** Commit protocol:
-**   1. Write complete new file to a temp path (filename + "-journal")
-**   2. fsync the temp file
-**   3. rename() temp over the original (atomic on POSIX)
-**   4. Reload in-memory state
 */
 #ifdef DOLTLITE_PROLLY
 
@@ -28,6 +38,8 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/stat.h>
+#include <sys/uio.h>
 
 /* --------------------------------------------------------------------
 ** Little-endian helper macros for reading/writing integers from byte
@@ -90,6 +102,12 @@ static int csMergeIndex(ChunkStore *cs, ChunkIndexEntry **ppMerged,
 static int csGrowPending(ChunkStore *cs);
 static int csGrowWriteBuf(ChunkStore *cs, int nNeeded);
 static char *csJournalPath(const char *zFilename);
+static char *csWalPath(const char *zFilename);
+static int csReplayWal(ChunkStore *cs);
+
+/* Journal record tags */
+#define CS_WAL_TAG_CHUNK  0x01   /* Chunk record: tag(1)+hash(20)+len(4)+data */
+#define CS_WAL_TAG_ROOT   0x02   /* Root record: tag(1)+manifest(168) */
 
 /* Initial allocation sizes */
 #define CS_INIT_INDEX_ALLOC   64
@@ -358,6 +376,172 @@ static char *csJournalPath(const char *zFilename){
   return z;
 }
 
+static char *csWalPath(const char *zFilename){
+  int n = (int)strlen(zFilename);
+  char *z = (char *)sqlite3_malloc(n + 5);  /* "-wal\0" */
+  if( z ){
+    memcpy(z, zFilename, n);
+    memcpy(z + n, "-wal", 5);
+  }
+  return z;
+}
+
+/*
+** Replay WAL file into the in-memory chunk index.
+** For each chunk record: add to index (pointing into WAL file).
+** For each root record: update manifest state.
+** Called during chunkStoreOpen after reading the main file.
+*/
+static int csReplayWal(ChunkStore *cs){
+  char *zWal;
+  int walFd;
+  struct stat walStat;
+  u8 *walData;
+  i64 pos, walSize;
+
+  zWal = csWalPath(cs->zFilename);
+  if( !zWal ) return SQLITE_NOMEM;
+
+  walFd = open(zWal, O_RDONLY);
+  if( walFd < 0 ){
+    sqlite3_free(zWal);
+    return SQLITE_OK;  /* No WAL = nothing to replay */
+  }
+
+  if( fstat(walFd, &walStat) != 0 || walStat.st_size == 0 ){
+    close(walFd);
+    sqlite3_free(zWal);
+    return SQLITE_OK;
+  }
+  walSize = walStat.st_size;
+
+  /* Read entire WAL into memory for replay */
+  walData = (u8*)sqlite3_malloc64(walSize);
+  if( !walData ){
+    close(walFd);
+    sqlite3_free(zWal);
+    return SQLITE_NOMEM;
+  }
+  {
+    ssize_t n = read(walFd, walData, (size_t)walSize);
+    if( n != (ssize_t)walSize ){
+      sqlite3_free(walData);
+      close(walFd);
+      sqlite3_free(zWal);
+      return SQLITE_IOERR_READ;
+    }
+  }
+  close(walFd);
+
+  /* Store WAL data and fd info for chunk reads later */
+  cs->pWalData = walData;
+  cs->nWalData = walSize;
+  cs->zWalPath = zWal;
+
+  /* Parse records */
+  pos = 0;
+  while( pos < walSize ){
+    u8 tag = walData[pos];
+    pos++;
+
+    if( tag == CS_WAL_TAG_CHUNK ){
+      /* Chunk record: hash(20) + length(4) + data(length) */
+      if( pos + 20 + 4 > walSize ) break;  /* truncated — stop */
+      ProllyHash hash;
+      memcpy(&hash, walData + pos, 20);
+      pos += 20;
+      u32 len = CS_READ_U32(walData + pos);
+      pos += 4;
+      if( pos + len > (u64)walSize ) break;  /* truncated */
+
+      /* Add to in-memory index. Offset is negative to indicate WAL data. */
+      /* We use a convention: offset = -(pos_of_data_in_walData) - 1
+      ** so that chunkStoreGet can distinguish WAL chunks from file chunks. */
+      {
+        int existing = csSearchIndex(cs->aIndex, cs->nIndex, &hash);
+        if( existing < 0 ){
+          /* Not in main index — add as pending-like entry */
+          int rc = csGrowPending(cs);
+          if( rc != SQLITE_OK ){
+            sqlite3_free(walData);
+            cs->pWalData = 0;
+            return rc;
+          }
+          ChunkIndexEntry *e = &cs->aPending[cs->nPending];
+          memcpy(&e->hash, &hash, sizeof(ProllyHash));
+          e->offset = -(i64)pos - 1;  /* negative = WAL offset */
+          e->size = (int)len;
+          cs->nPending++;
+        }
+      }
+      pos += len;
+
+    } else if( tag == CS_WAL_TAG_ROOT ){
+      /* Root record: manifest(168) */
+      if( pos + CHUNK_MANIFEST_SIZE > walSize ) break;
+      /* Parse manifest from WAL — same layout as csReadManifest */
+      {
+        u8 *m = walData + pos;
+        u32 magic = CS_READ_U32(m);
+        if( magic == CHUNK_STORE_MAGIC ){
+          memcpy(cs->root.data, m + 8, PROLLY_HASH_SIZE);
+          cs->nChunks = (int)CS_READ_U32(m + 28);
+          cs->iIndexOffset = CS_READ_I64(m + 32);
+          cs->nIndexSize = (int)CS_READ_U32(m + 40);
+          memcpy(cs->catalog.data, m + 44, PROLLY_HASH_SIZE);
+          memcpy(cs->headCommit.data, m + 64, PROLLY_HASH_SIZE);
+          memcpy(cs->stagedCatalog.data, m + 84, PROLLY_HASH_SIZE);
+          memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
+          cs->isMerging = (u8)CS_READ_U32(m + 124);
+          memcpy(cs->mergeCommitHash.data, m + 128, PROLLY_HASH_SIZE);
+          memcpy(cs->conflictsCatalogHash.data, m + 148, PROLLY_HASH_SIZE);
+        }
+      }
+      pos += CHUNK_MANIFEST_SIZE;
+
+    } else {
+      break;  /* Unknown tag — stop replay (truncated/corrupt) */
+    }
+  }
+
+  /* Merge WAL entries into main index */
+  if( cs->nPending > 0 ){
+    ChunkIndexEntry *aMerged = 0;
+    int nMerged = 0;
+    int rc = csMergeIndex(cs, &aMerged, &nMerged);
+    if( rc != SQLITE_OK ){
+      sqlite3_free(walData);
+      cs->pWalData = 0;
+      return rc;
+    }
+    sqlite3_free(cs->aIndex);
+    cs->aIndex = aMerged;
+    cs->nIndex = nMerged;
+    cs->nIndexAlloc = nMerged;
+    cs->nPending = 0;
+  }
+
+  /* Reload refs from the WAL-updated refsHash */
+  if( !prollyHashIsEmpty(&cs->refsHash) ){
+    u8 *refsData = 0; int nRefsData = 0;
+    int rc2 = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
+    if( rc2==SQLITE_OK && refsData ){
+      /* Free old refs */
+      { int k; for(k=0; k<cs->nBranches; k++) sqlite3_free(cs->aBranches[k].zName); }
+      sqlite3_free(cs->aBranches);
+      cs->aBranches = 0; cs->nBranches = 0;
+      { int k; for(k=0; k<cs->nTags; k++) sqlite3_free(cs->aTags[k].zName); }
+      sqlite3_free(cs->aTags);
+      cs->aTags = 0; cs->nTags = 0;
+      csDeserializeRefs(cs, refsData, nRefsData);
+      sqlite3_free(refsData);
+    }
+  }
+  if( !cs->zDefaultBranch ) cs->zDefaultBranch = sqlite3_mprintf("main");
+
+  return SQLITE_OK;
+}
+
 /* --------------------------------------------------------------------
 ** Comparison function for qsort of ChunkIndexEntry by hash.
 ** -------------------------------------------------------------------- */
@@ -527,8 +711,17 @@ int chunkStoreOpen(
     }else{
       cs->iAppendOffset = CHUNK_MANIFEST_SIZE;
     }
+    /* Replay WAL if it exists — may update manifest state and index */
+    rc = csReplayWal(cs);
+    if( rc != SQLITE_OK ){
+      csCloseFile(cs->pFile);
+      cs->pFile = 0;
+      sqlite3_free(cs->zFilename);
+      cs->zFilename = 0;
+      return rc;
+    }
   }else{
-    /* New empty store. No file created until first commit. */
+    /* No main file. Check if WAL exists (data may be WAL-only). */
     if( !(flags & SQLITE_OPEN_CREATE) ){
       sqlite3_free(cs->zFilename);
       cs->zFilename = 0;
@@ -539,7 +732,15 @@ int chunkStoreOpen(
     cs->iIndexOffset = 0;
     cs->nIndexSize = 0;
     cs->iAppendOffset = CHUNK_MANIFEST_SIZE;
-    cs->pFile = 0;  /* Will be created on first commit */
+    cs->pFile = 0;
+
+    /* Try replaying WAL even without main file */
+    rc = csReplayWal(cs);
+    if( rc != SQLITE_OK ){
+      sqlite3_free(cs->zFilename);
+      cs->zFilename = 0;
+      return rc;
+    }
   }
 
   return SQLITE_OK;
@@ -553,6 +754,8 @@ int chunkStoreClose(ChunkStore *cs){
     csCloseFile(cs->pFile);
     cs->pFile = 0;
   }
+  sqlite3_free(cs->pWalData);
+  sqlite3_free(cs->zWalPath);
   sqlite3_free(cs->zFilename);
   sqlite3_free(cs->aIndex);
   sqlite3_free(cs->aPending);
@@ -856,6 +1059,24 @@ int chunkStoreGet(
     return SQLITE_NOTFOUND;
   }
 
+  /* WAL chunk: negative offset means data is in pWalData */
+  {
+    ChunkIndexEntry *e = &cs->aIndex[idx];
+    if( e->offset < 0 && cs->pWalData ){
+      i64 walOff = -(e->offset + 1);  /* decode: offset = -(walPos) - 1 */
+      int sz = e->size;
+      if( walOff >= 0 && walOff + sz <= cs->nWalData ){
+        u8 *pCopy = (u8 *)sqlite3_malloc(sz);
+        if( pCopy == 0 ) return SQLITE_NOMEM;
+        memcpy(pCopy, cs->pWalData + walOff, sz);
+        *ppData = pCopy;
+        *pnData = sz;
+        return SQLITE_OK;
+      }
+      return SQLITE_NOTFOUND;
+    }
+  }
+
   /* For in-memory stores, chunks in the index may reference pWriteBuf */
   if( cs->pFile == 0 ){
     ChunkIndexEntry *e = &cs->aIndex[idx];
@@ -1009,151 +1230,101 @@ int chunkStoreCommit(ChunkStore *cs){
     return SQLITE_OK;
   }
 
-  if( cs->nPending == 0 && cs->pFile != 0 ){
-    /* Nothing to write except possibly an updated root hash.
-    ** We still need to rewrite the manifest if root changed. For
-    ** simplicity, fall through and do a full rewrite. If no pending
-    ** chunks and no file yet exists, we must create the file. */
+  if( cs->nPending == 0 ){
+    /* No new chunks — only the root/manifest may have changed.
+    ** Still need to write a root record to the WAL. */
   }
 
-  /* Build merged index */
-  /* First, translate pending offsets from buffer-local to file offsets.
-  ** Pending chunks will be placed right after existing chunk data. */
-  if( cs->pFile ){
-    oldDataSize = cs->iAppendOffset - CHUNK_MANIFEST_SIZE;
-  }else{
-    oldDataSize = 0;
-  }
-  pendingFileBase = CHUNK_MANIFEST_SIZE + oldDataSize;
-
-  for( i = 0; i < cs->nPending; i++ ){
-    /* Convert buffer-local offset to file offset */
-    cs->aPending[i].offset = pendingFileBase + cs->aPending[i].offset;
-  }
-
-  rc = csMergeIndex(cs, &aMerged, &nMerged);
-  if( rc != SQLITE_OK ) goto commit_error;
-
-  /* Prepare journal (temp) path */
-  zJournal = csJournalPath(cs->zFilename);
-  if( zJournal == 0 ){ rc = SQLITE_NOMEM; goto commit_error; }
-
-  /* Use raw POSIX I/O for the journal file to avoid SQLite VFS limits
-  ** (the VFS xWrite returns SQLITE_FULL for large writes on MAIN_DB files) */
+  /* Append-only WAL commit: write chunk records + root record to WAL.
+  ** Cost is O(new_chunks), not O(total_chunks). */
   {
-    int fd;
-    unlink(zJournal);
-    fd = open(zJournal, O_RDWR | O_CREAT | O_EXCL, 0644);
-    if( fd < 0 ){ rc = SQLITE_CANTOPEN; goto commit_error; }
+    char *zWal = csWalPath(cs->zFilename);
+    if( !zWal ){ rc = SQLITE_NOMEM; goto commit_error; }
 
-    /* Helper macro for writing to fd */
-    #define JOURNAL_WRITE(buf, len, off) do { \
-      ssize_t _n = pwrite(fd, (buf), (len), (off)); \
-      if( _n != (ssize_t)(len) ){ close(fd); unlink(zJournal); \
-        rc = SQLITE_IOERR_WRITE; goto commit_error; } \
-    } while(0)
+    /* Open WAL for append (create if needed) */
+    int walFd = open(zWal, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if( walFd < 0 ){
+      sqlite3_free(zWal);
+      rc = SQLITE_CANTOPEN;
+      goto commit_error;
+    }
 
-    /* -- Write manifest placeholder -- */
-    writePos = 0;
-    memset(hdrBuf, 0, CHUNK_MANIFEST_SIZE);
-    JOURNAL_WRITE(hdrBuf, CHUNK_MANIFEST_SIZE, writePos);
-    writePos += CHUNK_MANIFEST_SIZE;
+    /* Write chunk records: tag(1) + hash(20) + length(4) + data(length) */
+    for( i = 0; i < cs->nPending; i++ ){
+      ChunkIndexEntry *pe = &cs->aPending[i];
+      u8 recHdr[25];  /* tag(1) + hash(20) + length(4) */
+      recHdr[0] = CS_WAL_TAG_CHUNK;
+      memcpy(recHdr + 1, &pe->hash, 20);
+      CS_WRITE_U32(recHdr + 21, (u32)pe->size);
 
-    /* -- Copy existing chunk data from old file -- */
-    if( cs->pFile && oldDataSize > 0 ){
-      i64 remaining = oldDataSize;
-      i64 srcOff = CHUNK_MANIFEST_SIZE;
-      int copyBufSize = 65536;
-      u8 *copyBuf = (u8 *)sqlite3_malloc(copyBufSize);
-      if( copyBuf == 0 ){ close(fd); unlink(zJournal); rc = SQLITE_NOMEM; goto commit_error; }
+      /* pe->offset is buffer-local offset into pWriteBuf */
+      i64 bufOff = pe->offset;
+      /* Skip the 4-byte length prefix that chunkStorePut wrote */
+      bufOff += 4;
 
-      while( remaining > 0 ){
-        int toRead = (remaining > copyBufSize) ? copyBufSize : (int)remaining;
-        rc = sqlite3OsRead(cs->pFile, copyBuf, toRead, srcOff);
-        if( rc != SQLITE_OK ){
-          sqlite3_free(copyBuf); close(fd); unlink(zJournal);
-          goto commit_error;
-        }
-        JOURNAL_WRITE(copyBuf, toRead, writePos);
-        srcOff += toRead;
-        writePos += toRead;
-        remaining -= toRead;
+      struct iovec iov[2];
+      iov[0].iov_base = recHdr;
+      iov[0].iov_len = 25;
+      iov[1].iov_base = cs->pWriteBuf + bufOff;
+      iov[1].iov_len = pe->size;
+      ssize_t n = writev(walFd, iov, 2);
+      if( n != (ssize_t)(25 + pe->size) ){
+        close(walFd);
+        sqlite3_free(zWal);
+        rc = SQLITE_IOERR_WRITE;
+        goto commit_error;
       }
-      sqlite3_free(copyBuf);
     }
 
-    /* -- Write pending chunk data -- */
-    if( cs->nWriteBuf > 0 ){
-      JOURNAL_WRITE(cs->pWriteBuf, cs->nWriteBuf, writePos);
-      writePos += cs->nWriteBuf;
-    }
-
-    /* -- Write merged index -- */
-    indexBufSize = nMerged * CHUNK_INDEX_ENTRY_SIZE;
-    if( indexBufSize > 0 ){
-      indexBuf = (u8 *)sqlite3_malloc(indexBufSize);
-      if( indexBuf == 0 ){ close(fd); unlink(zJournal); rc = SQLITE_NOMEM; goto commit_error; }
-      for( i = 0; i < nMerged; i++ ){
-        csSerializeIndexEntry(&aMerged[i], indexBuf + i * CHUNK_INDEX_ENTRY_SIZE);
-      }
-      JOURNAL_WRITE(indexBuf, indexBufSize, writePos);
-    }
-
-    /* -- Rewrite manifest header -- */
+    /* Write root record: tag(1) + manifest(168) */
     {
-      ChunkStore tmp;
-      memset(&tmp, 0, sizeof(tmp));
-      memcpy(&tmp.root, &cs->root, sizeof(ProllyHash));
-      memcpy(&tmp.catalog, &cs->catalog, sizeof(ProllyHash));
-      memcpy(&tmp.headCommit, &cs->headCommit, sizeof(ProllyHash));
-      memcpy(&tmp.stagedCatalog, &cs->stagedCatalog, sizeof(ProllyHash));
-      memcpy(&tmp.refsHash, &cs->refsHash, sizeof(ProllyHash));
-      tmp.isMerging = cs->isMerging;
-      memcpy(&tmp.mergeCommitHash, &cs->mergeCommitHash, sizeof(ProllyHash));
-      memcpy(&tmp.conflictsCatalogHash, &cs->conflictsCatalogHash, sizeof(ProllyHash));
-      tmp.nChunks = nMerged;
-      tmp.iIndexOffset = writePos;
-      tmp.nIndexSize = indexBufSize;
-      csSerializeManifest(&tmp, hdrBuf);
+      u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
+      rootRec[0] = CS_WAL_TAG_ROOT;
+      csSerializeManifest(cs, rootRec + 1);
+      ssize_t n = write(walFd, rootRec, sizeof(rootRec));
+      if( n != (ssize_t)sizeof(rootRec) ){
+        close(walFd);
+        sqlite3_free(zWal);
+        rc = SQLITE_IOERR_WRITE;
+        goto commit_error;
+      }
     }
-    JOURNAL_WRITE(hdrBuf, CHUNK_MANIFEST_SIZE, 0);
 
-    /* -- fsync and close -- */
-    fsync(fd);
-    close(fd);
-    #undef JOURNAL_WRITE
+    /* fsync — this is the durability point */
+    fsync(walFd);
+    close(walFd);
+    sqlite3_free(zWal);
   }
 
-  if( cs->pFile ){
-    csCloseFile(cs->pFile);
-    cs->pFile = 0;
+  /* Update in-memory index: append chunk data to pWalData and set
+  ** negative offsets for WAL-based reads. O(new_chunks) only. */
+  for( i = 0; i < cs->nPending; i++ ){
+    ChunkIndexEntry *pe = &cs->aPending[i];
+    i64 bufOff = pe->offset + 4;  /* skip length prefix */
+    int sz = pe->size;
+
+    /* Append chunk data to in-memory WAL buffer */
+    i64 newSize = cs->nWalData + sz;
+    u8 *newBuf = (u8*)sqlite3_realloc64(cs->pWalData, newSize);
+    if( newBuf ){
+      memcpy(newBuf + cs->nWalData, cs->pWriteBuf + bufOff, sz);
+      pe->offset = -(i64)cs->nWalData - 1;  /* negative = WAL offset */
+      cs->pWalData = newBuf;
+      cs->nWalData = newSize;
+    }
   }
 
-  /* -- Atomic rename: temp over original -- */
-  rc = rename(zJournal, cs->zFilename);
-  if( rc != 0 ){
-    rc = SQLITE_IOERR;
-    goto commit_error;
-  }
-
-  /* -- Re-open the file and reload state -- */
   {
-    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-    rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile, openFlags);
-    if( rc != SQLITE_OK ) goto commit_error;
+    ChunkIndexEntry *aMerged2 = 0;
+    int nMerged2 = 0;
+    rc = csMergeIndex(cs, &aMerged2, &nMerged2);
+    if( rc == SQLITE_OK ){
+      sqlite3_free(cs->aIndex);
+      cs->aIndex = aMerged2;
+      cs->nIndex = nMerged2;
+      cs->nIndexAlloc = nMerged2;
+    }
   }
-
-  /* Update in-memory state */
-  sqlite3_free(cs->aIndex);
-  cs->aIndex = aMerged;
-  cs->nIndex = nMerged;
-  cs->nIndexAlloc = nMerged;
-  aMerged = 0;  /* ownership transferred */
-
-  cs->nChunks = nMerged;
-  cs->iIndexOffset = writePos;
-  cs->nIndexSize = indexBufSize;
-  cs->iAppendOffset = writePos;  /* next chunk goes before the index */
 
   /* Clear pending state */
   sqlite3_free(cs->pWriteBuf);
@@ -1161,24 +1332,10 @@ int chunkStoreCommit(ChunkStore *cs){
   cs->nWriteBuf = 0;
   cs->nWriteBufAlloc = 0;
   cs->nPending = 0;
-  /* Keep aPending allocation for reuse */
 
-  sqlite3_free(indexBuf);
-  sqlite3_free(zJournal);
   return SQLITE_OK;
 
 commit_error:
-  /* On error, restore pending offsets back to buffer-local.
-  ** This is best-effort; the store remains usable for rollback. */
-  for( i = 0; i < cs->nPending; i++ ){
-    if( cs->aPending[i].offset >= pendingFileBase ){
-      cs->aPending[i].offset -= pendingFileBase;
-    }
-  }
-  if( zJournal ){
-    unlink(zJournal);
-    sqlite3_free(zJournal);
-  }
   sqlite3_free(aMerged);
   sqlite3_free(indexBuf);
   return rc;
@@ -1272,6 +1429,9 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   }else{
     cs->iAppendOffset = CHUNK_MANIFEST_SIZE;
   }
+  /* Replay WAL after refreshing from main file */
+  rc = csReplayWal(cs);
+  if( rc!=SQLITE_OK ) return rc;
   *pChanged = 1;
   return SQLITE_OK;
 }

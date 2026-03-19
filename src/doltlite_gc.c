@@ -22,6 +22,7 @@
 #include "doltlite_commit.h"
 
 #include <string.h>
+#include <unistd.h>
 
 /* Provided by prolly_btree.c */
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
@@ -384,6 +385,9 @@ static int gcSweep(
       int nChunkData = 0;
       rc = chunkStoreGet(cs, &cs->aIndex[i].hash, &chunkData, &nChunkData);
       if( rc!=SQLITE_OK ){
+        fprintf(stderr, "GC: chunkStoreGet failed rc=%d idx=%d offset=%lld size=%d walData=%p nWal=%lld\n",
+                rc, i, (long long)cs->aIndex[i].offset, cs->aIndex[i].size,
+                (void*)cs->pWalData, (long long)cs->nWalData);
         sqlite3_free(aNewIndex);
         sqlite3_free(buf);
         return rc;
@@ -563,22 +567,52 @@ static int gcSweep(
             /* Close our current file handle */
             if( cs->pFile && cs->pFile->pMethods ){
               cs->pFile->pMethods->xClose(cs->pFile);
+              cs->pFile = 0;
             }
 
-            /* Rename temp over original */
-            rc = cs->pVfs->xDelete(cs->pVfs, cs->zFilename, 0);
-            if( rc==SQLITE_OK ){
-              /* Use system rename */
-              if( rename(zTmp, cs->zFilename)!=0 ){
-                rc = SQLITE_IOERR;
+            /* Delete old main file if it exists */
+            {
+              int exists = 0;
+              cs->pVfs->xAccess(cs->pVfs, cs->zFilename,
+                                SQLITE_ACCESS_EXISTS, &exists);
+              if( exists ){
+                cs->pVfs->xDelete(cs->pVfs, cs->zFilename, 0);
               }
             }
 
-            /* Reopen the file */
+            /* Rename temp over original */
+            if( rename(zTmp, cs->zFilename)!=0 ){
+              rc = SQLITE_IOERR;
+            }
+
+            /* Delete WAL file if it exists (data is now in main file) */
+            if( rc==SQLITE_OK ){
+              char *zWal = sqlite3_mprintf("%s-wal", cs->zFilename);
+              if( zWal ){
+                unlink(zWal);
+                sqlite3_free(zWal);
+              }
+              /* Free WAL in-memory data */
+              sqlite3_free(cs->pWalData);
+              cs->pWalData = 0;
+              cs->nWalData = 0;
+            }
+
+            /* Reopen the file (allocate fresh file handle) */
             if( rc==SQLITE_OK ){
               int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-              rc = cs->pVfs->xOpen(cs->pVfs, cs->zFilename, cs->pFile,
-                                   reopenFlags, &dummy);
+              sqlite3_file *pNewFile = sqlite3_malloc(cs->pVfs->szOsFile);
+              if( pNewFile ){
+                rc = cs->pVfs->xOpen(cs->pVfs, cs->zFilename, pNewFile,
+                                     reopenFlags, &dummy);
+                if( rc==SQLITE_OK ){
+                  cs->pFile = pNewFile;
+                } else {
+                  sqlite3_free(pNewFile);
+                }
+              } else {
+                rc = SQLITE_NOMEM;
+              }
             }
           }else{
             /* Clean up temp on failure */
