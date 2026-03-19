@@ -1,6 +1,8 @@
 name: Benchmark
 
 on:
+  push:
+    branches: [master]
   pull_request:
     branches: [master]
 
@@ -47,6 +49,7 @@ jobs:
         } >> "$GITHUB_OUTPUT"
 
     - name: Comment PR with results
+      if: github.event_name == 'pull_request'
       uses: actions/github-script@v7
       with:
         script: |

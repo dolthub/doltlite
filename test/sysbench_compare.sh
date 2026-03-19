@@ -278,17 +278,17 @@ else:
 "
 }
 
-TESTS="oltp_bulk_insert oltp_point_select oltp_range_select oltp_sum_range oltp_order_range oltp_distinct_range oltp_index_scan oltp_update_index oltp_update_non_index oltp_delete_insert oltp_insert oltp_write_only select_random_points select_random_ranges covering_index_scan groupby_scan index_join index_join_scan types_delete_insert types_table_scan table_scan oltp_read_only oltp_read_write"
+READ_TESTS="oltp_point_select oltp_range_select oltp_sum_range oltp_order_range oltp_distinct_range oltp_index_scan select_random_points select_random_ranges covering_index_scan groupby_scan index_join index_join_scan types_table_scan table_scan oltp_read_only"
+WRITE_TESTS="oltp_bulk_insert oltp_insert oltp_update_index oltp_update_non_index oltp_delete_insert oltp_write_only types_delete_insert oltp_read_write"
 
 # ============================================================
 # Output markdown table
 # ============================================================
-echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
-echo ""
-echo "| Test | SQLite (ms) | Doltlite (ms) | Multiplier |"
-echo "|------|-------------|---------------|------------|"
-
-for t in $TESTS; do
+run_section() {
+  local tests="$1"
+  echo "| Test | SQLite (ms) | Doltlite (ms) | Multiplier |"
+  echo "|------|-------------|---------------|------------|"
+  for t in $tests; do
   s=$(run_bench sqlite "$SQLITE3" "$TMPDIR/$t.sql")
   d=$(run_bench doltlite "$DOLTLITE" "$TMPDIR/$t.sql")
   s_display="$s"
@@ -301,7 +301,18 @@ for t in $TESTS; do
     ratio="--"
   fi
   echo "| $t | $s_display | $d_display | ${ratio} |"
-done
+  done
+}
+
+echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
+echo ""
+echo "### Reads"
+echo ""
+run_section "$READ_TESTS"
+echo ""
+echo "### Writes"
+echo ""
+run_section "$WRITE_TESTS"
 
 echo ""
 echo "_${ROWS} rows, in-memory, single CLI invocation per test, .timer on for workload only._"
