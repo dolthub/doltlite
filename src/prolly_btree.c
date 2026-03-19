@@ -2088,45 +2088,174 @@ int sqlite3BtreeIndexMoveto(
 
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  /* Flush pending index mutations before scanning.
-  ** BLOBKEY writes are never deferred (SQLite's serialized record format
-  ** doesn't sort correctly under memcmp), but other cursors on the same
-  ** table might have pending mutations from prior operations. */
-  rc = flushIfNeeded(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Flush OTHER cursors' pending mutations on this table.
+  ** Our own MutMap is handled inline via two-pass scan. */
+  {
+    BtCursor *p;
+    for(p = pCur->pBt->pCursor; p; p = p->pNext){
+      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
+       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
+        rc = flushMutMap(p);
+        if( rc!=SQLITE_OK ) return rc;
+        p->eState = CURSOR_INVALID;
+      }
+    }
+  }
 
   refreshCursorRoot(pCur);
 
   /*
-  ** For index btrees, the prolly tree stores serialized record blobs as keys.
-  ** We scan forward comparing each key with the UnpackedRecord using
-  ** sqlite3VdbeRecordCompare until we find a match or go past it.
+  ** Two-pass scan: check the tree and our own MutMap independently.
+  ** We can't merge them by memcmp because SQLite's serialized record
+  ** format doesn't sort correctly under memcmp (different serial type
+  ** codes for equivalent values). Instead, scan each source using
+  ** VdbeRecordCompare against the search key, then pick the best match.
   */
-  rc = prollyCursorFirst(&pCur->pCur, &res);
-  if( rc!=SQLITE_OK || res!=0 ){
-    *pRes = -1;
-    pCur->eState = CURSOR_INVALID;
-    return rc;
-  }
 
-  while( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-    const u8 *pKey;
-    int nKey;
-    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-    pIdxKey->eqSeen = 0;
-    cmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
-    if( cmp==0 || pIdxKey->eqSeen ){
-      *pRes = cmp;
-      pCur->eState = CURSOR_VALID;
-      return SQLITE_OK;
-    }else if( cmp>0 ){
-      *pRes = cmp;
+  /* ---- Pass 1: Scan tree for first entry >= search key ---- */
+  /* Skip any tree entry that is deleted in our MutMap. */
+  {
+    int treeFound = 0;
+    int treeCmp = 0;
+
+    rc = prollyCursorFirst(&pCur->pCur, &res);
+    if( rc==SQLITE_OK && res==0 ){
+      while( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+        const u8 *pKey;
+        int nKey;
+        prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+
+        /* Skip if this key is deleted in our MutMap */
+        if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+          ProllyMutMapEntry *mmE = prollyMutMapFind(
+              pCur->pMutMap, pKey, nKey, 0);
+          if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+            rc = prollyCursorNext(&pCur->pCur);
+            if( rc!=SQLITE_OK ) break;
+            continue;
+          }
+        }
+
+        pIdxKey->eqSeen = 0;
+        cmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
+        if( cmp==0 || pIdxKey->eqSeen ){
+          treeCmp = cmp;
+          treeFound = 1;
+          break;
+        }else if( cmp>0 ){
+          treeCmp = cmp;
+          treeFound = 1;
+          break;
+        }
+        rc = prollyCursorNext(&pCur->pCur);
+        if( rc!=SQLITE_OK ) break;
+      }
+    }
+
+    /* ---- Pass 2: Check MutMap INSERT entries ---- */
+    /* Only needed if we have pending edits AND the tree didn't find an
+    ** exact match. For UPDATE (seeking old index entry), the entry is
+    ** always in the tree, so this pass is skipped in the common case. */
+    if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)
+     && !(treeFound && treeCmp==0) ){
+      ProllyMutMapIter mutIter;
+      int mutFound = 0;
+      int mutCmp = 0;
+      const u8 *mutKey = 0;
+      int mutNKey = 0;
+
+      prollyMutMapIterFirst(&mutIter, pCur->pMutMap);
+      while( prollyMutMapIterValid(&mutIter) ){
+        ProllyMutMapEntry *mutE = prollyMutMapIterEntry(&mutIter);
+        if( mutE->op==PROLLY_EDIT_INSERT ){
+          pIdxKey->eqSeen = 0;
+          cmp = sqlite3VdbeRecordCompare(mutE->nKey, mutE->pKey, pIdxKey);
+          if( cmp==0 || pIdxKey->eqSeen ){
+            mutCmp = cmp;
+            mutKey = mutE->pKey;
+            mutNKey = mutE->nKey;
+            mutFound = 1;
+            break;
+          }else if( cmp>0 ){
+            /* First MutMap entry > search key. Check if it beats tree. */
+            if( !mutFound ){
+              mutCmp = cmp;
+              mutKey = mutE->pKey;
+              mutNKey = mutE->nKey;
+              mutFound = 1;
+            }
+            break;
+          }
+        }
+        prollyMutMapIterNext(&mutIter);
+      }
+
+      /* ---- Pick the best result ---- */
+      if( mutFound && treeFound ){
+        /* Both found candidates. Prefer exact match. If both are cmp>0,
+        ** compare them to each other to pick the closer one. */
+        if( mutCmp==0 || pIdxKey->eqSeen ){
+          /* MutMap has exact match — use it */
+          goto use_mutmap;
+        }else if( treeCmp==0 ){
+          /* Tree has exact match — already positioned */
+          goto use_tree;
+        }else{
+          /* Both cmp>0. Compare entries to each other using pKeyInfo.
+          ** Unpack tree entry and compare MutMap entry against it. */
+          UnpackedRecord *pTmp = sqlite3VdbeAllocUnpackedRecord(pCur->pKeyInfo);
+          if( pTmp ){
+            const u8 *tKey; int tNKey;
+            int ord;
+            prollyCursorKey(&pCur->pCur, &tKey, &tNKey);
+            sqlite3VdbeRecordUnpack(tNKey, tKey, pTmp);
+            pTmp->default_rc = 0;
+            ord = sqlite3VdbeRecordCompare(mutNKey, mutKey, pTmp);
+            sqlite3DbFree(pCur->pKeyInfo->db, pTmp);
+            if( ord<0 ){
+              /* MutMap entry is smaller (closer to search key) */
+              goto use_mutmap;
+            }
+          }
+          /* Tree entry is smaller or equal — use tree */
+          goto use_tree;
+        }
+      }else if( mutFound ){
+        goto use_mutmap;
+      }else if( treeFound ){
+        goto use_tree;
+      }
+
+      /* Neither found — fall through to end-of-tree handling */
+      goto no_match;
+
+use_mutmap:
+      /* Position on MutMap entry: cache key as payload */
+      if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
+        sqlite3_free(pCur->pCachedPayload);
+      }
+      pCur->pCachedPayload = sqlite3_malloc(mutNKey);
+      if( pCur->pCachedPayload ){
+        memcpy(pCur->pCachedPayload, mutKey, mutNKey);
+        pCur->nCachedPayload = mutNKey;
+      } else {
+        pCur->nCachedPayload = 0;
+      }
+      pCur->cachedPayloadOwned = 1;
+      *pRes = mutCmp;
       pCur->eState = CURSOR_VALID;
       return SQLITE_OK;
     }
-    rc = prollyCursorNext(&pCur->pCur);
-    if( rc!=SQLITE_OK ) break;
+
+use_tree:
+    if( treeFound ){
+      *pRes = treeCmp;
+      pCur->eState = CURSOR_VALID;
+      return SQLITE_OK;
+    }
   }
+
+no_match:
   /* Ran off the end — all stored keys < search key.
   ** Position at the last entry if possible. */
   {
@@ -2290,17 +2419,14 @@ int sqlite3BtreeInsert(
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Defer flush for persistent INTKEY data tables. The MutMap accumulates edits
+  /* Defer flush for persistent non-master tables. The MutMap accumulates edits
   ** and they are flushed at commit time via flushAllPending. TableMoveto
-  ** checks MutMap so reads see pending edits.
-  ** BLOBKEY (index) tables flush immediately because SQLite's serialized
-  ** record format does NOT sort correctly under memcmp, making merge-scan
-  ** of tree+MutMap unreliable. Only defer for INTKEY tables.
+  ** and IndexMoveto check MutMap so reads see pending edits.
   ** Only defer for tables in aCommittedTables — ephemeral tables (CTE working
   ** tables, autoindexes) need immediate writes. */
   {
     int canDefer = 0;
-    if( pCur->curIntKey && pCur->pgnoRoot > 1 ){
+    if( pCur->pgnoRoot > 1 ){
       Btree *pBtree = pCur->pBtree;
       if( pBtree->aCommittedTables ){
         int i;
@@ -2570,10 +2696,10 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Defer flush for persistent INTKEY data tables, same as Insert. */
+  /* Defer flush for persistent non-master tables, same as Insert. */
   {
     int canDefer = 0;
-    if( pCur->curIntKey && pCur->pgnoRoot > 1 ){
+    if( pCur->pgnoRoot > 1 ){
       Btree *pBtree = pCur->pBtree;
       if( pBtree->aCommittedTables ){
         int i;
