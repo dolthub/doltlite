@@ -352,46 +352,43 @@ does version control cost?
 
 Every PR runs a [sysbench-style benchmark](test/sysbench_compare.sh) comparing
 doltlite against stock SQLite on 23 OLTP workloads. Results are posted as a PR
-comment. These are the same benchmarks
-[Dolt](https://docs.dolthub.com/sql-reference/benchmarks/latency) uses to
-track performance against MySQL.
+comment.
 
 #### Reads
 
-| Test | Doltlite vs SQLite | Dolt vs MySQL |
-|------|-------------------|---------------|
-| oltp_point_select | 0.97 | 1.35 |
-| oltp_range_select | 0.97 | -- |
-| oltp_sum_range | 1.14 | -- |
-| oltp_order_range | 1.00 | -- |
-| oltp_distinct_range | 1.00 | -- |
-| oltp_index_scan | 12.67 | 0.65 |
-| select_random_points | 1.93 | 1.51 |
-| select_random_ranges | 1.00 | 1.41 |
-| covering_index_scan | 5.25 | 0.28 |
-| groupby_scan | 1.08 | 0.75 |
-| index_join | 6.67 | 1.2 |
-| index_join_scan | 56.67 | 0.95 |
-| types_table_scan | 1.00 | 0.87 |
-| table_scan | 1.00 | 0.64 |
-| oltp_read_only | 1.14 | 1.36 |
+| Test | Multiplier |
+|------|------------|
+| oltp_point_select | 0.97 |
+| oltp_range_select | 0.97 |
+| oltp_sum_range | 1.14 |
+| oltp_order_range | 1.00 |
+| oltp_distinct_range | 1.00 |
+| oltp_index_scan | 12.67 |
+| select_random_points | 1.93 |
+| select_random_ranges | 1.00 |
+| covering_index_scan | 5.25 |
+| groupby_scan | 1.08 |
+| index_join | 6.67 |
+| index_join_scan | 56.67 |
+| types_table_scan | 1.00 |
+| table_scan | 1.00 |
+| oltp_read_only | 1.14 |
 
 #### Writes
 
-| Test | Doltlite vs SQLite | Dolt vs MySQL |
-|------|-------------------|---------------|
-| oltp_bulk_insert | 1.36 | -- |
-| oltp_insert | 368 | 0.75 |
-| oltp_update_index | crash | 0.75 |
-| oltp_update_non_index | crash | 0.75 |
-| oltp_delete_insert | 943 | 0.76 |
-| oltp_write_only | crash | 1.15 |
-| types_delete_insert | crash | 0.79 |
-| oltp_read_write | crash | 1.24 |
+| Test | Multiplier |
+|------|------------|
+| oltp_bulk_insert | 1.36 |
+| oltp_insert | 368 |
+| oltp_update_index | crash |
+| oltp_update_non_index | crash |
+| oltp_delete_insert | 943 |
+| oltp_write_only | crash |
+| types_delete_insert | crash |
+| oltp_read_write | crash |
 
-_Dolt numbers from [docs.dolthub.com](https://docs.dolthub.com/sql-reference/benchmarks/latency).
-Doltlite numbers from `test/sysbench_compare.sh` (10K rows, in-memory, macOS ARM).
-"crash" = cursor invalidation bug during prolly tree flush ([tracking issue](https://github.com/timsehn/doltlite/issues))._
+_10K rows, in-memory, macOS ARM. Run `test/sysbench_compare.sh` to reproduce._
+"crash" = cursor invalidation bug during prolly tree flush (fix in progress)._
 
 **Reads are at parity for most workloads.** The VDBE, query planner, parser,
 and all upper layers are untouched SQLite — only the storage engine is
@@ -409,10 +406,9 @@ complete show 300-900x multipliers. This is not inherent to the architecture —
 Dolt achieves sub-2x write multipliers against MySQL using the same prolly tree
 design with proper write batching and cursor management.
 
-**For comparison**, Dolt's sysbench results show that a mature prolly tree
-implementation achieves ~1x reads and ~0.75-1.5x writes against MySQL.
-Doltlite's high write multipliers and crashes indicate early-stage optimization
-work needed in the cursor lifecycle and chunk store flush path.
+Doltlite's write path is early-stage — the high multipliers and crashes
+indicate optimization work needed in the cursor lifecycle and chunk store
+flush path.
 
 ### Algorithmic Complexity
 
