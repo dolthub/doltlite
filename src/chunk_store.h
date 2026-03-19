@@ -169,6 +169,8 @@ int chunkStoreIsEmpty(ChunkStore *cs);
 /* Get the filename */
 const char *chunkStoreFilename(ChunkStore *cs);
 
+int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged);
+
 /* Merge state accessors */
 int chunkStoreGetMergeState(ChunkStore *cs, u8 *pIsMerging,
                             ProllyHash *pMergeCommit,

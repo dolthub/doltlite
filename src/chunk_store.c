@@ -1187,6 +1187,68 @@ const char *chunkStoreFilename(ChunkStore *cs){
   return cs->zFilename;
 }
 
+
+int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
+  int bMoved = 0;
+  int rc;
+  *pChanged = 0;
+  if( cs->zFilename==0 || cs->zFilename[0]=='\0'
+   || strcmp(cs->zFilename, ":memory:")==0 ){
+    return SQLITE_OK;
+  }
+  if( cs->pFile==0 ){
+    int exists = 0;
+    rc = sqlite3OsAccess(cs->pVfs, cs->zFilename,
+                         SQLITE_ACCESS_EXISTS, &exists);
+    if( rc!=SQLITE_OK || !exists ) return SQLITE_OK;
+    bMoved = 1;
+  }else{
+    rc = sqlite3OsFileControl(cs->pFile,
+                              SQLITE_FCNTL_HAS_MOVED, &bMoved);
+    if( rc!=SQLITE_OK ) return SQLITE_OK;
+  }
+  if( !bMoved ) return SQLITE_OK;
+  if( cs->pFile ){
+    csCloseFile(cs->pFile);
+    cs->pFile = 0;
+  }
+  sqlite3_free(cs->aIndex);
+  cs->aIndex = 0; cs->nIndex = 0; cs->nIndexAlloc = 0;
+  { int i; for(i=0;i<cs->nBranches;i++) sqlite3_free(cs->aBranches[i].zName); }
+  sqlite3_free(cs->aBranches);
+  cs->aBranches = 0; cs->nBranches = 0;
+  { int i; for(i=0;i<cs->nTags;i++) sqlite3_free(cs->aTags[i].zName); }
+  sqlite3_free(cs->aTags);
+  cs->aTags = 0; cs->nTags = 0;
+  sqlite3_free(cs->zDefaultBranch);
+  cs->zDefaultBranch = 0;
+  {
+    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
+    rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile, openFlags);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = csReadManifest(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = csReadIndex(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !prollyHashIsEmpty(&cs->refsHash) ){
+    u8 *refsData = 0; int nRefsData = 0;
+    rc = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
+    if( rc==SQLITE_OK ){
+      csDeserializeRefs(cs, refsData, nRefsData);
+      sqlite3_free(refsData);
+    }
+  }
+  if( !cs->zDefaultBranch ) cs->zDefaultBranch = sqlite3_mprintf("main");
+  if( cs->iIndexOffset > 0 ){
+    cs->iAppendOffset = cs->iIndexOffset;
+  }else{
+    cs->iAppendOffset = CHUNK_MANIFEST_SIZE;
+  }
+  *pChanged = 1;
+  return SQLITE_OK;
+}
+
 /* --- Merge state accessors --- */
 
 /*
