@@ -3162,24 +3162,25 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
 }
 
 /*
-** Resolve a rootpage (iTable) to its table name.
+** Resolve a rootpage (iTable) to its table name by scanning the in-memory
+** schema hash table directly. This avoids calling sqlite3_prepare_v2 which
+** would trigger the full SQL parser and query planner, causing stack overflow
+** when called from serializeCatalog during BtreeCommitPhaseTwo.
 ** Returns sqlite3_malloc'd string. Caller must sqlite3_free.
 */
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
-  sqlite3_stmt *pStmt = 0;
-  char *zName = 0;
-  int rc;
-  rc = sqlite3_prepare_v2(db,
-    "SELECT name FROM sqlite_master WHERE type='table' AND rootpage=?",
-    -1, &pStmt, 0);
-  if( rc!=SQLITE_OK ) return 0;
-  sqlite3_bind_int(pStmt, 1, (int)iTable);
-  if( sqlite3_step(pStmt)==SQLITE_ROW ){
-    const char *z = (const char*)sqlite3_column_text(pStmt, 0);
-    if( z ) zName = sqlite3_mprintf("%s", z);
+  Schema *pSchema;
+  HashElem *k;
+  if( !db || db->nDb<=0 ) return 0;
+  pSchema = db->aDb[0].pSchema;
+  if( !pSchema ) return 0;
+  for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
+    Table *pTab = (Table*)sqliteHashData(k);
+    if( pTab && pTab->tnum==(Pgno)iTable ){
+      return sqlite3_mprintf("%s", pTab->zName);
+    }
   }
-  sqlite3_finalize(pStmt);
-  return zName;
+  return 0;
 }
 
 /*
