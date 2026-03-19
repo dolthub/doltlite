@@ -250,21 +250,29 @@ make_test("oltp_read_write",     prep_main, w_read_write)
 PYEOF
 
 # ============================================================
-# Run each test: prepare DB, then time the workload separately
+# Run each test: single CLI invocation, .timer on for workload only
 # ============================================================
 run_bench() {
   local engine="$1" binary="$2" sql_file="$3"
-  local db="/tmp/bench_${engine}_$$.db"
-  rm -f "$db"
-  # Split: everything before BENCH_START is prepare, after is workload
-  local start_line=$(grep -n "BENCH_START" "$sql_file" | cut -d: -f1)
-  local end_line=$(grep -n "BENCH_END" "$sql_file" | cut -d: -f1)
-  sed -n "1,$((start_line-1))p" "$sql_file" | "$binary" "$db" > /dev/null 2>&1
-  local t0=$(python3 -c "import time; print(int(time.time()*1000))")
-  sed -n "$((start_line+1)),$((end_line-1))p" "$sql_file" | "$binary" "$db" > /dev/null 2>&1
-  local t1=$(python3 -c "import time; print(int(time.time()*1000))")
-  rm -f "$db"
-  echo $((t1 - t0))
+  local db=":memory:"
+  # Single invocation: prepare runs without timer, workload runs with .timer on
+  # The SQL file has .print BENCH_START / BENCH_END markers
+  # We replace them with .timer on / .timer off
+  local output
+  output=$(sed \
+    -e 's/\.print BENCH_START/.timer on/' \
+    -e 's/\.print BENCH_END/.timer off/' \
+    "$sql_file" | "$binary" "$db" 2>&1)
+  # Sum all "Run Time: real X.XXX" lines (only from the timed section)
+  echo "$output" | python3 -c "
+import sys, re
+total = 0.0
+for line in sys.stdin:
+    m = re.search(r'Run Time: real (\d+\.\d+)', line)
+    if m:
+        total += float(m.group(1))
+print(int(total * 1000))
+"
 }
 
 TESTS="oltp_bulk_insert oltp_point_select oltp_range_select oltp_sum_range oltp_order_range oltp_distinct_range oltp_index_scan oltp_update_index oltp_update_non_index oltp_delete_insert oltp_insert oltp_write_only select_random_points select_random_ranges covering_index_scan groupby_scan index_join index_join_scan types_delete_insert types_table_scan table_scan oltp_read_only oltp_read_write"
@@ -289,4 +297,4 @@ for t in $TESTS; do
 done
 
 echo ""
-echo "_${ROWS} rows, file-backed, single connection per test, deterministic workload._"
+echo "_${ROWS} rows, in-memory, single CLI invocation per test, .timer on for workload only._"
