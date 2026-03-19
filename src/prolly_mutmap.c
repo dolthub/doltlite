@@ -268,17 +268,14 @@ int prollyMutMapDelete(
           pKey, nKey, intKey);
     if( c == 0 ){
       if( p->op == PROLLY_EDIT_INSERT ){
-        /* Insert then delete = no-op: remove the entry entirely */
-        for(i = 0; i < p->nLevel; i++){
-          update[i]->aForward[i] = p->aForward[i];
-        }
-        freeEntry(p);
-        mm->nEntries--;
-        /* Adjust maxLevel if needed */
-        while( mm->maxLevel > 0
-            && mm->pHeader->aForward[mm->maxLevel - 1] == 0 ){
-          mm->maxLevel--;
-        }
+        /* Convert INSERT to DELETE. We cannot simply remove the entry
+        ** because the original data may still exist in the unflushed tree.
+        ** The DELETE marker ensures reads see this key as deleted rather
+        ** than falling through to the stale tree data. */
+        p->op = PROLLY_EDIT_DELETE;
+        sqlite3_free(p->pVal);
+        p->pVal = 0;
+        p->nVal = 0;
         return SQLITE_OK;
       }else{
         /* Already a DELETE entry; nothing to do */
