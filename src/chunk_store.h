@@ -102,6 +102,8 @@ struct ChunkStore {
   int nWriteBufAlloc;
 
   u8 readOnly;               /* True if opened read-only */
+  u8 isMemory;               /* True if this is an in-memory store */
+  int nCommittedWriteBuf;    /* Bytes in pWriteBuf belonging to committed chunks */
 };
 
 /* Open or create a chunk store at the given path */
