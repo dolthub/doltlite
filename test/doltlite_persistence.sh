@@ -376,7 +376,14 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'data');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-SIZE=$(stat -f%z "$DB" 2>/dev/null || stat -c%s "$DB" 2>/dev/null)
+# Check total size of DB + WAL files
+SIZE=0
+for f in "$DB" "${DB}-wal"; do
+  if [ -f "$f" ]; then
+    S=$(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null)
+    SIZE=$((SIZE + S))
+  fi
+done
 if [ "$SIZE" -gt 100 ]; then
   PASS=$((PASS+1)); echo "  PASS: size_nonzero — $SIZE bytes"
 else
@@ -384,7 +391,7 @@ else
   echo "  FAIL: size_nonzero — $SIZE bytes (too small)"
 fi
 
-rm -f "$DB"
+rm -f "$DB" "${DB}-wal"
 
 # ============================================================
 # Done

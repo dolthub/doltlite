@@ -104,6 +104,12 @@ struct ChunkStore {
   u8 readOnly;               /* True if opened read-only */
   u8 isMemory;               /* True if this is an in-memory store */
   i64 nCommittedWriteBuf;    /* Bytes in pWriteBuf belonging to committed chunks */
+
+  /* WAL (write-ahead log) state */
+  u8 *pWalData;              /* WAL file contents (loaded on open for reads) */
+  i64 nWalData;              /* Size of pWalData */
+  char *zWalPath;            /* WAL file path */
+  int walFd;                 /* WAL file descriptor (open for append during writes) */
 };
 
 /* Open or create a chunk store at the given path */
