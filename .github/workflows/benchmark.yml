@@ -1,0 +1,79 @@
+name: Benchmark
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tcl-dev build-essential zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    - name: Build doltlite
+      run: cd build && make doltlite-lib
+
+    - name: Run benchmark
+      id: bench
+      run: |
+        cd build
+        bash ../test/sysbench_compare.sh > /tmp/bench_results.md
+        cat /tmp/bench_results.md
+        {
+          echo "results<<EOF"
+          cat /tmp/bench_results.md
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Comment PR with results
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const body = `${{ steps.bench.outputs.results }}`;
+
+          // Find existing benchmark comment
+          const comments = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          const botComment = comments.data.find(c =>
+            c.body.includes('Sysbench-Style Benchmark')
+          );
+
+          if (botComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
+          }
