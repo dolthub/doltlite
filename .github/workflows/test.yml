@@ -113,8 +113,7 @@ jobs:
     - name: Dolt schema diff tests
       run: cd build && bash ../test/doltlite_schema_diff.sh
 
-    - name: ALTER TABLE merge tests (known issues - diff across ALTER, DROP+modify)
-      continue-on-error: true
+    - name: ALTER TABLE merge tests
       run: cd build && bash ../test/doltlite_alter_merge.sh
 
     - name: Dolt garbage collection tests
@@ -134,8 +133,7 @@ jobs:
     - name: Deep feature coverage tests
       run: cd build && bash ../test/doltlite_feature_deep.sh
 
-    - name: Deep commit history tests (known issue - merge_base resolution)
-      continue-on-error: true
+    - name: Deep commit history tests
       run: cd build && bash ../test/doltlite_deep_history.sh
       timeout-minutes: 5
 
@@ -166,8 +164,7 @@ jobs:
     - name: Build libdoltlite
       run: cd build && make doltlite-lib
 
-    - name: Concurrent write test (known issue - multi-connection schema visibility)
-      continue-on-error: true
+    - name: Concurrent write test
       run: |
         cd build
         gcc -g -O0 -I. -o concurrent_write_test ../test/concurrent_write_test.c \

@@ -110,8 +110,8 @@ echo "SELECT dolt_checkout('deep_branch');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2000,'branch_extra'); SELECT dolt_commit('-A','-m','branch_change');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Get branch heads
-MAIN_HEAD=$(echo "SELECT dolt_hashof('main');" | $DOLTLITE "$DB" 2>/dev/null)
-BRANCH_HEAD=$(echo "SELECT dolt_hashof('deep_branch');" | $DOLTLITE "$DB" 2>/dev/null)
+MAIN_HEAD=$(echo "SELECT hash FROM dolt_branches WHERE name='main';" | $DOLTLITE "$DB" 2>/dev/null)
+BRANCH_HEAD=$(echo "SELECT hash FROM dolt_branches WHERE name='deep_branch';" | $DOLTLITE "$DB" 2>/dev/null)
 
 # Verify merge_base finds the right ancestor (commit_499 on main before the extra commit)
 # The branch was created from the tip of main (commit_499), so merge base = commit_499's hash

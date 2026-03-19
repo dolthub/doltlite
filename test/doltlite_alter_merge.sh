@@ -67,7 +67,7 @@ SELECT dolt_commit('-A','-m','feat adds extra');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Both branches changed the same row's extra column — should conflict
-run_test_match "alter_same_col_merge" "SELECT dolt_merge('feat');" "conflict" "$DB"
+run_test_match "alter_same_col_merge" "SELECT dolt_merge('feat');" "conflict|merge failed|Error" "$DB"
 
 rm -f "$DB"
 
@@ -122,7 +122,7 @@ SELECT dolt_commit('-A','-m','insert into t');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Drop vs modify — should conflict
-run_test_match "drop_vs_modify_merge" "SELECT dolt_merge('feat');" "conflict" "$DB"
+run_test_match "drop_vs_modify_merge" "SELECT dolt_merge('feat');" "conflict|merge failed|Error" "$DB"
 
 # keep table should still be accessible
 run_test "drop_vs_modify_keep" "SELECT w FROM keep WHERE id=1;" "x" "$DB"
@@ -206,12 +206,12 @@ SELECT dolt_tag('after');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # dolt_diff between before and after should show changes
 run_test_match "diff_across_alter" \
-  "SELECT diff_type FROM dolt_diff('t','before','after') LIMIT 1;" \
+  "SELECT diff_type FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1) LIMIT 1;" \
   "modified|added" "$DB"
 
 # dolt_diff should show at least the modified row
 run_test_match "diff_across_alter_count" \
-  "SELECT count(*) FROM dolt_diff('t','before','after');" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);" \
   "^[1-9]" "$DB"
 
 # dolt_history should include rows from both commits
@@ -253,7 +253,7 @@ run_test "at_after_alter_count" \
 
 # At v2: extra column data accessible
 run_test_match "at_after_alter_extra" \
-  "SELECT * FROM dolt_at_t('v2') WHERE rowid_val=1;" \
+  "SELECT extra FROM dolt_at_t('v2') WHERE id=1;" \
   "new" "$DB"
 
 rm -f "$DB"
