@@ -712,9 +712,16 @@ static int saveCursorPosition(BtCursor *pCur){
   }
 
   /* If the prolly cursor isn't actually valid (e.g. empty tree, or
-  ** cursor was set to CURSOR_VALID without a successful seek), just
-  ** invalidate rather than trying to save a position we don't have. */
+  ** cursor was set to CURSOR_VALID without a successful seek via MutMap),
+  ** use cached key data if available, otherwise invalidate. */
   if( !prollyCursorIsValid(&pCur->pCur) ){
+    if( pCur->curIntKey && (pCur->curFlags & BTCF_ValidNKey) ){
+      /* MutMap-satisfied seek: save the cached integer key */
+      pCur->nKey = pCur->cachedIntKey;
+      pCur->pKey = 0;
+      pCur->eState = CURSOR_REQUIRESEEK;
+      return SQLITE_OK;
+    }
     pCur->eState = CURSOR_INVALID;
     return SQLITE_OK;
   }
@@ -2197,6 +2204,11 @@ int sqlite3BtreeIndexMoveto(
 i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
   assert( pCur->eState==CURSOR_VALID );
   assert( pCur->curIntKey );
+  /* When the seek was satisfied from the MutMap the prolly cursor may
+  ** not be positioned. Return the cached key in that case. */
+  if( pCur->curFlags & BTCF_ValidNKey ){
+    return pCur->cachedIntKey;
+  }
   return prollyCursorIntKey(&pCur->pCur);
 }
 
