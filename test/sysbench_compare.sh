@@ -250,43 +250,85 @@ make_test("oltp_read_write",     prep_main, w_read_write)
 PYEOF
 
 # ============================================================
-# Run each test: prepare DB, then time the workload separately
+# Run each test: single CLI invocation, SQL timestamps for timing
 # ============================================================
 run_bench() {
-  local engine="$1" binary="$2" sql_file="$3"
-  local db="/tmp/bench_${engine}_$$.db"
-  rm -f "$db"
-  # Split: everything before BENCH_START is prepare, after is workload
-  local start_line=$(grep -n "BENCH_START" "$sql_file" | cut -d: -f1)
-  local end_line=$(grep -n "BENCH_END" "$sql_file" | cut -d: -f1)
-  sed -n "1,$((start_line-1))p" "$sql_file" | "$binary" "$db" > /dev/null 2>&1
-  local t0=$(python3 -c "import time; print(int(time.time()*1000))")
-  sed -n "$((start_line+1)),$((end_line-1))p" "$sql_file" | "$binary" "$db" > /dev/null 2>&1
-  local t1=$(python3 -c "import time; print(int(time.time()*1000))")
-  rm -f "$db"
-  echo $((t1 - t0))
+  local engine="$1" binary="$2" sql_file="$3" db_template="$4"
+  # For file-backed, use a unique temp file per invocation
+  local db="$db_template"
+  if [ "$db" != ":memory:" ]; then
+    db="/tmp/bench_${engine}_${RANDOM}_$$.db"
+    rm -f "$db"
+  fi
+  local output
+  output=$(sed \
+    -e "s/\.print BENCH_START/SELECT 'TS_START:' || (julianday('now')*86400000);/" \
+    -e "s/\.print BENCH_END/SELECT 'TS_END:' || (julianday('now')*86400000);/" \
+    "$sql_file" | "$binary" "$db" 2>&1)
+  if [ "$db" != ":memory:" ]; then rm -f "$db"; fi
+  # Extract timestamps and compute delta
+  echo "$output" | python3 -c "
+import sys, re
+start = end = None
+for line in sys.stdin:
+    m = re.search(r'TS_START:(\d+)', line)
+    if m: start = int(m.group(1))
+    m = re.search(r'TS_END:(\d+)', line)
+    if m: end = int(m.group(1))
+if start is not None and end is not None:
+    print(end - start)
+else:
+    print(-1)
+"
 }
 
-TESTS="oltp_bulk_insert oltp_point_select oltp_range_select oltp_sum_range oltp_order_range oltp_distinct_range oltp_index_scan oltp_update_index oltp_update_non_index oltp_delete_insert oltp_insert oltp_write_only select_random_points select_random_ranges covering_index_scan groupby_scan index_join index_join_scan types_delete_insert types_table_scan table_scan oltp_read_only oltp_read_write"
+READ_TESTS="oltp_point_select oltp_range_select oltp_sum_range oltp_order_range oltp_distinct_range oltp_index_scan select_random_points select_random_ranges covering_index_scan groupby_scan index_join index_join_scan types_table_scan table_scan oltp_read_only"
+WRITE_TESTS="oltp_bulk_insert oltp_insert oltp_update_index oltp_update_non_index oltp_delete_insert oltp_write_only types_delete_insert oltp_read_write"
 
 # ============================================================
 # Output markdown table
 # ============================================================
-echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
-echo ""
-echo "| Test | SQLite (ms) | Doltlite (ms) | Multiplier |"
-echo "|------|-------------|---------------|------------|"
-
-for t in $TESTS; do
-  s=$(run_bench sqlite "$SQLITE3" "$TMPDIR/$t.sql")
-  d=$(run_bench doltlite "$DOLTLITE" "$TMPDIR/$t.sql")
-  if [ "$s" -gt 0 ] 2>/dev/null; then
+run_section() {
+  local tests="$1" db_sq="$2" db_dl="$3"
+  echo "| Test | SQLite (ms) | Doltlite (ms) | Multiplier |"
+  echo "|------|-------------|---------------|------------|"
+  for t in $tests; do
+  s=$(run_bench sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
+  d=$(run_bench doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
+  s_display="$s"
+  d_display="$d"
+  if [ "$s" -eq -1 ] 2>/dev/null; then s_display="crash"; fi
+  if [ "$d" -eq -1 ] 2>/dev/null; then d_display="crash"; fi
+  if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
     ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
   else
-    ratio="N/A"
+    ratio="--"
   fi
-  echo "| $t | $s | $d | ${ratio} |"
-done
+  echo "| $t | $s_display | $d_display | ${ratio} |"
+  done
+}
+
+echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
+echo ""
+echo "### In-Memory"
+echo ""
+echo "#### Reads"
+echo ""
+run_section "$READ_TESTS" ":memory:" ":memory:"
+echo ""
+echo "#### Writes"
+echo ""
+run_section "$WRITE_TESTS" ":memory:" ":memory:"
+echo ""
+echo "### File-Backed"
+echo ""
+echo "#### Reads"
+echo ""
+run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+echo ""
+echo "#### Writes"
+echo ""
+run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
-echo "_${ROWS} rows, file-backed, single connection per test, deterministic workload._"
+echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"

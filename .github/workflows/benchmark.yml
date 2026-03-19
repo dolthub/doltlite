@@ -1,6 +1,8 @@
 name: Benchmark
 
 on:
+  push:
+    branches: [master]
   pull_request:
     branches: [master]
 
@@ -31,8 +33,11 @@ jobs:
           ../configure
         fi
 
-    - name: Build doltlite
-      run: cd build && make doltlite-lib
+    - name: Build doltlite and stock SQLite
+      run: |
+        cd build
+        make doltlite
+        make DOLTLITE_PROLLY=0 sqlite3
 
     - name: Run benchmark
       id: bench
@@ -51,6 +56,11 @@ jobs:
       with:
         script: |
           const body = `${{ steps.bench.outputs.results }}`;
+
+          if (!context.issue.number) {
+            console.log('No PR context (push event) — skipping comment');
+            return;
+          }
 
           // Find existing benchmark comment
           const comments = await github.rest.issues.listComments({
