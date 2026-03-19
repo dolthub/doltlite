@@ -250,28 +250,31 @@ make_test("oltp_read_write",     prep_main, w_read_write)
 PYEOF
 
 # ============================================================
-# Run each test: single CLI invocation, .timer on for workload only
+# Run each test: single CLI invocation, SQL timestamps for timing
 # ============================================================
 run_bench() {
   local engine="$1" binary="$2" sql_file="$3"
   local db=":memory:"
-  # Single invocation: prepare runs without timer, workload runs with .timer on
-  # The SQL file has .print BENCH_START / BENCH_END markers
-  # We replace them with .timer on / .timer off
+  # Replace BENCH_START/END markers with SQL timestamp queries.
+  # This captures wall-clock time for just the workload, not setup.
   local output
   output=$(sed \
-    -e 's/\.print BENCH_START/.timer on/' \
-    -e 's/\.print BENCH_END/.timer off/' \
-    "$sql_file" | "$binary" "$db" 2>&1)
-  # Sum all "Run Time: real X.XXX" lines (only from the timed section)
+    -e "s/\.print BENCH_START/SELECT 'TS_START:' || (julianday('now')*86400000);/" \
+    -e "s/\.print BENCH_END/SELECT 'TS_END:' || (julianday('now')*86400000);/" \
+    "$sql_file" | perl -e 'alarm(120); exec @ARGV' "$binary" "$db" 2>&1)
+  # Extract timestamps and compute delta
   echo "$output" | python3 -c "
 import sys, re
-total = 0.0
+start = end = None
 for line in sys.stdin:
-    m = re.search(r'Run Time: real (\d+\.\d+)', line)
-    if m:
-        total += float(m.group(1))
-print(int(total * 1000))
+    m = re.search(r'TS_START:(\d+)', line)
+    if m: start = int(m.group(1))
+    m = re.search(r'TS_END:(\d+)', line)
+    if m: end = int(m.group(1))
+if start is not None and end is not None:
+    print(end - start)
+else:
+    print(-1)
 "
 }
 
@@ -288,12 +291,16 @@ echo "|------|-------------|---------------|------------|"
 for t in $TESTS; do
   s=$(run_bench sqlite "$SQLITE3" "$TMPDIR/$t.sql")
   d=$(run_bench doltlite "$DOLTLITE" "$TMPDIR/$t.sql")
-  if [ "$s" -gt 0 ] 2>/dev/null; then
+  s_display="$s"
+  d_display="$d"
+  if [ "$s" -eq -1 ] 2>/dev/null; then s_display="crash"; fi
+  if [ "$d" -eq -1 ] 2>/dev/null; then d_display="crash"; fi
+  if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
     ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
   else
-    ratio="N/A"
+    ratio="--"
   fi
-  echo "| $t | $s | $d | ${ratio} |"
+  echo "| $t | $s_display | $d_display | ${ratio} |"
 done
 
 echo ""
