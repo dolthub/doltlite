@@ -264,7 +264,7 @@ run_bench() {
   output=$(sed \
     -e "s/\.print BENCH_START/SELECT 'TS_START:' || (julianday('now')*86400000);/" \
     -e "s/\.print BENCH_END/SELECT 'TS_END:' || (julianday('now')*86400000);/" \
-    "$sql_file" | perl -e 'alarm(120); exec @ARGV' "$binary" "$db" 2>&1)
+    "$sql_file" | "$binary" "$db" 2>&1)
   if [ "$db" != ":memory:" ]; then rm -f "$db"; fi
   # Extract timestamps and compute delta
   echo "$output" | python3 -c "

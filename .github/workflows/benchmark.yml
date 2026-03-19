@@ -33,8 +33,11 @@ jobs:
           ../configure
         fi
 
-    - name: Build doltlite
-      run: cd build && make doltlite-lib
+    - name: Build doltlite and stock SQLite
+      run: |
+        cd build
+        make doltlite
+        make DOLTLITE_PROLLY=0 sqlite3
 
     - name: Run benchmark
       id: bench
