@@ -1750,7 +1750,6 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
       pTE->pPending = pCur->pMutMap;
       pCur->pMutMap = 0;
     }else{
-      /* Table already has pending from another cursor — flush ours */
       flushMutMap(pCur);
     }
   }
@@ -2049,10 +2048,6 @@ int sqlite3BtreeTableMoveto(
     /* Not in MutMap — fall through to check the tree without flushing */
   }
 
-  /* Don't flush other cursors here — their edits are in pTE->pPending
-  ** and will be picked up by this cursor or flushed at commit/scan time.
-  ** This was the O(n²) bottleneck for bulk inserts. */
-
   refreshCursorRoot(pCur);
 
   rc = prollyCursorSeekInt(&pCur->pCur, intKey, pRes);
@@ -2164,6 +2159,9 @@ int sqlite3BtreeIndexMoveto(
       const u8 *mutKey = 0;
       int mutNKey = 0;
 
+      /* Scan ALL MutMap INSERTs — we cannot do early termination because
+      ** MutMap is sorted by memcmp which differs from VdbeRecordCompare
+      ** ordering. Track the best match (exact > closest-larger). */
       prollyMutMapIterFirst(&mutIter, pCur->pMutMap);
       while( prollyMutMapIterValid(&mutIter) ){
         ProllyMutMapEntry *mutE = prollyMutMapIterEntry(&mutIter);
@@ -2171,20 +2169,39 @@ int sqlite3BtreeIndexMoveto(
           pIdxKey->eqSeen = 0;
           cmp = sqlite3VdbeRecordCompare(mutE->nKey, mutE->pKey, pIdxKey);
           if( cmp==0 || pIdxKey->eqSeen ){
+            /* Exact match — best possible, stop looking */
             mutCmp = cmp;
             mutKey = mutE->pKey;
             mutNKey = mutE->nKey;
             mutFound = 1;
             break;
           }else if( cmp>0 ){
-            /* First MutMap entry > search key. Check if it beats tree. */
+            /* Entry > search key. Keep it if it's the closest so far.
+            ** Compare with current best using VdbeRecordCompare. */
             if( !mutFound ){
               mutCmp = cmp;
               mutKey = mutE->pKey;
               mutNKey = mutE->nKey;
               mutFound = 1;
+            } else {
+              /* Compare this entry with current best to find closer one.
+              ** Unpack current best, compare new entry against it. */
+              UnpackedRecord *pTmp = sqlite3VdbeAllocUnpackedRecord(
+                  pCur->pKeyInfo);
+              if( pTmp ){
+                int ord;
+                sqlite3VdbeRecordUnpack(mutNKey, mutKey, pTmp);
+                pTmp->default_rc = 0;
+                ord = sqlite3VdbeRecordCompare(mutE->nKey, mutE->pKey, pTmp);
+                sqlite3DbFree(pCur->pKeyInfo->db, pTmp);
+                if( ord<0 ){
+                  /* This entry is closer to search key */
+                  mutCmp = cmp;
+                  mutKey = mutE->pKey;
+                  mutNKey = mutE->nKey;
+                }
+              }
             }
-            break;
           }
         }
         prollyMutMapIterNext(&mutIter);
