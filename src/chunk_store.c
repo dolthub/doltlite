@@ -436,6 +436,21 @@ int chunkStoreOpen(
   memset(cs, 0, sizeof(*cs));
   cs->pVfs = pVfs;
 
+  /* Detect in-memory databases: NULL, empty string, or ":memory:" */
+  if( zFilename==0 || zFilename[0]=='\0'
+   || strcmp(zFilename, ":memory:")==0 ){
+    cs->isMemory = 1;
+    cs->zFilename = sqlite3_mprintf(":memory:");
+    if( cs->zFilename==0 ) return SQLITE_NOMEM;
+    memset(&cs->root, 0, sizeof(cs->root));
+    cs->nChunks = 0;
+    cs->iIndexOffset = 0;
+    cs->nIndexSize = 0;
+    cs->iAppendOffset = CHUNK_MANIFEST_SIZE;
+    cs->pFile = 0;
+    return SQLITE_OK;
+  }
+
   /* Copy the filename */
   n = (int)strlen(zFilename);
   cs->zFilename = (char *)sqlite3_malloc(n + 1);
@@ -966,23 +981,22 @@ int chunkStoreCommit(ChunkStore *cs){
 
   if( cs->readOnly ) return SQLITE_READONLY;
 
-  /* For in-memory databases (empty filename or ":memory:"), skip file I/O.
-  ** Just merge pending chunks into the in-memory index and clear the write
-  ** buffer. Chunks remain accessible from the aIndex + write buffer. */
-  if( cs->zFilename==0 || cs->zFilename[0]=='\0'
-   || strcmp(cs->zFilename, ":memory:")==0 ){
+  /* For in-memory databases, skip file I/O.  Just merge pending chunks
+  ** into the in-memory index and keep the write buffer.  Chunks remain
+  ** accessible via the aIndex offsets into pWriteBuf. */
+  if( cs->isMemory ){
     if( cs->nPending > 0 ){
-      ChunkIndexEntry *aMerged = 0;
-      int nMerged = 0;
-      int rc2 = csMergeIndex(cs, &aMerged, &nMerged);
+      ChunkIndexEntry *aMem = 0;
+      int nMem = 0;
+      int rc2 = csMergeIndex(cs, &aMem, &nMem);
       if( rc2!=SQLITE_OK ) return rc2;
       sqlite3_free(cs->aIndex);
-      cs->aIndex = aMerged;
-      cs->nIndex = nMerged;
-      /* Keep pWriteBuf — chunks are still referenced by aIndex offsets.
-      ** Mark pending as committed by clearing the pending count but not
-      ** the buffer itself. */
+      cs->aIndex = aMem;
+      cs->nIndex = nMem;
+      cs->nIndexAlloc = nMem;
       cs->nPending = 0;
+      /* Record how much of pWriteBuf is now committed data */
+      cs->nCommittedWriteBuf = cs->nWriteBuf;
     }
     return SQLITE_OK;
   }
@@ -1169,7 +1183,13 @@ commit_error:
 */
 void chunkStoreRollback(ChunkStore *cs){
   cs->nPending = 0;
-  cs->nWriteBuf = 0;
+  if( cs->isMemory ){
+    /* For in-memory stores, committed chunks live in pWriteBuf.
+    ** Only discard the uncommitted portion. */
+    cs->nWriteBuf = cs->nCommittedWriteBuf;
+  }else{
+    cs->nWriteBuf = 0;
+  }
   /* Buffers are kept allocated for potential reuse */
 }
 
@@ -1192,8 +1212,7 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   int bMoved = 0;
   int rc;
   *pChanged = 0;
-  if( cs->zFilename==0 || cs->zFilename[0]=='\0'
-   || strcmp(cs->zFilename, ":memory:")==0 ){
+  if( cs->isMemory ){
     return SQLITE_OK;
   }
   if( cs->pFile==0 ){
