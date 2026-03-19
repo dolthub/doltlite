@@ -2068,6 +2068,117 @@ int sqlite3BtreeTableMoveto(
   return rc;
 }
 
+/*
+** Serialize an UnpackedRecord to a blob for use with compareBlobKeys-based
+** tree navigation. Produces a standard SQLite record: varint header size,
+** varint serial types, then field data.
+*/
+/*
+** Compute the serial type for a Mem value (same logic as sqlite3VdbeSerialType).
+** Returns the serial type and sets *pLen to the data length.
+*/
+static u32 btreeSerialType(Mem *pMem, u32 *pLen){
+  int flags = pMem->flags;
+  if( flags & MEM_Null ){ *pLen = 0; return 0; }
+  if( flags & MEM_Int ){
+    i64 v = pMem->u.i;
+    if( v==0 ){ *pLen = 0; return 8; }
+    if( v==1 ){ *pLen = 0; return 9; }
+    if( v>=-128 && v<=127 ){ *pLen = 1; return 1; }
+    if( v>=-32768 && v<=32767 ){ *pLen = 2; return 2; }
+    if( v>=-8388608 && v<=8388607 ){ *pLen = 3; return 3; }
+    if( v>=-2147483648LL && v<=2147483647LL ){ *pLen = 4; return 4; }
+    if( v>=-140737488355328LL && v<=140737488355327LL ){ *pLen = 6; return 5; }
+    *pLen = 8; return 6;
+  }
+  if( flags & MEM_Real ){ *pLen = 8; return 7; }
+  if( flags & MEM_Str ){
+    u32 n = (u32)pMem->n;
+    *pLen = n;
+    return n*2 + 13;
+  }
+  if( flags & MEM_Blob ){
+    u32 n = (u32)pMem->n;
+    *pLen = n;
+    return n*2 + 12;
+  }
+  *pLen = 0; return 0;
+}
+
+/*
+** Serialize an UnpackedRecord to a blob for use with compareBlobKeys-based
+** tree navigation. Produces a standard SQLite record.
+*/
+static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut){
+  int nField = pRec->nField;
+  Mem *aMem = pRec->aMem;
+  u32 nData = 0;
+  u32 aType[64];
+  u32 aLen[64];
+  int i;
+  u8 *pOut;
+  int nHdr, nTotal;
+
+  if( nField > 64 ) nField = 64;
+
+  for(i=0; i<nField; i++){
+    aType[i] = btreeSerialType(&aMem[i], &aLen[i]);
+    nData += aLen[i];
+  }
+
+  nHdr = 1;
+  for(i=0; i<nField; i++) nHdr += sqlite3VarintLen(aType[i]);
+  if( nHdr > 126 ) nHdr++;
+
+  nTotal = nHdr + (int)nData;
+  pOut = (u8*)sqlite3_malloc(nTotal);
+  if( !pOut ) return SQLITE_NOMEM;
+
+  {
+    int off = putVarint32(pOut, (u32)nHdr);
+    for(i=0; i<nField; i++){
+      off += putVarint32(pOut + off, aType[i]);
+    }
+  }
+
+  {
+    u32 off = (u32)nHdr;
+    for(i=0; i<nField; i++){
+      Mem *p = &aMem[i];
+      u32 st = aType[i];
+      if( st==0 || st==8 || st==9 ){
+        /* no data */
+      }else if( st<=6 ){
+        i64 v = p->u.i;
+        int nByte = (int)aLen[i];
+        int j;
+        for(j=nByte-1; j>=0; j--){
+          pOut[off+j] = (u8)(v & 0xFF);
+          v >>= 8;
+        }
+        off += nByte;
+      }else if( st==7 ){
+        u64 x;
+        memcpy(&x, &p->u.r, 8);
+        int j;
+        for(j=7; j>=0; j--){
+          pOut[off+j] = (u8)(x & 0xFF);
+          x >>= 8;
+        }
+        off += 8;
+      }else{
+        int nByte = (int)aLen[i];
+        if( nByte > 0 && p->z ) memcpy(pOut + off, p->z, nByte);
+        off += nByte;
+      }
+    }
+  }
+
+  *ppOut = pOut;
+  *pnOut = nTotal;
+  return SQLITE_OK;
+}
+
 int sqlite3BtreeIndexMoveto(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -2100,31 +2211,55 @@ int sqlite3BtreeIndexMoveto(
   refreshCursorRoot(pCur);
 
   /*
-  ** Two-pass scan: check the tree and our own MutMap independently.
-  ** We can't merge them by memcmp because SQLite's serialized record
-  ** format doesn't sort correctly under memcmp (different serial type
-  ** codes for equivalent values). Instead, scan each source using
-  ** VdbeRecordCompare against the search key, then pick the best match.
+  ** Two-pass approach: O(log N) tree seek + MutMap check.
+  ** The prolly tree nodes are sorted by compareBlobKeys (field-by-field
+  ** numeric comparison), so prollyCursorSeekBlob navigates correctly.
+  ** We serialize the search key to a blob for the seek.
   */
 
-  /* ---- Pass 1: Linear tree scan for first entry >= search key ---- */
-  /* Skips entries deleted in our MutMap.
-  ** NOTE: O(log N) binary search through prolly tree nodes is not possible
-  ** because entries within nodes are sorted by memcmp, which does NOT match
-  ** VdbeRecordCompare ordering. Linear scan is correct. */
+  /* ---- Pass 1: O(log N) tree seek ---- */
   {
     int treeFound = 0;
     int treeCmp = 0;
-    int treeEqSeen = 0;
 
-    rc = prollyCursorFirst(&pCur->pCur, &res);
-    if( rc==SQLITE_OK && res==0 ){
+    /* Serialize the UnpackedRecord to a blob for SeekBlob */
+    u8 *pSerKey = 0;
+    int nSerKey = 0;
+    rc = serializeUnpackedRecord(pIdxKey, &pSerKey, &nSerKey);
+    if( rc!=SQLITE_OK ) return rc;
+
+    rc = prollyCursorSeekBlob(&pCur->pCur, pSerKey, nSerKey, &res);
+    sqlite3_free(pSerKey);
+    if( rc!=SQLITE_OK ) return rc;
+
+    if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+      /* SeekBlob landed on an approximate position. compareBlobKeys and
+      ** VdbeRecordCompare may disagree on partial-key matches (search key
+      ** has fewer fields than tree entries). Scan backward to find the
+      ** first entry where VdbeRecordCompare gives cmp >= 0. */
+      const u8 *pKey; int nKey;
+
+      /* First scan backward while VdbeRecordCompare says cmp < 0 */
+      while( 1 ){
+        prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+        pIdxKey->eqSeen = 0;
+        cmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
+        if( cmp >= 0 || pIdxKey->eqSeen ) break;
+        /* Entry < search key — try previous */
+        rc = prollyCursorPrev(&pCur->pCur);
+        if( rc!=SQLITE_OK || pCur->pCur.eState!=PROLLY_CURSOR_VALID ){
+          /* No previous entry — need forward scan */
+          rc = prollyCursorFirst(&pCur->pCur, &(int){0});
+          break;
+        }
+      }
+
+      /* Now scan forward to find the first entry with cmp >= 0,
+      ** skipping MutMap deletes */
       while( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-        const u8 *pKey;
-        int nKey;
         prollyCursorKey(&pCur->pCur, &pKey, &nKey);
 
-        /* Skip if this key is deleted in our MutMap */
+        /* Skip deleted entries */
         if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
           ProllyMutMapEntry *mmE = prollyMutMapFind(
               pCur->pMutMap, pKey, nKey, 0);
@@ -2136,14 +2271,8 @@ int sqlite3BtreeIndexMoveto(
         }
 
         pIdxKey->eqSeen = 0;
-        cmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
-        if( cmp==0 || pIdxKey->eqSeen ){
-          treeCmp = cmp;
-          treeEqSeen = pIdxKey->eqSeen;
-          treeFound = 1;
-          break;
-        }else if( cmp>0 ){
-          treeCmp = cmp;
+        treeCmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
+        if( treeCmp==0 || pIdxKey->eqSeen || treeCmp>0 ){
           treeFound = 1;
           break;
         }
