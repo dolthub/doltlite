@@ -29,140 +29,34 @@ jobs:
           ../configure
         fi
 
-    - name: Build doltlite
-      run: cd build && make doltlite
-
-    - name: Verify engine
+    - name: Build
       run: |
         cd build
-        echo "SELECT doltlite_engine();" | ./doltlite :memory: | grep -q "prolly"
-        echo "Engine: prolly (verified)"
-
-    - name: Branding tests
-      run: cd build && bash ../test/doltlite_branding.sh
-
-    - name: SQLite parity comparison tests
-      run: cd build && bash ../test/doltlite_parity.sh
-
-    - name: File persistence tests
-      run: cd build && bash ../test/doltlite_persistence.sh
-
-    - name: Smoke test
-      run: |
-        cd build
-        echo "
-        CREATE TABLE t(x INTEGER PRIMARY KEY, y TEXT);
-        INSERT INTO t VALUES(1,'hello'),(2,'world'),(3,'test');
-        SELECT * FROM t ORDER BY x;
-        DELETE FROM t WHERE x=2;
-        UPDATE t SET y='updated' WHERE x=1;
-        SELECT count(*) FROM t;
-        BEGIN; INSERT INTO t VALUES(4,'rollback'); ROLLBACK;
-        SELECT count(*) FROM t;
-        " | ./doltlite :memory:
-
-    - name: File persistence test
-      run: |
-        cd build
-        echo "CREATE TABLE t(x INTEGER PRIMARY KEY, y TEXT); INSERT INTO t VALUES(1,'persist');" | ./doltlite /tmp/test.db
-        result=$(echo "SELECT y FROM t;" | ./doltlite /tmp/test.db)
-        [ "$result" = "persist" ] && echo "Persistence: OK" || (echo "Persistence: FAIL" && exit 1)
-
-    - name: Dolt commit and log tests
-      run: cd build && bash ../test/doltlite_commit.sh
-
-    - name: Dolt staging workflow tests
-      run: cd build && bash ../test/doltlite_staging.sh
-
-    - name: Dolt diff tests
-      run: cd build && bash ../test/doltlite_diff.sh
-
-    - name: Dolt reset tests
-      run: cd build && bash ../test/doltlite_reset.sh
-
-    - name: Dolt branch tests
-      run: cd build && bash ../test/doltlite_branch.sh
-
-    - name: Dolt merge tests
-      run: cd build && bash ../test/doltlite_merge.sh
-
-    - name: Savepoint and transaction interaction tests
-      run: cd build && bash ../test/doltlite_savepoint.sh
-
-    - name: Dolt tag tests
-      run: cd build && bash ../test/doltlite_tag.sh
-
-    - name: Dolt conflicts tests
-      run: cd build && bash ../test/doltlite_conflicts.sh
-
-    - name: Dolt per-row conflict resolution tests
-      run: cd build && bash ../test/doltlite_conflict_rows.sh
-
-    - name: Dolt cherry-pick and revert tests
-      run: cd build && bash ../test/doltlite_cherry_pick.sh
-
-    - name: Dolt diff audit log tests
-      run: cd build && bash ../test/doltlite_diff_table.sh
-
-    - name: Dolt history table tests
-      run: cd build && bash ../test/doltlite_history.sh
-
-    - name: Dolt point-in-time query tests
-      run: cd build && bash ../test/doltlite_at.sh
-
-    - name: Dolt schema diff tests
-      run: cd build && bash ../test/doltlite_schema_diff.sh
-
-    - name: ALTER TABLE merge tests
-      run: cd build && bash ../test/doltlite_alter_merge.sh
-
-    - name: Dolt garbage collection tests
-      run: cd build && bash ../test/doltlite_gc.sh
-
-    - name: Branch and GC stress tests
-      run: cd build && bash ../test/doltlite_branch_gc_stress.sh
-      timeout-minutes: 5
-
-    - name: Structural sharing and GC tests
-      run: cd build && bash ../test/doltlite_structural.sh
-
-    - name: Performance tests
-      run: cd build && bash ../test/doltlite_perf.sh
-      timeout-minutes: 10
-
-    - name: Deep feature coverage tests
-      run: cd build && bash ../test/doltlite_feature_deep.sh
-
-    - name: Deep commit history tests
-      run: cd build && bash ../test/doltlite_deep_history.sh
-      timeout-minutes: 5
-
-    - name: Dolt getting-started demo test
-      run: cd build && bash ../test/doltlite_demo.sh
-
-    - name: End-to-end integration test
-      run: cd build && bash ../test/doltlite_e2e.sh
-
-    - name: Unicode and BLOB edge case tests
-      run: cd build && bash ../test/doltlite_unicode_blob.sh
-
-    - name: Edge case tests
-      run: cd build && bash ../test/doltlite_edge_cases.sh
-
-    - name: Advanced tests
-      run: cd build && bash ../test/doltlite_advanced.sh
-
-    - name: Concurrent branch test
-      run: |
-        cd build
+        make doltlite
+        make doltlite-lib
+        make testfixture
+        # Stock SQLite lib for concurrent_branch_test
         make libsqlite3.a USE_AMALGAMATION=0
+
+    # ── Doltlite feature tests ──────────────────────────────
+
+    - name: Doltlite feature tests
+      run: cd build && bash ../test/run_doltlite_tests.sh
+      timeout-minutes: 20
+
+    # ── C/Python/Go integration tests ───────────────────────
+
+    - name: C integration tests
+      run: |
+        cd build
+        # Quickstart
+        gcc -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
+        ./quickstart
+        # Concurrent branch test
         cc -g -O0 -I. -I../src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
           -o concurrent_branch_test ../test/concurrent_branch_test.c \
           libsqlite3.a -lz -lpthread -lm
         ./concurrent_branch_test
-
-    - name: Build libdoltlite
-      run: cd build && make doltlite-lib
 
     - name: Concurrent write test (known issue - multi-connection schema visibility)
       continue-on-error: true
@@ -172,190 +66,73 @@ jobs:
           libdoltlite.a -lz -lpthread -lm
         ./concurrent_write_test
 
-    - name: C library quickstart integration test
-      run: |
-        cd build
-        gcc -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz -lm
-        ./quickstart
+    - name: Python integration test
+      run: cd build && LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
 
-    - name: Python quickstart integration test
-      run: |
-        cd build
-        LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
-
-    - name: Setup Go
+    - name: Go integration test
       uses: actions/setup-go@v5
       with:
         go-version: '1.23'
-
-    - name: Go quickstart integration test
-      run: |
+    - run: |
         cd examples/go
         CGO_CFLAGS="-I../../build" CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread -lm" \
           go build -tags libsqlite3 -o quickstart .
         ./quickstart
 
-    - name: Build testfixture
-      run: cd build && make testfixture
+    # ── SQLite testfixture tests ────────────────────────────
 
-    - name: Run core test suite
+    - name: SQLite core tests
       run: |
         cd build
-        total=0
-        errors=0
-        for test in insert select1 select2 select3 select4 delete update \
-                     trans savepoint where expr index alter attach auth \
-                     coalesce conflict cse date join subquery vacuum view \
-                     between cast check limit null quote rowid sort types \
-                     types2 in in2 in3 in4 in5 in6 intpkey like like2 \
-                     minmax minmax2 minmax3 select5 select6 select7 \
-                     selectA selectB distinctagg enc count capi2 capi3 \
-                     collate1 collate2 collate3 collate4 \
-                     fkey1 fkey2 fkey5 \
-                     trigger1 trigger2 triggerA triggerB triggerC; do
-          result=$(timeout 120 ./testfixture ../test/${test}.test 2>&1)
-          done_line=$(echo "$result" | grep "errors out of")
-          if [ -n "$done_line" ]; then
-            e=$(echo "$done_line" | awk '{print $1}')
-            t=$(echo "$done_line" | awk '{print $5}')
-            total=$((total + t))
-            errors=$((errors + e))
-            if [ "$e" != "0" ]; then
-              echo "FAIL: $test — $done_line"
-            fi
-          else
-            p=$(echo "$result" | grep -c "Ok$")
-            total=$((total + p))
-            echo "TIMEOUT: $test ($p passed)"
-          fi
-        done
-        echo ""
-        echo "=== Results: $total tests, $errors errors ==="
-        if [ $errors -gt 0 ]; then
-          echo "::error::$errors test errors detected"
-          exit 1
-        fi
+        bash ../test/run_testfixture.sh "Core tests" 120 \
+          insert select1 select2 select3 select4 delete update \
+          trans savepoint where expr index alter attach auth \
+          coalesce conflict cse date join subquery vacuum view \
+          between cast check limit null quote rowid sort types \
+          types2 in in2 in3 in4 in5 in6 intpkey like like2 \
+          minmax minmax2 minmax3 select5 select6 select7 \
+          selectA selectB distinctagg enc count capi2 capi3 \
+          collate1 collate2 collate3 collate4 \
+          fkey1 fkey2 fkey5 \
+          trigger1 trigger2 triggerA triggerB triggerC
 
-    - name: Run large test files
+    - name: SQLite large tests
       run: |
         cd build
-        for test in func e_expr printf date randexpr1 enc4 fkey2 \
-                     boundary1 boundary2 boundary3 select9; do
-          result=$(timeout 180 ./testfixture ../test/${test}.test 2>&1)
-          done_line=$(echo "$result" | grep "errors out of")
-          if [ -n "$done_line" ]; then
-            e=$(echo "$done_line" | awk '{print $1}')
-            if [ "$e" != "0" ]; then
-              echo "FAIL: $test — $done_line"
-              exit 1
-            else
-              echo "OK: $test — $done_line"
-            fi
-          else
-            p=$(echo "$result" | grep -c "Ok$")
-            echo "TIMEOUT: $test ($p passed)"
-          fi
-        done
+        bash ../test/run_testfixture.sh "Large tests" 180 \
+          func e_expr printf date randexpr1 enc4 fkey2 \
+          boundary1 boundary2 boundary3 select9
 
-    - name: Run crash recovery tests
+    - name: SQLite crash recovery tests
       run: |
         cd build
-        total=0
-        errors=0
-        for test in crash crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM; do
-          result=$(timeout 180 ./testfixture ../test/${test}.test 2>&1)
-          done_line=$(echo "$result" | grep "errors out of")
-          if [ -n "$done_line" ]; then
-            e=$(echo "$done_line" | awk '{print $1}')
-            t=$(echo "$done_line" | awk '{print $5}')
-            total=$((total + t))
-            errors=$((errors + e))
-            if [ "$e" != "0" ]; then
-              echo "FAIL: $test — $done_line"
-            fi
-          else
-            p=$(echo "$result" | grep -c "Ok$")
-            total=$((total + p))
-            echo "TIMEOUT: $test ($p passed)"
-          fi
-        done
-        echo ""
-        echo "=== Crash recovery results: $total tests, $errors errors ==="
-        if [ $errors -gt 0 ]; then
-          echo "::error::$errors crash recovery test errors detected"
-          exit 1
-        fi
+        bash ../test/run_testfixture.sh "Crash recovery" 180 \
+          crash crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM
 
-    - name: Run fuzz tests
+    - name: SQLite fuzz tests
       run: |
         cd build
-        total=0
-        errors=0
-        for test in fuzz fuzz2 fuzz3 fuzz4; do
-          result=$(timeout 120 ./testfixture ../test/${test}.test 2>&1)
-          done_line=$(echo "$result" | grep "errors out of")
-          if [ -n "$done_line" ]; then
-            e=$(echo "$done_line" | awk '{print $1}')
-            t=$(echo "$done_line" | awk '{print $5}')
-            total=$((total + t))
-            errors=$((errors + e))
-            if [ "$e" != "0" ]; then
-              echo "FAIL: $test — $done_line"
-            fi
-          else
-            p=$(echo "$result" | grep -c "Ok$")
-            total=$((total + p))
-            echo "TIMEOUT: $test ($p passed)"
-          fi
-        done
-        echo ""
-        echo "=== Fuzz test results: $total tests, $errors errors ==="
-        if [ $errors -gt 0 ]; then
-          echo "::error::$errors fuzz test errors detected"
-          exit 1
-        fi
+        bash ../test/run_testfixture.sh "Fuzz tests" 120 \
+          fuzz fuzz2 fuzz3 fuzz4
 
-    - name: Run additional SQLite tests
+    - name: SQLite additional tests
       run: |
         cd build
-        total=0
-        errors=0
-        for test in window1 window2 window3 \
-                     json101 json102 json103 json104 json105 \
-                     aggnested aggorderby \
-                     affinity2 affinity3 \
-                     vacuum2 savepoint \
-                     between distinct distinctagg \
-                     e_createtable e_delete e_insert e_select e_update e_fkey \
-                     func2 func3 hexlit icu intarray \
-                     orderby1 orderby2 orderby3 orderby4 \
-                     pragma pragma2 printf2 \
-                     schema schema2 schema3 schema4 \
-                     shared shared2 shared3 \
-                     speed1 substr table tempdb \
-                     tkt-38cb5df375 tkt-9a8b09f8e6 tkt-99378177930f87bd \
-                     tkt-80e031a00f tkt-80ba201079 tkt-31338dca7e \
-                     tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
-                     tkt-f3e5abed55; do
-          result=$(timeout 120 ./testfixture ../test/${test}.test 2>&1)
-          done_line=$(echo "$result" | grep "errors out of")
-          if [ -n "$done_line" ]; then
-            e=$(echo "$done_line" | awk '{print $1}')
-            t=$(echo "$done_line" | awk '{print $5}')
-            total=$((total + t))
-            errors=$((errors + e))
-            if [ "$e" != "0" ]; then
-              echo "FAIL: $test — $done_line"
-            fi
-          else
-            p=$(echo "$result" | grep -c "Ok$")
-            total=$((total + p))
-            echo "TIMEOUT: $test ($p passed)"
-          fi
-        done
-        echo ""
-        echo "=== Additional SQLite test results: $total tests, $errors errors ==="
-        if [ $errors -gt 0 ]; then
-          echo "::error::$errors additional SQLite test errors detected"
-          exit 1
-        fi
+        bash ../test/run_testfixture.sh "Additional tests" 120 \
+          window1 window2 window3 \
+          json101 json102 json103 json104 json105 \
+          aggnested aggorderby \
+          affinity2 affinity3 \
+          vacuum2 savepoint \
+          between distinct distinctagg \
+          e_createtable e_delete e_insert e_select e_update e_fkey \
+          func2 func3 hexlit icu intarray \
+          orderby1 orderby2 orderby3 orderby4 \
+          pragma pragma2 printf2 \
+          schema schema2 schema3 schema4 \
+          shared shared2 shared3 \
+          speed1 substr table tempdb \
+          tkt-38cb5df375 tkt-9a8b09f8e6 tkt-99378177930f87bd \
+          tkt-80e031a00f tkt-80ba201079 tkt-31338dca7e \
+          tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
+          tkt-f3e5abed55
