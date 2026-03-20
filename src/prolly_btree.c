@@ -1278,6 +1278,25 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     if( pBt->btsFlags & BTS_READ_ONLY ){
       return SQLITE_READONLY;
     }
+    /* Ensure aTables includes all persistent tables from the catalog.
+    ** Tables are lazily added to aTables when cursors open, so after a
+    ** transaction commits and cursors close, aTables may only contain
+    ** the master table. Reload from the catalog so the snapshot used
+    ** for deferred-write eligibility includes all persistent tables. */
+    {
+      ProllyHash catHash;
+      chunkStoreGetCatalog(&pBt->store, &catHash);
+      if( !prollyHashIsEmpty(&catHash) ){
+        u8 *catData = 0;
+        int nCatData = 0;
+        int rc2 = chunkStoreGet(&pBt->store, &catHash, &catData, &nCatData);
+        if( rc2==SQLITE_OK && catData ){
+          rc2 = deserializeCatalog(p, catData, nCatData);
+          sqlite3_free(catData);
+          if( rc2!=SQLITE_OK ) return rc2;
+        }
+      }
+    }
     /* Snapshot table registry for rollback */
     sqlite3_free(p->aCommittedTables);
     p->aCommittedTables = 0;
