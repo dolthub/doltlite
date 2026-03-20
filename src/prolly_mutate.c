@@ -294,6 +294,135 @@ static int buildFromEdits(
 }
 
 /*
+** Merge-walk the existing tree with the edit map and produce a new tree.
+** O(N + M) — walks every entry regardless of edit count.
+** Used when M is large relative to N (hybrid flush fallback).
+*/
+static int mergeWalk(
+  ProllyMutator *pMut
+){
+  ProllyCursor cur;
+  ProllyMutMapIter iter;
+  ProllyChunker chunker;
+  int rc;
+  int curEmpty = 0;
+  int curValid;
+  int iterValid;
+
+  prollyCursorInit(&cur, pMut->pStore, pMut->pCache,
+                   &pMut->oldRoot, pMut->flags);
+  rc = prollyCursorFirst(&cur, &curEmpty);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+  if( curEmpty ){
+    prollyCursorClose(&cur);
+    return buildFromEdits(pMut);
+  }
+
+  prollyMutMapIterFirst(&iter, pMut->pEdits);
+
+  rc = prollyChunkerInit(&chunker, pMut->pStore, pMut->flags);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+
+  for(;;){
+    curValid = prollyCursorIsValid(&cur);
+    iterValid = prollyMutMapIterValid(&iter);
+    if( !curValid && !iterValid ) break;
+
+    if( curValid && !iterValid ){
+      const u8 *pKey; int nKey;
+      const u8 *pVal; int nVal;
+      i64 intKey = 0;
+      if( pMut->flags & PROLLY_NODE_INTKEY ){
+        intKey = prollyCursorIntKey(&cur);
+        pKey = 0; nKey = 0;
+      }else{
+        prollyCursorKey(&cur, &pKey, &nKey);
+      }
+      prollyCursorValue(&cur, &pVal, &nVal);
+      rc = feedChunker(&chunker, pMut->flags, pKey, nKey, intKey, pVal, nVal);
+      if( rc!=SQLITE_OK ) goto merge_cleanup;
+      rc = prollyCursorNext(&cur);
+      if( rc!=SQLITE_OK ) goto merge_cleanup;
+      continue;
+    }
+
+    if( !curValid && iterValid ){
+      ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
+      if( pEntry->op==PROLLY_EDIT_INSERT ){
+        rc = feedChunker(&chunker, pMut->flags,
+                         pEntry->pKey, pEntry->nKey, pEntry->intKey,
+                         pEntry->pVal, pEntry->nVal);
+        if( rc!=SQLITE_OK ) goto merge_cleanup;
+      }
+      prollyMutMapIterNext(&iter);
+      continue;
+    }
+
+    {
+      ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
+      const u8 *pCurKey; int nCurKey;
+      i64 iCurKey = 0;
+      int cmp;
+
+      if( pMut->flags & PROLLY_NODE_INTKEY ){
+        iCurKey = prollyCursorIntKey(&cur);
+        pCurKey = 0; nCurKey = 0;
+      }else{
+        prollyCursorKey(&cur, &pCurKey, &nCurKey);
+      }
+
+      cmp = compareKeys(pMut->flags,
+                         pCurKey, nCurKey, iCurKey,
+                         pEntry->pKey, pEntry->nKey, pEntry->intKey);
+
+      if( cmp < 0 ){
+        const u8 *pVal; int nVal;
+        prollyCursorValue(&cur, &pVal, &nVal);
+        rc = feedChunker(&chunker, pMut->flags,
+                         pCurKey, nCurKey, iCurKey, pVal, nVal);
+        if( rc!=SQLITE_OK ) goto merge_cleanup;
+        rc = prollyCursorNext(&cur);
+        if( rc!=SQLITE_OK ) goto merge_cleanup;
+      }else if( cmp == 0 ){
+        if( pEntry->op==PROLLY_EDIT_INSERT ){
+          rc = feedChunker(&chunker, pMut->flags,
+                           pEntry->pKey, pEntry->nKey, pEntry->intKey,
+                           pEntry->pVal, pEntry->nVal);
+          if( rc!=SQLITE_OK ) goto merge_cleanup;
+        }
+        rc = prollyCursorNext(&cur);
+        if( rc!=SQLITE_OK ) goto merge_cleanup;
+        prollyMutMapIterNext(&iter);
+      }else{
+        if( pEntry->op==PROLLY_EDIT_INSERT ){
+          rc = feedChunker(&chunker, pMut->flags,
+                           pEntry->pKey, pEntry->nKey, pEntry->intKey,
+                           pEntry->pVal, pEntry->nVal);
+          if( rc!=SQLITE_OK ) goto merge_cleanup;
+        }
+        prollyMutMapIterNext(&iter);
+      }
+    }
+  }
+
+  rc = prollyChunkerFinish(&chunker);
+  if( rc==SQLITE_OK ){
+    prollyChunkerGetRoot(&chunker, &pMut->newRoot);
+  }
+
+merge_cleanup:
+  prollyChunkerFree(&chunker);
+  prollyCursorClose(&cur);
+  return rc;
+}
+
+/*
 ** Clone all entries from a ProllyNode into a ProllyNodeBuilder.
 */
 static int cloneNodeToBuilder(
@@ -811,8 +940,63 @@ int prollyMutateFlush(ProllyMutator *pMut){
     return buildFromEdits(pMut);
   }
 
-  /* Case 3: targeted leaf edits */
-  return applyEdits(pMut);
+  /* Case 3: hybrid flush — pick strategy based on edit count vs tree size.
+  **
+  ** applyEdits (cursor-path): O(M * log N) — great when M << N
+  ** mergeWalk (full merge):   O(N + M)     — better when M ≈ N
+  **
+  ** Estimate N by loading the root node: for a tree of height H with
+  ** root having R children, N ≈ R * (avg_entries_per_subtree).
+  ** A rough estimate using ~50 entries per leaf and branching factor ~50:
+  **   height 0 (leaf root): N = root.nItems
+  **   height 1: N ≈ root.nItems * 50
+  **   height 2: N ≈ root.nItems * 2500
+  */
+  {
+    int M = prollyMutMapCount(pMut->pEdits);
+    int N = 0;
+
+    /* Load root to estimate N */
+    u8 *pRootData = 0;
+    int nRootData = 0;
+    int rcEst = chunkStoreGet(pMut->pStore, &pMut->oldRoot,
+                              &pRootData, &nRootData);
+    if( rcEst==SQLITE_OK && pRootData ){
+      ProllyNode rootNode;
+      if( prollyNodeParse(&rootNode, pRootData, nRootData)==SQLITE_OK ){
+        if( rootNode.level==0 ){
+          N = rootNode.nItems;
+        }else if( rootNode.level==1 ){
+          N = rootNode.nItems * 50;
+        }else{
+          /* Height >= 2: large tree */
+          int factor = 1;
+          int lv;
+          for(lv = 0; lv < rootNode.level; lv++) factor *= 50;
+          N = rootNode.nItems * factor;
+        }
+      }
+      sqlite3_free(pRootData);
+    }
+
+    /* Threshold: use mergeWalk when edits exceed ~25% of estimated tree size.
+    ** For BLOBKEY trees (indexes), use a lower threshold because blob key
+    ** comparison in applyEdits is much more expensive per seek. */
+    int threshold;
+    if( N <= 0 ){
+      threshold = 1000;  /* Fallback if estimation fails */
+    }else if( pMut->flags & PROLLY_NODE_INTKEY ){
+      threshold = N / 2;
+    }else{
+      threshold = N / 4;  /* BLOBKEY: more aggressive fallback */
+    }
+
+    if( M > threshold ){
+      return mergeWalk(pMut);
+    }else{
+      return applyEdits(pMut);
+    }
+  }
 }
 
 /*
