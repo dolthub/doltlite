@@ -38,6 +38,7 @@
 #include <stdio.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
 
@@ -103,7 +104,8 @@ static int csGrowPending(ChunkStore *cs);
 static int csGrowWriteBuf(ChunkStore *cs, int nNeeded);
 static char *csJournalPath(const char *zFilename);
 static char *csWalPath(const char *zFilename);
-static int csReplayWal(ChunkStore *cs);
+static int csReplayWalFull(ChunkStore *cs, int updateManifest);
+static int csReplayWal(ChunkStore *cs){ return csReplayWalFull(cs, 1); }
 
 /* Journal record tags */
 #define CS_WAL_TAG_CHUNK  0x01   /* Chunk record: tag(1)+hash(20)+len(4)+data */
@@ -392,7 +394,7 @@ static char *csWalPath(const char *zFilename){
 ** For each root record: update manifest state.
 ** Called during chunkStoreOpen after reading the main file.
 */
-static int csReplayWal(ChunkStore *cs){
+static int csReplayWalFull(ChunkStore *cs, int updateManifest){
   char *zWal;
   int walFd;
   struct stat walStat;
@@ -436,6 +438,7 @@ static int csReplayWal(ChunkStore *cs){
   /* Store WAL data and fd info for chunk reads later */
   cs->pWalData = walData;
   cs->nWalData = walSize;
+  cs->nWalFileSize = walSize;
   cs->zWalPath = zWal;
 
   /* Parse records */
@@ -479,8 +482,12 @@ static int csReplayWal(ChunkStore *cs){
     } else if( tag == CS_WAL_TAG_ROOT ){
       /* Root record: manifest(168) */
       if( pos + CHUNK_MANIFEST_SIZE > walSize ) break;
-      /* Parse manifest from WAL — same layout as csReadManifest */
-      {
+      /* Parse manifest from WAL — same layout as csReadManifest.
+      ** Only update manifest state on initial load, not on refresh.
+      ** During refresh, each connection keeps its own session state;
+      ** we only want the new chunk data, not another connection's
+      ** root/catalog/headCommit. */
+      if( updateManifest ){
         u8 *m = walData + pos;
         u32 magic = CS_READ_U32(m);
         if( magic == CHUNK_STORE_MAGIC ){
@@ -1243,12 +1250,34 @@ int chunkStoreCommit(ChunkStore *cs){
     char *zWal = csWalPath(cs->zFilename);
     if( !zWal ){ rc = SQLITE_NOMEM; goto commit_error; }
 
-    /* Open WAL for append (create if needed) */
+    /* Open WAL for append (create if needed) with exclusive lock.
+    ** The lock serializes concurrent writers so manifest state isn't
+    ** clobbered. We hold the lock until after fsync. */
     int walFd = open(zWal, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if( walFd < 0 ){
       sqlite3_free(zWal);
       rc = SQLITE_CANTOPEN;
       goto commit_error;
+    }
+    if( flock(walFd, LOCK_EX) != 0 ){
+      close(walFd);
+      sqlite3_free(zWal);
+      rc = SQLITE_BUSY;
+      goto commit_error;
+    }
+
+    /* Under the lock, re-read WAL to pick up other writers' state.
+    ** This ensures our root record builds on the latest manifest. */
+    {
+      struct stat walStat;
+      if( fstat(walFd, &walStat)==0 && (i64)walStat.st_size > cs->nWalFileSize ){
+        /* WAL grew since our last read — replay to get latest state */
+        sqlite3_free(cs->pWalData);
+        cs->pWalData = 0;
+        cs->nWalData = 0;
+        cs->nPending = 0;
+        csReplayWal(cs);  /* full replay including manifest */
+      }
     }
 
     /* Write chunk records: tag(1) + hash(20) + length(4) + data(length) */
@@ -1294,6 +1323,13 @@ int chunkStoreCommit(ChunkStore *cs){
 
     /* fsync — this is the durability point */
     fsync(walFd);
+    /* Track WAL file size so we don't re-replay our own writes */
+    {
+      struct stat walStat;
+      if( fstat(walFd, &walStat)==0 ){
+        cs->nWalFileSize = (i64)walStat.st_size;
+      }
+    }
     close(walFd);
     sqlite3_free(zWal);
   }
@@ -1392,14 +1428,71 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     int exists = 0;
     rc = sqlite3OsAccess(cs->pVfs, cs->zFilename,
                          SQLITE_ACCESS_EXISTS, &exists);
-    if( rc!=SQLITE_OK || !exists ) return SQLITE_OK;
+    if( rc!=SQLITE_OK ) return SQLITE_OK;
+    if( !exists ){
+      /* Main file still doesn't exist. But another connection may have
+      ** created a WAL file. Check the WAL file's actual size on disk
+      ** vs what this connection has already processed (nWalData).
+      ** Note: after this connection commits, nWalData reflects the data
+      ** it wrote, so this only triggers for OTHER connections' writes. */
+      char *zWal = csWalPath(cs->zFilename);
+      if( zWal ){
+        struct stat walStat;
+        i64 walFileSize = 0;
+        if( stat(zWal, &walStat)==0 ) walFileSize = (i64)walStat.st_size;
+        if( walFileSize > cs->nWalFileSize ){
+          /* WAL has new data from another connection. Free old buffer and
+          ** re-read the whole WAL. The new buffer has the same content at
+          ** the same byte positions, so existing negative-offset index
+          ** entries remain valid. */
+          sqlite3_free(cs->pWalData);
+          cs->pWalData = 0;
+          cs->nWalData = 0;
+          cs->nWalFileSize = 0;
+          cs->nPending = 0;
+          rc = csReplayWal(cs);  /* full replay including manifest */
+          if( rc!=SQLITE_OK ){ sqlite3_free(zWal); return rc; }
+          *pChanged = 1;
+        }
+        sqlite3_free(zWal);
+      }
+      return SQLITE_OK;
+    }
     bMoved = 1;
   }else{
     rc = sqlite3OsFileControl(cs->pFile,
                               SQLITE_FCNTL_HAS_MOVED, &bMoved);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
   }
-  if( !bMoved ) return SQLITE_OK;
+  if( !bMoved ){
+    /* Main file didn't move, but another connection may have appended
+    ** to the WAL. Check WAL size against our last-known size. */
+    char *zWal = csWalPath(cs->zFilename);
+    if( zWal ){
+      struct stat walStat;
+      if( stat(zWal, &walStat)==0 && (i64)walStat.st_size > cs->nWalData ){
+        /* WAL grew — re-read entirely. Existing index entries have
+        ** negative offsets into pWalData; the new buffer has the same
+        ** content at the same positions, so those offsets remain valid
+        ** as long as the old content is preserved. csReplayWal reads
+        ** the full WAL (including old data) into a new buffer, then
+        ** merges any new entries into the index. */
+        sqlite3_free(cs->pWalData);
+        cs->pWalData = 0;
+        cs->nWalData = 0;
+          cs->nWalFileSize = 0;
+        /* Reset pending so csReplayWalFull can use it for new WAL entries */
+        cs->nPending = 0;
+        rc = csReplayWal(cs);  /* full replay including manifest */
+        sqlite3_free(zWal);
+        if( rc!=SQLITE_OK ) return rc;
+        *pChanged = 1;
+      } else {
+        sqlite3_free(zWal);
+      }
+    }
+    return SQLITE_OK;
+  }
   if( cs->pFile ){
     csCloseFile(cs->pFile);
     cs->pFile = 0;

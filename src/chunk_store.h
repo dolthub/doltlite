@@ -108,6 +108,7 @@ struct ChunkStore {
   /* WAL (write-ahead log) state */
   u8 *pWalData;              /* WAL file contents (loaded on open for reads) */
   i64 nWalData;              /* Size of pWalData */
+  i64 nWalFileSize;          /* Last known WAL file size on disk */
   char *zWalPath;            /* WAL file path */
   int walFd;                 /* WAL file descriptor (open for append during writes) */
 };

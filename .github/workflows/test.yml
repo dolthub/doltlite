@@ -58,8 +58,7 @@ jobs:
           libsqlite3.a -lz -lpthread -lm
         ./concurrent_branch_test
 
-    - name: Concurrent write test (known issue - multi-connection schema visibility)
-      continue-on-error: true
+    - name: Concurrent write test
       run: |
         cd build
         gcc -g -O0 -I. -o concurrent_write_test ../test/concurrent_write_test.c \
