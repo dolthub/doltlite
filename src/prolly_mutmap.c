@@ -416,4 +416,30 @@ void prollyMutMapFree(ProllyMutMap *mm){
   mm->pHeader = 0;
 }
 
+/*
+** Merge all entries from pSrc into pDst. After this call, pSrc is empty
+** and all its entries have been copied into pDst. This avoids the need
+** to flush (rebuild the prolly tree) when two cursors on the same table
+** both have pending edits.
+*/
+int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
+  ProllyMutMapIter iter;
+  int rc = SQLITE_OK;
+
+  prollyMutMapIterFirst(&iter, pSrc);
+  while( prollyMutMapIterValid(&iter) ){
+    ProllyMutMapEntry *e = prollyMutMapIterEntry(&iter);
+    if( e->op == PROLLY_EDIT_INSERT ){
+      rc = prollyMutMapInsert(pDst, e->pKey, e->nKey, e->intKey,
+                               e->pVal, e->nVal);
+    } else {
+      rc = prollyMutMapDelete(pDst, e->pKey, e->nKey, e->intKey);
+    }
+    if( rc!=SQLITE_OK ) return rc;
+    prollyMutMapIterNext(&iter);
+  }
+  prollyMutMapClear(pSrc);
+  return SQLITE_OK;
+}
+
 #endif /* DOLTLITE_PROLLY */

@@ -1749,6 +1749,14 @@ int sqlite3BtreeCloseCursor(BtCursor *pCur){
     if( pTE && !pTE->pPending ){
       pTE->pPending = pCur->pMutMap;
       pCur->pMutMap = 0;
+    }else if( pTE && pTE->pPending ){
+      /* Merge into existing pending instead of flushing (tree rebuild).
+      ** This happens when multiple cursors on the same table close
+      ** during the same transaction. */
+      prollyMutMapMerge((ProllyMutMap*)pTE->pPending, pCur->pMutMap);
+      prollyMutMapFree(pCur->pMutMap);
+      sqlite3_free(pCur->pMutMap);
+      pCur->pMutMap = 0;
     }else{
       flushMutMap(pCur);
     }
@@ -2131,6 +2139,7 @@ static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut)
   if( nHdr > 126 ) nHdr++;
 
   nTotal = nHdr + (int)nData;
+  nTotal = nHdr + (int)nData;
   pOut = (u8*)sqlite3_malloc(nTotal);
   if( !pOut ) return SQLITE_NOMEM;
 
@@ -2211,55 +2220,44 @@ int sqlite3BtreeIndexMoveto(
   refreshCursorRoot(pCur);
 
   /*
-  ** Two-pass approach: O(log N) tree seek + MutMap check.
-  ** The prolly tree nodes are sorted by compareBlobKeys (field-by-field
-  ** numeric comparison), so prollyCursorSeekBlob navigates correctly.
-  ** We serialize the search key to a blob for the seek.
+  ** Parallel seek: O(log N) tree seek + O(log M) MutMap seek.
+  ** Both the tree and MutMap are sorted by compareBlobKeys.
+  ** Serialize the search key, seek both, pick the best match.
+  ** Verify with VdbeRecordCompare for eqSeen/default_rc correctness.
   */
-
-  /* ---- Pass 1: O(log N) tree seek ---- */
   {
-    int treeFound = 0;
-    int treeCmp = 0;
+    int treeFound = 0, mutFound = 0;
+    int treeCmp = 0, mutCmp = 0;
+    const u8 *mutKey = 0;
+    int mutNKey = 0;
 
-    /* Serialize the UnpackedRecord to a blob for SeekBlob */
+    /* Serialize the UnpackedRecord to a blob */
     u8 *pSerKey = 0;
     int nSerKey = 0;
     rc = serializeUnpackedRecord(pIdxKey, &pSerKey, &nSerKey);
     if( rc!=SQLITE_OK ) return rc;
 
+    /* ---- Tree seek: O(log N) ---- */
     rc = prollyCursorSeekBlob(&pCur->pCur, pSerKey, nSerKey, &res);
-    sqlite3_free(pSerKey);
-    if( rc!=SQLITE_OK ) return rc;
-
-    if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-      /* SeekBlob landed on an approximate position. compareBlobKeys and
-      ** VdbeRecordCompare may disagree on partial-key matches (search key
-      ** has fewer fields than tree entries). Scan backward to find the
-      ** first entry where VdbeRecordCompare gives cmp >= 0. */
+    if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       const u8 *pKey; int nKey;
 
-      /* First scan backward while VdbeRecordCompare says cmp < 0 */
+      /* Correction: scan backward then forward for VdbeRecordCompare match.
+      ** Skip entries deleted in MutMap. Limited to a few steps. */
       while( 1 ){
         prollyCursorKey(&pCur->pCur, &pKey, &nKey);
         pIdxKey->eqSeen = 0;
         cmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
         if( cmp >= 0 || pIdxKey->eqSeen ) break;
-        /* Entry < search key — try previous */
         rc = prollyCursorPrev(&pCur->pCur);
         if( rc!=SQLITE_OK || pCur->pCur.eState!=PROLLY_CURSOR_VALID ){
-          /* No previous entry — need forward scan */
           rc = prollyCursorFirst(&pCur->pCur, &(int){0});
           break;
         }
       }
-
-      /* Now scan forward to find the first entry with cmp >= 0,
-      ** skipping MutMap deletes */
+      /* Forward scan: skip deleted entries, find first cmp >= 0 */
       while( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
         prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-
-        /* Skip deleted entries */
         if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
           ProllyMutMapEntry *mmE = prollyMutMapFind(
               pCur->pMutMap, pKey, nKey, 0);
@@ -2269,7 +2267,6 @@ int sqlite3BtreeIndexMoveto(
             continue;
           }
         }
-
         pIdxKey->eqSeen = 0;
         treeCmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
         if( treeCmp==0 || pIdxKey->eqSeen || treeCmp>0 ){
@@ -2281,107 +2278,28 @@ int sqlite3BtreeIndexMoveto(
       }
     }
 
-    /* ---- Pass 2: Check MutMap INSERT entries ---- */
-    /* Only needed if we have pending edits AND the tree didn't find an
-    ** exact match. For UPDATE (seeking old index entry), the entry is
-    ** always in the tree, so this pass is skipped in the common case. */
+    /* ---- MutMap seek: O(log M) using prollyMutMapFind ---- */
+    /* Only if tree didn't find exact match */
     if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)
      && !(treeFound && treeCmp==0) ){
-      ProllyMutMapIter mutIter;
-      int mutFound = 0;
-      int mutCmp = 0;
-      const u8 *mutKey = 0;
-      int mutNKey = 0;
-
-      /* Scan ALL MutMap INSERTs — we cannot do early termination because
-      ** MutMap is sorted by memcmp which differs from VdbeRecordCompare
-      ** ordering. Track the best match (exact > closest-larger). */
-      prollyMutMapIterFirst(&mutIter, pCur->pMutMap);
-      while( prollyMutMapIterValid(&mutIter) ){
-        ProllyMutMapEntry *mutE = prollyMutMapIterEntry(&mutIter);
-        if( mutE->op==PROLLY_EDIT_INSERT ){
-          pIdxKey->eqSeen = 0;
-          cmp = sqlite3VdbeRecordCompare(mutE->nKey, mutE->pKey, pIdxKey);
-          if( cmp==0 || pIdxKey->eqSeen ){
-            /* Exact match — best possible, stop looking */
-            mutCmp = cmp;
-            mutKey = mutE->pKey;
-            mutNKey = mutE->nKey;
-            mutFound = 1;
-            break;
-          }else if( cmp>0 ){
-            /* Entry > search key. Keep it if it's the closest so far.
-            ** Compare with current best using VdbeRecordCompare. */
-            if( !mutFound ){
-              mutCmp = cmp;
-              mutKey = mutE->pKey;
-              mutNKey = mutE->nKey;
-              mutFound = 1;
-            } else {
-              /* Compare this entry with current best to find closer one.
-              ** Unpack current best, compare new entry against it. */
-              UnpackedRecord *pTmp = sqlite3VdbeAllocUnpackedRecord(
-                  pCur->pKeyInfo);
-              if( pTmp ){
-                int ord;
-                sqlite3VdbeRecordUnpack(mutNKey, mutKey, pTmp);
-                pTmp->default_rc = 0;
-                ord = sqlite3VdbeRecordCompare(mutE->nKey, mutE->pKey, pTmp);
-                sqlite3DbFree(pCur->pKeyInfo->db, pTmp);
-                if( ord<0 ){
-                  /* This entry is closer to search key */
-                  mutCmp = cmp;
-                  mutKey = mutE->pKey;
-                  mutNKey = mutE->nKey;
-                }
-              }
-            }
-          }
-        }
-        prollyMutMapIterNext(&mutIter);
-      }
-
-      /* ---- Pick the best result ---- */
-      if( mutFound && treeFound ){
-        /* Both found candidates. Prefer exact match. If both are cmp>0,
-        ** compare them to each other to pick the closer one. */
+      /* Use compareBlobKeys-based lookup for exact match */
+      ProllyMutMapEntry *mutE = prollyMutMapFind(
+          pCur->pMutMap, pSerKey, nSerKey, 0);
+      if( mutE && mutE->op==PROLLY_EDIT_INSERT ){
+        pIdxKey->eqSeen = 0;
+        mutCmp = sqlite3VdbeRecordCompare(mutE->nKey, mutE->pKey, pIdxKey);
         if( mutCmp==0 || pIdxKey->eqSeen ){
-          /* MutMap has exact match — use it */
-          goto use_mutmap;
-        }else if( treeCmp==0 ){
-          /* Tree has exact match — already positioned */
-          goto use_tree;
-        }else{
-          /* Both cmp>0. Compare entries to each other using pKeyInfo.
-          ** Unpack tree entry and compare MutMap entry against it. */
-          UnpackedRecord *pTmp = sqlite3VdbeAllocUnpackedRecord(pCur->pKeyInfo);
-          if( pTmp ){
-            const u8 *tKey; int tNKey;
-            int ord;
-            prollyCursorKey(&pCur->pCur, &tKey, &tNKey);
-            sqlite3VdbeRecordUnpack(tNKey, tKey, pTmp);
-            pTmp->default_rc = 0;
-            ord = sqlite3VdbeRecordCompare(mutNKey, mutKey, pTmp);
-            sqlite3DbFree(pCur->pKeyInfo->db, pTmp);
-            if( ord<0 ){
-              /* MutMap entry is smaller (closer to search key) */
-              goto use_mutmap;
-            }
-          }
-          /* Tree entry is smaller or equal — use tree */
-          goto use_tree;
+          mutKey = mutE->pKey;
+          mutNKey = mutE->nKey;
+          mutFound = 1;
         }
-      }else if( mutFound ){
-        goto use_mutmap;
-      }else if( treeFound ){
-        goto use_tree;
       }
+    }
+    sqlite3_free(pSerKey);
 
-      /* Neither found — fall through to end-of-tree handling */
-      goto no_match;
-
-use_mutmap:
-      /* Position on MutMap entry: cache key as payload */
+    /* ---- Pick best result ---- */
+    if( mutFound && (!treeFound || treeCmp!=0) ){
+      /* MutMap has exact match — use it */
       if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
         sqlite3_free(pCur->pCachedPayload);
       }
@@ -2397,8 +2315,6 @@ use_mutmap:
       pCur->eState = CURSOR_VALID;
       return SQLITE_OK;
     }
-
-use_tree:
     if( treeFound ){
       *pRes = treeCmp;
       pCur->eState = CURSOR_VALID;

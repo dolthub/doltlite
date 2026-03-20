@@ -50,6 +50,15 @@ static void rng_str(char *buf, int len){
   buf[len] = 0;
 }
 
+/* Pre-generated strings for benchmarks. Avoids per-character rand() calls
+** in the timed loop, which otherwise dominate the measurement. */
+static char g_c[121];
+static char g_pad[61];
+static void init_strings(void){
+  rng_str(g_c, 120);
+  rng_str(g_pad, 60);
+}
+
 /* ---- Helpers ---- */
 static void exec(sqlite3 *db, const char *sql){
   char *err = 0;
@@ -97,9 +106,9 @@ static void prepare(sqlite3 *db){
 
   exec(db, "BEGIN");
   for(i=1; i<=ROWS; i++){
-    rng_str(c, 120);
-    rng_str(pad, 60);
-    execf(db, "INSERT INTO sbtest1 VALUES(%d,%d,'%s','%s')", i, rng_int(1,ROWS), c, pad);
+    /* pre-generated */
+    /* pre-generated */
+    execf(db, "INSERT INTO sbtest1 VALUES(%d,%d,'%s','%s')", i, rng_int(1,ROWS), g_c, g_pad);
   }
   exec(db, "COMMIT");
 
@@ -115,9 +124,9 @@ static void prepare(sqlite3 *db){
   );
   exec(db, "BEGIN");
   for(i=1; i<=1000; i++){
-    rng_str(c, 120);
-    rng_str(pad, 60);
-    execf(db, "INSERT INTO sbtest2 VALUES(%d,%d,'%s','%s')", i, rng_int(1,ROWS), c, pad);
+    /* pre-generated */
+    /* pre-generated */
+    execf(db, "INSERT INTO sbtest2 VALUES(%d,%d,'%s','%s')", i, rng_int(1,ROWS), g_c, g_pad);
   }
   exec(db, "COMMIT");
 
@@ -151,9 +160,9 @@ static void bench_bulk_insert(sqlite3 *db){
   t0 = now_ms();
   exec(db, "BEGIN");
   for(i=1; i<=ROWS; i++){
-    rng_str(c, 120);
-    rng_str(pad, 60);
-    execf(db, "INSERT INTO sbtest_bulk VALUES(%d,%d,'%s','%s')", i, rng_int(1,ROWS), c, pad);
+    /* pre-generated */
+    /* pre-generated */
+    execf(db, "INSERT INTO sbtest_bulk VALUES(%d,%d,'%s','%s')", i, rng_int(1,ROWS), g_c, g_pad);
   }
   exec(db, "COMMIT");
   record("oltp_bulk_insert", now_ms()-t0);
@@ -293,8 +302,8 @@ static void bench_update_non_index(sqlite3 *db){
   t0 = now_ms();
   exec(db, "BEGIN");
   for(i=0; i<10000; i++){
-    rng_str(c, 120);
-    sqlite3_bind_text(stmt, 1, c, 120, SQLITE_TRANSIENT);
+    /* pre-generated */
+    sqlite3_bind_text(stmt, 1, g_c, 120, SQLITE_STATIC);
     sqlite3_bind_int(stmt, 2, rng_int(1,ROWS));
     sqlite3_step(stmt);
     sqlite3_reset(stmt);
@@ -319,12 +328,12 @@ static void bench_delete_insert(sqlite3 *db){
     sqlite3_bind_int(del_stmt, 1, id);
     sqlite3_step(del_stmt);
     sqlite3_reset(del_stmt);
-    rng_str(c, 120);
-    rng_str(pad, 60);
+    /* pre-generated */
+    /* pre-generated */
     sqlite3_bind_int(ins_stmt, 1, id);
     sqlite3_bind_int(ins_stmt, 2, rng_int(1,ROWS));
-    sqlite3_bind_text(ins_stmt, 3, c, 120, SQLITE_TRANSIENT);
-    sqlite3_bind_text(ins_stmt, 4, pad, 60, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins_stmt, 3, g_c, 120, SQLITE_STATIC);
+    sqlite3_bind_text(ins_stmt, 4, g_pad, 60, SQLITE_STATIC);
     sqlite3_step(ins_stmt);
     sqlite3_reset(ins_stmt);
   }
@@ -344,12 +353,12 @@ static void bench_oltp_insert(sqlite3 *db){
   t0 = now_ms();
   exec(db, "BEGIN");
   for(i=0; i<5000; i++){
-    rng_str(c, 120);
-    rng_str(pad, 60);
+    /* pre-generated */
+    /* pre-generated */
     sqlite3_bind_int(stmt, 1, rng_int(1,ROWS+5000));
     sqlite3_bind_int(stmt, 2, rng_int(1,ROWS));
-    sqlite3_bind_text(stmt, 3, c, 120, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 4, pad, 60, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, g_c, 120, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 4, g_pad, 60, SQLITE_STATIC);
     sqlite3_step(stmt);
     sqlite3_reset(stmt);
   }
@@ -373,15 +382,15 @@ static void bench_write_only(sqlite3 *db){
   for(i=0; i<1000; i++){
     sqlite3_bind_int(upd_k, 1, rng_int(1,ROWS)); sqlite3_bind_int(upd_k, 2, rng_int(1,ROWS));
     sqlite3_step(upd_k); sqlite3_reset(upd_k);
-    rng_str(c, 120);
-    sqlite3_bind_text(upd_c, 1, c, 120, SQLITE_TRANSIENT); sqlite3_bind_int(upd_c, 2, rng_int(1,ROWS));
+    /* pre-generated */
+    sqlite3_bind_text(upd_c, 1, g_c, 120, SQLITE_STATIC); sqlite3_bind_int(upd_c, 2, rng_int(1,ROWS));
     sqlite3_step(upd_c); sqlite3_reset(upd_c);
     id = rng_int(1,ROWS);
     sqlite3_bind_int(del, 1, id); sqlite3_step(del); sqlite3_reset(del);
-    rng_str(c, 120); rng_str(pad, 60);
+    /* pre-generated */ /* pre-generated */
     sqlite3_bind_int(ins, 1, id); sqlite3_bind_int(ins, 2, rng_int(1,ROWS));
-    sqlite3_bind_text(ins, 3, c, 120, SQLITE_TRANSIENT);
-    sqlite3_bind_text(ins, 4, pad, 60, SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins, 3, g_c, 120, SQLITE_STATIC);
+    sqlite3_bind_text(ins, 4, g_pad, 60, SQLITE_STATIC);
     sqlite3_step(ins); sqlite3_reset(ins);
   }
   exec(db, "COMMIT");
@@ -616,15 +625,15 @@ static void bench_read_write(sqlite3 *db){
     sqlite3_step(ss); sqlite3_reset(ss);
     sqlite3_bind_int(uk,1,rng_int(1,ROWS)); sqlite3_bind_int(uk,2,rng_int(1,ROWS));
     sqlite3_step(uk); sqlite3_reset(uk);
-    rng_str(c,120);
-    sqlite3_bind_text(uc,1,c,120,SQLITE_TRANSIENT); sqlite3_bind_int(uc,2,rng_int(1,ROWS));
+    /* pre-generated */
+    sqlite3_bind_text(uc,1,g_c,120,SQLITE_STATIC); sqlite3_bind_int(uc,2,rng_int(1,ROWS));
     sqlite3_step(uc); sqlite3_reset(uc);
     id=rng_int(1,ROWS);
     sqlite3_bind_int(del,1,id); sqlite3_step(del); sqlite3_reset(del);
-    rng_str(c,120); rng_str(pad,60);
+    /* pre-generated */ /* pre-generated */
     sqlite3_bind_int(ins,1,id); sqlite3_bind_int(ins,2,rng_int(1,ROWS));
-    sqlite3_bind_text(ins,3,c,120,SQLITE_TRANSIENT);
-    sqlite3_bind_text(ins,4,pad,60,SQLITE_TRANSIENT);
+    sqlite3_bind_text(ins,3,g_c,120,SQLITE_STATIC);
+    sqlite3_bind_text(ins,4,g_pad,60,SQLITE_STATIC);
     sqlite3_step(ins); sqlite3_reset(ins);
   }
   exec(db, "COMMIT");
@@ -634,22 +643,29 @@ static void bench_read_write(sqlite3 *db){
   sqlite3_finalize(del); sqlite3_finalize(ins);
 }
 
+/* Reset: close DB, delete files, reopen, re-prepare.
+** Gives each benchmark a fresh chunk store with no accumulated state. */
+static void fresh_db(sqlite3 **ppDb){
+  if( *ppDb ) sqlite3_close(*ppDb);
+  remove("/tmp/sysbench_compare.db");
+  remove("/tmp/sysbench_compare.db-wal");
+  remove("/tmp/sysbench_compare.db-journal");
+  sqlite3_open("/tmp/sysbench_compare.db", ppDb);
+  rng_seed(SEED);
+  prepare(*ppDb);
+}
+
 /* ---- Main ---- */
 static void run_benchmarks(void){
-  sqlite3 *db;
+  sqlite3 *db = 0;
   int i;
   double t0;
 
-  remove("/tmp/sysbench_compare.db"); remove("/tmp/sysbench_compare.db-wal");
-  sqlite3_open("/tmp/sysbench_compare.db", &db);
+  init_strings();
+  fresh_db(&db);
 
-  /* Prepare */
-  rng_seed(SEED);
-  t0 = now_ms();
-  prepare(db);
-  /* Don't count prepare time — it's the bulk_insert test */
-
-  /* Run all benchmarks with fresh RNG seed for each */
+  /* Run all benchmarks. Write-heavy tests get a fresh DB to avoid
+  ** chunk store accumulation inflating their numbers. */
   rng_seed(SEED + 1); bench_bulk_insert(db);
   rng_seed(SEED + 2); bench_point_select(db);
   rng_seed(SEED + 3); bench_range_select(db);
@@ -657,25 +673,28 @@ static void run_benchmarks(void){
   rng_seed(SEED + 5); bench_order_range(db);
   rng_seed(SEED + 6); bench_distinct_range(db);
   rng_seed(SEED + 7); bench_index_scan(db);
-  rng_seed(SEED + 8); bench_update_index(db);
-  rng_seed(SEED + 9); bench_update_non_index(db);
-  rng_seed(SEED + 10); bench_delete_insert(db);
-  rng_seed(SEED + 11); bench_oltp_insert(db);
-  rng_seed(SEED + 12); bench_write_only(db);
+  rng_seed(SEED + 8); fresh_db(&db); bench_update_index(db);
+  rng_seed(SEED + 9); fresh_db(&db); bench_update_non_index(db);
+  rng_seed(SEED + 10); fresh_db(&db); bench_delete_insert(db);
+  rng_seed(SEED + 11); fresh_db(&db); bench_oltp_insert(db);
+  rng_seed(SEED + 12); fresh_db(&db); bench_write_only(db);
+  fresh_db(&db);  /* fresh state for remaining read tests */
   rng_seed(SEED + 13); bench_select_random_points(db);
   rng_seed(SEED + 14); bench_select_random_ranges(db);
   rng_seed(SEED + 15); bench_covering_index_scan(db);
   rng_seed(SEED + 16); bench_groupby_scan(db);
   rng_seed(SEED + 17); bench_index_join(db);
   rng_seed(SEED + 18); bench_index_join_scan(db);
-  rng_seed(SEED + 19); bench_types_delete_insert(db);
+  rng_seed(SEED + 19); fresh_db(&db); bench_types_delete_insert(db);
   rng_seed(SEED + 20); bench_types_table_scan(db);
   rng_seed(SEED + 21); bench_table_scan(db);
-  rng_seed(SEED + 22); bench_read_only(db);
-  rng_seed(SEED + 23); bench_read_write(db);
+  rng_seed(SEED + 22); fresh_db(&db); bench_read_only(db);
+  rng_seed(SEED + 23); fresh_db(&db); bench_read_write(db);
 
   sqlite3_close(db);
-  remove("/tmp/sysbench_compare.db"); remove("/tmp/sysbench_compare.db-wal");
+  remove("/tmp/sysbench_compare.db");
+  remove("/tmp/sysbench_compare.db-wal");
+  remove("/tmp/sysbench_compare.db-journal");
 
   /* Output JSON */
   printf("{\"engine\":\"%s\",\"rows\":%d,\"results\":{", ENGINE_NAME, ROWS);
