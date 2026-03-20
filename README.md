@@ -358,20 +358,20 @@ comment.
 
 | Test | Multiplier |
 |------|------------|
-| oltp_point_select | 0.35 |
-| oltp_range_select | 0.90 |
-| oltp_sum_range | 0.71 |
-| oltp_order_range | 1.00 |
-| oltp_distinct_range | 1.18 |
-| oltp_index_scan | 11.98 |
-| select_random_points | 1.99 |
-| select_random_ranges | 0.44 |
-| covering_index_scan | 8.52 |
-| groupby_scan | 1.11 |
-| index_join | 0.73 |
-| index_join_scan | 172.38 |
-| types_table_scan | 1.09 |
-| table_scan | 1.27 |
+| oltp_point_select | 0.33 |
+| oltp_range_select | 0.83 |
+| oltp_sum_range | 0.70 |
+| oltp_order_range | 1.11 |
+| oltp_distinct_range | 1.06 |
+| oltp_index_scan | 11.40 |
+| select_random_points | 1.66 |
+| select_random_ranges | 0.41 |
+| covering_index_scan | 8.70 |
+| groupby_scan | 1.10 |
+| index_join | 0.78 |
+| index_join_scan | 160.24 |
+| types_table_scan | 1.03 |
+| table_scan | 1.06 |
 | oltp_read_only | 0.72 |
 
 #### Writes
@@ -379,13 +379,13 @@ comment.
 | Test | Multiplier |
 |------|------------|
 | oltp_bulk_insert | 1.22 |
-| oltp_insert | 1696 |
-| oltp_update_index | 1.41 |
-| oltp_update_non_index | 2.26 |
-| oltp_delete_insert | 1301 |
-| oltp_write_only | 204 |
-| types_delete_insert | 1.10 |
-| oltp_read_write | 158 |
+| oltp_insert | 1525 |
+| oltp_update_index | 526 |
+| oltp_update_non_index | 1.83 |
+| oltp_delete_insert | 1862 |
+| oltp_write_only | 360 |
+| types_delete_insert | 1.12 |
+| oltp_read_write | 162 |
 
 _10K rows, in-memory, macOS ARM. Run `test/sysbench_compare.sh` to reproduce._
 
@@ -402,15 +402,14 @@ covering_index_scan, index_join_scan) show higher multipliers because the prolly
 tree's index lookup path has more overhead than SQLite's B-tree. This is an
 optimization target.
 
-**Major write improvements.** Update and delete-insert workloads have dropped
-dramatically: oltp_update_index is down to 1.4x (from 966x), oltp_update_non_index
-to 2.3x (from 28x), types_delete_insert to 1.1x (from 223x), and oltp_bulk_insert
-to 1.2x (from 6x). The composite oltp_write_only dropped from 751x to 204x and
-oltp_read_write from 295x to 158x. Insert-heavy and delete-insert workloads
-(oltp_insert at 1696x, oltp_delete_insert at 1301x) still show high multipliers
-due to the per-operation flush cost. This is not inherent to the architecture —
-Dolt achieves sub-2x write multipliers against MySQL using the same prolly tree
-design with proper write batching.
+**Write performance is mixed.** oltp_bulk_insert (1.2x), oltp_update_non_index
+(1.8x), types_delete_insert (1.1x), and oltp_read_write (162x) remain
+reasonable. However, oltp_update_index regressed to 526x, and insert-heavy
+workloads (oltp_insert at 1525x, oltp_delete_insert at 1862x) still show high
+multipliers due to the per-operation flush cost. The composite oltp_write_only
+is at 360x. This is not inherent to the architecture — Dolt achieves sub-2x
+write multipliers against MySQL using the same prolly tree design with proper
+write batching.
 
 The next optimization targets are batching flushes across multiple writes
 within a transaction and reducing chunk store overhead for small mutations.
