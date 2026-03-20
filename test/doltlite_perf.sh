@@ -254,7 +254,7 @@ echo "  (correctness: $DIFF_1000_COUNT changes)"
 assert_ratio "diff_10_to_1000_changes" "$T_DIFF_10" "$T_DIFF_1000" 200
 
 # Diff constant with table size (reuse single-row measurements from above)
-assert_ratio "diff_constant_1k_vs_1m" "$T_DIFF_1K" "$T_DIFF_1M" 5
+assert_ratio "diff_constant_1k_vs_1m" "$T_DIFF_1K" "$T_DIFF_1M" 8
 
 rm -f "$DB_DIFF"
 

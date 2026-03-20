@@ -606,19 +606,106 @@ static int applyEdits(
       }
     }
 
-    /* Step 3: Serialize new leaf */
+    /* Step 3: Serialize the modified leaf with re-chunking if needed. */
+    #define MAX_LEAF_SPLITS 64
+    ProllyHash aLeafHash[MAX_LEAF_SPLITS];
+    u8 aLeafKeyBuf[MAX_LEAF_SPLITS][256];
+    int aLeafKeyLen[MAX_LEAF_SPLITS];
+    int nLeafSplits = 0;
     ProllyHash newHash;
     if( leafBuilder.nItems == 0 ){
-      /* Leaf became empty (all entries deleted).  Set hash to empty.
-      ** The ancestor rewrite will handle removing the child ref. */
       memset(&newHash, 0, sizeof(ProllyHash));
     }else{
-      rc = builderToChunk(&leafBuilder, pMut->pStore, &newHash);
-      if( rc!=SQLITE_OK ) goto leaf_err;
+      int nOff = (leafBuilder.nItems + 1) * 4;
+      int nTotal = 8 + nOff * 2 + leafBuilder.nKeyBytes
+                   + leafBuilder.nValBytes;
+      if( nTotal <= PROLLY_CHUNK_MAX ){
+        rc = builderToChunk(&leafBuilder, pMut->pStore, &newHash);
+        if( rc!=SQLITE_OK ) goto leaf_err;
+        nLeafSplits = 1;
+      }else{
+        /* Leaf overflow: split into multiple level-0 nodes using
+        ** rolling hash boundaries.  We collect (lastKey, hash) pairs
+        ** for each new leaf node, then pass them to the parent. */
+        ProllyRollingHash rh;
+        rc = prollyRollingHashInit(&rh, 64);
+        if( rc!=SQLITE_OK ) goto leaf_err;
+
+        ProllyNodeBuilder splitB;
+        prollyNodeBuilderInit(&splitB, 0, pMut->flags);
+        int splitBytes = 0;
+        nLeafSplits = 0;
+
+        int ei;
+        for(ei = 0; ei < leafBuilder.nItems; ei++){
+          u32 kO0 = leafBuilder.aKeyOff[ei];
+          u32 kO1 = leafBuilder.aKeyOff[ei + 1];
+          u32 vO0 = leafBuilder.aValOff[ei];
+          u32 vO1 = leafBuilder.aValOff[ei + 1];
+          int kLen = (int)(kO1 - kO0);
+          int vLen = (int)(vO1 - vO0);
+          const u8 *pKB = leafBuilder.pKeyBuf + kO0;
+          const u8 *pVB = leafBuilder.pValBuf + vO0;
+
+          rc = prollyNodeBuilderAdd(&splitB, pKB, kLen, pVB, vLen);
+          if( rc!=SQLITE_OK ) break;
+          splitBytes += kLen + vLen;
+
+          /* Feed key bytes into rolling hash */
+          int bi;
+          for(bi = 0; bi < kLen; bi++){
+            prollyRollingHashUpdate(&rh, pKB[bi]);
+          }
+
+          /* Check for split boundary */
+          if( splitBytes >= PROLLY_CHUNK_MIN
+           && ei < leafBuilder.nItems - 1
+           && nLeafSplits < MAX_LEAF_SPLITS - 1 ){
+            int atBound = prollyRollingHashAtBoundary(&rh,
+                            PROLLY_CHUNK_PATTERN);
+            if( atBound || splitBytes >= PROLLY_CHUNK_MAX ){
+              rc = builderToChunk(&splitB, pMut->pStore,
+                                  &aLeafHash[nLeafSplits]);
+              if( rc!=SQLITE_OK ) break;
+              /* Save last key for parent */
+              if( kLen > (int)sizeof(aLeafKeyBuf[0]) )
+                kLen = (int)sizeof(aLeafKeyBuf[0]);
+              memcpy(aLeafKeyBuf[nLeafSplits], pKB, kLen);
+              aLeafKeyLen[nLeafSplits] = kLen;
+              nLeafSplits++;
+              prollyNodeBuilderReset(&splitB);
+              prollyRollingHashReset(&rh);
+              splitBytes = 0;
+            }
+          }
+        }
+
+        /* Flush remaining entries as the last split node */
+        if( rc==SQLITE_OK && splitB.nItems > 0 ){
+          rc = builderToChunk(&splitB, pMut->pStore,
+                              &aLeafHash[nLeafSplits]);
+          if( rc==SQLITE_OK ) nLeafSplits++;
+        }
+
+        prollyNodeBuilderFree(&splitB);
+        prollyRollingHashFree(&rh);
+        if( rc!=SQLITE_OK ) goto leaf_err;
+
+        /* For single-split case, set newHash for compatibility */
+        if( nLeafSplits == 1 ){
+          memcpy(&newHash, &aLeafHash[0], sizeof(ProllyHash));
+        }
+      }
     }
     prollyNodeBuilderFree(&leafBuilder);
 
-    /* Step 4: Walk UP ancestor chain, replacing child hashes */
+    /* Step 4: Walk UP ancestor chain, replacing child hashes.
+    ** For single-leaf trees (leafLevel==0), the leaf IS the root. */
+    if( leafLevel == 0 ){
+      memcpy(&currentRoot, &newHash, sizeof(ProllyHash));
+      prollyCursorClose(&cur);
+      continue;
+    }
     {
       int level;
       for(level = leafLevel - 1; level >= 0; level--){
@@ -636,14 +723,29 @@ static int applyEdits(
           const u8 *pV; int nV;
           prollyNodeKey(pAnc, k, &pK, &nK);
           if( k == childIdx ){
-            /* Check if child was deleted (empty hash) */
-            if( prollyHashIsEmpty(&newHash) ){
-              /* Skip this entry — child was deleted */
-              continue;
+            if( nLeafSplits == 0 || (nLeafSplits == 1 && prollyHashIsEmpty(&newHash)) ){
+              continue;  /* Child deleted — skip */
             }
-            /* Replace with new child hash */
-            rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK,
-                                      newHash.data, PROLLY_HASH_SIZE);
+            if( nLeafSplits > 1 && level == leafLevel - 1 ){
+              /* Multiple leaf splits: insert all children.
+              ** All but the last get their own stored key;
+              ** the last reuses the original parent key. */
+              int si;
+              for(si = 0; si < nLeafSplits - 1; si++){
+                rc = prollyNodeBuilderAdd(&ancBuilder,
+                       aLeafKeyBuf[si], aLeafKeyLen[si],
+                       aLeafHash[si].data, PROLLY_HASH_SIZE);
+                if( rc!=SQLITE_OK ) break;
+              }
+              if( rc==SQLITE_OK ){
+                rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK,
+                       aLeafHash[nLeafSplits-1].data, PROLLY_HASH_SIZE);
+              }
+            }else{
+              /* Single replacement */
+              rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK,
+                                        newHash.data, PROLLY_HASH_SIZE);
+            }
           }else{
             prollyNodeValue(pAnc, k, &pV, &nV);
             rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK, pV, nV);
