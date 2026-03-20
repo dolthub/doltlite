@@ -385,9 +385,6 @@ static int gcSweep(
       int nChunkData = 0;
       rc = chunkStoreGet(cs, &cs->aIndex[i].hash, &chunkData, &nChunkData);
       if( rc!=SQLITE_OK ){
-        fprintf(stderr, "GC: chunkStoreGet failed rc=%d idx=%d offset=%lld size=%d walData=%p nWal=%lld\n",
-                rc, i, (long long)cs->aIndex[i].offset, cs->aIndex[i].size,
-                (void*)cs->pWalData, (long long)cs->nWalData);
         sqlite3_free(aNewIndex);
         sqlite3_free(buf);
         return rc;

@@ -340,19 +340,6 @@ static int mergeWalk(
   for(;;){
     curValid = prollyCursorIsValid(&cur);
     iterValid = prollyMutMapIterValid(&iter);
-#if 0
-    {const u8 *dk; int dnk;
-     if(curValid){prollyCursorKey(&cur,&dk,&dnk);
-       fprintf(stderr,"MERGE: cur key len=%d hex=",dnk);
-       for(int q=0;q<dnk&&q<16;q++) fprintf(stderr,"%02x",dk[q]);
-       fprintf(stderr,"\n");}
-     if(iterValid){ProllyMutMapEntry *de=prollyMutMapIterEntry(&iter);
-       fprintf(stderr,"MERGE: edit key len=%d hex=",de->nKey);
-       for(int q=0;q<de->nKey&&q<16;q++) fprintf(stderr,"%02x",de->pKey[q]);
-       fprintf(stderr," op=%d\n",de->op);}
-    }
-#endif
-
     if( !curValid && !iterValid ){
       /* Both streams exhausted — done */
       break;

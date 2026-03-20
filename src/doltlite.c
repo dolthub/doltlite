@@ -160,14 +160,13 @@ static void doltliteAddFunc(
       for(i=0; i<argc; i++){
         const char *zTable = (const char*)sqlite3_value_text(argv[i]);
         Pgno iTable;
-        int j, found;
+        int j;
 
         if( !zTable || zTable[0]=='-' ) continue;
         rc = doltliteResolveTableName(db, zTable, &iTable);
         if( rc!=SQLITE_OK ) continue;
 
         /* Find in working */
-        found = 0;
         for(j=0; j<nWorking; j++){
           if( aWorking[j].iTable==iTable ){
             /* Update or add in staged */
@@ -192,11 +191,9 @@ static void doltliteAddFunc(
                 nStaged++;
               }
             }
-            found = 1;
             break;
           }
         }
-        (void)found;
       }
 
       /* Re-serialize the modified staged catalog */
