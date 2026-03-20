@@ -53,6 +53,12 @@ int compareBlobKeys(const u8 *pKey1, int nKey1,
   /* Parse header sizes */
   off1 = getVarint32(pKey1, hdr1);
   off2 = getVarint32(pKey2, hdr2);
+  if( hdr1 > (u32)nKey1 || hdr2 > (u32)nKey2 ){
+    /* Malformed header — fall back to raw comparison */
+    if( nKey1<nKey2 ) return -1;
+    if( nKey1>nKey2 ) return 1;
+    return memcmp(pKey1, pKey2, nKey1);
+  }
   d1 = hdr1;
   d2 = hdr2;
 
@@ -86,6 +92,14 @@ int compareBlobKeys(const u8 *pKey1, int nKey1,
       len2 = (type2-12)/2;
     }else{
       len2 = 0;
+    }
+
+    /* Bounds check: ensure field data doesn't exceed key buffer */
+    if( d1+len1 > (u32)nKey1 || d2+len2 > (u32)nKey2 ){
+      /* Malformed key — fall back to raw length comparison */
+      if( nKey1<nKey2 ) return -1;
+      if( nKey1>nKey2 ) return 1;
+      return 0;
     }
 
     /* NULL handling: NULL sorts before everything */

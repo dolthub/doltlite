@@ -265,9 +265,14 @@ static void doltliteAddFunc(
       sqlite3_free(aStaged);
     }
 
-    /* Persist */
+    /* Persist — if commit fails, revert session state to avoid
+    ** inconsistency between in-memory session and on-disk store. */
     rc = chunkStoreCommit(cs);
     if( rc!=SQLITE_OK ){
+      /* Rollback session staged state to what's on disk */
+      ProllyHash diskStaged;
+      chunkStoreGetStagedCatalog(cs, &diskStaged);
+      doltliteSetSessionStaged(db, &diskStaged);
       sqlite3_result_error_code(context, rc);
       return;
     }

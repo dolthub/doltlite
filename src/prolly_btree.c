@@ -1501,6 +1501,9 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
           p->nTables = p->nCommittedTables;
           p->nTablesAlloc = p->nCommittedTables;
           p->iNextTable = p->iCommittedNextTable;
+        } else {
+          p->nTables = 0;
+          p->nTablesAlloc = 0;
         }
       }
       p->root = p->committedRoot;
@@ -1521,6 +1524,9 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
           p->nTables = p->nCommittedTables;
           p->nTablesAlloc = p->nCommittedTables;
           p->iNextTable = p->iCommittedNextTable;
+        } else {
+          p->nTables = 0;
+          p->nTablesAlloc = 0;
         }
       }
       p->nSavepoint = 0;

@@ -1311,6 +1311,12 @@ int chunkStoreCommit(ChunkStore *cs){
       pe->offset = -(i64)cs->nWalData - 1;  /* negative = WAL offset */
       cs->pWalData = newBuf;
       cs->nWalData = newSize;
+    } else {
+      /* Realloc failed — abort commit to avoid use-after-free.
+      ** pWriteBuf will be freed below, so any pending entries with
+      ** buffer-relative offsets would become dangling pointers. */
+      rc = SQLITE_NOMEM;
+      goto commit_error;
     }
   }
 
