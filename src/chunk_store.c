@@ -649,8 +649,10 @@ int chunkStoreOpen(
   if( cs->zFilename == 0 ) return SQLITE_NOMEM;
   memcpy(cs->zFilename, zFilename, n + 1);
 
-  /* Check if the file already exists */
-  rc = sqlite3OsAccess(pVfs, zFilename, SQLITE_ACCESS_EXISTS, &exists);
+  /* Check if the file already exists.
+  ** Use cs->zFilename (our persistent copy) not the caller's zFilename
+  ** which may be freed after this function returns. */
+  rc = sqlite3OsAccess(pVfs, cs->zFilename, SQLITE_ACCESS_EXISTS, &exists);
   if( rc != SQLITE_OK ){
     sqlite3_free(cs->zFilename);
     cs->zFilename = 0;
@@ -660,11 +662,11 @@ int chunkStoreOpen(
   if( exists ){
     /* Open the existing file */
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-    rc = csOpenFile(pVfs, zFilename, &cs->pFile, openFlags);
+    rc = csOpenFile(pVfs, cs->zFilename, &cs->pFile, openFlags);
     if( rc != SQLITE_OK ){
       /* Try read-only */
       openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
-      rc = csOpenFile(pVfs, zFilename, &cs->pFile, openFlags);
+      rc = csOpenFile(pVfs, cs->zFilename, &cs->pFile, openFlags);
       if( rc != SQLITE_OK ){
         sqlite3_free(cs->zFilename);
         cs->zFilename = 0;
