@@ -64,16 +64,12 @@ jobs:
             ext: ""
             lib_ext: ".dylib"
             static_ext: ".a"
-          - os: macos-13
-            target: osx-x64
-            ext: ""
-            lib_ext: ".dylib"
-            static_ext: ".a"
-          - os: windows-latest
-            target: win-x64
-            ext: ".exe"
-            lib_ext: ".dll"
-            static_ext: ".a"
+          # Windows disabled: chunk_store.c uses sys/uio.h (POSIX)
+          # - os: windows-latest
+          #   target: win-x64
+          #   ext: ".exe"
+          #   lib_ext: ".dll"
+          #   static_ext: ".a"
 
     runs-on: ${{ matrix.os }}
 
@@ -95,43 +91,15 @@ jobs:
         ../configure
         make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-lib
 
-    - name: Setup MSYS2 (Windows)
-      if: runner.os == 'Windows'
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: false
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-zlib
-          make
-          tcl
-
-    - name: Build (Windows)
-      if: runner.os == 'Windows'
-      shell: msys2 {0}
-      run: |
-        mkdir -p build && cd build
-        ../configure
-        make -j$(nproc) doltlite doltlite-lib
-
     - name: Package CLI tools
       shell: bash
       run: |
         VERSION=${GITHUB_REF_NAME#v}
         DIR="doltlite-tools-${{ matrix.target }}-${VERSION}"
         mkdir -p "${DIR}"
-        if [ "${{ runner.os }}" = "Windows" ]; then
-          cp build/doltlite.exe "${DIR}/" 2>/dev/null || cp build/doltlite "${DIR}/doltlite.exe"
-        else
-          cp build/doltlite "${DIR}/"
-          strip "${DIR}/doltlite" 2>/dev/null || true
-        fi
-        if [ "${{ runner.os }}" = "Windows" ]; then
-          7z a "${DIR}.zip" "${DIR}"
-        else
-          zip -r "${DIR}.zip" "${DIR}"
-        fi
+        cp build/doltlite "${DIR}/"
+        strip "${DIR}/doltlite" 2>/dev/null || true
+        zip -r "${DIR}.zip" "${DIR}"
 
     - name: Package libraries
       shell: bash
@@ -140,18 +108,9 @@ jobs:
         DIR="doltlite-lib-${{ matrix.target }}-${VERSION}"
         mkdir -p "${DIR}"
         cp build/sqlite3.h "${DIR}/doltlite.h" 2>/dev/null || true
-        if [ "${{ runner.os }}" = "Windows" ]; then
-          cp build/libdoltlite.lib "${DIR}/" 2>/dev/null || true
-          cp build/libdoltlite.dll "${DIR}/" 2>/dev/null || true
-        else
-          cp build/libdoltlite${{ matrix.static_ext }} "${DIR}/" 2>/dev/null || true
-          cp build/libdoltlite${{ matrix.lib_ext }} "${DIR}/" 2>/dev/null || true
-        fi
-        if [ "${{ runner.os }}" = "Windows" ]; then
-          7z a "${DIR}.zip" "${DIR}"
-        else
-          zip -r "${DIR}.zip" "${DIR}"
-        fi
+        cp build/libdoltlite${{ matrix.static_ext }} "${DIR}/" 2>/dev/null || true
+        cp build/libdoltlite${{ matrix.lib_ext }} "${DIR}/" 2>/dev/null || true
+        zip -r "${DIR}.zip" "${DIR}"
 
     - name: Upload binary artifacts
       uses: actions/upload-artifact@v4
