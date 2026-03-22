@@ -1,0 +1,189 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Source artifacts (run once on Linux) ──────────────────
+  source:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y build-essential zlib1g-dev tcl-dev
+
+    - name: Build amalgamation
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make sqlite3.c sqlite3.h
+        # sqlite3.c/h IS the doltlite amalgamation (built with DOLTLITE_PROLLY=1)
+
+    - name: Package amalgamation
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        mkdir doltlite-amalgamation-${VERSION}
+        cp build/sqlite3.c doltlite-amalgamation-${VERSION}/doltlite.c
+        cp build/sqlite3.h doltlite-amalgamation-${VERSION}/doltlite.h
+        zip -r doltlite-amalgamation-${VERSION}.zip doltlite-amalgamation-${VERSION}/
+
+    - name: Package autoconf source
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        tar czf doltlite-autoconf-${VERSION}.tar.gz \
+          --transform "s,^,doltlite-autoconf-${VERSION}/," \
+          configure Makefile.in main.mk src/ ext/ \
+          build/sqlite3.c build/sqlite3.h
+
+    - name: Upload source artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: source
+        path: |
+          doltlite-amalgamation-*.zip
+          doltlite-autoconf-*.tar.gz
+
+  # ── Binary builds (per-platform) ─────────────────────────
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            ext: ""
+            lib_ext: ".so"
+            static_ext: ".a"
+          - os: macos-latest
+            target: osx-arm64
+            ext: ""
+            lib_ext: ".dylib"
+            static_ext: ".a"
+          - os: macos-13
+            target: osx-x64
+            ext: ""
+            lib_ext: ".dylib"
+            static_ext: ".a"
+          - os: windows-latest
+            target: win-x64
+            ext: ".exe"
+            lib_ext: ".dll"
+            static_ext: ".lib"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y build-essential zlib1g-dev
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install zlib || true
+
+    - name: Configure and build (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-lib
+
+    - name: Build (Windows)
+      if: runner.os == 'Windows'
+      shell: cmd
+      run: |
+        mkdir build
+        cd build
+        copy ..\Makefile.msc Makefile
+        nmake /f Makefile TOP=.. DOLTLITE_PROLLY=1 doltlite.exe libdoltlite.lib 2>nul || (
+          REM Fallback: build amalgamation directly
+          ..\configure
+          make doltlite doltlite-lib
+        )
+
+    - name: Package CLI tools
+      shell: bash
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        DIR="doltlite-tools-${{ matrix.target }}-${VERSION}"
+        mkdir -p "${DIR}"
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          cp build/doltlite.exe "${DIR}/" 2>/dev/null || cp build/doltlite "${DIR}/doltlite.exe"
+        else
+          cp build/doltlite "${DIR}/"
+          strip "${DIR}/doltlite" 2>/dev/null || true
+        fi
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          7z a "${DIR}.zip" "${DIR}"
+        else
+          zip -r "${DIR}.zip" "${DIR}"
+        fi
+
+    - name: Package libraries
+      shell: bash
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        DIR="doltlite-lib-${{ matrix.target }}-${VERSION}"
+        mkdir -p "${DIR}"
+        cp build/sqlite3.h "${DIR}/doltlite.h" 2>/dev/null || true
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          cp build/libdoltlite.lib "${DIR}/" 2>/dev/null || true
+          cp build/libdoltlite.dll "${DIR}/" 2>/dev/null || true
+        else
+          cp build/libdoltlite${{ matrix.static_ext }} "${DIR}/" 2>/dev/null || true
+          cp build/libdoltlite${{ matrix.lib_ext }} "${DIR}/" 2>/dev/null || true
+        fi
+        if [ "${{ runner.os }}" = "Windows" ]; then
+          7z a "${DIR}.zip" "${DIR}"
+        else
+          zip -r "${DIR}.zip" "${DIR}"
+        fi
+
+    - name: Upload binary artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: binaries-${{ matrix.target }}
+        path: |
+          doltlite-tools-*.zip
+          doltlite-lib-*.zip
+
+  # ── Create GitHub release ─────────────────────────────────
+  release:
+    needs: [source, build]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Create release
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        # Collect all zips and tarballs
+        find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec mv {} . \;
+        ls -la *.zip *.tar.gz
+
+        gh release create "${GITHUB_REF_NAME}" \
+          --title "Doltlite ${VERSION}" \
+          --generate-notes \
+          doltlite-amalgamation-${VERSION}.zip \
+          doltlite-autoconf-${VERSION}.tar.gz \
+          doltlite-tools-linux-x64-${VERSION}.zip \
+          doltlite-tools-osx-arm64-${VERSION}.zip \
+          doltlite-tools-osx-x64-${VERSION}.zip \
+          doltlite-tools-win-x64-${VERSION}.zip \
+          doltlite-lib-linux-x64-${VERSION}.zip \
+          doltlite-lib-osx-arm64-${VERSION}.zip \
+          doltlite-lib-osx-x64-${VERSION}.zip \
+          doltlite-lib-win-x64-${VERSION}.zip
