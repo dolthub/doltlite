@@ -358,61 +358,62 @@ comment.
 
 | Test | Multiplier |
 |------|------------|
-| oltp_point_select | 0.33 |
-| oltp_range_select | 0.83 |
-| oltp_sum_range | 0.70 |
-| oltp_order_range | 1.11 |
-| oltp_distinct_range | 1.06 |
-| oltp_index_scan | 11.40 |
-| select_random_points | 1.66 |
-| select_random_ranges | 0.41 |
-| covering_index_scan | 8.70 |
-| groupby_scan | 1.10 |
-| index_join | 0.78 |
-| index_join_scan | 160.24 |
-| types_table_scan | 1.03 |
-| table_scan | 1.06 |
-| oltp_read_only | 0.72 |
+| oltp_point_select | 0.88 |
+| oltp_range_select | 1.27 |
+| oltp_sum_range | 1.29 |
+| oltp_order_range | 1.75 |
+| oltp_distinct_range | 0.83 |
+| oltp_index_scan | 14.50 |
+| select_random_points | 2.08 |
+| select_random_ranges | 0.80 |
+| covering_index_scan | 9.83 |
+| groupby_scan | 1.05 |
+| index_join | 2.50 |
+| index_join_scan | 130.50 |
+| types_table_scan | 1.00 |
+| table_scan | 1.00 |
+| oltp_read_only | 1.18 |
 
 #### Writes
 
 | Test | Multiplier |
 |------|------------|
-| oltp_bulk_insert | 1.22 |
-| oltp_insert | 1525 |
-| oltp_update_index | 526 |
-| oltp_update_non_index | 1.83 |
-| oltp_delete_insert | 1862 |
-| oltp_write_only | 360 |
-| types_delete_insert | 1.12 |
-| oltp_read_write | 162 |
+| oltp_bulk_insert | 1.19 |
+| oltp_insert | 1.50 |
+| oltp_update_index | 380 |
+| oltp_update_non_index | 1.28 |
+| oltp_delete_insert | 13.38 |
+| oltp_write_only | 20.45 |
+| types_delete_insert | 1.13 |
+| oltp_read_write | 3.57 |
 
 _10K rows, in-memory, macOS ARM. Run `test/sysbench_compare.sh` to reproduce._
 
 **Reads are at parity or faster for most workloads.** The VDBE, query planner,
 parser, and all upper layers are untouched SQLite — only the storage engine is
 replaced. Point selects, range queries, aggregates, and the composite
-oltp_read_only benchmark are all at or below 1x of stock SQLite. Several
-benchmarks (point_select, range_select, sum_range, select_random_ranges,
-index_join, read_only) now run faster than SQLite thanks to the prolly tree's
-cache-friendly layout.
+oltp_read_only benchmark are all within 1-2x of stock SQLite.
 
 **Index-heavy reads are slower.** Secondary index scans (oltp_index_scan,
 covering_index_scan, index_join_scan) show higher multipliers because the prolly
 tree's index lookup path has more overhead than SQLite's B-tree. This is an
 optimization target.
 
-**Write performance is mixed.** oltp_bulk_insert (1.2x), oltp_update_non_index
-(1.8x), types_delete_insert (1.1x), and oltp_read_write (162x) remain
-reasonable. However, oltp_update_index regressed to 526x, and insert-heavy
-workloads (oltp_insert at 1525x, oltp_delete_insert at 1862x) still show high
-multipliers due to the per-operation flush cost. The composite oltp_write_only
-is at 360x. This is not inherent to the architecture — Dolt achieves sub-2x
-write multipliers against MySQL using the same prolly tree design with proper
-write batching.
+**Most writes are within 1-4x of SQLite.** The Phase 1 chunk store rewrite
+replaced the O(N) full-tree copy-on-write with O(M log N) targeted leaf edits
+using a Dolt-style cursor-path-stack algorithm. Only the root-to-leaf path is
+rewritten per edit; unchanged subtrees are never touched. Combined with deferred
+flushing (edits accumulate in a skip list and flush once at commit time), this
+brings oltp_insert to 1.5x, oltp_update_non_index to 1.3x, types_delete_insert
+to 1.1x, and oltp_read_write to 3.6x.
 
-The next optimization targets are batching flushes across multiple writes
-within a transaction and reducing chunk store overhead for small mutations.
+**oltp_update_index (380x) remains the outlier.** This benchmark does 10K
+updates to an indexed column in one transaction, generating ~16K index edits on
+a 10K-entry BLOBKEY tree. A hybrid flush strategy selects the O(N+M) merge-walk
+algorithm for this case, but the per-entry cost of blob key comparison (parsing
+SQLite record format field-by-field) dominates. Dolt achieves sub-2x write
+multipliers with the same prolly tree design by using a more efficient key
+encoding. Optimizing blob key comparison is the next target.
 
 ### Algorithmic Complexity
 
