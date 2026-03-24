@@ -611,3 +611,7 @@ Both use mark-and-sweep: walk all reachable chunks from branches, tags, and
 commit history, then remove everything else. Dolt rewrites live data into new
 table files and deletes old ones. Doltlite compacts in-place by rewriting the
 single database file with only live chunks.
+
+## Links
+
+[![Hypercommit](https://img.shields.io/badge/Hypercommit-DB2475)](https://hypercommit.com/doltlite)
