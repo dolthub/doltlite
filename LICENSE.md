@@ -1,6 +1,25 @@
 License Information
 ===================
 
+Doltlite Extensions — Apache License 2.0
+-----------------------------------------
+
+The Doltlite extensions to SQLite — including the prolly tree storage
+engine, chunk store, version control functions (dolt_commit, dolt_merge,
+dolt_diff, etc.), and all related code in the following files — are
+licensed under the Apache License, Version 2.0:
+
+  * `src/prolly_*.c` and `src/prolly_*.h` — Prolly tree implementation
+  * `src/chunk_store.c` and `src/chunk_store.h` — Content-addressed chunk store
+  * `src/pager_shim.c` — Pager shim for SQLite integration
+  * `src/doltlite*.c` and `src/doltlite*.h` — Version control functions
+  * `.github/` — CI/CD workflows
+
+You may obtain a copy of the Apache License at:
+https://www.apache.org/licenses/LICENSE-2.0
+
+Copyright 2024-2026 DoltHub, Inc.
+
 SQLite Is Public Domain
 -----------------------
 
