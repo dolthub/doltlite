@@ -87,7 +87,24 @@ echo "CREATE TABLE extra(y); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB8" > 
 echo "SELECT dolt_branch('b5');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 run_test "checkout_after_schema_change_hard_reset" "SELECT dolt_checkout('b5');" "0" "$DB8"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
+# --- dolt_checkout('-b', 'name') creates and switches ---
+DB9=/tmp/test_branch9_$$.db; rm -f "$DB9"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+
+run_test "checkout_b_creates" "SELECT dolt_checkout('-b','newbr');" "0" "$DB9"
+run_test "checkout_b_active" "SELECT active_branch();" "newbr" "$DB9"
+run_test "checkout_b_listed" "SELECT count(*) FROM dolt_branches;" "2" "$DB9"
+
+# Work on the new branch, switch back, verify isolation
+echo "INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','on newbr');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+run_test "checkout_b_data" "SELECT count(*) FROM t;" "2" "$DB9"
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+run_test "checkout_b_main_data" "SELECT count(*) FROM t;" "1" "$DB9"
+
+# checkout -b with existing name errors
+run_test_match "checkout_b_dup" "SELECT dolt_checkout('-b','main');" "already exists" "$DB9"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

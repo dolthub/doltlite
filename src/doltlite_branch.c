@@ -172,6 +172,32 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   const char *zBranch = (const char*)sqlite3_value_text(argv[0]);
   if( !zBranch ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
 
+  /* Handle -b flag: create branch then check it out */
+  if( strcmp(zBranch, "-b")==0 ){
+    ProllyHash head;
+    if( argc<2 ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
+    zBranch = (const char*)sqlite3_value_text(argv[1]);
+    if( !zBranch ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
+
+    doltliteGetSessionHead(db, &head);
+    if( prollyHashIsEmpty(&head) ){
+      sqlite3_result_error(ctx, "no commits yet — commit first", -1);
+      return;
+    }
+    rc = chunkStoreAddBranch(cs, zBranch, &head);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(ctx, "branch already exists", -1);
+      return;
+    }
+    rc = chunkStoreSerializeRefs(cs);
+    if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    /* Fall through to checkout the newly created branch */
+  }
+
   if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
     sqlite3_result_int(ctx, 0);
     return;
