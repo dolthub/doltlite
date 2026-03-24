@@ -256,6 +256,7 @@ struct ConflictTableInfo {
     i64 intKey;
     u8 *pKey; int nKey;       /* blob key (NULL for INTKEY tables) — must match merge's layout */
     u8 *pBaseVal; int nBaseVal;
+    u8 *pOurVal; int nOurVal;
     u8 *pTheirVal; int nTheirVal;
   } *aRows;
 };
@@ -273,7 +274,9 @@ int doltliteSerializeConflicts(
     int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
     sz += 2 + nl + 4;
     for(j=0; j<aTables[i].nConflicts; j++){
-      sz += 8 + 4 + aTables[i].aRows[j].nBaseVal + 4 + aTables[i].aRows[j].nTheirVal;
+      sz += 8 + 4 + aTables[i].aRows[j].nBaseVal
+              + 4 + aTables[i].aRows[j].nOurVal
+              + 4 + aTables[i].aRows[j].nTheirVal;
     }
   }
 
@@ -297,6 +300,8 @@ int doltliteSerializeConflicts(
       p+=8;
       { int n=cr->nBaseVal; p[0]=(u8)n; p[1]=(u8)(n>>8); p[2]=(u8)(n>>16); p[3]=(u8)(n>>24); p+=4; }
       if(cr->nBaseVal>0){ memcpy(p, cr->pBaseVal, cr->nBaseVal); p+=cr->nBaseVal; }
+      { int n=cr->nOurVal; p[0]=(u8)n; p[1]=(u8)(n>>8); p[2]=(u8)(n>>16); p[3]=(u8)(n>>24); p+=4; }
+      if(cr->nOurVal>0){ memcpy(p, cr->pOurVal, cr->nOurVal); p+=cr->nOurVal; }
       { int n=cr->nTheirVal; p[0]=(u8)n; p[1]=(u8)(n>>8); p[2]=(u8)(n>>16); p[3]=(u8)(n>>24); p+=4; }
       if(cr->nTheirVal>0){ memcpy(p, cr->pTheirVal, cr->nTheirVal); p+=cr->nTheirVal; }
     }
@@ -361,6 +366,14 @@ static int loadAllConflicts(
         cr->nBaseVal = bvl;
       }
       p += bvl;
+      { int ovl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
+        if(ovl>0){
+          cr->pOurVal = sqlite3_malloc(ovl);
+          if(cr->pOurVal) memcpy(cr->pOurVal, p, ovl);
+          cr->nOurVal = ovl;
+        }
+        p += ovl;
+      }
       tvl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
       if(tvl>0){
         cr->pTheirVal = sqlite3_malloc(tvl);
@@ -382,6 +395,7 @@ static void freeConflictTables(ConflictTableInfo *aTables, int nTables){
   for(i=0; i<nTables; i++){
     for(j=0; j<aTables[i].nConflicts; j++){
       sqlite3_free(aTables[i].aRows[j].pBaseVal);
+      sqlite3_free(aTables[i].aRows[j].pOurVal);
       sqlite3_free(aTables[i].aRows[j].pTheirVal);
     }
     sqlite3_free(aTables[i].aRows);
@@ -592,26 +606,19 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       sqlite3_result_int64(ctx, cr->intKey);
       break;
     case 1: /* base_value */
-      if(cr->pBaseVal && cr->nBaseVal>0)
-        sqlite3_result_blob(ctx, cr->pBaseVal, cr->nBaseVal, SQLITE_TRANSIENT);
-      else
-        sqlite3_result_null(ctx);
+      doltliteResultRecord(ctx, cr->pBaseVal, cr->nBaseVal);
       break;
     case 2: /* our_rowid (same key) */
       sqlite3_result_int64(ctx, cr->intKey);
       break;
-    case 3: /* our_value — we don't store ours (it's the working value).
-            ** Query the actual table to get it. */
-      sqlite3_result_null(ctx);
+    case 3: /* our_value */
+      doltliteResultRecord(ctx, cr->pOurVal, cr->nOurVal);
       break;
     case 4: /* their_rowid */
       sqlite3_result_int64(ctx, cr->intKey);
       break;
     case 5: /* their_value */
-      if(cr->pTheirVal && cr->nTheirVal>0)
-        sqlite3_result_blob(ctx, cr->pTheirVal, cr->nTheirVal, SQLITE_TRANSIENT);
-      else
-        sqlite3_result_null(ctx);
+      doltliteResultRecord(ctx, cr->pTheirVal, cr->nTheirVal);
       break;
   }
   return SQLITE_OK;

@@ -73,10 +73,264 @@ struct RowMergeCtx {
     i64 intKey;
     u8 *pKey; int nKey;
     u8 *pBaseVal; int nBaseVal;
+    u8 *pOurVal; int nOurVal;
     u8 *pTheirVal; int nTheirVal;
   } *aConflicts;
   int nConflictsAlloc;
 };
+
+/* --------------------------------------------------------------------------
+** Cell-level (field-by-field) merge of SQLite record blobs.
+**
+** When both sides modify the same row, parse the three records and compare
+** each field. If changes don't overlap, build a merged record.
+**
+** Returns: merged record blob (caller frees) or NULL if there's a real
+**          field-level conflict.
+** -------------------------------------------------------------------------- */
+
+/* Read a varint from a record. Returns bytes consumed. */
+static int mergeReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
+  u64 v = 0; int i;
+  for(i=0; i<9 && p+i<pEnd; i++){
+    if(i<8){ v=(v<<7)|(p[i]&0x7f); if(!(p[i]&0x80)){*pVal=v; return i+1;} }
+    else{ v=(v<<8)|p[i]; *pVal=v; return 9; }
+  }
+  *pVal=v; return i?i:1;
+}
+
+/* Write a varint. Returns bytes written. */
+static int mergeWriteVarint(u8 *p, u64 v){
+  u8 buf[9]; int i, n;
+  if( v<=0x7f ){ p[0]=(u8)v; return 1; }
+  n=0;
+  for(i=0; v>0 && i<9; i++){ buf[i]=(u8)(v&0x7f); v>>=7; n++; }
+  /* Actually, use the standard SQLite varint encoding */
+  /* Simpler: write big-endian varint */
+  if( v==0 && n<=1 ){ p[0]=(u8)buf[0]; return 1; }
+  /* Fall back to a simple implementation */
+  return 0; /* Will use the approach below instead */
+}
+
+/* Get the data size for a serial type. */
+static int serialTypeSize(u64 st){
+  if(st==0||st==8||st==9) return 0;
+  if(st>=1&&st<=6){ static const int s[]={0,1,2,3,4,6,8}; return s[st]; }
+  if(st==7) return 8;
+  if(st>=12&&(st&1)==0) return ((int)st-12)/2;
+  if(st>=13&&(st&1)==1) return ((int)st-13)/2;
+  return 0;
+}
+
+/* Parse a record's fields into arrays of (serial_type, data_offset, data_len).
+** Returns number of fields, or -1 on error. */
+typedef struct RecField RecField;
+struct RecField { u64 st; int off; int len; };
+
+static int parseRecordFields(const u8 *pRec, int nRec,
+                             RecField **ppFields, int *pnFields){
+  const u8 *p, *pEnd, *pHdrEnd;
+  u64 hdrSize;
+  int hdrBytes, nFields = 0, nAlloc = 0, bodyOff;
+  RecField *aFields = 0;
+
+  if(!pRec || nRec<1) { *ppFields=0; *pnFields=0; return 0; }
+  p = pRec; pEnd = pRec + nRec;
+  hdrBytes = mergeReadVarint(p, pEnd, &hdrSize);
+  p += hdrBytes;
+  pHdrEnd = pRec + (int)hdrSize;
+  bodyOff = (int)hdrSize;
+
+  while(p < pHdrEnd && p < pEnd){
+    u64 st; int stBytes, sz;
+    stBytes = mergeReadVarint(p, pHdrEnd, &st);
+    p += stBytes;
+    sz = serialTypeSize(st);
+
+    if(nFields >= nAlloc){
+      nAlloc = nAlloc ? nAlloc*2 : 16;
+      aFields = sqlite3_realloc(aFields, nAlloc*(int)sizeof(RecField));
+      if(!aFields) return -1;
+    }
+    aFields[nFields].st = st;
+    aFields[nFields].off = bodyOff;
+    aFields[nFields].len = sz;
+    nFields++;
+    bodyOff += sz;
+  }
+
+  *ppFields = aFields;
+  *pnFields = nFields;
+  return nFields;
+}
+
+/* Compare a single field between two records. Returns 0 if identical. */
+static int fieldEquals(const u8 *pRecA, RecField *fA,
+                       const u8 *pRecB, RecField *fB){
+  if(fA->st != fB->st) return 1;
+  if(fA->len != fB->len) return 1;
+  if(fA->len==0) return 0;
+  return memcmp(pRecA + fA->off, pRecB + fB->off, fA->len);
+}
+
+/*
+** Try to merge three records field-by-field.
+** Returns a new merged record blob (caller must sqlite3_free), or NULL
+** if there's a real field-level conflict.
+*/
+static u8 *tryCellMerge(
+  const u8 *pBase, int nBase,
+  const u8 *pOurs, int nOurs,
+  const u8 *pTheirs, int nTheirs,
+  int *pnMerged
+){
+  RecField *aBase=0, *aOurs=0, *aTheirs=0;
+  int nfBase=0, nfOurs=0, nfTheirs=0;
+  int nfMax, i;
+  u8 *result = 0;
+
+  /* Parse all three records */
+  if(parseRecordFields(pBase, nBase, &aBase, &nfBase)<0) goto fail;
+  if(parseRecordFields(pOurs, nOurs, &aOurs, &nfOurs)<0) goto fail;
+  if(parseRecordFields(pTheirs, nTheirs, &aTheirs, &nfTheirs)<0) goto fail;
+
+  /* Determine max fields (handles schema changes adding columns) */
+  nfMax = nfBase;
+  if(nfOurs > nfMax) nfMax = nfOurs;
+  if(nfTheirs > nfMax) nfMax = nfTheirs;
+
+  /* For each field, decide which version to take */
+  {
+    /* We'll collect the winning (record, field) pairs, then build the result */
+    struct { const u8 *pRec; RecField *pField; } *winners;
+    int hdrSize, bodySize, pos;
+    u8 *hdr, *body;
+
+    winners = sqlite3_malloc(nfMax * (int)sizeof(*winners));
+    if(!winners) goto fail;
+
+    for(i=0; i<nfMax; i++){
+      int baseHas = (i < nfBase);
+      int oursHas = (i < nfOurs);
+      int theirsHas = (i < nfTheirs);
+
+      if(!baseHas && oursHas && !theirsHas){
+        /* New field in ours only (schema change on our side) */
+        winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
+      }else if(!baseHas && !oursHas && theirsHas){
+        /* New field in theirs only */
+        winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
+      }else if(!baseHas && oursHas && theirsHas){
+        /* Both added this field (both did schema change) */
+        if(fieldEquals(pOurs, &aOurs[i], pTheirs, &aTheirs[i])==0){
+          winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
+        }else{
+          sqlite3_free(winners); goto fail; /* conflict */
+        }
+      }else if(baseHas && oursHas && theirsHas){
+        /* Field exists in all three — compare */
+        int oursChanged = fieldEquals(pBase, &aBase[i], pOurs, &aOurs[i]);
+        int theirsChanged = fieldEquals(pBase, &aBase[i], pTheirs, &aTheirs[i]);
+        if(!oursChanged && !theirsChanged){
+          /* Neither changed */
+          winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
+        }else if(oursChanged && !theirsChanged){
+          /* Only ours changed */
+          winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
+        }else if(!oursChanged && theirsChanged){
+          /* Only theirs changed */
+          winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
+        }else{
+          /* Both changed — check if convergent */
+          if(fieldEquals(pOurs, &aOurs[i], pTheirs, &aTheirs[i])==0){
+            winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
+          }else{
+            sqlite3_free(winners); goto fail; /* real conflict */
+          }
+        }
+      }else if(baseHas && oursHas && !theirsHas){
+        /* Field dropped in theirs? Take ours (theirs has fewer columns) */
+        winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
+      }else if(baseHas && !oursHas && theirsHas){
+        /* Field dropped in ours? Take theirs */
+        winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
+      }else{
+        /* Edge case: field only in base, dropped by both */
+        continue;
+      }
+    }
+
+    /* Build the merged record: header (varint sizes) + body (field data) */
+    /* First pass: calculate header and body sizes */
+    hdrSize = 0; bodySize = 0;
+    for(i=0; i<nfMax; i++){
+      u64 st = winners[i].pField->st;
+      /* Varint size for this serial type */
+      if(st <= 0x7f) hdrSize += 1;
+      else if(st <= 0x3fff) hdrSize += 2;
+      else if(st <= 0x1fffff) hdrSize += 3;
+      else hdrSize += 4; /* good enough for practical values */
+      bodySize += winners[i].pField->len;
+    }
+    /* Header size varint (the header size includes the header size varint itself) */
+    { int tentative = hdrSize + 1;
+      if(tentative > 0x7f) tentative++;
+      hdrSize = tentative;
+    }
+
+    result = sqlite3_malloc(hdrSize + bodySize);
+    if(!result){ sqlite3_free(winners); goto fail; }
+
+    /* Write header size varint */
+    pos = 0;
+    { u64 hs = (u64)hdrSize;
+      if(hs <= 0x7f){ result[pos++] = (u8)hs; }
+      else{ result[pos++] = (u8)(0x80 | (hs>>7)); result[pos++] = (u8)(hs&0x7f); }
+    }
+    /* Write serial types */
+    for(i=0; i<nfMax; i++){
+      u64 st = winners[i].pField->st;
+      if(st <= 0x7f){
+        result[pos++] = (u8)st;
+      }else if(st <= 0x3fff){
+        result[pos++] = (u8)(0x80 | (st>>7));
+        result[pos++] = (u8)(st&0x7f);
+      }else if(st <= 0x1fffff){
+        result[pos++] = (u8)(0x80 | (st>>14));
+        result[pos++] = (u8)(0x80 | ((st>>7)&0x7f));
+        result[pos++] = (u8)(st&0x7f);
+      }else{
+        result[pos++] = (u8)(0x80 | (st>>21));
+        result[pos++] = (u8)(0x80 | ((st>>14)&0x7f));
+        result[pos++] = (u8)(0x80 | ((st>>7)&0x7f));
+        result[pos++] = (u8)(st&0x7f);
+      }
+    }
+    /* Write body */
+    for(i=0; i<nfMax; i++){
+      if(winners[i].pField->len > 0){
+        memcpy(result + pos, winners[i].pRec + winners[i].pField->off,
+               winners[i].pField->len);
+        pos += winners[i].pField->len;
+      }
+    }
+
+    *pnMerged = pos;
+    sqlite3_free(winners);
+  }
+
+  sqlite3_free(aBase);
+  sqlite3_free(aOurs);
+  sqlite3_free(aTheirs);
+  return result;
+
+fail:
+  sqlite3_free(aBase);
+  sqlite3_free(aOurs);
+  sqlite3_free(aTheirs);
+  *pnMerged = 0;
+  return 0;
+}
 
 static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   RowMergeCtx *ctx = (RowMergeCtx*)pCtx;
@@ -113,9 +367,33 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       /* Both made same change — no action, already in ours */
       break;
 
-    case THREE_WAY_CONFLICT_MM:
+    case THREE_WAY_CONFLICT_MM: {
+      /* Both sides modified — try cell-level merge first */
+      u8 *pMerged = 0;
+      int nMerged = 0;
+
+      if( pChange->pBaseVal && pChange->nBaseVal>0
+       && pChange->pOurVal && pChange->nOurVal>0
+       && pChange->pTheirVal && pChange->nTheirVal>0 ){
+        pMerged = tryCellMerge(
+            pChange->pBaseVal, pChange->nBaseVal,
+            pChange->pOurVal, pChange->nOurVal,
+            pChange->pTheirVal, pChange->nTheirVal,
+            &nMerged);
+      }
+
+      if( pMerged ){
+        /* Cell-level merge succeeded — apply as non-conflicting edit */
+        rc = prollyMutMapInsert(ctx->pEdits,
+            pChange->pKey, pChange->nKey, pChange->intKey,
+            pMerged, nMerged);
+        sqlite3_free(pMerged);
+        break;
+      }
+      /* Fall through to record as conflict */
+    }
     case THREE_WAY_CONFLICT_DM: {
-      /* Conflict — record it */
+      /* Real conflict — record it with all three values */
       struct ConflictRow *aNew;
       if( ctx->nConflicts >= ctx->nConflictsAlloc ){
         int nNew = ctx->nConflictsAlloc ? ctx->nConflictsAlloc*2 : 16;
@@ -138,6 +416,11 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           if(cr->pBaseVal) memcpy(cr->pBaseVal, pChange->pBaseVal, pChange->nBaseVal);
           cr->nBaseVal = pChange->nBaseVal;
         }
+        if( pChange->pOurVal && pChange->nOurVal>0 ){
+          cr->pOurVal = sqlite3_malloc(pChange->nOurVal);
+          if(cr->pOurVal) memcpy(cr->pOurVal, pChange->pOurVal, pChange->nOurVal);
+          cr->nOurVal = pChange->nOurVal;
+        }
         if( pChange->pTheirVal && pChange->nTheirVal>0 ){
           cr->pTheirVal = sqlite3_malloc(pChange->nTheirVal);
           if(cr->pTheirVal) memcpy(cr->pTheirVal, pChange->pTheirVal, pChange->nTheirVal);
@@ -156,6 +439,7 @@ static void freeRowMergeCtx(RowMergeCtx *ctx){
   for(i=0; i<ctx->nConflicts; i++){
     sqlite3_free(ctx->aConflicts[i].pKey);
     sqlite3_free(ctx->aConflicts[i].pBaseVal);
+    sqlite3_free(ctx->aConflicts[i].pOurVal);
     sqlite3_free(ctx->aConflicts[i].pTheirVal);
   }
   sqlite3_free(ctx->aConflicts);
@@ -574,6 +858,7 @@ do_merge_entry:
       for(cj=0; cj<aConflictTables[ci].nConflicts; cj++){
         sqlite3_free(aConflictTables[ci].aRows[cj].pKey);
         sqlite3_free(aConflictTables[ci].aRows[cj].pBaseVal);
+        sqlite3_free(aConflictTables[ci].aRows[cj].pOurVal);
         sqlite3_free(aConflictTables[ci].aRows[cj].pTheirVal);
       }
       sqlite3_free(aConflictTables[ci].aRows);

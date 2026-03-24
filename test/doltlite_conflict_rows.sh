@@ -41,9 +41,9 @@ run_test "view_count" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
 run_test "view_base_rowid" "SELECT base_rowid FROM dolt_conflicts_t;" "1" "$DB"
 run_test "view_our_rowid" "SELECT our_rowid FROM dolt_conflicts_t;" "1" "$DB"
 run_test "view_their_rowid" "SELECT their_rowid FROM dolt_conflicts_t;" "1" "$DB"
-# base_value may be null or blob depending on conflict type
-run_test_match "view_base_val" "SELECT typeof(base_value) FROM dolt_conflicts_t;" "blob|null" "$DB"
-run_test_match "view_their_val" "SELECT typeof(their_value) FROM dolt_conflicts_t;" "blob" "$DB"
+# Values are now decoded as text (pipe-separated fields)
+run_test_match "view_base_val" "SELECT typeof(base_value) FROM dolt_conflicts_t;" "text|null" "$DB"
+run_test_match "view_their_val" "SELECT typeof(their_value) FROM dolt_conflicts_t;" "text" "$DB"
 
 rm -f "$DB"
 

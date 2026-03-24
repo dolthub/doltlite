@@ -67,7 +67,44 @@ run_test "mixed_conflict_count" "SELECT num_conflicts FROM dolt_conflicts;" "1" 
 run_test "mixed_auto_row3" "SELECT v FROM t WHERE id=3;" "main3" "$DB4"
 run_test "mixed_auto_row4" "SELECT v FROM t WHERE id=4;" "feat4" "$DB4"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4"
+# --- Cell-level merge: non-overlapping column changes auto-merge ---
+DB5=/tmp/test_conflicts5_$$.db; rm -f "$DB5"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER); INSERT INTO t VALUES(1,'alice',100); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+echo "SELECT dolt_branch('a'); SELECT dolt_checkout('a'); UPDATE t SET name='ALICE' WHERE id=1; SELECT dolt_commit('-A','-m','a');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); SELECT dolt_branch('b'); SELECT dolt_checkout('b'); UPDATE t SET val=999 WHERE id=1; SELECT dolt_commit('-A','-m','b');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); SELECT dolt_merge('a');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+
+run_test_match "cell_merge_no_conflict" "SELECT dolt_merge('b');" "^[0-9a-f]" "$DB5"
+run_test "cell_merge_name" "SELECT name FROM t WHERE id=1;" "ALICE" "$DB5"
+run_test "cell_merge_val" "SELECT val FROM t WHERE id=1;" "999" "$DB5"
+run_test "cell_merge_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB5"
+
+# --- Cell-level merge: schema change + data change auto-merge ---
+DB6=/tmp/test_conflicts6_$$.db; rm -f "$DB6"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO t VALUES(1,'alice'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "SELECT dolt_branch('schema_br'); SELECT dolt_checkout('schema_br'); ALTER TABLE t ADD COLUMN extra TEXT; UPDATE t SET extra='x'; SELECT dolt_commit('-A','-m','schema');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); SELECT dolt_branch('data_br'); SELECT dolt_checkout('data_br'); UPDATE t SET name='ALICE' WHERE id=1; SELECT dolt_commit('-A','-m','data');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); SELECT dolt_merge('schema_br');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+
+run_test_match "schema_data_merge" "SELECT dolt_merge('data_br');" "^[0-9a-f]" "$DB6"
+run_test "schema_data_name" "SELECT name FROM t WHERE id=1;" "ALICE" "$DB6"
+run_test "schema_data_extra" "SELECT extra FROM t WHERE id=1;" "x" "$DB6"
+
+# --- Real conflict: same column changed on both sides ---
+DB7=/tmp/test_conflicts7_$$.db; rm -f "$DB7"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER); INSERT INTO t VALUES(1,'alice',100); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "SELECT dolt_branch('c'); SELECT dolt_checkout('c'); UPDATE t SET name='BOB' WHERE id=1; SELECT dolt_commit('-A','-m','c');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); UPDATE t SET name='CHARLIE' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+run_test_match "real_conflict" "SELECT dolt_merge('c');" "conflict" "$DB7"
+run_test "real_conflict_count" "SELECT num_conflicts FROM dolt_conflicts;" "1" "$DB7"
+
+# Conflict values are now decoded text, not raw binary
+run_test_match "conflict_base_decoded" "SELECT base_value FROM dolt_conflicts_t;" "alice" "$DB7"
+run_test_match "conflict_our_decoded" "SELECT our_value FROM dolt_conflicts_t;" "CHARLIE" "$DB7"
+run_test_match "conflict_their_decoded" "SELECT their_value FROM dolt_conflicts_t;" "BOB" "$DB7"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
