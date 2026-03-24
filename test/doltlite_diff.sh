@@ -98,8 +98,61 @@ run_test "diff_all_deletes_type" \
   "SELECT DISTINCT diff_type FROM dolt_diff('t');" \
   "removed" "$DB2"
 
+# --- Diff with branch names as refs ---
+DB3=/tmp/test_diff3_$$.db; rm -f "$DB3"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(3,'c'); UPDATE t SET val='A' WHERE id=1; SELECT dolt_commit('-A','-m','feat changes');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+
+run_test "diff_branch_names" \
+  "SELECT count(*) FROM dolt_diff('t', 'main', 'feat');" \
+  "2" "$DB3"
+
+run_test_match "diff_branch_names_types" \
+  "SELECT diff_type FROM dolt_diff('t', 'main', 'feat') ORDER BY rowid_val;" \
+  "modified" "$DB3"
+
+run_test_match "diff_branch_names_added" \
+  "SELECT diff_type FROM dolt_diff('t', 'main', 'feat') ORDER BY rowid_val;" \
+  "added" "$DB3"
+
+# Branch name result matches hex hash result
+run_test "diff_branch_matches_hash" \
+  "SELECT (SELECT group_concat(diff_type||rowid_val) FROM dolt_diff('t', 'main', 'feat'))
+       = (SELECT group_concat(diff_type||rowid_val) FROM dolt_diff('t',
+            (SELECT hash FROM dolt_branches WHERE name='main'),
+            (SELECT hash FROM dolt_branches WHERE name='feat')));" \
+  "1" "$DB3"
+
+# Diff with one branch name and one hash
+run_test "diff_mixed_ref_types" \
+  "SELECT count(*) FROM dolt_diff('t', 'main',
+    (SELECT hash FROM dolt_branches WHERE name='feat'));" \
+  "2" "$DB3"
+
+# Diff from branch to working state (only from_commit, no to_commit)
+echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(4,'d');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+run_test "diff_branch_to_working" \
+  "SELECT count(*) FROM dolt_diff('t');" \
+  "1" "$DB3"
+
+# Tag as ref
+DB4=/tmp/test_diff4_$$.db; rm -f "$DB4"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','v1');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+echo "SELECT dolt_tag('v1');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','v2');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+
+run_test "diff_tag_ref" \
+  "SELECT count(*) FROM dolt_diff('t', 'v1', 'main');" \
+  "1" "$DB4"
+
+run_test "diff_tag_type" \
+  "SELECT diff_type FROM dolt_diff('t', 'v1', 'main');" \
+  "added" "$DB4"
+
 # Cleanup
-rm -f "$DB" "$DB2"
+rm -f "$DB" "$DB2" "$DB3" "$DB4"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
