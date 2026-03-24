@@ -104,7 +104,20 @@ run_test_match "conflict_base_decoded" "SELECT base_value FROM dolt_conflicts_t;
 run_test_match "conflict_our_decoded" "SELECT our_value FROM dolt_conflicts_t;" "CHARLIE" "$DB7"
 run_test_match "conflict_their_decoded" "SELECT their_value FROM dolt_conflicts_t;" "BOB" "$DB7"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
+# --- Multiple conflicting rows in one table ---
+DB8=/tmp/test_conflicts8_$$.db; rm -f "$DB8"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET name='A' WHERE id=1; UPDATE t SET name='B' WHERE id=2; UPDATE t SET name='C' WHERE id=3; SELECT dolt_commit('-A','-m','other');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); UPDATE t SET name='a2' WHERE id=1; UPDATE t SET name='b2' WHERE id=2; UPDATE t SET name='c2' WHERE id=3; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+
+run_test_match "multi_row_conflict" "SELECT dolt_merge('other');" "3 conflict" "$DB8"
+run_test "multi_row_conflict_count" "SELECT num_conflicts FROM dolt_conflicts;" "3" "$DB8"
+run_test "multi_row_all_rows" "SELECT count(*) FROM dolt_conflicts_t;" "3" "$DB8"
+run_test_match "multi_row_has_row1" "SELECT their_value FROM dolt_conflicts_t WHERE base_rowid=1;" "A" "$DB8"
+run_test_match "multi_row_has_row2" "SELECT their_value FROM dolt_conflicts_t WHERE base_rowid=2;" "B" "$DB8"
+run_test_match "multi_row_has_row3" "SELECT their_value FROM dolt_conflicts_t WHERE base_rowid=3;" "C" "$DB8"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
