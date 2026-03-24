@@ -489,8 +489,9 @@ static void doltliteResetFunc(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash headCatHash;
+  ProllyHash targetCatHash;
   int isHard = 0;
+  const char *zRef = 0;
   int rc;
   int i;
 
@@ -499,35 +500,89 @@ static void doltliteResetFunc(
     return;
   }
 
-  /* Parse args */
+  /* Parse args: flags (--hard, --soft) and optional commit ref */
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
-    if( arg && strcmp(arg, "--hard")==0 ) isHard = 1;
+    if( !arg ) continue;
+    if( strcmp(arg, "--hard")==0 ){ isHard = 1; }
+    else if( strcmp(arg, "--soft")==0 ){ /* default */ }
+    else{ zRef = arg; }
   }
 
-  /* Get HEAD catalog hash */
-  rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "failed to read HEAD", -1);
-    return;
-  }
+  if( zRef ){
+    /* Reset to a specific commit — resolve ref, load its catalog */
+    ProllyHash targetCommit;
+    DoltliteCommit commit;
+    u8 *data = 0;
+    int nData = 0;
 
-  /* Soft reset: staged = HEAD catalog (unstage everything) */
-  doltliteSetSessionStaged(db, &headCatHash); chunkStoreSetStagedCatalog(cs, &headCatHash);
-
-  if( isHard ){
-    /* Hard reset: also reset working state to HEAD */
-    if( prollyHashIsEmpty(&headCatHash) ){
-      sqlite3_result_error(context, "no HEAD commit to reset to", -1);
+    /* Try hex hash first, then branch, then tag */
+    rc = SQLITE_NOTFOUND;
+    if( zRef && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
+      rc = doltliteHexToHash(zRef, &targetCommit);
+      if( rc==SQLITE_OK && !chunkStoreHas(cs, &targetCommit) ) rc = SQLITE_NOTFOUND;
+    }
+    if( rc!=SQLITE_OK ){
+      rc = chunkStoreFindBranch(cs, zRef, &targetCommit);
+      if( rc!=SQLITE_OK || prollyHashIsEmpty(&targetCommit) ){
+        rc = chunkStoreFindTag(cs, zRef, &targetCommit);
+      }
+    }
+    if( rc!=SQLITE_OK || prollyHashIsEmpty(&targetCommit) ){
+      sqlite3_result_error(context, "commit not found", -1);
       return;
     }
-    rc = doltliteHardReset(db, &headCatHash);
+
+    /* Load the target commit to get its catalog hash */
+    rc = chunkStoreGet(cs, &targetCommit, &data, &nData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "failed to load commit", -1);
+      return;
+    }
+    rc = doltliteCommitDeserialize(data, nData, &commit);
+    sqlite3_free(data);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "corrupt commit", -1);
+      return;
+    }
+    memcpy(&targetCatHash, &commit.catalogHash, sizeof(ProllyHash));
+    doltliteCommitClear(&commit);
+
+    /* Move HEAD and branch ref to the target commit */
+    doltliteSetSessionHead(db, &targetCommit);
+    chunkStoreSetHeadCommit(cs, &targetCommit);
+    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &targetCommit);
+    chunkStoreSerializeRefs(cs);
+
+    /* Clear any merge state */
+    chunkStoreClearMergeState(cs);
+    chunkStoreSetConflictsCatalog(cs, &(ProllyHash){{0}});
+  }else{
+    /* No ref: reset to current HEAD */
+    rc = doltliteGetHeadCatalogHash(db, &targetCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "failed to read HEAD", -1);
+      return;
+    }
+  }
+
+  /* Soft reset: staged = target catalog (unstage everything) */
+  doltliteSetSessionStaged(db, &targetCatHash);
+  chunkStoreSetStagedCatalog(cs, &targetCatHash);
+
+  if( isHard ){
+    /* Hard reset: also reset working state */
+    if( prollyHashIsEmpty(&targetCatHash) ){
+      sqlite3_result_error(context, "no commit to reset to", -1);
+      return;
+    }
+    rc = doltliteHardReset(db, &targetCatHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "hard reset failed", -1);
       return;
     }
   }else{
-    /* Persist soft reset (just the staged catalog change) */
+    /* Persist soft reset */
     rc = chunkStoreCommit(cs);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
