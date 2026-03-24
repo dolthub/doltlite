@@ -91,10 +91,10 @@ run_test_match "diff_ff_added" \
   "SELECT diff_type, to_value FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
   "added" "$DB2"
 
-# Test 10: After merge with conflicts, dolt_diff between ancestor and merge commit
-# The merge commit is HEAD (offset 0), ancestor is init (offset 2 since merge added a commit)
+# Test 10: After merge with conflicts, dolt_diff between init and HEAD shows the main change
+# Conflicted merges don't auto-commit, so HEAD is the 'main' commit (offset 0), init is offset 1
 run_test_match "diff_conflict_shows_change" \
-  "SELECT diff_type FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
+  "SELECT diff_type FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
   "modified" "$DB3"
 
 # Test 11: Row-level auto-merge (both modify same table, different rows)
@@ -134,7 +134,35 @@ run_test "mixed_row2_unchanged" "SELECT v FROM t WHERE id=2;" "b" "$DB8"
 run_test "mixed_row3_from_main" "SELECT v FROM t WHERE id=3;" "main3" "$DB8"
 run_test "mixed_row4_from_feat" "SELECT v FROM t WHERE id=4;" "feat4" "$DB8"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
+# --- dolt_merge('--abort') ---
+DB9=/tmp/test_merge9_$$.db; rm -f "$DB9"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+echo "SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='OTHER'; SELECT dolt_commit('-A','-m','other');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); UPDATE t SET v='MAIN'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+
+# Conflicted merge — no auto-commit
+run_test_match "abort_merge_has_conflict" "SELECT dolt_merge('other');" "conflict" "$DB9"
+run_test "abort_conflicts_exist" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB9"
+
+# Abort restores to pre-merge state
+run_test "abort_succeeds" "SELECT dolt_merge('--abort');" "0" "$DB9"
+run_test "abort_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB9"
+run_test "abort_data_restored" "SELECT v FROM t WHERE id=1;" "MAIN" "$DB9"
+
+# Abort without merge in progress
+run_test_match "abort_no_merge" "SELECT dolt_merge('--abort');" "no merge in progress" "$DB9"
+
+# Clean merge still auto-commits
+DB10=/tmp/test_merge10_$$.db; rm -f "$DB10"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+
+run_test_match "clean_merge_commits" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB10"
+run_test_match "clean_merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB10"
+run_test "clean_merge_data" "SELECT count(*) FROM t;" "2" "$DB10"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

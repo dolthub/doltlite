@@ -186,10 +186,12 @@ setup_conflict "$DB"
 
 echo "DELETE FROM dolt_conflicts_t WHERE base_rowid=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Merge commit already exists; conflicts just needed to be resolved
-run_test "flow_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
+# Conflicts resolved but merge not committed yet — user must commit
 run_test "flow_val" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
 run_test "flow_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+
+# Commit the resolved merge
+echo "SELECT dolt_commit('-A','-m','Merge resolved');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "flow_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB"
 
 rm -f "$DB"

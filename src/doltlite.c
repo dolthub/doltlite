@@ -368,15 +368,21 @@ static void doltliteCommitFunc(
     return;
   }
 
-  /* Check if staged == HEAD (nothing actually changed) */
+  /* Check if staged == HEAD (nothing actually changed).
+  ** Skip this check during a merge — committing a merge is always valid
+  ** even if the resolved state matches HEAD (e.g. kept all "ours" values). */
   {
-    ProllyHash headCatHash;
-    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-    if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash)
-     && prollyHashCompare(&catalogHash, &headCatHash)==0 ){
-      sqlite3_result_error(context,
-        "nothing to commit, working tree clean (use dolt_add to stage changes)", -1);
-      return;
+    u8 isMerging = 0;
+    chunkStoreGetMergeState(cs, &isMerging, 0, 0);
+    if( !isMerging ){
+      ProllyHash headCatHash;
+      rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+      if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash)
+       && prollyHashCompare(&catalogHash, &headCatHash)==0 ){
+        sqlite3_result_error(context,
+          "nothing to commit, working tree clean (use dolt_add to stage changes)", -1);
+        return;
+      }
     }
   }
 
@@ -441,6 +447,16 @@ static void doltliteCommitFunc(
       chunkStoreUpdateBranch(cs, branch, &commitHash);
     }
     chunkStoreSerializeRefs(cs);
+  }
+
+  /* Clear merge state if we were in a merge (commit concludes it) */
+  {
+    u8 wasMerging = 0;
+    chunkStoreGetMergeState(cs, &wasMerging, 0, 0);
+    if( wasMerging ){
+      chunkStoreClearMergeState(cs);
+      chunkStoreSetConflictsCatalog(cs, &(ProllyHash){{0}});
+    }
   }
 
   rc = chunkStoreCommit(cs);
@@ -555,6 +571,42 @@ static void doltliteMergeFunc(
 
   zBranch = (const char*)sqlite3_value_text(argv[0]);
   if( !zBranch ){ sqlite3_result_error(context, "branch name required", -1); return; }
+
+  /* Handle --abort: discard a conflicted merge, restore to HEAD */
+  if( strcmp(zBranch, "--abort")==0 ){
+    u8 isMerging = 0;
+    ProllyHash headCatHash;
+
+    chunkStoreGetMergeState(cs, &isMerging, 0, 0);
+    if( !isMerging ){
+      sqlite3_result_error(context, "no merge in progress", -1);
+      return;
+    }
+
+    /* Reset working set back to HEAD (merge didn't commit) */
+    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "failed to read HEAD", -1);
+      return;
+    }
+    rc = doltliteHardReset(db, &headCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "abort reset failed", -1);
+      return;
+    }
+
+    /* Restore staged to HEAD catalog */
+    doltliteSetSessionStaged(db, &headCatHash);
+    chunkStoreSetStagedCatalog(cs, &headCatHash);
+
+    /* Clear merge state and conflicts */
+    chunkStoreClearMergeState(cs);
+    chunkStoreSetConflictsCatalog(cs, &(ProllyHash){{0}});
+    chunkStoreCommit(cs);
+
+    sqlite3_result_int(context, 0);
+    return;
+  }
 
   /* Get our HEAD */
   doltliteGetSessionHead(db, &ourHead);
@@ -693,57 +745,58 @@ static void doltliteMergeFunc(
     return;
   }
 
-  /* Create merge commit: stage merged catalog, then commit with -A */
-  doltliteSetSessionStaged(db, &mergedCatHash);
-  chunkStoreSetStagedCatalog(cs, &mergedCatHash);
-
-  /* Build merge commit object */
-  {
-    DoltliteCommit mergeCommit;
-    u8 *commitData = 0;
-    int nCommitData = 0;
-    ProllyHash commitHash;
-    char hexBuf[PROLLY_HASH_SIZE*2+1];
-    char msg[256];
-
-    memset(&mergeCommit, 0, sizeof(mergeCommit));
-    memcpy(&mergeCommit.parentHash, &ourHead, sizeof(ProllyHash));
-    /* Note: second parent (theirHead) not stored yet — future enhancement */
-    memcpy(&mergeCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
-    mergeCommit.timestamp = (i64)time(0);
-    sqlite3_snprintf(sizeof(msg), msg, "Merge branch '%s'", zBranch);
-    mergeCommit.zName = sqlite3_mprintf("doltlite");
-    mergeCommit.zEmail = sqlite3_mprintf("");
-    mergeCommit.zMessage = sqlite3_mprintf("%s", msg);
-
-    rc = doltliteCommitSerialize(&mergeCommit, &commitData, &nCommitData);
-    if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, &commitHash);
-    sqlite3_free(commitData);
-    doltliteCommitClear(&mergeCommit);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(context, "failed to create merge commit", -1);
-      return;
-    }
-
-    /* Update HEAD and branch ref */
-    doltliteSetSessionHead(db, &commitHash);
-    doltliteSetSessionStaged(db, &mergedCatHash);
-    chunkStoreSetHeadCommit(cs, &commitHash);
-    chunkStoreSetStagedCatalog(cs, &mergedCatHash);
-    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
-    chunkStoreSerializeRefs(cs);
+  if( nMergeConflicts > 0 ){
+    /* Conflicts: leave working set dirty, don't commit.
+    ** User resolves conflicts then runs dolt_commit. */
+    doltliteRegisterConflictTables(db);
     chunkStoreCommit(cs);
-
-    doltliteHashToHex(&commitHash, hexBuf);
-    if( nMergeConflicts > 0 ){
+    {
       char msg[256];
-      /* Register per-row conflict tables so user can query them */
-      doltliteRegisterConflictTables(db);
       sqlite3_snprintf(sizeof(msg), msg,
-        "Merge completed with %d conflict(s). Use SELECT * FROM dolt_conflicts to view.",
+        "Merge has %d conflict(s). Resolve and then commit with dolt_commit.",
         nMergeConflicts);
       sqlite3_result_text(context, msg, -1, SQLITE_TRANSIENT);
-    }else{
+    }
+  }else{
+    /* Clean merge: create merge commit automatically */
+    doltliteSetSessionStaged(db, &mergedCatHash);
+    chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+
+    {
+      DoltliteCommit mergeCommit;
+      u8 *commitData = 0;
+      int nCommitData = 0;
+      ProllyHash commitHash;
+      char hexBuf[PROLLY_HASH_SIZE*2+1];
+      char msg[256];
+
+      memset(&mergeCommit, 0, sizeof(mergeCommit));
+      memcpy(&mergeCommit.parentHash, &ourHead, sizeof(ProllyHash));
+      memcpy(&mergeCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
+      mergeCommit.timestamp = (i64)time(0);
+      sqlite3_snprintf(sizeof(msg), msg, "Merge branch '%s'", zBranch);
+      mergeCommit.zName = sqlite3_mprintf("doltlite");
+      mergeCommit.zEmail = sqlite3_mprintf("");
+      mergeCommit.zMessage = sqlite3_mprintf("%s", msg);
+
+      rc = doltliteCommitSerialize(&mergeCommit, &commitData, &nCommitData);
+      if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, &commitHash);
+      sqlite3_free(commitData);
+      doltliteCommitClear(&mergeCommit);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(context, "failed to create merge commit", -1);
+        return;
+      }
+
+      doltliteSetSessionHead(db, &commitHash);
+      doltliteSetSessionStaged(db, &mergedCatHash);
+      chunkStoreSetHeadCommit(cs, &commitHash);
+      chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+      chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
+      chunkStoreSerializeRefs(cs);
+      chunkStoreCommit(cs);
+
+      doltliteHashToHex(&commitHash, hexBuf);
       sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
     }
   }

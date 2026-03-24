@@ -414,8 +414,9 @@ static int storeUpdatedConflicts(
   for(i=0; i<nTables; i++) totalConflicts += aTables[i].nConflicts;
 
   if( totalConflicts==0 ){
+    /* Clear conflict data but keep merge state — the merge is still
+    ** in progress until the user commits or aborts. */
     chunkStoreSetConflictsCatalog(cs, &(ProllyHash){{0}});
-    chunkStoreSetMergeState(cs, 0, 0, 0);
   }else{
     ProllyHash newHash;
     int rc = doltliteSerializeConflicts(cs, aTables, nTables, &newHash);
