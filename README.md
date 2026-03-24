@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="doltlite_logo.webp" alt="Doltlite" width="600">
+</p>
+
 # Doltlite
 
 A SQLite fork that replaces the B-tree storage engine with a content-addressed
