@@ -666,6 +666,14 @@ int chunkStoreOpen(
     return rc;
   }
 
+  /* Treat zero-byte placeholder as non-existent */
+  if( exists ){
+    struct stat mainStat;
+    if( stat(cs->zFilename, &mainStat)==0 && mainStat.st_size==0 ){
+      exists = 0;
+    }
+  }
+
   if( exists ){
     /* Open the existing file */
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
@@ -1377,6 +1385,18 @@ int chunkStoreCommit(ChunkStore *cs){
   cs->nWriteBufAlloc = 0;
   cs->nPending = 0;
 
+  /* Create a zero-byte placeholder at the user's filename so it's
+  ** visible in directory listings. The actual data lives in the -wal
+  ** file. GC/checkpoint will later write compacted data here. */
+  if( cs->pFile==0 && cs->zFilename && !cs->isMemory ){
+    int exists = 0;
+    sqlite3OsAccess(cs->pVfs, cs->zFilename, SQLITE_ACCESS_EXISTS, &exists);
+    if( !exists ){
+      int fd = open(cs->zFilename, O_WRONLY | O_CREAT, 0644);
+      if( fd >= 0 ) close(fd);
+    }
+  }
+
   return SQLITE_OK;
 
 commit_error:
@@ -1429,9 +1449,17 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     rc = sqlite3OsAccess(cs->pVfs, cs->zFilename,
                          SQLITE_ACCESS_EXISTS, &exists);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
+    /* Treat zero-byte placeholder the same as non-existent */
+    if( exists ){
+      struct stat mainStat;
+      if( stat(cs->zFilename, &mainStat)==0 && mainStat.st_size==0 ){
+        exists = 0;
+      }
+    }
     if( !exists ){
-      /* Main file still doesn't exist. But another connection may have
-      ** created a WAL file. Check the WAL file's actual size on disk
+      /* Main file doesn't exist (or is a zero-byte placeholder).
+      ** But another connection may have created a WAL file. Check the WAL
+      ** file's actual size on disk
       ** vs what this connection has already processed (nWalData).
       ** Note: after this connection commits, nWalData reflects the data
       ** it wrote, so this only triggers for OTHER connections' writes. */
