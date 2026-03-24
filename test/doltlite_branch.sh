@@ -43,7 +43,51 @@ echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2);" | $DOLTLITE "$DB3" > /dev/null 2>&1
 run_test_match "dirty_checkout" "SELECT dolt_checkout('b2');" "uncommitted" "$DB3"
 
-rm -f "$DB" "$DB2" "$DB3"
+# --- Checkout after hard reset (issue #107) ---
+DB4=/tmp/test_branch4_$$.db; rm -f "$DB4"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+
+# Make changes, stage, hard reset, then checkout should work
+echo "INSERT INTO t VALUES(2,'b'); SELECT dolt_add('-A'); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+run_test "checkout_after_hard_reset" "SELECT dolt_checkout('feat');" "0" "$DB4"
+run_test "active_after_hard_reset" "SELECT active_branch();" "feat" "$DB4"
+
+# Checkout back should also work (clean state)
+run_test "checkout_back_after_hard_reset" "SELECT dolt_checkout('main');" "0" "$DB4"
+
+# Hard reset with no prior staging
+DB5=/tmp/test_branch5_$$.db; rm -f "$DB5"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+run_test "checkout_after_hard_reset_no_stage" "SELECT dolt_checkout('b2');" "0" "$DB5"
+
+# Multiple hard resets then checkout
+DB6=/tmp/test_branch6_$$.db; rm -f "$DB6"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(3); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(4); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+echo "SELECT dolt_branch('b3');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+run_test "checkout_after_multi_hard_reset" "SELECT dolt_checkout('b3');" "0" "$DB6"
+
+# Verify dirty check still works after hard reset + new changes
+DB7=/tmp/test_branch7_$$.db; rm -f "$DB7"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(99);" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "SELECT dolt_branch('b4');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+run_test_match "dirty_after_hard_reset_new_changes" "SELECT dolt_checkout('b4');" "uncommitted" "$DB7"
+
+# Schema change (CREATE TABLE) then hard reset then checkout
+DB8=/tmp/test_branch8_$$.db; rm -f "$DB8"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "CREATE TABLE extra(y); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "SELECT dolt_branch('b5');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+run_test "checkout_after_schema_change_hard_reset" "SELECT dolt_checkout('b5');" "0" "$DB8"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
