@@ -259,11 +259,32 @@ static int findTableRoot(struct TableEntry *a, int n, Pgno iTable,
 }
 
 /* --------------------------------------------------------------------------
-** Resolve a commit hash string to a table root hash
+** Resolve a ref string (branch name, tag name, or hex hash) to a commit hash
+** -------------------------------------------------------------------------- */
+
+static int resolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc;
+  /* Try as hex hash first */
+  if( zRef && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
+    rc = doltliteHexToHash(zRef, pCommit);
+    if( rc==SQLITE_OK && chunkStoreHas(cs, pCommit) ) return SQLITE_OK;
+  }
+  /* Try as branch name */
+  rc = chunkStoreFindBranch(cs, zRef, pCommit);
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
+  /* Try as tag name */
+  rc = chunkStoreFindTag(cs, zRef, pCommit);
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
+  return SQLITE_NOTFOUND;
+}
+
+/* --------------------------------------------------------------------------
+** Resolve a ref string to a table root hash
 ** -------------------------------------------------------------------------- */
 
 static int resolveCommitToTableRoot(
-  sqlite3 *db, const char *zCommitHash, Pgno iTable,
+  sqlite3 *db, const char *zRef, Pgno iTable,
   ProllyHash *pRoot, u8 *pFlags
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -275,7 +296,7 @@ static int resolveCommitToTableRoot(
   int nTables = 0;
   int rc;
 
-  rc = doltliteHexToHash(zCommitHash, &commitHash);
+  rc = resolveRef(db, zRef, &commitHash);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStoreGet(cs, &commitHash, &data, &nData);
