@@ -23,17 +23,19 @@ check() {
   fi
 }
 
+REMOTE_URL="file://$TMPDIR/remote.db"
+
 echo "=== Test 1: dolt_remote add/list ==="
 "$DOLTLITE" "$TMPDIR/t1.db" <<ENDSQL
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','init');
-SELECT dolt_remote('add','origin','$TMPDIR/remote.db');
+SELECT dolt_remote('add','origin','$REMOTE_URL');
 .quit
 ENDSQL
 result=$("$DOLTLITE" "$TMPDIR/t1.db" "SELECT name, url FROM dolt_remotes;")
-check "remote shows in list" "origin|$TMPDIR/remote.db" "$result"
+check "remote shows in list" "origin|$REMOTE_URL" "$result"
 
 echo "=== Test 2: dolt_push ==="
 result=$("$DOLTLITE" "$TMPDIR/t1.db" "SELECT dolt_push('origin','main');")
@@ -42,9 +44,8 @@ result=$("$DOLTLITE" "$TMPDIR/remote.db" "SELECT * FROM t;")
 check "remote has pushed data" "1|a" "$result"
 
 echo "=== Test 3: dolt_clone ==="
-printf "SELECT dolt_clone('%s');\n.quit\n" "$TMPDIR/remote.db" | "$DOLTLITE" "$TMPDIR/clone.db"
-result=$("$DOLTLITE" "$TMPDIR/clone.db" "SELECT count(*) FROM t;")
-check "clone has data" "1" "$result"
+result=$("$DOLTLITE" "$TMPDIR/clone.db" "SELECT dolt_clone('$REMOTE_URL');")
+check "clone returns 0" "0" "$result"
 result=$("$DOLTLITE" "$TMPDIR/clone.db" "SELECT * FROM t;")
 check "clone has data" "1|a" "$result"
 result=$("$DOLTLITE" "$TMPDIR/clone.db" "SELECT active_branch();")
@@ -91,6 +92,11 @@ check "remote has feature branch" "0
 1|a
 2|b
 3|c" "$result"
+
+echo "=== Test 8: bad URL scheme ==="
+result=$("$DOLTLITE" "$TMPDIR/t1.db" "SELECT dolt_remote('add','bad','/no/scheme/path');" 2>&1)
+"$DOLTLITE" "$TMPDIR/t1.db" "SELECT dolt_push('bad','main');" 2>&1 | grep -q "file://"
+check "bad scheme rejected with helpful error" "0" "$?"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

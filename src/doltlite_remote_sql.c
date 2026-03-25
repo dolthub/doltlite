@@ -1,13 +1,13 @@
 /*
 ** SQL function interface for doltlite remotes: push, fetch, pull, clone.
 **
-**   SELECT dolt_remote('add', 'origin', '/path/to/remote.doltlite');
+**   SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.doltlite');
 **   SELECT dolt_remote('remove', 'origin');
 **   SELECT dolt_push('origin', 'main');
 **   SELECT dolt_fetch('origin');
 **   SELECT dolt_fetch('origin', 'main');
 **   SELECT dolt_pull('origin', 'main');
-**   SELECT dolt_clone('/path/to/source.doltlite');
+**   SELECT dolt_clone('file:///path/to/source.doltlite');
 **   SELECT * FROM dolt_remotes;
 */
 #ifdef DOLTLITE_PROLLY
@@ -31,6 +31,20 @@ extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 extern void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
 extern void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
 extern void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
+
+/*
+** Open a remote by URL. Dispatches based on scheme:
+**   file:///path  or  file://relative/path  →  filesystem remote
+**   (future: https://... → HTTP remote)
+** Returns NULL on error. Caller must close via pRemote->xClose().
+*/
+static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
+  if( strncmp(zUrl, "file://", 7)==0 ){
+    return doltliteFsRemoteOpen(pVfs, zUrl + 7);
+  }
+  /* No recognized scheme */
+  return 0;
+}
 
 /* --------------------------------------------------------------------------
 ** dolt_remote('add'|'remove', name [, url]) — manage remotes
@@ -117,9 +131,9 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  pRemote = doltliteFsRemoteOpen(cs->pVfs, zUrl);
+  pRemote = openRemoteByUrl(cs->pVfs, zUrl);
   if( !pRemote ){
-    sqlite3_result_error(ctx, "failed to open remote", -1);
+    sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
   }
 
@@ -234,9 +248,9 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  pRemote = doltliteFsRemoteOpen(cs->pVfs, zUrl);
+  pRemote = openRemoteByUrl(cs->pVfs, zUrl);
   if( !pRemote ){
-    sqlite3_result_error(ctx, "failed to open remote", -1);
+    sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
   }
 
@@ -275,10 +289,10 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     pRemote = 0;
 
     for(i=0; i<nNames; i++){
-      DoltliteRemote *pBrRemote = doltliteFsRemoteOpen(cs->pVfs, zUrl);
+      DoltliteRemote *pBrRemote = openRemoteByUrl(cs->pVfs, zUrl);
       if( !pBrRemote ){
         freeNameList(azNames, nNames);
-        sqlite3_result_error(ctx, "failed to open remote", -1);
+        sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
         return;
       }
       rc = doltliteFetch(cs, pBrRemote, zRemoteName, azNames[i]);
@@ -327,9 +341,9 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  pRemote = doltliteFsRemoteOpen(cs->pVfs, zUrl);
+  pRemote = openRemoteByUrl(cs->pVfs, zUrl);
   if( !pRemote ){
-    sqlite3_result_error(ctx, "failed to open remote", -1);
+    sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
   }
 
@@ -479,9 +493,9 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  pRemote = doltliteFsRemoteOpen(cs->pVfs, zUrl);
+  pRemote = openRemoteByUrl(cs->pVfs, zUrl);
   if( !pRemote ){
-    sqlite3_result_error(ctx, "failed to open remote", -1);
+    sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
   }
 
