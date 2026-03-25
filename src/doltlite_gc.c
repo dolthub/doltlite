@@ -24,6 +24,8 @@
 #include <string.h>
 #include <unistd.h>
 
+extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
+
 /* Provided by prolly_btree.c */
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 
@@ -483,48 +485,21 @@ static int gcSweep(
       }
     }
 
-    /* Build new manifest */
+    /* Build new manifest using csSerializeManifest.
+    ** Update ChunkStore fields first so the manifest reflects GC state. */
     {
       u8 manifest[CHUNK_MANIFEST_SIZE];
-      u8 *m = manifest;
-      memset(manifest, 0, CHUNK_MANIFEST_SIZE);
-      /* magic */
-      m[0]=(u8)CHUNK_STORE_MAGIC; m[1]=(u8)(CHUNK_STORE_MAGIC>>8);
-      m[2]=(u8)(CHUNK_STORE_MAGIC>>16); m[3]=(u8)(CHUNK_STORE_MAGIC>>24);
-      m+=4;
-      /* version */
-      m[0]=(u8)CHUNK_STORE_VERSION; m[1]=(u8)(CHUNK_STORE_VERSION>>8);
-      m[2]=(u8)(CHUNK_STORE_VERSION>>16); m[3]=(u8)(CHUNK_STORE_VERSION>>24);
-      m+=4;
-      /* root_hash */
-      memcpy(m, cs->root.data, PROLLY_HASH_SIZE); m+=PROLLY_HASH_SIZE;
-      /* chunk_count */
-      { u32 cc = (u32)nNewIndex;
-        m[0]=(u8)cc; m[1]=(u8)(cc>>8); m[2]=(u8)(cc>>16); m[3]=(u8)(cc>>24); }
-      m+=4;
-      /* index_offset (i64) */
-      { i64 io = indexOffset;
-        m[0]=(u8)io; m[1]=(u8)(io>>8); m[2]=(u8)(io>>16); m[3]=(u8)(io>>24);
-        m[4]=(u8)(io>>32); m[5]=(u8)(io>>40); m[6]=(u8)(io>>48); m[7]=(u8)(io>>56); }
-      m+=8;
-      /* index_size */
-      { u32 is = (u32)indexSize;
-        m[0]=(u8)is; m[1]=(u8)(is>>8); m[2]=(u8)(is>>16); m[3]=(u8)(is>>24); }
-      m+=4;
-      /* catalog_hash */
-      memcpy(m, cs->catalog.data, PROLLY_HASH_SIZE); m+=PROLLY_HASH_SIZE;
-      /* head_commit */
-      memcpy(m, cs->headCommit.data, PROLLY_HASH_SIZE); m+=PROLLY_HASH_SIZE;
-      /* staged_catalog (deprecated — zero-fill for format stability) */
-      memset(m, 0, PROLLY_HASH_SIZE); m+=PROLLY_HASH_SIZE;
-      /* refs_hash */
-      memcpy(m, cs->refsHash.data, PROLLY_HASH_SIZE); m+=PROLLY_HASH_SIZE;
-      /* is_merging (deprecated — zero-fill) */
-      memset(m, 0, 4); m+=4;
-      /* merge_commit_hash (deprecated — zero-fill) */
-      memset(m, 0, PROLLY_HASH_SIZE); m+=PROLLY_HASH_SIZE;
-      /* conflicts_catalog_hash (deprecated — zero-fill) */
-      memset(m, 0, PROLLY_HASH_SIZE);
+      i64 savedWalOffset = cs->iWalOffset;
+      int savedNChunks = cs->nChunks;
+      i64 savedIndexOffset = cs->iIndexOffset;
+      int savedIndexSize = cs->nIndexSize;
+
+      cs->nChunks = nNewIndex;
+      cs->iIndexOffset = indexOffset;
+      cs->nIndexSize = indexSize;
+      cs->iWalOffset = indexOffset + indexSize;  /* WAL starts after index */
+
+      csSerializeManifest(cs, manifest);
 
       /* Write to temp file, then rename */
       if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
@@ -593,14 +568,8 @@ static int gcSweep(
               rc = SQLITE_IOERR;
             }
 
-            /* Delete WAL file if it exists (data is now in main file) */
+            /* GC compacted all data — WAL region is now empty */
             if( rc==SQLITE_OK ){
-              char *zWal = sqlite3_mprintf("%s-wal", cs->zFilename);
-              if( zWal ){
-                unlink(zWal);
-                sqlite3_free(zWal);
-              }
-              /* Free WAL in-memory data */
               sqlite3_free(cs->pWalData);
               cs->pWalData = 0;
               cs->nWalData = 0;
@@ -642,7 +611,7 @@ static int gcSweep(
         cs->nChunks = nNewIndex;
         cs->iIndexOffset = CHUNK_MANIFEST_SIZE + nBuf;
         cs->nIndexSize = indexSize;
-        cs->iAppendOffset = CHUNK_MANIFEST_SIZE + nBuf;
+        cs->iWalOffset = CHUNK_MANIFEST_SIZE + nBuf + indexSize;
         aNewIndex = 0;  /* ownership transferred */
 
         /* Clear pending buffer */
