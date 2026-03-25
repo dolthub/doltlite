@@ -273,16 +273,18 @@ static void doltliteAddFunc(
 
     /* Persist — if commit fails, revert session state to avoid
     ** inconsistency between in-memory session and on-disk store. */
-    doltliteSaveWorkingSet(db);
-    chunkStoreSerializeRefs(cs);
-    rc = chunkStoreCommit(cs);
-    if( rc!=SQLITE_OK ){
-      /* Rollback session staged state to what's on disk */
-      ProllyHash diskStaged;
-      doltliteGetSessionStaged(db, &diskStaged);
-      doltliteSetSessionStaged(db, &diskStaged);
-      sqlite3_result_error_code(context, rc);
-      return;
+    {
+      ProllyHash savedStaged;
+      doltliteGetSessionStaged(db, &savedStaged);  /* Save before commit */
+      doltliteSaveWorkingSet(db);
+      chunkStoreSerializeRefs(cs);
+      rc = chunkStoreCommit(cs);
+      if( rc!=SQLITE_OK ){
+        /* Rollback session staged state to pre-commit value */
+        doltliteSetSessionStaged(db, &savedStaged);
+        sqlite3_result_error_code(context, rc);
+        return;
+      }
     }
   }
 
@@ -633,6 +635,7 @@ static void doltliteMergeFunc(
   memset(&theirCommit, 0, sizeof(theirCommit));
   memset(&ancCommit, 0, sizeof(ancCommit));
 
+  /* --- Phase 1: Argument parsing and ref resolution --- */
   if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
   if( argc<1 ){ sqlite3_result_error(context, "usage: dolt_merge('branch')", -1); return; }
 
@@ -773,7 +776,7 @@ static void doltliteMergeFunc(
     }
   }
 
-  /* Three-way merge: load all three catalog hashes */
+  /* --- Phase 2: Load ancestor, ours, theirs catalogs --- */
   rc = chunkStoreGet(cs, &ourHead, &data, &nData);
   if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load our commit", -1); return; }
   rc = doltliteCommitDeserialize(data, nData, &ourCommit);
@@ -796,7 +799,7 @@ static void doltliteMergeFunc(
   memcpy(&ancCatHash, &ancCommit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&ancCommit);
 
-  /* Perform the merge */
+  /* --- Phase 3: Table-level and row-level merge --- */
   rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash, &mergedCatHash, &nMergeConflicts);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&ourCommit);
@@ -805,7 +808,7 @@ static void doltliteMergeFunc(
     return;
   }
 
-  /* Hard reset to merged catalog */
+  /* --- Phase 4: Apply merge result and commit --- */
   rc = doltliteHardReset(db, &mergedCatHash);
   doltliteCommitClear(&ourCommit);
   doltliteCommitClear(&theirCommit);
