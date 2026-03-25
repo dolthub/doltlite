@@ -2292,8 +2292,13 @@ int sqlite3BtreeIndexMoveto(
             break;
           }
         }
-        /* Forward scan: skip deleted entries, find first cmp >= 0 */
-        while( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+        /* Forward scan: skip deleted entries, find first cmp >= 0.
+        ** LIMIT: scan at most 8 entries before giving up on the tree.
+        ** When many entries are deleted (e.g., UPDATE on indexed column),
+        ** the linear scan degrades to O(N) per seek. After the limit,
+        ** fall through to the MutMap-only lookup below. */
+        { int scanLimit = 8;
+        while( pCur->pCur.eState==PROLLY_CURSOR_VALID && scanLimit > 0 ){
           prollyCursorKey(&pCur->pCur, &pSK, &nSK);
           if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
             ProllyMutMapEntry *mmE = prollyMutMapFind(
@@ -2301,6 +2306,7 @@ int sqlite3BtreeIndexMoveto(
             if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
               rc = prollyCursorNext(&pCur->pCur);
               if( rc!=SQLITE_OK ) break;
+              scanLimit--;
               continue;
             }
           }
@@ -2313,6 +2319,8 @@ int sqlite3BtreeIndexMoveto(
           }
           rc = prollyCursorNext(&pCur->pCur);
           if( rc!=SQLITE_OK ) break;
+          scanLimit--;
+        }
         }
       }
     }
