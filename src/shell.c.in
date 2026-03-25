@@ -13333,8 +13333,8 @@ int SQLITE_CDECL main(int argc, char **argv){
       /* No-op.  The bail_on_error flag should already be set. */
     }else if( cli_strcmp(z,"-version")==0 ){
 #ifdef DOLTLITE_PROLLY
-      cli_printf(stdout, "DoltLite 0.1.0 (SQLite %s, %d-bit)\n",
-            sqlite3_libversion(), 8*(int)sizeof(char*));
+      cli_printf(stdout, "DoltLite %s (SQLite %s, %d-bit)\n",
+            DOLTLITE_VERSION, sqlite3_libversion(), 8*(int)sizeof(char*));
 #else
       cli_printf(stdout, "%s %s (%d-bit)\n",
             sqlite3_libversion(), sqlite3_sourceid(), 8*(int)sizeof(char*));
@@ -13487,9 +13487,9 @@ int SQLITE_CDECL main(int argc, char **argv){
       char *zHistory;
 #ifdef DOLTLITE_PROLLY
       cli_printf(stdout,
-            "DoltLite 0.1.0 (SQLite %s)\n"
+            "DoltLite %s (SQLite %s)\n"
             "Enter \".help\" for usage hints.\n",
-            sqlite3_libversion());
+            DOLTLITE_VERSION, sqlite3_libversion());
 #else
       cli_printf(stdout,
             "SQLite version %s %.19s\n" /*extra-version-info*/

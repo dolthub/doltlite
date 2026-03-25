@@ -569,11 +569,12 @@ PROLLY_OBJS = prolly_hash.o prolly_arena.o prolly_node.o prolly_cache.o \
               doltlite_gc.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_record.o
 
 DOLTLITE_PROLLY ?= 1
+DOLTLITE_VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
 ifeq ($(DOLTLITE_PROLLY),1)
   # Replace btree.o/pager.o/wal.o/btmutex.o/backup.o with prolly engine
   LIBOBJS0 := $(filter-out btree.o pager.o wal.o btmutex.o backup.o,$(LIBOBJS0))
   LIBOBJS0 += $(PROLLY_OBJS)
-  OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1
+  OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1 -DDOLTLITE_VERSION='"$(DOLTLITE_VERSION)"'
 endif
 
 LIBOBJS = $(LIBOBJS0)
