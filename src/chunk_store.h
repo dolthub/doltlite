@@ -29,6 +29,14 @@
 #define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32
 
+/* WorkingSet layout constants */
+#define WS_VERSION_SIZE     1
+#define WS_STAGED_OFF       WS_VERSION_SIZE                           /* 1  */
+#define WS_MERGING_OFF      (WS_STAGED_OFF + PROLLY_HASH_SIZE)       /* 21 */
+#define WS_MERGE_COMMIT_OFF (WS_MERGING_OFF + 1)                     /* 22 */
+#define WS_CONFLICTS_OFF    (WS_MERGE_COMMIT_OFF + PROLLY_HASH_SIZE) /* 42 */
+#define WS_TOTAL_SIZE       (WS_CONFLICTS_OFF + PROLLY_HASH_SIZE)    /* 62 */
+
 typedef struct ChunkStore ChunkStore;
 typedef struct ChunkIndexEntry ChunkIndexEntry;
 typedef struct ConflictEntry ConflictEntry;

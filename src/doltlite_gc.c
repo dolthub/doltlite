@@ -227,20 +227,24 @@ static int gcMarkReachable(
   if( rc!=SQLITE_OK ) return rc;
 
   /* Seed: manifest roots */
-  gcQueuePush(&queue, &cs->root);
-  gcQueuePush(&queue, &cs->catalog);
-  gcQueuePush(&queue, &cs->headCommit);
-  gcQueuePush(&queue, &cs->refsHash);
+  rc = gcQueuePush(&queue, &cs->root);
+  if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->catalog);
+  if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->headCommit);
+  if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->refsHash);
 
   /* All branch tips + per-branch WorkingSet chunks */
-  for(i=0; i<cs->nBranches; i++){
-    gcQueuePush(&queue, &cs->aBranches[i].commitHash);
-    gcQueuePush(&queue, &cs->aBranches[i].workingSetHash);
+  for(i=0; rc==SQLITE_OK && i<cs->nBranches; i++){
+    rc = gcQueuePush(&queue, &cs->aBranches[i].commitHash);
+    if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->aBranches[i].workingSetHash);
   }
 
   /* All tag targets */
-  for(i=0; i<cs->nTags; i++){
-    gcQueuePush(&queue, &cs->aTags[i].commitHash);
+  for(i=0; rc==SQLITE_OK && i<cs->nTags; i++){
+    rc = gcQueuePush(&queue, &cs->aTags[i].commitHash);
+  }
+  if( rc!=SQLITE_OK ){
+    gcQueueFree(&queue);
+    return rc;
   }
 
   /* BFS */
@@ -268,7 +272,8 @@ static int gcMarkReachable(
         for(i=0; i<(int)node.nItems; i++){
           ProllyHash childHash;
           prollyNodeChildHash(&node, i, &childHash);
-          gcQueuePush(&queue, &childHash);
+          rc = gcQueuePush(&queue, &childHash);
+          if( rc!=SQLITE_OK ) break;
         }
       }
     }else if( isCommitChunk(data, nData) ){
@@ -279,12 +284,13 @@ static int gcMarkReachable(
       if( drc==SQLITE_OK ){
         int pi;
         for(pi=0; pi<commit.nParents; pi++){
-          gcQueuePush(&queue, &commit.aParents[pi]);
+          rc = gcQueuePush(&queue, &commit.aParents[pi]);
+          if( rc!=SQLITE_OK ) break;
         }
-        if( !prollyHashIsEmpty(&commit.rootHash) ){
-          gcQueuePush(&queue, &commit.rootHash);  /* V1 compat */
+        if( rc==SQLITE_OK && !prollyHashIsEmpty(&commit.rootHash) ){
+          rc = gcQueuePush(&queue, &commit.rootHash);  /* V1 compat */
         }
-        gcQueuePush(&queue, &commit.catalogHash);
+        if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &commit.catalogHash);
         doltliteCommitClear(&commit);
       }
     }else{
@@ -294,16 +300,16 @@ static int gcMarkReachable(
       /* WorkingSet chunk: version(1=0x01) + staged(20) + merging(1) +
       ** mergeCommit(20) + conflicts(20) = 62 bytes.
       ** Follow staged catalog and conflicts catalog hashes. */
-      if( nData == 62 && data[0] == 1 ){
+      if( nData == WS_TOTAL_SIZE && data[0] == 1 ){
         ProllyHash stagedCat, conflictsCat;
-        memcpy(stagedCat.data, data + 1, PROLLY_HASH_SIZE);
-        memcpy(conflictsCat.data, data + 42, PROLLY_HASH_SIZE);
-        gcQueuePush(&queue, &stagedCat);
-        gcQueuePush(&queue, &conflictsCat);
-        if( data[21] ){  /* isMerging */
+        memcpy(stagedCat.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
+        memcpy(conflictsCat.data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
+        rc = gcQueuePush(&queue, &stagedCat);
+        if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &conflictsCat);
+        if( rc==SQLITE_OK && data[WS_MERGING_OFF] ){  /* isMerging */
           ProllyHash mergeCommit;
-          memcpy(mergeCommit.data, data + 22, PROLLY_HASH_SIZE);
-          gcQueuePush(&queue, &mergeCommit);
+          memcpy(mergeCommit.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
+          rc = gcQueuePush(&queue, &mergeCommit);
         }
       }
       /* Catalog chunk: version(1='C') */
@@ -317,7 +323,8 @@ static int gcMarkReachable(
             {
               ProllyHash tableRoot;
               memcpy(tableRoot.data, p + 5, PROLLY_HASH_SIZE);
-              gcQueuePush(&queue, &tableRoot);
+              rc = gcQueuePush(&queue, &tableRoot);
+              if( rc!=SQLITE_OK ) break;
             }
             {
               int nameLen;
@@ -331,6 +338,7 @@ static int gcMarkReachable(
     }
 
     sqlite3_free(data);
+    if( rc!=SQLITE_OK ) break;
   }
 
   gcQueueFree(&queue);
