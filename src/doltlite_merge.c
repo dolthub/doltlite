@@ -316,6 +316,21 @@ static u8 *tryCellMerge(
     }
 
     *pnMerged = pos;
+
+    /* Verify round-trip: the manually constructed record should parse back correctly.
+    ** This guards against encoding/decoding divergence. */
+#ifndef NDEBUG
+    {
+      /* debug-only: verify the merged record parses */
+      int nfCheck = 0;
+      RecField *aCheck = 0;
+      if( parseRecordFields(result, pos, &aCheck, &nfCheck) >= 0 ){
+        assert( nfCheck == nfMax );
+        sqlite3_free(aCheck);
+      }
+    }
+#endif
+
     sqlite3_free(winners);
   }
 
@@ -705,9 +720,10 @@ do_merge_entry:
       /* Table added in ours (not in ancestor by name) */
       if( theirsEntry ){
         /* Both sides added a table with the same name */
-        if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0 ){
-          /* Different content — conflict */
+        if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0
+         || prollyHashCompare(&aOurs[i].schemaHash, &theirsEntry->schemaHash)!=0 ){
           rc = SQLITE_ERROR;
+          /* TODO: better error message about schema conflict */
           goto merge_cleanup;
         }
         /* Identical content — include once (ours' iTable) */
@@ -770,6 +786,8 @@ do_merge_entry:
           /* Take theirs' root but with ours' iTable number */
           struct TableEntry merged = aOurs[i];
           memcpy(&merged.root, &theirsEntry->root, sizeof(ProllyHash));
+          memcpy(&merged.schemaHash, &theirsEntry->schemaHash, sizeof(ProllyHash));
+          merged.flags = theirsEntry->flags;
           aMerged[nMerged++] = merged;
         }else{
           aMerged[nMerged++] = aOurs[i];
