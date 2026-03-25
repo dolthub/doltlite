@@ -231,7 +231,7 @@ static int loadSchemaFromCatalog(
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal; int nVal;
     int aType[5], aOffset[5];
-    int nFields;
+    int nFields = 0;
 
     prollyCursorValue(&cur, &pVal, &nVal);
 
@@ -512,6 +512,7 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     if( zFromRef ){
     rc = sdResolveRef(cs, zFromRef, &fromCommit);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
+    if( prollyHashIsEmpty(&fromCommit) ) return SQLITE_OK;
     memset(&commit, 0, sizeof(commit));
     rc = chunkStoreGet(cs, &fromCommit, &data, &nData);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
@@ -530,6 +531,7 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   if( zToRef ){
     rc = sdResolveRef(cs, zToRef, &toCommit);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
+    if( prollyHashIsEmpty(&toCommit) ) return SQLITE_OK;
     memset(&commit, 0, sizeof(commit));
     rc = chunkStoreGet(cs, &toCommit, &data, &nData);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
