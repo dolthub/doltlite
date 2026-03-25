@@ -16,6 +16,7 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 
+#include <assert.h>
 #include <string.h>
 #include <time.h>
 
@@ -247,26 +248,28 @@ static char *buildDiffSchema(ColInfo *ci){
   z = sqlite3_malloc(sz);
   if( !z ) return 0;
 
-  strcpy(z, "CREATE TABLE x(");
+  {
+    char *p = z;
+    char *end = z + sz;
 
-  /* from_<col> columns */
-  for(i=0; i<ci->nCol; i++){
-    if( i > 0 ) strcat(z, ", ");
-    strcat(z, "\"from_");
-    strcat(z, ci->azName[i]);
-    strcat(z, "\"");
+    p += snprintf(p, end-p, "CREATE TABLE x(");
+
+    /* from_<col> columns */
+    for(i=0; i<ci->nCol; i++){
+      if( i > 0 ) p += snprintf(p, end-p, ", ");
+      p += snprintf(p, end-p, "\"from_%s\"", ci->azName[i]);
+    }
+
+    /* to_<col> columns */
+    for(i=0; i<ci->nCol; i++){
+      p += snprintf(p, end-p, ", \"to_%s\"", ci->azName[i]);
+    }
+
+    p += snprintf(p, end-p, ", from_commit TEXT, to_commit TEXT"
+              ", from_commit_date TEXT, to_commit_date TEXT"
+              ", diff_type TEXT)");
+    assert( p < end );
   }
-
-  /* to_<col> columns */
-  for(i=0; i<ci->nCol; i++){
-    strcat(z, ", \"to_");
-    strcat(z, ci->azName[i]);
-    strcat(z, "\"");
-  }
-
-  strcat(z, ", from_commit TEXT, to_commit TEXT"
-            ", from_commit_date TEXT, to_commit_date TEXT"
-            ", diff_type TEXT)");
 
   return z;
 }
