@@ -48,6 +48,8 @@ static int cfReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
 static i64 cfReadInt(const u8 *p, int nBytes){
   i64 v;
   int i;
+  assert( nBytes >= 1 && nBytes <= 8 );
+  if( nBytes < 1 || nBytes > 8 ) return 0;
   v = (p[0] & 0x80) ? -1 : 0;
   for(i=0; i<nBytes; i++){
     v = (v << 8) | p[i];
