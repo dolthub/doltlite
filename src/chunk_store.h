@@ -96,6 +96,21 @@ struct ChunkStore {
   } *aTags;
   int nTags;
 
+  /* Remote refs */
+  struct RemoteRef {
+    char *zName;    /* e.g., "origin" */
+    char *zUrl;     /* file path or URL */
+  } *aRemotes;
+  int nRemotes;
+
+  /* Remote tracking branches (e.g., origin/main) */
+  struct TrackingBranch {
+    char *zRemote;  /* Remote name */
+    char *zBranch;  /* Branch name */
+    ProllyHash commitHash;
+  } *aTracking;
+  int nTracking;
+
   /* File layout */
   int nChunks;               /* Number of compacted chunks */
   i64 iIndexOffset;          /* File offset of chunk index */
@@ -150,6 +165,9 @@ void chunkStoreSetHeadCommit(ChunkStore *cs, const ProllyHash *pHead);
 void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged);
 void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged);
 
+/* Reload refs (branches, tags, remotes, tracking) from the current refsHash */
+int chunkStoreReloadRefs(ChunkStore *cs);
+
 /* Branch management */
 const char *chunkStoreGetDefaultBranch(ChunkStore *cs);
 int chunkStoreSetDefaultBranch(ChunkStore *cs, const char *zName);
@@ -167,6 +185,22 @@ int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const Pro
 int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);
 int chunkStoreDeleteTag(ChunkStore *cs, const char *zName);
 int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
+
+/* Remote management */
+int chunkStoreAddRemote(ChunkStore *cs, const char *zName, const char *zUrl);
+int chunkStoreDeleteRemote(ChunkStore *cs, const char *zName);
+int chunkStoreFindRemote(ChunkStore *cs, const char *zName, const char **pzUrl);
+
+/* Tracking branch management */
+int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
+                             const char *zBranch, const ProllyHash *pCommit);
+int chunkStoreFindTracking(ChunkStore *cs, const char *zRemote,
+                           const char *zBranch, ProllyHash *pCommit);
+int chunkStoreDeleteTracking(ChunkStore *cs, const char *zRemote,
+                             const char *zBranch);
+
+/* Bulk has-check for sync (check multiple hashes at once) */
+int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aResult);
 
 /* Check if a chunk exists */
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash);

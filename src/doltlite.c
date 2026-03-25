@@ -1258,6 +1258,10 @@ void doltliteRegister(sqlite3 *db){
   doltliteAtRegister(db);
   doltliteRegisterHistoryTables(db);
   doltliteSchemaDiffRegister(db);
+  {
+    extern void doltliteRemoteSqlRegister(sqlite3 *db);
+    doltliteRemoteSqlRegister(db);
+  }
 }
 
 #endif /* DOLTLITE_PROLLY */

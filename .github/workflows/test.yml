@@ -44,6 +44,10 @@ jobs:
       run: cd build && bash ../test/run_doltlite_tests.sh
       timeout-minutes: 20
 
+    - name: Remote integration tests
+      run: cd build && bash ../test/remote_test.sh ./doltlite
+      timeout-minutes: 5
+
     # ── C/Python/Go integration tests ───────────────────────
 
     - name: C integration tests

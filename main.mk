@@ -566,7 +566,8 @@ PROLLY_OBJS = prolly_hash.o prolly_arena.o prolly_node.o prolly_cache.o \
               prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_log.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_conflicts.o \
-              doltlite_gc.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_record.o
+              doltlite_gc.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_record.o \
+              doltlite_remote.o doltlite_remote_sql.o
 
 DOLTLITE_PROLLY ?= 1
 DOLTLITE_VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
@@ -1352,6 +1353,12 @@ doltlite_record.o:	$(TOP)/src/doltlite_record.c $(DEPS_OBJ_COMMON)
 
 doltlite_merge.o:	$(TOP)/src/doltlite_merge.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge.c
+
+doltlite_remote.o:	$(TOP)/src/doltlite_remote.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_remote.c
+
+doltlite_remote_sql.o:	$(TOP)/src/doltlite_remote_sql.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_remote_sql.c
 
 build.o:	$(TOP)/src/build.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/build.c
