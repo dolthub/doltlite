@@ -5,6 +5,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_mutmap.h"
+#include "prolly_node.h"
 #include <string.h>
 
 /*
@@ -25,29 +26,17 @@ static int randomLevel(ProllyMutMap *mm){
 }
 
 /*
-** Compare two keys. For integer keys, compare the i64 values directly.
-** For blob keys, use memcmp with length comparison.
-**
-** Returns negative if a < b, zero if a == b, positive if a > b.
+** compareEntries: thin wrapper around prollyCompareKeys (prolly_node.c).
+** Maps the isIntKey flag to PROLLY_NODE_INTKEY for the shared comparator.
 */
 static int compareEntries(
   u8 isIntKey,
   const u8 *pKeyA, int nKeyA, i64 intKeyA,
   const u8 *pKeyB, int nKeyB, i64 intKeyB
 ){
-  if( isIntKey ){
-    if( intKeyA < intKeyB ) return -1;
-    if( intKeyA > intKeyB ) return 1;
-    return 0;
-  }else{
-    /* BLOBKEY entries store sort keys — memcmp gives correct order. */
-    int n = nKeyA < nKeyB ? nKeyA : nKeyB;
-    int c = memcmp(pKeyA, pKeyB, n);
-    if( c != 0 ) return c;
-    if( nKeyA < nKeyB ) return -1;
-    if( nKeyA > nKeyB ) return 1;
-    return 0;
-  }
+  u8 flags = isIntKey ? PROLLY_NODE_INTKEY : PROLLY_NODE_BLOBKEY;
+  return prollyCompareKeys(flags, pKeyA, nKeyA, intKeyA,
+                           pKeyB, nKeyB, intKeyB);
 }
 
 /*

@@ -113,4 +113,16 @@ void prollyNodeBuilderFree(ProllyNodeBuilder *b);
 /* Compute the content hash of serialized node data */
 void prollyNodeComputeHash(const u8 *pData, int nData, ProllyHash *pOut);
 
+/*
+** Compare two keys. For INTKEY tables, compare the i64 values directly.
+** For BLOBKEY tables, use memcmp with length comparison.
+**
+** Returns negative if key1 < key2, zero if equal, positive if key1 > key2.
+*/
+int prollyCompareKeys(
+  u8 flags,
+  const u8 *pKey1, int nKey1, i64 iKey1,
+  const u8 *pKey2, int nKey2, i64 iKey2
+);
+
 #endif /* SQLITE_PROLLY_NODE_H */

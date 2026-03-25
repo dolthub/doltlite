@@ -118,6 +118,7 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
 ** Return a pointer to key i and its length.
 */
 void prollyNodeKey(const ProllyNode *pNode, int i, const u8 **ppKey, int *pnKey){
+  assert( i >= 0 && i < (int)pNode->nItems );
   u32 off0 = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
   u32 off1 = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i+1]);
   *ppKey = pNode->pKeyData + off0;
@@ -128,6 +129,7 @@ void prollyNodeKey(const ProllyNode *pNode, int i, const u8 **ppKey, int *pnKey)
 ** Return a pointer to value i and its length.
 */
 void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVal){
+  assert( i >= 0 && i < (int)pNode->nItems );
   u32 off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
   u32 off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
   *ppVal = pNode->pValData + off0;
@@ -139,6 +141,7 @@ void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVa
 ** in little-endian format.
 */
 i64 prollyNodeIntKey(const ProllyNode *pNode, int i){
+  assert( i >= 0 && i < (int)pNode->nItems );
   u32 off = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
   const u8 *p = pNode->pKeyData + off;
   u32 lo = PROLLY_GET_U32(p);
@@ -151,12 +154,15 @@ i64 prollyNodeIntKey(const ProllyNode *pNode, int i){
 ** Only valid for internal nodes (level > 0).
 */
 void prollyNodeChildHash(const ProllyNode *pNode, int i, ProllyHash *pHash){
+  assert( i >= 0 && i < (int)pNode->nItems );
   u32 off = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
   memcpy(pHash->data, pNode->pValData + off, PROLLY_HASH_SIZE);
 }
 
 /*
 ** Binary search for a blob key within the node.
+** NOTE: keep in sync with prollyNodeSearchInt below.
+** Both are hot-path functions; a callback/flag indirection would hurt perf.
 **
 ** Returns the index where the key was found or where it would be inserted.
 ** *pRes is set to:
@@ -215,6 +221,8 @@ int prollyNodeSearchBlob(
 
 /*
 ** Binary search for an integer key within the node.
+** NOTE: keep in sync with prollyNodeSearchBlob above.
+** Both are hot-path functions; a callback/flag indirection would hurt perf.
 **
 ** Returns the index where the key was found or where it would be inserted.
 ** *pRes is set to:
@@ -477,6 +485,32 @@ void prollyNodeBuilderFree(ProllyNodeBuilder *b){
 */
 void prollyNodeComputeHash(const u8 *pData, int nData, ProllyHash *pOut){
   prollyHashCompute(pData, nData, pOut);
+}
+
+/*
+** Compare two keys. For INTKEY tables, compare the i64 values directly.
+** For BLOBKEY tables, use memcmp with length comparison (sort key encoding
+** ensures memcmp gives correct order).
+**
+** Returns negative if key1 < key2, zero if equal, positive if key1 > key2.
+*/
+int prollyCompareKeys(
+  u8 flags,
+  const u8 *pKey1, int nKey1, i64 iKey1,
+  const u8 *pKey2, int nKey2, i64 iKey2
+){
+  if( flags & PROLLY_NODE_INTKEY ){
+    if( iKey1 < iKey2 ) return -1;
+    if( iKey1 > iKey2 ) return +1;
+    return 0;
+  }else{
+    int n = nKey1 < nKey2 ? nKey1 : nKey2;
+    int c = memcmp(pKey1, pKey2, n);
+    if( c != 0 ) return c;
+    if( nKey1 < nKey2 ) return -1;
+    if( nKey1 > nKey2 ) return 1;
+    return 0;
+  }
 }
 
 #endif /* DOLTLITE_PROLLY */
