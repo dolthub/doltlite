@@ -87,9 +87,10 @@ SELECT dolt_push('origin','feature');
 .quit
 ENDSQL
 result=$("$DOLTLITE" "$TMPDIR/remote.db" "SELECT dolt_checkout('feature'); SELECT * FROM t ORDER BY id;")
-check "remote has feature branch" "1|a
+check "remote has feature branch" "0
+1|a
 2|b
-3|c" "$(echo "$result" | grep -v '^$')"
+3|c" "$result"
 
 echo ""
 echo "Results: $pass passed, $fail failed"

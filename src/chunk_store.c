@@ -810,9 +810,11 @@ const char *chunkStoreGetDefaultBranch(ChunkStore *cs){
 }
 
 int chunkStoreSetDefaultBranch(ChunkStore *cs, const char *zName){
+  char *zCopy = sqlite3_mprintf("%s", zName);
+  if( !zCopy ) return SQLITE_NOMEM;
   sqlite3_free(cs->zDefaultBranch);
-  cs->zDefaultBranch = sqlite3_mprintf("%s", zName);
-  return cs->zDefaultBranch ? SQLITE_OK : SQLITE_NOMEM;
+  cs->zDefaultBranch = zCopy;
+  return SQLITE_OK;
 }
 
 int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
