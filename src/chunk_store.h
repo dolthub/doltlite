@@ -1,19 +1,21 @@
 /*
-** File-backed content-addressed chunk store.
+** Single-file content-addressed chunk store.
 **
 ** File layout:
-**   [Manifest header: 168 bytes]
+**   [Manifest header: 168 bytes at offset 0]
 **     magic(4) + version(4) + root_hash(20) + chunk_count(4) +
 **     index_offset(8) + index_size(4) + catalog_hash(20) +
-**     head_commit(20) + staged_catalog(20) + refs_hash(20) +
-**     is_merging(4) + merge_commit_hash(20) + conflicts_catalog_hash(20)
-**   [Chunk data region: variable]
-**     Chunks are appended sequentially. Each chunk:
-**       length(4) + data(length)
-**   [Chunk index: variable]
-**     Sorted array of (hash(20) + offset(8) + size(4)) = 32 bytes each
+**     head_commit(20) + wal_offset(8) + reserved(12) + refs_hash(20) +
+**     reserved(64)
+**   [Compacted chunk data: offset 168 to iWalOffset]
+**     length(4) + data(length), with sorted index
+**   [WAL region: iWalOffset to EOF]
+**     Append-only journal of chunk and root records
+**     chunk record: tag(0x01) + hash(20) + len(4) + data
+**     root record:  tag(0x02) + manifest(168)
 **
-** Writes are committed atomically via write-to-temp + fsync + rename.
+** GC rewrites the file with all chunks compacted (empty WAL region).
+** Normal commits append to the WAL region at EOF.
 */
 #ifndef SQLITE_CHUNK_STORE_H
 #define SQLITE_CHUNK_STORE_H
@@ -23,7 +25,7 @@
 
 /* Manifest magic */
 #define CHUNK_STORE_MAGIC 0x444C5443  /* "DLTC" */
-#define CHUNK_STORE_VERSION 5
+#define CHUNK_STORE_VERSION 6
 #define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32
 
@@ -59,14 +61,13 @@ struct ChunkStore {
   sqlite3_file *pFile;       /* OS file handle */
   sqlite3_vfs *pVfs;         /* VFS for file operations */
   ProllyHash root;           /* Current root hash */
-  ProllyHash catalog;        /* Catalog hash (table registry + meta) */
-  ProllyHash headCommit;     /* HEAD commit hash (linked list of commits) */
-  ProllyHash stagedCatalog;  /* DEPRECATED: use per-branch WorkingSet instead */
+  ProllyHash catalog;        /* Catalog hash (table registry) */
+  ProllyHash headCommit;     /* HEAD commit hash */
   ProllyHash refsHash;       /* Hash of refs chunk (branch mapping) */
 
-  /* DEPRECATED: merge state now lives in per-branch WorkingSet.
-  ** These fields are kept for manifest format stability but are
-  ** loaded from/saved to WorkingSet, not the manifest. */
+  /* Legacy fields — kept in struct for code that still reads them,
+  ** but no longer persisted in manifest. Values come from WorkingSet. */
+  ProllyHash stagedCatalog;
   u8 isMerging;
   ProllyHash mergeCommitHash;
   ProllyHash conflictsCatalogHash;
@@ -75,45 +76,45 @@ struct ChunkStore {
   struct BranchRef {
     char *zName;
     ProllyHash commitHash;
-    ProllyHash workingSetHash;  /* Per-branch WorkingSet chunk */
+    ProllyHash workingSetHash;
   } *aBranches;
   int nBranches;
   char *zDefaultBranch;      /* Default branch for new connections */
 
-  /* Tag refs (in-memory, loaded from refs chunk) */
+  /* Tag refs */
   struct TagRef {
     char *zName;
     ProllyHash commitHash;
   } *aTags;
   int nTags;
-  int nChunks;               /* Number of chunks in store */
+
+  /* File layout */
+  int nChunks;               /* Number of compacted chunks */
   i64 iIndexOffset;          /* File offset of chunk index */
   int nIndexSize;            /* Size of chunk index in bytes */
-  i64 iAppendOffset;         /* Next write position for chunks */
+  i64 iWalOffset;            /* File offset where WAL region starts */
+  i64 iFileSize;             /* Last known total file size */
 
   /* In-memory index (loaded on open) */
   ChunkIndexEntry *aIndex;   /* Sorted array of index entries */
-  int nIndex;                /* Number of index entries */
-  int nIndexAlloc;           /* Allocated capacity */
+  int nIndex;
+  int nIndexAlloc;
 
   /* Write buffer for pending chunks */
-  ChunkIndexEntry *aPending; /* Pending new chunks */
+  ChunkIndexEntry *aPending;
   int nPending;
   int nPendingAlloc;
-  u8 *pWriteBuf;             /* Buffer for pending chunk data */
+  u8 *pWriteBuf;
   i64 nWriteBuf;
   i64 nWriteBufAlloc;
 
-  u8 readOnly;               /* True if opened read-only */
-  u8 isMemory;               /* True if this is an in-memory store */
-  i64 nCommittedWriteBuf;    /* Bytes in pWriteBuf belonging to committed chunks */
+  u8 readOnly;
+  u8 isMemory;
+  i64 nCommittedWriteBuf;
 
-  /* WAL (write-ahead log) state */
-  u8 *pWalData;              /* WAL file contents (loaded on open for reads) */
-  i64 nWalData;              /* Size of pWalData */
-  i64 nWalFileSize;          /* Last known WAL file size on disk */
-  char *zWalPath;            /* WAL file path */
-  int walFd;                 /* WAL file descriptor (open for append during writes) */
+  /* WAL region cache (read from file on open, updated on commit) */
+  u8 *pWalData;              /* In-memory copy of WAL region */
+  i64 nWalData;              /* Size of WAL region data */
 };
 
 /* Open or create a chunk store at the given path */

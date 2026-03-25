@@ -31,6 +31,11 @@ run_test_match "gc_clean" "SELECT dolt_gc();" "0 chunks removed" "$DB"
 run_test "gc_clean_data" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "gc_clean_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
 
+# Single-file: no -wal after GC
+nFiles=$(ls "$DB"* 2>/dev/null | wc -l | tr -d ' ')
+if [ "$nFiles" = "1" ]; then PASS=$((PASS+1))
+else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: gc_single_file\n  expected: 1 file\n  got:      $nFiles files"; fi
+
 db_rm "$DB"
 
 # ============================================================

@@ -57,10 +57,19 @@ static int dummyFileControl(sqlite3_file *p, int op, void *a){
 static int dummySectorSize(sqlite3_file *p){ (void)p; return 4096; }
 static int dummyDevChar(sqlite3_file *p){ (void)p; return 0; }
 static const sqlite3_io_methods dummyIoMethods = {
-  1, dummyClose, dummyRead, dummyWrite, dummyTruncate, dummySync,
-  dummyFileSize, dummyLock, dummyUnlock, dummyCheckLock,
-  dummyFileControl, dummySectorSize, dummyDevChar,
-  0, 0, 0, 0, 0, 0, 0
+  1,                  /* iVersion */
+  dummyClose,         /* xClose */
+  dummyRead,          /* xRead */
+  dummyWrite,         /* xWrite */
+  dummyTruncate,      /* xTruncate */
+  dummySync,          /* xSync */
+  dummyFileSize,      /* xFileSize */
+  dummyLock,          /* xLock */
+  dummyUnlock,        /* xUnlock */
+  dummyCheckLock,     /* xCheckReservedLock */
+  dummyFileControl,   /* xFileControl */
+  dummySectorSize,    /* xSectorSize */
+  dummyDevChar        /* xDeviceCharacteristics */
 };
 static sqlite3_file dummyFileObj;
 static sqlite3_file *pagerShimDummyFile(void){

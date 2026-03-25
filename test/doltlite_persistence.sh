@@ -32,6 +32,11 @@ run_test "basic_val2" "SELECT v FROM t WHERE id=2;" "world" "$DB"
 run_test "basic_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
 run_test_match "basic_msg" "SELECT message FROM dolt_log;" "init" "$DB"
 
+# Single-file: doltlite creates exactly one file, no -wal or -journal
+nFiles=$(ls "$DB"* 2>/dev/null | wc -l | tr -d ' ')
+if [ "$nFiles" = "1" ]; then PASS=$((PASS+1))
+else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: single_file\n  expected: 1 file\n  got:      $nFiles files ($(ls "$DB"* 2>/dev/null | tr '\n' ' '))"; fi
+
 rm -f "$DB"
 
 # ============================================================
