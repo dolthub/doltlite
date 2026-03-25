@@ -515,33 +515,33 @@ static int walkHistoryAndDiff(
 
 static int dtConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  DiffTblVtab *v;
+  DiffTblVtab *pVtab;
   int rc;
   const char *zModName;
   char *zSchema;
   (void)pAux; (void)pzErr;
 
-  v = sqlite3_malloc(sizeof(*v));
-  if( !v ) return SQLITE_NOMEM;
-  memset(v, 0, sizeof(*v));
-  v->db = db;
+  pVtab = sqlite3_malloc(sizeof(*pVtab));
+  if( !pVtab ) return SQLITE_NOMEM;
+  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab->db = db;
 
   /* Extract table name from module name: "dolt_diff_<tablename>" */
   zModName = argv[0];
   if( zModName && strncmp(zModName, "dolt_diff_", 10)==0 ){
-    v->zTableName = sqlite3_mprintf("%s", zModName + 10);
+    pVtab->zTableName = sqlite3_mprintf("%s", zModName + 10);
   }else if( argc > 3 ){
-    v->zTableName = sqlite3_mprintf("%s", argv[3]);
+    pVtab->zTableName = sqlite3_mprintf("%s", argv[3]);
   }else{
-    v->zTableName = sqlite3_mprintf("");
+    pVtab->zTableName = sqlite3_mprintf("");
   }
 
   /* Get column names from the actual table */
-  getColumnNames(db, v->zTableName, &v->cols);
+  getColumnNames(db, pVtab->zTableName, &pVtab->cols);
 
   /* Build dynamic schema */
-  if( v->cols.nCol > 0 ){
-    zSchema = buildDiffSchema(&v->cols);
+  if( pVtab->cols.nCol > 0 ){
+    zSchema = buildDiffSchema(&pVtab->cols);
   }else{
     /* Fallback: generic schema */
     zSchema = sqlite3_mprintf(
@@ -552,30 +552,30 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
   }
 
   if( !zSchema ){
-    sqlite3_free(v->zTableName);
-    freeColInfo(&v->cols);
-    sqlite3_free(v);
+    sqlite3_free(pVtab->zTableName);
+    freeColInfo(&pVtab->cols);
+    sqlite3_free(pVtab);
     return SQLITE_NOMEM;
   }
 
   rc = sqlite3_declare_vtab(db, zSchema);
   sqlite3_free(zSchema);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(v->zTableName);
-    freeColInfo(&v->cols);
-    sqlite3_free(v);
+    sqlite3_free(pVtab->zTableName);
+    freeColInfo(&pVtab->cols);
+    sqlite3_free(pVtab);
     return rc;
   }
 
-  *ppVtab = &v->base;
+  *ppVtab = &pVtab->base;
   return SQLITE_OK;
 }
 
-static int dtDisconnect(sqlite3_vtab *pVtab){
-  DiffTblVtab *v = (DiffTblVtab*)pVtab;
-  sqlite3_free(v->zTableName);
-  freeColInfo(&v->cols);
-  sqlite3_free(v);
+static int dtDisconnect(sqlite3_vtab *pBase){
+  DiffTblVtab *pVtab = (DiffTblVtab*)pBase;
+  sqlite3_free(pVtab->zTableName);
+  freeColInfo(&pVtab->cols);
+  sqlite3_free(pVtab);
   return SQLITE_OK;
 }
 
@@ -604,11 +604,11 @@ static int dtClose(sqlite3_vtab_cursor *cur){
 static int dtFilter(sqlite3_vtab_cursor *cur,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   DiffTblCursor *c = (DiffTblCursor*)cur;
-  DiffTblVtab *v = (DiffTblVtab*)cur->pVtab;
+  DiffTblVtab *pVtab = (DiffTblVtab*)cur->pVtab;
   (void)idxNum; (void)idxStr; (void)argc; (void)argv;
   freeAuditRows(c);
   c->iRow = 0;
-  walkHistoryAndDiff(c, v->db, v->zTableName);
+  walkHistoryAndDiff(c, pVtab->db, pVtab->zTableName);
   return SQLITE_OK;
 }
 
@@ -624,9 +624,9 @@ static int dtEof(sqlite3_vtab_cursor *cur){
 
 static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   DiffTblCursor *c = (DiffTblCursor*)cur;
-  DiffTblVtab *v = (DiffTblVtab*)cur->pVtab;
+  DiffTblVtab *pVtab = (DiffTblVtab*)cur->pVtab;
   AuditRow *r = &c->aRows[c->iRow];
-  int nCols = v->cols.nCol;
+  int nCols = pVtab->cols.nCol;
 
   /* Column layout:
   ** 0..nCols-1         : from_<col> values
@@ -641,7 +641,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   if( nCols > 0 && col < nCols ){
     /* from_<col> */
     int colIdx = col;
-    if( colIdx == v->cols.iPkCol ){
+    if( colIdx == pVtab->cols.iPkCol ){
       /* PK column: value comes from the rowid, not the record body.
       ** For 'added' rows (no old val), the PK didn't exist → NULL. */
       if( r->pOldVal && r->nOldVal > 0 ){
@@ -670,7 +670,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }else if( nCols > 0 && col < 2*nCols ){
     /* to_<col> */
     int colIdx = col - nCols;
-    if( colIdx == v->cols.iPkCol ){
+    if( colIdx == pVtab->cols.iPkCol ){
       if( r->pNewVal && r->nNewVal > 0 ){
         sqlite3_result_int64(ctx, r->intKey);
       }else{

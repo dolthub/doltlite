@@ -35,7 +35,7 @@ struct DoltliteLogCursor {
   ProllyHash currentHash;      /* Hash of current commit */
   DoltliteCommit current;      /* Deserialized current commit */
   int eof;                     /* True if no more commits */
-  i64 iRowid;                 /* Row counter */
+  i64 iRow;                 /* Row counter */
   char zHashHex[PROLLY_HASH_SIZE*2+1]; /* Hex string of currentHash */
 };
 
@@ -147,7 +147,7 @@ static int doltliteLogNext(sqlite3_vtab_cursor *pCursor){
     pCur->eof = 1;
     return SQLITE_OK;  /* Treat missing parent as end of log */
   }
-  pCur->iRowid++;
+  pCur->iRow++;
   return SQLITE_OK;
 }
 
@@ -182,7 +182,7 @@ static int doltliteLogFilter(
     pCur->eof = 1;
     return SQLITE_OK;
   }
-  pCur->iRowid = 0;
+  pCur->iRow = 0;
   pCur->eof = 0;
   return SQLITE_OK;
 }
@@ -232,7 +232,7 @@ static int doltliteLogColumn(
 }
 
 static int doltliteLogRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((DoltliteLogCursor*)pCursor)->iRowid;
+  *pRowid = ((DoltliteLogCursor*)pCursor)->iRow;
   return SQLITE_OK;
 }
 

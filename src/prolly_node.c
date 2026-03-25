@@ -48,8 +48,8 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   u16 count;
   int nOffsets;        /* total bytes consumed by both offset arrays */
   int minSize;         /* minimum valid buffer size */
-  u32 keyEnd;          /* last key offset = total key bytes */
-  u32 valEnd;          /* last val offset = total val bytes */
+  u32 totalKeyBytes;   /* last key offset = total key bytes */
+  u32 totalValBytes;   /* last val offset = total val bytes */
   const u8 *pCur;
 
   memset(pNode, 0, sizeof(*pNode));
@@ -103,11 +103,11 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   pNode->pKeyData = pCur;
 
   /* Validate that key and value regions fit in the buffer */
-  keyEnd = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[count]);
-  pNode->pValData = pCur + keyEnd;
+  totalKeyBytes = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[count]);
+  pNode->pValData = pCur + totalKeyBytes;
 
-  valEnd = PROLLY_GET_U32((const u8*)&pNode->aValOff[count]);
-  if( minSize + (int)keyEnd + (int)valEnd != nData ){
+  totalValBytes = PROLLY_GET_U32((const u8*)&pNode->aValOff[count]);
+  if( minSize + (int)totalKeyBytes + (int)totalValBytes != nData ){
     return SQLITE_CORRUPT;
   }
 

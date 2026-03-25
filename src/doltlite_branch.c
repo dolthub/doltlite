@@ -127,6 +127,42 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   sqlite3_result_int(ctx, 0);
 }
 
+/*
+** Load the target commit, deserialize it, and perform a hard reset to its
+** catalog state. On success, writes the commit hash's catalog hash to
+** *pCatHash so the caller can use it for session state updates.
+*/
+static int checkoutLoadAndApply(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char *zBranch,
+  ProllyHash *pCommitHash,
+  ProllyHash *pCatHash
+){
+  DoltliteCommit commit;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+
+  rc = chunkStoreGet(cs, pCommitHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteCommitDeserialize(data, nData, &commit);
+  sqlite3_free(data);
+  if( rc!=SQLITE_OK ) return rc;
+
+  memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
+  doltliteCommitClear(&commit);
+
+  /* Save current branch's WorkingSet BEFORE hard reset overwrites session */
+  {
+    extern int doltliteSaveWorkingSet(sqlite3*);
+    doltliteSaveWorkingSet(db);
+  }
+
+  rc = doltliteHardReset(db, pCatHash);
+  return rc;
+}
+
 /* --------------------------------------------------------------------------
 ** dolt_checkout('branch') — switch this session's active branch
 ** -------------------------------------------------------------------------- */
@@ -134,9 +170,6 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash targetCommit;
-  DoltliteCommit commit;
-  u8 *data = 0;
-  int nData = 0;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -194,24 +227,9 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   }
 
   /* Load target commit's catalog and hard reset */
-  rc = chunkStoreGet(cs, &targetCommit, &data, &nData);
-  if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "failed to load commit", -1); return; }
-  rc = doltliteCommitDeserialize(data, nData, &commit);
-  sqlite3_free(data);
-  if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "corrupt commit", -1); return; }
-
   {
     ProllyHash catHash;
-    memcpy(&catHash, &commit.catalogHash, sizeof(ProllyHash));
-    doltliteCommitClear(&commit);
-
-    /* Save current branch's WorkingSet BEFORE hard reset overwrites session */
-    {
-      extern int doltliteSaveWorkingSet(sqlite3*);
-      doltliteSaveWorkingSet(db);
-    }
-
-    rc = doltliteHardReset(db, &catHash);
+    rc = checkoutLoadAndApply(db, cs, zBranch, &targetCommit, &catHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(ctx, "checkout failed", -1);
       return;

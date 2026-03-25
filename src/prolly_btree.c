@@ -337,6 +337,9 @@ static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount);
 static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept);
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
+static int btreeRefreshFromDisk(Btree *p);
+static int btreeDeleteDeferred(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
+static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
 
 /* --------------------------------------------------------------------------
 ** Internal helper implementations
@@ -528,11 +531,9 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   q = buf;
   /* Version tag — distinguishes V2 (no meta) from V1 (has meta) */
   *q++ = CATALOG_FORMAT_V2;
-  /* iNextTable */
   q[0]=(u8)(pBtree->iNextTable); q[1]=(u8)(pBtree->iNextTable>>8);
   q[2]=(u8)(pBtree->iNextTable>>16); q[3]=(u8)(pBtree->iNextTable>>24);
   q += 4;
-  /* nTables */
   q[0]=(u8)nTables; q[1]=(u8)(nTables>>8);
   q[2]=(u8)(nTables>>16); q[3]=(u8)(nTables>>24);
   q += 4;
@@ -603,12 +604,12 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   ** connections on the same database agree on the version number,
   ** and schema changes are detected across connections. */
   {
-    u32 h = 0;
+    u32 schemaHash = 0;
     int j;
     for(j = 0; j < nData; j++){
-      h = h * 31 + data[j];
+      schemaHash = schemaHash * 31 + data[j];
     }
-    pBtree->aMeta[BTREE_SCHEMA_VERSION] = h | 1;  /* ensure non-zero */
+    pBtree->aMeta[BTREE_SCHEMA_VERSION] = schemaHash | 1;  /* ensure non-zero */
   }
 
   /* Table entries */
@@ -625,12 +626,10 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     if( !pTE ) return SQLITE_NOMEM;
     memcpy(pTE->root.data, q, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
-    /* schemaHash(20) */
     if( q + PROLLY_HASH_SIZE <= data+nData ){
       memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
       q += PROLLY_HASH_SIZE;
     }
-    /* name_len(2) + name(var) */
     if( q+2 <= data+nData ){
       nLen = q[0] | (q[1]<<8); q += 2;
       if( nLen>0 && q+nLen<=data+nData ){
@@ -1312,8 +1311,86 @@ int sqlite3BtreeIsReadonly(Btree *p){
 ** Transactions
 ** -------------------------------------------------------------------------- */
 
+/*
+** Check whether the on-disk manifest has changed since the last refresh
+** and, if so, reload the catalog and root hash from the chunk store.
+** Updates committedRoot, iBDataVersion, and the pager shim version.
+*/
+static int btreeRefreshFromDisk(Btree *p){
+  BtShared *pBt = p->pBt;
+  int bChanged = 0;
+  int rc = chunkStoreRefreshIfChanged(&pBt->store, &bChanged);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !bChanged ) return SQLITE_OK;
+
+  /* After refresh, decide whether the manifest state belongs to THIS
+  ** connection's branch.  The manifest headCommit is updated only by
+  ** dolt_commit / dolt_checkout.  If it matches our branch HEAD, the
+  ** manifest catalog/root may include uncommitted working changes and
+  ** we should use them.  If it doesn't match, a different branch
+  ** committed and we must reload from our branch HEAD commit. */
+  {
+    ProllyHash catHash;
+    ProllyHash manifestHead;
+    const char *zBr = p->zBranch ? p->zBranch : "main";
+    ProllyHash branchHead;
+    int useBranchCommit = 0;
+
+    memset(&catHash, 0, sizeof(catHash));
+    chunkStoreGetHeadCommit(&pBt->store, &manifestHead);
+
+    if( chunkStoreFindBranch(&pBt->store, zBr, &branchHead)==SQLITE_OK
+     && !prollyHashIsEmpty(&branchHead)
+     && prollyHashCompare(&manifestHead, &branchHead)!=0 ){
+      /* Manifest was written by a different branch — load our branch's
+      ** committed state instead of the manifest catalog. */
+      u8 *commitData = 0;
+      int nCommitData = 0;
+      rc = chunkStoreGet(&pBt->store, &branchHead, &commitData, &nCommitData);
+      if( rc==SQLITE_OK && commitData ){
+        DoltliteCommit commit;
+        rc = doltliteCommitDeserialize(commitData, nCommitData, &commit);
+        sqlite3_free(commitData);
+        if( rc==SQLITE_OK ){
+          memcpy(&catHash, &commit.catalogHash, sizeof(ProllyHash));
+          memcpy(&p->root, &commit.rootHash, sizeof(ProllyHash));
+          memcpy(&p->headCommit, &branchHead, sizeof(ProllyHash));
+          doltliteCommitClear(&commit);
+          useBranchCommit = 1;
+        }
+      }
+    }
+
+    if( !useBranchCommit ){
+      /* Manifest belongs to our branch — use manifest catalog/root
+      ** (may include uncommitted working changes). */
+      chunkStoreGetCatalog(&pBt->store, &catHash);
+      chunkStoreGetRoot(&pBt->store, &p->root);
+    }
+
+    if( !prollyHashIsEmpty(&catHash) ){
+      u8 *catData = 0;
+      int nCatData = 0;
+      rc = chunkStoreGet(&pBt->store, &catHash, &catData, &nCatData);
+      if( rc==SQLITE_OK && catData ){
+        rc = deserializeCatalog(p, catData, nCatData);
+        sqlite3_free(catData);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+    }
+    p->committedRoot = p->root;
+    p->iBDataVersion++;
+    if( pBt->pPagerShim ){
+      pBt->pPagerShim->iDataVersion++;
+    }
+  }
+
+  return SQLITE_OK;
+}
+
 int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   BtShared *pBt = p->pBt;
+  int rc;
 
   if( pSchemaVersion ){
     *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
@@ -1324,74 +1401,10 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   }
 
   /* Detect if another connection replaced the database file */
-  {
-    int bChanged = 0;
-    int rc = chunkStoreRefreshIfChanged(&pBt->store, &bChanged);
-    if( rc!=SQLITE_OK ) return rc;
-    if( bChanged ){
-      /* After refresh, decide whether the manifest state belongs to THIS
-      ** connection's branch.  The manifest headCommit is updated only by
-      ** dolt_commit / dolt_checkout.  If it matches our branch HEAD, the
-      ** manifest catalog/root may include uncommitted working changes and
-      ** we should use them.  If it doesn't match, a different branch
-      ** committed and we must reload from our branch HEAD commit. */
-      ProllyHash catHash;
-      ProllyHash manifestHead;
-      const char *zBr = p->zBranch ? p->zBranch : "main";
-      ProllyHash branchHead;
-      int useBranchCommit = 0;
-
-      memset(&catHash, 0, sizeof(catHash));
-      chunkStoreGetHeadCommit(&pBt->store, &manifestHead);
-
-      if( chunkStoreFindBranch(&pBt->store, zBr, &branchHead)==SQLITE_OK
-       && !prollyHashIsEmpty(&branchHead)
-       && prollyHashCompare(&manifestHead, &branchHead)!=0 ){
-        /* Manifest was written by a different branch — load our branch's
-        ** committed state instead of the manifest catalog. */
-        u8 *commitData = 0;
-        int nCommitData = 0;
-        rc = chunkStoreGet(&pBt->store, &branchHead, &commitData, &nCommitData);
-        if( rc==SQLITE_OK && commitData ){
-          DoltliteCommit commit;
-          rc = doltliteCommitDeserialize(commitData, nCommitData, &commit);
-          sqlite3_free(commitData);
-          if( rc==SQLITE_OK ){
-            memcpy(&catHash, &commit.catalogHash, sizeof(ProllyHash));
-            memcpy(&p->root, &commit.rootHash, sizeof(ProllyHash));
-            memcpy(&p->headCommit, &branchHead, sizeof(ProllyHash));
-            doltliteCommitClear(&commit);
-            useBranchCommit = 1;
-          }
-        }
-      }
-
-      if( !useBranchCommit ){
-        /* Manifest belongs to our branch — use manifest catalog/root
-        ** (may include uncommitted working changes). */
-        chunkStoreGetCatalog(&pBt->store, &catHash);
-        chunkStoreGetRoot(&pBt->store, &p->root);
-      }
-
-      if( !prollyHashIsEmpty(&catHash) ){
-        u8 *catData = 0;
-        int nCatData = 0;
-        rc = chunkStoreGet(&pBt->store, &catHash, &catData, &nCatData);
-        if( rc==SQLITE_OK && catData ){
-          rc = deserializeCatalog(p, catData, nCatData);
-          sqlite3_free(catData);
-          if( rc!=SQLITE_OK ) return rc;
-        }
-      }
-      p->committedRoot = p->root;
-      p->iBDataVersion++;
-      if( pBt->pPagerShim ){
-        pBt->pPagerShim->iDataVersion++;
-      }
-      if( pSchemaVersion ){
-        *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
-      }
-    }
+  rc = btreeRefreshFromDisk(p);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pSchemaVersion ){
+    *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
   }
 
   if( wrFlag ){
@@ -2319,12 +2332,12 @@ static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut)
         }
         off += nByte;
       }else if( st==7 ){
-        u64 x;
-        memcpy(&x, &p->u.r, 8);
+        u64 floatBits;
+        memcpy(&floatBits, &p->u.r, 8);
         int j;
         for(j=7; j>=0; j--){
-          pOut[off+j] = (u8)(x & 0xFF);
-          x >>= 8;
+          pOut[off+j] = (u8)(floatBits & 0xFF);
+          floatBits >>= 8;
         }
         off += 8;
       }else{
@@ -2895,8 +2908,76 @@ static int flushDeferredEdits(BtShared *pBt){
   return rc;
 }
 
+/*
+** Handle the deferred-write path for BtreeDelete: the MutMap entry has
+** already been marked as deleted, so we just update cursor state without
+** flushing to disk.
+*/
+static int btreeDeleteDeferred(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey){
+  (void)pKey; (void)nKey; (void)iKey;
+  CLEAR_CACHED_PAYLOAD(pCur);
+  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
+  return SQLITE_OK;
+}
+
+/*
+** Handle the immediate-flush path for BtreeDelete: flush the MutMap to
+** produce a new tree root, reinitialize the cursor, and optionally
+** re-seek for BTREE_SAVEPOSITION.
+*/
+static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey){
+  int rc;
+  i64 savedIntKey = 0;
+  u8 *savedBlobKey = 0;
+  int savedBlobKeyLen = 0;
+
+  if( pCur->curIntKey ){
+    if( !prollyCursorIsValid(&pCur->pCur)
+     && (pCur->curFlags & BTCF_ValidNKey) ){
+      savedIntKey = pCur->cachedIntKey;
+    } else {
+      savedIntKey = prollyCursorIntKey(&pCur->pCur);
+    }
+  } else {
+    if( nKey > 0 && pKey ){
+      savedBlobKey = sqlite3_malloc(nKey);
+      if( savedBlobKey ){ memcpy(savedBlobKey, pKey, nKey); savedBlobKeyLen = nKey; }
+    } else {
+      const u8 *pk; int nk;
+      prollyCursorKey(&pCur->pCur, &pk, &nk);
+      if( nk > 0 ){
+        savedBlobKey = sqlite3_malloc(nk);
+        if( savedBlobKey ){ memcpy(savedBlobKey, pk, nk); savedBlobKeyLen = nk; }
+      }
+    }
+  }
+  (void)iKey;
+
+  rc = flushMutMap(pCur);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(savedBlobKey);
+    return rc;
+  }
+
+  {
+    struct TableEntry *pTE2 = findTable(pCur->pBtree, pCur->pgnoRoot);
+    if( pTE2 ){
+      prollyCursorClose(&pCur->pCur);
+      prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
+                       &pTE2->root, pTE2->flags);
+    }
+  }
+
+  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
+  sqlite3_free(savedBlobKey);
+  return rc;
+}
+
 int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   int rc;
+  const u8 *pKey = 0;
+  int nKey = 0;
+  i64 iKey = 0;
 
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
@@ -2925,35 +3006,26 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   rc = ensureMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
+  /* Extract key and record the MutMap deletion */
   if( pCur->curIntKey ){
-    /* Use the cached integer key when available — the prolly cursor may
-    ** not be positioned if the seek was satisfied from the MutMap. */
-    i64 intKey;
     if( !prollyCursorIsValid(&pCur->pCur)
      && (pCur->curFlags & BTCF_ValidNKey) ){
-      intKey = pCur->cachedIntKey;
+      iKey = pCur->cachedIntKey;
     }else{
-      intKey = prollyCursorIntKey(&pCur->pCur);
+      iKey = prollyCursorIntKey(&pCur->pCur);
     }
-    rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, intKey);
+    rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, iKey);
   } else {
-    /* BLOBKEY delete: need the sort key for MutMap lookup.
-    ** Cached payload is a decoded SQLite record — recompute sort key.
-    ** If no cache, cursor key IS the sort key. */
-    const u8 *pKey;
-    int nKey;
     u8 *pDelSortKey = 0;
     int nDelSortKey = 0;
 
     if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
-      /* Cached payload is decoded SQLite record — compute sort key */
       rc = sortKeyFromRecord(pCur->pCachedPayload, pCur->nCachedPayload,
                              &pDelSortKey, &nDelSortKey);
       if( rc!=SQLITE_OK ) return rc;
       pKey = pDelSortKey;
       nKey = nDelSortKey;
     } else {
-      /* Cursor key is the sort key */
       prollyCursorKey(&pCur->pCur, &pKey, &nKey);
     }
     rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
@@ -2962,7 +3034,7 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Defer flush for persistent non-master tables, same as Insert. */
+  /* Dispatch to deferred or immediate path */
   {
     int canDefer = 0;
     if( pCur->pgnoRoot > 1 ){
@@ -2978,85 +3050,50 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
       }
     }
     if( canDefer ){
-      CLEAR_CACHED_PAYLOAD(pCur);
+      rc = btreeDeleteDeferred(pCur, pKey, nKey, iKey);
+      if( rc!=SQLITE_OK ) return rc;
       if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
-        /* The cursor is positioned on the deleted entry in the tree.
-        ** The entry still exists in the tree (not flushed) but is marked
-        ** DELETE in MutMap. Set SKIPNEXT so Next() advances past it. */
         pCur->eState = CURSOR_SKIPNEXT;
         pCur->skipNext = 0;
       } else {
         pCur->eState = CURSOR_INVALID;
       }
-      pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
       return SQLITE_OK;
     }
   }
 
-  /* Master table (pgnoRoot==1) and ephemeral tables: flush immediately */
-  {
-    i64 savedIntKey = 0;
-    u8 *savedBlobKey = 0;
-    int savedBlobKeyLen = 0;
+  /* Immediate flush path */
+  rc = btreeDeleteImmediate(pCur, pKey, nKey, iKey);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( flags & BTREE_SAVEPOSITION ){
+    int res = 0;
     if( pCur->curIntKey ){
-      if( !prollyCursorIsValid(&pCur->pCur)
-       && (pCur->curFlags & BTCF_ValidNKey) ){
-        savedIntKey = pCur->cachedIntKey;
+      rc = prollyCursorSeekInt(&pCur->pCur, iKey, &res);
+    } else if( pKey && nKey > 0 ){
+      /* Re-seek with the saved blob key */
+      u8 *pReseek = sqlite3_malloc(nKey);
+      if( pReseek ){
+        memcpy(pReseek, pKey, nKey);
+        rc = prollyCursorSeekBlob(&pCur->pCur, pReseek, nKey, &res);
+        sqlite3_free(pReseek);
       } else {
-        savedIntKey = prollyCursorIntKey(&pCur->pCur);
+        rc = SQLITE_NOMEM;
       }
     } else {
-      const u8 *pk; int nk;
-      if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
-        pk = pCur->pCachedPayload;
-        nk = pCur->nCachedPayload;
-      } else {
-        prollyCursorKey(&pCur->pCur, &pk, &nk);
-      }
-      if( nk > 0 ){
-        savedBlobKey = sqlite3_malloc(nk);
-        if( savedBlobKey ){ memcpy(savedBlobKey, pk, nk); savedBlobKeyLen = nk; }
-      }
+      rc = SQLITE_OK;
+      res = -1;
     }
-
-    rc = flushMutMap(pCur);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(savedBlobKey);
-      return rc;
-    }
-
-    {
-      struct TableEntry *pTE2 = findTable(pCur->pBtree, pCur->pgnoRoot);
-      if( pTE2 ){
-        prollyCursorClose(&pCur->pCur);
-        prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
-                         &pTE2->root, pTE2->flags);
-      }
-    }
-
-    if( flags & BTREE_SAVEPOSITION ){
-      int res = 0;
-      if( pCur->curIntKey ){
-        rc = prollyCursorSeekInt(&pCur->pCur, savedIntKey, &res);
-      } else if( savedBlobKey ){
-        rc = prollyCursorSeekBlob(&pCur->pCur, savedBlobKey, savedBlobKeyLen, &res);
-      } else {
-        rc = SQLITE_OK;
-        res = -1;
-      }
-      if( rc==SQLITE_OK && prollyCursorIsValid(&pCur->pCur) ){
-        pCur->eState = CURSOR_SKIPNEXT;
-        pCur->skipNext = (res>=0) ? 1 : -1;
-      } else {
-        pCur->eState = CURSOR_INVALID;
-      }
+    if( rc==SQLITE_OK && prollyCursorIsValid(&pCur->pCur) ){
+      pCur->eState = CURSOR_SKIPNEXT;
+      pCur->skipNext = (res>=0) ? 1 : -1;
     } else {
       pCur->eState = CURSOR_INVALID;
     }
-    sqlite3_free(savedBlobKey);
+  } else {
+    pCur->eState = CURSOR_INVALID;
   }
 
-  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
   return SQLITE_OK;
 }
 

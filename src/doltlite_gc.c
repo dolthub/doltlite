@@ -355,6 +355,238 @@ static int gcMarkReachable(
 **   4. Reload the chunk store index
 ** ---------------------------------------------------------------- */
 
+/*
+** Iterate the existing chunk index, copy surviving (marked) chunks into
+** a new contiguous data buffer, and build a new sorted index.
+** Caller must sqlite3_free *ppNewData and *ppNewIndex when done.
+*/
+static int gcBuildCompactedData(
+  ChunkStore *cs,
+  GcHashSet *marked,
+  u8 **ppNewData,
+  int *pnNewData,
+  ChunkIndexEntry **ppNewIndex,
+  int *pnNewIndex
+){
+  int i, j;
+  int kept = 0;
+  ChunkIndexEntry *aNewIndex = 0;
+  int nNewIndex = 0;
+  u8 *buf = 0;
+  int nBuf = 0, nBufAlloc = 0;
+  i64 dataOffset = CHUNK_MANIFEST_SIZE;
+  int rc = SQLITE_OK;
+
+  /* Count survivors to pre-allocate */
+  for(i=0; i<cs->nIndex; i++){
+    if( gcHashSetContains(marked, &cs->aIndex[i].hash) ) kept++;
+  }
+
+  aNewIndex = sqlite3_malloc(kept * (int)sizeof(ChunkIndexEntry));
+  if( !aNewIndex ) return SQLITE_NOMEM;
+
+  for(i=0; i<cs->nIndex; i++){
+    u8 *chunkData = 0;
+    int nChunkData = 0;
+
+    if( !gcHashSetContains(marked, &cs->aIndex[i].hash) ) continue;
+
+    rc = chunkStoreGet(cs, &cs->aIndex[i].hash, &chunkData, &nChunkData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(aNewIndex);
+      sqlite3_free(buf);
+      return rc;
+    }
+
+    /* Grow buffer: 4 (length prefix) + nChunkData */
+    {
+      int need = nBuf + 4 + nChunkData;
+      if( need > nBufAlloc ){
+        int newAlloc = nBufAlloc ? nBufAlloc * 2 : 65536;
+        while( newAlloc < need ) newAlloc *= 2;
+        buf = sqlite3_realloc(buf, newAlloc);
+        if( !buf ){
+          sqlite3_free(chunkData);
+          sqlite3_free(aNewIndex);
+          return SQLITE_NOMEM;
+        }
+        nBufAlloc = newAlloc;
+      }
+    }
+
+    /* Write length prefix + data */
+    buf[nBuf]   = (u8)(nChunkData);
+    buf[nBuf+1] = (u8)(nChunkData>>8);
+    buf[nBuf+2] = (u8)(nChunkData>>16);
+    buf[nBuf+3] = (u8)(nChunkData>>24);
+
+    memcpy(&aNewIndex[nNewIndex].hash, &cs->aIndex[i].hash, sizeof(ProllyHash));
+    aNewIndex[nNewIndex].offset = dataOffset + nBuf;
+    aNewIndex[nNewIndex].size = nChunkData;
+    nNewIndex++;
+
+    memcpy(buf + nBuf + 4, chunkData, nChunkData);
+    nBuf += 4 + nChunkData;
+
+    sqlite3_free(chunkData);
+  }
+
+  /* Sort new index by hash for binary search */
+  for(i=1; i<nNewIndex; i++){
+    ChunkIndexEntry tmp = aNewIndex[i];
+    j = i-1;
+    while( j>=0 && memcmp(aNewIndex[j].hash.data, tmp.hash.data, PROLLY_HASH_SIZE)>0 ){
+      aNewIndex[j+1] = aNewIndex[j];
+      j--;
+    }
+    aNewIndex[j+1] = tmp;
+  }
+
+  *ppNewData = buf;
+  *pnNewData = nBuf;
+  *ppNewIndex = aNewIndex;
+  *pnNewIndex = nNewIndex;
+  return SQLITE_OK;
+}
+
+/*
+** Write the compacted chunk store file: manifest + chunk data + index.
+** Fsyncs, renames the temp file into place, and reopens the file handle.
+*/
+static int gcRewriteFile(
+  ChunkStore *cs,
+  const u8 *pNewData,
+  int nNewData,
+  const ChunkIndexEntry *pNewIndex,
+  int nNewIndex
+){
+  int i;
+  int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
+  i64 indexOffset = CHUNK_MANIFEST_SIZE + nNewData;
+  u8 *indexBuf = 0;
+  u8 manifest[CHUNK_MANIFEST_SIZE];
+  int rc = SQLITE_OK;
+
+  /* Build serialized index */
+  indexBuf = sqlite3_malloc(indexSize);
+  if( !indexBuf ) return SQLITE_NOMEM;
+  for(i=0; i<nNewIndex; i++){
+    u8 *p = indexBuf + i * CHUNK_INDEX_ENTRY_SIZE;
+    memcpy(p, pNewIndex[i].hash.data, PROLLY_HASH_SIZE);
+    p += PROLLY_HASH_SIZE;
+    {
+      i64 off = pNewIndex[i].offset;
+      p[0] = (u8)off; p[1] = (u8)(off>>8);
+      p[2] = (u8)(off>>16); p[3] = (u8)(off>>24);
+      p[4] = (u8)(off>>32); p[5] = (u8)(off>>40);
+      p[6] = (u8)(off>>48); p[7] = (u8)(off>>56);
+    }
+    p += 8;
+    {
+      u32 sz = (u32)pNewIndex[i].size;
+      p[0] = (u8)sz; p[1] = (u8)(sz>>8);
+      p[2] = (u8)(sz>>16); p[3] = (u8)(sz>>24);
+    }
+  }
+
+  /* Update ChunkStore fields so the manifest reflects GC state */
+  cs->nChunks = nNewIndex;
+  cs->iIndexOffset = indexOffset;
+  cs->nIndexSize = indexSize;
+  cs->iWalOffset = indexOffset + indexSize;
+
+  csSerializeManifest(cs, manifest);
+
+  /* Write to temp file, then rename */
+  if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
+    char *zTmp = sqlite3_mprintf("%s-gc-tmp", cs->zFilename);
+    if( !zTmp ){
+      sqlite3_free(indexBuf);
+      return SQLITE_NOMEM;
+    }
+
+    {
+      sqlite3_file *pTmp = 0;
+      int tmpFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
+                     SQLITE_OPEN_MAIN_DB;
+      int dummy;
+
+      pTmp = sqlite3_malloc(cs->pVfs->szOsFile);
+      if( !pTmp ){
+        sqlite3_free(zTmp); sqlite3_free(indexBuf);
+        return SQLITE_NOMEM;
+      }
+
+      rc = cs->pVfs->xOpen(cs->pVfs, zTmp, pTmp, tmpFlags, &dummy);
+      if( rc==SQLITE_OK ){
+        rc = pTmp->pMethods->xWrite(pTmp, manifest, CHUNK_MANIFEST_SIZE, 0);
+        if( rc==SQLITE_OK && nNewData>0 ){
+          rc = pTmp->pMethods->xWrite(pTmp, pNewData, nNewData, CHUNK_MANIFEST_SIZE);
+        }
+        if( rc==SQLITE_OK && indexSize>0 ){
+          rc = pTmp->pMethods->xWrite(pTmp, indexBuf, indexSize, indexOffset);
+        }
+        if( rc==SQLITE_OK ){
+          rc = pTmp->pMethods->xTruncate(pTmp, indexOffset + indexSize);
+        }
+        if( rc==SQLITE_OK ){
+          rc = pTmp->pMethods->xSync(pTmp, SQLITE_SYNC_NORMAL);
+        }
+        pTmp->pMethods->xClose(pTmp);
+      }
+      sqlite3_free(pTmp);
+
+      if( rc==SQLITE_OK ){
+        if( cs->pFile && cs->pFile->pMethods ){
+          cs->pFile->pMethods->xClose(cs->pFile);
+          cs->pFile = 0;
+        }
+
+        {
+          int exists = 0;
+          cs->pVfs->xAccess(cs->pVfs, cs->zFilename,
+                            SQLITE_ACCESS_EXISTS, &exists);
+          if( exists ){
+            cs->pVfs->xDelete(cs->pVfs, cs->zFilename, 0);
+          }
+        }
+
+        if( rename(zTmp, cs->zFilename)!=0 ){
+          rc = SQLITE_IOERR;
+        }
+
+        if( rc==SQLITE_OK ){
+          sqlite3_free(cs->pWalData);
+          cs->pWalData = 0;
+          cs->nWalData = 0;
+        }
+
+        if( rc==SQLITE_OK ){
+          int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
+          sqlite3_file *pNewFile = sqlite3_malloc(cs->pVfs->szOsFile);
+          if( pNewFile ){
+            rc = cs->pVfs->xOpen(cs->pVfs, cs->zFilename, pNewFile,
+                                 reopenFlags, &dummy);
+            if( rc==SQLITE_OK ){
+              cs->pFile = pNewFile;
+            } else {
+              sqlite3_free(pNewFile);
+            }
+          } else {
+            rc = SQLITE_NOMEM;
+          }
+        }
+      }else{
+        cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
+      }
+    }
+    sqlite3_free(zTmp);
+  }
+
+  sqlite3_free(indexBuf);
+  return rc;
+}
+
 static int gcSweep(
   ChunkStore *cs,
   GcHashSet *marked,
@@ -365,11 +597,10 @@ static int gcSweep(
   ChunkIndexEntry *aNewIndex = 0;
   int nNewIndex = 0;
   u8 *buf = 0;
-  int nBuf = 0, nBufAlloc = 0;
-  i64 dataOffset;
+  int nBuf = 0;
   int rc = SQLITE_OK;
 
-  /* Count survivors */
+  /* Count survivors and removals */
   for(i=0; i<cs->nIndex; i++){
     if( gcHashSetContains(marked, &cs->aIndex[i].hash) ){
       kept++;
@@ -377,8 +608,6 @@ static int gcSweep(
       removed++;
     }
   }
-
-  /* Also check pending chunks */
   for(i=0; i<cs->nPending; i++){
     if( gcHashSetContains(marked, &cs->aPending[i].hash) ){
       kept++;
@@ -388,247 +617,31 @@ static int gcSweep(
   if( removed==0 ){
     *pKept = kept;
     *pRemoved = 0;
-    return SQLITE_OK;  /* Nothing to do */
+    return SQLITE_OK;
   }
 
-  /* Build new index and data buffer with surviving chunks */
-  aNewIndex = sqlite3_malloc(kept * (int)sizeof(ChunkIndexEntry));
-  if( !aNewIndex ) return SQLITE_NOMEM;
-  nNewIndex = 0;
+  /* Build compacted data and index */
+  rc = gcBuildCompactedData(cs, marked, &buf, &nBuf, &aNewIndex, &nNewIndex);
+  if( rc!=SQLITE_OK ) return rc;
 
-  /* Data starts after manifest */
-  dataOffset = CHUNK_MANIFEST_SIZE;
+  /* Rewrite the file */
+  rc = gcRewriteFile(cs, buf, nBuf, aNewIndex, nNewIndex);
 
-  for(i=0; i<cs->nIndex; i++){
-    if( !gcHashSetContains(marked, &cs->aIndex[i].hash) ) continue;
-
-    /* Read chunk data from old file */
-    {
-      u8 *chunkData = 0;
-      int nChunkData = 0;
-      rc = chunkStoreGet(cs, &cs->aIndex[i].hash, &chunkData, &nChunkData);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(aNewIndex);
-        sqlite3_free(buf);
-        return rc;
-      }
-
-      /* Grow buffer: 4 (length prefix) + nChunkData */
-      {
-        int need = nBuf + 4 + nChunkData;
-        if( need > nBufAlloc ){
-          int newAlloc = nBufAlloc ? nBufAlloc * 2 : 65536;
-          while( newAlloc < need ) newAlloc *= 2;
-          buf = sqlite3_realloc(buf, newAlloc);
-          if( !buf ){
-            sqlite3_free(chunkData);
-            sqlite3_free(aNewIndex);
-            return SQLITE_NOMEM;
-          }
-          nBufAlloc = newAlloc;
-        }
-      }
-
-      /* Write length prefix + data */
-      buf[nBuf]   = (u8)(nChunkData);
-      buf[nBuf+1] = (u8)(nChunkData>>8);
-      buf[nBuf+2] = (u8)(nChunkData>>16);
-      buf[nBuf+3] = (u8)(nChunkData>>24);
-
-      /* Record new index entry */
-      memcpy(&aNewIndex[nNewIndex].hash, &cs->aIndex[i].hash, sizeof(ProllyHash));
-      aNewIndex[nNewIndex].offset = dataOffset + nBuf;
-      aNewIndex[nNewIndex].size = nChunkData;
-      nNewIndex++;
-
-      memcpy(buf + nBuf + 4, chunkData, nChunkData);
-      nBuf += 4 + nChunkData;
-
-      sqlite3_free(chunkData);
-    }
-  }
-
-  /* Sort new index by hash for binary search */
-  {
-    int j;
-    for(i=1; i<nNewIndex; i++){
-      ChunkIndexEntry tmp = aNewIndex[i];
-      j = i-1;
-      while( j>=0 && memcmp(aNewIndex[j].hash.data, tmp.hash.data, PROLLY_HASH_SIZE)>0 ){
-        aNewIndex[j+1] = aNewIndex[j];
-        j--;
-      }
-      aNewIndex[j+1] = tmp;
-    }
-  }
-
-  /* Build serialized index */
-  {
+  /* Update in-memory state */
+  if( rc==SQLITE_OK ){
     int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
-    i64 indexOffset = CHUNK_MANIFEST_SIZE + nBuf;
-    u8 *indexBuf = sqlite3_malloc(indexSize);
-    if( !indexBuf ){
-      sqlite3_free(aNewIndex);
-      sqlite3_free(buf);
-      return SQLITE_NOMEM;
-    }
-    for(i=0; i<nNewIndex; i++){
-      u8 *p = indexBuf + i * CHUNK_INDEX_ENTRY_SIZE;
-      memcpy(p, aNewIndex[i].hash.data, PROLLY_HASH_SIZE);
-      p += PROLLY_HASH_SIZE;
-      /* offset: i64 little-endian */
-      {
-        i64 off = aNewIndex[i].offset;
-        p[0] = (u8)off; p[1] = (u8)(off>>8);
-        p[2] = (u8)(off>>16); p[3] = (u8)(off>>24);
-        p[4] = (u8)(off>>32); p[5] = (u8)(off>>40);
-        p[6] = (u8)(off>>48); p[7] = (u8)(off>>56);
-      }
-      p += 8;
-      /* size: u32 little-endian */
-      {
-        u32 sz = (u32)aNewIndex[i].size;
-        p[0] = (u8)sz; p[1] = (u8)(sz>>8);
-        p[2] = (u8)(sz>>16); p[3] = (u8)(sz>>24);
-      }
-    }
+    sqlite3_free(cs->aIndex);
+    cs->aIndex = aNewIndex;
+    cs->nIndex = nNewIndex;
+    cs->nIndexAlloc = nNewIndex;
+    cs->nChunks = nNewIndex;
+    cs->iIndexOffset = CHUNK_MANIFEST_SIZE + nBuf;
+    cs->nIndexSize = indexSize;
+    cs->iWalOffset = CHUNK_MANIFEST_SIZE + nBuf + indexSize;
+    aNewIndex = 0;  /* ownership transferred */
 
-    /* Build new manifest using csSerializeManifest.
-    ** Update ChunkStore fields first so the manifest reflects GC state. */
-    {
-      u8 manifest[CHUNK_MANIFEST_SIZE];
-      i64 savedWalOffset = cs->iWalOffset;
-      int savedNChunks = cs->nChunks;
-      i64 savedIndexOffset = cs->iIndexOffset;
-      int savedIndexSize = cs->nIndexSize;
-
-      cs->nChunks = nNewIndex;
-      cs->iIndexOffset = indexOffset;
-      cs->nIndexSize = indexSize;
-      cs->iWalOffset = indexOffset + indexSize;  /* WAL starts after index */
-
-      csSerializeManifest(cs, manifest);
-
-      /* Write to temp file, then rename */
-      if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
-        char *zTmp = sqlite3_mprintf("%s-gc-tmp", cs->zFilename);
-        if( !zTmp ){
-          sqlite3_free(indexBuf); sqlite3_free(aNewIndex); sqlite3_free(buf);
-          return SQLITE_NOMEM;
-        }
-
-        {
-          sqlite3_file *pTmp = 0;
-          int tmpFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
-                         SQLITE_OPEN_MAIN_DB;
-          int dummy;
-
-          pTmp = sqlite3_malloc(cs->pVfs->szOsFile);
-          if( !pTmp ){
-            sqlite3_free(zTmp); sqlite3_free(indexBuf);
-            sqlite3_free(aNewIndex); sqlite3_free(buf);
-            return SQLITE_NOMEM;
-          }
-
-          rc = cs->pVfs->xOpen(cs->pVfs, zTmp, pTmp, tmpFlags, &dummy);
-          if( rc==SQLITE_OK ){
-            /* Write manifest */
-            rc = pTmp->pMethods->xWrite(pTmp, manifest, CHUNK_MANIFEST_SIZE, 0);
-            /* Write chunk data */
-            if( rc==SQLITE_OK && nBuf>0 ){
-              rc = pTmp->pMethods->xWrite(pTmp, buf, nBuf, CHUNK_MANIFEST_SIZE);
-            }
-            /* Write index */
-            if( rc==SQLITE_OK && indexSize>0 ){
-              rc = pTmp->pMethods->xWrite(pTmp, indexBuf, indexSize, indexOffset);
-            }
-            /* Truncate to exact size */
-            if( rc==SQLITE_OK ){
-              rc = pTmp->pMethods->xTruncate(pTmp, indexOffset + indexSize);
-            }
-            /* Sync */
-            if( rc==SQLITE_OK ){
-              rc = pTmp->pMethods->xSync(pTmp, SQLITE_SYNC_NORMAL);
-            }
-            pTmp->pMethods->xClose(pTmp);
-          }
-          sqlite3_free(pTmp);
-
-          if( rc==SQLITE_OK ){
-            /* Close our current file handle */
-            if( cs->pFile && cs->pFile->pMethods ){
-              cs->pFile->pMethods->xClose(cs->pFile);
-              cs->pFile = 0;
-            }
-
-            /* Delete old main file if it exists */
-            {
-              int exists = 0;
-              cs->pVfs->xAccess(cs->pVfs, cs->zFilename,
-                                SQLITE_ACCESS_EXISTS, &exists);
-              if( exists ){
-                cs->pVfs->xDelete(cs->pVfs, cs->zFilename, 0);
-              }
-            }
-
-            /* Rename temp over original */
-            if( rename(zTmp, cs->zFilename)!=0 ){
-              rc = SQLITE_IOERR;
-            }
-
-            /* GC compacted all data — WAL region is now empty */
-            if( rc==SQLITE_OK ){
-              sqlite3_free(cs->pWalData);
-              cs->pWalData = 0;
-              cs->nWalData = 0;
-            }
-
-            /* Reopen the file (allocate fresh file handle) */
-            if( rc==SQLITE_OK ){
-              int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-              sqlite3_file *pNewFile = sqlite3_malloc(cs->pVfs->szOsFile);
-              if( pNewFile ){
-                rc = cs->pVfs->xOpen(cs->pVfs, cs->zFilename, pNewFile,
-                                     reopenFlags, &dummy);
-                if( rc==SQLITE_OK ){
-                  cs->pFile = pNewFile;
-                } else {
-                  sqlite3_free(pNewFile);
-                }
-              } else {
-                rc = SQLITE_NOMEM;
-              }
-            }
-          }else{
-            /* Clean up temp on failure */
-            cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
-          }
-        }
-        sqlite3_free(zTmp);
-      }else{
-        /* In-memory: just replace the index */
-        rc = SQLITE_OK;
-      }
-
-      /* Update in-memory index */
-      if( rc==SQLITE_OK ){
-        sqlite3_free(cs->aIndex);
-        cs->aIndex = aNewIndex;
-        cs->nIndex = nNewIndex;
-        cs->nIndexAlloc = nNewIndex;
-        cs->nChunks = nNewIndex;
-        cs->iIndexOffset = CHUNK_MANIFEST_SIZE + nBuf;
-        cs->nIndexSize = indexSize;
-        cs->iWalOffset = CHUNK_MANIFEST_SIZE + nBuf + indexSize;
-        aNewIndex = 0;  /* ownership transferred */
-
-        /* Clear pending buffer */
-        cs->nPending = 0;
-        cs->nWriteBuf = 0;
-      }
-    }
-
-    sqlite3_free(indexBuf);
+    cs->nPending = 0;
+    cs->nWriteBuf = 0;
   }
 
   sqlite3_free(aNewIndex);

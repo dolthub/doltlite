@@ -119,7 +119,6 @@ static int buildFromEdits(
         return rc;
       }
     }
-    /* DELETE edits on an empty tree: nothing to do, skip */
     prollyMutMapIterNext(&iter);
   }
 
@@ -320,23 +319,409 @@ static void getNodeKey(
 }
 
 /*
+** Maximum number of leaf splits when a rebuilt leaf overflows.
+*/
+#define MAX_LEAF_SPLITS 64
+
+/*
+** Result of handleLeafSplits: contains the hashes and boundary keys
+** produced when a rebuilt leaf is serialized (possibly splitting).
+*/
+typedef struct LeafSplitResult LeafSplitResult;
+struct LeafSplitResult {
+  ProllyHash aLeafHash[MAX_LEAF_SPLITS];
+  u8 (*aLeafKeyBuf)[256];       /* heap-allocated, caller must free */
+  int aLeafKeyLen[MAX_LEAF_SPLITS];
+  int nLeafSplits;
+  ProllyHash newHash;            /* single-node hash (or first split) */
+};
+
+/*
+** Phase 2: Sorted merge of old leaf entries with pending edits.
+**
+** Walks the old leaf (indices 0..nItems-1) and the edit iterator
+** simultaneously, emitting merged entries into leafBuilder.  Edits
+** that fall beyond this leaf's key range are left unconsumed for the
+** next seek, unless this is the rightmost leaf.
+**
+** On return the iterator has been advanced past all edits consumed.
+*/
+static int applyEditsToLeaf(
+  ProllyMutator *pMut,
+  ProllyNode *pLeaf,
+  ProllyCursor *pCur,
+  int leafLevel,
+  ProllyMutMapIter *pIter,
+  ProllyNodeBuilder *pBuilder
+){
+  int rc = SQLITE_OK;
+  int j = 0;
+
+  /* Save iterator position to detect if merge consumed any edits */
+  ProllyMutMapEntry *pIterBefore = prollyMutMapIterValid(pIter) ?
+                                   prollyMutMapIterEntry(pIter) : 0;
+
+  while( j < pLeaf->nItems || prollyMutMapIterValid(pIter) ){
+    int haveOld = (j < pLeaf->nItems);
+    int haveEdit = prollyMutMapIterValid(pIter);
+    ProllyMutMapEntry *pE = haveEdit ?
+                            prollyMutMapIterEntry(pIter) : 0;
+
+    if( haveOld && haveEdit ){
+      /* Check if edit is still within this leaf's key range */
+      const u8 *pLK; int nLK; i64 iLK = 0;
+      u8 aLeafKey[8];
+      getNodeKey(pLeaf, pLeaf->nItems - 1, pMut->flags,
+                 aLeafKey, &pLK, &nLK);
+
+      int editCmp;
+      if( pMut->flags & PROLLY_NODE_INTKEY ){
+        i64 lastIK = prollyNodeIntKey(pLeaf, pLeaf->nItems - 1);
+        if( pE->intKey > lastIK ) editCmp = 1;
+        else editCmp = 0;
+      }else{
+        editCmp = compareKeys(pMut->flags, pLK, nLK, 0,
+                              pE->pKey, pE->nKey, pE->intKey);
+        editCmp = (editCmp < 0) ? 1 : 0;  /* 1 = past leaf */
+      }
+
+      if( editCmp ){
+        /* Edit is past this leaf — copy remaining old entries */
+        const u8 *pK; int nK;
+        const u8 *pV; int nV;
+        u8 aKeyBuf[8];
+        getNodeKey(pLeaf, j, pMut->flags, aKeyBuf, &pK, &nK);
+        prollyNodeValue(pLeaf, j, &pV, &nV);
+        rc = prollyNodeBuilderAdd(pBuilder, pK, nK, pV, nV);
+        if( rc!=SQLITE_OK ) return rc;
+        j++;
+        continue;
+      }
+
+      /* Compare old key with edit key */
+      const u8 *pOldKey; int nOldKey; i64 iOldKey = 0;
+      u8 aOldKey[8];
+      if( pMut->flags & PROLLY_NODE_INTKEY ){
+        iOldKey = prollyNodeIntKey(pLeaf, j);
+      }
+      getNodeKey(pLeaf, j, pMut->flags, aOldKey, &pOldKey, &nOldKey);
+
+      int cmp = compareKeys(pMut->flags, pOldKey, nOldKey, iOldKey,
+                            pE->pKey, pE->nKey, pE->intKey);
+      if( cmp < 0 ){
+        /* Old entry first — copy */
+        const u8 *pV; int nV;
+        prollyNodeValue(pLeaf, j, &pV, &nV);
+        rc = prollyNodeBuilderAdd(pBuilder, pOldKey, nOldKey, pV, nV);
+        if( rc!=SQLITE_OK ) return rc;
+        j++;
+      }else if( cmp == 0 ){
+        /* Replace or delete */
+        if( pE->op==PROLLY_EDIT_INSERT ){
+          /* INTKEY: reuse existing encoded key (identical for matching keys).
+          ** BLOBKEY: use the edit's key bytes and value. */
+          if( pMut->flags & PROLLY_NODE_INTKEY ){
+            rc = prollyNodeBuilderAdd(pBuilder, pOldKey, nOldKey,
+                                      pE->pVal, pE->nVal);
+          }else{
+            rc = prollyNodeBuilderAdd(pBuilder,
+                   pE->pKey, pE->nKey, pE->pVal, pE->nVal);
+          }
+          if( rc!=SQLITE_OK ) return rc;
+        }
+        /* DELETE: skip both */
+        j++;
+        prollyMutMapIterNext(pIter);
+      }else{
+        /* Insert new entry before old */
+        if( pE->op==PROLLY_EDIT_INSERT ){
+          u8 aEditKey[8];
+          if( pMut->flags & PROLLY_NODE_INTKEY ){
+            encodeI64LE(aEditKey, pE->intKey);
+            rc = prollyNodeBuilderAdd(pBuilder, aEditKey, 8,
+                                      pE->pVal, pE->nVal);
+          }else{
+            rc = prollyNodeBuilderAdd(pBuilder,
+                   pE->pKey, pE->nKey, pE->pVal, pE->nVal);
+          }
+          if( rc!=SQLITE_OK ) return rc;
+        }
+        prollyMutMapIterNext(pIter);
+      }
+    }else if( haveOld ){
+      const u8 *pK; int nK;
+      const u8 *pV; int nV;
+      u8 aKeyBuf[8];
+      getNodeKey(pLeaf, j, pMut->flags, aKeyBuf, &pK, &nK);
+      prollyNodeValue(pLeaf, j, &pV, &nV);
+      rc = prollyNodeBuilderAdd(pBuilder, pK, nK, pV, nV);
+      if( rc!=SQLITE_OK ) return rc;
+      j++;
+    }else{
+      /* Remaining edits are past this leaf's last key.
+      ** If this is the rightmost leaf (cursor would go to EOF
+      ** after it), consume them as trailing inserts. Otherwise,
+      ** break — the next seek will route them to the right leaf. */
+      int isRightmost = 1;
+      {
+        int lv;
+        for(lv = leafLevel - 1; lv >= 0; lv--){
+          if( pCur->aLevel[lv].pEntry &&
+              pCur->aLevel[lv].idx < pCur->aLevel[lv].pEntry->node.nItems - 1 ){
+            isRightmost = 0;
+            break;
+          }
+        }
+      }
+      if( !isRightmost ) break;
+
+      /* This is the rightmost leaf — consume remaining edits */
+      while( prollyMutMapIterValid(pIter) ){
+        ProllyMutMapEntry *pT = prollyMutMapIterEntry(pIter);
+        if( pT->op==PROLLY_EDIT_INSERT ){
+          u8 aEditKey[8];
+          const u8 *pEK; int nEK;
+          if( pMut->flags & PROLLY_NODE_INTKEY ){
+            encodeI64LE(aEditKey, pT->intKey);
+            pEK = aEditKey; nEK = 8;
+          }else{
+            pEK = pT->pKey; nEK = pT->nKey;
+          }
+          rc = prollyNodeBuilderAdd(pBuilder,
+                 pEK, nEK, pT->pVal, pT->nVal);
+          if( rc!=SQLITE_OK ) return rc;
+        }
+        prollyMutMapIterNext(pIter);
+      }
+      break;
+    }
+  }
+
+  /* Safety: if the merge loop didn't consume ANY edits, force-consume
+  ** the current one to prevent infinite loops. */
+  {
+    ProllyMutMapEntry *pIterAfter = prollyMutMapIterValid(pIter) ?
+                                    prollyMutMapIterEntry(pIter) : 0;
+    if( pIterAfter == pIterBefore && pIterAfter != 0 ){
+      if( pIterAfter->op==PROLLY_EDIT_INSERT ){
+        u8 aEditKey[8];
+        const u8 *pEK; int nEK;
+        if( pMut->flags & PROLLY_NODE_INTKEY ){
+          encodeI64LE(aEditKey, pIterAfter->intKey);
+          pEK = aEditKey; nEK = 8;
+        }else{
+          pEK = pIterAfter->pKey; nEK = pIterAfter->nKey;
+        }
+        rc = prollyNodeBuilderAdd(pBuilder,
+               pEK, nEK, pIterAfter->pVal, pIterAfter->nVal);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+      prollyMutMapIterNext(pIter);
+    }
+  }
+
+  return SQLITE_OK;
+}
+
+/*
+** Phase 3: Serialize the rebuilt leaf, splitting if it exceeds the
+** chunk size limit.  Uses a rolling hash to find split boundaries.
+**
+** On success, pResult is populated with the split hashes and boundary
+** keys.  The caller must free pResult->aLeafKeyBuf via sqlite3_free.
+*/
+static int handleLeafSplits(
+  ProllyMutator *pMut,
+  ProllyNodeBuilder *pBuilder,
+  LeafSplitResult *pResult
+){
+  int rc;
+
+  memset(pResult, 0, sizeof(*pResult));
+  pResult->aLeafKeyBuf = (u8(*)[256])sqlite3_malloc(MAX_LEAF_SPLITS * 256);
+  if( !pResult->aLeafKeyBuf ) return SQLITE_NOMEM;
+
+  if( pBuilder->nItems == 0 ){
+    memset(&pResult->newHash, 0, sizeof(ProllyHash));
+    return SQLITE_OK;
+  }
+
+  int nOff = (pBuilder->nItems + 1) * 4;
+  int nTotal = 8 + nOff * 2 + pBuilder->nKeyBytes + pBuilder->nValBytes;
+  if( nTotal <= PROLLY_CHUNK_MAX ){
+    rc = builderToChunk(pBuilder, pMut->pStore, &pResult->newHash);
+    if( rc!=SQLITE_OK ) return rc;
+    pResult->nLeafSplits = 1;
+    return SQLITE_OK;
+  }
+
+  /* Leaf overflow: split into multiple level-0 nodes using
+  ** rolling hash boundaries. */
+  ProllyRollingHash rh;
+  rc = prollyRollingHashInit(&rh, 64);
+  if( rc!=SQLITE_OK ) return rc;
+
+  ProllyNodeBuilder splitB;
+  prollyNodeBuilderInit(&splitB, 0, pMut->flags);
+  int splitBytes = 0;
+
+  int ei;
+  for(ei = 0; ei < pBuilder->nItems; ei++){
+    u32 kO0 = pBuilder->aKeyOff[ei];
+    u32 kO1 = pBuilder->aKeyOff[ei + 1];
+    u32 vO0 = pBuilder->aValOff[ei];
+    u32 vO1 = pBuilder->aValOff[ei + 1];
+    int kLen = (int)(kO1 - kO0);
+    int vLen = (int)(vO1 - vO0);
+    const u8 *pKB = pBuilder->pKeyBuf + kO0;
+    const u8 *pVB = pBuilder->pValBuf + vO0;
+
+    rc = prollyNodeBuilderAdd(&splitB, pKB, kLen, pVB, vLen);
+    if( rc!=SQLITE_OK ) break;
+    splitBytes += kLen + vLen;
+
+    /* Feed key bytes into rolling hash */
+    int byteIdx;
+    for(byteIdx = 0; byteIdx < kLen; byteIdx++){
+      prollyRollingHashUpdate(&rh, pKB[byteIdx]);
+    }
+
+    /* Check for split boundary */
+    if( splitBytes >= PROLLY_CHUNK_MIN
+     && ei < pBuilder->nItems - 1
+     && pResult->nLeafSplits < MAX_LEAF_SPLITS - 1 ){
+      int atBound = prollyRollingHashAtBoundary(&rh,
+                      PROLLY_CHUNK_PATTERN);
+      if( atBound || splitBytes >= PROLLY_CHUNK_MAX ){
+        rc = builderToChunk(&splitB, pMut->pStore,
+                            &pResult->aLeafHash[pResult->nLeafSplits]);
+        if( rc!=SQLITE_OK ) break;
+        if( kLen > (int)sizeof(pResult->aLeafKeyBuf[0]) ){
+          rc = SQLITE_TOOBIG;
+          break;
+        }
+        memcpy(pResult->aLeafKeyBuf[pResult->nLeafSplits], pKB, kLen);
+        pResult->aLeafKeyLen[pResult->nLeafSplits] = kLen;
+        pResult->nLeafSplits++;
+        prollyNodeBuilderReset(&splitB);
+        prollyRollingHashReset(&rh);
+        splitBytes = 0;
+      }
+    }
+  }
+
+  /* Flush remaining entries as the last split node */
+  if( rc==SQLITE_OK && splitB.nItems > 0 ){
+    rc = builderToChunk(&splitB, pMut->pStore,
+                        &pResult->aLeafHash[pResult->nLeafSplits]);
+    if( rc==SQLITE_OK ) pResult->nLeafSplits++;
+  }
+
+  prollyNodeBuilderFree(&splitB);
+  prollyRollingHashFree(&rh);
+
+  if( rc==SQLITE_OK && pResult->nLeafSplits == 1 ){
+    memcpy(&pResult->newHash, &pResult->aLeafHash[0], sizeof(ProllyHash));
+  }
+
+  return rc;
+}
+
+/*
+** Phase 4: Walk up the cursor's path stack from the leaf's parent to
+** the root, rebuilding each ancestor node with the new child hashes
+** produced by the leaf split.
+**
+** On return, *pNewHash holds the new root hash for this edit batch.
+*/
+static int updateAncestors(
+  ProllyMutator *pMut,
+  ProllyCursor *pCur,
+  int leafLevel,
+  LeafSplitResult *pSplit,
+  ProllyHash *pNewHash
+){
+  int rc;
+  int level;
+
+  memcpy(pNewHash, &pSplit->newHash, sizeof(ProllyHash));
+
+  for(level = leafLevel - 1; level >= 0; level--){
+    ProllyNode *pAnc = &pCur->aLevel[level].pEntry->node;
+    int childIdx = pCur->aLevel[level].idx;
+    ProllyNodeBuilder ancBuilder;
+
+    prollyNodeBuilderInit(&ancBuilder, (u8)(pAnc->level), pMut->flags);
+
+    int k;
+    for(k = 0; k < pAnc->nItems; k++){
+      const u8 *pK; int nK;
+      const u8 *pV; int nV;
+      prollyNodeKey(pAnc, k, &pK, &nK);
+      if( k == childIdx ){
+        if( pSplit->nLeafSplits == 0
+         || (pSplit->nLeafSplits == 1 && prollyHashIsEmpty(pNewHash)) ){
+          continue;  /* Child deleted — skip */
+        }
+        if( pSplit->nLeafSplits > 1 && level == leafLevel - 1 ){
+          /* Multiple leaf splits: insert all children.
+          ** All but the last get their own stored key;
+          ** the last reuses the original parent key. */
+          int si;
+          for(si = 0; si < pSplit->nLeafSplits - 1; si++){
+            rc = prollyNodeBuilderAdd(&ancBuilder,
+                   pSplit->aLeafKeyBuf[si], pSplit->aLeafKeyLen[si],
+                   pSplit->aLeafHash[si].data, PROLLY_HASH_SIZE);
+            if( rc!=SQLITE_OK ) break;
+          }
+          if( rc==SQLITE_OK ){
+            rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK,
+                   pSplit->aLeafHash[pSplit->nLeafSplits-1].data,
+                   PROLLY_HASH_SIZE);
+          }
+        }else{
+          /* Single replacement */
+          rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK,
+                                    pNewHash->data, PROLLY_HASH_SIZE);
+        }
+      }else{
+        prollyNodeValue(pAnc, k, &pV, &nV);
+        rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK, pV, nV);
+      }
+      if( rc!=SQLITE_OK ){
+        prollyNodeBuilderFree(&ancBuilder);
+        return rc;
+      }
+    }
+
+    if( ancBuilder.nItems == 0 ){
+      /* Ancestor became empty — propagate up */
+      memset(pNewHash, 0, sizeof(ProllyHash));
+      prollyNodeBuilderFree(&ancBuilder);
+      continue;
+    }
+
+    rc = builderToChunk(&ancBuilder, pMut->pStore, pNewHash);
+    prollyNodeBuilderFree(&ancBuilder);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  return SQLITE_OK;
+}
+
+/*
 ** Apply edits to a tree using the Dolt-style cursor-path-stack approach.
 **
 ** Algorithm:
 **   1. Iterate edits in sorted order.
 **   2. For each edit, seek cursor to the edit key. The cursor's path
 **      stack now points from root to the target leaf.
-**   3. Clone the leaf into a builder, apply ALL edits that target this
-**      leaf (consuming them from the iterator).
-**   4. Serialize the new leaf → chunkStorePut → get newHash.
-**   5. Walk UP the path stack from leaf-parent to root:
-**      - Clone the ancestor node into a builder
-**      - Replace the child hash at the cursor's index with newHash
-**      - Serialize → chunkStorePut → get newHash
-**   6. The final newHash is the new root for this batch of edits.
-**      Set it as the cursor's root for the next seek.
+**   3. applyEditsToLeaf: merge the leaf's entries with pending edits.
+**   4. handleLeafSplits: serialize the rebuilt leaf, splitting if needed.
+**   5. updateAncestors: walk up the path stack, replacing child hashes.
+**   6. The final hash is the new root for this batch of edits.
 **
-** Cost: O(M × (log N + L)) where M = edits, L = avg leaf size.
+** Cost: O(M * (log N + L)) where M = edits, L = avg leaf size.
 ** Unchanged subtrees are never touched — only the path from root
 ** to the edited leaf is rewritten.
 */
@@ -356,7 +741,6 @@ static int applyEdits(
     ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&iter);
 
     /* --- Phase 1: Seek to edit position --- */
-    /* prollyCursorInit returns void — it just sets fields, cannot fail. */
     prollyCursorInit(&cur, pMut->pStore, pMut->pCache,
                      &currentRoot, pMut->flags);
     if( pMut->flags & PROLLY_NODE_INTKEY ){
@@ -376,366 +760,40 @@ static int applyEdits(
     ProllyNodeBuilder leafBuilder;
     prollyNodeBuilderInit(&leafBuilder, 0, pMut->flags);
 
-    /* Save iterator position to detect if merge consumed any edits */
-    ProllyMutMapEntry *pIterBefore = prollyMutMapIterValid(&iter) ?
-                                     prollyMutMapIterEntry(&iter) : 0;
-
-    /* Merge old entries with edits (sorted merge into builder) */
-    {
-      int j = 0;
-      while( j < pLeaf->nItems || prollyMutMapIterValid(&iter) ){
-        int haveOld = (j < pLeaf->nItems);
-        int haveEdit = prollyMutMapIterValid(&iter);
-        ProllyMutMapEntry *pE = haveEdit ?
-                                prollyMutMapIterEntry(&iter) : 0;
-
-        if( haveOld && haveEdit ){
-          /* Check if edit is still within this leaf's key range */
-          const u8 *pLK; int nLK; i64 iLK = 0;
-          u8 aLK[8];
-          getNodeKey(pLeaf, pLeaf->nItems - 1, pMut->flags,
-                     aLK, &pLK, &nLK);
-
-          int editCmp;
-          if( pMut->flags & PROLLY_NODE_INTKEY ){
-            i64 lastIK = prollyNodeIntKey(pLeaf, pLeaf->nItems - 1);
-            if( pE->intKey > lastIK ) editCmp = 1;
-            else editCmp = 0;
-          }else{
-            editCmp = compareKeys(pMut->flags, pLK, nLK, 0,
-                                  pE->pKey, pE->nKey, pE->intKey);
-            editCmp = (editCmp < 0) ? 1 : 0;  /* 1 = past leaf */
-          }
-
-          if( editCmp ){
-            /* Edit is past this leaf — copy remaining old entries */
-            const u8 *pK; int nK;
-            const u8 *pV; int nV;
-            u8 aKB[8];
-            getNodeKey(pLeaf, j, pMut->flags, aKB, &pK, &nK);
-            prollyNodeValue(pLeaf, j, &pV, &nV);
-            rc = prollyNodeBuilderAdd(&leafBuilder, pK, nK, pV, nV);
-            if( rc!=SQLITE_OK ) goto leaf_err;
-            j++;
-            continue;
-          }
-
-          /* Compare old key with edit key */
-          const u8 *pOK; int nOK; i64 iOK = 0;
-          u8 aOK[8];
-          if( pMut->flags & PROLLY_NODE_INTKEY ){
-            iOK = prollyNodeIntKey(pLeaf, j);
-          }
-          getNodeKey(pLeaf, j, pMut->flags, aOK, &pOK, &nOK);
-
-          int cmp = compareKeys(pMut->flags, pOK, nOK, iOK,
-                                pE->pKey, pE->nKey, pE->intKey);
-          if( cmp < 0 ){
-            /* Old entry first — copy */
-            const u8 *pV; int nV;
-            prollyNodeValue(pLeaf, j, &pV, &nV);
-            rc = prollyNodeBuilderAdd(&leafBuilder, pOK, nOK, pV, nV);
-            if( rc!=SQLITE_OK ) goto leaf_err;
-            j++;
-          }else if( cmp == 0 ){
-            /* Replace or delete */
-            if( pE->op==PROLLY_EDIT_INSERT ){
-              u8 aEK[8];
-              const u8 *pEK; int nEK;
-              getNodeKey(pLeaf, j, pMut->flags, aEK, &pEK, &nEK);
-              /* Use edit's value but preserve key format */
-              if( pMut->flags & PROLLY_NODE_INTKEY ){
-                rc = prollyNodeBuilderAdd(&leafBuilder, pOK, nOK,
-                                          pE->pVal, pE->nVal);
-              }else{
-                rc = prollyNodeBuilderAdd(&leafBuilder,
-                       pE->pKey, pE->nKey, pE->pVal, pE->nVal);
-              }
-              if( rc!=SQLITE_OK ) goto leaf_err;
-            }
-            /* DELETE: skip both */
-            j++;
-            prollyMutMapIterNext(&iter);
-          }else{
-            /* Insert new entry before old */
-            if( pE->op==PROLLY_EDIT_INSERT ){
-              u8 aEK[8];
-              if( pMut->flags & PROLLY_NODE_INTKEY ){
-                encodeI64LE(aEK, pE->intKey);
-                rc = prollyNodeBuilderAdd(&leafBuilder, aEK, 8,
-                                          pE->pVal, pE->nVal);
-              }else{
-                rc = prollyNodeBuilderAdd(&leafBuilder,
-                       pE->pKey, pE->nKey, pE->pVal, pE->nVal);
-              }
-              if( rc!=SQLITE_OK ) goto leaf_err;
-            }
-            prollyMutMapIterNext(&iter);
-          }
-        }else if( haveOld ){
-          const u8 *pK; int nK;
-          const u8 *pV; int nV;
-          u8 aKB[8];
-          getNodeKey(pLeaf, j, pMut->flags, aKB, &pK, &nK);
-          prollyNodeValue(pLeaf, j, &pV, &nV);
-          rc = prollyNodeBuilderAdd(&leafBuilder, pK, nK, pV, nV);
-          if( rc!=SQLITE_OK ) goto leaf_err;
-          j++;
-        }else{
-          /* Remaining edits are past this leaf's last key.
-          ** If this is the rightmost leaf (cursor would go to EOF
-          ** after it), consume them as trailing inserts. Otherwise,
-          ** break — the next seek will route them to the right leaf. */
-          int isRightmost = 1;
-          {
-            /* Check if there's a next leaf by looking at parent indices */
-            int lv;
-            for(lv = leafLevel - 1; lv >= 0; lv--){
-              if( cur.aLevel[lv].pEntry &&
-                  cur.aLevel[lv].idx < cur.aLevel[lv].pEntry->node.nItems - 1 ){
-                isRightmost = 0;
-                break;
-              }
-            }
-          }
-          if( !isRightmost ) break;
-
-          /* This is the rightmost leaf — consume remaining edits */
-          while( prollyMutMapIterValid(&iter) ){
-            ProllyMutMapEntry *pT = prollyMutMapIterEntry(&iter);
-            if( pT->op==PROLLY_EDIT_INSERT ){
-              u8 aEK[8];
-              const u8 *pEK; int nEK;
-              if( pMut->flags & PROLLY_NODE_INTKEY ){
-                encodeI64LE(aEK, pT->intKey);
-                pEK = aEK; nEK = 8;
-              }else{
-                pEK = pT->pKey; nEK = pT->nKey;
-              }
-              rc = prollyNodeBuilderAdd(&leafBuilder,
-                     pEK, nEK, pT->pVal, pT->nVal);
-              if( rc!=SQLITE_OK ) goto leaf_err;
-            }
-            prollyMutMapIterNext(&iter);
-          }
-          break;
-        }
-      }
-    }
-
-    /* Safety: if the merge loop didn't consume ANY edits, force-consume
-    ** the current one to prevent infinite loops. This happens when the
-    ** seek lands on a leaf where the edit key is past the last entry
-    ** AND we're not at the rightmost leaf (so the isRightmost path
-    ** didn't fire). Force-consume: if it's an INSERT, add it to the
-    ** builder; if DELETE, just skip it. */
-    {
-      ProllyMutMapEntry *pIterAfter = prollyMutMapIterValid(&iter) ?
-                                      prollyMutMapIterEntry(&iter) : 0;
-      if( pIterAfter == pIterBefore && pIterAfter != 0 ){
-        /* Iterator didn't move — force consume */
-        if( pIterAfter->op==PROLLY_EDIT_INSERT ){
-          u8 aEK[8];
-          const u8 *pEK; int nEK;
-          if( pMut->flags & PROLLY_NODE_INTKEY ){
-            encodeI64LE(aEK, pIterAfter->intKey);
-            pEK = aEK; nEK = 8;
-          }else{
-            pEK = pIterAfter->pKey; nEK = pIterAfter->nKey;
-          }
-          rc = prollyNodeBuilderAdd(&leafBuilder,
-                 pEK, nEK, pIterAfter->pVal, pIterAfter->nVal);
-          if( rc!=SQLITE_OK ) goto leaf_err;
-        }
-        prollyMutMapIterNext(&iter);
-      }
+    rc = applyEditsToLeaf(pMut, pLeaf, &cur, leafLevel, &iter, &leafBuilder);
+    if( rc!=SQLITE_OK ){
+      prollyNodeBuilderFree(&leafBuilder);
+      prollyCursorClose(&cur);
+      return rc;
     }
 
     /* --- Phase 3: Handle leaf splits --- */
-    #define MAX_LEAF_SPLITS 64
-    ProllyHash aLeafHash[MAX_LEAF_SPLITS];
-    u8 (*aLeafKeyBuf)[256] = (u8(*)[256])sqlite3_malloc(MAX_LEAF_SPLITS * 256);
-    if( !aLeafKeyBuf ){ rc = SQLITE_NOMEM; goto leaf_err; }
-    int aLeafKeyLen[MAX_LEAF_SPLITS];
-    int nLeafSplits = 0;
-    ProllyHash newHash;
-    if( leafBuilder.nItems == 0 ){
-      memset(&newHash, 0, sizeof(ProllyHash));
-    }else{
-      int nOff = (leafBuilder.nItems + 1) * 4;
-      int nTotal = 8 + nOff * 2 + leafBuilder.nKeyBytes
-                   + leafBuilder.nValBytes;
-      if( nTotal <= PROLLY_CHUNK_MAX ){
-        rc = builderToChunk(&leafBuilder, pMut->pStore, &newHash);
-        if( rc!=SQLITE_OK ) goto leaf_err;
-        nLeafSplits = 1;
-      }else{
-        /* Leaf overflow: split into multiple level-0 nodes using
-        ** rolling hash boundaries.  We collect (lastKey, hash) pairs
-        ** for each new leaf node, then pass them to the parent. */
-        ProllyRollingHash rh;
-        rc = prollyRollingHashInit(&rh, 64);
-        if( rc!=SQLITE_OK ) goto leaf_err;
-
-        ProllyNodeBuilder splitB;
-        prollyNodeBuilderInit(&splitB, 0, pMut->flags);
-        int splitBytes = 0;
-        nLeafSplits = 0;
-
-        int ei;
-        for(ei = 0; ei < leafBuilder.nItems; ei++){
-          u32 kO0 = leafBuilder.aKeyOff[ei];
-          u32 kO1 = leafBuilder.aKeyOff[ei + 1];
-          u32 vO0 = leafBuilder.aValOff[ei];
-          u32 vO1 = leafBuilder.aValOff[ei + 1];
-          int kLen = (int)(kO1 - kO0);
-          int vLen = (int)(vO1 - vO0);
-          const u8 *pKB = leafBuilder.pKeyBuf + kO0;
-          const u8 *pVB = leafBuilder.pValBuf + vO0;
-
-          rc = prollyNodeBuilderAdd(&splitB, pKB, kLen, pVB, vLen);
-          if( rc!=SQLITE_OK ) break;
-          splitBytes += kLen + vLen;
-
-          /* Feed key bytes into rolling hash */
-          int bi;
-          for(bi = 0; bi < kLen; bi++){
-            prollyRollingHashUpdate(&rh, pKB[bi]);
-          }
-
-          /* Check for split boundary */
-          if( splitBytes >= PROLLY_CHUNK_MIN
-           && ei < leafBuilder.nItems - 1
-           && nLeafSplits < MAX_LEAF_SPLITS - 1 ){
-            int atBound = prollyRollingHashAtBoundary(&rh,
-                            PROLLY_CHUNK_PATTERN);
-            if( atBound || splitBytes >= PROLLY_CHUNK_MAX ){
-              rc = builderToChunk(&splitB, pMut->pStore,
-                                  &aLeafHash[nLeafSplits]);
-              if( rc!=SQLITE_OK ) break;
-              /* Save last key for parent */
-              if( kLen > (int)sizeof(aLeafKeyBuf[0]) ){
-                rc = SQLITE_TOOBIG;
-                break;
-              }
-              memcpy(aLeafKeyBuf[nLeafSplits], pKB, kLen);
-              aLeafKeyLen[nLeafSplits] = kLen;
-              nLeafSplits++;
-              prollyNodeBuilderReset(&splitB);
-              prollyRollingHashReset(&rh);
-              splitBytes = 0;
-            }
-          }
-        }
-
-        /* Flush remaining entries as the last split node */
-        if( rc==SQLITE_OK && splitB.nItems > 0 ){
-          rc = builderToChunk(&splitB, pMut->pStore,
-                              &aLeafHash[nLeafSplits]);
-          if( rc==SQLITE_OK ) nLeafSplits++;
-        }
-
-        prollyNodeBuilderFree(&splitB);
-        prollyRollingHashFree(&rh);
-        if( rc!=SQLITE_OK ) goto leaf_err;
-
-        /* For single-split case, set newHash for compatibility */
-        if( nLeafSplits == 1 ){
-          memcpy(&newHash, &aLeafHash[0], sizeof(ProllyHash));
-        }
-      }
-    }
+    LeafSplitResult splitResult;
+    rc = handleLeafSplits(pMut, &leafBuilder, &splitResult);
     prollyNodeBuilderFree(&leafBuilder);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(splitResult.aLeafKeyBuf);
+      prollyCursorClose(&cur);
+      return rc;
+    }
 
     /* --- Phase 4: Walk up ancestors --- */
-    /* Walk UP ancestor chain, replacing child hashes.
-    ** For single-leaf trees (leafLevel==0), the leaf IS the root. */
+    /* For single-leaf trees (leafLevel==0), the leaf IS the root. */
     if( leafLevel == 0 ){
-      memcpy(&currentRoot, &newHash, sizeof(ProllyHash));
-      sqlite3_free(aLeafKeyBuf);
-      prollyCursorClose(&cur);
-      continue;
-    }
-    {
-      int level;
-      for(level = leafLevel - 1; level >= 0; level--){
-        ProllyNode *pAnc = &cur.aLevel[level].pEntry->node;
-        int childIdx = cur.aLevel[level].idx;
-        ProllyNodeBuilder ancBuilder;
-
-        prollyNodeBuilderInit(&ancBuilder, (u8)(pAnc->level),
-                              pMut->flags);
-
-        /* Copy all entries, replacing the child hash at childIdx */
-        int k;
-        for(k = 0; k < pAnc->nItems; k++){
-          const u8 *pK; int nK;
-          const u8 *pV; int nV;
-          prollyNodeKey(pAnc, k, &pK, &nK);
-          if( k == childIdx ){
-            if( nLeafSplits == 0 || (nLeafSplits == 1 && prollyHashIsEmpty(&newHash)) ){
-              continue;  /* Child deleted — skip */
-            }
-            if( nLeafSplits > 1 && level == leafLevel - 1 ){
-              /* Multiple leaf splits: insert all children.
-              ** All but the last get their own stored key;
-              ** the last reuses the original parent key. */
-              int si;
-              for(si = 0; si < nLeafSplits - 1; si++){
-                rc = prollyNodeBuilderAdd(&ancBuilder,
-                       aLeafKeyBuf[si], aLeafKeyLen[si],
-                       aLeafHash[si].data, PROLLY_HASH_SIZE);
-                if( rc!=SQLITE_OK ) break;
-              }
-              if( rc==SQLITE_OK ){
-                rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK,
-                       aLeafHash[nLeafSplits-1].data, PROLLY_HASH_SIZE);
-              }
-            }else{
-              /* Single replacement */
-              rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK,
-                                        newHash.data, PROLLY_HASH_SIZE);
-            }
-          }else{
-            prollyNodeValue(pAnc, k, &pV, &nV);
-            rc = prollyNodeBuilderAdd(&ancBuilder, pK, nK, pV, nV);
-          }
-          if( rc!=SQLITE_OK ){
-            prollyNodeBuilderFree(&ancBuilder);
-            sqlite3_free(aLeafKeyBuf);
-            prollyCursorClose(&cur);
-            return rc;
-          }
-        }
-
-        if( ancBuilder.nItems == 0 ){
-          /* Ancestor became empty — propagate up */
-          memset(&newHash, 0, sizeof(ProllyHash));
-          prollyNodeBuilderFree(&ancBuilder);
-          continue;
-        }
-
-        rc = builderToChunk(&ancBuilder, pMut->pStore, &newHash);
-        prollyNodeBuilderFree(&ancBuilder);
-        if( rc!=SQLITE_OK ){
-          sqlite3_free(aLeafKeyBuf);
-          prollyCursorClose(&cur);
-          return rc;
-        }
+      memcpy(&currentRoot, &splitResult.newHash, sizeof(ProllyHash));
+    }else{
+      ProllyHash newRoot;
+      rc = updateAncestors(pMut, &cur, leafLevel, &splitResult, &newRoot);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(splitResult.aLeafKeyBuf);
+        prollyCursorClose(&cur);
+        return rc;
       }
+      memcpy(&currentRoot, &newRoot, sizeof(ProllyHash));
     }
 
-    /* newHash is now the new root */
-    memcpy(&currentRoot, &newHash, sizeof(ProllyHash));
-    sqlite3_free(aLeafKeyBuf);
+    sqlite3_free(splitResult.aLeafKeyBuf);
     prollyCursorClose(&cur);
-    continue;
-
-leaf_err:
-    sqlite3_free(aLeafKeyBuf);
-    prollyNodeBuilderFree(&leafBuilder);
-    prollyCursorClose(&cur);
-    return rc;
   }
 
   memcpy(&pMut->newRoot, &currentRoot, sizeof(ProllyHash));

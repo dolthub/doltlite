@@ -26,9 +26,6 @@ BtShared *SQLITE_WSD sqlite3SharedCacheList = 0;
 
 #include <string.h>
 
-/*
-** Cast helper — every shim function uses this to get the real struct.
-*/
 #define SHIM(p) ((PagerShim*)(p))
 
 /* -----------------------------------------------------------------------

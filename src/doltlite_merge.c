@@ -101,13 +101,11 @@ static int mergeReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
 
 /* Write a varint. Returns bytes written. */
 static int mergeWriteVarint(u8 *p, u64 v){
-  u8 buf[9]; int i, n;
+  u8 buf[9]; int i, nBytes;
   if( v<=0x7f ){ p[0]=(u8)v; return 1; }
-  n=0;
-  for(i=0; v>0 && i<9; i++){ buf[i]=(u8)(v&0x7f); v>>=7; n++; }
-  /* Actually, use the standard SQLite varint encoding */
-  /* Simpler: write big-endian varint */
-  if( v==0 && n<=1 ){ p[0]=(u8)buf[0]; return 1; }
+  nBytes=0;
+  for(i=0; v>0 && i<9; i++){ buf[i]=(u8)(v&0x7f); v>>=7; nBytes++; }
+  if( v==0 && nBytes<=1 ){ p[0]=(u8)buf[0]; return 1; }
   /* Fall back to a simple implementation */
   return 0; /* Will use the approach below instead */
 }
@@ -129,22 +127,22 @@ struct RecField { u64 st; int off; int len; };
 
 static int parseRecordFields(const u8 *pRec, int nRec,
                              RecField **ppFields, int *pnFields){
-  const u8 *p, *pEnd, *pHdrEnd;
+  const u8 *pPos, *pEnd, *pHdrEnd;
   u64 hdrSize;
   int hdrBytes, nFields = 0, nAlloc = 0, bodyOff;
   RecField *aFields = 0;
 
   if(!pRec || nRec<1) { *ppFields=0; *pnFields=0; return 0; }
-  p = pRec; pEnd = pRec + nRec;
-  hdrBytes = mergeReadVarint(p, pEnd, &hdrSize);
-  p += hdrBytes;
+  pPos = pRec; pEnd = pRec + nRec;
+  hdrBytes = mergeReadVarint(pPos, pEnd, &hdrSize);
+  pPos += hdrBytes;
   pHdrEnd = pRec + (int)hdrSize;
   bodyOff = (int)hdrSize;
 
-  while(p < pHdrEnd && p < pEnd){
+  while(pPos < pHdrEnd && pPos < pEnd){
     u64 st; int stBytes, sz;
-    stBytes = mergeReadVarint(p, pHdrEnd, &st);
-    p += stBytes;
+    stBytes = mergeReadVarint(pPos, pHdrEnd, &st);
+    pPos += stBytes;
     sz = serialTypeSize(st);
 
     if(nFields >= nAlloc){
@@ -171,6 +169,90 @@ static int fieldEquals(const u8 *pRecA, RecField *fA,
   if(fA->len != fB->len) return 1;
   if(fA->len==0) return 0;
   return memcmp(pRecA + fA->off, pRecB + fB->off, fA->len);
+}
+
+/*
+** A winning field choice: the source record and which field within it.
+*/
+typedef struct MergeWinner MergeWinner;
+struct MergeWinner { const u8 *pRec; RecField *pField; };
+
+/*
+** Build a merged SQLite record blob from an array of per-field winners.
+** Returns the record (caller must sqlite3_free), or NULL on OOM.
+*/
+static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
+  int hdrSize = 0, bodySize = 0, pos, i;
+  u8 *result;
+
+  /* First pass: calculate header and body sizes */
+  for(i=0; i<nFields; i++){
+    u64 st = aWinners[i].pField->st;
+    if(st <= 0x7f) hdrSize += 1;
+    else if(st <= 0x3fff) hdrSize += 2;
+    else if(st <= 0x1fffff) hdrSize += 3;
+    else hdrSize += 4; /* good enough for practical values */
+    bodySize += aWinners[i].pField->len;
+  }
+  /* Header size varint (the header size includes the header size varint itself) */
+  { int tentative = hdrSize + 1;
+    if(tentative > 0x7f) tentative++;
+    hdrSize = tentative;
+  }
+
+  result = sqlite3_malloc(hdrSize + bodySize);
+  if(!result){ *pnOut = 0; return 0; }
+
+  /* Write header size varint */
+  pos = 0;
+  { u64 hs = (u64)hdrSize;
+    if(hs <= 0x7f){ result[pos++] = (u8)hs; }
+    else{ result[pos++] = (u8)(0x80 | (hs>>7)); result[pos++] = (u8)(hs&0x7f); }
+  }
+  /* Write serial types */
+  for(i=0; i<nFields; i++){
+    u64 st = aWinners[i].pField->st;
+    if(st <= 0x7f){
+      result[pos++] = (u8)st;
+    }else if(st <= 0x3fff){
+      result[pos++] = (u8)(0x80 | (st>>7));
+      result[pos++] = (u8)(st&0x7f);
+    }else if(st <= 0x1fffff){
+      result[pos++] = (u8)(0x80 | (st>>14));
+      result[pos++] = (u8)(0x80 | ((st>>7)&0x7f));
+      result[pos++] = (u8)(st&0x7f);
+    }else{
+      result[pos++] = (u8)(0x80 | (st>>21));
+      result[pos++] = (u8)(0x80 | ((st>>14)&0x7f));
+      result[pos++] = (u8)(0x80 | ((st>>7)&0x7f));
+      result[pos++] = (u8)(st&0x7f);
+    }
+  }
+  /* Write body */
+  for(i=0; i<nFields; i++){
+    if(aWinners[i].pField->len > 0){
+      memcpy(result + pos, aWinners[i].pRec + aWinners[i].pField->off,
+             aWinners[i].pField->len);
+      pos += aWinners[i].pField->len;
+    }
+  }
+
+  *pnOut = pos;
+
+  /* Verify round-trip: the manually constructed record should parse back correctly.
+  ** This guards against encoding/decoding divergence. */
+#ifndef NDEBUG
+  {
+    int nfCheck = 0;
+    RecField *aCheck = 0;
+    if( parseRecordFields(result, pos, &aCheck, &nfCheck) >= 0 ){
+      assert( nfCheck == nFields );
+      sqlite3_free(aCheck);
+    }
+  }
+#endif
+
+  return result;
 }
 
 /*
@@ -201,10 +283,7 @@ static u8 *tryCellMerge(
 
   /* For each field, decide which version to take */
   {
-    /* We'll collect the winning (record, field) pairs, then build the result */
-    struct { const u8 *pRec; RecField *pField; } *winners;
-    int hdrSize, bodySize, pos;
-    u8 *hdr, *body;
+    MergeWinner *winners;
 
     winners = sqlite3_malloc(nfMax * (int)sizeof(*winners));
     if(!winners) goto fail;
@@ -260,77 +339,7 @@ static u8 *tryCellMerge(
       }
     }
 
-    /* Build the merged record: header (varint sizes) + body (field data) */
-    /* First pass: calculate header and body sizes */
-    hdrSize = 0; bodySize = 0;
-    for(i=0; i<nfMax; i++){
-      u64 st = winners[i].pField->st;
-      /* Varint size for this serial type */
-      if(st <= 0x7f) hdrSize += 1;
-      else if(st <= 0x3fff) hdrSize += 2;
-      else if(st <= 0x1fffff) hdrSize += 3;
-      else hdrSize += 4; /* good enough for practical values */
-      bodySize += winners[i].pField->len;
-    }
-    /* Header size varint (the header size includes the header size varint itself) */
-    { int tentative = hdrSize + 1;
-      if(tentative > 0x7f) tentative++;
-      hdrSize = tentative;
-    }
-
-    result = sqlite3_malloc(hdrSize + bodySize);
-    if(!result){ sqlite3_free(winners); goto fail; }
-
-    /* Write header size varint */
-    pos = 0;
-    { u64 hs = (u64)hdrSize;
-      if(hs <= 0x7f){ result[pos++] = (u8)hs; }
-      else{ result[pos++] = (u8)(0x80 | (hs>>7)); result[pos++] = (u8)(hs&0x7f); }
-    }
-    /* Write serial types */
-    for(i=0; i<nfMax; i++){
-      u64 st = winners[i].pField->st;
-      if(st <= 0x7f){
-        result[pos++] = (u8)st;
-      }else if(st <= 0x3fff){
-        result[pos++] = (u8)(0x80 | (st>>7));
-        result[pos++] = (u8)(st&0x7f);
-      }else if(st <= 0x1fffff){
-        result[pos++] = (u8)(0x80 | (st>>14));
-        result[pos++] = (u8)(0x80 | ((st>>7)&0x7f));
-        result[pos++] = (u8)(st&0x7f);
-      }else{
-        result[pos++] = (u8)(0x80 | (st>>21));
-        result[pos++] = (u8)(0x80 | ((st>>14)&0x7f));
-        result[pos++] = (u8)(0x80 | ((st>>7)&0x7f));
-        result[pos++] = (u8)(st&0x7f);
-      }
-    }
-    /* Write body */
-    for(i=0; i<nfMax; i++){
-      if(winners[i].pField->len > 0){
-        memcpy(result + pos, winners[i].pRec + winners[i].pField->off,
-               winners[i].pField->len);
-        pos += winners[i].pField->len;
-      }
-    }
-
-    *pnMerged = pos;
-
-    /* Verify round-trip: the manually constructed record should parse back correctly.
-    ** This guards against encoding/decoding divergence. */
-#ifndef NDEBUG
-    {
-      /* debug-only: verify the merged record parses */
-      int nfCheck = 0;
-      RecField *aCheck = 0;
-      if( parseRecordFields(result, pos, &aCheck, &nfCheck) >= 0 ){
-        assert( nfCheck == nfMax );
-        sqlite3_free(aCheck);
-      }
-    }
-#endif
-
+    result = buildMergedRecord(winners, nfMax, pnMerged);
     sqlite3_free(winners);
   }
 
@@ -620,6 +629,186 @@ static int serializeMergedCatalog(
   return rc;
 }
 
+/* Collected conflict info for a single table during merge */
+typedef struct MergeConflictTable MergeConflictTable;
+struct MergeConflictTable {
+  char *zName;
+  int nConflicts;
+  struct ConflictRow *aRows;
+};
+
+/*
+** Pass 1: Process ours' tables.
+**
+** For each table in ours, find it in theirs and ancestor, determine if
+** changed on each side, and resolve or record a conflict.
+*/
+static int mergeCatalogPass1(
+  sqlite3 *db,
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aOurs, int nOurs,
+  struct TableEntry *aTheirs, int nTheirs,
+  struct TableEntry *aMerged, int *pnMerged,
+  MergeConflictTable **ppConflictTables, int *pnConflictTables,
+  int *pTotalConflicts
+){
+  int i, rc = SQLITE_OK;
+
+  for(i=0; i<nOurs; i++){
+    const char *zName = aOurs[i].zName;
+    struct TableEntry *ancEntry;
+    struct TableEntry *theirsEntry;
+
+    /* Table 1 (sqlite_master) has no zName but must be row-merged
+    ** so that CREATE TABLE statements from theirs appear after merge. */
+    if( aOurs[i].iTable==1 ){
+      ancEntry = findTableEntry(aAnc, nAnc, 1);
+      theirsEntry = findTableEntry(aTheirs, nTheirs, 1);
+      goto do_merge_entry;
+    }
+
+    /* Skip tables without names (internal bookkeeping, not real tables) */
+    if( !zName ){
+      aMerged[(*pnMerged)++] = aOurs[i];
+      continue;
+    }
+
+    /* Find by NAME in ancestor and theirs */
+    ancEntry = findTableByName(aAnc, nAnc, zName);
+    theirsEntry = findTableByName(aTheirs, nTheirs, zName);
+
+do_merge_entry:
+
+    if( !ancEntry ){
+      /* Table added in ours (not in ancestor by name) */
+      if( theirsEntry ){
+        /* Both sides added a table with the same name */
+        if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0
+         || prollyHashCompare(&aOurs[i].schemaHash, &theirsEntry->schemaHash)!=0 ){
+          return SQLITE_ERROR;
+        }
+        /* Identical content — include once (ours' iTable) */
+      }
+      aMerged[(*pnMerged)++] = aOurs[i];
+    }else{
+      /* Table existed in ancestor */
+      int oursChanged = prollyHashCompare(&aOurs[i].root, &ancEntry->root)!=0;
+
+      if( !theirsEntry ){
+        /* Deleted in theirs (by name) */
+        if( oursChanged ){
+          return SQLITE_ERROR;  /* Modified in ours, deleted in theirs */
+        }
+        /* Unchanged in ours, deleted in theirs — delete (skip) */
+      }else{
+        int theirsChanged = prollyHashCompare(&theirsEntry->root, &ancEntry->root)!=0;
+        if( oursChanged && theirsChanged ){
+          /* Both modified same table — do row-level three-way merge */
+          ProllyHash mergedTableRoot;
+          int nConflicts = 0;
+          struct ConflictRow *aConflictRows = 0;
+
+          rc = mergeTableRows(db, &ancEntry->root, &aOurs[i].root,
+                              &theirsEntry->root, aOurs[i].flags,
+                              &mergedTableRoot, &nConflicts, &aConflictRows);
+          if( rc!=SQLITE_OK ) return rc;
+
+          {
+            struct TableEntry merged = aOurs[i];
+            memcpy(&merged.root, &mergedTableRoot, sizeof(ProllyHash));
+            aMerged[(*pnMerged)++] = merged;
+          }
+
+          if( nConflicts>0 ){
+            *pTotalConflicts += nConflicts;
+            {
+              MergeConflictTable *aNew = sqlite3_realloc(*ppConflictTables,
+                (*pnConflictTables+1)*(int)sizeof(MergeConflictTable));
+              if( aNew ){
+                *ppConflictTables = aNew;
+                aNew[*pnConflictTables].zName = sqlite3_mprintf("%s", zName);
+                aNew[*pnConflictTables].nConflicts = nConflicts;
+                aNew[*pnConflictTables].aRows = aConflictRows;
+                (*pnConflictTables)++;
+                aConflictRows = 0; /* ownership transferred */
+              }else{
+                { int j; for(j=0;j<nConflicts;j++){
+                  sqlite3_free(aConflictRows[j].pKey);
+                  sqlite3_free(aConflictRows[j].pBaseVal);
+                  sqlite3_free(aConflictRows[j].pTheirVal);
+                }}
+                sqlite3_free(aConflictRows);
+              }
+            }
+          }
+        }else if( theirsChanged ){
+          /* Take theirs' root but with ours' iTable number */
+          struct TableEntry merged = aOurs[i];
+          memcpy(&merged.root, &theirsEntry->root, sizeof(ProllyHash));
+          memcpy(&merged.schemaHash, &theirsEntry->schemaHash, sizeof(ProllyHash));
+          merged.flags = theirsEntry->flags;
+          aMerged[(*pnMerged)++] = merged;
+        }else{
+          aMerged[(*pnMerged)++] = aOurs[i];
+        }
+      }
+    }
+  }
+  return rc;
+}
+
+/*
+** Pass 2: Process theirs' tables not in ours (new tables added by theirs).
+*/
+static int mergeCatalogPass2(
+  struct TableEntry *aAnc, int nAnc,
+  struct TableEntry *aOurs, int nOurs,
+  struct TableEntry *aTheirs, int nTheirs,
+  struct TableEntry *aMerged, int *pnMerged,
+  Pgno *piNextMerged
+){
+  int i;
+
+  for(i=0; i<nTheirs; i++){
+    const char *zName = aTheirs[i].zName;
+    struct TableEntry *oursEntry;
+
+    if( aTheirs[i].iTable<=1 || !zName ) continue;
+
+    oursEntry = findTableByName(aOurs, nOurs, zName);
+    if( oursEntry ) continue;  /* Already handled in pass 1 */
+
+    {
+      struct TableEntry *ancEntry = findTableByName(aAnc, nAnc, zName);
+      if( !ancEntry ){
+        /* Added in theirs only — keep their iTable if no conflict,
+        ** otherwise assign a new one. Keeping the original iTable is
+        ** important so sqlite_master rootpage values stay consistent. */
+        struct TableEntry newEntry = aTheirs[i];
+        {
+          int j, conflict = 0;
+          for(j=0; j<*pnMerged; j++){
+            if( aMerged[j].iTable==newEntry.iTable ){ conflict = 1; break; }
+          }
+          if( conflict ) newEntry.iTable = (*piNextMerged)++;
+        }
+        if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
+        /* Copy name string */
+        newEntry.zName = sqlite3_mprintf("%s", zName);
+        aMerged[(*pnMerged)++] = newEntry;
+      }else{
+        /* Was in ancestor, deleted in ours */
+        int theirsChanged = prollyHashCompare(&aTheirs[i].root, &ancEntry->root)!=0;
+        if( theirsChanged ){
+          return SQLITE_ERROR;  /* Modified in theirs, deleted in ours */
+        }
+        /* Unchanged in theirs, deleted in ours — delete (skip) */
+      }
+    }
+  }
+  return SQLITE_OK;
+}
+
 /*
 ** Perform a three-way catalog merge.
 **
@@ -648,14 +837,8 @@ int doltliteMergeCatalogs(
   int rc;
   int totalConflicts = 0;
 
-  /* Collected conflicts for storage */
-  struct MergeConflictTable {
-    char *zName;
-    int nConflicts;
-    struct ConflictRow *aRows;
-  } *aConflictTables = 0;
+  MergeConflictTable *aConflictTables = 0;
   int nConflictTables = 0;
-  int i;
 
   /* Load all three catalogs */
   rc = doltliteLoadCatalog(db, ancestor, &aAnc, &nAnc, &iNextAnc);
@@ -690,151 +873,15 @@ int doltliteMergeCatalogs(
   ** in ours get new iTable numbers from iNextMerged.
   */
 
-  /* Pass 1: Process all tables from "ours" */
-  for(i=0; i<nOurs; i++){
-    const char *zName = aOurs[i].zName;
-    struct TableEntry *ancEntry;
-    struct TableEntry *theirsEntry;
+  rc = mergeCatalogPass1(db, aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
+                          aMerged, &nMerged,
+                          &aConflictTables, &nConflictTables,
+                          &totalConflicts);
+  if( rc!=SQLITE_OK ) goto merge_cleanup;
 
-    /* Table 1 (sqlite_master) has no zName but must be row-merged
-    ** so that CREATE TABLE statements from theirs appear after merge. */
-    if( aOurs[i].iTable==1 ){
-      ancEntry = findTableEntry(aAnc, nAnc, 1);
-      theirsEntry = findTableEntry(aTheirs, nTheirs, 1);
-      goto do_merge_entry;
-    }
-
-    /* Skip tables without names (internal bookkeeping, not real tables) */
-    if( !zName ){
-      aMerged[nMerged++] = aOurs[i];
-      continue;
-    }
-
-    /* Find by NAME in ancestor and theirs */
-    ancEntry = findTableByName(aAnc, nAnc, zName);
-    theirsEntry = findTableByName(aTheirs, nTheirs, zName);
-
-do_merge_entry:
-
-    if( !ancEntry ){
-      /* Table added in ours (not in ancestor by name) */
-      if( theirsEntry ){
-        /* Both sides added a table with the same name */
-        if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0
-         || prollyHashCompare(&aOurs[i].schemaHash, &theirsEntry->schemaHash)!=0 ){
-          rc = SQLITE_ERROR;
-          /* TODO: better error message about schema conflict */
-          goto merge_cleanup;
-        }
-        /* Identical content — include once (ours' iTable) */
-      }
-      aMerged[nMerged++] = aOurs[i];
-    }else{
-      /* Table existed in ancestor */
-      int oursChanged = prollyHashCompare(&aOurs[i].root, &ancEntry->root)!=0;
-
-      if( !theirsEntry ){
-        /* Deleted in theirs (by name) */
-        if( oursChanged ){
-          rc = SQLITE_ERROR;  /* Modified in ours, deleted in theirs */
-          goto merge_cleanup;
-        }
-        /* Unchanged in ours, deleted in theirs — delete (skip) */
-      }else{
-        int theirsChanged = prollyHashCompare(&theirsEntry->root, &ancEntry->root)!=0;
-        if( oursChanged && theirsChanged ){
-          /* Both modified same table — do row-level three-way merge */
-          ProllyHash mergedTableRoot;
-          int nConflicts = 0;
-          struct ConflictRow *aConflictRows = 0;
-
-          rc = mergeTableRows(db, &ancEntry->root, &aOurs[i].root,
-                              &theirsEntry->root, aOurs[i].flags,
-                              &mergedTableRoot, &nConflicts, &aConflictRows);
-          if( rc!=SQLITE_OK ) goto merge_cleanup;
-
-          {
-            struct TableEntry merged = aOurs[i];
-            memcpy(&merged.root, &mergedTableRoot, sizeof(ProllyHash));
-            aMerged[nMerged++] = merged;
-          }
-
-          if( nConflicts>0 ){
-            totalConflicts += nConflicts;
-            /* Collect conflicts for this table */
-            {
-              struct MergeConflictTable *aNew = sqlite3_realloc(aConflictTables,
-                (nConflictTables+1)*(int)sizeof(struct MergeConflictTable));
-              if( aNew ){
-                aConflictTables = aNew;
-                aNew[nConflictTables].zName = sqlite3_mprintf("%s", zName);
-                aNew[nConflictTables].nConflicts = nConflicts;
-                aNew[nConflictTables].aRows = aConflictRows;
-                nConflictTables++;
-                aConflictRows = 0; /* ownership transferred */
-              }else{
-                { int j; for(j=0;j<nConflicts;j++){
-                  sqlite3_free(aConflictRows[j].pKey);
-                  sqlite3_free(aConflictRows[j].pBaseVal);
-                  sqlite3_free(aConflictRows[j].pTheirVal);
-                }}
-                sqlite3_free(aConflictRows);
-              }
-            }
-          }
-        }else if( theirsChanged ){
-          /* Take theirs' root but with ours' iTable number */
-          struct TableEntry merged = aOurs[i];
-          memcpy(&merged.root, &theirsEntry->root, sizeof(ProllyHash));
-          memcpy(&merged.schemaHash, &theirsEntry->schemaHash, sizeof(ProllyHash));
-          merged.flags = theirsEntry->flags;
-          aMerged[nMerged++] = merged;
-        }else{
-          aMerged[nMerged++] = aOurs[i];
-        }
-      }
-    }
-  }
-
-  /* Pass 2: Add tables from "theirs" that don't exist in "ours" by name */
-  for(i=0; i<nTheirs; i++){
-    const char *zName = aTheirs[i].zName;
-    struct TableEntry *oursEntry;
-
-    if( aTheirs[i].iTable<=1 || !zName ) continue;
-
-    oursEntry = findTableByName(aOurs, nOurs, zName);
-    if( oursEntry ) continue;  /* Already handled in pass 1 */
-
-    {
-      struct TableEntry *ancEntry = findTableByName(aAnc, nAnc, zName);
-      if( !ancEntry ){
-        /* Added in theirs only — keep their iTable if no conflict,
-        ** otherwise assign a new one. Keeping the original iTable is
-        ** important so sqlite_master rootpage values stay consistent. */
-        struct TableEntry newEntry = aTheirs[i];
-        {
-          int j, conflict = 0;
-          for(j=0; j<nMerged; j++){
-            if( aMerged[j].iTable==newEntry.iTable ){ conflict = 1; break; }
-          }
-          if( conflict ) newEntry.iTable = iNextMerged++;
-        }
-        if( newEntry.iTable >= iNextMerged ) iNextMerged = newEntry.iTable + 1;
-        /* Copy name string */
-        newEntry.zName = sqlite3_mprintf("%s", zName);
-        aMerged[nMerged++] = newEntry;
-      }else{
-        /* Was in ancestor, deleted in ours */
-        int theirsChanged = prollyHashCompare(&aTheirs[i].root, &ancEntry->root)!=0;
-        if( theirsChanged ){
-          rc = SQLITE_ERROR;  /* Modified in theirs, deleted in ours */
-          goto merge_cleanup;
-        }
-        /* Unchanged in theirs, deleted in ours — delete (skip) */
-      }
-    }
-  }
+  rc = mergeCatalogPass2(aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
+                          aMerged, &nMerged, &iNextMerged);
+  if( rc!=SQLITE_OK ) goto merge_cleanup;
 
   /* Serialize the merged catalog */
   rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,

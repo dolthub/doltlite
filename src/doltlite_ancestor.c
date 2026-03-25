@@ -139,6 +139,52 @@ static int loadCommitByHash(sqlite3 *db, const ProllyHash *hash,
 }
 
 /* --------------------------------------------------------------------------
+** BFS from one commit, populating the visited set with all ancestors.
+** -------------------------------------------------------------------------- */
+
+static int ancestorBfsCollect(
+  sqlite3 *db,
+  const ProllyHash *pStart,
+  HashSet *pVisited
+){
+  ProllyHash *queue = 0;
+  int qHead = 0, qTail = 0, qAlloc = 64;
+  ProllyHash current;
+  DoltliteCommit commit;
+  int rc = SQLITE_OK;
+  int i;
+
+  queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
+  if( !queue ) return SQLITE_NOMEM;
+  queue[qTail++] = *pStart;
+
+  while( qHead < qTail ){
+    current = queue[qHead++];
+    if( prollyHashIsEmpty(&current) ) continue;
+    if( hashSetContains(pVisited, &current) ) continue;
+    rc = hashSetInsert(pVisited, &current);
+    if( rc!=SQLITE_OK ) break;
+    memset(&commit, 0, sizeof(commit));
+    rc = loadCommitByHash(db, &current, &commit);
+    if( rc!=SQLITE_OK ){ rc = SQLITE_OK; continue; } /* end of chain */
+    for(i=0; i<commit.nParents; i++){
+      if( qTail >= qAlloc ){
+        qAlloc *= 2;
+        ProllyHash *q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(ProllyHash));
+        if( !q2 ){ doltliteCommitClear(&commit); rc=SQLITE_NOMEM; break; }
+        queue = q2;
+      }
+      queue[qTail++] = commit.aParents[i];
+    }
+    doltliteCommitClear(&commit);
+    if( rc!=SQLITE_OK ) break;
+  }
+
+  sqlite3_free(queue);
+  return rc;
+}
+
+/* --------------------------------------------------------------------------
 ** doltliteFindAncestor
 ** -------------------------------------------------------------------------- */
 
@@ -149,57 +195,65 @@ int doltliteFindAncestor(
   ProllyHash *pAncestor
 ){
   HashSet ancestors;
-  ProllyHash current;
-  DoltliteCommit commit;
   int rc;
 
   memset(pAncestor, 0, sizeof(*pAncestor));
 
-  /* If either hash is empty, no common ancestor */
   if( prollyHashIsEmpty(commitHash1) || prollyHashIsEmpty(commitHash2) ){
     return SQLITE_NOTFOUND;
   }
 
-  /* Quick check: if both hashes are the same, that's the ancestor */
   if( prollyHashCompare(commitHash1, commitHash2)==0 ){
     *pAncestor = *commitHash1;
     return SQLITE_OK;
   }
 
-  /* BFS traversal for DAG (supports merge commits with multiple parents).
-  ** Step 1: Collect all ancestors of commit1 via BFS.
-  ** Step 2: BFS commit2's ancestors, checking against the set. */
+  /* Step 1: Collect all ancestors of commit1 via BFS */
   rc = hashSetInit(&ancestors, 64);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* BFS queue: simple dynamic array of hashes */
+  rc = ancestorBfsCollect(db, commitHash1, &ancestors);
+  if( rc!=SQLITE_OK ){
+    hashSetFree(&ancestors);
+    return rc;
+  }
+
+  /* Step 2: BFS commit2's ancestors, checking against the set */
   {
     ProllyHash *queue = 0;
-    int qHead = 0, qTail = 0, qAlloc = 0;
+    int qHead = 0, qTail = 0, qAlloc = 64;
+    ProllyHash current;
+    DoltliteCommit commit;
+    HashSet visited;
     int i;
 
-    /* Enqueue commit1 */
-    qAlloc = 64;
-    queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
-    if( !queue ){ hashSetFree(&ancestors); return SQLITE_NOMEM; }
-    queue[qTail++] = *commitHash1;
+    rc = hashSetInit(&visited, 64);
+    if( rc!=SQLITE_OK ){ hashSetFree(&ancestors); return rc; }
 
-    /* Step 1: BFS all ancestors of commit1 */
+    queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
+    if( !queue ){ hashSetFree(&visited); hashSetFree(&ancestors); return SQLITE_NOMEM; }
+    queue[qTail++] = *commitHash2;
+
     while( qHead < qTail ){
       current = queue[qHead++];
       if( prollyHashIsEmpty(&current) ) continue;
-      if( hashSetContains(&ancestors, &current) ) continue;
-      rc = hashSetInsert(&ancestors, &current);
-      if( rc!=SQLITE_OK ) goto anc_cleanup;
+      if( hashSetContains(&visited, &current) ) continue;
+      hashSetInsert(&visited, &current);
+      if( hashSetContains(&ancestors, &current) ){
+        *pAncestor = current;
+        hashSetFree(&visited);
+        sqlite3_free(queue);
+        hashSetFree(&ancestors);
+        return SQLITE_OK;
+      }
       memset(&commit, 0, sizeof(commit));
       rc = loadCommitByHash(db, &current, &commit);
-      if( rc!=SQLITE_OK ) continue; /* end of chain */
-      /* Enqueue ALL parents (supports merge commits) */
+      if( rc!=SQLITE_OK ){ rc = SQLITE_OK; continue; }
       for(i=0; i<commit.nParents; i++){
         if( qTail >= qAlloc ){
           qAlloc *= 2;
           ProllyHash *q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(ProllyHash));
-          if( !q2 ){ doltliteCommitClear(&commit); rc=SQLITE_NOMEM; goto anc_cleanup; }
+          if( !q2 ){ doltliteCommitClear(&commit); hashSetFree(&visited); sqlite3_free(queue); hashSetFree(&ancestors); return SQLITE_NOMEM; }
           queue = q2;
         }
         queue[qTail++] = commit.aParents[i];
@@ -207,50 +261,12 @@ int doltliteFindAncestor(
       doltliteCommitClear(&commit);
     }
 
-    /* Step 2: BFS commit2's ancestors, checking against set */
-    qHead = 0; qTail = 0;
-    queue[qTail++] = *commitHash2;
-    {
-      HashSet visited;
-      rc = hashSetInit(&visited, 64);
-      if( rc!=SQLITE_OK ) goto anc_cleanup;
-
-      while( qHead < qTail ){
-        current = queue[qHead++];
-        if( prollyHashIsEmpty(&current) ) continue;
-        if( hashSetContains(&visited, &current) ) continue;
-        hashSetInsert(&visited, &current);
-        if( hashSetContains(&ancestors, &current) ){
-          *pAncestor = current;
-          hashSetFree(&visited);
-          sqlite3_free(queue);
-          hashSetFree(&ancestors);
-          return SQLITE_OK;
-        }
-        memset(&commit, 0, sizeof(commit));
-        rc = loadCommitByHash(db, &current, &commit);
-        if( rc!=SQLITE_OK ) continue;
-        for(i=0; i<commit.nParents; i++){
-          if( qTail >= qAlloc ){
-            qAlloc *= 2;
-            ProllyHash *q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(ProllyHash));
-            if( !q2 ){ doltliteCommitClear(&commit); hashSetFree(&visited); rc=SQLITE_NOMEM; goto anc_cleanup; }
-            queue = q2;
-          }
-          queue[qTail++] = commit.aParents[i];
-        }
-        doltliteCommitClear(&commit);
-      }
-      hashSetFree(&visited);
-    }
-
-    rc = SQLITE_NOTFOUND;
-anc_cleanup:
+    hashSetFree(&visited);
     sqlite3_free(queue);
   }
 
   hashSetFree(&ancestors);
-  return rc;
+  return SQLITE_NOTFOUND;
 }
 
 /* --------------------------------------------------------------------------

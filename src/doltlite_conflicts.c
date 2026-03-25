@@ -27,15 +27,15 @@ extern int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTab
 ** Helper: read a big-endian SQLite varint from a record blob.
 ** Returns bytes consumed.
 ** -------------------------------------------------------------------------- */
-static int cfReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
+static int cfReadVarint(const u8 *pRec, const u8 *pRecEnd, u64 *pVal){
   u64 v = 0;
   int i;
-  for(i=0; i<9 && p+i<pEnd; i++){
+  for(i=0; i<9 && pRec+i<pRecEnd; i++){
     if( i<8 ){
-      v = (v << 7) | (p[i] & 0x7f);
-      if( (p[i] & 0x80)==0 ){ *pVal = v; return i+1; }
+      v = (v << 7) | (pRec[i] & 0x7f);
+      if( (pRec[i] & 0x80)==0 ){ *pVal = v; return i+1; }
     }else{
-      v = (v << 8) | p[i];
+      v = (v << 8) | pRec[i];
       *pVal = v;
       return 9;
     }
@@ -45,16 +45,119 @@ static int cfReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
 }
 
 /* Read a big-endian signed integer of nBytes bytes. */
-static i64 cfReadInt(const u8 *p, int nBytes){
+static i64 cfReadInt(const u8 *pRec, int nBytes){
   i64 v;
   int i;
   assert( nBytes >= 1 && nBytes <= 8 );
   if( nBytes < 1 || nBytes > 8 ) return 0;
-  v = (p[0] & 0x80) ? -1 : 0;
+  v = (pRec[0] & 0x80) ? -1 : 0;
   for(i=0; i<nBytes; i++){
-    v = (v << 8) | p[i];
+    v = (v << 8) | pRec[i];
   }
   return v;
+}
+
+/* --------------------------------------------------------------------------
+** Build an INSERT OR REPLACE SQL statement from column names and a decoded
+** SQLite record blob. The record header position (pRec) should point past
+** the PK placeholder field. pBody should point to the first non-PK data
+** byte. Returns the SQL string (caller must sqlite3_free), or NULL on OOM.
+** -------------------------------------------------------------------------- */
+static char *buildInsertSql(
+  const char *zTable,
+  i64 intKey,
+  char **azCol, int nCol,
+  const u8 *pRec, const u8 *pRecEnd,
+  const u8 *pHdrEnd, const u8 *pBody
+){
+  char *zIns = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w\"(rowid", zTable);
+  char *zVals = sqlite3_mprintf("VALUES(%lld", intKey);
+  char *zTmp;
+  const u8 *pBodyPos = pBody;
+  int colIdx = 0;
+
+  while( pRec < pHdrEnd && pRec < pRecEnd && colIdx < nCol ){
+    u64 st;
+    int stBytes = cfReadVarint(pRec, pHdrEnd, &st);
+    pRec += stBytes;
+
+    /* Append column name */
+    zTmp = sqlite3_mprintf("%s,\"%w\"", zIns, azCol[colIdx]);
+    sqlite3_free(zIns); zIns = zTmp;
+
+    /* Decode value and append to VALUES */
+    if( st==0 ){
+      zTmp = sqlite3_mprintf("%s,NULL", zVals);
+      sqlite3_free(zVals); zVals = zTmp;
+    }else if( st==8 ){
+      zTmp = sqlite3_mprintf("%s,0", zVals);
+      sqlite3_free(zVals); zVals = zTmp;
+    }else if( st==9 ){
+      zTmp = sqlite3_mprintf("%s,1", zVals);
+      sqlite3_free(zVals); zVals = zTmp;
+    }else if( st>=1 && st<=6 ){
+      static const int sizes[] = {0,1,2,3,4,6,8};
+      int nBytes = sizes[st];
+      if( pBodyPos + nBytes <= pRecEnd ){
+        i64 v = cfReadInt(pBodyPos, nBytes);
+        zTmp = sqlite3_mprintf("%s,%lld", zVals, v);
+        sqlite3_free(zVals); zVals = zTmp;
+      }
+      pBodyPos += nBytes;
+    }else if( st==7 ){
+      /* IEEE 754 float */
+      if( pBodyPos + 8 <= pRecEnd ){
+        double v;
+        u64 bits = 0;
+        int k;
+        for(k=0; k<8; k++) bits = (bits<<8) | pBodyPos[k];
+        memcpy(&v, &bits, 8);
+        zTmp = sqlite3_mprintf("%s,%!.15g", zVals, v);
+        sqlite3_free(zVals); zVals = zTmp;
+      }
+      pBodyPos += 8;
+    }else if( st>=12 && (st&1)==0 ){
+      /* Blob */
+      int len = ((int)st - 12) / 2;
+      if( pBodyPos + len <= pRecEnd ){
+        zTmp = sqlite3_mprintf("%s,X'", zVals);
+        sqlite3_free(zVals); zVals = zTmp;
+        {
+          int k;
+          for(k=0; k<len; k++){
+            zTmp = sqlite3_mprintf("%s%02x", zVals, pBodyPos[k]);
+            sqlite3_free(zVals); zVals = zTmp;
+          }
+        }
+        zTmp = sqlite3_mprintf("%s'", zVals);
+        sqlite3_free(zVals); zVals = zTmp;
+      }
+      pBodyPos += len;
+    }else if( st>=13 && (st&1)==1 ){
+      /* Text */
+      int len = ((int)st - 13) / 2;
+      if( pBodyPos + len <= pRecEnd ){
+        /* Use %Q for safe quoting */
+        char *zText = sqlite3_malloc(len+1);
+        if( zText ){
+          memcpy(zText, pBodyPos, len);
+          zText[len] = 0;
+          zTmp = sqlite3_mprintf("%s,%Q", zVals, zText);
+          sqlite3_free(zVals); zVals = zTmp;
+          sqlite3_free(zText);
+        }
+      }
+      pBodyPos += len;
+    }
+
+    colIdx++;
+  }
+
+  /* Close the statement */
+  zTmp = sqlite3_mprintf("%s) %s)", zIns, zVals);
+  sqlite3_free(zIns);
+  sqlite3_free(zVals);
+  return zTmp;
 }
 
 /* --------------------------------------------------------------------------
@@ -71,8 +174,8 @@ static int applyTheirRecord(
 ){
   sqlite3_stmt *pInfo = 0;
   char *zSql;
-  int rc, nCol = 0, colIdx = 0;
-  const u8 *p, *pEnd, *pHdrEnd, *pBody;
+  int rc, nCol = 0;
+  const u8 *pPos, *pRecEnd, *pHdrEnd, *pBody;
   u64 hdrSize;
   int hdrBytes;
 
@@ -112,20 +215,20 @@ static int applyTheirRecord(
   }
 
   /* Parse the record header to get serial types */
-  p = pRec;
-  pEnd = pRec + nRec;
-  hdrBytes = cfReadVarint(p, pEnd, &hdrSize);
-  p += hdrBytes;
+  pPos = pRec;
+  pRecEnd = pRec + nRec;
+  hdrBytes = cfReadVarint(pPos, pRecEnd, &hdrSize);
+  pPos += hdrBytes;
   pHdrEnd = pRec + (int)hdrSize;
   pBody = pRec + (int)hdrSize;
 
   /* Skip the first record field (INTEGER PRIMARY KEY placeholder = NULL).
   ** The column list already excludes the PK, so the record fields and
   ** column names must be aligned by skipping this placeholder. */
-  if( p < pHdrEnd ){
+  if( pPos < pHdrEnd ){
     u64 stSkip;
-    int skipBytes = cfReadVarint(p, pHdrEnd, &stSkip);
-    p += skipBytes;
+    int skipBytes = cfReadVarint(pPos, pHdrEnd, &stSkip);
+    pPos += skipBytes;
     /* Advance pBody past the PK field's data (usually 0 bytes for NULL) */
     if( stSkip==0 || stSkip==8 || stSkip==9 ) {}
     else if( stSkip>=1 && stSkip<=6 ){ static const int s[]={0,1,2,3,4,6,8}; pBody+=s[stSkip]; }
@@ -134,109 +237,20 @@ static int applyTheirRecord(
     else if( stSkip>=13 && (stSkip&1)==1 ) pBody+=((int)stSkip-13)/2;
   }
 
-  /* Build: INSERT OR REPLACE INTO "table"(rowid, col1, col2, ...) VALUES(key, v1, v2, ...) */
+  /* Build and execute the INSERT OR REPLACE statement */
+  zSql = buildInsertSql(zTable, intKey, azCol, nCol, pPos, pRecEnd, pHdrEnd, pBody);
+  if( zSql ){
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    sqlite3_free(zSql);
+  }else{
+    rc = SQLITE_NOMEM;
+  }
+
+  /* Free column names */
   {
-    /* Use a dynamic string buffer */
-    char *zIns = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w\"(rowid", zTable);
-    char *zVals = sqlite3_mprintf("VALUES(%lld", intKey);
-    char *zTmp;
-
-    colIdx = 0;
-    while( p < pHdrEnd && p < pEnd && colIdx < nCol ){
-      u64 st;
-      int stBytes = cfReadVarint(p, pHdrEnd, &st);
-      p += stBytes;
-
-      /* Append column name */
-      zTmp = sqlite3_mprintf("%s,\"%w\"", zIns, azCol[colIdx]);
-      sqlite3_free(zIns); zIns = zTmp;
-
-      /* Decode value and append to VALUES */
-      if( st==0 ){
-        zTmp = sqlite3_mprintf("%s,NULL", zVals);
-        sqlite3_free(zVals); zVals = zTmp;
-      }else if( st==8 ){
-        zTmp = sqlite3_mprintf("%s,0", zVals);
-        sqlite3_free(zVals); zVals = zTmp;
-      }else if( st==9 ){
-        zTmp = sqlite3_mprintf("%s,1", zVals);
-        sqlite3_free(zVals); zVals = zTmp;
-      }else if( st>=1 && st<=6 ){
-        static const int sizes[] = {0,1,2,3,4,6,8};
-        int nBytes = sizes[st];
-        if( pBody + nBytes <= pEnd ){
-          i64 v = cfReadInt(pBody, nBytes);
-          zTmp = sqlite3_mprintf("%s,%lld", zVals, v);
-          sqlite3_free(zVals); zVals = zTmp;
-        }
-        pBody += nBytes;
-      }else if( st==7 ){
-        /* IEEE 754 float */
-        if( pBody + 8 <= pEnd ){
-          double v;
-          u64 bits = 0;
-          int k;
-          for(k=0; k<8; k++) bits = (bits<<8) | pBody[k];
-          memcpy(&v, &bits, 8);
-          zTmp = sqlite3_mprintf("%s,%!.15g", zVals, v);
-          sqlite3_free(zVals); zVals = zTmp;
-        }
-        pBody += 8;
-      }else if( st>=12 && (st&1)==0 ){
-        /* Blob */
-        int len = ((int)st - 12) / 2;
-        if( pBody + len <= pEnd ){
-          zTmp = sqlite3_mprintf("%s,X'", zVals);
-          sqlite3_free(zVals); zVals = zTmp;
-          {
-            int k;
-            for(k=0; k<len; k++){
-              zTmp = sqlite3_mprintf("%s%02x", zVals, pBody[k]);
-              sqlite3_free(zVals); zVals = zTmp;
-            }
-          }
-          zTmp = sqlite3_mprintf("%s'", zVals);
-          sqlite3_free(zVals); zVals = zTmp;
-        }
-        pBody += len;
-      }else if( st>=13 && (st&1)==1 ){
-        /* Text */
-        int len = ((int)st - 13) / 2;
-        if( pBody + len <= pEnd ){
-          /* Use %Q for safe quoting */
-          char *zText = sqlite3_malloc(len+1);
-          if( zText ){
-            memcpy(zText, pBody, len);
-            zText[len] = 0;
-            zTmp = sqlite3_mprintf("%s,%Q", zVals, zText);
-            sqlite3_free(zVals); zVals = zTmp;
-            sqlite3_free(zText);
-          }
-        }
-        pBody += len;
-      }
-
-      colIdx++;
-    }
-
-    /* Close the statement */
-    zSql = sqlite3_mprintf("%s) %s)", zIns, zVals);
-    sqlite3_free(zIns);
-    sqlite3_free(zVals);
-
-    if( zSql ){
-      rc = sqlite3_exec(db, zSql, 0, 0, 0);
-      sqlite3_free(zSql);
-    }else{
-      rc = SQLITE_NOMEM;
-    }
-
-    /* Free column names */
-    {
-      int k;
-      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
-      sqlite3_free(azCol);
-    }
+    int k;
+    for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
+    sqlite3_free(azCol);
   }
 
   return rc;

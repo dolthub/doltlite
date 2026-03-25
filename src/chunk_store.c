@@ -206,7 +206,7 @@ static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
 }
 
 /* --------------------------------------------------------------------
-** csSerializeManifest -- write the 64-byte manifest header into aBuf.
+** csSerializeManifest -- write the 168-byte manifest header into aBuf.
 ** -------------------------------------------------------------------- */
 /*
 ** V6 manifest layout (168 bytes):
@@ -256,7 +256,7 @@ static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e){
 }
 
 /* --------------------------------------------------------------------
-** csReadManifest -- read and validate the 64-byte manifest from an
+** csReadManifest -- read and validate the 168-byte manifest from an
 ** already-open file. Populates cs->root, cs->nChunks, cs->iIndexOffset,
 ** cs->nIndexSize.  Returns SQLITE_OK or error.
 ** -------------------------------------------------------------------- */
@@ -542,7 +542,7 @@ static int csMergeIndex(
 ){
   int nTotal = cs->nIndex + cs->nPending;
   ChunkIndexEntry *aMerged;
-  int i, j, k;
+  int idxPos, pendPos, outPos;
 
   *ppMerged = 0;
   *pnMerged = 0;
@@ -561,26 +561,26 @@ static int csMergeIndex(
   }
 
   /* Standard merge of two sorted arrays */
-  i = 0;  /* index into aIndex */
-  j = 0;  /* index into aPending */
-  k = 0;  /* index into aMerged */
-  while( i < cs->nIndex && j < cs->nPending ){
-    int cmp = prollyHashCompare(&cs->aIndex[i].hash, &cs->aPending[j].hash);
+  idxPos = 0;   /* index into aIndex */
+  pendPos = 0;  /* index into aPending */
+  outPos = 0;   /* index into aMerged */
+  while( idxPos < cs->nIndex && pendPos < cs->nPending ){
+    int cmp = prollyHashCompare(&cs->aIndex[idxPos].hash, &cs->aPending[pendPos].hash);
     if( cmp < 0 ){
-      aMerged[k++] = cs->aIndex[i++];
+      aMerged[outPos++] = cs->aIndex[idxPos++];
     }else if( cmp > 0 ){
-      aMerged[k++] = cs->aPending[j++];
+      aMerged[outPos++] = cs->aPending[pendPos++];
     }else{
       /* Duplicate hash: pending wins (shouldn't normally happen) */
-      aMerged[k++] = cs->aPending[j++];
-      i++;
+      aMerged[outPos++] = cs->aPending[pendPos++];
+      idxPos++;
     }
   }
-  while( i < cs->nIndex ) aMerged[k++] = cs->aIndex[i++];
-  while( j < cs->nPending ) aMerged[k++] = cs->aPending[j++];
+  while( idxPos < cs->nIndex ) aMerged[outPos++] = cs->aIndex[idxPos++];
+  while( pendPos < cs->nPending ) aMerged[outPos++] = cs->aPending[pendPos++];
 
   *ppMerged = aMerged;
-  *pnMerged = k;
+  *pnMerged = outPos;
   return SQLITE_OK;
 }
 
@@ -914,7 +914,7 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
   int defLen = (int)strlen(def);
   int sz = 1 + 2 + defLen + 2 + 2;  /* version + default + num_branches + num_tags */
   int i, rc;
-  u8 *buf, *p;
+  u8 *buf, *bufCur;
   ProllyHash refsHash;
 
   for(i=0; i<cs->nBranches; i++){
@@ -933,26 +933,26 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
   }
   buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
-  p = buf;
-  *p++ = 3;  /* version 3: branches with WorkingSet + tags */
-  p[0]=(u8)defLen; p[1]=(u8)(defLen>>8); p+=2;
-  memcpy(p, def, defLen); p+=defLen;
+  bufCur = buf;
+  *bufCur++ = 3;  /* version 3: branches with WorkingSet + tags */
+  bufCur[0]=(u8)defLen; bufCur[1]=(u8)(defLen>>8); bufCur+=2;
+  memcpy(bufCur, def, defLen); bufCur+=defLen;
   /* Branches: name + commitHash + workingSetHash */
-  p[0]=(u8)cs->nBranches; p[1]=(u8)(cs->nBranches>>8); p+=2;
+  bufCur[0]=(u8)cs->nBranches; bufCur[1]=(u8)(cs->nBranches>>8); bufCur+=2;
   for(i=0; i<cs->nBranches; i++){
-    int n = (int)strlen(cs->aBranches[i].zName);
-    p[0]=(u8)n; p[1]=(u8)(n>>8); p+=2;
-    memcpy(p, cs->aBranches[i].zName, n); p+=n;
-    memcpy(p, cs->aBranches[i].commitHash.data, PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
-    memcpy(p, cs->aBranches[i].workingSetHash.data, PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
+    int nameLen = (int)strlen(cs->aBranches[i].zName);
+    bufCur[0]=(u8)nameLen; bufCur[1]=(u8)(nameLen>>8); bufCur+=2;
+    memcpy(bufCur, cs->aBranches[i].zName, nameLen); bufCur+=nameLen;
+    memcpy(bufCur, cs->aBranches[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+    memcpy(bufCur, cs->aBranches[i].workingSetHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
   }
   /* Tags */
-  p[0]=(u8)cs->nTags; p[1]=(u8)(cs->nTags>>8); p+=2;
+  bufCur[0]=(u8)cs->nTags; bufCur[1]=(u8)(cs->nTags>>8); bufCur+=2;
   for(i=0; i<cs->nTags; i++){
-    int n = (int)strlen(cs->aTags[i].zName);
-    p[0]=(u8)n; p[1]=(u8)(n>>8); p+=2;
-    memcpy(p, cs->aTags[i].zName, n); p+=n;
-    memcpy(p, cs->aTags[i].commitHash.data, PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
+    int nameLen = (int)strlen(cs->aTags[i].zName);
+    bufCur[0]=(u8)nameLen; bufCur[1]=(u8)(nameLen>>8); bufCur+=2;
+    memcpy(bufCur, cs->aTags[i].zName, nameLen); bufCur+=nameLen;
+    memcpy(bufCur, cs->aTags[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
   }
   rc = chunkStorePut(cs, buf, sz, &refsHash);
   sqlite3_free(buf);
@@ -961,34 +961,34 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
 }
 
 static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
-  const u8 *p = data;
+  const u8 *bufCur = data;
   int defLen, nBranches, nTags, i;
   u8 version;
   if( nData<5 ) return SQLITE_CORRUPT;
-  version = *p++;
+  version = *bufCur++;
   if( version!=1 && version!=2 && version!=3 ) return SQLITE_CORRUPT;
-  defLen = p[0]|(p[1]<<8); p+=2;
-  if( p+defLen>data+nData ) return SQLITE_CORRUPT;
+  defLen = bufCur[0]|(bufCur[1]<<8); bufCur+=2;
+  if( bufCur+defLen>data+nData ) return SQLITE_CORRUPT;
   sqlite3_free(cs->zDefaultBranch);
   cs->zDefaultBranch = sqlite3_malloc(defLen+1);
   if(!cs->zDefaultBranch) return SQLITE_NOMEM;
-  memcpy(cs->zDefaultBranch, p, defLen); cs->zDefaultBranch[defLen]=0; p+=defLen;
-  nBranches = p[0]|(p[1]<<8); p+=2;
+  memcpy(cs->zDefaultBranch, bufCur, defLen); cs->zDefaultBranch[defLen]=0; bufCur+=defLen;
+  nBranches = bufCur[0]|(bufCur[1]<<8); bufCur+=2;
   csFreeBranches(cs);
   if( nBranches>0 ){
     cs->aBranches = sqlite3_malloc(nBranches*(int)sizeof(struct BranchRef));
     if(!cs->aBranches) return SQLITE_NOMEM;
     for(i=0;i<nBranches;i++){
-      int n; if(p+2>data+nData) return SQLITE_CORRUPT;
-      n=p[0]|(p[1]<<8); p+=2;
-      if(p+n+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
+      int nameLen; if(bufCur+2>data+nData) return SQLITE_CORRUPT;
+      nameLen=bufCur[0]|(bufCur[1]<<8); bufCur+=2;
+      if(bufCur+nameLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
       memset(&cs->aBranches[i], 0, sizeof(struct BranchRef));
-      cs->aBranches[i].zName=sqlite3_malloc(n+1);
+      cs->aBranches[i].zName=sqlite3_malloc(nameLen+1);
       if(!cs->aBranches[i].zName) return SQLITE_NOMEM;
-      memcpy(cs->aBranches[i].zName,p,n); cs->aBranches[i].zName[n]=0; p+=n;
-      memcpy(cs->aBranches[i].commitHash.data,p,PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
-      if( version>=3 && p+PROLLY_HASH_SIZE<=data+nData ){
-        memcpy(cs->aBranches[i].workingSetHash.data,p,PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
+      memcpy(cs->aBranches[i].zName,bufCur,nameLen); cs->aBranches[i].zName[nameLen]=0; bufCur+=nameLen;
+      memcpy(cs->aBranches[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+      if( version>=3 && bufCur+PROLLY_HASH_SIZE<=data+nData ){
+        memcpy(cs->aBranches[i].workingSetHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
       }
       cs->nBranches++;
     }
@@ -996,19 +996,19 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
 
   /* Tags (version 2+) */
   csFreeTags(cs);
-  if( version>=2 && p+2<=data+nData ){
-    nTags = p[0]|(p[1]<<8); p+=2;
+  if( version>=2 && bufCur+2<=data+nData ){
+    nTags = bufCur[0]|(bufCur[1]<<8); bufCur+=2;
     if( nTags>0 ){
       cs->aTags = sqlite3_malloc(nTags*(int)sizeof(struct TagRef));
       if(!cs->aTags) return SQLITE_NOMEM;
       for(i=0;i<nTags;i++){
-        int n; if(p+2>data+nData) break;
-        n=p[0]|(p[1]<<8); p+=2;
-        if(p+n+PROLLY_HASH_SIZE>data+nData) break;
-        cs->aTags[i].zName=sqlite3_malloc(n+1);
+        int nameLen; if(bufCur+2>data+nData) break;
+        nameLen=bufCur[0]|(bufCur[1]<<8); bufCur+=2;
+        if(bufCur+nameLen+PROLLY_HASH_SIZE>data+nData) break;
+        cs->aTags[i].zName=sqlite3_malloc(nameLen+1);
         if(!cs->aTags[i].zName) return SQLITE_NOMEM;
-        memcpy(cs->aTags[i].zName,p,n); cs->aTags[i].zName[n]=0; p+=n;
-        memcpy(cs->aTags[i].commitHash.data,p,PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
+        memcpy(cs->aTags[i].zName,bufCur,nameLen); cs->aTags[i].zName[nameLen]=0; bufCur+=nameLen;
+        memcpy(cs->aTags[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
         cs->nTags++;
       }
     }
@@ -1195,41 +1195,35 @@ int chunkStorePut(
 }
 
 /*
-** Commit all pending chunks and the current root hash atomically.
-**
-** Protocol:
-**   1. Build the merged index (old + pending, sorted by hash).
-**   2. Write a complete new file to a temporary path:
-**      a. 64-byte manifest header
-**      b. Copy existing chunk data from the old file
-**      c. Append pending chunk data from pWriteBuf
-**      d. Write the merged index
-**   3. fsync the temporary file.
-**   4. Close the old file, rename temp over original (atomic on POSIX).
-**   5. Re-open the file, reload in-memory state.
+** csCommitToMemory -- handle the in-memory-only commit path.
+** Merges pending entries into the committed index and marks the
+** write buffer as committed.
 */
-int chunkStoreCommit(ChunkStore *cs){
+static int csCommitToMemory(ChunkStore *cs){
+  if( cs->nPending > 0 ){
+    ChunkIndexEntry *aMem = 0;
+    int nMem = 0;
+    int rc = csMergeIndex(cs, &aMem, &nMem);
+    if( rc!=SQLITE_OK ) return rc;
+    sqlite3_free(cs->aIndex);
+    cs->aIndex = aMem;
+    cs->nIndex = nMem;
+    cs->nIndexAlloc = nMem;
+    cs->nPending = 0;
+    cs->nCommittedWriteBuf = cs->nWriteBuf;
+  }
+  return SQLITE_OK;
+}
+
+/*
+** csCommitToFile -- handle the file-based commit path.
+** Locks the file, writes WAL records for pending chunks, appends a
+** root record with the updated manifest, fsyncs, then updates the
+** in-memory index and WAL cache.
+*/
+static int csCommitToFile(ChunkStore *cs){
   int rc;
   int i;
-
-  if( cs->readOnly ) return SQLITE_READONLY;
-
-  /* In-memory: just merge pending into index */
-  if( cs->isMemory ){
-    if( cs->nPending > 0 ){
-      ChunkIndexEntry *aMem = 0;
-      int nMem = 0;
-      int rc2 = csMergeIndex(cs, &aMem, &nMem);
-      if( rc2!=SQLITE_OK ) return rc2;
-      sqlite3_free(cs->aIndex);
-      cs->aIndex = aMem;
-      cs->nIndex = nMem;
-      cs->nIndexAlloc = nMem;
-      cs->nPending = 0;
-      cs->nCommittedWriteBuf = cs->nWriteBuf;
-    }
-    return SQLITE_OK;
-  }
 
   /* Single-file commit: append WAL records to the main file at EOF.
   ** If the file doesn't exist yet, create it with a manifest header. */
@@ -1382,6 +1376,26 @@ int chunkStoreCommit(ChunkStore *cs){
   cs->nPending = 0;
 
   return SQLITE_OK;
+}
+
+/*
+** Commit all pending chunks and the current root hash atomically.
+**
+** Protocol:
+**   1. Build the merged index (old + pending, sorted by hash).
+**   2. Write a complete new file to a temporary path:
+**      a. 168-byte manifest header
+**      b. Copy existing chunk data from the old file
+**      c. Append pending chunk data from pWriteBuf
+**      d. Write the merged index
+**   3. fsync the temporary file.
+**   4. Close the old file, rename temp over original (atomic on POSIX).
+**   5. Re-open the file, reload in-memory state.
+*/
+int chunkStoreCommit(ChunkStore *cs){
+  if( cs->readOnly ) return SQLITE_READONLY;
+  if( cs->isMemory ) return csCommitToMemory(cs);
+  return csCommitToFile(cs);
 }
 
 /*
