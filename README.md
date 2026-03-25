@@ -7,8 +7,8 @@
 A SQLite fork that replaces the B-tree storage engine with a content-addressed
 prolly tree, enabling Git-like version control on a SQL database. Everything
 above SQLite's `btree.h` interface (VDBE, query planner, parser) is untouched.
-Everything below it -- the pager, WAL, and on-disk format -- is replaced with a
-prolly tree engine backed by an append-only chunk store.
+Everything below it -- the pager and on-disk format -- is replaced with a
+prolly tree engine backed by a single-file content-addressed chunk store.
 
 ## Building
 
@@ -360,64 +360,63 @@ comment.
 
 #### Reads
 
-| Test | Multiplier |
-|------|------------|
-| oltp_point_select | 0.88 |
-| oltp_range_select | 1.27 |
-| oltp_sum_range | 1.29 |
-| oltp_order_range | 1.75 |
-| oltp_distinct_range | 0.83 |
-| oltp_index_scan | 14.50 |
-| select_random_points | 2.08 |
-| select_random_ranges | 0.80 |
-| covering_index_scan | 9.83 |
-| groupby_scan | 1.05 |
-| index_join | 2.50 |
-| index_join_scan | 130.50 |
-| types_table_scan | 1.00 |
-| table_scan | 1.00 |
-| oltp_read_only | 1.18 |
+| Test | SQLite (ms) | Doltlite (ms) | Multiplier |
+|------|-------------|---------------|------------|
+| oltp_point_select | 95 | 61 | 0.64 |
+| oltp_range_select | 35 | 38 | 1.09 |
+| oltp_sum_range | 12 | 13 | 1.08 |
+| oltp_order_range | 7 | 6 | 0.86 |
+| oltp_distinct_range | 5 | 7 | 1.40 |
+| oltp_index_scan | 8 | 32 | 4.00 |
+| select_random_points | 19 | 33 | 1.74 |
+| select_random_ranges | 9 | 7 | 0.78 |
+| covering_index_scan | 12 | 35 | 2.92 |
+| groupby_scan | 37 | 42 | 1.14 |
+| index_join | 6 | 12 | 2.00 |
+| index_join_scan | 3 | 138 | 46.00 |
+| types_table_scan | 12 | 12 | 1.00 |
+| table_scan | 3 | 1 | 0.33 |
+| oltp_read_only | 216 | 209 | 0.97 |
 
 #### Writes
 
-| Test | Multiplier |
-|------|------------|
-| oltp_bulk_insert | 1.19 |
-| oltp_insert | 1.50 |
-| oltp_update_index | 380 |
-| oltp_update_non_index | 1.28 |
-| oltp_delete_insert | 13.38 |
-| oltp_write_only | 20.45 |
-| types_delete_insert | 1.13 |
-| oltp_read_write | 3.57 |
+| Test | SQLite (ms) | Doltlite (ms) | Multiplier |
+|------|-------------|---------------|------------|
+| oltp_bulk_insert | 18 | 20 | 1.11 |
+| oltp_insert | 14 | 18 | 1.29 |
+| oltp_update_index | 29 | 335 | 11.55 |
+| oltp_update_non_index | 21 | 25 | 1.19 |
+| oltp_delete_insert | 29 | 161 | 5.55 |
+| oltp_write_only | 14 | 129 | 9.21 |
+| types_delete_insert | 16 | 17 | 1.06 |
+| oltp_read_write | 75 | 192 | 2.56 |
 
-_10K rows, in-memory, macOS ARM. Run `test/sysbench_compare.sh` to reproduce._
+_10K rows, file-backed, macOS ARM. Run `test/sysbench_compare.sh` to reproduce._
 
 **Reads are at parity or faster for most workloads.** The VDBE, query planner,
 parser, and all upper layers are untouched SQLite — only the storage engine is
 replaced. Point selects, range queries, aggregates, and the composite
-oltp_read_only benchmark are all within 1-2x of stock SQLite.
+oltp_read_only benchmark are all within 1-2x of stock SQLite. Several benchmarks
+are actually faster than SQLite on file-backed databases because the prolly tree's
+content-addressed cache avoids redundant disk reads.
 
-**Index-heavy reads are slower.** Secondary index scans (oltp_index_scan,
-covering_index_scan, index_join_scan) show higher multipliers because the prolly
-tree's index lookup path has more overhead than SQLite's B-tree. This is an
-optimization target.
+**Index scans are 3-4x.** Secondary index scans (oltp_index_scan,
+covering_index_scan) use sort key materialization — pre-computed memcmp-sortable
+keys stored alongside the original SQLite record. This enables O(1) key
+comparison in the prolly tree but doubles index entry size. index_join_scan
+(46x) remains the main outlier due to this storage overhead on join-heavy
+workloads.
 
-**Most writes are within 1-4x of SQLite.** The Phase 1 chunk store rewrite
-replaced the O(N) full-tree copy-on-write with O(M log N) targeted leaf edits
-using a Dolt-style cursor-path-stack algorithm. Only the root-to-leaf path is
-rewritten per edit; unchanged subtrees are never touched. Combined with deferred
-flushing (edits accumulate in a skip list and flush once at commit time), this
-brings oltp_insert to 1.5x, oltp_update_non_index to 1.3x, types_delete_insert
-to 1.1x, and oltp_read_write to 3.6x.
+**Most writes are within 1-3x of SQLite.** Edits accumulate in a skip list and
+flush once at commit time using a Dolt-style cursor-path-stack algorithm. Only
+the root-to-leaf path is rewritten per edit; unchanged subtrees are structurally
+shared.
 
-**oltp_update_index (380x) remains the outlier.** This benchmark does 10K
-updates to an indexed column in one transaction, generating ~16K index edits on
-a 10K-entry BLOBKEY tree. A hybrid flush strategy selects the O(N+M) merge-walk
-algorithm for this case, but the per-entry cost of blob key comparison (parsing
-SQLite record format field-by-field) dominates. Dolt achieves sub-2x write
-multipliers with the same prolly tree design by using a more efficient key
-encoding. Optimizing blob key comparison is the next target.
+**oltp_update_index is 12x.** This benchmark does 10K updates to an indexed
+column in one transaction. Sort key materialization replaced the expensive
+field-by-field record comparison with memcmp, and a scan limit in IndexMoveto
+prevents O(N) linear scans through deleted entries. Combined, these brought the
+multiplier from 380x down to ~12x.
 
 ### Algorithmic Complexity
 
@@ -505,7 +504,8 @@ gcc -o concurrent_branch_test ../test/concurrent_branch_test.c \
 | `prolly_diff.c/h` | Tree-level diff (drives `dolt_diff`) |
 | `prolly_arena.c/h` | Arena allocator for tree operations |
 | `prolly_btree.c` | `btree.h` API implementation (main integration point) |
-| `chunk_store.c` | File-backed, append-only chunk storage |
+| `sortkey.c/h` | Sort key encoding for memcmp-sortable index keys |
+| `chunk_store.c` | Single-file content-addressed chunk storage |
 | `pager_shim.c` | Pager facade (satisfies pager API without page-based I/O) |
 
 ### Doltlite Feature Files
@@ -549,22 +549,18 @@ of where they appear, enabling structural sharing between versions.
 
 ### Key Encoding
 
-This is the biggest practical difference and the main remaining performance gap.
-
 **Dolt** uses a purpose-built tuple encoding: fields are serialized as contiguous
 bytes with a trailing offset array and field count. Keys sort lexicographically,
-so comparison is a single `memcmp`. This makes tree traversal (seek, merge-walk)
-very fast.
+so comparison is a single `memcmp`.
 
-**Doltlite** stores keys in SQLite's native record format. For INTKEY tables
-(rowid tables), keys are 8-byte little-endian integers — comparison is trivial.
-For BLOBKEY tables (indexes), keys are SQLite serialized records with a variable-
-length header encoding field types. Comparison requires parsing the header,
-extracting each field's type and length, and comparing field-by-field according
-to SQLite's type affinity rules (integers < floats < text < blobs). This is
-5-10x more expensive per comparison than Dolt's `memcmp`, and it shows up
-directly in `oltp_update_index` (380x) where millions of blob key comparisons
-dominate the flush cost.
+**Doltlite** uses sort key materialization for index (BLOBKEY) entries. Each
+SQLite record is converted to a memcmp-sortable byte string at insert time:
+integers and floats are encoded as IEEE 754 doubles with sign normalization,
+text and blobs use NUL-byte escaping with double-NUL terminators. The sort key
+is stored as the prolly tree key; the original SQLite record is stored as the
+value (for reads). This enables `memcmp` comparison in the tree at the cost of
+~2x index entry size. For INTKEY tables (rowid tables), keys are 8-byte
+little-endian integers — comparison is trivial.
 
 ### Tree Mutation
 
@@ -592,11 +588,12 @@ organized into generations (oldgen/newgen). Writers append new table files;
 readers see consistent snapshots. This enables MVCC-like concurrency with
 optimistic locking at the manifest level.
 
-**Doltlite** uses a single append-only file with three regions: a 168-byte
-manifest header, a chunk data region (length-prefixed chunks appended
-sequentially), and a sorted chunk index (hash + offset + size per entry).
-Commits are atomic via write-to-temp + fsync + rename. A WAL (write-ahead log)
-provides transactional safety. Concurrency uses SQLite's existing locking model.
+**Doltlite** uses a single file with three regions: a 168-byte manifest header
+at offset 0, a compacted chunk data region with sorted index (written by GC),
+and a WAL region at the end of the file (append-only journal of new chunks).
+Normal commits append to the WAL region at EOF. GC rewrites the entire file
+with all chunks compacted (empty WAL region). Concurrency uses file-level
+locking for serialization.
 
 ### Commits and Metadata
 
@@ -604,10 +601,12 @@ provides transactional safety. Concurrency uses SQLite's existing locking model.
 acyclic graph) with multiple parents for merge commits. Commits include a parent
 closure for O(1) ancestor queries and a height field for efficient traversal.
 
-**Doltlite** stores commits as custom binary objects in a linked list (single
-parent per commit, except during merge). The manifest tracks HEAD commit, staged
-catalog, branch refs, and merge state. Branches and tags are stored in a
-serialized refs chunk referenced by the manifest.
+**Doltlite** stores commits as custom binary objects forming a DAG with
+multi-parent support (merge commits record both parents). Each branch has an
+associated WorkingSet chunk that stores staged catalog and merge state
+independently. The catalog hash is purely data-derived (no runtime metadata),
+enabling O(1) dirty checks via hash comparison. Branches and tags are stored in
+a serialized refs chunk referenced by the manifest.
 
 ### Garbage Collection
 
