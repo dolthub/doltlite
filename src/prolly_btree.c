@@ -122,6 +122,8 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 #define BTS_INITIALLY_EMPTY 0x0010  /* Database was empty at open time */
 #define BTS_NO_WAL          0x0020  /* WAL mode is not used */
 
+/* WS_* constants now defined in chunk_store.h */
+
 /* Clear the cached payload, freeing owned copies */
 #define CLEAR_CACHED_PAYLOAD(pCur) do{ \
   if( (pCur)->cachedPayloadOwned && (pCur)->pCachedPayload ){ \
@@ -345,10 +347,16 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
 ** Returns a pointer to the entry, or NULL if not found.
 */
 static struct TableEntry *findTable(Btree *pBtree, Pgno iTable){
-  int i;
-  for(i=0; i<pBtree->nTables; i++){
-    if( pBtree->aTables[i].iTable==iTable ){
-      return &pBtree->aTables[i];
+  int lo = 0, hi = pBtree->nTables - 1;
+  while( lo<=hi ){
+    int mid = lo + (hi - lo) / 2;
+    Pgno midTable = pBtree->aTables[mid].iTable;
+    if( midTable==iTable ){
+      return &pBtree->aTables[mid];
+    } else if( midTable<iTable ){
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
     }
   }
   return 0;
@@ -379,7 +387,24 @@ static struct TableEntry *addTable(Btree *pBtree, Pgno iTable, u8 flags){
     pBtree->nTablesAlloc = nNew;
   }
 
-  pEntry = &pBtree->aTables[pBtree->nTables];
+  /* Find sorted insertion point using binary search */
+  {
+    int lo = 0, hi = pBtree->nTables;
+    while( lo<hi ){
+      int mid = lo + (hi - lo) / 2;
+      if( pBtree->aTables[mid].iTable < iTable ){
+        lo = mid + 1;
+      } else {
+        hi = mid;
+      }
+    }
+    /* Insert at position lo, shifting elements right */
+    if( lo < pBtree->nTables ){
+      memmove(&pBtree->aTables[lo+1], &pBtree->aTables[lo],
+              (pBtree->nTables - lo) * (int)sizeof(struct TableEntry));
+    }
+    pEntry = &pBtree->aTables[lo];
+  }
   memset(pEntry, 0, sizeof(*pEntry));
   pEntry->iTable = iTable;
   pEntry->flags = flags;
@@ -492,6 +517,9 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   /* Calculate variable size: per table = 4+1+20+20+2+name_len */
   for(i=0; i<nTables; i++){
     int nLen = pBtree->aTables[i].zName ? (int)strlen(pBtree->aTables[i].zName) : 0;
+    if( sz > 0x7FFFFFFF - (4 + 1 + PROLLY_HASH_SIZE*2 + 2 + nLen) ){
+      return SQLITE_TOOBIG;
+    }
     sz += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2 + nLen;
   }
 
@@ -610,6 +638,8 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
         if( pTE->zName ){
           memcpy(pTE->zName, q, nLen);
           pTE->zName[nLen] = 0;
+        }else{
+          return SQLITE_NOMEM;
         }
         q += nLen;
       }
@@ -1092,11 +1122,11 @@ catalog_loaded:
         /* WorkingSet exists — load it */
         u8 *wsData = 0; int nWsData = 0;
         if( chunkStoreGet(&pBt->store, &wsHash, &wsData, &nWsData)==SQLITE_OK
-         && nWsData >= 62 ){
-          memcpy(p->stagedCatalog.data, wsData + 1, PROLLY_HASH_SIZE);
-          p->isMerging = wsData[21];
-          memcpy(p->mergeCommitHash.data, wsData + 22, PROLLY_HASH_SIZE);
-          memcpy(p->conflictsCatalogHash.data, wsData + 42, PROLLY_HASH_SIZE);
+         && nWsData >= WS_TOTAL_SIZE ){
+          memcpy(p->stagedCatalog.data, wsData + WS_STAGED_OFF, PROLLY_HASH_SIZE);
+          p->isMerging = wsData[WS_MERGING_OFF];
+          memcpy(p->mergeCommitHash.data, wsData + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
+          memcpy(p->conflictsCatalogHash.data, wsData + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
         }
         sqlite3_free(wsData);
       }else{
@@ -1583,18 +1613,23 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
     } else if( iSavepoint>=0 && iSavepoint>=p->nSavepoint ){
       if( p->aCommittedTables ){
         sqlite3_free(p->aTables);
-        p->aTables = sqlite3_malloc(
-            p->nCommittedTables * (int)sizeof(struct TableEntry));
-        if( p->aTables ){
-          memcpy(p->aTables, p->aCommittedTables,
-                 p->nCommittedTables * sizeof(struct TableEntry));
-          p->nTables = p->nCommittedTables;
-          p->nTablesAlloc = p->nCommittedTables;
-          p->iNextTable = p->iCommittedNextTable;
+        if( p->nCommittedTables > 0 ){
+          p->aTables = sqlite3_malloc(
+              p->nCommittedTables * (int)sizeof(struct TableEntry));
+          if( p->aTables ){
+            memcpy(p->aTables, p->aCommittedTables,
+                   p->nCommittedTables * sizeof(struct TableEntry));
+          } else {
+            p->nTables = 0;
+            p->nTablesAlloc = 0;
+            return SQLITE_NOMEM;
+          }
         } else {
-          p->nTables = 0;
-          p->nTablesAlloc = 0;
+          p->aTables = 0;
         }
+        p->nTables = p->nCommittedTables;
+        p->nTablesAlloc = p->nCommittedTables;
+        p->iNextTable = p->iCommittedNextTable;
       }
       p->root = p->committedRoot;
       invalidateCursors(pBt, 0, SQLITE_ABORT);
@@ -1607,24 +1642,29 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
       p->root = p->committedRoot;
       if( p->aCommittedTables ){
         sqlite3_free(p->aTables);
-        p->aTables = sqlite3_malloc(p->nCommittedTables * (int)sizeof(struct TableEntry));
-        if( p->aTables ){
-          memcpy(p->aTables, p->aCommittedTables,
-                 p->nCommittedTables * sizeof(struct TableEntry));
-          p->nTables = p->nCommittedTables;
-          p->nTablesAlloc = p->nCommittedTables;
-          p->iNextTable = p->iCommittedNextTable;
+        if( p->nCommittedTables > 0 ){
+          p->aTables = sqlite3_malloc(p->nCommittedTables * (int)sizeof(struct TableEntry));
+          if( p->aTables ){
+            memcpy(p->aTables, p->aCommittedTables,
+                   p->nCommittedTables * sizeof(struct TableEntry));
+          } else {
+            p->nTables = 0;
+            p->nTablesAlloc = 0;
+            return SQLITE_NOMEM;
+          }
         } else {
-          p->nTables = 0;
-          p->nTablesAlloc = 0;
+          p->aTables = 0;
         }
+        p->nTables = p->nCommittedTables;
+        p->nTablesAlloc = p->nCommittedTables;
+        p->iNextTable = p->iCommittedNextTable;
       }
       p->nSavepoint = 0;
       invalidateCursors(pBt, 0, SQLITE_ABORT);
       invalidateSchema(p);
     }
   } else {
-    /* SAVEPOINT_RELEASE: free savepoints above this one */
+    /* SAVEPOINT_RELEASE: free this savepoint and all above it */
     if( iSavepoint>=0 && iSavepoint<p->nSavepoint ){
       int j;
       for(j=iSavepoint; j<p->nSavepoint; j++){
@@ -2251,7 +2291,6 @@ static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut)
   for(i=0; i<nField; i++) nHdr += sqlite3VarintLen(aType[i]);
   if( nHdr > 126 ) nHdr++;
 
-  nTotal = nHdr + (int)nData;
   nTotal = nHdr + (int)nData;
   pOut = (u8*)sqlite3_malloc(nTotal);
   if( !pOut ) return SQLITE_NOMEM;
@@ -3842,7 +3881,7 @@ void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){
 int doltliteSaveWorkingSet(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;
-  u8 buf[62];
+  u8 buf[WS_TOTAL_SIZE];
   ProllyHash wsHash;
   const char *zBranch;
   int rc;
@@ -3854,12 +3893,12 @@ int doltliteSaveWorkingSet(sqlite3 *db){
   zBranch = pBtree->zBranch ? pBtree->zBranch : "main";
 
   buf[0] = 1;  /* WorkingSet version */
-  memcpy(buf + 1, pBtree->stagedCatalog.data, PROLLY_HASH_SIZE);
-  buf[21] = pBtree->isMerging;
-  memcpy(buf + 22, pBtree->mergeCommitHash.data, PROLLY_HASH_SIZE);
-  memcpy(buf + 42, pBtree->conflictsCatalogHash.data, PROLLY_HASH_SIZE);
+  memcpy(buf + WS_STAGED_OFF, pBtree->stagedCatalog.data, PROLLY_HASH_SIZE);
+  buf[WS_MERGING_OFF] = pBtree->isMerging;
+  memcpy(buf + WS_MERGE_COMMIT_OFF, pBtree->mergeCommitHash.data, PROLLY_HASH_SIZE);
+  memcpy(buf + WS_CONFLICTS_OFF, pBtree->conflictsCatalogHash.data, PROLLY_HASH_SIZE);
 
-  rc = chunkStorePut(cs, buf, 62, &wsHash);
+  rc = chunkStorePut(cs, buf, WS_TOTAL_SIZE, &wsHash);
   if( rc != SQLITE_OK ) return rc;
 
   /* Store the WorkingSet hash in the branch ref */
@@ -3892,7 +3931,7 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
   }
 
   rc = chunkStoreGet(cs, &wsHash, &data, &nData);
-  if( rc != SQLITE_OK || nData < 62 ){
+  if( rc != SQLITE_OK || nData < WS_TOTAL_SIZE ){
     sqlite3_free(data);
     memset(&pBtree->stagedCatalog, 0, sizeof(ProllyHash));
     pBtree->isMerging = 0;
@@ -3901,10 +3940,10 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
     return SQLITE_OK;
   }
 
-  memcpy(pBtree->stagedCatalog.data, data + 1, PROLLY_HASH_SIZE);
-  pBtree->isMerging = data[21];
-  memcpy(pBtree->mergeCommitHash.data, data + 22, PROLLY_HASH_SIZE);
-  memcpy(pBtree->conflictsCatalogHash.data, data + 42, PROLLY_HASH_SIZE);
+  memcpy(pBtree->stagedCatalog.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
+  pBtree->isMerging = data[WS_MERGING_OFF];
+  memcpy(pBtree->mergeCommitHash.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
+  memcpy(pBtree->conflictsCatalogHash.data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
 
   sqlite3_free(data);
   return SQLITE_OK;
