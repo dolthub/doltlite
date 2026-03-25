@@ -61,18 +61,21 @@ struct ChunkStore {
   ProllyHash root;           /* Current root hash */
   ProllyHash catalog;        /* Catalog hash (table registry + meta) */
   ProllyHash headCommit;     /* HEAD commit hash (linked list of commits) */
-  ProllyHash stagedCatalog;  /* Staged catalog (tables added via dolt_add) */
+  ProllyHash stagedCatalog;  /* DEPRECATED: use per-branch WorkingSet instead */
   ProllyHash refsHash;       /* Hash of refs chunk (branch mapping) */
 
-  /* Merge state — persisted in the manifest */
-  u8 isMerging;              /* 1 if a merge is in progress */
-  ProllyHash mergeCommitHash;     /* Commit hash being merged in */
-  ProllyHash conflictsCatalogHash; /* Hash of conflicts catalog (table name → conflict tree root) */
+  /* DEPRECATED: merge state now lives in per-branch WorkingSet.
+  ** These fields are kept for manifest format stability but are
+  ** loaded from/saved to WorkingSet, not the manifest. */
+  u8 isMerging;
+  ProllyHash mergeCommitHash;
+  ProllyHash conflictsCatalogHash;
 
   /* Branch refs (in-memory, loaded from refs chunk) */
   struct BranchRef {
     char *zName;
     ProllyHash commitHash;
+    ProllyHash workingSetHash;  /* Per-branch WorkingSet chunk */
   } *aBranches;
   int nBranches;
   char *zDefaultBranch;      /* Default branch for new connections */
@@ -146,6 +149,10 @@ int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName);
 int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);
 int chunkStoreSerializeRefs(ChunkStore *cs);
+
+/* Per-branch WorkingSet management */
+int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash);
+int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash);
 
 /* Tag management */
 int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);

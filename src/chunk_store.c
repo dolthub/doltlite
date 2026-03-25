@@ -853,6 +853,7 @@ int chunkStoreAddBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCo
   aNew = sqlite3_realloc(cs->aBranches, (cs->nBranches+1)*(int)sizeof(struct BranchRef));
   if( !aNew ) return SQLITE_NOMEM;
   cs->aBranches = aNew;
+  memset(&aNew[cs->nBranches], 0, sizeof(struct BranchRef));
   aNew[cs->nBranches].zName = sqlite3_mprintf("%s", zName);
   if( !aNew[cs->nBranches].zName ) return SQLITE_NOMEM;
   memcpy(&aNew[cs->nBranches].commitHash, pCommit, sizeof(ProllyHash));
@@ -878,6 +879,31 @@ int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName){
       sqlite3_free(cs->aBranches[i].zName);
       cs->aBranches[i] = cs->aBranches[cs->nBranches-1];
       cs->nBranches--;
+      return SQLITE_OK;
+    }
+  }
+  return SQLITE_NOTFOUND;
+}
+
+/* --- Per-branch WorkingSet --- */
+
+int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash){
+  int i;
+  for(i=0; i<cs->nBranches; i++){
+    if( strcmp(cs->aBranches[i].zName, zBranch)==0 ){
+      memcpy(pHash, &cs->aBranches[i].workingSetHash, sizeof(ProllyHash));
+      return SQLITE_OK;
+    }
+  }
+  memset(pHash, 0, sizeof(ProllyHash));
+  return SQLITE_NOTFOUND;
+}
+
+int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash){
+  int i;
+  for(i=0; i<cs->nBranches; i++){
+    if( strcmp(cs->aBranches[i].zName, zBranch)==0 ){
+      memcpy(&cs->aBranches[i].workingSetHash, pHash, sizeof(ProllyHash));
       return SQLITE_OK;
     }
   }
@@ -924,8 +950,8 @@ int chunkStoreDeleteTag(ChunkStore *cs, const char *zName){
 }
 
 /*
-** Serialize refs v2: [version:1][default_branch_len:2][default_branch:var]
-**   [num_branches:2] per branch: [name_len:2][name:var][hash:20]
+** Serialize refs v3: [version:1=3][default_branch_len:2][default_branch:var]
+**   [num_branches:2] per branch: [name_len:2][name:var][commitHash:20][workingSetHash:20]
 **   [num_tags:2] per tag: [name_len:2][name:var][hash:20]
 */
 int chunkStoreSerializeRefs(ChunkStore *cs){
@@ -936,21 +962,22 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
   u8 *buf, *p;
   ProllyHash refsHash;
 
-  for(i=0; i<cs->nBranches; i++) sz += 2 + (int)strlen(cs->aBranches[i].zName) + PROLLY_HASH_SIZE;
+  for(i=0; i<cs->nBranches; i++) sz += 2 + (int)strlen(cs->aBranches[i].zName) + PROLLY_HASH_SIZE*2;
   for(i=0; i<cs->nTags; i++) sz += 2 + (int)strlen(cs->aTags[i].zName) + PROLLY_HASH_SIZE;
   buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
   p = buf;
-  *p++ = 2;  /* version 2: branches + tags */
+  *p++ = 3;  /* version 3: branches with WorkingSet + tags */
   p[0]=(u8)defLen; p[1]=(u8)(defLen>>8); p+=2;
   memcpy(p, def, defLen); p+=defLen;
-  /* Branches */
+  /* Branches: name + commitHash + workingSetHash */
   p[0]=(u8)cs->nBranches; p[1]=(u8)(cs->nBranches>>8); p+=2;
   for(i=0; i<cs->nBranches; i++){
     int n = (int)strlen(cs->aBranches[i].zName);
     p[0]=(u8)n; p[1]=(u8)(n>>8); p+=2;
     memcpy(p, cs->aBranches[i].zName, n); p+=n;
     memcpy(p, cs->aBranches[i].commitHash.data, PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
+    memcpy(p, cs->aBranches[i].workingSetHash.data, PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
   }
   /* Tags */
   p[0]=(u8)cs->nTags; p[1]=(u8)(cs->nTags>>8); p+=2;
@@ -972,7 +999,7 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   u8 version;
   if( nData<5 ) return SQLITE_CORRUPT;
   version = *p++;
-  if( version!=1 && version!=2 ) return SQLITE_CORRUPT;
+  if( version!=1 && version!=2 && version!=3 ) return SQLITE_CORRUPT;
   defLen = p[0]|(p[1]<<8); p+=2;
   if( p+defLen>data+nData ) return SQLITE_CORRUPT;
   sqlite3_free(cs->zDefaultBranch);
@@ -989,10 +1016,14 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
       int n; if(p+2>data+nData) return SQLITE_CORRUPT;
       n=p[0]|(p[1]<<8); p+=2;
       if(p+n+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
+      memset(&cs->aBranches[i], 0, sizeof(struct BranchRef));
       cs->aBranches[i].zName=sqlite3_malloc(n+1);
       if(!cs->aBranches[i].zName) return SQLITE_NOMEM;
       memcpy(cs->aBranches[i].zName,p,n); cs->aBranches[i].zName[n]=0; p+=n;
       memcpy(cs->aBranches[i].commitHash.data,p,PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
+      if( version>=3 && p+PROLLY_HASH_SIZE<=data+nData ){
+        memcpy(cs->aBranches[i].workingSetHash.data,p,PROLLY_HASH_SIZE); p+=PROLLY_HASH_SIZE;
+      }
       cs->nBranches++;
     }
   }

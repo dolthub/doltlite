@@ -177,9 +177,8 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   rc = chunkStoreFindBranch(cs, zBranch, &targetCommit);
   if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch not found", -1); return; }
 
-  /* Check for uncommitted changes using deep per-table comparison.
-  ** A shallow catalog-hash comparison would false-positive after operations
-  ** like dolt_reset('--hard') that bump the schema version meta value. */
+  /* Check for uncommitted changes via catalog hash comparison.
+  ** With V2 catalogs (no aMeta), hash comparison is reliable. */
   {
     int dirty = checkWorkingDirty(db);
     if( dirty>0 ){
@@ -211,15 +210,31 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       return;
     }
 
+    /* Save current branch's WorkingSet before switching */
+    {
+      extern int doltliteSaveWorkingSet(sqlite3*);
+      extern int doltliteLoadWorkingSet(sqlite3*, const char*);
+      doltliteSaveWorkingSet(db);
+    }
+
     /* Update this session's branch state */
     doltliteSetSessionBranch(db, zBranch);
     doltliteSetSessionHead(db, &targetCommit);
     doltliteSetSessionStaged(db, &catHash);
 
+    /* Load the target branch's WorkingSet (staged + merge state) */
+    {
+      extern int doltliteLoadWorkingSet(sqlite3*, const char*);
+      doltliteLoadWorkingSet(db, zBranch);
+    }
+
     /* Update the default branch in the store (for next open) */
     chunkStoreSetDefaultBranch(cs, zBranch);
     chunkStoreSetHeadCommit(cs, &targetCommit);
-    chunkStoreSetStagedCatalog(cs, &catHash);
+  }
+  {
+    extern int doltliteSaveWorkingSet(sqlite3*);
+    doltliteSaveWorkingSet(db);
   }
   rc = chunkStoreSerializeRefs(cs);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);

@@ -31,6 +31,16 @@ extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 extern void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
 extern void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
 extern void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
+extern void doltliteGetSessionMergeState(sqlite3 *db, u8 *pIsMerging,
+                                          ProllyHash *pMergeCommit,
+                                          ProllyHash *pConflictsCatalog);
+extern void doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
+                                          const ProllyHash *pMergeCommit,
+                                          const ProllyHash *pConflictsCatalog);
+extern void doltliteClearSessionMergeState(sqlite3 *db);
+extern void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
+extern void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
+extern int doltliteSaveWorkingSet(sqlite3 *db);
 
 /* TableEntry struct — must match prolly_btree.c definition */
 struct TableEntry {
@@ -125,7 +135,7 @@ static void doltliteAddFunc(
 
     if( stageAll ){
       /* Stage everything: staged = working */
-      doltliteSetSessionStaged(db, &workingHash); chunkStoreSetStagedCatalog(cs, &workingHash);
+      doltliteSetSessionStaged(db, &workingHash);
     }else{
       /* Stage specific tables */
       struct TableEntry *aWorking = 0, *aStaged = 0;
@@ -252,7 +262,7 @@ static void doltliteAddFunc(
           rc = chunkStorePut(cs, buf, (int)(p-buf), &newStagedHash);
           sqlite3_free(buf);
           if( rc==SQLITE_OK ){
-            doltliteSetSessionStaged(db, &newStagedHash); chunkStoreSetStagedCatalog(cs, &newStagedHash);
+            doltliteSetSessionStaged(db, &newStagedHash);
           }
         }
       }
@@ -263,11 +273,13 @@ static void doltliteAddFunc(
 
     /* Persist — if commit fails, revert session state to avoid
     ** inconsistency between in-memory session and on-disk store. */
+    doltliteSaveWorkingSet(db);
+    chunkStoreSerializeRefs(cs);
     rc = chunkStoreCommit(cs);
     if( rc!=SQLITE_OK ){
       /* Rollback session staged state to what's on disk */
       ProllyHash diskStaged;
-      chunkStoreGetStagedCatalog(cs, &diskStaged);
+      doltliteGetSessionStaged(db, &diskStaged);
       doltliteSetSessionStaged(db, &diskStaged);
       sqlite3_result_error_code(context, rc);
       return;
@@ -342,13 +354,13 @@ static void doltliteCommitFunc(
       sqlite3_result_error_code(context, rc);
       return;
     }
-    doltliteSetSessionStaged(db, &catalogHash); chunkStoreSetStagedCatalog(cs, &catalogHash);
+    doltliteSetSessionStaged(db, &catalogHash);
   }
 
   /* Block commit while merge conflicts exist */
   {
     ProllyHash cfHash;
-    chunkStoreGetConflictsCatalog(cs, &cfHash);
+    doltliteGetSessionConflictsCatalog(db, &cfHash);
     if( !prollyHashIsEmpty(&cfHash) ){
       sqlite3_result_error(context,
         "cannot commit: unresolved merge conflicts. Use dolt_conflicts_resolve() first.", -1);
@@ -369,7 +381,7 @@ static void doltliteCommitFunc(
   ** even if the resolved state matches HEAD (e.g. kept all "ours" values). */
   {
     u8 isMerging = 0;
-    chunkStoreGetMergeState(cs, &isMerging, 0, 0);
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
     if( !isMerging ){
       ProllyHash headCatHash;
       rc = doltliteGetHeadCatalogHash(db, &headCatHash);
@@ -427,11 +439,11 @@ static void doltliteCommitFunc(
 
   /* Update session HEAD and staged */
   doltliteSetSessionHead(db, &commitHash);
-  doltliteSetSessionStaged(db, &catalogHash); chunkStoreSetStagedCatalog(cs, &catalogHash);
+  doltliteSetSessionStaged(db, &catalogHash);
 
   /* Update shared state too (for manifest persistence) */
   chunkStoreSetHeadCommit(cs, &commitHash);
-  doltliteSetSessionStaged(db, &catalogHash); chunkStoreSetStagedCatalog(cs, &catalogHash);
+  doltliteSetSessionStaged(db, &catalogHash);
 
   /* Update branch refs — bootstrap "main" on first commit */
   {
@@ -448,13 +460,14 @@ static void doltliteCommitFunc(
   /* Clear merge state if we were in a merge (commit concludes it) */
   {
     u8 wasMerging = 0;
-    chunkStoreGetMergeState(cs, &wasMerging, 0, 0);
+    doltliteGetSessionMergeState(db, &wasMerging, 0, 0);
     if( wasMerging ){
-      chunkStoreClearMergeState(cs);
-      chunkStoreSetConflictsCatalog(cs, &(ProllyHash){{0}});
+      doltliteClearSessionMergeState(db);
     }
   }
 
+  doltliteSaveWorkingSet(db);
+  chunkStoreSerializeRefs(cs);
   rc = chunkStoreCommit(cs);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
@@ -551,8 +564,7 @@ static void doltliteResetFunc(
     chunkStoreSerializeRefs(cs);
 
     /* Clear any merge state */
-    chunkStoreClearMergeState(cs);
-    chunkStoreSetConflictsCatalog(cs, &(ProllyHash){{0}});
+    doltliteClearSessionMergeState(db);
   }else{
     /* No ref: reset to current HEAD */
     rc = doltliteGetHeadCatalogHash(db, &targetCatHash);
@@ -564,7 +576,7 @@ static void doltliteResetFunc(
 
   /* Soft reset: staged = target catalog (unstage everything) */
   doltliteSetSessionStaged(db, &targetCatHash);
-  chunkStoreSetStagedCatalog(cs, &targetCatHash);
+  /* WorkingSet: staged already set in session */
 
   if( isHard ){
     /* Hard reset: also reset working state */
@@ -572,6 +584,8 @@ static void doltliteResetFunc(
       sqlite3_result_error(context, "no commit to reset to", -1);
       return;
     }
+    doltliteSaveWorkingSet(db);
+    chunkStoreSerializeRefs(cs);
     rc = doltliteHardReset(db, &targetCatHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "hard reset failed", -1);
@@ -579,6 +593,8 @@ static void doltliteResetFunc(
     }
   }else{
     /* Persist soft reset */
+    doltliteSaveWorkingSet(db);
+    chunkStoreSerializeRefs(cs);
     rc = chunkStoreCommit(cs);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
@@ -628,7 +644,7 @@ static void doltliteMergeFunc(
     u8 isMerging = 0;
     ProllyHash headCatHash;
 
-    chunkStoreGetMergeState(cs, &isMerging, 0, 0);
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
     if( !isMerging ){
       sqlite3_result_error(context, "no merge in progress", -1);
       return;
@@ -648,11 +664,12 @@ static void doltliteMergeFunc(
 
     /* Restore staged to HEAD catalog */
     doltliteSetSessionStaged(db, &headCatHash);
-    chunkStoreSetStagedCatalog(cs, &headCatHash);
+    /* WorkingSet: staged already set in session */
 
     /* Clear merge state and conflicts */
-    chunkStoreClearMergeState(cs);
-    chunkStoreSetConflictsCatalog(cs, &(ProllyHash){{0}});
+    doltliteClearSessionMergeState(db);
+    doltliteSaveWorkingSet(db);
+    chunkStoreSerializeRefs(cs);
     chunkStoreCommit(cs);
 
     sqlite3_result_int(context, 0);
@@ -744,8 +761,9 @@ static void doltliteMergeFunc(
       doltliteSetSessionHead(db, &ch2);
       doltliteSetSessionStaged(db, &sc2);
       chunkStoreSetHeadCommit(cs, &ch2);
-      chunkStoreSetStagedCatalog(cs, &sc2);
+      /* WorkingSet: staged already set in session */
       chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &ch2);
+      doltliteSaveWorkingSet(db);
       chunkStoreSerializeRefs(cs);
       chunkStoreCommit(cs);
 
@@ -800,6 +818,8 @@ static void doltliteMergeFunc(
     /* Conflicts: leave working set dirty, don't commit.
     ** User resolves conflicts then runs dolt_commit. */
     doltliteRegisterConflictTables(db);
+    doltliteSaveWorkingSet(db);
+    chunkStoreSerializeRefs(cs);
     chunkStoreCommit(cs);
     {
       char msg[256];
@@ -811,7 +831,7 @@ static void doltliteMergeFunc(
   }else{
     /* Clean merge: create merge commit automatically */
     doltliteSetSessionStaged(db, &mergedCatHash);
-    chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+    /* WorkingSet: staged already set in session */
 
     {
       DoltliteCommit mergeCommit;
@@ -846,8 +866,9 @@ static void doltliteMergeFunc(
       doltliteSetSessionHead(db, &commitHash);
       doltliteSetSessionStaged(db, &mergedCatHash);
       chunkStoreSetHeadCommit(cs, &commitHash);
-      chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+      /* WorkingSet: staged already set in session */
       chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
+      doltliteSaveWorkingSet(db);
       chunkStoreSerializeRefs(cs);
       chunkStoreCommit(cs);
 
@@ -921,7 +942,7 @@ static int applyMergedCatalogAndCommit(
 
   /* Stage the merged catalog */
   doltliteSetSessionStaged(db, &mergedCatHash);
-  chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+  /* WorkingSet: staged already set in session */
 
   /* Build and store the new commit */
   {
@@ -948,7 +969,7 @@ static int applyMergedCatalogAndCommit(
     doltliteSetSessionHead(db, &commitHash);
     doltliteSetSessionStaged(db, &mergedCatHash);
     chunkStoreSetHeadCommit(cs, &commitHash);
-    chunkStoreSetStagedCatalog(cs, &mergedCatHash);
+    /* WorkingSet: staged already set in session */
     chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
     chunkStoreSerializeRefs(cs);
     chunkStoreCommit(cs);
@@ -1069,6 +1090,10 @@ static void doltliteCherryPickFunc(
 
   if( nConflicts > 0 ){
     char msg[256];
+    doltliteRegisterConflictTables(db);
+    doltliteSaveWorkingSet(db);
+    chunkStoreSerializeRefs(cs);
+    chunkStoreCommit(cs);
     sqlite3_snprintf(sizeof(msg), msg,
       "Cherry-pick completed with %d conflict(s). Use SELECT * FROM dolt_conflicts to view.",
       nConflicts);
@@ -1188,6 +1213,10 @@ static void doltliteRevertFunc(
 
   if( nConflicts > 0 ){
     char msg[256];
+    doltliteRegisterConflictTables(db);
+    doltliteSaveWorkingSet(db);
+    chunkStoreSerializeRefs(cs);
+    chunkStoreCommit(cs);
     sqlite3_snprintf(sizeof(msg), msg,
       "Revert completed with %d conflict(s). Use SELECT * FROM dolt_conflicts to view.",
       nConflicts);

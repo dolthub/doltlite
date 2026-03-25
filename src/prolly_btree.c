@@ -263,10 +263,14 @@ struct Btree {
   int nCommittedTables;
   Pgno iCommittedNextTable;
 
-  /* Per-session branch state. */
+  /* Per-session branch state (authoritative in-memory state).
+  ** Persisted to per-branch WorkingSet chunks, NOT in the manifest. */
   char *zBranch;             /* Current branch name (owned, NULL = "main") */
   ProllyHash headCommit;     /* This session's HEAD commit hash */
   ProllyHash stagedCatalog;  /* This session's staged catalog hash */
+  u8 isMerging;              /* 1 if a merge is in progress */
+  ProllyHash mergeCommitHash;     /* Commit hash being merged in */
+  ProllyHash conflictsCatalogHash; /* Conflicts catalog hash */
 };
 
 /*
@@ -1079,7 +1083,29 @@ catalog_loaded:
       /* No refs yet — use manifest headCommit directly */
       chunkStoreGetHeadCommit(&pBt->store, &p->headCommit);
     }
-    chunkStoreGetStagedCatalog(&pBt->store, &p->stagedCatalog);
+    /* Load per-branch WorkingSet (staged + merge state).
+    ** Falls back to manifest stagedCatalog for migration from pre-WorkingSet format. */
+    {
+      ProllyHash wsHash;
+      if( chunkStoreGetBranchWorkingSet(&pBt->store, defBranch, &wsHash)==SQLITE_OK
+       && !prollyHashIsEmpty(&wsHash) ){
+        /* WorkingSet exists — load it */
+        u8 *wsData = 0; int nWsData = 0;
+        if( chunkStoreGet(&pBt->store, &wsHash, &wsData, &nWsData)==SQLITE_OK
+         && nWsData >= 62 ){
+          memcpy(p->stagedCatalog.data, wsData + 1, PROLLY_HASH_SIZE);
+          p->isMerging = wsData[21];
+          memcpy(p->mergeCommitHash.data, wsData + 22, PROLLY_HASH_SIZE);
+          memcpy(p->conflictsCatalogHash.data, wsData + 42, PROLLY_HASH_SIZE);
+        }
+        sqlite3_free(wsData);
+      }else{
+        /* Migration: load from manifest (legacy) */
+        chunkStoreGetStagedCatalog(&pBt->store, &p->stagedCatalog);
+        chunkStoreGetMergeState(&pBt->store, &p->isMerging,
+                                &p->mergeCommitHash, &p->conflictsCatalogHash);
+      }
+    }
   }
 
   *ppBtree = p;
@@ -3710,6 +3736,9 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     invalidateSchema(pBtree);
   }
 
+  /* Hard reset: staged = target catalog (merge state is caller's responsibility) */
+  memcpy(&pBtree->stagedCatalog, catHash, sizeof(ProllyHash));
+
   /* Persist the new working state */
   chunkStoreSetCatalog(cs, catHash);
   rc = chunkStoreCommit(cs);
@@ -3761,6 +3790,124 @@ void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     memcpy(&db->aDb[0].pBt->stagedCatalog, pStaged, sizeof(ProllyHash));
   }
+}
+
+/* Per-session merge state accessors */
+void doltliteGetSessionMergeState(sqlite3 *db, u8 *pIsMerging,
+                                   ProllyHash *pMergeCommit,
+                                   ProllyHash *pConflictsCatalog){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    if( pIsMerging ) *pIsMerging = p->isMerging;
+    if( pMergeCommit ) memcpy(pMergeCommit, &p->mergeCommitHash, sizeof(ProllyHash));
+    if( pConflictsCatalog ) memcpy(pConflictsCatalog, &p->conflictsCatalogHash, sizeof(ProllyHash));
+  }else{
+    if( pIsMerging ) *pIsMerging = 0;
+    if( pMergeCommit ) memset(pMergeCommit, 0, sizeof(ProllyHash));
+    if( pConflictsCatalog ) memset(pConflictsCatalog, 0, sizeof(ProllyHash));
+  }
+}
+
+void doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
+                                   const ProllyHash *pMergeCommit,
+                                   const ProllyHash *pConflictsCatalog){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    p->isMerging = isMerging;
+    if( pMergeCommit ) memcpy(&p->mergeCommitHash, pMergeCommit, sizeof(ProllyHash));
+    else memset(&p->mergeCommitHash, 0, sizeof(ProllyHash));
+    if( pConflictsCatalog ) memcpy(&p->conflictsCatalogHash, pConflictsCatalog, sizeof(ProllyHash));
+    else memset(&p->conflictsCatalogHash, 0, sizeof(ProllyHash));
+  }
+}
+
+void doltliteClearSessionMergeState(sqlite3 *db){
+  doltliteSetSessionMergeState(db, 0, 0, 0);
+}
+
+void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
+  doltliteGetSessionMergeState(db, 0, 0, pHash);
+}
+
+void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    memcpy(&db->aDb[0].pBt->conflictsCatalogHash, pHash, sizeof(ProllyHash));
+  }
+}
+
+/*
+** Save session working state to a per-branch WorkingSet chunk.
+** Format: version(1) + staged(20) + isMerging(1) + mergeCommit(20) + conflicts(20)
+*/
+int doltliteSaveWorkingSet(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  Btree *pBtree;
+  u8 buf[62];
+  ProllyHash wsHash;
+  const char *zBranch;
+  int rc;
+
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  if( !cs ) return SQLITE_ERROR;
+
+  zBranch = pBtree->zBranch ? pBtree->zBranch : "main";
+
+  buf[0] = 1;  /* WorkingSet version */
+  memcpy(buf + 1, pBtree->stagedCatalog.data, PROLLY_HASH_SIZE);
+  buf[21] = pBtree->isMerging;
+  memcpy(buf + 22, pBtree->mergeCommitHash.data, PROLLY_HASH_SIZE);
+  memcpy(buf + 42, pBtree->conflictsCatalogHash.data, PROLLY_HASH_SIZE);
+
+  rc = chunkStorePut(cs, buf, 62, &wsHash);
+  if( rc != SQLITE_OK ) return rc;
+
+  /* Store the WorkingSet hash in the branch ref */
+  return chunkStoreSetBranchWorkingSet(cs, zBranch, &wsHash);
+}
+
+/*
+** Load a branch's WorkingSet into the session state.
+*/
+int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  Btree *pBtree;
+  ProllyHash wsHash;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  if( !cs ) return SQLITE_ERROR;
+
+  rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
+  if( rc != SQLITE_OK || prollyHashIsEmpty(&wsHash) ){
+    /* No saved WorkingSet — clear to defaults */
+    memset(&pBtree->stagedCatalog, 0, sizeof(ProllyHash));
+    pBtree->isMerging = 0;
+    memset(&pBtree->mergeCommitHash, 0, sizeof(ProllyHash));
+    memset(&pBtree->conflictsCatalogHash, 0, sizeof(ProllyHash));
+    return SQLITE_OK;
+  }
+
+  rc = chunkStoreGet(cs, &wsHash, &data, &nData);
+  if( rc != SQLITE_OK || nData < 62 ){
+    sqlite3_free(data);
+    memset(&pBtree->stagedCatalog, 0, sizeof(ProllyHash));
+    pBtree->isMerging = 0;
+    memset(&pBtree->mergeCommitHash, 0, sizeof(ProllyHash));
+    memset(&pBtree->conflictsCatalogHash, 0, sizeof(ProllyHash));
+    return SQLITE_OK;
+  }
+
+  memcpy(pBtree->stagedCatalog.data, data + 1, PROLLY_HASH_SIZE);
+  pBtree->isMerging = data[21];
+  memcpy(pBtree->mergeCommitHash.data, data + 22, PROLLY_HASH_SIZE);
+  memcpy(pBtree->conflictsCatalogHash.data, data + 42, PROLLY_HASH_SIZE);
+
+  sqlite3_free(data);
+  return SQLITE_OK;
 }
 
 /* External registration for all dolt features */

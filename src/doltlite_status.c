@@ -156,7 +156,8 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   rc=doltliteGetHeadCatalogHash(db,&headCatHash);
   if(rc==SQLITE_OK) doltliteLoadCatalog(db,&headCatHash,&aHead,&nHead,0);
 
-  chunkStoreGetStagedCatalog(cs,&stagedCatHash);
+  {extern void doltliteGetSessionStaged(sqlite3*,ProllyHash*);
+   doltliteGetSessionStaged(db,&stagedCatHash);}
   if(!prollyHashIsEmpty(&stagedCatHash))
     doltliteLoadCatalog(db,&stagedCatHash,&aStaged,&nStaged,0);
 

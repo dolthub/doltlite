@@ -832,9 +832,10 @@ do_merge_entry:
         (ConflictTableInfo*)aConflictTables, nConflictTables,
         &conflictsHash);
     if( rc2==SQLITE_OK ){
-      ChunkStore *cs2 = doltliteGetChunkStore(db);
-      chunkStoreSetConflictsCatalog(cs2, &conflictsHash);
-      chunkStoreSetMergeState(cs2, 1, 0, &conflictsHash);
+      extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
+      extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
+      doltliteSetSessionConflictsCatalog(db, &conflictsHash);
+      doltliteSetSessionMergeState(db, 1, 0, &conflictsHash);
     }
   }
 

@@ -317,16 +317,18 @@ int doltliteSerializeConflicts(
 ** -------------------------------------------------------------------------- */
 
 static int loadAllConflicts(
+  sqlite3 *db,
   ChunkStore *cs,
   ConflictTableInfo **ppTables, int *pnTables
 ){
   ProllyHash hash;
   u8 *data = 0; int nData = 0;
+  extern void doltliteGetSessionConflictsCatalog(sqlite3*, ProllyHash*);
   const u8 *p;
   int nTables, i, j, rc;
   ConflictTableInfo *aTables;
 
-  chunkStoreGetConflictsCatalog(cs, &hash);
+  doltliteGetSessionConflictsCatalog(db, &hash);
   if( prollyHashIsEmpty(&hash) ){ *ppTables = 0; *pnTables = 0; return SQLITE_OK; }
 
   rc = chunkStoreGet(cs, &hash, &data, &nData);
@@ -406,6 +408,7 @@ static void freeConflictTables(ConflictTableInfo *aTables, int nTables){
 
 /* Re-serialize and store updated conflicts, clearing if empty. */
 static int storeUpdatedConflicts(
+  sqlite3 *db,
   ChunkStore *cs,
   ConflictTableInfo *aTables, int nTables
 ){
@@ -413,18 +416,23 @@ static int storeUpdatedConflicts(
   int i;
   for(i=0; i<nTables; i++) totalConflicts += aTables[i].nConflicts;
 
-  if( totalConflicts==0 ){
-    /* Clear conflict data but keep merge state — the merge is still
-    ** in progress until the user commits or aborts. */
-    chunkStoreSetConflictsCatalog(cs, &(ProllyHash){{0}});
-  }else{
-    ProllyHash newHash;
-    int rc = doltliteSerializeConflicts(cs, aTables, nTables, &newHash);
-    if( rc!=SQLITE_OK ) return rc;
-    chunkStoreSetConflictsCatalog(cs, &newHash);
-    chunkStoreSetMergeState(cs, 1, 0, &newHash);
+  {
+    extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
+    extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
+    extern int doltliteSaveWorkingSet(sqlite3*);
+    if( totalConflicts==0 ){
+      doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
+    }else{
+      ProllyHash newHash;
+      int rc = doltliteSerializeConflicts(cs, aTables, nTables, &newHash);
+      if( rc!=SQLITE_OK ) return rc;
+      doltliteSetSessionConflictsCatalog(db, &newHash);
+      doltliteSetSessionMergeState(db, 1, 0, &newHash);
+    }
+    doltliteSaveWorkingSet(db);
+    chunkStoreSerializeRefs(cs);
+    return chunkStoreCommit(cs);
   }
-  return chunkStoreCommit(cs);
 }
 
 /* --------------------------------------------------------------------------
@@ -463,7 +471,7 @@ static int cfFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqlit
   ConflictsVtab *vt=(ConflictsVtab*)cur->pVtab;
   (void)n;(void)s;(void)a;(void)v;
   c->iRow=0;
-  loadAllConflicts(doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
+  loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
   return SQLITE_OK;
 }
 static int cfNext(sqlite3_vtab_cursor *cur){ ((ConflictsCur*)cur)->iRow++; return SQLITE_OK; }
@@ -573,7 +581,7 @@ static int cfrFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqli
 
   c->iRow = 0;
   c->iTableIdx = -1;
-  loadAllConflicts(doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
+  loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
 
   /* Find our table */
   for(i=0; i<c->nTables; i++){
@@ -673,7 +681,7 @@ static int cfrUpdate(
   deleteRowid = sqlite3_value_int64(apArg[0]);
 
   /* Load all conflicts */
-  rc = loadAllConflicts(cs, &aTables, &nTables);
+  rc = loadAllConflicts(v->db, cs, &aTables, &nTables);
   if( rc!=SQLITE_OK ) return rc;
 
   /* Find the table and remove the matching conflict row */
@@ -708,7 +716,7 @@ static int cfrUpdate(
         }
 
         /* Re-serialize and store */
-        rc = storeUpdatedConflicts(cs, aTables, nTables);
+        rc = storeUpdatedConflicts(v->db, cs, aTables, nTables);
         freeConflictTables(aTables, nTables);
         return rc;
       }
@@ -750,7 +758,7 @@ void doltliteRegisterConflictTables(sqlite3 *db){
   int i;
 
   if( !cs ) return;
-  loadAllConflicts(cs, &aTables, &nTables);
+  loadAllConflicts(db, cs, &aTables, &nTables);
 
   for(i=0; i<nTables; i++){
     if( aTables[i].zName ){
@@ -785,7 +793,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   zTable = (const char*)sqlite3_value_text(argv[1]);
   if(!zMode||!zTable){ sqlite3_result_error(ctx,"invalid args",-1); return; }
 
-  rc = loadAllConflicts(cs, &aTables, &nTables);
+  rc = loadAllConflicts(db, cs, &aTables, &nTables);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(ctx, rc);
     return;
@@ -813,7 +821,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
         break;
       }
     }
-    storeUpdatedConflicts(cs, aTables, nTables);
+    storeUpdatedConflicts(db, cs, aTables, nTables);
     freeConflictTables(aTables, nTables);
     sqlite3_result_int(ctx, 0);
 
@@ -861,7 +869,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
       nTables--;
       break;
     }
-    storeUpdatedConflicts(cs, aTables, nTables);
+    storeUpdatedConflicts(db, cs, aTables, nTables);
     freeConflictTables(aTables, nTables);
     sqlite3_result_int(ctx, 0);
 
