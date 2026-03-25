@@ -20,191 +20,10 @@
 ** Compare two keys according to the node flags.
 **
 ** For INTKEY tables: compare the 64-bit integer keys.
-** For BLOBKEY tables: memcmp on the shorter length, then compare lengths.
+** For BLOBKEY tables: keys are sort keys — memcmp gives correct order.
 **
 ** Returns negative if key1 < key2, zero if equal, positive if key1 > key2.
 */
-/*
-** Compare two SQLite serialized record keys using sqlite3VdbeRecordCompare.
-** This is necessary because raw memcmp does NOT produce the correct sort
-** order for SQLite record format (serial type encodings in the header
-** cause byte-order divergence from logical key order).
-**
-** We allocate a temporary KeyInfo with BINARY collation, unpack pKey2
-** into an UnpackedRecord, and compare pKey1 against it.
-*/
-/*
-** Compare two serialized SQLite record keys by parsing the record
-** headers and comparing field by field. This avoids needing KeyInfo
-** or the full VdbeRecordCompare machinery.
-**
-** Returns <0, 0, >0 like strcmp.
-*/
-int compareBlobKeys(const u8 *pKey1, int nKey1,
-                    const u8 *pKey2, int nKey2){
-  u32 hdr1, hdr2;
-  u32 off1, off2;  /* Offset within header */
-  u32 d1, d2;      /* Offset within data */
-
-  if( nKey1==0 && nKey2==0 ) return 0;
-  if( nKey1==0 ) return -1;
-  if( nKey2==0 ) return 1;
-
-  /* Parse header sizes */
-  off1 = getVarint32(pKey1, hdr1);
-  off2 = getVarint32(pKey2, hdr2);
-  if( hdr1 > (u32)nKey1 || hdr2 > (u32)nKey2 ){
-    /* Malformed header — fall back to raw comparison */
-    if( nKey1<nKey2 ) return -1;
-    if( nKey1>nKey2 ) return 1;
-    return memcmp(pKey1, pKey2, nKey1);
-  }
-  d1 = hdr1;
-  d2 = hdr2;
-
-  /* Compare fields one by one */
-  while( off1 < hdr1 && off2 < hdr2 ){
-    u32 type1, type2;
-    u32 len1, len2;
-
-    off1 += getVarint32(pKey1+off1, type1);
-    off2 += getVarint32(pKey2+off2, type2);
-
-    /* Compute field lengths from serial types */
-    if( type1<=6 ){
-      /* Integer types: 0=NULL(0 bytes), 1=1byte, 2=2bytes, 3=3bytes, 4=4bytes, 5=6bytes, 6=8bytes */
-      static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8};
-      len1 = aLen[type1];
-    }else if( type1==7 ){
-      len1 = 8; /* float */
-    }else if( type1>=12 ){
-      len1 = (type1-12)/2;
-    }else{
-      len1 = 0; /* types 8,9,10,11 = constants */
-    }
-
-    if( type2<=6 ){
-      static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8};
-      len2 = aLen[type2];
-    }else if( type2==7 ){
-      len2 = 8;
-    }else if( type2>=12 ){
-      len2 = (type2-12)/2;
-    }else{
-      len2 = 0;
-    }
-
-    /* Bounds check: ensure field data doesn't exceed key buffer */
-    if( d1+len1 > (u32)nKey1 || d2+len2 > (u32)nKey2 ){
-      /* Malformed key — fall back to raw length comparison */
-      if( nKey1<nKey2 ) return -1;
-      if( nKey1>nKey2 ) return 1;
-      return 0;
-    }
-
-    /* NULL handling: NULL sorts before everything */
-    if( type1==0 && type2==0 ){ d1+=len1; d2+=len2; continue; }
-    if( type1==0 ) return -1;
-    if( type2==0 ) return 1;
-
-    /* Integer types (1-6, 8, 9) */
-    if( (type1>=1 && type1<=6) || type1==8 || type1==9 ){
-      i64 v1, v2;
-      if( type1==8 ) v1 = 0;
-      else if( type1==9 ) v1 = 1;
-      else{
-        v1 = (pKey1[d1] & 0x80) ? -1 : 0;
-        for(u32 i=0; i<len1; i++) v1 = (v1<<8) | pKey1[d1+i];
-      }
-
-      /* type2 might be different type; compare by type class */
-      if( (type2>=1 && type2<=6) || type2==8 || type2==9 ){
-        if( type2==8 ) v2 = 0;
-        else if( type2==9 ) v2 = 1;
-        else{
-          v2 = (pKey2[d2] & 0x80) ? -1 : 0;
-          for(u32 i=0; i<len2; i++) v2 = (v2<<8) | pKey2[d2+i];
-        }
-        if( v1<v2 ){ return -1; }
-        if( v1>v2 ){ return 1; }
-      }else if( type2==7 ){
-        /* Integer vs float: promote to float */
-        return -1; /* integers sort before floats with same value; simplified */
-      }else{
-        /* Integer vs text/blob: integer sorts first */
-        return -1;
-      }
-      d1 += len1; d2 += len2;
-      continue;
-    }
-
-    /* Float (type 7) */
-    if( type1==7 ){
-      if( type2==7 ){
-        /* Compare 8-byte big-endian floats */
-        int c = memcmp(pKey1+d1, pKey2+d2, 8);
-        if( c!=0 ) return c;
-      }else if( (type2>=1 && type2<=6) || type2==8 || type2==9 ){
-        return 1; /* float after integer */
-      }else{
-        return -1; /* float before text/blob */
-      }
-      d1 += len1; d2 += len2;
-      continue;
-    }
-
-    /* Text types (odd serial type >= 13) */
-    if( type1>=13 && (type1&1) ){
-      if( type2>=13 && (type2&1) ){
-        /* Both text: compare as strings (BINARY collation) */
-        u32 n = len1 < len2 ? len1 : len2;
-        int c = memcmp(pKey1+d1, pKey2+d2, n);
-        if( c!=0 ) return c;
-        if( len1<len2 ) return -1;
-        if( len1>len2 ) return 1;
-      }else if( type2>=12 && !(type2&1) ){
-        /* Text vs blob: text sorts before blob */
-        return -1;
-      }else{
-        /* Text vs numeric: text sorts after numeric */
-        return 1;
-      }
-      d1 += len1; d2 += len2;
-      continue;
-    }
-
-    /* Blob types (even serial type >= 12) */
-    if( type1>=12 && !(type1&1) ){
-      if( type2>=12 && !(type2&1) ){
-        u32 n = len1 < len2 ? len1 : len2;
-        int c = memcmp(pKey1+d1, pKey2+d2, n);
-        if( c!=0 ) return c;
-        if( len1<len2 ) return -1;
-        if( len1>len2 ) return 1;
-      }else{
-        return 1; /* blob sorts last */
-      }
-      d1 += len1; d2 += len2;
-      continue;
-    }
-
-    /* Fallback: compare raw bytes */
-    {
-      u32 n = len1 < len2 ? len1 : len2;
-      int c = memcmp(pKey1+d1, pKey2+d2, n);
-      if( c!=0 ) return c;
-      if( len1<len2 ) return -1;
-      if( len1>len2 ) return 1;
-    }
-    d1 += len1; d2 += len2;
-  }
-
-  /* All compared fields are equal. Compare by number of remaining fields. */
-  if( off1 < hdr1 ) return 1;  /* key1 has more fields */
-  if( off2 < hdr2 ) return -1; /* key2 has more fields */
-  return 0;
-}
-
 static int compareKeys(
   u8 flags,
   const u8 *pKey1, int nKey1, i64 iKey1,
@@ -215,7 +34,13 @@ static int compareKeys(
     if( iKey1 > iKey2 ) return +1;
     return 0;
   }else{
-    return compareBlobKeys(pKey1, nKey1, pKey2, nKey2);
+    /* BLOBKEY: sort key encoding — memcmp is correct */
+    int n = nKey1 < nKey2 ? nKey1 : nKey2;
+    int c = memcmp(pKey1, pKey2, n);
+    if( c != 0 ) return c;
+    if( nKey1 < nKey2 ) return -1;
+    if( nKey1 > nKey2 ) return 1;
+    return 0;
   }
 }
 
@@ -979,16 +804,14 @@ int prollyMutateFlush(ProllyMutator *pMut){
       sqlite3_free(pRootData);
     }
 
-    /* Threshold: use mergeWalk when edits exceed ~25% of estimated tree size.
-    ** For BLOBKEY trees (indexes), use a lower threshold because blob key
-    ** comparison in applyEdits is much more expensive per seek. */
+    /* Threshold: use mergeWalk when edits exceed ~50% of estimated tree size.
+    ** With sort key encoding, BLOBKEY comparison is memcmp (same cost as
+    ** INTKEY), so both table types use the same threshold. */
     int threshold;
     if( N <= 0 ){
       threshold = 1000;  /* Fallback if estimation fails */
-    }else if( pMut->flags & PROLLY_NODE_INTKEY ){
-      threshold = N / 2;
     }else{
-      threshold = N / 4;  /* BLOBKEY: more aggressive fallback */
+      threshold = N / 2;
     }
 
     if( M > threshold ){

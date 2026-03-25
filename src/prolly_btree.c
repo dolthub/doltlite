@@ -50,6 +50,7 @@
 #include "prolly_mutate.h"
 #include "pager_shim.h"
 #include "doltlite_commit.h"
+#include "sortkey.h"
 #include "vdbeInt.h"
 
 #include <string.h>
@@ -2102,9 +2103,8 @@ int sqlite3BtreeTableMoveto(
 }
 
 /*
-** Serialize an UnpackedRecord to a blob for use with compareBlobKeys-based
-** tree navigation. Produces a standard SQLite record: varint header size,
-** varint serial types, then field data.
+** Serialize an UnpackedRecord to a SQLite record blob, then convert
+** to sort key for prolly tree navigation.
 */
 /*
 ** Compute the serial type for a Mem value (same logic as sqlite3VdbeSerialType).
@@ -2139,8 +2139,7 @@ static u32 btreeSerialType(Mem *pMem, u32 *pLen){
 }
 
 /*
-** Serialize an UnpackedRecord to a blob for use with compareBlobKeys-based
-** tree navigation. Produces a standard SQLite record.
+** Serialize an UnpackedRecord to a standard SQLite record blob.
 */
 static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut){
   int nField = pRec->nField;
@@ -2246,8 +2245,8 @@ int sqlite3BtreeIndexMoveto(
 
   /*
   ** Parallel seek: O(log N) tree seek + O(log M) MutMap seek.
-  ** Both the tree and MutMap are sorted by compareBlobKeys.
-  ** Serialize the search key, seek both, pick the best match.
+  ** Both the tree and MutMap are sorted by sort key.
+  ** Compute sort key from search key, seek both, pick the best match.
   ** Verify with VdbeRecordCompare for eqSeen/default_rc correctness.
   */
   {
@@ -2256,50 +2255,65 @@ int sqlite3BtreeIndexMoveto(
     const u8 *mutKey = 0;
     int mutNKey = 0;
 
-    /* Serialize the UnpackedRecord to a blob */
+    /* Serialize the UnpackedRecord to a blob, then compute sort key */
     u8 *pSerKey = 0;
     int nSerKey = 0;
+    u8 *pSortKey = 0;
+    int nSortKey = 0;
     rc = serializeUnpackedRecord(pIdxKey, &pSerKey, &nSerKey);
     if( rc!=SQLITE_OK ) return rc;
+    rc = sortKeyFromRecord(pSerKey, nSerKey, &pSortKey, &nSortKey);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pSerKey);
+      return rc;
+    }
 
-    /* ---- Tree seek: O(log N) ---- */
-    rc = prollyCursorSeekBlob(&pCur->pCur, pSerKey, nSerKey, &res);
+    /* ---- Tree seek: O(log N) using sort key ---- */
+    rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &res);
     if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       const u8 *pKey; int nKey;
 
       /* Correction: scan backward then forward for VdbeRecordCompare match.
-      ** Skip entries deleted in MutMap. Limited to a few steps. */
-      while( 1 ){
-        prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-        pIdxKey->eqSeen = 0;
-        cmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
-        if( cmp >= 0 || pIdxKey->eqSeen ) break;
-        rc = prollyCursorPrev(&pCur->pCur);
-        if( rc!=SQLITE_OK || pCur->pCur.eState!=PROLLY_CURSOR_VALID ){
-          rc = prollyCursorFirst(&pCur->pCur, &(int){0});
-          break;
-        }
-      }
-      /* Forward scan: skip deleted entries, find first cmp >= 0 */
-      while( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-        prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-        if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-          ProllyMutMapEntry *mmE = prollyMutMapFind(
-              pCur->pMutMap, pKey, nKey, 0);
-          if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
-            rc = prollyCursorNext(&pCur->pCur);
-            if( rc!=SQLITE_OK ) break;
-            continue;
+      ** Skip entries deleted in MutMap. Limited to a few steps.
+      ** BLOBKEY: key = sort key, value = original SQLite record.
+      ** VdbeRecordCompare needs original record; MutMap lookup uses sort key. */
+      {
+        const u8 *pVal; int nVal;
+        const u8 *pSK; int nSK;
+
+        while( 1 ){
+          prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+          pIdxKey->eqSeen = 0;
+          cmp = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
+          if( cmp >= 0 || pIdxKey->eqSeen ) break;
+          rc = prollyCursorPrev(&pCur->pCur);
+          if( rc!=SQLITE_OK || pCur->pCur.eState!=PROLLY_CURSOR_VALID ){
+            rc = prollyCursorFirst(&pCur->pCur, &(int){0});
+            break;
           }
         }
-        pIdxKey->eqSeen = 0;
-        treeCmp = sqlite3VdbeRecordCompare(nKey, pKey, pIdxKey);
-        if( treeCmp==0 || pIdxKey->eqSeen || treeCmp>0 ){
-          treeFound = 1;
-          break;
+        /* Forward scan: skip deleted entries, find first cmp >= 0 */
+        while( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+          prollyCursorKey(&pCur->pCur, &pSK, &nSK);
+          if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+            ProllyMutMapEntry *mmE = prollyMutMapFind(
+                pCur->pMutMap, pSK, nSK, 0);
+            if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+              rc = prollyCursorNext(&pCur->pCur);
+              if( rc!=SQLITE_OK ) break;
+              continue;
+            }
+          }
+          prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+          pIdxKey->eqSeen = 0;
+          treeCmp = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
+          if( treeCmp==0 || pIdxKey->eqSeen || treeCmp>0 ){
+            treeFound = 1;
+            break;
+          }
+          rc = prollyCursorNext(&pCur->pCur);
+          if( rc!=SQLITE_OK ) break;
         }
-        rc = prollyCursorNext(&pCur->pCur);
-        if( rc!=SQLITE_OK ) break;
       }
     }
 
@@ -2307,24 +2321,26 @@ int sqlite3BtreeIndexMoveto(
     /* Only if tree didn't find exact match */
     if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap)
      && !(treeFound && treeCmp==0) ){
-      /* Use compareBlobKeys-based lookup for exact match */
+      /* Use sort key for exact match lookup in MutMap */
       ProllyMutMapEntry *mutE = prollyMutMapFind(
-          pCur->pMutMap, pSerKey, nSerKey, 0);
+          pCur->pMutMap, pSortKey, nSortKey, 0);
       if( mutE && mutE->op==PROLLY_EDIT_INSERT ){
+        /* MutMap value = original SQLite record */
         pIdxKey->eqSeen = 0;
-        mutCmp = sqlite3VdbeRecordCompare(mutE->nKey, mutE->pKey, pIdxKey);
+        mutCmp = sqlite3VdbeRecordCompare(mutE->nVal, mutE->pVal, pIdxKey);
         if( mutCmp==0 || pIdxKey->eqSeen ){
-          mutKey = mutE->pKey;
-          mutNKey = mutE->nKey;
+          mutKey = mutE->pVal;
+          mutNKey = mutE->nVal;
           mutFound = 1;
         }
       }
     }
     sqlite3_free(pSerKey);
+    sqlite3_free(pSortKey);
 
     /* ---- Pick best result ---- */
     if( mutFound && (!treeFound || treeCmp!=0) ){
-      /* MutMap has exact match — use it */
+      /* MutMap has exact match — cache original SQLite record as payload */
       if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
         sqlite3_free(pCur->pCachedPayload);
       }
@@ -2396,7 +2412,9 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   if( pCur->curIntKey ){
     prollyCursorValue(&pCur->pCur, ppData, pnData);
   }else{
-    prollyCursorKey(&pCur->pCur, ppData, pnData);
+    /* BLOBKEY: sort key stored as prolly key, original SQLite record
+    ** stored as prolly value. Return the value directly. */
+    prollyCursorValue(&pCur->pCur, ppData, pnData);
   }
 }
 
@@ -2503,10 +2521,20 @@ int sqlite3BtreeInsert(
                              pData, nData);
     sqlite3_free(pBuf);
   } else {
-    rc = prollyMutMapInsert(pCur->pMutMap,
-                             (const u8*)pPayload->pKey,
-                             (int)pPayload->nKey,
-                             0, NULL, 0);
+    /* BLOBKEY (index): compute sort key for memcmp-sortable ordering.
+    ** Store sort key as prolly key, original SQLite record as value. */
+    u8 *pSortKey = 0;
+    int nSortKey = 0;
+    rc = sortKeyFromRecord((const u8*)pPayload->pKey,
+                           (int)pPayload->nKey,
+                           &pSortKey, &nSortKey);
+    if( rc==SQLITE_OK ){
+      rc = prollyMutMapInsert(pCur->pMutMap,
+                               pSortKey, nSortKey, 0,
+                               (const u8*)pPayload->pKey,
+                               (int)pPayload->nKey);
+      sqlite3_free(pSortKey);
+    }
   }
 
   if( rc!=SQLITE_OK ) return rc;
@@ -2773,17 +2801,27 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
     }
     rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, intKey);
   } else {
+    /* BLOBKEY delete: need the sort key for MutMap lookup.
+    ** Cached payload is a decoded SQLite record — recompute sort key.
+    ** If no cache, cursor key IS the sort key. */
     const u8 *pKey;
     int nKey;
-    /* Use cached payload if cursor is positioned on a MutMap entry
-    ** (set by IndexMoveto when the match came from the MutMap). */
+    u8 *pDelSortKey = 0;
+    int nDelSortKey = 0;
+
     if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
-      pKey = pCur->pCachedPayload;
-      nKey = pCur->nCachedPayload;
+      /* Cached payload is decoded SQLite record — compute sort key */
+      rc = sortKeyFromRecord(pCur->pCachedPayload, pCur->nCachedPayload,
+                             &pDelSortKey, &nDelSortKey);
+      if( rc!=SQLITE_OK ) return rc;
+      pKey = pDelSortKey;
+      nKey = nDelSortKey;
     } else {
+      /* Cursor key is the sort key */
       prollyCursorKey(&pCur->pCur, &pKey, &nKey);
     }
     rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
+    sqlite3_free(pDelSortKey);
   }
 
   if( rc!=SQLITE_OK ) return rc;

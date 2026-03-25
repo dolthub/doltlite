@@ -187,16 +187,11 @@ int prollyNodeSearchBlob(
     mid = lo + (hi - lo) / 2;
     prollyNodeKey(pNode, mid, &pMidKey, &nMidKey);
 
-    /* Use SQLite record comparison for BLOBKEY nodes to get correct
-    ** sort order (raw memcmp fails due to serial type encoding) */
-    if( pNode->flags & PROLLY_NODE_BLOBKEY ){
-      extern int compareBlobKeys(const u8*, int, const u8*, int);
-      c = compareBlobKeys(pKey, nKey, pMidKey, nMidKey);
-    }else{
-      nCmp = nMidKey < nKey ? nMidKey : nKey;
-      c = memcmp(pKey, pMidKey, nCmp);
-      if( c==0 ) c = nKey - nMidKey;
-    }
+    /* BLOBKEY nodes store sort keys — memcmp gives correct order.
+    ** INTKEY fallback also uses memcmp on LE-encoded keys. */
+    nCmp = nMidKey < nKey ? nMidKey : nKey;
+    c = memcmp(pKey, pMidKey, nCmp);
+    if( c==0 ) c = nKey - nMidKey;
 
     if( c==0 ){
       *pRes = 0;

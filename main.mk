@@ -563,7 +563,7 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
 #
 PROLLY_OBJS = prolly_hash.o prolly_arena.o prolly_node.o prolly_cache.o \
               chunk_store.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
-              prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_btree.o pager_shim.o \
+              prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_log.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_record.o
@@ -727,7 +727,9 @@ SRC += \
   $(TOP)/src/prolly_three_way_diff.h \
   $(TOP)/src/prolly_btree.c \
   $(TOP)/src/pager_shim.c \
-  $(TOP)/src/pager_shim.h
+  $(TOP)/src/pager_shim.h \
+  $(TOP)/src/sortkey.c \
+  $(TOP)/src/sortkey.h
 
 # Source code for extensions
 #
@@ -966,7 +968,8 @@ HDR += \
    $(TOP)/src/prolly_mutate.h \
    $(TOP)/src/prolly_diff.h \
    $(TOP)/src/prolly_three_way_diff.h \
-   $(TOP)/src/pager_shim.h
+   $(TOP)/src/pager_shim.h \
+   $(TOP)/src/sortkey.h
 # Reminder: sqlite_cfg.h is typically created by the configure script
 
 # Header files used by extensions
@@ -1297,6 +1300,9 @@ prolly_btree.o:	$(TOP)/src/prolly_btree.c $(DEPS_OBJ_COMMON)
 
 pager_shim.o:	$(TOP)/src/pager_shim.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/pager_shim.c
+
+sortkey.o:	$(TOP)/src/sortkey.c $(TOP)/src/sortkey.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/sortkey.c
 
 doltlite.o:	$(TOP)/src/doltlite.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite.c

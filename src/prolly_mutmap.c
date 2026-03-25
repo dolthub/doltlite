@@ -30,7 +30,6 @@ static int randomLevel(ProllyMutMap *mm){
 **
 ** Returns negative if a < b, zero if a == b, positive if a > b.
 */
-int compareBlobKeys(const u8 *pKey1, int nKey1, const u8 *pKey2, int nKey2);
 static int compareEntries(
   u8 isIntKey,
   const u8 *pKeyA, int nKeyA, i64 intKeyA,
@@ -41,10 +40,13 @@ static int compareEntries(
     if( intKeyA > intKeyB ) return 1;
     return 0;
   }else{
-    /* Use SQLite record comparison for BLOBKEY entries. Raw memcmp
-    ** produces incorrect sort order because the serial type encoding
-    ** in the record header doesn't sort the same way as field values. */
-    return compareBlobKeys(pKeyA, nKeyA, pKeyB, nKeyB);
+    /* BLOBKEY entries store sort keys — memcmp gives correct order. */
+    int n = nKeyA < nKeyB ? nKeyA : nKeyB;
+    int c = memcmp(pKeyA, pKeyB, n);
+    if( c != 0 ) return c;
+    if( nKeyA < nKeyB ) return -1;
+    if( nKeyA > nKeyB ) return 1;
+    return 0;
   }
 }
 
