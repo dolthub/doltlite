@@ -36,6 +36,7 @@
 #include "prolly_hash.h"
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/file.h>
@@ -109,6 +110,33 @@ static int csReplayWal(ChunkStore *cs){ return csReplayWalRegion(cs, 1); }
 /* Journal record tags */
 #define CS_WAL_TAG_CHUNK  0x01   /* Chunk record: tag(1)+hash(20)+len(4)+data */
 #define CS_WAL_TAG_ROOT   0x02   /* Root record: tag(1)+manifest(168) */
+
+/*
+** WAL offset encoding: file offsets are stored as-is (>= 0).
+** WAL-region offsets are stored as -(walPos) - 1 (always < 0).
+** This distinguishes file-resident chunks from WAL-resident chunks.
+*/
+static i64 csEncodeWalOffset(i64 walPos){ return -(walPos) - 1; }
+static i64 csDecodeWalOffset(i64 encoded){ return -(encoded + 1); }
+static int csIsWalOffset(i64 offset){ return offset < 0; }
+
+/*
+** Helper functions to free branch and tag arrays, used in multiple places.
+*/
+static void csFreeBranches(ChunkStore *cs){
+  int k;
+  for(k=0; k<cs->nBranches; k++) sqlite3_free(cs->aBranches[k].zName);
+  sqlite3_free(cs->aBranches);
+  cs->aBranches = 0;
+  cs->nBranches = 0;
+}
+static void csFreeTags(ChunkStore *cs){
+  int k;
+  for(k=0; k<cs->nTags; k++) sqlite3_free(cs->aTags[k].zName);
+  sqlite3_free(cs->aTags);
+  cs->aTags = 0;
+  cs->nTags = 0;
+}
 
 /* Initial allocation sizes */
 #define CS_INIT_INDEX_ALLOC   64
@@ -419,7 +447,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
       pos += 20;
       u32 len = CS_READ_U32(walData + pos);
       pos += 4;
-      if( pos + len > (u64)walSize ) break;
+      if( pos < 0 || (u64)pos + len > (u64)walSize ) break;
 
       {
         int existing = csSearchIndex(cs->aIndex, cs->nIndex, &hash);
@@ -432,7 +460,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
           }
           ChunkIndexEntry *e = &cs->aPending[cs->nPending];
           memcpy(&e->hash, &hash, sizeof(ProllyHash));
-          e->offset = -(i64)pos - 1;  /* negative = WAL region offset */
+          e->offset = csEncodeWalOffset((i64)pos);
           e->size = (int)len;
           cs->nPending++;
         }
@@ -483,12 +511,8 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     u8 *refsData = 0; int nRefsData = 0;
     int rc2 = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
     if( rc2==SQLITE_OK && refsData ){
-      { int k; for(k=0; k<cs->nBranches; k++) sqlite3_free(cs->aBranches[k].zName); }
-      sqlite3_free(cs->aBranches);
-      cs->aBranches = 0; cs->nBranches = 0;
-      { int k; for(k=0; k<cs->nTags; k++) sqlite3_free(cs->aTags[k].zName); }
-      sqlite3_free(cs->aTags);
-      cs->aTags = 0; cs->nTags = 0;
+      csFreeBranches(cs);
+      csFreeTags(cs);
       csDeserializeRefs(cs, refsData, nRefsData);
       sqlite3_free(refsData);
     }
@@ -711,10 +735,8 @@ int chunkStoreClose(ChunkStore *cs){
   sqlite3_free(cs->aPending);
   sqlite3_free(cs->pWriteBuf);
   sqlite3_free(cs->zDefaultBranch);
-  { int i; for(i=0; i<cs->nBranches; i++) sqlite3_free(cs->aBranches[i].zName); }
-  sqlite3_free(cs->aBranches);
-  { int i; for(i=0; i<cs->nTags; i++) sqlite3_free(cs->aTags[i].zName); }
-  sqlite3_free(cs->aTags);
+  csFreeBranches(cs);
+  csFreeTags(cs);
   memset(cs, 0, sizeof(*cs));
   return SQLITE_OK;
 }
@@ -895,8 +917,20 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
   u8 *buf, *p;
   ProllyHash refsHash;
 
-  for(i=0; i<cs->nBranches; i++) sz += 2 + (int)strlen(cs->aBranches[i].zName) + PROLLY_HASH_SIZE*2;
-  for(i=0; i<cs->nTags; i++) sz += 2 + (int)strlen(cs->aTags[i].zName) + PROLLY_HASH_SIZE;
+  for(i=0; i<cs->nBranches; i++){
+    int inc = 2 + (int)strlen(cs->aBranches[i].zName) + PROLLY_HASH_SIZE*2;
+    if( sz > INT_MAX - inc ){
+      return SQLITE_TOOBIG;
+    }
+    sz += inc;
+  }
+  for(i=0; i<cs->nTags; i++){
+    int inc = 2 + (int)strlen(cs->aTags[i].zName) + PROLLY_HASH_SIZE;
+    if( sz > INT_MAX - inc ){
+      return SQLITE_TOOBIG;
+    }
+    sz += inc;
+  }
   buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
   p = buf;
@@ -940,8 +974,7 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   if(!cs->zDefaultBranch) return SQLITE_NOMEM;
   memcpy(cs->zDefaultBranch, p, defLen); cs->zDefaultBranch[defLen]=0; p+=defLen;
   nBranches = p[0]|(p[1]<<8); p+=2;
-  for(i=0;i<cs->nBranches;i++) sqlite3_free(cs->aBranches[i].zName);
-  sqlite3_free(cs->aBranches); cs->aBranches=0; cs->nBranches=0;
+  csFreeBranches(cs);
   if( nBranches>0 ){
     cs->aBranches = sqlite3_malloc(nBranches*(int)sizeof(struct BranchRef));
     if(!cs->aBranches) return SQLITE_NOMEM;
@@ -962,8 +995,7 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   }
 
   /* Tags (version 2+) */
-  for(i=0;i<cs->nTags;i++) sqlite3_free(cs->aTags[i].zName);
-  sqlite3_free(cs->aTags); cs->aTags=0; cs->nTags=0;
+  csFreeTags(cs);
   if( version>=2 && p+2<=data+nData ){
     nTags = p[0]|(p[1]<<8); p+=2;
     if( nTags>0 ){
@@ -1043,8 +1075,8 @@ int chunkStoreGet(
   /* WAL chunk: negative offset means data is in pWalData */
   {
     ChunkIndexEntry *e = &cs->aIndex[idx];
-    if( e->offset < 0 && cs->pWalData ){
-      i64 walOff = -(e->offset + 1);  /* decode: offset = -(walPos) - 1 */
+    if( csIsWalOffset(e->offset) && cs->pWalData ){
+      i64 walOff = csDecodeWalOffset(e->offset);
       int sz = e->size;
       if( walOff >= 0 && walOff + sz <= cs->nWalData ){
         u8 *pCopy = (u8 *)sqlite3_malloc(sz);
@@ -1236,7 +1268,10 @@ int chunkStoreCommit(ChunkStore *cs){
         cs->iWalOffset = CHUNK_MANIFEST_SIZE;
         csSerializeManifest(cs, manifest);
         lseek(fd, 0, SEEK_SET);
-        write(fd, manifest, CHUNK_MANIFEST_SIZE);
+        if( write(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
+          close(fd);
+          return SQLITE_IOERR_WRITE;
+        }
       }
     }
 
@@ -1281,11 +1316,17 @@ int chunkStoreCommit(ChunkStore *cs){
       u8 manifest[CHUNK_MANIFEST_SIZE];
       csSerializeManifest(cs, manifest);
       lseek(fd, 0, SEEK_SET);
-      write(fd, manifest, CHUNK_MANIFEST_SIZE);
+      if( write(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
+        close(fd);
+        return SQLITE_IOERR_WRITE;
+      }
     }
 
     /* fsync — durability point */
-    fsync(fd);
+    if( fsync(fd)!=0 ){
+      close(fd);
+      return SQLITE_IOERR_FSYNC;
+    }
 
     /* Track file size */
     {
@@ -1312,7 +1353,7 @@ int chunkStoreCommit(ChunkStore *cs){
     u8 *newBuf = (u8*)sqlite3_realloc64(cs->pWalData, newSize);
     if( newBuf ){
       memcpy(newBuf + cs->nWalData, cs->pWriteBuf + bufOff, sz);
-      pe->offset = -(i64)cs->nWalData - 1;
+      pe->offset = csEncodeWalOffset(cs->nWalData);
       cs->pWalData = newBuf;
       cs->nWalData = newSize;
     } else {
@@ -1436,12 +1477,8 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   cs->aIndex = 0; cs->nIndex = 0; cs->nIndexAlloc = 0;
   sqlite3_free(cs->pWalData);
   cs->pWalData = 0; cs->nWalData = 0;
-  { int i; for(i=0;i<cs->nBranches;i++) sqlite3_free(cs->aBranches[i].zName); }
-  sqlite3_free(cs->aBranches);
-  cs->aBranches = 0; cs->nBranches = 0;
-  { int i; for(i=0;i<cs->nTags;i++) sqlite3_free(cs->aTags[i].zName); }
-  sqlite3_free(cs->aTags);
-  cs->aTags = 0; cs->nTags = 0;
+  csFreeBranches(cs);
+  csFreeTags(cs);
   sqlite3_free(cs->zDefaultBranch);
   cs->zDefaultBranch = 0;
   {
