@@ -17,6 +17,28 @@
 #include <string.h>
 
 /*
+** Encode a 64-bit integer as 8 bytes in little-endian format.
+** Used to convert INTKEY values into a sortable byte representation
+** for the chunker and node builder.
+*/
+static void encodeI64LE(u8 *buf, i64 v){
+  buf[0] = (u8)(v);
+  buf[1] = (u8)(v >> 8);
+  buf[2] = (u8)(v >> 16);
+  buf[3] = (u8)(v >> 24);
+  buf[4] = (u8)(v >> 32);
+  buf[5] = (u8)(v >> 40);
+  buf[6] = (u8)(v >> 48);
+  buf[7] = (u8)(v >> 56);
+}
+
+/*
+** Estimated entries per leaf node, used for tree size estimation
+** in the merge-vs-apply heuristic.
+*/
+#define PROLLY_EST_ENTRIES_PER_LEAF 50
+
+/*
 ** Compare two keys according to the node flags.
 **
 ** For INTKEY tables: compare the 64-bit integer keys.
@@ -34,7 +56,6 @@ static int compareKeys(
     if( iKey1 > iKey2 ) return +1;
     return 0;
   }else{
-    /* BLOBKEY: sort key encoding — memcmp is correct */
     int n = nKey1 < nKey2 ? nKey1 : nKey2;
     int c = memcmp(pKey1, pKey2, n);
     if( c != 0 ) return c;
@@ -61,14 +82,7 @@ static int feedChunker(
   if( flags & PROLLY_NODE_INTKEY ){
     /* Encode integer key as 8-byte little-endian for the chunker. */
     u8 aKeyBuf[8];
-    aKeyBuf[0] = (u8)(intKey);
-    aKeyBuf[1] = (u8)(intKey >> 8);
-    aKeyBuf[2] = (u8)(intKey >> 16);
-    aKeyBuf[3] = (u8)(intKey >> 24);
-    aKeyBuf[4] = (u8)(intKey >> 32);
-    aKeyBuf[5] = (u8)(intKey >> 40);
-    aKeyBuf[6] = (u8)(intKey >> 48);
-    aKeyBuf[7] = (u8)(intKey >> 56);
+    encodeI64LE(aKeyBuf, intKey);
     return prollyChunkerAdd(pCh, aKeyBuf, 8, pVal, nVal);
   }else{
     return prollyChunkerAdd(pCh, pKey, nKey, pVal, nVal);
@@ -134,6 +148,7 @@ static int mergeWalk(
   int curValid;
   int iterValid;
 
+  /* prollyCursorInit returns void — it just sets fields, cannot fail. */
   prollyCursorInit(&cur, pMut->pStore, pMut->pCache,
                    &pMut->oldRoot, pMut->flags);
   rc = prollyCursorFirst(&cur, &curEmpty);
@@ -296,10 +311,7 @@ static void getNodeKey(
 ){
   if( flags & PROLLY_NODE_INTKEY ){
     i64 ik = prollyNodeIntKey(pNode, idx);
-    aKeyBuf[0] = (u8)(ik);      aKeyBuf[1] = (u8)(ik >> 8);
-    aKeyBuf[2] = (u8)(ik >> 16); aKeyBuf[3] = (u8)(ik >> 24);
-    aKeyBuf[4] = (u8)(ik >> 32); aKeyBuf[5] = (u8)(ik >> 40);
-    aKeyBuf[6] = (u8)(ik >> 48); aKeyBuf[7] = (u8)(ik >> 56);
+    encodeI64LE(aKeyBuf, ik);
     *ppKey = aKeyBuf;
     *pnKey = 8;
   }else{
@@ -343,7 +355,8 @@ static int applyEdits(
   while( prollyMutMapIterValid(&iter) ){
     ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&iter);
 
-    /* Step 1: Seek cursor to edit key */
+    /* --- Phase 1: Seek to edit position --- */
+    /* prollyCursorInit returns void — it just sets fields, cannot fail. */
     prollyCursorInit(&cur, pMut->pStore, pMut->pCache,
                      &currentRoot, pMut->flags);
     if( pMut->flags & PROLLY_NODE_INTKEY ){
@@ -359,7 +372,7 @@ static int applyEdits(
     int leafLevel = cur.nLevel - 1;
     ProllyNode *pLeaf = &cur.aLevel[leafLevel].pEntry->node;
 
-    /* Step 2: Clone leaf into builder, apply all edits for this leaf */
+    /* --- Phase 2: Rebuild leaf with edits applied --- */
     ProllyNodeBuilder leafBuilder;
     prollyNodeBuilderInit(&leafBuilder, 0, pMut->flags);
 
@@ -447,16 +460,8 @@ static int applyEdits(
             /* Insert new entry before old */
             if( pE->op==PROLLY_EDIT_INSERT ){
               u8 aEK[8];
-              const u8 *pEK; int nEK;
               if( pMut->flags & PROLLY_NODE_INTKEY ){
-                aEK[0] = (u8)(pE->intKey);
-                aEK[1] = (u8)(pE->intKey >> 8);
-                aEK[2] = (u8)(pE->intKey >> 16);
-                aEK[3] = (u8)(pE->intKey >> 24);
-                aEK[4] = (u8)(pE->intKey >> 32);
-                aEK[5] = (u8)(pE->intKey >> 40);
-                aEK[6] = (u8)(pE->intKey >> 48);
-                aEK[7] = (u8)(pE->intKey >> 56);
+                encodeI64LE(aEK, pE->intKey);
                 rc = prollyNodeBuilderAdd(&leafBuilder, aEK, 8,
                                           pE->pVal, pE->nVal);
               }else{
@@ -502,14 +507,7 @@ static int applyEdits(
               u8 aEK[8];
               const u8 *pEK; int nEK;
               if( pMut->flags & PROLLY_NODE_INTKEY ){
-                aEK[0] = (u8)(pT->intKey);
-                aEK[1] = (u8)(pT->intKey >> 8);
-                aEK[2] = (u8)(pT->intKey >> 16);
-                aEK[3] = (u8)(pT->intKey >> 24);
-                aEK[4] = (u8)(pT->intKey >> 32);
-                aEK[5] = (u8)(pT->intKey >> 40);
-                aEK[6] = (u8)(pT->intKey >> 48);
-                aEK[7] = (u8)(pT->intKey >> 56);
+                encodeI64LE(aEK, pT->intKey);
                 pEK = aEK; nEK = 8;
               }else{
                 pEK = pT->pKey; nEK = pT->nKey;
@@ -540,14 +538,7 @@ static int applyEdits(
           u8 aEK[8];
           const u8 *pEK; int nEK;
           if( pMut->flags & PROLLY_NODE_INTKEY ){
-            aEK[0] = (u8)(pIterAfter->intKey);
-            aEK[1] = (u8)(pIterAfter->intKey >> 8);
-            aEK[2] = (u8)(pIterAfter->intKey >> 16);
-            aEK[3] = (u8)(pIterAfter->intKey >> 24);
-            aEK[4] = (u8)(pIterAfter->intKey >> 32);
-            aEK[5] = (u8)(pIterAfter->intKey >> 40);
-            aEK[6] = (u8)(pIterAfter->intKey >> 48);
-            aEK[7] = (u8)(pIterAfter->intKey >> 56);
+            encodeI64LE(aEK, pIterAfter->intKey);
             pEK = aEK; nEK = 8;
           }else{
             pEK = pIterAfter->pKey; nEK = pIterAfter->nKey;
@@ -560,10 +551,11 @@ static int applyEdits(
       }
     }
 
-    /* Step 3: Serialize the modified leaf with re-chunking if needed. */
+    /* --- Phase 3: Handle leaf splits --- */
     #define MAX_LEAF_SPLITS 64
     ProllyHash aLeafHash[MAX_LEAF_SPLITS];
-    u8 aLeafKeyBuf[MAX_LEAF_SPLITS][256];
+    u8 (*aLeafKeyBuf)[256] = (u8(*)[256])sqlite3_malloc(MAX_LEAF_SPLITS * 256);
+    if( !aLeafKeyBuf ){ rc = SQLITE_NOMEM; goto leaf_err; }
     int aLeafKeyLen[MAX_LEAF_SPLITS];
     int nLeafSplits = 0;
     ProllyHash newHash;
@@ -622,8 +614,10 @@ static int applyEdits(
                                   &aLeafHash[nLeafSplits]);
               if( rc!=SQLITE_OK ) break;
               /* Save last key for parent */
-              if( kLen > (int)sizeof(aLeafKeyBuf[0]) )
-                kLen = (int)sizeof(aLeafKeyBuf[0]);
+              if( kLen > (int)sizeof(aLeafKeyBuf[0]) ){
+                rc = SQLITE_TOOBIG;
+                break;
+              }
               memcpy(aLeafKeyBuf[nLeafSplits], pKB, kLen);
               aLeafKeyLen[nLeafSplits] = kLen;
               nLeafSplits++;
@@ -653,10 +647,12 @@ static int applyEdits(
     }
     prollyNodeBuilderFree(&leafBuilder);
 
-    /* Step 4: Walk UP ancestor chain, replacing child hashes.
+    /* --- Phase 4: Walk up ancestors --- */
+    /* Walk UP ancestor chain, replacing child hashes.
     ** For single-leaf trees (leafLevel==0), the leaf IS the root. */
     if( leafLevel == 0 ){
       memcpy(&currentRoot, &newHash, sizeof(ProllyHash));
+      sqlite3_free(aLeafKeyBuf);
       prollyCursorClose(&cur);
       continue;
     }
@@ -706,6 +702,7 @@ static int applyEdits(
           }
           if( rc!=SQLITE_OK ){
             prollyNodeBuilderFree(&ancBuilder);
+            sqlite3_free(aLeafKeyBuf);
             prollyCursorClose(&cur);
             return rc;
           }
@@ -721,6 +718,7 @@ static int applyEdits(
         rc = builderToChunk(&ancBuilder, pMut->pStore, &newHash);
         prollyNodeBuilderFree(&ancBuilder);
         if( rc!=SQLITE_OK ){
+          sqlite3_free(aLeafKeyBuf);
           prollyCursorClose(&cur);
           return rc;
         }
@@ -729,10 +727,12 @@ static int applyEdits(
 
     /* newHash is now the new root */
     memcpy(&currentRoot, &newHash, sizeof(ProllyHash));
+    sqlite3_free(aLeafKeyBuf);
     prollyCursorClose(&cur);
     continue;
 
 leaf_err:
+    sqlite3_free(aLeafKeyBuf);
     prollyNodeBuilderFree(&leafBuilder);
     prollyCursorClose(&cur);
     return rc;
@@ -792,12 +792,12 @@ int prollyMutateFlush(ProllyMutator *pMut){
         if( rootNode.level==0 ){
           N = rootNode.nItems;
         }else if( rootNode.level==1 ){
-          N = rootNode.nItems * 50;
+          N = rootNode.nItems * PROLLY_EST_ENTRIES_PER_LEAF;
         }else{
           /* Height >= 2: large tree */
           int factor = 1;
           int lv;
-          for(lv = 0; lv < rootNode.level; lv++) factor *= 50;
+          for(lv = 0; lv < rootNode.level; lv++) factor *= PROLLY_EST_ENTRIES_PER_LEAF;
           N = rootNode.nItems * factor;
         }
       }
