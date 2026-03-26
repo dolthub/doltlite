@@ -76,6 +76,9 @@ else
   N10=10000000
   N10_INSERT_MAX=120
   N10_COMMIT_MAX=60
+  N10_UPDATE_MAX=120
+  N10_DIFF_MAX=120
+  N10_CLONE_MAX=60
 fi
 
 # ════════════════════════════════════════════════════════════
@@ -233,7 +236,33 @@ echo "  ${elapsed}s"
 check_time "commit 10M" "$elapsed" "$N10_COMMIT_MAX"
 
 echo ""
-echo "--- 14. Point lookups ---"
+echo "--- 14. Update 50% of 10M ---"
+t0=$(ts)
+"$DB" "$TMPDIR/10m.db" "UPDATE big SET val=val+1 WHERE id%2=0; SELECT dolt_add('-A'); SELECT dolt_commit('-m','update 5M rows');" > /dev/null 2>&1
+elapsed=$(( $(ts) - t0 ))
+echo "  ${elapsed}s"
+check_time "update 5M rows" "$elapsed" "$N10_UPDATE_MAX"
+
+result=$("$DB" "$TMPDIR/10m.db" "SELECT count(*) FROM big;")
+check "10M intact after update" "$N10" "$result"
+
+echo ""
+echo "--- 15. Diff 10M --- SKIPPED (known bug #156: diff returns empty at 10M)"
+
+echo ""
+echo "--- 16. Clone 10M ---"
+t0=$(ts)
+"$DB" "$TMPDIR/10m.db" "SELECT dolt_remote('add','origin','file://$TMPDIR/10m_remote'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
+"$DB" "$TMPDIR/10m_clone" "SELECT dolt_clone('file://$TMPDIR/10m_remote');" > /dev/null 2>&1
+elapsed=$(( $(ts) - t0 ))
+echo "  ${elapsed}s"
+check_time "clone 10M" "$elapsed" "$N10_CLONE_MAX"
+
+result=$("$DB" "$TMPDIR/10m_clone" "SELECT count(*) FROM big;")
+check "10M clone count" "$N10" "$result"
+
+echo ""
+echo "--- 17. Point lookups ---"
 result=$("$DB" "$TMPDIR/10m.db" "SELECT name FROM big WHERE id=5000000;")
 check "10M midpoint" "row_5000000" "$result"
 result=$("$DB" "$TMPDIR/10m.db" "SELECT name FROM big WHERE id=9000000;")
