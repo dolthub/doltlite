@@ -70,6 +70,12 @@ extern void doltliteRegisterAtTables(sqlite3 *db);
 extern void doltliteRegisterHistoryTables(sqlite3 *db);
 extern int doltliteSchemaDiffRegister(sqlite3 *db);
 
+/* Per-session author config */
+extern const char *doltliteGetAuthorName(sqlite3 *db);
+extern void doltliteSetAuthorName(sqlite3 *db, const char *zName);
+extern const char *doltliteGetAuthorEmail(sqlite3 *db);
+extern void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
+
 /* From doltlite_ancestor.c */
 extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
                                  const ProllyHash *h2, ProllyHash *pAnc);
@@ -418,8 +424,8 @@ static void doltliteCommitFunc(
       commit.zEmail = sqlite3_mprintf("");
     }
   }else{
-    commit.zName = sqlite3_mprintf("doltlite");
-    commit.zEmail = sqlite3_mprintf("");
+    commit.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
+    commit.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
   }
   commit.zMessage = sqlite3_mprintf("%s", zMessage);
 
@@ -748,8 +754,8 @@ static void doltliteMergeFunc(
       memcpy(&mc.catalogHash, &sc2, sizeof(ProllyHash));
       mc.timestamp = (i64)time(0);
       sqlite3_snprintf(sizeof(mg2), mg2, "Merge branch '%s'", zBranch);
-      mc.zName = sqlite3_mprintf("doltlite");
-      mc.zEmail = sqlite3_mprintf("");
+      mc.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
+      mc.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
       mc.zMessage = sqlite3_mprintf("%s", mg2);
 
       rc = doltliteCommitSerialize(&mc, &cd2, &ncd2);
@@ -853,8 +859,8 @@ static void doltliteMergeFunc(
       memcpy(&mergeCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
       mergeCommit.timestamp = (i64)time(0);
       sqlite3_snprintf(sizeof(msg), msg, "Merge branch '%s'", zBranch);
-      mergeCommit.zName = sqlite3_mprintf("doltlite");
-      mergeCommit.zEmail = sqlite3_mprintf("");
+      mergeCommit.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
+      mergeCommit.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
       mergeCommit.zMessage = sqlite3_mprintf("%s", msg);
 
       rc = doltliteCommitSerialize(&mergeCommit, &commitData, &nCommitData);
@@ -958,8 +964,8 @@ static int applyMergedCatalogAndCommit(
     memcpy(&newCommit.parentHash, ourHead, sizeof(ProllyHash));
     memcpy(&newCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
     newCommit.timestamp = (i64)time(0);
-    newCommit.zName = sqlite3_mprintf("doltlite");
-    newCommit.zEmail = sqlite3_mprintf("");
+    newCommit.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
+    newCommit.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
     newCommit.zMessage = sqlite3_mprintf("%s", zMessage);
 
     rc = doltliteCommitSerialize(&newCommit, &commitData, &nCommitData);
@@ -1230,6 +1236,51 @@ static void doltliteRevertFunc(
 }
 
 /* --------------------------------------------------------------------------
+** dolt_config('key' [, 'value']) — get or set per-session configuration.
+**
+** Supported keys:
+**   user.name  — author name for commits (default: "doltlite")
+**   user.email — author email for commits (default: "")
+** -------------------------------------------------------------------------- */
+static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value **argv){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  const char *zKey;
+
+  if( argc<1 ){
+    sqlite3_result_error(context, "usage: dolt_config(key [, value])", -1);
+    return;
+  }
+  zKey = (const char*)sqlite3_value_text(argv[0]);
+  if( !zKey ){
+    sqlite3_result_error(context, "key required", -1);
+    return;
+  }
+
+  if( argc==1 ){
+    /* GET */
+    if( strcmp(zKey, "user.name")==0 ){
+      sqlite3_result_text(context, doltliteGetAuthorName(db), -1, SQLITE_TRANSIENT);
+    }else if( strcmp(zKey, "user.email")==0 ){
+      sqlite3_result_text(context, doltliteGetAuthorEmail(db), -1, SQLITE_TRANSIENT);
+    }else{
+      sqlite3_result_error(context, "unknown config key (valid: user.name, user.email)", -1);
+    }
+  }else{
+    /* SET */
+    const char *zVal = (const char*)sqlite3_value_text(argv[1]);
+    if( strcmp(zKey, "user.name")==0 ){
+      doltliteSetAuthorName(db, zVal);
+      sqlite3_result_int(context, 0);
+    }else if( strcmp(zKey, "user.email")==0 ){
+      doltliteSetAuthorEmail(db, zVal);
+      sqlite3_result_int(context, 0);
+    }else{
+      sqlite3_result_error(context, "unknown config key (valid: user.name, user.email)", -1);
+    }
+  }
+}
+
+/* --------------------------------------------------------------------------
 ** Registration
 ** -------------------------------------------------------------------------- */
 
@@ -1246,6 +1297,8 @@ void doltliteRegister(sqlite3 *db){
                           doltliteCherryPickFunc, 0, 0);
   sqlite3_create_function(db, "dolt_revert", -1, SQLITE_UTF8, 0,
                           doltliteRevertFunc, 0, 0);
+  sqlite3_create_function(db, "dolt_config", -1, SQLITE_UTF8, 0,
+                          doltliteConfigFunc, 0, 0);
   doltliteLogRegister(db);
   doltliteStatusRegister(db);
   doltliteDiffRegister(db);

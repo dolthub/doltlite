@@ -44,6 +44,10 @@ jobs:
       run: cd build && bash ../test/run_doltlite_tests.sh
       timeout-minutes: 20
 
+    - name: Config tests
+      run: cd build && bash ../test/config_test.sh ./doltlite
+      timeout-minutes: 2
+
     - name: Remote integration tests
       run: cd build && bash ../test/remote_test.sh ./doltlite
       timeout-minutes: 5

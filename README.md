@@ -117,6 +117,23 @@ SELECT dolt_commit('-A', '-m', 'Initial commit');
 SELECT dolt_commit('-m', 'Fix data', '--author', 'Alice <alice@example.com>');
 ```
 
+### Configuration
+
+```sql
+-- Set committer name and email (per-session)
+SELECT dolt_config('user.name', 'Tim Sehn');
+SELECT dolt_config('user.email', 'tim@dolthub.com');
+
+-- Read current config
+SELECT dolt_config('user.name');
+-- Tim Sehn
+```
+
+All commit-creating operations (`dolt_commit`, `dolt_merge`, `dolt_cherry_pick`,
+`dolt_revert`) use these values. The `--author` flag on `dolt_commit` overrides
+the session config for a single commit. Config is per-connection and not
+persisted — set it at the start of each session.
+
 ### Status and History
 
 ```sql

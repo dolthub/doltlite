@@ -268,6 +268,8 @@ struct Btree {
   /* Per-session branch state (authoritative in-memory state).
   ** Persisted to per-branch WorkingSet chunks, NOT in the manifest. */
   char *zBranch;             /* Current branch name (owned, NULL = "main") */
+  char *zAuthorName;         /* Configured author name (owned, NULL = "doltlite") */
+  char *zAuthorEmail;        /* Configured author email (owned, NULL = "") */
   ProllyHash headCommit;     /* This session's HEAD commit hash */
   ProllyHash stagedCatalog;  /* This session's staged catalog hash */
   u8 isMerging;              /* 1 if a merge is in progress */
@@ -1189,6 +1191,8 @@ int sqlite3BtreeClose(Btree *p){
   }
 
   sqlite3_free(p->zBranch);
+  sqlite3_free(p->zAuthorName);
+  sqlite3_free(p->zAuthorEmail);
   sqlite3_free(p);
   return SQLITE_OK;
 }
@@ -3837,6 +3841,38 @@ void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch){
     Btree *p = db->aDb[0].pBt;
     sqlite3_free(p->zBranch);
     p->zBranch = sqlite3_mprintf("%s", zBranch);
+  }
+}
+
+const char *doltliteGetAuthorName(sqlite3 *db){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    return p->zAuthorName ? p->zAuthorName : "doltlite";
+  }
+  return "doltlite";
+}
+
+void doltliteSetAuthorName(sqlite3 *db, const char *zName){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    sqlite3_free(p->zAuthorName);
+    p->zAuthorName = zName ? sqlite3_mprintf("%s", zName) : 0;
+  }
+}
+
+const char *doltliteGetAuthorEmail(sqlite3 *db){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    return p->zAuthorEmail ? p->zAuthorEmail : "";
+  }
+  return "";
+}
+
+void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail){
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    Btree *p = db->aDb[0].pBt;
+    sqlite3_free(p->zAuthorEmail);
+    p->zAuthorEmail = zEmail ? sqlite3_mprintf("%s", zEmail) : 0;
   }
 }
 
