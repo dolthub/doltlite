@@ -44,6 +44,10 @@ jobs:
       run: cd build && bash ../test/run_doltlite_tests.sh
       timeout-minutes: 20
 
+    - name: Large-scale test (10K rows)
+      run: cd build && bash ../test/large_scale_test.sh ./doltlite --quick
+      timeout-minutes: 5
+
     - name: Config tests
       run: cd build && bash ../test/config_test.sh ./doltlite
       timeout-minutes: 2
