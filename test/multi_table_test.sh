@@ -131,14 +131,7 @@ result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM dolt_diff_users WHERE diff_typ
 check "diff: users modified" "$((NU/100))" "$result"
 echo "  ($(( $(ts) - t0 ))s)"
 
-# ── 5. Index creation ──────────────────────────────────
-# ── 5-6. Index creation SKIPPED ─────────────────────────
-# CREATE INDEX after UPDATE corrupts data (GitHub issue #153).
-# Skipping index tests until the bug is fixed.
-echo ""
-echo "--- 5-6. Index creation SKIPPED (known bug #153) ---"
-
-# ── 7. Branch + merge with multi-table changes ─────────
+# ── 5. Branch + merge with multi-table changes ─────────
 echo ""
 echo "--- 7. Branch + merge ---"
 t0=$(ts)
@@ -213,7 +206,28 @@ echo "  ($(( $(ts) - t0 ))s)"
 result=$("$DB" "$TMPDIR/clone" "SELECT phone FROM users WHERE id=42;")
 check "clone pulled schema change" "555-42" "$result"
 
-# ── 11. 20 tables ──────────────────────────────────────
+# ── 11. Index creation (after merge, on final data) ────
+echo ""
+echo "--- 11. Index creation ---"
+t0=$(ts)
+"$DB" "$TMPDIR/db" <<'ENDSQL'
+CREATE INDEX idx_orders_user ON orders(user_id);
+CREATE INDEX idx_events_user ON events(user_id);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','add indexes');
+.quit
+ENDSQL
+echo "  ($(( $(ts) - t0 ))s)"
+
+result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%';")
+check "2 indexes created" "2" "$result"
+
+result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM users;")
+check "users intact after index" "$((NU+1))" "$result"
+result=$("$DB" "$TMPDIR/db" "SELECT count(*) FROM orders;")
+check "orders intact after index" "$((NO+1))" "$result"
+
+# ── 12. 20 tables ──────────────────────────────────────
 echo ""
 echo "--- 11. 20 dimension tables ---"
 t0=$(ts)
