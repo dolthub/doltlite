@@ -332,6 +332,47 @@ Find the common ancestor of two commits:
 SELECT dolt_merge_base('abc123...', 'def456...');
 ```
 
+### Remotes
+
+Doltlite supports Git-like remotes for pushing, fetching, pulling, and cloning
+between databases.
+
+#### Filesystem Remotes
+
+```sql
+-- Add a remote
+SELECT dolt_remote('add', 'origin', 'file:///path/to/remote.doltlite');
+
+-- Push a branch
+SELECT dolt_push('origin', 'main');
+
+-- Clone a remote database
+SELECT dolt_clone('file:///path/to/source.doltlite');
+
+-- Fetch updates
+SELECT dolt_fetch('origin', 'main');
+
+-- Pull (fetch + fast-forward)
+SELECT dolt_pull('origin', 'main');
+
+-- List remotes
+SELECT * FROM dolt_remotes;
+```
+
+#### HTTP Remotes (Experimental)
+
+```sql
+SELECT dolt_remote('add', 'origin', 'http://host:port');
+```
+
+Doltlite includes a built-in HTTP server (`doltlite-remotesrv`) for serving
+repositories over the network.
+
+#### How It Works
+
+Content-addressed chunk transfer — only sends chunks the remote doesn't already
+have. BFS traversal of the DAG with batch `HasMany` pruning.
+
 ## Per-Session Branching Architecture
 
 SQLite's `Btree` struct is per-connection. Doltlite stores each session's
