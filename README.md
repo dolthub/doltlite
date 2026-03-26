@@ -359,14 +359,41 @@ SELECT dolt_pull('origin', 'main');
 SELECT * FROM dolt_remotes;
 ```
 
-#### HTTP Remotes (Experimental)
+#### HTTP Remotes
 
 ```sql
-SELECT dolt_remote('add', 'origin', 'http://host:port');
+-- Add an HTTP remote (URL includes database name)
+SELECT dolt_remote('add', 'origin', 'http://myserver:8080/mydb.db');
+
+-- All operations work identically to file:// remotes
+SELECT dolt_push('origin', 'main');
+SELECT dolt_clone('http://myserver:8080/mydb.db');
+SELECT dolt_fetch('origin', 'main');
+SELECT dolt_pull('origin', 'main');
 ```
 
-Doltlite includes a built-in HTTP server (`doltlite-remotesrv`) for serving
-repositories over the network.
+#### Remote Server (`doltlite-remotesrv`)
+
+Doltlite includes a standalone HTTP server for serving databases over the
+network. Build it alongside doltlite:
+
+```
+cd build
+make doltlite-remotesrv
+```
+
+Start serving a directory of databases:
+
+```
+./doltlite-remotesrv -p 8080 /path/to/databases/
+```
+
+Every `.db` file in that directory becomes accessible at
+`http://host:8080/filename.db`. The server supports push, fetch, pull, and
+clone — multiple clients can collaborate on the same databases.
+
+The server is also embeddable as a library (`doltliteServeAsync` in
+`doltlite_remotesrv.h`) for applications that want to host remotes in-process.
 
 #### How It Works
 

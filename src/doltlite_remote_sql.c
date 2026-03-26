@@ -42,6 +42,9 @@ static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
   if( strncmp(zUrl, "file://", 7)==0 ){
     return doltliteFsRemoteOpen(pVfs, zUrl + 7);
   }
+  if( strncmp(zUrl, "http://", 7)==0 ){
+    return doltliteHttpRemoteOpen(zUrl);
+  }
   /* No recognized scheme */
   return 0;
 }

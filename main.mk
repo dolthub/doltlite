@@ -567,7 +567,8 @@ PROLLY_OBJS = prolly_hash.o prolly_arena.o prolly_node.o prolly_cache.o \
               doltlite.o doltlite_commit.o doltlite_log.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_record.o \
-              doltlite_remote.o doltlite_remote_sql.o
+              doltlite_remote.o doltlite_remote_sql.o \
+              doltlite_http_remote.o doltlite_remotesrv.o
 
 DOLTLITE_PROLLY ?= 1
 DOLTLITE_VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
@@ -1359,6 +1360,12 @@ doltlite_remote.o:	$(TOP)/src/doltlite_remote.c $(DEPS_OBJ_COMMON)
 
 doltlite_remote_sql.o:	$(TOP)/src/doltlite_remote_sql.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_remote_sql.c
+
+doltlite_http_remote.o:	$(TOP)/src/doltlite_http_remote.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_http_remote.c
+
+doltlite_remotesrv.o:	$(TOP)/src/doltlite_remotesrv.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_remotesrv.c
 
 build.o:	$(TOP)/src/build.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/build.c
@@ -2380,6 +2387,14 @@ libdoltlite$(T.dll):	$(LIBOBJS0)
 
 doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll)
 all: doltlite-lib
+
+#
+# doltlite-remotesrv: standalone HTTP server for serving doltlite databases.
+#
+doltlite-remotesrv$(T.exe):	$(TOP)/src/remotesrv_main.c $(LIBOBJS0)
+	$(T.link) -o $@ $(TOP)/src/remotesrv_main.c $(LIBOBJS0) \
+		$(LDFLAGS.libsqlite3)
+all: doltlite-remotesrv$(T.exe)
 
 install-doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll) $(install-dir.lib)
 	$(INSTALL.noexec) libdoltlite$(T.lib) "$(install-dir.lib)"

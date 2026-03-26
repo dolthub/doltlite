@@ -89,7 +89,7 @@ jobs:
       run: |
         mkdir -p build && cd build
         ../configure
-        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-lib
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-remotesrv doltlite-lib
 
     - name: Package CLI tools
       shell: bash
@@ -98,7 +98,9 @@ jobs:
         DIR="doltlite-tools-${{ matrix.target }}-${VERSION}"
         mkdir -p "${DIR}"
         cp build/doltlite "${DIR}/"
+        cp build/doltlite-remotesrv "${DIR}/"
         strip "${DIR}/doltlite" 2>/dev/null || true
+        strip "${DIR}/doltlite-remotesrv" 2>/dev/null || true
         zip -r "${DIR}.zip" "${DIR}"
 
     - name: Package libraries
