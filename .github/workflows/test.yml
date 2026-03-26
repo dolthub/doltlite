@@ -52,6 +52,10 @@ jobs:
       run: cd build && bash ../test/multi_table_test.sh ./doltlite --quick
       timeout-minutes: 5
 
+    - name: Diff tests
+      run: cd build && bash ../test/diff_test.sh ./doltlite
+      timeout-minutes: 10
+
     - name: Config tests
       run: cd build && bash ../test/config_test.sh ./doltlite
       timeout-minutes: 2

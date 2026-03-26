@@ -886,11 +886,10 @@ int prollyMutateFlush(ProllyMutator *pMut){
     }
 
     if( prollyHashIsEmpty(&pMut->oldRoot) ){
-      /* Empty tree — build from scratch */
       return buildFromEdits(pMut);
     }
     /* Always use mergeWalk for correctness. applyEdits has a bug with
-    ** INTKEY tables at scale where it produces corrupt trees (#156).
+    ** INTKEY tables at scale where it produces corrupt trees (#158).
     ** mergeWalk is O(N+M) but always correct. */
     (void)threshold;
     return mergeWalk(pMut);
