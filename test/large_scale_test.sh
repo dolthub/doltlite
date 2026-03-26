@@ -247,7 +247,13 @@ result=$("$DB" "$TMPDIR/10m.db" "SELECT count(*) FROM big;")
 check "10M intact after update" "$N10" "$result"
 
 echo ""
-echo "--- 15. Diff 10M --- SKIPPED (known bug #156: diff returns empty at 10M)"
+echo "--- 15. Diff 10M ---"
+t0=$(ts)
+result=$("$DB" "$TMPDIR/10m.db" "SELECT count(*) FROM dolt_diff_big WHERE diff_type='modified';")
+elapsed=$(( $(ts) - t0 ))
+echo "  ${elapsed}s"
+check_time "diff 5M changes" "$elapsed" "$N10_DIFF_MAX"
+check "10M diff count" "$((N10/2))" "$result"
 
 echo ""
 echo "--- 16. Clone 10M ---"
