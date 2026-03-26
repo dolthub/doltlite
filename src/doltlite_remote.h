@@ -40,8 +40,8 @@ struct DoltliteRemote {
 ** When an entire subtree is already present, the BFS prunes it.
 */
 int doltliteSyncChunks(
-  ChunkStore *pSrc,        /* Source chunk store (local for push, remote for fetch) */
-  DoltliteRemote *pDst,    /* Destination (remote for push, wraps local for fetch) */
+  DoltliteRemote *pSrc,    /* Source (uses xGetChunk to read) */
+  DoltliteRemote *pDst,    /* Destination (uses xHasChunks, xPutChunk) */
   ProllyHash *aRoots,      /* Root hashes to start sync from */
   int nRoots               /* Number of root hashes */
 );
@@ -71,5 +71,16 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote);
 ** Open a filesystem remote (another .doltlite file).
 */
 DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath);
+
+/*
+** Wrap a local ChunkStore with the DoltliteRemote vtable.
+** The ChunkStore is NOT owned (not closed on xClose).
+*/
+DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal);
+
+/*
+** Open an HTTP remote. URL format: http://host:port/dbname
+*/
+DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl);
 
 #endif /* DOLTLITE_REMOTE_H */

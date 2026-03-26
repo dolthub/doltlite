@@ -4,7 +4,8 @@
 # Starts a remotesrv server, runs push/fetch/pull/clone against it.
 #
 
-DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
+DOLTLITE_ARG="${1:-$(dirname "$0")/../build/doltlite}"
+DOLTLITE="$(cd "$(dirname "$DOLTLITE_ARG")" && pwd)/$(basename "$DOLTLITE_ARG")"
 TMPDIR=$(mktemp -d)
 trap 'kill $SERVER_PID 2>/dev/null; rm -rf $TMPDIR' EXIT
 
@@ -26,46 +27,15 @@ check() {
 DB="$DOLTLITE"
 
 # ============================================================
-# Start HTTP server on a random port
+# Basic URL scheme recognition tests
 # ============================================================
-echo "Starting remotesrv..."
+echo "=== HTTP remote URL recognition tests ==="
 
-# Create initial repo to serve
-"$DB" "$TMPDIR/served.db" <<'ENDSQL'
-CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
-INSERT INTO t VALUES(1,'server_init');
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','server init');
-.quit
-ENDSQL
-
-# Start server in background, capture port from output
-"$DB" "$TMPDIR/served.db" "SELECT doltlite_serve(0);" &
-SERVER_PID=$!
-sleep 1
-
-# Find the port — server prints it to stdout
-# Actually, doltlite_serve blocks. We need a different approach.
-# Use the remotesrv via a test that embeds it.
-# For now, test the HTTP client/server by using them within the same process.
-
-# Alternative approach: test HTTP remotes end-to-end by writing a small C test
-# that starts the server async and runs operations. But for shell tests, we need
-# a standalone server binary.
-
-# Let's create a simple test using the SQL interface instead:
-kill $SERVER_PID 2>/dev/null
-wait $SERVER_PID 2>/dev/null
-
-echo "=== HTTP remote tests require server binary — testing via embedded server ==="
-
-# For now, test that the http:// scheme is recognized and gives a connection error
-# (since no server is running)
-result=$("$DB" "$TMPDIR/test.db" "SELECT dolt_remote('add','origin','http://localhost:19999');" 2>/dev/null)
+result=$("$DB" "$TMPDIR/test.db" "SELECT dolt_remote('add','origin','http://localhost:19999/mydb');" 2>/dev/null)
 check "http remote add succeeds" "0" "$result"
 
 result=$("$DB" "$TMPDIR/test.db" "SELECT * FROM dolt_remotes;")
-check "http remote in list" "origin|http://localhost:19999" "$result"
+check "http remote in list" "origin|http://localhost:19999/mydb" "$result"
 
 result=$("$DB" "$TMPDIR/test.db" "SELECT dolt_push('origin','main');" 2>&1)
 check "push to dead server errors" "1" "$(echo "$result" | grep -c 'failed\|error\|connection')"
@@ -80,6 +50,7 @@ cat > "$TMPDIR/http_test.c" << 'CEOF'
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "sqlite3.h"
 #include "doltlite_remotesrv.h"
 
@@ -129,15 +100,20 @@ static int query_int(sqlite3 *db, const char *sql) {
 
 int main(int argc, char **argv) {
   int pass = 0, fail = 0;
-  char tmpdir[256], sql[1024];
+  char tmpdir[256], srvdir[256], sql[1024];
   const char *base = argc > 1 ? argv[1] : "/tmp/http_test";
 
   snprintf(tmpdir, sizeof(tmpdir), "%s", base);
+  snprintf(srvdir, sizeof(srvdir), "%s/served", base);
 
-  /* 1. Create source repo */
+  /* Create the server directory */
+  mkdir(tmpdir, 0755);
+  mkdir(srvdir, 0755);
+
+  /* 1. Create source repo inside the served directory */
   printf("=== 1. Setup source repo ===\n");
   sqlite3 *srcDb;
-  snprintf(sql, sizeof(sql), "%s/src.db", tmpdir);
+  snprintf(sql, sizeof(sql), "%s/src.db", srvdir);
   sqlite3_open(sql, &srcDb);
   run_sql(srcDb, "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT, age INTEGER)");
   run_sql(srcDb, "INSERT INTO users VALUES(1,'alice',30),(2,'bob',25),(3,'charlie',35)");
@@ -149,10 +125,9 @@ int main(int argc, char **argv) {
   );
   sqlite3_close(srcDb);
 
-  /* 2. Start HTTP server on the source repo */
+  /* 2. Start HTTP server on the served directory */
   printf("=== 2. Start HTTP server ===\n");
-  snprintf(sql, sizeof(sql), "%s/src.db", tmpdir);
-  DoltliteServer *srv = doltliteServeAsync(sql, 0);
+  DoltliteServer *srv = doltliteServeAsync(srvdir, 0);
   if (!srv) {
     printf("  FAIL: could not start server\n");
     return 1;
@@ -164,12 +139,12 @@ int main(int argc, char **argv) {
   /* Small delay for server to be ready */
   usleep(100000);
 
-  /* 3. Clone via HTTP */
+  /* 3. Clone via HTTP -- URL is http://host:port/dbname */
   printf("=== 3. Clone via HTTP ===\n");
   sqlite3 *cloneDb;
   snprintf(sql, sizeof(sql), "%s/clone.db", tmpdir);
   sqlite3_open(sql, &cloneDb);
-  snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d')", port);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d/src.db')", port);
   run_sql(cloneDb, sql);
   CHECK(
     "clone has 3 users",
@@ -195,7 +170,7 @@ int main(int argc, char **argv) {
 
   /* Verify server has the new data */
   sqlite3 *verifyDb;
-  snprintf(sql, sizeof(sql), "%s/src.db", tmpdir);
+  snprintf(sql, sizeof(sql), "%s/src.db", srvdir);
   sqlite3_open(sql, &verifyDb);
   CHECK(
     "server has 4 users after push",
@@ -208,7 +183,7 @@ int main(int argc, char **argv) {
   sqlite3 *fetchDb;
   snprintf(sql, sizeof(sql), "%s/fetcher.db", tmpdir);
   sqlite3_open(sql, &fetchDb);
-  snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d')", port);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d/src.db')", port);
   run_sql(fetchDb, sql);
   CHECK(
     "fetcher has 4 users",
@@ -241,12 +216,13 @@ if [ $? -ne 0 ]; then
 else
   echo "  Built http_test binary"
   mkdir -p "$TMPDIR/run"
-  ./http_test "$TMPDIR/run"
+  http_output=$(./http_test "$TMPDIR/run" 2>&1)
   test_exit=$?
+  echo "$http_output"
   if [ $test_exit -eq 0 ]; then
-    # Count passes from output
-    embedded_pass=$(./http_test "$TMPDIR/run2" 2>/dev/null | grep -c "PASS")
-    embedded_fail=$(./http_test "$TMPDIR/run2" 2>/dev/null | grep -c "FAIL")
+    # Count passes/fails from the "  PASS:" and "  FAIL:" lines only
+    embedded_pass=$(echo "$http_output" | grep -c "^  PASS:")
+    embedded_fail=$(echo "$http_output" | grep -c "^  FAIL:")
     pass=$((pass + embedded_pass))
     fail=$((fail + embedded_fail))
   else

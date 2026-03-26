@@ -1,7 +1,10 @@
 /*
 ** Minimal HTTP/1.1 server for doltlite remote access.
-** Serves a .doltlite file over HTTP, enabling push/fetch/clone
+** Serves a directory of .doltlite files over HTTP, enabling push/fetch/clone
 ** from remote clients.
+**
+** URL routing: /{dbname}/endpoint
+**   where dbname maps to {zDir}/{dbname} on disk.
 **
 ** Uses POSIX sockets, no external dependencies.
 */
@@ -11,6 +14,7 @@
 #include "chunk_store.h"
 #include "prolly_hash.h"
 #include "doltlite_remotesrv.h"
+#include "doltlite_commit.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -24,7 +28,7 @@ struct DoltliteServer {
   int listenFd;          /* Listening socket */
   int port;              /* Actual port (may differ from requested if 0) */
   volatile int running;  /* Set to 0 to stop */
-  ChunkStore store;      /* The chunk store being served */
+  char *zDir;            /* Directory containing .doltlite files */
   pthread_t thread;      /* Background thread (for async mode) */
 };
 
@@ -197,18 +201,62 @@ static int parseRequest(
 }
 
 /* ----------------------------------------------------------------
-** Request handlers
+** Path parsing: extract /{dbname}/{endpoint} from URL path
 ** ---------------------------------------------------------------- */
 
-/* GET /v1/root — Return 20-byte raw root hash */
-static void handleGetRoot(DoltliteServer *pSrv, int fd){
+/*
+** Parse path like "/mydb/root" into dbname="mydb", endpoint="root".
+** Also handles "/mydb/chunk/HEXHASH".
+** Returns 0 on success, -1 if path doesn't match expected format.
+*/
+static int parsePath(
+  const char *zPath,
+  char *zDbName, int nDbNameMax,
+  char *zEndpoint, int nEndpointMax
+){
+  const char *p = zPath;
+  const char *dbStart;
+  const char *dbEnd;
+  const char *epStart;
+  int dbLen, epLen;
+
+  if( *p != '/' ) return -1;
+  p++; /* skip leading '/' */
+
+  /* dbname is everything up to the next '/' */
+  dbStart = p;
+  while( *p && *p != '/' ) p++;
+  dbLen = (int)(p - dbStart);
+  if( dbLen <= 0 || dbLen >= nDbNameMax ) return -1;
+  memcpy(zDbName, dbStart, dbLen);
+  zDbName[dbLen] = '\0';
+
+  if( *p != '/' ) return -1;
+  p++; /* skip '/' */
+
+  /* endpoint is the rest */
+  epStart = p;
+  epLen = (int)strlen(epStart);
+  if( epLen <= 0 || epLen >= nEndpointMax ) return -1;
+  memcpy(zEndpoint, epStart, epLen);
+  zEndpoint[epLen] = '\0';
+
+  return 0;
+}
+
+/* ----------------------------------------------------------------
+** Request handlers (now take ChunkStore* instead of DoltliteServer*)
+** ---------------------------------------------------------------- */
+
+/* GET /{db}/root -- Return 20-byte raw root hash */
+static void handleGetRoot(ChunkStore *pStore, int fd){
   ProllyHash root;
-  chunkStoreGetRoot(&pSrv->store, &root);
+  chunkStoreGetRoot(pStore, &root);
   sendOk(fd, root.data, PROLLY_HASH_SIZE);
 }
 
-/* POST /v1/has-chunks — Batch existence check */
-static void handleHasChunks(DoltliteServer *pSrv, int fd,
+/* POST /{db}/has-chunks -- Batch existence check */
+static void handleHasChunks(ChunkStore *pStore, int fd,
                             const u8 *pBody, int nBody){
   int nHashes;
   u8 *aResult;
@@ -231,7 +279,7 @@ static void handleHasChunks(DoltliteServer *pSrv, int fd,
   }
   memset(aResult, 0, nHashes);
 
-  rc = chunkStoreHasMany(&pSrv->store, (const ProllyHash*)pBody,
+  rc = chunkStoreHasMany(pStore, (const ProllyHash*)pBody,
                          nHashes, aResult);
   if( rc!=SQLITE_OK ){
     sqlite3_free(aResult);
@@ -242,27 +290,24 @@ static void handleHasChunks(DoltliteServer *pSrv, int fd,
   sqlite3_free(aResult);
 }
 
-/* GET /v1/chunk/{40-char-hex-hash} — Download one chunk */
-static void handleGetChunk(DoltliteServer *pSrv, int fd, const char *zPath){
-  const char *zHex;
+/* GET /{db}/chunk/{40-char-hex-hash} -- Download one chunk */
+static void handleGetChunk(ChunkStore *pStore, int fd, const char *zHexHash){
   ProllyHash hash;
   u8 *pData = 0;
   int nData = 0;
   int rc;
 
-  /* Path is /v1/chunk/XXXX...  (prefix is 10 chars: "/v1/chunk/") */
-  if( (int)strlen(zPath) < 10 + PROLLY_HASH_SIZE*2 ){
-    sendBadRequest(fd);
-    return;
-  }
-  zHex = zPath + 10;
-
-  if( hexToHash(zHex, &hash)!=SQLITE_OK ){
+  if( (int)strlen(zHexHash) < PROLLY_HASH_SIZE*2 ){
     sendBadRequest(fd);
     return;
   }
 
-  rc = chunkStoreGet(&pSrv->store, &hash, &pData, &nData);
+  if( hexToHash(zHexHash, &hash)!=SQLITE_OK ){
+    sendBadRequest(fd);
+    return;
+  }
+
+  rc = chunkStoreGet(pStore, &hash, &pData, &nData);
   if( rc==SQLITE_NOTFOUND ){
     sendNotFound(fd);
     return;
@@ -276,17 +321,17 @@ static void handleGetChunk(DoltliteServer *pSrv, int fd, const char *zPath){
   sqlite3_free(pData);
 }
 
-/* POST /v1/chunks — Upload batch of chunks */
-static void handlePostChunks(DoltliteServer *pSrv, int fd,
+/* POST /{db}/chunks -- Upload batch of chunks */
+static void handlePostChunks(ChunkStore *pStore, int fd,
                              const u8 *pBody, int nBody){
   int offset = 0;
+  int rc;
 
   while( offset + PROLLY_HASH_SIZE + 4 <= nBody ){
     u32 len;
     ProllyHash hash;
-    int rc;
 
-    /* Skip the client-provided hash (20 bytes) — chunkStorePut computes it */
+    /* Skip the client-provided hash (20 bytes) -- chunkStorePut computes it */
     offset += PROLLY_HASH_SIZE;
 
     /* Read 4-byte little-endian length */
@@ -301,7 +346,7 @@ static void handlePostChunks(DoltliteServer *pSrv, int fd,
       return;
     }
 
-    rc = chunkStorePut(&pSrv->store, pBody + offset, (int)len, &hash);
+    rc = chunkStorePut(pStore, pBody + offset, (int)len, &hash);
     if( rc!=SQLITE_OK ){
       sendError(fd);
       return;
@@ -309,21 +354,28 @@ static void handlePostChunks(DoltliteServer *pSrv, int fd,
     offset += (int)len;
   }
 
+  /* Commit so chunks persist across requests (store is opened per-request) */
+  rc = chunkStoreCommit(pStore);
+  if( rc!=SQLITE_OK ){
+    sendError(fd);
+    return;
+  }
+
   sendOk(fd, 0, 0);
 }
 
-/* GET /v1/refs — Get serialized refs blob */
-static void handleGetRefs(DoltliteServer *pSrv, int fd){
+/* GET /{db}/refs -- Get serialized refs blob */
+static void handleGetRefs(ChunkStore *pStore, int fd){
   u8 *pData = 0;
   int nData = 0;
   int rc;
 
-  if( prollyHashIsEmpty(&pSrv->store.refsHash) ){
+  if( prollyHashIsEmpty(&pStore->refsHash) ){
     sendNotFound(fd);
     return;
   }
 
-  rc = chunkStoreGet(&pSrv->store, &pSrv->store.refsHash, &pData, &nData);
+  rc = chunkStoreGet(pStore, &pStore->refsHash, &pData, &nData);
   if( rc==SQLITE_NOTFOUND ){
     sendNotFound(fd);
     return;
@@ -337,8 +389,8 @@ static void handleGetRefs(DoltliteServer *pSrv, int fd){
   sqlite3_free(pData);
 }
 
-/* PUT /v1/refs — Update refs blob */
-static void handlePutRefs(DoltliteServer *pSrv, int fd,
+/* PUT /{db}/refs -- Update refs blob */
+static void handlePutRefs(ChunkStore *pStore, int fd,
                           const u8 *pBody, int nBody){
   ProllyHash hash;
   int rc;
@@ -348,15 +400,22 @@ static void handlePutRefs(DoltliteServer *pSrv, int fd,
     return;
   }
 
-  rc = chunkStorePut(&pSrv->store, pBody, nBody, &hash);
+  rc = chunkStorePut(pStore, pBody, nBody, &hash);
   if( rc!=SQLITE_OK ){
     sendError(fd);
     return;
   }
 
-  pSrv->store.refsHash = hash;
+  pStore->refsHash = hash;
 
-  rc = chunkStoreReloadRefs(&pSrv->store);
+  rc = chunkStoreReloadRefs(pStore);
+  if( rc!=SQLITE_OK ){
+    sendError(fd);
+    return;
+  }
+
+  /* Commit so refs persist across requests (store is opened per-request) */
+  rc = chunkStoreCommit(pStore);
   if( rc!=SQLITE_OK ){
     sendError(fd);
     return;
@@ -365,20 +424,39 @@ static void handlePutRefs(DoltliteServer *pSrv, int fd,
   sendOk(fd, 0, 0);
 }
 
-/* POST /v1/commit — Commit pending writes */
-static void handleCommit(DoltliteServer *pSrv, int fd){
+/* POST /{db}/commit -- Commit pending writes */
+static void handleCommit(ChunkStore *pStore, int fd){
   int rc;
 
-  rc = chunkStoreSerializeRefs(&pSrv->store);
+  rc = chunkStoreSerializeRefs(pStore);
   if( rc!=SQLITE_OK ){
     sendError(fd);
     return;
   }
 
-  rc = chunkStoreCommit(&pSrv->store);
+  rc = chunkStoreCommit(pStore);
   if( rc!=SQLITE_OK ){
     sendError(fd);
     return;
+  }
+
+  /* After refs are committed, update head/catalog from default branch */
+  {
+    const char *zDef = chunkStoreGetDefaultBranch(pStore);
+    ProllyHash branchCommit;
+    if( zDef && chunkStoreFindBranch(pStore, zDef, &branchCommit)==SQLITE_OK ){
+      u8 *cdata = 0; int ncdata = 0;
+      if( chunkStoreGet(pStore, &branchCommit, &cdata, &ncdata)==SQLITE_OK && cdata ){
+        DoltliteCommit commit;
+        if( doltliteCommitDeserialize(cdata, ncdata, &commit)==SQLITE_OK ){
+          chunkStoreSetHeadCommit(pStore, &branchCommit);
+          chunkStoreSetCatalog(pStore, &commit.catalogHash);
+          doltliteCommitClear(&commit);
+        }
+        sqlite3_free(cdata);
+      }
+      chunkStoreCommit(pStore);  /* Write updated manifest */
+    }
   }
 
   sendOk(fd, 0, 0);
@@ -391,8 +469,14 @@ static void handleCommit(DoltliteServer *pSrv, int fd){
 static void handleRequest(DoltliteServer *pSrv, int fd){
   char zMethod[16];
   char zPath[512];
+  char zDbName[256];
+  char zEndpoint[256];
   u8 *pBody = 0;
   int nBody = 0;
+  ChunkStore store;
+  char zDbPath[1024];
+  int rc;
+  int flags;
 
   if( parseRequest(fd, zMethod, sizeof(zMethod),
                    zPath, sizeof(zPath), &pBody, &nBody)!=0 ){
@@ -400,29 +484,49 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
     return;
   }
 
+  /* Parse /{dbname}/{endpoint} */
+  if( parsePath(zPath, zDbName, sizeof(zDbName),
+                zEndpoint, sizeof(zEndpoint))!=0 ){
+    sendNotFound(fd);
+    sqlite3_free(pBody);
+    return;
+  }
+
+  /* Open the chunk store for this database */
+  sqlite3_snprintf(sizeof(zDbPath), zDbPath, "%s/%s", pSrv->zDir, zDbName);
+  flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
+  memset(&store, 0, sizeof(store));
+  rc = chunkStoreOpen(&store, sqlite3_vfs_find(0), zDbPath, flags);
+  if( rc!=SQLITE_OK ){
+    sendError(fd);
+    sqlite3_free(pBody);
+    return;
+  }
+
+  /* Route to handler based on method + endpoint */
   if( strcmp(zMethod, "GET")==0 ){
-    if( strcmp(zPath, "/v1/root")==0 ){
-      handleGetRoot(pSrv, fd);
-    }else if( strncmp(zPath, "/v1/chunk/", 10)==0 ){
-      handleGetChunk(pSrv, fd, zPath);
-    }else if( strcmp(zPath, "/v1/refs")==0 ){
-      handleGetRefs(pSrv, fd);
+    if( strcmp(zEndpoint, "root")==0 ){
+      handleGetRoot(&store, fd);
+    }else if( strncmp(zEndpoint, "chunk/", 6)==0 ){
+      handleGetChunk(&store, fd, zEndpoint + 6);
+    }else if( strcmp(zEndpoint, "refs")==0 ){
+      handleGetRefs(&store, fd);
     }else{
       sendNotFound(fd);
     }
   }else if( strcmp(zMethod, "POST")==0 ){
-    if( strcmp(zPath, "/v1/has-chunks")==0 ){
-      handleHasChunks(pSrv, fd, pBody, nBody);
-    }else if( strcmp(zPath, "/v1/chunks")==0 ){
-      handlePostChunks(pSrv, fd, pBody, nBody);
-    }else if( strcmp(zPath, "/v1/commit")==0 ){
-      handleCommit(pSrv, fd);
+    if( strcmp(zEndpoint, "has-chunks")==0 ){
+      handleHasChunks(&store, fd, pBody, nBody);
+    }else if( strcmp(zEndpoint, "chunks")==0 ){
+      handlePostChunks(&store, fd, pBody, nBody);
+    }else if( strcmp(zEndpoint, "commit")==0 ){
+      handleCommit(&store, fd);
     }else{
       sendNotFound(fd);
     }
   }else if( strcmp(zMethod, "PUT")==0 ){
-    if( strcmp(zPath, "/v1/refs")==0 ){
-      handlePutRefs(pSrv, fd, pBody, nBody);
+    if( strcmp(zEndpoint, "refs")==0 ){
+      handlePutRefs(&store, fd, pBody, nBody);
     }else{
       sendNotFound(fd);
     }
@@ -430,6 +534,7 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
     sendBadRequest(fd);
   }
 
+  chunkStoreClose(&store);
   sqlite3_free(pBody);
 }
 
@@ -437,25 +542,25 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
 ** Server lifecycle
 ** ---------------------------------------------------------------- */
 
-static int serverInit(DoltliteServer *pSrv, const char *zDbPath, int port){
+static int serverInit(DoltliteServer *pSrv, const char *zDir, int port){
   struct sockaddr_in addr;
   socklen_t addrLen;
   int opt = 1;
-  int rc;
-  int flags;
+  int nDir;
 
   memset(pSrv, 0, sizeof(*pSrv));
   pSrv->listenFd = -1;
 
-  /* Open the chunk store */
-  flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
-  rc = chunkStoreOpen(&pSrv->store, sqlite3_vfs_find(0), zDbPath, flags);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Copy directory path */
+  nDir = (int)strlen(zDir);
+  pSrv->zDir = sqlite3_malloc(nDir + 1);
+  if( !pSrv->zDir ) return SQLITE_NOMEM;
+  memcpy(pSrv->zDir, zDir, nDir + 1);
 
   /* Create listening socket */
   pSrv->listenFd = socket(AF_INET, SOCK_STREAM, 0);
   if( pSrv->listenFd < 0 ){
-    chunkStoreClose(&pSrv->store);
+    sqlite3_free(pSrv->zDir);
     return SQLITE_ERROR;
   }
 
@@ -468,13 +573,13 @@ static int serverInit(DoltliteServer *pSrv, const char *zDbPath, int port){
 
   if( bind(pSrv->listenFd, (struct sockaddr*)&addr, sizeof(addr)) < 0 ){
     close(pSrv->listenFd);
-    chunkStoreClose(&pSrv->store);
+    sqlite3_free(pSrv->zDir);
     return SQLITE_ERROR;
   }
 
   if( listen(pSrv->listenFd, 5) < 0 ){
     close(pSrv->listenFd);
-    chunkStoreClose(&pSrv->store);
+    sqlite3_free(pSrv->zDir);
     return SQLITE_ERROR;
   }
 
@@ -515,18 +620,19 @@ static void serverCleanup(DoltliteServer *pSrv){
     close(pSrv->listenFd);
     pSrv->listenFd = -1;
   }
-  chunkStoreClose(&pSrv->store);
+  sqlite3_free(pSrv->zDir);
+  pSrv->zDir = 0;
 }
 
 /*
-** Start serving a doltlite database over HTTP.
+** Start serving doltlite databases in a directory over HTTP.
 ** Blocks until stopped. Returns SQLITE_OK on clean shutdown.
 */
-int doltliteServe(const char *zDbPath, int port){
+int doltliteServe(const char *zDir, int port){
   DoltliteServer server;
   int rc;
 
-  rc = serverInit(&server, zDbPath, port);
+  rc = serverInit(&server, zDir, port);
   if( rc!=SQLITE_OK ) return rc;
 
   serverLoop(&server);
@@ -545,14 +651,14 @@ static void *serverThreadEntry(void *pArg){
 /*
 ** Non-blocking: start server in background thread.
 */
-DoltliteServer *doltliteServeAsync(const char *zDbPath, int port){
+DoltliteServer *doltliteServeAsync(const char *zDir, int port){
   DoltliteServer *pSrv;
   int rc;
 
   pSrv = (DoltliteServer*)sqlite3_malloc(sizeof(DoltliteServer));
   if( !pSrv ) return 0;
 
-  rc = serverInit(pSrv, zDbPath, port);
+  rc = serverInit(pSrv, zDir, port);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pSrv);
     return 0;

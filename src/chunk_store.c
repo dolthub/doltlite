@@ -1255,6 +1255,111 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
 }
 
 /*
+** Public wrapper around csDeserializeRefs: parse a refs blob into the
+** ChunkStore's in-memory branch/tag/remote/tracking arrays, without
+** any file I/O.  Existing arrays are freed first.
+*/
+int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
+  csFreeBranches(cs);
+  csFreeTags(cs);
+  csFreeRemotes(cs);
+  csFreeTracking(cs);
+  return csDeserializeRefs(cs, data, nData);
+}
+
+/*
+** Serialize the in-memory branches/tags/remotes/tracking into a newly-
+** allocated blob.  Caller must sqlite3_free(*ppOut).
+** This is the serialization half of chunkStoreSerializeRefs (which
+** additionally stores the blob into the chunk store).
+*/
+int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
+  const char *def = cs->zDefaultBranch ? cs->zDefaultBranch : "main";
+  int defLen = (int)strlen(def);
+  int sz = 1 + 2 + defLen + 2 + 2 + 2 + 2;
+  int i;
+  u8 *buf, *bufCur;
+
+  *ppOut = 0;
+  *pnOut = 0;
+
+  for(i=0; i<cs->nBranches; i++){
+    int inc = 2 + (int)strlen(cs->aBranches[i].zName) + PROLLY_HASH_SIZE*2;
+    if( sz > INT_MAX - inc ) return SQLITE_TOOBIG;
+    sz += inc;
+  }
+  for(i=0; i<cs->nTags; i++){
+    int inc = 2 + (int)strlen(cs->aTags[i].zName) + PROLLY_HASH_SIZE;
+    if( sz > INT_MAX - inc ) return SQLITE_TOOBIG;
+    sz += inc;
+  }
+  for(i=0; i<cs->nRemotes; i++){
+    int inc = 2 + (int)strlen(cs->aRemotes[i].zName) + 2 + (int)strlen(cs->aRemotes[i].zUrl);
+    if( sz > INT_MAX - inc ) return SQLITE_TOOBIG;
+    sz += inc;
+  }
+  for(i=0; i<cs->nTracking; i++){
+    int inc = 2 + (int)strlen(cs->aTracking[i].zRemote) + 2 + (int)strlen(cs->aTracking[i].zBranch) + PROLLY_HASH_SIZE;
+    if( sz > INT_MAX - inc ) return SQLITE_TOOBIG;
+    sz += inc;
+  }
+
+  buf = sqlite3_malloc(sz);
+  if( !buf ) return SQLITE_NOMEM;
+  bufCur = buf;
+
+  *bufCur++ = 4;  /* version 4 */
+  bufCur[0]=(u8)defLen; bufCur[1]=(u8)(defLen>>8); bufCur+=2;
+  memcpy(bufCur, def, defLen); bufCur+=defLen;
+
+  /* Branches */
+  bufCur[0]=(u8)cs->nBranches; bufCur[1]=(u8)(cs->nBranches>>8); bufCur+=2;
+  for(i=0; i<cs->nBranches; i++){
+    int nameLen = (int)strlen(cs->aBranches[i].zName);
+    bufCur[0]=(u8)nameLen; bufCur[1]=(u8)(nameLen>>8); bufCur+=2;
+    memcpy(bufCur, cs->aBranches[i].zName, nameLen); bufCur+=nameLen;
+    memcpy(bufCur, cs->aBranches[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+    memcpy(bufCur, cs->aBranches[i].workingSetHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+  }
+
+  /* Tags */
+  bufCur[0]=(u8)cs->nTags; bufCur[1]=(u8)(cs->nTags>>8); bufCur+=2;
+  for(i=0; i<cs->nTags; i++){
+    int nameLen = (int)strlen(cs->aTags[i].zName);
+    bufCur[0]=(u8)nameLen; bufCur[1]=(u8)(nameLen>>8); bufCur+=2;
+    memcpy(bufCur, cs->aTags[i].zName, nameLen); bufCur+=nameLen;
+    memcpy(bufCur, cs->aTags[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+  }
+
+  /* Remotes */
+  bufCur[0]=(u8)cs->nRemotes; bufCur[1]=(u8)(cs->nRemotes>>8); bufCur+=2;
+  for(i=0; i<cs->nRemotes; i++){
+    int nameLen = (int)strlen(cs->aRemotes[i].zName);
+    int urlLen = (int)strlen(cs->aRemotes[i].zUrl);
+    bufCur[0]=(u8)nameLen; bufCur[1]=(u8)(nameLen>>8); bufCur+=2;
+    memcpy(bufCur, cs->aRemotes[i].zName, nameLen); bufCur+=nameLen;
+    bufCur[0]=(u8)urlLen; bufCur[1]=(u8)(urlLen>>8); bufCur+=2;
+    memcpy(bufCur, cs->aRemotes[i].zUrl, urlLen); bufCur+=urlLen;
+  }
+
+  /* Tracking branches */
+  bufCur[0]=(u8)cs->nTracking; bufCur[1]=(u8)(cs->nTracking>>8); bufCur+=2;
+  for(i=0; i<cs->nTracking; i++){
+    int remoteLen = (int)strlen(cs->aTracking[i].zRemote);
+    int branchLen = (int)strlen(cs->aTracking[i].zBranch);
+    bufCur[0]=(u8)remoteLen; bufCur[1]=(u8)(remoteLen>>8); bufCur+=2;
+    memcpy(bufCur, cs->aTracking[i].zRemote, remoteLen); bufCur+=remoteLen;
+    bufCur[0]=(u8)branchLen; bufCur[1]=(u8)(branchLen>>8); bufCur+=2;
+    memcpy(bufCur, cs->aTracking[i].zBranch, branchLen); bufCur+=branchLen;
+    memcpy(bufCur, cs->aTracking[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+  }
+
+  *ppOut = buf;
+  *pnOut = sz;
+  return SQLITE_OK;
+}
+
+/*
 ** Check whether a chunk with the given hash exists in the store
 ** (committed index or pending buffer).  Returns 1 if found, 0 if not.
 */

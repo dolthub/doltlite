@@ -5,8 +5,8 @@
 ** the doltlite HTTP remote server.  Uses raw BSD sockets — no libcurl
 ** or other external dependencies.
 **
-** URL format:  http://host:port[/path]
-** The "/v1" API prefix is always appended to the base path.
+** URL format:  http://host:port/dbname
+** The dbname becomes the base path (e.g., "/dbname").
 */
 #ifdef DOLTLITE_PROLLY
 
@@ -548,8 +548,8 @@ static void httpClose(DoltliteRemote *pRemote){
 ** Open an HTTP remote. Parses URL like "http://host:port/path"
 **
 ** Examples:
-**   http://localhost:8080       → host=localhost, port=8080, path=/v1
-**   http://example.com:3000/myrepo → host=example.com, port=3000, path=/myrepo/v1
+**   http://localhost:8080/mydb       -> host=localhost, port=8080, path=/mydb
+**   http://example.com:3000/myrepo   -> host=example.com, port=3000, path=/myrepo
 */
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   HttpRemote *p;
@@ -616,18 +616,22 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
 
   p->port = port;
 
-  /* Build base path: userPath + "/v1" */
-  nBasePath = nUserPath + 3; /* "/v1" is 3 chars */
+  /* Build base path from URL path (e.g., "/dbname") */
+  nBasePath = nUserPath;
+  if( nBasePath <= 0 ){
+    /* No path in URL -- invalid for multi-db server */
+    sqlite3_free(p->zHost);
+    sqlite3_free(p);
+    return 0;
+  }
   p->zBasePath = sqlite3_malloc(nBasePath + 1);
   if( !p->zBasePath ){
     sqlite3_free(p->zHost);
     sqlite3_free(p);
     return 0;
   }
-  if( nUserPath > 0 ){
-    memcpy(p->zBasePath, zPathStart, nUserPath);
-  }
-  memcpy(p->zBasePath + nUserPath, "/v1", 4); /* includes NUL */
+  memcpy(p->zBasePath, zPathStart, nBasePath);
+  p->zBasePath[nBasePath] = '\0';
 
   /* Wire up vtable */
   p->base.xGetChunk = httpGetChunk;

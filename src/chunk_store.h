@@ -199,6 +199,12 @@ int chunkStoreFindTracking(ChunkStore *cs, const char *zRemote,
 int chunkStoreDeleteTracking(ChunkStore *cs, const char *zRemote,
                              const char *zBranch);
 
+/* Parse a refs blob into cs->aBranches/aTags/aRemotes/aTracking (no file I/O) */
+int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData);
+
+/* Serialize cs->aBranches/aTags/aRemotes/aTracking into a blob (caller frees) */
+int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut);
+
 /* Bulk has-check for sync (check multiple hashes at once) */
 int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aResult);
 
