@@ -2442,7 +2442,11 @@ int sqlite3BtreeIndexMoveto(
         ** When many entries are deleted (e.g., UPDATE on indexed column),
         ** the linear scan degrades to O(N) per seek. After the limit,
         ** fall through to the MutMap-only lookup below. */
-        { int scanLimit = 8;
+        /* No scan limit: sort key order doesn't perfectly match
+        ** VdbeRecordCompare order, requiring a linear scan to find the
+        ** exact match. This makes IndexMoveto O(N) instead of O(log N).
+        ** TODO: fix sort key encoding to match VdbeRecordCompare order (#164) */
+        { int scanLimit = 0x7fffffff;
         while( pCur->pCur.eState==PROLLY_CURSOR_VALID && scanLimit > 0 ){
           prollyCursorKey(&pCur->pCur, &pSK, &nSK);
           if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
@@ -2692,24 +2696,22 @@ int sqlite3BtreeInsert(
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Defer flush for persistent non-master tables. The MutMap accumulates edits
-  ** and they are flushed at commit time via flushAllPending. TableMoveto
-  ** and IndexMoveto check MutMap so reads see pending edits.
-  ** Only defer for tables in aCommittedTables — ephemeral tables (CTE working
-  ** tables, autoindexes) need immediate writes. */
+  /* Defer flush for persistent (non-ephemeral) tables, including newly
+  ** created tables and indexes in the current transaction.
+  ** Ephemeral tables (temp database) need immediate writes because CTEs
+  ** and window functions read back what they just wrote.
+  ** We detect persistent tables by checking the MAIN database's aTables
+  ** (db->aDb[0].pBt), not the cursor's btree (which may be temp). */
   {
     int canDefer = 0;
-    if( pCur->pgnoRoot > 1 ){
-      Btree *pBtree = pCur->pBtree;
-      if( pBtree->aCommittedTables ){
-        int i;
-        for(i = 0; i < pBtree->nCommittedTables; i++){
-          if( pBtree->aCommittedTables[i].iTable == pCur->pgnoRoot ){
-            canDefer = 1;
-            break;
-          }
-        }
+    if( pCur->pgnoRoot > 1 && pCur->pBt->db ){
+      Btree *pMain = pCur->pBt->db->aDb[0].pBt;
+      if( pMain && pMain == pCur->pBtree ){
+        /* Cursor is on the main database — check aTables */
+        struct TableEntry *pTE2 = findTable(pMain, pCur->pgnoRoot);
+        if( pTE2 ) canDefer = 1;
       }
+      /* If cursor is on a temp/ephemeral database, canDefer stays 0 */
     }
     if( canDefer ){
       if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
@@ -3038,19 +3040,15 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Dispatch to deferred or immediate path */
+  /* Dispatch to deferred or immediate path.
+  ** Same logic as INSERT: only defer for main database tables. */
   {
     int canDefer = 0;
-    if( pCur->pgnoRoot > 1 ){
-      Btree *pBtree = pCur->pBtree;
-      if( pBtree->aCommittedTables ){
-        int i;
-        for(i = 0; i < pBtree->nCommittedTables; i++){
-          if( pBtree->aCommittedTables[i].iTable == pCur->pgnoRoot ){
-            canDefer = 1;
-            break;
-          }
-        }
+    if( pCur->pgnoRoot > 1 && pCur->pBt->db ){
+      Btree *pMain = pCur->pBt->db->aDb[0].pBt;
+      if( pMain && pMain == pCur->pBtree ){
+        struct TableEntry *pTE2 = findTable(pMain, pCur->pgnoRoot);
+        if( pTE2 ) canDefer = 1;
       }
     }
     if( canDefer ){
