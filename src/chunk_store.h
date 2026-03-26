@@ -127,6 +127,10 @@ struct ChunkStore {
   ChunkIndexEntry *aPending;
   int nPending;
   int nPendingAlloc;
+  int *aPendingHT;           /* Hash table buckets for pending lookup */
+  int *aPendingHTNext;       /* Next-chain for hash table */
+  int nPendingHTBuilt;       /* Entries indexed so far */
+  int nPendingHTNextAlloc;   /* Allocated size of aPendingHTNext */
   u8 *pWriteBuf;
   i64 nWriteBuf;
   i64 nWriteBufAlloc;

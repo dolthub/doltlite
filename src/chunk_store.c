@@ -96,6 +96,7 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData);
 static int csSearchIndex(const ChunkIndexEntry *aIdx, int nIdx,
                          const ProllyHash *pHash);
 static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash);
+static int csIndexEntryCmp(const void *a, const void *b);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 static void csSerializeIndexEntry(const ChunkIndexEntry *e, u8 *aBuf);
 static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e);
@@ -212,15 +213,65 @@ static int csSearchIndex(
 }
 
 /* --------------------------------------------------------------------
-** csSearchPending -- linear search pending entries for a hash.
-** Returns the index if found, or -1.
+** csSearchPending -- O(1) hash table lookup for pending chunks.
+** Uses an incrementally-built hash table (chained, 4K buckets).
 ** -------------------------------------------------------------------- */
-static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
+#define CS_PEND_HT_BITS 12
+#define CS_PEND_HT_SIZE (1 << CS_PEND_HT_BITS)
+#define CS_PEND_HT_MASK (CS_PEND_HT_SIZE - 1)
+
+static u32 csPendBucket(const ProllyHash *h){
+  return ((u32)h->data[0] | ((u32)h->data[1]<<8)) & CS_PEND_HT_MASK;
+}
+
+static void csPendHTClear(ChunkStore *cs){
+  sqlite3_free(cs->aPendingHT);
+  sqlite3_free(cs->aPendingHTNext);
+  cs->aPendingHT = 0;
+  cs->aPendingHTNext = 0;
+  cs->nPendingHTBuilt = 0;
+}
+
+static int csPendHTEnsure(ChunkStore *cs){
   int i;
-  for( i = 0; i < cs->nPending; i++ ){
-    if( prollyHashCompare(&cs->aPending[i].hash, pHash) == 0 ){
-      return i;
+  if( cs->nPending==0 ) return SQLITE_OK;
+  if( !cs->aPendingHT ){
+    cs->aPendingHT = sqlite3_malloc(CS_PEND_HT_SIZE * (int)sizeof(int));
+    if( !cs->aPendingHT ) return SQLITE_NOMEM;
+    memset(cs->aPendingHT, 0xff, CS_PEND_HT_SIZE * sizeof(int));
+    cs->nPendingHTBuilt = 0;
+  }
+  if( !cs->aPendingHTNext || cs->nPendingAlloc > cs->nPendingHTNextAlloc ){
+    int nAlloc = cs->nPendingAlloc > 0 ? cs->nPendingAlloc : 64;
+    int *aNew = sqlite3_realloc(cs->aPendingHTNext, nAlloc*(int)sizeof(int));
+    if( !aNew ) return SQLITE_NOMEM;
+    cs->aPendingHTNext = aNew;
+    cs->nPendingHTNextAlloc = nAlloc;
+  }
+  for(i=cs->nPendingHTBuilt; i<cs->nPending; i++){
+    u32 b = csPendBucket(&cs->aPending[i].hash);
+    cs->aPendingHTNext[i] = cs->aPendingHT[b];
+    cs->aPendingHT[b] = i;
+  }
+  cs->nPendingHTBuilt = cs->nPending;
+  return SQLITE_OK;
+}
+
+static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
+  int i; u32 b;
+  if( cs->nPending==0 ) return -1;
+  if( csPendHTEnsure(cs)!=SQLITE_OK ){
+    /* Fallback to linear scan on OOM */
+    for(i=0; i<cs->nPending; i++){
+      if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ) return i;
     }
+    return -1;
+  }
+  b = csPendBucket(pHash);
+  i = cs->aPendingHT[b];
+  while( i>=0 ){
+    if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ) return i;
+    i = cs->aPendingHTNext[i];
   }
   return -1;
 }
@@ -524,6 +575,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     cs->nIndex = nMerged;
     cs->nIndexAlloc = nMerged;
     cs->nPending = 0;
+    csPendHTClear(cs);
   }
 
   /* Reload refs from the WAL-updated refsHash */
@@ -755,6 +807,7 @@ int chunkStoreClose(ChunkStore *cs){
   sqlite3_free(cs->zFilename);
   sqlite3_free(cs->aIndex);
   sqlite3_free(cs->aPending);
+  csPendHTClear(cs);
   sqlite3_free(cs->pWriteBuf);
   sqlite3_free(cs->zDefaultBranch);
   csFreeBranches(cs);
@@ -1516,15 +1569,14 @@ int chunkStorePut(
   rc = csGrowWriteBuf(cs, 4 + nData);
   if( rc != SQLITE_OK ) return rc;
 
-  /* Record the pending index entry.  The offset stored here is relative
-  ** to the start of pWriteBuf (a buffer-local offset). During commit
-  ** these are translated to file offsets. */
+  /* Append to pending array. Sorted lazily by csSearchPending. */
   {
     ChunkIndexEntry *e = &cs->aPending[cs->nPending];
-    memcpy(&e->hash, &h, sizeof(ProllyHash));
-    e->offset = (i64)cs->nWriteBuf;  /* offset within pWriteBuf */
+    e->hash = h;
+    e->offset = (i64)cs->nWriteBuf;
     e->size = nData;
     cs->nPending++;
+    /* Hash table is incrementally updated by csSearchPending */
   }
 
   /* Append length + data to write buffer */
@@ -1552,6 +1604,7 @@ static int csCommitToMemory(ChunkStore *cs){
     cs->nIndex = nMem;
     cs->nIndexAlloc = nMem;
     cs->nPending = 0;
+    csPendHTClear(cs);
     cs->nCommittedWriteBuf = cs->nWriteBuf;
   }
   return SQLITE_OK;
@@ -1590,6 +1643,7 @@ static int csCommitToFile(ChunkStore *cs){
         /* Temporarily reset pending count so replay doesn't conflict */
         int savePending = cs->nPending;
         cs->nPending = 0;
+    csPendHTClear(cs);
         csReplayWalRegion(cs, 1);
         cs->nPending = savePending;
       }
@@ -1716,6 +1770,7 @@ static int csCommitToFile(ChunkStore *cs){
   cs->nWriteBuf = 0;
   cs->nWriteBufAlloc = 0;
   cs->nPending = 0;
+    csPendHTClear(cs);
 
   return SQLITE_OK;
 }
@@ -1747,6 +1802,7 @@ int chunkStoreCommit(ChunkStore *cs){
 */
 void chunkStoreRollback(ChunkStore *cs){
   cs->nPending = 0;
+    csPendHTClear(cs);
   if( cs->isMemory ){
     /* For in-memory stores, committed chunks live in pWriteBuf.
     ** Only discard the uncommitted portion. */
@@ -1842,6 +1898,7 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
       cs->pWalData = 0;
       cs->nWalData = 0;
       cs->nPending = 0;
+    csPendHTClear(cs);
       rc = csReplayWal(cs);
       if( rc!=SQLITE_OK ) return rc;
       cs->iFileSize = fileSize;

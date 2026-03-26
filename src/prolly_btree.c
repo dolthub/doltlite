@@ -2692,13 +2692,25 @@ int sqlite3BtreeInsert(
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Defer flush for ALL non-master tables, including ephemeral ones.
-  ** The MutMap accumulates edits; TableMoveto/IndexMoveto check MutMap
-  ** so reads see pending edits without needing a tree rebuild.
-  ** Only the master table (pgnoRoot==1) flushes immediately because
-  ** schema changes need to be visible to subsequent statements. */
+  /* Defer flush for persistent non-master tables. The MutMap accumulates edits
+  ** and they are flushed at commit time via flushAllPending. TableMoveto
+  ** and IndexMoveto check MutMap so reads see pending edits.
+  ** Only defer for tables in aCommittedTables — ephemeral tables (CTE working
+  ** tables, autoindexes) need immediate writes. */
   {
-    int canDefer = (pCur->pgnoRoot > 1);
+    int canDefer = 0;
+    if( pCur->pgnoRoot > 1 ){
+      Btree *pBtree = pCur->pBtree;
+      if( pBtree->aCommittedTables ){
+        int i;
+        for(i = 0; i < pBtree->nCommittedTables; i++){
+          if( pBtree->aCommittedTables[i].iTable == pCur->pgnoRoot ){
+            canDefer = 1;
+            break;
+          }
+        }
+      }
+    }
     if( canDefer ){
       if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
         /* INTKEY SAVEPOSITION: cache the inserted data so cursor reads work.
@@ -2731,7 +2743,7 @@ int sqlite3BtreeInsert(
     }
   }
 
-  /* Master table (pgnoRoot==1): flush immediately for schema visibility */
+  /* Master table (pgnoRoot==1) and ephemeral tables: flush immediately */
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
   {
@@ -3028,7 +3040,19 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
 
   /* Dispatch to deferred or immediate path */
   {
-    int canDefer = (pCur->pgnoRoot > 1);
+    int canDefer = 0;
+    if( pCur->pgnoRoot > 1 ){
+      Btree *pBtree = pCur->pBtree;
+      if( pBtree->aCommittedTables ){
+        int i;
+        for(i = 0; i < pBtree->nCommittedTables; i++){
+          if( pBtree->aCommittedTables[i].iTable == pCur->pgnoRoot ){
+            canDefer = 1;
+            break;
+          }
+        }
+      }
+    }
     if( canDefer ){
       rc = btreeDeleteDeferred(pCur, pKey, nKey, iKey);
       if( rc!=SQLITE_OK ) return rc;

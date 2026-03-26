@@ -10,7 +10,8 @@ TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
 N=100000
-if [ "$2" = "--quick" ]; then N=10000; fi
+QUICK=0
+if [ "$2" = "--quick" ]; then N=10000; QUICK=1; fi
 
 pass=0
 fail=0
@@ -182,6 +183,47 @@ db_size=$(stat -f%z "$TMPDIR/db" 2>/dev/null || stat -c%s "$TMPDIR/db" 2>/dev/nu
 db_mb=$((db_size / 1048576))
 echo "  Database: ${db_mb}MB ($((db_size/1024))KB)"
 check "file exists" "1" "$([ "$db_size" -gt 0 ] && echo 1 || echo 0)"
+
+# ── 11. Million-row test (skip in quick mode) ────────────
+if [ "$QUICK" = "0" ]; then
+echo ""
+echo "--- 11. 1M row insert + commit ---"
+t0=$(ts)
+"$DB" "$TMPDIR/1m.db" "CREATE TABLE big(id INTEGER PRIMARY KEY, name TEXT, val INTEGER);" > /dev/null 2>&1
+"$DB" "$TMPDIR/1m.db" "WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<1000000) INSERT INTO big SELECT x,'row_'||x,x%1000 FROM c; SELECT dolt_add('-A'); SELECT dolt_commit('-m','1M rows');" > /dev/null 2>&1
+echo "  ($(( $(ts) - t0 ))s)"
+
+result=$("$DB" "$TMPDIR/1m.db" "SELECT count(*) FROM big;")
+check "1M rows inserted" "1000000" "$result"
+
+result=$("$DB" "$TMPDIR/1m.db" "SELECT name FROM big WHERE id=500000;")
+check "1M midpoint lookup" "row_500000" "$result"
+
+sz=$("$DB" "$TMPDIR/1m.db" ".dbinfo" 2>/dev/null | head -1)
+m1_size=$(stat -f%z "$TMPDIR/1m.db" 2>/dev/null || stat -c%s "$TMPDIR/1m.db" 2>/dev/null)
+echo "  1M database: $((m1_size / 1048576))MB"
+
+echo ""
+echo "--- 12. 10M rows (batched) ---"
+t0=$(ts)
+"$DB" "$TMPDIR/10m.db" "CREATE TABLE big(id INTEGER PRIMARY KEY, name TEXT, val INTEGER);" > /dev/null 2>&1
+for batch in $(seq 0 9); do
+  start=$((batch * 1000000 + 1))
+  end=$((start + 999999))
+  "$DB" "$TMPDIR/10m.db" "WITH RECURSIVE c(x) AS (VALUES($start) UNION ALL SELECT x+1 FROM c WHERE x<$end) INSERT INTO big SELECT x,'row_'||x,x%1000 FROM c;" > /dev/null 2>&1
+done
+"$DB" "$TMPDIR/10m.db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','10M rows');" > /dev/null 2>&1
+echo "  ($(( $(ts) - t0 ))s)"
+
+result=$("$DB" "$TMPDIR/10m.db" "SELECT count(*) FROM big;")
+check "10M rows inserted" "10000000" "$result"
+
+result=$("$DB" "$TMPDIR/10m.db" "SELECT name FROM big WHERE id=5000000;")
+check "10M midpoint lookup" "row_5000000" "$result"
+
+m10_size=$(stat -f%z "$TMPDIR/10m.db" 2>/dev/null || stat -c%s "$TMPDIR/10m.db" 2>/dev/null)
+echo "  10M database: $((m10_size / 1048576))MB"
+fi
 
 echo ""
 echo "======================================="
