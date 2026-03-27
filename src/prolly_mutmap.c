@@ -397,6 +397,38 @@ void prollyMutMapClear(ProllyMutMap *mm){
 }
 
 /*
+** Deep-clone a mutable map. Returns a heap-allocated ProllyMutMap.
+** Caller must free with prollyMutMapFree + sqlite3_free.
+** Returns NULL on allocation failure or if mm is NULL/empty.
+*/
+ProllyMutMap *prollyMutMapClone(ProllyMutMap *mm){
+  ProllyMutMap *pNew;
+  ProllyMutMapEntry *p;
+  if( !mm || !mm->pHeader ) return 0;
+  pNew = sqlite3_malloc(sizeof(ProllyMutMap));
+  if( !pNew ) return 0;
+  if( prollyMutMapInit(pNew, mm->isIntKey)!=SQLITE_OK ){
+    sqlite3_free(pNew);
+    return 0;
+  }
+  for( p = mm->pHeader->aForward[0]; p; p = p->aForward[0] ){
+    int rc;
+    if( p->op==PROLLY_EDIT_INSERT ){
+      rc = prollyMutMapInsert(pNew, p->pKey, p->nKey, p->intKey,
+                              p->pVal, p->nVal);
+    }else{
+      rc = prollyMutMapDelete(pNew, p->pKey, p->nKey, p->intKey);
+    }
+    if( rc!=SQLITE_OK ){
+      prollyMutMapFree(pNew);
+      sqlite3_free(pNew);
+      return 0;
+    }
+  }
+  return pNew;
+}
+
+/*
 ** Free all resources associated with the mutable map.
 ** Clears all entries and frees the header sentinel.
 */

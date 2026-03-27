@@ -82,6 +82,9 @@ ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it);
 /* Merge all entries from pSrc into pDst. pSrc is emptied. */
 int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc);
 
+/* Deep-clone a mutable map */
+ProllyMutMap *prollyMutMapClone(ProllyMutMap *mm);
+
 /* Clear all entries */
 void prollyMutMapClear(ProllyMutMap *mm);
 
