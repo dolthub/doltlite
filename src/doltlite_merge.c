@@ -624,7 +624,7 @@ static int serializeMergedCatalog(
     }
   }
 
-  rc = chunkStorePut(cs, buf, sz, pOutHash);
+  rc = chunkStorePut(cs, buf, (int)(p - buf), pOutHash);
   sqlite3_free(buf);
   return rc;
 }

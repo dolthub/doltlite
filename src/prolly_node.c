@@ -107,7 +107,8 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   pNode->pValData = pCur + totalKeyBytes;
 
   totalValBytes = PROLLY_GET_U32((const u8*)&pNode->aValOff[count]);
-  if( minSize + (int)totalKeyBytes + (int)totalValBytes != nData ){
+  if( totalKeyBytes > (u32)nData || totalValBytes > (u32)nData
+   || minSize + (int)totalKeyBytes + (int)totalValBytes != nData ){
     return SQLITE_CORRUPT;
   }
 

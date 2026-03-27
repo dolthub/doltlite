@@ -76,10 +76,21 @@ static char *buildInsertSql(
   const u8 *pBodyPos = pBody;
   int colIdx = 0;
 
+  if( !zIns || !zVals ){
+    sqlite3_free(zIns); sqlite3_free(zVals);
+    return 0;
+  }
+
   while( pRec < pHdrEnd && pRec < pRecEnd && colIdx < nCol ){
     u64 st;
     int stBytes = cfReadVarint(pRec, pHdrEnd, &st);
     pRec += stBytes;
+
+    /* OOM check — if a previous sqlite3_mprintf failed, bail out */
+    if( !zIns || !zVals ){
+      sqlite3_free(zIns); sqlite3_free(zVals);
+      return 0;
+    }
 
     /* Append column name */
     zTmp = sqlite3_mprintf("%s,\"%w\"", zIns, azCol[colIdx]);

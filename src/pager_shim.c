@@ -434,7 +434,7 @@ int sqlite3PagerCommitPhaseOne(Pager *pPager, const char *zSuper, int noSync){
 }
 
 int sqlite3PagerCommitPhaseTwo(Pager *pPager){
-  (void)pPager;
+  SHIM(pPager)->iDataVersion++;
   return SQLITE_OK;
 }
 
