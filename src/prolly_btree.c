@@ -1562,6 +1562,33 @@ int sqlite3BtreeCommit(Btree *p){
   return rc;
 }
 
+/*
+** Restore the table registry from the committed snapshot.
+** Used by both rollback and savepoint rollback to transaction start.
+*/
+static int restoreFromCommitted(Btree *p){
+  if( p->aCommittedTables ){
+    sqlite3_free(p->aTables);
+    if( p->nCommittedTables > 0 ){
+      p->aTables = sqlite3_malloc(
+          p->nCommittedTables * (int)sizeof(struct TableEntry));
+      if( !p->aTables ){
+        p->nTables = 0;
+        p->nTablesAlloc = 0;
+        return SQLITE_NOMEM;
+      }
+      memcpy(p->aTables, p->aCommittedTables,
+             p->nCommittedTables * sizeof(struct TableEntry));
+    } else {
+      p->aTables = 0;
+    }
+    p->nTables = p->nCommittedTables;
+    p->nTablesAlloc = p->nCommittedTables;
+    p->iNextTable = p->iCommittedNextTable;
+  }
+  return SQLITE_OK;
+}
+
 int sqlite3BtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
   (void)writeOnly;
@@ -1663,27 +1690,8 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
       invalidateCursors(pBt, 0, SQLITE_ABORT);
       invalidateSchema(p);
     } else if( iSavepoint>=0 && iSavepoint>=p->nSavepoint ){
-      if( p->aCommittedTables ){
-        sqlite3_free(p->aTables);
-        if( p->nCommittedTables > 0 ){
-          p->aTables = sqlite3_malloc(
-              p->nCommittedTables * (int)sizeof(struct TableEntry));
-          if( p->aTables ){
-            memcpy(p->aTables, p->aCommittedTables,
-                   p->nCommittedTables * sizeof(struct TableEntry));
-          } else {
-            p->nTables = 0;
-            p->nTablesAlloc = 0;
-            return SQLITE_NOMEM;
-          }
-        } else {
-          p->aTables = 0;
-        }
-        p->nTables = p->nCommittedTables;
-        p->nTablesAlloc = p->nCommittedTables;
-        p->iNextTable = p->iCommittedNextTable;
-      }
       p->root = p->committedRoot;
+      { int rc2 = restoreFromCommitted(p); if( rc2 ) return rc2; }
       invalidateCursors(pBt, 0, SQLITE_ABORT);
       invalidateSchema(p);
     } else if( iSavepoint<0 ){
@@ -1692,25 +1700,7 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
         freeSavepointTables(&p->aSavepointTables[j]);
       }
       p->root = p->committedRoot;
-      if( p->aCommittedTables ){
-        sqlite3_free(p->aTables);
-        if( p->nCommittedTables > 0 ){
-          p->aTables = sqlite3_malloc(p->nCommittedTables * (int)sizeof(struct TableEntry));
-          if( p->aTables ){
-            memcpy(p->aTables, p->aCommittedTables,
-                   p->nCommittedTables * sizeof(struct TableEntry));
-          } else {
-            p->nTables = 0;
-            p->nTablesAlloc = 0;
-            return SQLITE_NOMEM;
-          }
-        } else {
-          p->aTables = 0;
-        }
-        p->nTables = p->nCommittedTables;
-        p->nTablesAlloc = p->nCommittedTables;
-        p->iNextTable = p->iCommittedNextTable;
-      }
+      { int rc2 = restoreFromCommitted(p); if( rc2 ) return rc2; }
       p->nSavepoint = 0;
       invalidateCursors(pBt, 0, SQLITE_ABORT);
       invalidateSchema(p);

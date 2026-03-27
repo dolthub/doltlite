@@ -61,20 +61,6 @@ static void hashToHex(const ProllyHash *pHash, char *zOut){
 ** ---------------------------------------------------------------- */
 
 /*
-** Read exactly nWant bytes from fd into pBuf.
-** Returns 0 on success, -1 on error/short read.
-*/
-static int readFull(int fd, u8 *pBuf, int nWant){
-  int nGot = 0;
-  while( nGot < nWant ){
-    ssize_t n = read(fd, pBuf + nGot, nWant - nGot);
-    if( n <= 0 ) return -1;
-    nGot += (int)n;
-  }
-  return 0;
-}
-
-/*
 ** Read all available data from fd until EOF.
 ** Caller frees *ppOut with sqlite3_free.
 */

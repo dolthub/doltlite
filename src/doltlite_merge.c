@@ -99,17 +99,6 @@ static int mergeReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
   *pVal=v; return i?i:1;
 }
 
-/* Write a varint. Returns bytes written. */
-static int mergeWriteVarint(u8 *p, u64 v){
-  u8 buf[9]; int i, nBytes;
-  if( v<=0x7f ){ p[0]=(u8)v; return 1; }
-  nBytes=0;
-  for(i=0; v>0 && i<9; i++){ buf[i]=(u8)(v&0x7f); v>>=7; nBytes++; }
-  if( v==0 && nBytes<=1 ){ p[0]=(u8)buf[0]; return 1; }
-  /* Fall back to a simple implementation */
-  return 0; /* Will use the approach below instead */
-}
-
 /* Get the data size for a serial type. */
 static int serialTypeSize(u64 st){
   if(st==0||st==8||st==9) return 0;
