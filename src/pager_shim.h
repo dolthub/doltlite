@@ -13,7 +13,9 @@
 ** that call sqlite3BtreePager() and then use the result.
 */
 typedef struct PagerShim PagerShim;
+#define PAGER_SHIM_MAGIC 0x50534D31  /* "PSM1" */
 struct PagerShim {
+  u32 magic;                   /* PAGER_SHIM_MAGIC — identifies this as PagerShim */
   sqlite3_file *pFd;        /* File descriptor (may be NULL for :memory:) */
   char *zFilename;           /* Database filename */
   char *zJournal;            /* Journal filename (always empty string) */

@@ -576,6 +576,8 @@ ifeq ($(DOLTLITE_PROLLY),1)
   # Replace btree.o/pager.o/wal.o/btmutex.o/backup.o with prolly engine
   LIBOBJS0 := $(filter-out btree.o pager.o wal.o btmutex.o backup.o,$(LIBOBJS0))
   LIBOBJS0 += $(PROLLY_OBJS)
+  # Also compile original btree/pager/wal with renamed symbols for ATTACH
+  LIBOBJS0 += btree_orig.o pager_orig.o wal_orig.o btmutex_orig.o backup_orig.o btree_orig_api.o
   OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1 -DDOLTLITE_VERSION='"$(DOLTLITE_VERSION)"'
 endif
 
@@ -1303,6 +1305,24 @@ prolly_btree.o:	$(TOP)/src/prolly_btree.c $(DEPS_OBJ_COMMON)
 
 pager_shim.o:	$(TOP)/src/pager_shim.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/pager_shim.c
+
+btree_orig.o:	$(TOP)/src/btree_orig.c $(TOP)/src/btree_orig_prefix.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/btree_orig.c
+
+pager_orig.o:	$(TOP)/src/pager_orig.c $(TOP)/src/btree_orig_prefix.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/pager_orig.c
+
+wal_orig.o:	$(TOP)/src/wal_orig.c $(TOP)/src/btree_orig_prefix.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/wal_orig.c
+
+btmutex_orig.o:	$(TOP)/src/btmutex_orig.c $(TOP)/src/btree_orig_prefix.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/btmutex_orig.c
+
+backup_orig.o:	$(TOP)/src/backup_orig.c $(TOP)/src/btree_orig_prefix.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/backup_orig.c
+
+btree_orig_api.o:	$(TOP)/src/btree_orig_api.c $(TOP)/src/btree_orig_api.h $(TOP)/src/btree_orig_prefix.h $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/btree_orig_api.c
 
 sortkey.o:	$(TOP)/src/sortkey.c $(TOP)/src/sortkey.h $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/sortkey.c
