@@ -4971,6 +4971,7 @@ case OP_SeekGT: {       /* jump0, in3, group, ncycle */
       goto seek_not_found;
     }
 
+#ifdef DOLTLITE_PROLLY
     /* Fix for prolly btree prefix-match positioning (issues #179, #180).
     **
     ** sqlite3BtreeIndexMoveto() may return res<0 with eqSeen when doing a
@@ -5017,6 +5018,7 @@ case OP_SeekGT: {       /* jump0, in3, group, ncycle */
         }
       }
     }
+#endif /* DOLTLITE_PROLLY */
   }
 #ifdef SQLITE_TEST
   sqlite3_search_count++;
