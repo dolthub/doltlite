@@ -22,7 +22,9 @@
 #include "doltlite_commit.h"
 
 #include <string.h>
-#include <unistd.h>
+#ifndef _WIN32
+# include <unistd.h>
+#endif
 
 extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 

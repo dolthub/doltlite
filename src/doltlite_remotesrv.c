@@ -16,13 +16,22 @@
 #include "doltlite_remotesrv.h"
 #include "doltlite_commit.h"
 
+#include <string.h>
+#include <stdio.h>
+
+#ifdef _WIN32
+/* remotesrv not yet ported to Windows (requires Winsock + Win32 threads) */
+DoltliteServer *doltliteServerCreate(const char *z, int p, char **e){
+  (void)z;(void)p; if(e) *e=sqlite3_mprintf("remotesrv not available on Windows"); return 0;
+}
+void doltliteServerDestroy(DoltliteServer *s){ (void)s; }
+int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
+#else /* POSIX */
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <poll.h>
-#include <string.h>
-#include <stdio.h>
 
 struct DoltliteServer {
   int listenFd;          /* Listening socket */
@@ -695,4 +704,5 @@ int doltliteServerPort(DoltliteServer *pServer){
   return pServer ? pServer->port : 0;
 }
 
+#endif /* !_WIN32 */
 #endif /* DOLTLITE_PROLLY */

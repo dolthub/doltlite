@@ -38,10 +38,41 @@
 #include <stdio.h>
 #include <limits.h>
 #include <fcntl.h>
-#include <unistd.h>
-#include <sys/file.h>
 #include <sys/stat.h>
-#include <sys/uio.h>
+
+#ifdef _WIN32
+# include <io.h>
+# include <windows.h>
+# define CS_OPEN(path, flags, mode) _open(path, flags | _O_BINARY, mode)
+# define CS_CLOSE(fd)              _close(fd)
+# define CS_WRITE(fd, buf, n)      _write(fd, buf, (unsigned)(n))
+# define CS_LSEEK(fd, off, whence) _lseeki64(fd, off, whence)
+# define CS_FSTAT(fd, st)          _fstat64(fd, st)
+# define CS_FSYNC(fd)              (_commit(fd)==0 ? 0 : -1)
+  typedef struct _stat64 cs_stat_t;
+  static int cs_flock(int fd, int op){
+    HANDLE h = (HANDLE)_get_osfhandle(fd);
+    OVERLAPPED ov = {0};
+    if( op==1 /*LOCK_EX*/ ){
+      return LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ov) ? 0 : -1;
+    }
+    UnlockFileEx(h, 0, MAXDWORD, MAXDWORD, &ov);
+    return 0;
+  }
+# define CS_FLOCK(fd, op) cs_flock(fd, op)
+#else
+# include <unistd.h>
+# include <sys/file.h>
+# include <sys/uio.h>
+# define CS_OPEN(path, flags, mode) open(path, flags, mode)
+# define CS_CLOSE(fd)              close(fd)
+# define CS_WRITE(fd, buf, n)      write(fd, buf, n)
+# define CS_LSEEK(fd, off, whence) lseek(fd, off, whence)
+# define CS_FSTAT(fd, st)          fstat(fd, st)
+# define CS_FSYNC(fd)              fsync(fd)
+# define CS_FLOCK(fd, op)          flock(fd, op)
+  typedef struct stat cs_stat_t;
+#endif
 
 /* --------------------------------------------------------------------
 ** Little-endian helper macros for reading/writing integers from byte
@@ -1661,19 +1692,19 @@ static int csCommitToFile(ChunkStore *cs){
   /* Single-file commit: append WAL records to the main file at EOF.
   ** If the file doesn't exist yet, create it with a manifest header. */
   {
-    int fd = open(cs->zFilename, O_WRONLY | O_CREAT, 0644);
+    int fd = CS_OPEN(cs->zFilename, O_WRONLY | O_CREAT, 0644);
     if( fd < 0 ) return SQLITE_CANTOPEN;
 
     /* Exclusive lock for concurrent writer serialization */
-    if( flock(fd, LOCK_EX) != 0 ){
-      close(fd);
+    if( CS_FLOCK(fd, 1 /*LOCK_EX*/) != 0 ){
+      CS_CLOSE(fd);
       return SQLITE_BUSY;
     }
 
     /* Under lock: check if file grew (another writer appended) */
     {
-      struct stat st;
-      if( fstat(fd, &st)==0 && (i64)st.st_size > cs->iFileSize && cs->pFile ){
+      cs_stat_t st;
+      if( CS_FSTAT(fd, &st)==0 && (i64)st.st_size > cs->iFileSize && cs->pFile ){
         /* Re-read WAL region to pick up other writer's chunks */
         sqlite3_free(cs->pWalData);
         cs->pWalData = 0;
@@ -1689,22 +1720,22 @@ static int csCommitToFile(ChunkStore *cs){
 
     /* If file is empty/new, write the manifest header first */
     {
-      struct stat st;
-      if( fstat(fd, &st)==0 && st.st_size == 0 ){
+      cs_stat_t st;
+      if( CS_FSTAT(fd, &st)==0 && st.st_size == 0 ){
         /* New file: write manifest at offset 0 */
         u8 manifest[CHUNK_MANIFEST_SIZE];
         cs->iWalOffset = CHUNK_MANIFEST_SIZE;
         csSerializeManifest(cs, manifest);
-        lseek(fd, 0, SEEK_SET);
-        if( write(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
-          close(fd);
+        CS_LSEEK(fd, 0, SEEK_SET);
+        if( CS_WRITE(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
+          CS_CLOSE(fd);
           return SQLITE_IOERR_WRITE;
         }
       }
     }
 
     /* Seek to end of file for appending WAL records */
-    lseek(fd, 0, SEEK_END);
+    CS_LSEEK(fd, 0, SEEK_END);
 
     /* Write chunk records: tag(1) + hash(20) + length(4) + data */
     for( i = 0; i < cs->nPending; i++ ){
@@ -1715,14 +1746,13 @@ static int csCommitToFile(ChunkStore *cs){
       CS_WRITE_U32(recHdr + 21, (u32)pe->size);
 
       i64 bufOff = pe->offset + 4;  /* skip length prefix */
-      struct iovec iov[2];
-      iov[0].iov_base = recHdr;
-      iov[0].iov_len = 25;
-      iov[1].iov_base = cs->pWriteBuf + bufOff;
-      iov[1].iov_len = pe->size;
-      ssize_t n = writev(fd, iov, 2);
-      if( n != (ssize_t)(25 + pe->size) ){
-        close(fd);
+      /* Write header + data (replaces writev for portability) */
+      if( CS_WRITE(fd, recHdr, 25) != 25 ){
+        CS_CLOSE(fd);
+        return SQLITE_IOERR_WRITE;
+      }
+      if( CS_WRITE(fd, cs->pWriteBuf + bufOff, pe->size) != (int)pe->size ){
+        CS_CLOSE(fd);
         return SQLITE_IOERR_WRITE;
       }
     }
@@ -1732,9 +1762,8 @@ static int csCommitToFile(ChunkStore *cs){
       u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
       rootRec[0] = CS_WAL_TAG_ROOT;
       csSerializeManifest(cs, rootRec + 1);
-      ssize_t n = write(fd, rootRec, sizeof(rootRec));
-      if( n != (ssize_t)sizeof(rootRec) ){
-        close(fd);
+      if( CS_WRITE(fd, rootRec, sizeof(rootRec)) != (int)sizeof(rootRec) ){
+        CS_CLOSE(fd);
         return SQLITE_IOERR_WRITE;
       }
     }
@@ -1743,25 +1772,25 @@ static int csCommitToFile(ChunkStore *cs){
     {
       u8 manifest[CHUNK_MANIFEST_SIZE];
       csSerializeManifest(cs, manifest);
-      lseek(fd, 0, SEEK_SET);
-      if( write(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
-        close(fd);
+      CS_LSEEK(fd, 0, SEEK_SET);
+      if( CS_WRITE(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
+        CS_CLOSE(fd);
         return SQLITE_IOERR_WRITE;
       }
     }
 
     /* fsync — durability point */
-    if( fsync(fd)!=0 ){
-      close(fd);
+    if( CS_FSYNC(fd)!=0 ){
+      CS_CLOSE(fd);
       return SQLITE_IOERR_FSYNC;
     }
 
     /* Track file size */
     {
-      struct stat st;
-      if( fstat(fd, &st)==0 ) cs->iFileSize = (i64)st.st_size;
+      cs_stat_t st;
+      if( CS_FSTAT(fd, &st)==0 ) cs->iFileSize = (i64)st.st_size;
     }
-    close(fd);
+    CS_CLOSE(fd);
   }
 
   /* If we didn't have a file handle yet (first commit), open it now */

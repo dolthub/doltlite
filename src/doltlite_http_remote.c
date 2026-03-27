@@ -17,11 +17,16 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <errno.h>
+
+#ifdef _WIN32
+/* HTTP remote not yet ported to Windows (requires Winsock) */
+void doltliteRegisterHttpRemote(sqlite3 *db){ (void)db; }
+#else /* POSIX */
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <unistd.h>
-#include <errno.h>
 
 /* ----------------------------------------------------------------
 ** HttpRemote structure
@@ -631,4 +636,5 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   return &p->base;
 }
 
+#endif /* !_WIN32 */
 #endif /* DOLTLITE_PROLLY */

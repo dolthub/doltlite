@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:  # Manual trigger from Actions tab for testing
 
 permissions:
   contents: write
@@ -64,12 +65,11 @@ jobs:
             ext: ""
             lib_ext: ".dylib"
             static_ext: ".a"
-          # Windows disabled: chunk_store.c uses sys/uio.h (POSIX)
-          # - os: windows-latest
-          #   target: win-x64
-          #   ext: ".exe"
-          #   lib_ext: ".dll"
-          #   static_ext: ".a"
+          - os: windows-latest
+            target: win-x64
+            ext: ".exe"
+            lib_ext: ".dll"
+            static_ext: ".lib"
 
     runs-on: ${{ matrix.os }}
 
@@ -91,16 +91,31 @@ jobs:
         ../configure
         make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-remotesrv doltlite-lib
 
+    - name: Build (Windows / MSYS2)
+      if: runner.os == 'Windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make tcl
+
+    - name: Configure and build (Windows)
+      if: runner.os == 'Windows'
+      shell: msys2 {0}
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make -j$(nproc) doltlite doltlite-remotesrv doltlite-lib
+
     - name: Package CLI tools
       shell: bash
       run: |
         VERSION=${GITHUB_REF_NAME#v}
         DIR="doltlite-tools-${{ matrix.target }}-${VERSION}"
         mkdir -p "${DIR}"
-        cp build/doltlite "${DIR}/"
-        cp build/doltlite-remotesrv "${DIR}/"
-        strip "${DIR}/doltlite" 2>/dev/null || true
-        strip "${DIR}/doltlite-remotesrv" 2>/dev/null || true
+        cp build/doltlite${{ matrix.ext }} "${DIR}/"
+        cp build/doltlite-remotesrv${{ matrix.ext }} "${DIR}/" 2>/dev/null || true
+        strip "${DIR}/doltlite${{ matrix.ext }}" 2>/dev/null || true
+        strip "${DIR}/doltlite-remotesrv${{ matrix.ext }}" 2>/dev/null || true
         zip -r "${DIR}.zip" "${DIR}"
 
     - name: Ad-hoc codesign (macOS)
@@ -135,6 +150,7 @@ jobs:
 
   # ── Create GitHub release ─────────────────────────────────
   release:
+    if: github.event_name != 'workflow_dispatch'
     needs: [source, build]
     runs-on: ubuntu-latest
     steps:
