@@ -50,7 +50,8 @@ INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thre
 -- Also insert rows for a different stream
 INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s2',0,'other');
 INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s2',1,'other');
-INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('cmd','s1',0,'other_kind');" \
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('cmd','s1',0,'other_kind');
+SELECT dolt_commit('-A','-m','setup');" \
   | $DOLTLITE "$DB180" > /dev/null 2>&1
 
 # Test: MAX with WHERE should return 9
@@ -106,6 +107,7 @@ echo "CREATE TABLE events(
     echo "INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',$i,'data_$i');"
   done
   echo "COMMIT;"
+  echo "SELECT dolt_commit('-A','-m','setup 500 rows');"
 } | $DOLTLITE "$DB180_LARGE" > /dev/null 2>&1
 
 run_test "issue180_max_where_500rows" \
@@ -127,7 +129,8 @@ echo "CREATE TABLE t(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT, sid TEXT, ver INTEGER,
   UNIQUE(kind, sid, ver)
-);" | $DOLTLITE "$DB179" > /dev/null 2>&1
+);
+SELECT dolt_commit('-A','-m','setup');" | $DOLTLITE "$DB179" > /dev/null 2>&1
 
 # Test: 3 self-referencing inserts in a transaction should all succeed
 run_test "issue179_self_ref_insert" \
@@ -150,7 +153,8 @@ echo "CREATE TABLE t(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT, sid TEXT, ver INTEGER,
   UNIQUE(kind, sid, ver)
-);" | $DOLTLITE "$DB179_5" > /dev/null 2>&1
+);
+SELECT dolt_commit('-A','-m','setup');" | $DOLTLITE "$DB179_5" > /dev/null 2>&1
 
 run_test "issue179_self_ref_5inserts" \
   "BEGIN;
@@ -181,7 +185,8 @@ echo "CREATE TABLE events(
   stream_version INTEGER NOT NULL,
   data TEXT,
   UNIQUE(aggregate_kind, stream_id, stream_version)
-);" | $DOLTLITE "$DB179_MAX" > /dev/null 2>&1
+);
+SELECT dolt_commit('-A','-m','setup');" | $DOLTLITE "$DB179_MAX" > /dev/null 2>&1
 
 run_test "issue179_max_pattern" \
   "BEGIN;
