@@ -2363,8 +2363,6 @@ int sqlite3BtreeIndexMoveto(
   int *pRes
 ){
   int rc;
-  int res;
-  int cmp;
 
   assert( !pCur->curIntKey );
 
@@ -2413,65 +2411,165 @@ int sqlite3BtreeIndexMoveto(
       return rc;
     }
 
-    /* ---- Tree seek: O(log N) using sort key ---- */
-    rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &res);
+    /* ---- Tree seek: O(log N) sort key descent + bounded leaf scan ----
+    ** Use sort key blob seek for O(log N) tree descent to the correct leaf.
+    ** Then scan the leaf node's VALUES using VdbeRecordCompare.
+    ** Leaf nodes are bounded in size (typically ~100 entries), so the
+    ** leaf scan is O(K) where K is a small constant.
+    ** If not found in the current leaf, check adjacent leaves (prev/next).
+    ** Total: O(log N) + O(K) = O(log N). */
+    rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &(int){0});
     if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-      const u8 *pKey; int nKey;
+      int iLevel = pCur->pCur.iLevel;
+      ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[iLevel].pEntry;
+      int seekIdx = pCur->pCur.aLevel[iLevel].idx;
+      int nItems = pLeaf->node.nItems;
 
-      /* Correction: scan backward then forward for VdbeRecordCompare match.
-      ** Skip entries deleted in MutMap. Limited to a few steps.
-      ** BLOBKEY: key = sort key, value = original SQLite record.
-      ** VdbeRecordCompare needs original record; MutMap lookup uses sort key. */
+      /* Scan current leaf: check all entries using VdbeRecordCompare on VALUES.
+      ** Start from seekIdx and expand outward for locality. */
+      int bestIdx = -1;
+      int bestCmp = 0;
       {
-        const u8 *pVal; int nVal;
-        const u8 *pSK; int nSK;
-
-        while( 1 ){
-          prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+        int i;
+        for( i = 0; i < nItems; i++ ){
+          const u8 *pVal; int nVal;
+          const u8 *pSK; int nSK;
+          prollyNodeValue(&pLeaf->node, i, &pVal, &nVal);
           pIdxKey->eqSeen = 0;
-          cmp = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
-          if( cmp >= 0 || pIdxKey->eqSeen ) break;
-          rc = prollyCursorPrev(&pCur->pCur);
-          if( rc!=SQLITE_OK || pCur->pCur.eState!=PROLLY_CURSOR_VALID ){
-            rc = prollyCursorFirst(&pCur->pCur, &(int){0});
+          int c = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
+
+          if( c==0 || pIdxKey->eqSeen ){
+            /* Check if deleted in MutMap */
+            prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
+            if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+              ProllyMutMapEntry *mmE = prollyMutMapFind(
+                  pCur->pMutMap, pSK, nSK, 0);
+              if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+                continue;  /* Skip deleted entries */
+              }
+            }
+            bestIdx = i;
+            bestCmp = c;
+            treeFound = 1;
+            treeCmp = c;
             break;
-          }
-        }
-        /* Forward scan: skip deleted entries, find first cmp >= 0.
-        ** LIMIT: scan at most 8 entries before giving up on the tree.
-        ** When many entries are deleted (e.g., UPDATE on indexed column),
-        ** the linear scan degrades to O(N) per seek. After the limit,
-        ** fall through to the MutMap-only lookup below. */
-        /* No scan limit: sort key order doesn't perfectly match
-        ** VdbeRecordCompare order, requiring a linear scan to find the
-        ** exact match. This makes IndexMoveto O(N) instead of O(log N).
-        ** TODO: fix sort key encoding to match VdbeRecordCompare order (#164) */
-        { int scanLimit = 0x7fffffff;
-        while( pCur->pCur.eState==PROLLY_CURSOR_VALID && scanLimit > 0 ){
-          prollyCursorKey(&pCur->pCur, &pSK, &nSK);
-          if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-            ProllyMutMapEntry *mmE = prollyMutMapFind(
-                pCur->pMutMap, pSK, nSK, 0);
-            if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
-              rc = prollyCursorNext(&pCur->pCur);
-              if( rc!=SQLITE_OK ) break;
-              scanLimit--;
-              continue;
+          } else if( c > 0 ){
+            /* Entry > search key. Track smallest such entry as fallback. */
+            prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
+            if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+              ProllyMutMapEntry *mmE = prollyMutMapFind(
+                  pCur->pMutMap, pSK, nSK, 0);
+              if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+                continue;
+              }
+            }
+            if( bestIdx < 0 ){
+              bestIdx = i;
+              bestCmp = c;
             }
           }
-          prollyCursorValue(&pCur->pCur, &pVal, &nVal);
-          pIdxKey->eqSeen = 0;
-          treeCmp = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
-          if( treeCmp==0 || pIdxKey->eqSeen || treeCmp>0 ){
-            treeFound = 1;
-            break;
-          }
-          rc = prollyCursorNext(&pCur->pCur);
-          if( rc!=SQLITE_OK ) break;
-          scanLimit--;
-        }
         }
       }
+
+      if( treeFound ){
+        /* Exact match found in leaf */
+        pCur->pCur.aLevel[iLevel].idx = bestIdx;
+      } else if( bestIdx >= 0 ){
+        /* No exact match but found a larger entry */
+        pCur->pCur.aLevel[iLevel].idx = bestIdx;
+        treeCmp = bestCmp;
+        treeFound = 1;
+      }
+
+      /* If no match at all in current leaf, try adjacent leaves.
+      ** An eqSeen match (treeFound=1 with treeCmp!=0) is valid - don't
+      ** search adjacent leaves which would corrupt the cursor position. */
+      if( !treeFound ){
+        /* Try previous leaf */
+        pCur->pCur.aLevel[iLevel].idx = 0;
+        pCur->pCur.eState = PROLLY_CURSOR_VALID;
+        int savedFound = treeFound;
+        int savedCmp = treeCmp;
+        int savedBestIdx = bestIdx;
+        rc = prollyCursorPrev(&pCur->pCur);
+        if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+          ProllyCacheEntry *pPrev = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
+          int pi;
+          for( pi = pPrev->node.nItems - 1; pi >= 0; pi-- ){
+            const u8 *pVal; int nVal;
+            const u8 *pSK; int nSK;
+            prollyNodeValue(&pPrev->node, pi, &pVal, &nVal);
+            pIdxKey->eqSeen = 0;
+            int c = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
+            if( c==0 || pIdxKey->eqSeen ){
+              prollyNodeKey(&pPrev->node, pi, &pSK, &nSK);
+              if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+                ProllyMutMapEntry *mmE = prollyMutMapFind(
+                    pCur->pMutMap, pSK, nSK, 0);
+                if( mmE && mmE->op==PROLLY_EDIT_DELETE ) continue;
+              }
+              pCur->pCur.aLevel[pCur->pCur.iLevel].idx = pi;
+              treeCmp = c;
+              treeFound = 1;
+              goto tree_seek_done;
+            }
+          }
+          /* No match in prev leaf, go back to original leaf */
+          rc = prollyCursorNext(&pCur->pCur);
+          if( rc!=SQLITE_OK ) goto tree_seek_done;
+        } else {
+          /* No prev leaf, reset to first */
+          rc = prollyCursorFirst(&pCur->pCur, &(int){0});
+          if( rc!=SQLITE_OK ) goto tree_seek_done;
+        }
+
+        /* Restore original leaf position */
+        /* Re-seek to get back to original leaf */
+        rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &(int){0});
+        if( rc!=SQLITE_OK ) goto tree_seek_done;
+        treeFound = savedFound;
+        treeCmp = savedCmp;
+        iLevel = pCur->pCur.iLevel;
+
+        /* Try next leaf */
+        pCur->pCur.aLevel[iLevel].idx =
+            pCur->pCur.aLevel[iLevel].pEntry->node.nItems - 1;
+        pCur->pCur.eState = PROLLY_CURSOR_VALID;
+        rc = prollyCursorNext(&pCur->pCur);
+        if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+          ProllyCacheEntry *pNext = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
+          int ni;
+          for( ni = 0; ni < pNext->node.nItems; ni++ ){
+            const u8 *pVal; int nVal;
+            const u8 *pSK; int nSK;
+            prollyNodeValue(&pNext->node, ni, &pVal, &nVal);
+            pIdxKey->eqSeen = 0;
+            int c = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
+            if( c==0 || pIdxKey->eqSeen ){
+              prollyNodeKey(&pNext->node, ni, &pSK, &nSK);
+              if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+                ProllyMutMapEntry *mmE = prollyMutMapFind(
+                    pCur->pMutMap, pSK, nSK, 0);
+                if( mmE && mmE->op==PROLLY_EDIT_DELETE ) continue;
+              }
+              pCur->pCur.aLevel[pCur->pCur.iLevel].idx = ni;
+              treeCmp = c;
+              treeFound = 1;
+              goto tree_seek_done;
+            }
+          }
+        }
+
+        /* Re-seek to restore valid cursor position */
+        rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &(int){0});
+        if( rc!=SQLITE_OK ) goto tree_seek_done;
+        treeFound = savedFound;
+        treeCmp = savedCmp;
+        if( savedBestIdx >= 0 ){
+          pCur->pCur.aLevel[pCur->pCur.iLevel].idx = savedBestIdx;
+        }
+      }
+tree_seek_done:;
     }
 
     /* ---- MutMap seek: O(log M) using prollyMutMapFind ---- */

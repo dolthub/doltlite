@@ -90,7 +90,7 @@ echo "--- 7. Index integrity after DELETE ---"
 rm -f "$TMPDIR/t.db"
 "$DB" "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT); CREATE INDEX idx ON t(val); WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<1000) INSERT INTO t SELECT x,x FROM c; DELETE FROM t WHERE id%10=0;" > /dev/null 2>&1
 # Index lookup should work after delete
-result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t WHERE val=500;" 2>/dev/null)
+result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t WHERE val=501;" 2>/dev/null)
 check "idx lookup after delete" "1" "$result"
 result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t WHERE val=10;" 2>/dev/null)
 check "deleted val not in idx" "0" "$result"
