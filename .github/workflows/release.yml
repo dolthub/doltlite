@@ -103,6 +103,17 @@ jobs:
         strip "${DIR}/doltlite-remotesrv" 2>/dev/null || true
         zip -r "${DIR}.zip" "${DIR}"
 
+    - name: Ad-hoc codesign (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        DIR="doltlite-tools-${{ matrix.target }}-${VERSION}"
+        codesign -s - --force "${DIR}/doltlite"
+        codesign -s - --force "${DIR}/doltlite-remotesrv"
+        # Re-zip with signed binaries
+        rm -f "${DIR}.zip"
+        zip -r "${DIR}.zip" "${DIR}"
+
     - name: Package libraries
       shell: bash
       run: |
