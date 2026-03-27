@@ -624,6 +624,7 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   CfRowCur *c = (CfRowCur*)cur;
   struct ConflictRow *cr;
   if( c->iTableIdx < 0 ) return SQLITE_OK;
+  if( c->iRow >= c->aTables[c->iTableIdx].nConflicts ) return SQLITE_OK;
   cr = &c->aTables[c->iTableIdx].aRows[c->iRow];
 
   switch(col){

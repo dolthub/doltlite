@@ -346,7 +346,9 @@ static int htEof(sqlite3_vtab_cursor *cur){
 static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   HistCursor *c=(HistCursor*)cur;
   HistVtab *v=(HistVtab*)cur->pVtab;
-  HistoryRow *r=&c->aRows[c->iRow];
+  HistoryRow *r;
+  if( c->iRow>=c->nRows ) return SQLITE_OK;
+  r=&c->aRows[c->iRow];
   int nCols=v->cols.nCol;
 
   /* Layout: col 0..nCols-1 = table columns, then commit_hash, committer, commit_date */

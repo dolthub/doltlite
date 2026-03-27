@@ -514,7 +514,9 @@ static int diffEof(sqlite3_vtab_cursor *pCursor){
 static int diffColumn(sqlite3_vtab_cursor *pCursor,
     sqlite3_context *ctx, int iCol){
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
-  DiffRow *r = &pCur->aRows[pCur->iRow];
+  DiffRow *r;
+  if( pCur->iRow >= pCur->nRows ) return SQLITE_OK;
+  r = &pCur->aRows[pCur->iRow];
 
   switch( iCol ){
     case 0: /* diff_type */

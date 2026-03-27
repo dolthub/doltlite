@@ -185,7 +185,9 @@ static int statusNext(sqlite3_vtab_cursor *p){((DoltliteStatusCursor*)p)->iRow++
 static int statusEof(sqlite3_vtab_cursor *p){return((DoltliteStatusCursor*)p)->iRow>=((DoltliteStatusCursor*)p)->nRows;}
 static int statusColumn(sqlite3_vtab_cursor *p,sqlite3_context *ctx,int c){
   DoltliteStatusCursor *pCur=(DoltliteStatusCursor*)p;
-  StatusRow *r=&pCur->aRows[pCur->iRow];
+  StatusRow *r;
+  if( pCur->iRow>=pCur->nRows ) return SQLITE_OK;
+  r=&pCur->aRows[pCur->iRow];
   switch(c){
     case 0:sqlite3_result_text(ctx,r->zName,-1,SQLITE_TRANSIENT);break;
     case 1:sqlite3_result_int(ctx,r->staged);break;

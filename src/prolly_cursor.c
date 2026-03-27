@@ -323,7 +323,13 @@ int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes){
 
   /* At the leaf: binary search for the key */
   int leafRes;
-  int leafIdx = prollyNodeSearchInt(&pEntry->node, intKey, &leafRes);
+  int leafIdx;
+  if( pEntry->node.nItems==0 ){
+    cur->eState = PROLLY_CURSOR_EOF;
+    *pRes = -1;
+    return SQLITE_OK;
+  }
+  leafIdx = prollyNodeSearchInt(&pEntry->node, intKey, &leafRes);
   cur->aLevel[cur->iLevel].idx = leafIdx;
 
   if( leafRes==0 ){
@@ -413,7 +419,13 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
 
   /* At the leaf: binary search */
   int leafRes;
-  int leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes);
+  int leafIdx;
+  if( pEntry->node.nItems==0 ){
+    cur->eState = PROLLY_CURSOR_EOF;
+    *pRes = -1;
+    return SQLITE_OK;
+  }
+  leafIdx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &leafRes);
   cur->aLevel[cur->iLevel].idx = leafIdx;
 
   if( leafRes==0 ){
