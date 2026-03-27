@@ -2465,27 +2465,72 @@ int sqlite3BtreeIndexMoveto(
       int seekIdx = pCur->pCur.aLevel[iLevel].idx;
       int nItems = pLeaf->node.nItems;
 
-      /* Scan current leaf: check all entries using VdbeRecordCompare on VALUES.
-      ** Start from seekIdx and expand outward for locality. */
+      /* Binary search on sort key prefix to find matching range, then
+      ** VdbeRecordCompare within that range. O(log L + K) where K is
+      ** the number of entries matching the sort key prefix.
+      ** Entries are sorted by sort key (memcmp). The search sort key
+      ** may be a prefix of stored sort keys (fewer index fields). */
       int bestIdx = -1;
       int bestCmp = 0;
       {
-        int i;
-        for( i = 0; i < nItems; i++ ){
-          const u8 *pVal; int nVal;
+        /* Phase 1: Binary search for first entry whose sort key prefix
+        ** >= pSortKey. Uses memcmp on the shorter of the two keys. */
+        int lo = 0, hi = nItems;
+        while( lo < hi ){
+          int mid = lo + (hi - lo) / 2;
           const u8 *pSK; int nSK;
+          prollyNodeKey(&pLeaf->node, mid, &pSK, &nSK);
+          int n = nSK < nSortKey ? nSK : nSortKey;
+          int c = memcmp(pSK, pSortKey, n);
+          if( c < 0 || (c==0 && nSK < nSortKey) ){
+            lo = mid + 1;
+          }else{
+            hi = mid;
+          }
+        }
+
+        /* Phase 2: Scan from 'lo' using VdbeRecordCompare. Stop when
+        ** we pass the prefix range (sort key prefix no longer matches). */
+        int i;
+        for( i = lo; i < nItems; i++ ){
+          const u8 *pSK; int nSK;
+          prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
+          /* Check if past prefix range — if so, this entry is the
+          ** first one greater than the search key. Capture as fallback
+          ** for range queries (>, >=) and stop scanning. */
+          {
+            int n = nSK < nSortKey ? nSK : nSortKey;
+            int pc = memcmp(pSK, pSortKey, n);
+            if( pc > 0 ){
+              if( bestIdx < 0 ){
+                int isDeleted = 0;
+                if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+                  ProllyMutMapEntry *mmE = prollyMutMapFind(
+                      pCur->pMutMap, pSK, nSK, 0);
+                  if( mmE && mmE->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
+                }
+                if( !isDeleted ){
+                  const u8 *pVal2; int nVal2;
+                  prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
+                  pIdxKey->eqSeen = 0;
+                  bestIdx = i;
+                  bestCmp = sqlite3VdbeRecordCompare(nVal2, pVal2, pIdxKey);
+                }
+              }
+              break;
+            }
+          }
+          const u8 *pVal; int nVal;
           prollyNodeValue(&pLeaf->node, i, &pVal, &nVal);
           pIdxKey->eqSeen = 0;
           int c = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
 
           if( c==0 || pIdxKey->eqSeen ){
-            /* Check if deleted in MutMap */
-            prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
             if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
               ProllyMutMapEntry *mmE = prollyMutMapFind(
                   pCur->pMutMap, pSK, nSK, 0);
               if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
-                continue;  /* Skip deleted entries */
+                continue;
               }
             }
             bestIdx = i;
@@ -2494,8 +2539,6 @@ int sqlite3BtreeIndexMoveto(
             treeCmp = c;
             break;
           } else if( c > 0 ){
-            /* Entry > search key. Track smallest such entry as fallback. */
-            prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
             if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
               ProllyMutMapEntry *mmE = prollyMutMapFind(
                   pCur->pMutMap, pSK, nSK, 0);
