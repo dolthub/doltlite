@@ -131,6 +131,7 @@ struct ChunkStore {
   int *aPendingHTNext;       /* Next-chain for hash table */
   int nPendingHTBuilt;       /* Entries indexed so far */
   int nPendingHTNextAlloc;   /* Allocated size of aPendingHTNext */
+  int nPendingHTSize;        /* Number of hash table buckets */
   u8 *pWriteBuf;
   i64 nWriteBuf;
   i64 nWriteBufAlloc;

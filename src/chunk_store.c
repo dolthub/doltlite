@@ -214,14 +214,15 @@ static int csSearchIndex(
 
 /* --------------------------------------------------------------------
 ** csSearchPending -- O(1) hash table lookup for pending chunks.
-** Uses an incrementally-built hash table (chained, 4K buckets).
+** Uses an incrementally-built hash table with dynamic resizing.
+** Starts at 4K buckets and doubles when load factor exceeds 4.
 ** -------------------------------------------------------------------- */
-#define CS_PEND_HT_BITS 12
-#define CS_PEND_HT_SIZE (1 << CS_PEND_HT_BITS)
-#define CS_PEND_HT_MASK (CS_PEND_HT_SIZE - 1)
+#define CS_PEND_HT_INIT_BITS 12
+#define CS_PEND_HT_MAX_LOAD  4   /* Rebuild when nPending/nBuckets > this */
 
-static u32 csPendBucket(const ProllyHash *h){
-  return ((u32)h->data[0] | ((u32)h->data[1]<<8)) & CS_PEND_HT_MASK;
+static u32 csPendBucket(const ProllyHash *h, int nHTMask){
+  return ((u32)h->data[0] | ((u32)h->data[1]<<8)
+        | ((u32)h->data[2]<<16) | ((u32)h->data[3]<<24)) & (u32)nHTMask;
 }
 
 static void csPendHTClear(ChunkStore *cs){
@@ -230,16 +231,53 @@ static void csPendHTClear(ChunkStore *cs){
   cs->aPendingHT = 0;
   cs->aPendingHTNext = 0;
   cs->nPendingHTBuilt = 0;
+  cs->nPendingHTSize = 0;
+}
+
+/*
+** Rebuild the entire hash table at the current size.
+*/
+static int csPendHTRebuild(ChunkStore *cs){
+  int i;
+  memset(cs->aPendingHT, 0xff, cs->nPendingHTSize * sizeof(int));
+  for(i=0; i<cs->nPending; i++){
+    u32 b = csPendBucket(&cs->aPending[i].hash, cs->nPendingHTSize - 1);
+    cs->aPendingHTNext[i] = cs->aPendingHT[b];
+    cs->aPendingHT[b] = i;
+  }
+  cs->nPendingHTBuilt = cs->nPending;
+  return SQLITE_OK;
 }
 
 static int csPendHTEnsure(ChunkStore *cs){
   int i;
   if( cs->nPending==0 ) return SQLITE_OK;
   if( !cs->aPendingHT ){
-    cs->aPendingHT = sqlite3_malloc(CS_PEND_HT_SIZE * (int)sizeof(int));
+    int initSize = 1 << CS_PEND_HT_INIT_BITS;
+    cs->aPendingHT = sqlite3_malloc(initSize * (int)sizeof(int));
     if( !cs->aPendingHT ) return SQLITE_NOMEM;
-    memset(cs->aPendingHT, 0xff, CS_PEND_HT_SIZE * sizeof(int));
+    memset(cs->aPendingHT, 0xff, initSize * sizeof(int));
+    cs->nPendingHTSize = initSize;
     cs->nPendingHTBuilt = 0;
+  }
+  /* Grow hash table when load factor exceeds threshold */
+  if( cs->nPending > cs->nPendingHTSize * CS_PEND_HT_MAX_LOAD ){
+    int newSize = cs->nPendingHTSize * 4;
+    int *aNew = sqlite3_realloc(cs->aPendingHT, newSize * (int)sizeof(int));
+    if( aNew ){
+      cs->aPendingHT = aNew;
+      cs->nPendingHTSize = newSize;
+      /* Must rebuild chains with new mask */
+      if( !cs->aPendingHTNext || cs->nPendingAlloc > cs->nPendingHTNextAlloc ){
+        int nAlloc = cs->nPendingAlloc > 0 ? cs->nPendingAlloc : 64;
+        int *aNew2 = sqlite3_realloc(cs->aPendingHTNext, nAlloc*(int)sizeof(int));
+        if( !aNew2 ) return SQLITE_NOMEM;
+        cs->aPendingHTNext = aNew2;
+        cs->nPendingHTNextAlloc = nAlloc;
+      }
+      return csPendHTRebuild(cs);
+    }
+    /* On OOM, continue with existing table (degraded perf, not incorrect) */
   }
   if( !cs->aPendingHTNext || cs->nPendingAlloc > cs->nPendingHTNextAlloc ){
     int nAlloc = cs->nPendingAlloc > 0 ? cs->nPendingAlloc : 64;
@@ -249,7 +287,7 @@ static int csPendHTEnsure(ChunkStore *cs){
     cs->nPendingHTNextAlloc = nAlloc;
   }
   for(i=cs->nPendingHTBuilt; i<cs->nPending; i++){
-    u32 b = csPendBucket(&cs->aPending[i].hash);
+    u32 b = csPendBucket(&cs->aPending[i].hash, cs->nPendingHTSize - 1);
     cs->aPendingHTNext[i] = cs->aPendingHT[b];
     cs->aPendingHT[b] = i;
   }
@@ -267,7 +305,7 @@ static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
     }
     return -1;
   }
-  b = csPendBucket(pHash);
+  b = csPendBucket(pHash, cs->nPendingHTSize - 1);
   i = cs->aPendingHT[b];
   while( i>=0 ){
     if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ) return i;
