@@ -872,7 +872,7 @@ static int pushSavepoint(Btree *pBtree){
   int rc;
 
   /* Flush cursor-level MutMaps. For table-level pPending: if small
-  ** (<=16 edits), clone into snapshot to avoid tree rebuild. If large,
+  ** (<=256 edits), clone into snapshot to avoid tree rebuild. If large,
   ** flush to tree (via flushDeferredEdits) to prevent clone accumulation. */
   {
     BtCursor *p;
@@ -1689,7 +1689,7 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
     } else if( iSavepoint<0 ){
       int j;
       for(j=0; j<p->nSavepoint; j++){
-        sqlite3_free(p->aSavepointTables[j].aTables);
+        freeSavepointTables(&p->aSavepointTables[j]);
       }
       p->root = p->committedRoot;
       if( p->aCommittedTables ){
@@ -1720,7 +1720,7 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
     if( iSavepoint>=0 && iSavepoint<p->nSavepoint ){
       int j;
       for(j=iSavepoint; j<p->nSavepoint; j++){
-        sqlite3_free(p->aSavepointTables[j].aTables);
+        freeSavepointTables(&p->aSavepointTables[j]);
       }
       p->nSavepoint = iSavepoint;
     }
