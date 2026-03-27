@@ -22,6 +22,7 @@
 #ifdef _WIN32
 /* HTTP remote not yet ported to Windows (requires Winsock) */
 void doltliteRegisterHttpRemote(sqlite3 *db){ (void)db; }
+DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){ (void)zUrl; return 0; }
 #else /* POSIX */
 #include <sys/socket.h>
 #include <netinet/in.h>
