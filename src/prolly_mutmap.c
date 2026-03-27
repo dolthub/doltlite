@@ -1,6 +1,10 @@
 /*
-** Mutable map implementation: skip list for buffering pending edits
-** before tree flush. Supports insert, delete, and ordered iteration.
+** Mutable map implementation: sorted array for buffering pending edits
+** before tree flush. Supports insert, delete, find, and ordered iteration.
+**
+** Sorted array gives O(log M) find, O(M) insert (shift), O(M) clone
+** (memcpy + key/val copy). For typical M <= 256, this is faster than
+** the previous skip list which had O(M log M) clone cost.
 */
 #ifdef DOLTLITE_PROLLY
 
@@ -8,26 +12,10 @@
 #include "prolly_node.h"
 #include <string.h>
 
-/*
-** Generate a random level for a new skip list entry using geometric
-** distribution. Uses a simple LCG PRNG and counts trailing zeros.
-** Returns a value between 1 and PROLLY_SKIPLIST_MAXLEVEL.
-*/
-static int randomLevel(ProllyMutMap *mm){
-  int level = 1;
-  mm->prng = mm->prng * 6364136223846793005ULL + 1;
-  sqlite3_uint64 r = (sqlite3_uint64)mm->prng;
-  /* Count trailing zeros to get geometric distribution */
-  while( (r & 1)==0 && level < PROLLY_SKIPLIST_MAXLEVEL ){
-    level++;
-    r >>= 1;
-  }
-  return level;
-}
+#define MUTMAP_INIT_CAP 16
 
 /*
-** compareEntries: thin wrapper around prollyCompareKeys (prolly_node.c).
-** Maps the isIntKey flag to PROLLY_NODE_INTKEY for the shared comparator.
+** Compare two keys using the shared comparator from prolly_node.c.
 */
 static int compareEntries(
   u8 isIntKey,
@@ -40,181 +28,153 @@ static int compareEntries(
 }
 
 /*
-** Allocate a new skip list entry with the given level. The entry struct
-** is allocated with trailing space for 'level' forward pointers.
-** Key and value data are copied into separately allocated buffers.
-**
-** Returns NULL on allocation failure.
+** Free the key and value buffers of an entry (but not the entry itself,
+** since entries are stored inline in the array).
 */
-static ProllyMutMapEntry *allocEntry(
-  u8 isIntKey,
-  const u8 *pKey, int nKey, i64 intKey,
-  const u8 *pVal, int nVal,
-  u8 op,
-  int level
-){
-  ProllyMutMapEntry *pEntry;
-  int sz = sizeof(ProllyMutMapEntry) + level * sizeof(ProllyMutMapEntry*);
-  int i;
+static void freeEntryData(ProllyMutMapEntry *e){
+  sqlite3_free(e->pKey);
+  sqlite3_free(e->pVal);
+  e->pKey = 0;
+  e->pVal = 0;
+  e->nKey = 0;
+  e->nVal = 0;
+}
 
-  pEntry = (ProllyMutMapEntry*)sqlite3_malloc(sz);
-  if( pEntry==0 ) return 0;
-  memset(pEntry, 0, sz);
-
-  pEntry->op = op;
-  pEntry->isIntKey = isIntKey;
-  pEntry->intKey = intKey;
-  pEntry->nLevel = level;
-  pEntry->pKey = 0;
-  pEntry->nKey = 0;
-  pEntry->pVal = 0;
-  pEntry->nVal = 0;
-
-  /* Copy blob key if not integer key */
-  if( !isIntKey && pKey && nKey>0 ){
-    pEntry->pKey = (u8*)sqlite3_malloc(nKey);
-    if( pEntry->pKey==0 ){
-      sqlite3_free(pEntry);
-      return 0;
-    }
-    memcpy(pEntry->pKey, pKey, nKey);
-    pEntry->nKey = nKey;
+/*
+** Copy key and value data into an entry. The entry's op, isIntKey,
+** and intKey must already be set.
+*/
+static int copyEntryData(ProllyMutMapEntry *e,
+                         const u8 *pKey, int nKey,
+                         const u8 *pVal, int nVal){
+  e->pKey = 0;
+  e->nKey = 0;
+  e->pVal = 0;
+  e->nVal = 0;
+  if( !e->isIntKey && pKey && nKey>0 ){
+    e->pKey = (u8*)sqlite3_malloc(nKey);
+    if( !e->pKey ) return SQLITE_NOMEM;
+    memcpy(e->pKey, pKey, nKey);
+    e->nKey = nKey;
   }
-
-  /* Copy value data */
   if( pVal && nVal>0 ){
-    pEntry->pVal = (u8*)sqlite3_malloc(nVal);
-    if( pEntry->pVal==0 ){
-      sqlite3_free(pEntry->pKey);
-      sqlite3_free(pEntry);
-      return 0;
+    e->pVal = (u8*)sqlite3_malloc(nVal);
+    if( !e->pVal ){
+      sqlite3_free(e->pKey);
+      e->pKey = 0;
+      return SQLITE_NOMEM;
     }
-    memcpy(pEntry->pVal, pVal, nVal);
-    pEntry->nVal = nVal;
+    memcpy(e->pVal, pVal, nVal);
+    e->nVal = nVal;
   }
-
-  /* Initialize forward pointers to NULL */
-  for(i=0; i<level; i++){
-    pEntry->aForward[i] = 0;
-  }
-
-  return pEntry;
-}
-
-/*
-** Free a skip list entry and its associated key/value buffers.
-*/
-static void freeEntry(ProllyMutMapEntry *pEntry){
-  if( pEntry ){
-    sqlite3_free(pEntry->pKey);
-    sqlite3_free(pEntry->pVal);
-    sqlite3_free(pEntry);
-  }
-}
-
-/*
-** Initialize a mutable map. Allocates the header sentinel node with
-** PROLLY_SKIPLIST_MAXLEVEL forward pointers, all set to NULL.
-**
-** Returns SQLITE_OK on success, SQLITE_NOMEM on allocation failure.
-*/
-int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey){
-  int sz = sizeof(ProllyMutMapEntry)
-         + PROLLY_SKIPLIST_MAXLEVEL * sizeof(ProllyMutMapEntry*);
-  int i;
-
-  memset(mm, 0, sizeof(*mm));
-  mm->isIntKey = isIntKey;
-  mm->nEntries = 0;
-  mm->maxLevel = 0;
-  mm->prng = 42;
-
-  mm->pHeader = (ProllyMutMapEntry*)sqlite3_malloc(sz);
-  if( mm->pHeader==0 ) return SQLITE_NOMEM;
-  memset(mm->pHeader, 0, sz);
-  mm->pHeader->nLevel = PROLLY_SKIPLIST_MAXLEVEL;
-
-  for(i=0; i<PROLLY_SKIPLIST_MAXLEVEL; i++){
-    mm->pHeader->aForward[i] = 0;
-  }
-
   return SQLITE_OK;
 }
 
 /*
-** Insert or update a key-value pair in the mutable map.
-** Copies key and value data. Sets op to PROLLY_EDIT_INSERT.
-**
-** If the key already exists, the existing entry's op and value are updated.
-** If the key is new, a new entry is allocated and spliced into the skip list.
-**
-** Returns SQLITE_OK on success, SQLITE_NOMEM on allocation failure.
+** Binary search for a key. Returns the index where the key is found
+** or should be inserted. Sets *pFound to 1 if an exact match exists.
+*/
+static int bsearch_key(ProllyMutMap *mm,
+                       const u8 *pKey, int nKey, i64 intKey,
+                       int *pFound){
+  int lo = 0, hi = mm->nEntries;
+  *pFound = 0;
+  while( lo < hi ){
+    int mid = lo + (hi - lo) / 2;
+    ProllyMutMapEntry *e = &mm->aEntries[mid];
+    int c = compareEntries(mm->isIntKey,
+                           e->pKey, e->nKey, e->intKey,
+                           pKey, nKey, intKey);
+    if( c < 0 ){
+      lo = mid + 1;
+    }else if( c > 0 ){
+      hi = mid;
+    }else{
+      *pFound = 1;
+      return mid;
+    }
+  }
+  return lo;
+}
+
+/*
+** Ensure the array has capacity for at least one more entry.
+*/
+static int ensureCapacity(ProllyMutMap *mm){
+  if( mm->nEntries >= mm->nAlloc ){
+    int nNew = mm->nAlloc ? mm->nAlloc * 2 : MUTMAP_INIT_CAP;
+    ProllyMutMapEntry *aNew = sqlite3_realloc(mm->aEntries,
+                                nNew * sizeof(ProllyMutMapEntry));
+    if( !aNew ) return SQLITE_NOMEM;
+    mm->aEntries = aNew;
+    mm->nAlloc = nNew;
+  }
+  return SQLITE_OK;
+}
+
+/*
+** Initialize a mutable map.
+*/
+int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey){
+  memset(mm, 0, sizeof(*mm));
+  mm->isIntKey = isIntKey;
+  return SQLITE_OK;
+}
+
+/*
+** Insert or update a key-value pair.
 */
 int prollyMutMapInsert(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
   const u8 *pVal, int nVal
 ){
-  ProllyMutMapEntry *update[PROLLY_SKIPLIST_MAXLEVEL];
-  ProllyMutMapEntry *p;
-  int i, c, level;
+  int found, idx, rc;
 
-  /* Walk the skip list from the highest level down, building the update array */
-  p = mm->pHeader;
-  for(i = mm->maxLevel - 1; i >= 0; i--){
-    while( p->aForward[i] != 0 ){
-      c = compareEntries(mm->isIntKey,
-            p->aForward[i]->pKey, p->aForward[i]->nKey, p->aForward[i]->intKey,
-            pKey, nKey, intKey);
-      if( c >= 0 ) break;
-      p = p->aForward[i];
+  idx = bsearch_key(mm, pKey, nKey, intKey, &found);
+
+  if( found ){
+    /* Update existing entry */
+    ProllyMutMapEntry *e = &mm->aEntries[idx];
+    e->op = PROLLY_EDIT_INSERT;
+    sqlite3_free(e->pVal);
+    e->pVal = 0;
+    e->nVal = 0;
+    if( pVal && nVal>0 ){
+      e->pVal = (u8*)sqlite3_malloc(nVal);
+      if( !e->pVal ) return SQLITE_NOMEM;
+      memcpy(e->pVal, pVal, nVal);
+      e->nVal = nVal;
     }
-    update[i] = p;
+    return SQLITE_OK;
   }
 
-  /* Check if key already exists */
-  p = (mm->maxLevel > 0) ? update[0]->aForward[0] : mm->pHeader->aForward[0];
-  if( p != 0 ){
-    c = compareEntries(mm->isIntKey,
-          p->pKey, p->nKey, p->intKey,
-          pKey, nKey, intKey);
-    if( c == 0 ){
-      /* Key exists: update op and value */
-      p->op = PROLLY_EDIT_INSERT;
-      sqlite3_free(p->pVal);
-      p->pVal = 0;
-      p->nVal = 0;
-      if( pVal && nVal > 0 ){
-        p->pVal = (u8*)sqlite3_malloc(nVal);
-        if( p->pVal == 0 ) return SQLITE_NOMEM;
-        memcpy(p->pVal, pVal, nVal);
-        p->nVal = nVal;
+  /* New entry: grow array if needed, shift entries right, insert */
+  rc = ensureCapacity(mm);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Shift entries at idx..nEntries-1 right by 1 */
+  if( idx < mm->nEntries ){
+    memmove(&mm->aEntries[idx+1], &mm->aEntries[idx],
+            (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
+  }
+
+  /* Initialize the new entry */
+  {
+    ProllyMutMapEntry *e = &mm->aEntries[idx];
+    memset(e, 0, sizeof(*e));
+    e->op = PROLLY_EDIT_INSERT;
+    e->isIntKey = mm->isIntKey;
+    e->intKey = intKey;
+    rc = copyEntryData(e, pKey, nKey, pVal, nVal);
+    if( rc!=SQLITE_OK ){
+      /* Shift back on failure */
+      if( idx < mm->nEntries ){
+        memmove(&mm->aEntries[idx], &mm->aEntries[idx+1],
+                (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
       }
-      return SQLITE_OK;
+      return rc;
     }
-  }
-
-  /* New key: generate random level and allocate entry */
-  level = randomLevel(mm);
-
-  ProllyMutMapEntry *pNew = allocEntry(
-    mm->isIntKey, pKey, nKey, intKey, pVal, nVal,
-    PROLLY_EDIT_INSERT, level
-  );
-  if( pNew == 0 ) return SQLITE_NOMEM;
-
-  /* If new level exceeds current max, extend update array */
-  if( level > mm->maxLevel ){
-    for(i = mm->maxLevel; i < level; i++){
-      update[i] = mm->pHeader;
-    }
-    mm->maxLevel = level;
-  }
-
-  /* Splice the new entry into the skip list */
-  for(i = 0; i < level; i++){
-    pNew->aForward[i] = update[i]->aForward[i];
-    update[i]->aForward[i] = pNew;
   }
 
   mm->nEntries++;
@@ -222,244 +182,185 @@ int prollyMutMapInsert(
 }
 
 /*
-** Mark a key for deletion in the mutable map.
-**
-** If the key exists and its op is INSERT, the entry is removed entirely
-** (insert then delete = no-op). If the key doesn't exist or has a
-** different op, an entry is inserted/updated with op=DELETE and NULL value.
-**
-** Returns SQLITE_OK on success, SQLITE_NOMEM on allocation failure.
+** Mark a key for deletion.
 */
 int prollyMutMapDelete(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey
 ){
-  ProllyMutMapEntry *update[PROLLY_SKIPLIST_MAXLEVEL];
-  ProllyMutMapEntry *p;
-  int i, c;
+  int found, idx, rc;
 
-  /* Walk the skip list from the highest level down, building the update array */
-  p = mm->pHeader;
-  for(i = mm->maxLevel - 1; i >= 0; i--){
-    while( p->aForward[i] != 0 ){
-      c = compareEntries(mm->isIntKey,
-            p->aForward[i]->pKey, p->aForward[i]->nKey, p->aForward[i]->intKey,
-            pKey, nKey, intKey);
-      if( c >= 0 ) break;
-      p = p->aForward[i];
+  idx = bsearch_key(mm, pKey, nKey, intKey, &found);
+
+  if( found ){
+    ProllyMutMapEntry *e = &mm->aEntries[idx];
+    if( e->op == PROLLY_EDIT_INSERT ){
+      /* Convert INSERT to DELETE */
+      e->op = PROLLY_EDIT_DELETE;
+      sqlite3_free(e->pVal);
+      e->pVal = 0;
+      e->nVal = 0;
+      return SQLITE_OK;
     }
-    update[i] = p;
+    /* Already a DELETE */
+    return SQLITE_OK;
   }
 
-  /* Check if key already exists */
-  p = (mm->maxLevel > 0) ? update[0]->aForward[0] : mm->pHeader->aForward[0];
-  if( p != 0 ){
-    c = compareEntries(mm->isIntKey,
-          p->pKey, p->nKey, p->intKey,
-          pKey, nKey, intKey);
-    if( c == 0 ){
-      if( p->op == PROLLY_EDIT_INSERT ){
-        /* Convert INSERT to DELETE. We cannot simply remove the entry
-        ** because the original data may still exist in the unflushed tree.
-        ** The DELETE marker ensures reads see this key as deleted rather
-        ** than falling through to the stale tree data. */
-        p->op = PROLLY_EDIT_DELETE;
-        sqlite3_free(p->pVal);
-        p->pVal = 0;
-        p->nVal = 0;
-        return SQLITE_OK;
-      }else{
-        /* Already a DELETE entry; nothing to do */
-        return SQLITE_OK;
-      }
-    }
+  /* New DELETE entry */
+  rc = ensureCapacity(mm);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( idx < mm->nEntries ){
+    memmove(&mm->aEntries[idx+1], &mm->aEntries[idx],
+            (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
   }
 
-  /* Key not found: insert a new DELETE entry */
   {
-    int level = randomLevel(mm);
-    ProllyMutMapEntry *pNew = allocEntry(
-      mm->isIntKey, pKey, nKey, intKey, 0, 0,
-      PROLLY_EDIT_DELETE, level
-    );
-    if( pNew == 0 ) return SQLITE_NOMEM;
-
-    if( level > mm->maxLevel ){
-      for(i = mm->maxLevel; i < level; i++){
-        update[i] = mm->pHeader;
+    ProllyMutMapEntry *e = &mm->aEntries[idx];
+    memset(e, 0, sizeof(*e));
+    e->op = PROLLY_EDIT_DELETE;
+    e->isIntKey = mm->isIntKey;
+    e->intKey = intKey;
+    rc = copyEntryData(e, pKey, nKey, 0, 0);
+    if( rc!=SQLITE_OK ){
+      if( idx < mm->nEntries ){
+        memmove(&mm->aEntries[idx], &mm->aEntries[idx+1],
+                (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
       }
-      mm->maxLevel = level;
+      return rc;
     }
-
-    for(i = 0; i < level; i++){
-      pNew->aForward[i] = update[i]->aForward[i];
-      update[i]->aForward[i] = pNew;
-    }
-
-    mm->nEntries++;
   }
+
+  mm->nEntries++;
   return SQLITE_OK;
 }
 
 /*
-** Look up a key in the skip list. Returns the entry if found, NULL otherwise.
+** Look up a key. Returns entry pointer or NULL.
 */
 ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
                                      const u8 *pKey, int nKey, i64 intKey){
-  ProllyMutMapEntry *p = mm->pHeader;
-  int i;
-  for(i = mm->maxLevel - 1; i >= 0; i--){
-    while( p->aForward[i] ){
-      int c = compareEntries(mm->isIntKey,
-                             p->aForward[i]->pKey, p->aForward[i]->nKey,
-                             p->aForward[i]->intKey,
-                             pKey, nKey, intKey);
-      if( c < 0 ){
-        p = p->aForward[i];
-      } else if( c == 0 ){
-        return p->aForward[i];
-      } else {
-        break;
-      }
-    }
-  }
-  return 0;
+  int found, idx;
+  if( mm->nEntries==0 ) return 0;
+  idx = bsearch_key(mm, pKey, nKey, intKey, &found);
+  return found ? &mm->aEntries[idx] : 0;
 }
 
-/*
-** Return the number of entries in the mutable map.
-*/
 int prollyMutMapCount(ProllyMutMap *mm){
   return mm->nEntries;
 }
 
-/*
-** Return true if the mutable map has no entries.
-*/
 int prollyMutMapIsEmpty(ProllyMutMap *mm){
   return mm->nEntries == 0;
 }
 
-/*
-** Initialize the iterator to point at the first entry in the map.
-*/
 void prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm){
   it->pMap = mm;
-  it->pCurrent = mm->pHeader->aForward[0];
+  it->idx = 0;
 }
 
-/*
-** Advance the iterator to the next entry.
-*/
 void prollyMutMapIterNext(ProllyMutMapIter *it){
-  if( it->pCurrent ){
-    it->pCurrent = it->pCurrent->aForward[0];
-  }
+  if( it->idx < it->pMap->nEntries ) it->idx++;
 }
 
-/*
-** Return true if the iterator points to a valid entry.
-*/
 int prollyMutMapIterValid(ProllyMutMapIter *it){
-  return it->pCurrent != 0;
+  return it->idx < it->pMap->nEntries;
 }
 
-/*
-** Return the entry the iterator currently points to.
-*/
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
-  return it->pCurrent;
+  return &it->pMap->aEntries[it->idx];
 }
 
 /*
-** Clear all entries from the mutable map. Walks level 0 and frees
-** each entry. Resets header forward pointers to NULL.
+** Clear all entries.
 */
 void prollyMutMapClear(ProllyMutMap *mm){
-  ProllyMutMapEntry *p;
-  ProllyMutMapEntry *pNext;
   int i;
-
-  if( mm->pHeader==0 ) return;
-
-  p = mm->pHeader->aForward[0];
-  while( p ){
-    pNext = p->aForward[0];
-    freeEntry(p);
-    p = pNext;
-  }
-
-  for(i = 0; i < PROLLY_SKIPLIST_MAXLEVEL; i++){
-    mm->pHeader->aForward[i] = 0;
+  for(i=0; i<mm->nEntries; i++){
+    freeEntryData(&mm->aEntries[i]);
   }
   mm->nEntries = 0;
-  mm->maxLevel = 0;
 }
 
 /*
-** Deep-clone a mutable map. Returns a heap-allocated ProllyMutMap.
-** Caller must free with prollyMutMapFree + sqlite3_free.
-** Returns NULL on allocation failure or if mm is NULL/empty.
+** Deep-clone. Clone is O(M) — memcpy the array then copy key/val data.
 */
 ProllyMutMap *prollyMutMapClone(ProllyMutMap *mm){
   ProllyMutMap *pNew;
-  ProllyMutMapEntry *p;
-  if( !mm || !mm->pHeader ) return 0;
+  int i;
+
+  if( !mm || mm->nEntries==0 ) return 0;
+
   pNew = sqlite3_malloc(sizeof(ProllyMutMap));
   if( !pNew ) return 0;
-  if( prollyMutMapInit(pNew, mm->isIntKey)!=SQLITE_OK ){
+
+  pNew->isIntKey = mm->isIntKey;
+  pNew->nEntries = mm->nEntries;
+  pNew->nAlloc = mm->nEntries;
+  pNew->aEntries = sqlite3_malloc(mm->nEntries * sizeof(ProllyMutMapEntry));
+  if( !pNew->aEntries ){
     sqlite3_free(pNew);
     return 0;
   }
-  for( p = mm->pHeader->aForward[0]; p; p = p->aForward[0] ){
-    int rc;
-    if( p->op==PROLLY_EDIT_INSERT ){
-      rc = prollyMutMapInsert(pNew, p->pKey, p->nKey, p->intKey,
-                              p->pVal, p->nVal);
-    }else{
-      rc = prollyMutMapDelete(pNew, p->pKey, p->nKey, p->intKey);
+
+  /* Copy the entry structs (shallow copy — pKey/pVal pointers are stale) */
+  memcpy(pNew->aEntries, mm->aEntries,
+         mm->nEntries * sizeof(ProllyMutMapEntry));
+
+  /* Deep-copy each entry's key and value data */
+  for(i=0; i<pNew->nEntries; i++){
+    ProllyMutMapEntry *src = &mm->aEntries[i];
+    ProllyMutMapEntry *dst = &pNew->aEntries[i];
+    dst->pKey = 0;
+    dst->pVal = 0;
+    if( src->pKey && src->nKey>0 ){
+      dst->pKey = sqlite3_malloc(src->nKey);
+      if( !dst->pKey ) goto clone_fail;
+      memcpy(dst->pKey, src->pKey, src->nKey);
     }
-    if( rc!=SQLITE_OK ){
-      prollyMutMapFree(pNew);
-      sqlite3_free(pNew);
-      return 0;
+    if( src->pVal && src->nVal>0 ){
+      dst->pVal = sqlite3_malloc(src->nVal);
+      if( !dst->pVal ) goto clone_fail;
+      memcpy(dst->pVal, src->pVal, src->nVal);
     }
   }
   return pNew;
+
+clone_fail:
+  /* Free partially cloned entries */
+  for(i=0; i<pNew->nEntries; i++){
+    sqlite3_free(pNew->aEntries[i].pKey);
+    sqlite3_free(pNew->aEntries[i].pVal);
+  }
+  sqlite3_free(pNew->aEntries);
+  sqlite3_free(pNew);
+  return 0;
 }
 
 /*
-** Free all resources associated with the mutable map.
-** Clears all entries and frees the header sentinel.
+** Free all resources.
 */
 void prollyMutMapFree(ProllyMutMap *mm){
-  if( mm->pHeader==0 ) return;
   prollyMutMapClear(mm);
-  sqlite3_free(mm->pHeader);
-  mm->pHeader = 0;
+  sqlite3_free(mm->aEntries);
+  mm->aEntries = 0;
+  mm->nAlloc = 0;
 }
 
 /*
-** Merge all entries from pSrc into pDst. After this call, pSrc is empty
-** and all its entries have been copied into pDst. This avoids the need
-** to flush (rebuild the prolly tree) when two cursors on the same table
-** both have pending edits.
+** Merge all entries from pSrc into pDst. pSrc is emptied.
 */
 int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
-  ProllyMutMapIter iter;
-  int rc = SQLITE_OK;
-
-  prollyMutMapIterFirst(&iter, pSrc);
-  while( prollyMutMapIterValid(&iter) ){
-    ProllyMutMapEntry *e = prollyMutMapIterEntry(&iter);
-    if( e->op == PROLLY_EDIT_INSERT ){
+  int i, rc;
+  for(i=0; i<pSrc->nEntries; i++){
+    ProllyMutMapEntry *e = &pSrc->aEntries[i];
+    if( e->op==PROLLY_EDIT_INSERT ){
       rc = prollyMutMapInsert(pDst, e->pKey, e->nKey, e->intKey,
                                e->pVal, e->nVal);
-    } else {
+    }else{
       rc = prollyMutMapDelete(pDst, e->pKey, e->nKey, e->intKey);
     }
     if( rc!=SQLITE_OK ) return rc;
-    prollyMutMapIterNext(&iter);
   }
   prollyMutMapClear(pSrc);
   return SQLITE_OK;

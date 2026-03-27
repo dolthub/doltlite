@@ -1,14 +1,11 @@
 /*
-** Mutable map: skip list for buffering pending edits before tree flush.
-** Supports insert, delete, and ordered iteration.
+** Mutable map: sorted array for buffering pending edits before tree flush.
+** Supports insert, delete, find (binary search), and ordered iteration.
 */
 #ifndef SQLITE_PROLLY_MUTMAP_H
 #define SQLITE_PROLLY_MUTMAP_H
 
 #include "sqliteInt.h"
-
-/* Max skip list levels */
-#define PROLLY_SKIPLIST_MAXLEVEL 16
 
 /* Edit operation types */
 #define PROLLY_EDIT_INSERT 1
@@ -26,16 +23,13 @@ struct ProllyMutMapEntry {
   int nKey;              /* Blob key size */
   u8 *pVal;              /* Value data (NULL for delete) */
   int nVal;              /* Value size */
-  int nLevel;            /* Skip list level for this entry */
-  ProllyMutMapEntry *aForward[];  /* Forward pointers [nLevel] */
 };
 
 struct ProllyMutMap {
   u8 isIntKey;            /* Table type */
   int nEntries;           /* Number of entries */
-  int maxLevel;           /* Current max level in use */
-  ProllyMutMapEntry *pHeader;  /* Skip list header (sentinel) */
-  sqlite3_int64 prng;    /* PRNG state for level generation */
+  int nAlloc;             /* Allocated capacity */
+  ProllyMutMapEntry *aEntries;  /* Sorted array of entries */
 };
 
 /* Initialize a mutable map */
@@ -64,7 +58,7 @@ int prollyMutMapIsEmpty(ProllyMutMap *mm);
 /* Iterator for ordered traversal */
 struct ProllyMutMapIter {
   ProllyMutMap *pMap;
-  ProllyMutMapEntry *pCurrent;
+  int idx;               /* Current index into aEntries */
 };
 
 /* Initialize iterator at first entry */
