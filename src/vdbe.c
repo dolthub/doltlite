@@ -4970,6 +4970,53 @@ case OP_SeekGT: {       /* jump0, in3, group, ncycle */
       assert( res!=0 );
       goto seek_not_found;
     }
+
+    /* Fix for prolly btree prefix-match positioning (issues #179, #180).
+    **
+    ** sqlite3BtreeIndexMoveto() may return res<0 with eqSeen when doing a
+    ** prefix match (search key has fewer fields than the index).  In standard
+    ** SQLite's b-tree, the binary search naturally lands PAST the matching
+    ** range (res>0), so SeekLE calls BtreePrevious to reach the last match.
+    ** In the prolly btree, IndexMoveto lands at the FIRST prefix match
+    ** (res<0), causing SeekLE to stay there — returning the MIN instead of
+    ** MAX for reverse-ordered queries.
+    **
+    ** Fix: when we get res<0 + eqSeen for a SeekLE or SeekGT, advance the
+    ** cursor forward through all prefix-matching entries, then position at
+    ** the first entry PAST the range (res>0).  The existing SeekLE logic
+    ** will then call BtreePrevious to land on the last match. */
+    if( res<0 && r.eqSeen && (oc==OP_SeekLE || oc==OP_SeekGT) ){
+      while(1){
+        int nx = sqlite3BtreeNext(pC->uc.pCursor, 0);
+        if( nx==SQLITE_DONE ){
+          /* Ran off the end — all remaining entries matched the prefix.
+          ** The last matching entry is the last entry in this index.
+          ** Use BtreeLast to reposition the cursor there. */
+          {
+            int eof = 0;
+            rc = sqlite3BtreeLast(pC->uc.pCursor, &eof);
+            if( rc!=SQLITE_OK ) goto abort_due_to_error;
+            res = eof ? 1 : -1;
+          }
+          break;
+        }
+        if( nx!=SQLITE_OK ){ rc = nx; goto abort_due_to_error; }
+        /* Compare the new cursor position against the search key */
+        {
+          int cmp = 0;
+          r.eqSeen = 0;
+          rc = sqlite3VdbeIdxKeyCompare(db, pC, &r, &cmp);
+          if( rc!=SQLITE_OK ) goto abort_due_to_error;
+          if( !(cmp==0 || r.eqSeen) ){
+            /* Past the prefix range — position here.  res>0 tells SeekLE
+            ** to call BtreePrevious, landing on the last match. */
+            res = 1;
+            break;
+          }
+          /* Still in prefix range — keep advancing */
+        }
+      }
+    }
   }
 #ifdef SQLITE_TEST
   sqlite3_search_count++;
