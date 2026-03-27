@@ -852,17 +852,51 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
 /*
 ** Push the current state onto the savepoint stack.
 */
+/* Free a savepoint's aTables including any cloned pPending maps. */
+static void freeSavepointTables(struct SavepointTableState *pState){
+  if( pState->aTables ){
+    int k;
+    for(k=0; k<pState->nTables; k++){
+      if( pState->aTables[k].pPending ){
+        prollyMutMapFree((ProllyMutMap*)pState->aTables[k].pPending);
+        sqlite3_free(pState->aTables[k].pPending);
+      }
+    }
+    sqlite3_free(pState->aTables);
+    pState->aTables = 0;
+  }
+}
+
 static int pushSavepoint(Btree *pBtree){
   struct SavepointTableState *pState;
   int rc;
 
-  /* Flush all pending mutations (both cursor-level and table-level deferred
-  ** edits) so that the table-entry root hashes reflect the current state.
-  ** Without this, data inserted before the savepoint but not yet flushed
-  ** would be lost on ROLLBACK TO because the snapshot would capture stale
-  ** root hashes that don't include the pending edits. */
-  rc = flushAllPending(pBtree->pBt, 0);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Flush cursor-level MutMaps. For table-level pPending: if small
+  ** (<=16 edits), clone into snapshot to avoid tree rebuild. If large,
+  ** flush to tree (via flushDeferredEdits) to prevent clone accumulation. */
+  {
+    BtCursor *p;
+    int needFullFlush = 0;
+    for(p = pBtree->pBt->pCursor; p; p = p->pNext){
+      rc = flushIfNeeded(p);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    /* Check if any pPending is too large to clone efficiently */
+    {
+      int i;
+      for(i=0; i<pBtree->nTables; i++){
+        ProllyMutMap *pMap = (ProllyMutMap*)pBtree->aTables[i].pPending;
+        if( pMap && prollyMutMapCount(pMap) > 256 ){
+          needFullFlush = 1;
+          break;
+        }
+      }
+    }
+    if( needFullFlush ){
+      rc = flushDeferredEdits(pBtree->pBt);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
 
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
     int nNew = pBtree->nSavepointAlloc ? pBtree->nSavepointAlloc*2 : 8;
@@ -891,13 +925,14 @@ static int pushSavepoint(Btree *pBtree){
     memcpy(pState->aTables, pBtree->aTables,
            pBtree->nTables * sizeof(struct TableEntry));
     pState->nTables = pBtree->nTables;
-    /* Clear pPending pointers in the snapshot — the flush above ensures
-    ** all edits are reflected in the root hashes.  Leaving stale pointers
-    ** in the snapshot would risk double-free on rollback. */
+    /* Clone small pPending into snapshot; clear if already flushed. */
     {
       int k;
       for(k=0; k<pState->nTables; k++){
-        pState->aTables[k].pPending = 0;
+        if( pState->aTables[k].pPending ){
+          pState->aTables[k].pPending =
+              prollyMutMapClone((ProllyMutMap*)pState->aTables[k].pPending);
+        }
       }
     }
   }
@@ -1173,7 +1208,7 @@ int sqlite3BtreeClose(Btree *p){
   if( p->aSavepointTables ){
     int i;
     for(i=0; i<p->nSavepoint; i++){
-      sqlite3_free(p->aSavepointTables[i].aTables);
+      freeSavepointTables(&p->aSavepointTables[i]);
     }
     sqlite3_free(p->aSavepointTables);
   }
@@ -1621,7 +1656,7 @@ int sqlite3BtreeSavepoint(Btree *p, int op, int iSavepoint){
       {
         int j;
         for(j=iSavepoint+1; j<p->nSavepoint; j++){
-          sqlite3_free(p->aSavepointTables[j].aTables);
+          freeSavepointTables(&p->aSavepointTables[j]);
         }
       }
       p->nSavepoint = iSavepoint;
@@ -2217,6 +2252,11 @@ int sqlite3BtreeTableMoveto(
           CLEAR_CACHED_PAYLOAD(pCur);
         }
         pCur->cachedPayloadOwned = 1;
+        /* Also position the prolly cursor for Next/Prev support.
+        ** Without this, BtreeNext crashes on an unpositioned cursor
+        ** when pPending edits are carried across savepoints. */
+        refreshCursorRoot(pCur);
+        prollyCursorSeekInt(&pCur->pCur, intKey, &(int){0});
         return SQLITE_OK;
       } else {
         /* Key is pending DELETE — doesn't exist */
