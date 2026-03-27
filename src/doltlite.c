@@ -115,7 +115,7 @@ static void doltliteAddFunc(
   /* Check for -A flag */
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
-    if( arg && (strcmp(arg, "-A")==0 || strcmp(arg, ".")==0) ){
+    if( arg && (strcmp(arg, "-A")==0 || strcmp(arg, "-a")==0 || strcmp(arg, ".")==0) ){
       stageAll = 1;
       break;
     }
