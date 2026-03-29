@@ -138,6 +138,7 @@ struct ChunkStore {
 
   u8 readOnly;
   u8 isMemory;
+  u8 snapshotPinned;         /* True while a read transaction holds a snapshot */
   i64 nCommittedWriteBuf;
 
   /* WAL region cache (read from file on open, updated on commit) */

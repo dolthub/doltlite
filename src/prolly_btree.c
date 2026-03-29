@@ -1558,6 +1558,10 @@ int sqlite3BtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     }
   }
 
+  /* Pin the chunk store snapshot so concurrent commits from other
+  ** connections don't change our view mid-transaction. */
+  pBt->store.snapshotPinned = 1;
+
   return SQLITE_OK;
 }
 
@@ -1606,6 +1610,9 @@ int sqlite3BtreeCommitPhaseTwo(Btree *p, int bCleanup){
   p->inTrans = TRANS_NONE;
   p->inTransaction = TRANS_NONE;
   p->nSavepoint = 0;
+
+  /* Unpin snapshot so next transaction sees latest state */
+  pBt->store.snapshotPinned = 0;
 
   return rc;
 }
@@ -1679,6 +1686,9 @@ int sqlite3BtreeRollback(Btree *p, int tripCode, int writeOnly){
   p->inTrans = TRANS_NONE;
   p->inTransaction = TRANS_NONE;
   p->nSavepoint = 0;
+
+  /* Unpin snapshot so next transaction sees latest state */
+  pBt->store.snapshotPinned = 0;
 
   return SQLITE_OK;
 }

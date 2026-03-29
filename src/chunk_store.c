@@ -1946,6 +1946,11 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   *pChanged = 0;
   if( cs->isMemory ) return SQLITE_OK;
 
+  /* Snapshot isolation: while a read transaction is active, don't pick up
+  ** changes from other connections.  The caller sees a consistent view
+  ** pinned at the root hash captured when the transaction began. */
+  if( cs->snapshotPinned ) return SQLITE_OK;
+
   if( cs->pFile==0 ){
     /* No file handle yet — check if file was created by another connection */
     int exists = 0;

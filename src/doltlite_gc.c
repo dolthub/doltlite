@@ -719,6 +719,32 @@ static void doltliteGcFunc(
 }
 
 /* ----------------------------------------------------------------
+** Non-SQL entry point for GC compaction (used by PRAGMA wal_checkpoint).
+** ---------------------------------------------------------------- */
+
+int doltliteGcCompact(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  GcHashSet marked;
+  int nKept = 0, nRemoved = 0;
+  int rc;
+
+  if( !cs ) return SQLITE_OK;
+  if( !cs->zFilename || strcmp(cs->zFilename, ":memory:")==0 ){
+    return SQLITE_OK;  /* In-memory databases don't need compaction */
+  }
+
+  rc = gcHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = gcMarkReachable(cs, &marked);
+  if( rc==SQLITE_OK ){
+    rc = gcSweep(cs, &marked, &nKept, &nRemoved);
+  }
+  gcHashSetFree(&marked);
+  return rc;
+}
+
+/* ----------------------------------------------------------------
 ** Registration.
 ** ---------------------------------------------------------------- */
 

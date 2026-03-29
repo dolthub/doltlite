@@ -196,7 +196,7 @@ PagerShim *pagerShimCreate(
   }
   pShim->pFd          = pFd;
   pShim->pVfs         = pVfs;
-  pShim->journalMode  = PAGER_JOURNALMODE_DELETE;
+  pShim->journalMode  = PAGER_JOURNALMODE_WAL;
   pShim->eLock        = 0;
   pShim->eState       = 0;
   pShim->noSync       = 0;
@@ -675,16 +675,27 @@ int sqlite3SectorSize(sqlite3_file *pFile){
 }
 
 #ifndef SQLITE_OMIT_WAL
+/* Provided by doltlite_gc.c — runs mark-and-sweep GC on the chunk store,
+** compacting the file and eliminating the WAL region. */
+extern int doltliteGcCompact(sqlite3 *db);
+
 int sqlite3PagerCheckpoint(Pager *pPager, sqlite3 *db, int eMode, int *pnLog, int *pnCkpt){
   if(!IS_SHIM(pPager)) return orig_sqlite3PagerCheckpoint(pPager, db, eMode, pnLog, pnCkpt);
-  (void)pPager; (void)db; (void)eMode;
+  (void)eMode;
   if( pnLog ) *pnLog = 0;
   if( pnCkpt ) *pnCkpt = 0;
+  /* WAL checkpoint = GC compaction for the content-addressed chunk store.
+  ** This merges all WAL-region chunks into the compacted region and
+  ** resets the WAL region to empty. */
+  if( db ){
+    int rc = doltliteGcCompact(db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   return SQLITE_OK;
 }
 int sqlite3PagerWalSupported(Pager *pPager){
-  (void)pPager;
-  return 0;
+  if( !IS_SHIM(pPager) ) return orig_sqlite3PagerWalSupported(pPager);
+  return 1;  /* Content-addressed chunk store provides MVCC natively */
 }
 int sqlite3PagerWalCallback(Pager *pPager){
   (void)pPager;
@@ -692,8 +703,8 @@ int sqlite3PagerWalCallback(Pager *pPager){
 }
 int sqlite3PagerOpenWal(Pager *pPager, int *pisOpen){
   if(!IS_SHIM(pPager)) return orig_sqlite3PagerOpenWal(pPager, pisOpen);
-  (void)pPager;
-  if( pisOpen ) *pisOpen = 0;
+  SHIM(pPager)->journalMode = PAGER_JOURNALMODE_WAL;
+  if( pisOpen ) *pisOpen = 1;  /* WAL is always "open" for chunk store */
   return SQLITE_OK;
 }
 int sqlite3PagerCloseWal(Pager *pPager, sqlite3 *db){

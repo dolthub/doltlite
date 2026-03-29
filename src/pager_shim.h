@@ -21,7 +21,7 @@ struct PagerShim {
   char *zJournal;            /* Journal filename (always empty string) */
   u8 eState;                 /* Pager state for compatibility */
   u8 eLock;                  /* Current lock level */
-  u8 journalMode;            /* Journal mode (always DELETE for compat) */
+  u8 journalMode;            /* Journal mode (WAL for doltlite databases) */
   u8 noSync;                 /* Disable sync */
   u32 iDataVersion;          /* Data version counter */
   int nRef;                  /* Outstanding page references (always 0) */
