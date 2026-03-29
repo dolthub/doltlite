@@ -391,11 +391,15 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     int searchRes;
     int idx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &searchRes);
 
-    if( searchRes>0 && idx<pEntry->node.nItems-1 ){
-      /* Key larger than key at idx, stay at idx */
-    } else if( searchRes<0 && idx>0 ){
-      idx--;
+    /* Internal node boundary keys are the LAST (max) key of each child.
+    ** To find key K, descend into the first child whose max key >= K.
+    ** prollyNodeSearchBlob returns the insertion point idx with searchRes<0
+    ** when K < boundary[idx] — that IS the correct child (its range
+    ** covers K).  searchRes>0 means K > all boundaries — last child. */
+    if( searchRes>0 ){
+      /* K past all boundaries — last child is correct (already idx=nItems-1) */
     }
+    /* searchRes<=0: idx is already the correct child */
 
     cur->aLevel[cur->iLevel].idx = idx;
 
