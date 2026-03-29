@@ -2680,95 +2680,11 @@ int sqlite3BtreeIndexMoveto(
         treeFound = 1;
       }
 
-      /* If no match at all in current leaf, try adjacent leaves.
-      ** An eqSeen match (treeFound=1 with treeCmp!=0) is valid - don't
-      ** search adjacent leaves which would corrupt the cursor position. */
-      if( !treeFound ){
-        /* Try previous leaf */
-        pCur->pCur.aLevel[iLevel].idx = 0;
-        pCur->pCur.eState = PROLLY_CURSOR_VALID;
-        int savedFound = treeFound;
-        int savedCmp = treeCmp;
-        int savedBestIdx = bestIdx;
-        rc = prollyCursorPrev(&pCur->pCur);
-        if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-          ProllyCacheEntry *pPrev = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
-          int pi;
-          for( pi = pPrev->node.nItems - 1; pi >= 0; pi-- ){
-            const u8 *pVal; int nVal;
-            const u8 *pSK; int nSK;
-            prollyNodeValue(&pPrev->node, pi, &pVal, &nVal);
-            pIdxKey->eqSeen = 0;
-            int c = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
-            if( c==0 || pIdxKey->eqSeen ){
-              prollyNodeKey(&pPrev->node, pi, &pSK, &nSK);
-              if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-                ProllyMutMapEntry *mmE = prollyMutMapFind(
-                    pCur->pMutMap, pSK, nSK, 0);
-                if( mmE && mmE->op==PROLLY_EDIT_DELETE ) continue;
-              }
-              pCur->pCur.aLevel[pCur->pCur.iLevel].idx = pi;
-              treeCmp = c;
-              treeFound = 1;
-              goto tree_seek_done;
-            }
-          }
-          /* No match in prev leaf, go back to original leaf */
-          rc = prollyCursorNext(&pCur->pCur);
-          if( rc!=SQLITE_OK ) goto tree_seek_done;
-        } else {
-          /* No prev leaf, reset to first */
-          rc = prollyCursorFirst(&pCur->pCur, &(int){0});
-          if( rc!=SQLITE_OK ) goto tree_seek_done;
-        }
-
-        /* Restore original leaf position */
-        /* Re-seek to get back to original leaf */
-        rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &(int){0});
-        if( rc!=SQLITE_OK ) goto tree_seek_done;
-        treeFound = savedFound;
-        treeCmp = savedCmp;
-        iLevel = pCur->pCur.iLevel;
-
-        /* Try next leaf */
-        pCur->pCur.aLevel[iLevel].idx =
-            pCur->pCur.aLevel[iLevel].pEntry->node.nItems - 1;
-        pCur->pCur.eState = PROLLY_CURSOR_VALID;
-        rc = prollyCursorNext(&pCur->pCur);
-        if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-          ProllyCacheEntry *pNext = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
-          int ni;
-          for( ni = 0; ni < pNext->node.nItems; ni++ ){
-            const u8 *pVal; int nVal;
-            const u8 *pSK; int nSK;
-            prollyNodeValue(&pNext->node, ni, &pVal, &nVal);
-            pIdxKey->eqSeen = 0;
-            int c = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
-            if( c==0 || pIdxKey->eqSeen ){
-              prollyNodeKey(&pNext->node, ni, &pSK, &nSK);
-              if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-                ProllyMutMapEntry *mmE = prollyMutMapFind(
-                    pCur->pMutMap, pSK, nSK, 0);
-                if( mmE && mmE->op==PROLLY_EDIT_DELETE ) continue;
-              }
-              pCur->pCur.aLevel[pCur->pCur.iLevel].idx = ni;
-              treeCmp = c;
-              treeFound = 1;
-              goto tree_seek_done;
-            }
-          }
-        }
-
-        /* Re-seek to restore valid cursor position */
-        rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &(int){0});
-        if( rc!=SQLITE_OK ) goto tree_seek_done;
-        treeFound = savedFound;
-        treeCmp = savedCmp;
-        if( savedBestIdx >= 0 ){
-          pCur->pCur.aLevel[pCur->pCur.iLevel].idx = savedBestIdx;
-        }
-      }
-tree_seek_done:;
+      /* The sort-key tree descent via prollyCursorSeekBlob lands on the
+      ** correct leaf — adjacent leaf scanning is not needed.  Internal
+      ** node boundary keys are the max key of each child, so the binary
+      ** search at each level guarantees we reach the leaf containing the
+      ** target key (or its immediate neighbor for range queries). */
     }
 
     /* ---- MutMap seek: O(log M) using prollyMutMapFind ---- */
