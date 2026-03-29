@@ -675,11 +675,22 @@ int sqlite3SectorSize(sqlite3_file *pFile){
 }
 
 #ifndef SQLITE_OMIT_WAL
+/* Provided by doltlite_gc.c — runs mark-and-sweep GC on the chunk store,
+** compacting the file and eliminating the WAL region. */
+extern int doltliteGcCompact(sqlite3 *db);
+
 int sqlite3PagerCheckpoint(Pager *pPager, sqlite3 *db, int eMode, int *pnLog, int *pnCkpt){
   if(!IS_SHIM(pPager)) return orig_sqlite3PagerCheckpoint(pPager, db, eMode, pnLog, pnCkpt);
-  (void)pPager; (void)db; (void)eMode;
+  (void)eMode;
   if( pnLog ) *pnLog = 0;
   if( pnCkpt ) *pnCkpt = 0;
+  /* WAL checkpoint = GC compaction for the content-addressed chunk store.
+  ** This merges all WAL-region chunks into the compacted region and
+  ** resets the WAL region to empty. */
+  if( db ){
+    int rc = doltliteGcCompact(db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   return SQLITE_OK;
 }
 int sqlite3PagerWalSupported(Pager *pPager){
