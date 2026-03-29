@@ -14,6 +14,7 @@
 
 #include "pager_shim.h"
 #include "sqliteInt.h"
+#include "chunk_store.h"
 
 /* Globals expected by test code */
 int sqlite3_pager_writej_count = 0;
@@ -91,6 +92,8 @@ extern int orig_sqlite3PagerSetSpillsize(Pager*, int);
 extern void orig_sqlite3PagerSetMmapLimit(Pager*, sqlite3_int64);
 extern void orig_sqlite3PagerTruncateImage(Pager*, Pgno);
 extern void orig_sqlite3PagerClearCache(Pager*);
+extern sqlite3_backup *orig_sqlite3_backup_init(sqlite3*,const char*,
+                                                 sqlite3*,const char*);
 
 /* -----------------------------------------------------------------------
 ** Dummy file object for :memory: databases
@@ -756,28 +759,158 @@ void enable_simulated_io_errors(void){
 }
 
 /* -----------------------------------------------------------------------
-** Backup API stubs (backup.c excluded from prolly build)
+** Backup API — copies the chunk store file from source to destination.
+** The chunk store is a single self-contained file, so a complete backup
+** is just a file copy.  For ATTACH'd standard SQLite databases, delegates
+** to the original backup implementation.
 ** ----------------------------------------------------------------------- */
+
+extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+
+/* Backup state for prolly-tree chunk store file copy. */
+typedef struct DoltliteBackup DoltliteBackup;
+struct DoltliteBackup {
+  sqlite3 *pSrcDb;
+  sqlite3 *pDestDb;
+  char *zSrcFile;       /* Source chunk store file path (owned copy) */
+  char *zDestFile;      /* Destination chunk store file path (owned copy) */
+  sqlite3_vfs *pVfs;
+  int done;             /* 1 after step completes the copy */
+  i64 nTotal;           /* Total bytes to copy */
+  i64 nRemaining;       /* Bytes remaining */
+};
+
 sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
                                      sqlite3 *pSrc, const char *zSrcDb){
-  (void)pDest; (void)zDestDb; (void)pSrc; (void)zSrcDb;
-  return 0;
+  DoltliteBackup *p;
+  ChunkStore *srcCs;
+  ChunkStore *destCs;
+  int iSrc, iDest;
+
+  if( !pDest || !pSrc || pDest==pSrc ) return 0;
+
+  /* Find the named databases */
+  iSrc = sqlite3FindDbName(pSrc, zSrcDb);
+  iDest = sqlite3FindDbName(pDest, zDestDb);
+  if( iSrc < 0 || iDest < 0 ) return 0;
+
+  /* For non-main databases (ATTACH'd SQLite btrees), delegate to original */
+  if( iSrc != 0 || iDest != 0 ){
+    return orig_sqlite3_backup_init(pDest, zDestDb, pSrc, zSrcDb);
+  }
+
+  /* Get chunk stores */
+  srcCs = doltliteGetChunkStore(pSrc);
+  destCs = doltliteGetChunkStore(pDest);
+  if( !srcCs || !srcCs->zFilename ) return 0;
+  if( srcCs->isMemory ) return 0;  /* Can't backup in-memory databases */
+  if( !destCs || !destCs->zFilename ) return 0;
+
+  p = (DoltliteBackup*)sqlite3_malloc(sizeof(DoltliteBackup));
+  if( !p ) return 0;
+  memset(p, 0, sizeof(*p));
+
+  p->pSrcDb = pSrc;
+  p->pDestDb = pDest;
+  p->pVfs = srcCs->pVfs;
+  p->zSrcFile = sqlite3_mprintf("%s", srcCs->zFilename);
+  p->zDestFile = sqlite3_mprintf("%s", destCs->zFilename);
+  if( !p->zSrcFile || !p->zDestFile ){
+    sqlite3_free(p->zSrcFile);
+    sqlite3_free(p->zDestFile);
+    sqlite3_free(p);
+    return 0;
+  }
+
+  return (sqlite3_backup*)p;
 }
-int sqlite3_backup_step(sqlite3_backup *p, int nPage){
-  (void)p; (void)nPage;
-  return SQLITE_DONE;
+
+int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
+  DoltliteBackup *p = (DoltliteBackup*)pBackup;
+  sqlite3_file *pSrc = 0;
+  sqlite3_file *pDest = 0;
+  i64 fileSize = 0;
+  int rc;
+  int openFlags;
+  (void)nPage;
+
+  if( !p ) return SQLITE_DONE;
+  if( p->done ) return SQLITE_DONE;
+
+  /* Open source file for reading */
+  openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
+  rc = sqlite3OsOpenMalloc(p->pVfs, p->zSrcFile, &pSrc, openFlags, 0);
+  if( rc != SQLITE_OK ) return rc;
+
+  rc = sqlite3OsFileSize(pSrc, &fileSize);
+  if( rc != SQLITE_OK ){
+    sqlite3OsCloseFree(pSrc);
+    return rc;
+  }
+  p->nTotal = fileSize;
+
+  /* Open/create destination file for writing */
+  openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
+  rc = sqlite3OsOpenMalloc(p->pVfs, p->zDestFile, &pDest, openFlags, 0);
+  if( rc != SQLITE_OK ){
+    sqlite3OsCloseFree(pSrc);
+    return rc;
+  }
+
+  /* Copy in 64KB chunks (VFS write size limit) */
+  {
+    u8 *buf = (u8*)sqlite3_malloc(65536);
+    i64 off = 0;
+    if( !buf ){
+      sqlite3OsCloseFree(pSrc);
+      sqlite3OsCloseFree(pDest);
+      return SQLITE_NOMEM;
+    }
+    while( off < fileSize ){
+      int toRead = (fileSize - off) > 65536 ? 65536 : (int)(fileSize - off);
+      rc = sqlite3OsRead(pSrc, buf, toRead, off);
+      if( rc != SQLITE_OK ) break;
+      rc = sqlite3OsWrite(pDest, buf, toRead, off);
+      if( rc != SQLITE_OK ) break;
+      off += toRead;
+    }
+    sqlite3_free(buf);
+  }
+
+  if( rc == SQLITE_OK ){
+    rc = sqlite3OsSync(pDest, SQLITE_SYNC_NORMAL);
+  }
+
+  sqlite3OsCloseFree(pSrc);
+  sqlite3OsCloseFree(pDest);
+
+  if( rc == SQLITE_OK ){
+    p->done = 1;
+    p->nRemaining = 0;
+    return SQLITE_DONE;
+  }
+  return rc;
 }
-int sqlite3_backup_finish(sqlite3_backup *p){
-  (void)p;
+
+int sqlite3_backup_finish(sqlite3_backup *pBackup){
+  DoltliteBackup *p = (DoltliteBackup*)pBackup;
+  if( !p ) return SQLITE_OK;
+  sqlite3_free(p->zSrcFile);
+  sqlite3_free(p->zDestFile);
+  sqlite3_free(p);
   return SQLITE_OK;
 }
-int sqlite3_backup_remaining(sqlite3_backup *p){
-  (void)p;
-  return 0;
+
+int sqlite3_backup_remaining(sqlite3_backup *pBackup){
+  DoltliteBackup *p = (DoltliteBackup*)pBackup;
+  if( !p ) return 0;
+  return p->done ? 0 : 1;
 }
-int sqlite3_backup_pagecount(sqlite3_backup *p){
-  (void)p;
-  return 0;
+
+int sqlite3_backup_pagecount(sqlite3_backup *pBackup){
+  DoltliteBackup *p = (DoltliteBackup*)pBackup;
+  if( !p ) return 0;
+  return 1;  /* Single "page" = entire chunk store file */
 }
 
 #endif /* DOLTLITE_PROLLY */
