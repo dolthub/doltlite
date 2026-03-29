@@ -181,8 +181,14 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   return SQLITE_OK;
 }
 
-static int statusNext(sqlite3_vtab_cursor *p){((DoltliteStatusCursor*)p)->iRow++;return SQLITE_OK;}
-static int statusEof(sqlite3_vtab_cursor *p){return((DoltliteStatusCursor*)p)->iRow>=((DoltliteStatusCursor*)p)->nRows;}
+static int statusNext(sqlite3_vtab_cursor *p){
+  ((DoltliteStatusCursor*)p)->iRow++;
+  return SQLITE_OK;
+}
+static int statusEof(sqlite3_vtab_cursor *p){
+  DoltliteStatusCursor *pCur = (DoltliteStatusCursor*)p;
+  return pCur->iRow >= pCur->nRows;
+}
 static int statusColumn(sqlite3_vtab_cursor *p,sqlite3_context *ctx,int c){
   DoltliteStatusCursor *pCur=(DoltliteStatusCursor*)p;
   StatusRow *r;
@@ -195,7 +201,10 @@ static int statusColumn(sqlite3_vtab_cursor *p,sqlite3_context *ctx,int c){
   }
   return SQLITE_OK;
 }
-static int statusRowid(sqlite3_vtab_cursor *p,sqlite3_int64 *r){*r=((DoltliteStatusCursor*)p)->iRow;return SQLITE_OK;}
+static int statusRowid(sqlite3_vtab_cursor *p, sqlite3_int64 *pRowid){
+  *pRowid = ((DoltliteStatusCursor*)p)->iRow;
+  return SQLITE_OK;
+}
 static int statusBestIndex(sqlite3_vtab *v,sqlite3_index_info *p){(void)v;p->estimatedCost=100.0;return SQLITE_OK;}
 
 static sqlite3_module doltliteStatusModule = {

@@ -35,7 +35,10 @@ static int skGetVarint32(const u8 *p, u32 *pVal){
 }
 
 /*
-** Return the data length for a SQLite serial type.
+** Return the payload byte length for a given SQLite serial type.
+** Serial types: 0=NULL(0), 1=int8(1), 2=int16(2), 3=int24(3),
+** 4=int32(4), 5=int48(6), 6=int64(8), 7=float64(8),
+** 8=false(0), 9=true(0), >=12=blob((N-12)/2), >=13=text((N-13)/2)
 */
 static u32 serialTypeLen(u32 serialType){
   static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8};
@@ -405,9 +408,9 @@ int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){
         }
       }
       if( tag == SORTKEY_TEXT ){
-        aType[nFields] = (u32)dataLen * 2 + 13;
+        aType[nFields] = (u32)dataLen * 2 + 13;  /* SQLite text serial type */
       }else{
-        aType[nFields] = (u32)dataLen * 2 + 12;
+        aType[nFields] = (u32)dataLen * 2 + 12;  /* SQLite blob serial type */
       }
       aLen[nFields] = (u32)dataLen;
       /* We'll decode the data in pass 2. Store the start offset. */
