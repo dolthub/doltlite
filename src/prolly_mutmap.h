@@ -73,6 +73,17 @@ int prollyMutMapIterValid(ProllyMutMapIter *it);
 /* Get current entry from iterator */
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it);
 
+/* Seek iterator to first entry >= given key (binary search).
+** If no entry >= key, iterator is positioned past end. */
+void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
+                          const u8 *pKey, int nKey, i64 intKey);
+
+/* Position iterator at last entry */
+void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm);
+
+/* Move iterator backward */
+void prollyMutMapIterPrev(ProllyMutMapIter *it);
+
 /* Merge all entries from pSrc into pDst. pSrc is emptied. */
 int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc);
 

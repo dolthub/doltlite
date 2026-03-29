@@ -330,6 +330,15 @@ struct BtCursor {
   /* Pinned state */
   u8 isPinned;
 
+  /* Merge iteration state: when mmActive, BtreeNext/Prev merges the
+  ** tree cursor with pending MutMap entries in sorted order. */
+  int mmIdx;                 /* Current MutMap index for merge (-1 = none) */
+  u8 mmActive;               /* 1 if merge iteration is active */
+#define MERGE_SRC_TREE  0
+#define MERGE_SRC_MUT   1
+#define MERGE_SRC_BOTH  2    /* Same key in tree and MutMap — MutMap wins */
+  u8 mergeSrc;               /* Which source provided the current entry */
+
   /* Save/restore state */
   i64 nKey;                  /* Saved integer key or blob key length */
   void *pKey;                /* Saved blob key (malloc'd) */
@@ -2124,6 +2133,215 @@ int sqlite3BtreeClosesWithCursor(Btree *p, BtCursor *pCur){
 #endif
 
 /* --------------------------------------------------------------------------
+** Merge iteration: two-pointer merge over tree cursor + MutMap.
+** Both sources are sorted by the same key ordering.  On each step,
+** we pick the smaller (Next) or larger (Prev) key, handling DELETEs
+** by skipping entries present in both sources.
+** -------------------------------------------------------------------------- */
+
+/* Compare the tree cursor's current key with a MutMap entry. */
+static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
+  if( pCur->curIntKey ){
+    i64 tk = prollyCursorIntKey(&pCur->pCur);
+    if( tk < e->intKey ) return -1;
+    if( tk > e->intKey ) return 1;
+    return 0;
+  }else{
+    const u8 *pK; int nK;
+    prollyCursorKey(&pCur->pCur, &pK, &nK);
+    int n = nK < e->nKey ? nK : e->nKey;
+    int c = memcmp(pK, e->pKey, n);
+    if( c ) return c;
+    return (nK < e->nKey) ? -1 : (nK > e->nKey) ? 1 : 0;
+  }
+}
+
+/* Advance to the next merged entry (forward). Returns SQLITE_OK or
+** SQLITE_DONE.  Skips DELETE entries and tree entries overridden by
+** MutMap. */
+static int mergeStepForward(BtCursor *pCur){
+  int treeOk, mutOk;
+
+  /* Advance the source(s) that produced the current entry */
+  if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
+    prollyCursorNext(&pCur->pCur);
+  }
+  if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH ){
+    pCur->mmIdx++;
+  }
+
+  for(;;){
+    treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
+    mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
+
+    if( !treeOk && !mutOk ) return SQLITE_DONE;
+
+    if( !mutOk ){
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      return SQLITE_OK;
+    }
+    ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+    if( !treeOk ){
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
+      pCur->mergeSrc = MERGE_SRC_MUT;
+      return SQLITE_OK;
+    }
+    int cmp = mergeCompare(pCur, e);
+    if( cmp < 0 ){
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      return SQLITE_OK;
+    }else if( cmp > 0 ){
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
+      pCur->mergeSrc = MERGE_SRC_MUT;
+      return SQLITE_OK;
+    }else{
+      /* Same key — MutMap overrides tree */
+      if( e->op==PROLLY_EDIT_DELETE ){
+        pCur->mmIdx++;
+        prollyCursorNext(&pCur->pCur);
+        continue;
+      }
+      pCur->mergeSrc = MERGE_SRC_BOTH;
+      return SQLITE_OK;
+    }
+  }
+}
+
+/* Advance to the previous merged entry (backward). */
+static int mergeStepBackward(BtCursor *pCur){
+  int treeOk, mutOk;
+
+  if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
+    prollyCursorPrev(&pCur->pCur);
+  }
+  if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH ){
+    pCur->mmIdx--;
+  }
+
+  for(;;){
+    treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
+    mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
+
+    if( !treeOk && !mutOk ) return SQLITE_DONE;
+
+    if( !mutOk ){
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      return SQLITE_OK;
+    }
+    ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+    if( !treeOk ){
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
+      pCur->mergeSrc = MERGE_SRC_MUT;
+      return SQLITE_OK;
+    }
+    int cmp = mergeCompare(pCur, e);
+    if( cmp > 0 ){
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      return SQLITE_OK;
+    }else if( cmp < 0 ){
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
+      pCur->mergeSrc = MERGE_SRC_MUT;
+      return SQLITE_OK;
+    }else{
+      if( e->op==PROLLY_EDIT_DELETE ){
+        pCur->mmIdx--;
+        prollyCursorPrev(&pCur->pCur);
+        continue;
+      }
+      pCur->mergeSrc = MERGE_SRC_BOTH;
+      return SQLITE_OK;
+    }
+  }
+}
+
+/* Find the first merged entry (for BtreeFirst). */
+static int mergeFirst(BtCursor *pCur, int *pRes){
+  pCur->mergeSrc = MERGE_SRC_TREE;  /* Will be corrected below */
+  pCur->mmIdx = 0;
+
+  int treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
+  int mutOk  = (pCur->mmIdx < pCur->pMutMap->nEntries);
+
+  /* Position: we haven't advanced yet, so this IS the first entry.
+  ** Use the same scan logic as mergeStepForward but without advancing first. */
+  for(;;){
+    treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
+    mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
+
+    if( !treeOk && !mutOk ){ *pRes = 1; return SQLITE_OK; }
+
+    if( !mutOk ){
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      *pRes = 0; return SQLITE_OK;
+    }
+    ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+    if( !treeOk ){
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
+      pCur->mergeSrc = MERGE_SRC_MUT;
+      *pRes = 0; return SQLITE_OK;
+    }
+    int cmp = mergeCompare(pCur, e);
+    if( cmp < 0 ){
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      *pRes = 0; return SQLITE_OK;
+    }else if( cmp > 0 ){
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
+      pCur->mergeSrc = MERGE_SRC_MUT;
+      *pRes = 0; return SQLITE_OK;
+    }else{
+      if( e->op==PROLLY_EDIT_DELETE ){
+        pCur->mmIdx++;
+        prollyCursorNext(&pCur->pCur);
+        continue;
+      }
+      pCur->mergeSrc = MERGE_SRC_BOTH;
+      *pRes = 0; return SQLITE_OK;
+    }
+  }
+}
+
+/* Find the last merged entry (for BtreeLast). */
+static int mergeLast(BtCursor *pCur, int *pRes){
+  pCur->mmIdx = pCur->pMutMap->nEntries - 1;
+  pCur->mergeSrc = MERGE_SRC_TREE;
+
+  for(;;){
+    int treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
+    int mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
+
+    if( !treeOk && !mutOk ){ *pRes = 1; return SQLITE_OK; }
+
+    if( !mutOk ){
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      *pRes = 0; return SQLITE_OK;
+    }
+    ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+    if( !treeOk ){
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
+      pCur->mergeSrc = MERGE_SRC_MUT;
+      *pRes = 0; return SQLITE_OK;
+    }
+    int cmp = mergeCompare(pCur, e);
+    if( cmp > 0 ){
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      *pRes = 0; return SQLITE_OK;
+    }else if( cmp < 0 ){
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
+      pCur->mergeSrc = MERGE_SRC_MUT;
+      *pRes = 0; return SQLITE_OK;
+    }else{
+      if( e->op==PROLLY_EDIT_DELETE ){
+        pCur->mmIdx--;
+        prollyCursorPrev(&pCur->pCur);
+        continue;
+      }
+      pCur->mergeSrc = MERGE_SRC_BOTH;
+      *pRes = 0; return SQLITE_OK;
+    }
+  }
+}
+
+/* --------------------------------------------------------------------------
 ** Cursor navigation
 ** -------------------------------------------------------------------------- */
 
@@ -2162,14 +2380,32 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
   CLEAR_CACHED_PAYLOAD(pCur);
   rc = flushTablePending(pCur);
   if( rc!=SQLITE_OK ) return rc;
-  rc = flushIfNeeded(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+
+  /* Flush OTHER cursors' MutMaps but NOT our own — merge iteration
+  ** handles our pending edits without tree rebuild. */
+  {
+    BtCursor *p;
+    for(p = pCur->pBt->pCursor; p; p = p->pNext){
+      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
+       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
+        rc = flushMutMap(p);
+        if( rc!=SQLITE_OK ) return rc;
+        p->eState = CURSOR_INVALID;
+      }
+    }
+  }
   refreshCursorRoot(pCur);
   rc = prollyCursorFirst(&pCur->pCur, pRes);
-  if( rc==SQLITE_OK ){
-    pCur->eState = (*pRes==0) ? CURSOR_VALID : CURSOR_INVALID;
-    pCur->curFlags &= ~BTCF_AtLast;
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    pCur->mmActive = 1;
+    rc = mergeFirst(pCur, pRes);
+  }else{
+    pCur->mmActive = 0;
   }
+  pCur->eState = (*pRes==0) ? CURSOR_VALID : CURSOR_INVALID;
+  pCur->curFlags &= ~BTCF_AtLast;
   return rc;
 }
 
@@ -2179,17 +2415,33 @@ int sqlite3BtreeLast(BtCursor *pCur, int *pRes){
   CLEAR_CACHED_PAYLOAD(pCur);
   rc = flushTablePending(pCur);
   if( rc!=SQLITE_OK ) return rc;
-  rc = flushIfNeeded(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+
+  {
+    BtCursor *p;
+    for(p = pCur->pBt->pCursor; p; p = p->pNext){
+      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
+       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
+        rc = flushMutMap(p);
+        if( rc!=SQLITE_OK ) return rc;
+        p->eState = CURSOR_INVALID;
+      }
+    }
+  }
   refreshCursorRoot(pCur);
   rc = prollyCursorLast(&pCur->pCur, pRes);
-  if( rc==SQLITE_OK ){
-    if( *pRes==0 ){
-      pCur->eState = CURSOR_VALID;
-      pCur->curFlags |= BTCF_AtLast;
-    } else {
-      pCur->eState = CURSOR_INVALID;
-    }
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    pCur->mmActive = 1;
+    rc = mergeLast(pCur, pRes);
+  }else{
+    pCur->mmActive = 0;
+  }
+  if( *pRes==0 ){
+    pCur->eState = CURSOR_VALID;
+    pCur->curFlags |= BTCF_AtLast;
+  } else {
+    pCur->eState = CURSOR_INVALID;
   }
   return rc;
 }
@@ -2226,13 +2478,47 @@ int sqlite3BtreeNext(BtCursor *pCur, int flags){
     pCur->skipNext = 0;
   }
 
-  rc = prollyCursorNext(&pCur->pCur);
-  if( rc==SQLITE_OK ){
-    if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-      pCur->eState = CURSOR_VALID;
-    } else {
+  if( pCur->mmActive ){
+    rc = mergeStepForward(pCur);
+    if( rc==SQLITE_DONE ){
       pCur->eState = CURSOR_INVALID;
-      return SQLITE_DONE;
+    }else if( rc==SQLITE_OK ){
+      pCur->eState = CURSOR_VALID;
+    }
+  }else{
+    /* If the MutMap acquired entries mid-scan (e.g. deferred deletes),
+    ** activate merge iteration so we skip deleted entries and see inserts. */
+    if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+      ProllyMutMapIter it;
+      if( pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
+        prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
+                             prollyCursorIntKey(&pCur->pCur));
+      }else if( !pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
+        const u8 *pK; int nK;
+        prollyCursorKey(&pCur->pCur, &pK, &nK);
+        prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
+      }else{
+        prollyMutMapIterFirst(&it, pCur->pMutMap);
+      }
+      pCur->mmIdx = it.idx;
+      pCur->mmActive = 1;
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      rc = mergeStepForward(pCur);
+      if( rc==SQLITE_DONE ){
+        pCur->eState = CURSOR_INVALID;
+      }else if( rc==SQLITE_OK ){
+        pCur->eState = CURSOR_VALID;
+      }
+    }else{
+      rc = prollyCursorNext(&pCur->pCur);
+      if( rc==SQLITE_OK ){
+        if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+          pCur->eState = CURSOR_VALID;
+        } else {
+          pCur->eState = CURSOR_INVALID;
+          return SQLITE_DONE;
+        }
+      }
     }
   }
   pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
@@ -2249,8 +2535,6 @@ int sqlite3BtreePrevious(BtCursor *pCur, int flags){
     return SQLITE_DONE;
   }
 
-  /* Restore cursor position if it was saved. See sqlite3BtreeNext for the
-  ** full explanation — this is the symmetric fix for backward traversal. */
   if( pCur->eState==CURSOR_REQUIRESEEK ){
     rc = restoreCursorPosition(pCur, 0);
     if( rc!=SQLITE_OK ) return rc;
@@ -2268,13 +2552,45 @@ int sqlite3BtreePrevious(BtCursor *pCur, int flags){
     pCur->skipNext = 0;
   }
 
-  rc = prollyCursorPrev(&pCur->pCur);
-  if( rc==SQLITE_OK ){
-    if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-      pCur->eState = CURSOR_VALID;
-    } else {
+  if( pCur->mmActive ){
+    rc = mergeStepBackward(pCur);
+    if( rc==SQLITE_DONE ){
       pCur->eState = CURSOR_INVALID;
-      return SQLITE_DONE;
+    }else if( rc==SQLITE_OK ){
+      pCur->eState = CURSOR_VALID;
+    }
+  }else{
+    if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+      ProllyMutMapIter it;
+      if( pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
+        prollyMutMapIterSeek(&it, pCur->pMutMap, 0, 0,
+                             prollyCursorIntKey(&pCur->pCur));
+      }else if( !pCur->curIntKey && prollyCursorIsValid(&pCur->pCur) ){
+        const u8 *pK; int nK;
+        prollyCursorKey(&pCur->pCur, &pK, &nK);
+        prollyMutMapIterSeek(&it, pCur->pMutMap, pK, nK, 0);
+      }else{
+        prollyMutMapIterLast(&it, pCur->pMutMap);
+      }
+      pCur->mmIdx = it.idx;
+      pCur->mmActive = 1;
+      pCur->mergeSrc = MERGE_SRC_TREE;
+      rc = mergeStepBackward(pCur);
+      if( rc==SQLITE_DONE ){
+        pCur->eState = CURSOR_INVALID;
+      }else if( rc==SQLITE_OK ){
+        pCur->eState = CURSOR_VALID;
+      }
+    }else{
+      rc = prollyCursorPrev(&pCur->pCur);
+      if( rc==SQLITE_OK ){
+        if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+          pCur->eState = CURSOR_VALID;
+        } else {
+          pCur->eState = CURSOR_INVALID;
+          return SQLITE_DONE;
+        }
+      }
     }
   }
   pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
@@ -2526,16 +2842,29 @@ int sqlite3BtreeIndexMoveto(
 
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  /* Flush OTHER cursors' pending mutations on this table.
-  ** Our own MutMap is handled inline via two-pass scan. */
+  /* Flush pending mutations from other cursors on this table.
+  ** For our own MutMap: flush only if the tree is empty (all data in
+  ** MutMap — e.g. freshly populated auto-index).  When the tree already
+  ** has data, our MutMap is checked inline during the leaf scan and via
+  ** the MutMap seek section below, avoiding O(N^2) flushes during
+  ** scan-based DELETE. */
   {
     BtCursor *p;
     for(p = pCur->pBt->pCursor; p; p = p->pNext){
-      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
+      if( p->pgnoRoot==pCur->pgnoRoot
        && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-        rc = flushMutMap(p);
-        if( rc!=SQLITE_OK ) return rc;
-        p->eState = CURSOR_INVALID;
+        if( p==pCur ){
+          /* Self-flush only when tree is empty (no prior data to seek) */
+          struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+          if( pTE && prollyHashIsEmpty(&pTE->root) ){
+            rc = flushMutMap(p);
+            if( rc!=SQLITE_OK ) return rc;
+          }
+        }else{
+          rc = flushMutMap(p);
+          if( rc!=SQLITE_OK ) return rc;
+          p->eState = CURSOR_INVALID;
+        }
       }
     }
   }
@@ -2789,10 +3118,11 @@ i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
   if(pCur && pCur->pOrigCursor) return origBtreeIntegerKey(pCur->pOrigCursor);
   assert( pCur->eState==CURSOR_VALID );
   assert( pCur->curIntKey );
-  /* When the seek was satisfied from the MutMap the prolly cursor may
-  ** not be positioned. Return the cached key only in that case.
-  ** If the prolly cursor IS valid, always read from it because
-  ** cachedIntKey may be stale after Next()/Previous(). */
+  /* Merge iteration: current entry may come from MutMap */
+  if( pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    return pCur->pMutMap->aEntries[pCur->mmIdx].intKey;
+  }
   if( !prollyCursorIsValid(&pCur->pCur)
    && (pCur->curFlags & BTCF_ValidNKey) ){
     return pCur->cachedIntKey;
@@ -2805,13 +3135,39 @@ i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
 ** For BLOBKEY (index) tables: payload = the key (entire record IS the key)
 */
 static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
-  /* If we have cached payload from a MutMap lookup or previous
-  ** reconstruction, return that. */
+  /* If we have cached payload, return that. */
   if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
     *ppData = pCur->pCachedPayload;
     *pnData = pCur->nCachedPayload;
     return;
   }
+
+  /* Merge iteration: current entry may come from MutMap, not tree. */
+  if( pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+    if( pCur->curIntKey ){
+      /* INTKEY: MutMap value IS the payload */
+      *ppData = e->pVal;
+      *pnData = e->nVal;
+    }else{
+      /* BLOBKEY: reconstruct record from MutMap sort key */
+      u8 *pRec = 0; int nRec = 0;
+      recordFromSortKey(e->pKey, e->nKey, &pRec, &nRec);
+      if( pRec ){
+        if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
+          sqlite3_free(pCur->pCachedPayload);
+        }
+        pCur->pCachedPayload = pRec;
+        pCur->nCachedPayload = nRec;
+        pCur->cachedPayloadOwned = 1;
+      }
+      *ppData = pRec;
+      *pnData = nRec;
+    }
+    return;
+  }
+
   if( pCur->curIntKey ){
     prollyCursorValue(&pCur->pCur, ppData, pnData);
   }else{
@@ -2821,11 +3177,9 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
     const u8 *pVal; int nVal;
     prollyCursorValue(&pCur->pCur, &pVal, &nVal);
     if( nVal > 0 ){
-      /* Old format: value is the original record */
       *ppData = pVal;
       *pnData = nVal;
     }else{
-      /* New format: reconstruct record from sort key */
       const u8 *pKey; int nKey;
       prollyCursorKey(&pCur->pCur, &pKey, &nKey);
       u8 *pRec = 0; int nRec = 0;
@@ -2975,20 +3329,13 @@ int sqlite3BtreeInsert(
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Defer flush for persistent (non-ephemeral) tables, including newly
-  ** created tables and indexes in the current transaction.
-  ** Ephemeral tables (temp database) flush immediately because their
-  ** VDBE cursor patterns (insert+scan on same cursor without Rewind)
-  ** don't always go through flushIfNeeded before reading. */
+  /* Defer flush for ALL non-master tables.  BtreeFirst/Last initialize
+  ** merge iteration over the tree cursor + MutMap, and BtreeNext/Prev
+  ** advance through both in sorted order.  This eliminates O(N^2)
+  ** per-row flushes for ephemeral tables (CTEs, DISTINCT, window
+  ** functions) and persistent tables alike. */
   {
-    int canDefer = 0;
-    if( pCur->pgnoRoot > 1 && pCur->pBt->db ){
-      Btree *pMain = pCur->pBt->db->aDb[0].pBt;
-      if( pMain && pMain == pCur->pBtree ){
-        struct TableEntry *pTE2 = findTable(pMain, pCur->pgnoRoot);
-        if( pTE2 ) canDefer = 1;
-      }
-    }
+    int canDefer = (pCur->pgnoRoot > 1);
     if( canDefer ){
       if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
         /* INTKEY SAVEPOSITION: cache the inserted data so cursor reads work.
@@ -3265,20 +3612,24 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
 
-  /* Restore cursor position if it was saved by saveAllCursors during a
-  ** concurrent insert on another cursor sharing the same ephemeral table.
-  ** This matches stock SQLite's btree.c which handles CURSOR_REQUIRESEEK
-  ** at the top of sqlite3BtreeDelete. Without this, window functions like
-  ** PERCENT_RANK crash because the prolly cursor has NULL node pointers. */
-  if( pCur->eState!=CURSOR_VALID ){
-    if( pCur->eState>=CURSOR_REQUIRESEEK ){
-      rc = restoreCursorPosition(pCur, 0);
-      if( rc!=SQLITE_OK || pCur->eState!=CURSOR_VALID ) return rc;
-    }else{
-      return SQLITE_CORRUPT_BKPT;
-    }
+  /* Restore or validate cursor position.  CURSOR_REQUIRESEEK means the
+  ** position was saved and must be re-established.  CURSOR_SKIPNEXT means
+  ** a deferred delete just happened and the cursor is still positioned.
+  ** CURSOR_INVALID is allowed when the delete key is provided by the
+  ** caller (OP_IdxDelete) — no cursor position needed. */
+  if( pCur->eState==CURSOR_REQUIRESEEK ){
+    rc = restoreCursorPosition(pCur, 0);
+    if( rc!=SQLITE_OK || pCur->eState!=CURSOR_VALID ) return rc;
+  }else if( pCur->eState==CURSOR_SKIPNEXT ){
+    pCur->eState = CURSOR_VALID;
+    pCur->skipNext = 0;
+  }else if( pCur->eState==CURSOR_INVALID ){
+    /* Allow INVALID for index deletes where the key comes from registers,
+    ** not from cursor position (OP_IdxDelete). The MutMap delete below
+    ** uses the extracted key, not the cursor position. */
+  }else if( pCur->eState!=CURSOR_VALID ){
+    return SQLITE_CORRUPT_BKPT;
   }
-  assert( pCur->eState==CURSOR_VALID );
 
   rc = syncSavepoints(pCur);
   if( rc!=SQLITE_OK ) return rc;
@@ -3289,9 +3640,14 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   rc = ensureMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Extract key and record the MutMap deletion */
+  /* Extract key and record the MutMap deletion.
+  ** In merge mode, the current entry may come from MutMap (not the tree
+  ** cursor), so read the key from the correct source. */
   if( pCur->curIntKey ){
-    if( !prollyCursorIsValid(&pCur->pCur)
+    if( pCur->mmActive
+     && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+      iKey = pCur->pMutMap->aEntries[pCur->mmIdx].intKey;
+    }else if( !prollyCursorIsValid(&pCur->pCur)
      && (pCur->curFlags & BTCF_ValidNKey) ){
       iKey = pCur->cachedIntKey;
     }else{
@@ -3302,7 +3658,13 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
     u8 *pDelSortKey = 0;
     int nDelSortKey = 0;
 
-    if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
+    if( pCur->mmActive
+     && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+      /* Key is the sort key from the MutMap entry */
+      ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+      pKey = e->pKey;
+      nKey = e->nKey;
+    }else if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
       rc = sortKeyFromRecord(pCur->pCachedPayload, pCur->nCachedPayload,
                              &pDelSortKey, &nDelSortKey);
       if( rc!=SQLITE_OK ) return rc;
@@ -3317,17 +3679,10 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
 
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Dispatch to deferred or immediate path.
-  ** Same logic as INSERT: only defer for main database tables. */
+  /* Dispatch to deferred or immediate path — must match BtreeInsert's
+  ** canDefer logic so INSERT and DELETE use the same deferral strategy. */
   {
-    int canDefer = 0;
-    if( pCur->pgnoRoot > 1 && pCur->pBt->db ){
-      Btree *pMain = pCur->pBt->db->aDb[0].pBt;
-      if( pMain && pMain == pCur->pBtree ){
-        struct TableEntry *pTE2 = findTable(pMain, pCur->pgnoRoot);
-        if( pTE2 ) canDefer = 1;
-      }
-    }
+    int canDefer = (pCur->pgnoRoot > 1);
     if( canDefer ){
       rc = btreeDeleteDeferred(pCur, pKey, nKey, iKey);
       if( rc!=SQLITE_OK ) return rc;
