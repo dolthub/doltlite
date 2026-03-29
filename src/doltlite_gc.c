@@ -22,8 +22,21 @@
 #include "doltlite_commit.h"
 
 #include <string.h>
-#ifndef _WIN32
+#include <stdio.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+# include <io.h>
+# define GC_OPEN(p,f,m) _open(p, f|_O_BINARY, m)
+# define GC_WRITE(fd,b,n) _write(fd, b, (unsigned)(n))
+# define GC_FSYNC(fd) _commit(fd)
+# define GC_CLOSE(fd) _close(fd)
+#else
 # include <unistd.h>
+# define GC_OPEN(p,f,m) open(p, f, m)
+# define GC_WRITE(fd,b,n) write(fd, b, n)
+# define GC_FSYNC(fd) fsync(fd)
+# define GC_CLOSE(fd) close(fd)
 #endif
 
 extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
@@ -499,7 +512,9 @@ static int gcRewriteFile(
 
   csSerializeManifest(cs, manifest);
 
-  /* Write to temp file, then rename */
+  /* Write to temp file, then rename.
+  ** Uses direct POSIX I/O instead of the SQLite VFS because the VFS
+  ** xWrite has a page-size limit that fails on large bulk writes. */
   if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
     char *zTmp = sqlite3_mprintf("%s-gc-tmp", cs->zFilename);
     if( !zTmp ){
@@ -508,49 +523,42 @@ static int gcRewriteFile(
     }
 
     {
-      sqlite3_file *pTmp = 0;
-      int tmpFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE |
-                     SQLITE_OPEN_MAIN_DB;
-      int dummy;
-
-      pTmp = sqlite3_malloc(cs->pVfs->szOsFile);
-      if( !pTmp ){
+      int fd = GC_OPEN(zTmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if( fd < 0 ){
         sqlite3_free(zTmp); sqlite3_free(indexBuf);
-        return SQLITE_NOMEM;
+        return SQLITE_CANTOPEN;
       }
 
-      rc = cs->pVfs->xOpen(cs->pVfs, zTmp, pTmp, tmpFlags, &dummy);
-      if( rc==SQLITE_OK ){
-        rc = pTmp->pMethods->xWrite(pTmp, manifest, CHUNK_MANIFEST_SIZE, 0);
-        if( rc==SQLITE_OK && nNewData>0 ){
-          rc = pTmp->pMethods->xWrite(pTmp, pNewData, nNewData, CHUNK_MANIFEST_SIZE);
-        }
-        if( rc==SQLITE_OK && indexSize>0 ){
-          rc = pTmp->pMethods->xWrite(pTmp, indexBuf, indexSize, indexOffset);
-        }
-        if( rc==SQLITE_OK ){
-          rc = pTmp->pMethods->xTruncate(pTmp, indexOffset + indexSize);
-        }
-        if( rc==SQLITE_OK ){
-          rc = pTmp->pMethods->xSync(pTmp, SQLITE_SYNC_NORMAL);
-        }
-        pTmp->pMethods->xClose(pTmp);
+      if( GC_WRITE(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
+        rc = SQLITE_IOERR_WRITE;
       }
-      sqlite3_free(pTmp);
+      if( rc==SQLITE_OK && nNewData>0 ){
+        /* Write chunk data in chunks to handle large buffers */
+        const u8 *p = pNewData;
+        int remaining = nNewData;
+        while( remaining > 0 && rc==SQLITE_OK ){
+          int toWrite = remaining > 1048576 ? 1048576 : remaining;
+          int written = GC_WRITE(fd, p, toWrite);
+          if( written != toWrite ){ rc = SQLITE_IOERR_WRITE; break; }
+          p += toWrite;
+          remaining -= toWrite;
+        }
+      }
+      if( rc==SQLITE_OK && indexSize>0 ){
+        if( GC_WRITE(fd, indexBuf, indexSize) != indexSize ){
+          rc = SQLITE_IOERR_WRITE;
+        }
+      }
+      if( rc==SQLITE_OK ){
+        if( GC_FSYNC(fd)!=0 ) rc = SQLITE_IOERR_FSYNC;
+      }
+      GC_CLOSE(fd);
 
       if( rc==SQLITE_OK ){
+        /* Close the old file handle before rename */
         if( cs->pFile && cs->pFile->pMethods ){
           cs->pFile->pMethods->xClose(cs->pFile);
           cs->pFile = 0;
-        }
-
-        {
-          int exists = 0;
-          cs->pVfs->xAccess(cs->pVfs, cs->zFilename,
-                            SQLITE_ACCESS_EXISTS, &exists);
-          if( exists ){
-            cs->pVfs->xDelete(cs->pVfs, cs->zFilename, 0);
-          }
         }
 
         if( rename(zTmp, cs->zFilename)!=0 ){
@@ -563,8 +571,10 @@ static int gcRewriteFile(
           cs->nWalData = 0;
         }
 
+        /* Reopen via VFS for subsequent operations */
         if( rc==SQLITE_OK ){
           int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
+          int dummy;
           sqlite3_file *pNewFile = sqlite3_malloc(cs->pVfs->szOsFile);
           if( pNewFile ){
             rc = cs->pVfs->xOpen(cs->pVfs, cs->zFilename, pNewFile,
@@ -579,7 +589,7 @@ static int gcRewriteFile(
           }
         }
       }else{
-        cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
+        unlink(zTmp);
       }
     }
     sqlite3_free(zTmp);
