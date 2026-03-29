@@ -2640,9 +2640,7 @@ int sqlite3BtreeIndexMoveto(
         treeFound = 1;
       }
 
-      /* If no match at all in current leaf, try adjacent leaves.
-      ** An eqSeen match (treeFound=1 with treeCmp!=0) is valid - don't
-      ** search adjacent leaves which would corrupt the cursor position. */
+      /* If no match at all in current leaf, try adjacent leaves. */
       if( !treeFound ){
         /* Try previous leaf */
         pCur->pCur.aLevel[iLevel].idx = 0;
@@ -2972,9 +2970,13 @@ int sqlite3BtreeInsert(
     if( pCur->pgnoRoot > 1 && pCur->pBt->db ){
       Btree *pMain = pCur->pBt->db->aDb[0].pBt;
       if( pMain && pMain == pCur->pBtree ){
-        /* Cursor is on the main database — check aTables */
-        struct TableEntry *pTE2 = findTable(pMain, pCur->pgnoRoot);
-        if( pTE2 ) canDefer = 1;
+        /* Cursor is on the main database — check aTables.
+        ** Deferred writes disabled: the streamingMerge path has a bug
+        ** that corrupts index chunk boundaries when flushing multiple
+        ** edits (M>1) with variable-size data. Flushing each edit
+        ** individually (M=1) avoids the merge bug entirely. */
+        (void)findTable(pMain, pCur->pgnoRoot);
+        canDefer = 0;
       }
       /* If cursor is on a temp/ephemeral database, canDefer stays 0 */
     }
