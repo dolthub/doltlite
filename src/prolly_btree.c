@@ -2606,14 +2606,15 @@ int sqlite3BtreeIndexMoveto(
         }
 
         /* Phase 2: Scan from 'lo' using VdbeRecordCompare. Stop when
-        ** we pass the prefix range (sort key prefix no longer matches). */
+        ** we pass the prefix range (sort key prefix no longer matches).
+        ** The SQLite record is either stored as the prolly value (old
+        ** format) or reconstructed from the sort key (new format). */
+        u8 *pRecBuf = 0;  /* Temp buffer for reconstructed records */
         int i;
         for( i = lo; i < nItems; i++ ){
           const u8 *pSK; int nSK;
           prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
-          /* Check if past prefix range — if so, this entry is the
-          ** first one greater than the search key. Capture as fallback
-          ** for range queries (>, >=) and stop scanning. */
+          /* Check if past prefix range */
           {
             int cmpLen = nSK < nSortKey ? nSK : nSortKey;
             int prefixCmp = memcmp(pSK, pSortKey, cmpLen);
@@ -2628,6 +2629,10 @@ int sqlite3BtreeIndexMoveto(
                 if( !isDeleted ){
                   const u8 *pVal2; int nVal2;
                   prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
+                  if( nVal2==0 ){
+                    recordFromSortKey(pSK, nSK, &pRecBuf, &nVal2);
+                    pVal2 = pRecBuf;
+                  }
                   pIdxKey->eqSeen = 0;
                   bestIdx = i;
                   bestCmp = sqlite3VdbeRecordCompare(nVal2, pVal2, pIdxKey);
@@ -2638,6 +2643,11 @@ int sqlite3BtreeIndexMoveto(
           }
           const u8 *pVal; int nVal;
           prollyNodeValue(&pLeaf->node, i, &pVal, &nVal);
+          if( nVal==0 ){
+            sqlite3_free(pRecBuf); pRecBuf = 0;
+            recordFromSortKey(pSK, nSK, &pRecBuf, &nVal);
+            pVal = pRecBuf;
+          }
           pIdxKey->eqSeen = 0;
           int recCmp = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
 
@@ -2668,6 +2678,7 @@ int sqlite3BtreeIndexMoveto(
             }
           }
         }
+        sqlite3_free(pRecBuf);
       }
 
       if( treeFound ){
@@ -2775,7 +2786,8 @@ i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
 ** For BLOBKEY (index) tables: payload = the key (entire record IS the key)
 */
 static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
-  /* If we have cached payload from a MutMap lookup, return that */
+  /* If we have cached payload from a MutMap lookup or previous
+  ** reconstruction, return that. */
   if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
     *ppData = pCur->pCachedPayload;
     *pnData = pCur->nCachedPayload;
@@ -2784,9 +2796,35 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   if( pCur->curIntKey ){
     prollyCursorValue(&pCur->pCur, ppData, pnData);
   }else{
-    /* BLOBKEY: sort key stored as prolly key, original SQLite record
-    ** stored as prolly value. Return the value directly. */
-    prollyCursorValue(&pCur->pCur, ppData, pnData);
+    /* BLOBKEY: the prolly value may be empty (new format) or contain
+    ** the original SQLite record (old format, backward compat).
+    ** If empty, reconstruct losslessly from the sort key. */
+    const u8 *pVal; int nVal;
+    prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+    if( nVal > 0 ){
+      /* Old format: value is the original record */
+      *ppData = pVal;
+      *pnData = nVal;
+    }else{
+      /* New format: reconstruct record from sort key */
+      const u8 *pKey; int nKey;
+      prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+      u8 *pRec = 0; int nRec = 0;
+      recordFromSortKey(pKey, nKey, &pRec, &nRec);
+      if( pRec ){
+        if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
+          sqlite3_free(pCur->pCachedPayload);
+        }
+        pCur->pCachedPayload = pRec;
+        pCur->nCachedPayload = nRec;
+        pCur->cachedPayloadOwned = 1;
+        *ppData = pRec;
+        *pnData = nRec;
+      }else{
+        *ppData = pVal;
+        *pnData = 0;
+      }
+    }
   }
 }
 
@@ -2900,7 +2938,9 @@ int sqlite3BtreeInsert(
     sqlite3_free(pBuf);
   } else {
     /* BLOBKEY (index): compute sort key for memcmp-sortable ordering.
-    ** Store sort key as prolly key, original SQLite record as value. */
+    ** Store sort key as prolly key with empty value — the original
+    ** SQLite record is reconstructed from the sort key on read via
+    ** recordFromSortKey() (the encoding is lossless). */
     u8 *pSortKey = 0;
     int nSortKey = 0;
     rc = sortKeyFromRecord((const u8*)pPayload->pKey,
@@ -2909,8 +2949,7 @@ int sqlite3BtreeInsert(
     if( rc==SQLITE_OK ){
       rc = prollyMutMapInsert(pCur->pMutMap,
                                pSortKey, nSortKey, 0,
-                               (const u8*)pPayload->pKey,
-                               (int)pPayload->nKey);
+                               NULL, 0);
       sqlite3_free(pSortKey);
     }
   }
