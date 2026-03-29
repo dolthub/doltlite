@@ -271,6 +271,22 @@ ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
   return &it->pMap->aEntries[it->idx];
 }
 
+void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
+                          const u8 *pKey, int nKey, i64 intKey){
+  int found = 0;
+  it->pMap = mm;
+  it->idx = bsearch_key(mm, pKey, nKey, intKey, &found);
+}
+
+void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
+  it->pMap = mm;
+  it->idx = mm->nEntries - 1;
+}
+
+void prollyMutMapIterPrev(ProllyMutMapIter *it){
+  it->idx--;
+}
+
 /*
 ** Clear all entries.
 */
