@@ -23,21 +23,8 @@
 
 #include <string.h>
 #include <stdio.h>
-#include <fcntl.h>
-#include <sys/stat.h>
-#ifdef _WIN32
-# include <io.h>
-# define GC_OPEN(p,f,m) _open(p, f|_O_BINARY, m)
-# define GC_WRITE(fd,b,n) _write(fd, b, (unsigned)(n))
-# define GC_FSYNC(fd) _commit(fd)
-# define GC_CLOSE(fd) _close(fd)
-#else
-# include <unistd.h>
-# define GC_OPEN(p,f,m) open(p, f, m)
-# define GC_WRITE(fd,b,n) write(fd, b, n)
-# define GC_FSYNC(fd) fsync(fd)
-# define GC_CLOSE(fd) close(fd)
-#endif
+/* POSIX I/O macros removed — GC file rewrite now routes through SQLite VFS.
+** See gcRewriteFile() below. */
 
 extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 
@@ -512,9 +499,10 @@ static int gcRewriteFile(
 
   csSerializeManifest(cs, manifest);
 
-  /* Write to temp file, then rename.
-  ** Uses direct POSIX I/O instead of the SQLite VFS because the VFS
-  ** xWrite has a page-size limit that fails on large bulk writes. */
+  /* Write to temp file via VFS, then rename.  All I/O routes through
+  ** the SQLite VFS layer so encryption extensions, compression plugins,
+  ** and custom I/O backends see every byte written.  Writes are bounded
+  ** to 64 KB per VFS call for broad VFS implementation compatibility. */
   if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
     char *zTmp = sqlite3_mprintf("%s-gc-tmp", cs->zFilename);
     if( !zTmp ){
@@ -523,41 +511,60 @@ static int gcRewriteFile(
     }
 
     {
-      int fd = GC_OPEN(zTmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-      if( fd < 0 ){
+      sqlite3_file *pTmpFile = 0;
+      int tmpFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                   | SQLITE_OPEN_MAIN_DB;
+      i64 writeOff = 0;
+
+      /* Remove stale temp file from a previous failed GC, if any */
+      cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
+
+      rc = sqlite3OsOpenMalloc(cs->pVfs, zTmp, &pTmpFile, tmpFlags, 0);
+      if( rc != SQLITE_OK ){
         sqlite3_free(zTmp); sqlite3_free(indexBuf);
         return SQLITE_CANTOPEN;
       }
 
-      if( GC_WRITE(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
-        rc = SQLITE_IOERR_WRITE;
-      }
+      /* Write manifest */
+      rc = sqlite3OsWrite(pTmpFile, manifest, CHUNK_MANIFEST_SIZE, writeOff);
+      writeOff += CHUNK_MANIFEST_SIZE;
+
+      /* Write chunk data in bounded pieces for VFS compatibility */
       if( rc==SQLITE_OK && nNewData>0 ){
-        /* Write chunk data in chunks to handle large buffers */
         const u8 *p = pNewData;
         int remaining = nNewData;
         while( remaining > 0 && rc==SQLITE_OK ){
-          int toWrite = remaining > 1048576 ? 1048576 : remaining;
-          int written = GC_WRITE(fd, p, toWrite);
-          if( written != toWrite ){ rc = SQLITE_IOERR_WRITE; break; }
+          int toWrite = remaining > 65536 ? 65536 : remaining;
+          rc = sqlite3OsWrite(pTmpFile, p, toWrite, writeOff);
           p += toWrite;
+          writeOff += toWrite;
           remaining -= toWrite;
         }
       }
+
+      /* Write index */
       if( rc==SQLITE_OK && indexSize>0 ){
-        if( GC_WRITE(fd, indexBuf, indexSize) != indexSize ){
-          rc = SQLITE_IOERR_WRITE;
+        const u8 *p = indexBuf;
+        int remaining = indexSize;
+        while( remaining > 0 && rc==SQLITE_OK ){
+          int toWrite = remaining > 65536 ? 65536 : remaining;
+          rc = sqlite3OsWrite(pTmpFile, p, toWrite, writeOff);
+          p += toWrite;
+          writeOff += toWrite;
+          remaining -= toWrite;
         }
       }
+
+      /* Sync — durability point */
       if( rc==SQLITE_OK ){
-        if( GC_FSYNC(fd)!=0 ) rc = SQLITE_IOERR_FSYNC;
+        rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
       }
-      GC_CLOSE(fd);
+      sqlite3OsCloseFree(pTmpFile);
 
       if( rc==SQLITE_OK ){
         /* Close the old file handle before rename */
-        if( cs->pFile && cs->pFile->pMethods ){
-          cs->pFile->pMethods->xClose(cs->pFile);
+        if( cs->pFile ){
+          sqlite3OsCloseFree(cs->pFile);
           cs->pFile = 0;
         }
 
@@ -574,22 +581,11 @@ static int gcRewriteFile(
         /* Reopen via VFS for subsequent operations */
         if( rc==SQLITE_OK ){
           int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-          int dummy;
-          sqlite3_file *pNewFile = sqlite3_malloc(cs->pVfs->szOsFile);
-          if( pNewFile ){
-            rc = cs->pVfs->xOpen(cs->pVfs, cs->zFilename, pNewFile,
-                                 reopenFlags, &dummy);
-            if( rc==SQLITE_OK ){
-              cs->pFile = pNewFile;
-            } else {
-              sqlite3_free(pNewFile);
-            }
-          } else {
-            rc = SQLITE_NOMEM;
-          }
+          rc = sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename, &cs->pFile,
+                                   reopenFlags, 0);
         }
       }else{
-        unlink(zTmp);
+        cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
       }
     }
     sqlite3_free(zTmp);

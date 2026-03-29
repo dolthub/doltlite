@@ -40,38 +40,51 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 
+/* Portable flock helpers for concurrent writer serialization in
+** csCommitToFile.  Uses raw POSIX flock (not VFS xLock) because the
+** VFS per-inode lock tracker conflicts with other VFS handles to the
+** same file within the process.  All data I/O routes through the VFS. */
 #ifdef _WIN32
 # include <io.h>
 # include <windows.h>
-# define CS_OPEN(path, flags, mode) _open(path, flags | _O_BINARY, mode)
-# define CS_CLOSE(fd)              _close(fd)
-# define CS_WRITE(fd, buf, n)      _write(fd, buf, (unsigned)(n))
-# define CS_LSEEK(fd, off, whence) _lseeki64(fd, off, whence)
-# define CS_FSTAT(fd, st)          _fstat64(fd, st)
-# define CS_FSYNC(fd)              (_commit(fd)==0 ? 0 : -1)
-  typedef struct _stat64 cs_stat_t;
-  static int cs_flock(int fd, int op){
-    HANDLE h = (HANDLE)_get_osfhandle(fd);
-    OVERLAPPED ov = {0};
-    if( op==1 /*LOCK_EX*/ ){
-      return LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ov) ? 0 : -1;
+  static int csFileLock(const char *path, int *pFd){
+    int fd = _open(path, _O_BINARY | _O_RDWR | _O_CREAT, 0644);
+    if( fd < 0 ) return -1;
+    {
+      HANDLE h = (HANDLE)_get_osfhandle(fd);
+      OVERLAPPED ov = {0};
+      if( !LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ov) ){
+        _close(fd);
+        return -1;
+      }
     }
-    UnlockFileEx(h, 0, MAXDWORD, MAXDWORD, &ov);
+    *pFd = fd;
     return 0;
   }
-# define CS_FLOCK(fd, op) cs_flock(fd, op)
+  static void csFileUnlock(int fd){
+    if( fd >= 0 ){
+      HANDLE h = (HANDLE)_get_osfhandle(fd);
+      OVERLAPPED ov = {0};
+      UnlockFileEx(h, 0, MAXDWORD, MAXDWORD, &ov);
+      _close(fd);
+    }
+  }
 #else
 # include <unistd.h>
 # include <sys/file.h>
-# include <sys/uio.h>
-# define CS_OPEN(path, flags, mode) open(path, flags, mode)
-# define CS_CLOSE(fd)              close(fd)
-# define CS_WRITE(fd, buf, n)      write(fd, buf, n)
-# define CS_LSEEK(fd, off, whence) lseek(fd, off, whence)
-# define CS_FSTAT(fd, st)          fstat(fd, st)
-# define CS_FSYNC(fd)              fsync(fd)
-# define CS_FLOCK(fd, op)          flock(fd, op)
-  typedef struct stat cs_stat_t;
+  static int csFileLock(const char *path, int *pFd){
+    int fd = open(path, O_RDWR | O_CREAT, 0644);
+    if( fd < 0 ) return -1;
+    if( flock(fd, LOCK_EX) != 0 ){
+      close(fd);
+      return -1;
+    }
+    *pFd = fd;
+    return 0;
+  }
+  static void csFileUnlock(int fd){
+    if( fd >= 0 ) close(fd);  /* close releases flock */
+  }
 #endif
 
 /* --------------------------------------------------------------------
@@ -1688,117 +1701,123 @@ static int csCommitToMemory(ChunkStore *cs){
 static int csCommitToFile(ChunkStore *cs){
   int rc;
   int i;
+  i64 fileSize = 0;
+  i64 writeOff;
+  int lockFd = -1;
+  int hadFile = (cs->pFile != 0);
 
   /* Single-file commit: append WAL records to the main file at EOF.
-  ** If the file doesn't exist yet, create it with a manifest header. */
-  {
-    int fd = CS_OPEN(cs->zFilename, O_WRONLY | O_CREAT, 0644);
-    if( fd < 0 ) return SQLITE_CANTOPEN;
+  ** All data I/O routes through the SQLite VFS layer so that encryption
+  ** extensions, compression plugins, and custom I/O backends see
+  ** every byte written.  Concurrent writer serialization still uses
+  ** POSIX flock to avoid conflicts with the VFS per-inode lock tracker. */
 
-    /* Exclusive lock for concurrent writer serialization */
-    if( CS_FLOCK(fd, 1 /*LOCK_EX*/) != 0 ){
-      CS_CLOSE(fd);
-      return SQLITE_BUSY;
-    }
-
-    /* Under lock: check if file grew (another writer appended) */
-    {
-      cs_stat_t st;
-      if( CS_FSTAT(fd, &st)==0 && (i64)st.st_size > cs->iFileSize && cs->pFile ){
-        /* Re-read WAL region to pick up other writer's chunks */
-        sqlite3_free(cs->pWalData);
-        cs->pWalData = 0;
-        cs->nWalData = 0;
-        /* Temporarily reset pending count so replay doesn't conflict */
-        int savePending = cs->nPending;
-        cs->nPending = 0;
-    csPendHTClear(cs);
-        csReplayWalRegion(cs, 1);
-        cs->nPending = savePending;
-      }
-    }
-
-    /* If file is empty/new, write the manifest header first */
-    {
-      cs_stat_t st;
-      if( CS_FSTAT(fd, &st)==0 && st.st_size == 0 ){
-        /* New file: write manifest at offset 0 */
-        u8 manifest[CHUNK_MANIFEST_SIZE];
-        cs->iWalOffset = CHUNK_MANIFEST_SIZE;
-        csSerializeManifest(cs, manifest);
-        CS_LSEEK(fd, 0, SEEK_SET);
-        if( CS_WRITE(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
-          CS_CLOSE(fd);
-          return SQLITE_IOERR_WRITE;
-        }
-      }
-    }
-
-    /* Seek to end of file for appending WAL records */
-    CS_LSEEK(fd, 0, SEEK_END);
-
-    /* Write chunk records: tag(1) + hash(20) + length(4) + data */
-    for( i = 0; i < cs->nPending; i++ ){
-      ChunkIndexEntry *pe = &cs->aPending[i];
-      u8 recHdr[25];
-      recHdr[0] = CS_WAL_TAG_CHUNK;
-      memcpy(recHdr + 1, &pe->hash, 20);
-      CS_WRITE_U32(recHdr + 21, (u32)pe->size);
-
-      i64 bufOff = pe->offset + 4;  /* skip length prefix */
-      /* Write header + data (replaces writev for portability) */
-      if( CS_WRITE(fd, recHdr, 25) != 25 ){
-        CS_CLOSE(fd);
-        return SQLITE_IOERR_WRITE;
-      }
-      if( CS_WRITE(fd, cs->pWriteBuf + bufOff, pe->size) != (int)pe->size ){
-        CS_CLOSE(fd);
-        return SQLITE_IOERR_WRITE;
-      }
-    }
-
-    /* Write root record: tag(1) + manifest(168) */
-    {
-      u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
-      rootRec[0] = CS_WAL_TAG_ROOT;
-      csSerializeManifest(cs, rootRec + 1);
-      if( CS_WRITE(fd, rootRec, sizeof(rootRec)) != (int)sizeof(rootRec) ){
-        CS_CLOSE(fd);
-        return SQLITE_IOERR_WRITE;
-      }
-    }
-
-    /* Also update manifest at offset 0 for fast open (skip WAL replay) */
-    {
-      u8 manifest[CHUNK_MANIFEST_SIZE];
-      csSerializeManifest(cs, manifest);
-      CS_LSEEK(fd, 0, SEEK_SET);
-      if( CS_WRITE(fd, manifest, CHUNK_MANIFEST_SIZE) != CHUNK_MANIFEST_SIZE ){
-        CS_CLOSE(fd);
-        return SQLITE_IOERR_WRITE;
-      }
-    }
-
-    /* fsync — durability point */
-    if( CS_FSYNC(fd)!=0 ){
-      CS_CLOSE(fd);
-      return SQLITE_IOERR_FSYNC;
-    }
-
-    /* Track file size */
-    {
-      cs_stat_t st;
-      if( CS_FSTAT(fd, &st)==0 ) cs->iFileSize = (i64)st.st_size;
-    }
-    CS_CLOSE(fd);
-  }
-
-  /* If we didn't have a file handle yet (first commit), open it now */
+  /* If we don't have a VFS file handle yet (first commit), create/open */
   if( cs->pFile == 0 ){
-    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
+    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                  | SQLITE_OPEN_MAIN_DB;
     rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile, openFlags);
-    if( rc != SQLITE_OK ) return rc;
+    if( rc != SQLITE_OK ) return SQLITE_CANTOPEN;
   }
+
+  /* Exclusive flock for concurrent writer serialization */
+  if( csFileLock(cs->zFilename, &lockFd) != 0 ){
+    return SQLITE_BUSY;
+  }
+
+  /* Under lock: get current file size via VFS */
+  rc = cs->pFile->pMethods->xFileSize(cs->pFile, &fileSize);
+  if( rc != SQLITE_OK ) goto commit_done;
+
+  /* Check if file grew (another writer appended) */
+  if( fileSize > cs->iFileSize && hadFile ){
+    /* Re-read WAL region to pick up other writer's chunks */
+    sqlite3_free(cs->pWalData);
+    cs->pWalData = 0;
+    cs->nWalData = 0;
+    /* Temporarily reset pending count so replay doesn't conflict */
+    {
+      int savePending = cs->nPending;
+      cs->nPending = 0;
+      csPendHTClear(cs);
+      csReplayWalRegion(cs, 1);
+      cs->nPending = savePending;
+    }
+  }
+
+  /* If file is empty/new, write the manifest header first */
+  if( fileSize == 0 ){
+    u8 manifest[CHUNK_MANIFEST_SIZE];
+    cs->iWalOffset = CHUNK_MANIFEST_SIZE;
+    csSerializeManifest(cs, manifest);
+    rc = sqlite3OsWrite(cs->pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
+    if( rc != SQLITE_OK ) goto commit_done;
+    fileSize = CHUNK_MANIFEST_SIZE;
+  }
+
+  /* Append WAL records at end of file */
+  writeOff = fileSize;
+
+  /* Write chunk records: tag(1) + hash(20) + length(4) + data */
+  for( i = 0; i < cs->nPending; i++ ){
+    ChunkIndexEntry *pe = &cs->aPending[i];
+    u8 recHdr[25];
+    recHdr[0] = CS_WAL_TAG_CHUNK;
+    memcpy(recHdr + 1, &pe->hash, 20);
+    CS_WRITE_U32(recHdr + 21, (u32)pe->size);
+
+    i64 bufOff = pe->offset + 4;  /* skip length prefix */
+    rc = sqlite3OsWrite(cs->pFile, recHdr, 25, writeOff);
+    if( rc != SQLITE_OK ) goto commit_done;
+    writeOff += 25;
+
+    /* Write chunk data in bounded pieces — the VFS xWrite interface
+    ** uses int for the size parameter and some implementations impose
+    ** per-call limits smaller than the maximum int value. */
+    {
+      const u8 *pSrc = cs->pWriteBuf + bufOff;
+      int remaining = pe->size;
+      while( remaining > 0 && rc==SQLITE_OK ){
+        int toWrite = remaining > 65536 ? 65536 : remaining;
+        rc = sqlite3OsWrite(cs->pFile, pSrc, toWrite, writeOff);
+        pSrc += toWrite;
+        writeOff += toWrite;
+        remaining -= toWrite;
+      }
+    }
+    if( rc != SQLITE_OK ) goto commit_done;
+  }
+
+  /* Write root record: tag(1) + manifest(168) */
+  {
+    u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
+    rootRec[0] = CS_WAL_TAG_ROOT;
+    csSerializeManifest(cs, rootRec + 1);
+    rc = sqlite3OsWrite(cs->pFile, rootRec, sizeof(rootRec), writeOff);
+    if( rc != SQLITE_OK ) goto commit_done;
+    writeOff += sizeof(rootRec);
+  }
+
+  /* Also update manifest at offset 0 for fast open (skip WAL replay) */
+  {
+    u8 manifest[CHUNK_MANIFEST_SIZE];
+    csSerializeManifest(cs, manifest);
+    rc = sqlite3OsWrite(cs->pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
+    if( rc != SQLITE_OK ) goto commit_done;
+  }
+
+  /* fsync via VFS — durability point */
+  rc = sqlite3OsSync(cs->pFile, SQLITE_SYNC_NORMAL);
+  if( rc != SQLITE_OK ) goto commit_done;
+
+  /* Track file size */
+  cs->iFileSize = writeOff;
+
+commit_done:
+  /* Release flock (close releases the lock) */
+  csFileUnlock(lockFd);
+
+  if( rc != SQLITE_OK ) return rc;
 
   /* Update in-memory index: move chunk data into WAL cache */
   for( i = 0; i < cs->nPending; i++ ){
