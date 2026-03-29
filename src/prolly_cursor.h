@@ -71,13 +71,6 @@ int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes);
 int prollyCursorSeekBlob(ProllyCursor *cur,
                          const u8 *pKey, int nKey, int *pRes);
 
-/* Seek using VdbeRecordCompare (for IndexMoveto).
-** O(log N) binary search from root to leaf.
-** *pRes: 0=exact, >0=cursor at larger, <0=cursor past end.
-** *pEqSeen: set if partial match (eqSeen). */
-int prollyCursorSeekRecord(ProllyCursor *cur, UnpackedRecord *pIdxKey,
-                           int *pRes, int *pEqSeen);
-
 /* Check if cursor is valid (pointing to an entry) */
 int prollyCursorIsValid(ProllyCursor *cur);
 
