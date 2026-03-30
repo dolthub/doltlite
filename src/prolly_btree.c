@@ -4214,35 +4214,12 @@ static int btreeDeleteDeferred(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKe
 */
 static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey){
   int rc;
-  i64 savedIntKey = 0;
-  u8 *savedBlobKey = 0;
-  int savedBlobKeyLen = 0;
-
-  if( pCur->curIntKey ){
-    if( !prollyCursorIsValid(&pCur->pCur)
-     && (pCur->curFlags & BTCF_ValidNKey) ){
-      savedIntKey = pCur->cachedIntKey;
-    } else {
-      savedIntKey = prollyCursorIntKey(&pCur->pCur);
-    }
-  } else {
-    if( nKey > 0 && pKey ){
-      savedBlobKey = sqlite3_malloc(nKey);
-      if( savedBlobKey ){ memcpy(savedBlobKey, pKey, nKey); savedBlobKeyLen = nKey; }
-    } else {
-      const u8 *pk; int nk;
-      prollyCursorKey(&pCur->pCur, &pk, &nk);
-      if( nk > 0 ){
-        savedBlobKey = sqlite3_malloc(nk);
-        if( savedBlobKey ){ memcpy(savedBlobKey, pk, nk); savedBlobKeyLen = nk; }
-      }
-    }
-  }
+  (void)pKey;
+  (void)nKey;
   (void)iKey;
 
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(savedBlobKey);
     return rc;
   }
 
@@ -4256,7 +4233,6 @@ static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iK
   }
 
   pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
-  sqlite3_free(savedBlobKey);
   return rc;
 }
 int sqlite3BtreeInsert(
@@ -4480,6 +4456,10 @@ int sqlite3SchemaMutexHeld(sqlite3 *db, int iDb, Schema *pSchema){
   return 1;
 }
 #endif
+#elif !defined(SQLITE_OMIT_SHARED_CACHE)
+/* Non-threadsafe build: provide a no-op so the vtable always has a valid
+** function pointer matching prollyBtreeEnter above. */
+static void prollyBtreeLeave(Btree *p){ (void)p; }
 #endif
 
 /* --------------------------------------------------------------------------

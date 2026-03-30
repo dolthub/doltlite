@@ -616,12 +616,4 @@ void prollyCursorClose(ProllyCursor *cur){
   cur->eState = PROLLY_CURSOR_INVALID;
 }
 
-/*
-** Public wrapper for loadNode. Used by prolly_btree.c for custom seek.
-*/
-int prollyCursorLoadNode(ProllyCursor *cur, const ProllyHash *hash,
-                         ProllyCacheEntry **ppEntry){
-  return loadNode(cur, hash, ppEntry);
-}
-
 #endif /* DOLTLITE_PROLLY */

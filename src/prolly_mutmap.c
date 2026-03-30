@@ -283,10 +283,6 @@ void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
   it->idx = mm->nEntries - 1;
 }
 
-void prollyMutMapIterPrev(ProllyMutMapIter *it){
-  it->idx--;
-}
-
 /*
 ** Clear all entries.
 */
@@ -296,61 +292,6 @@ void prollyMutMapClear(ProllyMutMap *mm){
     freeEntryData(&mm->aEntries[i]);
   }
   mm->nEntries = 0;
-}
-
-/*
-** Deep-clone. Clone is O(M) — memcpy the array then copy key/val data.
-*/
-ProllyMutMap *prollyMutMapClone(ProllyMutMap *mm){
-  ProllyMutMap *pNew;
-  int i;
-
-  if( !mm || mm->nEntries==0 ) return 0;
-
-  pNew = sqlite3_malloc(sizeof(ProllyMutMap));
-  if( !pNew ) return 0;
-
-  pNew->isIntKey = mm->isIntKey;
-  pNew->nEntries = mm->nEntries;
-  pNew->nAlloc = mm->nEntries;
-  pNew->aEntries = sqlite3_malloc(mm->nEntries * sizeof(ProllyMutMapEntry));
-  if( !pNew->aEntries ){
-    sqlite3_free(pNew);
-    return 0;
-  }
-
-  /* Copy the entry structs (shallow copy — pKey/pVal pointers are stale) */
-  memcpy(pNew->aEntries, mm->aEntries,
-         mm->nEntries * sizeof(ProllyMutMapEntry));
-
-  /* Deep-copy each entry's key and value data */
-  for(i=0; i<pNew->nEntries; i++){
-    ProllyMutMapEntry *src = &mm->aEntries[i];
-    ProllyMutMapEntry *dst = &pNew->aEntries[i];
-    dst->pKey = 0;
-    dst->pVal = 0;
-    if( src->pKey && src->nKey>0 ){
-      dst->pKey = sqlite3_malloc(src->nKey);
-      if( !dst->pKey ) goto clone_fail;
-      memcpy(dst->pKey, src->pKey, src->nKey);
-    }
-    if( src->pVal && src->nVal>0 ){
-      dst->pVal = sqlite3_malloc(src->nVal);
-      if( !dst->pVal ) goto clone_fail;
-      memcpy(dst->pVal, src->pVal, src->nVal);
-    }
-  }
-  return pNew;
-
-clone_fail:
-  /* Free partially cloned entries */
-  for(i=0; i<pNew->nEntries; i++){
-    sqlite3_free(pNew->aEntries[i].pKey);
-    sqlite3_free(pNew->aEntries[i].pVal);
-  }
-  sqlite3_free(pNew->aEntries);
-  sqlite3_free(pNew);
-  return 0;
 }
 
 /*

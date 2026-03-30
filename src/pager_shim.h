@@ -21,13 +21,9 @@ struct PagerShim {
   sqlite3_file *pFd;        /* File descriptor (may be NULL for :memory:) */
   char *zFilename;           /* Database filename */
   char *zJournal;            /* Journal filename (always empty string) */
-  u8 eState;                 /* Pager state for compatibility */
   u8 eLock;                  /* Current lock level */
   u8 journalMode;            /* Journal mode (WAL for doltlite databases) */
-  u8 noSync;                 /* Disable sync */
   u32 iDataVersion;          /* Data version counter */
-  int nRef;                  /* Outstanding page references (always 0) */
-  i64 nMmapSize;             /* Memory-mapped size (always 0) */
   sqlite3_vfs *pVfs;         /* VFS reference */
 };
 

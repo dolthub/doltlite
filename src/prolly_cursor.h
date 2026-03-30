@@ -95,10 +95,4 @@ void prollyCursorReleaseAll(ProllyCursor *cur);
 /* Close cursor and free resources */
 void prollyCursorClose(ProllyCursor *cur);
 
-/* Load a node by hash from cache or chunk store.
-** On success, *ppEntry is set to a cache entry with an incremented refcount.
-** Used by prolly_btree.c for custom seek implementations. */
-int prollyCursorLoadNode(ProllyCursor *cur, const ProllyHash *hash,
-                         ProllyCacheEntry **ppEntry);
-
 #endif /* SQLITE_PROLLY_CURSOR_H */

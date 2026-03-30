@@ -32,16 +32,13 @@ BtShared *SQLITE_WSD sqlite3SharedCacheList = 0;
 #include <string.h>
 
 #define SHIM(p) ((PagerShim*)(p))
-#define IS_SHIM(p) ((p) && ((PagerShim*)(p))->magic == PAGER_SHIM_MAGIC)
 
 /* Forward declarations for original pager dispatch */
 extern u32 orig_sqlite3PagerDataVersion(Pager *pPager);
 extern sqlite3_file *orig_sqlite3PagerFile(Pager *pPager);
 extern const char *orig_sqlite3PagerFilename(const Pager *pPager, int);
 extern const char *orig_sqlite3PagerJournalname(Pager *pPager);
-extern int orig_sqlite3PagerJournalMode(Pager *pPager, int);
 extern int orig_sqlite3PagerGetJournalMode(Pager *pPager);
-extern int orig_sqlite3PagerNosync(Pager *pPager);
 extern int orig_sqlite3PagerGet(Pager*, Pgno, DbPage**, int);
 extern void *orig_sqlite3PagerGetData(DbPage*);
 extern void *orig_sqlite3PagerGetExtra(DbPage*);
@@ -49,11 +46,9 @@ extern void orig_sqlite3PagerUnref(DbPage*);
 extern void orig_sqlite3PagerUnrefNotNull(DbPage*);
 extern void orig_sqlite3PagerUnrefPageOne(DbPage*);
 extern int orig_sqlite3PagerWrite(DbPage*);
-extern Pgno orig_sqlite3PagerPagenumber(DbPage*);
 extern int orig_sqlite3PagerPageRefcount(DbPage*);
 extern int orig_sqlite3PagerSharedLock(Pager*);
 extern int orig_sqlite3PagerOpenWal(Pager*, int*);
-extern int orig_sqlite3PagerWalFramesize(Pager*);
 extern int orig_sqlite3PagerIsMemdb(Pager*);
 extern void orig_sqlite3PagerSetBusyHandler(Pager*, int(*)(void*), void*);
 extern void orig_sqlite3PagerShrink(Pager*);
@@ -67,13 +62,11 @@ extern int orig_sqlite3PagerBegin(Pager*, int, int);
 extern int orig_sqlite3PagerRollback(Pager*);
 extern int orig_sqlite3PagerSync(Pager*, const char*);
 extern int orig_sqlite3PagerFlush(Pager*);
-extern void orig_sqlite3PagerClearCache(Pager*);
 extern sqlite3_vfs *orig_sqlite3PagerVfs(Pager*);
 extern Pgno orig_sqlite3PagerMaxPageCount(Pager*, Pgno);
 extern int orig_sqlite3PagerSetJournalMode(Pager*, int);
 extern int orig_sqlite3PagerExclusiveLock(Pager*);
 extern u8 orig_sqlite3PagerIsreadonly(Pager*);
-extern int orig_sqlite3PagerRefcount(Pager*);
 extern void orig_sqlite3PagerCacheStat(Pager*, int, int, u64*);
 extern int orig_sqlite3PagerMemUsed(Pager*);
 extern sqlite3_file *orig_sqlite3PagerJrnlFile(Pager*);
@@ -87,7 +80,6 @@ extern DbPage *orig_sqlite3PagerLookup(Pager*, Pgno);
 extern int orig_sqlite3PagerCheckpoint(Pager*, sqlite3*, int, int*, int*);
 extern int orig_sqlite3PagerWalSupported(Pager*);
 extern int orig_sqlite3PagerCloseWal(Pager*, sqlite3*);
-extern int *orig_sqlite3PagerStats(Pager*);
 extern void orig_sqlite3PagerSetCachesize(Pager*, int);
 extern int orig_sqlite3PagerSetSpillsize(Pager*, int);
 extern void orig_sqlite3PagerSetMmapLimit(Pager*, sqlite3_int64);
@@ -550,11 +542,7 @@ PagerShim *pagerShimCreate(
   pShim->pVfs         = pVfs;
   pShim->journalMode  = PAGER_JOURNALMODE_WAL;
   pShim->eLock        = 0;
-  pShim->eState       = 0;
-  pShim->noSync       = 0;
   pShim->iDataVersion = 1;   /* Start at 1 so the first check sees data */
-  pShim->nRef         = 0;
-  pShim->nMmapSize    = 0;
 
   return pShim;
 }
@@ -899,8 +887,6 @@ struct DoltliteBackup {
   char *zDestFile;      /* Destination chunk store file path (owned copy) */
   sqlite3_vfs *pVfs;
   int done;             /* 1 after step completes the copy */
-  i64 nTotal;           /* Total bytes to copy */
-  i64 nRemaining;       /* Bytes remaining */
 };
 
 sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
@@ -970,8 +956,6 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     sqlite3OsCloseFree(pSrc);
     return rc;
   }
-  p->nTotal = fileSize;
-
   /* Open/create destination file for writing */
   openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
   rc = sqlite3OsOpenMalloc(p->pVfs, p->zDestFile, &pDest, openFlags, 0);
@@ -1009,7 +993,6 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
 
   if( rc == SQLITE_OK ){
     p->done = 1;
-    p->nRemaining = 0;
     return SQLITE_DONE;
   }
   return rc;
