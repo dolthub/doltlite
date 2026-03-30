@@ -2570,10 +2570,49 @@ static int prollyBtreeCursor(
     pCur->curFlags = BTCF_WriteFlag;
   }
 
-  /* Piece 2: pick up deferred edits from a previous cursor on this table */
+  /* Piece 2: pick up deferred edits from a previous cursor on this table.
+  **
+  ** Bug #240: When a read cursor opens while a write cursor is still active
+  ** on the same table, the MutMap is in the write cursor (not pPending).
+  ** The read cursor would see a stale tree.  Fix: before any cursor opens
+  ** on a table, flush ALL live MutMaps for that table to the tree. This
+  ** ensures every cursor sees consistent data.
+  */
+  {
+    BtCursor *pOther;
+    for(pOther = pBt->pCursor; pOther; pOther = pOther->pNext){
+      if( pOther->pgnoRoot==iTable && pOther->pMutMap
+          && !prollyMutMapIsEmpty(pOther->pMutMap) ){
+        flushMutMap(pOther);
+      }
+    }
+  }
   if( pTE->pPending ){
-    pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
-    pTE->pPending = 0;
+    if( wrFlag & BTREE_WRCSR ){
+      pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+      pTE->pPending = 0;
+    }else{
+      /* Flush pPending too so read cursor sees consistent tree */
+      ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+      if( !prollyMutMapIsEmpty(pMap) ){
+        ProllyMutator mut;
+        int rc2;
+        memset(&mut, 0, sizeof(mut));
+        mut.pStore = &pBt->store;
+        mut.pCache = &pBt->cache;
+        memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
+        mut.pEdits = pMap;
+        mut.flags = pTE->flags;
+        rc2 = prollyMutateFlush(&mut);
+        if( rc2==SQLITE_OK ){
+          memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
+        }
+        prollyMutMapFree(pMap);
+        sqlite3_free(pMap);
+        pTE->pPending = 0;
+        if( rc2!=SQLITE_OK ) return rc2;
+      }
+    }
   }
 
   prollyCursorInit(&pCur->pCur, &pBt->store, &pBt->cache,
