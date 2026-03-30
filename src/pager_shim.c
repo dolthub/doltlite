@@ -9,6 +9,10 @@
 ** The PagerShim struct is defined in pager_shim.h. External code
 ** receives a Pager* which is really a PagerShim*, so every function
 ** here casts its Pager* argument to PagerShim* before accessing fields.
+**
+** Dispatch uses a PagerOps vtable: shim pagers use shimPagerOps,
+** original pagers use origPagerOps. The getPagerOps() helper
+** selects the correct table based on PagerShim magic.
 */
 #ifdef DOLTLITE_PROLLY
 
@@ -30,7 +34,7 @@ BtShared *SQLITE_WSD sqlite3SharedCacheList = 0;
 #define SHIM(p) ((PagerShim*)(p))
 #define IS_SHIM(p) ((p) && ((PagerShim*)(p))->magic == PAGER_SHIM_MAGIC)
 
-/* Forward declaration for original pager dispatch */
+/* Forward declarations for original pager dispatch */
 extern u32 orig_sqlite3PagerDataVersion(Pager *pPager);
 extern sqlite3_file *orig_sqlite3PagerFile(Pager *pPager);
 extern const char *orig_sqlite3PagerFilename(const Pager *pPager, int);
@@ -64,9 +68,7 @@ extern int orig_sqlite3PagerRollback(Pager*);
 extern int orig_sqlite3PagerSync(Pager*, const char*);
 extern int orig_sqlite3PagerFlush(Pager*);
 extern void orig_sqlite3PagerClearCache(Pager*);
-extern int orig_sqlite3PagerNosync(Pager*);
 extern sqlite3_vfs *orig_sqlite3PagerVfs(Pager*);
-extern int orig_sqlite3PagerJournalMode(Pager*, int);
 extern Pgno orig_sqlite3PagerMaxPageCount(Pager*, Pgno);
 extern int orig_sqlite3PagerSetJournalMode(Pager*, int);
 extern int orig_sqlite3PagerExclusiveLock(Pager*);
@@ -84,16 +86,71 @@ extern void *orig_sqlite3PagerTempSpace(Pager*);
 extern DbPage *orig_sqlite3PagerLookup(Pager*, Pgno);
 extern int orig_sqlite3PagerCheckpoint(Pager*, sqlite3*, int, int*, int*);
 extern int orig_sqlite3PagerWalSupported(Pager*);
-extern int orig_sqlite3PagerWalCallback(Pager*);
 extern int orig_sqlite3PagerCloseWal(Pager*, sqlite3*);
 extern int *orig_sqlite3PagerStats(Pager*);
 extern void orig_sqlite3PagerSetCachesize(Pager*, int);
 extern int orig_sqlite3PagerSetSpillsize(Pager*, int);
 extern void orig_sqlite3PagerSetMmapLimit(Pager*, sqlite3_int64);
 extern void orig_sqlite3PagerTruncateImage(Pager*, Pgno);
-extern void orig_sqlite3PagerClearCache(Pager*);
 extern sqlite3_backup *orig_sqlite3_backup_init(sqlite3*,const char*,
                                                  sqlite3*,const char*);
+extern void orig_sqlite3PagerPagecount(Pager*, int*);
+extern int orig_sqlite3PagerCommitPhaseOne(Pager*, const char*, int);
+extern int orig_sqlite3PagerCommitPhaseTwo(Pager*);
+
+/* -----------------------------------------------------------------------
+** PagerOps vtable — function pointers for all dispatched pager operations
+** ----------------------------------------------------------------------- */
+struct PagerOps {
+  sqlite3_file *(*xFile)(Pager*);
+  const char *(*xFilename)(const Pager*, int);
+  const char *(*xJournalname)(Pager*);
+  int (*xGetJournalMode)(Pager*);
+  int (*xOkToChangeJournalMode)(Pager*);
+  int (*xSetJournalMode)(Pager*, int);
+  int (*xExclusiveLock)(Pager*);
+  u8 (*xIsreadonly)(Pager*);
+  u32 (*xDataVersion)(Pager*);
+  void (*xShrink)(Pager*);
+  int (*xFlush)(Pager*);
+  void (*xCacheStat)(Pager*, int, int, u64*);
+  int (*xIsMemdb)(Pager*);
+  int (*xLockingMode)(Pager*, int);
+  sqlite3_vfs *(*xVfs)(Pager*);
+  i64 (*xJournalSizeLimit)(Pager*, i64);
+  sqlite3_backup **(*xBackupPtr)(Pager*);
+  int (*xGet)(Pager*, Pgno, DbPage**, int);
+  void (*xPagecount)(Pager*, int*);
+  int (*xSync)(Pager*, const char*);
+  void (*xTruncateImage)(Pager*, Pgno);
+  int (*xMemUsed)(Pager*);
+  sqlite3_file *(*xJrnlFile)(Pager*);
+  int (*xCommitPhaseOne)(Pager*, const char*, int);
+  int (*xCommitPhaseTwo)(Pager*);
+  void (*xSetBusyHandler)(Pager*, int(*)(void*), void*);
+  int (*xSetPagesize)(Pager*, u32*, int);
+  Pgno (*xMaxPageCount)(Pager*, Pgno);
+  void (*xSetCachesize)(Pager*, int);
+  int (*xSetSpillsize)(Pager*, int);
+  void (*xSetMmapLimit)(Pager*, sqlite3_int64);
+  void (*xSetFlags)(Pager*, unsigned);
+  int (*xBegin)(Pager*, int, int);
+  int (*xRollback)(Pager*);
+  int (*xOpenSavepoint)(Pager*, int);
+  int (*xSavepoint)(Pager*, int, int);
+  int (*xSharedLock)(Pager*);
+  int (*xClose)(Pager*, sqlite3*);
+  int (*xReadFileheader)(Pager*, int, unsigned char*);
+  int (*xMovepage)(Pager*, DbPage*, Pgno, int);
+  void *(*xTempSpace)(Pager*);
+  DbPage *(*xLookup)(Pager*, Pgno);
+#ifndef SQLITE_OMIT_WAL
+  int (*xCheckpoint)(Pager*, sqlite3*, int, int*, int*);
+  int (*xWalSupported)(Pager*);
+  int (*xOpenWal)(Pager*, int*);
+  int (*xCloseWal)(Pager*, sqlite3*);
+#endif
+};
 
 /* -----------------------------------------------------------------------
 ** Dummy file object for :memory: databases
@@ -142,6 +199,297 @@ static sqlite3_file *pagerShimDummyFile(void){
 }
 
 /* -----------------------------------------------------------------------
+** Shim vtable implementations — extracted from inline dispatch logic
+** ----------------------------------------------------------------------- */
+
+static sqlite3_file *shimPagerFile(Pager *p){
+  return SHIM(p)->pFd;
+}
+static const char *shimPagerFilename(const Pager *p, int fmt){
+  (void)fmt;
+  return ((const PagerShim*)p)->zFilename;
+}
+static const char *shimPagerJournalname(Pager *p){
+  return SHIM(p)->zJournal;
+}
+static int shimPagerGetJournalMode(Pager *p){
+  return (int)SHIM(p)->journalMode;
+}
+static int shimPagerOkToChangeJournalMode(Pager *p){
+  (void)p; return 1;
+}
+static int shimPagerSetJournalMode(Pager *p, int eMode){
+  PagerShim *s = SHIM(p);
+  if( eMode!=PAGER_JOURNALMODE_QUERY ) s->journalMode = (u8)eMode;
+  return (int)s->journalMode;
+}
+static int shimPagerExclusiveLock(Pager *p){
+  (void)p; return SQLITE_OK;
+}
+static u8 shimPagerIsreadonly(Pager *p){
+  (void)p; return 0;
+}
+static u32 shimPagerDataVersion(Pager *p){
+  return SHIM(p)->iDataVersion;
+}
+static void shimPagerShrink(Pager *p){
+  (void)p;
+}
+static int shimPagerFlush(Pager *p){
+  (void)p; return SQLITE_OK;
+}
+static void shimPagerCacheStat(Pager *p, int eStat, int reset, u64 *pStat){
+  (void)p; (void)eStat; (void)reset;
+  if( pStat ) *pStat = 0;
+}
+static int shimPagerIsMemdb(Pager *p){
+  const char *z = SHIM(p)->zFilename;
+  if( z==0 ) return 1;
+  if( z[0]=='\0' ) return 1;
+  if( strcmp(z, ":memory:")==0 ) return 1;
+  return 0;
+}
+static int shimPagerLockingMode(Pager *p, int eMode){
+  PagerShim *s = SHIM(p);
+  if( eMode!=PAGER_LOCKINGMODE_QUERY ) s->eLock = (u8)eMode;
+  return (int)s->eLock;
+}
+static sqlite3_vfs *shimPagerVfs(Pager *p){
+  return SHIM(p)->pVfs;
+}
+static i64 shimPagerJournalSizeLimit(Pager *p, i64 iLimit){
+  (void)p; (void)iLimit; return -1;
+}
+static sqlite3_backup **shimPagerBackupPtr(Pager *p){
+  static sqlite3_backup *pDummy = 0;
+  (void)p; return &pDummy;
+}
+static int shimPagerGet(Pager *p, Pgno pgno, DbPage **ppPage, int clrFlag){
+  (void)p; (void)pgno; (void)clrFlag;
+  *ppPage = 0;
+  return SQLITE_OK;
+}
+static void shimPagerPagecount(Pager *p, int *pnPage){
+  (void)p;
+  if( pnPage ) *pnPage = 0;
+}
+static int shimPagerSync(Pager *p, const char *zSuper){
+  (void)p; (void)zSuper; return SQLITE_OK;
+}
+static void shimPagerTruncateImage(Pager *p, Pgno nPage){
+  (void)p; (void)nPage;
+}
+static int shimPagerMemUsed(Pager *p){
+  (void)p; return 0;
+}
+static sqlite3_file *shimPagerJrnlFile(Pager *p){
+  (void)p; return 0;
+}
+static int shimPagerCommitPhaseOne(Pager *p, const char *zSuper, int noSync){
+  (void)p; (void)zSuper; (void)noSync; return SQLITE_OK;
+}
+static int shimPagerCommitPhaseTwo(Pager *p){
+  SHIM(p)->iDataVersion++;
+  return SQLITE_OK;
+}
+static void shimPagerSetBusyHandler(Pager *p, int(*xBusy)(void*), void *pCtx){
+  (void)p; (void)xBusy; (void)pCtx;
+}
+static int shimPagerSetPagesize(Pager *p, u32 *pPageSize, int nReserve){
+  (void)p; (void)pPageSize; (void)nReserve; return SQLITE_OK;
+}
+static Pgno shimPagerMaxPageCount(Pager *p, Pgno mxPage){
+  (void)p; (void)mxPage; return 0xFFFFFFFF;
+}
+static void shimPagerSetCachesize(Pager *p, int mxPage){
+  (void)p; (void)mxPage;
+}
+static int shimPagerSetSpillsize(Pager *p, int mxPage){
+  (void)p; (void)mxPage; return 0;
+}
+static void shimPagerSetMmapLimit(Pager *p, sqlite3_int64 szMmap){
+  (void)p; (void)szMmap;
+}
+static void shimPagerSetFlags(Pager *p, unsigned flags){
+  (void)p; (void)flags;
+}
+static int shimPagerBegin(Pager *p, int exFlag, int subjInMemory){
+  (void)p; (void)exFlag; (void)subjInMemory; return SQLITE_OK;
+}
+static int shimPagerRollback(Pager *p){
+  (void)p; return SQLITE_OK;
+}
+static int shimPagerOpenSavepoint(Pager *p, int n){
+  (void)p; (void)n; return SQLITE_OK;
+}
+static int shimPagerSavepoint(Pager *p, int op, int iSavepoint){
+  (void)p; (void)op; (void)iSavepoint; return SQLITE_OK;
+}
+static int shimPagerSharedLock(Pager *p){
+  (void)p; return SQLITE_OK;
+}
+static int shimPagerClose(Pager *p, sqlite3 *db){
+  (void)p; (void)db; return SQLITE_OK;
+}
+static int shimPagerReadFileheader(Pager *p, int n, unsigned char *pDest){
+  (void)p; memset(pDest, 0, n); return SQLITE_OK;
+}
+static int shimPagerMovepage(Pager *p, DbPage *pPg, Pgno pgno, int isCommit){
+  (void)p; (void)pPg; (void)pgno; (void)isCommit; return SQLITE_OK;
+}
+static void *shimPagerTempSpace(Pager *p){
+  static u8 aTmpSpace[65536];
+  (void)p; return aTmpSpace;
+}
+static DbPage *shimPagerLookup(Pager *p, Pgno pgno){
+  (void)p; (void)pgno; return 0;
+}
+
+#ifndef SQLITE_OMIT_WAL
+extern int doltliteGcCompact(sqlite3 *db);
+
+static int shimPagerCheckpoint(Pager *p, sqlite3 *db, int eMode,
+                               int *pnLog, int *pnCkpt){
+  (void)p; (void)eMode;
+  if( pnLog ) *pnLog = 0;
+  if( pnCkpt ) *pnCkpt = 0;
+  if( db ){
+    int rc = doltliteGcCompact(db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+static int shimPagerWalSupported(Pager *p){
+  (void)p; return 1;
+}
+static int shimPagerOpenWal(Pager *p, int *pisOpen){
+  SHIM(p)->journalMode = PAGER_JOURNALMODE_WAL;
+  if( pisOpen ) *pisOpen = 1;
+  return SQLITE_OK;
+}
+static int shimPagerCloseWal(Pager *p, sqlite3 *db){
+  (void)p; (void)db; return SQLITE_OK;
+}
+#endif /* SQLITE_OMIT_WAL */
+
+/* -----------------------------------------------------------------------
+** Vtable instances
+** ----------------------------------------------------------------------- */
+
+static const PagerOps shimPagerOps = {
+  shimPagerFile,
+  shimPagerFilename,
+  shimPagerJournalname,
+  shimPagerGetJournalMode,
+  shimPagerOkToChangeJournalMode,
+  shimPagerSetJournalMode,
+  shimPagerExclusiveLock,
+  shimPagerIsreadonly,
+  shimPagerDataVersion,
+  shimPagerShrink,
+  shimPagerFlush,
+  shimPagerCacheStat,
+  shimPagerIsMemdb,
+  shimPagerLockingMode,
+  shimPagerVfs,
+  shimPagerJournalSizeLimit,
+  shimPagerBackupPtr,
+  shimPagerGet,
+  shimPagerPagecount,
+  shimPagerSync,
+  shimPagerTruncateImage,
+  shimPagerMemUsed,
+  shimPagerJrnlFile,
+  shimPagerCommitPhaseOne,
+  shimPagerCommitPhaseTwo,
+  shimPagerSetBusyHandler,
+  shimPagerSetPagesize,
+  shimPagerMaxPageCount,
+  shimPagerSetCachesize,
+  shimPagerSetSpillsize,
+  shimPagerSetMmapLimit,
+  shimPagerSetFlags,
+  shimPagerBegin,
+  shimPagerRollback,
+  shimPagerOpenSavepoint,
+  shimPagerSavepoint,
+  shimPagerSharedLock,
+  shimPagerClose,
+  shimPagerReadFileheader,
+  shimPagerMovepage,
+  shimPagerTempSpace,
+  shimPagerLookup,
+#ifndef SQLITE_OMIT_WAL
+  shimPagerCheckpoint,
+  shimPagerWalSupported,
+  shimPagerOpenWal,
+  shimPagerCloseWal,
+#endif
+};
+
+static const PagerOps origPagerOps = {
+  orig_sqlite3PagerFile,
+  orig_sqlite3PagerFilename,
+  orig_sqlite3PagerJournalname,
+  orig_sqlite3PagerGetJournalMode,
+  orig_sqlite3PagerOkToChangeJournalMode,
+  orig_sqlite3PagerSetJournalMode,
+  orig_sqlite3PagerExclusiveLock,
+  orig_sqlite3PagerIsreadonly,
+  orig_sqlite3PagerDataVersion,
+  orig_sqlite3PagerShrink,
+  orig_sqlite3PagerFlush,
+  orig_sqlite3PagerCacheStat,
+  orig_sqlite3PagerIsMemdb,
+  orig_sqlite3PagerLockingMode,
+  orig_sqlite3PagerVfs,
+  orig_sqlite3PagerJournalSizeLimit,
+  orig_sqlite3PagerBackupPtr,
+  orig_sqlite3PagerGet,
+  orig_sqlite3PagerPagecount,
+  orig_sqlite3PagerSync,
+  orig_sqlite3PagerTruncateImage,
+  orig_sqlite3PagerMemUsed,
+  orig_sqlite3PagerJrnlFile,
+  orig_sqlite3PagerCommitPhaseOne,
+  orig_sqlite3PagerCommitPhaseTwo,
+  orig_sqlite3PagerSetBusyHandler,
+  orig_sqlite3PagerSetPagesize,
+  orig_sqlite3PagerMaxPageCount,
+  orig_sqlite3PagerSetCachesize,
+  orig_sqlite3PagerSetSpillsize,
+  orig_sqlite3PagerSetMmapLimit,
+  orig_sqlite3PagerSetFlags,
+  orig_sqlite3PagerBegin,
+  orig_sqlite3PagerRollback,
+  orig_sqlite3PagerOpenSavepoint,
+  orig_sqlite3PagerSavepoint,
+  orig_sqlite3PagerSharedLock,
+  orig_sqlite3PagerClose,
+  orig_sqlite3PagerReadFileheader,
+  orig_sqlite3PagerMovepage,
+  orig_sqlite3PagerTempSpace,
+  orig_sqlite3PagerLookup,
+#ifndef SQLITE_OMIT_WAL
+  orig_sqlite3PagerCheckpoint,
+  orig_sqlite3PagerWalSupported,
+  orig_sqlite3PagerOpenWal,
+  orig_sqlite3PagerCloseWal,
+#endif
+};
+
+/*
+** Return the PagerOps vtable for a given Pager pointer.
+** Shim pagers use shimPagerOps; original pagers use origPagerOps.
+*/
+static inline const PagerOps *getPagerOps(const Pager *p){
+  if( p && ((const PagerShim*)p)->magic == PAGER_SHIM_MAGIC ){
+    return ((const PagerShim*)p)->pOps;
+  }
+  return &origPagerOps;
+}
+
+/* -----------------------------------------------------------------------
 ** Lifecycle: create and destroy
 ** ----------------------------------------------------------------------- */
 
@@ -165,6 +513,7 @@ PagerShim *pagerShimCreate(
   if( pShim==0 ) return 0;
   memset(pShim, 0, sizeof(PagerShim));
   pShim->magic = PAGER_SHIM_MAGIC;
+  pShim->pOps = &shimPagerOps;
 
   /* Copy the filename.  Treat NULL as empty string. */
   if( zFilename && zFilename[0] ){
@@ -221,253 +570,91 @@ void pagerShimDestroy(PagerShim *pShim){
 }
 
 /* -----------------------------------------------------------------------
-** File descriptor
+** Dispatch functions — thin wrappers that delegate through PagerOps
 ** ----------------------------------------------------------------------- */
 
-/*
-** Return the file descriptor associated with the pager.
-*/
 sqlite3_file *sqlite3PagerFile(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerFile(pPager);
-  return SHIM(pPager)->pFd;
+  return getPagerOps(pPager)->xFile(pPager);
 }
 
-/* -----------------------------------------------------------------------
-** Filename queries
-** ----------------------------------------------------------------------- */
-
-/*
-** Return the full pathname of the database file.
-**
-** The second parameter (outputFormat) controls the format of the
-** returned string in the real pager.  For the shim we always return
-** the stored filename regardless.
-*/
 const char *sqlite3PagerFilename(const Pager *pPager, int outputFormat){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerFilename(pPager, outputFormat);
-  (void)outputFormat;
-  return SHIM(pPager)->zFilename;
+  return getPagerOps(pPager)->xFilename(pPager, outputFormat);
 }
 
-/*
-** Return the full pathname of the journal file.
-** In the shim this is always an empty string — there is no journal.
-*/
 const char *sqlite3PagerJournalname(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerJournalname(pPager);
-  return SHIM(pPager)->zJournal;
+  return getPagerOps(pPager)->xJournalname(pPager);
 }
 
-/* -----------------------------------------------------------------------
-** Journal mode
-** ----------------------------------------------------------------------- */
-
-/*
-** Return the current journal mode.
-*/
-extern int orig_sqlite3PagerGetJournalMode(Pager*);
 int sqlite3PagerGetJournalMode(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerGetJournalMode(pPager);
-  return (int)SHIM(pPager)->journalMode;
+  return getPagerOps(pPager)->xGetJournalMode(pPager);
 }
 
-/*
-** Return 1 — the shim always allows the journal mode to be changed.
-*/
 int sqlite3PagerOkToChangeJournalMode(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerOkToChangeJournalMode(pPager);
-  (void)pPager;
-  return 1;
+  return getPagerOps(pPager)->xOkToChangeJournalMode(pPager);
 }
 
-/*
-** Set the journal mode.  Store the value and return it.
-**
-** PAGER_JOURNALMODE_QUERY (-1) means "just return the current mode
-** without changing it."
-*/
 int sqlite3PagerSetJournalMode(Pager *pPager, int eMode){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerSetJournalMode(pPager, eMode);
-  PagerShim *pShim = SHIM(pPager);
-  if( eMode!=PAGER_JOURNALMODE_QUERY ){
-    pShim->journalMode = (u8)eMode;
-  }
-  return (int)pShim->journalMode;
+  return getPagerOps(pPager)->xSetJournalMode(pPager, eMode);
 }
 
-/* -----------------------------------------------------------------------
-** Lock helpers
-** ----------------------------------------------------------------------- */
-
-/*
-** Attempt to acquire an exclusive lock.  The shim always succeeds.
-*/
 int sqlite3PagerExclusiveLock(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerExclusiveLock(pPager);
-  (void)pPager;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xExclusiveLock(pPager);
 }
 
-/*
-** Return non-zero if the pager is read-only.  The shim is always
-** read-write, so return 0.
-*/
 u8 sqlite3PagerIsreadonly(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerIsreadonly(pPager);
-  (void)pPager;
-  return 0;
+  return getPagerOps(pPager)->xIsreadonly(pPager);
 }
 
-/* -----------------------------------------------------------------------
-** Reference counting
-** ----------------------------------------------------------------------- */
-
-/*
-** Return the number of outstanding page references.  The shim never
-** hands out pages, so this is always 0.
-*/
 int sqlite3PagerRefcount(Pager *pPager){
-  
   (void)pPager;
   return 0;
 }
 
-/* -----------------------------------------------------------------------
-** Data version
-** ----------------------------------------------------------------------- */
-
-/*
-** Return the data-version counter.  External code uses this to detect
-** when the database content has been modified by another connection.
-*/
 u32 sqlite3PagerDataVersion(Pager *pPager){
-  if( !IS_SHIM(pPager) ) return orig_sqlite3PagerDataVersion(pPager);
-  return SHIM(pPager)->iDataVersion;
+  return getPagerOps(pPager)->xDataVersion(pPager);
 }
 
-/* -----------------------------------------------------------------------
-** No-op / stub functions
-** ----------------------------------------------------------------------- */
-
-/*
-** Shrink the page cache.  Nothing to do in the shim.
-*/
 void sqlite3PagerShrink(Pager *pPager){
-  if(!IS_SHIM(pPager)){ orig_sqlite3PagerShrink(pPager); return; }
-  (void)pPager;
+  getPagerOps(pPager)->xShrink(pPager);
 }
 
-/*
-** Flush all dirty pages.  The shim has no dirty pages, so just
-** return SQLITE_OK.
-*/
 int sqlite3PagerFlush(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerFlush(pPager);
-  (void)pPager;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xFlush(pPager);
 }
 
-/*
-** Return pager cache statistics.  The shim has no page cache, so
-** every stat value is 0.
-**
-** Parameters:
-**   eStat  — which statistic to return
-**   reset  — if true, reset the counter after reading
-**   pStat  — output pointer
-*/
 void sqlite3PagerCacheStat(Pager *pPager, int eStat, int reset, u64 *pStat){
-  if(!IS_SHIM(pPager)){ orig_sqlite3PagerCacheStat(pPager, eStat, reset, pStat); return; }
-  (void)pPager;
-  (void)eStat;
-  (void)reset;
-  if( pStat ) *pStat = 0;
+  getPagerOps(pPager)->xCacheStat(pPager, eStat, reset, pStat);
 }
 
-/* -----------------------------------------------------------------------
-** Memory-database detection
-** ----------------------------------------------------------------------- */
-
-/*
-** Return non-zero if this pager represents an in-memory database.
-**
-** A database is considered in-memory if its filename is either the
-** empty string or the special name ":memory:".
-*/
 int sqlite3PagerIsMemdb(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerIsMemdb(pPager);
-  const char *z = SHIM(pPager)->zFilename;
-  if( z==0 ) return 1;
-  if( z[0]=='\0' ) return 1;
-  if( strcmp(z, ":memory:")==0 ) return 1;
-  return 0;
+  return getPagerOps(pPager)->xIsMemdb(pPager);
 }
 
-/* -----------------------------------------------------------------------
-** Locking mode
-** ----------------------------------------------------------------------- */
-
-/*
-** Get or set the locking mode.
-**
-** If eMode is PAGER_LOCKINGMODE_QUERY (-1), return the current mode
-** without changing it.  Otherwise store eMode and return it.
-**
-** Valid non-query values:
-**   PAGER_LOCKINGMODE_NORMAL      0
-**   PAGER_LOCKINGMODE_EXCLUSIVE   1
-*/
 int sqlite3PagerLockingMode(Pager *pPager, int eMode){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerLockingMode(pPager, eMode);
-  PagerShim *pShim = SHIM(pPager);
-  if( eMode!=PAGER_LOCKINGMODE_QUERY ){
-    pShim->eLock = (u8)eMode;
-  }
-  return (int)pShim->eLock;
+  return getPagerOps(pPager)->xLockingMode(pPager, eMode);
 }
 
-/* -----------------------------------------------------------------------
-** VFS accessor (bonus — cheap to provide, sometimes needed)
-** ----------------------------------------------------------------------- */
-
-/*
-** Return the VFS associated with this pager.
-*/
 sqlite3_vfs *sqlite3PagerVfs(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerVfs(pPager);
-  return SHIM(pPager)->pVfs;
+  return getPagerOps(pPager)->xVfs(pPager);
 }
-
-/* -----------------------------------------------------------------------
-** Additional pager stubs needed by external modules (vacuum, backup,
-** dbpage, dbstat, pragma, main, etc.)
-** ----------------------------------------------------------------------- */
 
 i64 sqlite3PagerJournalSizeLimit(Pager *pPager, i64 iLimit){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerJournalSizeLimit(pPager, iLimit);
-  (void)pPager; (void)iLimit;
-  return -1;
+  return getPagerOps(pPager)->xJournalSizeLimit(pPager, iLimit);
 }
 
 sqlite3_backup **sqlite3PagerBackupPtr(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerBackupPtr(pPager);
-  static sqlite3_backup *pDummy = 0;
-  (void)pPager;
-  return &pDummy;
+  return getPagerOps(pPager)->xBackupPtr(pPager);
 }
 
 int sqlite3PagerGet(Pager *pPager, Pgno pgno, DbPage **ppPage, int clrFlag){
-  if( !IS_SHIM(pPager) ) return orig_sqlite3PagerGet(pPager, pgno, ppPage, clrFlag);
-  (void)pPager; (void)pgno; (void)clrFlag;
-  *ppPage = 0;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xGet(pPager, pgno, ppPage, clrFlag);
 }
 
+/* -----------------------------------------------------------------------
+** DbPage-based functions — dispatch on page pointer, not on Pager vtable
+** ----------------------------------------------------------------------- */
+
 void *sqlite3PagerGetData(DbPage *pPg){
-  /* DbPage from the original pager — delegate.
-  ** We can't easily tell which pager a DbPage belongs to, but for
-  ** the prolly shim, PagerGet always returns NULL pages. So if pPg
-  ** is non-NULL, it came from the original pager. */
   if( pPg ) return orig_sqlite3PagerGetData(pPg);
   return 0;
 }
@@ -504,119 +691,88 @@ int sqlite3PagerPageRefcount(DbPage *pPg){
   return 0;
 }
 
-extern void orig_sqlite3PagerPagecount(Pager*, int*);
+/* -----------------------------------------------------------------------
+** More Pager dispatch functions
+** ----------------------------------------------------------------------- */
+
 void sqlite3PagerPagecount(Pager *pPager, int *pnPage){
-  if( !IS_SHIM(pPager) ){ orig_sqlite3PagerPagecount(pPager, pnPage); return; }
-  (void)pPager;
-  if( pnPage ) *pnPage = 0;
+  getPagerOps(pPager)->xPagecount(pPager, pnPage);
 }
 
 int sqlite3PagerSync(Pager *pPager, const char *zSuper){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerSync(pPager, zSuper);
-  (void)pPager; (void)zSuper;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xSync(pPager, zSuper);
 }
 
 void sqlite3PagerTruncateImage(Pager *pPager, Pgno nPage){
-  if(!IS_SHIM(pPager)){ orig_sqlite3PagerTruncateImage(pPager, nPage); return; }
-  (void)pPager; (void)nPage;
+  getPagerOps(pPager)->xTruncateImage(pPager, nPage);
 }
 
 int sqlite3PagerMemUsed(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerMemUsed(pPager);
-  (void)pPager;
-  return 0;
+  return getPagerOps(pPager)->xMemUsed(pPager);
 }
 
 sqlite3_file *sqlite3PagerJrnlFile(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerJrnlFile(pPager);
-  (void)pPager;
-  return 0;
+  return getPagerOps(pPager)->xJrnlFile(pPager);
 }
 
 void sqlite3PagerClearCache(Pager *pPager){
   (void)pPager;
 }
 
-extern int orig_sqlite3PagerCommitPhaseOne(Pager*, const char*, int);
-extern int orig_sqlite3PagerCommitPhaseTwo(Pager*);
 int sqlite3PagerCommitPhaseOne(Pager *pPager, const char *zSuper, int noSync){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerCommitPhaseOne(pPager, zSuper, noSync);
-  (void)pPager; (void)zSuper; (void)noSync;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xCommitPhaseOne(pPager, zSuper, noSync);
 }
 
 int sqlite3PagerCommitPhaseTwo(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerCommitPhaseTwo(pPager);
-  SHIM(pPager)->iDataVersion++;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xCommitPhaseTwo(pPager);
 }
 
 void sqlite3PagerSetBusyHandler(Pager *pPager, int(*xBusy)(void*), void *pCtx){
-  if(!IS_SHIM(pPager)){ orig_sqlite3PagerSetBusyHandler(pPager, xBusy, pCtx); return; }
-  (void)pPager; (void)xBusy; (void)pCtx;
+  getPagerOps(pPager)->xSetBusyHandler(pPager, xBusy, pCtx);
 }
 
 int sqlite3PagerSetPagesize(Pager *pPager, u32 *pPageSize, int nReserve){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerSetPagesize(pPager, pPageSize, nReserve);
-  (void)pPager; (void)pPageSize; (void)nReserve;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xSetPagesize(pPager, pPageSize, nReserve);
 }
 
 Pgno sqlite3PagerMaxPageCount(Pager *pPager, Pgno mxPage){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerMaxPageCount(pPager, mxPage);
-  (void)pPager; (void)mxPage;
-  return 0xFFFFFFFF;
+  return getPagerOps(pPager)->xMaxPageCount(pPager, mxPage);
 }
 
 void sqlite3PagerSetCachesize(Pager *pPager, int mxPage){
-  if(!IS_SHIM(pPager)){ orig_sqlite3PagerSetCachesize(pPager, mxPage); return; }
-  (void)pPager; (void)mxPage;
+  getPagerOps(pPager)->xSetCachesize(pPager, mxPage);
 }
 
 int sqlite3PagerSetSpillsize(Pager *pPager, int mxPage){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerSetSpillsize(pPager, mxPage);
-  (void)pPager; (void)mxPage;
-  return 0;
+  return getPagerOps(pPager)->xSetSpillsize(pPager, mxPage);
 }
 
 void sqlite3PagerSetMmapLimit(Pager *pPager, sqlite3_int64 szMmap){
-  if(!IS_SHIM(pPager)){ orig_sqlite3PagerSetMmapLimit(pPager, szMmap); return; }
-  (void)pPager; (void)szMmap;
+  getPagerOps(pPager)->xSetMmapLimit(pPager, szMmap);
 }
 
 void sqlite3PagerSetFlags(Pager *pPager, unsigned flags){
-  if(!IS_SHIM(pPager)){ orig_sqlite3PagerSetFlags(pPager, flags); return; }
-  (void)pPager; (void)flags;
+  getPagerOps(pPager)->xSetFlags(pPager, flags);
 }
 
 int sqlite3PagerBegin(Pager *pPager, int exFlag, int subjInMemory){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerBegin(pPager, exFlag, subjInMemory);
-  (void)pPager; (void)exFlag; (void)subjInMemory;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xBegin(pPager, exFlag, subjInMemory);
 }
 
 int sqlite3PagerRollback(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerRollback(pPager);
-  (void)pPager;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xRollback(pPager);
 }
 
 int sqlite3PagerOpenSavepoint(Pager *pPager, int n){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerOpenSavepoint(pPager, n);
-  (void)pPager; (void)n;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xOpenSavepoint(pPager, n);
 }
 
 int sqlite3PagerSavepoint(Pager *pPager, int op, int iSavepoint){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerSavepoint(pPager, op, iSavepoint);
-  (void)pPager; (void)op; (void)iSavepoint;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xSavepoint(pPager, op, iSavepoint);
 }
 
 int sqlite3PagerSharedLock(Pager *pPager){
-  if( !IS_SHIM(pPager) ) return orig_sqlite3PagerSharedLock(pPager);
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xSharedLock(pPager);
 }
 
 int sqlite3PagerOpen(
@@ -635,29 +791,19 @@ int sqlite3PagerOpen(
 }
 
 int sqlite3PagerClose(Pager *pPager, sqlite3 *db){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerClose(pPager, db);
-  (void)pPager; (void)db;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xClose(pPager, db);
 }
 
 int sqlite3PagerReadFileheader(Pager *pPager, int n, unsigned char *pDest){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerReadFileheader(pPager, n, pDest);
-  (void)pPager;
-  memset(pDest, 0, n);
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xReadFileheader(pPager, n, pDest);
 }
 
 int sqlite3PagerMovepage(Pager *pPager, DbPage *pPg, Pgno pgno, int isCommit){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerMovepage(pPager, pPg, pgno, isCommit);
-  (void)pPager; (void)pPg; (void)pgno; (void)isCommit;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xMovepage(pPager, pPg, pgno, isCommit);
 }
 
 void *sqlite3PagerTempSpace(Pager *pPager){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerTempSpace(pPager);
-  static u8 aTmpSpace[65536];
-  (void)pPager;
-  return aTmpSpace;
+  return getPagerOps(pPager)->xTempSpace(pPager);
 }
 
 void sqlite3PagerRekey(DbPage *pPg, Pgno pgno, u16 flags){
@@ -667,9 +813,7 @@ void sqlite3PagerRekey(DbPage *pPg, Pgno pgno, u16 flags){
 }
 
 DbPage *sqlite3PagerLookup(Pager *pPager, Pgno pgno){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerLookup(pPager, pgno);
-  (void)pPager; (void)pgno;
-  return 0;
+  return getPagerOps(pPager)->xLookup(pPager, pgno);
 }
 
 int sqlite3SectorSize(sqlite3_file *pFile){
@@ -678,42 +822,22 @@ int sqlite3SectorSize(sqlite3_file *pFile){
 }
 
 #ifndef SQLITE_OMIT_WAL
-/* Provided by doltlite_gc.c — runs mark-and-sweep GC on the chunk store,
-** compacting the file and eliminating the WAL region. */
-extern int doltliteGcCompact(sqlite3 *db);
-
-int sqlite3PagerCheckpoint(Pager *pPager, sqlite3 *db, int eMode, int *pnLog, int *pnCkpt){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerCheckpoint(pPager, db, eMode, pnLog, pnCkpt);
-  (void)eMode;
-  if( pnLog ) *pnLog = 0;
-  if( pnCkpt ) *pnCkpt = 0;
-  /* WAL checkpoint = GC compaction for the content-addressed chunk store.
-  ** This merges all WAL-region chunks into the compacted region and
-  ** resets the WAL region to empty. */
-  if( db ){
-    int rc = doltliteGcCompact(db);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  return SQLITE_OK;
+int sqlite3PagerCheckpoint(Pager *pPager, sqlite3 *db, int eMode,
+                           int *pnLog, int *pnCkpt){
+  return getPagerOps(pPager)->xCheckpoint(pPager, db, eMode, pnLog, pnCkpt);
 }
 int sqlite3PagerWalSupported(Pager *pPager){
-  if( !IS_SHIM(pPager) ) return orig_sqlite3PagerWalSupported(pPager);
-  return 1;  /* Content-addressed chunk store provides MVCC natively */
+  return getPagerOps(pPager)->xWalSupported(pPager);
 }
 int sqlite3PagerWalCallback(Pager *pPager){
   (void)pPager;
   return SQLITE_OK;
 }
 int sqlite3PagerOpenWal(Pager *pPager, int *pisOpen){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerOpenWal(pPager, pisOpen);
-  SHIM(pPager)->journalMode = PAGER_JOURNALMODE_WAL;
-  if( pisOpen ) *pisOpen = 1;  /* WAL is always "open" for chunk store */
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xOpenWal(pPager, pisOpen);
 }
 int sqlite3PagerCloseWal(Pager *pPager, sqlite3 *db){
-  if(!IS_SHIM(pPager)) return orig_sqlite3PagerCloseWal(pPager, db);
-  (void)pPager; (void)db;
-  return SQLITE_OK;
+  return getPagerOps(pPager)->xCloseWal(pPager, db);
 }
 #endif
 
@@ -740,7 +864,6 @@ int sqlite3PagerIswriteable(DbPage *pPg){
   return 1;
 }
 int *sqlite3PagerStats(Pager *pPager){
-  
   static int aStats[11];
   (void)pPager;
   memset(aStats, 0, sizeof(aStats));
