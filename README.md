@@ -537,61 +537,58 @@ comment.
 
 | Test | SQLite (ms) | Doltlite (ms) | Multiplier |
 |------|-------------|---------------|------------|
-| oltp_point_select | 95 | 61 | 0.64 |
-| oltp_range_select | 35 | 38 | 1.09 |
-| oltp_sum_range | 12 | 13 | 1.08 |
-| oltp_order_range | 7 | 6 | 0.86 |
-| oltp_distinct_range | 5 | 7 | 1.40 |
-| oltp_index_scan | 8 | 32 | 4.00 |
-| select_random_points | 19 | 33 | 1.74 |
-| select_random_ranges | 9 | 7 | 0.78 |
-| covering_index_scan | 12 | 35 | 2.92 |
-| groupby_scan | 37 | 42 | 1.14 |
-| index_join | 6 | 12 | 2.00 |
-| index_join_scan | 3 | 138 | 46.00 |
-| types_table_scan | 12 | 12 | 1.00 |
-| table_scan | 3 | 1 | 0.33 |
-| oltp_read_only | 216 | 209 | 0.97 |
+| oltp_point_select | 41 | 45 | 1.10 |
+| oltp_range_select | 28 | 64 | 2.29 |
+| oltp_sum_range | 12 | 14 | 1.17 |
+| oltp_order_range | 5 | 6 | 1.20 |
+| oltp_distinct_range | 6 | 7 | 1.17 |
+| oltp_index_scan | 6 | 7 | 1.17 |
+| select_random_points | 19 | 35 | 1.84 |
+| select_random_ranges | 6 | 8 | 1.33 |
+| covering_index_scan | 10 | 24 | 2.40 |
+| groupby_scan | 47 | 54 | 1.15 |
+| index_join | 6 | 8 | 1.33 |
+| index_join_scan | 3 | 6 | 2.00 |
+| types_table_scan | 10 | 12 | 1.20 |
+| table_scan | 1 | 1 | 1.00 |
+| oltp_read_only | 183 | 234 | 1.28 |
 
 #### Writes
 
 | Test | SQLite (ms) | Doltlite (ms) | Multiplier |
 |------|-------------|---------------|------------|
-| oltp_bulk_insert | 18 | 20 | 1.11 |
-| oltp_insert | 14 | 18 | 1.29 |
-| oltp_update_index | 29 | 335 | 11.55 |
-| oltp_update_non_index | 21 | 25 | 1.19 |
-| oltp_delete_insert | 29 | 161 | 5.55 |
-| oltp_write_only | 14 | 129 | 9.21 |
-| types_delete_insert | 16 | 17 | 1.06 |
-| oltp_read_write | 75 | 192 | 2.56 |
+| oltp_bulk_insert | 25 | 35 | 1.40 |
+| oltp_insert | 17 | 36 | 2.12 |
+| oltp_update_index | 40 | 129 | 3.23 |
+| oltp_update_non_index | 30 | 46 | 1.53 |
+| oltp_delete_insert | 39 | 69 | 1.77 |
+| oltp_write_only | 16 | 30 | 1.88 |
+| types_delete_insert | 22 | 26 | 1.18 |
+| oltp_read_write | 116 | 158 | 1.36 |
 
-_10K rows, file-backed, macOS ARM. Run `test/sysbench_compare.sh` to reproduce._
+_10K rows, file-backed, Linux x64 (GitHub Actions). Run `test/sysbench_compare.sh` to reproduce._
 
-**Reads are at parity or faster for most workloads.** The VDBE, query planner,
+**Reads are within 1-2.4x across all workloads.** The VDBE, query planner,
 parser, and all upper layers are untouched SQLite — only the storage engine is
-replaced. Point selects, range queries, aggregates, and the composite
-oltp_read_only benchmark are all within 1-2x of stock SQLite. Several benchmarks
-are actually faster than SQLite on file-backed databases because the prolly tree's
-content-addressed cache avoids redundant disk reads.
+replaced. Point selects, range queries, aggregates, GROUP BY, and full table
+scans are all close to parity. The composite oltp_read_only benchmark is 1.28x.
 
-**Index scans are 3-4x.** Secondary index scans (oltp_index_scan,
+**Index scans are 1-2.4x.** Secondary index scans (oltp_index_scan,
 covering_index_scan) use sort key materialization — pre-computed memcmp-sortable
 keys stored alongside the original SQLite record. This enables O(1) key
-comparison in the prolly tree but doubles index entry size. index_join_scan
-(46x) remains the main outlier due to this storage overhead on join-heavy
-workloads.
+comparison in the prolly tree. index_join_scan is now 2x (down from 46x in
+earlier versions) thanks to optimized cursor descent and structural sharing
+improvements.
 
-**Most writes are within 1-3x of SQLite.** Edits accumulate in a skip list and
-flush once at commit time using a Dolt-style cursor-path-stack algorithm. Only
-the root-to-leaf path is rewritten per edit; unchanged subtrees are structurally
-shared.
+**Writes are within 1-3.2x.** Edits accumulate in a skip list and flush once at
+commit time using a Dolt-style cursor-path-stack algorithm. Only the root-to-leaf
+path is rewritten per edit; unchanged subtrees are structurally shared.
 
-**oltp_update_index is 12x.** This benchmark does 10K updates to an indexed
-column in one transaction. Sort key materialization replaced the expensive
-field-by-field record comparison with memcmp, and a scan limit in IndexMoveto
-prevents O(N) linear scans through deleted entries. Combined, these brought the
-multiplier from 380x down to ~12x.
+**oltp_update_index is 3.2x** (down from 380x in the initial implementation and
+12x in previous releases). This benchmark does 10K updates to an indexed column
+in one transaction. Improvements came from sort key materialization (memcmp
+replaces field-by-field comparison), IndexMoveto scan limits, savepoint
+structural sharing, and deferred MutMap flush for ephemeral tables.
 
 ### Algorithmic Complexity
 
