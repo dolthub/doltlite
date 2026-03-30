@@ -332,3 +332,42 @@ run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
 echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"
+
+# ============================================================
+# Enforce performance ceiling (exit 1 if any test exceeds limit)
+# ============================================================
+MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-5}
+
+check_ceiling() {
+  local tests="$1" db_sq="$2" db_dl="$3"
+  local failed=0
+  for t in $tests; do
+    s=$(run_bench sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
+    d=$(run_bench doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
+    if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
+      over=$(python3 -c "r=$d/$s; print(1 if r>$MAX_MULTIPLIER else 0)")
+      if [ "$over" = "1" ]; then
+        ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
+        echo "FAIL: $t = ${ratio}x (ceiling: ${MAX_MULTIPLIER}x)" >&2
+        failed=1
+      fi
+    fi
+  done
+  return $failed
+}
+
+echo ""
+echo "### Performance Ceiling Check (${MAX_MULTIPLIER}x)"
+echo ""
+
+ceiling_ok=0
+check_ceiling "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file" || ceiling_ok=1
+check_ceiling "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file" || ceiling_ok=1
+
+if [ "$ceiling_ok" = "0" ]; then
+  echo "All tests within ${MAX_MULTIPLIER}x ceiling."
+else
+  echo ""
+  echo "**FAILED**: One or more tests exceeded the ${MAX_MULTIPLIER}x ceiling."
+  exit 1
+fi
