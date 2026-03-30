@@ -1,0 +1,61 @@
+name: SQL Logic Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  sqllogictest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y build-essential zlib1g-dev tcl-dev fossil
+
+    - name: Build doltlite amalgamation
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+        make sqlite3.c sqlite3.h
+
+    - name: Clone sqllogictest (official SQLite Fossil repo)
+      run: |
+        fossil clone https://www.sqlite.org/sqllogictest/ /tmp/sqllogictest.fossil
+        mkdir -p /tmp/sqllogictest && cd /tmp/sqllogictest
+        fossil open /tmp/sqllogictest.fossil
+
+    - name: Build stock sqllogictest C runner (reference)
+      run: |
+        cd /tmp/sqllogictest/src
+        gcc -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
+          -DSQLITE_OMIT_LOAD_EXTENSION -c md5.c
+        gcc -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
+          -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c
+        gcc -g -O2 -o sqllogictest-stock sqllogictest.c md5.o sqlite3.o -lpthread -lm
+
+    - name: Build sqllogictest C runner with doltlite
+      run: |
+        cd /tmp/sqllogictest/src
+        # Replace bundled SQLite amalgamation with doltlite's
+        cp $GITHUB_WORKSPACE/build/sqlite3.c sqlite3.c
+        cp $GITHUB_WORKSPACE/build/sqlite3.h sqlite3.h
+        gcc -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
+          -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c
+        gcc -g -O2 -o sqllogictest-doltlite sqllogictest.c md5.o sqlite3.o -lpthread -lm -lz
+
+    - name: Run full sqllogictest suite
+      run: |
+        bash test/run_sqllogictest.sh \
+          /tmp/sqllogictest/src/sqllogictest-doltlite \
+          /tmp/sqllogictest/src/sqllogictest-stock \
+          /tmp/sqllogictest/test
