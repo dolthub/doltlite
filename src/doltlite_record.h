@@ -23,6 +23,27 @@ char *doltliteDecodeRecord(const u8 *pData, int nData);
 void doltliteResultRecord(sqlite3_context *ctx, const u8 *pData, int nData);
 
 /*
+** Shared column-info structure used by diff_table, history, and at modules.
+*/
+typedef struct DoltliteColInfo DoltliteColInfo;
+struct DoltliteColInfo {
+  char **azName;    /* Column names (owned) */
+  int nCol;         /* Number of columns (ALL columns including PK) */
+  int iPkCol;       /* Index of the INTEGER PRIMARY KEY column, or -1 */
+};
+
+/*
+** Populate ci with column names from the given table via PRAGMA table_info.
+** Caller must call doltliteFreeColInfo() when done.
+*/
+int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci);
+
+/*
+** Free the column name array inside ci.
+*/
+void doltliteFreeColInfo(DoltliteColInfo *ci);
+
+/*
 ** Read a SQLite varint from pBuf. Returns bytes consumed (1-9).
 ** Sets *pVal to the decoded value.
 */

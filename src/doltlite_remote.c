@@ -14,115 +14,10 @@
 
 #include "doltlite_remote.h"
 #include "doltlite_commit.h"
+#include "prolly_hashset.h"
 #include "prolly_node.h"
 #include <string.h>
 
-/* ----------------------------------------------------------------
-** Hash set (reused from doltlite_gc.c pattern).
-** Open-addressing hash table keyed by ProllyHash.
-** ---------------------------------------------------------------- */
-
-typedef struct SyncHashSet SyncHashSet;
-struct SyncHashSet {
-  ProllyHash *aSlots;
-  u8 *aUsed;
-  int nSlots;
-  int nUsed;
-};
-
-static int syncHashSetInit(SyncHashSet *hs, int nCapacity){
-  int n = 256;
-  while( n < nCapacity*2 ) n *= 2;
-  hs->aSlots = sqlite3_malloc(n * sizeof(ProllyHash));
-  hs->aUsed = sqlite3_malloc(n);
-  if( !hs->aSlots || !hs->aUsed ){
-    sqlite3_free(hs->aSlots);
-    sqlite3_free(hs->aUsed);
-    return SQLITE_NOMEM;
-  }
-  memset(hs->aUsed, 0, n);
-  hs->nSlots = n;
-  hs->nUsed = 0;
-  return SQLITE_OK;
-}
-
-static void syncHashSetFree(SyncHashSet *hs){
-  sqlite3_free(hs->aSlots);
-  sqlite3_free(hs->aUsed);
-  memset(hs, 0, sizeof(*hs));
-}
-
-static u32 syncSlotIndex(const ProllyHash *h, int nSlots){
-  u32 v = (u32)h->data[0] | ((u32)h->data[1]<<8) |
-          ((u32)h->data[2]<<16) | ((u32)h->data[3]<<24);
-  return v & (nSlots - 1);
-}
-
-static int syncHashSetContains(SyncHashSet *hs, const ProllyHash *h){
-  u32 idx = syncSlotIndex(h, hs->nSlots);
-  int i;
-  for(i=0; i<hs->nSlots; i++){
-    u32 slot = (idx + i) & (hs->nSlots - 1);
-    if( !hs->aUsed[slot] ) return 0;
-    if( memcmp(hs->aSlots[slot].data, h->data, PROLLY_HASH_SIZE)==0 ) return 1;
-  }
-  return 0;
-}
-
-static int syncHashSetGrow(SyncHashSet *hs);
-
-static int syncHashSetAdd(SyncHashSet *hs, const ProllyHash *h){
-  u32 idx;
-  int i;
-  if( hs->nUsed >= hs->nSlots / 2 ){
-    int rc = syncHashSetGrow(hs);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  idx = syncSlotIndex(h, hs->nSlots);
-  for(i=0; i<hs->nSlots; i++){
-    u32 slot = (idx + i) & (hs->nSlots - 1);
-    if( !hs->aUsed[slot] ){
-      memcpy(hs->aSlots[slot].data, h->data, PROLLY_HASH_SIZE);
-      hs->aUsed[slot] = 1;
-      hs->nUsed++;
-      return SQLITE_OK;
-    }
-    if( memcmp(hs->aSlots[slot].data, h->data, PROLLY_HASH_SIZE)==0 ){
-      return SQLITE_OK; /* already present */
-    }
-  }
-  return SQLITE_FULL;
-}
-
-static int syncHashSetGrow(SyncHashSet *hs){
-  SyncHashSet newHs;
-  int i, rc;
-  int newSize = hs->nSlots * 2;
-  newHs.aSlots = sqlite3_malloc(newSize * sizeof(ProllyHash));
-  newHs.aUsed = sqlite3_malloc(newSize);
-  if( !newHs.aSlots || !newHs.aUsed ){
-    sqlite3_free(newHs.aSlots);
-    sqlite3_free(newHs.aUsed);
-    return SQLITE_NOMEM;
-  }
-  memset(newHs.aUsed, 0, newSize);
-  newHs.nSlots = newSize;
-  newHs.nUsed = 0;
-  for(i=0; i<hs->nSlots; i++){
-    if( hs->aUsed[i] ){
-      rc = syncHashSetAdd(&newHs, &hs->aSlots[i]);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(newHs.aSlots);
-        sqlite3_free(newHs.aUsed);
-        return rc;
-      }
-    }
-  }
-  sqlite3_free(hs->aSlots);
-  sqlite3_free(hs->aUsed);
-  *hs = newHs;
-  return SQLITE_OK;
-}
 
 /* ----------------------------------------------------------------
 ** BFS queue for sync traversal.
@@ -208,7 +103,7 @@ static int syncEnqueueChildren(
   const u8 *data,
   int nData,
   SyncQueue *q,
-  SyncHashSet *seen
+  ProllyHashSet *seen
 ){
   int rc = SQLITE_OK;
   int i;
@@ -221,8 +116,8 @@ static int syncEnqueueChildren(
       for(i=0; i<(int)node.nItems; i++){
         ProllyHash childHash;
         prollyNodeChildHash(&node, i, &childHash);
-        if( !prollyHashIsEmpty(&childHash) && !syncHashSetContains(seen, &childHash) ){
-          rc = syncHashSetAdd(seen, &childHash);
+        if( !prollyHashIsEmpty(&childHash) && !prollyHashSetContains(seen, &childHash) ){
+          rc = prollyHashSetAdd(seen, &childHash);
           if( rc==SQLITE_OK ) rc = syncQueuePush(q, &childHash);
         }
         if( rc!=SQLITE_OK ) break;
@@ -237,19 +132,19 @@ static int syncEnqueueChildren(
       int pi;
       for(pi=0; pi<commit.nParents && rc==SQLITE_OK; pi++){
         if( !prollyHashIsEmpty(&commit.aParents[pi])
-            && !syncHashSetContains(seen, &commit.aParents[pi]) ){
-          rc = syncHashSetAdd(seen, &commit.aParents[pi]);
+            && !prollyHashSetContains(seen, &commit.aParents[pi]) ){
+          rc = prollyHashSetAdd(seen, &commit.aParents[pi]);
           if( rc==SQLITE_OK ) rc = syncQueuePush(q, &commit.aParents[pi]);
         }
       }
       if( rc==SQLITE_OK && !prollyHashIsEmpty(&commit.rootHash)
-          && !syncHashSetContains(seen, &commit.rootHash) ){
-        rc = syncHashSetAdd(seen, &commit.rootHash);
+          && !prollyHashSetContains(seen, &commit.rootHash) ){
+        rc = prollyHashSetAdd(seen, &commit.rootHash);
         if( rc==SQLITE_OK ) rc = syncQueuePush(q, &commit.rootHash);
       }
       if( rc==SQLITE_OK && !prollyHashIsEmpty(&commit.catalogHash)
-          && !syncHashSetContains(seen, &commit.catalogHash) ){
-        rc = syncHashSetAdd(seen, &commit.catalogHash);
+          && !prollyHashSetContains(seen, &commit.catalogHash) ){
+        rc = prollyHashSetAdd(seen, &commit.catalogHash);
         if( rc==SQLITE_OK ) rc = syncQueuePush(q, &commit.catalogHash);
       }
       doltliteCommitClear(&commit);
@@ -259,19 +154,19 @@ static int syncEnqueueChildren(
     if( nData == WS_TOTAL_SIZE && data[0] == 1 ){
       ProllyHash h;
       memcpy(h.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
-      if( !prollyHashIsEmpty(&h) && !syncHashSetContains(seen, &h) ){
-        rc = syncHashSetAdd(seen, &h);
+      if( !prollyHashIsEmpty(&h) && !prollyHashSetContains(seen, &h) ){
+        rc = prollyHashSetAdd(seen, &h);
         if( rc==SQLITE_OK ) rc = syncQueuePush(q, &h);
       }
       memcpy(h.data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
-      if( rc==SQLITE_OK && !prollyHashIsEmpty(&h) && !syncHashSetContains(seen, &h) ){
-        rc = syncHashSetAdd(seen, &h);
+      if( rc==SQLITE_OK && !prollyHashIsEmpty(&h) && !prollyHashSetContains(seen, &h) ){
+        rc = prollyHashSetAdd(seen, &h);
         if( rc==SQLITE_OK ) rc = syncQueuePush(q, &h);
       }
       if( rc==SQLITE_OK && data[WS_MERGING_OFF] ){
         memcpy(h.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
-        if( !prollyHashIsEmpty(&h) && !syncHashSetContains(seen, &h) ){
-          rc = syncHashSetAdd(seen, &h);
+        if( !prollyHashIsEmpty(&h) && !prollyHashSetContains(seen, &h) ){
+          rc = prollyHashSetAdd(seen, &h);
           if( rc==SQLITE_OK ) rc = syncQueuePush(q, &h);
         }
       }
@@ -288,8 +183,8 @@ static int syncEnqueueChildren(
           {
             ProllyHash tableRoot;
             memcpy(tableRoot.data, p + 5, PROLLY_HASH_SIZE);
-            if( !prollyHashIsEmpty(&tableRoot) && !syncHashSetContains(seen, &tableRoot) ){
-              rc = syncHashSetAdd(seen, &tableRoot);
+            if( !prollyHashIsEmpty(&tableRoot) && !prollyHashSetContains(seen, &tableRoot) ){
+              rc = prollyHashSetAdd(seen, &tableRoot);
               if( rc==SQLITE_OK ) rc = syncQueuePush(q, &tableRoot);
             }
           }
@@ -320,7 +215,7 @@ int doltliteSyncChunks(
   int nRoots
 ){
   SyncQueue queue;
-  SyncHashSet seen;
+  ProllyHashSet seen;
   ProllyHash aBatch[SYNC_BATCH_SIZE];
   u8 aPresent[SYNC_BATCH_SIZE];
   int rc, i;
@@ -328,7 +223,7 @@ int doltliteSyncChunks(
   rc = syncQueueInit(&queue);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = syncHashSetInit(&seen, 256);
+  rc = prollyHashSetInit(&seen, 256);
   if( rc!=SQLITE_OK ){
     syncQueueFree(&queue);
     return rc;
@@ -336,8 +231,8 @@ int doltliteSyncChunks(
 
   /* Seed the queue with root hashes */
   for(i=0; i<nRoots && rc==SQLITE_OK; i++){
-    if( !prollyHashIsEmpty(&aRoots[i]) && !syncHashSetContains(&seen, &aRoots[i]) ){
-      rc = syncHashSetAdd(&seen, &aRoots[i]);
+    if( !prollyHashIsEmpty(&aRoots[i]) && !prollyHashSetContains(&seen, &aRoots[i]) ){
+      rc = prollyHashSetAdd(&seen, &aRoots[i]);
       if( rc==SQLITE_OK ) rc = syncQueuePush(&queue, &aRoots[i]);
     }
   }
@@ -389,7 +284,7 @@ int doltliteSyncChunks(
     }
   }
 
-  syncHashSetFree(&seen);
+  prollyHashSetFree(&seen);
   syncQueueFree(&queue);
   return rc;
 }
@@ -613,7 +508,7 @@ static int syncIsAncestor(
   const ProllyHash *pDescendant
 ){
   SyncQueue queue;
-  SyncHashSet visited;
+  ProllyHashSet visited;
   int found = 0;
   int rc;
 
@@ -621,14 +516,14 @@ static int syncIsAncestor(
 
   rc = syncQueueInit(&queue);
   if( rc!=SQLITE_OK ) return -1;
-  rc = syncHashSetInit(&visited, 256);
+  rc = prollyHashSetInit(&visited, 256);
   if( rc!=SQLITE_OK ){
     syncQueueFree(&queue);
     return -1;
   }
 
   syncQueuePush(&queue, pDescendant);
-  syncHashSetAdd(&visited, pDescendant);
+  prollyHashSetAdd(&visited, pDescendant);
 
   while( !found ){
     ProllyHash current;
@@ -651,8 +546,8 @@ static int syncIsAncestor(
             found = 1;
             break;
           }
-          if( !syncHashSetContains(&visited, &commit.aParents[pi]) ){
-            syncHashSetAdd(&visited, &commit.aParents[pi]);
+          if( !prollyHashSetContains(&visited, &commit.aParents[pi]) ){
+            prollyHashSetAdd(&visited, &commit.aParents[pi]);
             syncQueuePush(&queue, &commit.aParents[pi]);
           }
         }
@@ -662,7 +557,7 @@ static int syncIsAncestor(
     sqlite3_free(data);
   }
 
-  syncHashSetFree(&visited);
+  prollyHashSetFree(&visited);
   syncQueueFree(&queue);
   return found;
 }

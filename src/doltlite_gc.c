@@ -17,6 +17,7 @@
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
+#include "prolly_hashset.h"
 #include "prolly_node.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
@@ -31,112 +32,6 @@ extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 /* Provided by prolly_btree.c */
 extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 
-/* ----------------------------------------------------------------
-** Hash set for the mark phase.
-** Simple open-addressing hash table keyed by ProllyHash.
-** ---------------------------------------------------------------- */
-
-typedef struct GcHashSet GcHashSet;
-struct GcHashSet {
-  ProllyHash *aSlots;   /* Hash slot array */
-  u8 *aUsed;            /* 1 if slot is occupied */
-  int nSlots;           /* Total slots (power of 2) */
-  int nUsed;            /* Number of entries */
-};
-
-static int gcHashSetInit(GcHashSet *hs, int nCapacity){
-  int n = 256;
-  while( n < nCapacity*2 ) n *= 2;
-  hs->aSlots = sqlite3_malloc(n * sizeof(ProllyHash));
-  hs->aUsed = sqlite3_malloc(n);
-  if( !hs->aSlots || !hs->aUsed ){
-    sqlite3_free(hs->aSlots);
-    sqlite3_free(hs->aUsed);
-    return SQLITE_NOMEM;
-  }
-  memset(hs->aUsed, 0, n);
-  hs->nSlots = n;
-  hs->nUsed = 0;
-  return SQLITE_OK;
-}
-
-static void gcHashSetFree(GcHashSet *hs){
-  sqlite3_free(hs->aSlots);
-  sqlite3_free(hs->aUsed);
-  memset(hs, 0, sizeof(*hs));
-}
-
-static u32 gcSlotIndex(const ProllyHash *h, int nSlots){
-  u32 v = (u32)h->data[0] | ((u32)h->data[1]<<8) |
-          ((u32)h->data[2]<<16) | ((u32)h->data[3]<<24);
-  return v & (nSlots - 1);
-}
-
-static int gcHashSetContains(GcHashSet *hs, const ProllyHash *h){
-  u32 idx = gcSlotIndex(h, hs->nSlots);
-  int i;
-  for(i=0; i<hs->nSlots; i++){
-    u32 slot = (idx + i) & (hs->nSlots - 1);
-    if( !hs->aUsed[slot] ) return 0;
-    if( memcmp(hs->aSlots[slot].data, h->data, PROLLY_HASH_SIZE)==0 ) return 1;
-  }
-  return 0;
-}
-
-static int gcHashSetGrow(GcHashSet *hs);
-
-static int gcHashSetAdd(GcHashSet *hs, const ProllyHash *h){
-  u32 idx;
-  int i;
-  if( hs->nUsed >= hs->nSlots / 2 ){
-    int rc = gcHashSetGrow(hs);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  idx = gcSlotIndex(h, hs->nSlots);
-  for(i=0; i<hs->nSlots; i++){
-    u32 slot = (idx + i) & (hs->nSlots - 1);
-    if( !hs->aUsed[slot] ){
-      memcpy(hs->aSlots[slot].data, h->data, PROLLY_HASH_SIZE);
-      hs->aUsed[slot] = 1;
-      hs->nUsed++;
-      return SQLITE_OK;
-    }
-    if( memcmp(hs->aSlots[slot].data, h->data, PROLLY_HASH_SIZE)==0 ){
-      return SQLITE_OK; /* already present */
-    }
-  }
-  return SQLITE_FULL;
-}
-
-static int gcHashSetGrow(GcHashSet *hs){
-  GcHashSet newHs;
-  int i, rc;
-  int newSize = hs->nSlots * 2;
-  newHs.aSlots = sqlite3_malloc(newSize * sizeof(ProllyHash));
-  newHs.aUsed = sqlite3_malloc(newSize);
-  if( !newHs.aSlots || !newHs.aUsed ){
-    sqlite3_free(newHs.aSlots);
-    sqlite3_free(newHs.aUsed);
-    return SQLITE_NOMEM;
-  }
-  memset(newHs.aUsed, 0, newSize);
-  newHs.nSlots = newSize;
-  newHs.nUsed = 0;
-  for(i=0; i<hs->nSlots; i++){
-    if( hs->aUsed[i] ){
-      rc = gcHashSetAdd(&newHs, &hs->aSlots[i]);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(newHs.aSlots);
-        sqlite3_free(newHs.aUsed);
-        return rc;
-      }
-    }
-  }
-  sqlite3_free(hs->aSlots);
-  sqlite3_free(hs->aUsed);
-  *hs = newHs;
-  return SQLITE_OK;
-}
 
 /* ----------------------------------------------------------------
 ** BFS queue for mark traversal.
@@ -219,7 +114,7 @@ static int isProllyNodeChunk(const u8 *data, int nData){
 
 static int gcMarkReachable(
   ChunkStore *cs,
-  GcHashSet *marked
+  ProllyHashSet *marked
 ){
   GcQueue queue;
   ProllyHash current;
@@ -255,9 +150,9 @@ static int gcMarkReachable(
     int nData = 0;
 
     if( prollyHashIsEmpty(&current) ) continue;
-    if( gcHashSetContains(marked, &current) ) continue;
+    if( prollyHashSetContains(marked, &current) ) continue;
 
-    rc = gcHashSetAdd(marked, &current);
+    rc = prollyHashSetAdd(marked, &current);
     if( rc!=SQLITE_OK ) break;
 
     rc = chunkStoreGet(cs, &current, &data, &nData);
@@ -364,7 +259,7 @@ static int gcMarkReachable(
 */
 static int gcBuildCompactedData(
   ChunkStore *cs,
-  GcHashSet *marked,
+  ProllyHashSet *marked,
   u8 **ppNewData,
   int *pnNewData,
   ChunkIndexEntry **ppNewIndex,
@@ -381,7 +276,7 @@ static int gcBuildCompactedData(
 
   /* Count survivors to pre-allocate */
   for(i=0; i<cs->nIndex; i++){
-    if( gcHashSetContains(marked, &cs->aIndex[i].hash) ) kept++;
+    if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ) kept++;
   }
 
   aNewIndex = sqlite3_malloc(kept * (int)sizeof(ChunkIndexEntry));
@@ -391,7 +286,7 @@ static int gcBuildCompactedData(
     u8 *chunkData = 0;
     int nChunkData = 0;
 
-    if( !gcHashSetContains(marked, &cs->aIndex[i].hash) ) continue;
+    if( !prollyHashSetContains(marked, &cs->aIndex[i].hash) ) continue;
 
     rc = chunkStoreGet(cs, &cs->aIndex[i].hash, &chunkData, &nChunkData);
     if( rc!=SQLITE_OK ){
@@ -597,7 +492,7 @@ static int gcRewriteFile(
 
 static int gcSweep(
   ChunkStore *cs,
-  GcHashSet *marked,
+  ProllyHashSet *marked,
   int *pKept,
   int *pRemoved
 ){
@@ -610,14 +505,14 @@ static int gcSweep(
 
   /* Count survivors and removals */
   for(i=0; i<cs->nIndex; i++){
-    if( gcHashSetContains(marked, &cs->aIndex[i].hash) ){
+    if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ){
       kept++;
     }else{
       removed++;
     }
   }
   for(i=0; i<cs->nPending; i++){
-    if( gcHashSetContains(marked, &cs->aPending[i].hash) ){
+    if( prollyHashSetContains(marked, &cs->aPending[i].hash) ){
       kept++;
     }
   }
@@ -671,7 +566,7 @@ static void doltliteGcFunc(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  GcHashSet marked;
+  ProllyHashSet marked;
   int nKept = 0, nRemoved = 0;
   int rc;
   char result[128];
@@ -690,7 +585,7 @@ static void doltliteGcFunc(
     return;
   }
 
-  rc = gcHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
+  rc = prollyHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "out of memory", -1);
     return;
@@ -699,14 +594,14 @@ static void doltliteGcFunc(
   /* Mark phase */
   rc = gcMarkReachable(cs, &marked);
   if( rc!=SQLITE_OK ){
-    gcHashSetFree(&marked);
+    prollyHashSetFree(&marked);
     sqlite3_result_error(context, "gc mark phase failed", -1);
     return;
   }
 
   /* Sweep phase */
   rc = gcSweep(cs, &marked, &nKept, &nRemoved);
-  gcHashSetFree(&marked);
+  prollyHashSetFree(&marked);
 
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "gc sweep phase failed", -1);
@@ -724,7 +619,7 @@ static void doltliteGcFunc(
 
 int doltliteGcCompact(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  GcHashSet marked;
+  ProllyHashSet marked;
   int nKept = 0, nRemoved = 0;
   int rc;
 
@@ -733,14 +628,14 @@ int doltliteGcCompact(sqlite3 *db){
     return SQLITE_OK;  /* In-memory databases don't need compaction */
   }
 
-  rc = gcHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
+  rc = prollyHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = gcMarkReachable(cs, &marked);
   if( rc==SQLITE_OK ){
     rc = gcSweep(cs, &marked, &nKept, &nRemoved);
   }
-  gcHashSetFree(&marked);
+  prollyHashSetFree(&marked);
   return rc;
 }
 

@@ -21,6 +21,7 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
+#include "doltlite_record.h"
 
 #include <string.h>
 #include <time.h>
@@ -95,46 +96,9 @@ static void atResultField(sqlite3_context *ctx, const u8 *pData, int nData, int 
   sqlite3_result_null(ctx);
 }
 
-/* --------------------------------------------------------------------------
-** Column info
-** -------------------------------------------------------------------------- */
 
-typedef struct AtColInfo AtColInfo;
-struct AtColInfo {
-  char **azName;
-  int nCol;
-  int iPkCol;
-};
 
-static void atFreeColInfo(AtColInfo *ci){
-  int i; for(i=0;i<ci->nCol;i++) sqlite3_free(ci->azName[i]);
-  sqlite3_free(ci->azName); ci->azName=0; ci->nCol=0;
-}
-
-static int atGetColumnNames(sqlite3 *db, const char *zTable, AtColInfo *ci){
-  char *zSql; sqlite3_stmt *pStmt=0; int rc, nCol;
-  memset(ci,0,sizeof(*ci)); ci->iPkCol=-1;
-  zSql=sqlite3_mprintf("PRAGMA table_info(\"%w\")",zTable);
-  if(!zSql) return SQLITE_NOMEM;
-  rc=sqlite3_prepare_v2(db,zSql,-1,&pStmt,0); sqlite3_free(zSql);
-  if(rc!=SQLITE_OK) return rc;
-  nCol=0; while(sqlite3_step(pStmt)==SQLITE_ROW) nCol++;
-  sqlite3_reset(pStmt);
-  ci->azName=sqlite3_malloc(nCol*(int)sizeof(char*));
-  if(!ci->azName){sqlite3_finalize(pStmt);return SQLITE_NOMEM;}
-  memset(ci->azName,0,nCol*(int)sizeof(char*)); ci->nCol=0;
-  while(sqlite3_step(pStmt)==SQLITE_ROW){
-    const char *zName=(const char*)sqlite3_column_text(pStmt,1);
-    int pk=sqlite3_column_int(pStmt,5);
-    const char *zType=(const char*)sqlite3_column_text(pStmt,2);
-    if(pk==1&&zType&&sqlite3_stricmp(zType,"INTEGER")==0) ci->iPkCol=ci->nCol;
-    ci->azName[ci->nCol]=sqlite3_mprintf("%s",zName?zName:"");
-    ci->nCol++;
-  }
-  sqlite3_finalize(pStmt); return SQLITE_OK;
-}
-
-static char *atBuildSchema(AtColInfo *ci){
+static char *atBuildSchema(DoltliteColInfo *ci){
   int i, sz=256;
   char *z;
   for(i=0;i<ci->nCol;i++) sz+=(int)strlen(ci->azName[i])+10;
@@ -167,7 +131,7 @@ struct AtVtab {
   sqlite3_vtab base;
   sqlite3 *db;
   char *zTableName;
-  AtColInfo cols;
+  DoltliteColInfo cols;
 };
 
 typedef struct AtCursor AtCursor;
@@ -257,24 +221,24 @@ static int atConnect(sqlite3 *db, void *pAux, int argc,
   else if(argc>3) v->zTableName=sqlite3_mprintf("%s",argv[3]);
   else v->zTableName=sqlite3_mprintf("");
 
-  atGetColumnNames(db,v->zTableName,&v->cols);
+  doltliteGetColumnNames(db,v->zTableName,&v->cols);
 
   if(v->cols.nCol>0){
     zSchema=atBuildSchema(&v->cols);
   }else{
     zSchema=sqlite3_mprintf("CREATE TABLE x(rowid_val INTEGER, value TEXT, commit_ref TEXT HIDDEN)");
   }
-  if(!zSchema){sqlite3_free(v->zTableName);atFreeColInfo(&v->cols);sqlite3_free(v);return SQLITE_NOMEM;}
+  if(!zSchema){sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);return SQLITE_NOMEM;}
 
   rc=sqlite3_declare_vtab(db,zSchema); sqlite3_free(zSchema);
-  if(rc!=SQLITE_OK){sqlite3_free(v->zTableName);atFreeColInfo(&v->cols);sqlite3_free(v);return rc;}
+  if(rc!=SQLITE_OK){sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);return rc;}
 
   *ppVtab=&v->base; return SQLITE_OK;
 }
 
 static int atDisconnect(sqlite3_vtab *pVtab){
   AtVtab *v=(AtVtab*)pVtab;
-  sqlite3_free(v->zTableName); atFreeColInfo(&v->cols);
+  sqlite3_free(v->zTableName); doltliteFreeColInfo(&v->cols);
   sqlite3_free(v); return SQLITE_OK;
 }
 
