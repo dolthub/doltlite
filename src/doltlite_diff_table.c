@@ -15,6 +15,7 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
+#include "doltlite_record.h"
 
 #include <assert.h>
 #include <string.h>
@@ -172,71 +173,10 @@ static void dtResultField(
 }
 
 /* --------------------------------------------------------------------------
-** Column name extraction from sqlite_master
-** -------------------------------------------------------------------------- */
-
-typedef struct ColInfo ColInfo;
-struct ColInfo {
-  char **azName;    /* Column names (owned) */
-  int nCol;         /* Number of columns (ALL columns including PK) */
-  int iPkCol;       /* Index of the INTEGER PRIMARY KEY column, or -1 */
-};
-
-static void freeColInfo(ColInfo *ci){
-  int i;
-  for(i=0; i<ci->nCol; i++) sqlite3_free(ci->azName[i]);
-  sqlite3_free(ci->azName);
-  ci->azName = 0;
-  ci->nCol = 0;
-}
-
-static int getColumnNames(sqlite3 *db, const char *zTable, ColInfo *ci){
-  char *zSql;
-  sqlite3_stmt *pStmt = 0;
-  int rc, nCol;
-
-  memset(ci, 0, sizeof(*ci));
-  ci->iPkCol = -1;
-  zSql = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTable);
-  if( !zSql ) return SQLITE_NOMEM;
-
-  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
-  sqlite3_free(zSql);
-  if( rc!=SQLITE_OK ) return rc;
-
-  /* Count columns first */
-  nCol = 0;
-  while( sqlite3_step(pStmt)==SQLITE_ROW ) nCol++;
-  sqlite3_reset(pStmt);
-
-  ci->azName = sqlite3_malloc(nCol * (int)sizeof(char*));
-  if( !ci->azName ){ sqlite3_finalize(pStmt); return SQLITE_NOMEM; }
-  memset(ci->azName, 0, nCol * (int)sizeof(char*));
-  ci->nCol = 0;
-
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
-    const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
-    int pk = sqlite3_column_int(pStmt, 5);
-    const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
-
-    /* Track which column is the INTEGER PRIMARY KEY (rowid alias) */
-    if( pk==1 && zType && sqlite3_stricmp(zType,"INTEGER")==0 ){
-      ci->iPkCol = ci->nCol;
-    }
-
-    ci->azName[ci->nCol] = sqlite3_mprintf("%s", zName ? zName : "");
-    ci->nCol++;
-  }
-
-  sqlite3_finalize(pStmt);
-  return SQLITE_OK;
-}
-
-/* --------------------------------------------------------------------------
 ** Build the virtual table schema dynamically from column names
 ** -------------------------------------------------------------------------- */
 
-static char *buildDiffSchema(ColInfo *ci){
+static char *buildDiffSchema(DoltliteColInfo *ci){
   /* Schema: from_<col1>, ..., to_<col1>, ...,
   **         from_commit, to_commit, from_commit_date, to_commit_date, diff_type */
   int i;
@@ -299,7 +239,7 @@ struct DiffTblVtab {
   sqlite3_vtab base;
   sqlite3 *db;
   char *zTableName;
-  ColInfo cols;       /* Column names for this table */
+  DoltliteColInfo cols;       /* Column names for this table */
 };
 
 typedef struct DiffTblCursor DiffTblCursor;
@@ -537,7 +477,7 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
   }
 
   /* Get column names from the actual table */
-  getColumnNames(db, pVtab->zTableName, &pVtab->cols);
+  doltliteGetColumnNames(db, pVtab->zTableName, &pVtab->cols);
 
   /* Build dynamic schema */
   if( pVtab->cols.nCol > 0 ){
@@ -553,7 +493,7 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
 
   if( !zSchema ){
     sqlite3_free(pVtab->zTableName);
-    freeColInfo(&pVtab->cols);
+    doltliteFreeColInfo(&pVtab->cols);
     sqlite3_free(pVtab);
     return SQLITE_NOMEM;
   }
@@ -562,7 +502,7 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
   sqlite3_free(zSchema);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pVtab->zTableName);
-    freeColInfo(&pVtab->cols);
+    doltliteFreeColInfo(&pVtab->cols);
     sqlite3_free(pVtab);
     return rc;
   }
@@ -574,7 +514,7 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
 static int dtDisconnect(sqlite3_vtab *pBase){
   DiffTblVtab *pVtab = (DiffTblVtab*)pBase;
   sqlite3_free(pVtab->zTableName);
-  freeColInfo(&pVtab->cols);
+  doltliteFreeColInfo(&pVtab->cols);
   sqlite3_free(pVtab);
   return SQLITE_OK;
 }
