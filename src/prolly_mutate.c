@@ -348,6 +348,13 @@ static int streamingMerge(
         ** at a chunk boundary). Skip by emitting hash at parent level.
         ** If level-0 has pending items, we must descend to preserve
         ** chunk boundary alignment with the original tree. */
+        {
+          int lv;
+          for( lv = 0; lv < rootNode.level; lv++ ){
+            rc = prollyChunkerFlushLevel(&chunker, lv);
+            if( rc!=SQLITE_OK ) goto streaming_cleanup;
+          }
+        }
         rc = prollyChunkerAddAtLevel(&chunker, rootNode.level,
                                       pBoundKey, nBoundKey,
                                       pChildVal, nChildVal);

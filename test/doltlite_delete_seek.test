@@ -1,0 +1,61 @@
+# Regression test for delete + streamingMerge on larger INTKEY tables.
+#
+# The failure mode was:
+# - DELETE from a sufficiently large rowid table
+# - PRAGMA integrity_check still reports "ok"
+# - rowid lookup misses existing rows
+# - later indexed lookups that need table payload can fail with
+#   "database disk image is malformed"
+
+set testdir [file dirname $argv0]
+source $testdir/tester.tcl
+set testprefix doltlite_delete_seek
+
+do_test 1.0 {
+  execsql {
+    CREATE TABLE session_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      category TEXT NOT NULL,
+      priority INTEGER NOT NULL DEFAULT 2,
+      data TEXT NOT NULL,
+      source_hook TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      data_hash TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX idx_session_events_session ON session_events(session_id);
+    BEGIN;
+  }
+
+  for {set i 0} {$i < 1000} {incr i} {
+    set hex [format %016X $i]
+    db eval "
+      INSERT INTO session_events(session_id, type, category, priority, data, source_hook, data_hash)
+      VALUES('sess-5', 'file', 'file', 2, 'file-$i.ts', 'PostToolUse', '$hex')
+    "
+  }
+
+  execsql {
+    COMMIT;
+    DELETE FROM session_events WHERE id = 1;
+  }
+
+  set out [list]
+  lappend out {*}[execsql { PRAGMA integrity_check }]
+  lappend out {*}[execsql { SELECT data FROM session_events WHERE id = 2 }]
+  lappend out {*}[execsql {
+    SELECT data
+    FROM session_events
+    WHERE session_id = 'sess-5'
+    ORDER BY id ASC
+    LIMIT 3
+  }]
+  lappend out {*}[execsql {
+    SELECT group_concat(id, ',')
+    FROM (SELECT id FROM session_events NOT INDEXED ORDER BY id ASC LIMIT 3)
+  }]
+  set out
+} {ok file-1.ts file-1.ts file-2.ts file-3.ts 2,3,4}
+
+finish_test
