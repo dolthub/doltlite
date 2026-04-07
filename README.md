@@ -651,6 +651,43 @@ bash ../test/doltlite_merge.sh           # Three-way merge
 bash ../test/doltlite_attach_sqlite.sh   # ATTACH standard SQLite databases
 ```
 
+### SQL Logic Test Suite
+
+Doltlite passes 100% of the
+[sqllogictest](https://www.sqlite.org/sqllogictest/) suite — the same
+5.7 million-statement correctness corpus that SQLite itself uses. Every PR
+runs the full suite in CI, comparing Doltlite's results against stock SQLite
+as a reference. Zero failures, zero errors.
+
+The test works by building the official
+[sqllogictest C runner](https://www.sqlite.org/sqllogictest/) twice — once
+linked against stock SQLite, once against Doltlite's amalgamation — and
+running every `.test` file through both in `--verify` mode. Any result
+divergence from stock SQLite is a failure.
+
+```bash
+# Build both runners and run the full suite (requires Fossil)
+fossil clone https://www.sqlite.org/sqllogictest/ /tmp/sqllogictest.fossil
+mkdir -p /tmp/sqllogictest && cd /tmp/sqllogictest && fossil open /tmp/sqllogictest.fossil
+
+# Build stock runner (reference)
+cd src
+gcc -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
+    -DSQLITE_OMIT_LOAD_EXTENSION -c md5.c sqlite3.c
+gcc -O2 -o sqllogictest-stock sqllogictest.c md5.o sqlite3.o -lpthread -lm
+
+# Build doltlite runner (replace amalgamation)
+cp /path/to/doltlite/build/sqlite3.c sqlite3.c
+cp /path/to/doltlite/build/sqlite3.h sqlite3.h
+gcc -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
+    -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c
+gcc -O2 -o sqllogictest-doltlite sqllogictest.c md5.o sqlite3.o -lpthread -lm -lz
+
+# Run the suite
+bash test/run_sqllogictest.sh \
+    sqllogictest-doltlite sqllogictest-stock /tmp/sqllogictest/test
+```
+
 ### Concurrent Branch Test
 
 A C test that opens two connections on different branches and verifies they see
