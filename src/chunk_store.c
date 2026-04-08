@@ -726,6 +726,16 @@ int chunkStoreOpen(
         return rc;
       }
     }
+    /* Consistency check: a database with commits must have refs. If
+    ** headCommit is set but no branches loaded, the refs are missing
+    ** (zeroed hash or unreadable chunk). This is corruption. */
+    if( !prollyHashIsEmpty(&cs->headCommit) && cs->nBranches==0 ){
+      csCloseFile(cs->pFile);
+      cs->pFile = 0;
+      sqlite3_free(cs->zFilename);
+      cs->zFilename = 0;
+      return SQLITE_CORRUPT;
+    }
     if( !cs->zDefaultBranch ) cs->zDefaultBranch = sqlite3_mprintf("main");
   }else{
     if( !(flags & SQLITE_OPEN_CREATE) ){
