@@ -96,9 +96,7 @@ static int gcMarkReachable(
   if( rc!=SQLITE_OK ) return rc;
 
   
-  rc = gcQueuePush(&queue, &cs->root);
-  if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->headCommit);
-  if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->refsHash);
+  rc = gcQueuePush(&queue, &cs->refsHash);
 
   /* Mark the per-branch working state chunk and all catalog hashes within it. */
   if( rc==SQLITE_OK && !prollyHashIsEmpty(&cs->workingState) ){

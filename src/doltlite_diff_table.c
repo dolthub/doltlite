@@ -281,7 +281,7 @@ static int walkHistoryAndDiff(
   if( !cs || !pBt ) return SQLITE_OK;
   pCache = doltliteGetCache(db);
 
-  chunkStoreGetHeadCommit(cs, &curHash);
+  doltliteGetSessionHead(db, &curHash);
   if( prollyHashIsEmpty(&curHash) ) return SQLITE_OK;
 
   while( !prollyHashIsEmpty(&curHash) ){
@@ -599,7 +599,7 @@ void doltliteRegisterDiffTables(sqlite3 *db){
   int nTables = 0, i, rc;
 
   if( !cs ) return;
-  chunkStoreGetHeadCommit(cs, &headCommit);
+  doltliteGetSessionHead(db, &headCommit);
   if( prollyHashIsEmpty(&headCommit) ) return;
 
   rc = chunkStoreGet(cs, &headCommit, &data, &nData);

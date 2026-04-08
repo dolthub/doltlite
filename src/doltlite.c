@@ -450,7 +450,6 @@ static void doltliteCommitFunc(
   /* Under lock: update session and shared state */
   doltliteSetSessionHead(db, &commitHash);
   doltliteSetSessionStaged(db, &catalogHash);
-  chunkStoreSetHeadCommit(cs, &commitHash);
 
   {
     const char *branch = doltliteGetSessionBranch(db);
@@ -558,7 +557,6 @@ static void doltliteResetFunc(
 
     
     doltliteSetSessionHead(db, &targetCommit);
-    chunkStoreSetHeadCommit(cs, &targetCommit);
     chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &targetCommit);
     chunkStoreSerializeRefs(cs);
 
@@ -751,8 +749,7 @@ static void doltliteMergeFunc(
 
       doltliteSetSessionHead(db, &ch2);
       doltliteSetSessionStaged(db, &sc2);
-      chunkStoreSetHeadCommit(cs, &ch2);
-      
+
       chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &ch2);
       doltliteSaveWorkingSet(db);
       chunkStoreSerializeRefs(cs);
@@ -855,8 +852,7 @@ static void doltliteMergeFunc(
 
       doltliteSetSessionHead(db, &commitHash);
       doltliteSetSessionStaged(db, &mergedCatHash);
-      chunkStoreSetHeadCommit(cs, &commitHash);
-      
+
       chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
       doltliteSaveWorkingSet(db);
       chunkStoreSerializeRefs(cs);
@@ -943,8 +939,7 @@ static int applyMergedCatalogAndCommit(
     
     doltliteSetSessionHead(db, &commitHash);
     doltliteSetSessionStaged(db, &mergedCatHash);
-    chunkStoreSetHeadCommit(cs, &commitHash);
-    
+
     chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
     chunkStoreSerializeRefs(cs);
     chunkStoreCommit(cs);

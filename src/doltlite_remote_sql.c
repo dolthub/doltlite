@@ -414,7 +414,6 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
     doltliteSetSessionHead(db, &trackingCommit);
     doltliteSetSessionStaged(db, &commit.catalogHash);
-    chunkStoreSetHeadCommit(cs, &trackingCommit);
     doltliteCommitClear(&commit);
   }
 
@@ -508,7 +507,6 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
               doltliteSetSessionBranch(db, zDefault);
               doltliteSetSessionHead(db, &branchCommit);
               doltliteSetSessionStaged(db, &commit.catalogHash);
-              chunkStoreSetHeadCommit(cs, &branchCommit);
               chunkStoreSetDefaultBranch(cs, zDefault);
             }
             doltliteCommitClear(&commit);

@@ -201,7 +201,6 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
 
     
     chunkStoreSetDefaultBranch(cs, zBranch);
-    chunkStoreSetHeadCommit(cs, &targetCommit);
 
     {
       extern int doltliteSaveWorkingSet(sqlite3*);

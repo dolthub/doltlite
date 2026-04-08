@@ -308,11 +308,11 @@ static sqlite3_module atModule = {
 };
 
 void doltliteRegisterAtTables(sqlite3 *db){
-  ChunkStore *cs=doltliteGetChunkStore(db);
   ProllyHash headCommit; u8 *data=0;int nData=0;
   DoltliteCommit commit; struct TableEntry *aT=0;int nT=0,i,rc;
+  ChunkStore *cs=doltliteGetChunkStore(db);
   if(!cs) return;
-  chunkStoreGetHeadCommit(cs,&headCommit);
+  doltliteGetSessionHead(db,&headCommit);
   if(prollyHashIsEmpty(&headCommit)) return;
   rc=chunkStoreGet(cs,&headCommit,&data,&nData); if(rc!=SQLITE_OK) return;
   memset(&commit,0,sizeof(commit));

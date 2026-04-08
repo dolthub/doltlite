@@ -326,21 +326,21 @@ static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
 
 /*
 ** Manifest layout (168 bytes, all little-endian):
-**   0: magic(4) | 4: version(4) | 8: root_hash(20) | 28: nChunks(4)
-**   32: indexOffset(8) | 40: indexSize(4) | 44: catalog_hash(20)
-**   64: headCommit_hash(20) | 84: walOffset(8) | 104: refs_hash(20)
-**   124..167: reserved (zero)
+**   0: magic(4) | 4: version(4) | 8: reserved(20) | 28: nChunks(4)
+**   32: indexOffset(8) | 40: indexSize(4) | 44: reserved(20)
+**   64: reserved(20) | 84: walOffset(8) | 92: reserved(12)
+**   104: refs_hash(20) | 124: working_state_hash(20) | 144: reserved(24)
 */
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memset(aBuf, 0, CHUNK_MANIFEST_SIZE);
   CS_WRITE_U32(aBuf + 0, CHUNK_STORE_MAGIC);
   CS_WRITE_U32(aBuf + 4, CHUNK_STORE_VERSION);
-  memcpy(aBuf + 8, cs->root.data, PROLLY_HASH_SIZE);
+  /* offset 8: reserved (was root_hash) */
   CS_WRITE_U32(aBuf + 28, (u32)cs->nChunks);
   CS_WRITE_I64(aBuf + 32, cs->iIndexOffset);
   CS_WRITE_U32(aBuf + 40, (u32)cs->nIndexSize);
   /* offset 44: reserved (was catalog_hash, removed in v7) */
-  memcpy(aBuf + 64, cs->headCommit.data, PROLLY_HASH_SIZE);
+  /* offset 64: reserved (was headCommit_hash) */
   CS_WRITE_I64(aBuf + 84, cs->iWalOffset);
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
   memcpy(aBuf + 124, cs->workingState.data, PROLLY_HASH_SIZE);
@@ -371,12 +371,12 @@ static int csReadManifest(ChunkStore *cs){
   if( magic != CHUNK_STORE_MAGIC ) return SQLITE_NOTADB;
   if( version != CHUNK_STORE_VERSION ) return SQLITE_NOTADB;
 
-  memcpy(cs->root.data, aBuf + 8, PROLLY_HASH_SIZE);
+  /* offset 8: reserved (was root_hash) */
   cs->nChunks = (int)CS_READ_U32(aBuf + 28);
   cs->iIndexOffset = CS_READ_I64(aBuf + 32);
   cs->nIndexSize = (int)CS_READ_U32(aBuf + 40);
   /* offset 44: reserved (was catalog_hash, removed in v7) */
-  memcpy(cs->headCommit.data, aBuf + 64, PROLLY_HASH_SIZE);
+  /* offset 64: reserved (was headCommit_hash) */
   cs->iWalOffset = CS_READ_I64(aBuf + 84);
   memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
   memcpy(cs->workingState.data, aBuf + 124, PROLLY_HASH_SIZE);
@@ -544,9 +544,9 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         u8 *m = walData + pos;
         u32 magic = CS_READ_U32(m);
         if( magic == CHUNK_STORE_MAGIC ){
-          memcpy(cs->root.data, m + 8, PROLLY_HASH_SIZE);
+          /* offset 8: reserved (was root_hash) */
           cs->nChunks = (int)CS_READ_U32(m + 28);
-          memcpy(cs->headCommit.data, m + 64, PROLLY_HASH_SIZE);
+          /* offset 64: reserved (was headCommit_hash) */
           memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
           memcpy(cs->workingState.data, m + 124, PROLLY_HASH_SIZE);
           /* Don't update iWalOffset/iIndexOffset from WAL root records --
@@ -669,7 +669,6 @@ int chunkStoreOpen(
     cs->isMemory = 1;
     cs->zFilename = sqlite3_mprintf(":memory:");
     if( cs->zFilename==0 ) return SQLITE_NOMEM;
-    memset(&cs->root, 0, sizeof(cs->root));
     cs->nChunks = 0;
     cs->iIndexOffset = 0;
     cs->nIndexSize = 0;
@@ -754,16 +753,6 @@ int chunkStoreOpen(
         return rc;
       }
     }
-    /* Consistency check: a database with commits must have refs. If
-    ** headCommit is set but no branches loaded, the refs are missing
-    ** (zeroed hash or unreadable chunk). This is corruption. */
-    if( !prollyHashIsEmpty(&cs->headCommit) && cs->nBranches==0 ){
-      csCloseFile(cs->pFile);
-      cs->pFile = 0;
-      sqlite3_free(cs->zFilename);
-      cs->zFilename = 0;
-      return SQLITE_CORRUPT;
-    }
     if( !cs->zDefaultBranch ) cs->zDefaultBranch = sqlite3_mprintf("main");
   }else{
     if( !(flags & SQLITE_OPEN_CREATE) ){
@@ -771,7 +760,6 @@ int chunkStoreOpen(
       cs->zFilename = 0;
       return SQLITE_CANTOPEN;
     }
-    memset(&cs->root, 0, sizeof(cs->root));
     cs->nChunks = 0;
     cs->iIndexOffset = 0;
     cs->nIndexSize = 0;
@@ -803,22 +791,6 @@ int chunkStoreClose(ChunkStore *cs){
   csFreeTracking(cs);
   memset(cs, 0, sizeof(*cs));
   return SQLITE_OK;
-}
-
-void chunkStoreGetRoot(ChunkStore *cs, ProllyHash *pRoot){
-  memcpy(pRoot, &cs->root, sizeof(ProllyHash));
-}
-
-void chunkStoreSetRoot(ChunkStore *cs, const ProllyHash *pRoot){
-  memcpy(&cs->root, pRoot, sizeof(ProllyHash));
-}
-
-void chunkStoreGetHeadCommit(ChunkStore *cs, ProllyHash *pHead){
-  memcpy(pHead, &cs->headCommit, sizeof(ProllyHash));
-}
-
-void chunkStoreSetHeadCommit(ChunkStore *cs, const ProllyHash *pHead){
-  memcpy(&cs->headCommit, pHead, sizeof(ProllyHash));
 }
 
 void chunkStoreGetWorkingState(ChunkStore *cs, ProllyHash *pState){
@@ -1568,9 +1540,8 @@ static int csCommitToFile(ChunkStore *cs){
   rc = cs->pFile->pMethods->xFileSize(cs->pFile, &fileSize);
   if( rc != SQLITE_OK ) goto commit_done;
 
-  /* Detect concurrent writer: if file grew, re-read WAL and check for conflict. */
+  /* Detect concurrent writer: if file grew, re-read WAL to pick up new chunks. */
   if( fileSize > cs->iFileSize && hadFile ){
-    ProllyHash rootBefore = cs->root;
     sqlite3_free(cs->pWalData);
     cs->pWalData = 0;
     cs->nWalData = 0;
@@ -1580,10 +1551,6 @@ static int csCommitToFile(ChunkStore *cs){
       csPendHTClear(cs);
       csReplayWalRegion(cs, 1);
       cs->nPending = savePending;
-    }
-    if( prollyHashCompare(&rootBefore, &cs->root) != 0 ){
-      rc = SQLITE_BUSY_SNAPSHOT;
-      goto commit_done;
     }
   }
 
@@ -1718,7 +1685,7 @@ void chunkStoreRollback(ChunkStore *cs){
 }
 
 int chunkStoreIsEmpty(ChunkStore *cs){
-  return prollyHashIsEmpty(&cs->root);
+  return cs->nBranches == 0 && prollyHashIsEmpty(&cs->refsHash);
 }
 
 int chunkStoreReloadRefs(ChunkStore *cs){

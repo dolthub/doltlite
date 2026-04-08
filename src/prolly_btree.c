@@ -212,9 +212,8 @@ struct BtCursorOps {
 };
 
 /* Per-connection Btree handle implementing the SQLite Btree interface.
-** 'root' / 'committedRoot': current vs transaction-start prolly root hashes.
 ** 'aTables': sorted catalog mapping table numbers to prolly tree roots.
-** 'aSavepoint' + 'aSavepointTables': savepoint stack for ROLLBACK TO.
+** 'aSavepointTables': savepoint stack for ROLLBACK TO.
 ** 'aCommittedTables': catalog snapshot at BEGIN for full transaction rollback.
 ** 'pOps': dispatches to prolly or original SQLite btree implementation. */
 struct Btree {
@@ -230,9 +229,6 @@ struct Btree {
   BtLock lock;
   u64 nSeek;
 
-  ProllyHash root;           /* Current (in-flight) prolly tree root */
-  ProllyHash committedRoot;  /* Root at last commit -- restored on rollback */
-
   struct TableEntry *aTables; /* Sorted by iTable for binary search */
   int nTables;
   int nTablesAlloc;
@@ -245,10 +241,8 @@ struct Btree {
 
   u8 inTransaction;
 
-  /* Savepoint stack: aSavepoint[i] = prolly root hash at savepoint i,
-  ** aSavepointTables[i] = snapshot of aTables + pending edit counts.
-  ** On rollback, roots are restored and MutMap entries truncated. */
-  ProllyHash *aSavepoint;
+  /* Savepoint stack: aSavepointTables[i] = snapshot of aTables + pending
+  ** edit counts. On rollback, roots are restored and MutMap entries truncated. */
   int nSavepoint;
   int nSavepointAlloc;
 
@@ -1147,11 +1141,7 @@ static int pushSavepoint(Btree *pBtree){
 
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
     int nNew = pBtree->nSavepointAlloc ? pBtree->nSavepointAlloc*2 : 8;
-    ProllyHash *aNewH;
     struct SavepointTableState *aNewT;
-    aNewH = sqlite3_realloc(pBtree->aSavepoint, nNew*(int)sizeof(ProllyHash));
-    if( !aNewH ) return SQLITE_NOMEM;
-    pBtree->aSavepoint = aNewH;
     aNewT = sqlite3_realloc(pBtree->aSavepointTables, nNew*(int)sizeof(struct SavepointTableState));
     if( !aNewT ) return SQLITE_NOMEM;
     pBtree->aSavepointTables = aNewT;
@@ -1159,9 +1149,6 @@ static int pushSavepoint(Btree *pBtree){
     pBtree->nSavepointTablesAlloc = nNew;
   }
 
-  pBtree->aSavepoint[pBtree->nSavepoint] = pBtree->root;
-
-  
   pState = &pBtree->aSavepointTables[pBtree->nSavepoint];
   pState->aTables = 0;
   pState->aPendingCount = 0;
@@ -1308,9 +1295,6 @@ int sqlite3BtreeOpen(
     return rc;
   }
 
-  chunkStoreGetRoot(&pBt->store, &p->root);
-  p->committedRoot = p->root;
-
   pBt->pPagerShim = pagerShimCreate(pVfs, zFilename, pBt->store.pFile);
   if( !pBt->pPagerShim ){
     prollyCacheFree(&pBt->cache);
@@ -1404,8 +1388,7 @@ catalog_loaded:
     if( chunkStoreFindBranch(&pBt->store, defBranch, &branchCommit)==SQLITE_OK ){
       memcpy(&p->headCommit, &branchCommit, sizeof(ProllyHash));
     }else{
-      
-      chunkStoreGetHeadCommit(&pBt->store, &p->headCommit);
+      memset(&p->headCommit, 0, sizeof(ProllyHash));
     }
     
     {
@@ -1455,7 +1438,6 @@ static int prollyBtreeClose(Btree *p){
     p->pSchema = 0;
   }
   sqlite3_free(p->aTables);
-  sqlite3_free(p->aSavepoint);
   if( p->aSavepointTables ){
     int i;
     for(i=0; i<p->nSavepoint; i++){
@@ -1491,9 +1473,6 @@ static int prollyBtreeNewDb(Btree *p){
   memset(p->aMeta, 0, sizeof(p->aMeta));
   p->aMeta[BTREE_FILE_FORMAT] = 4;
   p->aMeta[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
-
-  memset(&p->root, 0, sizeof(ProllyHash));
-  memset(&p->committedRoot, 0, sizeof(ProllyHash));
 
   if( !findTable(p, 1) ){
     if( !addTable(p, 1, BTREE_INTKEY) ){
@@ -1838,7 +1817,6 @@ static int btreeRefreshFromDisk(Btree *p){
     memset(&catHash, 0, sizeof(catHash));
 
     btreeReadWorkingCatalog(&pBt->store, zBr, &catHash);
-    chunkStoreGetRoot(&pBt->store, &p->root);
 
     if( !prollyHashIsEmpty(&catHash) ){
       u8 *catData = 0;
@@ -1850,7 +1828,6 @@ static int btreeRefreshFromDisk(Btree *p){
         if( rc!=SQLITE_OK ) return rc;
       }
     }
-    p->committedRoot = p->root;
     p->iBDataVersion++;
     if( pBt->pPagerShim ){
       pBt->pPagerShim->iDataVersion++;
@@ -1924,7 +1901,6 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       }
     }
     p->iCommittedNextTable = p->iNextTable;
-    p->committedRoot = p->root;
     p->inTrans = TRANS_WRITE;
     p->inTransaction = TRANS_WRITE;
     
@@ -2004,11 +1980,9 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
         if( rc!=SQLITE_OK ) return rc;
       }
     }
-    chunkStoreSetRoot(&pBt->store, &p->root);
     /* Step 4: atomic manifest write */
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
-      p->committedRoot = p->root;
       p->iBDataVersion++;
       if( pBt->pPagerShim ){
         pBt->pPagerShim->iDataVersion++;
@@ -2081,8 +2055,6 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       p->aCommittedTables = 0;
       p->nCommittedTables = 0;
     }
-    p->root = p->committedRoot;
-    
     {
       BtCursor *pC;
       for(pC = pBt->pCursor; pC; pC = pC->pNext){
@@ -2150,7 +2122,6 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
     if( iSavepoint>=0 && iSavepoint<p->nSavepoint
      && p->aSavepointTables ){
       struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
-      p->root = p->aSavepoint[iSavepoint];
       if( pState->aTables ){
         /* Restore table roots and truncate MutMap entries */
         {
@@ -2200,7 +2171,6 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
       invalidateCursors(pBt, 0, SQLITE_ABORT);
       invalidateSchema(p);
     } else if( iSavepoint>=0 && iSavepoint>=p->nSavepoint ){
-      p->root = p->committedRoot;
       { int rc2 = restoreFromCommitted(p); if( rc2 ) return rc2; }
       invalidateCursors(pBt, 0, SQLITE_ABORT);
       invalidateSchema(p);
@@ -2209,7 +2179,6 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
       for(j=0; j<p->nSavepoint; j++){
         freeSavepointTables(&p->aSavepointTables[j]);
       }
-      p->root = p->committedRoot;
       { int rc2 = restoreFromCommitted(p); if( rc2 ) return rc2; }
       p->nSavepoint = 0;
       invalidateCursors(pBt, 0, SQLITE_ABORT);
@@ -4315,8 +4284,6 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
   }
 
   memcpy(pTo->aMeta, pFrom->aMeta, sizeof(pTo->aMeta));
-  pTo->root = pFrom->root;
-  pTo->committedRoot = pFrom->committedRoot;
   pTo->iNextTable = pFrom->iNextTable;
 
   pTo->iBDataVersion++;
