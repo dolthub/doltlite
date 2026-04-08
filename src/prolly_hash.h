@@ -1,4 +1,4 @@
-
+/* 20-byte content hash and rolling hash for content-defined chunking. */
 #ifndef SQLITE_PROLLY_HASH_H
 #define SQLITE_PROLLY_HASH_H
 

@@ -1,4 +1,4 @@
-
+/* Three-way diff for merge: diff(ancestor,ours) + diff(ancestor,theirs) merge-walked by key. */
 #ifndef SQLITE_PROLLY_THREE_WAY_DIFF_H
 #define SQLITE_PROLLY_THREE_WAY_DIFF_H
 

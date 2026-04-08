@@ -1,4 +1,4 @@
-
+/* B-tree-style cursor over a prolly tree with save/restore for concurrent mutation. */
 #ifndef SQLITE_PROLLY_CURSOR_H
 #define SQLITE_PROLLY_CURSOR_H
 

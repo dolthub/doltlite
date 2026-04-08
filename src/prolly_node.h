@@ -1,4 +1,5 @@
-
+/* Prolly tree node: [magic:4][level:1][count:2][flags:1] + offset arrays + data.
+** INTKEY keys are 8-byte big-endian (sign-bit-flipped); values are records or child hashes. */
 #ifndef SQLITE_PROLLY_NODE_H
 #define SQLITE_PROLLY_NODE_H
 

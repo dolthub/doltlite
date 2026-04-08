@@ -1,4 +1,4 @@
-
+/* Two-tree diff: walks cursors in parallel to emit ADD/DELETE/MODIFY changes. */
 #ifndef SQLITE_PROLLY_DIFF_H
 #define SQLITE_PROLLY_DIFF_H
 

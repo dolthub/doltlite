@@ -251,6 +251,10 @@ static int emitBothSides(
   return xCallback(pCtx, &change);
 }
 
+/* Three-way diff: diff(ancestor,ours) and diff(ancestor,theirs) collected
+** into sorted arrays, then merge-walked in key order. Same-key entries are
+** classified as convergent (identical change), MM conflict (both modified
+** differently), or DM conflict (one deleted, other modified). */
 int prollyThreeWayDiff(
   ChunkStore *pStore,
   ProllyCache *pCache,

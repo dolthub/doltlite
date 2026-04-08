@@ -1,4 +1,4 @@
-
+/* Shim that implements the Pager interface on top of ChunkStore instead of btree pages. */
 #ifndef SQLITE_PAGER_SHIM_H
 #define SQLITE_PAGER_SHIM_H
 

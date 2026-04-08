@@ -1,11 +1,22 @@
-
+/*
+** Prolly tree node binary format (all multi-byte integers little-endian):
+**   [magic:4 LE "DNOP"] [level:1] [count:2 LE] [flags:1]   = 8-byte header
+**   [keyOffsets: u32 LE * (count+1)]   -- cumulative byte offsets into key data
+**   [valOffsets: u32 LE * (count+1)]   -- cumulative byte offsets into val data
+**   [key data: variable]
+**   [value data: variable]
+**
+** For INTKEY tables, keys are 8-byte big-endian encoded i64 (see encodeI64BE
+** in prolly_mutate.c). For internal nodes (level>0), values are 20-byte
+** child hashes. Leaf values are SQLite record-format blobs.
+*/
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_node.h"
 #include "prolly_encoding.h"
 #include <string.h>
 
-#define PROLLY_HDR_SIZE       8   
+#define PROLLY_HDR_SIZE       8   /* magic(4) + level(1) + count(2) + flags(1) */
 #define PROLLY_MAGIC_OFF      0
 #define PROLLY_LEVEL_OFF      4
 #define PROLLY_COUNT_OFF      5
@@ -99,7 +110,8 @@ i64 prollyNodeIntKey(const ProllyNode *pNode, int i){
   assert( i >= 0 && i < (int)pNode->nItems );
   u32 off = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
   const u8 *p = pNode->pKeyData + off;
-  
+  /* Decode big-endian sort key back to signed i64. Keys are stored big-endian
+  ** with sign bit flipped (see encodeI64BE) so memcmp gives signed order. */
   u64 u = ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40) | ((u64)p[3]<<32)
          | ((u64)p[4]<<24) | ((u64)p[5]<<16) | ((u64)p[6]<<8) | (u64)p[7];
   return (i64)(u ^ ((u64)1 << 63));  

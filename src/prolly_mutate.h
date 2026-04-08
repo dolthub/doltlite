@@ -1,4 +1,4 @@
-
+/* Tree mutation: apply sorted edit map to produce a new content-addressed root. */
 #ifndef SQLITE_PROLLY_MUTATE_H
 #define SQLITE_PROLLY_MUTATE_H
 

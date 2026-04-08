@@ -213,6 +213,10 @@ static int mergeLeaf(
   return SQLITE_OK;
 }
 
+/* Streaming merge: skip unmodified subtrees by re-linking their hash at the
+** parent level (prollyChunkerAddAtLevel). Only descend into children whose
+** key range overlaps pending edits. O(M*L) when M << N. Falls through to
+** mergeWalk for height-0 (single-leaf) trees. */
 static int streamingMerge(
   ProllyMutator *pMut
 ){
@@ -268,7 +272,10 @@ static int streamingMerge(
                            pBoundKey, nBoundKey, iBoundKey)
        && (chunker.nLevels == 0
            || chunker.aLevel[0].builder.nItems == 0) ){
-        
+        /* No edits AND level-0 builder is empty (at chunk boundary).
+        ** Re-link child hash at parent level to skip this subtree.
+        ** Cannot skip if level-0 has pending items: that would break
+        ** chunk boundary alignment with the new tree. */
         rc = prollyChunkerAddAtLevel(&chunker, rootNode.level,
                                       pBoundKey, nBoundKey,
                                       pChildVal, nChildVal);
@@ -513,8 +520,10 @@ merge_cleanup:
   return rc;
 }
 
+/* Apply pending edits to produce a new tree root. Chooses between
+** streamingMerge (skips unchanged subtrees, good when M << N) and
+** mergeWalk (full scan, better when M ~ N) based on estimated tree size. */
 int prollyMutateFlush(ProllyMutator *pMut){
-  
   if( prollyMutMapIsEmpty(pMut->pEdits) ){
     memcpy(&pMut->newRoot, &pMut->oldRoot, sizeof(ProllyHash));
     return SQLITE_OK;

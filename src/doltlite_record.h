@@ -1,4 +1,4 @@
-
+/* SQLite record-format decoding helpers and varint/serial-type utilities. */
 #ifndef DOLTLITE_RECORD_H
 #define DOLTLITE_RECORD_H
 

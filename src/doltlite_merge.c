@@ -1,4 +1,18 @@
-
+/*
+** Three-way catalog merge. Algorithm:
+**  1. Load ancestor/ours/theirs catalogs (table lists).
+**  2. Pass 1 (mergeCatalogPass1): for each table in "ours", compare against
+**     ancestor and theirs. If both sides changed the same table, perform a
+**     row-level three-way merge via prollyThreeWayDiff, attempting per-field
+**     cell merge for modify/modify conflicts before recording true conflicts.
+**  3. Pass 2 (mergeCatalogPass2): add tables that exist only in "theirs"
+**     (new tables added on the other branch).
+**  4. Serialize the merged catalog and any conflict rows.
+**
+** Row-level merge: LEFT changes (ours) are already in the "ours" tree, so
+** only RIGHT changes (theirs) need to be applied as edits. Convergent
+** changes (both sides made the same edit) are no-ops.
+*/
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -269,7 +283,8 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     case THREE_WAY_LEFT_ADD:
     case THREE_WAY_LEFT_MODIFY:
     case THREE_WAY_LEFT_DELETE:
-      
+      /* Left (ours) changes are already present in the "ours" tree that
+      ** we are mutating, so no edits needed. */
       break;
 
     case THREE_WAY_RIGHT_ADD:
@@ -297,7 +312,9 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       break;
 
     case THREE_WAY_CONFLICT_MM: {
-      
+      /* Both sides modified the same row. Try per-field cell merge: if each
+      ** column was changed by at most one side, merge succeeds. Otherwise
+      ** fall through to record a conflict (intentional fallthrough to DM). */
       u8 *pMerged = 0;
       int nMerged = 0;
 
@@ -312,14 +329,13 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       }
 
       if( pMerged ){
-        
         rc = prollyMutMapInsert(ctx->pEdits,
             pChange->pKey, pChange->nKey, pChange->intKey,
             pMerged, nMerged);
         sqlite3_free(pMerged);
         break;
       }
-      
+      /* FALLTHROUGH: cell merge failed, record as conflict */
     }
     case THREE_WAY_CONFLICT_DM: {
       

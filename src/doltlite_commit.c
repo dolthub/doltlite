@@ -1,4 +1,9 @@
-
+/*
+** Commit V2 wire format (all multi-byte integers little-endian):
+**   [version:1] [nParents:1] [parents:20*N] [catalogHash:20]
+**   [timestamp:8] [nameLen:2][name] [emailLen:2][email] [msgLen:2][msg]
+** V2 has no rootHash field; rootHash is zeroed on deserialize.
+*/
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_commit.h"

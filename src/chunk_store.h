@@ -1,3 +1,21 @@
+/*
+** Content-addressed chunk store backed by a single file.
+**
+** File layout:
+**   [Manifest: 168 bytes at offset 0]
+**     magic(4) + version(4) + root_hash(20) + nChunks(4) +
+**     index_offset(8) + index_size(4) + catalog_hash(20) +
+**     head_commit_hash(20) + wal_offset(8) + reserved(12) +
+**     refs_hash(20) + reserved(44)
+**   [Chunk data region: after manifest, before index]
+**     Each chunk stored as: length_le32(4) + data(length)
+**   [Sorted index: nChunks * 32-byte entries]
+**     Each entry: hash(20) + file_offset(8) + data_size(4)
+**   [WAL region: iWalOffset to EOF]
+**     Append-only log of chunk and root records for crash safety.
+**     chunk record: tag(0x01) + hash(20) + len_le32(4) + data(len)
+**     root record:  tag(0x02) + manifest_snapshot(168)
+*/
 
 #ifndef SQLITE_CHUNK_STORE_H
 #define SQLITE_CHUNK_STORE_H
@@ -5,11 +23,13 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 
-#define CHUNK_STORE_MAGIC 0x444C5443  
+#define CHUNK_STORE_MAGIC 0x444C5443  /* "DLTC" in little-endian */
 #define CHUNK_STORE_VERSION 6
 #define CHUNK_MANIFEST_SIZE 168
-#define CHUNK_INDEX_ENTRY_SIZE 32     
+#define CHUNK_INDEX_ENTRY_SIZE 32     /* 20-byte hash + 8-byte offset + 4-byte size */
 
+/* Working set blob layout:
+**   [version:1][staged_hash:20][is_merging:1][merge_commit:20][conflicts:20] */
 #define WS_VERSION_SIZE     1
 #define WS_STAGED_OFF       WS_VERSION_SIZE
 #define WS_MERGING_OFF      (WS_STAGED_OFF + PROLLY_HASH_SIZE)
@@ -21,100 +41,95 @@ typedef struct ChunkStore ChunkStore;
 typedef struct ChunkIndexEntry ChunkIndexEntry;
 typedef struct ConflictEntry ConflictEntry;
 
+/* Three-way merge conflict. "Ours" is the current working row, not stored here. */
 struct ConflictEntry {
-  u8 *pKey;           
-  int nKey;           
-  u8 *pBaseVal;       
-  int nBaseVal;       
-  u8 *pTheirVal;      
-  int nTheirVal;      
+  u8 *pKey;
+  int nKey;
+  u8 *pBaseVal;       /* Ancestor value (NULL if row didn't exist in base) */
+  int nBaseVal;
+  u8 *pTheirVal;      /* Their value (NULL if deleted by theirs) */
+  int nTheirVal;
 };
 
 struct ChunkIndexEntry {
   ProllyHash hash;
-  i64 offset;     
-  int size;       
+  i64 offset;      /* File offset of the 4-byte length prefix, or negative for WAL-encoded offset */
+  int size;        /* Data size (excludes the 4-byte length prefix) */
 };
 
 struct ChunkStore {
-  char *zFilename;           
-  sqlite3_file *pFile;       
-  sqlite3_vfs *pVfs;         
-  ProllyHash root;           
-  ProllyHash catalog;        
-  ProllyHash headCommit;     
-  ProllyHash refsHash;       
+  char *zFilename;
+  sqlite3_file *pFile;
+  sqlite3_vfs *pVfs;
+  ProllyHash root;
+  ProllyHash catalog;
+  ProllyHash headCommit;
+  ProllyHash refsHash;
 
-  
+  /* These fields come from the per-branch WorkingSet, not from the manifest. */
   ProllyHash stagedCatalog;
   u8 isMerging;
   ProllyHash mergeCommitHash;
   ProllyHash conflictsCatalogHash;
 
-  
   struct BranchRef {
     char *zName;
     ProllyHash commitHash;
     ProllyHash workingSetHash;
   } *aBranches;
   int nBranches;
-  char *zDefaultBranch;      
+  char *zDefaultBranch;
 
-  
   struct TagRef {
     char *zName;
     ProllyHash commitHash;
   } *aTags;
   int nTags;
 
-  
   struct RemoteRef {
-    char *zName;    
-    char *zUrl;     
+    char *zName;
+    char *zUrl;
   } *aRemotes;
   int nRemotes;
 
-  
   struct TrackingBranch {
-    char *zRemote;  
-    char *zBranch;  
+    char *zRemote;
+    char *zBranch;
     ProllyHash commitHash;
   } *aTracking;
   int nTracking;
 
-  
-  int nChunks;               
-  i64 iIndexOffset;          
-  int nIndexSize;            
-  i64 iWalOffset;            
-  i64 iFileSize;             
+  int nChunks;
+  i64 iIndexOffset;
+  int nIndexSize;
+  i64 iWalOffset;
+  i64 iFileSize;             /* Last-known file size; used to detect concurrent writers */
 
-  
-  ChunkIndexEntry *aIndex;   
+  ChunkIndexEntry *aIndex;   /* Committed index, sorted by hash for binary search */
   int nIndex;
   int nIndexAlloc;
 
-  
+  /* Pending (uncommitted) chunks. Offsets point into pWriteBuf at the length prefix. */
   ChunkIndexEntry *aPending;
   int nPending;
   int nPendingAlloc;
-  int *aPendingHT;           
-  int *aPendingHTNext;       
-  int nPendingHTBuilt;       
-  int nPendingHTNextAlloc;   
-  int nPendingHTSize;        
-  u8 *pWriteBuf;
+  int *aPendingHT;           /* Hash table buckets: bucket -> aPending index, -1 = empty */
+  int *aPendingHTNext;       /* Collision chains: aPending index -> next index, -1 = end */
+  int nPendingHTBuilt;       /* How many aPending entries are indexed in the hash table */
+  int nPendingHTNextAlloc;
+  int nPendingHTSize;        /* Bucket count (always a power of 2) */
+  u8 *pWriteBuf;             /* Serialized pending chunks: [4-byte LE length][data]... */
   i64 nWriteBuf;
   i64 nWriteBufAlloc;
 
   u8 readOnly;
   u8 isMemory;
-  u8 snapshotPinned;         
-  i64 nCommittedWriteBuf;
+  u8 snapshotPinned;         /* When set, RefreshIfChanged becomes a no-op */
+  i64 nCommittedWriteBuf;    /* In-memory mode: committed portion of pWriteBuf (survives rollback) */
 
-  
-  u8 *pWalData;              
-  i64 nWalData;              
+  /* Cached copy of the on-disk WAL region so chunk reads don't hit the file */
+  u8 *pWalData;
+  i64 nWalData;
 };
 
 int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
@@ -171,9 +186,11 @@ int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aR
 
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash);
 
+/* Caller must sqlite3_free(*ppData). Returns SQLITE_NOTFOUND if not present. */
 int chunkStoreGet(ChunkStore *cs, const ProllyHash *hash,
                   u8 **ppData, int *pnData);
 
+/* Data is buffered in memory until chunkStoreCommit. */
 int chunkStorePut(ChunkStore *cs, const u8 *pData, int nData,
                   ProllyHash *pHash);
 
@@ -198,4 +215,4 @@ void chunkStoreClearMergeState(ChunkStore *cs);
 void chunkStoreGetConflictsCatalog(ChunkStore *cs, ProllyHash *pHash);
 void chunkStoreSetConflictsCatalog(ChunkStore *cs, const ProllyHash *pHash);
 
-#endif 
+#endif /* SQLITE_CHUNK_STORE_H */

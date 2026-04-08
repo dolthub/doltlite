@@ -1,4 +1,4 @@
-
+/* BLOBKEY sort key encoding: type-prefixed (NULL/NUM/TEXT/BLOB) for memcmp ordering. */
 #ifndef SQLITE_SORTKEY_H
 #define SQLITE_SORTKEY_H
 

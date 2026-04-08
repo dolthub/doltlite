@@ -76,6 +76,9 @@ static int flushLevel(ProllyChunker *ch, int level){
   if( rc!=SQLITE_OK ) return rc;
 
   
+  /* Propagate upward: add (lastKey -> childHash) entry to parent level.
+  ** The parent's key is the last key from this child, matching prolly tree
+  ** convention where internal keys are the max key of their subtree. */
   if( level + 1 < PROLLY_CURSOR_MAX_DEPTH ){
     rc = addToLevel(ch, level + 1,
                     pLastKey, nLastKey,
@@ -148,6 +151,10 @@ static int addToLevel(ProllyChunker *ch, int level,
   pLevel->nBytes += nKey + nVal;
 
   
+  /* Content-defined chunking: split when the rolling hash of key bytes
+  ** matches PROLLY_CHUNK_PATTERN (after reaching PROLLY_CHUNK_MIN bytes).
+  ** This makes boundaries depend on content, not position, so insertions
+  ** only invalidate nearby chunks rather than shifting all subsequent ones. */
   if( pLevel->nBytes >= PROLLY_CHUNK_MIN ){
     int atBoundary = prollyRollingHashAtBoundary(&pLevel->rh,
                                                   PROLLY_CHUNK_PATTERN);
@@ -180,12 +187,14 @@ int prollyChunkerAdd(ProllyChunker *ch,
   return SQLITE_OK;
 }
 
+/* Flush remaining items bottom-up. At each level, if a parent level has
+** pending items, finalize this level's node and add its hash to the parent.
+** The highest level with items becomes the tree root. */
 int prollyChunkerFinish(ProllyChunker *ch){
   int rc;
   int level;
   int maxLevel;
 
-  
   if( ch->nLevels == 0 ){
     memset(&ch->root, 0, sizeof(ProllyHash));
     return SQLITE_OK;

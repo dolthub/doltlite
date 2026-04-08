@@ -80,6 +80,10 @@ static int isProllyNodeChunk(const u8 *data, int nData){
   return m == PROLLY_NODE_MAGIC_VAL;
 }
 
+/* BFS from all roots (manifest hashes + all branch/tag refs + working sets)
+** to mark every reachable chunk. Understands three chunk types: prolly nodes
+** (recurse into children), commits (follow parents + catalog), and catalog
+** blobs (follow table root hashes). */
 static int gcMarkReachable(
   ChunkStore *cs,
   ProllyHashSet *marked
@@ -397,6 +401,8 @@ static int gcRewriteFile(
 
       if( rc==SQLITE_OK ){
         
+        /* Close the old file before rename. The file handle must be released
+        ** first or rename() will fail on Windows. After rename, reopen. */
         if( cs->pFile ){
           sqlite3OsCloseFree(cs->pFile);
           cs->pFile = 0;

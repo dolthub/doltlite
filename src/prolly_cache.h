@@ -1,4 +1,4 @@
-
+/* LRU cache for parsed prolly tree nodes, keyed by content hash. Refcounted. */
 #ifndef SQLITE_PROLLY_CACHE_H
 #define SQLITE_PROLLY_CACHE_H
 

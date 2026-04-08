@@ -150,6 +150,9 @@ static int diffSerialTypeSize(u64 st){
   return 0;
 }
 
+/* Compare two SQLite record-format values field-by-field. Returns 1 if
+** equal, 0 otherwise. Needed because records with identical logical content
+** can have different total byte lengths due to varint encoding differences. */
 int diffRecordsEqualFieldwise(
   const u8 *pA, int nA,
   const u8 *pB, int nB
@@ -408,6 +411,10 @@ static int diffLeaves(
   return rc;
 }
 
+/* Recursive node-level diff. Identical child hashes are skipped (structural
+** sharing). When internal keys align, recurse into changed subtrees. When
+** keys diverge (tree shape changed), fall back to a full cursor walk from
+** pOldRoot/pNewRoot -- this handles inserts/deletes that shifted boundaries. */
 static int diffNodes(
   ChunkStore *pStore, ProllyCache *pCache,
   const ProllyHash *pOldHash, const ProllyHash *pNewHash,

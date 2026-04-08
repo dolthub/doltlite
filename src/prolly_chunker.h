@@ -1,4 +1,4 @@
-
+/* Content-defined chunking: rolling-hash-based tree builder (min 512, target 4K, max 16K). */
 #ifndef SQLITE_PROLLY_CHUNKER_H
 #define SQLITE_PROLLY_CHUNKER_H
 

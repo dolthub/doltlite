@@ -377,7 +377,10 @@ static void doltliteCommitFunc(
     }
   }
 
-  
+  /* Optimistic concurrency: reject if another connection committed to this
+  ** branch since our session last read it. Session HEAD was captured at
+  ** checkout/open; if it no longer matches the branch tip in shared refs,
+  ** someone else committed and our staged catalog is based on stale state. */
   {
     const char *branch = doltliteGetSessionBranch(db);
     ProllyHash branchTip;
@@ -831,7 +834,7 @@ static void doltliteMergeFunc(
       char msg[256];
 
       memset(&mergeCommit, 0, sizeof(mergeCommit));
-      
+      /* Merge commit has two parents: ours (index 0) and theirs (index 1) */
       mergeCommit.aParents[0] = ourHead;
       mergeCommit.aParents[1] = theirHead;
       mergeCommit.nParents = 2;

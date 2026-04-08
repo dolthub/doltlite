@@ -1,4 +1,4 @@
-
+/* Sorted map of pending INSERT/DELETE edits, consumed by prolly_mutate. */
 #ifndef SQLITE_PROLLY_MUTMAP_H
 #define SQLITE_PROLLY_MUTMAP_H
 
