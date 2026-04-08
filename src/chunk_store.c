@@ -343,6 +343,7 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memcpy(aBuf + 64, cs->headCommit.data, PROLLY_HASH_SIZE);
   CS_WRITE_I64(aBuf + 84, cs->iWalOffset);
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
+  memcpy(aBuf + 124, cs->workingState.data, PROLLY_HASH_SIZE);
 }
 
 static void csSerializeIndexEntry(const ChunkIndexEntry *e, u8 *aBuf){
@@ -378,6 +379,7 @@ static int csReadManifest(ChunkStore *cs){
   memcpy(cs->headCommit.data, aBuf + 64, PROLLY_HASH_SIZE);
   cs->iWalOffset = CS_READ_I64(aBuf + 84);
   memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
+  memcpy(cs->workingState.data, aBuf + 124, PROLLY_HASH_SIZE);
 
   return SQLITE_OK;
 }
@@ -547,6 +549,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
           memcpy(cs->catalog.data, m + 44, PROLLY_HASH_SIZE);
           memcpy(cs->headCommit.data, m + 64, PROLLY_HASH_SIZE);
           memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
+          memcpy(cs->workingState.data, m + 124, PROLLY_HASH_SIZE);
           /* Don't update iWalOffset/iIndexOffset from WAL root records --
           ** those fields describe the compacted region and only change on GC. */
         }
@@ -825,6 +828,14 @@ void chunkStoreGetHeadCommit(ChunkStore *cs, ProllyHash *pHead){
 
 void chunkStoreSetHeadCommit(ChunkStore *cs, const ProllyHash *pHead){
   memcpy(&cs->headCommit, pHead, sizeof(ProllyHash));
+}
+
+void chunkStoreGetWorkingState(ChunkStore *cs, ProllyHash *pState){
+  memcpy(pState, &cs->workingState, sizeof(ProllyHash));
+}
+
+void chunkStoreSetWorkingState(ChunkStore *cs, const ProllyHash *pState){
+  memcpy(&cs->workingState, pState, sizeof(ProllyHash));
 }
 
 void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged){
@@ -1806,12 +1817,27 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     rc = sqlite3OsFileSize(cs->pFile, &fileSize);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
     if( fileSize > cs->iFileSize ){
-      /* File grew from another writer; re-read WAL to pick up new chunks. */
+      /* File grew from another writer; re-read WAL to pick up new chunks.
+      ** Must also clear WAL-offset entries from the index because committed
+      ** chunks were appended as raw data to pWalData (at positions that won't
+      ** match the on-disk WAL format after re-read). Keeping the on-disk
+      ** sorted index entries is safe since their file offsets don't change. */
       sqlite3_free(cs->pWalData);
       cs->pWalData = 0;
       cs->nWalData = 0;
       cs->nPending = 0;
-    csPendHTClear(cs);
+      csPendHTClear(cs);
+      /* Remove WAL-offset entries from aIndex (keep file-offset entries). */
+      {
+        int rd, wr;
+        for(rd=0, wr=0; rd<cs->nIndex; rd++){
+          if( !csIsWalOffset(cs->aIndex[rd].offset) ){
+            if( wr!=rd ) cs->aIndex[wr] = cs->aIndex[rd];
+            wr++;
+          }
+        }
+        cs->nIndex = wr;
+      }
       rc = csReplayWal(cs);
       if( rc!=SQLITE_OK ) return rc;
       cs->iFileSize = fileSize;

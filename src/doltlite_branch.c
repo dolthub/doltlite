@@ -202,10 +202,15 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     
     chunkStoreSetDefaultBranch(cs, zBranch);
     chunkStoreSetHeadCommit(cs, &targetCommit);
-  }
-  {
-    extern int doltliteSaveWorkingSet(sqlite3*);
-    doltliteSaveWorkingSet(db);
+
+    {
+      extern int doltliteSaveWorkingSet(sqlite3*);
+      extern int doltliteUpdateBranchWorkingState(sqlite3*, const char*, const ProllyHash*);
+      doltliteSaveWorkingSet(db);
+      /* Record the target branch's working catalog in the per-branch working
+      ** state so cross-branch connections find the correct catalog on refresh. */
+      doltliteUpdateBranchWorkingState(db, zBranch, &catHash);
+    }
   }
   rc = chunkStoreSerializeRefs(cs);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
