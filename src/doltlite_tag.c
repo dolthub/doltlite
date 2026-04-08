@@ -1,11 +1,4 @@
-/*
-** dolt_tag and dolt_tags: immutable named pointers to commits.
-**
-**   SELECT dolt_tag('v1.0');                           -- tag HEAD
-**   SELECT dolt_tag('v1.0', 'abc123...');              -- tag specific commit
-**   SELECT dolt_tag('-d', 'v1.0');                     -- delete tag
-**   SELECT * FROM dolt_tags;                           -- list tags
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -15,9 +8,6 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* --------------------------------------------------------------------------
-** dolt_tag('name' [, 'commit_hash']) or dolt_tag('-d', 'name')
-** -------------------------------------------------------------------------- */
 static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -39,10 +29,10 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
   }else{
-    /* Create tag */
+    
     ProllyHash commitHash;
     if( argc>=2 ){
-      /* Tag a specific commit */
+      
       const char *zHash = (const char*)sqlite3_value_text(argv[1]);
       if( !zHash ){ sqlite3_result_error(ctx, "invalid commit hash", -1); return; }
       rc = doltliteHexToHash(zHash, &commitHash);
@@ -51,7 +41,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         return;
       }
     }else{
-      /* Tag HEAD */
+      
       doltliteGetSessionHead(db, &commitHash);
       if( prollyHashIsEmpty(&commitHash) ){
         sqlite3_result_error(ctx, "no commits to tag", -1);
@@ -71,9 +61,6 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3_result_int(ctx, 0);
 }
 
-/* --------------------------------------------------------------------------
-** dolt_tags virtual table
-** -------------------------------------------------------------------------- */
 typedef struct TagVtab TagVtab;
 struct TagVtab { sqlite3_vtab base; sqlite3 *db; };
 typedef struct TagCur TagCur;
@@ -122,7 +109,7 @@ static int tagColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
       break;
     }
     case 2: {
-      /* Load commit to get message */
+      
       u8 *data=0; int nData=0;
       int rc = chunkStoreGet(cs, &t->commitHash, &data, &nData);
       if( rc==SQLITE_OK && data ){
@@ -158,4 +145,4 @@ int doltliteTagRegister(sqlite3 *db){
   return rc;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

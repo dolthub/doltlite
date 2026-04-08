@@ -1,20 +1,10 @@
-/*
-** prolly_diff.c — Two-tree diff for prolly trees.
-**
-** Computes the set of changes (ADD, DELETE, MODIFY) between two prolly
-** trees by walking two cursors in parallel, comparing keys in sorted
-** order.  When the root hashes are identical the diff is trivially empty.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_diff.h"
 
-#include <string.h>  /* memcmp */
+#include <string.h>  
 
-/*
-** Compare two blob keys lexicographically.
-** Returns <0, 0, or >0.
-*/
 static int diffBlobKeyCmp(
   const u8 *pA, int nA,
   const u8 *pB, int nB
@@ -25,13 +15,6 @@ static int diffBlobKeyCmp(
   return nA - nB;
 }
 
-/*
-** Compare the current keys of two cursors.
-** Sets *pCmp to <0, 0, or >0 following the same convention as memcmp.
-**
-** For INTKEY trees the integer keys are compared directly.
-** For BLOBKEY trees the raw key blobs are compared lexicographically.
-*/
 static void diffCompareKeys(
   ProllyCursor *pOld,
   ProllyCursor *pNew,
@@ -53,17 +36,6 @@ static void diffCompareKeys(
   }
 }
 
-/*
-** Fill a ProllyDiffChange from a single cursor entry.
-**   type     – PROLLY_DIFF_ADD, _DELETE, or _MODIFY
-**   pCur     – cursor positioned at the entry
-**   flags    – INTKEY / BLOBKEY
-**   pChange  – [out] change record to populate
-**
-** Key fields are always set from pCur.  Caller is responsible for
-** setting the value pointers that correspond to the "other" side
-** (pOldVal for ADD, pNewVal for DELETE, or both for MODIFY).
-*/
 static void diffFillKey(
   ProllyDiffChange *pChange,
   ProllyCursor *pCur,
@@ -82,9 +54,6 @@ static void diffFillKey(
   }
 }
 
-/*
-** Emit a DELETE change for the current entry of curOld.
-*/
 static int diffEmitDelete(
   ProllyCursor *pOld,
   u8 flags,
@@ -105,9 +74,6 @@ static int diffEmitDelete(
   return xCallback(pCtx, &change);
 }
 
-/*
-** Emit an ADD change for the current entry of curNew.
-*/
 static int diffEmitAdd(
   ProllyCursor *pNew,
   u8 flags,
@@ -128,9 +94,6 @@ static int diffEmitAdd(
   return xCallback(pCtx, &change);
 }
 
-/*
-** Emit a MODIFY change when the key matches but the value differs.
-*/
 static int diffEmitModify(
   ProllyCursor *pOld,
   ProllyCursor *pNew,
@@ -154,10 +117,6 @@ static int diffEmitModify(
   return xCallback(pCtx, &change);
 }
 
-/*
-** Read a SQLite-format varint from p, not reading past pEnd.
-** Returns the number of bytes consumed, or 0 on error.
-*/
 static int diffReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
   u64 v = 0;
   int i;
@@ -176,9 +135,6 @@ static int diffReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
   return i ? i : 0;
 }
 
-/*
-** Return the data size in bytes for a given SQLite serial type.
-*/
 static int diffSerialTypeSize(u64 st){
   if( st==0 ) return 0;
   if( st==1 ) return 1;
@@ -194,16 +150,6 @@ static int diffSerialTypeSize(u64 st){
   return 0;
 }
 
-/*
-** Compare two SQLite record-format values field-by-field, treating
-** trailing NULL fields (serial type 0) in the longer record as equal
-** to missing fields in the shorter record.  This handles the case
-** where ALTER TABLE ADD COLUMN causes records to be rewritten with
-** extra trailing NULLs.
-**
-** Returns non-zero if the records are logically equal.
-** Returns 0 (not equal) if either record is malformed.
-*/
 int diffRecordsEqualFieldwise(
   const u8 *pA, int nA,
   const u8 *pB, int nB
@@ -266,12 +212,6 @@ int diffRecordsEqualFieldwise(
   return 1;
 }
 
-/*
-** Return non-zero if the two values at the current cursor positions
-** are identical.  Fast path: same length and same bytes.  Slow path:
-** parse SQLite record format to compare field-by-field, tolerating
-** trailing NULL differences from ALTER TABLE ADD COLUMN.
-*/
 static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew){
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
@@ -285,12 +225,6 @@ static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew){
   return diffRecordsEqualFieldwise(pOldVal, nOldVal, pNewVal, nNewVal);
 }
 
-/* --------------------------------------------------------------------------
-** Cursor-based merge walk: brute-force diff of two subtrees via cursors.
-** O(N+M) where N and M are the entry counts of the two subtrees.
-** Used as fallback when structural comparison can't skip subtrees
-** (e.g., boundary key mismatches at internal node level).
-** -------------------------------------------------------------------------- */
 static int diffCursorWalk(
   ChunkStore *pStore, ProllyCache *pCache,
   const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
@@ -350,9 +284,6 @@ walk_done:
   return rc;
 }
 
-/* --------------------------------------------------------------------------
-** Emit all entries under a subtree as ADDs or DELETEs.
-** -------------------------------------------------------------------------- */
 static int diffEmitSubtree(
   ChunkStore *pStore, ProllyCache *pCache,
   const ProllyHash *pRoot, u8 flags, u8 changeType,
@@ -378,9 +309,6 @@ static int diffEmitSubtree(
   return rc;
 }
 
-/* --------------------------------------------------------------------------
-** Compare boundary keys from two internal nodes.
-** -------------------------------------------------------------------------- */
 static int diffNodeKeyCmp(
   const ProllyNode *pA, int iA,
   const ProllyNode *pB, int iB,
@@ -399,9 +327,6 @@ static int diffNodeKeyCmp(
   }
 }
 
-/* --------------------------------------------------------------------------
-** Leaf-level diff: compare entries in two leaf nodes directly.
-** -------------------------------------------------------------------------- */
 static int diffLeaves(
   const ProllyNode *pOld, const ProllyNode *pNew, u8 flags,
   ProllyDiffCallback xCb, void *pCtx
@@ -483,22 +408,6 @@ static int diffLeaves(
   return rc;
 }
 
-/* --------------------------------------------------------------------------
-** Recursive structural diff.
-**
-** Compares two prolly tree nodes top-down, skipping shared subtrees
-** by hash comparison.  For k changes on an N-entry tree of depth d,
-** this visits O(k * d) nodes instead of O(N).
-**
-**   diffNodes(oldHash, newHash):
-**     if oldHash == newHash → return (skip entire subtree!)
-**     load both nodes
-**     if both leaves → compare entries directly
-**     if both internal → merge-walk children:
-**       matching childHash → SKIP (the key optimization)
-**       same boundary key, different childHash → recurse
-**       boundary mismatch → fall back to cursor walk for that range
-** -------------------------------------------------------------------------- */
 static int diffNodes(
   ChunkStore *pStore, ProllyCache *pCache,
   const ProllyHash *pOldHash, const ProllyHash *pNewHash,
@@ -510,10 +419,10 @@ static int diffNodes(
   ProllyNode oldNode, newNode;
   int rc = SQLITE_OK;
 
-  /* Same hash → identical subtree, zero diff */
+  
   if( prollyHashCompare(pOldHash, pNewHash)==0 ) return SQLITE_OK;
 
-  /* Handle empty hashes */
+  
   if( prollyHashIsEmpty(pOldHash) && prollyHashIsEmpty(pNewHash) ) return SQLITE_OK;
   if( prollyHashIsEmpty(pOldHash) ){
     return diffEmitSubtree(pStore, pCache, pNewHash, flags, PROLLY_DIFF_ADD, xCb, pCtx);
@@ -522,7 +431,7 @@ static int diffNodes(
     return diffEmitSubtree(pStore, pCache, pOldHash, flags, PROLLY_DIFF_DELETE, xCb, pCtx);
   }
 
-  /* Load both nodes */
+  
   rc = chunkStoreGet(pStore, pOldHash, &oldData, &nOld);
   if( rc!=SQLITE_OK ) return rc;
   rc = prollyNodeParse(&oldNode, oldData, nOld);
@@ -534,11 +443,11 @@ static int diffNodes(
   if( rc!=SQLITE_OK ){ sqlite3_free(oldData); sqlite3_free(newData); return rc; }
 
   if( oldNode.level==0 && newNode.level==0 ){
-    /* ── Both leaves: direct entry comparison ── */
+    
     rc = diffLeaves(&oldNode, &newNode, flags, xCb, pCtx);
 
   }else if( oldNode.level>0 && newNode.level>0 ){
-    /* ── Both internal: compare children, skip shared subtrees ── */
+    
     int i = 0, j = 0;
 
     while( i < (int)oldNode.nItems && j < (int)newNode.nItems && rc==SQLITE_OK ){
@@ -546,7 +455,7 @@ static int diffNodes(
       prollyNodeChildHash(&oldNode, i, &oldChild);
       prollyNodeChildHash(&newNode, j, &newChild);
 
-      /* THE KEY OPTIMIZATION: skip shared subtrees */
+      
       if( prollyHashCompare(&oldChild, &newChild)==0 ){
         i++; j++;
         continue;
@@ -555,19 +464,12 @@ static int diffNodes(
       int cmp = diffNodeKeyCmp(&oldNode, i, &newNode, j, flags);
 
       if( cmp==0 ){
-        /* Same boundary key, different content → recurse */
+        
         rc = diffNodes(pStore, pCache, &oldChild, &newChild,
                        pOldRoot, pNewRoot, flags, xCb, pCtx);
         i++; j++;
       }else{
-        /* Boundary mismatch: the chunker split differently between old
-        ** and new. We can't pair children 1:1 by boundary key.
-        **
-        ** Correct approach: use cursor walk on the FULL tree roots for
-        ** the remaining range. The cursors need to be positioned past
-        ** the already-processed children (those with matching hashes).
-        ** We use the boundary key of the last matched child as the
-        ** seek target. */
+        
         {
           ProllyCursor *pCO = sqlite3_malloc(sizeof(ProllyCursor));
           ProllyCursor *pCN = sqlite3_malloc(sizeof(ProllyCursor));
@@ -578,7 +480,7 @@ static int diffNodes(
             prollyCursorInit(pCO, pStore, pCache, pOldRoot, flags);
             prollyCursorInit(pCN, pStore, pCache, pNewRoot, flags);
 
-            /* Seek past already-processed children */
+            
             if( i > 0 && (flags & PROLLY_NODE_INTKEY) ){
               i64 seekKey = prollyNodeIntKey(&oldNode, i-1);
               int res;
@@ -604,7 +506,7 @@ static int diffNodes(
               if( rc==SQLITE_OK ) rc = prollyCursorFirst(pCN, &emN);
             }
 
-            /* Merge walk the rest */
+            
             while( rc==SQLITE_OK && prollyCursorIsValid(pCO) && prollyCursorIsValid(pCN) ){
               int keyCmp;
               diffCompareKeys(pCO, pCN, flags, &keyCmp);
@@ -642,14 +544,14 @@ static int diffNodes(
       }
     }
 
-    /* Remaining old children → all deleted */
+    
     while( i < (int)oldNode.nItems && rc==SQLITE_OK ){
       ProllyHash ch;
       prollyNodeChildHash(&oldNode, i, &ch);
       rc = diffEmitSubtree(pStore, pCache, &ch, flags, PROLLY_DIFF_DELETE, xCb, pCtx);
       i++;
     }
-    /* Remaining new children → all added */
+    
     while( j < (int)newNode.nItems && rc==SQLITE_OK ){
       ProllyHash ch;
       prollyNodeChildHash(&newNode, j, &ch);
@@ -658,7 +560,7 @@ static int diffNodes(
     }
 
   }else{
-    /* Level mismatch — shouldn't happen in well-formed trees. Fallback. */
+    
     rc = diffCursorWalk(pStore, pCache, pOldRoot, pNewRoot, flags, xCb, pCtx);
   }
 
@@ -667,14 +569,6 @@ static int diffNodes(
   return rc;
 }
 
-/* --------------------------------------------------------------------------
-** Public API: Structural diff between two prolly trees.
-**
-** Exploits content-addressing to skip shared subtrees.  For k changes
-** on an N-entry tree of depth d, this visits O(k * d) nodes instead
-** of O(N).  Falls back to cursor-based merge walk when chunk boundaries
-** shifted between old and new trees.
-** -------------------------------------------------------------------------- */
 int prollyDiff(
   ChunkStore *pStore,
   ProllyCache *pCache,
@@ -688,4 +582,4 @@ int prollyDiff(
                    pOldRoot, pNewRoot, flags, xCallback, pCtx);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

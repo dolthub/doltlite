@@ -1,10 +1,4 @@
-/*
-** dolt_log virtual table: walks the commit chain from HEAD.
-**
-** Usage:
-**   SELECT * FROM dolt_log;
-**   SELECT commit_hash, message FROM dolt_log LIMIT 10;
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -15,10 +9,6 @@
 #include "doltlite_internal.h"
 #include <time.h>
 
-/* --------------------------------------------------------------------------
-** Virtual table structure
-** -------------------------------------------------------------------------- */
-
 typedef struct DoltliteLogVtab DoltliteLogVtab;
 struct DoltliteLogVtab {
   sqlite3_vtab base;
@@ -28,16 +18,12 @@ struct DoltliteLogVtab {
 typedef struct DoltliteLogCursor DoltliteLogCursor;
 struct DoltliteLogCursor {
   sqlite3_vtab_cursor base;
-  ProllyHash currentHash;      /* Hash of current commit */
-  DoltliteCommit current;      /* Deserialized current commit */
-  int eof;                     /* True if no more commits */
-  i64 iRow;                 /* Row counter */
-  char zHashHex[PROLLY_HASH_SIZE*2+1]; /* Hex string of currentHash */
+  ProllyHash currentHash;      
+  DoltliteCommit current;      
+  int eof;                     
+  i64 iRow;                 
+  char zHashHex[PROLLY_HASH_SIZE*2+1]; 
 };
-
-/* --------------------------------------------------------------------------
-** Schema
-** -------------------------------------------------------------------------- */
 
 static const char *doltliteLogSchema =
   "CREATE TABLE x("
@@ -47,10 +33,6 @@ static const char *doltliteLogSchema =
   "  date TEXT,"
   "  message TEXT"
   ")";
-
-/* --------------------------------------------------------------------------
-** Load a commit by hash from the chunk store
-** -------------------------------------------------------------------------- */
 
 static int loadCommit(sqlite3 *db, const ProllyHash *hash,
                       DoltliteCommit *pCommit){
@@ -69,10 +51,6 @@ static int loadCommit(sqlite3 *db, const ProllyHash *hash,
   sqlite3_free(data);
   return rc;
 }
-
-/* --------------------------------------------------------------------------
-** Virtual table methods
-** -------------------------------------------------------------------------- */
 
 static int doltliteLogConnect(
   sqlite3 *db,
@@ -127,7 +105,7 @@ static int doltliteLogNext(sqlite3_vtab_cursor *pCursor){
   ProllyHash parent;
   int rc;
 
-  /* Follow parent pointer */
+  
   memcpy(&parent, &pCur->current.parentHash, sizeof(ProllyHash));
   doltliteCommitClear(&pCur->current);
 
@@ -141,7 +119,7 @@ static int doltliteLogNext(sqlite3_vtab_cursor *pCursor){
   rc = loadCommit(pVtab->db, &pCur->currentHash, &pCur->current);
   if( rc!=SQLITE_OK ){
     pCur->eof = 1;
-    return SQLITE_OK;  /* Treat missing parent as end of log */
+    return SQLITE_OK;  
   }
   pCur->iRow++;
   return SQLITE_OK;
@@ -158,14 +136,14 @@ static int doltliteLogFilter(
   int rc;
   (void)idxNum; (void)idxStr; (void)argc; (void)argv;
 
-  /* Start from HEAD */
+  
   cs = doltliteGetChunkStore(pVtab->db);
   if( !cs ){
     pCur->eof = 1;
     return SQLITE_OK;
   }
 
-  /* Use this session's HEAD, not the shared store's */
+  
   doltliteGetSessionHead(pVtab->db, &pCur->currentHash);
   if( prollyHashIsEmpty(&pCur->currentHash) ){
     pCur->eof = 1;
@@ -195,18 +173,18 @@ static int doltliteLogColumn(
   DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
 
   switch( iCol ){
-    case 0: /* commit_hash */
+    case 0: 
       sqlite3_result_text(ctx, pCur->zHashHex, -1, SQLITE_TRANSIENT);
       break;
-    case 1: /* committer */
+    case 1: 
       sqlite3_result_text(ctx, pCur->current.zName ? pCur->current.zName : "",
                           -1, SQLITE_TRANSIENT);
       break;
-    case 2: /* email */
+    case 2: 
       sqlite3_result_text(ctx, pCur->current.zEmail ? pCur->current.zEmail : "",
                           -1, SQLITE_TRANSIENT);
       break;
-    case 3: /* date */
+    case 3: 
       {
         time_t t = (time_t)pCur->current.timestamp;
         struct tm *tm = gmtime(&t);
@@ -219,7 +197,7 @@ static int doltliteLogColumn(
         }
       }
       break;
-    case 4: /* message */
+    case 4: 
       sqlite3_result_text(ctx, pCur->current.zMessage ? pCur->current.zMessage : "",
                           -1, SQLITE_TRANSIENT);
       break;
@@ -239,40 +217,36 @@ static int doltliteLogBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   return SQLITE_OK;
 }
 
-/* --------------------------------------------------------------------------
-** Module definition
-** -------------------------------------------------------------------------- */
-
 static sqlite3_module doltliteLogModule = {
-  0,                         /* iVersion */
-  0,                         /* xCreate (not used for eponymous) */
-  doltliteLogConnect,        /* xConnect */
-  doltliteLogBestIndex,      /* xBestIndex */
-  doltliteLogDisconnect,     /* xDisconnect */
-  0,                         /* xDestroy */
-  doltliteLogOpen,           /* xOpen */
-  doltliteLogClose,          /* xClose */
-  doltliteLogFilter,         /* xFilter */
-  doltliteLogNext,           /* xNext */
-  doltliteLogEof,            /* xEof */
-  doltliteLogColumn,         /* xColumn */
-  doltliteLogRowid,          /* xRowid */
-  0,                         /* xUpdate */
-  0,                         /* xBegin */
-  0,                         /* xSync */
-  0,                         /* xCommit */
-  0,                         /* xRollback */
-  0,                         /* xFindFunction */
-  0,                         /* xRename */
-  0,                         /* xSavepoint */
-  0,                         /* xRelease */
-  0,                         /* xRollbackTo */
-  0,                         /* xShadowName */
-  0                          /* xIntegrity */
+  0,                         
+  0,                         
+  doltliteLogConnect,        
+  doltliteLogBestIndex,      
+  doltliteLogDisconnect,     
+  0,                         
+  doltliteLogOpen,           
+  doltliteLogClose,          
+  doltliteLogFilter,         
+  doltliteLogNext,           
+  doltliteLogEof,            
+  doltliteLogColumn,         
+  doltliteLogRowid,          
+  0,                         
+  0,                         
+  0,                         
+  0,                         
+  0,                         
+  0,                         
+  0,                         
+  0,                         
+  0,                         
+  0,                         
+  0,                         
+  0                          
 };
 
 int doltliteLogRegister(sqlite3 *db){
   return sqlite3_create_module(db, "dolt_log", &doltliteLogModule, 0);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

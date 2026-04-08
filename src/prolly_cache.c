@@ -1,27 +1,16 @@
-/*
-** Implementation of LRU node cache with reference counting for prolly tree
-** nodes. Uses open-chaining hash table keyed by content hash with a
-** doubly-linked LRU eviction list.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_cache.h"
 #include <string.h>
 #include <assert.h>
 
-/*
-** Compute the hash bucket index for a ProllyHash. Takes the first 4 bytes
-** of the hash as a little-endian u32 and reduces modulo nBucket.
-*/
 static int cacheHashBucket(const ProllyCache *cache, const ProllyHash *hash){
   u32 h;
   memcpy(&h, hash->data, sizeof(u32));
   return (int)(h % (u32)cache->nBucket);
 }
 
-/*
-** Remove an entry from the LRU doubly-linked list. Does not free the entry.
-*/
 static void lruRemove(ProllyCacheEntry *pEntry){
   pEntry->pLruPrev->pLruNext = pEntry->pLruNext;
   pEntry->pLruNext->pLruPrev = pEntry->pLruPrev;
@@ -29,9 +18,6 @@ static void lruRemove(ProllyCacheEntry *pEntry){
   pEntry->pLruPrev = 0;
 }
 
-/*
-** Insert an entry at the head of the LRU list (most recently used position).
-*/
 static void lruInsertHead(ProllyCache *cache, ProllyCacheEntry *pEntry){
   pEntry->pLruNext = cache->lruHead.pLruNext;
   pEntry->pLruPrev = &cache->lruHead;
@@ -39,9 +25,6 @@ static void lruInsertHead(ProllyCache *cache, ProllyCacheEntry *pEntry){
   cache->lruHead.pLruNext = pEntry;
 }
 
-/*
-** Remove an entry from its hash bucket chain.
-*/
 static void hashRemove(ProllyCache *cache, ProllyCacheEntry *pEntry){
   int iBucket = cacheHashBucket(cache, &pEntry->hash);
   ProllyCacheEntry **pp = &cache->aBucket[iBucket];
@@ -55,9 +38,6 @@ static void hashRemove(ProllyCache *cache, ProllyCacheEntry *pEntry){
   }
 }
 
-/*
-** Free a single cache entry. Frees the owned data copy and the entry itself.
-*/
 static void cacheEntryFree(ProllyCacheEntry *pEntry){
   if( pEntry ){
     sqlite3_free(pEntry->pData);
@@ -65,12 +45,6 @@ static void cacheEntryFree(ProllyCacheEntry *pEntry){
   }
 }
 
-/*
-** Initialize a prolly cache with the given maximum capacity.
-**
-** The hash table uses nCapacity*2 buckets (minimum 16) for a low load factor.
-** Returns SQLITE_OK on success, SQLITE_NOMEM on allocation failure.
-*/
 int prollyCacheInit(ProllyCache *cache, int nCapacity){
   int nBucket;
 
@@ -90,7 +64,7 @@ int prollyCacheInit(ProllyCache *cache, int nCapacity){
   }
   memset(cache->aBucket, 0, sizeof(ProllyCacheEntry *) * nBucket);
 
-  /* Initialize LRU sentinels: head <-> tail */
+  
   cache->lruHead.pLruNext = &cache->lruTail;
   cache->lruHead.pLruPrev = 0;
   cache->lruTail.pLruPrev = &cache->lruHead;
@@ -99,13 +73,6 @@ int prollyCacheInit(ProllyCache *cache, int nCapacity){
   return SQLITE_OK;
 }
 
-/*
-** Look up a node in the cache by its content hash.
-**
-** If found, the entry's reference count is incremented and it is moved
-** to the head of the LRU list (most recently used). Returns the entry
-** pointer, or NULL if not found.
-*/
 ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
   int iBucket;
   ProllyCacheEntry *pEntry;
@@ -117,7 +84,7 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
 
   while( pEntry ){
     if( memcmp(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE)==0 ){
-      /* Found: increment refcount and promote in LRU */
+      
       pEntry->nRef++;
       lruRemove(pEntry);
       lruInsertHead(cache, pEntry);
@@ -129,22 +96,18 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
   return 0;
 }
 
-/*
-** Evict a single unreferenced entry from the LRU tail (least recently used).
-** Returns 1 if an entry was evicted, 0 if no evictable entry was found.
-*/
 static int cacheEvictOne(ProllyCache *cache){
   ProllyCacheEntry *pEntry;
 
-  /* Walk from tail toward head looking for an unreferenced entry */
+  
   pEntry = cache->lruTail.pLruPrev;
   while( pEntry!=&cache->lruHead ){
     if( pEntry->nRef==0 ){
-      /* Remove from LRU list */
+      
       lruRemove(pEntry);
-      /* Remove from hash bucket chain */
+      
       hashRemove(cache, pEntry);
-      /* Free and update count */
+      
       cacheEntryFree(pEntry);
       cache->nUsed--;
       return 1;
@@ -154,18 +117,6 @@ static int cacheEvictOne(ProllyCache *cache){
   return 0;
 }
 
-/*
-** Insert node data into the cache, keyed by content hash.
-**
-** If the hash is already present, the existing entry is returned with its
-** reference count incremented. Otherwise, a new entry is created:
-**   - If the cache is at capacity, LRU entries with nRef==0 are evicted.
-**   - A copy of pData is made (owned by the entry).
-**   - prollyNodeParse is called on the copy to populate the ProllyNode.
-**   - The new entry starts with nRef=1.
-**
-** Returns the cache entry, or NULL on allocation failure.
-*/
 ProllyCacheEntry *prollyCachePut(
   ProllyCache *cache,
   const ProllyHash *hash,
@@ -177,26 +128,26 @@ ProllyCacheEntry *prollyCachePut(
   u8 *pCopy;
   int rc;
 
-  /* Check if already present */
+  
   pEntry = prollyCacheGet(cache, hash);
   if( pEntry ){
     return pEntry;
   }
 
-  /* Evict if at capacity */
+  
   while( cache->nUsed>=cache->nCapacity ){
     if( !cacheEvictOne(cache) ){
-      /* All entries are referenced, cannot evict. Allow over-capacity. */
+      
       break;
     }
   }
 
-  /* Allocate new entry */
+  
   pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
   if( pEntry==0 ) return 0;
   memset(pEntry, 0, sizeof(*pEntry));
 
-  /* Copy the serialized data */
+  
   pCopy = (u8 *)sqlite3_malloc(nData);
   if( pCopy==0 ){
     sqlite3_free(pEntry);
@@ -204,13 +155,13 @@ ProllyCacheEntry *prollyCachePut(
   }
   memcpy(pCopy, pData, nData);
 
-  /* Fill in the entry */
+  
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
   pEntry->pData = pCopy;
   pEntry->nData = nData;
   pEntry->nRef = 1;
 
-  /* Parse the node from the owned copy */
+  
   rc = prollyNodeParse(&pEntry->node, pCopy, nData);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pCopy);
@@ -218,33 +169,24 @@ ProllyCacheEntry *prollyCachePut(
     return 0;
   }
 
-  /* Insert into hash bucket chain */
+  
   iBucket = cacheHashBucket(cache, hash);
   pEntry->pHashNext = cache->aBucket[iBucket];
   cache->aBucket[iBucket] = pEntry;
 
-  /* Insert at LRU head */
+  
   lruInsertHead(cache, pEntry);
 
   cache->nUsed++;
   return pEntry;
 }
 
-/*
-** Release a reference to a cache entry. Decrements the reference count.
-** The entry remains in the cache and may be evicted later when its
-** reference count is zero.
-*/
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry){
   (void)cache;
   assert( entry->nRef>0 );
   entry->nRef--;
 }
 
-/*
-** Remove all unreferenced entries (nRef==0) from the cache.
-** Walk the LRU list from tail toward head, removing entries with nRef==0.
-*/
 void prollyCachePurge(ProllyCache *cache){
   ProllyCacheEntry *pEntry;
   ProllyCacheEntry *pPrev;
@@ -264,17 +206,13 @@ void prollyCachePurge(ProllyCache *cache){
   }
 }
 
-/*
-** Free all cache resources. Asserts that every entry has nRef==0.
-** After this call the ProllyCache struct is zeroed.
-*/
 void prollyCacheFree(ProllyCache *cache){
   ProllyCacheEntry *pEntry;
   ProllyCacheEntry *pNext;
 
   if( cache->aBucket==0 ) return;
 
-  /* Walk LRU list and free all entries */
+  
   pEntry = cache->lruHead.pLruNext;
   while( pEntry!=&cache->lruTail ){
     pNext = pEntry->pLruNext;
@@ -287,4 +225,4 @@ void prollyCacheFree(ProllyCache *cache){
   memset(cache, 0, sizeof(*cache));
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

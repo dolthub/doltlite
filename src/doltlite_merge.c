@@ -1,15 +1,4 @@
-/*
-** Three-way catalog merge with conflict detection for Doltlite.
-**
-** Given three catalog hashes (ancestor, ours, theirs), produce a merged
-** catalog. For each table:
-**   - If only one side changed it, take that side's root hash.
-**   - If both sides changed the same table, return SQLITE_ERROR (conflict).
-**   - If a table was added on one side and doesn't exist on the other, include it.
-**   - If deleted on one side and unchanged on the other, delete it.
-**
-** Returns the merged catalog as a serialized chunk stored in the chunk store.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -24,16 +13,10 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* From doltlite_conflicts.c */
 typedef struct ConflictTableInfo ConflictTableInfo;
 extern int doltliteSerializeConflicts(ChunkStore *cs, ConflictTableInfo *aTables,
                                        int nTables, ProllyHash *pHash);
 
-/*
-** Find a table entry by table number in an array of entries.
-** Returns a pointer to the entry, or NULL if not found.
-*/
-/* findTableEntry replaced by doltliteFindTableByNumber in doltlite_internal.h */
 static struct TableEntry *findTableEntry(
   struct TableEntry *aEntries,
   int nEntries,
@@ -42,16 +25,12 @@ static struct TableEntry *findTableEntry(
   return doltliteFindTableByNumber(aEntries, nEntries, iTable);
 }
 
-/*
-** Row-level merge context: collects non-conflicting edits into a MutMap
-** and conflicting rows into a list.
-*/
 typedef struct RowMergeCtx RowMergeCtx;
 struct RowMergeCtx {
-  ProllyMutMap *pEdits;      /* Non-conflicting edits to apply */
+  ProllyMutMap *pEdits;      
   u8 isIntKey;
   int nConflicts;
-  /* Conflict entries: stored as a simple array for later serialization */
+  
   struct ConflictRow {
     i64 intKey;
     u8 *pKey; int nKey;
@@ -62,22 +41,6 @@ struct RowMergeCtx {
   int nConflictsAlloc;
 };
 
-/* --------------------------------------------------------------------------
-** Cell-level (field-by-field) merge of SQLite record blobs.
-**
-** When both sides modify the same row, parse the three records and compare
-** each field. If changes don't overlap, build a merged record.
-**
-** Returns: merged record blob (caller frees) or NULL if there's a real
-**          field-level conflict.
-** -------------------------------------------------------------------------- */
-
-/* Varint reader: use shared dlReadVarint from doltlite_record.h */
-
-/* Serial type size: use shared dlSerialTypeLen from doltlite_record.h */
-
-/* Parse a record's fields into arrays of (serial_type, data_offset, data_len).
-** Returns number of fields, or -1 on error. */
 typedef struct RecField RecField;
 struct RecField { u64 st; int off; int len; };
 
@@ -118,7 +81,6 @@ static int parseRecordFields(const u8 *pRec, int nRec,
   return nFields;
 }
 
-/* Compare a single field between two records. Returns 0 if identical. */
 static int fieldEquals(const u8 *pRecA, RecField *fA,
                        const u8 *pRecB, RecField *fB){
   if(fA->st != fB->st) return 1;
@@ -127,30 +89,23 @@ static int fieldEquals(const u8 *pRecA, RecField *fA,
   return memcmp(pRecA + fA->off, pRecB + fB->off, fA->len);
 }
 
-/*
-** A winning field choice: the source record and which field within it.
-*/
 typedef struct MergeWinner MergeWinner;
 struct MergeWinner { const u8 *pRec; RecField *pField; };
 
-/*
-** Build a merged SQLite record blob from an array of per-field winners.
-** Returns the record (caller must sqlite3_free), or NULL on OOM.
-*/
 static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   int hdrSize = 0, bodySize = 0, pos, i;
   u8 *result;
 
-  /* First pass: calculate header and body sizes */
+  
   for(i=0; i<nFields; i++){
     u64 st = aWinners[i].pField->st;
     if(st <= 0x7f) hdrSize += 1;
     else if(st <= 0x3fff) hdrSize += 2;
     else if(st <= 0x1fffff) hdrSize += 3;
-    else hdrSize += 4; /* good enough for practical values */
+    else hdrSize += 4; 
     bodySize += aWinners[i].pField->len;
   }
-  /* Header size varint (the header size includes the header size varint itself) */
+  
   { int tentative = hdrSize + 1;
     if(tentative > 0x7f) tentative++;
     hdrSize = tentative;
@@ -159,13 +114,13 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   result = sqlite3_malloc(hdrSize + bodySize);
   if(!result){ *pnOut = 0; return 0; }
 
-  /* Write header size varint */
+  
   pos = 0;
   { u64 hs = (u64)hdrSize;
     if(hs <= 0x7f){ result[pos++] = (u8)hs; }
     else{ result[pos++] = (u8)(0x80 | (hs>>7)); result[pos++] = (u8)(hs&0x7f); }
   }
-  /* Write serial types */
+  
   for(i=0; i<nFields; i++){
     u64 st = aWinners[i].pField->st;
     if(st <= 0x7f){
@@ -184,7 +139,7 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
       result[pos++] = (u8)(st&0x7f);
     }
   }
-  /* Write body */
+  
   for(i=0; i<nFields; i++){
     if(aWinners[i].pField->len > 0){
       memcpy(result + pos, aWinners[i].pRec + aWinners[i].pField->off,
@@ -195,8 +150,7 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
 
   *pnOut = pos;
 
-  /* Verify round-trip: the manually constructed record should parse back correctly.
-  ** This guards against encoding/decoding divergence. */
+  
 #ifndef NDEBUG
   {
     int nfCheck = 0;
@@ -211,11 +165,6 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   return result;
 }
 
-/*
-** Try to merge three records field-by-field.
-** Returns a new merged record blob (caller must sqlite3_free), or NULL
-** if there's a real field-level conflict.
-*/
 static u8 *tryCellMerge(
   const u8 *pBase, int nBase,
   const u8 *pOurs, int nOurs,
@@ -227,17 +176,17 @@ static u8 *tryCellMerge(
   int nfMax, i;
   u8 *result = 0;
 
-  /* Parse all three records */
+  
   if(parseRecordFields(pBase, nBase, &aBase, &nfBase)<0) goto fail;
   if(parseRecordFields(pOurs, nOurs, &aOurs, &nfOurs)<0) goto fail;
   if(parseRecordFields(pTheirs, nTheirs, &aTheirs, &nfTheirs)<0) goto fail;
 
-  /* Determine max fields (handles schema changes adding columns) */
+  
   nfMax = nfBase;
   if(nfOurs > nfMax) nfMax = nfOurs;
   if(nfTheirs > nfMax) nfMax = nfTheirs;
 
-  /* For each field, decide which version to take */
+  
   {
     MergeWinner *winners;
 
@@ -250,47 +199,47 @@ static u8 *tryCellMerge(
       int theirsHas = (i < nfTheirs);
 
       if(!baseHas && oursHas && !theirsHas){
-        /* New field in ours only (schema change on our side) */
+        
         winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
       }else if(!baseHas && !oursHas && theirsHas){
-        /* New field in theirs only */
+        
         winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
       }else if(!baseHas && oursHas && theirsHas){
-        /* Both added this field (both did schema change) */
+        
         if(fieldEquals(pOurs, &aOurs[i], pTheirs, &aTheirs[i])==0){
           winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
         }else{
-          sqlite3_free(winners); goto fail; /* conflict */
+          sqlite3_free(winners); goto fail; 
         }
       }else if(baseHas && oursHas && theirsHas){
-        /* Field exists in all three — compare */
+        
         int oursChanged = fieldEquals(pBase, &aBase[i], pOurs, &aOurs[i]);
         int theirsChanged = fieldEquals(pBase, &aBase[i], pTheirs, &aTheirs[i]);
         if(!oursChanged && !theirsChanged){
-          /* Neither changed */
+          
           winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
         }else if(oursChanged && !theirsChanged){
-          /* Only ours changed */
+          
           winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
         }else if(!oursChanged && theirsChanged){
-          /* Only theirs changed */
+          
           winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
         }else{
-          /* Both changed — check if convergent */
+          
           if(fieldEquals(pOurs, &aOurs[i], pTheirs, &aTheirs[i])==0){
             winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
           }else{
-            sqlite3_free(winners); goto fail; /* real conflict */
+            sqlite3_free(winners); goto fail; 
           }
         }
       }else if(baseHas && oursHas && !theirsHas){
-        /* Field dropped in theirs? Take ours (theirs has fewer columns) */
+        
         winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
       }else if(baseHas && !oursHas && theirsHas){
-        /* Field dropped in ours? Take theirs */
+        
         winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
       }else{
-        /* Edge case: field only in base, dropped by both */
+        
         continue;
       }
     }
@@ -320,35 +269,35 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     case THREE_WAY_LEFT_ADD:
     case THREE_WAY_LEFT_MODIFY:
     case THREE_WAY_LEFT_DELETE:
-      /* Our change only — already in our tree, no action needed */
+      
       break;
 
     case THREE_WAY_RIGHT_ADD:
-      /* Theirs added a row — insert it */
+      
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pChange->pTheirVal, pChange->nTheirVal);
       break;
 
     case THREE_WAY_RIGHT_MODIFY:
-      /* Theirs modified a row — update it */
+      
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pChange->pTheirVal, pChange->nTheirVal);
       break;
 
     case THREE_WAY_RIGHT_DELETE:
-      /* Theirs deleted a row — delete it */
+      
       rc = prollyMutMapDelete(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey);
       break;
 
     case THREE_WAY_CONVERGENT:
-      /* Both made same change — no action, already in ours */
+      
       break;
 
     case THREE_WAY_CONFLICT_MM: {
-      /* Both sides modified — try cell-level merge first */
+      
       u8 *pMerged = 0;
       int nMerged = 0;
 
@@ -363,17 +312,17 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       }
 
       if( pMerged ){
-        /* Cell-level merge succeeded — apply as non-conflicting edit */
+        
         rc = prollyMutMapInsert(ctx->pEdits,
             pChange->pKey, pChange->nKey, pChange->intKey,
             pMerged, nMerged);
         sqlite3_free(pMerged);
         break;
       }
-      /* Fall through to record as conflict */
+      
     }
     case THREE_WAY_CONFLICT_DM: {
-      /* Real conflict — record it with all three values */
+      
       struct ConflictRow *aNew;
       if( ctx->nConflicts >= ctx->nConflictsAlloc ){
         int nNew = ctx->nConflictsAlloc ? ctx->nConflictsAlloc*2 : 16;
@@ -429,10 +378,6 @@ static void freeRowMergeCtx(RowMergeCtx *ctx){
   }
 }
 
-/*
-** Perform row-level three-way merge on a single table.
-** Returns: the new merged root hash + number of conflicts.
-*/
 static int mergeTableRows(
   sqlite3 *db,
   const ProllyHash *pAncRoot,
@@ -457,7 +402,7 @@ static int mergeTableRows(
   rc = prollyMutMapInit(ctx.pEdits, ctx.isIntKey);
   if( rc!=SQLITE_OK ){ sqlite3_free(ctx.pEdits); return rc; }
 
-  /* Run three-way diff */
+  
   rc = prollyThreeWayDiff(cs, cache, pAncRoot, pOursRoot, pTheirsRoot,
                           flags, rowMergeCallback, &ctx);
   if( rc!=SQLITE_OK ){
@@ -465,7 +410,7 @@ static int mergeTableRows(
     return rc;
   }
 
-  /* Apply non-conflicting edits to produce merged tree */
+  
   if( !prollyMutMapIsEmpty(ctx.pEdits) ){
     memset(&mut, 0, sizeof(mut));
     mut.pStore = cs;
@@ -478,13 +423,13 @@ static int mergeTableRows(
       memcpy(pMergedRoot, &mut.newRoot, sizeof(ProllyHash));
     }
   }else{
-    /* No non-conflicting edits — merged root is same as ours */
+    
     memcpy(pMergedRoot, pOursRoot, sizeof(ProllyHash));
   }
 
   *pnConflicts = ctx.nConflicts;
   *ppConflicts = ctx.aConflicts;
-  ctx.aConflicts = 0; /* ownership transferred */
+  ctx.aConflicts = 0; 
   ctx.nConflicts = 0;
 
   freeRowMergeCtx(&ctx);
@@ -499,24 +444,16 @@ static struct TableEntry *findTableByName(
   return doltliteFindTableByName(aEntries, nEntries, zName);
 }
 
-/*
-** Serialize a merged catalog into a chunk and store it.
-**
-** Format: iNextTable(4) + nTables(4) + meta(64) + entries(25 each)
-**
-** Meta is copied from the "ours" catalog (the current branch's metadata
-** takes precedence in a merge).
-*/
 static int serializeMergedCatalog(
   sqlite3 *db,
-  const ProllyHash *oursCatHash,     /* unused (V2 has no meta to copy) */
+  const ProllyHash *oursCatHash,     
   struct TableEntry *aMerged,
   int nMerged,
   Pgno iNextTable,
-  ProllyHash *pOutHash               /* OUT: hash of stored catalog chunk */
+  ProllyHash *pOutHash               
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  int sz = 1 + 4 + 4;  /* V2: version(1) + iNextTable(4) + nTables(4) */
+  int sz = 1 + 4 + 4;  
   { int j; for(j=0;j<nMerged;j++){
     int nl = aMerged[j].zName ? (int)strlen(aMerged[j].zName) : 0;
     sz += 4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE+2+nl;
@@ -525,14 +462,14 @@ static int serializeMergedCatalog(
   u8 *p;
   int rc;
 
-  (void)oursCatHash;  /* V2 catalogs have no meta to copy */
+  (void)oursCatHash;  
 
   buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
   p = buf;
 
-  /* V2 format: version byte + iNextTable + nTables (no aMeta) */
-  *p++ = 0x43;  /* CATALOG_FORMAT_V2 = 'C' */
+  
+  *p++ = 0x43;  
   p[0] = (u8)iNextTable;
   p[1] = (u8)(iNextTable>>8);
   p[2] = (u8)(iNextTable>>16);
@@ -544,7 +481,7 @@ static int serializeMergedCatalog(
   p[3] = (u8)(nMerged>>24);
   p += 4;
 
-  /* Write table entries: iTable(4) + flags(1) + root(20) + schemaHash(20) + name_len(2) + name(var) */
+  
   {
     int i;
     for(i=0; i<nMerged; i++){
@@ -571,7 +508,6 @@ static int serializeMergedCatalog(
   return rc;
 }
 
-/* Collected conflict info for a single table during merge */
 typedef struct MergeConflictTable MergeConflictTable;
 struct MergeConflictTable {
   char *zName;
@@ -579,12 +515,6 @@ struct MergeConflictTable {
   struct ConflictRow *aRows;
 };
 
-/*
-** Pass 1: Process ours' tables.
-**
-** For each table in ours, find it in theirs and ancestor, determine if
-** changed on each side, and resolve or record a conflict.
-*/
 static int mergeCatalogPass1(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
@@ -601,51 +531,50 @@ static int mergeCatalogPass1(
     struct TableEntry *ancEntry;
     struct TableEntry *theirsEntry;
 
-    /* Table 1 (sqlite_master) has no zName but must be row-merged
-    ** so that CREATE TABLE statements from theirs appear after merge. */
+    
     if( aOurs[i].iTable==1 ){
       ancEntry = findTableEntry(aAnc, nAnc, 1);
       theirsEntry = findTableEntry(aTheirs, nTheirs, 1);
       goto do_merge_entry;
     }
 
-    /* Skip tables without names (internal bookkeeping, not real tables) */
+    
     if( !zName ){
       aMerged[(*pnMerged)++] = aOurs[i];
       continue;
     }
 
-    /* Find by NAME in ancestor and theirs */
+    
     ancEntry = findTableByName(aAnc, nAnc, zName);
     theirsEntry = findTableByName(aTheirs, nTheirs, zName);
 
 do_merge_entry:
 
     if( !ancEntry ){
-      /* Table added in ours (not in ancestor by name) */
+      
       if( theirsEntry ){
-        /* Both sides added a table with the same name */
+        
         if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0
          || prollyHashCompare(&aOurs[i].schemaHash, &theirsEntry->schemaHash)!=0 ){
           return SQLITE_ERROR;
         }
-        /* Identical content — include once (ours' iTable) */
+        
       }
       aMerged[(*pnMerged)++] = aOurs[i];
     }else{
-      /* Table existed in ancestor */
+      
       int oursChanged = prollyHashCompare(&aOurs[i].root, &ancEntry->root)!=0;
 
       if( !theirsEntry ){
-        /* Deleted in theirs (by name) */
+        
         if( oursChanged ){
-          return SQLITE_ERROR;  /* Modified in ours, deleted in theirs */
+          return SQLITE_ERROR;  
         }
-        /* Unchanged in ours, deleted in theirs — delete (skip) */
+        
       }else{
         int theirsChanged = prollyHashCompare(&theirsEntry->root, &ancEntry->root)!=0;
         if( oursChanged && theirsChanged ){
-          /* Both modified same table — do row-level three-way merge */
+          
           ProllyHash mergedTableRoot;
           int nConflicts = 0;
           struct ConflictRow *aConflictRows = 0;
@@ -672,7 +601,7 @@ do_merge_entry:
                 aNew[*pnConflictTables].nConflicts = nConflicts;
                 aNew[*pnConflictTables].aRows = aConflictRows;
                 (*pnConflictTables)++;
-                aConflictRows = 0; /* ownership transferred */
+                aConflictRows = 0; 
               }else{
                 { int j; for(j=0;j<nConflicts;j++){
                   sqlite3_free(aConflictRows[j].pKey);
@@ -684,7 +613,7 @@ do_merge_entry:
             }
           }
         }else if( theirsChanged ){
-          /* Take theirs' root but with ours' iTable number */
+          
           struct TableEntry merged = aOurs[i];
           memcpy(&merged.root, &theirsEntry->root, sizeof(ProllyHash));
           memcpy(&merged.schemaHash, &theirsEntry->schemaHash, sizeof(ProllyHash));
@@ -699,9 +628,6 @@ do_merge_entry:
   return rc;
 }
 
-/*
-** Pass 2: Process theirs' tables not in ours (new tables added by theirs).
-*/
 static int mergeCatalogPass2(
   struct TableEntry *aAnc, int nAnc,
   struct TableEntry *aOurs, int nOurs,
@@ -718,14 +644,12 @@ static int mergeCatalogPass2(
     if( aTheirs[i].iTable<=1 || !zName ) continue;
 
     oursEntry = findTableByName(aOurs, nOurs, zName);
-    if( oursEntry ) continue;  /* Already handled in pass 1 */
+    if( oursEntry ) continue;  
 
     {
       struct TableEntry *ancEntry = findTableByName(aAnc, nAnc, zName);
       if( !ancEntry ){
-        /* Added in theirs only — keep their iTable if no conflict,
-        ** otherwise assign a new one. Keeping the original iTable is
-        ** important so sqlite_master rootpage values stay consistent. */
+        
         struct TableEntry newEntry = aTheirs[i];
         {
           int j, conflict = 0;
@@ -735,39 +659,29 @@ static int mergeCatalogPass2(
           if( conflict ) newEntry.iTable = (*piNextMerged)++;
         }
         if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
-        /* Copy name string */
+        
         newEntry.zName = sqlite3_mprintf("%s", zName);
         aMerged[(*pnMerged)++] = newEntry;
       }else{
-        /* Was in ancestor, deleted in ours */
+        
         int theirsChanged = prollyHashCompare(&aTheirs[i].root, &ancEntry->root)!=0;
         if( theirsChanged ){
-          return SQLITE_ERROR;  /* Modified in theirs, deleted in ours */
+          return SQLITE_ERROR;  
         }
-        /* Unchanged in theirs, deleted in ours — delete (skip) */
+        
       }
     }
   }
   return SQLITE_OK;
 }
 
-/*
-** Perform a three-way catalog merge.
-**
-** ancestor: the common ancestor catalog hash
-** ours:     the current branch's catalog hash
-** theirs:   the other branch's catalog hash
-**
-** On success, *pMergedHash contains the hash of the merged catalog chunk.
-** Returns SQLITE_OK on success, SQLITE_ERROR on conflict.
-*/
 int doltliteMergeCatalogs(
   sqlite3 *db,
   const ProllyHash *ancestor,
   const ProllyHash *ours,
   const ProllyHash *theirs,
   ProllyHash *pMergedHash,
-  int *pnConflicts          /* OUT: total row conflicts across all tables */
+  int *pnConflicts          
 ){
   struct TableEntry *aAnc = 0, *aOurs = 0, *aTheirs = 0;
   int nAnc = 0, nOurs = 0, nTheirs = 0;
@@ -782,7 +696,7 @@ int doltliteMergeCatalogs(
   MergeConflictTable *aConflictTables = 0;
   int nConflictTables = 0;
 
-  /* Load all three catalogs */
+  
   rc = doltliteLoadCatalog(db, ancestor, &aAnc, &nAnc, &iNextAnc);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
@@ -792,7 +706,7 @@ int doltliteMergeCatalogs(
   rc = doltliteLoadCatalog(db, theirs, &aTheirs, &nTheirs, &iNextTheirs);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
-  /* Allocate merged array — worst case is all tables from both sides */
+  
   nMergedAlloc = nOurs + nTheirs;
   if( nMergedAlloc==0 ) nMergedAlloc = 1;
   aMerged = sqlite3_malloc(nMergedAlloc * (int)sizeof(struct TableEntry));
@@ -801,19 +715,10 @@ int doltliteMergeCatalogs(
     goto merge_cleanup;
   }
 
-  /* Use ours' iNextTable as the starting point, take max with theirs */
+  
   iNextMerged = iNextOurs > iNextTheirs ? iNextOurs : iNextTheirs;
 
-  /*
-  ** NAME-BASED THREE-WAY MERGE
-  **
-  ** Tables are matched by NAME (zName), not by iTable number.
-  ** This handles the case where two branches independently CREATE TABLE
-  ** and get different iTable numbers for tables with different names.
-  **
-  ** Output uses ours' iTable numbers. Theirs' tables that don't exist
-  ** in ours get new iTable numbers from iNextMerged.
-  */
+  
 
   rc = mergeCatalogPass1(db, aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
                           aMerged, &nMerged,
@@ -825,15 +730,15 @@ int doltliteMergeCatalogs(
                           aMerged, &nMerged, &iNextMerged);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
-  /* Serialize the merged catalog */
+  
   rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
                               pMergedHash);
   if( pnConflicts ) *pnConflicts = totalConflicts;
 
-  /* Store conflicts if any */
+  
   if( totalConflicts>0 && nConflictTables>0 && rc==SQLITE_OK ){
     ProllyHash conflictsHash;
-    /* ConflictTableInfo has the same layout as MergeConflictTable */
+    
     int rc2 = doltliteSerializeConflicts(
         doltliteGetChunkStore(db),
         (ConflictTableInfo*)aConflictTables, nConflictTables,
@@ -846,7 +751,7 @@ int doltliteMergeCatalogs(
     }
   }
 
-  /* Free collected conflicts */
+  
   {
     int ci;
     for(ci=0; ci<nConflictTables; ci++){
@@ -871,4 +776,4 @@ merge_cleanup:
   return rc;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

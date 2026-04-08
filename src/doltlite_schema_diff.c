@@ -1,18 +1,4 @@
-/*
-** dolt_schema_diff('from_ref', 'to_ref') — schema-level diff between commits.
-**
-** Shows tables added, dropped, or modified (schema changed) between
-** two commits:
-**
-**   SELECT * FROM dolt_schema_diff('abc123...', 'def456...');
-**   -- table_name | from_create_stmt | to_create_stmt | diff_type
-**
-** Also accepts branch and tag names.
-** With no arguments, diffs HEAD vs working state.
-**
-** Works by reading sqlite_master (table 1) at each commit and
-** comparing the CREATE TABLE statements.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -25,32 +11,20 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* --------------------------------------------------------------------------
-** Schema entry: name + CREATE statement extracted from sqlite_master rows
-** -------------------------------------------------------------------------- */
-
 typedef struct SchemaEntry SchemaEntry;
 struct SchemaEntry {
   char *zName;
-  char *zSql;       /* CREATE TABLE ... statement */
-  char *zType;      /* "table", "index", "view", etc. */
+  char *zSql;       
+  char *zType;      
 };
-
-/* --------------------------------------------------------------------------
-** Schema diff row
-** -------------------------------------------------------------------------- */
 
 typedef struct SchemaDiffRow SchemaDiffRow;
 struct SchemaDiffRow {
   char *zName;
   char *zFromSql;
   char *zToSql;
-  char *zDiffType;    /* "added", "dropped", "modified" */
+  char *zDiffType;    
 };
-
-/* --------------------------------------------------------------------------
-** Virtual table structures
-** -------------------------------------------------------------------------- */
 
 typedef struct SdVtab SdVtab;
 struct SdVtab {
@@ -80,10 +54,6 @@ static void freeSchemaDiffRows(SdCursor *c){
   c->nAlloc = 0;
 }
 
-/* --------------------------------------------------------------------------
-** Resolve a ref to a commit hash (hash, branch, or tag)
-** -------------------------------------------------------------------------- */
-
 static int sdResolveRef(ChunkStore *cs, const char *zRef, ProllyHash *pCommit){
   int rc;
   if( zRef && strlen(zRef)==40 ){
@@ -96,16 +66,6 @@ static int sdResolveRef(ChunkStore *cs, const char *zRef, ProllyHash *pCommit){
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
   return SQLITE_NOTFOUND;
 }
-
-/* --------------------------------------------------------------------------
-** Extract schema entries from sqlite_master (table 1) at a given catalog.
-**
-** sqlite_master rows are SQLite records with fields:
-**   type(TEXT), name(TEXT), tbl_name(TEXT), rootpage(INT), sql(TEXT)
-**
-** We use ProllyCursor to scan table 1's prolly tree, then parse each
-** row's record to extract name and sql.
-** -------------------------------------------------------------------------- */
 
 static int parseRecordHeader(
   const u8 *pData, int nData,
@@ -121,7 +81,7 @@ static int parseRecordHeader(
 
   if( nData < 1 ) return 0;
 
-  /* Header size varint */
+  
   hdrBytes = dlReadVarint(p, pDataEnd, &hdrSize);
   p += hdrBytes;
 
@@ -136,8 +96,8 @@ static int parseRecordHeader(
     aType[iField] = (int)st;
     aOffset[iField] = off;
 
-    /* Compute field size from serial type */
-    if( st==0 ) { /* NULL */ }
+    
+    if( st==0 ) {  }
     else if( st==1 ) off += 1;
     else if( st==2 ) off += 2;
     else if( st==3 ) off += 3;
@@ -145,9 +105,9 @@ static int parseRecordHeader(
     else if( st==5 ) off += 6;
     else if( st==6 ) off += 8;
     else if( st==7 ) off += 8;
-    else if( st==8 || st==9 ) { /* 0 or 1, 0 bytes */ }
-    else if( st>=12 && (st&1)==0 ) off += ((int)st-12)/2;  /* blob */
-    else if( st>=13 && (st&1)==1 ) off += ((int)st-13)/2;  /* text */
+    else if( st==8 || st==9 ) {  }
+    else if( st>=12 && (st&1)==0 ) off += ((int)st-12)/2;  
+    else if( st>=13 && (st&1)==1 ) off += ((int)st-13)/2;  
     iField++;
   }
 
@@ -173,7 +133,7 @@ static int loadSchemaFromCatalog(
   rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ){ *ppEntries = 0; *pnEntries = 0; return rc; }
 
-  /* Find table 1 (sqlite_master) */
+  
   memset(&masterRoot, 0, sizeof(masterRoot));
   for(i=0; i<nTables; i++){
     if( aTables[i].iTable==1 ){
@@ -189,7 +149,7 @@ static int loadSchemaFromCatalog(
     return SQLITE_OK;
   }
 
-  /* Scan sqlite_master rows */
+  
   prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
   rc = prollyCursorFirst(&cur, &res);
   if( rc!=SQLITE_OK || res ){ prollyCursorClose(&cur); *ppEntries = 0; *pnEntries = 0; return rc; }
@@ -204,11 +164,11 @@ static int loadSchemaFromCatalog(
     if( pVal && nVal > 0 ){
       nFields = parseRecordHeader(pVal, nVal, aType, aOffset, 5);
 
-      /* We need: field 0 = type, field 1 = name, field 4 = sql */
+      
       if( nFields >= 5 ){
         char *zType = 0, *zName = 0, *zSql = 0;
 
-        /* Extract text fields */
+        
         if( aType[0] >= 13 && (aType[0]&1)==1 ){
           int len = (aType[0]-13)/2;
           if( aOffset[0]+len <= nVal ){
@@ -270,10 +230,6 @@ static void freeSchemaEntries(SchemaEntry *a, int n){
   sqlite3_free(a);
 }
 
-/* --------------------------------------------------------------------------
-** Find a schema entry by name
-** -------------------------------------------------------------------------- */
-
 static SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName){
   int i;
   for(i=0; i<n; i++){
@@ -282,10 +238,6 @@ static SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName){
   return 0;
 }
 
-/* --------------------------------------------------------------------------
-** Compute schema diff between two sets of entries
-** -------------------------------------------------------------------------- */
-
 static int computeSchemaDiff(
   SdCursor *pCur,
   SchemaEntry *aFrom, int nFrom,
@@ -293,13 +245,13 @@ static int computeSchemaDiff(
 ){
   int i;
 
-  /* Check each "to" entry: added or modified */
+  
   for(i=0; i<nTo; i++){
     SchemaEntry *fromEntry = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
     SchemaDiffRow *r;
 
     if( !fromEntry ){
-      /* Added */
+      
       if( pCur->nRows >= pCur->nAlloc ){
         int nNew = pCur->nAlloc ? pCur->nAlloc*2 : 16;
         SchemaDiffRow *aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(SchemaDiffRow));
@@ -314,7 +266,7 @@ static int computeSchemaDiff(
       r->zDiffType = "added";
     }else if( fromEntry->zSql && aTo[i].zSql
            && strcmp(fromEntry->zSql, aTo[i].zSql)!=0 ){
-      /* Modified */
+      
       if( pCur->nRows >= pCur->nAlloc ){
         int nNew = pCur->nAlloc ? pCur->nAlloc*2 : 16;
         SchemaDiffRow *aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(SchemaDiffRow));
@@ -330,7 +282,7 @@ static int computeSchemaDiff(
     }
   }
 
-  /* Check each "from" entry: dropped if not in "to" */
+  
   for(i=0; i<nFrom; i++){
     SchemaEntry *toEntry = findSchemaEntry(aTo, nTo, aFrom[i].zName);
     if( !toEntry ){
@@ -352,10 +304,6 @@ static int computeSchemaDiff(
 
   return SQLITE_OK;
 }
-
-/* --------------------------------------------------------------------------
-** Virtual table methods
-** -------------------------------------------------------------------------- */
 
 static const char *sdSchema =
   "CREATE TABLE x("
@@ -460,21 +408,20 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
   }
 
-  /* Single argument that's not a valid ref = table name filter.
-  ** In this mode, diff HEAD vs working for that specific table. */
+  
   {
     const char *zTableFilter = 0;
     if( zFromRef && !zToRef ){
       ProllyHash testHash;
       int resolved = sdResolveRef(cs, zFromRef, &testHash);
       if( resolved!=SQLITE_OK ){
-        /* Not a valid commit/branch/tag — treat as table name */
+        
         zTableFilter = zFromRef;
         zFromRef = 0;
       }
     }
 
-    /* Resolve "from" ref → catalog hash */
+    
     if( zFromRef ){
     rc = sdResolveRef(cs, zFromRef, &fromCommit);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
@@ -488,12 +435,12 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     memcpy(&fromCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
   }else{
-    /* Default: HEAD */
+    
     rc = doltliteGetHeadCatalogHash(db, &fromCatHash);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
   }
 
-  /* Resolve "to" ref → catalog hash */
+  
   if( zToRef ){
     rc = sdResolveRef(cs, zToRef, &toCommit);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
@@ -507,7 +454,7 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     memcpy(&toCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
   }else{
-    /* Default: working state */
+    
     u8 *catData = 0; int nCatData = 0;
     rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
     if( rc==SQLITE_OK ){
@@ -517,14 +464,14 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     if( rc!=SQLITE_OK ) return SQLITE_OK;
   }
 
-  /* Load schema at both points */
+  
   loadSchemaFromCatalog(db, cs, pCache, &fromCatHash, &aFrom, &nFrom);
   loadSchemaFromCatalog(db, cs, pCache, &toCatHash, &aTo, &nTo);
 
-  /* Compute diff */
+  
   computeSchemaDiff(c, aFrom, nFrom, aTo, nTo);
 
-  /* If filtering by table name, remove rows that don't match */
+  
   if( zTableFilter ){
     int j, k=0;
     for(j=0; j<c->nRows; j++){
@@ -540,7 +487,7 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     c->nRows = k;
   }
 
-  } /* end of zTableFilter scope */
+  } 
 
   freeSchemaEntries(aFrom, nFrom);
   freeSchemaEntries(aTo, nTo);
@@ -583,4 +530,4 @@ int doltliteSchemaDiffRegister(sqlite3 *db){
   return sqlite3_create_module(db, "dolt_schema_diff", &schemaDiffModule, 0);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

@@ -1,7 +1,4 @@
-/*
-** Open-addressing hash set keyed by ProllyHash.
-** Shared by GC mark phase and sync engine.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_hashset.h"
@@ -65,7 +62,7 @@ int prollyHashSetAdd(ProllyHashSet *hs, const ProllyHash *h){
       return SQLITE_OK;
     }
     if( memcmp(hs->aSlots[slot].data, h->data, PROLLY_HASH_SIZE)==0 ){
-      return SQLITE_OK; /* already present */
+      return SQLITE_OK; 
     }
   }
   return SQLITE_FULL;
@@ -101,4 +98,4 @@ static int prollyHashSetGrow(ProllyHashSet *hs){
   return SQLITE_OK;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

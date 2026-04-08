@@ -3,26 +3,17 @@
 #include "prolly_arena.h"
 #include <string.h>
 
-/*
-** Initialize an arena with the given default block size.
-** No memory is allocated until the first call to prollyArenaAlloc.
-*/
 void prollyArenaInit(ProllyArena *a, int defaultBlockSize){
   memset(a, 0, sizeof(*a));
   a->defaultBlockSize = defaultBlockSize;
 }
 
-/*
-** Allocate n bytes from the arena. Returns NULL on OOM.
-** If the current block does not have enough room, a new block is allocated
-** whose usable size is the larger of defaultBlockSize and n.
-*/
 void *prollyArenaAlloc(ProllyArena *a, int n){
   ProllyArenaBlock *b;
   void *p;
 
   b = a->pCurrent;
-  /* Align to 8 bytes */
+  
   if( b ){
     int aligned_used = (b->used + 7) & ~7;
     if( (b->sz - aligned_used) >= n ){
@@ -32,13 +23,13 @@ void *prollyArenaAlloc(ProllyArena *a, int n){
     }
   }
 
-  /* Need a new block. Size is at least defaultBlockSize or n. */
+  
   {
     int blockSz = a->defaultBlockSize;
     if( n > blockSz ) blockSz = n;
 
     int totalSz = (int)sizeof(ProllyArenaBlock) + blockSz;
-    if( totalSz < blockSz ){  /* overflow */
+    if( totalSz < blockSz ){  
       return 0;
     }
     b = (ProllyArenaBlock*)sqlite3_malloc(totalSz);
@@ -59,26 +50,19 @@ void *prollyArenaAlloc(ProllyArena *a, int n){
   }
 }
 
-/*
-** Allocate n bytes from the arena and zero-initialize them.
-*/
 void *prollyArenaAllocZero(ProllyArena *a, int n){
   void *p = prollyArenaAlloc(a, n);
   if( p ) memset(p, 0, n);
   return p;
 }
 
-/*
-** Reset the arena: free all blocks except the first, reset the first
-** block's usage counter to zero.
-*/
 void prollyArenaReset(ProllyArena *a){
   ProllyArenaBlock *b;
 
   b = a->pFirst;
   if( b==0 ) return;
 
-  /* Free all blocks after the first */
+  
   {
     ProllyArenaBlock *pNext;
     ProllyArenaBlock *p = b->pNext;
@@ -94,9 +78,6 @@ void prollyArenaReset(ProllyArena *a){
   a->pCurrent = b;
 }
 
-/*
-** Destroy the arena: free all blocks and zero out the struct.
-*/
 void prollyArenaFree(ProllyArena *a){
   ProllyArenaBlock *b = a->pFirst;
   while( b ){
@@ -107,4 +88,4 @@ void prollyArenaFree(ProllyArena *a){
   memset(a, 0, sizeof(*a));
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

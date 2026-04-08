@@ -1,12 +1,4 @@
-/*
-** dolt_status virtual table: shows working and staged changes.
-**
-** Usage:
-**   SELECT * FROM dolt_status;
-**   -- table_name | staged | status
-**   -- users      | 0      | modified
-**   -- users      | 0      | schema modified
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -14,8 +6,6 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
-
-/* -------------------------------------------------------------------------- */
 
 typedef struct StatusRow StatusRow;
 struct StatusRow {
@@ -36,7 +26,6 @@ struct DoltliteStatusCursor {
 static const char *statusSchema =
   "CREATE TABLE x(table_name TEXT, staged INTEGER, status TEXT)";
 
-/* findInCatalog replaced by doltliteFindTableByNumber in doltlite_internal.h */
 #define findInCatalog(a,n,t) doltliteFindTableByNumber(a,n,t)
 
 static void addRow(DoltliteStatusCursor *pCur, const char *zName,
@@ -70,11 +59,11 @@ static void compareCatalogs(
     if(!pFrom){
       addRow(pCur, zName, staged, "new table");
     }else{
-      /* Check data changes */
+      
       if(prollyHashCompare(&pFrom->root, &aTo[i].root)!=0){
         addRow(pCur, zName, staged, "modified");
       }
-      /* Check schema changes (schemaHash differs) */
+      
       if(!prollyHashIsEmpty(&pFrom->schemaHash)
        && !prollyHashIsEmpty(&aTo[i].schemaHash)
        && prollyHashCompare(&pFrom->schemaHash, &aTo[i].schemaHash)!=0){
@@ -95,8 +84,6 @@ static void compareCatalogs(
     }
   }
 }
-
-/* -------------------------------------------------------------------------- */
 
 static int statusConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
@@ -213,4 +200,4 @@ int doltliteStatusRegister(sqlite3 *db){
   return sqlite3_create_module(db,"dolt_status",&doltliteStatusModule,0);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

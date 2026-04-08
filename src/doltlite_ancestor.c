@@ -1,10 +1,4 @@
-/*
-** Find the common ancestor (merge base) of two commits.
-**
-** Algorithm: collect all ancestors of commit1 (including itself) into a
-** hash set, then walk commit2's chain until finding one in the set.
-** This is the simplest correct approach for single-parent commit chains.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_ancestor.h"
@@ -13,17 +7,12 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* --------------------------------------------------------------------------
-** Simple hash set for ProllyHash values.
-** Open-addressing with linear probing. Sized to a power of 2.
-** -------------------------------------------------------------------------- */
-
 typedef struct HashSet HashSet;
 struct HashSet {
-  ProllyHash *aSlot;   /* Array of slots */
-  u8 *aUsed;           /* 1 if slot occupied, 0 if empty */
-  int nSlot;           /* Number of slots (power of 2) */
-  int nUsed;           /* Number of occupied slots */
+  ProllyHash *aSlot;   
+  u8 *aUsed;           
+  int nSlot;           
+  int nUsed;           
 };
 
 static int hashSetInit(HashSet *hs, int nInitial){
@@ -49,7 +38,6 @@ static void hashSetFree(HashSet *hs){
   memset(hs, 0, sizeof(*hs));
 }
 
-/* Hash a ProllyHash to a slot index. Use first 4 bytes as a u32. */
 static int hashSetIndex(const HashSet *hs, const ProllyHash *h){
   u32 v = (u32)h->data[0] | ((u32)h->data[1]<<8)
         | ((u32)h->data[2]<<16) | ((u32)h->data[3]<<24);
@@ -87,7 +75,6 @@ static int hashSetGrow(HashSet *hs){
   return SQLITE_OK;
 }
 
-/* Insert a hash. Returns SQLITE_OK or SQLITE_NOMEM. */
 static int hashSetInsert(HashSet *hs, const ProllyHash *h){
   int idx;
   if( hs->nUsed * 2 >= hs->nSlot ){
@@ -96,7 +83,7 @@ static int hashSetInsert(HashSet *hs, const ProllyHash *h){
   }
   idx = hashSetIndex(hs, h);
   while( hs->aUsed[idx] ){
-    if( prollyHashCompare(&hs->aSlot[idx], h)==0 ) return SQLITE_OK; /* dup */
+    if( prollyHashCompare(&hs->aSlot[idx], h)==0 ) return SQLITE_OK; 
     idx = (idx + 1) & (hs->nSlot - 1);
   }
   hs->aSlot[idx] = *h;
@@ -105,7 +92,6 @@ static int hashSetInsert(HashSet *hs, const ProllyHash *h){
   return SQLITE_OK;
 }
 
-/* Check if a hash is in the set. Returns 1 if found, 0 if not. */
 static int hashSetContains(const HashSet *hs, const ProllyHash *h){
   int idx = hashSetIndex(hs, h);
   while( hs->aUsed[idx] ){
@@ -114,10 +100,6 @@ static int hashSetContains(const HashSet *hs, const ProllyHash *h){
   }
   return 0;
 }
-
-/* --------------------------------------------------------------------------
-** Load a commit by hash from the chunk store (same pattern as doltlite_log.c)
-** -------------------------------------------------------------------------- */
 
 static int loadCommitByHash(sqlite3 *db, const ProllyHash *hash,
                             DoltliteCommit *pCommit){
@@ -136,10 +118,6 @@ static int loadCommitByHash(sqlite3 *db, const ProllyHash *hash,
   sqlite3_free(data);
   return rc;
 }
-
-/* --------------------------------------------------------------------------
-** BFS from one commit, populating the visited set with all ancestors.
-** -------------------------------------------------------------------------- */
 
 static int ancestorBfsCollect(
   sqlite3 *db,
@@ -165,7 +143,7 @@ static int ancestorBfsCollect(
     if( rc!=SQLITE_OK ) break;
     memset(&commit, 0, sizeof(commit));
     rc = loadCommitByHash(db, &current, &commit);
-    if( rc!=SQLITE_OK ){ rc = SQLITE_OK; continue; } /* end of chain */
+    if( rc!=SQLITE_OK ){ rc = SQLITE_OK; continue; } 
     for(i=0; i<commit.nParents; i++){
       if( qTail >= qAlloc ){
         qAlloc *= 2;
@@ -182,10 +160,6 @@ static int ancestorBfsCollect(
   sqlite3_free(queue);
   return rc;
 }
-
-/* --------------------------------------------------------------------------
-** doltliteFindAncestor
-** -------------------------------------------------------------------------- */
 
 int doltliteFindAncestor(
   sqlite3 *db,
@@ -207,7 +181,7 @@ int doltliteFindAncestor(
     return SQLITE_OK;
   }
 
-  /* Step 1: Collect all ancestors of commit1 via BFS */
+  
   rc = hashSetInit(&ancestors, 64);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -217,7 +191,7 @@ int doltliteFindAncestor(
     return rc;
   }
 
-  /* Step 2: BFS commit2's ancestors, checking against the set */
+  
   {
     ProllyHash *queue = 0;
     int qHead = 0, qTail = 0, qAlloc = 64;
@@ -268,29 +242,22 @@ int doltliteFindAncestor(
   return SQLITE_NOTFOUND;
 }
 
-/* --------------------------------------------------------------------------
-** dolt_merge_base(hash1, hash2) SQL function
-**
-** Returns the hex hash of the common ancestor commit, or NULL if none.
-** Arguments can be commit hashes (40-char hex) or branch names.
-** -------------------------------------------------------------------------- */
-
 extern int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 extern int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 
 static int resolveCommitRef(sqlite3 *db, const char *zRef, ProllyHash *pHash){
   ChunkStore *cs;
-  /* Try as hex hash first */
+  
   if( zRef && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
     if( doltliteHexToHash(zRef, pHash)==SQLITE_OK ) return SQLITE_OK;
   }
   cs = doltliteGetChunkStore(db);
   if( !cs ) return SQLITE_ERROR;
-  /* Try as branch name */
+  
   if( chunkStoreFindBranch(cs, zRef, pHash)==SQLITE_OK ){
     return SQLITE_OK;
   }
-  /* Try as tag name */
+  
   if( chunkStoreFindTag(cs, zRef, pHash)==SQLITE_OK ){
     return SQLITE_OK;
   }
@@ -347,4 +314,4 @@ int doltliteAncestorRegister(sqlite3 *db){
                                  doltMergeBaseFunc, 0, 0);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

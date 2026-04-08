@@ -1,18 +1,4 @@
-/*
-** dolt_at_<tablename>(commit_ref) — point-in-time table query with real columns.
-**
-** Returns the table as it existed at a specific commit, with the actual
-** table column names (not generic rowid_val/value):
-**
-**   SELECT * FROM dolt_at_users('v1.0');
-**   -- id | name | email
-**
-**   SELECT * FROM dolt_at_users('main');
-**   SELECT * FROM dolt_at_users('abc123...');
-**
-** This is the SQLite equivalent of Dolt's AS OF clause.
-** One eponymous virtual table is registered per user table.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -26,10 +12,6 @@
 
 #include <string.h>
 #include <time.h>
-
-/* --------------------------------------------------------------------------
-** Record field parser and result setter (same approach as dolt_history)
-** -------------------------------------------------------------------------- */
 
 #define AT_MAX_COLS 64
 
@@ -76,8 +58,6 @@ static void atResultField(sqlite3_context *ctx, const u8 *pData, int nData, int 
   sqlite3_result_null(ctx);
 }
 
-
-
 static char *atBuildSchema(DoltliteColInfo *ci){
   int i, sz=256;
   char *z;
@@ -92,19 +72,11 @@ static char *atBuildSchema(DoltliteColInfo *ci){
   return z;
 }
 
-/* --------------------------------------------------------------------------
-** Buffered row
-** -------------------------------------------------------------------------- */
-
 typedef struct AtRow AtRow;
 struct AtRow {
   i64 intKey;
   u8 *pVal; int nVal;
 };
-
-/* --------------------------------------------------------------------------
-** Virtual table structures
-** -------------------------------------------------------------------------- */
 
 typedef struct AtVtab AtVtab;
 struct AtVtab {
@@ -127,10 +99,6 @@ static void freeAtRows(AtCursor *c){
   int i; for(i=0;i<c->nRows;i++) sqlite3_free(c->aRows[i].pVal);
   sqlite3_free(c->aRows); c->aRows=0; c->nRows=0; c->nAlloc=0;
 }
-
-/* --------------------------------------------------------------------------
-** Resolve ref and scan table
-** -------------------------------------------------------------------------- */
 
 static int atResolveRef(ChunkStore *cs, const char *zRef, ProllyHash *pCommit){
   int rc;
@@ -182,10 +150,6 @@ static int atScanTree(AtCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
   prollyCursorClose(&cur); return SQLITE_OK;
 }
 
-/* --------------------------------------------------------------------------
-** Virtual table methods
-** -------------------------------------------------------------------------- */
-
 static int atConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   AtVtab *v; int rc; const char *zMod; char *zSchema;
@@ -225,7 +189,7 @@ static int atBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   AtVtab *v=(AtVtab*)pVtab;
   int nCols=v->cols.nCol;
   int iRef=-1, i, argvIdx=1;
-  /* The commit_ref is the last column (HIDDEN) */
+  
   int refCol = nCols > 0 ? nCols : 2;
   (void)pVtab;
 
@@ -317,7 +281,7 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   int nCols=v->cols.nCol;
 
   if(nCols>0 && col<nCols){
-    /* Table column */
+    
     if(col==v->cols.iPkCol){
       sqlite3_result_int64(ctx,r->intKey);
     }else{
@@ -328,7 +292,7 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       }else sqlite3_result_null(ctx);
     }
   }
-  /* commit_ref is HIDDEN — not returned by SELECT * */
+  
   return SQLITE_OK;
 }
 
@@ -341,10 +305,6 @@ static sqlite3_module atModule = {
   atOpen, atClose, atFilter, atNext, atEof, atColumn, atRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
-
-/* --------------------------------------------------------------------------
-** Registration: register dolt_at_<tablename> for each user table.
-** -------------------------------------------------------------------------- */
 
 void doltliteRegisterAtTables(sqlite3 *db){
   ChunkStore *cs=doltliteGetChunkStore(db);
@@ -369,10 +329,10 @@ void doltliteRegisterAtTables(sqlite3 *db){
 }
 
 int doltliteAtRegister(sqlite3 *db){
-  /* Also register the generic dolt_at TVF for backwards compatibility */
-  /* (kept as a separate simpler module — not reimplemented here) */
+  
+  
   doltliteRegisterAtTables(db);
   return SQLITE_OK;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

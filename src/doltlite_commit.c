@@ -1,12 +1,9 @@
-/*
-** Doltlite commit object serialization and utilities.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "doltlite_commit.h"
 #include <string.h>
 
-/* Little-endian helpers */
 #define DLC_PUT_U16(p,v) do{ (p)[0]=(u8)(v); (p)[1]=(u8)((v)>>8); }while(0)
 #define DLC_GET_U16(p) ((u16)((p)[0] | ((p)[1]<<8)))
 #define DLC_PUT_I64(p,v) do{ \
@@ -26,7 +23,7 @@ int doltliteCommitSerialize(const DoltliteCommit *c, u8 **ppOut, int *pnOut){
     return SQLITE_TOOBIG;
   }
   nPar = c->nParents > 0 ? c->nParents : (prollyHashIsEmpty(&c->parentHash) ? 0 : 1);
-  /* V2: version(1) + nParents(1) + parents(20*N) + catalog(20) + ts(8) + strings */
+  
   int sz = 1 + 1 + PROLLY_HASH_SIZE*nPar + PROLLY_HASH_SIZE + 8
          + 2 + nName + 2 + nEmail + 2 + nMsg;
   u8 *buf = sqlite3_malloc(sz);
@@ -35,10 +32,10 @@ int doltliteCommitSerialize(const DoltliteCommit *c, u8 **ppOut, int *pnOut){
   if( !buf ) return SQLITE_NOMEM;
   p = buf;
 
-  /* version */
+  
   *p++ = DOLTLITE_COMMIT_V2;
 
-  /* nParents + parent hashes */
+  
   *p++ = (u8)nPar;
   if( nPar > 0 && c->nParents > 0 ){
     for(i=0; i<nPar; i++){
@@ -46,26 +43,26 @@ int doltliteCommitSerialize(const DoltliteCommit *c, u8 **ppOut, int *pnOut){
       p += PROLLY_HASH_SIZE;
     }
   }else if( nPar == 1 ){
-    /* Legacy: single parent from parentHash field */
+    
     memcpy(p, c->parentHash.data, PROLLY_HASH_SIZE);
     p += PROLLY_HASH_SIZE;
   }
 
-  /* catalog hash (no rootHash in V2) */
+  
   memcpy(p, c->catalogHash.data, PROLLY_HASH_SIZE); p += PROLLY_HASH_SIZE;
 
-  /* timestamp */
+  
   DLC_PUT_I64(p, c->timestamp); p += 8;
 
-  /* name */
+  
   DLC_PUT_U16(p, (u16)nName); p += 2;
   if( nName>0 ){ memcpy(p, c->zName, nName); p += nName; }
 
-  /* email */
+  
   DLC_PUT_U16(p, (u16)nEmail); p += 2;
   if( nEmail>0 ){ memcpy(p, c->zEmail, nEmail); p += nEmail; }
 
-  /* message */
+  
   DLC_PUT_U16(p, (u16)nMsg); p += 2;
   if( nMsg>0 ){ memcpy(p, c->zMessage, nMsg); p += nMsg; }
 
@@ -87,7 +84,7 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
   if( version != DOLTLITE_COMMIT_V2 ) return SQLITE_CORRUPT;
 
   {
-    /* V2: nParents(1) + parents(20*N) + catalog(20) + ts(8) + strings */
+    
     int nPar;
     if( nData < 3 ) return SQLITE_CORRUPT;
     nPar = *p++;
@@ -100,17 +97,17 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
       memcpy(c->aParents[i].data, p, PROLLY_HASH_SIZE);
       p += PROLLY_HASH_SIZE;
     }
-    /* Set parentHash to first parent for convenience */
+    
     if( nPar > 0 ) c->parentHash = c->aParents[0];
-    /* catalog hash (no rootHash) */
+    
     memcpy(c->catalogHash.data, p, PROLLY_HASH_SIZE); p += PROLLY_HASH_SIZE;
     memset(c->rootHash.data, 0, PROLLY_HASH_SIZE);
   }
 
-  /* timestamp */
+  
   c->timestamp = DLC_GET_I64(p); p += 8;
 
-  /* name */
+  
   nName = DLC_GET_U16(p); p += 2;
   if( p + nName > data + nData ) return SQLITE_CORRUPT;
   c->zName = sqlite3_malloc(nName + 1);
@@ -119,7 +116,7 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
   c->zName[nName] = 0;
   p += nName;
 
-  /* email */
+  
   nEmail = DLC_GET_U16(p); p += 2;
   if( p + nEmail > data + nData ) return SQLITE_CORRUPT;
   c->zEmail = sqlite3_malloc(nEmail + 1);
@@ -128,7 +125,7 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
   c->zEmail[nEmail] = 0;
   p += nEmail;
 
-  /* message */
+  
   nMsg = DLC_GET_U16(p); p += 2;
   if( p + nMsg > data + nData ){ doltliteCommitClear(c); return SQLITE_CORRUPT; }
   c->zMessage = sqlite3_malloc(nMsg + 1);
@@ -179,4 +176,4 @@ int doltliteHexToHash(const char *hex, ProllyHash *h){
   return SQLITE_OK;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

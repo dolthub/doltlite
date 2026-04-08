@@ -1,40 +1,14 @@
-/*
-** Merge-flush: apply buffered edits from MutMap into an existing prolly tree.
-** This is the core mutation algorithm — it merges sorted edits with the
-** existing tree's leaf entries, then rebuilds the tree using the chunker.
-**
-** The algorithm performs a single sorted merge-walk over two streams:
-**   1. The existing tree's leaf entries (via cursor)
-**   2. The pending edits (via MutMap iterator)
-**
-** The merged output is fed to the chunker, which produces a new set of
-** content-addressed nodes forming the updated tree. Unchanged subtrees
-** are structurally shared with the old tree.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_mutate.h"
 #include <string.h>
 
-/*
-** Encode a 64-bit integer as 8 bytes in big-endian format.
-** Used to convert INTKEY values into a sortable byte representation
-** for the chunker and node builder.
-*/
-/*
-** Encode a signed 64-bit integer as 8 bytes in BIG-ENDIAN order.
-** Big-endian is required so that memcmp on encoded keys gives the
-** same order as numeric comparison — the prolly tree relies on
-** lexicographic key ordering.
-**
-** For signed integers, we XOR the sign bit so that negative values
-** sort before positive values in unsigned byte comparison:
-**   -1 → 7F FF FF FF FF FF FF FF
-**    0 → 80 00 00 00 00 00 00 00
-**    1 → 80 00 00 00 00 00 00 01
-*/
+/* Encode signed i64 as big-endian sort key. XOR sign bit so memcmp gives
+** correct signed ordering. BIG-ENDIAN despite the rest of the system being
+** little-endian -- sort keys must compare correctly under byte-wise memcmp. */
 static void encodeI64BE(u8 *buf, i64 v){
-  u64 u = (u64)v ^ ((u64)1 << 63);  /* flip sign bit */
+  u64 u = (u64)v ^ ((u64)1 << 63);
   buf[0] = (u8)(u >> 56);
   buf[1] = (u8)(u >> 48);
   buf[2] = (u8)(u >> 40);
@@ -45,20 +19,8 @@ static void encodeI64BE(u8 *buf, i64 v){
   buf[7] = (u8)(u);
 }
 
-/*
-** Estimated entries per leaf node, used for tree size estimation
-** in the merge-vs-apply heuristic.
-*/
 #define PROLLY_EST_ENTRIES_PER_LEAF 50
 
-/*
-** Compare two keys according to the node flags.
-**
-** For INTKEY tables: compare the 64-bit integer keys.
-** For BLOBKEY tables: keys are sort keys — memcmp gives correct order.
-**
-** Returns negative if key1 < key2, zero if equal, positive if key1 > key2.
-*/
 static int compareKeys(
   u8 flags,
   const u8 *pKey1, int nKey1, i64 iKey1,
@@ -78,14 +40,6 @@ static int compareKeys(
   }
 }
 
-/*
-** Feed a single key-value pair into the chunker.
-**
-** For INTKEY tables the key is serialized as an 8-byte big-endian i64
-** so that the chunker (which works on raw bytes) receives a sortable key
-** representation.  For BLOBKEY tables the key bytes are passed through
-** directly.
-*/
 static int feedChunker(
   ProllyChunker *pCh,
   u8 flags,
@@ -93,7 +47,7 @@ static int feedChunker(
   const u8 *pVal, int nVal
 ){
   if( flags & PROLLY_NODE_INTKEY ){
-    /* Encode integer key as 8-byte big-endian for the chunker. */
+    
     u8 aKeyBuf[8];
     encodeI64BE(aKeyBuf, intKey);
     return prollyChunkerAdd(pCh, aKeyBuf, 8, pVal, nVal);
@@ -102,14 +56,6 @@ static int feedChunker(
   }
 }
 
-/*
-** Build a new tree from scratch using only the edits in the MutMap.
-** This is used when the old tree is empty (oldRoot is all-zeros).
-**
-** We simply iterate over all edits in sorted order. INSERT edits are
-** fed to the chunker; DELETE edits are silently ignored (there is
-** nothing to delete in an empty tree).
-*/
 static int buildFromEdits(
   ProllyMutator *pMut
 ){
@@ -146,12 +92,6 @@ static int buildFromEdits(
 
 static int mergeWalk(ProllyMutator *pMut);
 
-/*
-** Check if the next edit key is within a subtree's key range.
-** Returns 1 if the edit key <= the subtree's boundary key (has edits),
-** 0 if the edit key > boundary key (no edits in this subtree).
-** If no edits remain, returns 0.
-*/
 static int subtreeHasEdits(
   u8 flags,
   ProllyMutMapIter *pIter,
@@ -163,14 +103,9 @@ static int subtreeHasEdits(
   pEd = prollyMutMapIterEntry(pIter);
   cmp = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
                     pBoundKey, nBoundKey, iBoundKey);
-  return (cmp <= 0);  /* edit key <= boundary key means edits in this subtree */
+  return (cmp <= 0);  
 }
 
-/*
-** Merge a single leaf node's entries with the edit iterator.
-** Feeds merged entries into the chunker at level 0.
-** Advances the edit iterator past all edits consumed.
-*/
 static int mergeLeaf(
   ProllyMutator *pMut,
   ProllyNode *pLeaf,
@@ -198,7 +133,7 @@ static int mergeLeaf(
     }
 
     if( !haveEdit ){
-      /* No more edits — emit remaining leaf entries */
+      
       const u8 *pVal; int nVal;
       prollyNodeValue(pLeaf, j, &pVal, &nVal);
       rc = prollyChunkerAdd(pCh, pCurKey, nCurKey, pVal, nVal);
@@ -207,7 +142,7 @@ static int mergeLeaf(
       continue;
     }
 
-    /* Check if edit is past this leaf */
+    
     {
       const u8 *pLastKey; int nLastKey;
       i64 iLastKey = 0;
@@ -222,7 +157,7 @@ static int mergeLeaf(
       int pastLeaf = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
                                  pLastKey, nLastKey, iLastKey);
       if( pastLeaf > 0 ){
-        /* Edit is past this leaf — emit remaining entries and return */
+        
         const u8 *pVal; int nVal;
         prollyNodeValue(pLeaf, j, &pVal, &nVal);
         rc = prollyChunkerAdd(pCh, pCurKey, nCurKey, pVal, nVal);
@@ -232,18 +167,18 @@ static int mergeLeaf(
       }
     }
 
-    /* Compare current entry with edit */
+    
     int cmp = compareKeys(flags, pCurKey, nCurKey, iCurKey,
                           pEd->pKey, pEd->nKey, pEd->intKey);
     if( cmp < 0 ){
-      /* Old entry first */
+      
       const u8 *pVal; int nVal;
       prollyNodeValue(pLeaf, j, &pVal, &nVal);
       rc = prollyChunkerAdd(pCh, pCurKey, nCurKey, pVal, nVal);
       if( rc!=SQLITE_OK ) return rc;
       j++;
     }else if( cmp == 0 ){
-      /* Replace or delete */
+      
       if( pEd->op==PROLLY_EDIT_INSERT ){
         u8 aEditKey[8];
         const u8 *pEK; int nEK;
@@ -259,7 +194,7 @@ static int mergeLeaf(
       j++;
       prollyMutMapIterNext(pIter);
     }else{
-      /* Insert new entry before old */
+      
       if( pEd->op==PROLLY_EDIT_INSERT ){
         u8 aEditKey[8];
         const u8 *pEK; int nEK;
@@ -278,17 +213,6 @@ static int mergeLeaf(
   return SQLITE_OK;
 }
 
-/*
-** Streaming merge: walk the old tree's internal nodes alongside the edit
-** iterator. Skip unchanged subtrees by emitting their hash directly at
-** the parent level. Only descend into subtrees that contain edits.
-**
-** For height-1 trees (root → leaves): O(M * L + S) where M = edits,
-** L = leaf size, S = number of skipped subtrees. Much faster than
-** mergeWalk's O(N + M) when M << N.
-**
-** For height-0 trees (leaf root): falls through to mergeWalk.
-*/
 static int streamingMerge(
   ProllyMutator *pMut
 ){
@@ -300,7 +224,7 @@ static int streamingMerge(
   ProllyNode rootNode;
   ProllyCache *pCache = pMut->pCache;
 
-  /* Load root node */
+  
   rc = chunkStoreGet(pMut->pStore, &pMut->oldRoot, &pRootData, &nRootData);
   if( rc!=SQLITE_OK ) return rc;
   rc = prollyNodeParse(&rootNode, pRootData, nRootData);
@@ -309,7 +233,7 @@ static int streamingMerge(
     return rc;
   }
 
-  /* Height-0 tree: single leaf, use mergeWalk */
+  
   if( rootNode.level == 0 ){
     sqlite3_free(pRootData);
     return mergeWalk(pMut);
@@ -322,7 +246,7 @@ static int streamingMerge(
     return rc;
   }
 
-  /* Walk root node's children (level-1 entries) */
+  
   {
     int i;
     for( i = 0; i < rootNode.nItems; i++ ){
@@ -344,18 +268,15 @@ static int streamingMerge(
                            pBoundKey, nBoundKey, iBoundKey)
        && (chunker.nLevels == 0
            || chunker.aLevel[0].builder.nItems == 0) ){
-        /* No edits in this subtree AND level-0 is empty (naturally
-        ** at a chunk boundary). Skip by emitting hash at parent level.
-        ** If level-0 has pending items, we must descend to preserve
-        ** chunk boundary alignment with the original tree. */
+        
         rc = prollyChunkerAddAtLevel(&chunker, rootNode.level,
                                       pBoundKey, nBoundKey,
                                       pChildVal, nChildVal);
         if( rc!=SQLITE_OK ) goto streaming_cleanup;
       }else{
-        /* Subtree has edits — load child and merge at leaf level */
+        
         if( rootNode.level == 1 ){
-          /* Child is a leaf — merge directly */
+          
           ProllyHash childHash;
           ProllyCacheEntry *pChildEntry;
           u8 *pChildData = 0;
@@ -376,8 +297,7 @@ static int streamingMerge(
           prollyCacheRelease(pCache, pChildEntry);
           if( rc!=SQLITE_OK ) goto streaming_cleanup;
         }else{
-          /* TODO: recurse for height > 2 trees. For now, fall back
-          ** to walking all entries in this subtree. */
+          
           ProllyCursor subCur;
           ProllyHash childHash;
           int subEmpty;
@@ -403,7 +323,7 @@ static int streamingMerge(
             }
             prollyCursorValue(&subCur, &pV, &nV);
 
-            /* Check if current entry should be merged with edit */
+            
             if( prollyMutMapIterValid(&iter) ){
               ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&iter);
               int cmp = compareKeys(pMut->flags, pK, nK, iK,
@@ -445,7 +365,7 @@ static int streamingMerge(
     }
   }
 
-  /* Handle remaining edits past the tree's last key */
+  
   while( prollyMutMapIterValid(&iter) ){
     ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&iter);
     if( pEd->op==PROLLY_EDIT_INSERT ){
@@ -468,11 +388,6 @@ streaming_cleanup:
   return rc;
 }
 
-/*
-** Merge-walk the existing tree with the edit map and produce a new tree.
-** O(N + M) — walks every entry regardless of edit count.
-** Used when M is large relative to N (hybrid flush fallback).
-*/
 static int mergeWalk(
   ProllyMutator *pMut
 ){
@@ -484,7 +399,7 @@ static int mergeWalk(
   int curValid;
   int iterValid;
 
-  /* prollyCursorInit returns void — it just sets fields, cannot fail. */
+  
   prollyCursorInit(&cur, pMut->pStore, pMut->pCache,
                    &pMut->oldRoot, pMut->flags);
   rc = prollyCursorFirst(&cur, &curEmpty);
@@ -598,40 +513,24 @@ merge_cleanup:
   return rc;
 }
 
-/*
-** Apply all edits in pMut->pEdits to the tree rooted at pMut->oldRoot.
-** Produces a new tree whose root hash is stored in pMut->newRoot.
-**
-** Three cases:
-**   1. No edits: newRoot = oldRoot (no work).
-**   2. Old tree is empty: build from edits alone.
-**   3. Otherwise: merge-walk old tree + edits.
-**
-** Returns SQLITE_OK on success with result in pMut->newRoot.
-*/
 int prollyMutateFlush(ProllyMutator *pMut){
-  /* Case 1: no edits — the tree is unchanged */
+  
   if( prollyMutMapIsEmpty(pMut->pEdits) ){
     memcpy(&pMut->newRoot, &pMut->oldRoot, sizeof(ProllyHash));
     return SQLITE_OK;
   }
 
-  /* Case 2: old tree is empty — build entirely from edits */
+  
   if( prollyHashIsEmpty(&pMut->oldRoot) ){
     return buildFromEdits(pMut);
   }
 
-  /* Case 3: pick strategy based on edit count vs tree size.
-  **
-  ** streamingMerge: O(M * L) — skips unchanged subtrees, great when M << N
-  ** mergeWalk:      O(N + M) — walks all entries, better when M ≈ N
-  **
-  ** Estimate N from the root node to choose the threshold. */
+  
   {
     int M = prollyMutMapCount(pMut->pEdits);
     int N = 0;
 
-    /* Load root to estimate N */
+    
     u8 *pRootData = 0;
     int nRootData = 0;
     int rcEst = chunkStoreGet(pMut->pStore, &pMut->oldRoot,
@@ -644,7 +543,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
         }else if( rootNode.level==1 ){
           N = rootNode.nItems * PROLLY_EST_ENTRIES_PER_LEAF;
         }else{
-          /* Height >= 2: large tree */
+          
           int factor = 1;
           int lv;
           for(lv = 0; lv < rootNode.level; lv++) factor *= PROLLY_EST_ENTRIES_PER_LEAF;
@@ -654,19 +553,15 @@ int prollyMutateFlush(ProllyMutator *pMut){
       sqlite3_free(pRootData);
     }
 
-    /* Threshold: use mergeWalk when edits exceed ~50% of estimated tree size.
-    ** With sort key encoding, BLOBKEY comparison is memcmp (same cost as
-    ** INTKEY), so both table types use the same threshold. */
+    
     int threshold;
     if( N <= 0 ){
-      threshold = 1000;  /* Fallback if estimation fails */
+      threshold = 1000;  
     }else{
       threshold = N / 2;
     }
 
-    /* Use streamingMerge for small edit sets — it skips unchanged
-    ** subtrees for O(M * L) instead of mergeWalk's O(N + M).
-    ** Fall back to mergeWalk when edits are a large fraction of the tree. */
+    
     if( M > threshold ){
       return mergeWalk(pMut);
     }else{
@@ -675,12 +570,6 @@ int prollyMutateFlush(ProllyMutator *pMut){
   }
 }
 
-/*
-** Convenience function: apply a single INSERT to a tree.
-**
-** Creates a temporary 1-entry MutMap, wraps it in a ProllyMutator,
-** calls prollyMutateFlush, and returns the new root hash.
-*/
 int prollyMutateInsert(
   ChunkStore *pStore,
   ProllyCache *pCache,
@@ -695,7 +584,7 @@ int prollyMutateInsert(
   int rc;
   u8 isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
 
-  /* Initialize a 1-entry edit map with the INSERT */
+  
   rc = prollyMutMapInit(&mm, isIntKey);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -705,7 +594,7 @@ int prollyMutateInsert(
     return rc;
   }
 
-  /* Set up the mutator */
+  
   memset(&mut, 0, sizeof(mut));
   mut.pStore = pStore;
   mut.pCache = pCache;
@@ -713,7 +602,7 @@ int prollyMutateInsert(
   mut.pEdits = &mm;
   mut.flags = flags;
 
-  /* Flush */
+  
   rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){
     memcpy(pNewRoot, &mut.newRoot, sizeof(ProllyHash));
@@ -723,12 +612,6 @@ int prollyMutateInsert(
   return rc;
 }
 
-/*
-** Convenience function: apply a single DELETE to a tree.
-**
-** Creates a temporary 1-entry MutMap with a DELETE edit, wraps it in a
-** ProllyMutator, calls prollyMutateFlush, and returns the new root hash.
-*/
 int prollyMutateDelete(
   ChunkStore *pStore,
   ProllyCache *pCache,
@@ -742,7 +625,7 @@ int prollyMutateDelete(
   int rc;
   u8 isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
 
-  /* Initialize a 1-entry edit map with the DELETE */
+  
   rc = prollyMutMapInit(&mm, isIntKey);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -752,7 +635,7 @@ int prollyMutateDelete(
     return rc;
   }
 
-  /* Set up the mutator */
+  
   memset(&mut, 0, sizeof(mut));
   mut.pStore = pStore;
   mut.pCache = pCache;
@@ -760,7 +643,7 @@ int prollyMutateDelete(
   mut.pEdits = &mm;
   mut.flags = flags;
 
-  /* Flush */
+  
   rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){
     memcpy(pNewRoot, &mut.newRoot, sizeof(ProllyHash));
@@ -770,4 +653,4 @@ int prollyMutateDelete(
   return rc;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 
