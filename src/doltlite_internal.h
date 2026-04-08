@@ -46,7 +46,11 @@ int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
+int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
 int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
+int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
+                                     const ProllyHash *pCatHash,
+                                     const ProllyHash *pCommitHash);
 
 const char *doltliteGetSessionBranch(sqlite3 *db);
 void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);

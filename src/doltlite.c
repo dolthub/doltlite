@@ -712,6 +712,8 @@ static void doltliteMergeFunc(
     if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "corrupt commit", -1); return; }
 
     rc = doltliteHardReset(db, &theirCommit.catalogHash);
+    if( rc==SQLITE_OK ){
+    }
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&theirCommit);
       sqlite3_result_error(context, "fast-forward failed", -1);

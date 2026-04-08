@@ -40,6 +40,13 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     }
     rc = chunkStoreDeleteBranch(cs, zName);
     if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch not found", -1); return; }
+    /* Clear this branch's entry from the working state so GC can
+    ** reclaim the deleted branch's catalog and data chunks. */
+    {
+      ProllyHash empty;
+      memset(&empty, 0, sizeof(empty));
+      doltliteUpdateBranchWorkingState(db, zName, &empty, NULL);
+    }
   }else{
     
     doltliteGetSessionHead(db, &head);
@@ -64,27 +71,46 @@ static int checkoutLoadAndApply(
   ProllyHash *pCommitHash,
   ProllyHash *pCatHash
 ){
-  DoltliteCommit commit;
-  u8 *data = 0;
-  int nData = 0;
   int rc;
+  ProllyHash committedCatHash;
 
-  rc = chunkStoreGet(cs, pCommitHash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteCommitDeserialize(data, nData, &commit);
-  sqlite3_free(data);
-  if( rc!=SQLITE_OK ) return rc;
-
-  memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
-  doltliteCommitClear(&commit);
-
-  
+  /* Load the committed catalog for this branch. */
   {
-    extern int doltliteSaveWorkingSet(sqlite3*);
-    doltliteSaveWorkingSet(db);
+    DoltliteCommit commit;
+    u8 *data = 0;
+    int nData = 0;
+
+    rc = chunkStoreGet(cs, pCommitHash, &data, &nData);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = doltliteCommitDeserialize(data, nData, &commit);
+    sqlite3_free(data);
+    if( rc!=SQLITE_OK ) return rc;
+
+    memcpy(&committedCatHash, &commit.catalogHash, sizeof(ProllyHash));
+    doltliteCommitClear(&commit);
   }
 
-  rc = doltliteHardReset(db, pCatHash);
+  /* Check working state for uncommitted changes. If the stored commitHash
+  ** matches the branch's current commit AND the stored catHash differs
+  ** from the committed catalog, the working state has uncommitted changes
+  ** that should be preserved. */
+  {
+    ProllyHash wsCatHash, wsCommitHash;
+    memset(&wsCatHash, 0, sizeof(wsCatHash));
+    memset(&wsCommitHash, 0, sizeof(wsCommitHash));
+    if( chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCatHash, &wsCommitHash)==SQLITE_OK
+     && !prollyHashIsEmpty(&wsCommitHash)
+     && memcmp(wsCommitHash.data, pCommitHash->data, PROLLY_HASH_SIZE)==0
+     && memcmp(wsCatHash.data, committedCatHash.data, PROLLY_HASH_SIZE)!=0 ){
+      /* Working state has uncommitted changes — use it. */
+      memcpy(pCatHash, &wsCatHash, sizeof(ProllyHash));
+      rc = doltliteSwitchCatalog(db, pCatHash);
+      return rc;
+    }
+  }
+
+  memcpy(pCatHash, &committedCatHash, sizeof(ProllyHash));
+  rc = doltliteSwitchCatalog(db, pCatHash);
   return rc;
 }
 
@@ -140,6 +166,24 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   }
 
   
+  /* Save the current branch's working catalog before hardReset overwrites
+  ** it with the target branch's catalog. */
+  {
+    extern int doltliteFlushAndSerializeCatalog(sqlite3*, u8**, int*);
+    extern int doltliteUpdateBranchWorkingState(sqlite3*, const char*,
+                                                const ProllyHash*, const ProllyHash*);
+    u8 *oldCatData = 0; int nOldCat = 0;
+    ProllyHash oldCatHash;
+    ProllyHash oldCommitHash;
+    doltliteGetSessionHead(db, &oldCommitHash);
+    if( doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat)==SQLITE_OK ){
+      chunkStorePut(cs, oldCatData, nOldCat, &oldCatHash);
+      sqlite3_free(oldCatData);
+      doltliteUpdateBranchWorkingState(db,
+          doltliteGetSessionBranch(db), &oldCatHash, &oldCommitHash);
+    }
+  }
+
   {
     ProllyHash catHash;
     rc = checkoutLoadAndApply(db, cs, zBranch, &targetCommit, &catHash);
@@ -148,15 +192,15 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       return;
     }
 
-    
+
     doltliteSetSessionBranch(db, zBranch);
     doltliteSetSessionHead(db, &targetCommit);
 
-    
+
     {
       extern int doltliteLoadWorkingSet(sqlite3*, const char*);
       doltliteLoadWorkingSet(db, zBranch);
-      
+
       {
         ProllyHash staged;
         doltliteGetSessionStaged(db, &staged);
@@ -166,16 +210,17 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       }
     }
 
-    
+
     chunkStoreSetDefaultBranch(cs, zBranch);
 
     {
       extern int doltliteSaveWorkingSet(sqlite3*);
-      extern int doltliteUpdateBranchWorkingState(sqlite3*, const char*, const ProllyHash*);
+      extern int doltliteUpdateBranchWorkingState(sqlite3*, const char*,
+                                                  const ProllyHash*, const ProllyHash*);
       doltliteSaveWorkingSet(db);
       /* Record the target branch's working catalog in the per-branch working
       ** state so cross-branch connections find the correct catalog on refresh. */
-      doltliteUpdateBranchWorkingState(db, zBranch, &catHash);
+      doltliteUpdateBranchWorkingState(db, zBranch, &catHash, &targetCommit);
     }
   }
   rc = chunkStoreSerializeRefs(cs);
