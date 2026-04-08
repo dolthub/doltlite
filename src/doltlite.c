@@ -705,6 +705,9 @@ static void doltliteMergeFunc(
 
   
   if( prollyHashCompare(&ancestorHash, &ourHead)==0 ){
+    /* Fast-forward: move branch pointer to their commit, no merge commit. */
+    char hx[PROLLY_HASH_SIZE*2+1];
+
     rc = chunkStoreGet(cs, &theirHead, &data, &nData);
     if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load commit", -1); return; }
     rc = doltliteCommitDeserialize(data, nData, &theirCommit);
@@ -712,55 +715,24 @@ static void doltliteMergeFunc(
     if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "corrupt commit", -1); return; }
 
     rc = doltliteHardReset(db, &theirCommit.catalogHash);
-    if( rc==SQLITE_OK ){
-    }
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&theirCommit);
       sqlite3_result_error(context, "fast-forward failed", -1);
       return;
     }
 
-    {
-      DoltliteCommit mc;
-      u8 *cd2 = 0;
-      int ncd2 = 0;
-      ProllyHash ch2, sc2;
-      char hx2[PROLLY_HASH_SIZE*2+1];
-      char mg2[256];
+    doltliteSetSessionHead(db, &theirHead);
+    doltliteSetSessionStaged(db, &theirCommit.catalogHash);
+    doltliteCommitClear(&theirCommit);
 
-      memcpy(&sc2, &theirCommit.catalogHash, sizeof(ProllyHash));
-      doltliteCommitClear(&theirCommit);
+    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &theirHead);
+    doltliteSaveWorkingSet(db);
+    chunkStoreSerializeRefs(cs);
+    chunkStoreCommit(cs);
 
-      memset(&mc, 0, sizeof(mc));
-      memcpy(&mc.parentHash, &theirHead, sizeof(ProllyHash));
-      memcpy(&mc.catalogHash, &sc2, sizeof(ProllyHash));
-      mc.timestamp = (i64)time(0);
-      snprintf(mg2, sizeof(mg2), "Merge branch '%s'", zBranch);
-      mc.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
-      mc.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
-      mc.zMessage = sqlite3_mprintf("%s", mg2);
-
-      rc = doltliteCommitSerialize(&mc, &cd2, &ncd2);
-      if( rc==SQLITE_OK ) rc = chunkStorePut(cs, cd2, ncd2, &ch2);
-      sqlite3_free(cd2);
-      doltliteCommitClear(&mc);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error(context, "failed to create merge commit", -1);
-        return;
-      }
-
-      doltliteSetSessionHead(db, &ch2);
-      doltliteSetSessionStaged(db, &sc2);
-
-      chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &ch2);
-      doltliteSaveWorkingSet(db);
-      chunkStoreSerializeRefs(cs);
-      chunkStoreCommit(cs);
-
-      doltliteHashToHex(&ch2, hx2);
-      sqlite3_result_text(context, hx2, -1, SQLITE_TRANSIENT);
-      return;
-    }
+    doltliteHashToHex(&theirHead, hx);
+    sqlite3_result_text(context, hx, -1, SQLITE_TRANSIENT);
+    return;
   }
 
   
