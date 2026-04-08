@@ -5,6 +5,7 @@
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
 
+
 struct TableEntry {
   Pgno iTable;           
   ProllyHash root;       
