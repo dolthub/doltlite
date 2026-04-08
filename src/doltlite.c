@@ -735,7 +735,7 @@ static void doltliteMergeFunc(
       memcpy(&mc.parentHash, &theirHead, sizeof(ProllyHash));
       memcpy(&mc.catalogHash, &sc2, sizeof(ProllyHash));
       mc.timestamp = (i64)time(0);
-      sqlite3_snprintf(sizeof(mg2), mg2, "Merge branch '%s'", zBranch);
+      snprintf(mg2, sizeof(mg2), "Merge branch '%s'", zBranch);
       mc.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
       mc.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
       mc.zMessage = sqlite3_mprintf("%s", mg2);
@@ -838,7 +838,7 @@ static void doltliteMergeFunc(
       mergeCommit.parentHash = ourHead;  
       memcpy(&mergeCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
       mergeCommit.timestamp = (i64)time(0);
-      sqlite3_snprintf(sizeof(msg), msg, "Merge branch '%s'", zBranch);
+      snprintf(msg, sizeof(msg), "Merge branch '%s'", zBranch);
       mergeCommit.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
       mergeCommit.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
       mergeCommit.zMessage = sqlite3_mprintf("%s", msg);
