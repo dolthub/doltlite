@@ -8,31 +8,7 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-static int checkWorkingDirty(sqlite3 *db){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash headCatHash, workingCatHash;
-  int rc;
 
-  if( !cs ) return -1;
-
-  
-  rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-  if( rc!=SQLITE_OK ) return -1;
-  if( prollyHashIsEmpty(&headCatHash) ) return 0;
-
-  
-  {
-    u8 *catData = 0; int nCatData = 0;
-    rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
-    if( rc!=SQLITE_OK ) return -1;
-    rc = chunkStorePut(cs, catData, nCatData, &workingCatHash);
-    sqlite3_free(catData);
-    if( rc!=SQLITE_OK ) return -1;
-  }
-
-  
-  return prollyHashCompare(&headCatHash, &workingCatHash) != 0;
-}
 
 static void activeBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
@@ -157,15 +133,6 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
 
   rc = chunkStoreFindBranch(cs, zBranch, &targetCommit);
   if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch not found", -1); return; }
-
-  
-  {
-    int dirty = checkWorkingDirty(db);
-    if( dirty>0 ){
-      sqlite3_result_error(ctx, "uncommitted changes — commit or reset first", -1);
-      return;
-    }
-  }
 
   if( prollyHashIsEmpty(&targetCommit) ){
     sqlite3_result_error(ctx, "target branch has no commits", -1);
