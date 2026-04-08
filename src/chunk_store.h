@@ -156,7 +156,11 @@ void chunkStoreUnlock(ChunkStore *cs);
 void chunkStoreGetWorkingState(ChunkStore *cs, ProllyHash *pState);
 void chunkStoreSetWorkingState(ChunkStore *cs, const ProllyHash *pState);
 int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
-                                        const ProllyHash *pCatHash);
+                                        const ProllyHash *pCatHash,
+                                        const ProllyHash *pCommitHash);
+int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
+                                       ProllyHash *pCatHash,
+                                       ProllyHash *pCommitHash);
 
 void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged);
 void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged);

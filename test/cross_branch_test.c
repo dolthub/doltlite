@@ -213,15 +213,107 @@ int main(){
   r = exec1(db1, "SELECT count(*) FROM t");
   check("t7_feature_preserved", strcmp(r, "2")==0);
 
-  printf("--- Test 8: checkout with uncommitted changes doesn't error ---\n");
+  printf("--- Test 8: uncommitted changes survive checkout roundtrip ---\n");
 
-  /* Uncommitted insert, then checkout — should not error */
+  /* Uncommitted insert on feature, then checkout to main and back */
   execsql(db1, "INSERT INTO t VALUES(3, 'uncommitted')");
   check("t8_has_3", strcmp(exec1(db1, "SELECT count(*) FROM t"), "3")==0);
 
   rc = execsql(db1, "SELECT dolt_checkout('main')");
   check("t8_checkout_ok", rc==SQLITE_OK);
   check("t8_main_has_1", strcmp(exec1(db1, "SELECT count(*) FROM t"), "1")==0);
+
+  /* Switch back to feature — uncommitted row should still be there */
+  exec1(db1, "SELECT dolt_checkout('feature')");
+  r = exec1(db1, "SELECT count(*) FROM t");
+  check("t8_uncommitted_survives", strcmp(r, "3")==0);
+  r = exec1(db1, "SELECT val FROM t WHERE id=3");
+  check("t8_uncommitted_val", strcmp(r, "uncommitted")==0);
+
+  printf("--- Test 9: branch deletion ---\n");
+
+  /* Start fresh for branch deletion test */
+  sqlite3_close(db1);
+  remove(dbpath);
+  { char w[256]; snprintf(w,256,"%s-wal",dbpath); remove(w); }
+
+  rc = sqlite3_open(dbpath, &db1);
+  check("t9_open", rc==SQLITE_OK);
+  sqlite3_busy_timeout(db1, 5000);
+
+  execsql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT)");
+  execsql(db1, "INSERT INTO t VALUES(1, 'main-data')");
+  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init main')");
+
+  /* Create a branch with extra data */
+  exec1(db1, "SELECT dolt_checkout('-b', 'doomed')");
+  execsql(db1, "INSERT INTO t VALUES(2, 'doomed-data')");
+  exec1(db1, "SELECT dolt_commit('-A', '-m', 'doomed commit')");
+  check("t9_doomed_has_2", strcmp(exec1(db1, "SELECT count(*) FROM t"), "2")==0);
+
+  /* Switch to main and delete the branch */
+  exec1(db1, "SELECT dolt_checkout('main')");
+  check("t9_main_has_1", strcmp(exec1(db1, "SELECT count(*) FROM t"), "1")==0);
+
+  exec1(db1, "SELECT dolt_branch('-d', 'doomed')");
+
+  /* Verify deleted branch is gone from dolt_branches */
+  r = exec1(db1, "SELECT count(*) FROM dolt_branches WHERE name='doomed'");
+  check("t9_branch_gone", strcmp(r, "0")==0);
+
+  /* Verify only main branch remains */
+  r = exec1(db1, "SELECT count(*) FROM dolt_branches");
+  check("t9_only_main", strcmp(r, "1")==0);
+
+  /* Verify main data still intact */
+  check("t9_main_intact", strcmp(exec1(db1, "SELECT val FROM t WHERE id=1"), "main-data")==0);
+
+  printf("--- Test 10: branch deletion + GC reclaims space ---\n");
+
+  {
+    long sizeBefore, sizeAfter;
+    FILE *f;
+
+    /* Insert enough data on a branch to make a measurable difference */
+    exec1(db1, "SELECT dolt_checkout('-b', 'bigbranch')");
+    {
+      int i;
+      for(i=100; i<200; i++){
+        char sql[128];
+        snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'bulk-%d')", i, i);
+        execsql(db1, sql);
+      }
+    }
+    exec1(db1, "SELECT dolt_commit('-A', '-m', 'bulk data')");
+    exec1(db1, "SELECT dolt_checkout('main')");
+
+    /* Measure file size before delete+GC */
+    sqlite3_close(db1);
+    f = fopen(dbpath, "rb");
+    if(f){ fseek(f,0,SEEK_END); sizeBefore=ftell(f); fclose(f); }
+    else sizeBefore=0;
+
+    rc = sqlite3_open(dbpath, &db1);
+    check("t10_reopen", rc==SQLITE_OK);
+    sqlite3_busy_timeout(db1, 5000);
+
+    exec1(db1, "SELECT dolt_branch('-d', 'bigbranch')");
+    exec1(db1, "SELECT dolt_gc()");
+
+    /* Measure file size after GC */
+    sqlite3_close(db1);
+    f = fopen(dbpath, "rb");
+    if(f){ fseek(f,0,SEEK_END); sizeAfter=ftell(f); fclose(f); }
+    else sizeAfter=0;
+
+    check("t10_gc_shrinks", sizeAfter < sizeBefore);
+
+    /* Verify main data survived GC */
+    rc = sqlite3_open(dbpath, &db1);
+    check("t10_reopen2", rc==SQLITE_OK);
+    sqlite3_busy_timeout(db1, 5000);
+    check("t10_main_survives", strcmp(exec1(db1, "SELECT val FROM t WHERE id=1"), "main-data")==0);
+  }
 
   /* Cleanup */
   sqlite3_close(db1);
