@@ -399,6 +399,41 @@ fi
 rm -f "$DB" "${DB}-wal"
 
 # ============================================================
+# Branch commit reopen with manifest head divergence.
+# Triggers the code path where branch tip != manifest head:
+# commit on dev, then commit on main (making main the manifest
+# head), then reopen on dev. The bug: p->root was set from the
+# always-empty commit.rootHash, zeroing the working tree.
+# ============================================================
+
+echo ""
+echo "--- Branch commit reopen (diverged manifest head) ---"
+
+DB=/tmp/test_persist_branch_reopen_$$.db; rm -f "$DB"
+
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'from_main');
+SELECT dolt_commit('-A','-m','main commit');
+SELECT dolt_branch('dev');
+SELECT dolt_checkout('dev');
+INSERT INTO t VALUES(2,'from_dev');
+SELECT dolt_commit('-A','-m','dev commit');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'main_again');
+SELECT dolt_commit('-A','-m','main second');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Reopen on dev — manifest head is main's latest, not dev's
+echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "diverged_dev_count" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "diverged_dev_val" "SELECT v FROM t WHERE id=2;" "from_dev" "$DB"
+
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "diverged_main_count" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "diverged_main_val" "SELECT v FROM t WHERE id=3;" "main_again" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Done
 # ============================================================
 
