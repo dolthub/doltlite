@@ -511,18 +511,19 @@ Each connection gets its own `Btree` and `BtShared` (not shared across
 connections). Doltlite stores the session's branch name, HEAD commit hash,
 and staged catalog hash in the `Btree` struct.
 
-- Each connection can be on a different branch.
+- Each connection can be on a different branch. Cross-branch concurrent
+  access is safe — each branch's working catalog is stored independently
+  in a per-branch working state chunk, so one branch's autocommit never
+  corrupts another branch's reads.
 - `dolt_checkout` reloads the table registry from the target branch's catalog.
+- Write transactions (DML) are serialized via an exclusive file-level lock,
+  matching SQLite's standard behavior. Under that lock, the connection
+  refreshes from disk before writing. Multiple connections can read
+  concurrently; writes from one connection are immediately visible to
+  readers on the same branch.
 - All commit graph mutations (`dolt_commit`, `dolt_merge`, `dolt_reset`,
-  `dolt_branch`, `dolt_tag`, push, pull) are serialized via an exclusive
-  file-level lock. Under that lock, the connection refreshes from disk
-  before writing, preventing silent data loss from concurrent commits.
-- DML (INSERT/UPDATE/DELETE) concurrency between multiple connections
-  is not fully characterized. The PagerShim does not implement SQLite's
-  file-level write locking, so concurrent write transactions are not
-  serialized the way standard SQLite serializes them. Single-connection
-  use is fully supported. Multi-connection concurrent DML behavior is
-  an area of active investigation.
+  `dolt_branch`, `dolt_tag`, push, pull) are also serialized via the
+  file-level lock, preventing silent data loss from concurrent commits.
 
 ## Performance
 
@@ -690,17 +691,16 @@ bash test/run_sqllogictest.sh \
     sqllogictest-doltlite sqllogictest-stock /tmp/sqllogictest/test
 ```
 
-### Concurrent Branch Test
+### Concurrent Branch Tests
 
-A C test that opens two connections on different branches and verifies they see
-different data:
+C tests that verify cross-branch isolation — two connections on different
+branches both write and read without corrupting each other:
 
 ```bash
 cd build
-# Compile (adjust flags as needed)
-gcc -o concurrent_branch_test ../test/concurrent_branch_test.c \
-    -I../src -L. -lsqlite3 -lpthread
-./concurrent_branch_test
+gcc -o cross_branch_test ../test/cross_branch_test.c \
+    -I. -I../src libdoltlite.a -lz -lpthread
+./cross_branch_test
 ```
 
 ## Architecture
@@ -828,9 +828,12 @@ closure for O(1) ancestor queries and a height field for efficient traversal.
 **Doltlite** stores commits as custom binary objects forming a DAG with
 multi-parent support (merge commits record both parents). Each branch has an
 associated WorkingSet chunk that stores staged catalog and merge state
-independently. The catalog hash is purely data-derived (no runtime metadata),
-enabling O(1) dirty checks via hash comparison. Branches and tags are stored in
-a serialized refs chunk referenced by the manifest.
+independently, plus a per-branch working catalog tracked in a separate working
+state chunk (referenced by the manifest). This allows connections on different
+branches to each find their own catalog on refresh without reading a stale
+catalog from another branch. The catalog hash is purely data-derived (no
+runtime metadata), enabling O(1) dirty checks via hash comparison. Branches
+and tags are stored in a serialized refs chunk referenced by the manifest.
 
 ### Garbage Collection
 
