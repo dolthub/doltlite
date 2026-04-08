@@ -148,23 +148,59 @@ static int htScanAtCommit(
   prollyCursorClose(&cur); return SQLITE_OK;
 }
 
+/* BFS all parents with dedup, matching dolt_log traversal order. */
 static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
   ChunkStore *cs=doltliteGetChunkStore(db);
-  ProllyCache *pCache; ProllyHash curHash; int rc;
+  ProllyCache *pCache;
+  ProllyHash *queue=0, *visited=0;
+  int qHead=0, qTail=0, qAlloc=0;
+  int nVisited=0, nVisitedAlloc=0;
+  int rc=SQLITE_OK;
+  ProllyHash head;
+
   if(!cs) return SQLITE_OK;
   pCache=doltliteGetCache(db);
   if(!pCache) return SQLITE_OK;
-  chunkStoreGetHeadCommit(cs,&curHash);
-  while(!prollyHashIsEmpty(&curHash)){
-    u8 *data=0;int nData=0; DoltliteCommit commit;
+
+  doltliteGetSessionHead(db, &head);
+  if(prollyHashIsEmpty(&head)) return SQLITE_OK;
+
+  qAlloc=16;
+  queue=sqlite3_malloc(qAlloc*(int)sizeof(ProllyHash));
+  if(!queue) return SQLITE_NOMEM;
+  queue[qTail++]=head;
+
+  while(qHead<qTail){
+    ProllyHash cur=queue[qHead++];
+    u8 *data=0; int nData=0;
+    DoltliteCommit commit;
     ProllyHash tableRoot; u8 flags=0;
     char hexBuf[PROLLY_HASH_SIZE*2+1];
+    int dup=0, i;
+
+    for(i=0;i<nVisited;i++){
+      if(prollyHashCompare(&visited[i],&cur)==0){dup=1;break;}
+    }
+    if(dup) continue;
+
+    if(nVisited>=nVisitedAlloc){
+      int na=nVisitedAlloc?nVisitedAlloc*2:16;
+      ProllyHash *tmp=sqlite3_realloc(visited,na*(int)sizeof(ProllyHash));
+      if(!tmp){rc=SQLITE_NOMEM;break;}
+      visited=tmp; nVisitedAlloc=na;
+    }
+    visited[nVisited++]=cur;
+
     memset(&commit,0,sizeof(commit));
-    rc=chunkStoreGet(cs,&curHash,&data,&nData); if(rc!=SQLITE_OK) break;
-    rc=doltliteCommitDeserialize(data,nData,&commit); sqlite3_free(data);
+    rc=chunkStoreGet(cs,&cur,&data,&nData);
     if(rc!=SQLITE_OK) break;
-    doltliteHashToHex(&curHash,hexBuf);
-    {struct TableEntry *aT=0;int nT=0;
+    rc=doltliteCommitDeserialize(data,nData,&commit);
+    sqlite3_free(data);
+    if(rc!=SQLITE_OK) break;
+
+    doltliteHashToHex(&cur,hexBuf);
+    {
+      struct TableEntry *aT=0; int nT=0;
       rc=doltliteLoadCatalog(db,&commit.catalogHash,&aT,&nT,0);
       if(rc==SQLITE_OK){
         if(htFindRoot(aT,nT,zTableName,&tableRoot,&flags)==SQLITE_OK)
@@ -172,10 +208,24 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
         sqlite3_free(aT);
       }
     }
-    {ProllyHash next;memcpy(&next,&commit.parentHash,sizeof(ProllyHash));
-      doltliteCommitClear(&commit);memcpy(&curHash,&next,sizeof(ProllyHash));}
+
+    for(i=0;i<commit.nParents;i++){
+      if(prollyHashIsEmpty(&commit.aParents[i])) continue;
+      if(qTail>=qAlloc){
+        int na=qAlloc*2;
+        ProllyHash *tmp=sqlite3_realloc(queue,na*(int)sizeof(ProllyHash));
+        if(!tmp){rc=SQLITE_NOMEM;break;}
+        queue=tmp; qAlloc=na;
+      }
+      queue[qTail++]=commit.aParents[i];
+    }
+    doltliteCommitClear(&commit);
+    if(rc!=SQLITE_OK) break;
   }
-  return SQLITE_OK;
+
+  sqlite3_free(queue);
+  sqlite3_free(visited);
+  return rc;
 }
 
 static int htConnect(sqlite3 *db, void *pAux, int argc,

@@ -244,11 +244,9 @@ SELECT dolt_reset('--hard');   -- discard all uncommitted changes
 
 ### Branching (Per-Session)
 
-Each connection tracks its own active branch. Two connections can be on
-different branches, seeing different data, at the same time. Branch state
-(active branch name, HEAD commit, staged catalog hash) lives in the `Btree`
-struct (per-connection). The chunk store in `BtShared` is shared across
-connections.
+Each connection tracks its own active branch. Branch state (active branch
+name, HEAD commit, staged catalog hash) lives in the `Btree` struct
+(per-connection). Each connection gets its own `BtShared` and chunk store.
 
 ```sql
 -- Create a branch at current HEAD
@@ -509,18 +507,20 @@ SELECT * FROM dolt_diff('config');
 
 ## Per-Session Branching Architecture
 
-SQLite's `Btree` struct is per-connection. Doltlite stores each session's
-branch name, HEAD commit hash, and staged catalog hash there. The underlying
-chunk store (`BtShared`) is shared. This means:
+Each connection gets its own `Btree` and `BtShared` (not shared across
+connections). Doltlite stores the session's branch name, HEAD commit hash,
+and staged catalog hash in the `Btree` struct.
 
-- Two connections to the same database file can be on different branches.
-- Each sees its own tables, schema, and data based on its branch's HEAD.
+- Each connection can be on a different branch.
 - `dolt_checkout` reloads the table registry from the target branch's catalog.
-- Writers are serialized by SQLite's existing locking, so branch switches are
-  safe.
-
-The `concurrent_branch_test.c` test demonstrates two connections on different
-branches querying different data simultaneously.
+- All commit graph mutations (`dolt_commit`, `dolt_merge`, `dolt_reset`,
+  `dolt_branch`, `dolt_tag`, push, pull) are serialized via an exclusive
+  file-level lock. Under that lock, the connection refreshes from disk
+  before writing, preventing silent data loss from concurrent commits.
+- DML (INSERT/UPDATE/DELETE) operates on the connection's local state
+  with no cross-connection locking. DoltLite is currently validated for
+  single-writer use; concurrent DML from multiple connections to the same
+  tables is not supported.
 
 ## Performance
 

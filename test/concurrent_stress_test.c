@@ -2459,13 +2459,5 @@ int main(void){
 
   printf("=== Results: %d passed, %d failed out of %d total ===\n",
          nPass, nFail, nTotal);
-  /* Known failures from shared BtShared corruption (issue #250):
-  ** 2.2, 2.3, 2.10, 4.6 — these involve concurrent DML from multiple
-  ** connections. Exit 0 if ONLY known failures remain, exit 1 if new
-  ** regressions appear. */
-  if( nFail > 0 && nFail <= 4 ){
-    printf("(all failures are known issues — see #250)\n");
-    return 0;
-  }
   return nFail > 0 ? 1 : 0;
 }
