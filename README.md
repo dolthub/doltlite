@@ -571,27 +571,6 @@ comment.
 
 _10K rows, file-backed, Linux x64 (GitHub Actions). Run `test/sysbench_compare.sh` to reproduce._
 
-**Most reads are at or below parity.** The VDBE, query planner, parser, and all
-upper layers are untouched SQLite — only the storage engine is replaced. The
-prolly tree's content-addressed chunks are cached in memory after the first
-read, so repeated access patterns (point selects, range scans) often beat
-SQLite's B-tree on file-backed workloads. The composite oltp_read_only is 0.76x.
-
-**Writes are within 1-2.7x.** Edits accumulate in a skip list and flush once at
-commit time using a Dolt-style cursor-path-stack algorithm. Only the root-to-leaf
-path is rewritten per edit; unchanged subtrees are structurally shared.
-
-**oltp_read_write is 3.8x.** This mixed workload (reads + writes in one large
-transaction) is the most expensive because write transactions serialize via
-file-level lock and each commit persists per-branch working state for
-cross-branch isolation.
-
-**oltp_update_index is 2.7x** (down from 380x in the initial implementation).
-This benchmark does 10K updates to an indexed column in one transaction.
-Improvements came from sort key materialization (memcmp replaces field-by-field
-comparison), IndexMoveto scan limits, savepoint structural sharing, and deferred
-MutMap flush for ephemeral tables.
-
 ### Algorithmic Complexity
 
 All numbers below have automated assertions in CI (`test/doltlite_perf.sh` and `test/doltlite_structural.sh`).
