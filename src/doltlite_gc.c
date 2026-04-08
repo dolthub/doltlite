@@ -175,22 +175,26 @@ static int gcMarkReachable(
         }
       }
       
-      if( nData >= 9 && data[0] == 0x43 ){
-        int nTables = (int)(data[5] | (data[6]<<8) |
-                            (data[7]<<16) | (data[8]<<24));
+      if( nData >= CAT_HEADER_SIZE && data[0] == CATALOG_FORMAT_V2 ){
+        int nTables = (int)(data[CAT_NUM_TABLES_OFF]
+                          | (data[CAT_NUM_TABLES_OFF+1]<<8)
+                          | (data[CAT_NUM_TABLES_OFF+2]<<16)
+                          | (data[CAT_NUM_TABLES_OFF+3]<<24));
         if( nTables >= 0 && nTables < 10000 ){
-          const u8 *p = data + 9;
+          const u8 *p = data + CAT_HEADER_SIZE;
           for(i=0; i<nTables; i++){
-            if( p + 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2 > data + nData ) break;
+            if( p + CAT_ENTRY_FIXED_SIZE > data + nData ) break;
             {
               ProllyHash tableRoot;
-              memcpy(tableRoot.data, p + 5, PROLLY_HASH_SIZE);
+              memcpy(tableRoot.data, p + CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE,
+                     PROLLY_HASH_SIZE);
               rc = gcQueuePush(&queue, &tableRoot);
               if( rc!=SQLITE_OK ) break;
             }
             {
               int nameLen;
-              p += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
+              p += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
+                 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
               nameLen = p[0] | (p[1]<<8);
               p += 2 + nameLen;
             }

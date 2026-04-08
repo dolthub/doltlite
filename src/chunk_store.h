@@ -37,6 +37,17 @@
 #define WS_CONFLICTS_OFF    (WS_MERGE_COMMIT_OFF + PROLLY_HASH_SIZE)
 #define WS_TOTAL_SIZE       (WS_CONFLICTS_OFF + PROLLY_HASH_SIZE)
 
+/* Catalog (table registry) binary format V2:
+**   magic(1) + iNextTable(4 LE) + nTables(4 LE) + entries...
+** Per entry: iTable(4 LE) + flags(1) + root(20) + schema(20) + nameLen(2 LE) + name */
+#define CATALOG_FORMAT_V2       0x43
+#define CAT_NEXT_TABLE_OFF      1
+#define CAT_NUM_TABLES_OFF      5
+#define CAT_HEADER_SIZE         9
+#define CAT_ENTRY_ITABLE_SIZE   4
+#define CAT_ENTRY_FLAGS_SIZE    1
+#define CAT_ENTRY_FIXED_SIZE    (CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2)
+
 typedef struct ChunkStore ChunkStore;
 typedef struct ChunkIndexEntry ChunkIndexEntry;
 typedef struct ConflictEntry ConflictEntry;

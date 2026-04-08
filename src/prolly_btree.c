@@ -778,8 +778,6 @@ static void refreshCursorRoot(BtCursor *pCur){
   }
 }
 
-#define CATALOG_FORMAT_V2 0x43
-
 /*
 ** Catalog serialization format (V2):
 **   Byte 0:       CATALOG_FORMAT_V2 magic (0x43)
