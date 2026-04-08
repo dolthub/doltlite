@@ -114,11 +114,6 @@ static int syncEnqueueChildren(
           if( rc==SQLITE_OK ) rc = syncQueuePush(q, &commit.aParents[pi]);
         }
       }
-      if( rc==SQLITE_OK && !prollyHashIsEmpty(&commit.rootHash)
-          && !prollyHashSetContains(seen, &commit.rootHash) ){
-        rc = prollyHashSetAdd(seen, &commit.rootHash);
-        if( rc==SQLITE_OK ) rc = syncQueuePush(q, &commit.rootHash);
-      }
       if( rc==SQLITE_OK && !prollyHashIsEmpty(&commit.catalogHash)
           && !prollyHashSetContains(seen, &commit.catalogHash) ){
         rc = prollyHashSetAdd(seen, &commit.catalogHash);

@@ -12,8 +12,7 @@
 
 typedef struct DoltliteCommit DoltliteCommit;
 struct DoltliteCommit {
-  ProllyHash parentHash;     
-  ProllyHash rootHash;       
+  ProllyHash parentHash;
   ProllyHash catalogHash;    
   i64 timestamp;             
   char *zName;               
