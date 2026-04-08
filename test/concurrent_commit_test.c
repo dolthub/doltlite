@@ -1,8 +1,20 @@
 /*
-** Test concurrent dolt_commit: reproduces Aaron's code review scenario where
-** two connections commit to the same branch and the first commit is silently
-** lost. After the fix, the second commit should fail with SQLITE_BUSY_SNAPSHOT
-** (surfaced as an error message) instead of silent data loss.
+** Concurrent commit invariant tests for DoltLite.
+**
+** These tests verify the commit isolation invariant:
+**
+**   NO SILENT COMMIT LOSS: If dolt_commit returns a hash, that commit
+**   is the branch tip. If another connection committed to the same branch
+**   since this connection last saw it, dolt_commit must return an error —
+**   not silently overwrite the other connection's commit.
+**
+** This invariant was violated in the original code. Aaron's code review
+** demonstrated the bug: Connection A commits "add one", Connection B
+** commits "add two", and "add one" disappears from the log with no error.
+**
+** Test 1 reproduces Aaron's exact scenario.
+** Test 2 verifies single-connection commits still work (no false positives).
+** Test 3 verifies sequential commits from reopened connections work.
 **
 ** Build:
 **   cc -g -I. -o concurrent_commit_test \

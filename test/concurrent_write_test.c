@@ -1,6 +1,16 @@
 /*
-** Test concurrent writes: multiple connections writing simultaneously
-** to the same branch, verifying proper serialization and data integrity.
+** Concurrent access tests for DoltLite (single-writer, multi-reader).
+**
+** These tests verify the concurrency model that DoltLite currently supports:
+** one connection does all DML writes, other connections can read.
+**
+**   READER CONSISTENCY: Readers see a consistent view — either the state
+**   before or after a write, never a partial or corrupt intermediate state.
+**
+**   KNOWN LIMITATION: Multiple in-process connections sharing a BtShared
+**   cannot safely do concurrent DML to the same tables. This corrupts the
+**   shared in-memory prolly tree (see issue #250). The multi-writer
+**   scenario is documented as SKIPPED at the end of this file.
 */
 #include <stdio.h>
 #include <stdlib.h>
