@@ -339,7 +339,7 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   CS_WRITE_U32(aBuf + 28, (u32)cs->nChunks);
   CS_WRITE_I64(aBuf + 32, cs->iIndexOffset);
   CS_WRITE_U32(aBuf + 40, (u32)cs->nIndexSize);
-  memcpy(aBuf + 44, cs->catalog.data, PROLLY_HASH_SIZE);
+  /* offset 44: reserved (was catalog_hash, removed in v7) */
   memcpy(aBuf + 64, cs->headCommit.data, PROLLY_HASH_SIZE);
   CS_WRITE_I64(aBuf + 84, cs->iWalOffset);
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
@@ -375,7 +375,7 @@ static int csReadManifest(ChunkStore *cs){
   cs->nChunks = (int)CS_READ_U32(aBuf + 28);
   cs->iIndexOffset = CS_READ_I64(aBuf + 32);
   cs->nIndexSize = (int)CS_READ_U32(aBuf + 40);
-  memcpy(cs->catalog.data, aBuf + 44, PROLLY_HASH_SIZE);
+  /* offset 44: reserved (was catalog_hash, removed in v7) */
   memcpy(cs->headCommit.data, aBuf + 64, PROLLY_HASH_SIZE);
   cs->iWalOffset = CS_READ_I64(aBuf + 84);
   memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
@@ -546,7 +546,6 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         if( magic == CHUNK_STORE_MAGIC ){
           memcpy(cs->root.data, m + 8, PROLLY_HASH_SIZE);
           cs->nChunks = (int)CS_READ_U32(m + 28);
-          memcpy(cs->catalog.data, m + 44, PROLLY_HASH_SIZE);
           memcpy(cs->headCommit.data, m + 64, PROLLY_HASH_SIZE);
           memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
           memcpy(cs->workingState.data, m + 124, PROLLY_HASH_SIZE);
@@ -812,14 +811,6 @@ void chunkStoreGetRoot(ChunkStore *cs, ProllyHash *pRoot){
 
 void chunkStoreSetRoot(ChunkStore *cs, const ProllyHash *pRoot){
   memcpy(&cs->root, pRoot, sizeof(ProllyHash));
-}
-
-void chunkStoreGetCatalog(ChunkStore *cs, ProllyHash *pCat){
-  memcpy(pCat, &cs->catalog, sizeof(ProllyHash));
-}
-
-void chunkStoreSetCatalog(ChunkStore *cs, const ProllyHash *pCat){
-  memcpy(&cs->catalog, pCat, sizeof(ProllyHash));
 }
 
 void chunkStoreGetHeadCommit(ChunkStore *cs, ProllyHash *pHead){
