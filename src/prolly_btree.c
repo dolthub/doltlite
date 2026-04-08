@@ -4690,8 +4690,9 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   memcpy(&pBtree->stagedCatalog, catHash, sizeof(ProllyHash));
 
   
-  /* Update per-branch working state (correct for reset/merge; checkout
-  ** overwrites with the target branch afterward). */
+  /* Update per-branch working state for the current session branch.
+  ** Callers that change branches (checkout) must save the old branch's
+  ** working catalog BEFORE calling hardReset. */
   {
     const char *zBr = pBtree->zBranch ? pBtree->zBranch : "main";
     btreeWriteWorkingState(cs, zBr, catHash);

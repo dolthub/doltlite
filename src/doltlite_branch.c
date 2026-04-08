@@ -140,6 +140,21 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   }
 
   
+  /* Save the current branch's working catalog before hardReset overwrites
+  ** it with the target branch's catalog. */
+  {
+    extern int doltliteFlushAndSerializeCatalog(sqlite3*, u8**, int*);
+    extern int doltliteUpdateBranchWorkingState(sqlite3*, const char*, const ProllyHash*);
+    u8 *oldCatData = 0; int nOldCat = 0;
+    ProllyHash oldCatHash;
+    if( doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat)==SQLITE_OK ){
+      chunkStorePut(cs, oldCatData, nOldCat, &oldCatHash);
+      sqlite3_free(oldCatData);
+      doltliteUpdateBranchWorkingState(db,
+          doltliteGetSessionBranch(db), &oldCatHash);
+    }
+  }
+
   {
     ProllyHash catHash;
     rc = checkoutLoadAndApply(db, cs, zBranch, &targetCommit, &catHash);
