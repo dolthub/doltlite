@@ -146,10 +146,11 @@ static int gcMarkReachable(
         }
       }
     }else if( isCommitChunk(data, nData) ){
-      
+
       DoltliteCommit commit;
+      int drc;
       memset(&commit, 0, sizeof(commit));
-      int drc = doltliteCommitDeserialize(data, nData, &commit);
+      drc = doltliteCommitDeserialize(data, nData, &commit);
       if( drc==SQLITE_OK ){
         int pi;
         for(pi=0; pi<commit.nParents; pi++){

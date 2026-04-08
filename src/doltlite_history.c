@@ -248,9 +248,10 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   HistCursor *c=(HistCursor*)cur;
   HistVtab *v=(HistVtab*)cur->pVtab;
   HistoryRow *r;
+  int nCols;
   if( c->iRow>=c->nRows ) return SQLITE_OK;
   r=&c->aRows[c->iRow];
-  int nCols=v->cols.nCol;
+  nCols=v->cols.nCol;
 
   
 

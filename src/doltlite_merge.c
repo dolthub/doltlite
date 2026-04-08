@@ -469,14 +469,14 @@ static int serializeMergedCatalog(
   ProllyHash *pOutHash               
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  int sz = 1 + 4 + 4;  
+  int sz = 1 + 4 + 4;
+  u8 *buf;
+  u8 *p;
+  int rc;
   { int j; for(j=0;j<nMerged;j++){
     int nl = aMerged[j].zName ? (int)strlen(aMerged[j].zName) : 0;
     sz += 4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE+2+nl;
   }}
-  u8 *buf;
-  u8 *p;
-  int rc;
 
   (void)oursCatHash;  
 

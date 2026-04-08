@@ -353,11 +353,12 @@ static int walkHistoryAndDiff(
     }else{
       if( !prollyHashIsEmpty(&curRoot) ){
         ProllyHash emptyRoot;
+        CollectCtx ctx;
         memset(&emptyRoot, 0, sizeof(emptyRoot));
         memset(parentHex, '0', PROLLY_HASH_SIZE*2);
         parentHex[PROLLY_HASH_SIZE*2] = 0;
 
-        CollectCtx ctx;
+
         ctx.pCur = pCur;
         ctx.zFromCommit = parentHex;
         ctx.zToCommit = curHex;

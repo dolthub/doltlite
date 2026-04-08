@@ -91,35 +91,43 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
 }
 
 void prollyNodeKey(const ProllyNode *pNode, int i, const u8 **ppKey, int *pnKey){
+  u32 off0;
+  u32 off1;
   assert( i >= 0 && i < (int)pNode->nItems );
-  u32 off0 = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
-  u32 off1 = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i+1]);
+  off0 = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
+  off1 = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i+1]);
   *ppKey = pNode->pKeyData + off0;
   *pnKey = (int)(off1 - off0);
 }
 
 void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVal){
+  u32 off0;
+  u32 off1;
   assert( i >= 0 && i < (int)pNode->nItems );
-  u32 off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
-  u32 off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
+  off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
+  off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
   *ppVal = pNode->pValData + off0;
   *pnVal = (int)(off1 - off0);
 }
 
 i64 prollyNodeIntKey(const ProllyNode *pNode, int i){
+  u32 off;
+  const u8 *p;
+  u64 u;
   assert( i >= 0 && i < (int)pNode->nItems );
-  u32 off = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
-  const u8 *p = pNode->pKeyData + off;
+  off = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
+  p = pNode->pKeyData + off;
   /* Decode big-endian sort key back to signed i64. Keys are stored big-endian
   ** with sign bit flipped (see encodeI64BE) so memcmp gives signed order. */
-  u64 u = ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40) | ((u64)p[3]<<32)
-         | ((u64)p[4]<<24) | ((u64)p[5]<<16) | ((u64)p[6]<<8) | (u64)p[7];
+  u = ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40) | ((u64)p[3]<<32)
+    | ((u64)p[4]<<24) | ((u64)p[5]<<16) | ((u64)p[6]<<8) | (u64)p[7];
   return (i64)(u ^ ((u64)1 << 63));  
 }
 
 void prollyNodeChildHash(const ProllyNode *pNode, int i, ProllyHash *pHash){
+  u32 off;
   assert( i >= 0 && i < (int)pNode->nItems );
-  u32 off = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
+  off = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
   memcpy(pHash->data, pNode->pValData + off, PROLLY_HASH_SIZE);
 }
 

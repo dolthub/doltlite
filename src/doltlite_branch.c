@@ -44,17 +44,19 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash head;
+  const char *arg0;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<1 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
 
-  const char *arg0 = (const char*)sqlite3_value_text(argv[0]);
+  arg0 = (const char*)sqlite3_value_text(argv[0]);
   if( !arg0 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
 
   if( strcmp(arg0, "-d")==0 || strcmp(arg0, "--delete")==0 ){
+    const char *zName;
     if( argc<2 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
-    const char *zName = (const char*)sqlite3_value_text(argv[1]);
+    zName = (const char*)sqlite3_value_text(argv[1]);
     if( !zName ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
     if( strcmp(zName, doltliteGetSessionBranch(db))==0 ){
       sqlite3_result_error(ctx, "cannot delete the current branch", -1);
@@ -114,11 +116,12 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash targetCommit;
+  const char *zBranch;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<1 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
-  const char *zBranch = (const char*)sqlite3_value_text(argv[0]);
+  zBranch = (const char*)sqlite3_value_text(argv[0]);
   if( !zBranch ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
 
   

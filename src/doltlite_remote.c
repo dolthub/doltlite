@@ -100,10 +100,11 @@ static int syncEnqueueChildren(
       }
     }
   }else if( syncIsCommitChunk(data, nData) ){
-    
+
     DoltliteCommit commit;
+    int drc;
     memset(&commit, 0, sizeof(commit));
-    int drc = doltliteCommitDeserialize(data, nData, &commit);
+    drc = doltliteCommitDeserialize(data, nData, &commit);
     if( drc==SQLITE_OK ){
       int pi;
       for(pi=0; pi<commit.nParents && rc==SQLITE_OK; pi++){
@@ -537,15 +538,17 @@ int doltlitePush(
     int nRefsData = 0;
     rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
     if( rc==SQLITE_OK && refsData ){
-      
+
       ChunkStore tmpCs;
+      const u8 *p;
       memset(&tmpCs, 0, sizeof(tmpCs));
-      
-      
-      const u8 *p = refsData;
+
+
+      p = refsData;
       if( nRefsData >= 5 ){
-        u8 ver = p[0]; p++;
-        int defLen = p[0]|(p[1]<<8); p += 2;
+        u8 ver; int defLen;
+        ver = p[0]; p++;
+        defLen = p[0]|(p[1]<<8); p += 2;
         if( p + defLen + 2 <= refsData + nRefsData ){
           int nBranches;
           p += defLen;
@@ -666,8 +669,9 @@ int doltliteFetch(
   
   if( nRefsData >= 5 ){
     const u8 *p = refsData;
-    u8 ver = p[0]; p++;
-    int defLen = p[0]|(p[1]<<8); p += 2;
+    u8 ver; int defLen;
+    ver = p[0]; p++;
+    defLen = p[0]|(p[1]<<8); p += 2;
     if( p + defLen + 2 <= refsData + nRefsData ){
       int nBranches, i;
       p += defLen;
@@ -731,8 +735,9 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   
   if( nRefsData >= 5 ){
     const u8 *p = refsData;
-    u8 ver = p[0]; p++;
-    int defLen = p[0]|(p[1]<<8); p += 2;
+    u8 ver; int defLen;
+    ver = p[0]; p++;
+    defLen = p[0]|(p[1]<<8); p += 2;
     if( p + defLen + 2 <= refsData + nRefsData ){
       int nBranches, nTags, i;
       p += defLen;

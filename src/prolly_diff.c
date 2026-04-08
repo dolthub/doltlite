@@ -369,9 +369,10 @@ static int diffLeaves(
       rc = xCb(pCtx, &ch); j++;
     }else{
       const u8 *pOV; int nOV; const u8 *pNV; int nNV;
+      int eq;
       prollyNodeValue(pOld, i, &pOV, &nOV);
       prollyNodeValue(pNew, j, &pNV, &nNV);
-      int eq = (nOV==nNV && (nOV==0 || memcmp(pOV, pNV, nOV)==0));
+      eq = (nOV==nNV && (nOV==0 || memcmp(pOV, pNV, nOV)==0));
       if( !eq && nOV>=2 && nNV>=2 ) eq = diffRecordsEqualFieldwise(pOV,nOV,pNV,nNV);
       if( !eq ){
         ProllyDiffChange ch;
@@ -459,16 +460,17 @@ static int diffNodes(
 
     while( i < (int)oldNode.nItems && j < (int)newNode.nItems && rc==SQLITE_OK ){
       ProllyHash oldChild, newChild;
+      int cmp;
       prollyNodeChildHash(&oldNode, i, &oldChild);
       prollyNodeChildHash(&newNode, j, &newChild);
 
-      
+
       if( prollyHashCompare(&oldChild, &newChild)==0 ){
         i++; j++;
         continue;
       }
 
-      int cmp = diffNodeKeyCmp(&oldNode, i, &newNode, j, flags);
+      cmp = diffNodeKeyCmp(&oldNode, i, &newNode, j, flags);
 
       if( cmp==0 ){
         

@@ -23,24 +23,27 @@ static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
 static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zAction;
+  const char *zName;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<2 ){ sqlite3_result_error(ctx, "usage: dolt_remote(action, name [, url])", -1); return; }
 
-  const char *zAction = (const char*)sqlite3_value_text(argv[0]);
-  const char *zName = (const char*)sqlite3_value_text(argv[1]);
+  zAction = (const char*)sqlite3_value_text(argv[0]);
+  zName = (const char*)sqlite3_value_text(argv[1]);
   if( !zAction || !zName ){
     sqlite3_result_error(ctx, "action and name required", -1);
     return;
   }
 
   if( strcmp(zAction, "add")==0 ){
+    const char *zUrl;
     if( argc<3 ){
       sqlite3_result_error(ctx, "url required for add", -1);
       return;
     }
-    const char *zUrl = (const char*)sqlite3_value_text(argv[2]);
+    zUrl = (const char*)sqlite3_value_text(argv[2]);
     if( !zUrl ){
       sqlite3_result_error(ctx, "url required for add", -1);
       return;
@@ -72,6 +75,8 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteRemote *pRemote = 0;
   const char *zUrl = 0;
+  const char *zRemoteName;
+  const char *zBranch;
   int bForce = 0;
   int rc;
 
@@ -81,8 +86,8 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  const char *zRemoteName = (const char*)sqlite3_value_text(argv[0]);
-  const char *zBranch = (const char*)sqlite3_value_text(argv[1]);
+  zRemoteName = (const char*)sqlite3_value_text(argv[0]);
+  zBranch = (const char*)sqlite3_value_text(argv[1]);
   if( !zRemoteName || !zBranch ){
     sqlite3_result_error(ctx, "remote and branch required", -1);
     return;
@@ -138,8 +143,9 @@ static int parseRemoteBranchNames(
 
   {
     const u8 *p = refsData;
-    u8 ver = p[0]; p++;
-    int defLen = p[0]|(p[1]<<8); p += 2;
+    u8 ver; int defLen;
+    ver = p[0]; p++;
+    defLen = p[0]|(p[1]<<8); p += 2;
     if( p + defLen + 2 <= refsData + nRefsData ){
       int nBranches, i;
       p += defLen;
@@ -189,6 +195,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteRemote *pRemote = 0;
   const char *zUrl = 0;
+  const char *zRemoteName;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -197,7 +204,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  const char *zRemoteName = (const char*)sqlite3_value_text(argv[0]);
+  zRemoteName = (const char*)sqlite3_value_text(argv[0]);
   if( !zRemoteName ){
     sqlite3_result_error(ctx, "remote name required", -1);
     return;
@@ -273,6 +280,8 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteRemote *pRemote = 0;
   const char *zUrl = 0;
+  const char *zRemoteName;
+  const char *zBranch;
   ProllyHash trackingCommit, localCommit;
   int rc;
 
@@ -282,8 +291,8 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  const char *zRemoteName = (const char*)sqlite3_value_text(argv[0]);
-  const char *zBranch = (const char*)sqlite3_value_text(argv[1]);
+  zRemoteName = (const char*)sqlite3_value_text(argv[0]);
+  zBranch = (const char*)sqlite3_value_text(argv[1]);
   if( !zRemoteName || !zBranch ){
     sqlite3_result_error(ctx, "remote and branch required", -1);
     return;
@@ -423,6 +432,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteRemote *pRemote = 0;
+  const char *zUrl;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -431,7 +441,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  const char *zUrl = (const char*)sqlite3_value_text(argv[0]);
+  zUrl = (const char*)sqlite3_value_text(argv[0]);
   if( !zUrl ){
     sqlite3_result_error(ctx, "url required", -1);
     return;
