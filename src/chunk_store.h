@@ -3,9 +3,9 @@
 **
 ** File layout:
 **   [Manifest: 168 bytes at offset 0]
-**     magic(4) + version(4) + root_hash(20) + nChunks(4) +
-**     index_offset(8) + index_size(4) + catalog_hash(20) +
-**     head_commit_hash(20) + wal_offset(8) + reserved(12) +
+**     magic(4) + version(4) + reserved(20) + nChunks(4) +
+**     index_offset(8) + index_size(4) + reserved(20) +
+**     reserved(20) + wal_offset(8) + reserved(12) +
 **     refs_hash(20) + working_state_hash(20) + reserved(24)
 **   [Chunk data region: after manifest, before index]
 **     Each chunk stored as: length_le32(4) + data(length)
@@ -24,7 +24,7 @@
 #include "prolly_hash.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443  /* "DLTC" in little-endian */
-#define CHUNK_STORE_VERSION 6
+#define CHUNK_STORE_VERSION 7
 #define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32     /* 20-byte hash + 8-byte offset + 4-byte size */
 
@@ -72,9 +72,6 @@ struct ChunkStore {
   char *zFilename;
   sqlite3_file *pFile;
   sqlite3_vfs *pVfs;
-  ProllyHash root;
-  ProllyHash catalog;
-  ProllyHash headCommit;
   ProllyHash refsHash;
   ProllyHash workingState;  /* Per-branch working catalog state chunk hash */
 
@@ -156,18 +153,10 @@ int chunkStoreClose(ChunkStore *cs);
 int chunkStoreLockAndRefresh(ChunkStore *cs);
 void chunkStoreUnlock(ChunkStore *cs);
 
-void chunkStoreGetRoot(ChunkStore *cs, ProllyHash *pRoot);
-
-void chunkStoreSetRoot(ChunkStore *cs, const ProllyHash *pRoot);
-
-void chunkStoreGetCatalog(ChunkStore *cs, ProllyHash *pCat);
-void chunkStoreSetCatalog(ChunkStore *cs, const ProllyHash *pCat);
-
-void chunkStoreGetHeadCommit(ChunkStore *cs, ProllyHash *pHead);
-void chunkStoreSetHeadCommit(ChunkStore *cs, const ProllyHash *pHead);
-
 void chunkStoreGetWorkingState(ChunkStore *cs, ProllyHash *pState);
 void chunkStoreSetWorkingState(ChunkStore *cs, const ProllyHash *pState);
+int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
+                                        const ProllyHash *pCatHash);
 
 void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged);
 void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged);

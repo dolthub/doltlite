@@ -328,8 +328,7 @@ static int fsCommit(DoltliteRemote *pRemote){
       if( chunkStoreGet(&p->store, &branchCommit, &cdata, &ncdata)==SQLITE_OK && cdata ){
         DoltliteCommit commit;
         if( doltliteCommitDeserialize(cdata, ncdata, &commit)==SQLITE_OK ){
-          chunkStoreSetHeadCommit(&p->store, &branchCommit);
-          chunkStoreSetCatalog(&p->store, &commit.catalogHash);
+          chunkStoreWriteBranchWorkingCatalog(&p->store, zDef, &commit.catalogHash);
           doltliteCommitClear(&commit);
         }
         sqlite3_free(cdata);
@@ -540,35 +539,35 @@ int doltlitePush(
 
 
       p = refsData;
-      if( nRefsData >= 5 ){
+      if( nRefsData >= 9 ){
         u8 ver; int defLen;
         ver = p[0]; p++;
-        defLen = p[0]|(p[1]<<8); p += 2;
-        if( p + defLen + 2 <= refsData + nRefsData ){
+        defLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
+        if( p + defLen + 4 <= refsData + nRefsData ){
           int nBranches;
           p += defLen;
-          nBranches = p[0]|(p[1]<<8); p += 2;
+          nBranches = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
           for(i=0; i<nBranches; i++){
             int nameLen;
-            if( p+2 > refsData+nRefsData ) break;
-            nameLen = p[0]|(p[1]<<8); p += 2;
+            if( p+4 > refsData+nRefsData ) break;
+            nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
             if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
             if( nameLen==(int)strlen(zBranch) && memcmp(p, zBranch, nameLen)==0 ){
               memcpy(remoteCommit.data, p+nameLen, PROLLY_HASH_SIZE);
               if( !prollyHashIsEmpty(&remoteCommit)
                   && prollyHashCompare(&remoteCommit, &localCommit)!=0 ){
-                
+
                 int isAnc = syncIsAncestor(pLocal, &remoteCommit, &localCommit);
                 if( isAnc <= 0 ){
                   sqlite3_free(refsData);
-                  return SQLITE_ERROR; 
+                  return SQLITE_ERROR;
                 }
               }
               break;
             }
             p += nameLen + PROLLY_HASH_SIZE;
-            
-            if( ver >= 3 && p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
+
+            if( p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
               p += PROLLY_HASH_SIZE;
             }
           }
@@ -662,26 +661,26 @@ int doltliteFetch(
   if( rc!=SQLITE_OK ) return rc;
 
   
-  if( nRefsData >= 5 ){
+  if( nRefsData >= 9 ){
     const u8 *p = refsData;
     u8 ver; int defLen;
     ver = p[0]; p++;
-    defLen = p[0]|(p[1]<<8); p += 2;
-    if( p + defLen + 2 <= refsData + nRefsData ){
+    defLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
+    if( p + defLen + 4 <= refsData + nRefsData ){
       int nBranches, i;
       p += defLen;
-      nBranches = p[0]|(p[1]<<8); p += 2;
+      nBranches = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
       for(i=0; i<nBranches; i++){
         int nameLen;
-        if( p+2 > refsData+nRefsData ) break;
-        nameLen = p[0]|(p[1]<<8); p += 2;
+        if( p+4 > refsData+nRefsData ) break;
+        nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
         if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
         if( nameLen==(int)strlen(zBranch) && memcmp(p, zBranch, nameLen)==0 ){
           memcpy(remoteCommit.data, p+nameLen, PROLLY_HASH_SIZE);
           found = 1;
         }
         p += nameLen + PROLLY_HASH_SIZE;
-        if( ver >= 3 && p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
+        if( p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
           p += PROLLY_HASH_SIZE;
         }
         if( found ) break;
@@ -728,15 +727,15 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   if( rc!=SQLITE_OK ) return rc;
 
   
-  if( nRefsData >= 5 ){
+  if( nRefsData >= 9 ){
     const u8 *p = refsData;
     u8 ver; int defLen;
     ver = p[0]; p++;
-    defLen = p[0]|(p[1]<<8); p += 2;
-    if( p + defLen + 2 <= refsData + nRefsData ){
+    defLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
+    if( p + defLen + 4 <= refsData + nRefsData ){
       int nBranches, nTags, i;
       p += defLen;
-      nBranches = p[0]|(p[1]<<8); p += 2;
+      nBranches = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
 
       nRootsAlloc = nBranches + 16;
       aRoots = sqlite3_malloc(nRootsAlloc * sizeof(ProllyHash));
@@ -747,23 +746,21 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
 
       for(i=0; i<nBranches; i++){
         int nameLen;
-        if( p+2 > refsData+nRefsData ) break;
-        nameLen = p[0]|(p[1]<<8); p += 2;
+        if( p+4 > refsData+nRefsData ) break;
+        nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
         if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
         p += nameLen;
-        
+
         memcpy(aRoots[nRoots].data, p, PROLLY_HASH_SIZE);
         if( !prollyHashIsEmpty(&aRoots[nRoots]) ) nRoots++;
         p += PROLLY_HASH_SIZE;
-        
-        if( ver >= 3 && p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
-          p += PROLLY_HASH_SIZE;
-        }
+
+        p += PROLLY_HASH_SIZE; /* skip workingSetHash */
       }
 
-      
-      if( ver >= 2 && p+2 <= refsData+nRefsData ){
-        nTags = p[0]|(p[1]<<8); p += 2;
+
+      if( p+4 <= refsData+nRefsData ){
+        nTags = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
         if( nRoots + nTags > nRootsAlloc ){
           nRootsAlloc = nRoots + nTags + 8;
           aRoots = sqlite3_realloc(aRoots, nRootsAlloc * sizeof(ProllyHash));
@@ -774,8 +771,8 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
         }
         for(i=0; i<nTags; i++){
           int nameLen;
-          if( p+2 > refsData+nRefsData ) break;
-          nameLen = p[0]|(p[1]<<8); p += 2;
+          if( p+4 > refsData+nRefsData ) break;
+          nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
           if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
           p += nameLen;
           memcpy(aRoots[nRoots].data, p, PROLLY_HASH_SIZE);

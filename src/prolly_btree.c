@@ -212,9 +212,8 @@ struct BtCursorOps {
 };
 
 /* Per-connection Btree handle implementing the SQLite Btree interface.
-** 'root' / 'committedRoot': current vs transaction-start prolly root hashes.
 ** 'aTables': sorted catalog mapping table numbers to prolly tree roots.
-** 'aSavepoint' + 'aSavepointTables': savepoint stack for ROLLBACK TO.
+** 'aSavepointTables': savepoint stack for ROLLBACK TO.
 ** 'aCommittedTables': catalog snapshot at BEGIN for full transaction rollback.
 ** 'pOps': dispatches to prolly or original SQLite btree implementation. */
 struct Btree {
@@ -230,9 +229,6 @@ struct Btree {
   BtLock lock;
   u64 nSeek;
 
-  ProllyHash root;           /* Current (in-flight) prolly tree root */
-  ProllyHash committedRoot;  /* Root at last commit -- restored on rollback */
-
   struct TableEntry *aTables; /* Sorted by iTable for binary search */
   int nTables;
   int nTablesAlloc;
@@ -245,10 +241,8 @@ struct Btree {
 
   u8 inTransaction;
 
-  /* Savepoint stack: aSavepoint[i] = prolly root hash at savepoint i,
-  ** aSavepointTables[i] = snapshot of aTables + pending edit counts.
-  ** On rollback, roots are restored and MutMap entries truncated. */
-  ProllyHash *aSavepoint;
+  /* Savepoint stack: aSavepointTables[i] = snapshot of aTables + pending
+  ** edit counts. On rollback, roots are restored and MutMap entries truncated. */
   int nSavepoint;
   int nSavepointAlloc;
 
@@ -342,6 +336,8 @@ static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept);
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
 static int btreeRefreshFromDisk(Btree *p);
+static int btreeReadWorkingCatalog(ChunkStore *cs, const char *zBranch,
+                                   ProllyHash *pCatHash);
 static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
 
 static int prollyBtreeClose(Btree*);
@@ -1145,11 +1141,7 @@ static int pushSavepoint(Btree *pBtree){
 
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
     int nNew = pBtree->nSavepointAlloc ? pBtree->nSavepointAlloc*2 : 8;
-    ProllyHash *aNewH;
     struct SavepointTableState *aNewT;
-    aNewH = sqlite3_realloc(pBtree->aSavepoint, nNew*(int)sizeof(ProllyHash));
-    if( !aNewH ) return SQLITE_NOMEM;
-    pBtree->aSavepoint = aNewH;
     aNewT = sqlite3_realloc(pBtree->aSavepointTables, nNew*(int)sizeof(struct SavepointTableState));
     if( !aNewT ) return SQLITE_NOMEM;
     pBtree->aSavepointTables = aNewT;
@@ -1157,9 +1149,6 @@ static int pushSavepoint(Btree *pBtree){
     pBtree->nSavepointTablesAlloc = nNew;
   }
 
-  pBtree->aSavepoint[pBtree->nSavepoint] = pBtree->root;
-
-  
   pState = &pBtree->aSavepointTables[pBtree->nSavepoint];
   pState->aTables = 0;
   pState->aPendingCount = 0;
@@ -1306,9 +1295,6 @@ int sqlite3BtreeOpen(
     return rc;
   }
 
-  chunkStoreGetRoot(&pBt->store, &p->root);
-  p->committedRoot = p->root;
-
   pBt->pPagerShim = pagerShimCreate(pVfs, zFilename, pBt->store.pFile);
   if( !pBt->pPagerShim ){
     prollyCacheFree(&pBt->cache);
@@ -1343,9 +1329,14 @@ int sqlite3BtreeOpen(
   p->aMeta[BTREE_APPLICATION_ID] = 0;
 
   
+  /* Load catalog from per-branch working state. Use the default branch
+  ** since p->zBranch hasn't been set yet (checkout happens later). */
   {
     ProllyHash catHash;
-    chunkStoreGetCatalog(&pBt->store, &catHash);
+    const char *zDef = chunkStoreGetDefaultBranch(&pBt->store);
+    if( !zDef ) zDef = "main";
+    memset(&catHash, 0, sizeof(catHash));
+    btreeReadWorkingCatalog(&pBt->store, zDef, &catHash);
     if( !prollyHashIsEmpty(&catHash) ){
       u8 *catData = 0;
       int nCatData = 0;
@@ -1397,8 +1388,7 @@ catalog_loaded:
     if( chunkStoreFindBranch(&pBt->store, defBranch, &branchCommit)==SQLITE_OK ){
       memcpy(&p->headCommit, &branchCommit, sizeof(ProllyHash));
     }else{
-      
-      chunkStoreGetHeadCommit(&pBt->store, &p->headCommit);
+      memset(&p->headCommit, 0, sizeof(ProllyHash));
     }
     
     {
@@ -1448,7 +1438,6 @@ static int prollyBtreeClose(Btree *p){
     p->pSchema = 0;
   }
   sqlite3_free(p->aTables);
-  sqlite3_free(p->aSavepoint);
   if( p->aSavepointTables ){
     int i;
     for(i=0; i<p->nSavepoint; i++){
@@ -1484,9 +1473,6 @@ static int prollyBtreeNewDb(Btree *p){
   memset(p->aMeta, 0, sizeof(p->aMeta));
   p->aMeta[BTREE_FILE_FORMAT] = 4;
   p->aMeta[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
-
-  memset(&p->root, 0, sizeof(ProllyHash));
-  memset(&p->committedRoot, 0, sizeof(ProllyHash));
 
   if( !findTable(p, 1) ){
     if( !addTable(p, 1, BTREE_INTKEY) ){
@@ -1698,15 +1684,15 @@ static int btreeReadWorkingCatalog(
 
   rc = chunkStoreGet(cs, &wsHash, &data, &nData);
   if( rc!=SQLITE_OK || !data ) return SQLITE_NOTFOUND;
-  if( nData < 2 ){ sqlite3_free(data); return SQLITE_NOTFOUND; }
+  if( nData < 4 ){ sqlite3_free(data); return SQLITE_NOTFOUND; }
 
-  nBr = (int)data[0] | ((int)data[1] << 8);
-  p = data + 2;
+  nBr = (int)((u32)data[0] | ((u32)data[1]<<8) | ((u32)data[2]<<16) | ((u32)data[3]<<24));
+  p = data + 4;
   for(i=0; i<nBr; i++){
     int nl;
-    if( p + 2 > data + nData ) break;
-    nl = (int)p[0] | ((int)p[1] << 8);
-    p += 2;
+    if( p + 4 > data + nData ) break;
+    nl = (int)((u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24));
+    p += 4;
     if( p + nl + PROLLY_HASH_SIZE > data + nData ) break;
     if( nl==brLen && memcmp(p, zBranch, nl)==0 ){
       memcpy(pCatHash->data, p + nl, PROLLY_HASH_SIZE);
@@ -1747,38 +1733,40 @@ static int btreeWriteWorkingState(
   }
 
   /* Calculate max size: old data + our new entry */
-  nAlloc = (oldData && nOldData >= 2) ? nOldData : 2;
-  nAlloc += 2 + brLen + PROLLY_HASH_SIZE + 16; /* extra space */
+  nAlloc = (oldData && nOldData >= 4) ? nOldData : 4;
+  nAlloc += 4 + brLen + PROLLY_HASH_SIZE + 16; /* extra space */
   newBuf = (u8*)sqlite3_malloc(nAlloc);
   if( !newBuf ){
     sqlite3_free(oldData);
     return SQLITE_NOMEM;
   }
 
-  /* Start writing at offset 2 (skip nBranches header) */
-  nNew = 2;
+  /* Start writing at offset 4 (skip nBranches header) */
+  nNew = 4;
 
   /* Copy existing entries, replacing our branch if found */
-  if( oldData && nOldData >= 2 ){
-    int oldNBr = (int)oldData[0] | ((int)oldData[1] << 8);
-    const u8 *p = oldData + 2;
+  if( oldData && nOldData >= 4 ){
+    int oldNBr = (int)((u32)oldData[0] | ((u32)oldData[1]<<8) | ((u32)oldData[2]<<16) | ((u32)oldData[3]<<24));
+    const u8 *p = oldData + 4;
     for(i=0; i<oldNBr; i++){
       int nl;
-      if( p + 2 > oldData + nOldData ) break;
-      nl = (int)p[0] | ((int)p[1] << 8);
-      p += 2;
+      if( p + 4 > oldData + nOldData ) break;
+      nl = (int)((u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24));
+      p += 4;
       if( p + nl + PROLLY_HASH_SIZE > oldData + nOldData ) break;
       if( nl==brLen && memcmp(p, zBranch, nl)==0 ){
         /* Replace our entry */
         newBuf[nNew++] = (u8)(nl & 0xff);
         newBuf[nNew++] = (u8)((nl >> 8) & 0xff);
+        newBuf[nNew++] = (u8)((nl >> 16) & 0xff);
+        newBuf[nNew++] = (u8)((nl >> 24) & 0xff);
         memcpy(newBuf + nNew, zBranch, nl); nNew += nl;
         memcpy(newBuf + nNew, pCatHash->data, PROLLY_HASH_SIZE); nNew += PROLLY_HASH_SIZE;
         found = 1;
       }else{
         /* Copy other branch's entry as-is */
-        int entrySize = 2 + nl + PROLLY_HASH_SIZE;
-        memcpy(newBuf + nNew, p - 2, entrySize);
+        int entrySize = 4 + nl + PROLLY_HASH_SIZE;
+        memcpy(newBuf + nNew, p - 4, entrySize);
         nNew += entrySize;
       }
       p += nl + PROLLY_HASH_SIZE;
@@ -1790,6 +1778,8 @@ static int btreeWriteWorkingState(
     /* Append new entry for our branch */
     newBuf[nNew++] = (u8)(brLen & 0xff);
     newBuf[nNew++] = (u8)((brLen >> 8) & 0xff);
+    newBuf[nNew++] = (u8)((brLen >> 16) & 0xff);
+    newBuf[nNew++] = (u8)((brLen >> 24) & 0xff);
     memcpy(newBuf + nNew, zBranch, brLen); nNew += brLen;
     memcpy(newBuf + nNew, pCatHash->data, PROLLY_HASH_SIZE); nNew += PROLLY_HASH_SIZE;
     nBr++;
@@ -1798,6 +1788,8 @@ static int btreeWriteWorkingState(
   /* Write branch count header */
   newBuf[0] = (u8)(nBr & 0xff);
   newBuf[1] = (u8)((nBr >> 8) & 0xff);
+  newBuf[2] = (u8)((nBr >> 16) & 0xff);
+  newBuf[3] = (u8)((nBr >> 24) & 0xff);
 
   sqlite3_free(oldData);
 
@@ -1830,13 +1822,7 @@ static int btreeRefreshFromDisk(Btree *p){
 
     memset(&catHash, 0, sizeof(catHash));
 
-    /* Try per-branch working catalog first */
-    if( btreeReadWorkingCatalog(&pBt->store, zBr, &catHash)!=SQLITE_OK ){
-      /* Fallback: no working state yet (first open, or pre-existing db).
-      ** Use the manifest catalog. */
-      chunkStoreGetCatalog(&pBt->store, &catHash);
-    }
-    chunkStoreGetRoot(&pBt->store, &p->root);
+    btreeReadWorkingCatalog(&pBt->store, zBr, &catHash);
 
     if( !prollyHashIsEmpty(&catHash) ){
       u8 *catData = 0;
@@ -1848,7 +1834,6 @@ static int btreeRefreshFromDisk(Btree *p){
         if( rc!=SQLITE_OK ) return rc;
       }
     }
-    p->committedRoot = p->root;
     p->iBDataVersion++;
     if( pBt->pPagerShim ){
       pBt->pPagerShim->iDataVersion++;
@@ -1888,15 +1873,12 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     rc = chunkStoreLockAndRefresh(&pBt->store);
     if( rc!=SQLITE_OK ) return rc;
 
-    /* Reload catalog under lock — use per-branch working catalog to avoid
-    ** cross-branch corruption, same as btreeRefreshFromDisk. */
+    /* Reload catalog under lock from per-branch working state. */
     {
       ProllyHash catHash;
       const char *zBr = p->zBranch ? p->zBranch : "main";
       memset(&catHash, 0, sizeof(catHash));
-      if( btreeReadWorkingCatalog(&pBt->store, zBr, &catHash)!=SQLITE_OK ){
-        chunkStoreGetCatalog(&pBt->store, &catHash);
-      }
+      btreeReadWorkingCatalog(&pBt->store, zBr, &catHash);
       if( !prollyHashIsEmpty(&catHash) ){
         u8 *catData = 0;
         int nCatData = 0;
@@ -1925,7 +1907,6 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       }
     }
     p->iCommittedNextTable = p->iNextTable;
-    p->committedRoot = p->root;
     p->inTrans = TRANS_WRITE;
     p->inTransaction = TRANS_WRITE;
     
@@ -1995,26 +1976,19 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       if( rc==SQLITE_OK ){
         rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
         sqlite3_free(catData);
-        if( rc==SQLITE_OK ){
-          chunkStoreSetCatalog(&pBt->store, &catHash);
-        }
       }
       if( rc!=SQLITE_OK ) return rc;
-    }
-    chunkStoreSetRoot(&pBt->store, &p->root);
-    /* Step 3b: save per-branch working catalog so cross-branch connections
-    ** can find this branch's catalog without relying on the shared manifest. */
-    {
-      const char *zBr = p->zBranch ? p->zBranch : "main";
-      ProllyHash catHash;
-      chunkStoreGetCatalog(&pBt->store, &catHash);
-      rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash);
-      if( rc!=SQLITE_OK ) return rc;
+      /* Save per-branch working catalog so other connections on this branch
+      ** (and cross-branch connections) find the correct catalog on refresh. */
+      {
+        const char *zBr = p->zBranch ? p->zBranch : "main";
+        rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash);
+        if( rc!=SQLITE_OK ) return rc;
+      }
     }
     /* Step 4: atomic manifest write */
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
-      p->committedRoot = p->root;
       p->iBDataVersion++;
       if( pBt->pPagerShim ){
         pBt->pPagerShim->iDataVersion++;
@@ -2087,8 +2061,6 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       p->aCommittedTables = 0;
       p->nCommittedTables = 0;
     }
-    p->root = p->committedRoot;
-    
     {
       BtCursor *pC;
       for(pC = pBt->pCursor; pC; pC = pC->pNext){
@@ -2156,7 +2128,6 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
     if( iSavepoint>=0 && iSavepoint<p->nSavepoint
      && p->aSavepointTables ){
       struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
-      p->root = p->aSavepoint[iSavepoint];
       if( pState->aTables ){
         /* Restore table roots and truncate MutMap entries */
         {
@@ -2206,7 +2177,6 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
       invalidateCursors(pBt, 0, SQLITE_ABORT);
       invalidateSchema(p);
     } else if( iSavepoint>=0 && iSavepoint>=p->nSavepoint ){
-      p->root = p->committedRoot;
       { int rc2 = restoreFromCommitted(p); if( rc2 ) return rc2; }
       invalidateCursors(pBt, 0, SQLITE_ABORT);
       invalidateSchema(p);
@@ -2215,7 +2185,6 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
       for(j=0; j<p->nSavepoint; j++){
         freeSavepointTables(&p->aSavepointTables[j]);
       }
-      p->root = p->committedRoot;
       { int rc2 = restoreFromCommitted(p); if( rc2 ) return rc2; }
       p->nSavepoint = 0;
       invalidateCursors(pBt, 0, SQLITE_ABORT);
@@ -4321,8 +4290,6 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
   }
 
   memcpy(pTo->aMeta, pFrom->aMeta, sizeof(pTo->aMeta));
-  pTo->root = pFrom->root;
-  pTo->committedRoot = pFrom->committedRoot;
   pTo->iNextTable = pFrom->iNextTable;
 
   pTo->iBDataVersion++;
@@ -4723,10 +4690,8 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   memcpy(&pBtree->stagedCatalog, catHash, sizeof(ProllyHash));
 
   
-  chunkStoreSetCatalog(cs, catHash);
-  /* Update per-branch working state with the new catalog so cross-branch
-  ** connections refresh correctly. Uses current branch name (correct for
-  ** reset/merge; checkout overwrites with the target branch afterward). */
+  /* Update per-branch working state (correct for reset/merge; checkout
+  ** overwrites with the target branch afterward). */
   {
     const char *zBr = pBtree->zBranch ? pBtree->zBranch : "main";
     btreeWriteWorkingState(cs, zBr, catHash);
@@ -4739,6 +4704,11 @@ int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
                                      const ProllyHash *pCatHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
   if( !cs ) return SQLITE_ERROR;
+  return btreeWriteWorkingState(cs, zBranch, pCatHash);
+}
+
+int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
+                                        const ProllyHash *pCatHash){
   return btreeWriteWorkingState(cs, zBranch, pCatHash);
 }
 

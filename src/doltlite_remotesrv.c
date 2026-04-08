@@ -218,8 +218,13 @@ static int parsePath(
 
 static void handleGetRoot(ChunkStore *pStore, int fd){
   ProllyHash root;
-  chunkStoreGetRoot(pStore, &root);
-  sendOk(fd, root.data, PROLLY_HASH_SIZE);
+  const char *zDef = chunkStoreGetDefaultBranch(pStore);
+  if( zDef && chunkStoreFindBranch(pStore, zDef, &root)==SQLITE_OK ){
+    sendOk(fd, root.data, PROLLY_HASH_SIZE);
+  }else{
+    memset(&root, 0, sizeof(root));
+    sendOk(fd, root.data, PROLLY_HASH_SIZE);
+  }
 }
 
 static void handleHasChunks(ChunkStore *pStore, int fd,
@@ -410,8 +415,7 @@ static void handleCommit(ChunkStore *pStore, int fd){
       if( chunkStoreGet(pStore, &branchCommit, &cdata, &ncdata)==SQLITE_OK && cdata ){
         DoltliteCommit commit;
         if( doltliteCommitDeserialize(cdata, ncdata, &commit)==SQLITE_OK ){
-          chunkStoreSetHeadCommit(pStore, &branchCommit);
-          chunkStoreSetCatalog(pStore, &commit.catalogHash);
+          chunkStoreWriteBranchWorkingCatalog(pStore, zDef, &commit.catalogHash);
           doltliteCommitClear(&commit);
         }
         sqlite3_free(cdata);

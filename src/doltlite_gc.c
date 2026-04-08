@@ -96,10 +96,35 @@ static int gcMarkReachable(
   if( rc!=SQLITE_OK ) return rc;
 
   
-  rc = gcQueuePush(&queue, &cs->root);
-  if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->catalog);
-  if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->headCommit);
-  if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->refsHash);
+  rc = gcQueuePush(&queue, &cs->refsHash);
+
+  /* Mark the per-branch working state chunk and all catalog hashes within it. */
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(&cs->workingState) ){
+    rc = gcQueuePush(&queue, &cs->workingState);
+    if( rc==SQLITE_OK ){
+      u8 *wsData = 0; int nWsData = 0;
+      if( chunkStoreGet(cs, &cs->workingState, &wsData, &nWsData)==SQLITE_OK
+       && wsData && nWsData >= 4 ){
+        int nBr = (int)((u32)wsData[0] | ((u32)wsData[1]<<8) | ((u32)wsData[2]<<16) | ((u32)wsData[3]<<24));
+        const u8 *pp = wsData + 4;
+        int j;
+        for(j=0; j<nBr && rc==SQLITE_OK; j++){
+          int nl;
+          if( pp + 4 > wsData + nWsData ) break;
+          nl = (int)((u32)pp[0] | ((u32)pp[1]<<8) | ((u32)pp[2]<<16) | ((u32)pp[3]<<24));
+          pp += 4;
+          if( pp + nl + PROLLY_HASH_SIZE > wsData + nWsData ) break;
+          {
+            ProllyHash brCat;
+            memcpy(brCat.data, pp + nl, PROLLY_HASH_SIZE);
+            rc = gcQueuePush(&queue, &brCat);
+          }
+          pp += nl + PROLLY_HASH_SIZE;
+        }
+        sqlite3_free(wsData);
+      }
+    }
+  }
 
   
   for(i=0; rc==SQLITE_OK && i<cs->nBranches; i++){
