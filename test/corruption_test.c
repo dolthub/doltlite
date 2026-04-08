@@ -497,19 +497,17 @@ static void test_zero_refs_hash(void){
   memset(zeros, 0, sizeof(zeros));
   check("corrupt_6", corrupt_bytes(dbpath, 104, zeros, sizeof(zeros))==0);
 
-  /* Opening should detect that refs hash is zeroed / invalid */
+  /* Opening should detect the inconsistency: headCommit is set but
+  ** refs are missing. Must return an error, not silently lose branches. */
   {
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     if( rc==SQLITE_OK ){
-      /* Try to query branches -- should fail or return 0 since refs
-      ** are corrupted */
       const char *r = exec1(db, "SELECT count(*) FROM dolt_branches");
-      int branches_gone = (strcmp(r, "0")==0);
-      int branches_err = (strncmp(r, "ERROR", 5)==0);
-      check("zeroed_refs_detected_or_empty", branches_gone || branches_err);
+      int is_error = (strncmp(r, "ERROR", 5)==0);
+      check("zeroed_refs_returns_error", is_error);
     }else{
-      check("zeroed_refs_detected_or_empty", 1);
+      check("zeroed_refs_returns_error", 1);
     }
     if( db ) sqlite3_close(db);
   }
@@ -976,12 +974,5 @@ int main(void){
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
-  /* Known failures: chunk store does not yet detect these corruption
-  ** scenarios (issue #256). Exit 0 if only known failures, exit 1
-  ** if new regressions. */
-  if( nFail > 0 && nFail <= 5 ){
-    printf("(all failures are known issues — see #256)\n");
-    return 0;
-  }
   return nFail > 0 ? 1 : 0;
 }
