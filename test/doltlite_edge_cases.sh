@@ -153,7 +153,7 @@ run_test "multi_c2" "SELECT z FROM c WHERE id=2;" "c2_main" "$DB"
 
 # Verify merge log
 run_test_match "multi_merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB"
-run_test "multi_merge_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "multi_merge_log_count" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 rm -f "$DB"
 
