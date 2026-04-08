@@ -411,7 +411,7 @@ static void handleCommit(ChunkStore *pStore, int fd){
         DoltliteCommit commit;
         if( doltliteCommitDeserialize(cdata, ncdata, &commit)==SQLITE_OK ){
           chunkStoreSetHeadCommit(pStore, &branchCommit);
-          chunkStoreSetCatalog(pStore, &commit.catalogHash);
+          chunkStoreWriteBranchWorkingCatalog(pStore, zDef, &commit.catalogHash);
           doltliteCommitClear(&commit);
         }
         sqlite3_free(cdata);

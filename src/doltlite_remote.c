@@ -329,7 +329,7 @@ static int fsCommit(DoltliteRemote *pRemote){
         DoltliteCommit commit;
         if( doltliteCommitDeserialize(cdata, ncdata, &commit)==SQLITE_OK ){
           chunkStoreSetHeadCommit(&p->store, &branchCommit);
-          chunkStoreSetCatalog(&p->store, &commit.catalogHash);
+          chunkStoreWriteBranchWorkingCatalog(&p->store, zDef, &commit.catalogHash);
           doltliteCommitClear(&commit);
         }
         sqlite3_free(cdata);

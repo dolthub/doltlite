@@ -342,6 +342,8 @@ static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept);
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
 static int btreeRefreshFromDisk(Btree *p);
+static int btreeReadWorkingCatalog(ChunkStore *cs, const char *zBranch,
+                                   ProllyHash *pCatHash);
 static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
 
 static int prollyBtreeClose(Btree*);
@@ -1343,9 +1345,14 @@ int sqlite3BtreeOpen(
   p->aMeta[BTREE_APPLICATION_ID] = 0;
 
   
+  /* Load catalog from per-branch working state. Use the default branch
+  ** since p->zBranch hasn't been set yet (checkout happens later). */
   {
     ProllyHash catHash;
-    chunkStoreGetCatalog(&pBt->store, &catHash);
+    const char *zDef = chunkStoreGetDefaultBranch(&pBt->store);
+    if( !zDef ) zDef = "main";
+    memset(&catHash, 0, sizeof(catHash));
+    btreeReadWorkingCatalog(&pBt->store, zDef, &catHash);
     if( !prollyHashIsEmpty(&catHash) ){
       u8 *catData = 0;
       int nCatData = 0;
@@ -1830,12 +1837,7 @@ static int btreeRefreshFromDisk(Btree *p){
 
     memset(&catHash, 0, sizeof(catHash));
 
-    /* Try per-branch working catalog first */
-    if( btreeReadWorkingCatalog(&pBt->store, zBr, &catHash)!=SQLITE_OK ){
-      /* Fallback: no working state yet (first open, or pre-existing db).
-      ** Use the manifest catalog. */
-      chunkStoreGetCatalog(&pBt->store, &catHash);
-    }
+    btreeReadWorkingCatalog(&pBt->store, zBr, &catHash);
     chunkStoreGetRoot(&pBt->store, &p->root);
 
     if( !prollyHashIsEmpty(&catHash) ){
@@ -1888,15 +1890,12 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     rc = chunkStoreLockAndRefresh(&pBt->store);
     if( rc!=SQLITE_OK ) return rc;
 
-    /* Reload catalog under lock — use per-branch working catalog to avoid
-    ** cross-branch corruption, same as btreeRefreshFromDisk. */
+    /* Reload catalog under lock from per-branch working state. */
     {
       ProllyHash catHash;
       const char *zBr = p->zBranch ? p->zBranch : "main";
       memset(&catHash, 0, sizeof(catHash));
-      if( btreeReadWorkingCatalog(&pBt->store, zBr, &catHash)!=SQLITE_OK ){
-        chunkStoreGetCatalog(&pBt->store, &catHash);
-      }
+      btreeReadWorkingCatalog(&pBt->store, zBr, &catHash);
       if( !prollyHashIsEmpty(&catHash) ){
         u8 *catData = 0;
         int nCatData = 0;
@@ -1995,22 +1994,17 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       if( rc==SQLITE_OK ){
         rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
         sqlite3_free(catData);
-        if( rc==SQLITE_OK ){
-          chunkStoreSetCatalog(&pBt->store, &catHash);
-        }
       }
       if( rc!=SQLITE_OK ) return rc;
+      /* Save per-branch working catalog so other connections on this branch
+      ** (and cross-branch connections) find the correct catalog on refresh. */
+      {
+        const char *zBr = p->zBranch ? p->zBranch : "main";
+        rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash);
+        if( rc!=SQLITE_OK ) return rc;
+      }
     }
     chunkStoreSetRoot(&pBt->store, &p->root);
-    /* Step 3b: save per-branch working catalog so cross-branch connections
-    ** can find this branch's catalog without relying on the shared manifest. */
-    {
-      const char *zBr = p->zBranch ? p->zBranch : "main";
-      ProllyHash catHash;
-      chunkStoreGetCatalog(&pBt->store, &catHash);
-      rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash);
-      if( rc!=SQLITE_OK ) return rc;
-    }
     /* Step 4: atomic manifest write */
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
@@ -4723,10 +4717,8 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   memcpy(&pBtree->stagedCatalog, catHash, sizeof(ProllyHash));
 
   
-  chunkStoreSetCatalog(cs, catHash);
-  /* Update per-branch working state with the new catalog so cross-branch
-  ** connections refresh correctly. Uses current branch name (correct for
-  ** reset/merge; checkout overwrites with the target branch afterward). */
+  /* Update per-branch working state (correct for reset/merge; checkout
+  ** overwrites with the target branch afterward). */
   {
     const char *zBr = pBtree->zBranch ? pBtree->zBranch : "main";
     btreeWriteWorkingState(cs, zBr, catHash);
@@ -4739,6 +4731,11 @@ int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
                                      const ProllyHash *pCatHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
   if( !cs ) return SQLITE_ERROR;
+  return btreeWriteWorkingState(cs, zBranch, pCatHash);
+}
+
+int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
+                                        const ProllyHash *pCatHash){
   return btreeWriteWorkingState(cs, zBranch, pCatHash);
 }
 

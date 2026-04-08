@@ -168,6 +168,8 @@ void chunkStoreSetHeadCommit(ChunkStore *cs, const ProllyHash *pHead);
 
 void chunkStoreGetWorkingState(ChunkStore *cs, ProllyHash *pState);
 void chunkStoreSetWorkingState(ChunkStore *cs, const ProllyHash *pState);
+int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
+                                        const ProllyHash *pCatHash);
 
 void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged);
 void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged);
