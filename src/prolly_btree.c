@@ -2005,6 +2005,10 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     if( pBt->btsFlags & BTS_READ_ONLY ){
       return SQLITE_READONLY;
     }
+    /* TODO: exclusive writer enforcement needed here (issue #250).
+    ** Multiple in-process connections sharing a BtShared can corrupt the
+    ** in-memory prolly tree via concurrent DML. The fix requires
+    ** understanding how BtShared is shared across connections. */
     /* Ensure aTables includes all persistent tables from the catalog.
     ** Tables are lazily added to aTables when cursors open, so after a
     ** transaction commits and cursors close, aTables may only contain
