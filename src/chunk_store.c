@@ -55,6 +55,16 @@
   static void csFileUnlock(int fd){
     if( fd >= 0 ) close(fd);
   }
+  static int csFileLockNB(const char *path, int *pFd){
+    int fd = open(path, O_RDWR | O_CREAT, 0644);
+    if( fd < 0 ) return -1;
+    if( flock(fd, LOCK_EX | LOCK_NB) != 0 ){
+      close(fd);
+      return -1;
+    }
+    *pFd = fd;
+    return 0;
+  }
 #endif
 
 #define CS_READ_U32(p) (             \
@@ -635,6 +645,7 @@ int chunkStoreOpen(
 
   memset(cs, 0, sizeof(*cs));
   cs->pVfs = pVfs;
+  cs->graphLockFd = -1;
 
   if( zFilename==0 || zFilename[0]=='\0'
    || strcmp(zFilename, ":memory:")==0 ){
@@ -757,6 +768,7 @@ int chunkStoreOpen(
 }
 
 int chunkStoreClose(ChunkStore *cs){
+  chunkStoreUnlock(cs);
   if( cs->pFile ){
     csCloseFile(cs->pFile);
     cs->pFile = 0;
@@ -1526,8 +1538,14 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc != SQLITE_OK ) return SQLITE_CANTOPEN;
   }
 
-  if( csFileLock(cs->zFilename, &lockFd) != 0 ){
-    return SQLITE_BUSY;
+  /* Use the graph lock if already held (from chunkStoreLockAndRefresh),
+  ** otherwise acquire our own. Avoids deadlock from double-locking. */
+  if( cs->graphLockFd >= 0 ){
+    lockFd = -1;
+  }else{
+    if( csFileLock(cs->zFilename, &lockFd) != 0 ){
+      return SQLITE_BUSY;
+    }
   }
 
   rc = cs->pFile->pMethods->xFileSize(cs->pFile, &fileSize);
@@ -1655,9 +1673,20 @@ commit_done:
 }
 
 int chunkStoreCommit(ChunkStore *cs){
+  int rc;
+  int acquiredLock = 0;
   if( cs->readOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
-  return csCommitToFile(cs);
+  /* Auto-acquire graph lock if caller didn't already. Ensures ALL
+  ** commit graph mutations are serialized across connections. */
+  if( cs->graphLockFd < 0 && cs->zFilename ){
+    rc = chunkStoreLockAndRefresh(cs);
+    if( rc!=SQLITE_OK ) return rc;
+    acquiredLock = 1;
+  }
+  rc = csCommitToFile(cs);
+  if( acquiredLock ) chunkStoreUnlock(cs);
+  return rc;
 }
 
 void chunkStoreRollback(ChunkStore *cs){
@@ -1697,6 +1726,30 @@ int chunkStoreReloadRefs(ChunkStore *cs){
 
 const char *chunkStoreFilename(ChunkStore *cs){
   return cs->zFilename;
+}
+
+int chunkStoreLockAndRefresh(ChunkStore *cs){
+  int changed = 0;
+  int rc;
+  if( cs->isMemory ) return SQLITE_OK;
+  if( cs->graphLockFd >= 0 ) return SQLITE_OK;
+  if( !cs->zFilename ) return SQLITE_ERROR;
+  if( csFileLockNB(cs->zFilename, &cs->graphLockFd) != 0 ){
+    return SQLITE_BUSY;
+  }
+  rc = chunkStoreRefreshIfChanged(cs, &changed);
+  if( rc!=SQLITE_OK ){
+    csFileUnlock(cs->graphLockFd);
+    cs->graphLockFd = -1;
+  }
+  return rc;
+}
+
+void chunkStoreUnlock(ChunkStore *cs){
+  if( cs->graphLockFd >= 0 ){
+    csFileUnlock(cs->graphLockFd);
+    cs->graphLockFd = -1;
+  }
 }
 
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
