@@ -1674,21 +1674,27 @@ static int btreeRefreshFromDisk(Btree *p){
   if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
 
-  
+  /* The file changed. Check if THIS connection's branch moved.
+  ** Another connection on a different branch may have written to the file
+  ** without affecting our branch. Only reload if our branch tip changed. */
   {
     ProllyHash catHash;
-    ProllyHash manifestHead;
     const char *zBr = p->zBranch ? p->zBranch : "main";
     ProllyHash branchHead;
-    int useBranchCommit = 0;
 
     memset(&catHash, 0, sizeof(catHash));
-    chunkStoreGetHeadCommit(&pBt->store, &manifestHead);
 
-    if( chunkStoreFindBranch(&pBt->store, zBr, &branchHead)==SQLITE_OK
-     && !prollyHashIsEmpty(&branchHead)
-     && prollyHashCompare(&manifestHead, &branchHead)!=0 ){
-      
+    if( chunkStoreFindBranch(&pBt->store, zBr, &branchHead)!=SQLITE_OK
+     || prollyHashIsEmpty(&branchHead) ){
+      /* Branch not found in refs — use manifest catalog */
+      chunkStoreGetCatalog(&pBt->store, &catHash);
+      chunkStoreGetRoot(&pBt->store, &p->root);
+    }else if( prollyHashCompare(&p->headCommit, &branchHead)==0 ){
+      /* Our branch tip hasn't moved — no refresh needed even though
+      ** the file changed (another branch was modified). */
+      return SQLITE_OK;
+    }else{
+      /* Our branch tip moved — load the new commit's catalog. */
       u8 *commitData = 0;
       int nCommitData = 0;
       rc = chunkStoreGet(&pBt->store, &branchHead, &commitData, &nCommitData);
@@ -1698,18 +1704,11 @@ static int btreeRefreshFromDisk(Btree *p){
         sqlite3_free(commitData);
         if( rc==SQLITE_OK ){
           memcpy(&catHash, &commit.catalogHash, sizeof(ProllyHash));
-          chunkStoreGetRoot(&pBt->store, &p->root);
           memcpy(&p->headCommit, &branchHead, sizeof(ProllyHash));
           doltliteCommitClear(&commit);
-          useBranchCommit = 1;
         }
       }
-    }
-
-    if( !useBranchCommit ){
-      
-      chunkStoreGetCatalog(&pBt->store, &catHash);
-      chunkStoreGetRoot(&pBt->store, &p->root);
+      if( rc!=SQLITE_OK ) return rc;
     }
 
     if( !prollyHashIsEmpty(&catHash) ){
@@ -1762,18 +1761,51 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     rc = chunkStoreLockAndRefresh(&pBt->store);
     if( rc!=SQLITE_OK ) return rc;
     
-    
+    /* Reload catalog from THIS connection's branch, not the manifest.
+    ** Another branch may have committed, moving the manifest's catalog. */
     {
       ProllyHash catHash;
-      chunkStoreGetCatalog(&pBt->store, &catHash);
-      if( !prollyHashIsEmpty(&catHash) ){
+      const char *zBr = p->zBranch ? p->zBranch : "main";
+      ProllyHash branchHead;
+      int needReload = 0;
+
+      memset(&catHash, 0, sizeof(catHash));
+      if( chunkStoreFindBranch(&pBt->store, zBr, &branchHead)==SQLITE_OK
+       && !prollyHashIsEmpty(&branchHead)
+       && prollyHashCompare(&p->headCommit, &branchHead)!=0 ){
+        /* Our branch moved — load the new commit's catalog */
+        u8 *commitData = 0;
+        int nCommitData = 0;
+        int rc2 = chunkStoreGet(&pBt->store, &branchHead, &commitData, &nCommitData);
+        if( rc2==SQLITE_OK && commitData ){
+          DoltliteCommit commit;
+          rc2 = doltliteCommitDeserialize(commitData, nCommitData, &commit);
+          sqlite3_free(commitData);
+          if( rc2==SQLITE_OK ){
+            memcpy(&catHash, &commit.catalogHash, sizeof(ProllyHash));
+            memcpy(&p->headCommit, &branchHead, sizeof(ProllyHash));
+            doltliteCommitClear(&commit);
+            needReload = 1;
+          }
+        }
+      }else if( prollyHashIsEmpty(&p->headCommit) ){
+        /* First write on a fresh connection — use manifest catalog */
+        chunkStoreGetCatalog(&pBt->store, &catHash);
+        needReload = 1;
+      }
+      /* else: branch tip matches our HEAD — no reload needed */
+
+      if( needReload && !prollyHashIsEmpty(&catHash) ){
         u8 *catData = 0;
         int nCatData = 0;
         int rc2 = chunkStoreGet(&pBt->store, &catHash, &catData, &nCatData);
         if( rc2==SQLITE_OK && catData ){
           rc2 = deserializeCatalog(p, catData, nCatData);
           sqlite3_free(catData);
-          if( rc2!=SQLITE_OK ) return rc2;
+          if( rc2!=SQLITE_OK ){
+            chunkStoreUnlock(&pBt->store);
+            return rc2;
+          }
         }
       }
     }
