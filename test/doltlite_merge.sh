@@ -32,8 +32,8 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 run_test "ff_before" "SELECT count(*) FROM t;" "1" "$DB2"
 run_test_match "ff_merge" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB2"
 run_test "ff_after" "SELECT count(*) FROM t;" "2" "$DB2"
-run_test "ff_merge_msg" "SELECT message FROM dolt_log LIMIT 1;" "Merge branch 'feature'" "$DB2"
-run_test "ff_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB2"
+run_test "ff_no_merge_commit" "SELECT message FROM dolt_log LIMIT 1;" "feature" "$DB2"
+run_test "ff_log_count" "SELECT count(*) FROM dolt_log;" "2" "$DB2"
 
 # Test 3: Already up to date
 run_test "up_to_date" "SELECT dolt_merge('feature');" "Already up to date" "$DB2"
@@ -85,9 +85,9 @@ run_test_match "diff_3way_orders" \
   "added" "$DB"
 
 # Test 9: dolt_diff after fast-forward merge (DB2 from Test 2)
-# Log has 3 entries: merge commit (0), feature (1), init (2)
+# Log has 2 entries: feature (0), init (1) — no merge commit for ff
 run_test_match "diff_ff_added" \
-  "SELECT diff_type, to_value FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
+  "SELECT diff_type, to_value FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
   "added" "$DB2"
 
 # Test 10: After merge with conflicts, dolt_diff between init and HEAD shows the main change
@@ -157,9 +157,9 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB10" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB10" > /dev/null 2>&1
 
-run_test_match "clean_merge_commits" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB10"
-run_test_match "clean_merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB10"
-run_test "clean_merge_data" "SELECT count(*) FROM t;" "2" "$DB10"
+run_test_match "clean_ff_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB10"
+run_test "clean_ff_log" "SELECT message FROM dolt_log LIMIT 1;" "feat" "$DB10"
+run_test "clean_ff_data" "SELECT count(*) FROM t;" "2" "$DB10"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
 echo ""

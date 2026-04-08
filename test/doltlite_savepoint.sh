@@ -235,9 +235,9 @@ run_test "merge_in_txn_feature_row" \
   "SELECT v FROM t WHERE id=2;" \
   "feature-row" "$DB7"
 
-run_test_match "merge_in_txn_log" \
+run_test "merge_in_txn_log" \
   "SELECT message FROM dolt_log LIMIT 1;" \
-  "Merge branch" "$DB7"
+  "feature work" "$DB7"
 
 # ============================================================
 # Test 8: ROLLBACK after dolt_branch — does the branch creation persist?
