@@ -181,7 +181,7 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
 static int htConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   HistVtab *v; int rc; const char *zMod; char *zSchema;
-  (void)pAux;(void)pzErr;
+  (void)pAux;
 
   v=sqlite3_malloc(sizeof(*v)); if(!v) return SQLITE_NOMEM;
   memset(v,0,sizeof(*v)); v->db=db;
@@ -194,11 +194,12 @@ static int htConnect(sqlite3 *db, void *pAux, int argc,
 
   doltliteGetColumnNames(db,v->zTableName,&v->cols);
 
-  if(v->cols.nCol>0){
-    zSchema=htBuildSchema(&v->cols);
-  }else{
-    zSchema=sqlite3_mprintf("CREATE TABLE x(value TEXT, commit_hash TEXT, committer TEXT, commit_date TEXT)");
+  if(v->cols.nCol<=0){
+    sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);
+    *pzErr=sqlite3_mprintf("table '%s' not found or has no columns",v->zTableName?v->zTableName:"");
+    return SQLITE_ERROR;
   }
+  zSchema=htBuildSchema(&v->cols);
   if(!zSchema){sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);return SQLITE_NOMEM;}
 
   rc=sqlite3_declare_vtab(db,zSchema); sqlite3_free(zSchema);
@@ -270,17 +271,9 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     }
   }else{
     int fixedCol=col-nCols;
-    if(nCols==0) fixedCol=col;
     switch(fixedCol){
-      case 0: 
-        if(nCols==0){
-          
-          char *z=doltliteDecodeRecord(r->pVal,r->nVal);
-          if(z) sqlite3_result_text(ctx,z,-1,sqlite3_free);
-          else sqlite3_result_null(ctx);
-        }else{
-          sqlite3_result_text(ctx,r->zCommit,-1,SQLITE_TRANSIENT);
-        }
+      case 0:
+        sqlite3_result_text(ctx,r->zCommit,-1,SQLITE_TRANSIENT);
         break;
       case 1: 
         sqlite3_result_text(ctx,r->zCommitter,-1,SQLITE_TRANSIENT);

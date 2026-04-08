@@ -407,16 +407,14 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
   doltliteGetColumnNames(db, pVtab->zTableName, &pVtab->cols);
 
   
-  if( pVtab->cols.nCol > 0 ){
-    zSchema = buildDiffSchema(&pVtab->cols);
-  }else{
-    
-    zSchema = sqlite3_mprintf(
-      "CREATE TABLE x(from_value, to_value,"
-      " from_commit TEXT, to_commit TEXT,"
-      " from_commit_date TEXT, to_commit_date TEXT,"
-      " diff_type TEXT)");
+  if( pVtab->cols.nCol <= 0 ){
+    sqlite3_free(pVtab->zTableName);
+    doltliteFreeColInfo(&pVtab->cols);
+    sqlite3_free(pVtab);
+    *pzErr = sqlite3_mprintf("table '%s' not found or has no columns", argv[3] ? argv[3] : "");
+    return SQLITE_ERROR;
   }
+  zSchema = buildDiffSchema(&pVtab->cols);
 
   if( !zSchema ){
     sqlite3_free(pVtab->zTableName);
@@ -548,29 +546,13 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   }else{
     
     int fixedCol = col - 2*nCols;
-    if( nCols == 0 ) fixedCol = col; 
 
     switch( fixedCol ){
-      case 0: 
-        if( nCols == 0 ){
-          
-          if( r->pOldVal )
-            sqlite3_result_blob(ctx, r->pOldVal, r->nOldVal, SQLITE_TRANSIENT);
-          else
-            sqlite3_result_null(ctx);
-        }else{
-          sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);
-        }
+      case 0:
+        sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);
         break;
-      case 1: 
-        if( nCols == 0 ){
-          if( r->pNewVal )
-            sqlite3_result_blob(ctx, r->pNewVal, r->nNewVal, SQLITE_TRANSIENT);
-          else
-            sqlite3_result_null(ctx);
-        }else{
-          sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
-        }
+      case 1:
+        sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
         break;
       case 2: 
         { time_t t = (time_t)r->fromDate; struct tm *tm = gmtime(&t);
