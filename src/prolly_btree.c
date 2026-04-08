@@ -1684,31 +1684,46 @@ static int btreeRefreshFromDisk(Btree *p){
 
     memset(&catHash, 0, sizeof(catHash));
 
-    if( chunkStoreFindBranch(&pBt->store, zBr, &branchHead)!=SQLITE_OK
-     || prollyHashIsEmpty(&branchHead) ){
-      /* Branch not found in refs — use manifest catalog */
-      chunkStoreGetCatalog(&pBt->store, &catHash);
-      chunkStoreGetRoot(&pBt->store, &p->root);
-    }else if( prollyHashCompare(&p->headCommit, &branchHead)==0 ){
-      /* Our branch tip hasn't moved — no refresh needed even though
-      ** the file changed (another branch was modified). */
-      return SQLITE_OK;
-    }else{
-      /* Our branch tip moved — load the new commit's catalog. */
-      u8 *commitData = 0;
-      int nCommitData = 0;
-      rc = chunkStoreGet(&pBt->store, &branchHead, &commitData, &nCommitData);
-      if( rc==SQLITE_OK && commitData ){
-        DoltliteCommit commit;
-        rc = doltliteCommitDeserialize(commitData, nCommitData, &commit);
-        sqlite3_free(commitData);
-        if( rc==SQLITE_OK ){
-          memcpy(&catHash, &commit.catalogHash, sizeof(ProllyHash));
-          memcpy(&p->headCommit, &branchHead, sizeof(ProllyHash));
-          doltliteCommitClear(&commit);
+    {
+      ProllyHash manifestHead;
+      chunkStoreGetHeadCommit(&pBt->store, &manifestHead);
+
+      if( chunkStoreFindBranch(&pBt->store, zBr, &branchHead)!=SQLITE_OK
+       || prollyHashIsEmpty(&branchHead) ){
+        /* Branch not found — use manifest catalog */
+        chunkStoreGetCatalog(&pBt->store, &catHash);
+        chunkStoreGetRoot(&pBt->store, &p->root);
+      }else if( prollyHashCompare(&manifestHead, &branchHead)==0 ){
+        /* Manifest head matches our branch — the file change is from our
+        ** branch (autocommit from same or another connection on same branch).
+        ** Reload the manifest catalog. */
+        chunkStoreGetCatalog(&pBt->store, &catHash);
+        chunkStoreGetRoot(&pBt->store, &p->root);
+      }else{
+        /* Manifest head is from a DIFFERENT branch. Check if our branch
+        ** tip actually moved (another connection did dolt_commit to our branch). */
+        if( prollyHashCompare(&p->headCommit, &branchHead)==0 ){
+          /* Our branch didn't move — skip refresh */
+          return SQLITE_OK;
+        }
+        /* Our branch moved — load catalog from the branch's commit */
+        {
+          u8 *commitData = 0;
+          int nCommitData = 0;
+          rc = chunkStoreGet(&pBt->store, &branchHead, &commitData, &nCommitData);
+          if( rc==SQLITE_OK && commitData ){
+            DoltliteCommit commit;
+            rc = doltliteCommitDeserialize(commitData, nCommitData, &commit);
+            sqlite3_free(commitData);
+            if( rc==SQLITE_OK ){
+              memcpy(&catHash, &commit.catalogHash, sizeof(ProllyHash));
+              memcpy(&p->headCommit, &branchHead, sizeof(ProllyHash));
+              doltliteCommitClear(&commit);
+            }
+          }
+          if( rc!=SQLITE_OK ) return rc;
         }
       }
-      if( rc!=SQLITE_OK ) return rc;
     }
 
     if( !prollyHashIsEmpty(&catHash) ){
@@ -1761,19 +1776,25 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     rc = chunkStoreLockAndRefresh(&pBt->store);
     if( rc!=SQLITE_OK ) return rc;
     
-    /* Reload catalog from THIS connection's branch, not the manifest.
-    ** Another branch may have committed, moving the manifest's catalog. */
+    /* Reload catalog — same branch-aware logic as btreeRefreshFromDisk. */
     {
       ProllyHash catHash;
       const char *zBr = p->zBranch ? p->zBranch : "main";
       ProllyHash branchHead;
+      ProllyHash manifestHead;
       int needReload = 0;
 
       memset(&catHash, 0, sizeof(catHash));
-      if( chunkStoreFindBranch(&pBt->store, zBr, &branchHead)==SQLITE_OK
-       && !prollyHashIsEmpty(&branchHead)
-       && prollyHashCompare(&p->headCommit, &branchHead)!=0 ){
-        /* Our branch moved — load the new commit's catalog */
+      chunkStoreGetHeadCommit(&pBt->store, &manifestHead);
+
+      if( chunkStoreFindBranch(&pBt->store, zBr, &branchHead)!=SQLITE_OK
+       || prollyHashIsEmpty(&branchHead)
+       || prollyHashCompare(&manifestHead, &branchHead)==0 ){
+        /* Branch not found, or manifest matches our branch — use manifest */
+        chunkStoreGetCatalog(&pBt->store, &catHash);
+        needReload = 1;
+      }else if( prollyHashCompare(&p->headCommit, &branchHead)!=0 ){
+        /* Manifest is from another branch AND our branch moved */
         u8 *commitData = 0;
         int nCommitData = 0;
         int rc2 = chunkStoreGet(&pBt->store, &branchHead, &commitData, &nCommitData);
@@ -1788,12 +1809,8 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
             needReload = 1;
           }
         }
-      }else if( prollyHashIsEmpty(&p->headCommit) ){
-        /* First write on a fresh connection — use manifest catalog */
-        chunkStoreGetCatalog(&pBt->store, &catHash);
-        needReload = 1;
       }
-      /* else: branch tip matches our HEAD — no reload needed */
+      /* else: manifest is from another branch, our branch unchanged — skip */
 
       if( needReload && !prollyHashIsEmpty(&catHash) ){
         u8 *catData = 0;
