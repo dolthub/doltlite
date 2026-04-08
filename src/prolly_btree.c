@@ -1755,6 +1755,12 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     if( pBt->btsFlags & BTS_READ_ONLY ){
       return SQLITE_READONLY;
     }
+    /* Acquire exclusive file lock for the duration of this write transaction.
+    ** This serializes write transactions across connections, matching SQLite's
+    ** standard behavior. The lock also refreshes from disk so we see the
+    ** latest committed state. */
+    rc = chunkStoreLockAndRefresh(&pBt->store);
+    if( rc!=SQLITE_OK ) return rc;
     
     
     {
@@ -1877,7 +1883,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   p->inTransaction = TRANS_NONE;
   p->nSavepoint = 0;
 
-  
+  chunkStoreUnlock(&pBt->store);
   pBt->store.snapshotPinned = 0;
 
   return rc;
@@ -1955,7 +1961,7 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   p->inTransaction = TRANS_NONE;
   p->nSavepoint = 0;
 
-  
+  chunkStoreUnlock(&pBt->store);
   pBt->store.snapshotPinned = 0;
 
   return SQLITE_OK;

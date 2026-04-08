@@ -8,15 +8,15 @@ typedef struct PagerShim PagerShim;
 typedef struct PagerOps PagerOps;
 #define PAGER_SHIM_MAGIC 0x50534D31  
 struct PagerShim {
-  u32 magic;                   
-  const PagerOps *pOps;        
-  sqlite3_file *pFd;        
-  char *zFilename;           
-  char *zJournal;            
-  u8 eLock;                  
-  u8 journalMode;            
-  u32 iDataVersion;          
-  sqlite3_vfs *pVfs;         
+  u32 magic;
+  const PagerOps *pOps;
+  sqlite3_file *pFd;
+  char *zFilename;
+  char *zJournal;
+  u8 eLock;
+  u8 journalMode;
+  u32 iDataVersion;
+  sqlite3_vfs *pVfs;
 };
 
 PagerShim *pagerShimCreate(sqlite3_vfs *pVfs, const char *zFilename,
