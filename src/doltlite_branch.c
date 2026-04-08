@@ -71,19 +71,27 @@ static int checkoutLoadAndApply(
   ProllyHash *pCommitHash,
   ProllyHash *pCatHash
 ){
-  DoltliteCommit commit;
-  u8 *data = 0;
-  int nData = 0;
   int rc;
 
-  rc = chunkStoreGet(cs, pCommitHash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteCommitDeserialize(data, nData, &commit);
-  sqlite3_free(data);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Load the committed catalog for this branch. */
+  {
+    DoltliteCommit commit;
+    u8 *data = 0;
+    int nData = 0;
 
-  memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
-  doltliteCommitClear(&commit);
+    rc = chunkStoreGet(cs, pCommitHash, &data, &nData);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = doltliteCommitDeserialize(data, nData, &commit);
+    sqlite3_free(data);
+    if( rc!=SQLITE_OK ) return rc;
+
+    memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
+    doltliteCommitClear(&commit);
+  }
+
+  /* TODO: restore uncommitted changes on checkout. Requires storing the
+  ** commit hash in the working state chunk so we can distinguish
+  ** "uncommitted changes" from "stale working state after push/pull." */
 
   rc = doltliteSwitchCatalog(db, pCatHash);
   return rc;

@@ -182,9 +182,49 @@ int main(){
     sqlite3_close(fresh);
   }
 
-  /* Cleanup */
+  printf("--- Test 7: checkout doesn't corrupt source branch ---\n");
+
+  /* Start fresh for this test */
   sqlite3_close(db1);
   sqlite3_close(db2);
+  remove(dbpath);
+  { char w[256]; snprintf(w,256,"%s-wal",dbpath); remove(w); }
+
+  rc = sqlite3_open(dbpath, &db1);
+  check("t7_open", rc==SQLITE_OK);
+  sqlite3_busy_timeout(db1, 5000);
+
+  execsql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT)");
+  execsql(db1, "INSERT INTO t VALUES(1, 'committed')");
+  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  exec1(db1, "SELECT dolt_checkout('-b', 'feature')");
+
+  /* Commit on feature */
+  execsql(db1, "INSERT INTO t VALUES(2, 'on-feature')");
+  exec1(db1, "SELECT dolt_commit('-A', '-m', 'feature commit')");
+  check("t7_feature_has_2", strcmp(exec1(db1, "SELECT count(*) FROM t"), "2")==0);
+
+  /* Switch to main — should see 1 row, not 2 */
+  exec1(db1, "SELECT dolt_checkout('main')");
+  check("t7_main_has_1", strcmp(exec1(db1, "SELECT count(*) FROM t"), "1")==0);
+
+  /* Switch back to feature — should see 2 rows */
+  exec1(db1, "SELECT dolt_checkout('feature')");
+  r = exec1(db1, "SELECT count(*) FROM t");
+  check("t7_feature_preserved", strcmp(r, "2")==0);
+
+  printf("--- Test 8: checkout with uncommitted changes doesn't error ---\n");
+
+  /* Uncommitted insert, then checkout — should not error */
+  execsql(db1, "INSERT INTO t VALUES(3, 'uncommitted')");
+  check("t8_has_3", strcmp(exec1(db1, "SELECT count(*) FROM t"), "3")==0);
+
+  rc = execsql(db1, "SELECT dolt_checkout('main')");
+  check("t8_checkout_ok", rc==SQLITE_OK);
+  check("t8_main_has_1", strcmp(exec1(db1, "SELECT count(*) FROM t"), "1")==0);
+
+  /* Cleanup */
+  sqlite3_close(db1);
   remove(dbpath);
   { char w[256]; snprintf(w,256,"%s-wal",dbpath); remove(w); }
 
