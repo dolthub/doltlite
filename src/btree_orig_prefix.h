@@ -92,7 +92,9 @@
 #define sqlite3BtreeSchema orig_sqlite3BtreeSchema
 #define sqlite3BtreeSchemaLocked orig_sqlite3BtreeSchemaLocked
 #define sqlite3BtreeSecureDelete orig_sqlite3BtreeSecureDelete
+#ifdef SQLITE_DEBUG
 #define sqlite3BtreeSeekCount orig_sqlite3BtreeSeekCount
+#endif
 #define sqlite3BtreeSetAutoVacuum orig_sqlite3BtreeSetAutoVacuum
 #define sqlite3BtreeSetCacheSize orig_sqlite3BtreeSetCacheSize
 #define sqlite3BtreeSetMmapLimit orig_sqlite3BtreeSetMmapLimit
@@ -180,11 +182,15 @@
 #define sqlite3PagerUnrefPageOne orig_sqlite3PagerUnrefPageOne
 #define sqlite3PagerVfs orig_sqlite3PagerVfs
 #define sqlite3PagerWalCallback orig_sqlite3PagerWalCallback
+#if !defined(SQLITE_OMIT_WAL) && defined(SQLITE_ENABLE_SETLK_TIMEOUT)
 #define sqlite3PagerWalDb orig_sqlite3PagerWalDb
+#endif
 #define sqlite3PagerWalFramesize orig_sqlite3PagerWalFramesize
 #define sqlite3PagerWalSupported orig_sqlite3PagerWalSupported
 #define sqlite3PagerWalSystemErrno orig_sqlite3PagerWalSystemErrno
+#if !defined(SQLITE_OMIT_WAL) && defined(SQLITE_ENABLE_SETLK_TIMEOUT)
 #define sqlite3PagerWalWriteLock orig_sqlite3PagerWalWriteLock
+#endif
 #define sqlite3PagerWrite orig_sqlite3PagerWrite
 
 /* WAL symbols */
@@ -194,7 +200,9 @@
 #define sqlite3WalCheckpoint orig_sqlite3WalCheckpoint
 #define sqlite3WalClose orig_sqlite3WalClose
 #define sqlite3WalCloseSnapshot orig_sqlite3WalCloseSnapshot
+#ifdef SQLITE_ENABLE_SETLK_TIMEOUT
 #define sqlite3WalDb orig_sqlite3WalDb
+#endif
 #define sqlite3WalDbsize orig_sqlite3WalDbsize
 #define sqlite3WalEndReadTransaction orig_sqlite3WalEndReadTransaction
 #define sqlite3WalEndWriteTransaction orig_sqlite3WalEndWriteTransaction
