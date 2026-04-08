@@ -2509,193 +2509,83 @@ static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
   }
 }
 
-static int mergeStepForward(BtCursor *pCur){
-  int treeOk, mutOk;
-
-
-  if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
-    prollyCursorNext(&pCur->pCur);
-  }
-  if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH ){
-    pCur->mmIdx++;
-  }
-
-  for(;;){
-    ProllyMutMapEntry *e;
-    int cmp;
-    treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
-    mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
-
-    if( !treeOk && !mutOk ) return SQLITE_DONE;
-
-    if( !mutOk ){
-      pCur->mergeSrc = MERGE_SRC_TREE;
-      return SQLITE_OK;
-    }
-    e = &pCur->pMutMap->aEntries[pCur->mmIdx];
-    if( !treeOk ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
-      pCur->mergeSrc = MERGE_SRC_MUT;
-      return SQLITE_OK;
-    }
-    cmp = mergeCompare(pCur, e);
-    if( cmp < 0 ){
-      pCur->mergeSrc = MERGE_SRC_TREE;
-      return SQLITE_OK;
-    }else if( cmp > 0 ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
-      pCur->mergeSrc = MERGE_SRC_MUT;
-      return SQLITE_OK;
-    }else{
-      /* Keys match. If MutMap says delete, advance BOTH sources to suppress
-      ** the tree entry, then loop to find the next visible row. */
-      if( e->op==PROLLY_EDIT_DELETE ){
-        pCur->mmIdx++;
-        prollyCursorNext(&pCur->pCur);
-        continue;
-      }
-      /* Keys match and MutMap has an insert: MutMap value overrides tree */
-      pCur->mergeSrc = MERGE_SRC_BOTH;
-      return SQLITE_OK;
-    }
-  }
-}
-
-static int mergeStepBackward(BtCursor *pCur){
-  int treeOk, mutOk;
-
-  if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
-    prollyCursorPrev(&pCur->pCur);
-  }
-  if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH ){
-    pCur->mmIdx--;
-  }
-
-  for(;;){
-    ProllyMutMapEntry *e;
-    int cmp;
-    treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
-    mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
-
-    if( !treeOk && !mutOk ) return SQLITE_DONE;
-
-    if( !mutOk ){
-      pCur->mergeSrc = MERGE_SRC_TREE;
-      return SQLITE_OK;
-    }
-    e = &pCur->pMutMap->aEntries[pCur->mmIdx];
-    if( !treeOk ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
-      pCur->mergeSrc = MERGE_SRC_MUT;
-      return SQLITE_OK;
-    }
-    cmp = mergeCompare(pCur, e);
-    if( cmp > 0 ){
-      pCur->mergeSrc = MERGE_SRC_TREE;
-      return SQLITE_OK;
-    }else if( cmp < 0 ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
-      pCur->mergeSrc = MERGE_SRC_MUT;
-      return SQLITE_OK;
-    }else{
-      if( e->op==PROLLY_EDIT_DELETE ){
-        pCur->mmIdx--;
-        prollyCursorPrev(&pCur->pCur);
-        continue;
-      }
-      pCur->mergeSrc = MERGE_SRC_BOTH;
-      return SQLITE_OK;
-    }
-  }
-}
-
-static int mergeFirst(BtCursor *pCur, int *pRes){
-  int treeOk, mutOk;
-  pCur->mergeSrc = MERGE_SRC_TREE;
-  pCur->mmIdx = 0;
-
-  treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
-  mutOk  = (pCur->mmIdx < pCur->pMutMap->nEntries);
-
-
-  for(;;){
-    ProllyMutMapEntry *e;
-    int cmp;
-    treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
-    mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
-
-    if( !treeOk && !mutOk ){ *pRes = 1; return SQLITE_OK; }
-
-    if( !mutOk ){
-      pCur->mergeSrc = MERGE_SRC_TREE;
-      *pRes = 0; return SQLITE_OK;
-    }
-    e = &pCur->pMutMap->aEntries[pCur->mmIdx];
-    if( !treeOk ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
-      pCur->mergeSrc = MERGE_SRC_MUT;
-      *pRes = 0; return SQLITE_OK;
-    }
-    cmp = mergeCompare(pCur, e);
-    if( cmp < 0 ){
-      pCur->mergeSrc = MERGE_SRC_TREE;
-      *pRes = 0; return SQLITE_OK;
-    }else if( cmp > 0 ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
-      pCur->mergeSrc = MERGE_SRC_MUT;
-      *pRes = 0; return SQLITE_OK;
-    }else{
-      if( e->op==PROLLY_EDIT_DELETE ){
-        pCur->mmIdx++;
-        prollyCursorNext(&pCur->pCur);
-        continue;
-      }
-      pCur->mergeSrc = MERGE_SRC_BOTH;
-      *pRes = 0; return SQLITE_OK;
-    }
-  }
-}
-
-static int mergeLast(BtCursor *pCur, int *pRes){
-  pCur->mmIdx = pCur->pMutMap->nEntries - 1;
-  pCur->mergeSrc = MERGE_SRC_TREE;
-
+/* Scan for the next visible merged entry in the given direction.
+** dir=+1 for forward, dir=-1 for backward.
+** If pRes is non-NULL (mergeFirst/mergeLast), sets *pRes=1 if empty.
+** If pRes is NULL (mergeStep), returns SQLITE_DONE if exhausted. */
+static int mergeScan(BtCursor *pCur, int dir, int *pRes){
   for(;;){
     int treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
     int mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
     ProllyMutMapEntry *e;
     int cmp;
 
-    if( !treeOk && !mutOk ){ *pRes = 1; return SQLITE_OK; }
-
+    if( !treeOk && !mutOk ){
+      if( pRes ){ *pRes = 1; return SQLITE_OK; }
+      return SQLITE_DONE;
+    }
     if( !mutOk ){
       pCur->mergeSrc = MERGE_SRC_TREE;
-      *pRes = 0; return SQLITE_OK;
+      if( pRes ) *pRes = 0;
+      return SQLITE_OK;
     }
     e = &pCur->pMutMap->aEntries[pCur->mmIdx];
     if( !treeOk ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx += dir; continue; }
       pCur->mergeSrc = MERGE_SRC_MUT;
-      *pRes = 0; return SQLITE_OK;
+      if( pRes ) *pRes = 0;
+      return SQLITE_OK;
     }
     cmp = mergeCompare(pCur, e);
-    if( cmp > 0 ){
+    if( cmp*dir < 0 ){
       pCur->mergeSrc = MERGE_SRC_TREE;
-      *pRes = 0; return SQLITE_OK;
-    }else if( cmp < 0 ){
-      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
+      if( pRes ) *pRes = 0;
+      return SQLITE_OK;
+    }else if( cmp*dir > 0 ){
+      if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx += dir; continue; }
       pCur->mergeSrc = MERGE_SRC_MUT;
-      *pRes = 0; return SQLITE_OK;
+      if( pRes ) *pRes = 0;
+      return SQLITE_OK;
     }else{
       if( e->op==PROLLY_EDIT_DELETE ){
-        pCur->mmIdx--;
-        prollyCursorPrev(&pCur->pCur);
+        pCur->mmIdx += dir;
+        if( dir > 0 ) prollyCursorNext(&pCur->pCur);
+        else           prollyCursorPrev(&pCur->pCur);
         continue;
       }
       pCur->mergeSrc = MERGE_SRC_BOTH;
-      *pRes = 0; return SQLITE_OK;
+      if( pRes ) *pRes = 0;
+      return SQLITE_OK;
     }
   }
+}
+
+static int mergeStepForward(BtCursor *pCur){
+  if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH )
+    prollyCursorNext(&pCur->pCur);
+  if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH )
+    pCur->mmIdx++;
+  return mergeScan(pCur, 1, 0);
+}
+
+static int mergeStepBackward(BtCursor *pCur){
+  if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH )
+    prollyCursorPrev(&pCur->pCur);
+  if( pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH )
+    pCur->mmIdx--;
+  return mergeScan(pCur, -1, 0);
+}
+
+static int mergeFirst(BtCursor *pCur, int *pRes){
+  pCur->mergeSrc = MERGE_SRC_TREE;
+  pCur->mmIdx = 0;
+  return mergeScan(pCur, 1, pRes);
+}
+
+static int mergeLast(BtCursor *pCur, int *pRes){
+  pCur->mmIdx = pCur->pMutMap->nEntries - 1;
+  pCur->mergeSrc = MERGE_SRC_TREE;
+  return mergeScan(pCur, -1, pRes);
 }
 
 static int flushTablePending(BtCursor *pCur){
