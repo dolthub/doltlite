@@ -6,7 +6,7 @@
 **     magic(4) + version(4) + root_hash(20) + nChunks(4) +
 **     index_offset(8) + index_size(4) + catalog_hash(20) +
 **     head_commit_hash(20) + wal_offset(8) + reserved(12) +
-**     refs_hash(20) + reserved(44)
+**     refs_hash(20) + working_state_hash(20) + reserved(24)
 **   [Chunk data region: after manifest, before index]
 **     Each chunk stored as: length_le32(4) + data(length)
 **   [Sorted index: nChunks * 32-byte entries]
@@ -76,6 +76,7 @@ struct ChunkStore {
   ProllyHash catalog;
   ProllyHash headCommit;
   ProllyHash refsHash;
+  ProllyHash workingState;  /* Per-branch working catalog state chunk hash */
 
   /* These fields come from the per-branch WorkingSet, not from the manifest. */
   ProllyHash stagedCatalog;
@@ -164,6 +165,9 @@ void chunkStoreSetCatalog(ChunkStore *cs, const ProllyHash *pCat);
 
 void chunkStoreGetHeadCommit(ChunkStore *cs, ProllyHash *pHead);
 void chunkStoreSetHeadCommit(ChunkStore *cs, const ProllyHash *pHead);
+
+void chunkStoreGetWorkingState(ChunkStore *cs, ProllyHash *pState);
+void chunkStoreSetWorkingState(ChunkStore *cs, const ProllyHash *pState);
 
 void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged);
 void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged);
