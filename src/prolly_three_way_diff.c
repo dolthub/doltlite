@@ -93,14 +93,7 @@ static int diffEntryKeyCmp(const DiffEntry *pA, const DiffEntry *pB, u8 flags){
   }
 }
 
-static int valuesEqual(const u8 *pA, int nA, const u8 *pB, int nB){
-  if( nA==nB ){
-    if( nA==0 ) return 1;
-    if( memcmp(pA, pB, nA)==0 ) return 1;
-  }
-  if( nA < 2 || nB < 2 ) return 0;
-  return diffRecordsEqualFieldwise(pA, nA, pB, nB);
-}
+#define valuesEqual prollyValuesEqual
 
 static void fillKeyFromEntry(ThreeWayChange *pOut, const DiffEntry *pEntry){
   pOut->pKey = pEntry->pKey;
