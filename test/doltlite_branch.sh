@@ -41,7 +41,7 @@ DB3=/tmp/test_branch3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','i');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2);" | $DOLTLITE "$DB3" > /dev/null 2>&1
-run_test_match "dirty_checkout" "SELECT dolt_checkout('b2');" "uncommitted" "$DB3"
+run_test "dirty_checkout" "SELECT dolt_checkout('b2');" "0" "$DB3"
 
 # --- Checkout after hard reset (issue #107) ---
 DB4=/tmp/test_branch4_$$.db; rm -f "$DB4"
@@ -78,7 +78,7 @@ echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dol
 echo "INSERT INTO t VALUES(2); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(99);" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "SELECT dolt_branch('b4');" | $DOLTLITE "$DB7" > /dev/null 2>&1
-run_test_match "dirty_after_hard_reset_new_changes" "SELECT dolt_checkout('b4');" "uncommitted" "$DB7"
+run_test "dirty_after_hard_reset_new_changes" "SELECT dolt_checkout('b4');" "0" "$DB7"
 
 # Schema change (CREATE TABLE) then hard reset then checkout
 DB8=/tmp/test_branch8_$$.db; rm -f "$DB8"

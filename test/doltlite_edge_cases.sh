@@ -255,9 +255,9 @@ run_test_match "err_tag_dup" "SELECT dolt_tag('v1');" "already exists" "$DB"
 # Delete non-existent tag
 run_test_match "err_tag_del_noexist" "SELECT dolt_tag('-d','nope');" "not found" "$DB"
 
-# Checkout with uncommitted changes
+# Checkout with uncommitted changes (allowed, like Dolt SQL context)
 echo "INSERT INTO t VALUES(2,'dirty');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "err_checkout_dirty" "SELECT dolt_checkout('dup');" "uncommitted" "$DB"
+run_test "checkout_dirty_allowed" "SELECT dolt_checkout('dup');" "0" "$DB"
 
 # Hard reset cleans it
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB" > /dev/null 2>&1

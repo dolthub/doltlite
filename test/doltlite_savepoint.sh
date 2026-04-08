@@ -206,10 +206,10 @@ DB6b=/tmp/test_savepoint6b_$$.db; rm -f "$DB6b"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6b" > /dev/null 2>&1
 echo "SELECT dolt_branch('other');" | $DOLTLITE "$DB6b" > /dev/null 2>&1
 
-# INSERT then checkout in same transaction — should fail due to uncommitted changes
-run_test_match "checkout_dirty_in_txn" \
+# INSERT then checkout in same transaction — allowed (like Dolt SQL context)
+run_test "checkout_dirty_in_txn" \
   "BEGIN; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_checkout('other'); COMMIT;" \
-  "uncommitted" "$DB6b"
+  "0" "$DB6b"
 
 # ============================================================
 # Test 7: dolt_merge inside a BEGIN/COMMIT block
