@@ -517,10 +517,11 @@ and staged catalog hash in the `Btree` struct.
   `dolt_branch`, `dolt_tag`, push, pull) are serialized via an exclusive
   file-level lock. Under that lock, the connection refreshes from disk
   before writing, preventing silent data loss from concurrent commits.
-- DML (INSERT/UPDATE/DELETE) operates on the connection's local state
-  with no cross-connection locking. DoltLite is currently validated for
-  single-writer use; concurrent DML from multiple connections to the same
-  tables is not supported.
+- DML (INSERT/UPDATE/DELETE) operates on the connection's local state.
+  Each connection has its own in-memory prolly tree, so concurrent DML
+  from multiple connections is safe. Conflicts are detected at commit
+  time: if another connection committed to the same branch since this
+  connection last read it, `dolt_commit` returns an error.
 
 ## Performance
 
