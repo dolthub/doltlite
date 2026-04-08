@@ -1831,7 +1831,6 @@ static int btreeRefreshFromDisk(Btree *p){
     memset(&catHash, 0, sizeof(catHash));
 
     /* Try per-branch working catalog first */
-    /* Try per-branch working catalog first */
     if( btreeReadWorkingCatalog(&pBt->store, zBr, &catHash)!=SQLITE_OK ){
       /* Fallback: no working state yet (first open, or pre-existing db).
       ** Use the manifest catalog. */
@@ -1888,8 +1887,7 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     ** latest committed state. */
     rc = chunkStoreLockAndRefresh(&pBt->store);
     if( rc!=SQLITE_OK ) return rc;
-    
-    
+
     /* Reload catalog under lock — use per-branch working catalog to avoid
     ** cross-branch corruption, same as btreeRefreshFromDisk. */
     {
@@ -2008,9 +2006,9 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
     ** can find this branch's catalog without relying on the shared manifest. */
     {
       const char *zBr = p->zBranch ? p->zBranch : "main";
-      ProllyHash catHash2;
-      chunkStoreGetCatalog(&pBt->store, &catHash2);
-      rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash2);
+      ProllyHash catHash;
+      chunkStoreGetCatalog(&pBt->store, &catHash);
+      rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash);
       if( rc!=SQLITE_OK ) return rc;
     }
     /* Step 4: atomic manifest write */
