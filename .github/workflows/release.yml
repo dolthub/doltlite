@@ -164,10 +164,39 @@ jobs:
           doltlite-tools-*.zip
           doltlite-lib-*.zip
 
+  # ── Run benchmarks ────────────────────────────────────────
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: sudo apt-get update && sudo apt-get install -y build-essential zlib1g-dev python3
+
+    - name: Build doltlite and sqlite3
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make -j$(nproc) doltlite
+        make DOLTLITE_PROLLY=0 sqlite3
+
+    - name: Run benchmark
+      run: |
+        cd build
+        bash ../test/sysbench_compare.sh > /tmp/bench_full.md 2>/dev/null
+        # Extract file-backed section only
+        sed -n '/### File-Backed/,/^_/p' /tmp/bench_full.md > /tmp/bench_file.md
+
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmark
+        path: /tmp/bench_file.md
+
   # ── Create GitHub release ─────────────────────────────────
   release:
     if: github.event_name != 'workflow_dispatch'
-    needs: [source, build]
+    needs: [source, build, benchmark]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -198,3 +227,15 @@ jobs:
         ASSETS=$(find . -maxdepth 1 \( -name "*.zip" -o -name "*.tar.gz" \) -print)
         echo "Uploading: ${ASSETS}"
         gh release upload "${GITHUB_REF_NAME}" ${ASSETS} --clobber
+
+    - name: Append benchmark to release notes
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        BENCH="artifacts/benchmark/bench_file.md"
+        if [ -f "$BENCH" ]; then
+          EXISTING=$(gh release view "${GITHUB_REF_NAME}" --json body --jq .body)
+          APPEND=$(printf '\n## Benchmark (file-backed, 10K rows, Linux x64)\n\n'; cat "$BENCH")
+          printf '%s\n%s' "$EXISTING" "$APPEND" > /tmp/release_body.md
+          gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release_body.md
+        fi

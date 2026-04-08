@@ -540,58 +540,57 @@ comment.
 
 | Test | SQLite (ms) | Doltlite (ms) | Multiplier |
 |------|-------------|---------------|------------|
-| oltp_point_select | 41 | 45 | 1.10 |
-| oltp_range_select | 28 | 64 | 2.29 |
-| oltp_sum_range | 12 | 14 | 1.17 |
-| oltp_order_range | 5 | 6 | 1.20 |
-| oltp_distinct_range | 6 | 7 | 1.17 |
-| oltp_index_scan | 6 | 7 | 1.17 |
-| select_random_points | 19 | 35 | 1.84 |
-| select_random_ranges | 6 | 8 | 1.33 |
-| covering_index_scan | 10 | 24 | 2.40 |
-| groupby_scan | 47 | 54 | 1.15 |
-| index_join | 6 | 8 | 1.33 |
+| oltp_point_select | 145 | 89 | 0.61 |
+| oltp_range_select | 38 | 36 | 0.95 |
+| oltp_sum_range | 21 | 18 | 0.86 |
+| oltp_order_range | 8 | 8 | 1.00 |
+| oltp_distinct_range | 9 | 7 | 0.78 |
+| oltp_index_scan | 15 | 11 | 0.73 |
+| select_random_points | 39 | 48 | 1.23 |
+| select_random_ranges | 17 | 10 | 0.59 |
+| covering_index_scan | 20 | 28 | 1.40 |
+| groupby_scan | 54 | 54 | 1.00 |
+| index_join | 9 | 11 | 1.22 |
 | index_join_scan | 3 | 6 | 2.00 |
-| types_table_scan | 10 | 12 | 1.20 |
-| table_scan | 1 | 1 | 1.00 |
-| oltp_read_only | 183 | 234 | 1.28 |
+| types_table_scan | 13 | 13 | 1.00 |
+| table_scan | 1 | 2 | 2.00 |
+| oltp_read_only | 340 | 259 | 0.76 |
 
 #### Writes
 
 | Test | SQLite (ms) | Doltlite (ms) | Multiplier |
 |------|-------------|---------------|------------|
-| oltp_bulk_insert | 25 | 35 | 1.40 |
-| oltp_insert | 17 | 36 | 2.12 |
-| oltp_update_index | 40 | 129 | 3.23 |
-| oltp_update_non_index | 30 | 46 | 1.53 |
-| oltp_delete_insert | 39 | 69 | 1.77 |
-| oltp_write_only | 16 | 30 | 1.88 |
-| types_delete_insert | 22 | 26 | 1.18 |
-| oltp_read_write | 116 | 158 | 1.36 |
+| oltp_bulk_insert | 32 | 39 | 1.22 |
+| oltp_insert | 21 | 35 | 1.67 |
+| oltp_update_index | 48 | 128 | 2.67 |
+| oltp_update_non_index | 37 | 52 | 1.41 |
+| oltp_delete_insert | 44 | 76 | 1.73 |
+| oltp_write_only | 21 | 35 | 1.67 |
+| types_delete_insert | 28 | 32 | 1.14 |
+| oltp_read_write | 128 | 488 | 3.81 |
 
 _10K rows, file-backed, Linux x64 (GitHub Actions). Run `test/sysbench_compare.sh` to reproduce._
 
-**Reads are within 1-2.4x across all workloads.** The VDBE, query planner,
-parser, and all upper layers are untouched SQLite — only the storage engine is
-replaced. Point selects, range queries, aggregates, GROUP BY, and full table
-scans are all close to parity. The composite oltp_read_only benchmark is 1.28x.
+**Most reads are at or below parity.** The VDBE, query planner, parser, and all
+upper layers are untouched SQLite — only the storage engine is replaced. The
+prolly tree's content-addressed chunks are cached in memory after the first
+read, so repeated access patterns (point selects, range scans) often beat
+SQLite's B-tree on file-backed workloads. The composite oltp_read_only is 0.76x.
 
-**Index scans are 1-2.4x.** Secondary index scans (oltp_index_scan,
-covering_index_scan) use sort key materialization — pre-computed memcmp-sortable
-keys stored alongside the original SQLite record. This enables O(1) key
-comparison in the prolly tree. index_join_scan is now 2x (down from 46x in
-earlier versions) thanks to optimized cursor descent and structural sharing
-improvements.
-
-**Writes are within 1-3.2x.** Edits accumulate in a skip list and flush once at
+**Writes are within 1-2.7x.** Edits accumulate in a skip list and flush once at
 commit time using a Dolt-style cursor-path-stack algorithm. Only the root-to-leaf
 path is rewritten per edit; unchanged subtrees are structurally shared.
 
-**oltp_update_index is 3.2x** (down from 380x in the initial implementation and
-12x in previous releases). This benchmark does 10K updates to an indexed column
-in one transaction. Improvements came from sort key materialization (memcmp
-replaces field-by-field comparison), IndexMoveto scan limits, savepoint
-structural sharing, and deferred MutMap flush for ephemeral tables.
+**oltp_read_write is 3.8x.** This mixed workload (reads + writes in one large
+transaction) is the most expensive because write transactions serialize via
+file-level lock and each commit persists per-branch working state for
+cross-branch isolation.
+
+**oltp_update_index is 2.7x** (down from 380x in the initial implementation).
+This benchmark does 10K updates to an indexed column in one transaction.
+Improvements came from sort key materialization (memcmp replaces field-by-field
+comparison), IndexMoveto scan limits, savepoint structural sharing, and deferred
+MutMap flush for ephemeral tables.
 
 ### Algorithmic Complexity
 
