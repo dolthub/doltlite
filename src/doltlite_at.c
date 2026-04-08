@@ -153,7 +153,7 @@ static int atScanTree(AtCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
 static int atConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   AtVtab *v; int rc; const char *zMod; char *zSchema;
-  (void)pAux;(void)pzErr;
+  (void)pAux;
 
   v=sqlite3_malloc(sizeof(*v)); if(!v) return SQLITE_NOMEM;
   memset(v,0,sizeof(*v)); v->db=db;
@@ -166,11 +166,12 @@ static int atConnect(sqlite3 *db, void *pAux, int argc,
 
   doltliteGetColumnNames(db,v->zTableName,&v->cols);
 
-  if(v->cols.nCol>0){
-    zSchema=atBuildSchema(&v->cols);
-  }else{
-    zSchema=sqlite3_mprintf("CREATE TABLE x(rowid_val INTEGER, value TEXT, commit_ref TEXT HIDDEN)");
+  if(v->cols.nCol<=0){
+    sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);
+    *pzErr=sqlite3_mprintf("table '%s' not found or has no columns",v->zTableName?v->zTableName:"");
+    return SQLITE_ERROR;
   }
+  zSchema=atBuildSchema(&v->cols);
   if(!zSchema){sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);return SQLITE_NOMEM;}
 
   rc=sqlite3_declare_vtab(db,zSchema); sqlite3_free(zSchema);

@@ -968,6 +968,47 @@ run_test_match "branchfrom_to_main" "SELECT dolt_merge('dev');" "^[0-9a-f]{40}$"
 rm -f "$DB"
 
 # ============================================================
+# Virtual table error on nonexistent table (regression: previously
+# these fell back to generic schemas instead of erroring)
+# ============================================================
+
+echo ""
+echo "--- Virtual table errors for missing tables ---"
+
+DB=/tmp/test_edge_vtab_err_$$.db; rm -f "$DB"
+echo "CREATE TABLE real_table(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO real_table VALUES(1,'x');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Schema must use real column names (from_v, to_v), not generic fallback
+# names (from_value, to_value). The fallback was removed — if column
+# detection fails, the vtable now returns an error instead.
+run_test_match "diff_schema_has_from_v" \
+  "SELECT group_concat(name) FROM pragma_table_info('dolt_diff_real_table');" \
+  "from_v" "$DB"
+
+run_test_match "diff_schema_no_generic" \
+  "SELECT group_concat(name) FROM pragma_table_info('dolt_diff_real_table');" \
+  "from_v.*to_v" "$DB"
+
+run_test_match "history_schema_has_v" \
+  "SELECT group_concat(name) FROM pragma_table_info('dolt_history_real_table');" \
+  "\bv\b" "$DB"
+
+# Virtual tables work with real data
+run_test_match "diff_table_real_works" \
+  "SELECT count(*) FROM dolt_diff_real_table;" \
+  "^[0-9]" "$DB"
+run_test_match "history_real_works" \
+  "SELECT count(*) FROM dolt_history_real_table;" \
+  "^[0-9]" "$DB"
+run_test_match "at_real_works" \
+  "SELECT count(*) FROM dolt_at_real_table('HEAD');" \
+  "^[0-9]" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Done
 # ============================================================
 
