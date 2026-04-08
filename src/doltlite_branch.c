@@ -1,12 +1,4 @@
-/*
-** Doltlite branch management with per-session branch state.
-**
-** Each connection tracks its own active branch. The chunk store holds
-** the refs (branch → commit mapping) shared across all connections.
-** When dolt_checkout is called, the session's branch pointer is updated
-** AND the shared BtShared working state is reloaded (safe because
-** SQLite serializes writers).
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -16,13 +8,6 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/*
-** Check whether there are uncommitted working changes by doing a deep
-** per-table comparison (roots + schema hashes) between the working state
-** and HEAD.  This is the same approach dolt_status uses.
-**
-** Returns 1 if dirty, 0 if clean, or -1 on error.
-*/
 static int checkWorkingDirty(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headCatHash, workingCatHash;
@@ -30,14 +15,12 @@ static int checkWorkingDirty(sqlite3 *db){
 
   if( !cs ) return -1;
 
-  /* Get HEAD catalog hash */
+  
   rc = doltliteGetHeadCatalogHash(db, &headCatHash);
   if( rc!=SQLITE_OK ) return -1;
   if( prollyHashIsEmpty(&headCatHash) ) return 0;
 
-  /* Get working catalog hash — serialize current state to a chunk.
-  ** With V2 catalog format, the hash is purely data-derived (no aMeta),
-  ** so this comparison is reliable: equal hashes ↔ identical data. */
+  
   {
     u8 *catData = 0; int nCatData = 0;
     rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
@@ -47,23 +30,16 @@ static int checkWorkingDirty(sqlite3 *db){
     if( rc!=SQLITE_OK ) return -1;
   }
 
-  /* O(1) dirty check: compare catalog hashes */
+  
   return prollyHashCompare(&headCatHash, &workingCatHash) != 0;
 }
 
-/* --------------------------------------------------------------------------
-** active_branch() — returns this session's current branch name
-** -------------------------------------------------------------------------- */
 static void activeBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   (void)argc; (void)argv;
   sqlite3_result_text(ctx, doltliteGetSessionBranch(db), -1, SQLITE_TRANSIENT);
 }
 
-/* --------------------------------------------------------------------------
-** dolt_branch('name') — create branch at this session's HEAD
-** dolt_branch('-d', 'name') — delete branch
-** -------------------------------------------------------------------------- */
 static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -87,7 +63,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     rc = chunkStoreDeleteBranch(cs, zName);
     if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch not found", -1); return; }
   }else{
-    /* Create branch at this session's HEAD */
+    
     doltliteGetSessionHead(db, &head);
     if( prollyHashIsEmpty(&head) ){
       sqlite3_result_error(ctx, "no commits yet — commit first", -1);
@@ -103,11 +79,6 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   sqlite3_result_int(ctx, 0);
 }
 
-/*
-** Load the target commit, deserialize it, and perform a hard reset to its
-** catalog state. On success, writes the commit hash's catalog hash to
-** *pCatHash so the caller can use it for session state updates.
-*/
 static int checkoutLoadAndApply(
   sqlite3 *db,
   ChunkStore *cs,
@@ -129,7 +100,7 @@ static int checkoutLoadAndApply(
   memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&commit);
 
-  /* Save current branch's WorkingSet BEFORE hard reset overwrites session */
+  
   {
     extern int doltliteSaveWorkingSet(sqlite3*);
     doltliteSaveWorkingSet(db);
@@ -139,9 +110,6 @@ static int checkoutLoadAndApply(
   return rc;
 }
 
-/* --------------------------------------------------------------------------
-** dolt_checkout('branch') — switch this session's active branch
-** -------------------------------------------------------------------------- */
 static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -153,7 +121,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   const char *zBranch = (const char*)sqlite3_value_text(argv[0]);
   if( !zBranch ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
 
-  /* Handle -b flag: create branch then check it out */
+  
   if( strcmp(zBranch, "-b")==0 ){
     ProllyHash head;
     if( argc<2 ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
@@ -176,7 +144,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       sqlite3_result_error_code(ctx, rc);
       return;
     }
-    /* Fall through to checkout the newly created branch */
+    
   }
 
   if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
@@ -187,8 +155,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   rc = chunkStoreFindBranch(cs, zBranch, &targetCommit);
   if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch not found", -1); return; }
 
-  /* Check for uncommitted changes via catalog hash comparison.
-  ** With V2 catalogs (no aMeta), hash comparison is reliable. */
+  
   {
     int dirty = checkWorkingDirty(db);
     if( dirty>0 ){
@@ -202,7 +169,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     return;
   }
 
-  /* Load target commit's catalog and hard reset */
+  
   {
     ProllyHash catHash;
     rc = checkoutLoadAndApply(db, cs, zBranch, &targetCommit, &catHash);
@@ -211,17 +178,15 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       return;
     }
 
-    /* Update this session's branch state */
+    
     doltliteSetSessionBranch(db, zBranch);
     doltliteSetSessionHead(db, &targetCommit);
 
-    /* Load the target branch's WorkingSet (staged + merge state).
-    ** If the target branch has no saved WorkingSet, defaults to
-    ** staged = empty (which means "same as HEAD" = clean). */
+    
     {
       extern int doltliteLoadWorkingSet(sqlite3*, const char*);
       doltliteLoadWorkingSet(db, zBranch);
-      /* If no WorkingSet was loaded (staged is empty), set staged = HEAD catalog */
+      
       {
         ProllyHash staged;
         doltliteGetSessionStaged(db, &staged);
@@ -231,7 +196,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       }
     }
 
-    /* Update the default branch in the store (for next open) */
+    
     chunkStoreSetDefaultBranch(cs, zBranch);
     chunkStoreSetHeadCommit(cs, &targetCommit);
   }
@@ -245,9 +210,6 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   sqlite3_result_int(ctx, 0);
 }
 
-/* --------------------------------------------------------------------------
-** dolt_branches virtual table
-** -------------------------------------------------------------------------- */
 typedef struct BrVtab BrVtab;
 struct BrVtab { sqlite3_vtab base; sqlite3 *db; };
 typedef struct BrCur BrCur;
@@ -317,4 +279,4 @@ int doltliteBranchRegister(sqlite3 *db){
   return rc;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

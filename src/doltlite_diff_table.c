@@ -1,12 +1,4 @@
-/*
-** dolt_diff_<tablename> — per-table audit log with Dolt-style column schema.
-**
-** Schema mirrors Dolt:
-**   from_<col1>, from_<col2>, ..., to_<col1>, to_<col2>, ...,
-**   from_commit, to_commit, from_commit_date, to_commit_date, diff_type
-**
-** Values are decoded from SQLite record format into native types.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -21,10 +13,6 @@
 #include <assert.h>
 #include <string.h>
 #include <time.h>
-
-/* --------------------------------------------------------------------------
-** Parse record header to get serial types and body offsets
-** -------------------------------------------------------------------------- */
 
 #define DT_MAX_COLS 64
 
@@ -77,7 +65,6 @@ static void dtParseRecord(const u8 *pData, int nData, RecordInfo *pInfo){
   }
 }
 
-/* Set a sqlite3_context result from a record field */
 static void dtResultField(
   sqlite3_context *ctx,
   const u8 *pData, int nData,
@@ -142,13 +129,8 @@ static void dtResultField(
   sqlite3_result_null(ctx);
 }
 
-/* --------------------------------------------------------------------------
-** Build the virtual table schema dynamically from column names
-** -------------------------------------------------------------------------- */
-
 static char *buildDiffSchema(DoltliteColInfo *ci){
-  /* Schema: from_<col1>, ..., to_<col1>, ...,
-  **         from_commit, to_commit, from_commit_date, to_commit_date, diff_type */
+  
   int i;
   int sz = 256;
   char *z;
@@ -164,13 +146,13 @@ static char *buildDiffSchema(DoltliteColInfo *ci){
 
     p += snprintf(p, end-p, "CREATE TABLE x(");
 
-    /* from_<col> columns */
+    
     for(i=0; i<ci->nCol; i++){
       if( i > 0 ) p += snprintf(p, end-p, ", ");
       p += snprintf(p, end-p, "\"from_%s\"", ci->azName[i]);
     }
 
-    /* to_<col> columns */
+    
     for(i=0; i<ci->nCol; i++){
       p += snprintf(p, end-p, ", \"to_%s\"", ci->azName[i]);
     }
@@ -184,10 +166,6 @@ static char *buildDiffSchema(DoltliteColInfo *ci){
   return z;
 }
 
-/* --------------------------------------------------------------------------
-** Buffered audit row
-** -------------------------------------------------------------------------- */
-
 typedef struct AuditRow AuditRow;
 struct AuditRow {
   u8 diffType;
@@ -200,16 +178,12 @@ struct AuditRow {
   i64 toDate;
 };
 
-/* --------------------------------------------------------------------------
-** Virtual table structures
-** -------------------------------------------------------------------------- */
-
 typedef struct DiffTblVtab DiffTblVtab;
 struct DiffTblVtab {
   sqlite3_vtab base;
   sqlite3 *db;
   char *zTableName;
-  DoltliteColInfo cols;       /* Column names for this table */
+  DoltliteColInfo cols;       
 };
 
 typedef struct DiffTblCursor DiffTblCursor;
@@ -220,10 +194,6 @@ struct DiffTblCursor {
   int nAlloc;
   int iRow;
 };
-
-/* --------------------------------------------------------------------------
-** Diff callback
-** -------------------------------------------------------------------------- */
 
 typedef struct CollectCtx CollectCtx;
 struct CollectCtx {
@@ -284,10 +254,6 @@ static void freeAuditRows(DiffTblCursor *pCur){
   pCur->nAlloc = 0;
 }
 
-/* --------------------------------------------------------------------------
-** Find table root by name
-** -------------------------------------------------------------------------- */
-
 static int findTableRootByName(
   struct TableEntry *a, int n, const char *zName,
   ProllyHash *pRoot, u8 *pFlags
@@ -302,10 +268,6 @@ static int findTableRootByName(
   if( pFlags ) *pFlags = 0;
   return SQLITE_NOTFOUND;
 }
-
-/* --------------------------------------------------------------------------
-** Walk commit history and diff
-** -------------------------------------------------------------------------- */
 
 static int walkHistoryAndDiff(
   DiffTblCursor *pCur, sqlite3 *db, const char *zTableName
@@ -417,10 +379,6 @@ static int walkHistoryAndDiff(
   return SQLITE_OK;
 }
 
-/* --------------------------------------------------------------------------
-** Virtual table methods
-** -------------------------------------------------------------------------- */
-
 static int dtConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   DiffTblVtab *pVtab;
@@ -434,7 +392,7 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
   memset(pVtab, 0, sizeof(*pVtab));
   pVtab->db = db;
 
-  /* Extract table name from module name: "dolt_diff_<tablename>" */
+  
   zModName = argv[0];
   if( zModName && strncmp(zModName, "dolt_diff_", 10)==0 ){
     pVtab->zTableName = sqlite3_mprintf("%s", zModName + 10);
@@ -444,14 +402,14 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
     pVtab->zTableName = sqlite3_mprintf("");
   }
 
-  /* Get column names from the actual table */
+  
   doltliteGetColumnNames(db, pVtab->zTableName, &pVtab->cols);
 
-  /* Build dynamic schema */
+  
   if( pVtab->cols.nCol > 0 ){
     zSchema = buildDiffSchema(&pVtab->cols);
   }else{
-    /* Fallback: generic schema */
+    
     zSchema = sqlite3_mprintf(
       "CREATE TABLE x(from_value, to_value,"
       " from_commit TEXT, to_commit TEXT,"
@@ -536,32 +494,20 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   AuditRow *r = &c->aRows[c->iRow];
   int nCols = pVtab->cols.nCol;
 
-  /* Column layout:
-  ** 0..nCols-1         : from_<col> values
-  ** nCols..2*nCols-1   : to_<col> values
-  ** 2*nCols            : from_commit
-  ** 2*nCols+1          : to_commit
-  ** 2*nCols+2          : from_commit_date
-  ** 2*nCols+3          : to_commit_date
-  ** 2*nCols+4          : diff_type
-  */
+  
 
   if( nCols > 0 && col < nCols ){
-    /* from_<col> */
+    
     int colIdx = col;
     if( colIdx == pVtab->cols.iPkCol ){
-      /* PK column: value comes from the rowid, not the record body.
-      ** For 'added' rows (no old val), the PK didn't exist → NULL. */
+      
       if( r->pOldVal && r->nOldVal > 0 ){
         sqlite3_result_int64(ctx, r->intKey);
       }else{
         sqlite3_result_null(ctx);
       }
     }else{
-      /* Non-PK column: decode from old record body.
-      ** The record body has fields for all columns in schema order,
-      ** but the PK field stores NULL (placeholder). Map schema col
-      ** index directly to record field index. */
+      
       if( r->pOldVal && r->nOldVal > 0 ){
         RecordInfo ri;
         dtParseRecord(r->pOldVal, r->nOldVal, &ri);
@@ -576,7 +522,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       }
     }
   }else if( nCols > 0 && col < 2*nCols ){
-    /* to_<col> */
+    
     int colIdx = col - nCols;
     if( colIdx == pVtab->cols.iPkCol ){
       if( r->pNewVal && r->nNewVal > 0 ){
@@ -599,14 +545,14 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       }
     }
   }else{
-    /* Fixed columns at the end */
+    
     int fixedCol = col - 2*nCols;
-    if( nCols == 0 ) fixedCol = col; /* fallback mode */
+    if( nCols == 0 ) fixedCol = col; 
 
     switch( fixedCol ){
-      case 0: /* from_commit */
+      case 0: 
         if( nCols == 0 ){
-          /* fallback: from_value blob */
+          
           if( r->pOldVal )
             sqlite3_result_blob(ctx, r->pOldVal, r->nOldVal, SQLITE_TRANSIENT);
           else
@@ -615,7 +561,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
           sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);
         }
         break;
-      case 1: /* to_commit */
+      case 1: 
         if( nCols == 0 ){
           if( r->pNewVal )
             sqlite3_result_blob(ctx, r->pNewVal, r->nNewVal, SQLITE_TRANSIENT);
@@ -625,19 +571,19 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
           sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
         }
         break;
-      case 2: /* from_commit_date */
+      case 2: 
         { time_t t = (time_t)r->fromDate; struct tm *tm = gmtime(&t);
           if(tm){ char b[32]; strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",tm);
             sqlite3_result_text(ctx,b,-1,SQLITE_TRANSIENT);
           }else sqlite3_result_null(ctx); }
         break;
-      case 3: /* to_commit_date */
+      case 3: 
         { time_t t = (time_t)r->toDate; struct tm *tm = gmtime(&t);
           if(tm){ char b[32]; strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",tm);
             sqlite3_result_text(ctx,b,-1,SQLITE_TRANSIENT);
           }else sqlite3_result_null(ctx); }
         break;
-      case 4: /* diff_type */
+      case 4: 
         switch( r->diffType ){
           case PROLLY_DIFF_ADD:    sqlite3_result_text(ctx,"added",-1,SQLITE_STATIC); break;
           case PROLLY_DIFF_DELETE: sqlite3_result_text(ctx,"removed",-1,SQLITE_STATIC); break;
@@ -660,10 +606,6 @@ static sqlite3_module diffTableModule = {
   dtOpen, dtClose, dtFilter, dtNext, dtEof, dtColumn, dtRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
-
-/* --------------------------------------------------------------------------
-** Registration
-** -------------------------------------------------------------------------- */
 
 void doltliteRegisterDiffTables(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -701,4 +643,4 @@ void doltliteRegisterDiffTables(sqlite3 *db){
   sqlite3_free(aTables);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

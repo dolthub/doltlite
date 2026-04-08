@@ -1,11 +1,4 @@
-/*
-** Mutable map implementation: sorted array for buffering pending edits
-** before tree flush. Supports insert, delete, find, and ordered iteration.
-**
-** Sorted array gives O(log M) find, O(M) insert (shift), O(M) clone
-** (memcpy + key/val copy). For typical M <= 256, this is faster than
-** the previous skip list which had O(M log M) clone cost.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_mutmap.h"
@@ -14,9 +7,6 @@
 
 #define MUTMAP_INIT_CAP 16
 
-/*
-** Compare two keys using the shared comparator from prolly_node.c.
-*/
 static int compareEntries(
   u8 isIntKey,
   const u8 *pKeyA, int nKeyA, i64 intKeyA,
@@ -27,10 +17,6 @@ static int compareEntries(
                            pKeyB, nKeyB, intKeyB);
 }
 
-/*
-** Free the key and value buffers of an entry (but not the entry itself,
-** since entries are stored inline in the array).
-*/
 static void freeEntryData(ProllyMutMapEntry *e){
   sqlite3_free(e->pKey);
   sqlite3_free(e->pVal);
@@ -40,10 +26,6 @@ static void freeEntryData(ProllyMutMapEntry *e){
   e->nVal = 0;
 }
 
-/*
-** Copy key and value data into an entry. The entry's op, isIntKey,
-** and intKey must already be set.
-*/
 static int copyEntryData(ProllyMutMapEntry *e,
                          const u8 *pKey, int nKey,
                          const u8 *pVal, int nVal){
@@ -70,10 +52,6 @@ static int copyEntryData(ProllyMutMapEntry *e,
   return SQLITE_OK;
 }
 
-/*
-** Binary search for a key. Returns the index where the key is found
-** or should be inserted. Sets *pFound to 1 if an exact match exists.
-*/
 static int bsearch_key(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey,
                        int *pFound){
@@ -97,9 +75,6 @@ static int bsearch_key(ProllyMutMap *mm,
   return lo;
 }
 
-/*
-** Ensure the array has capacity for at least one more entry.
-*/
 static int ensureCapacity(ProllyMutMap *mm){
   if( mm->nEntries >= mm->nAlloc ){
     int nNew = mm->nAlloc ? mm->nAlloc * 2 : MUTMAP_INIT_CAP;
@@ -112,18 +87,12 @@ static int ensureCapacity(ProllyMutMap *mm){
   return SQLITE_OK;
 }
 
-/*
-** Initialize a mutable map.
-*/
 int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey){
   memset(mm, 0, sizeof(*mm));
   mm->isIntKey = isIntKey;
   return SQLITE_OK;
 }
 
-/*
-** Insert or update a key-value pair.
-*/
 int prollyMutMapInsert(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
@@ -134,7 +103,7 @@ int prollyMutMapInsert(
   idx = bsearch_key(mm, pKey, nKey, intKey, &found);
 
   if( found ){
-    /* Update existing entry */
+    
     ProllyMutMapEntry *e = &mm->aEntries[idx];
     e->op = PROLLY_EDIT_INSERT;
     sqlite3_free(e->pVal);
@@ -149,17 +118,17 @@ int prollyMutMapInsert(
     return SQLITE_OK;
   }
 
-  /* New entry: grow array if needed, shift entries right, insert */
+  
   rc = ensureCapacity(mm);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Shift entries at idx..nEntries-1 right by 1 */
+  
   if( idx < mm->nEntries ){
     memmove(&mm->aEntries[idx+1], &mm->aEntries[idx],
             (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
   }
 
-  /* Initialize the new entry */
+  
   {
     ProllyMutMapEntry *e = &mm->aEntries[idx];
     memset(e, 0, sizeof(*e));
@@ -168,7 +137,7 @@ int prollyMutMapInsert(
     e->intKey = intKey;
     rc = copyEntryData(e, pKey, nKey, pVal, nVal);
     if( rc!=SQLITE_OK ){
-      /* Shift back on failure */
+      
       if( idx < mm->nEntries ){
         memmove(&mm->aEntries[idx], &mm->aEntries[idx+1],
                 (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
@@ -181,9 +150,6 @@ int prollyMutMapInsert(
   return SQLITE_OK;
 }
 
-/*
-** Mark a key for deletion.
-*/
 int prollyMutMapDelete(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey
@@ -195,18 +161,18 @@ int prollyMutMapDelete(
   if( found ){
     ProllyMutMapEntry *e = &mm->aEntries[idx];
     if( e->op == PROLLY_EDIT_INSERT ){
-      /* Convert INSERT to DELETE */
+      
       e->op = PROLLY_EDIT_DELETE;
       sqlite3_free(e->pVal);
       e->pVal = 0;
       e->nVal = 0;
       return SQLITE_OK;
     }
-    /* Already a DELETE */
+    
     return SQLITE_OK;
   }
 
-  /* New DELETE entry */
+  
   rc = ensureCapacity(mm);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -235,9 +201,6 @@ int prollyMutMapDelete(
   return SQLITE_OK;
 }
 
-/*
-** Look up a key. Returns entry pointer or NULL.
-*/
 ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
                                      const u8 *pKey, int nKey, i64 intKey){
   int found, idx;
@@ -283,9 +246,6 @@ void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
   it->idx = mm->nEntries - 1;
 }
 
-/*
-** Clear all entries.
-*/
 void prollyMutMapClear(ProllyMutMap *mm){
   int i;
   for(i=0; i<mm->nEntries; i++){
@@ -294,9 +254,6 @@ void prollyMutMapClear(ProllyMutMap *mm){
   mm->nEntries = 0;
 }
 
-/*
-** Free all resources.
-*/
 void prollyMutMapFree(ProllyMutMap *mm){
   prollyMutMapClear(mm);
   sqlite3_free(mm->aEntries);
@@ -304,9 +261,6 @@ void prollyMutMapFree(ProllyMutMap *mm){
   mm->nAlloc = 0;
 }
 
-/*
-** Merge all entries from pSrc into pDst. pSrc is emptied.
-*/
 int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
   int i, rc;
   for(i=0; i<pSrc->nEntries; i++){
@@ -323,4 +277,4 @@ int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
   return SQLITE_OK;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

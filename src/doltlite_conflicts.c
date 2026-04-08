@@ -1,17 +1,4 @@
-/*
-** dolt_conflicts: view and resolve merge conflicts.
-**
-** Summary table:
-**   SELECT * FROM dolt_conflicts;  -- table_name, num_conflicts
-**
-** Per-table conflict rows (registered dynamically as dolt_conflicts_<table>):
-**   SELECT * FROM dolt_conflicts_users;
-**   DELETE FROM dolt_conflicts_users WHERE base_rowid = 5;
-**
-** Bulk resolution:
-**   SELECT dolt_conflicts_resolve('--ours', 'users');
-**   SELECT dolt_conflicts_resolve('--theirs', 'users');
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -21,9 +8,6 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* Varint reader: use shared dlReadVarint from doltlite_record.h */
-
-/* Read a big-endian signed integer of nBytes bytes. */
 static i64 cfReadInt(const u8 *pRec, int nBytes){
   i64 v;
   int i;
@@ -36,28 +20,6 @@ static i64 cfReadInt(const u8 *pRec, int nBytes){
   return v;
 }
 
-/* --------------------------------------------------------------------------
-** Build an INSERT OR REPLACE SQL statement for conflict resolution.
-**
-** Constructs a complete INSERT OR REPLACE statement from a raw SQLite
-** record blob, decoding each field according to its serial type (integers,
-** floats, text with %Q quoting, blobs as hex literals). This is used
-** during --theirs conflict resolution to apply the remote side's row
-** values into the local table. The rowid is passed separately because
-** INTKEY tables store it outside the record blob.
-**
-** Parameters:
-**   zTable   - target table name
-**   intKey   - rowid value for the row
-**   azCol    - array of column names (from PRAGMA table_info)
-**   nCol     - number of columns
-**   pRec     - current position in the record header (serial types)
-**   pRecEnd  - end of the record blob
-**   pHdrEnd  - end of the header section
-**   pBody    - start of the data section
-**
-** Returns the SQL string (caller must sqlite3_free), or NULL on OOM.
-** -------------------------------------------------------------------------- */
 static char *buildInsertSql(
   const char *zTable,
   i64 intKey,
@@ -81,17 +43,17 @@ static char *buildInsertSql(
     int stBytes = dlReadVarint(pRec, pHdrEnd, &st);
     pRec += stBytes;
 
-    /* OOM check — if a previous sqlite3_mprintf failed, bail out */
+    
     if( !zIns || !zVals ){
       sqlite3_free(zIns); sqlite3_free(zVals);
       return 0;
     }
 
-    /* Append column name */
+    
     zTmp = sqlite3_mprintf("%s,\"%w\"", zIns, azCol[colIdx]);
     sqlite3_free(zIns); zIns = zTmp;
 
-    /* Decode value and append to VALUES */
+    
     if( st==0 ){
       zTmp = sqlite3_mprintf("%s,NULL", zVals);
       sqlite3_free(zVals); zVals = zTmp;
@@ -111,7 +73,7 @@ static char *buildInsertSql(
       }
       pBodyPos += nBytes;
     }else if( st==7 ){
-      /* IEEE 754 float */
+      
       if( pBodyPos + 8 <= pRecEnd ){
         double v;
         u64 bits = 0;
@@ -123,7 +85,7 @@ static char *buildInsertSql(
       }
       pBodyPos += 8;
     }else if( st>=12 && (st&1)==0 ){
-      /* Blob */
+      
       int len = ((int)st - 12) / 2;
       if( pBodyPos + len <= pRecEnd ){
         zTmp = sqlite3_mprintf("%s,X'", zVals);
@@ -140,10 +102,10 @@ static char *buildInsertSql(
       }
       pBodyPos += len;
     }else if( st>=13 && (st&1)==1 ){
-      /* Text */
+      
       int len = ((int)st - 13) / 2;
       if( pBodyPos + len <= pRecEnd ){
-        /* Use %Q for safe quoting */
+        
         char *zText = sqlite3_malloc(len+1);
         if( zText ){
           memcpy(zText, pBodyPos, len);
@@ -159,18 +121,13 @@ static char *buildInsertSql(
     colIdx++;
   }
 
-  /* Close the statement */
+  
   zTmp = sqlite3_mprintf("%s) %s)", zIns, zVals);
   sqlite3_free(zIns);
   sqlite3_free(zVals);
   return zTmp;
 }
 
-/* --------------------------------------------------------------------------
-** Build and execute an INSERT OR REPLACE for a raw SQLite record blob.
-** The record is the row data (not including the rowid).
-** Uses PRAGMA table_info to get column names.
-** -------------------------------------------------------------------------- */
 static int applyTheirRecord(
   sqlite3 *db,
   const char *zTable,
@@ -185,7 +142,7 @@ static int applyTheirRecord(
   u64 hdrSize;
   int hdrBytes;
 
-  /* Collect column names */
+  
   char **azCol = 0;
   int nColAlloc = 0;
 
@@ -198,11 +155,11 @@ static int applyTheirRecord(
   while( sqlite3_step(pInfo)==SQLITE_ROW ){
     const char *zName = (const char*)sqlite3_column_text(pInfo, 1);
     int pk = sqlite3_column_int(pInfo, 5);
-    /* Skip the INTEGER PRIMARY KEY column — it's the rowid, not in the record */
+    
     if( pk==1 ){
       const char *zType = (const char*)sqlite3_column_text(pInfo, 2);
       if( zType && sqlite3_stricmp(zType, "INTEGER")==0 ){
-        continue; /* This is an alias for rowid; skip */
+        continue; 
       }
     }
     if( nCol >= nColAlloc ){
@@ -220,7 +177,7 @@ static int applyTheirRecord(
     return SQLITE_ERROR;
   }
 
-  /* Parse the record header to get serial types */
+  
   pPos = pRec;
   pRecEnd = pRec + nRec;
   hdrBytes = dlReadVarint(pPos, pRecEnd, &hdrSize);
@@ -228,14 +185,12 @@ static int applyTheirRecord(
   pHdrEnd = pRec + (int)hdrSize;
   pBody = pRec + (int)hdrSize;
 
-  /* Skip the first record field (INTEGER PRIMARY KEY placeholder = NULL).
-  ** The column list already excludes the PK, so the record fields and
-  ** column names must be aligned by skipping this placeholder. */
+  
   if( pPos < pHdrEnd ){
     u64 stSkip;
     int skipBytes = dlReadVarint(pPos, pHdrEnd, &stSkip);
     pPos += skipBytes;
-    /* Advance pBody past the PK field's data (usually 0 bytes for NULL) */
+    
     if( stSkip==0 || stSkip==8 || stSkip==9 ) {}
     else if( stSkip>=1 && stSkip<=6 ){ static const int s[]={0,1,2,3,4,6,8}; pBody+=s[stSkip]; }
     else if( stSkip==7 ) pBody+=8;
@@ -243,7 +198,7 @@ static int applyTheirRecord(
     else if( stSkip>=13 && (stSkip&1)==1 ) pBody+=((int)stSkip-13)/2;
   }
 
-  /* Build and execute the INSERT OR REPLACE statement */
+  
   zSql = buildInsertSql(zTable, intKey, azCol, nCol, pPos, pRecEnd, pHdrEnd, pBody);
   if( zSql ){
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
@@ -252,7 +207,7 @@ static int applyTheirRecord(
     rc = SQLITE_NOMEM;
   }
 
-  /* Free column names */
+  
   {
     int k;
     for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
@@ -262,21 +217,13 @@ static int applyTheirRecord(
   return rc;
 }
 
-/* --------------------------------------------------------------------------
-** Conflict catalog serialization
-**
-** Format: [num_tables:2]
-** per table: [name_len:2][name:var][num_conflicts:4]
-** per conflict: [intKey:8][baseVal_len:4][baseVal:var][theirVal_len:4][theirVal:var]
-** -------------------------------------------------------------------------- */
-
 typedef struct ConflictTableInfo ConflictTableInfo;
 struct ConflictTableInfo {
   char *zName;
   int nConflicts;
   struct ConflictRow {
     i64 intKey;
-    u8 *pKey; int nKey;       /* blob key (NULL for INTKEY tables) — must match merge's layout */
+    u8 *pKey; int nKey;       
     u8 *pBaseVal; int nBaseVal;
     u8 *pOurVal; int nOurVal;
     u8 *pTheirVal; int nTheirVal;
@@ -288,7 +235,7 @@ int doltliteSerializeConflicts(
   ConflictTableInfo *aTables, int nTables,
   ProllyHash *pHash
 ){
-  int sz = 2;  /* num_tables */
+  int sz = 2;  
   int i, j, rc;
   u8 *buf, *p;
 
@@ -333,10 +280,6 @@ int doltliteSerializeConflicts(
   sqlite3_free(buf);
   return rc;
 }
-
-/* --------------------------------------------------------------------------
-** Load full conflict data (not just summary) for all tables.
-** -------------------------------------------------------------------------- */
 
 static int loadAllConflicts(
   sqlite3 *db,
@@ -428,7 +371,6 @@ static void freeConflictTables(ConflictTableInfo *aTables, int nTables){
   sqlite3_free(aTables);
 }
 
-/* Re-serialize and store updated conflicts, clearing if empty. */
 static int storeUpdatedConflicts(
   sqlite3 *db,
   ChunkStore *cs,
@@ -456,10 +398,6 @@ static int storeUpdatedConflicts(
     return chunkStoreCommit(cs);
   }
 }
-
-/* --------------------------------------------------------------------------
-** dolt_conflicts summary virtual table (unchanged)
-** -------------------------------------------------------------------------- */
 
 typedef struct ConflictsVtab ConflictsVtab;
 struct ConflictsVtab { sqlite3_vtab base; sqlite3 *db; };
@@ -514,20 +452,11 @@ static sqlite3_module conflictsModule = {
   cfColumn,cfRowid,0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-/* --------------------------------------------------------------------------
-** dolt_conflicts_<tablename> per-row virtual table
-**
-** Schema: base_rowid, base_value, our_rowid, our_value,
-**         their_rowid, their_value
-**
-** Supports DELETE to resolve individual conflicts.
-** -------------------------------------------------------------------------- */
-
 typedef struct CfRowVtab CfRowVtab;
 struct CfRowVtab {
   sqlite3_vtab base;
   sqlite3 *db;
-  char *zTableName;    /* Target table name (e.g. "users") */
+  char *zTableName;    
 };
 
 typedef struct CfRowCur CfRowCur;
@@ -535,8 +464,8 @@ struct CfRowCur {
   sqlite3_vtab_cursor base;
   ConflictTableInfo *aTables;
   int nTables;
-  int iTableIdx;       /* Index of our table in aTables */
-  int iRow;            /* Current conflict row */
+  int iTableIdx;       
+  int iRow;            
 };
 
 static int cfrConnect(sqlite3 *db, void *pAux, int argc,
@@ -556,12 +485,12 @@ static int cfrConnect(sqlite3 *db, void *pAux, int argc,
   memset(v,0,sizeof(*v));
   v->db = db;
 
-  /* Extract table name from module name: "dolt_conflicts_<tablename>" */
-  zModuleName = argv[0]; /* module name */
+  
+  zModuleName = argv[0]; 
   if( zModuleName && strncmp(zModuleName, "dolt_conflicts_", 15)==0 ){
     v->zTableName = sqlite3_mprintf("%s", zModuleName + 15);
   }else if( argc > 3 ){
-    /* Fallback: table name passed as argument */
+    
     v->zTableName = sqlite3_mprintf("%s", argv[3]);
   }else{
     v->zTableName = sqlite3_mprintf("");
@@ -605,7 +534,7 @@ static int cfrFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqli
   c->iTableIdx = -1;
   loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
 
-  /* Find our table */
+  
   for(i=0; i<c->nTables; i++){
     if( c->aTables[i].zName && strcmp(c->aTables[i].zName, vt->zTableName)==0 ){
       c->iTableIdx = i;
@@ -634,22 +563,22 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   cr = &c->aTables[c->iTableIdx].aRows[c->iRow];
 
   switch(col){
-    case 0: /* base_rowid */
+    case 0: 
       sqlite3_result_int64(ctx, cr->intKey);
       break;
-    case 1: /* base_value */
+    case 1: 
       doltliteResultRecord(ctx, cr->pBaseVal, cr->nBaseVal);
       break;
-    case 2: /* our_rowid (same key) */
+    case 2: 
       sqlite3_result_int64(ctx, cr->intKey);
       break;
-    case 3: /* our_value */
+    case 3: 
       doltliteResultRecord(ctx, cr->pOurVal, cr->nOurVal);
       break;
-    case 4: /* their_rowid */
+    case 4: 
       sqlite3_result_int64(ctx, cr->intKey);
       break;
-    case 5: /* their_value */
+    case 5: 
       doltliteResultRecord(ctx, cr->pTheirVal, cr->nTheirVal);
       break;
   }
@@ -672,14 +601,6 @@ static int cfrBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   return SQLITE_OK;
 }
 
-/* --------------------------------------------------------------------------
-** DELETE from dolt_conflicts_<tablename>
-**
-** Removes the conflict row at the given rowid from the conflict catalog.
-** This resolves that specific conflict (keeping whatever is in the
-** working table for that row).
-** -------------------------------------------------------------------------- */
-
 static int cfrUpdate(
   sqlite3_vtab *pVtab,
   int nArg,
@@ -695,7 +616,7 @@ static int cfrUpdate(
 
   (void)pRowid;
 
-  /* Only DELETE is supported (nArg==1) */
+  
   if( nArg != 1 ){
     pVtab->zErrMsg = sqlite3_mprintf("only DELETE is supported on conflict tables");
     return SQLITE_ERROR;
@@ -703,34 +624,34 @@ static int cfrUpdate(
 
   deleteRowid = sqlite3_value_int64(apArg[0]);
 
-  /* Load all conflicts */
+  
   rc = loadAllConflicts(v->db, cs, &aTables, &nTables);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Find the table and remove the matching conflict row */
+  
   for(i=0; i<nTables; i++){
     if( !aTables[i].zName || strcmp(aTables[i].zName, v->zTableName)!=0 )
       continue;
 
     for(j=0; j<aTables[i].nConflicts; j++){
       if( aTables[i].aRows[j].intKey == deleteRowid ){
-        /* Free this row's data */
+        
         sqlite3_free(aTables[i].aRows[j].pBaseVal);
         sqlite3_free(aTables[i].aRows[j].pTheirVal);
 
-        /* Shift remaining rows down */
+        
         if( j < aTables[i].nConflicts - 1 ){
           memmove(&aTables[i].aRows[j], &aTables[i].aRows[j+1],
                   (aTables[i].nConflicts - j - 1) * sizeof(struct ConflictRow));
         }
         aTables[i].nConflicts--;
 
-        /* If table has no more conflicts, remove the table entry */
+        
         if( aTables[i].nConflicts == 0 ){
           sqlite3_free(aTables[i].aRows);
           aTables[i].aRows = 0;
           sqlite3_free(aTables[i].zName);
-          /* Shift remaining tables */
+          
           if( i < nTables - 1 ){
             memmove(&aTables[i], &aTables[i+1],
                     (nTables - i - 1) * sizeof(ConflictTableInfo));
@@ -738,7 +659,7 @@ static int cfrUpdate(
           nTables--;
         }
 
-        /* Re-serialize and store */
+        
         rc = storeUpdatedConflicts(v->db, cs, aTables, nTables);
         freeConflictTables(aTables, nTables);
         return rc;
@@ -748,31 +669,26 @@ static int cfrUpdate(
   }
 
   freeConflictTables(aTables, nTables);
-  return SQLITE_OK; /* Row not found — no-op */
+  return SQLITE_OK; 
 }
 
 static sqlite3_module cfRowModule = {
-  0,                   /* iVersion */
-  cfrConnect,          /* xCreate — same as xConnect for eponymous */
-  cfrConnect,          /* xConnect */
-  cfrBestIndex,        /* xBestIndex */
-  cfrDisconnect,       /* xDisconnect */
-  cfrDisconnect,       /* xDestroy — same as xDisconnect */
-  cfrOpen,             /* xOpen */
-  cfrClose,            /* xClose */
-  cfrFilter,           /* xFilter */
-  cfrNext,             /* xNext */
-  cfrEof,              /* xEof */
-  cfrColumn,           /* xColumn */
-  cfrRowid,            /* xRowid */
-  cfrUpdate,           /* xUpdate */
-  0,0,0,0,0,0,0,0,0,0,0  /* remaining */
+  0,                   
+  cfrConnect,          
+  cfrConnect,          
+  cfrBestIndex,        
+  cfrDisconnect,       
+  cfrDisconnect,       
+  cfrOpen,             
+  cfrClose,            
+  cfrFilter,           
+  cfrNext,             
+  cfrEof,              
+  cfrColumn,           
+  cfrRowid,            
+  cfrUpdate,           
+  0,0,0,0,0,0,0,0,0,0,0  
 };
-
-/* --------------------------------------------------------------------------
-** Register dolt_conflicts_<tablename> virtual tables for all conflicted
-** tables.  Called during registration and after merge.
-** -------------------------------------------------------------------------- */
 
 void doltliteRegisterConflictTables(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -787,8 +703,7 @@ void doltliteRegisterConflictTables(sqlite3 *db){
     if( aTables[i].zName ){
       char *zModuleName = sqlite3_mprintf("dolt_conflicts_%s", aTables[i].zName);
       if( zModuleName ){
-        /* Register as eponymous virtual table: module name = table name,
-        ** so SELECT * FROM dolt_conflicts_<table> works without CREATE. */
+        
         sqlite3_create_module(db, zModuleName, &cfRowModule, 0);
         sqlite3_free(zModuleName);
       }
@@ -796,10 +711,6 @@ void doltliteRegisterConflictTables(sqlite3 *db){
   }
   freeConflictTables(aTables, nTables);
 }
-
-/* --------------------------------------------------------------------------
-** dolt_conflicts_resolve('--ours'|'--theirs', 'tablename')
-** -------------------------------------------------------------------------- */
 
 static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
@@ -823,10 +734,10 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   }
 
   if( strcmp(zMode,"--ours")==0 ){
-    /* Keep ours: remove conflicts for this table, leave working data as-is */
+    
     for(i=0; i<nTables; i++){
       if( aTables[i].zName && strcmp(aTables[i].zName, zTable)==0 ){
-        /* Free this table's conflict rows */
+        
         for(j=0; j<aTables[i].nConflicts; j++){
           sqlite3_free(aTables[i].aRows[j].pBaseVal);
           sqlite3_free(aTables[i].aRows[j].pTheirVal);
@@ -835,7 +746,7 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
         aTables[i].aRows = 0;
         aTables[i].nConflicts = 0;
         sqlite3_free(aTables[i].zName);
-        /* Remove table entry */
+        
         if( i < nTables - 1 ){
           memmove(&aTables[i], &aTables[i+1],
                   (nTables - i - 1) * sizeof(ConflictTableInfo));
@@ -849,18 +760,15 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     sqlite3_result_int(ctx, 0);
 
   }else if( strcmp(zMode,"--theirs")==0 ){
-    /* Take theirs: apply their values to working tree for conflicted rows,
-    ** then clear conflicts for this table */
+    
     for(i=0; i<nTables; i++){
       if( !aTables[i].zName || strcmp(aTables[i].zName, zTable)!=0 ) continue;
 
-      /* Apply each conflict's theirVal */
+      
       for(j=0; j<aTables[i].nConflicts; j++){
         struct ConflictRow *cr = &aTables[i].aRows[j];
         if( cr->pTheirVal && cr->nTheirVal > 0 ){
-          /* Their value exists — decode the raw SQLite record and
-          ** apply it via INSERT OR REPLACE, which handles both the
-          ** deletion of our value and insertion of theirs atomically. */
+          
           rc = applyTheirRecord(db, zTable, cr->intKey,
                                 cr->pTheirVal, cr->nTheirVal);
           if( rc!=SQLITE_OK ){
@@ -869,14 +777,14 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
             return;
           }
         }else{
-          /* Their value is NULL — they deleted the row. Delete ours. */
+          
           char *zSql = sqlite3_mprintf("DELETE FROM \"%w\" WHERE rowid=%lld",
                                         zTable, cr->intKey);
           if(zSql){ sqlite3_exec(db, zSql, 0, 0, 0); sqlite3_free(zSql); }
         }
       }
 
-      /* Clear conflicts for this table */
+      
       for(j=0; j<aTables[i].nConflicts; j++){
         sqlite3_free(aTables[i].aRows[j].pBaseVal);
         sqlite3_free(aTables[i].aRows[j].pTheirVal);
@@ -902,20 +810,16 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   }
 }
 
-/* --------------------------------------------------------------------------
-** Registration
-** -------------------------------------------------------------------------- */
-
 int doltliteConflictsRegister(sqlite3 *db){
   int rc;
   rc = sqlite3_create_module(db, "dolt_conflicts", &conflictsModule, 0);
   if( rc==SQLITE_OK )
     rc = sqlite3_create_function(db, "dolt_conflicts_resolve", -1, SQLITE_UTF8, 0,
                                   conflictsResolveFunc, 0, 0);
-  /* Register any existing conflict tables from a prior merge */
+  
   if( rc==SQLITE_OK )
     doltliteRegisterConflictTables(db);
   return rc;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

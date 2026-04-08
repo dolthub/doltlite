@@ -1,11 +1,4 @@
-/*
-** dolt_diff table-valued function: row-level diff between two commits
-** or between HEAD and working state.
-**
-** Usage:
-**   SELECT * FROM dolt_diff('tablename');                        -- working vs HEAD
-**   SELECT * FROM dolt_diff('tablename', 'from_hash', 'to_hash'); -- between commits
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -19,23 +12,15 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* --------------------------------------------------------------------------
-** Buffered diff row
-** -------------------------------------------------------------------------- */
-
 typedef struct DiffRow DiffRow;
 struct DiffRow {
-  u8 type;        /* PROLLY_DIFF_ADD, DELETE, MODIFY */
-  i64 intKey;     /* rowid for INTKEY tables */
-  u8 *pOldVal;    /* old value (owned, NULL for ADD) */
+  u8 type;        
+  i64 intKey;     
+  u8 *pOldVal;    
   int nOldVal;
-  u8 *pNewVal;    /* new value (owned, NULL for DELETE) */
+  u8 *pNewVal;    
   int nNewVal;
 };
-
-/* --------------------------------------------------------------------------
-** Virtual table structures
-** -------------------------------------------------------------------------- */
 
 typedef struct DoltliteDiffVtab DoltliteDiffVtab;
 struct DoltliteDiffVtab {
@@ -49,7 +34,7 @@ struct DoltliteDiffCursor {
   DiffRow *aRows;
   int nRows;
   int iRow;
-  int iPkField;    /* Record field index of the user's PK, or -1 if rowid alias */
+  int iPkField;    
 };
 
 static const char *diffSchema =
@@ -62,12 +47,6 @@ static const char *diffSchema =
   "  from_commit TEXT HIDDEN,"
   "  to_commit   TEXT HIDDEN"
   ")";
-
-/* --------------------------------------------------------------------------
-** Detect whether a table's PK is a rowid alias (INTEGER PRIMARY KEY).
-** Returns -1 if it IS a rowid alias (intKey == user PK).
-** Returns the column index (0-based) if it's NOT (user PK is in the record).
-** -------------------------------------------------------------------------- */
 
 static int detectPkField(sqlite3 *db, const char *zTable){
   char *zSql;
@@ -85,11 +64,11 @@ static int detectPkField(sqlite3 *db, const char *zTable){
     if( pk==1 ){
       const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
       if( zType && sqlite3_stricmp(zType, "INTEGER")==0 ){
-        /* TRUE rowid alias — intKey IS the user's PK */
+        
         sqlite3_finalize(pStmt);
         return -1;
       }
-      /* NOT a rowid alias — PK is stored in record at this column index */
+      
       pkField = colIdx;
     }
     colIdx++;
@@ -97,11 +76,6 @@ static int detectPkField(sqlite3 *db, const char *zTable){
   sqlite3_finalize(pStmt);
   return pkField;
 }
-
-/* --------------------------------------------------------------------------
-** Extract PK value from a record and set it as the result.
-** Uses the same varint/field parsing as doltlite_record.c.
-** -------------------------------------------------------------------------- */
 
 static void resultPkFromRecord(
   sqlite3_context *ctx,
@@ -115,19 +89,19 @@ static void resultPkFromRecord(
   if( !pData || nData<1 ){ sqlite3_result_null(ctx); return; }
 
   p = pData; pEnd = pData + nData;
-  /* Read header size varint */
+  
   hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
   p += hdrBytes;
   off = (int)hdrSize;
 
-  /* Walk serial types to find the PK field */
+  
   while( p < pData+hdrSize && p < pEnd ){
     u64 st; int stBytes;
     stBytes = dlReadVarint(p, pData+hdrSize, &st);
     p += stBytes;
 
     if( fieldIdx==pkFieldIdx ){
-      /* Found the PK field — decode and return its value */
+      
       if( st==0 ){ sqlite3_result_null(ctx); return; }
       if( st==8 ){ sqlite3_result_int(ctx,0); return; }
       if( st==9 ){ sqlite3_result_int(ctx,1); return; }
@@ -151,16 +125,12 @@ static void resultPkFromRecord(
       return;
     }
 
-    /* Advance offset past this field's data */
+    
     off += dlSerialTypeLen(st);
     fieldIdx++;
   }
   sqlite3_result_null(ctx);
 }
-
-/* --------------------------------------------------------------------------
-** Diff callback: collect changes into buffer
-** -------------------------------------------------------------------------- */
 
 static int diffCollect(void *pCtx, const ProllyDiffChange *pChange){
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCtx;
@@ -202,10 +172,6 @@ static void freeDiffRows(DoltliteDiffCursor *pCur){
   pCur->nRows = 0;
 }
 
-/* --------------------------------------------------------------------------
-** Helper: find a table's root hash in a catalog
-** -------------------------------------------------------------------------- */
-
 static int findTableRoot(struct TableEntry *a, int n, Pgno iTable,
                          ProllyHash *pRoot, u8 *pFlags){
   struct TableEntry *e = doltliteFindTableByNumber(a, n, iTable);
@@ -219,30 +185,22 @@ static int findTableRoot(struct TableEntry *a, int n, Pgno iTable,
   return SQLITE_NOTFOUND;
 }
 
-/* --------------------------------------------------------------------------
-** Resolve a ref string (branch name, tag name, or hex hash) to a commit hash
-** -------------------------------------------------------------------------- */
-
 static int resolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc;
-  /* Try as hex hash first */
+  
   if( zRef && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
     rc = doltliteHexToHash(zRef, pCommit);
     if( rc==SQLITE_OK && chunkStoreHas(cs, pCommit) ) return SQLITE_OK;
   }
-  /* Try as branch name */
+  
   rc = chunkStoreFindBranch(cs, zRef, pCommit);
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
-  /* Try as tag name */
+  
   rc = chunkStoreFindTag(cs, zRef, pCommit);
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
   return SQLITE_NOTFOUND;
 }
-
-/* --------------------------------------------------------------------------
-** Resolve a ref string to a table root hash
-** -------------------------------------------------------------------------- */
 
 static int resolveCommitToTableRoot(
   sqlite3 *db, const char *zRef, Pgno iTable,
@@ -276,10 +234,6 @@ static int resolveCommitToTableRoot(
   return rc;
 }
 
-/* --------------------------------------------------------------------------
-** Virtual table methods
-** -------------------------------------------------------------------------- */
-
 static int diffConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   DoltliteDiffVtab *pVtab;
@@ -312,14 +266,14 @@ static int diffBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     if( !pInfo->aConstraint[i].usable ) continue;
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     switch( pInfo->aConstraint[i].iColumn ){
-      case 4: iTableName = i; break;   /* table_name */
-      case 5: iFromCommit = i; break;  /* from_commit */
-      case 6: iToCommit = i; break;    /* to_commit */
+      case 4: iTableName = i; break;   
+      case 5: iFromCommit = i; break;  
+      case 6: iToCommit = i; break;    
     }
   }
 
   if( iTableName<0 ){
-    /* table_name is required */
+    
     pInfo->estimatedCost = 1e12;
     return SQLITE_OK;
   }
@@ -335,7 +289,7 @@ static int diffBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iToCommit].omit = 1;
   }
 
-  /* Encode which args are present in idxNum */
+  
   pInfo->idxNum = (iTableName>=0 ? 1 : 0)
                 | (iFromCommit>=0 ? 2 : 0)
                 | (iToCommit>=0 ? 4 : 0);
@@ -383,7 +337,7 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 
   if( !cs || !pBt ) return SQLITE_OK;
 
-  /* Extract arguments */
+  
   if( (idxNum & 1) && argIdx<argc ){
     zTableName = (const char*)sqlite3_value_text(argv[argIdx++]);
   }
@@ -396,18 +350,18 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 
   if( !zTableName ) return SQLITE_OK;
 
-  /* Detect if table PK is a rowid alias or stored in the record */
+  
   pCur->iPkField = detectPkField(db, zTableName);
 
-  /* Resolve table name to Pgno */
+  
   rc = doltliteResolveTableName(db, zTableName, &iTable);
-  if( rc!=SQLITE_OK ) return SQLITE_OK; /* Unknown table = empty diff */
+  if( rc!=SQLITE_OK ) return SQLITE_OK; 
 
-  /* Determine old root hash */
+  
   if( zFromCommit ){
     rc = resolveCommitToTableRoot(db, zFromCommit, iTable, &oldRoot, &flags);
   }else{
-    /* Default: HEAD */
+    
     ProllyHash headCatHash;
     struct TableEntry *aHead = 0;
     int nHead = 0;
@@ -421,13 +375,13 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
     }
   }
 
-  /* Determine new root hash */
+  
   if( zToCommit ){
     u8 f2;
     rc = resolveCommitToTableRoot(db, zToCommit, iTable, &newRoot, &f2);
     if( flags==0 ) flags = f2;
   }else{
-    /* Default: working state */
+    
     u8 *catData = 0; int nCatData = 0;
     ProllyHash workingCatHash;
     struct TableEntry *aWork = 0;
@@ -446,10 +400,10 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
     }
   }
 
-  /* Same root = no changes */
+  
   if( prollyHashCompare(&oldRoot, &newRoot)==0 ) return SQLITE_OK;
 
-  /* Run the diff */
+  
   {
     ProllyCache *pCache = doltliteGetCache(db);
 
@@ -478,28 +432,28 @@ static int diffColumn(sqlite3_vtab_cursor *pCursor,
   r = &pCur->aRows[pCur->iRow];
 
   switch( iCol ){
-    case 0: /* diff_type */
+    case 0: 
       switch( r->type ){
         case PROLLY_DIFF_ADD:    sqlite3_result_text(ctx,"added",-1,SQLITE_STATIC); break;
         case PROLLY_DIFF_DELETE: sqlite3_result_text(ctx,"removed",-1,SQLITE_STATIC); break;
         case PROLLY_DIFF_MODIFY: sqlite3_result_text(ctx,"modified",-1,SQLITE_STATIC); break;
       }
       break;
-    case 1: /* rowid_val — show user's PK, not hidden rowid */
+    case 1: 
       if( pCur->iPkField >= 0 ){
-        /* PK is NOT a rowid alias — extract from record */
+        
         const u8 *pRec = r->pNewVal ? r->pNewVal : r->pOldVal;
         int nRec = r->pNewVal ? r->nNewVal : r->nOldVal;
         resultPkFromRecord(ctx, pRec, nRec, pCur->iPkField);
       }else{
-        /* PK IS the rowid (INTEGER PRIMARY KEY) */
+        
         sqlite3_result_int64(ctx, r->intKey);
       }
       break;
-    case 2: /* from_value */
+    case 2: 
       doltliteResultRecord(ctx, r->pOldVal, r->nOldVal);
       break;
-    case 3: /* to_value */
+    case 3: 
       doltliteResultRecord(ctx, r->pNewVal, r->nNewVal);
       break;
   }
@@ -510,8 +464,6 @@ static int diffRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
   *pRowid = ((DoltliteDiffCursor*)pCursor)->iRow;
   return SQLITE_OK;
 }
-
-/* -------------------------------------------------------------------------- */
 
 static sqlite3_module doltliteDiffModule = {
   0, 0, diffConnect, diffBestIndex, diffDisconnect, 0,
@@ -524,4 +476,4 @@ int doltliteDiffRegister(sqlite3 *db){
   return sqlite3_create_module(db, "dolt_diff", &doltliteDiffModule, 0);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

@@ -1,15 +1,7 @@
 #ifdef DOLTLITE_PROLLY
-/*
-** Prolly tree hashing implementation.
-** SHA-512 based (first 20 bytes, matching Dolt) content-addressed hashing
-** and Buzhash rolling hash splitter.
-*/
+
 #include "prolly_hash.h"
 #include <string.h>
-
-/*****************************************************************************
-** SHA-512 implementation (FIPS 180-4)
-*****************************************************************************/
 
 static u64 sha512_rotr(u64 x, int n){ return (x >> n) | (x << (64 - n)); }
 static u64 sha512_Ch(u64 x, u64 y, u64 z){ return (x & y) ^ (~x & z); }
@@ -86,7 +78,7 @@ static void sha512_hash(const void *data, int len, u8 digest[64]){
     remaining -= 128;
   }
 
-  /* Padding */
+  
   memset(block, 0, 128);
   memcpy(block, p, remaining);
   block[remaining] = 0x80;
@@ -96,7 +88,7 @@ static void sha512_hash(const void *data, int len, u8 digest[64]){
     memset(block, 0, 128);
   }
 
-  /* Length in bits as big-endian u128 (we only need lower 64 bits for len < 2^61) */
+  
   sha512_store64be(block + 120, (u64)len * 8);
 
   sha512_transform(state, block);
@@ -104,19 +96,11 @@ static void sha512_hash(const void *data, int len, u8 digest[64]){
   for(i=0; i<8; i++) sha512_store64be(digest + i*8, state[i]);
 }
 
-/*****************************************************************************
-** Content hash: compute a 20-byte hash using SHA-512 truncated
-*****************************************************************************/
-
 void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut){
   u8 digest[64];
   sha512_hash(pData, nData, digest);
-  memcpy(pOut->data, digest, PROLLY_HASH_SIZE);  /* First 20 bytes */
+  memcpy(pOut->data, digest, PROLLY_HASH_SIZE);  
 }
-
-/*****************************************************************************
-** Hash comparison and utility
-*****************************************************************************/
 
 int prollyHashCompare(const ProllyHash *a, const ProllyHash *b){
   return memcmp(a->data, b->data, PROLLY_HASH_SIZE);
@@ -129,14 +113,6 @@ int prollyHashIsEmpty(const ProllyHash *h){
   }
   return 1;
 }
-
-/*****************************************************************************
-** Buzhash rolling hash
-**
-** Uses a 256-entry table of pseudo-random u32 values and a circular buffer
-** of size windowSize. On each update the outgoing byte is rotated out and
-** the incoming byte is XOR'd in.
-*****************************************************************************/
 
 static const u32 buzHashTable[256] = {
   0x6b326ac4U, 0x13f8e1a8U, 0xb240d8d2U, 0x9a7c5e3fU,
@@ -224,11 +200,11 @@ u32 prollyRollingHashUpdate(ProllyRollingHash *rh, u8 byte){
     rh->filled++;
   }
 
-  /* Rotate left by 1 */
+  
   h = rh->hash;
   h = (h << 1) | (h >> 31);
 
-  /* XOR out the contribution of the outgoing byte (rotated by windowSize) */
+  
   {
     u32 outHash = buzHashTable[outgoing];
     int rot = rh->windowSize % 32;
@@ -236,7 +212,7 @@ u32 prollyRollingHashUpdate(ProllyRollingHash *rh, u8 byte){
     h ^= rotatedOut;
   }
 
-  /* XOR in the incoming byte */
+  
   h ^= buzHashTable[byte];
 
   rh->hash = h;
@@ -263,4 +239,4 @@ void prollyRollingHashFree(ProllyRollingHash *rh){
   }
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

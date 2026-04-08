@@ -1,18 +1,4 @@
-/*
-** Stop-the-world garbage collection for Doltlite.
-**
-** SQL interface:
-**   SELECT dolt_gc();
-**   -- Returns "N chunks removed, M chunks kept"
-**
-** Algorithm: mark-and-sweep
-**   Mark:  BFS from all roots (branches, tags, HEAD, staged, merge state)
-**          following commit chains, catalogs, and prolly tree nodes.
-**   Sweep: Rewrite the chunk store file with only reachable chunks.
-**
-** This is a stop-the-world operation: no other connections should be
-** active during GC.  The entire file is rewritten atomically.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -24,23 +10,16 @@
 
 #include <string.h>
 #include <stdio.h>
-/* POSIX I/O macros removed — GC file rewrite now routes through SQLite VFS.
-** See gcRewriteFile() below. */
 
 extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 #include "doltlite_internal.h"
-
-
-/* ----------------------------------------------------------------
-** BFS queue for mark traversal.
-** ---------------------------------------------------------------- */
 
 typedef struct GcQueue GcQueue;
 struct GcQueue {
   ProllyHash *aItems;
   int nItems;
   int nAlloc;
-  int iHead;   /* Next item to dequeue */
+  int iHead;   
 };
 
 static int gcQueueInit(GcQueue *q){
@@ -78,18 +57,13 @@ static int gcQueuePop(GcQueue *q, ProllyHash *h){
   return 1;
 }
 
-/* ----------------------------------------------------------------
-** Chunk type detection helpers.
-** ---------------------------------------------------------------- */
-
 #define PROLLY_NODE_MAGIC_VAL 0x504E4F44
 
 static int isCommitChunk(const u8 *data, int nData){
-  /* Commits start with version byte (V2=2).
-  ** V2: version(1) + nParents(1) + parents(20*N) + catalog(20) + ... min ~30 bytes */
+  
   if( nData < 30 ) return 0;
   if( data[0] != DOLTLITE_COMMIT_V2 ) return 0;
-  /* Verify it's NOT a prolly node (magic would be at offset 0) */
+  
   if( nData >= 4 ){
     u32 m = (u32)data[0] | ((u32)data[1]<<8) |
             ((u32)data[2]<<16) | ((u32)data[3]<<24);
@@ -106,10 +80,10 @@ static int isProllyNodeChunk(const u8 *data, int nData){
   return m == PROLLY_NODE_MAGIC_VAL;
 }
 
-/* ----------------------------------------------------------------
-** Mark phase: BFS from all roots.
-** ---------------------------------------------------------------- */
-
+/* BFS from all roots (manifest hashes + all branch/tag refs + working sets)
+** to mark every reachable chunk. Understands three chunk types: prolly nodes
+** (recurse into children), commits (follow parents + catalog), and catalog
+** blobs (follow table root hashes). */
 static int gcMarkReachable(
   ChunkStore *cs,
   ProllyHashSet *marked
@@ -121,19 +95,19 @@ static int gcMarkReachable(
   rc = gcQueueInit(&queue);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Seed: manifest roots */
+  
   rc = gcQueuePush(&queue, &cs->root);
   if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->catalog);
   if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->headCommit);
   if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->refsHash);
 
-  /* All branch tips + per-branch WorkingSet chunks */
+  
   for(i=0; rc==SQLITE_OK && i<cs->nBranches; i++){
     rc = gcQueuePush(&queue, &cs->aBranches[i].commitHash);
     if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->aBranches[i].workingSetHash);
   }
 
-  /* All tag targets */
+  
   for(i=0; rc==SQLITE_OK && i<cs->nTags; i++){
     rc = gcQueuePush(&queue, &cs->aTags[i].commitHash);
   }
@@ -142,7 +116,7 @@ static int gcMarkReachable(
     return rc;
   }
 
-  /* BFS */
+  
   while( gcQueuePop(&queue, &current) ){
     u8 *data = 0;
     int nData = 0;
@@ -155,12 +129,12 @@ static int gcMarkReachable(
 
     rc = chunkStoreGet(cs, &current, &data, &nData);
     if( rc!=SQLITE_OK ){
-      /* Chunk missing — skip, don't fail GC */
+      
       continue;
     }
 
     if( isProllyNodeChunk(data, nData) ){
-      /* Prolly tree node — follow child hashes if internal */
+      
       ProllyNode node;
       int parseRc = prollyNodeParse(&node, data, nData);
       if( parseRc==SQLITE_OK && node.level > 0 ){
@@ -172,7 +146,7 @@ static int gcMarkReachable(
         }
       }
     }else if( isCommitChunk(data, nData) ){
-      /* Commit — follow ALL parents + catalog */
+      
       DoltliteCommit commit;
       memset(&commit, 0, sizeof(commit));
       int drc = doltliteCommitDeserialize(data, nData, &commit);
@@ -186,25 +160,21 @@ static int gcMarkReachable(
         doltliteCommitClear(&commit);
       }
     }else{
-      /* Could be a catalog, refs, or conflict chunk.
-      ** Catalogs contain table root hashes we need to follow.
-      ** Format: version(1=0x02)+iNextTable(4)+nTables(4)+entries */
-      /* WorkingSet chunk: version(1=0x01) + staged(20) + merging(1) +
-      ** mergeCommit(20) + conflicts(20) = 62 bytes.
-      ** Follow staged catalog and conflicts catalog hashes. */
+      
+      
       if( nData == WS_TOTAL_SIZE && data[0] == 1 ){
         ProllyHash stagedCat, conflictsCat;
         memcpy(stagedCat.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
         memcpy(conflictsCat.data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
         rc = gcQueuePush(&queue, &stagedCat);
         if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &conflictsCat);
-        if( rc==SQLITE_OK && data[WS_MERGING_OFF] ){  /* isMerging */
+        if( rc==SQLITE_OK && data[WS_MERGING_OFF] ){  
           ProllyHash mergeCommit;
           memcpy(mergeCommit.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
           rc = gcQueuePush(&queue, &mergeCommit);
         }
       }
-      /* Catalog chunk: version(1='C') */
+      
       if( nData >= 9 && data[0] == 0x43 ){
         int nTables = (int)(data[5] | (data[6]<<8) |
                             (data[7]<<16) | (data[8]<<24));
@@ -237,21 +207,6 @@ static int gcMarkReachable(
   return rc;
 }
 
-/* ----------------------------------------------------------------
-** Sweep phase: rewrite chunk store with only marked chunks.
-**
-** Strategy:
-**   1. Build list of surviving ChunkIndexEntry from old index
-**   2. Write new file: manifest + chunk data + new index
-**   3. Atomically replace old file (temp + rename)
-**   4. Reload the chunk store index
-** ---------------------------------------------------------------- */
-
-/*
-** Iterate the existing chunk index, copy surviving (marked) chunks into
-** a new contiguous data buffer, and build a new sorted index.
-** Caller must sqlite3_free *ppNewData and *ppNewIndex when done.
-*/
 static int gcBuildCompactedData(
   ChunkStore *cs,
   ProllyHashSet *marked,
@@ -269,7 +224,7 @@ static int gcBuildCompactedData(
   i64 dataOffset = CHUNK_MANIFEST_SIZE;
   int rc = SQLITE_OK;
 
-  /* Count survivors to pre-allocate */
+  
   for(i=0; i<cs->nIndex; i++){
     if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ) kept++;
   }
@@ -290,7 +245,7 @@ static int gcBuildCompactedData(
       return rc;
     }
 
-    /* Grow buffer: 4 (length prefix) + nChunkData */
+    
     {
       int need = nBuf + 4 + nChunkData;
       if( need > nBufAlloc ){
@@ -306,7 +261,7 @@ static int gcBuildCompactedData(
       }
     }
 
-    /* Write length prefix + data */
+    
     buf[nBuf]   = (u8)(nChunkData);
     buf[nBuf+1] = (u8)(nChunkData>>8);
     buf[nBuf+2] = (u8)(nChunkData>>16);
@@ -323,7 +278,7 @@ static int gcBuildCompactedData(
     sqlite3_free(chunkData);
   }
 
-  /* Sort new index by hash for binary search */
+  
   for(i=1; i<nNewIndex; i++){
     ChunkIndexEntry tmp = aNewIndex[i];
     j = i-1;
@@ -341,10 +296,6 @@ static int gcBuildCompactedData(
   return SQLITE_OK;
 }
 
-/*
-** Write the compacted chunk store file: manifest + chunk data + index.
-** Fsyncs, renames the temp file into place, and reopens the file handle.
-*/
 static int gcRewriteFile(
   ChunkStore *cs,
   const u8 *pNewData,
@@ -359,7 +310,7 @@ static int gcRewriteFile(
   u8 manifest[CHUNK_MANIFEST_SIZE];
   int rc = SQLITE_OK;
 
-  /* Build serialized index */
+  
   indexBuf = sqlite3_malloc(indexSize);
   if( !indexBuf ) return SQLITE_NOMEM;
   for(i=0; i<nNewIndex; i++){
@@ -381,7 +332,7 @@ static int gcRewriteFile(
     }
   }
 
-  /* Update ChunkStore fields so the manifest reflects GC state */
+  
   cs->nChunks = nNewIndex;
   cs->iIndexOffset = indexOffset;
   cs->nIndexSize = indexSize;
@@ -389,10 +340,7 @@ static int gcRewriteFile(
 
   csSerializeManifest(cs, manifest);
 
-  /* Write to temp file via VFS, then rename.  All I/O routes through
-  ** the SQLite VFS layer so encryption extensions, compression plugins,
-  ** and custom I/O backends see every byte written.  Writes are bounded
-  ** to 64 KB per VFS call for broad VFS implementation compatibility. */
+  
   if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
     char *zTmp = sqlite3_mprintf("%s-gc-tmp", cs->zFilename);
     if( !zTmp ){
@@ -406,7 +354,7 @@ static int gcRewriteFile(
                    | SQLITE_OPEN_MAIN_DB;
       i64 writeOff = 0;
 
-      /* Remove stale temp file from a previous failed GC, if any */
+      
       cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
 
       rc = sqlite3OsOpenMalloc(cs->pVfs, zTmp, &pTmpFile, tmpFlags, 0);
@@ -415,11 +363,11 @@ static int gcRewriteFile(
         return SQLITE_CANTOPEN;
       }
 
-      /* Write manifest */
+      
       rc = sqlite3OsWrite(pTmpFile, manifest, CHUNK_MANIFEST_SIZE, writeOff);
       writeOff += CHUNK_MANIFEST_SIZE;
 
-      /* Write chunk data in bounded pieces for VFS compatibility */
+      
       if( rc==SQLITE_OK && nNewData>0 ){
         const u8 *p = pNewData;
         int remaining = nNewData;
@@ -432,7 +380,7 @@ static int gcRewriteFile(
         }
       }
 
-      /* Write index */
+      
       if( rc==SQLITE_OK && indexSize>0 ){
         const u8 *p = indexBuf;
         int remaining = indexSize;
@@ -445,14 +393,16 @@ static int gcRewriteFile(
         }
       }
 
-      /* Sync — durability point */
+      
       if( rc==SQLITE_OK ){
         rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
       }
       sqlite3OsCloseFree(pTmpFile);
 
       if( rc==SQLITE_OK ){
-        /* Close the old file handle before rename */
+        
+        /* Close the old file before rename. The file handle must be released
+        ** first or rename() will fail on Windows. After rename, reopen. */
         if( cs->pFile ){
           sqlite3OsCloseFree(cs->pFile);
           cs->pFile = 0;
@@ -468,7 +418,7 @@ static int gcRewriteFile(
           cs->nWalData = 0;
         }
 
-        /* Reopen via VFS for subsequent operations */
+        
         if( rc==SQLITE_OK ){
           int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
           rc = sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename, &cs->pFile,
@@ -498,7 +448,7 @@ static int gcSweep(
   int nBuf = 0;
   int rc = SQLITE_OK;
 
-  /* Count survivors and removals */
+  
   for(i=0; i<cs->nIndex; i++){
     if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ){
       kept++;
@@ -518,14 +468,14 @@ static int gcSweep(
     return SQLITE_OK;
   }
 
-  /* Build compacted data and index */
+  
   rc = gcBuildCompactedData(cs, marked, &buf, &nBuf, &aNewIndex, &nNewIndex);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Rewrite the file */
+  
   rc = gcRewriteFile(cs, buf, nBuf, aNewIndex, nNewIndex);
 
-  /* Update in-memory state */
+  
   if( rc==SQLITE_OK ){
     int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
     sqlite3_free(cs->aIndex);
@@ -536,7 +486,7 @@ static int gcSweep(
     cs->iIndexOffset = CHUNK_MANIFEST_SIZE + nBuf;
     cs->nIndexSize = indexSize;
     cs->iWalOffset = CHUNK_MANIFEST_SIZE + nBuf + indexSize;
-    aNewIndex = 0;  /* ownership transferred */
+    aNewIndex = 0;  
 
     cs->nPending = 0;
     cs->nWriteBuf = 0;
@@ -549,10 +499,6 @@ static int gcSweep(
   *pRemoved = removed;
   return rc;
 }
-
-/* ----------------------------------------------------------------
-** dolt_gc() SQL function.
-** ---------------------------------------------------------------- */
 
 static void doltliteGcFunc(
   sqlite3_context *context,
@@ -574,7 +520,7 @@ static void doltliteGcFunc(
     return;
   }
 
-  /* In-memory databases don't need GC (no file to compact) */
+  
   if( !cs->zFilename || strcmp(cs->zFilename, ":memory:")==0 ){
     sqlite3_result_text(context, "0 chunks removed, 0 chunks kept (in-memory)", -1, SQLITE_TRANSIENT);
     return;
@@ -586,7 +532,7 @@ static void doltliteGcFunc(
     return;
   }
 
-  /* Mark phase */
+  
   rc = gcMarkReachable(cs, &marked);
   if( rc!=SQLITE_OK ){
     prollyHashSetFree(&marked);
@@ -594,7 +540,7 @@ static void doltliteGcFunc(
     return;
   }
 
-  /* Sweep phase */
+  
   rc = gcSweep(cs, &marked, &nKept, &nRemoved);
   prollyHashSetFree(&marked);
 
@@ -608,10 +554,6 @@ static void doltliteGcFunc(
   sqlite3_result_text(context, result, -1, SQLITE_TRANSIENT);
 }
 
-/* ----------------------------------------------------------------
-** Non-SQL entry point for GC compaction (used by PRAGMA wal_checkpoint).
-** ---------------------------------------------------------------- */
-
 int doltliteGcCompact(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHashSet marked;
@@ -620,7 +562,7 @@ int doltliteGcCompact(sqlite3 *db){
 
   if( !cs ) return SQLITE_OK;
   if( !cs->zFilename || strcmp(cs->zFilename, ":memory:")==0 ){
-    return SQLITE_OK;  /* In-memory databases don't need compaction */
+    return SQLITE_OK;  
   }
 
   rc = prollyHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
@@ -634,13 +576,9 @@ int doltliteGcCompact(sqlite3 *db){
   return rc;
 }
 
-/* ----------------------------------------------------------------
-** Registration.
-** ---------------------------------------------------------------- */
-
 int doltliteGcRegister(sqlite3 *db){
   return sqlite3_create_function(db, "dolt_gc", 0, SQLITE_UTF8, 0,
                                   doltliteGcFunc, 0, 0);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

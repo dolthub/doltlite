@@ -1,12 +1,4 @@
-/*
-** dolt_history_<tablename> — time-travel virtual tables.
-**
-** Shows every version of every row across all commits with per-column
-** schema matching the actual table:
-**
-**   SELECT * FROM dolt_history_users;
-**   -- id | name | email | commit_hash | committer | commit_date
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -20,12 +12,6 @@
 #include "doltlite_internal.h"
 #include <string.h>
 #include <time.h>
-
-/* Varint reader: use shared dlReadVarint from doltlite_record.h */
-
-/* --------------------------------------------------------------------------
-** Record field parsing and result setting (same as dolt_diff_table.c)
-** -------------------------------------------------------------------------- */
 
 #define HT_MAX_COLS 64
 
@@ -69,8 +55,6 @@ static void htResultField(sqlite3_context *ctx, const u8 *pData, int nData, int 
   sqlite3_result_null(ctx);
 }
 
-
-
 static char *htBuildSchema(DoltliteColInfo *ci){
   int i, sz=256;
   char *z;
@@ -85,10 +69,6 @@ static char *htBuildSchema(DoltliteColInfo *ci){
   return z;
 }
 
-/* --------------------------------------------------------------------------
-** Buffered history row
-** -------------------------------------------------------------------------- */
-
 typedef struct HistoryRow HistoryRow;
 struct HistoryRow {
   i64 intKey;
@@ -97,10 +77,6 @@ struct HistoryRow {
   char *zCommitter;
   i64 commitDate;
 };
-
-/* --------------------------------------------------------------------------
-** Virtual table structures
-** -------------------------------------------------------------------------- */
 
 typedef struct HistVtab HistVtab;
 struct HistVtab {
@@ -129,10 +105,6 @@ static void freeHistoryRows(HistCursor *c){
   c->aRows=0; c->nRows=0; c->nAlloc=0;
 }
 
-/* --------------------------------------------------------------------------
-** Find table root by name
-** -------------------------------------------------------------------------- */
-
 static int htFindRoot(struct TableEntry *a, int n, const char *zName,
                       ProllyHash *pRoot, u8 *pFlags){
   struct TableEntry *e = doltliteFindTableByName(a, n, zName);
@@ -144,10 +116,6 @@ static int htFindRoot(struct TableEntry *a, int n, const char *zName,
   memset(pRoot,0,sizeof(ProllyHash)); if(pFlags)*pFlags=0;
   return SQLITE_NOTFOUND;
 }
-
-/* --------------------------------------------------------------------------
-** Scan all rows from a table at a given commit
-** -------------------------------------------------------------------------- */
 
 static int htScanAtCommit(
   HistCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
@@ -180,10 +148,6 @@ static int htScanAtCommit(
   prollyCursorClose(&cur); return SQLITE_OK;
 }
 
-/* --------------------------------------------------------------------------
-** Walk commit history
-** -------------------------------------------------------------------------- */
-
 static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
   ChunkStore *cs=doltliteGetChunkStore(db);
   ProllyCache *pCache; ProllyHash curHash; int rc;
@@ -213,10 +177,6 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
   }
   return SQLITE_OK;
 }
-
-/* --------------------------------------------------------------------------
-** Virtual table methods
-** -------------------------------------------------------------------------- */
 
 static int htConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
@@ -292,15 +252,15 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   r=&c->aRows[c->iRow];
   int nCols=v->cols.nCol;
 
-  /* Layout: col 0..nCols-1 = table columns, then commit_hash, committer, commit_date */
+  
 
   if(nCols>0 && col<nCols){
-    /* Table column */
+    
     if(col==v->cols.iPkCol){
-      /* INTEGER PRIMARY KEY = rowid */
+      
       sqlite3_result_int64(ctx,r->intKey);
     }else{
-      /* Decode from record */
+      
       if(r->pVal&&r->nVal>0){
         HtRecInfo ri; htParseRecord(r->pVal,r->nVal,&ri);
         if(col<ri.nField) htResultField(ctx,r->pVal,r->nVal,ri.aType[col],ri.aOffset[col]);
@@ -311,9 +271,9 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     int fixedCol=col-nCols;
     if(nCols==0) fixedCol=col;
     switch(fixedCol){
-      case 0: /* commit_hash */
+      case 0: 
         if(nCols==0){
-          /* fallback: value as text */
+          
           char *z=doltliteDecodeRecord(r->pVal,r->nVal);
           if(z) sqlite3_result_text(ctx,z,-1,sqlite3_free);
           else sqlite3_result_null(ctx);
@@ -321,10 +281,10 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
           sqlite3_result_text(ctx,r->zCommit,-1,SQLITE_TRANSIENT);
         }
         break;
-      case 1: /* committer */
+      case 1: 
         sqlite3_result_text(ctx,r->zCommitter,-1,SQLITE_TRANSIENT);
         break;
-      case 2: /* commit_date */
+      case 2: 
         {time_t t=(time_t)r->commitDate;struct tm *tm=gmtime(&t);
           if(tm){char b[32];strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",tm);
             sqlite3_result_text(ctx,b,-1,SQLITE_TRANSIENT);
@@ -344,10 +304,6 @@ static sqlite3_module historyModule = {
   htOpen, htClose, htFilter, htNext, htEof, htColumn, htRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
-
-/* --------------------------------------------------------------------------
-** Registration
-** -------------------------------------------------------------------------- */
 
 void doltliteRegisterHistoryTables(sqlite3 *db){
   ChunkStore *cs=doltliteGetChunkStore(db);
@@ -371,4 +327,4 @@ void doltliteRegisterHistoryTables(sqlite3 *db){
   sqlite3_free(aT);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 

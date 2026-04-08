@@ -1,10 +1,4 @@
-/*
-** Shared little-endian encoding/decoding macros for DoltLite.
-**
-** All multi-byte integers in the prolly tree and chunk store are
-** little-endian. These macros provide a single set of helpers
-** instead of duplicating the encoding inline.
-*/
+
 #ifndef PROLLY_ENCODING_H
 #define PROLLY_ENCODING_H
 
@@ -21,4 +15,4 @@
   (p)[2]=(u8)((v)>>16); (p)[3]=(u8)((v)>>24); \
 }while(0)
 
-#endif /* PROLLY_ENCODING_H */
+#endif 

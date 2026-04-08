@@ -1,39 +1,21 @@
-/*
-** Pager shim implementation.
-**
-** When DOLTLITE_PROLLY is defined, the real pager.c is not linked.
-** Instead, sqlite3BtreePager() returns a PagerShim* cast to Pager*.
-** This file implements the subset of sqlite3Pager* functions that are
-** actually called by the 18 files which use sqlite3BtreePager().
-**
-** The PagerShim struct is defined in pager_shim.h. External code
-** receives a Pager* which is really a PagerShim*, so every function
-** here casts its Pager* argument to PagerShim* before accessing fields.
-**
-** Dispatch uses a PagerOps vtable: shim pagers use shimPagerOps,
-** original pagers use origPagerOps. The getPagerOps() helper
-** selects the correct table based on PagerShim magic.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "pager_shim.h"
 #include "sqliteInt.h"
 #include "chunk_store.h"
 
-/* Globals expected by test code */
 int sqlite3_pager_writej_count = 0;
 int sqlite3_pager_readdb_count = 0;
 int sqlite3_pager_writedb_count = 0;
 int sqlite3_opentemp_count = 0;
 
-/* Shared cache list (empty — no shared cache in prolly) */
 BtShared *SQLITE_WSD sqlite3SharedCacheList = 0;
 
 #include <string.h>
 
 #define SHIM(p) ((PagerShim*)(p))
 
-/* Forward declarations for original pager dispatch */
 extern u32 orig_sqlite3PagerDataVersion(Pager *pPager);
 extern sqlite3_file *orig_sqlite3PagerFile(Pager *pPager);
 extern const char *orig_sqlite3PagerFilename(const Pager *pPager, int);
@@ -90,9 +72,6 @@ extern void orig_sqlite3PagerPagecount(Pager*, int*);
 extern int orig_sqlite3PagerCommitPhaseOne(Pager*, const char*, int);
 extern int orig_sqlite3PagerCommitPhaseTwo(Pager*);
 
-/* -----------------------------------------------------------------------
-** PagerOps vtable — function pointers for all dispatched pager operations
-** ----------------------------------------------------------------------- */
 struct PagerOps {
   sqlite3_file *(*xFile)(Pager*);
   const char *(*xFilename)(const Pager*, int);
@@ -144,9 +123,6 @@ struct PagerOps {
 #endif
 };
 
-/* -----------------------------------------------------------------------
-** Dummy file object for :memory: databases
-** ----------------------------------------------------------------------- */
 static int dummyClose(sqlite3_file *p){ (void)p; return SQLITE_OK; }
 static int dummyRead(sqlite3_file *p, void *b, int n, sqlite3_int64 o){
   (void)p; (void)b; (void)n; (void)o; return SQLITE_IOERR_SHORT_READ;
@@ -170,29 +146,25 @@ static int dummyFileControl(sqlite3_file *p, int op, void *a){
 static int dummySectorSize(sqlite3_file *p){ (void)p; return 4096; }
 static int dummyDevChar(sqlite3_file *p){ (void)p; return 0; }
 static const sqlite3_io_methods dummyIoMethods = {
-  1,                  /* iVersion */
-  dummyClose,         /* xClose */
-  dummyRead,          /* xRead */
-  dummyWrite,         /* xWrite */
-  dummyTruncate,      /* xTruncate */
-  dummySync,          /* xSync */
-  dummyFileSize,      /* xFileSize */
-  dummyLock,          /* xLock */
-  dummyUnlock,        /* xUnlock */
-  dummyCheckLock,     /* xCheckReservedLock */
-  dummyFileControl,   /* xFileControl */
-  dummySectorSize,    /* xSectorSize */
-  dummyDevChar        /* xDeviceCharacteristics */
+  1,                  
+  dummyClose,         
+  dummyRead,          
+  dummyWrite,         
+  dummyTruncate,      
+  dummySync,          
+  dummyFileSize,      
+  dummyLock,          
+  dummyUnlock,        
+  dummyCheckLock,     
+  dummyFileControl,   
+  dummySectorSize,    
+  dummyDevChar        
 };
 static sqlite3_file dummyFileObj;
 static sqlite3_file *pagerShimDummyFile(void){
   dummyFileObj.pMethods = &dummyIoMethods;
   return &dummyFileObj;
 }
-
-/* -----------------------------------------------------------------------
-** Shim vtable implementations — extracted from inline dispatch logic
-** ----------------------------------------------------------------------- */
 
 static sqlite3_file *shimPagerFile(Pager *p){
   return SHIM(p)->pFd;
@@ -362,11 +334,7 @@ static int shimPagerOpenWal(Pager *p, int *pisOpen){
 static int shimPagerCloseWal(Pager *p, sqlite3 *db){
   (void)p; (void)db; return SQLITE_OK;
 }
-#endif /* SQLITE_OMIT_WAL */
-
-/* -----------------------------------------------------------------------
-** Vtable instances
-** ----------------------------------------------------------------------- */
+#endif 
 
 static const PagerOps shimPagerOps = {
   shimPagerFile,
@@ -470,10 +438,6 @@ static const PagerOps origPagerOps = {
 #endif
 };
 
-/*
-** Return the PagerOps vtable for a given Pager pointer.
-** Shim pagers use shimPagerOps; original pagers use origPagerOps.
-*/
 static inline const PagerOps *getPagerOps(const Pager *p){
   if( p && ((const PagerShim*)p)->magic == PAGER_SHIM_MAGIC ){
     return ((const PagerShim*)p)->pOps;
@@ -481,19 +445,6 @@ static inline const PagerOps *getPagerOps(const Pager *p){
   return &origPagerOps;
 }
 
-/* -----------------------------------------------------------------------
-** Lifecycle: create and destroy
-** ----------------------------------------------------------------------- */
-
-/*
-** Allocate a new PagerShim.
-**
-**   pVfs       — VFS to remember (may be NULL)
-**   zFilename  — database file path; NULL and "" are both valid
-**   pFd        — open file descriptor (may be NULL for :memory:)
-**
-** Returns NULL on OOM.
-*/
 PagerShim *pagerShimCreate(
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -507,7 +458,7 @@ PagerShim *pagerShimCreate(
   pShim->magic = PAGER_SHIM_MAGIC;
   pShim->pOps = &shimPagerOps;
 
-  /* Copy the filename.  Treat NULL as empty string. */
+  
   if( zFilename && zFilename[0] ){
     int n = (int)strlen(zFilename);
     pShim->zFilename = (char*)sqlite3_malloc(n + 1);
@@ -525,7 +476,7 @@ PagerShim *pagerShimCreate(
     pShim->zFilename[0] = '\0';
   }
 
-  /* Journal name is always an empty string for the shim. */
+  
   pShim->zJournal = (char*)sqlite3_malloc(1);
   if( pShim->zJournal==0 ){
     sqlite3_free(pShim->zFilename);
@@ -534,7 +485,7 @@ PagerShim *pagerShimCreate(
   }
   pShim->zJournal[0] = '\0';
 
-  /* Provide a dummy file object when pFd is NULL (e.g., :memory: dbs). */
+  
   if( pFd==0 ){
     pFd = pagerShimDummyFile();
   }
@@ -542,24 +493,17 @@ PagerShim *pagerShimCreate(
   pShim->pVfs         = pVfs;
   pShim->journalMode  = PAGER_JOURNALMODE_WAL;
   pShim->eLock        = 0;
-  pShim->iDataVersion = 1;   /* Start at 1 so the first check sees data */
+  pShim->iDataVersion = 1;   
 
   return pShim;
 }
 
-/*
-** Free all memory associated with a PagerShim.
-*/
 void pagerShimDestroy(PagerShim *pShim){
   if( pShim==0 ) return;
   sqlite3_free(pShim->zFilename);
   sqlite3_free(pShim->zJournal);
   sqlite3_free(pShim);
 }
-
-/* -----------------------------------------------------------------------
-** Dispatch functions — thin wrappers that delegate through PagerOps
-** ----------------------------------------------------------------------- */
 
 sqlite3_file *sqlite3PagerFile(Pager *pPager){
   return getPagerOps(pPager)->xFile(pPager);
@@ -638,10 +582,6 @@ int sqlite3PagerGet(Pager *pPager, Pgno pgno, DbPage **ppPage, int clrFlag){
   return getPagerOps(pPager)->xGet(pPager, pgno, ppPage, clrFlag);
 }
 
-/* -----------------------------------------------------------------------
-** DbPage-based functions — dispatch on page pointer, not on Pager vtable
-** ----------------------------------------------------------------------- */
-
 void *sqlite3PagerGetData(DbPage *pPg){
   if( pPg ) return orig_sqlite3PagerGetData(pPg);
   return 0;
@@ -678,10 +618,6 @@ int sqlite3PagerPageRefcount(DbPage *pPg){
   if( pPg ) return orig_sqlite3PagerPageRefcount(pPg);
   return 0;
 }
-
-/* -----------------------------------------------------------------------
-** More Pager dispatch functions
-** ----------------------------------------------------------------------- */
 
 void sqlite3PagerPagecount(Pager *pPager, int *pnPage){
   getPagerOps(pPager)->xPagecount(pPager, pnPage);
@@ -829,20 +765,16 @@ int sqlite3PagerCloseWal(Pager *pPager, sqlite3 *db){
 }
 #endif
 
-/* shared cache stub */
 int sqlite3_enable_shared_cache(int enable){
   (void)enable;
   return SQLITE_OK;
 }
 
-/* database_file_object stub */
 sqlite3_file *sqlite3_database_file_object(const char *zName){
   (void)zName;
   return 0;
 }
 
-/* Always provide these — test code links against libsqlite3.a which may
-** not have been compiled with SQLITE_TEST, but testfixture needs them. */
 Pgno sqlite3PagerPagenumber(DbPage *pPg){
   (void)pPg;
   return 0;
@@ -861,7 +793,6 @@ void sqlite3PagerRefdump(Pager *pPager){
   (void)pPager;
 }
 
-/* Undef macros from pager.h so we can define actual functions */
 #undef disable_simulated_io_errors
 #undef enable_simulated_io_errors
 void disable_simulated_io_errors(void){
@@ -869,26 +800,16 @@ void disable_simulated_io_errors(void){
 void enable_simulated_io_errors(void){
 }
 
-/* -----------------------------------------------------------------------
-** Backup API — copies the chunk store file from source to destination.
-** The chunk store is a single self-contained file, so a complete backup
-** is just a file copy.  For ATTACH'd standard SQLite databases, delegates
-** to the original backup implementation.
-** ----------------------------------------------------------------------- */
-
-/* doltliteGetChunkStore is declared in doltlite_internal.h, but pager_shim
-** is a lower layer — use a local forward declaration instead. */
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 
-/* Backup state for prolly-tree chunk store file copy. */
 typedef struct DoltliteBackup DoltliteBackup;
 struct DoltliteBackup {
   sqlite3 *pSrcDb;
   sqlite3 *pDestDb;
-  char *zSrcFile;       /* Source chunk store file path (owned copy) */
-  char *zDestFile;      /* Destination chunk store file path (owned copy) */
+  char *zSrcFile;       
+  char *zDestFile;      
   sqlite3_vfs *pVfs;
-  int done;             /* 1 after step completes the copy */
+  int done;             
 };
 
 sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
@@ -900,21 +821,21 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
 
   if( !pDest || !pSrc || pDest==pSrc ) return 0;
 
-  /* Find the named databases */
+  
   iSrc = sqlite3FindDbName(pSrc, zSrcDb);
   iDest = sqlite3FindDbName(pDest, zDestDb);
   if( iSrc < 0 || iDest < 0 ) return 0;
 
-  /* For non-main databases (ATTACH'd SQLite btrees), delegate to original */
+  
   if( iSrc != 0 || iDest != 0 ){
     return orig_sqlite3_backup_init(pDest, zDestDb, pSrc, zSrcDb);
   }
 
-  /* Get chunk stores */
+  
   srcCs = doltliteGetChunkStore(pSrc);
   destCs = doltliteGetChunkStore(pDest);
   if( !srcCs || !srcCs->zFilename ) return 0;
-  if( srcCs->isMemory ) return 0;  /* Can't backup in-memory databases */
+  if( srcCs->isMemory ) return 0;  
   if( !destCs || !destCs->zFilename ) return 0;
 
   p = (DoltliteBackup*)sqlite3_malloc(sizeof(DoltliteBackup));
@@ -948,7 +869,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   if( !p ) return SQLITE_DONE;
   if( p->done ) return SQLITE_DONE;
 
-  /* Open source file for reading */
+  
   openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
   rc = sqlite3OsOpenMalloc(p->pVfs, p->zSrcFile, &pSrc, openFlags, 0);
   if( rc != SQLITE_OK ) return rc;
@@ -958,7 +879,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     sqlite3OsCloseFree(pSrc);
     return rc;
   }
-  /* Open/create destination file for writing */
+  
   openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
   rc = sqlite3OsOpenMalloc(p->pVfs, p->zDestFile, &pDest, openFlags, 0);
   if( rc != SQLITE_OK ){
@@ -966,7 +887,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     return rc;
   }
 
-  /* Copy in 64KB chunks (VFS write size limit) */
+  
   {
     u8 *buf = (u8*)sqlite3_malloc(65536);
     i64 off = 0;
@@ -1018,7 +939,7 @@ int sqlite3_backup_remaining(sqlite3_backup *pBackup){
 int sqlite3_backup_pagecount(sqlite3_backup *pBackup){
   DoltliteBackup *p = (DoltliteBackup*)pBackup;
   if( !p ) return 0;
-  return 1;  /* Single "page" = entire chunk store file */
+  return 1;  
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif 
