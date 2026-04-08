@@ -531,23 +531,38 @@ static void doltliteGcFunc(
     return;
   }
 
+  /* Acquire exclusive write lock for the entire GC operation.
+  ** GC rewrites the file — no other connection or process may be
+  ** reading or writing while this happens. */
+  rc = chunkStoreLockAndRefresh(cs);
+  if( rc==SQLITE_BUSY ){
+    sqlite3_result_error(context,
+      "database is locked by another connection", -1);
+    return;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to acquire lock for gc", -1);
+    return;
+  }
+
   rc = prollyHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
   if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
     sqlite3_result_error(context, "out of memory", -1);
     return;
   }
 
-  
   rc = gcMarkReachable(cs, &marked);
   if( rc!=SQLITE_OK ){
     prollyHashSetFree(&marked);
+    chunkStoreUnlock(cs);
     sqlite3_result_error(context, "gc mark phase failed", -1);
     return;
   }
 
-  
   rc = gcSweep(cs, &marked, &nKept, &nRemoved);
   prollyHashSetFree(&marked);
+  chunkStoreUnlock(cs);
 
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "gc sweep phase failed", -1);
