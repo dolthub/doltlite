@@ -442,7 +442,7 @@ result=$("$DB" "$TMPDIR/merge_clone.db" "SELECT count(*) FROM doc;")
 check "merge clone has 3 docs" "3" "$result"
 
 result=$("$DB" "$TMPDIR/merge_clone.db" "SELECT count(*) FROM dolt_log;")
-check "merge clone has commit history" "3" "$result"
+check "merge clone has commit history" "4" "$result"
 
 # ============================================================
 echo "=== 23. Round-trip: A→remote→B→remote→A (3 hops) ==="

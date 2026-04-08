@@ -20,7 +20,7 @@ run_test_match "merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$D
 run_test "merge_users" "SELECT name FROM users;" "ALICE" "$DB"
 run_test "merge_orders" "SELECT count(*) FROM orders;" "2" "$DB"
 run_test "merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge branch 'feature'" "$DB"
-run_test "merge_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "merge_log_count" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 # Test 2: Fast-forward merge
 DB2=/tmp/test_merge2_$$.db; rm -f "$DB2"
@@ -78,15 +78,14 @@ run_test "post_merge_rows" "SELECT count(*) FROM t;" "1" "$DB5"
 # The merge commit is HEAD (offset 0), ancestor is 2 commits back (offset 2 = "initial")
 # Between ancestor and merged result, users table should show 'Alice'->'ALICE', orders should show added row
 run_test_match "diff_3way_users" \
-  "SELECT diff_type, from_value, to_value FROM dolt_diff('users', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
+  "SELECT diff_type, from_value, to_value FROM dolt_diff('users', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 3), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
   "modified" "$DB"
 run_test_match "diff_3way_orders" \
-  "SELECT diff_type FROM dolt_diff('orders', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
+  "SELECT diff_type FROM dolt_diff('orders', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 3), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
   "added" "$DB"
 
 # Test 9: dolt_diff after fast-forward merge (DB2 from Test 2)
-# Log now has 3 entries: merge commit (0), feature (1), init (2)
-# Compare init (offset 2) to merge commit (offset 0) to see the added row
+# Log has 3 entries: merge commit (0), feature (1), init (2)
 run_test_match "diff_ff_added" \
   "SELECT diff_type, to_value FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
   "added" "$DB2"
