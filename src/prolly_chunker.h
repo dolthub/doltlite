@@ -40,7 +40,6 @@ struct ProllyChunker {
   int nLevels;                   /* Number of levels currently in use */
   ProllyChunkerLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];
   ProllyHash root;               /* Resulting root hash */
-  int nTotalItems;               /* Total leaf items written */
 };
 
 /* Initialize chunker for building a new tree */

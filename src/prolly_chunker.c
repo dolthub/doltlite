@@ -237,7 +237,6 @@ int prollyChunkerInit(ProllyChunker *ch, ChunkStore *pStore, u8 flags){
   ch->pStore = pStore;
   ch->flags = flags;
   ch->nLevels = 0;
-  ch->nTotalItems = 0;
   memset(&ch->root, 0, sizeof(ProllyHash));
   return SQLITE_OK;
 }
@@ -257,7 +256,6 @@ int prollyChunkerAdd(ProllyChunker *ch,
   rc = addToLevel(ch, 0, pKey, nKey, pVal, nVal);
   if( rc!=SQLITE_OK ) return rc;
 
-  ch->nTotalItems++;
   return SQLITE_OK;
 }
 
@@ -293,7 +291,7 @@ int prollyChunkerFinish(ProllyChunker *ch){
   int maxLevel;
 
   /* Handle empty tree */
-  if( ch->nLevels == 0 || ch->nTotalItems == 0 ){
+  if( ch->nLevels == 0 ){
     memset(&ch->root, 0, sizeof(ProllyHash));
     return SQLITE_OK;
   }

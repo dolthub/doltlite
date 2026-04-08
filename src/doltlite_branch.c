@@ -13,24 +13,8 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
+#include "doltlite_internal.h"
 #include <string.h>
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
-extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
-extern int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
-
-struct TableEntry {
-  Pgno iTable;
-  ProllyHash root;
-  ProllyHash schemaHash;
-  u8 flags;
-  char *zName;
-  void *pPending;
-};
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
 
 /*
 ** Check whether there are uncommitted working changes by doing a deep
@@ -66,14 +50,6 @@ static int checkWorkingDirty(sqlite3 *db){
   /* O(1) dirty check: compare catalog hashes */
   return prollyHashCompare(&headCatHash, &workingCatHash) != 0;
 }
-
-/* Per-session branch state (in Btree struct) */
-extern const char *doltliteGetSessionBranch(sqlite3 *db);
-extern void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);
-extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
-extern void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
-extern void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
-extern void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
 
 /* --------------------------------------------------------------------------
 ** active_branch() — returns this session's current branch name

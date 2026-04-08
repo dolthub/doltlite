@@ -13,23 +13,7 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
-extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
-extern char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
-
-struct TableEntry {
-  Pgno iTable;
-  ProllyHash root;
-  ProllyHash schemaHash;
-  u8 flags;
-  char *zName;
-  void *pPending;
-};
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
+#include "doltlite_internal.h"
 
 /* -------------------------------------------------------------------------- */
 
@@ -52,13 +36,8 @@ struct DoltliteStatusCursor {
 static const char *statusSchema =
   "CREATE TABLE x(table_name TEXT, staged INTEGER, status TEXT)";
 
-static struct TableEntry *findInCatalog(struct TableEntry *a, int n, Pgno iTable){
-  int i;
-  for(i=0; i<n; i++){
-    if( a[i].iTable==iTable ) return &a[i];
-  }
-  return 0;
-}
+/* findInCatalog replaced by doltliteFindTableByNumber in doltlite_internal.h */
+#define findInCatalog(a,n,t) doltliteFindTableByNumber(a,n,t)
 
 static void addRow(DoltliteStatusCursor *pCur, const char *zName,
                    int staged, const char *zStatus){

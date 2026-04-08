@@ -28,9 +28,7 @@
 ** See gcRewriteFile() below. */
 
 extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
-
-/* Provided by prolly_btree.c */
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+#include "doltlite_internal.h"
 
 
 /* ----------------------------------------------------------------
@@ -174,7 +172,7 @@ static int gcMarkReachable(
         }
       }
     }else if( isCommitChunk(data, nData) ){
-      /* Commit — follow ALL parents + catalog (+ rootHash for V1) */
+      /* Commit — follow ALL parents + catalog */
       DoltliteCommit commit;
       memset(&commit, 0, sizeof(commit));
       int drc = doltliteCommitDeserialize(data, nData, &commit);
@@ -183,9 +181,6 @@ static int gcMarkReachable(
         for(pi=0; pi<commit.nParents; pi++){
           rc = gcQueuePush(&queue, &commit.aParents[pi]);
           if( rc!=SQLITE_OK ) break;
-        }
-        if( rc==SQLITE_OK && !prollyHashIsEmpty(&commit.rootHash) ){
-          rc = gcQueuePush(&queue, &commit.rootHash);  /* V1 compat */
         }
         if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &commit.catalogHash);
         doltliteCommitClear(&commit);

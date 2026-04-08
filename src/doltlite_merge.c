@@ -21,43 +21,25 @@
 #include "prolly_mutmap.h"
 #include "prolly_mutate.h"
 #include "doltlite_record.h"
+#include "doltlite_internal.h"
 #include <string.h>
-
-/* TableEntry struct — must match prolly_btree.c definition */
-struct TableEntry {
-  Pgno iTable;
-  ProllyHash root;
-  ProllyHash schemaHash;
-  u8 flags;
-  char *zName;
-  void *pPending;
-};
 
 /* From doltlite_conflicts.c */
 typedef struct ConflictTableInfo ConflictTableInfo;
 extern int doltliteSerializeConflicts(ChunkStore *cs, ConflictTableInfo *aTables,
                                        int nTables, ProllyHash *pHash);
 
-/* Provided by prolly_btree.c */
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
-
 /*
 ** Find a table entry by table number in an array of entries.
 ** Returns a pointer to the entry, or NULL if not found.
 */
+/* findTableEntry replaced by doltliteFindTableByNumber in doltlite_internal.h */
 static struct TableEntry *findTableEntry(
   struct TableEntry *aEntries,
   int nEntries,
   Pgno iTable
 ){
-  int i;
-  for(i=0; i<nEntries; i++){
-    if( aEntries[i].iTable==iTable ) return &aEntries[i];
-  }
-  return 0;
+  return doltliteFindTableByNumber(aEntries, nEntries, iTable);
 }
 
 /*
@@ -462,14 +444,7 @@ static int mergeTableRows(
   struct ConflictRow **ppConflicts
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = (ProllyCache*)(((char*)cs) -
-    ((char*)&((struct { ChunkStore s; ProllyCache c; }*)0)->s - (char*)0) +
-    sizeof(ChunkStore));
-  /* Actually, we need the BtShared to get the cache. Use a simpler approach: */
-  /* The cache is the field right after ChunkStore in BtShared. */
-  extern void *doltliteGetBtShared(sqlite3 *db);
-  void *pBt = doltliteGetBtShared(db);
-  ProllyCache *cache = (ProllyCache*)((u8*)pBt + sizeof(ChunkStore));
+  ProllyCache *cache = doltliteGetCache(db);
 
   RowMergeCtx ctx;
   ProllyMutator mut;
@@ -521,14 +496,7 @@ static struct TableEntry *findTableByName(
   int nEntries,
   const char *zName
 ){
-  int i;
-  if( !zName ) return 0;
-  for(i=0; i<nEntries; i++){
-    if( aEntries[i].zName && strcmp(aEntries[i].zName, zName)==0 ){
-      return &aEntries[i];
-    }
-  }
-  return 0;
+  return doltliteFindTableByName(aEntries, nEntries, zName);
 }
 
 /*

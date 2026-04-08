@@ -12,12 +12,8 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 
+#include "doltlite_internal.h"
 #include <time.h>
-
-/* Forward declarations */
-typedef struct BtShared BtShared;
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 
 /* --------------------------------------------------------------------------
 ** Virtual table structure

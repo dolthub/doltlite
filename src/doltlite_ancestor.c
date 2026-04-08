@@ -10,9 +10,8 @@
 #include "doltlite_ancestor.h"
 #include "doltlite_commit.h"
 #include "chunk_store.h"
+#include "doltlite_internal.h"
 #include <string.h>
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 
 /* --------------------------------------------------------------------------
 ** Simple hash set for ProllyHash values.

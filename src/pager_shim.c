@@ -876,7 +876,9 @@ void enable_simulated_io_errors(void){
 ** to the original backup implementation.
 ** ----------------------------------------------------------------------- */
 
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+/* doltliteGetChunkStore is declared in doltlite_internal.h, but pager_shim
+** is a lower layer — use a local forward declaration instead. */
+ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 
 /* Backup state for prolly-tree chunk store file copy. */
 typedef struct DoltliteBackup DoltliteBackup;

@@ -16,23 +16,8 @@
 #include "doltlite_commit.h"
 
 #include "doltlite_record.h"
+#include "doltlite_internal.h"
 #include <string.h>
-
-/* From prolly_btree.c */
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
-extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
-extern int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
-
-struct TableEntry { Pgno iTable; ProllyHash root; ProllyHash schemaHash; u8 flags; char *zName; void *pPending; };
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
-
-/* BtShared — we need the cache pointer */
-typedef struct BtShared BtShared;
-extern BtShared *doltliteGetBtShared(sqlite3 *db);
-/* Access cache from BtShared — defined as second field after ChunkStore */
 
 /* --------------------------------------------------------------------------
 ** Buffered diff row
@@ -46,8 +31,6 @@ struct DiffRow {
   int nOldVal;
   u8 *pNewVal;    /* new value (owned, NULL for DELETE) */
   int nNewVal;
-  u8 *pKey;       /* blob key for BLOBKEY tables (owned) */
-  int nKey;
 };
 
 /* --------------------------------------------------------------------------
@@ -193,11 +176,6 @@ static int diffCollect(void *pCtx, const ProllyDiffChange *pChange){
   r->type = pChange->type;
   r->intKey = pChange->intKey;
 
-  if( pChange->pKey && pChange->nKey>0 ){
-    r->pKey = sqlite3_malloc(pChange->nKey);
-    if( r->pKey ) memcpy(r->pKey, pChange->pKey, pChange->nKey);
-    r->nKey = pChange->nKey;
-  }
   if( pChange->pOldVal && pChange->nOldVal>0 ){
     r->pOldVal = sqlite3_malloc(pChange->nOldVal);
     if( r->pOldVal ) memcpy(r->pOldVal, pChange->pOldVal, pChange->nOldVal);
@@ -218,7 +196,6 @@ static void freeDiffRows(DoltliteDiffCursor *pCur){
   for(i=0; i<pCur->nRows; i++){
     sqlite3_free(pCur->aRows[i].pOldVal);
     sqlite3_free(pCur->aRows[i].pNewVal);
-    sqlite3_free(pCur->aRows[i].pKey);
   }
   sqlite3_free(pCur->aRows);
   pCur->aRows = 0;
@@ -231,13 +208,11 @@ static void freeDiffRows(DoltliteDiffCursor *pCur){
 
 static int findTableRoot(struct TableEntry *a, int n, Pgno iTable,
                          ProllyHash *pRoot, u8 *pFlags){
-  int i;
-  for(i=0; i<n; i++){
-    if( a[i].iTable==iTable ){
-      memcpy(pRoot, &a[i].root, sizeof(ProllyHash));
-      if( pFlags ) *pFlags = a[i].flags;
-      return SQLITE_OK;
-    }
+  struct TableEntry *e = doltliteFindTableByNumber(a, n, iTable);
+  if( e ){
+    memcpy(pRoot, &e->root, sizeof(ProllyHash));
+    if( pFlags ) *pFlags = e->flags;
+    return SQLITE_OK;
   }
   memset(pRoot, 0, sizeof(ProllyHash));
   if( pFlags ) *pFlags = 0;
@@ -476,9 +451,7 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 
   /* Run the diff */
   {
-    /* Access the ProllyCache — it's the second field of BtShared
-    ** after ChunkStore. This is fragile but we're inside the fork. */
-    ProllyCache *pCache = (ProllyCache*)(((char*)pBt) + sizeof(ChunkStore));
+    ProllyCache *pCache = doltliteGetCache(db);
 
     rc = prollyDiff(cs, pCache, &oldRoot, &newRoot, flags,
                     diffCollect, (void*)pCur);
