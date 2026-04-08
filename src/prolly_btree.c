@@ -1698,7 +1698,7 @@ static int btreeRefreshFromDisk(Btree *p){
         sqlite3_free(commitData);
         if( rc==SQLITE_OK ){
           memcpy(&catHash, &commit.catalogHash, sizeof(ProllyHash));
-          memcpy(&p->root, &commit.rootHash, sizeof(ProllyHash));
+          chunkStoreGetRoot(&pBt->store, &p->root);
           memcpy(&p->headCommit, &branchHead, sizeof(ProllyHash));
           doltliteCommitClear(&commit);
           useBranchCommit = 1;

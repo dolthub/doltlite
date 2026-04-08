@@ -279,7 +279,6 @@ static void doltliteCommitFunc(
   int nCommitData = 0;
   ProllyHash commitHash;
   ProllyHash catalogHash;
-  ProllyHash rootHash;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
   int rc;
   int i;
@@ -399,8 +398,6 @@ static void doltliteCommitFunc(
   
   memset(&commit, 0, sizeof(commit));
   doltliteGetSessionHead(db, &commit.parentHash);
-  chunkStoreGetRoot(cs, &rootHash);
-  memcpy(&commit.rootHash, &rootHash, sizeof(ProllyHash));
   memcpy(&commit.catalogHash, &catalogHash, sizeof(ProllyHash));
   commit.timestamp = (i64)time(0);
 

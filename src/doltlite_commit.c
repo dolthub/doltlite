@@ -108,7 +108,6 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
     if( nPar > 0 ) c->parentHash = c->aParents[0];
     
     memcpy(c->catalogHash.data, p, PROLLY_HASH_SIZE); p += PROLLY_HASH_SIZE;
-    memset(c->rootHash.data, 0, PROLLY_HASH_SIZE);
   }
 
   
