@@ -24,16 +24,18 @@ int doltliteCommitSerialize(const DoltliteCommit *c, u8 **ppOut, int *pnOut){
   int nEmail = c->zEmail ? (int)strlen(c->zEmail) : 0;
   int nMsg = c->zMessage ? (int)strlen(c->zMessage) : 0;
   int nPar;
+  int sz;
+  u8 *buf;
+  u8 *p;
+  int i;
   if( nName > 0xFFFF || nEmail > 0xFFFF || nMsg > 0xFFFF ){
     return SQLITE_TOOBIG;
   }
   nPar = c->nParents > 0 ? c->nParents : (prollyHashIsEmpty(&c->parentHash) ? 0 : 1);
-  
-  int sz = 1 + 1 + PROLLY_HASH_SIZE*nPar + PROLLY_HASH_SIZE + 8
+
+  sz = 1 + 1 + PROLLY_HASH_SIZE*nPar + PROLLY_HASH_SIZE + 8
          + 2 + nName + 2 + nEmail + 2 + nMsg;
-  u8 *buf = sqlite3_malloc(sz);
-  u8 *p;
-  int i;
+  buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
   p = buf;
 

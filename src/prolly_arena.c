@@ -26,9 +26,10 @@ void *prollyArenaAlloc(ProllyArena *a, int n){
   
   {
     int blockSz = a->defaultBlockSize;
+    int totalSz;
     if( n > blockSz ) blockSz = n;
 
-    int totalSz = (int)sizeof(ProllyArenaBlock) + blockSz;
+    totalSz = (int)sizeof(ProllyArenaBlock) + blockSz;
     if( totalSz < blockSz ){  
       return 0;
     }

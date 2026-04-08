@@ -401,7 +401,8 @@ T.cc.TARGET_DEBUG ?=
 # Define -D_HAVE_SQLITE_CONFIG_H so that the code knows it
 # can include the generated sqlite_cfg.h.
 #
-T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite $(T.cc.TARGET_DEBUG)
+T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite $(T.cc.TARGET_DEBUG) \
+    -Wdeclaration-after-statement
 
 #
 # $(T.cc.sqlite) is $(T.cc) plus any flags which are desired for the

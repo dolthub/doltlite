@@ -54,8 +54,9 @@ static int readUntilEof(int fd, u8 **ppOut, int *pnOut){
   for(;;){
     ssize_t n;
     if( nUsed + 1024 > nAlloc ){
+      u8 *pNew;
       nAlloc *= 2;
-      u8 *pNew = sqlite3_realloc(pBuf, nAlloc);
+      pNew = sqlite3_realloc(pBuf, nAlloc);
       if( !pNew ){
         sqlite3_free(pBuf);
         return SQLITE_NOMEM;
@@ -231,8 +232,9 @@ static int httpRequest(
 static int uploadBufAppend(HttpRemote *p, const u8 *pData, int nData){
   if( p->nUploadBuf + nData > p->nUploadBufAlloc ){
     i64 nNew = p->nUploadBufAlloc ? p->nUploadBufAlloc * 2 : 4096;
+    u8 *pNew;
     while( nNew < p->nUploadBuf + nData ) nNew *= 2;
-    u8 *pNew = sqlite3_realloc64(p->pUploadBuf, nNew);
+    pNew = sqlite3_realloc64(p->pUploadBuf, nNew);
     if( !pNew ) return SQLITE_NOMEM;
     p->pUploadBuf = pNew;
     p->nUploadBufAlloc = nNew;

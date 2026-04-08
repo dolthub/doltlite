@@ -2016,15 +2016,18 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
           int k;
           for(k=0; k<pState->nTables && k<p->nTables; k++){
             p->aTables[k].root = pState->aTables[k].root;
+            {
             ProllyMutMap *pMap = (ProllyMutMap*)p->aTables[k].pPending;
             if( pMap ){
               int savedCount = pState->aPendingCount[k];
               while( pMap->nEntries > savedCount ){
+                ProllyMutMapEntry *e;
                 pMap->nEntries--;
-                ProllyMutMapEntry *e = &pMap->aEntries[pMap->nEntries];
+                e = &pMap->aEntries[pMap->nEntries];
                 sqlite3_free(e->pKey); e->pKey = 0;
                 sqlite3_free(e->pVal); e->pVal = 0;
               }
+            }
             }
           }
           
@@ -2497,9 +2500,10 @@ static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
     return 0;
   }else{
     const u8 *pK; int nK;
+    int n; int c;
     prollyCursorKey(&pCur->pCur, &pK, &nK);
-    int n = nK < e->nKey ? nK : e->nKey;
-    int c = memcmp(pK, e->pKey, n);
+    n = nK < e->nKey ? nK : e->nKey;
+    c = memcmp(pK, e->pKey, n);
     if( c ) return c;
     return (nK < e->nKey) ? -1 : (nK > e->nKey) ? 1 : 0;
   }
@@ -2508,7 +2512,7 @@ static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
 static int mergeStepForward(BtCursor *pCur){
   int treeOk, mutOk;
 
-  
+
   if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
     prollyCursorNext(&pCur->pCur);
   }
@@ -2517,6 +2521,8 @@ static int mergeStepForward(BtCursor *pCur){
   }
 
   for(;;){
+    ProllyMutMapEntry *e;
+    int cmp;
     treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
     mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
 
@@ -2526,13 +2532,13 @@ static int mergeStepForward(BtCursor *pCur){
       pCur->mergeSrc = MERGE_SRC_TREE;
       return SQLITE_OK;
     }
-    ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+    e = &pCur->pMutMap->aEntries[pCur->mmIdx];
     if( !treeOk ){
       if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
       pCur->mergeSrc = MERGE_SRC_MUT;
       return SQLITE_OK;
     }
-    int cmp = mergeCompare(pCur, e);
+    cmp = mergeCompare(pCur, e);
     if( cmp < 0 ){
       pCur->mergeSrc = MERGE_SRC_TREE;
       return SQLITE_OK;
@@ -2566,6 +2572,8 @@ static int mergeStepBackward(BtCursor *pCur){
   }
 
   for(;;){
+    ProllyMutMapEntry *e;
+    int cmp;
     treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
     mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
 
@@ -2575,13 +2583,13 @@ static int mergeStepBackward(BtCursor *pCur){
       pCur->mergeSrc = MERGE_SRC_TREE;
       return SQLITE_OK;
     }
-    ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+    e = &pCur->pMutMap->aEntries[pCur->mmIdx];
     if( !treeOk ){
       if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
       pCur->mergeSrc = MERGE_SRC_MUT;
       return SQLITE_OK;
     }
-    int cmp = mergeCompare(pCur, e);
+    cmp = mergeCompare(pCur, e);
     if( cmp > 0 ){
       pCur->mergeSrc = MERGE_SRC_TREE;
       return SQLITE_OK;
@@ -2602,14 +2610,17 @@ static int mergeStepBackward(BtCursor *pCur){
 }
 
 static int mergeFirst(BtCursor *pCur, int *pRes){
-  pCur->mergeSrc = MERGE_SRC_TREE;  
+  int treeOk, mutOk;
+  pCur->mergeSrc = MERGE_SRC_TREE;
   pCur->mmIdx = 0;
 
-  int treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
-  int mutOk  = (pCur->mmIdx < pCur->pMutMap->nEntries);
+  treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
+  mutOk  = (pCur->mmIdx < pCur->pMutMap->nEntries);
 
-  
+
   for(;;){
+    ProllyMutMapEntry *e;
+    int cmp;
     treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
     mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
 
@@ -2619,13 +2630,13 @@ static int mergeFirst(BtCursor *pCur, int *pRes){
       pCur->mergeSrc = MERGE_SRC_TREE;
       *pRes = 0; return SQLITE_OK;
     }
-    ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+    e = &pCur->pMutMap->aEntries[pCur->mmIdx];
     if( !treeOk ){
       if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx++; continue; }
       pCur->mergeSrc = MERGE_SRC_MUT;
       *pRes = 0; return SQLITE_OK;
     }
-    int cmp = mergeCompare(pCur, e);
+    cmp = mergeCompare(pCur, e);
     if( cmp < 0 ){
       pCur->mergeSrc = MERGE_SRC_TREE;
       *pRes = 0; return SQLITE_OK;
@@ -2652,6 +2663,8 @@ static int mergeLast(BtCursor *pCur, int *pRes){
   for(;;){
     int treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
     int mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
+    ProllyMutMapEntry *e;
+    int cmp;
 
     if( !treeOk && !mutOk ){ *pRes = 1; return SQLITE_OK; }
 
@@ -2659,13 +2672,13 @@ static int mergeLast(BtCursor *pCur, int *pRes){
       pCur->mergeSrc = MERGE_SRC_TREE;
       *pRes = 0; return SQLITE_OK;
     }
-    ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+    e = &pCur->pMutMap->aEntries[pCur->mmIdx];
     if( !treeOk ){
       if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx--; continue; }
       pCur->mergeSrc = MERGE_SRC_MUT;
       *pRes = 0; return SQLITE_OK;
     }
-    int cmp = mergeCompare(pCur, e);
+    cmp = mergeCompare(pCur, e);
     if( cmp > 0 ){
       pCur->mergeSrc = MERGE_SRC_TREE;
       *pRes = 0; return SQLITE_OK;
@@ -3132,8 +3145,8 @@ static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut)
         off += nByte;
       }else if( st==SERIAL_TYPE_FLOAT64 ){
         u64 floatBits;
-        memcpy(&floatBits, &p->u.r, 8);
         int j;
+        memcpy(&floatBits, &p->u.r, 8);
         for(j=7; j>=0; j--){
           pOut[off+j] = (u8)(floatBits & 0xFF);
           floatBits >>= 8;
@@ -3221,14 +3234,17 @@ static int prollyBtCursorIndexMoveto(
       int bestIdx = -1;
       int bestCmp = 0;
       {
-        
+
         int lo = 0, hi = nItems;
+        u8 *pRecBuf = 0;
+        int i;
         while( lo < hi ){
           int mid = lo + (hi - lo) / 2;
           const u8 *pSK; int nSK;
+          int cmpLen; int keyCmp;
           prollyNodeKey(&pLeaf->node, mid, &pSK, &nSK);
-          int cmpLen = nSK < nSortKey ? nSK : nSortKey;
-          int keyCmp = memcmp(pSK, pSortKey, cmpLen);
+          cmpLen = nSK < nSortKey ? nSK : nSortKey;
+          keyCmp = memcmp(pSK, pSortKey, cmpLen);
           if( keyCmp < 0 || (keyCmp==0 && nSK < nSortKey) ){
             lo = mid + 1;
           }else{
@@ -3236,11 +3252,11 @@ static int prollyBtCursorIndexMoveto(
           }
         }
 
-        
-        u8 *pRecBuf = 0;  
-        int i;
+
         for( i = lo; i < nItems; i++ ){
           const u8 *pSK; int nSK;
+          const u8 *pVal; int nVal;
+          int recCmp;
           prollyNodeKey(&pLeaf->node, i, &pSK, &nSK);
           
           {
@@ -3269,7 +3285,6 @@ static int prollyBtCursorIndexMoveto(
               break;
             }
           }
-          const u8 *pVal; int nVal;
           prollyNodeValue(&pLeaf->node, i, &pVal, &nVal);
           if( nVal==0 ){
             sqlite3_free(pRecBuf); pRecBuf = 0;
@@ -3277,7 +3292,7 @@ static int prollyBtCursorIndexMoveto(
             pVal = pRecBuf;
           }
           pIdxKey->eqSeen = 0;
-          int recCmp = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
+          recCmp = sqlite3VdbeRecordCompare(nVal, pVal, pIdxKey);
 
           if( recCmp==0 || pIdxKey->eqSeen ){
             if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
@@ -3480,8 +3495,8 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
       *pnData = nVal;
     }else{
       const u8 *pKey; int nKey;
-      prollyCursorKey(&pCur->pCur, &pKey, &nKey);
       u8 *pRec = 0; int nRec = 0;
+      prollyCursorKey(&pCur->pCur, &pKey, &nKey);
       recordFromSortKey(pKey, nKey, &pRec, &nRec);
       if( pRec ){
         if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){

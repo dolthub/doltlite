@@ -102,14 +102,14 @@ char *doltliteDecodeRecord(const u8 *pData, int nData){
       }
       pBody += nBytes;
     }else if( st==7 ){
-      
+
       if( pBody + 8 <= pEnd ){
         double v;
         u64 bits = 0;
         int i;
+        char tmp[64];
         for(i=0; i<8; i++) bits = (bits<<8) | pBody[i];
         memcpy(&v, &bits, 8);
-        char tmp[64];
         sqlite3_snprintf(sizeof(tmp), tmp, "%!.15g", v);
         recBufAppend(&buf, tmp, -1);
       }

@@ -37,6 +37,7 @@ int main(int argc, char **argv){
   int port = 8080;
   const char *zDir = 0;
   int i;
+  int rc;
 
   for(i=1; i<argc; i++){
     if( strcmp(argv[i], "-p")==0 && i+1<argc ){
@@ -62,6 +63,6 @@ int main(int argc, char **argv){
   printf("doltlite-remotesrv serving %s on port %d\n", zDir, port);
   printf("Press Ctrl+C to stop.\n\n");
 
-  int rc = doltliteServe(zDir, port);
+  rc = doltliteServe(zDir, port);
   return rc==0 ? 0 : 1;
 }

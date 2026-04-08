@@ -123,6 +123,7 @@ static int mergeLeaf(
     const u8 *pCurKey; int nCurKey;
     i64 iCurKey = 0;
     u8 aKeyBuf[8];
+    int cmp;
 
     if( flags & PROLLY_NODE_INTKEY ){
       iCurKey = prollyNodeIntKey(pLeaf, j);
@@ -147,6 +148,7 @@ static int mergeLeaf(
       const u8 *pLastKey; int nLastKey;
       i64 iLastKey = 0;
       u8 aLastBuf[8];
+      int pastLeaf;
       if( flags & PROLLY_NODE_INTKEY ){
         iLastKey = prollyNodeIntKey(pLeaf, pLeaf->nItems - 1);
         encodeI64BE(aLastBuf, iLastKey);
@@ -154,7 +156,7 @@ static int mergeLeaf(
       }else{
         prollyNodeKey(pLeaf, pLeaf->nItems - 1, &pLastKey, &nLastKey);
       }
-      int pastLeaf = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
+      pastLeaf = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
                                  pLastKey, nLastKey, iLastKey);
       if( pastLeaf > 0 ){
         
@@ -167,8 +169,8 @@ static int mergeLeaf(
       }
     }
 
-    
-    int cmp = compareKeys(flags, pCurKey, nCurKey, iCurKey,
+
+    cmp = compareKeys(flags, pCurKey, nCurKey, iCurKey,
                           pEd->pKey, pEd->nKey, pEd->intKey);
     if( cmp < 0 ){
       
@@ -538,8 +540,9 @@ int prollyMutateFlush(ProllyMutator *pMut){
   {
     int M = prollyMutMapCount(pMut->pEdits);
     int N = 0;
+    int threshold;
 
-    
+
     u8 *pRootData = 0;
     int nRootData = 0;
     int rcEst = chunkStoreGet(pMut->pStore, &pMut->oldRoot,
@@ -552,7 +555,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
         }else if( rootNode.level==1 ){
           N = rootNode.nItems * PROLLY_EST_ENTRIES_PER_LEAF;
         }else{
-          
+
           int factor = 1;
           int lv;
           for(lv = 0; lv < rootNode.level; lv++) factor *= PROLLY_EST_ENTRIES_PER_LEAF;
@@ -562,8 +565,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
       sqlite3_free(pRootData);
     }
 
-    
-    int threshold;
+
     if( N <= 0 ){
       threshold = 1000;  
     }else{

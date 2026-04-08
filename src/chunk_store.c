@@ -422,6 +422,7 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
   i64 nRequired = cs->nWriteBuf + (i64)nNeeded;
   if( nRequired > cs->nWriteBufAlloc ){
     i64 nNew = cs->nWriteBufAlloc ? cs->nWriteBufAlloc : CS_INIT_WRITEBUF_SIZE;
+    u8 *pNew;
     /* Double below 64MB, then grow by 1.5x to limit wasted memory. */
     while( nNew < nRequired ){
       if( nNew < 64*1024*1024 ){
@@ -430,7 +431,7 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
         nNew += nNew / 2;
       }
     }
-    u8 *pNew = (u8 *)sqlite3_realloc64(cs->pWriteBuf, (sqlite3_uint64)nNew);
+    pNew = (u8 *)sqlite3_realloc64(cs->pWriteBuf, (sqlite3_uint64)nNew);
     if( pNew == 0 ) return SQLITE_NOMEM;
     cs->pWriteBuf = pNew;
     cs->nWriteBufAlloc = nNew;
@@ -482,11 +483,12 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     pos++;
 
     if( tag == CS_WAL_TAG_CHUNK ){
-      if( pos + 20 + 4 > walSize ) break;
       ProllyHash hash;
+      u32 len;
+      if( pos + 20 + 4 > walSize ) break;
       memcpy(&hash, walData + pos, 20);
       pos += 20;
-      u32 len = CS_READ_U32(walData + pos);
+      len = CS_READ_U32(walData + pos);
       pos += 4;
       if( pos < 0 || (u64)pos + len > (u64)walSize ) break;
 
@@ -494,12 +496,13 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         int existing = csSearchIndex(cs->aIndex, cs->nIndex, &hash);
         if( existing < 0 ){
           int rc = csGrowPending(cs);
+          ChunkIndexEntry *e;
           if( rc != SQLITE_OK ){
             sqlite3_free(walData);
             cs->pWalData = 0;
             return rc;
           }
-          ChunkIndexEntry *e = &cs->aPending[cs->nPending];
+          e = &cs->aPending[cs->nPending];
           memcpy(&e->hash, &hash, sizeof(ProllyHash));
           e->offset = csEncodeWalOffset((i64)pos);
           e->size = (int)len;
@@ -1554,11 +1557,12 @@ static int csCommitToFile(ChunkStore *cs){
   for( i = 0; i < cs->nPending; i++ ){
     ChunkIndexEntry *pe = &cs->aPending[i];
     u8 recHdr[25];
+    i64 bufOff;
     recHdr[0] = CS_WAL_TAG_CHUNK;
     memcpy(recHdr + 1, &pe->hash, 20);
     CS_WRITE_U32(recHdr + 21, (u32)pe->size);
 
-    i64 bufOff = pe->offset + 4;  /* skip length prefix to get to data */
+    bufOff = pe->offset + 4;  /* skip length prefix to get to data */
     rc = sqlite3OsWrite(cs->pFile, recHdr, 25, writeOff);
     if( rc != SQLITE_OK ) goto commit_done;
     writeOff += 25;

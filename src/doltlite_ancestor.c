@@ -146,8 +146,9 @@ static int ancestorBfsCollect(
     if( rc!=SQLITE_OK ){ rc = SQLITE_OK; continue; } 
     for(i=0; i<commit.nParents; i++){
       if( qTail >= qAlloc ){
+        ProllyHash *q2;
         qAlloc *= 2;
-        ProllyHash *q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(ProllyHash));
+        q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(ProllyHash));
         if( !q2 ){ doltliteCommitClear(&commit); rc=SQLITE_NOMEM; break; }
         queue = q2;
       }
@@ -224,8 +225,9 @@ int doltliteFindAncestor(
       if( rc!=SQLITE_OK ){ rc = SQLITE_OK; continue; }
       for(i=0; i<commit.nParents; i++){
         if( qTail >= qAlloc ){
+          ProllyHash *q2;
           qAlloc *= 2;
-          ProllyHash *q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(ProllyHash));
+          q2 = sqlite3_realloc(queue, qAlloc*(int)sizeof(ProllyHash));
           if( !q2 ){ doltliteCommitClear(&commit); hashSetFree(&visited); sqlite3_free(queue); hashSetFree(&ancestors); return SQLITE_NOMEM; }
           queue = q2;
         }
