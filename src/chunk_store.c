@@ -39,6 +39,21 @@
       _close(fd);
     }
   }
+  static int csFileLockNB(const char *path, int *pFd){
+    int fd = _open(path, _O_BINARY | _O_RDWR | _O_CREAT, 0644);
+    if( fd < 0 ) return -1;
+    {
+      HANDLE h = (HANDLE)_get_osfhandle(fd);
+      OVERLAPPED ov = {0};
+      if( !LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                       0, MAXDWORD, MAXDWORD, &ov) ){
+        _close(fd);
+        return -1;
+      }
+    }
+    *pFd = fd;
+    return 0;
+  }
 #else
 # include <unistd.h>
 # include <sys/file.h>
