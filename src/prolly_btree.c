@@ -4641,6 +4641,52 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
   return 0;
 }
 
+/* Load a catalog into the Btree without committing to disk.
+** Used by checkout to switch the in-memory table registry. */
+int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
+  BtShared *pBt = doltliteGetBtShared(db);
+  Btree *pBtree;
+  ChunkStore *cs;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
+
+  if( !pBt ) return SQLITE_ERROR;
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  cs = &pBt->store;
+
+  if( prollyHashIsEmpty(catHash) ) return SQLITE_OK;
+
+  rc = chunkStoreGet(cs, catHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+
+  invalidateCursors(pBt, 0, SQLITE_ABORT);
+
+  sqlite3_free(pBtree->aTables);
+  pBtree->aTables = 0;
+  pBtree->nTables = 0;
+  pBtree->nTablesAlloc = 0;
+
+  rc = deserializeCatalog(pBtree, data, nData);
+  sqlite3_free(data);
+  if( rc!=SQLITE_OK ) return rc;
+
+  pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
+  pBtree->iBDataVersion++;
+  if( pBt->pPagerShim ){
+    pBt->pPagerShim->iDataVersion++;
+  }
+
+  if( pBtree->db ){
+    sqlite3ResetAllSchemasOfConnection(pBtree->db);
+  }else{
+    invalidateSchema(pBtree);
+  }
+
+  return SQLITE_OK;
+}
+
 int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   BtShared *pBt = doltliteGetBtShared(db);
   Btree *pBtree;

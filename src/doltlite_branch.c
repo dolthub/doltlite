@@ -40,6 +40,13 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     }
     rc = chunkStoreDeleteBranch(cs, zName);
     if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch not found", -1); return; }
+    /* Clear this branch's entry from the working state so GC can
+    ** reclaim the deleted branch's catalog and data chunks. */
+    {
+      ProllyHash empty;
+      memset(&empty, 0, sizeof(empty));
+      doltliteUpdateBranchWorkingState(db, zName, &empty);
+    }
   }else{
     
     doltliteGetSessionHead(db, &head);
@@ -78,13 +85,7 @@ static int checkoutLoadAndApply(
   memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&commit);
 
-  
-  {
-    extern int doltliteSaveWorkingSet(sqlite3*);
-    doltliteSaveWorkingSet(db);
-  }
-
-  rc = doltliteHardReset(db, pCatHash);
+  rc = doltliteSwitchCatalog(db, pCatHash);
   return rc;
 }
 
