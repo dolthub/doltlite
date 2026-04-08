@@ -17,16 +17,9 @@
 #include "doltlite_commit.h"
 
 #include "doltlite_record.h"
+#include "doltlite_internal.h"
 #include <string.h>
 #include <time.h>
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern void *doltliteGetBtShared(sqlite3 *db);
-
-struct TableEntry { Pgno iTable; ProllyHash root; ProllyHash schemaHash; u8 flags; char *zName; void *pPending; };
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
 
 /* Varint reader: use shared dlReadVarint from doltlite_record.h */
 
@@ -142,12 +135,11 @@ static void freeHistoryRows(HistCursor *c){
 
 static int htFindRoot(struct TableEntry *a, int n, const char *zName,
                       ProllyHash *pRoot, u8 *pFlags){
-  int i;
-  for(i=0;i<n;i++){
-    if(a[i].zName&&strcmp(a[i].zName,zName)==0){
-      memcpy(pRoot,&a[i].root,sizeof(ProllyHash));
-      if(pFlags)*pFlags=a[i].flags; return SQLITE_OK;
-    }
+  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
+  if( e ){
+    memcpy(pRoot, &e->root, sizeof(ProllyHash));
+    if( pFlags ) *pFlags = e->flags;
+    return SQLITE_OK;
   }
   memset(pRoot,0,sizeof(ProllyHash)); if(pFlags)*pFlags=0;
   return SQLITE_NOTFOUND;
@@ -194,10 +186,10 @@ static int htScanAtCommit(
 
 static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
   ChunkStore *cs=doltliteGetChunkStore(db);
-  void *pBt=doltliteGetBtShared(db);
   ProllyCache *pCache; ProllyHash curHash; int rc;
-  if(!cs||!pBt) return SQLITE_OK;
-  pCache=(ProllyCache*)(((char*)pBt)+sizeof(ChunkStore));
+  if(!cs) return SQLITE_OK;
+  pCache=doltliteGetCache(db);
+  if(!pCache) return SQLITE_OK;
   chunkStoreGetHeadCommit(cs,&curHash);
   while(!prollyHashIsEmpty(&curHash)){
     u8 *data=0;int nData=0; DoltliteCommit commit;

@@ -18,10 +18,8 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include "doltlite_record.h"
+#include "doltlite_internal.h"
 #include <string.h>
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 
 /* Varint reader: use shared dlReadVarint from doltlite_record.h */
 

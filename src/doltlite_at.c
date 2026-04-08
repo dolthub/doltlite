@@ -22,30 +22,10 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
+#include "doltlite_internal.h"
 
 #include <string.h>
 #include <time.h>
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern void *doltliteGetBtShared(sqlite3 *db);
-
-struct TableEntry { Pgno iTable; ProllyHash root; ProllyHash schemaHash; u8 flags; char *zName; void *pPending; };
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
-
-/* --------------------------------------------------------------------------
-** Varint reader
-** -------------------------------------------------------------------------- */
-
-static int atReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
-  u64 v=0; int i;
-  for(i=0;i<9&&p+i<pEnd;i++){
-    if(i<8){v=(v<<7)|(p[i]&0x7f);if(!(p[i]&0x80)){*pVal=v;return i+1;}}
-    else{v=(v<<8)|p[i];*pVal=v;return 9;}
-  }
-  *pVal=v; return i?i:1;
-}
 
 /* --------------------------------------------------------------------------
 ** Record field parser and result setter (same approach as dolt_history)
@@ -61,10 +41,10 @@ static void atParseRecord(const u8 *pData, int nData, AtRecInfo *ri){
   u64 hdrSize; int hdrBytes, off;
   memset(ri,0,sizeof(*ri));
   if(!pData||nData<1) return;
-  hdrBytes=atReadVarint(p,pEnd,&hdrSize); p+=hdrBytes;
+  hdrBytes=dlReadVarint(p,pEnd,&hdrSize); p+=hdrBytes;
   off=(int)hdrSize;
   while(p<pData+hdrSize && p<pEnd && ri->nField<AT_MAX_COLS){
-    u64 st; int stBytes=atReadVarint(p,pData+hdrSize,&st); p+=stBytes;
+    u64 st; int stBytes=dlReadVarint(p,pData+hdrSize,&st); p+=stBytes;
     ri->aType[ri->nField]=(int)st; ri->aOffset[ri->nField]=off;
     if(st==0){}else if(st==1)off+=1;else if(st==2)off+=2;else if(st==3)off+=3;
     else if(st==4)off+=4;else if(st==5)off+=6;else if(st==6)off+=8;else if(st==7)off+=8;
@@ -167,12 +147,11 @@ static int atResolveRef(ChunkStore *cs, const char *zRef, ProllyHash *pCommit){
 
 static int atFindRoot(struct TableEntry *a, int n, const char *zName,
                       ProllyHash *pRoot, u8 *pFlags){
-  int i;
-  for(i=0;i<n;i++){
-    if(a[i].zName&&strcmp(a[i].zName,zName)==0){
-      memcpy(pRoot,&a[i].root,sizeof(ProllyHash));
-      if(pFlags)*pFlags=a[i].flags; return SQLITE_OK;
-    }
+  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
+  if( e ){
+    memcpy(pRoot, &e->root, sizeof(ProllyHash));
+    if( pFlags ) *pFlags = e->flags;
+    return SQLITE_OK;
   }
   memset(pRoot,0,sizeof(ProllyHash)); if(pFlags)*pFlags=0;
   return SQLITE_NOTFOUND;
@@ -298,7 +277,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
 
   pBt=doltliteGetBtShared(db);
   if(!pBt) return SQLITE_OK;
-  pCache=(ProllyCache*)(((char*)pBt)+sizeof(ChunkStore));
+  pCache=doltliteGetCache(db);
 
   zRef=(const char*)sqlite3_value_text(argv[0]);
   if(!zRef) return SQLITE_OK;

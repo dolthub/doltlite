@@ -465,7 +465,6 @@ static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept);
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
 static int btreeRefreshFromDisk(Btree *p);
-static int btreeDeleteDeferred(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
 static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
 
 /* --------------------------------------------------------------------------
@@ -2006,6 +2005,10 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     if( pBt->btsFlags & BTS_READ_ONLY ){
       return SQLITE_READONLY;
     }
+    /* TODO: exclusive writer enforcement needed here (issue #250).
+    ** Multiple in-process connections sharing a BtShared can corrupt the
+    ** in-memory prolly tree via concurrent DML. The fix requires
+    ** understanding how BtShared is shared across connections. */
     /* Ensure aTables includes all persistent tables from the catalog.
     ** Tables are lazily added to aTables when cursors open, so after a
     ** transaction commits and cursors close, aTables may only contain
@@ -4196,18 +4199,6 @@ static int flushDeferredEdits(BtShared *pBt){
 }
 
 /*
-** Handle the deferred-write path for BtreeDelete: the MutMap entry has
-** already been marked as deleted, so we just update cursor state without
-** flushing to disk.
-*/
-static int btreeDeleteDeferred(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey){
-  (void)pKey; (void)nKey; (void)iKey;
-  CLEAR_CACHED_PAYLOAD(pCur);
-  pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
-  return SQLITE_OK;
-}
-
-/*
 ** Handle the immediate-flush path for BtreeDelete: flush the MutMap to
 ** produce a new tree root, reinitialize the cursor, and optionally
 ** re-seek for BTREE_SAVEPOSITION.
@@ -4326,8 +4317,8 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   {
     int canDefer = (pCur->pgnoRoot > 1);
     if( canDefer ){
-      rc = btreeDeleteDeferred(pCur, pKey, nKey, iKey);
-      if( rc!=SQLITE_OK ) return rc;
+      CLEAR_CACHED_PAYLOAD(pCur);
+      pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
       if( flags & BTREE_SAVEPOSITION ){
         /* Cursor is still positioned at the deleted entry in the tree
         ** (deletion is deferred in MutMap). CURSOR_SKIPNEXT with
@@ -4949,40 +4940,51 @@ BtShared *doltliteGetBtShared(sqlite3 *db){
   return 0;
 }
 
+ProllyCache *doltliteGetCache(sqlite3 *db){
+  BtShared *pBt = doltliteGetBtShared(db);
+  if( pBt ) return &pBt->cache;
+  return 0;
+}
+
 /*
 ** Flush all pending mutations and serialize catalog.
 ** Called by dolt_commit before snapshotting state.
 */
 /*
-** Compute schemaHash for each table by querying sqlite_master.
-** Must be called from SQL function context (NOT from BtreeCommit).
+** Update a single table's schema hash. Called from doltlite.c which
+** retrieves the CREATE TABLE SQL from sqlite_master (using high-level
+** SQL APIs that are appropriate at the doltlite layer, not here).
 */
-void doltliteUpdateSchemaHashes(sqlite3 *db){
+void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
   Btree *pBtree;
   int i;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return;
   pBtree = db->aDb[0].pBt;
   for(i=0; i<pBtree->nTables; i++){
-    if( pBtree->aTables[i].iTable>1 && pBtree->aTables[i].zName ){
-      sqlite3_stmt *pStmt = 0;
-      char *zSql = sqlite3_mprintf(
-        "SELECT sql FROM sqlite_master WHERE type='table' AND tbl_name='%q'",
-        pBtree->aTables[i].zName);
-      if( zSql ){
-        if( sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0)==SQLITE_OK ){
-          if( sqlite3_step(pStmt)==SQLITE_ROW ){
-            const char *zCreate = (const char*)sqlite3_column_text(pStmt, 0);
-            if( zCreate ){
-              prollyHashCompute(zCreate, (int)strlen(zCreate),
-                                &pBtree->aTables[i].schemaHash);
-            }
-          }
-          sqlite3_finalize(pStmt);
-        }
-        sqlite3_free(zSql);
-      }
+    if( pBtree->aTables[i].iTable==iTable ){
+      memcpy(&pBtree->aTables[i].schemaHash, pH, sizeof(ProllyHash));
+      return;
     }
   }
+}
+
+/*
+** Iterate table names for schema hash updates. Returns table name
+** and iTable for each user table (iTable > 1). Returns NULL when done.
+** *pIdx should be initialized to 0 before the first call.
+*/
+const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable){
+  Btree *pBtree;
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
+  pBtree = db->aDb[0].pBt;
+  while( *pIdx < pBtree->nTables ){
+    int i = (*pIdx)++;
+    if( pBtree->aTables[i].iTable>1 && pBtree->aTables[i].zName ){
+      *piTable = pBtree->aTables[i].iTable;
+      return pBtree->aTables[i].zName;
+    }
+  }
+  return 0;
 }
 
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
@@ -4997,8 +4999,11 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   /* Flush table-level deferred edits (pPending from closed cursors) */
   rc = flushDeferredEdits(pBt);
   if( rc!=SQLITE_OK ) return rc;
-  /* Update schema hashes */
-  doltliteUpdateSchemaHashes(db);
+  /* Update schema hashes — delegated to doltlite layer which can use SQL APIs */
+  {
+    extern void doltliteUpdateSchemaHashes(sqlite3 *db);
+    doltliteUpdateSchemaHashes(db);
+  }
   return serializeCatalog(pBtree, ppOut, pnOut);
 }
 
@@ -5070,24 +5075,24 @@ int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash){
 
 /*
 ** Resolve a table name to its rootpage (iTable number).
+** Scans the in-memory schema hash table directly, avoiding
+** sqlite3_prepare_v2 (which is a layering violation from the btree layer
+** and can cause stack overflow when called during BtreeCommitPhaseTwo).
 */
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
-  sqlite3_stmt *pStmt = 0;
-  int rc;
-  rc = sqlite3_prepare_v2(db,
-    "SELECT rootpage FROM sqlite_master WHERE type='table' AND name=?",
-    -1, &pStmt, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  sqlite3_bind_text(pStmt, 1, zTable, -1, SQLITE_STATIC);
-  rc = sqlite3_step(pStmt);
-  if( rc==SQLITE_ROW ){
-    *piTable = (Pgno)sqlite3_column_int(pStmt, 0);
-    rc = SQLITE_OK;
-  }else{
-    rc = SQLITE_ERROR;
+  Schema *pSchema;
+  HashElem *k;
+  if( !db || db->nDb<=0 ) return SQLITE_ERROR;
+  pSchema = db->aDb[0].pSchema;
+  if( !pSchema ) return SQLITE_ERROR;
+  for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
+    Table *pTab = (Table*)sqliteHashData(k);
+    if( pTab && strcmp(pTab->zName, zTable)==0 ){
+      *piTable = pTab->tnum;
+      return SQLITE_OK;
+    }
   }
-  sqlite3_finalize(pStmt);
-  return rc;
+  return SQLITE_ERROR;
 }
 
 /*

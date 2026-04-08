@@ -298,7 +298,10 @@ HAVE_WASI_SDK ?= 0
 # With the above-described defined, the rest of this make script will
 # build the project's deliverables and testing tools.
 ################################################################################
-all:	doltlite$(T.exe)
+all:	lint doltlite$(T.exe)
+
+lint:
+	@bash $(TOP)/test/lint_layers.sh $(TOP)/src
 
 ########################################################################
 ########################################################################

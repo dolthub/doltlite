@@ -17,20 +17,8 @@
 #include "chunk_store.h"
 #include "doltlite_remote.h"
 #include "doltlite_commit.h"
+#include "doltlite_internal.h"
 #include <string.h>
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
-extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
-extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
-
-/* Per-session branch state */
-extern const char *doltliteGetSessionBranch(sqlite3 *db);
-extern void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);
-extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
-extern void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
-extern void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
-extern void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
 
 /*
 ** Open a remote by URL. Dispatches based on scheme:

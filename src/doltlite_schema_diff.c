@@ -21,18 +21,9 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
-
+#include "doltlite_record.h"
+#include "doltlite_internal.h"
 #include <string.h>
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern void *doltliteGetBtShared(sqlite3 *db);
-extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
-extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
-
-struct TableEntry { Pgno iTable; ProllyHash root; ProllyHash schemaHash; u8 flags; char *zName; void *pPending; };
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
 
 /* --------------------------------------------------------------------------
 ** Schema entry: name + CREATE statement extracted from sqlite_master rows
@@ -116,31 +107,6 @@ static int sdResolveRef(ChunkStore *cs, const char *zRef, ProllyHash *pCommit){
 ** row's record to extract name and sql.
 ** -------------------------------------------------------------------------- */
 
-/*
-** Parse a SQLite record header to find field offsets.
-** Returns the number of fields, fills aOffset with byte offsets
-** and aType with serial types.
-*/
-/*
-** Read a SQLite varint from p. Returns bytes consumed.
-*/
-static int readVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
-  u64 v = 0;
-  int i;
-  for(i=0; i<9 && p+i<pEnd; i++){
-    if( i<8 ){
-      v = (v << 7) | (p[i] & 0x7f);
-      if( (p[i] & 0x80)==0 ){ *pVal = v; return i+1; }
-    }else{
-      v = (v << 8) | p[i];
-      *pVal = v;
-      return 9;
-    }
-  }
-  *pVal = v;
-  return i;
-}
-
 static int parseRecordHeader(
   const u8 *pData, int nData,
   int *aType, int *aOffset, int maxFields
@@ -156,7 +122,7 @@ static int parseRecordHeader(
   if( nData < 1 ) return 0;
 
   /* Header size varint */
-  hdrBytes = readVarint(p, pDataEnd, &hdrSize);
+  hdrBytes = dlReadVarint(p, pDataEnd, &hdrSize);
   p += hdrBytes;
 
   pEnd = pData + (int)hdrSize;
@@ -164,7 +130,7 @@ static int parseRecordHeader(
 
   while( p < pEnd && p < pDataEnd && iField < maxFields ){
     u64 st;
-    int stBytes = readVarint(p, pEnd, &st);
+    int stBytes = dlReadVarint(p, pEnd, &st);
     p += stBytes;
 
     aType[iField] = (int)st;
@@ -485,7 +451,7 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   if( !cs ) return SQLITE_OK;
   pBt = doltliteGetBtShared(db);
   if( !pBt ) return SQLITE_OK;
-  pCache = (ProllyCache*)(((char*)pBt) + sizeof(ChunkStore));
+  pCache = doltliteGetCache(db);
 
   if( (idxNum & 1) && argIdx<argc ){
     zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);

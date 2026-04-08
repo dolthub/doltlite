@@ -16,41 +16,11 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
+#include "doltlite_internal.h"
 
 #include <assert.h>
 #include <string.h>
 #include <time.h>
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern void *doltliteGetBtShared(sqlite3 *db);
-extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
-extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
-
-struct TableEntry { Pgno iTable; ProllyHash root; ProllyHash schemaHash; u8 flags; char *zName; void *pPending; };
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
-
-/* --------------------------------------------------------------------------
-** Varint reader (big-endian SQLite format)
-** -------------------------------------------------------------------------- */
-
-static int dtReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
-  u64 v = 0;
-  int i;
-  for(i=0; i<9 && p+i<pEnd; i++){
-    if( i<8 ){
-      v = (v << 7) | (p[i] & 0x7f);
-      if( (p[i] & 0x80)==0 ){ *pVal = v; return i+1; }
-    }else{
-      v = (v << 8) | p[i];
-      *pVal = v;
-      return 9;
-    }
-  }
-  *pVal = v;
-  return i ? i : 1;
-}
 
 /* --------------------------------------------------------------------------
 ** Parse record header to get serial types and body offsets
@@ -77,7 +47,7 @@ static void dtParseRecord(const u8 *pData, int nData, RecordInfo *pInfo){
   memset(pInfo, 0, sizeof(*pInfo));
   if( !pData || nData < 1 ) return;
 
-  hdrBytes = dtReadVarint(p, pEnd, &hdrSize);
+  hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
   p += hdrBytes;
   pHdrEnd = pData + (int)hdrSize;
   off = (int)hdrSize;
@@ -85,7 +55,7 @@ static void dtParseRecord(const u8 *pData, int nData, RecordInfo *pInfo){
 
   while( p < pHdrEnd && p < pEnd && pInfo->nField < DT_MAX_COLS ){
     u64 st;
-    int stBytes = dtReadVarint(p, pHdrEnd, &st);
+    int stBytes = dlReadVarint(p, pHdrEnd, &st);
     p += stBytes;
 
     pInfo->aType[pInfo->nField] = (int)st;
@@ -322,13 +292,11 @@ static int findTableRootByName(
   struct TableEntry *a, int n, const char *zName,
   ProllyHash *pRoot, u8 *pFlags
 ){
-  int i;
-  for(i=0; i<n; i++){
-    if( a[i].zName && strcmp(a[i].zName, zName)==0 ){
-      memcpy(pRoot, &a[i].root, sizeof(ProllyHash));
-      if( pFlags ) *pFlags = a[i].flags;
-      return SQLITE_OK;
-    }
+  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
+  if( e ){
+    memcpy(pRoot, &e->root, sizeof(ProllyHash));
+    if( pFlags ) *pFlags = e->flags;
+    return SQLITE_OK;
   }
   memset(pRoot, 0, sizeof(ProllyHash));
   if( pFlags ) *pFlags = 0;
@@ -349,7 +317,7 @@ static int walkHistoryAndDiff(
   int rc;
 
   if( !cs || !pBt ) return SQLITE_OK;
-  pCache = (ProllyCache*)(((char*)pBt) + sizeof(ChunkStore));
+  pCache = doltliteGetCache(db);
 
   chunkStoreGetHeadCommit(cs, &curHash);
   if( prollyHashIsEmpty(&curHash) ) return SQLITE_OK;

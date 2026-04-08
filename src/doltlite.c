@@ -11,49 +11,13 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
-#include "doltlite_commit.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "doltlite_commit.h"
+#include "doltlite_internal.h"
 
 #include <string.h>
 #include <time.h>
-
-/* Provided by prolly_btree.c */
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
-extern int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
-extern int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
-
-/* Per-session branch state */
-extern const char *doltliteGetSessionBranch(sqlite3 *db);
-extern void doltliteSetSessionBranch(sqlite3 *db, const char *zBranch);
-extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
-extern void doltliteSetSessionHead(sqlite3 *db, const ProllyHash *pHead);
-extern void doltliteGetSessionStaged(sqlite3 *db, ProllyHash *pStaged);
-extern void doltliteSetSessionStaged(sqlite3 *db, const ProllyHash *pStaged);
-extern void doltliteGetSessionMergeState(sqlite3 *db, u8 *pIsMerging,
-                                          ProllyHash *pMergeCommit,
-                                          ProllyHash *pConflictsCatalog);
-extern void doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
-                                          const ProllyHash *pMergeCommit,
-                                          const ProllyHash *pConflictsCatalog);
-extern void doltliteClearSessionMergeState(sqlite3 *db);
-extern void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
-extern void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
-extern int doltliteSaveWorkingSet(sqlite3 *db);
-
-/* TableEntry struct — must match prolly_btree.c definition */
-struct TableEntry {
-  Pgno iTable;
-  ProllyHash root;
-  ProllyHash schemaHash;
-  u8 flags;
-  char *zName;
-  void *pPending;
-};
-extern int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
-                               struct TableEntry **ppTables, int *pnTables,
-                               Pgno *piNextTable);
 
 extern int doltliteLogRegister(sqlite3 *db);
 extern int doltliteStatusRegister(sqlite3 *db);
@@ -70,12 +34,6 @@ extern void doltliteRegisterAtTables(sqlite3 *db);
 extern void doltliteRegisterHistoryTables(sqlite3 *db);
 extern int doltliteSchemaDiffRegister(sqlite3 *db);
 
-/* Per-session author config */
-extern const char *doltliteGetAuthorName(sqlite3 *db);
-extern void doltliteSetAuthorName(sqlite3 *db, const char *zName);
-extern const char *doltliteGetAuthorEmail(sqlite3 *db);
-extern void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
-
 /* From doltlite_ancestor.c */
 extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
                                  const ProllyHash *h2, ProllyHash *pAnc);
@@ -83,8 +41,40 @@ extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
 extern int doltliteMergeCatalogs(sqlite3 *db, const ProllyHash *ancestor,
                                   const ProllyHash *ours, const ProllyHash *theirs,
                                   ProllyHash *pMergedHash, int *pnConflicts);
-/* From prolly_btree.c */
-extern int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
+
+/* --------------------------------------------------------------------------
+** Schema hash update: query sqlite_master for CREATE TABLE SQL and hash it.
+** This lives in the doltlite layer (not prolly_btree) because it uses
+** sqlite3_prepare_v2 which is a high-level SQL API.
+** -------------------------------------------------------------------------- */
+
+extern const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable);
+extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
+
+void doltliteUpdateSchemaHashes(sqlite3 *db){
+  int idx = 0;
+  Pgno iTable;
+  const char *zName;
+  while( (zName = doltliteNextTableForSchema(db, &idx, &iTable)) != 0 ){
+    sqlite3_stmt *pStmt = 0;
+    char *zSql = sqlite3_mprintf(
+      "SELECT sql FROM sqlite_master WHERE type='table' AND tbl_name='%q'", zName);
+    if( zSql ){
+      if( sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0)==SQLITE_OK ){
+        if( sqlite3_step(pStmt)==SQLITE_ROW ){
+          const char *zCreate = (const char*)sqlite3_column_text(pStmt, 0);
+          if( zCreate ){
+            ProllyHash h;
+            prollyHashCompute(zCreate, (int)strlen(zCreate), &h);
+            doltliteSetTableSchemaHash(db, iTable, &h);
+          }
+        }
+        sqlite3_finalize(pStmt);
+      }
+      sqlite3_free(zSql);
+    }
+  }
+}
 
 /* --------------------------------------------------------------------------
 ** dolt_add('tablename') or dolt_add('-A')
@@ -421,6 +411,24 @@ static void doltliteCommitFunc(
     }
   }
 
+  /* Detect concurrent commit conflict: check if this connection's HEAD
+  ** still matches the branch tip in the shared refs. If another connection
+  ** committed to the same branch since we last saw it, reject. */
+  {
+    const char *branch = doltliteGetSessionBranch(db);
+    ProllyHash branchTip;
+    ProllyHash sessionHead;
+    doltliteGetSessionHead(db, &sessionHead);
+    if( chunkStoreFindBranch(cs, branch, &branchTip)==SQLITE_OK ){
+      if( prollyHashCompare(&sessionHead, &branchTip)!=0 ){
+        sqlite3_result_error(context,
+          "commit conflict: another connection committed to this branch. "
+          "Please retry your transaction.", -1);
+        return;
+      }
+    }
+  }
+
   /* Build commit object — use session HEAD as parent */
   memset(&commit, 0, sizeof(commit));
   doltliteGetSessionHead(db, &commit.parentHash);
@@ -496,6 +504,12 @@ static void doltliteCommitFunc(
   doltliteSaveWorkingSet(db);
   chunkStoreSerializeRefs(cs);
   rc = chunkStoreCommit(cs);
+  if( rc==SQLITE_BUSY_SNAPSHOT ){
+    sqlite3_result_error(context,
+      "commit conflict: another connection modified the database. "
+      "Please retry your transaction.", -1);
+    return;
+  }
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;

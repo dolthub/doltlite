@@ -12,10 +12,8 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
+#include "doltlite_internal.h"
 #include <string.h>
-
-extern ChunkStore *doltliteGetChunkStore(sqlite3 *db);
-extern void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 
 /* --------------------------------------------------------------------------
 ** dolt_tag('name' [, 'commit_hash']) or dolt_tag('-d', 'name')

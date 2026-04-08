@@ -17,7 +17,7 @@
 #include <string.h>
 
 /*
-** Encode a 64-bit integer as 8 bytes in little-endian format.
+** Encode a 64-bit integer as 8 bytes in big-endian format.
 ** Used to convert INTKEY values into a sortable byte representation
 ** for the chunker and node builder.
 */
@@ -81,7 +81,7 @@ static int compareKeys(
 /*
 ** Feed a single key-value pair into the chunker.
 **
-** For INTKEY tables the key is serialized as an 8-byte little-endian i64
+** For INTKEY tables the key is serialized as an 8-byte big-endian i64
 ** so that the chunker (which works on raw bytes) receives a sortable key
 ** representation.  For BLOBKEY tables the key bytes are passed through
 ** directly.
@@ -93,7 +93,7 @@ static int feedChunker(
   const u8 *pVal, int nVal
 ){
   if( flags & PROLLY_NODE_INTKEY ){
-    /* Encode integer key as 8-byte little-endian for the chunker. */
+    /* Encode integer key as 8-byte big-endian for the chunker. */
     u8 aKeyBuf[8];
     encodeI64BE(aKeyBuf, intKey);
     return prollyChunkerAdd(pCh, aKeyBuf, 8, pVal, nVal);
