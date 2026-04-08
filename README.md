@@ -517,11 +517,12 @@ and staged catalog hash in the `Btree` struct.
   `dolt_branch`, `dolt_tag`, push, pull) are serialized via an exclusive
   file-level lock. Under that lock, the connection refreshes from disk
   before writing, preventing silent data loss from concurrent commits.
-- DML (INSERT/UPDATE/DELETE) operates on the connection's local state.
-  Each connection has its own in-memory prolly tree, so concurrent DML
-  from multiple connections is safe. Conflicts are detected at commit
-  time: if another connection committed to the same branch since this
-  connection last read it, `dolt_commit` returns an error.
+- DML (INSERT/UPDATE/DELETE) concurrency between multiple connections
+  is not fully characterized. The PagerShim does not implement SQLite's
+  file-level write locking, so concurrent write transactions are not
+  serialized the way standard SQLite serializes them. Single-connection
+  use is fully supported. Multi-connection concurrent DML behavior is
+  an area of active investigation.
 
 ## Performance
 
