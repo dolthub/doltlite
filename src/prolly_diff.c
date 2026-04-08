@@ -215,43 +215,31 @@ int diffRecordsEqualFieldwise(
   return 1;
 }
 
+/* Compare two record values: fast memcmp path, then field-wise fallback
+** for records with different varint encodings of the same logical data. */
+int prollyValuesEqual(const u8 *pA, int nA, const u8 *pB, int nB){
+  if( nA==nB ){
+    if( nA==0 ) return 1;
+    if( memcmp(pA, pB, nA)==0 ) return 1;
+  }
+  if( nA < 2 || nB < 2 ) return 0;
+  return diffRecordsEqualFieldwise(pA, nA, pB, nB);
+}
+
 static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew){
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
   prollyCursorValue(pOld, &pOldVal, &nOldVal);
   prollyCursorValue(pNew, &pNewVal, &nNewVal);
-  if( nOldVal == nNewVal ){
-    if( nOldVal == 0 ) return 1;
-    return memcmp(pOldVal, pNewVal, nOldVal) == 0;
-  }
-  if( nOldVal < 2 || nNewVal < 2 ) return 0;
-  return diffRecordsEqualFieldwise(pOldVal, nOldVal, pNewVal, nNewVal);
+  return prollyValuesEqual(pOldVal, nOldVal, pNewVal, nNewVal);
 }
 
-static int diffCursorWalk(
-  ChunkStore *pStore, ProllyCache *pCache,
-  const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
+/* Merge-walk two positioned cursors, emitting diffs until both are exhausted. */
+static int diffMergeWalk(
+  ProllyCursor *pCurOld, ProllyCursor *pCurNew,
   u8 flags, ProllyDiffCallback xCb, void *pCtx
 ){
-  ProllyCursor *pCurOld = 0;
-  ProllyCursor *pCurNew = 0;
   int rc = SQLITE_OK;
-  int emptyOld = 0, emptyNew = 0;
-
-  pCurOld = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
-  pCurNew = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
-  if( !pCurOld || !pCurNew ){
-    sqlite3_free(pCurOld); sqlite3_free(pCurNew);
-    return SQLITE_NOMEM;
-  }
-
-  prollyCursorInit(pCurOld, pStore, pCache, pOldRoot, flags);
-  prollyCursorInit(pCurNew, pStore, pCache, pNewRoot, flags);
-
-  rc = prollyCursorFirst(pCurOld, &emptyOld);
-  if( rc==SQLITE_OK ) rc = prollyCursorFirst(pCurNew, &emptyNew);
-  if( rc!=SQLITE_OK ) goto walk_done;
-
   while( prollyCursorIsValid(pCurOld) && prollyCursorIsValid(pCurNew) ){
     int cmp;
     diffCompareKeys(pCurOld, pCurNew, flags, &cmp);
@@ -278,6 +266,32 @@ static int diffCursorWalk(
     rc = diffEmitAdd(pCurNew, flags, xCb, pCtx);
     if( rc==SQLITE_OK ) rc = prollyCursorNext(pCurNew);
   }
+  return rc;
+}
+
+static int diffCursorWalk(
+  ChunkStore *pStore, ProllyCache *pCache,
+  const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
+  u8 flags, ProllyDiffCallback xCb, void *pCtx
+){
+  ProllyCursor *pCurOld = 0;
+  ProllyCursor *pCurNew = 0;
+  int rc = SQLITE_OK;
+  int emptyOld = 0, emptyNew = 0;
+
+  pCurOld = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
+  pCurNew = (ProllyCursor*)sqlite3_malloc(sizeof(ProllyCursor));
+  if( !pCurOld || !pCurNew ){
+    sqlite3_free(pCurOld); sqlite3_free(pCurNew);
+    return SQLITE_NOMEM;
+  }
+
+  prollyCursorInit(pCurOld, pStore, pCache, pOldRoot, flags);
+  prollyCursorInit(pCurNew, pStore, pCache, pNewRoot, flags);
+
+  rc = prollyCursorFirst(pCurOld, &emptyOld);
+  if( rc==SQLITE_OK ) rc = prollyCursorFirst(pCurNew, &emptyNew);
+  if( rc==SQLITE_OK ) rc = diffMergeWalk(pCurOld, pCurNew, flags, xCb, pCtx);
 
 walk_done:
   prollyCursorClose(pCurOld);
@@ -513,32 +527,7 @@ static int diffNodes(
               if( rc==SQLITE_OK ) rc = prollyCursorFirst(pCN, &emN);
             }
 
-            
-            while( rc==SQLITE_OK && prollyCursorIsValid(pCO) && prollyCursorIsValid(pCN) ){
-              int keyCmp;
-              diffCompareKeys(pCO, pCN, flags, &keyCmp);
-              if( keyCmp < 0 ){
-                rc = diffEmitDelete(pCO, flags, xCb, pCtx);
-                if( rc==SQLITE_OK ) rc = prollyCursorNext(pCO);
-              }else if( keyCmp > 0 ){
-                rc = diffEmitAdd(pCN, flags, xCb, pCtx);
-                if( rc==SQLITE_OK ) rc = prollyCursorNext(pCN);
-              }else{
-                if( !diffValuesEqual(pCO, pCN) ){
-                  rc = diffEmitModify(pCO, pCN, flags, xCb, pCtx);
-                }
-                if( rc==SQLITE_OK ) rc = prollyCursorNext(pCO);
-                if( rc==SQLITE_OK ) rc = prollyCursorNext(pCN);
-              }
-            }
-            while( rc==SQLITE_OK && prollyCursorIsValid(pCO) ){
-              rc = diffEmitDelete(pCO, flags, xCb, pCtx);
-              if( rc==SQLITE_OK ) rc = prollyCursorNext(pCO);
-            }
-            while( rc==SQLITE_OK && prollyCursorIsValid(pCN) ){
-              rc = diffEmitAdd(pCN, flags, xCb, pCtx);
-              if( rc==SQLITE_OK ) rc = prollyCursorNext(pCN);
-            }
+            if( rc==SQLITE_OK ) rc = diffMergeWalk(pCO, pCN, flags, xCb, pCtx);
 
             prollyCursorClose(pCO);
             prollyCursorClose(pCN);

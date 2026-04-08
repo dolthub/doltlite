@@ -34,5 +34,6 @@ int prollyDiff(ChunkStore *pStore, ProllyCache *pCache,
                u8 flags, ProllyDiffCallback xCallback, void *pCtx);
 
 int diffRecordsEqualFieldwise(const u8 *pA, int nA, const u8 *pB, int nB);
+int prollyValuesEqual(const u8 *pA, int nA, const u8 *pB, int nB);
 
-#endif 
+#endif
