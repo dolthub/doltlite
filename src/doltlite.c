@@ -376,26 +376,7 @@ static void doltliteCommitFunc(
     }
   }
 
-  /* Optimistic concurrency: reject if another connection committed to this
-  ** branch since our session last read it. Session HEAD was captured at
-  ** checkout/open; if it no longer matches the branch tip in shared refs,
-  ** someone else committed and our staged catalog is based on stale state. */
-  {
-    const char *branch = doltliteGetSessionBranch(db);
-    ProllyHash branchTip;
-    ProllyHash sessionHead;
-    doltliteGetSessionHead(db, &sessionHead);
-    if( chunkStoreFindBranch(cs, branch, &branchTip)==SQLITE_OK ){
-      if( prollyHashCompare(&sessionHead, &branchTip)!=0 ){
-        sqlite3_result_error(context,
-          "commit conflict: another connection committed to this branch. "
-          "Please retry your transaction.", -1);
-        return;
-      }
-    }
-  }
-
-  
+  /* Build commit object locally (no lock needed yet) */
   memset(&commit, 0, sizeof(commit));
   doltliteGetSessionHead(db, &commit.parentHash);
   memcpy(&commit.catalogHash, &catalogHash, sizeof(ProllyHash));
@@ -436,15 +417,41 @@ static void doltliteCommitFunc(
     return;
   }
 
-  
+  /* Lock the commit graph, refresh from disk, then check for conflicts.
+  ** This serializes all commit graph mutations across connections. */
+  rc = chunkStoreLockAndRefresh(cs);
+  if( rc==SQLITE_BUSY ){
+    sqlite3_result_error(context,
+      "database is locked by another connection", -1);
+    return;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+
+  /* Under lock: check if branch tip still matches our session HEAD */
+  {
+    const char *branch = doltliteGetSessionBranch(db);
+    ProllyHash branchTip;
+    ProllyHash sessionHead;
+    doltliteGetSessionHead(db, &sessionHead);
+    if( chunkStoreFindBranch(cs, branch, &branchTip)==SQLITE_OK ){
+      if( prollyHashCompare(&sessionHead, &branchTip)!=0 ){
+        chunkStoreUnlock(cs);
+        sqlite3_result_error(context,
+          "commit conflict: another connection committed to this branch. "
+          "Please retry your transaction.", -1);
+        return;
+      }
+    }
+  }
+
+  /* Under lock: update session and shared state */
   doltliteSetSessionHead(db, &commitHash);
   doltliteSetSessionStaged(db, &catalogHash);
-
-  
   chunkStoreSetHeadCommit(cs, &commitHash);
-  doltliteSetSessionStaged(db, &catalogHash);
 
-  
   {
     const char *branch = doltliteGetSessionBranch(db);
     if( cs->nBranches==0 ){
@@ -456,7 +463,6 @@ static void doltliteCommitFunc(
     chunkStoreSerializeRefs(cs);
   }
 
-  
   {
     u8 wasMerging = 0;
     doltliteGetSessionMergeState(db, &wasMerging, 0, 0);
@@ -468,12 +474,7 @@ static void doltliteCommitFunc(
   doltliteSaveWorkingSet(db);
   chunkStoreSerializeRefs(cs);
   rc = chunkStoreCommit(cs);
-  if( rc==SQLITE_BUSY_SNAPSHOT ){
-    sqlite3_result_error(context,
-      "commit conflict: another connection modified the database. "
-      "Please retry your transaction.", -1);
-    return;
-  }
+  chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;

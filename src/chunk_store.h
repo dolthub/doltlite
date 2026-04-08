@@ -136,6 +136,7 @@ struct ChunkStore {
   u8 readOnly;
   u8 isMemory;
   u8 snapshotPinned;         /* When set, RefreshIfChanged becomes a no-op */
+  int graphLockFd;           /* flock fd held during commit graph mutation, -1 if none */
   i64 nCommittedWriteBuf;    /* In-memory mode: committed portion of pWriteBuf (survives rollback) */
 
   /* Cached copy of the on-disk WAL region so chunk reads don't hit the file */
@@ -147,6 +148,12 @@ int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
                    const char *zFilename, int flags);
 
 int chunkStoreClose(ChunkStore *cs);
+
+/* Acquire exclusive file lock (non-blocking), refresh from disk.
+** Call before modifying the commit graph. Returns SQLITE_BUSY if
+** another connection holds the lock. Caller must call Unlock after. */
+int chunkStoreLockAndRefresh(ChunkStore *cs);
+void chunkStoreUnlock(ChunkStore *cs);
 
 void chunkStoreGetRoot(ChunkStore *cs, ProllyHash *pRoot);
 
