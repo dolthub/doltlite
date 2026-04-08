@@ -104,15 +104,15 @@ static int gcMarkReachable(
     if( rc==SQLITE_OK ){
       u8 *wsData = 0; int nWsData = 0;
       if( chunkStoreGet(cs, &cs->workingState, &wsData, &nWsData)==SQLITE_OK
-       && wsData && nWsData >= 2 ){
-        int nBr = (int)wsData[0] | ((int)wsData[1] << 8);
-        const u8 *pp = wsData + 2;
+       && wsData && nWsData >= 4 ){
+        int nBr = (int)((u32)wsData[0] | ((u32)wsData[1]<<8) | ((u32)wsData[2]<<16) | ((u32)wsData[3]<<24));
+        const u8 *pp = wsData + 4;
         int j;
         for(j=0; j<nBr && rc==SQLITE_OK; j++){
           int nl;
-          if( pp + 2 > wsData + nWsData ) break;
-          nl = (int)pp[0] | ((int)pp[1] << 8);
-          pp += 2;
+          if( pp + 4 > wsData + nWsData ) break;
+          nl = (int)((u32)pp[0] | ((u32)pp[1]<<8) | ((u32)pp[2]<<16) | ((u32)pp[3]<<24));
+          pp += 4;
           if( pp + nl + PROLLY_HASH_SIZE > wsData + nWsData ) break;
           {
             ProllyHash brCat;

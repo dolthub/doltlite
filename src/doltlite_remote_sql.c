@@ -136,7 +136,7 @@ static int parseRemoteBranchNames(
 
   rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
-  if( !refsData || nRefsData < 5 ){
+  if( !refsData || nRefsData < 9 ){
     sqlite3_free(refsData);
     return SQLITE_OK; 
   }
@@ -145,11 +145,11 @@ static int parseRemoteBranchNames(
     const u8 *p = refsData;
     u8 ver; int defLen;
     ver = p[0]; p++;
-    defLen = p[0]|(p[1]<<8); p += 2;
-    if( p + defLen + 2 <= refsData + nRefsData ){
+    defLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
+    if( p + defLen + 4 <= refsData + nRefsData ){
       int nBranches, i;
       p += defLen;
-      nBranches = p[0]|(p[1]<<8); p += 2;
+      nBranches = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
 
       azNames = sqlite3_malloc(nBranches * sizeof(char*));
       if( !azNames ){
@@ -160,8 +160,8 @@ static int parseRemoteBranchNames(
 
       for(i=0; i<nBranches; i++){
         int nameLen;
-        if( p+2 > refsData+nRefsData ) break;
-        nameLen = p[0]|(p[1]<<8); p += 2;
+        if( p+4 > refsData+nRefsData ) break;
+        nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
         if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
         azNames[nNames] = sqlite3_malloc(nameLen+1);
         if( azNames[nNames] ){
@@ -170,8 +170,8 @@ static int parseRemoteBranchNames(
           nNames++;
         }
         p += nameLen + PROLLY_HASH_SIZE;
-        
-        if( ver >= 3 && p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
+
+        if( p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
           p += PROLLY_HASH_SIZE;
         }
       }

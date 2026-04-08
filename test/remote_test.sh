@@ -239,9 +239,9 @@ check "push to unknown remote errors" "1" "$(echo "$result" | grep -c 'remote no
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('origin','nonexistent');" 2>&1)
 check "push unknown branch errors" "1" "$(echo "$result" | grep -c 'push failed')"
 
-# clone into a db that already has data succeeds silently (returns 0)
+# clone into a db that already has data errors
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_clone('$R/remote.db');" 2>&1)
-check "clone into non-empty succeeds" "0" "$result"
+check "clone into non-empty errors" "1" "$(echo "$result" | grep -c 'not empty')"
 
 result=$("$DB" "$TMPDIR/err.db" "SELECT dolt_clone('/no/scheme');" 2>&1)
 check "clone without scheme errors" "1" "$(echo "$result" | grep -c 'file://')"

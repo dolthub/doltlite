@@ -1684,15 +1684,15 @@ static int btreeReadWorkingCatalog(
 
   rc = chunkStoreGet(cs, &wsHash, &data, &nData);
   if( rc!=SQLITE_OK || !data ) return SQLITE_NOTFOUND;
-  if( nData < 2 ){ sqlite3_free(data); return SQLITE_NOTFOUND; }
+  if( nData < 4 ){ sqlite3_free(data); return SQLITE_NOTFOUND; }
 
-  nBr = (int)data[0] | ((int)data[1] << 8);
-  p = data + 2;
+  nBr = (int)((u32)data[0] | ((u32)data[1]<<8) | ((u32)data[2]<<16) | ((u32)data[3]<<24));
+  p = data + 4;
   for(i=0; i<nBr; i++){
     int nl;
-    if( p + 2 > data + nData ) break;
-    nl = (int)p[0] | ((int)p[1] << 8);
-    p += 2;
+    if( p + 4 > data + nData ) break;
+    nl = (int)((u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24));
+    p += 4;
     if( p + nl + PROLLY_HASH_SIZE > data + nData ) break;
     if( nl==brLen && memcmp(p, zBranch, nl)==0 ){
       memcpy(pCatHash->data, p + nl, PROLLY_HASH_SIZE);
@@ -1733,38 +1733,40 @@ static int btreeWriteWorkingState(
   }
 
   /* Calculate max size: old data + our new entry */
-  nAlloc = (oldData && nOldData >= 2) ? nOldData : 2;
-  nAlloc += 2 + brLen + PROLLY_HASH_SIZE + 16; /* extra space */
+  nAlloc = (oldData && nOldData >= 4) ? nOldData : 4;
+  nAlloc += 4 + brLen + PROLLY_HASH_SIZE + 16; /* extra space */
   newBuf = (u8*)sqlite3_malloc(nAlloc);
   if( !newBuf ){
     sqlite3_free(oldData);
     return SQLITE_NOMEM;
   }
 
-  /* Start writing at offset 2 (skip nBranches header) */
-  nNew = 2;
+  /* Start writing at offset 4 (skip nBranches header) */
+  nNew = 4;
 
   /* Copy existing entries, replacing our branch if found */
-  if( oldData && nOldData >= 2 ){
-    int oldNBr = (int)oldData[0] | ((int)oldData[1] << 8);
-    const u8 *p = oldData + 2;
+  if( oldData && nOldData >= 4 ){
+    int oldNBr = (int)((u32)oldData[0] | ((u32)oldData[1]<<8) | ((u32)oldData[2]<<16) | ((u32)oldData[3]<<24));
+    const u8 *p = oldData + 4;
     for(i=0; i<oldNBr; i++){
       int nl;
-      if( p + 2 > oldData + nOldData ) break;
-      nl = (int)p[0] | ((int)p[1] << 8);
-      p += 2;
+      if( p + 4 > oldData + nOldData ) break;
+      nl = (int)((u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24));
+      p += 4;
       if( p + nl + PROLLY_HASH_SIZE > oldData + nOldData ) break;
       if( nl==brLen && memcmp(p, zBranch, nl)==0 ){
         /* Replace our entry */
         newBuf[nNew++] = (u8)(nl & 0xff);
         newBuf[nNew++] = (u8)((nl >> 8) & 0xff);
+        newBuf[nNew++] = (u8)((nl >> 16) & 0xff);
+        newBuf[nNew++] = (u8)((nl >> 24) & 0xff);
         memcpy(newBuf + nNew, zBranch, nl); nNew += nl;
         memcpy(newBuf + nNew, pCatHash->data, PROLLY_HASH_SIZE); nNew += PROLLY_HASH_SIZE;
         found = 1;
       }else{
         /* Copy other branch's entry as-is */
-        int entrySize = 2 + nl + PROLLY_HASH_SIZE;
-        memcpy(newBuf + nNew, p - 2, entrySize);
+        int entrySize = 4 + nl + PROLLY_HASH_SIZE;
+        memcpy(newBuf + nNew, p - 4, entrySize);
         nNew += entrySize;
       }
       p += nl + PROLLY_HASH_SIZE;
@@ -1776,6 +1778,8 @@ static int btreeWriteWorkingState(
     /* Append new entry for our branch */
     newBuf[nNew++] = (u8)(brLen & 0xff);
     newBuf[nNew++] = (u8)((brLen >> 8) & 0xff);
+    newBuf[nNew++] = (u8)((brLen >> 16) & 0xff);
+    newBuf[nNew++] = (u8)((brLen >> 24) & 0xff);
     memcpy(newBuf + nNew, zBranch, brLen); nNew += brLen;
     memcpy(newBuf + nNew, pCatHash->data, PROLLY_HASH_SIZE); nNew += PROLLY_HASH_SIZE;
     nBr++;
@@ -1784,6 +1788,8 @@ static int btreeWriteWorkingState(
   /* Write branch count header */
   newBuf[0] = (u8)(nBr & 0xff);
   newBuf[1] = (u8)((nBr >> 8) & 0xff);
+  newBuf[2] = (u8)((nBr >> 16) & 0xff);
+  newBuf[3] = (u8)((nBr >> 24) & 0xff);
 
   sqlite3_free(oldData);
 
