@@ -215,6 +215,70 @@ static int mergeLeaf(
   return SQLITE_OK;
 }
 
+/* Recursively process one internal node's children: skip unmodified subtrees,
+** descend into modified ones. Works at any tree level. */
+static int streamingMergeNode(
+  ProllyMutator *pMut,
+  const ProllyNode *pNode,
+  ProllyChunker *pChunker,
+  ProllyMutMapIter *pIter
+){
+  ProllyCache *pCache = pMut->pCache;
+  int rc = SQLITE_OK;
+  int i;
+
+  for( i = 0; i < pNode->nItems; i++ ){
+    const u8 *pBoundKey; int nBoundKey;
+    const u8 *pChildVal; int nChildVal;
+    i64 iBoundKey = 0;
+    u8 aBoundBuf[8];
+
+    prollyNodeKey(pNode, i, &pBoundKey, &nBoundKey);
+    prollyNodeValue(pNode, i, &pChildVal, &nChildVal);
+
+    if( pMut->flags & PROLLY_NODE_INTKEY ){
+      iBoundKey = prollyNodeIntKey(pNode, i);
+      encodeI64BE(aBoundBuf, iBoundKey);
+      pBoundKey = aBoundBuf; nBoundKey = 8;
+    }
+
+    if( !subtreeHasEdits(pMut->flags, pIter,
+                         pBoundKey, nBoundKey, iBoundKey)
+     && (pChunker->nLevels == 0
+         || pChunker->aLevel[0].builder.nItems == 0) ){
+      rc = prollyChunkerAddAtLevel(pChunker, pNode->level,
+                                    pBoundKey, nBoundKey,
+                                    pChildVal, nChildVal);
+      if( rc!=SQLITE_OK ) return rc;
+    }else{
+      ProllyHash childHash;
+      ProllyCacheEntry *pChildEntry;
+      u8 *pChildData = 0;
+      int nChildData = 0;
+
+      assert( nChildVal == PROLLY_HASH_SIZE );
+      memcpy(&childHash, pChildVal, PROLLY_HASH_SIZE);
+      pChildEntry = prollyCacheGet(pCache, &childHash);
+      if( !pChildEntry ){
+        rc = chunkStoreGet(pMut->pStore, &childHash, &pChildData, &nChildData);
+        if( rc!=SQLITE_OK ) return rc;
+        pChildEntry = prollyCachePut(pCache, &childHash, pChildData, nChildData);
+        sqlite3_free(pChildData);
+        if( !pChildEntry ) return SQLITE_NOMEM;
+      }
+
+      if( pChildEntry->node.level == 0 ){
+        rc = mergeLeaf(pMut, &pChildEntry->node, pChunker, pIter);
+      }else{
+        rc = streamingMergeNode(pMut, &pChildEntry->node, pChunker, pIter);
+      }
+      prollyCacheRelease(pCache, pChildEntry);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
+}
+
 /* Streaming merge: skip unmodified subtrees by re-linking their hash at the
 ** parent level (prollyChunkerAddAtLevel). Only descend into children whose
 ** key range overlaps pending edits. O(M*L) when M << N. Falls through to
@@ -252,127 +316,7 @@ static int streamingMerge(
     return rc;
   }
 
-  
-  {
-    int i;
-    for( i = 0; i < rootNode.nItems; i++ ){
-      const u8 *pBoundKey; int nBoundKey;
-      const u8 *pChildVal; int nChildVal;
-      i64 iBoundKey = 0;
-      u8 aBoundBuf[8];
-
-      prollyNodeKey(&rootNode, i, &pBoundKey, &nBoundKey);
-      prollyNodeValue(&rootNode, i, &pChildVal, &nChildVal);
-
-      if( pMut->flags & PROLLY_NODE_INTKEY ){
-        iBoundKey = prollyNodeIntKey(&rootNode, i);
-        encodeI64BE(aBoundBuf, iBoundKey);
-        pBoundKey = aBoundBuf; nBoundKey = 8;
-      }
-
-      if( !subtreeHasEdits(pMut->flags, &iter,
-                           pBoundKey, nBoundKey, iBoundKey)
-       && (chunker.nLevels == 0
-           || chunker.aLevel[0].builder.nItems == 0) ){
-        /* No edits AND level-0 builder is empty (at chunk boundary).
-        ** Re-link child hash at parent level to skip this subtree.
-        ** Cannot skip if level-0 has pending items: that would break
-        ** chunk boundary alignment with the new tree. */
-        rc = prollyChunkerAddAtLevel(&chunker, rootNode.level,
-                                      pBoundKey, nBoundKey,
-                                      pChildVal, nChildVal);
-        if( rc!=SQLITE_OK ) goto streaming_cleanup;
-      }else{
-        
-        if( rootNode.level == 1 ){
-          
-          ProllyHash childHash;
-          ProllyCacheEntry *pChildEntry;
-          u8 *pChildData = 0;
-          int nChildData = 0;
-
-          assert( nChildVal == PROLLY_HASH_SIZE );
-          memcpy(&childHash, pChildVal, PROLLY_HASH_SIZE);
-          pChildEntry = prollyCacheGet(pCache, &childHash);
-          if( !pChildEntry ){
-            rc = chunkStoreGet(pMut->pStore, &childHash, &pChildData, &nChildData);
-            if( rc!=SQLITE_OK ) goto streaming_cleanup;
-            pChildEntry = prollyCachePut(pCache, &childHash, pChildData, nChildData);
-            sqlite3_free(pChildData);
-            if( !pChildEntry ){ rc = SQLITE_NOMEM; goto streaming_cleanup; }
-          }
-
-          rc = mergeLeaf(pMut, &pChildEntry->node, &chunker, &iter);
-          prollyCacheRelease(pCache, pChildEntry);
-          if( rc!=SQLITE_OK ) goto streaming_cleanup;
-        }else{
-          
-          ProllyCursor subCur;
-          ProllyHash childHash;
-          int subEmpty;
-
-          assert( nChildVal == PROLLY_HASH_SIZE );
-          memcpy(&childHash, pChildVal, PROLLY_HASH_SIZE);
-          prollyCursorInit(&subCur, pMut->pStore, pMut->pCache,
-                           &childHash, pMut->flags);
-          rc = prollyCursorFirst(&subCur, &subEmpty);
-          if( rc!=SQLITE_OK ){
-            prollyCursorClose(&subCur);
-            goto streaming_cleanup;
-          }
-          while( prollyCursorIsValid(&subCur) ){
-            const u8 *pK; int nK;
-            const u8 *pV; int nV;
-            i64 iK = 0;
-            if( pMut->flags & PROLLY_NODE_INTKEY ){
-              iK = prollyCursorIntKey(&subCur);
-              pK = 0; nK = 0;
-            }else{
-              prollyCursorKey(&subCur, &pK, &nK);
-            }
-            prollyCursorValue(&subCur, &pV, &nV);
-
-            
-            if( prollyMutMapIterValid(&iter) ){
-              ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&iter);
-              int cmp = compareKeys(pMut->flags, pK, nK, iK,
-                                    pEd->pKey, pEd->nKey, pEd->intKey);
-              if( cmp < 0 ){
-                rc = feedChunker(&chunker, pMut->flags, pK, nK, iK, pV, nV);
-                if( rc!=SQLITE_OK ){ prollyCursorClose(&subCur); goto streaming_cleanup; }
-                rc = prollyCursorNext(&subCur);
-                if( rc!=SQLITE_OK ){ prollyCursorClose(&subCur); goto streaming_cleanup; }
-              }else if( cmp == 0 ){
-                if( pEd->op==PROLLY_EDIT_INSERT ){
-                  rc = feedChunker(&chunker, pMut->flags,
-                                   pEd->pKey, pEd->nKey, pEd->intKey,
-                                   pEd->pVal, pEd->nVal);
-                  if( rc!=SQLITE_OK ){ prollyCursorClose(&subCur); goto streaming_cleanup; }
-                }
-                rc = prollyCursorNext(&subCur);
-                if( rc!=SQLITE_OK ){ prollyCursorClose(&subCur); goto streaming_cleanup; }
-                prollyMutMapIterNext(&iter);
-              }else{
-                if( pEd->op==PROLLY_EDIT_INSERT ){
-                  rc = feedChunker(&chunker, pMut->flags,
-                                   pEd->pKey, pEd->nKey, pEd->intKey,
-                                   pEd->pVal, pEd->nVal);
-                  if( rc!=SQLITE_OK ){ prollyCursorClose(&subCur); goto streaming_cleanup; }
-                }
-                prollyMutMapIterNext(&iter);
-              }
-            }else{
-              rc = feedChunker(&chunker, pMut->flags, pK, nK, iK, pV, nV);
-              if( rc!=SQLITE_OK ){ prollyCursorClose(&subCur); goto streaming_cleanup; }
-              rc = prollyCursorNext(&subCur);
-              if( rc!=SQLITE_OK ){ prollyCursorClose(&subCur); goto streaming_cleanup; }
-            }
-          }
-          prollyCursorClose(&subCur);
-        }
-      }
-    }
-  }
+  rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter);
 
   
   while( prollyMutMapIterValid(&iter) ){
