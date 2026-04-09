@@ -812,66 +812,17 @@ static int serializeMergedCatalog(
   ProllyHash *pOutHash
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  int sz = CAT_HEADER_SIZE_V3;
-  u8 *buf;
-  u8 *p;
+  u8 *buf = 0;
+  int nBuf = 0;
   int rc;
 
   (void)oursCatHash;
   (void)iNextTable;
 
-  /* Sort a copy by name for deterministic serialization (same as
-  ** serializeCatalog in prolly_btree.c). */
-  {
-    struct TableEntry *aSorted = sqlite3_malloc(
-        nMerged * (int)sizeof(struct TableEntry));
-    if( !aSorted ) return SQLITE_NOMEM;
-    memcpy(aSorted, aMerged, nMerged * (int)sizeof(struct TableEntry));
-    qsort(aSorted, nMerged, sizeof(struct TableEntry), tableEntryNameCmp);
+  rc = doltliteSerializeCatalogEntries(db, aMerged, nMerged, &buf, &nBuf);
+  if( rc!=SQLITE_OK ) return rc;
 
-    { int j; for(j=0;j<nMerged;j++){
-      int nl = aSorted[j].zName ? (int)strlen(aSorted[j].zName) : 0;
-      sz += 4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE+2+nl;
-    }}
-
-    buf = sqlite3_malloc(sz);
-    if( !buf ){
-      sqlite3_free(aSorted);
-      return SQLITE_NOMEM;
-    }
-    p = buf;
-
-    *p++ = CATALOG_FORMAT_V3;
-    p[0] = (u8)nMerged;
-    p[1] = (u8)(nMerged>>8);
-    p[2] = (u8)(nMerged>>16);
-    p[3] = (u8)(nMerged>>24);
-    p += 4;
-
-    {
-      int i;
-      for(i=0; i<nMerged; i++){
-        Pgno pg = aSorted[i].iTable;
-        int nl = aSorted[i].zName ? (int)strlen(aSorted[i].zName) : 0;
-        p[0] = (u8)pg;
-        p[1] = (u8)(pg>>8);
-        p[2] = (u8)(pg>>16);
-        p[3] = (u8)(pg>>24);
-        p += 4;
-        *p++ = aSorted[i].flags;
-        memcpy(p, aSorted[i].root.data, PROLLY_HASH_SIZE);
-        p += PROLLY_HASH_SIZE;
-        memcpy(p, aSorted[i].schemaHash.data, PROLLY_HASH_SIZE);
-        p += PROLLY_HASH_SIZE;
-        p[0]=(u8)nl; p[1]=(u8)(nl>>8); p+=2;
-        if(nl>0) memcpy(p, aSorted[i].zName, nl);
-        p += nl;
-      }
-    }
-    sqlite3_free(aSorted);
-  }
-
-  rc = chunkStorePut(cs, buf, (int)(p - buf), pOutHash);
+  rc = chunkStorePut(cs, buf, nBuf, pOutHash);
   sqlite3_free(buf);
   return rc;
 }

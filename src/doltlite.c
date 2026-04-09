@@ -293,6 +293,9 @@ static void doltliteAddFunc(
 
   {
     ProllyHash workingHash;
+    ProllyHash savedStaged;
+
+    doltliteGetSessionStaged(db, &savedStaged);
 
     rc = doltliteFlushCatalogToHash(db, &workingHash);
     if( rc!=SQLITE_OK ){
@@ -336,12 +339,24 @@ static void doltliteAddFunc(
       
       for(i=0; i<argc; i++){
         const char *zTable = (const char*)sqlite3_value_text(argv[i]);
-        Pgno iTable;
+        Pgno iTable = 0;
         int j;
 
         if( !zTable || zTable[0]=='-' ) continue;
         rc = doltliteResolveTableName(db, zTable, &iTable);
-        if( rc!=SQLITE_OK ) continue;
+        if( rc!=SQLITE_OK ){
+          for(j=0; j<nStaged; j++){
+            if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
+              if( j+1 < nStaged ){
+                memmove(&aStaged[j], &aStaged[j+1],
+                        (nStaged-j-1) * (int)sizeof(struct TableEntry));
+              }
+              nStaged--;
+              break;
+            }
+          }
+          continue;
+        }
 
         
         for(j=0; j<nWorking; j++){
@@ -351,9 +366,7 @@ static void doltliteAddFunc(
             int updated = 0;
             for(k=0; k<nStaged; k++){
               if( aStaged[k].iTable==iTable ){
-                aStaged[k].root = aWorking[j].root;
-                aStaged[k].schemaHash = aWorking[j].schemaHash;
-                aStaged[k].flags = aWorking[j].flags;
+                aStaged[k] = aWorking[j];
                 updated = 1;
                 break;
               }
@@ -362,11 +375,15 @@ static void doltliteAddFunc(
               
               struct TableEntry *aNew = sqlite3_realloc(aStaged,
                   (nStaged+1)*(int)sizeof(struct TableEntry));
-              if( aNew ){
-                aStaged = aNew;
-                aStaged[nStaged] = aWorking[j];
-                nStaged++;
+              if( !aNew ){
+                sqlite3_free(aWorking);
+                sqlite3_free(aStaged);
+                sqlite3_result_error_nomem(context);
+                return;
               }
+              aStaged = aNew;
+              aStaged[nStaged] = aWorking[j];
+              nStaged++;
             }
             break;
           }
@@ -375,49 +392,20 @@ static void doltliteAddFunc(
 
       
       {
-        {
-          int sz = CAT_HEADER_SIZE_V3;
-          u8 *buf, *p;
-          ProllyHash newStagedHash;
-          int j;
-
-          for(j=0;j<nStaged;j++){
-            int nl = aStaged[j].zName ? (int)strlen(aStaged[j].zName) : 0;
-            sz += 4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE+2+nl;
-          }
-          buf = sqlite3_malloc(sz);
-          if( !buf ){
-            sqlite3_free(aWorking);
-            sqlite3_free(aStaged);
-            sqlite3_result_error(context, "out of memory", -1);
-            return;
-          }
-          p = buf;
-          *p++ = CATALOG_FORMAT_V3;
-          p[0]=(u8)nStaged; p[1]=(u8)(nStaged>>8);
-          p[2]=(u8)(nStaged>>16); p[3]=(u8)(nStaged>>24);
-          p += 4;
-
-          for(i=0; i<nStaged; i++){
-            Pgno pg = aStaged[i].iTable;
-            int nl = aStaged[i].zName ? (int)strlen(aStaged[i].zName) : 0;
-            p[0]=(u8)pg; p[1]=(u8)(pg>>8); p[2]=(u8)(pg>>16); p[3]=(u8)(pg>>24);
-            p += 4;
-            *p++ = aStaged[i].flags;
-            memcpy(p, aStaged[i].root.data, PROLLY_HASH_SIZE);
-            p += PROLLY_HASH_SIZE;
-            memcpy(p, aStaged[i].schemaHash.data, PROLLY_HASH_SIZE);
-            p += PROLLY_HASH_SIZE;
-            p[0]=(u8)nl; p[1]=(u8)(nl>>8); p+=2;
-            if(nl>0) memcpy(p, aStaged[i].zName, nl);
-            p += nl;
-          }
-
-          rc = chunkStorePut(cs, buf, (int)(p-buf), &newStagedHash);
-          sqlite3_free(buf);
-          if( rc==SQLITE_OK ){
-            doltliteSetSessionStaged(db, &newStagedHash);
-          }
+        u8 *buf = 0;
+        int nBuf = 0;
+        ProllyHash newStagedHash;
+        rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          sqlite3_result_error_code(context, rc);
+          return;
+        }
+        rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
+        sqlite3_free(buf);
+        if( rc==SQLITE_OK ){
+          doltliteSetSessionStaged(db, &newStagedHash);
         }
       }
 
@@ -425,16 +413,11 @@ static void doltliteAddFunc(
       sqlite3_free(aStaged);
     }
 
-
-    {
-      ProllyHash savedStaged;
-      doltliteGetSessionStaged(db, &savedStaged);
-      rc = doltlitePersistState(db);
-      if( rc!=SQLITE_OK ){
-        doltliteSetSessionStaged(db, &savedStaged);
-        sqlite3_result_error_code(context, rc);
-        return;
-      }
+    rc = doltlitePersistState(db);
+    if( rc!=SQLITE_OK ){
+      doltliteSetSessionStaged(db, &savedStaged);
+      sqlite3_result_error_code(context, rc);
+      return;
     }
   }
 
