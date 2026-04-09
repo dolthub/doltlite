@@ -14,120 +14,7 @@
 #include <string.h>
 #include <time.h>
 
-#define DT_MAX_COLS 64
 
-typedef struct RecordInfo RecordInfo;
-struct RecordInfo {
-  int nField;
-  int aType[DT_MAX_COLS];
-  int aOffset[DT_MAX_COLS];
-  int bodyStart;
-};
-
-static void dtParseRecord(const u8 *pData, int nData, RecordInfo *pInfo){
-  const u8 *p = pData;
-  const u8 *pEnd = pData + nData;
-  u64 hdrSize;
-  int hdrBytes;
-  const u8 *pHdrEnd;
-  int off;
-
-  memset(pInfo, 0, sizeof(*pInfo));
-  if( !pData || nData < 1 ) return;
-
-  hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
-  p += hdrBytes;
-  pHdrEnd = pData + (int)hdrSize;
-  off = (int)hdrSize;
-  pInfo->bodyStart = off;
-
-  while( p < pHdrEnd && p < pEnd && pInfo->nField < DT_MAX_COLS ){
-    u64 st;
-    int stBytes = dlReadVarint(p, pHdrEnd, &st);
-    p += stBytes;
-
-    pInfo->aType[pInfo->nField] = (int)st;
-    pInfo->aOffset[pInfo->nField] = off;
-
-    if( st==0 ) {}
-    else if( st==1 ) off += 1;
-    else if( st==2 ) off += 2;
-    else if( st==3 ) off += 3;
-    else if( st==4 ) off += 4;
-    else if( st==5 ) off += 6;
-    else if( st==6 ) off += 8;
-    else if( st==7 ) off += 8;
-    else if( st==8 || st==9 ) {}
-    else if( st>=12 && (st&1)==0 ) off += ((int)st-12)/2;
-    else if( st>=13 && (st&1)==1 ) off += ((int)st-13)/2;
-
-    pInfo->nField++;
-  }
-}
-
-static void dtResultField(
-  sqlite3_context *ctx,
-  const u8 *pData, int nData,
-  int fieldType, int fieldOffset
-){
-  int st = fieldType;
-
-  if( st==0 ){ sqlite3_result_null(ctx); return; }
-  if( st==8 ){ sqlite3_result_int(ctx, 0); return; }
-  if( st==9 ){ sqlite3_result_int(ctx, 1); return; }
-
-  if( st>=1 && st<=6 ){
-    static const int sizes[] = {0,1,2,3,4,6,8};
-    int nBytes = sizes[st];
-    if( fieldOffset + nBytes <= nData ){
-      const u8 *p = pData + fieldOffset;
-      i64 v = (p[0] & 0x80) ? -1 : 0;
-      int i;
-      for(i=0; i<nBytes; i++) v = (v<<8) | p[i];
-      sqlite3_result_int64(ctx, v);
-    }else{
-      sqlite3_result_null(ctx);
-    }
-    return;
-  }
-
-  if( st==7 ){
-    if( fieldOffset + 8 <= nData ){
-      const u8 *p = pData + fieldOffset;
-      double v;
-      u64 bits = 0;
-      int i;
-      for(i=0; i<8; i++) bits = (bits<<8) | p[i];
-      memcpy(&v, &bits, 8);
-      sqlite3_result_double(ctx, v);
-    }else{
-      sqlite3_result_null(ctx);
-    }
-    return;
-  }
-
-  if( st>=13 && (st&1)==1 ){
-    int len = (st-13)/2;
-    if( fieldOffset + len <= nData ){
-      sqlite3_result_text(ctx, (const char*)(pData+fieldOffset), len, SQLITE_TRANSIENT);
-    }else{
-      sqlite3_result_null(ctx);
-    }
-    return;
-  }
-
-  if( st>=12 && (st&1)==0 ){
-    int len = (st-12)/2;
-    if( fieldOffset + len <= nData ){
-      sqlite3_result_blob(ctx, pData+fieldOffset, len, SQLITE_TRANSIENT);
-    }else{
-      sqlite3_result_null(ctx);
-    }
-    return;
-  }
-
-  sqlite3_result_null(ctx);
-}
 
 static char *buildDiffSchema(DoltliteColInfo *ci){
   
@@ -494,10 +381,10 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     }else{
       
       if( r->pOldVal && r->nOldVal > 0 ){
-        RecordInfo ri;
-        dtParseRecord(r->pOldVal, r->nOldVal, &ri);
+        DoltliteRecordInfo ri;
+        doltliteParseRecord(r->pOldVal, r->nOldVal, &ri);
         if( colIdx < ri.nField ){
-          dtResultField(ctx, r->pOldVal, r->nOldVal,
+          doltliteResultField(ctx, r->pOldVal, r->nOldVal,
                         ri.aType[colIdx], ri.aOffset[colIdx]);
         }else{
           sqlite3_result_null(ctx);
@@ -517,10 +404,10 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       }
     }else{
       if( r->pNewVal && r->nNewVal > 0 ){
-        RecordInfo ri;
-        dtParseRecord(r->pNewVal, r->nNewVal, &ri);
+        DoltliteRecordInfo ri;
+        doltliteParseRecord(r->pNewVal, r->nNewVal, &ri);
         if( colIdx < ri.nField ){
-          dtResultField(ctx, r->pNewVal, r->nNewVal,
+          doltliteResultField(ctx, r->pNewVal, r->nNewVal,
                         ri.aType[colIdx], ri.aOffset[colIdx]);
         }else{
           sqlite3_result_null(ctx);

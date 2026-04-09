@@ -13,47 +13,6 @@
 #include <string.h>
 #include <time.h>
 
-#define HT_MAX_COLS 64
-
-typedef struct HtRecInfo HtRecInfo;
-struct HtRecInfo { int nField; int aType[HT_MAX_COLS]; int aOffset[HT_MAX_COLS]; };
-
-static void htParseRecord(const u8 *pData, int nData, HtRecInfo *ri){
-  const u8 *p=pData, *pEnd=pData+nData;
-  u64 hdrSize; int hdrBytes, off;
-  memset(ri,0,sizeof(*ri));
-  if(!pData||nData<1) return;
-  hdrBytes=dlReadVarint(p,pEnd,&hdrSize); p+=hdrBytes;
-  off=(int)hdrSize;
-  while(p<pData+hdrSize && p<pEnd && ri->nField<HT_MAX_COLS){
-    u64 st; int stBytes=dlReadVarint(p,pData+hdrSize,&st); p+=stBytes;
-    ri->aType[ri->nField]=(int)st; ri->aOffset[ri->nField]=off;
-    off += dlSerialTypeLen(st);
-    ri->nField++;
-  }
-}
-
-static void htResultField(sqlite3_context *ctx, const u8 *pData, int nData, int st, int off){
-  if(st==0){sqlite3_result_null(ctx);return;}
-  if(st==8){sqlite3_result_int(ctx,0);return;}
-  if(st==9){sqlite3_result_int(ctx,1);return;}
-  if(st>=1&&st<=6){
-    static const int sz[]={0,1,2,3,4,6,8}; int nB=sz[st];
-    if(off+nB<=nData){const u8*q=pData+off;i64 v=(q[0]&0x80)?-1:0;int i;
-      for(i=0;i<nB;i++)v=(v<<8)|q[i];sqlite3_result_int64(ctx,v);}
-    else sqlite3_result_null(ctx); return;
-  }
-  if(st==7){if(off+8<=nData){const u8*q=pData+off;double v;u64 bits=0;int i;
-    for(i=0;i<8;i++)bits=(bits<<8)|q[i];memcpy(&v,&bits,8);
-    sqlite3_result_double(ctx,v);}else sqlite3_result_null(ctx);return;}
-  if(st>=13&&(st&1)==1){int len=(st-13)/2;
-    if(off+len<=nData)sqlite3_result_text(ctx,(const char*)(pData+off),len,SQLITE_TRANSIENT);
-    else sqlite3_result_null(ctx);return;}
-  if(st>=12&&(st&1)==0){int len=(st-12)/2;
-    if(off+len<=nData)sqlite3_result_blob(ctx,pData+off,len,SQLITE_TRANSIENT);
-    else sqlite3_result_null(ctx);return;}
-  sqlite3_result_null(ctx);
-}
 
 static char *htBuildSchema(DoltliteColInfo *ci){
   int i, sz=256;
@@ -303,8 +262,8 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     }else{
       
       if(r->pVal&&r->nVal>0){
-        HtRecInfo ri; htParseRecord(r->pVal,r->nVal,&ri);
-        if(col<ri.nField) htResultField(ctx,r->pVal,r->nVal,ri.aType[col],ri.aOffset[col]);
+        DoltliteRecordInfo ri; doltliteParseRecord(r->pVal,r->nVal,&ri);
+        if(col<ri.nField) doltliteResultField(ctx,r->pVal,r->nVal,ri.aType[col],ri.aOffset[col]);
         else sqlite3_result_null(ctx);
       }else sqlite3_result_null(ctx);
     }

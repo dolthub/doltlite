@@ -208,4 +208,125 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   return SQLITE_OK;
 }
 
-#endif 
+void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo){
+  const u8 *p = pData;
+  const u8 *pEnd = pData + nData;
+  u64 hdrSize;
+  int hdrBytes, off;
+  const u8 *pHdrEnd;
+
+  memset(pInfo, 0, sizeof(*pInfo));
+  if( !pData || nData < 1 ) return;
+
+  hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
+  p += hdrBytes;
+  pHdrEnd = pData + (int)hdrSize;
+  off = (int)hdrSize;
+
+  while( p < pHdrEnd && p < pEnd && pInfo->nField < DOLTLITE_MAX_RECORD_FIELDS ){
+    u64 st;
+    int stBytes = dlReadVarint(p, pHdrEnd, &st);
+    p += stBytes;
+    pInfo->aType[pInfo->nField] = (int)st;
+    pInfo->aOffset[pInfo->nField] = off;
+    off += dlSerialTypeLen(st);
+    pInfo->nField++;
+  }
+}
+
+void doltliteResultField(
+  sqlite3_context *ctx, const u8 *pData, int nData,
+  int st, int off
+){
+  if( st==0 ){ sqlite3_result_null(ctx); return; }
+  if( st==8 ){ sqlite3_result_int(ctx, 0); return; }
+  if( st==9 ){ sqlite3_result_int(ctx, 1); return; }
+  if( st>=1 && st<=6 ){
+    static const int sizes[] = {0,1,2,3,4,6,8};
+    int nB = sizes[st];
+    if( off+nB <= nData ){
+      const u8 *q = pData + off;
+      i64 v = (q[0] & 0x80) ? -1 : 0;
+      int i;
+      for(i=0; i<nB; i++) v = (v<<8) | q[i];
+      sqlite3_result_int64(ctx, v);
+    }else{
+      sqlite3_result_null(ctx);
+    }
+    return;
+  }
+  if( st==7 ){
+    if( off+8 <= nData ){
+      const u8 *q = pData + off;
+      double v; u64 bits = 0; int i;
+      for(i=0; i<8; i++) bits = (bits<<8) | q[i];
+      memcpy(&v, &bits, 8);
+      sqlite3_result_double(ctx, v);
+    }else{
+      sqlite3_result_null(ctx);
+    }
+    return;
+  }
+  if( st>=13 && (st&1)==1 ){
+    int len = (st-13)/2;
+    if( off+len <= nData )
+      sqlite3_result_text(ctx, (const char*)(pData+off), len, SQLITE_TRANSIENT);
+    else sqlite3_result_null(ctx);
+    return;
+  }
+  if( st>=12 && (st&1)==0 ){
+    int len = (st-12)/2;
+    if( off+len <= nData )
+      sqlite3_result_blob(ctx, pData+off, len, SQLITE_TRANSIENT);
+    else sqlite3_result_null(ctx);
+    return;
+  }
+  sqlite3_result_null(ctx);
+}
+
+int doltliteBindField(
+  sqlite3_stmt *pStmt, int iParam,
+  const u8 *pData, int nData,
+  int st, int off
+){
+  if( st==0 ) return sqlite3_bind_null(pStmt, iParam);
+  if( st==8 ) return sqlite3_bind_int(pStmt, iParam, 0);
+  if( st==9 ) return sqlite3_bind_int(pStmt, iParam, 1);
+  if( st>=1 && st<=6 ){
+    static const int sizes[] = {0,1,2,3,4,6,8};
+    int nB = sizes[st];
+    if( off+nB <= nData ){
+      const u8 *q = pData + off;
+      i64 v = (q[0] & 0x80) ? -1 : 0;
+      int i;
+      for(i=0; i<nB; i++) v = (v<<8) | q[i];
+      return sqlite3_bind_int64(pStmt, iParam, v);
+    }
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  if( st==7 ){
+    if( off+8 <= nData ){
+      const u8 *q = pData + off;
+      double v; u64 bits = 0; int i;
+      for(i=0; i<8; i++) bits = (bits<<8) | q[i];
+      memcpy(&v, &bits, 8);
+      return sqlite3_bind_double(pStmt, iParam, v);
+    }
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  if( st>=13 && (st&1)==1 ){
+    int len = (st-13)/2;
+    if( off+len <= nData )
+      return sqlite3_bind_text(pStmt, iParam, (const char*)(pData+off), len, SQLITE_TRANSIENT);
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  if( st>=12 && (st&1)==0 ){
+    int len = (st-12)/2;
+    if( off+len <= nData )
+      return sqlite3_bind_blob(pStmt, iParam, pData+off, len, SQLITE_TRANSIENT);
+    return sqlite3_bind_null(pStmt, iParam);
+  }
+  return sqlite3_bind_null(pStmt, iParam);
+}
+
+#endif

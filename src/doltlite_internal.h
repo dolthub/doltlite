@@ -170,8 +170,6 @@ struct MigrateDiffCtx {
 };
 
 char *extractColNameFromDef(const char *zDef);
-int bindRecordField(sqlite3_stmt *pStmt, int iParam, const u8 *pData,
-                    int nData, int serialType, int offset);
 int migrateDiffCb(void *pArg, const struct ProllyDiffChange *pChange);
 int migrateSchemaRowData(sqlite3 *db, const ProllyHash *pAncCatHash,
                          const ProllyHash *pTheirCatHash,
