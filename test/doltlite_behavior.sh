@@ -109,9 +109,91 @@ run_test_match "schema_merge_has_x_col" \
   "SELECT x FROM t WHERE id=1;" \
   "mx" "$DB"
 
-run_test_match "schema_merge_has_y_col" \
-  "SELECT typeof(y) FROM t WHERE id=1;" \
-  "null|integer" "$DB"
+run_test "schema_merge_has_y_col" \
+  "SELECT y FROM t WHERE id=1;" \
+  "42" "$DB"
+
+rm -f "$DB"
+
+# Test 4b: Schema merge row data migration - multiple rows with both columns
+DB=/tmp/test_bhv4b_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+INSERT INTO t VALUES(2,'b');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Main adds column 'x' with data for all rows
+echo "ALTER TABLE t ADD COLUMN x TEXT;
+UPDATE t SET x='x1' WHERE id=1;
+UPDATE t SET x='x2' WHERE id=2;
+UPDATE t SET x='x3' WHERE id=3;
+SELECT dolt_commit('-A','-m','add x');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# b1 adds column 'y' with data for all rows
+echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN y INTEGER;
+UPDATE t SET y=10 WHERE id=1;
+UPDATE t SET y=20 WHERE id=2;
+UPDATE t SET y=30 WHERE id=3;
+SELECT dolt_commit('-A','-m','add y');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_merge('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Verify all rows have correct values for BOTH added columns
+run_test "schema_data_migrate_row1" \
+  "SELECT x, y FROM t WHERE id=1;" \
+  "x1|10" "$DB"
+
+run_test "schema_data_migrate_row2" \
+  "SELECT x, y FROM t WHERE id=2;" \
+  "x2|20" "$DB"
+
+run_test "schema_data_migrate_row3" \
+  "SELECT x, y FROM t WHERE id=3;" \
+  "x3|30" "$DB"
+
+# Verify original columns preserved
+run_test "schema_data_migrate_orig" \
+  "SELECT v FROM t WHERE id=1;" \
+  "a" "$DB"
+
+rm -f "$DB"
+
+# Test 4c: Schema merge with new rows added on branch with different column
+DB=/tmp/test_bhv4c_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'orig');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Main adds column 'x' and inserts a new row
+echo "ALTER TABLE t ADD COLUMN x TEXT;
+UPDATE t SET x='val_x' WHERE id=1;
+INSERT INTO t VALUES(2,'main_new','new_x');
+SELECT dolt_commit('-A','-m','add x with new row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# b1 adds column 'y' and inserts a different new row
+echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN y INTEGER;
+UPDATE t SET y=7 WHERE id=1;
+INSERT INTO t VALUES(3,'b1_new',77);
+SELECT dolt_commit('-A','-m','add y with new row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_merge('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Row 1 should have both x and y values
+run_test "schema_data_migrate_both_cols" \
+  "SELECT x, y FROM t WHERE id=1;" \
+  "val_x|7" "$DB"
+
+# Row 2 (added on main) should have x but NULL y
+run_test "schema_data_migrate_main_row" \
+  "SELECT x, typeof(y) FROM t WHERE id=2;" \
+  "new_x|null" "$DB"
 
 rm -f "$DB"
 
