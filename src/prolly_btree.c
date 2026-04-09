@@ -1352,17 +1352,15 @@ int sqlite3BtreeOpen(
 
   *ppBtree = 0;
 
-  /* Delegate to the original SQLite btree implementation for everything
-  ** except the primary doltlite database. Temp tables, ephemeral tables,
-  ** attached databases, and standard SQLite files all use the original
-  ** btree. Only the main database (aDb[0], opened first) uses prolly trees.
-  **
-  ** Detection: if db->aDb[0].pBt is already set, this open is for a
-  ** secondary database (temp, attach), not the main one. */
+  /* Delegate to the original SQLite btree implementation for:
+  ** - NULL/empty filenames (temp databases, ephemeral tables)
+  ** - BTREE_SINGLE flag (transient/ephemeral btrees)
+  ** - Temp database (SQLITE_OPEN_TEMP_DB in vfsFlags)
+  ** - Existing files with standard SQLite headers
+  ** All other databases (main, attached doltlite files) use prolly trees. */
   if( !zFilename || zFilename[0]=='\0'
    || (flags & BTREE_SINGLE)
    || (vfsFlags & SQLITE_OPEN_TEMP_DB)
-   || (db->aDb[0].pBt != 0)
    || origBtreeIsSqliteFile(zFilename)
   ){
     p = sqlite3_malloc(sizeof(Btree));
