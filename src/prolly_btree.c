@@ -3737,6 +3737,28 @@ static int prollyBtCursorInsert(
         ** mergeSrc) is stale. Reset so the next Next/Previous call
         ** re-synchronizes the merge cursor with the updated MutMap. */
         pCur->mmActive = 0;
+      } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
+        /* For BLOBKEY cursors (WITHOUT ROWID PK), after a deferred insert
+        ** following a deferred delete with SAVEPOSITION, advance the tree
+        ** cursor past the old (deleted) entry. This prevents OP_Next from
+        ** re-syncing with MutMap at the old position and picking up the
+        ** newly inserted entry (whose sort key differs because non-PK
+        ** columns changed). Set skipNext=1 so OP_Next returns immediately
+        ** with the cursor at the next tree entry. */
+        CLEAR_CACHED_PAYLOAD(pCur);
+        if( prollyCursorIsValid(&pCur->pCur) ){
+          int trc = prollyCursorNext(&pCur->pCur);
+          if( trc==SQLITE_OK
+           && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+            pCur->eState = CURSOR_SKIPNEXT;
+            pCur->skipNext = 1;
+          } else {
+            pCur->eState = CURSOR_INVALID;
+          }
+        } else {
+          pCur->eState = CURSOR_INVALID;
+        }
+        pCur->mmActive = 0;
       } else {
         pCur->eState = CURSOR_INVALID;
       }
@@ -3744,7 +3766,7 @@ static int prollyBtCursorInsert(
     }
   }
 
-  
+
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
   {
