@@ -421,8 +421,6 @@ INSERT INTO doc VALUES(3,'new from main');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main changes');
 SELECT dolt_merge('edit');
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','merge edit into main');
 SELECT dolt_remote('add','origin','$R/merge_remote.db');
 SELECT dolt_push('origin','main');
 .quit
