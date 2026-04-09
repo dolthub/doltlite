@@ -481,43 +481,52 @@ int prollyMutateFlush(ProllyMutator *pMut){
   }
 
   
+  /* Choose between full rebuild (mergeWalk) and incremental (streamingMerge).
+  **
+  ** streamingMerge skips unchanged subtrees — fast when editing a tiny
+  ** fraction of a large tree. But it can produce trees with extra levels
+  ** because it splices old subtrees into a new chunker at their original
+  ** level, which compounds over multiple sessions.
+  **
+  ** mergeWalk rebuilds from scratch — always produces optimal depth.
+  ** Use it when edits are a significant fraction of the tree, or when
+  ** the tree is small enough that a full scan is cheap. */
   {
     int M = prollyMutMapCount(pMut->pEdits);
-    int N = 0;
-    int threshold;
+    int leafCount = 0;
 
-
-    u8 *pRootData = 0;
-    int nRootData = 0;
-    int rcEst = chunkStoreGet(pMut->pStore, &pMut->oldRoot,
-                              &pRootData, &nRootData);
-    if( rcEst==SQLITE_OK && pRootData ){
-      ProllyNode rootNode;
-      if( prollyNodeParse(&rootNode, pRootData, nRootData)==SQLITE_OK ){
-        if( rootNode.level==0 ){
-          N = rootNode.nItems;
-        }else if( rootNode.level==1 ){
-          N = rootNode.nItems * PROLLY_EST_ENTRIES_PER_LEAF;
-        }else{
-
-          int factor = 1;
-          int lv;
-          for(lv = 0; lv < rootNode.level; lv++) factor *= PROLLY_EST_ENTRIES_PER_LEAF;
-          N = rootNode.nItems * factor;
+    /* Estimate leaf count from root node. Only use streamingMerge when
+    ** edits are a small fraction of actual leaf entries. */
+    {
+      u8 *pRootData = 0;
+      int nRootData = 0;
+      int rcEst = chunkStoreGet(pMut->pStore, &pMut->oldRoot,
+                                &pRootData, &nRootData);
+      if( rcEst==SQLITE_OK && pRootData ){
+        ProllyNode rootNode;
+        if( prollyNodeParse(&rootNode, pRootData, nRootData)==SQLITE_OK ){
+          if( rootNode.level==0 ){
+            leafCount = rootNode.nItems;
+          }else{
+            /* For deeper trees, use nItems at root * fan-out per level.
+            ** Cap estimate to avoid overflow from deep trees. */
+            leafCount = rootNode.nItems * PROLLY_EST_ENTRIES_PER_LEAF;
+            if( rootNode.level > 1 && leafCount < 0x7FFFFFFF / PROLLY_EST_ENTRIES_PER_LEAF ){
+              leafCount *= PROLLY_EST_ENTRIES_PER_LEAF;
+            }
+            /* Don't extrapolate further — two levels of fan-out is enough
+            ** for a reasonable estimate. Over-estimating causes streaming
+            ** merge to be chosen too aggressively, producing deep trees. */
+          }
         }
+        sqlite3_free(pRootData);
       }
-      sqlite3_free(pRootData);
     }
 
-
-    if( N <= 0 ){
-      threshold = 1000;  
-    }else{
-      threshold = N / 2;
-    }
-
-    
-    if( M > threshold ){
+    /* Use mergeWalk (full rebuild) unless edits are < 1% of leaf count
+    ** AND there are fewer than 10000 edits. This ensures batch inserts
+    ** always rebuild cleanly. */
+    if( leafCount <= 0 || M > leafCount / 100 || M > 10000 ){
       return mergeWalk(pMut);
     }else{
       return streamingMerge(pMut);
