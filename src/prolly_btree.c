@@ -104,6 +104,7 @@ struct TableEntry {
   ProllyHash root;
   ProllyHash schemaHash;
   u8 flags;
+  u8 pendingFlushSeekEdits;
   char *zName;
   ProllyMutMap *pPending;
 };
@@ -325,7 +326,6 @@ static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode);
 static void invalidateSchema(Btree *pBtree);
 static int flushMutMap(BtCursor *pCur);
 static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
-static int mutMapHasDeleteOps(ProllyMutMap *pMap);
 static int flushIfNeeded(BtCursor *pCur);
 static int flushAllPending(BtShared *pBt, Pgno iTable);
 static int flushDeferredEdits(BtShared *pBt);
@@ -338,6 +338,7 @@ static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount);
 static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept);
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
+static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE);
 static int btreeRefreshFromDisk(Btree *p);
 static int btreeReadWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                    ProllyHash *pCatHash,
@@ -1027,17 +1028,6 @@ static int ensureMutMap(BtCursor *pCur){
   return SQLITE_OK;
 }
 
-static int mutMapHasDeleteOps(ProllyMutMap *pMap){
-  int i;
-  if( !pMap ) return 0;
-  for(i=0; i<pMap->nEntries; i++){
-    if( pMap->aEntries[i].op==PROLLY_EDIT_DELETE ){
-      return 1;
-    }
-  }
-  return 0;
-}
-
 static int saveCursorPosition(BtCursor *pCur){
   int rc = SQLITE_OK;
 
@@ -1090,6 +1080,14 @@ static int saveCursorPosition(BtCursor *pCur){
 
   pCur->eState = CURSOR_REQUIRESEEK;
   return SQLITE_OK;
+}
+
+static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE){
+  if( !pTE || pTE->iTable<=1 ) return 0;
+  if( !pTE->zName && pBtree && pBtree->db ){
+    pTE->zName = doltliteResolveTableNumber(pBtree->db, pTE->iTable);
+  }
+  return pTE->zName!=0;
 }
 
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
@@ -2560,7 +2558,13 @@ static int prollyBtreeCursor(
     if( wrFlag & BTREE_WRCSR ){
       pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
       pTE->pPending = 0;
-      pCur->flushSeekEdits = mutMapHasDeleteOps(pCur->pMutMap);
+      pCur->flushSeekEdits = pTE->pendingFlushSeekEdits;
+      if( !pCur->curIntKey
+       && tableEntryIsTableRoot(p, pTE)
+       && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+        pCur->flushSeekEdits = 1;
+      }
+      pTE->pendingFlushSeekEdits = 0;
     }else{
       
       ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
@@ -2580,6 +2584,7 @@ static int prollyBtreeCursor(
         prollyMutMapFree(pMap);
         sqlite3_free(pMap);
         pTE->pPending = 0;
+        pTE->pendingFlushSeekEdits = 0;
         if( rc2!=SQLITE_OK ) return rc2;
       }
     }
@@ -2621,10 +2626,12 @@ static int prollyBtCursorCloseCursor(BtCursor *pCur){
     struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
     if( pTE && !pTE->pPending ){
       pTE->pPending = pCur->pMutMap;
+      pTE->pendingFlushSeekEdits = pCur->flushSeekEdits;
       pCur->pMutMap = 0;
     }else if( pTE && pTE->pPending ){
       
       prollyMutMapMerge((ProllyMutMap*)pTE->pPending, pCur->pMutMap);
+      pTE->pendingFlushSeekEdits = pCur->flushSeekEdits;
       prollyMutMapFree(pCur->pMutMap);
       sqlite3_free(pCur->pMutMap);
       pCur->pMutMap = 0;

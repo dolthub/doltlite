@@ -11,6 +11,7 @@ struct TableEntry {
   ProllyHash root;       
   ProllyHash schemaHash; 
   u8 flags;              
+  u8 pendingFlushSeekEdits;
   char *zName;           
   void *pPending;        
 };
