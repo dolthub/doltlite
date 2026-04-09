@@ -2456,7 +2456,7 @@ SELECT * FROM t ORDER BY a;
 echo ""
 echo "--- Category 29: VACUUM and maintenance ---"
 
-# 29a. VACUUM after heavy mutation
+# 29a. VACUUM after heavy mutation (no-op for doltlite, must not crash)
 oracle "cat29_vacuum_after_mutation" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
 CREATE INDEX idx ON t(val);
@@ -2767,12 +2767,17 @@ ORDER BY id;
 echo ""
 echo "--- Category 36: Temp tables and attached databases ---"
 
-# 36a. TEMP table SELECT with index
-oracle "cat36_temp_select" "
+# 36a. TEMP table CRUD with index
+oracle "cat36_temp_crud" "
 CREATE TEMP TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX temp.idx ON t(val);
 INSERT INTO t VALUES(1,30),(2,10),(3,20);
 SELECT * FROM t ORDER BY val;
-SELECT count(*) FROM t WHERE val > 15;
+UPDATE t SET val = val + 100;
+SELECT * FROM t ORDER BY val;
+DELETE FROM t WHERE val > 120;
+SELECT count(*) FROM t;
+SELECT * FROM t ORDER BY id;
 "
 
 # 36b. TEMP and main table interaction (read-only on temp)
@@ -2784,13 +2789,16 @@ INSERT INTO temp_t VALUES(1,100),(2,200);
 SELECT m.val, t.val FROM main_t m JOIN temp_t t ON m.id = t.id ORDER BY m.id;
 "
 
-# 36c. Attached database (read-only operations)
-oracle "cat36_attach_read" "
+# 36c. Attached database CRUD
+oracle "cat36_attach_crud" "
 ATTACH ':memory:' AS db2;
 CREATE TABLE db2.t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX db2.idx ON db2.t(val);
 INSERT INTO db2.t VALUES(1,10),(2,20),(3,30);
+UPDATE db2.t SET val = val * 2;
 SELECT * FROM db2.t ORDER BY val;
-SELECT count(*) FROM db2.t WHERE val > 15;
+DELETE FROM db2.t WHERE val > 40;
+SELECT count(*) FROM db2.t;
 DETACH db2;
 "
 
