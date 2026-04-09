@@ -6,6 +6,7 @@
 #include "chunk_store.h"
 #include "prolly_cursor.h"
 #include "prolly_cache.h"
+#include "prolly_diff.h"
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
@@ -704,15 +705,83 @@ static int bindRecordField(
 }
 
 /*
+** Diff callback for schema data migration. Called for each row that
+** changed between ancestor and theirs (ADD or MODIFY). Extracts the
+** added column values from theirs' record and UPDATEs the merged table.
+*/
+struct MigrateDiffCtx {
+  sqlite3_stmt *pUpd;
+  int *aiColIdx;
+  char **azColNames;
+  int nCols;
+};
+
+static int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
+  struct MigrateDiffCtx *ctx = (struct MigrateDiffCtx*)pArg;
+  const u8 *pVal;
+  int nVal;
+  int aType[64], aOffset[64];
+  int nFields = 0;
+  int sj, bindIdx;
+
+  if( pChange->type == PROLLY_DIFF_DELETE ) return SQLITE_OK;
+
+  pVal = pChange->pNewVal;
+  nVal = pChange->nNewVal;
+  if( !pVal || nVal<=0 ) return SQLITE_OK;
+
+  /* Parse record header */
+  {
+    const u8 *hp = pVal;
+    const u8 *hpEnd = pVal + nVal;
+    u64 hdrSize;
+    int hdrBytes, off;
+
+    hdrBytes = dlReadVarint(hp, hpEnd, &hdrSize);
+    hp += hdrBytes;
+    off = (int)hdrSize;
+
+    while( hp < pVal+hdrSize && hp < hpEnd && nFields<64 ){
+      u64 st;
+      int stBytes = dlReadVarint(hp, pVal+hdrSize, &st);
+      hp += stBytes;
+      aType[nFields] = (int)st;
+      aOffset[nFields] = off;
+      off += dlSerialTypeLen(st);
+      nFields++;
+    }
+  }
+
+  sqlite3_reset(ctx->pUpd);
+  bindIdx = 1;
+  for(sj=0; sj<ctx->nCols; sj++){
+    if( ctx->aiColIdx[sj]<0 || !ctx->azColNames[sj] ) continue;
+    if( ctx->aiColIdx[sj] < nFields ){
+      bindRecordField(ctx->pUpd, bindIdx, pVal, nVal,
+                      aType[ctx->aiColIdx[sj]],
+                      aOffset[ctx->aiColIdx[sj]]);
+    }else{
+      sqlite3_bind_null(ctx->pUpd, bindIdx);
+    }
+    bindIdx++;
+  }
+  sqlite3_bind_int64(ctx->pUpd, bindIdx, pChange->intKey);
+  sqlite3_step(ctx->pUpd);
+
+  return SQLITE_OK;
+}
+
+/*
 ** Migrate row data for added columns after a schema merge.
 **
 ** After ALTER TABLE ADD COLUMN has been applied for theirs' columns, the
 ** merged table has the right schema but all NULLs for the new columns.
-** This function reads theirs' prolly tree and UPDATEs the merged table
-** to fill in the actual values.
+** This function diffs ancestor vs theirs and UPDATEs only changed rows
+** to fill in the actual values for the added columns.
 */
 static int migrateSchemaRowData(
   sqlite3 *db,
+  const ProllyHash *pAncCatHash,
   const ProllyHash *pTheirCatHash,
   SchemaMergeAction *aActions,
   int nActions
@@ -726,11 +795,16 @@ static int migrateSchemaRowData(
   int rc = SQLITE_OK;
   int si;
 
+  struct TableEntry *aAncTables = 0;
+  int nAncTables = 0;
+
   if( !cs || !pCache || nActions<=0 ) return SQLITE_OK;
 
-  /* Load theirs' catalog to find table root hashes */
-  rc = doltliteLoadCatalog(db, pTheirCatHash, &aTheirTables, &nTheirTables, 0);
+  /* Load ancestor and theirs' catalogs to find table root hashes */
+  rc = doltliteLoadCatalog(db, pAncCatHash, &aAncTables, &nAncTables, 0);
   if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCatalog(db, pTheirCatHash, &aTheirTables, &nTheirTables, 0);
+  if( rc!=SQLITE_OK ){ sqlite3_free(aAncTables); return rc; }
 
   /* Load theirs' schema entries to find column ordinal positions */
   rc = loadSchemaFromCatalog(db, cs, pCache, pTheirCatHash,
@@ -942,82 +1016,28 @@ static int migrateSchemaRowData(
         sqlite3_free(zUpdate);
         if( rc!=SQLITE_OK ) goto next_action;
 
-        /* Now iterate theirs' prolly tree and UPDATE each row */
+        /* Diff ancestor vs theirs — only UPDATE rows that changed */
         {
-          ProllyCursor cur;
-          int res;
+          struct TableEntry *ancTE;
+          ProllyHash ancRoot;
+          struct MigrateDiffCtx diffCtx;
 
-          prollyCursorInit(&cur, cs, pCache, &theirTE->root, theirTE->flags);
-          rc = prollyCursorFirst(&cur, &res);
-
-          while( rc==SQLITE_OK && !res && prollyCursorIsValid(&cur) ){
-            const u8 *pVal;
-            int nVal;
-            i64 rowid;
-            int aType[64], aOffset[64];
-            int nFields;
-
-            rowid = prollyCursorIntKey(&cur);
-            prollyCursorValue(&cur, &pVal, &nVal);
-
-            if( pVal && nVal>0 ){
-              /* Parse the record header to get field types and offsets */
-              nFields = 0;
-              {
-                const u8 *hp = pVal;
-                const u8 *hpEnd = pVal + nVal;
-                u64 hdrSize;
-                int hdrBytes, off;
-
-                hdrBytes = dlReadVarint(hp, hpEnd, &hdrSize);
-                hp += hdrBytes;
-                off = (int)hdrSize;
-
-                while( hp < pVal+hdrSize && hp < hpEnd && nFields<64 ){
-                  u64 st;
-                  int stBytes = dlReadVarint(hp, pVal+hdrSize, &st);
-                  hp += stBytes;
-                  aType[nFields] = (int)st;
-                  aOffset[nFields] = off;
-                  off += dlSerialTypeLen(st);
-                  nFields++;
-                }
-              }
-
-              /* Bind the column values */
-              sqlite3_reset(pUpd);
-              {
-                int bindIdx = 1;
-                int skipRow = 0;
-                for(sj=0; sj<nCols; sj++){
-                  if( aiColIdx[sj]<0 || !azColNames[sj] ) continue;
-                  if( aiColIdx[sj] < nFields ){
-                    bindRecordField(pUpd, bindIdx,
-                                    pVal, nVal,
-                                    aType[aiColIdx[sj]],
-                                    aOffset[aiColIdx[sj]]);
-                  }else{
-                    sqlite3_bind_null(pUpd, bindIdx);
-                  }
-                  bindIdx++;
-                }
-                /* Bind rowid */
-                sqlite3_bind_int64(pUpd, bindIdx, rowid);
-
-                if( !skipRow ){
-                  rc = sqlite3_step(pUpd);
-                  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
-                }
-              }
-            }
-
-            if( rc!=SQLITE_OK ) break;
-            res = 0;
-            rc = prollyCursorNext(&cur);
-            if( rc==SQLITE_OK && !prollyCursorIsValid(&cur) ) break;
+          ancTE = doltliteFindTableByName(aAncTables, nAncTables,
+                                           pAct->zTableName);
+          if( ancTE ){
+            memcpy(&ancRoot, &ancTE->root, sizeof(ProllyHash));
+          }else{
+            memset(&ancRoot, 0, sizeof(ancRoot));
           }
 
-          prollyCursorClose(&cur);
+          diffCtx.pUpd = pUpd;
+          diffCtx.aiColIdx = aiColIdx;
+          diffCtx.azColNames = azColNames;
+          diffCtx.nCols = nCols;
+
+          rc = prollyDiff(cs, pCache, &ancRoot, &theirTE->root,
+                          theirTE->flags, migrateDiffCb, &diffCtx);
+          if( rc!=SQLITE_OK ) rc = SQLITE_OK; /* best-effort */
         }
 
         sqlite3_finalize(pUpd);
@@ -1038,6 +1058,7 @@ next_action:
 
   freeSchemaEntries(aTheirSchema, nTheirSchema);
   sqlite3_free(aTheirTables);
+  sqlite3_free(aAncTables);
   return rc;
 }
 
@@ -1261,7 +1282,7 @@ static void doltliteMergeFunc(
         }
       }
       /* Migrate row data: fill in theirs' column values for the added columns */
-      rc = migrateSchemaRowData(db, &theirCatHash, aSchemaActions, nSchemaActions);
+      rc = migrateSchemaRowData(db, &ancCatHash, &theirCatHash, aSchemaActions, nSchemaActions);
       if( rc!=SQLITE_OK ) rc = SQLITE_OK; /* best-effort; don't block merge */
 
       /* Re-serialize the catalog to capture updated schema hashes after ALTERs */
