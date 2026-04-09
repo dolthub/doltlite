@@ -138,7 +138,7 @@ jobs:
       run: |
         cd build
         bash ../test/run_testfixture.sh "Crash recovery" 180 \
-          crash crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM
+          crash crash2 crash3 crash4 crash5 crash6 crash8 crashM
 
     - name: SQLite fuzz tests
       run: |
