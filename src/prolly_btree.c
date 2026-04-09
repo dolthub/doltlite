@@ -775,22 +775,7 @@ static void refreshCursorRoot(BtCursor *pCur){
   }
 }
 
-/*
-** Catalog serialization format (V2):
-**   Byte 0:       CATALOG_FORMAT_V2 magic (0x43)
-**   Bytes 1-4:    reserved (was iNextTable; now derived from max(iTable)+1)
-**   Bytes 5-8:    nTables (little-endian u32)
-**   Per table:
-**     4 bytes:    iTable (little-endian u32)
-**     1 byte:     flags (BTREE_INTKEY or BTREE_BLOBKEY)
-**     PROLLY_HASH_SIZE bytes: root hash
-**     PROLLY_HASH_SIZE bytes: schema hash
-**     2 bytes:    name length (little-endian u16)
-**     N bytes:    table name (not null-terminated)
-**
-** The catalog is stored as a content-addressed chunk. Its hash is persisted
-** in the manifest so the table registry can be reconstructed on open.
-*/
+/* Catalog serialization — see chunk_store.h for format docs. */
 /*
 ** Compare two TableEntry structs by name for deterministic catalog ordering.
 ** NULL names sort before all others (table 1 / sqlite_master has no name).
@@ -806,7 +791,7 @@ static int tableEntryNameCmp(const void *a, const void *b){
 
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   int nTables = pBtree->nTables;
-  int sz = 1 + 4 + 4;  /* header: magic + reserved + nTables */
+  int sz = CAT_HEADER_SIZE_V3;
   u8 *buf, *q;
   struct TableEntry *aSorted;  /* name-sorted copy for deterministic output */
   int i;
@@ -844,11 +829,7 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   }
   q = buf;
 
-  *q++ = CATALOG_FORMAT_V2;
-  /* Reserved (was iNextTable). Write zeros so the catalog hash is
-  ** deterministic — iNextTable is derived from max(iTable)+1 on load. */
-  q[0]=0; q[1]=0; q[2]=0; q[3]=0;
-  q += 4;
+  *q++ = CATALOG_FORMAT_V3;
   q[0]=(u8)nTables; q[1]=(u8)(nTables>>8);
   q[2]=(u8)(nTables>>16); q[3]=(u8)(nTables>>24);
   q += 4;
@@ -885,20 +866,18 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   const u8 *q = data;
   int nTables, i;
 
-  if( nData < 9 ) return SQLITE_CORRUPT;
-  if( data[0] != CATALOG_FORMAT_V2 ) return SQLITE_CORRUPT;
+  {
+    const u8 *pEntries;
+    if( !catalogParseHeader(data, nData, &nTables, &pEntries) ){
+      return SQLITE_CORRUPT;
+    }
+    q = pEntries;
+  }
 
-  
   sqlite3_free(pBtree->aTables);
   pBtree->aTables = 0;
   pBtree->nTables = 0;
   pBtree->nTablesAlloc = 0;
-
-  
-  q++;
-  q += 4; /* skip reserved (was iNextTable, now derived below) */
-  nTables = (int)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
-  q += 4;
   initDefaultMeta(pBtree);
 
   /* Derive BTREE_SCHEMA_VERSION from a hash of the entire catalog blob.

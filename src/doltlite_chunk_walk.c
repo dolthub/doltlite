@@ -27,9 +27,12 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_WORKING_SET;
   }
 
-  /* Catalog V2: starts with magic 0x43, has at least header size */
-  if( nData >= CAT_HEADER_SIZE && data[0] == CATALOG_FORMAT_V2 ){
-    return CHUNK_CATALOG;
+  /* Catalog V2/V3: recognized by catalogParseHeader */
+  {
+    int nTables; const u8 *pEntries;
+    if( catalogParseHeader(data, nData, &nTables, &pEntries) ){
+      return CHUNK_CATALOG;
+    }
   }
 
   /* Commit V2: version byte matches, minimum size 30 */
@@ -98,13 +101,8 @@ static int enumerateCatalogChildren(
   int i;
   int rc = SQLITE_OK;
 
-  nTables = (int)(data[CAT_NUM_TABLES_OFF]
-                | (data[CAT_NUM_TABLES_OFF+1]<<8)
-                | (data[CAT_NUM_TABLES_OFF+2]<<16)
-                | (data[CAT_NUM_TABLES_OFF+3]<<24));
+  if( !catalogParseHeader(data, nData, &nTables, &p) ) return SQLITE_OK;
   if( nTables < 0 || nTables >= 10000 ) return SQLITE_OK;
-
-  p = data + CAT_HEADER_SIZE;
   for(i=0; i<nTables && rc==SQLITE_OK; i++){
     int nameLen;
     ProllyHash tableRoot;
