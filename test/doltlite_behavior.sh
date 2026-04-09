@@ -80,7 +80,7 @@ rm -f "$DB"
 
 echo "--- Schema merge tests ---"
 
-# Test 4: Both branches add different columns to same table -> error
+# Test 4: Both branches add different columns to same table -> merge succeeds
 DB=/tmp/test_bhv4_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -98,11 +98,102 @@ echo "ALTER TABLE t ADD COLUMN y INTEGER;
 UPDATE t SET y=42;
 SELECT dolt_commit('-A','-m','add y');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Back to main, merge should fail with schema error
+# Back to main, merge should succeed with schema merge
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "schema_diverge_error" \
+run_test_match "schema_merge_both_add_col" \
   "SELECT dolt_merge('b1');" \
-  "schema" "$DB"
+  "^[0-9a-f]" "$DB"
+
+# Verify both columns are present after merge
+run_test_match "schema_merge_has_x_col" \
+  "SELECT x FROM t WHERE id=1;" \
+  "mx" "$DB"
+
+run_test "schema_merge_has_y_col" \
+  "SELECT y FROM t WHERE id=1;" \
+  "42" "$DB"
+
+rm -f "$DB"
+
+# Test 4b: Schema merge row data migration - multiple rows with both columns
+DB=/tmp/test_bhv4b_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+INSERT INTO t VALUES(2,'b');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Main adds column 'x' with data for all rows
+echo "ALTER TABLE t ADD COLUMN x TEXT;
+UPDATE t SET x='x1' WHERE id=1;
+UPDATE t SET x='x2' WHERE id=2;
+UPDATE t SET x='x3' WHERE id=3;
+SELECT dolt_commit('-A','-m','add x');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# b1 adds column 'y' with data for all rows
+echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN y INTEGER;
+UPDATE t SET y=10 WHERE id=1;
+UPDATE t SET y=20 WHERE id=2;
+UPDATE t SET y=30 WHERE id=3;
+SELECT dolt_commit('-A','-m','add y');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_merge('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Verify all rows have correct values for BOTH added columns
+run_test "schema_data_migrate_row1" \
+  "SELECT x, y FROM t WHERE id=1;" \
+  "x1|10" "$DB"
+
+run_test "schema_data_migrate_row2" \
+  "SELECT x, y FROM t WHERE id=2;" \
+  "x2|20" "$DB"
+
+run_test "schema_data_migrate_row3" \
+  "SELECT x, y FROM t WHERE id=3;" \
+  "x3|30" "$DB"
+
+# Verify original columns preserved
+run_test "schema_data_migrate_orig" \
+  "SELECT v FROM t WHERE id=1;" \
+  "a" "$DB"
+
+rm -f "$DB"
+
+# Test 4c: Schema merge with new rows added on branch with different column
+DB=/tmp/test_bhv4c_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'orig');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Main adds column 'x' and inserts a new row
+echo "ALTER TABLE t ADD COLUMN x TEXT;
+UPDATE t SET x='val_x' WHERE id=1;
+INSERT INTO t VALUES(2,'main_new','new_x');
+SELECT dolt_commit('-A','-m','add x with new row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# b1 adds column 'y' and inserts a different new row
+echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN y INTEGER;
+UPDATE t SET y=7 WHERE id=1;
+INSERT INTO t VALUES(3,'b1_new',77);
+SELECT dolt_commit('-A','-m','add y with new row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_merge('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Row 1 should have both x and y values
+run_test "schema_data_migrate_both_cols" \
+  "SELECT x, y FROM t WHERE id=1;" \
+  "val_x|7" "$DB"
+
+# Row 2 (added on main) should have x but NULL y
+run_test "schema_data_migrate_main_row" \
+  "SELECT x, typeof(y) FROM t WHERE id=2;" \
+  "new_x|null" "$DB"
 
 rm -f "$DB"
 
@@ -155,6 +246,79 @@ run_test_match "diff_tables_merge_ok" \
 
 run_test "diff_tables_t1" "SELECT v FROM t1;" "A" "$DB"
 run_test "diff_tables_t2" "SELECT v FROM t2;" "X" "$DB"
+
+rm -f "$DB"
+
+# Test 7: Both branches add same column with same definition -> merge succeeds
+DB=/tmp/test_bhv7s_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Main adds column 'z' TEXT
+echo "ALTER TABLE t ADD COLUMN z TEXT;
+UPDATE t SET z='main_z';
+SELECT dolt_commit('-A','-m','add z on main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# b1 adds same column 'z' TEXT
+echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN z TEXT;
+UPDATE t SET z='b1_z';
+SELECT dolt_commit('-A','-m','add z on b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+# Merge should succeed (same column added on both) — row conflict may occur
+# since both modified the same row with different z values, but schema merge OK
+run_test_match "schema_merge_same_col_same_def" \
+  "SELECT dolt_merge('b1');" \
+  "^[0-9a-f]|conflict" "$DB"
+
+rm -f "$DB"
+
+# Test 8: Both branches add same column with different types -> schema conflict
+DB=/tmp/test_bhv8s_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Main adds column 'w' as TEXT
+echo "ALTER TABLE t ADD COLUMN w TEXT;
+SELECT dolt_commit('-A','-m','add w TEXT');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# b1 adds column 'w' as INTEGER
+echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "ALTER TABLE t ADD COLUMN w INTEGER;
+SELECT dolt_commit('-A','-m','add w INTEGER');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "schema_merge_same_col_diff_type" \
+  "SELECT dolt_merge('b1');" \
+  "schema conflict" "$DB"
+
+rm -f "$DB"
+
+# Test 9: One branch adds column, other drops different column -> merge succeeds
+DB=/tmp/test_bhv9s_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, extra TEXT);
+INSERT INTO t VALUES(1,'a','e');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Main adds a new column
+echo "ALTER TABLE t ADD COLUMN newcol TEXT;
+SELECT dolt_commit('-A','-m','add newcol');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# b1 only changes data (can't drop columns easily in SQLite, so just data change)
+echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "UPDATE t SET v='b';
+SELECT dolt_commit('-A','-m','data change');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "schema_add_col_other_data" \
+  "SELECT dolt_merge('b1');" \
+  "^[0-9a-f]" "$DB"
 
 rm -f "$DB"
 

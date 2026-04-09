@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Tests for ALTER TABLE interactions with dolt operations (merge, cherry-pick,
+# Tests for Schema merge and ALTER TABLE interactions with dolt operations (merge, cherry-pick,
 # revert, diff, history, point-in-time queries, schema_diff).
 #
 DOLTLITE=./doltlite
@@ -94,8 +94,17 @@ UPDATE t SET col_feat='f';
 SELECT dolt_commit('-A','-m','feat adds col_feat');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# This is a schema conflict — different columns added on each side
-run_test_match "alter_diff_cols_merge" "SELECT dolt_merge('feat');" "conflict" "$DB"
+# Schema merge: different columns added on each side -> should succeed
+run_test_match "schema_diff_cols_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB"
+
+# Verify both columns present
+run_test_match "schema_diff_cols_has_col_main" \
+  "SELECT col_main FROM t WHERE id=1;" \
+  "m" "$DB"
+
+run_test_match "schema_diff_cols_has_col_feat" \
+  "SELECT typeof(col_feat) FROM t WHERE id=1;" \
+  "null|text" "$DB"
 
 rm -f "$DB"
 
@@ -290,6 +299,208 @@ run_test_match "schema_diff_alter_from_stmt" \
   "SELECT from_create_stmt FROM dolt_schema_diff('v1','v2') WHERE table_name='t';" \
   "v TEXT" "$DB"
 
+rm -f "$DB"
+
+# ============================================================
+# Schema Merge: column additions
+# ============================================================
+
+# Test 10: Both branches add different columns with data — merge succeeds
+DB=/tmp/test_schema_merge10_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "ALTER TABLE t ADD COLUMN x INTEGER;
+UPDATE t SET x=10 WHERE id=1;
+UPDATE t SET x=20 WHERE id=2;
+SELECT dolt_commit('-A','-m','main adds x');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN y TEXT;
+UPDATE t SET y='hello' WHERE id=1;
+UPDATE t SET y='world' WHERE id=2;
+SELECT dolt_commit('-A','-m','feat adds y');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "schema_merge_diff_cols_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB"
+run_test "schema_merge_diff_cols_x1" "SELECT x FROM t WHERE id=1;" "10" "$DB"
+run_test "schema_merge_diff_cols_x2" "SELECT x FROM t WHERE id=2;" "20" "$DB"
+run_test "schema_merge_diff_cols_y1" "SELECT typeof(y) FROM t WHERE id=1;" "text" "$DB"
+run_test "schema_merge_diff_cols_count" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='x' OR name='y';" \
+  "2" "$DB"
+rm -f "$DB"
+
+# Test 11: Both branches add same column with identical definition — convergent, succeeds
+DB=/tmp/test_schema_merge11_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_commit('-A','-m','main adds extra');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_commit('-A','-m','feat adds extra');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "schema_merge_same_col_converge" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB"
+run_test "schema_merge_same_col_exists" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra';" \
+  "1" "$DB"
+rm -f "$DB"
+
+# Test 12: Both branches add same column with different types — error
+DB=/tmp/test_schema_merge12_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "ALTER TABLE t ADD COLUMN extra INTEGER;
+SELECT dolt_commit('-A','-m','main adds extra INTEGER');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_commit('-A','-m','feat adds extra TEXT');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "schema_merge_same_col_diff_type" "SELECT dolt_merge('feat');" "schema conflict|conflict|Error" "$DB"
+rm -f "$DB"
+
+# ============================================================
+# Schema Merge: one-sided changes
+# ============================================================
+
+# Test 13: Only one branch adds column, other changes data — column propagated
+DB=/tmp/test_schema_merge13_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "INSERT INTO t VALUES(3,'c');
+UPDATE t SET v='a2' WHERE id=1;
+SELECT dolt_commit('-A','-m','main changes data');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN extra TEXT;
+UPDATE t SET extra='e1' WHERE id=1;
+UPDATE t SET extra='e2' WHERE id=2;
+SELECT dolt_commit('-A','-m','feat adds extra col');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "schema_merge_onesided_col_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB"
+run_test "schema_merge_onesided_col_exists" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra';" \
+  "1" "$DB"
+run_test "schema_merge_onesided_row_count" "SELECT count(*) FROM t;" "3" "$DB"
+run_test "schema_merge_onesided_data_main" "SELECT v FROM t WHERE id=1;" "a2" "$DB"
+rm -f "$DB"
+
+# Test 14: Only one branch drops a column (via recreating table), other doesn't touch schema
+DB=/tmp/test_schema_merge14_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, extra TEXT);
+INSERT INTO t VALUES(1,'a','e1');
+INSERT INTO t VALUES(2,'b','e2');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(3,'c','e3');
+SELECT dolt_commit('-A','-m','feat adds data');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Main just fast-forwards to feat since it has no changes
+run_test_match "schema_merge_ff_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]|Fast-forward" "$DB"
+run_test "schema_merge_ff_count" "SELECT count(*) FROM t;" "3" "$DB"
+rm -f "$DB"
+
+# ============================================================
+# Schema Merge: multiple tables
+# ============================================================
+
+# Test 15: Two branches each add columns to different tables — no conflict
+DB=/tmp/test_schema_merge15_$$.db; rm -f "$DB"
+echo "CREATE TABLE t1(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO t1 VALUES(1,'a');
+INSERT INTO t2 VALUES(1,'x');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "ALTER TABLE t1 ADD COLUMN col_main TEXT;
+UPDATE t1 SET col_main='m1' WHERE id=1;
+SELECT dolt_commit('-A','-m','main adds col to t1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+echo "SELECT dolt_checkout('feat');
+ALTER TABLE t2 ADD COLUMN col_feat TEXT;
+UPDATE t2 SET col_feat='f1' WHERE id=1;
+SELECT dolt_commit('-A','-m','feat adds col to t2');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "schema_merge_multi_table_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB"
+run_test "schema_merge_multi_t1_col" \
+  "SELECT count(*) FROM pragma_table_info('t1') WHERE name='col_main';" \
+  "1" "$DB"
+run_test "schema_merge_multi_t2_col" \
+  "SELECT count(*) FROM pragma_table_info('t2') WHERE name='col_feat';" \
+  "1" "$DB"
+run_test "schema_merge_multi_t1_data" "SELECT col_main FROM t1 WHERE id=1;" "m1" "$DB"
+rm -f "$DB"
+
+# ============================================================
+# Schema Merge: data integrity with many rows
+# ============================================================
+
+# Test 16: 50 rows, one branch adds a score column and sets all values + adds row 51.
+#           Other branch adds row 52. After merge: 52 rows, scores correct.
+DB=/tmp/test_schema_merge16_$$.db; rm -f "$DB"
+
+# Build insert statements for 50 rows
+INSERTS=""
+for i in $(seq 1 50); do
+  INSERTS="${INSERTS}INSERT INTO t VALUES($i,'row$i');"
+done
+
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+${INSERTS}
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Main branch: add score column, set values for all 50 rows, add row 51
+UPDATES=""
+for i in $(seq 1 50); do
+  UPDATES="${UPDATES}UPDATE t SET score=$((i*10)) WHERE id=$i;"
+done
+
+echo "ALTER TABLE t ADD COLUMN score INTEGER;
+${UPDATES}
+INSERT INTO t VALUES(51,'row51',510);
+SELECT dolt_commit('-A','-m','main adds score + row51');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+# Feat branch: add row 52
+echo "SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(52,'row52');
+SELECT dolt_commit('-A','-m','feat adds row52');
+SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "schema_merge_many_rows_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB"
+run_test "schema_merge_many_rows_count" "SELECT count(*) FROM t;" "52" "$DB"
+run_test "schema_merge_many_rows_score1" "SELECT score FROM t WHERE id=1;" "10" "$DB"
+run_test "schema_merge_many_rows_score25" "SELECT score FROM t WHERE id=25;" "250" "$DB"
+run_test "schema_merge_many_rows_score50" "SELECT score FROM t WHERE id=50;" "500" "$DB"
+run_test "schema_merge_many_rows_row51" "SELECT v||':'||score FROM t WHERE id=51;" "row51:510" "$DB"
+run_test "schema_merge_many_rows_row52_exists" "SELECT v FROM t WHERE id=52;" "row52" "$DB"
+run_test "schema_merge_many_rows_score_col" \
+  "SELECT count(*) FROM pragma_table_info('t') WHERE name='score';" \
+  "1" "$DB"
 rm -f "$DB"
 
 # ============================================================

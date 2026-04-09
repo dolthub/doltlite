@@ -11,12 +11,7 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-typedef struct SchemaEntry SchemaEntry;
-struct SchemaEntry {
-  char *zName;
-  char *zSql;       
-  char *zType;      
-};
+/* SchemaEntry struct is declared in doltlite_internal.h */
 
 typedef struct SchemaDiffRow SchemaDiffRow;
 struct SchemaDiffRow {
@@ -114,7 +109,7 @@ static int parseRecordHeader(
   return iField;
 }
 
-static int loadSchemaFromCatalog(
+int loadSchemaFromCatalog(
   sqlite3 *db,
   ChunkStore *cs,
   ProllyCache *pCache,
@@ -220,7 +215,7 @@ static int loadSchemaFromCatalog(
   return SQLITE_OK;
 }
 
-static void freeSchemaEntries(SchemaEntry *a, int n){
+void freeSchemaEntries(SchemaEntry *a, int n){
   int i;
   for(i=0; i<n; i++){
     sqlite3_free(a[i].zName);
@@ -230,7 +225,7 @@ static void freeSchemaEntries(SchemaEntry *a, int n){
   sqlite3_free(a);
 }
 
-static SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName){
+SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName){
   int i;
   for(i=0; i<n; i++){
     if( a[i].zName && strcmp(a[i].zName, zName)==0 ) return &a[i];

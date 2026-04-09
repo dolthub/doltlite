@@ -35,7 +35,7 @@ TESTS=(
   doltlite_gc.sh
   doltlite_structural.sh
   doltlite_savepoint.sh
-  doltlite_alter_merge.sh
+  doltlite_schema_merge.sh
   doltlite_branch_gc_stress.sh
 
   # Edge cases and integration

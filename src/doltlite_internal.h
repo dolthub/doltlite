@@ -74,4 +74,52 @@ void doltliteSetAuthorName(sqlite3 *db, const char *zName);
 const char *doltliteGetAuthorEmail(sqlite3 *db);
 void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
 
-#endif 
+/* Schema entry, used by schema_diff and merge */
+typedef struct SchemaEntry SchemaEntry;
+struct SchemaEntry {
+  char *zName;
+  char *zSql;
+  char *zType;
+};
+
+int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
+                          const ProllyHash *pCatHash,
+                          SchemaEntry **ppEntries, int *pnEntries);
+SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName);
+void freeSchemaEntries(SchemaEntry *a, int n);
+
+/* Schema merge actions returned from doltliteMergeCatalogs */
+typedef struct SchemaMergeAction SchemaMergeAction;
+struct SchemaMergeAction {
+  char *zTableName;
+  char **azAddColumns;   /* ALTER TABLE ADD COLUMN definitions */
+  int nAddColumns;
+};
+
+void freeSchemaMergeActions(SchemaMergeAction *a, int n);
+
+int doltliteMergeCatalogs(sqlite3 *db,
+  const ProllyHash *ancestor, const ProllyHash *ours,
+  const ProllyHash *theirs, ProllyHash *pMergedHash,
+  int *pnConflicts, char **pzErrMsg,
+  SchemaMergeAction **ppActions, int *pnActions);
+
+/* Schema merge helpers (doltlite_schema_merge.c) */
+struct ProllyDiffChange;
+
+struct MigrateDiffCtx {
+  sqlite3_stmt *pUpd;
+  int *aiColIdx;
+  char **azColNames;
+  int nCols;
+};
+
+char *extractColNameFromDef(const char *zDef);
+int bindRecordField(sqlite3_stmt *pStmt, int iParam, const u8 *pData,
+                    int nData, int serialType, int offset);
+int migrateDiffCb(void *pArg, const struct ProllyDiffChange *pChange);
+int migrateSchemaRowData(sqlite3 *db, const ProllyHash *pAncCatHash,
+                         const ProllyHash *pTheirCatHash,
+                         SchemaMergeAction *aActions, int nActions);
+
+#endif
