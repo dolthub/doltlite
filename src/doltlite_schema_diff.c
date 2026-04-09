@@ -49,65 +49,7 @@ static void freeSchemaDiffRows(SdCursor *c){
   c->nAlloc = 0;
 }
 
-static int sdResolveRef(ChunkStore *cs, const char *zRef, ProllyHash *pCommit){
-  int rc;
-  if( zRef && strlen(zRef)==40 ){
-    rc = doltliteHexToHash(zRef, pCommit);
-    if( rc==SQLITE_OK && chunkStoreHas(cs, pCommit) ) return SQLITE_OK;
-  }
-  rc = chunkStoreFindBranch(cs, zRef, pCommit);
-  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
-  rc = chunkStoreFindTag(cs, zRef, pCommit);
-  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
-  return SQLITE_NOTFOUND;
-}
 
-static int parseRecordHeader(
-  const u8 *pData, int nData,
-  int *aType, int *aOffset, int maxFields
-){
-  int iField = 0;
-  const u8 *p = pData;
-  const u8 *pDataEnd = pData + nData;
-  const u8 *pEnd;
-  int off;
-  u64 hdrSize;
-  int hdrBytes;
-
-  if( nData < 1 ) return 0;
-
-  
-  hdrBytes = dlReadVarint(p, pDataEnd, &hdrSize);
-  p += hdrBytes;
-
-  pEnd = pData + (int)hdrSize;
-  off = (int)hdrSize;
-
-  while( p < pEnd && p < pDataEnd && iField < maxFields ){
-    u64 st;
-    int stBytes = dlReadVarint(p, pEnd, &st);
-    p += stBytes;
-
-    aType[iField] = (int)st;
-    aOffset[iField] = off;
-
-    
-    if( st==0 ) {  }
-    else if( st==1 ) off += 1;
-    else if( st==2 ) off += 2;
-    else if( st==3 ) off += 3;
-    else if( st==4 ) off += 4;
-    else if( st==5 ) off += 6;
-    else if( st==6 ) off += 8;
-    else if( st==7 ) off += 8;
-    else if( st==8 || st==9 ) {  }
-    else if( st>=12 && (st&1)==0 ) off += ((int)st-12)/2;  
-    else if( st>=13 && (st&1)==1 ) off += ((int)st-13)/2;  
-    iField++;
-  }
-
-  return iField;
-}
 
 int loadSchemaFromCatalog(
   sqlite3 *db,
@@ -151,16 +93,16 @@ int loadSchemaFromCatalog(
 
   while( prollyCursorIsValid(&cur) ){
     const u8 *pVal; int nVal;
-    int aType[5], aOffset[5];
-    int nFields = 0;
+    DoltliteRecordInfo ri;
 
     prollyCursorValue(&cur, &pVal, &nVal);
 
     if( pVal && nVal > 0 ){
-      nFields = parseRecordHeader(pVal, nVal, aType, aOffset, 5);
+      doltliteParseRecord(pVal, nVal, &ri);
 
-      
-      if( nFields >= 5 ){
+      if( ri.nField >= 5 ){
+        int *aType = ri.aType;
+        int *aOffset = ri.aOffset;
         char *zType = 0, *zName = 0, *zSql = 0;
 
         
@@ -408,7 +350,7 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     const char *zTableFilter = 0;
     if( zFromRef && !zToRef ){
       ProllyHash testHash;
-      int resolved = sdResolveRef(cs, zFromRef, &testHash);
+      int resolved = doltliteResolveRef(db,zFromRef, &testHash);
       if( resolved!=SQLITE_OK ){
         
         zTableFilter = zFromRef;
@@ -418,14 +360,10 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
 
     
     if( zFromRef ){
-    rc = sdResolveRef(cs, zFromRef, &fromCommit);
+    rc = doltliteResolveRef(db,zFromRef, &fromCommit);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
-    if( prollyHashIsEmpty(&fromCommit) ) return SQLITE_OK;
     memset(&commit, 0, sizeof(commit));
-    rc = chunkStoreGet(cs, &fromCommit, &data, &nData);
-    if( rc!=SQLITE_OK ) return SQLITE_OK;
-    rc = doltliteCommitDeserialize(data, nData, &commit);
-    sqlite3_free(data); data = 0;
+    rc = doltliteLoadCommit(db, &fromCommit, &commit);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
     memcpy(&fromCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
@@ -437,14 +375,10 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
 
   
   if( zToRef ){
-    rc = sdResolveRef(cs, zToRef, &toCommit);
+    rc = doltliteResolveRef(db,zToRef, &toCommit);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
-    if( prollyHashIsEmpty(&toCommit) ) return SQLITE_OK;
     memset(&commit, 0, sizeof(commit));
-    rc = chunkStoreGet(cs, &toCommit, &data, &nData);
-    if( rc!=SQLITE_OK ) return SQLITE_OK;
-    rc = doltliteCommitDeserialize(data, nData, &commit);
-    sqlite3_free(data); data = 0;
+    rc = doltliteLoadCommit(db, &toCommit, &commit);
     if( rc!=SQLITE_OK ) return SQLITE_OK;
     memcpy(&toCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);

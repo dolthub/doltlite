@@ -14,120 +14,7 @@
 #include <string.h>
 #include <time.h>
 
-#define DT_MAX_COLS 64
 
-typedef struct RecordInfo RecordInfo;
-struct RecordInfo {
-  int nField;
-  int aType[DT_MAX_COLS];
-  int aOffset[DT_MAX_COLS];
-  int bodyStart;
-};
-
-static void dtParseRecord(const u8 *pData, int nData, RecordInfo *pInfo){
-  const u8 *p = pData;
-  const u8 *pEnd = pData + nData;
-  u64 hdrSize;
-  int hdrBytes;
-  const u8 *pHdrEnd;
-  int off;
-
-  memset(pInfo, 0, sizeof(*pInfo));
-  if( !pData || nData < 1 ) return;
-
-  hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
-  p += hdrBytes;
-  pHdrEnd = pData + (int)hdrSize;
-  off = (int)hdrSize;
-  pInfo->bodyStart = off;
-
-  while( p < pHdrEnd && p < pEnd && pInfo->nField < DT_MAX_COLS ){
-    u64 st;
-    int stBytes = dlReadVarint(p, pHdrEnd, &st);
-    p += stBytes;
-
-    pInfo->aType[pInfo->nField] = (int)st;
-    pInfo->aOffset[pInfo->nField] = off;
-
-    if( st==0 ) {}
-    else if( st==1 ) off += 1;
-    else if( st==2 ) off += 2;
-    else if( st==3 ) off += 3;
-    else if( st==4 ) off += 4;
-    else if( st==5 ) off += 6;
-    else if( st==6 ) off += 8;
-    else if( st==7 ) off += 8;
-    else if( st==8 || st==9 ) {}
-    else if( st>=12 && (st&1)==0 ) off += ((int)st-12)/2;
-    else if( st>=13 && (st&1)==1 ) off += ((int)st-13)/2;
-
-    pInfo->nField++;
-  }
-}
-
-static void dtResultField(
-  sqlite3_context *ctx,
-  const u8 *pData, int nData,
-  int fieldType, int fieldOffset
-){
-  int st = fieldType;
-
-  if( st==0 ){ sqlite3_result_null(ctx); return; }
-  if( st==8 ){ sqlite3_result_int(ctx, 0); return; }
-  if( st==9 ){ sqlite3_result_int(ctx, 1); return; }
-
-  if( st>=1 && st<=6 ){
-    static const int sizes[] = {0,1,2,3,4,6,8};
-    int nBytes = sizes[st];
-    if( fieldOffset + nBytes <= nData ){
-      const u8 *p = pData + fieldOffset;
-      i64 v = (p[0] & 0x80) ? -1 : 0;
-      int i;
-      for(i=0; i<nBytes; i++) v = (v<<8) | p[i];
-      sqlite3_result_int64(ctx, v);
-    }else{
-      sqlite3_result_null(ctx);
-    }
-    return;
-  }
-
-  if( st==7 ){
-    if( fieldOffset + 8 <= nData ){
-      const u8 *p = pData + fieldOffset;
-      double v;
-      u64 bits = 0;
-      int i;
-      for(i=0; i<8; i++) bits = (bits<<8) | p[i];
-      memcpy(&v, &bits, 8);
-      sqlite3_result_double(ctx, v);
-    }else{
-      sqlite3_result_null(ctx);
-    }
-    return;
-  }
-
-  if( st>=13 && (st&1)==1 ){
-    int len = (st-13)/2;
-    if( fieldOffset + len <= nData ){
-      sqlite3_result_text(ctx, (const char*)(pData+fieldOffset), len, SQLITE_TRANSIENT);
-    }else{
-      sqlite3_result_null(ctx);
-    }
-    return;
-  }
-
-  if( st>=12 && (st&1)==0 ){
-    int len = (st-12)/2;
-    if( fieldOffset + len <= nData ){
-      sqlite3_result_blob(ctx, pData+fieldOffset, len, SQLITE_TRANSIENT);
-    }else{
-      sqlite3_result_null(ctx);
-    }
-    return;
-  }
-
-  sqlite3_result_null(ctx);
-}
 
 static char *buildDiffSchema(DoltliteColInfo *ci){
   
@@ -254,20 +141,6 @@ static void freeAuditRows(DiffTblCursor *pCur){
   pCur->nAlloc = 0;
 }
 
-static int findTableRootByName(
-  struct TableEntry *a, int n, const char *zName,
-  ProllyHash *pRoot, u8 *pFlags
-){
-  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
-  if( e ){
-    memcpy(pRoot, &e->root, sizeof(ProllyHash));
-    if( pFlags ) *pFlags = e->flags;
-    return SQLITE_OK;
-  }
-  memset(pRoot, 0, sizeof(ProllyHash));
-  if( pFlags ) *pFlags = 0;
-  return SQLITE_NOTFOUND;
-}
 
 static int walkHistoryAndDiff(
   DiffTblCursor *pCur, sqlite3 *db, const char *zTableName
@@ -285,7 +158,6 @@ static int walkHistoryAndDiff(
   if( prollyHashIsEmpty(&curHash) ) return SQLITE_OK;
 
   while( !prollyHashIsEmpty(&curHash) ){
-    u8 *data = 0; int nData = 0;
     DoltliteCommit commit;
     ProllyHash curRoot, parentRoot;
     u8 flags = 0;
@@ -293,10 +165,7 @@ static int walkHistoryAndDiff(
     char parentHex[PROLLY_HASH_SIZE*2+1];
 
     memset(&commit, 0, sizeof(commit));
-    rc = chunkStoreGet(cs, &curHash, &data, &nData);
-    if( rc!=SQLITE_OK ) break;
-    rc = doltliteCommitDeserialize(data, nData, &commit);
-    sqlite3_free(data);
+    rc = doltliteLoadCommit(db, &curHash, &commit);
     if( rc!=SQLITE_OK ) break;
 
     doltliteHashToHex(&curHash, curHex);
@@ -305,7 +174,7 @@ static int walkHistoryAndDiff(
       struct TableEntry *aTables = 0; int nTables = 0;
       rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
       if( rc==SQLITE_OK ){
-        findTableRootByName(aTables, nTables, zTableName, &curRoot, &flags);
+        doltliteFindTableRootByName(aTables, nTables, zTableName, &curRoot, &flags);
         sqlite3_free(aTables);
       }else{
         memset(&curRoot, 0, sizeof(curRoot));
@@ -314,14 +183,9 @@ static int walkHistoryAndDiff(
 
     if( !prollyHashIsEmpty(&commit.parentHash) ){
       DoltliteCommit parentCommit;
-      u8 *pdata = 0; int npdata = 0;
 
       memset(&parentCommit, 0, sizeof(parentCommit));
-      rc = chunkStoreGet(cs, &commit.parentHash, &pdata, &npdata);
-      if( rc==SQLITE_OK ){
-        rc = doltliteCommitDeserialize(pdata, npdata, &parentCommit);
-        sqlite3_free(pdata);
-      }
+      rc = doltliteLoadCommit(db, &commit.parentHash, &parentCommit);
 
       if( rc==SQLITE_OK ){
         doltliteHashToHex(&commit.parentHash, parentHex);
@@ -330,7 +194,7 @@ static int walkHistoryAndDiff(
           struct TableEntry *aPT = 0; int nPT = 0;
           rc = doltliteLoadCatalog(db, &parentCommit.catalogHash, &aPT, &nPT, 0);
           if( rc==SQLITE_OK ){
-            findTableRootByName(aPT, nPT, zTableName, &parentRoot, 0);
+            doltliteFindTableRootByName(aPT, nPT, zTableName, &parentRoot, 0);
             sqlite3_free(aPT);
           }else{
             memset(&parentRoot, 0, sizeof(parentRoot));
@@ -508,10 +372,10 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     }else{
       
       if( r->pOldVal && r->nOldVal > 0 ){
-        RecordInfo ri;
-        dtParseRecord(r->pOldVal, r->nOldVal, &ri);
+        DoltliteRecordInfo ri;
+        doltliteParseRecord(r->pOldVal, r->nOldVal, &ri);
         if( colIdx < ri.nField ){
-          dtResultField(ctx, r->pOldVal, r->nOldVal,
+          doltliteResultField(ctx, r->pOldVal, r->nOldVal,
                         ri.aType[colIdx], ri.aOffset[colIdx]);
         }else{
           sqlite3_result_null(ctx);
@@ -531,10 +395,10 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       }
     }else{
       if( r->pNewVal && r->nNewVal > 0 ){
-        RecordInfo ri;
-        dtParseRecord(r->pNewVal, r->nNewVal, &ri);
+        DoltliteRecordInfo ri;
+        doltliteParseRecord(r->pNewVal, r->nNewVal, &ri);
         if( colIdx < ri.nField ){
-          dtResultField(ctx, r->pNewVal, r->nNewVal,
+          doltliteResultField(ctx, r->pNewVal, r->nNewVal,
                         ri.aType[colIdx], ri.aOffset[colIdx]);
         }else{
           sqlite3_result_null(ctx);
@@ -591,39 +455,7 @@ static sqlite3_module diffTableModule = {
 };
 
 void doltliteRegisterDiffTables(sqlite3 *db){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash headCommit;
-  u8 *data = 0; int nData = 0;
-  DoltliteCommit commit;
-  struct TableEntry *aTables = 0;
-  int nTables = 0, i, rc;
-
-  if( !cs ) return;
-  doltliteGetSessionHead(db, &headCommit);
-  if( prollyHashIsEmpty(&headCommit) ) return;
-
-  rc = chunkStoreGet(cs, &headCommit, &data, &nData);
-  if( rc!=SQLITE_OK ) return;
-
-  memset(&commit, 0, sizeof(commit));
-  rc = doltliteCommitDeserialize(data, nData, &commit);
-  sqlite3_free(data);
-  if( rc!=SQLITE_OK ) return;
-
-  rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
-  doltliteCommitClear(&commit);
-  if( rc!=SQLITE_OK ) return;
-
-  for(i=0; i<nTables; i++){
-    if( aTables[i].zName && aTables[i].iTable > 1 ){
-      char *zModName = sqlite3_mprintf("dolt_diff_%s", aTables[i].zName);
-      if( zModName ){
-        sqlite3_create_module(db, zModName, &diffTableModule, 0);
-        sqlite3_free(zModName);
-      }
-    }
-  }
-  sqlite3_free(aTables);
+  doltliteForEachUserTable(db, "dolt_diff_", &diffTableModule);
 }
 
-#endif 
+#endif

@@ -568,9 +568,9 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
 PROLLY_OBJS = prolly_hash.o prolly_hashset.o prolly_arena.o prolly_node.o prolly_cache.o \
               chunk_store.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_btree.o pager_shim.o sortkey.o \
-              doltlite.o doltlite_commit.o doltlite_log.o doltlite_status.o \
+              doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_schema_merge.o doltlite_conflicts.o \
-              doltlite_gc.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_record.o \
+              doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_record.o \
               doltlite_remote.o doltlite_remote_sql.o \
               doltlite_http_remote.o doltlite_remotesrv.o
 
@@ -1346,6 +1346,9 @@ doltlite_log.o:	$(TOP)/src/doltlite_log.c $(DEPS_OBJ_COMMON)
 doltlite_status.o:	$(TOP)/src/doltlite_status.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_status.c
 
+doltlite_ref.o:	$(TOP)/src/doltlite_ref.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_ref.c
+
 doltlite_diff.o:	$(TOP)/src/doltlite_diff.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_diff.c
 
@@ -1363,6 +1366,9 @@ doltlite_conflicts.o:	$(TOP)/src/doltlite_conflicts.c $(DEPS_OBJ_COMMON)
 
 doltlite_gc.o:	$(TOP)/src/doltlite_gc.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_gc.c
+
+doltlite_chunk_walk.o:	$(TOP)/src/doltlite_chunk_walk.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_chunk_walk.c
 
 doltlite_diff_table.o:	$(TOP)/src/doltlite_diff_table.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_diff_table.c

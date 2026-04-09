@@ -111,16 +111,10 @@ static int tagColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
       break;
     }
     case 2: {
-      
-      u8 *data=0; int nData=0;
-      int rc = chunkStoreGet(cs, &t->commitHash, &data, &nData);
-      if( rc==SQLITE_OK && data ){
-        DoltliteCommit commit;
-        if( doltliteCommitDeserialize(data, nData, &commit)==SQLITE_OK ){
-          sqlite3_result_text(ctx, commit.zMessage?commit.zMessage:"", -1, SQLITE_TRANSIENT);
-          doltliteCommitClear(&commit);
-        }
-        sqlite3_free(data);
+      DoltliteCommit commit;
+      if( doltliteLoadCommit(v->db, &t->commitHash, &commit)==SQLITE_OK ){
+        sqlite3_result_text(ctx, commit.zMessage?commit.zMessage:"", -1, SQLITE_TRANSIENT);
+        doltliteCommitClear(&commit);
       }
       break;
     }

@@ -77,13 +77,8 @@ static int checkoutLoadAndApply(
   /* Load the committed catalog for this branch. */
   {
     DoltliteCommit commit;
-    u8 *data = 0;
-    int nData = 0;
 
-    rc = chunkStoreGet(cs, pCommitHash, &data, &nData);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = doltliteCommitDeserialize(data, nData, &commit);
-    sqlite3_free(data);
+    rc = doltliteLoadCommit(db, pCommitHash, &commit);
     if( rc!=SQLITE_OK ) return rc;
 
     memcpy(&committedCatHash, &commit.catalogHash, sizeof(ProllyHash));

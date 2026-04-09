@@ -13,47 +13,6 @@
 #include <string.h>
 #include <time.h>
 
-#define HT_MAX_COLS 64
-
-typedef struct HtRecInfo HtRecInfo;
-struct HtRecInfo { int nField; int aType[HT_MAX_COLS]; int aOffset[HT_MAX_COLS]; };
-
-static void htParseRecord(const u8 *pData, int nData, HtRecInfo *ri){
-  const u8 *p=pData, *pEnd=pData+nData;
-  u64 hdrSize; int hdrBytes, off;
-  memset(ri,0,sizeof(*ri));
-  if(!pData||nData<1) return;
-  hdrBytes=dlReadVarint(p,pEnd,&hdrSize); p+=hdrBytes;
-  off=(int)hdrSize;
-  while(p<pData+hdrSize && p<pEnd && ri->nField<HT_MAX_COLS){
-    u64 st; int stBytes=dlReadVarint(p,pData+hdrSize,&st); p+=stBytes;
-    ri->aType[ri->nField]=(int)st; ri->aOffset[ri->nField]=off;
-    off += dlSerialTypeLen(st);
-    ri->nField++;
-  }
-}
-
-static void htResultField(sqlite3_context *ctx, const u8 *pData, int nData, int st, int off){
-  if(st==0){sqlite3_result_null(ctx);return;}
-  if(st==8){sqlite3_result_int(ctx,0);return;}
-  if(st==9){sqlite3_result_int(ctx,1);return;}
-  if(st>=1&&st<=6){
-    static const int sz[]={0,1,2,3,4,6,8}; int nB=sz[st];
-    if(off+nB<=nData){const u8*q=pData+off;i64 v=(q[0]&0x80)?-1:0;int i;
-      for(i=0;i<nB;i++)v=(v<<8)|q[i];sqlite3_result_int64(ctx,v);}
-    else sqlite3_result_null(ctx); return;
-  }
-  if(st==7){if(off+8<=nData){const u8*q=pData+off;double v;u64 bits=0;int i;
-    for(i=0;i<8;i++)bits=(bits<<8)|q[i];memcpy(&v,&bits,8);
-    sqlite3_result_double(ctx,v);}else sqlite3_result_null(ctx);return;}
-  if(st>=13&&(st&1)==1){int len=(st-13)/2;
-    if(off+len<=nData)sqlite3_result_text(ctx,(const char*)(pData+off),len,SQLITE_TRANSIENT);
-    else sqlite3_result_null(ctx);return;}
-  if(st>=12&&(st&1)==0){int len=(st-12)/2;
-    if(off+len<=nData)sqlite3_result_blob(ctx,pData+off,len,SQLITE_TRANSIENT);
-    else sqlite3_result_null(ctx);return;}
-  sqlite3_result_null(ctx);
-}
 
 static char *htBuildSchema(DoltliteColInfo *ci){
   int i, sz=256;
@@ -105,17 +64,6 @@ static void freeHistoryRows(HistCursor *c){
   c->aRows=0; c->nRows=0; c->nAlloc=0;
 }
 
-static int htFindRoot(struct TableEntry *a, int n, const char *zName,
-                      ProllyHash *pRoot, u8 *pFlags){
-  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
-  if( e ){
-    memcpy(pRoot, &e->root, sizeof(ProllyHash));
-    if( pFlags ) *pFlags = e->flags;
-    return SQLITE_OK;
-  }
-  memset(pRoot,0,sizeof(ProllyHash)); if(pFlags)*pFlags=0;
-  return SQLITE_NOTFOUND;
-}
 
 static int htScanAtCommit(
   HistCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
@@ -172,7 +120,6 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
 
   while(qHead<qTail){
     ProllyHash cur=queue[qHead++];
-    u8 *data=0; int nData=0;
     DoltliteCommit commit;
     ProllyHash tableRoot; u8 flags=0;
     char hexBuf[PROLLY_HASH_SIZE*2+1];
@@ -192,10 +139,7 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
     visited[nVisited++]=cur;
 
     memset(&commit,0,sizeof(commit));
-    rc=chunkStoreGet(cs,&cur,&data,&nData);
-    if(rc!=SQLITE_OK) break;
-    rc=doltliteCommitDeserialize(data,nData,&commit);
-    sqlite3_free(data);
+    rc=doltliteLoadCommit(db,&cur,&commit);
     if(rc!=SQLITE_OK) break;
 
     doltliteHashToHex(&cur,hexBuf);
@@ -203,7 +147,7 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
       struct TableEntry *aT=0; int nT=0;
       rc=doltliteLoadCatalog(db,&commit.catalogHash,&aT,&nT,0);
       if(rc==SQLITE_OK){
-        if(htFindRoot(aT,nT,zTableName,&tableRoot,&flags)==SQLITE_OK)
+        if(doltliteFindTableRootByName(aT,nT,zTableName,&tableRoot,&flags)==SQLITE_OK)
           htScanAtCommit(pCur,cs,pCache,&tableRoot,flags,hexBuf,commit.zName,commit.timestamp);
         sqlite3_free(aT);
       }
@@ -314,8 +258,8 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     }else{
       
       if(r->pVal&&r->nVal>0){
-        HtRecInfo ri; htParseRecord(r->pVal,r->nVal,&ri);
-        if(col<ri.nField) htResultField(ctx,r->pVal,r->nVal,ri.aType[col],ri.aOffset[col]);
+        DoltliteRecordInfo ri; doltliteParseRecord(r->pVal,r->nVal,&ri);
+        if(col<ri.nField) doltliteResultField(ctx,r->pVal,r->nVal,ri.aType[col],ri.aOffset[col]);
         else sqlite3_result_null(ctx);
       }else sqlite3_result_null(ctx);
     }
@@ -350,25 +294,7 @@ static sqlite3_module historyModule = {
 };
 
 void doltliteRegisterHistoryTables(sqlite3 *db){
-  ProllyHash headCommit; u8 *data=0;int nData=0;
-  DoltliteCommit commit; struct TableEntry *aT=0;int nT=0,i,rc;
-  ChunkStore *cs=doltliteGetChunkStore(db);
-  if(!cs) return;
-  doltliteGetSessionHead(db,&headCommit);
-  if(prollyHashIsEmpty(&headCommit)) return;
-  rc=chunkStoreGet(cs,&headCommit,&data,&nData); if(rc!=SQLITE_OK) return;
-  memset(&commit,0,sizeof(commit));
-  rc=doltliteCommitDeserialize(data,nData,&commit); sqlite3_free(data);
-  if(rc!=SQLITE_OK) return;
-  rc=doltliteLoadCatalog(db,&commit.catalogHash,&aT,&nT,0);
-  doltliteCommitClear(&commit); if(rc!=SQLITE_OK) return;
-  for(i=0;i<nT;i++){
-    if(aT[i].zName&&aT[i].iTable>1){
-      char *zMod=sqlite3_mprintf("dolt_history_%s",aT[i].zName);
-      if(zMod){sqlite3_create_module(db,zMod,&historyModule,0);sqlite3_free(zMod);}
-    }
-  }
-  sqlite3_free(aT);
+  doltliteForEachUserTable(db, "dolt_history_", &historyModule);
 }
 
 #endif 

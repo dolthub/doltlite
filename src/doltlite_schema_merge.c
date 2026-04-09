@@ -3,7 +3,7 @@
 **
 ** Functions that handle data migration after a schema merge:
 **   extractColNameFromDef()  - parse column name from ADD COLUMN def
-**   bindRecordField()        - bind a field from a SQLite record blob
+**   doltliteBindField()        - bind a field from a SQLite record blob
 **   migrateDiffCb()          - diff callback for schema data migration
 **   migrateSchemaRowData()   - top-level migration driver
 */
@@ -62,64 +62,7 @@ char *extractColNameFromDef(const char *zDef){
 ** parameter. The field is identified by its serial type and offset within
 ** the record data.
 */
-int bindRecordField(
-  sqlite3_stmt *pStmt,
-  int iParam,             /* 1-based bind parameter index */
-  const u8 *pData,
-  int nData,
-  int serialType,
-  int offset
-){
-  if( serialType==0 ){
-    return sqlite3_bind_null(pStmt, iParam);
-  }
-  if( serialType==8 ){
-    return sqlite3_bind_int(pStmt, iParam, 0);
-  }
-  if( serialType==9 ){
-    return sqlite3_bind_int(pStmt, iParam, 1);
-  }
-  if( serialType>=1 && serialType<=6 ){
-    static const int sz[] = {0,1,2,3,4,6,8};
-    int nB = sz[serialType];
-    if( offset+nB <= nData ){
-      const u8 *q = pData + offset;
-      i64 v = (q[0] & 0x80) ? -1 : 0;
-      int i;
-      for(i=0; i<nB; i++) v = (v<<8) | q[i];
-      return sqlite3_bind_int64(pStmt, iParam, v);
-    }
-    return sqlite3_bind_null(pStmt, iParam);
-  }
-  if( serialType==7 ){
-    if( offset+8 <= nData ){
-      const u8 *q = pData + offset;
-      double v;
-      u64 bits = 0;
-      int i;
-      for(i=0; i<8; i++) bits = (bits<<8) | q[i];
-      memcpy(&v, &bits, 8);
-      return sqlite3_bind_double(pStmt, iParam, v);
-    }
-    return sqlite3_bind_null(pStmt, iParam);
-  }
-  if( serialType>=13 && (serialType&1)==1 ){
-    int len = (serialType-13)/2;
-    if( offset+len <= nData ){
-      return sqlite3_bind_text(pStmt, iParam,
-                               (const char*)(pData+offset), len, SQLITE_TRANSIENT);
-    }
-    return sqlite3_bind_null(pStmt, iParam);
-  }
-  if( serialType>=12 && (serialType&1)==0 ){
-    int len = (serialType-12)/2;
-    if( offset+len <= nData ){
-      return sqlite3_bind_blob(pStmt, iParam, pData+offset, len, SQLITE_TRANSIENT);
-    }
-    return sqlite3_bind_null(pStmt, iParam);
-  }
-  return sqlite3_bind_null(pStmt, iParam);
-}
+/* bindRecordField removed — use doltliteBindField() from doltlite_record.c */
 
 /*
 ** Diff callback for schema data migration. Called for each row that
@@ -167,7 +110,7 @@ int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
   for(sj=0; sj<ctx->nCols; sj++){
     if( ctx->aiColIdx[sj]<0 || !ctx->azColNames[sj] ) continue;
     if( ctx->aiColIdx[sj] < nFields ){
-      bindRecordField(ctx->pUpd, bindIdx, pVal, nVal,
+      doltliteBindField(ctx->pUpd, bindIdx, pVal, nVal,
                       aType[ctx->aiColIdx[sj]],
                       aOffset[ctx->aiColIdx[sj]]);
     }else{

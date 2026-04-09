@@ -172,64 +172,27 @@ static void freeDiffRows(DoltliteDiffCursor *pCur){
   pCur->nRows = 0;
 }
 
-static int findTableRoot(struct TableEntry *a, int n, Pgno iTable,
-                         ProllyHash *pRoot, u8 *pFlags){
-  struct TableEntry *e = doltliteFindTableByNumber(a, n, iTable);
-  if( e ){
-    memcpy(pRoot, &e->root, sizeof(ProllyHash));
-    if( pFlags ) *pFlags = e->flags;
-    return SQLITE_OK;
-  }
-  memset(pRoot, 0, sizeof(ProllyHash));
-  if( pFlags ) *pFlags = 0;
-  return SQLITE_NOTFOUND;
-}
-
-static int resolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  int rc;
-  
-  if( zRef && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
-    rc = doltliteHexToHash(zRef, pCommit);
-    if( rc==SQLITE_OK && chunkStoreHas(cs, pCommit) ) return SQLITE_OK;
-  }
-  
-  rc = chunkStoreFindBranch(cs, zRef, pCommit);
-  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
-  
-  rc = chunkStoreFindTag(cs, zRef, pCommit);
-  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
-  return SQLITE_NOTFOUND;
-}
-
 static int resolveCommitToTableRoot(
   sqlite3 *db, const char *zRef, Pgno iTable,
   ProllyHash *pRoot, u8 *pFlags
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash commitHash;
-  u8 *data = 0;
-  int nData = 0;
   DoltliteCommit commit;
   struct TableEntry *aTables = 0;
   int nTables = 0;
   int rc;
 
-  rc = resolveRef(db, zRef, &commitHash);
+  rc = doltliteResolveRef(db, zRef, &commitHash);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = chunkStoreGet(cs, &commitHash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = doltliteCommitDeserialize(data, nData, &commit);
-  sqlite3_free(data);
+  rc = doltliteLoadCommit(db, &commitHash, &commit);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
   doltliteCommitClear(&commit);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = findTableRoot(aTables, nTables, iTable, pRoot, pFlags);
+  rc = doltliteFindTableRoot(aTables, nTables, iTable, pRoot, pFlags);
   sqlite3_free(aTables);
   return rc;
 }
@@ -369,7 +332,7 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
     if( rc==SQLITE_OK ){
       rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
       if( rc==SQLITE_OK ){
-        findTableRoot(aHead, nHead, iTable, &oldRoot, &flags);
+        doltliteFindTableRoot(aHead, nHead, iTable, &oldRoot, &flags);
         sqlite3_free(aHead);
       }
     }
@@ -393,7 +356,7 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
       if( rc==SQLITE_OK ){
         rc = doltliteLoadCatalog(db, &workingCatHash, &aWork, &nWork, 0);
         if( rc==SQLITE_OK ){
-          findTableRoot(aWork, nWork, iTable, &newRoot, &flags);
+          doltliteFindTableRoot(aWork, nWork, iTable, &newRoot, &flags);
           sqlite3_free(aWork);
         }
       }

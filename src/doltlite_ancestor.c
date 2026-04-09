@@ -103,20 +103,8 @@ static int hashSetContains(const HashSet *hs, const ProllyHash *h){
 
 static int loadCommitByHash(sqlite3 *db, const ProllyHash *hash,
                             DoltliteCommit *pCommit){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  u8 *data = 0;
-  int nData = 0;
-  int rc;
-
-  if( !cs ) return SQLITE_ERROR;
   if( prollyHashIsEmpty(hash) ) return SQLITE_NOTFOUND;
-
-  rc = chunkStoreGet(cs, hash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = doltliteCommitDeserialize(data, nData, pCommit);
-  sqlite3_free(data);
-  return rc;
+  return doltliteLoadCommit(db, hash, pCommit);
 }
 
 static int ancestorBfsCollect(
@@ -247,24 +235,6 @@ int doltliteFindAncestor(
 extern int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 extern int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 
-static int resolveCommitRef(sqlite3 *db, const char *zRef, ProllyHash *pHash){
-  ChunkStore *cs;
-  
-  if( zRef && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
-    if( doltliteHexToHash(zRef, pHash)==SQLITE_OK ) return SQLITE_OK;
-  }
-  cs = doltliteGetChunkStore(db);
-  if( !cs ) return SQLITE_ERROR;
-  
-  if( chunkStoreFindBranch(cs, zRef, pHash)==SQLITE_OK ){
-    return SQLITE_OK;
-  }
-  
-  if( chunkStoreFindTag(cs, zRef, pHash)==SQLITE_OK ){
-    return SQLITE_OK;
-  }
-  return SQLITE_ERROR;
-}
 
 static void doltMergeBaseFunc(
   sqlite3_context *ctx,
@@ -288,12 +258,12 @@ static void doltMergeBaseFunc(
     return;
   }
 
-  rc = resolveCommitRef(db, zRef1, &hash1);
+  rc = doltliteResolveRef(db,zRef1, &hash1);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(ctx, "could not resolve first argument to a commit", -1);
     return;
   }
-  rc = resolveCommitRef(db, zRef2, &hash2);
+  rc = doltliteResolveRef(db,zRef2, &hash2);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(ctx, "could not resolve second argument to a commit", -1);
     return;
