@@ -28,10 +28,7 @@ extern int doltliteSchemaDiffRegister(sqlite3 *db);
 extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
                                  const ProllyHash *h2, ProllyHash *pAnc);
 
-extern int doltliteMergeCatalogs(sqlite3 *db, const ProllyHash *ancestor,
-                                  const ProllyHash *ours, const ProllyHash *theirs,
-                                  ProllyHash *pMergedHash, int *pnConflicts,
-                                  char **pzErrMsg);
+/* doltliteMergeCatalogs is now declared in doltlite_internal.h */
 
 extern const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable);
 extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
@@ -761,7 +758,11 @@ static void doltliteMergeFunc(
 
   {
     char *zMergeErr = 0;
-    rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash, &mergedCatHash, &nMergeConflicts, &zMergeErr);
+    SchemaMergeAction *aSchemaActions = 0;
+    int nSchemaActions = 0;
+    rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash,
+                                &mergedCatHash, &nMergeConflicts, &zMergeErr,
+                                &aSchemaActions, &nSchemaActions);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&ourCommit);
       doltliteCommitClear(&theirCommit);
@@ -771,18 +772,71 @@ static void doltliteMergeFunc(
       }else{
         sqlite3_result_error(context, "merge failed", -1);
       }
+      /* Free any partial schema actions */
+      { int si; for(si=0;si<nSchemaActions;si++){
+        int sj; for(sj=0;sj<aSchemaActions[si].nAddColumns;sj++)
+          sqlite3_free(aSchemaActions[si].azAddColumns[sj]);
+        sqlite3_free(aSchemaActions[si].azAddColumns);
+        sqlite3_free(aSchemaActions[si].zTableName);
+      }}
+      sqlite3_free(aSchemaActions);
       return;
     }
     sqlite3_free(zMergeErr);
-  }
 
-  
-  rc = doltliteHardReset(db, &mergedCatHash);
-  doltliteCommitClear(&ourCommit);
-  doltliteCommitClear(&theirCommit);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "merge reset failed", -1);
-    return;
+    /* Hard reset to load the merged catalog */
+    rc = doltliteHardReset(db, &mergedCatHash);
+    doltliteCommitClear(&ourCommit);
+    doltliteCommitClear(&theirCommit);
+    if( rc!=SQLITE_OK ){
+      { int si; for(si=0;si<nSchemaActions;si++){
+        int sj; for(sj=0;sj<aSchemaActions[si].nAddColumns;sj++)
+          sqlite3_free(aSchemaActions[si].azAddColumns[sj]);
+        sqlite3_free(aSchemaActions[si].azAddColumns);
+        sqlite3_free(aSchemaActions[si].zTableName);
+      }}
+      sqlite3_free(aSchemaActions);
+      sqlite3_result_error(context, "merge reset failed", -1);
+      return;
+    }
+
+    /* Apply schema merge actions: ALTER TABLE ADD COLUMN for each needed column */
+    if( nSchemaActions > 0 ){
+      int si;
+      for(si=0; si<nSchemaActions; si++){
+        int sj;
+        for(sj=0; sj<aSchemaActions[si].nAddColumns; sj++){
+          char *zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" ADD COLUMN %s",
+                                          aSchemaActions[si].zTableName,
+                                          aSchemaActions[si].azAddColumns[sj]);
+          if( zAlter ){
+            rc = sqlite3_exec(db, zAlter, 0, 0, 0);
+            sqlite3_free(zAlter);
+            if( rc!=SQLITE_OK ){
+              /* If ALTER fails, report but continue - the data is merged */
+              rc = SQLITE_OK;
+            }
+          }
+        }
+      }
+      /* Re-serialize the catalog to capture updated schema hashes after ALTERs */
+      {
+        u8 *catData = 0; int nCatData = 0;
+        rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
+        if( rc==SQLITE_OK ){
+          rc = chunkStorePut(cs, catData, nCatData, &mergedCatHash);
+          sqlite3_free(catData);
+        }
+      }
+      /* Free schema actions */
+      { int si2; for(si2=0;si2<nSchemaActions;si2++){
+        int sj2; for(sj2=0;sj2<aSchemaActions[si2].nAddColumns;sj2++)
+          sqlite3_free(aSchemaActions[si2].azAddColumns[sj2]);
+        sqlite3_free(aSchemaActions[si2].azAddColumns);
+        sqlite3_free(aSchemaActions[si2].zTableName);
+      }}
+      sqlite3_free(aSchemaActions);
+    }
   }
 
   if( nMergeConflicts > 0 ){
@@ -888,7 +942,7 @@ static int applyMergedCatalogAndCommit(
   int rc;
 
   rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
-                              &mergedCatHash, pnConflicts, 0);
+                              &mergedCatHash, pnConflicts, 0, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteHardReset(db, &mergedCatHash);

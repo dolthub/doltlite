@@ -94,8 +94,17 @@ UPDATE t SET col_feat='f';
 SELECT dolt_commit('-A','-m','feat adds col_feat');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# This is a schema conflict — different columns added on each side
-run_test_match "alter_diff_cols_merge" "SELECT dolt_merge('feat');" "conflict" "$DB"
+# Schema merge: different columns added on each side -> should succeed
+run_test_match "alter_diff_cols_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB"
+
+# Verify both columns present
+run_test_match "alter_diff_cols_has_col_main" \
+  "SELECT col_main FROM t WHERE id=1;" \
+  "m" "$DB"
+
+run_test_match "alter_diff_cols_has_col_feat" \
+  "SELECT typeof(col_feat) FROM t WHERE id=1;" \
+  "null|text" "$DB"
 
 rm -f "$DB"
 

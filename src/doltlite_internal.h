@@ -74,4 +74,32 @@ void doltliteSetAuthorName(sqlite3 *db, const char *zName);
 const char *doltliteGetAuthorEmail(sqlite3 *db);
 void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
 
-#endif 
+/* Schema entry, used by schema_diff and merge */
+typedef struct SchemaEntry SchemaEntry;
+struct SchemaEntry {
+  char *zName;
+  char *zSql;
+  char *zType;
+};
+
+int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
+                          const ProllyHash *pCatHash,
+                          SchemaEntry **ppEntries, int *pnEntries);
+SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName);
+void freeSchemaEntries(SchemaEntry *a, int n);
+
+/* Schema merge actions returned from doltliteMergeCatalogs */
+typedef struct SchemaMergeAction SchemaMergeAction;
+struct SchemaMergeAction {
+  char *zTableName;
+  char **azAddColumns;   /* ALTER TABLE ADD COLUMN definitions */
+  int nAddColumns;
+};
+
+int doltliteMergeCatalogs(sqlite3 *db,
+  const ProllyHash *ancestor, const ProllyHash *ours,
+  const ProllyHash *theirs, ProllyHash *pMergedHash,
+  int *pnConflicts, char **pzErrMsg,
+  SchemaMergeAction **ppActions, int *pnActions);
+
+#endif
