@@ -29,12 +29,6 @@ check() {
 echo "--- 1. INTKEY + index: scan DELETE ---"
 for N in 100 500 1000 5000; do
   rm -f "$TMPDIR/t.db"
-  "$DB" "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT); CREATE INDEX idx ON t(val); WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N) INSERT INTO t SELECT x,x FROM c; DELETE FROM t WHERE id%10=0; SELECT count(*) FROM t;" 2>/dev/null
-  result=$(tail -1 < /dev/stdin)
-done
-# Can't capture inline. Redo properly:
-for N in 100 500 1000 5000; do
-  rm -f "$TMPDIR/t.db"
   result=$("$DB" "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT); CREATE INDEX idx ON t(val); WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N) INSERT INTO t SELECT x,x FROM c; DELETE FROM t WHERE id%10=0; SELECT count(*) FROM t;" 2>/dev/null | tail -1)
   check "INTKEY+idx delete N=$N" "$((N - N/10))" "$result"
 done

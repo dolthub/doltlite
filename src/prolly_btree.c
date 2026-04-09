@@ -2906,7 +2906,18 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
       }
       pCur->mmIdx = it.idx;
       pCur->mmActive = 1;
-      pCur->mergeSrc = MERGE_SRC_TREE;
+      /* If the MutMap entry matches the current tree key (e.g. an UPDATE
+      ** just wrote to the same key), both sources must advance past it.
+      ** Otherwise only the tree advances. Without this, mergeStepForward
+      ** leaves the MutMap positioned at the current key, causing the
+      ** merged scan to re-visit the row (double-apply UPDATE bug). */
+      if( it.idx >= 0 && it.idx < pCur->pMutMap->nEntries
+       && prollyCursorIsValid(&pCur->pCur)
+       && mergeCompare(pCur, &pCur->pMutMap->aEntries[it.idx])==0 ){
+        pCur->mergeSrc = MERGE_SRC_BOTH;
+      }else{
+        pCur->mergeSrc = MERGE_SRC_TREE;
+      }
       rc = mergeStepForward(pCur);
       if( rc==SQLITE_DONE ){
         pCur->eState = CURSOR_INVALID;
@@ -2981,7 +2992,15 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags){
       }
       pCur->mmIdx = it.idx;
       pCur->mmActive = 1;
-      pCur->mergeSrc = MERGE_SRC_TREE;
+      /* Same fix as in Next: if MutMap entry matches the current tree
+      ** key, advance both sources to avoid re-visiting the row. */
+      if( it.idx >= 0 && it.idx < pCur->pMutMap->nEntries
+       && prollyCursorIsValid(&pCur->pCur)
+       && mergeCompare(pCur, &pCur->pMutMap->aEntries[it.idx])==0 ){
+        pCur->mergeSrc = MERGE_SRC_BOTH;
+      }else{
+        pCur->mergeSrc = MERGE_SRC_TREE;
+      }
       rc = mergeStepBackward(pCur);
       if( rc==SQLITE_DONE ){
         pCur->eState = CURSOR_INVALID;
@@ -3726,8 +3745,12 @@ static int prollyBtCursorInsert(
           CLEAR_CACHED_PAYLOAD(pCur);
         }
         pCur->cachedPayloadOwned = 1;
+        /* The MutMap was modified — the merge iteration state (mmIdx,
+        ** mergeSrc) is stale. Reset so the next Next/Previous call
+        ** re-synchronizes the merge cursor with the updated MutMap. */
+        pCur->mmActive = 0;
       } else {
-        
+
         pCur->eState = CURSOR_INVALID;
       }
       return SQLITE_OK;
