@@ -163,10 +163,37 @@ else
 fi
 
 # ============================================================
+# Integrity check on attached SQLite database (#295)
+# ============================================================
+
+SQLDB_IC=/tmp/test_attach_ic_$$.db
+$SQLITE3 "$SQLDB_IC" "
+CREATE TABLE items(id INTEGER PRIMARY KEY, name TEXT, val REAL);
+CREATE INDEX idx_name ON items(name);
+CREATE INDEX idx_val ON items(val);
+INSERT INTO items VALUES(1,'alpha',1.1),(2,'beta',2.2),(3,'gamma',3.3);
+"
+
+run_test "attach_integrity_check" \
+  "ATTACH DATABASE '$SQLDB_IC' AS side;
+PRAGMA side.integrity_check;" \
+  "ok" ":memory:"
+
+DLDB_IC=/tmp/test_attach_dl_ic_$$.db
+rm -f "$DLDB_IC"
+run_test "doltlite_main_attach_integrity" \
+  "CREATE TABLE t(x INTEGER); INSERT INTO t VALUES(1);
+SELECT dolt_commit('-am','init') IS NOT NULL;
+ATTACH DATABASE '$SQLDB_IC' AS side;
+PRAGMA side.integrity_check;" \
+  "1
+ok" "$DLDB_IC"
+
+# ============================================================
 # Cleanup
 # ============================================================
 
-rm -f "$SQLDB1" "$SQLDB2" "$DLDB" "$SQLDB_W"
+rm -f "$SQLDB1" "$SQLDB2" "$DLDB" "$SQLDB_W" "$SQLDB_IC" "$DLDB_IC"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

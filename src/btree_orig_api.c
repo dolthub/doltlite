@@ -156,4 +156,12 @@ int origBtreeIsSqliteFile(const char *zFilename){
   return memcmp(buf, "SQLite format 3\000", 16)==0;
 }
 
+int origBtreeIntegrityCheck(
+  sqlite3 *db, void *p, Pgno *aRoot, sqlite3_value *aCnt,
+  int nRoot, int mxErr, int *pnErr, char **pzOut
+){
+  return orig_sqlite3BtreeIntegrityCheck(db, B(p), aRoot, aCnt,
+                                         nRoot, mxErr, pnErr, pzOut);
+}
+
 #endif /* DOLTLITE_PROLLY */
