@@ -120,7 +120,6 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
 
   while(qHead<qTail){
     ProllyHash cur=queue[qHead++];
-    u8 *data=0; int nData=0;
     DoltliteCommit commit;
     ProllyHash tableRoot; u8 flags=0;
     char hexBuf[PROLLY_HASH_SIZE*2+1];
@@ -140,10 +139,7 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
     visited[nVisited++]=cur;
 
     memset(&commit,0,sizeof(commit));
-    rc=chunkStoreGet(cs,&cur,&data,&nData);
-    if(rc!=SQLITE_OK) break;
-    rc=doltliteCommitDeserialize(data,nData,&commit);
-    sqlite3_free(data);
+    rc=doltliteLoadCommit(db,&cur,&commit);
     if(rc!=SQLITE_OK) break;
 
     doltliteHashToHex(&cur,hexBuf);
@@ -298,15 +294,12 @@ static sqlite3_module historyModule = {
 };
 
 void doltliteRegisterHistoryTables(sqlite3 *db){
-  ProllyHash headCommit; u8 *data=0;int nData=0;
+  ProllyHash headCommit;
   DoltliteCommit commit; struct TableEntry *aT=0;int nT=0,i,rc;
-  ChunkStore *cs=doltliteGetChunkStore(db);
-  if(!cs) return;
   doltliteGetSessionHead(db,&headCommit);
   if(prollyHashIsEmpty(&headCommit)) return;
-  rc=chunkStoreGet(cs,&headCommit,&data,&nData); if(rc!=SQLITE_OK) return;
   memset(&commit,0,sizeof(commit));
-  rc=doltliteCommitDeserialize(data,nData,&commit); sqlite3_free(data);
+  rc=doltliteLoadCommit(db,&headCommit,&commit);
   if(rc!=SQLITE_OK) return;
   rc=doltliteLoadCatalog(db,&commit.catalogHash,&aT,&nT,0);
   doltliteCommitClear(&commit); if(rc!=SQLITE_OK) return;

@@ -66,8 +66,6 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
 
   while( qHead < qTail ){
     ProllyHash cur = queue[qHead++];
-    u8 *data = 0;
-    int nData = 0;
     DoltliteCommit commit;
     LogEntry *pEntry;
     int dup = 0;
@@ -88,11 +86,8 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
     visited[nVisited++] = cur;
 
     /* Load commit */
-    rc = chunkStoreGet(cs, &cur, &data, &nData);
-    if( rc!=SQLITE_OK ) break;
     memset(&commit, 0, sizeof(commit));
-    rc = doltliteCommitDeserialize(data, nData, &commit);
-    sqlite3_free(data);
+    rc = doltliteLoadCommit(db, &cur, &commit);
     if( rc!=SQLITE_OK ) break;
 
     /* Add to results */

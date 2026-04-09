@@ -148,12 +148,7 @@ void freeSchemaMergeActions(SchemaMergeAction *a, int n){
 
 /* resolveCommitRef removed — use doltliteResolveRef() from doltlite_ref.c */
 
-/*
-** Helper #5 uses the existing loadCommitByHash — declared later.  Forward-declare
-** it here so the helpers below can use it.
-*/
-static int loadCommitByHash(ChunkStore *cs, const ProllyHash *pHash,
-                            DoltliteCommit *pCommit);
+/* Helper #5: loadCommitByHash replaced by doltliteLoadCommit from doltlite_ref.c */
 
 /*
 ** Helper #6: Build a commit object, serialize it, store it, and clear.
@@ -664,7 +659,7 @@ static void doltliteResetFunc(
       return;
     }
 
-    rc = loadCommitByHash(cs, &targetCommit, &commit);
+    rc = doltliteLoadCommit(db, &targetCommit, &commit);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to load commit", -1);
       return;
@@ -824,7 +819,7 @@ static void doltliteMergeFunc(
     /* Fast-forward: move branch pointer to their commit, no merge commit. */
     char hx[PROLLY_HASH_SIZE*2+1];
 
-    rc = loadCommitByHash(cs, &theirHead, &theirCommit);
+    rc = doltliteLoadCommit(db, &theirHead, &theirCommit);
     if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load commit", -1); return; }
 
     rc = doltliteSwitchCatalog(db, &theirCommit.catalogHash);
@@ -845,15 +840,15 @@ static void doltliteMergeFunc(
   }
 
 
-  rc = loadCommitByHash(cs, &ourHead, &ourCommit);
+  rc = doltliteLoadCommit(db, &ourHead, &ourCommit);
   if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load our commit", -1); return; }
   memcpy(&ourCatHash, &ourCommit.catalogHash, sizeof(ProllyHash));
 
-  rc = loadCommitByHash(cs, &theirHead, &theirCommit);
+  rc = doltliteLoadCommit(db, &theirHead, &theirCommit);
   if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); sqlite3_result_error(context, "failed to load their commit", -1); return; }
   memcpy(&theirCatHash, &theirCommit.catalogHash, sizeof(ProllyHash));
 
-  rc = loadCommitByHash(cs, &ancestorHash, &ancCommit);
+  rc = doltliteLoadCommit(db, &ancestorHash, &ancCommit);
   if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); doltliteCommitClear(&theirCommit); sqlite3_result_error(context, "failed to load ancestor", -1); return; }
   memcpy(&ancCatHash, &ancCommit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&ancCommit);
@@ -947,21 +942,7 @@ static void doltliteMergeFunc(
   }
 }
 
-static int loadCommitByHash(
-  ChunkStore *cs,
-  const ProllyHash *pHash,
-  DoltliteCommit *pCommit
-){
-  u8 *data = 0;
-  int nData = 0;
-  int rc;
-  memset(pCommit, 0, sizeof(*pCommit));
-  rc = chunkStoreGet(cs, pHash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteCommitDeserialize(data, nData, pCommit);
-  sqlite3_free(data);
-  return rc;
-}
+/* loadCommitByHash removed — callers migrated to doltliteLoadCommit */
 
 static int applyMergedCatalogAndCommit(
   sqlite3 *db,
@@ -1038,7 +1019,7 @@ static void doltliteCherryPickFunc(
   }
 
   
-  rc = loadCommitByHash(cs, &pickHash, &pickCommit);
+  rc = doltliteLoadCommit(db, &pickHash, &pickCommit);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "commit not found", -1);
     return;
@@ -1051,7 +1032,7 @@ static void doltliteCherryPickFunc(
     return;
   }
 
-  rc = loadCommitByHash(cs, &pickCommit.parentHash, &parentCommit);
+  rc = doltliteLoadCommit(db, &pickCommit.parentHash, &parentCommit);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&pickCommit);
     sqlite3_result_error(context, "parent commit not found", -1);
@@ -1067,7 +1048,7 @@ static void doltliteCherryPickFunc(
     return;
   }
 
-  rc = loadCommitByHash(cs, &ourHead, &ourCommit);
+  rc = doltliteLoadCommit(db, &ourHead, &ourCommit);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&pickCommit);
     doltliteCommitClear(&parentCommit);
@@ -1140,7 +1121,7 @@ static void doltliteRevertFunc(
   }
 
   
-  rc = loadCommitByHash(cs, &revertHash, &revertCommit);
+  rc = doltliteLoadCommit(db, &revertHash, &revertCommit);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "commit not found", -1);
     return;
@@ -1153,7 +1134,7 @@ static void doltliteRevertFunc(
     return;
   }
 
-  rc = loadCommitByHash(cs, &revertCommit.parentHash, &parentCommit);
+  rc = doltliteLoadCommit(db, &revertCommit.parentHash, &parentCommit);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&revertCommit);
     sqlite3_result_error(context, "parent commit not found", -1);
@@ -1169,7 +1150,7 @@ static void doltliteRevertFunc(
     return;
   }
 
-  rc = loadCommitByHash(cs, &ourHead, &ourCommit);
+  rc = doltliteLoadCommit(db, &ourHead, &ourCommit);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&revertCommit);
     doltliteCommitClear(&parentCommit);

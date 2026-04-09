@@ -103,20 +103,8 @@ static int hashSetContains(const HashSet *hs, const ProllyHash *h){
 
 static int loadCommitByHash(sqlite3 *db, const ProllyHash *hash,
                             DoltliteCommit *pCommit){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  u8 *data = 0;
-  int nData = 0;
-  int rc;
-
-  if( !cs ) return SQLITE_ERROR;
   if( prollyHashIsEmpty(hash) ) return SQLITE_NOTFOUND;
-
-  rc = chunkStoreGet(cs, hash, &data, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = doltliteCommitDeserialize(data, nData, pCommit);
-  sqlite3_free(data);
-  return rc;
+  return doltliteLoadCommit(db, hash, pCommit);
 }
 
 static int ancestorBfsCollect(

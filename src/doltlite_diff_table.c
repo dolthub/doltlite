@@ -158,7 +158,6 @@ static int walkHistoryAndDiff(
   if( prollyHashIsEmpty(&curHash) ) return SQLITE_OK;
 
   while( !prollyHashIsEmpty(&curHash) ){
-    u8 *data = 0; int nData = 0;
     DoltliteCommit commit;
     ProllyHash curRoot, parentRoot;
     u8 flags = 0;
@@ -166,10 +165,7 @@ static int walkHistoryAndDiff(
     char parentHex[PROLLY_HASH_SIZE*2+1];
 
     memset(&commit, 0, sizeof(commit));
-    rc = chunkStoreGet(cs, &curHash, &data, &nData);
-    if( rc!=SQLITE_OK ) break;
-    rc = doltliteCommitDeserialize(data, nData, &commit);
-    sqlite3_free(data);
+    rc = doltliteLoadCommit(db, &curHash, &commit);
     if( rc!=SQLITE_OK ) break;
 
     doltliteHashToHex(&curHash, curHex);
@@ -187,14 +183,9 @@ static int walkHistoryAndDiff(
 
     if( !prollyHashIsEmpty(&commit.parentHash) ){
       DoltliteCommit parentCommit;
-      u8 *pdata = 0; int npdata = 0;
 
       memset(&parentCommit, 0, sizeof(parentCommit));
-      rc = chunkStoreGet(cs, &commit.parentHash, &pdata, &npdata);
-      if( rc==SQLITE_OK ){
-        rc = doltliteCommitDeserialize(pdata, npdata, &parentCommit);
-        sqlite3_free(pdata);
-      }
+      rc = doltliteLoadCommit(db, &commit.parentHash, &parentCommit);
 
       if( rc==SQLITE_OK ){
         doltliteHashToHex(&commit.parentHash, parentHex);
@@ -464,23 +455,16 @@ static sqlite3_module diffTableModule = {
 };
 
 void doltliteRegisterDiffTables(sqlite3 *db){
-  ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headCommit;
-  u8 *data = 0; int nData = 0;
   DoltliteCommit commit;
   struct TableEntry *aTables = 0;
   int nTables = 0, i, rc;
 
-  if( !cs ) return;
   doltliteGetSessionHead(db, &headCommit);
   if( prollyHashIsEmpty(&headCommit) ) return;
 
-  rc = chunkStoreGet(cs, &headCommit, &data, &nData);
-  if( rc!=SQLITE_OK ) return;
-
   memset(&commit, 0, sizeof(commit));
-  rc = doltliteCommitDeserialize(data, nData, &commit);
-  sqlite3_free(data);
+  rc = doltliteLoadCommit(db, &headCommit, &commit);
   if( rc!=SQLITE_OK ) return;
 
   rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
