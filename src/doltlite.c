@@ -722,7 +722,7 @@ static void doltliteMergeFunc(
     sqlite3_free(data); data = 0;
     if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "corrupt commit", -1); return; }
 
-    rc = doltliteHardReset(db, &theirCommit.catalogHash);
+    rc = doltliteSwitchCatalog(db, &theirCommit.catalogHash);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&theirCommit);
       sqlite3_result_error(context, "fast-forward failed", -1);
@@ -731,6 +731,8 @@ static void doltliteMergeFunc(
 
     doltliteSetSessionHead(db, &theirHead);
     doltliteSetSessionStaged(db, &theirCommit.catalogHash);
+    doltliteUpdateBranchWorkingState(db,
+        doltliteGetSessionBranch(db), &theirCommit.catalogHash, NULL);
     doltliteCommitClear(&theirCommit);
 
     chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &theirHead);
@@ -794,8 +796,13 @@ static void doltliteMergeFunc(
     }
     sqlite3_free(zMergeErr);
 
-    /* Hard reset to load the merged catalog */
-    rc = doltliteHardReset(db, &mergedCatHash);
+    /* Load the merged catalog into the connection */
+    rc = doltliteSwitchCatalog(db, &mergedCatHash);
+    if( rc==SQLITE_OK ){
+      doltliteSetSessionStaged(db, &mergedCatHash);
+      doltliteUpdateBranchWorkingState(db,
+          doltliteGetSessionBranch(db), &mergedCatHash, NULL);
+    }
     doltliteCommitClear(&ourCommit);
     doltliteCommitClear(&theirCommit);
     if( rc!=SQLITE_OK ){
@@ -959,11 +966,12 @@ static int applyMergedCatalogAndCommit(
                               &mergedCatHash, pnConflicts, 0, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = doltliteHardReset(db, &mergedCatHash);
+  rc = doltliteSwitchCatalog(db, &mergedCatHash);
   if( rc!=SQLITE_OK ) return rc;
 
-  
   doltliteSetSessionStaged(db, &mergedCatHash);
+  doltliteUpdateBranchWorkingState(db,
+      doltliteGetSessionBranch(db), &mergedCatHash, NULL);
   
 
   
