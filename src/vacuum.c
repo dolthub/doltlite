@@ -166,6 +166,16 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
   char zDbVacuum[42];     /* Name of the ATTACH-ed database used for vacuum */
 
 
+#ifdef DOLTLITE_PROLLY
+  /* VACUUM is a no-op for the doltlite main database. Prolly trees use
+  ** content-addressed chunk storage with automatic deduplication; there
+  ** is no fragmented page structure to compact. VACUUM INTO (pOut!=NULL)
+  ** is allowed to proceed for export purposes. */
+  if( pOut==0 && iDb==0 ){
+    return SQLITE_OK;
+  }
+#endif
+
   if( !db->autoCommit ){
     sqlite3SetString(pzErrMsg, db, "cannot VACUUM from within a transaction");
     return SQLITE_ERROR; /* IMP: R-12218-18073 */
