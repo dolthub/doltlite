@@ -48,6 +48,15 @@ TESTS=(
   doltlite_perf.sh
   doltlite_demo.sh
   doltlite_e2e.sh
+
+  # Additional tests
+  doltlite_attach_sqlite.sh
+  doltlite_behavior.sh
+  doltlite_branch_edge.sh
+  doltlite_diff_alter.sh
+  doltlite_index_prefix.sh
+  doltlite_issue179_180.sh
+  review_regression_test.sh
 )
 
 total_pass=0
