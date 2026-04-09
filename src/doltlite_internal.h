@@ -128,6 +128,10 @@ void doltliteClearSessionMergeState(sqlite3 *db);
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
 void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
 int doltliteSaveWorkingSet(sqlite3 *db);
+int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
+
+typedef int (*DoltliteRefsMutation)(sqlite3 *db, ChunkStore *cs, void *pArg);
+int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg);
 
 const char *doltliteGetAuthorName(sqlite3 *db);
 void doltliteSetAuthorName(sqlite3 *db, const char *zName);

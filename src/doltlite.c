@@ -115,6 +115,25 @@ static int doltlitePersistState(sqlite3 *db){
   return chunkStoreCommit(cs);
 }
 
+int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc;
+
+  if( !cs ) return SQLITE_ERROR;
+
+  rc = chunkStoreLockAndRefresh(cs);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = xMutate(db, cs, pArg);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreSerializeRefs(cs);
+    if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+  }
+
+  chunkStoreUnlock(cs);
+  return rc;
+}
+
 /*
 ** Helper #2: Flush the in-memory catalog, serialize it into the chunk store,
 ** and return the resulting hash.

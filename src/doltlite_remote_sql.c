@@ -9,6 +9,20 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
+typedef struct RemoteMutationCtx RemoteMutationCtx;
+struct RemoteMutationCtx {
+  const char *zName;
+  const char *zUrl;
+  int isDelete;
+};
+
+static int mutateRemoteRef(sqlite3 *db, ChunkStore *cs, void *pArg){
+  RemoteMutationCtx *p = (RemoteMutationCtx*)pArg;
+  (void)db;
+  if( p->isDelete ) return chunkStoreDeleteRemote(cs, p->zName);
+  return chunkStoreAddRemote(cs, p->zName, p->zUrl);
+}
+
 static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
   if( strncmp(zUrl, "file://", 7)==0 ){
     return doltliteFsRemoteOpen(pVfs, zUrl + 7);
@@ -23,12 +37,15 @@ static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
 static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
+  RemoteMutationCtx m;
   const char *zAction;
   const char *zName;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<2 ){ sqlite3_result_error(ctx, "usage: dolt_remote(action, name [, url])", -1); return; }
+
+  memset(&m, 0, sizeof(m));
 
   zAction = (const char*)sqlite3_value_text(argv[0]);
   zName = (const char*)sqlite3_value_text(argv[1]);
@@ -48,13 +65,17 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       sqlite3_result_error(ctx, "url required for add", -1);
       return;
     }
-    rc = chunkStoreAddRemote(cs, zName, zUrl);
+    m.zName = zName;
+    m.zUrl = zUrl;
+    rc = doltliteMutateRefs(db, mutateRemoteRef, &m);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(ctx, "remote already exists or error", -1);
       return;
     }
   }else if( strcmp(zAction, "remove")==0 ){
-    rc = chunkStoreDeleteRemote(cs, zName);
+    m.zName = zName;
+    m.isDelete = 1;
+    rc = doltliteMutateRefs(db, mutateRemoteRef, &m);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(ctx, "remote not found", -1);
       return;
@@ -64,9 +85,6 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     return;
   }
 
-  rc = chunkStoreSerializeRefs(cs);
-  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
-  if( rc!=SQLITE_OK ){ sqlite3_result_error_code(ctx, rc); return; }
   sqlite3_result_int(ctx, 0);
 }
 

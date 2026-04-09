@@ -140,10 +140,47 @@ static void test_stale_reset_loses_branch_history(void){
   remove_db(dbpath);
 }
 
+static void test_stale_checkout_refreshes_target_branch(void){
+  sqlite3 *db1 = 0, *db2 = 0;
+  const char *dbpath = "/tmp/test_concurrent_refs_checkout.db";
+
+  printf("--- Test 2: stale dolt_checkout refreshes target branch ---\n");
+  remove_db(dbpath);
+
+  check("checkout_open_db1", open_db(dbpath, &db1)==SQLITE_OK);
+  check("checkout_open_db2", open_db(dbpath, &db2)==SQLITE_OK);
+
+  check("checkout_setup_schema", execsql(db1,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  check("checkout_init_commit",
+    strlen(exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')"))==40);
+  check("checkout_create_branch",
+    strcmp(exec1(db1, "SELECT dolt_branch('feature')"), "0")==0);
+  check("checkout_switch_db1_feature",
+    strcmp(exec1(db1, "SELECT dolt_checkout('feature')"), "0")==0);
+  check("checkout_feature_insert",
+    execsql(db1, "INSERT INTO t VALUES(2,'feature')")==SQLITE_OK);
+  check("checkout_feature_commit",
+    strlen(exec1(db1, "SELECT dolt_commit('-A', '-m', 'feature update')"))==40);
+
+  check("checkout_stale_connection_switches",
+    strcmp(exec1(db2, "SELECT dolt_checkout('feature')"), "0")==0);
+  check("checkout_latest_branch_tip_visible",
+    strcmp(exec1(db2, "SELECT message FROM dolt_log LIMIT 1"), "feature update")==0);
+  check("checkout_latest_branch_data_visible",
+    strcmp(exec1(db2, "SELECT count(*) FROM t"), "2")==0);
+
+  sqlite3_close(db1);
+  sqlite3_close(db2);
+  remove_db(dbpath);
+}
+
 int main(void){
   printf("=== Concurrent Refs Test ===\n\n");
 
   test_stale_reset_loses_branch_history();
+  test_stale_checkout_refreshes_target_branch();
 
   printf("\nResults: %d passed, %d failed out of %d tests\n",
          nPass, nFail, nPass+nFail);
