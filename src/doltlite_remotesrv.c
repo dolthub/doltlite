@@ -23,6 +23,7 @@ int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #include <unistd.h>
 #include <pthread.h>
 #include <poll.h>
+#include <errno.h>
 
 struct DoltliteServer {
   int listenFd;          
@@ -50,6 +51,21 @@ static int hexToHash(const char *zHex, ProllyHash *pHash){
   return SQLITE_OK;
 }
 
+static int writeAll(int fd, const void *pBuf, int nBuf){
+  int nWritten = 0;
+  const u8 *p = (const u8*)pBuf;
+  while( nWritten < nBuf ){
+    ssize_t n = write(fd, p + nWritten, nBuf - nWritten);
+    if( n<0 ){
+      if( errno==EINTR ) continue;
+      return SQLITE_IOERR_WRITE;
+    }
+    if( n==0 ) return SQLITE_IOERR_WRITE;
+    nWritten += (int)n;
+  }
+  return SQLITE_OK;
+}
+
 static void sendResponse(int fd, int status, const char *zStatus,
                          const u8 *pBody, int nBody){
   char zHeader[256];
@@ -61,9 +77,9 @@ static void sendResponse(int fd, int status, const char *zStatus,
     "\r\n",
     status, zStatus, nBody);
   nHeader = (int)strlen(zHeader);
-  write(fd, zHeader, nHeader);
+  if( writeAll(fd, zHeader, nHeader)!=SQLITE_OK ) return;
   if( pBody && nBody>0 ){
-    write(fd, pBody, nBody);
+    writeAll(fd, pBody, nBody);
   }
 }
 
@@ -214,6 +230,23 @@ static int parsePath(
   zEndpoint[epLen] = '\0';
 
   return 0;
+}
+
+static int isSafeDbName(const char *zDbName){
+  int i;
+  if( zDbName[0]=='.' && zDbName[1]=='\0' ) return 0;
+  if( zDbName[0]=='.' && zDbName[1]=='.' && zDbName[2]=='\0' ) return 0;
+  for(i=0; zDbName[i]; i++){
+    char c = zDbName[i];
+    if( (c>='a' && c<='z')
+     || (c>='A' && c<='Z')
+     || (c>='0' && c<='9')
+     || c=='_' || c=='-' || c=='.' ){
+      continue;
+    }
+    return 0;
+  }
+  return 1;
 }
 
 static void handleGetRoot(ChunkStore *pStore, int fd){
@@ -448,6 +481,11 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
   
   if( parsePath(zPath, zDbName, sizeof(zDbName),
                 zEndpoint, sizeof(zEndpoint))!=0 ){
+    sendNotFound(fd);
+    sqlite3_free(pBody);
+    return;
+  }
+  if( !isSafeDbName(zDbName) ){
     sendNotFound(fd);
     sqlite3_free(pBody);
     return;
