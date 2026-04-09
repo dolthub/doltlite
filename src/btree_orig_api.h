@@ -85,6 +85,10 @@ void origBtreeEnter(void *p);
 void origBtreeLeave(void *p);
 void *origBtreePager(void *p);
 
+int origBtreeIntegrityCheck(sqlite3 *db, void *p, Pgno *aRoot,
+                            sqlite3_value *aCnt, int nRoot, int mxErr,
+                            int *pnErr, char **pzOut);
+
 /* Detect if a file is standard SQLite format (returns 1) or doltlite (0) */
 int origBtreeIsSqliteFile(const char *zFilename);
 

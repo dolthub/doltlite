@@ -4234,11 +4234,22 @@ int sqlite3BtreeIntegrityCheck(
   int i;
   int nErr = 0;
 
-  (void)db;
+  if( !p ){
+    if( pnErr ) *pnErr = 0;
+    if( pzOut ) *pzOut = 0;
+    return SQLITE_OK;
+  }
+
+  /* Attached plain SQLite databases: delegate to the original btree. */
+  if( p->pOrigBtree ){
+    return origBtreeIntegrityCheck(db, p->pOrigBtree, aRoot, aCnt,
+                                   nRoot, mxErr, pnErr, pzOut);
+  }
+
   (void)aCnt;
   (void)mxErr;
 
-  if( !p || !p->pBt ){
+  if( !p->pBt ){
     if( pnErr ) *pnErr = 0;
     if( pzOut ) *pzOut = 0;
     return SQLITE_OK;
