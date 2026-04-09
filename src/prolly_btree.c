@@ -793,19 +793,23 @@ static int tableEntryNameCmp(const void *a, const void *b){
   return strcmp(ea->zName, eb->zName);
 }
 
-static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
-  int nTables = pBtree->nTables;
+int doltliteSerializeCatalogEntries(
+  sqlite3 *db,
+  struct TableEntry *aTables,
+  int nTables,
+  u8 **ppOut,
+  int *pnOut
+){
   int sz = CAT_HEADER_SIZE_V3;
   u8 *buf, *q;
   struct TableEntry *aSorted;  /* name-sorted copy for deterministic output */
   int i;
 
   /* Resolve table names eagerly so serialization is deterministic. */
-  if( pBtree->db ){
+  if( db ){
     for(i=0; i<nTables; i++){
-      if( !pBtree->aTables[i].zName && pBtree->aTables[i].iTable>1 ){
-        pBtree->aTables[i].zName = doltliteResolveTableNumber(
-            pBtree->db, pBtree->aTables[i].iTable);
+      if( !aTables[i].zName && aTables[i].iTable>1 ){
+        aTables[i].zName = doltliteResolveTableNumber(db, aTables[i].iTable);
       }
     }
   }
@@ -814,7 +818,7 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   ** stays sorted by iTable (binary search by page number depends on it). */
   aSorted = sqlite3_malloc(nTables * (int)sizeof(struct TableEntry));
   if( !aSorted ) return SQLITE_NOMEM;
-  memcpy(aSorted, pBtree->aTables, nTables * (int)sizeof(struct TableEntry));
+  memcpy(aSorted, aTables, nTables * (int)sizeof(struct TableEntry));
   qsort(aSorted, nTables, sizeof(struct TableEntry), tableEntryNameCmp);
 
   for(i=0; i<nTables; i++){
@@ -857,6 +861,11 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   *ppOut = buf;
   *pnOut = (int)(q - buf);
   return SQLITE_OK;
+}
+
+static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
+  return doltliteSerializeCatalogEntries(
+      pBtree->db, pBtree->aTables, pBtree->nTables, ppOut, pnOut);
 }
 
 static void initDefaultMeta(Btree *pBtree){
