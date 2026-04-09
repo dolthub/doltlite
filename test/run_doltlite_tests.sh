@@ -57,8 +57,7 @@ TESTS=(
   doltlite_gc_scale.sh
   doltlite_index_prefix.sh
   doltlite_issue179_180.sh
-  concurrent_refs_test.sh
-  checkout_persist_failure_test.sh
+  doltlite_regression_test_c.sh
   review_regression_test.sh
 )
 
