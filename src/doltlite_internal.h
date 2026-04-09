@@ -36,6 +36,19 @@ static SQLITE_INLINE struct TableEntry *doltliteFindTableByName(
   return 0;
 }
 
+/*
+** Compare two TableEntry structs by name for deterministic catalog ordering.
+** NULL names sort before all others (table 1 / sqlite_master has no name).
+*/
+static SQLITE_INLINE int tableEntryNameCmp(const void *a, const void *b){
+  const struct TableEntry *ea = (const struct TableEntry *)a;
+  const struct TableEntry *eb = (const struct TableEntry *)b;
+  if( !ea->zName && !eb->zName ) return 0;
+  if( !ea->zName ) return -1;
+  if( !eb->zName ) return 1;
+  return strcmp(ea->zName, eb->zName);
+}
+
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 BtShared *doltliteGetBtShared(sqlite3 *db);
 ProllyCache *doltliteGetCache(sqlite3 *db);

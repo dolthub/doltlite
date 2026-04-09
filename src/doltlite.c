@@ -42,6 +42,8 @@ extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHas
 ** Returns 1 if there are uncommitted changes (working differs from HEAD
 ** or staged differs from HEAD), 0 otherwise.
 */
+static int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
+
 int doltliteHasUncommittedChanges(sqlite3 *db){
   ProllyHash headCatHash, stagedHash, workingCatHash;
   u8 *wCatData = 0; int nWCat = 0;
@@ -57,39 +59,22 @@ int doltliteHasUncommittedChanges(sqlite3 *db){
     return 1;
   }
 
-  /* Working differs from HEAD? Compare table entries (root + schema hashes)
-  ** since catalog serialization is not fully deterministic (table name
-  ** resolution and other side effects can change the serialized bytes). */
+  /* Working differs from HEAD? Catalog serialization is now deterministic
+  ** (sorted by name, iNextTable zeroed, names eagerly resolved) so a
+  ** simple hash comparison is sufficient. */
   {
-    struct TableEntry *aHead = 0, *aWorking = 0;
-    int nHead = 0, nWorking = 0, dirty = 0, i;
-    ProllyHash workingCatHash;
     ChunkStore *cs = doltliteGetChunkStore(db);
-
-    doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
-
     if( cs ){
       rc = doltliteFlushAndSerializeCatalog(db, &wCatData, &nWCat);
       if( rc==SQLITE_OK ){
         chunkStorePut(cs, wCatData, nWCat, &workingCatHash);
         sqlite3_free(wCatData);
-        doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
-      }
-    }
-
-    if( aHead && aWorking ){
-      if( nHead != nWorking ) dirty = 1;
-      for(i=0; i<nHead && i<nWorking && !dirty; i++){
-        if( aHead[i].iTable != aWorking[i].iTable
-         || prollyHashCompare(&aHead[i].root, &aWorking[i].root)!=0
-         || prollyHashCompare(&aHead[i].schemaHash, &aWorking[i].schemaHash)!=0 ){
-          dirty = 1;
+        if( prollyHashCompare(&headCatHash, &workingCatHash)!=0 ){
+          return 1;
         }
       }
     }
-    sqlite3_free(aHead);
-    sqlite3_free(aWorking);
-    return dirty;
+    return 0;
   }
 }
 

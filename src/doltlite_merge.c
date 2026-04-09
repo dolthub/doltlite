@@ -805,61 +805,74 @@ schema_merge_cleanup:
 
 static int serializeMergedCatalog(
   sqlite3 *db,
-  const ProllyHash *oursCatHash,     
+  const ProllyHash *oursCatHash,
   struct TableEntry *aMerged,
   int nMerged,
   Pgno iNextTable,
-  ProllyHash *pOutHash               
+  ProllyHash *pOutHash
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int sz = 1 + 4 + 4;
   u8 *buf;
   u8 *p;
   int rc;
-  { int j; for(j=0;j<nMerged;j++){
-    int nl = aMerged[j].zName ? (int)strlen(aMerged[j].zName) : 0;
-    sz += 4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE+2+nl;
-  }}
 
-  (void)oursCatHash;  
+  (void)oursCatHash;
+  (void)iNextTable;
 
-  buf = sqlite3_malloc(sz);
-  if( !buf ) return SQLITE_NOMEM;
-  p = buf;
-
-  
-  *p++ = 0x43;  
-  p[0] = (u8)iNextTable;
-  p[1] = (u8)(iNextTable>>8);
-  p[2] = (u8)(iNextTable>>16);
-  p[3] = (u8)(iNextTable>>24);
-  p += 4;
-  p[0] = (u8)nMerged;
-  p[1] = (u8)(nMerged>>8);
-  p[2] = (u8)(nMerged>>16);
-  p[3] = (u8)(nMerged>>24);
-  p += 4;
-
-  
+  /* Sort a copy by name for deterministic serialization (same as
+  ** serializeCatalog in prolly_btree.c). */
   {
-    int i;
-    for(i=0; i<nMerged; i++){
-      Pgno pg = aMerged[i].iTable;
-      int nl = aMerged[i].zName ? (int)strlen(aMerged[i].zName) : 0;
-      p[0] = (u8)pg;
-      p[1] = (u8)(pg>>8);
-      p[2] = (u8)(pg>>16);
-      p[3] = (u8)(pg>>24);
-      p += 4;
-      *p++ = aMerged[i].flags;
-      memcpy(p, aMerged[i].root.data, PROLLY_HASH_SIZE);
-      p += PROLLY_HASH_SIZE;
-      memcpy(p, aMerged[i].schemaHash.data, PROLLY_HASH_SIZE);
-      p += PROLLY_HASH_SIZE;
-      p[0]=(u8)nl; p[1]=(u8)(nl>>8); p+=2;
-      if(nl>0) memcpy(p, aMerged[i].zName, nl);
-      p += nl;
+    struct TableEntry *aSorted = sqlite3_malloc(
+        nMerged * (int)sizeof(struct TableEntry));
+    if( !aSorted ) return SQLITE_NOMEM;
+    memcpy(aSorted, aMerged, nMerged * (int)sizeof(struct TableEntry));
+    qsort(aSorted, nMerged, sizeof(struct TableEntry), tableEntryNameCmp);
+
+    { int j; for(j=0;j<nMerged;j++){
+      int nl = aSorted[j].zName ? (int)strlen(aSorted[j].zName) : 0;
+      sz += 4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE+2+nl;
+    }}
+
+    buf = sqlite3_malloc(sz);
+    if( !buf ){
+      sqlite3_free(aSorted);
+      return SQLITE_NOMEM;
     }
+    p = buf;
+
+    *p++ = 0x43;
+    /* Reserved (was iNextTable). Write zeros for deterministic hashing —
+    ** iNextTable is derived from max(iTable)+1 on load. */
+    p[0]=0; p[1]=0; p[2]=0; p[3]=0;
+    p += 4;
+    p[0] = (u8)nMerged;
+    p[1] = (u8)(nMerged>>8);
+    p[2] = (u8)(nMerged>>16);
+    p[3] = (u8)(nMerged>>24);
+    p += 4;
+
+    {
+      int i;
+      for(i=0; i<nMerged; i++){
+        Pgno pg = aSorted[i].iTable;
+        int nl = aSorted[i].zName ? (int)strlen(aSorted[i].zName) : 0;
+        p[0] = (u8)pg;
+        p[1] = (u8)(pg>>8);
+        p[2] = (u8)(pg>>16);
+        p[3] = (u8)(pg>>24);
+        p += 4;
+        *p++ = aSorted[i].flags;
+        memcpy(p, aSorted[i].root.data, PROLLY_HASH_SIZE);
+        p += PROLLY_HASH_SIZE;
+        memcpy(p, aSorted[i].schemaHash.data, PROLLY_HASH_SIZE);
+        p += PROLLY_HASH_SIZE;
+        p[0]=(u8)nl; p[1]=(u8)(nl>>8); p+=2;
+        if(nl>0) memcpy(p, aSorted[i].zName, nl);
+        p += nl;
+      }
+    }
+    sqlite3_free(aSorted);
   }
 
   rc = chunkStorePut(cs, buf, (int)(p - buf), pOutHash);
