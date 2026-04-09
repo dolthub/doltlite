@@ -254,20 +254,6 @@ static void freeAuditRows(DiffTblCursor *pCur){
   pCur->nAlloc = 0;
 }
 
-static int findTableRootByName(
-  struct TableEntry *a, int n, const char *zName,
-  ProllyHash *pRoot, u8 *pFlags
-){
-  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
-  if( e ){
-    memcpy(pRoot, &e->root, sizeof(ProllyHash));
-    if( pFlags ) *pFlags = e->flags;
-    return SQLITE_OK;
-  }
-  memset(pRoot, 0, sizeof(ProllyHash));
-  if( pFlags ) *pFlags = 0;
-  return SQLITE_NOTFOUND;
-}
 
 static int walkHistoryAndDiff(
   DiffTblCursor *pCur, sqlite3 *db, const char *zTableName
@@ -305,7 +291,7 @@ static int walkHistoryAndDiff(
       struct TableEntry *aTables = 0; int nTables = 0;
       rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
       if( rc==SQLITE_OK ){
-        findTableRootByName(aTables, nTables, zTableName, &curRoot, &flags);
+        doltliteFindTableRootByName(aTables, nTables, zTableName, &curRoot, &flags);
         sqlite3_free(aTables);
       }else{
         memset(&curRoot, 0, sizeof(curRoot));
@@ -330,7 +316,7 @@ static int walkHistoryAndDiff(
           struct TableEntry *aPT = 0; int nPT = 0;
           rc = doltliteLoadCatalog(db, &parentCommit.catalogHash, &aPT, &nPT, 0);
           if( rc==SQLITE_OK ){
-            findTableRootByName(aPT, nPT, zTableName, &parentRoot, 0);
+            doltliteFindTableRootByName(aPT, nPT, zTableName, &parentRoot, 0);
             sqlite3_free(aPT);
           }else{
             memset(&parentRoot, 0, sizeof(parentRoot));

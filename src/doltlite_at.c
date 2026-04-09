@@ -100,30 +100,6 @@ static void freeAtRows(AtCursor *c){
   sqlite3_free(c->aRows); c->aRows=0; c->nRows=0; c->nAlloc=0;
 }
 
-static int atResolveRef(ChunkStore *cs, const char *zRef, ProllyHash *pCommit){
-  int rc;
-  if(zRef&&strlen(zRef)==40){
-    rc=doltliteHexToHash(zRef,pCommit);
-    if(rc==SQLITE_OK&&chunkStoreHas(cs,pCommit)) return SQLITE_OK;
-  }
-  rc=chunkStoreFindBranch(cs,zRef,pCommit);
-  if(rc==SQLITE_OK&&!prollyHashIsEmpty(pCommit)) return SQLITE_OK;
-  rc=chunkStoreFindTag(cs,zRef,pCommit);
-  if(rc==SQLITE_OK&&!prollyHashIsEmpty(pCommit)) return SQLITE_OK;
-  return SQLITE_NOTFOUND;
-}
-
-static int atFindRoot(struct TableEntry *a, int n, const char *zName,
-                      ProllyHash *pRoot, u8 *pFlags){
-  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
-  if( e ){
-    memcpy(pRoot, &e->root, sizeof(ProllyHash));
-    if( pFlags ) *pFlags = e->flags;
-    return SQLITE_OK;
-  }
-  memset(pRoot,0,sizeof(ProllyHash)); if(pFlags)*pFlags=0;
-  return SQLITE_NOTFOUND;
-}
 
 static int atScanTree(AtCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
                       const ProllyHash *pRoot, u8 flags){
@@ -247,14 +223,11 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   zRef=(const char*)sqlite3_value_text(argv[0]);
   if(!zRef) return SQLITE_OK;
 
-  rc=atResolveRef(cs,zRef,&commitHash);
+  rc=doltliteResolveRef(db,zRef,&commitHash);
   if(rc!=SQLITE_OK) return SQLITE_OK;
 
   memset(&commit,0,sizeof(commit));
-  rc=chunkStoreGet(cs,&commitHash,&data,&nData);
-  if(rc!=SQLITE_OK) return SQLITE_OK;
-  rc=doltliteCommitDeserialize(data,nData,&commit);
-  sqlite3_free(data);
+  rc=doltliteLoadCommit(db,&commitHash,&commit);
   if(rc!=SQLITE_OK) return SQLITE_OK;
 
   /* For branch refs, prefer the working state catalog if it has
@@ -286,7 +259,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
 
 at_find_root:
 
-  rc=atFindRoot(aTables,nTables,v->zTableName,&tableRoot,&flags);
+  rc=doltliteFindTableRootByName(aTables,nTables,v->zTableName,&tableRoot,&flags);
   sqlite3_free(aTables);
   if(rc!=SQLITE_OK) return SQLITE_OK;
 

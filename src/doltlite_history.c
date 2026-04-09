@@ -105,17 +105,6 @@ static void freeHistoryRows(HistCursor *c){
   c->aRows=0; c->nRows=0; c->nAlloc=0;
 }
 
-static int htFindRoot(struct TableEntry *a, int n, const char *zName,
-                      ProllyHash *pRoot, u8 *pFlags){
-  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
-  if( e ){
-    memcpy(pRoot, &e->root, sizeof(ProllyHash));
-    if( pFlags ) *pFlags = e->flags;
-    return SQLITE_OK;
-  }
-  memset(pRoot,0,sizeof(ProllyHash)); if(pFlags)*pFlags=0;
-  return SQLITE_NOTFOUND;
-}
 
 static int htScanAtCommit(
   HistCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
@@ -203,7 +192,7 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
       struct TableEntry *aT=0; int nT=0;
       rc=doltliteLoadCatalog(db,&commit.catalogHash,&aT,&nT,0);
       if(rc==SQLITE_OK){
-        if(htFindRoot(aT,nT,zTableName,&tableRoot,&flags)==SQLITE_OK)
+        if(doltliteFindTableRootByName(aT,nT,zTableName,&tableRoot,&flags)==SQLITE_OK)
           htScanAtCommit(pCur,cs,pCache,&tableRoot,flags,hexBuf,commit.zName,commit.timestamp);
         sqlite3_free(aT);
       }

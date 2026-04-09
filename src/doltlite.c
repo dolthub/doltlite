@@ -146,34 +146,7 @@ void freeSchemaMergeActions(SchemaMergeAction *a, int n){
   sqlite3_free(a);
 }
 
-/*
-** Helper #4: Resolve a commit reference — tries hex hash, branch name, then
-** tag name.  Replaces the old resolveCommitRef (hex-only) and inline resolution
-** in doltliteResetFunc.
-*/
-static int resolveCommitRef(
-  ChunkStore *cs,
-  const char *zRef,
-  ProllyHash *pHash
-){
-  int rc = SQLITE_NOTFOUND;
-  if( !zRef ) return SQLITE_ERROR;
-  /* Try 40-char hex hash */
-  if( strlen(zRef)==PROLLY_HASH_SIZE*2 ){
-    rc = doltliteHexToHash(zRef, pHash);
-    if( rc==SQLITE_OK && !chunkStoreHas(cs, pHash) ) rc = SQLITE_NOTFOUND;
-  }
-  /* Try branch name */
-  if( rc!=SQLITE_OK ){
-    rc = chunkStoreFindBranch(cs, zRef, pHash);
-    if( rc!=SQLITE_OK || prollyHashIsEmpty(pHash) ){
-      /* Try tag name */
-      rc = chunkStoreFindTag(cs, zRef, pHash);
-    }
-  }
-  if( rc==SQLITE_OK && prollyHashIsEmpty(pHash) ) rc = SQLITE_NOTFOUND;
-  return rc;
-}
+/* resolveCommitRef removed — use doltliteResolveRef() from doltlite_ref.c */
 
 /*
 ** Helper #5 uses the existing loadCommitByHash — declared later.  Forward-declare
@@ -685,7 +658,7 @@ static void doltliteResetFunc(
     ProllyHash targetCommit;
     DoltliteCommit commit;
 
-    rc = resolveCommitRef(cs, zRef, &targetCommit);
+    rc = doltliteResolveRef(db,zRef, &targetCommit);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "commit not found", -1);
       return;
@@ -1058,7 +1031,7 @@ static void doltliteCherryPickFunc(
   }
 
   
-  rc = resolveCommitRef(cs, zRef, &pickHash);
+  rc = doltliteResolveRef(db,zRef, &pickHash);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "invalid commit hash", -1);
     return;
@@ -1160,7 +1133,7 @@ static void doltliteRevertFunc(
   }
 
   
-  rc = resolveCommitRef(cs, zRef, &revertHash);
+  rc = doltliteResolveRef(db,zRef, &revertHash);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "invalid commit hash", -1);
     return;

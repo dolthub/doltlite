@@ -49,6 +49,40 @@ static SQLITE_INLINE int tableEntryNameCmp(const void *a, const void *b){
   return strcmp(ea->zName, eb->zName);
 }
 
+/*
+** Find a table's root hash and flags from a catalog entry array.
+** Returns SQLITE_OK if found, SQLITE_NOTFOUND otherwise (with pRoot zeroed).
+*/
+static SQLITE_INLINE int doltliteFindTableRoot(
+  struct TableEntry *a, int n, Pgno iTable,
+  ProllyHash *pRoot, u8 *pFlags
+){
+  struct TableEntry *e = doltliteFindTableByNumber(a, n, iTable);
+  if( e ){
+    memcpy(pRoot, &e->root, sizeof(ProllyHash));
+    if( pFlags ) *pFlags = e->flags;
+    return SQLITE_OK;
+  }
+  memset(pRoot, 0, sizeof(ProllyHash));
+  if( pFlags ) *pFlags = 0;
+  return SQLITE_NOTFOUND;
+}
+
+static SQLITE_INLINE int doltliteFindTableRootByName(
+  struct TableEntry *a, int n, const char *zName,
+  ProllyHash *pRoot, u8 *pFlags
+){
+  struct TableEntry *e = doltliteFindTableByName(a, n, zName);
+  if( e ){
+    memcpy(pRoot, &e->root, sizeof(ProllyHash));
+    if( pFlags ) *pFlags = e->flags;
+    return SQLITE_OK;
+  }
+  memset(pRoot, 0, sizeof(ProllyHash));
+  if( pFlags ) *pFlags = 0;
+  return SQLITE_NOTFOUND;
+}
+
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 BtShared *doltliteGetBtShared(sqlite3 *db);
 ProllyCache *doltliteGetCache(sqlite3 *db);
@@ -57,6 +91,14 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                         Pgno *piNextTable);
 int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
+/* Ref resolution: try hex hash, then branch, then tag (doltlite_ref.c) */
+int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit);
+
+/* Load a commit by hash. Caller must doltliteCommitClear() (doltlite_ref.c) */
+typedef struct DoltliteCommit DoltliteCommit;
+int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
+                       DoltliteCommit *pCommit);
+
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
