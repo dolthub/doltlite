@@ -294,22 +294,7 @@ static sqlite3_module historyModule = {
 };
 
 void doltliteRegisterHistoryTables(sqlite3 *db){
-  ProllyHash headCommit;
-  DoltliteCommit commit; struct TableEntry *aT=0;int nT=0,i,rc;
-  doltliteGetSessionHead(db,&headCommit);
-  if(prollyHashIsEmpty(&headCommit)) return;
-  memset(&commit,0,sizeof(commit));
-  rc=doltliteLoadCommit(db,&headCommit,&commit);
-  if(rc!=SQLITE_OK) return;
-  rc=doltliteLoadCatalog(db,&commit.catalogHash,&aT,&nT,0);
-  doltliteCommitClear(&commit); if(rc!=SQLITE_OK) return;
-  for(i=0;i<nT;i++){
-    if(aT[i].zName&&aT[i].iTable>1){
-      char *zMod=sqlite3_mprintf("dolt_history_%s",aT[i].zName);
-      if(zMod){sqlite3_create_module(db,zMod,&historyModule,0);sqlite3_free(zMod);}
-    }
-  }
-  sqlite3_free(aT);
+  doltliteForEachUserTable(db, "dolt_history_", &historyModule);
 }
 
 #endif 

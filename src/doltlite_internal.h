@@ -99,6 +99,11 @@ typedef struct DoltliteCommit DoltliteCommit;
 int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
                        DoltliteCommit *pCommit);
 
+/* Register a per-table virtual table module for each user table in HEAD.
+** Creates modules named "<zPrefix><tablename>" (doltlite_ref.c) */
+int doltliteForEachUserTable(sqlite3 *db, const char *zPrefix,
+                             const sqlite3_module *pModule);
+
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);

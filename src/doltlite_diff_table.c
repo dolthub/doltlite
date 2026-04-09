@@ -455,32 +455,7 @@ static sqlite3_module diffTableModule = {
 };
 
 void doltliteRegisterDiffTables(sqlite3 *db){
-  ProllyHash headCommit;
-  DoltliteCommit commit;
-  struct TableEntry *aTables = 0;
-  int nTables = 0, i, rc;
-
-  doltliteGetSessionHead(db, &headCommit);
-  if( prollyHashIsEmpty(&headCommit) ) return;
-
-  memset(&commit, 0, sizeof(commit));
-  rc = doltliteLoadCommit(db, &headCommit, &commit);
-  if( rc!=SQLITE_OK ) return;
-
-  rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
-  doltliteCommitClear(&commit);
-  if( rc!=SQLITE_OK ) return;
-
-  for(i=0; i<nTables; i++){
-    if( aTables[i].zName && aTables[i].iTable > 1 ){
-      char *zModName = sqlite3_mprintf("dolt_diff_%s", aTables[i].zName);
-      if( zModName ){
-        sqlite3_create_module(db, zModName, &diffTableModule, 0);
-        sqlite3_free(zModName);
-      }
-    }
-  }
-  sqlite3_free(aTables);
+  doltliteForEachUserTable(db, "dolt_diff_", &diffTableModule);
 }
 
-#endif 
+#endif

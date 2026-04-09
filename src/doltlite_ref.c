@@ -48,4 +48,38 @@ int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
   return rc;
 }
 
+int doltliteForEachUserTable(
+  sqlite3 *db,
+  const char *zPrefix,
+  const sqlite3_module *pModule
+){
+  ProllyHash headCommit;
+  DoltliteCommit commit;
+  struct TableEntry *aTables = 0;
+  int nTables = 0, i, rc;
+
+  doltliteGetSessionHead(db, &headCommit);
+  if( prollyHashIsEmpty(&headCommit) ) return SQLITE_OK;
+
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommit(db, &headCommit, &commit);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
+  doltliteCommitClear(&commit);
+  if( rc!=SQLITE_OK ) return rc;
+
+  for(i=0; i<nTables; i++){
+    if( aTables[i].zName && aTables[i].iTable > 1 ){
+      char *zMod = sqlite3_mprintf("%s%s", zPrefix, aTables[i].zName);
+      if( zMod ){
+        sqlite3_create_module(db, zMod, pModule, 0);
+        sqlite3_free(zMod);
+      }
+    }
+  }
+  sqlite3_free(aTables);
+  return SQLITE_OK;
+}
+
 #endif
