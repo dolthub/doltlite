@@ -324,6 +324,7 @@ static void removeTable(Btree *pBtree, Pgno iTable);
 static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode);
 static void invalidateSchema(Btree *pBtree);
 static int flushMutMap(BtCursor *pCur);
+static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
 static int mutMapHasDeleteOps(ProllyMutMap *pMap);
 static int flushIfNeeded(BtCursor *pCur);
 static int flushAllPending(BtShared *pBt, Pgno iTable);
@@ -3456,11 +3457,6 @@ static int prollyBtCursorIndexMoveto(
 
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  /* Re-seeking a write cursor against its own unflushed BLOBKEY edits can
-  ** leave the cursor comparing against stale in-memory state across repeated
-  ** DELETE/UPDATE probes in the same statement. Materialize the current
-  ** cursor's pending edits before the seek so later seek/recheck opcodes
-  ** see a consistent tree image. */
   if( pCur->flushSeekEdits
    && (pCur->curFlags & BTCF_WriteFlag)
    && pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
@@ -3470,7 +3466,6 @@ static int prollyBtCursorIndexMoveto(
     pCur->flushSeekEdits = 0;
   }
 
-  
   {
     BtCursor *p;
     for(p = pCur->pBt->pCursor; p; p = p->pNext){
@@ -3991,6 +3986,7 @@ static int prollyBtCursorInsert(
         ** mergeSrc) is stale. Reset so the next Next/Previous call
         ** re-synchronizes the merge cursor with the updated MutMap. */
         pCur->mmActive = 0;
+        pCur->flushSeekEdits = 0;
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
         /* For BLOBKEY cursors (WITHOUT ROWID PK), after a deferred insert
         ** following a deferred delete with SAVEPOSITION, advance the tree
@@ -4013,8 +4009,10 @@ static int prollyBtCursorInsert(
           pCur->eState = CURSOR_INVALID;
         }
         pCur->mmActive = 0;
+        pCur->flushSeekEdits = 0;
       } else {
         pCur->eState = CURSOR_INVALID;
+        pCur->flushSeekEdits = 0;
       }
       return SQLITE_OK;
     }
@@ -4312,6 +4310,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     if( canDefer ){
       CLEAR_CACHED_PAYLOAD(pCur);
       pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
+      pCur->mmActive = 0;
       if( flags & (BTREE_SAVEPOSITION | BTREE_AUXDELETE) ){
         pCur->flushSeekEdits = 1;
         pCur->eState = CURSOR_SKIPNEXT;
