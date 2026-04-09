@@ -299,6 +299,7 @@ struct BtCursor {
   i64 cachedIntKey;
 
   u8 isPinned;            /* When pinned, saveCursorPosition is a no-op */
+  u8 flushSeekEdits;      /* Flush pending deletes before next IndexMoveto */
 
   /* Merge iteration state: mmIdx indexes into pMutMap->aEntries.
   ** mergeSrc says where the current row comes from. */
@@ -323,6 +324,7 @@ static void removeTable(Btree *pBtree, Pgno iTable);
 static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode);
 static void invalidateSchema(Btree *pBtree);
 static int flushMutMap(BtCursor *pCur);
+static int mutMapHasDeleteOps(ProllyMutMap *pMap);
 static int flushIfNeeded(BtCursor *pCur);
 static int flushAllPending(BtShared *pBt, Pgno iTable);
 static int flushDeferredEdits(BtShared *pBt);
@@ -1022,6 +1024,17 @@ static int ensureMutMap(BtCursor *pCur){
     return rc;
   }
   return SQLITE_OK;
+}
+
+static int mutMapHasDeleteOps(ProllyMutMap *pMap){
+  int i;
+  if( !pMap ) return 0;
+  for(i=0; i<pMap->nEntries; i++){
+    if( pMap->aEntries[i].op==PROLLY_EDIT_DELETE ){
+      return 1;
+    }
+  }
+  return 0;
 }
 
 static int saveCursorPosition(BtCursor *pCur){
@@ -2546,6 +2559,7 @@ static int prollyBtreeCursor(
     if( wrFlag & BTREE_WRCSR ){
       pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
       pTE->pPending = 0;
+      pCur->flushSeekEdits = mutMapHasDeleteOps(pCur->pMutMap);
     }else{
       
       ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
@@ -3442,6 +3456,20 @@ static int prollyBtCursorIndexMoveto(
 
   CLEAR_CACHED_PAYLOAD(pCur);
 
+  /* Re-seeking a write cursor against its own unflushed BLOBKEY edits can
+  ** leave the cursor comparing against stale in-memory state across repeated
+  ** DELETE/UPDATE probes in the same statement. Materialize the current
+  ** cursor's pending edits before the seek so later seek/recheck opcodes
+  ** see a consistent tree image. */
+  if( pCur->flushSeekEdits
+   && (pCur->curFlags & BTCF_WriteFlag)
+   && pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    rc = flushMutMap(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+    pCur->mmActive = 0;
+    pCur->flushSeekEdits = 0;
+  }
+
   
   {
     BtCursor *p;
@@ -4284,8 +4312,8 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     if( canDefer ){
       CLEAR_CACHED_PAYLOAD(pCur);
       pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
-      if( flags & BTREE_SAVEPOSITION ){
-        
+      if( flags & (BTREE_SAVEPOSITION | BTREE_AUXDELETE) ){
+        pCur->flushSeekEdits = 1;
         pCur->eState = CURSOR_SKIPNEXT;
         pCur->skipNext = 0;
       } else {
