@@ -8,7 +8,7 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 
-#define PROLLY_CURSOR_MAX_DEPTH 64
+#define PROLLY_CURSOR_MAX_DEPTH 32
 
 typedef struct ProllyCursor ProllyCursor;
 typedef struct ProllyCursorLevel ProllyCursorLevel;

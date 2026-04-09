@@ -306,23 +306,26 @@ static int diffEmitSubtree(
   const ProllyHash *pRoot, u8 flags, u8 changeType,
   ProllyDiffCallback xCb, void *pCtx
 ){
-  ProllyCursor cur;
+  ProllyCursor *pCur;
   int rc, empty = 0;
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
-  prollyCursorInit(&cur, pStore, pCache, pRoot, flags);
-  rc = prollyCursorFirst(&cur, &empty);
-  if( rc!=SQLITE_OK || empty ){ prollyCursorClose(&cur); return rc; }
-  while( prollyCursorIsValid(&cur) ){
+  pCur = sqlite3_malloc(sizeof(ProllyCursor));
+  if( !pCur ) return SQLITE_NOMEM;
+  prollyCursorInit(pCur, pStore, pCache, pRoot, flags);
+  rc = prollyCursorFirst(pCur, &empty);
+  if( rc!=SQLITE_OK || empty ){ prollyCursorClose(pCur); sqlite3_free(pCur); return rc; }
+  while( prollyCursorIsValid(pCur) ){
     if( changeType==PROLLY_DIFF_ADD ){
-      rc = diffEmitAdd(&cur, flags, xCb, pCtx);
+      rc = diffEmitAdd(pCur, flags, xCb, pCtx);
     }else{
-      rc = diffEmitDelete(&cur, flags, xCb, pCtx);
+      rc = diffEmitDelete(pCur, flags, xCb, pCtx);
     }
     if( rc!=SQLITE_OK ) break;
-    rc = prollyCursorNext(&cur);
+    rc = prollyCursorNext(pCur);
     if( rc!=SQLITE_OK ) break;
   }
-  prollyCursorClose(&cur);
+  prollyCursorClose(pCur);
+  sqlite3_free(pCur);
   return rc;
 }
 
