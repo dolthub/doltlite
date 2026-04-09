@@ -16,15 +16,39 @@ static void activeBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   sqlite3_result_text(ctx, doltliteGetSessionBranch(db), -1, SQLITE_TRANSIENT);
 }
 
+typedef struct BranchMutationCtx BranchMutationCtx;
+struct BranchMutationCtx {
+  const char *zName;
+  ProllyHash head;
+  int isDelete;
+};
+
+static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
+  BranchMutationCtx *p = (BranchMutationCtx*)pArg;
+  int rc;
+
+  if( p->isDelete ){
+    ProllyHash empty;
+    rc = chunkStoreDeleteBranch(cs, p->zName);
+    if( rc!=SQLITE_OK ) return rc;
+    memset(&empty, 0, sizeof(empty));
+    return doltliteUpdateBranchWorkingState(db, p->zName, &empty, NULL);
+  }
+
+  return chunkStoreAddBranch(cs, p->zName, &p->head);
+}
+
 static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash head;
+  BranchMutationCtx m;
   const char *arg0;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<1 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
+
+  memset(&m, 0, sizeof(m));
 
   arg0 = (const char*)sqlite3_value_text(argv[0]);
   if( !arg0 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
@@ -38,29 +62,21 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       sqlite3_result_error(ctx, "cannot delete the current branch", -1);
       return;
     }
-    rc = chunkStoreDeleteBranch(cs, zName);
+    m.zName = zName;
+    m.isDelete = 1;
+    rc = doltliteMutateRefs(db, mutateBranchRef, &m);
     if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch not found", -1); return; }
-    /* Clear this branch's entry from the working state so GC can
-    ** reclaim the deleted branch's catalog and data chunks. */
-    {
-      ProllyHash empty;
-      memset(&empty, 0, sizeof(empty));
-      doltliteUpdateBranchWorkingState(db, zName, &empty, NULL);
-    }
   }else{
-    
-    doltliteGetSessionHead(db, &head);
-    if( prollyHashIsEmpty(&head) ){
+    doltliteGetSessionHead(db, &m.head);
+    if( prollyHashIsEmpty(&m.head) ){
       sqlite3_result_error(ctx, "no commits yet — commit first", -1);
       return;
     }
-    rc = chunkStoreAddBranch(cs, arg0, &head);
+    m.zName = arg0;
+    rc = doltliteMutateRefs(db, mutateBranchRef, &m);
     if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch already exists", -1); return; }
   }
 
-  rc = chunkStoreSerializeRefs(cs);
-  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
-  if( rc!=SQLITE_OK ){ sqlite3_result_error_code(ctx, rc); return; }
   sqlite3_result_int(ctx, 0);
 }
 
@@ -109,11 +125,66 @@ static int checkoutLoadAndApply(
   return rc;
 }
 
+typedef struct CheckoutMutationCtx CheckoutMutationCtx;
+struct CheckoutMutationCtx {
+  const char *zTargetBranch;
+  const char *zCurrentBranch;
+  ProllyHash oldCatHash;
+  ProllyHash oldCommitHash;
+  ProllyHash targetCommit;
+  ProllyHash targetCatHash;
+  int haveOldState;
+};
+
+static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
+  CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
+  int rc;
+
+  rc = chunkStoreFindBranch(cs, p->zTargetBranch, &p->targetCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(&p->targetCommit) ) return SQLITE_EMPTY;
+
+  rc = checkoutLoadAndApply(db, cs, p->zTargetBranch,
+                            &p->targetCommit, &p->targetCatHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteSetSessionBranch(db, p->zTargetBranch);
+  doltliteSetSessionHead(db, &p->targetCommit);
+
+  rc = doltliteLoadWorkingSet(db, p->zTargetBranch);
+  if( rc!=SQLITE_OK ) return rc;
+
+  {
+    ProllyHash staged;
+    doltliteGetSessionStaged(db, &staged);
+    if( prollyHashIsEmpty(&staged) ){
+      doltliteSetSessionStaged(db, &p->targetCatHash);
+    }
+  }
+
+  rc = chunkStoreSetDefaultBranch(cs, p->zTargetBranch);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteSaveWorkingSet(db);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( p->haveOldState ){
+    rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
+                                          &p->oldCatHash, &p->oldCommitHash);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  return doltliteUpdateBranchWorkingState(db, p->zTargetBranch,
+                                          &p->targetCatHash, &p->targetCommit);
+}
+
 static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash targetCommit;
+  CheckoutMutationCtx m;
+  BranchMutationCtx branchCreate;
   const char *zBranch;
+  char *zCurrentBranch = 0;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -121,42 +192,30 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   zBranch = (const char*)sqlite3_value_text(argv[0]);
   if( !zBranch ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
 
+  memset(&m, 0, sizeof(m));
+  memset(&branchCreate, 0, sizeof(branchCreate));
+
   
   if( strcmp(zBranch, "-b")==0 ){
-    ProllyHash head;
     if( argc<2 ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
     zBranch = (const char*)sqlite3_value_text(argv[1]);
     if( !zBranch ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
 
-    doltliteGetSessionHead(db, &head);
-    if( prollyHashIsEmpty(&head) ){
+    doltliteGetSessionHead(db, &branchCreate.head);
+    if( prollyHashIsEmpty(&branchCreate.head) ){
       sqlite3_result_error(ctx, "no commits yet — commit first", -1);
       return;
     }
-    rc = chunkStoreAddBranch(cs, zBranch, &head);
+    branchCreate.zName = zBranch;
+    rc = doltliteMutateRefs(db, mutateBranchRef, &branchCreate);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(ctx, "branch already exists", -1);
       return;
     }
-    rc = chunkStoreSerializeRefs(cs);
-    if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(ctx, rc);
-      return;
-    }
-    
   }
 
   if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
     sqlite3_result_int(ctx, 0);
-    return;
-  }
-
-  rc = chunkStoreFindBranch(cs, zBranch, &targetCommit);
-  if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch not found", -1); return; }
-
-  if( prollyHashIsEmpty(&targetCommit) ){
-    sqlite3_result_error(ctx, "target branch has no commits", -1);
     return;
   }
 
@@ -173,63 +232,40 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   /* Save the current branch's working catalog before hardReset overwrites
   ** it with the target branch's catalog. */
   {
-    extern int doltliteFlushAndSerializeCatalog(sqlite3*, u8**, int*);
-    extern int doltliteUpdateBranchWorkingState(sqlite3*, const char*,
-                                                const ProllyHash*, const ProllyHash*);
     u8 *oldCatData = 0; int nOldCat = 0;
-    ProllyHash oldCatHash;
-    ProllyHash oldCommitHash;
-    doltliteGetSessionHead(db, &oldCommitHash);
-    if( doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat)==SQLITE_OK ){
-      chunkStorePut(cs, oldCatData, nOldCat, &oldCatHash);
-      sqlite3_free(oldCatData);
-      doltliteUpdateBranchWorkingState(db,
-          doltliteGetSessionBranch(db), &oldCatHash, &oldCommitHash);
-    }
-  }
-
-  {
-    ProllyHash catHash;
-    rc = checkoutLoadAndApply(db, cs, zBranch, &targetCommit, &catHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "checkout failed", -1);
+    doltliteGetSessionHead(db, &m.oldCommitHash);
+    zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
+    if( !zCurrentBranch ){
+      sqlite3_result_error_nomem(ctx);
       return;
     }
-
-
-    doltliteSetSessionBranch(db, zBranch);
-    doltliteSetSessionHead(db, &targetCommit);
-
-
-    {
-      extern int doltliteLoadWorkingSet(sqlite3*, const char*);
-      doltliteLoadWorkingSet(db, zBranch);
-
-      {
-        ProllyHash staged;
-        doltliteGetSessionStaged(db, &staged);
-        if( prollyHashIsEmpty(&staged) ){
-          doltliteSetSessionStaged(db, &catHash);
-        }
-      }
-    }
-
-
-    chunkStoreSetDefaultBranch(cs, zBranch);
-
-    {
-      extern int doltliteSaveWorkingSet(sqlite3*);
-      extern int doltliteUpdateBranchWorkingState(sqlite3*, const char*,
-                                                  const ProllyHash*, const ProllyHash*);
-      doltliteSaveWorkingSet(db);
-      /* Record the target branch's working catalog in the per-branch working
-      ** state so cross-branch connections find the correct catalog on refresh. */
-      doltliteUpdateBranchWorkingState(db, zBranch, &catHash, &targetCommit);
+    if( doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat)==SQLITE_OK ){
+      rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
+      sqlite3_free(oldCatData);
+      if( rc==SQLITE_OK ) m.haveOldState = 1;
     }
   }
-  rc = chunkStoreSerializeRefs(cs);
-  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
 
+  m.zTargetBranch = zBranch;
+  m.zCurrentBranch = zCurrentBranch;
+  rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
+  sqlite3_free(zCurrentBranch);
+  if( rc==SQLITE_NOTFOUND ){
+    sqlite3_result_error(ctx, "branch not found", -1);
+    return;
+  }
+  if( rc==SQLITE_EMPTY ){
+    sqlite3_result_error(ctx, "target branch has no commits", -1);
+    return;
+  }
+  if( rc==SQLITE_BUSY ){
+    sqlite3_result_error(ctx, "database is locked by another connection", -1);
+    return;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(ctx, "checkout failed", -1);
+    return;
+  }
   sqlite3_result_int(ctx, 0);
 }
 

@@ -115,6 +115,25 @@ static int doltlitePersistState(sqlite3 *db){
   return chunkStoreCommit(cs);
 }
 
+int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc;
+
+  if( !cs ) return SQLITE_ERROR;
+
+  rc = chunkStoreLockAndRefresh(cs);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = xMutate(db, cs, pArg);
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreSerializeRefs(cs);
+    if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+  }
+
+  chunkStoreUnlock(cs);
+  return rc;
+}
+
 /*
 ** Helper #2: Flush the in-memory catalog, serialize it into the chunk store,
 ** and return the resulting hash.
@@ -617,10 +636,12 @@ static void doltliteResetFunc(
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash targetCatHash;
+  ProllyHash targetCommit;
   int isHard = 0;
   const char *zRef = 0;
   int rc;
   int i;
+  int graphLocked = 0;
 
   if( !cs ){
     sqlite3_result_error(context, "no database open", -1);
@@ -637,7 +658,6 @@ static void doltliteResetFunc(
   }
 
   if( zRef ){
-    ProllyHash targetCommit;
     DoltliteCommit commit;
 
     rc = doltliteResolveRef(db,zRef, &targetCommit);
@@ -654,9 +674,38 @@ static void doltliteResetFunc(
     memcpy(&targetCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
 
+    rc = chunkStoreLockAndRefresh(cs);
+    if( rc==SQLITE_BUSY ){
+      sqlite3_result_error(context,
+        "database is locked by another connection", -1);
+      return;
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
+    graphLocked = 1;
+
+    {
+      const char *branch = doltliteGetSessionBranch(db);
+      ProllyHash branchTip;
+      ProllyHash sessionHead;
+      doltliteGetSessionHead(db, &sessionHead);
+      if( chunkStoreFindBranch(cs, branch, &branchTip)==SQLITE_OK
+       && prollyHashCompare(&sessionHead, &branchTip)!=0 ){
+        sqlite3_result_error(context,
+          "reset conflict: another connection moved this branch. "
+          "Please retry your transaction.", -1);
+        goto reset_cleanup;
+      }
+    }
+
     doltliteSetSessionHead(db, &targetCommit);
-    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &targetCommit);
-    chunkStoreSerializeRefs(cs);
+    rc = chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &targetCommit);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto reset_cleanup;
+    }
 
     doltliteClearSessionMergeState(db);
   }else{
@@ -672,24 +721,28 @@ static void doltliteResetFunc(
   if( isHard ){
     if( prollyHashIsEmpty(&targetCatHash) ){
       sqlite3_result_error(context, "no commit to reset to", -1);
-      return;
+      goto reset_cleanup;
     }
     doltliteSaveWorkingSet(db);
     chunkStoreSerializeRefs(cs);
     rc = doltliteHardReset(db, &targetCatHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "hard reset failed", -1);
-      return;
+      goto reset_cleanup;
     }
   }else{
     rc = doltlitePersistState(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
-      return;
+      goto reset_cleanup;
     }
   }
 
   sqlite3_result_int(context, 0);
+reset_cleanup:
+  if( graphLocked ){
+    chunkStoreUnlock(cs);
+  }
 }
 
 /* extractColNameFromDef, bindRecordField, migrateDiffCb, migrateSchemaRowData

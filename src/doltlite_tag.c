@@ -8,14 +8,31 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
+typedef struct TagMutationCtx TagMutationCtx;
+struct TagMutationCtx {
+  const char *zName;
+  ProllyHash commitHash;
+  int isDelete;
+};
+
+static int mutateTagRef(sqlite3 *db, ChunkStore *cs, void *pArg){
+  TagMutationCtx *p = (TagMutationCtx*)pArg;
+  (void)db;
+  if( p->isDelete ) return chunkStoreDeleteTag(cs, p->zName);
+  return chunkStoreAddTag(cs, p->zName, &p->commitHash);
+}
+
 static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
+  TagMutationCtx m;
   const char *arg0;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<1 ){ sqlite3_result_error(ctx, "tag name required", -1); return; }
+
+  memset(&m, 0, sizeof(m));
 
   arg0 = (const char*)sqlite3_value_text(argv[0]);
   if( !arg0 ){ sqlite3_result_error(ctx, "tag name required", -1); return; }
@@ -25,41 +42,40 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     if( argc<2 ){ sqlite3_result_error(ctx, "tag name required for delete", -1); return; }
     zName = (const char*)sqlite3_value_text(argv[1]);
     if( !zName ){ sqlite3_result_error(ctx, "tag name required", -1); return; }
-    rc = chunkStoreDeleteTag(cs, zName);
+    m.zName = zName;
+    m.isDelete = 1;
+    rc = doltliteMutateRefs(db, mutateTagRef, &m);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(ctx, "tag not found", -1);
       return;
     }
   }else{
     
-    ProllyHash commitHash;
     if( argc>=2 ){
       
       const char *zHash = (const char*)sqlite3_value_text(argv[1]);
       if( !zHash ){ sqlite3_result_error(ctx, "invalid commit hash", -1); return; }
-      rc = doltliteHexToHash(zHash, &commitHash);
+      rc = doltliteHexToHash(zHash, &m.commitHash);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error(ctx, "invalid commit hash format", -1);
         return;
       }
     }else{
       
-      doltliteGetSessionHead(db, &commitHash);
-      if( prollyHashIsEmpty(&commitHash) ){
+      doltliteGetSessionHead(db, &m.commitHash);
+      if( prollyHashIsEmpty(&m.commitHash) ){
         sqlite3_result_error(ctx, "no commits to tag", -1);
         return;
       }
     }
-    rc = chunkStoreAddTag(cs, arg0, &commitHash);
+    m.zName = arg0;
+    rc = doltliteMutateRefs(db, mutateTagRef, &m);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(ctx, "tag already exists", -1);
       return;
     }
   }
 
-  rc = chunkStoreSerializeRefs(cs);
-  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
-  if( rc!=SQLITE_OK ){ sqlite3_result_error_code(ctx, rc); return; }
   sqlite3_result_int(ctx, 0);
 }
 
