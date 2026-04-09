@@ -778,7 +778,7 @@ static void refreshCursorRoot(BtCursor *pCur){
 /*
 ** Catalog serialization format (V2):
 **   Byte 0:       CATALOG_FORMAT_V2 magic (0x43)
-**   Bytes 1-4:    iNextTable (little-endian u32)
+**   Bytes 1-4:    reserved (was iNextTable; now derived from max(iTable)+1)
 **   Bytes 5-8:    nTables (little-endian u32)
 **   Per table:
 **     4 bytes:    iTable (little-endian u32)
@@ -822,8 +822,9 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   q = buf;
   
   *q++ = CATALOG_FORMAT_V2;
-  q[0]=(u8)(pBtree->iNextTable); q[1]=(u8)(pBtree->iNextTable>>8);
-  q[2]=(u8)(pBtree->iNextTable>>16); q[3]=(u8)(pBtree->iNextTable>>24);
+  /* Reserved (was iNextTable). Write zeros so the catalog hash is
+  ** deterministic — iNextTable is derived from max(iTable)+1 on load. */
+  q[0]=0; q[1]=0; q[2]=0; q[3]=0;
   q += 4;
   q[0]=(u8)nTables; q[1]=(u8)(nTables>>8);
   q[2]=(u8)(nTables>>16); q[3]=(u8)(nTables>>24);
@@ -870,9 +871,8 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   pBtree->nTablesAlloc = 0;
 
   
-  q++;  
-  pBtree->iNextTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
-  q += 4;
+  q++;
+  q += 4; /* skip reserved (was iNextTable, now derived below) */
   nTables = (int)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
   q += 4;
   initDefaultMeta(pBtree);
@@ -932,6 +932,9 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       }
     }
     pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = maxPage;
+    /* Derive iNextTable from the data — the stored value was zeroed
+    ** in the catalog format so the content hash is deterministic. */
+    pBtree->iNextTable = maxPage + 1;
   }
 
   return SQLITE_OK;

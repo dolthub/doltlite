@@ -57,33 +57,33 @@ int doltliteHasUncommittedChanges(sqlite3 *db){
     return 1;
   }
 
-  /* Working differs from HEAD? Compare table entries (root + schema hashes),
-  ** not catalog chunk hashes, since iNextTable may drift. Same logic as
-  ** dolt_status uses via compareCatalogs. */
+  /* Working differs from HEAD? Compare table entries (root + schema hashes)
+  ** since catalog serialization is not fully deterministic (table name
+  ** resolution and other side effects can change the serialized bytes). */
   {
     struct TableEntry *aHead = 0, *aWorking = 0;
     int nHead = 0, nWorking = 0, dirty = 0, i;
+    ProllyHash workingCatHash;
+    ChunkStore *cs = doltliteGetChunkStore(db);
 
     doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
 
-    rc = doltliteFlushAndSerializeCatalog(db, &wCatData, &nWCat);
-    if( rc==SQLITE_OK ){
-      ChunkStore *cs = doltliteGetChunkStore(db);
-      if( cs ){
-        rc = chunkStorePut(cs, wCatData, nWCat, &workingCatHash);
-        if( rc==SQLITE_OK )
-          doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
+    if( cs ){
+      rc = doltliteFlushAndSerializeCatalog(db, &wCatData, &nWCat);
+      if( rc==SQLITE_OK ){
+        chunkStorePut(cs, wCatData, nWCat, &workingCatHash);
+        sqlite3_free(wCatData);
+        doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
       }
-      sqlite3_free(wCatData);
     }
 
     if( aHead && aWorking ){
-      if( nHead != nWorking ){ dirty = 1; }
-      else{
-        for(i=0; i<nHead && !dirty; i++){
-          if( aHead[i].iTable != aWorking[i].iTable ) dirty = 1;
-          else if( prollyHashCompare(&aHead[i].root, &aWorking[i].root)!=0 ) dirty = 1;
-          else if( prollyHashCompare(&aHead[i].schemaHash, &aWorking[i].schemaHash)!=0 ) dirty = 1;
+      if( nHead != nWorking ) dirty = 1;
+      for(i=0; i<nHead && i<nWorking && !dirty; i++){
+        if( aHead[i].iTable != aWorking[i].iTable
+         || prollyHashCompare(&aHead[i].root, &aWorking[i].root)!=0
+         || prollyHashCompare(&aHead[i].schemaHash, &aWorking[i].schemaHash)!=0 ){
+          dirty = 1;
         }
       }
     }
