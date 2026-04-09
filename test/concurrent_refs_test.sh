@@ -7,5 +7,5 @@
 set -euo pipefail
 
 echo "=== Concurrent Refs Repro ==="
-cc -g -I. -o concurrent_refs_test ../test/concurrent_refs_test.c libdoltlite.a -lz -lpthread
+cc -g -I. -o concurrent_refs_test ../test/concurrent_refs_test.c libdoltlite.a -lz -lpthread -lm
 ./concurrent_refs_test
