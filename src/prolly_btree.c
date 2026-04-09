@@ -1365,8 +1365,7 @@ int sqlite3BtreeOpen(
   ** - NULL/empty filenames (temp databases, ephemeral tables)
   ** - BTREE_SINGLE flag (transient/ephemeral btrees)
   ** - Temp database (SQLITE_OPEN_TEMP_DB in vfsFlags)
-  ** - Existing files with standard SQLite headers
-  ** All other databases (main, attached doltlite files) use prolly trees. */
+  ** - Existing files with standard SQLite headers */
   if( !zFilename || zFilename[0]=='\0'
    || (flags & BTREE_SINGLE)
    || (vfsFlags & SQLITE_OPEN_TEMP_DB)
