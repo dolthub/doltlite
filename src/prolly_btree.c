@@ -798,6 +798,9 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   int i;
 
   
+  /* Resolve table names eagerly (needed for serialization).
+  ** Sort a COPY by name for deterministic output — do not mutate
+  ** aTables in place, since other code depends on insertion order. */
   if( pBtree->db ){
     for(i=0; i<nTables; i++){
       if( !pBtree->aTables[i].zName && pBtree->aTables[i].iTable>1 ){
@@ -806,9 +809,7 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
       }
     }
   }
-  
 
-  
   for(i=0; i<nTables; i++){
     int nLen = pBtree->aTables[i].zName ? (int)strlen(pBtree->aTables[i].zName) : 0;
     if( sz > 0x7FFFFFFF - (4 + 1 + PROLLY_HASH_SIZE*2 + 2 + nLen) ){

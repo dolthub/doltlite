@@ -42,10 +42,12 @@ extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHas
 ** Returns 1 if there are uncommitted changes (working differs from HEAD
 ** or staged differs from HEAD), 0 otherwise.
 */
+static int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
+
 int doltliteHasUncommittedChanges(sqlite3 *db){
   ProllyHash headCatHash, stagedHash, workingCatHash;
   u8 *wCatData = 0; int nWCat = 0;
-  int rc;
+  int rc, i;
 
   rc = doltliteGetHeadCatalogHash(db, &headCatHash);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&headCatHash) ) return 0;
@@ -58,12 +60,11 @@ int doltliteHasUncommittedChanges(sqlite3 *db){
   }
 
   /* Working differs from HEAD? Compare table entries (root + schema hashes)
-  ** since catalog serialization is not fully deterministic (table name
-  ** resolution and other side effects can change the serialized bytes). */
+  ** because catalog serialization has side effects from lazy name resolution
+  ** that can change the serialized bytes (issue #290). */
   {
     struct TableEntry *aHead = 0, *aWorking = 0;
-    int nHead = 0, nWorking = 0, dirty = 0, i;
-    ProllyHash workingCatHash;
+    int nHead = 0, nWorking = 0, dirty = 0;
     ChunkStore *cs = doltliteGetChunkStore(db);
 
     doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
