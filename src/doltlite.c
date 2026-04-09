@@ -30,7 +30,8 @@ extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
 
 extern int doltliteMergeCatalogs(sqlite3 *db, const ProllyHash *ancestor,
                                   const ProllyHash *ours, const ProllyHash *theirs,
-                                  ProllyHash *pMergedHash, int *pnConflicts);
+                                  ProllyHash *pMergedHash, int *pnConflicts,
+                                  char **pzErrMsg);
 
 extern const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable);
 extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
@@ -758,13 +759,21 @@ static void doltliteMergeFunc(
   memcpy(&ancCatHash, &ancCommit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&ancCommit);
 
-  
-  rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash, &mergedCatHash, &nMergeConflicts);
-  if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&ourCommit);
-    doltliteCommitClear(&theirCommit);
-    sqlite3_result_error(context, "merge failed", -1);
-    return;
+  {
+    char *zMergeErr = 0;
+    rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash, &mergedCatHash, &nMergeConflicts, &zMergeErr);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&ourCommit);
+      doltliteCommitClear(&theirCommit);
+      if( zMergeErr ){
+        sqlite3_result_error(context, zMergeErr, -1);
+        sqlite3_free(zMergeErr);
+      }else{
+        sqlite3_result_error(context, "merge failed", -1);
+      }
+      return;
+    }
+    sqlite3_free(zMergeErr);
   }
 
   
@@ -879,7 +888,7 @@ static int applyMergedCatalogAndCommit(
   int rc;
 
   rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
-                              &mergedCatHash, pnConflicts);
+                              &mergedCatHash, pnConflicts, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteHardReset(db, &mergedCatHash);

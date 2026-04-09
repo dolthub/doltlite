@@ -165,7 +165,16 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     return;
   }
 
-  
+  /* Block checkout during unresolved merge conflicts. */
+  {
+    u8 isMerging = 0;
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+    if( isMerging ){
+      sqlite3_result_error(ctx, "unresolved merge conflicts \xe2\x80\x94 commit or abort first", -1);
+      return;
+    }
+  }
+
   /* Save the current branch's working catalog before hardReset overwrites
   ** it with the target branch's catalog. */
   {
