@@ -102,4 +102,22 @@ int doltliteMergeCatalogs(sqlite3 *db,
   int *pnConflicts, char **pzErrMsg,
   SchemaMergeAction **ppActions, int *pnActions);
 
+/* Schema merge helpers (doltlite_schema_merge.c) */
+struct ProllyDiffChange;
+
+struct MigrateDiffCtx {
+  sqlite3_stmt *pUpd;
+  int *aiColIdx;
+  char **azColNames;
+  int nCols;
+};
+
+char *extractColNameFromDef(const char *zDef);
+int bindRecordField(sqlite3_stmt *pStmt, int iParam, const u8 *pData,
+                    int nData, int serialType, int offset);
+int migrateDiffCb(void *pArg, const struct ProllyDiffChange *pChange);
+int migrateSchemaRowData(sqlite3 *db, const ProllyHash *pAncCatHash,
+                         const ProllyHash *pTheirCatHash,
+                         SchemaMergeAction *aActions, int nActions);
+
 #endif
