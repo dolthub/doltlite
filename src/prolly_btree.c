@@ -1130,6 +1130,98 @@ static void freeSavepointTables(struct SavepointTableState *pState){
   }
 }
 
+static void truncatePendingToCount(ProllyMutMap *pMap, int savedCount){
+  while( pMap && pMap->nEntries > savedCount ){
+    ProllyMutMapEntry *e;
+    pMap->nEntries--;
+    e = &pMap->aEntries[pMap->nEntries];
+    sqlite3_free(e->pKey);
+    e->pKey = 0;
+    sqlite3_free(e->pVal);
+    e->pVal = 0;
+  }
+}
+
+static int findTableIndexInArray(
+  struct TableEntry *aTables,
+  int nTables,
+  Pgno iTable
+){
+  int lo = 0;
+  int hi = nTables;
+  while( lo < hi ){
+    int mid = lo + ((hi - lo) / 2);
+    Pgno midTable = aTables[mid].iTable;
+    if( midTable==iTable ){
+      return mid;
+    }
+    if( midTable < iTable ){
+      lo = mid + 1;
+    }else{
+      hi = mid;
+    }
+  }
+  return -1;
+}
+
+static int restoreTablesFromSavepoint(
+  Btree *pBtree,
+  struct SavepointTableState *pState
+){
+  ProllyMutMap **apPending = 0;
+  int k;
+
+  if( pState->nTables>0 ){
+    apPending = sqlite3_malloc64(
+        pState->nTables * sizeof(ProllyMutMap*));
+    if( !apPending ) return SQLITE_NOMEM;
+    memset(apPending, 0, pState->nTables * sizeof(ProllyMutMap*));
+
+    if( pBtree->nTablesAlloc < pState->nTables ){
+      struct TableEntry *aNew = sqlite3_realloc(
+          pBtree->aTables, pState->nTables * (int)sizeof(struct TableEntry));
+      if( !aNew ){
+        sqlite3_free(apPending);
+        return SQLITE_NOMEM;
+      }
+      pBtree->aTables = aNew;
+      pBtree->nTablesAlloc = pState->nTables;
+    }
+  }
+
+  for(k=0; k<pBtree->nTables; k++){
+    ProllyMutMap *pMap = pBtree->aTables[k].pPending;
+    int iSaved;
+    if( !pMap ) continue;
+    iSaved = findTableIndexInArray(
+        pState->aTables, pState->nTables, pBtree->aTables[k].iTable);
+    if( iSaved>=0 ){
+      truncatePendingToCount(pMap, pState->aPendingCount[iSaved]);
+      apPending[iSaved] = pMap;
+    }else{
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+    }
+  }
+
+  if( pState->nTables>0 ){
+    memcpy(pBtree->aTables, pState->aTables,
+           pState->nTables * sizeof(struct TableEntry));
+    for(k=0; k<pState->nTables; k++){
+      pBtree->aTables[k].pPending = apPending[k];
+    }
+  }else{
+    sqlite3_free(pBtree->aTables);
+    pBtree->aTables = 0;
+    pBtree->nTablesAlloc = 0;
+  }
+
+  pBtree->nTables = pState->nTables;
+  pBtree->iNextTable = pState->iNextTable;
+  sqlite3_free(apPending);
+  return SQLITE_OK;
+}
+
 /* Snapshot the current state so ROLLBACK TO can restore it.
 ** Saves: (1) the current prolly root hash, (2) each table's root hash,
 ** (3) the nEntries count of each table's pending MutMap.
@@ -2157,38 +2249,9 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
      && p->aSavepointTables ){
       struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
       if( pState->aTables ){
-        /* Restore table roots and truncate MutMap entries */
-        {
-          int k;
-          for(k=0; k<pState->nTables && k<p->nTables; k++){
-            p->aTables[k].root = pState->aTables[k].root;
-            {
-            ProllyMutMap *pMap = (ProllyMutMap*)p->aTables[k].pPending;
-            if( pMap ){
-              int savedCount = pState->aPendingCount[k];
-              while( pMap->nEntries > savedCount ){
-                ProllyMutMapEntry *e;
-                pMap->nEntries--;
-                e = &pMap->aEntries[pMap->nEntries];
-                sqlite3_free(e->pKey); e->pKey = 0;
-                sqlite3_free(e->pVal); e->pVal = 0;
-              }
-            }
-            }
-          }
-          
-          for(k=pState->nTables; k<p->nTables; k++){
-            if( p->aTables[k].pPending ){
-              prollyMutMapFree((ProllyMutMap*)p->aTables[k].pPending);
-              sqlite3_free(p->aTables[k].pPending);
-            }
-          }
-        }
-        
-        p->nTables = pState->nTables;
-        p->nTablesAlloc = p->nTables;
-        p->iNextTable = pState->iNextTable;
-        
+        int rc = restoreTablesFromSavepoint(p, pState);
+        if( rc!=SQLITE_OK ) return rc;
+
         sqlite3_free(pState->aTables);
         sqlite3_free(pState->aPendingCount);
         pState->aTables = 0;

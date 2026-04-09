@@ -59,6 +59,7 @@ TESTS=(
   doltlite_issue179_180.sh
   concurrent_refs_test.sh
   checkout_persist_failure_test.sh
+  savepoint_catalog_restore_test.sh
   review_regression_test.sh
 )
 
