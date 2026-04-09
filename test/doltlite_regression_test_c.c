@@ -10,6 +10,7 @@
 **   ./doltlite_regression_test_c concurrent_refs
 **   ./doltlite_regression_test_c checkout_persist_failure
 **   ./doltlite_regression_test_c savepoint_catalog_restore
+**   ./doltlite_regression_test_c refs_blob_corruption
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,6 +18,7 @@
 #include <unistd.h>
 #include "sqlite3.h"
 #include "prolly_hash.h"
+#include "chunk_store.h"
 
 typedef unsigned char u8;
 typedef unsigned int Pgno;
@@ -124,7 +126,12 @@ struct FailFile {
 static sqlite3_vfs gFailVfs;
 static sqlite3_vfs *gBaseVfs = 0;
 static int gFailSyncOnce = 0;
+static int gFailAccessOnce = 0;
+static int gFailHasMovedOnce = 0;
+static int gFailFileSizeOnce = 0;
 static int gFailHits = 0;
+
+static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pResOut);
 
 static int failClose(sqlite3_file *pFile){
   FailFile *p = (FailFile*)pFile;
@@ -158,6 +165,11 @@ static int failSync(sqlite3_file *pFile, int flags){
 
 static int failFileSize(sqlite3_file *pFile, sqlite3_int64 *pSize){
   FailFile *p = (FailFile*)pFile;
+  if( gFailFileSizeOnce>0 ){
+    gFailFileSizeOnce--;
+    gFailHits++;
+    return SQLITE_IOERR;
+  }
   return p->pReal->pMethods->xFileSize(p->pReal, pSize);
 }
 
@@ -178,6 +190,11 @@ static int failCheckReservedLock(sqlite3_file *pFile, int *pResOut){
 
 static int failFileControl(sqlite3_file *pFile, int op, void *pArg){
   FailFile *p = (FailFile*)pFile;
+  if( op==SQLITE_FCNTL_HAS_MOVED && gFailHasMovedOnce>0 ){
+    gFailHasMovedOnce--;
+    gFailHits++;
+    return SQLITE_IOERR;
+  }
   return p->pReal->pMethods->xFileControl(p->pReal, op, pArg);
 }
 
@@ -275,7 +292,18 @@ static int registerFailVfs(void){
   gFailVfs.zName = "doltlite-failvfs";
   gFailVfs.szOsFile = sizeof(FailFile) + gBaseVfs->szOsFile;
   gFailVfs.xOpen = failOpen;
+  gFailVfs.xAccess = failAccess;
   return sqlite3_vfs_register(&gFailVfs, 0);
+}
+
+static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pResOut){
+  (void)pVfs;
+  if( gFailAccessOnce>0 ){
+    gFailAccessOnce--;
+    gFailHits++;
+    return SQLITE_IOERR;
+  }
+  return gBaseVfs->xAccess(gBaseVfs, zName, flags, pResOut);
 }
 
 static int open_fail_db(const char *path, sqlite3 **ppDb){
@@ -454,10 +482,109 @@ static void run_savepoint_catalog_restore(void){
   sqlite3_close(db);
 }
 
+static void run_refs_blob_corruption(void){
+  ChunkStore cs;
+  ChunkStore cs2;
+  u8 *pBlob = 0;
+  int nBlob = 0;
+  int rc;
+
+  printf("=== Refs Blob Corruption Test ===\n\n");
+  printf("--- Test 1: truncated refs blob is rejected ---\n");
+
+  check("open_mem_store_1",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("open_mem_store_2",
+        chunkStoreOpen(&cs2, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+
+  check("set_default_branch",
+        chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
+  cs.aBranches = sqlite3_malloc(sizeof(*cs.aBranches));
+  check("alloc_branch_ref", cs.aBranches!=0);
+  if( cs.aBranches ){
+    memset(cs.aBranches, 0, sizeof(*cs.aBranches));
+    cs.nBranches = 1;
+    cs.aBranches[0].zName = sqlite3_mprintf("main");
+    check("alloc_branch_name", cs.aBranches[0].zName!=0);
+  }
+
+  cs.aTags = sqlite3_malloc(sizeof(*cs.aTags));
+  check("alloc_tag_ref", cs.aTags!=0);
+  if( cs.aTags ){
+    memset(cs.aTags, 0, sizeof(*cs.aTags));
+    cs.nTags = 1;
+    cs.aTags[0].zName = sqlite3_mprintf("v1");
+    check("alloc_tag_name", cs.aTags[0].zName!=0);
+  }
+
+  check("serialize_refs_blob",
+        chunkStoreSerializeRefsToBlob(&cs, &pBlob, &nBlob)==SQLITE_OK);
+  check("refs_blob_has_tag_payload", nBlob>0);
+
+  rc = chunkStoreLoadRefsFromBlob(&cs2, pBlob, nBlob-20);
+  check("truncated_blob_returns_corrupt", rc==SQLITE_CORRUPT);
+
+  sqlite3_free(pBlob);
+  chunkStoreClose(&cs2);
+  chunkStoreClose(&cs);
+}
+
+static void run_refresh_error_propagation(void){
+  sqlite3 *db = 0;
+  ChunkStore cs;
+  int changed = -1;
+  int rc;
+  char dbpath[256];
+
+  printf("=== Refresh Error Propagation Test ===\n\n");
+  check("register_fail_vfs_for_refresh", registerFailVfs()==SQLITE_OK);
+
+  printf("--- Test 1: xAccess failure is surfaced ---\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refresh_access_failure");
+  remove_db(dbpath);
+  check("open_empty_chunk_store",
+        chunkStoreOpen(&cs, &gFailVfs, dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  gFailHits = 0;
+  gFailAccessOnce = 1;
+  changed = -1;
+  rc = chunkStoreRefreshIfChanged(&cs, &changed);
+  check("refresh_returns_access_error", rc!=SQLITE_OK);
+  check("access_failure_injected", gFailHits>0);
+  check("changed_left_false_on_access_error", changed==0);
+  chunkStoreClose(&cs);
+  remove_db(dbpath);
+
+  printf("--- Test 2: xFileControl failure is surfaced ---\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refresh_filecontrol_failure");
+  remove_db(dbpath);
+  check("open_sql_db", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_doltlite_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+  check("open_chunk_store_with_file",
+        chunkStoreOpen(&cs, &gFailVfs, dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  gFailHits = 0;
+  gFailHasMovedOnce = 1;
+  changed = -1;
+  rc = chunkStoreRefreshIfChanged(&cs, &changed);
+  check("refresh_returns_filecontrol_error", rc!=SQLITE_OK);
+  check("filecontrol_failure_injected", gFailHits>0);
+  check("changed_left_false_on_filecontrol_error", changed==0);
+  chunkStoreClose(&cs);
+  remove_db(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
-  { "savepoint_catalog_restore", "Savepoint Catalog Restore Test", run_savepoint_catalog_restore }
+  { "savepoint_catalog_restore", "Savepoint Catalog Restore Test", run_savepoint_catalog_restore },
+  { "refs_blob_corruption", "Refs Blob Corruption Test", run_refs_blob_corruption },
+  { "refresh_error_propagation", "Refresh Error Propagation Test", run_refresh_error_propagation }
 };
 
 static int run_case_by_name(const char *zName){
