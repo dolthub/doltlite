@@ -5,6 +5,7 @@
 #include "doltlite_commit.h"
 #include "prolly_hashset.h"
 #include "prolly_node.h"
+#include "doltlite_chunk_walk.h"
 #include <string.h>
 
 typedef struct SyncQueue SyncQueue;
@@ -54,25 +55,20 @@ static int syncQueuePending(SyncQueue *q){
   return q->nItems - q->iHead;
 }
 
-#define SYNC_PROLLY_NODE_MAGIC 0x504E4F44
+typedef struct SyncEnqCtx SyncEnqCtx;
+struct SyncEnqCtx {
+  SyncQueue *q;
+  ProllyHashSet *seen;
+};
 
-static int syncIsProllyNodeChunk(const u8 *data, int nData){
-  u32 m;
-  if( nData < 8 ) return 0;
-  m = (u32)data[0] | ((u32)data[1]<<8) |
-      ((u32)data[2]<<16) | ((u32)data[3]<<24);
-  return m == SYNC_PROLLY_NODE_MAGIC;
-}
-
-static int syncIsCommitChunk(const u8 *data, int nData){
-  if( nData < 30 ) return 0;
-  if( data[0] != DOLTLITE_COMMIT_V2 ) return 0;
-  if( nData >= 4 ){
-    u32 m = (u32)data[0] | ((u32)data[1]<<8) |
-            ((u32)data[2]<<16) | ((u32)data[3]<<24);
-    if( m == SYNC_PROLLY_NODE_MAGIC ) return 0;
-  }
-  return 1;
+static int syncChildCb(void *pCtx, const ProllyHash *pHash){
+  SyncEnqCtx *ctx = (SyncEnqCtx*)pCtx;
+  int rc;
+  if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
+  if( prollyHashSetContains(ctx->seen, pHash) ) return SQLITE_OK;
+  rc = prollyHashSetAdd(ctx->seen, pHash);
+  if( rc==SQLITE_OK ) rc = syncQueuePush(ctx->q, pHash);
+  return rc;
 }
 
 static int syncEnqueueChildren(
@@ -81,97 +77,10 @@ static int syncEnqueueChildren(
   SyncQueue *q,
   ProllyHashSet *seen
 ){
-  int rc = SQLITE_OK;
-  int i;
-
-  if( syncIsProllyNodeChunk(data, nData) ){
-    
-    ProllyNode node;
-    int parseRc = prollyNodeParse(&node, data, nData);
-    if( parseRc==SQLITE_OK && node.level > 0 ){
-      for(i=0; i<(int)node.nItems; i++){
-        ProllyHash childHash;
-        prollyNodeChildHash(&node, i, &childHash);
-        if( !prollyHashIsEmpty(&childHash) && !prollyHashSetContains(seen, &childHash) ){
-          rc = prollyHashSetAdd(seen, &childHash);
-          if( rc==SQLITE_OK ) rc = syncQueuePush(q, &childHash);
-        }
-        if( rc!=SQLITE_OK ) break;
-      }
-    }
-  }else if( syncIsCommitChunk(data, nData) ){
-
-    DoltliteCommit commit;
-    int drc;
-    memset(&commit, 0, sizeof(commit));
-    drc = doltliteCommitDeserialize(data, nData, &commit);
-    if( drc==SQLITE_OK ){
-      int pi;
-      for(pi=0; pi<commit.nParents && rc==SQLITE_OK; pi++){
-        if( !prollyHashIsEmpty(&commit.aParents[pi])
-            && !prollyHashSetContains(seen, &commit.aParents[pi]) ){
-          rc = prollyHashSetAdd(seen, &commit.aParents[pi]);
-          if( rc==SQLITE_OK ) rc = syncQueuePush(q, &commit.aParents[pi]);
-        }
-      }
-      if( rc==SQLITE_OK && !prollyHashIsEmpty(&commit.catalogHash)
-          && !prollyHashSetContains(seen, &commit.catalogHash) ){
-        rc = prollyHashSetAdd(seen, &commit.catalogHash);
-        if( rc==SQLITE_OK ) rc = syncQueuePush(q, &commit.catalogHash);
-      }
-      doltliteCommitClear(&commit);
-    }
-  }else{
-    
-    if( nData == WS_TOTAL_SIZE && data[0] == 1 ){
-      ProllyHash h;
-      memcpy(h.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
-      if( !prollyHashIsEmpty(&h) && !prollyHashSetContains(seen, &h) ){
-        rc = prollyHashSetAdd(seen, &h);
-        if( rc==SQLITE_OK ) rc = syncQueuePush(q, &h);
-      }
-      memcpy(h.data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
-      if( rc==SQLITE_OK && !prollyHashIsEmpty(&h) && !prollyHashSetContains(seen, &h) ){
-        rc = prollyHashSetAdd(seen, &h);
-        if( rc==SQLITE_OK ) rc = syncQueuePush(q, &h);
-      }
-      if( rc==SQLITE_OK && data[WS_MERGING_OFF] ){
-        memcpy(h.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
-        if( !prollyHashIsEmpty(&h) && !prollyHashSetContains(seen, &h) ){
-          rc = prollyHashSetAdd(seen, &h);
-          if( rc==SQLITE_OK ) rc = syncQueuePush(q, &h);
-        }
-      }
-    }
-
-    
-    if( nData >= 9 && data[0] == 0x43 ){
-      int nTables = (int)(data[5] | (data[6]<<8) |
-                          (data[7]<<16) | (data[8]<<24));
-      if( nTables >= 0 && nTables < 10000 ){
-        const u8 *p = data + 9;
-        for(i=0; i<nTables && rc==SQLITE_OK; i++){
-          if( p + 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2 > data + nData ) break;
-          {
-            ProllyHash tableRoot;
-            memcpy(tableRoot.data, p + 5, PROLLY_HASH_SIZE);
-            if( !prollyHashIsEmpty(&tableRoot) && !prollyHashSetContains(seen, &tableRoot) ){
-              rc = prollyHashSetAdd(seen, &tableRoot);
-              if( rc==SQLITE_OK ) rc = syncQueuePush(q, &tableRoot);
-            }
-          }
-          {
-            int nameLen;
-            p += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
-            nameLen = p[0] | (p[1]<<8);
-            p += 2 + nameLen;
-          }
-        }
-      }
-    }
-  }
-
-  return rc;
+  SyncEnqCtx ctx;
+  ctx.q = q;
+  ctx.seen = seen;
+  return doltliteEnumerateChunkChildren(data, nData, syncChildCb, &ctx);
 }
 
 #define SYNC_BATCH_SIZE 256
@@ -482,7 +391,7 @@ static int syncIsAncestor(
     rc = chunkStoreGet(cs, &current, &data, &nData);
     if( rc!=SQLITE_OK ) break;
 
-    if( syncIsCommitChunk(data, nData) ){
+    if( doltliteClassifyChunk(data, nData) == CHUNK_COMMIT ){
       DoltliteCommit commit;
       memset(&commit, 0, sizeof(commit));
       if( doltliteCommitDeserialize(data, nData, &commit)==SQLITE_OK ){

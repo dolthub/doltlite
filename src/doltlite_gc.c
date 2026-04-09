@@ -7,6 +7,7 @@
 #include "prolly_node.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
+#include "doltlite_chunk_walk.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -57,33 +58,15 @@ static int gcQueuePop(GcQueue *q, ProllyHash *h){
   return 1;
 }
 
-#define PROLLY_NODE_MAGIC_VAL 0x504E4F44
-
-static int isCommitChunk(const u8 *data, int nData){
-  
-  if( nData < 30 ) return 0;
-  if( data[0] != DOLTLITE_COMMIT_V2 ) return 0;
-  
-  if( nData >= 4 ){
-    u32 m = (u32)data[0] | ((u32)data[1]<<8) |
-            ((u32)data[2]<<16) | ((u32)data[3]<<24);
-    if( m == PROLLY_NODE_MAGIC_VAL ) return 0;
-  }
-  return 1;
-}
-
-static int isProllyNodeChunk(const u8 *data, int nData){
-  u32 m;
-  if( nData < 8 ) return 0;
-  m = (u32)data[0] | ((u32)data[1]<<8) |
-      ((u32)data[2]<<16) | ((u32)data[3]<<24);
-  return m == PROLLY_NODE_MAGIC_VAL;
-}
-
 /* BFS from all roots (manifest hashes + all branch/tag refs + working sets)
-** to mark every reachable chunk. Understands three chunk types: prolly nodes
-** (recurse into children), commits (follow parents + catalog), and catalog
-** blobs (follow table root hashes). */
+** to mark every reachable chunk. Uses doltliteEnumerateChunkChildren to
+** discover child hashes from all known chunk types. */
+
+static int gcChildCb(void *ctx, const ProllyHash *pHash){
+  GcQueue *q = (GcQueue*)ctx;
+  return gcQueuePush(q, pHash);
+}
+
 static int gcMarkReachable(
   ChunkStore *cs,
   ProllyHashSet *marked
@@ -162,76 +145,7 @@ static int gcMarkReachable(
       continue;
     }
 
-    if( isProllyNodeChunk(data, nData) ){
-      
-      ProllyNode node;
-      int parseRc = prollyNodeParse(&node, data, nData);
-      if( parseRc==SQLITE_OK && node.level > 0 ){
-        for(i=0; i<(int)node.nItems; i++){
-          ProllyHash childHash;
-          prollyNodeChildHash(&node, i, &childHash);
-          rc = gcQueuePush(&queue, &childHash);
-          if( rc!=SQLITE_OK ) break;
-        }
-      }
-    }else if( isCommitChunk(data, nData) ){
-
-      DoltliteCommit commit;
-      int drc;
-      memset(&commit, 0, sizeof(commit));
-      drc = doltliteCommitDeserialize(data, nData, &commit);
-      if( drc==SQLITE_OK ){
-        int pi;
-        for(pi=0; pi<commit.nParents; pi++){
-          rc = gcQueuePush(&queue, &commit.aParents[pi]);
-          if( rc!=SQLITE_OK ) break;
-        }
-        if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &commit.catalogHash);
-        doltliteCommitClear(&commit);
-      }
-    }else{
-      
-      
-      if( nData == WS_TOTAL_SIZE && data[0] == 1 ){
-        ProllyHash stagedCat, conflictsCat;
-        memcpy(stagedCat.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
-        memcpy(conflictsCat.data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
-        rc = gcQueuePush(&queue, &stagedCat);
-        if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &conflictsCat);
-        if( rc==SQLITE_OK && data[WS_MERGING_OFF] ){  
-          ProllyHash mergeCommit;
-          memcpy(mergeCommit.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
-          rc = gcQueuePush(&queue, &mergeCommit);
-        }
-      }
-      
-      if( nData >= CAT_HEADER_SIZE && data[0] == CATALOG_FORMAT_V2 ){
-        int nTables = (int)(data[CAT_NUM_TABLES_OFF]
-                          | (data[CAT_NUM_TABLES_OFF+1]<<8)
-                          | (data[CAT_NUM_TABLES_OFF+2]<<16)
-                          | (data[CAT_NUM_TABLES_OFF+3]<<24));
-        if( nTables >= 0 && nTables < 10000 ){
-          const u8 *p = data + CAT_HEADER_SIZE;
-          for(i=0; i<nTables; i++){
-            if( p + CAT_ENTRY_FIXED_SIZE > data + nData ) break;
-            {
-              ProllyHash tableRoot;
-              memcpy(tableRoot.data, p + CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE,
-                     PROLLY_HASH_SIZE);
-              rc = gcQueuePush(&queue, &tableRoot);
-              if( rc!=SQLITE_OK ) break;
-            }
-            {
-              int nameLen;
-              p += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
-                 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
-              nameLen = p[0] | (p[1]<<8);
-              p += 2 + nameLen;
-            }
-          }
-        }
-      }
-    }
+    rc = doltliteEnumerateChunkChildren(data, nData, gcChildCb, &queue);
 
     sqlite3_free(data);
     if( rc!=SQLITE_OK ) break;
