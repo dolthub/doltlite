@@ -243,12 +243,8 @@ SELECT dolt_commit('-m','update 10 rows');
 SELECT count(*) FROM dolt_diff_big WHERE diff_type='modified';" 2>/dev/null | tail -1)
 elapsed=$(( $(ts) - t0 ))
 echo "  ${elapsed}s"
-if [ -n "$result" ]; then
-  check_time "update+diff 10 rows in 10M" "$elapsed" 30
-  check "10M diff count" "10" "$result"
-else
-  echo "  SKIP: 10M update+diff crashed or returned empty (known issue at this scale)"
-fi
+check_time "update+diff 10 rows in 10M" "$elapsed" 30
+check "10M diff count" "10" "$result"
 
 echo ""
 echo "--- 16. Clone 10M ---"

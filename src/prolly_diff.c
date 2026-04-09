@@ -306,23 +306,26 @@ static int diffEmitSubtree(
   const ProllyHash *pRoot, u8 flags, u8 changeType,
   ProllyDiffCallback xCb, void *pCtx
 ){
-  ProllyCursor cur;
+  ProllyCursor *pCur;
   int rc, empty = 0;
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
-  prollyCursorInit(&cur, pStore, pCache, pRoot, flags);
-  rc = prollyCursorFirst(&cur, &empty);
-  if( rc!=SQLITE_OK || empty ){ prollyCursorClose(&cur); return rc; }
-  while( prollyCursorIsValid(&cur) ){
+  pCur = sqlite3_malloc(sizeof(ProllyCursor));
+  if( !pCur ) return SQLITE_NOMEM;
+  prollyCursorInit(pCur, pStore, pCache, pRoot, flags);
+  rc = prollyCursorFirst(pCur, &empty);
+  if( rc!=SQLITE_OK || empty ){ prollyCursorClose(pCur); sqlite3_free(pCur); return rc; }
+  while( prollyCursorIsValid(pCur) ){
     if( changeType==PROLLY_DIFF_ADD ){
-      rc = diffEmitAdd(&cur, flags, xCb, pCtx);
+      rc = diffEmitAdd(pCur, flags, xCb, pCtx);
     }else{
-      rc = diffEmitDelete(&cur, flags, xCb, pCtx);
+      rc = diffEmitDelete(pCur, flags, xCb, pCtx);
     }
     if( rc!=SQLITE_OK ) break;
-    rc = prollyCursorNext(&cur);
+    rc = prollyCursorNext(pCur);
     if( rc!=SQLITE_OK ) break;
   }
-  prollyCursorClose(&cur);
+  prollyCursorClose(pCur);
+  sqlite3_free(pCur);
   return rc;
 }
 
@@ -430,21 +433,25 @@ static int diffLeaves(
 ** sharing). When internal keys align, recurse into changed subtrees. When
 ** keys diverge (tree shape changed), fall back to a full cursor walk from
 ** pOldRoot/pNewRoot -- this handles inserts/deletes that shifted boundaries. */
-static int diffNodes(
+/*
+** Process one level of the diff between two internal nodes. For child
+** pairs with matching key boundaries but different hashes, push them
+** onto the work stack for iterative descent instead of recursing.
+*/
+static int diffNodesOneLevel(
   ChunkStore *pStore, ProllyCache *pCache,
   const ProllyHash *pOldHash, const ProllyHash *pNewHash,
   const ProllyHash *pOldRoot, const ProllyHash *pNewRoot,
-  u8 flags, ProllyDiffCallback xCb, void *pCtx
+  u8 flags, ProllyDiffCallback xCb, void *pCtx,
+  ProllyHash **ppStack, int *pnStack, int *pnStackAlloc
 ){
   u8 *oldData = 0, *newData = 0;
   int nOld = 0, nNew = 0;
   ProllyNode oldNode, newNode;
   int rc = SQLITE_OK;
 
-  
   if( prollyHashCompare(pOldHash, pNewHash)==0 ) return SQLITE_OK;
 
-  
   if( prollyHashIsEmpty(pOldHash) && prollyHashIsEmpty(pNewHash) ) return SQLITE_OK;
   if( prollyHashIsEmpty(pOldHash) ){
     return diffEmitSubtree(pStore, pCache, pNewHash, flags, PROLLY_DIFF_ADD, xCb, pCtx);
@@ -453,7 +460,6 @@ static int diffNodes(
     return diffEmitSubtree(pStore, pCache, pOldHash, flags, PROLLY_DIFF_DELETE, xCb, pCtx);
   }
 
-  
   rc = chunkStoreGet(pStore, pOldHash, &oldData, &nOld);
   if( rc!=SQLITE_OK ) return rc;
   rc = prollyNodeParse(&oldNode, oldData, nOld);
@@ -465,11 +471,9 @@ static int diffNodes(
   if( rc!=SQLITE_OK ){ sqlite3_free(oldData); sqlite3_free(newData); return rc; }
 
   if( oldNode.level==0 && newNode.level==0 ){
-    
     rc = diffLeaves(&oldNode, &newNode, flags, xCb, pCtx);
 
   }else if( oldNode.level>0 && newNode.level>0 ){
-    
     int i = 0, j = 0;
 
     while( i < (int)oldNode.nItems && j < (int)newNode.nItems && rc==SQLITE_OK ){
@@ -477,7 +481,6 @@ static int diffNodes(
       int cmp;
       prollyNodeChildHash(&oldNode, i, &oldChild);
       prollyNodeChildHash(&newNode, j, &newChild);
-
 
       if( prollyHashCompare(&oldChild, &newChild)==0 ){
         i++; j++;
@@ -487,9 +490,17 @@ static int diffNodes(
       cmp = diffNodeKeyCmp(&oldNode, i, &newNode, j, flags);
 
       if( cmp==0 ){
-        
-        rc = diffNodes(pStore, pCache, &oldChild, &newChild,
-                       pOldRoot, pNewRoot, flags, xCb, pCtx);
+        /* Push child pair onto work stack for iterative processing */
+        if( *pnStack + 2 > *pnStackAlloc ){
+          int nNew = *pnStackAlloc ? *pnStackAlloc * 2 : 32;
+          ProllyHash *pNew = sqlite3_realloc(*ppStack,
+                                             nNew * (int)sizeof(ProllyHash));
+          if( !pNew ){ rc = SQLITE_NOMEM; break; }
+          *ppStack = pNew;
+          *pnStackAlloc = nNew;
+        }
+        (*ppStack)[(*pnStack)++] = oldChild;
+        (*ppStack)[(*pnStack)++] = newChild;
         i++; j++;
       }else{
         
@@ -576,8 +587,28 @@ int prollyDiff(
   ProllyDiffCallback xCallback,
   void *pCtx
 ){
-  return diffNodes(pStore, pCache, pOldRoot, pNewRoot,
-                   pOldRoot, pNewRoot, flags, xCallback, pCtx);
+  ProllyHash *aStack = 0;
+  int nStack = 0, nStackAlloc = 0;
+  int rc = SQLITE_OK;
+
+  /* Seed the work stack with the root pair */
+  aStack = sqlite3_malloc(32 * (int)sizeof(ProllyHash));
+  if( !aStack ) return SQLITE_NOMEM;
+  nStackAlloc = 32;
+  aStack[nStack++] = *pOldRoot;
+  aStack[nStack++] = *pNewRoot;
+
+  /* Iterative descent: process each (old, new) hash pair. Each level
+  ** may push child pairs back onto the stack instead of recursing. */
+  while( nStack >= 2 && rc==SQLITE_OK ){
+    ProllyHash newH = aStack[--nStack];
+    ProllyHash oldH = aStack[--nStack];
+    rc = diffNodesOneLevel(pStore, pCache, &oldH, &newH,
+                           pOldRoot, pNewRoot, flags, xCallback, pCtx,
+                           &aStack, &nStack, &nStackAlloc);
+  }
+  sqlite3_free(aStack);
+  return rc;
 }
 
 #endif 
