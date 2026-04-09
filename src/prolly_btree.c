@@ -3297,17 +3297,18 @@ static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut)
 
 static int findMatchingMutMapEntry(
   ProllyMutMap *pMap,
+  KeyInfo *pKeyInfo,
   UnpackedRecord *pIdxKey,
   const u8 *pSortKey,
   int nSortKey,
   ProllyMutMapEntry **ppMatch,
   int *pCmp
 ){
-  ProllyMutMapIter it;
   int rc = SQLITE_OK;
   int cmp = 0;
   ProllyMutMapEntry *pMatch = 0;
   u8 *pRecBuf = 0;
+  int lo, hi;
 
   *ppMatch = 0;
   *pCmp = 0;
@@ -3315,20 +3316,26 @@ static int findMatchingMutMapEntry(
     return SQLITE_OK;
   }
 
-  (void)pSortKey;
-  (void)nSortKey;
-  prollyMutMapIterFirst(&it, pMap);
-  while( prollyMutMapIterValid(&it) ){
-    ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&it);
+  if( pKeyInfo
+   && pIdxKey->nField >= pKeyInfo->nAllField ){
+    ProllyMutMapEntry *pEntry = prollyMutMapFind(pMap, pSortKey, nSortKey, 0);
+    if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+      *ppMatch = pEntry;
+    }
+    return SQLITE_OK;
+  }
+
+  lo = 0;
+  hi = pMap->nEntries;
+  while( lo < hi ){
+    int mid = lo + (hi - lo) / 2;
+    ProllyMutMapEntry *pEntry = &pMap->aEntries[mid];
     const u8 *pRec = pEntry->pVal;
     int nRec = pEntry->nVal;
+    int isLess;
 
     if( pEntry->isIntKey ){
-      prollyMutMapIterNext(&it);
-      continue;
-    }
-    if( pEntry->op!=PROLLY_EDIT_INSERT ){
-      prollyMutMapIterNext(&it);
+      lo = mid + 1;
       continue;
     }
     if( nRec==0 ){
@@ -3340,11 +3347,40 @@ static int findMatchingMutMapEntry(
     }
     pIdxKey->eqSeen = 0;
     cmp = sqlite3VdbeRecordCompare(nRec, pRec, pIdxKey);
-    if( cmp==0 || pIdxKey->eqSeen ){
+    isLess = (cmp<0 && !pIdxKey->eqSeen);
+    if( isLess ){
+      lo = mid + 1;
+    }else{
+      hi = mid;
+    }
+  }
+
+  while( rc==SQLITE_OK && lo < pMap->nEntries ){
+    ProllyMutMapEntry *pEntry = &pMap->aEntries[lo];
+    const u8 *pRec = pEntry->pVal;
+    int nRec = pEntry->nVal;
+
+    if( pEntry->isIntKey ){
+      lo++;
+      continue;
+    }
+    if( nRec==0 ){
+      sqlite3_free(pRecBuf);
+      pRecBuf = 0;
+      rc = recordFromSortKey(pEntry->pKey, pEntry->nKey, &pRecBuf, &nRec);
+      if( rc!=SQLITE_OK ) break;
+      pRec = pRecBuf;
+    }
+    pIdxKey->eqSeen = 0;
+    cmp = sqlite3VdbeRecordCompare(nRec, pRec, pIdxKey);
+    if( cmp!=0 && !pIdxKey->eqSeen ){
+      break;
+    }
+    if( pEntry->op==PROLLY_EDIT_INSERT ){
       pMatch = pEntry;
       break;
     }
-    prollyMutMapIterNext(&it);
+    lo++;
   }
 
   sqlite3_free(pRecBuf);
@@ -3538,6 +3574,7 @@ static int prollyBtCursorIndexMoveto(
        && !(treeFound && treeCmp==0) ){
       ProllyMutMapEntry *mutE = 0;
       rc = findMatchingMutMapEntry((ProllyMutMap*)pCur->pMutMap,
+                                   pCur->pKeyInfo,
                                    pIdxKey, pSortKey, nSortKey,
                                    &mutE, &mutCmp);
       if( rc!=SQLITE_OK ){
@@ -3547,6 +3584,7 @@ static int prollyBtCursorIndexMoveto(
       }
       if( !mutE && pPending && pPending!=pCur->pMutMap ){
         rc = findMatchingMutMapEntry(pPending,
+                                     pCur->pKeyInfo,
                                      pIdxKey, pSortKey, nSortKey,
                                      &mutE, &mutCmp);
         if( rc!=SQLITE_OK ){
