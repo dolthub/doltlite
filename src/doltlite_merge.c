@@ -538,7 +538,8 @@ static int mergeCatalogPass1(
   struct TableEntry *aTheirs, int nTheirs,
   struct TableEntry *aMerged, int *pnMerged,
   MergeConflictTable **ppConflictTables, int *pnConflictTables,
-  int *pTotalConflicts
+  int *pTotalConflicts,
+  char **pzErrMsg
 ){
   int i, rc = SQLITE_OK;
 
@@ -590,10 +591,32 @@ do_merge_entry:
       }else{
         int theirsChanged = prollyHashCompare(&theirsEntry->root, &ancEntry->root)!=0;
         if( oursChanged && theirsChanged ){
-          
+          /* Check for schema conflicts: both sides modified the schema
+          ** relative to the ancestor, and the results diverge. */
+          {
+            int ourSchemaChanged = prollyHashCompare(
+                &aOurs[i].schemaHash, &ancEntry->schemaHash)!=0;
+            int theirSchemaChanged = prollyHashCompare(
+                &theirsEntry->schemaHash, &ancEntry->schemaHash)!=0;
+            if( ourSchemaChanged && theirSchemaChanged
+             && prollyHashCompare(&aOurs[i].schemaHash,
+                                  &theirsEntry->schemaHash)!=0 ){
+              if( pzErrMsg ){
+                *pzErrMsg = sqlite3_mprintf(
+                  "schema conflict on table '%s' "
+                  "\xe2\x80\x94 schema merges not yet supported",
+                  zName ? zName : "(unknown)");
+              }
+              return SQLITE_ERROR;
+            }
+          }
+
+          {
           ProllyHash mergedTableRoot;
           int nConflicts = 0;
           struct ConflictRow *aConflictRows = 0;
+          int theirSchemaChanged2 = prollyHashCompare(
+              &theirsEntry->schemaHash, &ancEntry->schemaHash)!=0;
 
           rc = mergeTableRows(db, &ancEntry->root, &aOurs[i].root,
                               &theirsEntry->root, aOurs[i].flags,
@@ -603,6 +626,14 @@ do_merge_entry:
           {
             struct TableEntry merged = aOurs[i];
             memcpy(&merged.root, &mergedTableRoot, sizeof(ProllyHash));
+            /* If only theirs changed the schema, use their schema. */
+            if( theirSchemaChanged2
+             && prollyHashCompare(&aOurs[i].schemaHash,
+                                  &ancEntry->schemaHash)==0 ){
+              memcpy(&merged.schemaHash, &theirsEntry->schemaHash,
+                     sizeof(ProllyHash));
+              merged.flags = theirsEntry->flags;
+            }
             aMerged[(*pnMerged)++] = merged;
           }
 
@@ -628,8 +659,9 @@ do_merge_entry:
               }
             }
           }
+          }
         }else if( theirsChanged ){
-          
+
           struct TableEntry merged = aOurs[i];
           memcpy(&merged.root, &theirsEntry->root, sizeof(ProllyHash));
           memcpy(&merged.schemaHash, &theirsEntry->schemaHash, sizeof(ProllyHash));
@@ -697,7 +729,8 @@ int doltliteMergeCatalogs(
   const ProllyHash *ours,
   const ProllyHash *theirs,
   ProllyHash *pMergedHash,
-  int *pnConflicts          
+  int *pnConflicts,
+  char **pzErrMsg
 ){
   struct TableEntry *aAnc = 0, *aOurs = 0, *aTheirs = 0;
   int nAnc = 0, nOurs = 0, nTheirs = 0;
@@ -739,7 +772,7 @@ int doltliteMergeCatalogs(
   rc = mergeCatalogPass1(db, aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
                           aMerged, &nMerged,
                           &aConflictTables, &nConflictTables,
-                          &totalConflicts);
+                          &totalConflicts, pzErrMsg);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
   rc = mergeCatalogPass2(aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,

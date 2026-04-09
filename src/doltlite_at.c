@@ -257,9 +257,34 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   sqlite3_free(data);
   if(rc!=SQLITE_OK) return SQLITE_OK;
 
+  /* For branch refs, prefer the working state catalog if it has
+  ** uncommitted changes (same logic as checkout). */
+  {
+    ProllyHash branchCommit;
+    int isBranch = (chunkStoreFindBranch(cs,zRef,&branchCommit)==SQLITE_OK
+                    && !prollyHashIsEmpty(&branchCommit));
+    if( isBranch ){
+      ProllyHash wsCatHash, wsCommitHash;
+      memset(&wsCatHash,0,sizeof(wsCatHash));
+      memset(&wsCommitHash,0,sizeof(wsCommitHash));
+      if( chunkStoreReadBranchWorkingCatalog(cs,zRef,&wsCatHash,&wsCommitHash)==SQLITE_OK
+       && !prollyHashIsEmpty(&wsCommitHash)
+       && memcmp(wsCommitHash.data,branchCommit.data,PROLLY_HASH_SIZE)==0
+       && memcmp(wsCatHash.data,commit.catalogHash.data,PROLLY_HASH_SIZE)!=0 ){
+        /* Working state has uncommitted changes — use it. */
+        rc=doltliteLoadCatalog(db,&wsCatHash,&aTables,&nTables,0);
+        doltliteCommitClear(&commit);
+        if(rc!=SQLITE_OK) return SQLITE_OK;
+        goto at_find_root;
+      }
+    }
+  }
+
   rc=doltliteLoadCatalog(db,&commit.catalogHash,&aTables,&nTables,0);
   doltliteCommitClear(&commit);
   if(rc!=SQLITE_OK) return SQLITE_OK;
+
+at_find_root:
 
   rc=atFindRoot(aTables,nTables,v->zTableName,&tableRoot,&flags);
   sqlite3_free(aTables);
