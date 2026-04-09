@@ -205,13 +205,11 @@ static int gcMarkReachable(
         }
       }
       
-      if( nData >= CAT_HEADER_SIZE && data[0] == CATALOG_FORMAT_V2 ){
-        int nTables = (int)(data[CAT_NUM_TABLES_OFF]
-                          | (data[CAT_NUM_TABLES_OFF+1]<<8)
-                          | (data[CAT_NUM_TABLES_OFF+2]<<16)
-                          | (data[CAT_NUM_TABLES_OFF+3]<<24));
-        if( nTables >= 0 && nTables < 10000 ){
-          const u8 *p = data + CAT_HEADER_SIZE;
+      {
+        int nTables = 0;
+        const u8 *p = 0;
+        if( catalogParseHeader(data, nData, &nTables, &p)
+         && nTables >= 0 && nTables < 10000 ){
           for(i=0; i<nTables; i++){
             if( p + CAT_ENTRY_FIXED_SIZE > data + nData ) break;
             {

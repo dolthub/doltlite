@@ -812,7 +812,7 @@ static int serializeMergedCatalog(
   ProllyHash *pOutHash
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  int sz = 1 + 4 + 4;
+  int sz = CAT_HEADER_SIZE_V3;
   u8 *buf;
   u8 *p;
   int rc;
@@ -841,11 +841,7 @@ static int serializeMergedCatalog(
     }
     p = buf;
 
-    *p++ = 0x43;
-    /* Reserved (was iNextTable). Write zeros for deterministic hashing —
-    ** iNextTable is derived from max(iTable)+1 on load. */
-    p[0]=0; p[1]=0; p[2]=0; p[3]=0;
-    p += 4;
+    *p++ = CATALOG_FORMAT_V3;
     p[0] = (u8)nMerged;
     p[1] = (u8)(nMerged>>8);
     p[2] = (u8)(nMerged>>16);
