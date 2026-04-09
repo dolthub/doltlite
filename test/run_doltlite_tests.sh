@@ -54,6 +54,7 @@ TESTS=(
   doltlite_behavior.sh
   doltlite_branch_edge.sh
   doltlite_diff_alter.sh
+  doltlite_gc_scale.sh
   doltlite_index_prefix.sh
   doltlite_issue179_180.sh
   review_regression_test.sh
