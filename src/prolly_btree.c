@@ -791,16 +791,27 @@ static void refreshCursorRoot(BtCursor *pCur){
 ** The catalog is stored as a content-addressed chunk. Its hash is persisted
 ** in the manifest so the table registry can be reconstructed on open.
 */
+/*
+** Compare two TableEntry structs by name for deterministic catalog ordering.
+** NULL names sort before all others (table 1 / sqlite_master has no name).
+*/
+static int tableEntryNameCmp(const void *a, const void *b){
+  const struct TableEntry *ea = (const struct TableEntry *)a;
+  const struct TableEntry *eb = (const struct TableEntry *)b;
+  if( !ea->zName && !eb->zName ) return 0;
+  if( !ea->zName ) return -1;
+  if( !eb->zName ) return 1;
+  return strcmp(ea->zName, eb->zName);
+}
+
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   int nTables = pBtree->nTables;
-  int sz = 1 + 4 + 4;  /* header: magic + iNextTable + nTables */
+  int sz = 1 + 4 + 4;  /* header: magic + reserved + nTables */
   u8 *buf, *q;
+  struct TableEntry *aSorted;  /* name-sorted copy for deterministic output */
   int i;
 
-  
-  /* Resolve table names eagerly (needed for serialization).
-  ** Sort a COPY by name for deterministic output — do not mutate
-  ** aTables in place, since other code depends on insertion order. */
+  /* Resolve table names eagerly so serialization is deterministic. */
   if( pBtree->db ){
     for(i=0; i<nTables; i++){
       if( !pBtree->aTables[i].zName && pBtree->aTables[i].iTable>1 ){
@@ -810,18 +821,29 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
     }
   }
 
+  /* Create a shallow copy sorted by name. The in-memory aTables array
+  ** stays sorted by iTable (binary search by page number depends on it). */
+  aSorted = sqlite3_malloc(nTables * (int)sizeof(struct TableEntry));
+  if( !aSorted ) return SQLITE_NOMEM;
+  memcpy(aSorted, pBtree->aTables, nTables * (int)sizeof(struct TableEntry));
+  qsort(aSorted, nTables, sizeof(struct TableEntry), tableEntryNameCmp);
+
   for(i=0; i<nTables; i++){
-    int nLen = pBtree->aTables[i].zName ? (int)strlen(pBtree->aTables[i].zName) : 0;
+    int nLen = aSorted[i].zName ? (int)strlen(aSorted[i].zName) : 0;
     if( sz > 0x7FFFFFFF - (4 + 1 + PROLLY_HASH_SIZE*2 + 2 + nLen) ){
+      sqlite3_free(aSorted);
       return SQLITE_TOOBIG;
     }
     sz += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2 + nLen;
   }
 
   buf = sqlite3_malloc(sz);
-  if( !buf ) return SQLITE_NOMEM;
+  if( !buf ){
+    sqlite3_free(aSorted);
+    return SQLITE_NOMEM;
+  }
   q = buf;
-  
+
   *q++ = CATALOG_FORMAT_V2;
   /* Reserved (was iNextTable). Write zeros so the catalog hash is
   ** deterministic — iNextTable is derived from max(iTable)+1 on load. */
@@ -830,9 +852,9 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   q[0]=(u8)nTables; q[1]=(u8)(nTables>>8);
   q[2]=(u8)(nTables>>16); q[3]=(u8)(nTables>>24);
   q += 4;
-  
+
   for(i=0; i<nTables; i++){
-    struct TableEntry *t = &pBtree->aTables[i];
+    struct TableEntry *t = &aSorted[i];
     u32 pg = t->iTable;
     int nLen = t->zName ? (int)strlen(t->zName) : 0;
     q[0]=(u8)pg; q[1]=(u8)(pg>>8); q[2]=(u8)(pg>>16); q[3]=(u8)(pg>>24);
@@ -846,6 +868,7 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
     if( nLen>0 ) memcpy(q, t->zName, nLen);
     q += nLen;
   }
+  sqlite3_free(aSorted);
   *ppOut = buf;
   *pnOut = (int)(q - buf);
   return SQLITE_OK;
