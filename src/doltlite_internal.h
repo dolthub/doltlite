@@ -96,6 +96,8 @@ struct SchemaMergeAction {
   int nAddColumns;
 };
 
+void freeSchemaMergeActions(SchemaMergeAction *a, int n);
+
 int doltliteMergeCatalogs(sqlite3 *db,
   const ProllyHash *ancestor, const ProllyHash *ours,
   const ProllyHash *theirs, ProllyHash *pMergedHash,

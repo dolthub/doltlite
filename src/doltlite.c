@@ -118,6 +118,177 @@ void doltliteUpdateSchemaHashes(sqlite3 *db){
   }
 }
 
+/*
+** Helper #1: Persist working-set + refs to disk.
+** Replaces the doltliteSaveWorkingSet/chunkStoreSerializeRefs/chunkStoreCommit
+** sequence found at many call sites.
+*/
+static int doltlitePersistState(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  doltliteSaveWorkingSet(db);
+  chunkStoreSerializeRefs(cs);
+  return chunkStoreCommit(cs);
+}
+
+/*
+** Helper #2: Flush the in-memory catalog, serialize it into the chunk store,
+** and return the resulting hash.
+*/
+static int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  u8 *catData = 0;
+  int nCatData = 0;
+  int rc;
+  rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStorePut(cs, catData, nCatData, pHash);
+  sqlite3_free(catData);
+  return rc;
+}
+
+/*
+** Helper #3: Free an array of SchemaMergeAction structs.
+*/
+void freeSchemaMergeActions(SchemaMergeAction *a, int n){
+  int i, j;
+  for(i=0; i<n; i++){
+    for(j=0; j<a[i].nAddColumns; j++){
+      sqlite3_free(a[i].azAddColumns[j]);
+    }
+    sqlite3_free(a[i].azAddColumns);
+    sqlite3_free(a[i].zTableName);
+  }
+  sqlite3_free(a);
+}
+
+/*
+** Helper #4: Resolve a commit reference — tries hex hash, branch name, then
+** tag name.  Replaces the old resolveCommitRef (hex-only) and inline resolution
+** in doltliteResetFunc.
+*/
+static int resolveCommitRef(
+  ChunkStore *cs,
+  const char *zRef,
+  ProllyHash *pHash
+){
+  int rc = SQLITE_NOTFOUND;
+  if( !zRef ) return SQLITE_ERROR;
+  /* Try 40-char hex hash */
+  if( strlen(zRef)==PROLLY_HASH_SIZE*2 ){
+    rc = doltliteHexToHash(zRef, pHash);
+    if( rc==SQLITE_OK && !chunkStoreHas(cs, pHash) ) rc = SQLITE_NOTFOUND;
+  }
+  /* Try branch name */
+  if( rc!=SQLITE_OK ){
+    rc = chunkStoreFindBranch(cs, zRef, pHash);
+    if( rc!=SQLITE_OK || prollyHashIsEmpty(pHash) ){
+      /* Try tag name */
+      rc = chunkStoreFindTag(cs, zRef, pHash);
+    }
+  }
+  if( rc==SQLITE_OK && prollyHashIsEmpty(pHash) ) rc = SQLITE_NOTFOUND;
+  return rc;
+}
+
+/*
+** Helper #5 uses the existing loadCommitByHash — declared later.  Forward-declare
+** it here so the helpers below can use it.
+*/
+static int loadCommitByHash(ChunkStore *cs, const ProllyHash *pHash,
+                            DoltliteCommit *pCommit);
+
+/*
+** Helper #6: Build a commit object, serialize it, store it, and clear.
+** If zAuthorName/zAuthorEmail are NULL the default session author is used.
+** aExtraParents/nExtraParents are for merge commits (may be NULL/0).
+** Writes the resulting commit hash into *pCommitHash.
+*/
+static int doltliteCreateAndStoreCommit(
+  sqlite3 *db,
+  const ProllyHash *pParent,
+  const ProllyHash *pCatalog,
+  const char *zMessage,
+  const char *zAuthorName,
+  const char *zAuthorEmail,
+  const ProllyHash *aExtraParents,
+  int nExtraParents,
+  ProllyHash *pCommitHash
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  DoltliteCommit c;
+  u8 *commitData = 0;
+  int nCommitData = 0;
+  int rc, i;
+
+  memset(&c, 0, sizeof(c));
+  memcpy(&c.parentHash, pParent, sizeof(ProllyHash));
+  memcpy(&c.catalogHash, pCatalog, sizeof(ProllyHash));
+  c.timestamp = (i64)time(0);
+  c.zName  = sqlite3_mprintf("%s", zAuthorName  ? zAuthorName  : doltliteGetAuthorName(db));
+  c.zEmail = sqlite3_mprintf("%s", zAuthorEmail ? zAuthorEmail : doltliteGetAuthorEmail(db));
+  c.zMessage = sqlite3_mprintf("%s", zMessage);
+
+  if( nExtraParents > 0 && aExtraParents ){
+    c.aParents[0] = *pParent;
+    for(i=0; i<nExtraParents && (i+1)<DOLTLITE_MAX_PARENTS; i++){
+      c.aParents[i+1] = aExtraParents[i];
+    }
+    c.nParents = 1 + (nExtraParents < DOLTLITE_MAX_PARENTS-1
+                       ? nExtraParents : DOLTLITE_MAX_PARENTS-1);
+  }
+
+  rc = doltliteCommitSerialize(&c, &commitData, &nCommitData);
+  if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, pCommitHash);
+  sqlite3_free(commitData);
+  doltliteCommitClear(&c);
+  return rc;
+}
+
+/*
+** Helper #7: Advance the current branch to a new head commit.
+** Sets session head, session staged, updates the branch ref, and persists.
+** Handles the first-commit case where nBranches==0.
+*/
+static int doltliteAdvanceBranch(
+  sqlite3 *db,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *branch = doltliteGetSessionBranch(db);
+
+  doltliteSetSessionHead(db, pNewHead);
+  doltliteSetSessionStaged(db, pCatalogHash);
+
+  if( cs->nBranches==0 ){
+    chunkStoreAddBranch(cs, branch, pNewHead);
+    chunkStoreSetDefaultBranch(cs, branch);
+  }else{
+    chunkStoreUpdateBranch(cs, branch, pNewHead);
+  }
+
+  return doltlitePersistState(db);
+}
+
+/*
+** Helper #8: Register conflict tables, persist state, and report a
+** conflict-count message via sqlite3_result_text.
+*/
+static void doltliteReportConflicts(
+  sqlite3 *db,
+  sqlite3_context *ctx,
+  int nConflicts,
+  const char *zOp
+){
+  char msg[256];
+  doltliteRegisterConflictTables(db);
+  doltlitePersistState(db);
+  sqlite3_snprintf(sizeof(msg), msg,
+    "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
+    zOp, nConflicts);
+  sqlite3_result_text(ctx, msg, -1, SQLITE_TRANSIENT);
+}
+
 static void doltliteAddFunc(
   sqlite3_context *context,
   int argc,
@@ -147,21 +318,13 @@ static void doltliteAddFunc(
     }
   }
 
-  
+
   {
-    u8 *catData = 0;
-    int nCatData = 0;
     ProllyHash workingHash;
 
-    rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
+    rc = doltliteFlushCatalogToHash(db, &workingHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to flush", -1);
-      return;
-    }
-    rc = chunkStorePut(cs, catData, nCatData, &workingHash);
-    sqlite3_free(catData);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context, rc);
       return;
     }
 
@@ -303,15 +466,12 @@ static void doltliteAddFunc(
       sqlite3_free(aStaged);
     }
 
-    
+
     {
       ProllyHash savedStaged;
-      doltliteGetSessionStaged(db, &savedStaged);  
-      doltliteSaveWorkingSet(db);
-      chunkStoreSerializeRefs(cs);
-      rc = chunkStoreCommit(cs);
+      doltliteGetSessionStaged(db, &savedStaged);
+      rc = doltlitePersistState(db);
       if( rc!=SQLITE_OK ){
-        
         doltliteSetSessionStaged(db, &savedStaged);
         sqlite3_result_error_code(context, rc);
         return;
@@ -329,12 +489,9 @@ static void doltliteCommitFunc(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  DoltliteCommit commit;
   const char *zMessage = 0;
   const char *zAuthor = 0;
   int addAll = 0;
-  u8 *commitData = 0;
-  int nCommitData = 0;
   ProllyHash commitHash;
   ProllyHash catalogHash;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
@@ -381,19 +538,11 @@ static void doltliteCommitFunc(
     return;
   }
 
-  
+
   if( addAll ){
-    u8 *catData = 0;
-    int nCatData = 0;
-    rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
+    rc = doltliteFlushCatalogToHash(db, &catalogHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to flush", -1);
-      return;
-    }
-    rc = chunkStorePut(cs, catData, nCatData, &catalogHash);
-    sqlite3_free(catData);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context, rc);
       return;
     }
     doltliteSetSessionStaged(db, &catalogHash);
@@ -435,44 +584,33 @@ static void doltliteCommitFunc(
   }
 
   /* Build commit object locally (no lock needed yet) */
-  memset(&commit, 0, sizeof(commit));
-  doltliteGetSessionHead(db, &commit.parentHash);
-  memcpy(&commit.catalogHash, &catalogHash, sizeof(ProllyHash));
-  commit.timestamp = (i64)time(0);
+  {
+    ProllyHash parentHash;
+    char *zParsedName = 0, *zParsedEmail = 0;
+    doltliteGetSessionHead(db, &parentHash);
 
-  
-  if( zAuthor ){
-    const char *lt = strchr(zAuthor, '<');
-    const char *gt = lt ? strchr(lt, '>') : 0;
-    if( lt && gt ){
-      int nameLen = (int)(lt - zAuthor);
-      while( nameLen>0 && zAuthor[nameLen-1]==' ' ) nameLen--;
-      commit.zName = sqlite3_mprintf("%.*s", nameLen, zAuthor);
-      commit.zEmail = sqlite3_mprintf("%.*s", (int)(gt-lt-1), lt+1);
-    }else{
-      commit.zName = sqlite3_mprintf("%s", zAuthor);
-      commit.zEmail = sqlite3_mprintf("");
+    if( zAuthor ){
+      const char *lt = strchr(zAuthor, '<');
+      const char *gt = lt ? strchr(lt, '>') : 0;
+      if( lt && gt ){
+        int nameLen = (int)(lt - zAuthor);
+        while( nameLen>0 && zAuthor[nameLen-1]==' ' ) nameLen--;
+        zParsedName = sqlite3_mprintf("%.*s", nameLen, zAuthor);
+        zParsedEmail = sqlite3_mprintf("%.*s", (int)(gt-lt-1), lt+1);
+      }else{
+        zParsedName = sqlite3_mprintf("%s", zAuthor);
+        zParsedEmail = sqlite3_mprintf("");
+      }
     }
-  }else{
-    commit.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
-    commit.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
-  }
-  commit.zMessage = sqlite3_mprintf("%s", zMessage);
 
-  
-  rc = doltliteCommitSerialize(&commit, &commitData, &nCommitData);
-  if( rc!=SQLITE_OK ){
-    doltliteCommitClear(&commit);
-    sqlite3_result_error_code(context, rc);
-    return;
-  }
-
-  rc = chunkStorePut(cs, commitData, nCommitData, &commitHash);
-  sqlite3_free(commitData);
-  doltliteCommitClear(&commit);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error_code(context, rc);
-    return;
+    rc = doltliteCreateAndStoreCommit(db, &parentHash, &catalogHash,
+        zMessage, zParsedName, zParsedEmail, 0, 0, &commitHash);
+    sqlite3_free(zParsedName);
+    sqlite3_free(zParsedEmail);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
   }
 
   /* Lock the commit graph, refresh from disk, then check for conflicts.
@@ -506,20 +644,6 @@ static void doltliteCommitFunc(
   }
 
   /* Under lock: update session and shared state */
-  doltliteSetSessionHead(db, &commitHash);
-  doltliteSetSessionStaged(db, &catalogHash);
-
-  {
-    const char *branch = doltliteGetSessionBranch(db);
-    if( cs->nBranches==0 ){
-      chunkStoreAddBranch(cs, branch, &commitHash);
-      chunkStoreSetDefaultBranch(cs, branch);
-    }else{
-      chunkStoreUpdateBranch(cs, branch, &commitHash);
-    }
-    chunkStoreSerializeRefs(cs);
-  }
-
   {
     u8 wasMerging = 0;
     doltliteGetSessionMergeState(db, &wasMerging, 0, 0);
@@ -528,9 +652,7 @@ static void doltliteCommitFunc(
     }
   }
 
-  doltliteSaveWorkingSet(db);
-  chunkStoreSerializeRefs(cs);
-  rc = chunkStoreCommit(cs);
+  rc = doltliteAdvanceBranch(db, &commitHash, &catalogHash);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
@@ -575,53 +697,29 @@ static void doltliteResetFunc(
   }
 
   if( zRef ){
-    
     ProllyHash targetCommit;
     DoltliteCommit commit;
-    u8 *data = 0;
-    int nData = 0;
 
-    
-    rc = SQLITE_NOTFOUND;
-    if( zRef && strlen(zRef)==PROLLY_HASH_SIZE*2 ){
-      rc = doltliteHexToHash(zRef, &targetCommit);
-      if( rc==SQLITE_OK && !chunkStoreHas(cs, &targetCommit) ) rc = SQLITE_NOTFOUND;
-    }
+    rc = resolveCommitRef(cs, zRef, &targetCommit);
     if( rc!=SQLITE_OK ){
-      rc = chunkStoreFindBranch(cs, zRef, &targetCommit);
-      if( rc!=SQLITE_OK || prollyHashIsEmpty(&targetCommit) ){
-        rc = chunkStoreFindTag(cs, zRef, &targetCommit);
-      }
-    }
-    if( rc!=SQLITE_OK || prollyHashIsEmpty(&targetCommit) ){
       sqlite3_result_error(context, "commit not found", -1);
       return;
     }
 
-    
-    rc = chunkStoreGet(cs, &targetCommit, &data, &nData);
+    rc = loadCommitByHash(cs, &targetCommit, &commit);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to load commit", -1);
-      return;
-    }
-    rc = doltliteCommitDeserialize(data, nData, &commit);
-    sqlite3_free(data);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(context, "corrupt commit", -1);
       return;
     }
     memcpy(&targetCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
 
-    
     doltliteSetSessionHead(db, &targetCommit);
     chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &targetCommit);
     chunkStoreSerializeRefs(cs);
 
-    
     doltliteClearSessionMergeState(db);
   }else{
-    
     rc = doltliteGetHeadCatalogHash(db, &targetCatHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to read HEAD", -1);
@@ -629,12 +727,9 @@ static void doltliteResetFunc(
     }
   }
 
-  
   doltliteSetSessionStaged(db, &targetCatHash);
-  
 
   if( isHard ){
-    
     if( prollyHashIsEmpty(&targetCatHash) ){
       sqlite3_result_error(context, "no commit to reset to", -1);
       return;
@@ -647,10 +742,7 @@ static void doltliteResetFunc(
       return;
     }
   }else{
-    
-    doltliteSaveWorkingSet(db);
-    chunkStoreSerializeRefs(cs);
-    rc = chunkStoreCommit(cs);
+    rc = doltlitePersistState(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       return;
@@ -677,8 +769,6 @@ static void doltliteMergeFunc(
   ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
   int nMergeConflicts = 0;
   DoltliteCommit ourCommit, theirCommit, ancCommit;
-  u8 *data = 0;
-  int nData = 0;
   int rc;
 
   memset(&ourCommit, 0, sizeof(ourCommit));
@@ -719,11 +809,9 @@ static void doltliteMergeFunc(
     doltliteSetSessionStaged(db, &headCatHash);
     
 
-    
+
     doltliteClearSessionMergeState(db);
-    doltliteSaveWorkingSet(db);
-    chunkStoreSerializeRefs(cs);
-    chunkStoreCommit(cs);
+    doltlitePersistState(db);
 
     sqlite3_result_int(context, 0);
     return;
@@ -778,11 +866,8 @@ static void doltliteMergeFunc(
     /* Fast-forward: move branch pointer to their commit, no merge commit. */
     char hx[PROLLY_HASH_SIZE*2+1];
 
-    rc = chunkStoreGet(cs, &theirHead, &data, &nData);
+    rc = loadCommitByHash(cs, &theirHead, &theirCommit);
     if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load commit", -1); return; }
-    rc = doltliteCommitDeserialize(data, nData, &theirCommit);
-    sqlite3_free(data); data = 0;
-    if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "corrupt commit", -1); return; }
 
     rc = doltliteSwitchCatalog(db, &theirCommit.catalogHash);
     if( rc!=SQLITE_OK ){
@@ -791,42 +876,27 @@ static void doltliteMergeFunc(
       return;
     }
 
-    doltliteSetSessionHead(db, &theirHead);
-    doltliteSetSessionStaged(db, &theirCommit.catalogHash);
     doltliteUpdateBranchWorkingState(db,
         doltliteGetSessionBranch(db), &theirCommit.catalogHash, NULL);
+    rc = doltliteAdvanceBranch(db, &theirHead, &theirCommit.catalogHash);
     doltliteCommitClear(&theirCommit);
-
-    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &theirHead);
-    doltliteSaveWorkingSet(db);
-    chunkStoreSerializeRefs(cs);
-    chunkStoreCommit(cs);
 
     doltliteHashToHex(&theirHead, hx);
     sqlite3_result_text(context, hx, -1, SQLITE_TRANSIENT);
     return;
   }
 
-  
-  rc = chunkStoreGet(cs, &ourHead, &data, &nData);
+
+  rc = loadCommitByHash(cs, &ourHead, &ourCommit);
   if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load our commit", -1); return; }
-  rc = doltliteCommitDeserialize(data, nData, &ourCommit);
-  sqlite3_free(data); data = 0;
-  if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "corrupt commit", -1); return; }
   memcpy(&ourCatHash, &ourCommit.catalogHash, sizeof(ProllyHash));
 
-  rc = chunkStoreGet(cs, &theirHead, &data, &nData);
+  rc = loadCommitByHash(cs, &theirHead, &theirCommit);
   if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); sqlite3_result_error(context, "failed to load their commit", -1); return; }
-  rc = doltliteCommitDeserialize(data, nData, &theirCommit);
-  sqlite3_free(data); data = 0;
-  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); sqlite3_result_error(context, "corrupt commit", -1); return; }
   memcpy(&theirCatHash, &theirCommit.catalogHash, sizeof(ProllyHash));
 
-  rc = chunkStoreGet(cs, &ancestorHash, &data, &nData);
+  rc = loadCommitByHash(cs, &ancestorHash, &ancCommit);
   if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); doltliteCommitClear(&theirCommit); sqlite3_result_error(context, "failed to load ancestor", -1); return; }
-  rc = doltliteCommitDeserialize(data, nData, &ancCommit);
-  sqlite3_free(data); data = 0;
-  if( rc!=SQLITE_OK ){ doltliteCommitClear(&ourCommit); doltliteCommitClear(&theirCommit); sqlite3_result_error(context, "corrupt ancestor", -1); return; }
   memcpy(&ancCatHash, &ancCommit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&ancCommit);
 
@@ -846,14 +916,7 @@ static void doltliteMergeFunc(
       }else{
         sqlite3_result_error(context, "merge failed", -1);
       }
-      /* Free any partial schema actions */
-      { int si; for(si=0;si<nSchemaActions;si++){
-        int sj; for(sj=0;sj<aSchemaActions[si].nAddColumns;sj++)
-          sqlite3_free(aSchemaActions[si].azAddColumns[sj]);
-        sqlite3_free(aSchemaActions[si].azAddColumns);
-        sqlite3_free(aSchemaActions[si].zTableName);
-      }}
-      sqlite3_free(aSchemaActions);
+      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       return;
     }
     sqlite3_free(zMergeErr);
@@ -868,13 +931,7 @@ static void doltliteMergeFunc(
     doltliteCommitClear(&ourCommit);
     doltliteCommitClear(&theirCommit);
     if( rc!=SQLITE_OK ){
-      { int si; for(si=0;si<nSchemaActions;si++){
-        int sj; for(sj=0;sj<aSchemaActions[si].nAddColumns;sj++)
-          sqlite3_free(aSchemaActions[si].azAddColumns[sj]);
-        sqlite3_free(aSchemaActions[si].azAddColumns);
-        sqlite3_free(aSchemaActions[si].zTableName);
-      }}
-      sqlite3_free(aSchemaActions);
+      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       sqlite3_result_error(context, "merge reset failed", -1);
       return;
     }
@@ -903,84 +960,32 @@ static void doltliteMergeFunc(
       if( rc!=SQLITE_OK ) rc = SQLITE_OK; /* best-effort; don't block merge */
 
       /* Re-serialize the catalog to capture updated schema hashes after ALTERs */
-      {
-        u8 *catData = 0; int nCatData = 0;
-        rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
-        if( rc==SQLITE_OK ){
-          rc = chunkStorePut(cs, catData, nCatData, &mergedCatHash);
-          sqlite3_free(catData);
-        }
-      }
-      /* Free schema actions */
-      { int si2; for(si2=0;si2<nSchemaActions;si2++){
-        int sj2; for(sj2=0;sj2<aSchemaActions[si2].nAddColumns;sj2++)
-          sqlite3_free(aSchemaActions[si2].azAddColumns[sj2]);
-        sqlite3_free(aSchemaActions[si2].azAddColumns);
-        sqlite3_free(aSchemaActions[si2].zTableName);
-      }}
-      sqlite3_free(aSchemaActions);
+      doltliteFlushCatalogToHash(db, &mergedCatHash);
+      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
     }
   }
 
   if( nMergeConflicts > 0 ){
-    
-    doltliteRegisterConflictTables(db);
-    doltliteSaveWorkingSet(db);
-    chunkStoreSerializeRefs(cs);
-    chunkStoreCommit(cs);
-    {
-      char msg[256];
-      sqlite3_snprintf(sizeof(msg), msg,
-        "Merge has %d conflict(s). Resolve and then commit with dolt_commit.",
-        nMergeConflicts);
-      sqlite3_result_text(context, msg, -1, SQLITE_TRANSIENT);
-    }
+    doltliteReportConflicts(db, context, nMergeConflicts, "Merge");
   }else{
-    
+    ProllyHash commitHash;
+    char hexBuf[PROLLY_HASH_SIZE*2+1];
+    char msg[256];
+
     doltliteSetSessionStaged(db, &mergedCatHash);
-    
 
-    {
-      DoltliteCommit mergeCommit;
-      u8 *commitData = 0;
-      int nCommitData = 0;
-      ProllyHash commitHash;
-      char hexBuf[PROLLY_HASH_SIZE*2+1];
-      char msg[256];
-
-      memset(&mergeCommit, 0, sizeof(mergeCommit));
-      /* Merge commit has two parents: ours (index 0) and theirs (index 1) */
-      mergeCommit.aParents[0] = ourHead;
-      mergeCommit.aParents[1] = theirHead;
-      mergeCommit.nParents = 2;
-      mergeCommit.parentHash = ourHead;  
-      memcpy(&mergeCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
-      mergeCommit.timestamp = (i64)time(0);
-      snprintf(msg, sizeof(msg), "Merge branch '%s'", zBranch);
-      mergeCommit.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
-      mergeCommit.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
-      mergeCommit.zMessage = sqlite3_mprintf("%s", msg);
-
-      rc = doltliteCommitSerialize(&mergeCommit, &commitData, &nCommitData);
-      if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, &commitHash);
-      sqlite3_free(commitData);
-      doltliteCommitClear(&mergeCommit);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error(context, "failed to create merge commit", -1);
-        return;
-      }
-
-      doltliteSetSessionHead(db, &commitHash);
-      doltliteSetSessionStaged(db, &mergedCatHash);
-
-      chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
-      doltliteSaveWorkingSet(db);
-      chunkStoreSerializeRefs(cs);
-      chunkStoreCommit(cs);
-
-      doltliteHashToHex(&commitHash, hexBuf);
-      sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
+    snprintf(msg, sizeof(msg), "Merge branch '%s'", zBranch);
+    rc = doltliteCreateAndStoreCommit(db, &ourHead, &mergedCatHash,
+        msg, NULL, NULL, &theirHead, 1, &commitHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "failed to create merge commit", -1);
+      return;
     }
+
+    rc = doltliteAdvanceBranch(db, &commitHash, &mergedCatHash);
+
+    doltliteHashToHex(&commitHash, hexBuf);
+    sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
   }
 }
 
@@ -1000,15 +1005,6 @@ static int loadCommitByHash(
   return rc;
 }
 
-static int resolveCommitRef(
-  ChunkStore *cs,
-  const char *zRef,
-  ProllyHash *pHash
-){
-  if( !zRef || strlen(zRef)!=40 ) return SQLITE_ERROR;
-  return doltliteHexToHash(zRef, pHash);
-}
-
 static int applyMergedCatalogAndCommit(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1020,8 +1016,8 @@ static int applyMergedCatalogAndCommit(
   int *pnConflicts,
   char *hexBuf
 ){
-  ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash mergedCatHash;
+  ProllyHash commitHash;
   int rc;
 
   rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
@@ -1034,40 +1030,15 @@ static int applyMergedCatalogAndCommit(
   doltliteSetSessionStaged(db, &mergedCatHash);
   doltliteUpdateBranchWorkingState(db,
       doltliteGetSessionBranch(db), &mergedCatHash, NULL);
-  
 
-  
-  {
-    DoltliteCommit newCommit;
-    u8 *commitData = 0;
-    int nCommitData = 0;
-    ProllyHash commitHash;
+  rc = doltliteCreateAndStoreCommit(db, ourHead, &mergedCatHash,
+      zMessage, NULL, NULL, NULL, 0, &commitHash);
+  if( rc!=SQLITE_OK ) return rc;
 
-    memset(&newCommit, 0, sizeof(newCommit));
-    memcpy(&newCommit.parentHash, ourHead, sizeof(ProllyHash));
-    memcpy(&newCommit.catalogHash, &mergedCatHash, sizeof(ProllyHash));
-    newCommit.timestamp = (i64)time(0);
-    newCommit.zName = sqlite3_mprintf("%s", doltliteGetAuthorName(db));
-    newCommit.zEmail = sqlite3_mprintf("%s", doltliteGetAuthorEmail(db));
-    newCommit.zMessage = sqlite3_mprintf("%s", zMessage);
+  rc = doltliteAdvanceBranch(db, &commitHash, &mergedCatHash);
+  if( rc!=SQLITE_OK ) return rc;
 
-    rc = doltliteCommitSerialize(&newCommit, &commitData, &nCommitData);
-    if( rc==SQLITE_OK ) rc = chunkStorePut(cs, commitData, nCommitData, &commitHash);
-    sqlite3_free(commitData);
-    doltliteCommitClear(&newCommit);
-    if( rc!=SQLITE_OK ) return rc;
-
-    
-    doltliteSetSessionHead(db, &commitHash);
-    doltliteSetSessionStaged(db, &mergedCatHash);
-
-    chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &commitHash);
-    chunkStoreSerializeRefs(cs);
-    chunkStoreCommit(cs);
-
-    doltliteHashToHex(&commitHash, hexBuf);
-  }
-
+  doltliteHashToHex(&commitHash, hexBuf);
   return SQLITE_OK;
 }
 
@@ -1167,15 +1138,7 @@ static void doltliteCherryPickFunc(
   }
 
   if( nConflicts > 0 ){
-    char msg[256];
-    doltliteRegisterConflictTables(db);
-    doltliteSaveWorkingSet(db);
-    chunkStoreSerializeRefs(cs);
-    chunkStoreCommit(cs);
-    sqlite3_snprintf(sizeof(msg), msg,
-      "Cherry-pick completed with %d conflict(s). Use SELECT * FROM dolt_conflicts to view.",
-      nConflicts);
-    sqlite3_result_text(context, msg, -1, SQLITE_TRANSIENT);
+    doltliteReportConflicts(db, context, nConflicts, "Cherry-pick");
   }else{
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
   }
@@ -1277,15 +1240,7 @@ static void doltliteRevertFunc(
   }
 
   if( nConflicts > 0 ){
-    char msg[256];
-    doltliteRegisterConflictTables(db);
-    doltliteSaveWorkingSet(db);
-    chunkStoreSerializeRefs(cs);
-    chunkStoreCommit(cs);
-    sqlite3_snprintf(sizeof(msg), msg,
-      "Revert completed with %d conflict(s). Use SELECT * FROM dolt_conflicts to view.",
-      nConflicts);
-    sqlite3_result_text(context, msg, -1, SQLITE_TRANSIENT);
+    doltliteReportConflicts(db, context, nConflicts, "Revert");
   }else{
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
   }
