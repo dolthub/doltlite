@@ -38,6 +38,61 @@ extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
 extern const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable);
 extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
 
+/*
+** Returns 1 if there are uncommitted changes (working differs from HEAD
+** or staged differs from HEAD), 0 otherwise.
+*/
+int doltliteHasUncommittedChanges(sqlite3 *db){
+  ProllyHash headCatHash, stagedHash, workingCatHash;
+  u8 *wCatData = 0; int nWCat = 0;
+  int rc;
+
+  rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  if( rc!=SQLITE_OK || prollyHashIsEmpty(&headCatHash) ) return 0;
+
+  /* Staged differs from HEAD? */
+  doltliteGetSessionStaged(db, &stagedHash);
+  if( !prollyHashIsEmpty(&stagedHash)
+   && prollyHashCompare(&headCatHash, &stagedHash)!=0 ){
+    return 1;
+  }
+
+  /* Working differs from HEAD? Compare table entries (root + schema hashes),
+  ** not catalog chunk hashes, since iNextTable may drift. Same logic as
+  ** dolt_status uses via compareCatalogs. */
+  {
+    struct TableEntry *aHead = 0, *aWorking = 0;
+    int nHead = 0, nWorking = 0, dirty = 0, i;
+
+    doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
+
+    rc = doltliteFlushAndSerializeCatalog(db, &wCatData, &nWCat);
+    if( rc==SQLITE_OK ){
+      ChunkStore *cs = doltliteGetChunkStore(db);
+      if( cs ){
+        rc = chunkStorePut(cs, wCatData, nWCat, &workingCatHash);
+        if( rc==SQLITE_OK )
+          doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
+      }
+      sqlite3_free(wCatData);
+    }
+
+    if( aHead && aWorking ){
+      if( nHead != nWorking ){ dirty = 1; }
+      else{
+        for(i=0; i<nHead && !dirty; i++){
+          if( aHead[i].iTable != aWorking[i].iTable ) dirty = 1;
+          else if( prollyHashCompare(&aHead[i].root, &aWorking[i].root)!=0 ) dirty = 1;
+          else if( prollyHashCompare(&aHead[i].schemaHash, &aWorking[i].schemaHash)!=0 ) dirty = 1;
+        }
+      }
+    }
+    sqlite3_free(aHead);
+    sqlite3_free(aWorking);
+    return dirty;
+  }
+}
+
 void doltliteUpdateSchemaHashes(sqlite3 *db){
   int idx = 0;
   Pgno iTable;
@@ -695,6 +750,13 @@ static void doltliteMergeFunc(
   
   if( prollyHashCompare(&ourHead, &theirHead)==0 ){
     sqlite3_result_text(context, "Already up to date", -1, SQLITE_STATIC);
+    return;
+  }
+
+  /* Reject merge if there are uncommitted changes */
+  if( doltliteHasUncommittedChanges(db) ){
+    sqlite3_result_error(context,
+      "uncommitted changes \xe2\x80\x94 commit or reset before merging", -1);
     return;
   }
 
