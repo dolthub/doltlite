@@ -1114,11 +1114,13 @@ ifcapable vacuum {
       PRAGMA user_version;
     }
   } {2}
-  do_test pragma-8.2.4.3 {
-    execsql {
-      PRAGMA schema_version;
-    }
-  } {109}
+  # Skipped: VACUUM is a no-op on doltlite (prolly trees have no page
+  # fragmentation). schema_version is not bumped. See issue #322.
+  # do_test pragma-8.2.4.3 {
+  #   execsql {
+  #     PRAGMA schema_version;
+  #   }
+  # } {109}
 }
 
 ifcapable attach {

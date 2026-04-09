@@ -170,7 +170,7 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
   /* VACUUM is a no-op for doltlite databases. Prolly trees use content-
   ** addressed chunk storage — there are no fragmented pages to compact.
   ** The BtreeCopyFile implementation doesn't transfer chunk data between
-  ** stores, so VACUUM would silently lose data. */
+  ** stores, so VACUUM would silently lose data. See issue #322. */
   (void)pOut;
   return SQLITE_OK;
 #endif
