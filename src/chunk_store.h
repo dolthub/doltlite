@@ -37,16 +37,45 @@
 #define WS_CONFLICTS_OFF    (WS_MERGE_COMMIT_OFF + PROLLY_HASH_SIZE)
 #define WS_TOTAL_SIZE       (WS_CONFLICTS_OFF + PROLLY_HASH_SIZE)
 
-/* Catalog (table registry) binary format V2:
-**   magic(1) + iNextTable(4 LE) + nTables(4 LE) + entries...
-** Per entry: iTable(4 LE) + flags(1) + root(20) + schema(20) + nameLen(2 LE) + name */
-#define CATALOG_FORMAT_V2       0x43
-#define CAT_NEXT_TABLE_OFF      1
-#define CAT_NUM_TABLES_OFF      5
-#define CAT_HEADER_SIZE         9
+/* Catalog (table registry) binary format.
+**
+** V3 (current): magic(1) + nTables(4 LE) + entries (sorted by name)...
+** V2 (legacy):  magic(1) + iNextTable(4 LE) + nTables(4 LE) + entries...
+** Per entry: iTable(4 LE) + flags(1) + root(20) + schema(20) + nameLen(2 LE) + name
+**
+** V3 removes the iNextTable field (derived from max(iTable)+1 on load)
+** and sorts entries by name for deterministic content hashing. */
+#define CATALOG_FORMAT_V3       0x44
+#define CATALOG_FORMAT_V2       0x43  /* read-only compat */
+#define CAT_HEADER_SIZE_V3      5     /* magic(1) + nTables(4) */
+#define CAT_HEADER_SIZE_V2      9     /* magic(1) + iNextTable(4) + nTables(4) */
 #define CAT_ENTRY_ITABLE_SIZE   4
 #define CAT_ENTRY_FLAGS_SIZE    1
 #define CAT_ENTRY_FIXED_SIZE    (CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2)
+
+/*
+** Parse a catalog header. Returns the number of tables and a pointer
+** past the header to the first entry. Returns 0 on format mismatch.
+*/
+static SQLITE_INLINE int catalogParseHeader(
+  const u8 *data, int nData, int *pnTables, const u8 **ppEntries
+){
+  int hdrSz;
+  const u8 *q;
+  if( nData < CAT_HEADER_SIZE_V3 ) return 0;
+  if( data[0] == CATALOG_FORMAT_V3 ){
+    hdrSz = CAT_HEADER_SIZE_V3;
+  }else if( data[0] == CATALOG_FORMAT_V2 ){
+    if( nData < CAT_HEADER_SIZE_V2 ) return 0;
+    hdrSz = CAT_HEADER_SIZE_V2;
+  }else{
+    return 0;
+  }
+  q = data + hdrSz - 4;  /* nTables is always the last 4 bytes of header */
+  *pnTables = (int)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+  *ppEntries = data + hdrSz;
+  return 1;
+}
 
 typedef struct ChunkStore ChunkStore;
 typedef struct ChunkIndexEntry ChunkIndexEntry;

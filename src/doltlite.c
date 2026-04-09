@@ -388,18 +388,8 @@ static void doltliteAddFunc(
 
       
       {
-        Pgno iNextTable = 2;
-        
         {
-          u8 *wData = 0; int wn = 0;
-          rc = chunkStoreGet(cs, &workingHash, &wData, &wn);
-          if( rc==SQLITE_OK && wn>=5 && wData[0]==0x43 ){
-            iNextTable = (Pgno)(wData[1]|(wData[2]<<8)|(wData[3]<<16)|(wData[4]<<24));
-          }
-          sqlite3_free(wData);
-        }
-        {
-          int sz = 1 + 4 + 4;  
+          int sz = CAT_HEADER_SIZE_V3;
           u8 *buf, *p;
           ProllyHash newStagedHash;
           int j;
@@ -416,10 +406,7 @@ static void doltliteAddFunc(
             return;
           }
           p = buf;
-          *p++ = 0x43;  
-          p[0]=(u8)iNextTable; p[1]=(u8)(iNextTable>>8);
-          p[2]=(u8)(iNextTable>>16); p[3]=(u8)(iNextTable>>24);
-          p += 4;
+          *p++ = CATALOG_FORMAT_V3;
           p[0]=(u8)nStaged; p[1]=(u8)(nStaged>>8);
           p[2]=(u8)(nStaged>>16); p[3]=(u8)(nStaged>>24);
           p += 4;

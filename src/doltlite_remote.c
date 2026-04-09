@@ -145,11 +145,11 @@ static int syncEnqueueChildren(
     }
 
     
-    if( nData >= 9 && data[0] == 0x43 ){
-      int nTables = (int)(data[5] | (data[6]<<8) |
-                          (data[7]<<16) | (data[8]<<24));
-      if( nTables >= 0 && nTables < 10000 ){
-        const u8 *p = data + 9;
+    {
+      int nTables = 0;
+      const u8 *p = 0;
+      if( catalogParseHeader(data, nData, &nTables, &p)
+       && nTables >= 0 && nTables < 10000 ){
         for(i=0; i<nTables && rc==SQLITE_OK; i++){
           if( p + 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2 > data + nData ) break;
           {
