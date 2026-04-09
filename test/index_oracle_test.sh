@@ -878,6 +878,1063 @@ PRAGMA integrity_check;
 "
 
 # ════════════════════════════════════════════════════════════════════
+# Category 8: WITHOUT ROWID tables
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 8: WITHOUT ROWID tables ---"
+
+# 8a. Basic CRUD on WITHOUT ROWID
+oracle "cat8_wr_basic_crud" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO t VALUES('x', 1, 100), ('x', 2, 200), ('y', 1, 300);
+UPDATE t SET c = 999 WHERE a = 'x' AND b = 1;
+DELETE FROM t WHERE a = 'y';
+SELECT * FROM t ORDER BY a, b;
+SELECT count(*) FROM t;
+"
+
+# 8b. WITHOUT ROWID single-column PK UPDATE non-PK column
+oracle "cat8_wr_single_pk_update" "
+CREATE TABLE t(k TEXT PRIMARY KEY, v INT) WITHOUT ROWID;
+INSERT INTO t VALUES('a', 1), ('b', 2), ('c', 3);
+UPDATE t SET v = v * 10;
+SELECT * FROM t ORDER BY k;
+"
+
+# 8c. WITHOUT ROWID multi-row UPDATE with secondary index
+oracle "cat8_wr_multirow_update_secidx" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+CREATE INDEX idx_c ON t(c);
+INSERT INTO t VALUES('x', 1, 100), ('x', 2, 200), ('x', 3, 300);
+INSERT INTO t VALUES('y', 1, 400), ('y', 2, 500);
+UPDATE t SET c = c + 1000 WHERE a = 'x';
+SELECT a, b, c FROM t ORDER BY a, b;
+SELECT count(*) FROM t WHERE c > 1000;
+SELECT c FROM t WHERE c >= 1100 ORDER BY c;
+"
+
+# 8d. WITHOUT ROWID REPLACE INTO
+oracle "cat8_wr_replace" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO t VALUES('x', 1, 100);
+REPLACE INTO t VALUES('x', 1, 999);
+SELECT * FROM t ORDER BY a, b;
+SELECT count(*) FROM t;
+"
+
+# 8e. WITHOUT ROWID UPDATE PK column
+oracle "cat8_wr_update_pk" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO t VALUES('x', 1, 100), ('x', 2, 200);
+UPDATE t SET a = 'z' WHERE b = 1;
+SELECT * FROM t ORDER BY a, b;
+"
+
+# 8f. WITHOUT ROWID DELETE with secondary index
+oracle "cat8_wr_delete_secidx" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+CREATE INDEX idx_c ON t(c);
+INSERT INTO t VALUES('a', 1, 10), ('a', 2, 20), ('b', 1, 30), ('b', 2, 40);
+DELETE FROM t WHERE c > 20;
+SELECT * FROM t ORDER BY a, b;
+SELECT count(*) FROM t WHERE c <= 20;
+"
+
+# 8g. WITHOUT ROWID UPSERT
+oracle "cat8_wr_upsert" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO t VALUES('x', 1, 100);
+INSERT INTO t VALUES('x', 1, 999) ON CONFLICT(a, b) DO UPDATE SET c = excluded.c;
+SELECT * FROM t;
+SELECT count(*) FROM t;
+"
+
+# 8h. WITHOUT ROWID bulk UPDATE all rows
+oracle "cat8_wr_bulk_update_all" "
+CREATE TABLE t(k INT PRIMARY KEY, v TEXT, n INT) WITHOUT ROWID;
+INSERT INTO t VALUES(1, 'a', 10), (2, 'b', 20), (3, 'c', 30), (4, 'd', 40), (5, 'e', 50);
+UPDATE t SET n = n * 100;
+SELECT * FROM t ORDER BY k;
+"
+
+# 8i. WITHOUT ROWID with unique secondary index and REPLACE
+oracle "cat8_wr_unique_secidx_replace" "
+CREATE TABLE t(a INT, b INT, c TEXT UNIQUE, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO t VALUES(1, 1, 'hello');
+INSERT INTO t VALUES(2, 2, 'world');
+REPLACE INTO t VALUES(3, 3, 'hello');
+SELECT * FROM t ORDER BY a, b;
+SELECT count(*) FROM t;
+"
+
+# 8j. WITHOUT ROWID integrity check after mutations
+oracle "cat8_wr_integrity" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+CREATE INDEX idx_c ON t(c);
+INSERT INTO t VALUES('x', 1, 100), ('x', 2, 200), ('y', 1, 300), ('y', 2, 400);
+UPDATE t SET c = c + 1000 WHERE a = 'x';
+DELETE FROM t WHERE a = 'y' AND b = 2;
+INSERT INTO t VALUES('z', 1, 500);
+SELECT count(*) FROM t;
+PRAGMA integrity_check;
+"
+
+# 8k. WITHOUT ROWID large-ish dataset
+oracle "cat8_wr_large" "
+CREATE TABLE t(a INT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+CREATE INDEX idx_c ON t(c);
+WITH RECURSIVE r(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM r WHERE x<200)
+INSERT INTO t SELECT x / 50, x, x * 10 FROM r;
+UPDATE t SET c = c + 5000 WHERE b % 3 = 0;
+DELETE FROM t WHERE b % 7 = 0;
+SELECT count(*) FROM t;
+SELECT sum(c) FROM t;
+SELECT count(*) FROM t WHERE c > 5000;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 9: Reverse scans and ORDER BY DESC
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 9: Reverse scans and ORDER BY DESC ---"
+
+# 9a. ORDER BY DESC on indexed column
+oracle "cat9_desc_indexed" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 30), (2, 10), (3, 50), (4, 20), (5, 40);
+SELECT val FROM t ORDER BY val DESC;
+"
+
+# 9b. ORDER BY DESC with LIMIT
+oracle "cat9_desc_limit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<100)
+INSERT INTO t SELECT x, x * 7 % 100 FROM c;
+SELECT val FROM t ORDER BY val DESC LIMIT 5;
+"
+
+# 9c. ORDER BY DESC on composite index prefix
+oracle "cat9_desc_composite_prefix" "
+CREATE TABLE t(a TEXT, b INT, c INT);
+CREATE INDEX idx ON t(a, b);
+INSERT INTO t VALUES('x', 3, 100), ('x', 1, 200), ('x', 2, 300);
+INSERT INTO t VALUES('y', 2, 400), ('y', 1, 500);
+SELECT a, b FROM t WHERE a = 'x' ORDER BY b DESC;
+"
+
+# 9d. ORDER BY DESC on composite index full key
+oracle "cat9_desc_composite_full" "
+CREATE TABLE t(a TEXT, b INT, c INT);
+CREATE INDEX idx ON t(a, b);
+INSERT INTO t VALUES('a', 1, 10), ('a', 2, 20), ('b', 1, 30), ('b', 2, 40);
+SELECT a, b FROM t ORDER BY a DESC, b DESC;
+"
+
+# 9e. Reverse scan with range condition
+oracle "cat9_desc_range" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+SELECT val FROM t WHERE val BETWEEN 20 AND 40 ORDER BY val DESC;
+"
+
+# 9f. MAX() uses reverse index scan
+oracle "cat9_max_index" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 50), (3, 30), (4, 20), (5, 40);
+SELECT max(val) FROM t;
+SELECT min(val) FROM t;
+"
+
+# 9g. ORDER BY DESC after UPDATE
+oracle "cat9_desc_after_update" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+UPDATE t SET val = val + 100 WHERE id <= 3;
+SELECT val FROM t ORDER BY val DESC;
+"
+
+# 9h. ORDER BY DESC on WITHOUT ROWID
+oracle "cat9_desc_without_rowid" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+INSERT INTO t VALUES('x', 1, 10), ('x', 2, 20), ('x', 3, 30);
+INSERT INTO t VALUES('y', 1, 40), ('y', 2, 50);
+SELECT a, b FROM t WHERE a = 'x' ORDER BY b DESC;
+SELECT a, b FROM t ORDER BY a DESC, b DESC;
+"
+
+# 9i. LAST_VALUE / window with DESC ordering
+oracle "cat9_desc_window" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, grp TEXT, val INT);
+CREATE INDEX idx ON t(grp, val);
+INSERT INTO t VALUES(1, 'a', 10), (2, 'a', 30), (3, 'a', 20);
+INSERT INTO t VALUES(4, 'b', 40), (5, 'b', 50);
+SELECT grp, val, rank() OVER (PARTITION BY grp ORDER BY val DESC) as rnk
+FROM t ORDER BY grp, rnk;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 10: Range queries and boundary conditions
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 10: Range queries and boundary conditions ---"
+
+# 10a. Seek past all entries
+oracle "cat10_seek_past_end" "
+CREATE TABLE t(x INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1), (3), (5), (7), (9);
+SELECT * FROM t WHERE x >= 10;
+SELECT * FROM t WHERE x > 9;
+SELECT count(*) FROM t WHERE x > 100;
+"
+
+# 10b. Seek before all entries
+oracle "cat10_seek_before_start" "
+CREATE TABLE t(x INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(10), (20), (30);
+SELECT * FROM t WHERE x < 5;
+SELECT * FROM t WHERE x <= 0;
+SELECT count(*) FROM t WHERE x < 10;
+"
+
+# 10c. BETWEEN on indexed column
+oracle "cat10_between" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 5), (2, 10), (3, 15), (4, 20), (5, 25), (6, 30);
+SELECT val FROM t WHERE val BETWEEN 10 AND 25 ORDER BY val;
+SELECT val FROM t WHERE val BETWEEN 100 AND 200 ORDER BY val;
+SELECT val FROM t WHERE val BETWEEN 5 AND 5 ORDER BY val;
+"
+
+# 10d. Empty table queries
+oracle "cat10_empty_table" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+SELECT * FROM t;
+SELECT count(*) FROM t;
+SELECT max(val) FROM t;
+SELECT min(val) FROM t;
+SELECT * FROM t WHERE val = 5;
+SELECT * FROM t WHERE val BETWEEN 1 AND 100;
+"
+
+# 10e. Single-row table
+oracle "cat10_single_row" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 42);
+SELECT * FROM t WHERE val = 42;
+SELECT * FROM t WHERE val > 42;
+SELECT * FROM t WHERE val < 42;
+SELECT * FROM t WHERE val >= 42;
+SELECT * FROM t WHERE val <= 42;
+SELECT * FROM t WHERE val != 42;
+"
+
+# 10f. Boundary: exact match at first and last entry
+oracle "cat10_boundary_first_last" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+SELECT val FROM t WHERE val >= 10 ORDER BY val LIMIT 1;
+SELECT val FROM t WHERE val <= 50 ORDER BY val DESC LIMIT 1;
+SELECT val FROM t WHERE val > 10 ORDER BY val LIMIT 1;
+SELECT val FROM t WHERE val < 50 ORDER BY val DESC LIMIT 1;
+"
+
+# 10g. Gaps in index values
+oracle "cat10_gaps" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 1000), (3, 1000000);
+SELECT val FROM t WHERE val > 10 AND val < 1000000 ORDER BY val;
+SELECT val FROM t WHERE val >= 500 ORDER BY val LIMIT 1;
+SELECT count(*) FROM t WHERE val BETWEEN 11 AND 999;
+"
+
+# 10h. Duplicate index values with range
+oracle "cat10_dup_range" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 10), (3, 10), (4, 20), (5, 20), (6, 30);
+SELECT count(*) FROM t WHERE val = 10;
+SELECT count(*) FROM t WHERE val >= 10 AND val < 20;
+SELECT count(*) FROM t WHERE val > 10 AND val <= 20;
+SELECT id FROM t WHERE val = 10 ORDER BY id;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 11: NULL handling in indexes
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 11: NULL handling in indexes ---"
+
+# 11a. NULLs in indexed column ordering
+oracle "cat11_null_ordering" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, NULL), (2, 10), (3, NULL), (4, 5), (5, 20);
+SELECT id, val FROM t ORDER BY val;
+SELECT id, val FROM t ORDER BY val DESC;
+"
+
+# 11b. NULL in composite index
+oracle "cat11_null_composite" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, b INT);
+CREATE INDEX idx ON t(a, b);
+INSERT INTO t VALUES(1, 'x', NULL), (2, 'x', 10), (3, NULL, 5), (4, NULL, NULL);
+SELECT id, a, b FROM t ORDER BY a, b;
+SELECT count(*) FROM t WHERE a IS NULL;
+SELECT count(*) FROM t WHERE a = 'x' AND b IS NULL;
+"
+
+# 11c. UPDATE NULL to value and value to NULL
+oracle "cat11_null_update" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, NULL), (2, 10), (3, 20);
+UPDATE t SET val = 99 WHERE val IS NULL;
+UPDATE t SET val = NULL WHERE val = 10;
+SELECT id, val FROM t ORDER BY id;
+SELECT count(*) FROM t WHERE val IS NULL;
+SELECT count(*) FROM t WHERE val IS NOT NULL;
+"
+
+# 11d. NULL with UNIQUE index
+oracle "cat11_null_unique" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT UNIQUE);
+INSERT INTO t VALUES(1, NULL);
+INSERT INTO t VALUES(2, NULL);
+INSERT INTO t VALUES(3, 10);
+SELECT count(*) FROM t;
+SELECT id, val FROM t ORDER BY id;
+"
+
+# 11e. IS NULL / IS NOT NULL index scan
+oracle "cat11_isnull_scan" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, NULL), (2, 'a'), (3, NULL), (4, 'b'), (5, NULL);
+SELECT id FROM t WHERE val IS NULL ORDER BY id;
+SELECT id FROM t WHERE val IS NOT NULL ORDER BY id;
+SELECT count(*) FROM t WHERE val IS NULL;
+"
+
+# 11f. NULL in WITHOUT ROWID PK (not allowed, but secondary index)
+oracle "cat11_null_wr_secondary" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+CREATE INDEX idx ON t(c);
+INSERT INTO t VALUES('x', 1, NULL), ('x', 2, 10), ('y', 1, NULL);
+SELECT a, b, c FROM t WHERE c IS NULL ORDER BY a, b;
+SELECT count(*) FROM t WHERE c IS NOT NULL;
+UPDATE t SET c = 42 WHERE c IS NULL;
+SELECT * FROM t ORDER BY a, b;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 12: Type affinity and mixed types
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 12: Type affinity and mixed types ---"
+
+# 12a. Integer stored as text vs integer comparison
+oracle "cat12_int_text_affinity" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 42), (2, '42'), (3, 42.0);
+SELECT id, typeof(val), val FROM t ORDER BY id;
+SELECT id FROM t WHERE val = 42 ORDER BY id;
+SELECT id FROM t WHERE val = '42' ORDER BY id;
+"
+
+# 12b. Mixed types in indexed column ordering
+oracle "cat12_mixed_type_order" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, NULL);
+INSERT INTO t VALUES(2, 1);
+INSERT INTO t VALUES(3, 2.5);
+INSERT INTO t VALUES(4, 'hello');
+INSERT INTO t VALUES(5, X'BEEF');
+INSERT INTO t VALUES(6, 0);
+INSERT INTO t VALUES(7, '');
+SELECT id, typeof(val), val FROM t ORDER BY val;
+"
+
+# 12c. Integer boundary values (within double precision range)
+oracle "cat12_integer_boundaries" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INTEGER);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 2147483647);
+INSERT INTO t VALUES(2, -2147483648);
+INSERT INTO t VALUES(3, 0);
+INSERT INTO t VALUES(4, 2147483646);
+INSERT INTO t VALUES(5, -1);
+SELECT val FROM t ORDER BY val;
+SELECT val FROM t WHERE val > 2147483646;
+SELECT val FROM t WHERE val = 2147483647;
+"
+
+# 12d. Float values in index
+oracle "cat12_float_values" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val REAL);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 3.14);
+INSERT INTO t VALUES(2, -2.71);
+INSERT INTO t VALUES(3, 0.0);
+INSERT INTO t VALUES(4, 1e10);
+INSERT INTO t VALUES(5, -1e10);
+SELECT id, val FROM t ORDER BY val;
+SELECT id FROM t WHERE val > 0 ORDER BY val;
+SELECT id FROM t WHERE val BETWEEN -3 AND 4 ORDER BY val;
+"
+
+# 12e. Text collation default (BINARY)
+oracle "cat12_text_binary_collation" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
+CREATE INDEX idx ON t(name);
+INSERT INTO t VALUES(1, 'abc'), (2, 'ABC'), (3, 'Abc'), (4, 'aBC');
+SELECT name FROM t ORDER BY name;
+SELECT name FROM t WHERE name > 'Abc' ORDER BY name;
+SELECT name FROM t WHERE name = 'abc';
+"
+
+# 12f. Text ordering with default BINARY collation
+oracle "cat12_text_ordering" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
+CREATE INDEX idx ON t(name);
+INSERT INTO t VALUES(1, 'banana'), (2, 'apple'), (3, 'cherry'), (4, 'date');
+SELECT name FROM t ORDER BY name;
+SELECT name FROM t WHERE name >= 'cherry' ORDER BY name;
+SELECT name FROM t WHERE name BETWEEN 'b' AND 'd' ORDER BY name;
+"
+
+# 12g. Empty string and space handling
+oracle "cat12_empty_string" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, ''), (2, ' '), (3, 'a'), (4, '  ');
+SELECT id, length(val) FROM t ORDER BY val;
+SELECT id FROM t WHERE val = '' ORDER BY id;
+SELECT id FROM t WHERE val > '' ORDER BY val;
+"
+
+# 12h. Blob comparison in index
+oracle "cat12_blob_comparison" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, data BLOB);
+CREATE INDEX idx ON t(data);
+INSERT INTO t VALUES(1, X'00'), (2, X'0000'), (3, X'0001'), (4, X'01'), (5, X'FF');
+SELECT id FROM t ORDER BY data;
+SELECT id FROM t WHERE data > X'00' ORDER BY data;
+SELECT id FROM t WHERE data = X'0000';
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 13: Savepoint and transaction edge cases
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 13: Savepoint and transaction edge cases ---"
+
+# 13a. Nested savepoints with INSERT/DELETE/UPDATE
+oracle "cat13_nested_sp_mixed" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 20), (3, 30);
+SAVEPOINT sp1;
+INSERT INTO t VALUES(4, 40);
+UPDATE t SET val = 99 WHERE id = 1;
+SAVEPOINT sp2;
+DELETE FROM t WHERE id = 2;
+INSERT INTO t VALUES(5, 50);
+ROLLBACK TO sp2;
+SELECT * FROM t ORDER BY id;
+RELEASE sp1;
+SELECT * FROM t ORDER BY id;
+"
+
+# 13b. Rollback after multiple UPDATE on same row
+oracle "cat13_rollback_multi_update" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10);
+SAVEPOINT sp;
+UPDATE t SET val = 20 WHERE id = 1;
+UPDATE t SET val = 30 WHERE id = 1;
+UPDATE t SET val = 40 WHERE id = 1;
+ROLLBACK TO sp;
+SELECT * FROM t;
+"
+
+# 13c. Savepoint rollback with secondary index consistency
+oracle "cat13_sp_secidx_consistency" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT);
+CREATE INDEX idx_a ON t(a);
+CREATE INDEX idx_b ON t(b);
+INSERT INTO t VALUES(1, 10, 'x'), (2, 20, 'y'), (3, 30, 'z');
+SAVEPOINT sp;
+UPDATE t SET a = 99, b = 'changed' WHERE id = 2;
+DELETE FROM t WHERE id = 3;
+INSERT INTO t VALUES(4, 40, 'w');
+ROLLBACK TO sp;
+SELECT * FROM t ORDER BY id;
+SELECT count(*) FROM t WHERE a = 20;
+SELECT count(*) FROM t WHERE b = 'y';
+PRAGMA integrity_check;
+"
+
+# 13d. Deeply nested savepoints
+oracle "cat13_deep_nested_sp" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 100);
+SAVEPOINT s1;
+UPDATE t SET val = 200 WHERE id = 1;
+SAVEPOINT s2;
+UPDATE t SET val = 300 WHERE id = 1;
+SAVEPOINT s3;
+UPDATE t SET val = 400 WHERE id = 1;
+ROLLBACK TO s3;
+SELECT val FROM t WHERE id = 1;
+ROLLBACK TO s2;
+SELECT val FROM t WHERE id = 1;
+RELEASE s1;
+SELECT val FROM t WHERE id = 1;
+"
+
+# 13e. Transaction with DELETE all then re-INSERT
+oracle "cat13_delete_all_reinsert" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 20), (3, 30);
+BEGIN;
+DELETE FROM t;
+SELECT count(*) FROM t;
+INSERT INTO t VALUES(4, 40), (5, 50);
+SELECT * FROM t ORDER BY id;
+COMMIT;
+SELECT * FROM t ORDER BY id;
+PRAGMA integrity_check;
+"
+
+# 13f. Savepoint with WITHOUT ROWID
+oracle "cat13_sp_without_rowid" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+CREATE INDEX idx ON t(c);
+INSERT INTO t VALUES('x', 1, 100), ('x', 2, 200);
+SAVEPOINT sp;
+UPDATE t SET c = c + 1000;
+DELETE FROM t WHERE b = 1;
+INSERT INTO t VALUES('z', 1, 500);
+ROLLBACK TO sp;
+SELECT * FROM t ORDER BY a, b;
+PRAGMA integrity_check;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 14: REPLACE and UPSERT edge cases
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 14: REPLACE and UPSERT edge cases ---"
+
+# 14a. REPLACE with cascading unique conflicts
+oracle "cat14_replace_cascade_unique" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT UNIQUE, b INT UNIQUE);
+INSERT INTO t VALUES(1, 10, 100);
+INSERT INTO t VALUES(2, 20, 200);
+INSERT INTO t VALUES(3, 30, 300);
+REPLACE INTO t VALUES(4, 10, 200);
+SELECT * FROM t ORDER BY id;
+SELECT count(*) FROM t;
+"
+
+# 14b. UPSERT with expression in DO UPDATE
+oracle "cat14_upsert_expression" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT, count INT DEFAULT 0);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10, 1);
+INSERT INTO t VALUES(1, 10, 1) ON CONFLICT(id) DO UPDATE SET count = count + 1, val = val + excluded.val;
+INSERT INTO t VALUES(1, 10, 1) ON CONFLICT(id) DO UPDATE SET count = count + 1, val = val + excluded.val;
+SELECT * FROM t;
+"
+
+# 14c. REPLACE on WITHOUT ROWID with secondary index
+oracle "cat14_replace_wr_secidx" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+CREATE INDEX idx ON t(c);
+INSERT INTO t VALUES('x', 1, 100), ('x', 2, 200), ('y', 1, 300);
+REPLACE INTO t VALUES('x', 1, 999);
+REPLACE INTO t VALUES('y', 1, 888);
+SELECT * FROM t ORDER BY a, b;
+SELECT c FROM t ORDER BY c;
+PRAGMA integrity_check;
+"
+
+# 14d. INSERT OR IGNORE with multiple conflicts
+oracle "cat14_ignore_multi_conflict" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT UNIQUE, b TEXT);
+INSERT INTO t VALUES(1, 10, 'first');
+INSERT INTO t VALUES(2, 20, 'second');
+INSERT OR IGNORE INTO t VALUES(1, 30, 'pk_conflict');
+INSERT OR IGNORE INTO t VALUES(3, 10, 'unique_conflict');
+INSERT OR IGNORE INTO t VALUES(4, 40, 'success');
+SELECT * FROM t ORDER BY id;
+SELECT count(*) FROM t;
+"
+
+# 14e. UPSERT on composite UNIQUE index
+oracle "cat14_upsert_composite_unique" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, b INT, val INT, UNIQUE(a, b));
+INSERT INTO t VALUES(1, 'x', 1, 100);
+INSERT INTO t VALUES(2, 'x', 2, 200);
+INSERT INTO t VALUES(3, 'x', 1, 999)
+  ON CONFLICT(a, b) DO UPDATE SET val = excluded.val;
+SELECT * FROM t ORDER BY id;
+SELECT count(*) FROM t;
+"
+
+# 14f. Multiple REPLACE in sequence
+oracle "cat14_multi_replace_sequence" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT UNIQUE);
+INSERT INTO t VALUES(1, 10);
+REPLACE INTO t VALUES(2, 10);
+REPLACE INTO t VALUES(3, 10);
+REPLACE INTO t VALUES(4, 10);
+SELECT * FROM t ORDER BY id;
+SELECT count(*) FROM t;
+"
+
+# 14g. UPSERT DO UPDATE with WHERE clause
+oracle "cat14_upsert_do_update_where" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT, status TEXT);
+INSERT INTO t VALUES(1, 10, 'active');
+INSERT INTO t VALUES(1, 20, 'new')
+  ON CONFLICT(id) DO UPDATE SET val = excluded.val WHERE status = 'active';
+SELECT * FROM t;
+INSERT INTO t VALUES(1, 30, 'newer')
+  ON CONFLICT(id) DO UPDATE SET val = excluded.val WHERE status = 'inactive';
+SELECT * FROM t;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 15: Complex UPDATE patterns
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 15: Complex UPDATE patterns ---"
+
+# 15a. UPDATE with subquery
+oracle "cat15_update_subquery" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, val INT);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, ref_id INT, bonus INT);
+CREATE INDEX idx ON t1(val);
+INSERT INTO t1 VALUES(1, 100), (2, 200), (3, 300);
+INSERT INTO t2 VALUES(1, 1, 10), (2, 2, 20);
+UPDATE t1 SET val = val + (SELECT COALESCE(bonus, 0) FROM t2 WHERE t2.ref_id = t1.id)
+  WHERE id IN (SELECT ref_id FROM t2);
+SELECT * FROM t1 ORDER BY id;
+"
+
+# 15b. UPDATE with JOIN (FROM clause)
+oracle "cat15_update_from" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE TABLE lookup(id INT, factor INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 20), (3, 30);
+INSERT INTO lookup VALUES(1, 100), (3, 300);
+UPDATE t SET val = t.val * lookup.factor FROM lookup WHERE t.id = lookup.id;
+SELECT * FROM t ORDER BY id;
+"
+
+# 15c. UPDATE with correlated subquery in SET
+oracle "cat15_update_correlated_set" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT, grp TEXT);
+CREATE INDEX idx ON t(grp);
+INSERT INTO t VALUES(1, 10, 'a'), (2, 20, 'a'), (3, 30, 'b'), (4, 40, 'b');
+UPDATE t SET val = (SELECT sum(val) FROM t AS t2 WHERE t2.grp = t.grp);
+SELECT * FROM t ORDER BY id;
+"
+
+# 15d. UPDATE setting column to expression of itself
+oracle "cat15_self_ref_update" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX idx_a ON t(a);
+CREATE INDEX idx_b ON t(b);
+INSERT INTO t VALUES(1, 10, 100), (2, 20, 200), (3, 30, 300);
+UPDATE t SET a = b, b = a;
+SELECT * FROM t ORDER BY id;
+"
+
+# 15e. Cascading UPDATE via trigger
+oracle "cat15_trigger_cascade" "
+CREATE TABLE parent(id INTEGER PRIMARY KEY, val INT);
+CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INT, derived INT);
+CREATE INDEX idx_p ON parent(val);
+CREATE INDEX idx_c ON child(parent_id);
+INSERT INTO parent VALUES(1, 10), (2, 20);
+INSERT INTO child VALUES(1, 1, 0), (2, 1, 0), (3, 2, 0);
+CREATE TRIGGER trg AFTER UPDATE ON parent
+BEGIN
+  UPDATE child SET derived = NEW.val * 10 WHERE parent_id = NEW.id;
+END;
+UPDATE parent SET val = val + 5;
+SELECT * FROM parent ORDER BY id;
+SELECT * FROM child ORDER BY id;
+"
+
+# 15f. UPDATE with CASE expression
+oracle "cat15_update_case" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, category TEXT, val INT);
+CREATE INDEX idx ON t(category);
+INSERT INTO t VALUES(1, 'a', 10), (2, 'b', 20), (3, 'a', 30), (4, 'c', 40);
+UPDATE t SET val = CASE category WHEN 'a' THEN val * 2 WHEN 'b' THEN val * 3 ELSE val END;
+SELECT * FROM t ORDER BY id;
+SELECT sum(val) FROM t WHERE category = 'a';
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 16: Complex DELETE patterns
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 16: Complex DELETE patterns ---"
+
+# 16a. DELETE with subquery
+oracle "cat16_delete_subquery" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE TABLE blacklist(bad_val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+INSERT INTO blacklist VALUES(20), (40);
+DELETE FROM t WHERE val IN (SELECT bad_val FROM blacklist);
+SELECT * FROM t ORDER BY id;
+"
+
+# 16b. DELETE with IN subquery
+oracle "cat16_delete_in_subquery" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<20)
+INSERT INTO t SELECT x, x * 10 FROM c;
+DELETE FROM t WHERE id IN (SELECT id FROM t ORDER BY val DESC LIMIT 5);
+SELECT count(*) FROM t;
+SELECT max(val) FROM t;
+"
+
+# 16c. DELETE all rows with multiple indexes
+oracle "cat16_delete_all_multi_idx" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT, c REAL);
+CREATE INDEX idx_a ON t(a);
+CREATE INDEX idx_b ON t(b);
+CREATE INDEX idx_c ON t(c);
+INSERT INTO t VALUES(1, 10, 'x', 1.1), (2, 20, 'y', 2.2), (3, 30, 'z', 3.3);
+DELETE FROM t;
+SELECT count(*) FROM t;
+INSERT INTO t VALUES(4, 40, 'w', 4.4);
+SELECT * FROM t;
+PRAGMA integrity_check;
+"
+
+# 16d. DELETE with complex WHERE on composite index
+oracle "cat16_delete_complex_where" "
+CREATE TABLE t(a TEXT, b INT, c INT);
+CREATE INDEX idx ON t(a, b);
+INSERT INTO t VALUES('x', 1, 10), ('x', 2, 20), ('x', 3, 30);
+INSERT INTO t VALUES('y', 1, 40), ('y', 2, 50);
+DELETE FROM t WHERE a = 'x' AND b >= 2;
+SELECT * FROM t ORDER BY a, b;
+"
+
+# 16e. DELETE on WITHOUT ROWID with multi-row match
+oracle "cat16_delete_wr_multirow" "
+CREATE TABLE t(a TEXT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+CREATE INDEX idx ON t(c);
+INSERT INTO t VALUES('x', 1, 10), ('x', 2, 20), ('x', 3, 30);
+INSERT INTO t VALUES('y', 1, 40), ('y', 2, 50);
+DELETE FROM t WHERE a = 'x';
+SELECT * FROM t ORDER BY a, b;
+SELECT count(*) FROM t;
+PRAGMA integrity_check;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 17: Partial indexes
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 17: Partial indexes ---"
+
+# 17a. Partial index basic operations
+oracle "cat17_partial_basic" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, status TEXT, val INT);
+CREATE INDEX idx ON t(val) WHERE status = 'active';
+INSERT INTO t VALUES(1, 'active', 10), (2, 'inactive', 20), (3, 'active', 30);
+SELECT val FROM t WHERE status = 'active' ORDER BY val;
+UPDATE t SET status = 'active' WHERE id = 2;
+SELECT val FROM t WHERE status = 'active' ORDER BY val;
+"
+
+# 17b. Partial index with UPDATE moving rows in/out
+oracle "cat17_partial_update_inout" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, flag INT, val INT);
+CREATE INDEX idx ON t(val) WHERE flag = 1;
+INSERT INTO t VALUES(1, 1, 100), (2, 0, 200), (3, 1, 300), (4, 0, 400);
+UPDATE t SET flag = 0 WHERE id = 1;
+UPDATE t SET flag = 1 WHERE id = 2;
+SELECT id, val FROM t WHERE flag = 1 ORDER BY val;
+PRAGMA integrity_check;
+"
+
+# 17c. Partial index with DELETE
+oracle "cat17_partial_delete" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, type TEXT, val INT);
+CREATE INDEX idx ON t(val) WHERE type != 'hidden';
+INSERT INTO t VALUES(1, 'visible', 10), (2, 'hidden', 20), (3, 'visible', 30);
+DELETE FROM t WHERE type = 'visible';
+SELECT * FROM t ORDER BY id;
+INSERT INTO t VALUES(4, 'visible', 40);
+SELECT id, val FROM t WHERE type != 'hidden' ORDER BY val;
+PRAGMA integrity_check;
+"
+
+# 17d. Partial index with NULL condition
+oracle "cat17_partial_null" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX idx ON t(b) WHERE a IS NOT NULL;
+INSERT INTO t VALUES(1, 10, 100), (2, NULL, 200), (3, 30, 300), (4, NULL, 400);
+SELECT id, b FROM t WHERE a IS NOT NULL ORDER BY b;
+UPDATE t SET a = 99 WHERE id = 2;
+SELECT id, b FROM t WHERE a IS NOT NULL ORDER BY b;
+PRAGMA integrity_check;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 18: Multi-table and complex queries
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 18: Multi-table and complex queries ---"
+
+# 18a. Correlated subquery with index
+oracle "cat18_correlated_subquery" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, grp TEXT, val INT);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, grp TEXT, val INT);
+CREATE INDEX idx1 ON t1(grp);
+CREATE INDEX idx2 ON t2(grp);
+INSERT INTO t1 VALUES(1, 'a', 10), (2, 'a', 20), (3, 'b', 30);
+INSERT INTO t2 VALUES(1, 'a', 100), (2, 'b', 200);
+SELECT t1.id, t1.val, (SELECT sum(t2.val) FROM t2 WHERE t2.grp = t1.grp)
+FROM t1 ORDER BY t1.id;
+"
+
+# 18b. DELETE with EXISTS subquery
+oracle "cat18_delete_exists" "
+CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INT);
+CREATE INDEX idx ON child(parent_id);
+INSERT INTO parent VALUES(1, 'a'), (2, 'b'), (3, 'c');
+INSERT INTO child VALUES(1, 1), (2, 1), (3, 3);
+DELETE FROM parent WHERE NOT EXISTS (SELECT 1 FROM child WHERE child.parent_id = parent.id);
+SELECT * FROM parent ORDER BY id;
+"
+
+# 18c. INSERT INTO ... SELECT with index
+oracle "cat18_insert_select" "
+CREATE TABLE src(id INTEGER PRIMARY KEY, val INT);
+CREATE TABLE dst(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx_src ON src(val);
+CREATE INDEX idx_dst ON dst(val);
+INSERT INTO src VALUES(1, 10), (2, 20), (3, 30), (4, 40), (5, 50);
+INSERT INTO dst SELECT id + 100, val * 2 FROM src WHERE val > 20;
+SELECT * FROM dst ORDER BY id;
+SELECT count(*) FROM dst WHERE val > 50;
+"
+
+# 18d. UPDATE with multi-table WHERE
+oracle "cat18_update_multi_where" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, category INT, val INT);
+CREATE TABLE cats(id INTEGER PRIMARY KEY, multiplier INT);
+CREATE INDEX idx ON t(category);
+INSERT INTO t VALUES(1, 1, 10), (2, 1, 20), (3, 2, 30), (4, 2, 40);
+INSERT INTO cats VALUES(1, 10), (2, 100);
+UPDATE t SET val = val * (SELECT multiplier FROM cats WHERE cats.id = t.category);
+SELECT * FROM t ORDER BY id;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 19: Concurrent cursor / iteration edge cases
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 19: Concurrent cursor / iteration edge cases ---"
+
+# 19a. Trigger modifies same table during UPDATE
+oracle "cat19_trigger_same_table" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT, log INT DEFAULT 0);
+CREATE INDEX idx ON t(val);
+CREATE TRIGGER trg AFTER UPDATE OF val ON t
+BEGIN
+  UPDATE t SET log = log + 1 WHERE id = NEW.id;
+END;
+INSERT INTO t VALUES(1, 10, 0), (2, 20, 0), (3, 30, 0);
+UPDATE t SET val = val + 5 WHERE id <= 2;
+SELECT * FROM t ORDER BY id;
+"
+
+# 19b. Trigger INSERT into same table
+oracle "cat19_trigger_insert_same" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+CREATE TRIGGER trg AFTER INSERT ON t WHEN NEW.val < 100
+BEGIN
+  INSERT OR IGNORE INTO t VALUES(NEW.id + 1000, NEW.val + 100);
+END;
+INSERT INTO t VALUES(1, 10);
+INSERT INTO t VALUES(2, 20);
+SELECT * FROM t ORDER BY id;
+"
+
+# 19c. FK CASCADE DELETE with index
+oracle "cat19_fk_cascade" "
+CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE child(id INTEGER PRIMARY KEY, parent_id INT REFERENCES parent(id) ON DELETE CASCADE, val INT);
+CREATE INDEX idx ON child(parent_id);
+PRAGMA foreign_keys = ON;
+INSERT INTO parent VALUES(1, 'a'), (2, 'b');
+INSERT INTO child VALUES(1, 1, 10), (2, 1, 20), (3, 2, 30);
+DELETE FROM parent WHERE id = 1;
+SELECT * FROM child ORDER BY id;
+SELECT count(*) FROM child;
+"
+
+# 19d. CREATE INDEX on table with pending changes
+oracle "cat19_create_index_pending" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+INSERT INTO t VALUES(1, 10), (2, 20), (3, 30), (4, 20), (5, 10);
+CREATE INDEX idx ON t(val);
+SELECT val FROM t WHERE val = 20 ORDER BY id;
+UPDATE t SET val = val + 1;
+SELECT val FROM t ORDER BY val;
+PRAGMA integrity_check;
+"
+
+# 19e. DROP and recreate index
+oracle "cat19_drop_recreate_index" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10), (2, 20), (3, 30);
+UPDATE t SET val = val * 2;
+DROP INDEX idx;
+CREATE INDEX idx ON t(val);
+SELECT val FROM t ORDER BY val;
+PRAGMA integrity_check;
+"
+
+# 19f. REINDEX after mutations
+oracle "cat19_reindex" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 30), (2, 10), (3, 20);
+UPDATE t SET val = val + 100;
+REINDEX;
+SELECT val FROM t ORDER BY val;
+PRAGMA integrity_check;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 20: Stress and scale edge cases
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 20: Stress and scale edge cases ---"
+
+# 20a. Many columns in index
+oracle "cat20_many_columns" "
+CREATE TABLE t(a INT, b INT, c INT, d INT, e INT, f INT, g INT, h INT,
+               i INT, j INT, k INT, l INT, m INT, n INT, o INT, p INT,
+               PRIMARY KEY(a));
+CREATE INDEX idx ON t(b, c, d, e, f, g, h);
+INSERT INTO t VALUES(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
+INSERT INTO t VALUES(2, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 16, 17);
+UPDATE t SET h = h + 100;
+SELECT a, h FROM t ORDER BY a;
+PRAGMA integrity_check;
+"
+
+# 20b. Many indexes on one table
+oracle "cat20_many_indexes" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT, c INT, d INT, e INT);
+CREATE INDEX idx_a ON t(a);
+CREATE INDEX idx_b ON t(b);
+CREATE INDEX idx_c ON t(c);
+CREATE INDEX idx_d ON t(d);
+CREATE INDEX idx_e ON t(e);
+CREATE INDEX idx_ab ON t(a, b);
+CREATE INDEX idx_cd ON t(c, d);
+INSERT INTO t VALUES(1, 10, 20, 30, 40, 50);
+INSERT INTO t VALUES(2, 11, 21, 31, 41, 51);
+INSERT INTO t VALUES(3, 12, 22, 32, 42, 52);
+UPDATE t SET a=a+100, b=b+100, c=c+100, d=d+100, e=e+100;
+DELETE FROM t WHERE id = 2;
+SELECT * FROM t ORDER BY id;
+PRAGMA integrity_check;
+"
+
+# 20c. Rapid sequential mutations
+oracle "cat20_rapid_mutations" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 1);
+UPDATE t SET val = 2 WHERE id = 1;
+UPDATE t SET val = 3 WHERE id = 1;
+UPDATE t SET val = 4 WHERE id = 1;
+UPDATE t SET val = 5 WHERE id = 1;
+DELETE FROM t WHERE id = 1;
+INSERT INTO t VALUES(1, 100);
+UPDATE t SET val = 200 WHERE id = 1;
+SELECT * FROM t;
+"
+
+# 20d. Large batch UPDATE
+oracle "cat20_large_batch_update" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<1000)
+INSERT INTO t SELECT x, x FROM c;
+UPDATE t SET val = val + 10000 WHERE id % 2 = 0;
+SELECT count(*) FROM t WHERE val > 10000;
+SELECT count(*) FROM t WHERE val < 10000;
+SELECT min(val) FROM t;
+SELECT max(val) FROM t;
+"
+
+# 20e. Interleaved INSERT and DELETE
+oracle "cat20_interleaved_ins_del" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx ON t(val);
+INSERT INTO t VALUES(1, 10);
+INSERT INTO t VALUES(2, 20);
+DELETE FROM t WHERE id = 1;
+INSERT INTO t VALUES(3, 30);
+DELETE FROM t WHERE id = 2;
+INSERT INTO t VALUES(4, 40);
+INSERT INTO t VALUES(5, 50);
+DELETE FROM t WHERE id = 4;
+SELECT * FROM t ORDER BY id;
+SELECT val FROM t ORDER BY val;
+"
+
+# 20f. WITHOUT ROWID: many rows, update all, verify count and sum
+oracle "cat20_wr_large_update" "
+CREATE TABLE t(a INT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+CREATE INDEX idx ON t(c);
+WITH RECURSIVE r(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM r WHERE x<500)
+INSERT INTO t SELECT x / 10, x, x * 3 FROM r;
+UPDATE t SET c = c + 10000 WHERE b % 5 = 0;
+SELECT count(*) FROM t;
+SELECT count(*) FROM t WHERE c > 10000;
+SELECT min(c) FROM t WHERE c > 10000;
+"
+
+# ════════════════════════════════════════════════════════════════════
 echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
