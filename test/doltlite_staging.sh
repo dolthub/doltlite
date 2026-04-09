@@ -190,6 +190,29 @@ run_test "staged_persists" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB6"
 
+# --- Named dolt_add can stage a dropped table ---
+DB6B=/tmp/test_staging6b_$$.db
+rm -f "$DB6B"
+echo "CREATE TABLE keep_t(x); CREATE TABLE drop_t(y); INSERT INTO keep_t VALUES(1); INSERT INTO drop_t VALUES(2); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6B" > /dev/null 2>&1
+echo "DROP TABLE drop_t;" | $DOLTLITE "$DB6B" > /dev/null 2>&1
+
+run_test "dropped_table_unstaged" \
+  "SELECT table_name, staged, status FROM dolt_status WHERE table_name='drop_t';" \
+  "drop_t|0|deleted" "$DB6B"
+
+echo "SELECT dolt_add('drop_t');" | $DOLTLITE "$DB6B" > /dev/null 2>&1
+run_test "dropped_table_staged" \
+  "SELECT table_name, staged, status FROM dolt_status WHERE table_name='drop_t';" \
+  "drop_t|1|deleted" "$DB6B"
+
+run_test_match "commit_dropped_table" \
+  "SELECT dolt_commit('-m','drop drop_t');" \
+  "^[0-9a-f]{40}$" "$DB6B"
+
+run_test "dropped_table_gone_after_commit" \
+  "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='drop_t';" \
+  "0" "$DB6B"
+
 # --- dolt_add dot (.) stages everything ---
 DB7=/tmp/test_staging7_$$.db
 rm -f "$DB7"
@@ -213,7 +236,7 @@ run_test "add_lowercase_a_stages_all" \
   "1" "$DB8"
 
 # --- Cleanup ---
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB6B" "$DB7" "$DB8"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

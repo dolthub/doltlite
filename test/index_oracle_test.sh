@@ -751,6 +751,18 @@ SELECT a, b, c FROM t ORDER BY a, b;
 SELECT count(*) FROM t WHERE c > 1000;
 "
 
+# 6g2. WITHOUT ROWID PK conflict sees prior deferred replace in same tx
+oracle "cat6_without_rowid_replace_same_tx" "
+CREATE TABLE t(a INT, b INT, c INT, PRIMARY KEY(a, b)) WITHOUT ROWID;
+BEGIN;
+INSERT INTO t VALUES(1, 1, 100);
+REPLACE INTO t VALUES(1, 1, 200);
+REPLACE INTO t VALUES(1, 1, 300);
+SELECT a, b, c FROM t ORDER BY a, b, c;
+SELECT count(*) FROM t;
+COMMIT;
+"
+
 # 6h. Partial index: CREATE INDEX idx ON t(a) WHERE a IS NOT NULL
 oracle "cat6_partial_index" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, a INT);

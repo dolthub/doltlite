@@ -239,11 +239,20 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       sqlite3_result_error_nomem(ctx);
       return;
     }
-    if( doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat)==SQLITE_OK ){
-      rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
-      sqlite3_free(oldCatData);
-      if( rc==SQLITE_OK ) m.haveOldState = 1;
+    rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
+      return;
     }
+    rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
+    sqlite3_free(oldCatData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
+      return;
+    }
+    m.haveOldState = 1;
   }
 
   m.zTargetBranch = zBranch;

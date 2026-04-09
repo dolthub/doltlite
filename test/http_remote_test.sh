@@ -48,11 +48,60 @@ echo "=== Building embedded HTTP test binary ==="
 # Write a C test that starts server async, runs operations, verifies
 cat > "$TMPDIR/http_test.c" << 'CEOF'
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <dlfcn.h>
 #include "sqlite3.h"
 #include "doltlite_remotesrv.h"
+
+static int gShortWriteOnce = 0;
+
+static void enable_short_write_once(void) {
+  gShortWriteOnce = 1;
+}
+
+static ssize_t call_real_write(int fd, const void *buf, size_t count) {
+#ifdef __APPLE__
+  static ssize_t (*xRealWrite)(int, const void*, size_t) = 0;
+  if (!xRealWrite) {
+    xRealWrite = (ssize_t (*)(int, const void*, size_t))dlsym(RTLD_NEXT, "write");
+  }
+  return xRealWrite(fd, buf, count);
+#else
+  return write(fd, buf, count);
+#endif
+}
+
+static ssize_t short_write_interceptor(int fd, const void *buf, size_t count) {
+  if (gShortWriteOnce > 0 && count > 1) {
+    int soType = 0;
+    socklen_t nOpt = sizeof(soType);
+    if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &soType, &nOpt) == 0) {
+      size_t nShort = count / 2;
+      if (nShort < 1) nShort = 1;
+      gShortWriteOnce--;
+      return call_real_write(fd, buf, nShort);
+    }
+  }
+  return call_real_write(fd, buf, count);
+}
+
+#ifdef __APPLE__
+__attribute__((used))
+static struct {
+  const void *replacement;
+  const void *replacee;
+} write_interposers[]
+__attribute__((section("__DATA,__interpose"))) = {
+  { (const void*)short_write_interceptor, (const void*)write }
+};
+#endif
 
 static int run_sql(sqlite3 *db, const char *sql) {
   char *err = 0;
@@ -93,6 +142,51 @@ static int query_int(sqlite3 *db, const char *sql) {
     sqlite3_finalize(stmt);
   }
   return val;
+}
+
+static int raw_http_status(int port, const char *path) {
+  int fd, n;
+  struct sockaddr_in addr;
+  char req[512];
+  char resp[1024];
+  char *p;
+  int nOff = 0;
+
+  fd = socket(AF_INET, SOCK_STREAM, 0);
+  if (fd < 0) return -1;
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons((unsigned short)port);
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  if (connect(fd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+    close(fd);
+    return -1;
+  }
+
+  n = snprintf(req, sizeof(req),
+    "GET %s HTTP/1.1\r\n"
+    "Host: 127.0.0.1\r\n"
+    "Connection: close\r\n"
+    "\r\n",
+    path);
+  while (nOff < n) {
+    int nSent = (int)send(fd, req + nOff, n - nOff, 0);
+    if (nSent <= 0) {
+      close(fd);
+      return -1;
+    }
+    nOff += nSent;
+  }
+
+  n = (int)read(fd, resp, sizeof(resp)-1);
+  close(fd);
+  if (n <= 0) return -1;
+  resp[n] = 0;
+
+  p = strchr(resp, ' ');
+  if (!p) return -1;
+  return atoi(p + 1);
 }
 
 #define CHECK(desc, expected, actual) do { \
@@ -148,6 +242,28 @@ int main(int argc, char **argv) {
   printf("  Server started on port %d\n", port);
   CHECK("server started", 1, port > 0);
   usleep(100000);
+
+  /* ============================================================
+   * 2b. Invalid traversal-like paths are rejected
+   * ============================================================ */
+  printf("=== 2b. Reject traversal-like paths ===\n");
+  CHECK("parent path returns 404", 404, raw_http_status(port, "/../root"));
+  CHECK("dot path returns 404", 404, raw_http_status(port, "/./root"));
+
+  /* ============================================================
+   * 2c. Short-write transport handling
+   * ============================================================ */
+  printf("=== 2c. Short-write transport handling ===\n");
+  enable_short_write_once();
+  CHECK("server response survives short write", 200, raw_http_status(port, "/src.db/root"));
+  sqlite3 *shortCloneDb;
+  snprintf(path, sizeof(path), "%s/short_clone.db", tmpdir);
+  sqlite3_open(path, &shortCloneDb);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d/src.db')", port);
+  enable_short_write_once();
+  CHECK("client request survives short write", SQLITE_OK, run_sql(shortCloneDb, sql));
+  CHECK("short-write clone has 3 users", 3, query_int(shortCloneDb, "SELECT count(*) FROM users"));
+  sqlite3_close(shortCloneDb);
 
   /* ============================================================
    * 3. Clone via HTTP - verify all data, branch, remote, history
