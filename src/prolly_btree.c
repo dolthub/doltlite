@@ -762,8 +762,12 @@ static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
     if( iTable==0 || p->pgnoRoot==iTable ){
       p->eState = CURSOR_FAULT;
       p->skipNext = errCode;
-      
-      if( p->pMutMap ) prollyMutMapClear(p->pMutMap);
+      p->mmActive = 0;
+      /* Release cached tree positions but do NOT clear pMutMap — it may
+      ** be shared with the table's pPending, and the savepoint rollback
+      ** path has already truncated it to the correct saved count.
+      ** Clearing it would destroy changes from outer savepoints. */
+      prollyCursorReleaseAll(&p->pCur);
     }
   }
 }
@@ -2522,7 +2526,6 @@ int sqlite3BtreeCursor(
 static int prollyBtCursorCloseCursor(BtCursor *pCur){
   BtShared *pBt;
   BtCursor **pp;
-
   if( !pCur ) return SQLITE_OK;
   pBt = pCur->pBt;
   if( !pBt ) return SQLITE_OK;
@@ -2839,7 +2842,6 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
   (void)flags;
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  
   if( pCur->eState==CURSOR_INVALID ){
     return SQLITE_DONE;
   }
@@ -2889,11 +2891,15 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
       ** just wrote to the same key), both sources must advance past it.
       ** Otherwise only the tree advances. Without this, mergeStepForward
       ** leaves the MutMap positioned at the current key, causing the
-      ** merged scan to re-visit the row (double-apply UPDATE bug). */
+      ** merged scan to re-visit the row (double-apply UPDATE bug).
+      ** If the tree cursor is already at EOF, only the MutMap source
+      ** should advance; advancing a tree at EOF would deref a null node. */
       if( it.idx >= 0 && it.idx < pCur->pMutMap->nEntries
        && prollyCursorIsValid(&pCur->pCur)
        && mergeCompare(pCur, &pCur->pMutMap->aEntries[it.idx])==0 ){
         pCur->mergeSrc = MERGE_SRC_BOTH;
+      }else if( !prollyCursorIsValid(&pCur->pCur) ){
+        pCur->mergeSrc = MERGE_SRC_MUT;
       }else{
         pCur->mergeSrc = MERGE_SRC_TREE;
       }
@@ -2972,11 +2978,14 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags){
       pCur->mmIdx = it.idx;
       pCur->mmActive = 1;
       /* Same fix as in Next: if MutMap entry matches the current tree
-      ** key, advance both sources to avoid re-visiting the row. */
+      ** key, advance both sources to avoid re-visiting the row.
+      ** If the tree cursor is at EOF, only the MutMap should retreat. */
       if( it.idx >= 0 && it.idx < pCur->pMutMap->nEntries
        && prollyCursorIsValid(&pCur->pCur)
        && mergeCompare(pCur, &pCur->pMutMap->aEntries[it.idx])==0 ){
         pCur->mergeSrc = MERGE_SRC_BOTH;
+      }else if( !prollyCursorIsValid(&pCur->pCur) ){
+        pCur->mergeSrc = MERGE_SRC_MUT;
       }else{
         pCur->mergeSrc = MERGE_SRC_TREE;
       }
@@ -3728,15 +3737,36 @@ static int prollyBtCursorInsert(
         ** mergeSrc) is stale. Reset so the next Next/Previous call
         ** re-synchronizes the merge cursor with the updated MutMap. */
         pCur->mmActive = 0;
+      } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
+        /* For BLOBKEY cursors (WITHOUT ROWID PK), after a deferred insert
+        ** following a deferred delete with SAVEPOSITION, advance the tree
+        ** cursor past the old (deleted) entry. This prevents OP_Next from
+        ** re-syncing with MutMap at the old position and picking up the
+        ** newly inserted entry (whose sort key differs because non-PK
+        ** columns changed). Set skipNext=1 so OP_Next returns immediately
+        ** with the cursor at the next tree entry. */
+        CLEAR_CACHED_PAYLOAD(pCur);
+        if( prollyCursorIsValid(&pCur->pCur) ){
+          int trc = prollyCursorNext(&pCur->pCur);
+          if( trc==SQLITE_OK
+           && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+            pCur->eState = CURSOR_SKIPNEXT;
+            pCur->skipNext = 1;
+          } else {
+            pCur->eState = CURSOR_INVALID;
+          }
+        } else {
+          pCur->eState = CURSOR_INVALID;
+        }
+        pCur->mmActive = 0;
       } else {
-
         pCur->eState = CURSOR_INVALID;
       }
       return SQLITE_OK;
     }
   }
 
-  
+
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
   {
@@ -3832,7 +3862,6 @@ static int flushIfNeeded(BtCursor *pCur){
   }
 
   if( anyFlushed ){
-    
     pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
     if( pTE ){
       prollyCursorClose(&pCur->pCur);
@@ -3930,11 +3959,17 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   const u8 *pKey = 0;
   int nKey = 0;
   i64 iKey = 0;
+  /* Save the delete key BEFORE syncSavepoints, which may flush the cursor's
+  ** MutMap and reinitialize its tree position. Without this, the key
+  ** extraction below would read from an invalidated cursor. */
+  u8 *pSavedDelKey = 0;
+  int nSavedDelKey = 0;
+  i64 savedIntKey = 0;
+  int hasSavedKey = 0;
 
   assert( pCur->pBtree->inTrans==TRANS_WRITE );
   assert( pCur->curFlags & BTCF_WriteFlag );
 
-  
   if( pCur->eState==CURSOR_REQUIRESEEK ){
     rc = restoreCursorPosition(pCur, 0);
     if( rc!=SQLITE_OK || pCur->eState!=CURSOR_VALID ) return rc;
@@ -3942,53 +3977,77 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     pCur->eState = CURSOR_VALID;
     pCur->skipNext = 0;
   }else if( pCur->eState==CURSOR_INVALID ){
-    
+
   }else if( pCur->eState!=CURSOR_VALID ){
     return SQLITE_CORRUPT_BKPT;
   }
 
+  /* Extract the key to delete now, while the cursor is still positioned.
+  ** syncSavepoints below may push implicit savepoints which flush pending
+  ** MutMap edits and reinitialize the tree cursor. */
+  if( pCur->eState==CURSOR_VALID || pCur->eState==CURSOR_INVALID ){
+    if( pCur->curIntKey ){
+      if( pCur->mmActive
+       && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+        savedIntKey = pCur->pMutMap->aEntries[pCur->mmIdx].intKey;
+        hasSavedKey = 1;
+      }else if( !prollyCursorIsValid(&pCur->pCur)
+       && (pCur->curFlags & BTCF_ValidNKey) ){
+        savedIntKey = pCur->cachedIntKey;
+        hasSavedKey = 1;
+      }else if( prollyCursorIsValid(&pCur->pCur) ){
+        savedIntKey = prollyCursorIntKey(&pCur->pCur);
+        hasSavedKey = 1;
+      }
+    } else {
+      if( pCur->mmActive
+       && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+        ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
+        pSavedDelKey = sqlite3_malloc(e->nKey);
+        if( !pSavedDelKey ) return SQLITE_NOMEM;
+        memcpy(pSavedDelKey, e->pKey, e->nKey);
+        nSavedDelKey = e->nKey;
+        hasSavedKey = 1;
+      }else if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
+        rc = sortKeyFromRecord(pCur->pCachedPayload, pCur->nCachedPayload,
+                               &pSavedDelKey, &nSavedDelKey);
+        if( rc!=SQLITE_OK ) return rc;
+        hasSavedKey = 1;
+      }else if( prollyCursorIsValid(&pCur->pCur) ){
+        const u8 *pTmp; int nTmp;
+        prollyCursorKey(&pCur->pCur, &pTmp, &nTmp);
+        pSavedDelKey = sqlite3_malloc(nTmp);
+        if( !pSavedDelKey ) return SQLITE_NOMEM;
+        memcpy(pSavedDelKey, pTmp, nTmp);
+        nSavedDelKey = nTmp;
+        hasSavedKey = 1;
+      }
+    }
+  }
+
   rc = syncSavepoints(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){ sqlite3_free(pSavedDelKey); return rc; }
 
   rc = saveAllCursors(pCur->pBt, pCur->pgnoRoot, pCur);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){ sqlite3_free(pSavedDelKey); return rc; }
 
   rc = ensureMutMap(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){ sqlite3_free(pSavedDelKey); return rc; }
 
-  
+  /* Use the saved key for the MutMap delete */
   if( pCur->curIntKey ){
-    if( pCur->mmActive
-     && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-      iKey = pCur->pMutMap->aEntries[pCur->mmIdx].intKey;
-    }else if( !prollyCursorIsValid(&pCur->pCur)
-     && (pCur->curFlags & BTCF_ValidNKey) ){
-      iKey = pCur->cachedIntKey;
-    }else{
-      iKey = prollyCursorIntKey(&pCur->pCur);
+    if( hasSavedKey ){
+      iKey = savedIntKey;
     }
     rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, iKey);
   } else {
-    u8 *pDelSortKey = 0;
-    int nDelSortKey = 0;
-
-    if( pCur->mmActive
-     && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-      
-      ProllyMutMapEntry *e = &pCur->pMutMap->aEntries[pCur->mmIdx];
-      pKey = e->pKey;
-      nKey = e->nKey;
-    }else if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
-      rc = sortKeyFromRecord(pCur->pCachedPayload, pCur->nCachedPayload,
-                             &pDelSortKey, &nDelSortKey);
-      if( rc!=SQLITE_OK ) return rc;
-      pKey = pDelSortKey;
-      nKey = nDelSortKey;
-    } else {
-      prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+    if( hasSavedKey ){
+      pKey = pSavedDelKey;
+      nKey = nSavedDelKey;
     }
     rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
-    sqlite3_free(pDelSortKey);
+    sqlite3_free(pSavedDelKey);
+    pSavedDelKey = 0;
   }
 
   if( rc!=SQLITE_OK ) return rc;
