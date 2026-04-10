@@ -239,6 +239,12 @@ check "push to unknown remote errors" "1" "$(echo "$result" | grep -c 'remote no
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('origin','nonexistent');" 2>&1)
 check "push unknown branch errors" "1" "$(echo "$result" | grep -c 'push failed')"
 
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add','origin','$R/duplicate.db');" 2>&1)
+check "duplicate remote add errors" "1" "$(echo "$result" | grep -c 'remote already exists')"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('remove','missing_remote');" 2>&1)
+check "missing remote remove errors" "1" "$(echo "$result" | grep -c 'remote not found')"
+
 # clone into a db that already has data errors
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_clone('$R/remote.db');" 2>&1)
 check "clone into non-empty errors" "1" "$(echo "$result" | grep -c 'not empty')"

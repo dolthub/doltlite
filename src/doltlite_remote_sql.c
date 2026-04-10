@@ -158,7 +158,8 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     m.zUrl = zUrl;
     rc = doltliteMutateRefs(db, mutateRemoteRef, &m);
     if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "remote already exists or error", -1);
+      remoteSqlResultError(ctx, rc,
+        rc==SQLITE_ERROR ? "remote already exists" : 0);
       return;
     }
   }else if( strcmp(zAction, "remove")==0 ){
@@ -166,7 +167,8 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateRemoteRef, &m);
     if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "remote not found", -1);
+      remoteSqlResultError(ctx, rc,
+        rc==SQLITE_NOTFOUND ? "remote not found" : 0);
       return;
     }
   }else{
@@ -257,6 +259,10 @@ static int parseRemoteBranchNames(
   if( rc!=SQLITE_OK ){
     chunkStoreClose(&refsView);
     return rc;
+  }
+  if( refsView.nBranches > nRefsData / 44 ){
+    chunkStoreClose(&refsView);
+    return SQLITE_CORRUPT;
   }
 
   if( refsView.nBranches>0 ){
