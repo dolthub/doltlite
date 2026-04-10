@@ -49,6 +49,74 @@ static void freeSchemaDiffRows(SdCursor *c){
   c->nAlloc = 0;
 }
 
+static int appendSchemaEntry(
+  SchemaEntry **paEntries,
+  int *pnEntries,
+  int *pnAlloc,
+  char *zName,
+  char *zSql,
+  char *zType
+){
+  SchemaEntry *aEntries = *paEntries;
+  int nEntries = *pnEntries;
+  int nAlloc = *pnAlloc;
+  if( nEntries >= nAlloc ){
+    int nNew = nAlloc ? nAlloc*2 : 16;
+    SchemaEntry *aNew = sqlite3_realloc(aEntries, nNew*(int)sizeof(SchemaEntry));
+    if( !aNew ) return SQLITE_NOMEM;
+    aEntries = aNew;
+    nAlloc = nNew;
+  }
+  aEntries[nEntries].zName = zName;
+  aEntries[nEntries].zSql = zSql;
+  aEntries[nEntries].zType = zType;
+  *paEntries = aEntries;
+  *pnEntries = nEntries + 1;
+  *pnAlloc = nAlloc;
+  return SQLITE_OK;
+}
+
+static int appendSchemaDiffRow(
+  SdCursor *pCur,
+  const char *zName,
+  const char *zFromSql,
+  const char *zToSql,
+  char *zDiffType
+){
+  SchemaDiffRow *r;
+  if( pCur->nRows >= pCur->nAlloc ){
+    int nNew = pCur->nAlloc ? pCur->nAlloc*2 : 16;
+    SchemaDiffRow *aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(SchemaDiffRow));
+    if( !aNew ) return SQLITE_NOMEM;
+    pCur->aRows = aNew;
+    pCur->nAlloc = nNew;
+  }
+  r = &pCur->aRows[pCur->nRows];
+  memset(r, 0, sizeof(*r));
+  r->zName = sqlite3_mprintf("%s", zName ? zName : "");
+  if( !r->zName ) return SQLITE_NOMEM;
+  if( zFromSql ){
+    r->zFromSql = sqlite3_mprintf("%s", zFromSql);
+    if( !r->zFromSql ){
+      sqlite3_free(r->zName);
+      memset(r, 0, sizeof(*r));
+      return SQLITE_NOMEM;
+    }
+  }
+  if( zToSql ){
+    r->zToSql = sqlite3_mprintf("%s", zToSql);
+    if( !r->zToSql ){
+      sqlite3_free(r->zName);
+      sqlite3_free(r->zFromSql);
+      memset(r, 0, sizeof(*r));
+      return SQLITE_NOMEM;
+    }
+  }
+  r->zDiffType = zDiffType;
+  pCur->nRows++;
+  return SQLITE_OK;
+}
+
 
 
 int loadSchemaFromCatalog(
@@ -110,36 +178,35 @@ int loadSchemaFromCatalog(
           int len = (aType[0]-13)/2;
           if( aOffset[0]+len <= nVal ){
             zType = sqlite3_malloc(len+1);
-            if(zType){ memcpy(zType, pVal+aOffset[0], len); zType[len]=0; }
+            if( !zType ){ rc = SQLITE_NOMEM; goto load_schema_done; }
+            memcpy(zType, pVal+aOffset[0], len); zType[len]=0;
           }
         }
         if( aType[1] >= 13 && (aType[1]&1)==1 ){
           int len = (aType[1]-13)/2;
           if( aOffset[1]+len <= nVal ){
             zName = sqlite3_malloc(len+1);
-            if(zName){ memcpy(zName, pVal+aOffset[1], len); zName[len]=0; }
+            if( !zName ){ rc = SQLITE_NOMEM; goto load_schema_done; }
+            memcpy(zName, pVal+aOffset[1], len); zName[len]=0;
           }
         }
         if( aType[4] >= 13 && (aType[4]&1)==1 ){
           int len = (aType[4]-13)/2;
           if( aOffset[4]+len <= nVal ){
             zSql = sqlite3_malloc(len+1);
-            if(zSql){ memcpy(zSql, pVal+aOffset[4], len); zSql[len]=0; }
+            if( !zSql ){ rc = SQLITE_NOMEM; goto load_schema_done; }
+            memcpy(zSql, pVal+aOffset[4], len); zSql[len]=0;
           }
         }
 
         if( zName ){
-          if( nEntries >= nAlloc ){
-            int nNew = nAlloc ? nAlloc*2 : 16;
-            SchemaEntry *aNew = sqlite3_realloc(aEntries, nNew*(int)sizeof(SchemaEntry));
-            if( aNew ){ aEntries = aNew; nAlloc = nNew; }
+          rc = appendSchemaEntry(&aEntries, &nEntries, &nAlloc, zName, zSql, zType);
+          if( rc!=SQLITE_OK ){
+            goto load_schema_done;
           }
-          if( nEntries < nAlloc ){
-            aEntries[nEntries].zName = zName; zName = 0;
-            aEntries[nEntries].zSql = zSql; zSql = 0;
-            aEntries[nEntries].zType = zType; zType = 0;
-            nEntries++;
-          }
+          zName = 0;
+          zSql = 0;
+          zType = 0;
         }
         sqlite3_free(zType);
         sqlite3_free(zName);
@@ -151,10 +218,17 @@ int loadSchemaFromCatalog(
     if( rc!=SQLITE_OK ) break;
   }
 
+load_schema_done:
   prollyCursorClose(&cur);
+  if( rc!=SQLITE_OK ){
+    freeSchemaEntries(aEntries, nEntries);
+    *ppEntries = 0;
+    *pnEntries = 0;
+    return rc;
+  }
   *ppEntries = aEntries;
   *pnEntries = nEntries;
-  return SQLITE_OK;
+  return rc;
 }
 
 void freeSchemaEntries(SchemaEntry *a, int n){
@@ -185,37 +259,16 @@ static int computeSchemaDiff(
   
   for(i=0; i<nTo; i++){
     SchemaEntry *fromEntry = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
-    SchemaDiffRow *r;
 
     if( !fromEntry ){
-      
-      if( pCur->nRows >= pCur->nAlloc ){
-        int nNew = pCur->nAlloc ? pCur->nAlloc*2 : 16;
-        SchemaDiffRow *aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(SchemaDiffRow));
-        if( !aNew ) return SQLITE_NOMEM;
-        pCur->aRows = aNew; pCur->nAlloc = nNew;
-      }
-      r = &pCur->aRows[pCur->nRows++];
-      memset(r, 0, sizeof(*r));
-      r->zName = sqlite3_mprintf("%s", aTo[i].zName);
-      r->zFromSql = 0;
-      r->zToSql = sqlite3_mprintf("%s", aTo[i].zSql ? aTo[i].zSql : "");
-      r->zDiffType = "added";
+      int rc = appendSchemaDiffRow(pCur, aTo[i].zName, 0,
+                                   aTo[i].zSql ? aTo[i].zSql : "", "added");
+      if( rc!=SQLITE_OK ) return rc;
     }else if( fromEntry->zSql && aTo[i].zSql
            && strcmp(fromEntry->zSql, aTo[i].zSql)!=0 ){
-      
-      if( pCur->nRows >= pCur->nAlloc ){
-        int nNew = pCur->nAlloc ? pCur->nAlloc*2 : 16;
-        SchemaDiffRow *aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(SchemaDiffRow));
-        if( !aNew ) return SQLITE_NOMEM;
-        pCur->aRows = aNew; pCur->nAlloc = nNew;
-      }
-      r = &pCur->aRows[pCur->nRows++];
-      memset(r, 0, sizeof(*r));
-      r->zName = sqlite3_mprintf("%s", aTo[i].zName);
-      r->zFromSql = sqlite3_mprintf("%s", fromEntry->zSql);
-      r->zToSql = sqlite3_mprintf("%s", aTo[i].zSql);
-      r->zDiffType = "modified";
+      int rc = appendSchemaDiffRow(pCur, aTo[i].zName, fromEntry->zSql,
+                                   aTo[i].zSql, "modified");
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
 
@@ -223,19 +276,10 @@ static int computeSchemaDiff(
   for(i=0; i<nFrom; i++){
     SchemaEntry *toEntry = findSchemaEntry(aTo, nTo, aFrom[i].zName);
     if( !toEntry ){
-      SchemaDiffRow *r;
-      if( pCur->nRows >= pCur->nAlloc ){
-        int nNew = pCur->nAlloc ? pCur->nAlloc*2 : 16;
-        SchemaDiffRow *aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(SchemaDiffRow));
-        if( !aNew ) return SQLITE_NOMEM;
-        pCur->aRows = aNew; pCur->nAlloc = nNew;
-      }
-      r = &pCur->aRows[pCur->nRows++];
-      memset(r, 0, sizeof(*r));
-      r->zName = sqlite3_mprintf("%s", aFrom[i].zName);
-      r->zFromSql = sqlite3_mprintf("%s", aFrom[i].zSql ? aFrom[i].zSql : "");
-      r->zToSql = 0;
-      r->zDiffType = "dropped";
+      int rc = appendSchemaDiffRow(pCur, aFrom[i].zName,
+                                   aFrom[i].zSql ? aFrom[i].zSql : "",
+                                   0, "dropped");
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
 
@@ -326,7 +370,6 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   ProllyHash fromCatHash, toCatHash;
   SchemaEntry *aFrom = 0, *aTo = 0;
   int nFrom = 0, nTo = 0;
-  u8 *data = 0; int nData = 0;
   int rc, argIdx = 0;
   (void)idxStr;
 
@@ -350,77 +393,80 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     const char *zTableFilter = 0;
     if( zFromRef && !zToRef ){
       ProllyHash testHash;
-      int resolved = doltliteResolveRef(db,zFromRef, &testHash);
-      if( resolved!=SQLITE_OK ){
-        
+      rc = doltliteResolveRef(db,zFromRef, &testHash);
+      if( rc==SQLITE_NOTFOUND ){
         zTableFilter = zFromRef;
         zFromRef = 0;
+      }else if( rc!=SQLITE_OK ){
+        return rc;
       }
     }
 
     
     if( zFromRef ){
-    rc = doltliteResolveRef(db,zFromRef, &fromCommit);
-    if( rc!=SQLITE_OK ) return SQLITE_OK;
-    memset(&commit, 0, sizeof(commit));
-    rc = doltliteLoadCommit(db, &fromCommit, &commit);
-    if( rc!=SQLITE_OK ) return SQLITE_OK;
-    memcpy(&fromCatHash, &commit.catalogHash, sizeof(ProllyHash));
-    doltliteCommitClear(&commit);
-  }else{
-    
-    rc = doltliteGetHeadCatalogHash(db, &fromCatHash);
-    if( rc!=SQLITE_OK ) return SQLITE_OK;
-  }
-
-  
-  if( zToRef ){
-    rc = doltliteResolveRef(db,zToRef, &toCommit);
-    if( rc!=SQLITE_OK ) return SQLITE_OK;
-    memset(&commit, 0, sizeof(commit));
-    rc = doltliteLoadCommit(db, &toCommit, &commit);
-    if( rc!=SQLITE_OK ) return SQLITE_OK;
-    memcpy(&toCatHash, &commit.catalogHash, sizeof(ProllyHash));
-    doltliteCommitClear(&commit);
-  }else{
-    
-    u8 *catData = 0; int nCatData = 0;
-    rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
-    if( rc==SQLITE_OK ){
-      rc = chunkStorePut(cs, catData, nCatData, &toCatHash);
-      sqlite3_free(catData);
+      rc = doltliteResolveRef(db,zFromRef, &fromCommit);
+      if( rc!=SQLITE_OK ) return rc;
+      memset(&commit, 0, sizeof(commit));
+      rc = doltliteLoadCommit(db, &fromCommit, &commit);
+      if( rc!=SQLITE_OK ) return rc;
+      memcpy(&fromCatHash, &commit.catalogHash, sizeof(ProllyHash));
+      doltliteCommitClear(&commit);
+    }else{
+      rc = doltliteGetHeadCatalogHash(db, &fromCatHash);
+      if( rc!=SQLITE_OK ) return rc;
     }
-    if( rc!=SQLITE_OK ) return SQLITE_OK;
-  }
 
   
-  loadSchemaFromCatalog(db, cs, pCache, &fromCatHash, &aFrom, &nFrom);
-  loadSchemaFromCatalog(db, cs, pCache, &toCatHash, &aTo, &nTo);
-
-  
-  computeSchemaDiff(c, aFrom, nFrom, aTo, nTo);
-
-  
-  if( zTableFilter ){
-    int j, k=0;
-    for(j=0; j<c->nRows; j++){
-      if( c->aRows[j].zName && strcmp(c->aRows[j].zName, zTableFilter)==0 ){
-        if( k!=j ) c->aRows[k] = c->aRows[j];
-        k++;
-      }else{
-        sqlite3_free(c->aRows[j].zName);
-        sqlite3_free(c->aRows[j].zFromSql);
-        sqlite3_free(c->aRows[j].zToSql);
+    if( zToRef ){
+      rc = doltliteResolveRef(db,zToRef, &toCommit);
+      if( rc!=SQLITE_OK ) return rc;
+      memset(&commit, 0, sizeof(commit));
+      rc = doltliteLoadCommit(db, &toCommit, &commit);
+      if( rc!=SQLITE_OK ) return rc;
+      memcpy(&toCatHash, &commit.catalogHash, sizeof(ProllyHash));
+      doltliteCommitClear(&commit);
+    }else{
+      u8 *catData = 0; int nCatData = 0;
+      rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
+      if( rc==SQLITE_OK ){
+        rc = chunkStorePut(cs, catData, nCatData, &toCatHash);
+        sqlite3_free(catData);
       }
+      if( rc!=SQLITE_OK ) return rc;
     }
-    c->nRows = k;
+
+  
+    rc = loadSchemaFromCatalog(db, cs, pCache, &fromCatHash, &aFrom, &nFrom);
+    if( rc!=SQLITE_OK ) goto sd_filter_done;
+    rc = loadSchemaFromCatalog(db, cs, pCache, &toCatHash, &aTo, &nTo);
+    if( rc!=SQLITE_OK ) goto sd_filter_done;
+
+  
+    rc = computeSchemaDiff(c, aFrom, nFrom, aTo, nTo);
+    if( rc!=SQLITE_OK ) goto sd_filter_done;
+
+  
+    if( zTableFilter ){
+      int j, k=0;
+      for(j=0; j<c->nRows; j++){
+        if( c->aRows[j].zName && strcmp(c->aRows[j].zName, zTableFilter)==0 ){
+          if( k!=j ) c->aRows[k] = c->aRows[j];
+          k++;
+        }else{
+          sqlite3_free(c->aRows[j].zName);
+          sqlite3_free(c->aRows[j].zFromSql);
+          sqlite3_free(c->aRows[j].zToSql);
+        }
+      }
+      c->nRows = k;
+    }
+
   }
 
-  } 
-
+sd_filter_done:
   freeSchemaEntries(aFrom, nFrom);
   freeSchemaEntries(aTo, nTo);
-  return SQLITE_OK;
+  return rc;
 }
 
 static int sdNext(sqlite3_vtab_cursor *cur){ ((SdCursor*)cur)->iRow++; return SQLITE_OK; }

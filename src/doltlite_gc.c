@@ -86,21 +86,36 @@ static int gcMarkReachable(
   ** We push catHash to the GC queue. commitHash is skipped because
   ** commits are already reachable via branch refs. */
   if( rc==SQLITE_OK && !prollyHashIsEmpty(&cs->workingState) ){
-    rc = gcQueuePush(&queue, &cs->workingState);
+    rc = prollyHashSetAdd(marked, &cs->workingState);
     if( rc==SQLITE_OK ){
       u8 *wsData = 0; int nWsData = 0;
       int entryHashSize = PROLLY_HASH_SIZE * 2; /* catHash + commitHash */
-      if( chunkStoreGet(cs, &cs->workingState, &wsData, &nWsData)==SQLITE_OK
-       && wsData && nWsData >= 4 ){
+      rc = chunkStoreGet(cs, &cs->workingState, &wsData, &nWsData);
+      if( rc!=SQLITE_OK ){
+        gcQueueFree(&queue);
+        return rc;
+      }
+      if( !wsData || nWsData < 4 ){
+        sqlite3_free(wsData);
+        gcQueueFree(&queue);
+        return SQLITE_CORRUPT;
+      }
+      {
         int nBr = (int)((u32)wsData[0] | ((u32)wsData[1]<<8) | ((u32)wsData[2]<<16) | ((u32)wsData[3]<<24));
         const u8 *pp = wsData + 4;
         int j;
         for(j=0; j<nBr && rc==SQLITE_OK; j++){
           int nl;
-          if( pp + 4 > wsData + nWsData ) break;
+          if( pp + 4 > wsData + nWsData ){
+            rc = SQLITE_CORRUPT;
+            break;
+          }
           nl = (int)((u32)pp[0] | ((u32)pp[1]<<8) | ((u32)pp[2]<<16) | ((u32)pp[3]<<24));
           pp += 4;
-          if( pp + nl + entryHashSize > wsData + nWsData ) break;
+          if( pp + nl + entryHashSize > wsData + nWsData ){
+            rc = SQLITE_CORRUPT;
+            break;
+          }
           {
             ProllyHash brCat;
             memcpy(brCat.data, pp + nl, PROLLY_HASH_SIZE);
@@ -108,8 +123,8 @@ static int gcMarkReachable(
           }
           pp += nl + entryHashSize;
         }
-        sqlite3_free(wsData);
       }
+      sqlite3_free(wsData);
     }
   }
 
@@ -141,8 +156,7 @@ static int gcMarkReachable(
 
     rc = chunkStoreGet(cs, &current, &data, &nData);
     if( rc!=SQLITE_OK ){
-      
-      continue;
+      break;
     }
 
     rc = doltliteEnumerateChunkChildren(data, nData, gcChildCb, &queue);
@@ -528,14 +542,21 @@ int doltliteGcCompact(sqlite3 *db){
     return SQLITE_OK;  
   }
 
-  rc = prollyHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
+  rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
+
+  rc = prollyHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    return rc;
+  }
 
   rc = gcMarkReachable(cs, &marked);
   if( rc==SQLITE_OK ){
     rc = gcSweep(cs, &marked, &nKept, &nRemoved);
   }
   prollyHashSetFree(&marked);
+  chunkStoreUnlock(cs);
   return rc;
 }
 

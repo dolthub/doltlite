@@ -14,6 +14,7 @@
 **   ./doltlite_regression_test_c conflicts_blob_corruption
 **   ./doltlite_regression_test_c status_error_propagation
 **   ./doltlite_regression_test_c remote_refs_corruption
+**   ./doltlite_regression_test_c chunk_walk_corruption
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@
 #include "sqlite3.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "doltlite_chunk_walk.h"
 #include "doltlite_internal.h"
 
 typedef unsigned char u8;
@@ -704,6 +706,22 @@ static void run_remote_refs_corruption(void){
   remove_db(localPath);
 }
 
+static void run_chunk_walk_corruption(void){
+  static const u8 badCatalog[] = {
+    'D','L','C','T',
+    3, 0,
+    1, 0, 0, 0,
+    2, 0, 0, 0,
+    0,
+    1, 0
+  };
+  int rc;
+
+  printf("=== Chunk Walk Corruption Test ===\n\n");
+  rc = doltliteEnumerateChunkChildren(badCatalog, (int)sizeof(badCatalog), 0, 0);
+  check("truncated_catalog_is_corrupt", rc==SQLITE_CORRUPT);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -712,7 +730,8 @@ static const RegressionCase aCases[] = {
   { "refresh_error_propagation", "Refresh Error Propagation Test", run_refresh_error_propagation },
   { "conflicts_blob_corruption", "Conflicts Blob Corruption Test", run_conflicts_blob_corruption },
   { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation },
-  { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption }
+  { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
+  { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption }
 };
 
 static int run_case_by_name(const char *zName){
