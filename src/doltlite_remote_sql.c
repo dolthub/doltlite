@@ -34,6 +34,8 @@ static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
   return 0;
 }
 
+static void freeNameList(char **azNames, int nNames);
+
 static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -156,15 +158,23 @@ static int parseRemoteBranchNames(
   if( rc!=SQLITE_OK ) return rc;
   if( !refsData || nRefsData < 9 ){
     sqlite3_free(refsData);
-    return SQLITE_OK; 
+    return SQLITE_CORRUPT;
   }
 
   {
     const u8 *p = refsData;
     u8 ver; int defLen;
     ver = p[0]; p++;
+    if( ver!=5 ){
+      sqlite3_free(refsData);
+      return SQLITE_CORRUPT;
+    }
     defLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-    if( p + defLen + 4 <= refsData + nRefsData ){
+    if( p + defLen + 4 > refsData + nRefsData ){
+      sqlite3_free(refsData);
+      return SQLITE_CORRUPT;
+    }
+    {
       int nBranches, i;
       p += defLen;
       nBranches = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
@@ -178,20 +188,27 @@ static int parseRemoteBranchNames(
 
       for(i=0; i<nBranches; i++){
         int nameLen;
-        if( p+4 > refsData+nRefsData ) break;
+        if( p+4 > refsData+nRefsData ){
+          freeNameList(azNames, nNames);
+          sqlite3_free(refsData);
+          return SQLITE_CORRUPT;
+        }
         nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-        if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
+        if( p+nameLen+(PROLLY_HASH_SIZE*2) > refsData+nRefsData ){
+          freeNameList(azNames, nNames);
+          sqlite3_free(refsData);
+          return SQLITE_CORRUPT;
+        }
         azNames[nNames] = sqlite3_malloc(nameLen+1);
-        if( azNames[nNames] ){
-          memcpy(azNames[nNames], p, nameLen);
-          azNames[nNames][nameLen] = 0;
-          nNames++;
+        if( !azNames[nNames] ){
+          freeNameList(azNames, nNames);
+          sqlite3_free(refsData);
+          return SQLITE_NOMEM;
         }
-        p += nameLen + PROLLY_HASH_SIZE;
-
-        if( p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
-          p += PROLLY_HASH_SIZE;
-        }
+        memcpy(azNames[nNames], p, nameLen);
+        azNames[nNames][nameLen] = 0;
+        nNames++;
+        p += nameLen + (PROLLY_HASH_SIZE*2);
       }
     }
   }
@@ -485,6 +502,10 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   
   rc = chunkStoreAddRemote(cs, "origin", zUrl);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(ctx, "failed to add origin remote", -1);
+    return;
+  }
   
 
   
@@ -516,19 +537,30 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         DoltliteCommit commit;
 
         rc = chunkStoreGet(cs, &branchCommit, &data, &nData);
-        if( rc==SQLITE_OK && data ){
-          rc = doltliteCommitDeserialize(data, nData, &commit);
-          sqlite3_free(data);
-          if( rc==SQLITE_OK ){
-            rc = doltliteHardReset(db, &commit.catalogHash);
-            if( rc==SQLITE_OK ){
-              doltliteSetSessionBranch(db, zDefault);
-              doltliteSetSessionHead(db, &branchCommit);
-              doltliteSetSessionStaged(db, &commit.catalogHash);
-              chunkStoreSetDefaultBranch(cs, zDefault);
-            }
-            doltliteCommitClear(&commit);
-          }
+        if( rc!=SQLITE_OK || !data ){
+          sqlite3_result_error(ctx, "failed to load default branch commit", -1);
+          return;
+        }
+        rc = doltliteCommitDeserialize(data, nData, &commit);
+        sqlite3_free(data);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error(ctx, "failed to deserialize default branch commit", -1);
+          return;
+        }
+        rc = doltliteHardReset(db, &commit.catalogHash);
+        if( rc!=SQLITE_OK ){
+          doltliteCommitClear(&commit);
+          sqlite3_result_error(ctx, "failed to initialize working tree from default branch", -1);
+          return;
+        }
+        doltliteSetSessionBranch(db, zDefault);
+        doltliteSetSessionHead(db, &branchCommit);
+        doltliteSetSessionStaged(db, &commit.catalogHash);
+        rc = chunkStoreSetDefaultBranch(cs, zDefault);
+        doltliteCommitClear(&commit);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error(ctx, "failed to record default branch", -1);
+          return;
         }
       }
     }

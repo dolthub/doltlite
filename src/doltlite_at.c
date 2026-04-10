@@ -15,16 +15,20 @@
 
 
 static char *atBuildSchema(DoltliteColInfo *ci){
-  int i, sz=256;
+  int i;
+  sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
-  for(i=0;i<ci->nCol;i++) sz+=(int)strlen(ci->azName[i])+10;
-  z=sqlite3_malloc(sz); if(!z) return 0;
-  strcpy(z,"CREATE TABLE x(");
-  for(i=0;i<ci->nCol;i++){
-    if(i>0) strcat(z,", ");
-    strcat(z,"\""); strcat(z,ci->azName[i]); strcat(z,"\"");
+  if( !pStr ) return 0;
+  sqlite3_str_appendall(pStr, "CREATE TABLE x(");
+  for(i=0; i<ci->nCol; i++){
+    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
+    if( doltliteAppendQuotedIdent(pStr, ci->azName[i])!=SQLITE_OK ){
+      sqlite3_str_reset(pStr);
+      return 0;
+    }
   }
-  strcat(z,", commit_ref TEXT HIDDEN)");
+  sqlite3_str_appendall(pStr, ", commit_ref TEXT HIDDEN)");
+  z = sqlite3_str_finish(pStr);
   return z;
 }
 
@@ -75,11 +79,20 @@ static int atScanTree(AtCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
     r=&pCur->aRows[pCur->nRows]; memset(r,0,sizeof(*r));
     r->intKey=prollyCursorIntKey(&cur);
     prollyCursorValue(&cur,&pVal,&nVal);
-    if(pVal&&nVal>0){r->pVal=sqlite3_malloc(nVal);if(r->pVal)memcpy(r->pVal,pVal,nVal);r->nVal=nVal;}
+    if( pVal && nVal>0 ){
+      r->pVal = sqlite3_malloc(nVal);
+      if( !r->pVal ){
+        prollyCursorClose(&cur);
+        return SQLITE_NOMEM;
+      }
+      memcpy(r->pVal,pVal,nVal);
+      r->nVal=nVal;
+    }
     pCur->nRows++;
     rc=prollyCursorNext(&cur); if(rc!=SQLITE_OK) break;
   }
-  prollyCursorClose(&cur); return SQLITE_OK;
+  prollyCursorClose(&cur);
+  return rc;
 }
 
 static int atConnect(sqlite3 *db, void *pAux, int argc,
@@ -99,8 +112,10 @@ static int atConnect(sqlite3 *db, void *pAux, int argc,
   doltliteGetColumnNames(db,v->zTableName,&v->cols);
 
   if(v->cols.nCol<=0){
+    char *zErr = sqlite3_mprintf("table '%s' not found or has no columns",
+                                 v->zTableName ? v->zTableName : "");
     sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);
-    *pzErr=sqlite3_mprintf("table '%s' not found or has no columns",v->zTableName?v->zTableName:"");
+    *pzErr = zErr;
     return SQLITE_ERROR;
   }
   zSchema=atBuildSchema(&v->cols);
@@ -180,11 +195,12 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   if(!zRef) return SQLITE_OK;
 
   rc=doltliteResolveRef(db,zRef,&commitHash);
-  if(rc!=SQLITE_OK) return SQLITE_OK;
+  if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
+  if(rc!=SQLITE_OK) return rc;
 
   memset(&commit,0,sizeof(commit));
   rc=doltliteLoadCommit(db,&commitHash,&commit);
-  if(rc!=SQLITE_OK) return SQLITE_OK;
+  if(rc!=SQLITE_OK) return rc;
 
   /* For branch refs, prefer the working state catalog if it has
   ** uncommitted changes (same logic as checkout). */
@@ -203,7 +219,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
         /* Working state has uncommitted changes — use it. */
         rc=doltliteLoadCatalog(db,&wsCatHash,&aTables,&nTables,0);
         doltliteCommitClear(&commit);
-        if(rc!=SQLITE_OK) return SQLITE_OK;
+        if(rc!=SQLITE_OK) return rc;
         goto at_find_root;
       }
     }
@@ -211,16 +227,17 @@ static int atFilter(sqlite3_vtab_cursor *cur,
 
   rc=doltliteLoadCatalog(db,&commit.catalogHash,&aTables,&nTables,0);
   doltliteCommitClear(&commit);
-  if(rc!=SQLITE_OK) return SQLITE_OK;
+  if(rc!=SQLITE_OK) return rc;
 
 at_find_root:
 
   rc=doltliteFindTableRootByName(aTables,nTables,v->zTableName,&tableRoot,&flags);
   sqlite3_free(aTables);
-  if(rc!=SQLITE_OK) return SQLITE_OK;
+  if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
+  if(rc!=SQLITE_OK) return rc;
 
-  atScanTree(c,cs,pCache,&tableRoot,flags);
-  return SQLITE_OK;
+  rc = atScanTree(c,cs,pCache,&tableRoot,flags);
+  return rc;
 }
 
 static int atNext(sqlite3_vtab_cursor *cur){((AtCursor*)cur)->iRow++;return SQLITE_OK;}
