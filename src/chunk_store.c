@@ -146,6 +146,40 @@ static int csReloadFromDisk(ChunkStore *cs);
 #define CS_WAL_TAG_CHUNK  0x01
 #define CS_WAL_TAG_ROOT   0x02
 
+typedef struct SavedRefsState SavedRefsState;
+typedef struct ChunkStoreReplayState ChunkStoreReplayState;
+typedef struct ChunkStoreReloadState ChunkStoreReloadState;
+
+struct SavedRefsState {
+  char *zDefaultBranch;
+  struct BranchRef *aBranches;
+  int nBranches;
+  struct TagRef *aTags;
+  int nTags;
+  struct RemoteRef *aRemotes;
+  int nRemotes;
+  struct TrackingBranch *aTracking;
+  int nTracking;
+};
+
+struct ChunkStoreReplayState {
+  u8 *pWalData;
+  i64 nWalData;
+  int nChunks;
+  ProllyHash refsHash;
+  ChunkIndexEntry *aIndex;
+  int nIndex;
+  int nIndexAlloc;
+  SavedRefsState refs;
+};
+
+struct ChunkStoreReloadState {
+  sqlite3_file *pFile;
+  ChunkIndexEntry *aIndex;
+  u8 *pWalData;
+  SavedRefsState refs;
+};
+
 /*
 ** WAL offsets are stored as negative values in ChunkIndexEntry.offset to
 ** distinguish them from regular file offsets. The encoding maps walPos 0
@@ -195,6 +229,86 @@ static void csFreeTracking(ChunkStore *cs){
   sqlite3_free(cs->aTracking);
   cs->aTracking = 0;
   cs->nTracking = 0;
+}
+
+static void csCaptureSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
+  memset(pSaved, 0, sizeof(*pSaved));
+  pSaved->zDefaultBranch = cs->zDefaultBranch;
+  pSaved->aBranches = cs->aBranches;
+  pSaved->nBranches = cs->nBranches;
+  pSaved->aTags = cs->aTags;
+  pSaved->nTags = cs->nTags;
+  pSaved->aRemotes = cs->aRemotes;
+  pSaved->nRemotes = cs->nRemotes;
+  pSaved->aTracking = cs->aTracking;
+  pSaved->nTracking = cs->nTracking;
+}
+
+static void csRestoreSavedRefsState(ChunkStore *cs, const SavedRefsState *pSaved){
+  cs->zDefaultBranch = pSaved->zDefaultBranch;
+  cs->aBranches = pSaved->aBranches;
+  cs->nBranches = pSaved->nBranches;
+  cs->aTags = pSaved->aTags;
+  cs->nTags = pSaved->nTags;
+  cs->aRemotes = pSaved->aRemotes;
+  cs->nRemotes = pSaved->nRemotes;
+  cs->aTracking = pSaved->aTracking;
+  cs->nTracking = pSaved->nTracking;
+}
+
+static void csFreeSavedRefsState(SavedRefsState *pSaved){
+  ChunkStore refsStore;
+  memset(&refsStore, 0, sizeof(refsStore));
+  refsStore.zDefaultBranch = pSaved->zDefaultBranch;
+  refsStore.aBranches = pSaved->aBranches;
+  refsStore.nBranches = pSaved->nBranches;
+  refsStore.aTags = pSaved->aTags;
+  refsStore.nTags = pSaved->nTags;
+  refsStore.aRemotes = pSaved->aRemotes;
+  refsStore.nRemotes = pSaved->nRemotes;
+  refsStore.aTracking = pSaved->aTracking;
+  refsStore.nTracking = pSaved->nTracking;
+  csFreeRefsState(&refsStore);
+  memset(pSaved, 0, sizeof(*pSaved));
+}
+
+static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
+  memset(pSaved, 0, sizeof(*pSaved));
+  pSaved->pWalData = cs->pWalData;
+  pSaved->nWalData = cs->nWalData;
+  pSaved->nChunks = cs->nChunks;
+  pSaved->refsHash = cs->refsHash;
+  pSaved->aIndex = cs->aIndex;
+  pSaved->nIndex = cs->nIndex;
+  pSaved->nIndexAlloc = cs->nIndexAlloc;
+  csCaptureSavedRefsState(cs, &pSaved->refs);
+}
+
+static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pSaved){
+  cs->pWalData = pSaved->pWalData;
+  cs->nWalData = pSaved->nWalData;
+  cs->nChunks = pSaved->nChunks;
+  cs->refsHash = pSaved->refsHash;
+  cs->aIndex = pSaved->aIndex;
+  cs->nIndex = pSaved->nIndex;
+  cs->nIndexAlloc = pSaved->nIndexAlloc;
+  csRestoreSavedRefsState(cs, &pSaved->refs);
+}
+
+static void csCaptureReloadState(ChunkStore *cs, ChunkStoreReloadState *pSaved){
+  memset(pSaved, 0, sizeof(*pSaved));
+  pSaved->pFile = cs->pFile;
+  pSaved->aIndex = cs->aIndex;
+  pSaved->pWalData = cs->pWalData;
+  csCaptureSavedRefsState(cs, &pSaved->refs);
+}
+
+static void csFreeReloadState(ChunkStoreReloadState *pSaved){
+  csCloseFile(pSaved->pFile);
+  sqlite3_free(pSaved->aIndex);
+  sqlite3_free(pSaved->pWalData);
+  csFreeSavedRefsState(&pSaved->refs);
+  memset(pSaved, 0, sizeof(*pSaved));
 }
 static void csFreeRefsState(ChunkStore *cs){
   csFreeBranches(cs);
@@ -492,28 +606,15 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
 static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   i64 walSize;
   u8 *walData;
-  u8 *pOldWalData = cs->pWalData;
-  i64 nOldWalData = cs->nWalData;
+  ChunkStoreReplayState saved;
   i64 pos;
   int nPendingBefore = cs->nPending;
   int nRootedPending = cs->nPending;
-  int nOldChunks = cs->nChunks;
-  ProllyHash oldRefsHash = cs->refsHash;
-  ChunkIndexEntry *aOldIndex = cs->aIndex;
-  int nOldIndex = cs->nIndex;
-  int nOldIndexAlloc = cs->nIndexAlloc;
-  char *zOldDefaultBranch = cs->zDefaultBranch;
-  struct BranchRef *aOldBranches = cs->aBranches;
-  int nOldBranches = cs->nBranches;
-  struct TagRef *aOldTags = cs->aTags;
-  int nOldTags = cs->nTags;
-  struct RemoteRef *aOldRemotes = cs->aRemotes;
-  int nOldRemotes = cs->nRemotes;
-  struct TrackingBranch *aOldTracking = cs->aTracking;
-  int nOldTracking = cs->nTracking;
   ChunkStore tmpRefs;
   int haveTmpRefs = 0;
   int rc = SQLITE_OK;
+
+  csCaptureReplayState(cs, &saved);
 
   if( cs->iWalOffset <= 0 || !cs->pFile ) return SQLITE_OK;
 
@@ -562,9 +663,9 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
 
       {
         int existing = csSearchIndex(cs->aIndex, cs->nIndex, &hash);
+        ChunkIndexEntry *e = 0;
         if( existing < 0 ){
           rc = csGrowPending(cs);
-          ChunkIndexEntry *e;
           if( rc != SQLITE_OK ) goto replay_error;
           e = &cs->aPending[cs->nPending];
           memcpy(&e->hash, &hash, sizeof(ProllyHash));
@@ -649,45 +750,17 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     }
   }
 
-  if( cs->aIndex!=aOldIndex ) sqlite3_free(aOldIndex);
-  sqlite3_free(pOldWalData);
-  {
-    ChunkStore oldRefs;
-    memset(&oldRefs, 0, sizeof(oldRefs));
-    oldRefs.zDefaultBranch = zOldDefaultBranch;
-    oldRefs.aBranches = aOldBranches;
-    oldRefs.nBranches = nOldBranches;
-    oldRefs.aTags = aOldTags;
-    oldRefs.nTags = nOldTags;
-    oldRefs.aRemotes = aOldRemotes;
-    oldRefs.nRemotes = nOldRemotes;
-    oldRefs.aTracking = aOldTracking;
-    oldRefs.nTracking = nOldTracking;
-    csFreeRefsState(&oldRefs);
-  }
+  if( cs->aIndex!=saved.aIndex ) sqlite3_free(saved.aIndex);
+  sqlite3_free(saved.pWalData);
+  csFreeSavedRefsState(&saved.refs);
 
   return SQLITE_OK;
 
 replay_error:
   if( haveTmpRefs ) csFreeRefsState(&tmpRefs);
-  if( cs->aIndex!=aOldIndex ) sqlite3_free(cs->aIndex);
+  if( cs->aIndex!=saved.aIndex ) sqlite3_free(cs->aIndex);
   sqlite3_free(cs->pWalData);
-  cs->pWalData = pOldWalData;
-  cs->nWalData = nOldWalData;
-  cs->nChunks = nOldChunks;
-  cs->refsHash = oldRefsHash;
-  cs->aIndex = aOldIndex;
-  cs->nIndex = nOldIndex;
-  cs->nIndexAlloc = nOldIndexAlloc;
-  cs->zDefaultBranch = zOldDefaultBranch;
-  cs->aBranches = aOldBranches;
-  cs->nBranches = nOldBranches;
-  cs->aTags = aOldTags;
-  cs->nTags = nOldTags;
-  cs->aRemotes = aOldRemotes;
-  cs->nRemotes = nOldRemotes;
-  cs->aTracking = aOldTracking;
-  cs->nTracking = nOldTracking;
+  csRestoreReplayState(cs, &saved);
   cs->nPending = nPendingBefore;
   csPendHTClear(cs);
   return rc;
@@ -1963,17 +2036,12 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
 
 static int csReloadFromDisk(ChunkStore *cs){
   ChunkStore tmp;
-  sqlite3_file *pOldFile = cs->pFile;
-  ChunkIndexEntry *aOldIndex = cs->aIndex;
-  u8 *pOldWalData = cs->pWalData;
-  char *zOldDefaultBranch = cs->zDefaultBranch;
-  struct BranchRef *aOldBranches = cs->aBranches;
-  struct TagRef *aOldTags = cs->aTags;
-  struct RemoteRef *aOldRemotes = cs->aRemotes;
-  struct TrackingBranch *aOldTracking = cs->aTracking;
+  ChunkStoreReloadState saved;
   int rc = chunkStoreOpen(&tmp, cs->pVfs, cs->zFilename,
                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
+
+  csCaptureReloadState(cs, &saved);
 
   cs->pFile = tmp.pFile;
   cs->readOnly = tmp.readOnly;
@@ -2019,22 +2087,7 @@ static int csReloadFromDisk(ChunkStore *cs){
   tmp.nTracking = 0;
   chunkStoreClose(&tmp);
 
-  csCloseFile(pOldFile);
-  sqlite3_free(aOldIndex);
-  sqlite3_free(pOldWalData);
-  sqlite3_free(zOldDefaultBranch);
-  {
-    ChunkStore oldRefs;
-    memset(&oldRefs, 0, sizeof(oldRefs));
-    oldRefs.aBranches = aOldBranches;
-    oldRefs.aTags = aOldTags;
-    oldRefs.aRemotes = aOldRemotes;
-    oldRefs.aTracking = aOldTracking;
-    csFreeBranches(&oldRefs);
-    csFreeTags(&oldRefs);
-    csFreeRemotes(&oldRefs);
-    csFreeTracking(&oldRefs);
-  }
+  csFreeReloadState(&saved);
   return SQLITE_OK;
 }
 
