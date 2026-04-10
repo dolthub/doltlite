@@ -81,9 +81,14 @@ static int parseRecordFields(const u8 *pRec, int nRec,
     sz = dlSerialTypeLen(st);
 
     if(nFields >= nAlloc){
+      RecField *aNew;
       nAlloc = nAlloc ? nAlloc*2 : 16;
-      aFields = sqlite3_realloc(aFields, nAlloc*(int)sizeof(RecField));
-      if(!aFields) return -1;
+      aNew = sqlite3_realloc(aFields, nAlloc*(int)sizeof(RecField));
+      if(!aNew){
+        sqlite3_free(aFields);
+        return -1;
+      }
+      aFields = aNew;
     }
     aFields[nFields].st = st;
     aFields[nFields].off = bodyOff;

@@ -665,18 +665,22 @@ static void run_status_error_propagation(void){
 static void run_remote_refs_corruption(void){
   sqlite3 *srcDb = 0;
   sqlite3 *localDb = 0;
+  sqlite3 *cloneDb = 0;
   ChunkStore cs;
   ProllyHash badRefsHash;
   u8 badBlob[] = { 5, 0, 0, 0, 0, 1, 0, 0 };
   char remotePath[256];
   char localPath[256];
+  char clonePath[256];
   int rc;
 
   printf("=== Remote Refs Corruption Test ===\n\n");
   make_dbpath(remotePath, sizeof(remotePath), "test_remote_refs_corruption_remote");
   make_dbpath(localPath, sizeof(localPath), "test_remote_refs_corruption_local");
+  make_dbpath(clonePath, sizeof(clonePath), "test_remote_refs_corruption_clone");
   remove_db(remotePath);
   remove_db(localPath);
+  remove_db(clonePath);
 
   check("open_remote_db", open_db(remotePath, &srcDb)==SQLITE_OK);
   check("setup_remote_repo", execsql(srcDb,
@@ -710,9 +714,22 @@ static void run_remote_refs_corruption(void){
   rc = execsql_silent(localDb, "SELECT dolt_fetch('origin');");
   check("fetch_surfaces_corrupt_refs", rc!=SQLITE_OK);
 
+  rc = execsql_silent(localDb, "SELECT dolt_push('origin','main');");
+  check("push_surfaces_corrupt_refs", rc!=SQLITE_OK);
+
+  check("open_clone_db", open_db(clonePath, &cloneDb)==SQLITE_OK);
+  if( cloneDb ){
+    char sql[1024];
+    snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+    rc = execsql_silent(cloneDb, sql);
+    check("clone_surfaces_corrupt_refs", rc!=SQLITE_OK);
+  }
+
+  sqlite3_close(cloneDb);
   sqlite3_close(localDb);
   remove_db(remotePath);
   remove_db(localPath);
+  remove_db(clonePath);
 }
 
 static void run_chunk_walk_corruption(void){
