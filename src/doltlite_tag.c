@@ -15,6 +15,21 @@ struct TagMutationCtx {
   int isDelete;
 };
 
+static void tagResultError(
+  sqlite3_context *ctx,
+  int rc,
+  const char *zNotFound,
+  const char *zExists
+){
+  if( rc==SQLITE_NOTFOUND ){
+    sqlite3_result_error(ctx, zNotFound, -1);
+  }else if( rc==SQLITE_ERROR && zExists ){
+    sqlite3_result_error(ctx, zExists, -1);
+  }else{
+    sqlite3_result_error(ctx, sqlite3_errstr(rc), -1);
+  }
+}
+
 static int mutateTagRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   TagMutationCtx *p = (TagMutationCtx*)pArg;
   (void)db;
@@ -46,13 +61,13 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateTagRef, &m);
     if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "tag not found", -1);
+      tagResultError(ctx, rc, "tag not found", 0);
       return;
     }
   }else{
     
     if( argc>=2 ){
-      
+      DoltliteCommit commit;
       const char *zHash = (const char*)sqlite3_value_text(argv[1]);
       if( !zHash ){ sqlite3_result_error(ctx, "invalid commit hash", -1); return; }
       rc = doltliteHexToHash(zHash, &m.commitHash);
@@ -60,6 +75,13 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         sqlite3_result_error(ctx, "invalid commit hash format", -1);
         return;
       }
+      memset(&commit, 0, sizeof(commit));
+      rc = doltliteLoadCommit(db, &m.commitHash, &commit);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(ctx, "commit not found", -1);
+        return;
+      }
+      doltliteCommitClear(&commit);
     }else{
       
       doltliteGetSessionHead(db, &m.commitHash);
@@ -71,7 +93,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     m.zName = arg0;
     rc = doltliteMutateRefs(db, mutateTagRef, &m);
     if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "tag already exists", -1);
+      tagResultError(ctx, rc, "tag not found", "tag already exists");
       return;
     }
   }

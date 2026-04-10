@@ -24,6 +24,11 @@ run_test "two_tags" "SELECT count(*) FROM dolt_tags;" "2" "$DB"
 # Duplicate tag error
 run_test_match "dup_tag" "SELECT dolt_tag('v1.0');" "already exists" "$DB"
 
+# Explicit tag target must resolve to a real commit
+run_test_match "tag_missing_commit" \
+  "SELECT dolt_tag('badtag','0123456789abcdef0123456789abcdef01234567');" \
+  "commit not found" "$DB"
+
 # Delete tag
 run_test "delete_tag" "SELECT dolt_tag('-d','v0.9');" "0" "$DB"
 run_test "one_tag_left" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
