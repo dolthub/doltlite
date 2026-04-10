@@ -2,6 +2,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_diff.h"
+#include "doltlite_record.h"
 
 #include <string.h>  
 
@@ -117,24 +118,6 @@ static int diffEmitModify(
   return xCallback(pCtx, &change);
 }
 
-static int diffReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
-  u64 v = 0;
-  int i;
-  if( p >= pEnd ){ *pVal = 0; return 0; }
-  for(i=0; i<9 && p+i<pEnd; i++){
-    if( i<8 ){
-      v = (v << 7) | (p[i] & 0x7f);
-      if( (p[i] & 0x80)==0 ){ *pVal = v; return i+1; }
-    }else{
-      v = (v << 8) | p[i];
-      *pVal = v;
-      return 9;
-    }
-  }
-  *pVal = v;
-  return i ? i : 0;
-}
-
 static int diffSerialTypeSize(u64 st){
   if( st==0 ) return 0;
   if( st==1 ) return 1;
@@ -169,9 +152,9 @@ int diffRecordsEqualFieldwise(
   pEndA = pA + nA;
   pEndB = pB + nB;
 
-  hdrBytesA = diffReadVarint(pA, pEndA, &hdrSizeA);
+  hdrBytesA = dlReadVarint(pA, pEndA, &hdrSizeA);
   if( hdrBytesA == 0 ) return 0;
-  hdrBytesB = diffReadVarint(pB, pEndB, &hdrSizeB);
+  hdrBytesB = dlReadVarint(pB, pEndB, &hdrSizeB);
   if( hdrBytesB == 0 ) return 0;
 
   if( (int)hdrSizeA < hdrBytesA || (int)hdrSizeA > nA ) return 0;
@@ -189,12 +172,12 @@ int diffRecordsEqualFieldwise(
     int szA, szB;
 
     if( hpA < hdrEndA ){
-      int n = diffReadVarint(hpA, hdrEndA, &stA);
+      int n = dlReadVarint(hpA, hdrEndA, &stA);
       if( n == 0 ) return 0;
       hpA += n;
     }
     if( hpB < hdrEndB ){
-      int n = diffReadVarint(hpB, hdrEndB, &stB);
+      int n = dlReadVarint(hpB, hdrEndB, &stB);
       if( n == 0 ) return 0;
       hpB += n;
     }
