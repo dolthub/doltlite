@@ -130,7 +130,7 @@ SELECT count(*) FROM ops.events;" \
 run_test "dolt_commit_with_attach" \
   "CREATE TABLE t(x INTEGER);
 INSERT INTO t VALUES(99);
-SELECT dolt_commit('-am','init') IS NOT NULL;
+SELECT dolt_commit('-Am','init') IS NOT NULL;
 ATTACH DATABASE '$SQLDB1' AS ops;
 SELECT x FROM t;
 SELECT count(*) FROM ops.events;" \
@@ -183,7 +183,7 @@ DLDB_IC=/tmp/test_attach_dl_ic_$$.db
 rm -f "$DLDB_IC"
 run_test "doltlite_main_attach_integrity" \
   "CREATE TABLE t(x INTEGER); INSERT INTO t VALUES(1);
-SELECT dolt_commit('-am','init') IS NOT NULL;
+SELECT dolt_commit('-Am','init') IS NOT NULL;
 ATTACH DATABASE '$SQLDB_IC' AS side;
 PRAGMA side.integrity_check;" \
   "1
