@@ -35,6 +35,14 @@ run_test_match "checkout_blocked_conflict" \
   "SELECT dolt_checkout('feature');" \
   "conflict|merge" "$DB"
 
+run_test_match "checkout_create_blocked_conflict" \
+  "SELECT dolt_checkout('-b','blocked_branch');" \
+  "conflict|merge" "$DB"
+
+run_test "checkout_create_no_branch_on_conflict" \
+  "SELECT count(*) FROM dolt_branches WHERE name='blocked_branch';" \
+  "0" "$DB"
+
 # Test 2: Resolve conflicts, then checkout should succeed
 echo "SELECT dolt_conflicts_resolve('--ours','t');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_commit('-A','-m','resolved');" | $DOLTLITE "$DB" > /dev/null 2>&1

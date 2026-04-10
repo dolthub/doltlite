@@ -67,6 +67,32 @@ run_test "alter_merge_quoted_val" 'SELECT "odd""name" FROM t WHERE id=1;' "quote
 rm -f "$DB"
 
 # ============================================================
+# Test 1c: schema merge handles escaped quoted identifiers
+# ============================================================
+
+DB=/tmp/test_alter_merge1c_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+ALTER TABLE t ADD COLUMN "main""col" TEXT;
+UPDATE t SET "main""col"='left' WHERE id=1;
+SELECT dolt_commit('-A','-m','main quoted add');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN "feat""col" TEXT;
+UPDATE t SET "feat""col"='right' WHERE id=1;
+SELECT dolt_commit('-A','-m','feat quoted add');
+SELECT dolt_checkout('main');
+EOF
+
+run_test_match "alter_merge_escaped_quoted_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "alter_merge_escaped_main_val" 'SELECT "main""col" FROM t WHERE id=1;' "left" "$DB"
+run_test "alter_merge_escaped_feat_val" 'SELECT "feat""col" FROM t WHERE id=1;' "right" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Test 2: ALTER TABLE ADD COLUMN same name on both branches — conflict?
 # ============================================================
 

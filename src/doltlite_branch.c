@@ -404,6 +404,16 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   memset(&m, 0, sizeof(m));
   memset(&branchCreate, 0, sizeof(branchCreate));
 
+  /* Block checkout during unresolved merge conflicts. */
+  {
+    u8 isMerging = 0;
+    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+    if( isMerging ){
+      sqlite3_result_error(ctx, "unresolved merge conflicts \xe2\x80\x94 commit or abort first", -1);
+      return;
+    }
+  }
+
   
   if( strcmp(zBranch, "-b")==0 ){
     if( argc<2 ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
@@ -426,16 +436,6 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
     sqlite3_result_int(ctx, 0);
     return;
-  }
-
-  /* Block checkout during unresolved merge conflicts. */
-  {
-    u8 isMerging = 0;
-    doltliteGetSessionMergeState(db, &isMerging, 0, 0);
-    if( isMerging ){
-      sqlite3_result_error(ctx, "unresolved merge conflicts \xe2\x80\x94 commit or abort first", -1);
-      return;
-    }
   }
 
   /* Save the current branch's working catalog before hardReset overwrites
