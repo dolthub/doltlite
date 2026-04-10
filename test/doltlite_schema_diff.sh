@@ -70,6 +70,21 @@ run_test "none_count" "SELECT count(*) FROM dolt_schema_diff('v1','v2');" "0" "$
 rm -f "$DB"
 
 # ============================================================
+# Bad refs surface an error
+# ============================================================
+
+DB=/tmp/test_sd_badref_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "bad_to_ref_errors" \
+  "SELECT count(*) FROM dolt_schema_diff((SELECT commit_hash FROM dolt_log LIMIT 1),'definitely_not_a_ref');" \
+  "Error" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Resolve by branch name
 # ============================================================
 

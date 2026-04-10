@@ -54,7 +54,7 @@ static int enumerateProllyNodeChildren(
   int i;
 
   rc = prollyNodeParse(&node, data, nData);
-  if( rc!=SQLITE_OK ) return SQLITE_OK; /* parse failure: no children */
+  if( rc!=SQLITE_OK ) return rc;
   if( node.level == 0 ) return SQLITE_OK; /* leaf: no child hashes */
 
   for(i=0; i<(int)node.nItems; i++){
@@ -78,7 +78,7 @@ static int enumerateCommitChildren(
 
   memset(&commit, 0, sizeof(commit));
   drc = doltliteCommitDeserialize(data, nData, &commit);
-  if( drc!=SQLITE_OK ) return SQLITE_OK; /* can't parse: no children */
+  if( drc!=SQLITE_OK ) return drc;
 
   for(pi=0; pi<commit.nParents && rc==SQLITE_OK; pi++){
     rc = xChild(ctx, &commit.aParents[pi]);
@@ -101,13 +101,14 @@ static int enumerateCatalogChildren(
   int i;
   int rc = SQLITE_OK;
 
-  if( !catalogParseHeader(data, nData, &nTables, &p) ) return SQLITE_OK;
-  if( nTables < 0 || nTables >= 10000 ) return SQLITE_OK;
+  if( !catalogParseHeader(data, nData, &nTables, &p) ) return SQLITE_CORRUPT;
+  if( nTables < 0 || nTables >= 10000 ) return SQLITE_CORRUPT;
   for(i=0; i<nTables && rc==SQLITE_OK; i++){
     int nameLen;
     ProllyHash tableRoot;
+    const u8 *pEnd = data + nData;
 
-    if( p + CAT_ENTRY_FIXED_SIZE > data + nData ) break;
+    if( p + CAT_ENTRY_FIXED_SIZE > pEnd ) return SQLITE_CORRUPT;
 
     memcpy(tableRoot.data,
            p + CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE,
@@ -117,7 +118,9 @@ static int enumerateCatalogChildren(
 
     p += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
        + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
+    if( p + 2 > pEnd ) return SQLITE_CORRUPT;
     nameLen = p[0] | (p[1]<<8);
+    if( p + 2 + nameLen > pEnd ) return SQLITE_CORRUPT;
     p += 2 + nameLen;
   }
   return rc;
