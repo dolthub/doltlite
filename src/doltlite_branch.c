@@ -22,6 +22,7 @@ struct BranchMutationCtx {
   const char *zName;
   ProllyHash head;
   int isDelete;
+  int force;
 };
 
 static void branchResultError(
@@ -51,51 +52,213 @@ static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
     return doltliteUpdateBranchWorkingState(db, p->zName, &empty, NULL);
   }
 
+  if( p->force && chunkStoreFindBranch(cs, p->zName, 0)==SQLITE_OK ){
+    return chunkStoreUpdateBranch(cs, p->zName, &p->head);
+  }
   return chunkStoreAddBranch(cs, p->zName, &p->head);
+}
+
+/* Copy context: look up source branch's head, add destination at that head. */
+typedef struct BranchCopyCtx BranchCopyCtx;
+struct BranchCopyCtx {
+  const char *zSrc;
+  const char *zDest;
+  int force;
+};
+
+static int mutateBranchCopy(sqlite3 *db, ChunkStore *cs, void *pArg){
+  BranchCopyCtx *p = (BranchCopyCtx*)pArg;
+  ProllyHash srcCommit;
+  int rc;
+  (void)db;
+
+  rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  if( p->force ){
+    /* Force-create: update if exists, add otherwise. */
+    if( chunkStoreFindBranch(cs, p->zDest, 0)==SQLITE_OK ){
+      return chunkStoreUpdateBranch(cs, p->zDest, &srcCommit);
+    }
+  }
+  return chunkStoreAddBranch(cs, p->zDest, &srcCommit);
+}
+
+/* Move context: atomically rename src to dest. If the current session
+** branch is being renamed, the caller updates it after a successful
+** mutation. */
+typedef struct BranchMoveCtx BranchMoveCtx;
+struct BranchMoveCtx {
+  const char *zSrc;
+  const char *zDest;
+};
+
+static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
+  BranchMoveCtx *p = (BranchMoveCtx*)pArg;
+  ProllyHash srcCommit, empty;
+  int rc;
+  (void)db;
+
+  rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreAddBranch(cs, p->zDest, &srcCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreDeleteBranch(cs, p->zSrc);
+  if( rc!=SQLITE_OK ) return rc;
+  memset(&empty, 0, sizeof(empty));
+  return doltliteUpdateBranchWorkingState(db, p->zSrc, &empty, NULL);
 }
 
 static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  BranchMutationCtx m;
-  const char *arg0;
-  int rc;
+  enum { MODE_CREATE, MODE_DELETE, MODE_COPY, MODE_MOVE } mode = MODE_CREATE;
+  int force = 0;
+  const char *aPositional[3] = {0, 0, 0};
+  int nPositional = 0;
+  int i, rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
-  if( argc<1 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
+  if( argc<1 ){ sqlite3_result_error(ctx, "dolt_branch requires arguments", -1); return; }
 
-  memset(&m, 0, sizeof(m));
+  /* Parse flags. Multiple mode flags is an error. */
+  for(i=0; i<argc; i++){
+    const char *arg = (const char*)sqlite3_value_text(argv[i]);
+    if( !arg ) continue;
+    if( strcmp(arg, "-d")==0 || strcmp(arg, "--delete")==0 ){
+      if( mode!=MODE_CREATE ){
+        sqlite3_result_error(ctx, "conflicting flags", -1); return;
+      }
+      mode = MODE_DELETE;
+    }else if( strcmp(arg, "-D")==0 ){
+      /* Dolt's -D is delete + force; doltlite has no unmerged-branch
+      ** safety check, so -D is equivalent to -d here. Keeping the flag
+      ** separately so unknown-flag rejection stays strict. */
+      if( mode!=MODE_CREATE ){
+        sqlite3_result_error(ctx, "conflicting flags", -1); return;
+      }
+      mode = MODE_DELETE;
+      force = 1;
+    }else if( strcmp(arg, "-c")==0 || strcmp(arg, "--copy")==0 ){
+      if( mode!=MODE_CREATE ){
+        sqlite3_result_error(ctx, "conflicting flags", -1); return;
+      }
+      mode = MODE_COPY;
+    }else if( strcmp(arg, "-m")==0 || strcmp(arg, "--move")==0 ){
+      if( mode!=MODE_CREATE ){
+        sqlite3_result_error(ctx, "conflicting flags", -1); return;
+      }
+      mode = MODE_MOVE;
+    }else if( strcmp(arg, "-f")==0 || strcmp(arg, "--force")==0 ){
+      force = 1;
+    }else if( arg[0]=='-' ){
+      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
+      if( zErr ){
+        sqlite3_result_error(ctx, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(ctx);
+      }
+      return;
+    }else{
+      if( nPositional >= 3 ){
+        sqlite3_result_error(ctx, "too many arguments", -1); return;
+      }
+      aPositional[nPositional++] = arg;
+    }
+  }
 
-  arg0 = (const char*)sqlite3_value_text(argv[0]);
-  if( !arg0 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
+  switch( mode ){
+    case MODE_DELETE: {
+      BranchMutationCtx m;
+      if( nPositional<1 ){
+        sqlite3_result_error(ctx, "branch name required", -1); return;
+      }
+      if( strcmp(aPositional[0], doltliteGetSessionBranch(db))==0 ){
+        sqlite3_result_error(ctx, "cannot delete the current branch", -1);
+        return;
+      }
+      memset(&m, 0, sizeof(m));
+      m.zName = aPositional[0];
+      m.isDelete = 1;
+      rc = doltliteMutateRefs(db, mutateBranchRef, &m);
+      if( rc!=SQLITE_OK ){
+        branchResultError(ctx, rc, "branch not found", 0);
+        return;
+      }
+      break;
+    }
 
-  if( strcmp(arg0, "-d")==0 || strcmp(arg0, "--delete")==0 ){
-    const char *zName;
-    if( argc<2 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
-    zName = (const char*)sqlite3_value_text(argv[1]);
-    if( !zName ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
-    if( strcmp(zName, doltliteGetSessionBranch(db))==0 ){
-      sqlite3_result_error(ctx, "cannot delete the current branch", -1);
-      return;
+    case MODE_COPY: {
+      BranchCopyCtx m;
+      if( nPositional<2 ){
+        sqlite3_result_error(ctx, "copy requires source and destination", -1);
+        return;
+      }
+      memset(&m, 0, sizeof(m));
+      m.zSrc = aPositional[0];
+      m.zDest = aPositional[1];
+      m.force = force;
+      rc = doltliteMutateRefs(db, mutateBranchCopy, &m);
+      if( rc!=SQLITE_OK ){
+        branchResultError(ctx, rc, "source branch not found", "branch already exists");
+        return;
+      }
+      break;
     }
-    m.zName = zName;
-    m.isDelete = 1;
-    rc = doltliteMutateRefs(db, mutateBranchRef, &m);
-    if( rc!=SQLITE_OK ){
-      branchResultError(ctx, rc, "branch not found", 0);
-      return;
+
+    case MODE_MOVE: {
+      BranchMoveCtx m;
+      int renamingCurrent;
+      if( nPositional<2 ){
+        sqlite3_result_error(ctx, "move requires source and destination", -1);
+        return;
+      }
+      memset(&m, 0, sizeof(m));
+      m.zSrc = aPositional[0];
+      m.zDest = aPositional[1];
+      renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
+      rc = doltliteMutateRefs(db, mutateBranchMove, &m);
+      if( rc!=SQLITE_OK ){
+        branchResultError(ctx, rc, "source branch not found", "destination already exists");
+        return;
+      }
+      if( renamingCurrent ){
+        doltliteSetSessionBranch(db, m.zDest);
+        chunkStoreSetDefaultBranch(cs, m.zDest);
+      }
+      break;
     }
-  }else{
-    doltliteGetSessionHead(db, &m.head);
-    if( prollyHashIsEmpty(&m.head) ){
-      sqlite3_result_error(ctx, "no commits yet — commit first", -1);
-      return;
-    }
-    m.zName = arg0;
-    rc = doltliteMutateRefs(db, mutateBranchRef, &m);
-    if( rc!=SQLITE_OK ){
-      branchResultError(ctx, rc, "branch not found", "branch already exists");
-      return;
+
+    case MODE_CREATE: {
+      BranchMutationCtx m;
+      const char *zName, *zStart;
+      if( nPositional<1 ){
+        sqlite3_result_error(ctx, "branch name required", -1); return;
+      }
+      zName = aPositional[0];
+      zStart = nPositional>=2 ? aPositional[1] : 0;
+      memset(&m, 0, sizeof(m));
+      if( zStart ){
+        rc = doltliteResolveRef(db, zStart, &m.head);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error(ctx, "start point not found", -1);
+          return;
+        }
+      }else{
+        doltliteGetSessionHead(db, &m.head);
+        if( prollyHashIsEmpty(&m.head) ){
+          sqlite3_result_error(ctx, "no commits yet — commit first", -1);
+          return;
+        }
+      }
+      m.zName = zName;
+      m.force = force;
+      rc = doltliteMutateRefs(db, mutateBranchRef, &m);
+      if( rc!=SQLITE_OK ){
+        branchResultError(ctx, rc, "branch not found", "branch already exists");
+        return;
+      }
+      break;
     }
   }
 
