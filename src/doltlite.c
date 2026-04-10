@@ -15,6 +15,47 @@
 #include <ctype.h>
 #include <time.h>
 
+#ifdef _WIN32
+static const char *dlWinStrptime(
+  const char *zDate,
+  const char *zFmt,
+  struct tm *pTm
+){
+  int year = 0, month = 0, day = 0;
+  int hour = 0, minute = 0, second = 0;
+  char sep = 0;
+  int n = 0;
+
+  if( strcmp(zFmt, "%Y-%m-%dT%H:%M:%S")==0 ){
+    n = sscanf(zDate, "%d-%d-%dT%d:%d:%d%c",
+               &year, &month, &day, &hour, &minute, &second, &sep);
+    if( n!=6 ) return 0;
+  }else if( strcmp(zFmt, "%Y-%m-%d %H:%M:%S")==0 ){
+    n = sscanf(zDate, "%d-%d-%d %d:%d:%d%c",
+               &year, &month, &day, &hour, &minute, &second, &sep);
+    if( n!=6 ) return 0;
+  }else{
+    return 0;
+  }
+
+  memset(pTm, 0, sizeof(*pTm));
+  pTm->tm_year = year - 1900;
+  pTm->tm_mon = month - 1;
+  pTm->tm_mday = day;
+  pTm->tm_hour = hour;
+  pTm->tm_min = minute;
+  pTm->tm_sec = second;
+  pTm->tm_isdst = 0;
+  return zDate + sqlite3Strlen30(zDate);
+}
+
+static time_t dlWinTimegm(struct tm *pTm){
+  return _mkgmtime(pTm);
+}
+#define strptime dlWinStrptime
+#define timegm dlWinTimegm
+#endif
+
 extern int doltliteLogRegister(sqlite3 *db);
 extern int doltliteStatusRegister(sqlite3 *db);
 extern int doltliteDiffRegister(sqlite3 *db);
