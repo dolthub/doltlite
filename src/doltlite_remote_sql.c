@@ -482,9 +482,25 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   
+  /* Allow cloning over a pristine, auto-seeded repository: a single branch
+  ** whose head commit is a root (empty parent). Any real commit descends
+  ** from the seed and thus has a non-empty parent. */
   if( !chunkStoreIsEmpty(cs) ){
-    sqlite3_result_error(ctx, "database is not empty — clone into a fresh database", -1);
-    return;
+    int virgin = 0;
+    if( cs->nBranches==1 ){
+      DoltliteCommit c;
+      memset(&c, 0, sizeof(c));
+      if( doltliteLoadCommit(db, &cs->aBranches[0].commitHash, &c)==SQLITE_OK
+       && prollyHashIsEmpty(&c.parentHash) ){
+        virgin = 1;
+      }
+      doltliteCommitClear(&c);
+    }
+    if( !virgin ){
+      sqlite3_result_error(ctx, "database is not empty — clone into a fresh database", -1);
+      return;
+    }
+    chunkStoreClearRefs(cs);
   }
 
   pRemote = openRemoteByUrl(cs->pVfs, zUrl);

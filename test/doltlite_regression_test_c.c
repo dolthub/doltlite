@@ -371,7 +371,7 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
   check("newer_commit_still_visible_in_log",
     strcmp(exec1(db3, sql), "1")==0);
   check("branch_history_has_both_commits",
-    strcmp(exec1(db3, "SELECT count(*) FROM dolt_log"), "2")==0);
+    strcmp(exec1(db3, "SELECT count(*) FROM dolt_log"), "3")==0);
 
   sqlite3_close(db3);
   remove_db(dbpath);

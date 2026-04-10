@@ -150,7 +150,7 @@ echo "SELECT dolt_reset('--hard','$C1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Session 2: verify reset took effect
 run_test "xsess_reset_count" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "xsess_reset_val" "SELECT v FROM t WHERE id=1;" "keep" "$DB"
-run_test "xsess_reset_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "xsess_reset_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 db_rm "$DB"
 
 echo ""
@@ -208,7 +208,7 @@ run_test_match "ff_history_count" \
 
 # Test: dolt_log after fast-forward merge -- no merge commit
 run_test "ff_log_no_merge" "SELECT message FROM dolt_log LIMIT 1;" "feat commit 2" "$DB"
-run_test "ff_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "ff_log_count" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 # Test: dolt_at with branch name shows branch's committed state
 DB2=/tmp/test_bedge_at_branch_$$.db; db_rm "$DB2"
@@ -275,7 +275,7 @@ echo "SELECT dolt_reset('--hard','$C1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "reset_hash_count" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "reset_hash_val" "SELECT v FROM t WHERE id=1;" "v1" "$DB"
-run_test "reset_hash_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "reset_hash_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 db_rm "$DB"
 
 # Test: Soft reset unstages but keeps working changes
@@ -453,7 +453,7 @@ run_test "ff_merge_data" "SELECT count(*) FROM t;" "2" "$DB"
 run_test "ff_merge_val" "SELECT v FROM t WHERE id=2;" "ff_data" "$DB"
 # No merge commit: last message should be feat's commit
 run_test "ff_merge_no_merge_commit" "SELECT message FROM dolt_log LIMIT 1;" "feat commit" "$DB"
-run_test "ff_merge_log_count" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "ff_merge_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 db_rm "$DB"
 
 # Test: Non-fast-forward merge -- merge commit exists, data from both branches
@@ -476,7 +476,7 @@ run_test "noff_merge_feat_row" "SELECT v FROM t WHERE id=3;" "feat_row" "$DB"
 # Non-ff merge should have a merge commit
 run_test_match "noff_merge_commit_msg" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB"
 # Log should have: merge, main adds, feat adds, init = 4 commits
-run_test "noff_merge_log_count" "SELECT count(*) FROM dolt_log;" "4" "$DB"
+run_test "noff_merge_log_count" "SELECT count(*) FROM dolt_log;" "5" "$DB"
 db_rm "$DB"
 
 echo ""
@@ -514,7 +514,7 @@ done
 
 run_test_match "gc_many_commits" "SELECT dolt_gc();" "chunks" "$DB"
 run_test "gc_many_val" "SELECT v FROM t WHERE id=1;" "v15" "$DB"
-run_test "gc_many_log" "SELECT count(*) FROM dolt_log;" "16" "$DB"
+run_test "gc_many_log" "SELECT count(*) FROM dolt_log;" "17" "$DB"
 
 # Verify old commits still reachable via dolt_at
 run_test_match "gc_many_history" \
@@ -529,7 +529,7 @@ SELECT dolt_commit('-A','-m','empty');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "gc_empty_db" "SELECT dolt_gc();" "chunks" "$DB"
 run_test "gc_empty_db_data" "SELECT count(*) FROM t;" "0" "$DB"
-run_test "gc_empty_db_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "gc_empty_db_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 db_rm "$DB"
 
 echo ""

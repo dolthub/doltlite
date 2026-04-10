@@ -72,7 +72,7 @@ run_test "status_clean_after_staged_commit" \
 # --- Log has 2 commits ---
 run_test "log_two_commits" \
   "SELECT count(*) FROM dolt_log;" \
-  "2" "$DB"
+  "3" "$DB"
 
 # --- New table shows as 'new table' ---
 echo "CREATE TABLE orders(id INTEGER PRIMARY KEY, item TEXT); INSERT INTO orders VALUES(1,'hat');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -93,7 +93,7 @@ run_test_match "commit_orders" \
 
 run_test "log_three_commits" \
   "SELECT count(*) FROM dolt_log;" \
-  "3" "$DB"
+  "4" "$DB"
 
 # --- dolt_add -A stages everything ---
 DB2=/tmp/test_staging2_$$.db
@@ -134,7 +134,7 @@ run_test "clean_after_dash_a" \
 
 run_test "log_after_dash_a" \
   "SELECT count(*) FROM dolt_log;" \
-  "2" "$DB3"
+  "3" "$DB3"
 
 # --- Commit without staging fails ---
 DB4=/tmp/test_staging4_$$.db

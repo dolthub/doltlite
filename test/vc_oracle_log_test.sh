@@ -18,20 +18,18 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 
-# Normalize a `commit_hash,message` CSV stream:
-#   - drop Dolt's seed "Initialize data repository" row
+# Normalize a `hash\tmessage` stream (tab-separated, one row per line):
 #   - replace each distinct hash with H1, H2, ... in first-appearance order
-#   - trim trailing whitespace
+#   - strip CRLF
 normalize() {
-  tr -d '\r' | awk -F, '
-    $2 == "Initialize data repository" { next }
+  tr -d '\r' | awk -F'\t' '
     {
       h = $1
       if (!(h in seen)) { n++; seen[h] = "H" n }
       $1 = seen[h]
-      print $1 "," $2
+      print $1 "\t" $2
     }
-  ' OFS=,
+  '
 }
 
 # Run an oracle scenario. $1=name, $2=setup SQL using doltlite syntax
@@ -42,11 +40,10 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  # doltlite side
+  # doltlite side: tab mode, single concatenated column avoids csv quoting.
   local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode csv\nSELECT commit_hash, message FROM dolt_log;\n" "$setup" \
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT commit_hash || char(9) || message FROM dolt_log;\n" "$setup" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
-           | tail -n +1 \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
@@ -59,11 +56,11 @@ oracle() {
     cd "$dir/dt" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
     echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
-    "$DOLT" sql -r csv -q "SELECT commit_hash, message FROM dolt_log ORDER BY commit_order DESC;" 2>>"$dir/dt.err"
+    "$DOLT" sql -r csv -q "SELECT concat(commit_hash, char(9), message) FROM dolt_log ORDER BY commit_order DESC;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
 
   local dt_out
-  dt_out=$(tail -n +2 "$dir/dt.raw" | normalize)
+  dt_out=$(tail -n +2 "$dir/dt.raw" | tr -d '"' | normalize)
 
   if [ "$dl_out" = "$dt_out" ]; then
     pass=$((pass+1))
@@ -78,6 +75,14 @@ oracle() {
 
 echo "=== Version Control Oracle Tests: dolt_log ==="
 echo ""
+
+# ─── Category 0: fresh repository state ──────────────────────────────
+echo "--- fresh repo ---"
+
+oracle "fresh_db_has_seed_commit" "
+-- no user commits; both sides should report a single seed commit
+SELECT 1;
+"
 
 # ─── Category 1: linear commit chains ────────────────────────────────
 echo "--- linear chains ---"

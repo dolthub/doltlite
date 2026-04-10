@@ -36,14 +36,14 @@ INSERT INTO t VALUES(1,'durable');
 SELECT dolt_commit('-A','-m','persist test');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "durable_data" "SELECT v FROM t WHERE id=1;" "durable" "$DB"
-run_test "durable_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "durable_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 # Second commit
 echo "INSERT INTO t VALUES(2,'also durable');
 SELECT dolt_commit('-A','-m','second persist');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "durable_second" "SELECT v FROM t WHERE id=2;" "also durable" "$DB"
-run_test "durable_log2" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "durable_log2" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 rm -f "$DB"
 
 # ============================================================
@@ -126,9 +126,9 @@ INSERT INTO t VALUES(3,'main2');
 SELECT dolt_commit('-A','-m','main work');
 SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Log must have 4 entries: merge + main work + feature work + init
+# Log must have 5 entries: merge + main work + feature work + init + seed
 run_test "merge_log_all_parents" \
-  "SELECT count(*) FROM dolt_log;" "4" "$DB"
+  "SELECT count(*) FROM dolt_log;" "5" "$DB"
 
 # Feature commit must be visible in the log
 run_test_match "merge_log_has_feature" \
@@ -290,7 +290,7 @@ SELECT dolt_commit('-A','-m','pre-gc 2');
 SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "gc_data_intact" "SELECT count(*) FROM t;" "2" "$DB"
-run_test "gc_log_intact" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "gc_log_intact" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 run_test "gc_val_intact" "SELECT v FROM t WHERE id=1;" "before gc" "$DB"
 
 # Reopen after GC

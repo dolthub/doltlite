@@ -291,7 +291,7 @@ SELECT dolt_commit('-A','-m','first');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "gc_first_commit" "SELECT dolt_gc();" "chunks" "$DB"
 run_test "gc_first_data" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "gc_first_val" "SELECT v FROM t WHERE id=1;" "hello" "$DB"
-run_test "gc_first_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "gc_first_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 db_rm "$DB"
 
@@ -325,7 +325,7 @@ run_test_match "recycle_gc" "SELECT dolt_gc();" "chunks removed" "$DB"
 
 # Data still intact after GC
 run_test "recycle_post_gc_data" "SELECT count(*) FROM t;" "1" "$DB"
-run_test "recycle_post_gc_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "recycle_post_gc_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 # Create the branch one more time to prove the name is reusable after GC
 echo "SELECT dolt_branch('recycled');" | $DOLTLITE "$DB" > /dev/null 2>&1

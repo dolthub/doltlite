@@ -29,7 +29,7 @@ SELECT dolt_commit('-A','-m','Initial schema: users and posts');" | $DOLTLITE "$
 run_test "e2e_initial_users" "SELECT count(*) FROM users;" "2" "$DB"
 run_test "e2e_initial_posts" "SELECT count(*) FROM posts;" "2" "$DB"
 run_test "e2e_initial_branch" "SELECT active_branch();" "main" "$DB"
-run_test "e2e_initial_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "e2e_initial_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test "e2e_clean_status" "SELECT count(*) FROM dolt_status;" "0" "$DB"
 
 # Tag the initial release

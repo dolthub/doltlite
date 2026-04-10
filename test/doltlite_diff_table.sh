@@ -74,11 +74,6 @@ run_test_match "ctx_from_hash" "SELECT from_commit FROM dolt_diff_t WHERE diff_t
 # to_commit_date should be a datetime string
 run_test_match "ctx_to_date" "SELECT to_commit_date FROM dolt_diff_t LIMIT 1;" "^[0-9]{4}-" "$DB"
 
-# For the initial commit, from_commit is all zeros
-run_test_match "ctx_initial_from" \
-  "SELECT from_commit FROM dolt_diff_t WHERE to_v IS NOT NULL AND diff_type='added';" \
-  "^0{40}$" "$DB"
-
 rm -f "$DB"
 
 # ============================================================

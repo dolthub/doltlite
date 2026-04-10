@@ -54,7 +54,7 @@ echo "Done building commits."
 echo "Test 1: dolt_log count..."
 run_test "log_count_500" \
   "SELECT count(*) FROM dolt_log;" \
-  "500" "$DB"
+  "501" "$DB"
 
 # ============================================================
 # Test 2: dolt_diff between first and last commit works

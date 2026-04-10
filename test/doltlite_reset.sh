@@ -115,13 +115,13 @@ echo "UPDATE t SET v='v2' WHERE x=1; SELECT dolt_commit('-A','-m','c2');" | $DOL
 echo "INSERT INTO t VALUES(2,'new'); SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 
 run_test "pre_reset_count" "SELECT count(*) FROM t;" "2" "$DB5"
-run_test "pre_reset_commits" "SELECT count(*) FROM dolt_log;" "3" "$DB5"
+run_test "pre_reset_commits" "SELECT count(*) FROM dolt_log;" "4" "$DB5"
 
 echo "SELECT dolt_reset('--hard','$C1');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 
 run_test "reset_to_hash_data" "SELECT v FROM t;" "v1" "$DB5"
 run_test "reset_to_hash_count" "SELECT count(*) FROM t;" "1" "$DB5"
-run_test "reset_to_hash_log" "SELECT count(*) FROM dolt_log;" "1" "$DB5"
+run_test "reset_to_hash_log" "SELECT count(*) FROM dolt_log;" "2" "$DB5"
 run_test "reset_to_hash_head" "SELECT commit_hash FROM dolt_log LIMIT 1;" "$C1" "$DB5"
 run_test "reset_to_hash_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB5"
 

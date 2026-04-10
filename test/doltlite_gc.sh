@@ -29,7 +29,7 @@ echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Second GC should find nothing to remove
 run_test_match "gc_clean" "SELECT dolt_gc();" "0 chunks removed" "$DB"
 run_test "gc_clean_data" "SELECT count(*) FROM t;" "1" "$DB"
-run_test "gc_clean_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "gc_clean_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 # Single-file: no -wal after GC
 nFiles=$(ls "$DB"* 2>/dev/null | wc -l | tr -d ' ')
@@ -62,12 +62,12 @@ if [ "$SIZE_AFTER" -le "$SIZE_BEFORE" ]; then PASS=$((PASS+1)); else FAIL=$((FAI
 
 # Data intact after GC
 run_test "gc_multi_count" "SELECT count(*) FROM t;" "3" "$DB"
-run_test "gc_multi_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "gc_multi_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 run_test "gc_multi_val" "SELECT v FROM t WHERE id=3;" "c" "$DB"
 
 # Data intact after reopen
 run_test "gc_multi_reopen_count" "SELECT count(*) FROM t;" "3" "$DB"
-run_test "gc_multi_reopen_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "gc_multi_reopen_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 db_rm "$DB"
 
@@ -103,7 +103,7 @@ if [ "$SIZE_AFTER_GC" -lt "$SIZE_WITH_BRANCH" ]; then PASS=$((PASS+1)); else FAI
 # Main data intact
 run_test "gc_branch_data" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "gc_branch_val" "SELECT v FROM t WHERE id=1;" "a" "$DB"
-run_test "gc_branch_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "gc_branch_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 # feat data should be gone
 run_test "gc_branch_no_feat" "SELECT count(*) FROM t WHERE id=100;" "0" "$DB"
@@ -172,7 +172,7 @@ if [ "$SIZE_AFTER" -le "$SIZE_BEFORE" ]; then PASS=$((PASS+1)); else FAIL=$((FAI
 
 # Latest data intact
 run_test "gc_updates_val" "SELECT v FROM t WHERE id=1;" "v20" "$DB"
-run_test "gc_updates_log" "SELECT count(*) FROM dolt_log;" "21" "$DB"
+run_test "gc_updates_log" "SELECT count(*) FROM dolt_log;" "22" "$DB"
 
 # All 21 commits still navigable
 run_test_match "gc_updates_first_msg" \
@@ -268,7 +268,7 @@ run_test_match "gc_cprv_result" "SELECT dolt_gc();" "chunks" "$DB"
 
 # After revert, row 2 should be gone
 run_test "gc_cprv_count" "SELECT count(*) FROM t;" "1" "$DB"
-run_test "gc_cprv_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "gc_cprv_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 # Reopen
 run_test "gc_cprv_reopen" "SELECT count(*) FROM t;" "1" "$DB"

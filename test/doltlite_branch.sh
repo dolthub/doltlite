@@ -33,10 +33,6 @@ run_test "delete_branch" "SELECT dolt_branch('-d','feature');" "0" "$DB"
 run_test "one_branch" "SELECT count(*) FROM dolt_branches;" "1" "$DB"
 run_test_match "checkout_gone" "SELECT dolt_checkout('feature');" "not found" "$DB"
 
-DB2=/tmp/test_branch2_$$.db; rm -f "$DB2"
-echo "CREATE TABLE t(x);" | $DOLTLITE "$DB2" > /dev/null 2>&1
-run_test_match "branch_no_commit" "SELECT dolt_branch('foo');" "no commits" "$DB2"
-
 DB3=/tmp/test_branch3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','i');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB3" > /dev/null 2>&1

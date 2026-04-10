@@ -32,7 +32,7 @@ run_test "cp_basic_count" "SELECT count(*) FROM t;" "2" "$DB"
 run_test "cp_basic_val" "SELECT v FROM t WHERE id=2;" "feat_row" "$DB"
 run_test_match "cp_basic_msg" "SELECT message FROM dolt_log LIMIT 1;" "Cherry-pick: add feat_row" "$DB"
 run_test "cp_basic_branch" "SELECT active_branch();" "main" "$DB"
-run_test "cp_basic_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "cp_basic_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
@@ -142,9 +142,9 @@ run_test_match "cp_err_noarg" "SELECT dolt_cherry_pick();" "usage" "$DB"
 # Invalid hash
 run_test_match "cp_err_badhash" "SELECT dolt_cherry_pick('not_a_hash');" "invalid" "$DB"
 
-# Cannot cherry-pick initial commit (no parent)
+# Cannot cherry-pick the root (seed) commit: it has no parent to replay
 run_test_match "cp_err_initial" \
-  "SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log WHERE message='Initialize data repository'));" \
   "initial commit" "$DB"
 
 rm -f "$DB"
@@ -194,7 +194,7 @@ run_test "rv_basic_count" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "rv_basic_val" "SELECT v FROM t WHERE id=1;" "init" "$DB"
 run_test "rv_basic_no2" "SELECT count(*) FROM t WHERE id=2;" "0" "$DB"
 run_test_match "rv_basic_msg" "SELECT message FROM dolt_log LIMIT 1;" "Revert 'add row 2'" "$DB"
-run_test "rv_basic_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "rv_basic_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 rm -f "$DB"
 
@@ -288,7 +288,7 @@ SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "rv_err_noarg" "SELECT dolt_revert();" "usage" "$DB"
 run_test_match "rv_err_badhash" "SELECT dolt_revert('bad');" "invalid" "$DB"
 run_test_match "rv_err_initial" \
-  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='Initialize data repository'));" \
   "initial commit" "$DB"
 
 rm -f "$DB"
@@ -309,7 +309,7 @@ echo "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" | $DOLTLI
 # Verify after reopen
 run_test "rv_persist_count" "SELECT count(*) FROM t;" "1" "$DB"
 run_test_match "rv_persist_log" "SELECT message FROM dolt_log LIMIT 1;" "Revert" "$DB"
-run_test "rv_persist_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "rv_persist_log_count" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 rm -f "$DB"
 
@@ -336,7 +336,7 @@ run_test_match "combo_revert" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "^[0-9a-f]{40}$" "$DB"
 run_test "combo_after_rv" "SELECT count(*) FROM t;" "1" "$DB"
-run_test "combo_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "combo_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 rm -f "$DB"
 
@@ -373,7 +373,7 @@ echo "SELECT dolt_cherry_pick('$HASH2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "cp_multi_both" "SELECT count(*) FROM t;" "3" "$DB"
 run_test "cp_multi_has11" "SELECT v FROM t WHERE id=11;" "cp2" "$DB"
-run_test "cp_multi_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "cp_multi_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 rm -f "$DB"
 
@@ -398,7 +398,7 @@ run_test_match "rv_double_revert2" \
   "^[0-9a-f]{40}$" "$DB"
 run_test "rv_double_after2" "SELECT count(*) FROM t;" "2" "$DB"
 run_test "rv_double_val" "SELECT v FROM t WHERE id=2;" "added" "$DB"
-run_test "rv_double_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
+run_test "rv_double_log" "SELECT count(*) FROM dolt_log;" "5" "$DB"
 
 rm -f "$DB"
 

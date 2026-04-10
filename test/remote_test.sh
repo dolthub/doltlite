@@ -325,9 +325,9 @@ check "deep clone returns 0" "0" "$result"
 result=$("$DB" "$TMPDIR/deep_clone.db" "SELECT count(*) FROM log;")
 check "deep clone has 20 rows" "20" "$result"
 
-# Count commits in clone (21 = create + 20 inserts)
+# Count commits in clone (22 = seed + create + 20 inserts)
 result=$("$DB" "$TMPDIR/deep_clone.db" "SELECT count(*) FROM dolt_log;")
-check "deep clone has 21 commits" "21" "$result"
+check "deep clone has 22 commits" "22" "$result"
 
 # ============================================================
 echo "=== 20. Diverged branches: push both, clone gets all ==="
@@ -440,7 +440,7 @@ result=$("$DB" "$TMPDIR/merge_clone.db" "SELECT count(*) FROM doc;")
 check "merge clone has 3 docs" "3" "$result"
 
 result=$("$DB" "$TMPDIR/merge_clone.db" "SELECT count(*) FROM dolt_log;")
-check "merge clone has commit history" "4" "$result"
+check "merge clone has commit history" "5" "$result"
 
 # ============================================================
 echo "=== 23. Round-trip: A→remote→B→remote→A (3 hops) ==="
