@@ -2716,6 +2716,47 @@ void sqlite3EndTable(
   assert( (p->tabFlags & TF_HasPrimaryKey)!=0
        || (p->iPKey<0 && sqlite3PrimaryKeyIndex(p)==0) );
 
+  iDb = sqlite3SchemaToIndex(db, p->pSchema);
+  assert( iDb>=0 && iDb<=db->nDb );
+
+  /* Doltlite: tables with a primary key that isn't INTEGER PRIMARY KEY
+  ** get auto-converted to WITHOUT ROWID at parse time. The storage layer
+  ** then keys the row by the user PK columns instead of by sqlite's
+  ** auto-allocated rowid, which is the requirement for cross-branch
+  ** merging to behave correctly. INTEGER PRIMARY KEY tables already key
+  ** by the user value (the rowid IS the user PK), so they need no
+  ** change. Tables with no primary key at all keep sqlite's default
+  ** rowid behavior — they work for normal queries but their inserts
+  ** can collide on rowid across branches, so they're not suitable for
+  ** version control. We don't reject them: sqlite-parity tests rely on
+  ** keyless tables, and the failure mode for cross-branch use is
+  ** loud enough (phantom merge conflicts) that users will figure it
+  ** out without an upfront error.
+  **
+  ** Skipped entirely for:
+  **   - Temp tables (iDb == 1): scratch, never persisted.
+  **   - Virtual tables (PARSE_MODE_DECLARE_VTAB): no real storage.
+  **   - Views: no storage.
+  **   - Internal sqlite_* tables: created by sqlite for AUTOINCREMENT
+  **     bookkeeping etc. and don't have user PKs.
+  **
+  ** Runs during sqlite_master replay (db->init.busy) as well as
+  ** user-issued CREATE TABLE, because the stored CREATE TABLE statement
+  ** doesn't carry the WITHOUT ROWID modifier and re-parses would
+  ** otherwise revert the in-memory schema to rowid mode while the
+  ** on-disk storage stays BLOBKEY. Re-conversion is safe because
+  ** doltlite refuses to open databases written by older binaries that
+  ** don't enforce this storage model. */
+  if( iDb!=1
+   && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
+   && IsOrdinaryTable(p)
+   && sqlite3StrNICmp(p->zName, "sqlite_", 7)!=0
+   && (p->tabFlags & TF_HasPrimaryKey)!=0
+   && p->iPKey<0
+   && (tabOpts & TF_WithoutRowid)==0 ){
+    tabOpts |= TF_WithoutRowid;
+  }
+
   /* Special processing for WITHOUT ROWID Tables */
   if( tabOpts & TF_WithoutRowid ){
     if( (p->tabFlags & TF_Autoincrement) ){
@@ -2730,8 +2771,6 @@ void sqlite3EndTable(
     p->tabFlags |= TF_WithoutRowid | TF_NoVisibleRowid;
     convertToWithoutRowidTable(pParse, p);
   }
-  iDb = sqlite3SchemaToIndex(db, p->pSchema);
-  assert( iDb>=0 && iDb<=db->nDb );
 
 #ifndef SQLITE_OMIT_CHECK
   /* Resolve names in all CHECK constraint expressions.

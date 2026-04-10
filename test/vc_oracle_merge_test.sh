@@ -7,21 +7,14 @@
 # conflict, --no-ff (force a merge commit even when fast-forward would
 # work), -m / --message overrides, --abort, and a few error paths.
 #
-# IMPORTANT: every scenario uses INTEGER PRIMARY KEY (the sqlite rowid
-# alias) for its merged tables. doltlite stores rows keyed by sqlite's
-# auto-rowid, which is allocated independently per branch. With a non-
-# alias PK like `id INT PRIMARY KEY`, two branches that each insert one
-# new row both land on rowid=2 and the row-level merge sees a spurious
-# MM conflict on rowid 2 even though the user's PK values are distinct.
-# Dolt keys by user PK directly, so the same scenario merges cleanly
-# there. Until doltlite's storage layer supports user-PK-keyed rows,
-# the oracle scenarios stick to INTEGER PRIMARY KEY where the user's
-# value IS the rowid and the keys never collide. The conflict scenario
-# below also uses INTEGER PRIMARY KEY and exercises a true MM conflict
-# (UPDATE on the same row from both sides) which doltlite handles
-# correctly.
+# Scenarios use a mix of primary key shapes to exercise the storage
+# layer: INTEGER PRIMARY KEY (the sqlite rowid alias), INT PRIMARY KEY
+# (auto-converted to WITHOUT ROWID by doltlite), TEXT PRIMARY KEY, and
+# composite PRIMARY KEY. All shapes should merge correctly because
+# doltlite encodes the storage key from the user PK columns rather
+# than from sqlite's auto-allocated rowid.
 #
-# Conflict scenarios are checked via oracle_error_or_state because
+# Conflict scenarios are checked via oracle_no_merge_commit because
 # doltlite enters a merge state on conflict while Dolt rolls back the
 # transaction under autocommit. The two engines diverge in HOW the
 # conflict is surfaced, but both refuse to produce a clean merge
@@ -220,6 +213,85 @@ SELECT dolt_checkout('feature');
 UPDATE t SET b = 20 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat_b');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+echo "--- non-INTEGER primary key shapes ---"
+
+# These three scenarios were the original motivation for this entire
+# work. Before the user-PK row keying fix, doltlite stored rows in INT
+# / TEXT / composite PK tables under sqlite's auto-allocated rowid,
+# which collided across branches and produced phantom modify-modify
+# conflicts on every cross-branch insert. With the storage layer now
+# encoding the prolly tree key from the user PK columns, these merge
+# cleanly the same way they do in Dolt.
+
+oracle "three_way_int_pk" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES (100, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (200, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+oracle "three_way_text_pk" "
+CREATE TABLE t(id VARCHAR(64) PRIMARY KEY, v INT);
+INSERT INTO t VALUES ('alpha', 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES ('beta', 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES ('gamma', 3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+oracle "three_way_composite_pk" "
+CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a, b));
+INSERT INTO t VALUES (1, 1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES (1, 2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 1, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+oracle "three_way_text_pk_modify_non_pk_col" "
+CREATE TABLE t(id VARCHAR(64) PRIMARY KEY, v INT);
+INSERT INTO t VALUES ('alpha', 1);
+INSERT INTO t VALUES ('beta', 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+UPDATE t SET v = 10 WHERE id = 'alpha';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 20 WHERE id = 'beta';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "

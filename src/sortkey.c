@@ -130,29 +130,38 @@ static int encodeVarLen(u8 *pOut, u8 tag, const u8 *pData, u32 nData){
   return pos;
 }
 
-static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut){
+/*
+** Encode the first nMaxFields columns of pRec as a binary-comparable
+** sort key. Pass nMaxFields = 0 (or any value larger than the field
+** count) to encode the whole record. Returns the encoded byte count, or
+** -1 on error.
+*/
+static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields){
   u32 hdrSize;
   u32 hdrOff;
   u32 dataOff;
   int outPos = 0;
+  int nField = 0;
 
   if( nRec <= 0 ) return -1;
 
-  
+
   hdrOff = skGetVarint32(pRec, &hdrSize);
   if( hdrSize > (u32)nRec ) return -1;
   dataOff = hdrSize;
 
-  
+
   while( hdrOff < hdrSize ){
     u32 serialType;
     u32 fieldLen;
     const u8 *pField;
 
+    if( nMaxFields > 0 && nField >= nMaxFields ) break;
+
     hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
     fieldLen = serialTypeLen(serialType);
 
-    
+
     if( dataOff + fieldLen > (u32)nRec ) return -1;
     pField = pRec + dataOff;
 
@@ -179,26 +188,33 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut){
     }
 
     dataOff += fieldLen;
+    nField++;
   }
 
   return outPos;
 }
 
 int sortKeySize(const u8 *pRec, int nRec){
-  return sortKeyEncode(pRec, nRec, NULL);
+  return sortKeyEncode(pRec, nRec, NULL, 0);
 }
 
 int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut){
+  return sortKeyFromRecordPrefix(pRec, nRec, 0, ppOut, pnOut);
+}
+
+int sortKeyFromRecordPrefix(
+  const u8 *pRec, int nRec, int nKeyField, u8 **ppOut, int *pnOut
+){
   int nSize;
   u8 *pBuf;
 
   *ppOut = 0;
   *pnOut = 0;
 
-  nSize = sortKeyEncode(pRec, nRec, NULL);
+  nSize = sortKeyEncode(pRec, nRec, NULL, nKeyField);
   if( nSize < 0 ) return SQLITE_CORRUPT;
   if( nSize == 0 ){
-    
+
     *ppOut = (u8*)sqlite3_malloc(1);
     if( !*ppOut ) return SQLITE_NOMEM;
     *pnOut = 0;
@@ -208,7 +224,7 @@ int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut){
   pBuf = (u8*)sqlite3_malloc(nSize);
   if( !pBuf ) return SQLITE_NOMEM;
 
-  sortKeyEncode(pRec, nRec, pBuf);
+  sortKeyEncode(pRec, nRec, pBuf, nKeyField);
 
   *ppOut = pBuf;
   *pnOut = nSize;
