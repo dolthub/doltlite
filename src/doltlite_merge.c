@@ -502,6 +502,57 @@ struct ParsedColumn {
   char *zDef;     /* Full column definition text */
 };
 
+static int parseQuotedIdentifier(
+  const char *z,
+  const char *zEnd,
+  const char **ppEnd,
+  char **pzName
+){
+  char cOpen, cClose;
+  const char *p;
+  int nOut = 0;
+  char *zName;
+
+  *ppEnd = z;
+  *pzName = 0;
+  if( z>=zEnd ) return SQLITE_CORRUPT;
+
+  cOpen = *z;
+  cClose = cOpen=='[' ? ']' : cOpen;
+  p = z + 1;
+  while( p<zEnd ){
+    if( *p==cClose ){
+      if( p+1<zEnd && p[1]==cClose ){
+        nOut++;
+        p += 2;
+        continue;
+      }
+      break;
+    }
+    nOut++;
+    p++;
+  }
+  if( p>=zEnd || *p!=cClose ) return SQLITE_CORRUPT;
+
+  zName = sqlite3_malloc(nOut + 1);
+  if( !zName ) return SQLITE_NOMEM;
+
+  p = z + 1;
+  nOut = 0;
+  while( p<zEnd && *p!=cClose ){
+    if( p+1<zEnd && p[0]==cClose && p[1]==cClose ){
+      zName[nOut++] = cClose;
+      p += 2;
+    }else{
+      zName[nOut++] = *p++;
+    }
+  }
+  zName[nOut] = 0;
+  *ppEnd = p + 1;
+  *pzName = zName;
+  return SQLITE_OK;
+}
+
 /*
 ** Parse columns from a CREATE TABLE SQL string.
 ** Returns an array of ParsedColumn entries.
@@ -525,7 +576,7 @@ static int parseColumns(
   /* Find the opening '(' after CREATE TABLE ... */
   p = zSql;
   while( *p && *p!='(' ) p++;
-  if( *p!='(' ) return SQLITE_OK;
+  if( *p!='(' ) return SQLITE_CORRUPT;
   p++; /* skip '(' */
 
   /* Find the matching closing ')' */
@@ -536,7 +587,7 @@ static int parseColumns(
     else if( *pEnd==')' ) depth--;
     pEnd++;
   }
-  if( depth!=0 ) return SQLITE_OK;
+  if( depth!=0 ) return SQLITE_CORRUPT;
   pEnd--; /* back to the ')' */
 
   /* Now parse comma-separated segments between p and pEnd */
@@ -601,33 +652,48 @@ static int parseColumns(
             const char *nameStart = s;
             const char *nameEnd = nameStart;
             int nameLen;
+            int rc;
             /* Handle quoted names */
             if( *nameStart=='"' || *nameStart=='`' || *nameStart=='[' ){
-              char closeChar = (*nameStart=='"') ? '"' :
-                               (*nameStart=='`') ? '`' : ']';
-              nameEnd = nameStart + 1;
-              while( nameEnd<e && *nameEnd!=closeChar ) nameEnd++;
-              if( nameEnd<e ) nameEnd++; /* include close quote */
-              nameLen = (int)(nameEnd - nameStart);
-              /* Store unquoted name for comparison */
-              zName = sqlite3_malloc(nameLen - 1);  /* minus 2 quotes + 1 NUL */
-              if( zName ){
-                memcpy(zName, nameStart+1, nameLen-2);
-                zName[nameLen-2] = 0;
-                /* Lowercase for comparison */
-                { int ci; for(ci=0;zName[ci];ci++) zName[ci]=(char)tolower((unsigned char)zName[ci]); }
+              rc = parseQuotedIdentifier(nameStart, e, &nameEnd, &zName);
+              if( rc!=SQLITE_OK ){
+                sqlite3_free(zTrimmed);
+                { int ci; for(ci=0;ci<nCols;ci++){
+                  sqlite3_free(aCols[ci].zName);
+                  sqlite3_free(aCols[ci].zDef);
+                }}
+                sqlite3_free(aCols);
+                return rc;
               }
             }else{
               while( nameEnd<e && !isspace((unsigned char)*nameEnd)
                   && *nameEnd!='(' && *nameEnd!=',' ) nameEnd++;
               nameLen = (int)(nameEnd - nameStart);
               zName = sqlite3_malloc(nameLen + 1);
-              if( zName ){
-                memcpy(zName, nameStart, nameLen);
-                zName[nameLen] = 0;
-                /* Lowercase for comparison */
-                { int ci; for(ci=0;zName[ci];ci++) zName[ci]=(char)tolower((unsigned char)zName[ci]); }
+              if( !zName ){
+                sqlite3_free(zTrimmed);
+                { int ci; for(ci=0;ci<nCols;ci++){
+                  sqlite3_free(aCols[ci].zName);
+                  sqlite3_free(aCols[ci].zDef);
+                }}
+                sqlite3_free(aCols);
+                return SQLITE_NOMEM;
               }
+              memcpy(zName, nameStart, nameLen);
+              zName[nameLen] = 0;
+            }
+            /* Lowercase for comparison */
+            { int ci; for(ci=0;zName[ci];ci++) zName[ci]=(char)tolower((unsigned char)zName[ci]); }
+
+            if( nameEnd<=nameStart ){
+              sqlite3_free(zName);
+              sqlite3_free(zTrimmed);
+              { int ci; for(ci=0;ci<nCols;ci++){
+                sqlite3_free(aCols[ci].zName);
+                sqlite3_free(aCols[ci].zDef);
+              }}
+              sqlite3_free(aCols);
+              return SQLITE_CORRUPT;
             }
 
             if( nCols >= nAlloc ){
