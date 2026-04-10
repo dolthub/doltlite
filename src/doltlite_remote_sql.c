@@ -795,7 +795,13 @@ static int remConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   RemVtab *p; int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
-  rc = sqlite3_declare_vtab(db, "CREATE TABLE x(name TEXT, url TEXT)");
+  rc = sqlite3_declare_vtab(db,
+    "CREATE TABLE x("
+      "name TEXT, "
+      "url TEXT, "
+      "fetch_specs TEXT, "
+      "params TEXT"
+    ")");
   if( rc!=SQLITE_OK ) return rc;
   p = sqlite3_malloc(sizeof(*p));
   if( !p ) return SQLITE_NOMEM;
@@ -826,8 +832,31 @@ static int remColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
   if(!cs) return SQLITE_OK;
   rem = &cs->aRemotes[((RemCur*)c)->iRow];
   switch(col){
-    case 0: sqlite3_result_text(ctx, rem->zName, -1, SQLITE_TRANSIENT); break;
-    case 1: sqlite3_result_text(ctx, rem->zUrl, -1, SQLITE_TRANSIENT); break;
+    case 0:
+      sqlite3_result_text(ctx, rem->zName, -1, SQLITE_TRANSIENT);
+      break;
+    case 1:
+      sqlite3_result_text(ctx, rem->zUrl, -1, SQLITE_TRANSIENT);
+      break;
+    case 2: {
+      /* Default fetch refspec derived from the remote name, matching the
+      ** shape Dolt emits for a vanilla dolt_remote add call. doltlite has
+      ** no concept of customizable refspecs, so this is always derived. */
+      char *zSpec = sqlite3_mprintf(
+          "[\"refs/heads/*:refs/remotes/%s/*\"]", rem->zName);
+      if( zSpec ){
+        sqlite3_result_text(ctx, zSpec, -1, SQLITE_TRANSIENT);
+        sqlite3_free(zSpec);
+      }else{
+        sqlite3_result_null(ctx);
+      }
+      break;
+    }
+    case 3:
+      /* Dolt uses params for auth/config overrides; doltlite has none,
+      ** so this is always an empty JSON object. */
+      sqlite3_result_text(ctx, "{}", -1, SQLITE_STATIC);
+      break;
   }
   return SQLITE_OK;
 }
