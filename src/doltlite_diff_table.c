@@ -102,6 +102,47 @@ struct DiffTblCursor {
   i64 iRowid;                   /* Monotonically increasing rowid */
 };
 
+static int diffRecordField(
+  const u8 *pData,
+  int nData,
+  int iField,
+  int *pType,
+  int *pOff
+){
+  const u8 *p = pData;
+  const u8 *pEnd = pData + nData;
+  const u8 *pHdrEnd;
+  u64 hdrSize;
+  int hdrBytes;
+  int off;
+  int i;
+
+  if( !pData || nData < 1 || iField < 0 ) return SQLITE_CORRUPT;
+  hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
+  if( hdrBytes <= 0 || hdrSize < (u64)hdrBytes || hdrSize > (u64)nData ){
+    return SQLITE_CORRUPT;
+  }
+  p += hdrBytes;
+  pHdrEnd = pData + (int)hdrSize;
+  off = (int)hdrSize;
+  for(i=0; p < pHdrEnd; i++){
+    u64 st;
+    int stBytes = dlReadVarint(p, pHdrEnd, &st);
+    int len;
+    if( stBytes <= 0 ) return SQLITE_CORRUPT;
+    p += stBytes;
+    len = dlSerialTypeLen(st);
+    if( off < 0 || off + len > nData ) return SQLITE_CORRUPT;
+    if( i==iField ){
+      *pType = (int)st;
+      *pOff = off;
+      return SQLITE_OK;
+    }
+    off += len;
+  }
+  return SQLITE_NOTFOUND;
+}
+
 static void clearAuditRow(AuditRow *r){
   sqlite3_free(r->pOldVal);
   sqlite3_free(r->pNewVal);
@@ -322,15 +363,12 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
   }
 
 
-  doltliteGetColumnNames(db, pVtab->zTableName, &pVtab->cols);
-
-
-  if( pVtab->cols.nCol <= 0 ){
+  rc = doltliteLoadUserTableColumns(db, pVtab->zTableName, &pVtab->cols, pzErr);
+  if( rc!=SQLITE_OK ){
     sqlite3_free(pVtab->zTableName);
     doltliteFreeColInfo(&pVtab->cols);
     sqlite3_free(pVtab);
-    *pzErr = sqlite3_mprintf("table '%s' not found or has no columns", argv[3] ? argv[3] : "");
-    return SQLITE_ERROR;
+    return rc;
   }
   zSchema = buildDiffSchema(&pVtab->cols);
 
@@ -457,13 +495,16 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     }else{
 
       if( r->pOldVal && r->nOldVal > 0 ){
-        DoltliteRecordInfo ri;
-        doltliteParseRecord(r->pOldVal, r->nOldVal, &ri);
-        if( colIdx < ri.nField ){
+        int st, off;
+        int rc = diffRecordField(r->pOldVal, r->nOldVal, colIdx, &st, &off);
+        if( rc==SQLITE_OK ){
           doltliteResultField(ctx, r->pOldVal, r->nOldVal,
-                        ri.aType[colIdx], ri.aOffset[colIdx]);
-        }else{
+                        st, off);
+        }else if( rc==SQLITE_NOTFOUND ){
           sqlite3_result_null(ctx);
+        }else{
+          sqlite3_result_error_code(ctx, rc);
+          return rc;
         }
       }else{
         sqlite3_result_null(ctx);
@@ -480,13 +521,16 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       }
     }else{
       if( r->pNewVal && r->nNewVal > 0 ){
-        DoltliteRecordInfo ri;
-        doltliteParseRecord(r->pNewVal, r->nNewVal, &ri);
-        if( colIdx < ri.nField ){
+        int st, off;
+        int rc = diffRecordField(r->pNewVal, r->nNewVal, colIdx, &st, &off);
+        if( rc==SQLITE_OK ){
           doltliteResultField(ctx, r->pNewVal, r->nNewVal,
-                        ri.aType[colIdx], ri.aOffset[colIdx]);
-        }else{
+                        st, off);
+        }else if( rc==SQLITE_NOTFOUND ){
           sqlite3_result_null(ctx);
+        }else{
+          sqlite3_result_error_code(ctx, rc);
+          return rc;
         }
       }else{
         sqlite3_result_null(ctx);

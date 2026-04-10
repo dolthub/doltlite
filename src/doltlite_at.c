@@ -111,14 +111,10 @@ static int atConnect(sqlite3 *db, void *pAux, int argc,
   else if(argc>3) v->zTableName=sqlite3_mprintf("%s",argv[3]);
   else v->zTableName=sqlite3_mprintf("");
 
-  doltliteGetColumnNames(db,v->zTableName,&v->cols);
-
-  if(v->cols.nCol<=0){
-    char *zErr = sqlite3_mprintf("table '%s' not found or has no columns",
-                                 v->zTableName ? v->zTableName : "");
+  rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
+  if( rc!=SQLITE_OK ){
     sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);
-    *pzErr = zErr;
-    return SQLITE_ERROR;
+    return rc;
   }
   zSchema=atBuildSchema(&v->cols);
   if(!zSchema){sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);return SQLITE_NOMEM;}
