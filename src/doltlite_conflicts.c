@@ -754,26 +754,8 @@ static sqlite3_module cfRowModule = {
   0,0,0,0,0,0,0,0,0,0,0  
 };
 
-void doltliteRegisterConflictTables(sqlite3 *db){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ConflictTableInfo *aTables = 0;
-  int nTables = 0;
-  int i;
-
-  if( !cs ) return;
-  loadAllConflicts(db, cs, &aTables, &nTables);
-
-  for(i=0; i<nTables; i++){
-    if( aTables[i].zName ){
-      char *zModuleName = sqlite3_mprintf("dolt_conflicts_%s", aTables[i].zName);
-      if( zModuleName ){
-        
-        sqlite3_create_module(db, zModuleName, &cfRowModule, 0);
-        sqlite3_free(zModuleName);
-      }
-    }
-  }
-  freeConflictTables(aTables, nTables);
+int doltliteRegisterConflictTables(sqlite3 *db){
+  return doltliteForEachUserTable(db, "dolt_conflicts_", &cfRowModule);
 }
 
 static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -874,7 +856,7 @@ int doltliteConflictsRegister(sqlite3 *db){
                                   conflictsResolveFunc, 0, 0);
   
   if( rc==SQLITE_OK )
-    doltliteRegisterConflictTables(db);
+    rc = doltliteRegisterConflictTables(db);
   return rc;
 }
 

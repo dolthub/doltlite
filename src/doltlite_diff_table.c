@@ -539,8 +539,8 @@ static sqlite3_module diffTableModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-void doltliteRegisterDiffTables(sqlite3 *db){
-  doltliteForEachUserTable(db, "dolt_diff_", &diffTableModule);
+int doltliteRegisterDiffTables(sqlite3 *db){
+  return doltliteForEachUserTable(db, "dolt_diff_", &diffTableModule);
 }
 
 #endif

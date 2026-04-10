@@ -127,7 +127,7 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
 
   
   nEmail = DLC_GET_U16(p); p += 2;
-  if( p + nEmail > data + nData ) return SQLITE_CORRUPT;
+  if( p + nEmail > data + nData ){ doltliteCommitClear(c); return SQLITE_CORRUPT; }
   c->zEmail = sqlite3_malloc(nEmail + 1);
   if( !c->zEmail ){ doltliteCommitClear(c); return SQLITE_NOMEM; }
   if( nEmail>0 ) memcpy(c->zEmail, p, nEmail);

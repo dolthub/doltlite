@@ -278,15 +278,12 @@ static sqlite3_module atModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-void doltliteRegisterAtTables(sqlite3 *db){
-  doltliteForEachUserTable(db, "dolt_at_", &atModule);
+int doltliteRegisterAtTables(sqlite3 *db){
+  return doltliteForEachUserTable(db, "dolt_at_", &atModule);
 }
 
 int doltliteAtRegister(sqlite3 *db){
-  
-  
-  doltliteRegisterAtTables(db);
-  return SQLITE_OK;
+  return doltliteRegisterAtTables(db);
 }
 
 #endif 
