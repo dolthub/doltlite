@@ -20,112 +20,135 @@ static i64 cfReadInt(const u8 *pRec, int nBytes){
   return v;
 }
 
-static char *buildInsertSql(
+static int cfSqlRc(sqlite3_str *pStr){
+  int rc = sqlite3_str_errcode(pStr);
+  return rc==SQLITE_OK ? SQLITE_OK : rc;
+}
+
+static int cfAppendLiteral(
+  sqlite3_str *pStr,
+  const u8 **ppBodyPos,
+  const u8 *pRecEnd,
+  u64 st
+){
+  const u8 *pBodyPos = *ppBodyPos;
+  int len;
+
+  if( st==0 ){
+    sqlite3_str_appendall(pStr, "NULL");
+  }else if( st==8 ){
+    sqlite3_str_appendall(pStr, "0");
+  }else if( st==9 ){
+    sqlite3_str_appendall(pStr, "1");
+  }else if( st>=1 && st<=6 ){
+    static const int sizes[] = {0,1,2,3,4,6,8};
+    int nBytes = sizes[st];
+    if( pBodyPos + nBytes > pRecEnd ) return SQLITE_CORRUPT;
+    sqlite3_str_appendf(pStr, "%lld", cfReadInt(pBodyPos, nBytes));
+    pBodyPos += nBytes;
+  }else if( st==7 ){
+    double v;
+    u64 bits = 0;
+    int k;
+    if( pBodyPos + 8 > pRecEnd ) return SQLITE_CORRUPT;
+    for(k=0; k<8; k++) bits = (bits<<8) | pBodyPos[k];
+    memcpy(&v, &bits, 8);
+    sqlite3_str_appendf(pStr, "%!.15g", v);
+    pBodyPos += 8;
+  }else if( st>=12 && (st&1)==0 ){
+    int k;
+    len = ((int)st - 12) / 2;
+    if( pBodyPos + len > pRecEnd ) return SQLITE_CORRUPT;
+    sqlite3_str_appendall(pStr, "X'");
+    for(k=0; k<len; k++){
+      sqlite3_str_appendf(pStr, "%02x", pBodyPos[k]);
+    }
+    sqlite3_str_appendall(pStr, "'");
+    pBodyPos += len;
+  }else if( st>=13 && (st&1)==1 ){
+    char *zText;
+    len = ((int)st - 13) / 2;
+    if( pBodyPos + len > pRecEnd ) return SQLITE_CORRUPT;
+    zText = sqlite3_malloc(len + 1);
+    if( !zText ) return SQLITE_NOMEM;
+    memcpy(zText, pBodyPos, len);
+    zText[len] = 0;
+    sqlite3_str_appendf(pStr, "%Q", zText);
+    sqlite3_free(zText);
+    pBodyPos += len;
+  }else{
+    return SQLITE_CORRUPT;
+  }
+
+  *ppBodyPos = pBodyPos;
+  return cfSqlRc(pStr);
+}
+
+static int buildInsertSql(
   const char *zTable,
   i64 intKey,
   char **azCol, int nCol,
   const u8 *pRec, const u8 *pRecEnd,
-  const u8 *pHdrEnd, const u8 *pBody
+  const u8 *pHdrEnd, const u8 *pBody,
+  char **pzSql
 ){
-  char *zIns = sqlite3_mprintf("INSERT OR REPLACE INTO \"%w\"(rowid", zTable);
-  char *zVals = sqlite3_mprintf("VALUES(%lld", intKey);
-  char *zTmp;
+  sqlite3_str *pIns = sqlite3_str_new(0);
+  sqlite3_str *pVals = sqlite3_str_new(0);
   const u8 *pBodyPos = pBody;
   int colIdx = 0;
+  char *zIns;
+  char *zVals;
+  int rc;
 
-  if( !zIns || !zVals ){
-    sqlite3_free(zIns); sqlite3_free(zVals);
-    return 0;
+  *pzSql = 0;
+  if( !pIns || !pVals ){
+    sqlite3_str_reset(pIns);
+    sqlite3_str_reset(pVals);
+    return SQLITE_NOMEM;
+  }
+  sqlite3_str_appendf(pIns, "INSERT OR REPLACE INTO \"%w\"(rowid", zTable);
+  sqlite3_str_appendf(pVals, "VALUES(%lld", intKey);
+  rc = cfSqlRc(pIns);
+  if( rc==SQLITE_OK ) rc = cfSqlRc(pVals);
+  if( rc!=SQLITE_OK ){
+    sqlite3_str_reset(pIns);
+    sqlite3_str_reset(pVals);
+    return rc;
   }
 
   while( pRec < pHdrEnd && pRec < pRecEnd && colIdx < nCol ){
     u64 st;
     int stBytes = dlReadVarint(pRec, pHdrEnd, &st);
+    if( stBytes <= 0 ) rc = SQLITE_CORRUPT;
     pRec += stBytes;
-
-    
-    if( !zIns || !zVals ){
-      sqlite3_free(zIns); sqlite3_free(zVals);
-      return 0;
+    if( rc==SQLITE_OK ){
+      sqlite3_str_appendf(pIns, ",\"%w\"", azCol[colIdx]);
+      sqlite3_str_appendall(pVals, ",");
+      rc = cfSqlRc(pIns);
     }
-
-    
-    zTmp = sqlite3_mprintf("%s,\"%w\"", zIns, azCol[colIdx]);
-    sqlite3_free(zIns); zIns = zTmp;
-
-    
-    if( st==0 ){
-      zTmp = sqlite3_mprintf("%s,NULL", zVals);
-      sqlite3_free(zVals); zVals = zTmp;
-    }else if( st==8 ){
-      zTmp = sqlite3_mprintf("%s,0", zVals);
-      sqlite3_free(zVals); zVals = zTmp;
-    }else if( st==9 ){
-      zTmp = sqlite3_mprintf("%s,1", zVals);
-      sqlite3_free(zVals); zVals = zTmp;
-    }else if( st>=1 && st<=6 ){
-      static const int sizes[] = {0,1,2,3,4,6,8};
-      int nBytes = sizes[st];
-      if( pBodyPos + nBytes <= pRecEnd ){
-        i64 v = cfReadInt(pBodyPos, nBytes);
-        zTmp = sqlite3_mprintf("%s,%lld", zVals, v);
-        sqlite3_free(zVals); zVals = zTmp;
-      }
-      pBodyPos += nBytes;
-    }else if( st==7 ){
-      
-      if( pBodyPos + 8 <= pRecEnd ){
-        double v;
-        u64 bits = 0;
-        int k;
-        for(k=0; k<8; k++) bits = (bits<<8) | pBodyPos[k];
-        memcpy(&v, &bits, 8);
-        zTmp = sqlite3_mprintf("%s,%!.15g", zVals, v);
-        sqlite3_free(zVals); zVals = zTmp;
-      }
-      pBodyPos += 8;
-    }else if( st>=12 && (st&1)==0 ){
-      
-      int len = ((int)st - 12) / 2;
-      if( pBodyPos + len <= pRecEnd ){
-        zTmp = sqlite3_mprintf("%s,X'", zVals);
-        sqlite3_free(zVals); zVals = zTmp;
-        {
-          int k;
-          for(k=0; k<len; k++){
-            zTmp = sqlite3_mprintf("%s%02x", zVals, pBodyPos[k]);
-            sqlite3_free(zVals); zVals = zTmp;
-          }
-        }
-        zTmp = sqlite3_mprintf("%s'", zVals);
-        sqlite3_free(zVals); zVals = zTmp;
-      }
-      pBodyPos += len;
-    }else if( st>=13 && (st&1)==1 ){
-      
-      int len = ((int)st - 13) / 2;
-      if( pBodyPos + len <= pRecEnd ){
-        
-        char *zText = sqlite3_malloc(len+1);
-        if( zText ){
-          memcpy(zText, pBodyPos, len);
-          zText[len] = 0;
-          zTmp = sqlite3_mprintf("%s,%Q", zVals, zText);
-          sqlite3_free(zVals); zVals = zTmp;
-          sqlite3_free(zText);
-        }
-      }
-      pBodyPos += len;
+    if( rc==SQLITE_OK ){
+      rc = cfAppendLiteral(pVals, &pBodyPos, pRecEnd, st);
     }
-
+    if( rc!=SQLITE_OK ) break;
     colIdx++;
   }
-
-  
-  zTmp = sqlite3_mprintf("%s) %s)", zIns, zVals);
+  if( rc!=SQLITE_OK ){
+    sqlite3_str_reset(pIns);
+    sqlite3_str_reset(pVals);
+    return rc;
+  }
+  zIns = sqlite3_str_finish(pIns);
+  zVals = sqlite3_str_finish(pVals);
+  if( !zIns || !zVals ){
+    sqlite3_free(zIns);
+    sqlite3_free(zVals);
+    return SQLITE_NOMEM;
+  }
+  *pzSql = sqlite3_mprintf("%s) %s)", zIns, zVals);
   sqlite3_free(zIns);
   sqlite3_free(zVals);
-  return zTmp;
+  if( !*pzSql ) return SQLITE_NOMEM;
+  return SQLITE_OK;
 }
 
 static int applyTheirRecord(
@@ -152,7 +175,7 @@ static int applyTheirRecord(
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ) return rc;
 
-  while( sqlite3_step(pInfo)==SQLITE_ROW ){
+  while( (rc = sqlite3_step(pInfo))==SQLITE_ROW ){
     const char *zName = (const char*)sqlite3_column_text(pInfo, 1);
     int pk = sqlite3_column_int(pInfo, 5);
     
@@ -163,24 +186,46 @@ static int applyTheirRecord(
       }
     }
     if( nCol >= nColAlloc ){
+      char **azNew;
       nColAlloc = nColAlloc ? nColAlloc*2 : 8;
-      azCol = sqlite3_realloc(azCol, nColAlloc * (int)sizeof(char*));
-      if( !azCol ){ sqlite3_finalize(pInfo); return SQLITE_NOMEM; }
+      azNew = sqlite3_realloc(azCol, nColAlloc * (int)sizeof(char*));
+      if( !azNew ){
+        int k;
+        sqlite3_finalize(pInfo);
+        for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
+        sqlite3_free(azCol);
+        return SQLITE_NOMEM;
+      }
+      azCol = azNew;
     }
     azCol[nCol] = sqlite3_mprintf("%s", zName);
+    if( !azCol[nCol] ){
+      int k;
+      sqlite3_finalize(pInfo);
+      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
+      sqlite3_free(azCol);
+      return SQLITE_NOMEM;
+    }
     nCol++;
   }
   sqlite3_finalize(pInfo);
-
-  if( nCol==0 ){
+  if( rc!=SQLITE_DONE ){
+    int k;
+    for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
     sqlite3_free(azCol);
-    return SQLITE_ERROR;
+    return rc;
   }
 
   
   pPos = pRec;
   pRecEnd = pRec + nRec;
   hdrBytes = dlReadVarint(pPos, pRecEnd, &hdrSize);
+  if( hdrBytes <= 0 || hdrSize < (u64)hdrBytes || hdrSize > (u64)nRec ){
+    int k;
+    for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
+    sqlite3_free(azCol);
+    return SQLITE_CORRUPT;
+  }
   pPos += hdrBytes;
   pHdrEnd = pRec + (int)hdrSize;
   pBody = pRec + (int)hdrSize;
@@ -189,6 +234,12 @@ static int applyTheirRecord(
   if( pPos < pHdrEnd ){
     u64 stSkip;
     int skipBytes = dlReadVarint(pPos, pHdrEnd, &stSkip);
+    if( skipBytes <= 0 ){
+      int k;
+      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
+      sqlite3_free(azCol);
+      return SQLITE_CORRUPT;
+    }
     pPos += skipBytes;
     
     if( stSkip==0 || stSkip==8 || stSkip==9 ) {}
@@ -196,15 +247,25 @@ static int applyTheirRecord(
     else if( stSkip==7 ) pBody+=8;
     else if( stSkip>=12 && (stSkip&1)==0 ) pBody+=((int)stSkip-12)/2;
     else if( stSkip>=13 && (stSkip&1)==1 ) pBody+=((int)stSkip-13)/2;
+    else{
+      int k;
+      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
+      sqlite3_free(azCol);
+      return SQLITE_CORRUPT;
+    }
+    if( pBody > pRecEnd ){
+      int k;
+      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
+      sqlite3_free(azCol);
+      return SQLITE_CORRUPT;
+    }
   }
 
   
-  zSql = buildInsertSql(zTable, intKey, azCol, nCol, pPos, pRecEnd, pHdrEnd, pBody);
-  if( zSql ){
+  rc = buildInsertSql(zTable, intKey, azCol, nCol, pPos, pRecEnd, pHdrEnd, pBody, &zSql);
+  if( rc==SQLITE_OK ){
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
     sqlite3_free(zSql);
-  }else{
-    rc = SQLITE_NOMEM;
   }
 
   

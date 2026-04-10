@@ -17,6 +17,25 @@ struct DoltliteColInfo {
 
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci);
 
+static inline int doltliteLoadUserTableColumns(
+  sqlite3 *db,
+  const char *zTable,
+  DoltliteColInfo *pCols,
+  char **pzErr
+){
+  int rc = doltliteGetColumnNames(db, zTable, pCols);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pCols->nCol<=0 ){
+    if( pzErr ){
+      *pzErr = sqlite3_mprintf("table '%s' not found or has no columns",
+                               zTable ? zTable : "");
+      if( !*pzErr ) return SQLITE_NOMEM;
+    }
+    return SQLITE_ERROR;
+  }
+  return SQLITE_OK;
+}
+
 void doltliteFreeColInfo(DoltliteColInfo *ci);
 
 static inline int dlReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
