@@ -25,12 +25,12 @@ SELECT dolt_commit('-A','-m','c2');
 SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "add_count" "SELECT count(*) FROM dolt_schema_diff('v1','v2');" "1" "$DB"
-run_test "add_name" "SELECT table_name FROM dolt_schema_diff('v1','v2');" "t2" "$DB"
-run_test "add_type" "SELECT diff_type FROM dolt_schema_diff('v1','v2');" "added" "$DB"
+run_test "add_to_name" "SELECT to_table_name FROM dolt_schema_diff('v1','v2');" "t2" "$DB"
+run_test "add_from_name_empty" "SELECT length(from_table_name) FROM dolt_schema_diff('v1','v2');" "0" "$DB"
 run_test_match "add_to_sql" \
-  "SELECT to_create_stmt FROM dolt_schema_diff('v1','v2');" "CREATE TABLE t2" "$DB"
-run_test "add_from_null" \
-  "SELECT from_create_stmt IS NULL FROM dolt_schema_diff('v1','v2');" "1" "$DB"
+  "SELECT to_create_statement FROM dolt_schema_diff('v1','v2');" "CREATE TABLE t2" "$DB"
+run_test "add_from_sql_empty" \
+  "SELECT length(from_create_statement) FROM dolt_schema_diff('v1','v2');" "0" "$DB"
 
 rm -f "$DB"
 
@@ -98,8 +98,8 @@ SELECT dolt_commit('-A','-m','feat add table');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "branch_count" "SELECT count(*) FROM dolt_schema_diff('main','feat');" "1" "$DB"
-run_test "branch_name" "SELECT table_name FROM dolt_schema_diff('main','feat');" "feat_tbl" "$DB"
-run_test "branch_type" "SELECT diff_type FROM dolt_schema_diff('main','feat');" "added" "$DB"
+run_test "branch_to_name" "SELECT to_table_name FROM dolt_schema_diff('main','feat');" "feat_tbl" "$DB"
+run_test "branch_from_name_empty" "SELECT length(from_table_name) FROM dolt_schema_diff('main','feat');" "0" "$DB"
 
 rm -f "$DB"
 
@@ -115,18 +115,19 @@ CREATE TABLE extra(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-A','-m','c2');
 SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# v1→v2: extra is added
-run_test "reverse_fwd" "SELECT diff_type FROM dolt_schema_diff('v1','v2');" "added" "$DB"
+# v1→v2: extra is added (from side empty, to side has the table)
+run_test "reverse_fwd_to_name" "SELECT to_table_name FROM dolt_schema_diff('v1','v2');" "extra" "$DB"
+run_test "reverse_fwd_from_empty" "SELECT length(from_table_name) FROM dolt_schema_diff('v1','v2');" "0" "$DB"
 
-# v2→v1: extra is dropped
-run_test "reverse_rev" "SELECT diff_type FROM dolt_schema_diff('v2','v1');" "dropped" "$DB"
-run_test "reverse_rev_name" "SELECT table_name FROM dolt_schema_diff('v2','v1');" "extra" "$DB"
+# v2→v1: extra is dropped (from side has the table, to side empty)
+run_test "reverse_rev_from_name" "SELECT from_table_name FROM dolt_schema_diff('v2','v1');" "extra" "$DB"
+run_test "reverse_rev_to_empty" "SELECT length(to_table_name) FROM dolt_schema_diff('v2','v1');" "0" "$DB"
 
-# When dropped, from_create_stmt is set, to_create_stmt is null
+# When dropped, from_create_statement is set, to_create_statement is empty
 run_test_match "reverse_from" \
-  "SELECT from_create_stmt FROM dolt_schema_diff('v2','v1');" "CREATE TABLE" "$DB"
-run_test "reverse_to_null" \
-  "SELECT to_create_stmt IS NULL FROM dolt_schema_diff('v2','v1');" "1" "$DB"
+  "SELECT from_create_statement FROM dolt_schema_diff('v2','v1');" "CREATE TABLE" "$DB"
+run_test "reverse_to_empty_sql" \
+  "SELECT length(to_create_statement) FROM dolt_schema_diff('v2','v1');" "0" "$DB"
 
 rm -f "$DB"
 
@@ -163,9 +164,9 @@ SELECT dolt_commit('-A','-m','main work');
 SELECT dolt_merge('feat');
 SELECT dolt_tag('after');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# before→after should show feat_tbl as added
+# before→after should show feat_tbl as added (to_table_name set, from empty)
 run_test_match "merge_added" \
-  "SELECT table_name FROM dolt_schema_diff('before','after') WHERE diff_type='added';" \
+  "SELECT to_table_name FROM dolt_schema_diff('before','after') WHERE from_table_name='';" \
   "feat_tbl" "$DB"
 
 rm -f "$DB"
@@ -186,7 +187,7 @@ SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Index creation adds an entry to sqlite_master
 run_test_match "index_count" "SELECT count(*) FROM dolt_schema_diff('v1','v2');" "^[1-9]" "$DB"
 run_test_match "index_name" \
-  "SELECT table_name FROM dolt_schema_diff('v1','v2') LIMIT 1;" "idx_name" "$DB"
+  "SELECT to_table_name FROM dolt_schema_diff('v1','v2') LIMIT 1;" "idx_name" "$DB"
 
 rm -f "$DB"
 
@@ -205,7 +206,7 @@ SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "view_count" "SELECT count(*) FROM dolt_schema_diff('v1','v2');" "^[1-9]" "$DB"
 run_test_match "view_name" \
-  "SELECT table_name FROM dolt_schema_diff('v1','v2') WHERE table_name='v';" "v" "$DB"
+  "SELECT to_table_name FROM dolt_schema_diff('v1','v2') WHERE to_table_name='v';" "v" "$DB"
 
 rm -f "$DB"
 
@@ -237,10 +238,10 @@ SELECT dolt_commit('-A','-m','add users');
 SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "stmt_content" \
-  "SELECT to_create_stmt FROM dolt_schema_diff('v1','v2');" \
+  "SELECT to_create_statement FROM dolt_schema_diff('v1','v2');" \
   "CREATE TABLE users" "$DB"
 run_test_match "stmt_cols" \
-  "SELECT to_create_stmt FROM dolt_schema_diff('v1','v2');" \
+  "SELECT to_create_statement FROM dolt_schema_diff('v1','v2');" \
   "name TEXT" "$DB"
 
 rm -f "$DB"

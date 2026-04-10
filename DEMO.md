@@ -207,12 +207,13 @@ WHERE rowid_val = 0;
 Compare schemas between two points:
 
 ```sql
-SELECT table_name, diff_type, to_create_stmt
+SELECT from_table_name, to_table_name, to_create_statement
 FROM dolt_schema_diff(
     (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2),
     (SELECT commit_hash FROM dolt_log LIMIT 1)
 );
--- Shows tables/indexes added, dropped, or modified between commits
+-- Added rows have empty from_table_name; dropped rows have empty
+-- to_table_name; modified rows have both equal.
 ```
 
 ## Garbage Collection

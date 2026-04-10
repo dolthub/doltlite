@@ -15,10 +15,10 @@
 
 typedef struct SchemaDiffRow SchemaDiffRow;
 struct SchemaDiffRow {
-  char *zName;
+  char *zFromName;
+  char *zToName;
   char *zFromSql;
   char *zToSql;
-  char *zDiffType;    
 };
 
 typedef struct SdVtab SdVtab;
@@ -65,7 +65,8 @@ static int schemaTextField(
 static void freeSchemaDiffRows(SdCursor *c){
   int i;
   for(i=0; i<c->nRows; i++){
-    sqlite3_free(c->aRows[i].zName);
+    sqlite3_free(c->aRows[i].zFromName);
+    sqlite3_free(c->aRows[i].zToName);
     sqlite3_free(c->aRows[i].zFromSql);
     sqlite3_free(c->aRows[i].zToSql);
   }
@@ -104,10 +105,10 @@ static int appendSchemaEntry(
 
 static int appendSchemaDiffRow(
   SdCursor *pCur,
-  const char *zName,
+  const char *zFromName,
+  const char *zToName,
   const char *zFromSql,
-  const char *zToSql,
-  char *zDiffType
+  const char *zToSql
 ){
   SchemaDiffRow *r;
   if( pCur->nRows >= pCur->nAlloc ){
@@ -119,26 +120,18 @@ static int appendSchemaDiffRow(
   }
   r = &pCur->aRows[pCur->nRows];
   memset(r, 0, sizeof(*r));
-  r->zName = sqlite3_mprintf("%s", zName ? zName : "");
-  if( !r->zName ) return SQLITE_NOMEM;
-  if( zFromSql ){
-    r->zFromSql = sqlite3_mprintf("%s", zFromSql);
-    if( !r->zFromSql ){
-      sqlite3_free(r->zName);
-      memset(r, 0, sizeof(*r));
-      return SQLITE_NOMEM;
-    }
+  r->zFromName = sqlite3_mprintf("%s", zFromName ? zFromName : "");
+  r->zToName   = sqlite3_mprintf("%s", zToName   ? zToName   : "");
+  r->zFromSql  = sqlite3_mprintf("%s", zFromSql  ? zFromSql  : "");
+  r->zToSql    = sqlite3_mprintf("%s", zToSql    ? zToSql    : "");
+  if( !r->zFromName || !r->zToName || !r->zFromSql || !r->zToSql ){
+    sqlite3_free(r->zFromName);
+    sqlite3_free(r->zToName);
+    sqlite3_free(r->zFromSql);
+    sqlite3_free(r->zToSql);
+    memset(r, 0, sizeof(*r));
+    return SQLITE_NOMEM;
   }
-  if( zToSql ){
-    r->zToSql = sqlite3_mprintf("%s", zToSql);
-    if( !r->zToSql ){
-      sqlite3_free(r->zName);
-      sqlite3_free(r->zFromSql);
-      memset(r, 0, sizeof(*r));
-      return SQLITE_NOMEM;
-    }
-  }
-  r->zDiffType = zDiffType;
   pCur->nRows++;
   return SQLITE_OK;
 }
@@ -269,29 +262,31 @@ static int computeSchemaDiff(
 ){
   int i;
 
-  
+  /* Added or modified: walk the to-side and look for matches in from. */
   for(i=0; i<nTo; i++){
     SchemaEntry *fromEntry = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
 
     if( !fromEntry ){
-      int rc = appendSchemaDiffRow(pCur, aTo[i].zName, 0,
-                                   aTo[i].zSql ? aTo[i].zSql : "", "added");
+      /* Added: from_table_name and from_create_statement are empty. */
+      int rc = appendSchemaDiffRow(pCur, "", aTo[i].zName,
+                                   "", aTo[i].zSql);
       if( rc!=SQLITE_OK ) return rc;
     }else if( fromEntry->zSql && aTo[i].zSql
            && strcmp(fromEntry->zSql, aTo[i].zSql)!=0 ){
-      int rc = appendSchemaDiffRow(pCur, aTo[i].zName, fromEntry->zSql,
-                                   aTo[i].zSql, "modified");
+      /* Modified: both names equal, both SQL strings present. */
+      int rc = appendSchemaDiffRow(pCur, aTo[i].zName, aTo[i].zName,
+                                   fromEntry->zSql, aTo[i].zSql);
       if( rc!=SQLITE_OK ) return rc;
     }
   }
 
-  
+  /* Dropped: walk the from-side and emit anything missing on the to-side. */
   for(i=0; i<nFrom; i++){
     SchemaEntry *toEntry = findSchemaEntry(aTo, nTo, aFrom[i].zName);
     if( !toEntry ){
-      int rc = appendSchemaDiffRow(pCur, aFrom[i].zName,
-                                   aFrom[i].zSql ? aFrom[i].zSql : "",
-                                   0, "dropped");
+      /* Dropped: to_table_name and to_create_statement are empty. */
+      int rc = appendSchemaDiffRow(pCur, aFrom[i].zName, "",
+                                   aFrom[i].zSql, "");
       if( rc!=SQLITE_OK ) return rc;
     }
   }
@@ -301,12 +296,13 @@ static int computeSchemaDiff(
 
 static const char *sdSchema =
   "CREATE TABLE x("
-  "  table_name TEXT,"
-  "  from_create_stmt TEXT,"
-  "  to_create_stmt TEXT,"
-  "  diff_type TEXT,"
+  "  from_table_name TEXT,"
+  "  to_table_name TEXT,"
+  "  from_create_statement TEXT,"
+  "  to_create_statement TEXT,"
   "  from_ref TEXT HIDDEN,"
-  "  to_ref TEXT HIDDEN"
+  "  to_ref TEXT HIDDEN,"
+  "  table_name TEXT HIDDEN"      /* 3rd positional arg: filter to a single table */
   ")";
 
 static int sdConnect(sqlite3 *db, void *pAux, int argc,
@@ -326,7 +322,7 @@ static int sdConnect(sqlite3 *db, void *pAux, int argc,
 static int sdDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
 
 static int sdBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
-  int iFrom = -1, iTo = -1;
+  int iFrom = -1, iTo = -1, iTbl = -1;
   int i, argvIdx = 1;
   (void)pVtab;
 
@@ -335,7 +331,8 @@ static int sdBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     switch( pInfo->aConstraint[i].iColumn ){
       case 4: iFrom = i; break;
-      case 5: iTo = i; break;
+      case 5: iTo   = i; break;
+      case 6: iTbl  = i; break;
     }
   }
 
@@ -347,8 +344,12 @@ static int sdBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iTo].argvIndex = argvIdx++;
     pInfo->aConstraintUsage[iTo].omit = 1;
   }
+  if( iTbl>=0 ){
+    pInfo->aConstraintUsage[iTbl].argvIndex = argvIdx++;
+    pInfo->aConstraintUsage[iTbl].omit = 1;
+  }
 
-  pInfo->idxNum = (iFrom>=0 ? 1 : 0) | (iTo>=0 ? 2 : 0);
+  pInfo->idxNum = (iFrom>=0 ? 1 : 0) | (iTo>=0 ? 2 : 0) | (iTbl>=0 ? 4 : 0);
   pInfo->estimatedCost = 1000.0;
   return SQLITE_OK;
 }
@@ -401,9 +402,12 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
   }
 
-  
   {
     const char *zTableFilter = 0;
+    /* 3rd positional arg (or WHERE table_name='...') = single-table filter. */
+    if( (idxNum & 4) && argIdx<argc ){
+      zTableFilter = (const char*)sqlite3_value_text(argv[argIdx++]);
+    }
     if( zFromRef && !zToRef ){
       ProllyHash testHash;
       rc = doltliteResolveRef(db,zFromRef, &testHash);
@@ -462,11 +466,18 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     if( zTableFilter ){
       int j, k=0;
       for(j=0; j<c->nRows; j++){
-        if( c->aRows[j].zName && strcmp(c->aRows[j].zName, zTableFilter)==0 ){
+        /* Match on either side — added rows have empty zFromName,
+        ** dropped rows have empty zToName, modified rows have both
+        ** equal. Checking either is enough. */
+        const char *zRowName = c->aRows[j].zToName && c->aRows[j].zToName[0]
+                                ? c->aRows[j].zToName
+                                : c->aRows[j].zFromName;
+        if( zRowName && strcmp(zRowName, zTableFilter)==0 ){
           if( k!=j ) c->aRows[k] = c->aRows[j];
           k++;
         }else{
-          sqlite3_free(c->aRows[j].zName);
+          sqlite3_free(c->aRows[j].zFromName);
+          sqlite3_free(c->aRows[j].zToName);
           sqlite3_free(c->aRows[j].zFromSql);
           sqlite3_free(c->aRows[j].zToSql);
         }
@@ -488,17 +499,14 @@ static int sdEof(sqlite3_vtab_cursor *cur){ return ((SdCursor*)cur)->iRow >= ((S
 static int sdColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   SdCursor *c = (SdCursor*)cur;
   SchemaDiffRow *r = &c->aRows[c->iRow];
+  /* All four visible columns are emitted as text, never NULL — empty
+  ** string when the row's side of the from/to pair is missing. This
+  ** matches Dolt's dolt_schema_diff column shape. */
   switch( col ){
-    case 0: sqlite3_result_text(ctx, r->zName, -1, SQLITE_TRANSIENT); break;
-    case 1:
-      if(r->zFromSql) sqlite3_result_text(ctx, r->zFromSql, -1, SQLITE_TRANSIENT);
-      else sqlite3_result_null(ctx);
-      break;
-    case 2:
-      if(r->zToSql) sqlite3_result_text(ctx, r->zToSql, -1, SQLITE_TRANSIENT);
-      else sqlite3_result_null(ctx);
-      break;
-    case 3: sqlite3_result_text(ctx, r->zDiffType, -1, SQLITE_STATIC); break;
+    case 0: sqlite3_result_text(ctx, r->zFromName, -1, SQLITE_TRANSIENT); break;
+    case 1: sqlite3_result_text(ctx, r->zToName,   -1, SQLITE_TRANSIENT); break;
+    case 2: sqlite3_result_text(ctx, r->zFromSql,  -1, SQLITE_TRANSIENT); break;
+    case 3: sqlite3_result_text(ctx, r->zToSql,    -1, SQLITE_TRANSIENT); break;
   }
   return SQLITE_OK;
 }
