@@ -2847,8 +2847,14 @@ static int seedMutMapIterFromCursor(
     if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
       u8 *pSortKey = 0;
       int nSortKey = 0;
-      int rc = sortKeyFromRecord(pCur->pCachedPayload, pCur->nCachedPayload,
-                                 &pSortKey, &nSortKey);
+      int nMutKeyField = 0;
+      int rc;
+      if( pCur->pKeyInfo
+       && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
+        nMutKeyField = (int)pCur->pKeyInfo->nKeyField;
+      }
+      rc = sortKeyFromRecordPrefix(pCur->pCachedPayload, pCur->nCachedPayload,
+                                   nMutKeyField, &pSortKey, &nSortKey);
       if( rc!=SQLITE_OK ) return rc;
       prollyMutMapIterSeek(pIt, pCur->pMutMap, pSortKey, nSortKey, 0);
       sqlite3_free(pSortKey);
@@ -3524,14 +3530,25 @@ static int prollyBtCursorIndexMoveto(
     const u8 *mutKey = 0;
     int mutNKey = 0;
 
-    
+    /* Build the sort-key prefix used to seek the prolly tree. For unique
+    ** indexes (and the PK index of WITHOUT ROWID tables), nKeyField <
+    ** nAllField and the stored prolly key is the sort-key encoding of
+    ** only the leading nKeyField columns; encode the seek key the same
+    ** way so it matches. For non-unique indexes the entire record is
+    ** the prolly key, so we encode all columns. */
     u8 *pSerKey = 0;
     int nSerKey = 0;
     u8 *pSortKey = 0;
     int nSortKey = 0;
+    int nSeekKeyField = 0;
+    if( pCur->pKeyInfo
+     && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
+      nSeekKeyField = (int)pCur->pKeyInfo->nKeyField;
+    }
     rc = serializeUnpackedRecord(pIdxKey, &pSerKey, &nSerKey);
     if( rc!=SQLITE_OK ) return rc;
-    rc = sortKeyFromRecord(pSerKey, nSerKey, &pSortKey, &nSortKey);
+    rc = sortKeyFromRecordPrefix(pSerKey, nSerKey, nSeekKeyField,
+                                 &pSortKey, &nSortKey);
     if( rc!=SQLITE_OK ){
       sqlite3_free(pSerKey);
       return rc;
@@ -3961,20 +3978,50 @@ static int prollyBtCursorInsert(
                              pData, nData);
     sqlite3_free(pBuf);
   } else {
-    /* Index tables: the record is transformed into a sort key (a binary-
-    ** comparable encoding) and stored as the prolly tree KEY with an empty
-    ** value. The original record can be reconstructed from the sort key
-    ** via recordFromSortKey(). This allows prolly tree key comparison to
-    ** use simple memcmp instead of SQLite's complex record comparator. */
+    /* BLOBKEY storage. Two flavors of cursor land here:
+    **
+    ** (1) The PK index of a WITHOUT ROWID table (or any UNIQUE index).
+    **     KeyInfo has nKeyField < nAllField: the leading nKeyField
+    **     columns are unique, the trailing columns are non-key data
+    **     (table columns for the PK index, rowid/PK suffix for unique
+    **     indexes). For these we encode only the first nKeyField
+    **     columns as the prolly key and store the full original record
+    **     in the value side. Same prolly key on both sides of an UPDATE
+    **     means the diff walker classifies it as MODIFY rather than
+    **     DELETE+ADD. The full record in the value lets the read path
+    **     use it directly and skip recordFromSortKey().
+    **
+    ** (2) Non-UNIQUE indexes. KeyInfo has nKeyField == nAllField: the
+    **     entire entry (indexed columns plus rowid suffix) participates
+    **     in the uniqueness of the index entry. Two rows can share the
+    **     first nKeyField bytes (same indexed column value) and the
+    **     rowid suffix is what distinguishes them. For these we encode
+    **     the full record as the prolly key with an empty value side,
+    **     which is the existing behavior — modifications produce
+    **     different prolly keys and the diff correctly emits DELETE+ADD. */
     u8 *pSortKey = 0;
     int nSortKey = 0;
-    rc = sortKeyFromRecord((const u8*)pPayload->pKey,
-                           (int)pPayload->nKey,
-                           &pSortKey, &nSortKey);
+    int nKeyField = 0;
+    int splitKey = 0;
+    if( pCur->pKeyInfo
+     && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
+      nKeyField = (int)pCur->pKeyInfo->nKeyField;
+      splitKey = 1;
+    }
+    rc = sortKeyFromRecordPrefix((const u8*)pPayload->pKey,
+                                 (int)pPayload->nKey,
+                                 splitKey ? nKeyField : 0,
+                                 &pSortKey, &nSortKey);
     if( rc==SQLITE_OK ){
-      rc = prollyMutMapInsert(pCur->pMutMap,
-                               pSortKey, nSortKey, 0,
-                               NULL, 0);
+      if( splitKey ){
+        rc = prollyMutMapInsert(pCur->pMutMap,
+                                 pSortKey, nSortKey, 0,
+                                 (const u8*)pPayload->pKey, (int)pPayload->nKey);
+      }else{
+        rc = prollyMutMapInsert(pCur->pMutMap,
+                                 pSortKey, nSortKey, 0,
+                                 NULL, 0);
+      }
       sqlite3_free(pSortKey);
     }
   }
@@ -4289,8 +4336,13 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         nSavedDelKey = e->nKey;
         hasSavedKey = 1;
       }else if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
-        rc = sortKeyFromRecord(pCur->pCachedPayload, pCur->nCachedPayload,
-                               &pSavedDelKey, &nSavedDelKey);
+        int nDelKeyField = 0;
+        if( pCur->pKeyInfo
+         && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
+          nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
+        }
+        rc = sortKeyFromRecordPrefix(pCur->pCachedPayload, pCur->nCachedPayload,
+                                     nDelKeyField, &pSavedDelKey, &nSavedDelKey);
         if( rc!=SQLITE_OK ) return rc;
         hasSavedKey = 1;
       }else if( prollyCursorIsValid(&pCur->pCur) ){

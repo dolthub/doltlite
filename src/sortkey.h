@@ -11,6 +11,19 @@
 
 int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut);
 
+/*
+** Encode the first nKeyField columns of pRec as a sort key. This is used
+** for the prolly tree key of WITHOUT ROWID table btrees, where the prolly
+** key needs to identify the row by its primary key columns only (so that
+** a row UPDATE that changes a non-PK column produces the same key on
+** both sides of a diff and can be classified as MODIFY rather than
+** DELETE+ADD). The remaining columns are stored in the prolly value side
+** by the caller. nKeyField=0 encodes the whole record (same as
+** sortKeyFromRecord).
+*/
+int sortKeyFromRecordPrefix(const u8 *pRec, int nRec, int nKeyField,
+                            u8 **ppOut, int *pnOut);
+
 int sortKeySize(const u8 *pRec, int nRec);
 
 int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut);

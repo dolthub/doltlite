@@ -7,12 +7,12 @@
 # single-table conflicts, multi-row conflicts, multi-table conflicts,
 # resolution with --ours / --theirs, partial resolution, and abort.
 #
-# IMPORTANT: every scenario uses INTEGER PRIMARY KEY for the same reason
-# documented in vc_oracle_merge_test.sh — doltlite stores rows by sqlite
-# auto-rowid which collides on independent inserts across branches when
-# the user's PK isn't the rowid alias. Pure conflict scenarios (modify
-# same row on both sides) work either way, but using INTEGER PRIMARY KEY
-# keeps the test setup symmetric with the merge oracle.
+# Scenarios mostly use INTEGER PRIMARY KEY because conflict scenarios
+# modify the SAME row on both sides — the rowid-vs-PK distinction
+# doesn't matter for that case. The doltlite storage layer now keys
+# all user tables by their primary key columns, so non-INTEGER PK
+# shapes also produce correct conflict semantics; the merge oracle
+# exercises those.
 #
 # IMPORTANT: Dolt's autocommit mode rolls back the transaction when a
 # merge produces a conflict, so dolt_conflicts is empty by default. The
