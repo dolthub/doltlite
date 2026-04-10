@@ -20,6 +20,8 @@
 **   ./doltlite_regression_test_c clone_persist_failure
 **   ./doltlite_regression_test_c resolve_ref_non_commit
 **   ./doltlite_regression_test_c commit_parent_limit
+**   ./doltlite_regression_test_c merge_persist_failure
+**   ./doltlite_regression_test_c cherry_pick_stale_branch
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -908,6 +910,90 @@ static void run_commit_parent_limit(void){
   sqlite3_free(pBlob);
 }
 
+static void run_merge_persist_failure(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Merge Persist Failure Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_merge_persist_failure");
+  remove_db(dbpath);
+
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+  check("register_fail_vfs_for_merge", registerFailVfs()==SQLITE_OK);
+  check("open_fail_db", open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_ff_merge_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_checkout('feature');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'feature work');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+
+  gFailHits = 0;
+  gFailSyncOnce = 1;
+  res = exec1(db, "SELECT dolt_merge('feature')");
+  check("merge_failure_was_injected", gFailHits>0);
+  check("merge_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
+  check("merge_restores_branch_name",
+    strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_cherry_pick_stale_branch(void){
+  sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
+  sqlite3 *db3 = 0;
+  char dbpath[256];
+  char sql[256];
+  char featHash[128];
+  const char *res;
+
+  printf("=== Cherry-pick Stale Branch Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_cherry_pick_stale_branch");
+  remove_db(dbpath);
+
+  check("open_db1", open_db(dbpath, &db1)==SQLITE_OK);
+  check("setup_init", execsql(db1,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_checkout('feature');"
+    "INSERT INTO t VALUES(2,'feat');"
+    "SELECT dolt_commit('-A', '-m', 'feature work');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+
+  snprintf(featHash, sizeof(featHash), "%s",
+           exec1(db1, "SELECT hash FROM dolt_branches WHERE name='feature'"));
+
+  check("open_db2", open_db(dbpath, &db2)==SQLITE_OK);
+  check("db2_sees_old_main",
+    strcmp(exec1(db2, "SELECT count(*) FROM t"), "1")==0);
+
+  check("advance_main_in_db1", execsql(db1,
+    "INSERT INTO t VALUES(3,'main');"
+    "SELECT dolt_commit('-A', '-m', 'main work');")==SQLITE_OK);
+
+  snprintf(sql, sizeof(sql), "SELECT dolt_cherry_pick('%s')", featHash);
+  res = exec1(db2, sql);
+  check("stale_cherry_pick_returns_error", strstr(res, "ERROR:")!=0);
+
+  check("open_db3", open_db(dbpath, &db3)==SQLITE_OK);
+  check("stale_cherry_pick_does_not_persist_feature_row",
+    strcmp(exec1(db3, "SELECT count(*) FROM t"), "2")==0);
+
+  sqlite3_close(db3);
+  sqlite3_close(db2);
+  sqlite3_close(db1);
+  remove_db(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -922,7 +1008,9 @@ static const RegressionCase aCases[] = {
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },
   { "clone_persist_failure", "Clone Persist Failure Test", run_clone_persist_failure },
   { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },
-  { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit }
+  { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
+  { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
+  { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch }
 };
 
 static int run_case_by_name(const char *zName){
