@@ -131,7 +131,7 @@ static int ancestorBfsCollect(
     if( rc!=SQLITE_OK ) break;
     memset(&commit, 0, sizeof(commit));
     rc = loadCommitByHash(db, &current, &commit);
-    if( rc!=SQLITE_OK ){ rc = SQLITE_OK; continue; } 
+    if( rc!=SQLITE_OK ) break;
     for(i=0; i<commit.nParents; i++){
       if( qTail >= qAlloc ){
         ProllyHash *q2;
@@ -200,7 +200,13 @@ int doltliteFindAncestor(
       current = queue[qHead++];
       if( prollyHashIsEmpty(&current) ) continue;
       if( hashSetContains(&visited, &current) ) continue;
-      hashSetInsert(&visited, &current);
+      rc = hashSetInsert(&visited, &current);
+      if( rc!=SQLITE_OK ){
+        hashSetFree(&visited);
+        sqlite3_free(queue);
+        hashSetFree(&ancestors);
+        return rc;
+      }
       if( hashSetContains(&ancestors, &current) ){
         *pAncestor = current;
         hashSetFree(&visited);
@@ -210,7 +216,12 @@ int doltliteFindAncestor(
       }
       memset(&commit, 0, sizeof(commit));
       rc = loadCommitByHash(db, &current, &commit);
-      if( rc!=SQLITE_OK ){ rc = SQLITE_OK; continue; }
+      if( rc!=SQLITE_OK ){
+        hashSetFree(&visited);
+        sqlite3_free(queue);
+        hashSetFree(&ancestors);
+        return rc;
+      }
       for(i=0; i<commit.nParents; i++){
         if( qTail >= qAlloc ){
           ProllyHash *q2;

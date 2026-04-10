@@ -15,6 +15,7 @@
 **   ./doltlite_regression_test_c status_error_propagation
 **   ./doltlite_regression_test_c remote_refs_corruption
 **   ./doltlite_regression_test_c chunk_walk_corruption
+**   ./doltlite_regression_test_c ancestor_missing_start
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +25,7 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include "doltlite_chunk_walk.h"
+#include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
 
 typedef unsigned char u8;
@@ -446,8 +448,8 @@ static void run_checkout_persist_failure(void){
   res = exec1(db1, "SELECT dolt_checkout('feature')");
   check("persist_failure_was_injected", gFailHits>0);
   check("checkout_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
-  check("session_branch_already_switched_before_error",
-    strcmp(exec1(db1, "SELECT active_branch()"), "feature")==0);
+  check("session_branch_restored_after_error",
+    strcmp(exec1(db1, "SELECT active_branch()"), "main")==0);
 
   sqlite3_close(db1);
   remove_db(dbpath);
@@ -722,6 +724,33 @@ static void run_chunk_walk_corruption(void){
   check("truncated_catalog_is_corrupt", rc==SQLITE_CORRUPT);
 }
 
+static void run_ancestor_missing_start(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  ProllyHash badHash;
+  ProllyHash headHash;
+  ProllyHash ancestor;
+  int rc;
+
+  printf("=== Ancestor Missing Start Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_ancestor_missing_start");
+  remove_db(dbpath);
+
+  check("open_db", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  doltliteGetSessionHead(db, &headHash);
+  memset(&badHash, 0x5a, sizeof(badHash));
+  rc = doltliteFindAncestor(db, &badHash, &headHash, &ancestor);
+  check("missing_start_commit_returns_notfound", rc==SQLITE_NOTFOUND);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -731,7 +760,8 @@ static const RegressionCase aCases[] = {
   { "conflicts_blob_corruption", "Conflicts Blob Corruption Test", run_conflicts_blob_corruption },
   { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
-  { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption }
+  { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
+  { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start }
 };
 
 static int run_case_by_name(const char *zName){

@@ -23,6 +23,21 @@ struct BranchMutationCtx {
   int isDelete;
 };
 
+static void branchResultError(
+  sqlite3_context *ctx,
+  int rc,
+  const char *zNotFound,
+  const char *zExists
+){
+  if( rc==SQLITE_NOTFOUND ){
+    sqlite3_result_error(ctx, zNotFound, -1);
+  }else if( rc==SQLITE_ERROR && zExists ){
+    sqlite3_result_error(ctx, zExists, -1);
+  }else{
+    sqlite3_result_error(ctx, sqlite3_errstr(rc), -1);
+  }
+}
+
 static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMutationCtx *p = (BranchMutationCtx*)pArg;
   int rc;
@@ -65,7 +80,10 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     m.zName = zName;
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateBranchRef, &m);
-    if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch not found", -1); return; }
+    if( rc!=SQLITE_OK ){
+      branchResultError(ctx, rc, "branch not found", 0);
+      return;
+    }
   }else{
     doltliteGetSessionHead(db, &m.head);
     if( prollyHashIsEmpty(&m.head) ){
@@ -74,7 +92,10 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     }
     m.zName = arg0;
     rc = doltliteMutateRefs(db, mutateBranchRef, &m);
-    if( rc!=SQLITE_OK ){ sqlite3_result_error(ctx, "branch already exists", -1); return; }
+    if( rc!=SQLITE_OK ){
+      branchResultError(ctx, rc, "branch not found", "branch already exists");
+      return;
+    }
   }
 
   sqlite3_result_int(ctx, 0);
@@ -129,12 +150,29 @@ typedef struct CheckoutMutationCtx CheckoutMutationCtx;
 struct CheckoutMutationCtx {
   const char *zTargetBranch;
   const char *zCurrentBranch;
+  ProllyHash savedSessionHead;
+  ProllyHash savedSessionStaged;
+  ProllyHash savedMergeCommit;
+  ProllyHash savedConflictsCatalog;
   ProllyHash oldCatHash;
   ProllyHash oldCommitHash;
   ProllyHash targetCommit;
   ProllyHash targetCatHash;
+  u8 savedIsMerging;
   int haveOldState;
 };
+
+static void checkoutRestoreSession(sqlite3 *db, CheckoutMutationCtx *p){
+  doltliteSetSessionBranch(db, p->zCurrentBranch);
+  doltliteSetSessionHead(db, &p->savedSessionHead);
+  doltliteSetSessionStaged(db, &p->savedSessionStaged);
+  doltliteSetSessionMergeState(db, p->savedIsMerging,
+                               &p->savedMergeCommit,
+                               &p->savedConflictsCatalog);
+  if( p->haveOldState ){
+    doltliteSwitchCatalog(db, &p->oldCatHash);
+  }
+}
 
 static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
@@ -171,11 +209,18 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( p->haveOldState ){
     rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
                                           &p->oldCatHash, &p->oldCommitHash);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      checkoutRestoreSession(db, p);
+      return rc;
+    }
   }
 
-  return doltliteUpdateBranchWorkingState(db, p->zTargetBranch,
-                                          &p->targetCatHash, &p->targetCommit);
+  rc = doltliteUpdateBranchWorkingState(db, p->zTargetBranch,
+                                        &p->targetCatHash, &p->targetCommit);
+  if( rc!=SQLITE_OK ){
+    checkoutRestoreSession(db, p);
+  }
+  return rc;
 }
 
 static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -254,10 +299,18 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     }
     m.haveOldState = 1;
   }
+  doltliteGetSessionHead(db, &m.savedSessionHead);
+  doltliteGetSessionStaged(db, &m.savedSessionStaged);
+  doltliteGetSessionMergeState(db, &m.savedIsMerging,
+                               &m.savedMergeCommit,
+                               &m.savedConflictsCatalog);
 
   m.zTargetBranch = zBranch;
   m.zCurrentBranch = zCurrentBranch;
   rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
+  if( rc!=SQLITE_OK ){
+    checkoutRestoreSession(db, &m);
+  }
   sqlite3_free(zCurrentBranch);
   if( rc==SQLITE_NOTFOUND ){
     sqlite3_result_error(ctx, "branch not found", -1);

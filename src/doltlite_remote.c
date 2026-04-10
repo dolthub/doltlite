@@ -234,15 +234,21 @@ static int fsCommit(DoltliteRemote *pRemote){
     ProllyHash branchCommit;
     if( zDef && chunkStoreFindBranch(&p->store, zDef, &branchCommit)==SQLITE_OK ){
       u8 *cdata = 0; int ncdata = 0;
-      if( chunkStoreGet(&p->store, &branchCommit, &cdata, &ncdata)==SQLITE_OK && cdata ){
+      rc = chunkStoreGet(&p->store, &branchCommit, &cdata, &ncdata);
+      if( rc!=SQLITE_OK ) return rc;
+      if( cdata ){
         DoltliteCommit commit;
-        if( doltliteCommitDeserialize(cdata, ncdata, &commit)==SQLITE_OK ){
-          chunkStoreWriteBranchWorkingCatalog(&p->store, zDef, &commit.catalogHash, NULL);
+        rc = doltliteCommitDeserialize(cdata, ncdata, &commit);
+        if( rc==SQLITE_OK ){
+          rc = chunkStoreWriteBranchWorkingCatalog(&p->store, zDef,
+                                                   &commit.catalogHash, NULL);
           doltliteCommitClear(&commit);
         }
         sqlite3_free(cdata);
+        if( rc!=SQLITE_OK ) return rc;
       }
-      chunkStoreCommit(&p->store);  
+      rc = chunkStoreCommit(&p->store);
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
 
