@@ -138,6 +138,10 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded);
 
 static int csReplayWalRegion(ChunkStore *cs, int updateManifest);
 static int csReplayWal(ChunkStore *cs){ return csReplayWalRegion(cs, 1); }
+static void csFreeRefsState(ChunkStore *cs);
+static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData);
+static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc);
+static int csReloadFromDisk(ChunkStore *cs);
 
 #define CS_WAL_TAG_CHUNK  0x01
 #define CS_WAL_TAG_ROOT   0x02
@@ -191,6 +195,14 @@ static void csFreeTracking(ChunkStore *cs){
   sqlite3_free(cs->aTracking);
   cs->aTracking = 0;
   cs->nTracking = 0;
+}
+static void csFreeRefsState(ChunkStore *cs){
+  csFreeBranches(cs);
+  csFreeTags(cs);
+  csFreeRemotes(cs);
+  csFreeTracking(cs);
+  sqlite3_free(cs->zDefaultBranch);
+  cs->zDefaultBranch = 0;
 }
 
 #define CS_INIT_INDEX_ALLOC   64
@@ -483,6 +495,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   i64 walSize;
   u8 *walData;
   i64 pos;
+  int nRootedPending = cs->nPending;
 
   if( cs->iWalOffset <= 0 || !cs->pFile ) return SQLITE_OK;
 
@@ -559,11 +572,14 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         }
       }
       pos += CHUNK_MANIFEST_SIZE;
+      nRootedPending = cs->nPending;
 
     } else {
       break;
     }
   }
+
+  cs->nPending = nRootedPending;
 
   if( cs->nPending > 0 ){
     ChunkIndexEntry *aMerged = 0;
@@ -1343,12 +1359,43 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   return SQLITE_OK;
 }
 
+static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData){
+  memset(pTmp, 0, sizeof(*pTmp));
+  return csDeserializeRefs(pTmp, data, nData);
+}
+
+static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
+  pDst->aBranches = pSrc->aBranches;
+  pDst->nBranches = pSrc->nBranches;
+  pDst->zDefaultBranch = pSrc->zDefaultBranch;
+  pDst->aTags = pSrc->aTags;
+  pDst->nTags = pSrc->nTags;
+  pDst->aRemotes = pSrc->aRemotes;
+  pDst->nRemotes = pSrc->nRemotes;
+  pDst->aTracking = pSrc->aTracking;
+  pDst->nTracking = pSrc->nTracking;
+
+  pSrc->aBranches = 0;
+  pSrc->nBranches = 0;
+  pSrc->zDefaultBranch = 0;
+  pSrc->aTags = 0;
+  pSrc->nTags = 0;
+  pSrc->aRemotes = 0;
+  pSrc->nRemotes = 0;
+  pSrc->aTracking = 0;
+  pSrc->nTracking = 0;
+}
+
 int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
-  csFreeBranches(cs);
-  csFreeTags(cs);
-  csFreeRemotes(cs);
-  csFreeTracking(cs);
-  return csDeserializeRefs(cs, data, nData);
+  ChunkStore tmp;
+  int rc = csDeserializeRefsIntoTemp(&tmp, data, nData);
+  if( rc!=SQLITE_OK ){
+    csFreeRefsState(&tmp);
+    return rc;
+  }
+  csFreeRefsState(cs);
+  csAdoptRefsState(cs, &tmp);
+  return SQLITE_OK;
 }
 
 int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
@@ -1542,6 +1589,11 @@ static int csCommitToFile(ChunkStore *cs){
   i64 writeOff;
   int lockFd = -1;
   int hadFile = (cs->pFile != 0);
+  i64 newWalSize = cs->nWalData;
+  u8 *pNewWalData = 0;
+  ChunkIndexEntry *aCommittedPending = 0;
+  ChunkIndexEntry *aMerged = 0;
+  int nMerged = 0;
 
   if( cs->pFile == 0 ){
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
@@ -1565,16 +1617,60 @@ static int csCommitToFile(ChunkStore *cs){
 
   /* Detect concurrent writer: if file grew, re-read WAL to pick up new chunks. */
   if( fileSize > cs->iFileSize && hadFile ){
-    sqlite3_free(cs->pWalData);
-    cs->pWalData = 0;
-    cs->nWalData = 0;
-    {
-      int savePending = cs->nPending;
-      cs->nPending = 0;
-      csPendHTClear(cs);
-      csReplayWalRegion(cs, 1);
-      cs->nPending = savePending;
+    rc = csReloadFromDisk(cs);
+    if( rc != SQLITE_OK ) goto commit_done;
+    fileSize = cs->iFileSize;
+  }
+
+  if( cs->nPending > 0 ){
+    ChunkStore mergeView;
+    i64 walPos = cs->nWalData;
+    i64 appendBytes = 0;
+
+    for( i = 0; i < cs->nPending; i++ ){
+      if( appendBytes > LARGEST_INT64 - cs->aPending[i].size ){
+        rc = SQLITE_TOOBIG;
+        goto commit_done;
+      }
+      appendBytes += cs->aPending[i].size;
     }
+    if( cs->nWalData > LARGEST_INT64 - appendBytes ){
+      rc = SQLITE_TOOBIG;
+      goto commit_done;
+    }
+    newWalSize = cs->nWalData + appendBytes;
+    if( newWalSize > 0 ){
+      pNewWalData = (u8*)sqlite3_malloc64(newWalSize);
+      if( !pNewWalData ){
+        rc = SQLITE_NOMEM;
+        goto commit_done;
+      }
+      if( cs->nWalData > 0 ){
+        memcpy(pNewWalData, cs->pWalData, cs->nWalData);
+      }
+    }
+
+    aCommittedPending = (ChunkIndexEntry*)sqlite3_malloc(
+      cs->nPending * (int)sizeof(ChunkIndexEntry)
+    );
+    if( !aCommittedPending ){
+      rc = SQLITE_NOMEM;
+      goto commit_done;
+    }
+
+    for( i = 0; i < cs->nPending; i++ ){
+      ChunkIndexEntry *pSrc = &cs->aPending[i];
+      aCommittedPending[i] = *pSrc;
+      aCommittedPending[i].offset = csEncodeWalOffset(walPos);
+      memcpy(pNewWalData + walPos, cs->pWriteBuf + pSrc->offset + 4, pSrc->size);
+      walPos += pSrc->size;
+    }
+
+    mergeView = *cs;
+    mergeView.aPending = aCommittedPending;
+    mergeView.nPending = cs->nPending;
+    rc = csMergeIndex(&mergeView, &aMerged, &nMerged);
+    if( rc!=SQLITE_OK ) goto commit_done;
   }
 
   if( fileSize == 0 ){
@@ -1635,38 +1731,25 @@ static int csCommitToFile(ChunkStore *cs){
 commit_done:
   csFileUnlock(lockFd);
 
-  if( rc != SQLITE_OK ) return rc;
-
-  /* Move pending chunks into the WAL data cache with encoded offsets. */
-  for( i = 0; i < cs->nPending; i++ ){
-    ChunkIndexEntry *pe = &cs->aPending[i];
-    i64 bufOff = pe->offset + 4;
-    int sz = pe->size;
-
-    i64 newSize = cs->nWalData + sz;
-    u8 *newBuf = (u8*)sqlite3_realloc64(cs->pWalData, newSize);
-    if( newBuf ){
-      memcpy(newBuf + cs->nWalData, cs->pWriteBuf + bufOff, sz);
-      pe->offset = csEncodeWalOffset(cs->nWalData);
-      cs->pWalData = newBuf;
-      cs->nWalData = newSize;
-    } else {
-      return SQLITE_NOMEM;
-    }
+  if( rc != SQLITE_OK ){
+    sqlite3_free(aCommittedPending);
+    sqlite3_free(aMerged);
+    sqlite3_free(pNewWalData);
+    return rc;
   }
 
-  {
-    ChunkIndexEntry *aMerged = 0;
-    int nMerged = 0;
-    rc = csMergeIndex(cs, &aMerged, &nMerged);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(aMerged);
-      return rc;
-    }
+  sqlite3_free(aCommittedPending);
+  if( cs->nPending > 0 ){
     sqlite3_free(cs->aIndex);
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
     cs->nIndexAlloc = nMerged;
+    sqlite3_free(cs->pWalData);
+    cs->pWalData = pNewWalData;
+    cs->nWalData = newWalSize;
+  }else{
+    sqlite3_free(aMerged);
+    sqlite3_free(pNewWalData);
   }
 
   sqlite3_free(cs->pWriteBuf);
@@ -1724,6 +1807,7 @@ void chunkStoreClearRefs(ChunkStore *cs){
 int chunkStoreReloadRefs(ChunkStore *cs){
   u8 *refsData = 0;
   int nRefsData = 0;
+  ChunkStore tmp;
   int rc;
 
   if( prollyHashIsEmpty(&cs->refsHash) ) return SQLITE_OK;
@@ -1731,14 +1815,16 @@ int chunkStoreReloadRefs(ChunkStore *cs){
   rc = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
 
-  csFreeBranches(cs);
-  csFreeTags(cs);
-  csFreeRemotes(cs);
-  csFreeTracking(cs);
-
-  rc = csDeserializeRefs(cs, refsData, nRefsData);
+  rc = csDeserializeRefsIntoTemp(&tmp, refsData, nRefsData);
   sqlite3_free(refsData);
-  return rc;
+  if( rc!=SQLITE_OK ){
+    csFreeRefsState(&tmp);
+    return rc;
+  }
+
+  csFreeRefsState(cs);
+  csAdoptRefsState(cs, &tmp);
+  return SQLITE_OK;
 }
 
 const char *chunkStoreFilename(ChunkStore *cs){
@@ -1807,71 +1893,90 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     i64 fileSize = 0;
     rc = sqlite3OsFileSize(cs->pFile, &fileSize);
     if( rc!=SQLITE_OK ) return rc;
-    if( fileSize > cs->iFileSize ){
-      /* File grew from another writer; re-read WAL to pick up new chunks.
-      ** Must also clear WAL-offset entries from the index because committed
-      ** chunks were appended as raw data to pWalData (at positions that won't
-      ** match the on-disk WAL format after re-read). Keeping the on-disk
-      ** sorted index entries is safe since their file offsets don't change. */
-      sqlite3_free(cs->pWalData);
-      cs->pWalData = 0;
-      cs->nWalData = 0;
-      cs->nPending = 0;
-      csPendHTClear(cs);
-      /* Remove WAL-offset entries from aIndex (keep file-offset entries). */
-      {
-        int rd, wr;
-        for(rd=0, wr=0; rd<cs->nIndex; rd++){
-          if( !csIsWalOffset(cs->aIndex[rd].offset) ){
-            if( wr!=rd ) cs->aIndex[wr] = cs->aIndex[rd];
-            wr++;
-          }
-        }
-        cs->nIndex = wr;
-      }
-      rc = csReplayWal(cs);
-      if( rc!=SQLITE_OK ) return rc;
-      cs->iFileSize = fileSize;
-      *pChanged = 1;
-    }
-    return SQLITE_OK;
+    if( fileSize <= cs->iFileSize ) return SQLITE_OK;
   }
 
-  /* File was moved/replaced (e.g., by GC). Reopen and reload everything. */
-  csCloseFile(cs->pFile);
-  cs->pFile = 0;
-  sqlite3_free(cs->aIndex);
-  cs->aIndex = 0; cs->nIndex = 0; cs->nIndexAlloc = 0;
-  sqlite3_free(cs->pWalData);
-  cs->pWalData = 0; cs->nWalData = 0;
-  csFreeBranches(cs);
-  csFreeTags(cs);
-  csFreeRemotes(cs);
-  csFreeTracking(cs);
-  sqlite3_free(cs->zDefaultBranch);
-  cs->zDefaultBranch = 0;
-  {
-    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-    rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile, openFlags);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  rc = csReadManifest(cs);
+  rc = csReloadFromDisk(cs);
   if( rc!=SQLITE_OK ) return rc;
-  rc = csReadIndex(cs);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = csReplayWal(cs);
-  if( rc!=SQLITE_OK ) return rc;
-  if( !prollyHashIsEmpty(&cs->refsHash) ){
-    u8 *refsData = 0; int nRefsData = 0;
-    rc = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
-    if( rc==SQLITE_OK ){
-      rc = csDeserializeRefs(cs, refsData, nRefsData);
-      sqlite3_free(refsData);
-    }
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  if( !cs->zDefaultBranch ) cs->zDefaultBranch = sqlite3_mprintf("main");
   *pChanged = 1;
+  return SQLITE_OK;
+}
+
+static int csReloadFromDisk(ChunkStore *cs){
+  ChunkStore tmp;
+  sqlite3_file *pOldFile = cs->pFile;
+  ChunkIndexEntry *aOldIndex = cs->aIndex;
+  u8 *pOldWalData = cs->pWalData;
+  char *zOldDefaultBranch = cs->zDefaultBranch;
+  struct BranchRef *aOldBranches = cs->aBranches;
+  struct TagRef *aOldTags = cs->aTags;
+  struct RemoteRef *aOldRemotes = cs->aRemotes;
+  struct TrackingBranch *aOldTracking = cs->aTracking;
+  int rc = chunkStoreOpen(&tmp, cs->pVfs, cs->zFilename,
+                          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  if( rc!=SQLITE_OK ) return rc;
+
+  cs->pFile = tmp.pFile;
+  cs->readOnly = tmp.readOnly;
+  cs->refsHash = tmp.refsHash;
+  cs->workingState = tmp.workingState;
+  cs->stagedCatalog = tmp.stagedCatalog;
+  cs->isMerging = tmp.isMerging;
+  cs->mergeCommitHash = tmp.mergeCommitHash;
+  cs->conflictsCatalogHash = tmp.conflictsCatalogHash;
+  cs->nChunks = tmp.nChunks;
+  cs->iIndexOffset = tmp.iIndexOffset;
+  cs->nIndexSize = tmp.nIndexSize;
+  cs->iWalOffset = tmp.iWalOffset;
+  cs->iFileSize = tmp.iFileSize;
+  cs->aIndex = tmp.aIndex;
+  cs->nIndex = tmp.nIndex;
+  cs->nIndexAlloc = tmp.nIndexAlloc;
+  cs->pWalData = tmp.pWalData;
+  cs->nWalData = tmp.nWalData;
+  cs->aBranches = tmp.aBranches;
+  cs->nBranches = tmp.nBranches;
+  cs->zDefaultBranch = tmp.zDefaultBranch;
+  cs->aTags = tmp.aTags;
+  cs->nTags = tmp.nTags;
+  cs->aRemotes = tmp.aRemotes;
+  cs->nRemotes = tmp.nRemotes;
+  cs->aTracking = tmp.aTracking;
+  cs->nTracking = tmp.nTracking;
+
+  tmp.pFile = 0;
+  tmp.aIndex = 0;
+  tmp.nIndex = 0;
+  tmp.nIndexAlloc = 0;
+  tmp.pWalData = 0;
+  tmp.nWalData = 0;
+  tmp.aBranches = 0;
+  tmp.nBranches = 0;
+  tmp.zDefaultBranch = 0;
+  tmp.aTags = 0;
+  tmp.nTags = 0;
+  tmp.aRemotes = 0;
+  tmp.nRemotes = 0;
+  tmp.aTracking = 0;
+  tmp.nTracking = 0;
+  chunkStoreClose(&tmp);
+
+  csCloseFile(pOldFile);
+  sqlite3_free(aOldIndex);
+  sqlite3_free(pOldWalData);
+  sqlite3_free(zOldDefaultBranch);
+  {
+    ChunkStore oldRefs;
+    memset(&oldRefs, 0, sizeof(oldRefs));
+    oldRefs.aBranches = aOldBranches;
+    oldRefs.aTags = aOldTags;
+    oldRefs.aRemotes = aOldRemotes;
+    oldRefs.aTracking = aOldTracking;
+    csFreeBranches(&oldRefs);
+    csFreeTags(&oldRefs);
+    csFreeRemotes(&oldRefs);
+    csFreeTracking(&oldRefs);
+  }
   return SQLITE_OK;
 }
 

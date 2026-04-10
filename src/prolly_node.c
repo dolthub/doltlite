@@ -30,6 +30,7 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   u32 totalKeyBytes;   
   u32 totalValBytes;   
   const u8 *pCur;
+  int i;
 
   memset(pNode, 0, sizeof(*pNode));
 
@@ -48,8 +49,14 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   pNode->nData = nData;
   pNode->level = pData[PROLLY_LEVEL_OFF];
   count = PROLLY_GET_U16(pData + PROLLY_COUNT_OFF);
+  if( count > PROLLY_NODE_MAX_ITEMS ){
+    return SQLITE_CORRUPT;
+  }
   pNode->nItems = count;
   pNode->flags = pData[PROLLY_FLAGS_OFF];
+  if( pNode->flags!=PROLLY_NODE_INTKEY && pNode->flags!=PROLLY_NODE_BLOBKEY ){
+    return SQLITE_CORRUPT;
+  }
 
   if( count==0 ){
     
@@ -85,6 +92,27 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   if( totalKeyBytes > (u32)nData || totalValBytes > (u32)nData
    || minSize + (int)totalKeyBytes + (int)totalValBytes != nData ){
     return SQLITE_CORRUPT;
+  }
+
+  for(i=0; i<=count; i++){
+    u32 keyOff = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
+    u32 valOff = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
+    if( keyOff > totalKeyBytes || valOff > totalValBytes ){
+      return SQLITE_CORRUPT;
+    }
+    if( i>0 ){
+      u32 prevKeyOff = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i-1]);
+      u32 prevValOff = PROLLY_GET_U32((const u8*)&pNode->aValOff[i-1]);
+      if( keyOff < prevKeyOff || valOff < prevValOff ){
+        return SQLITE_CORRUPT;
+      }
+      if( (pNode->flags & PROLLY_NODE_INTKEY) && keyOff - prevKeyOff != 8 ){
+        return SQLITE_CORRUPT;
+      }
+      if( pNode->level>0 && valOff - prevValOff != PROLLY_HASH_SIZE ){
+        return SQLITE_CORRUPT;
+      }
+    }
   }
 
   return SQLITE_OK;

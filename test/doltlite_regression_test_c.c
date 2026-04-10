@@ -25,6 +25,9 @@
 **   ./doltlite_regression_test_c branches_metadata_corruption
 **   ./doltlite_regression_test_c gc_rewrite_failure
 **   ./doltlite_regression_test_c record_decode_corruption
+**   ./doltlite_regression_test_c reload_refs_transactional
+**   ./doltlite_regression_test_c refresh_refs_corruption_preserves_state
+**   ./doltlite_regression_test_c prolly_node_corruption
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,6 +41,7 @@
 #include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
 #include "doltlite_record.h"
+#include "prolly_node.h"
 
 typedef unsigned char u8;
 typedef unsigned int Pgno;
@@ -1130,6 +1134,141 @@ static void run_record_decode_corruption(void){
   sqlite3_free(z);
 }
 
+static void run_reload_refs_transactional(void){
+  ChunkStore cs;
+  ProllyHash emptyHash;
+  ProllyHash badHash;
+  static const u8 badBlob[] = { 6, 0, 0, 0 };
+  int nBranchesBefore;
+  char *zDefaultBefore = 0;
+  char *zBranchBefore = 0;
+  int rc;
+
+  printf("=== Reload Refs Transactional Test ===\n\n");
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  check("open_mem_store",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("set_default_branch",
+        chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
+  check("add_branch",
+        chunkStoreAddBranch(&cs, "main", &emptyHash)==SQLITE_OK);
+  check("serialize_good_refs",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  nBranchesBefore = cs.nBranches;
+  zDefaultBefore = sqlite3_mprintf("%s", cs.zDefaultBranch ? cs.zDefaultBranch : "");
+  zBranchBefore = (cs.aBranches && cs.nBranches>0 && cs.aBranches[0].zName)
+                ? sqlite3_mprintf("%s", cs.aBranches[0].zName)
+                : sqlite3_mprintf("");
+
+  check("load_bad_refs_blob_as_chunk",
+        chunkStorePut(&cs, badBlob, (int)sizeof(badBlob), &badHash)==SQLITE_OK);
+
+  rc = chunkStoreLoadRefsFromBlob(&cs, badBlob, (int)sizeof(badBlob));
+  check("load_refs_blob_returns_corrupt", rc==SQLITE_CORRUPT);
+  check("load_refs_blob_preserves_default_branch",
+        cs.zDefaultBranch && strcmp(cs.zDefaultBranch, zDefaultBefore)==0);
+  check("load_refs_blob_preserves_branch_count", cs.nBranches==nBranchesBefore);
+  check("load_refs_blob_preserves_branch_name",
+        nBranchesBefore==0 ||
+        (cs.aBranches && cs.aBranches[0].zName
+         && strcmp(cs.aBranches[0].zName, zBranchBefore)==0));
+
+  memcpy(&cs.refsHash, &badHash, sizeof(badHash));
+  rc = chunkStoreReloadRefs(&cs);
+  check("reload_refs_returns_corrupt", rc==SQLITE_CORRUPT);
+  check("reload_refs_preserves_default_branch",
+        cs.zDefaultBranch && strcmp(cs.zDefaultBranch, zDefaultBefore)==0);
+  check("reload_refs_preserves_branch_count", cs.nBranches==nBranchesBefore);
+  check("reload_refs_preserves_branch_name",
+        nBranchesBefore==0 ||
+        (cs.aBranches && cs.aBranches[0].zName
+         && strcmp(cs.aBranches[0].zName, zBranchBefore)==0));
+
+  sqlite3_free(zDefaultBefore);
+  sqlite3_free(zBranchBefore);
+  chunkStoreClose(&cs);
+}
+
+static void run_refresh_refs_corruption_preserves_state(void){
+  sqlite3 *db = 0;
+  ChunkStore cs1;
+  ChunkStore cs2;
+  ProllyHash badHash;
+  static const u8 badBlob[] = { 6, 0, 0, 0 };
+  char dbpath[256];
+  int nBranchesBefore;
+  char *zDefaultBefore = 0;
+  char *zBranchBefore = 0;
+  int changed = -1;
+  int rc;
+
+  printf("=== Refresh Corrupt Refs State Preservation Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refresh_refs_preserves_state");
+  remove_db(dbpath);
+
+  check("open_db", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  check("open_store_1", chunkStoreOpen(&cs1, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  nBranchesBefore = cs1.nBranches;
+  zDefaultBefore = sqlite3_mprintf("%s", cs1.zDefaultBranch ? cs1.zDefaultBranch : "");
+  zBranchBefore = (cs1.aBranches && cs1.nBranches>0 && cs1.aBranches[0].zName)
+                ? sqlite3_mprintf("%s", cs1.aBranches[0].zName)
+                : sqlite3_mprintf("");
+
+  check("open_store_2", chunkStoreOpen(&cs2, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("lock_store_2", chunkStoreLockAndRefresh(&cs2)==SQLITE_OK);
+  check("put_bad_refs_chunk",
+        chunkStorePut(&cs2, badBlob, (int)sizeof(badBlob), &badHash)==SQLITE_OK);
+  memcpy(&cs2.refsHash, &badHash, sizeof(badHash));
+  check("commit_bad_refs_hash", chunkStoreCommit(&cs2)==SQLITE_OK);
+  chunkStoreUnlock(&cs2);
+  chunkStoreClose(&cs2);
+
+  rc = chunkStoreRefreshIfChanged(&cs1, &changed);
+  check("refresh_returns_error_for_corrupt_refs", rc==SQLITE_CORRUPT);
+  check("refresh_does_not_mark_changed", changed==0);
+  check("refresh_preserves_default_branch",
+        cs1.zDefaultBranch && strcmp(cs1.zDefaultBranch, zDefaultBefore)==0);
+  check("refresh_preserves_branch_count", cs1.nBranches==nBranchesBefore);
+  check("refresh_preserves_branch_name",
+        nBranchesBefore==0 ||
+        (cs1.aBranches && cs1.aBranches[0].zName
+         && strcmp(cs1.aBranches[0].zName, zBranchBefore)==0));
+
+  sqlite3_free(zDefaultBefore);
+  sqlite3_free(zBranchBefore);
+  chunkStoreClose(&cs1);
+  remove_db(dbpath);
+}
+
+static void run_prolly_node_corruption(void){
+  static const u8 badIntKeyNode[] = {
+    'D','O','N','P',
+    0,
+    1, 0,
+    PROLLY_NODE_INTKEY,
+    0,0,0,0,
+    7,0,0,0,
+    0,0,0,0,
+    1,0,0,0,
+    1,2,3,4,5,6,7,
+    0x2a
+  };
+  ProllyNode node;
+
+  printf("=== Prolly Node Corruption Test ===\n\n");
+  check("intkey_width_corruption_is_rejected",
+        prollyNodeParse(&node, badIntKeyNode, (int)sizeof(badIntKeyNode))==SQLITE_CORRUPT);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -1149,7 +1288,10 @@ static const RegressionCase aCases[] = {
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },
   { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },
-  { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption }
+  { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption },
+  { "reload_refs_transactional", "Reload Refs Transactional Test", run_reload_refs_transactional },
+  { "refresh_refs_corruption_preserves_state", "Refresh Corrupt Refs State Preservation Test", run_refresh_refs_corruption_preserves_state },
+  { "prolly_node_corruption", "Prolly Node Corruption Test", run_prolly_node_corruption }
 };
 
 static int run_case_by_name(const char *zName){
