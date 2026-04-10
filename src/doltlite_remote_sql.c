@@ -16,6 +16,80 @@ struct RemoteMutationCtx {
   int isDelete;
 };
 
+typedef struct RemoteSqlState RemoteSqlState;
+struct RemoteSqlState {
+  u8 *pRefsBlob;
+  int nRefsBlob;
+  ProllyHash refsHash;
+  char *zSessionBranch;
+  ProllyHash sessionHead;
+  ProllyHash sessionStaged;
+  ProllyHash sessionMergeCommit;
+  ProllyHash sessionConflictsCatalog;
+  ProllyHash sessionCatalogHash;
+  u8 sessionIsMerging;
+};
+
+static void remoteSqlStateClear(RemoteSqlState *p){
+  sqlite3_free(p->pRefsBlob);
+  sqlite3_free(p->zSessionBranch);
+  memset(p, 0, sizeof(*p));
+}
+
+static int remoteSqlStateSave(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
+  u8 *pCatalog = 0;
+  int nCatalog = 0;
+  int rc;
+
+  memset(p, 0, sizeof(*p));
+
+  rc = chunkStoreSerializeRefsToBlob(cs, &p->pRefsBlob, &p->nRefsBlob);
+  if( rc!=SQLITE_OK ) return rc;
+  memcpy(&p->refsHash, &cs->refsHash, sizeof(ProllyHash));
+
+  p->zSessionBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
+  if( !p->zSessionBranch ){
+    remoteSqlStateClear(p);
+    return SQLITE_NOMEM;
+  }
+  doltliteGetSessionHead(db, &p->sessionHead);
+  doltliteGetSessionStaged(db, &p->sessionStaged);
+  doltliteGetSessionMergeState(db, &p->sessionIsMerging,
+                               &p->sessionMergeCommit,
+                               &p->sessionConflictsCatalog);
+
+  rc = doltliteFlushAndSerializeCatalog(db, &pCatalog, &nCatalog);
+  if( rc!=SQLITE_OK ){
+    remoteSqlStateClear(p);
+    return rc;
+  }
+  rc = chunkStorePut(cs, pCatalog, nCatalog, &p->sessionCatalogHash);
+  sqlite3_free(pCatalog);
+  if( rc!=SQLITE_OK ){
+    remoteSqlStateClear(p);
+  }
+  return rc;
+}
+
+static int remoteSqlStateRestore(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
+  int rc;
+
+  rc = chunkStoreLoadRefsFromBlob(cs, p->pRefsBlob, p->nRefsBlob);
+  if( rc!=SQLITE_OK ) return rc;
+  memcpy(&cs->refsHash, &p->refsHash, sizeof(ProllyHash));
+
+  rc = doltliteSwitchCatalog(db, &p->sessionCatalogHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteSetSessionBranch(db, p->zSessionBranch);
+  doltliteSetSessionHead(db, &p->sessionHead);
+  doltliteSetSessionStaged(db, &p->sessionStaged);
+  doltliteSetSessionMergeState(db, p->sessionIsMerging,
+                               &p->sessionMergeCommit,
+                               &p->sessionConflictsCatalog);
+  return SQLITE_OK;
+}
+
 static int mutateRemoteRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   RemoteMutationCtx *p = (RemoteMutationCtx*)pArg;
   (void)db;
@@ -318,6 +392,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   const char *zRemoteName;
   const char *zBranch;
   ProllyHash trackingCommit, localCommit;
+  RemoteSqlState savedState;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -330,6 +405,13 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   zBranch = (const char*)sqlite3_value_text(argv[1]);
   if( !zRemoteName || !zBranch ){
     sqlite3_result_error(ctx, "remote and branch required", -1);
+    return;
+  }
+  memset(&savedState, 0, sizeof(savedState));
+
+  rc = remoteSqlStateSave(db, cs, &savedState);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
     return;
   }
 
@@ -349,6 +431,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = doltliteFetch(cs, pRemote, zRemoteName, zBranch);
   pRemote->xClose(pRemote);
   if( rc!=SQLITE_OK ){
+    remoteSqlStateClear(&savedState);
     sqlite3_result_error(ctx, "fetch failed: branch not found on remote", -1);
     return;
   }
@@ -356,6 +439,12 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   
   rc = chunkStoreFindTracking(cs, zRemoteName, zBranch, &trackingCommit);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&trackingCommit) ){
+    rc = remoteSqlStateRestore(db, cs, &savedState);
+    remoteSqlStateClear(&savedState);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_error(ctx, "tracking branch not found after fetch", -1);
     return;
   }
@@ -366,6 +455,12 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     
     rc = chunkStoreAddBranch(cs, zBranch, &trackingCommit);
     if( rc!=SQLITE_OK ){
+      rc = remoteSqlStateRestore(db, cs, &savedState);
+      remoteSqlStateClear(&savedState);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
       sqlite3_result_error(ctx, "failed to create local branch", -1);
       return;
     }
@@ -374,6 +469,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   
   if( prollyHashCompare(&localCommit, &trackingCommit)==0 ){
+    remoteSqlStateClear(&savedState);
     sqlite3_result_int(ctx, 0); 
     return;
   }
@@ -410,6 +506,12 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
 
     if( !canFF ){
+      rc = remoteSqlStateRestore(db, cs, &savedState);
+      remoteSqlStateClear(&savedState);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
       sqlite3_result_error(ctx,
         "cannot fast-forward — use dolt_merge with the tracking branch instead", -1);
       return;
@@ -419,6 +521,12 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   
   rc = chunkStoreUpdateBranch(cs, zBranch, &trackingCommit);
   if( rc!=SQLITE_OK ){
+    rc = remoteSqlStateRestore(db, cs, &savedState);
+    remoteSqlStateClear(&savedState);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_error(ctx, "failed to update branch", -1);
     return;
   }
@@ -430,12 +538,24 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
     rc = chunkStoreGet(cs, &trackingCommit, &data, &nData);
     if( rc!=SQLITE_OK ){
+      rc = remoteSqlStateRestore(db, cs, &savedState);
+      remoteSqlStateClear(&savedState);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
       sqlite3_result_error(ctx, "failed to load commit", -1);
       return;
     }
     rc = doltliteCommitDeserialize(data, nData, &commit);
     sqlite3_free(data);
     if( rc!=SQLITE_OK ){
+      rc = remoteSqlStateRestore(db, cs, &savedState);
+      remoteSqlStateClear(&savedState);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
       sqlite3_result_error(ctx, "failed to deserialize commit", -1);
       return;
     }
@@ -443,6 +563,12 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     rc = doltliteHardReset(db, &commit.catalogHash);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&commit);
+      rc = remoteSqlStateRestore(db, cs, &savedState);
+      remoteSqlStateClear(&savedState);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
       sqlite3_result_error(ctx, "hard reset failed", -1);
       return;
     }
@@ -456,9 +582,16 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = chunkStoreSerializeRefs(cs);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
   if( rc!=SQLITE_OK ){
+    rc = remoteSqlStateRestore(db, cs, &savedState);
+    remoteSqlStateClear(&savedState);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_error_code(ctx, rc);
     return;
   }
+  remoteSqlStateClear(&savedState);
   sqlite3_result_int(ctx, 0);
 }
 
@@ -467,6 +600,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteRemote *pRemote = 0;
   const char *zUrl;
+  RemoteSqlState savedState;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -480,6 +614,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     sqlite3_result_error(ctx, "url required", -1);
     return;
   }
+  memset(&savedState, 0, sizeof(savedState));
 
   
   /* Allow cloning over a pristine, auto-seeded repository: a single branch
@@ -500,11 +635,26 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       sqlite3_result_error(ctx, "database is not empty — clone into a fresh database", -1);
       return;
     }
+  }
+
+  rc = remoteSqlStateSave(db, cs, &savedState);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+
+  if( !chunkStoreIsEmpty(cs) ){
     chunkStoreClearRefs(cs);
   }
 
   pRemote = openRemoteByUrl(cs->pVfs, zUrl);
   if( !pRemote ){
+    rc = remoteSqlStateRestore(db, cs, &savedState);
+    remoteSqlStateClear(&savedState);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
   }
@@ -512,6 +662,12 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = doltliteClone(cs, pRemote);
   pRemote->xClose(pRemote);
   if( rc!=SQLITE_OK ){
+    rc = remoteSqlStateRestore(db, cs, &savedState);
+    remoteSqlStateClear(&savedState);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_error(ctx, "clone failed", -1);
     return;
   }
@@ -519,6 +675,12 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   
   rc = chunkStoreAddRemote(cs, "origin", zUrl);
   if( rc!=SQLITE_OK ){
+    rc = remoteSqlStateRestore(db, cs, &savedState);
+    remoteSqlStateClear(&savedState);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_error(ctx, "failed to add origin remote", -1);
     return;
   }
@@ -554,18 +716,37 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
         rc = chunkStoreGet(cs, &branchCommit, &data, &nData);
         if( rc!=SQLITE_OK || !data ){
+          if( data ) sqlite3_free(data);
+          rc = remoteSqlStateRestore(db, cs, &savedState);
+          remoteSqlStateClear(&savedState);
+          if( rc!=SQLITE_OK ){
+            sqlite3_result_error_code(ctx, rc);
+            return;
+          }
           sqlite3_result_error(ctx, "failed to load default branch commit", -1);
           return;
         }
         rc = doltliteCommitDeserialize(data, nData, &commit);
         sqlite3_free(data);
         if( rc!=SQLITE_OK ){
+          rc = remoteSqlStateRestore(db, cs, &savedState);
+          remoteSqlStateClear(&savedState);
+          if( rc!=SQLITE_OK ){
+            sqlite3_result_error_code(ctx, rc);
+            return;
+          }
           sqlite3_result_error(ctx, "failed to deserialize default branch commit", -1);
           return;
         }
         rc = doltliteHardReset(db, &commit.catalogHash);
         if( rc!=SQLITE_OK ){
           doltliteCommitClear(&commit);
+          rc = remoteSqlStateRestore(db, cs, &savedState);
+          remoteSqlStateClear(&savedState);
+          if( rc!=SQLITE_OK ){
+            sqlite3_result_error_code(ctx, rc);
+            return;
+          }
           sqlite3_result_error(ctx, "failed to initialize working tree from default branch", -1);
           return;
         }
@@ -575,6 +756,12 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         rc = chunkStoreSetDefaultBranch(cs, zDefault);
         doltliteCommitClear(&commit);
         if( rc!=SQLITE_OK ){
+          rc = remoteSqlStateRestore(db, cs, &savedState);
+          remoteSqlStateClear(&savedState);
+          if( rc!=SQLITE_OK ){
+            sqlite3_result_error_code(ctx, rc);
+            return;
+          }
           sqlite3_result_error(ctx, "failed to record default branch", -1);
           return;
         }
@@ -586,9 +773,16 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = chunkStoreSerializeRefs(cs);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
   if( rc!=SQLITE_OK ){
+    rc = remoteSqlStateRestore(db, cs, &savedState);
+    remoteSqlStateClear(&savedState);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_error_code(ctx, rc);
     return;
   }
+  remoteSqlStateClear(&savedState);
   sqlite3_result_int(ctx, 0);
 }
 
