@@ -809,11 +809,18 @@ int doltliteSerializeCatalogEntries(
   struct TableEntry *aSorted;  /* name-sorted copy for deterministic output */
   int i;
 
-  /* Resolve table names eagerly so serialization is deterministic. */
+  /* Refresh table names from sqlite_master so serialization is deterministic
+  ** and reflects the current schema. A simple "resolve only when null" check
+  ** would leave zName stale after ALTER TABLE ... RENAME, which would in turn
+  ** make dolt_status invisible to the rename. */
   if( db ){
     for(i=0; i<nTables; i++){
-      if( !aTables[i].zName && aTables[i].iTable>1 ){
-        aTables[i].zName = doltliteResolveTableNumber(db, aTables[i].iTable);
+      if( aTables[i].iTable>1 ){
+        char *zCur = doltliteResolveTableNumber(db, aTables[i].iTable);
+        if( zCur ){
+          sqlite3_free(aTables[i].zName);
+          aTables[i].zName = zCur;
+        }
       }
     }
   }
