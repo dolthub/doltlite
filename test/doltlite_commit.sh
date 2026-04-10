@@ -77,7 +77,7 @@ run_test_match "second_commit" \
 
 run_test "log_count_two" \
   "SELECT count(*) FROM dolt_log;" \
-  "2" "$DB"
+  "3" "$DB"
 
 run_test_match "log_order" \
   "SELECT message FROM dolt_log;" \
@@ -99,7 +99,7 @@ run_test "author_email" \
 
 run_test "log_count_three" \
   "SELECT count(*) FROM dolt_log;" \
-  "3" "$DB"
+  "4" "$DB"
 
 # --- Data persists across reopen ---
 
@@ -114,7 +114,7 @@ run_test "persist_data" \
 coat" "$DB2"
 
 run_test "persist_log" \
-  "SELECT message FROM dolt_log;" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
   "create items" "$DB2"
 
 # --- Commit after schema change ---
@@ -125,13 +125,13 @@ run_test_match "commit_after_alter" \
 
 run_test "log_after_alter" \
   "SELECT count(*) FROM dolt_log;" \
-  "2" "$DB2"
+  "3" "$DB2"
 
 # --- Empty log before first commit ---
 
 run_test "empty_log" \
   "SELECT count(*) FROM dolt_log;" \
-  "0" ":memory:"
+  "1" ":memory:"
 
 # --- Commit with no changes (should fail) ---
 
@@ -146,7 +146,7 @@ run_test "commit_no_changes" \
 
 run_test "one_commit_after_no_change" \
   "SELECT count(*) FROM dolt_log;" \
-  "1" "$DB3"
+  "2" "$DB3"
 
 # --- Multiple tables ---
 
@@ -238,7 +238,7 @@ SELECT dolt_commit('-am','second');" \
 
 run_test "compound_am_multi_count" \
   "SELECT count(*) FROM dolt_log;" \
-  "2" "$DB8"
+  "3" "$DB8"
 
 run_test "compound_am_multi_data" \
   "SELECT count(*) FROM t;" \

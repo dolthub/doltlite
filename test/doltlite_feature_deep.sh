@@ -156,7 +156,7 @@ SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "gc_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "gc_log_count" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 run_test "gc_log_first" "SELECT message FROM dolt_log LIMIT 1;" "c3" "$DB"
 run_test "gc_log_last" "SELECT message FROM dolt_log LIMIT 1 OFFSET 2;" "c1" "$DB"
 
@@ -564,7 +564,7 @@ echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 SIZE_AFTER=$(db_size "$DB")
 
 run_test "gc_revert_data" "SELECT count(*) FROM t;" "1" "$DB"
-run_test "gc_revert_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "gc_revert_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 db_rm "$DB"
 

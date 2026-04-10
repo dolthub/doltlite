@@ -71,7 +71,7 @@ run_test "empty_string_val" "SELECT val FROM t WHERE id=1;" "" "$DB"
 run_test "max_int" "SELECT val FROM t WHERE id=9223372036854775807;" "maxint" "$DB"
 run_test "min_int" "SELECT val FROM t WHERE id=-9223372036854775808;" "minint" "$DB"
 run_test "boundary_count" "SELECT count(*) FROM t;" "4" "$DB"
-run_test "boundary_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "boundary_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 # Persist and reopen
 run_test "boundary_persist_max" "SELECT val FROM t WHERE id=9223372036854775807;" "maxint" "$DB"
@@ -153,7 +153,7 @@ run_test "multi_c2" "SELECT z FROM c WHERE id=2;" "c2_main" "$DB"
 
 # Verify merge log
 run_test_match "multi_merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB"
-run_test "multi_merge_log_count" "SELECT count(*) FROM dolt_log;" "4" "$DB"
+run_test "multi_merge_log_count" "SELECT count(*) FROM dolt_log;" "5" "$DB"
 
 rm -f "$DB"
 
@@ -331,7 +331,7 @@ run_test_match "schema_diff_working" "SELECT count(*) FROM dolt_diff('t');" "^[1
 echo "SELECT dolt_commit('-A','-m','add email column');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "schema_new_col" "SELECT email FROM t WHERE id=1;" "alice@test.com" "$DB"
-run_test "schema_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "schema_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 # Insert with new column
 echo "INSERT INTO t VALUES(2,'Bob','bob@test.com');
@@ -404,7 +404,7 @@ run_test_match "diff_tags" \
   "^[2-9]" "$DB"
 
 # Verify log has 3 commits
-run_test "diff_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "diff_log_count" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 # Tag listing
 run_test "diff_tag_count" "SELECT count(*) FROM dolt_tags;" "2" "$DB"
@@ -580,7 +580,7 @@ echo "$SQL" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "bulk_count" "SELECT count(*) FROM big;" "500" "$DB"
 run_test "bulk_first" "SELECT v FROM big WHERE id=1;" "row_1" "$DB"
 run_test "bulk_last" "SELECT v FROM big WHERE id=500;" "row_500" "$DB"
-run_test "bulk_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "bulk_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 # Persist and verify
 run_test "bulk_persist_count" "SELECT count(*) FROM big;" "500" "$DB"
@@ -690,7 +690,7 @@ run_test_match "difftype_new_working_type" "SELECT diff_type FROM dolt_diff('t')
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Verify data integrity
-run_test "difftype_data_ok" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "difftype_data_ok" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
@@ -734,7 +734,7 @@ SELECT dolt_commit('-A','-m','round3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Verify after multiple commits (each is a separate session/reopen)
 run_test "persist_count" "SELECT count(*) FROM t;" "3" "$DB"
-run_test "persist_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "persist_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 run_test "persist_branch" "SELECT active_branch();" "main" "$DB"
 
 # Create branch and commit on it
@@ -846,12 +846,12 @@ for i in $(seq 2 21); do
   echo "INSERT INTO t VALUES($i,'v$i'); SELECT dolt_commit('-A','-m','commit $i');" | $DOLTLITE "$DB" > /dev/null 2>&1
 done
 
-run_test "history_count" "SELECT count(*) FROM dolt_log;" "21" "$DB"
+run_test "history_count" "SELECT count(*) FROM dolt_log;" "22" "$DB"
 run_test "history_data" "SELECT count(*) FROM t;" "21" "$DB"
 run_test_match "history_first_msg" "SELECT message FROM dolt_log LIMIT 1;" "commit 21" "$DB"
 
 # Persist and verify
-run_test "history_persist" "SELECT count(*) FROM dolt_log;" "21" "$DB"
+run_test "history_persist" "SELECT count(*) FROM dolt_log;" "22" "$DB"
 
 rm -f "$DB"
 
@@ -927,7 +927,7 @@ INSERT INTO t VALUES(4,'d'); SELECT dolt_commit('-A','-m','c4');
 INSERT INTO t VALUES(5,'e'); SELECT dolt_commit('-A','-m','c5');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "rapid_data" "SELECT count(*) FROM t;" "5" "$DB"
-run_test "rapid_log" "SELECT count(*) FROM dolt_log;" "5" "$DB"
+run_test "rapid_log" "SELECT count(*) FROM dolt_log;" "6" "$DB"
 run_test "rapid_last_msg" "SELECT message FROM dolt_log LIMIT 1;" "c5" "$DB"
 run_test "rapid_persist" "SELECT count(*) FROM t;" "5" "$DB"
 

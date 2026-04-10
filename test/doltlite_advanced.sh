@@ -65,7 +65,7 @@ run_test_match "txn_status" "SELECT count(*) FROM dolt_status;" "^[1-9]" "$DB"
 # Dolt commit captures it
 run_test_match "txn_dolt_commit" "SELECT dolt_commit('-A','-m','txn work');" "^[0-9a-f]{40}$" "$DB"
 run_test "txn_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
-run_test "txn_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "txn_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
@@ -103,7 +103,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 SELECT dolt_commit('-A','-m','empty table');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "empty_count" "SELECT count(*) FROM t;" "0" "$DB"
-run_test "empty_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "empty_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test "empty_diff" "SELECT count(*) FROM dolt_diff('t');" "0" "$DB"
 
 # Branch empty table
@@ -141,7 +141,7 @@ INSERT INTO ids VALUES(50);
 SELECT dolt_commit('-A','-m','more ids');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "pkonly_count2" "SELECT count(*) FROM ids;" "5" "$DB"
-run_test "pkonly_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "pkonly_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
@@ -168,7 +168,7 @@ echo "INSERT OR REPLACE INTO t VALUES(2,'or_replaced');
 SELECT dolt_commit('-A','-m','or replace');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "or_replace_val" "SELECT v FROM t WHERE id=2;" "or_replaced" "$DB"
-run_test "or_replace_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "or_replace_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 rm -f "$DB"
 
@@ -189,7 +189,7 @@ SELECT dolt_commit('-A','-m','ignore test');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "ignore_orig" "SELECT v FROM t WHERE id=1;" "first" "$DB"
 run_test "ignore_new" "SELECT v FROM t WHERE id=2;" "new" "$DB"
 run_test "ignore_count" "SELECT count(*) FROM t;" "2" "$DB"
-run_test "ignore_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "ignore_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
@@ -298,7 +298,7 @@ run_test "multiupd_count" "SELECT count(*) FROM t;" "1" "$DB"
 run_test_match "multiupd_diff" \
   "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "^1$" "$DB"
-run_test "multiupd_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "multiupd_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
@@ -431,14 +431,14 @@ DB=/tmp/test_adv_schemaonly_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 SELECT dolt_commit('-A','-m','empty schema');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "schemaonly_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "schemaonly_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test "schemaonly_count" "SELECT count(*) FROM t;" "0" "$DB"
 
 # Add another table (schema change, no data)
 echo "CREATE TABLE t2(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-A','-m','add t2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "schemaonly_log2" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "schemaonly_log2" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 run_test "schemaonly_tables" "SELECT count(*) FROM sqlite_master WHERE type='table';" "2" "$DB"
 
 rm -f "$DB"
@@ -540,7 +540,7 @@ run_test "logorder_last" "SELECT message FROM dolt_log LIMIT 1 OFFSET 2;" "first
 
 # Count and offset
 run_test "logorder_offset1" "SELECT message FROM dolt_log LIMIT 1 OFFSET 1;" "second" "$DB"
-run_test "logorder_total" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "logorder_total" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 rm -f "$DB"
 

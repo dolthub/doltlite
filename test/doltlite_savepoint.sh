@@ -62,7 +62,7 @@ run_test "txn_rollback_data_count" \
 # Expected: 2 commits (init + in-txn commit) — dolt operations persist
 run_test "txn_rollback_dolt_commit_survives" \
   "SELECT count(*) FROM dolt_log;" \
-  "2" "$DB1"
+  "3" "$DB1"
 
 # ============================================================
 # Test 2: BEGIN; INSERT; SAVEPOINT x; INSERT more; dolt_commit; ROLLBACK TO x
@@ -93,7 +93,7 @@ run_test "savepoint_rollback_row3_gone" \
 # Dolt commit log should still show the commit made inside the savepoint
 run_test "savepoint_dolt_commit_in_log" \
   "SELECT count(*) FROM dolt_log;" \
-  "2" "$DB2"
+  "3" "$DB2"
 
 # ============================================================
 # Test 3: INSERT outside transaction; dolt_commit — basic sanity
@@ -110,7 +110,7 @@ run_test "basic_no_txn_data" \
   "hello" "$DB3"
 
 run_test "basic_no_txn_log" \
-  "SELECT message FROM dolt_log;" \
+  "SELECT message FROM dolt_log LIMIT 1;" \
   "basic" "$DB3"
 
 # ============================================================

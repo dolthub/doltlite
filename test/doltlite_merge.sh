@@ -20,7 +20,7 @@ run_test_match "merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$D
 run_test "merge_users" "SELECT name FROM users;" "ALICE" "$DB"
 run_test "merge_orders" "SELECT count(*) FROM orders;" "2" "$DB"
 run_test "merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge branch 'feature'" "$DB"
-run_test "merge_log_count" "SELECT count(*) FROM dolt_log;" "4" "$DB"
+run_test "merge_log_count" "SELECT count(*) FROM dolt_log;" "5" "$DB"
 
 # Test 2: Fast-forward merge
 DB2=/tmp/test_merge2_$$.db; rm -f "$DB2"
@@ -33,7 +33,7 @@ run_test "ff_before" "SELECT count(*) FROM t;" "1" "$DB2"
 run_test_match "ff_merge" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB2"
 run_test "ff_after" "SELECT count(*) FROM t;" "2" "$DB2"
 run_test "ff_no_merge_commit" "SELECT message FROM dolt_log LIMIT 1;" "feature" "$DB2"
-run_test "ff_log_count" "SELECT count(*) FROM dolt_log;" "2" "$DB2"
+run_test "ff_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB2"
 
 # Test 3: Already up to date
 run_test "up_to_date" "SELECT dolt_merge('feature');" "Already up to date" "$DB2"

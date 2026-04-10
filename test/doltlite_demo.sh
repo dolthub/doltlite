@@ -24,7 +24,7 @@ CREATE TABLE employees_teams(team_id INTEGER, employee_id INTEGER, PRIMARY KEY(t
 SELECT dolt_commit('-A','-m','Created initial schema');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "schema_tables" "SELECT count(*) FROM sqlite_master WHERE type='table';" "3" "$DB"
-run_test "schema_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "schema_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test_match "schema_msg" "SELECT message FROM dolt_log;" "Created initial schema" "$DB"
 run_test "schema_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
 
@@ -60,7 +60,7 @@ run_test "data_eng_team" \
 echo "SELECT dolt_commit('-A','-m','Populated tables with data');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_tag('v1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "data_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "data_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 run_test "data_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
 
 # ============================================================
@@ -186,7 +186,7 @@ run_test "tags_v1_data" "SELECT count(*) FROM dolt_at_employees('v1');" "4" "$DB
 # ============================================================
 
 run_test "persist_emp" "SELECT count(*) FROM employees;" "5" "$DB"
-run_test "persist_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "persist_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 run_test "persist_branch" "SELECT active_branch();" "main" "$DB"
 run_test "persist_tags" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
 

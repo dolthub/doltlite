@@ -29,7 +29,7 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "basic_count" "SELECT count(*) FROM t;" "2" "$DB"
 run_test "basic_val1" "SELECT v FROM t WHERE id=1;" "hello" "$DB"
 run_test "basic_val2" "SELECT v FROM t WHERE id=2;" "world" "$DB"
-run_test "basic_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "basic_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test_match "basic_msg" "SELECT message FROM dolt_log;" "init" "$DB"
 
 # Single-file: doltlite creates exactly one file, no -wal or -journal
@@ -56,7 +56,7 @@ INSERT INTO t VALUES(3,'c');
 SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "multi_count" "SELECT count(*) FROM t;" "3" "$DB"
-run_test "multi_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
+run_test "multi_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 run_test_match "multi_latest" "SELECT message FROM dolt_log LIMIT 1;" "c3" "$DB"
 
 rm -f "$DB"
@@ -82,7 +82,7 @@ run_test "bulk100_count" "SELECT count(*) FROM t;" "100" "$DB"
 run_test "bulk100_first" "SELECT v FROM t WHERE id=0;" "row_0" "$DB"
 run_test "bulk100_last" "SELECT v FROM t WHERE id=99;" "row_99" "$DB"
 run_test "bulk100_mid" "SELECT v FROM t WHERE id=50;" "row_50" "$DB"
-run_test "bulk100_log" "SELECT count(*) FROM dolt_log;" "1" "$DB"
+run_test "bulk100_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 rm -f "$DB"
 
@@ -125,7 +125,7 @@ UPDATE t SET v='changed' WHERE id=1;
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "update_val" "SELECT v FROM t WHERE id=1;" "changed" "$DB"
-run_test "update_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "update_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
@@ -343,7 +343,7 @@ run_test "bulkmod_count" "SELECT count(*) FROM t;" "999" "$DB"
 run_test "bulkmod_modified" "SELECT v FROM t WHERE id=500;" "MODIFIED" "$DB"
 run_test "bulkmod_deleted" "SELECT count(*) FROM t WHERE id=999;" "0" "$DB"
 run_test "bulkmod_unchanged" "SELECT v FROM t WHERE id=1;" "row_1" "$DB"
-run_test "bulkmod_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
+run_test "bulkmod_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
@@ -364,7 +364,7 @@ SELECT dolt_commit('-A','-m','commit $i');" | $DOLTLITE "$DB" > /dev/null 2>&1
 done
 
 run_test "rapid_count" "SELECT count(*) FROM t;" "10" "$DB"
-run_test "rapid_log" "SELECT count(*) FROM dolt_log;" "11" "$DB"
+run_test "rapid_log" "SELECT count(*) FROM dolt_log;" "12" "$DB"
 run_test "rapid_val5" "SELECT v FROM t WHERE id=5;" "val_5" "$DB"
 
 rm -f "$DB"

@@ -223,7 +223,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','third');
 .quit
 SQL
-result=$("$DB" "$TMPDIR/t12.db" "SELECT count(DISTINCT committer) FROM dolt_log;")
+result=$("$DB" "$TMPDIR/t12.db" "SELECT count(DISTINCT committer) FROM dolt_log WHERE message != 'Initialize data repository';")
 check "all 3 commits same author" "1" "$result"
 
 result=$("$DB" "$TMPDIR/t12.db" "SELECT committer FROM dolt_log LIMIT 1;")

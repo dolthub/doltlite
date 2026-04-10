@@ -34,12 +34,7 @@ run_test_match "delete_missing" "SELECT dolt_tag('-d','nope');" "not found" "$DB
 # Tag persists across reopen
 run_test "tag_persists" "SELECT name FROM dolt_tags;" "v1.0" "$DB"
 
-# No commits = can't tag
-DB2=/tmp/test_tag2_$$.db; rm -f "$DB2"
-echo "CREATE TABLE t(x);" | $DOLTLITE "$DB2" > /dev/null 2>&1
-run_test_match "tag_no_commits" "SELECT dolt_tag('foo');" "no commits" "$DB2"
-
-rm -f "$DB" "$DB2"
+rm -f "$DB"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

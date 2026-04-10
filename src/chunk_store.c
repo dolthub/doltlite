@@ -1630,6 +1630,16 @@ int chunkStoreIsEmpty(ChunkStore *cs){
   return cs->nBranches == 0 && prollyHashIsEmpty(&cs->refsHash);
 }
 
+void chunkStoreClearRefs(ChunkStore *cs){
+  csFreeBranches(cs);
+  csFreeTags(cs);
+  csFreeRemotes(cs);
+  csFreeTracking(cs);
+  memset(&cs->refsHash, 0, sizeof(cs->refsHash));
+  memset(&cs->workingState, 0, sizeof(cs->workingState));
+  memset(&cs->stagedCatalog, 0, sizeof(cs->stagedCatalog));
+}
+
 int chunkStoreReloadRefs(ChunkStore *cs){
   u8 *refsData = 0;
   int nRefsData = 0;

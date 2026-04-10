@@ -244,6 +244,8 @@ void chunkStoreRollback(ChunkStore *cs);
 
 int chunkStoreIsEmpty(ChunkStore *cs);
 
+void chunkStoreClearRefs(ChunkStore *cs);
+
 const char *chunkStoreFilename(ChunkStore *cs);
 
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged);

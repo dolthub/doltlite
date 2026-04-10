@@ -1246,6 +1246,34 @@ static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value
   }
 }
 
+/*
+** Seed a brand-new repository with an "Initialize data repository" commit
+** on the default branch. Matches Dolt: a freshly initialized repo has one
+** commit whose catalog is empty. No-op if the chunk store already has any
+** branches, if no chunk store is attached, or if the database was opened
+** read-only.
+*/
+static void doltliteMaybeSeedRepo(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash emptyParent;
+  ProllyHash emptyCatalog;
+  ProllyHash seedHash;
+  int rc;
+
+  if( !cs ) return;
+  if( cs->nBranches > 0 ) return;
+  if( sqlite3_db_readonly(db, "main")==1 ) return;
+
+  memset(&emptyParent, 0, sizeof(emptyParent));
+  memset(&emptyCatalog, 0, sizeof(emptyCatalog));
+
+  rc = doltliteCreateAndStoreCommit(db, &emptyParent, &emptyCatalog,
+      "Initialize data repository", NULL, NULL, 0, 0, &seedHash);
+  if( rc!=SQLITE_OK ) return;
+
+  (void)doltliteAdvanceBranch(db, &seedHash, &emptyCatalog);
+}
+
 void doltliteRegister(sqlite3 *db){
   sqlite3_create_function(db, "dolt_commit", -1, SQLITE_UTF8, 0,
                           doltliteCommitFunc, 0, 0);
@@ -1277,6 +1305,7 @@ void doltliteRegister(sqlite3 *db){
     extern void doltliteRemoteSqlRegister(sqlite3 *db);
     doltliteRemoteSqlRegister(db);
   }
+  doltliteMaybeSeedRepo(db);
 }
 
 #endif 
