@@ -1061,6 +1061,34 @@ SELECT max(val) FROM t;
 SELECT min(val) FROM t;
 "
 
+# 9f2. MAX/MIN with WHERE on composite unique index (#180)
+oracle "cat9_max_where_composite_index" "
+CREATE TABLE events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  aggregate_kind TEXT NOT NULL,
+  stream_id TEXT NOT NULL,
+  stream_version INTEGER NOT NULL,
+  data TEXT,
+  UNIQUE(aggregate_kind, stream_id, stream_version)
+);
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',0,'v0');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',1,'v1');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',2,'v2');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',3,'v3');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',4,'v4');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',5,'v5');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',6,'v6');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',7,'v7');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',8,'v8');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s1',9,'v9');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s2',0,'other');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('thread','s2',1,'other');
+INSERT INTO events(aggregate_kind, stream_id, stream_version, data) VALUES('cmd','s1',0,'other_kind');
+SELECT MAX(stream_version) FROM events WHERE aggregate_kind='thread' AND stream_id='s1';
+SELECT MIN(stream_version) FROM events WHERE aggregate_kind='thread' AND stream_id='s1';
+SELECT COALESCE(MAX(stream_version)+1, 0) FROM events WHERE aggregate_kind='thread' AND stream_id='s1';
+"
+
 # 9g. ORDER BY DESC after UPDATE
 oracle "cat9_desc_after_update" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
@@ -3737,6 +3765,45 @@ DELETE FROM t1 WHERE NOT EXISTS (SELECT 1 FROM t2 WHERE t2.ref = t1.id);
 SELECT * FROM t1 ORDER BY id;
 "
 
+# 56e. Self-referencing INSERT sees prior writes in same transaction (#179)
+oracle "cat56_self_ref_insert_txn" "
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT, sid TEXT, ver INTEGER,
+  UNIQUE(kind, sid, ver)
+);
+BEGIN;
+INSERT INTO t(kind,sid,ver) VALUES('thread','t1',
+  COALESCE((SELECT ver+1 FROM t WHERE kind='thread' AND sid='t1' ORDER BY ver DESC LIMIT 1), 0));
+INSERT INTO t(kind,sid,ver) VALUES('thread','t1',
+  COALESCE((SELECT ver+1 FROM t WHERE kind='thread' AND sid='t1' ORDER BY ver DESC LIMIT 1), 0));
+INSERT INTO t(kind,sid,ver) VALUES('thread','t1',
+  COALESCE((SELECT ver+1 FROM t WHERE kind='thread' AND sid='t1' ORDER BY ver DESC LIMIT 1), 0));
+COMMIT;
+SELECT ver FROM t WHERE kind='thread' AND sid='t1' ORDER BY ver;
+"
+
+# 56f. Self-referencing MAX pattern in INSERT sees prior writes (#179)
+oracle "cat56_self_ref_max_pattern" "
+CREATE TABLE events(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  aggregate_kind TEXT NOT NULL,
+  stream_id TEXT NOT NULL,
+  stream_version INTEGER NOT NULL,
+  data TEXT,
+  UNIQUE(aggregate_kind, stream_id, stream_version)
+);
+BEGIN;
+INSERT INTO events(aggregate_kind,stream_id,stream_version,data) VALUES('thread','s1',
+  COALESCE((SELECT MAX(stream_version)+1 FROM events WHERE aggregate_kind='thread' AND stream_id='s1'), 0), 'e0');
+INSERT INTO events(aggregate_kind,stream_id,stream_version,data) VALUES('thread','s1',
+  COALESCE((SELECT MAX(stream_version)+1 FROM events WHERE aggregate_kind='thread' AND stream_id='s1'), 0), 'e1');
+INSERT INTO events(aggregate_kind,stream_id,stream_version,data) VALUES('thread','s1',
+  COALESCE((SELECT MAX(stream_version)+1 FROM events WHERE aggregate_kind='thread' AND stream_id='s1'), 0), 'e2');
+COMMIT;
+SELECT stream_version FROM events WHERE aggregate_kind='thread' AND stream_id='s1' ORDER BY stream_version;
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 57: Index interactions with schema changes
 # ════════════════════════════════════════════════════════════════════
@@ -4714,6 +4781,32 @@ DELETE FROM t WHERE k = 3;
 INSERT INTO t VALUES(4,'d');
 RELEASE sp;
 SELECT * FROM t ORDER BY k;
+"
+
+# 79d. Deferred rows inserted in txn update exactly once (#319)
+oracle "cat79_update_inserted_rows_once" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, val INT);
+CREATE INDEX idx1 ON t1(val);
+BEGIN;
+INSERT INTO t1 VALUES(1,100),(2,200);
+UPDATE t1 SET val = val + 50;
+SELECT id, val FROM t1 ORDER BY id;
+COMMIT;
+"
+
+# 79e. Deferred-row update does not disturb other tables (#319)
+oracle "cat79_update_inserted_rows_cross_table" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, val INT);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, ref INT, data TEXT);
+CREATE INDEX idx1 ON t1(val);
+CREATE INDEX idx2 ON t2(ref);
+BEGIN;
+INSERT INTO t1 VALUES(1,100),(2,200);
+INSERT INTO t2 VALUES(1,1,'a'),(2,2,'b');
+UPDATE t1 SET val = val + 50;
+SELECT id, val FROM t1 ORDER BY id;
+SELECT id, ref, data FROM t2 ORDER BY id;
+COMMIT;
 "
 
 # ════════════════════════════════════════════════════════════════════

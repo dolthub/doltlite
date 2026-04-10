@@ -1,6 +1,8 @@
 #!/bin/bash
 #
-# Regression tests for GitHub issues #325, #326, and #327
+# Regression tests for WITHOUT ROWID mutation edge cases.
+# These intentionally assert Doltlite behavior directly instead of using
+# the SQLite oracle, because some covered cases differ from stock SQLite.
 #
 set -euo pipefail
 
@@ -24,12 +26,12 @@ run_test() {
   fi
 }
 
-echo "=== Issue #325 / #326 / #327 Regression Tests ==="
+echo "=== WITHOUT ROWID Regression Tests ==="
 echo ""
 
-DB325=/tmp/test_issue325_$$.db
+DB325=/tmp/test_wr_regression_325_$$.db
 rm -f "$DB325"
-run_test "issue325_delete_in_index_scan" \
+run_test "delete_in_index_scan" \
 "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
 CREATE INDEX idx ON t(val);
 INSERT INTO t VALUES(1,10),(2,20),(3,30),(4,40),(5,50);
@@ -39,9 +41,9 @@ SELECT val FROM t ORDER BY val;" \
 30
 40" "$DB325"
 
-DB326=/tmp/test_issue326_$$.db
+DB326=/tmp/test_wr_regression_326_$$.db
 rm -f "$DB326"
-run_test "issue326_without_rowid_savepoint_sequence" \
+run_test "savepoint_sequence_release" \
 "CREATE TABLE t(k INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
 SAVEPOINT sp;
@@ -54,9 +56,9 @@ SELECT * FROM t ORDER BY k;" \
 2|x
 4|d" "$DB326"
 
-DB327=/tmp/test_issue327_$$.db
+DB327=/tmp/test_wr_regression_327_$$.db
 rm -f "$DB327"
-run_test "issue327_without_rowid_multi_delete" \
+run_test "multi_delete_secondary_indexes" \
 "CREATE TABLE t(k INT PRIMARY KEY, a INT, b TEXT, c REAL) WITHOUT ROWID;
 CREATE INDEX idx_a ON t(a);
 CREATE INDEX idx_b ON t(b);
