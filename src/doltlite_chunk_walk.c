@@ -22,8 +22,8 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_PROLLY_NODE;
   }
 
-  /* Working set: exactly WS_TOTAL_SIZE bytes, version byte == 1 */
-  if( nData == WS_TOTAL_SIZE && data[0] == 1 ){
+  /* Working set: exactly WS_TOTAL_SIZE bytes, version byte == 2 */
+  if( nData == WS_TOTAL_SIZE && data[0] == 2 ){
     return CHUNK_WORKING_SET;
   }
 
@@ -141,6 +141,16 @@ static int enumerateWorkingSetChildren(
   int rc;
 
   (void)nData;
+
+  /* working catalog hash */
+  memcpy(h.data, data + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
+  rc = xChild(ctx, &h);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* working commit hash */
+  memcpy(h.data, data + WS_WORKING_COMMIT_OFF, PROLLY_HASH_SIZE);
+  rc = xChild(ctx, &h);
+  if( rc!=SQLITE_OK ) return rc;
 
   /* staged catalog hash */
   memcpy(h.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);

@@ -570,7 +570,7 @@ static int brIsDirty(
   }
 
   rc = chunkStoreGet(cs, &br->workingSetHash, &wsData, &nWsData);
-  if( rc!=SQLITE_OK || !wsData || nWsData < WS_TOTAL_SIZE ){
+  if( rc!=SQLITE_OK || !wsData || nWsData < WS_TOTAL_SIZE || wsData[0] != 2 ){
     sqlite3_free(wsData);
     return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
   }

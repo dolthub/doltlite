@@ -346,7 +346,7 @@ static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
 **   0: magic(4) | 4: version(4) | 8: reserved(20) | 28: nChunks(4)
 **   32: indexOffset(8) | 40: indexSize(4) | 44: reserved(20)
 **   64: reserved(20) | 84: walOffset(8) | 92: reserved(12)
-**   104: refs_hash(20) | 124: working_state_hash(20) | 144: reserved(24)
+**   104: refs_hash(20) | 124: reserved(44)
 */
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memset(aBuf, 0, CHUNK_MANIFEST_SIZE);
@@ -360,7 +360,6 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   /* offset 64: reserved (was headCommit_hash) */
   CS_WRITE_I64(aBuf + 84, cs->iWalOffset);
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
-  memcpy(aBuf + 124, cs->workingState.data, PROLLY_HASH_SIZE);
 }
 
 static void csSerializeIndexEntry(const ChunkIndexEntry *e, u8 *aBuf){
@@ -396,7 +395,6 @@ static int csReadManifest(ChunkStore *cs){
   /* offset 64: reserved (was headCommit_hash) */
   cs->iWalOffset = CS_READ_I64(aBuf + 84);
   memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
-  memcpy(cs->workingState.data, aBuf + 124, PROLLY_HASH_SIZE);
 
   return SQLITE_OK;
 }
@@ -501,7 +499,6 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   int nRootedPending = cs->nPending;
   int nOldChunks = cs->nChunks;
   ProllyHash oldRefsHash = cs->refsHash;
-  ProllyHash oldWorkingState = cs->workingState;
   ChunkIndexEntry *aOldIndex = cs->aIndex;
   int nOldIndex = cs->nIndex;
   int nOldIndexAlloc = cs->nIndexAlloc;
@@ -594,7 +591,6 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         cs->nChunks = (int)CS_READ_U32(m + 28);
         /* offset 64: reserved (was headCommit_hash) */
         memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
-        memcpy(cs->workingState.data, m + 124, PROLLY_HASH_SIZE);
         /* Don't update iWalOffset/iIndexOffset from WAL root records --
         ** those fields describe the compacted region and only change on GC. */
       }
@@ -680,7 +676,6 @@ replay_error:
   cs->nWalData = nOldWalData;
   cs->nChunks = nOldChunks;
   cs->refsHash = oldRefsHash;
-  cs->workingState = oldWorkingState;
   cs->aIndex = aOldIndex;
   cs->nIndex = nOldIndex;
   cs->nIndexAlloc = nOldIndexAlloc;
@@ -892,14 +887,6 @@ int chunkStoreClose(ChunkStore *cs){
   csFreeTracking(cs);
   memset(cs, 0, sizeof(*cs));
   return SQLITE_OK;
-}
-
-void chunkStoreGetWorkingState(ChunkStore *cs, ProllyHash *pState){
-  memcpy(pState, &cs->workingState, sizeof(ProllyHash));
-}
-
-void chunkStoreSetWorkingState(ChunkStore *cs, const ProllyHash *pState){
-  memcpy(&cs->workingState, pState, sizeof(ProllyHash));
 }
 
 void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged){
@@ -1880,7 +1867,6 @@ void chunkStoreClearRefs(ChunkStore *cs){
   csFreeRemotes(cs);
   csFreeTracking(cs);
   memset(&cs->refsHash, 0, sizeof(cs->refsHash));
-  memset(&cs->workingState, 0, sizeof(cs->workingState));
   memset(&cs->stagedCatalog, 0, sizeof(cs->stagedCatalog));
 }
 
@@ -1992,7 +1978,6 @@ static int csReloadFromDisk(ChunkStore *cs){
   cs->pFile = tmp.pFile;
   cs->readOnly = tmp.readOnly;
   cs->refsHash = tmp.refsHash;
-  cs->workingState = tmp.workingState;
   cs->stagedCatalog = tmp.stagedCatalog;
   cs->isMerging = tmp.isMerging;
   cs->mergeCommitHash = tmp.mergeCommitHash;

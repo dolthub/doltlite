@@ -347,6 +347,26 @@ static int btreeRefreshFromDisk(Btree *p);
 static int btreeReadWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                    ProllyHash *pCatHash,
                                    ProllyHash *pCommitHash);
+static int btreeLoadWorkingSetBlob(
+  ChunkStore *cs,
+  const char *zBranch,
+  ProllyHash *pWorkingCat,
+  ProllyHash *pWorkingCommit,
+  ProllyHash *pStaged,
+  u8 *pIsMerging,
+  ProllyHash *pMergeCommit,
+  ProllyHash *pConflicts
+);
+static int btreeStoreWorkingSetBlob(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pWorkingCat,
+  const ProllyHash *pWorkingCommit,
+  const ProllyHash *pStaged,
+  u8 isMerging,
+  const ProllyHash *pMergeCommit,
+  const ProllyHash *pConflicts
+);
 static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
 
 static int prollyBtreeClose(Btree*);
@@ -1503,7 +1523,7 @@ int sqlite3BtreeOpen(
   p->aMeta[BTREE_APPLICATION_ID] = 0;
 
   
-  /* Load catalog from per-branch working state. Use the default branch
+  /* Load catalog from the default branch working-set blob. Use the default branch
   ** since p->zBranch hasn't been set yet (checkout happens later). */
   {
     ProllyHash catHash;
@@ -1572,18 +1592,23 @@ catalog_loaded:
         
         u8 *wsData = 0; int nWsData = 0;
         if( chunkStoreGet(&pBt->store, &wsHash, &wsData, &nWsData)==SQLITE_OK
-         && nWsData >= WS_TOTAL_SIZE ){
+         && wsData && nWsData >= WS_TOTAL_SIZE && wsData[0] == 2 ){
           memcpy(p->stagedCatalog.data, wsData + WS_STAGED_OFF, PROLLY_HASH_SIZE);
           p->isMerging = wsData[WS_MERGING_OFF];
           memcpy(p->mergeCommitHash.data, wsData + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
           memcpy(p->conflictsCatalogHash.data, wsData + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
+        }else{
+          memset(&p->stagedCatalog, 0, sizeof(ProllyHash));
+          p->isMerging = 0;
+          memset(&p->mergeCommitHash, 0, sizeof(ProllyHash));
+          memset(&p->conflictsCatalogHash, 0, sizeof(ProllyHash));
         }
         sqlite3_free(wsData);
       }else{
-        
-        chunkStoreGetStagedCatalog(&pBt->store, &p->stagedCatalog);
-        chunkStoreGetMergeState(&pBt->store, &p->isMerging,
-                                &p->mergeCommitHash, &p->conflictsCatalogHash);
+        memset(&p->stagedCatalog, 0, sizeof(ProllyHash));
+        p->isMerging = 0;
+        memset(&p->mergeCommitHash, 0, sizeof(ProllyHash));
+        memset(&p->conflictsCatalogHash, 0, sizeof(ProllyHash));
       }
     }
   }
@@ -1827,173 +1852,121 @@ int sqlite3BtreeIsReadonly(Btree *p){
   return p->pOps->xIsReadonly(p);
 }
 
-/*
-** Working state chunk: per-branch working catalog hashes.
-** Format: [nBranches:2 LE] per branch: [nameLen:2 LE][name][catHash:20]
-**
-** This allows each branch to persist its working catalog independently,
-** so cross-branch autocommits don't overwrite each other's catalogs.
-*/
+static int btreeLoadWorkingSetBlob(
+  ChunkStore *cs,
+  const char *zBranch,
+  ProllyHash *pWorkingCat,
+  ProllyHash *pWorkingCommit,
+  ProllyHash *pStaged,
+  u8 *pIsMerging,
+  ProllyHash *pMergeCommit,
+  ProllyHash *pConflicts
+){
+  ProllyHash wsHash;
+  u8 *data = 0;
+  int nData = 0;
+  int rc;
 
-/*
-** Read the working catalog hash for zBranch from the working state chunk.
-** Returns SQLITE_OK and fills *pCatHash if found.
-** Returns SQLITE_NOTFOUND if the branch is not in the working state.
-*/
+  if( pWorkingCat ) memset(pWorkingCat, 0, sizeof(ProllyHash));
+  if( pWorkingCommit ) memset(pWorkingCommit, 0, sizeof(ProllyHash));
+  if( pStaged ) memset(pStaged, 0, sizeof(ProllyHash));
+  if( pIsMerging ) *pIsMerging = 0;
+  if( pMergeCommit ) memset(pMergeCommit, 0, sizeof(ProllyHash));
+  if( pConflicts ) memset(pConflicts, 0, sizeof(ProllyHash));
+
+  rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
+  if( rc!=SQLITE_OK || prollyHashIsEmpty(&wsHash) ) return SQLITE_NOTFOUND;
+
+  rc = chunkStoreGet(cs, &wsHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !data || nData < WS_TOTAL_SIZE || data[0] != 2 ){
+    sqlite3_free(data);
+    return SQLITE_CORRUPT;
+  }
+
+  if( pWorkingCat ) memcpy(pWorkingCat->data, data + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
+  if( pWorkingCommit ) memcpy(pWorkingCommit->data, data + WS_WORKING_COMMIT_OFF, PROLLY_HASH_SIZE);
+  if( pStaged ) memcpy(pStaged->data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
+  if( pIsMerging ) *pIsMerging = data[WS_MERGING_OFF];
+  if( pMergeCommit ) memcpy(pMergeCommit->data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
+  if( pConflicts ) memcpy(pConflicts->data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
+  sqlite3_free(data);
+  return SQLITE_OK;
+}
+
+static int btreeStoreWorkingSetBlob(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pWorkingCat,
+  const ProllyHash *pWorkingCommit,
+  const ProllyHash *pStaged,
+  u8 isMerging,
+  const ProllyHash *pMergeCommit,
+  const ProllyHash *pConflicts
+){
+  u8 buf[WS_TOTAL_SIZE];
+  ProllyHash wsHash;
+  static const ProllyHash emptyHash = {{0}};
+  int rc;
+
+  buf[0] = 2;
+  memcpy(buf + WS_WORKING_CAT_OFF,
+         (pWorkingCat ? pWorkingCat : &emptyHash)->data, PROLLY_HASH_SIZE);
+  memcpy(buf + WS_WORKING_COMMIT_OFF,
+         (pWorkingCommit ? pWorkingCommit : &emptyHash)->data, PROLLY_HASH_SIZE);
+  memcpy(buf + WS_STAGED_OFF,
+         (pStaged ? pStaged : &emptyHash)->data, PROLLY_HASH_SIZE);
+  buf[WS_MERGING_OFF] = isMerging;
+  memcpy(buf + WS_MERGE_COMMIT_OFF,
+         (pMergeCommit ? pMergeCommit : &emptyHash)->data, PROLLY_HASH_SIZE);
+  memcpy(buf + WS_CONFLICTS_OFF,
+         (pConflicts ? pConflicts : &emptyHash)->data, PROLLY_HASH_SIZE);
+
+  rc = chunkStorePut(cs, buf, WS_TOTAL_SIZE, &wsHash);
+  if( rc != SQLITE_OK ) return rc;
+  rc = chunkStoreSetBranchWorkingSet(cs, zBranch, &wsHash);
+  if( rc == SQLITE_NOTFOUND && chunkStoreIsEmpty(cs) ){
+    return SQLITE_OK;
+  }
+  if( rc != SQLITE_OK ) return rc;
+  return chunkStoreSerializeRefs(cs);
+}
+
 static int btreeReadWorkingCatalog(
   ChunkStore *cs,
   const char *zBranch,
   ProllyHash *pCatHash,
   ProllyHash *pCommitHash
 ){
-  ProllyHash wsHash;
-  u8 *data = 0;
-  int nData = 0;
-  int rc;
-  int nBr, i;
-  int brLen = (int)strlen(zBranch);
-  const u8 *p;
-  int entryHashSize = PROLLY_HASH_SIZE * 2; /* catHash + commitHash */
-
-  if( pCommitHash ) memset(pCommitHash, 0, sizeof(ProllyHash));
-
-  chunkStoreGetWorkingState(cs, &wsHash);
-  if( prollyHashIsEmpty(&wsHash) ) return SQLITE_NOTFOUND;
-
-  rc = chunkStoreGet(cs, &wsHash, &data, &nData);
-  if( rc!=SQLITE_OK || !data ) return SQLITE_NOTFOUND;
-  if( nData < 4 ){ sqlite3_free(data); return SQLITE_NOTFOUND; }
-
-  nBr = (int)((u32)data[0] | ((u32)data[1]<<8) | ((u32)data[2]<<16) | ((u32)data[3]<<24));
-  p = data + 4;
-  for(i=0; i<nBr; i++){
-    int nl;
-    if( p + 4 > data + nData ) break;
-    nl = (int)((u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24));
-    p += 4;
-    if( p + nl + entryHashSize > data + nData ) break;
-    if( nl==brLen && memcmp(p, zBranch, nl)==0 ){
-      memcpy(pCatHash->data, p + nl, PROLLY_HASH_SIZE);
-      if( pCommitHash ){
-        memcpy(pCommitHash->data, p + nl + PROLLY_HASH_SIZE, PROLLY_HASH_SIZE);
-      }
-      sqlite3_free(data);
-      return SQLITE_OK;
-    }
-    p += nl + entryHashSize;
-  }
-
-  sqlite3_free(data);
-  return SQLITE_NOTFOUND;
+  return btreeLoadWorkingSetBlob(cs, zBranch, pCatHash, pCommitHash,
+                                 0, 0, 0, 0);
 }
 
-/*
-** Update the working state chunk: set zBranch's catalog hash to *pCatHash
-** and commit hash to *pCommitHash (or zeros if NULL).
-** Merges with existing entries for other branches.
-** Writes the new chunk to the store and updates cs->workingState.
-**
-** Each entry is: [nameLen:4 LE][name][catHash:20][commitHash:20]
-*/
 static int btreeWriteWorkingState(
   ChunkStore *cs,
   const char *zBranch,
   const ProllyHash *pCatHash,
   const ProllyHash *pCommitHash
 ){
-  ProllyHash wsHash;
-  u8 *oldData = 0;
-  int nOldData = 0;
-  u8 *newBuf = 0;
-  int nNew = 0;
-  int nAlloc;
-  int nBr = 0, i;
-  int brLen = (int)strlen(zBranch);
-  int found = 0;
+  ProllyHash stagedCatalog;
+  ProllyHash mergeCommitHash;
+  ProllyHash conflictsCatalogHash;
+  u8 isMerging = 0;
   int rc;
-  int entryHashSize = PROLLY_HASH_SIZE * 2; /* catHash + commitHash */
-  static const u8 zeroHash[PROLLY_HASH_SIZE] = {0};
 
-  chunkStoreGetWorkingState(cs, &wsHash);
-  if( !prollyHashIsEmpty(&wsHash) ){
-    chunkStoreGet(cs, &wsHash, &oldData, &nOldData);
+  rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, &stagedCatalog, &isMerging,
+                               &mergeCommitHash, &conflictsCatalogHash);
+  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+  if( rc==SQLITE_NOTFOUND ){
+    memset(&stagedCatalog, 0, sizeof(ProllyHash));
+    memset(&mergeCommitHash, 0, sizeof(ProllyHash));
+    memset(&conflictsCatalogHash, 0, sizeof(ProllyHash));
+    isMerging = 0;
   }
 
-  /* Calculate max size: old data + our new entry */
-  nAlloc = (oldData && nOldData >= 4) ? nOldData : 4;
-  nAlloc += 4 + brLen + entryHashSize + 64; /* extra space */
-  newBuf = (u8*)sqlite3_malloc(nAlloc);
-  if( !newBuf ){
-    sqlite3_free(oldData);
-    return SQLITE_NOMEM;
-  }
-
-  /* Start writing at offset 4 (skip nBranches header) */
-  nNew = 4;
-
-  /* Copy existing entries, replacing our branch if found */
-  if( oldData && nOldData >= 4 ){
-    int oldNBr = (int)((u32)oldData[0] | ((u32)oldData[1]<<8) | ((u32)oldData[2]<<16) | ((u32)oldData[3]<<24));
-    const u8 *p = oldData + 4;
-    for(i=0; i<oldNBr; i++){
-      int nl;
-      if( p + 4 > oldData + nOldData ) break;
-      nl = (int)((u32)p[0] | ((u32)p[1]<<8) | ((u32)p[2]<<16) | ((u32)p[3]<<24));
-      p += 4;
-      if( p + nl + entryHashSize > oldData + nOldData ) break;
-      if( nl==brLen && memcmp(p, zBranch, nl)==0 ){
-        /* Replace our entry */
-        newBuf[nNew++] = (u8)(nl & 0xff);
-        newBuf[nNew++] = (u8)((nl >> 8) & 0xff);
-        newBuf[nNew++] = (u8)((nl >> 16) & 0xff);
-        newBuf[nNew++] = (u8)((nl >> 24) & 0xff);
-        memcpy(newBuf + nNew, zBranch, nl); nNew += nl;
-        memcpy(newBuf + nNew, pCatHash->data, PROLLY_HASH_SIZE); nNew += PROLLY_HASH_SIZE;
-        memcpy(newBuf + nNew, pCommitHash ? pCommitHash->data : zeroHash, PROLLY_HASH_SIZE);
-        nNew += PROLLY_HASH_SIZE;
-        found = 1;
-      }else{
-        /* Copy other branch's entry as-is */
-        int entrySize = 4 + nl + entryHashSize;
-        memcpy(newBuf + nNew, p - 4, entrySize);
-        nNew += entrySize;
-      }
-      p += nl + entryHashSize;
-      nBr++;
-    }
-  }
-
-  if( !found ){
-    /* Append new entry for our branch */
-    newBuf[nNew++] = (u8)(brLen & 0xff);
-    newBuf[nNew++] = (u8)((brLen >> 8) & 0xff);
-    newBuf[nNew++] = (u8)((brLen >> 16) & 0xff);
-    newBuf[nNew++] = (u8)((brLen >> 24) & 0xff);
-    memcpy(newBuf + nNew, zBranch, brLen); nNew += brLen;
-    memcpy(newBuf + nNew, pCatHash->data, PROLLY_HASH_SIZE); nNew += PROLLY_HASH_SIZE;
-    memcpy(newBuf + nNew, pCommitHash ? pCommitHash->data : zeroHash, PROLLY_HASH_SIZE);
-    nNew += PROLLY_HASH_SIZE;
-    nBr++;
-  }
-
-  /* Write branch count header */
-  newBuf[0] = (u8)(nBr & 0xff);
-  newBuf[1] = (u8)((nBr >> 8) & 0xff);
-  newBuf[2] = (u8)((nBr >> 16) & 0xff);
-  newBuf[3] = (u8)((nBr >> 24) & 0xff);
-
-  sqlite3_free(oldData);
-
-  /* Store the chunk and update the manifest field */
-  {
-    ProllyHash newHash;
-    rc = chunkStorePut(cs, newBuf, nNew, &newHash);
-    sqlite3_free(newBuf);
-    if( rc!=SQLITE_OK ) return rc;
-    chunkStoreSetWorkingState(cs, &newHash);
-  }
-
-  return SQLITE_OK;
+  return btreeStoreWorkingSetBlob(cs, zBranch, pCatHash, pCommitHash,
+                                  &stagedCatalog, isMerging,
+                                  &mergeCommitHash, &conflictsCatalogHash);
 }
 
 static int btreeRefreshFromDisk(Btree *p){
@@ -2004,7 +1977,7 @@ static int btreeRefreshFromDisk(Btree *p){
   if( !bChanged ) return SQLITE_OK;
 
   /* The file changed. Load the catalog for THIS connection's branch.
-  ** Each branch's working catalog is stored in the working state chunk
+  ** Each branch's working catalog is stored in the branch WorkingSet blob
   ** (persisted on every autocommit). This prevents cross-branch corruption
   ** where one branch's autocommit overwrites the shared manifest catalog. */
   {
@@ -2153,10 +2126,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
   int rcRollback = SQLITE_OK;
-  ProllyHash oldWorkingState;
   (void)bCleanup;
-
-  oldWorkingState = pBt->store.workingState;
 
   if( p->inTrans==TRANS_WRITE ){
     /* Step 1: flush all in-memory edits to prolly trees */
@@ -2198,7 +2168,6 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       /* SQLite tears down the outer transaction on COMMIT failure here.
       ** Roll back our in-memory roots and chunk-store state so the
       ** connection does not keep seeing uncommitted edits. */
-      pBt->store.workingState = oldWorkingState;
       rcRollback = prollyBtreeRollback(p, rc, 0);
       if( rcRollback!=SQLITE_OK ){
         return rcRollback;
@@ -4647,7 +4616,6 @@ int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
   if( rc!=SQLITE_OK ) return rc;
 
   rc = integrityCheckChunkGraph(&ctx, &pBt->store.refsHash);
-  if( rc==SQLITE_OK ) rc = integrityCheckChunkGraph(&ctx, &pBt->store.workingState);
   for(i=0; rc==SQLITE_OK && i<pBt->store.nBranches; i++){
     rc = integrityCheckChunkGraph(&ctx, &pBt->store.aBranches[i].commitHash);
     if( rc==SQLITE_OK ){
@@ -5434,8 +5402,9 @@ void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){
 int doltliteSaveWorkingSet(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;
-  u8 buf[WS_TOTAL_SIZE];
-  ProllyHash wsHash;
+  u8 *catData = 0;
+  int nCatData = 0;
+  ProllyHash workingCatHash;
   const char *zBranch;
   int rc;
 
@@ -5445,58 +5414,38 @@ int doltliteSaveWorkingSet(sqlite3 *db){
 
   zBranch = pBtree->zBranch ? pBtree->zBranch : "main";
 
-  buf[0] = 1;  
-  memcpy(buf + WS_STAGED_OFF, pBtree->stagedCatalog.data, PROLLY_HASH_SIZE);
-  buf[WS_MERGING_OFF] = pBtree->isMerging;
-  memcpy(buf + WS_MERGE_COMMIT_OFF, pBtree->mergeCommitHash.data, PROLLY_HASH_SIZE);
-  memcpy(buf + WS_CONFLICTS_OFF, pBtree->conflictsCatalogHash.data, PROLLY_HASH_SIZE);
-
-  rc = chunkStorePut(cs, buf, WS_TOTAL_SIZE, &wsHash);
+  rc = serializeCatalog(pBtree, &catData, &nCatData);
+  if( rc != SQLITE_OK ) return rc;
+  rc = chunkStorePut(cs, catData, nCatData, &workingCatHash);
+  sqlite3_free(catData);
   if( rc != SQLITE_OK ) return rc;
 
-  
-  return chunkStoreSetBranchWorkingSet(cs, zBranch, &wsHash);
+  return btreeStoreWorkingSetBlob(cs, zBranch, &workingCatHash,
+                                  &pBtree->headCommit, &pBtree->stagedCatalog,
+                                  pBtree->isMerging, &pBtree->mergeCommitHash,
+                                  &pBtree->conflictsCatalogHash);
 }
 
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;
-  ProllyHash wsHash;
-  u8 *data = 0;
-  int nData = 0;
   int rc;
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   pBtree = db->aDb[0].pBt;
   if( !cs ) return SQLITE_ERROR;
 
-  rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
-  if( rc != SQLITE_OK || prollyHashIsEmpty(&wsHash) ){
-    
+  rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, &pBtree->stagedCatalog,
+                               &pBtree->isMerging, &pBtree->mergeCommitHash,
+                               &pBtree->conflictsCatalogHash);
+  if( rc == SQLITE_NOTFOUND ){
     memset(&pBtree->stagedCatalog, 0, sizeof(ProllyHash));
     pBtree->isMerging = 0;
     memset(&pBtree->mergeCommitHash, 0, sizeof(ProllyHash));
     memset(&pBtree->conflictsCatalogHash, 0, sizeof(ProllyHash));
     return SQLITE_OK;
   }
-
-  rc = chunkStoreGet(cs, &wsHash, &data, &nData);
-  if( rc != SQLITE_OK || nData < WS_TOTAL_SIZE ){
-    sqlite3_free(data);
-    memset(&pBtree->stagedCatalog, 0, sizeof(ProllyHash));
-    pBtree->isMerging = 0;
-    memset(&pBtree->mergeCommitHash, 0, sizeof(ProllyHash));
-    memset(&pBtree->conflictsCatalogHash, 0, sizeof(ProllyHash));
-    return SQLITE_OK;
-  }
-
-  memcpy(pBtree->stagedCatalog.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
-  pBtree->isMerging = data[WS_MERGING_OFF];
-  memcpy(pBtree->mergeCommitHash.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
-  memcpy(pBtree->conflictsCatalogHash.data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
-
-  sqlite3_free(data);
-  return SQLITE_OK;
+  return rc;
 }
 
 static int origBtreeCloseVt(Btree *p){

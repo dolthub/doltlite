@@ -1212,7 +1212,6 @@ static void run_refresh_refs_corruption_preserves_state(void){
   ChunkStore cs2;
   ProllyHash badHash;
   ProllyHash refsHashBefore;
-  ProllyHash workingStateBefore;
   static const u8 badBlob[] = { 6, 0, 0, 0 };
   char dbpath[256];
   int nBranchesBefore;
@@ -1236,7 +1235,6 @@ static void run_refresh_refs_corruption_preserves_state(void){
   check("open_store_1", chunkStoreOpen(&cs1, sqlite3_vfs_find(0), dbpath,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
   refsHashBefore = cs1.refsHash;
-  workingStateBefore = cs1.workingState;
   nBranchesBefore = cs1.nBranches;
   zDefaultBefore = sqlite3_mprintf("%s", cs1.zDefaultBranch ? cs1.zDefaultBranch : "");
   zBranchBefore = (cs1.aBranches && cs1.nBranches>0 && cs1.aBranches[0].zName)
@@ -1265,9 +1263,6 @@ static void run_refresh_refs_corruption_preserves_state(void){
          && strcmp(cs1.aBranches[0].zName, zBranchBefore)==0));
   check("refresh_preserves_refs_hash",
         memcmp(&cs1.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
-  check("refresh_preserves_working_state",
-        memcmp(&cs1.workingState, &workingStateBefore, sizeof(ProllyHash))==0);
-
   sqlite3_free(zDefaultBefore);
   sqlite3_free(zBranchBefore);
   chunkStoreClose(&cs1);
@@ -1446,8 +1441,6 @@ static void run_refresh_open_path_transactional(void){
   check("refresh_open_path_returns_error", rc!=SQLITE_OK);
   check("refresh_open_path_does_not_mark_changed", changed==0);
   check("refresh_open_path_preserves_empty_refs", prollyHashIsEmpty(&cs.refsHash));
-  check("refresh_open_path_preserves_empty_working_state",
-        prollyHashIsEmpty(&cs.workingState));
   check("refresh_open_path_preserves_branch_count", cs.nBranches==0);
 
   chunkStoreClose(&cs);
