@@ -2495,11 +2495,6 @@ void sqlite3GenerateConstraintChecks(
     ** is invoked.  */
     assert( IsOrdinaryTable(pTab) );
 #ifndef SQLITE_ENABLE_PREUPDATE_HOOK
-#ifndef DOLTLITE_PROLLY
-    /* Optimization: skip conflict check when the B-tree can implicitly
-    ** replace the existing entry by PK prefix. Disabled for prolly trees
-    ** because their sort keys include ALL columns, so OP_IdxInsert creates
-    ** a new entry instead of replacing the existing one. */
     if( (ix==0 && pIdx->pNext==0)                   /* Condition 3 */
      && pPk==pIdx                                   /* Condition 2 */
      && onError==OE_Replace                         /* Condition 1 */
@@ -2511,7 +2506,6 @@ void sqlite3GenerateConstraintChecks(
       sqlite3VdbeResolveLabel(v, addrUniqueOk);
       continue;
     }
-#endif /* ifndef DOLTLITE_PROLLY */
 #endif /* ifndef SQLITE_ENABLE_PREUPDATE_HOOK */
 
     /* Check to see if the new index entry will be unique */

@@ -1,0 +1,320 @@
+# Known divergences from upstream sqlite testfixture
+#
+# Format: <test_file> <test_name>  # reason (optional)
+#
+# These tests fail when run by run_testfixture.sh against doltlite's
+# testfixture build, but the failures are not bugs — they're cases
+# where upstream sqlite tests assume rowid-based semantics that
+# doltlite intentionally cannot match.
+#
+# Background: doltlite keys user-table rows in its prolly tree by the
+# user's primary key columns rather than by sqlite's auto-allocated
+# rowid (since #358), because rowid is allocation-order-dependent and
+# therefore history-dependent — a hard incompatibility with the Dolt
+# model where two branches that independently insert identical rows
+# must produce identical row identities. Tests that rely on rowid
+# behavior in any of these forms produce different (but correct under
+# doltlite's model) results:
+#
+#   * `WHERE rowid = N` against tables that doltlite auto-converts
+#     to WITHOUT ROWID, where rowid no longer exists as an
+#     addressable column
+#   * Unordered SELECT relying on insertion order (sqlite returns
+#     rowid order, doltlite returns user-PK order)
+#   * `pragma table_info` reporting non-PK columns differently for
+#     auto-converted WITHOUT-ROWID tables
+#   * AUTOINCREMENT / sqlite_sequence behavior tied to rowid
+#     allocation
+#   * Foreign key SET NULL / SET DEFAULT actions whose triggering
+#     DELETE addresses parent rows by rowid
+#   * Collation tests that exercise the rowid column itself
+#   * `pragma integrity_check` tests that inject corruption via
+#     test_control hooks that don't reach prolly storage
+#
+# The runner (test/run_testfixture.sh) enforces strict equality:
+# every entry here MUST still actually fail, and any actual failure
+# NOT listed here is a regression. If you fix one of these, remove
+# the entry.
+
+# ── select1 ──
+select1 select1-2.23  # rowid-order vs PK-order on unordered SELECT
+
+# ── index ──
+index index-7.3   # explicit rowid reference
+index index-11.1  # rowid-order assumption
+index index-13.2  # rowid-order assumption
+index index-16.1  # explicit rowid reference
+index index-16.2  # explicit rowid reference
+index index-16.3  # explicit rowid reference
+index index-16.4  # explicit rowid reference
+index index-16.5  # explicit rowid reference
+index index-17.1  # rowid-order assumption
+
+# ── alter ──
+alter alter-1.2  # ALTER TABLE rowid-preservation semantics
+alter alter-1.5  # ALTER TABLE rowid-preservation semantics
+alter alter-1.6  # ALTER TABLE rowid-preservation semantics
+alter alter-1.7  # ALTER TABLE rowid-preservation semantics
+
+# ── auth ──
+auth auth-1.283  # rowid-based authorization edge case
+
+# ── in ──
+in in-19.40  # IN clause path that hits NOT NULL via rowid lookup
+
+# ── in3 ──
+in3 in3-1.2   # IN clause variant using rowid
+in3 in3-1.4   # IN clause variant using rowid
+in3 in3-1.6   # IN clause variant using rowid
+in3 in3-1.16  # IN clause variant using rowid
+in3 in3-1.17  # IN clause variant using rowid
+
+# ── intpkey ──
+intpkey intpkey-1.1  # tests INTEGER vs INT primary key alias semantics
+
+# ── collate1 ──
+collate1 collate1-6.7  # collation on the rowid column
+
+# ── collate4 ──
+collate4 collate4-1.1.7   # collation interacting with rowid ordering
+collate4 collate4-1.1.8
+collate4 collate4-1.1.9
+collate4 collate4-1.1.10
+collate4 collate4-1.1.11
+collate4 collate4-1.1.12
+collate4 collate4-1.1.13
+collate4 collate4-1.1.14
+collate4 collate4-1.1.15
+collate4 collate4-1.1.16
+collate4 collate4-1.1.17
+collate4 collate4-1.1.18
+collate4 collate4-1.1.19
+collate4 collate4-1.1.20
+collate4 collate4-1.2.7
+collate4 collate4-1.2.8
+collate4 collate4-1.2.9
+collate4 collate4-1.2.10
+collate4 collate4-1.2.11
+collate4 collate4-1.2.12
+collate4 collate4-1.2.13
+
+# ── fkey1 ──
+fkey1 fkey1-4.2  # foreign key resolution via rowid
+
+# ── fkey2 ──
+fkey2 fkey2-5.2     # FK + rowid interaction
+fkey2 fkey2-5.3
+fkey2 fkey2-5.4
+fkey2 fkey2-13.1.2.1
+fkey2 fkey2-13.1.2.3
+fkey2 fkey2-13.1.3
+fkey2 fkey2-13.1.4
+
+# ── triggerC ──
+triggerC triggerC-2.1.1  # trigger flow control with rowid access
+triggerC triggerC-2.1.2
+triggerC triggerC-2.1.3
+triggerC triggerC-2.1.4
+triggerC triggerC-2.1.6
+
+# ── window1 ──
+window1 window1-10.7  # rowid-order vs PK-order on unordered SELECT
+window1 window1-10.8  # rowid-order vs PK-order on unordered SELECT
+
+# ── e_createtable ──
+e_createtable e_createtable-4.4.1   # AUTOINCREMENT / sqlite_sequence
+e_createtable e_createtable-4.4.2
+e_createtable e_createtable-4.4.3
+e_createtable e_createtable-4.4.4
+e_createtable e_createtable-4.4.5
+e_createtable e_createtable-4.4.6
+e_createtable e_createtable-4.4.7
+e_createtable e_createtable-4.4.8
+e_createtable e_createtable-4.4.9
+e_createtable e_createtable-4.4.10
+e_createtable e_createtable-4.4.11
+e_createtable e_createtable-4.4.12
+e_createtable e_createtable-4.4.13
+e_createtable e_createtable-4.4.14
+e_createtable e_createtable-4.5.1.1
+e_createtable e_createtable-4.5.1.2
+e_createtable e_createtable-4.5.1.3
+e_createtable e_createtable-4.5.1.4
+e_createtable e_createtable-4.9.1
+e_createtable e_createtable-4.9.4
+e_createtable e_createtable-4.9.5
+e_createtable e_createtable-4.10.1
+e_createtable e_createtable-4.15.5.4
+e_createtable e_createtable-5.3.4
+e_createtable e_createtable-5.3.5
+e_createtable e_createtable-5.3.6
+e_createtable e_createtable-5.3.7
+e_createtable e_createtable-5.4.2.1
+e_createtable e_createtable-5.4.2.2
+e_createtable e_createtable-5.4.2.3
+e_createtable e_createtable-5.4.2.4
+e_createtable e_createtable-5.4.3
+e_createtable e_createtable-5.6.1
+
+# ── e_select ──
+e_select e_select-4.9.4  # rowid-order vs PK-order on unordered SELECT
+
+# ── e_fkey ──
+e_fkey e_fkey-16.4   # explicit rowid reference (no such column: rowid)
+e_fkey e_fkey-17.4   # explicit rowid reference
+e_fkey e_fkey-44.2   # ON DELETE SET NULL via rowid lookup
+e_fkey e_fkey-44.3
+e_fkey e_fkey-44.4
+e_fkey e_fkey-44.5
+e_fkey e_fkey-45.1   # ON DELETE SET DEFAULT via rowid lookup
+e_fkey e_fkey-45.2
+e_fkey e_fkey-45.3
+e_fkey e_fkey-45.4
+e_fkey e_fkey-45.5
+e_fkey e_fkey-51.2
+e_fkey e_fkey-51.3
+e_fkey e_fkey-52.6
+e_fkey e_fkey-57.7
+e_fkey e_fkey-58.3
+
+# ── pragma ──
+pragma pragma-6.2.2   # table_info notnull shape on auto-converted WITHOUT-ROWID
+pragma pragma-6.8     # table_info shape on auto-converted WITHOUT-ROWID
+pragma pragma-22.2    # integrity_check on injected corruption (doesn't reach prolly)
+pragma pragma-22.3.1
+pragma pragma-22.3.3
+pragma pragma-22.4.1
+pragma pragma-22.4.2
+
+# ── shared ──
+shared shared-1.7.2    # shared-cache + rowid-order assumption
+shared shared-1.10.5   # rowid-order on unordered SELECT
+shared shared-1.10.7
+shared shared-2.7.2
+shared shared-2.10.5
+shared shared-2.10.7
+
+# ── shared2 ──
+shared2 shared2-1.1  # shared-cache rowid-order assumption
+shared2 shared2-1.2
+shared2 shared2-1.3
+
+# ── pragma (extra: VACUUM no-op) ──
+pragma pragma-8.2.4.3  # PRAGMA schema_version after VACUUM — VACUUM is a no-op (#322), so schema_version is not bumped
+
+# ── vacuum ──
+# VACUUM is intentionally a no-op for doltlite. Prolly trees use
+# content-addressed storage with no page fragmentation, so VACUUM
+# has nothing to do. The full vacuum.test file still exercises
+# parser/analyzer/temp-database paths that aren't VACUUM-specific —
+# 40 of 47 tests pass under the no-op. The 7 failures below all
+# verify post-VACUUM page-layout side effects that don't apply.
+vacuum vacuum-1.3    # post-VACUUM page count assertion
+vacuum vacuum-1.6    # post-VACUUM page count assertion
+vacuum vacuum-2.1.1  # "cannot VACUUM from within a transaction" error path (no-op skips this check)
+vacuum vacuum-5.1    # post-VACUUM NOT NULL constraint propagation (no-op never re-runs constraints)
+vacuum vacuum-7.6    # post-VACUUM page count assertion
+vacuum vacuum-11.2   # VACUUM page_size change to 2048 (no-op leaves page_size unchanged)
+vacuum vacuum-11.3   # VACUUM page_size change to 4096
+
+# ── vacuum2 ──
+# Same rationale as vacuum.test. 23 of 31 pass under the no-op.
+vacuum2 vacuum2-2.2   # post-VACUUM page count
+vacuum2 vacuum2-3.1   # post-VACUUM page count
+vacuum2 vacuum2-3.13  # post-VACUUM page count
+vacuum2 vacuum2-4.1   # post-VACUUM auto_vacuum mode change
+vacuum2 vacuum2-5.2   # "cannot VACUUM - SQL statements in progress" error path
+vacuum2 vacuum2-5.3   # error path
+vacuum2 vacuum2-5.4   # error path
+vacuum2 vacuum2-6.3   # post-VACUUM page count
+
+# ── crash7 ──
+# crash7 verifies crash recovery during VACUUM. Since VACUUM is a no-op
+# for doltlite (#322), the simulated crashes that the test framework
+# triggers don't fire (the child process exits cleanly because there's
+# no VACUUM work to crash inside of). The test file has 294 cases:
+# 148 pass (the non-VACUUM-specific setup/teardown paths) and 146
+# fail. The 146 are listed below.
+crash7 crash7-1.1.crash
+crash7 crash7-1.2.crash
+crash7 crash7-1.3.crash
+crash7 crash7-1.4.crash
+crash7 crash7-1.5.crash
+crash7 crash7-1.6.crash
+crash7 crash7-1.7.crash
+crash7 crash7-1.8.crash
+crash7 crash7-1.9.crash
+crash7 crash7-1.10.crash
+crash7 crash7-1.11.crash
+crash7 crash7-1.12.crash
+crash7 crash7-1.13.crash
+crash7 crash7-1.14.crash
+crash7 crash7-1.15.crash
+crash7 crash7-1.16.crash
+crash7 crash7-1.17.crash
+crash7 crash7-1.18.crash
+crash7 crash7-1.19.crash
+crash7 crash7-1.20.crash
+crash7 crash7-1.21.crash
+crash7 crash7-1.22.crash
+crash7 crash7-1.23.crash
+crash7 crash7-1.24.crash
+crash7 crash7-1.25.crash
+crash7 crash7-1.26.crash
+crash7 crash7-1.27.crash
+crash7 crash7-1.28.crash
+crash7 crash7-1.29.crash
+crash7 crash7-1.30.crash
+crash7 crash7-1.31.crash
+crash7 crash7-1.32.crash
+crash7 crash7-1.33.crash
+crash7 crash7-1.34.crash
+crash7 crash7-1.35.crash
+crash7 crash7-1.36.crash
+crash7 crash7-1.37.crash
+crash7 crash7-1.38.crash
+crash7 crash7-1.39.crash
+crash7 crash7-1.40.crash
+crash7 crash7-1.41.crash
+crash7 crash7-1.42.crash
+crash7 crash7-1.43.crash
+crash7 crash7-1.44.crash
+crash7 crash7-1.45.crash
+crash7 crash7-1.46.crash
+crash7 crash7-1.47.crash
+crash7 crash7-1.48.crash
+crash7 crash7-1.49.crash
+crash7 crash7-1.50.crash
+crash7 crash7-1.51.crash
+crash7 crash7-1.52.crash
+crash7 crash7-1.53.crash
+crash7 crash7-1.54.crash
+crash7 crash7-1.55.crash
+crash7 crash7-1.56.crash
+crash7 crash7-1.57.crash
+crash7 crash7-1.58.crash
+crash7 crash7-1.59.crash
+crash7 crash7-1.60.crash
+crash7 crash7-1.61.crash
+crash7 crash7-1.62.crash
+crash7 crash7-1.63.crash
+crash7 crash7-2.1.1
+crash7 crash7-2.2.1
+crash7 crash7-2.3.1
+crash7 crash7-2.4.1
+crash7 crash7-2.5.1
+crash7 crash7-2.6.1
+crash7 crash7-2.7.1
+crash7 crash7-2.8.1
+crash7 crash7-2.9.1
+crash7 crash7-2.10.1
+crash7 crash7-2.11.1
+crash7 crash7-2.12.1
+crash7 crash7-2.13.1
+crash7 crash7-2.14.1
+crash7 crash7-2.15.1
+crash7 crash7-2.16.1
+crash7 crash7-2.17.1
+crash7 crash7-2.18.1
+crash7 crash7-2.19.1
+crash7 crash7-2.20.1

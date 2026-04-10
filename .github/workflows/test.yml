@@ -155,44 +155,33 @@ jobs:
 
     # ── SQLite testfixture tests ────────────────────────────
     #
-    # Several upstream sqlite testfixture files are deliberately excluded
-    # because they assume sqlite-stock rowid semantics that doltlite
-    # cannot match. Doltlite keys user tables by their primary key
-    # columns (since #358) so that two branches that diverge from a
-    # common ancestor and independently insert rows produce identical
-    # row identities for identical user data — a hard requirement for
-    # cross-branch merging. sqlite's auto-allocated rowid is allocation-
-    # order dependent and therefore history-dependent, which is
-    # fundamentally incompatible with the doltlite/Dolt model. Tests
-    # that rely on rowid being a stable, history-dependent integer
-    # (savepoint rollback restoring rowids, index/trigger access by
-    # rowid, INTEGER vs INT semantics around AUTOINCREMENT, foreign
-    # key child references via rowid, collation tests on the rowid
-    # column, etc.) are excluded here. See doltlite issue #359 for
-    # the full rationale and per-test exclusion reasons.
-    #
-    # trigger2 is excluded for a different reason — it crashes early
-    # with "database disk image is malformed" after ~33 tests (the
-    # outer runner misclassifies the early exit as a timeout). The
-    # crash only reproduces under testfixture's build flags
-    # (-DSQLITE_TEST=1 etc); the same SQL run against libdoltlite.a
-    # via the doltlite shell or a C client succeeds. Tracked in
-    # issue #361.
+    # Every upstream sqlite testfixture file we know about is run.
+    # Files that have a small number of expected divergences from
+    # upstream behavior (because doltlite keys rows by user PK rather
+    # than by sqlite's auto-allocated rowid since #358) record those
+    # specific test names in test/known_testfixture_divergences.txt
+    # and the runner enforces strict equality: any actual failure
+    # not on the list is a regression, and any list entry that
+    # stops failing is reported as needing removal. This keeps the
+    # divergence list honest and lets us catch real bugs in tests
+    # that USED to be skipped at the file level.
 
     - name: SQLite core tests
       run: |
         cd build
         bash ../test/run_testfixture.sh "Core tests" 120 \
-          insert select2 select3 select4 delete update \
+          insert select1 select2 select3 select4 delete update \
           trans where expr attach \
           coalesce conflict cse date join subquery view \
           between cast check limit null quote rowid sort types \
-          types2 in2 in4 in5 in6 like like2 \
+          types2 in in2 in3 in4 in5 in6 like like2 \
           minmax minmax2 minmax3 select5 select6 select7 \
           selectA selectB distinctagg enc count capi2 capi3 \
-          collate2 collate3 \
-          fkey5 \
-          triggerA triggerB
+          collate1 collate2 collate3 collate4 \
+          index intpkey \
+          alter auth savepoint \
+          fkey1 fkey2 fkey5 \
+          trigger1 trigger2 triggerA triggerB triggerC
 
     - name: SQLite large tests
       run: |
@@ -205,7 +194,7 @@ jobs:
       run: |
         cd build
         bash ../test/run_testfixture.sh "Crash recovery" 180 \
-          crash crash2 crash3 crash4 crash5 crash6 crash8 crashM
+          crash crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM
 
     - name: SQLite fuzz tests
       run: |
@@ -217,18 +206,19 @@ jobs:
       run: |
         cd build
         bash ../test/run_testfixture.sh "Additional tests" 120 \
-          window2 window3 \
+          window1 window2 window3 \
           json101 json102 json103 json104 json105 \
           aggnested aggorderby \
           affinity2 affinity3 \
           between distinct distinctagg \
-          e_delete e_insert e_update \
+          e_createtable e_delete e_insert e_select e_update e_fkey \
           func2 func3 hexlit icu intarray \
           orderby1 orderby2 orderby3 orderby4 \
-          pragma2 printf2 \
+          pragma pragma2 printf2 \
           schema schema2 schema3 schema4 \
-          shared3 \
+          shared shared2 shared3 \
           speed1 substr table tempdb \
+          vacuum vacuum2 \
           tkt-38cb5df375 tkt-9a8b09f8e6 tkt-99378177930f87bd \
           tkt-80e031a00f tkt-80ba201079 tkt-31338dca7e \
           tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \

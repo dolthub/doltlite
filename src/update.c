@@ -1087,19 +1087,6 @@ void sqlite3Update(
     if( hasFK>1 || chngKey ){
       sqlite3VdbeAddOp2(v, OP_Delete, iDataCur, 0);
     }
-#ifdef DOLTLITE_PROLLY
-    else if( pPk ){
-      /* Prolly tree sort keys include ALL columns (PK + non-PK), so updating
-      ** a non-PK column produces a different sort key. Standard SQLite B-tree
-      ** does implicit seek-and-replace by PK prefix, but the prolly tree sees
-      ** the new key as a distinct entry. Explicitly delete the old PK entry
-      ** before inserting the updated one to prevent duplicates. */
-      sqlite3VdbeAddOp2(v, OP_Delete, iDataCur, 0);
-      if( eOnePass==ONEPASS_MULTI ){
-        sqlite3VdbeChangeP5(v, OPFLAG_SAVEPOSITION);
-      }
-    }
-#endif
 #endif
 
     if( hasFK ){
