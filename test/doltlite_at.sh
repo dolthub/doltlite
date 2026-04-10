@@ -41,6 +41,25 @@ run_test "basic_c3" \
 rm -f "$DB"
 
 # ============================================================
+# Quoted table names work in dolt_at_<table>
+# ============================================================
+
+DB=/tmp/test_at_quoted_$$.db; rm -f "$DB"
+echo "CREATE TABLE \"odd\"\"name\"(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO \"odd\"\"name\" VALUES(1,'a');
+SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "quoted_name_count" \
+  "SELECT count(*) FROM \"dolt_at_odd\"\"name\"( (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "1" "$DB"
+
+run_test "quoted_name_value" \
+  "SELECT v FROM \"dolt_at_odd\"\"name\"( (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "a" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Rowid values correct at each commit
 # ============================================================
 

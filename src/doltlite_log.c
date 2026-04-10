@@ -5,6 +5,7 @@
 #include "sqliteInt.h"
 #include "doltlite_commit.h"
 #include "prolly_hash.h"
+#include "prolly_hashset.h"
 #include "chunk_store.h"
 
 #include "doltlite_internal.h"
@@ -46,12 +47,11 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash *queue = 0;
   int qHead = 0, qTail = 0, qAlloc = 0;
-  ProllyHash *visited = 0;
-  int nVisited = 0, nVisitedAlloc = 0;
+  ProllyHashSet visited;
   LogEntry *aEntries = 0;
   int nEntries = 0, nAlloc = 0;
   int rc = SQLITE_OK;
-  int i;
+  int i, visitedInit = 0;
 
   if( !cs || prollyHashIsEmpty(pHead) ){
     *ppOut = 0; *pnOut = 0;
@@ -63,27 +63,24 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
   queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
   if( !queue ) return SQLITE_NOMEM;
   queue[qTail++] = *pHead;
+  rc = prollyHashSetInit(&visited, 64);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(queue);
+    return rc;
+  }
+  visitedInit = 1;
 
   while( qHead < qTail ){
     ProllyHash cur = queue[qHead++];
     DoltliteCommit commit;
     LogEntry *pEntry;
-    int dup = 0;
 
     /* Dedup by hash */
-    for(i = 0; i < nVisited; i++){
-      if( prollyHashCompare(&visited[i], &cur)==0 ){ dup = 1; break; }
+    if( prollyHashSetContains(&visited, &cur) ) continue;
+    rc = prollyHashSetAdd(&visited, &cur);
+    if( rc!=SQLITE_OK ){
+      break;
     }
-    if( dup ) continue;
-
-    /* Add to visited */
-    if( nVisited >= nVisitedAlloc ){
-      int newAlloc = nVisitedAlloc ? nVisitedAlloc*2 : 16;
-      ProllyHash *tmp = sqlite3_realloc(visited, newAlloc*(int)sizeof(ProllyHash));
-      if( !tmp ){ rc = SQLITE_NOMEM; break; }
-      visited = tmp; nVisitedAlloc = newAlloc;
-    }
-    visited[nVisited++] = cur;
 
     /* Load commit */
     memset(&commit, 0, sizeof(commit));
@@ -120,7 +117,7 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
   }
 
   sqlite3_free(queue);
-  sqlite3_free(visited);
+  if( visitedInit ) prollyHashSetFree(&visited);
 
   if( rc!=SQLITE_OK ){
     for(i = 0; i < nEntries; i++) doltliteCommitClear(&aEntries[i].commit);

@@ -13,6 +13,7 @@
 **   ./doltlite_regression_test_c refs_blob_corruption
 **   ./doltlite_regression_test_c conflicts_blob_corruption
 **   ./doltlite_regression_test_c status_error_propagation
+**   ./doltlite_regression_test_c remote_refs_corruption
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -650,6 +651,59 @@ static void run_status_error_propagation(void){
   remove_db(dbpath);
 }
 
+static void run_remote_refs_corruption(void){
+  sqlite3 *srcDb = 0;
+  sqlite3 *localDb = 0;
+  ChunkStore cs;
+  ProllyHash badRefsHash;
+  u8 badBlob[] = { 5, 0, 0, 0, 0, 1, 0, 0 };
+  char remotePath[256];
+  char localPath[256];
+  int rc;
+
+  printf("=== Remote Refs Corruption Test ===\n\n");
+  make_dbpath(remotePath, sizeof(remotePath), "test_remote_refs_corruption_remote");
+  make_dbpath(localPath, sizeof(localPath), "test_remote_refs_corruption_local");
+  remove_db(remotePath);
+  remove_db(localPath);
+
+  check("open_remote_db", open_db(remotePath, &srcDb)==SQLITE_OK);
+  check("setup_remote_repo", execsql(srcDb,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_close(srcDb);
+  srcDb = 0;
+
+  check("open_local_db", open_db(localPath, &localDb)==SQLITE_OK);
+  {
+    char sql[1024];
+    snprintf(sql, sizeof(sql),
+      "CREATE TABLE seed(x INTEGER);"
+      "SELECT dolt_commit('-A', '-m', 'seed');"
+      "SELECT dolt_remote('add','origin','file://%s');",
+      remotePath);
+    check("setup_local_remote", execsql(localDb, sql)==SQLITE_OK);
+  }
+
+  check("open_chunk_store", chunkStoreOpen(&cs, sqlite3_vfs_find(0), remotePath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("lock_remote_store", chunkStoreLockAndRefresh(&cs)==SQLITE_OK);
+  check("put_bad_remote_refs",
+        chunkStorePut(&cs, badBlob, (int)sizeof(badBlob), &badRefsHash)==SQLITE_OK);
+  memcpy(&cs.refsHash, &badRefsHash, sizeof(ProllyHash));
+  check("commit_bad_remote_refs", chunkStoreCommit(&cs)==SQLITE_OK);
+  chunkStoreUnlock(&cs);
+  chunkStoreClose(&cs);
+
+  rc = execsql_silent(localDb, "SELECT dolt_fetch('origin');");
+  check("fetch_surfaces_corrupt_refs", rc!=SQLITE_OK);
+
+  sqlite3_close(localDb);
+  remove_db(remotePath);
+  remove_db(localPath);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -657,7 +711,8 @@ static const RegressionCase aCases[] = {
   { "refs_blob_corruption", "Refs Blob Corruption Test", run_refs_blob_corruption },
   { "refresh_error_propagation", "Refresh Error Propagation Test", run_refresh_error_propagation },
   { "conflicts_blob_corruption", "Conflicts Blob Corruption Test", run_conflicts_blob_corruption },
-  { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation }
+  { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation },
+  { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption }
 };
 
 static int run_case_by_name(const char *zName){
