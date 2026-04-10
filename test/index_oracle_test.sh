@@ -862,7 +862,24 @@ SELECT count(*) FROM t;
 PRAGMA integrity_check;
 "
 
-# 7e. After CREATE INDEX on existing data + UPDATE
+# 7e. File-backed update after savepoint rollback (#320)
+oracle "cat7_update_after_savepoint_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b INT);
+CREATE INDEX idx_a ON t(a);
+CREATE INDEX idx_b ON t(b);
+INSERT INTO t VALUES(1,10,100),(2,20,200),(3,30,300);
+SAVEPOINT sp;
+UPDATE t SET a = 99, b = 99;
+DELETE FROM t WHERE id = 2;
+INSERT INTO t VALUES(4,40,400);
+ROLLBACK TO sp;
+INSERT INTO t VALUES(5,50,500);
+UPDATE t SET b = b + 1;
+SELECT * FROM t ORDER BY id;
+PRAGMA integrity_check;
+"
+
+# 7f. After CREATE INDEX on existing data + UPDATE
 oracle "cat7_integrity_create_index_update" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
 WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<300)
@@ -873,7 +890,7 @@ SELECT count(*) FROM t;
 PRAGMA integrity_check;
 "
 
-# 7f. After mixed INSERT/UPDATE/DELETE batch
+# 7g. After mixed INSERT/UPDATE/DELETE batch
 oracle "cat7_integrity_mixed_batch" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
 CREATE INDEX idx ON t(val);
