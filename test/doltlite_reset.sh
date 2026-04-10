@@ -72,7 +72,8 @@ run_test "correct_data_after_hard" \
   "SELECT v FROM t;" \
   "a" "$DB"
 
-# --- Hard reset discards multiple changes ---
+# --- Hard reset reverts tracked-table modifications but preserves
+# --- untracked tables (matching git --hard semantics).
 DB2=/tmp/test_reset2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE a(x); CREATE TABLE b(y); INSERT INTO a VALUES(1); INSERT INTO b VALUES(2); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "INSERT INTO a VALUES(10); INSERT INTO b VALUES(20); CREATE TABLE c(z);" | $DOLTLITE "$DB2" > /dev/null 2>&1
@@ -83,9 +84,15 @@ run_test "changes_before_hard" \
 
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 
-run_test "clean_after_multi_hard" \
+# After hard reset: a and b are reverted (no longer in status),
+# but c (untracked new table) is preserved as an unstaged new table.
+run_test "untracked_preserved_after_multi_hard" \
   "SELECT count(*) FROM dolt_status;" \
-  "0" "$DB2"
+  "1" "$DB2"
+
+run_test "untracked_table_still_present_after_hard" \
+  "SELECT table_name FROM dolt_status;" \
+  "c" "$DB2"
 
 run_test "a_reverted" \
   "SELECT * FROM a;" \

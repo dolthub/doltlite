@@ -1067,6 +1067,8 @@ static void doltliteResetFunc(
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash targetCatHash;
   ProllyHash targetCommit;
+  ProllyHash preResetHeadCatHash;
+  int havePreResetHead = 0;
   int isHard = 0;
   int isSoft = 0;
   int isMixed = 0;
@@ -1080,6 +1082,15 @@ static void doltliteResetFunc(
   if( !cs ){
     sqlite3_result_error(context, "no database open", -1);
     return;
+  }
+
+  /* Capture the pre-reset HEAD catalog hash now, before any
+  ** session state mutations. The --hard preserve-untracked logic
+  ** below uses this to identify which tables in the working set
+  ** are untracked (in working but NOT in pre-reset HEAD). */
+  if( doltliteGetHeadCatalogHash(db, &preResetHeadCatHash)==SQLITE_OK
+   && !prollyHashIsEmpty(&preResetHeadCatHash) ){
+    havePreResetHead = 1;
   }
 
   /* Parse arguments. The first non-flag positional that resolves as
@@ -1318,10 +1329,135 @@ static void doltliteResetFunc(
   doltliteSetSessionStaged(db, &targetCatHash);
 
   if( isHard ){
+    /* Save the original (target) staged catalog so we can restore
+    ** it after doltliteHardReset clobbers it with the merged
+    ** working-set catalog. The merged catalog includes untracked
+    ** tables for the working set, but those should NOT appear in
+    ** the staged set. */
+    ProllyHash origStagedAfterReset;
+    memcpy(&origStagedAfterReset, &targetCatHash, sizeof(ProllyHash));
+
     if( prollyHashIsEmpty(&targetCatHash) ){
       sqlite3_result_error(context, "no commit to reset to", -1);
       goto reset_cleanup;
     }
+
+    /* Preserve untracked tables across --hard, matching git's
+    ** semantics: tables in the working set that aren't in the
+    ** PRE-RESET HEAD catalog are left alone. The check is a
+    ** two-step:
+    **
+    **   1. Cheap pre-scan via sqlite_master (no flush, no chunk
+    **      writes) to find table NAMES that exist in the live
+    **      schema but aren't in the pre-reset HEAD catalog.
+    **
+    **   2. Only if any untracked names are found, do the
+    **      expensive flush + per-entry merge to actually rebuild
+    **      the target catalog with those entries preserved.
+    **
+    ** Step 1 is required because doltliteFlushCatalogToHash has
+    ** subtle side effects on pending DROP TABLE operations that
+    ** can leave a tracked table dropped instead of restored when
+    ** there's nothing untracked to preserve. */
+    if( havePreResetHead ){
+      struct TableEntry *aHead = 0;
+      int nHead = 0;
+      int nUntracked = 0;
+      char **azUntracked = 0;
+      sqlite3_stmt *pStmt = 0;
+      int j, k;
+
+      rc = doltliteLoadCatalog(db, &preResetHeadCatHash, &aHead, &nHead, 0);
+      if( rc==SQLITE_OK ){
+        rc = sqlite3_prepare_v2(db,
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
+            -1, &pStmt, 0);
+      }
+      if( rc==SQLITE_OK ){
+        while( sqlite3_step(pStmt)==SQLITE_ROW ){
+          const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
+          int inHead = 0;
+          if( !zName ) continue;
+          for(k=0; k<nHead; k++){
+            if( aHead[k].zName && strcmp(aHead[k].zName, zName)==0 ){
+              inHead = 1; break;
+            }
+          }
+          if( !inHead ){
+            char **aNew = sqlite3_realloc(azUntracked,
+                (nUntracked+1)*(int)sizeof(char*));
+            if( !aNew ){ rc = SQLITE_NOMEM; break; }
+            azUntracked = aNew;
+            azUntracked[nUntracked++] = sqlite3_mprintf("%s", zName);
+          }
+        }
+        sqlite3_finalize(pStmt);
+      }
+
+      /* Only flush + rebuild if there's something to preserve.
+      ** The simplest correct approach: take the LIVE working
+      ** catalog (which contains both tracked and untracked
+      ** tables), then for every TRACKED table, replace its entry
+      ** with HEAD's version of that table. The result is
+      ** "HEAD's content for tracked tables + working's untracked
+      ** entries", which is exactly the git --hard semantic. */
+      if( rc==SQLITE_OK && nUntracked>0 ){
+        ProllyHash workingHash;
+        struct TableEntry *aWorking = 0, *aTarget = 0;
+        int nWorking = 0, nTarget = 0;
+
+        rc = doltliteFlushCatalogToHash(db, &workingHash);
+        if( rc==SQLITE_OK ){
+          rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
+        }
+        if( rc==SQLITE_OK ){
+          rc = doltliteLoadCatalog(db, &targetCatHash, &aTarget, &nTarget, 0);
+        }
+        if( rc==SQLITE_OK ){
+          /* For each working entry that IS in the target catalog
+          ** (i.e. tracked), replace its content with the target's
+          ** version. Untracked entries (not in target) stay
+          ** unchanged. */
+          for(j=0; j<nWorking; j++){
+            int tgtIdx = -1;
+            for(k=0; k<nTarget; k++){
+              if( aTarget[k].zName && aWorking[j].zName
+               && strcmp(aTarget[k].zName, aWorking[j].zName)==0 ){
+                tgtIdx = k; break;
+              }
+            }
+            if( tgtIdx>=0 ){
+              aWorking[j] = aTarget[tgtIdx];
+            }
+          }
+        }
+        if( rc==SQLITE_OK ){
+          u8 *buf = 0;
+          int nBuf = 0;
+          ProllyHash mergedHash;
+          rc = doltliteSerializeCatalogEntries(db, aWorking, nWorking, &buf, &nBuf);
+          if( rc==SQLITE_OK ){
+            rc = chunkStorePut(cs, buf, nBuf, &mergedHash);
+          }
+          sqlite3_free(buf);
+          if( rc==SQLITE_OK ){
+            memcpy(&targetCatHash, &mergedHash, sizeof(ProllyHash));
+          }
+        }
+        sqlite3_free(aWorking);
+        sqlite3_free(aTarget);
+      }
+
+      for(j=0; j<nUntracked; j++) sqlite3_free(azUntracked[j]);
+      sqlite3_free(azUntracked);
+      sqlite3_free(aHead);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(context, rc);
+        goto reset_cleanup;
+      }
+    }
+
     doltliteSaveWorkingSet(db);
     chunkStoreSerializeRefs(cs);
     rc = doltliteHardReset(db, &targetCatHash);
@@ -1329,6 +1465,12 @@ static void doltliteResetFunc(
       sqlite3_result_error(context, "hard reset failed", -1);
       goto reset_cleanup;
     }
+    /* doltliteHardReset clobbers the staged catalog with whatever
+    ** we passed it (the merged working catalog including untracked
+    ** tables). Restore staged to the original target so untracked
+    ** tables show up as unstaged in dolt_status, matching Dolt. */
+    doltliteSetSessionStaged(db, &origStagedAfterReset);
+    doltlitePersistState(db);
   }else{
     rc = doltlitePersistState(db);
     if( rc!=SQLITE_OK ){

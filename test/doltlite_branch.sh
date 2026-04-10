@@ -31,7 +31,7 @@ run_test_match "del_current" "SELECT dolt_branch('-d','feature');" "cannot delet
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "delete_branch" "SELECT dolt_branch('-d','feature');" "0" "$DB"
 run_test "one_branch" "SELECT count(*) FROM dolt_branches;" "1" "$DB"
-run_test_match "checkout_gone" "SELECT dolt_checkout('feature');" "not found" "$DB"
+run_test_match "checkout_gone" "SELECT dolt_checkout('feature');" "no such branch or table" "$DB"
 
 DB3=/tmp/test_branch3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','i');" | $DOLTLITE "$DB3" > /dev/null 2>&1

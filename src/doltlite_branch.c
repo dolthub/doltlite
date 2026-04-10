@@ -387,6 +387,130 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   return rc;
 }
 
+/* Per-table checkout: revert each named table's working state back
+** to whatever the staged catalog has for that table (or HEAD's entry
+** if nothing is staged). Matches git's `git checkout file` semantics
+** — reverts to the index, NOT all the way to HEAD. To go to HEAD,
+** the user uses dolt_reset.
+**
+** Returns SQLITE_NOTFOUND if any of the named tables doesn't exist
+** in the working catalog or in the source (staged/HEAD) catalog —
+** in that case nothing is mutated.
+*/
+static int doltliteCheckoutTables(
+  sqlite3 *db,
+  sqlite3_value **argv,
+  int nNames
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash workingHash, headCatHash, stagedHash;
+  ProllyHash sourceCatHash;       /* staged-or-HEAD */
+  struct TableEntry *aWorking = 0, *aSource = 0;
+  int nWorking = 0, nSource = 0;
+  int i, j;
+  int rc;
+
+  if( !cs ) return SQLITE_ERROR;
+  if( nNames<=0 ) return SQLITE_NOTFOUND;
+
+  /* Build the source catalog: staged if non-empty, else HEAD. */
+  doltliteGetSessionStaged(db, &stagedHash);
+  if( !prollyHashIsEmpty(&stagedHash) ){
+    memcpy(&sourceCatHash, &stagedHash, sizeof(ProllyHash));
+  }else{
+    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+    if( rc!=SQLITE_OK ) return rc;
+    memcpy(&sourceCatHash, &headCatHash, sizeof(ProllyHash));
+  }
+  if( prollyHashIsEmpty(&sourceCatHash) ){
+    /* Nothing tracked yet — nothing to revert. */
+    return SQLITE_NOTFOUND;
+  }
+
+  /* Snapshot the current working catalog so we can build a modified
+  ** copy and pass it to switchCatalog. */
+  rc = doltliteFlushCatalogToHash(db, &workingHash);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteLoadCatalog(db, &sourceCatHash, &aSource, &nSource, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(aWorking);
+    return rc;
+  }
+
+  /* For each named table, replace the working entry with the
+  ** source-catalog entry. If the table is in working but not in
+  ** the source, drop it from working (it was untracked, revert
+  ** removes it). If it's in neither, that's an error. */
+  for(i=0; i<nNames; i++){
+    const char *zName = (const char*)sqlite3_value_text(argv[i]);
+    int srcIdx = -1, workIdx = -1;
+    if( !zName ) continue;
+
+    for(j=0; j<nSource; j++){
+      if( aSource[j].zName && strcmp(aSource[j].zName, zName)==0 ){
+        srcIdx = j; break;
+      }
+    }
+    for(j=0; j<nWorking; j++){
+      if( aWorking[j].zName && strcmp(aWorking[j].zName, zName)==0 ){
+        workIdx = j; break;
+      }
+    }
+
+    if( srcIdx<0 && workIdx<0 ){
+      sqlite3_free(aWorking); sqlite3_free(aSource);
+      return SQLITE_NOTFOUND;
+    }
+
+    if( srcIdx<0 ){
+      /* Table is in working but not in source — drop from working. */
+      if( workIdx+1<nWorking ){
+        memmove(&aWorking[workIdx], &aWorking[workIdx+1],
+                (nWorking-workIdx-1)*(int)sizeof(struct TableEntry));
+      }
+      nWorking--;
+    }else if( workIdx<0 ){
+      /* Source has it, working does not (the user dropped the
+      ** table; checkout brings it back). */
+      struct TableEntry *aNew = sqlite3_realloc(aWorking,
+          (nWorking+1)*(int)sizeof(struct TableEntry));
+      if( !aNew ){
+        sqlite3_free(aWorking); sqlite3_free(aSource);
+        return SQLITE_NOMEM;
+      }
+      aWorking = aNew;
+      aWorking[nWorking++] = aSource[srcIdx];
+    }else{
+      aWorking[workIdx] = aSource[srcIdx];
+    }
+  }
+
+  /* Serialize the new working catalog and switch to it. */
+  {
+    u8 *buf = 0;
+    int nBuf = 0;
+    ProllyHash newWorkingHash;
+    rc = doltliteSerializeCatalogEntries(db, aWorking, nWorking, &buf, &nBuf);
+    if( rc==SQLITE_OK ){
+      rc = chunkStorePut(cs, buf, nBuf, &newWorkingHash);
+    }
+    sqlite3_free(buf);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSwitchCatalog(db, &newWorkingHash);
+    }
+    if( rc==SQLITE_OK ){
+      doltliteSaveWorkingSet(db);
+    }
+  }
+
+  sqlite3_free(aWorking);
+  sqlite3_free(aSource);
+  return rc;
+}
+
 static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -476,8 +600,25 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     checkoutRestoreSession(db, &m);
   }
   sqlite3_free(zCurrentBranch);
+  zCurrentBranch = 0;
   if( rc==SQLITE_NOTFOUND ){
-    sqlite3_result_error(ctx, "branch not found", -1);
+    /* Not a branch — fall through to per-table checkout (revert
+    ** the named tables in the working set to whatever the staged
+    ** catalog has, or HEAD if nothing is staged). Matches git
+    ** semantics: `git checkout file` reverts working to staged. */
+    rc = doltliteCheckoutTables(db, argv, argc);
+    if( rc==SQLITE_NOTFOUND ){
+      char *zErr = sqlite3_mprintf(
+          "no such branch or table: %s", zBranch);
+      sqlite3_result_error(ctx, zErr ? zErr : "no such branch or table", -1);
+      sqlite3_free(zErr);
+      return;
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    sqlite3_result_int(ctx, 0);
     return;
   }
   if( rc==SQLITE_EMPTY ){
