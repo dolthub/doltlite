@@ -235,8 +235,19 @@ run_test "add_lowercase_a_stages_all" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB8"
 
+# --- dolt_status ignores internal index roots in clean state ---
+DB9=/tmp/test_staging_9_$$.db
+rm -f "$DB9"
+echo "CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT);
+CREATE TABLE membership(team_id INTEGER, employee_id INTEGER, PRIMARY KEY(team_id, employee_id));
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+
+run_test "status_clean_composite_pk_schema" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB9"
+
 # --- Cleanup ---
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB6B" "$DB7" "$DB8"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB6B" "$DB7" "$DB8" "$DB9"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

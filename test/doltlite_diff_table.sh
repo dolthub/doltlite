@@ -219,6 +219,22 @@ run_test "history_commits" "SELECT count(DISTINCT to_commit) FROM dolt_diff_t;" 
 rm -f "$DB"
 
 # ============================================================
+# Quoted table names
+# ============================================================
+
+DB=/tmp/test_dt_quoted_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE "odd""name"(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO "odd""name" VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+EOF
+
+run_test "quoted_diff_count" 'SELECT count(*) FROM "dolt_diff_odd""name";' "1" "$DB"
+run_test_match "quoted_diff_type" 'SELECT diff_type FROM "dolt_diff_odd""name";' "added" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Table not present before a commit
 # ============================================================
 

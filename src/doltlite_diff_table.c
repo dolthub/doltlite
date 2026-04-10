@@ -17,39 +17,44 @@
 
 
 static char *buildDiffSchema(DoltliteColInfo *ci){
-
   int i;
-  int sz = 256;
+  sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
-
-  for(i=0; i<ci->nCol; i++) sz += 2 * ((int)strlen(ci->azName[i]) + 20);
-
-  z = sqlite3_malloc(sz);
-  if( !z ) return 0;
-
-  {
-    char *p = z;
-    char *end = z + sz;
-
-    p += snprintf(p, end-p, "CREATE TABLE x(");
-
-
-    for(i=0; i<ci->nCol; i++){
-      if( i > 0 ) p += snprintf(p, end-p, ", ");
-      p += snprintf(p, end-p, "\"from_%s\"", ci->azName[i]);
+  char *zColName;
+  if( !pStr ) return 0;
+  sqlite3_str_appendall(pStr, "CREATE TABLE x(");
+  for(i=0; i<ci->nCol; i++){
+    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
+    zColName = sqlite3_mprintf("from_%s", ci->azName[i] ? ci->azName[i] : "");
+    if( !zColName ){
+      sqlite3_str_reset(pStr);
+      return 0;
     }
-
-
-    for(i=0; i<ci->nCol; i++){
-      p += snprintf(p, end-p, ", \"to_%s\"", ci->azName[i]);
+    if( doltliteAppendQuotedIdent(pStr, zColName)!=SQLITE_OK ){
+      sqlite3_free(zColName);
+      sqlite3_str_reset(pStr);
+      return 0;
     }
-
-    p += snprintf(p, end-p, ", from_commit TEXT, to_commit TEXT"
-              ", from_commit_date TEXT, to_commit_date TEXT"
-              ", diff_type TEXT)");
-    assert( p < end );
+    sqlite3_free(zColName);
   }
-
+  for(i=0; i<ci->nCol; i++){
+    sqlite3_str_appendall(pStr, ", ");
+    zColName = sqlite3_mprintf("to_%s", ci->azName[i] ? ci->azName[i] : "");
+    if( !zColName ){
+      sqlite3_str_reset(pStr);
+      return 0;
+    }
+    if( doltliteAppendQuotedIdent(pStr, zColName)!=SQLITE_OK ){
+      sqlite3_free(zColName);
+      sqlite3_str_reset(pStr);
+      return 0;
+    }
+    sqlite3_free(zColName);
+  }
+  sqlite3_str_appendall(pStr, ", from_commit TEXT, to_commit TEXT"
+                              ", from_commit_date TEXT, to_commit_date TEXT"
+                              ", diff_type TEXT)");
+  z = sqlite3_str_finish(pStr);
   return z;
 }
 

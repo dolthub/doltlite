@@ -11,6 +11,8 @@
 **   ./doltlite_regression_test_c checkout_persist_failure
 **   ./doltlite_regression_test_c savepoint_catalog_restore
 **   ./doltlite_regression_test_c refs_blob_corruption
+**   ./doltlite_regression_test_c conflicts_blob_corruption
+**   ./doltlite_regression_test_c status_error_propagation
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +21,7 @@
 #include "sqlite3.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "doltlite_internal.h"
 
 typedef unsigned char u8;
 typedef unsigned int Pgno;
@@ -74,6 +77,13 @@ static int execsql(sqlite3 *db, const char *sql){
             err ? err : "?", rc, sql);
     sqlite3_free(err);
   }
+  return rc;
+}
+
+static int execsql_silent(sqlite3 *db, const char *sql){
+  char *err = 0;
+  int rc = sqlite3_exec(db, sql, 0, 0, &err);
+  sqlite3_free(err);
   return rc;
 }
 
@@ -579,12 +589,75 @@ static void run_refresh_error_propagation(void){
   remove_db(dbpath);
 }
 
+static void run_conflicts_blob_corruption(void){
+  sqlite3 *db = 0;
+  ChunkStore *cs = 0;
+  ProllyHash hash;
+  char dbpath[256];
+  u8 badBlob[] = {
+    1, 0,
+    1, 0, 't',
+    1, 0, 0
+  };
+
+  printf("=== Conflicts Blob Corruption Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_conflicts_blob_corruption");
+  remove_db(dbpath);
+
+  check("open_db", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  cs = doltliteGetChunkStore(db);
+  check("have_chunk_store", cs!=0);
+  if( cs ){
+    check("put_bad_conflicts_blob",
+      chunkStorePut(cs, badBlob, (int)sizeof(badBlob), &hash)==SQLITE_OK);
+    doltliteSetSessionConflictsCatalog(db, &hash);
+    check("corrupt_conflicts_table_errors",
+      execsql_silent(db, "SELECT count(*) FROM dolt_conflicts;")!=SQLITE_OK);
+  }
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_status_error_propagation(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  ProllyHash badHash;
+  int rc;
+
+  printf("=== Status Error Propagation Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_status_error_propagation");
+  remove_db(dbpath);
+
+  check("open_db", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_status_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+
+  memset(&badHash, 0x7b, sizeof(badHash));
+  doltliteSetSessionStaged(db, &badHash);
+  rc = execsql_silent(db, "SELECT count(*) FROM dolt_status;");
+  check("status_surfaces_persist_error", rc!=SQLITE_OK);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
   { "savepoint_catalog_restore", "Savepoint Catalog Restore Test", run_savepoint_catalog_restore },
   { "refs_blob_corruption", "Refs Blob Corruption Test", run_refs_blob_corruption },
-  { "refresh_error_propagation", "Refresh Error Propagation Test", run_refresh_error_propagation }
+  { "refresh_error_propagation", "Refresh Error Propagation Test", run_refresh_error_propagation },
+  { "conflicts_blob_corruption", "Conflicts Blob Corruption Test", run_conflicts_blob_corruption },
+  { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation }
 };
 
 static int run_case_by_name(const char *zName){

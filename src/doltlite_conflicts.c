@@ -230,6 +230,8 @@ struct ConflictTableInfo {
   } *aRows;
 };
 
+static void freeConflictTables(ConflictTableInfo *aTables, int nTables);
+
 int doltliteSerializeConflicts(
   ChunkStore *cs,
   ConflictTableInfo *aTables, int nTables,
@@ -309,52 +311,72 @@ static int loadAllConflicts(
 
   for(i=0; i<nTables; i++){
     int nl, nc;
-    if(p+2>data+nData) break;
+    if( p+2 > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
     nl = p[0]|(p[1]<<8); p+=2;
+    if( nl<0 || p+nl > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
     aTables[i].zName = sqlite3_malloc(nl+1);
-    if(aTables[i].zName){ memcpy(aTables[i].zName, p, nl); aTables[i].zName[nl]=0; }
+    if( !aTables[i].zName ){ rc = SQLITE_NOMEM; goto conflicts_cleanup; }
+    memcpy(aTables[i].zName, p, nl); aTables[i].zName[nl]=0;
     p += nl;
+    if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
     nc = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
+    if( nc<0 ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
     aTables[i].nConflicts = nc;
     aTables[i].aRows = sqlite3_malloc(nc * (int)sizeof(struct ConflictRow));
-    if( !aTables[i].aRows ){ nc = 0; aTables[i].nConflicts = 0; }
-    else memset(aTables[i].aRows, 0, nc * (int)sizeof(struct ConflictRow));
+    if( !aTables[i].aRows ){ rc = SQLITE_NOMEM; goto conflicts_cleanup; }
+    memset(aTables[i].aRows, 0, nc * (int)sizeof(struct ConflictRow));
 
     for(j=0; j<nc; j++){
       struct ConflictRow *cr = &aTables[i].aRows[j];
-      int bvl, tvl;
+      int bvl, ovl, tvl;
+      if( p+8 > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
       cr->intKey = (i64)((u64)p[0] | ((u64)p[1]<<8) | ((u64)p[2]<<16) | ((u64)p[3]<<24) |
                          ((u64)p[4]<<32) | ((u64)p[5]<<40) | ((u64)p[6]<<48) | ((u64)p[7]<<56));
       p+=8;
+      if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
       bvl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
+      if( bvl<0 || p+bvl > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
       if(bvl>0){
         cr->pBaseVal = sqlite3_malloc(bvl);
-        if(cr->pBaseVal) memcpy(cr->pBaseVal, p, bvl);
+        if( !cr->pBaseVal ){ rc = SQLITE_NOMEM; goto conflicts_cleanup; }
+        memcpy(cr->pBaseVal, p, bvl);
         cr->nBaseVal = bvl;
       }
       p += bvl;
-      { int ovl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
-        if(ovl>0){
-          cr->pOurVal = sqlite3_malloc(ovl);
-          if(cr->pOurVal) memcpy(cr->pOurVal, p, ovl);
-          cr->nOurVal = ovl;
-        }
-        p += ovl;
+      if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
+      ovl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
+      if( ovl<0 || p+ovl > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
+      if(ovl>0){
+        cr->pOurVal = sqlite3_malloc(ovl);
+        if( !cr->pOurVal ){ rc = SQLITE_NOMEM; goto conflicts_cleanup; }
+        memcpy(cr->pOurVal, p, ovl);
+        cr->nOurVal = ovl;
       }
+      p += ovl;
+      if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
       tvl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
+      if( tvl<0 || p+tvl > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
       if(tvl>0){
         cr->pTheirVal = sqlite3_malloc(tvl);
-        if(cr->pTheirVal) memcpy(cr->pTheirVal, p, tvl);
+        if( !cr->pTheirVal ){ rc = SQLITE_NOMEM; goto conflicts_cleanup; }
+        memcpy(cr->pTheirVal, p, tvl);
         cr->nTheirVal = tvl;
       }
       p += tvl;
     }
   }
 
+  if( p!=data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
+
   *ppTables = aTables;
   *pnTables = nTables;
   sqlite3_free(data);
   return SQLITE_OK;
+
+conflicts_cleanup:
+  freeConflictTables(aTables, nTables);
+  sqlite3_free(data);
+  return rc;
 }
 
 static void freeConflictTables(ConflictTableInfo *aTables, int nTables){
@@ -431,8 +453,7 @@ static int cfFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqlit
   ConflictsVtab *vt=(ConflictsVtab*)cur->pVtab;
   (void)n;(void)s;(void)a;(void)v;
   c->iRow=0;
-  loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
-  return SQLITE_OK;
+  return loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
 }
 static int cfNext(sqlite3_vtab_cursor *cur){ ((ConflictsCur*)cur)->iRow++; return SQLITE_OK; }
 static int cfEof(sqlite3_vtab_cursor *cur){ ConflictsCur *c=(ConflictsCur*)cur; return c->iRow>=c->nTables; }
@@ -527,12 +548,13 @@ static int cfrClose(sqlite3_vtab_cursor *cur){
 static int cfrFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqlite3_value **v){
   CfRowCur *c = (CfRowCur*)cur;
   CfRowVtab *vt = (CfRowVtab*)cur->pVtab;
-  int i;
+  int i, rc;
   (void)n;(void)s;(void)a;(void)v;
 
   c->iRow = 0;
   c->iTableIdx = -1;
-  loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
+  rc = loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
+  if( rc!=SQLITE_OK ) return rc;
 
   
   for(i=0; i<c->nTables; i++){
