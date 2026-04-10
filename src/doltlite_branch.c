@@ -7,6 +7,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 #include <string.h>
+#include <time.h>
 
 
 
@@ -340,7 +341,18 @@ static int brConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   BrVtab *p; int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
-  rc = sqlite3_declare_vtab(db, "CREATE TABLE x(name TEXT, hash TEXT, is_current INTEGER)");
+  rc = sqlite3_declare_vtab(db,
+    "CREATE TABLE x("
+      "name TEXT, "
+      "hash TEXT, "
+      "latest_committer TEXT, "
+      "latest_committer_email TEXT, "
+      "latest_commit_date TEXT, "
+      "latest_commit_message TEXT, "
+      "remote TEXT, "
+      "branch TEXT, "
+      "dirty INTEGER"
+    ")");
   if( rc!=SQLITE_OK ) return rc;
   p = sqlite3_malloc(sizeof(*p));
   if( !p ) return SQLITE_NOMEM;
@@ -364,18 +376,119 @@ static int brEof(sqlite3_vtab_cursor *c){
   ChunkStore *cs = doltliteGetChunkStore(v->db);
   return !cs || ((BrCur*)c)->iRow >= cs->nBranches;
 }
+/*
+** Compute the "dirty" bit for a branch. The current branch is dirty when
+** the in-memory working state differs from HEAD's catalog (already
+** computed by doltliteHasUncommittedChanges). Other branches have a
+** persisted working-set blob on the BranchRef whose hash points at a
+** versioned record containing the staged catalog hash; the branch is
+** dirty when that staged catalog differs from HEAD's catalog.
+*/
+static int brIsDirty(sqlite3 *db, ChunkStore *cs, struct BranchRef *br){
+  ProllyHash stagedCat;
+  ProllyHash commitCat;
+  u8 *wsData = 0;
+  int nWsData = 0;
+  int rc, dirty = 0;
+
+  if( strcmp(br->zName, doltliteGetSessionBranch(db))==0 ){
+    return doltliteHasUncommittedChanges(db) ? 1 : 0;
+  }
+  if( prollyHashIsEmpty(&br->workingSetHash) ){
+    return 0;
+  }
+
+  rc = chunkStoreGet(cs, &br->workingSetHash, &wsData, &nWsData);
+  if( rc!=SQLITE_OK || !wsData || nWsData < WS_TOTAL_SIZE ){
+    sqlite3_free(wsData);
+    return 0;
+  }
+  memcpy(stagedCat.data, wsData + WS_STAGED_OFF, PROLLY_HASH_SIZE);
+  sqlite3_free(wsData);
+
+  if( prollyHashIsEmpty(&stagedCat) ){
+    return 0;
+  }
+
+  {
+    DoltliteCommit c;
+    memset(&c, 0, sizeof(c));
+    rc = doltliteLoadCommit(db, &br->commitHash, &c);
+    if( rc==SQLITE_OK ){
+      memcpy(commitCat.data, c.catalogHash.data, PROLLY_HASH_SIZE);
+      dirty = prollyHashCompare(&stagedCat, &commitCat)!=0;
+    }
+    doltliteCommitClear(&c);
+  }
+  return dirty;
+}
+
 static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
   BrVtab *v = (BrVtab*)c->pVtab;
   ChunkStore *cs = doltliteGetChunkStore(v->db);
   struct BranchRef *br;
   if(!cs) return SQLITE_OK;
   br = &cs->aBranches[((BrCur*)c)->iRow];
+
   switch(col){
-    case 0: sqlite3_result_text(ctx, br->zName, -1, SQLITE_TRANSIENT); break;
-    case 1: { char h[41]; doltliteHashToHex(&br->commitHash, h);
-              sqlite3_result_text(ctx, h, -1, SQLITE_TRANSIENT); break; }
-    case 2: sqlite3_result_int(ctx,
-              strcmp(br->zName, doltliteGetSessionBranch(v->db))==0 ? 1 : 0); break;
+    case 0:
+      sqlite3_result_text(ctx, br->zName, -1, SQLITE_TRANSIENT);
+      return SQLITE_OK;
+    case 1: {
+      char h[41];
+      doltliteHashToHex(&br->commitHash, h);
+      sqlite3_result_text(ctx, h, -1, SQLITE_TRANSIENT);
+      return SQLITE_OK;
+    }
+    case 6: case 7:
+      /* Upstream tracking: doltlite has no local-branch upstream concept,
+      ** so these are always empty (matches Dolt's output for branches
+      ** without an upstream configured). */
+      sqlite3_result_text(ctx, "", -1, SQLITE_STATIC);
+      return SQLITE_OK;
+    case 8:
+      sqlite3_result_int(ctx, brIsDirty(v->db, cs, br));
+      return SQLITE_OK;
+  }
+
+  /* Columns 2-5 require the head commit. Load once. */
+  {
+    DoltliteCommit cm;
+    int rc;
+    memset(&cm, 0, sizeof(cm));
+    rc = doltliteLoadCommit(v->db, &br->commitHash, &cm);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_null(ctx);
+      doltliteCommitClear(&cm);
+      return SQLITE_OK;
+    }
+    switch(col){
+      case 2:
+        sqlite3_result_text(ctx, cm.zName ? cm.zName : "",
+                            -1, SQLITE_TRANSIENT);
+        break;
+      case 3:
+        sqlite3_result_text(ctx, cm.zEmail ? cm.zEmail : "",
+                            -1, SQLITE_TRANSIENT);
+        break;
+      case 4: {
+        time_t t = (time_t)cm.timestamp;
+        struct tm *tm = gmtime(&t);
+        if( tm ){
+          char buf[32];
+          strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+          sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+        }else{
+          sqlite3_result_null(ctx);
+        }
+        break;
+      }
+      case 5:
+        sqlite3_result_text(ctx, cm.zMessage ? cm.zMessage : "",
+                            -1, SQLITE_TRANSIENT);
+        break;
+    }
+    doltliteCommitClear(&cm);
   }
   return SQLITE_OK;
 }

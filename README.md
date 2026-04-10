@@ -260,7 +260,8 @@ SELECT active_branch();
 
 -- List all branches
 SELECT * FROM dolt_branches;
--- name | hash | is_current
+-- name | hash | latest_committer | latest_committer_email
+-- | latest_commit_date | latest_commit_message | remote | branch | dirty
 
 -- Delete a branch
 SELECT dolt_branch('-d', 'feature');
