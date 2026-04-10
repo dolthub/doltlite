@@ -293,9 +293,10 @@ echo "SELECT dolt_add('a');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "stg_a_staged" "SELECT count(*) FROM dolt_status WHERE staged=1;" "1" "$DB"
 run_test "stg_b_unstaged" "SELECT count(*) FROM dolt_status WHERE staged=0;" "1" "$DB"
 
-# Soft reset unstages a
-echo "SELECT dolt_reset('--soft');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "stg_soft_reset" "SELECT count(*) FROM dolt_status WHERE staged=1;" "0" "$DB"
+# No-args reset (== --mixed) unstages a. (--soft with no target ref
+# is a no-op under git/Dolt semantics.)
+echo "SELECT dolt_reset();" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "stg_reset_unstages" "SELECT count(*) FROM dolt_status WHERE staged=1;" "0" "$DB"
 run_test "stg_data_kept" "SELECT count(*) FROM a;" "2" "$DB"
 
 # Stage a again, commit just a

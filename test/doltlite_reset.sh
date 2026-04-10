@@ -29,20 +29,33 @@ run_test "staged_before_soft_reset" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB"
 
-# Soft reset
+# --soft with no target ref is a no-op (matches Dolt and git: --soft
+# HEAD changes nothing). The unstage-all behavior is reserved for the
+# no-args / --mixed forms.
 echo "SELECT dolt_reset('--soft');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "unstaged_after_soft_reset" \
+run_test "still_staged_after_soft_noop" \
+  "SELECT count(*) FROM dolt_status WHERE staged=1;" \
+  "1" "$DB"
+
+run_test "no_unstaged_after_soft_noop" \
+  "SELECT count(*) FROM dolt_status WHERE staged=0;" \
+  "0" "$DB"
+
+run_test "data_preserved_soft_noop" \
+  "SELECT count(*) FROM t;" \
+  "2" "$DB"
+
+# No-args reset (== --mixed) does unstage everything.
+echo "SELECT dolt_reset();" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "unstaged_after_no_args_reset" \
   "SELECT count(*) FROM dolt_status WHERE staged=0;" \
   "1" "$DB"
 
-run_test "no_staged_after_soft_reset" \
+run_test "no_staged_after_no_args_reset" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "0" "$DB"
-
-run_test "data_preserved_soft_reset" \
-  "SELECT count(*) FROM t;" \
-  "2" "$DB"
 
 # --- Hard reset ---
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB" > /dev/null 2>&1
