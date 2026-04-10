@@ -91,6 +91,10 @@ jobs:
       run: cd build && bash ../test/vc_oracle_branch_test.sh ./doltlite dolt
       timeout-minutes: 5
 
+    - name: Version control oracle tests (dolt_checkout)
+      run: cd build && bash ../test/vc_oracle_checkout_test.sh ./doltlite dolt
+      timeout-minutes: 5
+
     - name: Version control oracle tests (dolt_merge)
       run: cd build && bash ../test/vc_oracle_merge_test.sh ./doltlite dolt
       timeout-minutes: 5
