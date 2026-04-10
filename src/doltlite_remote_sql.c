@@ -108,6 +108,19 @@ static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
   return 0;
 }
 
+static void remoteSqlResultError(
+  sqlite3_context *ctx,
+  int rc,
+  const char *zMsg
+){
+  if( zMsg ){
+    sqlite3_result_error(ctx, zMsg, -1);
+    sqlite3_result_error_code(ctx, rc);
+  }else{
+    sqlite3_result_error_code(ctx, rc);
+  }
+}
+
 static void freeNameList(char **azNames, int nNames);
 
 static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -208,7 +221,8 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   pRemote->xClose(pRemote);
 
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error(ctx, "push failed (not a fast-forward?)", -1);
+    remoteSqlResultError(ctx, rc,
+      rc==SQLITE_ERROR ? "push failed (not a fast-forward?)" : 0);
     return;
   }
   sqlite3_result_int(ctx, 0);
@@ -222,72 +236,47 @@ static int parseRemoteBranchNames(
   u8 *refsData = 0;
   int nRefsData = 0;
   int rc;
+  ChunkStore refsView;
   char **azNames = 0;
   int nNames = 0;
+  int i;
 
   *pazNames = 0;
   *pnNames = 0;
 
   rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
-  if( !refsData || nRefsData < 9 ){
+  if( !refsData || nRefsData <= 0 ){
     sqlite3_free(refsData);
     return SQLITE_CORRUPT;
   }
 
-  {
-    const u8 *p = refsData;
-    u8 ver; int defLen;
-    ver = p[0]; p++;
-    if( ver!=5 ){
-      sqlite3_free(refsData);
-      return SQLITE_CORRUPT;
-    }
-    defLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-    if( p + defLen + 4 > refsData + nRefsData ){
-      sqlite3_free(refsData);
-      return SQLITE_CORRUPT;
-    }
-    {
-      int nBranches, i;
-      p += defLen;
-      nBranches = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-
-      azNames = sqlite3_malloc(nBranches * sizeof(char*));
-      if( !azNames ){
-        sqlite3_free(refsData);
-        return SQLITE_NOMEM;
-      }
-      memset(azNames, 0, nBranches * sizeof(char*));
-
-      for(i=0; i<nBranches; i++){
-        int nameLen;
-        if( p+4 > refsData+nRefsData ){
-          freeNameList(azNames, nNames);
-          sqlite3_free(refsData);
-          return SQLITE_CORRUPT;
-        }
-        nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-        if( p+nameLen+(PROLLY_HASH_SIZE*2) > refsData+nRefsData ){
-          freeNameList(azNames, nNames);
-          sqlite3_free(refsData);
-          return SQLITE_CORRUPT;
-        }
-        azNames[nNames] = sqlite3_malloc(nameLen+1);
-        if( !azNames[nNames] ){
-          freeNameList(azNames, nNames);
-          sqlite3_free(refsData);
-          return SQLITE_NOMEM;
-        }
-        memcpy(azNames[nNames], p, nameLen);
-        azNames[nNames][nameLen] = 0;
-        nNames++;
-        p += nameLen + (PROLLY_HASH_SIZE*2);
-      }
-    }
+  memset(&refsView, 0, sizeof(refsView));
+  rc = chunkStoreLoadRefsFromBlob(&refsView, refsData, nRefsData);
+  sqlite3_free(refsData);
+  if( rc!=SQLITE_OK ){
+    chunkStoreClose(&refsView);
+    return rc;
   }
 
-  sqlite3_free(refsData);
+  if( refsView.nBranches>0 ){
+    azNames = sqlite3_malloc(refsView.nBranches * sizeof(char*));
+    if( !azNames ){
+      chunkStoreClose(&refsView);
+      return SQLITE_NOMEM;
+    }
+    memset(azNames, 0, refsView.nBranches * sizeof(char*));
+    for(i=0; i<refsView.nBranches; i++){
+      azNames[nNames] = sqlite3_mprintf("%s", refsView.aBranches[i].zName);
+      if( !azNames[nNames] ){
+        freeNameList(azNames, nNames);
+        chunkStoreClose(&refsView);
+        return SQLITE_NOMEM;
+      }
+      nNames++;
+    }
+  }
+  chunkStoreClose(&refsView);
   *pazNames = azNames;
   *pnNames = nNames;
   return SQLITE_OK;
@@ -342,7 +331,8 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     rc = doltliteFetch(cs, pRemote, zRemoteName, zBranch);
     if( rc!=SQLITE_OK ){
       pRemote->xClose(pRemote);
-      sqlite3_result_error(ctx, "fetch failed: branch not found on remote", -1);
+      remoteSqlResultError(ctx, rc,
+        rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0);
       return;
     }
   }else{
@@ -371,9 +361,9 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       }
       rc = doltliteFetch(cs, pBrRemote, zRemoteName, azNames[i]);
       pBrRemote->xClose(pBrRemote);
-      if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ){
+      if( rc!=SQLITE_OK ){
         freeNameList(azNames, nNames);
-        sqlite3_result_error(ctx, "fetch failed", -1);
+        remoteSqlResultError(ctx, rc, "fetch failed");
         return;
       }
     }
@@ -418,12 +408,14 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   
   rc = chunkStoreFindRemote(cs, zRemoteName, &zUrl);
   if( rc!=SQLITE_OK || !zUrl ){
+    remoteSqlStateClear(&savedState);
     sqlite3_result_error(ctx, "remote not found", -1);
     return;
   }
 
   pRemote = openRemoteByUrl(cs->pVfs, zUrl);
   if( !pRemote ){
+    remoteSqlStateClear(&savedState);
     sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
   }
@@ -431,8 +423,14 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = doltliteFetch(cs, pRemote, zRemoteName, zBranch);
   pRemote->xClose(pRemote);
   if( rc!=SQLITE_OK ){
+    rc = remoteSqlStateRestore(db, cs, &savedState);
     remoteSqlStateClear(&savedState);
-    sqlite3_result_error(ctx, "fetch failed: branch not found on remote", -1);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    remoteSqlResultError(ctx, rc,
+      rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0);
     return;
   }
 
@@ -479,10 +477,10 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     ProllyHash walk;
     int maxDepth = 1000;
     int canFF = 0;
+    int walkRc = SQLITE_OK;
     memcpy(&walk, &trackingCommit, sizeof(ProllyHash));
 
     while( maxDepth-- > 0 ){
-      u8 *data = 0; int nData = 0;
       DoltliteCommit commit;
 
       if( prollyHashCompare(&walk, &localCommit)==0 ){
@@ -491,11 +489,9 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       }
       if( prollyHashIsEmpty(&walk) ) break;
 
-      rc = chunkStoreGet(cs, &walk, &data, &nData);
-      if( rc!=SQLITE_OK || !data ) break;
-      rc = doltliteCommitDeserialize(data, nData, &commit);
-      sqlite3_free(data);
-      if( rc!=SQLITE_OK ) break;
+      memset(&commit, 0, sizeof(commit));
+      walkRc = doltliteLoadCommit(db, &walk, &commit);
+      if( walkRc!=SQLITE_OK ) break;
 
       if( commit.nParents > 0 ){
         memcpy(&walk, &commit.aParents[0], sizeof(ProllyHash));
@@ -503,6 +499,17 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         memset(&walk, 0, sizeof(ProllyHash));
       }
       doltliteCommitClear(&commit);
+    }
+
+    if( walkRc!=SQLITE_OK ){
+      int restoreRc = remoteSqlStateRestore(db, cs, &savedState);
+      remoteSqlStateClear(&savedState);
+      if( restoreRc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, restoreRc);
+        return;
+      }
+      sqlite3_result_error_code(ctx, walkRc);
+      return;
     }
 
     if( !canFF ){
@@ -709,7 +716,17 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
     if( zDefault ){
       rc = chunkStoreFindBranch(cs, zDefault, &branchCommit);
-      if( rc==SQLITE_OK && !prollyHashIsEmpty(&branchCommit) ){
+      if( rc!=SQLITE_OK || prollyHashIsEmpty(&branchCommit) ){
+        rc = remoteSqlStateRestore(db, cs, &savedState);
+        remoteSqlStateClear(&savedState);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error_code(ctx, rc);
+          return;
+        }
+        sqlite3_result_error(ctx, "default branch missing from cloned refs", -1);
+        return;
+      }
+      {
         
         u8 *data = 0; int nData = 0;
         DoltliteCommit commit;
