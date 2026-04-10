@@ -168,14 +168,18 @@ run_test "at_commit10_tracker_val" \
 # ============================================================
 
 echo "Test 6: dolt_diff_t audit log..."
+# Counts include the merge commit's diff against BOTH parents
+# (mainline + side branch) since the dolt_diff_<table> walk now
+# follows every parent edge — this matches Dolt's behavior. The
+# extra row is the merge commit comparing against its second
+# parent and emitting branch_extra as added a second time.
 run_test "diff_table_total_entries" \
   "SELECT count(*) FROM dolt_diff_t;" \
-  "1001" "$DB"
+  "1002" "$DB"
 
-# Verify we have both added and modified types
 run_test_match "diff_table_has_added" \
   "SELECT count(*) FROM dolt_diff_t WHERE diff_type='added';" \
-  "^502$" "$DB"
+  "^503$" "$DB"
 
 run_test_match "diff_table_has_modified" \
   "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';" \

@@ -232,8 +232,8 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Merge non-existent branch
 run_test_match "err_merge_noexist" "SELECT dolt_merge('nope');" "not found" "$DB"
 
-# Checkout non-existent branch
-run_test_match "err_checkout_noexist" "SELECT dolt_checkout('nope');" "not found" "$DB"
+# Checkout non-existent branch / table
+run_test_match "err_checkout_noexist" "SELECT dolt_checkout('nope');" "no such branch or table" "$DB"
 
 # Branch already exists
 echo "SELECT dolt_branch('dup');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -990,7 +990,7 @@ run_test_match "diff_schema_has_from_v" \
 
 run_test_match "diff_schema_no_generic" \
   "SELECT group_concat(name) FROM pragma_table_info('dolt_diff_real_table');" \
-  "from_v.*to_v" "$DB"
+  "to_v.*from_v" "$DB"
 
 run_test_match "history_schema_has_v" \
   "SELECT group_concat(name) FROM pragma_table_info('dolt_history_real_table');" \
