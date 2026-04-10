@@ -1613,15 +1613,20 @@ static void doltliteCherryPickFunc(
     return;
   }
 
-  
+  /* Cherry-pick uses the original commit message verbatim, matching
+  ** Dolt and git. If the original message is somehow missing, fall
+  ** back to "cherry-pick of <ref>" so the new commit isn't blank. */
   {
-    char msg[512];
-    sqlite3_snprintf(sizeof(msg), msg, "Cherry-pick: %s",
-                     pickCommit.zMessage ? pickCommit.zMessage : zRef);
+    const char *zMsg = pickCommit.zMessage;
+    char fallback[256];
+    if( !zMsg || !*zMsg ){
+      sqlite3_snprintf(sizeof(fallback), fallback, "cherry-pick of %s", zRef);
+      zMsg = fallback;
+    }
 
-  rc = applyMergedCatalogAndCommit(db, context,
-      &parentCommit.catalogHash, &ourCommit.catalogHash,
-      &pickCommit.catalogHash, &ourHead, msg, &nConflicts, hexBuf);
+    rc = applyMergedCatalogAndCommit(db, context,
+        &parentCommit.catalogHash, &ourCommit.catalogHash,
+        &pickCommit.catalogHash, &ourHead, zMsg, &nConflicts, hexBuf);
   }
 
   doltliteCommitClear(&pickCommit);
@@ -1665,18 +1670,21 @@ static void doltliteRevertFunc(
   memset(&ourCommit, 0, sizeof(ourCommit));
 
   if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
+  /* Match Dolt: dolt_revert() with no args is a silent no-op rather
+  ** than an error. (Likely a Dolt quirk — there's no documented
+  ** semantics for "revert nothing" — but the oracle pins us to it.) */
   if( argc<1 ){
-    sqlite3_result_error(context, "usage: dolt_revert('commit_hash')", -1);
+    sqlite3_result_int(context, 0);
     return;
   }
 
   zRef = (const char*)sqlite3_value_text(argv[0]);
   if( !zRef ){
-    sqlite3_result_error(context, "commit hash required", -1);
+    sqlite3_result_int(context, 0);
     return;
   }
 
-  
+
   rc = doltliteResolveRef(db,zRef, &revertHash);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "invalid commit hash", -1);
@@ -1721,15 +1729,17 @@ static void doltliteRevertFunc(
     return;
   }
 
-  
+  /* Revert message format matches Dolt: Revert "<original message>".
+  ** Double quotes around the original message, no single-quote
+  ** alternative — Dolt does this and the oracle compares verbatim. */
   {
     char msg[512];
-    sqlite3_snprintf(sizeof(msg), msg, "Revert '%s'",
+    sqlite3_snprintf(sizeof(msg), msg, "Revert \"%s\"",
                      revertCommit.zMessage ? revertCommit.zMessage : zRef);
 
-  rc = applyMergedCatalogAndCommit(db, context,
-      &revertCommit.catalogHash, &ourCommit.catalogHash,
-      &parentCommit.catalogHash, &ourHead, msg, &nConflicts, hexBuf);
+    rc = applyMergedCatalogAndCommit(db, context,
+        &revertCommit.catalogHash, &ourCommit.catalogHash,
+        &parentCommit.catalogHash, &ourHead, msg, &nConflicts, hexBuf);
   }
 
   doltliteCommitClear(&revertCommit);
