@@ -5,6 +5,7 @@
 #include "prolly_hash.h"
 #include "prolly_cursor.h"
 #include "prolly_cache.h"
+#include "prolly_hashset.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 
@@ -110,43 +111,50 @@ static int htScanAtCommit(
 static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
   ChunkStore *cs=doltliteGetChunkStore(db);
   ProllyCache *pCache;
-  ProllyHash *queue=0, *visited=0;
+  ProllyHash *queue=0;
+  ProllyHashSet visited, queued;
   int qHead=0, qTail=0, qAlloc=0;
-  int nVisited=0, nVisitedAlloc=0;
   int rc=SQLITE_OK;
   ProllyHash head;
 
   if(!cs) return SQLITE_OK;
   pCache=doltliteGetCache(db);
   if(!pCache) return SQLITE_OK;
+  memset(&visited, 0, sizeof(visited));
+  memset(&queued, 0, sizeof(queued));
 
   doltliteGetSessionHead(db, &head);
   if(prollyHashIsEmpty(&head)) return SQLITE_OK;
 
+  rc = prollyHashSetInit(&visited, 64);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = prollyHashSetInit(&queued, 64);
+  if( rc!=SQLITE_OK ){
+    prollyHashSetFree(&visited);
+    return rc;
+  }
+
   qAlloc=16;
   queue=sqlite3_malloc(qAlloc*(int)sizeof(ProllyHash));
-  if(!queue) return SQLITE_NOMEM;
+  if(!queue){
+    prollyHashSetFree(&visited);
+    prollyHashSetFree(&queued);
+    return SQLITE_NOMEM;
+  }
   queue[qTail++]=head;
+  rc = prollyHashSetAdd(&queued, &head);
+  if( rc!=SQLITE_OK ) goto history_done;
 
   while(qHead<qTail){
     ProllyHash cur=queue[qHead++];
     DoltliteCommit commit;
     ProllyHash tableRoot; u8 flags=0;
     char hexBuf[PROLLY_HASH_SIZE*2+1];
-    int dup=0, i;
+    int i;
 
-    for(i=0;i<nVisited;i++){
-      if(prollyHashCompare(&visited[i],&cur)==0){dup=1;break;}
-    }
-    if(dup) continue;
-
-    if(nVisited>=nVisitedAlloc){
-      int na=nVisitedAlloc?nVisitedAlloc*2:16;
-      ProllyHash *tmp=sqlite3_realloc(visited,na*(int)sizeof(ProllyHash));
-      if(!tmp){rc=SQLITE_NOMEM;break;}
-      visited=tmp; nVisitedAlloc=na;
-    }
-    visited[nVisited++]=cur;
+    if( prollyHashSetContains(&visited, &cur) ) continue;
+    rc = prollyHashSetAdd(&visited, &cur);
+    if( rc!=SQLITE_OK ) break;
 
     memset(&commit,0,sizeof(commit));
     rc=doltliteLoadCommit(db,&cur,&commit);
@@ -166,6 +174,8 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
 
     for(i=0;i<commit.nParents;i++){
       if(prollyHashIsEmpty(&commit.aParents[i])) continue;
+      if( prollyHashSetContains(&visited, &commit.aParents[i]) ) continue;
+      if( prollyHashSetContains(&queued, &commit.aParents[i]) ) continue;
       if(qTail>=qAlloc){
         int na=qAlloc*2;
         ProllyHash *tmp=sqlite3_realloc(queue,na*(int)sizeof(ProllyHash));
@@ -173,13 +183,17 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
         queue=tmp; qAlloc=na;
       }
       queue[qTail++]=commit.aParents[i];
+      rc = prollyHashSetAdd(&queued, &commit.aParents[i]);
+      if( rc!=SQLITE_OK ) break;
     }
     doltliteCommitClear(&commit);
     if(rc!=SQLITE_OK) break;
   }
 
+history_done:
   sqlite3_free(queue);
-  sqlite3_free(visited);
+  prollyHashSetFree(&visited);
+  prollyHashSetFree(&queued);
   return rc;
 }
 

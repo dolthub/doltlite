@@ -42,7 +42,7 @@ extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHas
 ** Returns 1 if there are uncommitted changes (working differs from HEAD
 ** or staged differs from HEAD), 0 otherwise.
 */
-static int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
+int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
 
 typedef struct DoltliteTxnState DoltliteTxnState;
 struct DoltliteTxnState {
@@ -241,7 +241,7 @@ int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
 ** Helper #2: Flush the in-memory catalog, serialize it into the chunk store,
 ** and return the resulting hash.
 */
-static int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
+int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
   u8 *catData = 0;
   int nCatData = 0;

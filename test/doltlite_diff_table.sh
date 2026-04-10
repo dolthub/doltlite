@@ -214,6 +214,27 @@ run_test "history_commits" "SELECT count(DISTINCT to_commit) FROM dolt_diff_t;" 
 rm -f "$DB"
 
 # ============================================================
+# Unchanged commit spans do not break diff traversal
+# ============================================================
+
+DB=/tmp/test_dt_unchanged_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'keep');
+INSERT INTO u VALUES(1,'u0');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+for i in $(seq 1 25); do
+  echo "UPDATE u SET v='u$i' WHERE id=1;
+SELECT dolt_commit('-A','-m','u$i');" | $DOLTLITE "$DB" > /dev/null 2>&1
+done
+
+run_test "unchanged_table_diff_count" "SELECT count(*) FROM dolt_diff_t;" "1" "$DB"
+run_test "unchanged_table_diff_type" "SELECT diff_type FROM dolt_diff_t;" "added" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Quoted table names
 # ============================================================
 

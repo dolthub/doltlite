@@ -26,11 +26,20 @@ struct DoltliteStatusCursor {
 static const char *statusSchema =
   "CREATE TABLE x(table_name TEXT, staged INTEGER, status TEXT)";
 
-static char *statusTableName(sqlite3 *db, const struct TableEntry *pEntry){
+static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **pzName){
+  *pzName = 0;
   if( pEntry->zName ){
-    return sqlite3_mprintf("%s", pEntry->zName);
+    *pzName = sqlite3_mprintf("%s", pEntry->zName);
+    return *pzName ? SQLITE_OK : SQLITE_NOMEM;
   }
-  return doltliteResolveTableNumber(db, pEntry->iTable);
+  /* Internal index roots can legitimately lack a table name in sqlite's
+  ** schema hash; dolt_status should ignore them rather than surfacing an
+  ** error for an otherwise clean working tree. */
+  if( pEntry->flags & BTREE_BLOBKEY ){
+    return SQLITE_NOTFOUND;
+  }
+  *pzName = doltliteResolveTableNumber(db, pEntry->iTable);
+  return *pzName ? SQLITE_OK : SQLITE_NOMEM;
 }
 
 /*
@@ -118,8 +127,9 @@ static int compareCatalogs(
     if(aTo[i].iTable<=1) continue;
     if( useRename && toHandled[i] ) continue;
     pFrom = findCatalogEntry(aFrom, nFrom, &aTo[i]);
-    zName = statusTableName(db, &aTo[i]);
-    if(!zName) continue;
+    rc = statusTableName(db, &aTo[i], &zName);
+    if( rc==SQLITE_NOTFOUND ) continue;
+    if( rc!=SQLITE_OK ) return rc;
     if(!pFrom){
       rc = addRow(pCur, zName, staged, "new table");
     }else{
@@ -142,8 +152,9 @@ static int compareCatalogs(
     if(aFrom[i].iTable<=1) continue;
     if( useRename && fromHandled[i] ) continue;
     if(!findCatalogEntry(aTo, nTo, &aFrom[i])){
-      zName = statusTableName(db, &aFrom[i]);
-      if(!zName) continue;
+      rc = statusTableName(db, &aFrom[i], &zName);
+      if( rc==SQLITE_NOTFOUND ) continue;
+      if( rc!=SQLITE_OK ) return rc;
       rc = addRow(pCur, zName, staged, "deleted");
       sqlite3_free(zName);
       if( rc!=SQLITE_OK ) return rc;
@@ -216,12 +227,10 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
     if( rc!=SQLITE_OK ) goto status_done;
   }
 
-  {u8 *catData=0;int nCatData=0;
-    rc=doltliteFlushAndSerializeCatalog(db,&catData,&nCatData);
+  {
+    rc = doltliteFlushCatalogToHash(db, &workingCatHash);
     if(rc==SQLITE_OK){
-      rc=chunkStorePut(cs,catData,nCatData,&workingCatHash);
-      sqlite3_free(catData);
-      if(rc==SQLITE_OK) rc = doltliteLoadCatalog(db,&workingCatHash,&aWorking,&nWorking,0);
+      rc = doltliteLoadCatalog(db,&workingCatHash,&aWorking,&nWorking,0);
     }
     if( rc!=SQLITE_OK ) goto status_done;
   }
