@@ -462,7 +462,6 @@ static int storeUpdatedConflicts(
     extern int doltliteSaveWorkingSet(sqlite3*);
     if( totalConflicts==0 ){
       doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
-      doltliteSetSessionMergeState(db, 0, 0, 0);
     }else{
       ProllyHash newHash;
       int rc = doltliteSerializeConflicts(cs, aTables, nTables, &newHash);
