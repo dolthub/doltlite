@@ -990,7 +990,7 @@ run_test_match "diff_schema_has_from_v" \
 
 run_test_match "diff_schema_no_generic" \
   "SELECT group_concat(name) FROM pragma_table_info('dolt_diff_real_table');" \
-  "from_v.*to_v" "$DB"
+  "to_v.*from_v" "$DB"
 
 run_test_match "history_schema_has_v" \
   "SELECT group_concat(name) FROM pragma_table_info('dolt_history_real_table');" \
