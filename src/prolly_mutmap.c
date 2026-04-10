@@ -227,7 +227,7 @@ void prollyMutMapIterNext(ProllyMutMapIter *it){
 }
 
 int prollyMutMapIterValid(ProllyMutMapIter *it){
-  return it->idx < it->pMap->nEntries;
+  return it->idx >= 0 && it->idx < it->pMap->nEntries;
 }
 
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
@@ -243,7 +243,7 @@ void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
 
 void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
   it->pMap = mm;
-  it->idx = mm->nEntries - 1;
+  it->idx = mm->nEntries>0 ? mm->nEntries - 1 : mm->nEntries;
 }
 
 void prollyMutMapClear(ProllyMutMap *mm){
