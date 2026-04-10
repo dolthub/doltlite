@@ -19,6 +19,13 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y tcl-dev build-essential zlib1g-dev
 
+    - name: Install Dolt
+      run: |
+        DOLT_VERSION=1.86.0
+        curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/dolt-linux-amd64.tar.gz" \
+          | sudo tar -xz -C /usr/local --strip-components=1
+        dolt version
+
     - name: Configure
       run: |
         mkdir -p build && cd build
@@ -54,6 +61,10 @@ jobs:
 
     - name: Index oracle tests
       run: cd build && bash ../test/index_oracle_test.sh ./doltlite sqlite3
+      timeout-minutes: 5
+
+    - name: Version control oracle tests (dolt_log)
+      run: cd build && bash ../test/vc_oracle_log_test.sh ./doltlite dolt
       timeout-minutes: 5
 
     - name: Large-scale test (10K rows)
