@@ -53,11 +53,13 @@ struct AtCursor {
   int nRows;
   int nAlloc;
   int iRow;
+  char *zCommitRef;
 };
 
 static void freeAtRows(AtCursor *c){
   int i; for(i=0;i<c->nRows;i++) sqlite3_free(c->aRows[i].pVal);
   sqlite3_free(c->aRows); c->aRows=0; c->nRows=0; c->nAlloc=0;
+  sqlite3_free(c->zCommitRef); c->zCommitRef=0;
 }
 
 
@@ -193,6 +195,8 @@ static int atFilter(sqlite3_vtab_cursor *cur,
 
   zRef=(const char*)sqlite3_value_text(argv[0]);
   if(!zRef) return SQLITE_OK;
+  c->zCommitRef = sqlite3_mprintf("%s", zRef);
+  if( !c->zCommitRef ) return SQLITE_NOMEM;
 
   rc=doltliteResolveRef(db,zRef,&commitHash);
   if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
@@ -252,7 +256,10 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   AtRow *r=&c->aRows[c->iRow];
   int nCols=v->cols.nCol;
 
-  if(nCols>0 && col<nCols){
+  if( col==nCols ){
+    sqlite3_result_text(ctx, c->zCommitRef ? c->zCommitRef : "",
+                        -1, SQLITE_TRANSIENT);
+  }else if(nCols>0 && col<nCols){
     
     if(col==v->cols.iPkCol){
       sqlite3_result_int64(ctx,r->intKey);
@@ -278,15 +285,12 @@ static sqlite3_module atModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-void doltliteRegisterAtTables(sqlite3 *db){
-  doltliteForEachUserTable(db, "dolt_at_", &atModule);
+int doltliteRegisterAtTables(sqlite3 *db){
+  return doltliteForEachUserTable(db, "dolt_at_", &atModule);
 }
 
 int doltliteAtRegister(sqlite3 *db){
-  
-  
-  doltliteRegisterAtTables(db);
-  return SQLITE_OK;
+  return doltliteRegisterAtTables(db);
 }
 
 #endif 
