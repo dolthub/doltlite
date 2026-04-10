@@ -108,6 +108,17 @@ static int fieldEquals(const u8 *pRecA, RecField *fA,
 typedef struct MergeWinner MergeWinner;
 struct MergeWinner { const u8 *pRec; RecField *pField; };
 
+static int mergeDupBytes(const u8 *pIn, int nIn, u8 **ppOut){
+  u8 *pCopy;
+  *ppOut = 0;
+  if( !pIn || nIn<=0 ) return SQLITE_OK;
+  pCopy = sqlite3_malloc(nIn);
+  if( !pCopy ) return SQLITE_NOMEM;
+  memcpy(pCopy, pIn, nIn);
+  *ppOut = pCopy;
+  return SQLITE_OK;
+}
+
 static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   int hdrSize = 0, bodySize = 0, pos, i;
   u8 *result;
@@ -354,23 +365,38 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         memset(cr, 0, sizeof(*cr));
         cr->intKey = pChange->intKey;
         if( pChange->pKey && pChange->nKey>0 ){
-          cr->pKey = sqlite3_malloc(pChange->nKey);
-          if(cr->pKey) memcpy(cr->pKey, pChange->pKey, pChange->nKey);
+          rc = mergeDupBytes(pChange->pKey, pChange->nKey, &cr->pKey);
+          if( rc!=SQLITE_OK ) return rc;
           cr->nKey = pChange->nKey;
         }
         if( pChange->pBaseVal && pChange->nBaseVal>0 ){
-          cr->pBaseVal = sqlite3_malloc(pChange->nBaseVal);
-          if(cr->pBaseVal) memcpy(cr->pBaseVal, pChange->pBaseVal, pChange->nBaseVal);
+          rc = mergeDupBytes(pChange->pBaseVal, pChange->nBaseVal, &cr->pBaseVal);
+          if( rc!=SQLITE_OK ){
+            sqlite3_free(cr->pKey);
+            memset(cr, 0, sizeof(*cr));
+            return rc;
+          }
           cr->nBaseVal = pChange->nBaseVal;
         }
         if( pChange->pOurVal && pChange->nOurVal>0 ){
-          cr->pOurVal = sqlite3_malloc(pChange->nOurVal);
-          if(cr->pOurVal) memcpy(cr->pOurVal, pChange->pOurVal, pChange->nOurVal);
+          rc = mergeDupBytes(pChange->pOurVal, pChange->nOurVal, &cr->pOurVal);
+          if( rc!=SQLITE_OK ){
+            sqlite3_free(cr->pKey);
+            sqlite3_free(cr->pBaseVal);
+            memset(cr, 0, sizeof(*cr));
+            return rc;
+          }
           cr->nOurVal = pChange->nOurVal;
         }
         if( pChange->pTheirVal && pChange->nTheirVal>0 ){
-          cr->pTheirVal = sqlite3_malloc(pChange->nTheirVal);
-          if(cr->pTheirVal) memcpy(cr->pTheirVal, pChange->pTheirVal, pChange->nTheirVal);
+          rc = mergeDupBytes(pChange->pTheirVal, pChange->nTheirVal, &cr->pTheirVal);
+          if( rc!=SQLITE_OK ){
+            sqlite3_free(cr->pKey);
+            sqlite3_free(cr->pBaseVal);
+            sqlite3_free(cr->pOurVal);
+            memset(cr, 0, sizeof(*cr));
+            return rc;
+          }
           cr->nTheirVal = pChange->nTheirVal;
         }
         ctx->nConflicts++;

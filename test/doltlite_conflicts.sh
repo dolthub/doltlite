@@ -117,7 +117,28 @@ run_test_match "multi_row_has_row1" "SELECT their_value FROM dolt_conflicts_t WH
 run_test_match "multi_row_has_row2" "SELECT their_value FROM dolt_conflicts_t WHERE base_rowid=2;" "B" "$DB8"
 run_test_match "multi_row_has_row3" "SELECT their_value FROM dolt_conflicts_t WHERE base_rowid=3;" "C" "$DB8"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
+# Test 9: --theirs delete failure should keep conflict state
+DB9=/tmp/test_conflicts9_$$.db; rm -f "$DB9"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'orig');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+DELETE FROM t WHERE id=1;
+SELECT dolt_commit('-A','-m','feat delete');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main' WHERE id=1;
+SELECT dolt_commit('-A','-m','main update');
+SELECT dolt_merge('feature');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+run_test "theirs_delete_conflict_present" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB9"
+echo "CREATE TRIGGER block_delete BEFORE DELETE ON t BEGIN SELECT RAISE(FAIL,'blocked delete'); END;" | $DOLTLITE "$DB9" > /dev/null 2>&1
+run_test_match "theirs_delete_failure_errors" \
+  "SELECT dolt_conflicts_resolve('--theirs','t');" \
+  "failed to apply theirs value" "$DB9"
+run_test "theirs_delete_failure_conflict_kept" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB9"
+run_test "theirs_delete_failure_row_kept" "SELECT v FROM t WHERE id=1;" "main" "$DB9"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
