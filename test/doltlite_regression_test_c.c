@@ -23,6 +23,8 @@
 **   ./doltlite_regression_test_c merge_persist_failure
 **   ./doltlite_regression_test_c cherry_pick_stale_branch
 **   ./doltlite_regression_test_c branches_metadata_corruption
+**   ./doltlite_regression_test_c gc_rewrite_failure
+**   ./doltlite_regression_test_c record_decode_corruption
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,6 +37,7 @@
 #include "doltlite_chunk_walk.h"
 #include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
+#include "doltlite_record.h"
 
 typedef unsigned char u8;
 typedef unsigned int Pgno;
@@ -1073,6 +1076,60 @@ static void run_branches_metadata_corruption(void){
   remove_db(dbpath);
 }
 
+static void run_gc_rewrite_failure(void){
+  sqlite3 *db = 0;
+  sqlite3 *db2 = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== GC Rewrite Failure Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_gc_rewrite_failure");
+  remove_db(dbpath);
+
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+  check("register_fail_vfs_for_gc", registerFailVfs()==SQLITE_OK);
+  check("open_fail_db", open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_gc_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
+
+  gFailHits = 0;
+  gFailSyncOnce = 1;
+  res = exec1(db, "SELECT dolt_gc()");
+  check("gc_failure_was_injected", gFailHits>0);
+  check("gc_returns_error_on_rewrite_failure", strstr(res, "ERROR:")!=0);
+  check("gc_connection_still_reads_data",
+    strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("gc_connection_still_reads_log",
+    strcmp(exec1(db, "SELECT count(*) FROM dolt_log"), "3")==0);
+
+  sqlite3_close(db);
+  check("reopen_db_after_gc_failure", open_db(dbpath, &db2)==SQLITE_OK);
+  check("gc_reopen_reads_data",
+    strcmp(exec1(db2, "SELECT count(*) FROM t"), "2")==0);
+  check("gc_reopen_reads_log",
+    strcmp(exec1(db2, "SELECT count(*) FROM dolt_log"), "3")==0);
+
+  sqlite3_close(db2);
+  remove_db(dbpath);
+}
+
+static void run_record_decode_corruption(void){
+  static const u8 badRecord[] = {
+    0x05, 0x01
+  };
+  char *z;
+
+  printf("=== Record Decode Corruption Test ===\n\n");
+  z = doltliteDecodeRecord(badRecord, (int)sizeof(badRecord));
+  check("corrupt_record_decodes_to_null", z==0);
+  sqlite3_free(z);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -1090,7 +1147,9 @@ static const RegressionCase aCases[] = {
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
-  { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption }
+  { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },
+  { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },
+  { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption }
 };
 
 static int run_case_by_name(const char *zName){
