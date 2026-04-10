@@ -12,6 +12,21 @@
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 
+static int doltliteValidateCommitHash(
+  sqlite3 *db,
+  const ProllyHash *pHash
+){
+  DoltliteCommit commit;
+  int rc;
+
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommit(db, pHash, &commit);
+  if( rc==SQLITE_OK ){
+    doltliteCommitClear(&commit);
+  }
+  return rc;
+}
+
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc;
@@ -20,16 +35,28 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   /* Try 40-char hex hash */
   if( strlen(zRef)==PROLLY_HASH_SIZE*2 ){
     rc = doltliteHexToHash(zRef, pCommit);
-    if( rc==SQLITE_OK && chunkStoreHas(cs, pCommit) ) return SQLITE_OK;
+    if( rc==SQLITE_OK ){
+      rc = doltliteValidateCommitHash(db, pCommit);
+      if( rc==SQLITE_OK ) return SQLITE_OK;
+      if( rc!=SQLITE_NOTFOUND ) return rc;
+    }
   }
 
   /* Try branch name */
   rc = chunkStoreFindBranch(cs, zRef, pCommit);
-  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
+    rc = doltliteValidateCommitHash(db, pCommit);
+    if( rc==SQLITE_OK ) return SQLITE_OK;
+    return rc;
+  }
 
   /* Try tag name */
   rc = chunkStoreFindTag(cs, zRef, pCommit);
-  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ) return SQLITE_OK;
+  if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
+    rc = doltliteValidateCommitHash(db, pCommit);
+    if( rc==SQLITE_OK ) return SQLITE_OK;
+    return rc;
+  }
 
   return SQLITE_NOTFOUND;
 }

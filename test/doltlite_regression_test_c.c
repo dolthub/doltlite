@@ -16,6 +16,10 @@
 **   ./doltlite_regression_test_c remote_refs_corruption
 **   ./doltlite_regression_test_c chunk_walk_corruption
 **   ./doltlite_regression_test_c ancestor_missing_start
+**   ./doltlite_regression_test_c pull_persist_failure
+**   ./doltlite_regression_test_c clone_persist_failure
+**   ./doltlite_regression_test_c resolve_ref_non_commit
+**   ./doltlite_regression_test_c commit_parent_limit
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +28,7 @@
 #include "sqlite3.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "doltlite_commit.h"
 #include "doltlite_chunk_walk.h"
 #include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
@@ -751,6 +756,158 @@ static void run_ancestor_missing_start(void){
   remove_db(dbpath);
 }
 
+static void run_pull_persist_failure(void){
+  sqlite3 *localDb = 0;
+  sqlite3 *remoteDb = 0;
+  char localPath[256];
+  char remotePath[256];
+  char sql[1024];
+  const char *res;
+
+  printf("=== Pull Persist Failure Test ===\n\n");
+  make_dbpath(localPath, sizeof(localPath), "test_pull_persist_failure_local");
+  make_dbpath(remotePath, sizeof(remotePath), "test_pull_persist_failure_remote");
+  remove_db(localPath);
+  remove_db(remotePath);
+
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+  check("register_fail_vfs_for_pull", registerFailVfs()==SQLITE_OK);
+  check("open_local_fail_db", open_fail_db(localPath, &localDb)==SQLITE_OK);
+  check("open_remote_db", open_db(remotePath, &remoteDb)==SQLITE_OK);
+
+  snprintf(sql, sizeof(sql),
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_remote('add','origin','file://%s');"
+    "SELECT dolt_push('origin','main');",
+    remotePath);
+  check("setup_local_and_push", execsql(localDb, sql)==SQLITE_OK);
+
+  sqlite3_close(remoteDb);
+  remoteDb = 0;
+  check("reopen_remote_db", open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("advance_remote", execsql(remoteDb,
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'remote update');")==SQLITE_OK);
+
+  gFailHits = 0;
+  gFailSyncOnce = 2;
+  res = exec1(localDb, "SELECT dolt_pull('origin','main')");
+  check("pull_failure_was_injected", gFailHits>0);
+  check("pull_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
+  check("pull_branch_stays_main",
+    strcmp(exec1(localDb, "SELECT active_branch()"), "main")==0);
+  check("pull_head_data_restored",
+    strcmp(exec1(localDb, "SELECT count(*) FROM t"), "1")==0);
+
+  sqlite3_close(remoteDb);
+  sqlite3_close(localDb);
+  remove_db(localPath);
+  remove_db(remotePath);
+}
+
+static void run_clone_persist_failure(void){
+  sqlite3 *localDb = 0;
+  sqlite3 *remoteDb = 0;
+  char localPath[256];
+  char remotePath[256];
+  char sql[1024];
+  const char *res;
+
+  printf("=== Clone Persist Failure Test ===\n\n");
+  make_dbpath(localPath, sizeof(localPath), "test_clone_persist_failure_local");
+  make_dbpath(remotePath, sizeof(remotePath), "test_clone_persist_failure_remote");
+  remove_db(localPath);
+  remove_db(remotePath);
+
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+  check("register_fail_vfs_for_clone", registerFailVfs()==SQLITE_OK);
+  check("open_remote_db", open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("setup_remote_repo", execsql(remoteDb,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_close(remoteDb);
+  remoteDb = 0;
+
+  check("open_local_fail_db", open_fail_db(localPath, &localDb)==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  gFailHits = 0;
+  gFailSyncOnce = 2;
+  res = exec1(localDb, sql);
+  check("clone_failure_was_injected", gFailHits>0);
+  check("clone_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
+  check("clone_does_not_leave_origin_remote",
+    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "0")==0);
+  check("clone_restores_empty_catalog",
+    strcmp(exec1(localDb,
+      "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t'"), "0")==0);
+
+  sqlite3_close(localDb);
+  remove_db(localPath);
+  remove_db(remotePath);
+}
+
+static void run_resolve_ref_non_commit(void){
+  sqlite3 *db = 0;
+  ChunkStore *cs = 0;
+  char dbpath[256];
+  ProllyHash headHash;
+  ProllyHash resolved;
+  DoltliteCommit commit;
+  char hex[PROLLY_HASH_SIZE*2 + 1];
+  int rc;
+
+  printf("=== Resolve Ref Non-Commit Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_resolve_ref_non_commit");
+  remove_db(dbpath);
+
+  check("open_db", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  doltliteGetSessionHead(db, &headHash);
+  memset(&commit, 0, sizeof(commit));
+  check("load_head_commit", doltliteLoadCommit(db, &headHash, &commit)==SQLITE_OK);
+  doltliteHashToHex(&commit.catalogHash, hex);
+
+  rc = doltliteResolveRef(db, hex, &resolved);
+  check("hex_catalog_hash_is_not_resolved_as_commit", rc!=SQLITE_OK);
+
+  cs = doltliteGetChunkStore(db);
+  check("have_chunk_store", cs!=0);
+  if( cs ){
+    check("corrupt_branch_ref_to_catalog_hash",
+      chunkStoreUpdateBranch(cs, "main", &commit.catalogHash)==SQLITE_OK);
+    rc = doltliteResolveRef(db, "main", &resolved);
+    check("branch_catalog_hash_is_not_resolved_as_commit", rc!=SQLITE_OK);
+  }
+
+  doltliteCommitClear(&commit);
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_commit_parent_limit(void){
+  DoltliteCommit commit;
+  u8 *pBlob = 0;
+  int nBlob = 0;
+  int rc;
+
+  printf("=== Commit Parent Limit Test ===\n\n");
+  memset(&commit, 0, sizeof(commit));
+  commit.nParents = DOLTLITE_MAX_PARENTS + 1;
+
+  rc = doltliteCommitSerialize(&commit, &pBlob, &nBlob);
+  check("serialize_rejects_too_many_parents", rc==SQLITE_TOOBIG);
+  sqlite3_free(pBlob);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -761,7 +918,11 @@ static const RegressionCase aCases[] = {
   { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
-  { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start }
+  { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
+  { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },
+  { "clone_persist_failure", "Clone Persist Failure Test", run_clone_persist_failure },
+  { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },
+  { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit }
 };
 
 static int run_case_by_name(const char *zName){
