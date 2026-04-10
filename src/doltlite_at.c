@@ -194,8 +194,15 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   c->zCommitRef = sqlite3_mprintf("%s", zRef);
   if( !c->zCommitRef ) return SQLITE_NOMEM;
 
+  /* Surface ref-resolution failures to the caller instead of
+  ** silently returning an empty result. Matches Dolt's `t AS OF
+  ** '<bad-ref>'` which errors with a "ref not found" diagnostic. */
   rc=doltliteResolveRef(db,zRef,&commitHash);
-  if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
+  if(rc==SQLITE_NOTFOUND){
+    sqlite3_free(cur->pVtab->zErrMsg);
+    cur->pVtab->zErrMsg = sqlite3_mprintf("ref not found: %s", zRef);
+    return SQLITE_ERROR;
+  }
   if(rc!=SQLITE_OK) return rc;
 
   memset(&commit,0,sizeof(commit));

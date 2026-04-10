@@ -206,17 +206,19 @@ run_test_match "notable" \
 rm -f "$DB"
 
 # ============================================================
-# Non-existent ref returns empty
+# Non-existent ref errors with "ref not found"
 # ============================================================
+# Matches Dolt's `t AS OF '<bad-ref>'` which surfaces a
+# "ref not found" diagnostic instead of silently returning empty.
 
 DB=/tmp/test_at_noref_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "noref" \
+run_test_match "noref" \
   "SELECT count(*) FROM dolt_at_t( 'nonexistent_branch');" \
-  "0" "$DB"
+  "ref not found" "$DB"
 
 rm -f "$DB"
 
