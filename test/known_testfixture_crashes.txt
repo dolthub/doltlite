@@ -1,0 +1,10 @@
+# Files where testfixture crashes (or hangs) before producing the
+# usual "errors out of N tests" summary line. The runner exits with
+# the file marked as PASS if it crashes and is on this list, and as
+# FAIL if it crashes without being listed.
+#
+# Format: <test_file>  # reason
+#
+# Currently empty — trigger2 used to be here but was fixed by
+# commit 5cd33a12a (removed obsolete DOLTLITE_PROLLY UPDATE codegen
+# branches; see issue #361).

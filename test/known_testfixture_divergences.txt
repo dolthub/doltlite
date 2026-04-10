@@ -1,0 +1,200 @@
+# Known divergences from upstream sqlite testfixture
+#
+# Format: <test_file> <test_name>  # reason (optional)
+#
+# These tests fail when run by run_testfixture.sh against doltlite's
+# testfixture build, but the failures are not bugs — they're cases
+# where upstream sqlite tests assume rowid-based semantics that
+# doltlite intentionally cannot match.
+#
+# Background: doltlite keys user-table rows in its prolly tree by the
+# user's primary key columns rather than by sqlite's auto-allocated
+# rowid (since #358), because rowid is allocation-order-dependent and
+# therefore history-dependent — a hard incompatibility with the Dolt
+# model where two branches that independently insert identical rows
+# must produce identical row identities. Tests that rely on rowid
+# behavior in any of these forms produce different (but correct under
+# doltlite's model) results:
+#
+#   * `WHERE rowid = N` against tables that doltlite auto-converts
+#     to WITHOUT ROWID, where rowid no longer exists as an
+#     addressable column
+#   * Unordered SELECT relying on insertion order (sqlite returns
+#     rowid order, doltlite returns user-PK order)
+#   * `pragma table_info` reporting non-PK columns differently for
+#     auto-converted WITHOUT-ROWID tables
+#   * AUTOINCREMENT / sqlite_sequence behavior tied to rowid
+#     allocation
+#   * Foreign key SET NULL / SET DEFAULT actions whose triggering
+#     DELETE addresses parent rows by rowid
+#   * Collation tests that exercise the rowid column itself
+#   * `pragma integrity_check` tests that inject corruption via
+#     test_control hooks that don't reach prolly storage
+#
+# The runner (test/run_testfixture.sh) enforces strict equality:
+# every entry here MUST still actually fail, and any actual failure
+# NOT listed here is a regression. If you fix one of these, remove
+# the entry.
+
+# ── select1 ──
+select1 select1-2.23  # rowid-order vs PK-order on unordered SELECT
+
+# ── index ──
+index index-7.3   # explicit rowid reference
+index index-11.1  # rowid-order assumption
+index index-13.2  # rowid-order assumption
+index index-16.1  # explicit rowid reference
+index index-16.2  # explicit rowid reference
+index index-16.3  # explicit rowid reference
+index index-16.4  # explicit rowid reference
+index index-16.5  # explicit rowid reference
+index index-17.1  # rowid-order assumption
+
+# ── alter ──
+alter alter-1.2  # ALTER TABLE rowid-preservation semantics
+alter alter-1.5  # ALTER TABLE rowid-preservation semantics
+alter alter-1.6  # ALTER TABLE rowid-preservation semantics
+alter alter-1.7  # ALTER TABLE rowid-preservation semantics
+
+# ── auth ──
+auth auth-1.283  # rowid-based authorization edge case
+
+# ── in ──
+in in-19.40  # IN clause path that hits NOT NULL via rowid lookup
+
+# ── in3 ──
+in3 in3-1.2   # IN clause variant using rowid
+in3 in3-1.4   # IN clause variant using rowid
+in3 in3-1.6   # IN clause variant using rowid
+in3 in3-1.16  # IN clause variant using rowid
+in3 in3-1.17  # IN clause variant using rowid
+
+# ── intpkey ──
+intpkey intpkey-1.1  # tests INTEGER vs INT primary key alias semantics
+
+# ── collate1 ──
+collate1 collate1-6.7  # collation on the rowid column
+
+# ── collate4 ──
+collate4 collate4-1.1.7   # collation interacting with rowid ordering
+collate4 collate4-1.1.8
+collate4 collate4-1.1.9
+collate4 collate4-1.1.10
+collate4 collate4-1.1.11
+collate4 collate4-1.1.12
+collate4 collate4-1.1.13
+collate4 collate4-1.1.14
+collate4 collate4-1.1.15
+collate4 collate4-1.1.16
+collate4 collate4-1.1.17
+collate4 collate4-1.1.18
+collate4 collate4-1.1.19
+collate4 collate4-1.1.20
+collate4 collate4-1.2.7
+collate4 collate4-1.2.8
+collate4 collate4-1.2.9
+collate4 collate4-1.2.10
+collate4 collate4-1.2.11
+collate4 collate4-1.2.12
+collate4 collate4-1.2.13
+
+# ── fkey1 ──
+fkey1 fkey1-4.2  # foreign key resolution via rowid
+
+# ── fkey2 ──
+fkey2 fkey2-5.2     # FK + rowid interaction
+fkey2 fkey2-5.3
+fkey2 fkey2-5.4
+fkey2 fkey2-13.1.2.1
+fkey2 fkey2-13.1.2.3
+fkey2 fkey2-13.1.3
+fkey2 fkey2-13.1.4
+
+# ── triggerC ──
+triggerC triggerC-2.1.1  # trigger flow control with rowid access
+triggerC triggerC-2.1.2
+triggerC triggerC-2.1.3
+triggerC triggerC-2.1.4
+triggerC triggerC-2.1.6
+
+# ── window1 ──
+window1 window1-10.7  # rowid-order vs PK-order on unordered SELECT
+window1 window1-10.8  # rowid-order vs PK-order on unordered SELECT
+
+# ── e_createtable ──
+e_createtable e_createtable-4.4.1   # AUTOINCREMENT / sqlite_sequence
+e_createtable e_createtable-4.4.2
+e_createtable e_createtable-4.4.3
+e_createtable e_createtable-4.4.4
+e_createtable e_createtable-4.4.5
+e_createtable e_createtable-4.4.6
+e_createtable e_createtable-4.4.7
+e_createtable e_createtable-4.4.8
+e_createtable e_createtable-4.4.9
+e_createtable e_createtable-4.4.10
+e_createtable e_createtable-4.4.11
+e_createtable e_createtable-4.4.12
+e_createtable e_createtable-4.4.13
+e_createtable e_createtable-4.4.14
+e_createtable e_createtable-4.5.1.1
+e_createtable e_createtable-4.5.1.2
+e_createtable e_createtable-4.5.1.3
+e_createtable e_createtable-4.5.1.4
+e_createtable e_createtable-4.9.1
+e_createtable e_createtable-4.9.4
+e_createtable e_createtable-4.9.5
+e_createtable e_createtable-4.10.1
+e_createtable e_createtable-4.15.5.4
+e_createtable e_createtable-5.3.4
+e_createtable e_createtable-5.3.5
+e_createtable e_createtable-5.3.6
+e_createtable e_createtable-5.3.7
+e_createtable e_createtable-5.4.2.1
+e_createtable e_createtable-5.4.2.2
+e_createtable e_createtable-5.4.2.3
+e_createtable e_createtable-5.4.2.4
+e_createtable e_createtable-5.4.3
+e_createtable e_createtable-5.6.1
+
+# ── e_select ──
+e_select e_select-4.9.4  # rowid-order vs PK-order on unordered SELECT
+
+# ── e_fkey ──
+e_fkey e_fkey-16.4   # explicit rowid reference (no such column: rowid)
+e_fkey e_fkey-17.4   # explicit rowid reference
+e_fkey e_fkey-44.2   # ON DELETE SET NULL via rowid lookup
+e_fkey e_fkey-44.3
+e_fkey e_fkey-44.4
+e_fkey e_fkey-44.5
+e_fkey e_fkey-45.1   # ON DELETE SET DEFAULT via rowid lookup
+e_fkey e_fkey-45.2
+e_fkey e_fkey-45.3
+e_fkey e_fkey-45.4
+e_fkey e_fkey-45.5
+e_fkey e_fkey-51.2
+e_fkey e_fkey-51.3
+e_fkey e_fkey-52.6
+e_fkey e_fkey-57.7
+e_fkey e_fkey-58.3
+
+# ── pragma ──
+pragma pragma-6.2.2   # table_info notnull shape on auto-converted WITHOUT-ROWID
+pragma pragma-6.8     # table_info shape on auto-converted WITHOUT-ROWID
+pragma pragma-22.2    # integrity_check on injected corruption (doesn't reach prolly)
+pragma pragma-22.3.1
+pragma pragma-22.3.3
+pragma pragma-22.4.1
+pragma pragma-22.4.2
+
+# ── shared ──
+shared shared-1.7.2    # shared-cache + rowid-order assumption
+shared shared-1.10.5   # rowid-order on unordered SELECT
+shared shared-1.10.7
+shared shared-2.7.2
+shared shared-2.10.5
+shared shared-2.10.7
+
+# ── shared2 ──
+shared2 shared2-1.1  # shared-cache rowid-order assumption
+shared2 shared2-1.2
+shared2 shared2-1.3
