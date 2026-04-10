@@ -17,7 +17,7 @@ echo "UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "conflicts_table" "SELECT table_name FROM dolt_conflicts;" "t" "$DB"
+run_test "conflicts_table" "SELECT \"table\" FROM dolt_conflicts;" "t" "$DB"
 run_test "conflicts_count" "SELECT num_conflicts FROM dolt_conflicts;" "1" "$DB"
 
 # Test 2: Commit blocked with conflicts

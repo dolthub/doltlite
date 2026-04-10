@@ -489,7 +489,10 @@ static int cfConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   ConflictsVtab *v; int rc;
   (void)pAux;(void)argc;(void)argv;(void)pzErr;
-  rc = sqlite3_declare_vtab(db, "CREATE TABLE x(table_name TEXT, num_conflicts INTEGER)");
+  /* Column is named "table" to match Dolt; the quoting is required because
+  ** "table" is a reserved keyword in SQL. Callers must quote it on access:
+  ** SELECT "table" FROM dolt_conflicts. */
+  rc = sqlite3_declare_vtab(db, "CREATE TABLE x(\"table\" TEXT, num_conflicts INTEGER)");
   if(rc!=SQLITE_OK) return rc;
   v = sqlite3_malloc(sizeof(*v)); if(!v) return SQLITE_NOMEM;
   memset(v,0,sizeof(*v)); v->db=db; *ppVtab=&v->base; return SQLITE_OK;
