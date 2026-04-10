@@ -19,7 +19,7 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "merge_hash" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB"
 run_test "merge_users" "SELECT name FROM users;" "ALICE" "$DB"
 run_test "merge_orders" "SELECT count(*) FROM orders;" "2" "$DB"
-run_test "merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge branch 'feature'" "$DB"
+run_test "merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge branch 'feature' into main" "$DB"
 run_test "merge_log_count" "SELECT count(*) FROM dolt_log;" "5" "$DB"
 
 # Test 2: Fast-forward merge

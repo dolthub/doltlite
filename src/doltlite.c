@@ -898,29 +898,63 @@ static void doltliteMergeFunc(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
-  const char *zBranch;
+  const char *zBranch = 0;
+  const char *zMessage = 0;
+  int isAbort = 0;
+  int noFastForward = 0;
   ProllyHash ourHead, theirHead, ancestorHash;
   ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
   DoltliteTxnState savedState;
   int nMergeConflicts = 0;
   DoltliteCommit ourCommit, theirCommit, ancCommit;
   int graphLocked = 0;
-  int rc;
+  int rc, i;
 
   memset(&ourCommit, 0, sizeof(ourCommit));
   memset(&theirCommit, 0, sizeof(theirCommit));
   memset(&ancCommit, 0, sizeof(ancCommit));
   memset(&savedState, 0, sizeof(savedState));
 
-  
+
   if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
   if( argc<1 ){ sqlite3_result_error(context, "usage: dolt_merge('branch')", -1); return; }
 
-  zBranch = (const char*)sqlite3_value_text(argv[0]);
-  if( !zBranch ){ sqlite3_result_error(context, "branch name required", -1); return; }
+  /* Parse arguments. The first non-flag positional is the target branch
+  ** (or --abort, which is handled as a special branch-position keyword).
+  ** Recognized flags: -m / --message, --no-ff, --abort. Unknown
+  ** dash-prefixed flags are rejected. */
+  for(i=0; i<argc; i++){
+    const char *arg = (const char*)sqlite3_value_text(argv[i]);
+    if( !arg ) continue;
+    if( strcmp(arg, "--abort")==0 ){
+      isAbort = 1;
+    }else if( strcmp(arg, "--no-ff")==0 ){
+      noFastForward = 1;
+    }else if( strcmp(arg, "-m")==0 || strcmp(arg, "--message")==0 ){
+      if( i+1<argc ){
+        zMessage = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "-m requires a message", -1);
+        return;
+      }
+    }else if( arg[0]=='-' ){
+      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
+      if( zErr ){
+        sqlite3_result_error(context, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(context);
+      }
+      return;
+    }else if( !zBranch ){
+      zBranch = arg;
+    }else{
+      sqlite3_result_error(context, "too many positional arguments to dolt_merge", -1);
+      return;
+    }
+  }
 
-  
-  if( strcmp(zBranch, "--abort")==0 ){
+  if( isAbort ){
     u8 isMerging = 0;
     ProllyHash headCatHash;
 
@@ -954,7 +988,11 @@ static void doltliteMergeFunc(
     return;
   }
 
-  
+  if( !zBranch ){
+    sqlite3_result_error(context, "branch name required", -1);
+    return;
+  }
+
   doltliteGetSessionHead(db, &ourHead);
   if( prollyHashIsEmpty(&ourHead) ){
     sqlite3_result_error(context, "no commits on current branch", -1);
@@ -999,8 +1037,11 @@ static void doltliteMergeFunc(
   }
 
   
-  if( prollyHashCompare(&ancestorHash, &ourHead)==0 ){
-    /* Fast-forward: move branch pointer to their commit, no merge commit. */
+  if( prollyHashCompare(&ancestorHash, &ourHead)==0 && !noFastForward ){
+    /* Fast-forward: move branch pointer to their commit, no merge commit.
+    ** Skipped when --no-ff was passed; in that case fall through to the
+    ** three-way merge path which will produce a real merge commit even
+    ** though the row content is identical to theirs. */
     char hx[PROLLY_HASH_SIZE*2+1];
 
     rc = doltliteLoadCommit(db, &theirHead, &theirCommit);
@@ -1208,7 +1249,12 @@ static void doltliteMergeFunc(
 
     doltliteSetSessionStaged(db, &mergedCatHash);
 
-    snprintf(msg, sizeof(msg), "Merge branch '%s'", zBranch);
+    if( zMessage && zMessage[0] ){
+      sqlite3_snprintf(sizeof(msg), msg, "%s", zMessage);
+    }else{
+      snprintf(msg, sizeof(msg), "Merge branch '%s' into %s",
+               zBranch, doltliteGetSessionBranch(db));
+    }
     rc = doltliteCreateAndStoreCommit(db, &ourHead, &mergedCatHash,
         msg, NULL, NULL, &theirHead, 1, &commitHash);
     if( rc!=SQLITE_OK ){
