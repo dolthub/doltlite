@@ -211,7 +211,7 @@ run_test "cp_alter_col_exists" \
   "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra';" \
   "1" "$DB"
 run_test "cp_alter_val" "SELECT extra FROM t WHERE id=1;" "cp" "$DB"
-run_test_match "cp_alter_msg" "SELECT message FROM dolt_log LIMIT 1;" "Cherry-pick: alter add extra" "$DB"
+run_test_match "cp_alter_msg" "SELECT message FROM dolt_log LIMIT 1;" "^alter add extra$" "$DB"
 
 rm -f "$DB"
 
