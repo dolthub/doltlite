@@ -20,15 +20,16 @@ extern int doltliteStatusRegister(sqlite3 *db);
 extern int doltliteDiffRegister(sqlite3 *db);
 extern int doltliteBranchRegister(sqlite3 *db);
 extern int doltliteConflictsRegister(sqlite3 *db);
-extern void doltliteRegisterConflictTables(sqlite3 *db);
+extern int doltliteRegisterConflictTables(sqlite3 *db);
 extern int doltliteTagRegister(sqlite3 *db);
 extern int doltliteGcRegister(sqlite3 *db);
-extern void doltliteRegisterDiffTables(sqlite3 *db);
+extern int doltliteRegisterDiffTables(sqlite3 *db);
 extern int doltliteAncestorRegister(sqlite3 *db);
 extern int doltliteAtRegister(sqlite3 *db);
 extern int doltliteRegisterAtTables(sqlite3 *db);
 extern int doltliteRegisterHistoryTables(sqlite3 *db);
 extern int doltliteSchemaDiffRegister(sqlite3 *db);
+extern int doltliteRemoteSqlRegister(sqlite3 *db);
 
 extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
                                  const ProllyHash *h2, ProllyHash *pAnc);
@@ -375,7 +376,8 @@ static int doltliteReportConflicts(
 ){
   char msg[256];
   int rc;
-  doltliteRegisterConflictTables(db);
+  rc = doltliteRegisterConflictTables(db);
+  if( rc!=SQLITE_OK ) return rc;
   rc = doltlitePersistState(db);
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
@@ -761,8 +763,11 @@ static void doltliteCommitFunc(
 
   doltliteHashToHex(&commitHash, hexBuf);
 
-  
-  doltliteRegisterDiffTables(db);
+  rc = doltliteRegisterDiffTables(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
   rc = doltliteRegisterHistoryTables(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
@@ -1650,20 +1655,22 @@ static void doltliteMaybeSeedRepo(sqlite3 *db){
 }
 
 void doltliteRegister(sqlite3 *db){
-  sqlite3_create_function(db, "dolt_commit", -1, SQLITE_UTF8, 0,
-                          doltliteCommitFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_add", -1, SQLITE_UTF8, 0,
-                          doltliteAddFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_reset", -1, SQLITE_UTF8, 0,
-                          doltliteResetFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_merge", -1, SQLITE_UTF8, 0,
-                          doltliteMergeFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_cherry_pick", -1, SQLITE_UTF8, 0,
-                          doltliteCherryPickFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_revert", -1, SQLITE_UTF8, 0,
-                          doltliteRevertFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_config", -1, SQLITE_UTF8, 0,
-                          doltliteConfigFunc, 0, 0);
+  int rc;
+  rc = sqlite3_create_function(db, "dolt_commit", -1, SQLITE_UTF8, 0,
+                               doltliteCommitFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_add", -1, SQLITE_UTF8, 0,
+                                                   doltliteAddFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_reset", -1, SQLITE_UTF8, 0,
+                                                   doltliteResetFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_merge", -1, SQLITE_UTF8, 0,
+                                                   doltliteMergeFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_cherry_pick", -1, SQLITE_UTF8, 0,
+                                                   doltliteCherryPickFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_revert", -1, SQLITE_UTF8, 0,
+                                                   doltliteRevertFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_config", -1, SQLITE_UTF8, 0,
+                                                   doltliteConfigFunc, 0, 0);
+  if( rc!=SQLITE_OK ) return;
   if( doltliteLogRegister(db)!=SQLITE_OK ) return;
   if( doltliteStatusRegister(db)!=SQLITE_OK ) return;
   if( doltliteDiffRegister(db)!=SQLITE_OK ) return;
@@ -1671,15 +1678,12 @@ void doltliteRegister(sqlite3 *db){
   if( doltliteTagRegister(db)!=SQLITE_OK ) return;
   if( doltliteConflictsRegister(db)!=SQLITE_OK ) return;
   if( doltliteGcRegister(db)!=SQLITE_OK ) return;
-  doltliteRegisterDiffTables(db);
+  if( doltliteRegisterDiffTables(db)!=SQLITE_OK ) return;
   if( doltliteAncestorRegister(db)!=SQLITE_OK ) return;
   if( doltliteAtRegister(db)!=SQLITE_OK ) return;
   if( doltliteRegisterHistoryTables(db)!=SQLITE_OK ) return;
   if( doltliteSchemaDiffRegister(db)!=SQLITE_OK ) return;
-  {
-    extern void doltliteRemoteSqlRegister(sqlite3 *db);
-    doltliteRemoteSqlRegister(db);
-  }
+  if( doltliteRemoteSqlRegister(db)!=SQLITE_OK ) return;
   doltliteMaybeSeedRepo(db);
 }
 

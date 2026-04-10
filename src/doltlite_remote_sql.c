@@ -905,18 +905,20 @@ static sqlite3_module remotesModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-void doltliteRemoteSqlRegister(sqlite3 *db){
-  sqlite3_create_function(db, "dolt_remote", -1, SQLITE_UTF8, 0,
-                          doltRemoteFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_push", -1, SQLITE_UTF8, 0,
-                          doltPushFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_fetch", -1, SQLITE_UTF8, 0,
-                          doltFetchFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_pull", -1, SQLITE_UTF8, 0,
-                          doltPullFunc, 0, 0);
-  sqlite3_create_function(db, "dolt_clone", -1, SQLITE_UTF8, 0,
-                          doltCloneFunc, 0, 0);
-  sqlite3_create_module(db, "dolt_remotes", &remotesModule, 0);
+int doltliteRemoteSqlRegister(sqlite3 *db){
+  int rc;
+  rc = sqlite3_create_function(db, "dolt_remote", -1, SQLITE_UTF8, 0,
+                               doltRemoteFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_push", -1, SQLITE_UTF8, 0,
+                                                   doltPushFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_fetch", -1, SQLITE_UTF8, 0,
+                                                   doltFetchFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_pull", -1, SQLITE_UTF8, 0,
+                                                   doltPullFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_clone", -1, SQLITE_UTF8, 0,
+                                                   doltCloneFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_module(db, "dolt_remotes", &remotesModule, 0);
+  return rc;
 }
 
 #endif 
