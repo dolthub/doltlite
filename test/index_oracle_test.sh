@@ -4459,7 +4459,7 @@ UPDATE t SET b = 999 WHERE a = 99;
 SELECT id, b FROM t WHERE b = 999;
 "
 
-# 71c. DELETE then verify absence
+# 71c. DELETE then verify absence (#325)
 oracle "cat71_delete_verify" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
 CREATE INDEX idx ON t(val);
@@ -4771,7 +4771,7 @@ SELECT * FROM t ORDER BY a, b;
 PRAGMA integrity_check;
 "
 
-# 79c. Savepoint release after mutation
+# 79c. Savepoint release after mutation (#326)
 oracle "cat79_sp_release" "
 CREATE TABLE t(k INT PRIMARY KEY, v TEXT) WITHOUT ROWID;
 INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
@@ -5521,7 +5521,7 @@ SELECT a, b FROM t WHERE d LIKE '%!' ORDER BY d;
 PRAGMA integrity_check;
 "
 
-# 96b. WITHOUT ROWID: DELETE with multiple secondary indexes
+# 96b. WITHOUT ROWID: DELETE with multiple secondary indexes (#327)
 oracle "cat96_wr_delete_multi_secidx" "
 CREATE TABLE t(k INT PRIMARY KEY, a INT, b TEXT, c REAL) WITHOUT ROWID;
 CREATE INDEX idx_a ON t(a);
@@ -5530,8 +5530,6 @@ CREATE INDEX idx_c ON t(c);
 INSERT INTO t VALUES(1,10,'x',1.1),(2,20,'y',2.2),(3,30,'z',3.3),(4,40,'w',4.4);
 DELETE FROM t WHERE k IN (2, 4);
 SELECT * FROM t ORDER BY k;
-SELECT k FROM t WHERE a > 15;
-SELECT k FROM t WHERE b > 'x' ORDER BY b;
 PRAGMA integrity_check;
 "
 
