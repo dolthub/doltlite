@@ -110,7 +110,7 @@ SELECT dolt_commit('-A','-m','Main: update Alice name');" | $DOLTLITE "$DB" > /d
 run_test_match "e2e_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
 
 # Verify conflict state
-run_test "e2e_has_conflicts" "SELECT num_conflicts FROM dolt_conflicts WHERE table_name='users';" "1" "$DB"
+run_test "e2e_has_conflicts" "SELECT num_conflicts FROM dolt_conflicts WHERE \"table\"='users';" "1" "$DB"
 
 # Commit should be blocked
 run_test_match "e2e_commit_blocked" "SELECT dolt_commit('-A','-m','fail');" "unresolved" "$DB"
