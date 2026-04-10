@@ -144,9 +144,9 @@ echo "SELECT dolt_add('users');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "e2e_one_staged" "SELECT count(*) FROM dolt_status WHERE staged=1;" "1" "$DB"
 run_test "e2e_one_unstaged" "SELECT count(*) FROM dolt_status WHERE staged=0;" "1" "$DB"
 
-# Soft reset unstages
-echo "SELECT dolt_reset('--soft');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "e2e_after_soft_reset" "SELECT count(*) FROM dolt_status WHERE staged=1;" "0" "$DB"
+# No-args reset (== --mixed) unstages
+echo "SELECT dolt_reset();" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "e2e_after_reset" "SELECT count(*) FROM dolt_status WHERE staged=1;" "0" "$DB"
 run_test "e2e_data_preserved" "SELECT count(*) FROM users;" "4" "$DB"
 
 # Stage all and commit

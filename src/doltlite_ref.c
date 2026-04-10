@@ -27,10 +27,23 @@ static int doltliteValidateCommitHash(
   return rc;
 }
 
-int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
+/* Resolve a base ref (no ~N / ^N suffix) to a commit hash. Tries
+** the literal "HEAD" keyword, then 40-char hex, then branch name,
+** then tag name. Returns SQLITE_NOTFOUND if none match. */
+static int doltliteResolveBaseRef(
+  sqlite3 *db,
+  const char *zRef,
+  ProllyHash *pCommit
+){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc;
-  if( !zRef || !cs ) return SQLITE_ERROR;
+
+  /* "HEAD" keyword resolves to the current session head */
+  if( strcmp(zRef, "HEAD")==0 ){
+    doltliteGetSessionHead(db, pCommit);
+    if( prollyHashIsEmpty(pCommit) ) return SQLITE_NOTFOUND;
+    return SQLITE_OK;
+  }
 
   /* Try 40-char hex hash */
   if( strlen(zRef)==PROLLY_HASH_SIZE*2 ){
@@ -59,6 +72,86 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   }
 
   return SQLITE_NOTFOUND;
+}
+
+/* Walk back N commits along the first-parent chain. */
+static int doltliteWalkFirstParent(
+  sqlite3 *db,
+  ProllyHash *pCommit,
+  int n
+){
+  int i;
+  for(i=0; i<n; i++){
+    DoltliteCommit commit;
+    int rc;
+    memset(&commit, 0, sizeof(commit));
+    rc = doltliteLoadCommit(db, pCommit, &commit);
+    if( rc!=SQLITE_OK ) return rc;
+    if( commit.nParents==0 ){
+      doltliteCommitClear(&commit);
+      return SQLITE_NOTFOUND;
+    }
+    memcpy(pCommit, &commit.aParents[0], sizeof(ProllyHash));
+    doltliteCommitClear(&commit);
+  }
+  return SQLITE_OK;
+}
+
+int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int len, j, n_back, rc;
+  int suffix_pos = -1;
+  char *base_buf = 0;
+  const char *base;
+
+  if( !zRef || !cs ) return SQLITE_ERROR;
+
+  /* Look for a trailing ~N or ^N (rightmost) revision suffix. The
+  ** base ref before the suffix is resolved by doltliteResolveBaseRef
+  ** and then walked back N commits along the first-parent chain. An
+  ** empty digit run (HEAD~ / HEAD^) is treated as N=1, matching git.
+  ** Only the rightmost suffix is honored — chained suffixes such as
+  ** HEAD~2~3 are not supported. */
+  len = (int)strlen(zRef);
+  for(j=len-1; j>=0; j--){
+    if( zRef[j]=='~' || zRef[j]=='^' ){
+      int k, allDigits = 1;
+      for(k=j+1; k<len; k++){
+        if( zRef[k]<'0' || zRef[k]>'9' ){ allDigits = 0; break; }
+      }
+      if( allDigits ) suffix_pos = j;
+      break;
+    }
+  }
+
+  n_back = 0;
+  base = zRef;
+  if( suffix_pos>=0 ){
+    if( suffix_pos==len-1 ){
+      n_back = 1;
+    }else{
+      n_back = atoi(zRef + suffix_pos + 1);
+      if( n_back<=0 ) n_back = 0;
+    }
+    if( n_back>0 ){
+      if( suffix_pos==0 ){
+        base = "HEAD";
+      }else{
+        base_buf = sqlite3_malloc(suffix_pos + 1);
+        if( !base_buf ) return SQLITE_NOMEM;
+        memcpy(base_buf, zRef, suffix_pos);
+        base_buf[suffix_pos] = '\0';
+        base = base_buf;
+      }
+    }
+  }
+
+  rc = doltliteResolveBaseRef(db, base, pCommit);
+  if( rc==SQLITE_OK && n_back>0 ){
+    rc = doltliteWalkFirstParent(db, pCommit, n_back);
+  }
+  if( base_buf ) sqlite3_free(base_buf);
+  return rc;
 }
 
 int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,

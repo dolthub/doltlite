@@ -289,11 +289,11 @@ echo "INSERT INTO t VALUES(2,'new'); SELECT dolt_add('-A');" | $DOLTLITE "$DB" >
 run_test "soft_reset_staged" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" "1" "$DB"
 
-echo "SELECT dolt_reset('--soft');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_reset();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "soft_reset_unstaged" \
+run_test "reset_unstaged" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" "0" "$DB"
-run_test "soft_reset_data_kept" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "reset_data_kept" "SELECT count(*) FROM t;" "2" "$DB"
 db_rm "$DB"
 
 # Test: Hard reset then checkout another branch

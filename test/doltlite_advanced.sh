@@ -592,8 +592,8 @@ INSERT INTO b VALUES(2,'b2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Stage only a
 echo "SELECT dolt_add('a');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Soft reset — should unstage a but keep all data
-echo "SELECT dolt_reset('--soft');" | $DOLTLITE "$DB" > /dev/null 2>&1
+# No-args reset (== --mixed) — unstage a but keep all data
+echo "SELECT dolt_reset();" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "resetstage_unstaged" "SELECT count(*) FROM dolt_status WHERE staged=1;" "0" "$DB"
 run_test "resetstage_data_a" "SELECT count(*) FROM a;" "2" "$DB"
 run_test "resetstage_data_b" "SELECT count(*) FROM b;" "2" "$DB"

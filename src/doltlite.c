@@ -792,7 +792,11 @@ static void doltliteResetFunc(
   ProllyHash targetCatHash;
   ProllyHash targetCommit;
   int isHard = 0;
+  int isSoft = 0;
+  int isMixed = 0;
   const char *zRef = 0;
+  const char **azPaths = 0;
+  int nPaths = 0;
   int rc;
   int i;
   int graphLocked = 0;
@@ -802,14 +806,179 @@ static void doltliteResetFunc(
     return;
   }
 
-  
+  /* Parse arguments. The first non-flag positional that resolves as
+  ** a ref is the target commit; any other non-flag positional is
+  ** treated as a table-path argument to unstage. Recognized flags:
+  ** --hard, --soft, --mixed (default). Other dash-prefixed args are
+  ** rejected. */
+  azPaths = (const char**)sqlite3_malloc(sizeof(char*) * (argc>0?argc:1));
+  if( !azPaths ){ sqlite3_result_error_nomem(context); return; }
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
     if( !arg ) continue;
     if( strcmp(arg, "--hard")==0 ){ isHard = 1; }
-    else if( strcmp(arg, "--soft")==0 ){  }
-    else{ zRef = arg; }
+    else if( strcmp(arg, "--soft")==0 ){ isSoft = 1; }
+    else if( strcmp(arg, "--mixed")==0 ){ isMixed = 1; }
+    else if( arg[0]=='-' ){
+      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
+      sqlite3_result_error(context, zErr ? zErr : "unknown option", -1);
+      sqlite3_free(zErr);
+      sqlite3_free(azPaths);
+      return;
+    }
+    else if( !zRef ){
+      /* First non-flag positional. If a mode flag (--hard / --soft /
+      ** --mixed) was given, this MUST be a ref — path mode is
+      ** mutually exclusive with mode flags. Otherwise, try as a ref
+      ** first; if it doesn't resolve, treat as a table path so that
+      ** dolt_reset('table_name') works. */
+      if( isHard || isSoft || isMixed ){
+        zRef = arg;
+      }else{
+        ProllyHash probe;
+        if( doltliteResolveRef(db, arg, &probe)==SQLITE_OK ){
+          zRef = arg;
+        }else{
+          azPaths[nPaths++] = arg;
+        }
+      }
+    }
+    else{
+      /* Subsequent non-flag positionals are always table paths */
+      azPaths[nPaths++] = arg;
+    }
   }
+
+  /* Path-based unstage: rewrite the staged catalog so that the
+  ** listed tables match HEAD again, leave every other staged entry
+  ** alone, and don't touch HEAD or the working set. Mutually
+  ** exclusive with --hard / --soft and with a target ref. */
+  if( nPaths>0 ){
+    struct TableEntry *aHead = 0, *aStaged = 0;
+    int nHead = 0, nStaged = 0;
+    ProllyHash headCatHash, stagedHash;
+    int p;
+
+    if( isHard || isSoft || zRef ){
+      sqlite3_result_error(context,
+        "table paths cannot be combined with --hard / --soft or a target ref", -1);
+      sqlite3_free(azPaths);
+      return;
+    }
+
+    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(azPaths);
+      sqlite3_result_error(context, "failed to read HEAD", -1);
+      return;
+    }
+    if( !prollyHashIsEmpty(&headCatHash) ){
+      rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(azPaths);
+        sqlite3_result_error(context, "failed to load HEAD catalog", -1);
+        return;
+      }
+    }
+
+    doltliteGetSessionStaged(db, &stagedHash);
+    if( !prollyHashIsEmpty(&stagedHash) ){
+      rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(aHead);
+        sqlite3_free(azPaths);
+        sqlite3_result_error(context, "failed to load staged catalog", -1);
+        return;
+      }
+    }
+
+    for(p=0; p<nPaths; p++){
+      const char *zTable = azPaths[p];
+      int iH;
+      int iS = -1;
+      int j;
+
+      /* Find this table in HEAD and in staged */
+      for(j=0; j<nStaged; j++){
+        if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
+          iS = j; break;
+        }
+      }
+      iH = -1;
+      for(j=0; j<nHead; j++){
+        if( aHead[j].zName && strcmp(aHead[j].zName, zTable)==0 ){
+          iH = j; break;
+        }
+      }
+
+      if( iH<0 && iS<0 ){
+        char *zErr = sqlite3_mprintf("table not found: %s", zTable);
+        sqlite3_free(aHead); sqlite3_free(aStaged); sqlite3_free(azPaths);
+        sqlite3_result_error(context, zErr ? zErr : "table not found", -1);
+        sqlite3_free(zErr);
+        return;
+      }
+
+      if( iH<0 ){
+        /* Not in HEAD: drop the staged entry */
+        if( iS+1<nStaged ){
+          memmove(&aStaged[iS], &aStaged[iS+1],
+                  (nStaged-iS-1)*(int)sizeof(struct TableEntry));
+        }
+        nStaged--;
+      }else if( iS<0 ){
+        /* In HEAD but not staged yet: add it */
+        struct TableEntry *aNew = sqlite3_realloc(aStaged,
+            (nStaged+1)*(int)sizeof(struct TableEntry));
+        if( !aNew ){
+          sqlite3_free(aHead); sqlite3_free(aStaged); sqlite3_free(azPaths);
+          sqlite3_result_error_nomem(context);
+          return;
+        }
+        aStaged = aNew;
+        aStaged[nStaged] = aHead[iH];
+        nStaged++;
+      }else{
+        /* In both: replace staged with HEAD's version */
+        aStaged[iS] = aHead[iH];
+      }
+    }
+
+    {
+      u8 *buf = 0;
+      int nBuf = 0;
+      ProllyHash newStagedHash;
+      rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
+      if( rc==SQLITE_OK ){
+        rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
+      }
+      sqlite3_free(buf);
+      if( rc==SQLITE_OK ){
+        doltliteSetSessionStaged(db, &newStagedHash);
+      }
+    }
+
+    sqlite3_free(aHead);
+    sqlite3_free(aStaged);
+    sqlite3_free(azPaths);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
+    doltlitePersistState(db);
+    sqlite3_result_int(context, 0);
+    return;
+  }
+  sqlite3_free(azPaths);
+
+  /* `dolt_reset('--soft')` with no target ref is a no-op (matches
+  ** Dolt's git-like semantics: --soft HEAD changes nothing). The
+  ** unstage-all behavior is reserved for no-args and --mixed. */
+  if( isSoft && !zRef ){
+    sqlite3_result_int(context, 0);
+    return;
+  }
+  (void)isMixed;
 
   if( zRef ){
     DoltliteCommit commit;
