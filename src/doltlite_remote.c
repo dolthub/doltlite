@@ -55,6 +55,64 @@ static int syncQueuePending(SyncQueue *q){
   return q->nItems - q->iHead;
 }
 
+static int remoteLoadRefsView(const u8 *pData, int nData, ChunkStore *pRefs){
+  memset(pRefs, 0, sizeof(*pRefs));
+  if( !pData || nData<=0 ) return SQLITE_NOTFOUND;
+  return chunkStoreLoadRefsFromBlob(pRefs, pData, nData);
+}
+
+static int remoteFindBranchFromRefsBlob(
+  const u8 *pData, int nData, const char *zBranch, ProllyHash *pCommit
+){
+  ChunkStore refsView;
+  int rc = remoteLoadRefsView(pData, nData, &refsView);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreFindBranch(&refsView, zBranch, pCommit);
+  chunkStoreClose(&refsView);
+  return rc;
+}
+
+static int remoteCollectRootsFromRefsBlob(
+  const u8 *pData, int nData, ProllyHash **paRoots, int *pnRoots
+){
+  ChunkStore refsView;
+  ProllyHash *aRoots = 0;
+  int nRoots = 0;
+  int nAlloc = 0;
+  int rc;
+  int i;
+
+  *paRoots = 0;
+  *pnRoots = 0;
+  rc = remoteLoadRefsView(pData, nData, &refsView);
+  if( rc!=SQLITE_OK ) return rc;
+
+  nAlloc = refsView.nBranches + refsView.nTags + 1;
+  if( nAlloc>0 ){
+    aRoots = sqlite3_malloc(nAlloc * (int)sizeof(ProllyHash));
+    if( !aRoots ){
+      chunkStoreClose(&refsView);
+      return SQLITE_NOMEM;
+    }
+  }
+
+  for(i=0; i<refsView.nBranches; i++){
+    if( !prollyHashIsEmpty(&refsView.aBranches[i].commitHash) ){
+      aRoots[nRoots++] = refsView.aBranches[i].commitHash;
+    }
+  }
+  for(i=0; i<refsView.nTags; i++){
+    if( !prollyHashIsEmpty(&refsView.aTags[i].commitHash) ){
+      aRoots[nRoots++] = refsView.aTags[i].commitHash;
+    }
+  }
+
+  chunkStoreClose(&refsView);
+  *paRoots = aRoots;
+  *pnRoots = nRoots;
+  return SQLITE_OK;
+}
+
 typedef struct SyncEnqCtx SyncEnqCtx;
 struct SyncEnqCtx {
   SyncQueue *q;
@@ -384,8 +442,18 @@ static int syncIsAncestor(
     return -1;
   }
 
-  syncQueuePush(&queue, pDescendant);
-  prollyHashSetAdd(&visited, pDescendant);
+  rc = syncQueuePush(&queue, pDescendant);
+  if( rc!=SQLITE_OK ){
+    prollyHashSetFree(&visited);
+    syncQueueFree(&queue);
+    return -1;
+  }
+  rc = prollyHashSetAdd(&visited, pDescendant);
+  if( rc!=SQLITE_OK ){
+    prollyHashSetFree(&visited);
+    syncQueueFree(&queue);
+    return -1;
+  }
 
   while( !found ){
     ProllyHash current;
@@ -409,14 +477,23 @@ static int syncIsAncestor(
             break;
           }
           if( !prollyHashSetContains(&visited, &commit.aParents[pi]) ){
-            prollyHashSetAdd(&visited, &commit.aParents[pi]);
-            syncQueuePush(&queue, &commit.aParents[pi]);
+            rc = prollyHashSetAdd(&visited, &commit.aParents[pi]);
+            if( rc!=SQLITE_OK ){
+              found = -1;
+              break;
+            }
+            rc = syncQueuePush(&queue, &commit.aParents[pi]);
+            if( rc!=SQLITE_OK ){
+              found = -1;
+              break;
+            }
           }
         }
         doltliteCommitClear(&commit);
       }
     }
     sqlite3_free(data);
+    if( found<0 ) break;
   }
 
   prollyHashSetFree(&visited);
@@ -447,49 +524,21 @@ int doltlitePush(
     int nRefsData = 0;
     rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
     if( rc==SQLITE_OK && refsData ){
-
-      ChunkStore tmpCs;
-      const u8 *p;
-      memset(&tmpCs, 0, sizeof(tmpCs));
-
-
-      p = refsData;
-      if( nRefsData >= 9 ){
-        u8 ver; int defLen;
-        ver = p[0]; p++;
-        defLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-        if( p + defLen + 4 <= refsData + nRefsData ){
-          int nBranches;
-          p += defLen;
-          nBranches = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-          for(i=0; i<nBranches; i++){
-            int nameLen;
-            if( p+4 > refsData+nRefsData ) break;
-            nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-            if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
-            if( nameLen==(int)strlen(zBranch) && memcmp(p, zBranch, nameLen)==0 ){
-              memcpy(remoteCommit.data, p+nameLen, PROLLY_HASH_SIZE);
-              if( !prollyHashIsEmpty(&remoteCommit)
-                  && prollyHashCompare(&remoteCommit, &localCommit)!=0 ){
-
-                int isAnc = syncIsAncestor(pLocal, &remoteCommit, &localCommit);
-                if( isAnc <= 0 ){
-                  sqlite3_free(refsData);
-                  return SQLITE_ERROR;
-                }
-              }
-              break;
-            }
-            p += nameLen + PROLLY_HASH_SIZE;
-
-            if( p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
-              p += PROLLY_HASH_SIZE;
-            }
-          }
+      rc = remoteFindBranchFromRefsBlob(refsData, nRefsData, zBranch, &remoteCommit);
+      if( rc==SQLITE_OK && !prollyHashIsEmpty(&remoteCommit)
+          && prollyHashCompare(&remoteCommit, &localCommit)!=0 ){
+        int isAnc = syncIsAncestor(pLocal, &remoteCommit, &localCommit);
+        if( isAnc <= 0 ){
+          sqlite3_free(refsData);
+          return isAnc<0 ? SQLITE_NOMEM : SQLITE_ERROR;
         }
       }
       sqlite3_free(refsData);
-      (void)tmpCs;
+      if( rc==SQLITE_NOTFOUND ){
+        rc = SQLITE_OK;
+      }else if( rc!=SQLITE_OK ){
+        return rc;
+      }
     }else if( rc==SQLITE_NOTFOUND ){
       rc = SQLITE_OK; 
     }
@@ -576,33 +625,12 @@ int doltliteFetch(
   if( rc!=SQLITE_OK ) return rc;
 
   
-  if( nRefsData >= 9 ){
-    const u8 *p = refsData;
-    u8 ver; int defLen;
-    ver = p[0]; p++;
-    defLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-    if( p + defLen + 4 <= refsData + nRefsData ){
-      int nBranches, i;
-      p += defLen;
-      nBranches = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-      for(i=0; i<nBranches; i++){
-        int nameLen;
-        if( p+4 > refsData+nRefsData ) break;
-        nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-        if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
-        if( nameLen==(int)strlen(zBranch) && memcmp(p, zBranch, nameLen)==0 ){
-          memcpy(remoteCommit.data, p+nameLen, PROLLY_HASH_SIZE);
-          found = 1;
-        }
-        p += nameLen + PROLLY_HASH_SIZE;
-        if( p+PROLLY_HASH_SIZE <= refsData+nRefsData ){
-          p += PROLLY_HASH_SIZE;
-        }
-        if( found ) break;
-      }
-    }
-  }
+  rc = remoteFindBranchFromRefsBlob(refsData, nRefsData, zBranch, &remoteCommit);
   sqlite3_free(refsData);
+  if( rc!=SQLITE_OK ){
+    return rc==SQLITE_NOTFOUND ? SQLITE_NOTFOUND : rc;
+  }
+  found = !prollyHashIsEmpty(&remoteCommit);
 
   if( !found || prollyHashIsEmpty(&remoteCommit) ){
     return SQLITE_NOTFOUND; 
@@ -633,7 +661,6 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   int nRefsData = 0;
   ProllyHash *aRoots = 0;
   int nRoots = 0;
-  int nRootsAlloc = 0;
   DoltliteRemote *pLocalDst = 0;
   int rc;
 
@@ -642,60 +669,10 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   if( rc!=SQLITE_OK ) return rc;
 
   
-  if( nRefsData >= 9 ){
-    const u8 *p = refsData;
-    u8 ver; int defLen;
-    ver = p[0]; p++;
-    defLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-    if( p + defLen + 4 <= refsData + nRefsData ){
-      int nBranches, nTags, i;
-      p += defLen;
-      nBranches = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-
-      nRootsAlloc = nBranches + 16;
-      aRoots = sqlite3_malloc(nRootsAlloc * sizeof(ProllyHash));
-      if( !aRoots ){
-        sqlite3_free(refsData);
-        return SQLITE_NOMEM;
-      }
-
-      for(i=0; i<nBranches; i++){
-        int nameLen;
-        if( p+4 > refsData+nRefsData ) break;
-        nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-        if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
-        p += nameLen;
-
-        memcpy(aRoots[nRoots].data, p, PROLLY_HASH_SIZE);
-        if( !prollyHashIsEmpty(&aRoots[nRoots]) ) nRoots++;
-        p += PROLLY_HASH_SIZE;
-
-        p += PROLLY_HASH_SIZE; /* skip workingSetHash */
-      }
-
-
-      if( p+4 <= refsData+nRefsData ){
-        nTags = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-        if( nRoots + nTags > nRootsAlloc ){
-          nRootsAlloc = nRoots + nTags + 8;
-          aRoots = sqlite3_realloc(aRoots, nRootsAlloc * sizeof(ProllyHash));
-          if( !aRoots ){
-            sqlite3_free(refsData);
-            return SQLITE_NOMEM;
-          }
-        }
-        for(i=0; i<nTags; i++){
-          int nameLen;
-          if( p+4 > refsData+nRefsData ) break;
-          nameLen = (int)p[0]|((int)p[1]<<8)|((int)p[2]<<16)|((int)p[3]<<24); p += 4;
-          if( p+nameLen+PROLLY_HASH_SIZE > refsData+nRefsData ) break;
-          p += nameLen;
-          memcpy(aRoots[nRoots].data, p, PROLLY_HASH_SIZE);
-          if( !prollyHashIsEmpty(&aRoots[nRoots]) ) nRoots++;
-          p += PROLLY_HASH_SIZE;
-        }
-      }
-    }
+  rc = remoteCollectRootsFromRefsBlob(refsData, nRefsData, &aRoots, &nRoots);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(refsData);
+    return rc;
   }
 
   if( nRoots == 0 ){
