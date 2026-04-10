@@ -211,10 +211,11 @@ Compare schemas between any two commits, branches, or tags:
 
 ```sql
 SELECT * FROM dolt_schema_diff('v1.0', 'v2.0');
--- table_name | from_create_stmt | to_create_stmt | diff_type
-
--- Shows tables added, dropped, or modified (schema changed)
--- Also detects new indexes and views
+-- from_table_name | to_table_name | from_create_statement | to_create_statement
+--
+-- Added rows have an empty from_table_name; dropped rows have an
+-- empty to_table_name; modified rows have both equal.
+-- Also detects new indexes and views.
 ```
 
 ### Audit Log (dolt_diff_&lt;table&gt;)

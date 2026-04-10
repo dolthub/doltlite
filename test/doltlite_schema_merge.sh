@@ -334,17 +334,17 @@ run_test_match "schema_diff_alter_count" \
   "^[1-9]" "$DB"
 
 run_test_match "schema_diff_alter_table" \
-  "SELECT table_name FROM dolt_schema_diff('v1','v2') WHERE table_name='t';" \
+  "SELECT to_table_name FROM dolt_schema_diff('v1','v2') WHERE to_table_name='t';" \
   "^t$" "$DB"
 
-# The to_create_stmt should include the extra column
+# The to_create_statement should include the extra column
 run_test_match "schema_diff_alter_to_stmt" \
-  "SELECT to_create_stmt FROM dolt_schema_diff('v1','v2') WHERE table_name='t';" \
+  "SELECT to_create_statement FROM dolt_schema_diff('v1','v2') WHERE to_table_name='t';" \
   "extra" "$DB"
 
-# The from_create_stmt should NOT include the extra column
+# The from_create_statement should NOT include the extra column
 run_test_match "schema_diff_alter_from_stmt" \
-  "SELECT from_create_stmt FROM dolt_schema_diff('v1','v2') WHERE table_name='t';" \
+  "SELECT from_create_statement FROM dolt_schema_diff('v1','v2') WHERE to_table_name='t';" \
   "v TEXT" "$DB"
 
 rm -f "$DB"
