@@ -328,6 +328,8 @@ static int flushMutMap(BtCursor *pCur);
 static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
 static int flushIfNeeded(BtCursor *pCur);
 static int flushAllPending(BtShared *pBt, Pgno iTable);
+static int applyMutMapToTableRoot(BtShared *pBt, struct TableEntry *pTE, ProllyMutMap *pMap);
+static int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData);
 static int flushDeferredEdits(BtShared *pBt);
 static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
@@ -974,10 +976,44 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   return SQLITE_OK;
 }
 
-static int flushMutMap(BtCursor *pCur){
-  int rc;
-  struct TableEntry *pTE;
+static int applyMutMapToTableRoot(
+  BtShared *pBt,
+  struct TableEntry *pTE,
+  ProllyMutMap *pMap
+){
   ProllyMutator mut;
+  int rc;
+
+  memset(&mut, 0, sizeof(mut));
+  mut.pStore = &pBt->store;
+  mut.pCache = &pBt->cache;
+  mut.oldRoot = pTE->root;
+  mut.pEdits = pMap;
+  mut.flags = pTE->flags;
+
+  rc = prollyMutateFlush(&mut);
+  if( rc!=SQLITE_OK ) return rc;
+
+  pTE->root = mut.newRoot;
+  return SQLITE_OK;
+}
+
+static int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData){
+  u8 *pCopy = 0;
+  if( nData > 0 ){
+    pCopy = sqlite3_malloc(nData);
+    if( !pCopy ) return SQLITE_NOMEM;
+    memcpy(pCopy, pData, nData);
+  }
+  CLEAR_CACHED_PAYLOAD(pCur);
+  pCur->pCachedPayload = pCopy;
+  pCur->nCachedPayload = nData;
+  pCur->cachedPayloadOwned = 1;
+  return SQLITE_OK;
+}
+
+static int flushMutMap(BtCursor *pCur){
+  struct TableEntry *pTE;
 
   if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
     return SQLITE_OK;
@@ -988,20 +1024,11 @@ static int flushMutMap(BtCursor *pCur){
     return SQLITE_INTERNAL;
   }
 
-  memset(&mut, 0, sizeof(mut));
-  mut.pStore = &pCur->pBt->store;
-  mut.pCache = &pCur->pBt->cache;
-  mut.oldRoot = pTE->root;
-  mut.pEdits = pCur->pMutMap;
-  mut.flags = pTE->flags;
-
-  rc = prollyMutateFlush(&mut);
-  if( rc!=SQLITE_OK ){
-    return rc;
+  {
+    int rc = applyMutMapToTableRoot(pCur->pBt, pTE, pCur->pMutMap);
+    if( rc!=SQLITE_OK ) return rc;
   }
-
-  pTE->root = mut.newRoot;
-  pCur->pCur.root = mut.newRoot;
+  pCur->pCur.root = pTE->root;
   prollyMutMapClear(pCur->pMutMap);
 
   return SQLITE_OK;
@@ -2123,7 +2150,11 @@ int sqlite3BtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
 static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
+  int rcRollback = SQLITE_OK;
+  ProllyHash oldWorkingState;
   (void)bCleanup;
+
+  oldWorkingState = pBt->store.workingState;
 
   if( p->inTrans==TRANS_WRITE ){
     /* Step 1: flush all in-memory edits to prolly trees */
@@ -2155,7 +2186,23 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       if( pBt->pPagerShim ){
         pBt->pPagerShim->iDataVersion++;
       }
+      p->inTrans = TRANS_NONE;
+      p->inTransaction = TRANS_NONE;
+      p->nSavepoint = 0;
+
+      chunkStoreUnlock(&pBt->store);
+      pBt->store.snapshotPinned = 0;
+    }else{
+      /* SQLite tears down the outer transaction on COMMIT failure here.
+      ** Roll back our in-memory roots and chunk-store state so the
+      ** connection does not keep seeing uncommitted edits. */
+      pBt->store.workingState = oldWorkingState;
+      rcRollback = prollyBtreeRollback(p, rc, 0);
+      if( rcRollback!=SQLITE_OK ){
+        return rcRollback;
+      }
     }
+    return rc;
   }
 
   p->inTrans = TRANS_NONE;
@@ -2571,7 +2618,8 @@ static int prollyBtreeCursor(
     for(pOther = pBt->pCursor; pOther; pOther = pOther->pNext){
       if( pOther->pgnoRoot==iTable && pOther->pMutMap
           && !prollyMutMapIsEmpty(pOther->pMutMap) ){
-        flushMutMap(pOther);
+        int rc = flushMutMap(pOther);
+        if( rc!=SQLITE_OK ) return rc;
       }
     }
   }
@@ -2590,18 +2638,7 @@ static int prollyBtreeCursor(
       
       ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
       if( !prollyMutMapIsEmpty(pMap) ){
-        ProllyMutator mut;
-        int rc2;
-        memset(&mut, 0, sizeof(mut));
-        mut.pStore = &pBt->store;
-        mut.pCache = &pBt->cache;
-        memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
-        mut.pEdits = pMap;
-        mut.flags = pTE->flags;
-        rc2 = prollyMutateFlush(&mut);
-        if( rc2==SQLITE_OK ){
-          memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
-        }
+        int rc2 = applyMutMapToTableRoot(pBt, pTE, pMap);
         prollyMutMapFree(pMap);
         sqlite3_free(pMap);
         pTE->pPending = 0;
@@ -2650,14 +2687,15 @@ static int prollyBtCursorCloseCursor(BtCursor *pCur){
       pTE->pendingFlushSeekEdits = pCur->flushSeekEdits;
       pCur->pMutMap = 0;
     }else if( pTE && pTE->pPending ){
-      
-      prollyMutMapMerge((ProllyMutMap*)pTE->pPending, pCur->pMutMap);
-      pTE->pendingFlushSeekEdits = pCur->flushSeekEdits;
+      int rc = prollyMutMapMerge((ProllyMutMap*)pTE->pPending, pCur->pMutMap);
+      if( rc!=SQLITE_OK ) return rc;
+      pTE->pendingFlushSeekEdits |= pCur->flushSeekEdits;
       prollyMutMapFree(pCur->pMutMap);
       sqlite3_free(pCur->pMutMap);
       pCur->pMutMap = 0;
     }else{
-      flushMutMap(pCur);
+      int rc = flushMutMap(pCur);
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
 
@@ -2881,18 +2919,7 @@ static int flushTablePending(BtCursor *pCur){
   if( pTE && pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     if( !prollyMutMapIsEmpty(pMap) ){
-      ProllyMutator mut;
-      int rc;
-      memset(&mut, 0, sizeof(mut));
-      mut.pStore = &pCur->pBt->store;
-      mut.pCache = &pCur->pBt->cache;
-      memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
-      mut.pEdits = pMap;
-      mut.flags = pTE->flags;
-      rc = prollyMutateFlush(&mut);
-      if( rc==SQLITE_OK ){
-        memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
-      }
+      int rc = applyMutMapToTableRoot(pCur->pBt, pTE, pMap);
       prollyMutMapFree(pMap);
       sqlite3_free(pMap);
       pTE->pPending = 0;
@@ -3222,21 +3249,8 @@ static int prollyBtCursorTableMoveto(
         pCur->curFlags |= BTCF_ValidNKey;
         pCur->cachedIntKey = intKey;
         
-        if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
-          sqlite3_free(pCur->pCachedPayload);
-        }
-        if( pEntry->nVal > 0 && pEntry->pVal ){
-          pCur->pCachedPayload = sqlite3_malloc(pEntry->nVal);
-          if( pCur->pCachedPayload ){
-            memcpy(pCur->pCachedPayload, pEntry->pVal, pEntry->nVal);
-            pCur->nCachedPayload = pEntry->nVal;
-          } else {
-            pCur->nCachedPayload = 0;
-          }
-        } else {
-          CLEAR_CACHED_PAYLOAD(pCur);
-        }
-        pCur->cachedPayloadOwned = 1;
+  rc = cacheCursorPayloadCopy(pCur, pEntry->pVal, pEntry->nVal);
+  if( rc!=SQLITE_OK ) return rc;
         
         refreshCursorRoot(pCur);
         {
@@ -3726,22 +3740,10 @@ static int prollyBtCursorIndexMoveto(
       if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
         sqlite3_free(pCur->pCachedPayload);
       }
-      if( mutNKey > 0 ){
-        
-        u8 *pCopy = sqlite3_malloc(mutNKey);
-        if( pCopy ){
-          memcpy(pCopy, mutKey, mutNKey);
-          pCur->pCachedPayload = pCopy;
-          pCur->nCachedPayload = mutNKey;
-        } else {
-          pCur->nCachedPayload = 0;
-          pCur->pCachedPayload = 0;
-        }
-      } else {
-        pCur->pCachedPayload = 0;
-        pCur->nCachedPayload = 0;
+      rc = cacheCursorPayloadCopy(pCur, mutKey, mutNKey);
+      if( rc!=SQLITE_OK ){
+        return rc;
       }
-      pCur->cachedPayloadOwned = 1;
       *pRes = mutCmp;
       pCur->eState = CURSOR_VALID;
       return SQLITE_OK;
@@ -4042,21 +4044,11 @@ static int prollyBtCursorInsert(
         pCur->eState = CURSOR_VALID;
         pCur->curFlags |= BTCF_ValidNKey;
         pCur->cachedIntKey = pPayload->nKey;
-        if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
-          sqlite3_free(pCur->pCachedPayload);
-        }
-        if( pEntry && pEntry->nVal > 0 && pEntry->pVal ){
-          pCur->pCachedPayload = sqlite3_malloc(pEntry->nVal);
-          if( pCur->pCachedPayload ){
-            memcpy(pCur->pCachedPayload, pEntry->pVal, pEntry->nVal);
-            pCur->nCachedPayload = pEntry->nVal;
-          } else {
-            pCur->nCachedPayload = 0;
-          }
-        } else {
-          CLEAR_CACHED_PAYLOAD(pCur);
-        }
-        pCur->cachedPayloadOwned = 1;
+        rc = cacheCursorPayloadCopy(
+            pCur,
+            (pEntry && pEntry->nVal > 0 && pEntry->pVal) ? pEntry->pVal : 0,
+            (pEntry && pEntry->nVal > 0 && pEntry->pVal) ? pEntry->nVal : 0);
+        if( rc!=SQLITE_OK ) return rc;
         /* The MutMap was modified — the merge iteration state (mmIdx,
         ** mergeSrc) is stale. Reset so the next Next/Previous call
         ** re-synchronizes the merge cursor with the updated MutMap. */
@@ -4227,17 +4219,7 @@ static int flushDeferredEdits(BtShared *pBt){
     for(i=0; i<pBtree->nTables; i++){
       struct TableEntry *pTE = &pBtree->aTables[i];
       if( pTE->pPending && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
-        ProllyMutator mut;
-        memset(&mut, 0, sizeof(mut));
-        mut.pStore = &pBt->store;
-        mut.pCache = &pBt->cache;
-        memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
-        mut.pEdits = (ProllyMutMap*)pTE->pPending;
-        mut.flags = pTE->flags;
-        rc = prollyMutateFlush(&mut);
-        if( rc==SQLITE_OK ){
-          memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
-        }
+        rc = applyMutMapToTableRoot(pBt, pTE, (ProllyMutMap*)pTE->pPending);
         prollyMutMapFree((ProllyMutMap*)pTE->pPending);
         sqlite3_free(pTE->pPending);
         pTE->pPending = 0;

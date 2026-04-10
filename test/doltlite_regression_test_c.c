@@ -28,6 +28,8 @@
 **   ./doltlite_regression_test_c reload_refs_transactional
 **   ./doltlite_regression_test_c refresh_refs_corruption_preserves_state
 **   ./doltlite_regression_test_c prolly_node_corruption
+**   ./doltlite_regression_test_c btree_commit_failure_transactional
+**   ./doltlite_regression_test_c mutmap_empty_reverse_iter
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -42,6 +44,7 @@
 #include "doltlite_internal.h"
 #include "doltlite_record.h"
 #include "prolly_node.h"
+#include "prolly_mutmap.h"
 
 typedef unsigned char u8;
 typedef unsigned int Pgno;
@@ -155,6 +158,7 @@ struct FailFile {
 
 static sqlite3_vfs gFailVfs;
 static sqlite3_vfs *gBaseVfs = 0;
+static int gFailWriteOnce = 0;
 static int gFailSyncOnce = 0;
 static int gFailAccessOnce = 0;
 static int gFailHasMovedOnce = 0;
@@ -175,6 +179,11 @@ static int failRead(sqlite3_file *pFile, void *zBuf, int iAmt, sqlite3_int64 iOf
 
 static int failWrite(sqlite3_file *pFile, const void *zBuf, int iAmt, sqlite3_int64 iOfst){
   FailFile *p = (FailFile*)pFile;
+  if( gFailWriteOnce>0 ){
+    gFailWriteOnce--;
+    gFailHits++;
+    return SQLITE_IOERR_WRITE;
+  }
   return p->pReal->pMethods->xWrite(p->pReal, zBuf, iAmt, iOfst);
 }
 
@@ -1269,6 +1278,52 @@ static void run_prolly_node_corruption(void){
         prollyNodeParse(&node, badIntKeyNode, (int)sizeof(badIntKeyNode))==SQLITE_CORRUPT);
 }
 
+static void run_btree_commit_failure_transactional(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Btree Commit Failure Transaction Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_btree_commit_failure_transactional");
+  remove_db(dbpath);
+  gFailWriteOnce = 0;
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+
+  check("register_fail_vfs_for_btree_commit", registerFailVfs()==SQLITE_OK);
+  check("open_fail_db_for_btree_commit", open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_table", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  check("begin_write_txn", execsql(db, "BEGIN; INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+
+  gFailWriteOnce = 1;
+  rc = execsql_silent(db, "COMMIT;");
+  check("commit_failure_injected", gFailHits>0);
+  check("commit_returns_error", rc!=SQLITE_OK);
+  check("autocommit_restored_after_failed_commit", sqlite3_get_autocommit(db)==1);
+  check("failed_commit_rolled_back_visible_state",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+
+  sqlite3_close(db);
+  check("reopen_after_failed_commit", open_db(dbpath, &db)==SQLITE_OK);
+  check("failed_commit_did_not_persist_row",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_mutmap_empty_reverse_iter(void){
+  ProllyMutMap mm;
+  ProllyMutMapIter it;
+
+  printf("=== MutMap Empty Reverse Iterator Test ===\n\n");
+  check("mutmap_init_for_reverse_iter", prollyMutMapInit(&mm, 1)==SQLITE_OK);
+  prollyMutMapIterLast(&it, &mm);
+  check("empty_reverse_iter_is_invalid", !prollyMutMapIterValid(&it));
+  prollyMutMapFree(&mm);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -1291,7 +1346,9 @@ static const RegressionCase aCases[] = {
   { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption },
   { "reload_refs_transactional", "Reload Refs Transactional Test", run_reload_refs_transactional },
   { "refresh_refs_corruption_preserves_state", "Refresh Corrupt Refs State Preservation Test", run_refresh_refs_corruption_preserves_state },
-  { "prolly_node_corruption", "Prolly Node Corruption Test", run_prolly_node_corruption }
+  { "prolly_node_corruption", "Prolly Node Corruption Test", run_prolly_node_corruption },
+  { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
+  { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter }
 };
 
 static int run_case_by_name(const char *zName){
