@@ -319,8 +319,8 @@ static sqlite3_module historyModule = {
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
-void doltliteRegisterHistoryTables(sqlite3 *db){
-  doltliteForEachUserTable(db, "dolt_history_", &historyModule);
+int doltliteRegisterHistoryTables(sqlite3 *db){
+  return doltliteForEachUserTable(db, "dolt_history_", &historyModule);
 }
 
 #endif 

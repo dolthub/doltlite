@@ -26,8 +26,8 @@ extern int doltliteGcRegister(sqlite3 *db);
 extern void doltliteRegisterDiffTables(sqlite3 *db);
 extern int doltliteAncestorRegister(sqlite3 *db);
 extern int doltliteAtRegister(sqlite3 *db);
-extern void doltliteRegisterAtTables(sqlite3 *db);
-extern void doltliteRegisterHistoryTables(sqlite3 *db);
+extern int doltliteRegisterAtTables(sqlite3 *db);
+extern int doltliteRegisterHistoryTables(sqlite3 *db);
 extern int doltliteSchemaDiffRegister(sqlite3 *db);
 
 extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
@@ -763,8 +763,16 @@ static void doltliteCommitFunc(
 
   
   doltliteRegisterDiffTables(db);
-  doltliteRegisterHistoryTables(db);
-  doltliteRegisterAtTables(db);
+  rc = doltliteRegisterHistoryTables(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  rc = doltliteRegisterAtTables(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
 
   sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
 }
@@ -1656,18 +1664,18 @@ void doltliteRegister(sqlite3 *db){
                           doltliteRevertFunc, 0, 0);
   sqlite3_create_function(db, "dolt_config", -1, SQLITE_UTF8, 0,
                           doltliteConfigFunc, 0, 0);
-  doltliteLogRegister(db);
-  doltliteStatusRegister(db);
-  doltliteDiffRegister(db);
-  doltliteBranchRegister(db);
-  doltliteTagRegister(db);
-  doltliteConflictsRegister(db);
-  doltliteGcRegister(db);
+  if( doltliteLogRegister(db)!=SQLITE_OK ) return;
+  if( doltliteStatusRegister(db)!=SQLITE_OK ) return;
+  if( doltliteDiffRegister(db)!=SQLITE_OK ) return;
+  if( doltliteBranchRegister(db)!=SQLITE_OK ) return;
+  if( doltliteTagRegister(db)!=SQLITE_OK ) return;
+  if( doltliteConflictsRegister(db)!=SQLITE_OK ) return;
+  if( doltliteGcRegister(db)!=SQLITE_OK ) return;
   doltliteRegisterDiffTables(db);
-  doltliteAncestorRegister(db);
-  doltliteAtRegister(db);
-  doltliteRegisterHistoryTables(db);
-  doltliteSchemaDiffRegister(db);
+  if( doltliteAncestorRegister(db)!=SQLITE_OK ) return;
+  if( doltliteAtRegister(db)!=SQLITE_OK ) return;
+  if( doltliteRegisterHistoryTables(db)!=SQLITE_OK ) return;
+  if( doltliteSchemaDiffRegister(db)!=SQLITE_OK ) return;
   {
     extern void doltliteRemoteSqlRegister(sqlite3 *db);
     doltliteRemoteSqlRegister(db);
