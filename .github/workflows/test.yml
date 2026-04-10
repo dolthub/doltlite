@@ -176,8 +176,8 @@ jobs:
     # outer runner misclassifies the early exit as a timeout). The
     # crash only reproduces under testfixture's build flags
     # (-DSQLITE_TEST=1 etc); the same SQL run against libdoltlite.a
-    # via the doltlite shell or a C client succeeds. Tracked in #359
-    # for separate investigation.
+    # via the doltlite shell or a C client succeeds. Tracked in
+    # issue #361.
 
     - name: SQLite core tests
       run: |
