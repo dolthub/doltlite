@@ -97,7 +97,7 @@ def main():
     # ---- 7. Tag ----
     print("== Tag current state ==\n")
     cur.execute("SELECT dolt_tag('v1.0')")
-    for row in cur.execute("SELECT name, hash FROM dolt_tags"):
+    for row in cur.execute("SELECT tag_name, tag_hash FROM dolt_tags"):
         print(f"  {row[0]}: {row[1][:12]}...")
     print()
 

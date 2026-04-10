@@ -196,8 +196,8 @@ SELECT dolt_commit('-A','-m','c2');
 SELECT dolt_tag('v2.0');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "tag_count" "SELECT count(*) FROM dolt_tags;" "2" "$DB"
-run_test_match "tag_v1" "SELECT name FROM dolt_tags WHERE name='v1.0';" "v1.0" "$DB"
-run_test_match "tag_v2" "SELECT name FROM dolt_tags WHERE name='v2.0';" "v2.0" "$DB"
+run_test_match "tag_v1" "SELECT tag_name FROM dolt_tags WHERE tag_name='v1.0';" "v1.0" "$DB"
+run_test_match "tag_v2" "SELECT tag_name FROM dolt_tags WHERE tag_name='v2.0';" "v2.0" "$DB"
 
 rm -f "$DB"
 
