@@ -247,8 +247,13 @@ int migrateSchemaRowData(
 
       for(sj=0; sj<pAct->nAddColumns; sj++){
         azColNames[sj] = extractColNameFromDef(pAct->azAddColumns[sj]);
+        if( !azColNames[sj] ){
+          rc = SQLITE_NOMEM;
+          break;
+        }
         aiColIdx[sj] = -1;
       }
+      if( rc!=SQLITE_OK ) break;
 
       /* Now parse theirs' CREATE TABLE SQL to find each column's ordinal.
       ** Column ordinal in the record = position in CREATE TABLE column list.
@@ -263,7 +268,7 @@ int migrateSchemaRowData(
 
         /* Find '(' */
         while( *p && *p!='(' ) p++;
-        if( !*p ) goto next_action;
+        if( !*p ){ rc = SQLITE_CORRUPT; goto next_action; }
         p++;
 
         segStart = p;
@@ -276,7 +281,7 @@ int migrateSchemaRowData(
             else if(*pSqlEnd==')') d2--;
             pSqlEnd++;
           }
-          if( d2!=0 ) goto next_action;
+          if( d2!=0 ){ rc = SQLITE_CORRUPT; goto next_action; }
           pSqlEnd--; /* back to ')' */
 
           while( p <= pSqlEnd ){
@@ -316,15 +321,20 @@ int migrateSchemaRowData(
                   int nl = dlIdentTokenLen(ns, (int)(e - ns));
 
                   zColName = dlExtractIdentLower(ns, nl);
-                  if( zColName ){
-                    /* Check if this column matches any of our added columns */
-                    for(sj=0; sj<pAct->nAddColumns; sj++){
-                      if( azColNames[sj]
-                       && strcmp(azColNames[sj], zColName)==0 ){
-                        aiColIdx[sj] = colOrdinal;
-                      }
+                  if( !zColName ){
+                    rc = SQLITE_NOMEM;
+                    goto next_action;
+                  }
+                  /* Check if this column matches any of our added columns */
+                  for(sj=0; sj<pAct->nAddColumns; sj++){
+                    if( azColNames[sj]
+                     && strcmp(azColNames[sj], zColName)==0 ){
+                      aiColIdx[sj] = colOrdinal;
                     }
-                    sqlite3_free(zColName);
+                  }
+                  sqlite3_free(zColName);
+                  if( rc!=SQLITE_OK ){
+                    goto next_action;
                   }
                   colOrdinal++;
                 }
