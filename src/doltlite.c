@@ -1421,6 +1421,12 @@ static void doltliteResetFunc(
           ** unchanged. */
           for(j=0; j<nWorking; j++){
             int tgtIdx = -1;
+            if( aWorking[j].iTable==1 ){
+              /* Keep the working sqlite_master root when preserving
+              ** untracked tables. Replacing table 1 from HEAD would drop
+              ** the schema rows for those untracked objects immediately. */
+              continue;
+            }
             for(k=0; k<nTarget; k++){
               if( aTarget[k].zName && aWorking[j].zName
                && strcmp(aTarget[k].zName, aWorking[j].zName)==0 ){

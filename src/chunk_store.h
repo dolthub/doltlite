@@ -6,7 +6,7 @@
 **     magic(4) + version(4) + reserved(20) + nChunks(4) +
 **     index_offset(8) + index_size(4) + reserved(20) +
 **     reserved(20) + wal_offset(8) + reserved(12) +
-**     refs_hash(20) + working_state_hash(20) + reserved(24)
+**     refs_hash(20) + reserved(44)
 **   [Chunk data region: after manifest, before index]
 **     Each chunk stored as: length_le32(4) + data(length)
 **   [Sorted index: nChunks * 32-byte entries]
@@ -24,14 +24,17 @@
 #include "prolly_hash.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443  /* "DLTC" in little-endian */
-#define CHUNK_STORE_VERSION 7
+#define CHUNK_STORE_VERSION 8
 #define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32     /* 20-byte hash + 8-byte offset + 4-byte size */
 
 /* Working set blob layout:
-**   [version:1][staged_hash:20][is_merging:1][merge_commit:20][conflicts:20] */
+**   [version:1][working_catalog:20][working_commit:20][staged_hash:20]
+**   [is_merging:1][merge_commit:20][conflicts:20] */
 #define WS_VERSION_SIZE     1
-#define WS_STAGED_OFF       WS_VERSION_SIZE
+#define WS_WORKING_CAT_OFF  WS_VERSION_SIZE
+#define WS_WORKING_COMMIT_OFF (WS_WORKING_CAT_OFF + PROLLY_HASH_SIZE)
+#define WS_STAGED_OFF       (WS_WORKING_COMMIT_OFF + PROLLY_HASH_SIZE)
 #define WS_MERGING_OFF      (WS_STAGED_OFF + PROLLY_HASH_SIZE)
 #define WS_MERGE_COMMIT_OFF (WS_MERGING_OFF + 1)
 #define WS_CONFLICTS_OFF    (WS_MERGE_COMMIT_OFF + PROLLY_HASH_SIZE)
@@ -102,7 +105,6 @@ struct ChunkStore {
   sqlite3_file *pFile;
   sqlite3_vfs *pVfs;
   ProllyHash refsHash;
-  ProllyHash workingState;  /* Per-branch working catalog state chunk hash */
 
   /* These fields come from the per-branch WorkingSet, not from the manifest. */
   ProllyHash stagedCatalog;
@@ -186,8 +188,6 @@ int chunkStoreClose(ChunkStore *cs);
 int chunkStoreLockAndRefresh(ChunkStore *cs);
 void chunkStoreUnlock(ChunkStore *cs);
 
-void chunkStoreGetWorkingState(ChunkStore *cs, ProllyHash *pState);
-void chunkStoreSetWorkingState(ChunkStore *cs, const ProllyHash *pState);
 int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                         const ProllyHash *pCatHash,
                                         const ProllyHash *pCommitHash);

@@ -65,7 +65,7 @@ static inline int dlSerialTypeLen(u64 st){
 ** Parsed record header: field count, serial types, and data offsets.
 ** Shared across diff_table, history, at, schema_diff, and merge.
 */
-#define DOLTLITE_MAX_RECORD_FIELDS 64
+#define DOLTLITE_MAX_RECORD_FIELDS 256
 
 typedef struct DoltliteRecordInfo DoltliteRecordInfo;
 struct DoltliteRecordInfo {
@@ -73,6 +73,9 @@ struct DoltliteRecordInfo {
   int aType[DOLTLITE_MAX_RECORD_FIELDS];
   int aOffset[DOLTLITE_MAX_RECORD_FIELDS];
 };
+
+int doltliteParseRecordStrict(const u8 *pData, int nData,
+                              DoltliteRecordInfo *pInfo);
 
 void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo);
 

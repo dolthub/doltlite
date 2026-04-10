@@ -209,7 +209,11 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   return SQLITE_OK;
 }
 
-void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo){
+int doltliteParseRecordStrict(
+  const u8 *pData,
+  int nData,
+  DoltliteRecordInfo *pInfo
+){
   const u8 *p = pData;
   const u8 *pEnd = pData + nData;
   u64 hdrSize;
@@ -217,22 +221,38 @@ void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo){
   const u8 *pHdrEnd;
 
   memset(pInfo, 0, sizeof(*pInfo));
-  if( !pData || nData < 1 ) return;
+  if( !pData || nData < 1 ) return SQLITE_CORRUPT;
 
   hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
+  if( hdrBytes<=0 ) return SQLITE_CORRUPT;
+  if( (int)hdrSize < hdrBytes || (int)hdrSize > nData ) return SQLITE_CORRUPT;
   p += hdrBytes;
   pHdrEnd = pData + (int)hdrSize;
   off = (int)hdrSize;
 
-  while( p < pHdrEnd && p < pEnd && pInfo->nField < DOLTLITE_MAX_RECORD_FIELDS ){
+  while( p < pHdrEnd ){
     u64 st;
     int stBytes = dlReadVarint(p, pHdrEnd, &st);
+    int nField;
+    int nSerial;
+    if( stBytes<=0 ) return SQLITE_CORRUPT;
+    nField = pInfo->nField;
+    if( nField >= DOLTLITE_MAX_RECORD_FIELDS ) return SQLITE_CORRUPT;
     p += stBytes;
-    pInfo->aType[pInfo->nField] = (int)st;
-    pInfo->aOffset[pInfo->nField] = off;
-    off += dlSerialTypeLen(st);
-    pInfo->nField++;
+    nSerial = dlSerialTypeLen(st);
+    if( off > nData - nSerial ) return SQLITE_CORRUPT;
+    pInfo->aType[nField] = (int)st;
+    pInfo->aOffset[nField] = off;
+    off += nSerial;
+    pInfo->nField = nField + 1;
   }
+  if( p != pHdrEnd ) return SQLITE_CORRUPT;
+  if( off != nData ) return SQLITE_CORRUPT;
+  return SQLITE_OK;
+}
+
+void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo){
+  (void)doltliteParseRecordStrict(pData, nData, pInfo);
 }
 
 void doltliteResultField(

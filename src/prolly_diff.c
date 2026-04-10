@@ -133,88 +133,87 @@ static int diffSerialTypeSize(u64 st){
   return 0;
 }
 
-/* Compare two SQLite record-format values field-by-field. Returns 1 if
-** equal, 0 otherwise. Needed because records with identical logical content
-** can have different total byte lengths due to varint encoding differences. */
-int diffRecordsEqualFieldwise(
+/* Compare two SQLite record-format values field-by-field. Returns
+** SQLITE_OK and sets *pEqual, or SQLITE_CORRUPT for malformed records. */
+static int diffRecordsEqualFieldwise(
   const u8 *pA, int nA,
-  const u8 *pB, int nB
+  const u8 *pB, int nB,
+  int *pEqual
 ){
-  const u8 *pEndA, *pEndB;
-  u64 hdrSizeA, hdrSizeB;
-  int hdrBytesA, hdrBytesB;
-  const u8 *hpA, *hpB;
-  const u8 *hdrEndA, *hdrEndB;
-  int offA, offB;
+  DoltliteRecordInfo aInfo;
+  DoltliteRecordInfo bInfo;
+  int i;
+  int rc;
 
-  if( nA < 1 || nB < 1 ) return 0;
+  *pEqual = 0;
+  if( nA < 1 || nB < 1 ) return SQLITE_CORRUPT;
 
-  pEndA = pA + nA;
-  pEndB = pB + nB;
+  rc = doltliteParseRecordStrict(pA, nA, &aInfo);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteParseRecordStrict(pB, nB, &bInfo);
+  if( rc!=SQLITE_OK ) return rc;
 
-  hdrBytesA = dlReadVarint(pA, pEndA, &hdrSizeA);
-  if( hdrBytesA == 0 ) return 0;
-  hdrBytesB = dlReadVarint(pB, pEndB, &hdrSizeB);
-  if( hdrBytesB == 0 ) return 0;
+  if( aInfo.nField != bInfo.nField ) return SQLITE_OK;
 
-  if( (int)hdrSizeA < hdrBytesA || (int)hdrSizeA > nA ) return 0;
-  if( (int)hdrSizeB < hdrBytesB || (int)hdrSizeB > nB ) return 0;
+  for(i=0; i<aInfo.nField; i++){
+    int stA = aInfo.aType[i];
+    int stB = bInfo.aType[i];
+    int szA;
+    int szB;
 
-  hpA = pA + hdrBytesA;
-  hpB = pB + hdrBytesB;
-  hdrEndA = pA + (int)hdrSizeA;
-  hdrEndB = pB + (int)hdrSizeB;
-  offA = (int)hdrSizeA;
-  offB = (int)hdrSizeB;
-
-  while( hpA < hdrEndA || hpB < hdrEndB ){
-    u64 stA = 0, stB = 0;
-    int szA, szB;
-
-    if( hpA < hdrEndA ){
-      int n = dlReadVarint(hpA, hdrEndA, &stA);
-      if( n == 0 ) return 0;
-      hpA += n;
+    if( stA != stB ) return SQLITE_OK;
+    szA = diffSerialTypeSize((u64)stA);
+    szB = diffSerialTypeSize((u64)stB);
+    if( szA != szB ) return SQLITE_OK;
+    if( szA>0 && memcmp(pA + aInfo.aOffset[i], pB + bInfo.aOffset[i], szA)!=0 ){
+      return SQLITE_OK;
     }
-    if( hpB < hdrEndB ){
-      int n = dlReadVarint(hpB, hdrEndB, &stB);
-      if( n == 0 ) return 0;
-      hpB += n;
-    }
-
-    szA = diffSerialTypeSize(stA);
-    szB = diffSerialTypeSize(stB);
-
-    if( stA == 0 && stB == 0 ) continue;
-    if( stA != stB ) return 0;
-
-    if( offA + szA > nA || offB + szB > nB ) return 0;
-    if( szA > 0 && memcmp(pA + offA, pB + offB, szA) != 0 ) return 0;
-
-    offA += szA;
-    offB += szB;
   }
-
-  return 1;
+  *pEqual = 1;
+  return SQLITE_OK;
 }
 
 /* Compare two record values: fast memcmp path, then field-wise fallback
 ** for records with different varint encodings of the same logical data. */
-int prollyValuesEqual(const u8 *pA, int nA, const u8 *pB, int nB){
+int prollyValuesEqual(
+  const u8 *pA, int nA,
+  const u8 *pB, int nB,
+  int *pEqual
+){
+  int rc;
   if( nA==nB ){
-    if( nA==0 ) return 1;
-    if( memcmp(pA, pB, nA)==0 ) return 1;
+    if( nA==0 ){
+      *pEqual = 1;
+      return SQLITE_OK;
+    }
+    if( memcmp(pA, pB, nA)==0 ){
+      if( nA < 2 ){
+        *pEqual = 0;
+        return SQLITE_CORRUPT;
+      }
+      rc = diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
+      if( rc!=SQLITE_OK ) return rc;
+      if( *pEqual ) return SQLITE_OK;
+      return SQLITE_CORRUPT;
+    }
   }
-  if( nA < 2 || nB < 2 ) return 0;
-  return diffRecordsEqualFieldwise(pA, nA, pB, nB);
+  if( nA < 2 || nB < 2 ){
+    *pEqual = 0;
+    return SQLITE_CORRUPT;
+  }
+  return diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
 }
 
 static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew){
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
+  int equal = 0;
+  int rc;
   prollyCursorValue(pOld, &pOldVal, &nOldVal);
   prollyCursorValue(pNew, &pNewVal, &nNewVal);
-  return prollyValuesEqual(pOldVal, nOldVal, pNewVal, nNewVal);
+  rc = prollyValuesEqual(pOldVal, nOldVal, pNewVal, nNewVal, &equal);
+  if( rc!=SQLITE_OK ) return rc;
+  return equal ? SQLITE_OK : SQLITE_DONE;
 }
 
 /* Merge-walk two positioned cursors, emitting diffs until both are exhausted. */
@@ -233,8 +232,11 @@ static int diffMergeWalk(
       rc = diffEmitAdd(pCurNew, flags, xCb, pCtx);
       if( rc==SQLITE_OK ) rc = prollyCursorNext(pCurNew);
     }else{
-      if( !diffValuesEqual(pCurOld, pCurNew) ){
+      rc = diffValuesEqual(pCurOld, pCurNew);
+      if( rc==SQLITE_DONE ){
         rc = diffEmitModify(pCurOld, pCurNew, flags, xCb, pCtx);
+      }else if( rc!=SQLITE_OK ){
+        break;
       }
       if( rc==SQLITE_OK ) rc = prollyCursorNext(pCurOld);
       if( rc==SQLITE_OK ) rc = prollyCursorNext(pCurNew);
@@ -370,10 +372,14 @@ static int diffLeaves(
     }else{
       const u8 *pOV; int nOV; const u8 *pNV; int nNV;
       int eq;
+      int eqRc = SQLITE_OK;
       prollyNodeValue(pOld, i, &pOV, &nOV);
       prollyNodeValue(pNew, j, &pNV, &nNV);
       eq = (nOV==nNV && (nOV==0 || memcmp(pOV, pNV, nOV)==0));
-      if( !eq && nOV>=2 && nNV>=2 ) eq = diffRecordsEqualFieldwise(pOV,nOV,pNV,nNV);
+      if( !eq && nOV>=2 && nNV>=2 ){
+        eqRc = diffRecordsEqualFieldwise(pOV, nOV, pNV, nNV, &eq);
+      }
+      if( eqRc!=SQLITE_OK ) return eqRc;
       if( !eq ){
         ProllyDiffChange ch;
         memset(&ch, 0, sizeof(ch));
@@ -732,13 +738,15 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
         break; /* Found a change */
       }else{
         /* Same key in both trees: check if values differ */
-        if( diffValuesEqual(pOld, pNew) ){
+        pIter->rc = diffValuesEqual(pOld, pNew);
+        if( pIter->rc==SQLITE_OK ){
           /* Values equal — advance both cursors and loop */
           pIter->rc = prollyCursorNext(pOld);
           if( pIter->rc==SQLITE_OK ) pIter->rc = prollyCursorNext(pNew);
           if( pIter->rc!=SQLITE_OK ) return pIter->rc;
           continue; /* Skip to next pair */
-        }else{
+        }else if( pIter->rc==SQLITE_DONE ){
+          pIter->rc = SQLITE_OK;
           const u8 *pOV; int nOV;
           const u8 *pNV; int nNV;
           pCh->type = PROLLY_DIFF_MODIFY;
@@ -764,6 +772,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
           pIter->rc = prollyCursorNext(pOld);
           if( pIter->rc==SQLITE_OK ) pIter->rc = prollyCursorNext(pNew);
           break; /* Found a change */
+        }else{
+          return pIter->rc;
         }
       }
     }else if( validOld ){

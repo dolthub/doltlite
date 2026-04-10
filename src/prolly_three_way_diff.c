@@ -93,7 +93,10 @@ static int diffEntryKeyCmp(const DiffEntry *pA, const DiffEntry *pB, u8 flags){
   }
 }
 
-#define valuesEqual prollyValuesEqual
+static int valuesEqual(const u8 *pA, int nA, const u8 *pB, int nB){
+  int equal = 0;
+  return prollyValuesEqual(pA, nA, pB, nB, &equal)==SQLITE_OK && equal;
+}
 
 static void fillKeyFromEntry(ThreeWayChange *pOut, const DiffEntry *pEntry){
   pOut->pKey = pEntry->pKey;

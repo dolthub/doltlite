@@ -28,6 +28,13 @@
 **   ./doltlite_regression_test_c reload_refs_transactional
 **   ./doltlite_regression_test_c refresh_refs_corruption_preserves_state
 **   ./doltlite_regression_test_c prolly_node_corruption
+**   ./doltlite_regression_test_c truncated_wal_rejected
+**   ./doltlite_regression_test_c refresh_open_path_transactional
+**   ./doltlite_regression_test_c wal_offset_corruption
+**   ./doltlite_regression_test_c integrity_check_walks_nodes
+**   ./doltlite_regression_test_c memory_chunk_lookup_corruption
+**   ./doltlite_regression_test_c prolly_diff_record_corruption
+**   ./doltlite_regression_test_c integrity_check_repo_state
 **   ./doltlite_regression_test_c btree_commit_failure_transactional
 **   ./doltlite_regression_test_c mutmap_empty_reverse_iter
 */
@@ -43,6 +50,7 @@
 #include "doltlite_ancestor.h"
 #include "doltlite_internal.h"
 #include "doltlite_record.h"
+#include "prolly_diff.h"
 #include "prolly_node.h"
 #include "prolly_mutmap.h"
 
@@ -1203,6 +1211,7 @@ static void run_refresh_refs_corruption_preserves_state(void){
   ChunkStore cs1;
   ChunkStore cs2;
   ProllyHash badHash;
+  ProllyHash refsHashBefore;
   static const u8 badBlob[] = { 6, 0, 0, 0 };
   char dbpath[256];
   int nBranchesBefore;
@@ -1225,6 +1234,7 @@ static void run_refresh_refs_corruption_preserves_state(void){
 
   check("open_store_1", chunkStoreOpen(&cs1, sqlite3_vfs_find(0), dbpath,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  refsHashBefore = cs1.refsHash;
   nBranchesBefore = cs1.nBranches;
   zDefaultBefore = sqlite3_mprintf("%s", cs1.zDefaultBranch ? cs1.zDefaultBranch : "");
   zBranchBefore = (cs1.aBranches && cs1.nBranches>0 && cs1.aBranches[0].zName)
@@ -1251,7 +1261,8 @@ static void run_refresh_refs_corruption_preserves_state(void){
         nBranchesBefore==0 ||
         (cs1.aBranches && cs1.aBranches[0].zName
          && strcmp(cs1.aBranches[0].zName, zBranchBefore)==0));
-
+  check("refresh_preserves_refs_hash",
+        memcmp(&cs1.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
   sqlite3_free(zDefaultBefore);
   sqlite3_free(zBranchBefore);
   chunkStoreClose(&cs1);
@@ -1276,6 +1287,267 @@ static void run_prolly_node_corruption(void){
   printf("=== Prolly Node Corruption Test ===\n\n");
   check("intkey_width_corruption_is_rejected",
         prollyNodeParse(&node, badIntKeyNode, (int)sizeof(badIntKeyNode))==SQLITE_CORRUPT);
+  {
+    static const u8 badEmptyInternalNode[] = {
+      'D','O','N','P',
+      1,
+      0, 0,
+      PROLLY_NODE_BLOBKEY
+    };
+    check("empty_internal_node_is_rejected",
+          prollyNodeParse(&node, badEmptyInternalNode,
+                          (int)sizeof(badEmptyInternalNode))==SQLITE_CORRUPT);
+  }
+}
+
+static void run_memory_chunk_lookup_corruption(void){
+  ChunkStore cs;
+  ProllyHash h;
+  static const u8 payload[] = { 1, 2, 3, 4 };
+  u8 *pOut = 0;
+  int nOut = 0;
+  int rc;
+
+  printf("=== Memory Chunk Lookup Corruption Test ===\n\n");
+  check("open_mem_store_for_lookup",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("put_chunk_for_lookup",
+        chunkStorePut(&cs, payload, (int)sizeof(payload), &h)==SQLITE_OK);
+  check("commit_mem_store_lookup",
+        chunkStoreCommit(&cs)==SQLITE_OK);
+  check("have_committed_index_entry", cs.nIndex > 0);
+  if( cs.nIndex > 0 ){
+    cs.aIndex[0].offset = cs.nWriteBuf + 100;
+  }
+  rc = chunkStoreGet(&cs, &h, &pOut, &nOut);
+  check("memory_lookup_corruption_returns_corrupt", rc==SQLITE_CORRUPT);
+  sqlite3_free(pOut);
+  chunkStoreClose(&cs);
+}
+
+static void run_prolly_diff_record_corruption(void){
+  static const u8 badRecord[] = { 0x05, 0x01 };
+  int equal = 0;
+  int rc;
+
+  printf("=== Prolly Diff Record Corruption Test ===\n\n");
+  rc = prollyValuesEqual(badRecord, (int)sizeof(badRecord),
+                         badRecord, (int)sizeof(badRecord), &equal);
+  check("prolly_diff_surfaces_record_corruption", rc==SQLITE_CORRUPT);
+  check("corrupt_records_not_reported_equal", equal==0);
+}
+
+static void run_integrity_check_repo_state(void){
+  sqlite3 *db = 0;
+  ChunkStore cs;
+  char dbpath[256];
+  ProllyHash badHash;
+  int nErr = 0;
+  int rc;
+
+  printf("=== Integrity Check Repository State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_integrity_check_repo_state");
+  remove_db(dbpath);
+
+  check("open_db_repo_state", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_state", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  memset(&badHash, 0x5d, sizeof(badHash));
+  check("open_store_repo_state", chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("lock_store_repo_state", chunkStoreLockAndRefresh(&cs)==SQLITE_OK);
+  check("set_bad_branch_working_set",
+        chunkStoreSetBranchWorkingSet(&cs, "main", &badHash)==SQLITE_OK);
+  check("serialize_corrupt_branch_refs", chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("commit_bad_branch_working_set", chunkStoreCommit(&cs)==SQLITE_OK);
+  chunkStoreUnlock(&cs);
+  chunkStoreClose(&cs);
+
+  check("reopen_repo_state_db", open_db(dbpath, &db)==SQLITE_OK);
+  rc = doltliteCheckRepoGraphIntegrity(db->aDb[0].pBt, 100, &nErr);
+  check("repo_graph_integrity_call_succeeds", rc==SQLITE_OK);
+  check("integrity_check_reports_repo_state_corruption", nErr>0);
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_truncated_wal_is_rejected(void){
+  sqlite3 *db = 0;
+  ChunkStore cs;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Truncated WAL Rejected Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_truncated_wal_rejected");
+  remove_db(dbpath);
+
+  check("open_db_for_truncated_wal", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_truncated_wal", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
+  sqlite3_close(db);
+
+  check("open_store_for_wal_tag_corruption", chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("have_wal_region", cs.nWalData > 0);
+  if( cs.nWalData > 0 ){
+    unsigned char badTag = 0xff;
+    check("corrupt_first_wal_tag",
+          sqlite3OsWrite(cs.pFile, &badTag, 1, cs.iWalOffset)==SQLITE_OK);
+  }
+  chunkStoreClose(&cs);
+
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  check("chunk_store_open_rejects_corrupt_wal", rc==SQLITE_CORRUPT);
+
+  remove_db(dbpath);
+}
+
+static void run_refresh_open_path_transactional(void){
+  ChunkStore cs;
+  char dbpath[256];
+  FILE *f = 0;
+  int changed = -1;
+  int rc;
+
+  printf("=== Refresh Open Path Transactional Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_refresh_open_path_transactional");
+  remove_db(dbpath);
+
+  check("open_empty_store_with_no_file",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("store_starts_without_file", cs.pFile==0);
+
+  f = fopen(dbpath, "wb");
+  check("create_corrupt_file", f!=0);
+  if( f ){
+    static const unsigned char badFile[] = { 'b', 'a', 'd' };
+    check("write_corrupt_file",
+          fwrite(badFile, 1, sizeof(badFile), f)==sizeof(badFile));
+    fclose(f);
+  }
+
+  rc = chunkStoreRefreshIfChanged(&cs, &changed);
+  check("refresh_open_path_returns_error", rc!=SQLITE_OK);
+  check("refresh_open_path_does_not_mark_changed", changed==0);
+  check("refresh_open_path_preserves_empty_refs", prollyHashIsEmpty(&cs.refsHash));
+  check("refresh_open_path_preserves_branch_count", cs.nBranches==0);
+
+  chunkStoreClose(&cs);
+  remove_db(dbpath);
+}
+
+static void run_wal_offset_corruption_is_rejected(void){
+  sqlite3 *db = 0;
+  ChunkStore cs;
+  char dbpath[256];
+  int iWal = -1;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc;
+
+  printf("=== WAL Offset Corruption Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_wal_offset_corruption");
+  remove_db(dbpath);
+
+  check("open_db_for_wal_offset", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_wal_offset", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
+  sqlite3_close(db);
+
+  check("open_store_for_wal_offset", chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  {
+    int i;
+    for(i=0; i<cs.nIndex; i++){
+      if( cs.aIndex[i].offset < 0 ){
+        iWal = i;
+        break;
+      }
+    }
+  }
+  check("have_wal_backed_index_entry", iWal >= 0);
+  if( iWal >= 0 ){
+    cs.aIndex[iWal].offset = -(cs.nWalData + cs.aIndex[iWal].size + 2);
+    rc = chunkStoreGet(&cs, &cs.aIndex[iWal].hash, &pData, &nData);
+    check("corrupt_wal_offset_returns_error", rc!=SQLITE_OK);
+  }
+  sqlite3_free(pData);
+  chunkStoreClose(&cs);
+  remove_db(dbpath);
+}
+
+static void run_integrity_check_walks_prolly_nodes(void){
+  sqlite3 *db = 0;
+  sqlite3 *db2 = 0;
+  ChunkStore cs;
+  char dbpath[256];
+  ProllyHash catHash;
+  struct TableEntry *aTables = 0;
+  int nTables = 0;
+  Pgno iNextTable = 0;
+  struct TableEntry *pTable = 0;
+  i64 dataOff = -1;
+
+  printf("=== Integrity Check Walks Prolly Nodes Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_integrity_check_walks_nodes");
+  remove_db(dbpath);
+
+  check("open_db_for_integrity_walk", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_integrity_walk", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  check("get_head_catalog_hash", doltliteGetHeadCatalogHash(db, &catHash)==SQLITE_OK);
+  check("load_head_catalog", doltliteLoadCatalog(db, &catHash, &aTables, &nTables, &iNextTable)==SQLITE_OK);
+  pTable = doltliteFindTableByName(aTables, nTables, "t");
+  check("find_table_root_in_catalog", pTable!=0);
+  sqlite3_close(db);
+
+  check("open_store_for_integrity_walk", chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  if( pTable ){
+    int i;
+    for(i=0; i<cs.nIndex; i++){
+      if( prollyHashCompare(&cs.aIndex[i].hash, &pTable->root)==0 ){
+        if( cs.aIndex[i].offset < 0 ){
+          dataOff = cs.iWalOffset + (-(cs.aIndex[i].offset + 1));
+        }else{
+          dataOff = cs.aIndex[i].offset + 4;
+        }
+        break;
+      }
+    }
+  }
+  check("find_root_chunk_offset", dataOff >= 0);
+  if( dataOff >= 0 ){
+    unsigned char badByte = 0;
+    check("corrupt_root_chunk_magic",
+          sqlite3OsWrite(cs.pFile, &badByte, 1, dataOff)==SQLITE_OK);
+  }
+  chunkStoreClose(&cs);
+
+  check("reopen_db_for_integrity_walk", open_db(dbpath, &db2)==SQLITE_OK);
+  check("integrity_check_surfaces_root_corruption",
+        strcmp(exec1(db2, "PRAGMA integrity_check"), "ok")!=0);
+
+  sqlite3_close(db2);
+  remove_db(dbpath);
 }
 
 static void run_btree_commit_failure_transactional(void){
@@ -1347,6 +1619,13 @@ static const RegressionCase aCases[] = {
   { "reload_refs_transactional", "Reload Refs Transactional Test", run_reload_refs_transactional },
   { "refresh_refs_corruption_preserves_state", "Refresh Corrupt Refs State Preservation Test", run_refresh_refs_corruption_preserves_state },
   { "prolly_node_corruption", "Prolly Node Corruption Test", run_prolly_node_corruption },
+  { "truncated_wal_rejected", "Truncated WAL Rejected Test", run_truncated_wal_is_rejected },
+  { "refresh_open_path_transactional", "Refresh Open Path Transactional Test", run_refresh_open_path_transactional },
+  { "wal_offset_corruption", "WAL Offset Corruption Test", run_wal_offset_corruption_is_rejected },
+  { "integrity_check_walks_nodes", "Integrity Check Walks Prolly Nodes Test", run_integrity_check_walks_prolly_nodes },
+  { "memory_chunk_lookup_corruption", "Memory Chunk Lookup Corruption Test", run_memory_chunk_lookup_corruption },
+  { "prolly_diff_record_corruption", "Prolly Diff Record Corruption Test", run_prolly_diff_record_corruption },
+  { "integrity_check_repo_state", "Integrity Check Repository State Test", run_integrity_check_repo_state },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter }
 };
