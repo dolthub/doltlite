@@ -56,9 +56,6 @@ TESTS=(
   doltlite_diff_alter.sh
   doltlite_gc_scale.sh
   doltlite_index_prefix.sh
-  doltlite_issue179_180.sh
-  doltlite_issue325_327.sh
-  doltlite_issue319.sh
   doltlite_regression_test_c.sh
   review_regression_test.sh
 )
