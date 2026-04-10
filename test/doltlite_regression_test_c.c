@@ -22,6 +22,7 @@
 **   ./doltlite_regression_test_c commit_parent_limit
 **   ./doltlite_regression_test_c merge_persist_failure
 **   ./doltlite_regression_test_c cherry_pick_stale_branch
+**   ./doltlite_regression_test_c branches_metadata_corruption
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -1011,6 +1012,67 @@ static void run_cherry_pick_stale_branch(void){
   remove_db(dbpath);
 }
 
+static void run_branches_metadata_corruption(void){
+  sqlite3 *db = 0;
+  ChunkStore cs;
+  char dbpath[256];
+  ProllyHash badHash;
+  int iFeature = -1;
+  int rc;
+
+  printf("=== Branches Metadata Corruption Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_branches_metadata_corruption");
+  remove_db(dbpath);
+
+  check("open_db", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_checkout('feature');"
+    "INSERT INTO t VALUES(2,'feat');"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  memset(&badHash, 0x7c, sizeof(badHash));
+  memset(&cs, 0, sizeof(cs));
+  check("open_store", chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("lock_store", chunkStoreLockAndRefresh(&cs)==SQLITE_OK);
+  {
+    int i;
+    for(i=0; i<cs.nBranches; i++){
+      if( cs.aBranches[i].zName && strcmp(cs.aBranches[i].zName, "feature")==0 ){
+        iFeature = i;
+        break;
+      }
+    }
+  }
+  check("have_feature_branch", iFeature >= 0);
+  if( iFeature >= 0 ){
+    memcpy(&cs.aBranches[iFeature].commitHash, &badHash, sizeof(ProllyHash));
+    memcpy(&cs.aBranches[iFeature].workingSetHash, &badHash, sizeof(ProllyHash));
+  }
+  check("serialize_corrupt_branch_refs", chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("commit_corrupt_branch_refs", chunkStoreCommit(&cs)==SQLITE_OK);
+  chunkStoreUnlock(&cs);
+  chunkStoreClose(&cs);
+
+  check("reopen_db", open_db(dbpath, &db)==SQLITE_OK);
+  rc = execsql_silent(db,
+    "SELECT latest_commit_message FROM dolt_branches WHERE name='feature';");
+  check("branches_latest_commit_surfaces_corruption", rc!=SQLITE_OK);
+  rc = execsql_silent(db,
+    "SELECT dirty FROM dolt_branches WHERE name='feature';");
+  check("branches_dirty_surfaces_corruption", rc!=SQLITE_OK);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -1027,7 +1089,8 @@ static const RegressionCase aCases[] = {
   { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
-  { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch }
+  { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
+  { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption }
 };
 
 static int run_case_by_name(const char *zName){

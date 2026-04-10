@@ -547,30 +547,38 @@ static int brEof(sqlite3_vtab_cursor *c){
 ** versioned record containing the staged catalog hash; the branch is
 ** dirty when that staged catalog differs from HEAD's catalog.
 */
-static int brIsDirty(sqlite3 *db, ChunkStore *cs, struct BranchRef *br){
+static int brIsDirty(
+  sqlite3 *db,
+  ChunkStore *cs,
+  struct BranchRef *br,
+  int *pDirty
+){
   ProllyHash stagedCat;
   ProllyHash commitCat;
   u8 *wsData = 0;
   int nWsData = 0;
-  int rc, dirty = 0;
+  int rc;
+
+  *pDirty = 0;
 
   if( strcmp(br->zName, doltliteGetSessionBranch(db))==0 ){
-    return doltliteHasUncommittedChanges(db) ? 1 : 0;
+    *pDirty = doltliteHasUncommittedChanges(db) ? 1 : 0;
+    return SQLITE_OK;
   }
   if( prollyHashIsEmpty(&br->workingSetHash) ){
-    return 0;
+    return SQLITE_OK;
   }
 
   rc = chunkStoreGet(cs, &br->workingSetHash, &wsData, &nWsData);
   if( rc!=SQLITE_OK || !wsData || nWsData < WS_TOTAL_SIZE ){
     sqlite3_free(wsData);
-    return 0;
+    return rc==SQLITE_OK ? SQLITE_CORRUPT : rc;
   }
   memcpy(stagedCat.data, wsData + WS_STAGED_OFF, PROLLY_HASH_SIZE);
   sqlite3_free(wsData);
 
   if( prollyHashIsEmpty(&stagedCat) ){
-    return 0;
+    return SQLITE_OK;
   }
 
   {
@@ -579,11 +587,11 @@ static int brIsDirty(sqlite3 *db, ChunkStore *cs, struct BranchRef *br){
     rc = doltliteLoadCommit(db, &br->commitHash, &c);
     if( rc==SQLITE_OK ){
       memcpy(commitCat.data, c.catalogHash.data, PROLLY_HASH_SIZE);
-      dirty = prollyHashCompare(&stagedCat, &commitCat)!=0;
+      *pDirty = prollyHashCompare(&stagedCat, &commitCat)!=0;
     }
     doltliteCommitClear(&c);
   }
-  return dirty;
+  return rc;
 }
 
 static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
@@ -609,9 +617,16 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
       ** without an upstream configured). */
       sqlite3_result_text(ctx, "", -1, SQLITE_STATIC);
       return SQLITE_OK;
-    case 8:
-      sqlite3_result_int(ctx, brIsDirty(v->db, cs, br));
+    case 8: {
+      int dirty = 0;
+      int rc = brIsDirty(v->db, cs, br, &dirty);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return rc;
+      }
+      sqlite3_result_int(ctx, dirty);
       return SQLITE_OK;
+    }
   }
 
   /* Columns 2-5 require the head commit. Load once. */
@@ -621,9 +636,9 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
     memset(&cm, 0, sizeof(cm));
     rc = doltliteLoadCommit(v->db, &br->commitHash, &cm);
     if( rc!=SQLITE_OK ){
-      sqlite3_result_null(ctx);
+      sqlite3_result_error_code(ctx, rc);
       doltliteCommitClear(&cm);
-      return SQLITE_OK;
+      return rc;
     }
     switch(col){
       case 2:
