@@ -8,9 +8,11 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 #include "prolly_cursor.h"
+#include "prolly_hashset.h"
 #include "prolly_mutmap.h"
 #include "prolly_mutate.h"
 #include "pager_shim.h"
+#include "doltlite_chunk_walk.h"
 #include "doltlite_commit.h"
 #include "sortkey.h"
 #include "btree_orig_api.h"
@@ -4580,46 +4582,94 @@ i64 sqlite3BtreeRowCountEst(BtCursor *pCur){
   return pCur->pCurOps->xRowCountEst(pCur);
 }
 
-static int integrityCheckProllySubtree(
-  BtShared *pBt,
-  const ProllyHash *pHash,
-  int mxErr,
-  int *pnErr
+typedef struct IntegrityCheckCtx IntegrityCheckCtx;
+struct IntegrityCheckCtx {
+  BtShared *pBt;
+  ProllyHashSet seen;
+  int mxErr;
+  int *pnErr;
+};
+
+static int integrityCheckChunkGraph(IntegrityCheckCtx *pCtx, const ProllyHash *pHash);
+
+static int integrityCheckChildCb(void *pArg, const ProllyHash *pHash){
+  return integrityCheckChunkGraph((IntegrityCheckCtx*)pArg, pHash);
+}
+
+static int integrityCheckChunkGraph(
+  IntegrityCheckCtx *pCtx,
+  const ProllyHash *pHash
 ){
   u8 *pData = 0;
   int nData = 0;
-  ProllyNode node;
   int rc;
-  int i;
 
   if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
-  if( mxErr>0 && *pnErr>=mxErr ) return SQLITE_OK;
+  if( pCtx->mxErr>0 && *pCtx->pnErr>=pCtx->mxErr ) return SQLITE_OK;
+  if( prollyHashSetContains(&pCtx->seen, pHash) ) return SQLITE_OK;
 
-  rc = chunkStoreGet(&pBt->store, pHash, &pData, &nData);
+  rc = prollyHashSetAdd(&pCtx->seen, pHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = chunkStoreGet(&pCtx->pBt->store, pHash, &pData, &nData);
   if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
-    (*pnErr)++;
+    (*pCtx->pnErr)++;
     return SQLITE_OK;
   }
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = prollyNodeParse(&node, pData, nData);
+  rc = doltliteEnumerateChunkChildren(pData, nData, integrityCheckChildCb, pCtx);
   sqlite3_free(pData);
-  if( rc!=SQLITE_OK ){
-    (*pnErr)++;
+  if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
+    (*pCtx->pnErr)++;
     return SQLITE_OK;
   }
+  return rc;
+}
 
-  if( node.level==0 ) return SQLITE_OK;
+int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
+  BtShared *pBt;
+  IntegrityCheckCtx ctx;
+  int i;
+  int nErr = 0;
+  int rc;
 
-  for(i=0; i<(int)node.nItems; i++){
-    ProllyHash childHash;
-    prollyNodeChildHash(&node, i, &childHash);
-    rc = integrityCheckProllySubtree(pBt, &childHash, mxErr, pnErr);
-    if( rc!=SQLITE_OK ) return rc;
-    if( mxErr>0 && *pnErr>=mxErr ) break;
+  if( pnErr ) *pnErr = 0;
+  if( !p || !p->pBt ) return SQLITE_OK;
+  if( p->pOrigBtree ) return SQLITE_OK;
+
+  pBt = p->pBt;
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.pBt = pBt;
+  ctx.mxErr = mxErr;
+  ctx.pnErr = &nErr;
+  rc = prollyHashSetInit(&ctx.seen, 256);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = integrityCheckChunkGraph(&ctx, &pBt->store.refsHash);
+  if( rc==SQLITE_OK ) rc = integrityCheckChunkGraph(&ctx, &pBt->store.workingState);
+  for(i=0; rc==SQLITE_OK && i<pBt->store.nBranches; i++){
+    rc = integrityCheckChunkGraph(&ctx, &pBt->store.aBranches[i].commitHash);
+    if( rc==SQLITE_OK ){
+      rc = integrityCheckChunkGraph(&ctx, &pBt->store.aBranches[i].workingSetHash);
+    }
+  }
+  for(i=0; rc==SQLITE_OK && i<pBt->store.nTags; i++){
+    rc = integrityCheckChunkGraph(&ctx, &pBt->store.aTags[i].commitHash);
+  }
+  for(i=0; rc==SQLITE_OK && i<pBt->store.nTracking; i++){
+    rc = integrityCheckChunkGraph(&ctx, &pBt->store.aTracking[i].commitHash);
+  }
+  if( rc==SQLITE_OK && pBt->store.isMerging ){
+    rc = integrityCheckChunkGraph(&ctx, &pBt->store.mergeCommitHash);
+  }
+  if( rc==SQLITE_OK ){
+    rc = integrityCheckChunkGraph(&ctx, &pBt->store.conflictsCatalogHash);
   }
 
-  return SQLITE_OK;
+  prollyHashSetFree(&ctx.seen);
+  if( pnErr ) *pnErr = nErr;
+  return rc;
 }
 
 int sqlite3BtreeSetVersion(Btree *p, int iVersion){
@@ -4647,8 +4697,10 @@ int sqlite3BtreeIntegrityCheck(
   char **pzOut
 ){
   BtShared *pBt;
+  IntegrityCheckCtx ctx;
   int i;
   int nErr = 0;
+  int rc;
 
   if( !p ){
     if( pnErr ) *pnErr = 0;
@@ -4671,6 +4723,12 @@ int sqlite3BtreeIntegrityCheck(
     return SQLITE_OK;
   }
   pBt = p->pBt;
+  memset(&ctx, 0, sizeof(ctx));
+  ctx.pBt = pBt;
+  ctx.mxErr = mxErr;
+  ctx.pnErr = &nErr;
+  rc = prollyHashSetInit(&ctx.seen, 256);
+  if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<nRoot; i++){
     
@@ -4682,14 +4740,29 @@ int sqlite3BtreeIntegrityCheck(
       struct TableEntry *pTE = findTable(p, aRoot[i]);
       if( !pTE ) continue;
       if( !prollyHashIsEmpty(&pTE->root) ){
-        int rc = integrityCheckProllySubtree(pBt, &pTE->root, mxErr, &nErr);
-        if( rc!=SQLITE_OK ) return rc;
+        rc = integrityCheckChunkGraph(&ctx, &pTE->root);
+        if( rc!=SQLITE_OK ) goto integrity_done;
       }
     }
   }
 
+  rc = doltliteCheckRepoGraphIntegrity(p, mxErr, &i);
+  if( rc!=SQLITE_OK ) goto integrity_done;
+  nErr += i;
+
+integrity_done:
+  prollyHashSetFree(&ctx.seen);
+  if( rc!=SQLITE_OK ) return rc;
+
   if( pnErr ) *pnErr = nErr;
-  if( pzOut ) *pzOut = 0;
+  if( pzOut ){
+    if( nErr>0 ){
+      *pzOut = sqlite3_mprintf("integrity check failed");
+      if( !*pzOut ) return SQLITE_NOMEM;
+    }else{
+      *pzOut = 0;
+    }
+  }
 
   return SQLITE_OK;
 }

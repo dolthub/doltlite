@@ -497,9 +497,26 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   u8 *pOldWalData = cs->pWalData;
   i64 nOldWalData = cs->nWalData;
   i64 pos;
-  int rc = SQLITE_OK;
   int nPendingBefore = cs->nPending;
   int nRootedPending = cs->nPending;
+  int nOldChunks = cs->nChunks;
+  ProllyHash oldRefsHash = cs->refsHash;
+  ProllyHash oldWorkingState = cs->workingState;
+  ChunkIndexEntry *aOldIndex = cs->aIndex;
+  int nOldIndex = cs->nIndex;
+  int nOldIndexAlloc = cs->nIndexAlloc;
+  char *zOldDefaultBranch = cs->zDefaultBranch;
+  struct BranchRef *aOldBranches = cs->aBranches;
+  int nOldBranches = cs->nBranches;
+  struct TagRef *aOldTags = cs->aTags;
+  int nOldTags = cs->nTags;
+  struct RemoteRef *aOldRemotes = cs->aRemotes;
+  int nOldRemotes = cs->nRemotes;
+  struct TrackingBranch *aOldTracking = cs->aTracking;
+  int nOldTracking = cs->nTracking;
+  ChunkStore tmpRefs;
+  int haveTmpRefs = 0;
+  int rc = SQLITE_OK;
 
   if( cs->iWalOffset <= 0 || !cs->pFile ) return SQLITE_OK;
 
@@ -522,7 +539,6 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     }
   }
 
-  sqlite3_free(cs->pWalData);
   cs->pWalData = walData;
   cs->nWalData = walSize;
 
@@ -598,7 +614,6 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     int nMerged = 0;
     rc = csMergeIndex(cs, &aMerged, &nMerged);
     if( rc != SQLITE_OK ) goto replay_error;
-    sqlite3_free(cs->aIndex);
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
     cs->nIndexAlloc = nMerged;
@@ -619,21 +634,65 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         rc = rc2;
         goto replay_error;
       }
-      csFreeRefsState(cs);
-      csAdoptRefsState(cs, &tmpRefs);
+      haveTmpRefs = 1;
     }else if( rc2!=SQLITE_OK ){
       rc = rc2;
       goto replay_error;
     }
   }
-  if( !cs->zDefaultBranch ) cs->zDefaultBranch = sqlite3_mprintf("main");
+  if( haveTmpRefs ){
+    csFreeRefsState(cs);
+    csAdoptRefsState(cs, &tmpRefs);
+    haveTmpRefs = 0;
+  }
+  if( !cs->zDefaultBranch ){
+    cs->zDefaultBranch = sqlite3_mprintf("main");
+    if( !cs->zDefaultBranch ){
+      rc = SQLITE_NOMEM;
+      goto replay_error;
+    }
+  }
+
+  if( cs->aIndex!=aOldIndex ) sqlite3_free(aOldIndex);
+  sqlite3_free(pOldWalData);
+  {
+    ChunkStore oldRefs;
+    memset(&oldRefs, 0, sizeof(oldRefs));
+    oldRefs.zDefaultBranch = zOldDefaultBranch;
+    oldRefs.aBranches = aOldBranches;
+    oldRefs.nBranches = nOldBranches;
+    oldRefs.aTags = aOldTags;
+    oldRefs.nTags = nOldTags;
+    oldRefs.aRemotes = aOldRemotes;
+    oldRefs.nRemotes = nOldRemotes;
+    oldRefs.aTracking = aOldTracking;
+    oldRefs.nTracking = nOldTracking;
+    csFreeRefsState(&oldRefs);
+  }
 
   return SQLITE_OK;
 
 replay_error:
+  if( haveTmpRefs ) csFreeRefsState(&tmpRefs);
+  if( cs->aIndex!=aOldIndex ) sqlite3_free(cs->aIndex);
   sqlite3_free(cs->pWalData);
   cs->pWalData = pOldWalData;
   cs->nWalData = nOldWalData;
+  cs->nChunks = nOldChunks;
+  cs->refsHash = oldRefsHash;
+  cs->workingState = oldWorkingState;
+  cs->aIndex = aOldIndex;
+  cs->nIndex = nOldIndex;
+  cs->nIndexAlloc = nOldIndexAlloc;
+  cs->zDefaultBranch = zOldDefaultBranch;
+  cs->aBranches = aOldBranches;
+  cs->nBranches = nOldBranches;
+  cs->aTags = aOldTags;
+  cs->nTags = nOldTags;
+  cs->aRemotes = aOldRemotes;
+  cs->nRemotes = nOldRemotes;
+  cs->aTracking = aOldTracking;
+  cs->nTracking = nOldTracking;
   cs->nPending = nPendingBefore;
   csPendHTClear(cs);
   return rc;
@@ -1499,7 +1558,7 @@ int chunkStoreGet(
       *pnData = e->size;
       return SQLITE_OK;
     }
-    return SQLITE_NOTFOUND;
+    return SQLITE_CORRUPT;
   }
 
   /* 4. Read from file. Verify stored length matches index for corruption check. */

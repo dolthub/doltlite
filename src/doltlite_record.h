@@ -74,6 +74,9 @@ struct DoltliteRecordInfo {
   int aOffset[DOLTLITE_MAX_RECORD_FIELDS];
 };
 
+int doltliteParseRecordStrict(const u8 *pData, int nData,
+                              DoltliteRecordInfo *pInfo);
+
 void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo);
 
 void doltliteResultField(sqlite3_context *ctx, const u8 *pData, int nData,

@@ -59,6 +59,9 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   }
 
   if( count==0 ){
+    if( pNode->level>0 ){
+      return SQLITE_CORRUPT;
+    }
     
     pNode->aKeyOff = 0;
     pNode->aValOff = 0;
