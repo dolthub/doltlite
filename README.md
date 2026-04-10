@@ -220,16 +220,20 @@ SELECT * FROM dolt_schema_diff('v1.0', 'v2.0');
 
 ### Audit Log (dolt_diff_&lt;table&gt;)
 
-Full history of every change to every row, across all commits:
+Full history of every change to every row, across all commits. For a
+table `users(id, name, email)`, the columns are the real per-column
+to_/from_ pairs plus commit metadata and a `diff_type`:
 
 ```sql
 SELECT * FROM dolt_diff_users;
--- diff_type | rowid_val | from_value | to_value |
---   from_commit | to_commit | from_commit_date | to_commit_date
+-- to_id | to_name | to_email | to_commit | to_commit_date |
+--   from_id | from_name | from_email | from_commit | from_commit_date |
+--   diff_type
 
 -- Every INSERT, UPDATE, DELETE that was ever committed is here
-SELECT diff_type, rowid_val, to_commit FROM dolt_diff_users
-  WHERE rowid_val = 42;
+SELECT diff_type, to_name, to_email, to_commit
+  FROM dolt_diff_users
+  WHERE to_id = 42;
 ```
 
 One `dolt_diff_<table>` virtual table is automatically created for each
