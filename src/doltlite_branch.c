@@ -45,11 +45,8 @@ static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   int rc;
 
   if( p->isDelete ){
-    ProllyHash empty;
-    rc = chunkStoreDeleteBranch(cs, p->zName);
-    if( rc!=SQLITE_OK ) return rc;
-    memset(&empty, 0, sizeof(empty));
-    return doltliteUpdateBranchWorkingState(db, p->zName, &empty, NULL);
+    (void)db;
+    return chunkStoreDeleteBranch(cs, p->zName);
   }
 
   if( p->force && chunkStoreFindBranch(cs, p->zName, 0)==SQLITE_OK ){
@@ -94,18 +91,22 @@ struct BranchMoveCtx {
 
 static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMoveCtx *p = (BranchMoveCtx*)pArg;
-  ProllyHash srcCommit, empty;
+  ProllyHash srcCommit, srcWorkingSet;
   int rc;
   (void)db;
 
   rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreGetBranchWorkingSet(cs, p->zSrc, &srcWorkingSet);
+  if( rc!=SQLITE_OK ) memset(&srcWorkingSet, 0, sizeof(srcWorkingSet));
   rc = chunkStoreAddBranch(cs, p->zDest, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
+  if( !prollyHashIsEmpty(&srcWorkingSet) ){
+    rc = chunkStoreSetBranchWorkingSet(cs, p->zDest, &srcWorkingSet);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   rc = chunkStoreDeleteBranch(cs, p->zSrc);
-  if( rc!=SQLITE_OK ) return rc;
-  memset(&empty, 0, sizeof(empty));
-  return doltliteUpdateBranchWorkingState(db, p->zSrc, &empty, NULL);
+  return rc;
 }
 
 static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){

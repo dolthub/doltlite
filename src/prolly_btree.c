@@ -367,6 +367,12 @@ static int btreeStoreWorkingSetBlob(
   const ProllyHash *pMergeCommit,
   const ProllyHash *pConflicts
 );
+static int btreeWriteWorkingState(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pCatHash,
+  const ProllyHash *pCommitHash
+);
 static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
 
 static int prollyBtreeClose(Btree*);
@@ -2165,13 +2171,34 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       chunkStoreUnlock(&pBt->store);
       pBt->store.snapshotPinned = 0;
     }else{
-      /* SQLite tears down the outer transaction on COMMIT failure here.
-      ** Roll back our in-memory roots and chunk-store state so the
-      ** connection does not keep seeing uncommitted edits. */
-      rcRollback = prollyBtreeRollback(p, rc, 0);
-      if( rcRollback!=SQLITE_OK ){
-        return rcRollback;
+      /* Commit failed after we had already materialized in-memory roots.
+      ** Restore the pre-transaction in-memory state, but do not try to
+      ** durably persist the rollback result here. The durable commit did
+      ** not happen, so the correct outcome is simply "old durable state
+      ** remains on disk". */
+      if( p->aCommittedTables ){
+        sqlite3_free(p->aTables);
+        p->aTables = p->aCommittedTables;
+        p->nTables = p->nCommittedTables;
+        p->nTablesAlloc = p->nCommittedTables;
+        p->iNextTable = p->iCommittedNextTable;
+        p->aCommittedTables = 0;
+        p->nCommittedTables = 0;
       }
+      {
+        BtCursor *pC;
+        for(pC = pBt->pCursor; pC; pC = pC->pNext){
+          if( pC->pMutMap ) prollyMutMapClear(pC->pMutMap);
+        }
+      }
+      invalidateCursors(pBt, 0, rc);
+      invalidateSchema(p);
+      chunkStoreRollback(&pBt->store);
+      p->inTrans = TRANS_NONE;
+      p->inTransaction = TRANS_NONE;
+      p->nSavepoint = 0;
+      chunkStoreUnlock(&pBt->store);
+      pBt->store.snapshotPinned = 0;
     }
     return rc;
   }
@@ -2228,6 +2255,7 @@ static int restoreFromCommitted(Btree *p){
 
 static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
+  int rc = SQLITE_OK;
   (void)writeOnly;
 
   if( p->inTrans==TRANS_WRITE ){
@@ -2250,6 +2278,29 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     invalidateCursors(pBt, 0, tripCode ? tripCode : SQLITE_ABORT);
     invalidateSchema(p);
     chunkStoreRollback(&pBt->store);
+    {
+      u8 *catData = 0;
+      int nCatData = 0;
+      ProllyHash catHash;
+      const char *zBr = p->zBranch ? p->zBranch : "main";
+
+      rc = serializeCatalog(p, &catData, &nCatData);
+      if( rc==SQLITE_OK ){
+        rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
+      }
+      sqlite3_free(catData);
+      if( rc==SQLITE_OK ){
+        rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash, &p->headCommit);
+      }
+      if( rc==SQLITE_OK ){
+        rc = chunkStoreCommit(&pBt->store);
+      }
+      if( rc!=SQLITE_OK ){
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc;
+      }
+    }
   }
 
   p->inTrans = TRANS_NONE;
@@ -2259,7 +2310,7 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   chunkStoreUnlock(&pBt->store);
   pBt->store.snapshotPinned = 0;
 
-  return SQLITE_OK;
+  return rc;
 }
 int sqlite3BtreeRollback(Btree *p, int tripCode, int writeOnly){
   if( !p ) return SQLITE_OK;
