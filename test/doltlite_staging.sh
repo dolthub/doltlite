@@ -224,17 +224,6 @@ run_test "add_dot_stages_all" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB7"
 
-# --- dolt_add('-a') lowercase flag ---
-DB8=/tmp/test_staging_8_$$.db
-rm -f "$DB8"
-echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(2);" | $DOLTLITE "$DB8" > /dev/null 2>&1
-
-echo "SELECT dolt_add('-a');" | $DOLTLITE "$DB8" > /dev/null 2>&1
-run_test "add_lowercase_a_stages_all" \
-  "SELECT count(*) FROM dolt_status WHERE staged=1;" \
-  "1" "$DB8"
-
 # --- dolt_status ignores internal index roots in clean state ---
 DB9=/tmp/test_staging_9_$$.db
 rm -f "$DB9"

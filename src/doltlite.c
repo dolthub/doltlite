@@ -282,11 +282,26 @@ static void doltliteAddFunc(
   }
 
   
+  /* Recognized "stage everything" flags. Match Dolt: -A, --all, and the
+  ** pathspec "." count; lowercase -a is rejected (Dolt errors with
+  ** "unknown option `a`"). Any other dash-prefixed arg is an unknown flag
+  ** and is rejected for the same reason. */
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
-    if( arg && (strcmp(arg, "-A")==0 || strcmp(arg, "-a")==0 || strcmp(arg, ".")==0) ){
+    if( !arg ) continue;
+    if( strcmp(arg, "-A")==0
+     || strcmp(arg, "--all")==0
+     || strcmp(arg, ".")==0 ){
       stageAll = 1;
-      break;
+    }else if( arg[0]=='-' ){
+      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
+      if( zErr ){
+        sqlite3_result_error(context, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(context);
+      }
+      return;
     }
   }
 
@@ -336,15 +351,20 @@ static void doltliteAddFunc(
         return;
       }
 
-      
+
       for(i=0; i<argc; i++){
         const char *zTable = (const char*)sqlite3_value_text(argv[i]);
         Pgno iTable = 0;
         int j;
 
-        if( !zTable || zTable[0]=='-' ) continue;
+        if( !zTable || zTable[0]=='-' || strcmp(zTable, ".")==0 ) continue;
         rc = doltliteResolveTableName(db, zTable, &iTable);
         if( rc!=SQLITE_OK ){
+          /* Table no longer exists in working. If it's still in the staged
+          ** catalog, the user is staging the deletion — drop the entry and
+          ** carry on. If it's nowhere, this is a bogus table name and we
+          ** error like Dolt does. */
+          int found = 0;
           for(j=0; j<nStaged; j++){
             if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
               if( j+1 < nStaged ){
@@ -352,8 +372,22 @@ static void doltliteAddFunc(
                         (nStaged-j-1) * (int)sizeof(struct TableEntry));
               }
               nStaged--;
+              found = 1;
               break;
             }
+          }
+          if( !found ){
+            char *zErr = sqlite3_mprintf(
+                "table not found: %s", zTable);
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            if( zErr ){
+              sqlite3_result_error(context, zErr, -1);
+              sqlite3_free(zErr);
+            }else{
+              sqlite3_result_error_nomem(context);
+            }
+            return;
           }
           continue;
         }

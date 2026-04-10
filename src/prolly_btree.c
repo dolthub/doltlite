@@ -826,11 +826,18 @@ int doltliteSerializeCatalogEntries(
   }
 
   /* Create a shallow copy sorted by name. The in-memory aTables array
-  ** stays sorted by iTable (binary search by page number depends on it). */
-  aSorted = sqlite3_malloc(nTables * (int)sizeof(struct TableEntry));
-  if( !aSorted ) return SQLITE_NOMEM;
-  memcpy(aSorted, aTables, nTables * (int)sizeof(struct TableEntry));
-  qsort(aSorted, nTables, sizeof(struct TableEntry), tableEntryNameCmp);
+  ** stays sorted by iTable (binary search by page number depends on it).
+  ** Empty catalogs are legal (e.g. dolt_add('-A') with no working tables);
+  ** sqlite3_malloc(0) returns NULL, which would otherwise be misread as
+  ** SQLITE_NOMEM. */
+  if( nTables > 0 ){
+    aSorted = sqlite3_malloc(nTables * (int)sizeof(struct TableEntry));
+    if( !aSorted ) return SQLITE_NOMEM;
+    memcpy(aSorted, aTables, nTables * (int)sizeof(struct TableEntry));
+    qsort(aSorted, nTables, sizeof(struct TableEntry), tableEntryNameCmp);
+  }else{
+    aSorted = 0;
+  }
 
   for(i=0; i<nTables; i++){
     int nLen = aSorted[i].zName ? (int)strlen(aSorted[i].zName) : 0;
