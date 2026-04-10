@@ -28,6 +28,13 @@ static const char *statusSchema =
 
 #define findInCatalog(a,n,t) doltliteFindTableByNumber(a,n,t)
 
+static char *statusTableName(sqlite3 *db, const struct TableEntry *pEntry){
+  if( pEntry->zName ){
+    return sqlite3_mprintf("%s", pEntry->zName);
+  }
+  return doltliteResolveTableNumber(db, pEntry->iTable);
+}
+
 static int addRow(DoltliteStatusCursor *pCur, const char *zName,
                   int staged, const char *zStatus){
   StatusRow *aNew = sqlite3_realloc(pCur->aRows,
@@ -54,9 +61,8 @@ static int compareCatalogs(
     char *zName;
     if(aTo[i].iTable<=1) continue;
     pFrom = findInCatalog(aFrom, nFrom, aTo[i].iTable);
-    zName = aTo[i].zName ? sqlite3_mprintf("%s",aTo[i].zName)
-                         : doltliteResolveTableNumber(db, aTo[i].iTable);
-    if(!zName) return SQLITE_NOMEM;
+    zName = statusTableName(db, &aTo[i]);
+    if(!zName) continue;
     if(!pFrom){
       rc = addRow(pCur, zName, staged, "new table");
     }else{
@@ -78,10 +84,8 @@ static int compareCatalogs(
     char *zName;
     if(aFrom[i].iTable<=1) continue;
     if(!findInCatalog(aTo, nTo, aFrom[i].iTable)){
-      zName = aFrom[i].zName ? sqlite3_mprintf("%s",aFrom[i].zName)
-                              : doltliteResolveTableNumber(db, aFrom[i].iTable);
-      if(!zName) zName = sqlite3_mprintf("table_%d", aFrom[i].iTable);
-      if(!zName) return SQLITE_NOMEM;
+      zName = statusTableName(db, &aFrom[i]);
+      if(!zName) continue;
       rc = addRow(pCur, zName, staged, "deleted");
       sqlite3_free(zName);
       if( rc!=SQLITE_OK ) return rc;
