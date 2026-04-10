@@ -100,8 +100,15 @@ int doltliteForEachUserTable(
     if( aTables[i].zName && aTables[i].iTable > 1 ){
       char *zMod = sqlite3_mprintf("%s%s", zPrefix, aTables[i].zName);
       if( zMod ){
-        sqlite3_create_module(db, zMod, pModule, 0);
+        rc = sqlite3_create_module(db, zMod, pModule, 0);
         sqlite3_free(zMod);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(aTables);
+          return rc;
+        }
+      }else{
+        sqlite3_free(aTables);
+        return SQLITE_NOMEM;
       }
     }
   }
