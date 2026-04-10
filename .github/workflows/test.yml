@@ -194,7 +194,7 @@ jobs:
       run: |
         cd build
         bash ../test/run_testfixture.sh "Crash recovery" 180 \
-          crash crash2 crash3 crash4 crash5 crash6 crash8 crashM
+          crash crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM
 
     - name: SQLite fuzz tests
       run: |
@@ -218,6 +218,7 @@ jobs:
           schema schema2 schema3 schema4 \
           shared shared2 shared3 \
           speed1 substr table tempdb \
+          vacuum vacuum2 \
           tkt-38cb5df375 tkt-9a8b09f8e6 tkt-99378177930f87bd \
           tkt-80e031a00f tkt-80ba201079 tkt-31338dca7e \
           tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
