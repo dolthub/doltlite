@@ -15,16 +15,20 @@
 
 
 static char *htBuildSchema(DoltliteColInfo *ci){
-  int i, sz=256;
+  int i;
+  sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
-  for(i=0;i<ci->nCol;i++) sz+=(int)strlen(ci->azName[i])+10;
-  z=sqlite3_malloc(sz); if(!z) return 0;
-  strcpy(z,"CREATE TABLE x(");
-  for(i=0;i<ci->nCol;i++){
-    if(i>0) strcat(z,", ");
-    strcat(z,"\""); strcat(z,ci->azName[i]); strcat(z,"\"");
+  if( !pStr ) return 0;
+  sqlite3_str_appendall(pStr, "CREATE TABLE x(");
+  for(i=0; i<ci->nCol; i++){
+    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
+    if( doltliteAppendQuotedIdent(pStr, ci->azName[i])!=SQLITE_OK ){
+      sqlite3_str_reset(pStr);
+      return 0;
+    }
   }
-  strcat(z,", commit_hash TEXT, committer TEXT, commit_date TEXT)");
+  sqlite3_str_appendall(pStr, ", commit_hash TEXT, committer TEXT, commit_date TEXT)");
+  z = sqlite3_str_finish(pStr);
   return z;
 }
 
@@ -86,14 +90,20 @@ static int htScanAtCommit(
     r=&pCur->aRows[pCur->nRows]; memset(r,0,sizeof(*r));
     r->intKey=prollyCursorIntKey(&cur);
     prollyCursorValue(&cur,&pVal,&nVal);
-    if(pVal&&nVal>0){r->pVal=sqlite3_malloc(nVal);if(r->pVal)memcpy(r->pVal,pVal,nVal);r->nVal=nVal;}
+    if(pVal&&nVal>0){
+      r->pVal=sqlite3_malloc(nVal);
+      if( !r->pVal ){ prollyCursorClose(&cur); return SQLITE_NOMEM; }
+      memcpy(r->pVal,pVal,nVal);
+      r->nVal=nVal;
+    }
     memcpy(r->zCommit,zCommitHex,PROLLY_HASH_SIZE*2+1);
     r->zCommitter=sqlite3_mprintf("%s",zCommitter?zCommitter:"");
+    if( !r->zCommitter ){ prollyCursorClose(&cur); return SQLITE_NOMEM; }
     r->commitDate=commitDate;
     pCur->nRows++;
     rc=prollyCursorNext(&cur); if(rc!=SQLITE_OK) break;
   }
-  prollyCursorClose(&cur); return SQLITE_OK;
+  prollyCursorClose(&cur); return rc;
 }
 
 /* BFS all parents with dedup, matching dolt_log traversal order. */
@@ -148,9 +158,10 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
       rc=doltliteLoadCatalog(db,&commit.catalogHash,&aT,&nT,0);
       if(rc==SQLITE_OK){
         if(doltliteFindTableRootByName(aT,nT,zTableName,&tableRoot,&flags)==SQLITE_OK)
-          htScanAtCommit(pCur,cs,pCache,&tableRoot,flags,hexBuf,commit.zName,commit.timestamp);
+          rc = htScanAtCommit(pCur,cs,pCache,&tableRoot,flags,hexBuf,commit.zName,commit.timestamp);
         sqlite3_free(aT);
       }
+      if( rc!=SQLITE_OK ){ doltliteCommitClear(&commit); break; }
     }
 
     for(i=0;i<commit.nParents;i++){
@@ -189,8 +200,10 @@ static int htConnect(sqlite3 *db, void *pAux, int argc,
   doltliteGetColumnNames(db,v->zTableName,&v->cols);
 
   if(v->cols.nCol<=0){
+    char *zErr = sqlite3_mprintf("table '%s' not found or has no columns",
+                                 v->zTableName ? v->zTableName : "");
     sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);
-    *pzErr=sqlite3_mprintf("table '%s' not found or has no columns",v->zTableName?v->zTableName:"");
+    *pzErr=zErr;
     return SQLITE_ERROR;
   }
   zSchema=htBuildSchema(&v->cols);
@@ -229,8 +242,7 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   HistVtab *v=(HistVtab*)cur->pVtab;
   (void)idxNum;(void)idxStr;(void)argc;(void)argv;
   freeHistoryRows(c); c->iRow=0;
-  htWalkHistory(c,v->db,v->zTableName);
-  return SQLITE_OK;
+  return htWalkHistory(c,v->db,v->zTableName);
 }
 
 static int htNext(sqlite3_vtab_cursor *cur){((HistCursor*)cur)->iRow++;return SQLITE_OK;}

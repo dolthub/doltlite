@@ -210,6 +210,22 @@ run_test "late_t" "SELECT count(*) FROM dolt_history_t;" "2" "$DB"
 rm -f "$DB"
 
 # ============================================================
+# Quoted table names
+# ============================================================
+
+DB=/tmp/test_hist_quoted_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE "odd""name"(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO "odd""name" VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+EOF
+
+run_test "quoted_count" 'SELECT count(*) FROM "dolt_history_odd""name";' "1" "$DB"
+run_test "quoted_value" 'SELECT v FROM "dolt_history_odd""name";' "a" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # History query with WHERE filter
 # ============================================================
 

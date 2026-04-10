@@ -28,26 +28,27 @@ static const char *statusSchema =
 
 #define findInCatalog(a,n,t) doltliteFindTableByNumber(a,n,t)
 
-static void addRow(DoltliteStatusCursor *pCur, const char *zName,
-                   int staged, const char *zStatus){
+static int addRow(DoltliteStatusCursor *pCur, const char *zName,
+                  int staged, const char *zStatus){
   StatusRow *aNew = sqlite3_realloc(pCur->aRows,
       (pCur->nRows+1)*(int)sizeof(StatusRow));
-  if(aNew){
-    pCur->aRows = aNew;
-    aNew[pCur->nRows].zName = sqlite3_mprintf("%s", zName);
-    aNew[pCur->nRows].staged = staged;
-    aNew[pCur->nRows].zStatus = zStatus;
-    pCur->nRows++;
-  }
+  if( !aNew ) return SQLITE_NOMEM;
+  pCur->aRows = aNew;
+  aNew[pCur->nRows].zName = sqlite3_mprintf("%s", zName);
+  if( !aNew[pCur->nRows].zName ) return SQLITE_NOMEM;
+  aNew[pCur->nRows].staged = staged;
+  aNew[pCur->nRows].zStatus = zStatus;
+  pCur->nRows++;
+  return SQLITE_OK;
 }
 
-static void compareCatalogs(
+static int compareCatalogs(
   DoltliteStatusCursor *pCur, sqlite3 *db,
   struct TableEntry *aFrom, int nFrom,
   struct TableEntry *aTo, int nTo,
   int staged
 ){
-  int i;
+  int i, rc;
   for(i=0; i<nTo; i++){
     struct TableEntry *pFrom;
     char *zName;
@@ -55,22 +56,23 @@ static void compareCatalogs(
     pFrom = findInCatalog(aFrom, nFrom, aTo[i].iTable);
     zName = aTo[i].zName ? sqlite3_mprintf("%s",aTo[i].zName)
                          : doltliteResolveTableNumber(db, aTo[i].iTable);
-    if(!zName) continue;
+    if(!zName) return SQLITE_NOMEM;
     if(!pFrom){
-      addRow(pCur, zName, staged, "new table");
+      rc = addRow(pCur, zName, staged, "new table");
     }else{
-      
+      rc = SQLITE_OK;
       if(prollyHashCompare(&pFrom->root, &aTo[i].root)!=0){
-        addRow(pCur, zName, staged, "modified");
+        rc = addRow(pCur, zName, staged, "modified");
       }
-      
-      if(!prollyHashIsEmpty(&pFrom->schemaHash)
+      if(rc==SQLITE_OK
+       && !prollyHashIsEmpty(&pFrom->schemaHash)
        && !prollyHashIsEmpty(&aTo[i].schemaHash)
        && prollyHashCompare(&pFrom->schemaHash, &aTo[i].schemaHash)!=0){
-        addRow(pCur, zName, staged, "schema modified");
+        rc = addRow(pCur, zName, staged, "schema modified");
       }
     }
     sqlite3_free(zName);
+    if( rc!=SQLITE_OK ) return rc;
   }
   for(i=0; i<nFrom; i++){
     char *zName;
@@ -79,10 +81,13 @@ static void compareCatalogs(
       zName = aFrom[i].zName ? sqlite3_mprintf("%s",aFrom[i].zName)
                               : doltliteResolveTableNumber(db, aFrom[i].iTable);
       if(!zName) zName = sqlite3_mprintf("table_%d", aFrom[i].iTable);
-      addRow(pCur, zName, staged, "deleted");
+      if(!zName) return SQLITE_NOMEM;
+      rc = addRow(pCur, zName, staged, "deleted");
       sqlite3_free(zName);
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
+  return SQLITE_OK;
 }
 
 static int statusConnect(sqlite3 *db, void *pAux, int argc,
@@ -137,31 +142,41 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   if(!cs) return SQLITE_OK;
 
   rc=doltliteGetHeadCatalogHash(db,&headCatHash);
-  if(rc==SQLITE_OK) doltliteLoadCatalog(db,&headCatHash,&aHead,&nHead,0);
+  if(rc!=SQLITE_OK) goto status_done;
+  rc = doltliteLoadCatalog(db,&headCatHash,&aHead,&nHead,0);
+  if(rc!=SQLITE_OK) goto status_done;
 
   {extern void doltliteGetSessionStaged(sqlite3*,ProllyHash*);
    doltliteGetSessionStaged(db,&stagedCatHash);}
-  if(!prollyHashIsEmpty(&stagedCatHash))
-    doltliteLoadCatalog(db,&stagedCatHash,&aStaged,&nStaged,0);
+  if(!prollyHashIsEmpty(&stagedCatHash)){
+    rc = doltliteLoadCatalog(db,&stagedCatHash,&aStaged,&nStaged,0);
+    if( rc!=SQLITE_OK ) goto status_done;
+  }
 
   {u8 *catData=0;int nCatData=0;
     rc=doltliteFlushAndSerializeCatalog(db,&catData,&nCatData);
     if(rc==SQLITE_OK){
       rc=chunkStorePut(cs,catData,nCatData,&workingCatHash);
       sqlite3_free(catData);
-      if(rc==SQLITE_OK) doltliteLoadCatalog(db,&workingCatHash,&aWorking,&nWorking,0);
+      if(rc==SQLITE_OK) rc = doltliteLoadCatalog(db,&workingCatHash,&aWorking,&nWorking,0);
     }
+    if( rc!=SQLITE_OK ) goto status_done;
   }
 
-  if(aStaged&&aHead) compareCatalogs(pCur,db,aHead,nHead,aStaged,nStaged,1);
+  if(aStaged&&aHead){
+    rc = compareCatalogs(pCur,db,aHead,nHead,aStaged,nStaged,1);
+    if( rc!=SQLITE_OK ) goto status_done;
+  }
   {struct TableEntry *aBase=aStaged?aStaged:aHead;
     int nBase=aStaged?nStaged:nHead;
-    if(aWorking&&aBase) compareCatalogs(pCur,db,aBase,nBase,aWorking,nWorking,0);
-    else if(aWorking&&!aBase) compareCatalogs(pCur,db,0,0,aWorking,nWorking,0);
+    if(aWorking&&aBase) rc = compareCatalogs(pCur,db,aBase,nBase,aWorking,nWorking,0);
+    else if(aWorking&&!aBase) rc = compareCatalogs(pCur,db,0,0,aWorking,nWorking,0);
+    if( rc!=SQLITE_OK ) goto status_done;
   }
 
+status_done:
   sqlite3_free(aHead);sqlite3_free(aStaged);sqlite3_free(aWorking);
-  return SQLITE_OK;
+  return rc;
 }
 
 static int statusNext(sqlite3_vtab_cursor *p){

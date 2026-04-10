@@ -187,4 +187,10 @@ int migrateSchemaRowData(sqlite3 *db, const ProllyHash *pAncCatHash,
                          const ProllyHash *pTheirCatHash,
                          SchemaMergeAction *aActions, int nActions);
 
+static SQLITE_INLINE int doltliteAppendQuotedIdent(sqlite3_str *pStr,
+                                                   const char *zName){
+  sqlite3_str_appendf(pStr, "\"%w\"", zName ? zName : "");
+  return sqlite3_str_errcode(pStr);
+}
+
 #endif
