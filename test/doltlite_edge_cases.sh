@@ -400,7 +400,7 @@ echo "SELECT dolt_tag('v1', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2))
 echo "SELECT dolt_tag('v3', (SELECT commit_hash FROM dolt_log LIMIT 1));" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "diff_tags" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT hash FROM dolt_tags WHERE name='v1'), (SELECT hash FROM dolt_tags WHERE name='v3'));" \
+  "SELECT count(*) FROM dolt_diff('t', (SELECT tag_hash FROM dolt_tags WHERE tag_name='v1'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v3'));" \
   "^[2-9]" "$DB"
 
 # Verify log has 3 commits
@@ -423,7 +423,7 @@ INSERT INTO t VALUES(3); SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" 
 
 # Tag specific commit (the first one)
 echo "SELECT dolt_tag('old', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2));" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "tag_specific" "SELECT count(*) FROM dolt_tags WHERE name='old';" "1" "$DB"
+run_test "tag_specific" "SELECT count(*) FROM dolt_tags WHERE tag_name='old';" "1" "$DB"
 
 # Multiple tags on same commit
 echo "SELECT dolt_tag('latest');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -433,11 +433,11 @@ run_test "tag_multi_same" "SELECT count(*) FROM dolt_tags;" "3" "$DB"
 # Delete a tag
 echo "SELECT dolt_tag('-d','also-latest');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "tag_deleted" "SELECT count(*) FROM dolt_tags;" "2" "$DB"
-run_test "tag_correct_remain" "SELECT count(*) FROM dolt_tags WHERE name='latest';" "1" "$DB"
+run_test "tag_correct_remain" "SELECT count(*) FROM dolt_tags WHERE tag_name='latest';" "1" "$DB"
 
 # Tag persists across reopen
-run_test "tag_persist" "SELECT count(*) FROM dolt_tags WHERE name='old';" "1" "$DB"
-run_test "tag_persist2" "SELECT name FROM dolt_tags WHERE name='latest';" "latest" "$DB"
+run_test "tag_persist" "SELECT count(*) FROM dolt_tags WHERE tag_name='old';" "1" "$DB"
+run_test "tag_persist2" "SELECT tag_name FROM dolt_tags WHERE tag_name='latest';" "latest" "$DB"
 
 rm -f "$DB"
 
@@ -905,11 +905,11 @@ run_test "tagstate_current" "SELECT count(*) FROM t;" "2" "$DB"
 
 # Tags have different hashes
 run_test_match "tagstate_diff_hashes" \
-  "SELECT count(DISTINCT hash) FROM dolt_tags;" "2" "$DB"
+  "SELECT count(DISTINCT tag_hash) FROM dolt_tags;" "2" "$DB"
 
 # Diff between tags should show changes
 run_test_match "tagstate_diff" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT hash FROM dolt_tags WHERE name='v1.0'), (SELECT hash FROM dolt_tags WHERE name='v2.0'));" \
+  "SELECT count(*) FROM dolt_diff('t', (SELECT tag_hash FROM dolt_tags WHERE tag_name='v1.0'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v2.0'));" \
   "^[1-9]" "$DB"
 
 rm -f "$DB"

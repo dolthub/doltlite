@@ -176,7 +176,7 @@ run_test "schema_diff_same" \
 # ============================================================
 
 run_test "tags_count" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
-run_test "tags_v1" "SELECT name FROM dolt_tags;" "v1" "$DB"
+run_test "tags_v1" "SELECT tag_name FROM dolt_tags;" "v1" "$DB"
 
 # Data at v1: 4 employees
 run_test "tags_v1_data" "SELECT count(*) FROM dolt_at_employees('v1');" "4" "$DB"

@@ -9,11 +9,11 @@ echo ""
 DB=/tmp/test_tag_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','first');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "tag_head" "SELECT dolt_tag('v1.0');" "0" "$DB"
+run_test "tag_head" "SELECT dolt_tag('v1.0','-m','release one');" "0" "$DB"
 run_test "list_tags" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
-run_test "tag_name" "SELECT name FROM dolt_tags;" "v1.0" "$DB"
-run_test_match "tag_hash" "SELECT hash FROM dolt_tags;" "^[0-9a-f]{40}$" "$DB"
-run_test "tag_message" "SELECT commit_message FROM dolt_tags;" "first" "$DB"
+run_test "tag_name" "SELECT tag_name FROM dolt_tags;" "v1.0" "$DB"
+run_test_match "tag_hash" "SELECT tag_hash FROM dolt_tags;" "^[0-9a-f]{40}$" "$DB"
+run_test "tag_message" "SELECT message FROM dolt_tags;" "release one" "$DB"
 
 # Second commit, tag specific commit
 echo "INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','second');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -37,7 +37,7 @@ run_test "one_tag_left" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
 run_test_match "delete_missing" "SELECT dolt_tag('-d','nope');" "not found" "$DB"
 
 # Tag persists across reopen
-run_test "tag_persists" "SELECT name FROM dolt_tags;" "v1.0" "$DB"
+run_test "tag_persists" "SELECT tag_name FROM dolt_tags;" "v1.0" "$DB"
 
 rm -f "$DB"
 echo ""

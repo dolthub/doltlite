@@ -344,7 +344,7 @@ run_test "gc_taghist_data" "SELECT count(*) FROM t;" "3" "$DB"
 
 # Diff between tags should still work (old tree nodes preserved)
 run_test_match "gc_taghist_diff" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT hash FROM dolt_tags WHERE name='v1.0'), (SELECT hash FROM dolt_tags WHERE name='v2.0'));" \
+  "SELECT count(*) FROM dolt_diff('t', (SELECT tag_hash FROM dolt_tags WHERE tag_name='v1.0'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v2.0'));" \
   "^[1-9]" "$DB"
 
 db_rm "$DB"

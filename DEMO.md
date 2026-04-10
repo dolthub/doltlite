@@ -169,8 +169,8 @@ SELECT * FROM dolt_branches;
 -- modifications | 15542b3e3de19d575287bd5fde8398a52cf65534 | 0
 
 SELECT * FROM dolt_tags;
--- name | hash
--- v1   | 4e130d15c8858d3ab474bfdb48f3f23e358fa822
+-- tag_name | tag_hash                                 | tagger   | email | date | message
+-- v1       | 4e130d15c8858d3ab474bfdb48f3f23e358fa822 | doltlite |       | ...  |
 
 SELECT active_branch();
 -- main

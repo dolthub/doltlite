@@ -416,10 +416,10 @@ SELECT dolt_commit('-A','-m','release v2');
 SELECT dolt_tag('v2.0');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "tagmeta_count" "SELECT count(*) FROM dolt_tags;" "2" "$DB"
-run_test_match "tagmeta_hash" "SELECT hash FROM dolt_tags WHERE name='v1.0';" "^[0-9a-f]{40}$" "$DB"
-run_test "tagmeta_diff_hash" "SELECT count(DISTINCT hash) FROM dolt_tags;" "2" "$DB"
+run_test_match "tagmeta_hash" "SELECT tag_hash FROM dolt_tags WHERE tag_name='v1.0';" "^[0-9a-f]{40}$" "$DB"
+run_test "tagmeta_diff_hash" "SELECT count(DISTINCT tag_hash) FROM dolt_tags;" "2" "$DB"
 run_test_match "tagmeta_names" \
-  "SELECT group_concat(name) FROM (SELECT name FROM dolt_tags ORDER BY name);" "v1.*v2" "$DB"
+  "SELECT group_concat(tag_name) FROM (SELECT tag_name FROM dolt_tags ORDER BY tag_name);" "v1.*v2" "$DB"
 
 rm -f "$DB"
 
@@ -519,7 +519,7 @@ run_test "subq_tag" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
 
 # Diff using subquery for hashes
 run_test_match "subq_diff" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT hash FROM dolt_tags WHERE name='first'), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT count(*) FROM dolt_diff('t', (SELECT tag_hash FROM dolt_tags WHERE tag_name='first'), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "^[1-9]" "$DB"
 
 rm -f "$DB"

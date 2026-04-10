@@ -79,6 +79,10 @@ jobs:
       run: cd build && bash ../test/vc_oracle_branches_test.sh ./doltlite dolt
       timeout-minutes: 5
 
+    - name: Version control oracle tests (dolt_tags)
+      run: cd build && bash ../test/vc_oracle_tags_test.sh ./doltlite dolt
+      timeout-minutes: 5
+
     - name: Large-scale test (10K rows)
       run: cd build && bash ../test/large_scale_test.sh ./doltlite --quick
       timeout-minutes: 5

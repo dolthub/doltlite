@@ -116,7 +116,7 @@ int main(int argc, char **argv){
   /* ---- 7. Tag the release ---- */
   printf("== Tag current state ==\n\n");
   exec(db, "SELECT dolt_tag('v1.0')");
-  exec(db, "SELECT name, hash FROM dolt_tags");
+  exec(db, "SELECT tag_name, tag_hash FROM dolt_tags");
 
   /* ---- Cleanup ---- */
   sqlite3_close(db);

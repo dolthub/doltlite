@@ -34,7 +34,7 @@ run_test "e2e_clean_status" "SELECT count(*) FROM dolt_status;" "0" "$DB"
 
 # Tag the initial release
 echo "SELECT dolt_tag('v0.1');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "e2e_tag_exists" "SELECT name FROM dolt_tags;" "v0.1" "$DB"
+run_test "e2e_tag_exists" "SELECT tag_name FROM dolt_tags;" "v0.1" "$DB"
 
 # ============================================================
 # Phase 2: Feature branch — add comments table
@@ -90,7 +90,7 @@ run_test "e2e_two_tags" "SELECT count(*) FROM dolt_tags;" "2" "$DB"
 # ============================================================
 
 run_test_match "e2e_diff_users_v01_v02" \
-  "SELECT count(*) FROM dolt_diff('users', (SELECT hash FROM dolt_tags WHERE name='v0.1'), (SELECT hash FROM dolt_tags WHERE name='v0.2'));" \
+  "SELECT count(*) FROM dolt_diff('users', (SELECT tag_hash FROM dolt_tags WHERE tag_name='v0.1'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v0.2'));" \
   "^[0-9]" "$DB"
 
 # ============================================================

@@ -152,7 +152,7 @@ func main() {
 	// ---- 7. Tag ----
 	fmt.Println("== Tag current state ==\n")
 	exec(db, "SELECT dolt_tag('v1.0')")
-	rows, _ = db.Query("SELECT name, hash FROM dolt_tags")
+	rows, _ = db.Query("SELECT tag_name, tag_hash FROM dolt_tags")
 	for rows.Next() {
 		var name, h string
 		rows.Scan(&name, &h)

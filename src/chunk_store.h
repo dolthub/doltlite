@@ -121,6 +121,10 @@ struct ChunkStore {
   struct TagRef {
     char *zName;
     ProllyHash commitHash;
+    char *zTagger;
+    char *zEmail;
+    i64 timestamp;
+    char *zMessage;
   } *aTags;
   int nTags;
 
@@ -208,6 +212,9 @@ int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHas
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash);
 
 int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit);
+int chunkStoreAddTagFull(ChunkStore *cs, const char *zName, const ProllyHash *pCommit,
+                         const char *zTagger, const char *zEmail,
+                         i64 timestamp, const char *zMessage);
 int chunkStoreDeleteTag(ChunkStore *cs, const char *zName);
 int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 

@@ -162,7 +162,12 @@ static void csFreeBranches(ChunkStore *cs){
 }
 static void csFreeTags(ChunkStore *cs){
   int k;
-  for(k=0; k<cs->nTags; k++) sqlite3_free(cs->aTags[k].zName);
+  for(k=0; k<cs->nTags; k++){
+    sqlite3_free(cs->aTags[k].zName);
+    sqlite3_free(cs->aTags[k].zTagger);
+    sqlite3_free(cs->aTags[k].zEmail);
+    sqlite3_free(cs->aTags[k].zMessage);
+  }
   sqlite3_free(cs->aTags);
   cs->aTags = 0;
   cs->nTags = 0;
@@ -905,14 +910,34 @@ int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
 }
 
 int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
+  return chunkStoreAddTagFull(cs, zName, pCommit, 0, 0, 0, 0);
+}
+
+int chunkStoreAddTagFull(
+  ChunkStore *cs,
+  const char *zName,
+  const ProllyHash *pCommit,
+  const char *zTagger,
+  const char *zEmail,
+  i64 timestamp,
+  const char *zMessage
+){
   struct TagRef *aNew;
   if( chunkStoreFindTag(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
   aNew = sqlite3_realloc(cs->aTags, (cs->nTags+1)*(int)sizeof(struct TagRef));
   if( !aNew ) return SQLITE_NOMEM;
   cs->aTags = aNew;
+  memset(&aNew[cs->nTags], 0, sizeof(struct TagRef));
   aNew[cs->nTags].zName = sqlite3_mprintf("%s", zName);
   if( !aNew[cs->nTags].zName ) return SQLITE_NOMEM;
   memcpy(&aNew[cs->nTags].commitHash, pCommit, sizeof(ProllyHash));
+  aNew[cs->nTags].zTagger  = sqlite3_mprintf("%s", zTagger  ? zTagger  : "");
+  aNew[cs->nTags].zEmail   = sqlite3_mprintf("%s", zEmail   ? zEmail   : "");
+  aNew[cs->nTags].zMessage = sqlite3_mprintf("%s", zMessage ? zMessage : "");
+  if( !aNew[cs->nTags].zTagger || !aNew[cs->nTags].zEmail || !aNew[cs->nTags].zMessage ){
+    return SQLITE_NOMEM;
+  }
+  aNew[cs->nTags].timestamp = timestamp;
   cs->nTags++;
   return SQLITE_OK;
 }
@@ -1048,13 +1073,19 @@ int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aR
 }
 
 /*
-** Refs blob format (version 5):
+** Refs blob format (version 6):
 **   [version:1][default_branch_len:4][default_branch:N]
 **   [nBranches:4] { [name_len:4][name:N][commit_hash:20][ws_hash:20] }...
-**   [nTags:4]     { [name_len:4][name:N][commit_hash:20] }...
+**   [nTags:4]     { [name_len:4][name:N][commit_hash:20]
+**                   [tagger_len:4][tagger:N]
+**                   [email_len:4][email:N]
+**                   [timestamp:8]
+**                   [message_len:4][message:N] }...
 **   [nRemotes:4]  { [name_len:4][name:N][url_len:4][url:N] }...
 **   [nTracking:4] { [remote_len:4][remote:N][branch_len:4][branch:N][commit_hash:20] }...
-** All length fields are little-endian u32.
+** Version 5 omits the per-tag metadata fields; the deserializer accepts
+** both versions and defaults missing tag metadata to empty/0.
+** All length fields are little-endian u32; timestamp is little-endian i64.
 */
 static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   const char *def = cs->zDefaultBranch ? cs->zDefaultBranch : "main";
@@ -1074,7 +1105,14 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
     sz += inc;
   }
   for(i=0; i<cs->nTags; i++){
-    int inc = 4 + (int)strlen(cs->aTags[i].zName) + PROLLY_HASH_SIZE;
+    int taggerLen  = cs->aTags[i].zTagger  ? (int)strlen(cs->aTags[i].zTagger)  : 0;
+    int emailLen   = cs->aTags[i].zEmail   ? (int)strlen(cs->aTags[i].zEmail)   : 0;
+    int messageLen = cs->aTags[i].zMessage ? (int)strlen(cs->aTags[i].zMessage) : 0;
+    int inc = 4 + (int)strlen(cs->aTags[i].zName) + PROLLY_HASH_SIZE
+            + 4 + taggerLen
+            + 4 + emailLen
+            + 8
+            + 4 + messageLen;
     if( sz > INT_MAX - inc ){
       return SQLITE_TOOBIG;
     }
@@ -1097,7 +1135,7 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
   bufCur = buf;
-  *bufCur++ = 5;  /* refs format version */
+  *bufCur++ = 6;  /* refs format version */
   CS_WRITE_U32(bufCur,defLen); bufCur+=4;
   memcpy(bufCur, def, defLen); bufCur+=defLen;
   CS_WRITE_U32(bufCur,cs->nBranches); bufCur+=4;
@@ -1110,10 +1148,23 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   }
   CS_WRITE_U32(bufCur,cs->nTags); bufCur+=4;
   for(i=0; i<cs->nTags; i++){
-    int nameLen = (int)strlen(cs->aTags[i].zName);
+    int nameLen    = (int)strlen(cs->aTags[i].zName);
+    int taggerLen  = cs->aTags[i].zTagger  ? (int)strlen(cs->aTags[i].zTagger)  : 0;
+    int emailLen   = cs->aTags[i].zEmail   ? (int)strlen(cs->aTags[i].zEmail)   : 0;
+    int messageLen = cs->aTags[i].zMessage ? (int)strlen(cs->aTags[i].zMessage) : 0;
     CS_WRITE_U32(bufCur,nameLen); bufCur+=4;
     memcpy(bufCur, cs->aTags[i].zName, nameLen); bufCur+=nameLen;
     memcpy(bufCur, cs->aTags[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+    CS_WRITE_U32(bufCur,taggerLen); bufCur+=4;
+    if( taggerLen ) memcpy(bufCur, cs->aTags[i].zTagger, taggerLen);
+    bufCur+=taggerLen;
+    CS_WRITE_U32(bufCur,emailLen); bufCur+=4;
+    if( emailLen ) memcpy(bufCur, cs->aTags[i].zEmail, emailLen);
+    bufCur+=emailLen;
+    CS_WRITE_I64(bufCur,cs->aTags[i].timestamp); bufCur+=8;
+    CS_WRITE_U32(bufCur,messageLen); bufCur+=4;
+    if( messageLen ) memcpy(bufCur, cs->aTags[i].zMessage, messageLen);
+    bufCur+=messageLen;
   }
   CS_WRITE_U32(bufCur,cs->nRemotes); bufCur+=4;
   for(i=0; i<cs->nRemotes; i++){
@@ -1159,7 +1210,7 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   u8 version;
   if( nData<5 ) return SQLITE_CORRUPT;
   version = *bufCur++;
-  if( version!=5 ) return SQLITE_CORRUPT;
+  if( version!=5 && version!=6 ) return SQLITE_CORRUPT;
   if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
   defLen = (int)CS_READ_U32(bufCur); bufCur+=4;
   if( bufCur+defLen>data+nData ) return SQLITE_CORRUPT;
@@ -1204,6 +1255,36 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
         if(!cs->aTags[i].zName) return SQLITE_NOMEM;
         memcpy(cs->aTags[i].zName,bufCur,nameLen); cs->aTags[i].zName[nameLen]=0; bufCur+=nameLen;
         memcpy(cs->aTags[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+        if( version>=6 ){
+          int taggerLen, emailLen, messageLen;
+          if(bufCur+4>data+nData) return SQLITE_CORRUPT;
+          taggerLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+          if(bufCur+taggerLen>data+nData) return SQLITE_CORRUPT;
+          cs->aTags[i].zTagger=sqlite3_malloc(taggerLen+1);
+          if(!cs->aTags[i].zTagger) return SQLITE_NOMEM;
+          memcpy(cs->aTags[i].zTagger,bufCur,taggerLen); cs->aTags[i].zTagger[taggerLen]=0; bufCur+=taggerLen;
+          if(bufCur+4>data+nData) return SQLITE_CORRUPT;
+          emailLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+          if(bufCur+emailLen>data+nData) return SQLITE_CORRUPT;
+          cs->aTags[i].zEmail=sqlite3_malloc(emailLen+1);
+          if(!cs->aTags[i].zEmail) return SQLITE_NOMEM;
+          memcpy(cs->aTags[i].zEmail,bufCur,emailLen); cs->aTags[i].zEmail[emailLen]=0; bufCur+=emailLen;
+          if(bufCur+8>data+nData) return SQLITE_CORRUPT;
+          cs->aTags[i].timestamp=CS_READ_I64(bufCur); bufCur+=8;
+          if(bufCur+4>data+nData) return SQLITE_CORRUPT;
+          messageLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+          if(bufCur+messageLen>data+nData) return SQLITE_CORRUPT;
+          cs->aTags[i].zMessage=sqlite3_malloc(messageLen+1);
+          if(!cs->aTags[i].zMessage) return SQLITE_NOMEM;
+          memcpy(cs->aTags[i].zMessage,bufCur,messageLen); cs->aTags[i].zMessage[messageLen]=0; bufCur+=messageLen;
+        }else{
+          cs->aTags[i].zTagger  = sqlite3_mprintf("");
+          cs->aTags[i].zEmail   = sqlite3_mprintf("");
+          cs->aTags[i].zMessage = sqlite3_mprintf("");
+          if( !cs->aTags[i].zTagger || !cs->aTags[i].zEmail || !cs->aTags[i].zMessage ){
+            return SQLITE_NOMEM;
+          }
+        }
         cs->nTags++;
       }
     }
