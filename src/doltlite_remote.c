@@ -534,7 +534,11 @@ int doltlitePush(
         }
       }
       sqlite3_free(refsData);
-      if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+      if( rc==SQLITE_NOTFOUND ){
+        rc = SQLITE_OK;
+      }else if( rc!=SQLITE_OK ){
+        return rc;
+      }
     }else if( rc==SQLITE_NOTFOUND ){
       rc = SQLITE_OK; 
     }
