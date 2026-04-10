@@ -88,61 +88,6 @@ static int detectPkField(sqlite3 *db, const char *zTable){
   return pkField;
 }
 
-static void resultPkFromRecord(
-  sqlite3_context *ctx,
-  const u8 *pData, int nData,
-  int pkFieldIdx
-){
-  const u8 *p, *pEnd;
-  u64 hdrSize;
-  int hdrBytes, fieldIdx = 0, off;
-
-  if( !pData || nData<1 ){ sqlite3_result_null(ctx); return; }
-
-  p = pData; pEnd = pData + nData;
-  
-  hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
-  p += hdrBytes;
-  off = (int)hdrSize;
-
-  
-  while( p < pData+hdrSize && p < pEnd ){
-    u64 st; int stBytes;
-    stBytes = dlReadVarint(p, pData+hdrSize, &st);
-    p += stBytes;
-
-    if( fieldIdx==pkFieldIdx ){
-      
-      if( st==0 ){ sqlite3_result_null(ctx); return; }
-      if( st==8 ){ sqlite3_result_int(ctx,0); return; }
-      if( st==9 ){ sqlite3_result_int(ctx,1); return; }
-      if( st>=1 && st<=6 ){
-        static const int sizes[]={0,1,2,3,4,6,8};
-        int nB=sizes[st];
-        if( off+nB<=nData ){
-          const u8 *q=pData+off; i64 v=(q[0]&0x80)?-1:0; int i;
-          for(i=0;i<nB;i++) v=(v<<8)|q[i];
-          sqlite3_result_int64(ctx,v);
-        }else sqlite3_result_null(ctx);
-        return;
-      }
-      if( st>=13 && (st&1)==1 ){
-        int len=((int)st-13)/2;
-        if(off+len<=nData) sqlite3_result_text(ctx,(const char*)(pData+off),len,SQLITE_TRANSIENT);
-        else sqlite3_result_null(ctx);
-        return;
-      }
-      sqlite3_result_null(ctx);
-      return;
-    }
-
-    
-    off += dlSerialTypeLen(st);
-    fieldIdx++;
-  }
-  sqlite3_result_null(ctx);
-}
-
 static int diffCollect(void *pCtx, const ProllyDiffChange *pChange){
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCtx;
   DiffRow *aNew;
@@ -310,8 +255,6 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   struct TableEntry *aWork = 0;
   int nHead = 0;
   int nWork = 0;
-  u8 *catData = 0;
-  int nCatData = 0;
   (void)idxStr;
 
   freeDiffRows(pCur);
@@ -374,15 +317,12 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
     }
     if( flags==0 ) flags = f2;
   }else{
-    rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
+    rc = doltliteFlushCatalogToHash(db, &workingCatHash);
     if( rc==SQLITE_OK ){
-      rc = chunkStorePut(cs, catData, nCatData, &workingCatHash);
+      rc = doltliteLoadCatalog(db, &workingCatHash, &aWork, &nWork, 0);
       if( rc==SQLITE_OK ){
-        rc = doltliteLoadCatalog(db, &workingCatHash, &aWork, &nWork, 0);
-        if( rc==SQLITE_OK ){
-          rc = doltliteFindTableRoot(aWork, nWork, iTable, &newRoot, &flags);
-          if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
-        }
+        rc = doltliteFindTableRoot(aWork, nWork, iTable, &newRoot, &flags);
+        if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
       }
     }
   }
@@ -402,7 +342,6 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 diff_filter_done:
   sqlite3_free(aHead);
   sqlite3_free(aWork);
-  sqlite3_free(catData);
   return rc;
 }
 
@@ -436,7 +375,7 @@ static int diffColumn(sqlite3_vtab_cursor *pCursor,
         
         const u8 *pRec = r->pNewVal ? r->pNewVal : r->pOldVal;
         int nRec = r->pNewVal ? r->nNewVal : r->nOldVal;
-        resultPkFromRecord(ctx, pRec, nRec, pCur->iPkField);
+        doltliteResultRecordPkField(ctx, pRec, nRec, pCur->iPkField);
       }else{
         
         sqlite3_result_int64(ctx, r->intKey);
