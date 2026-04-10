@@ -38,6 +38,10 @@ run_test "basic_c3" \
   "SELECT count(*) FROM dolt_at_t( (SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "3" "$DB"
 
+run_test "basic_commit_ref_hash" \
+  "SELECT commit_ref FROM dolt_at_t( (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1)) LIMIT 1;" \
+  "$(echo "SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1;" | $DOLTLITE "$DB" 2>/dev/null)" "$DB"
+
 rm -f "$DB"
 
 # ============================================================
@@ -103,6 +107,9 @@ run_test "branch_feat" "SELECT count(*) FROM dolt_at_t( 'feat');" "2" "$DB"
 
 # At branch 'main': rows 1,3
 run_test "branch_main" "SELECT count(*) FROM dolt_at_t( 'main');" "2" "$DB"
+
+run_test "branch_commit_ref_name" \
+  "SELECT commit_ref FROM dolt_at_t( 'feat') LIMIT 1;" "feat" "$DB"
 
 # Specific rowids per branch
 run_test "branch_feat_has2" \
