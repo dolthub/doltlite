@@ -22,39 +22,69 @@
 #include <string.h>
 #include <ctype.h>
 
+static int dlIdentTokenLen(const char *z, int n){
+  int i = 0;
+  if( !z || n<=0 ) return 0;
+  if( z[0]=='"' || z[0]=='`' ){
+    char q = z[0];
+    for(i=1; i<n; i++){
+      if( z[i]==q ){
+        if( i+1<n && z[i+1]==q ){
+          i++;
+          continue;
+        }
+        return i+1;
+      }
+    }
+    return n;
+  }
+  if( z[0]=='[' ){
+    for(i=1; i<n; i++){
+      if( z[i]==']' ){
+        if( i+1<n && z[i+1]==']' ){
+          i++;
+          continue;
+        }
+        return i+1;
+      }
+    }
+    return n;
+  }
+  while( i<n && !isspace((unsigned char)z[i]) && z[i]!='(' && z[i]!=',' ){
+    i++;
+  }
+  return i;
+}
+
+static char *dlExtractIdentLower(const char *z, int n){
+  char *zName;
+  int i;
+  if( !z || n<=0 ) return 0;
+  zName = sqlite3_malloc(n + 1);
+  if( !zName ) return 0;
+  memcpy(zName, z, n);
+  zName[n] = 0;
+  sqlite3Dequote(zName);
+  for(i=0; zName[i]; i++){
+    zName[i] = (char)tolower((unsigned char)zName[i]);
+  }
+  return zName;
+}
+
 /*
 ** Extract the column name from an ADD COLUMN definition string like "y INTEGER".
 ** Returns a malloc'd, lowercased copy of the name. Caller must sqlite3_free.
 */
 char *extractColNameFromDef(const char *zDef){
   const char *s = zDef;
-  const char *e;
-  char *zName;
-  int len, i;
+  int len;
 
   /* Skip leading whitespace */
   while( *s && isspace((unsigned char)*s) ) s++;
   if( !*s ) return 0;
 
-  /* Handle quoted names */
-  if( *s=='"' || *s=='`' || *s=='[' ){
-    char close = (*s=='"') ? '"' : (*s=='`') ? '`' : ']';
-    s++;
-    e = s;
-    while( *e && *e!=close ) e++;
-    len = (int)(e - s);
-  }else{
-    e = s;
-    while( *e && !isspace((unsigned char)*e) && *e!='(' && *e!=',' ) e++;
-    len = (int)(e - s);
-  }
-  if( len<=0 ) return 0;
-  zName = sqlite3_malloc(len + 1);
-  if( !zName ) return 0;
-  memcpy(zName, s, len);
-  zName[len] = 0;
-  for(i=0; zName[i]; i++) zName[i] = (char)tolower((unsigned char)zName[i]);
-  return zName;
+  len = dlIdentTokenLen(s, (int)strlen(s));
+  return dlExtractIdentLower(s, len);
 }
 
 /*
@@ -110,16 +140,23 @@ int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
   for(sj=0; sj<ctx->nCols; sj++){
     if( ctx->aiColIdx[sj]<0 || !ctx->azColNames[sj] ) continue;
     if( ctx->aiColIdx[sj] < nFields ){
-      doltliteBindField(ctx->pUpd, bindIdx, pVal, nVal,
-                      aType[ctx->aiColIdx[sj]],
-                      aOffset[ctx->aiColIdx[sj]]);
+      int brc = doltliteBindField(ctx->pUpd, bindIdx, pVal, nVal,
+                                  aType[ctx->aiColIdx[sj]],
+                                  aOffset[ctx->aiColIdx[sj]]);
+      if( brc!=SQLITE_OK ) return brc;
     }else{
-      sqlite3_bind_null(ctx->pUpd, bindIdx);
+      int brc = sqlite3_bind_null(ctx->pUpd, bindIdx);
+      if( brc!=SQLITE_OK ) return brc;
     }
     bindIdx++;
   }
-  sqlite3_bind_int64(ctx->pUpd, bindIdx, pChange->intKey);
-  sqlite3_step(ctx->pUpd);
+  {
+    int brc = sqlite3_bind_int64(ctx->pUpd, bindIdx, pChange->intKey);
+    int src;
+    if( brc!=SQLITE_OK ) return brc;
+    src = sqlite3_step(ctx->pUpd);
+    if( src!=SQLITE_DONE ) return src;
+  }
 
   return SQLITE_OK;
 }
@@ -276,30 +313,10 @@ int migrateSchemaRowData(
                   /* Extract the column name */
                   char *zColName;
                   const char *ns = s;
-                  const char *ne;
-                  int nl;
+                  int nl = dlIdentTokenLen(ns, (int)(e - ns));
 
-                  if( *ns=='"' || *ns=='`' || *ns=='[' ){
-                    char close = (*ns=='"') ? '"' : (*ns=='`') ? '`' : ']';
-                    ns++;
-                    ne = ns;
-                    while( ne<e && *ne!=close ) ne++;
-                    nl = (int)(ne - ns);
-                  }else{
-                    ne = ns;
-                    while( ne<e && !isspace((unsigned char)*ne)
-                        && *ne!='(' && *ne!=',' ) ne++;
-                    nl = (int)(ne - ns);
-                  }
-
-                  zColName = sqlite3_malloc(nl + 1);
+                  zColName = dlExtractIdentLower(ns, nl);
                   if( zColName ){
-                    int ci;
-                    memcpy(zColName, ns, nl);
-                    zColName[nl] = 0;
-                    for(ci=0; zColName[ci]; ci++)
-                      zColName[ci] = (char)tolower((unsigned char)zColName[ci]);
-
                     /* Check if this column matches any of our added columns */
                     for(sj=0; sj<pAct->nAddColumns; sj++){
                       if( azColNames[sj]
@@ -390,7 +407,6 @@ int migrateSchemaRowData(
 
           rc = prollyDiff(cs, pCache, &ancRoot, &theirTE->root,
                           theirTE->flags, migrateDiffCb, &diffCtx);
-          if( rc!=SQLITE_OK ) rc = SQLITE_OK; /* best-effort */
         }
 
         sqlite3_finalize(pUpd);
@@ -405,8 +421,7 @@ next_action:
     }
     sqlite3_free(aiColIdx);
 
-    /* Continue even on non-fatal errors */
-    if( rc!=SQLITE_OK && rc!=SQLITE_NOMEM ) rc = SQLITE_OK;
+    if( rc!=SQLITE_OK ) break;
   }
 
   freeSchemaEntries(aTheirSchema, nTheirSchema);

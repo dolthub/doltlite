@@ -59,6 +59,9 @@ void doltliteParseRecord(const u8 *pData, int nData, DoltliteRecordInfo *pInfo);
 
 void doltliteResultField(sqlite3_context *ctx, const u8 *pData, int nData,
                          int serialType, int offset);
+void doltliteResultRecordPkField(sqlite3_context *ctx,
+                                 const u8 *pData, int nData,
+                                 int iPkField);
 
 int doltliteBindField(sqlite3_stmt *pStmt, int iParam,
                       const u8 *pData, int nData,

@@ -284,6 +284,23 @@ void doltliteResultField(
   sqlite3_result_null(ctx);
 }
 
+void doltliteResultRecordPkField(
+  sqlite3_context *ctx, const u8 *pData, int nData, int iPkField
+){
+  DoltliteRecordInfo ri;
+  if( !pData || nData<1 || iPkField<0 ){
+    sqlite3_result_null(ctx);
+    return;
+  }
+  doltliteParseRecord(pData, nData, &ri);
+  if( iPkField>=ri.nField ){
+    sqlite3_result_null(ctx);
+    return;
+  }
+  doltliteResultField(ctx, pData, nData,
+                      ri.aType[iPkField], ri.aOffset[iPkField]);
+}
+
 int doltliteBindField(
   sqlite3_stmt *pStmt, int iParam,
   const u8 *pData, int nData,

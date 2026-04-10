@@ -45,6 +45,28 @@ run_test "alter_merge_count" "SELECT count(*) FROM t;" "2" "$DB"
 rm -f "$DB"
 
 # ============================================================
+# Test 1b: quoted added columns migrate correctly across merge
+# ============================================================
+
+DB=/tmp/test_alter_merge1b_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+ALTER TABLE t ADD COLUMN "odd""name" TEXT;
+UPDATE t SET "odd""name"='quoted' WHERE id=1;
+SELECT dolt_commit('-A','-m','add quoted column');
+SELECT dolt_checkout('main');
+EOF
+
+run_test_match "alter_merge_quoted_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
+run_test "alter_merge_quoted_val" 'SELECT "odd""name" FROM t WHERE id=1;' "quoted" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Test 2: ALTER TABLE ADD COLUMN same name on both branches — conflict?
 # ============================================================
 
