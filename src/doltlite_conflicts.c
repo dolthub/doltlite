@@ -232,6 +232,61 @@ struct ConflictTableInfo {
 
 static void freeConflictTables(ConflictTableInfo *aTables, int nTables);
 
+static void freeConflictRow(struct ConflictRow *pRow){
+  if( !pRow ) return;
+  sqlite3_free(pRow->pKey);
+  sqlite3_free(pRow->pBaseVal);
+  sqlite3_free(pRow->pOurVal);
+  sqlite3_free(pRow->pTheirVal);
+  memset(pRow, 0, sizeof(*pRow));
+}
+
+static int dupConflictBytes(const u8 *pIn, int nIn, u8 **ppOut){
+  u8 *pCopy;
+  *ppOut = 0;
+  if( !pIn || nIn<=0 ) return SQLITE_OK;
+  pCopy = sqlite3_malloc(nIn);
+  if( !pCopy ) return SQLITE_NOMEM;
+  memcpy(pCopy, pIn, nIn);
+  *ppOut = pCopy;
+  return SQLITE_OK;
+}
+
+static void removeConflictRow(ConflictTableInfo *pTable, int iRow){
+  if( !pTable || iRow<0 || iRow>=pTable->nConflicts ) return;
+  freeConflictRow(&pTable->aRows[iRow]);
+  if( iRow < pTable->nConflicts - 1 ){
+    memmove(&pTable->aRows[iRow], &pTable->aRows[iRow+1],
+            (pTable->nConflicts - iRow - 1) * sizeof(struct ConflictRow));
+  }
+  pTable->nConflicts--;
+  if( pTable->aRows ){
+    memset(&pTable->aRows[pTable->nConflicts], 0, sizeof(struct ConflictRow));
+  }
+}
+
+static void removeConflictTable(ConflictTableInfo *aTables, int *pnTables, int iTable){
+  int nTables;
+  if( !aTables || !pnTables ) return;
+  nTables = *pnTables;
+  if( iTable<0 || iTable>=nTables ) return;
+  sqlite3_free(aTables[iTable].zName);
+  {
+    int j;
+    for(j=0; j<aTables[iTable].nConflicts; j++){
+      freeConflictRow(&aTables[iTable].aRows[j]);
+    }
+  }
+  sqlite3_free(aTables[iTable].aRows);
+  memset(&aTables[iTable], 0, sizeof(aTables[iTable]));
+  if( iTable < nTables - 1 ){
+    memmove(&aTables[iTable], &aTables[iTable+1],
+            (nTables - iTable - 1) * sizeof(ConflictTableInfo));
+  }
+  (*pnTables)--;
+  memset(&aTables[*pnTables], 0, sizeof(aTables[*pnTables]));
+}
+
 int doltliteSerializeConflicts(
   ChunkStore *cs,
   ConflictTableInfo *aTables, int nTables,
@@ -383,9 +438,7 @@ static void freeConflictTables(ConflictTableInfo *aTables, int nTables){
   int i, j;
   for(i=0; i<nTables; i++){
     for(j=0; j<aTables[i].nConflicts; j++){
-      sqlite3_free(aTables[i].aRows[j].pBaseVal);
-      sqlite3_free(aTables[i].aRows[j].pOurVal);
-      sqlite3_free(aTables[i].aRows[j].pTheirVal);
+      freeConflictRow(&aTables[i].aRows[j]);
     }
     sqlite3_free(aTables[i].aRows);
     sqlite3_free(aTables[i].zName);
@@ -403,11 +456,13 @@ static int storeUpdatedConflicts(
   for(i=0; i<nTables; i++) totalConflicts += aTables[i].nConflicts;
 
   {
+    int rc;
     extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
     extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
     extern int doltliteSaveWorkingSet(sqlite3*);
     if( totalConflicts==0 ){
       doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
+      doltliteSetSessionMergeState(db, 0, 0, 0);
     }else{
       ProllyHash newHash;
       int rc = doltliteSerializeConflicts(cs, aTables, nTables, &newHash);
@@ -415,8 +470,10 @@ static int storeUpdatedConflicts(
       doltliteSetSessionConflictsCatalog(db, &newHash);
       doltliteSetSessionMergeState(db, 1, 0, &newHash);
     }
-    doltliteSaveWorkingSet(db);
-    chunkStoreSerializeRefs(cs);
+    rc = doltliteSaveWorkingSet(db);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = chunkStoreSerializeRefs(cs);
+    if( rc!=SQLITE_OK ) return rc;
     return chunkStoreCommit(cs);
   }
 }
@@ -657,28 +714,11 @@ static int cfrUpdate(
 
     for(j=0; j<aTables[i].nConflicts; j++){
       if( aTables[i].aRows[j].intKey == deleteRowid ){
-        
-        sqlite3_free(aTables[i].aRows[j].pBaseVal);
-        sqlite3_free(aTables[i].aRows[j].pTheirVal);
-
-        
-        if( j < aTables[i].nConflicts - 1 ){
-          memmove(&aTables[i].aRows[j], &aTables[i].aRows[j+1],
-                  (aTables[i].nConflicts - j - 1) * sizeof(struct ConflictRow));
-        }
-        aTables[i].nConflicts--;
+        removeConflictRow(&aTables[i], j);
 
         
         if( aTables[i].nConflicts == 0 ){
-          sqlite3_free(aTables[i].aRows);
-          aTables[i].aRows = 0;
-          sqlite3_free(aTables[i].zName);
-          
-          if( i < nTables - 1 ){
-            memmove(&aTables[i], &aTables[i+1],
-                    (nTables - i - 1) * sizeof(ConflictTableInfo));
-          }
-          nTables--;
+          removeConflictTable(aTables, &nTables, i);
         }
 
         
@@ -759,26 +799,16 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     
     for(i=0; i<nTables; i++){
       if( aTables[i].zName && strcmp(aTables[i].zName, zTable)==0 ){
-        
-        for(j=0; j<aTables[i].nConflicts; j++){
-          sqlite3_free(aTables[i].aRows[j].pBaseVal);
-          sqlite3_free(aTables[i].aRows[j].pTheirVal);
-        }
-        sqlite3_free(aTables[i].aRows);
-        aTables[i].aRows = 0;
-        aTables[i].nConflicts = 0;
-        sqlite3_free(aTables[i].zName);
-        
-        if( i < nTables - 1 ){
-          memmove(&aTables[i], &aTables[i+1],
-                  (nTables - i - 1) * sizeof(ConflictTableInfo));
-        }
-        nTables--;
+        removeConflictTable(aTables, &nTables, i);
         break;
       }
     }
-    storeUpdatedConflicts(db, cs, aTables, nTables);
+    rc = storeUpdatedConflicts(db, cs, aTables, nTables);
     freeConflictTables(aTables, nTables);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_int(ctx, 0);
 
   }else if( strcmp(zMode,"--theirs")==0 ){
@@ -802,28 +832,30 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
           
           char *zSql = sqlite3_mprintf("DELETE FROM \"%w\" WHERE rowid=%lld",
                                         zTable, cr->intKey);
-          if(zSql){ sqlite3_exec(db, zSql, 0, 0, 0); sqlite3_free(zSql); }
+          if( !zSql ){
+            freeConflictTables(aTables, nTables);
+            sqlite3_result_error_code(ctx, SQLITE_NOMEM);
+            return;
+          }
+          rc = sqlite3_exec(db, zSql, 0, 0, 0);
+          sqlite3_free(zSql);
+          if( rc!=SQLITE_OK ){
+            freeConflictTables(aTables, nTables);
+            sqlite3_result_error(ctx, "failed to apply theirs value", -1);
+            return;
+          }
         }
       }
 
-      
-      for(j=0; j<aTables[i].nConflicts; j++){
-        sqlite3_free(aTables[i].aRows[j].pBaseVal);
-        sqlite3_free(aTables[i].aRows[j].pTheirVal);
-      }
-      sqlite3_free(aTables[i].aRows);
-      aTables[i].aRows = 0;
-      aTables[i].nConflicts = 0;
-      sqlite3_free(aTables[i].zName);
-      if( i < nTables - 1 ){
-        memmove(&aTables[i], &aTables[i+1],
-                (nTables - i - 1) * sizeof(ConflictTableInfo));
-      }
-      nTables--;
+      removeConflictTable(aTables, &nTables, i);
       break;
     }
-    storeUpdatedConflicts(db, cs, aTables, nTables);
+    rc = storeUpdatedConflicts(db, cs, aTables, nTables);
     freeConflictTables(aTables, nTables);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_int(ctx, 0);
 
   }else{

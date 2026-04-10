@@ -48,6 +48,17 @@ static const char *diffSchema =
   "  to_commit   TEXT HIDDEN"
   ")";
 
+static int diffDupValue(const u8 *pIn, int nIn, u8 **ppOut){
+  u8 *pCopy;
+  *ppOut = 0;
+  if( !pIn || nIn<=0 ) return SQLITE_OK;
+  pCopy = sqlite3_malloc(nIn);
+  if( !pCopy ) return SQLITE_NOMEM;
+  memcpy(pCopy, pIn, nIn);
+  *ppOut = pCopy;
+  return SQLITE_OK;
+}
+
 static int detectPkField(sqlite3 *db, const char *zTable){
   char *zSql;
   sqlite3_stmt *pStmt = 0;
@@ -136,6 +147,7 @@ static int diffCollect(void *pCtx, const ProllyDiffChange *pChange){
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCtx;
   DiffRow *aNew;
   DiffRow *r;
+  int rc;
 
   aNew = sqlite3_realloc(pCur->aRows, (pCur->nRows+1)*(int)sizeof(DiffRow));
   if( !aNew ) return SQLITE_NOMEM;
@@ -147,13 +159,18 @@ static int diffCollect(void *pCtx, const ProllyDiffChange *pChange){
   r->intKey = pChange->intKey;
 
   if( pChange->pOldVal && pChange->nOldVal>0 ){
-    r->pOldVal = sqlite3_malloc(pChange->nOldVal);
-    if( r->pOldVal ) memcpy(r->pOldVal, pChange->pOldVal, pChange->nOldVal);
+    rc = diffDupValue(pChange->pOldVal, pChange->nOldVal, &r->pOldVal);
+    if( rc!=SQLITE_OK ) return rc;
     r->nOldVal = pChange->nOldVal;
   }
   if( pChange->pNewVal && pChange->nNewVal>0 ){
-    r->pNewVal = sqlite3_malloc(pChange->nNewVal);
-    if( r->pNewVal ) memcpy(r->pNewVal, pChange->pNewVal, pChange->nNewVal);
+    rc = diffDupValue(pChange->pNewVal, pChange->nNewVal, &r->pNewVal);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(r->pOldVal);
+      r->pOldVal = 0;
+      r->nOldVal = 0;
+      return rc;
+    }
     r->nNewVal = pChange->nNewVal;
   }
 
@@ -173,19 +190,15 @@ static void freeDiffRows(DoltliteDiffCursor *pCur){
 }
 
 static int resolveCommitToTableRoot(
-  sqlite3 *db, const char *zRef, Pgno iTable,
+  sqlite3 *db, const ProllyHash *pCommitHash, Pgno iTable,
   ProllyHash *pRoot, u8 *pFlags
 ){
-  ProllyHash commitHash;
   DoltliteCommit commit;
   struct TableEntry *aTables = 0;
   int nTables = 0;
   int rc;
 
-  rc = doltliteResolveRef(db, zRef, &commitHash);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = doltliteLoadCommit(db, &commitHash, &commit);
+  rc = doltliteLoadCommit(db, pCommitHash, &commit);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
@@ -288,15 +301,25 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   const char *zTableName = 0;
   const char *zFromCommit = 0;
   const char *zToCommit = 0;
-  ProllyHash oldRoot, newRoot;
+  ProllyHash oldRoot, newRoot, headCatHash, workingCatHash;
   u8 flags = 0;
   Pgno iTable;
-  int rc;
+  int rc = SQLITE_OK;
   int argIdx = 0;
+  struct TableEntry *aHead = 0;
+  struct TableEntry *aWork = 0;
+  int nHead = 0;
+  int nWork = 0;
+  u8 *catData = 0;
+  int nCatData = 0;
   (void)idxStr;
 
   freeDiffRows(pCur);
   pCur->iRow = 0;
+  memset(&oldRoot, 0, sizeof(oldRoot));
+  memset(&newRoot, 0, sizeof(newRoot));
+  memset(&headCatHash, 0, sizeof(headCatHash));
+  memset(&workingCatHash, 0, sizeof(workingCatHash));
 
   if( !cs || !pBt ) return SQLITE_OK;
 
@@ -322,49 +345,51 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 
   
   if( zFromCommit ){
-    rc = resolveCommitToTableRoot(db, zFromCommit, iTable, &oldRoot, &flags);
+    ProllyHash fromCommitHash;
+    rc = doltliteResolveRef(db, zFromCommit, &fromCommitHash);
+    if( rc==SQLITE_OK ){
+      rc = resolveCommitToTableRoot(db, &fromCommitHash, iTable, &oldRoot, &flags);
+      if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    }
   }else{
-    
-    ProllyHash headCatHash;
-    struct TableEntry *aHead = 0;
-    int nHead = 0;
     rc = doltliteGetHeadCatalogHash(db, &headCatHash);
     if( rc==SQLITE_OK ){
       rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
       if( rc==SQLITE_OK ){
-        doltliteFindTableRoot(aHead, nHead, iTable, &oldRoot, &flags);
-        sqlite3_free(aHead);
+        rc = doltliteFindTableRoot(aHead, nHead, iTable, &oldRoot, &flags);
+        if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
       }
     }
   }
+  if( rc!=SQLITE_OK ) goto diff_filter_done;
 
   
   if( zToCommit ){
+    ProllyHash toCommitHash;
     u8 f2;
-    rc = resolveCommitToTableRoot(db, zToCommit, iTable, &newRoot, &f2);
+    rc = doltliteResolveRef(db, zToCommit, &toCommitHash);
+    if( rc==SQLITE_OK ){
+      rc = resolveCommitToTableRoot(db, &toCommitHash, iTable, &newRoot, &f2);
+      if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    }
     if( flags==0 ) flags = f2;
   }else{
-    
-    u8 *catData = 0; int nCatData = 0;
-    ProllyHash workingCatHash;
-    struct TableEntry *aWork = 0;
-    int nWork = 0;
     rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
     if( rc==SQLITE_OK ){
       rc = chunkStorePut(cs, catData, nCatData, &workingCatHash);
-      sqlite3_free(catData);
       if( rc==SQLITE_OK ){
         rc = doltliteLoadCatalog(db, &workingCatHash, &aWork, &nWork, 0);
         if( rc==SQLITE_OK ){
-          doltliteFindTableRoot(aWork, nWork, iTable, &newRoot, &flags);
-          sqlite3_free(aWork);
+          rc = doltliteFindTableRoot(aWork, nWork, iTable, &newRoot, &flags);
+          if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
         }
       }
     }
   }
+  if( rc!=SQLITE_OK ) goto diff_filter_done;
 
   
-  if( prollyHashCompare(&oldRoot, &newRoot)==0 ) return SQLITE_OK;
+  if( prollyHashCompare(&oldRoot, &newRoot)==0 ) goto diff_filter_done;
 
   
   {
@@ -374,7 +399,11 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
                     diffCollect, (void*)pCur);
   }
 
-  return SQLITE_OK;
+diff_filter_done:
+  sqlite3_free(aHead);
+  sqlite3_free(aWork);
+  sqlite3_free(catData);
+  return rc;
 }
 
 static int diffNext(sqlite3_vtab_cursor *pCursor){

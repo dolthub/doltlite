@@ -75,6 +75,11 @@ run_test "diff_no_such_table" \
   "SELECT count(*) FROM dolt_diff('nonexistent');" \
   "0" "$DB"
 
+# Bad ref should surface an error, not an empty diff
+run_test_match "diff_bad_ref_errors" \
+  "SELECT count(*) FROM dolt_diff('t', 'definitely_not_a_ref', (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "Error" "$DB"
+
 # Diff with only adds (new table after commit)
 DB2=/tmp/test_diff2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE t(x); SELECT dolt_commit('-A','-m','empty');" | $DOLTLITE "$DB2" > /dev/null 2>&1
