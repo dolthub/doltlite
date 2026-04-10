@@ -1012,14 +1012,11 @@ static void doltliteMergeFunc(
     return;
   }
 
-  
-  rc = chunkStoreFindBranch(cs, zBranch, &theirHead);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error(context, "branch not found", -1);
-    return;
-  }
-  if( prollyHashIsEmpty(&theirHead) ){
-    sqlite3_result_error(context, "target branch has no commits", -1);
+  /* Resolve the merge source as either a branch, a tag, or a 40-char
+  ** commit hash. doltliteResolveRef tries each in order. */
+  rc = doltliteResolveRef(db, zBranch, &theirHead);
+  if( rc!=SQLITE_OK || prollyHashIsEmpty(&theirHead) ){
+    sqlite3_result_error(context, "merge source not found", -1);
     return;
   }
 

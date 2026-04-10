@@ -358,6 +358,314 @@ $SEED
 SELECT dolt_merge('main');
 "
 
+echo "--- other operation pairs ---"
+
+# main adds row, feature modifies a different row. Different rows, so
+# no conflict — three-way merge should land both changes cleanly.
+oracle "add_modify_disjoint_rows_clean" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+# Both branches insert the same key with the same value. This is
+# convergent — both sides did the same thing, three-way merge should
+# treat it as no conflict.
+oracle "add_add_same_key_same_value" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+# Both branches insert the same key with DIFFERENT values. The PK
+# collides and the values disagree — should be a conflict, both
+# engines refuse to produce a clean merge commit.
+oracle_no_merge_commit "add_add_same_key_different_value_conflict" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 99);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+# Both branches delete the same row. Convergent delete, clean merge.
+oracle "delete_delete_same_row" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+DELETE FROM t WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+DELETE FROM t WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+# One side deletes a row, the other modifies it. This is a real
+# delete/modify conflict — both Dolt and doltlite should refuse to
+# produce a clean merge commit.
+oracle_no_merge_commit "delete_modify_conflict" "
+$SEED
+DELETE FROM t WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+echo "--- multi-commit branches ---"
+
+# Feature branch with four commits before the merge. Exercises the
+# iterative ancestor walk and confirms the resulting merge commit's
+# parent linkage isn't off-by-one.
+oracle "multi_commit_feature_branch" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat2');
+INSERT INTO t VALUES (4, 40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat3');
+INSERT INTO t VALUES (5, 50);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat4');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+echo "--- multi-table merges ---"
+
+# Independent inserts spread across two tables. Tests that the
+# per-table merge descent doesn't drop or duplicate either side.
+oracle "multi_table_independent_inserts" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+INSERT INTO a VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO b VALUES (2, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+# One branch modifies table a, the other inserts into table b. Each
+# table sees only one side change.
+oracle "multi_table_modify_one_insert_other" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+UPDATE a SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO b VALUES (2, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+# Three tables, all touched on one side or the other. Stresses the
+# per-table descent across more breadth than two tables.
+oracle "three_tables_disjoint_changes" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE c(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 100);
+INSERT INTO c VALUES (1, 1000);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+INSERT INTO a VALUES (2, 20);
+INSERT INTO c VALUES (2, 2000);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO b VALUES (2, 200);
+UPDATE c SET v = 1500 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+echo "--- schema deltas ---"
+
+# Feature branch creates a brand new table. Main concurrently inserts
+# into the pre-existing table. Merge should land the new table on
+# main alongside main's insert.
+oracle "feature_creates_new_table" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+CREATE TABLE u(id INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO u VALUES (1, 'one');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_new_table');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+# Feature branch adds a new column to the existing table. Main
+# concurrently inserts a row using only the original columns. Merge
+# should produce a schema with the new column and have main's row
+# using the column default.
+oracle "feature_adds_column_main_inserts_old_shape" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN tag TEXT;
+UPDATE t SET tag = 'a' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_col');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+# Both branches add a column. Different column names — concurrent
+# add of disjoint columns should merge cleanly with both columns
+# present in the result.
+oracle "both_branches_add_disjoint_columns" "
+$SEED
+ALTER TABLE t ADD COLUMN main_col INT;
+UPDATE t SET main_col = 1 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_add_col');
+SELECT dolt_checkout('feature');
+ALTER TABLE t ADD COLUMN feat_col INT;
+UPDATE t SET feat_col = 2 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_col');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
+echo "--- non-branch merge sources ---"
+
+# Merge from a tag instead of a branch. Tags were promoted to first-
+# class objects with metadata in 0557f09b8 — this verifies dolt_merge
+# accepts a tag name as the source revision.
+oracle "merge_from_tag" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_tag('release-1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('release-1');
+"
+
+# Merge from a commit hash. Both engines need to accept a hex hash
+# as the merge source. Captured via subquery against dolt_log so the
+# scenario is fully self-contained.
+oracle "merge_from_commit_hash" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge((SELECT commit_hash FROM dolt_log WHERE message = 'feat1'));
+"
+
+echo "--- merge sequences ---"
+
+# Merge feature into main (creates a merge commit), then merge main
+# into feature. The second merge should fast-forward feature to
+# wherever main is now, with no new commit.
+oracle "merge_then_reverse_fast_forward" "
+$SEED
+INSERT INTO t VALUES (10, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (20, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+SELECT dolt_checkout('feature');
+SELECT dolt_merge('main');
+"
+
+# Merge feature into main once, then add more commits to feature and
+# merge again. The second merge should produce another clean merge
+# commit (or fast-forward if main hasn't moved).
+oracle "merge_twice_with_intermediate_commits" "
+$SEED
+INSERT INTO t VALUES (10, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (20, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (30, 300);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+"
+
 echo "--- error paths ---"
 
 oracle_error "merge_nonexistent_branch" "
