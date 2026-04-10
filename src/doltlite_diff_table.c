@@ -126,7 +126,7 @@ static int openNextCommitPairIter(DiffTblCursor *pCur, sqlite3 *db,
                                   const char *zTableName){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
-  DoltliteCommit commit;
+  DoltliteCommit commit, parentCommit;
   ProllyHash curRoot, parentRoot;
   ProllyHash emptyRoot;
   u8 flags = 0;
@@ -134,76 +134,71 @@ static int openNextCommitPairIter(DiffTblCursor *pCur, sqlite3 *db,
 
   if( !cs ) return SQLITE_OK;
 
-  memset(&commit, 0, sizeof(commit));
-  rc = doltliteLoadCommit(db, &pCur->curCommitHash, &commit);
-  if( rc!=SQLITE_OK ) return rc;
+  for(;;){
+    memset(&commit, 0, sizeof(commit));
+    memset(&parentCommit, 0, sizeof(parentCommit));
+    memset(&curRoot, 0, sizeof(curRoot));
+    memset(&parentRoot, 0, sizeof(parentRoot));
+    flags = 0;
 
-  /* Get the table root for the current commit */
-  {
-    struct TableEntry *aTables = 0; int nTables = 0;
-    rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
-    if( rc==SQLITE_OK ){
+    rc = doltliteLoadCommit(db, &pCur->curCommitHash, &commit);
+    if( rc!=SQLITE_OK ) return rc;
+
+    {
+      struct TableEntry *aTables = 0; int nTables = 0;
+      rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&commit);
+        return rc;
+      }
       doltliteFindTableRootByName(aTables, nTables, zTableName, &curRoot, &flags);
       sqlite3_free(aTables);
-    }else{
-      memset(&curRoot, 0, sizeof(curRoot));
     }
-  }
 
-  /* Fill in the "to" commit info on the row */
-  doltliteHashToHex(&pCur->curCommitHash, pCur->row.zToCommit);
-  pCur->row.toDate = commit.timestamp;
+    doltliteHashToHex(&pCur->curCommitHash, pCur->row.zToCommit);
+    pCur->row.toDate = commit.timestamp;
 
-  if( !prollyHashIsEmpty(&commit.parentHash) ){
-    /* Non-initial commit: diff parent -> current */
-    DoltliteCommit parentCommit;
-    memset(&parentCommit, 0, sizeof(parentCommit));
-    rc = doltliteLoadCommit(db, &commit.parentHash, &parentCommit);
-    if( rc!=SQLITE_OK ){
+    if( !prollyHashIsEmpty(&commit.parentHash) ){
+      ProllyHash nextHash;
+      memset(&nextHash, 0, sizeof(nextHash));
+      rc = doltliteLoadCommit(db, &commit.parentHash, &parentCommit);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&commit);
+        return rc;
+      }
+
+      doltliteHashToHex(&commit.parentHash, pCur->row.zFromCommit);
+      pCur->row.fromDate = parentCommit.timestamp;
+
+      {
+        struct TableEntry *aPT = 0; int nPT = 0;
+        rc = doltliteLoadCatalog(db, &parentCommit.catalogHash, &aPT, &nPT, 0);
+        if( rc!=SQLITE_OK ){
+          doltliteCommitClear(&parentCommit);
+          doltliteCommitClear(&commit);
+          return rc;
+        }
+        doltliteFindTableRootByName(aPT, nPT, zTableName, &parentRoot, 0);
+        sqlite3_free(aPT);
+      }
+
+      memcpy(&nextHash, &commit.parentHash, sizeof(ProllyHash));
+      doltliteCommitClear(&parentCommit);
+
+      if( prollyHashCompare(&parentRoot, &curRoot)==0 ){
+        doltliteCommitClear(&commit);
+        memcpy(&pCur->curCommitHash, &nextHash, sizeof(ProllyHash));
+        continue;
+      }
+
+      rc = prollyDiffIterOpen(&pCur->diffIter, cs, pCache,
+                              &parentRoot, &curRoot, flags);
+      if( rc==SQLITE_OK ) pCur->diffIterOpen = 1;
       doltliteCommitClear(&commit);
+      memcpy(&pCur->curCommitHash, &nextHash, sizeof(ProllyHash));
       return rc;
     }
 
-    doltliteHashToHex(&commit.parentHash, pCur->row.zFromCommit);
-    pCur->row.fromDate = parentCommit.timestamp;
-
-    /* Get the table root for the parent commit */
-    {
-      struct TableEntry *aPT = 0; int nPT = 0;
-      rc = doltliteLoadCatalog(db, &parentCommit.catalogHash, &aPT, &nPT, 0);
-      if( rc==SQLITE_OK ){
-        doltliteFindTableRootByName(aPT, nPT, zTableName, &parentRoot, 0);
-        sqlite3_free(aPT);
-      }else{
-        memset(&parentRoot, 0, sizeof(parentRoot));
-      }
-    }
-
-    doltliteCommitClear(&parentCommit);
-
-    /* If roots are the same, no diff for this pair — skip. */
-    if( prollyHashCompare(&parentRoot, &curRoot)==0 ){
-      /* Advance to parent and try next pair */
-      ProllyHash nextHash;
-      memcpy(&nextHash, &commit.parentHash, sizeof(ProllyHash));
-      doltliteCommitClear(&commit);
-      memcpy(&pCur->curCommitHash, &nextHash, sizeof(ProllyHash));
-      return openNextCommitPairIter(pCur, db, zTableName);
-    }
-
-    rc = prollyDiffIterOpen(&pCur->diffIter, cs, pCache,
-                            &parentRoot, &curRoot, flags);
-    if( rc==SQLITE_OK ) pCur->diffIterOpen = 1;
-
-    /* Advance commit walk to the parent for the next pair */
-    {
-      ProllyHash nextHash;
-      memcpy(&nextHash, &commit.parentHash, sizeof(ProllyHash));
-      doltliteCommitClear(&commit);
-      memcpy(&pCur->curCommitHash, &nextHash, sizeof(ProllyHash));
-    }
-  }else{
-    /* Initial commit: diff empty -> current */
     if( !prollyHashIsEmpty(&curRoot) ){
       memset(&emptyRoot, 0, sizeof(emptyRoot));
       memset(pCur->row.zFromCommit, '0', PROLLY_HASH_SIZE*2);
@@ -213,14 +208,17 @@ static int openNextCommitPairIter(DiffTblCursor *pCur, sqlite3 *db,
       rc = prollyDiffIterOpen(&pCur->diffIter, cs, pCache,
                               &emptyRoot, &curRoot, flags);
       if( rc==SQLITE_OK ) pCur->diffIterOpen = 1;
+      doltliteCommitClear(&commit);
+      memset(&pCur->curCommitHash, 0, sizeof(ProllyHash));
+      pCur->commitWalkDone = 1;
+      return rc;
     }
-    /* No more commits after the initial one */
+
     doltliteCommitClear(&commit);
     memset(&pCur->curCommitHash, 0, sizeof(ProllyHash));
     pCur->commitWalkDone = 1;
+    return SQLITE_OK;
   }
-
-  return rc;
 }
 
 /*
@@ -239,35 +237,39 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
       ProllyDiffChange *pChange = 0;
       rc = prollyDiffIterStep(&pCur->diffIter, &pChange);
       if( rc==SQLITE_ROW && pChange ){
+        u8 *pOldVal = 0;
+        u8 *pNewVal = 0;
         /* Free previous value copies (preserves commit-pair metadata) */
         sqlite3_free(pCur->row.pOldVal);
         sqlite3_free(pCur->row.pNewVal);
+        pCur->row.pOldVal = 0;
+        pCur->row.nOldVal = 0;
+        pCur->row.pNewVal = 0;
+        pCur->row.nNewVal = 0;
 
         pCur->row.diffType = pChange->type;
         pCur->row.intKey = pChange->intKey;
 
         /* Copy value data — the iterator's copies are valid until next Step */
         if( pChange->pOldVal && pChange->nOldVal > 0 ){
-          pCur->row.pOldVal = sqlite3_malloc(pChange->nOldVal);
-          if( pCur->row.pOldVal ){
-            memcpy(pCur->row.pOldVal, pChange->pOldVal, pChange->nOldVal);
-          }
-          pCur->row.nOldVal = pChange->nOldVal;
-        }else{
-          pCur->row.pOldVal = 0;
-          pCur->row.nOldVal = 0;
+          pOldVal = sqlite3_malloc(pChange->nOldVal);
+          if( !pOldVal ) return SQLITE_NOMEM;
+          memcpy(pOldVal, pChange->pOldVal, pChange->nOldVal);
         }
 
         if( pChange->pNewVal && pChange->nNewVal > 0 ){
-          pCur->row.pNewVal = sqlite3_malloc(pChange->nNewVal);
-          if( pCur->row.pNewVal ){
-            memcpy(pCur->row.pNewVal, pChange->pNewVal, pChange->nNewVal);
+          pNewVal = sqlite3_malloc(pChange->nNewVal);
+          if( !pNewVal ){
+            sqlite3_free(pOldVal);
+            return SQLITE_NOMEM;
           }
-          pCur->row.nNewVal = pChange->nNewVal;
-        }else{
-          pCur->row.pNewVal = 0;
-          pCur->row.nNewVal = 0;
+          memcpy(pNewVal, pChange->pNewVal, pChange->nNewVal);
         }
+
+        pCur->row.pOldVal = pOldVal;
+        pCur->row.nOldVal = pChange->pOldVal ? pChange->nOldVal : 0;
+        pCur->row.pNewVal = pNewVal;
+        pCur->row.nNewVal = pChange->pNewVal ? pChange->nNewVal : 0;
 
         pCur->hasRow = 1;
         pCur->iRowid++;
