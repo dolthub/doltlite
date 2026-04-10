@@ -265,12 +265,21 @@ static int fsGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
 
 static int fsSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
   FsRemote *p = (FsRemote*)pRemote;
+  ProllyHash oldRefsHash;
   ProllyHash refsHash;
   int rc = chunkStorePut(&p->store, pData, nData, &refsHash);
   if( rc==SQLITE_OK ){
+    memcpy(&oldRefsHash, &p->store.refsHash, sizeof(ProllyHash));
     memcpy(&p->store.refsHash, &refsHash, sizeof(ProllyHash));
     
     rc = chunkStoreReloadRefs(&p->store);
+    if( rc!=SQLITE_OK ){
+      memcpy(&p->store.refsHash, &oldRefsHash, sizeof(ProllyHash));
+      if( !prollyHashIsEmpty(&oldRefsHash) ){
+        int restoreRc = chunkStoreReloadRefs(&p->store);
+        if( restoreRc!=SQLITE_OK ) return restoreRc;
+      }
+    }
   }
   return rc;
 }
@@ -662,7 +671,10 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   ProllyHash *aRoots = 0;
   int nRoots = 0;
   DoltliteRemote *pLocalDst = 0;
+  ProllyHash oldRefsHash;
   int rc;
+
+  memcpy(&oldRefsHash, &pLocal->refsHash, sizeof(ProllyHash));
 
   
   rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
@@ -713,10 +725,20 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
 
   
   rc = chunkStoreCommit(pLocal);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    memcpy(&pLocal->refsHash, &oldRefsHash, sizeof(ProllyHash));
+    return rc;
+  }
 
   
   rc = chunkStoreReloadRefs(pLocal);
+  if( rc!=SQLITE_OK ){
+    memcpy(&pLocal->refsHash, &oldRefsHash, sizeof(ProllyHash));
+    if( !prollyHashIsEmpty(&oldRefsHash) ){
+      int restoreRc = chunkStoreReloadRefs(pLocal);
+      if( restoreRc!=SQLITE_OK ) return restoreRc;
+    }
+  }
 
   return rc;
 }

@@ -36,6 +36,32 @@ struct SdCursor {
   int iRow;
 };
 
+static int schemaTextField(
+  const u8 *pVal,
+  int nVal,
+  DoltliteRecordInfo *pRi,
+  int iField,
+  char **pzOut
+){
+  int st, off, len;
+  char *zOut;
+
+  *pzOut = 0;
+  if( iField>=pRi->nField ) return SQLITE_CORRUPT;
+  st = pRi->aType[iField];
+  off = pRi->aOffset[iField];
+  if( st==0 ) return SQLITE_OK;
+  if( st<13 || (st&1)==0 ) return SQLITE_CORRUPT;
+  len = (st-13)/2;
+  if( off<0 || off+len>nVal ) return SQLITE_CORRUPT;
+  zOut = sqlite3_malloc(len+1);
+  if( !zOut ) return SQLITE_NOMEM;
+  memcpy(zOut, pVal+off, len);
+  zOut[len] = 0;
+  *pzOut = zOut;
+  return SQLITE_OK;
+}
+
 static void freeSchemaDiffRows(SdCursor *c){
   int i;
   for(i=0; i<c->nRows; i++){
@@ -168,42 +194,29 @@ int loadSchemaFromCatalog(
     if( pVal && nVal > 0 ){
       doltliteParseRecord(pVal, nVal, &ri);
 
-      if( ri.nField >= 5 ){
-        int *aType = ri.aType;
-        int *aOffset = ri.aOffset;
+      if( ri.nField < 5 ){
+        rc = SQLITE_CORRUPT;
+        goto load_schema_done;
+      }else{
         char *zType = 0, *zName = 0, *zSql = 0;
 
-        
-        if( aType[0] >= 13 && (aType[0]&1)==1 ){
-          int len = (aType[0]-13)/2;
-          if( aOffset[0]+len <= nVal ){
-            zType = sqlite3_malloc(len+1);
-            if( !zType ){ rc = SQLITE_NOMEM; goto load_schema_done; }
-            memcpy(zType, pVal+aOffset[0], len); zType[len]=0;
-          }
+        rc = schemaTextField(pVal, nVal, &ri, 0, &zType);
+        if( rc!=SQLITE_OK ) goto load_schema_done;
+        rc = schemaTextField(pVal, nVal, &ri, 1, &zName);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(zType);
+          goto load_schema_done;
         }
-        if( aType[1] >= 13 && (aType[1]&1)==1 ){
-          int len = (aType[1]-13)/2;
-          if( aOffset[1]+len <= nVal ){
-            zName = sqlite3_malloc(len+1);
-            if( !zName ){ rc = SQLITE_NOMEM; goto load_schema_done; }
-            memcpy(zName, pVal+aOffset[1], len); zName[len]=0;
-          }
-        }
-        if( aType[4] >= 13 && (aType[4]&1)==1 ){
-          int len = (aType[4]-13)/2;
-          if( aOffset[4]+len <= nVal ){
-            zSql = sqlite3_malloc(len+1);
-            if( !zSql ){ rc = SQLITE_NOMEM; goto load_schema_done; }
-            memcpy(zSql, pVal+aOffset[4], len); zSql[len]=0;
-          }
+        rc = schemaTextField(pVal, nVal, &ri, 4, &zSql);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(zType);
+          sqlite3_free(zName);
+          goto load_schema_done;
         }
 
         if( zName ){
           rc = appendSchemaEntry(&aEntries, &nEntries, &nAlloc, zName, zSql, zType);
-          if( rc!=SQLITE_OK ){
-            goto load_schema_done;
-          }
+          if( rc!=SQLITE_OK ) goto load_schema_done;
           zName = 0;
           zSql = 0;
           zType = 0;
