@@ -494,7 +494,11 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
 static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   i64 walSize;
   u8 *walData;
+  u8 *pOldWalData = cs->pWalData;
+  i64 nOldWalData = cs->nWalData;
   i64 pos;
+  int rc = SQLITE_OK;
+  int nPendingBefore = cs->nPending;
   int nRootedPending = cs->nPending;
 
   if( cs->iWalOffset <= 0 || !cs->pFile ) return SQLITE_OK;
@@ -530,23 +534,25 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     if( tag == CS_WAL_TAG_CHUNK ){
       ProllyHash hash;
       u32 len;
-      if( pos + 20 + 4 > walSize ) break;
+      if( pos + 20 + 4 > walSize ){
+        rc = SQLITE_CORRUPT;
+        goto replay_error;
+      }
       memcpy(&hash, walData + pos, 20);
       pos += 20;
       len = CS_READ_U32(walData + pos);
       pos += 4;
-      if( pos < 0 || (u64)pos + len > (u64)walSize ) break;
+      if( pos < 0 || (u64)pos + len > (u64)walSize ){
+        rc = SQLITE_CORRUPT;
+        goto replay_error;
+      }
 
       {
         int existing = csSearchIndex(cs->aIndex, cs->nIndex, &hash);
         if( existing < 0 ){
-          int rc = csGrowPending(cs);
+          rc = csGrowPending(cs);
           ChunkIndexEntry *e;
-          if( rc != SQLITE_OK ){
-            sqlite3_free(walData);
-            cs->pWalData = 0;
-            return rc;
-          }
+          if( rc != SQLITE_OK ) goto replay_error;
           e = &cs->aPending[cs->nPending];
           memcpy(&e->hash, &hash, sizeof(ProllyHash));
           e->offset = csEncodeWalOffset((i64)pos);
@@ -557,25 +563,31 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
       pos += len;
 
     } else if( tag == CS_WAL_TAG_ROOT ){
-      if( pos + CHUNK_MANIFEST_SIZE > walSize ) break;
+      if( pos + CHUNK_MANIFEST_SIZE > walSize ){
+        rc = SQLITE_CORRUPT;
+        goto replay_error;
+      }
       if( updateManifest ){
         u8 *m = walData + pos;
         u32 magic = CS_READ_U32(m);
-        if( magic == CHUNK_STORE_MAGIC ){
-          /* offset 8: reserved (was root_hash) */
-          cs->nChunks = (int)CS_READ_U32(m + 28);
-          /* offset 64: reserved (was headCommit_hash) */
-          memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
-          memcpy(cs->workingState.data, m + 124, PROLLY_HASH_SIZE);
-          /* Don't update iWalOffset/iIndexOffset from WAL root records --
-          ** those fields describe the compacted region and only change on GC. */
+        if( magic != CHUNK_STORE_MAGIC ){
+          rc = SQLITE_CORRUPT;
+          goto replay_error;
         }
+        /* offset 8: reserved (was root_hash) */
+        cs->nChunks = (int)CS_READ_U32(m + 28);
+        /* offset 64: reserved (was headCommit_hash) */
+        memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
+        memcpy(cs->workingState.data, m + 124, PROLLY_HASH_SIZE);
+        /* Don't update iWalOffset/iIndexOffset from WAL root records --
+        ** those fields describe the compacted region and only change on GC. */
       }
       pos += CHUNK_MANIFEST_SIZE;
       nRootedPending = cs->nPending;
 
     } else {
-      break;
+      rc = SQLITE_CORRUPT;
+      goto replay_error;
     }
   }
 
@@ -584,12 +596,8 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   if( cs->nPending > 0 ){
     ChunkIndexEntry *aMerged = 0;
     int nMerged = 0;
-    int rc = csMergeIndex(cs, &aMerged, &nMerged);
-    if( rc != SQLITE_OK ){
-      sqlite3_free(walData);
-      cs->pWalData = 0;
-      return rc;
-    }
+    rc = csMergeIndex(cs, &aMerged, &nMerged);
+    if( rc != SQLITE_OK ) goto replay_error;
     sqlite3_free(cs->aIndex);
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
@@ -599,23 +607,36 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   }
 
   if( !prollyHashIsEmpty(&cs->refsHash) ){
-    u8 *refsData = 0; int nRefsData = 0;
+    u8 *refsData = 0;
+    int nRefsData = 0;
+    ChunkStore tmpRefs;
     int rc2 = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
     if( rc2==SQLITE_OK && refsData ){
-      csFreeBranches(cs);
-      csFreeTags(cs);
-      csFreeRemotes(cs);
-      csFreeTracking(cs);
-      rc2 = csDeserializeRefs(cs, refsData, nRefsData);
+      rc2 = csDeserializeRefsIntoTemp(&tmpRefs, refsData, nRefsData);
       sqlite3_free(refsData);
-      if( rc2!=SQLITE_OK ) return rc2;
+      if( rc2!=SQLITE_OK ){
+        csFreeRefsState(&tmpRefs);
+        rc = rc2;
+        goto replay_error;
+      }
+      csFreeRefsState(cs);
+      csAdoptRefsState(cs, &tmpRefs);
     }else if( rc2!=SQLITE_OK ){
-      return rc2;
+      rc = rc2;
+      goto replay_error;
     }
   }
   if( !cs->zDefaultBranch ) cs->zDefaultBranch = sqlite3_mprintf("main");
 
   return SQLITE_OK;
+
+replay_error:
+  sqlite3_free(cs->pWalData);
+  cs->pWalData = pOldWalData;
+  cs->nWalData = nOldWalData;
+  cs->nPending = nPendingBefore;
+  csPendHTClear(cs);
+  return rc;
 }
 
 static int csIndexEntryCmp(const void *a, const void *b){
@@ -1462,7 +1483,7 @@ int chunkStoreGet(
         *pnData = sz;
         return SQLITE_OK;
       }
-      return SQLITE_NOTFOUND;
+      return SQLITE_CORRUPT;
     }
   }
 
@@ -1871,14 +1892,7 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     if( exists ){
       struct stat mainStat;
       if( stat(cs->zFilename, &mainStat)==0 && mainStat.st_size > 0 ){
-        int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-        rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile, openFlags);
-        if( rc!=SQLITE_OK ) return rc;
-        rc = csReadManifest(cs);
-        if( rc!=SQLITE_OK ) return rc;
-        rc = csReadIndex(cs);
-        if( rc!=SQLITE_OK ) return rc;
-        rc = csReplayWal(cs);
+        rc = csReloadFromDisk(cs);
         if( rc!=SQLITE_OK ) return rc;
         *pChanged = 1;
       }

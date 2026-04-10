@@ -4580,6 +4580,48 @@ i64 sqlite3BtreeRowCountEst(BtCursor *pCur){
   return pCur->pCurOps->xRowCountEst(pCur);
 }
 
+static int integrityCheckProllySubtree(
+  BtShared *pBt,
+  const ProllyHash *pHash,
+  int mxErr,
+  int *pnErr
+){
+  u8 *pData = 0;
+  int nData = 0;
+  ProllyNode node;
+  int rc;
+  int i;
+
+  if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
+  if( mxErr>0 && *pnErr>=mxErr ) return SQLITE_OK;
+
+  rc = chunkStoreGet(&pBt->store, pHash, &pData, &nData);
+  if( rc==SQLITE_NOTFOUND || rc==SQLITE_CORRUPT ){
+    (*pnErr)++;
+    return SQLITE_OK;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = prollyNodeParse(&node, pData, nData);
+  sqlite3_free(pData);
+  if( rc!=SQLITE_OK ){
+    (*pnErr)++;
+    return SQLITE_OK;
+  }
+
+  if( node.level==0 ) return SQLITE_OK;
+
+  for(i=0; i<(int)node.nItems; i++){
+    ProllyHash childHash;
+    prollyNodeChildHash(&node, i, &childHash);
+    rc = integrityCheckProllySubtree(pBt, &childHash, mxErr, pnErr);
+    if( rc!=SQLITE_OK ) return rc;
+    if( mxErr>0 && *pnErr>=mxErr ) break;
+  }
+
+  return SQLITE_OK;
+}
+
 int sqlite3BtreeSetVersion(Btree *p, int iVersion){
   if( p->inTrans!=TRANS_WRITE ){
     int rc = sqlite3BtreeBeginTrans(p, 2, 0);
@@ -4640,9 +4682,8 @@ int sqlite3BtreeIntegrityCheck(
       struct TableEntry *pTE = findTable(p, aRoot[i]);
       if( !pTE ) continue;
       if( !prollyHashIsEmpty(&pTE->root) ){
-        if( !chunkStoreHas(&pBt->store, &pTE->root) ){
-          nErr++;
-        }
+        int rc = integrityCheckProllySubtree(pBt, &pTE->root, mxErr, &nErr);
+        if( rc!=SQLITE_OK ) return rc;
       }
     }
   }
