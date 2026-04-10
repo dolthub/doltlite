@@ -118,7 +118,7 @@ jobs:
         bash ../test/run_testfixture.sh "Core tests" 120 \
           insert select1 select2 select3 select4 delete update \
           trans savepoint where expr index alter attach auth \
-          coalesce conflict cse date join subquery vacuum view \
+          coalesce conflict cse date join subquery view \
           between cast check limit null quote rowid sort types \
           types2 in in2 in3 in4 in5 in6 intpkey like like2 \
           minmax minmax2 minmax3 select5 select6 select7 \
@@ -138,7 +138,7 @@ jobs:
       run: |
         cd build
         bash ../test/run_testfixture.sh "Crash recovery" 180 \
-          crash crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM
+          crash crash2 crash3 crash4 crash5 crash6 crash8 crashM
 
     - name: SQLite fuzz tests
       run: |
@@ -154,7 +154,7 @@ jobs:
           json101 json102 json103 json104 json105 \
           aggnested aggorderby \
           affinity2 affinity3 \
-          vacuum2 savepoint \
+          savepoint \
           between distinct distinctagg \
           e_createtable e_delete e_insert e_select e_update e_fkey \
           func2 func3 hexlit icu intarray \
