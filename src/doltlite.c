@@ -279,6 +279,19 @@ void freeSchemaMergeActions(SchemaMergeAction *a, int n){
 ** aExtraParents/nExtraParents are for merge commits (may be NULL/0).
 ** Writes the resulting commit hash into *pCommitHash.
 */
+static int doltliteCreateAndStoreCommitWithTime(
+  sqlite3 *db,
+  const ProllyHash *pParent,
+  const ProllyHash *pCatalog,
+  const char *zMessage,
+  const char *zAuthorName,
+  const char *zAuthorEmail,
+  const ProllyHash *aExtraParents,
+  int nExtraParents,
+  i64 explicitTimestamp,
+  ProllyHash *pCommitHash
+);
+
 static int doltliteCreateAndStoreCommit(
   sqlite3 *db,
   const ProllyHash *pParent,
@@ -290,6 +303,24 @@ static int doltliteCreateAndStoreCommit(
   int nExtraParents,
   ProllyHash *pCommitHash
 ){
+  return doltliteCreateAndStoreCommitWithTime(db, pParent, pCatalog, zMessage,
+      zAuthorName, zAuthorEmail, aExtraParents, nExtraParents, 0, pCommitHash);
+}
+
+/* Same as doltliteCreateAndStoreCommit but accepts an explicit
+** timestamp (unix seconds). Pass 0 to use the current time. */
+static int doltliteCreateAndStoreCommitWithTime(
+  sqlite3 *db,
+  const ProllyHash *pParent,
+  const ProllyHash *pCatalog,
+  const char *zMessage,
+  const char *zAuthorName,
+  const char *zAuthorEmail,
+  const ProllyHash *aExtraParents,
+  int nExtraParents,
+  i64 explicitTimestamp,
+  ProllyHash *pCommitHash
+){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteCommit c;
   u8 *commitData = 0;
@@ -299,7 +330,7 @@ static int doltliteCreateAndStoreCommit(
   memset(&c, 0, sizeof(c));
   memcpy(&c.parentHash, pParent, sizeof(ProllyHash));
   memcpy(&c.catalogHash, pCatalog, sizeof(ProllyHash));
-  c.timestamp = (i64)time(0);
+  c.timestamp = explicitTimestamp ? explicitTimestamp : (i64)time(0);
   c.zName  = sqlite3_mprintf("%s", zAuthorName  ? zAuthorName  : doltliteGetAuthorName(db));
   c.zEmail = sqlite3_mprintf("%s", zAuthorEmail ? zAuthorEmail : doltliteGetAuthorEmail(db));
   c.zMessage = sqlite3_mprintf("%s", zMessage);
@@ -593,7 +624,12 @@ static void doltliteCommitFunc(
   ChunkStore *cs = doltliteGetChunkStore(db);
   const char *zMessage = 0;
   const char *zAuthor = 0;
-  int addAll = 0;
+  const char *zDate = 0;
+  int addAll = 0;            /* -A / --all: stage everything including new */
+  int addModifiedOnly = 0;   /* -a:        stage modifications to tracked tables */
+  int amend = 0;             /* --amend:    replace HEAD with a new commit */
+  int allowEmpty = 0;        /* --allow-empty: create commit even with no changes */
+  int skipEmpty = 0;         /* --skip-empty:  silently no-op when no changes */
   ProllyHash commitHash;
   ProllyHash catalogHash;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
@@ -605,33 +641,75 @@ static void doltliteCommitFunc(
     return;
   }
 
-  
+  /* Argument parsing. -m / --message take a value, --author takes a
+  ** value, -A / --all means stage-all-including-new, -a (lowercase)
+  ** means stage modifications to tracked tables only (matches git
+  ** and Dolt). Combo flags like -am / -Am combine the single-letter
+  ** forms. */
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
     if( !arg ) continue;
     if( arg[0]=='-' && arg[1]!='-' && arg[1]!=0 && arg[2]!=0 ){
-      
       int j;
       for(j=1; arg[j]; j++){
-        if( arg[j]=='a' || arg[j]=='A' ){
+        if( arg[j]=='A' ){
           addAll = 1;
+        }else if( arg[j]=='a' ){
+          addModifiedOnly = 1;
         }else if( arg[j]=='m' ){
-          
           if( arg[j+1]!=0 ){
             zMessage = &arg[j+1];
           }else if( i+1<argc ){
             zMessage = (const char*)sqlite3_value_text(argv[++i]);
           }
-          break;  
+          break;
         }
       }
     }else if( strcmp(arg, "-m")==0 && i+1<argc ){
       zMessage = (const char*)sqlite3_value_text(argv[++i]);
+    }else if( strcmp(arg, "--message")==0 && i+1<argc ){
+      zMessage = (const char*)sqlite3_value_text(argv[++i]);
     }else if( strcmp(arg, "--author")==0 && i+1<argc ){
       zAuthor = (const char*)sqlite3_value_text(argv[++i]);
-    }else if( strcmp(arg, "-A")==0 || strcmp(arg, "-a")==0 ){
+    }else if( strcmp(arg, "--date")==0 && i+1<argc ){
+      zDate = (const char*)sqlite3_value_text(argv[++i]);
+    }else if( strcmp(arg, "--amend")==0 ){
+      amend = 1;
+    }else if( strcmp(arg, "--allow-empty")==0 ){
+      allowEmpty = 1;
+    }else if( strcmp(arg, "--skip-empty")==0 ){
+      skipEmpty = 1;
+    }else if( strcmp(arg, "-A")==0 ){
       addAll = 1;
+    }else if( strcmp(arg, "-a")==0 || strcmp(arg, "--all")==0 ){
+      /* --all is the long form of -a, matching git semantics:
+      ** "stage modifications to TRACKED files only" — not -A. */
+      addModifiedOnly = 1;
     }
+  }
+  /* If --date was given, parse it as ISO 8601 (YYYY-MM-DDTHH:MM:SSZ
+  ** or YYYY-MM-DD HH:MM:SS — both are accepted by Dolt). The result
+  ** is a unix timestamp passed through to doltliteCreateAndStoreCommitWithTime.
+  ** Anything that fails to parse is rejected with an explicit error
+  ** rather than silently fallen-back to "now", because falling back
+  ** would silently produce a divergent commit. */
+  i64 explicitTimestamp = 0;
+  if( zDate ){
+    struct tm tm;
+    memset(&tm, 0, sizeof(tm));
+    const char *p = strptime(zDate, "%Y-%m-%dT%H:%M:%S", &tm);
+    if( !p ){
+      memset(&tm, 0, sizeof(tm));
+      p = strptime(zDate, "%Y-%m-%d %H:%M:%S", &tm);
+    }
+    if( !p ){
+      char *zErr = sqlite3_mprintf(
+          "could not parse --date `%s` (expected YYYY-MM-DDTHH:MM:SS)", zDate);
+      sqlite3_result_error(context, zErr ? zErr : "bad --date", -1);
+      sqlite3_free(zErr);
+      return;
+    }
+    explicitTimestamp = (i64)timegm(&tm);
   }
 
   if( !zMessage || zMessage[0]==0 ){
@@ -642,12 +720,152 @@ static void doltliteCommitFunc(
 
 
   if( addAll ){
+    /* -A / --all: stage everything in the working set, including
+    ** brand-new tables that aren't yet tracked. */
     rc = doltliteFlushCatalogToHash(db, &catalogHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to flush", -1);
       return;
     }
     doltliteSetSessionStaged(db, &catalogHash);
+  }else if( addModifiedOnly ){
+    /* -a: stage modifications to tables that are already tracked
+    ** in HEAD. New (untracked) tables stay unstaged. Matches git's
+    ** -a semantics and Dolt's dolt_commit -a behavior. */
+    ProllyHash workingHash, headCatHash, stagedHash;
+    struct TableEntry *aWorking = 0, *aHead = 0, *aStaged = 0;
+    int nWorking = 0, nHead = 0, nStaged = 0;
+    int j, k;
+
+    rc = doltliteFlushCatalogToHash(db, &workingHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "failed to flush", -1);
+      return;
+    }
+    rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(context, "failed to load working catalog", -1);
+      return;
+    }
+    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+    if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash) ){
+      rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(aWorking);
+        sqlite3_result_error(context, "failed to load HEAD catalog", -1);
+        return;
+      }
+    }
+    /* Seed the new staged catalog from the current staged catalog
+    ** (or from HEAD if nothing is staged yet) so existing
+    ** explicit-add stages are preserved. */
+    doltliteGetSessionStaged(db, &stagedHash);
+    if( !prollyHashIsEmpty(&stagedHash) ){
+      rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
+    }else if( !prollyHashIsEmpty(&headCatHash) ){
+      rc = doltliteLoadCatalog(db, &headCatHash, &aStaged, &nStaged, 0);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(aWorking);
+      sqlite3_free(aHead);
+      sqlite3_result_error(context, "failed to load staged catalog", -1);
+      return;
+    }
+
+    /* For each table in the working catalog that ALSO exists in
+    ** HEAD, copy the working entry into the staged set (replacing
+    ** any prior staged entry for the same table). New tables in
+    ** working but not in HEAD are skipped. */
+    for(j=0; j<nWorking; j++){
+      const char *zName = aWorking[j].zName;
+      int inHead = 0;
+      for(k=0; k<nHead; k++){
+        if( aHead[k].zName && zName && strcmp(aHead[k].zName, zName)==0 ){
+          inHead = 1; break;
+        }
+      }
+      if( !inHead ) continue;
+
+      int updated = 0;
+      for(k=0; k<nStaged; k++){
+        if( aStaged[k].zName && zName && strcmp(aStaged[k].zName, zName)==0 ){
+          aStaged[k] = aWorking[j];
+          updated = 1;
+          break;
+        }
+      }
+      if( !updated ){
+        struct TableEntry *aNew = sqlite3_realloc(aStaged,
+            (nStaged+1)*(int)sizeof(struct TableEntry));
+        if( !aNew ){
+          sqlite3_free(aWorking); sqlite3_free(aHead); sqlite3_free(aStaged);
+          sqlite3_result_error_nomem(context);
+          return;
+        }
+        aStaged = aNew;
+        aStaged[nStaged++] = aWorking[j];
+      }
+    }
+
+    /* Tables that exist in HEAD but no longer in the working set
+    ** are deletions of tracked tables — stage those too. */
+    for(k=0; k<nHead; k++){
+      const char *zName = aHead[k].zName;
+      int inWorking = 0;
+      int j2;
+      for(j2=0; j2<nWorking; j2++){
+        if( aWorking[j2].zName && zName && strcmp(aWorking[j2].zName, zName)==0 ){
+          inWorking = 1; break;
+        }
+      }
+      if( inWorking ) continue;
+
+      for(j2=0; j2<nStaged; j2++){
+        if( aStaged[j2].zName && zName && strcmp(aStaged[j2].zName, zName)==0 ){
+          if( j2+1<nStaged ){
+            memmove(&aStaged[j2], &aStaged[j2+1],
+                    (nStaged-j2-1)*(int)sizeof(struct TableEntry));
+          }
+          nStaged--;
+          break;
+        }
+      }
+    }
+
+    /* If the resulting staged catalog is empty, there are no
+    ** tracked tables to commit. Bail out with the standard
+    ** "nothing to commit" error so we don't write a hash for an
+    ** empty catalog and let the commit proceed. */
+    if( nStaged==0 ){
+      sqlite3_free(aWorking);
+      sqlite3_free(aHead);
+      sqlite3_free(aStaged);
+      sqlite3_result_error(context,
+        "nothing to commit, working tree clean (use dolt_add to stage changes)", -1);
+      return;
+    }
+
+    {
+      u8 *buf = 0;
+      int nBuf = 0;
+      ProllyHash newStagedHash;
+      rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
+      if( rc==SQLITE_OK ){
+        rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
+      }
+      sqlite3_free(buf);
+      if( rc==SQLITE_OK ){
+        doltliteSetSessionStaged(db, &newStagedHash);
+      }
+    }
+
+    sqlite3_free(aWorking);
+    sqlite3_free(aHead);
+    sqlite3_free(aStaged);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
   }
 
   
@@ -661,35 +879,93 @@ static void doltliteCommitFunc(
     }
   }
 
-  
+  /* Get the staged catalog. If nothing is staged, fall back to
+  ** HEAD's catalog when --allow-empty is set so an empty commit
+  ** can still be created. */
   doltliteGetSessionStaged(db, &catalogHash);
   if( prollyHashIsEmpty(&catalogHash) ){
-    sqlite3_result_error(context,
-      "nothing to commit (use dolt_add first, or dolt_commit('-A', '-m', 'msg'))", -1);
-    return;
+    if( allowEmpty ){
+      ProllyHash headCatHash;
+      rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+      if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash) ){
+        memcpy(&catalogHash, &headCatHash, sizeof(ProllyHash));
+      }else{
+        sqlite3_result_error(context,
+          "nothing to commit (use dolt_add first, or dolt_commit('-A', '-m', 'msg'))", -1);
+        return;
+      }
+    }else{
+      sqlite3_result_error(context,
+        "nothing to commit (use dolt_add first, or dolt_commit('-A', '-m', 'msg'))", -1);
+      return;
+    }
   }
 
-  
+  /* If the staged catalog matches HEAD, there's nothing new to
+  ** commit. --allow-empty bypasses this check; --skip-empty turns
+  ** the error into a silent success. */
   {
     u8 isMerging = 0;
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
-    if( !isMerging ){
+    if( !isMerging && !amend ){
       ProllyHash headCatHash;
       rc = doltliteGetHeadCatalogHash(db, &headCatHash);
       if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash)
        && prollyHashCompare(&catalogHash, &headCatHash)==0 ){
-        sqlite3_result_error(context,
-          "nothing to commit, working tree clean (use dolt_add to stage changes)", -1);
-        return;
+        if( allowEmpty ){
+          /* fall through and create the empty commit */
+        }else if( skipEmpty ){
+          sqlite3_result_int(context, 0);
+          return;
+        }else{
+          sqlite3_result_error(context,
+            "nothing to commit, working tree clean (use dolt_add to stage changes)", -1);
+          return;
+        }
       }
     }
   }
 
-  /* Build commit object locally (no lock needed yet) */
+  /* Build commit object locally (no lock needed yet). For --amend,
+  ** the parent of the new commit is the parent of the current
+  ** HEAD (so we replace HEAD rather than appending after it). */
   {
     ProllyHash parentHash;
     char *zParsedName = 0, *zParsedEmail = 0;
     doltliteGetSessionHead(db, &parentHash);
+
+    if( amend ){
+      DoltliteCommit headCommit;
+      ProllyHash headHash;
+      memset(&headCommit, 0, sizeof(headCommit));
+      doltliteGetSessionHead(db, &headHash);
+      if( prollyHashIsEmpty(&headHash) ){
+        sqlite3_result_error(context,
+          "cannot --amend: branch has no commits", -1);
+        return;
+      }
+      rc = doltliteLoadCommit(db, &headHash, &headCommit);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(context,
+          "cannot --amend: failed to load HEAD commit", -1);
+        return;
+      }
+      if( headCommit.nParents == 0 ){
+        doltliteCommitClear(&headCommit);
+        sqlite3_result_error(context,
+          "cannot --amend: HEAD has no parent (initial commit)", -1);
+        return;
+      }
+      /* Use the first parent of HEAD as the new commit's parent.
+      ** If the user didn't supply a new message, reuse the
+      ** existing one. */
+      memcpy(&parentHash, &headCommit.aParents[0], sizeof(ProllyHash));
+      if( !zMessage || !*zMessage ){
+        zMessage = sqlite3_mprintf("%s",
+            headCommit.zMessage ? headCommit.zMessage : "");
+      }
+      doltliteCommitClear(&headCommit);
+    }
 
     if( zAuthor ){
       const char *lt = strchr(zAuthor, '<');
@@ -705,8 +981,8 @@ static void doltliteCommitFunc(
       }
     }
 
-    rc = doltliteCreateAndStoreCommit(db, &parentHash, &catalogHash,
-        zMessage, zParsedName, zParsedEmail, 0, 0, &commitHash);
+    rc = doltliteCreateAndStoreCommitWithTime(db, &parentHash, &catalogHash,
+        zMessage, zParsedName, zParsedEmail, 0, 0, explicitTimestamp, &commitHash);
     sqlite3_free(zParsedName);
     sqlite3_free(zParsedEmail);
     if( rc!=SQLITE_OK ){

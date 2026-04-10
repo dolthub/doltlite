@@ -177,13 +177,23 @@ run_test_match "log_select_columns" \
   "." "$DB"
 
 # --- Compound short flags (e.g. -am) ---
+#
+# Matching git/Dolt: -a stages MODIFIED tracked tables only, not new
+# untracked tables. -am on a brand-new table is a no-op (errors with
+# "nothing to commit"); the test seeds an initial commit so the
+# table is tracked before -am is exercised.
 
 DB5=/tmp/test_dolt_compound_$$.db; rm -f "$DB5"
 
-# -am: stages all + sets message in one compound flag
+# Seed: create + commit so the table is tracked
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'init');
+SELECT dolt_commit('-A','-m','seed');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+
+# -am on a modified tracked table: stages the modification + sets
+# message in one compound flag
 run_test_match "compound_am" \
-  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
-INSERT INTO t VALUES(1,'a');
+  "INSERT INTO t VALUES(2,'a');
 SELECT dolt_commit('-am','compound flag commit');" \
   "^[0-9a-f]{40}$" "$DB5"
 
@@ -192,10 +202,11 @@ run_test "compound_am_message" \
   "compound flag commit" "$DB5"
 
 run_test "compound_am_data" \
-  "SELECT v FROM t WHERE id=1;" \
+  "SELECT v FROM t WHERE id=2;" \
   "a" "$DB5"
 
-# -Am: uppercase A variant
+# -Am: uppercase A variant — -A stages everything including new
+# tables, so this works on a brand-new table without seeding
 DB6=/tmp/test_dolt_compound2_$$.db; rm -f "$DB6"
 
 run_test_match "compound_Am" \
@@ -222,13 +233,15 @@ run_test "compound_ma_message_is_a" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "a" "$DB7"
 
-# Multiple commits with -am
+# Multiple commits with -am — first commit must use -A or -Am to
+# stage the new table; subsequent -am commits then work on the
+# now-tracked table.
 DB8=/tmp/test_dolt_compound4_$$.db; rm -f "$DB8"
 
 run_test_match "compound_am_multi_1" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
 INSERT INTO t VALUES(1,10);
-SELECT dolt_commit('-am','first');" \
+SELECT dolt_commit('-Am','first');" \
   "^[0-9a-f]{40}$" "$DB8"
 
 run_test_match "compound_am_multi_2" \
