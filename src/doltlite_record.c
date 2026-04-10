@@ -6,23 +6,6 @@
 #include <string.h>
 #include <stdio.h>
 
-static int recReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
-  u64 v = 0;
-  int i;
-  for(i=0; i<9 && p+i<pEnd; i++){
-    if( i<8 ){
-      v = (v << 7) | (p[i] & 0x7f);
-      if( (p[i] & 0x80)==0 ){ *pVal = v; return i+1; }
-    }else{
-      v = (v << 8) | p[i];
-      *pVal = v;
-      return 9;
-    }
-  }
-  *pVal = v;
-  return i ? i : 1;
-}
-
 static i64 recReadInt(const u8 *p, int nBytes){
   i64 v;
   int i;
@@ -41,18 +24,21 @@ struct RecBuf {
   int nAlloc;
 };
 
-static void recBufAppend(RecBuf *b, const char *z, int n){
+static int recBufAppend(RecBuf *b, const char *z, int n){
+  char *zNew;
   if( n<0 ) n = (int)strlen(z);
   if( b->n + n + 1 > b->nAlloc ){
     int nNew = b->nAlloc ? b->nAlloc*2 : 128;
     while( nNew < b->n + n + 1 ) nNew *= 2;
-    b->z = sqlite3_realloc(b->z, nNew);
-    if( !b->z ){ b->nAlloc = 0; return; }
+    zNew = sqlite3_realloc(b->z, nNew);
+    if( !zNew ) return SQLITE_NOMEM;
+    b->z = zNew;
     b->nAlloc = nNew;
   }
   memcpy(b->z + b->n, z, n);
   b->n += n;
   b->z[b->n] = 0;
+  return SQLITE_OK;
 }
 
 char *doltliteDecodeRecord(const u8 *pData, int nData){
@@ -64,82 +50,84 @@ char *doltliteDecodeRecord(const u8 *pData, int nData){
   const u8 *pBody;
   RecBuf buf;
   int fieldIdx = 0;
+  int rc = SQLITE_OK;
 
   if( !pData || nData < 1 ) return 0;
 
   memset(&buf, 0, sizeof(buf));
 
-  
-  hdrBytes = recReadVarint(p, pEnd, &hdrSize);
+  hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
+  if( hdrBytes<=0 ) return 0;
   p += hdrBytes;
+  if( hdrSize<(u64)hdrBytes || hdrSize>(u64)nData ) return 0;
   pHdrEnd = pData + hdrSize;
   pBody = pData + hdrSize;
 
-  
-  while( p < pHdrEnd && p < pEnd ){
+  while( rc==SQLITE_OK && p < pHdrEnd && p < pEnd ){
     u64 st;
-    int stBytes = recReadVarint(p, pHdrEnd, &st);
+    int stBytes = dlReadVarint(p, pHdrEnd, &st);
+    if( stBytes<=0 ) rc = SQLITE_CORRUPT;
+    if( rc!=SQLITE_OK ) break;
     p += stBytes;
 
-    if( fieldIdx > 0 ) recBufAppend(&buf, "|", 1);
+    if( fieldIdx > 0 ){
+      rc = recBufAppend(&buf, "|", 1);
+      if( rc!=SQLITE_OK ) break;
+    }
 
     if( st==0 ){
-      
-      recBufAppend(&buf, "NULL", 4);
+      rc = recBufAppend(&buf, "NULL", 4);
     }else if( st==8 ){
-      recBufAppend(&buf, "0", 1);
+      rc = recBufAppend(&buf, "0", 1);
     }else if( st==9 ){
-      recBufAppend(&buf, "1", 1);
+      rc = recBufAppend(&buf, "1", 1);
     }else if( st>=1 && st<=6 ){
-      
       static const int sizes[] = {0,1,2,3,4,6,8};
       int nBytes = sizes[st];
-      if( pBody + nBytes <= pEnd ){
-        i64 v = recReadInt(pBody, nBytes);
-        char tmp[32];
-        sqlite3_snprintf(sizeof(tmp), tmp, "%lld", v);
-        recBufAppend(&buf, tmp, -1);
-      }
+      char tmp[32];
+      if( pBody + nBytes > pEnd ){ rc = SQLITE_CORRUPT; break; }
+      sqlite3_snprintf(sizeof(tmp), tmp, "%lld", recReadInt(pBody, nBytes));
+      rc = recBufAppend(&buf, tmp, -1);
       pBody += nBytes;
     }else if( st==7 ){
-
-      if( pBody + 8 <= pEnd ){
-        double v;
-        u64 bits = 0;
-        int i;
-        char tmp[64];
-        for(i=0; i<8; i++) bits = (bits<<8) | pBody[i];
-        memcpy(&v, &bits, 8);
-        sqlite3_snprintf(sizeof(tmp), tmp, "%!.15g", v);
-        recBufAppend(&buf, tmp, -1);
-      }
+      double v;
+      u64 bits = 0;
+      int i;
+      char tmp[64];
+      if( pBody + 8 > pEnd ){ rc = SQLITE_CORRUPT; break; }
+      for(i=0; i<8; i++) bits = (bits<<8) | pBody[i];
+      memcpy(&v, &bits, 8);
+      sqlite3_snprintf(sizeof(tmp), tmp, "%!.15g", v);
+      rc = recBufAppend(&buf, tmp, -1);
       pBody += 8;
     }else if( st>=12 && (st&1)==0 ){
-      
       int len = ((int)st - 12) / 2;
-      recBufAppend(&buf, "x'", 2);
-      if( pBody + len <= pEnd ){
-        int i;
-        for(i=0; i<len; i++){
-          char hex[3];
-          sqlite3_snprintf(3, hex, "%02x", pBody[i]);
-          recBufAppend(&buf, hex, 2);
-        }
+      int i;
+      if( len<0 || pBody + len > pEnd ){ rc = SQLITE_CORRUPT; break; }
+      rc = recBufAppend(&buf, "x'", 2);
+      for(i=0; rc==SQLITE_OK && i<len; i++){
+        char hex[3];
+        sqlite3_snprintf(3, hex, "%02x", pBody[i]);
+        rc = recBufAppend(&buf, hex, 2);
       }
-      recBufAppend(&buf, "'", 1);
+      if( rc==SQLITE_OK ) rc = recBufAppend(&buf, "'", 1);
       pBody += len;
     }else if( st>=13 && (st&1)==1 ){
-      
       int len = ((int)st - 13) / 2;
-      if( pBody + len <= pEnd ){
-        recBufAppend(&buf, (const char*)pBody, len);
-      }
+      if( len<0 || pBody + len > pEnd ){ rc = SQLITE_CORRUPT; break; }
+      rc = recBufAppend(&buf, (const char*)pBody, len);
       pBody += len;
+    }else{
+      rc = SQLITE_CORRUPT;
     }
 
     fieldIdx++;
   }
 
+  if( rc!=SQLITE_OK || p!=pHdrEnd ){
+    sqlite3_free(buf.z);
+    return 0;
+  }
   return buf.z;
 }
 
@@ -180,9 +168,12 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   sqlite3_free(zSql);
   if( rc!=SQLITE_OK ) return rc;
 
-  
   nCol = 0;
-  while( sqlite3_step(pStmt)==SQLITE_ROW ) nCol++;
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ) nCol++;
+  if( rc!=SQLITE_DONE ){
+    sqlite3_finalize(pStmt);
+    return rc;
+  }
   sqlite3_reset(pStmt);
 
   ci->azName = sqlite3_malloc(nCol * (int)sizeof(char*));
@@ -190,7 +181,7 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   memset(ci->azName, 0, nCol * (int)sizeof(char*));
   ci->nCol = 0;
 
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
     int pk = sqlite3_column_int(pStmt, 5);
     const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
@@ -201,7 +192,17 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     }
 
     ci->azName[ci->nCol] = sqlite3_mprintf("%s", zName ? zName : "");
+    if( !ci->azName[ci->nCol] ){
+      doltliteFreeColInfo(ci);
+      sqlite3_finalize(pStmt);
+      return SQLITE_NOMEM;
+    }
     ci->nCol++;
+  }
+  if( rc!=SQLITE_DONE ){
+    doltliteFreeColInfo(ci);
+    sqlite3_finalize(pStmt);
+    return rc;
   }
 
   sqlite3_finalize(pStmt);

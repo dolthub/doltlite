@@ -136,6 +136,12 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       zParsedTagger = sqlite3_mprintf("%s", zAuthor);
       zParsedEmail  = sqlite3_mprintf("");
     }
+    if( !zParsedTagger || !zParsedEmail ){
+      sqlite3_free(zParsedTagger);
+      sqlite3_free(zParsedEmail);
+      sqlite3_result_error_nomem(ctx);
+      return;
+    }
     m.zTagger = zParsedTagger;
     m.zEmail  = zParsedEmail;
   }else{

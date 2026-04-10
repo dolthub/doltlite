@@ -1,4 +1,4 @@
-/* dolt_log: BFS traversal of all reachable commits, sorted by timestamp desc.
+/* dolt_log: BFS traversal of all reachable commits.
 ** Follows ALL parents (not just the first), deduplicating by commit hash. */
 #ifdef DOLTLITE_PROLLY
 

@@ -270,6 +270,7 @@ static int gcRewriteFile(
   i64 indexOffset = CHUNK_MANIFEST_SIZE + nNewData;
   u8 *indexBuf = 0;
   u8 manifest[CHUNK_MANIFEST_SIZE];
+  ChunkStore manifestCs;
   int rc = SQLITE_OK;
 
   
@@ -294,13 +295,13 @@ static int gcRewriteFile(
     }
   }
 
-  
-  cs->nChunks = nNewIndex;
-  cs->iIndexOffset = indexOffset;
-  cs->nIndexSize = indexSize;
-  cs->iWalOffset = indexOffset + indexSize;
+  manifestCs = *cs;
+  manifestCs.nChunks = nNewIndex;
+  manifestCs.iIndexOffset = indexOffset;
+  manifestCs.nIndexSize = indexSize;
+  manifestCs.iWalOffset = indexOffset + indexSize;
 
-  csSerializeManifest(cs, manifest);
+  csSerializeManifest(&manifestCs, manifest);
 
   
   if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
