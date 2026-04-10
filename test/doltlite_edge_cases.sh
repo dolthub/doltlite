@@ -232,8 +232,8 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Merge non-existent branch
 run_test_match "err_merge_noexist" "SELECT dolt_merge('nope');" "not found" "$DB"
 
-# Checkout non-existent branch
-run_test_match "err_checkout_noexist" "SELECT dolt_checkout('nope');" "not found" "$DB"
+# Checkout non-existent branch / table
+run_test_match "err_checkout_noexist" "SELECT dolt_checkout('nope');" "no such branch or table" "$DB"
 
 # Branch already exists
 echo "SELECT dolt_branch('dup');" | $DOLTLITE "$DB" > /dev/null 2>&1
