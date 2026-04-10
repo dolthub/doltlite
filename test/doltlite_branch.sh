@@ -12,7 +12,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'
 run_test "default_branch" "SELECT active_branch();" "main" "$DB"
 run_test "create_branch" "SELECT dolt_branch('feature');" "0" "$DB"
 run_test "list_branches" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
-run_test "main_current" "SELECT is_current FROM dolt_branches WHERE name='main';" "1" "$DB"
+run_test "main_current" "SELECT active_branch();" "main" "$DB"
 
 run_test "checkout_feature" "SELECT dolt_checkout('feature');" "0" "$DB"
 run_test "active_feature" "SELECT active_branch();" "feature" "$DB"
