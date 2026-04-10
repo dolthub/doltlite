@@ -88,7 +88,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "noconf_table" "SELECT count(*) FROM dolt_conflicts_t;" "no such table" "$DB"
+run_test "noconf_table" "SELECT count(*) FROM dolt_conflicts_t;" "0" "$DB"
 run_test "noconf_summary" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 
 rm -f "$DB"
