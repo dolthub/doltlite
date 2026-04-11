@@ -254,6 +254,10 @@ struct Btree {
     int *aPendingCount;     /* MutMap nEntries per table at savepoint time */
     int nTables;
     Pgno iNextTable;
+    ProllyHash stagedCatalog;
+    u8 isMerging;
+    ProllyHash mergeCommitHash;
+    ProllyHash conflictsCatalogHash;
   } *aSavepointTables;
   int nSavepointTablesAlloc;
 
@@ -261,6 +265,10 @@ struct Btree {
   struct TableEntry *aCommittedTables;
   int nCommittedTables;
   Pgno iCommittedNextTable;
+  ProllyHash committedStagedCatalog;
+  u8 committedIsMerging;
+  ProllyHash committedMergeCommitHash;
+  ProllyHash committedConflictsCatalogHash;
 
   /* DoltLite versioning state */
   char *zBranch;
@@ -337,6 +345,7 @@ static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
 static int pushSavepoint(Btree *pBtree);
+static int restoreFromCommitted(Btree *p);
 static void refreshCursorRoot(BtCursor *pCur);
 static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount);
 static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept);
@@ -1218,6 +1227,10 @@ static void freeSavepointTables(struct SavepointTableState *pState){
     sqlite3_free(pState->aPendingCount);
     pState->aPendingCount = 0;
   }
+  memset(&pState->stagedCatalog, 0, sizeof(pState->stagedCatalog));
+  pState->isMerging = 0;
+  memset(&pState->mergeCommitHash, 0, sizeof(pState->mergeCommitHash));
+  memset(&pState->conflictsCatalogHash, 0, sizeof(pState->conflictsCatalogHash));
 }
 
 static void truncatePendingToCount(ProllyMutMap *pMap, int savedCount){
@@ -1347,6 +1360,10 @@ static int pushSavepoint(Btree *pBtree){
   pState->aPendingCount = 0;
   pState->nTables = 0;
   pState->iNextTable = pBtree->iNextTable;
+  pState->stagedCatalog = pBtree->stagedCatalog;
+  pState->isMerging = pBtree->isMerging;
+  pState->mergeCommitHash = pBtree->mergeCommitHash;
+  pState->conflictsCatalogHash = pBtree->conflictsCatalogHash;
   if( pBtree->nTables > 0 ){
     pState->aTables = sqlite3_malloc(pBtree->nTables * (int)sizeof(struct TableEntry));
     if( !pState->aTables ) return SQLITE_NOMEM;
@@ -2077,6 +2094,10 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       }
     }
     p->iCommittedNextTable = p->iNextTable;
+    p->committedStagedCatalog = p->stagedCatalog;
+    p->committedIsMerging = p->isMerging;
+    p->committedMergeCommitHash = p->mergeCommitHash;
+    p->committedConflictsCatalogHash = p->conflictsCatalogHash;
     p->inTrans = TRANS_WRITE;
     p->inTransaction = TRANS_WRITE;
     
@@ -2176,14 +2197,12 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       ** durably persist the rollback result here. The durable commit did
       ** not happen, so the correct outcome is simply "old durable state
       ** remains on disk". */
-      if( p->aCommittedTables ){
-        sqlite3_free(p->aTables);
-        p->aTables = p->aCommittedTables;
-        p->nTables = p->nCommittedTables;
-        p->nTablesAlloc = p->nCommittedTables;
-        p->iNextTable = p->iCommittedNextTable;
-        p->aCommittedTables = 0;
-        p->nCommittedTables = 0;
+      int rc2 = restoreFromCommitted(p);
+      if( rc2!=SQLITE_OK ){
+        chunkStoreRollback(&pBt->store);
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc2;
       }
       {
         BtCursor *pC;
@@ -2250,6 +2269,10 @@ static int restoreFromCommitted(Btree *p){
     p->nTablesAlloc = p->nCommittedTables;
     p->iNextTable = p->iCommittedNextTable;
   }
+  p->stagedCatalog = p->committedStagedCatalog;
+  p->isMerging = p->committedIsMerging;
+  p->mergeCommitHash = p->committedMergeCommitHash;
+  p->conflictsCatalogHash = p->committedConflictsCatalogHash;
   return SQLITE_OK;
 }
 
@@ -2259,15 +2282,11 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   (void)writeOnly;
 
   if( p->inTrans==TRANS_WRITE ){
-    
-    if( p->aCommittedTables ){
-      sqlite3_free(p->aTables);
-      p->aTables = p->aCommittedTables;
-      p->nTables = p->nCommittedTables;
-      p->nTablesAlloc = p->nCommittedTables;
-      p->iNextTable = p->iCommittedNextTable;
-      p->aCommittedTables = 0;
-      p->nCommittedTables = 0;
+    rc = restoreFromCommitted(p);
+    if( rc!=SQLITE_OK ){
+      chunkStoreUnlock(&pBt->store);
+      pBt->store.snapshotPinned = 0;
+      return rc;
     }
     {
       BtCursor *pC;
@@ -2362,12 +2381,12 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
       if( pState->aTables ){
         int rc = restoreTablesFromSavepoint(p, pState);
         if( rc!=SQLITE_OK ) return rc;
-
-        sqlite3_free(pState->aTables);
-        sqlite3_free(pState->aPendingCount);
-        pState->aTables = 0;
-        pState->aPendingCount = 0;
       }
+      p->stagedCatalog = pState->stagedCatalog;
+      p->isMerging = pState->isMerging;
+      p->mergeCommitHash = pState->mergeCommitHash;
+      p->conflictsCatalogHash = pState->conflictsCatalogHash;
+      freeSavepointTables(pState);
       
       {
         int j;
@@ -5256,6 +5275,12 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   BtShared *pBt = doltliteGetBtShared(db);
   Btree *pBtree;
   ChunkStore *cs;
+  u8 *oldCatData = 0;
+  int nOldCatData = 0;
+  ProllyHash oldStagedCatalog;
+  u8 oldIsMerging;
+  ProllyHash oldMergeCommitHash;
+  ProllyHash oldConflictsCatalogHash;
   u8 *data = 0;
   int nData = 0;
   int rc;
@@ -5267,21 +5292,44 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
 
   if( prollyHashIsEmpty(catHash) ) return SQLITE_OK;
 
-  rc = chunkStoreGet(cs, catHash, &data, &nData);
+  rc = serializeCatalog(pBtree, &oldCatData, &nOldCatData);
   if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreGet(cs, catHash, &data, &nData);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(oldCatData);
+    return rc;
+  }
+
+  oldStagedCatalog = pBtree->stagedCatalog;
+  oldIsMerging = pBtree->isMerging;
+  oldMergeCommitHash = pBtree->mergeCommitHash;
+  oldConflictsCatalogHash = pBtree->conflictsCatalogHash;
 
   
   invalidateCursors(pBt, 0, SQLITE_ABORT);
 
   
-  sqlite3_free(pBtree->aTables);
   pBtree->aTables = 0;
   pBtree->nTables = 0;
   pBtree->nTablesAlloc = 0;
 
   rc = deserializeCatalog(pBtree, data, nData);
   sqlite3_free(data);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pBtree->aTables);
+    pBtree->aTables = 0;
+    pBtree->nTables = 0;
+    pBtree->nTablesAlloc = 0;
+    if( oldCatData ){
+      rc = deserializeCatalog(pBtree, oldCatData, nOldCatData);
+    }
+    sqlite3_free(oldCatData);
+    pBtree->stagedCatalog = oldStagedCatalog;
+    pBtree->isMerging = oldIsMerging;
+    pBtree->mergeCommitHash = oldMergeCommitHash;
+    pBtree->conflictsCatalogHash = oldConflictsCatalogHash;
+    return rc;
+  }
 
   
   pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
@@ -5306,10 +5354,45 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   ** working catalog BEFORE calling hardReset. */
   {
     const char *zBr = pBtree->zBranch ? pBtree->zBranch : "main";
-    btreeWriteWorkingState(cs, zBr, catHash, NULL);
+    rc = btreeWriteWorkingState(cs, zBr, catHash, NULL);
   }
-  rc = chunkStoreCommit(cs);
-  return rc;
+  if( rc==SQLITE_OK ){
+    rc = chunkStoreCommit(cs);
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pBtree->aTables);
+    pBtree->aTables = 0;
+    pBtree->nTables = 0;
+    pBtree->nTablesAlloc = 0;
+    if( oldCatData ){
+      int rc2 = deserializeCatalog(pBtree, oldCatData, nOldCatData);
+      if( rc2!=SQLITE_OK ){
+        sqlite3_free(oldCatData);
+        chunkStoreRollback(cs);
+        return rc;
+      }
+    }
+    pBtree->stagedCatalog = oldStagedCatalog;
+    pBtree->isMerging = oldIsMerging;
+    pBtree->mergeCommitHash = oldMergeCommitHash;
+    pBtree->conflictsCatalogHash = oldConflictsCatalogHash;
+    if( pBtree->db ){
+      sqlite3ResetAllSchemasOfConnection(pBtree->db);
+    }else{
+      invalidateSchema(pBtree);
+    }
+    pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
+    pBtree->iBDataVersion++;
+    if( pBt->pPagerShim ){
+      pBt->pPagerShim->iDataVersion++;
+    }
+    chunkStoreRollback(cs);
+    sqlite3_free(oldCatData);
+    return rc;
+  }
+
+  sqlite3_free(oldCatData);
+  return SQLITE_OK;
 }
 
 int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,

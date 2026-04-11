@@ -1556,6 +1556,14 @@ static void run_btree_commit_failure_transactional(void){
   sqlite3 *db = 0;
   char dbpath[256];
   int rc;
+  ProllyHash headCatHash;
+  ProllyHash dummyStaged;
+  ProllyHash dummyMerge;
+  ProllyHash dummyConflicts;
+  ProllyHash stagedAfter;
+  ProllyHash mergeAfter;
+  ProllyHash conflictsAfter;
+  u8 isMergingAfter = 0;
 
   printf("=== Btree Commit Failure Transaction Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_btree_commit_failure_transactional");
@@ -1569,7 +1577,16 @@ static void run_btree_commit_failure_transactional(void){
   check("setup_table", execsql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  check("get_head_catalog_for_commit_failure",
+        doltliteGetHeadCatalogHash(db, &headCatHash)==SQLITE_OK);
+  doltliteSetSessionStaged(db, &headCatHash);
+  doltliteClearSessionMergeState(db);
   check("begin_write_txn", execsql(db, "BEGIN; INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+  memset(&dummyStaged, 0x71, sizeof(dummyStaged));
+  memset(&dummyMerge, 0x72, sizeof(dummyMerge));
+  memset(&dummyConflicts, 0x73, sizeof(dummyConflicts));
+  doltliteSetSessionStaged(db, &dummyStaged);
+  doltliteSetSessionMergeState(db, 1, &dummyMerge, &dummyConflicts);
 
   gFailWriteOnce = 1;
   rc = execsql_silent(db, "COMMIT;");
@@ -1578,11 +1595,120 @@ static void run_btree_commit_failure_transactional(void){
   check("autocommit_restored_after_failed_commit", sqlite3_get_autocommit(db)==1);
   check("failed_commit_rolled_back_visible_state",
         strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+  doltliteGetSessionStaged(db, &stagedAfter);
+  doltliteGetSessionMergeState(db, &isMergingAfter, &mergeAfter, &conflictsAfter);
+  check("failed_commit_restores_session_staged",
+        memcmp(&stagedAfter, &headCatHash, sizeof(headCatHash))==0);
+  check("failed_commit_clears_merge_flag", isMergingAfter==0);
+  check("failed_commit_restores_merge_commit",
+        memcmp(&mergeAfter, &(ProllyHash){{0}}, sizeof(ProllyHash))==0);
+  check("failed_commit_restores_conflicts_catalog",
+        memcmp(&conflictsAfter, &(ProllyHash){{0}}, sizeof(ProllyHash))==0);
 
   sqlite3_close(db);
   check("reopen_after_failed_commit", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_commit_did_not_persist_row",
         strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_savepoint_restores_session_metadata(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  ProllyHash baseStaged;
+  ProllyHash dummyStaged;
+  ProllyHash dummyMerge;
+  ProllyHash dummyConflicts;
+  ProllyHash stagedAfter;
+  ProllyHash mergeAfter;
+  ProllyHash conflictsAfter;
+  u8 isMergingAfter = 0;
+
+  printf("=== Savepoint Restores Session Metadata Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_restores_session_metadata");
+  remove_db(dbpath);
+
+  check("open_db_for_savepoint_metadata", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_savepoint_metadata", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  check("get_head_catalog_for_savepoint_metadata",
+        doltliteGetHeadCatalogHash(db, &baseStaged)==SQLITE_OK);
+  doltliteSetSessionStaged(db, &baseStaged);
+  doltliteClearSessionMergeState(db);
+
+  check("begin_immediate_for_savepoint_metadata",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("create_savepoint_for_metadata",
+        execsql(db, "SAVEPOINT s1;")==SQLITE_OK);
+
+  memset(&dummyStaged, 0x41, sizeof(dummyStaged));
+  memset(&dummyMerge, 0x42, sizeof(dummyMerge));
+  memset(&dummyConflicts, 0x43, sizeof(dummyConflicts));
+  doltliteSetSessionStaged(db, &dummyStaged);
+  doltliteSetSessionMergeState(db, 1, &dummyMerge, &dummyConflicts);
+  doltliteGetSessionStaged(db, &stagedAfter);
+  check("savepoint_metadata_mutation_applied",
+        memcmp(&stagedAfter, &dummyStaged, sizeof(dummyStaged))==0);
+
+  check("rollback_to_savepoint_metadata",
+        execsql(db, "ROLLBACK TO s1;")==SQLITE_OK);
+  doltliteGetSessionStaged(db, &stagedAfter);
+  doltliteGetSessionMergeState(db, &isMergingAfter, &mergeAfter, &conflictsAfter);
+  check("rollback_to_savepoint_restores_staged",
+        memcmp(&stagedAfter, &baseStaged, sizeof(baseStaged))==0);
+  check("rollback_to_savepoint_clears_merge_flag", isMergingAfter==0);
+  check("rollback_to_savepoint_clears_merge_commit",
+        memcmp(&mergeAfter, &(ProllyHash){{0}}, sizeof(ProllyHash))==0);
+  check("rollback_to_savepoint_clears_conflicts_catalog",
+        memcmp(&conflictsAfter, &(ProllyHash){{0}}, sizeof(ProllyHash))==0);
+
+  check("release_savepoint_metadata", execsql(db, "RELEASE s1;")==SQLITE_OK);
+  check("rollback_outer_txn_metadata", execsql(db, "ROLLBACK;")==SQLITE_OK);
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_hard_reset_failure_restores_memory_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  ProllyHash headCatHash;
+  int rc;
+
+  printf("=== Hard Reset Failure Restores Memory State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_hard_reset_failure_restores_memory_state");
+  remove_db(dbpath);
+  gFailWriteOnce = 0;
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+
+  check("register_fail_vfs_for_hard_reset", registerFailVfs()==SQLITE_OK);
+  check("open_fail_db_for_hard_reset", open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_hard_reset_failure", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+  check("working_row_visible_before_hard_reset",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("get_head_catalog_for_hard_reset",
+        doltliteGetHeadCatalogHash(db, &headCatHash)==SQLITE_OK);
+
+  gFailHits = 0;
+  gFailWriteOnce = 1;
+  rc = doltliteHardReset(db, &headCatHash);
+  check("hard_reset_failure_injected", gFailHits>0);
+  check("hard_reset_returns_error_on_commit_failure", rc!=SQLITE_OK);
+  check("failed_hard_reset_preserves_memory_state",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+
+  sqlite3_close(db);
+  check("reopen_after_failed_hard_reset", open_db(dbpath, &db)==SQLITE_OK);
+  check("failed_hard_reset_preserves_durable_state",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
   sqlite3_close(db);
   remove_db(dbpath);
 }
@@ -1731,6 +1857,8 @@ static const RegressionCase aCases[] = {
   { "prolly_diff_record_corruption", "Prolly Diff Record Corruption Test", run_prolly_diff_record_corruption },
   { "integrity_check_repo_state", "Integrity Check Repository State Test", run_integrity_check_repo_state },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
+  { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
+  { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "prolly_blob_cursor_boundary", "Prolly Blob Cursor Internal Boundary Test", run_prolly_blob_cursor_seek_across_internal_boundary },
   { "prolly_cursor_corrupt_node", "Prolly Cursor Corrupt Node Test", run_prolly_cursor_surfaces_corrupt_node }
