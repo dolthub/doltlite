@@ -372,27 +372,71 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat1');
 "
 
-# Diff-after-merge: not oracle-tested. Both engines correctly walk
-# the merge commit graph and emit per-(commit, parent) diff rows,
-# but they DIFFER on which (commit, parent) edge they attribute
-# each row to. Concretely, for a merge of feature(adds row 2)
-# into main(adds row 3):
-#
-#   doltlite emits:
-#     row 3 added at main2 vs c1
-#     row 2 added at feat1 vs c1
-#     row 2 added at merge vs main2
-#
-#   Dolt emits:
-#     row 2 added at feat1 vs c1
-#     row 2 added at merge vs main2
-#     row 3 added at merge vs feat1   (NOT main2 vs c1)
-#
-# Both views are correct — row 3 IS added across both edges. The
-# walk attribution algorithm differs and matching it would require
-# either reverse-engineering Dolt's exact graph traversal or
-# changing doltlite's. Tracked as a separate follow-up; the
-# summary-level dolt_diff for the merge case (above) does match.
+echo "--- merges ---"
+
+# Simple merge: feature adds row 2, main adds row 3, then merge.
+# Dolt's algorithm (now mirrored by doltlite) attributes row 3 to
+# the merge-vs-feat1 edge — NOT to main2-vs-c1 — because the merge
+# absorbs main2's first-parent diff. See doltlite_diff_table.c
+# buildDiffPairs() and the dolt diff_table.go processCommit /
+# CommitItrForRoots LIFO walk for the canonical algorithm.
+oracle "diff_after_simple_merge" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feature');
+"
+
+# Merge with multiple commits between branch base and merge on the
+# main side. This exercises the more interesting case where main3
+# is the merge's first parent but main2 is reachable only via
+# main3's first-parent edge — main3 vs main2 IS emitted, but
+# main2 vs c1 is suppressed because the merge edge (merge,feat1)
+# already covers row 3.
+oracle "diff_after_merge_with_intermediate_commits" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+INSERT INTO t VALUES (4, 40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main3');
+SELECT dolt_merge('feature');
+"
+
+# Merge that introduces no new content on the main side (feature is
+# a fast-forwardable change but we force a merge commit by having
+# main also commit). Verifies the per-edge row attribution still
+# matches when the merge's first-parent diff is empty.
+oracle "diff_after_merge_no_main_changes_after_branch" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat2');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 11 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_update');
+SELECT dolt_merge('feature');
+"
 
 echo ""
 echo "--- summary form: dolt_diff (no args) ---"
