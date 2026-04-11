@@ -27,10 +27,10 @@ static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
   }
 
   
-  pEntry = prollyCachePut(cur->pCache, hash, pData, nData);
+  pEntry = prollyCachePut(cur->pCache, hash, pData, nData, &rc);
   sqlite3_free(pData);
   if( pEntry==0 ){
-    return SQLITE_NOMEM;
+    return rc;
   }
 
   *ppEntry = pEntry;
@@ -341,11 +341,9 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     int searchRes;
     int idx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &searchRes);
 
-    
     if( searchRes>0 ){
-      
+      idx++;
     }
-    
 
     cur->aLevel[cur->iLevel].idx = idx;
 

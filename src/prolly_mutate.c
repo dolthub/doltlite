@@ -262,9 +262,9 @@ static int streamingMergeNode(
       if( !pChildEntry ){
         rc = chunkStoreGet(pMut->pStore, &childHash, &pChildData, &nChildData);
         if( rc!=SQLITE_OK ) return rc;
-        pChildEntry = prollyCachePut(pCache, &childHash, pChildData, nChildData);
+        pChildEntry = prollyCachePut(pCache, &childHash, pChildData, nChildData, &rc);
         sqlite3_free(pChildData);
-        if( !pChildEntry ) return SQLITE_NOMEM;
+        if( !pChildEntry ) return rc;
       }
 
       if( pChildEntry->node.level == 0 ){
