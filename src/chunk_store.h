@@ -106,12 +106,6 @@ struct ChunkStore {
   sqlite3_vfs *pVfs;
   ProllyHash refsHash;
 
-  /* These fields come from the per-branch WorkingSet, not from the manifest. */
-  ProllyHash stagedCatalog;
-  u8 isMerging;
-  ProllyHash mergeCommitHash;
-  ProllyHash conflictsCatalogHash;
-
   struct BranchRef {
     char *zName;
     ProllyHash commitHash;
@@ -195,9 +189,6 @@ int chunkStoreReadBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                        ProllyHash *pCatHash,
                                        ProllyHash *pCommitHash);
 
-void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged);
-void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged);
-
 int chunkStoreReloadRefs(ChunkStore *cs);
 
 const char *chunkStoreGetDefaultBranch(ChunkStore *cs);
@@ -256,16 +247,5 @@ void chunkStoreClearRefs(ChunkStore *cs);
 const char *chunkStoreFilename(ChunkStore *cs);
 
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged);
-
-int chunkStoreGetMergeState(ChunkStore *cs, u8 *pIsMerging,
-                            ProllyHash *pMergeCommit,
-                            ProllyHash *pConflictsCatalog);
-void chunkStoreSetMergeState(ChunkStore *cs, u8 isMerging,
-                             const ProllyHash *pMergeCommit,
-                             const ProllyHash *pConflictsCatalog);
-void chunkStoreClearMergeState(ChunkStore *cs);
-
-void chunkStoreGetConflictsCatalog(ChunkStore *cs, ProllyHash *pHash);
-void chunkStoreSetConflictsCatalog(ChunkStore *cs, const ProllyHash *pHash);
 
 #endif /* SQLITE_CHUNK_STORE_H */

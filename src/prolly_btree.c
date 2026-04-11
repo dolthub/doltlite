@@ -259,7 +259,6 @@ struct Btree {
     ProllyHash mergeCommitHash;
     ProllyHash conflictsCatalogHash;
   } *aSavepointTables;
-  int nSavepointTablesAlloc;
 
   /* Snapshot of aTables at BEGIN WRITE -- for full transaction rollback */
   struct TableEntry *aCommittedTables;
@@ -1352,7 +1351,6 @@ static int pushSavepoint(Btree *pBtree){
     if( !aNewT ) return SQLITE_NOMEM;
     pBtree->aSavepointTables = aNewT;
     pBtree->nSavepointAlloc = nNew;
-    pBtree->nSavepointTablesAlloc = nNew;
   }
 
   pState = &pBtree->aSavepointTables[pBtree->nSavepoint];
@@ -4698,11 +4696,11 @@ int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
   for(i=0; rc==SQLITE_OK && i<pBt->store.nTracking; i++){
     rc = integrityCheckChunkGraph(&ctx, &pBt->store.aTracking[i].commitHash);
   }
-  if( rc==SQLITE_OK && pBt->store.isMerging ){
-    rc = integrityCheckChunkGraph(&ctx, &pBt->store.mergeCommitHash);
+  if( rc==SQLITE_OK && p->isMerging ){
+    rc = integrityCheckChunkGraph(&ctx, &p->mergeCommitHash);
   }
   if( rc==SQLITE_OK ){
-    rc = integrityCheckChunkGraph(&ctx, &pBt->store.conflictsCatalogHash);
+    rc = integrityCheckChunkGraph(&ctx, &p->conflictsCatalogHash);
   }
 
   prollyHashSetFree(&ctx.seen);
