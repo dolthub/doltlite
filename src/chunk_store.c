@@ -915,10 +915,7 @@ int chunkStoreOpen(
         sqlite3_free(refsData);
       }
       if( rc!=SQLITE_OK ){
-        csCloseFile(cs->pFile);
-        cs->pFile = 0;
-        sqlite3_free(cs->zFilename);
-        cs->zFilename = 0;
+        chunkStoreClose(cs);
         return rc;
       }
     }

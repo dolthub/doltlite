@@ -35,7 +35,8 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash);
 
 ProllyCacheEntry *prollyCachePut(ProllyCache *cache,
                                   const ProllyHash *hash,
-                                  const u8 *pData, int nData);
+                                  const u8 *pData, int nData,
+                                  int *pRc);
 
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry);
 
