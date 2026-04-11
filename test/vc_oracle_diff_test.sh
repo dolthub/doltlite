@@ -1,23 +1,28 @@
 #!/bin/bash
 #
-# Version-control oracle test: dolt_diff_<table>
+# Version-control oracle tests: dolt_diff_<table> AND dolt_diff
 #
-# Tests the per-table diff vtable end-to-end against Dolt 1.86.0+:
-# row-level diff history for one table across all commits, plus
-# the working-set diff at the head as `to_commit='WORKING'`.
-# Schema layout (matches Dolt):
-#   to_<col1>, ..., to_<colN>, to_commit, to_commit_date,
-#   from_<col1>, ..., from_<colN>, from_commit, from_commit_date,
-#   diff_type
+# Two surfaces are tested here:
 #
-# The harness LEFT JOINs dolt_log on to_commit and from_commit so
-# the comparison uses commit MESSAGES (stable across engines) instead
-# of the engine-specific commit hashes.
+# 1. dolt_diff_<table> (per-table row-level diff history)
+#    Schema layout (matches Dolt):
+#      to_<col1>, ..., to_<colN>, to_commit, to_commit_date,
+#      from_<col1>, ..., from_<colN>, from_commit, from_commit_date,
+#      diff_type
+#    The harness LEFT JOINs dolt_log on to_commit and from_commit so
+#    the comparison uses commit MESSAGES (stable across engines)
+#    instead of engine-specific commit hashes.
 #
-# Note: doltlite's no-arg dolt_diff vtable currently exposes a
-# legacy per-row schema rather than Dolt's commits-touching-tables
-# summary. Conforming dolt_diff to Dolt's surface is a separate
-# follow-up — this oracle covers dolt_diff_<table> only.
+# 2. dolt_diff no-arg vtable (commits-touching-tables summary)
+#    One row per (commit, changed_table). Dolt-compatible columns:
+#      commit_hash, table_name, committer, email, date, message,
+#      data_change, schema_change
+#    Compared on (table_name, message, data_change, schema_change),
+#    sorted, with engine-specific hashes/timestamps stripped. Note
+#    that doltlite's dolt_diff is polymorphic: with no constraint
+#    on table_name it returns the summary form; with `dolt_diff('t')`
+#    it falls through to the legacy per-row form used by the 90+
+#    existing self-tests.
 #
 # Usage: bash vc_oracle_diff_test.sh [path/to/doltlite] [path/to/dolt]
 #
@@ -138,6 +143,70 @@ oracle() {
     echo "  FAIL: $name"
     echo "    doltlite:"; echo "$dl_table" | sed 's/^/      /'
     echo "    dolt:";     echo "$dt_table" | sed 's/^/      /'
+  fi
+}
+
+# Normalize summary-form rows. Dolt emits data_change/schema_change
+# as `true`/`false` in csv; doltlite emits 0/1. Coerce both to 0/1.
+# Then strip CR, drop blank lines, sort.
+normalize_summary() {
+  tr -d '\r' \
+    | sed -e 's/	true$/	1/' -e 's/	true	/	1	/g' \
+          -e 's/	false$/	0/' -e 's/	false	/	0	/g' \
+    | awk -F'\t' 'NF >= 5 && $1 == "S" { print }' \
+    | sort
+}
+
+# Oracle for dolt_diff no-arg summary form. Compares the
+# (table_name, message, data_change, schema_change) tuples after
+# joining with dolt_log to use commit MESSAGES rather than the
+# engine-specific commit hashes (which differ between engines and
+# are non-deterministic in dolt).
+oracle_summary() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_summary"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  # Both engines: SELECT joins dolt_diff against dolt_log on
+  # commit_hash to translate the hash into the commit MESSAGE.
+  # Some commits may not appear in dolt_log (e.g. unreachable),
+  # in which case coalesce falls back to the hash.
+  local q="SELECT 'S' || char(9) || dd.table_name || char(9) || coalesce(dl.message, dd.commit_hash) || char(9) || dd.data_change || char(9) || dd.schema_change FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
+  local q_dolt="SELECT concat('S', char(9), dd.table_name, char(9), coalesce(dl.message, dd.commit_hash), char(9), dd.data_change, char(9), dd.schema_change) FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | normalize_summary)
+
+  local dolt_setup
+  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    {
+      printf '%s\n' "$dolt_setup"
+      printf '%s;\n' "$q_dolt"
+    } | "$DOLT" sql -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
+  )
+
+  if [ -z "$dl_out" ] && [ -z "$dt_out" ]; then
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (both summary queries empty — harness bug)"
+    return
+  fi
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
   fi
 }
 
@@ -324,6 +393,84 @@ SELECT dolt_commit('-m', 'feat1');
 # either reverse-engineering Dolt's exact graph traversal or
 # changing doltlite's. Tracked as a separate follow-up; the
 # summary-level dolt_diff for the merge case (above) does match.
+
+echo ""
+echo "--- summary form: dolt_diff (no args) ---"
+
+# Single-table linear history. Two commits should produce two
+# summary rows, both with data_change=1; the first commit (table
+# creation) also has schema_change=1.
+oracle_summary "summary_two_commits_one_table" "
+$SEED
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+"
+
+# Multi-commit linear history with INSERT, UPDATE, DELETE.
+oracle_summary "summary_linear_three_commits" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_insert');
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c3_update');
+DELETE FROM t WHERE id = 2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c4_delete');
+"
+
+# Two independent tables changing in different commits. Each
+# commit should produce a row only for the table it touched.
+oracle_summary "summary_two_tables_independent" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+CREATE TABLE u(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+INSERT INTO u VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init_both');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'modify_t_only');
+INSERT INTO u VALUES (2, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'modify_u_only');
+"
+
+# Schema change via ALTER TABLE — schema_change should be 1.
+oracle_summary "summary_schema_change_add_column" "
+$SEED
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col');
+"
+
+# Combined data and schema change in one commit.
+oracle_summary "summary_data_and_schema_in_one_commit" "
+$SEED
+ALTER TABLE t ADD COLUMN extra TEXT;
+INSERT INTO t VALUES (2, 20, 'hi');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'col_and_row');
+"
+
+# Newly created table in a later commit.
+oracle_summary "summary_table_added_later" "
+$SEED
+CREATE TABLE u(id INT PRIMARY KEY, x TEXT);
+INSERT INTO u VALUES (1, 'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_u');
+"
+
+# Working-set changes are NOT reachable via dolt_diff (which is
+# commits-only); both engines should ignore them. The only
+# summary rows should be for the committed setup.
+oracle_summary "summary_working_set_excluded" "
+$SEED
+UPDATE t SET v = 99 WHERE id = 1;
+"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
