@@ -959,14 +959,6 @@ int chunkStoreClose(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-void chunkStoreGetStagedCatalog(ChunkStore *cs, ProllyHash *pStaged){
-  memcpy(pStaged, &cs->stagedCatalog, sizeof(ProllyHash));
-}
-
-void chunkStoreSetStagedCatalog(ChunkStore *cs, const ProllyHash *pStaged){
-  memcpy(&cs->stagedCatalog, pStaged, sizeof(ProllyHash));
-}
-
 const char *chunkStoreGetDefaultBranch(ChunkStore *cs){
   return cs->zDefaultBranch ? cs->zDefaultBranch : "main";
 }
@@ -1937,7 +1929,6 @@ void chunkStoreClearRefs(ChunkStore *cs){
   csFreeRemotes(cs);
   csFreeTracking(cs);
   memset(&cs->refsHash, 0, sizeof(cs->refsHash));
-  memset(&cs->stagedCatalog, 0, sizeof(cs->stagedCatalog));
 }
 
 int chunkStoreReloadRefs(ChunkStore *cs){
@@ -2043,10 +2034,6 @@ static int csReloadFromDisk(ChunkStore *cs){
   cs->pFile = tmp.pFile;
   cs->readOnly = tmp.readOnly;
   cs->refsHash = tmp.refsHash;
-  cs->stagedCatalog = tmp.stagedCatalog;
-  cs->isMerging = tmp.isMerging;
-  cs->mergeCommitHash = tmp.mergeCommitHash;
-  cs->conflictsCatalogHash = tmp.conflictsCatalogHash;
   cs->nChunks = tmp.nChunks;
   cs->iIndexOffset = tmp.iIndexOffset;
   cs->nIndexSize = tmp.nIndexSize;
@@ -2086,51 +2073,6 @@ static int csReloadFromDisk(ChunkStore *cs){
 
   csFreeReloadState(&saved);
   return SQLITE_OK;
-}
-
-int chunkStoreGetMergeState(
-  ChunkStore *cs,
-  u8 *pIsMerging,
-  ProllyHash *pMergeCommit,
-  ProllyHash *pConflictsCatalog
-){
-  if( pIsMerging ) *pIsMerging = cs->isMerging;
-  if( pMergeCommit ) memcpy(pMergeCommit, &cs->mergeCommitHash, sizeof(ProllyHash));
-  if( pConflictsCatalog ) memcpy(pConflictsCatalog, &cs->conflictsCatalogHash, sizeof(ProllyHash));
-  return SQLITE_OK;
-}
-
-void chunkStoreSetMergeState(
-  ChunkStore *cs,
-  u8 isMerging,
-  const ProllyHash *pMergeCommit,
-  const ProllyHash *pConflictsCatalog
-){
-  cs->isMerging = isMerging;
-  if( pMergeCommit ){
-    memcpy(&cs->mergeCommitHash, pMergeCommit, sizeof(ProllyHash));
-  }else{
-    memset(&cs->mergeCommitHash, 0, sizeof(ProllyHash));
-  }
-  if( pConflictsCatalog ){
-    memcpy(&cs->conflictsCatalogHash, pConflictsCatalog, sizeof(ProllyHash));
-  }else{
-    memset(&cs->conflictsCatalogHash, 0, sizeof(ProllyHash));
-  }
-}
-
-void chunkStoreClearMergeState(ChunkStore *cs){
-  cs->isMerging = 0;
-  memset(&cs->mergeCommitHash, 0, sizeof(ProllyHash));
-  memset(&cs->conflictsCatalogHash, 0, sizeof(ProllyHash));
-}
-
-void chunkStoreGetConflictsCatalog(ChunkStore *cs, ProllyHash *pHash){
-  memcpy(pHash, &cs->conflictsCatalogHash, sizeof(ProllyHash));
-}
-
-void chunkStoreSetConflictsCatalog(ChunkStore *cs, const ProllyHash *pHash){
-  memcpy(&cs->conflictsCatalogHash, pHash, sizeof(ProllyHash));
 }
 
 #endif /* DOLTLITE_PROLLY */

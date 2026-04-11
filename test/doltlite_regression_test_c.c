@@ -35,6 +35,7 @@
 **   ./doltlite_regression_test_c memory_chunk_lookup_corruption
 **   ./doltlite_regression_test_c prolly_diff_record_corruption
 **   ./doltlite_regression_test_c integrity_check_repo_state
+**   ./doltlite_regression_test_c integrity_check_session_merge_state
 **   ./doltlite_regression_test_c btree_commit_failure_transactional
 **   ./doltlite_regression_test_c mutmap_empty_reverse_iter
 */
@@ -1378,6 +1379,34 @@ static void run_integrity_check_repo_state(void){
   remove_db(dbpath);
 }
 
+static void run_integrity_check_session_merge_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  ProllyHash badHash;
+  int nErr = 0;
+  int rc;
+
+  printf("=== Integrity Check Session Merge State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_integrity_check_session_merge_state");
+  remove_db(dbpath);
+
+  check("open_db_session_merge_state", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_session_merge_state", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  memset(&badHash, 0x4c, sizeof(badHash));
+  doltliteSetSessionMergeState(db, 1, &badHash, &badHash);
+
+  rc = doltliteCheckRepoGraphIntegrity(db->aDb[0].pBt, 100, &nErr);
+  check("session_merge_state_integrity_call_succeeds", rc==SQLITE_OK);
+  check("integrity_check_reports_session_merge_state_corruption", nErr>0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_truncated_wal_is_rejected(void){
   sqlite3 *db = 0;
   ChunkStore cs;
@@ -1856,6 +1885,7 @@ static const RegressionCase aCases[] = {
   { "memory_chunk_lookup_corruption", "Memory Chunk Lookup Corruption Test", run_memory_chunk_lookup_corruption },
   { "prolly_diff_record_corruption", "Prolly Diff Record Corruption Test", run_prolly_diff_record_corruption },
   { "integrity_check_repo_state", "Integrity Check Repository State Test", run_integrity_check_repo_state },
+  { "integrity_check_session_merge_state", "Integrity Check Session Merge State Test", run_integrity_check_session_merge_state },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
