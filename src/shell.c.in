@@ -7557,22 +7557,20 @@ static int dotCmdImport(ShellState *p){
   seenInterrupt = 0;
   open_db(p, 0);
   if( sCtx.cColSep==0 ){
-    if( p->mode.spec.zColumnSep && p->mode.spec.zColumnSep[0]!=0 ){
-      sCtx.cColSep = p->mode.spec.zColumnSep[0];
-    }else{
-      sCtx.cColSep = ',';
-    }
+    /* doltlite: .import always defaults to RFC-4180 CSV (comma) regardless
+    ** of the current display mode. Upstream sqlite couples .import's
+    ** separator to the display mode, which surprises users in batch mode
+    ** (default `list` mode -> `|`) who run `.import foo.csv t` and end up
+    ** with one ANY-typed column named after the whole header line.
+    ** Use --colsep/--ascii/--csv to override. */
+    sCtx.cColSep = ',';
   }
   if( (sCtx.cColSep & 0x80)!=0 ){
     eputz("Error: .import column separator must be ASCII\n");
     return 1;
   }
   if( sCtx.cRowSep==0 ){
-    if( p->mode.spec.zRowSep && p->mode.spec.zRowSep[0]!=0 ){
-      sCtx.cRowSep = p->mode.spec.zRowSep[0];
-    }else{
-      sCtx.cRowSep = '\n';
-    }
+    sCtx.cRowSep = '\n';
   }
   if( sCtx.cRowSep=='\r' && xRead!=ascii_read_one_field ){
     sCtx.cRowSep = '\n';
