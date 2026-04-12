@@ -314,6 +314,8 @@ static int fsCommit(DoltliteRemote *pRemote){
         sqlite3_free(cdata);
         if( rc!=SQLITE_OK ) return rc;
       }
+      rc = chunkStoreSerializeRefs(&p->store);
+      if( rc!=SQLITE_OK ) return rc;
       rc = chunkStoreCommit(&p->store);
       if( rc!=SQLITE_OK ) return rc;
     }
@@ -566,9 +568,24 @@ int doltlitePush(
   
   {
     u8 *refsData2 = 0; int nRefsData2 = 0;
+    u8 *commitData = 0; int nCommitData = 0;
+    DoltliteCommit pushedCommit;
     rc = pRemote->xGetRefs(pRemote, &refsData2, &nRefsData2);
     if( rc==SQLITE_NOTFOUND ){ refsData2 = 0; nRefsData2 = 0; rc = SQLITE_OK; }
     if( rc!=SQLITE_OK ) return rc;
+    memset(&pushedCommit, 0, sizeof(pushedCommit));
+
+    rc = chunkStoreGet(pLocal, &localCommit, &commitData, &nCommitData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(refsData2);
+      return rc;
+    }
+    rc = doltliteCommitDeserialize(commitData, nCommitData, &pushedCommit);
+    sqlite3_free(commitData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(refsData2);
+      return rc;
+    }
 
     
     {
@@ -593,12 +610,23 @@ int doltlitePush(
         rc = chunkStoreAddBranch(&tmpCs, zBranch, &localCommit);
       }
       if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&pushedCommit);
+        chunkStoreClose(&tmpCs);
+        return rc;
+      }
+
+      rc = chunkStoreWriteBranchWorkingCatalog(&tmpCs, zBranch,
+                                               &pushedCommit.catalogHash,
+                                               &localCommit);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&pushedCommit);
         chunkStoreClose(&tmpCs);
         return rc;
       }
 
       
       rc = chunkStoreSerializeRefsToBlob(&tmpCs, &newRefs, &nNewRefs);
+      doltliteCommitClear(&pushedCommit);
       chunkStoreClose(&tmpCs);
       if( rc!=SQLITE_OK ) return rc;
 
