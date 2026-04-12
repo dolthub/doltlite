@@ -39,6 +39,7 @@
 **   ./doltlite_regression_test_c btree_commit_failure_transactional
 **   ./doltlite_regression_test_c mutmap_empty_reverse_iter
 **   ./doltlite_regression_test_c working_set_refreshes_staged_across_connections
+**   ./doltlite_regression_test_c reopen_preserves_staged_working_set
 **   ./doltlite_regression_test_c begin_write_refreshes_working_set_metadata
 **   ./doltlite_regression_test_c begin_write_from_stale_read_snapshot
 **   ./doltlite_regression_test_c open_rejects_corrupt_working_set
@@ -1553,6 +1554,46 @@ static void run_working_set_refreshes_staged_across_connections(void){
   remove_db(dbpath);
 }
 
+static void run_reopen_preserves_staged_working_set(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  ProllyHash stagedBeforeClose;
+  ProllyHash stagedAfterReopen;
+
+  printf("=== Reopen Preserves Staged Working Set Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_reopen_preserves_staged_working_set");
+  remove_db(dbpath);
+
+  check("open_db_for_reopen_staged", open_db(dbpath, &db)==SQLITE_OK);
+  check("create_table_for_reopen_staged",
+        execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+  check("insert_base_row_for_reopen_staged",
+        execsql(db, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  check("commit_base_row_for_reopen_staged",
+        execsql(db, "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  check("stage_new_row_for_reopen_staged",
+        execsql(db,
+          "INSERT INTO t VALUES(2,'b');"
+          "SELECT dolt_add('-A');")==SQLITE_OK);
+  check("staged_status_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status WHERE staged=1"), "1")==0);
+  doltliteGetSessionStaged(db, &stagedBeforeClose);
+  check("staged_hash_before_close_nonempty",
+        !prollyHashIsEmpty(&stagedBeforeClose));
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_reopen_staged", open_db(dbpath, &db)==SQLITE_OK);
+  check("staged_status_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status WHERE staged=1"), "1")==0);
+  doltliteGetSessionStaged(db, &stagedAfterReopen);
+  check("staged_hash_after_reopen_matches",
+        memcmp(&stagedAfterReopen, &stagedBeforeClose, sizeof(ProllyHash))==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_begin_write_refreshes_working_set_metadata(void){
   sqlite3 *db1 = 0;
   sqlite3 *db2 = 0;
@@ -2176,6 +2217,7 @@ static const RegressionCase aCases[] = {
   { "prepared_stmt_reuse_after_commit", "Prepared Statement Reuse After Commit Test", run_prepared_stmt_reuse_after_commit },
   { "prepared_stmt_reuse_after_schema_checkout", "Prepared Statement Reuse After Schema Checkout Test", run_prepared_stmt_reuse_after_schema_checkout },
   { "working_set_refreshes_staged_across_connections", "Working Set Refreshes Staged Across Connections Test", run_working_set_refreshes_staged_across_connections },
+  { "reopen_preserves_staged_working_set", "Reopen Preserves Staged Working Set Test", run_reopen_preserves_staged_working_set },
   { "begin_write_refreshes_working_set_metadata", "Begin Write Refreshes Working Set Metadata Test", run_begin_write_refreshes_working_set_metadata },
   { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },

@@ -1597,7 +1597,6 @@ int sqlite3BtreeOpen(
           sqlite3_free(p);
           return rc;
         }
-        goto catalog_loaded;
       }else{
         sqlite3_free(catData);
         if( rc!=SQLITE_OK ){
@@ -1635,7 +1634,6 @@ int sqlite3BtreeOpen(
     return SQLITE_NOMEM;
   }
 
-catalog_loaded:
   p->db = db;
   p->pBt = pBt;
   p->pOps = &prollyBtreeOps;
