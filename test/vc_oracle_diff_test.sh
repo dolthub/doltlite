@@ -210,6 +210,51 @@ oracle_summary() {
   fi
 }
 
+# Oracle for `dolt_diff WHERE dd.table_name='X'` filtering a commit
+# that names a table that no longer exists (dropped at some point).
+# This exercises the fallback path where doltlite's polymorphic
+# vtable can't resolve the name to a live user table and therefore
+# falls through to summary mode with an in-memory name filter.
+#
+# Intentionally different from the TVF form `dolt_diff('X')`, which
+# still goes per-row against a live table.
+oracle_summary_filter_name() {
+  local name="$1" setup="$2" target="$3"
+  local dir="$TMPROOT/${name}_filter"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local q="SELECT 'S' || char(9) || dd.table_name || char(9) || coalesce(dl.message, dd.commit_hash) || char(9) || dd.data_change || char(9) || dd.schema_change FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash WHERE dd.table_name = '$target'"
+  local q_dolt="SELECT concat('S', char(9), dd.table_name, char(9), coalesce(dl.message, dd.commit_hash), char(9), dd.data_change, char(9), dd.schema_change) FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash WHERE dd.table_name = '$target'"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | normalize_summary)
+
+  local dolt_setup
+  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    {
+      printf '%s\n' "$dolt_setup"
+      printf '%s;\n' "$q_dolt"
+    } | "$DOLT" sql -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
+  )
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_diff / dolt_diff_<table> ==="
 echo ""
 
@@ -515,6 +560,57 @@ oracle_summary "summary_working_set_excluded" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 "
+
+echo "--- summary form: WHERE table_name=... filter ---"
+
+# Filter summary rows to a table that has been DROPPED by the time
+# of the query. doltlite's polymorphic vtable can't resolve the
+# name to a live user table, so it must fall through to summary
+# mode with an in-memory name filter.
+oracle_summary_filter_name "filter_dropped_table" "
+CREATE TABLE dropped(id INT PRIMARY KEY, v INT);
+INSERT INTO dropped VALUES(1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1_create_dropped');
+INSERT INTO dropped VALUES(2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_modify_dropped');
+DROP TABLE dropped;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c3_drop_dropped');
+" "dropped"
+
+# Filter to a name that never existed — both engines return empty.
+oracle_summary_filter_name "filter_nonexistent_name" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "never_existed"
+
+# Filter to a table that appears in multiple commits with a mix of
+# data and schema changes, along with unrelated tables in those
+# commits. The filter should return only the rows that match the
+# named table.
+oracle_summary_filter_name "filter_mixed_history" "
+CREATE TABLE x(id INT PRIMARY KEY, v INT);
+INSERT INTO x VALUES(1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'create_x');
+CREATE TABLE y(id INT PRIMARY KEY);
+INSERT INTO y VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'create_y');
+INSERT INTO x VALUES(2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'update_x');
+INSERT INTO y VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'update_y');
+DROP TABLE x;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_x');
+" "x"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
