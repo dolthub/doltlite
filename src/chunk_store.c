@@ -142,6 +142,7 @@ static void csFreeRefsState(ChunkStore *cs);
 static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData);
 static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc);
 static int csReloadFromDisk(ChunkStore *cs);
+static int csDetectExternalChanges(ChunkStore *cs, int *pChanged);
 
 #define CS_WAL_TAG_CHUNK  0x01
 #define CS_WAL_TAG_ROOT   0x02
@@ -1982,13 +1983,12 @@ void chunkStoreUnlock(ChunkStore *cs){
   }
 }
 
-int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
+static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
   int bMoved = 0;
   int rc;
+
   *pChanged = 0;
   if( cs->isMemory ) return SQLITE_OK;
-
-  if( cs->snapshotPinned ) return SQLITE_OK;
 
   if( cs->pFile==0 ){
     int exists = 0;
@@ -1998,8 +1998,6 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
     if( exists ){
       struct stat mainStat;
       if( stat(cs->zFilename, &mainStat)==0 && mainStat.st_size > 0 ){
-        rc = csReloadFromDisk(cs);
-        if( rc!=SQLITE_OK ) return rc;
         *pChanged = 1;
       }
     }
@@ -2008,13 +2006,38 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
 
   rc = sqlite3OsFileControl(cs->pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
   if( rc!=SQLITE_OK ) return rc;
+  if( bMoved ){
+    *pChanged = 1;
+    return SQLITE_OK;
+  }
 
-  if( !bMoved ){
+  {
     i64 fileSize = 0;
     rc = sqlite3OsFileSize(cs->pFile, &fileSize);
     if( rc!=SQLITE_OK ) return rc;
-    if( fileSize <= cs->iFileSize ) return SQLITE_OK;
+    if( fileSize > cs->iFileSize ){
+      *pChanged = 1;
+    }
   }
+  return SQLITE_OK;
+}
+
+int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged){
+  return csDetectExternalChanges(cs, pChanged);
+}
+
+int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
+  int rc;
+  int bChanged = 0;
+  if( cs->isMemory ){
+    *pChanged = 0;
+    return SQLITE_OK;
+  }
+  *pChanged = 0;
+  if( cs->snapshotPinned ) return SQLITE_OK;
+  rc = csDetectExternalChanges(cs, &bChanged);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !bChanged ) return SQLITE_OK;
 
   rc = csReloadFromDisk(cs);
   if( rc!=SQLITE_OK ) return rc;

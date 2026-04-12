@@ -177,6 +177,17 @@ static int doltliteRefreshAndConfirmHead(
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
 
+  if( cs->snapshotPinned ){
+    int changed = 0;
+    cs->snapshotPinned = 0;
+    rc = chunkStoreRefreshIfChanged(cs, &changed);
+    cs->snapshotPinned = 1;
+    if( rc!=SQLITE_OK ){
+      chunkStoreUnlock(cs);
+      return rc;
+    }
+  }
+ 
   zBranch = doltliteGetSessionBranch(db);
   if( chunkStoreFindBranch(cs, zBranch, &branchTip)==SQLITE_OK
    && prollyHashCompare(&branchTip, pExpectedHead)!=0 ){
@@ -253,6 +264,16 @@ int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
 
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
+  if( cs->snapshotPinned ){
+    int changed = 0;
+    cs->snapshotPinned = 0;
+    rc = chunkStoreRefreshIfChanged(cs, &changed);
+    cs->snapshotPinned = 1;
+    if( rc!=SQLITE_OK ){
+      chunkStoreUnlock(cs);
+      return rc;
+    }
+  }
 
   rc = xMutate(db, cs, pArg);
   if( rc==SQLITE_OK ){
@@ -658,6 +679,7 @@ static void doltliteCommitFunc(
   int skipEmpty = 0;         /* --skip-empty:  silently no-op when no changes */
   ProllyHash commitHash;
   ProllyHash catalogHash;
+  ProllyHash sessionHeadBeforeLock;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
   int rc;
   int i;
@@ -1017,34 +1039,20 @@ static void doltliteCommitFunc(
     }
   }
 
+  doltliteGetSessionHead(db, &sessionHeadBeforeLock);
+
   /* Lock the commit graph, refresh from disk, then check for conflicts.
   ** This serializes all commit graph mutations across connections. */
-  rc = chunkStoreLockAndRefresh(cs);
+  rc = doltliteRefreshAndConfirmHead(db, cs, &sessionHeadBeforeLock);
   if( rc==SQLITE_BUSY ){
     sqlite3_result_error(context,
-      "database is locked by another connection", -1);
+      "commit conflict: another connection committed to this branch. "
+      "Please retry your transaction.", -1);
     return;
   }
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;
-  }
-
-  /* Under lock: check if branch tip still matches our session HEAD */
-  {
-    const char *branch = doltliteGetSessionBranch(db);
-    ProllyHash branchTip;
-    ProllyHash sessionHead;
-    doltliteGetSessionHead(db, &sessionHead);
-    if( chunkStoreFindBranch(cs, branch, &branchTip)==SQLITE_OK ){
-      if( prollyHashCompare(&sessionHead, &branchTip)!=0 ){
-        chunkStoreUnlock(cs);
-        sqlite3_result_error(context,
-          "commit conflict: another connection committed to this branch. "
-          "Please retry your transaction.", -1);
-        return;
-      }
-    }
   }
 
   /* Under lock: update session and shared state */
@@ -1094,6 +1102,7 @@ static void doltliteResetFunc(
   ProllyHash targetCatHash;
   ProllyHash targetCommit;
   ProllyHash preResetHeadCatHash;
+  ProllyHash sessionHeadBeforeLock;
   int havePreResetHead = 0;
   int isHard = 0;
   int isSoft = 0;
@@ -1314,10 +1323,12 @@ static void doltliteResetFunc(
     memcpy(&targetCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
 
-    rc = chunkStoreLockAndRefresh(cs);
+    doltliteGetSessionHead(db, &sessionHeadBeforeLock);
+    rc = doltliteRefreshAndConfirmHead(db, cs, &sessionHeadBeforeLock);
     if( rc==SQLITE_BUSY ){
       sqlite3_result_error(context,
-        "database is locked by another connection", -1);
+        "reset conflict: another connection moved this branch. "
+        "Please retry your transaction.", -1);
       return;
     }
     if( rc!=SQLITE_OK ){
@@ -1325,20 +1336,6 @@ static void doltliteResetFunc(
       return;
     }
     graphLocked = 1;
-
-    {
-      const char *branch = doltliteGetSessionBranch(db);
-      ProllyHash branchTip;
-      ProllyHash sessionHead;
-      doltliteGetSessionHead(db, &sessionHead);
-      if( chunkStoreFindBranch(cs, branch, &branchTip)==SQLITE_OK
-       && prollyHashCompare(&sessionHead, &branchTip)!=0 ){
-        sqlite3_result_error(context,
-          "reset conflict: another connection moved this branch. "
-          "Please retry your transaction.", -1);
-        goto reset_cleanup;
-      }
-    }
 
     doltliteSetSessionHead(db, &targetCommit);
     rc = chunkStoreUpdateBranch(cs, doltliteGetSessionBranch(db), &targetCommit);

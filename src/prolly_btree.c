@@ -1554,10 +1554,34 @@ int sqlite3BtreeOpen(
   ** since p->zBranch hasn't been set yet (checkout happens later). */
   {
     ProllyHash catHash;
+    ProllyHash workingCommit;
+    ProllyHash stagedCatalog;
+    ProllyHash mergeCommitHash;
+    ProllyHash conflictsCatalogHash;
+    ProllyHash branchCommit;
     const char *zDef = chunkStoreGetDefaultBranch(&pBt->store);
+    u8 isMerging = 0;
     if( !zDef ) zDef = "main";
     memset(&catHash, 0, sizeof(catHash));
-    btreeReadWorkingCatalog(&pBt->store, zDef, &catHash, NULL);
+    memset(&workingCommit, 0, sizeof(workingCommit));
+    memset(&stagedCatalog, 0, sizeof(stagedCatalog));
+    memset(&mergeCommitHash, 0, sizeof(mergeCommitHash));
+    memset(&conflictsCatalogHash, 0, sizeof(conflictsCatalogHash));
+    memset(&branchCommit, 0, sizeof(branchCommit));
+    rc = btreeLoadWorkingSetBlob(&pBt->store, zDef, &catHash, &workingCommit,
+                                 &stagedCatalog, &isMerging,
+                                 &mergeCommitHash, &conflictsCatalogHash);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = SQLITE_OK;
+    }
+    if( rc!=SQLITE_OK ){
+      pagerShimDestroy(pBt->pPagerShim);
+      prollyCacheFree(&pBt->cache);
+      chunkStoreClose(&pBt->store);
+      sqlite3_free(pBt);
+      sqlite3_free(p);
+      return rc;
+    }
     if( !prollyHashIsEmpty(&catHash) ){
       u8 *catData = 0;
       int nCatData = 0;
@@ -1574,8 +1598,30 @@ int sqlite3BtreeOpen(
           return rc;
         }
         goto catalog_loaded;
+      }else{
+        sqlite3_free(catData);
+        if( rc!=SQLITE_OK ){
+          pagerShimDestroy(pBt->pPagerShim);
+          prollyCacheFree(&pBt->cache);
+          chunkStoreClose(&pBt->store);
+          sqlite3_free(pBt);
+          sqlite3_free(p);
+          return rc;
+        }
       }
     }
+
+    if( chunkStoreFindBranch(&pBt->store, zDef, &branchCommit)==SQLITE_OK ){
+      memcpy(&p->headCommit, &branchCommit, sizeof(ProllyHash));
+    }else if( !prollyHashIsEmpty(&workingCommit) ){
+      memcpy(&p->headCommit, &workingCommit, sizeof(ProllyHash));
+    }else{
+      memset(&p->headCommit, 0, sizeof(ProllyHash));
+    }
+    p->stagedCatalog = stagedCatalog;
+    p->isMerging = isMerging;
+    p->mergeCommitHash = mergeCommitHash;
+    p->conflictsCatalogHash = conflictsCatalogHash;
   }
 
   
@@ -1605,38 +1651,10 @@ catalog_loaded:
     const char *defBranch = chunkStoreGetDefaultBranch(&pBt->store);
     ProllyHash branchCommit;
     p->zBranch = sqlite3_mprintf("%s", defBranch);
-    
-    if( chunkStoreFindBranch(&pBt->store, defBranch, &branchCommit)==SQLITE_OK ){
+
+    if( prollyHashIsEmpty(&p->headCommit)
+     && chunkStoreFindBranch(&pBt->store, defBranch, &branchCommit)==SQLITE_OK ){
       memcpy(&p->headCommit, &branchCommit, sizeof(ProllyHash));
-    }else{
-      memset(&p->headCommit, 0, sizeof(ProllyHash));
-    }
-    
-    {
-      ProllyHash wsHash;
-      if( chunkStoreGetBranchWorkingSet(&pBt->store, defBranch, &wsHash)==SQLITE_OK
-       && !prollyHashIsEmpty(&wsHash) ){
-        
-        u8 *wsData = 0; int nWsData = 0;
-        if( chunkStoreGet(&pBt->store, &wsHash, &wsData, &nWsData)==SQLITE_OK
-         && wsData && nWsData >= WS_TOTAL_SIZE && wsData[0] == 2 ){
-          memcpy(p->stagedCatalog.data, wsData + WS_STAGED_OFF, PROLLY_HASH_SIZE);
-          p->isMerging = wsData[WS_MERGING_OFF];
-          memcpy(p->mergeCommitHash.data, wsData + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
-          memcpy(p->conflictsCatalogHash.data, wsData + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
-        }else{
-          memset(&p->stagedCatalog, 0, sizeof(ProllyHash));
-          p->isMerging = 0;
-          memset(&p->mergeCommitHash, 0, sizeof(ProllyHash));
-          memset(&p->conflictsCatalogHash, 0, sizeof(ProllyHash));
-        }
-        sqlite3_free(wsData);
-      }else{
-        memset(&p->stagedCatalog, 0, sizeof(ProllyHash));
-        p->isMerging = 0;
-        memset(&p->mergeCommitHash, 0, sizeof(ProllyHash));
-        memset(&p->conflictsCatalogHash, 0, sizeof(ProllyHash));
-      }
     }
   }
 
@@ -2087,6 +2105,19 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     ** latest committed state. */
     rc = chunkStoreLockAndRefresh(&pBt->store);
     if( rc!=SQLITE_OK ) return rc;
+
+    if( p->inTrans==TRANS_READ ){
+      int bChanged = 0;
+      rc = chunkStoreHasExternalChanges(&pBt->store, &bChanged);
+      if( rc!=SQLITE_OK ){
+        chunkStoreUnlock(&pBt->store);
+        return rc;
+      }
+      if( bChanged ){
+        chunkStoreUnlock(&pBt->store);
+        return SQLITE_BUSY_SNAPSHOT;
+      }
+    }
 
     rc = btreeReloadBranchWorkingState(p, 1);
     if( rc!=SQLITE_OK ){
@@ -5609,7 +5640,8 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
   pBtree = db->aDb[0].pBt;
   if( !cs ) return SQLITE_ERROR;
 
-  rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, &pBtree->stagedCatalog,
+  rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0,
+                               &pBtree->stagedCatalog,
                                &pBtree->isMerging, &pBtree->mergeCommitHash,
                                &pBtree->conflictsCatalogHash);
   if( rc == SQLITE_NOTFOUND ){

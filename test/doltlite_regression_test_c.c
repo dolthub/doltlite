@@ -40,6 +40,8 @@
 **   ./doltlite_regression_test_c mutmap_empty_reverse_iter
 **   ./doltlite_regression_test_c working_set_refreshes_staged_across_connections
 **   ./doltlite_regression_test_c begin_write_refreshes_working_set_metadata
+**   ./doltlite_regression_test_c begin_write_from_stale_read_snapshot
+**   ./doltlite_regression_test_c open_rejects_corrupt_working_set
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -1610,6 +1612,88 @@ static void run_begin_write_refreshes_working_set_metadata(void){
   remove_db(dbpath);
 }
 
+static void run_begin_write_from_stale_read_snapshot(void){
+  sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
+  sqlite3_stmt *pRead = 0;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Begin Write From Stale Read Snapshot Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_begin_write_from_stale_read_snapshot");
+  remove_db(dbpath);
+
+  check("open_db1_for_stale_snapshot", open_db(dbpath, &db1)==SQLITE_OK);
+  check("create_table_for_stale_snapshot",
+        execsql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+  check("insert_row_for_stale_snapshot",
+        execsql(db1, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  check("open_db2_for_stale_snapshot", open_db(dbpath, &db2)==SQLITE_OK);
+
+  check("begin_read_txn_for_stale_snapshot", execsql(db2, "BEGIN;")==SQLITE_OK);
+  check("prepare_read_in_stale_snapshot",
+        sqlite3_prepare_v2(db2, "SELECT count(*) FROM t", -1, &pRead, 0)==SQLITE_OK);
+  check("step_read_in_stale_snapshot", sqlite3_step(pRead)==SQLITE_ROW);
+  check("read_in_stale_snapshot", sqlite3_column_int(pRead, 0)==1);
+  check("db1_autocommit_change_after_read_snapshot",
+        execsql(db1, "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+
+  rc = execsql_silent(db2, "INSERT INTO t VALUES(3,'c');");
+  check("write_upgrade_fails", rc!=SQLITE_OK);
+  check("write_upgrade_returns_busy_snapshot",
+        sqlite3_extended_errcode(db2)==SQLITE_BUSY_SNAPSHOT);
+  sqlite3_finalize(pRead);
+  check("rollback_stale_snapshot_txn", execsql(db2, "ROLLBACK;")==SQLITE_OK);
+  check("stale_snapshot_did_not_overwrite_rows",
+        strcmp(exec1(db1, "SELECT count(*) FROM t"), "2")==0);
+
+  sqlite3_close(db2);
+  sqlite3_close(db1);
+  remove_db(dbpath);
+}
+
+static void run_open_rejects_corrupt_working_set(void){
+  sqlite3 *db = 0;
+  sqlite3 *db2 = 0;
+  ChunkStore cs;
+  char dbpath[256];
+  int stmtRc;
+  ProllyHash badHash;
+  int rc;
+  static const unsigned char badBlob[] = { 0x01, 0x02, 0x03, 0x04 };
+
+  printf("=== Open Rejects Corrupt Working Set Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_open_rejects_corrupt_working_set");
+  remove_db(dbpath);
+
+  check("open_db_for_corrupt_working_set", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_corrupt_working_set", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_close(db);
+  db = 0;
+
+  check("open_store_for_corrupt_working_set",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("store_bad_working_set_blob",
+        chunkStorePut(&cs, badBlob, (int)sizeof(badBlob), &badHash)==SQLITE_OK);
+  check("point_main_branch_at_bad_working_set",
+        chunkStoreSetBranchWorkingSet(&cs, "main", &badHash)==SQLITE_OK);
+  check("serialize_refs_for_bad_working_set",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("commit_bad_working_set_refs", chunkStoreCommit(&cs)==SQLITE_OK);
+  chunkStoreClose(&cs);
+
+  rc = sqlite3_open(dbpath, &db2);
+  stmtRc = db2 ? execsql_silent(db2, "SELECT count(*) FROM sqlite_master;") : rc;
+  check("open_or_first_statement_returns_corrupt_for_bad_working_set",
+        rc==SQLITE_CORRUPT || stmtRc==SQLITE_CORRUPT);
+  if( db2 ) sqlite3_close(db2);
+  remove_db(dbpath);
+}
+
 static void run_truncated_wal_is_rejected(void){
   sqlite3 *db = 0;
   ChunkStore cs;
@@ -2093,6 +2177,8 @@ static const RegressionCase aCases[] = {
   { "prepared_stmt_reuse_after_schema_checkout", "Prepared Statement Reuse After Schema Checkout Test", run_prepared_stmt_reuse_after_schema_checkout },
   { "working_set_refreshes_staged_across_connections", "Working Set Refreshes Staged Across Connections Test", run_working_set_refreshes_staged_across_connections },
   { "begin_write_refreshes_working_set_metadata", "Begin Write Refreshes Working Set Metadata Test", run_begin_write_refreshes_working_set_metadata },
+  { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
+  { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
