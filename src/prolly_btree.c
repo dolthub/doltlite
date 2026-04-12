@@ -1460,12 +1460,15 @@ int sqlite3BtreeOpen(
 
   /* Delegate to the original SQLite btree implementation for:
   ** - NULL/empty filenames
-  ** - explicit in-memory databases
+  ** - attached explicit in-memory databases
   ** - BTREE_SINGLE flag (transient/ephemeral btrees)
   ** - Temp database (SQLITE_OPEN_TEMP_DB in vfsFlags)
-  ** - Existing files with standard SQLite headers */
+  ** - Existing files with standard SQLite headers
+  **
+  ** Keep the main ":memory:" database on the Doltlite path so the shell and
+  ** SQL functions/modules are registered normally. */
   if( !zFilename || zFilename[0]=='\0'
-   || strcmp(zFilename, ":memory:")==0
+   || (strcmp(zFilename, ":memory:")==0 && db->aDb[0].pBt!=0)
    || (flags & BTREE_SINGLE)
    || (vfsFlags & SQLITE_OPEN_TEMP_DB)
    || origBtreeIsSqliteFile(zFilename)
