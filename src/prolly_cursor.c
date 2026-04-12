@@ -100,6 +100,7 @@ void prollyCursorInit(ProllyCursor *cur, ChunkStore *pStore,
 int prollyCursorFirst(ProllyCursor *cur, int *pRes){
   int rc;
   ProllyCacheEntry *pRoot = 0;
+  ProllyCacheEntry *pLeaf;
 
   prollyCursorReleaseAll(cur);
 
@@ -119,6 +120,13 @@ int prollyCursorFirst(ProllyCursor *cur, int *pRes){
   rc = descendToLeftmostLeaf(cur);
   if( rc!=SQLITE_OK ) return rc;
 
+  pLeaf = cur->aLevel[cur->iLevel].pEntry;
+  if( pLeaf->node.nItems==0 ){
+    cur->eState = PROLLY_CURSOR_EOF;
+    *pRes = 1;
+    return SQLITE_OK;
+  }
+
   cur->eState = PROLLY_CURSOR_VALID;
   *pRes = 0;
   return SQLITE_OK;
@@ -127,6 +135,7 @@ int prollyCursorFirst(ProllyCursor *cur, int *pRes){
 int prollyCursorLast(ProllyCursor *cur, int *pRes){
   int rc;
   ProllyCacheEntry *pRoot = 0;
+  ProllyCacheEntry *pLeaf;
 
   prollyCursorReleaseAll(cur);
 
@@ -138,6 +147,15 @@ int prollyCursorLast(ProllyCursor *cur, int *pRes){
 
   rc = loadNode(cur, &cur->root, &pRoot);
   if( rc!=SQLITE_OK ) return rc;
+  if( pRoot->node.nItems==0 ){
+    cur->iLevel = 0;
+    cur->aLevel[0].pEntry = pRoot;
+    cur->aLevel[0].idx = 0;
+    cur->nLevel = 1;
+    cur->eState = PROLLY_CURSOR_EOF;
+    *pRes = 1;
+    return SQLITE_OK;
+  }
 
   cur->iLevel = 0;
   cur->aLevel[0].pEntry = pRoot;
@@ -145,6 +163,13 @@ int prollyCursorLast(ProllyCursor *cur, int *pRes){
 
   rc = descendToRightmostLeaf(cur);
   if( rc!=SQLITE_OK ) return rc;
+
+  pLeaf = cur->aLevel[cur->iLevel].pEntry;
+  if( pLeaf->node.nItems==0 ){
+    cur->eState = PROLLY_CURSOR_EOF;
+    *pRes = 1;
+    return SQLITE_OK;
+  }
 
   cur->eState = PROLLY_CURSOR_VALID;
   *pRes = 0;
@@ -341,7 +366,7 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     int searchRes;
     int idx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &searchRes);
 
-    if( searchRes>0 ){
+    if( searchRes>0 && idx<pEntry->node.nItems-1 ){
       idx++;
     }
 
