@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Tests for per-row conflict resolution via dolt_conflicts_<tablename>.
-# Uses DELETE FROM dolt_conflicts_<table> WHERE base_rowid=N to resolve
+# Uses DELETE FROM dolt_conflicts_<table> WHERE base_id=N to resolve
 # individual conflict rows.
 #
 DOLTLITE=./doltlite
@@ -38,12 +38,13 @@ DB=/tmp/test_cfrow_view_$$.db
 setup_conflict "$DB"
 
 run_test "view_count" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "view_base_rowid" "SELECT base_rowid FROM dolt_conflicts_t;" "1" "$DB"
-run_test "view_our_rowid" "SELECT our_rowid FROM dolt_conflicts_t;" "1" "$DB"
-run_test "view_their_rowid" "SELECT their_rowid FROM dolt_conflicts_t;" "1" "$DB"
-# Values are now decoded as text (pipe-separated fields)
-run_test_match "view_base_val" "SELECT typeof(base_value) FROM dolt_conflicts_t;" "text|null" "$DB"
-run_test_match "view_their_val" "SELECT typeof(their_value) FROM dolt_conflicts_t;" "text" "$DB"
+run_test "view_base_id" "SELECT base_id FROM dolt_conflicts_t;" "1" "$DB"
+run_test "view_our_id" "SELECT our_id FROM dolt_conflicts_t;" "1" "$DB"
+run_test "view_their_id" "SELECT their_id FROM dolt_conflicts_t;" "1" "$DB"
+# User columns are projected individually now (Dolt-compatible schema).
+# The v column is declared TEXT so typeof(base_v) is "text".
+run_test_match "view_base_val" "SELECT typeof(base_v) FROM dolt_conflicts_t;" "text|null" "$DB"
+run_test_match "view_their_val" "SELECT typeof(their_v) FROM dolt_conflicts_t;" "text" "$DB"
 
 rm -f "$DB"
 
@@ -54,7 +55,7 @@ rm -f "$DB"
 DB=/tmp/test_cfrow_del_$$.db
 setup_conflict "$DB"
 
-echo "DELETE FROM dolt_conflicts_t WHERE base_rowid=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "DELETE FROM dolt_conflicts_t WHERE base_id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # After deleting all conflicts, the conflict table module is removed
 run_test "del_summary_cleared" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
@@ -103,10 +104,10 @@ setup_conflict "$DB"
 # Reopen — conflicts visible
 run_test "persist_summary" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB"
 run_test "persist_rows" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "persist_rowid" "SELECT base_rowid FROM dolt_conflicts_t;" "1" "$DB"
+run_test "persist_rowid" "SELECT base_id FROM dolt_conflicts_t;" "1" "$DB"
 
 # Delete via new session
-echo "DELETE FROM dolt_conflicts_t WHERE base_rowid=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "DELETE FROM dolt_conflicts_t WHERE base_id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Verify cleared after another reopen
 run_test "persist_after_del" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
@@ -120,10 +121,10 @@ rm -f "$DB"
 DB=/tmp/test_cfrow_noop_$$.db
 setup_conflict "$DB"
 
-echo "DELETE FROM dolt_conflicts_t WHERE base_rowid=999;" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "DELETE FROM dolt_conflicts_t WHERE base_id=999;" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "noop_still_there" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "noop_rowid" "SELECT base_rowid FROM dolt_conflicts_t;" "1" "$DB"
+run_test "noop_rowid" "SELECT base_id FROM dolt_conflicts_t;" "1" "$DB"
 
 rm -f "$DB"
 
@@ -146,7 +147,7 @@ SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | 
 
 run_test "cp_has_conflict" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
 
-echo "DELETE FROM dolt_conflicts_t WHERE base_rowid=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "DELETE FROM dolt_conflicts_t WHERE base_id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "cp_resolved" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 run_test "cp_val" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
 
@@ -169,9 +170,9 @@ UPDATE t SET v='main_val' WHERE id=1000;
 SELECT dolt_commit('-A','-m','main');
 SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "bigid_rowid" "SELECT base_rowid FROM dolt_conflicts_t;" "1000" "$DB"
+run_test "bigid_rowid" "SELECT base_id FROM dolt_conflicts_t;" "1000" "$DB"
 
-echo "DELETE FROM dolt_conflicts_t WHERE base_rowid=1000;" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "DELETE FROM dolt_conflicts_t WHERE base_id=1000;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "bigid_cleared" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 run_test "bigid_val" "SELECT v FROM t WHERE id=1000;" "main_val" "$DB"
 
@@ -184,7 +185,7 @@ rm -f "$DB"
 DB=/tmp/test_cfrow_fullflow_$$.db
 setup_conflict "$DB"
 
-echo "DELETE FROM dolt_conflicts_t WHERE base_rowid=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "DELETE FROM dolt_conflicts_t WHERE base_id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Conflicts resolved but merge not committed yet — user must commit
 run_test "flow_val" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
