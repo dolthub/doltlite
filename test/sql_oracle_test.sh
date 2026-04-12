@@ -1,9 +1,11 @@
 #!/bin/bash
 #
-# Oracle test: run identical SQL against doltlite and stock SQLite,
-# compare output. Catches any divergence in index-related mutations.
+# SQL oracle test: run identical SQL against doltlite and stock SQLite,
+# compare output. Exercises general SQL semantics (DDL, DML, indexes,
+# joins, aggregates, etc.) — anywhere doltlite should behave like
+# upstream SQLite at the row level.
 #
-# Usage: bash index_oracle_test.sh [path/to/doltlite] [path/to/sqlite3]
+# Usage: bash sql_oracle_test.sh [path/to/doltlite] [path/to/sqlite3]
 #
 
 DOLTLITE="${1:-./doltlite}"

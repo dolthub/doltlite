@@ -59,8 +59,8 @@ jobs:
       run: cd build && bash ../test/index_test.sh ./doltlite
       timeout-minutes: 5
 
-    - name: Index oracle tests
-      run: cd build && bash ../test/index_oracle_test.sh ./doltlite sqlite3
+    - name: SQL oracle tests (vs stock SQLite)
+      run: cd build && bash ../test/sql_oracle_test.sh ./doltlite sqlite3
       timeout-minutes: 5
 
     - name: Version control oracle tests (dolt_log)
