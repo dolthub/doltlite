@@ -43,6 +43,8 @@
 **   ./doltlite_regression_test_c begin_write_refreshes_working_set_metadata
 **   ./doltlite_regression_test_c begin_write_from_stale_read_snapshot
 **   ./doltlite_regression_test_c open_rejects_corrupt_working_set
+**   ./doltlite_regression_test_c prolly_blob_cursor_seek_past_max
+**   ./doltlite_regression_test_c prolly_cursor_empty_leaf_root
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -2157,6 +2159,120 @@ static void run_prolly_blob_cursor_seek_across_internal_boundary(void){
   chunkStoreClose(&cs);
 }
 
+static void run_prolly_blob_cursor_seek_past_max(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyCursor cur;
+  ProllyNodeBuilder b;
+  ProllyHash leftHash, rightHash, rootHash;
+  u8 *pNode = 0;
+  int nNode = 0;
+  const u8 *pKey = 0;
+  int nKey = 0;
+  int rc;
+  int res = 99;
+
+  static const u8 v1[] = { '1' };
+  static const u8 v2[] = { '2' };
+  static const u8 kA[] = { 'a' };
+  static const u8 kM[] = { 'm' };
+  static const u8 kT[] = { 't' };
+  static const u8 kZ[] = { 'z' };
+  static const u8 kZZ[] = { 'z', 'z' };
+
+  printf("=== Prolly Blob Cursor Seek Past Max Test ===\n\n");
+
+  check("open_memory_store_for_blob_cursor_past_max",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("init_cache_for_blob_cursor_past_max", prollyCacheInit(&cache, 8)==SQLITE_OK);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
+  check("build_left_leaf_a_past_max",
+        prollyNodeBuilderAdd(&b, kA, sizeof(kA), v1, sizeof(v1))==SQLITE_OK);
+  check("build_left_leaf_m_past_max",
+        prollyNodeBuilderAdd(&b, kM, sizeof(kM), v1, sizeof(v1))==SQLITE_OK);
+  check("finish_left_leaf_past_max", prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_left_leaf_past_max", chunkStorePut(&cs, pNode, nNode, &leftHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
+  check("build_right_leaf_t_past_max",
+        prollyNodeBuilderAdd(&b, kT, sizeof(kT), v2, sizeof(v2))==SQLITE_OK);
+  check("build_right_leaf_z_past_max",
+        prollyNodeBuilderAdd(&b, kZ, sizeof(kZ), v2, sizeof(v2))==SQLITE_OK);
+  check("finish_right_leaf_past_max", prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_right_leaf_past_max", chunkStorePut(&cs, pNode, nNode, &rightHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 1, PROLLY_NODE_BLOBKEY);
+  check("build_root_left_sep_past_max",
+        prollyNodeBuilderAdd(&b, kM, sizeof(kM),
+                             leftHash.data, PROLLY_HASH_SIZE)==SQLITE_OK);
+  check("build_root_right_sep_past_max",
+        prollyNodeBuilderAdd(&b, kZ, sizeof(kZ),
+                             rightHash.data, PROLLY_HASH_SIZE)==SQLITE_OK);
+  check("finish_root_past_max", prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_root_past_max", chunkStorePut(&cs, pNode, nNode, &rootHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  prollyNodeBuilderFree(&b);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorSeekBlob(&cur, kZZ, sizeof(kZZ), &res);
+  check("seek_blob_key_past_max", rc==SQLITE_OK);
+  check("seek_blob_key_past_max_result", res==-1);
+  check("blob_cursor_valid_after_past_max_seek", prollyCursorIsValid(&cur));
+  if( prollyCursorIsValid(&cur) ){
+    prollyCursorKey(&cur, &pKey, &nKey);
+    check("blob_cursor_lands_on_max_key_after_past_max_seek",
+          nKey==(int)sizeof(kZ) && memcmp(pKey, kZ, sizeof(kZ))==0);
+  }
+
+  prollyCursorClose(&cur);
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
+static void run_prolly_cursor_empty_leaf_root(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyCursor cur;
+  ProllyHash rootHash;
+  int rc;
+  int res = 99;
+  static const u8 emptyLeafRoot[] = {
+    'D', 'O', 'N', 'P', 0, 0, 0, PROLLY_NODE_BLOBKEY
+  };
+
+  printf("=== Prolly Cursor Empty Leaf Root Test ===\n\n");
+
+  check("open_memory_store_for_empty_leaf_root",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("init_cache_for_empty_leaf_root", prollyCacheInit(&cache, 4)==SQLITE_OK);
+  check("store_empty_leaf_root",
+        chunkStorePut(&cs, emptyLeafRoot, (int)sizeof(emptyLeafRoot), &rootHash)==SQLITE_OK);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorFirst(&cur, &res);
+  check("cursor_first_empty_leaf_root_ok", rc==SQLITE_OK);
+  check("cursor_first_empty_leaf_root_eof", res==1);
+  check("cursor_first_empty_leaf_root_not_valid", !prollyCursorIsValid(&cur));
+  prollyCursorClose(&cur);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorLast(&cur, &res);
+  check("cursor_last_empty_leaf_root_ok", rc==SQLITE_OK);
+  check("cursor_last_empty_leaf_root_eof", res==1);
+  check("cursor_last_empty_leaf_root_not_valid", !prollyCursorIsValid(&cur));
+  prollyCursorClose(&cur);
+
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
 static void run_prolly_cursor_surfaces_corrupt_node(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -2226,6 +2342,8 @@ static const RegressionCase aCases[] = {
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "prolly_blob_cursor_boundary", "Prolly Blob Cursor Internal Boundary Test", run_prolly_blob_cursor_seek_across_internal_boundary },
+  { "prolly_blob_cursor_seek_past_max", "Prolly Blob Cursor Seek Past Max Test", run_prolly_blob_cursor_seek_past_max },
+  { "prolly_cursor_empty_leaf_root", "Prolly Cursor Empty Leaf Root Test", run_prolly_cursor_empty_leaf_root },
   { "prolly_cursor_corrupt_node", "Prolly Cursor Corrupt Node Test", run_prolly_cursor_surfaces_corrupt_node }
 };
 
