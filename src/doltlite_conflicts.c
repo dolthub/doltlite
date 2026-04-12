@@ -777,7 +777,8 @@ typedef struct CfRowVtab CfRowVtab;
 struct CfRowVtab {
   sqlite3_vtab base;
   sqlite3 *db;
-  char *zTableName;    
+  char *zTableName;
+  DoltliteColInfo cols;
 };
 
 typedef struct CfRowCur CfRowCur;
@@ -789,32 +790,84 @@ struct CfRowCur {
   int iRow;            
 };
 
+/* Build a dolt-conformant dolt_conflicts_<table> schema by projecting
+** every user column of `t` under three prefixes (base_, our_, their_),
+** plus the standard metadata columns Dolt emits: from_root_ish,
+** our_diff_type, their_diff_type, dolt_conflict_id. */
+static char *cfrBuildSchema(const DoltliteColInfo *ci){
+  sqlite3_str *pStr = sqlite3_str_new(0);
+  int i;
+  char *z;
+  if( !pStr ) return 0;
+  sqlite3_str_appendall(pStr, "CREATE TABLE x(from_root_ish TEXT");
+  /* base_* */
+  for(i=0; i<ci->nCol; i++){
+    sqlite3_str_appendf(pStr, ", \"base_%w\"", ci->azName[i]);
+  }
+  /* our_* + our_diff_type */
+  for(i=0; i<ci->nCol; i++){
+    sqlite3_str_appendf(pStr, ", \"our_%w\"", ci->azName[i]);
+  }
+  sqlite3_str_appendall(pStr, ", our_diff_type TEXT");
+  /* their_* + their_diff_type */
+  for(i=0; i<ci->nCol; i++){
+    sqlite3_str_appendf(pStr, ", \"their_%w\"", ci->azName[i]);
+  }
+  sqlite3_str_appendall(pStr, ", their_diff_type TEXT");
+  sqlite3_str_appendall(pStr, ", dolt_conflict_id TEXT");
+  sqlite3_str_appendall(pStr, ")");
+  z = sqlite3_str_finish(pStr);
+  return z;
+}
+
 static int cfrConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  CfRowVtab *v; int rc;
+  CfRowVtab *v;
+  int rc;
   const char *zModuleName;
-  (void)pAux;(void)pzErr;
-
-  rc = sqlite3_declare_vtab(db,
-    "CREATE TABLE x(base_rowid INTEGER, base_value BLOB,"
-    " our_rowid INTEGER, our_value BLOB,"
-    " their_rowid INTEGER, their_value BLOB)");
-  if(rc!=SQLITE_OK) return rc;
+  char *zSchema;
+  (void)pAux;
 
   v = sqlite3_malloc(sizeof(*v));
   if(!v) return SQLITE_NOMEM;
   memset(v,0,sizeof(*v));
   v->db = db;
 
-  
-  zModuleName = argv[0]; 
+  zModuleName = argv[0];
   if( zModuleName && strncmp(zModuleName, "dolt_conflicts_", 15)==0 ){
     v->zTableName = sqlite3_mprintf("%s", zModuleName + 15);
   }else if( argc > 3 ){
-    
     v->zTableName = sqlite3_mprintf("%s", argv[3]);
   }else{
     v->zTableName = sqlite3_mprintf("");
+  }
+  if( !v->zTableName ){
+    sqlite3_free(v);
+    return SQLITE_NOMEM;
+  }
+
+  rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(v->zTableName);
+    doltliteFreeColInfo(&v->cols);
+    sqlite3_free(v);
+    return rc;
+  }
+
+  zSchema = cfrBuildSchema(&v->cols);
+  if( !zSchema ){
+    sqlite3_free(v->zTableName);
+    doltliteFreeColInfo(&v->cols);
+    sqlite3_free(v);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3_declare_vtab(db, zSchema);
+  sqlite3_free(zSchema);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(v->zTableName);
+    doltliteFreeColInfo(&v->cols);
+    sqlite3_free(v);
+    return rc;
   }
 
   *ppVtab = &v->base;
@@ -824,6 +877,7 @@ static int cfrConnect(sqlite3 *db, void *pAux, int argc,
 static int cfrDisconnect(sqlite3_vtab *pVtab){
   CfRowVtab *v = (CfRowVtab*)pVtab;
   sqlite3_free(v->zTableName);
+  doltliteFreeColInfo(&v->cols);
   sqlite3_free(v);
   return SQLITE_OK;
 }
@@ -877,32 +931,105 @@ static int cfrEof(sqlite3_vtab_cursor *cur){
   return c->iRow >= c->aTables[c->iTableIdx].nConflicts;
 }
 
+/* Emit one projected column from a record body. If iPkCol>=0 and
+** iUserCol==iPkCol, the PK value comes from intKey (rowid-aliased
+** INTEGER PRIMARY KEY case) rather than the record body. */
+static void cfrEmitRecordCol(
+  sqlite3_context *ctx,
+  const u8 *pRec, int nRec,
+  int iUserCol,
+  int iPkCol,
+  i64 intKey
+){
+  if( !pRec || nRec<=0 ){
+    sqlite3_result_null(ctx);
+    return;
+  }
+  if( iUserCol==iPkCol ){
+    sqlite3_result_int64(ctx, intKey);
+    return;
+  }
+  {
+    DoltliteRecordInfo ri;
+    doltliteParseRecord(pRec, nRec, &ri);
+    if( iUserCol >= ri.nField ){
+      sqlite3_result_null(ctx);
+      return;
+    }
+    doltliteResultField(ctx, pRec, nRec, ri.aType[iUserCol], ri.aOffset[iUserCol]);
+  }
+}
+
+/* Classify a conflict row on one side as added/modified/removed
+** relative to its base. Dolt uses "added" if the base is missing,
+** "removed" if the side is missing, otherwise "modified". */
+static const char *cfrDiffType(const u8 *pBase, int nBase,
+                               const u8 *pSide, int nSide){
+  int baseHas = (pBase && nBase>0);
+  int sideHas = (pSide && nSide>0);
+  if( !sideHas ) return "removed";
+  if( !baseHas ) return "added";
+  return "modified";
+}
+
 static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   CfRowCur *c = (CfRowCur*)cur;
+  CfRowVtab *v = (CfRowVtab*)cur->pVtab;
   struct ConflictRow *cr;
+  int nUserCols;
+  int colBaseStart, colOurStart, colOurDiff;
+  int colTheirStart, colTheirDiff, colConflictId;
+
   if( c->iTableIdx < 0 ) return SQLITE_OK;
   if( c->iRow >= c->aTables[c->iTableIdx].nConflicts ) return SQLITE_OK;
   cr = &c->aTables[c->iTableIdx].aRows[c->iRow];
 
-  switch(col){
-    case 0: 
-      sqlite3_result_int64(ctx, cr->intKey);
-      break;
-    case 1: 
-      doltliteResultRecord(ctx, cr->pBaseVal, cr->nBaseVal);
-      break;
-    case 2: 
-      sqlite3_result_int64(ctx, cr->intKey);
-      break;
-    case 3: 
-      doltliteResultRecord(ctx, cr->pOurVal, cr->nOurVal);
-      break;
-    case 4: 
-      sqlite3_result_int64(ctx, cr->intKey);
-      break;
-    case 5: 
-      doltliteResultRecord(ctx, cr->pTheirVal, cr->nTheirVal);
-      break;
+  /* Schema layout:
+  **   col 0                     : from_root_ish
+  **   col 1..nUserCols          : base_<col>
+  **   col nUserCols+1..2*nUserCols : our_<col>
+  **   col 2*nUserCols+1         : our_diff_type
+  **   col 2*nUserCols+2..3*nUserCols+1 : their_<col>
+  **   col 3*nUserCols+2         : their_diff_type
+  **   col 3*nUserCols+3         : dolt_conflict_id
+  */
+  nUserCols = v->cols.nCol;
+  colBaseStart  = 1;
+  colOurStart   = 1 + nUserCols;
+  colOurDiff    = 1 + 2*nUserCols;
+  colTheirStart = 2 + 2*nUserCols;
+  colTheirDiff  = 2 + 3*nUserCols;
+  colConflictId = 3 + 3*nUserCols;
+
+  if( col==0 ){
+    /* from_root_ish: doltlite doesn't track this per-conflict. Emit
+    ** NULL — oracle tests should not compare this column. */
+    sqlite3_result_null(ctx);
+  }else if( col>=colBaseStart && col<colOurStart ){
+    cfrEmitRecordCol(ctx, cr->pBaseVal, cr->nBaseVal,
+                     col - colBaseStart, v->cols.iPkCol, cr->intKey);
+  }else if( col>=colOurStart && col<colOurDiff ){
+    cfrEmitRecordCol(ctx, cr->pOurVal, cr->nOurVal,
+                     col - colOurStart, v->cols.iPkCol, cr->intKey);
+  }else if( col==colOurDiff ){
+    sqlite3_result_text(ctx,
+      cfrDiffType(cr->pBaseVal, cr->nBaseVal, cr->pOurVal, cr->nOurVal),
+      -1, SQLITE_STATIC);
+  }else if( col>=colTheirStart && col<colTheirDiff ){
+    cfrEmitRecordCol(ctx, cr->pTheirVal, cr->nTheirVal,
+                     col - colTheirStart, v->cols.iPkCol, cr->intKey);
+  }else if( col==colTheirDiff ){
+    sqlite3_result_text(ctx,
+      cfrDiffType(cr->pBaseVal, cr->nBaseVal, cr->pTheirVal, cr->nTheirVal),
+      -1, SQLITE_STATIC);
+  }else if( col==colConflictId ){
+    /* Stable synthetic id: intKey + iRow. Oracle tests should not
+    ** compare this column since Dolt uses a different scheme. */
+    char buf[64];
+    sqlite3_snprintf(sizeof(buf), buf, "%lld:%d", cr->intKey, c->iRow);
+    sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+  }else{
+    sqlite3_result_null(ctx);
   }
   return SQLITE_OK;
 }

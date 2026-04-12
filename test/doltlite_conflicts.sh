@@ -99,10 +99,10 @@ echo "SELECT dolt_checkout('main'); UPDATE t SET name='CHARLIE' WHERE id=1; SELE
 run_test_match "real_conflict" "SELECT dolt_merge('c');" "conflict" "$DB7"
 run_test "real_conflict_count" "SELECT num_conflicts FROM dolt_conflicts;" "1" "$DB7"
 
-# Conflict values are now decoded text, not raw binary
-run_test_match "conflict_base_decoded" "SELECT base_value FROM dolt_conflicts_t;" "alice" "$DB7"
-run_test_match "conflict_our_decoded" "SELECT our_value FROM dolt_conflicts_t;" "CHARLIE" "$DB7"
-run_test_match "conflict_their_decoded" "SELECT their_value FROM dolt_conflicts_t;" "BOB" "$DB7"
+# User columns are now projected individually (Dolt-compatible schema).
+run_test_match "conflict_base_decoded" "SELECT base_name FROM dolt_conflicts_t;" "alice" "$DB7"
+run_test_match "conflict_our_decoded" "SELECT our_name FROM dolt_conflicts_t;" "CHARLIE" "$DB7"
+run_test_match "conflict_their_decoded" "SELECT their_name FROM dolt_conflicts_t;" "BOB" "$DB7"
 
 # --- Multiple conflicting rows in one table ---
 DB8=/tmp/test_conflicts8_$$.db; rm -f "$DB8"
@@ -113,9 +113,9 @@ echo "SELECT dolt_checkout('main'); UPDATE t SET name='a2' WHERE id=1; UPDATE t 
 run_test_match "multi_row_conflict" "SELECT dolt_merge('other');" "3 conflict" "$DB8"
 run_test "multi_row_conflict_count" "SELECT num_conflicts FROM dolt_conflicts;" "3" "$DB8"
 run_test "multi_row_all_rows" "SELECT count(*) FROM dolt_conflicts_t;" "3" "$DB8"
-run_test_match "multi_row_has_row1" "SELECT their_value FROM dolt_conflicts_t WHERE base_rowid=1;" "A" "$DB8"
-run_test_match "multi_row_has_row2" "SELECT their_value FROM dolt_conflicts_t WHERE base_rowid=2;" "B" "$DB8"
-run_test_match "multi_row_has_row3" "SELECT their_value FROM dolt_conflicts_t WHERE base_rowid=3;" "C" "$DB8"
+run_test_match "multi_row_has_row1" "SELECT their_name FROM dolt_conflicts_t WHERE base_id=1;" "A" "$DB8"
+run_test_match "multi_row_has_row2" "SELECT their_name FROM dolt_conflicts_t WHERE base_id=2;" "B" "$DB8"
+run_test_match "multi_row_has_row3" "SELECT their_name FROM dolt_conflicts_t WHERE base_id=3;" "C" "$DB8"
 
 # Test 9: --theirs delete failure should keep conflict state
 DB9=/tmp/test_conflicts9_$$.db; rm -f "$DB9"
