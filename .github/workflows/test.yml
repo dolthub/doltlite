@@ -180,6 +180,13 @@ jobs:
           libdoltlite.a -lz -lpthread -lm
         ./concurrent_write_test
 
+    - name: Prepared statement reuse test
+      run: |
+        cd build
+        gcc -g -O0 -I. -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \
+          libdoltlite.a -lz -lpthread -lm
+        ./prepared_stmt_reuse_test
+
     - name: Python integration test
       run: cd build && LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
 
