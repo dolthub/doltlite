@@ -570,7 +570,7 @@ PROLLY_OBJS = prolly_hash.o prolly_hashset.o prolly_arena.o prolly_node.o prolly
               prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_schema_merge.o doltlite_conflicts.o \
-              doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_record.o \
+              doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_schemas.o doltlite_record.o \
               doltlite_remote.o doltlite_remote_sql.o \
               doltlite_http_remote.o doltlite_remotesrv.o
 
@@ -1381,6 +1381,9 @@ doltlite_at.o:	$(TOP)/src/doltlite_at.c $(DEPS_OBJ_COMMON)
 
 doltlite_schema_diff.o:	$(TOP)/src/doltlite_schema_diff.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_schema_diff.c
+
+doltlite_schemas.o:	$(TOP)/src/doltlite_schemas.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_schemas.c
 
 doltlite_record.o:	$(TOP)/src/doltlite_record.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_record.c

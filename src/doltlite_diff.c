@@ -14,6 +14,62 @@
 #include <string.h>
 #include <time.h>
 
+/* Does a sqlite_schema record represent a view or a trigger? Returns
+** 1 if the record's type field (field 0) is "view" or "trigger", 0
+** otherwise. The caller should pass whichever side of a diff change
+** has a non-NULL record (both base and new sides need checking —
+** either a newly-added view has a new record, or a dropped view has
+** an old record). */
+static int schemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
+  DoltliteRecordInfo ri;
+  int st, off, len;
+  const u8 *pBody;
+  if( !pRec || nRec<=0 ) return 0;
+  doltliteParseRecord(pRec, nRec, &ri);
+  if( ri.nField < 1 ) return 0;
+  st = ri.aType[0];
+  off = ri.aOffset[0];
+  if( st < 13 || (st & 1)==0 ) return 0;  /* not a TEXT serial type */
+  len = (st - 13) / 2;
+  if( off < 0 || off + len > nRec ) return 0;
+  pBody = pRec + off;
+  if( len==4 && memcmp(pBody, "view", 4)==0 ) return 1;
+  if( len==7 && memcmp(pBody, "trigger", 7)==0 ) return 1;
+  return 0;
+}
+
+/* Walk a prolly diff between two sqlite_schema roots and return 1 if
+** any change touches a view or trigger row. Used by the dolt_diff
+** summary walker to decide whether to emit a synthetic "dolt_schemas"
+** entry for a commit. Returns 0 for no view/trigger change (so the
+** caller can skip emitting) or on any error; dolt_diff is an
+** informational surface and shouldn't fail just because sqlite_schema
+** couldn't be walked. */
+static int schemaHasViewOrTriggerDiff(sqlite3 *db,
+                                      const ProllyHash *pOldRoot,
+                                      const ProllyHash *pNewRoot,
+                                      u8 flags){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyDiffIter iter;
+  ProllyDiffChange *pChange = 0;
+  int rc;
+  int found = 0;
+  if( !cs || !pCache ) return 0;
+  if( prollyHashCompare(pOldRoot, pNewRoot)==0 ) return 0;
+  rc = prollyDiffIterOpen(&iter, cs, pCache, pOldRoot, pNewRoot, flags);
+  if( rc!=SQLITE_OK ) return 0;
+  while( (rc = prollyDiffIterStep(&iter, &pChange))==SQLITE_ROW && pChange ){
+    if( schemaRecordIsViewOrTrigger(pChange->pNewVal, pChange->nNewVal)
+     || schemaRecordIsViewOrTrigger(pChange->pOldVal, pChange->nOldVal) ){
+      found = 1;
+      break;
+    }
+  }
+  prollyDiffIterClose(&iter);
+  return found;
+}
+
 /* Per-row diff (legacy form: dolt_diff('table', from, to)). */
 typedef struct DiffRow DiffRow;
 struct DiffRow {
@@ -287,7 +343,20 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
     struct TableEntry *e = &aWork[i];
     struct TableEntry *p;
     u8 dataChange, schemaChange;
-    if( !e->zName ) continue;
+    if( !e->zName ){
+      /* sqlite_master: surface uncommitted view/trigger changes. */
+      ProllyHash emptyRoot;
+      const ProllyHash *pOldRoot;
+      struct TableEntry *pOldMaster;
+      memset(&emptyRoot, 0, sizeof(emptyRoot));
+      pOldMaster = doltliteFindTableByNumber(aHead, nHead, 1);
+      pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
+      if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
+        rc = appendSummaryRow(pCur, zHexBuf, "dolt_schemas", 0, 1, 0);
+        if( rc!=SQLITE_OK ) goto done;
+      }
+      continue;
+    }
     p = doltliteFindTableByName(aHead, nHead, e->zName);
     if( !p ){
       dataChange = 1;
@@ -350,7 +419,25 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
     struct TableEntry *e = &aChild[i];
     struct TableEntry *p;
     u8 dataChange, schemaChange;
-    if( !e->zName ) continue;  /* skip sqlite_master */
+    if( !e->zName ){
+      /* sqlite_master: surface view/trigger changes as "dolt_schemas".
+      ** Regular CREATE TABLE also touches sqlite_master but is
+      ** already attributed to the created table above, so we only
+      ** emit dolt_schemas when the change specifically touches a
+      ** view or trigger row. */
+      ProllyHash emptyRoot;
+      const ProllyHash *pOldRoot;
+      struct TableEntry *pOldMaster;
+      memset(&emptyRoot, 0, sizeof(emptyRoot));
+      pOldMaster = doltliteFindTableByNumber(aParent, nParent, 1);
+      pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
+      if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
+        rc = appendSummaryRow(pCur, zCommitHex, "dolt_schemas", pCommit,
+                              1, 0);
+        if( rc!=SQLITE_OK ) goto done;
+      }
+      continue;
+    }
     p = doltliteFindTableByName(aParent, nParent, e->zName);
     if( !p ){
       /* Newly added in this commit. */
