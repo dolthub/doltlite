@@ -352,6 +352,7 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
 static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE);
 static int btreeRefreshFromDisk(Btree *p);
+static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog);
 static int btreeReadWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                    ProllyHash *pCatHash,
                                    ProllyHash *pCommitHash);
@@ -1990,6 +1991,50 @@ static int btreeWriteWorkingState(
                                   &mergeCommitHash, &conflictsCatalogHash);
 }
 
+static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
+  BtShared *pBt = p->pBt;
+  ProllyHash catHash;
+  ProllyHash stagedCatalog;
+  ProllyHash mergeCommitHash;
+  ProllyHash conflictsCatalogHash;
+  const char *zBr = p->zBranch ? p->zBranch : "main";
+  u8 isMerging = 0;
+  int rc;
+
+  memset(&catHash, 0, sizeof(catHash));
+  memset(&stagedCatalog, 0, sizeof(stagedCatalog));
+  memset(&mergeCommitHash, 0, sizeof(mergeCommitHash));
+  memset(&conflictsCatalogHash, 0, sizeof(conflictsCatalogHash));
+
+  rc = btreeLoadWorkingSetBlob(
+      &pBt->store, zBr, &catHash, 0, &stagedCatalog, &isMerging,
+      &mergeCommitHash, &conflictsCatalogHash);
+  if( rc==SQLITE_NOTFOUND ){
+    rc = SQLITE_OK;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( bLoadCatalog && !prollyHashIsEmpty(&catHash) ){
+    u8 *catData = 0;
+    int nCatData = 0;
+    rc = chunkStoreGet(&pBt->store, &catHash, &catData, &nCatData);
+    if( rc==SQLITE_OK && catData ){
+      rc = deserializeCatalog(p, catData, nCatData);
+      sqlite3_free(catData);
+      if( rc!=SQLITE_OK ) return rc;
+    }else{
+      sqlite3_free(catData);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+
+  p->stagedCatalog = stagedCatalog;
+  p->isMerging = isMerging;
+  p->mergeCommitHash = mergeCommitHash;
+  p->conflictsCatalogHash = conflictsCatalogHash;
+  return SQLITE_OK;
+}
+
 static int btreeRefreshFromDisk(Btree *p){
   BtShared *pBt = p->pBt;
   int bChanged = 0;
@@ -1997,32 +2042,12 @@ static int btreeRefreshFromDisk(Btree *p){
   if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
 
-  /* The file changed. Load the catalog for THIS connection's branch.
-  ** Each branch's working catalog is stored in the branch WorkingSet blob
-  ** (persisted on every autocommit). This prevents cross-branch corruption
-  ** where one branch's autocommit overwrites the shared manifest catalog. */
-  {
-    ProllyHash catHash;
-    const char *zBr = p->zBranch ? p->zBranch : "main";
+  rc = btreeReloadBranchWorkingState(p, 1);
+  if( rc!=SQLITE_OK ) return rc;
 
-    memset(&catHash, 0, sizeof(catHash));
-
-    btreeReadWorkingCatalog(&pBt->store, zBr, &catHash, NULL);
-
-    if( !prollyHashIsEmpty(&catHash) ){
-      u8 *catData = 0;
-      int nCatData = 0;
-      rc = chunkStoreGet(&pBt->store, &catHash, &catData, &nCatData);
-      if( rc==SQLITE_OK && catData ){
-        rc = deserializeCatalog(p, catData, nCatData);
-        sqlite3_free(catData);
-        if( rc!=SQLITE_OK ) return rc;
-      }
-    }
-    p->iBDataVersion++;
-    if( pBt->pPagerShim ){
-      pBt->pPagerShim->iDataVersion++;
-    }
+  p->iBDataVersion++;
+  if( pBt->pPagerShim ){
+    pBt->pPagerShim->iDataVersion++;
   }
 
   return SQLITE_OK;
@@ -2048,6 +2073,7 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   }
 
   if( wrFlag ){
+    int nSavepointStart = p->nSavepoint;
     if( pBt->btsFlags & BTS_READ_ONLY ){
       return SQLITE_READONLY;
     }
@@ -2058,25 +2084,10 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     rc = chunkStoreLockAndRefresh(&pBt->store);
     if( rc!=SQLITE_OK ) return rc;
 
-    /* Reload catalog under lock from per-branch working state. */
-    {
-      ProllyHash catHash;
-      const char *zBr = p->zBranch ? p->zBranch : "main";
-      memset(&catHash, 0, sizeof(catHash));
-      btreeReadWorkingCatalog(&pBt->store, zBr, &catHash, NULL);
-      if( !prollyHashIsEmpty(&catHash) ){
-        u8 *catData = 0;
-        int nCatData = 0;
-        int rc2 = chunkStoreGet(&pBt->store, &catHash, &catData, &nCatData);
-        if( rc2==SQLITE_OK && catData ){
-          rc2 = deserializeCatalog(p, catData, nCatData);
-          sqlite3_free(catData);
-          if( rc2!=SQLITE_OK ){
-            chunkStoreUnlock(&pBt->store);
-            return rc2;
-          }
-        }
-      }
+    rc = btreeReloadBranchWorkingState(p, 1);
+    if( rc!=SQLITE_OK ){
+      chunkStoreUnlock(&pBt->store);
+      return rc;
     }
 
     sqlite3_free(p->aCommittedTables);
@@ -2096,15 +2107,22 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     p->committedIsMerging = p->isMerging;
     p->committedMergeCommitHash = p->mergeCommitHash;
     p->committedConflictsCatalogHash = p->conflictsCatalogHash;
-    p->inTrans = TRANS_WRITE;
-    p->inTransaction = TRANS_WRITE;
     
     if( p->db ){
       while( p->nSavepoint < p->db->nSavepoint ){
         int rc2 = pushSavepoint(p);
-        if( rc2!=SQLITE_OK ) return rc2;
+        if( rc2!=SQLITE_OK ){
+          while( p->nSavepoint > nSavepointStart ){
+            p->nSavepoint--;
+            freeSavepointTables(&p->aSavepointTables[p->nSavepoint]);
+          }
+          chunkStoreUnlock(&pBt->store);
+          return rc2;
+        }
       }
     }
+    p->inTrans = TRANS_WRITE;
+    p->inTransaction = TRANS_WRITE;
   } else {
     if( p->inTrans==TRANS_NONE ){
       p->inTrans = TRANS_READ;
