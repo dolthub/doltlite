@@ -172,6 +172,105 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first');
 "
 
+echo "--- branch at older commit ---"
+
+# dolt_branch('name', 'HEAD~N') should create a branch pointing at
+# an older commit. The branch's latest_commit_message should be
+# the OLDER commit, not HEAD.
+oracle "branch_at_head_minus_one" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'second');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'third');
+SELECT dolt_branch('back_one', 'HEAD~1');
+SELECT dolt_branch('back_two', 'HEAD~2');
+"
+
+echo "--- branch copy ---"
+
+# dolt_branch('-c', src, dst) copies a branch. Both src and dst
+# should point at the same commit.
+oracle "branch_copy_main_to_clone" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SELECT dolt_branch('-c', 'main', 'clone');
+"
+
+echo "--- branch rename ---"
+
+# dolt_branch('-m', src, dst) renames a branch. The src name should
+# disappear, dst should exist at the same commit.
+oracle "branch_rename_non_current" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SELECT dolt_branch('old_name');
+SELECT dolt_branch('-m', 'old_name', 'new_name');
+"
+
+echo "--- multi-branch states ---"
+
+# Three branches: one at main HEAD, one ahead of main, one at an
+# older commit. Tests that latest_commit_message per-branch is
+# computed independently.
+oracle "three_branches_three_heads" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_branch('back', 'HEAD~1');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_only');
+"
+
+# Multiple branches all dirty (working set diverges from their own
+# HEAD). Current branch marker matters here — only the current
+# branch's dirty bit actually reflects uncommitted state.
+oracle "other_branch_dirty_bit_untracked" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SELECT dolt_branch('feature');
+SELECT dolt_branch('experiment');
+INSERT INTO t VALUES (2);
+"
+
+echo "--- branch after merge ---"
+
+# After merging feature into main, main's latest_commit_message
+# should be the merge commit.
+oracle "main_head_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feature');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

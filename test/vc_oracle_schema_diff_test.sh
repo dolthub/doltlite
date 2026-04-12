@@ -148,6 +148,82 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_col');
 " "HEAD~1" "HEAD"
 
+oracle "modified_drop_col" "
+$SEED
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col');
+ALTER TABLE t DROP COLUMN extra;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_col');
+" "HEAD~1" "HEAD"
+
+oracle "modified_rename_col" "
+$SEED
+ALTER TABLE t RENAME COLUMN v TO vv;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'rename_col');
+" "HEAD~1" "HEAD"
+
+oracle "modified_add_not_null_default" "
+$SEED
+ALTER TABLE t ADD COLUMN extra VARCHAR(32) NOT NULL DEFAULT '';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_not_null');
+" "HEAD~1" "HEAD"
+
+oracle "modified_add_nullable_default" "
+$SEED
+ALTER TABLE t ADD COLUMN extra VARCHAR(32) DEFAULT 'hi';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_nullable');
+" "HEAD~1" "HEAD"
+
+oracle "modified_add_nullable_no_default" "
+$SEED
+ALTER TABLE t ADD COLUMN extra VARCHAR(32);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_bare');
+" "HEAD~1" "HEAD"
+
+# Multi-step: add col, populate it, drop it in follow-up commits.
+# The commit range covering all three steps should still show the
+# table as modified (net: add extra, populate, remove extra).
+oracle "modified_net_addcol_dropcol_range" "
+$SEED
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col');
+UPDATE t SET extra = 'x' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'populate');
+ALTER TABLE t DROP COLUMN extra;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_col_again');
+" "HEAD~3" "HEAD"
+
+# Multiple ALTER TABLE operations in a single commit should show up
+# as a single modified-table row.
+oracle "multiple_alters_single_commit" "
+$SEED
+ALTER TABLE t ADD COLUMN a TEXT;
+ALTER TABLE t ADD COLUMN b INT;
+ALTER TABLE t RENAME COLUMN v TO vv;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'many_alters');
+" "HEAD~1" "HEAD"
+
+# CREATE TABLE + ALTER TABLE in the same commit should only appear
+# as an added-table row (the ALTER is rolled into the new table's
+# initial schema), not as an added + modified pair.
+oracle "create_then_alter_same_commit" "
+$SEED
+CREATE TABLE u(id INT PRIMARY KEY);
+ALTER TABLE u ADD COLUMN v TEXT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'create_and_alter');
+" "HEAD~1" "HEAD"
+
 echo "--- multiple changes in one diff ---"
 
 oracle "multi_change" "
