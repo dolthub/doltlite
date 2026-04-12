@@ -107,6 +107,14 @@ jobs:
       run: cd build && bash ../test/vc_oracle_conflicts_test.sh ./doltlite dolt
       timeout-minutes: 5
 
+    - name: Version control oracle tests (dolt_conflicts_resolve)
+      run: cd build && bash ../test/vc_oracle_conflicts_resolve_test.sh ./doltlite dolt
+      timeout-minutes: 5
+
+    - name: Version control oracle tests (active_branch)
+      run: cd build && bash ../test/vc_oracle_active_branch_test.sh ./doltlite dolt
+      timeout-minutes: 5
+
     - name: Version control oracle tests (dolt_reset)
       run: cd build && bash ../test/vc_oracle_reset_test.sh ./doltlite dolt
       timeout-minutes: 5
