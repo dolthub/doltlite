@@ -70,6 +70,41 @@ static int schemaHasViewOrTriggerDiff(sqlite3 *db,
   return found;
 }
 
+/* Returns 1 if the sqlite_schema btree at pRoot contains at least
+** one row whose type is 'view' or 'trigger'. Used by the summary
+** walker to detect whether dolt_schemas is being CREATED at a given
+** commit (parent has zero view/trigger rows) vs merely modified
+** (parent already has at least one). Dolt emits schema_change=1 on
+** the initial creation; we match that. */
+static int schemaHasAnyViewOrTrigger(sqlite3 *db,
+                                     const ProllyHash *pRoot,
+                                     u8 flags){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyCursor cur;
+  int rc, res;
+  int found = 0;
+  if( !cs || !pCache ) return 0;
+  if( prollyHashIsEmpty(pRoot) ) return 0;
+  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
+  rc = prollyCursorFirst(&cur, &res);
+  if( rc!=SQLITE_OK || res ){
+    prollyCursorClose(&cur);
+    return 0;
+  }
+  while( prollyCursorIsValid(&cur) ){
+    const u8 *pVal; int nVal;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( schemaRecordIsViewOrTrigger(pVal, nVal) ){
+      found = 1;
+      break;
+    }
+    if( prollyCursorNext(&cur)!=SQLITE_OK ) break;
+  }
+  prollyCursorClose(&cur);
+  return found;
+}
+
 /* Per-row diff (legacy form: dolt_diff('table', from, to)). */
 typedef struct DiffRow DiffRow;
 struct DiffRow {
@@ -344,7 +379,10 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
     struct TableEntry *p;
     u8 dataChange, schemaChange;
     if( !e->zName ){
-      /* sqlite_master: surface uncommitted view/trigger changes. */
+      /* sqlite_master: surface uncommitted view/trigger changes.
+      ** schema_change is 1 iff the HEAD side has NO view/trigger
+      ** rows yet — matching Dolt's behavior of reporting
+      ** schema_change on the implicit creation of dolt_schemas. */
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
@@ -352,7 +390,10 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
       pOldMaster = doltliteFindTableByNumber(aHead, nHead, 1);
       pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
       if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
-        rc = appendSummaryRow(pCur, zHexBuf, "dolt_schemas", 0, 1, 0);
+        u8 schemaChangeFlag =
+          schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags) ? 0 : 1;
+        rc = appendSummaryRow(pCur, zHexBuf, "dolt_schemas", 0,
+                              1, schemaChangeFlag);
         if( rc!=SQLITE_OK ) goto done;
       }
       continue;
@@ -424,7 +465,9 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
       ** Regular CREATE TABLE also touches sqlite_master but is
       ** already attributed to the created table above, so we only
       ** emit dolt_schemas when the change specifically touches a
-      ** view or trigger row. */
+      ** view or trigger row. schema_change is 1 iff the parent side
+      ** had NO view/trigger rows yet — matching Dolt's reporting of
+      ** schema_change on the implicit creation of dolt_schemas. */
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
@@ -432,8 +475,10 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
       pOldMaster = doltliteFindTableByNumber(aParent, nParent, 1);
       pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
       if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
+        u8 schemaChangeFlag =
+          schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags) ? 0 : 1;
         rc = appendSummaryRow(pCur, zCommitHex, "dolt_schemas", pCommit,
-                              1, 0);
+                              1, schemaChangeFlag);
         if( rc!=SQLITE_OK ) goto done;
       }
       continue;

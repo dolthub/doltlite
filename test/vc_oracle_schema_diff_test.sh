@@ -16,6 +16,22 @@
 # canonicalize CREATE TABLE differently (whitespace, type aliases,
 # quoting, ENGINE=... suffix in Dolt).
 #
+# Known intentional divergences from Dolt (NOT oracle-tested here):
+#
+#   - CREATE INDEX: doltlite treats indexes as first-class schema
+#     entries (sqlite_schema has a row of type='index' for each
+#     one), so ALTER TABLE ... / CREATE INDEX adds a new row to
+#     dolt_schema_diff with the index as a separate "added" entry.
+#     Dolt rolls indexes into the table's CREATE statement and
+#     reports the table as modified instead. doltlite's behavior is
+#     the natural consequence of the sqlite_schema model and is
+#     intentional — indexes ARE schemas in SQLite.
+#
+#   - ALTER TABLE RENAME TO: doltlite emits (drop old, add new)
+#     as two separate rows; Dolt emits a single row with
+#     from_table_name != to_table_name. Worth conforming, tracked
+#     separately.
+#
 # Usage: bash vc_oracle_schema_diff_test.sh [path/to/doltlite] [path/to/dolt]
 #
 

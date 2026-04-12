@@ -18,11 +18,12 @@
 #      Dolt uses them for MySQL-specific metadata).
 #
 #   2. SELECT table_name FROM dolt_diff — which commits touch
-#      dolt_schemas. Compared on (message, table_name, data_change)
-#      via a LEFT JOIN with dolt_log so engine-specific commit hashes
-#      don't matter. schema_change is NOT compared because doltlite
-#      emits 0 for dolt_schemas content changes while Dolt emits 1 on
-#      the initial view creation.
+#      dolt_schemas. Compared on (message, table_name, data_change,
+#      schema_change) via a LEFT JOIN with dolt_log so engine-
+#      specific commit hashes don't matter. Both engines now emit
+#      schema_change=1 on the FIRST view/trigger creation (the
+#      implicit creation of dolt_schemas) and schema_change=0 on
+#      subsequent view/trigger commits.
 #
 # Scope: views only. Triggers diverge in syntax between Dolt's MySQL
 # dialect (FOR EACH ROW BEGIN ... END;) and doltlite's SQLite
@@ -100,8 +101,8 @@ oracle_diff_touches_schemas() {
   local dir="$TMPROOT/${name}_diff"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  local q="SELECT 'D' || char(9) || dd.table_name || char(9) || coalesce(dl.message, dd.commit_hash) || char(9) || dd.data_change FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
-  local q_dolt="SELECT concat('D', char(9), dd.table_name, char(9), coalesce(dl.message, dd.commit_hash), char(9), dd.data_change) FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
+  local q="SELECT 'D' || char(9) || dd.table_name || char(9) || coalesce(dl.message, dd.commit_hash) || char(9) || dd.data_change || char(9) || dd.schema_change FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
+  local q_dolt="SELECT concat('D', char(9), dd.table_name, char(9), coalesce(dl.message, dd.commit_hash), char(9), dd.data_change, char(9), dd.schema_change) FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q" \

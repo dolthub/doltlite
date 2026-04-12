@@ -170,14 +170,23 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'this is a deliberately very long commit message that goes on and on and on to exercise any buffer-size assumptions in the log walker or in either engine|s output format and should still come back intact');
 "
 
-# Dolt trims leading/trailing whitespace from commit messages
-# (matching git's behavior); doltlite preserves them. Test only
-# internal whitespace to avoid that divergence.
+# Internal whitespace is preserved exactly as written on both
+# engines.
 oracle "internal_whitespace_preserved" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
 SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'one    two     three');
+"
+
+# Leading/trailing whitespace gets trimmed on both engines, matching
+# git's behavior. A message of '  hello  ' becomes 'hello' in both
+# engines' dolt_log.
+oracle "leading_trailing_whitespace_trimmed" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('t');
+SELECT dolt_commit('-m', '   hello world   ');
 "
 
 # ─── Category 3: merge-commit shapes ─────────────────────────────────

@@ -1008,8 +1008,45 @@ static void doltliteCommitFunc(
       }
     }
 
+    /* Trim leading/trailing ASCII whitespace from the commit message
+    ** to match git / Dolt semantics. The caller keeps whatever
+    ** internal whitespace they wrote. A message that's entirely
+    ** whitespace is rejected as empty. Scoped tightly so we can free
+    ** the allocation immediately after the commit is created. */
+    char *zTrimmedMessage = 0;
+    {
+      const char *pStart = zMessage;
+      const char *pEnd;
+      int len;
+      while( *pStart==' ' || *pStart=='\t'
+          || *pStart=='\n' || *pStart=='\r' ) pStart++;
+      pEnd = pStart + strlen(pStart);
+      while( pEnd>pStart
+          && (pEnd[-1]==' ' || pEnd[-1]=='\t'
+           || pEnd[-1]=='\n' || pEnd[-1]=='\r') ) pEnd--;
+      if( pEnd==pStart ){
+        sqlite3_free(zParsedName);
+        sqlite3_free(zParsedEmail);
+        sqlite3_result_error(context,
+          "dolt_commit requires a non-empty message", -1);
+        return;
+      }
+      len = (int)(pEnd - pStart);
+      zTrimmedMessage = sqlite3_malloc(len+1);
+      if( !zTrimmedMessage ){
+        sqlite3_free(zParsedName);
+        sqlite3_free(zParsedEmail);
+        sqlite3_result_error_code(context, SQLITE_NOMEM);
+        return;
+      }
+      memcpy(zTrimmedMessage, pStart, len);
+      zTrimmedMessage[len] = 0;
+      zMessage = zTrimmedMessage;
+    }
+
     rc = doltliteCreateAndStoreCommitWithTime(db, &parentHash, &catalogHash,
         zMessage, zParsedName, zParsedEmail, 0, 0, explicitTimestamp, &commitHash);
+    sqlite3_free(zTrimmedMessage);
     sqlite3_free(zParsedName);
     sqlite3_free(zParsedEmail);
     if( rc!=SQLITE_OK ){
