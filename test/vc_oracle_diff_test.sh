@@ -557,24 +557,35 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_row');
 "
 
-# DROP COLUMN with no data change: not oracle-tested. doltlite's
-# per-row diff walker emits a spurious "modified" row for every
-# user-PK-table row at a DROP COLUMN commit, because the prolly
-# tree's record encoding changes even though no user-visible data
-# did. Dolt correctly suppresses the commit from the per-row diff.
-# Tracked as a follow-up; the schema_diff oracle already catches
-# the schema change via modified_drop_col.
+# DROP COLUMN with no data change: schema-only commit, no row-level
+# diff. The walker must detect that the from-side's record (with
+# the dropped column) and the to-side's record (without it) are
+# semantically equal on every shared column, and suppress the
+# spurious "modified" emission. Fixed by the pair-level column-
+# name lookup in doltlite_diff_table.c.
+oracle "diff_alter_drop_col_no_data_change" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_extra');
+ALTER TABLE t DROP COLUMN extra;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_extra');
+"
 
-# DROP COLUMN that DID have data — row 1 had `extra=100` before
-# the drop, so a real modification exists. Both engines should
-# agree the row is modified at the drop commit (the column the
-# harness projects, `v`, is unchanged but the walker still emits
-# the row because the underlying record changed).
-#
-# Not oracle-tested either, for the same user-PK-vs-INTEGER-PK
-# reason: on user-PK tables doltlite emits an extra synthetic
-# "modified" row that Dolt doesn't, independent of whether the
-# dropped column had data. Left as a follow-up.
+# Drop a column whose only ever value was a per-row non-NULL: the
+# drop still counts as schema-only because the column is gone and
+# the filter only compares shared columns. Both engines agree.
+oracle "diff_alter_drop_col_with_data_also_shared_match" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+UPDATE t SET extra = 100 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_and_populate');
+ALTER TABLE t DROP COLUMN extra;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_extra');
+"
 
 # RENAME COLUMN. The current schema has the new name, but pre-
 # rename rows are projected under the new name's column position.
