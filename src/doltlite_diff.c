@@ -700,12 +700,43 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 
   if( !zTableName ) return SQLITE_OK;
 
-  
   pCur->iPkField = detectPkField(db, zTableName);
 
-  
   rc = doltliteResolveTableName(db, zTableName, &iTable);
-  if( rc!=SQLITE_OK ) return SQLITE_OK; 
+  if( rc!=SQLITE_OK ){
+    /* The named object isn't a user table — but the user may be
+    ** filtering dolt_diff's summary output by table_name (e.g.
+    ** `SELECT * FROM dolt_diff WHERE table_name='dolt_schemas'`).
+    ** The HIDDEN column + bestIndex routing can't distinguish a
+    ** filter from a TVF call, so fall through to summary mode and
+    ** filter the result by name. Only do this when no commit bounds
+    ** are specified — a 3-arg call names a missing table for a
+    ** real reason and should stay empty. */
+    if( zFromCommit==0 && zToCommit==0 ){
+      int i;
+      pCur->isSummary = 1;
+      rc = collectSummary(pCur, db);
+      if( rc!=SQLITE_OK ) return rc;
+      /* In-place filter. Shift-compact kept rows to the front. */
+      {
+        int out = 0;
+        for(i=0; i<pCur->nSummary; i++){
+          if( pCur->aSummary[i].zTableName
+           && strcmp(pCur->aSummary[i].zTableName, zTableName)==0 ){
+            if( out!=i ) pCur->aSummary[out] = pCur->aSummary[i];
+            out++;
+          }else{
+            sqlite3_free(pCur->aSummary[i].zTableName);
+            sqlite3_free(pCur->aSummary[i].zCommitter);
+            sqlite3_free(pCur->aSummary[i].zEmail);
+            sqlite3_free(pCur->aSummary[i].zMessage);
+          }
+        }
+        pCur->nSummary = out;
+      }
+    }
+    return SQLITE_OK;
+  }
 
   
   if( zFromCommit ){
