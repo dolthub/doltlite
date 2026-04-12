@@ -129,6 +129,12 @@ static int open_db(const char *path, sqlite3 **ppDb){
   return rc;
 }
 
+static int stmt_column_text_equals(sqlite3_stmt *stmt, int iCol, const char *zExpect){
+  const unsigned char *z = sqlite3_column_text(stmt, iCol);
+  if( !zExpect ) return z==0;
+  return z && strcmp((const char*)z, zExpect)==0;
+}
+
 static void make_dbpath(char *zBuf, size_t nBuf, const char *zBase){
   snprintf(zBuf, nBuf, "/tmp/%s_%ld.db", zBase, (long)getpid());
 }
@@ -1407,6 +1413,98 @@ static void run_integrity_check_session_merge_state(void){
   remove_db(dbpath);
 }
 
+static void run_prepared_stmt_reuse_after_commit(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *stmt = 0;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Prepared Statement Reuse After Commit Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_prepared_stmt_reuse_after_commit");
+  remove_db(dbpath);
+
+  check("open_db_stmt_commit", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_stmt_commit", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(db, "SELECT id, v FROM t ORDER BY id", -1, &stmt, 0);
+  check("prepare_stmt_commit", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("stmt_commit_first_row", sqlite3_step(stmt)==SQLITE_ROW);
+    check("stmt_commit_first_id", sqlite3_column_int(stmt, 0)==1);
+    check("stmt_commit_first_val", stmt_column_text_equals(stmt, 1, "a"));
+    check("stmt_commit_done", sqlite3_step(stmt)==SQLITE_DONE);
+    check("stmt_commit_reset_initial", sqlite3_reset(stmt)==SQLITE_OK);
+
+    check("commit_new_row_same_conn", execsql(db,
+      "INSERT INTO t VALUES(2,'b');"
+      "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
+
+    check("stmt_commit_reuse_row1", sqlite3_step(stmt)==SQLITE_ROW);
+    check("stmt_commit_reuse_row1_id", sqlite3_column_int(stmt, 0)==1);
+    check("stmt_commit_reuse_row1_val", stmt_column_text_equals(stmt, 1, "a"));
+    check("stmt_commit_reuse_row2", sqlite3_step(stmt)==SQLITE_ROW);
+    check("stmt_commit_reuse_row2_id", sqlite3_column_int(stmt, 0)==2);
+    check("stmt_commit_reuse_row2_val", stmt_column_text_equals(stmt, 1, "b"));
+    check("stmt_commit_reuse_done", sqlite3_step(stmt)==SQLITE_DONE);
+    check("stmt_commit_reset_final", sqlite3_reset(stmt)==SQLITE_OK);
+  }
+
+  sqlite3_finalize(stmt);
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_prepared_stmt_reuse_after_schema_checkout(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *stmt = 0;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Prepared Statement Reuse After Schema Checkout Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_prepared_stmt_reuse_after_schema_checkout");
+  remove_db(dbpath);
+
+  check("open_db_stmt_checkout", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_stmt_checkout", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_checkout('-b', 'schema_branch');"
+    "ALTER TABLE t ADD COLUMN x INT;"
+    "UPDATE t SET x=7;"
+    "SELECT dolt_commit('-A', '-m', 'schema');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(db, "SELECT * FROM t ORDER BY id", -1, &stmt, 0);
+  check("prepare_stmt_checkout", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("stmt_checkout_main_row", sqlite3_step(stmt)==SQLITE_ROW);
+    check("stmt_checkout_main_colcount", sqlite3_column_count(stmt)==2);
+    check("stmt_checkout_main_id", sqlite3_column_int(stmt, 0)==1);
+    check("stmt_checkout_main_val", stmt_column_text_equals(stmt, 1, "a"));
+    check("stmt_checkout_main_done", sqlite3_step(stmt)==SQLITE_DONE);
+    check("stmt_checkout_reset_initial", sqlite3_reset(stmt)==SQLITE_OK);
+
+    check("checkout_schema_branch", execsql(db,
+      "SELECT dolt_checkout('schema_branch');")==SQLITE_OK);
+
+    check("stmt_checkout_branch_row", sqlite3_step(stmt)==SQLITE_ROW);
+    check("stmt_checkout_branch_colcount", sqlite3_column_count(stmt)==3);
+    check("stmt_checkout_branch_id", sqlite3_column_int(stmt, 0)==1);
+    check("stmt_checkout_branch_val", stmt_column_text_equals(stmt, 1, "a"));
+    check("stmt_checkout_branch_extra", sqlite3_column_int(stmt, 2)==7);
+    check("stmt_checkout_branch_done", sqlite3_step(stmt)==SQLITE_DONE);
+    check("stmt_checkout_reset_final", sqlite3_reset(stmt)==SQLITE_OK);
+  }
+
+  sqlite3_finalize(stmt);
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_truncated_wal_is_rejected(void){
   sqlite3 *db = 0;
   ChunkStore cs;
@@ -1886,6 +1984,8 @@ static const RegressionCase aCases[] = {
   { "prolly_diff_record_corruption", "Prolly Diff Record Corruption Test", run_prolly_diff_record_corruption },
   { "integrity_check_repo_state", "Integrity Check Repository State Test", run_integrity_check_repo_state },
   { "integrity_check_session_merge_state", "Integrity Check Session Merge State Test", run_integrity_check_session_merge_state },
+  { "prepared_stmt_reuse_after_commit", "Prepared Statement Reuse After Commit Test", run_prepared_stmt_reuse_after_commit },
+  { "prepared_stmt_reuse_after_schema_checkout", "Prepared Statement Reuse After Schema Checkout Test", run_prepared_stmt_reuse_after_schema_checkout },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
