@@ -181,6 +181,7 @@ int chunkStoreClose(ChunkStore *cs);
 ** another connection holds the lock. Caller must call Unlock after. */
 int chunkStoreLockAndRefresh(ChunkStore *cs);
 void chunkStoreUnlock(ChunkStore *cs);
+int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged);
 
 int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                         const ProllyHash *pCatHash,
