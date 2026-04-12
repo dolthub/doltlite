@@ -469,6 +469,11 @@ static void handleCommit(ChunkStore *pStore, int fd){
         }
         sqlite3_free(cdata);
       }
+      rc = chunkStoreSerializeRefs(pStore);
+      if( rc!=SQLITE_OK ){
+        sendError(fd);
+        return;
+      }
       rc = chunkStoreCommit(pStore);
       if( rc!=SQLITE_OK ){
         sendError(fd);

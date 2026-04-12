@@ -38,6 +38,8 @@
 **   ./doltlite_regression_test_c integrity_check_session_merge_state
 **   ./doltlite_regression_test_c btree_commit_failure_transactional
 **   ./doltlite_regression_test_c mutmap_empty_reverse_iter
+**   ./doltlite_regression_test_c working_set_refreshes_staged_across_connections
+**   ./doltlite_regression_test_c begin_write_refreshes_working_set_metadata
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -369,6 +371,10 @@ static int open_fail_db(const char *path, sqlite3 **ppDb){
     sqlite3_busy_timeout(*ppDb, 5000);
   }
   return rc;
+}
+
+static int persist_working_set(sqlite3 *db){
+  return doltlitePersistWorkingSet(db);
 }
 
 static void test_concurrent_refs_stale_reset_is_rejected(void){
@@ -1505,6 +1511,105 @@ static void run_prepared_stmt_reuse_after_schema_checkout(void){
   remove_db(dbpath);
 }
 
+static void run_working_set_refreshes_staged_across_connections(void){
+  sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
+  char dbpath[256];
+  ProllyHash stagedBefore;
+  ProllyHash stagedExpected;
+  ProllyHash stagedAfter;
+
+  printf("=== Working Set Refreshes Staged Across Connections Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_working_set_refreshes_staged_across_connections");
+  remove_db(dbpath);
+
+  check("open_db1_for_cross_conn_staged", open_db(dbpath, &db1)==SQLITE_OK);
+  check("create_table_for_cross_conn_staged",
+        execsql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+  check("insert_row_for_cross_conn_staged",
+        execsql(db1, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  check("initial_commit_for_cross_conn_staged",
+        execsql(db1, "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  check("open_db2_for_cross_conn_staged", open_db(dbpath, &db2)==SQLITE_OK);
+
+  doltliteGetSessionStaged(db2, &stagedBefore);
+  check("db1_stage_new_row", execsql(db1,
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_add('-A');")==SQLITE_OK);
+  doltliteGetSessionStaged(db1, &stagedExpected);
+  check("staged_hash_changed_after_dolt_add",
+        memcmp(&stagedExpected, &stagedBefore, sizeof(ProllyHash))!=0);
+
+  check("db2_refreshes_working_catalog_on_read",
+        strcmp(exec1(db2, "SELECT count(*) FROM t"), "2")==0);
+  doltliteGetSessionStaged(db2, &stagedAfter);
+  check("db2_refreshes_staged_hash",
+        memcmp(&stagedAfter, &stagedExpected, sizeof(ProllyHash))==0);
+
+  sqlite3_close(db2);
+  sqlite3_close(db1);
+  remove_db(dbpath);
+}
+
+static void run_begin_write_refreshes_working_set_metadata(void){
+  sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
+  char dbpath[256];
+  ProllyHash stagedBefore;
+  ProllyHash stagedExpected;
+  ProllyHash mergeExpected;
+  ProllyHash conflictsExpected;
+  ProllyHash stagedAfter;
+  ProllyHash mergeAfter;
+  ProllyHash conflictsAfter;
+  u8 isMergingAfter = 0;
+
+  printf("=== Begin Write Refreshes Working Set Metadata Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_begin_write_refreshes_working_set_metadata");
+  remove_db(dbpath);
+
+  check("open_db1_for_begin_write_refresh", open_db(dbpath, &db1)==SQLITE_OK);
+  check("create_table_for_begin_write_refresh",
+        execsql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+  check("insert_row_for_begin_write_refresh",
+        execsql(db1, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+  check("initial_commit_for_begin_write_refresh",
+        execsql(db1, "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  check("open_db2_for_begin_write_refresh", open_db(dbpath, &db2)==SQLITE_OK);
+
+  doltliteGetSessionStaged(db2, &stagedBefore);
+  check("db1_prepare_new_working_state", execsql(db1,
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_add('-A');")==SQLITE_OK);
+  doltliteGetSessionStaged(db1, &stagedExpected);
+  memset(&mergeExpected, 0x55, sizeof(mergeExpected));
+  memset(&conflictsExpected, 0x66, sizeof(conflictsExpected));
+  doltliteSetSessionMergeState(db1, 1, &mergeExpected, &conflictsExpected);
+  check("persist_merge_state_for_begin_write_refresh",
+        persist_working_set(db1)==SQLITE_OK);
+
+  check("db2_staged_state_is_initially_stale",
+        memcmp(&stagedBefore, &stagedExpected, sizeof(ProllyHash))!=0);
+  check("db2_begin_immediate_refreshes_branch_state",
+        execsql(db2, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("db2_sees_latest_working_rows_in_write_txn",
+        strcmp(exec1(db2, "SELECT count(*) FROM t"), "2")==0);
+  doltliteGetSessionStaged(db2, &stagedAfter);
+  doltliteGetSessionMergeState(db2, &isMergingAfter, &mergeAfter, &conflictsAfter);
+  check("begin_write_refreshes_staged_hash",
+        memcmp(&stagedAfter, &stagedExpected, sizeof(ProllyHash))==0);
+  check("begin_write_refreshes_merge_flag", isMergingAfter==1);
+  check("begin_write_refreshes_merge_commit",
+        memcmp(&mergeAfter, &mergeExpected, sizeof(ProllyHash))==0);
+  check("begin_write_refreshes_conflicts_catalog",
+        memcmp(&conflictsAfter, &conflictsExpected, sizeof(ProllyHash))==0);
+  check("rollback_begin_write_refresh_txn", execsql(db2, "ROLLBACK;")==SQLITE_OK);
+
+  sqlite3_close(db2);
+  sqlite3_close(db1);
+  remove_db(dbpath);
+}
+
 static void run_truncated_wal_is_rejected(void){
   sqlite3 *db = 0;
   ChunkStore cs;
@@ -1986,6 +2091,8 @@ static const RegressionCase aCases[] = {
   { "integrity_check_session_merge_state", "Integrity Check Session Merge State Test", run_integrity_check_session_merge_state },
   { "prepared_stmt_reuse_after_commit", "Prepared Statement Reuse After Commit Test", run_prepared_stmt_reuse_after_commit },
   { "prepared_stmt_reuse_after_schema_checkout", "Prepared Statement Reuse After Schema Checkout Test", run_prepared_stmt_reuse_after_schema_checkout },
+  { "working_set_refreshes_staged_across_connections", "Working Set Refreshes Staged Across Connections Test", run_working_set_refreshes_staged_across_connections },
+  { "begin_write_refreshes_working_set_metadata", "Begin Write Refreshes Working Set Metadata Test", run_begin_write_refreshes_working_set_metadata },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },

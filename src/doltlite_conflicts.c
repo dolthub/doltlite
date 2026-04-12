@@ -700,7 +700,6 @@ static int storeUpdatedConflicts(
     int rc;
     extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
     extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
-    extern int doltliteSaveWorkingSet(sqlite3*);
     if( totalConflicts==0 ){
       doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
     }else{
@@ -710,11 +709,7 @@ static int storeUpdatedConflicts(
       doltliteSetSessionConflictsCatalog(db, &newHash);
       doltliteSetSessionMergeState(db, 1, 0, &newHash);
     }
-    rc = doltliteSaveWorkingSet(db);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = chunkStoreSerializeRefs(cs);
-    if( rc!=SQLITE_OK ) return rc;
-    return chunkStoreCommit(cs);
+    return doltlitePersistWorkingSet(db);
   }
 }
 
