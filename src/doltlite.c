@@ -59,6 +59,7 @@ static time_t dlWinTimegm(struct tm *pTm){
 extern int doltliteLogRegister(sqlite3 *db);
 extern int doltliteStatusRegister(sqlite3 *db);
 extern int doltliteDiffRegister(sqlite3 *db);
+extern int doltliteSchemasRegister(sqlite3 *db);
 extern int doltliteBranchRegister(sqlite3 *db);
 extern int doltliteConflictsRegister(sqlite3 *db);
 extern int doltliteRegisterConflictTables(sqlite3 *db);
@@ -2324,6 +2325,7 @@ void doltliteRegister(sqlite3 *db){
   if( doltliteAtRegister(db)!=SQLITE_OK ) return;
   if( doltliteRegisterHistoryTables(db)!=SQLITE_OK ) return;
   if( doltliteSchemaDiffRegister(db)!=SQLITE_OK ) return;
+  if( doltliteSchemasRegister(db)!=SQLITE_OK ) return;
   if( doltliteRemoteSqlRegister(db)!=SQLITE_OK ) return;
   doltliteMaybeSeedRepo(db);
 }
