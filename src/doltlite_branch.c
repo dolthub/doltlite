@@ -503,7 +503,7 @@ static int doltliteCheckoutTables(
       rc = doltliteSwitchCatalog(db, &newWorkingHash);
     }
     if( rc==SQLITE_OK ){
-      doltliteSaveWorkingSet(db);
+      rc = doltliteSaveWorkingSet(db);
     }
   }
 

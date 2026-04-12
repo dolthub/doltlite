@@ -1950,8 +1950,7 @@ static int btreeStoreWorkingSetBlob(
   if( rc == SQLITE_NOTFOUND && chunkStoreIsEmpty(cs) ){
     return SQLITE_OK;
   }
-  if( rc != SQLITE_OK ) return rc;
-  return chunkStoreSerializeRefs(cs);
+  return rc;
 }
 
 static int btreeReadWorkingCatalog(
@@ -2192,6 +2191,8 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
         const char *zBr = p->zBranch ? p->zBranch : "main";
         rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash, NULL);
         if( rc!=SQLITE_OK ) return rc;
+        rc = chunkStoreSerializeRefs(&pBt->store);
+        if( rc!=SQLITE_OK ) return rc;
       }
     }
     /* Step 4: atomic manifest write */
@@ -2326,6 +2327,9 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       sqlite3_free(catData);
       if( rc==SQLITE_OK ){
         rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash, &p->headCommit);
+      }
+      if( rc==SQLITE_OK ){
+        rc = chunkStoreSerializeRefs(&pBt->store);
       }
       if( rc==SQLITE_OK ){
         rc = chunkStoreCommit(&pBt->store);
@@ -5373,6 +5377,9 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     rc = btreeWriteWorkingState(cs, zBr, catHash, NULL);
   }
   if( rc==SQLITE_OK ){
+    rc = chunkStoreSerializeRefs(cs);
+  }
+  if( rc==SQLITE_OK ){
     rc = chunkStoreCommit(cs);
   }
   if( rc!=SQLITE_OK ){
@@ -5574,6 +5581,18 @@ int doltliteSaveWorkingSet(sqlite3 *db){
                                   &pBtree->headCommit, &pBtree->stagedCatalog,
                                   pBtree->isMerging, &pBtree->mergeCommitHash,
                                   &pBtree->conflictsCatalogHash);
+}
+
+int doltlitePersistWorkingSet(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  int rc;
+
+  if( !cs ) return SQLITE_ERROR;
+  rc = doltliteSaveWorkingSet(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreSerializeRefs(cs);
+  if( rc!=SQLITE_OK ) return rc;
+  return chunkStoreCommit(cs);
 }
 
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){

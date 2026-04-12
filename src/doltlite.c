@@ -245,21 +245,6 @@ void doltliteUpdateSchemaHashes(sqlite3 *db){
   }
 }
 
-/*
-** Helper #1: Persist working-set + refs to disk.
-** Replaces the doltliteSaveWorkingSet/chunkStoreSerializeRefs/chunkStoreCommit
-** sequence found at many call sites.
-*/
-static int doltlitePersistState(sqlite3 *db){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  int rc;
-  rc = doltliteSaveWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = chunkStoreSerializeRefs(cs);
-  if( rc!=SQLITE_OK ) return rc;
-  return chunkStoreCommit(cs);
-}
-
 int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc;
@@ -425,7 +410,7 @@ static int doltliteAdvanceBranch(
   doltliteSetSessionHead(db, pNewHead);
   doltliteSetSessionStaged(db, pCatalogHash);
 
-  rc = doltlitePersistState(db);
+  rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ){
     int rc2 = doltliteRestoreTxnState(db, &saved);
     doltliteTxnStateClear(&saved);
@@ -450,7 +435,7 @@ static int doltliteReportConflicts(
   int rc;
   rc = doltliteRegisterConflictTables(db);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltlitePersistState(db);
+  rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
     "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
@@ -645,7 +630,7 @@ static void doltliteAddFunc(
       sqlite3_free(aStaged);
     }
 
-    rc = doltlitePersistState(db);
+    rc = doltlitePersistWorkingSet(db);
     if( rc!=SQLITE_OK ){
       doltliteSetSessionStaged(db, &savedStaged);
       sqlite3_result_error_code(context, rc);
@@ -1293,7 +1278,11 @@ static void doltliteResetFunc(
       sqlite3_result_error_code(context, rc);
       return;
     }
-    doltlitePersistState(db);
+    rc = doltlitePersistWorkingSet(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
     sqlite3_result_int(context, 0);
     return;
   }
@@ -1505,8 +1494,11 @@ static void doltliteResetFunc(
       }
     }
 
-    doltliteSaveWorkingSet(db);
-    chunkStoreSerializeRefs(cs);
+    rc = doltliteSaveWorkingSet(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto reset_cleanup;
+    }
     rc = doltliteHardReset(db, &targetCatHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "hard reset failed", -1);
@@ -1517,9 +1509,13 @@ static void doltliteResetFunc(
     ** tables). Restore staged to the original target so untracked
     ** tables show up as unstaged in dolt_status, matching Dolt. */
     doltliteSetSessionStaged(db, &origStagedAfterReset);
-    doltlitePersistState(db);
+    rc = doltlitePersistWorkingSet(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      goto reset_cleanup;
+    }
   }else{
-    rc = doltlitePersistState(db);
+    rc = doltlitePersistWorkingSet(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       goto reset_cleanup;
@@ -1629,7 +1625,11 @@ static void doltliteMergeFunc(
 
 
     doltliteClearSessionMergeState(db);
-    doltlitePersistState(db);
+    rc = doltlitePersistWorkingSet(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
 
     sqlite3_result_int(context, 0);
     return;
