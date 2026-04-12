@@ -100,14 +100,17 @@ static int buildInsertSql(
   char *zVals;
   int rc;
 
+  (void)intKey; /* PK value is in the record body; no need for intKey. */
   *pzSql = 0;
   if( !pIns || !pVals ){
     sqlite3_str_reset(pIns);
     sqlite3_str_reset(pVals);
     return SQLITE_NOMEM;
   }
-  sqlite3_str_appendf(pIns, "INSERT OR REPLACE INTO \"%w\"(rowid", zTable);
-  sqlite3_str_appendf(pVals, "VALUES(%lld", intKey);
+  /* Don't use "rowid" — doltlite user-PK tables don't expose it.
+  ** All columns (including PK) are read from the record body. */
+  sqlite3_str_appendf(pIns, "INSERT OR REPLACE INTO \"%w\"(", zTable);
+  sqlite3_str_appendf(pVals, "VALUES(");
   rc = cfSqlRc(pIns);
   if( rc==SQLITE_OK ) rc = cfSqlRc(pVals);
   if( rc!=SQLITE_OK ){
@@ -122,8 +125,11 @@ static int buildInsertSql(
     if( stBytes <= 0 ) rc = SQLITE_CORRUPT;
     pRec += stBytes;
     if( rc==SQLITE_OK ){
-      sqlite3_str_appendf(pIns, ",\"%w\"", azCol[colIdx]);
-      sqlite3_str_appendall(pVals, ",");
+      if( colIdx>0 ){
+        sqlite3_str_appendall(pIns, ",");
+        sqlite3_str_appendall(pVals, ",");
+      }
+      sqlite3_str_appendf(pIns, "\"%w\"", azCol[colIdx]);
       rc = cfSqlRc(pIns);
     }
     if( rc==SQLITE_OK ){
@@ -177,14 +183,7 @@ static int applyTheirRecord(
 
   while( (rc = sqlite3_step(pInfo))==SQLITE_ROW ){
     const char *zName = (const char*)sqlite3_column_text(pInfo, 1);
-    int pk = sqlite3_column_int(pInfo, 5);
-    
-    if( pk==1 ){
-      const char *zType = (const char*)sqlite3_column_text(pInfo, 2);
-      if( zType && sqlite3_stricmp(zType, "INTEGER")==0 ){
-        continue; 
-      }
-    }
+    (void)sqlite3_column_int(pInfo, 5); /* pk flag — not used */
     if( nCol >= nColAlloc ){
       char **azNew;
       nColAlloc = nColAlloc ? nColAlloc*2 : 8;
@@ -230,38 +229,10 @@ static int applyTheirRecord(
   pHdrEnd = pRec + (int)hdrSize;
   pBody = pRec + (int)hdrSize;
 
-  
-  if( pPos < pHdrEnd ){
-    u64 stSkip;
-    int skipBytes = dlReadVarint(pPos, pHdrEnd, &stSkip);
-    if( skipBytes <= 0 ){
-      int k;
-      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
-      sqlite3_free(azCol);
-      return SQLITE_CORRUPT;
-    }
-    pPos += skipBytes;
-    
-    if( stSkip==0 || stSkip==8 || stSkip==9 ) {}
-    else if( stSkip>=1 && stSkip<=6 ){ static const int s[]={0,1,2,3,4,6,8}; pBody+=s[stSkip]; }
-    else if( stSkip==7 ) pBody+=8;
-    else if( stSkip>=12 && (stSkip&1)==0 ) pBody+=((int)stSkip-12)/2;
-    else if( stSkip>=13 && (stSkip&1)==1 ) pBody+=((int)stSkip-13)/2;
-    else{
-      int k;
-      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
-      sqlite3_free(azCol);
-      return SQLITE_CORRUPT;
-    }
-    if( pBody > pRecEnd ){
-      int k;
-      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
-      sqlite3_free(azCol);
-      return SQLITE_CORRUPT;
-    }
-  }
-
-  
+  /* No field skipping — the record body includes ALL columns (including
+  ** the PK) for doltlite user-PK tables. buildInsertSql reads them all
+  ** and uses the PK column name directly (not "rowid", which doesn't
+  ** exist on doltlite user-PK tables). */
   rc = buildInsertSql(zTable, intKey, azCol, nCol, pPos, pRecEnd, pHdrEnd, pBody, &zSql);
   if( rc==SQLITE_OK ){
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
