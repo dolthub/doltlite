@@ -483,6 +483,155 @@ SELECT dolt_commit('-m', 'main_update');
 SELECT dolt_merge('feature');
 "
 
+echo "--- DDL across commits (ALTER TABLE in history) ---"
+
+# Schema-only change: ADD COLUMN in its own commit, no data.
+# dolt_diff_<table> should NOT emit a row for the add-column commit
+# since no rows changed.
+oracle "diff_alter_add_col_no_data_change" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col_only');
+"
+
+# ADD COLUMN then update an existing row's OLD column. The walker
+# should emit the update as 'modified' regardless of the schema
+# change having happened in the intermediate commit.
+oracle "diff_alter_add_col_then_update_old_col" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col');
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'update_v');
+"
+
+# ADD COLUMN then update the NEW column specifically. The diff
+# output should show row 1 as 'modified' between the add-col
+# commit and the update commit.
+oracle "diff_alter_add_col_then_update_new_col" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col');
+UPDATE t SET extra = 42 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'populate_extra');
+"
+
+# ADD COLUMN and INSERT new row in the same commit. The insert
+# shows as 'added' at that commit; no other changes.
+oracle "diff_alter_add_col_plus_insert_same_commit" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+INSERT INTO t VALUES (2, 20, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col_and_insert');
+"
+
+# INSERT after an ALTER ADD COLUMN in a separate commit.
+oracle "diff_alter_add_col_then_insert_next_commit" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col');
+INSERT INTO t VALUES (2, 20, 200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'insert_after_alter');
+"
+
+# DELETE after an ALTER ADD COLUMN. The delete should show up as
+# 'removed' at that commit.
+oracle "diff_alter_add_col_then_delete_next_commit" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_row');
+ALTER TABLE t ADD COLUMN extra INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_col');
+DELETE FROM t WHERE id = 2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_row');
+"
+
+# DROP COLUMN with no data change: not oracle-tested. doltlite's
+# per-row diff walker emits a spurious "modified" row for every
+# user-PK-table row at a DROP COLUMN commit, because the prolly
+# tree's record encoding changes even though no user-visible data
+# did. Dolt correctly suppresses the commit from the per-row diff.
+# Tracked as a follow-up; the schema_diff oracle already catches
+# the schema change via modified_drop_col.
+
+# DROP COLUMN that DID have data — row 1 had `extra=100` before
+# the drop, so a real modification exists. Both engines should
+# agree the row is modified at the drop commit (the column the
+# harness projects, `v`, is unchanged but the walker still emits
+# the row because the underlying record changed).
+#
+# Not oracle-tested either, for the same user-PK-vs-INTEGER-PK
+# reason: on user-PK tables doltlite emits an extra synthetic
+# "modified" row that Dolt doesn't, independent of whether the
+# dropped column had data. Left as a follow-up.
+
+# RENAME COLUMN. The current schema has the new name, but pre-
+# rename rows are projected under the new name's column position.
+# Both engines should agree that no rows actually changed.
+oracle "diff_alter_rename_col_no_data_change" "
+$SEED
+ALTER TABLE t RENAME COLUMN v TO vv;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'rename_v');
+"
+
+# Multiple ALTERs in a single commit, no data change. Schema-only
+# combined commit should emit nothing from dolt_diff_<table>.
+oracle "diff_multiple_alters_single_commit_no_data" "
+$SEED
+ALTER TABLE t ADD COLUMN a TEXT;
+ALTER TABLE t ADD COLUMN b INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'multi_alter');
+"
+
+# ALTER ADD COLUMN on one branch, row update on the other, then
+# merge. The merge should carry both contributions without
+# duplicating rows in the diff walker output.
+oracle "diff_alter_then_merge" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_add_row');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 99 WHERE id = 2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_update');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN extra INT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_add_col');
+SELECT dolt_merge('feature');
+"
+
+# Stage an ALTER in the working set, then query dolt_diff_<table>.
+# The WORKING row should show schema-only change (no data diff).
+oracle "diff_alter_add_col_working_set_only" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+"
+
+# Stage an ALTER + a data change in the working set. The WORKING
+# row should show only the data change; the schema change is
+# schema-only and doesn't produce a row-level diff.
+oracle "diff_alter_add_col_and_update_working_set" "
+$SEED
+ALTER TABLE t ADD COLUMN extra INT;
+UPDATE t SET extra = 42 WHERE id = 1;
+"
+
 echo ""
 echo "--- summary form: dolt_diff (no args) ---"
 
