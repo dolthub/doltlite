@@ -374,10 +374,7 @@ static int open_fail_db(const char *path, sqlite3 **ppDb){
 }
 
 static int persist_working_set(sqlite3 *db){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  int rc = doltliteSaveWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
-  return chunkStoreCommit(cs);
+  return doltlitePersistWorkingSet(db);
 }
 
 static void test_concurrent_refs_stale_reset_is_rejected(void){
