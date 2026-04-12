@@ -1459,11 +1459,13 @@ int sqlite3BtreeOpen(
   *ppBtree = 0;
 
   /* Delegate to the original SQLite btree implementation for:
-  ** - NULL/empty filenames (temp databases, ephemeral tables)
+  ** - NULL/empty filenames
+  ** - explicit in-memory databases
   ** - BTREE_SINGLE flag (transient/ephemeral btrees)
   ** - Temp database (SQLITE_OPEN_TEMP_DB in vfsFlags)
   ** - Existing files with standard SQLite headers */
   if( !zFilename || zFilename[0]=='\0'
+   || strcmp(zFilename, ":memory:")==0
    || (flags & BTREE_SINGLE)
    || (vfsFlags & SQLITE_OPEN_TEMP_DB)
    || origBtreeIsSqliteFile(zFilename)
