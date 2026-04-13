@@ -16,6 +16,8 @@ static int addToLevel(ProllyChunker *ch, int level,
                       const u8 *pVal, int nVal);
 static int finishFlushLevel(ProllyChunker *ch, int level,
                             ProllyHash *pHash);
+static int hasPendingAncestorLevels(const ProllyChunker *ch, int level);
+static int finishPropagateLevel(ProllyChunker *ch, int level);
 
 static int initLevel(ProllyChunker *ch, int level){
   ProllyChunkerLevel *pLevel;
@@ -116,6 +118,38 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
   return SQLITE_OK;
 }
 
+static int hasPendingAncestorLevels(const ProllyChunker *ch, int level){
+  int k;
+  for( k = level + 1; k < ch->nLevels; k++ ){
+    if( ch->aLevel[k].builder.nItems > 0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+static int finishPropagateLevel(ProllyChunker *ch, int level){
+  ProllyChunkerLevel *pLevel = &ch->aLevel[level];
+  ProllyHash hash;
+  const u8 *pLastKey;
+  int nLastKey;
+  int rc;
+
+  builderLastKey(&pLevel->builder, &pLastKey, &nLastKey);
+  rc = finishFlushLevel(ch, level, &hash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = addToLevel(ch, level + 1, pLastKey, nLastKey,
+                  hash.data, PROLLY_HASH_SIZE);
+  if( rc!=SQLITE_OK ) return rc;
+
+  prollyNodeBuilderReset(&pLevel->builder);
+  prollyRollingHashReset(&pLevel->rh);
+  pLevel->nItems = 0;
+  pLevel->nBytes = 0;
+  return SQLITE_OK;
+}
+
 static int addToLevel(ProllyChunker *ch, int level,
                       const u8 *pKey, int nKey,
                       const u8 *pVal, int nVal){
@@ -213,48 +247,9 @@ int prollyChunkerFinish(ProllyChunker *ch){
 
     
     {
-      int parentActive = 0;
-      int k;
-
-      
-      for(k = level + 1; k < ch->nLevels; k++){
-        if( ch->aLevel[k].builder.nItems > 0 ){
-          parentActive = 1;
-          break;
-        }
-      }
-
-      if( parentActive ){
-        
-        ProllyHash hash;
-        const u8 *pLastKey;
-        int nLastKey;
-
-        builderLastKey(&pLevel->builder, &pLastKey, &nLastKey);
-
-        rc = finishFlushLevel(ch, level, &hash);
+      if( hasPendingAncestorLevels(ch, level) ){
+        rc = finishPropagateLevel(ch, level);
         if( rc!=SQLITE_OK ) return rc;
-
-        
-        if( level + 1 >= ch->nLevels ){
-          rc = initLevel(ch, ch->nLevels);
-          if( rc!=SQLITE_OK ) return rc;
-          ch->nLevels++;
-        }
-
-        rc = prollyNodeBuilderAdd(
-          &ch->aLevel[level + 1].builder,
-          pLastKey, nLastKey,
-          hash.data, PROLLY_HASH_SIZE
-        );
-        if( rc!=SQLITE_OK ) return rc;
-        ch->aLevel[level + 1].nItems++;
-
-        
-        prollyNodeBuilderReset(&pLevel->builder);
-        prollyRollingHashReset(&pLevel->rh);
-        pLevel->nItems = 0;
-        pLevel->nBytes = 0;
       } else {
         
         ProllyHash hash;

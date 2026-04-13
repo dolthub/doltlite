@@ -2,7 +2,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_diff.h"
-#include "doltlite_record.h"
+#include "prolly_record.h"
 
 #include <string.h>  
 
@@ -776,9 +776,9 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
           if( pIter->rc!=SQLITE_OK ) return pIter->rc;
           continue; /* Skip to next pair */
         }else if( pIter->rc==SQLITE_DONE ){
-          pIter->rc = SQLITE_OK;
           const u8 *pOV; int nOV;
           const u8 *pNV; int nNV;
+          pIter->rc = SQLITE_OK;
           pCh->type = PROLLY_DIFF_MODIFY;
           pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
           if( pIter->rc!=SQLITE_OK ) return pIter->rc;
