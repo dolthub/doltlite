@@ -258,40 +258,112 @@ SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName){
 static int computeSchemaDiff(
   SdCursor *pCur,
   SchemaEntry *aFrom, int nFrom,
-  SchemaEntry *aTo, int nTo
+  SchemaEntry *aTo, int nTo,
+  struct TableEntry *aFromTables, int nFromTables,
+  struct TableEntry *aToTables, int nToTables
 ){
   int i;
+  u8 *fromConsumed = 0, *toConsumed = 0;
+  int rc = SQLITE_OK;
+
+  if( nFrom > 0 ){
+    fromConsumed = sqlite3_malloc(nFrom);
+    if( !fromConsumed ) return SQLITE_NOMEM;
+    memset(fromConsumed, 0, nFrom);
+  }
+  if( nTo > 0 ){
+    toConsumed = sqlite3_malloc(nTo);
+    if( !toConsumed ){
+      sqlite3_free(fromConsumed);
+      return SQLITE_NOMEM;
+    }
+    memset(toConsumed, 0, nTo);
+  }
+
+  /* Rename detection: ALTER TABLE RENAME TO preserves the table's rootpage
+  ** (iTable) AND its tree root (data content), while changing zName and
+  ** the CREATE-TABLE DDL. Matching a (dropped, added) pair on both
+  ** iTable and root rejects drop+create sequences that happen to reuse
+  ** an iTable via SQLite's rootpage freelist. The collapsed row emits
+  ** from_table_name != to_table_name, matching Dolt's dolt_schema_diff.
+  **
+  ** Views and triggers have iTable==0 and are excluded. Rename + data
+  ** modification in a single commit is not detected here — the root
+  ** hashes differ, so the pair still emits as (dropped, added). */
+  for(i=0; i<nTo; i++){
+    SchemaEntry *fromEntry;
+    struct TableEntry *toTE;
+    int j;
+
+    fromEntry = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
+    if( fromEntry ) continue;
+
+    toTE = doltliteFindTableByName(aToTables, nToTables, aTo[i].zName);
+    if( !toTE || toTE->iTable==0 ) continue;
+
+    for(j=0; j<nFromTables; j++){
+      SchemaEntry *dropped;
+      int k;
+      if( aFromTables[j].iTable != toTE->iTable ) continue;
+      if( !aFromTables[j].zName ) continue;
+      if( prollyHashCompare(&aFromTables[j].root, &toTE->root)!=0 ) break;
+      /* The from-side table with this iTable must not still exist under
+      ** its old name in the to-side catalog — otherwise it's a modify or
+      ** a no-op, not a rename. */
+      if( doltliteFindTableByName(aToTables, nToTables, aFromTables[j].zName) ) break;
+
+      dropped = findSchemaEntry(aFrom, nFrom, aFromTables[j].zName);
+      if( !dropped ) break;
+
+      rc = appendSchemaDiffRow(pCur, dropped->zName, aTo[i].zName,
+                               dropped->zSql, aTo[i].zSql);
+      if( rc!=SQLITE_OK ) goto done;
+
+      toConsumed[i] = 1;
+      for(k=0; k<nFrom; k++){
+        if( &aFrom[k] == dropped ){ fromConsumed[k] = 1; break; }
+      }
+      break;
+    }
+  }
 
   /* Added or modified: walk the to-side and look for matches in from. */
   for(i=0; i<nTo; i++){
-    SchemaEntry *fromEntry = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
+    SchemaEntry *fromEntry;
+    if( toConsumed && toConsumed[i] ) continue;
+    fromEntry = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
 
     if( !fromEntry ){
       /* Added: from_table_name and from_create_statement are empty. */
-      int rc = appendSchemaDiffRow(pCur, "", aTo[i].zName,
-                                   "", aTo[i].zSql);
-      if( rc!=SQLITE_OK ) return rc;
+      rc = appendSchemaDiffRow(pCur, "", aTo[i].zName,
+                               "", aTo[i].zSql);
+      if( rc!=SQLITE_OK ) goto done;
     }else if( fromEntry->zSql && aTo[i].zSql
            && strcmp(fromEntry->zSql, aTo[i].zSql)!=0 ){
       /* Modified: both names equal, both SQL strings present. */
-      int rc = appendSchemaDiffRow(pCur, aTo[i].zName, aTo[i].zName,
-                                   fromEntry->zSql, aTo[i].zSql);
-      if( rc!=SQLITE_OK ) return rc;
+      rc = appendSchemaDiffRow(pCur, aTo[i].zName, aTo[i].zName,
+                               fromEntry->zSql, aTo[i].zSql);
+      if( rc!=SQLITE_OK ) goto done;
     }
   }
 
   /* Dropped: walk the from-side and emit anything missing on the to-side. */
   for(i=0; i<nFrom; i++){
-    SchemaEntry *toEntry = findSchemaEntry(aTo, nTo, aFrom[i].zName);
+    SchemaEntry *toEntry;
+    if( fromConsumed && fromConsumed[i] ) continue;
+    toEntry = findSchemaEntry(aTo, nTo, aFrom[i].zName);
     if( !toEntry ){
       /* Dropped: to_table_name and to_create_statement are empty. */
-      int rc = appendSchemaDiffRow(pCur, aFrom[i].zName, "",
-                                   aFrom[i].zSql, "");
-      if( rc!=SQLITE_OK ) return rc;
+      rc = appendSchemaDiffRow(pCur, aFrom[i].zName, "",
+                               aFrom[i].zSql, "");
+      if( rc!=SQLITE_OK ) goto done;
     }
   }
 
-  return SQLITE_OK;
+done:
+  sqlite3_free(fromConsumed);
+  sqlite3_free(toConsumed);
+  return rc;
 }
 
 static const char *sdSchema =
@@ -384,6 +456,8 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   ProllyHash fromCatHash, toCatHash;
   SchemaEntry *aFrom = 0, *aTo = 0;
   int nFrom = 0, nTo = 0;
+  struct TableEntry *aFromTables = 0, *aToTables = 0;
+  int nFromTables = 0, nToTables = 0;
   int rc, argIdx = 0;
   (void)idxStr;
 
@@ -458,8 +532,16 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
     rc = loadSchemaFromCatalog(db, cs, pCache, &toCatHash, &aTo, &nTo);
     if( rc!=SQLITE_OK ) goto sd_filter_done;
 
-  
-    rc = computeSchemaDiff(c, aFrom, nFrom, aTo, nTo);
+    /* Also load the TableEntry lists so computeSchemaDiff can detect
+    ** renames by matching dropped+added entries on iTable. */
+    rc = doltliteLoadCatalog(db, &fromCatHash, &aFromTables, &nFromTables, 0);
+    if( rc!=SQLITE_OK ) goto sd_filter_done;
+    rc = doltliteLoadCatalog(db, &toCatHash, &aToTables, &nToTables, 0);
+    if( rc!=SQLITE_OK ) goto sd_filter_done;
+
+    rc = computeSchemaDiff(c, aFrom, nFrom, aTo, nTo,
+                           aFromTables, nFromTables,
+                           aToTables, nToTables);
     if( rc!=SQLITE_OK ) goto sd_filter_done;
 
   
@@ -490,6 +572,8 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
 sd_filter_done:
   freeSchemaEntries(aFrom, nFrom);
   freeSchemaEntries(aTo, nTo);
+  sqlite3_free(aFromTables);
+  sqlite3_free(aToTables);
   return rc;
 }
 

@@ -205,6 +205,45 @@ SELECT * FROM dolt_diff('users', 'abc123...', 'def456...');
 -- diff_type | rowid_val | from_value | to_value
 ```
 
+### Diff Stat
+
+Row- and cell-level change counts between any two commits, branches, or tags.
+One row per changed table, with counts of rows added/deleted/modified and
+cells added/deleted/modified:
+
+```sql
+SELECT * FROM dolt_diff_stat('v1.0', 'HEAD');
+-- table_name | rows_unmodified | rows_added | rows_deleted | rows_modified |
+--   cells_added | cells_deleted | cells_modified |
+--   old_row_count | new_row_count | old_cell_count | new_cell_count
+
+-- Narrow to a single table
+SELECT * FROM dolt_diff_stat('v1.0', 'HEAD', 'users');
+
+-- How many rows changed on feature vs main?
+SELECT sum(rows_added + rows_deleted + rows_modified)
+  FROM dolt_diff_stat('main', 'feature');
+```
+
+### Diff Summary
+
+High-level summary of which tables changed between any two commits, branches,
+or tags. One row per changed table, classifying each change as `added`,
+`dropped`, `renamed`, or `modified`, and indicating whether the change
+touched data, schema, or both:
+
+```sql
+SELECT * FROM dolt_diff_summary('v1.0', 'HEAD');
+-- from_table_name | to_table_name | diff_type | data_change | schema_change
+
+-- Narrow to a single table
+SELECT * FROM dolt_diff_summary('v1.0', 'HEAD', 'users');
+
+-- Which tables had schema changes between two releases?
+SELECT to_table_name FROM dolt_diff_summary('v1.0', 'v2.0')
+  WHERE schema_change = 1;
+```
+
 ### Schema Diff
 
 Compare schemas between any two commits, branches, or tags:
@@ -217,6 +256,30 @@ SELECT * FROM dolt_schema_diff('v1.0', 'v2.0');
 -- empty to_table_name; modified rows have both equal.
 -- Also detects new indexes and views.
 ```
+
+### Schemas (dolt_schemas)
+
+Projection of views and triggers from `sqlite_schema`. This is the Dolt-style
+surface for browsing non-table schema objects. Because `sqlite_schema` lives
+in the branch-scoped catalog, `dolt_schemas` is version-controlled per branch
+just like user tables — switching branches with `dolt_checkout` will show the
+views and triggers defined on that branch:
+
+```sql
+CREATE VIEW active_users AS SELECT * FROM users WHERE active = 1;
+CREATE TRIGGER audit_users AFTER UPDATE ON users
+  BEGIN INSERT INTO audit VALUES(new.id, 'updated'); END;
+SELECT dolt_commit('-Am', 'Add view and trigger');
+
+SELECT * FROM dolt_schemas;
+-- type    | name         | fragment                                  | extra | sql_mode
+-- view    | active_users | CREATE VIEW active_users AS SELECT ...    |       |
+-- trigger | audit_users  | CREATE TRIGGER audit_users AFTER UPDATE...|       |
+```
+
+Rows are filtered to `type IN ('view','trigger')` — ordinary tables and
+indexes are not reported here. Use `sqlite_schema` directly (or
+`dolt_schema_diff`) if you need the full schema surface.
 
 ### Audit Log (dolt_diff_&lt;table&gt;)
 
