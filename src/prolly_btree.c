@@ -4328,19 +4328,23 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
       *ppData = e->pVal;
       *pnData = e->nVal;
     }else{
-      
-      u8 *pRec = 0; int nRec = 0;
-      recordFromSortKey(e->pKey, e->nKey, &pRec, &nRec);
-      if( pRec ){
-        if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
-          sqlite3_free(pCur->pCachedPayload);
+      if( e->nVal > 0 && e->pVal ){
+        *ppData = e->pVal;
+        *pnData = e->nVal;
+      }else{
+        u8 *pRec = 0; int nRec = 0;
+        recordFromSortKey(e->pKey, e->nKey, &pRec, &nRec);
+        if( pRec ){
+          if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
+            sqlite3_free(pCur->pCachedPayload);
+          }
+          pCur->pCachedPayload = pRec;
+          pCur->nCachedPayload = nRec;
+          pCur->cachedPayloadOwned = 1;
         }
-        pCur->pCachedPayload = pRec;
-        pCur->nCachedPayload = nRec;
-        pCur->cachedPayloadOwned = 1;
+        *ppData = pRec;
+        *pnData = nRec;
       }
-      *ppData = pRec;
-      *pnData = nRec;
     }
     return;
   }
