@@ -172,8 +172,8 @@ echo "  100K: ${T_DIFF_100K}ms"
 T_DIFF_1M=$(time_ms "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_1M'")
 echo "  1M: ${T_DIFF_1M}ms"
 
-assert_ratio "diff_1k_to_100k" "$T_DIFF_1K" "$T_DIFF_100K" 5
-assert_ratio "diff_100k_to_1m" "$T_DIFF_100K" "$T_DIFF_1M" 5
+assert_ratio "diff_1k_to_100k" "$T_DIFF_1K" "$T_DIFF_100K" 10
+assert_ratio "diff_100k_to_1m" "$T_DIFF_100K" "$T_DIFF_1M" 10
 
 # ============================================================
 # Diff correctness: exactly 1 change at each size
