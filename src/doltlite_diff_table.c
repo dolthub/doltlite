@@ -69,8 +69,8 @@ typedef struct AuditRow AuditRow;
 struct AuditRow {
   u8 diffType;
   i64 intKey;
-  u8 *pOldVal; int nOldVal;
-  u8 *pNewVal; int nNewVal;
+  const u8 *pOldVal; int nOldVal;
+  const u8 *pNewVal; int nNewVal;
   char zFromCommit[PROLLY_HASH_SIZE*2+1];
   char zToCommit[PROLLY_HASH_SIZE*2+1];
   i64 fromDate;
@@ -191,8 +191,6 @@ static int diffRecordField(
 }
 
 static void clearAuditRow(AuditRow *r){
-  sqlite3_free(r->pOldVal);
-  sqlite3_free(r->pNewVal);
   memset(r, 0, sizeof(*r));
 }
 
@@ -885,9 +883,6 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
       ProllyDiffChange *pChange = 0;
       rc = prollyDiffIterStep(&pCur->diffIter, &pChange);
       if( rc==SQLITE_ROW && pChange ){
-        u8 *pOldVal = 0;
-        u8 *pNewVal = 0;
-
         /* When the pair's schemas differ (ADD/DROP/RENAME column
         ** between these commits), a MODIFY change may be a pure
         ** schema-encoding artifact: the record bytes differ but
@@ -903,9 +898,9 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
           continue;
         }
 
-        /* Free previous value copies (preserves commit-pair metadata) */
-        sqlite3_free(pCur->row.pOldVal);
-        sqlite3_free(pCur->row.pNewVal);
+        /* Row value pointers borrow the diff iterator's storage, which
+        ** remains valid until the next Step/Close. Clear any previous
+        ** borrowed pointers before publishing the new current row. */
         pCur->row.pOldVal = 0;
         pCur->row.nOldVal = 0;
         pCur->row.pNewVal = 0;
@@ -914,25 +909,9 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
         pCur->row.diffType = pChange->type;
         pCur->row.intKey = pChange->intKey;
 
-        /* Copy value data — the iterator's copies are valid until next Step */
-        if( pChange->pOldVal && pChange->nOldVal > 0 ){
-          pOldVal = sqlite3_malloc(pChange->nOldVal);
-          if( !pOldVal ) return SQLITE_NOMEM;
-          memcpy(pOldVal, pChange->pOldVal, pChange->nOldVal);
-        }
-
-        if( pChange->pNewVal && pChange->nNewVal > 0 ){
-          pNewVal = sqlite3_malloc(pChange->nNewVal);
-          if( !pNewVal ){
-            sqlite3_free(pOldVal);
-            return SQLITE_NOMEM;
-          }
-          memcpy(pNewVal, pChange->pNewVal, pChange->nNewVal);
-        }
-
-        pCur->row.pOldVal = pOldVal;
+        pCur->row.pOldVal = pChange->pOldVal;
         pCur->row.nOldVal = pChange->pOldVal ? pChange->nOldVal : 0;
-        pCur->row.pNewVal = pNewVal;
+        pCur->row.pNewVal = pChange->pNewVal;
         pCur->row.nNewVal = pChange->pNewVal ? pChange->nNewVal : 0;
 
         pCur->hasRow = 1;
