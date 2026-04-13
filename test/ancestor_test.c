@@ -59,7 +59,7 @@ int main(){
   const char *dbpath = "/tmp/test_ancestor.db";
   int rc;
   const char *main_head, *feature_head, *ancestor;
-  char main_head_buf[128], feature_head_buf[128];
+  char main_head_buf[128], feature_head_buf[128], merge_head_buf[128];
 
   remove(dbpath);
   remove("/tmp/test_ancestor.db-chunks");
@@ -143,6 +143,34 @@ int main(){
     ancestor = exec1(db, sql);
     printf("Ancestor (C2,feature):   %s\n", ancestor);
     check("ancestor where one is ancestor of other",
+          strcmp(ancestor, c2_hash_buf)==0);
+  }
+
+  /* Merge feature back into main to exercise ^N parent selection. */
+  execsql(db, "SELECT dolt_checkout('main')");
+  execsql(db, "SELECT dolt_merge('feature')");
+  main_head = exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
+  snprintf(merge_head_buf, sizeof(merge_head_buf), "%s", main_head);
+
+  /* Test 4: HEAD^2 resolves to the second parent of the merge commit. */
+  {
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+      "SELECT dolt_merge_base('%s^2', '%s^2')", merge_head_buf, merge_head_buf);
+    ancestor = exec1(db, sql);
+    printf("Ancestor (HEAD^2,HEAD^2): %s\n", ancestor);
+    check("merge second-parent ref resolves to feature head",
+          strcmp(ancestor, feature_head_buf)==0);
+  }
+
+  /* Test 5: second parent vs first parent merges at the branch point. */
+  {
+    char sql[512];
+    snprintf(sql, sizeof(sql),
+      "SELECT dolt_merge_base('%s^2', '%s~1')", merge_head_buf, merge_head_buf);
+    ancestor = exec1(db, sql);
+    printf("Ancestor (HEAD^2,HEAD~1): %s\n", ancestor);
+    check("merge first/second parent base is C2",
           strcmp(ancestor, c2_hash_buf)==0);
   }
 

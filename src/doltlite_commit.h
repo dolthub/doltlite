@@ -29,6 +29,25 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c);
 
 void doltliteCommitClear(DoltliteCommit *c);
 
+static SQLITE_INLINE int doltliteCommitParentCount(const DoltliteCommit *pCommit){
+  if( pCommit->nParents>0 ) return pCommit->nParents;
+  return prollyHashIsEmpty(&pCommit->parentHash) ? 0 : 1;
+}
+
+static SQLITE_INLINE const ProllyHash *doltliteCommitParentHash(
+  const DoltliteCommit *pCommit,
+  int iParent
+){
+  if( iParent<0 ) return 0;
+  if( pCommit->nParents>0 ){
+    return iParent<pCommit->nParents ? &pCommit->aParents[iParent] : 0;
+  }
+  if( iParent==0 && !prollyHashIsEmpty(&pCommit->parentHash) ){
+    return &pCommit->parentHash;
+  }
+  return 0;
+}
+
 void doltliteHashToHex(const ProllyHash *h, char *buf);
 
 int doltliteHexToHash(const char *hex, ProllyHash *h);
