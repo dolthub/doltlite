@@ -105,6 +105,7 @@ struct ChunkStore {
   sqlite3_file *pFile;
   sqlite3_vfs *pVfs;
   ProllyHash refsHash;
+  ProllyHash committedRefsHash;
 
   struct BranchRef {
     char *zName;

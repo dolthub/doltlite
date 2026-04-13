@@ -61,6 +61,8 @@
 #include "prolly_cache.h"
 #include "prolly_cursor.h"
 #include "prolly_diff.h"
+#include "prolly_chunker.h"
+#include "prolly_mutate.h"
 #include "prolly_node.h"
 #include "prolly_mutmap.h"
 
@@ -167,6 +169,10 @@ static void remove_db(const char *path){
   remove(tmp);
   snprintf(tmp, sizeof(tmp), "%s-journal", path);
   remove(tmp);
+}
+
+static void make_prolly_blob_key(int iKey, u8 *aBuf, int nBuf){
+  snprintf((char*)aBuf, nBuf, "key-%028d", iKey);
 }
 
 static Pgno table_rootpage(sqlite3 *db, const char *zName){
@@ -803,6 +809,42 @@ static void run_chunk_walk_corruption(void){
   printf("=== Chunk Walk Corruption Test ===\n\n");
   rc = doltliteEnumerateChunkChildren(badCatalog, (int)sizeof(badCatalog), 0, 0);
   check("truncated_catalog_is_corrupt", rc==SQLITE_CORRUPT);
+
+  {
+    static const u8 legacyCatalogV2[] = {
+      CATALOG_FORMAT_V2,
+      1, 0, 0, 0,
+      0, 0, 0, 0
+    };
+    rc = doltliteEnumerateChunkChildren(legacyCatalogV2,
+                                        (int)sizeof(legacyCatalogV2), 0, 0);
+    check("legacy_catalog_v2_is_corrupt_to_chunk_walk", rc==SQLITE_CORRUPT);
+  }
+
+  {
+    static const u8 legacyRefsV5[] = {
+      5,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0
+    };
+    static const u8 currentRefsV6[] = {
+      6,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0
+    };
+    rc = doltliteEnumerateChunkChildren(legacyRefsV5,
+                                        (int)sizeof(legacyRefsV5), 0, 0);
+    check("legacy_refs_v5_is_corrupt_to_chunk_walk", rc==SQLITE_CORRUPT);
+    rc = doltliteEnumerateChunkChildren(currentRefsV6,
+                                        (int)sizeof(currentRefsV6), 0, 0);
+    check("current_refs_v6_is_accepted_by_chunk_walk", rc==SQLITE_OK);
+  }
 }
 
 static void run_ancestor_missing_start(void){
@@ -2161,6 +2203,185 @@ static void run_mutmap_empty_reverse_iter(void){
   prollyMutMapFree(&mm);
 }
 
+static void run_prolly_mutate_preserves_order_across_skipped_subtrees(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyChunker chunker;
+  ProllyCursor cur;
+  ProllyHash rootHash, newRootHash;
+  ProllyNode rootNode;
+  u8 *pRootData = 0;
+  int nRootData = 0;
+  u8 aKey[33];
+  const u8 *pKey = 0;
+  int nKey = 0;
+  int rc;
+  int res = 99;
+  int i;
+  int expected = 0;
+  int nSeen = 0;
+  int iterRcOk = 1;
+  const int nItem = 100000;
+  const int iDelete = 1;
+  u8 aVal[256];
+
+  printf("=== Prolly Mutate Skipped Subtree Order Test ===\n\n");
+  memset(aVal, 'v', sizeof(aVal));
+
+  check("open_memory_store_for_prolly_mutate_skip",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("init_cache_for_prolly_mutate_skip", prollyCacheInit(&cache, 64)==SQLITE_OK);
+  check("init_chunker_for_prolly_mutate_skip",
+        prollyChunkerInit(&chunker, &cs, PROLLY_NODE_BLOBKEY)==SQLITE_OK);
+
+  for( i = 0; i < nItem; i++ ){
+    make_prolly_blob_key(i, aKey, sizeof(aKey));
+    check("add_key_to_chunker_for_prolly_mutate_skip",
+          prollyChunkerAdd(&chunker, aKey, 32, aVal, sizeof(aVal))==SQLITE_OK);
+  }
+  check("finish_chunker_for_prolly_mutate_skip", prollyChunkerFinish(&chunker)==SQLITE_OK);
+  prollyChunkerGetRoot(&chunker, &rootHash);
+  prollyChunkerFree(&chunker);
+
+  check("load_root_for_prolly_mutate_skip",
+        chunkStoreGet(&cs, &rootHash, &pRootData, &nRootData)==SQLITE_OK);
+  check("parse_root_for_prolly_mutate_skip",
+        prollyNodeParse(&rootNode, pRootData, nRootData)==SQLITE_OK);
+  check("root_is_multi_level_for_prolly_mutate_skip", rootNode.level >= 2);
+  sqlite3_free(pRootData);
+  pRootData = 0;
+
+  make_prolly_blob_key(iDelete, aKey, sizeof(aKey));
+  rc = prollyMutateDelete(&cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY,
+                          aKey, 32, 0, &newRootHash);
+  check("delete_key_from_multi_level_tree", rc==SQLITE_OK);
+
+  prollyCursorInit(&cur, &cs, &cache, &newRootHash, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorFirst(&cur, &res);
+  check("cursor_first_after_prolly_mutate_skip", rc==SQLITE_OK);
+  check("cursor_first_after_prolly_mutate_skip_valid",
+        res==0 && prollyCursorIsValid(&cur));
+
+  while( prollyCursorIsValid(&cur) ){
+    while( expected==iDelete ){
+      expected++;
+    }
+    make_prolly_blob_key(expected, aKey, sizeof(aKey));
+    prollyCursorKey(&cur, &pKey, &nKey);
+    if( nKey!=32 || memcmp(pKey, aKey, 32)!=0 ){
+      iterRcOk = 0;
+      break;
+    }
+    nSeen++;
+    expected++;
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ){
+      iterRcOk = 0;
+      break;
+    }
+  }
+  check("iterate_after_prolly_mutate_skip_in_order", iterRcOk);
+  check("iterate_after_prolly_mutate_skip_count", nSeen==nItem-1);
+  check("iterate_after_prolly_mutate_skip_expected_end", expected==nItem);
+
+  prollyCursorClose(&cur);
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
+static void run_chunk_store_rollback_restores_refs_hash(void){
+  ChunkStore cs;
+  ProllyHash emptyHash;
+  ProllyHash refsHashBefore;
+  ProllyHash foundHash;
+
+  printf("=== Chunk Store Rollback Restores Refs Hash Test ===\n\n");
+
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  check("open_memory_store_for_refs_rollback",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("set_default_branch_for_refs_rollback",
+        chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
+  check("add_main_branch_for_refs_rollback",
+        chunkStoreAddBranch(&cs, "main", &emptyHash)==SQLITE_OK);
+  check("serialize_initial_refs_for_refs_rollback",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("commit_initial_refs_for_refs_rollback",
+        chunkStoreCommit(&cs)==SQLITE_OK);
+  refsHashBefore = cs.refsHash;
+
+  check("add_tag_before_rollback",
+        chunkStoreAddTag(&cs, "v1", &emptyHash)==SQLITE_OK);
+  check("serialize_updated_refs_before_rollback",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("refs_hash_changed_before_rollback",
+        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))!=0);
+
+  chunkStoreRollback(&cs);
+  check("refs_hash_restored_on_rollback",
+        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
+  check("reload_refs_after_rollback", chunkStoreReloadRefs(&cs)==SQLITE_OK);
+  check("tag_absent_after_reload_rollback",
+        chunkStoreFindTag(&cs, "v1", &foundHash)!=SQLITE_OK);
+
+  chunkStoreClose(&cs);
+}
+
+static void run_chunk_store_commit_failure_restores_refs_hash(void){
+  ChunkStore cs;
+  ProllyHash emptyHash;
+  ProllyHash refsHashBefore;
+  ProllyHash foundHash;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Chunk Store Commit Failure Restores Refs Hash Test ===\n\n");
+
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  make_dbpath(dbpath, sizeof(dbpath), "test_refs_commit_failure_restore");
+  remove_db(dbpath);
+
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+  check("register_fail_vfs_for_refs_commit_failure", registerFailVfs()==SQLITE_OK);
+  check("open_fail_store_for_refs_commit_failure",
+        chunkStoreOpen(&cs, &gFailVfs, dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("set_default_branch_for_refs_commit_failure",
+        chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
+  check("add_main_branch_for_refs_commit_failure",
+        chunkStoreAddBranch(&cs, "main", &emptyHash)==SQLITE_OK);
+  check("serialize_initial_refs_for_refs_commit_failure",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("commit_initial_refs_for_refs_commit_failure",
+        chunkStoreCommit(&cs)==SQLITE_OK);
+  refsHashBefore = cs.refsHash;
+
+  check("add_tag_for_refs_commit_failure",
+        chunkStoreAddTag(&cs, "v1", &emptyHash)==SQLITE_OK);
+  check("serialize_updated_refs_for_refs_commit_failure",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("refs_hash_changed_for_refs_commit_failure",
+        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))!=0);
+
+  gFailHits = 0;
+  gFailSyncOnce = 1;
+  rc = chunkStoreCommit(&cs);
+  check("commit_failure_injected_for_refs_commit_failure", gFailHits>0);
+  check("commit_failure_surfaces_for_refs_commit_failure", rc!=SQLITE_OK);
+  check("refs_hash_restored_on_commit_failure",
+        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
+
+  chunkStoreRollback(&cs);
+  check("reload_refs_after_commit_failure_rollback",
+        chunkStoreReloadRefs(&cs)==SQLITE_OK);
+  check("tag_absent_after_commit_failure_rollback",
+        chunkStoreFindTag(&cs, "v1", &foundHash)!=SQLITE_OK);
+
+  chunkStoreClose(&cs);
+  remove_db(dbpath);
+}
+
 static void run_prolly_blob_cursor_seek_across_internal_boundary(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -2579,6 +2800,9 @@ static const RegressionCase aCases[] = {
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
+  { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },
+  { "refs_hash_rollback_restore", "Chunk Store Rollback Restores Refs Hash Test", run_chunk_store_rollback_restores_refs_hash },
+  { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
   { "prolly_blob_cursor_boundary", "Prolly Blob Cursor Internal Boundary Test", run_prolly_blob_cursor_seek_across_internal_boundary },
   { "prolly_blob_cursor_seek_past_max", "Prolly Blob Cursor Seek Past Max Test", run_prolly_blob_cursor_seek_past_max },
   { "prolly_cursor_empty_leaf_root", "Prolly Cursor Empty Leaf Root Test", run_prolly_cursor_empty_leaf_root },

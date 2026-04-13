@@ -106,6 +106,19 @@ static int subtreeHasEdits(
   return (cmp <= 0);  
 }
 
+static int chunkerLevelsBelowEmpty(
+  const ProllyChunker *pChunker,
+  int level
+){
+  int i;
+  for( i = 0; i < level && i < pChunker->nLevels; i++ ){
+    if( pChunker->aLevel[i].builder.nItems > 0 ){
+      return 0;
+    }
+  }
+  return 1;
+}
+
 static int mergeLeaf(
   ProllyMutator *pMut,
   ProllyNode *pLeaf,
@@ -244,8 +257,7 @@ static int streamingMergeNode(
 
     if( !subtreeHasEdits(pMut->flags, pIter,
                          pBoundKey, nBoundKey, iBoundKey)
-     && (pChunker->nLevels == 0
-         || pChunker->aLevel[0].builder.nItems == 0) ){
+     && chunkerLevelsBelowEmpty(pChunker, pNode->level) ){
       rc = prollyChunkerAddAtLevel(pChunker, pNode->level,
                                     pBoundKey, nBoundKey,
                                     pChildVal, nChildVal);

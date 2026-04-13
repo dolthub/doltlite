@@ -683,6 +683,7 @@ static void doltliteCommitFunc(
   ProllyHash catalogHash;
   ProllyHash sessionHeadBeforeLock;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
+  i64 explicitTimestamp = 0;
   int rc;
   int i;
 
@@ -743,11 +744,11 @@ static void doltliteCommitFunc(
   ** Anything that fails to parse is rejected with an explicit error
   ** rather than silently fallen-back to "now", because falling back
   ** would silently produce a divergent commit. */
-  i64 explicitTimestamp = 0;
   if( zDate ){
     struct tm tm;
+    const char *p;
     memset(&tm, 0, sizeof(tm));
-    const char *p = strptime(zDate, "%Y-%m-%dT%H:%M:%S", &tm);
+    p = strptime(zDate, "%Y-%m-%dT%H:%M:%S", &tm);
     if( !p ){
       memset(&tm, 0, sizeof(tm));
       p = strptime(zDate, "%Y-%m-%d %H:%M:%S", &tm);
@@ -829,6 +830,7 @@ static void doltliteCommitFunc(
     for(j=0; j<nWorking; j++){
       const char *zName = aWorking[j].zName;
       int inHead = 0;
+      int updated = 0;
       for(k=0; k<nHead; k++){
         if( aHead[k].zName && zName && strcmp(aHead[k].zName, zName)==0 ){
           inHead = 1; break;
@@ -836,7 +838,6 @@ static void doltliteCommitFunc(
       }
       if( !inHead ) continue;
 
-      int updated = 0;
       for(k=0; k<nStaged; k++){
         if( aStaged[k].zName && zName && strcmp(aStaged[k].zName, zName)==0 ){
           aStaged[k] = aWorking[j];
@@ -982,6 +983,7 @@ static void doltliteCommitFunc(
   {
     ProllyHash parentHash;
     char *zParsedName = 0, *zParsedEmail = 0;
+    char *zTrimmedMessage = 0;
     doltliteGetSessionHead(db, &parentHash);
 
     if( amend ){
@@ -1036,7 +1038,6 @@ static void doltliteCommitFunc(
     ** internal whitespace they wrote. A message that's entirely
     ** whitespace is rejected as empty. Scoped tightly so we can free
     ** the allocation immediately after the commit is created. */
-    char *zTrimmedMessage = 0;
     {
       const char *pStart = zMessage;
       const char *pEnd;

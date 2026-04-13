@@ -232,6 +232,14 @@ static void csFreeTracking(ChunkStore *cs){
   cs->nTracking = 0;
 }
 
+static void csMarkRefsCommitted(ChunkStore *cs){
+  cs->committedRefsHash = cs->refsHash;
+}
+
+static void csRestoreCommittedRefsHash(ChunkStore *cs){
+  cs->refsHash = cs->committedRefsHash;
+}
+
 static void csCaptureSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
   pSaved->zDefaultBranch = cs->zDefaultBranch;
@@ -936,6 +944,7 @@ int chunkStoreOpen(
     cs->pFile = 0;
   }
 
+  csMarkRefsCommitted(cs);
   return SQLITE_OK;
 }
 
@@ -1525,6 +1534,7 @@ int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
   }
   csFreeRefsState(cs);
   csAdoptRefsState(cs, &tmp);
+  csMarkRefsCommitted(cs);
   return SQLITE_OK;
 }
 
@@ -1697,6 +1707,7 @@ static int csCommitToMemory(ChunkStore *cs){
     csPendHTClear(cs);
     cs->nCommittedWriteBuf = cs->nWriteBuf;
   }
+  csMarkRefsCommitted(cs);
   return SQLITE_OK;
 }
 
@@ -1862,6 +1873,7 @@ commit_done:
   csFileUnlock(lockFd);
 
   if( rc != SQLITE_OK ){
+    csRestoreCommittedRefsHash(cs);
     sqlite3_free(aCommittedPending);
     sqlite3_free(aMerged);
     sqlite3_free(pNewWalData);
@@ -1888,6 +1900,7 @@ commit_done:
   cs->nWriteBufAlloc = 0;
   cs->nPending = 0;
   csPendHTClear(cs);
+  csMarkRefsCommitted(cs);
 
   return SQLITE_OK;
 }
@@ -1911,13 +1924,14 @@ int chunkStoreCommit(ChunkStore *cs){
 
 void chunkStoreRollback(ChunkStore *cs){
   cs->nPending = 0;
-    csPendHTClear(cs);
+  csPendHTClear(cs);
   if( cs->isMemory ){
     /* Truncate pWriteBuf back to the last committed point. */
     cs->nWriteBuf = cs->nCommittedWriteBuf;
   }else{
     cs->nWriteBuf = 0;
   }
+  csRestoreCommittedRefsHash(cs);
 }
 
 int chunkStoreIsEmpty(ChunkStore *cs){
@@ -2057,6 +2071,7 @@ static int csReloadFromDisk(ChunkStore *cs){
   cs->pFile = tmp.pFile;
   cs->readOnly = tmp.readOnly;
   cs->refsHash = tmp.refsHash;
+  cs->committedRefsHash = tmp.committedRefsHash;
   cs->nChunks = tmp.nChunks;
   cs->iIndexOffset = tmp.iIndexOffset;
   cs->nIndexSize = tmp.nIndexSize;
