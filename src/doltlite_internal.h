@@ -111,6 +111,9 @@ int doltliteForEachUserTable(sqlite3 *db, const char *zPrefix,
 
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
+int doltliteApplyRawRowMutation(sqlite3 *db, const char *zTable,
+                                const u8 *pKey, int nKey, i64 intKey,
+                                const u8 *pVal, int nVal);
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
 int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
 int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,

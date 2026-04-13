@@ -117,9 +117,16 @@ run_test_match "multi_row_has_row1" "SELECT their_name FROM dolt_conflicts_t WHE
 run_test_match "multi_row_has_row2" "SELECT their_name FROM dolt_conflicts_t WHERE base_id=2;" "B" "$DB8"
 run_test_match "multi_row_has_row3" "SELECT their_name FROM dolt_conflicts_t WHERE base_id=3;" "C" "$DB8"
 
-# Test 9: --theirs delete failure should keep conflict state
+# Test 9: triggers on the target table do NOT fire during conflict
+# resolution. Matches Dolt's semantics: merge-resolve writes go to the
+# prolly tree directly; triggers already ran on the original commits
+# and re-firing them during resolve would be wrong. Earlier versions
+# of doltlite accidentally fired triggers because the resolve path
+# ran through sqlite3_exec(INSERT/DELETE) — that was incorrect, and
+# the test cases that enforced it have been removed.
 DB9=/tmp/test_conflicts9_$$.db; rm -f "$DB9"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE trig_log(note TEXT);
 INSERT INTO t VALUES(1,'orig');
 SELECT dolt_commit('-A','-m','init');
 SELECT dolt_branch('feature');
@@ -129,14 +136,13 @@ SELECT dolt_commit('-A','-m','feat delete');
 SELECT dolt_checkout('main');
 UPDATE t SET v='main' WHERE id=1;
 SELECT dolt_commit('-A','-m','main update');
-SELECT dolt_merge('feature');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+SELECT dolt_merge('feature');
+CREATE TRIGGER audit_delete BEFORE DELETE ON t BEGIN INSERT INTO trig_log VALUES('fired'); END;" | $DOLTLITE "$DB9" > /dev/null 2>&1
 run_test "theirs_delete_conflict_present" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB9"
-echo "CREATE TRIGGER block_delete BEFORE DELETE ON t BEGIN SELECT RAISE(FAIL,'blocked delete'); END;" | $DOLTLITE "$DB9" > /dev/null 2>&1
-run_test_match "theirs_delete_failure_errors" \
-  "SELECT dolt_conflicts_resolve('--theirs','t');" \
-  "failed to apply theirs value" "$DB9"
-run_test "theirs_delete_failure_conflict_kept" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB9"
-run_test "theirs_delete_failure_row_kept" "SELECT v FROM t WHERE id=1;" "main" "$DB9"
+echo "SELECT dolt_conflicts_resolve('--theirs','t');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+run_test "theirs_delete_clears_conflict" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB9"
+run_test "theirs_delete_removes_row"     "SELECT count(*) FROM t WHERE id=1;" "0" "$DB9"
+run_test "theirs_delete_trigger_skipped" "SELECT count(*) FROM trig_log;" "0" "$DB9"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9"
 echo ""
