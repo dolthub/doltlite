@@ -24,6 +24,25 @@ int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut);
 int sortKeyFromRecordPrefix(const u8 *pRec, int nRec, int nKeyField,
                             u8 **ppOut, int *pnOut);
 
+/*
+** Collation-aware variant. When pKeyInfo is non-NULL, each encoded TEXT
+** column is transformed according to its declared collation before
+** being written into the sort key:
+**
+**   BINARY  — no transform (default)
+**   NOCASE  — ASCII A-Z folded to a-z so 'Alice' and 'alice' produce
+**             the same sort key
+**   RTRIM   — trailing 0x20 bytes stripped so 'abc' and 'abc ' produce
+**             the same sort key
+**
+** Any other collation (user-defined, etc.) falls back to BINARY because
+** the prolly tree can't pair-wise invoke xCmp at key-encode time. Pass
+** pKeyInfo=NULL to get the legacy byte-level encoding.
+*/
+int sortKeyFromRecordPrefixColl(const u8 *pRec, int nRec, int nKeyField,
+                                 const KeyInfo *pKeyInfo,
+                                 u8 **ppOut, int *pnOut);
+
 int sortKeySize(const u8 *pRec, int nRec);
 
 int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut);
