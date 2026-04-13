@@ -2363,6 +2363,17 @@ void doltliteRegister(sqlite3 *db){
   if( doltliteSchemasRegister(db)!=SQLITE_OK ) return;
   if( doltliteDiffStatRegister(db)!=SQLITE_OK ) return;
   if( doltliteRemoteSqlRegister(db)!=SQLITE_OK ) return;
+  /* Install the doltlite sqlite_dbpage override as an auto-extension.
+  ** openDatabase still has to finish: after sqlite3BtreeOpen returns
+  ** (and thus after this function runs), the stock
+  ** sqlite3BuiltinExtensions loop will register the stock sqlite_dbpage,
+  ** and THEN sqlite3AutoLoadExtensions will run — at which point our
+  ** override wins. sqlite3_auto_extension dedupes by function pointer
+  ** so repeated calls across db opens are safe. */
+  {
+    extern int doltliteDbpageInstallAutoExt(void);
+    doltliteDbpageInstallAutoExt();
+  }
   doltliteMaybeSeedRepo(db);
 }
 
