@@ -142,6 +142,18 @@ static int stmt_column_text_equals(sqlite3_stmt *stmt, int iCol, const char *zEx
   return z && strcmp((const char*)z, zExpect)==0;
 }
 
+typedef struct DiffCountCtx DiffCountCtx;
+struct DiffCountCtx {
+  int nChange;
+};
+
+static int count_diff_change(void *pCtx, const ProllyDiffChange *pChange){
+  DiffCountCtx *p = (DiffCountCtx*)pCtx;
+  (void)pChange;
+  p->nChange++;
+  return SQLITE_OK;
+}
+
 static void make_dbpath(char *zBuf, size_t nBuf, const char *zBase){
   snprintf(zBuf, nBuf, "/tmp/%s_%ld.db", zBase, (long)getpid());
 }
@@ -2299,6 +2311,164 @@ static void run_prolly_cursor_surfaces_corrupt_node(void){
   chunkStoreClose(&cs);
 }
 
+static void run_prolly_diff_iter_copies_blob_keys(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyDiffIter iter;
+  ProllyDiffChange *pCh = 0;
+  ProllyNodeBuilder b;
+  ProllyHash oldLeftHash, oldRightHash, oldRootHash, newRootHash;
+  u8 *pNode = 0;
+  int nNode = 0;
+  int rc;
+  int i;
+  int keyBackedByCache = 0;
+  static const u8 oldKey[] = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  static const u8 newKey[] = "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+  static const u8 v1[] = { '1' };
+  static const u8 v2[] = { '2' };
+
+  printf("=== Prolly Diff Iterator Copies Blob Keys Test ===\n\n");
+
+  check("open_memory_store_for_diff_iter_key_copy",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("init_cache_for_diff_iter_key_copy", prollyCacheInit(&cache, 8)==SQLITE_OK);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
+  check("build_old_left_leaf_for_diff_iter_key_copy",
+        prollyNodeBuilderAdd(&b, oldKey, sizeof(oldKey), v1, sizeof(v1))==SQLITE_OK);
+  check("finish_old_left_leaf_for_diff_iter_key_copy",
+        prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_old_left_leaf_for_diff_iter_key_copy",
+        chunkStorePut(&cs, pNode, nNode, &oldLeftHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
+  check("build_old_right_leaf_for_diff_iter_key_copy",
+        prollyNodeBuilderAdd(&b, newKey, sizeof(newKey), v2, sizeof(v2))==SQLITE_OK);
+  check("finish_old_right_leaf_for_diff_iter_key_copy",
+        prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_old_right_leaf_for_diff_iter_key_copy",
+        chunkStorePut(&cs, pNode, nNode, &oldRightHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 1, PROLLY_NODE_BLOBKEY);
+  check("build_old_root_left_sep_for_diff_iter_key_copy",
+        prollyNodeBuilderAdd(&b, oldKey, sizeof(oldKey),
+                             oldLeftHash.data, PROLLY_HASH_SIZE)==SQLITE_OK);
+  check("build_old_root_right_sep_for_diff_iter_key_copy",
+        prollyNodeBuilderAdd(&b, newKey, sizeof(newKey),
+                             oldRightHash.data, PROLLY_HASH_SIZE)==SQLITE_OK);
+  check("finish_old_root_for_diff_iter_key_copy",
+        prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_old_root_for_diff_iter_key_copy",
+        chunkStorePut(&cs, pNode, nNode, &oldRootHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
+  check("build_new_root_for_diff_iter_key_copy",
+        prollyNodeBuilderAdd(&b, newKey, sizeof(newKey), v2, sizeof(v2))==SQLITE_OK);
+  check("finish_new_root_for_diff_iter_key_copy",
+        prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_new_root_for_diff_iter_key_copy",
+        chunkStorePut(&cs, pNode, nNode, &newRootHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  rc = prollyDiffIterOpen(&iter, &cs, &cache, &oldRootHash, &newRootHash,
+                          PROLLY_NODE_BLOBKEY);
+  check("open_diff_iter_key_copy", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    rc = prollyDiffIterStep(&iter, &pCh);
+    check("step_diff_iter_key_copy", rc==SQLITE_ROW);
+    if( rc==SQLITE_ROW ){
+      check("diff_iter_key_copy_delete_type", pCh->type==PROLLY_DIFF_DELETE);
+      check("diff_iter_key_copy_matches_expected_before_purge",
+            pCh->nKey==(int)sizeof(oldKey) &&
+            memcmp(pCh->pKey, oldKey, sizeof(oldKey))==0);
+      for(i=0; i<cache.nBucket; i++){
+        ProllyCacheEntry *pEntry = cache.aBucket[i];
+        while( pEntry ){
+          if( pCh->pKey >= pEntry->pData &&
+              pCh->pKey < pEntry->pData + pEntry->nData ){
+            keyBackedByCache = 1;
+          }
+          pEntry = pEntry->pHashNext;
+        }
+      }
+      check("diff_iter_key_copy_not_backed_by_cache_node", !keyBackedByCache);
+    }
+    prollyDiffIterClose(&iter);
+  }
+
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
+static void run_prolly_diff_leaf_surfaces_record_corruption(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyNodeBuilder b;
+  ProllyHash oldRootHash, newRootHash;
+  u8 *pNode = 0;
+  int nNode = 0;
+  int rc;
+  DiffCountCtx ctx;
+  static const u8 badRecord[] = { 0x05, 0x01 };
+  static const u8 key[] = { 'a' };
+  static const u8 key2[] = { 'b' };
+  static const u8 goodRecord[] = { 0x02, 0x09 };
+
+  printf("=== Prolly Diff Leaf Corruption Test ===\n\n");
+
+  memset(&ctx, 0, sizeof(ctx));
+  check("open_memory_store_for_diff_leaf_corruption",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("init_cache_for_diff_leaf_corruption", prollyCacheInit(&cache, 4)==SQLITE_OK);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
+  check("build_old_leaf_bad_record",
+        prollyNodeBuilderAdd(&b, key, sizeof(key),
+                             badRecord, sizeof(badRecord))==SQLITE_OK);
+  check("finish_old_leaf_bad_record",
+        prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_old_leaf_bad_record",
+        chunkStorePut(&cs, pNode, nNode, &oldRootHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_BLOBKEY);
+  check("build_new_leaf_bad_record",
+        prollyNodeBuilderAdd(&b, key, sizeof(key),
+                             badRecord, sizeof(badRecord))==SQLITE_OK);
+  check("build_new_leaf_extra_row",
+        prollyNodeBuilderAdd(&b, key2, sizeof(key2),
+                             goodRecord, sizeof(goodRecord))==SQLITE_OK);
+  check("finish_new_leaf_bad_record",
+        prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_new_leaf_bad_record",
+        chunkStorePut(&cs, pNode, nNode, &newRootHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  rc = prollyDiff(&cs, &cache, &oldRootHash, &newRootHash,
+                  PROLLY_NODE_BLOBKEY, count_diff_change, &ctx);
+  check("diff_leaf_bad_record_returns_corrupt", rc==SQLITE_CORRUPT);
+  check("diff_leaf_bad_record_emits_no_changes", ctx.nChange==0);
+
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
 static const RegressionCase aCases[] = {
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
@@ -2344,7 +2514,9 @@ static const RegressionCase aCases[] = {
   { "prolly_blob_cursor_boundary", "Prolly Blob Cursor Internal Boundary Test", run_prolly_blob_cursor_seek_across_internal_boundary },
   { "prolly_blob_cursor_seek_past_max", "Prolly Blob Cursor Seek Past Max Test", run_prolly_blob_cursor_seek_past_max },
   { "prolly_cursor_empty_leaf_root", "Prolly Cursor Empty Leaf Root Test", run_prolly_cursor_empty_leaf_root },
-  { "prolly_cursor_corrupt_node", "Prolly Cursor Corrupt Node Test", run_prolly_cursor_surfaces_corrupt_node }
+  { "prolly_cursor_corrupt_node", "Prolly Cursor Corrupt Node Test", run_prolly_cursor_surfaces_corrupt_node },
+  { "prolly_diff_iter_copies_blob_keys", "Prolly Diff Iterator Blob Key Copy Test", run_prolly_diff_iter_copies_blob_keys },
+  { "prolly_diff_leaf_record_corruption", "Prolly Diff Leaf Corruption Test", run_prolly_diff_leaf_surfaces_record_corruption }
 };
 
 static int run_case_by_name(const char *zName){
