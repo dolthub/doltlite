@@ -44,6 +44,8 @@ jobs:
         make testfixture
         # Stock SQLite lib for concurrent_branch_test
         make libsqlite3.a USE_AMALGAMATION=0
+        # Stock sqlite3 shell for dot-command oracle test
+        make sqlite3
 
     # ── Doltlite feature tests ──────────────────────────────
 
@@ -161,6 +163,10 @@ jobs:
 
     - name: Oracle tests (.import dot-command)
       run: cd build && bash ../test/oracle_import_test.sh ./doltlite dolt
+      timeout-minutes: 5
+
+    - name: Oracle tests (shell dot-commands)
+      run: cd build && bash ../test/oracle_dot_commands_test.sh ./doltlite ./sqlite3
       timeout-minutes: 5
 
     - name: Large-scale test (10K rows)
