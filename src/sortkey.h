@@ -21,6 +21,10 @@ int sortKeyFromRecordPrefixColl(const u8 *pRec, int nRec, int nKeyField,
 int sortKeySize(const u8 *pRec, int nRec);
 
 int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut);
+int recordFromSortKeyBuffer(
+  const u8 *pSortKey, int nSortKey,
+  u8 **ppBuf, int *pnAlloc, int *pnOut
+);
 
 static inline int compareSortKeys(
   const u8 *pKey1, int nKey1,

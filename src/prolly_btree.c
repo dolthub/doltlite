@@ -304,7 +304,9 @@ struct BtCursor {
 
   u8 *pCachedPayload;
   int nCachedPayload;
-  u8 cachedPayloadOwned;
+  u8 cachedPayloadOwned;  /* 1 if pCachedPayload was malloc'd by us */
+  u8 *pReconPayload;
+  int nReconPayloadAlloc;
   i64 cachedIntKey;
 
   u8 isPinned;
@@ -1036,6 +1038,21 @@ static int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData){
   pCur->pCachedPayload = pCopy;
   pCur->nCachedPayload = nData;
   pCur->cachedPayloadOwned = 1;
+  return SQLITE_OK;
+}
+
+static int cacheCursorPayloadReconstructed(
+  BtCursor *pCur, const u8 *pSortKey, int nSortKey
+){
+  int nRec = 0;
+  int rc = recordFromSortKeyBuffer(
+      pSortKey, nSortKey,
+      &pCur->pReconPayload, &pCur->nReconPayloadAlloc, &nRec);
+  if( rc!=SQLITE_OK ) return rc;
+  CLEAR_CACHED_PAYLOAD(pCur);
+  pCur->pCachedPayload = pCur->pReconPayload;
+  pCur->nCachedPayload = nRec;
+  pCur->cachedPayloadOwned = 0;
   return SQLITE_OK;
 }
 
@@ -3097,6 +3114,11 @@ static int prollyBtCursorCloseCursor(BtCursor *pCur){
   }
 
   CLEAR_CACHED_PAYLOAD(pCur);
+  if( pCur->pReconPayload ){
+    sqlite3_free(pCur->pReconPayload);
+    pCur->pReconPayload = 0;
+    pCur->nReconPayloadAlloc = 0;
+  }
 
   if( pCur->pKey ){
     sqlite3_free(pCur->pKey);
@@ -4187,18 +4209,13 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
         *ppData = e->pVal;
         *pnData = e->nVal;
       }else{
-        u8 *pRec = 0; int nRec = 0;
-        recordFromSortKey(e->pKey, e->nKey, &pRec, &nRec);
-        if( pRec ){
-          if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
-            sqlite3_free(pCur->pCachedPayload);
-          }
-          pCur->pCachedPayload = pRec;
-          pCur->nCachedPayload = nRec;
-          pCur->cachedPayloadOwned = 1;
+        if( cacheCursorPayloadReconstructed(pCur, e->pKey, e->nKey)==SQLITE_OK ){
+          *ppData = pCur->pCachedPayload;
+          *pnData = pCur->nCachedPayload;
+        }else{
+          *ppData = 0;
+          *pnData = 0;
         }
-        *ppData = pRec;
-        *pnData = nRec;
       }
     }
     return;
@@ -4215,18 +4232,10 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
       *pnData = nVal;
     }else{
       const u8 *pKey; int nKey;
-      u8 *pRec = 0; int nRec = 0;
       prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-      recordFromSortKey(pKey, nKey, &pRec, &nRec);
-      if( pRec ){
-        if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
-          sqlite3_free(pCur->pCachedPayload);
-        }
-        pCur->pCachedPayload = pRec;
-        pCur->nCachedPayload = nRec;
-        pCur->cachedPayloadOwned = 1;
-        *ppData = pRec;
-        *pnData = nRec;
+      if( cacheCursorPayloadReconstructed(pCur, pKey, nKey)==SQLITE_OK ){
+        *ppData = pCur->pCachedPayload;
+        *pnData = pCur->nCachedPayload;
       }else{
         *ppData = pVal;
         *pnData = 0;

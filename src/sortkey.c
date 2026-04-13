@@ -313,8 +313,10 @@ static void writeIntBE(u8 *p, i64 v, int nByte){
   }
 }
 
-int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){
-
+int recordFromSortKeyBuffer(
+  const u8 *pSortKey, int nSortKey,
+  u8 **ppBuf, int *pnAlloc, int *pnOut
+){
   u32 aType[64];
   u32 aLen[64];
 
@@ -326,15 +328,17 @@ int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){
   int nHdr, nData, nTotal;
   int i;
 
-  *ppOut = 0;
   *pnOut = 0;
 
   if( nSortKey <= 0 ){
-
-    pOut = (u8*)sqlite3_malloc(1);
-    if( !pOut ) return SQLITE_NOMEM;
-    pOut[0] = 1;
-    *ppOut = pOut;
+    if( *pnAlloc < 1 ){
+      u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, 1);
+      if( !pNew ) return SQLITE_NOMEM;
+      *ppBuf = pNew;
+      *pnAlloc = 1;
+    }
+    pOut = *ppBuf;
+    pOut[0] = 1;  
     *pnOut = 1;
     return SQLITE_OK;
   }
@@ -440,8 +444,13 @@ int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){
   for(i = 0; i < nFields; i++) nData += (int)aLen[i];
 
   nTotal = nHdr + nData;
-  pOut = (u8*)sqlite3_malloc(nTotal);
-  if( !pOut ) return SQLITE_NOMEM;
+  if( *pnAlloc < nTotal ){
+    u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nTotal);
+    if( !pNew ) return SQLITE_NOMEM;
+    *ppBuf = pNew;
+    *pnAlloc = nTotal;
+  }
+  pOut = *ppBuf;
 
 
   {
@@ -491,9 +500,14 @@ int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){
     }
   }
 
-  *ppOut = pOut;
   *pnOut = nTotal;
   return SQLITE_OK;
+}
+
+int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){
+  int nAlloc = 0;
+  *ppOut = 0;
+  return recordFromSortKeyBuffer(pSortKey, nSortKey, ppOut, &nAlloc, pnOut);
 }
 
 #endif
