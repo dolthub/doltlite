@@ -264,34 +264,47 @@ int sortKeyFromRecordPrefix(
   return sortKeyFromRecordPrefixColl(pRec, nRec, nKeyField, NULL, ppOut, pnOut);
 }
 
-int sortKeyFromRecordPrefixColl(
+int sortKeyFromRecordPrefixCollBuffer(
   const u8 *pRec, int nRec, int nKeyField, const KeyInfo *pKeyInfo,
-  u8 **ppOut, int *pnOut
+  u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
   int nSize;
   u8 *pBuf;
 
-  *ppOut = 0;
   *pnOut = 0;
 
   nSize = sortKeyEncode(pRec, nRec, NULL, nKeyField, pKeyInfo);
   if( nSize < 0 ) return SQLITE_CORRUPT;
   if( nSize == 0 ){
-
-    *ppOut = (u8*)sqlite3_malloc(1);
-    if( !*ppOut ) return SQLITE_NOMEM;
+    if( *pnAlloc < 1 ){
+      u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, 1);
+      if( !pNew ) return SQLITE_NOMEM;
+      *ppBuf = pNew;
+      *pnAlloc = 1;
+    }
     *pnOut = 0;
     return SQLITE_OK;
   }
 
-  pBuf = (u8*)sqlite3_malloc(nSize);
-  if( !pBuf ) return SQLITE_NOMEM;
-
+  if( *pnAlloc < nSize ){
+    u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nSize);
+    if( !pNew ) return SQLITE_NOMEM;
+    *ppBuf = pNew;
+    *pnAlloc = nSize;
+  }
+  pBuf = *ppBuf;
   sortKeyEncode(pRec, nRec, pBuf, nKeyField, pKeyInfo);
-
-  *ppOut = pBuf;
   *pnOut = nSize;
   return SQLITE_OK;
+}
+
+int sortKeyFromRecordPrefixColl(
+  const u8 *pRec, int nRec, int nKeyField, const KeyInfo *pKeyInfo,
+  u8 **ppOut, int *pnOut
+){
+  *ppOut = 0;
+  return sortKeyFromRecordPrefixCollBuffer(
+      pRec, nRec, nKeyField, pKeyInfo, ppOut, &(int){0}, pnOut);
 }
 
 static void intSerialType(i64 v, u32 *pType, u32 *pLen){

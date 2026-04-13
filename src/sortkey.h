@@ -17,6 +17,9 @@ int sortKeyFromRecordPrefix(const u8 *pRec, int nRec, int nKeyField,
 int sortKeyFromRecordPrefixColl(const u8 *pRec, int nRec, int nKeyField,
                                  const KeyInfo *pKeyInfo,
                                  u8 **ppOut, int *pnOut);
+int sortKeyFromRecordPrefixCollBuffer(const u8 *pRec, int nRec, int nKeyField,
+                                 const KeyInfo *pKeyInfo,
+                                 u8 **ppBuf, int *pnAlloc, int *pnOut);
 
 int sortKeySize(const u8 *pRec, int nRec);
 
