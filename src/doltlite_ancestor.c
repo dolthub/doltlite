@@ -132,7 +132,9 @@ static int ancestorBfsCollect(
     memset(&commit, 0, sizeof(commit));
     rc = loadCommitByHash(db, &current, &commit);
     if( rc!=SQLITE_OK ) break;
-    for(i=0; i<commit.nParents; i++){
+    for(i=0; i<doltliteCommitParentCount(&commit); i++){
+      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
+      if( !pParent ) continue;
       if( qTail >= qAlloc ){
         ProllyHash *q2;
         qAlloc *= 2;
@@ -140,7 +142,7 @@ static int ancestorBfsCollect(
         if( !q2 ){ doltliteCommitClear(&commit); rc=SQLITE_NOMEM; break; }
         queue = q2;
       }
-      queue[qTail++] = commit.aParents[i];
+      queue[qTail++] = *pParent;
     }
     doltliteCommitClear(&commit);
     if( rc!=SQLITE_OK ) break;
@@ -222,7 +224,9 @@ int doltliteFindAncestor(
         hashSetFree(&ancestors);
         return rc;
       }
-      for(i=0; i<commit.nParents; i++){
+      for(i=0; i<doltliteCommitParentCount(&commit); i++){
+        const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
+        if( !pParent ) continue;
         if( qTail >= qAlloc ){
           ProllyHash *q2;
           qAlloc *= 2;
@@ -230,7 +234,7 @@ int doltliteFindAncestor(
           if( !q2 ){ doltliteCommitClear(&commit); hashSetFree(&visited); sqlite3_free(queue); hashSetFree(&ancestors); return SQLITE_NOMEM; }
           queue = q2;
         }
-        queue[qTail++] = commit.aParents[i];
+        queue[qTail++] = *pParent;
       }
       doltliteCommitClear(&commit);
     }

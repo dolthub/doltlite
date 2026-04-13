@@ -160,6 +160,8 @@ SELECT dolt_merge('feat');
 
 oracle "merged_main_feat" "$POST_MERGE" "'main'" "'feat'"
 oracle "merged_feat_head" "$POST_MERGE" "'feat'" "'HEAD'"
+oracle "merged_second_parent_self" "$POST_MERGE" "'HEAD^2'" "'HEAD^2'"
+oracle "merged_second_parent_vs_first_parent" "$POST_MERGE" "'HEAD^2'" "'HEAD~1'"
 
 echo "--- tag refs ---"
 

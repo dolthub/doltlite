@@ -103,15 +103,16 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
     pEntry->commit = commit;
 
     /* Enqueue all parents */
-    for(i = 0; i < commit.nParents; i++){
-      if( prollyHashIsEmpty(&commit.aParents[i]) ) continue;
+    for(i = 0; i < doltliteCommitParentCount(&commit); i++){
+      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
+      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
       if( qTail >= qAlloc ){
         int newAlloc = qAlloc*2;
         ProllyHash *tmp = sqlite3_realloc(queue, newAlloc*(int)sizeof(ProllyHash));
         if( !tmp ){ rc = SQLITE_NOMEM; break; }
         queue = tmp; qAlloc = newAlloc;
       }
-      queue[qTail++] = commit.aParents[i];
+      queue[qTail++] = *pParent;
     }
     if( rc!=SQLITE_OK ) break;
   }

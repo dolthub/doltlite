@@ -83,33 +83,57 @@ static int doltliteWalkFirstParent(
   int i;
   for(i=0; i<n; i++){
     DoltliteCommit commit;
+    const ProllyHash *pParent;
     int rc;
     memset(&commit, 0, sizeof(commit));
     rc = doltliteLoadCommit(db, pCommit, &commit);
     if( rc!=SQLITE_OK ) return rc;
-    if( commit.nParents==0 ){
+    pParent = doltliteCommitParentHash(&commit, 0);
+    if( !pParent ){
       doltliteCommitClear(&commit);
       return SQLITE_NOTFOUND;
     }
-    memcpy(pCommit, &commit.aParents[0], sizeof(ProllyHash));
+    memcpy(pCommit, pParent, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
   }
   return SQLITE_OK;
 }
 
+static int doltliteSelectParent(
+  sqlite3 *db,
+  ProllyHash *pCommit,
+  int iParent
+){
+  DoltliteCommit commit;
+  const ProllyHash *pParent;
+  int rc;
+
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommit(db, pCommit, &commit);
+  if( rc!=SQLITE_OK ) return rc;
+  pParent = doltliteCommitParentHash(&commit, iParent);
+  if( !pParent ){
+    doltliteCommitClear(&commit);
+    return SQLITE_NOTFOUND;
+  }
+  memcpy(pCommit, pParent, sizeof(ProllyHash));
+  doltliteCommitClear(&commit);
+  return SQLITE_OK;
+}
+
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  int len, j, n_back, rc;
+  int len, j, n_back, parent_sel, rc;
   int suffix_pos = -1;
+  char suffix_op = 0;
   char *base_buf = 0;
   const char *base;
 
   if( !zRef || !cs ) return SQLITE_ERROR;
 
-  /* Look for a trailing ~N or ^N (rightmost) revision suffix. The
-  ** base ref before the suffix is resolved by doltliteResolveBaseRef
-  ** and then walked back N commits along the first-parent chain. An
-  ** empty digit run (HEAD~ / HEAD^) is treated as N=1, matching git.
+  /* Look for a trailing ~N or ^N (rightmost) revision suffix.
+  **  ~N walks back N commits along the first-parent chain.
+  **  ^N selects the Nth parent of the resolved commit (default 1).
   ** Only the rightmost suffix is honored — chained suffixes such as
   ** HEAD~2~3 are not supported. */
   len = (int)strlen(zRef);
@@ -119,21 +143,34 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
       for(k=j+1; k<len; k++){
         if( zRef[k]<'0' || zRef[k]>'9' ){ allDigits = 0; break; }
       }
-      if( allDigits ) suffix_pos = j;
+      if( allDigits ){
+        suffix_pos = j;
+        suffix_op = zRef[j];
+      }
       break;
     }
   }
 
   n_back = 0;
+  parent_sel = 0;
   base = zRef;
   if( suffix_pos>=0 ){
     if( suffix_pos==len-1 ){
-      n_back = 1;
+      if( suffix_op=='~' ){
+        n_back = 1;
+      }else{
+        parent_sel = 1;
+      }
     }else{
-      n_back = atoi(zRef + suffix_pos + 1);
-      if( n_back<=0 ) n_back = 0;
+      int n = atoi(zRef + suffix_pos + 1);
+      if( n<=0 ) n = 0;
+      if( suffix_op=='~' ){
+        n_back = n;
+      }else{
+        parent_sel = n;
+      }
     }
-    if( n_back>0 ){
+    if( n_back>0 || parent_sel>0 ){
       if( suffix_pos==0 ){
         base = "HEAD";
       }else{
@@ -149,6 +186,8 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   rc = doltliteResolveBaseRef(db, base, pCommit);
   if( rc==SQLITE_OK && n_back>0 ){
     rc = doltliteWalkFirstParent(db, pCommit, n_back);
+  }else if( rc==SQLITE_OK && parent_sel>0 ){
+    rc = doltliteSelectParent(db, pCommit, parent_sel-1);
   }
   if( base_buf ) sqlite3_free(base_buf);
   return rc;

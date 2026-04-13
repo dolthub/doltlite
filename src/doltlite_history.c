@@ -74,25 +74,6 @@ static void freeHistoryRows(HistCursor *c){
   c->aRows=0; c->nRows=0; c->nAlloc=0;
 }
 
-static int htCommitParentCount(const DoltliteCommit *pCommit){
-  if( pCommit->nParents>0 ) return pCommit->nParents;
-  return prollyHashIsEmpty(&pCommit->parentHash) ? 0 : 1;
-}
-
-static const ProllyHash *htCommitParentHash(
-  const DoltliteCommit *pCommit,
-  int iParent
-){
-  if( iParent<0 ) return 0;
-  if( pCommit->nParents>0 ){
-    return iParent<pCommit->nParents ? &pCommit->aParents[iParent] : 0;
-  }
-  if( iParent==0 && !prollyHashIsEmpty(&pCommit->parentHash) ){
-    return &pCommit->parentHash;
-  }
-  return 0;
-}
-
 static int htScanAtCommit(
   HistCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
   const ProllyHash *pRoot, u8 flags,
@@ -203,8 +184,8 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
       if( rc!=SQLITE_OK ){ doltliteCommitClear(&commit); break; }
     }
 
-    for(i=0; i<htCommitParentCount(&commit); i++){
-      const ProllyHash *pParent = htCommitParentHash(&commit, i);
+    for(i=0; i<doltliteCommitParentCount(&commit); i++){
+      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
       if( !pParent || prollyHashIsEmpty(pParent) ) continue;
       if( prollyHashSetContains(&visited, pParent) ) continue;
       if( prollyHashSetContains(&queued, pParent) ) continue;
