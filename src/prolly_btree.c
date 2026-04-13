@@ -252,7 +252,14 @@ struct Btree {
 
   struct SavepointTableState {
     struct TableEntry *aTables;
-    int *aPendingCount;     /* MutMap nEntries per table at savepoint time */
+    /* Lazy deep-copy snapshot of each table's pPending mutmap. Populated
+    ** on the first flush of that table under this savepoint (see
+    ** snapshotPendingForSavepoint). NULL slots mean "no flush happened
+    ** under this savepoint" — rollback falls through to per-entry
+    ** undo-log rollback on the live pPending. Required because the
+    ** root-hash snapshot alone would lose entries that were buffered
+    ** in pPending at savepoint time and then flushed away. */
+    ProllyMutMap **aPendingSnapshot;
     int nTables;
     Pgno iNextTable;
     ProllyHash stagedCatalog;
@@ -345,6 +352,8 @@ static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
 static int pushSavepoint(Btree *pBtree);
+static int findTableIndexInArray(struct TableEntry *aTables, int nTables, Pgno iTable);
+static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable, ProllyMutMap *pPending);
 static int restoreFromCommitted(Btree *p);
 static void refreshCursorRoot(BtCursor *pCur);
 static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount);
@@ -1082,6 +1091,7 @@ static int advanceTreeCursor(BtCursor *pCur, int dir){
 
 static int flushMutMap(BtCursor *pCur){
   struct TableEntry *pTE;
+  int rc;
 
   if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
     return SQLITE_OK;
@@ -1092,10 +1102,15 @@ static int flushMutMap(BtCursor *pCur){
     return SQLITE_INTERNAL;
   }
 
-  {
-    int rc = applyMutMapToTableRoot(pCur->pBt, pTE, pCur->pMutMap);
-    if( rc!=SQLITE_OK ) return rc;
-  }
+  /* Same savepoint-snapshot invariant as pTE->pPending flushes: a
+  ** cursor mutmap can also hold pre-savepoint edits (see the write
+  ** cursor open path that transfers pTE->pPending into the cursor).
+  ** Capturing the pre-flush state here lets rollback reconstruct
+  ** pTE->pPending from the snapshot. */
+  rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot, pCur->pMutMap);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = applyMutMapToTableRoot(pCur->pBt, pTE, pCur->pMutMap);
+  if( rc!=SQLITE_OK ) return rc;
   pCur->pCur.root = pTE->root;
   prollyMutMapClear(pCur->pMutMap);
 
@@ -1133,6 +1148,8 @@ static int flushOtherCursorPending(BtCursor *pCur){
   if( pTE && pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     if( !prollyMutMapIsEmpty(pMap) ){
+      rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot, pMap);
+      if( rc!=SQLITE_OK ) return rc;
       rc = applyMutMapToTableRoot(pCur->pBt, pTE, pMap);
       if( rc!=SQLITE_OK ) return rc;
     }
@@ -1184,6 +1201,11 @@ static int ensureMutMap(BtCursor *pCur){
     sqlite3_free(pCur->pMutMap);
     pCur->pMutMap = 0;
     return rc;
+  }
+  /* A cursor opened mid-savepoint inherits the current level so any
+  ** subsequent in-place mutations correctly trigger undo logging. */
+  if( pCur->pBtree ){
+    pCur->pMutMap->currentSavepointLevel = pCur->pBtree->nSavepoint;
   }
   return SQLITE_OK;
 }
@@ -1312,13 +1334,20 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
 }
 
 static void freeSavepointTables(struct SavepointTableState *pState){
+  if( pState->aPendingSnapshot ){
+    int i;
+    for(i=0; i<pState->nTables; i++){
+      if( pState->aPendingSnapshot[i] ){
+        prollyMutMapFree(pState->aPendingSnapshot[i]);
+        sqlite3_free(pState->aPendingSnapshot[i]);
+      }
+    }
+    sqlite3_free(pState->aPendingSnapshot);
+    pState->aPendingSnapshot = 0;
+  }
   if( pState->aTables ){
     sqlite3_free(pState->aTables);
     pState->aTables = 0;
-  }
-  if( pState->aPendingCount ){
-    sqlite3_free(pState->aPendingCount);
-    pState->aPendingCount = 0;
   }
   memset(&pState->stagedCatalog, 0, sizeof(pState->stagedCatalog));
   pState->isMerging = 0;
@@ -1326,16 +1355,127 @@ static void freeSavepointTables(struct SavepointTableState *pState){
   memset(&pState->conflictsCatalogHash, 0, sizeof(pState->conflictsCatalogHash));
 }
 
-static void truncatePendingToCount(ProllyMutMap *pMap, int savedCount){
-  while( pMap && pMap->nEntries > savedCount ){
-    ProllyMutMapEntry *e;
-    pMap->nEntries--;
-    e = &pMap->aEntries[pMap->nEntries];
-    sqlite3_free(e->pKey);
-    e->pKey = 0;
-    sqlite3_free(e->pVal);
-    e->pVal = 0;
+/* Walk every live mutmap belonging to this Btree — both the per-table
+** pPending slots and every cursor's own pMutMap — and broadcast a
+** savepoint state change. The mutmap state machine (bornAt stamps +
+** lazy undo log) relies on seeing every transition. Cursors from a
+** shared BtShared that belong to a different Btree are skipped. */
+static void pushSavepointOnMutMaps(Btree *pBtree, int level){
+  int k;
+  BtCursor *p;
+  for(k=0; k<pBtree->nTables; k++){
+    ProllyMutMap *pMap = (ProllyMutMap*)pBtree->aTables[k].pPending;
+    if( pMap ) prollyMutMapPushSavepoint(pMap, level);
   }
+  for(p = pBtree->pBt->pCursor; p; p = p->pNext){
+    if( p->pBtree==pBtree && p->pMutMap ){
+      prollyMutMapPushSavepoint(p->pMutMap, level);
+    }
+  }
+}
+
+/* Find the smallest-index savepoint in [iFromSavepoint..nSavepoint) that
+** has a pPending snapshot for iTable. Returns the snapshot pointer (not
+** ownership — caller clones) or NULL if none found. */
+static ProllyMutMap *findPendingSnapshot(Btree *pBtree, int iFromSavepoint,
+                                          Pgno iTable){
+  int i;
+  for(i=iFromSavepoint; i<pBtree->nSavepoint; i++){
+    struct SavepointTableState *pState = &pBtree->aSavepointTables[i];
+    int j;
+    if( !pState->aPendingSnapshot ) continue;
+    j = findTableIndexInArray(pState->aTables, pState->nTables, iTable);
+    if( j < 0 ) continue;
+    if( pState->aPendingSnapshot[j] ){
+      return pState->aPendingSnapshot[j];
+    }
+  }
+  return 0;
+}
+
+/* Rollback all live mutmaps to the given savepoint level. For each
+** table mutmap: if any savepoint in the range being rolled back has a
+** snapshot (captured at first flush under that savepoint), replace
+** pTE->pPending with a clone of the smallest-level snapshot, then
+** apply per-entry rollback to the clone. Otherwise just apply
+** per-entry rollback to the live pPending — the live state is
+** authoritative because no flush happened to destroy it. */
+static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
+                                       int iFromSavepoint){
+  int k, rc;
+  BtCursor *p;
+  for(k=0; k<pBtree->nTables; k++){
+    struct TableEntry *pTE = &pBtree->aTables[k];
+    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+    ProllyMutMap *pSnap = findPendingSnapshot(pBtree, iFromSavepoint,
+                                               pTE->iTable);
+    if( pSnap ){
+      ProllyMutMap *pClone = 0;
+      rc = prollyMutMapClone(&pClone, pSnap);
+      if( rc!=SQLITE_OK ) return rc;
+      if( pMap ){
+        prollyMutMapFree(pMap);
+        sqlite3_free(pMap);
+      }
+      pTE->pPending = pClone;
+      rc = prollyMutMapRollbackToSavepoint(pClone, level);
+      if( rc!=SQLITE_OK ) return rc;
+    }else if( pMap ){
+      rc = prollyMutMapRollbackToSavepoint(pMap, level);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  for(p = pBtree->pBt->pCursor; p; p = p->pNext){
+    if( p->pBtree==pBtree && p->pMutMap ){
+      rc = prollyMutMapRollbackToSavepoint(p->pMutMap, level);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static void releaseMutMapsToSavepoint(Btree *pBtree, int level){
+  int k;
+  BtCursor *p;
+  for(k=0; k<pBtree->nTables; k++){
+    ProllyMutMap *pMap = (ProllyMutMap*)pBtree->aTables[k].pPending;
+    if( pMap ) prollyMutMapReleaseSavepoint(pMap, level);
+  }
+  for(p = pBtree->pBt->pCursor; p; p = p->pNext){
+    if( p->pBtree==pBtree && p->pMutMap ){
+      prollyMutMapReleaseSavepoint(p->pMutMap, level);
+    }
+  }
+}
+
+/* Before a flush applies pTE->pPending to the tree, make sure each
+** active savepoint has captured whatever state that flush is about
+** to destroy. Only the innermost savepoint without a snapshot for
+** this table actually takes the (deep-copy) snapshot — deeper walks
+** are skipped because the innermost snapshot is sufficient to roll
+** back the outer savepoints too (applyRollback on the clone walks
+** the snapshot's internal bornAt stamps and undo log). */
+static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
+                                   ProllyMutMap *pPending){
+  int i;
+  if( !pBtree || !pPending ) return SQLITE_OK;
+  if( pBtree->nSavepoint <= 0 ) return SQLITE_OK;
+  if( prollyMutMapIsEmpty(pPending) ) return SQLITE_OK;
+
+  for(i = pBtree->nSavepoint - 1; i >= 0; i--){
+    struct SavepointTableState *pState = &pBtree->aSavepointTables[i];
+    int j;
+    if( !pState->aPendingSnapshot ) continue;
+    j = findTableIndexInArray(pState->aTables, pState->nTables, iTable);
+    if( j < 0 ) continue;
+    if( pState->aPendingSnapshot[j] ) return SQLITE_OK;
+    {
+      int rc = prollyMutMapClone(&pState->aPendingSnapshot[j], pPending);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    return SQLITE_OK;
+  }
+  return SQLITE_OK;
 }
 
 static int findTableIndexInArray(
@@ -1392,7 +1532,9 @@ static int restoreTablesFromSavepoint(
     iSaved = findTableIndexInArray(
         pState->aTables, pState->nTables, pBtree->aTables[k].iTable);
     if( iSaved>=0 ){
-      truncatePendingToCount(pMap, pState->aPendingCount[iSaved]);
+      /* Mutmap content was already rolled back via the per-entry
+      ** bornAt stamps + undo log in rollbackMutMapsToSavepoint; just
+      ** preserve the pointer so it survives the aTables memcpy. */
       apPending[iSaved] = pMap;
     }else{
       prollyMutMapFree(pMap);
@@ -1418,25 +1560,16 @@ static int restoreTablesFromSavepoint(
   return SQLITE_OK;
 }
 
-/* Snapshot the current state so ROLLBACK TO can restore it.
-** Saves: (1) the current prolly root hash, (2) each table's root hash,
-** (3) the nEntries count of each table's pending MutMap.
-** On rollback, table roots are restored and MutMap entries are truncated
-** back to the saved count -- this works because MutMap is append-only.
-** IMPORTANT: all cursor MutMaps must be flushed first, because the
-** savepoint only records table-level root hashes and MutMap counts. */
+/* Snapshot just enough to let ROLLBACK TO reconstruct table-level
+** state. Per-entry mutmap edits are tracked separately by the bornAt
+** stamp + lazy undo log in each ProllyMutMap (see prolly_mutmap.c),
+** so we no longer flush cursor edits here or record per-table mutmap
+** sizes — the root-hash snapshot covers the case where a flush happens
+** mid-savepoint, and the per-entry tracking covers everything still
+** buffered. Cost of push is O(nTables) memcpy plus O(live mutmaps)
+** int-writes from pushSavepointOnMutMaps. */
 static int pushSavepoint(Btree *pBtree){
   struct SavepointTableState *pState;
-  int rc;
-
-  /* Flush all cursor edits before snapshotting */
-  {
-    BtCursor *p;
-    for(p = pBtree->pBt->pCursor; p; p = p->pNext){
-      rc = flushIfNeeded(p);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-  }
 
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
     int nNew = pBtree->nSavepointAlloc ? pBtree->nSavepointAlloc*2 : 8;
@@ -1449,7 +1582,7 @@ static int pushSavepoint(Btree *pBtree){
 
   pState = &pBtree->aSavepointTables[pBtree->nSavepoint];
   pState->aTables = 0;
-  pState->aPendingCount = 0;
+  pState->aPendingSnapshot = 0;
   pState->nTables = 0;
   pState->iNextTable = pBtree->iNextTable;
   pState->stagedCatalog = pBtree->stagedCatalog;
@@ -1459,26 +1592,28 @@ static int pushSavepoint(Btree *pBtree){
   if( pBtree->nTables > 0 ){
     pState->aTables = sqlite3_malloc(pBtree->nTables * (int)sizeof(struct TableEntry));
     if( !pState->aTables ) return SQLITE_NOMEM;
-    pState->aPendingCount = sqlite3_malloc(pBtree->nTables * (int)sizeof(int));
-    if( !pState->aPendingCount ){
+    pState->aPendingSnapshot = sqlite3_malloc(
+        pBtree->nTables * (int)sizeof(ProllyMutMap*));
+    if( !pState->aPendingSnapshot ){
       sqlite3_free(pState->aTables);
       pState->aTables = 0;
       return SQLITE_NOMEM;
     }
+    memset(pState->aPendingSnapshot, 0,
+           pBtree->nTables * sizeof(ProllyMutMap*));
     memcpy(pState->aTables, pBtree->aTables,
            pBtree->nTables * sizeof(struct TableEntry));
     pState->nTables = pBtree->nTables;
     {
       int k;
       for(k=0; k<pState->nTables; k++){
-        ProllyMutMap *pMap = (ProllyMutMap*)pState->aTables[k].pPending;
-        pState->aPendingCount[k] = pMap ? pMap->nEntries : 0;
-        pState->aTables[k].pPending = 0;  
+        pState->aTables[k].pPending = 0;
       }
     }
   }
 
   pBtree->nSavepoint++;
+  pushSavepointOnMutMaps(pBtree, pBtree->nSavepoint);
   return SQLITE_OK;
 }
 
@@ -2517,16 +2652,18 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
   }
 
   if( op==SAVEPOINT_ROLLBACK ){
-    /* Rollback: restore the prolly root and each table's root to the
-    ** values captured at pushSavepoint time. For MutMap entries, we
-    ** truncate back to the saved nEntries count (MutMap is append-only,
-    ** so entries after savedCount are exactly the post-savepoint writes).
-    ** Tables created after the savepoint are removed entirely. */
+    /* Rollback: per-entry bornAt + undo log reverts buffered edits in
+    ** every live mutmap first, then the table-level snapshot (root
+    ** hashes, catalog state) is restored for the case where a flush
+    ** happened mid-savepoint. Tables created under the savepoint are
+    ** freed by restoreTablesFromSavepoint. */
     if( iSavepoint>=0 && iSavepoint<p->nSavepoint
      && p->aSavepointTables ){
       struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
+      int rc = rollbackMutMapsToSavepoint(p, iSavepoint + 1, iSavepoint);
+      if( rc!=SQLITE_OK ) return rc;
       if( pState->aTables ){
-        int rc = restoreTablesFromSavepoint(p, pState);
+        rc = restoreTablesFromSavepoint(p, pState);
         if( rc!=SQLITE_OK ) return rc;
       }
       p->stagedCatalog = pState->stagedCatalog;
@@ -2534,7 +2671,7 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
       p->mergeCommitHash = pState->mergeCommitHash;
       p->conflictsCatalogHash = pState->conflictsCatalogHash;
       freeSavepointTables(pState);
-      
+
       {
         int j;
         for(j=iSavepoint+1; j<p->nSavepoint; j++){
@@ -2559,9 +2696,13 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
       invalidateSchema(p);
     }
   } else {
-    
+    /* RELEASE: commit savepoint levels [iSavepoint+1..nSavepoint] into
+    ** level iSavepoint. The per-mutmap release relabels undo records
+    ** and clamps entry bornAt so a later ROLLBACK TO the parent still
+    ** finds the correct state. */
     if( iSavepoint>=0 && iSavepoint<p->nSavepoint ){
       int j;
+      releaseMutMapsToSavepoint(p, iSavepoint + 1);
       for(j=iSavepoint; j<p->nSavepoint; j++){
         freeSavepointTables(&p->aSavepointTables[j]);
       }
@@ -2823,10 +2964,12 @@ static int prollyBtreeCursor(
       }
       pTE->pendingFlushSeekEdits = 0;
     }else{
-      
+
       ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
       if( !prollyMutMapIsEmpty(pMap) ){
-        int rc2 = applyMutMapToTableRoot(pBt, pTE, pMap);
+        int rc2 = snapshotPendingForFlush(p, iTable, pMap);
+        if( rc2!=SQLITE_OK ) return rc2;
+        rc2 = applyMutMapToTableRoot(pBt, pTE, pMap);
         prollyMutMapFree(pMap);
         sqlite3_free(pMap);
         pTE->pPending = 0;
@@ -3113,7 +3256,9 @@ static int flushTablePending(BtCursor *pCur){
   if( pTE && pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     if( !prollyMutMapIsEmpty(pMap) ){
-      int rc = applyMutMapToTableRoot(pCur->pBt, pTE, pMap);
+      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot, pMap);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pMap);
       prollyMutMapFree(pMap);
       sqlite3_free(pMap);
       pTE->pPending = 0;
@@ -4403,6 +4548,9 @@ static int flushDeferredEdits(BtShared *pBt){
     for(i=0; i<pBtree->nTables; i++){
       struct TableEntry *pTE = &pBtree->aTables[i];
       if( pTE->pPending && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
+        rc = snapshotPendingForFlush(pBtree, pTE->iTable,
+                                     (ProllyMutMap*)pTE->pPending);
+        if( rc!=SQLITE_OK ) return rc;
         rc = applyMutMapToTableRoot(pBt, pTE, (ProllyMutMap*)pTE->pPending);
         prollyMutMapFree((ProllyMutMap*)pTE->pPending);
         sqlite3_free(pTE->pPending);
@@ -5306,6 +5454,8 @@ int doltliteApplyRawRowMutation(
   if( pTE->pPending ){
     ProllyMutMap *pPend = (ProllyMutMap*)pTE->pPending;
     if( !prollyMutMapIsEmpty(pPend) ){
+      rc = snapshotPendingForFlush(pBtree, pTE->iTable, pPend);
+      if( rc!=SQLITE_OK ) return rc;
       rc = applyMutMapToTableRoot(pBt, pTE, pPend);
       if( rc!=SQLITE_OK ) return rc;
     }
