@@ -185,6 +185,10 @@ jobs:
       run: cd build && bash ../test/oracle_foreign_keys_test.sh ./doltlite ./sqlite3
       timeout-minutes: 5
 
+    - name: Oracle tests (UPSERT / INSERT OR)
+      run: cd build && bash ../test/oracle_upsert_test.sh ./doltlite ./sqlite3
+      timeout-minutes: 5
+
     - name: Large-scale test (10K rows)
       run: cd build && bash ../test/large_scale_test.sh ./doltlite --quick
       timeout-minutes: 5
