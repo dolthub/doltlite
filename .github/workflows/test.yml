@@ -147,6 +147,10 @@ jobs:
       run: cd build && bash ../test/vc_oracle_schemas_test.sh ./doltlite dolt
       timeout-minutes: 5
 
+    - name: Version control oracle tests (dolt_diff_stat / dolt_diff_summary)
+      run: cd build && bash ../test/vc_oracle_diff_stat_test.sh ./doltlite dolt
+      timeout-minutes: 5
+
     - name: Version control oracle tests (dolt_history_<table>)
       run: cd build && bash ../test/vc_oracle_history_test.sh ./doltlite dolt
       timeout-minutes: 5
