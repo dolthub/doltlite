@@ -20,7 +20,7 @@ struct GcQueue {
   ProllyHash *aItems;
   int nItems;
   int nAlloc;
-  int iHead;   
+  int iHead;
 };
 
 static int gcQueueInit(GcQueue *q){
@@ -58,15 +58,17 @@ static int gcQueuePop(GcQueue *q, ProllyHash *h){
   return 1;
 }
 
-/* BFS from all roots (manifest hashes + all branch/tag refs + working sets)
-** to mark every reachable chunk. Uses doltliteEnumerateChunkChildren to
-** discover child hashes from all known chunk types. */
-
 static int gcChildCb(void *ctx, const ProllyHash *pHash){
   GcQueue *q = (GcQueue*)ctx;
   return gcQueuePush(q, pHash);
 }
 
+/* Mark phase: seed from every branch head, working-set, and tag
+** (any chunk that could be navigated to via a ref). refsHash is
+** also pinned because the refs blob itself lives in the chunk store.
+** Walk children via doltliteEnumerateChunkChildren — a missing case
+** in that classifier silently drops live chunks, corrupting the
+** store after sweep. */
 static int gcMarkReachable(
   ChunkStore *cs,
   ProllyHashSet *marked
@@ -78,7 +80,7 @@ static int gcMarkReachable(
   rc = gcQueueInit(&queue);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   rc = gcQueuePush(&queue, &cs->refsHash);
 
   for(i=0; rc==SQLITE_OK && i<cs->nBranches; i++){
@@ -86,7 +88,7 @@ static int gcMarkReachable(
     if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->aBranches[i].workingSetHash);
   }
 
-  
+
   for(i=0; rc==SQLITE_OK && i<cs->nTags; i++){
     rc = gcQueuePush(&queue, &cs->aTags[i].commitHash);
   }
@@ -95,7 +97,7 @@ static int gcMarkReachable(
     return rc;
   }
 
-  
+
   while( gcQueuePop(&queue, &current) ){
     u8 *data = 0;
     int nData = 0;
@@ -138,7 +140,7 @@ static int gcBuildCompactedData(
   i64 dataOffset = CHUNK_MANIFEST_SIZE;
   int rc = SQLITE_OK;
 
-  
+
   for(i=0; i<cs->nIndex; i++){
     if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ) kept++;
   }
@@ -159,7 +161,7 @@ static int gcBuildCompactedData(
       return rc;
     }
 
-    
+
     {
       int need = nBuf + 4 + nChunkData;
       if( need > nBufAlloc ){
@@ -175,7 +177,7 @@ static int gcBuildCompactedData(
       }
     }
 
-    
+
     buf[nBuf]   = (u8)(nChunkData);
     buf[nBuf+1] = (u8)(nChunkData>>8);
     buf[nBuf+2] = (u8)(nChunkData>>16);
@@ -192,7 +194,7 @@ static int gcBuildCompactedData(
     sqlite3_free(chunkData);
   }
 
-  
+
   for(i=1; i<nNewIndex; i++){
     ChunkIndexEntry tmp = aNewIndex[i];
     j = i-1;
@@ -225,7 +227,7 @@ static int gcRewriteFile(
   ChunkStore manifestCs;
   int rc = SQLITE_OK;
 
-  
+
   indexBuf = sqlite3_malloc(indexSize);
   if( !indexBuf ) return SQLITE_NOMEM;
   for(i=0; i<nNewIndex; i++){
@@ -255,7 +257,11 @@ static int gcRewriteFile(
 
   csSerializeManifest(&manifestCs, manifest);
 
-  
+
+  /* Write to a sibling tmp file then atomic rename. Has to close the
+  ** original fd before rename() on platforms where an open fd pins
+  ** the old inode, and the WAL buffer is dropped because its chunks
+  ** are now inlined into the compacted data region. */
   if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
     char *zTmp = sqlite3_mprintf("%s-gc-tmp", cs->zFilename);
     if( !zTmp ){
@@ -269,7 +275,7 @@ static int gcRewriteFile(
                    | SQLITE_OPEN_MAIN_DB;
       i64 writeOff = 0;
 
-      
+
       cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
 
       rc = sqlite3OsOpenMalloc(cs->pVfs, zTmp, &pTmpFile, tmpFlags, 0);
@@ -278,11 +284,11 @@ static int gcRewriteFile(
         return SQLITE_CANTOPEN;
       }
 
-      
+
       rc = sqlite3OsWrite(pTmpFile, manifest, CHUNK_MANIFEST_SIZE, writeOff);
       writeOff += CHUNK_MANIFEST_SIZE;
 
-      
+
       if( rc==SQLITE_OK && nNewData>0 ){
         const u8 *p = pNewData;
         int remaining = nNewData;
@@ -295,7 +301,7 @@ static int gcRewriteFile(
         }
       }
 
-      
+
       if( rc==SQLITE_OK && indexSize>0 ){
         const u8 *p = indexBuf;
         int remaining = indexSize;
@@ -308,16 +314,15 @@ static int gcRewriteFile(
         }
       }
 
-      
+
       if( rc==SQLITE_OK ){
         rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
       }
       sqlite3OsCloseFree(pTmpFile);
 
       if( rc==SQLITE_OK ){
-        
-        /* Close the old file before rename. The file handle must be released
-        ** first or rename() will fail on Windows. After rename, reopen. */
+
+
         if( cs->pFile ){
           sqlite3OsCloseFree(cs->pFile);
           cs->pFile = 0;
@@ -333,7 +338,7 @@ static int gcRewriteFile(
           cs->nWalData = 0;
         }
 
-        
+
         if( rc==SQLITE_OK ){
           int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
           rc = sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename, &cs->pFile,
@@ -363,7 +368,7 @@ static int gcSweep(
   int nBuf = 0;
   int rc = SQLITE_OK;
 
-  
+
   for(i=0; i<cs->nIndex; i++){
     if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ){
       kept++;
@@ -383,14 +388,14 @@ static int gcSweep(
     return SQLITE_OK;
   }
 
-  
+
   rc = gcBuildCompactedData(cs, marked, &buf, &nBuf, &aNewIndex, &nNewIndex);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   rc = gcRewriteFile(cs, buf, nBuf, aNewIndex, nNewIndex);
 
-  
+
   if( rc==SQLITE_OK ){
     int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
     sqlite3_free(cs->aIndex);
@@ -401,7 +406,7 @@ static int gcSweep(
     cs->iIndexOffset = CHUNK_MANIFEST_SIZE + nBuf;
     cs->nIndexSize = indexSize;
     cs->iWalOffset = CHUNK_MANIFEST_SIZE + nBuf + indexSize;
-    aNewIndex = 0;  
+    aNewIndex = 0;
 
     cs->nPending = 0;
     cs->nWriteBuf = 0;
@@ -435,15 +440,13 @@ static void doltliteGcFunc(
     return;
   }
 
-  
+
   if( !cs->zFilename || strcmp(cs->zFilename, ":memory:")==0 ){
     sqlite3_result_text(context, "0 chunks removed, 0 chunks kept (in-memory)", -1, SQLITE_TRANSIENT);
     return;
   }
 
-  /* Acquire exclusive write lock for the entire GC operation.
-  ** GC rewrites the file — no other connection or process may be
-  ** reading or writing while this happens. */
+
   rc = chunkStoreLockAndRefresh(cs);
   if( rc==SQLITE_BUSY ){
     sqlite3_result_error(context,
@@ -492,7 +495,7 @@ int doltliteGcCompact(sqlite3 *db){
 
   if( !cs ) return SQLITE_OK;
   if( !cs->zFilename || strcmp(cs->zFilename, ":memory:")==0 ){
-    return SQLITE_OK;  
+    return SQLITE_OK;
   }
 
   rc = chunkStoreLockAndRefresh(cs);
@@ -518,4 +521,4 @@ int doltliteGcRegister(sqlite3 *db){
                                   doltliteGcFunc, 0, 0);
 }
 
-#endif 
+#endif

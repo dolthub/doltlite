@@ -12,4 +12,4 @@ int doltliteFindAncestor(
   ProllyHash *pAncestor
 );
 
-#endif 
+#endif

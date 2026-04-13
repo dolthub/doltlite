@@ -1,22 +1,11 @@
-/*
-** Prolly tree node binary format (all multi-byte integers little-endian):
-**   [magic:4 LE "DNOP"] [level:1] [count:2 LE] [flags:1]   = 8-byte header
-**   [keyOffsets: u32 LE * (count+1)]   -- cumulative byte offsets into key data
-**   [valOffsets: u32 LE * (count+1)]   -- cumulative byte offsets into val data
-**   [key data: variable]
-**   [value data: variable]
-**
-** For INTKEY tables, keys are 8-byte big-endian encoded i64 (see encodeI64BE
-** in prolly_mutate.c). For internal nodes (level>0), values are 20-byte
-** child hashes. Leaf values are SQLite record-format blobs.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_node.h"
 #include "prolly_encoding.h"
 #include <string.h>
 
-#define PROLLY_HDR_SIZE       8   /* magic(4) + level(1) + count(2) + flags(1) */
+#define PROLLY_HDR_SIZE       8
 #define PROLLY_MAGIC_OFF      0
 #define PROLLY_LEVEL_OFF      4
 #define PROLLY_COUNT_OFF      5
@@ -25,21 +14,21 @@
 int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   u32 magic;
   u16 count;
-  int nOffsets;        
-  int minSize;         
-  u32 totalKeyBytes;   
-  u32 totalValBytes;   
+  int nOffsets;
+  int minSize;
+  u32 totalKeyBytes;
+  u32 totalValBytes;
   const u8 *pCur;
   int i;
 
   memset(pNode, 0, sizeof(*pNode));
 
-  
+
   if( nData<PROLLY_HDR_SIZE ){
     return SQLITE_CORRUPT;
   }
 
-  
+
   magic = PROLLY_GET_U32(pData + PROLLY_MAGIC_OFF);
   if( magic!=PROLLY_NODE_MAGIC ){
     return SQLITE_CORRUPT;
@@ -62,7 +51,7 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
     if( pNode->level>0 ){
       return SQLITE_CORRUPT;
     }
-    
+
     pNode->aKeyOff = 0;
     pNode->aValOff = 0;
     pNode->pKeyData = pData + PROLLY_HDR_SIZE;
@@ -70,24 +59,24 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
     return SQLITE_OK;
   }
 
-  
+
   nOffsets = (int)(count + 1) * 4 * 2;
   minSize = PROLLY_HDR_SIZE + nOffsets;
   if( nData<minSize ){
     return SQLITE_CORRUPT;
   }
 
-  
+
   pCur = pData + PROLLY_HDR_SIZE;
   pNode->aKeyOff = (const u32*)pCur;
   pCur += (count + 1) * 4;
   pNode->aValOff = (const u32*)pCur;
   pCur += (count + 1) * 4;
 
-  
+
   pNode->pKeyData = pCur;
 
-  
+
   totalKeyBytes = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[count]);
   pNode->pValData = pCur + totalKeyBytes;
 
@@ -148,11 +137,10 @@ i64 prollyNodeIntKey(const ProllyNode *pNode, int i){
   assert( i >= 0 && i < (int)pNode->nItems );
   off = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
   p = pNode->pKeyData + off;
-  /* Decode big-endian sort key back to signed i64. Keys are stored big-endian
-  ** with sign bit flipped (see encodeI64BE) so memcmp gives signed order. */
+
   u = ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40) | ((u64)p[3]<<32)
     | ((u64)p[4]<<24) | ((u64)p[5]<<16) | ((u64)p[6]<<8) | (u64)p[7];
-  return (i64)(u ^ ((u64)1 << 63));  
+  return (i64)(u ^ ((u64)1 << 63));
 }
 
 void prollyNodeChildHash(const ProllyNode *pNode, int i, ProllyHash *pHash){
@@ -185,7 +173,7 @@ int prollyNodeSearchBlob(
     mid = lo + (hi - lo) / 2;
     prollyNodeKey(pNode, mid, &pMidKey, &nMidKey);
 
-    
+
     nCmp = nMidKey < nKey ? nMidKey : nKey;
     c = memcmp(pKey, pMidKey, nCmp);
     if( c==0 ) c = nKey - nMidKey;
@@ -200,7 +188,7 @@ int prollyNodeSearchBlob(
     }
   }
 
-  
+
   if( lo>=pNode->nItems ){
     *pRes = 1;
     return pNode->nItems - 1;
@@ -235,7 +223,7 @@ int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes){
     }
   }
 
-  
+
   if( lo>=pNode->nItems ){
     *pRes = 1;
     return pNode->nItems - 1;
@@ -255,7 +243,7 @@ void prollyNodeBuilderInit(ProllyNodeBuilder *b, u8 level, u8 flags){
 }
 
 static int builderGrowOffsets(ProllyNodeBuilder *b){
-  int nNeeded = b->nItems + 2;  
+  int nNeeded = b->nItems + 2;
   if( nNeeded>b->nAlloc ){
     int nNew = b->nAlloc ? b->nAlloc * 2 : PROLLY_BUILDER_INIT_CAP;
     u32 *aNew;
@@ -313,26 +301,27 @@ int prollyNodeBuilderAdd(
     return SQLITE_FULL;
   }
 
-  
+
   rc = builderGrowOffsets(b);
   if( rc ) return rc;
 
-  
+
   rc = builderGrowKeyBuf(b, nKey);
   if( rc ) return rc;
   rc = builderGrowValBuf(b, nVal);
   if( rc ) return rc;
 
-  
+
   if( b->nItems==0 ){
     b->aKeyOff[0] = 0;
     b->aValOff[0] = 0;
   }
 
-  /* The `+ N` offsets below are UB when the base pointer is NULL,
-  ** even for N = 0 (C11 6.5.6/8). The builder's buffers are lazily
-  ** allocated and stay NULL while no bytes have been written, so
-  ** skip the memcpy entirely on an empty key or value. */
+
+  /* Guard against `NULL + 0` pointer arithmetic — the builder's
+  ** buffers are lazily allocated and stay NULL until the first
+  ** non-empty byte, and `p + 0` on a null pointer is UB per
+  ** C11 6.5.6/8 even though the value is never dereferenced. */
   if( nKey > 0 ){
     memcpy(b->pKeyBuf + b->nKeyBytes, pKey, nKey);
     b->nKeyBytes += nKey;
@@ -350,8 +339,8 @@ int prollyNodeBuilderAdd(
 }
 
 int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
-  int nOff;         
-  int nTotal;       
+  int nOff;
+  int nTotal;
   u8 *pBuf;
   u8 *pCur;
   int i;
@@ -365,7 +354,7 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
   pBuf = (u8*)sqlite3_malloc(nTotal);
   if( !pBuf ) return SQLITE_NOMEM;
 
-  
+
   PROLLY_PUT_U32(pBuf + PROLLY_MAGIC_OFF, PROLLY_NODE_MAGIC);
   pBuf[PROLLY_LEVEL_OFF] = b->level;
   PROLLY_PUT_U16(pBuf + PROLLY_COUNT_OFF, (u16)b->nItems);
@@ -373,25 +362,25 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
 
   pCur = pBuf + PROLLY_HDR_SIZE;
 
-  
+
   for(i=0; i<=b->nItems; i++){
     PROLLY_PUT_U32(pCur, b->aKeyOff[i]);
     pCur += 4;
   }
 
-  
+
   for(i=0; i<=b->nItems; i++){
     PROLLY_PUT_U32(pCur, b->aValOff[i]);
     pCur += 4;
   }
 
-  
+
   if( b->nKeyBytes>0 ){
     memcpy(pCur, b->pKeyBuf, b->nKeyBytes);
     pCur += b->nKeyBytes;
   }
 
-  
+
   if( b->nValBytes>0 ){
     memcpy(pCur, b->pValBuf, b->nValBytes);
     pCur += b->nValBytes;
@@ -408,7 +397,7 @@ void prollyNodeBuilderReset(ProllyNodeBuilder *b){
   b->nItems = 0;
   b->nKeyBytes = 0;
   b->nValBytes = 0;
-  
+
 }
 
 void prollyNodeBuilderFree(ProllyNodeBuilder *b){
@@ -442,4 +431,4 @@ int prollyCompareKeys(
   }
 }
 
-#endif 
+#endif

@@ -1,4 +1,4 @@
-/* SQLite record-format decoding helpers and varint/serial-type utilities. */
+
 #ifndef DOLTLITE_RECORD_H
 #define DOLTLITE_RECORD_H
 
@@ -10,9 +10,9 @@ void doltliteResultRecord(sqlite3_context *ctx, const u8 *pData, int nData);
 
 typedef struct DoltliteColInfo DoltliteColInfo;
 struct DoltliteColInfo {
-  char **azName;    
-  int nCol;         
-  int iPkCol;       
+  char **azName;
+  int nCol;
+  int iPkCol;
 };
 
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci);

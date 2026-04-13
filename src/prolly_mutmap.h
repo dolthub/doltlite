@@ -1,4 +1,3 @@
-/* Sorted map of pending INSERT/DELETE edits, consumed by prolly_mutate. */
 #ifndef SQLITE_PROLLY_MUTMAP_H
 #define SQLITE_PROLLY_MUTMAP_H
 
@@ -19,23 +18,16 @@ struct ProllyMutMapEntry {
   int nKey;
   u8 *pVal;
   int nVal;
-  /* Savepoint level at which this entry was created or last
-  ** modified in place. 0 means "no savepoint active when written".
-  ** Used by the savepoint rollback path to drop post-savepoint
-  ** entries — see prollyMutMapPushSavepoint. */
   int bornAt;
 };
 
-/* Undo record: pre-mutation snapshot of an entry whose op or value
-** was overwritten in place under an active savepoint. The record
-** captures enough to put the entry back the way it was. Created
-** lazily — only when an in-place mutation actually crosses a
-** savepoint boundary, never on fresh-key inserts. */
+/* Lazy — allocated only when an in-place mutation under an active
+** savepoint is about to overwrite the previous (op, value). */
 typedef struct ProllyMutMapUndoRec ProllyMutMapUndoRec;
 struct ProllyMutMapUndoRec {
-  int level;        /* savepoint level this record belongs to */
-  int entryIdx;     /* aEntries[] index at the time of capture */
-  int prevBornAt;   /* original bornAt to restore */
+  int level;
+  int entryIdx;
+  int prevBornAt;
   u8 prevOp;
   u8 *prevVal;
   int nPrevVal;
@@ -48,16 +40,15 @@ struct ProllyMutMap {
   int nEntries;
   int nAlloc;
   ProllyMutMapEntry *aEntries;
-  int *aOrder;              /* sorted-position -> physical entry index */
-  int *aPos;                /* physical entry index -> sorted-position */
-  int *aHash;               /* open-addressing hash table storing phys+1 */
+  /* aOrder / aPos form a two-way mapping between sorted position and
+  ** physical entry index. aHash is an open-addressing lookup table
+  ** storing (phys + 1) so 0 marks an empty slot. */
+  int *aOrder;
+  int *aPos;
+  int *aHash;
   int nHashAlloc;
-  /* Active savepoint level. 0 = no savepoint, mutations skip
-  ** the undo-log path entirely (fast path for autocommit). */
+  /* 0 disables the undo-log path entirely — the autocommit fast path. */
   int currentSavepointLevel;
-  /* Undo log, append-only between savepoint state transitions.
-  ** Rollback walks backward; release drops the suffix at or
-  ** above the released level. */
   ProllyMutMapUndoRec *aUndo;
   int nUndo;
   int nUndoAlloc;
@@ -86,7 +77,7 @@ int prollyMutMapIsEmpty(ProllyMutMap *mm);
 
 struct ProllyMutMapIter {
   ProllyMutMap *pMap;
-  int idx;               
+  int idx;
 };
 
 void prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm);
@@ -104,43 +95,12 @@ void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm);
 
 int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc);
 
-/* Deep-copy src into a fresh mutmap returned via *out. Preserves entries
-** (key/val bytes), the undo log, isIntKey, and currentSavepointLevel.
-** Used by the btree savepoint layer to snapshot a pPending mutmap before
-** the btree flushes it into the underlying tree — without this the
-** savepoint's root snapshot alone loses pre-savepoint buffered writes. */
 int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src);
 
-/* Savepoint controls. The btree calls these to bracket a savepoint:
-**
-**   prollyMutMapPushSavepoint(mm, level)
-**     O(1). Sets mm->currentSavepointLevel to level. New entries
-**     written henceforth get bornAt = level; in-place mutations on
-**     existing entries with bornAt < level log an undo record (lazy
-**     — only the first mutation per entry per level allocates).
-**
-**   prollyMutMapRollbackToSavepoint(mm, level)
-**     Reverts everything done at savepoint levels >= level.
-**     Order matters: walk the undo log backward FIRST, restoring
-**     in-place mutations to their pre-savepoint state (including
-**     resetting bornAt), THEN drop remaining entries with
-**     bornAt >= level (fresh inserts under the rolled-back savepoints
-**     that have no undo records). Sets currentSavepointLevel to
-**     level - 1.
-**
-**   prollyMutMapReleaseSavepoint(mm, level)
-**     Commits everything done at levels >= level into level-1.
-**     Relabels undo records at level >= the released level down to
-**     level-1 (so a future ROLLBACK TO the parent still finds the
-**     pre-release state) and clamps entry bornAt >= level to level-1
-**     (so fresh post-savepoint inserts aren't mistakenly dropped by
-**     a later parent rollback). Special case: when releasing to 0
-**     (fast path), the entire undo log is freed. Sets
-**     currentSavepointLevel to level - 1.
-**
-** Hot path: when currentSavepointLevel == 0 (autocommit, no user
-** savepoints) the in-place mutation paths fast-path past the undo
-** log code entirely. */
+/* Rollback order matters: walk the undo log backward FIRST (restoring
+** in-place mutations), THEN drop entries with bornAt >= level. Doing it
+** the other way would drop in-place-mutated entries before their undo
+** record gets applied. */
 void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level);
 int  prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level);
 void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level);
@@ -149,4 +109,4 @@ void prollyMutMapClear(ProllyMutMap *mm);
 
 void prollyMutMapFree(ProllyMutMap *mm);
 
-#endif 
+#endif

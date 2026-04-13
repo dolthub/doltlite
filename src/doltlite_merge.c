@@ -1,18 +1,4 @@
-/*
-** Three-way catalog merge. Algorithm:
-**  1. Load ancestor/ours/theirs catalogs (table lists).
-**  2. Pass 1 (mergeCatalogPass1): for each table in "ours", compare against
-**     ancestor and theirs. If both sides changed the same table, perform a
-**     row-level three-way merge via prollyThreeWayDiff, attempting per-field
-**     cell merge for modify/modify conflicts before recording true conflicts.
-**  3. Pass 2 (mergeCatalogPass2): add tables that exist only in "theirs"
-**     (new tables added on the other branch).
-**  4. Serialize the merged catalog and any conflict rows.
-**
-** Row-level merge: LEFT changes (ours) are already in the "ours" tree, so
-** only RIGHT changes (theirs) need to be applied as edits. Convergent
-** changes (both sides made the same edit) are no-ops.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -43,10 +29,10 @@ static struct TableEntry *findTableEntry(
 
 typedef struct RowMergeCtx RowMergeCtx;
 struct RowMergeCtx {
-  ProllyMutMap *pEdits;      
+  ProllyMutMap *pEdits;
   u8 isIntKey;
   int nConflicts;
-  
+
   struct ConflictRow {
     i64 intKey;
     u8 *pKey; int nKey;
@@ -128,16 +114,16 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   int hdrSize = 0, bodySize = 0, pos, i;
   u8 *result;
 
-  
+
   for(i=0; i<nFields; i++){
     u64 st = aWinners[i].pField->st;
     if(st <= 0x7f) hdrSize += 1;
     else if(st <= 0x3fff) hdrSize += 2;
     else if(st <= 0x1fffff) hdrSize += 3;
-    else hdrSize += 4; 
+    else hdrSize += 4;
     bodySize += aWinners[i].pField->len;
   }
-  
+
   { int tentative = hdrSize + 1;
     if(tentative > 0x7f) tentative++;
     hdrSize = tentative;
@@ -146,13 +132,13 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   result = sqlite3_malloc(hdrSize + bodySize);
   if(!result){ *pnOut = 0; return 0; }
 
-  
+
   pos = 0;
   { u64 hs = (u64)hdrSize;
     if(hs <= 0x7f){ result[pos++] = (u8)hs; }
     else{ result[pos++] = (u8)(0x80 | (hs>>7)); result[pos++] = (u8)(hs&0x7f); }
   }
-  
+
   for(i=0; i<nFields; i++){
     u64 st = aWinners[i].pField->st;
     if(st <= 0x7f){
@@ -171,7 +157,7 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
       result[pos++] = (u8)(st&0x7f);
     }
   }
-  
+
   for(i=0; i<nFields; i++){
     if(aWinners[i].pField->len > 0){
       memcpy(result + pos, aWinners[i].pRec + aWinners[i].pField->off,
@@ -182,7 +168,7 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
 
   *pnOut = pos;
 
-  
+
 #ifndef NDEBUG
   {
     int nfCheck = 0;
@@ -197,6 +183,12 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   return result;
 }
 
+/* Field-level 3-way merge. A row with a modify-modify conflict at
+** the row level still merges cleanly IF ours and theirs touched
+** different columns. For each field, pick the side that changed
+** (vs base); if both changed, merge only if the values match.
+** Returns NULL on any unresolvable field, pushing the row into the
+** conflict table. */
 static u8 *tryCellMerge(
   const u8 *pBase, int nBase,
   const u8 *pOurs, int nOurs,
@@ -208,17 +200,17 @@ static u8 *tryCellMerge(
   int nfMax, i;
   u8 *result = 0;
 
-  
+
   if(parseRecordFields(pBase, nBase, &aBase, &nfBase)<0) goto fail;
   if(parseRecordFields(pOurs, nOurs, &aOurs, &nfOurs)<0) goto fail;
   if(parseRecordFields(pTheirs, nTheirs, &aTheirs, &nfTheirs)<0) goto fail;
 
-  
+
   nfMax = nfBase;
   if(nfOurs > nfMax) nfMax = nfOurs;
   if(nfTheirs > nfMax) nfMax = nfTheirs;
 
-  
+
   {
     MergeWinner *winners;
 
@@ -231,47 +223,47 @@ static u8 *tryCellMerge(
       int theirsHas = (i < nfTheirs);
 
       if(!baseHas && oursHas && !theirsHas){
-        
+
         winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
       }else if(!baseHas && !oursHas && theirsHas){
-        
+
         winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
       }else if(!baseHas && oursHas && theirsHas){
-        
+
         if(fieldEquals(pOurs, &aOurs[i], pTheirs, &aTheirs[i])==0){
           winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
         }else{
-          sqlite3_free(winners); goto fail; 
+          sqlite3_free(winners); goto fail;
         }
       }else if(baseHas && oursHas && theirsHas){
-        
+
         int oursChanged = fieldEquals(pBase, &aBase[i], pOurs, &aOurs[i]);
         int theirsChanged = fieldEquals(pBase, &aBase[i], pTheirs, &aTheirs[i]);
         if(!oursChanged && !theirsChanged){
-          
+
           winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
         }else if(oursChanged && !theirsChanged){
-          
+
           winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
         }else if(!oursChanged && theirsChanged){
-          
+
           winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
         }else{
-          
+
           if(fieldEquals(pOurs, &aOurs[i], pTheirs, &aTheirs[i])==0){
             winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
           }else{
-            sqlite3_free(winners); goto fail; 
+            sqlite3_free(winners); goto fail;
           }
         }
       }else if(baseHas && oursHas && !theirsHas){
-        
+
         winners[i].pRec = pOurs; winners[i].pField = &aOurs[i];
       }else if(baseHas && !oursHas && theirsHas){
-        
+
         winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
       }else{
-        
+
         continue;
       }
     }
@@ -293,6 +285,13 @@ fail:
   return 0;
 }
 
+/* The mutator starts from oursRoot, so LEFT_* (our-side-only)
+** changes are already baked into the starting tree and must NOT be
+** re-applied. Only RIGHT_* changes (theirs-only) need to be
+** inserted/deleted on top. CONVERGENT is a no-op for the same
+** reason. CONFLICT_MM first tries field-level merge via
+** tryCellMerge — non-overlapping field edits auto-resolve — and
+** falls through to CONFLICT_DM (conflict record) if cells overlap. */
 static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   RowMergeCtx *ctx = (RowMergeCtx*)pCtx;
   int rc = SQLITE_OK;
@@ -301,38 +300,35 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     case THREE_WAY_LEFT_ADD:
     case THREE_WAY_LEFT_MODIFY:
     case THREE_WAY_LEFT_DELETE:
-      /* Left (ours) changes are already present in the "ours" tree that
-      ** we are mutating, so no edits needed. */
+
       break;
 
     case THREE_WAY_RIGHT_ADD:
-      
+
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pChange->pTheirVal, pChange->nTheirVal);
       break;
 
     case THREE_WAY_RIGHT_MODIFY:
-      
+
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pChange->pTheirVal, pChange->nTheirVal);
       break;
 
     case THREE_WAY_RIGHT_DELETE:
-      
+
       rc = prollyMutMapDelete(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey);
       break;
 
     case THREE_WAY_CONVERGENT:
-      
+
       break;
 
     case THREE_WAY_CONFLICT_MM: {
-      /* Both sides modified the same row. Try per-field cell merge: if each
-      ** column was changed by at most one side, merge succeeds. Otherwise
-      ** fall through to record a conflict (intentional fallthrough to DM). */
+
       u8 *pMerged = 0;
       int nMerged = 0;
 
@@ -353,10 +349,10 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         sqlite3_free(pMerged);
         break;
       }
-      /* FALLTHROUGH: cell merge failed, record as conflict */
+
     }
     case THREE_WAY_CONFLICT_DM: {
-      
+
       struct ConflictRow *aNew;
       if( ctx->nConflicts >= ctx->nConflictsAlloc ){
         int nNew = ctx->nConflictsAlloc ? ctx->nConflictsAlloc*2 : 16;
@@ -451,7 +447,7 @@ static int mergeTableRows(
   rc = prollyMutMapInit(ctx.pEdits, ctx.isIntKey);
   if( rc!=SQLITE_OK ){ sqlite3_free(ctx.pEdits); return rc; }
 
-  
+
   rc = prollyThreeWayDiff(cs, cache, pAncRoot, pOursRoot, pTheirsRoot,
                           flags, rowMergeCallback, &ctx);
   if( rc!=SQLITE_OK ){
@@ -459,7 +455,7 @@ static int mergeTableRows(
     return rc;
   }
 
-  
+
   if( !prollyMutMapIsEmpty(ctx.pEdits) ){
     memset(&mut, 0, sizeof(mut));
     mut.pStore = cs;
@@ -472,13 +468,13 @@ static int mergeTableRows(
       memcpy(pMergedRoot, &mut.newRoot, sizeof(ProllyHash));
     }
   }else{
-    
+
     memcpy(pMergedRoot, pOursRoot, sizeof(ProllyHash));
   }
 
   *pnConflicts = ctx.nConflicts;
   *ppConflicts = ctx.aConflicts;
-  ctx.aConflicts = 0; 
+  ctx.aConflicts = 0;
   ctx.nConflicts = 0;
 
   freeRowMergeCtx(&ctx);
@@ -493,13 +489,10 @@ static struct TableEntry *findTableByName(
   return doltliteFindTableByName(aEntries, nEntries, zName);
 }
 
-/*
-** Column definition parsed from CREATE TABLE SQL.
-*/
 typedef struct ParsedColumn ParsedColumn;
 struct ParsedColumn {
-  char *zName;    /* Column name (lowercased for comparison) */
-  char *zDef;     /* Full column definition text */
+  char *zName;
+  char *zDef;
 };
 
 static int parseQuotedIdentifier(
@@ -553,11 +546,6 @@ static int parseQuotedIdentifier(
   return SQLITE_OK;
 }
 
-/*
-** Parse columns from a CREATE TABLE SQL string.
-** Returns an array of ParsedColumn entries.
-** Caller must free with freeColumns().
-*/
 static int parseColumns(
   const char *zSql,
   ParsedColumn **ppCols, int *pnCols
@@ -573,13 +561,13 @@ static int parseColumns(
 
   if( !zSql ) return SQLITE_OK;
 
-  /* Find the opening '(' after CREATE TABLE ... */
+
   p = zSql;
   while( *p && *p!='(' ) p++;
   if( *p!='(' ) return SQLITE_CORRUPT;
-  p++; /* skip '(' */
+  p++;
 
-  /* Find the matching closing ')' */
+
   pEnd = p;
   depth = 1;
   while( *pEnd && depth>0 ){
@@ -588,31 +576,31 @@ static int parseColumns(
     pEnd++;
   }
   if( depth!=0 ) return SQLITE_CORRUPT;
-  pEnd--; /* back to the ')' */
+  pEnd--;
 
-  /* Now parse comma-separated segments between p and pEnd */
+
   segStart = p;
   depth = 0;
   while( p <= pEnd ){
     if( p==pEnd || (*p==',' && depth==0) ){
-      /* We have a segment from segStart to p */
+
       const char *s = segStart;
       const char *e = (p==pEnd) ? p : p;
       char *zTrimmed;
       int len;
 
-      /* Trim whitespace */
+
       while( s<e && isspace((unsigned char)*s) ) s++;
       while( e>s && isspace((unsigned char)*(e-1)) ) e--;
 
       len = (int)(e - s);
       if( len > 0 ){
-        /* Check if this is a table constraint (not a column definition) */
-        /* Table constraints start with: PRIMARY KEY, UNIQUE, CHECK, FOREIGN KEY, CONSTRAINT */
+
+
         int isConstraint = 0;
         {
           const char *t = s;
-          /* Skip leading whitespace (already done) */
+
           if( len>=11 && sqlite3_strnicmp(t, "PRIMARY KEY", 11)==0
               && (len==11 || !isalnum((unsigned char)t[11])) ){
             isConstraint = 1;
@@ -632,10 +620,10 @@ static int parseColumns(
         }
 
         if( !isConstraint ){
-          /* This is a column definition */
+
           zTrimmed = sqlite3_malloc(len + 1);
           if( !zTrimmed ){
-            /* free what we have */
+
             { int ci; for(ci=0;ci<nCols;ci++){
               sqlite3_free(aCols[ci].zName);
               sqlite3_free(aCols[ci].zDef);
@@ -646,14 +634,14 @@ static int parseColumns(
           memcpy(zTrimmed, s, len);
           zTrimmed[len] = 0;
 
-          /* Extract column name: first token */
+
           {
             char *zName;
             const char *nameStart = s;
             const char *nameEnd = nameStart;
             int nameLen;
             int rc;
-            /* Handle quoted names */
+
             if( *nameStart=='"' || *nameStart=='`' || *nameStart=='[' ){
               rc = parseQuotedIdentifier(nameStart, e, &nameEnd, &zName);
               if( rc!=SQLITE_OK ){
@@ -682,7 +670,7 @@ static int parseColumns(
               memcpy(zName, nameStart, nameLen);
               zName[nameLen] = 0;
             }
-            /* Lowercase for comparison */
+
             { int ci; for(ci=0;zName[ci];ci++) zName[ci]=(char)tolower((unsigned char)zName[ci]); }
 
             if( nameEnd<=nameStart ){
@@ -752,13 +740,6 @@ static ParsedColumn *findColumn(ParsedColumn *aCols, int nCols, const char *zNam
   return 0;
 }
 
-/*
-** Attempt a three-way schema merge for a single table.
-** Returns SQLITE_OK if merge succeeds, SQLITE_ERROR on conflict.
-** On success, *ppAddCols / *pnAddCols contain ALTER TABLE ADD COLUMN
-** definitions that must be applied to "ours" to complete the merge,
-** and *pUseTheirSchema is set if we should use theirs' schema hash.
-*/
 static int trySchemaColumnMerge(
   const char *zAncSql,
   const char *zOursSql,
@@ -785,18 +766,18 @@ static int trySchemaColumnMerge(
   rc = parseColumns(zTheirsSql, &aTheirs, &nTheirs);
   if( rc!=SQLITE_OK ){ freeColumns(aAnc, nAnc); freeColumns(aOurs, nOurs); return rc; }
 
-  /* Check for conflicts: columns added/modified/dropped on both sides */
 
-  /* Check their adds: columns in theirs but not in ancestor */
+
+
   for(i=0; i<nTheirs; i++){
     ParsedColumn *ancCol = findColumn(aAnc, nAnc, aTheirs[i].zName);
     if( !ancCol ){
-      /* theirs added this column */
+
       ParsedColumn *ourCol = findColumn(aOurs, nOurs, aTheirs[i].zName);
       if( ourCol ){
-        /* Both sides added column with same name - check if same definition */
+
         if( strcmp(ourCol->zDef, aTheirs[i].zDef)!=0 ){
-          /* Different definitions -> conflict */
+
           if( pzErrDetail ){
             *pzErrDetail = sqlite3_mprintf(
               "both branches add column '%s' with different definitions",
@@ -805,9 +786,9 @@ static int trySchemaColumnMerge(
           rc = SQLITE_ERROR;
           goto schema_merge_cleanup;
         }
-        /* Same definition -> convergent, no action needed */
+
       }else{
-        /* Only theirs added this column -> record as ADD COLUMN */
+
         if( nAdd >= nAddAlloc ){
           int nNew = nAddAlloc ? nAddAlloc*2 : 4;
           char **azNew = sqlite3_realloc(azAdd, nNew*(int)sizeof(char*));
@@ -819,15 +800,15 @@ static int trySchemaColumnMerge(
         nAdd++;
       }
     }else{
-      /* Column existed in ancestor - check if modified differently */
+
       ParsedColumn *ourCol = findColumn(aOurs, nOurs, aTheirs[i].zName);
       if( ourCol ){
         int ancToTheirs = strcmp(ancCol->zDef, aTheirs[i].zDef)!=0;
         int ancToOurs = strcmp(ancCol->zDef, ourCol->zDef)!=0;
         if( ancToTheirs && ancToOurs ){
-          /* Both modified the same column */
+
           if( strcmp(ourCol->zDef, aTheirs[i].zDef)!=0 ){
-            /* Different modifications -> conflict */
+
             if( pzErrDetail ){
               *pzErrDetail = sqlite3_mprintf(
                 "both branches modified column '%s' differently",
@@ -836,13 +817,13 @@ static int trySchemaColumnMerge(
             rc = SQLITE_ERROR;
             goto schema_merge_cleanup;
           }
-          /* Same modification -> convergent, no conflict */
+
         }
       }else{
-        /* Column existed in ancestor, is in theirs, but not in ours -> ours dropped it */
+
         int theirsModified = strcmp(ancCol->zDef, aTheirs[i].zDef)!=0;
         if( theirsModified ){
-          /* Ours dropped, theirs modified -> conflict */
+
           if( pzErrDetail ){
             *pzErrDetail = sqlite3_mprintf(
               "column '%s' modified on one branch and dropped on another",
@@ -851,22 +832,22 @@ static int trySchemaColumnMerge(
           rc = SQLITE_ERROR;
           goto schema_merge_cleanup;
         }
-        /* Ours dropped, theirs didn't modify -> drop wins, no conflict */
+
       }
     }
   }
 
-  /* Check our adds that might conflict with theirs drops */
+
   for(i=0; i<nOurs; i++){
     ParsedColumn *ancCol = findColumn(aAnc, nAnc, aOurs[i].zName);
     if( ancCol ){
-      /* Column existed in ancestor, is in ours */
+
       ParsedColumn *theirCol = findColumn(aTheirs, nTheirs, aOurs[i].zName);
       if( !theirCol ){
-        /* Theirs dropped this column */
+
         int oursModified = strcmp(ancCol->zDef, aOurs[i].zDef)!=0;
         if( oursModified ){
-          /* Theirs dropped, ours modified -> conflict */
+
           if( pzErrDetail ){
             *pzErrDetail = sqlite3_mprintf(
               "column '%s' modified on one branch and dropped on another",
@@ -875,19 +856,19 @@ static int trySchemaColumnMerge(
           rc = SQLITE_ERROR;
           goto schema_merge_cleanup;
         }
-        /* Theirs dropped, ours didn't modify -> drop wins, no conflict */
+
       }
     }
-    /* Our-only adds are already in our schema, no action needed */
+
   }
 
-  /* If we get here, merge is possible */
+
   if( nAdd > 0 ){
-    *pUseTheirSchema = 0; /* We'll use our schema + ADD COLUMN */
+    *pUseTheirSchema = 0;
   }
   *ppAddCols = azAdd;
   *pnAddCols = nAdd;
-  azAdd = 0; nAdd = 0; /* ownership transferred */
+  azAdd = 0; nAdd = 0;
 
 schema_merge_cleanup:
   freeColumns(aAnc, nAnc);
@@ -931,6 +912,13 @@ struct MergeConflictTable {
   struct ConflictRow *aRows;
 };
 
+/* Pass 1: walk OUR side, resolving each table against anc/theirs.
+** For every "ours" table, determine whether row-merge is needed and
+** invoke mergeTableRows; any rows that can't auto-merge become
+** conflict entries. Table iTable==1 (the catalog itself) is deferred
+** to the end so schema actions collected earlier can influence its
+** merge decision. Pass 2 picks up any tables that exist in theirs
+** but not ours. */
 static int mergeCatalogPass1(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
@@ -946,41 +934,40 @@ static int mergeCatalogPass1(
   SchemaMergeAction **ppSchemaActions, int *pnSchemaActions
 ){
   int i, rc = SQLITE_OK;
-  int iTable1Idx = -1;  /* Index of table 1 entry, deferred until end */
+  int iTable1Idx = -1;
 
   for(i=0; i<nOurs; i++){
     const char *zName = aOurs[i].zName;
     struct TableEntry *ancEntry;
     struct TableEntry *theirsEntry;
 
-    /* Defer table 1 (sqlite_master) until after user tables, so we know
-    ** whether schema merge actions occurred. */
+
     if( aOurs[i].iTable==1 ){
       iTable1Idx = i;
       continue;
     }
 
-    
+
     if( !zName ){
       aMerged[(*pnMerged)++] = aOurs[i];
       continue;
     }
 
-    
+
     ancEntry = findTableByName(aAnc, nAnc, zName);
     theirsEntry = findTableByName(aTheirs, nTheirs, zName);
 
 do_merge_entry:
 
     if( !ancEntry ){
-      
+
       if( theirsEntry ){
-        
+
         if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0
          || prollyHashCompare(&aOurs[i].schemaHash, &theirsEntry->schemaHash)!=0 ){
           return SQLITE_ERROR;
         }
-        
+
       }
       aMerged[(*pnMerged)++] = aOurs[i];
     }else{
@@ -1001,12 +988,11 @@ do_merge_entry:
             &theirsEntry->schemaHash, &ancEntry->schemaHash)!=0;
         int skipRowMerge = 0;
 
-        /* Schema divergence check: both sides changed the schema differently.
-        ** This must be checked regardless of whether data (root) changed. */
+
         if( ourSchemaChanged && theirSchemaChanged
          && prollyHashCompare(&aOurs[i].schemaHash,
                               &theirsEntry->schemaHash)!=0 ){
-          /* Both sides changed the schema differently. Attempt column-level merge. */
+
           ChunkStore *csLocal = doltliteGetChunkStore(db);
           ProllyCache *cacheLocal = doltliteGetCache(db);
           SchemaEntry *aAncSchema=0, *aOursSchema=0, *aTheirsSchema=0;
@@ -1060,12 +1046,9 @@ do_merge_entry:
           }
           sqlite3_free(zSchemaErr);
 
-          /* Schema merge succeeded. When there are columns to add from theirs,
-          ** skip the row-level merge (which would produce spurious conflicts due
-          ** to column position misalignment) and just use ours' data tree.
-          ** The caller will ALTER TABLE ADD COLUMN to add theirs' columns. */
+
           if( nAddCols > 0 ){
-            /* Record schema merge actions */
+
             if( ppSchemaActions && pnSchemaActions ){
               SchemaMergeAction *aNew = sqlite3_realloc(*ppSchemaActions,
                 (*pnSchemaActions+1)*(int)sizeof(SchemaMergeAction));
@@ -1075,18 +1058,17 @@ do_merge_entry:
                 aNew[*pnSchemaActions].azAddColumns = azAddCols;
                 aNew[*pnSchemaActions].nAddColumns = nAddCols;
                 (*pnSchemaActions)++;
-                azAddCols = 0; nAddCols = 0; /* ownership transferred */
+                azAddCols = 0; nAddCols = 0;
               }
             }
             { int j; for(j=0;j<nAddCols;j++) sqlite3_free(azAddCols[j]); }
             sqlite3_free(azAddCols);
 
-            /* Use ours' data tree as-is (skip row merge) */
+
             aMerged[(*pnMerged)++] = aOurs[i];
             skipRowMerge = 1;
           }else{
-            /* Schema merge succeeded with no columns to add (e.g., both added
-            ** the same column identically). Proceed with normal row merge. */
+
             { int j; for(j=0;j<nAddCols;j++) sqlite3_free(azAddCols[j]); }
             sqlite3_free(azAddCols);
           }
@@ -1094,7 +1076,7 @@ do_merge_entry:
 
         if( !skipRowMerge ){
           if( oursChanged && theirsChanged ){
-            /* Normal row-level merge. */
+
             ProllyHash mergedTableRoot;
             int nConflicts = 0;
             struct ConflictRow *aConflictRows = 0;
@@ -1107,7 +1089,7 @@ do_merge_entry:
             {
               struct TableEntry merged = aOurs[i];
               memcpy(&merged.root, &mergedTableRoot, sizeof(ProllyHash));
-              /* If only theirs changed the schema, use their schema. */
+
               if( theirSchemaChanged
                && !ourSchemaChanged ){
                 memcpy(&merged.schemaHash, &theirsEntry->schemaHash,
@@ -1148,12 +1130,12 @@ do_merge_entry:
           }else{
             aMerged[(*pnMerged)++] = aOurs[i];
           }
-        } /* !skipRowMerge */
+        }
       }
     }
   }
 
-  /* Now handle table 1 (sqlite_master), which was deferred. */
+
   if( iTable1Idx >= 0 ){
     struct TableEntry *ancEntry = findTableEntry(aAnc, nAnc, 1);
     struct TableEntry *theirsEntry = findTableEntry(aTheirs, nTheirs, 1);
@@ -1177,11 +1159,10 @@ do_merge_entry:
       int theirsChanged = prollyHashCompare(&theirsEntry->root, &ancEntry->root)!=0;
 
       if( oursChanged && theirsChanged && hasSchemaActions ){
-        /* Schema merge is happening — use ours' table 1 as-is.
-        ** The caller's ALTER TABLE ADD COLUMN will update sqlite_master. */
+
         aMerged[(*pnMerged)++] = aOurs[iTable1Idx];
       }else if( oursChanged && theirsChanged ){
-        /* Normal row merge for table 1 */
+
         ProllyHash mergedTableRoot;
         int nConflicts = 0;
         struct ConflictRow *aConflictRows = 0;
@@ -1259,12 +1240,12 @@ static int mergeCatalogPass2(
     if( aTheirs[i].iTable<=1 || !zName ) continue;
 
     oursEntry = findTableByName(aOurs, nOurs, zName);
-    if( oursEntry ) continue;  
+    if( oursEntry ) continue;
 
     {
       struct TableEntry *ancEntry = findTableByName(aAnc, nAnc, zName);
       if( !ancEntry ){
-        
+
         struct TableEntry newEntry = aTheirs[i];
         {
           int j, conflict = 0;
@@ -1274,16 +1255,16 @@ static int mergeCatalogPass2(
           if( conflict ) newEntry.iTable = (*piNextMerged)++;
         }
         if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
-        
+
         newEntry.zName = sqlite3_mprintf("%s", zName);
         aMerged[(*pnMerged)++] = newEntry;
       }else{
-        
+
         int theirsChanged = prollyHashCompare(&aTheirs[i].root, &ancEntry->root)!=0;
         if( theirsChanged ){
-          return SQLITE_ERROR;  
+          return SQLITE_ERROR;
         }
-        
+
       }
     }
   }
@@ -1314,7 +1295,7 @@ int doltliteMergeCatalogs(
   MergeConflictTable *aConflictTables = 0;
   int nConflictTables = 0;
 
-  
+
   rc = doltliteLoadCatalog(db, ancestor, &aAnc, &nAnc, &iNextAnc);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
@@ -1324,7 +1305,7 @@ int doltliteMergeCatalogs(
   rc = doltliteLoadCatalog(db, theirs, &aTheirs, &nTheirs, &iNextTheirs);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
-  
+
   nMergedAlloc = nOurs + nTheirs;
   if( nMergedAlloc==0 ) nMergedAlloc = 1;
   aMerged = sqlite3_malloc(nMergedAlloc * (int)sizeof(struct TableEntry));
@@ -1333,10 +1314,10 @@ int doltliteMergeCatalogs(
     goto merge_cleanup;
   }
 
-  
+
   iNextMerged = iNextOurs > iNextTheirs ? iNextOurs : iNextTheirs;
 
-  
+
 
   rc = mergeCatalogPass1(db, aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
                           aMerged, &nMerged,
@@ -1350,15 +1331,15 @@ int doltliteMergeCatalogs(
                           aMerged, &nMerged, &iNextMerged);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
-  
+
   rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
                               pMergedHash);
   if( pnConflicts ) *pnConflicts = totalConflicts;
 
-  
+
   if( totalConflicts>0 && nConflictTables>0 && rc==SQLITE_OK ){
     ProllyHash conflictsHash;
-    
+
     int rc2 = doltliteSerializeConflicts(
         doltliteGetChunkStore(db),
         (ConflictTableInfo*)aConflictTables, nConflictTables,
@@ -1371,7 +1352,7 @@ int doltliteMergeCatalogs(
     }
   }
 
-  
+
   {
     int ci;
     for(ci=0; ci<nConflictTables; ci++){
@@ -1396,4 +1377,4 @@ merge_cleanup:
   return rc;
 }
 
-#endif 
+#endif

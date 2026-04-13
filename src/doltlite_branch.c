@@ -9,8 +9,6 @@
 #include <string.h>
 #include <time.h>
 
-
-
 static void activeBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   (void)argc; (void)argv;
@@ -55,7 +53,6 @@ static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   return chunkStoreAddBranch(cs, p->zName, &p->head);
 }
 
-/* Copy context: look up source branch's head, add destination at that head. */
 typedef struct BranchCopyCtx BranchCopyCtx;
 struct BranchCopyCtx {
   const char *zSrc;
@@ -72,7 +69,7 @@ static int mutateBranchCopy(sqlite3 *db, ChunkStore *cs, void *pArg){
   rc = chunkStoreFindBranch(cs, p->zSrc, &srcCommit);
   if( rc!=SQLITE_OK ) return rc;
   if( p->force ){
-    /* Force-create: update if exists, add otherwise. */
+
     if( chunkStoreFindBranch(cs, p->zDest, 0)==SQLITE_OK ){
       return chunkStoreUpdateBranch(cs, p->zDest, &srcCommit);
     }
@@ -80,9 +77,6 @@ static int mutateBranchCopy(sqlite3 *db, ChunkStore *cs, void *pArg){
   return chunkStoreAddBranch(cs, p->zDest, &srcCommit);
 }
 
-/* Move context: atomically rename src to dest. If the current session
-** branch is being renamed, the caller updates it after a successful
-** mutation. */
 typedef struct BranchMoveCtx BranchMoveCtx;
 struct BranchMoveCtx {
   const char *zSrc;
@@ -121,7 +115,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<1 ){ sqlite3_result_error(ctx, "dolt_branch requires arguments", -1); return; }
 
-  /* Parse flags. Multiple mode flags is an error. */
+
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
     if( !arg ) continue;
@@ -131,9 +125,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       }
       mode = MODE_DELETE;
     }else if( strcmp(arg, "-D")==0 ){
-      /* Dolt's -D is delete + force; doltlite has no unmerged-branch
-      ** safety check, so -D is equivalent to -d here. Keeping the flag
-      ** separately so unknown-flag rejection stays strict. */
+
       if( mode!=MODE_CREATE ){
         sqlite3_result_error(ctx, "conflicting flags", -1); return;
       }
@@ -276,7 +268,7 @@ static int checkoutLoadAndApply(
   int rc;
   ProllyHash committedCatHash;
 
-  /* Load the committed catalog for this branch. */
+
   {
     DoltliteCommit commit;
 
@@ -287,10 +279,7 @@ static int checkoutLoadAndApply(
     doltliteCommitClear(&commit);
   }
 
-  /* Check working state for uncommitted changes. If the stored commitHash
-  ** matches the branch's current commit AND the stored catHash differs
-  ** from the committed catalog, the working state has uncommitted changes
-  ** that should be preserved. */
+
   {
     ProllyHash wsCatHash, wsCommitHash;
     memset(&wsCatHash, 0, sizeof(wsCatHash));
@@ -299,7 +288,7 @@ static int checkoutLoadAndApply(
      && !prollyHashIsEmpty(&wsCommitHash)
      && memcmp(wsCommitHash.data, pCommitHash->data, PROLLY_HASH_SIZE)==0
      && memcmp(wsCatHash.data, committedCatHash.data, PROLLY_HASH_SIZE)!=0 ){
-      /* Working state has uncommitted changes — use it. */
+
       memcpy(pCatHash, &wsCatHash, sizeof(ProllyHash));
       rc = doltliteSwitchCatalog(db, pCatHash);
       return rc;
@@ -311,6 +300,11 @@ static int checkoutLoadAndApply(
   return rc;
 }
 
+/* Checkout is a multi-step mutation: persist outgoing branch state,
+** update refs, load target branch, reload session. If any step fails
+** we must unwind every prior step — the saved* fields are the
+** snapshot of session state taken before the mutation begins so
+** checkoutRestoreSession can roll back cleanly. */
 typedef struct CheckoutMutationCtx CheckoutMutationCtx;
 struct CheckoutMutationCtx {
   const char *zTargetBranch;
@@ -388,16 +382,11 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   return rc;
 }
 
-/* Per-table checkout: revert each named table's working state back
-** to whatever the staged catalog has for that table (or HEAD's entry
-** if nothing is staged). Matches git's `git checkout file` semantics
-** — reverts to the index, NOT all the way to HEAD. To go to HEAD,
-** the user uses dolt_reset.
-**
-** Returns SQLITE_NOTFOUND if any of the named tables doesn't exist
-** in the working catalog or in the source (staged/HEAD) catalog —
-** in that case nothing is mutated.
-*/
+/* `dolt_checkout <table>...` path. Reached as a fallthrough when the
+** first argument doesn't resolve to a branch — in Dolt, checkout
+** overloads "branch name" and "table name". Copies the named tables
+** from the staged catalog (or HEAD if nothing is staged) into the
+** working catalog, mirroring Dolt's reset-a-single-table semantics. */
 static int doltliteCheckoutTables(
   sqlite3 *db,
   sqlite3_value **argv,
@@ -405,7 +394,7 @@ static int doltliteCheckoutTables(
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash workingHash, headCatHash, stagedHash;
-  ProllyHash sourceCatHash;       /* staged-or-HEAD */
+  ProllyHash sourceCatHash;
   struct TableEntry *aWorking = 0, *aSource = 0;
   int nWorking = 0, nSource = 0;
   int i, j;
@@ -414,7 +403,7 @@ static int doltliteCheckoutTables(
   if( !cs ) return SQLITE_ERROR;
   if( nNames<=0 ) return SQLITE_NOTFOUND;
 
-  /* Build the source catalog: staged if non-empty, else HEAD. */
+
   doltliteGetSessionStaged(db, &stagedHash);
   if( !prollyHashIsEmpty(&stagedHash) ){
     memcpy(&sourceCatHash, &stagedHash, sizeof(ProllyHash));
@@ -424,12 +413,11 @@ static int doltliteCheckoutTables(
     memcpy(&sourceCatHash, &headCatHash, sizeof(ProllyHash));
   }
   if( prollyHashIsEmpty(&sourceCatHash) ){
-    /* Nothing tracked yet — nothing to revert. */
+
     return SQLITE_NOTFOUND;
   }
 
-  /* Snapshot the current working catalog so we can build a modified
-  ** copy and pass it to switchCatalog. */
+
   rc = doltliteFlushCatalogToHash(db, &workingHash);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
@@ -441,10 +429,7 @@ static int doltliteCheckoutTables(
     return rc;
   }
 
-  /* For each named table, replace the working entry with the
-  ** source-catalog entry. If the table is in working but not in
-  ** the source, drop it from working (it was untracked, revert
-  ** removes it). If it's in neither, that's an error. */
+
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[i]);
     int srcIdx = -1, workIdx = -1;
@@ -467,15 +452,14 @@ static int doltliteCheckoutTables(
     }
 
     if( srcIdx<0 ){
-      /* Table is in working but not in source — drop from working. */
+
       if( workIdx+1<nWorking ){
         memmove(&aWorking[workIdx], &aWorking[workIdx+1],
                 (nWorking-workIdx-1)*(int)sizeof(struct TableEntry));
       }
       nWorking--;
     }else if( workIdx<0 ){
-      /* Source has it, working does not (the user dropped the
-      ** table; checkout brings it back). */
+
       struct TableEntry *aNew = sqlite3_realloc(aWorking,
           (nWorking+1)*(int)sizeof(struct TableEntry));
       if( !aNew ){
@@ -489,7 +473,7 @@ static int doltliteCheckoutTables(
     }
   }
 
-  /* Serialize the new working catalog and switch to it. */
+
   {
     u8 *buf = 0;
     int nBuf = 0;
@@ -529,7 +513,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   memset(&m, 0, sizeof(m));
   memset(&branchCreate, 0, sizeof(branchCreate));
 
-  /* Block checkout during unresolved merge conflicts. */
+
   {
     u8 isMerging = 0;
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
@@ -539,7 +523,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     }
   }
 
-  
+
   if( strcmp(zBranch, "-b")==0 ){
     if( argc<2 ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
     zBranch = (const char*)sqlite3_value_text(argv[1]);
@@ -563,8 +547,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     return;
   }
 
-  /* Save the current branch's working catalog before hardReset overwrites
-  ** it with the target branch's catalog. */
+
   {
     u8 *oldCatData = 0; int nOldCat = 0;
     doltliteGetSessionHead(db, &m.oldCommitHash);
@@ -603,10 +586,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   sqlite3_free(zCurrentBranch);
   zCurrentBranch = 0;
   if( rc==SQLITE_NOTFOUND ){
-    /* Not a branch — fall through to per-table checkout (revert
-    ** the named tables in the working set to whatever the staged
-    ** catalog has, or HEAD if nothing is staged). Matches git
-    ** semantics: `git checkout file` reverts working to staged. */
+
     rc = doltliteCheckoutTables(db, argv, argc);
     if( rc==SQLITE_NOTFOUND ){
       char *zErr = sqlite3_mprintf(
@@ -681,14 +661,7 @@ static int brEof(sqlite3_vtab_cursor *c){
   ChunkStore *cs = doltliteGetChunkStore(v->db);
   return !cs || ((BrCur*)c)->iRow >= cs->nBranches;
 }
-/*
-** Compute the "dirty" bit for a branch. The current branch is dirty when
-** the in-memory working state differs from HEAD's catalog (already
-** computed by doltliteHasUncommittedChanges). Other branches have a
-** persisted working-set blob on the BranchRef whose hash points at a
-** versioned record containing the staged catalog hash; the branch is
-** dirty when that staged catalog differs from HEAD's catalog.
-*/
+
 static int brIsDirty(
   sqlite3 *db,
   ChunkStore *cs,
@@ -754,9 +727,7 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
       return SQLITE_OK;
     }
     case 6: case 7:
-      /* Upstream tracking: doltlite has no local-branch upstream concept,
-      ** so these are always empty (matches Dolt's output for branches
-      ** without an upstream configured). */
+
       sqlite3_result_text(ctx, "", -1, SQLITE_STATIC);
       return SQLITE_OK;
     case 8: {
@@ -771,7 +742,7 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
     }
   }
 
-  /* Columns 2-5 require the head commit. Load once. */
+
   {
     DoltliteCommit cm;
     int rc;
@@ -833,4 +804,4 @@ int doltliteBranchRegister(sqlite3 *db){
   return rc;
 }
 
-#endif 
+#endif

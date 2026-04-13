@@ -4,4 +4,4 @@
 
 #include "prolly_chunk_walk.h"
 
-#endif /* DOLTLITE_CHUNK_WALK_H */
+#endif

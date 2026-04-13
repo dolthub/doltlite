@@ -14,7 +14,6 @@
 #include <string.h>
 #include <time.h>
 
-
 static char *htBuildSchema(DoltliteColInfo *ci){
   int i;
   sqlite3_str *pStr = sqlite3_str_new(0);
@@ -119,7 +118,13 @@ static int htScanAtCommit(
   prollyCursorClose(&cur); return rc;
 }
 
-/* BFS all parents with dedup, matching dolt_log traversal order. */
+/* dolt_history_<table> expands to one row per (commit, live row) in
+** the table's history — so a 100-row table over 10 commits emits
+** 1000 rows. The scan walks the commit graph BFS, reloads the table
+** root at each visited commit, and emits every live row with that
+** commit's metadata attached. No de-duplication: unchanged rows
+** reappear under every commit, matching Dolt's dolt_history_T
+** semantics. */
 static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
   ChunkStore *cs=doltliteGetChunkStore(db);
   ProllyCache *pCache;
@@ -283,15 +288,15 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   r=&c->aRows[c->iRow];
   nCols=v->cols.nCol;
 
-  
+
 
   if(nCols>0 && col<nCols){
-    
+
     if(col==v->cols.iPkCol){
-      
+
       sqlite3_result_int64(ctx,r->intKey);
     }else{
-      
+
       if(r->pVal&&r->nVal>0){
         DoltliteRecordInfo ri; doltliteParseRecord(r->pVal,r->nVal,&ri);
         if(col<ri.nField) doltliteResultField(ctx,r->pVal,r->nVal,ri.aType[col],ri.aOffset[col]);
@@ -304,10 +309,10 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       case 0:
         sqlite3_result_text(ctx,r->zCommit,-1,SQLITE_TRANSIENT);
         break;
-      case 1: 
+      case 1:
         sqlite3_result_text(ctx,r->zCommitter,-1,SQLITE_TRANSIENT);
         break;
-      case 2: 
+      case 2:
         {time_t t=(time_t)r->commitDate;struct tm *tm=gmtime(&t);
           if(tm){char b[32];strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",tm);
             sqlite3_result_text(ctx,b,-1,SQLITE_TRANSIENT);
@@ -332,4 +337,4 @@ int doltliteRegisterHistoryTables(sqlite3 *db){
   return doltliteForEachUserTable(db, "dolt_history_", &historyModule);
 }
 
-#endif 
+#endif

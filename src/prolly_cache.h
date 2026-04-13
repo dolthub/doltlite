@@ -1,4 +1,4 @@
-/* LRU cache for parsed prolly tree nodes, keyed by content hash. Refcounted. */
+
 #ifndef SQLITE_PROLLY_CACHE_H
 #define SQLITE_PROLLY_CACHE_H
 
@@ -9,24 +9,28 @@
 typedef struct ProllyCache ProllyCache;
 typedef struct ProllyCacheEntry ProllyCacheEntry;
 
+/* Refcounted cache entry. node has pointers into pData, so as long
+** as any cursor holds a ref the entry must stay live — the LRU
+** evictor skips anything with nRef > 0. Callers get a ref from
+** prollyCacheGet / prollyCachePut and must pair it with Release. */
 struct ProllyCacheEntry {
-  ProllyHash hash;           
-  u8 *pData;                 
-  int nData;                 
-  ProllyNode node;           
-  int nRef;                  
-  ProllyCacheEntry *pLruNext; 
+  ProllyHash hash;
+  u8 *pData;
+  int nData;
+  ProllyNode node;
+  int nRef;
+  ProllyCacheEntry *pLruNext;
   ProllyCacheEntry *pLruPrev;
-  ProllyCacheEntry *pHashNext; 
+  ProllyCacheEntry *pHashNext;
 };
 
 struct ProllyCache {
-  int nCapacity;              
-  int nUsed;                  
-  int nBucket;                
-  ProllyCacheEntry **aBucket; 
-  ProllyCacheEntry lruHead;   
-  ProllyCacheEntry lruTail;   
+  int nCapacity;
+  int nUsed;
+  int nBucket;
+  ProllyCacheEntry **aBucket;
+  ProllyCacheEntry lruHead;
+  ProllyCacheEntry lruTail;
 };
 
 int prollyCacheInit(ProllyCache *cache, int nCapacity);
@@ -44,4 +48,4 @@ void prollyCachePurge(ProllyCache *cache);
 
 void prollyCacheFree(ProllyCache *cache);
 
-#endif 
+#endif

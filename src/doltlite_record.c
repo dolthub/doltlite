@@ -9,7 +9,7 @@
 static i64 recReadInt(const u8 *p, int nBytes){
   i64 v;
   int i;
-  
+
   v = (p[0] & 0x80) ? -1 : 0;
   for(i=0; i<nBytes; i++){
     v = (v << 8) | p[i];
@@ -154,6 +154,11 @@ void doltliteFreeColInfo(DoltliteColInfo *ci){
   ci->nCol = 0;
 }
 
+/* iPkCol is set only for a rowid-aliased INTEGER PRIMARY KEY column.
+** Other PK columns live in the record payload like any user column,
+** so callers that serialize INT PK values separately (at, history,
+** diff vtables) use iPkCol to pull the rowid from the cursor
+** instead of the record. */
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci){
   char *zSql;
   sqlite3_stmt *pStmt = 0;
@@ -186,7 +191,7 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     int pk = sqlite3_column_int(pStmt, 5);
     const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
 
-    
+
     if( pk==1 && zType && sqlite3_stricmp(zType,"INTEGER")==0 ){
       ci->iPkCol = ci->nCol;
     }

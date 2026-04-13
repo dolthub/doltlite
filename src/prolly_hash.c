@@ -78,7 +78,7 @@ static void sha512_hash(const void *data, int len, u8 digest[64]){
     remaining -= 128;
   }
 
-  
+
   memset(block, 0, 128);
   memcpy(block, p, remaining);
   block[remaining] = 0x80;
@@ -88,7 +88,7 @@ static void sha512_hash(const void *data, int len, u8 digest[64]){
     memset(block, 0, 128);
   }
 
-  
+
   sha512_store64be(block + 120, (u64)len * 8);
 
   sha512_transform(state, block);
@@ -99,7 +99,7 @@ static void sha512_hash(const void *data, int len, u8 digest[64]){
 void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut){
   u8 digest[64];
   sha512_hash(pData, nData, digest);
-  memcpy(pOut->data, digest, PROLLY_HASH_SIZE);  
+  memcpy(pOut->data, digest, PROLLY_HASH_SIZE);
 }
 
 int prollyHashCompare(const ProllyHash *a, const ProllyHash *b){
@@ -200,25 +200,23 @@ u32 prollyRollingHashUpdate(ProllyRollingHash *rh, u8 byte){
     rh->filled++;
   }
 
-  
+
   h = rh->hash;
   h = (h << 1) | (h >> 31);
 
-  
+
   {
+    /* `outHash >> (32 - rot)` is UB when rot == 0 (shift exponent
+    ** equals the full type width, C11 6.5.7/3). Masking with 31
+    ** makes rot=0 a no-op rotation without losing the standard
+    ** rol32 idiom the compiler recognizes for rot in [1, 31]. */
     u32 outHash = buzHashTable[outgoing];
     int rot = rh->windowSize % 32;
-    /* `outHash >> (32 - rot)` is undefined behavior when rot == 0
-    ** (shift exponent equals the full width of u32). Mask the shift
-    ** amount with 31 so rot=0 becomes a no-op rotation (the
-    ** high half yields `outHash >> 0 = outHash`) which the OR below
-    ** correctly combines into just outHash. UBSan flagged the
-    ** naive form in prolly_hash.c line 211. */
     u32 rotatedOut = (outHash << rot) | (outHash >> ((32 - rot) & 31));
     h ^= rotatedOut;
   }
 
-  
+
   h ^= buzHashTable[byte];
 
   rh->hash = h;
@@ -245,4 +243,4 @@ void prollyRollingHashFree(ProllyRollingHash *rh){
   }
 }
 
-#endif 
+#endif

@@ -1,4 +1,11 @@
 
+/* Cursor navigation maintains aLevel[0..iLevel] as the path from
+** root (0) to the current leaf (iLevel). Each level holds a
+** cache-acquired ProllyCacheEntry and an idx into its node. Every
+** load via loadNode takes a cache reference; every level popped
+** during ascent must call prollyCacheRelease on its entry, otherwise
+** the cache leaks and the entry's pointers dangle the next time
+** something else evicts it. */
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_cursor.h"
@@ -14,7 +21,6 @@ static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
 
   *ppEntry = 0;
 
-
   pEntry = prollyCacheGet(cur->pCache, hash);
   if( pEntry ){
     *ppEntry = pEntry;
@@ -26,7 +32,7 @@ static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
     return rc;
   }
 
-  
+
   pEntry = prollyCachePut(cur->pCache, hash, pData, nData, &rc);
   sqlite3_free(pData);
   if( pEntry==0 ){
@@ -202,17 +208,17 @@ int prollyCursorNext(ProllyCursor *cur){
 
   assert( cur->eState==PROLLY_CURSOR_VALID );
 
-
   pLeaf = cur->aLevel[cur->iLevel].pEntry;
   if( cur->aLevel[cur->iLevel].idx < pLeaf->node.nItems - 1 ){
     cur->aLevel[cur->iLevel].idx++;
     return SQLITE_OK;
   }
 
-
+  /* Leaf exhausted: walk up the path releasing cache refs until an
+  ** ancestor still has an unconsumed child, then descend back to the
+  ** leftmost leaf of the next subtree. */
   level = cur->iLevel;
   while( level>0 ){
-
     prollyCacheRelease(cur->pCache, cur->aLevel[level].pEntry);
     cur->aLevel[level].pEntry = 0;
     level--;
@@ -228,7 +234,7 @@ int prollyCursorNext(ProllyCursor *cur){
     }
   }
 
-  
+
   cur->eState = PROLLY_CURSOR_EOF;
   return SQLITE_OK;
 }
@@ -239,12 +245,10 @@ int prollyCursorPrev(ProllyCursor *cur){
 
   assert( cur->eState==PROLLY_CURSOR_VALID );
 
-
   if( cur->aLevel[cur->iLevel].idx > 0 ){
     cur->aLevel[cur->iLevel].idx--;
     return SQLITE_OK;
   }
-
 
   level = cur->iLevel;
   while( level>0 ){
@@ -262,7 +266,7 @@ int prollyCursorPrev(ProllyCursor *cur){
     }
   }
 
-  
+
   cur->eState = PROLLY_CURSOR_EOF;
   return SQLITE_OK;
 }
@@ -281,7 +285,7 @@ int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes){
     return SQLITE_OK;
   }
 
-  
+
   while( pEntry->node.level>0 ){
     int searchRes;
     int idx = prollyNodeSearchInt(&pEntry->node, intKey, &searchRes);
@@ -315,7 +319,7 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     return SQLITE_OK;
   }
 
-  
+
   while( pEntry->node.level>0 ){
     int searchRes;
     int idx = prollyNodeSearchBlob(&pEntry->node, pKey, nKey, &searchRes);
@@ -371,7 +375,7 @@ int prollyCursorSave(ProllyCursor *cur){
     return SQLITE_OK;
   }
 
-  
+
   if( cur->iLevel < 0 || cur->iLevel >= PROLLY_CURSOR_MAX_DEPTH
    || !cur->aLevel[cur->iLevel].pEntry ){
     cur->hasSavedPosition = 0;
@@ -379,7 +383,7 @@ int prollyCursorSave(ProllyCursor *cur){
     return SQLITE_OK;
   }
 
-  
+
   if( cur->flags & PROLLY_NODE_INTKEY ){
     cur->iSavedIntKey = prollyCursorIntKey(cur);
   } else {
@@ -398,7 +402,7 @@ int prollyCursorSave(ProllyCursor *cur){
     cur->nSavedKey = nKey;
   }
 
-  
+
   prollyCursorReleaseAll(cur);
 
   cur->hasSavedPosition = 1;
@@ -429,7 +433,7 @@ int prollyCursorRestore(ProllyCursor *cur, int *pDifferentRow){
     *pDifferentRow = 1;
   }
 
-  
+
   if( cur->pSavedKey ){
     sqlite3_free(cur->pSavedKey);
     cur->pSavedKey = 0;
@@ -451,7 +455,7 @@ void prollyCursorReleaseAll(ProllyCursor *cur){
   }
   cur->nLevel = 0;
   cur->iLevel = 0;
-  
+
   cur->eState = PROLLY_CURSOR_INVALID;
 }
 
@@ -466,4 +470,4 @@ void prollyCursorClose(ProllyCursor *cur){
   cur->eState = PROLLY_CURSOR_INVALID;
 }
 
-#endif 
+#endif

@@ -1,8 +1,7 @@
-/*
-** Implementation of the single-file content-addressed chunk store.
-** See chunk_store.h for the file layout. All integers on disk are little-endian.
-*/
 
+
+/* Single-file content-addressed chunk store. See chunk_store.h for
+** the on-disk layout. All integers on disk are little-endian. */
 #ifdef DOLTLITE_PROLLY
 
 #include "chunk_store.h"
@@ -181,13 +180,11 @@ struct ChunkStoreReloadState {
   SavedRefsState refs;
 };
 
-/*
-** WAL offsets are stored as negative values in ChunkIndexEntry.offset to
-** distinguish them from regular file offsets. The encoding maps walPos 0
-** to -1, 1 to -2, etc., so that 0 remains available as "no offset."
-** A negative offset means the chunk data lives in the in-memory pWalData
-** buffer rather than at a direct file position.
-*/
+/* WAL offsets are stored as NEGATIVE values in ChunkIndexEntry.offset
+** so they can't collide with regular file offsets (which are >= 0).
+** walPos 0 encodes to -1, 1 to -2, etc., which keeps 0 available as
+** "no offset". A negative offset means the chunk data lives in the
+** in-memory pWalData buffer, not on disk at a direct position. */
 static i64 csEncodeWalOffset(i64 walPos){ return -(walPos) - 1; }
 static i64 csDecodeWalOffset(i64 encoded){ return -(encoded + 1); }
 static int csIsWalOffset(i64 offset){ return offset < 0; }
@@ -371,7 +368,7 @@ static int csSearchIndex(
 }
 
 #define CS_PEND_HT_INIT_BITS 12
-#define CS_PEND_HT_MAX_LOAD  4   /* max entries per bucket before resize */
+#define CS_PEND_HT_MAX_LOAD  4
 
 static u32 csPendBucket(const ProllyHash *h, int nHTMask){
   return ((u32)h->data[0] | ((u32)h->data[1]<<8)
@@ -387,7 +384,6 @@ static void csPendHTClear(ChunkStore *cs){
   cs->nPendingHTSize = 0;
 }
 
-/* Fill aPendingHT with 0xff (-1 as int) to mark all buckets empty. */
 static int csPendHTRebuild(ChunkStore *cs){
   int i;
   memset(cs->aPendingHT, 0xff, cs->nPendingHTSize * sizeof(int));
@@ -426,7 +422,7 @@ static int csPendHTEnsure(ChunkStore *cs){
       }
       return csPendHTRebuild(cs);
     }
-    /* realloc failed; fall through to incremental insert with old table size */
+
   }
   if( !cs->aPendingHTNext || cs->nPendingAlloc > cs->nPendingHTNextAlloc ){
     int nAlloc = cs->nPendingAlloc > 0 ? cs->nPendingAlloc : 64;
@@ -435,7 +431,7 @@ static int csPendHTEnsure(ChunkStore *cs){
     cs->aPendingHTNext = aNew;
     cs->nPendingHTNextAlloc = nAlloc;
   }
-  /* Incrementally insert only the entries added since the last ensure. */
+
   for(i=cs->nPendingHTBuilt; i<cs->nPending; i++){
     u32 b = csPendBucket(&cs->aPending[i].hash, cs->nPendingHTSize - 1);
     cs->aPendingHTNext[i] = cs->aPendingHT[b];
@@ -449,7 +445,7 @@ static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
   int i; u32 b;
   if( cs->nPending==0 ) return -1;
   if( csPendHTEnsure(cs)!=SQLITE_OK ){
-    /* Hash table alloc failed; fall back to linear scan. */
+
     for(i=0; i<cs->nPending; i++){
       if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ) return i;
     }
@@ -464,23 +460,16 @@ static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
   return -1;
 }
 
-/*
-** Manifest layout (168 bytes, all little-endian):
-**   0: magic(4) | 4: version(4) | 8: reserved(20) | 28: nChunks(4)
-**   32: indexOffset(8) | 40: indexSize(4) | 44: reserved(20)
-**   64: reserved(20) | 84: walOffset(8) | 92: reserved(12)
-**   104: refs_hash(20) | 124: reserved(44)
-*/
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memset(aBuf, 0, CHUNK_MANIFEST_SIZE);
   CS_WRITE_U32(aBuf + 0, CHUNK_STORE_MAGIC);
   CS_WRITE_U32(aBuf + 4, CHUNK_STORE_VERSION);
-  /* offset 8: reserved (was root_hash) */
+
   CS_WRITE_U32(aBuf + 28, (u32)cs->nChunks);
   CS_WRITE_I64(aBuf + 32, cs->iIndexOffset);
   CS_WRITE_U32(aBuf + 40, (u32)cs->nIndexSize);
-  /* offset 44: reserved (was catalog_hash, removed in v7) */
-  /* offset 64: reserved (was headCommit_hash) */
+
+
   CS_WRITE_I64(aBuf + 84, cs->iWalOffset);
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
 }
@@ -497,6 +486,19 @@ static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e){
   e->size = (int)CS_READ_U32(aBuf + PROLLY_HASH_SIZE + 8);
 }
 
+/* Manifest layout (168 bytes, little-endian):
+**
+**     0  magic(4) | 4  version(4) | 8  reserved(20, was root_hash)
+**    28  nChunks(4)
+**    32  indexOffset(8) | 40 indexSize(4)
+**    44  reserved(20, was catalog_hash, removed in v7)
+**    64  reserved(20, was headCommit_hash)
+**    84  walOffset(8)  | 92 reserved(12)
+**   104  refs_hash(20)
+**   124  reserved(44)
+**
+** The reserved slots are kept at their historical offsets so old-
+** reader code paths don't have to branch on version. */
 static int csReadManifest(ChunkStore *cs){
   u8 aBuf[CHUNK_MANIFEST_SIZE];
   u32 magic, version;
@@ -510,12 +512,10 @@ static int csReadManifest(ChunkStore *cs){
   if( magic != CHUNK_STORE_MAGIC ) return SQLITE_NOTADB;
   if( version != CHUNK_STORE_VERSION ) return SQLITE_NOTADB;
 
-  /* offset 8: reserved (was root_hash) */
   cs->nChunks = (int)CS_READ_U32(aBuf + 28);
   cs->iIndexOffset = CS_READ_I64(aBuf + 32);
   cs->nIndexSize = (int)CS_READ_U32(aBuf + 40);
-  /* offset 44: reserved (was catalog_hash, removed in v7) */
-  /* offset 64: reserved (was headCommit_hash) */
+
   cs->iWalOffset = CS_READ_I64(aBuf + 84);
   memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
 
@@ -588,7 +588,7 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
   if( nRequired > cs->nWriteBufAlloc ){
     i64 nNew = cs->nWriteBufAlloc ? cs->nWriteBufAlloc : CS_INIT_WRITEBUF_SIZE;
     u8 *pNew;
-    /* Double below 64MB, then grow by 1.5x to limit wasted memory. */
+
     while( nNew < nRequired ){
       if( nNew < 64*1024*1024 ){
         nNew *= 2;
@@ -604,14 +604,14 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
   return SQLITE_OK;
 }
 
-/*
-** Replay the WAL region (everything from iWalOffset to EOF).
-** WAL records are: [tag:1][payload...].
-**   CHUNK record: tag(0x01) + hash(20) + len_le32(4) + data(len)
-**   ROOT record:  tag(0x02) + manifest_snapshot(168)
-** Chunks found here are merged into the in-memory index with WAL-encoded
-** (negative) offsets pointing into the cached pWalData buffer.
-*/
+/* Replay the WAL region (iWalOffset..EOF) into the in-memory index.
+** Records are framed [tag:1][payload...]:
+**   CHUNK: 0x01 | hash(20) | len_le32(4) | data(len)
+**   ROOT:  0x02 | manifest_snapshot(168)
+** Replayed chunks get WAL-encoded (negative) offsets pointing into
+** the cached pWalData buffer. ROOT records do NOT update
+** iWalOffset / iIndexOffset — those describe the compacted region
+** on disk and only move on GC. */
 static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   i64 walSize;
   u8 *walData;
@@ -697,12 +697,11 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
           rc = SQLITE_CORRUPT;
           goto replay_error;
         }
-        /* offset 8: reserved (was root_hash) */
+
         cs->nChunks = (int)CS_READ_U32(m + 28);
-        /* offset 64: reserved (was headCommit_hash) */
+
         memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
-        /* Don't update iWalOffset/iIndexOffset from WAL root records --
-        ** those fields describe the compacted region and only change on GC. */
+
       }
       pos += CHUNK_MANIFEST_SIZE;
       nRootedPending = cs->nPending;
@@ -799,7 +798,7 @@ static int csMergeIndex(
   );
   if( aMerged == 0 ) return SQLITE_NOMEM;
 
-  /* aIndex is already sorted; sort aPending before merge. */
+
   if( cs->nPending > 1 ){
     qsort(cs->aPending, cs->nPending, sizeof(ChunkIndexEntry),
           csIndexEntryCmp);
@@ -815,7 +814,7 @@ static int csMergeIndex(
     }else if( cmp > 0 ){
       aMerged[outPos++] = cs->aPending[pendPos++];
     }else{
-      /* Duplicate hash: pending entry wins (it may carry a WAL offset). */
+
       aMerged[outPos++] = cs->aPending[pendPos++];
       idxPos++;
     }
@@ -867,7 +866,7 @@ int chunkStoreOpen(
     return rc;
   }
 
-  /* Treat a zero-byte file as non-existent (leftover from a failed create). */
+
   if( exists ){
     struct stat mainStat;
     if( stat(cs->zFilename, &mainStat)==0 && mainStat.st_size==0 ){
@@ -938,7 +937,7 @@ int chunkStoreOpen(
     cs->nChunks = 0;
     cs->iIndexOffset = 0;
     cs->nIndexSize = 0;
-    /* File not yet created; WAL starts right after the manifest. */
+
     cs->iWalOffset = CHUNK_MANIFEST_SIZE;
     cs->iFileSize = 0;
     cs->pFile = 0;
@@ -1146,7 +1145,7 @@ int chunkStoreDeleteRemote(ChunkStore *cs, const char *zName){
       sqlite3_free(cs->aRemotes[i].zUrl);
       cs->aRemotes[i] = cs->aRemotes[cs->nRemotes-1];
       cs->nRemotes--;
-      /* Also remove all tracking branches for this remote. */
+
       for(j=cs->nTracking-1; j>=0; j--){
         if( strcmp(cs->aTracking[j].zRemote, zName)==0 ){
           sqlite3_free(cs->aTracking[j].zRemote);
@@ -1184,7 +1183,7 @@ int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
       return SQLITE_OK;
     }
   }
-  /* Not found: create a new tracking entry. */
+
   {
     struct TrackingBranch *aNew;
     aNew = sqlite3_realloc(cs->aTracking, (cs->nTracking+1)*(int)sizeof(struct TrackingBranch));
@@ -1227,21 +1226,26 @@ int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aR
   return SQLITE_OK;
 }
 
-/*
-** Refs blob format (version 6):
-**   [version:1][default_branch_len:4][default_branch:N]
-**   [nBranches:4] { [name_len:4][name:N][commit_hash:20][ws_hash:20] }...
-**   [nTags:4]     { [name_len:4][name:N][commit_hash:20]
+/* Refs blob format (version 6). All lengths u32 LE; timestamps i64 LE:
+**
+**   [version:1]
+**   [default_branch_len:4][default_branch:N]
+**   [nBranches:4] { [name_len:4][name:N]
+**                   [commit_hash:20][ws_hash:20] }*
+**   [nTags:4]     { [name_len:4][name:N]
+**                   [commit_hash:20]
 **                   [tagger_len:4][tagger:N]
 **                   [email_len:4][email:N]
 **                   [timestamp:8]
-**                   [message_len:4][message:N] }...
-**   [nRemotes:4]  { [name_len:4][name:N][url_len:4][url:N] }...
-**   [nTracking:4] { [remote_len:4][remote:N][branch_len:4][branch:N][commit_hash:20] }...
-** Version 5 omits the per-tag metadata fields; the deserializer accepts
-** both versions and defaults missing tag metadata to empty/0.
-** All length fields are little-endian u32; timestamp is little-endian i64.
-*/
+**                   [message_len:4][message:N] }*
+**   [nRemotes:4]  { [name_len:4][name:N]
+**                   [url_len:4][url:N] }*
+**   [nTracking:4] { [remote_len:4][remote:N]
+**                   [branch_len:4][branch:N]
+**                   [commit_hash:20] }*
+**
+** Version 5 omits the per-tag metadata fields — the deserializer
+** accepts both versions and defaults missing metadata to empty / 0. */
 static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   const char *def = cs->zDefaultBranch ? cs->zDefaultBranch : "main";
   int defLen = (int)strlen(def);
@@ -1290,7 +1294,7 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
   bufCur = buf;
-  *bufCur++ = 6;  /* refs format version */
+  *bufCur++ = 6;
   CS_WRITE_U32(bufCur,defLen); bufCur+=4;
   memcpy(bufCur, def, defLen); bufCur+=defLen;
   CS_WRITE_U32(bufCur,cs->nBranches); bufCur+=4;
@@ -1548,14 +1552,9 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash){
   return 0;
 }
 
-/*
-** Retrieve a chunk by hash. The lookup order matters:
-**   1. Pending (uncommitted) chunks in pWriteBuf
-**   2. Committed index -- WAL-encoded offsets read from pWalData cache
-**   3. Committed index -- in-memory pWriteBuf (memory-only stores)
-**   4. Committed index -- read from file (offset + 4 skips length prefix)
-** Caller must sqlite3_free(*ppData).
-*/
+/* Lookup order matters: pending (uncommitted write buffer) first,
+** then the on-disk index. A hash can exist in both — pending wins
+** because it carries the most recent write. */
 int chunkStoreGet(
   ChunkStore *cs,
   const ProllyHash *hash,
@@ -1568,7 +1567,6 @@ int chunkStoreGet(
   *ppData = 0;
   *pnData = 0;
 
-  /* 1. Check pending (uncommitted) chunks first. */
   idx = csSearchPending(cs, hash);
   if( idx >= 0 ){
     ChunkIndexEntry *e = &cs->aPending[idx];
@@ -1576,7 +1574,7 @@ int chunkStoreGet(
     int sz = e->size;
     u8 *pCopy = (u8 *)sqlite3_malloc(sz);
     if( pCopy == 0 ) return SQLITE_NOMEM;
-    /* offset points at the 4-byte length prefix; data starts at offset+4 */
+
     memcpy(pCopy, cs->pWriteBuf + off + 4, sz);
     *ppData = pCopy;
     *pnData = sz;
@@ -1588,7 +1586,7 @@ int chunkStoreGet(
     return SQLITE_NOTFOUND;
   }
 
-  /* 2. WAL-cached chunk (negative offset). */
+
   {
     ChunkIndexEntry *e = &cs->aIndex[idx];
     if( csIsWalOffset(e->offset) && cs->pWalData ){
@@ -1606,7 +1604,7 @@ int chunkStoreGet(
     }
   }
 
-  /* 3. Memory-only store: read from pWriteBuf. */
+
   if( cs->pFile == 0 ){
     ChunkIndexEntry *e = &cs->aIndex[idx];
     if( cs->pWriteBuf && e->offset >= 0
@@ -1621,7 +1619,7 @@ int chunkStoreGet(
     return SQLITE_CORRUPT;
   }
 
-  /* 4. Read from file. Verify stored length matches index for corruption check. */
+
   {
     ChunkIndexEntry *e = &cs->aIndex[idx];
     i64 fileOff = e->offset;
@@ -1666,7 +1664,7 @@ int chunkStorePut(
   prollyHashCompute(pData, nData, &h);
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
-  /* Content-addressed: skip if chunk already exists. */
+
   if( csSearchIndex(cs->aIndex, cs->nIndex, &h) >= 0 ) return SQLITE_OK;
   if( csSearchPending(cs, &h) >= 0 ) return SQLITE_OK;
 
@@ -1679,12 +1677,12 @@ int chunkStorePut(
   {
     ChunkIndexEntry *e = &cs->aPending[cs->nPending];
     e->hash = h;
-    e->offset = (i64)cs->nWriteBuf;  /* points at the length prefix in pWriteBuf */
+    e->offset = (i64)cs->nWriteBuf;
     e->size = nData;
     cs->nPending++;
   }
 
-  /* Write [length_le32][data] into pWriteBuf. */
+
   CS_WRITE_U32(cs->pWriteBuf + cs->nWriteBuf, (u32)nData);
   cs->nWriteBuf += 4;
   memcpy(cs->pWriteBuf + cs->nWriteBuf, pData, nData);
@@ -1711,18 +1709,6 @@ static int csCommitToMemory(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-/*
-** Commit pending chunks to file. The protocol is crash-safe:
-**   1. Acquire exclusive file lock
-**   2. Check for concurrent writes (file grew since last known size)
-**   3. Append WAL chunk records: tag(0x01) + hash(20) + len(4) + data
-**   4. Append WAL root record: tag(0x02) + manifest_snapshot(168)
-**   5. fsync -- this is the durability point
-**   6. Release lock
-** After fsync, copy newly-committed chunks into the in-memory pWalData
-** cache and merge pending entries into the sorted aIndex.
-** If another writer changed the root since we opened, return SQLITE_BUSY_SNAPSHOT.
-*/
 static int csCommitToFile(ChunkStore *cs){
   int rc;
   int i;
@@ -1743,8 +1729,7 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc != SQLITE_OK ) return SQLITE_CANTOPEN;
   }
 
-  /* Use the graph lock if already held (from chunkStoreLockAndRefresh),
-  ** otherwise acquire our own. Avoids deadlock from double-locking. */
+
   if( cs->graphLockFd >= 0 ){
     lockFd = -1;
   }else{
@@ -1756,7 +1741,7 @@ static int csCommitToFile(ChunkStore *cs){
   rc = cs->pFile->pMethods->xFileSize(cs->pFile, &fileSize);
   if( rc != SQLITE_OK ) goto commit_done;
 
-  /* Detect concurrent writer: if file grew, re-read WAL to pick up new chunks. */
+
   if( fileSize > cs->iFileSize && hadFile ){
     rc = csReloadFromDisk(cs);
     if( rc != SQLITE_OK ) goto commit_done;
@@ -1825,7 +1810,7 @@ static int csCommitToFile(ChunkStore *cs){
 
   writeOff = fileSize;
 
-  /* Write WAL chunk records. */
+
   for( i = 0; i < cs->nPending; i++ ){
     ChunkIndexEntry *pe = &cs->aPending[i];
     u8 recHdr[25];
@@ -1834,7 +1819,7 @@ static int csCommitToFile(ChunkStore *cs){
     memcpy(recHdr + 1, &pe->hash, 20);
     CS_WRITE_U32(recHdr + 21, (u32)pe->size);
 
-    bufOff = pe->offset + 4;  /* skip length prefix to get to data */
+    bufOff = pe->offset + 4;
     rc = sqlite3OsWrite(cs->pFile, recHdr, 25, writeOff);
     if( rc != SQLITE_OK ) goto commit_done;
     writeOff += 25;
@@ -1853,7 +1838,7 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc != SQLITE_OK ) goto commit_done;
   }
 
-  /* Write WAL root record (manifest snapshot for crash recovery). */
+
   {
     u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
     rootRec[0] = CS_WAL_TAG_ROOT;
@@ -1863,7 +1848,7 @@ static int csCommitToFile(ChunkStore *cs){
     writeOff += sizeof(rootRec);
   }
 
-  /* fsync is the durability point -- all data is recoverable after this. */
+
   rc = sqlite3OsSync(cs->pFile, SQLITE_SYNC_NORMAL);
   if( rc != SQLITE_OK ) goto commit_done;
 
@@ -1910,8 +1895,7 @@ int chunkStoreCommit(ChunkStore *cs){
   int acquiredLock = 0;
   if( cs->readOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
-  /* Auto-acquire graph lock if caller didn't already. Ensures ALL
-  ** commit graph mutations are serialized across connections. */
+
   if( cs->graphLockFd < 0 && cs->zFilename ){
     rc = chunkStoreLockAndRefresh(cs);
     if( rc!=SQLITE_OK ) return rc;
@@ -1926,7 +1910,7 @@ void chunkStoreRollback(ChunkStore *cs){
   cs->nPending = 0;
   csPendHTClear(cs);
   if( cs->isMemory ){
-    /* Truncate pWriteBuf back to the last committed point. */
+
     cs->nWriteBuf = cs->nCommittedWriteBuf;
   }else{
     cs->nWriteBuf = 0;
@@ -2113,4 +2097,4 @@ static int csReloadFromDisk(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif

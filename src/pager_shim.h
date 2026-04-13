@@ -1,4 +1,4 @@
-/* Shim that implements the Pager interface on top of ChunkStore instead of btree pages. */
+
 #ifndef SQLITE_PAGER_SHIM_H
 #define SQLITE_PAGER_SHIM_H
 
@@ -6,7 +6,10 @@
 
 typedef struct PagerShim PagerShim;
 typedef struct PagerOps PagerOps;
-#define PAGER_SHIM_MAGIC 0x50534D31  
+/* PagerShim is cast to Pager* at the callsite, so the magic MUST be
+** at offset 0 — getPagerOps sniffs it blindly on every incoming
+** Pager* to decide shim vs. orig dispatch. */
+#define PAGER_SHIM_MAGIC 0x50534D31
 struct PagerShim {
   u32 magic;
   const PagerOps *pOps;
@@ -47,4 +50,4 @@ void sqlite3PagerCacheStat(Pager*, int, int, u64*);
 int sqlite3PagerIsMemdb(Pager*);
 int sqlite3PagerLockingMode(Pager*, int);
 
-#endif 
+#endif

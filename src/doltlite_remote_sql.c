@@ -36,6 +36,10 @@ static void remoteSqlStateClear(RemoteSqlState *p){
   memset(p, 0, sizeof(*p));
 }
 
+/* Snapshot enough session and ref state to undo a remote op mid-way.
+** dolt_clone/dolt_pull/dolt_fetch can fail partway through and leave
+** the working set pointing at chunks we're about to roll back —
+** this state is the snapshot we restore to if something errors. */
 static int remoteSqlStateSave(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
   u8 *pCatalog = 0;
   int nCatalog = 0;
@@ -104,7 +108,7 @@ static DoltliteRemote *openRemoteByUrl(sqlite3_vfs *pVfs, const char *zUrl){
   if( strncmp(zUrl, "http://", 7)==0 ){
     return doltliteHttpRemoteOpen(zUrl);
   }
-  
+
   return 0;
 }
 
@@ -327,7 +331,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   if( argc>=2 && sqlite3_value_type(argv[1])!=SQLITE_NULL ){
-    
+
     const char *zBranch = (const char*)sqlite3_value_text(argv[1]);
     if( !zBranch ){
       pRemote->xClose(pRemote);
@@ -342,7 +346,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
   }else{
-    
+
     char **azNames = 0;
     int nNames = 0;
     int i;
@@ -354,7 +358,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
 
-    
+
     pRemote->xClose(pRemote);
     pRemote = 0;
 
@@ -411,7 +415,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  
+
   rc = chunkStoreFindRemote(cs, zRemoteName, &zUrl);
   if( rc!=SQLITE_OK || !zUrl ){
     remoteSqlStateClear(&savedState);
@@ -441,7 +445,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  
+
   rc = chunkStoreFindTracking(cs, zRemoteName, zBranch, &trackingCommit);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&trackingCommit) ){
     int restoreRc = remoteSqlStateRestore(db, cs, &savedState);
@@ -454,10 +458,10 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  
+
   rc = chunkStoreFindBranch(cs, zBranch, &localCommit);
   if( rc!=SQLITE_OK ){
-    
+
     rc = chunkStoreAddBranch(cs, zBranch, &trackingCommit);
     if( rc!=SQLITE_OK ){
       int restoreRc = remoteSqlStateRestore(db, cs, &savedState);
@@ -472,14 +476,20 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     localCommit = trackingCommit;
   }
 
-  
+
   if( prollyHashCompare(&localCommit, &trackingCommit)==0 ){
     remoteSqlStateClear(&savedState);
-    sqlite3_result_int(ctx, 0); 
+    sqlite3_result_int(ctx, 0);
     return;
   }
 
-  
+
+  /* dolt_pull is fast-forward-only; we walk the tracking branch's
+  ** first-parent chain back to the local tip. If we hit the local
+  ** commit, the local side has no unique commits and FF is safe.
+  ** Otherwise the user must dolt_merge to reconcile. maxDepth is
+  ** a safety cap against malformed cycles — legitimate histories
+  ** don't exceed it in practice. */
   {
     ProllyHash walk;
     int maxDepth = 1000;
@@ -532,7 +542,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  
+
   rc = chunkStoreUpdateBranch(cs, zBranch, &trackingCommit);
   if( rc!=SQLITE_OK ){
     int restoreRc = remoteSqlStateRestore(db, cs, &savedState);
@@ -545,7 +555,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  
+
   if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
     DoltliteCommit commit;
     u8 *data = 0; int nData = 0;
@@ -594,7 +604,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     doltliteCommitClear(&commit);
   }
 
-  
+
   rc = chunkStoreSerializeRefs(cs);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
   if( rc!=SQLITE_OK ){
@@ -633,10 +643,8 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
   memset(&savedState, 0, sizeof(savedState));
 
-  
-  /* Allow cloning over a pristine, auto-seeded repository: a single branch
-  ** whose head commit is a root (empty parent). Any real commit descends
-  ** from the seed and thus has a non-empty parent. */
+
+
   if( !chunkStoreIsEmpty(cs) ){
     int virgin = 0;
     if( cs->nBranches==1 ){
@@ -689,7 +697,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  
+
   rc = chunkStoreAddRemote(cs, "origin", zUrl);
   if( rc!=SQLITE_OK ){
     int restoreRc = remoteSqlStateRestore(db, cs, &savedState);
@@ -701,21 +709,21 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     sqlite3_result_error(ctx, "failed to add origin remote", -1);
     return;
   }
-  
 
-  
+
+
   {
     u8 *refsData = 0; int nRefsData = 0;
     ProllyHash refsHash;
     memcpy(&refsHash, &cs->refsHash, sizeof(ProllyHash));
     if( !prollyHashIsEmpty(&refsHash) ){
       rc = chunkStoreGet(cs, &refsHash, &refsData, &nRefsData);
-      (void)refsData; 
+      (void)refsData;
       sqlite3_free(refsData);
     }
   }
 
-  
+
   {
     const char *zDefault = chunkStoreGetDefaultBranch(cs);
     ProllyHash branchCommit;
@@ -737,7 +745,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
         return;
       }
       {
-        
+
         u8 *data = 0; int nData = 0;
         DoltliteCommit commit;
 
@@ -800,7 +808,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  
+
   rc = chunkStoreSerializeRefs(cs);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
   if( rc!=SQLITE_OK ){
@@ -871,9 +879,7 @@ static int remColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
       sqlite3_result_text(ctx, rem->zUrl, -1, SQLITE_TRANSIENT);
       break;
     case 2: {
-      /* Default fetch refspec derived from the remote name, matching the
-      ** shape Dolt emits for a vanilla dolt_remote add call. doltlite has
-      ** no concept of customizable refspecs, so this is always derived. */
+
       char *zSpec = sqlite3_mprintf(
           "[\"refs/heads/*:refs/remotes/%s/*\"]", rem->zName);
       if( zSpec ){
@@ -885,8 +891,7 @@ static int remColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
       break;
     }
     case 3:
-      /* Dolt uses params for auth/config overrides; doltlite has none,
-      ** so this is always an empty JSON object. */
+
       sqlite3_result_text(ctx, "{}", -1, SQLITE_STATIC);
       break;
   }
@@ -921,4 +926,4 @@ int doltliteRemoteSqlRegister(sqlite3 *db){
   return rc;
 }
 
-#endif 
+#endif

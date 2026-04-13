@@ -1,4 +1,4 @@
-/* Commit V2: [version:1][nParents:1][parents:20*N][catalog:20][ts:8][name][email][msg] (LE). */
+
 #ifndef DOLTLITE_COMMIT_H
 #define DOLTLITE_COMMIT_H
 
@@ -10,17 +10,22 @@
 
 #define DOLTLITE_MAX_PARENTS 8
 
+/* parentHash is a legacy V1 single-parent field still populated by
+** deserialize so older call sites keep working. nParents/aParents is
+** the canonical multi-parent list (merge commits have two). Accessors
+** below prefer aParents and fall back to parentHash when aParents is
+** empty — never access either field directly. */
 typedef struct DoltliteCommit DoltliteCommit;
 struct DoltliteCommit {
   ProllyHash parentHash;
-  ProllyHash catalogHash;    
-  i64 timestamp;             
-  char *zName;               
-  char *zEmail;              
-  char *zMessage;            
-  
-  ProllyHash aParents[DOLTLITE_MAX_PARENTS];  
-  int nParents;              
+  ProllyHash catalogHash;
+  i64 timestamp;
+  char *zName;
+  char *zEmail;
+  char *zMessage;
+
+  ProllyHash aParents[DOLTLITE_MAX_PARENTS];
+  int nParents;
 };
 
 int doltliteCommitSerialize(const DoltliteCommit *c, u8 **ppOut, int *pnOut);
@@ -52,4 +57,4 @@ void doltliteHashToHex(const ProllyHash *h, char *buf);
 
 int doltliteHexToHash(const char *hex, ProllyHash *h);
 
-#endif 
+#endif

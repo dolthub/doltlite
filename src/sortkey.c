@@ -11,7 +11,7 @@ static int skGetVarint32(const u8 *p, u32 *pVal){
     *pVal = a;
     return 1;
   }
-  
+
   {
     u32 v = a & 0x7f;
     int i = 1;
@@ -30,7 +30,7 @@ static u32 serialTypeLen(u32 serialType){
   if( serialType <= 6 ) return aLen[serialType];
   if( serialType == 7 ) return 8;
   if( serialType >= 12 ) return (serialType - 12) / 2;
-  return 0;  
+  return 0;
 }
 
 static u8 serialTypeTag(u32 serialType){
@@ -41,14 +41,15 @@ static u8 serialTypeTag(u32 serialType){
   if( serialType == 7 ) return SORTKEY_NUM;
   if( serialType >= 13 && (serialType & 1) ) return SORTKEY_TEXT;
   if( serialType >= 12 && !(serialType & 1) ) return SORTKEY_BLOB;
-  return SORTKEY_NULL;  
+  return SORTKEY_NULL;
 }
 
-/* Collation identifiers. 0 = BINARY / unknown (no transform), 1 = NOCASE
-** (fold ASCII A-Z to a-z), 2 = RTRIM (strip trailing 0x20). Keyed from
-** the collation's zName at encode time — we avoid calling xCmp because
-** the encoder produces byte-comparable keys, not pair-wise comparisons,
-** and there's no general way to invert a custom xCmp into a transform. */
+/* The sort key is byte-comparable with memcmp, so we can't invoke
+** the collation's xCmp at encode time. Instead we preprocess TEXT
+** bytes so two inputs that the collation considers equal produce
+** identical sort keys: NOCASE folds ASCII A-Z to a-z, RTRIM strips
+** trailing 0x20. Any other (user-defined) collation falls back to
+** BINARY — the prolly tree still sorts, just byte-wise. */
 #define SORTKEY_COLL_BINARY 0
 #define SORTKEY_COLL_NOCASE 1
 #define SORTKEY_COLL_RTRIM  2
@@ -64,8 +65,6 @@ static int collFromKeyInfo(const KeyInfo *pKeyInfo, int iCol){
   return SORTKEY_COLL_BINARY;
 }
 
-/* Return the effective byte length of pData/nData after applying the
-** given collation's transform. Pure byte counting — no allocation. */
 static u32 collTextLen(int coll, const u8 *pData, u32 nData){
   if( coll==SORTKEY_COLL_RTRIM ){
     while( nData > 0 && pData[nData - 1] == 0x20 ) nData--;
@@ -111,10 +110,10 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
   pOut[0] = SORTKEY_NUM;
 
   if( serialType == 7 ){
-    
+
     memcpy(buf, pData, 8);
   }else{
-    
+
     i64 v;
     u64 x;
     if( serialType == 8 ){
@@ -122,10 +121,10 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
     }else if( serialType == 9 ){
       v = 1;
     }else{
-      /* Big-endian sign-extended multi-byte integer. The naive
-      ** `v << 8` is left shift of a signed value, which is UB when
-      ** v is negative (C11 6.5.7/4). Do the arithmetic in u64 and
-      ** reinterpret — two's-complement bit pattern is identical. */
+      /* Big-endian sign-extended multi-byte integer. Accumulate in
+      ** u64 because left-shift of a negative signed value is UB
+      ** per C11 6.5.7/4; two's-complement bit pattern is identical
+      ** so the cast back at the end is exact. */
       u64 uv = (pData[0] & 0x80) ? (u64)-1 : 0;
       for(u32 i = 0; i < nData; i++){
         uv = (uv << 8) | pData[i];
@@ -133,7 +132,7 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
       v = (i64)uv;
     }
     d = (double)v;
-    
+
     memcpy(&x, &d, 8);
     buf[0] = (u8)(x >> 56); buf[1] = (u8)(x >> 48);
     buf[2] = (u8)(x >> 40); buf[3] = (u8)(x >> 32);
@@ -141,12 +140,12 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
     buf[6] = (u8)(x >> 8);  buf[7] = (u8)(x);
   }
 
-  
+
   if( buf[0] & 0x80 ){
-    
+
     for(int i = 0; i < 8; i++) buf[i] = ~buf[i];
   }else{
-    
+
     buf[0] ^= 0x80;
   }
 
@@ -166,16 +165,12 @@ static int encodeVarLen(u8 *pOut, u8 tag, const u8 *pData, u32 nData){
     }
   }
 
-
   pOut[pos++] = 0x00;
   pOut[pos++] = 0x00;
 
   return pos;
 }
 
-/* Write a TEXT sort-key field with the collation transform applied.
-** Matches encodedFieldSize's size arithmetic byte-for-byte so the
-** pre-computed output buffer is exactly the right size. */
 static int encodeText(u8 *pOut, const u8 *pData, u32 nData, int coll){
   int pos = 0;
   u32 n = collTextLen(coll, pData, nData);
@@ -195,15 +190,6 @@ static int encodeText(u8 *pOut, const u8 *pData, u32 nData, int coll){
   return pos;
 }
 
-/*
-** Encode the first nMaxFields columns of pRec as a binary-comparable
-** sort key. Pass nMaxFields = 0 (or any value larger than the field
-** count) to encode the whole record. When pKeyInfo is non-NULL, each
-** TEXT field is transformed by its declared collation before encoding
-** so a CASE-INSENSITIVE or RTRIM PK produces identical sort keys for
-** values that should be considered equal. Returns the encoded byte
-** count, or -1 on error.
-*/
 static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
                          const KeyInfo *pKeyInfo){
   u32 hdrSize;
@@ -214,11 +200,9 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
 
   if( nRec <= 0 ) return -1;
 
-
   hdrOff = skGetVarint32(pRec, &hdrSize);
   if( hdrSize > (u32)nRec ) return -1;
   dataOff = hdrSize;
-
 
   while( hdrOff < hdrSize ){
     u32 serialType;
@@ -230,7 +214,6 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
 
     hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
     fieldLen = serialTypeLen(serialType);
-
 
     if( dataOff + fieldLen > (u32)nRec ) return -1;
     pField = pRec + dataOff;
@@ -334,12 +317,11 @@ int recordFromSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
-  
   u32 aType[64];
   u32 aLen[64];
-  
+
   const u8 *aFieldPtr[64];
-  u8 aIntBuf[64][8];  
+  u8 aIntBuf[64][8];
   int nFields = 0;
   int pos = 0;
   u8 *pOut;
@@ -361,7 +343,7 @@ int recordFromSortKeyBuffer(
     return SQLITE_OK;
   }
 
-  
+
   while( pos < nSortKey && nFields < 64 ){
     u8 tag = pSortKey[pos++];
 
@@ -372,37 +354,37 @@ int recordFromSortKeyBuffer(
       nFields++;
 
     }else if( tag == SORTKEY_NUM ){
-      
+
       u8 buf[8];
       double d;
       u64 x;
       if( pos + 8 > nSortKey ) return SQLITE_CORRUPT;
       memcpy(buf, pSortKey + pos, 8);
       pos += 8;
-      
+
       if( buf[0] & 0x80 ){
-        
+
         buf[0] ^= 0x80;
       }else{
-        
+
         for(i = 0; i < 8; i++) buf[i] = ~buf[i];
       }
-      
+
       x = ((u64)buf[0] << 56) | ((u64)buf[1] << 48)
         | ((u64)buf[2] << 40) | ((u64)buf[3] << 32)
         | ((u64)buf[4] << 24) | ((u64)buf[5] << 16)
         | ((u64)buf[6] << 8)  | (u64)buf[7];
       memcpy(&d, &x, 8);
-      
+
       {
         i64 iv = (i64)d;
         if( (double)iv == d && d >= -9.22e18 && d <= 9.22e18 ){
-          
+
           intSerialType(iv, &aType[nFields], &aLen[nFields]);
           writeIntBE(aIntBuf[nFields], iv, (int)aLen[nFields]);
           aFieldPtr[nFields] = aIntBuf[nFields];
         }else{
-          
+
           aType[nFields] = 7;
           aLen[nFields] = 8;
           memcpy(aIntBuf[nFields], buf, 8);
@@ -412,19 +394,19 @@ int recordFromSortKeyBuffer(
       nFields++;
 
     }else if( tag == SORTKEY_TEXT || tag == SORTKEY_BLOB ){
-      
-      
+
+
       int start = pos;
       int dataLen = 0;
       while( pos < nSortKey ){
         if( pSortKey[pos] == 0x00 ){
           if( pos + 1 >= nSortKey ) return SQLITE_CORRUPT;
           if( pSortKey[pos+1] == 0x00 ){
-            
+
             pos += 2;
             break;
           }else if( pSortKey[pos+1] == 0x01 ){
-            
+
             dataLen++;
             pos += 2;
           }else{
@@ -436,13 +418,13 @@ int recordFromSortKeyBuffer(
         }
       }
       if( tag == SORTKEY_TEXT ){
-        aType[nFields] = (u32)dataLen * 2 + 13;  
+        aType[nFields] = (u32)dataLen * 2 + 13;
       }else{
-        aType[nFields] = (u32)dataLen * 2 + 12;  
+        aType[nFields] = (u32)dataLen * 2 + 12;
       }
       aLen[nFields] = (u32)dataLen;
-      
-      
+
+
       aFieldPtr[nFields] = pSortKey + start;
       nFields++;
 
@@ -451,12 +433,12 @@ int recordFromSortKeyBuffer(
     }
   }
 
-  
-  nHdr = 1;  
+
+  nHdr = 1;
   for(i = 0; i < nFields; i++){
     nHdr += sqlite3VarintLen(aType[i]);
   }
-  if( nHdr > 126 ) nHdr++;  
+  if( nHdr > 126 ) nHdr++;
 
   nData = 0;
   for(i = 0; i < nFields; i++) nData += (int)aLen[i];
@@ -470,32 +452,32 @@ int recordFromSortKeyBuffer(
   }
   pOut = *ppBuf;
 
-  
+
   {
     int off;
 
-    
+
     off = putVarint32(pOut, (u32)nHdr);
     for(i = 0; i < nFields; i++){
       off += putVarint32(pOut + off, aType[i]);
     }
 
-    
+
     for(i = 0; i < nFields; i++){
       u32 serialType = aType[i];
       u32 fieldLen = aLen[i];
 
       if( fieldLen == 0 ){
-        
+
         continue;
       }
 
       if( serialType <= 6 || serialType == 7 ){
-        
+
         memcpy(pOut + off, aIntBuf[i], fieldLen);
         off += (int)fieldLen;
       }else{
-        
+
         const u8 *pSrc = aFieldPtr[i];
         const u8 *pSrcEnd = pSortKey + nSortKey;
         int j = 0;
@@ -509,7 +491,7 @@ int recordFromSortKeyBuffer(
             pOut[off++] = pSrc[j];
             j++;
           }else{
-            
+
             pOut[off++] = 0x00;
           }
           written++;
@@ -528,4 +510,4 @@ int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){
   return recordFromSortKeyBuffer(pSortKey, nSortKey, ppOut, &nAlloc, pnOut);
 }
 
-#endif 
+#endif

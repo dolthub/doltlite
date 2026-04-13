@@ -1,4 +1,4 @@
-/* Generic chunk graph classification/walk helpers shared by prolly and DoltLite. */
+
 #ifndef SQLITE_PROLLY_CHUNK_WALK_H
 #define SQLITE_PROLLY_CHUNK_WALK_H
 

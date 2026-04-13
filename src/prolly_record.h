@@ -1,4 +1,4 @@
-/* Low-level SQLite record-format parsing shared by prolly and DoltLite code. */
+
 #ifndef SQLITE_PROLLY_RECORD_H
 #define SQLITE_PROLLY_RECORD_H
 
@@ -19,6 +19,11 @@ static inline int dlReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
   return i;
 }
 
+/* SQLite record serial-type → payload length. Types 0-6 are fixed
+** int widths (0, 1, 2, 3, 4, 6, 8), 7 is float8, 8/9 are the literal
+** 0/1 with no payload. Even types >= 12 are BLOBs of (st-12)/2 bytes,
+** odd types >= 13 are TEXT of (st-13)/2 bytes — both round to the
+** same length, so the /2 below handles either parity. */
 static inline int dlSerialTypeLen(u64 st){
   static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8};
   if( st <= 6 ) return aLen[st];

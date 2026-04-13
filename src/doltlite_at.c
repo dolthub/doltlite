@@ -13,7 +13,6 @@
 #include <string.h>
 #include <time.h>
 
-
 static char *atBuildSchema(DoltliteColInfo *ci){
   int i;
   sqlite3_str *pStr = sqlite3_str_new(0);
@@ -61,7 +60,6 @@ static void freeAtRows(AtCursor *c){
   sqlite3_free(c->aRows); c->aRows=0; c->nRows=0; c->nAlloc=0;
   sqlite3_free(c->zCommitRef); c->zCommitRef=0;
 }
-
 
 static int atScanTree(AtCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
                       const ProllyHash *pRoot, u8 flags){
@@ -135,7 +133,7 @@ static int atBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   AtVtab *v=(AtVtab*)pVtab;
   int nCols=v->cols.nCol;
   int iRef=-1, i, argvIdx=1;
-  
+
   int refCol = nCols > 0 ? nCols : 2;
   (void)pVtab;
 
@@ -194,9 +192,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   c->zCommitRef = sqlite3_mprintf("%s", zRef);
   if( !c->zCommitRef ) return SQLITE_NOMEM;
 
-  /* Surface ref-resolution failures to the caller instead of
-  ** silently returning an empty result. Matches Dolt's `t AS OF
-  ** '<bad-ref>'` which errors with a "ref not found" diagnostic. */
+
   rc=doltliteResolveRef(db,zRef,&commitHash);
   if(rc==SQLITE_NOTFOUND){
     sqlite3_free(cur->pVtab->zErrMsg);
@@ -209,8 +205,13 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   rc=doltliteLoadCommit(db,&commitHash,&commit);
   if(rc!=SQLITE_OK) return rc;
 
-  /* For branch refs, prefer the working state catalog if it has
-  ** uncommitted changes (same logic as checkout). */
+
+  /* When the ref is a branch name (not a commit hash or tag), prefer
+  ** its working catalog over the committed catalog IF the working set
+  ** is still based on HEAD — that lets dolt_at_<table>@branch show
+  ** staged-but-uncommitted rows on that branch. If the working set
+  ** points at a different commit (mid-merge, stale WIP) fall through
+  ** and use the committed catalog so the output still makes sense. */
   {
     ProllyHash branchCommit;
     int isBranch = (chunkStoreFindBranch(cs,zRef,&branchCommit)==SQLITE_OK
@@ -223,7 +224,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
        && !prollyHashIsEmpty(&wsCommitHash)
        && memcmp(wsCommitHash.data,branchCommit.data,PROLLY_HASH_SIZE)==0
        && memcmp(wsCatHash.data,commit.catalogHash.data,PROLLY_HASH_SIZE)!=0 ){
-        /* Working state has uncommitted changes — use it. */
+
         rc=doltliteLoadCatalog(db,&wsCatHash,&aTables,&nTables,0);
         doltliteCommitClear(&commit);
         if(rc!=SQLITE_OK) return rc;
@@ -263,7 +264,7 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     sqlite3_result_text(ctx, c->zCommitRef ? c->zCommitRef : "",
                         -1, SQLITE_TRANSIENT);
   }else if(nCols>0 && col<nCols){
-    
+
     if(col==v->cols.iPkCol){
       sqlite3_result_int64(ctx,r->intKey);
     }else{
@@ -274,7 +275,7 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       }else sqlite3_result_null(ctx);
     }
   }
-  
+
   return SQLITE_OK;
 }
 
@@ -296,4 +297,4 @@ int doltliteAtRegister(sqlite3 *db){
   return doltliteRegisterAtTables(db);
 }
 
-#endif 
+#endif
