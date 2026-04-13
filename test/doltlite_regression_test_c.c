@@ -1923,6 +1923,72 @@ static void run_integrity_check_walks_prolly_nodes(void){
   remove_db(dbpath);
 }
 
+static void run_table_moveto_mutmap_delete_preserves_neighbors(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Table Moveto MutMap Delete Preserves Neighbors Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_table_moveto_mutmap_delete_preserves_neighbors");
+  remove_db(dbpath);
+
+  check("open_db_for_table_moveto_delete", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_table_for_table_moveto_delete", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "INSERT INTO t VALUES(3,'c');")==SQLITE_OK);
+  check("begin_txn_for_table_moveto_delete", execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("insert_mutmap_only_row_for_table_moveto_delete",
+        execsql(db, "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+  check("delete_mutmap_only_row_by_rowid",
+        execsql(db, "DELETE FROM t WHERE rowid=2;")==SQLITE_OK);
+  check("neighbors_preserved_after_delete",
+        strcmp(exec1(db,
+          "SELECT group_concat(id, ',') FROM (SELECT id FROM t ORDER BY id)"),
+          "1,3")==0);
+  check("rollback_table_moveto_delete_txn", execsql(db, "ROLLBACK;")==SQLITE_OK);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_index_moveto_mutmap_exact_keeps_iteration_aligned(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *stmt = 0;
+  char dbpath[256];
+  int rc;
+
+  printf("=== Index Moveto MutMap Exact Keeps Iteration Aligned Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_index_moveto_mutmap_exact_keeps_iteration_aligned");
+  remove_db(dbpath);
+
+  check("open_db_for_index_moveto_exact", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_table_for_index_moveto_exact", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, b TEXT, c TEXT);"
+    "CREATE INDEX idx_b ON t(b);"
+    "INSERT INTO t VALUES(1,'a','aa');"
+    "INSERT INTO t VALUES(3,'c','cc');")==SQLITE_OK);
+  check("begin_txn_for_index_moveto_exact", execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("insert_mutmap_only_index_row",
+        execsql(db, "INSERT INTO t VALUES(2,'b','bb');")==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(db,
+    "SELECT b FROM t INDEXED BY idx_b WHERE b >= 'b' ORDER BY b",
+    -1, &stmt, 0);
+  check("prepare_index_moveto_exact_stmt", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("index_moveto_exact_first_row", sqlite3_step(stmt)==SQLITE_ROW);
+    check("index_moveto_exact_first_val", stmt_column_text_equals(stmt, 0, "b"));
+    check("index_moveto_exact_second_row", sqlite3_step(stmt)==SQLITE_ROW);
+    check("index_moveto_exact_second_val", stmt_column_text_equals(stmt, 0, "c"));
+    check("index_moveto_exact_done", sqlite3_step(stmt)==SQLITE_DONE);
+  }
+  sqlite3_finalize(stmt);
+  check("rollback_index_moveto_exact_txn", execsql(db, "ROLLBACK;")==SQLITE_OK);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_btree_commit_failure_transactional(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -2507,6 +2573,8 @@ static const RegressionCase aCases[] = {
   { "begin_write_refreshes_working_set_metadata", "Begin Write Refreshes Working Set Metadata Test", run_begin_write_refreshes_working_set_metadata },
   { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
+  { "table_moveto_mutmap_delete_preserves_neighbors", "Table Moveto MutMap Delete Preserves Neighbors Test", run_table_moveto_mutmap_delete_preserves_neighbors },
+  { "index_moveto_mutmap_exact_keeps_iteration_aligned", "Index Moveto MutMap Exact Keeps Iteration Aligned Test", run_index_moveto_mutmap_exact_keeps_iteration_aligned },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
