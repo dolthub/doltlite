@@ -304,7 +304,15 @@ struct BtCursor {
 
   u8 *pCachedPayload;
   int nCachedPayload;
-  u8 cachedPayloadOwned;
+  u8 cachedPayloadOwned;  /* 1 if pCachedPayload was malloc'd by us */
+  u8 *pReconPayload;
+  int nReconPayloadAlloc;
+  u8 *pSeekRecord;
+  int nSeekRecordAlloc;
+  u8 *pSeekSortKey;
+  int nSeekSortKeyAlloc;
+  u8 *pMovetoRec;
+  int nMovetoRecAlloc;
   i64 cachedIntKey;
 
   u8 isPinned;
@@ -339,6 +347,10 @@ static int flushIfNeeded(BtCursor *pCur);
 static int flushAllPending(BtShared *pBt, Pgno iTable);
 static int applyMutMapToTableRoot(BtShared *pBt, struct TableEntry *pTE, ProllyMutMap *pMap);
 static int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData);
+static int serializeUnpackedRecordBuffer(
+  UnpackedRecord *pRec, u8 **ppBuf, int *pnAlloc, int *pnOut
+);
+static u32 btreeSerialType(Mem *pMem, u32 *pLen);
 static int flushDeferredEdits(BtShared *pBt);
 static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
@@ -1036,6 +1048,96 @@ static int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData){
   pCur->pCachedPayload = pCopy;
   pCur->nCachedPayload = nData;
   pCur->cachedPayloadOwned = 1;
+  return SQLITE_OK;
+}
+
+static int cacheCursorPayloadReconstructed(
+  BtCursor *pCur, const u8 *pSortKey, int nSortKey
+){
+  int nRec = 0;
+  int rc = recordFromSortKeyBuffer(
+      pSortKey, nSortKey,
+      &pCur->pReconPayload, &pCur->nReconPayloadAlloc, &nRec);
+  if( rc!=SQLITE_OK ) return rc;
+  CLEAR_CACHED_PAYLOAD(pCur);
+  pCur->pCachedPayload = pCur->pReconPayload;
+  pCur->nCachedPayload = nRec;
+  pCur->cachedPayloadOwned = 0;
+  return SQLITE_OK;
+}
+
+static int serializeUnpackedRecordBuffer(
+  UnpackedRecord *pRec, u8 **ppBuf, int *pnAlloc, int *pnOut
+){
+  int nField = pRec->nField;
+  Mem *aMem = pRec->aMem;
+  u32 nData = 0;
+  u32 aType[MAX_RECORD_FIELDS];
+  u32 aLen[MAX_RECORD_FIELDS];
+  int i;
+  u8 *pOut;
+  int nHdr, nTotal;
+
+  if( nField > MAX_RECORD_FIELDS ) nField = MAX_RECORD_FIELDS;
+
+  for(i=0; i<nField; i++){
+    aType[i] = btreeSerialType(&aMem[i], &aLen[i]);
+    nData += aLen[i];
+  }
+
+  nHdr = 1;
+  for(i=0; i<nField; i++) nHdr += sqlite3VarintLen(aType[i]);
+  if( nHdr > MAX_ONEBYTE_HEADER ) nHdr++;
+
+  nTotal = nHdr + (int)nData;
+  if( *pnAlloc < nTotal ){
+    u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nTotal);
+    if( !pNew ) return SQLITE_NOMEM;
+    *ppBuf = pNew;
+    *pnAlloc = nTotal;
+  }
+  pOut = *ppBuf;
+
+  {
+    int off = putVarint32(pOut, (u32)nHdr);
+    for(i=0; i<nField; i++){
+      off += putVarint32(pOut + off, aType[i]);
+    }
+  }
+
+  {
+    u32 off = (u32)nHdr;
+    for(i=0; i<nField; i++){
+      Mem *p = &aMem[i];
+      u32 st = aType[i];
+      if( st==SERIAL_TYPE_NULL || st==SERIAL_TYPE_ZERO || st==SERIAL_TYPE_ONE ){
+      }else if( st<=SERIAL_TYPE_INT64 ){
+        i64 v = p->u.i;
+        int nByte = (int)aLen[i];
+        int j;
+        for(j=nByte-1; j>=0; j--){
+          pOut[off+j] = (u8)(v & 0xFF);
+          v >>= 8;
+        }
+        off += nByte;
+      }else if( st==SERIAL_TYPE_FLOAT64 ){
+        u64 floatBits;
+        int j;
+        memcpy(&floatBits, &p->u.r, 8);
+        for(j=7; j>=0; j--){
+          pOut[off+j] = (u8)(floatBits & 0xFF);
+          floatBits >>= 8;
+        }
+        off += 8;
+      }else{
+        int nByte = (int)aLen[i];
+        if( nByte > 0 && p->z ) memcpy(pOut + off, p->z, nByte);
+        off += nByte;
+      }
+    }
+  }
+
+  *pnOut = nTotal;
   return SQLITE_OK;
 }
 
@@ -3097,6 +3199,26 @@ static int prollyBtCursorCloseCursor(BtCursor *pCur){
   }
 
   CLEAR_CACHED_PAYLOAD(pCur);
+  if( pCur->pReconPayload ){
+    sqlite3_free(pCur->pReconPayload);
+    pCur->pReconPayload = 0;
+    pCur->nReconPayloadAlloc = 0;
+  }
+  if( pCur->pSeekRecord ){
+    sqlite3_free(pCur->pSeekRecord);
+    pCur->pSeekRecord = 0;
+    pCur->nSeekRecordAlloc = 0;
+  }
+  if( pCur->pSeekSortKey ){
+    sqlite3_free(pCur->pSeekSortKey);
+    pCur->pSeekSortKey = 0;
+    pCur->nSeekSortKeyAlloc = 0;
+  }
+  if( pCur->pMovetoRec ){
+    sqlite3_free(pCur->pMovetoRec);
+    pCur->pMovetoRec = 0;
+    pCur->nMovetoRecAlloc = 0;
+  }
 
   if( pCur->pKey ){
     sqlite3_free(pCur->pKey);
@@ -3697,73 +3819,9 @@ static u32 btreeSerialType(Mem *pMem, u32 *pLen){
 }
 
 static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut){
-  int nField = pRec->nField;
-  Mem *aMem = pRec->aMem;
-  u32 nData = 0;
-  u32 aType[MAX_RECORD_FIELDS];
-  u32 aLen[MAX_RECORD_FIELDS];
-  int i;
-  u8 *pOut;
-  int nHdr, nTotal;
-
-  if( nField > MAX_RECORD_FIELDS ) nField = MAX_RECORD_FIELDS;
-
-  for(i=0; i<nField; i++){
-    aType[i] = btreeSerialType(&aMem[i], &aLen[i]);
-    nData += aLen[i];
-  }
-
-  nHdr = 1;
-  for(i=0; i<nField; i++) nHdr += sqlite3VarintLen(aType[i]);
-  if( nHdr > MAX_ONEBYTE_HEADER ) nHdr++;
-
-  nTotal = nHdr + (int)nData;
-  pOut = (u8*)sqlite3_malloc(nTotal);
-  if( !pOut ) return SQLITE_NOMEM;
-
-  {
-    int off = putVarint32(pOut, (u32)nHdr);
-    for(i=0; i<nField; i++){
-      off += putVarint32(pOut + off, aType[i]);
-    }
-  }
-
-  {
-    u32 off = (u32)nHdr;
-    for(i=0; i<nField; i++){
-      Mem *p = &aMem[i];
-      u32 st = aType[i];
-      if( st==SERIAL_TYPE_NULL || st==SERIAL_TYPE_ZERO || st==SERIAL_TYPE_ONE ){
-
-      }else if( st<=SERIAL_TYPE_INT64 ){
-        i64 v = p->u.i;
-        int nByte = (int)aLen[i];
-        int j;
-        for(j=nByte-1; j>=0; j--){
-          pOut[off+j] = (u8)(v & 0xFF);
-          v >>= 8;
-        }
-        off += nByte;
-      }else if( st==SERIAL_TYPE_FLOAT64 ){
-        u64 floatBits;
-        int j;
-        memcpy(&floatBits, &p->u.r, 8);
-        for(j=7; j>=0; j--){
-          pOut[off+j] = (u8)(floatBits & 0xFF);
-          floatBits >>= 8;
-        }
-        off += 8;
-      }else{
-        int nByte = (int)aLen[i];
-        if( nByte > 0 && p->z ) memcpy(pOut + off, p->z, nByte);
-        off += nByte;
-      }
-    }
-  }
-
-  *ppOut = pOut;
-  *pnOut = nTotal;
-  return SQLITE_OK;
+  int nAlloc = 0;
+  *ppOut = 0;
+  return serializeUnpackedRecordBuffer(pRec, ppOut, &nAlloc, pnOut);
 }
 
 static int findMatchingMutMapEntry(
@@ -3927,14 +3985,15 @@ static int prollyBtCursorIndexMoveto(
      && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
       nSeekKeyField = (int)pCur->pKeyInfo->nKeyField;
     }
-    rc = serializeUnpackedRecord(pIdxKey, &pSerKey, &nSerKey);
+    rc = serializeUnpackedRecordBuffer(
+        pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
     if( rc!=SQLITE_OK ) return rc;
-    rc = sortKeyFromRecordPrefixColl(pSerKey, nSerKey, nSeekKeyField,
-                                      pCur->pKeyInfo, &pSortKey, &nSortKey);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(pSerKey);
-      return rc;
-    }
+    pSerKey = pCur->pSeekRecord;
+    rc = sortKeyFromRecordPrefixCollBuffer(
+        pSerKey, nSerKey, nSeekKeyField, pCur->pKeyInfo,
+        &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+    if( rc!=SQLITE_OK ) return rc;
+    pSortKey = pCur->pSeekSortKey;
 
 
     rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &(int){0});
@@ -3950,7 +4009,8 @@ static int prollyBtCursorIndexMoveto(
       {
 
         int lo = 0, hi = nItems;
-        u8 *pRecBuf = 0;
+        u8 *pRecBuf = pCur->pMovetoRec;
+        int nRecBufAlloc = pCur->nMovetoRecAlloc;
         int i;
         while( lo < hi ){
           int mid = lo + (hi - lo) / 2;
@@ -3987,7 +4047,9 @@ static int prollyBtCursorIndexMoveto(
                   const u8 *pVal2; int nVal2;
                   prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
                   if( nVal2==0 ){
-                    recordFromSortKey(pSK, nSK, &pRecBuf, &nVal2);
+                    rc = recordFromSortKeyBuffer(
+                        pSK, nSK, &pRecBuf, &nRecBufAlloc, &nVal2);
+                    if( rc!=SQLITE_OK ) break;
                     pVal2 = pRecBuf;
                   }
                   pIdxKey->eqSeen = 0;
@@ -4000,8 +4062,9 @@ static int prollyBtCursorIndexMoveto(
           }
           prollyNodeValue(&pLeaf->node, i, &pVal, &nVal);
           if( nVal==0 ){
-            sqlite3_free(pRecBuf); pRecBuf = 0;
-            recordFromSortKey(pSK, nSK, &pRecBuf, &nVal);
+            rc = recordFromSortKeyBuffer(
+                pSK, nSK, &pRecBuf, &nRecBufAlloc, &nVal);
+            if( rc!=SQLITE_OK ) break;
             pVal = pRecBuf;
           }
           pIdxKey->eqSeen = 0;
@@ -4034,7 +4097,9 @@ static int prollyBtCursorIndexMoveto(
             }
           }
         }
-        sqlite3_free(pRecBuf);
+        pCur->pMovetoRec = pRecBuf;
+        pCur->nMovetoRecAlloc = nRecBufAlloc;
+        if( rc!=SQLITE_OK ) return rc;
       }
 
       if( treeFound ){
@@ -4064,8 +4129,6 @@ static int prollyBtCursorIndexMoveto(
                                    pIdxKey, pSortKey, nSortKey,
                                    &mutE, &mutCmp);
       if( rc!=SQLITE_OK ){
-        sqlite3_free(pSerKey);
-        sqlite3_free(pSortKey);
         return rc;
       }
       if( mutE ) mutFromCursorMap = 1;
@@ -4075,8 +4138,6 @@ static int prollyBtCursorIndexMoveto(
                                      pIdxKey, pSortKey, nSortKey,
                                      &mutE, &mutCmp);
         if( rc!=SQLITE_OK ){
-          sqlite3_free(pSerKey);
-          sqlite3_free(pSortKey);
           return rc;
         }
       }
@@ -4084,22 +4145,21 @@ static int prollyBtCursorIndexMoveto(
 
         const u8 *pMutVal = mutE->pVal;
         int nMutVal = mutE->nVal;
-        u8 *pRecon = 0;
         if( nMutVal==0 ){
-          recordFromSortKey(mutE->pKey, mutE->nKey, &pRecon, &nMutVal);
-          pMutVal = pRecon;
+          rc = recordFromSortKeyBuffer(
+              mutE->pKey, mutE->nKey,
+              &pCur->pMovetoRec, &pCur->nMovetoRecAlloc, &nMutVal);
+          if( rc!=SQLITE_OK ) return rc;
+          pMutVal = pCur->pMovetoRec;
         }
         if( pMutVal ){
           mutKey = pMutVal;
           mutNKey = nMutVal;
           mutFound = 1;
         }
-        if( !mutFound ) sqlite3_free(pRecon);
       }
     }
     }
-    sqlite3_free(pSerKey);
-    sqlite3_free(pSortKey);
 
 
       if( mutFound && (!treeFound || treeCmp!=0) ){
@@ -4187,18 +4247,13 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
         *ppData = e->pVal;
         *pnData = e->nVal;
       }else{
-        u8 *pRec = 0; int nRec = 0;
-        recordFromSortKey(e->pKey, e->nKey, &pRec, &nRec);
-        if( pRec ){
-          if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
-            sqlite3_free(pCur->pCachedPayload);
-          }
-          pCur->pCachedPayload = pRec;
-          pCur->nCachedPayload = nRec;
-          pCur->cachedPayloadOwned = 1;
+        if( cacheCursorPayloadReconstructed(pCur, e->pKey, e->nKey)==SQLITE_OK ){
+          *ppData = pCur->pCachedPayload;
+          *pnData = pCur->nCachedPayload;
+        }else{
+          *ppData = 0;
+          *pnData = 0;
         }
-        *ppData = pRec;
-        *pnData = nRec;
       }
     }
     return;
@@ -4215,18 +4270,10 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
       *pnData = nVal;
     }else{
       const u8 *pKey; int nKey;
-      u8 *pRec = 0; int nRec = 0;
       prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-      recordFromSortKey(pKey, nKey, &pRec, &nRec);
-      if( pRec ){
-        if( pCur->cachedPayloadOwned && pCur->pCachedPayload ){
-          sqlite3_free(pCur->pCachedPayload);
-        }
-        pCur->pCachedPayload = pRec;
-        pCur->nCachedPayload = nRec;
-        pCur->cachedPayloadOwned = 1;
-        *ppData = pRec;
-        *pnData = nRec;
+      if( cacheCursorPayloadReconstructed(pCur, pKey, nKey)==SQLITE_OK ){
+        *ppData = pCur->pCachedPayload;
+        *pnData = pCur->nCachedPayload;
       }else{
         *ppData = pVal;
         *pnData = 0;
