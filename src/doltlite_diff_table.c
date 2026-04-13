@@ -571,10 +571,14 @@ static int buildWorkingDiffPair(
     int rootsDiffer = prollyHashCompare(&headTblRoot, &workingTblRoot)!=0;
     int schemasDiffer = prollyHashCompare(&headSchemaHash, &workingSchemaHash)!=0;
     if( rootsDiffer || schemasDiffer ){
-      rc = doltliteFlushCatalogToHash(db, &workingCat);
-      if( rc!=SQLITE_OK ){
-        doltliteCommitClear(&headCommit);
-        return rc;
+      if( schemasDiffer ){
+        rc = doltliteFlushCatalogToHash(db, &workingCat);
+        if( rc!=SQLITE_OK ){
+          doltliteCommitClear(&headCommit);
+          return rc;
+        }
+      }else{
+        memset(&workingCat, 0, sizeof(workingCat));
       }
       fromFlags = headFlags ? headFlags : workingFlags;
       rc = pairsAppend(pCur, &headHash, &headTblRoot, &headCommit.catalogHash,
