@@ -5006,7 +5006,16 @@ int sqlite3BtreeTripAllCursors(Btree *p, int errCode, int writeOnly){
   BtShared *pBt;
 
   if( !p ) return SQLITE_OK;
+  /* Attached stock-SQLite files keep their state under p->pOrigBtree
+  ** and have p->pBt==NULL. VDBE walks db->aDb[] on savepoint rollback
+  ** and calls us for every attached db indiscriminately, so we must
+  ** dispatch here instead of unconditionally dereferencing pBt. */
+  if( p->pOrigBtree ){
+    origBtreeTripAllCursors(p->pOrigBtree, errCode, writeOnly);
+    return SQLITE_OK;
+  }
   pBt = p->pBt;
+  if( !pBt ) return SQLITE_OK;
 
   for(pCur=pBt->pCursor; pCur; pCur=pCur->pNext){
     if( writeOnly && !(pCur->curFlags & BTCF_WriteFlag) ){
