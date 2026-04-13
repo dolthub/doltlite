@@ -59,16 +59,39 @@ struct HistCursor {
   int iRow;
 };
 
+static void freeHistoryRow(HistoryRow *r){
+  sqlite3_free(r->pVal);
+  sqlite3_free(r->zCommitter);
+  memset(r, 0, sizeof(*r));
+}
+
 static void freeHistoryRows(HistCursor *c){
   int i;
   for(i=0;i<c->nRows;i++){
-    sqlite3_free(c->aRows[i].pVal);
-    sqlite3_free(c->aRows[i].zCommitter);
+    freeHistoryRow(&c->aRows[i]);
   }
   sqlite3_free(c->aRows);
   c->aRows=0; c->nRows=0; c->nAlloc=0;
 }
 
+static int htCommitParentCount(const DoltliteCommit *pCommit){
+  if( pCommit->nParents>0 ) return pCommit->nParents;
+  return prollyHashIsEmpty(&pCommit->parentHash) ? 0 : 1;
+}
+
+static const ProllyHash *htCommitParentHash(
+  const DoltliteCommit *pCommit,
+  int iParent
+){
+  if( iParent<0 ) return 0;
+  if( pCommit->nParents>0 ){
+    return iParent<pCommit->nParents ? &pCommit->aParents[iParent] : 0;
+  }
+  if( iParent==0 && !prollyHashIsEmpty(&pCommit->parentHash) ){
+    return &pCommit->parentHash;
+  }
+  return 0;
+}
 
 static int htScanAtCommit(
   HistCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
@@ -93,13 +116,21 @@ static int htScanAtCommit(
     prollyCursorValue(&cur,&pVal,&nVal);
     if(pVal&&nVal>0){
       r->pVal=sqlite3_malloc(nVal);
-      if( !r->pVal ){ prollyCursorClose(&cur); return SQLITE_NOMEM; }
+      if( !r->pVal ){
+        freeHistoryRow(r);
+        prollyCursorClose(&cur);
+        return SQLITE_NOMEM;
+      }
       memcpy(r->pVal,pVal,nVal);
       r->nVal=nVal;
     }
     memcpy(r->zCommit,zCommitHex,PROLLY_HASH_SIZE*2+1);
     r->zCommitter=sqlite3_mprintf("%s",zCommitter?zCommitter:"");
-    if( !r->zCommitter ){ prollyCursorClose(&cur); return SQLITE_NOMEM; }
+    if( !r->zCommitter ){
+      freeHistoryRow(r);
+      prollyCursorClose(&cur);
+      return SQLITE_NOMEM;
+    }
     r->commitDate=commitDate;
     pCur->nRows++;
     rc=prollyCursorNext(&cur); if(rc!=SQLITE_OK) break;
@@ -172,18 +203,19 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
       if( rc!=SQLITE_OK ){ doltliteCommitClear(&commit); break; }
     }
 
-    for(i=0;i<commit.nParents;i++){
-      if(prollyHashIsEmpty(&commit.aParents[i])) continue;
-      if( prollyHashSetContains(&visited, &commit.aParents[i]) ) continue;
-      if( prollyHashSetContains(&queued, &commit.aParents[i]) ) continue;
+    for(i=0; i<htCommitParentCount(&commit); i++){
+      const ProllyHash *pParent = htCommitParentHash(&commit, i);
+      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
+      if( prollyHashSetContains(&visited, pParent) ) continue;
+      if( prollyHashSetContains(&queued, pParent) ) continue;
       if(qTail>=qAlloc){
         int na=qAlloc*2;
         ProllyHash *tmp=sqlite3_realloc(queue,na*(int)sizeof(ProllyHash));
         if(!tmp){rc=SQLITE_NOMEM;break;}
         queue=tmp; qAlloc=na;
       }
-      queue[qTail++]=commit.aParents[i];
-      rc = prollyHashSetAdd(&queued, &commit.aParents[i]);
+      queue[qTail++]=*pParent;
+      rc = prollyHashSetAdd(&queued, pParent);
       if( rc!=SQLITE_OK ) break;
     }
     doltliteCommitClear(&commit);
