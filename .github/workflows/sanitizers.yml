@@ -1,0 +1,82 @@
+name: Sanitizers
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  asan-ubsan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tcl-dev build-essential zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    # Build doltlite + the stock sqlite3 shell oracle target with
+    # ASan + UBSan. `-fno-sanitize-recover=all` turns every sanitizer
+    # finding into an immediate abort so the test suite cannot
+    # silently paper over a new one. `-fno-omit-frame-pointer` keeps
+    # backtraces readable; `-O1` is the usual sanitizer-friendly
+    # compromise between speed and accurate error location.
+    - name: Build with ASan/UBSan
+      run: |
+        cd build
+        make \
+          CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
+          LDFLAGS="-fsanitize=address,undefined" \
+          doltlite
+        make sqlite3
+
+    # ASan options: log to stderr, abort on error, disable the
+    # short-lived-leak detector that the stock sqlite shell trips
+    # in its own test mode. UBSan options: print full stack on
+    # first error.
+    - name: Set sanitizer env
+      run: |
+        echo "ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:halt_on_error=1:print_stacktrace=1" >> $GITHUB_ENV
+        echo "UBSAN_OPTIONS=abort_on_error=1:halt_on_error=1:print_stacktrace=1" >> $GITHUB_ENV
+
+    # Run the oracle suite (the most bug-productive subset of
+    # our tests). The testfixture and external-integration tests
+    # are skipped — they take too long under ASan and aren't where
+    # prolly-side UB lives.
+    - name: Oracle tests (savepoints + rollbacks)
+      run: cd build && bash ../test/oracle_savepoints_test.sh ./doltlite ./sqlite3
+
+    - name: Oracle tests (foreign keys)
+      run: cd build && bash ../test/oracle_foreign_keys_test.sh ./doltlite ./sqlite3
+
+    - name: Oracle tests (UPSERT / INSERT OR)
+      run: cd build && bash ../test/oracle_upsert_test.sh ./doltlite ./sqlite3
+
+    - name: Oracle tests (generated columns)
+      run: cd build && bash ../test/oracle_generated_columns_test.sh ./doltlite ./sqlite3
+
+    - name: Oracle tests (WITHOUT ROWID)
+      run: cd build && bash ../test/oracle_without_rowid_test.sh ./doltlite ./sqlite3
+
+    - name: Oracle tests (SQL triggers)
+      run: cd build && bash ../test/oracle_triggers_test.sh ./doltlite ./sqlite3
+
+    - name: SQL oracle tests
+      run: cd build && bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3
+
+    - name: Correctness regression tests
+      run: cd build && bash ../test/correctness_test.sh ./doltlite
