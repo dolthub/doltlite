@@ -43,11 +43,15 @@ struct ProllyMutMapUndoRec {
 
 struct ProllyMutMap {
   u8 isIntKey;
+  u8 keepSorted;
+  u8 orderDirty;
   int nEntries;
   int nAlloc;
   ProllyMutMapEntry *aEntries;
   int *aOrder;              /* sorted-position -> physical entry index */
   int *aPos;                /* physical entry index -> sorted-position */
+  int *aHash;               /* open-addressing hash table storing phys+1 */
+  int nHashAlloc;
   /* Active savepoint level. 0 = no savepoint, mutations skip
   ** the undo-log path entirely (fast path for autocommit). */
   int currentSavepointLevel;
@@ -60,6 +64,7 @@ struct ProllyMutMap {
 };
 
 int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey);
+int prollyMutMapInitMode(ProllyMutMap *mm, u8 isIntKey, u8 keepSorted);
 
 int prollyMutMapInsert(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey,
