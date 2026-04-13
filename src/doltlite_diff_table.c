@@ -146,6 +146,9 @@ struct DiffTblCursor {
   i64 iRowid;                   /* Monotonically increasing rowid */
 };
 
+/* idxNum bits for xBestIndex/xFilter. */
+#define DT_IDX_TO_COMMIT_EQ  0x01
+
 static int diffRecordField(
   const u8 *pData,
   int nData,
@@ -516,6 +519,65 @@ walk_done:
   sqlite3_free(aMap);
   sqlite3_free(aStack);
   sqlite3_free(aAdded);
+  return rc;
+}
+
+/* Build just the HEAD -> WORKING pair for queries constrained to
+** to_commit='WORKING'. This avoids the full audit-history walk when
+** callers only want the current working-set diff. */
+static int buildWorkingDiffPair(
+  DiffTblCursor *pCur,
+  sqlite3 *db,
+  const char *zTableName
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash headHash;
+  ProllyHash workingCat, workingTblRoot, workingSchemaHash;
+  ProllyHash headTblRoot, headSchemaHash;
+  DoltliteCommit headCommit;
+  u8 workingFlags = 0;
+  u8 headFlags = 0;
+  u8 fromFlags;
+  int rc;
+  char zWorking[PROLLY_HASH_SIZE*2+1];
+
+  if( !cs ) return SQLITE_OK;
+
+  doltliteGetSessionHead(db, &headHash);
+  if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
+
+  memset(&workingCat, 0, sizeof(workingCat));
+  memset(&workingTblRoot, 0, sizeof(workingTblRoot));
+  memset(&workingSchemaHash, 0, sizeof(workingSchemaHash));
+  memset(&headTblRoot, 0, sizeof(headTblRoot));
+  memset(&headSchemaHash, 0, sizeof(headSchemaHash));
+  memset(&headCommit, 0, sizeof(headCommit));
+  memset(zWorking, 0, sizeof(zWorking));
+  memcpy(zWorking, "WORKING", 7);
+
+  rc = doltliteFlushCatalogToHash(db, &workingCat);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = loadTblRootAtCommit(db, &workingCat, zTableName,
+                           &workingTblRoot, &workingFlags,
+                           &workingSchemaHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteLoadCommit(db, &headHash, &headCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = loadTblRootAtCommit(db, &headCommit.catalogHash, zTableName,
+                           &headTblRoot, &headFlags, &headSchemaHash);
+  if( rc==SQLITE_OK ){
+    int rootsDiffer = prollyHashCompare(&headTblRoot, &workingTblRoot)!=0;
+    int schemasDiffer = prollyHashCompare(&headSchemaHash, &workingSchemaHash)!=0;
+    if( rootsDiffer || schemasDiffer ){
+      fromFlags = headFlags ? headFlags : workingFlags;
+      rc = pairsAppend(pCur, &headHash, &headTblRoot, &headCommit.catalogHash,
+                       &headSchemaHash, fromFlags, headCommit.timestamp,
+                       zWorking, &workingTblRoot, &workingCat, &workingSchemaHash,
+                       workingFlags, 0);
+    }
+  }
+  doltliteCommitClear(&headCommit);
   return rc;
 }
 
@@ -948,8 +1010,28 @@ static int dtDisconnect(sqlite3_vtab *pBase){
 }
 
 static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
-  (void)pVtab;
-  pInfo->estimatedCost = 10000.0;
+  DiffTblVtab *p = (DiffTblVtab*)pVtab;
+  int i;
+  int iToCommitEq = -1;
+  int toCommitCol = p->cols.nCol;
+
+  for(i=0; i<pInfo->nConstraint; i++){
+    if( !pInfo->aConstraint[i].usable ) continue;
+    if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( pInfo->aConstraint[i].iColumn==toCommitCol ){
+      iToCommitEq = i;
+      break;
+    }
+  }
+
+  if( iToCommitEq>=0 ){
+    pInfo->idxNum = DT_IDX_TO_COMMIT_EQ;
+    pInfo->aConstraintUsage[iToCommitEq].argvIndex = 1;
+    pInfo->estimatedCost = 100.0;
+  }else{
+    pInfo->idxNum = 0;
+    pInfo->estimatedCost = 10000.0;
+  }
   return SQLITE_OK;
 }
 
@@ -978,7 +1060,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   DiffTblVtab *pVtab = (DiffTblVtab*)cur->pVtab;
   sqlite3 *db = pVtab->db;
   int rc;
-  (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  (void)idxStr;
 
   /* Reset state */
   closeDiffIter(c);
@@ -1001,11 +1083,20 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
     }
   }
 
-  /* Pre-build the (from,to) diff pairs from a Dolt-matching graph
-  ** walk. The first pair (when present) is the working-set diff
-  ** against HEAD; subsequent pairs are commits walked DFS-LIFO with
-  ** descendant attribution overwritten on each step. */
-  rc = buildDiffPairs(c, db, pVtab->zTableName);
+  if( (idxNum & DT_IDX_TO_COMMIT_EQ)!=0 && argc>=1 ){
+    const char *zToCommit = (const char*)sqlite3_value_text(argv[0]);
+    if( zToCommit && sqlite3_stricmp(zToCommit, "WORKING")==0 ){
+      rc = buildWorkingDiffPair(c, db, pVtab->zTableName);
+    }else{
+      rc = buildDiffPairs(c, db, pVtab->zTableName);
+    }
+  }else{
+    /* Pre-build the (from,to) diff pairs from a Dolt-matching graph
+    ** walk. The first pair (when present) is the working-set diff
+    ** against HEAD; subsequent pairs are commits walked DFS-LIFO with
+    ** descendant attribution overwritten on each step. */
+    rc = buildDiffPairs(c, db, pVtab->zTableName);
+  }
   if( rc!=SQLITE_OK ) return rc;
   if( c->nPairs==0 ){
     c->pairsDone = 1;
