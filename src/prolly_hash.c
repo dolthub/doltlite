@@ -208,7 +208,13 @@ u32 prollyRollingHashUpdate(ProllyRollingHash *rh, u8 byte){
   {
     u32 outHash = buzHashTable[outgoing];
     int rot = rh->windowSize % 32;
-    u32 rotatedOut = (outHash << rot) | (outHash >> (32 - rot));
+    /* `outHash >> (32 - rot)` is undefined behavior when rot == 0
+    ** (shift exponent equals the full width of u32). Mask the shift
+    ** amount with 31 so rot=0 becomes a no-op rotation (the
+    ** high half yields `outHash >> 0 = outHash`) which the OR below
+    ** correctly combines into just outHash. UBSan flagged the
+    ** naive form in prolly_hash.c line 211. */
+    u32 rotatedOut = (outHash << rot) | (outHash >> ((32 - rot) & 31));
     h ^= rotatedOut;
   }
 
