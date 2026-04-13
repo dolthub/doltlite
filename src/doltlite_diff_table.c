@@ -555,11 +555,12 @@ static int buildWorkingDiffPair(
   memset(zWorking, 0, sizeof(zWorking));
   memcpy(zWorking, "WORKING", 7);
 
-  rc = doltliteFlushCatalogToHash(db, &workingCat);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = loadTblRootAtCommit(db, &workingCat, zTableName,
-                           &workingTblRoot, &workingFlags,
-                           &workingSchemaHash);
+  rc = doltliteGetWorkingTableState(db, zTableName,
+                                    &workingTblRoot, &workingFlags,
+                                    &workingSchemaHash);
+  if( rc==SQLITE_NOTFOUND ){
+    rc = SQLITE_OK;
+  }
   if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteLoadCommit(db, &headHash, &headCommit);
@@ -570,6 +571,11 @@ static int buildWorkingDiffPair(
     int rootsDiffer = prollyHashCompare(&headTblRoot, &workingTblRoot)!=0;
     int schemasDiffer = prollyHashCompare(&headSchemaHash, &workingSchemaHash)!=0;
     if( rootsDiffer || schemasDiffer ){
+      rc = doltliteFlushCatalogToHash(db, &workingCat);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&headCommit);
+        return rc;
+      }
       fromFlags = headFlags ? headFlags : workingFlags;
       rc = pairsAppend(pCur, &headHash, &headTblRoot, &headCommit.catalogHash,
                        &headSchemaHash, fromFlags, headCommit.timestamp,

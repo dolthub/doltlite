@@ -38,6 +38,7 @@
 
 static void registerDoltiteFunctions(sqlite3 *db);
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
+int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 
 #ifndef TRANS_NONE
@@ -5295,6 +5296,31 @@ int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash){
 
   memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&commit);
+  return SQLITE_OK;
+}
+
+int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
+                                 ProllyHash *pRoot, u8 *pFlags,
+                                 ProllyHash *pSchemaHash){
+  Btree *pBtree;
+  Pgno iTable;
+  struct TableEntry *pEntry;
+
+  if( pRoot ) memset(pRoot, 0, sizeof(ProllyHash));
+  if( pFlags ) *pFlags = 0;
+  if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(ProllyHash));
+
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  if( doltliteResolveTableName(db, zTable, &iTable)!=SQLITE_OK ){
+    return SQLITE_NOTFOUND;
+  }
+  pEntry = findTable(pBtree, iTable);
+  if( !pEntry ) return SQLITE_NOTFOUND;
+
+  if( pRoot ) memcpy(pRoot, &pEntry->root, sizeof(ProllyHash));
+  if( pFlags ) *pFlags = pEntry->flags;
+  if( pSchemaHash ) memcpy(pSchemaHash, &pEntry->schemaHash, sizeof(ProllyHash));
   return SQLITE_OK;
 }
 

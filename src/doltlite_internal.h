@@ -95,6 +95,9 @@ int doltliteSerializeCatalogEntries(sqlite3 *db, struct TableEntry *aTables,
 int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
+int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
+                                 ProllyHash *pRoot, u8 *pFlags,
+                                 ProllyHash *pSchemaHash);
 int doltliteHasUncommittedChanges(sqlite3 *db);
 /* Ref resolution: try hex hash, then branch, then tag (doltlite_ref.c) */
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit);
