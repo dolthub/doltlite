@@ -217,6 +217,22 @@ static int ensureOrder(ProllyMutMap *mm){
   return SQLITE_OK;
 }
 
+static int rankEntryWithoutOrder(ProllyMutMap *mm, int phys){
+  ProllyMutMapEntry *target = &mm->aEntries[phys];
+  int rank = 0;
+  int i;
+  for(i=0; i<mm->nEntries; i++){
+    if( i==phys ) continue;
+    if( compareEntries(mm->isIntKey,
+                       mm->aEntries[i].pKey, mm->aEntries[i].nKey,
+                       mm->aEntries[i].intKey,
+                       target->pKey, target->nKey, target->intKey) < 0 ){
+      rank++;
+    }
+  }
+  return rank;
+}
+
 static int ensureCapacity(ProllyMutMap *mm){
   if( mm->nEntries >= mm->nAlloc ){
     int nNew = mm->nAlloc ? mm->nAlloc * 2 : MUTMAP_INIT_CAP;
@@ -585,6 +601,9 @@ ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx){
 
 int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry){
   int phys = (int)(pEntry - mm->aEntries);
+  if( !mm->keepSorted && mm->orderDirty ){
+    return rankEntryWithoutOrder(mm, phys);
+  }
   ensureOrder(mm);
   return mm->aPos[phys];
 }
