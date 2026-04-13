@@ -17,6 +17,10 @@ static int compareEntries(
                            pKeyB, nKeyB, intKeyB);
 }
 
+static ProllyMutMapEntry *entryAtOrder(ProllyMutMap *mm, int idx){
+  return &mm->aEntries[mm->aOrder[idx]];
+}
+
 static void freeEntryData(ProllyMutMapEntry *e){
   sqlite3_free(e->pKey);
   sqlite3_free(e->pVal);
@@ -59,7 +63,7 @@ static int bsearch_key(ProllyMutMap *mm,
   *pFound = 0;
   while( lo < hi ){
     int mid = lo + (hi - lo) / 2;
-    ProllyMutMapEntry *e = &mm->aEntries[mid];
+    ProllyMutMapEntry *e = entryAtOrder(mm, mid);
     int c = compareEntries(mm->isIntKey,
                            e->pKey, e->nKey, e->intKey,
                            pKey, nKey, intKey);
@@ -80,8 +84,16 @@ static int ensureCapacity(ProllyMutMap *mm){
     int nNew = mm->nAlloc ? mm->nAlloc * 2 : MUTMAP_INIT_CAP;
     ProllyMutMapEntry *aNew = sqlite3_realloc(mm->aEntries,
                                 nNew * sizeof(ProllyMutMapEntry));
+    int *aOrderNew;
+    int *aPosNew;
     if( !aNew ) return SQLITE_NOMEM;
+    aOrderNew = sqlite3_realloc(mm->aOrder, nNew * sizeof(int));
+    if( !aOrderNew ) return SQLITE_NOMEM;
+    aPosNew = sqlite3_realloc(mm->aPos, nNew * sizeof(int));
+    if( !aPosNew ) return SQLITE_NOMEM;
     mm->aEntries = aNew;
+    mm->aOrder = aOrderNew;
+    mm->aPos = aPosNew;
     mm->nAlloc = nNew;
   }
   return SQLITE_OK;
@@ -148,7 +160,7 @@ int prollyMutMapInsert(
   idx = bsearch_key(mm, pKey, nKey, intKey, &found);
 
   if( found ){
-    ProllyMutMapEntry *e = &mm->aEntries[idx];
+    ProllyMutMapEntry *e = entryAtOrder(mm, idx);
     /* In-place mutation. If a savepoint is active AND the entry
     ** predates it, snapshot before overwriting. */
     if( mm->currentSavepointLevel > 0
@@ -173,16 +185,10 @@ int prollyMutMapInsert(
   rc = ensureCapacity(mm);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( idx < mm->nEntries ){
-    memmove(&mm->aEntries[idx+1], &mm->aEntries[idx],
-            (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
-    if( mm->currentSavepointLevel > 0 ){
-      shiftUndoIndices(mm, idx, 1);
-    }
-  }
-
   {
-    ProllyMutMapEntry *e = &mm->aEntries[idx];
+    int phys = mm->nEntries;
+    int i;
+    ProllyMutMapEntry *e = &mm->aEntries[phys];
     memset(e, 0, sizeof(*e));
     e->op = PROLLY_EDIT_INSERT;
     e->isIntKey = mm->isIntKey;
@@ -190,14 +196,16 @@ int prollyMutMapInsert(
     e->bornAt = mm->currentSavepointLevel;
     rc = copyEntryData(e, pKey, nKey, pVal, nVal);
     if( rc!=SQLITE_OK ){
-      if( idx < mm->nEntries ){
-        memmove(&mm->aEntries[idx], &mm->aEntries[idx+1],
-                (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
-        if( mm->currentSavepointLevel > 0 ){
-          shiftUndoIndices(mm, idx+1, -1);
-        }
-      }
       return rc;
+    }
+    if( idx < mm->nEntries ){
+      memmove(&mm->aOrder[idx+1], &mm->aOrder[idx],
+              (mm->nEntries - idx) * sizeof(int));
+    }
+    mm->aOrder[idx] = phys;
+    mm->aPos[phys] = idx;
+    for(i = idx + 1; i <= mm->nEntries; i++){
+      mm->aPos[mm->aOrder[i]] = i;
     }
   }
 
@@ -214,7 +222,7 @@ int prollyMutMapDelete(
   idx = bsearch_key(mm, pKey, nKey, intKey, &found);
 
   if( found ){
-    ProllyMutMapEntry *e = &mm->aEntries[idx];
+    ProllyMutMapEntry *e = entryAtOrder(mm, idx);
     if( e->op == PROLLY_EDIT_INSERT ){
       if( mm->currentSavepointLevel > 0
        && e->bornAt < mm->currentSavepointLevel ){
@@ -235,16 +243,10 @@ int prollyMutMapDelete(
   rc = ensureCapacity(mm);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( idx < mm->nEntries ){
-    memmove(&mm->aEntries[idx+1], &mm->aEntries[idx],
-            (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
-    if( mm->currentSavepointLevel > 0 ){
-      shiftUndoIndices(mm, idx, 1);
-    }
-  }
-
   {
-    ProllyMutMapEntry *e = &mm->aEntries[idx];
+    int phys = mm->nEntries;
+    int i;
+    ProllyMutMapEntry *e = &mm->aEntries[phys];
     memset(e, 0, sizeof(*e));
     e->op = PROLLY_EDIT_DELETE;
     e->isIntKey = mm->isIntKey;
@@ -252,14 +254,16 @@ int prollyMutMapDelete(
     e->bornAt = mm->currentSavepointLevel;
     rc = copyEntryData(e, pKey, nKey, 0, 0);
     if( rc!=SQLITE_OK ){
-      if( idx < mm->nEntries ){
-        memmove(&mm->aEntries[idx], &mm->aEntries[idx+1],
-                (mm->nEntries - idx) * sizeof(ProllyMutMapEntry));
-        if( mm->currentSavepointLevel > 0 ){
-          shiftUndoIndices(mm, idx+1, -1);
-        }
-      }
       return rc;
+    }
+    if( idx < mm->nEntries ){
+      memmove(&mm->aOrder[idx+1], &mm->aOrder[idx],
+              (mm->nEntries - idx) * sizeof(int));
+    }
+    mm->aOrder[idx] = phys;
+    mm->aPos[phys] = idx;
+    for(i = idx + 1; i <= mm->nEntries; i++){
+      mm->aPos[mm->aOrder[i]] = i;
     }
   }
 
@@ -309,28 +313,45 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
 
   /* Drop new entries (bornAt >= level) — these are fresh-key inserts
   ** under the rolled-back savepoints. Walk descending so removals
-  ** don't disturb later indices. Patch surviving lower-level undo
-  ** records whose entryIdx > i as each removal shifts later entries
-  ** left by one. */
-  for(i = mm->nEntries - 1; i >= 0; i--){
-    if( mm->aEntries[i].bornAt >= level ){
-      ProllyMutMapEntry *e = &mm->aEntries[i];
-      sqlite3_free(e->pKey);
-      sqlite3_free(e->pVal);
-      if( i < mm->nEntries - 1 ){
-        memmove(&mm->aEntries[i], &mm->aEntries[i+1],
-                (mm->nEntries - 1 - i) * sizeof(ProllyMutMapEntry));
-      }
-      mm->nEntries--;
-      {
-        int j;
-        for(j=0; j<mm->nUndo; j++){
-          if( mm->aUndo[j].entryIdx > i ){
-            mm->aUndo[j].entryIdx--;
-          }
+  ** don't disturb later indices. Physical entries are compacted once at
+  ** the end; sorted order is rebuilt by filtering the old order vector. */
+  {
+    int oldN = mm->nEntries;
+    int *aMap = 0;
+    int newN = 0;
+    if( oldN > 0 ){
+      aMap = sqlite3_malloc(oldN * sizeof(int));
+      if( !aMap ) return SQLITE_NOMEM;
+    }
+    for(i=0; i<oldN; i++){
+      if( mm->aEntries[i].bornAt >= level ){
+        freeEntryData(&mm->aEntries[i]);
+        aMap[i] = -1;
+      }else{
+        if( newN != i ){
+          mm->aEntries[newN] = mm->aEntries[i];
         }
+        aMap[i] = newN++;
       }
     }
+    {
+      int j;
+      int out = 0;
+      for(j=0; j<oldN; j++){
+        int mapped = aMap[mm->aOrder[j]];
+        if( mapped >= 0 ){
+          mm->aOrder[out++] = mapped;
+        }
+      }
+      mm->nEntries = out;
+      for(j=0; j<mm->nEntries; j++){
+        mm->aPos[mm->aOrder[j]] = j;
+      }
+      for(j=0; j<mm->nUndo; j++){
+        mm->aUndo[j].entryIdx = aMap[mm->aUndo[j].entryIdx];
+      }
+    }
+    sqlite3_free(aMap);
   }
 
   mm->currentSavepointLevel = level - 1;
@@ -380,7 +401,16 @@ ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
   int found, idx;
   if( mm->nEntries==0 ) return 0;
   idx = bsearch_key(mm, pKey, nKey, intKey, &found);
-  return found ? &mm->aEntries[idx] : 0;
+  return found ? entryAtOrder(mm, idx) : 0;
+}
+
+ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx){
+  return entryAtOrder(mm, idx);
+}
+
+int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry){
+  int phys = (int)(pEntry - mm->aEntries);
+  return mm->aPos[phys];
 }
 
 int prollyMutMapCount(ProllyMutMap *mm){
@@ -405,7 +435,7 @@ int prollyMutMapIterValid(ProllyMutMapIter *it){
 }
 
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
-  return &it->pMap->aEntries[it->idx];
+  return entryAtOrder(it->pMap, it->idx);
 }
 
 void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
@@ -440,6 +470,10 @@ void prollyMutMapFree(ProllyMutMap *mm){
   prollyMutMapClear(mm);
   sqlite3_free(mm->aEntries);
   mm->aEntries = 0;
+  sqlite3_free(mm->aOrder);
+  mm->aOrder = 0;
+  sqlite3_free(mm->aPos);
+  mm->aPos = 0;
   mm->nAlloc = 0;
   sqlite3_free(mm->aUndo);
   mm->aUndo = 0;
@@ -460,7 +494,9 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
   if( src->nEntries > 0 ){
     dst->aEntries = (ProllyMutMapEntry*)sqlite3_malloc(
         src->nEntries * (int)sizeof(ProllyMutMapEntry));
-    if( !dst->aEntries ){
+    dst->aOrder = (int*)sqlite3_malloc(src->nEntries * (int)sizeof(int));
+    dst->aPos = (int*)sqlite3_malloc(src->nEntries * (int)sizeof(int));
+    if( !dst->aEntries || !dst->aOrder || !dst->aPos ){
       prollyMutMapFree(dst);
       sqlite3_free(dst);
       return SQLITE_NOMEM;
@@ -505,6 +541,8 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
       }
       dst->nEntries++;
     }
+    memcpy(dst->aOrder, src->aOrder, src->nEntries * sizeof(int));
+    memcpy(dst->aPos, src->aPos, src->nEntries * sizeof(int));
   }
 
   if( src->nUndo > 0 ){

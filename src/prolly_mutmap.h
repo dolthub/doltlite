@@ -46,6 +46,8 @@ struct ProllyMutMap {
   int nEntries;
   int nAlloc;
   ProllyMutMapEntry *aEntries;
+  int *aOrder;              /* sorted-position -> physical entry index */
+  int *aPos;                /* physical entry index -> sorted-position */
   /* Active savepoint level. 0 = no savepoint, mutations skip
   ** the undo-log path entirely (fast path for autocommit). */
   int currentSavepointLevel;
@@ -68,6 +70,10 @@ int prollyMutMapDelete(ProllyMutMap *mm,
 
 ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
                                      const u8 *pKey, int nKey, i64 intKey);
+
+ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx);
+
+int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry);
 
 int prollyMutMapCount(ProllyMutMap *mm);
 
