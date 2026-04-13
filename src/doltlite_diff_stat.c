@@ -111,25 +111,28 @@ static void dsFreeColNames(char **az, int n){
   sqlite3_free(az);
 }
 
-/* Count rows in a prolly tree by iterating. Returns -1 on error. */
-static int dsCountRows(sqlite3 *db, const ProllyHash *pRoot, u8 flags){
+/* Count rows in a prolly tree by iterating. */
+static int dsCountRows(sqlite3 *db, const ProllyHash *pRoot, u8 flags,
+                       i64 *pnRow){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   ProllyCursor cur;
   int rc, res;
-  int n = 0;
-  if( !cs || !pCache ) return -1;
-  if( prollyHashIsEmpty(pRoot) ) return 0;
+  i64 n = 0;
+  if( pnRow ) *pnRow = 0;
+  if( !cs || !pCache ) return SQLITE_ERROR;
+  if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
   rc = prollyCursorFirst(&cur, &res);
-  if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return -1; }
+  if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
   while( !res && prollyCursorIsValid(&cur) ){
     n++;
     rc = prollyCursorNext(&cur);
-    if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return -1; }
+    if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
   }
   prollyCursorClose(&cur);
-  return n;
+  if( pnRow ) *pnRow = n;
+  return SQLITE_OK;
 }
 
 /* Compare two record fields by semantic value (same logic as
@@ -294,6 +297,15 @@ static int dsResolveCatHash(sqlite3 *db, const char *zRef,
   return doltliteGetHeadCatalogHash(db, pOut);
 }
 
+static int dsRequireRefs(sqlite3_vtab *pVtab, int idxNum, const char *zName){
+  if( (idxNum & 3)!=3 ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf("%s requires from_ref and to_ref", zName);
+    return SQLITE_ERROR;
+  }
+  return SQLITE_OK;
+}
+
 /* ──────────────────────────────────────────────────────────────── */
 /*  Per-table work: compute stat counters for a single table across */
 /*  from and to. Returns 1 if the table should be included in the   */
@@ -310,13 +322,14 @@ static int dsComputeTableStats(
   struct TableEntry *aFrom = 0, *aTo = 0;
   int nFromCat = 0, nToCat = 0;
   struct TableEntry *pFromEntry, *pToEntry;
+  int hasFrom = 0, hasTo = 0;
   ProllyHash fromRoot, toRoot;
   u8 fromFlags = 0, toFlags = 0;
   char **azFromCols = 0, **azToCols = 0;
   int nFromCols = 0, nToCols = 0;
-  int oldCount = 0, newCount = 0;
+  i64 oldCount = 0, newCount = 0;
   int rowsMod = 0, rowsAdd = 0, rowsDel = 0;
-  int cellsMod = 0, cellsAdd = 0, cellsDel = 0;
+  i64 cellsMod = 0, cellsAdd = 0, cellsDel = 0;
   int rc;
 
   memset(pOut, 0, sizeof(*pOut));
@@ -331,6 +344,8 @@ static int dsComputeTableStats(
 
   pFromEntry = doltliteFindTableByName(aFrom, nFromCat, zTableName);
   pToEntry   = doltliteFindTableByName(aTo,   nToCat,   zTableName);
+  hasFrom = pFromEntry!=0;
+  hasTo = pToEntry!=0;
 
   memset(&fromRoot, 0, sizeof(fromRoot));
   memset(&toRoot,   0, sizeof(toRoot));
@@ -345,14 +360,14 @@ static int dsComputeTableStats(
   sqlite3_free(aFrom);
   sqlite3_free(aTo);
 
-  if( !pFromEntry && !pToEntry ) return SQLITE_OK;
+  if( !hasFrom && !hasTo ) return SQLITE_OK;
 
   /* Column name lists for each side (for semantic cell compare). */
-  if( pFromEntry ){
+  if( hasFrom ){
     rc = dsLoadColNames(db, pFromCatHash, zTableName, &azFromCols, &nFromCols);
     if( rc!=SQLITE_OK ) return rc;
   }
-  if( pToEntry ){
+  if( hasTo ){
     rc = dsLoadColNames(db, pToCatHash, zTableName, &azToCols, &nToCols);
     if( rc!=SQLITE_OK ){
       dsFreeColNames(azFromCols, nFromCols);
@@ -361,17 +376,17 @@ static int dsComputeTableStats(
   }
 
   /* Row counts on each side. */
-  if( pFromEntry ){
-    oldCount = dsCountRows(db, &fromRoot, fromFlags);
-    if( oldCount<0 ) oldCount = 0;
+  if( hasFrom ){
+    rc = dsCountRows(db, &fromRoot, fromFlags, &oldCount);
+    if( rc!=SQLITE_OK ) goto done;
   }
-  if( pToEntry ){
-    newCount = dsCountRows(db, &toRoot, toFlags);
-    if( newCount<0 ) newCount = 0;
+  if( hasTo ){
+    rc = dsCountRows(db, &toRoot, toFlags, &newCount);
+    if( rc!=SQLITE_OK ) goto done;
   }
 
   /* Walk the prolly diff iter to count per-row changes. */
-  if( pFromEntry && pToEntry
+  if( hasFrom && hasTo
    && prollyHashCompare(&fromRoot, &toRoot)!=0 ){
     ChunkStore *cs = doltliteGetChunkStore(db);
     ProllyCache *pCache = doltliteGetCache(db);
@@ -420,8 +435,8 @@ static int dsComputeTableStats(
   ** reported as modified and the non-NULL-value contribution is
   ** counted in cells_modified. The two counters can legitimately
   ** overlap on the same physical cell. */
-  if( pFromEntry && pToEntry ){
-    int rowsInBoth = oldCount - rowsDel;
+  if( hasFrom && hasTo ){
+    i64 rowsInBoth = oldCount - rowsDel;
     if( rowsInBoth < 0 ) rowsInBoth = 0;
     if( nToCols > nFromCols ){
       cellsAdd += (i64)rowsInBoth * (nToCols - nFromCols);
@@ -431,11 +446,11 @@ static int dsComputeTableStats(
   }
 
   /* For added tables, every row+cell is new; for dropped, all gone. */
-  if( !pFromEntry && pToEntry ){
+  if( !hasFrom && hasTo ){
     rowsAdd = newCount;
     cellsAdd = (i64)newCount * nToCols;
   }
-  if( pFromEntry && !pToEntry ){
+  if( hasFrom && !hasTo ){
     rowsDel = oldCount;
     cellsDel = (i64)oldCount * nFromCols;
   }
@@ -444,7 +459,7 @@ static int dsComputeTableStats(
   pOut->rowsAdded      = rowsAdd;
   pOut->rowsDeleted    = rowsDel;
   pOut->rowsModified   = rowsMod;
-  pOut->rowsUnmodified = (pFromEntry ? oldCount - rowsDel - rowsMod : 0);
+  pOut->rowsUnmodified = hasFrom ? oldCount - rowsDel - rowsMod : 0;
   if( pOut->rowsUnmodified<0 ) pOut->rowsUnmodified = 0;
   pOut->cellsAdded     = cellsAdd;
   pOut->cellsDeleted   = cellsDel;
@@ -669,6 +684,9 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
 
   dstFreeRows(c);
   c->iRow = 0;
+
+  rc = dsRequireRefs(&v->base, idxNum, "dolt_diff_stat");
+  if( rc!=SQLITE_OK ) return rc;
 
   if( (idxNum & 1) && argIdx<argc )
     zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);
@@ -896,6 +914,8 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
   sqlite3 *db = v->db;
   const char *zFromRef = 0, *zToRef = 0, *zTblFilter = 0;
   ProllyHash fromCat, toCat;
+  struct TableEntry *aFromCat = 0, *aToCat = 0;
+  int nFromCat = 0, nToCat = 0;
   char **azNames = 0;
   int nNames = 0;
   int rc, argIdx = 0, i;
@@ -903,6 +923,9 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
 
   dssFreeRows(c);
   c->iRow = 0;
+
+  rc = dsRequireRefs(&v->base, idxNum, "dolt_diff_summary");
+  if( rc!=SQLITE_OK ) return rc;
 
   if( (idxNum & 1) && argIdx<argc )
     zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);
@@ -918,21 +941,18 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
 
   rc = dsCollectTableNames(db, &fromCat, &toCat, &azNames, &nNames);
   if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCatalog(db, &fromCat, &aFromCat, &nFromCat, 0);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = doltliteLoadCatalog(db, &toCat, &aToCat, &nToCat, 0);
+  if( rc!=SQLITE_OK ) goto done;
 
   for(i=0; i<nNames; i++){
-    struct TableEntry *aFromCat = 0, *aToCat = 0;
-    int nFromCat = 0, nToCat = 0;
     struct TableEntry *pFromEntry, *pToEntry;
-    int oldCount = 0, newCount = 0;
+    i64 oldCount = 0, newCount = 0;
     int dataChange, schemaChange;
     const char *zDiffType;
 
     if( zTblFilter && strcmp(azNames[i], zTblFilter)!=0 ) continue;
-
-    rc = doltliteLoadCatalog(db, &fromCat, &aFromCat, &nFromCat, 0);
-    if( rc!=SQLITE_OK ) goto done;
-    rc = doltliteLoadCatalog(db, &toCat, &aToCat, &nToCat, 0);
-    if( rc!=SQLITE_OK ){ sqlite3_free(aFromCat); goto done; }
 
     pFromEntry = doltliteFindTableByName(aFromCat, nFromCat, azNames[i]);
     pToEntry   = doltliteFindTableByName(aToCat,   nToCat,   azNames[i]);
@@ -943,8 +963,6 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
       int schemasDiffer = (prollyHashCompare(&pFromEntry->schemaHash,
                                              &pToEntry->schemaHash)!=0);
       if( !rootsDiffer && !schemasDiffer ){
-        sqlite3_free(aFromCat);
-        sqlite3_free(aToCat);
         continue;
       }
       dataChange = rootsDiffer;
@@ -953,27 +971,27 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
       rc = dssAppend(c, azNames[i], azNames[i], zDiffType,
                      dataChange, schemaChange);
     }else if( !pFromEntry && pToEntry ){
-      newCount = dsCountRows(db, &pToEntry->root, pToEntry->flags);
-      if( newCount<0 ) newCount = 0;
+      rc = dsCountRows(db, &pToEntry->root, pToEntry->flags, &newCount);
+      if( rc!=SQLITE_OK ) goto done;
       dataChange = newCount > 0;
       schemaChange = 1;
       rc = dssAppend(c, "", azNames[i], "added",
                      dataChange, schemaChange);
     }else if( pFromEntry && !pToEntry ){
-      oldCount = dsCountRows(db, &pFromEntry->root, pFromEntry->flags);
-      if( oldCount<0 ) oldCount = 0;
+      rc = dsCountRows(db, &pFromEntry->root, pFromEntry->flags, &oldCount);
+      if( rc!=SQLITE_OK ) goto done;
       dataChange = oldCount > 0;
       schemaChange = 1;
       rc = dssAppend(c, azNames[i], "", "dropped",
                      dataChange, schemaChange);
     }
 
-    sqlite3_free(aFromCat);
-    sqlite3_free(aToCat);
     if( rc!=SQLITE_OK ) goto done;
   }
 
 done:
+  sqlite3_free(aFromCat);
+  sqlite3_free(aToCat);
   for(i=0; i<nNames; i++) sqlite3_free(azNames[i]);
   sqlite3_free(azNames);
   return rc;

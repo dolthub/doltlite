@@ -1791,6 +1791,140 @@ static void run_open_rejects_corrupt_working_set(void){
   remove_db(dbpath);
 }
 
+static void run_diff_stat_requires_refs(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Diff Stat Requires Refs Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_diff_stat_requires_refs");
+  remove_db(dbpath);
+
+  check("open_db_for_diff_stat_requires_refs", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_diff_stat_requires_refs", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT count(*) FROM dolt_diff_stat('HEAD');");
+  check("diff_stat_missing_to_ref_returns_error", strstr(res, "ERROR:")!=0);
+  res = exec1(db, "SELECT count(*) FROM dolt_diff_summary('HEAD');");
+  check("diff_summary_missing_to_ref_returns_error", strstr(res, "ERROR:")!=0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_diff_stat_surfaces_corrupt_root(void){
+  sqlite3 *db = 0;
+  ChunkStore *cs = 0;
+  char dbpath[256];
+  ProllyHash headHash, fromHash, badRootHash, badCatHash, badCommitHash;
+  DoltliteCommit headCommit, fromCommit, badCommit;
+  struct TableEntry *aTables = 0;
+  int nTables = 0;
+  u8 *pCatData = 0;
+  int nCatData = 0;
+  u8 *pCommitData = 0;
+  int nCommitData = 0;
+  int rc;
+  int i;
+  char zFrom[PROLLY_HASH_SIZE*2 + 1];
+  char zTo[PROLLY_HASH_SIZE*2 + 1];
+  char sql[512];
+  const char *res;
+  static const u8 badNode[] = { 'b', 'a', 'd', '!' };
+
+  printf("=== Diff Stat Surfaces Corrupt Root Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_diff_stat_surfaces_corrupt_root");
+  remove_db(dbpath);
+
+  memset(&headCommit, 0, sizeof(headCommit));
+  memset(&fromCommit, 0, sizeof(fromCommit));
+  memset(&badCommit, 0, sizeof(badCommit));
+
+  check("open_db_for_diff_stat_corrupt_root", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_diff_stat_corrupt_root", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'c1');"
+    "DROP TABLE t;"
+    "SELECT dolt_commit('-A', '-m', 'c2');")==SQLITE_OK);
+
+  doltliteGetSessionHead(db, &headHash);
+  check("load_head_commit_for_diff_stat_corrupt_root",
+        doltliteLoadCommit(db, &headHash, &headCommit)==SQLITE_OK);
+  if( headCommit.nParents>0 ){
+    fromHash = headCommit.aParents[0];
+  }else{
+    fromHash = headCommit.parentHash;
+  }
+  check("have_from_commit_hash_for_diff_stat_corrupt_root",
+        !prollyHashIsEmpty(&fromHash));
+  check("load_from_commit_for_diff_stat_corrupt_root",
+        doltliteLoadCommit(db, &fromHash, &fromCommit)==SQLITE_OK);
+  check("load_from_catalog_for_diff_stat_corrupt_root",
+        doltliteLoadCatalog(db, &fromCommit.catalogHash, &aTables, &nTables, 0)==SQLITE_OK);
+
+  for(i=0; i<nTables; i++){
+    if( aTables[i].zName && strcmp(aTables[i].zName, "t")==0 ){
+      break;
+    }
+  }
+  check("find_table_in_from_catalog_for_diff_stat_corrupt_root", i<nTables);
+
+  cs = doltliteGetChunkStore(db);
+  check("have_chunk_store_for_diff_stat_corrupt_root", cs!=0);
+  if( cs && i<nTables ){
+    check("store_bad_root_for_diff_stat_corrupt_root",
+          chunkStorePut(cs, badNode, (int)sizeof(badNode), &badRootHash)==SQLITE_OK);
+    aTables[i].root = badRootHash;
+    check("serialize_corrupt_catalog_for_diff_stat_corrupt_root",
+          doltliteSerializeCatalogEntries(db, aTables, nTables, &pCatData, &nCatData)==SQLITE_OK);
+    check("store_corrupt_catalog_for_diff_stat_corrupt_root",
+          chunkStorePut(cs, pCatData, nCatData, &badCatHash)==SQLITE_OK);
+
+    badCommit.parentHash = fromCommit.parentHash;
+    badCommit.catalogHash = badCatHash;
+    badCommit.timestamp = fromCommit.timestamp;
+    badCommit.zName = sqlite3_mprintf("%s", fromCommit.zName ? fromCommit.zName : "");
+    badCommit.zEmail = sqlite3_mprintf("%s", fromCommit.zEmail ? fromCommit.zEmail : "");
+    badCommit.zMessage = sqlite3_mprintf("%s", fromCommit.zMessage ? fromCommit.zMessage : "");
+    badCommit.nParents = fromCommit.nParents;
+    memcpy(badCommit.aParents, fromCommit.aParents, sizeof(fromCommit.aParents));
+    check("serialize_bad_commit_for_diff_stat_corrupt_root",
+          doltliteCommitSerialize(&badCommit, &pCommitData, &nCommitData)==SQLITE_OK);
+    check("store_bad_commit_for_diff_stat_corrupt_root",
+          chunkStorePut(cs, pCommitData, nCommitData, &badCommitHash)==SQLITE_OK);
+    rc = chunkStoreCommit(cs);
+    check("commit_bad_commit_for_diff_stat_corrupt_root", rc==SQLITE_OK);
+  }
+
+  doltliteHashToHex(&badCommitHash, zFrom);
+  doltliteHashToHex(&headHash, zTo);
+
+  snprintf(sql, sizeof(sql),
+           "SELECT count(*) FROM dolt_diff_stat('%s','%s','t');",
+           zFrom, zTo);
+  res = exec1(db, sql);
+  check("diff_stat_corrupt_root_returns_error", strstr(res, "ERROR:")!=0);
+
+  snprintf(sql, sizeof(sql),
+           "SELECT count(*) FROM dolt_diff_summary('%s','%s','t');",
+           zFrom, zTo);
+  res = exec1(db, sql);
+  check("diff_summary_corrupt_root_returns_error", strstr(res, "ERROR:")!=0);
+
+  sqlite3_free(pCommitData);
+  sqlite3_free(pCatData);
+  sqlite3_free(aTables);
+  doltliteCommitClear(&badCommit);
+  doltliteCommitClear(&fromCommit);
+  doltliteCommitClear(&headCommit);
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_truncated_wal_is_rejected(void){
   sqlite3 *db = 0;
   ChunkStore cs;
@@ -2794,6 +2928,8 @@ static const RegressionCase aCases[] = {
   { "begin_write_refreshes_working_set_metadata", "Begin Write Refreshes Working Set Metadata Test", run_begin_write_refreshes_working_set_metadata },
   { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
+  { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
+  { "diff_stat_surfaces_corrupt_root", "Diff Stat Surfaces Corrupt Root Test", run_diff_stat_surfaces_corrupt_root },
   { "table_moveto_mutmap_delete_preserves_neighbors", "Table Moveto MutMap Delete Preserves Neighbors Test", run_table_moveto_mutmap_delete_preserves_neighbors },
   { "index_moveto_mutmap_exact_keeps_iteration_aligned", "Index Moveto MutMap Exact Keeps Iteration Aligned Test", run_index_moveto_mutmap_exact_keeps_iteration_aligned },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
