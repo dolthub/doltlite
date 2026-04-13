@@ -391,6 +391,11 @@ static int btreeLoadWorkingSetBlob(
   ProllyHash *pMergeCommit,
   ProllyHash *pConflicts
 );
+
+static int canReadCursorOwnPending(BtShared *pBt, struct TableEntry *pTE){
+  if( !pBt || !pBt->db || !pTE || !pTE->zName ) return 0;
+  return sqlite3ShadowTableName(pBt->db, pTE->zName)==0;
+}
 static int btreeStoreWorkingSetBlob(
   ChunkStore *cs,
   const char *zBranch,
@@ -3128,7 +3133,7 @@ static int prollyBtreeCursor(
       pTE->pendingFlushSeekEdits = 0;
     }else{
       ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-      if( !hasPeerCursor ){
+      if( !hasPeerCursor && canReadCursorOwnPending(pBt, pTE) ){
         pCur->pMutMap = pMap;
         pCur->flushSeekEdits = pTE->pendingFlushSeekEdits;
         pTE->pPending = 0;
