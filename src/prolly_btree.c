@@ -3076,6 +3076,7 @@ static int prollyBtreeCursor(
 ){
   BtShared *pBt = p->pBt;
   struct TableEntry *pTE;
+  int hasPeerCursor = 0;
 
   assert( p->inTrans>=TRANS_READ );
 
@@ -3104,6 +3105,9 @@ static int prollyBtreeCursor(
   {
     BtCursor *pOther;
     for(pOther = pBt->pCursor; pOther; pOther = pOther->pNext){
+      if( pOther->pgnoRoot==iTable ){
+        hasPeerCursor = 1;
+      }
       if( pOther->pgnoRoot==iTable && pOther->pMutMap
           && !prollyMutMapIsEmpty(pOther->pMutMap) ){
         int rc = flushMutMap(pOther);
@@ -3123,9 +3127,13 @@ static int prollyBtreeCursor(
       }
       pTE->pendingFlushSeekEdits = 0;
     }else{
-
       ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-      if( !prollyMutMapIsEmpty(pMap) ){
+      if( !hasPeerCursor ){
+        pCur->pMutMap = pMap;
+        pCur->flushSeekEdits = pTE->pendingFlushSeekEdits;
+        pTE->pPending = 0;
+        pTE->pendingFlushSeekEdits = 0;
+      }else if( !prollyMutMapIsEmpty(pMap) ){
         ProllyMutMap *pFlushMap = pMap;
         int captured = 0;
         int rc2 = snapshotPendingForFlush(p, iTable, &pTE->pPending,
