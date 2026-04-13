@@ -1,4 +1,4 @@
-/* Tree mutation: apply sorted edit map to produce a new content-addressed root. */
+
 #ifndef SQLITE_PROLLY_MUTATE_H
 #define SQLITE_PROLLY_MUTATE_H
 
@@ -16,10 +16,10 @@ typedef struct ProllyMutator ProllyMutator;
 struct ProllyMutator {
   ChunkStore *pStore;
   ProllyCache *pCache;
-  ProllyHash oldRoot;       
-  ProllyMutMap *pEdits;     
-  u8 flags;                 
-  ProllyHash newRoot;       
+  ProllyHash oldRoot;
+  ProllyMutMap *pEdits;
+  u8 flags;
+  ProllyHash newRoot;
 };
 
 int prollyMutateFlush(ProllyMutator *pMut);
@@ -35,4 +35,4 @@ int prollyMutateDelete(ChunkStore *pStore, ProllyCache *pCache,
                        const u8 *pKey, int nKey, i64 intKey,
                        ProllyHash *pNewRoot);
 
-#endif 
+#endif

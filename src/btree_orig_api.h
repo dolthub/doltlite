@@ -1,10 +1,8 @@
-/*
-** Public API for the original SQLite btree, compiled with renamed symbols.
-** All functions take/return void* for Btree and BtCursor to avoid struct
-** conflicts with prolly_btree.c's definitions.
-**
-** These are implemented in btree_orig_api.c.
-*/
+/* Unshimmed SQLite btree API. These origBtree* entry points call the
+** untouched SQLite btree code (via the btree_orig_prefix.h renames)
+** so attached stock-sqlite files continue to work page-for-page while
+** the main doltlite db is served by prolly-backed btree.c. */
+
 #ifndef BTREE_ORIG_API_H
 #define BTREE_ORIG_API_H
 
@@ -89,7 +87,6 @@ int origBtreeIntegrityCheck(sqlite3 *db, void *p, Pgno *aRoot,
                             sqlite3_value *aCnt, int nRoot, int mxErr,
                             int *pnErr, char **pzOut);
 
-/* Detect if a file is standard SQLite format (returns 1) or doltlite (0) */
 int origBtreeIsSqliteFile(const char *zFilename);
 
-#endif /* BTREE_ORIG_API_H */
+#endif

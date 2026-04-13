@@ -6,10 +6,10 @@
 
 typedef struct ProllyHashSet ProllyHashSet;
 struct ProllyHashSet {
-  ProllyHash *aSlots;   
-  u8 *aUsed;            
-  int nSlots;           
-  int nUsed;            
+  ProllyHash *aSlots;
+  u8 *aUsed;
+  int nSlots;
+  int nUsed;
 };
 
 int prollyHashSetInit(ProllyHashSet *hs, int nCapacity);
@@ -17,4 +17,4 @@ void prollyHashSetFree(ProllyHashSet *hs);
 int prollyHashSetContains(ProllyHashSet *hs, const ProllyHash *h);
 int prollyHashSetAdd(ProllyHashSet *hs, const ProllyHash *h);
 
-#endif 
+#endif

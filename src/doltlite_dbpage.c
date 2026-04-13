@@ -1,26 +1,4 @@
-/* doltlite_dbpage: override of the stock sqlite_dbpage vtable.
-**
-** The stock sqlite_dbpage reads raw b-tree pages through the sqlite
-** pager. doltlite's storage is prolly trees, not pages, so the stock
-** implementation returns NULL for every page and .dbinfo reports
-** "unable to read database header".
-**
-** This module registers a doltlite-specific sqlite_dbpage AFTER the
-** stock one so sqlite3_create_module's override wins. It only
-** synthesizes pgno=1 — the 100-byte SQLite-format-3 header that
-** .dbinfo parses — with values drawn from the active catalog:
-**
-**   file change counter = low 32 bits of the head commit hash
-**   schema cookie       = low 32 bits of the catalog hash
-**   database page count = number of user tables in the catalog
-**   largest root page   = max iTable in the catalog
-**   software version    = SQLITE_VERSION_NUMBER
-**   everything else     = zero / standard defaults
-**
-** The synthesized page is enough for .dbinfo to print a coherent
-** report — the rest of its output comes from follow-up queries
-** against sqlite_schema, which doltlite already supports.
-*/
+
 
 #ifdef DOLTLITE_PROLLY
 
@@ -30,10 +8,6 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* Return a full 4096-byte page so sqlite3_column_bytes() > 100 — the
-** strict inequality that .dbinfo uses to decide the read succeeded.
-** Only the first 100 bytes (the SQLite file header) are populated;
-** the rest is zero-filled page content. */
 #define DOLTLITE_DBPAGE_PAGE_BYTES 4096
 
 typedef struct DbpageVtab DbpageVtab;
@@ -45,8 +19,8 @@ struct DbpageVtab {
 typedef struct DbpageCursor DbpageCursor;
 struct DbpageCursor {
   sqlite3_vtab_cursor base;
-  int iRow;                   /* 0 before first row, 1 after */
-  int hasRow;                 /* 1 if a row should be emitted */
+  int iRow;
+  int hasRow;
   unsigned char aPage[DOLTLITE_DBPAGE_PAGE_BYTES];
 };
 
@@ -62,12 +36,14 @@ static void put4byteBE(unsigned char *p, unsigned int v){
   p[3] = (unsigned char)(v & 0xff);
 }
 
-/*
-** Fill the first 100 bytes of aPage with a synthesized SQLite
-** format-3 db header. The remaining page bytes are zeroed — no
-** b-tree contents are synthesized. Non-fatal: if any doltlite state
-** lookup fails, the corresponding header field is left at zero.
-*/
+/* sqlite_dbpage is normally a view into the real 4k-paged database
+** file, but doltlite's on-disk format is a chunk store — there ARE
+** no pages. Instead we fabricate a single synthetic page 1 that
+** looks enough like a SQLite header for tools that parse it
+** (shell .dbinfo, backup-utilities) to read meta without crashing.
+** Higher pgnos return EOF. Field values are derived from the
+** current HEAD: change_counter from the commit hash, schema_cookie
+** from the catalog hash, pageCount = user-table count. */
 static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
   ProllyHash headHash;
   ProllyHash catHash;
@@ -83,18 +59,17 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
 
   memset(aPage, 0, DOLTLITE_DBPAGE_PAGE_BYTES);
 
-  /* Magic + fixed header constants. */
-  memcpy(aHdr, "SQLite format 3", 16);  /* 16th byte is the \0 from memset */
-  put2byteBE(aHdr + 16, 4096);          /* page size (display-only) */
-  aHdr[18] = 1;                         /* write format */
-  aHdr[19] = 1;                         /* read format */
-  aHdr[20] = 0;                         /* reserved bytes per page */
-  aHdr[21] = 64;                        /* max embedded payload fraction */
-  aHdr[22] = 32;                        /* min embedded payload fraction */
-  aHdr[23] = 32;                        /* leaf payload fraction */
 
-  /* Change counter = low 32 bits of the head commit hash. Zero on an
-  ** empty repo (no commits yet). */
+  memcpy(aHdr, "SQLite format 3", 16);
+  put2byteBE(aHdr + 16, 4096);
+  aHdr[18] = 1;
+  aHdr[19] = 1;
+  aHdr[20] = 0;
+  aHdr[21] = 64;
+  aHdr[22] = 32;
+  aHdr[23] = 32;
+
+
   doltliteGetSessionHead(db, &headHash);
   if( !prollyHashIsEmpty(&headHash) ){
     for(i=0; i<4; i++){
@@ -103,14 +78,14 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
   }
   put4byteBE(aHdr + 24, changeCounter);
 
-  /* Walk the current catalog for table count and max iTable. */
+
   if( doltliteGetHeadCatalogHash(db, &catHash)==SQLITE_OK
    && !prollyHashIsEmpty(&catHash)
    && doltliteLoadCatalog(db, &catHash, &aTables, &nTables, &iNextTable)==SQLITE_OK
   ){
     int userTables = 0;
     for(i=0; i<nTables; i++){
-      /* Skip the sqlite_master slot (iTable==1, name==NULL). */
+
       if( aTables[i].iTable<=1 ) continue;
       userTables++;
       if( (unsigned int)aTables[i].iTable > largestRoot ){
@@ -124,19 +99,19 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
     sqlite3_free(aTables);
   }
 
-  put4byteBE(aHdr + 28, pageCount);      /* database size in pages */
-  /* 32..35: first freelist trunk page — 0 */
-  /* 36..39: total freelist pages — 0 */
+  put4byteBE(aHdr + 28, pageCount);
+
+
   put4byteBE(aHdr + 40, schemaCookie);
-  put4byteBE(aHdr + 44, 4);              /* schema format number */
-  /* 48..51: default page cache size — 0 */
-  put4byteBE(aHdr + 52, largestRoot);    /* largest root b-tree page */
-  put4byteBE(aHdr + 56, 1);              /* text encoding: utf8 */
-  /* 60..63: user version — 0 */
-  /* 64..67: incremental vacuum mode — 0 */
-  /* 68..71: application id — 0 */
-  /* 72..91: reserved for expansion — all zero */
-  put4byteBE(aHdr + 92, changeCounter);  /* version-valid-for */
+  put4byteBE(aHdr + 44, 4);
+
+  put4byteBE(aHdr + 52, largestRoot);
+  put4byteBE(aHdr + 56, 1);
+
+
+
+
+  put4byteBE(aHdr + 92, changeCounter);
   put4byteBE(aHdr + 96, SQLITE_VERSION_NUMBER);
 }
 
@@ -163,14 +138,6 @@ static int dbpageDisconnect(sqlite3_vtab *pVtab){
   return SQLITE_OK;
 }
 
-/*
-** Accept pgno= (column 0) and schema= (column 2 HIDDEN) equality
-** constraints. The shell's .dbinfo uses the table-valued-function
-** form sqlite_dbpage(?1) WHERE pgno=1 which binds the schema name
-** into the hidden schema column — we accept and discard it (doltlite
-** only synthesizes the main schema's page 1). idxNum bit 1 = pgno
-** present, bit 2 = schema present.
-*/
 static int dbpageBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int i, idxNum = 0, nArg = 0;
   int iPgno = -1, iSchema = -1;
@@ -229,13 +196,12 @@ static int dbpageFilter(sqlite3_vtab_cursor *pCursor,
   pCur->iRow = 0;
   pCur->hasRow = 0;
 
-  /* idxNum bit 1: pgno= present at argv[iArg]. Only emit if pgno==1. */
+
   if( idxNum & 1 ){
     sqlite3_int64 pgno = sqlite3_value_int64(argv[iArg++]);
     wantPage1 = (pgno==1);
   }
-  /* idxNum bit 2: schema= present at argv[iArg]. Accept but ignore —
-  ** doltlite only synthesizes the main schema's page 1. */
+
   if( idxNum & 2 ){
     iArg++;
   }
@@ -262,14 +228,14 @@ static int dbpageColumn(sqlite3_vtab_cursor *pCursor,
     sqlite3_context *ctx, int iCol){
   DbpageCursor *pCur = (DbpageCursor*)pCursor;
   switch( iCol ){
-    case 0:  /* pgno */
+    case 0:
       sqlite3_result_int64(ctx, 1);
       break;
-    case 1:  /* data */
+    case 1:
       sqlite3_result_blob(ctx, pCur->aPage, DOLTLITE_DBPAGE_PAGE_BYTES,
                           SQLITE_TRANSIENT);
       break;
-    case 2:  /* schema (HIDDEN) */
+    case 2:
     default:
       sqlite3_result_null(ctx);
       break;
@@ -294,14 +260,6 @@ int doltliteDbpageRegister(sqlite3 *db){
   return sqlite3_create_module(db, "sqlite_dbpage", &doltliteDbpageModule, 0);
 }
 
-/*
-** Extension-init wrapper matching the sqlite3_load_extension / auto-
-** extension signature. Installed via sqlite3_auto_extension from
-** process startup so every sqlite3_open picks up the doltlite
-** sqlite_dbpage override AFTER the stock sqlite3BuiltinExtensions
-** loop has registered its version. Without this ordering the stock
-** module clobbers ours and .dbinfo fails on prolly-backed databases.
-*/
 static int doltliteDbpageExtInit(
   sqlite3 *db,
   char **pzErrMsg,

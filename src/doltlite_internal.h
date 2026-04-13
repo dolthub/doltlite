@@ -5,15 +5,19 @@
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
 
-
+/* iTable is the rowid-alias of the table in sqlite_master and
+** survives renames (used by dolt_status to detect renames as same
+** iTable + different name). pPending is the in-memory ProllyMutMap
+** of uncommitted edits for this table — NULL until the first
+** mutation flushes a table entry into the working catalog. */
 struct TableEntry {
-  Pgno iTable;           
-  ProllyHash root;       
-  ProllyHash schemaHash; 
-  u8 flags;              
+  Pgno iTable;
+  ProllyHash root;
+  ProllyHash schemaHash;
+  u8 flags;
   u8 pendingFlushSeekEdits;
-  char *zName;           
-  void *pPending;        
+  char *zName;
+  void *pPending;
 };
 
 static SQLITE_INLINE struct TableEntry *doltliteFindTableByNumber(
@@ -37,10 +41,6 @@ static SQLITE_INLINE struct TableEntry *doltliteFindTableByName(
   return 0;
 }
 
-/*
-** Compare two TableEntry structs by name for deterministic catalog ordering.
-** NULL names sort before all others (table 1 / sqlite_master has no name).
-*/
 static SQLITE_INLINE int tableEntryNameCmp(const void *a, const void *b){
   const struct TableEntry *ea = (const struct TableEntry *)a;
   const struct TableEntry *eb = (const struct TableEntry *)b;
@@ -50,10 +50,6 @@ static SQLITE_INLINE int tableEntryNameCmp(const void *a, const void *b){
   return strcmp(ea->zName, eb->zName);
 }
 
-/*
-** Find a table's root hash and flags from a catalog entry array.
-** Returns SQLITE_OK if found, SQLITE_NOTFOUND otherwise (with pRoot zeroed).
-*/
 static SQLITE_INLINE int doltliteFindTableRoot(
   struct TableEntry *a, int n, Pgno iTable,
   ProllyHash *pRoot, u8 *pFlags
@@ -99,16 +95,13 @@ int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
                                  ProllyHash *pRoot, u8 *pFlags,
                                  ProllyHash *pSchemaHash);
 int doltliteHasUncommittedChanges(sqlite3 *db);
-/* Ref resolution: try hex hash, then branch, then tag (doltlite_ref.c) */
+
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit);
 
-/* Load a commit by hash. Caller must doltliteCommitClear() (doltlite_ref.c) */
 typedef struct DoltliteCommit DoltliteCommit;
 int doltliteLoadCommit(sqlite3 *db, const ProllyHash *pHash,
                        DoltliteCommit *pCommit);
 
-/* Register a per-table virtual table module for each user table in HEAD.
-** Creates modules named "<zPrefix><tablename>" (doltlite_ref.c) */
 int doltliteForEachUserTable(sqlite3 *db, const char *zPrefix,
                              const sqlite3_module *pModule);
 
@@ -151,7 +144,6 @@ void doltliteSetAuthorName(sqlite3 *db, const char *zName);
 const char *doltliteGetAuthorEmail(sqlite3 *db);
 void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
 
-/* Schema entry, used by schema_diff and merge */
 typedef struct SchemaEntry SchemaEntry;
 struct SchemaEntry {
   char *zName;
@@ -165,11 +157,10 @@ int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
 SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName);
 void freeSchemaEntries(SchemaEntry *a, int n);
 
-/* Schema merge actions returned from doltliteMergeCatalogs */
 typedef struct SchemaMergeAction SchemaMergeAction;
 struct SchemaMergeAction {
   char *zTableName;
-  char **azAddColumns;   /* ALTER TABLE ADD COLUMN definitions */
+  char **azAddColumns;
   int nAddColumns;
 };
 
@@ -181,7 +172,6 @@ int doltliteMergeCatalogs(sqlite3 *db,
   int *pnConflicts, char **pzErrMsg,
   SchemaMergeAction **ppActions, int *pnActions);
 
-/* Schema merge helpers (doltlite_schema_merge.c) */
 struct ProllyDiffChange;
 
 struct MigrateDiffCtx {

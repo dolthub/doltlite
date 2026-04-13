@@ -1,4 +1,4 @@
-/* Two-tree diff: walks cursors in parallel to emit ADD/DELETE/MODIFY changes. */
+
 #ifndef SQLITE_PROLLY_DIFF_H
 #define SQLITE_PROLLY_DIFF_H
 
@@ -9,21 +9,21 @@
 #include "prolly_cache.h"
 #include "chunk_store.h"
 
-#define PROLLY_DIFF_ADD     1   
-#define PROLLY_DIFF_DELETE  2   
-#define PROLLY_DIFF_MODIFY  3   
+#define PROLLY_DIFF_ADD     1
+#define PROLLY_DIFF_DELETE  2
+#define PROLLY_DIFF_MODIFY  3
 
 typedef struct ProllyDiff ProllyDiff;
 typedef struct ProllyDiffChange ProllyDiffChange;
 
 struct ProllyDiffChange {
-  u8 type;              
-  const u8 *pKey;       
-  int nKey;             
-  i64 intKey;           
-  const u8 *pOldVal;   
+  u8 type;
+  const u8 *pKey;
+  int nKey;
+  i64 intKey;
+  const u8 *pOldVal;
   int nOldVal;
-  const u8 *pNewVal;   
+  const u8 *pNewVal;
   int nNewVal;
 };
 
@@ -39,10 +39,11 @@ int prollyValuesEqual(
   int *pEqual
 );
 
-/*
-** Streaming diff iterator: yields one ProllyDiffChange at a time from the
-** merge-walk of two prolly trees. Avoids materializing all diffs in memory.
-*/
+/* Iterator form of prollyDiff. The copy buffers are load-bearing:
+** cursor movement can release the cache entry the key/value pointers
+** live in, so the iterator deep-copies each change into its own
+** owned buffers before returning it to the caller. The ppChange
+** pointer from prollyDiffIterStep stays valid until the next step. */
 typedef struct ProllyDiffIter ProllyDiffIter;
 struct ProllyDiffIter {
   ChunkStore *pStore;
@@ -52,17 +53,14 @@ struct ProllyDiffIter {
   ProllyCursor *pCurOld;
   ProllyCursor *pCurNew;
 
-  u8 eof;             /* 1 when iteration is complete */
-  int rc;             /* error code, if any */
+  u8 eof;
+  int rc;
 
-  /* Current change (valid after a successful Step) */
   ProllyDiffChange current;
 
-  /* Copy of blob-key data so the change survives cursor movement */
   u8 *pKeyCopy;
   int nKeyCopy;
 
-  /* Copies of value data so the change survives cursor movement */
   u8 *pOldValCopy;
   int nOldValCopy;
   u8 *pNewValCopy;

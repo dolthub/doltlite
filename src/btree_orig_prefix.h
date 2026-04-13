@@ -1,12 +1,13 @@
-/*
-** Symbol renames for compiling the original SQLite btree/pager/wal
-** alongside the prolly btree replacement.  Include this header
-** before btree.c, pager.c, wal.c, and btmutex.c.
-*/
+/* Rename shim. The vanilla SQLite btree/pager/wal/backup code is
+** compiled with this header force-included (see Makefile) so every
+** external symbol it exports gets an `orig_` prefix. That keeps the
+** original implementation linkable alongside doltlite's shimmed
+** entry points (btree.c, pager_shim.c), which export the unprefixed
+** names used by the rest of SQLite. */
+
 #ifndef BTREE_ORIG_PREFIX_H
 #define BTREE_ORIG_PREFIX_H
 
-/* Btree symbols */
 #define sqlite3BtreeBeginStmt orig_sqlite3BtreeBeginStmt
 #define sqlite3BtreeBeginTrans orig_sqlite3BtreeBeginTrans
 #define sqlite3BtreeCheckpoint orig_sqlite3BtreeCheckpoint
@@ -110,7 +111,6 @@
 #define sqlite3BtreeTxnState orig_sqlite3BtreeTxnState
 #define sqlite3BtreeUpdateMeta orig_sqlite3BtreeUpdateMeta
 
-/* Pager symbols */
 #define sqlite3PagerBackupPtr orig_sqlite3PagerBackupPtr
 #define sqlite3PagerBegin orig_sqlite3PagerBegin
 #define sqlite3PagerCacheStat orig_sqlite3PagerCacheStat
@@ -193,7 +193,6 @@
 #endif
 #define sqlite3PagerWrite orig_sqlite3PagerWrite
 
-/* WAL symbols */
 #define sqlite3WalBeginReadTransaction orig_sqlite3WalBeginReadTransaction
 #define sqlite3WalBeginWriteTransaction orig_sqlite3WalBeginWriteTransaction
 #define sqlite3WalCallback orig_sqlite3WalCallback
@@ -228,24 +227,20 @@
 #define sqlite3WalUndo orig_sqlite3WalUndo
 #define sqlite3WalWriteLock orig_sqlite3WalWriteLock
 
-/* Backup symbols */
 #define sqlite3BackupRestart orig_sqlite3BackupRestart
 #define sqlite3BackupUpdate orig_sqlite3BackupUpdate
 
-/* Public backup API symbols */
 #define sqlite3_backup_init orig_sqlite3_backup_init
 #define sqlite3_backup_step orig_sqlite3_backup_step
 #define sqlite3_backup_finish orig_sqlite3_backup_finish
 #define sqlite3_backup_remaining orig_sqlite3_backup_remaining
 #define sqlite3_backup_pagecount orig_sqlite3_backup_pagecount
 
-/* Other duplicate symbols from pager/btree */
 #define sqlite3_database_file_object orig_sqlite3_database_file_object
 #define sqlite3_enable_shared_cache orig_sqlite3_enable_shared_cache
 #define sqlite3HeaderSizeBtree orig_sqlite3HeaderSizeBtree
 #define sqlite3SectorSize orig_sqlite3SectorSize
 
-/* BtMutex symbols */
 #define sqlite3BtreeEnter orig_sqlite3BtreeEnter
 #define sqlite3BtreeEnterAll orig_sqlite3BtreeEnterAll
 #define sqlite3BtreeEnterCursor orig_sqlite3BtreeEnterCursor
@@ -255,4 +250,4 @@
 #define sqlite3BtreeLeaveAll orig_sqlite3BtreeLeaveAll
 #define sqlite3BtreeLeaveCursor orig_sqlite3BtreeLeaveCursor
 
-#endif /* BTREE_ORIG_PREFIX_H */
+#endif

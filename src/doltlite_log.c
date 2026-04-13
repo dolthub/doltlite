@@ -1,5 +1,4 @@
-/* dolt_log: BFS traversal of all reachable commits.
-** Follows ALL parents (not just the first), deduplicating by commit hash. */
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -42,6 +41,9 @@ static const char *doltliteLogSchema =
   "  message TEXT"
   ")";
 
+/* BFS from HEAD across the parent graph. Output is arrival-order,
+** NOT chronological — in merge histories a later commit may land
+** before an older one. Callers must ORDER BY date for git-log order. */
 static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
                          LogEntry **ppOut, int *pnOut){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -58,7 +60,7 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
     return SQLITE_OK;
   }
 
-  /* Seed queue */
+
   qAlloc = 16;
   queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
   if( !queue ) return SQLITE_NOMEM;
@@ -75,19 +77,19 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
     DoltliteCommit commit;
     LogEntry *pEntry;
 
-    /* Dedup by hash */
+
     if( prollyHashSetContains(&visited, &cur) ) continue;
     rc = prollyHashSetAdd(&visited, &cur);
     if( rc!=SQLITE_OK ){
       break;
     }
 
-    /* Load commit */
+
     memset(&commit, 0, sizeof(commit));
     rc = doltliteLoadCommit(db, &cur, &commit);
     if( rc!=SQLITE_OK ) break;
 
-    /* Add to results */
+
     if( nEntries >= nAlloc ){
       int newAlloc = nAlloc ? nAlloc*2 : 16;
       LogEntry *tmp = sqlite3_realloc(aEntries, newAlloc*(int)sizeof(LogEntry));
@@ -102,7 +104,7 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
     doltliteHashToHex(&cur, pEntry->zHex);
     pEntry->commit = commit;
 
-    /* Enqueue all parents */
+
     for(i = 0; i < doltliteCommitParentCount(&commit); i++){
       const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
       if( !pParent || prollyHashIsEmpty(pParent) ) continue;
@@ -127,7 +129,7 @@ static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
     return rc;
   }
 
-  /* BFS order is topological: each commit before its parents */
+
   *ppOut = aEntries;
   *pnOut = nEntries;
   return SQLITE_OK;

@@ -1,3 +1,11 @@
+/* Pager API shim. Doltlite stores data in a content-addressed chunk
+** store, not 4k pages, so the stock SQLite pager layer has nothing to
+** do. This file provides a drop-in replacement for every sqlite3Pager*
+** entry point. The shim dispatches by sniffing a magic field on the
+** Pager struct: shimmed pagers have PAGER_SHIM_MAGIC and route to
+** no-op / bookkeeping ops, stock pagers (temp files, attached
+** :memory:, plain-sqlite ATTACHes) fall through to origPagerOps which
+** calls the real SQLite implementation. */
 
 #ifdef DOLTLITE_PROLLY
 
@@ -146,19 +154,19 @@ static int dummyFileControl(sqlite3_file *p, int op, void *a){
 static int dummySectorSize(sqlite3_file *p){ (void)p; return 4096; }
 static int dummyDevChar(sqlite3_file *p){ (void)p; return 0; }
 static const sqlite3_io_methods dummyIoMethods = {
-  1,                  
-  dummyClose,         
-  dummyRead,          
-  dummyWrite,         
-  dummyTruncate,      
-  dummySync,          
-  dummyFileSize,      
-  dummyLock,          
-  dummyUnlock,        
-  dummyCheckLock,     
-  dummyFileControl,   
-  dummySectorSize,    
-  dummyDevChar        
+  1,
+  dummyClose,
+  dummyRead,
+  dummyWrite,
+  dummyTruncate,
+  dummySync,
+  dummyFileSize,
+  dummyLock,
+  dummyUnlock,
+  dummyCheckLock,
+  dummyFileControl,
+  dummySectorSize,
+  dummyDevChar
 };
 static sqlite3_file dummyFileObj;
 static sqlite3_file *pagerShimDummyFile(void){
@@ -334,7 +342,7 @@ static int shimPagerOpenWal(Pager *p, int *pisOpen){
 static int shimPagerCloseWal(Pager *p, sqlite3 *db){
   (void)p; (void)db; return SQLITE_OK;
 }
-#endif 
+#endif
 
 static const PagerOps shimPagerOps = {
   shimPagerFile,
@@ -438,6 +446,10 @@ static const PagerOps origPagerOps = {
 #endif
 };
 
+/* Dispatch table selector. Stock SQLite Pagers never set the magic
+** field, so anything without it gets the real pager ops — this is
+** what lets attached stock-sqlite databases coexist with doltlite's
+** main db in the same sqlite3 handle. */
 static inline const PagerOps *getPagerOps(const Pager *p){
   if( p && ((const PagerShim*)p)->magic == PAGER_SHIM_MAGIC ){
     return ((const PagerShim*)p)->pOps;
@@ -458,7 +470,7 @@ PagerShim *pagerShimCreate(
   pShim->magic = PAGER_SHIM_MAGIC;
   pShim->pOps = &shimPagerOps;
 
-  
+
   if( zFilename && zFilename[0] ){
     int n = (int)strlen(zFilename);
     pShim->zFilename = (char*)sqlite3_malloc(n + 1);
@@ -476,7 +488,7 @@ PagerShim *pagerShimCreate(
     pShim->zFilename[0] = '\0';
   }
 
-  
+
   pShim->zJournal = (char*)sqlite3_malloc(1);
   if( pShim->zJournal==0 ){
     sqlite3_free(pShim->zFilename);
@@ -485,7 +497,7 @@ PagerShim *pagerShimCreate(
   }
   pShim->zJournal[0] = '\0';
 
-  
+
   if( pFd==0 ){
     pFd = pagerShimDummyFile();
   }
@@ -493,7 +505,7 @@ PagerShim *pagerShimCreate(
   pShim->pVfs         = pVfs;
   pShim->journalMode  = PAGER_JOURNALMODE_WAL;
   pShim->eLock        = 0;
-  pShim->iDataVersion = 1;   
+  pShim->iDataVersion = 1;
 
   return pShim;
 }
@@ -806,12 +818,16 @@ typedef struct DoltliteBackup DoltliteBackup;
 struct DoltliteBackup {
   sqlite3 *pSrcDb;
   sqlite3 *pDestDb;
-  char *zSrcFile;       
-  char *zDestFile;      
+  char *zSrcFile;
+  char *zDestFile;
   sqlite3_vfs *pVfs;
-  int done;             
+  int done;
 };
 
+/* Doltlite's backup can't use SQLite's page-by-page copy — shimmed
+** pagers return no pages. Instead we copy the chunk store file
+** byte-for-byte. Only the main db (iDb == 0) is doltlite-backed;
+** attached stock databases fall through to the real backup API. */
 sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
                                      sqlite3 *pSrc, const char *zSrcDb){
   DoltliteBackup *p;
@@ -821,21 +837,21 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
 
   if( !pDest || !pSrc || pDest==pSrc ) return 0;
 
-  
+
   iSrc = sqlite3FindDbName(pSrc, zSrcDb);
   iDest = sqlite3FindDbName(pDest, zDestDb);
   if( iSrc < 0 || iDest < 0 ) return 0;
 
-  
+
   if( iSrc != 0 || iDest != 0 ){
     return orig_sqlite3_backup_init(pDest, zDestDb, pSrc, zSrcDb);
   }
 
-  
+
   srcCs = doltliteGetChunkStore(pSrc);
   destCs = doltliteGetChunkStore(pDest);
   if( !srcCs || !srcCs->zFilename ) return 0;
-  if( srcCs->isMemory ) return 0;  
+  if( srcCs->isMemory ) return 0;
   if( !destCs || !destCs->zFilename ) return 0;
 
   p = (DoltliteBackup*)sqlite3_malloc(sizeof(DoltliteBackup));
@@ -869,7 +885,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
   if( !p ) return SQLITE_DONE;
   if( p->done ) return SQLITE_DONE;
 
-  
+
   openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
   rc = sqlite3OsOpenMalloc(p->pVfs, p->zSrcFile, &pSrc, openFlags, 0);
   if( rc != SQLITE_OK ) return rc;
@@ -879,7 +895,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     sqlite3OsCloseFree(pSrc);
     return rc;
   }
-  
+
   openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
   rc = sqlite3OsOpenMalloc(p->pVfs, p->zDestFile, &pDest, openFlags, 0);
   if( rc != SQLITE_OK ){
@@ -887,7 +903,7 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     return rc;
   }
 
-  
+
   {
     u8 *buf = (u8*)sqlite3_malloc(65536);
     i64 off = 0;
@@ -939,7 +955,7 @@ int sqlite3_backup_remaining(sqlite3_backup *pBackup){
 int sqlite3_backup_pagecount(sqlite3_backup *pBackup){
   DoltliteBackup *p = (DoltliteBackup*)pBackup;
   if( !p ) return 0;
-  return 1;  
+  return 1;
 }
 
-#endif 
+#endif

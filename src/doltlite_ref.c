@@ -1,9 +1,4 @@
-/*
-** Shared ref resolution and commit loading.
-**
-** doltliteResolveRef: resolve a string (hex hash, branch, tag) to a commit.
-** doltliteLoadCommit: load a commit object by hash from the chunk store.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -27,9 +22,6 @@ static int doltliteValidateCommitHash(
   return rc;
 }
 
-/* Resolve a base ref (no ~N / ^N suffix) to a commit hash. Tries
-** the literal "HEAD" keyword, then 40-char hex, then branch name,
-** then tag name. Returns SQLITE_NOTFOUND if none match. */
 static int doltliteResolveBaseRef(
   sqlite3 *db,
   const char *zRef,
@@ -38,14 +30,14 @@ static int doltliteResolveBaseRef(
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc;
 
-  /* "HEAD" keyword resolves to the current session head */
+
   if( strcmp(zRef, "HEAD")==0 ){
     doltliteGetSessionHead(db, pCommit);
     if( prollyHashIsEmpty(pCommit) ) return SQLITE_NOTFOUND;
     return SQLITE_OK;
   }
 
-  /* Try 40-char hex hash */
+
   if( strlen(zRef)==PROLLY_HASH_SIZE*2 ){
     rc = doltliteHexToHash(zRef, pCommit);
     if( rc==SQLITE_OK ){
@@ -55,7 +47,7 @@ static int doltliteResolveBaseRef(
     }
   }
 
-  /* Try branch name */
+
   rc = chunkStoreFindBranch(cs, zRef, pCommit);
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
     rc = doltliteValidateCommitHash(db, pCommit);
@@ -63,7 +55,7 @@ static int doltliteResolveBaseRef(
     return rc;
   }
 
-  /* Try tag name */
+
   rc = chunkStoreFindTag(cs, zRef, pCommit);
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
     rc = doltliteValidateCommitHash(db, pCommit);
@@ -74,7 +66,6 @@ static int doltliteResolveBaseRef(
   return SQLITE_NOTFOUND;
 }
 
-/* Walk back N commits along the first-parent chain. */
 static int doltliteWalkFirstParent(
   sqlite3 *db,
   ProllyHash *pCommit,
@@ -121,6 +112,16 @@ static int doltliteSelectParent(
   return SQLITE_OK;
 }
 
+/* Git-style ref resolution. Accepts:
+**   HEAD            — session head
+**   <40-hex>        — direct commit hash
+**   <branch>        — branch name
+**   <tag>           — tag name
+** plus git revision suffixes:
+**   <base>~N        — walk first-parent N times (default 1)
+**   <base>^N        — select Nth parent of <base> (1-based; default 1)
+** The ~/^ suffix is parsed off the tail first, then the base is
+** resolved recursively via doltliteResolveBaseRef. */
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int len, j, n_back, parent_sel, rc;
@@ -131,11 +132,7 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
 
   if( !zRef || !cs ) return SQLITE_ERROR;
 
-  /* Look for a trailing ~N or ^N (rightmost) revision suffix.
-  **  ~N walks back N commits along the first-parent chain.
-  **  ^N selects the Nth parent of the resolved commit (default 1).
-  ** Only the rightmost suffix is honored — chained suffixes such as
-  ** HEAD~2~3 are not supported. */
+
   len = (int)strlen(zRef);
   for(j=len-1; j>=0; j--){
     if( zRef[j]=='~' || zRef[j]=='^' ){

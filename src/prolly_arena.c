@@ -13,7 +13,7 @@ void *prollyArenaAlloc(ProllyArena *a, int n){
   void *p;
 
   b = a->pCurrent;
-  
+
   if( b ){
     int aligned_used = (b->used + 7) & ~7;
     if( (b->sz - aligned_used) >= n ){
@@ -23,14 +23,14 @@ void *prollyArenaAlloc(ProllyArena *a, int n){
     }
   }
 
-  
+
   {
     int blockSz = a->defaultBlockSize;
     int totalSz;
     if( n > blockSz ) blockSz = n;
 
     totalSz = (int)sizeof(ProllyArenaBlock) + blockSz;
-    if( totalSz < blockSz ){  
+    if( totalSz < blockSz ){
       return 0;
     }
     b = (ProllyArenaBlock*)sqlite3_malloc(totalSz);
@@ -63,7 +63,7 @@ void prollyArenaReset(ProllyArena *a){
   b = a->pFirst;
   if( b==0 ) return;
 
-  
+
   {
     ProllyArenaBlock *pNext;
     ProllyArenaBlock *p = b->pNext;
@@ -89,4 +89,4 @@ void prollyArenaFree(ProllyArena *a){
   memset(a, 0, sizeof(*a));
 }
 
-#endif 
+#endif

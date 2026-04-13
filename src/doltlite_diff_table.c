@@ -14,19 +14,13 @@
 #include <string.h>
 #include <time.h>
 
-
-
 static char *buildDiffSchema(DoltliteColInfo *ci){
   int i;
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   char *zColName;
   if( !pStr ) return 0;
-  /* Column order matches Dolt's dolt_diff_<table>: all to_* columns
-  ** first, then all from_* columns, then commit metadata, then
-  ** diff_type. The opposite order would still be byte-equivalent
-  ** but produces visibly different `SELECT *` output, which is the
-  ** primary user-facing surface. */
+
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
   for(i=0; i<ci->nCol; i++){
     if( i>0 ) sqlite3_str_appendall(pStr, ", ");
@@ -63,8 +57,6 @@ static char *buildDiffSchema(DoltliteColInfo *ci){
   return z;
 }
 
-/* A single row of diff output — holds copies of value data so it survives
-** cursor movement within the prolly tree. */
 typedef struct AuditRow AuditRow;
 struct AuditRow {
   u8 diffType;
@@ -85,68 +77,51 @@ struct DiffTblVtab {
   DoltliteColInfo cols;
 };
 
-/* A (from, to) commit pair eligible for diffing. Built up-front in
-** dtFilter from a Dolt-matching walk of the commit graph (see
-** buildDiffPairs); the cursor iterates through this list, opening one
-** ProllyDiffIter per pair. */
 typedef struct DiffPair DiffPair;
 struct DiffPair {
-  /* From side = the older commit being processed. */
+
   ProllyHash fromHash;
   ProllyHash fromTblRoot;
-  ProllyHash fromCatHash;      /* catalog hash at the from commit */
-  ProllyHash fromSchemaHash;   /* table's schemaHash at the from commit */
+  ProllyHash fromCatHash;
+  ProllyHash fromSchemaHash;
   u8         fromFlags;
   i64        fromDate;
-  /* To side = the descendant assigned to this commit by the walk.
-  ** zToCommit is either the descendant's hex hash or the literal
-  ** "WORKING" for the working-set entry. */
+
   char       zToCommit[PROLLY_HASH_SIZE*2+1];
   ProllyHash toTblRoot;
-  ProllyHash toCatHash;        /* catalog hash for the "to" side */
-  ProllyHash toSchemaHash;     /* table's schemaHash on the "to" side */
+  ProllyHash toCatHash;
+  ProllyHash toSchemaHash;
   u8         toFlags;
   i64        toDate;
 };
 
-/*
-** Streaming cursor: pre-builds the list of (from,to) diff pairs from a
-** Dolt-matching graph walk in dtFilter, then opens one ProllyDiffIter
-** per pair lazily and yields rows from each in sequence.
-*/
 typedef struct DiffTblCursor DiffTblCursor;
 struct DiffTblCursor {
   sqlite3_vtab_cursor base;
 
-  /* Pairs to diff, in iteration order. */
+
   DiffPair *aPairs;
   int nPairs;
-  int iPair;                    /* Index of the pair currently being diffed */
-  int pairsDone;                /* 1 when iPair has passed the end */
+  int iPair;
+  int pairsDone;
 
-  /* Diff iterator for the current commit pair */
+
   ProllyDiffIter diffIter;
-  int diffIterOpen;             /* 1 if diffIter is currently open */
+  int diffIterOpen;
 
-  /* Cached column-name lists for the current pair's from/to sides.
-  ** Loaded in openNextPairIter when the pair's schemas differ, used
-  ** by advanceToNextRow to filter out MODIFY changes that only touch
-  ** columns outside the intersection of the two schemas (e.g. a
-  ** DROP COLUMN commit where the remaining user-visible columns are
-  ** unchanged). NULL when schemas are identical. */
+
   char **azFromCols;
   int    nFromCols;
   char **azToCols;
   int    nToCols;
-  int    needFilter;            /* 1 when azFromCols/azToCols are live */
+  int    needFilter;
 
-  /* Current row data */
+
   AuditRow row;
-  int hasRow;                   /* 1 if row contains valid data */
-  i64 iRowid;                   /* Monotonically increasing rowid */
+  int hasRow;
+  i64 iRowid;
 };
 
-/* idxNum bits for xBestIndex/xFilter. */
 #define DT_IDX_TO_COMMIT_EQ  0x01
 
 static int diffRecordField(
@@ -201,31 +176,17 @@ static void closeDiffIter(DiffTblCursor *pCur){
   }
 }
 
-/* Working-set vs HEAD diff is no longer a separate phase: it's the
-** first entry produced by buildDiffPairs (cmHashToTblInfo[HEAD] is
-** seeded with the working catalog as the "to" side, and HEAD's own
-** processCommit step emits the (HEAD, WORKING) pair if they differ). */
-
-/* Per-commit "to-side" info recorded in the cmHashToTblInfo map
-** during the graph walk. Each commit, when reached, looks up its
-** entry to know which descendant commit it should be diffed against
-** (and against which version of the table). Mirrors Dolt's
-** TblInfoAtCommit struct. */
 typedef struct CmTblInfo CmTblInfo;
 struct CmTblInfo {
   ProllyHash key;
   ProllyHash tblRoot;
-  ProllyHash catHash;       /* catalog hash at the commit that wrote this entry */
-  ProllyHash schemaHash;    /* table's schemaHash at that commit */
+  ProllyHash catHash;
+  ProllyHash schemaHash;
   u8         flags;
   i64        date;
   char       zHexName[PROLLY_HASH_SIZE*2+1];
 };
 
-/* Linear-search map operations. The walk visits each commit once,
-** so n is bounded by the size of the commit graph; for that range
-** linear search beats hash-table overhead. Returns the index of the
-** existing entry if found, or -1 otherwise. */
 static int mapFind(const CmTblInfo *aMap, int nMap, const ProllyHash *pKey){
   int i;
   for(i=0; i<nMap; i++){
@@ -234,9 +195,6 @@ static int mapFind(const CmTblInfo *aMap, int nMap, const ProllyHash *pKey){
   return -1;
 }
 
-/* Insert or overwrite an entry in the cmHashToTblInfo map. Mirrors
-** Dolt's `dps.cmHashToTblInfo[h] = newInfo` behavior, where the most
-** recent processCommit call wins. */
 static int mapPut(CmTblInfo **paMap, int *pnMap, const ProllyHash *pKey,
                   const ProllyHash *pTblRoot,
                   const ProllyHash *pCatHash,
@@ -266,7 +224,6 @@ static int mapPut(CmTblInfo **paMap, int *pnMap, const ProllyHash *pKey,
   return SQLITE_OK;
 }
 
-/* Append a (from,to) pair to the cursor's diff-pair list. */
 static int pairsAppend(DiffTblCursor *pCur,
                        const ProllyHash *pFromHash,
                        const ProllyHash *pFromTblRoot,
@@ -300,9 +257,6 @@ static int pairsAppend(DiffTblCursor *pCur,
   return SQLITE_OK;
 }
 
-/* Helper: load a commit's catalog and look up the named table's root,
-** flags, and schemaHash. Sets outputs to zero if the table doesn't
-** exist at this commit. */
 static int loadTblRootAtCommit(sqlite3 *db, const ProllyHash *pCatHash,
                                const char *zTableName,
                                ProllyHash *pTblRoot, u8 *pFlags,
@@ -328,23 +282,14 @@ static int loadTblRootAtCommit(sqlite3 *db, const ProllyHash *pCatHash,
   return SQLITE_OK;
 }
 
-/* Walk the commit graph from HEAD using the same algorithm as Dolt's
-** dolt_diff_<table>:
-**
-**   1. Initialize cmHashToTblInfo[HEAD] = {name: "WORKING", tblRoot:
-**      working catalog's root for this table}.
-**   2. DFS-LIFO walk via a stack: push parents in forward order, pop
-**      from the END (so the LAST parent is visited first).
-**   3. For each visited commit C: read cmHashToTblInfo[C] (its assigned
-**      descendant info, set by some prior step). If the descendant's
-**      tblRoot differs from C's tblRoot, record a (from=C, to=desc)
-**      diff pair. Then overwrite cmHashToTblInfo[parent] = C's info
-**      for every parent of C (last writer wins).
-**
-** This produces the exact (commit, parent) attribution Dolt produces
-** for merge commits — the merge edge "absorbs" first-parent diffs that
-** would otherwise be redundant. See diff_table.go:processCommit /
-** commit_itr.go:Next in the dolt repo for the canonical algorithm. */
+/* Walk history toward the root, emitting one DiffPair per commit
+** whose table root (or schema) differs from the commit that follows
+** it. aMap is keyed by commit hash and stores "what child info do we
+** have for this commit?" — when we pop a commit off the stack, we
+** compare its table root with the child info already registered
+** under its own hash and, if different, emit a pair. Before walking
+** further we register the parent(s) in aMap with this commit's data,
+** so when a parent gets visited later it already has a child. */
 static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
                           const char *zTableName){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -355,7 +300,7 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
   int nMap = 0;
   ProllyHash *aStack = 0;
   int nStack = 0;
-  ProllyHash *aAdded = 0;  /* commits already pushed to stack */
+  ProllyHash *aAdded = 0;
   int nAdded = 0;
   int currInited = 0;
   ProllyHash curr;
@@ -367,7 +312,7 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
 
-  /* Initialize cmHashToTblInfo[HEAD] = {name:"WORKING", working root}. */
+
   memset(&workingCat, 0, sizeof(workingCat));
   memset(&workingTblRoot, 0, sizeof(workingTblRoot));
   rc = doltliteFlushCatalogToHash(db, &workingCat);
@@ -390,9 +335,7 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
     }
   }
 
-  /* Mark HEAD as added so we don't push it twice if a parent edge
-  ** ever cycles back. Initial curr = HEAD; the iter equivalent
-  ** returns it before pushing any parents. */
+
   {
     ProllyHash *aN = sqlite3_realloc(aAdded, (nAdded+1)*(int)sizeof(ProllyHash));
     if( !aN ){ rc = SQLITE_NOMEM; goto walk_done; }
@@ -426,11 +369,7 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
 
     doltliteHashToHex(&curr, curHex);
 
-    /* processCommit: compare against to-info, emit pair if either
-    ** the table's data root OR its schema DDL hash differs. Relying
-    ** on rootsDiffer alone misses schema-only changes (e.g. ALTER
-    ** TABLE DROP COLUMN on an empty table) where the prolly tree
-    ** root is unchanged but the user-visible schema isn't. */
+
     idx = mapFind(aMap, nMap, &curr);
     if( idx>=0 ){
       CmTblInfo *info = &aMap[idx];
@@ -449,12 +388,9 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
         }
       }
     }
-    /* If idx<0 the commit was reached without an assigned to-info;
-    ** that shouldn't happen for a connected graph rooted at HEAD,
-    ** so silently skip without emitting. */
 
-    /* For each parent: overwrite cmHashToTblInfo[parent] with curr's
-    ** info (last writer wins). */
+
+
     {
       int nParents = commit.nParents>0
                        ? commit.nParents
@@ -472,9 +408,7 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
         break;
       }
 
-      /* Push parents (those not yet added) onto the stack in forward
-      ** order so popping from the END visits the LAST parent first.
-      ** This matches Dolt's CommitItrForRoots LIFO ordering. */
+
       for(i=0; i<nParents; i++){
         const ProllyHash *pParent = commit.nParents>0
                                        ? &commit.aParents[i]
@@ -504,7 +438,7 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
     doltliteCommitClear(&commit);
     if( rc!=SQLITE_OK ) break;
 
-    /* Pop the next commit from the END of the stack. */
+
     if( nStack==0 ){
       currInited = 0;
     }else{
@@ -520,9 +454,6 @@ walk_done:
   return rc;
 }
 
-/* Build just the HEAD -> WORKING pair for queries constrained to
-** to_commit='WORKING'. This avoids the full audit-history walk when
-** callers only want the current working-set diff. */
 static int buildWorkingDiffPair(
   DiffTblCursor *pCur,
   sqlite3 *db,
@@ -589,7 +520,6 @@ static int buildWorkingDiffPair(
   return rc;
 }
 
-/* Free the cached per-pair column name lists. */
 static void freePairCols(DiffTblCursor *pCur){
   int i;
   if( pCur->azFromCols ){
@@ -607,13 +537,6 @@ static void freePairCols(DiffTblCursor *pCur){
   pCur->needFilter = 0;
 }
 
-/* Load the column names for zTableName at the commit whose catalog
-** hash is pCatHash. Returns the names in *pazOut / *pnOut. The
-** caller owns the returned array. Implementation:
-**   1. loadSchemaFromCatalog → find the CREATE TABLE DDL for zTableName
-**   2. exec the DDL in a throwaway in-memory sqlite db
-**   3. PRAGMA table_info to extract column names in declaration order
-** Returns SQLITE_NOTFOUND if the table doesn't exist at this commit. */
 static int loadColNamesAtCatalog(
   sqlite3 *db,
   const ProllyHash *pCatHash,
@@ -685,8 +608,6 @@ cleanup:
   return SQLITE_OK;
 }
 
-/* Decode a signed integer from `nBytes` bytes of a SQLite serial-type
-** body (serial types 1..6). Sign-extends from the top bit. */
 static i64 sdReadInt(const u8 *p, int nBytes){
   i64 v;
   int i;
@@ -696,13 +617,6 @@ static i64 sdReadInt(const u8 *p, int nBytes){
   return v;
 }
 
-/* Compare two record fields by semantic value rather than raw bytes.
-** Returns 1 if equal, 0 otherwise. Handles the case where the same
-** integer value is encoded with different serial types on each side
-** (e.g. literal 1 = type 9 with 0 body bytes vs 1-byte int = type 1
-** with 1 body byte). That happens naturally when doltlite re-encodes
-** records after an ALTER TABLE, so two semantically-equal rows can
-** have byte-different records. */
 static int fieldValuesEqual(
   int aType, const u8 *pA, int nA, int aOff,
   int bType, const u8 *pB, int nB, int bOff
@@ -710,11 +624,11 @@ static int fieldValuesEqual(
   i64 ai, bi;
   int aLen, bLen;
 
-  /* NULL vs NULL */
+
   if( aType==0 && bType==0 ) return 1;
   if( aType==0 || bType==0 ) return 0;
 
-  /* Both sides are integer-valued (1..6, 8, 9) */
+
   {
     int aIsInt = (aType>=1 && aType<=6) || aType==8 || aType==9;
     int bIsInt = (bType>=1 && bType<=6) || bType==8 || bType==9;
@@ -737,9 +651,7 @@ static int fieldValuesEqual(
     }
   }
 
-  /* Everything else: require matching serial type and byte-identical
-  ** body bytes. This covers floats (type 7), blobs (>=12 even), and
-  ** text (>=13 odd). */
+
   if( aType != bType ) return 0;
   aLen = dlSerialTypeLen(aType);
   if( aLen<0 ) return 0;
@@ -761,24 +673,14 @@ static int changeIsSchemaOnly(
   doltliteParseRecord(pFromRec, nFromRec, &fromRi);
   doltliteParseRecord(pToRec,   nToRec,   &toRi);
 
-  /* 1. Every column in TO that's shared with FROM (by name) must
-  **    have the same value semantically.
-  ** 2. Every column in TO that's NEW (not in FROM) must be NULL in
-  **    the to-side record. A non-NULL value in a new column means
-  **    the row was actually modified after the ADD COLUMN.
-  ** 3. Every column in FROM that's DROPPED (not in TO) must have
-  **    been NULL on the from side. A non-NULL value that the user
-  **    subsequently dropped is a real data change — the row's
-  **    user-visible state went from "has column X = v" to "no
-  **    column X at all". Dolt treats that as modified; we must too. */
+
   for(i=0; i<nToCols; i++){
     int fromIdx;
     for(fromIdx=0; fromIdx<nFromCols; fromIdx++){
       if( strcmp(azFromCols[fromIdx], azToCols[i])==0 ) break;
     }
     if( fromIdx>=nFromCols ){
-      /* column only in to (new column) — must be NULL or the change
-      ** is real. */
+
       if( i<toRi.nField && toRi.aType[i]!=0 ) return 0;
       continue;
     }
@@ -796,32 +698,26 @@ static int changeIsSchemaOnly(
       return 0;
     }
   }
-  /* Check dropped columns: any column in FROM but not in TO, with
-  ** a non-NULL value, means real data was lost. */
+
   for(i=0; i<nFromCols; i++){
     int toIdx;
     for(toIdx=0; toIdx<nToCols; toIdx++){
       if( strcmp(azToCols[toIdx], azFromCols[i])==0 ) break;
     }
-    if( toIdx<nToCols ) continue;   /* shared — already handled */
-    if( i>=fromRi.nField ) continue; /* implicitly NULL */
-    if( fromRi.aType[i]!=0 ) return 0; /* dropped non-NULL value */
+    if( toIdx<nToCols ) continue;
+    if( i>=fromRi.nField ) continue;
+    if( fromRi.aType[i]!=0 ) return 0;
   }
   return 1;
 }
 
-/* Open a ProllyDiffIter for the next pair in aPairs[iPair] and
-** advance iPair. Sets pairsDone=1 when the list is exhausted.
-** If the pair's from/to schemaHash differ, also loads the column
-** name lists for both sides so advanceToNextRow can filter
-** schema-only record-encoding changes. */
 static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
   DiffTblVtab *pVtab = (DiffTblVtab*)pCur->base.pVtab;
   int rc;
 
-  /* Reset per-pair cached column lists from the previous pair. */
+
   freePairCols(pCur);
 
   if( !cs ) return SQLITE_OK;
@@ -843,12 +739,7 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
     pCur->diffIterOpen = 1;
 
-    /* If the table's schema changed between from and to, load both
-    ** column-name lists so advanceToNextRow can filter out MODIFY
-    ** changes that only reflect the schema's record encoding.
-    ** Failure to load column lists is non-fatal — we fall back to
-    ** emitting all changes, which may produce false positives for
-    ** DROP COLUMN but is strictly safer than a query error. */
+
     if( prollyHashCompare(&p->fromSchemaHash, &p->toSchemaHash)!=0 ){
       int rc2;
       rc2 = loadColNamesAtCatalog(db, &p->fromCatHash, pVtab->zTableName,
@@ -867,11 +758,6 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   }
 }
 
-/*
-** Try to produce the next row. Steps the current diff iterator; if
-** exhausted, moves to the next commit pair. Sets hasRow=1 if a row
-** is available, or leaves hasRow=0 if all diffs are exhausted.
-*/
 static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
                             const char *zTableName){
   int rc;
@@ -883,12 +769,7 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
       ProllyDiffChange *pChange = 0;
       rc = prollyDiffIterStep(&pCur->diffIter, &pChange);
       if( rc==SQLITE_ROW && pChange ){
-        /* When the pair's schemas differ (ADD/DROP/RENAME column
-        ** between these commits), a MODIFY change may be a pure
-        ** schema-encoding artifact: the record bytes differ but
-        ** every user-visible column shared by both schemas has the
-        ** same value. Filter those out so they don't show up as
-        ** spurious modifications. */
+
         if( pCur->needFilter
          && pChange->type==PROLLY_DIFF_MODIFY
          && changeIsSchemaOnly(pChange->pOldVal, pChange->nOldVal,
@@ -898,9 +779,7 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
           continue;
         }
 
-        /* Row value pointers borrow the diff iterator's storage, which
-        ** remains valid until the next Step/Close. Clear any previous
-        ** borrowed pointers before publishing the new current row. */
+
         pCur->row.pOldVal = 0;
         pCur->row.nOldVal = 0;
         pCur->row.pNewVal = 0;
@@ -919,14 +798,14 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
         return SQLITE_OK;
       }
       if( rc!=SQLITE_DONE && rc!=SQLITE_ROW ){
-        /* Error from the iterator */
+
         return rc;
       }
-      /* This iter is exhausted */
+
       closeDiffIter(pCur);
     }
 
-    /* Open the next pair, if any. */
+
     if( pCur->pairsDone ){
       return SQLITE_OK;
     }
@@ -950,7 +829,6 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
   memset(pVtab, 0, sizeof(*pVtab));
   pVtab->db = db;
 
-
   zModName = argv[0];
   if( zModName && strncmp(zModName, "dolt_diff_", 10)==0 ){
     pVtab->zTableName = sqlite3_mprintf("%s", zModName + 10);
@@ -959,7 +837,6 @@ static int dtConnect(sqlite3 *db, void *pAux, int argc,
   }else{
     pVtab->zTableName = sqlite3_mprintf("");
   }
-
 
   rc = doltliteLoadUserTableColumns(db, pVtab->zTableName, &pVtab->cols, pzErr);
   if( rc!=SQLITE_OK ){
@@ -1051,7 +928,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   int rc;
   (void)idxStr;
 
-  /* Reset state */
+
   closeDiffIter(c);
   clearAuditRow(&c->row);
   freePairCols(c);
@@ -1080,10 +957,7 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
       rc = buildDiffPairs(c, db, pVtab->zTableName);
     }
   }else{
-    /* Pre-build the (from,to) diff pairs from a Dolt-matching graph
-    ** walk. The first pair (when present) is the working-set diff
-    ** against HEAD; subsequent pairs are commits walked DFS-LIFO with
-    ** descendant attribution overwritten on each step. */
+
     rc = buildDiffPairs(c, db, pVtab->zTableName);
   }
   if( rc!=SQLITE_OK ) return rc;
@@ -1112,17 +986,9 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   AuditRow *r = &c->row;
   int nCols = pVtab->cols.nCol;
 
-  /* Schema layout (matches Dolt):
-  **   [0      .. nCols-1   ]  to_<col_i>      (from pNewVal)
-  **   [nCols              ]  to_commit
-  **   [nCols+1            ]  to_commit_date
-  **   [nCols+2 .. 2*nCols+1]  from_<col_i>    (from pOldVal)
-  **   [2*nCols+2          ]  from_commit
-  **   [2*nCols+3          ]  from_commit_date
-  **   [2*nCols+4          ]  diff_type
-  */
+
   if( nCols > 0 && col < nCols ){
-    /* to_<col>: from pNewVal */
+
     int colIdx = col;
     if( colIdx == pVtab->cols.iPkCol ){
       if( r->pNewVal && r->nNewVal > 0 ){
@@ -1147,10 +1013,10 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       }
     }
   }else if( nCols > 0 && col == nCols ){
-    /* to_commit */
+
     sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
   }else if( nCols > 0 && col == nCols+1 ){
-    /* to_commit_date */
+
     time_t t = (time_t)r->toDate;
     struct tm *tm = gmtime(&t);
     if(tm){
@@ -1161,7 +1027,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       sqlite3_result_null(ctx);
     }
   }else if( nCols > 0 && col < 2*nCols+2 ){
-    /* from_<col>: from pOldVal */
+
     int colIdx = col - nCols - 2;
     if( colIdx == pVtab->cols.iPkCol ){
       if( r->pOldVal && r->nOldVal > 0 ){
@@ -1186,10 +1052,10 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       }
     }
   }else if( nCols > 0 && col == 2*nCols+2 ){
-    /* from_commit */
+
     sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);
   }else if( nCols > 0 && col == 2*nCols+3 ){
-    /* from_commit_date */
+
     time_t t = (time_t)r->fromDate;
     struct tm *tm = gmtime(&t);
     if(tm){
@@ -1200,7 +1066,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       sqlite3_result_null(ctx);
     }
   }else{
-    /* diff_type */
+
     switch( r->diffType ){
       case PROLLY_DIFF_ADD:    sqlite3_result_text(ctx,"added",-1,SQLITE_STATIC); break;
       case PROLLY_DIFF_DELETE: sqlite3_result_text(ctx,"removed",-1,SQLITE_STATIC); break;

@@ -14,12 +14,6 @@
 #include <string.h>
 #include <time.h>
 
-/* Does a sqlite_schema record represent a view or a trigger? Returns
-** 1 if the record's type field (field 0) is "view" or "trigger", 0
-** otherwise. The caller should pass whichever side of a diff change
-** has a non-NULL record (both base and new sides need checking —
-** either a newly-added view has a new record, or a dropped view has
-** an old record). */
 static int schemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
   DoltliteRecordInfo ri;
   int st, off, len;
@@ -29,7 +23,7 @@ static int schemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
   if( ri.nField < 1 ) return 0;
   st = ri.aType[0];
   off = ri.aOffset[0];
-  if( st < 13 || (st & 1)==0 ) return 0;  /* not a TEXT serial type */
+  if( st < 13 || (st & 1)==0 ) return 0;
   len = (st - 13) / 2;
   if( off < 0 || off + len > nRec ) return 0;
   pBody = pRec + off;
@@ -38,13 +32,6 @@ static int schemaRecordIsViewOrTrigger(const u8 *pRec, int nRec){
   return 0;
 }
 
-/* Walk a prolly diff between two sqlite_schema roots and return 1 if
-** any change touches a view or trigger row. Used by the dolt_diff
-** summary walker to decide whether to emit a synthetic "dolt_schemas"
-** entry for a commit. Returns 0 for no view/trigger change (so the
-** caller can skip emitting) or on any error; dolt_diff is an
-** informational surface and shouldn't fail just because sqlite_schema
-** couldn't be walked. */
 static int schemaHasViewOrTriggerDiff(sqlite3 *db,
                                       const ProllyHash *pOldRoot,
                                       const ProllyHash *pNewRoot,
@@ -70,12 +57,6 @@ static int schemaHasViewOrTriggerDiff(sqlite3 *db,
   return found;
 }
 
-/* Returns 1 if the sqlite_schema btree at pRoot contains at least
-** one row whose type is 'view' or 'trigger'. Used by the summary
-** walker to detect whether dolt_schemas is being CREATED at a given
-** commit (parent has zero view/trigger rows) vs merely modified
-** (parent already has at least one). Dolt emits schema_change=1 on
-** the initial creation; we match that. */
 static int schemaHasAnyViewOrTrigger(sqlite3 *db,
                                      const ProllyHash *pRoot,
                                      u8 flags){
@@ -105,9 +86,6 @@ static int schemaHasAnyViewOrTrigger(sqlite3 *db,
   return found;
 }
 
-/* Summary row (no-arg form: SELECT * FROM dolt_diff). One row per
-** (commit, changed_table) describing whether the table's data and/or
-** schema changed at that commit relative to its first parent. */
 typedef struct DiffSummaryRow DiffSummaryRow;
 struct DiffSummaryRow {
   char zCommitHex[PROLLY_HASH_SIZE*2+1];
@@ -126,8 +104,6 @@ struct DoltliteDiffVtab {
   sqlite3 *db;
 };
 
-/* idxNum bit layout:
-**   bit 0: visible table_name equality constraint present */
 #define DIFF_IDX_TABLE_NAME  0x01
 
 typedef struct DoltliteDiffCursor DoltliteDiffCursor;
@@ -138,17 +114,16 @@ struct DoltliteDiffCursor {
   int iRow;
 };
 
-/* Summary-only surface matching Dolt's `SELECT * FROM dolt_diff`. */
 static const char *diffSchema =
   "CREATE TABLE x("
-  "  commit_hash   TEXT,"     /* 0  summary */
-  "  committer     TEXT,"     /* 1  summary */
-  "  email         TEXT,"     /* 2  summary */
-  "  date          TEXT,"     /* 3  summary */
-  "  message       TEXT,"     /* 4  summary */
-  "  data_change   INTEGER,"  /* 5  summary */
-  "  schema_change INTEGER,"  /* 6  summary */
-  "  table_name    TEXT"      /* 7  summary/filter */
+  "  commit_hash   TEXT,"
+  "  committer     TEXT,"
+  "  email         TEXT,"
+  "  date          TEXT,"
+  "  message       TEXT,"
+  "  data_change   INTEGER,"
+  "  schema_change INTEGER,"
+  "  table_name    TEXT"
   ")";
 
 #define DIFF_COL_COMMIT_HASH   0
@@ -173,9 +148,6 @@ static void freeSummaryRows(DoltliteDiffCursor *pCur){
   pCur->nSummary = 0;
 }
 
-/* Append one summary row to the cursor. If pCommit is NULL, the row
-** represents the working set: committer/email/message are left NULL
-** and timestamp is 0. */
 static int appendSummaryRow(DoltliteDiffCursor *pCur,
                             const char *zCommitHex,
                             const char *zTableName,
@@ -204,16 +176,17 @@ static int appendSummaryRow(DoltliteDiffCursor *pCur,
     }
     r->timestamp = pCommit->timestamp;
   }
-  /* Else: zCommitter, zEmail, zMessage stay NULL; timestamp stays 0. */
+
   r->dataChange   = dataChange;
   r->schemaChange = schemaChange;
   pCur->nSummary++;
   return SQLITE_OK;
 }
 
-/* Compare HEAD against the working set and emit one summary row per
-** table that differs. The synthetic commit_hash for the working-set
-** row is "WORKING", matching Dolt. */
+/* Emit summary rows for the working set (uncommitted changes). The
+** commit_hash column gets the sentinel "WORKING" so callers can
+** filter uncommitted rows without a second scan. Reached before the
+** commit-walk so WORKING rows appear first in the result set. */
 static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
   ProllyHash headCat, workCat;
   struct TableEntry *aHead = 0, *aWork = 0;
@@ -227,13 +200,13 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
 
   rc = doltliteGetHeadCatalogHash(db, &headCat);
   if( rc!=SQLITE_OK ){
-    /* No HEAD yet (fresh repo): no commits to compare against, skip. */
+
     return SQLITE_OK;
   }
   rc = doltliteFlushCatalogToHash(db, &workCat);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Identical catalogs => no working-set diff. */
+
   if( prollyHashCompare(&headCat, &workCat)==0 ) return SQLITE_OK;
 
   rc = doltliteLoadCatalog(db, &headCat, &aHead, &nHead, 0);
@@ -252,10 +225,7 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
     struct TableEntry *p;
     u8 dataChange, schemaChange;
     if( !e->zName ){
-      /* sqlite_master: surface uncommitted view/trigger changes.
-      ** schema_change is 1 iff the HEAD side has NO view/trigger
-      ** rows yet — matching Dolt's behavior of reporting
-      ** schema_change on the implicit creation of dolt_schemas. */
+
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
@@ -297,9 +267,6 @@ done:
   return rc;
 }
 
-/* For one commit, compare its catalog against its first parent's catalog
-** (or against an empty catalog if it has no parent) and emit one summary
-** row per table that changed. */
 static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
                                    const ProllyHash *pCommitHash,
                                    const DoltliteCommit *pCommit,
@@ -328,19 +295,13 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
     }
   }
 
-  /* Tables present in the child commit. */
+
   for(i=0; i<nChild; i++){
     struct TableEntry *e = &aChild[i];
     struct TableEntry *p;
     u8 dataChange, schemaChange;
     if( !e->zName ){
-      /* sqlite_master: surface view/trigger changes as "dolt_schemas".
-      ** Regular CREATE TABLE also touches sqlite_master but is
-      ** already attributed to the created table above, so we only
-      ** emit dolt_schemas when the change specifically touches a
-      ** view or trigger row. schema_change is 1 iff the parent side
-      ** had NO view/trigger rows yet — matching Dolt's reporting of
-      ** schema_change on the implicit creation of dolt_schemas. */
+
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
@@ -358,7 +319,7 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
     }
     p = doltliteFindTableByName(aParent, nParent, e->zName);
     if( !p ){
-      /* Newly added in this commit. */
+
       dataChange = 1;
       schemaChange = 1;
     }else{
@@ -371,7 +332,7 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
     if( rc!=SQLITE_OK ) goto done;
   }
 
-  /* Tables present in the parent but absent from the child = dropped. */
+
   for(i=0; i<nParent; i++){
     struct TableEntry *p = &aParent[i];
     if( !p->zName ) continue;
@@ -386,8 +347,6 @@ done:
   return rc;
 }
 
-/* Walk the commit graph from HEAD, BFS over all parents (matching
-** dolt_log), and emit summary rows for every (commit, changed_table). */
 static int collectSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash head;
@@ -400,8 +359,7 @@ static int collectSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
 
   if( !cs ) return SQLITE_OK;
 
-  /* Working-set diff is emitted first, matching Dolt's ordering
-  ** (newest changes at the top). Empty if HEAD == working catalog. */
+
   rc = collectWorkingSetSummary(pCur, db);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -603,7 +561,7 @@ static int summaryColumn(DoltliteDiffCursor *pCur, sqlite3_context *ctx,
       }
       break;
     case DIFF_COL_DATE: {
-      /* Working-set rows have no timestamp; emit NULL to match Dolt. */
+
       if( r->timestamp==0 && r->zCommitter==0 ){
         sqlite3_result_null(ctx);
       }else{
@@ -663,4 +621,4 @@ int doltliteDiffRegister(sqlite3 *db){
   return sqlite3_create_module(db, "dolt_diff", &doltliteDiffModule, 0);
 }
 
-#endif 
+#endif

@@ -1,4 +1,4 @@
-/* B-tree-style cursor over a prolly tree with save/restore for concurrent mutation. */
+
 #ifndef SQLITE_PROLLY_CURSOR_H
 #define SQLITE_PROLLY_CURSOR_H
 
@@ -14,27 +14,33 @@ typedef struct ProllyCursor ProllyCursor;
 typedef struct ProllyCursorLevel ProllyCursorLevel;
 
 struct ProllyCursorLevel {
-  ProllyCacheEntry *pEntry;   
-  int idx;                    
+  ProllyCacheEntry *pEntry;
+  int idx;
 };
 
+/* iLevel is the CURRENT depth (leaf when fully descended), nLevel is
+** the depth the tree was loaded to. aLevel[0..iLevel] each hold a
+** pinned ProllyCacheEntry — they must be released on cursor close or
+** re-seek or the cache entries leak their node buffer. */
 struct ProllyCursor {
-  ChunkStore *pStore;         
-  ProllyCache *pCache;        
-  ProllyHash root;            
-  u8 flags;                   
+  ChunkStore *pStore;
+  ProllyCache *pCache;
+  ProllyHash root;
+  u8 flags;
 
-  int nLevel;                 
-  int iLevel;                 
+  int nLevel;
+  int iLevel;
   ProllyCursorLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];
 
-  u8 eState;                  
+  u8 eState;
 
-  
-  u8 *pSavedKey;              
+  /* Saved logical position for prollyCursorSave/Restore. After a
+  ** write invalidates cache pointers, the cursor reseeks by key
+  ** rather than by cached node pointers. */
+  u8 *pSavedKey;
   int nSavedKey;
-  i64 iSavedIntKey;           
-  u8 hasSavedPosition;        
+  i64 iSavedIntKey;
+  u8 hasSavedPosition;
 };
 
 #define PROLLY_CURSOR_VALID    0
@@ -73,4 +79,4 @@ void prollyCursorReleaseAll(ProllyCursor *cur);
 
 void prollyCursorClose(ProllyCursor *cur);
 
-#endif 
+#endif

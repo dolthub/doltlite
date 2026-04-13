@@ -32,9 +32,7 @@ static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **
     *pzName = sqlite3_mprintf("%s", pEntry->zName);
     return *pzName ? SQLITE_OK : SQLITE_NOMEM;
   }
-  /* Internal index roots can legitimately lack a table name in sqlite's
-  ** schema hash; dolt_status should ignore them rather than surfacing an
-  ** error for an otherwise clean working tree. */
+
   if( pEntry->flags & BTREE_BLOBKEY ){
     return SQLITE_NOTFOUND;
   }
@@ -42,14 +40,6 @@ static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **
   return *pzName ? SQLITE_OK : SQLITE_NOMEM;
 }
 
-/*
-** Find a catalog entry by name, falling back to iTable when the entry has
-** no resolved name (rare for user tables but possible during bootstrap).
-** Matching by name is required for correct status reporting when sqlite
-** reuses a dropped table's iTable for a freshly created one — in that case
-** an iTable-only match would falsely classify the new table as a
-** modification of the old one and silently swallow the deletion.
-*/
 static struct TableEntry *findCatalogEntry(
   struct TableEntry *a, int n, const struct TableEntry *pNeedle
 ){
@@ -73,13 +63,11 @@ static int addRow(DoltliteStatusCursor *pCur, const char *zName,
   return SQLITE_OK;
 }
 
-/*
-** A rename in doltlite preserves the underlying btree iTable: ALTER TABLE
-** RENAME TO is purely a sqlite_master update. So an entry that shares iTable
-** and root hash with a counterpart in the other catalog but carries a
-** different name is unambiguously a rename, not a drop+create that happens
-** to reuse the iTable (which always changes the root hash to empty).
-*/
+/* Detect a rename by iTable identity: a table that keeps the same
+** rootpage number and data hash but gains a new name is the same
+** table renamed. Without this detection, a rename would show up as
+** "deleted <old> + new table <new>" which is noisy and loses the
+** continuity git status gets from rename heuristics. */
 static int isRenamePair(const struct TableEntry *pA, const struct TableEntry *pB){
   if( pA->iTable != pB->iTable ) return 0;
   if( !pA->zName || !pB->zName ) return 0;
@@ -94,9 +82,7 @@ static int compareCatalogs(
   int staged
 ){
   int i, j, rc;
-  /* Two-bit bitmaps marking entries already accounted for as the source or
-  ** destination of a rename. Cap at a sane size; if a catalog ever exceeds
-  ** this, fall through to the regular delete+new representation. */
+
   #define DOLT_STATUS_RENAME_CAP 4096
   unsigned char fromHandled[DOLT_STATUS_RENAME_CAP] = {0};
   unsigned char toHandled[DOLT_STATUS_RENAME_CAP] = {0};
@@ -235,10 +221,7 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
     if( rc!=SQLITE_OK ) goto status_done;
   }
 
-  /* Compare HEAD vs staged. aHead may legitimately be NULL when the head
-  ** commit's catalog is empty (e.g. fresh repo with only the seed commit
-  ** and a staged "new table"); compareCatalogs handles a NULL "from" by
-  ** treating every "to" entry as new. */
+
   if(aStaged){
     rc = compareCatalogs(pCur,db,aHead,nHead,aStaged,nStaged,1);
     if( rc!=SQLITE_OK ) goto status_done;
@@ -291,4 +274,4 @@ int doltliteStatusRegister(sqlite3 *db){
   return sqlite3_create_module(db,"dolt_status",&doltliteStatusModule,0);
 }
 
-#endif 
+#endif

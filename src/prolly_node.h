@@ -1,30 +1,36 @@
-/* Prolly tree node: [magic:4][level:1][count:2][flags:1] + offset arrays + data.
-** INTKEY keys are 8-byte big-endian (sign-bit-flipped); values are records or child hashes. */
+
+/* Prolly tree node encoding:
+**   [magic:4][level:1][count:2][flags:1]
+**   [aKeyOff:4*count][aValOff:4*count]
+**   [key data][value data]
+** INTKEY keys are 8-byte big-endian with the sign bit flipped so
+** memcmp gives correct signed order. Values are SQLite record bytes
+** at leaf level, or child hashes at interior levels. */
 #ifndef SQLITE_PROLLY_NODE_H
 #define SQLITE_PROLLY_NODE_H
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 
-#define PROLLY_NODE_MAGIC 0x504E4F44  
+#define PROLLY_NODE_MAGIC 0x504E4F44
 
-#define PROLLY_NODE_INTKEY  0x01  
-#define PROLLY_NODE_BLOBKEY 0x02  
+#define PROLLY_NODE_INTKEY  0x01
+#define PROLLY_NODE_BLOBKEY 0x02
 
 #define PROLLY_NODE_MAX_ITEMS 4096
 
 typedef struct ProllyNode ProllyNode;
 struct ProllyNode {
-  const u8 *pData;    
-  int nData;           
-  u8 level;            
-  u16 nItems;          
-  u8 flags;            
-  const u32 *aKeyOff;  
-  const u32 *aValOff;  
-  const u8 *pKeyData;  
-  const u8 *pValData;  
-  ProllyHash addr;     
+  const u8 *pData;
+  int nData;
+  u8 level;
+  u16 nItems;
+  u8 flags;
+  const u32 *aKeyOff;
+  const u32 *aValOff;
+  const u8 *pKeyData;
+  const u8 *pValData;
+  ProllyHash addr;
 };
 
 int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData);
@@ -49,12 +55,12 @@ struct ProllyNodeBuilder {
   int nItems;
   int nKeyBytes;
   int nValBytes;
-  int nAlloc;          
-  u32 *aKeyOff;        
-  u32 *aValOff;        
-  u8 *pKeyBuf;         
+  int nAlloc;
+  u32 *aKeyOff;
+  u32 *aValOff;
+  u8 *pKeyBuf;
   int nKeyBufAlloc;
-  u8 *pValBuf;         
+  u8 *pValBuf;
   int nValBufAlloc;
 };
 
@@ -78,4 +84,4 @@ int prollyCompareKeys(
   const u8 *pKey2, int nKey2, i64 iKey2
 );
 
-#endif 
+#endif

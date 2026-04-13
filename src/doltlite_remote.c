@@ -143,6 +143,12 @@ static int syncEnqueueChildren(
 
 #define SYNC_BATCH_SIZE 256
 
+/* BFS the src store starting from aRoots, streaming each unseen
+** chunk to dst. xHasChunks is called in 256-chunk batches so a
+** large push/fetch doesn't round-trip per chunk. xGetChunk may
+** return NOTFOUND for a hash that's not present in src (sparse
+** remote) — treated as OK and skipped rather than an error, since
+** we don't want a partially cloned remote to block a later sync. */
 int doltliteSyncChunks(
   DoltliteRemote *pSrc,
   DoltliteRemote *pDst,
@@ -164,7 +170,7 @@ int doltliteSyncChunks(
     return rc;
   }
 
-  
+
   for(i=0; i<nRoots && rc==SQLITE_OK; i++){
     if( !prollyHashIsEmpty(&aRoots[i]) && !prollyHashSetContains(&seen, &aRoots[i]) ){
       rc = prollyHashSetAdd(&seen, &aRoots[i]);
@@ -172,47 +178,47 @@ int doltliteSyncChunks(
     }
   }
 
-  
+
   while( rc==SQLITE_OK && syncQueuePending(&queue) > 0 ){
     int nBatch = 0;
 
-    
+
     while( nBatch < SYNC_BATCH_SIZE && syncQueuePop(&queue, &aBatch[nBatch]) ){
       nBatch++;
     }
     if( nBatch == 0 ) break;
 
-    
+
     rc = pDst->xHasChunks(pDst, aBatch, nBatch, aPresent);
     if( rc!=SQLITE_OK ) break;
 
-    
+
     for(i=0; i<nBatch && rc==SQLITE_OK; i++){
       u8 *data = 0;
       int nData = 0;
 
       if( aPresent[i] ){
-        
+
         continue;
       }
 
-      
+
       rc = pSrc->xGetChunk(pSrc, &aBatch[i], &data, &nData);
       if( rc==SQLITE_NOTFOUND ){
-        
+
         rc = SQLITE_OK;
         continue;
       }
       if( rc!=SQLITE_OK ) break;
 
-      
+
       rc = pDst->xPutChunk(pDst, &aBatch[i], data, nData);
       if( rc!=SQLITE_OK ){
         sqlite3_free(data);
         break;
       }
 
-      
+
       rc = syncEnqueueChildren(data, nData, &queue, &seen);
       sqlite3_free(data);
     }
@@ -225,8 +231,8 @@ int doltliteSyncChunks(
 
 typedef struct FsRemote FsRemote;
 struct FsRemote {
-  DoltliteRemote base;   
-  ChunkStore store;      
+  DoltliteRemote base;
+  ChunkStore store;
 };
 
 static int fsGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
@@ -239,7 +245,7 @@ static int fsPutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
                       const u8 *pData, int nData){
   FsRemote *p = (FsRemote*)pRemote;
   ProllyHash computed;
-  (void)pHash; 
+  (void)pHash;
   return chunkStorePut(&p->store, pData, nData, &computed);
 }
 
@@ -271,7 +277,7 @@ static int fsSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
   if( rc==SQLITE_OK ){
     memcpy(&oldRefsHash, &p->store.refsHash, sizeof(ProllyHash));
     memcpy(&p->store.refsHash, &refsHash, sizeof(ProllyHash));
-    
+
     rc = chunkStoreReloadRefs(&p->store);
     if( rc!=SQLITE_OK ){
       memcpy(&p->store.refsHash, &oldRefsHash, sizeof(ProllyHash));
@@ -288,14 +294,14 @@ static int fsCommit(DoltliteRemote *pRemote){
   FsRemote *p = (FsRemote*)pRemote;
   int rc;
 
-  
+
   rc = chunkStoreSerializeRefs(&p->store);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStoreCommit(&p->store);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   {
     const char *zDef = chunkStoreGetDefaultBranch(&p->store);
     ProllyHash branchCommit;
@@ -359,7 +365,7 @@ DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath){
 typedef struct LocalAsRemote LocalAsRemote;
 struct LocalAsRemote {
   DoltliteRemote base;
-  ChunkStore *pStore;   
+  ChunkStore *pStore;
 };
 
 static int localGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
@@ -412,7 +418,7 @@ static int localCommit(DoltliteRemote *pRemote){
 }
 
 static void localClose(DoltliteRemote *pRemote){
-  
+
   sqlite3_free(pRemote);
 }
 
@@ -512,6 +518,13 @@ static int syncIsAncestor(
   return found;
 }
 
+/* Git-style push: refuse non-fast-forward without --force. A FF push
+** means the remote tip is an ancestor of the local tip; otherwise
+** we'd overwrite remote work. The ancestor check walks the commit
+** graph on the LOCAL side (because we have all chunks locally) —
+** this is safe even though the remote may have divergent history
+** we haven't fetched, since any non-ancestor branch on the remote
+** will still fail isAncestor here. */
 int doltlitePush(
   ChunkStore *pLocal,
   DoltliteRemote *pRemote,
@@ -523,13 +536,13 @@ int doltlitePush(
   int rc;
   int i;
 
-  
+
   rc = chunkStoreFindBranch(pLocal, zBranch, &localCommit);
   if( rc!=SQLITE_OK ){
-    return SQLITE_ERROR; 
+    return SQLITE_ERROR;
   }
 
-  
+
   if( !bForce ){
     u8 *refsData = 0;
     int nRefsData = 0;
@@ -551,12 +564,12 @@ int doltlitePush(
         return rc;
       }
     }else if( rc==SQLITE_NOTFOUND ){
-      rc = SQLITE_OK; 
+      rc = SQLITE_OK;
     }
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  
+
   {
     DoltliteRemote *pLocalSrc = doltliteLocalAsRemote(pLocal);
     if( !pLocalSrc ) return SQLITE_NOMEM;
@@ -565,7 +578,7 @@ int doltlitePush(
   }
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   {
     u8 *refsData2 = 0; int nRefsData2 = 0;
     u8 *commitData = 0; int nCommitData = 0;
@@ -587,7 +600,7 @@ int doltlitePush(
       return rc;
     }
 
-    
+
     {
       ChunkStore tmpCs;
       u8 *newRefs = 0; int nNewRefs = 0;
@@ -595,7 +608,7 @@ int doltlitePush(
       if( refsData2 && nRefsData2 > 0 ){
         rc = chunkStoreLoadRefsFromBlob(&tmpCs, refsData2, nRefsData2);
       }else{
-        
+
         chunkStoreSetDefaultBranch(&tmpCs, "main");
       }
       sqlite3_free(refsData2);
@@ -604,7 +617,7 @@ int doltlitePush(
         return rc;
       }
 
-      
+
       rc = chunkStoreUpdateBranch(&tmpCs, zBranch, &localCommit);
       if( rc==SQLITE_NOTFOUND ){
         rc = chunkStoreAddBranch(&tmpCs, zBranch, &localCommit);
@@ -624,7 +637,7 @@ int doltlitePush(
         return rc;
       }
 
-      
+
       rc = chunkStoreSerializeRefsToBlob(&tmpCs, &newRefs, &nNewRefs);
       doltliteCommitClear(&pushedCommit);
       chunkStoreClose(&tmpCs);
@@ -636,7 +649,7 @@ int doltlitePush(
     }
   }
 
-  
+
   rc = pRemote->xCommit(pRemote);
 
   return rc;
@@ -657,11 +670,11 @@ int doltliteFetch(
 
   memset(&remoteCommit, 0, sizeof(remoteCommit));
 
-  
+
   rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   rc = remoteFindBranchFromRefsBlob(refsData, nRefsData, zBranch, &remoteCommit);
   sqlite3_free(refsData);
   if( rc!=SQLITE_OK ){
@@ -670,10 +683,10 @@ int doltliteFetch(
   found = !prollyHashIsEmpty(&remoteCommit);
 
   if( !found || prollyHashIsEmpty(&remoteCommit) ){
-    return SQLITE_NOTFOUND; 
+    return SQLITE_NOTFOUND;
   }
 
-  
+
   pLocalDst = doltliteLocalAsRemote(pLocal);
   if( !pLocalDst ) return SQLITE_NOMEM;
 
@@ -682,11 +695,11 @@ int doltliteFetch(
   pLocalDst->xClose(pLocalDst);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   rc = chunkStoreUpdateTracking(pLocal, zRemoteName, zBranch, &remoteCommit);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   rc = chunkStoreSerializeRefs(pLocal);
   if( rc==SQLITE_OK ) rc = chunkStoreCommit(pLocal);
 
@@ -704,11 +717,11 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
 
   memcpy(&oldRefsHash, &pLocal->refsHash, sizeof(ProllyHash));
 
-  
+
   rc = pRemote->xGetRefs(pRemote, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   rc = remoteCollectRootsFromRefsBlob(refsData, nRefsData, &aRoots, &nRoots);
   if( rc!=SQLITE_OK ){
     sqlite3_free(refsData);
@@ -716,11 +729,11 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   }
 
   if( nRoots == 0 ){
-    
+
     sqlite3_free(aRoots);
-    
+
   }else{
-    
+
     pLocalDst = doltliteLocalAsRemote(pLocal);
     if( !pLocalDst ){
       sqlite3_free(aRoots);
@@ -740,7 +753,7 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
     }
   }
 
-  
+
   if( refsData && nRefsData > 0 ){
     ProllyHash refsHash;
     rc = chunkStorePut(pLocal, refsData, nRefsData, &refsHash);
@@ -751,14 +764,14 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   sqlite3_free(refsData);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   rc = chunkStoreCommit(pLocal);
   if( rc!=SQLITE_OK ){
     memcpy(&pLocal->refsHash, &oldRefsHash, sizeof(ProllyHash));
     return rc;
   }
 
-  
+
   rc = chunkStoreReloadRefs(pLocal);
   if( rc!=SQLITE_OK ){
     memcpy(&pLocal->refsHash, &oldRefsHash, sizeof(ProllyHash));
@@ -771,4 +784,4 @@ int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){
   return rc;
 }
 
-#endif 
+#endif

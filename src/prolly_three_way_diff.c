@@ -2,26 +2,26 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_three_way_diff.h"
-#include <string.h>  
+#include <string.h>
 
 typedef struct DiffEntry DiffEntry;
 struct DiffEntry {
-  u8 type;            
-  u8 *pKey;           
+  u8 type;
+  u8 *pKey;
   int nKey;
   i64 intKey;
-  u8 *pOldVal;        
+  u8 *pOldVal;
   int nOldVal;
-  u8 *pNewVal;        
+  u8 *pNewVal;
   int nNewVal;
 };
 
 typedef struct DiffCollector DiffCollector;
 struct DiffCollector {
-  DiffEntry *aEntry;  
-  int nEntry;         
-  int nAlloc;         
-  u8 flags;           
+  DiffEntry *aEntry;
+  int nEntry;
+  int nAlloc;
+  u8 flags;
 };
 
 static u8 *dupBlob(const u8 *pSrc, int nSrc){
@@ -36,7 +36,7 @@ static int diffCollectCallback(void *pCtx, const ProllyDiffChange *pChange){
   DiffCollector *pColl = (DiffCollector*)pCtx;
   DiffEntry *pEntry;
 
-  
+
   if( pColl->nEntry >= pColl->nAlloc ){
     int nNew = pColl->nAlloc ? pColl->nAlloc*2 : 32;
     DiffEntry *aNew = (DiffEntry*)sqlite3_realloc(pColl->aEntry,
@@ -57,7 +57,7 @@ static int diffCollectCallback(void *pCtx, const ProllyDiffChange *pChange){
   pEntry->pNewVal = dupBlob(pChange->pNewVal, pChange->nNewVal);
   pEntry->nNewVal = pChange->nNewVal;
 
-  
+
   if( (pChange->pKey && pChange->nKey>0 && !pEntry->pKey)
    || (pChange->pOldVal && pChange->nOldVal>0 && !pEntry->pOldVal)
    || (pChange->pNewVal && pChange->nNewVal>0 && !pEntry->pNewVal) ){
@@ -166,6 +166,18 @@ static int emitRightOnly(
   return xCallback(pCtx, &change);
 }
 
+/* Classification when both branches touched the same key:
+**
+**   ADD vs ADD        → CONVERGENT if same value, else CONFLICT_MM
+**   DELETE vs DELETE  → CONVERGENT
+**   MODIFY vs MODIFY  → CONVERGENT if same new value, else CONFLICT_MM
+**   DELETE vs MODIFY  → CONFLICT_DM
+**   MODIFY vs DELETE  → CONFLICT_DM
+**   anything else     → CONFLICT_MM (fallback)
+**
+** "Both sides made the same change" (convergent) is the one case
+** merge can silently accept — everything else either needs user
+** resolution or is impossible given the diff semantics. */
 static int emitBothSides(
   const DiffEntry *pLeft,
   const DiffEntry *pRight,
@@ -176,7 +188,7 @@ static int emitBothSides(
   memset(&change, 0, sizeof(change));
   fillKeyFromEntry(&change, pLeft);
 
-  
+
   if( pLeft->type==PROLLY_DIFF_ADD && pRight->type==PROLLY_DIFF_ADD ){
     if( valuesEqual(pLeft->pNewVal, pLeft->nNewVal,
                     pRight->pNewVal, pRight->nNewVal) ){
@@ -195,7 +207,7 @@ static int emitBothSides(
     return xCallback(pCtx, &change);
   }
 
-  
+
   if( pLeft->type==PROLLY_DIFF_DELETE && pRight->type==PROLLY_DIFF_DELETE ){
     change.type = THREE_WAY_CONVERGENT;
     change.pBaseVal = pLeft->pOldVal;
@@ -203,7 +215,7 @@ static int emitBothSides(
     return xCallback(pCtx, &change);
   }
 
-  
+
   if( pLeft->type==PROLLY_DIFF_MODIFY && pRight->type==PROLLY_DIFF_MODIFY ){
     change.pBaseVal = pLeft->pOldVal;
     change.nBaseVal = pLeft->nOldVal;
@@ -220,7 +232,7 @@ static int emitBothSides(
     return xCallback(pCtx, &change);
   }
 
-  
+
   if( (pLeft->type==PROLLY_DIFF_DELETE && pRight->type==PROLLY_DIFF_MODIFY)
    || (pLeft->type==PROLLY_DIFF_MODIFY && pRight->type==PROLLY_DIFF_DELETE) ){
     change.type = THREE_WAY_CONFLICT_DM;
@@ -236,7 +248,7 @@ static int emitBothSides(
     return xCallback(pCtx, &change);
   }
 
-  
+
   change.type = THREE_WAY_CONFLICT_MM;
   change.pBaseVal = pLeft->pOldVal;
   change.nBaseVal = pLeft->nOldVal;
@@ -247,10 +259,6 @@ static int emitBothSides(
   return xCallback(pCtx, &change);
 }
 
-/* Three-way diff: diff(ancestor,ours) and diff(ancestor,theirs) collected
-** into sorted arrays, then merge-walked in key order. Same-key entries are
-** classified as convergent (identical change), MM conflict (both modified
-** differently), or DM conflict (one deleted, other modified). */
 int prollyThreeWayDiff(
   ChunkStore *pStore,
   ProllyCache *pCache,
@@ -271,33 +279,33 @@ int prollyThreeWayDiff(
   left.flags = flags;
   right.flags = flags;
 
-  
+
   rc = prollyDiff(pStore, pCache, pAncestorRoot, pOursRoot,
                   flags, diffCollectCallback, &left);
   if( rc!=SQLITE_OK ) goto cleanup;
 
-  
+
   rc = prollyDiff(pStore, pCache, pAncestorRoot, pTheirsRoot,
                   flags, diffCollectCallback, &right);
   if( rc!=SQLITE_OK ) goto cleanup;
 
-  
+
   iL = 0;
   iR = 0;
   while( iL < left.nEntry && iR < right.nEntry ){
     int cmp = diffEntryKeyCmp(&left.aEntry[iL], &right.aEntry[iR], flags);
     if( cmp < 0 ){
-      
+
       rc = emitLeftOnly(&left.aEntry[iL], xCallback, pCtx);
       if( rc!=SQLITE_OK ) goto cleanup;
       iL++;
     }else if( cmp > 0 ){
-      
+
       rc = emitRightOnly(&right.aEntry[iR], xCallback, pCtx);
       if( rc!=SQLITE_OK ) goto cleanup;
       iR++;
     }else{
-      
+
       rc = emitBothSides(&left.aEntry[iL], &right.aEntry[iR],
                          xCallback, pCtx);
       if( rc!=SQLITE_OK ) goto cleanup;
@@ -306,14 +314,14 @@ int prollyThreeWayDiff(
     }
   }
 
-  
+
   while( iL < left.nEntry ){
     rc = emitLeftOnly(&left.aEntry[iL], xCallback, pCtx);
     if( rc!=SQLITE_OK ) goto cleanup;
     iL++;
   }
 
-  
+
   while( iR < right.nEntry ){
     rc = emitRightOnly(&right.aEntry[iR], xCallback, pCtx);
     if( rc!=SQLITE_OK ) goto cleanup;
@@ -326,4 +334,4 @@ cleanup:
   return rc;
 }
 
-#endif 
+#endif

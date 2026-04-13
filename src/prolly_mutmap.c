@@ -248,10 +248,6 @@ int prollyMutMapInitMode(ProllyMutMap *mm, u8 isIntKey, u8 keepSorted){
   return SQLITE_OK;
 }
 
-/* Append an undo record snapshotting the current state of
-** aEntries[idx]. Only called when an in-place mutation under an
-** active savepoint would lose information that ROLLBACK TO needs.
-*/
 static int appendUndoRec(ProllyMutMap *mm, int idx){
   ProllyMutMapEntry *e;
   ProllyMutMapUndoRec *rec;
@@ -281,9 +277,6 @@ static int appendUndoRec(ProllyMutMap *mm, int idx){
   return SQLITE_OK;
 }
 
-/* When an insert at idx shifts later entries to the right, any
-** undo records pointing at the shifted entries need their indices
-** bumped to track. Symmetric for an undo of the insert. */
 static void shiftUndoIndices(ProllyMutMap *mm, int idx, int delta){
   int i;
   for(i=0; i<mm->nUndo; i++){
@@ -313,8 +306,7 @@ int prollyMutMapInsert(
 
   if( found ){
     ProllyMutMapEntry *e = &mm->aEntries[phys];
-    /* In-place mutation. If a savepoint is active AND the entry
-    ** predates it, snapshot before overwriting. */
+
     if( mm->currentSavepointLevel > 0
      && e->bornAt < mm->currentSavepointLevel ){
       rc = appendUndoRec(mm, phys);
@@ -408,7 +400,7 @@ int prollyMutMapDelete(
       e->bornAt = mm->currentSavepointLevel;
       return SQLITE_OK;
     }
-    /* Already a DELETE — no state change. */
+
     return SQLITE_OK;
   }
 
@@ -459,18 +451,14 @@ void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level){
   mm->currentSavepointLevel = level;
 }
 
-/* Rollback order matters: first walk the undo log backward restoring
-** in-place mutations to their pre-savepoint state (including resetting
-** bornAt). THEN drop any remaining entries with bornAt >= level —
-** those are fresh-key inserts under the rolled-back savepoints, which
-** never had undo records in the first place. Doing it the other way
-** would drop in-place-mutated entries before their undo record was
-** applied, losing the restored state. */
+/* Order matters: restore in-place mutations from the undo log
+** FIRST, then drop fresh-key inserts with bornAt >= level. Doing it
+** the other way would drop in-place-mutated entries before their
+** undo record gets applied, losing the restored state. */
 int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
   int i;
   if( !mm ) return SQLITE_OK;
 
-  /* Restore in-place mutations. Walk undo backward. */
   while( mm->nUndo > 0
       && mm->aUndo[mm->nUndo - 1].level >= level ){
     ProllyMutMapUndoRec *rec = &mm->aUndo[mm->nUndo - 1];
@@ -494,10 +482,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
     mm->nUndo--;
   }
 
-  /* Drop new entries (bornAt >= level) — these are fresh-key inserts
-  ** under the rolled-back savepoints. Walk descending so removals
-  ** don't disturb later indices. Physical entries are compacted once at
-  ** the end; sorted order is rebuilt by filtering the old order vector. */
+
   {
     int oldN = mm->nEntries;
     int *aMap = 0;
@@ -551,15 +536,6 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
   return SQLITE_OK;
 }
 
-/* RELEASE commits everything at level >= `level` into level `level-1`.
-** Two things need to happen: (1) in-place undo records at the released
-** levels get "inherited" by the parent level so a future ROLLBACK TO
-** the parent can still find the pre-release state; (2) entries with
-** bornAt in the released range get clamped down to level-1 so a later
-** ROLLBACK TO the parent doesn't mistakenly drop them as fresh post-
-** savepoint inserts. Special case: releasing to level 0 (fast path)
-** drops the undo log entirely — there's no outer savepoint to preserve
-** those records for, and COMMIT/full-ROLLBACK don't use them. */
 void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level){
   int i;
   int target;
@@ -654,10 +630,10 @@ void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
   it->idx = mm->nEntries>0 ? mm->nEntries - 1 : mm->nEntries;
 }
 
-/* Clear wipes data only (entries + undo records). currentSavepointLevel
-** is savepoint *context* not data; a flushMutMap mid-savepoint calls
-** clear but the mutmap continues to live under the same savepoint,
-** so any subsequent writes must still be attributed to that level. */
+/* Wipes data only — currentSavepointLevel is context not data. A
+** flushMutMap mid-savepoint calls clear and the mutmap continues to
+** live under the same savepoint, so subsequent writes must still
+** attribute to that level. */
 void prollyMutMapClear(ProllyMutMap *mm){
   int i;
   for(i=0; i<mm->nEntries; i++){
@@ -827,4 +803,4 @@ int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
   return SQLITE_OK;
 }
 
-#endif 
+#endif

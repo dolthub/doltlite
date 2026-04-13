@@ -1,17 +1,12 @@
-/*
-** Shell wrapper: runs the SQLite shell main() on a thread with a large stack.
-**
-** Prolly tree operations (especially serializeCatalog during COMMIT
-** and deep VDBE call chains) need more stack than the default 512KB
-** on macOS secondary threads or the default 8MB on Linux.
-**
-** This wrapper spawns a shell on a 64MB stack thread, matching what
-** the C benchmark does.
-*/
+/* The shell recurses deeply during SQL parse/codegen, and doltlite's
+** prolly-tree cursor stack adds another layer on top. The default
+** 8MB main-thread stack overflows on pathological queries, so we
+** hand the shell off to a worker thread with a 256MB stack and just
+** wait for it to return. */
+
 #include <pthread.h>
 #include <stdlib.h>
 
-/* Forward declare the real shell main (defined in shell.c) */
 extern int sqlite3_shell_main(int argc, char **argv);
 
 struct ShellArgs {
@@ -36,7 +31,7 @@ int main(int argc, char **argv){
   sa.rc = 0;
 
   pthread_attr_init(&attr);
-  pthread_attr_setstacksize(&attr, 256 * 1024 * 1024);  /* 256MB stack */
+  pthread_attr_setstacksize(&attr, 256 * 1024 * 1024);
   pthread_create(&th, &attr, shell_thread, &sa);
   pthread_join(th, NULL);
   pthread_attr_destroy(&attr);

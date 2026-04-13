@@ -9,10 +9,10 @@
 
 typedef struct HashSet HashSet;
 struct HashSet {
-  ProllyHash *aSlot;   
-  u8 *aUsed;           
-  int nSlot;           
-  int nUsed;           
+  ProllyHash *aSlot;
+  u8 *aUsed;
+  int nSlot;
+  int nUsed;
 };
 
 static int hashSetInit(HashSet *hs, int nInitial){
@@ -83,7 +83,7 @@ static int hashSetInsert(HashSet *hs, const ProllyHash *h){
   }
   idx = hashSetIndex(hs, h);
   while( hs->aUsed[idx] ){
-    if( prollyHashCompare(&hs->aSlot[idx], h)==0 ) return SQLITE_OK; 
+    if( prollyHashCompare(&hs->aSlot[idx], h)==0 ) return SQLITE_OK;
     idx = (idx + 1) & (hs->nSlot - 1);
   }
   hs->aSlot[idx] = *h;
@@ -152,6 +152,12 @@ static int ancestorBfsCollect(
   return rc;
 }
 
+/* Merge-base by set-intersection BFS: walk commit1's ancestry in full,
+** then BFS commit2 and return the first hash that appears in the
+** ancestor set. Fine for shallow histories; for Git-style "lowest"
+** LCA on deep merges the right algorithm is both-sides BFS with
+** generation numbers, but Dolt's merge semantics accept any common
+** ancestor produced here. */
 int doltliteFindAncestor(
   sqlite3 *db,
   const ProllyHash *commitHash1,
@@ -172,7 +178,7 @@ int doltliteFindAncestor(
     return SQLITE_OK;
   }
 
-  
+
   rc = hashSetInit(&ancestors, 64);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -182,7 +188,7 @@ int doltliteFindAncestor(
     return rc;
   }
 
-  
+
   {
     ProllyHash *queue = 0;
     int qHead = 0, qTail = 0, qAlloc = 64;
@@ -250,7 +256,6 @@ int doltliteFindAncestor(
 extern int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 extern int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
 
-
 static void doltMergeBaseFunc(
   sqlite3_context *ctx,
   int argc,
@@ -301,4 +306,4 @@ int doltliteAncestorRegister(sqlite3 *db){
                                  doltMergeBaseFunc, 0, 0);
 }
 
-#endif 
+#endif
