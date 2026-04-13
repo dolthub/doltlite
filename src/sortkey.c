@@ -122,10 +122,15 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
     }else if( serialType == 9 ){
       v = 1;
     }else{
-      v = (pData[0] & 0x80) ? -1 : 0;
+      /* Big-endian sign-extended multi-byte integer. The naive
+      ** `v << 8` is left shift of a signed value, which is UB when
+      ** v is negative (C11 6.5.7/4). Do the arithmetic in u64 and
+      ** reinterpret — two's-complement bit pattern is identical. */
+      u64 uv = (pData[0] & 0x80) ? (u64)-1 : 0;
       for(u32 i = 0; i < nData; i++){
-        v = (v << 8) | pData[i];
+        uv = (uv << 8) | pData[i];
       }
+      v = (i64)uv;
     }
     d = (double)v;
     

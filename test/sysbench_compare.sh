@@ -336,7 +336,7 @@ echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQ
 # ============================================================
 # Enforce performance ceiling (exit 1 if any test exceeds limit)
 # ============================================================
-MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-6}
+MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-4}
 
 check_ceiling() {
   local tests="$1" db_sq="$2" db_dl="$3"
