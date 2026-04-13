@@ -169,6 +169,10 @@ jobs:
       run: cd build && bash ../test/oracle_dot_commands_test.sh ./doltlite ./sqlite3
       timeout-minutes: 5
 
+    - name: Oracle tests (FTS5)
+      run: cd build && bash ../test/oracle_fts5_test.sh ./doltlite ./sqlite3
+      timeout-minutes: 5
+
     - name: Large-scale test (10K rows)
       run: cd build && bash ../test/large_scale_test.sh ./doltlite --quick
       timeout-minutes: 5

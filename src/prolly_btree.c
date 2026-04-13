@@ -1102,6 +1102,57 @@ static int flushMutMap(BtCursor *pCur){
   return SQLITE_OK;
 }
 
+/*
+** Before a read-path seek on pCur's table, drain any pending writes
+** that have not yet reached the table's live root hash:
+**
+**   1. The TableEntry's pPending slot, populated when a write cursor
+**      is closed with a non-empty mutmap (see prollyBtCursorCloseCursor).
+**      The new-cursor-open path in prollyBtreeCursor() flushes this,
+**      but only the first time a cursor is opened; cached cursors
+**      re-seeked via sqlite3_blob_reopen don't re-run that code.
+**   2. Peer cursors that currently own non-empty mutmaps for this
+**      same table.
+**
+** Without this drain, a seek can miss rows that a write cursor
+** just buffered and then closed — FTS5 hits this path on every
+** auto-merge because its long-lived blob read cursor gets
+** re-seeked through OP_NotExists while writes flow in and out of
+** the table's pPending slot.
+**
+** Leaves pCur->pMutMap untouched — the cursor's own pending edits
+** are still needed for the own-mutmap fast paths in Moveto / First /
+** Last.
+*/
+static int flushOtherCursorPending(BtCursor *pCur){
+  struct TableEntry *pTE;
+  BtCursor *p;
+  int rc;
+
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( pTE && pTE->pPending ){
+    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+    if( !prollyMutMapIsEmpty(pMap) ){
+      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pMap);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    prollyMutMapFree(pMap);
+    sqlite3_free(pMap);
+    pTE->pPending = 0;
+    pTE->pendingFlushSeekEdits = 0;
+  }
+
+  for(p = pCur->pBt->pCursor; p; p = p->pNext){
+    if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
+     && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
+      rc = flushMutMap(p);
+      if( rc!=SQLITE_OK ) return rc;
+      p->eState = CURSOR_INVALID;
+    }
+  }
+  return SQLITE_OK;
+}
+
 /* SQLite may open implicit statement savepoints (nStatement) in addition to
 ** explicit user savepoints (nSavepoint). Our savepoint stack must match
 ** their combined count, or ROLLBACK TO will index out of bounds.
@@ -3081,18 +3132,8 @@ static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   rc = flushTablePending(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
-  
-  {
-    BtCursor *p;
-    for(p = pCur->pBt->pCursor; p; p = p->pNext){
-      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
-       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-        rc = flushMutMap(p);
-        if( rc!=SQLITE_OK ) return rc;
-        p->eState = CURSOR_INVALID;
-      }
-    }
-  }
+  rc = flushOtherCursorPending(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   refreshCursorRoot(pCur);
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -3119,17 +3160,8 @@ static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   rc = flushTablePending(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
-  {
-    BtCursor *p;
-    for(p = pCur->pBt->pCursor; p; p = p->pNext){
-      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
-       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-        rc = flushMutMap(p);
-        if( rc!=SQLITE_OK ) return rc;
-        p->eState = CURSOR_INVALID;
-      }
-    }
-  }
+  rc = flushOtherCursorPending(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   refreshCursorRoot(pCur);
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -3385,13 +3417,13 @@ static int prollyBtCursorTableMoveto(
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  
+
   if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
     ProllyMutMapEntry *pEntry = prollyMutMapFind(pCur->pMutMap, 0, 0, intKey);
     if( pEntry ){
       if( pEntry->op == PROLLY_EDIT_INSERT ){
         int idx = (int)(pEntry - pCur->pMutMap->aEntries);
-        
+
         *pRes = 0;
         refreshCursorRoot(pCur);
         {
@@ -3402,14 +3434,21 @@ static int prollyBtCursorTableMoveto(
         setCursorToMutMapEntry(pCur, idx);
         return SQLITE_OK;
       } else {
-        
+
         *pRes = 1;
         pCur->eState = CURSOR_INVALID;
         return SQLITE_OK;
       }
     }
-    
+
   }
+
+  /* Drain any pending writes on other cursors of this same table so
+  ** the tree seek below sees them. Without this, a long-lived read
+  ** cursor (e.g., the one FTS5 keeps open across sqlite3_blob_reopen
+  ** calls) can miss rows another cursor just inserted. */
+  rc = flushOtherCursorPending(pCur);
+  if( rc!=SQLITE_OK ) return rc;
 
   refreshCursorRoot(pCur);
 
