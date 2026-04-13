@@ -8,455 +8,15 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-static i64 cfReadInt(const u8 *pRec, int nBytes){
-  i64 v;
-  int i;
-  assert( nBytes >= 1 && nBytes <= 8 );
-  if( nBytes < 1 || nBytes > 8 ) return 0;
-  v = (pRec[0] & 0x80) ? -1 : 0;
-  for(i=0; i<nBytes; i++){
-    v = (v << 8) | pRec[i];
-  }
-  return v;
-}
-
-static int cfSqlRc(sqlite3_str *pStr){
-  int rc = sqlite3_str_errcode(pStr);
-  return rc==SQLITE_OK ? SQLITE_OK : rc;
-}
-
-static int cfAppendLiteral(
-  sqlite3_str *pStr,
-  const u8 **ppBodyPos,
-  const u8 *pRecEnd,
-  u64 st
-){
-  const u8 *pBodyPos = *ppBodyPos;
-  int len;
-
-  if( st==0 ){
-    sqlite3_str_appendall(pStr, "NULL");
-  }else if( st==8 ){
-    sqlite3_str_appendall(pStr, "0");
-  }else if( st==9 ){
-    sqlite3_str_appendall(pStr, "1");
-  }else if( st>=1 && st<=6 ){
-    static const int sizes[] = {0,1,2,3,4,6,8};
-    int nBytes = sizes[st];
-    if( pBodyPos + nBytes > pRecEnd ) return SQLITE_CORRUPT;
-    sqlite3_str_appendf(pStr, "%lld", cfReadInt(pBodyPos, nBytes));
-    pBodyPos += nBytes;
-  }else if( st==7 ){
-    double v;
-    u64 bits = 0;
-    int k;
-    if( pBodyPos + 8 > pRecEnd ) return SQLITE_CORRUPT;
-    for(k=0; k<8; k++) bits = (bits<<8) | pBodyPos[k];
-    memcpy(&v, &bits, 8);
-    sqlite3_str_appendf(pStr, "%!.15g", v);
-    pBodyPos += 8;
-  }else if( st>=12 && (st&1)==0 ){
-    int k;
-    len = ((int)st - 12) / 2;
-    if( pBodyPos + len > pRecEnd ) return SQLITE_CORRUPT;
-    sqlite3_str_appendall(pStr, "X'");
-    for(k=0; k<len; k++){
-      sqlite3_str_appendf(pStr, "%02x", pBodyPos[k]);
-    }
-    sqlite3_str_appendall(pStr, "'");
-    pBodyPos += len;
-  }else if( st>=13 && (st&1)==1 ){
-    char *zText;
-    len = ((int)st - 13) / 2;
-    if( pBodyPos + len > pRecEnd ) return SQLITE_CORRUPT;
-    zText = sqlite3_malloc(len + 1);
-    if( !zText ) return SQLITE_NOMEM;
-    memcpy(zText, pBodyPos, len);
-    zText[len] = 0;
-    sqlite3_str_appendf(pStr, "%Q", zText);
-    sqlite3_free(zText);
-    pBodyPos += len;
-  }else{
-    return SQLITE_CORRUPT;
-  }
-
-  *ppBodyPos = pBodyPos;
-  return cfSqlRc(pStr);
-}
-
-/* Advance pBody past the value for a single serial-type code without
-** writing anything. Returns SQLITE_OK or SQLITE_CORRUPT. */
-static int cfSkipField(const u8 **ppBody, const u8 *pRecEnd, u64 st){
-  const u8 *p = *ppBody;
-  int len = 0;
-  if( st==0 || st==8 || st==9 ){
-    /* NULL or integer constants 0/1: zero body bytes. */
-  }else if( st>=1 && st<=6 ){
-    static const int sizes[] = {0,1,2,3,4,6,8};
-    len = sizes[st];
-  }else if( st==7 ){
-    len = 8;
-  }else if( st>=12 && (st&1)==0 ){
-    len = ((int)st - 12) / 2;
-  }else if( st>=13 && (st&1)==1 ){
-    len = ((int)st - 13) / 2;
-  }else{
-    return SQLITE_CORRUPT;
-  }
-  if( p + len > pRecEnd ) return SQLITE_CORRUPT;
-  *ppBody = p + len;
-  return SQLITE_OK;
-}
-
-/* Build a DELETE-by-PK statement for a user table, using a conflict
-** row's existing record body (typically pOurVal) as the source of the
-** PK value(s). Used by the --theirs resolution path when the theirs
-** side is a delete: we need to remove the row currently in the table,
-** and its PK must come from somewhere.
-**
-** Two modes:
-**
-**   - rowid-aliased (INTEGER PRIMARY KEY, single PK column): the
-**     record body does NOT include the PK. Caller passes the row's
-**     intKey and we emit `DELETE ... WHERE <pk>=intKey`.
-**
-**   - user PK (INT/TEXT/composite): the record body includes all
-**     columns. We walk PRAGMA table_info, find the PK column(s), and
-**     extract the values for the PK ordinal(s) from the body.
-*/
-static int buildDeleteByKeySql(
-  sqlite3 *db,
-  const char *zTable,
-  i64 intKey,
-  const u8 *pRec,
-  int nRec,
-  char **pzSql
-){
-  sqlite3_stmt *pInfo = 0;
-  char *zInfoSql;
-  int rc;
-  sqlite3_str *pDel = 0;
-  const u8 *pPos, *pRecEnd, *pHdrEnd, *pBody;
-  u64 hdrSize;
-  int hdrBytes;
-  int colIdx;
-  int nPk = 0;
-  int nAllCols = 0;
-  int pkEmitted = 0;
-  int rowidAliased = 0;
-  int iPkCol = -1;
-
-  typedef struct {
-    char *zName;
-    int  colIdx;  /* ordinal in the table_info listing */
-  } PkCol;
-  PkCol *aPk = 0;
-
-  *pzSql = 0;
-
-  zInfoSql = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTable);
-  if( !zInfoSql ) return SQLITE_NOMEM;
-  rc = sqlite3_prepare_v2(db, zInfoSql, -1, &pInfo, 0);
-  sqlite3_free(zInfoSql);
-  if( rc!=SQLITE_OK ) return rc;
-
-  while( (rc = sqlite3_step(pInfo))==SQLITE_ROW ){
-    int pk = sqlite3_column_int(pInfo, 5);
-    const char *zType = (const char*)sqlite3_column_text(pInfo, 2);
-    if( pk>0 ){
-      const char *zName = (const char*)sqlite3_column_text(pInfo, 1);
-      PkCol *aNew = sqlite3_realloc(aPk, (nPk+1)*(int)sizeof(PkCol));
-      if( !aNew ){ rc = SQLITE_NOMEM; break; }
-      aPk = aNew;
-      aPk[nPk].zName = sqlite3_mprintf("%s", zName ? zName : "");
-      aPk[nPk].colIdx = nAllCols;
-      if( !aPk[nPk].zName ){ rc = SQLITE_NOMEM; break; }
-      if( pk==1 && zType && sqlite3_stricmp(zType, "INTEGER")==0 ){
-        iPkCol = nAllCols;
-      }
-      nPk++;
-    }
-    nAllCols++;
-  }
-  sqlite3_finalize(pInfo);
-  if( rc!=SQLITE_OK && rc!=SQLITE_DONE ) goto delete_cleanup;
-  rc = SQLITE_OK;
-  if( nPk==0 ){
-    rc = SQLITE_CONSTRAINT;
-    goto delete_cleanup;
-  }
-
-  rowidAliased = (nPk==1 && iPkCol>=0) ? 1 : 0;
-
-  if( rowidAliased ){
-    /* Simple case: single INTEGER PK, record body has no PK. */
-    pDel = sqlite3_str_new(0);
-    if( !pDel ){ rc = SQLITE_NOMEM; goto delete_cleanup; }
-    sqlite3_str_appendf(pDel, "DELETE FROM \"%w\" WHERE \"%w\"=%lld",
-                        zTable, aPk[0].zName, intKey);
-    goto delete_finalize;
-  }
-
-  /* Walk the record body, appending only the PK columns to the
-  ** WHERE clause and skipping the others. */
-  pPos = pRec;
-  pRecEnd = pRec + nRec;
-  hdrBytes = dlReadVarint(pPos, pRecEnd, &hdrSize);
-  if( hdrBytes <= 0 || hdrSize < (u64)hdrBytes || hdrSize > (u64)nRec ){
-    rc = SQLITE_CORRUPT;
-    goto delete_cleanup;
-  }
-  pPos += hdrBytes;
-  pHdrEnd = pRec + (int)hdrSize;
-  pBody = pRec + (int)hdrSize;
-
-  pDel = sqlite3_str_new(0);
-  if( !pDel ){ rc = SQLITE_NOMEM; goto delete_cleanup; }
-  sqlite3_str_appendf(pDel, "DELETE FROM \"%w\" WHERE ", zTable);
-
-  colIdx = 0;
-  while( pPos < pHdrEnd && colIdx < nAllCols ){
-    u64 st;
-    int stBytes = dlReadVarint(pPos, pHdrEnd, &st);
-    int k, isPk = 0;
-    if( stBytes <= 0 ){ rc = SQLITE_CORRUPT; break; }
-    pPos += stBytes;
-
-    for(k=0; k<nPk; k++){
-      if( aPk[k].colIdx==colIdx ){ isPk = 1; break; }
-    }
-    if( isPk ){
-      if( pkEmitted>0 ) sqlite3_str_appendall(pDel, " AND ");
-      sqlite3_str_appendf(pDel, "\"%w\"=", aPk[k].zName);
-      rc = cfAppendLiteral(pDel, &pBody, pRecEnd, st);
-      if( rc!=SQLITE_OK ) break;
-      pkEmitted++;
-    }else{
-      rc = cfSkipField(&pBody, pRecEnd, st);
-      if( rc!=SQLITE_OK ) break;
-    }
-    colIdx++;
-  }
-  if( rc==SQLITE_OK && pkEmitted!=nPk ) rc = SQLITE_CORRUPT;
-
-delete_finalize:
-delete_cleanup:
-  {
-    int k;
-    for(k=0; k<nPk; k++) sqlite3_free(aPk[k].zName);
-    sqlite3_free(aPk);
-  }
-  if( rc!=SQLITE_OK ){
-    if( pDel ) sqlite3_str_reset(pDel);
-    return rc;
-  }
-  *pzSql = sqlite3_str_finish(pDel);
-  if( !*pzSql ) return SQLITE_NOMEM;
-  return SQLITE_OK;
-}
-
-static int buildInsertSql(
-  const char *zTable,
-  i64 intKey,
-  int rowidAliased,   /* 1: INTEGER PK case, use intKey for PK column */
-  int iPkCol,         /* ordinal of the aliased PK column (if rowidAliased) */
-  char **azCol, int nCol,
-  const u8 *pRec, const u8 *pRecEnd,
-  const u8 *pHdrEnd, const u8 *pBody,
-  char **pzSql
-){
-  sqlite3_str *pIns = sqlite3_str_new(0);
-  sqlite3_str *pVals = sqlite3_str_new(0);
-  const u8 *pBodyPos = pBody;
-  int colIdx = 0;
-  int emitted = 0;
-  char *zIns;
-  char *zVals;
-  int rc;
-
-  *pzSql = 0;
-  if( !pIns || !pVals ){
-    sqlite3_str_reset(pIns);
-    sqlite3_str_reset(pVals);
-    return SQLITE_NOMEM;
-  }
-  sqlite3_str_appendf(pIns, "INSERT OR REPLACE INTO \"%w\"(", zTable);
-  sqlite3_str_appendf(pVals, "VALUES(");
-  rc = cfSqlRc(pIns);
-  if( rc==SQLITE_OK ) rc = cfSqlRc(pVals);
-  if( rc!=SQLITE_OK ){
-    sqlite3_str_reset(pIns);
-    sqlite3_str_reset(pVals);
-    return rc;
-  }
-
-  /* For rowid-aliased INTEGER PK tables the record body does NOT
-  ** include the PK; emit it explicitly from intKey first, then walk
-  ** the record for the remaining columns (in azCol order, skipping
-  ** the PK ordinal). For user-PK tables (INT/TEXT/composite) the
-  ** record includes all columns and we walk them linearly. */
-  if( rowidAliased && iPkCol>=0 && iPkCol<nCol ){
-    sqlite3_str_appendf(pIns, "\"%w\"", azCol[iPkCol]);
-    sqlite3_str_appendf(pVals, "%lld", intKey);
-    rc = cfSqlRc(pIns);
-    if( rc==SQLITE_OK ) rc = cfSqlRc(pVals);
-    if( rc!=SQLITE_OK ){
-      sqlite3_str_reset(pIns);
-      sqlite3_str_reset(pVals);
-      return rc;
-    }
-    emitted = 1;
-  }
-
-  while( pRec < pHdrEnd && pRec < pRecEnd && colIdx < nCol ){
-    u64 st;
-    int stBytes;
-    /* Skip the aliased-PK ordinal in azCol since it was emitted above. */
-    if( rowidAliased && colIdx==iPkCol ){ colIdx++; continue; }
-
-    stBytes = dlReadVarint(pRec, pHdrEnd, &st);
-    if( stBytes <= 0 ) rc = SQLITE_CORRUPT;
-    pRec += stBytes;
-    if( rc==SQLITE_OK ){
-      if( emitted>0 ){
-        sqlite3_str_appendall(pIns, ",");
-        sqlite3_str_appendall(pVals, ",");
-      }
-      sqlite3_str_appendf(pIns, "\"%w\"", azCol[colIdx]);
-      rc = cfSqlRc(pIns);
-    }
-    if( rc==SQLITE_OK ){
-      rc = cfAppendLiteral(pVals, &pBodyPos, pRecEnd, st);
-    }
-    if( rc!=SQLITE_OK ) break;
-    emitted++;
-    colIdx++;
-  }
-  if( rc!=SQLITE_OK ){
-    sqlite3_str_reset(pIns);
-    sqlite3_str_reset(pVals);
-    return rc;
-  }
-  zIns = sqlite3_str_finish(pIns);
-  zVals = sqlite3_str_finish(pVals);
-  if( !zIns || !zVals ){
-    sqlite3_free(zIns);
-    sqlite3_free(zVals);
-    return SQLITE_NOMEM;
-  }
-  *pzSql = sqlite3_mprintf("%s) %s)", zIns, zVals);
-  sqlite3_free(zIns);
-  sqlite3_free(zVals);
-  if( !*pzSql ) return SQLITE_NOMEM;
-  return SQLITE_OK;
-}
-
-static int applyTheirRecord(
-  sqlite3 *db,
-  const char *zTable,
-  i64 intKey,
-  const u8 *pRec,
-  int nRec
-){
-  sqlite3_stmt *pInfo = 0;
-  char *zSql;
-  int rc, nCol = 0;
-  const u8 *pPos, *pRecEnd, *pHdrEnd, *pBody;
-  u64 hdrSize;
-  int hdrBytes;
-  int rowidAliased = 0;
-  int iPkCol = -1;
-  int nPk = 0;
-
-  char **azCol = 0;
-  int nColAlloc = 0;
-
-  zSql = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTable);
-  if( !zSql ) return SQLITE_NOMEM;
-  rc = sqlite3_prepare_v2(db, zSql, -1, &pInfo, 0);
-  sqlite3_free(zSql);
-  if( rc!=SQLITE_OK ) return rc;
-
-  while( (rc = sqlite3_step(pInfo))==SQLITE_ROW ){
-    const char *zName = (const char*)sqlite3_column_text(pInfo, 1);
-    const char *zType = (const char*)sqlite3_column_text(pInfo, 2);
-    int pk = sqlite3_column_int(pInfo, 5);
-    if( pk>0 ){
-      nPk++;
-      if( pk==1 && zType && sqlite3_stricmp(zType, "INTEGER")==0 ){
-        iPkCol = nCol;
-      }
-    }
-    if( nCol >= nColAlloc ){
-      char **azNew;
-      nColAlloc = nColAlloc ? nColAlloc*2 : 8;
-      azNew = sqlite3_realloc(azCol, nColAlloc * (int)sizeof(char*));
-      if( !azNew ){
-        int k;
-        sqlite3_finalize(pInfo);
-        for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
-        sqlite3_free(azCol);
-        return SQLITE_NOMEM;
-      }
-      azCol = azNew;
-    }
-    azCol[nCol] = sqlite3_mprintf("%s", zName);
-    if( !azCol[nCol] ){
-      int k;
-      sqlite3_finalize(pInfo);
-      for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
-      sqlite3_free(azCol);
-      return SQLITE_NOMEM;
-    }
-    nCol++;
-  }
-  sqlite3_finalize(pInfo);
-  if( rc!=SQLITE_DONE ){
-    int k;
-    for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
-    sqlite3_free(azCol);
-    return rc;
-  }
-
-  /* Rowid-aliased iff the single PK column is declared INTEGER. In
-  ** that case the record body omits the PK (it's the intKey). For
-  ** any other PK shape (INT, TEXT, composite) the record body
-  ** includes every column in declaration order. */
-  rowidAliased = (nPk==1 && iPkCol>=0) ? 1 : 0;
-
-  pPos = pRec;
-  pRecEnd = pRec + nRec;
-  hdrBytes = dlReadVarint(pPos, pRecEnd, &hdrSize);
-  if( hdrBytes <= 0 || hdrSize < (u64)hdrBytes || hdrSize > (u64)nRec ){
-    int k;
-    for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
-    sqlite3_free(azCol);
-    return SQLITE_CORRUPT;
-  }
-  pPos += hdrBytes;
-  pHdrEnd = pRec + (int)hdrSize;
-  pBody = pRec + (int)hdrSize;
-
-  /* No field skipping — the record body includes ALL columns (including
-  ** the PK) for doltlite user-PK tables. buildInsertSql reads them all
-  ** and uses the PK column name directly (not "rowid", which doesn't
-  ** exist on doltlite user-PK tables). */
-  rc = buildInsertSql(zTable, intKey, rowidAliased, iPkCol, azCol, nCol,
-                      pPos, pRecEnd, pHdrEnd, pBody, &zSql);
-  if( rc==SQLITE_OK ){
-    rc = sqlite3_exec(db, zSql, 0, 0, 0);
-    sqlite3_free(zSql);
-  }
-
-  
-  {
-    int k;
-    for(k=0; k<nCol; k++) sqlite3_free(azCol[k]);
-    sqlite3_free(azCol);
-  }
-
-  return rc;
-}
+/* Historical note: an earlier version of this file built SQL text to
+** apply conflict resolutions — INSERT OR REPLACE strings with literal
+** values inlined per type (%lld, %Q, X'..', %!.15g), handed to
+** sqlite3_exec. That round-tripped the stored record bytes through
+** the parser and VDBE purely to land them in the prolly tree.
+** Resolution now calls doltliteApplyRawRowMutation (prolly_btree.c)
+** which writes the bytes directly into the target table's tree. No
+** SQL engine involvement; triggers and FK checks correctly do NOT
+** fire (they already ran on the original commits). */
 
 typedef struct ConflictTableInfo ConflictTableInfo;
 struct ConflictTableInfo {
@@ -528,12 +88,38 @@ static void removeConflictTable(ConflictTableInfo *aTables, int *pnTables, int i
   memset(&aTables[*pnTables], 0, sizeof(aTables[*pnTables]));
 }
 
+/* Conflict catalog format:
+**
+**   Header: 4 magic bytes 'D' 'L' 'C' version
+**     - version 1: rows carry (nKey, key, intKey, base, our, their)
+**     - v0 (legacy, before the rename-conformity refactor): (intKey,
+**       base, our, their) with no version header; that format only
+**       worked for INTEGER PK tables and is no longer produced. It
+**       is NOT read by loadAllConflicts — any on-disk conflict
+**       catalog written by a pre-rename-conformity doltlite must be
+**       cleared with dolt_merge('--abort') before upgrading.
+**   Then: uint16 nTables
+**   Per table: uint16 nameLen, name, uint32 nConflicts, rows[]
+**   Per row:  uint32 nKey, keyBytes, int64 intKey,
+**             uint32 nBase, baseVal, uint32 nOur, ourVal,
+**             uint32 nTheir, theirVal
+**
+** The key bytes are needed so the --ours / --theirs resolve paths
+** (which now write directly into the prolly tree via
+** doltliteApplyRawRowMutation) can reach user-PK rows. INTEGER-PK
+** tables still use intKey and store nKey=0.
+*/
+#define DOLTLITE_CONFLICTS_MAGIC0 'D'
+#define DOLTLITE_CONFLICTS_MAGIC1 'L'
+#define DOLTLITE_CONFLICTS_MAGIC2 'C'
+#define DOLTLITE_CONFLICTS_VERSION 1
+
 int doltliteSerializeConflicts(
   ChunkStore *cs,
   ConflictTableInfo *aTables, int nTables,
   ProllyHash *pHash
 ){
-  int sz = 2;  
+  int sz = 4 + 2;  /* magic+version header + nTables */
   int i, j, rc;
   u8 *buf, *p;
 
@@ -541,7 +127,9 @@ int doltliteSerializeConflicts(
     int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
     sz += 2 + nl + 4;
     for(j=0; j<aTables[i].nConflicts; j++){
-      sz += 8 + 4 + aTables[i].aRows[j].nBaseVal
+      sz += 4 + aTables[i].aRows[j].nKey  /* nKey + key bytes */
+              + 8                          /* intKey */
+              + 4 + aTables[i].aRows[j].nBaseVal
               + 4 + aTables[i].aRows[j].nOurVal
               + 4 + aTables[i].aRows[j].nTheirVal;
     }
@@ -551,6 +139,11 @@ int doltliteSerializeConflicts(
   if( !buf ) return SQLITE_NOMEM;
   p = buf;
 
+  p[0] = DOLTLITE_CONFLICTS_MAGIC0;
+  p[1] = DOLTLITE_CONFLICTS_MAGIC1;
+  p[2] = DOLTLITE_CONFLICTS_MAGIC2;
+  p[3] = DOLTLITE_CONFLICTS_VERSION;
+  p += 4;
   p[0]=(u8)nTables; p[1]=(u8)(nTables>>8); p+=2;
   for(i=0; i<nTables; i++){
     int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
@@ -562,6 +155,8 @@ int doltliteSerializeConflicts(
     for(j=0; j<nc; j++){
       struct ConflictRow *cr = &aTables[i].aRows[j];
       i64 k = cr->intKey;
+      { int n=cr->nKey; p[0]=(u8)n; p[1]=(u8)(n>>8); p[2]=(u8)(n>>16); p[3]=(u8)(n>>24); p+=4; }
+      if(cr->nKey>0){ memcpy(p, cr->pKey, cr->nKey); p+=cr->nKey; }
       p[0]=(u8)k; p[1]=(u8)(k>>8); p[2]=(u8)(k>>16); p[3]=(u8)(k>>24);
       p[4]=(u8)(k>>32); p[5]=(u8)(k>>40); p[6]=(u8)(k>>48); p[7]=(u8)(k>>56);
       p+=8;
@@ -596,9 +191,21 @@ static int loadAllConflicts(
 
   rc = chunkStoreGet(cs, &hash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  if( nData<2 ){ sqlite3_free(data); return SQLITE_CORRUPT; }
+  if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
 
   p = data;
+  /* Header: 'D' 'L' 'C' version. Any on-disk catalog without this
+  ** header is from before the rename-conformity refactor and cannot
+  ** be read — those only carried intKey and the user-PK resolve path
+  ** would have no key bytes. */
+  if( p[0]!=DOLTLITE_CONFLICTS_MAGIC0
+   || p[1]!=DOLTLITE_CONFLICTS_MAGIC1
+   || p[2]!=DOLTLITE_CONFLICTS_MAGIC2
+   || p[3]!=DOLTLITE_CONFLICTS_VERSION ){
+    sqlite3_free(data);
+    return SQLITE_CORRUPT;
+  }
+  p += 4;
   nTables = p[0]|(p[1]<<8); p+=2;
 
   aTables = sqlite3_malloc(nTables * (int)sizeof(ConflictTableInfo));
@@ -624,7 +231,17 @@ static int loadAllConflicts(
 
     for(j=0; j<nc; j++){
       struct ConflictRow *cr = &aTables[i].aRows[j];
-      int bvl, ovl, tvl;
+      int kvl, bvl, ovl, tvl;
+      if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
+      kvl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
+      if( kvl<0 || p+kvl > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
+      if(kvl>0){
+        cr->pKey = sqlite3_malloc(kvl);
+        if( !cr->pKey ){ rc = SQLITE_NOMEM; goto conflicts_cleanup; }
+        memcpy(cr->pKey, p, kvl);
+        cr->nKey = kvl;
+      }
+      p += kvl;
       if( p+8 > data+nData ){ rc = SQLITE_CORRUPT; goto conflicts_cleanup; }
       cr->intKey = (i64)((u64)p[0] | ((u64)p[1]<<8) | ((u64)p[2]<<16) | ((u64)p[3]<<24) |
                          ((u64)p[4]<<32) | ((u64)p[5]<<40) | ((u64)p[6]<<48) | ((u64)p[7]<<56));
@@ -1163,43 +780,22 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     for(i=0; i<nTables; i++){
       if( !aTables[i].zName || strcmp(aTables[i].zName, zTable)!=0 ) continue;
 
-      
+
+      /* Write each conflict row's theirs bytes directly into the
+      ** target table's prolly tree. pTheirVal==NULL means theirs is a
+      ** delete — doltliteApplyRawRowMutation stages a tree delete at
+      ** the PK when pVal is NULL. Keys: intKey for INTEGER-PK tables,
+      ** pKey/nKey for user-PK (the merge path captured those into the
+      ** conflict row when the conflict was recorded). */
       for(j=0; j<aTables[i].nConflicts; j++){
         struct ConflictRow *cr = &aTables[i].aRows[j];
-        if( cr->pTheirVal && cr->nTheirVal > 0 ){
-          
-          rc = applyTheirRecord(db, zTable, cr->intKey,
-                                cr->pTheirVal, cr->nTheirVal);
-          if( rc!=SQLITE_OK ){
-            freeConflictTables(aTables, nTables);
-            sqlite3_result_error(ctx, "failed to apply theirs value", -1);
-            return;
-          }
-        }else{
-          /* theirs is a delete: remove the row from the table. The PK
-          ** value is extracted from the ours-side record body
-          ** (required), or falls back to base if ours is missing
-          ** (shouldn't happen in practice). doltlite user-PK tables
-          ** don't expose a "rowid" column so we build the DELETE
-          ** against the actual PK columns. */
-          const u8 *pSrcRec = cr->pOurVal ? cr->pOurVal : cr->pBaseVal;
-          int nSrcRec       = cr->pOurVal ? cr->nOurVal : cr->nBaseVal;
-          char *zSql = 0;
-          if( !pSrcRec || nSrcRec<=0 ){
-            freeConflictTables(aTables, nTables);
-            sqlite3_result_error(ctx, "failed to apply theirs value (no key)", -1);
-            return;
-          }
-          rc = buildDeleteByKeySql(db, zTable, cr->intKey, pSrcRec, nSrcRec, &zSql);
-          if( rc==SQLITE_OK ){
-            rc = sqlite3_exec(db, zSql, 0, 0, 0);
-          }
-          sqlite3_free(zSql);
-          if( rc!=SQLITE_OK ){
-            freeConflictTables(aTables, nTables);
-            sqlite3_result_error(ctx, "failed to apply theirs value", -1);
-            return;
-          }
+        rc = doltliteApplyRawRowMutation(db, zTable,
+                                         cr->pKey, cr->nKey, cr->intKey,
+                                         cr->pTheirVal, cr->nTheirVal);
+        if( rc!=SQLITE_OK ){
+          freeConflictTables(aTables, nTables);
+          sqlite3_result_error(ctx, "failed to apply theirs value", -1);
+          return;
         }
       }
 

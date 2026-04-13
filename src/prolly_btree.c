@@ -5205,6 +5205,106 @@ void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
   }
 }
 
+/*
+** Apply a single-row upsert (or delete when pVal==NULL) to a named
+** user table's in-memory root, operating directly on the prolly tree
+** without round-tripping through the SQL engine.
+**
+** Used by conflict resolution (doltlite_conflicts.c): the conflict
+** catalog already stores rows in SQLite-record format, and the goal of
+** --ours / --theirs is to write those same bytes to the target tree.
+** The SQL-exec path was doing record → literal encoding → parser →
+** VDBE → record, purely to land back at the same bytes. This helper
+** replaces that round trip with a ProllyMutMap insert/delete.
+**
+** Any buffered pPending edits on the table are flushed first so we
+** compute the new root against the true current root — normally a
+** no-op because conflict resolution runs outside any open cursor.
+** Triggers and FK checks do NOT fire (correct semantics for merge
+** resolution; they already ran on the original commits).
+**
+** For INTEGER-PK tables, pass pKey=NULL/nKey=0 and the intKey is
+** used. For user-PK tables, pKey/nKey carry the serialized key
+** blob (the same blob the normal write path stored).
+*/
+int doltliteApplyRawRowMutation(
+  sqlite3 *db,
+  const char *zTable,
+  const u8 *pKey, int nKey, i64 intKey,
+  const u8 *pVal, int nVal
+){
+  Btree *pBtree;
+  BtShared *pBt;
+  struct TableEntry *pTE;
+  ProllyMutMap mm;
+  ProllyMutator mut;
+  int rc;
+  u8 isIntKey;
+
+  if( !db || !zTable ) return SQLITE_MISUSE;
+  if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  pBt = pBtree->pBt;
+  if( !pBt ) return SQLITE_ERROR;
+
+  {
+    int i;
+    pTE = 0;
+    for(i=0; i<pBtree->nTables; i++){
+      if( pBtree->aTables[i].zName
+       && strcmp(pBtree->aTables[i].zName, zTable)==0 ){
+        pTE = &pBtree->aTables[i];
+        break;
+      }
+    }
+  }
+  if( !pTE ) return SQLITE_NOTFOUND;
+
+  /* Flush any buffered edits on this table first so we see the true
+  ** current root. In the conflict-resolution context this is a no-op,
+  ** but paying for it keeps the helper safe to call from any context. */
+  if( pTE->pPending ){
+    ProllyMutMap *pPend = (ProllyMutMap*)pTE->pPending;
+    if( !prollyMutMapIsEmpty(pPend) ){
+      rc = applyMutMapToTableRoot(pBt, pTE, pPend);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    prollyMutMapFree(pPend);
+    sqlite3_free(pPend);
+    pTE->pPending = 0;
+    pTE->pendingFlushSeekEdits = 0;
+  }
+
+  isIntKey = (pTE->flags & PROLLY_NODE_INTKEY) ? 1 : 0;
+  rc = prollyMutMapInit(&mm, isIntKey);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( pVal ){
+    rc = prollyMutMapInsert(&mm, pKey, nKey, intKey, pVal, nVal);
+  }else{
+    rc = prollyMutMapDelete(&mm, pKey, nKey, intKey);
+  }
+  if( rc!=SQLITE_OK ){
+    prollyMutMapFree(&mm);
+    return rc;
+  }
+
+  memset(&mut, 0, sizeof(mut));
+  mut.pStore = &pBt->store;
+  mut.pCache = &pBt->cache;
+  memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
+  mut.pEdits = &mm;
+  mut.flags = pTE->flags;
+
+  rc = prollyMutateFlush(&mut);
+  if( rc==SQLITE_OK ){
+    memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
+  }
+
+  prollyMutMapFree(&mm);
+  return rc;
+}
+
 const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable){
   Btree *pBtree;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
