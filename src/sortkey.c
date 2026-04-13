@@ -44,22 +44,60 @@ static u8 serialTypeTag(u32 serialType){
   return SORTKEY_NULL;  
 }
 
-static int encodedFieldSize(u32 serialType, const u8 *pData, u32 nData){
+/* Collation identifiers. 0 = BINARY / unknown (no transform), 1 = NOCASE
+** (fold ASCII A-Z to a-z), 2 = RTRIM (strip trailing 0x20). Keyed from
+** the collation's zName at encode time — we avoid calling xCmp because
+** the encoder produces byte-comparable keys, not pair-wise comparisons,
+** and there's no general way to invert a custom xCmp into a transform. */
+#define SORTKEY_COLL_BINARY 0
+#define SORTKEY_COLL_NOCASE 1
+#define SORTKEY_COLL_RTRIM  2
+
+static int collFromKeyInfo(const KeyInfo *pKeyInfo, int iCol){
+  const CollSeq *pColl;
+  if( !pKeyInfo ) return SORTKEY_COLL_BINARY;
+  if( iCol < 0 || iCol >= pKeyInfo->nAllField ) return SORTKEY_COLL_BINARY;
+  pColl = pKeyInfo->aColl[iCol];
+  if( !pColl || !pColl->zName ) return SORTKEY_COLL_BINARY;
+  if( sqlite3StrICmp(pColl->zName, "NOCASE")==0 ) return SORTKEY_COLL_NOCASE;
+  if( sqlite3StrICmp(pColl->zName, "RTRIM")==0 ) return SORTKEY_COLL_RTRIM;
+  return SORTKEY_COLL_BINARY;
+}
+
+/* Return the effective byte length of pData/nData after applying the
+** given collation's transform. Pure byte counting — no allocation. */
+static u32 collTextLen(int coll, const u8 *pData, u32 nData){
+  if( coll==SORTKEY_COLL_RTRIM ){
+    while( nData > 0 && pData[nData - 1] == 0x20 ) nData--;
+  }
+  return nData;
+}
+
+static int encodedFieldSize(u32 serialType, const u8 *pData, u32 nData, int coll){
   u8 tag = serialTypeTag(serialType);
   switch( tag ){
     case SORTKEY_NULL:
       return 1;
     case SORTKEY_NUM:
       return 9;
-    case SORTKEY_TEXT:
+    case SORTKEY_TEXT: {
+      u32 n = collTextLen(coll, pData, nData);
+      int extra = 0;
+      u32 i;
+      for(i = 0; i < n; i++){
+        u8 b = pData[i];
+        if( coll==SORTKEY_COLL_NOCASE && b >= 'A' && b <= 'Z' ) b += 32;
+        if( b == 0x00 ) extra++;
+      }
+      return 1 + (int)n + extra + 2;
+    }
     case SORTKEY_BLOB: {
-      
       int extra = 0;
       u32 i;
       for(i = 0; i < nData; i++){
         if( pData[i] == 0x00 ) extra++;
       }
-      return 1 + (int)nData + extra + 2;  
+      return 1 + (int)nData + extra + 2;
     }
     default:
       return 1;
@@ -123,20 +161,46 @@ static int encodeVarLen(u8 *pOut, u8 tag, const u8 *pData, u32 nData){
     }
   }
 
-  
+
   pOut[pos++] = 0x00;
   pOut[pos++] = 0x00;
 
   return pos;
 }
 
+/* Write a TEXT sort-key field with the collation transform applied.
+** Matches encodedFieldSize's size arithmetic byte-for-byte so the
+** pre-computed output buffer is exactly the right size. */
+static int encodeText(u8 *pOut, const u8 *pData, u32 nData, int coll){
+  int pos = 0;
+  u32 n = collTextLen(coll, pData, nData);
+  pOut[pos++] = SORTKEY_TEXT;
+  for(u32 i = 0; i < n; i++){
+    u8 b = pData[i];
+    if( coll==SORTKEY_COLL_NOCASE && b >= 'A' && b <= 'Z' ) b += 32;
+    if( b == 0x00 ){
+      pOut[pos++] = 0x00;
+      pOut[pos++] = 0x01;
+    }else{
+      pOut[pos++] = b;
+    }
+  }
+  pOut[pos++] = 0x00;
+  pOut[pos++] = 0x00;
+  return pos;
+}
+
 /*
 ** Encode the first nMaxFields columns of pRec as a binary-comparable
 ** sort key. Pass nMaxFields = 0 (or any value larger than the field
-** count) to encode the whole record. Returns the encoded byte count, or
-** -1 on error.
+** count) to encode the whole record. When pKeyInfo is non-NULL, each
+** TEXT field is transformed by its declared collation before encoding
+** so a CASE-INSENSITIVE or RTRIM PK produces identical sort keys for
+** values that should be considered equal. Returns the encoded byte
+** count, or -1 on error.
 */
-static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields){
+static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
+                         const KeyInfo *pKeyInfo){
   u32 hdrSize;
   u32 hdrOff;
   u32 dataOff;
@@ -155,6 +219,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields){
     u32 serialType;
     u32 fieldLen;
     const u8 *pField;
+    int coll;
 
     if( nMaxFields > 0 && nField >= nMaxFields ) break;
 
@@ -164,6 +229,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields){
 
     if( dataOff + fieldLen > (u32)nRec ) return -1;
     pField = pRec + dataOff;
+    coll = collFromKeyInfo(pKeyInfo, nField);
 
     if( pOut ){
       u8 tag = serialTypeTag(serialType);
@@ -176,6 +242,8 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields){
           outPos += 9;
           break;
         case SORTKEY_TEXT:
+          outPos += encodeText(pOut + outPos, pField, fieldLen, coll);
+          break;
         case SORTKEY_BLOB:
           outPos += encodeVarLen(pOut + outPos, tag, pField, fieldLen);
           break;
@@ -184,7 +252,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields){
           break;
       }
     }else{
-      outPos += encodedFieldSize(serialType, pField, fieldLen);
+      outPos += encodedFieldSize(serialType, pField, fieldLen, coll);
     }
 
     dataOff += fieldLen;
@@ -195,7 +263,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields){
 }
 
 int sortKeySize(const u8 *pRec, int nRec){
-  return sortKeyEncode(pRec, nRec, NULL, 0);
+  return sortKeyEncode(pRec, nRec, NULL, 0, NULL);
 }
 
 int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut){
@@ -205,13 +273,20 @@ int sortKeyFromRecord(const u8 *pRec, int nRec, u8 **ppOut, int *pnOut){
 int sortKeyFromRecordPrefix(
   const u8 *pRec, int nRec, int nKeyField, u8 **ppOut, int *pnOut
 ){
+  return sortKeyFromRecordPrefixColl(pRec, nRec, nKeyField, NULL, ppOut, pnOut);
+}
+
+int sortKeyFromRecordPrefixColl(
+  const u8 *pRec, int nRec, int nKeyField, const KeyInfo *pKeyInfo,
+  u8 **ppOut, int *pnOut
+){
   int nSize;
   u8 *pBuf;
 
   *ppOut = 0;
   *pnOut = 0;
 
-  nSize = sortKeyEncode(pRec, nRec, NULL, nKeyField);
+  nSize = sortKeyEncode(pRec, nRec, NULL, nKeyField, pKeyInfo);
   if( nSize < 0 ) return SQLITE_CORRUPT;
   if( nSize == 0 ){
 
@@ -224,7 +299,7 @@ int sortKeyFromRecordPrefix(
   pBuf = (u8*)sqlite3_malloc(nSize);
   if( !pBuf ) return SQLITE_NOMEM;
 
-  sortKeyEncode(pRec, nRec, pBuf, nKeyField);
+  sortKeyEncode(pRec, nRec, pBuf, nKeyField, pKeyInfo);
 
   *ppOut = pBuf;
   *pnOut = nSize;

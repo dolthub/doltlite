@@ -3391,8 +3391,9 @@ static int seedMutMapIterFromCursor(
        && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
         nMutKeyField = (int)pCur->pKeyInfo->nKeyField;
       }
-      rc = sortKeyFromRecordPrefix(pCur->pCachedPayload, pCur->nCachedPayload,
-                                   nMutKeyField, &pSortKey, &nSortKey);
+      rc = sortKeyFromRecordPrefixColl(pCur->pCachedPayload, pCur->nCachedPayload,
+                                        nMutKeyField, pCur->pKeyInfo,
+                                        &pSortKey, &nSortKey);
       if( rc!=SQLITE_OK ) return rc;
       prollyMutMapIterSeek(pIt, pCur->pMutMap, pSortKey, nSortKey, 0);
       sqlite3_free(pSortKey);
@@ -4058,8 +4059,8 @@ static int prollyBtCursorIndexMoveto(
     }
     rc = serializeUnpackedRecord(pIdxKey, &pSerKey, &nSerKey);
     if( rc!=SQLITE_OK ) return rc;
-    rc = sortKeyFromRecordPrefix(pSerKey, nSerKey, nSeekKeyField,
-                                 &pSortKey, &nSortKey);
+    rc = sortKeyFromRecordPrefixColl(pSerKey, nSerKey, nSeekKeyField,
+                                      pCur->pKeyInfo, &pSortKey, &nSortKey);
     if( rc!=SQLITE_OK ){
       sqlite3_free(pSerKey);
       return rc;
@@ -4507,10 +4508,11 @@ static int prollyBtCursorInsert(
       nKeyField = (int)pCur->pKeyInfo->nKeyField;
       splitKey = 1;
     }
-    rc = sortKeyFromRecordPrefix((const u8*)pPayload->pKey,
-                                 (int)pPayload->nKey,
-                                 splitKey ? nKeyField : 0,
-                                 &pSortKey, &nSortKey);
+    rc = sortKeyFromRecordPrefixColl((const u8*)pPayload->pKey,
+                                      (int)pPayload->nKey,
+                                      splitKey ? nKeyField : 0,
+                                      pCur->pKeyInfo,
+                                      &pSortKey, &nSortKey);
     if( rc==SQLITE_OK ){
       if( splitKey ){
         rc = prollyMutMapInsert(pCur->pMutMap,
@@ -4828,8 +4830,9 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
          && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
           nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
         }
-        rc = sortKeyFromRecordPrefix(pCur->pCachedPayload, pCur->nCachedPayload,
-                                     nDelKeyField, &pSavedDelKey, &nSavedDelKey);
+        rc = sortKeyFromRecordPrefixColl(pCur->pCachedPayload, pCur->nCachedPayload,
+                                          nDelKeyField, pCur->pKeyInfo,
+                                          &pSavedDelKey, &nSavedDelKey);
         if( rc!=SQLITE_OK ) return rc;
         hasSavedKey = 1;
       }else if( prollyCursorIsValid(&pCur->pCur) ){
