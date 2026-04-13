@@ -610,36 +610,36 @@ comment.
 
 | Test | SQLite (ms) | Doltlite (ms) | Multiplier |
 |------|-------------|---------------|------------|
-| oltp_point_select | 145 | 89 | 0.61 |
-| oltp_range_select | 38 | 36 | 0.95 |
-| oltp_sum_range | 21 | 18 | 0.86 |
-| oltp_order_range | 8 | 8 | 1.00 |
-| oltp_distinct_range | 9 | 7 | 0.78 |
-| oltp_index_scan | 15 | 11 | 0.73 |
-| select_random_points | 39 | 48 | 1.23 |
-| select_random_ranges | 17 | 10 | 0.59 |
-| covering_index_scan | 20 | 28 | 1.40 |
-| groupby_scan | 54 | 54 | 1.00 |
-| index_join | 9 | 11 | 1.22 |
+| oltp_point_select | 175 | 106 | 0.61 |
+| oltp_range_select | 46 | 38 | 0.83 |
+| oltp_sum_range | 27 | 18 | 0.67 |
+| oltp_order_range | 6 | 7 | 1.17 |
+| oltp_distinct_range | 7 | 8 | 1.14 |
+| oltp_index_scan | 15 | 13 | 0.87 |
+| select_random_points | 30 | 27 | 0.90 |
+| select_random_ranges | 24 | 12 | 0.50 |
+| covering_index_scan | 26 | 28 | 1.08 |
+| groupby_scan | 49 | 59 | 1.20 |
+| index_join | 11 | 11 | 1.00 |
 | index_join_scan | 3 | 6 | 2.00 |
 | types_table_scan | 13 | 13 | 1.00 |
-| table_scan | 1 | 2 | 2.00 |
-| oltp_read_only | 340 | 259 | 0.76 |
+| table_scan | 2 | 3 | 1.50 |
+| oltp_read_only | 373 | 263 | 0.71 |
 
 #### Writes
 
 | Test | SQLite (ms) | Doltlite (ms) | Multiplier |
 |------|-------------|---------------|------------|
-| oltp_bulk_insert | 32 | 39 | 1.22 |
-| oltp_insert | 21 | 35 | 1.67 |
-| oltp_update_index | 48 | 128 | 2.67 |
-| oltp_update_non_index | 37 | 52 | 1.41 |
-| oltp_delete_insert | 44 | 76 | 1.73 |
-| oltp_write_only | 21 | 35 | 1.67 |
-| types_delete_insert | 28 | 32 | 1.14 |
-| oltp_read_write | 128 | 488 | 3.81 |
+| oltp_bulk_insert | 36 | 39 | 1.08 |
+| oltp_insert | 22 | 34 | 1.55 |
+| oltp_update_index | 47 | 81 | 1.72 |
+| oltp_update_non_index | 35 | 54 | 1.54 |
+| oltp_delete_insert | 45 | 89 | 1.98 |
+| oltp_write_only | 20 | 35 | 1.75 |
+| types_delete_insert | 25 | 28 | 1.12 |
+| oltp_read_write | 108 | 168 | 1.56 |
 
-_10K rows, file-backed, Linux x64 (GitHub Actions). Run `test/sysbench_compare.sh` to reproduce._
+_10K rows, file-backed, Linux x64 (GitHub Actions). Every test lands within a 3× ceiling enforced by CI (`test/sysbench_compare.sh`). Run the same script to reproduce._
 
 ### Algorithmic Complexity
 
@@ -686,7 +686,7 @@ make testfixture DOLTLITE_PROLLY=0 USE_AMALGAMATION=1
 
 ### Doltlite Shell Tests
 
-31 test suites covering all features:
+39 test suites covering all features:
 
 ```bash
 # Run all suites
@@ -701,6 +701,35 @@ bash ../test/doltlite_branch.sh          # Branching and checkout
 bash ../test/doltlite_merge.sh           # Three-way merge
 bash ../test/doltlite_attach_sqlite.sh   # ATTACH standard SQLite databases
 ```
+
+### Differential Oracle Tests
+
+Doltlite ships a suite of differential oracle tests that run the same SQL
+through doltlite and stock sqlite3 and compare results byte-for-byte. Each
+script is focused on a SQL feature surface — savepoints, foreign keys,
+UPSERT, generated columns, WITHOUT ROWID, large BLOBs at chunk boundaries,
+ATTACH cross-engine queries, TEMP tables, triggers, dot-commands, FTS5 —
+and scenarios are written to hit storage-layer edge cases. The oracles
+drove most of the correctness fixes in recent releases.
+
+```bash
+cd build
+bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_savepoints_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_foreign_keys_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_upsert_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_generated_columns_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_without_rowid_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_large_blobs_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_attach_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_temp_tables_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_triggers_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_fts5_test.sh ./doltlite ./sqlite3
+```
+
+A separate CI job builds the same suite with
+`-fsanitize=address,undefined` and runs every oracle under ASan/UBSan to
+catch memory and undefined-behavior bugs before they reach master.
 
 ### SQL Logic Test Suite
 
@@ -767,7 +796,7 @@ gcc -o cross_branch_test ../test/cross_branch_test.c \
 | `prolly_diff.c/h` | Tree-level diff (drives `dolt_diff`) |
 | `prolly_arena.c/h` | Arena allocator for tree operations |
 | `prolly_btree.c` | `btree.h` API implementation (main integration point) |
-| `sortkey.c/h` | Sort key encoding for memcmp-sortable index keys |
+| `sortkey.c/h` | Sort key encoding for memcmp-sortable index keys (collation-aware for TEXT columns) |
 | `chunk_store.c` | Single-file content-addressed chunk storage |
 | `pager_shim.c` | Pager facade (satisfies pager API without page-based I/O) |
 | `btree_orig_*.c` | Original SQLite btree compiled with renamed symbols (for ATTACH) |
