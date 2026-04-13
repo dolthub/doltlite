@@ -5,8 +5,9 @@
 # Runs identical schema-diff scenarios against doltlite and Dolt and
 # compares the row output. Both engines now expose the same columns
 # (from_table_name, to_table_name, from_create_statement,
-# to_create_statement) and accept the same call form
-# (`dolt_schema_diff('from','to'[,'tbl'])`), so the oracle can issue
+# to_create_statement) and accept the same call forms
+# (`dolt_schema_diff('from','to'[,'tbl'])` and `dolt_schema_diff('from..to')`),
+# so the oracle can issue
 # the same query string against both.
 #
 # Compared surface: (from_table_name, to_table_name, from_present,
@@ -122,6 +123,43 @@ oracle_error() {
   fi
 }
 
+oracle_query() {
+  local name="$1" setup="$2" q="$3"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' \
+           | grep '^ROW|' \
+           | sort)
+
+  local dolt_setup
+  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+
+  local dt_out
+  (
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    {
+      echo "$dolt_setup"
+      echo "$q"
+    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^ROW|' | sort)
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_schema_diff ==="
 echo ""
 
@@ -186,6 +224,13 @@ ALTER TABLE t RENAME TO t2;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'rename_table');
 " "HEAD~1" "HEAD"
+
+oracle "modified_rename_table_filter_old_name" "
+$SEED
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'rename_table');
+" "HEAD~1" "HEAD" "t"
 
 oracle "modified_add_not_null_default" "
 $SEED
@@ -314,6 +359,16 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_u');
 " "HEAD~1" "HEAD" "no_such_table"
 
+oracle_query "single_arg_range" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_u');
+" "SELECT CONCAT('ROW|', from_table_name, '|', to_table_name, '|', \
+      CASE WHEN from_create_statement IS NULL OR from_create_statement='' THEN 'N' ELSE 'Y' END, '|', \
+      CASE WHEN to_create_statement   IS NULL OR to_create_statement=''   THEN 'N' ELSE 'Y' END \
+    ) FROM dolt_schema_diff('HEAD~1..HEAD') ORDER BY from_table_name, to_table_name;"
+
 echo "--- error paths ---"
 
 oracle_error "bad_from_ref" "$SEED" \
@@ -321,6 +376,9 @@ oracle_error "bad_from_ref" "$SEED" \
 
 oracle_error "bad_to_ref" "$SEED" \
   "SELECT * FROM dolt_schema_diff('HEAD','nope');"
+
+oracle_error "bad_single_arg" "$SEED" \
+  "SELECT * FROM dolt_schema_diff('nope');"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

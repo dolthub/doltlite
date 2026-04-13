@@ -442,6 +442,122 @@ static int sdClose(sqlite3_vtab_cursor *cur){
   return SQLITE_OK;
 }
 
+static int sdResolveRefs(
+  sqlite3 *db,
+  sqlite3_vtab *pVtab,
+  const char *zFromRef,
+  const char *zToRef,
+  ProllyHash *pFromCatHash,
+  ProllyHash *pToCatHash
+){
+  DoltliteCommit commit;
+  ProllyHash commitHash;
+  int rc;
+
+  if( !zFromRef || !zToRef ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf(
+      "dolt_schema_diff requires from_ref and to_ref"
+    );
+    return SQLITE_ERROR;
+  }
+
+  rc = doltliteResolveRef(db, zFromRef, &commitHash);
+  if( rc!=SQLITE_OK ) return rc;
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommit(db, &commitHash, &commit);
+  if( rc!=SQLITE_OK ) return rc;
+  memcpy(pFromCatHash, &commit.catalogHash, sizeof(ProllyHash));
+  doltliteCommitClear(&commit);
+
+  rc = doltliteResolveRef(db, zToRef, &commitHash);
+  if( rc!=SQLITE_OK ) return rc;
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommit(db, &commitHash, &commit);
+  if( rc!=SQLITE_OK ) return rc;
+  memcpy(pToCatHash, &commit.catalogHash, sizeof(ProllyHash));
+  doltliteCommitClear(&commit);
+
+  return SQLITE_OK;
+}
+
+static int sdParseArgs(
+  sqlite3 *db,
+  sqlite3_vtab *pVtab,
+  int idxNum,
+  int argc,
+  sqlite3_value **argv,
+  const char **pzFromRef,
+  const char **pzToRef,
+  const char **pzTableFilter
+){
+  int argIdx = 0;
+  const char *zFromRef = 0;
+  const char *zToRef = 0;
+  const char *zTableFilter = 0;
+
+  if( (idxNum & 1) && argIdx<argc ){
+    zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);
+  }
+  if( (idxNum & 2) && argIdx<argc ){
+    zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
+  }
+  if( (idxNum & 4) && argIdx<argc ){
+    zTableFilter = (const char*)sqlite3_value_text(argv[argIdx++]);
+  }
+
+  if( zFromRef && !zToRef ){
+    const char *zDots = strstr(zFromRef, "..");
+    if( zDots ){
+      int nFrom = (int)(zDots - zFromRef);
+      int nTo = (int)strlen(zDots + 2);
+      char *zRangeFrom = 0;
+      char *zRangeTo = 0;
+      ProllyHash probe;
+      int rc;
+
+      if( nFrom<=0 || nTo<=0 ){
+        sqlite3_free(pVtab->zErrMsg);
+        pVtab->zErrMsg = sqlite3_mprintf(
+          "Invalid argument to dolt_schema_diff: %s",
+          zFromRef
+        );
+        return SQLITE_ERROR;
+      }
+
+      zRangeFrom = sqlite3_mprintf("%.*s", nFrom, zFromRef);
+      zRangeTo = sqlite3_mprintf("%s", zDots + 2);
+      if( !zRangeFrom || !zRangeTo ){
+        sqlite3_free(zRangeFrom);
+        sqlite3_free(zRangeTo);
+        return SQLITE_NOMEM;
+      }
+
+      rc = doltliteResolveRef(db, zRangeFrom, &probe);
+      if( rc==SQLITE_OK ) rc = doltliteResolveRef(db, zRangeTo, &probe);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zRangeFrom);
+        sqlite3_free(zRangeTo);
+        return rc;
+      }
+
+      zFromRef = zRangeFrom;
+      zToRef = zRangeTo;
+    }else{
+      sqlite3_free(pVtab->zErrMsg);
+      pVtab->zErrMsg = sqlite3_mprintf(
+        "Invalid argument to dolt_schema_diff: There are less than 2 arguments present, and the first does not contain '..'"
+      );
+      return SQLITE_ERROR;
+    }
+  }
+
+  *pzFromRef = zFromRef;
+  *pzToRef = zToRef;
+  *pzTableFilter = zTableFilter;
+  return SQLITE_OK;
+}
+
 static int sdFilter(sqlite3_vtab_cursor *cur,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   SdCursor *c = (SdCursor*)cur;
@@ -451,14 +567,13 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   void *pBt;
   ProllyCache *pCache;
   const char *zFromRef = 0, *zToRef = 0;
-  ProllyHash fromCommit, toCommit;
-  DoltliteCommit commit;
+  const char *zTableFilter = 0;
   ProllyHash fromCatHash, toCatHash;
   SchemaEntry *aFrom = 0, *aTo = 0;
   int nFrom = 0, nTo = 0;
   struct TableEntry *aFromTables = 0, *aToTables = 0;
-  int nFromTables = 0, nToTables = 0;
-  int rc, argIdx = 0;
+  int nFromTables = 0, nToTables = 0, freeRangeRefs = 0;
+  int rc;
   (void)idxStr;
 
   freeSchemaDiffRows(c);
@@ -469,104 +584,51 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   if( !pBt ) return SQLITE_OK;
   pCache = doltliteGetCache(db);
 
-  if( (idxNum & 1) && argIdx<argc ){
-    zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);
-  }
-  if( (idxNum & 2) && argIdx<argc ){
-    zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
-  }
+  rc = sdParseArgs(db, &v->base, idxNum, argc, argv,
+                   &zFromRef, &zToRef, &zTableFilter);
+  if( rc!=SQLITE_OK ) return rc;
+  freeRangeRefs = (zFromRef && zToRef && !(idxNum & 2));
 
-  {
-    const char *zTableFilter = 0;
-    /* 3rd positional arg (or WHERE table_name='...') = single-table filter. */
-    if( (idxNum & 4) && argIdx<argc ){
-      zTableFilter = (const char*)sqlite3_value_text(argv[argIdx++]);
-    }
-    if( zFromRef && !zToRef ){
-      ProllyHash testHash;
-      rc = doltliteResolveRef(db,zFromRef, &testHash);
-      if( rc==SQLITE_NOTFOUND ){
-        zTableFilter = zFromRef;
-        zFromRef = 0;
-      }else if( rc!=SQLITE_OK ){
-        return rc;
+  rc = sdResolveRefs(db, &v->base, zFromRef, zToRef, &fromCatHash, &toCatHash);
+  if( rc!=SQLITE_OK ) goto sd_filter_done;
+
+  rc = loadSchemaFromCatalog(db, cs, pCache, &fromCatHash, &aFrom, &nFrom);
+  if( rc!=SQLITE_OK ) goto sd_filter_done;
+  rc = loadSchemaFromCatalog(db, cs, pCache, &toCatHash, &aTo, &nTo);
+  if( rc!=SQLITE_OK ) goto sd_filter_done;
+
+  /* Also load the TableEntry lists so computeSchemaDiff can detect
+  ** renames by matching dropped+added entries on iTable. */
+  rc = doltliteLoadCatalog(db, &fromCatHash, &aFromTables, &nFromTables, 0);
+  if( rc!=SQLITE_OK ) goto sd_filter_done;
+  rc = doltliteLoadCatalog(db, &toCatHash, &aToTables, &nToTables, 0);
+  if( rc!=SQLITE_OK ) goto sd_filter_done;
+
+  rc = computeSchemaDiff(c, aFrom, nFrom, aTo, nTo,
+                         aFromTables, nFromTables,
+                         aToTables, nToTables);
+  if( rc!=SQLITE_OK ) goto sd_filter_done;
+
+  if( zTableFilter ){
+    int j, k=0;
+    for(j=0; j<c->nRows; j++){
+      int matchFrom = c->aRows[j].zFromName
+                   && c->aRows[j].zFromName[0]
+                   && strcmp(c->aRows[j].zFromName, zTableFilter)==0;
+      int matchTo = c->aRows[j].zToName
+                 && c->aRows[j].zToName[0]
+                 && strcmp(c->aRows[j].zToName, zTableFilter)==0;
+      if( matchFrom || matchTo ){
+        if( k!=j ) c->aRows[k] = c->aRows[j];
+        k++;
+      }else{
+        sqlite3_free(c->aRows[j].zFromName);
+        sqlite3_free(c->aRows[j].zToName);
+        sqlite3_free(c->aRows[j].zFromSql);
+        sqlite3_free(c->aRows[j].zToSql);
       }
     }
-
-    
-    if( zFromRef ){
-      rc = doltliteResolveRef(db,zFromRef, &fromCommit);
-      if( rc!=SQLITE_OK ) return rc;
-      memset(&commit, 0, sizeof(commit));
-      rc = doltliteLoadCommit(db, &fromCommit, &commit);
-      if( rc!=SQLITE_OK ) return rc;
-      memcpy(&fromCatHash, &commit.catalogHash, sizeof(ProllyHash));
-      doltliteCommitClear(&commit);
-    }else{
-      rc = doltliteGetHeadCatalogHash(db, &fromCatHash);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-
-  
-    if( zToRef ){
-      rc = doltliteResolveRef(db,zToRef, &toCommit);
-      if( rc!=SQLITE_OK ) return rc;
-      memset(&commit, 0, sizeof(commit));
-      rc = doltliteLoadCommit(db, &toCommit, &commit);
-      if( rc!=SQLITE_OK ) return rc;
-      memcpy(&toCatHash, &commit.catalogHash, sizeof(ProllyHash));
-      doltliteCommitClear(&commit);
-    }else{
-      u8 *catData = 0; int nCatData = 0;
-      rc = doltliteFlushAndSerializeCatalog(db, &catData, &nCatData);
-      if( rc==SQLITE_OK ){
-        rc = chunkStorePut(cs, catData, nCatData, &toCatHash);
-        sqlite3_free(catData);
-      }
-      if( rc!=SQLITE_OK ) return rc;
-    }
-
-  
-    rc = loadSchemaFromCatalog(db, cs, pCache, &fromCatHash, &aFrom, &nFrom);
-    if( rc!=SQLITE_OK ) goto sd_filter_done;
-    rc = loadSchemaFromCatalog(db, cs, pCache, &toCatHash, &aTo, &nTo);
-    if( rc!=SQLITE_OK ) goto sd_filter_done;
-
-    /* Also load the TableEntry lists so computeSchemaDiff can detect
-    ** renames by matching dropped+added entries on iTable. */
-    rc = doltliteLoadCatalog(db, &fromCatHash, &aFromTables, &nFromTables, 0);
-    if( rc!=SQLITE_OK ) goto sd_filter_done;
-    rc = doltliteLoadCatalog(db, &toCatHash, &aToTables, &nToTables, 0);
-    if( rc!=SQLITE_OK ) goto sd_filter_done;
-
-    rc = computeSchemaDiff(c, aFrom, nFrom, aTo, nTo,
-                           aFromTables, nFromTables,
-                           aToTables, nToTables);
-    if( rc!=SQLITE_OK ) goto sd_filter_done;
-
-  
-    if( zTableFilter ){
-      int j, k=0;
-      for(j=0; j<c->nRows; j++){
-        /* Match on either side — added rows have empty zFromName,
-        ** dropped rows have empty zToName, modified rows have both
-        ** equal. Checking either is enough. */
-        const char *zRowName = c->aRows[j].zToName && c->aRows[j].zToName[0]
-                                ? c->aRows[j].zToName
-                                : c->aRows[j].zFromName;
-        if( zRowName && strcmp(zRowName, zTableFilter)==0 ){
-          if( k!=j ) c->aRows[k] = c->aRows[j];
-          k++;
-        }else{
-          sqlite3_free(c->aRows[j].zFromName);
-          sqlite3_free(c->aRows[j].zToName);
-          sqlite3_free(c->aRows[j].zFromSql);
-          sqlite3_free(c->aRows[j].zToSql);
-        }
-      }
-      c->nRows = k;
-    }
-
+    c->nRows = k;
   }
 
 sd_filter_done:
@@ -574,6 +636,10 @@ sd_filter_done:
   freeSchemaEntries(aTo, nTo);
   sqlite3_free(aFromTables);
   sqlite3_free(aToTables);
+  if( freeRangeRefs ){
+    sqlite3_free((char*)zFromRef);
+    sqlite3_free((char*)zToRef);
+  }
   return rc;
 }
 
