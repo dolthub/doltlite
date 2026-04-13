@@ -441,48 +441,6 @@ static void test_commit_reuse(void){
 }
 
 /* ------------------------------------------------------------------ */
-/*  Test: dolt_diff('table',from,to) legacy TVF reuse                 */
-/* ------------------------------------------------------------------ */
-static void test_legacy_diff_reuse(void){
-  sqlite3 *db = 0;
-  sqlite3_stmt *pDiff = 0;
-  int rc;
-
-  rc = sqlite3_open("test_legacy_diff_reuse.db", &db);
-  check("legacy_diff_reuse: open", rc==SQLITE_OK);
-
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
-  execsql(db, "INSERT INTO t VALUES(1, 10)");
-  execsql(db, "SELECT dolt_commit('-A','-m','c1')");
-  execsql(db, "INSERT INTO t VALUES(2, 20)");
-  execsql(db, "SELECT dolt_commit('-A','-m','c2')");
-  execsql(db, "UPDATE t SET v=99 WHERE id=1");
-  execsql(db, "SELECT dolt_commit('-A','-m','c3')");
-
-  /* Prepare the legacy TVF form with bound refs */
-  rc = sqlite3_prepare_v2(db,
-    "SELECT count(*) FROM dolt_diff('t', "
-    " (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2),"
-    " (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1))",
-    -1, &pDiff, 0);
-  check("legacy_diff_reuse: prepare", rc==SQLITE_OK);
-
-  /* Step + reset multiple times — should give same result */
-  {
-    int n1 = step_int(pDiff);
-    int n2 = step_int(pDiff);
-    int n3 = step_int(pDiff);
-    check("legacy_diff_reuse: consistent pass 1", n1==n2);
-    check("legacy_diff_reuse: consistent pass 2", n2==n3);
-    check("legacy_diff_reuse: has rows", n1>0);
-  }
-
-  sqlite3_finalize(pDiff);
-  sqlite3_close(db);
-  unlink("test_legacy_diff_reuse.db");
-}
-
-/* ------------------------------------------------------------------ */
 /*  Test: Rapid interleave — mutate between vtable resets              */
 /* ------------------------------------------------------------------ */
 static void test_rapid_interleave(void){
@@ -617,9 +575,6 @@ int main(int argc, char **argv){
 
   printf("--- dolt_commit reuse ---\n");
   test_commit_reuse();
-
-  printf("--- legacy diff TVF reuse ---\n");
-  test_legacy_diff_reuse();
 
   printf("--- rapid interleave ---\n");
   test_rapid_interleave();

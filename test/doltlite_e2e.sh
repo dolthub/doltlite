@@ -90,7 +90,7 @@ run_test "e2e_two_tags" "SELECT count(*) FROM dolt_tags;" "2" "$DB"
 # ============================================================
 
 run_test_match "e2e_diff_users_v01_v02" \
-  "SELECT count(*) FROM dolt_diff('users', (SELECT tag_hash FROM dolt_tags WHERE tag_name='v0.1'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v0.2'));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT tag_hash FROM dolt_tags WHERE tag_name='v0.1'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v0.2'), 'users');" \
   "^[0-9]" "$DB"
 
 # ============================================================

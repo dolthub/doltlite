@@ -31,6 +31,7 @@
 /* Working set blob layout:
 **   [version:1][working_catalog:20][working_commit:20][staged_hash:20]
 **   [is_merging:1][merge_commit:20][conflicts:20] */
+#define WS_FORMAT_VERSION   2
 #define WS_VERSION_SIZE     1
 #define WS_WORKING_CAT_OFF  WS_VERSION_SIZE
 #define WS_WORKING_COMMIT_OFF (WS_WORKING_CAT_OFF + PROLLY_HASH_SIZE)
@@ -42,16 +43,12 @@
 
 /* Catalog (table registry) binary format.
 **
-** V3 (current): magic(1) + nTables(4 LE) + entries (sorted by name)...
-** V2 (legacy):  magic(1) + iNextTable(4 LE) + nTables(4 LE) + entries...
+** Current: magic(1) + nTables(4 LE) + entries (sorted by name)...
 ** Per entry: iTable(4 LE) + flags(1) + root(20) + schema(20) + nameLen(2 LE) + name
 **
-** V3 removes the iNextTable field (derived from max(iTable)+1 on load)
-** and sorts entries by name for deterministic content hashing. */
+** Entries are sorted by name for deterministic content hashing. */
 #define CATALOG_FORMAT_V3       0x44
-#define CATALOG_FORMAT_V2       0x43  /* read-only compat */
 #define CAT_HEADER_SIZE_V3      5     /* magic(1) + nTables(4) */
-#define CAT_HEADER_SIZE_V2      9     /* magic(1) + iNextTable(4) + nTables(4) */
 #define CAT_ENTRY_ITABLE_SIZE   4
 #define CAT_ENTRY_FLAGS_SIZE    1
 #define CAT_ENTRY_FIXED_SIZE    (CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2)
@@ -63,20 +60,14 @@
 static SQLITE_INLINE int catalogParseHeader(
   const u8 *data, int nData, int *pnTables, const u8 **ppEntries
 ){
-  int hdrSz;
   const u8 *q;
   if( nData < CAT_HEADER_SIZE_V3 ) return 0;
-  if( data[0] == CATALOG_FORMAT_V3 ){
-    hdrSz = CAT_HEADER_SIZE_V3;
-  }else if( data[0] == CATALOG_FORMAT_V2 ){
-    if( nData < CAT_HEADER_SIZE_V2 ) return 0;
-    hdrSz = CAT_HEADER_SIZE_V2;
-  }else{
+  if( data[0] != CATALOG_FORMAT_V3 ){
     return 0;
   }
-  q = data + hdrSz - 4;  /* nTables is always the last 4 bytes of header */
+  q = data + CAT_HEADER_SIZE_V3 - 4;
   *pnTables = (int)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
-  *ppEntries = data + hdrSz;
+  *ppEntries = data + CAT_HEADER_SIZE_V3;
   return 1;
 }
 

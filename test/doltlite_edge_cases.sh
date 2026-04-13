@@ -25,11 +25,11 @@ SELECT dolt_commit('-A','-m','nulls and values');" | $DOLTLITE "$DB" > /dev/null
 
 run_test "null_select" "SELECT a FROM t WHERE id=1;" "" "$DB"
 run_test "null_count" "SELECT count(*) FROM t WHERE a IS NULL;" "1" "$DB"
-run_test "null_diff_count" "SELECT count(*) FROM dolt_diff('t');" "0" "$DB"
+run_test "null_diff_count" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "0" "$DB"
 
 # Update NULL to value — check with working diff (uncommitted)
 echo "UPDATE t SET a='was_null' WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "null_diff_shows" "SELECT count(*) FROM dolt_diff('t');" "^[1-9]" "$DB"
+run_test_match "null_diff_shows" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "^[1-9]" "$DB"
 echo "SELECT dolt_commit('-A','-m','fill nulls');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "null_updated" "SELECT a FROM t WHERE id=1;" "was_null" "$DB"
@@ -99,7 +99,7 @@ run_test "special_count" "SELECT count(*) FROM t;" "5" "$DB"
 
 # Diff after modification — check WORKING diff before commit
 echo "UPDATE t SET val='updated' WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "special_diff" "SELECT count(*) FROM dolt_diff('t');" "^[1-9]" "$DB"
+run_test_match "special_diff" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "^[1-9]" "$DB"
 echo "SELECT dolt_commit('-A','-m','update special');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "special_updated" "SELECT val FROM t WHERE id=1;" "updated" "$DB"
@@ -267,7 +267,7 @@ run_test "err_reset_cleaned" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "err_resolve_none" "SELECT dolt_conflicts_resolve('--ours','t');" "0" "$DB"
 
 # dolt_diff on non-existent table returns empty
-run_test "err_diff_notable" "SELECT count(*) FROM dolt_diff('nonexistent');" "0" "$DB"
+run_test "err_diff_notable" "SELECT count(*) FROM dolt_diff WHERE table_name='nonexistent';" "0" "$DB"
 
 rm -f "$DB"
 
@@ -327,7 +327,7 @@ echo "ALTER TABLE t ADD COLUMN email TEXT;
 UPDATE t SET email='alice@test.com' WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Check working diff before commit (should show change)
-run_test_match "schema_diff_working" "SELECT count(*) FROM dolt_diff('t');" "^[1-9]" "$DB"
+run_test_match "schema_diff_working" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "^[1-9]" "$DB"
 
 echo "SELECT dolt_commit('-A','-m','add email column');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -373,26 +373,26 @@ SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Diff between c1 and c3 (should show changes)
 run_test_match "diff_c1_c3" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^[2-9]" "$DB"
 
 # Diff between c2 and c3
 run_test_match "diff_c2_c3" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^[1-9]" "$DB"
 
 # Diff between same commit (should be 0)
 run_test "diff_same_commit" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "0" "$DB"
 
 # Diff on working changes (no hashes = HEAD vs working)
 echo "INSERT INTO t VALUES(4,'uncommitted');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "diff_working" "SELECT count(*) FROM dolt_diff('t');" "^[1-9]" "$DB"
+run_test_match "diff_working" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "^[1-9]" "$DB"
 
 # Diff types present
 run_test_match "diff_type_added" \
-  "SELECT diff_type FROM dolt_diff('t') LIMIT 1;" "added" "$DB"
+  "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING' LIMIT 1;" "added" "$DB"
 
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -401,7 +401,7 @@ echo "SELECT dolt_tag('v1', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2))
 echo "SELECT dolt_tag('v3', (SELECT commit_hash FROM dolt_log LIMIT 1));" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "diff_tags" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT tag_hash FROM dolt_tags WHERE tag_name='v1'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v3'));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT tag_hash FROM dolt_tags WHERE tag_name='v1'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v3'), 't');" \
   "^[2-9]" "$DB"
 
 # Verify log has 3 commits
@@ -670,23 +670,23 @@ UPDATE t SET v='MODIFIED' WHERE id=2;
 DELETE FROM t WHERE id=3;" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Working diff should show changes
-run_test_match "difftype_working_count" "SELECT count(*) FROM dolt_diff('t');" "^[1-9]" "$DB"
+run_test_match "difftype_working_count" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "^[1-9]" "$DB"
 
 # Commit and verify between-commit diff
 echo "SELECT dolt_commit('-A','-m','mixed changes');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # After commit, HEAD vs working should be clean
-run_test "difftype_clean" "SELECT count(*) FROM dolt_diff('t');" "0" "$DB"
+run_test "difftype_clean" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "0" "$DB"
 
 # Diff between the two commits should show changes
 run_test_match "difftype_commit_diff" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^[1-9]" "$DB"
 
 # Make another working change
 echo "INSERT INTO t VALUES(5,'new_working');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "difftype_new_working" "SELECT count(*) FROM dolt_diff('t');" "1" "$DB"
-run_test_match "difftype_new_working_type" "SELECT diff_type FROM dolt_diff('t');" "added" "$DB"
+run_test "difftype_new_working" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "1" "$DB"
+run_test_match "difftype_new_working_type" "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" "added" "$DB"
 
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -910,7 +910,7 @@ run_test_match "tagstate_diff_hashes" \
 
 # Diff between tags should show changes
 run_test_match "tagstate_diff" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT tag_hash FROM dolt_tags WHERE tag_name='v1.0'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v2.0'));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT tag_hash FROM dolt_tags WHERE tag_name='v1.0'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v2.0'), 't');" \
   "^[1-9]" "$DB"
 
 rm -f "$DB"

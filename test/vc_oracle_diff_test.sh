@@ -19,10 +19,8 @@
 #      data_change, schema_change
 #    Compared on (table_name, message, data_change, schema_change),
 #    sorted, with engine-specific hashes/timestamps stripped. Note
-#    that doltlite's dolt_diff is polymorphic: with no constraint
-#    on table_name it returns the summary form; with `dolt_diff('t')`
-#    it falls through to the legacy per-row form used by the 90+
-#    existing self-tests.
+#    that doltlite's dolt_diff is summary-only; row-level history is
+#    exposed separately through `dolt_diff_<table>`.
 #
 # Usage: bash vc_oracle_diff_test.sh [path/to/doltlite] [path/to/dolt]
 #
@@ -216,8 +214,8 @@ oracle_summary() {
 # vtable can't resolve the name to a live user table and therefore
 # falls through to summary mode with an in-memory name filter.
 #
-# Intentionally different from the TVF form `dolt_diff('X')`, which
-# still goes per-row against a live table.
+# Intentionally different from the row-history surface
+# `dolt_diff_<table>`, which only walks live table history.
 oracle_summary_filter_name() {
   local name="$1" setup="$2" target="$3"
   local dir="$TMPROOT/${name}_filter"
@@ -323,9 +321,8 @@ echo "--- staged state interactions ---"
 # Stage a modification, verify dolt_diff_t shows the staged change
 # as part of the WORKING row (since the vtable form rolls up
 # WORKING vs HEAD; the staged diff is implicit). Note: Dolt also
-# exposes a separate dolt_diff('STAGED','WORKING','t') table-
-# valued function that surfaces STAGED specifically; that's a
-# different surface and is not covered by this oracle.
+# exposes separate staged/working history through other surfaces;
+# that is not covered by this oracle.
 oracle "table_diff_after_stage_only" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;

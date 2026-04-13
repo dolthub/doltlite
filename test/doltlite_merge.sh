@@ -74,27 +74,23 @@ run_test "pre_merge_rows" "SELECT count(*) FROM t;" "2" "$DB5"
 run_test_match "merge_del" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB5"
 run_test "post_merge_rows" "SELECT count(*) FROM t;" "1" "$DB5"
 
-# Test 8: dolt_diff after three-way merge (DB from Test 1)
-# The merge commit is HEAD (offset 0), ancestor is 2 commits back (offset 2 = "initial")
-# Between ancestor and merged result, users table should show 'Alice'->'ALICE', orders should show added row
-run_test_match "diff_3way_users" \
-  "SELECT diff_type, from_value, to_value FROM dolt_diff('users', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 3), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
-  "modified" "$DB"
-run_test_match "diff_3way_orders" \
-  "SELECT diff_type FROM dolt_diff('orders', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 3), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
-  "added" "$DB"
+# Test 8: diff summary/stat after three-way merge (DB from Test 1)
+run_test "diff_3way_users" \
+  "SELECT rows_modified FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 3), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 'users');" \
+  "1" "$DB"
+run_test "diff_3way_orders" \
+  "SELECT rows_added FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 3), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 'orders');" \
+  "1" "$DB"
 
-# Test 9: dolt_diff after fast-forward merge (DB2 from Test 2)
-# Log has 2 entries: feature (0), init (1) — no merge commit for ff
-run_test_match "diff_ff_added" \
-  "SELECT diff_type, to_value FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
-  "added" "$DB2"
+# Test 9: diff stat after fast-forward merge (DB2 from Test 2)
+run_test "diff_ff_added" \
+  "SELECT rows_added FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 't');" \
+  "1" "$DB2"
 
-# Test 10: After merge with conflicts, dolt_diff between init and HEAD shows the main change
-# Conflicted merges don't auto-commit, so HEAD is the 'main' commit (offset 0), init is offset 1
-run_test_match "diff_conflict_shows_change" \
-  "SELECT diff_type FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
-  "modified" "$DB3"
+# Test 10: After merge with conflicts, diff stat between init and HEAD shows the main change
+run_test "diff_conflict_shows_change" \
+  "SELECT rows_modified FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 't');" \
+  "1" "$DB3"
 
 # Test 11: Row-level auto-merge (both modify same table, different rows)
 DB6=/tmp/test_merge6_$$.db; rm -f "$DB6"

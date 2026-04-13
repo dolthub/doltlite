@@ -1365,7 +1365,7 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   u8 version;
   if( nData<5 ) return SQLITE_CORRUPT;
   version = *bufCur++;
-  if( version!=5 && version!=6 ) return SQLITE_CORRUPT;
+  if( version!=6 ) return SQLITE_CORRUPT;
   if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
   defLen = (int)CS_READ_U32(bufCur); bufCur+=4;
   if( bufCur+defLen>data+nData ) return SQLITE_CORRUPT;

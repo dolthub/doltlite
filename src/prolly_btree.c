@@ -1963,7 +1963,7 @@ static int btreeLoadWorkingSetBlob(
 
   rc = chunkStoreGet(cs, &wsHash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  if( !data || nData < WS_TOTAL_SIZE || data[0] != 2 ){
+  if( !data || nData < WS_TOTAL_SIZE || data[0] != WS_FORMAT_VERSION ){
     sqlite3_free(data);
     return SQLITE_CORRUPT;
   }
@@ -1993,7 +1993,7 @@ static int btreeStoreWorkingSetBlob(
   static const ProllyHash emptyHash = {{0}};
   int rc;
 
-  buf[0] = 2;
+  buf[0] = WS_FORMAT_VERSION;
   memcpy(buf + WS_WORKING_CAT_OFF,
          (pWorkingCat ? pWorkingCat : &emptyHash)->data, PROLLY_HASH_SIZE);
   memcpy(buf + WS_WORKING_COMMIT_OFF,

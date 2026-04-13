@@ -90,12 +90,9 @@ oracle_schemas() {
 
 # Oracle for which commits touch dolt_schemas in dolt_diff, joined
 # against dolt_log on commit_hash so we compare by commit MESSAGE
-# (stable across engines). IMPORTANT: doltlite's dolt_diff treats
-# `table_name` as a HIDDEN constraint column — a WHERE clause like
-# `table_name='dolt_schemas'` triggers the polymorphic vtable's
-# per-row mode (dolt_diff('dolt_schemas',...)) instead of filtering
-# the summary rows. We query without that filter and grep
-# dolt_schemas rows out in shell.
+# (stable across engines). IMPORTANT: doltlite's dolt_diff is
+# summary-only, so we query it directly and grep dolt_schemas rows out
+# in shell instead of relying on row-history surfaces.
 oracle_diff_touches_schemas() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_diff"

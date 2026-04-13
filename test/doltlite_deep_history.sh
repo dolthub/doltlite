@@ -64,15 +64,15 @@ echo "Test 2: dolt_diff first-to-last..."
 # The first commit (oldest) is at the largest offset; last commit is offset 0.
 # Between commit_0 and commit_499, 499 rows were added (ids 1..499) and row 0 was modified.
 run_test "diff_first_last_count" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 499), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0));" \
+  "SELECT rows_added + rows_modified + rows_deleted FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 499), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 't');" \
   "500" "$DB"
 
 run_test_match "diff_first_last_has_added" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 499), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0)) WHERE diff_type='added';" \
+  "SELECT rows_added FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 499), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 't');" \
   "^499$" "$DB"
 
 run_test_match "diff_first_last_has_modified" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 499), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0)) WHERE diff_type='modified';" \
+  "SELECT rows_modified FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 499), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 't');" \
   "^1$" "$DB"
 
 # ============================================================

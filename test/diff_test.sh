@@ -180,7 +180,7 @@ for N in 100 1000 5000; do
   rm -f "$TMPDIR/t.db"
   setup_table "$TMPDIR/t.db" "id INTEGER PRIMARY KEY, a INT, b INT" "$N" "x, x, 0"
   "$DB" "$TMPDIR/t.db" "UPDATE t SET b=1 WHERE id%2=0;" > /dev/null 2>&1
-  result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff('t') WHERE diff_type='modified';" 2>/dev/null)
+  result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING' AND diff_type='modified';" 2>/dev/null)
   check "working diff N=$N" "$((N/2))" "$result"
 done
 
@@ -189,7 +189,7 @@ echo ""
 echo "--- 12. No changes ---"
 rm -f "$TMPDIR/t.db"
 setup_table "$TMPDIR/t.db" "id INTEGER PRIMARY KEY, a INT, b INT" "1000" "x, x, 0"
-result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff('t');" 2>/dev/null)
+result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" 2>/dev/null)
 check "no-change diff" "0" "$result"
 
 # ── 13. Performance: O(changes) not O(table) ─────────────
@@ -205,7 +205,7 @@ done
 "$DB" "$TMPDIR/t.db" "SELECT dolt_add('-A'); SELECT dolt_commit('-m','100K');" > /dev/null 2>&1
 "$DB" "$TMPDIR/t.db" "UPDATE t SET b=1 WHERE id<=10;" > /dev/null 2>&1
 t0=$(ts)
-result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff('t') WHERE diff_type='modified';" 2>/dev/null)
+result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING' AND diff_type='modified';" 2>/dev/null)
 elapsed=$(( $(ts) - t0 ))
 check "10 changes on 100K" "10" "$result"
 check_time "diff perf 100K" "$elapsed" "5"

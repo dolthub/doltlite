@@ -1,5 +1,5 @@
 #!/bin/bash
-# Tests for dolt_diff across ALTER TABLE ADD COLUMN schema changes.
+# Tests for current diff surfaces across ALTER TABLE ADD COLUMN schema changes.
 # Verifies that rows not modified after ADD COLUMN are NOT reported
 # as changed, and rows actually modified ARE reported correctly.
 DOLTLITE=./doltlite
@@ -37,7 +37,7 @@ echo "ALTER TABLE t ADD COLUMN age INTEGER;" | $DOLTLITE "$DB1" > /dev/null 2>&1
 
 # Working diff should be empty -- only schema changed, no data
 run_test "alter_add_col_no_data_change" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "0" "$DB1"
 
 # ---------------------------------------------------------------
@@ -47,11 +47,11 @@ run_test "alter_add_col_no_data_change" \
 echo "UPDATE t SET age=30 WHERE id=1;" | $DOLTLITE "$DB1" > /dev/null 2>&1
 
 run_test "alter_only_updated_row_in_diff" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "1" "$DB1"
 
 run_test "alter_updated_row_is_modify" \
-  "SELECT diff_type, rowid_val FROM dolt_diff('t');" \
+  "SELECT diff_type || '|' || coalesce(to_id, from_id) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "modified|1" "$DB1"
 
 # ---------------------------------------------------------------
@@ -61,12 +61,12 @@ run_test "alter_updated_row_is_modify" \
 echo "SELECT dolt_commit('-A','-m','add age column and update alice');" | $DOLTLITE "$DB1" > /dev/null 2>&1
 
 run_test "alter_cross_commit_count" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "1" "$DB1"
 
 run_test "alter_cross_commit_type" \
-  "SELECT diff_type FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
-  "modified" "$DB1"
+  "SELECT rows_modified FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
+  "1" "$DB1"
 
 # ---------------------------------------------------------------
 # Test 4: Multiple ADD COLUMNs, untouched rows stay equal
@@ -81,17 +81,17 @@ echo "ALTER TABLE items ADD COLUMN price REAL;
 ALTER TABLE items ADD COLUMN qty INTEGER;" | $DOLTLITE "$DB2" > /dev/null 2>&1
 
 run_test "multi_add_col_no_change" \
-  "SELECT count(*) FROM dolt_diff('items');" \
+  "SELECT count(*) FROM dolt_diff_items WHERE to_commit='WORKING';" \
   "0" "$DB2"
 
 echo "UPDATE items SET price=9.99, qty=5 WHERE id=2;" | $DOLTLITE "$DB2" > /dev/null 2>&1
 
 run_test "multi_add_col_one_update" \
-  "SELECT count(*) FROM dolt_diff('items');" \
+  "SELECT count(*) FROM dolt_diff_items WHERE to_commit='WORKING';" \
   "1" "$DB2"
 
 run_test "multi_add_col_correct_row" \
-  "SELECT rowid_val FROM dolt_diff('items');" \
+  "SELECT coalesce(to_id, from_id) FROM dolt_diff_items WHERE to_commit='WORKING';" \
   "2" "$DB2"
 
 # ---------------------------------------------------------------
@@ -116,11 +116,11 @@ echo "ALTER TABLE t ADD COLUMN w TEXT;
 INSERT INTO t VALUES(2,'y','z');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 
 run_test "insert_after_alter_count" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "1" "$DB3"
 
 run_test "insert_after_alter_type" \
-  "SELECT diff_type, rowid_val FROM dolt_diff('t');" \
+  "SELECT diff_type || '|' || coalesce(to_id, from_id) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "added|2" "$DB3"
 
 # ---------------------------------------------------------------
@@ -136,11 +136,11 @@ echo "ALTER TABLE t ADD COLUMN extra TEXT;
 DELETE FROM t WHERE id=1;" | $DOLTLITE "$DB4" > /dev/null 2>&1
 
 run_test "delete_after_alter_count" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "1" "$DB4"
 
 run_test "delete_after_alter_type" \
-  "SELECT diff_type, rowid_val FROM dolt_diff('t');" \
+  "SELECT diff_type || '|' || coalesce(to_id, from_id) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "removed|1" "$DB4"
 
 # ---------------------------------------------------------------
@@ -171,7 +171,7 @@ run_test_match "merge_after_alter_no_crash" \
 
 # After merge, diff between merge commit and its parent should work
 run_test_match "diff_after_merge_works" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^[0-9]+$" "$DB5"
 
 # Cleanup

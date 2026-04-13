@@ -37,8 +37,8 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_PROLLY_NODE;
   }
 
-  /* Working set: exactly WS_TOTAL_SIZE bytes, version byte == 2 */
-  if( nData == WS_TOTAL_SIZE && data[0] == 2 ){
+  /* Working set: exactly WS_TOTAL_SIZE bytes, current version only. */
+  if( nData == WS_TOTAL_SIZE && data[0] == WS_FORMAT_VERSION ){
     return CHUNK_WORKING_SET;
   }
 

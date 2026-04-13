@@ -163,13 +163,13 @@ UPDATE t SET v='diffme' WHERE id=0;" | $DOLTLITE "$DB_100K" > /dev/null 2>&1
 echo "SELECT dolt_commit('-A','-m','baseline');
 UPDATE t SET v='diffme' WHERE id=0;" | $DOLTLITE "$DB_1M" > /dev/null 2>&1
 
-T_DIFF_1K=$(time_ms "echo \"SELECT count(*) FROM dolt_diff('t');\" | $DOLTLITE '$DB_1K'")
+T_DIFF_1K=$(time_ms "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_1K'")
 echo "  1K: ${T_DIFF_1K}ms"
 
-T_DIFF_100K=$(time_ms "echo \"SELECT count(*) FROM dolt_diff('t');\" | $DOLTLITE '$DB_100K'")
+T_DIFF_100K=$(time_ms "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_100K'")
 echo "  100K: ${T_DIFF_100K}ms"
 
-T_DIFF_1M=$(time_ms "echo \"SELECT count(*) FROM dolt_diff('t');\" | $DOLTLITE '$DB_1M'")
+T_DIFF_1M=$(time_ms "echo \"SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';\" | $DOLTLITE '$DB_1M'")
 echo "  1M: ${T_DIFF_1M}ms"
 
 assert_ratio "diff_1k_to_100k" "$T_DIFF_1K" "$T_DIFF_100K" 5
@@ -186,7 +186,7 @@ echo "--- Diff correctness ---"
 # inside the same session invalidates the schema cache. Using 1K only.
 for pair in "1K:$DB_1K"; do
   name="${pair%%:*}"; db="${pair#*:}"
-  val=$(echo "SELECT count(*) FROM dolt_diff('t');" | $DOLTLITE "$db" 2>&1)
+  val=$(echo "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" | $DOLTLITE "$db" 2>&1)
   if [ "$val" = "1" ]; then
     PASS=$((PASS+1)); echo "  PASS: diff_correct_$name — 1 change detected"
   else
@@ -221,16 +221,18 @@ for i in range(10):
 print(\"SELECT dolt_commit('-A','-m','10 changes');\")
 " | $DOLTLITE "$DB_DIFF" > /dev/null 2>&1
 
-T_DIFF_10=$(time_ms "echo \"SELECT count(*) FROM dolt_diff('t',
+T_DIFF_10=$(time_ms "echo \"SELECT rows_added + rows_deleted + rows_modified FROM dolt_diff_stat(
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
-  (SELECT commit_hash FROM dolt_log LIMIT 1));\" | $DOLTLITE '$DB_DIFF'")
+  (SELECT commit_hash FROM dolt_log LIMIT 1),
+  't');\" | $DOLTLITE '$DB_DIFF'")
 echo "  10 changes (1M table): ${T_DIFF_10}ms"
 
 # Correctness check (known schema cache issue on 1M after dolt_commit
 # in same session — skip for now, correctness verified at 1K above)
-DIFF_10_COUNT=$(echo "SELECT count(*) FROM dolt_diff('t',
+DIFF_10_COUNT=$(echo "SELECT rows_added + rows_deleted + rows_modified FROM dolt_diff_stat(
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
-  (SELECT commit_hash FROM dolt_log LIMIT 1));" | $DOLTLITE "$DB_DIFF" 2>&1)
+  (SELECT commit_hash FROM dolt_log LIMIT 1),
+  't');" | $DOLTLITE "$DB_DIFF" 2>&1)
 echo "  (correctness: $DIFF_10_COUNT changes — known issue if 0 on large tables)"
 
 # Make 1000 changes (non-overlapping range) and commit
@@ -240,14 +242,16 @@ for i in range(100, 1100):
 print(\"SELECT dolt_commit('-A','-m','1000 changes');\")
 " | $DOLTLITE "$DB_DIFF" > /dev/null 2>&1
 
-T_DIFF_1000=$(time_ms "echo \"SELECT count(*) FROM dolt_diff('t',
+T_DIFF_1000=$(time_ms "echo \"SELECT rows_added + rows_deleted + rows_modified FROM dolt_diff_stat(
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
-  (SELECT commit_hash FROM dolt_log LIMIT 1));\" | $DOLTLITE '$DB_DIFF'")
+  (SELECT commit_hash FROM dolt_log LIMIT 1),
+  't');\" | $DOLTLITE '$DB_DIFF'")
 echo "  1000 changes (1M table): ${T_DIFF_1000}ms"
 
-DIFF_1000_COUNT=$(echo "SELECT count(*) FROM dolt_diff('t',
+DIFF_1000_COUNT=$(echo "SELECT rows_added + rows_deleted + rows_modified FROM dolt_diff_stat(
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
-  (SELECT commit_hash FROM dolt_log LIMIT 1));" | $DOLTLITE "$DB_DIFF" 2>&1)
+  (SELECT commit_hash FROM dolt_log LIMIT 1),
+  't');" | $DOLTLITE "$DB_DIFF" 2>&1)
 echo "  (correctness: $DIFF_1000_COUNT changes)"
 
 # 100x more changes → at most 200x time

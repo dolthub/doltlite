@@ -812,7 +812,7 @@ static void run_chunk_walk_corruption(void){
 
   {
     static const u8 legacyCatalogV2[] = {
-      CATALOG_FORMAT_V2,
+      0x43,
       1, 0, 0, 0,
       0, 0, 0, 0
     };

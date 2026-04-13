@@ -197,12 +197,13 @@ SELECT count(*) FROM dolt_at_users('v1.0');    -- 42
 
 ### Diff
 
-Row-level diff between any two commits, or working state vs HEAD:
+Commit-history summary of which tables changed:
 
 ```sql
-SELECT * FROM dolt_diff('users');
-SELECT * FROM dolt_diff('users', 'abc123...', 'def456...');
--- diff_type | rowid_val | from_value | to_value
+SELECT * FROM dolt_diff;
+SELECT * FROM dolt_diff WHERE table_name = 'users';
+-- commit_hash | committer | email | date | message |
+--   data_change | schema_change | table_name
 ```
 
 ### Diff Stat
@@ -571,7 +572,7 @@ JOIN tel.events e ON e.kind = c.key
 GROUP BY c.key;
 
 -- Version control only applies to main db
-SELECT * FROM dolt_diff('config');
+SELECT * FROM dolt_diff WHERE table_name='config';
 ```
 
 ## Per-Session Branching Architecture
