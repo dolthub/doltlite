@@ -809,6 +809,42 @@ static void run_chunk_walk_corruption(void){
   printf("=== Chunk Walk Corruption Test ===\n\n");
   rc = doltliteEnumerateChunkChildren(badCatalog, (int)sizeof(badCatalog), 0, 0);
   check("truncated_catalog_is_corrupt", rc==SQLITE_CORRUPT);
+
+  {
+    static const u8 legacyCatalogV2[] = {
+      CATALOG_FORMAT_V2,
+      1, 0, 0, 0,
+      0, 0, 0, 0
+    };
+    rc = doltliteEnumerateChunkChildren(legacyCatalogV2,
+                                        (int)sizeof(legacyCatalogV2), 0, 0);
+    check("legacy_catalog_v2_is_corrupt_to_chunk_walk", rc==SQLITE_CORRUPT);
+  }
+
+  {
+    static const u8 legacyRefsV5[] = {
+      5,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0
+    };
+    static const u8 currentRefsV6[] = {
+      6,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0
+    };
+    rc = doltliteEnumerateChunkChildren(legacyRefsV5,
+                                        (int)sizeof(legacyRefsV5), 0, 0);
+    check("legacy_refs_v5_is_corrupt_to_chunk_walk", rc==SQLITE_CORRUPT);
+    rc = doltliteEnumerateChunkChildren(currentRefsV6,
+                                        (int)sizeof(currentRefsV6), 0, 0);
+    check("current_refs_v6_is_accepted_by_chunk_walk", rc==SQLITE_OK);
+  }
 }
 
 static void run_ancestor_missing_start(void){

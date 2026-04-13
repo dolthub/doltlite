@@ -10,6 +10,21 @@
 
 #include <string.h>
 
+static int parseCurrentCatalogHeader(
+  const u8 *data,
+  int nData,
+  int *pnTables,
+  const u8 **ppEntries
+){
+  const u8 *q;
+  if( nData < CAT_HEADER_SIZE_V3 ) return 0;
+  if( data[0] != CATALOG_FORMAT_V3 ) return 0;
+  q = data + CAT_HEADER_SIZE_V3 - 4;
+  *pnTables = (int)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+  *ppEntries = data + CAT_HEADER_SIZE_V3;
+  return 1;
+}
+
 DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   u32 m;
 
@@ -27,10 +42,10 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_WORKING_SET;
   }
 
-  /* Catalog V2/V3: recognized by catalogParseHeader */
+  /* Catalog V3 only. */
   {
     int nTables; const u8 *pEntries;
-    if( catalogParseHeader(data, nData, &nTables, &pEntries) ){
+    if( parseCurrentCatalogHeader(data, nData, &nTables, &pEntries) ){
       return CHUNK_CATALOG;
     }
   }
@@ -40,8 +55,8 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_COMMIT;
   }
 
-  /* Refs blob: version byte 5/6 with length-prefixed sections. */
-  if( nData >= 5 && (data[0] == 5 || data[0] == 6) ){
+  /* Refs blob: current format is version 6. */
+  if( nData >= 5 && data[0] == 6 ){
     return CHUNK_REFS;
   }
 
@@ -106,7 +121,7 @@ static int enumerateCatalogChildren(
   int i;
   int rc = SQLITE_OK;
 
-  if( !catalogParseHeader(data, nData, &nTables, &p) ) return SQLITE_CORRUPT;
+  if( !parseCurrentCatalogHeader(data, nData, &nTables, &p) ) return SQLITE_CORRUPT;
   if( nTables < 0 || nTables >= 10000 ) return SQLITE_CORRUPT;
   for(i=0; i<nTables && rc==SQLITE_OK; i++){
     int nameLen;
@@ -191,7 +206,7 @@ static int enumerateRefsChildren(
 
   if( nData < 5 ) return SQLITE_CORRUPT;
   version = *p++;
-  if( version!=5 && version!=6 ) return SQLITE_CORRUPT;
+  if( version!=6 ) return SQLITE_CORRUPT;
   if( p + 4 > pEnd ) return SQLITE_CORRUPT;
   defLen = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
   p += 4;
@@ -322,7 +337,7 @@ int doltliteEnumerateChunkChildren(
       return enumerateRefsChildren(data, nData, xChild, ctx);
     case CHUNK_UNKNOWN:
     default:
-      return SQLITE_OK;
+      return SQLITE_CORRUPT;
   }
 }
 
