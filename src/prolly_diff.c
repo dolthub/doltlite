@@ -55,6 +55,34 @@ static void diffFillKey(
   }
 }
 
+static int diffIterCopyKey(
+  ProllyDiffIter *pIter,
+  ProllyDiffChange *pChange,
+  ProllyCursor *pCur,
+  u8 flags
+){
+  if( flags & PROLLY_NODE_INTKEY ){
+    pChange->intKey = prollyCursorIntKey(pCur);
+    pChange->pKey = 0;
+    pChange->nKey = 0;
+    return SQLITE_OK;
+  }else{
+    const u8 *pKey;
+    int nKey;
+    prollyCursorKey(pCur, &pKey, &nKey);
+    if( nKey>0 ){
+      pIter->pKeyCopy = sqlite3_malloc(nKey);
+      if( !pIter->pKeyCopy ) return SQLITE_NOMEM;
+      memcpy(pIter->pKeyCopy, pKey, nKey);
+      pIter->nKeyCopy = nKey;
+    }
+    pChange->pKey = pIter->pKeyCopy;
+    pChange->nKey = pIter->nKeyCopy;
+    pChange->intKey = 0;
+    return SQLITE_OK;
+  }
+}
+
 static int diffEmitDelete(
   ProllyCursor *pOld,
   u8 flags,
@@ -375,10 +403,7 @@ static int diffLeaves(
       int eqRc = SQLITE_OK;
       prollyNodeValue(pOld, i, &pOV, &nOV);
       prollyNodeValue(pNew, j, &pNV, &nNV);
-      eq = (nOV==nNV && (nOV==0 || memcmp(pOV, pNV, nOV)==0));
-      if( !eq && nOV>=2 && nNV>=2 ){
-        eqRc = diffRecordsEqualFieldwise(pOV, nOV, pNV, nNV, &eq);
-      }
+      eqRc = prollyValuesEqual(pOV, nOV, pNV, nNV, &eq);
       if( eqRc!=SQLITE_OK ) return eqRc;
       if( !eq ){
         ProllyDiffChange ch;
@@ -606,7 +631,10 @@ int prollyDiff(
 ** but yields one change at a time instead of calling a callback.
 */
 
-static void diffIterFreeValCopies(ProllyDiffIter *pIter){
+static void diffIterFreeCopies(ProllyDiffIter *pIter){
+  sqlite3_free(pIter->pKeyCopy);
+  pIter->pKeyCopy = 0;
+  pIter->nKeyCopy = 0;
   sqlite3_free(pIter->pOldValCopy);
   pIter->pOldValCopy = 0;
   pIter->nOldValCopy = 0;
@@ -682,7 +710,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
   if( pIter->rc!=SQLITE_OK ) return pIter->rc;
 
   /* Free previous value copies */
-  diffIterFreeValCopies(pIter);
+  diffIterFreeCopies(pIter);
 
   pOld = pIter->pCurOld;
   pNew = pIter->pCurNew;
@@ -708,7 +736,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
         /* Key only in old tree: DELETE */
         const u8 *pVal; int nVal;
         pCh->type = PROLLY_DIFF_DELETE;
-        diffFillKey(pCh, pOld, pIter->flags);
+        pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->flags);
+        if( pIter->rc!=SQLITE_OK ) return pIter->rc;
         prollyCursorValue(pOld, &pVal, &nVal);
         if( nVal > 0 ){
           pIter->pOldValCopy = sqlite3_malloc(nVal);
@@ -724,7 +753,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
         /* Key only in new tree: ADD */
         const u8 *pVal; int nVal;
         pCh->type = PROLLY_DIFF_ADD;
-        diffFillKey(pCh, pNew, pIter->flags);
+        pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
+        if( pIter->rc!=SQLITE_OK ) return pIter->rc;
         prollyCursorValue(pNew, &pVal, &nVal);
         if( nVal > 0 ){
           pIter->pNewValCopy = sqlite3_malloc(nVal);
@@ -750,7 +780,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
           const u8 *pOV; int nOV;
           const u8 *pNV; int nNV;
           pCh->type = PROLLY_DIFF_MODIFY;
-          diffFillKey(pCh, pNew, pIter->flags);
+          pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
+          if( pIter->rc!=SQLITE_OK ) return pIter->rc;
           prollyCursorValue(pOld, &pOV, &nOV);
           prollyCursorValue(pNew, &pNV, &nNV);
           if( nOV > 0 ){
@@ -780,7 +811,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
       /* Only old cursor valid: DELETE */
       const u8 *pVal; int nVal;
       pCh->type = PROLLY_DIFF_DELETE;
-      diffFillKey(pCh, pOld, pIter->flags);
+      pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->flags);
+      if( pIter->rc!=SQLITE_OK ) return pIter->rc;
       prollyCursorValue(pOld, &pVal, &nVal);
       if( nVal > 0 ){
         pIter->pOldValCopy = sqlite3_malloc(nVal);
@@ -796,7 +828,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
       /* Only new cursor valid: ADD */
       const u8 *pVal; int nVal;
       pCh->type = PROLLY_DIFF_ADD;
-      diffFillKey(pCh, pNew, pIter->flags);
+      pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
+      if( pIter->rc!=SQLITE_OK ) return pIter->rc;
       prollyCursorValue(pNew, &pVal, &nVal);
       if( nVal > 0 ){
         pIter->pNewValCopy = sqlite3_malloc(nVal);
@@ -830,7 +863,7 @@ void prollyDiffIterClose(ProllyDiffIter *pIter){
     sqlite3_free(pIter->pCurNew);
     pIter->pCurNew = 0;
   }
-  diffIterFreeValCopies(pIter);
+  diffIterFreeCopies(pIter);
   pIter->eof = 1;
 }
 

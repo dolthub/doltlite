@@ -58,6 +58,10 @@ struct ProllyDiffIter {
   /* Current change (valid after a successful Step) */
   ProllyDiffChange current;
 
+  /* Copy of blob-key data so the change survives cursor movement */
+  u8 *pKeyCopy;
+  int nKeyCopy;
+
   /* Copies of value data so the change survives cursor movement */
   u8 *pOldValCopy;
   int nOldValCopy;
