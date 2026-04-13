@@ -1,0 +1,18 @@
+CREATE VIRTUAL TABLE chunks USING fts5(content, tokenize='unicode61');
+INSERT INTO chunks(rowid, content) VALUES(1, 'x');
+INSERT INTO chunks(rowid, content) VALUES(2, 'x');
+INSERT INTO chunks(rowid, content) VALUES(3, 'x');
+INSERT INTO chunks(rowid, content) VALUES(4, 'x');
+INSERT INTO chunks(rowid, content) VALUES(5, 'x');
+INSERT INTO chunks(rowid, content) VALUES(6, 'x');
+INSERT INTO chunks(rowid, content) VALUES(7, 'x');
+INSERT INTO chunks(rowid, content) VALUES(8, 'x');
+INSERT INTO chunks(rowid, content) VALUES(9, 'x');
+INSERT INTO chunks(rowid, content) VALUES(10, 'x');
+INSERT INTO chunks(rowid, content) VALUES(11, 'x');
+INSERT INTO chunks(rowid, content) VALUES(12, 'x');
+INSERT INTO chunks(rowid, content) VALUES(13, 'x');
+INSERT INTO chunks(rowid, content) VALUES(14, 'x');
+INSERT INTO chunks(rowid, content) VALUES(15, 'x');
+INSERT INTO chunks(rowid, content) VALUES(16, 'x');
+SELECT count(*) FROM chunks;
