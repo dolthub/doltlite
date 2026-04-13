@@ -27,11 +27,6 @@
 #     the natural consequence of the sqlite_schema model and is
 #     intentional — indexes ARE schemas in SQLite.
 #
-#   - ALTER TABLE RENAME TO: doltlite emits (drop old, add new)
-#     as two separate rows; Dolt emits a single row with
-#     from_table_name != to_table_name. Worth conforming, tracked
-#     separately.
-#
 # Usage: bash vc_oracle_schema_diff_test.sh [path/to/doltlite] [path/to/dolt]
 #
 
@@ -179,6 +174,17 @@ $SEED
 ALTER TABLE t RENAME COLUMN v TO vv;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'rename_col');
+" "HEAD~1" "HEAD"
+
+# ALTER TABLE RENAME TO: both engines emit a single row with
+# from_table_name != to_table_name. doltlite's heuristic detects this
+# by matching dropped+added pairs on iTable + tree root, which works
+# for the pure-rename case (no data change in the same commit).
+oracle "modified_rename_table" "
+$SEED
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'rename_table');
 " "HEAD~1" "HEAD"
 
 oracle "modified_add_not_null_default" "
