@@ -329,14 +329,20 @@ int prollyNodeBuilderAdd(
     b->aValOff[0] = 0;
   }
 
-  
-  memcpy(b->pKeyBuf + b->nKeyBytes, pKey, nKey);
-  b->nKeyBytes += nKey;
+  /* The `+ N` offsets below are UB when the base pointer is NULL,
+  ** even for N = 0 (C11 6.5.6/8). The builder's buffers are lazily
+  ** allocated and stay NULL while no bytes have been written, so
+  ** skip the memcpy entirely on an empty key or value. */
+  if( nKey > 0 ){
+    memcpy(b->pKeyBuf + b->nKeyBytes, pKey, nKey);
+    b->nKeyBytes += nKey;
+  }
   b->aKeyOff[b->nItems + 1] = (u32)b->nKeyBytes;
 
-  
-  memcpy(b->pValBuf + b->nValBytes, pVal, nVal);
-  b->nValBytes += nVal;
+  if( nVal > 0 ){
+    memcpy(b->pValBuf + b->nValBytes, pVal, nVal);
+    b->nValBytes += nVal;
+  }
   b->aValOff[b->nItems + 1] = (u32)b->nValBytes;
 
   b->nItems++;
