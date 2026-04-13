@@ -81,6 +81,9 @@ SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "bad_to_ref_errors" \
   "SELECT count(*) FROM dolt_schema_diff((SELECT commit_hash FROM dolt_log LIMIT 1),'definitely_not_a_ref');" \
   "Error" "$DB"
+run_test_match "bad_single_arg_errors" \
+  "SELECT count(*) FROM dolt_schema_diff('definitely_not_a_ref');" \
+  "Error" "$DB"
 
 rm -f "$DB"
 
@@ -141,6 +144,21 @@ SELECT dolt_commit('-A','-m','init');
 SELECT dolt_tag('v1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "same_empty" "SELECT count(*) FROM dolt_schema_diff('v1','v1');" "0" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
+# Single-argument range syntax
+# ============================================================
+
+DB=/tmp/test_sd_range_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','c1');
+CREATE TABLE u(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "range_count" "SELECT count(*) FROM dolt_schema_diff('HEAD~1..HEAD');" "1" "$DB"
+run_test "range_to_name" "SELECT to_table_name FROM dolt_schema_diff('HEAD~1..HEAD');" "u" "$DB"
 
 rm -f "$DB"
 
@@ -207,6 +225,23 @@ SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "view_count" "SELECT count(*) FROM dolt_schema_diff('v1','v2');" "^[1-9]" "$DB"
 run_test_match "view_name" \
   "SELECT to_table_name FROM dolt_schema_diff('v1','v2') WHERE to_table_name='v';" "v" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
+# Rename filter matches either old or new table name
+# ============================================================
+
+DB=/tmp/test_sd_rename_filter_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','c1');
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "rename_filter_new_name" \
+  "SELECT count(*) FROM dolt_schema_diff('HEAD~1','HEAD','t2');" "1" "$DB"
+run_test "rename_filter_old_name" \
+  "SELECT count(*) FROM dolt_schema_diff('HEAD~1','HEAD','t');" "1" "$DB"
 
 rm -f "$DB"
 
