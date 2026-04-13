@@ -29,16 +29,6 @@
 #   - Savepoint-inside-BEGIN interaction
 #   - Trigger RAISE(ROLLBACK) unwinding nested savepoints
 #
-# Known disabled scenarios (marked DISABLED inline with the
-# repro and a pointer to the underlying bug):
-#
-#   - rollback_undoes_alter_rename,
-#     rollback_undoes_alter_rename_column — pre-existing SIGSEGV
-#     in the ALTER TABLE RENAME + ROLLBACK TO interaction
-#     (reproduces on master). Crash lands in
-#     sqlite3BtreeTripAllCursors before the savepoint restore
-#     code. Filed as a separate follow-up.
-#
 # Usage: bash oracle_savepoints_test.sh [path/to/doltlite] [path/to/sqlite3]
 #
 
@@ -541,50 +531,36 @@ RELEASE SAVEPOINT s1;
 SELECT id, v FROM t ORDER BY id;
 "
 
-# ─── Schema state shallow-copy edge cases ──────────────────────────
+# ─── ALTER TABLE RENAME inside a savepoint ─────────────────────────
 #
-# DISABLED: ALTER TABLE RENAME [COLUMN] inside a savepoint followed
-# by ROLLBACK TO SAVEPOINT crashes doltlite with SIGSEGV. This
-# reproduces on master (without the savepoint snapshot deep-copy
-# fix in this PR), so it is a pre-existing crash in the rename +
-# rollback interaction, NOT a regression and NOT addressed by the
-# mutmap-snapshot fix here. The crash backtrace lands inside
-# sqlite3BtreeTripAllCursors which runs BEFORE the savepoint
-# restore code, suggesting the rename leaves a cursor-list /
-# catalog state inconsistent that the rollback path then walks.
-#
-# Repro:
-#
-#   CREATE TABLE t(id INT PRIMARY KEY, v INT);
-#   INSERT INTO t VALUES(1, 10);
-#   SAVEPOINT s1;
-#   ALTER TABLE t RENAME TO renamed_t;
-#   ROLLBACK TO SAVEPOINT s1;            -- SIGSEGV here
-#
-# Filed as a follow-up issue. Re-enable when the rename interaction
-# is fixed.
-#
-# oracle "rollback_undoes_alter_rename" "
-# CREATE TABLE t(id INT PRIMARY KEY, v INT);
-# INSERT INTO t VALUES(1, 10);
-# SAVEPOINT s1;
-# ALTER TABLE t RENAME TO renamed_t;
-# ROLLBACK TO SAVEPOINT s1;
-# RELEASE SAVEPOINT s1;
-# SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
-# SELECT id, v FROM t;
-# "
-#
-# oracle "rollback_undoes_alter_rename_column" "
-# CREATE TABLE t(id INT PRIMARY KEY, v INT);
-# INSERT INTO t VALUES(1, 10);
-# SAVEPOINT s1;
-# ALTER TABLE t RENAME COLUMN v TO val;
-# ROLLBACK TO SAVEPOINT s1;
-# RELEASE SAVEPOINT s1;
-# SELECT sql FROM sqlite_master WHERE type='table' AND name='t';
-# SELECT id, v FROM t;
-# "
+# ROLLBACK TO SAVEPOINT over an ALTER TABLE RENAME / RENAME COLUMN.
+# VDBE's savepoint-rollback opcode walks db->aDb[] and calls
+# sqlite3BtreeTripAllCursors on every attached btree. Attached stock-
+# SQLite files (temp, memory, etc.) have pBt==NULL and store state
+# under pOrigBtree, so the trip-all-cursors path must dispatch to
+# origBtreeTripAllCursors instead of dereferencing pBt directly.
+
+oracle "rollback_undoes_alter_rename" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10);
+SAVEPOINT s1;
+ALTER TABLE t RENAME TO renamed_t;
+ROLLBACK TO SAVEPOINT s1;
+RELEASE SAVEPOINT s1;
+SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;
+SELECT id, v FROM t;
+"
+
+oracle "rollback_undoes_alter_rename_column" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10);
+SAVEPOINT s1;
+ALTER TABLE t RENAME COLUMN v TO val;
+ROLLBACK TO SAVEPOINT s1;
+RELEASE SAVEPOINT s1;
+SELECT sql FROM sqlite_master WHERE type='table' AND name='t';
+SELECT id, v FROM t;
+"
 
 # CREATE INDEX inside a savepoint. Indexes are sqlite_master rows
 # with their own iTable / root. Rollback must remove both the
