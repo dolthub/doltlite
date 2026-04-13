@@ -571,6 +571,7 @@ PROLLY_OBJS = prolly_hash.o prolly_hashset.o prolly_arena.o prolly_node.o prolly
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_schema_merge.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_schema_diff.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
+              doltlite_dbpage.o \
               doltlite_remote.o doltlite_remote_sql.o \
               doltlite_http_remote.o doltlite_remotesrv.o
 
@@ -583,6 +584,24 @@ ifeq ($(DOLTLITE_PROLLY),1)
   # Also compile original btree/pager/wal with renamed symbols for ATTACH
   LIBOBJS0 += btree_orig.o pager_orig.o wal_orig.o btmutex_orig.o backup_orig.o btree_orig_api.o
   OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1 -DDOLTLITE_VERSION='"$(DOLTLITE_VERSION)"'
+  # The non-amalgamation build compiles individual .c files into .o's, so
+  # the SHELL_OPT flags the stock sqlite3 target passes at link time never
+  # reach the preprocessor. That leaves dbpage.o, stmt.o, dbstat.o, rtree.o,
+  # fts3*.o as empty translation units and (worse) strips the matching
+  # entries out of main.o's sqlite3BuiltinExtensions[] — so sqlite_dbpage /
+  # sqlite_stmt / rtree / fts4 / bytecode / dbstat never register on a
+  # doltlite connection. Promote ONLY the vtable-enable macros into the
+  # compile flags. Deliberately NOT propagating SHELL_OPT wholesale — it
+  # also carries behavioral flags like SQLITE_DQS=0 and
+  # SQLITE_STRICT_SUBTYPE=1 that would change semantics for code and
+  # tests that were written assuming the doltlite default.
+  OPT_FEATURE_FLAGS += \
+    -DSQLITE_ENABLE_BYTECODE_VTAB \
+    -DSQLITE_ENABLE_DBPAGE_VTAB \
+    -DSQLITE_ENABLE_DBSTAT_VTAB \
+    -DSQLITE_ENABLE_FTS4 \
+    -DSQLITE_ENABLE_RTREE \
+    -DSQLITE_ENABLE_STMTVTAB
 endif
 
 LIBOBJS = $(LIBOBJS0)
@@ -1387,6 +1406,9 @@ doltlite_schemas.o:	$(TOP)/src/doltlite_schemas.c $(DEPS_OBJ_COMMON)
 
 doltlite_diff_stat.o:	$(TOP)/src/doltlite_diff_stat.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_diff_stat.c
+
+doltlite_dbpage.o:	$(TOP)/src/doltlite_dbpage.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_dbpage.c
 
 doltlite_record.o:	$(TOP)/src/doltlite_record.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_record.c

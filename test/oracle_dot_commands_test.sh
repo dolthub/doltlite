@@ -18,20 +18,14 @@
 #   - .output, .read, .quit, .open — I/O redirection / shell control.
 #   - .backup, .restore, .recover — file-level ops not comparable.
 #
-# Known divergences from upstream SQLite (NOT oracle-tested here):
-#
-#   - .dbinfo: depends on the sqlite_dbpage shadow vtable, which
-#     doltlite does not register (its storage backend is prolly
-#     trees, not SQLite pages). doltlite errors with "no such
-#     table: sqlite_dbpage".
-#
-#   - .schema sqlite_%: stock SQLite shows comment-form entries for
-#     sqlite_dbpage and sqlite_stmt alongside the real
-#     sqlite_schema/sqlite_sequence rows. doltlite lacks both
-#     system vtables and so omits those comment lines.
-#
-#   Both are downstream of the same gap — doltlite's prolly storage
-#   doesn't expose page- or statement-level introspection vtables.
+# .dbinfo note: doltlite registers a custom sqlite_dbpage override
+# (doltlite_dbpage.c) that synthesizes a 100-byte SQLite-format-3
+# header on pgno=1, so .dbinfo's fixed format fields (page size,
+# read/write format, schema format, encoding, software version) match
+# stock. The mutable fields (file change counter, schema cookie, db
+# page count, largest root) are derived from doltlite's catalog/commit
+# state and differ from stock by design — those are NOT oracle-tested
+# here; the .dbinfo scenario only checks the invariant fields.
 #
 # Usage: bash oracle_dot_commands_test.sh [path/to/doltlite] [path/to/sqlite3]
 #
@@ -86,6 +80,42 @@ oracle() {
     FAILED_NAMES="$FAILED_NAMES $name"
     echo "  FAIL: $name"
     echo "    cmd: $cmd"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
+  fi
+}
+
+# Oracle that strips .dbinfo rows whose values legitimately differ
+# between stock SQLite (raw page storage) and doltlite (prolly tree
+# storage mapped into a synthesized page 1 header): change counter,
+# db page count, schema cookie, autovacuum top root, data version.
+# The remaining rows are format-level invariants that must match
+# byte-for-byte.
+oracle_dbinfo() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/sq"
+
+  local filter='grep -Ev "^(file change counter|database page count|schema cookie|autovacuum top root|data version)"'
+
+  local dl_out
+  dl_out=$(printf '%s\n.dbinfo\n' "$setup" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | eval "$filter" \
+           | normalize)
+
+  local sq_out
+  sq_out=$(printf '%s\n.dbinfo\n' "$setup" \
+           | "$SQLITE3" "$dir/sq/db" 2>"$dir/sq.err" \
+           | eval "$filter" \
+           | normalize)
+
+  if [ "$dl_out" = "$sq_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
     echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
     echo "    sqlite3:";  echo "$sq_out" | sed 's/^/      /'
   fi
@@ -213,6 +243,21 @@ oracle "fullschema_empty"       "$SEED_EMPTY" ".fullschema"
 oracle "fullschema_one_table"   "$SEED_ONE_TABLE" ".fullschema"
 oracle "fullschema_with_index"  "$SEED_WITH_INDEX" ".fullschema"
 oracle "fullschema_with_view"   "$SEED_WITH_VIEW" ".fullschema"
+
+echo "--- .schema sqlite_% (shadow vtable comment lines) ---"
+
+oracle "schema_sqlite_pattern_empty"      "$SEED_EMPTY" ".schema sqlite_%"
+oracle "schema_sqlite_pattern_one_table"  "$SEED_ONE_TABLE" ".schema sqlite_%"
+oracle "schema_sqlite_pattern_with_autoinc" "$SEED_AUTOINC" ".schema sqlite_%"
+
+echo "--- .dbinfo (invariant fields) ---"
+
+# Truly empty dbs have no stock page 1 to read (stock sqlite3 returns
+# "unable to read database header"), while doltlite always synthesizes
+# one. Only oracle scenarios with at least one table.
+oracle_dbinfo "dbinfo_one_table"  "$SEED_ONE_TABLE"
+oracle_dbinfo "dbinfo_with_index" "$SEED_WITH_INDEX"
+oracle_dbinfo "dbinfo_with_view"  "$SEED_WITH_VIEW"
 
 echo "--- DDL feature coverage ---"
 
