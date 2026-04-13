@@ -64,7 +64,7 @@ int prollyCacheInit(ProllyCache *cache, int nCapacity){
   }
   memset(cache->aBucket, 0, sizeof(ProllyCacheEntry *) * nBucket);
 
-  
+
   cache->lruHead.pLruNext = &cache->lruTail;
   cache->lruHead.pLruPrev = 0;
   cache->lruTail.pLruPrev = &cache->lruHead;
@@ -84,7 +84,7 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
 
   while( pEntry ){
     if( memcmp(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE)==0 ){
-      
+
       pEntry->nRef++;
       lruRemove(pEntry);
       lruInsertHead(cache, pEntry);
@@ -96,18 +96,18 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
   return 0;
 }
 
+/* Only entries with nRef == 0 are evictable — active cursors hold
+** references and their pointers would dangle. If every entry is
+** pinned we return 0 and let the caller overflow nCapacity rather
+** than break a cursor. */
 static int cacheEvictOne(ProllyCache *cache){
   ProllyCacheEntry *pEntry;
 
-  
   pEntry = cache->lruTail.pLruPrev;
   while( pEntry!=&cache->lruHead ){
     if( pEntry->nRef==0 ){
-      
       lruRemove(pEntry);
-      
       hashRemove(cache, pEntry);
-      
       cacheEntryFree(pEntry);
       cache->nUsed--;
       return 1;
@@ -131,21 +131,21 @@ ProllyCacheEntry *prollyCachePut(
 
   if( pRc ) *pRc = SQLITE_OK;
 
-  
+
   pEntry = prollyCacheGet(cache, hash);
   if( pEntry ){
     return pEntry;
   }
 
-  
+
   while( cache->nUsed>=cache->nCapacity ){
     if( !cacheEvictOne(cache) ){
-      
+
       break;
     }
   }
 
-  
+
   pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
   if( pEntry==0 ){
     if( pRc ) *pRc = SQLITE_NOMEM;
@@ -153,7 +153,7 @@ ProllyCacheEntry *prollyCachePut(
   }
   memset(pEntry, 0, sizeof(*pEntry));
 
-  
+
   pCopy = (u8 *)sqlite3_malloc(nData);
   if( pCopy==0 ){
     if( pRc ) *pRc = SQLITE_NOMEM;
@@ -162,13 +162,13 @@ ProllyCacheEntry *prollyCachePut(
   }
   memcpy(pCopy, pData, nData);
 
-  
+
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
   pEntry->pData = pCopy;
   pEntry->nData = nData;
   pEntry->nRef = 1;
 
-  
+
   rc = prollyNodeParse(&pEntry->node, pCopy, nData);
   if( rc!=SQLITE_OK ){
     if( pRc ) *pRc = rc;
@@ -177,12 +177,12 @@ ProllyCacheEntry *prollyCachePut(
     return 0;
   }
 
-  
+
   iBucket = cacheHashBucket(cache, hash);
   pEntry->pHashNext = cache->aBucket[iBucket];
   cache->aBucket[iBucket] = pEntry;
 
-  
+
   lruInsertHead(cache, pEntry);
 
   cache->nUsed++;
@@ -220,7 +220,7 @@ void prollyCacheFree(ProllyCache *cache){
 
   if( cache->aBucket==0 ) return;
 
-  
+
   pEntry = cache->lruHead.pLruNext;
   while( pEntry!=&cache->lruTail ){
     pNext = pEntry->pLruNext;
@@ -233,4 +233,4 @@ void prollyCacheFree(ProllyCache *cache){
   memset(cache, 0, sizeof(*cache));
 }
 
-#endif 
+#endif

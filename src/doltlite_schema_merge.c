@@ -1,12 +1,4 @@
-/*
-** Schema merge helpers. Extracted from doltlite.c.
-**
-** Functions that handle data migration after a schema merge:
-**   extractColNameFromDef()  - parse column name from ADD COLUMN def
-**   doltliteBindField()        - bind a field from a SQLite record blob
-**   migrateDiffCb()          - diff callback for schema data migration
-**   migrateSchemaRowData()   - top-level migration driver
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "sqliteInt.h"
@@ -71,15 +63,11 @@ static char *dlExtractIdentLower(const char *z, int n){
   return zName;
 }
 
-/*
-** Extract the column name from an ADD COLUMN definition string like "y INTEGER".
-** Returns a malloc'd, lowercased copy of the name. Caller must sqlite3_free.
-*/
 char *extractColNameFromDef(const char *zDef){
   const char *s = zDef;
   int len;
 
-  /* Skip leading whitespace */
+
   while( *s && isspace((unsigned char)*s) ) s++;
   if( !*s ) return 0;
 
@@ -87,18 +75,6 @@ char *extractColNameFromDef(const char *zDef){
   return dlExtractIdentLower(s, len);
 }
 
-/*
-** Bind a field from a SQLite record-format blob to a prepared statement
-** parameter. The field is identified by its serial type and offset within
-** the record data.
-*/
-/* bindRecordField removed — use doltliteBindField() from doltlite_record.c */
-
-/*
-** Diff callback for schema data migration. Called for each row that
-** changed between ancestor and theirs (ADD or MODIFY). Extracts the
-** added column values from theirs' record and UPDATEs the merged table.
-*/
 int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
   struct MigrateDiffCtx *ctx = (struct MigrateDiffCtx*)pArg;
   const u8 *pVal;
@@ -113,7 +89,7 @@ int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
   nVal = pChange->nNewVal;
   if( !pVal || nVal<=0 ) return SQLITE_OK;
 
-  /* Parse record header */
+
   {
     const u8 *hp = pVal;
     const u8 *hpEnd = pVal + nVal;
@@ -161,14 +137,14 @@ int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
   return SQLITE_OK;
 }
 
-/*
-** Migrate row data for added columns after a schema merge.
-**
-** After ALTER TABLE ADD COLUMN has been applied for theirs' columns, the
-** merged table has the right schema but all NULLs for the new columns.
-** This function diffs ancestor vs theirs and UPDATEs only changed rows
-** to fill in the actual values for the added columns.
-*/
+/* After schema merge decides to ADD COLUMN X from theirs, every
+** row that exists on theirs needs X backfilled onto ours. Parse
+** their CREATE TABLE to find each new column's ordinal, then diff
+** their table against anc and UPDATE each row on ours with the
+** value of the new column. Rows that only exist on theirs (diff
+** ADD) also need the update. Rows DELETEd on theirs are skipped
+** (trySchemaColumnMerge has already rejected drop-on-one-side
+** edit-on-other, so we shouldn't see that case here). */
 int migrateSchemaRowData(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -190,13 +166,13 @@ int migrateSchemaRowData(
 
   if( !cs || !pCache || nActions<=0 ) return SQLITE_OK;
 
-  /* Load ancestor and theirs' catalogs to find table root hashes */
+
   rc = doltliteLoadCatalog(db, pAncCatHash, &aAncTables, &nAncTables, 0);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCatalog(db, pTheirCatHash, &aTheirTables, &nTheirTables, 0);
   if( rc!=SQLITE_OK ){ sqlite3_free(aAncTables); return rc; }
 
-  /* Load theirs' schema entries to find column ordinal positions */
+
   rc = loadSchemaFromCatalog(db, cs, pCache, pTheirCatHash,
                               &aTheirSchema, &nTheirSchema);
   if( rc!=SQLITE_OK ){
@@ -208,32 +184,30 @@ int migrateSchemaRowData(
     SchemaMergeAction *pAct = &aActions[si];
     struct TableEntry *theirTE;
     SchemaEntry *theirSE;
-    char **azColNames = 0;   /* Column names extracted from ADD defs */
-    int *aiColIdx = 0;       /* Column ordinal in theirs' schema */
+    char **azColNames = 0;
+    int *aiColIdx = 0;
     int nCols = 0;
     int sj;
 
     if( pAct->nAddColumns<=0 ) continue;
 
-    /* Find theirs' table entry */
+
     theirTE = doltliteFindTableByName(aTheirTables, nTheirTables,
                                        pAct->zTableName);
     if( !theirTE ) continue;
 
-    /* Find theirs' schema SQL to determine column order */
+
     theirSE = findSchemaEntry(aTheirSchema, nTheirSchema, pAct->zTableName);
     if( !theirSE || !theirSE->zSql ) continue;
 
-    /* Parse theirs' schema to get column positions */
+
     {
       DoltliteColInfo theirCols;
       memset(&theirCols, 0, sizeof(theirCols));
 
-      /* We need to parse theirs' CREATE TABLE to find column ordinals.
-      ** Use PRAGMA-style parsing via a temporary approach: parse the SQL
-      ** to count columns and find positions. */
 
-      /* First, extract column names from the ADD COLUMN definitions */
+
+
       azColNames = sqlite3_malloc(pAct->nAddColumns * (int)sizeof(char*));
       aiColIdx = sqlite3_malloc(pAct->nAddColumns * (int)sizeof(int));
       if( !azColNames || !aiColIdx ){
@@ -255,10 +229,7 @@ int migrateSchemaRowData(
       }
       if( rc!=SQLITE_OK ) break;
 
-      /* Now parse theirs' CREATE TABLE SQL to find each column's ordinal.
-      ** Column ordinal in the record = position in CREATE TABLE column list.
-      ** For INTEGER PRIMARY KEY tables, the PK column is NOT stored in the
-      ** record (it's the rowid/intKey), so the ordinal needs adjustment. */
+
       {
         const char *zSql = theirSE->zSql;
         const char *p = zSql;
@@ -266,7 +237,7 @@ int migrateSchemaRowData(
         int depth = 0;
         const char *segStart;
 
-        /* Find '(' */
+
         while( *p && *p!='(' ) p++;
         if( !*p ){ rc = SQLITE_CORRUPT; goto next_action; }
         p++;
@@ -282,11 +253,11 @@ int migrateSchemaRowData(
             pSqlEnd++;
           }
           if( d2!=0 ){ rc = SQLITE_CORRUPT; goto next_action; }
-          pSqlEnd--; /* back to ')' */
+          pSqlEnd--;
 
           while( p <= pSqlEnd ){
             if( p==pSqlEnd || (*p==',' && depth==0) ){
-              /* Extract column name from this segment */
+
               const char *s = segStart;
               const char *e = p;
               int isConstraint = 0;
@@ -296,7 +267,7 @@ int migrateSchemaRowData(
 
               if( e > s ){
                 int segLen = (int)(e - s);
-                /* Check if it's a constraint, not a column */
+
                 if( segLen>=11 && sqlite3_strnicmp(s, "PRIMARY KEY", 11)==0
                     && (segLen==11 || !isalnum((unsigned char)s[11])) ){
                   isConstraint = 1;
@@ -315,7 +286,7 @@ int migrateSchemaRowData(
                 }
 
                 if( !isConstraint ){
-                  /* Extract the column name */
+
                   char *zColName;
                   const char *ns = s;
                   int nl = dlIdentTokenLen(ns, (int)(e - ns));
@@ -325,7 +296,7 @@ int migrateSchemaRowData(
                     rc = SQLITE_NOMEM;
                     goto next_action;
                   }
-                  /* Check if this column matches any of our added columns */
+
                   for(sj=0; sj<pAct->nAddColumns; sj++){
                     if( azColNames[sj]
                      && strcmp(azColNames[sj], zColName)==0 ){
@@ -352,7 +323,7 @@ int migrateSchemaRowData(
 
       nCols = pAct->nAddColumns;
 
-      /* Check that we found at least one column to migrate */
+
       {
         int hasAny = 0;
         for(sj=0; sj<nCols; sj++){
@@ -361,8 +332,7 @@ int migrateSchemaRowData(
         if( !hasAny ) goto next_action;
       }
 
-      /* Build the UPDATE statement:
-      ** UPDATE "<table>" SET col1=?1, col2=?2, ... WHERE rowid=?N */
+
       {
         char *zUpdate;
         char *zSet = 0;
@@ -396,7 +366,7 @@ int migrateSchemaRowData(
         sqlite3_free(zUpdate);
         if( rc!=SQLITE_OK ) goto next_action;
 
-        /* Diff ancestor vs theirs -- only UPDATE rows that changed */
+
         {
           struct TableEntry *ancTE;
           ProllyHash ancRoot;
@@ -424,7 +394,7 @@ int migrateSchemaRowData(
     }
 
 next_action:
-    /* Free column name array */
+
     if( azColNames ){
       for(sj=0; sj<pAct->nAddColumns; sj++) sqlite3_free(azColNames[sj]);
       sqlite3_free(azColNames);
@@ -440,4 +410,4 @@ next_action:
   return rc;
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif

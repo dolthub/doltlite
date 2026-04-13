@@ -62,7 +62,7 @@ int prollyHashSetAdd(ProllyHashSet *hs, const ProllyHash *h){
       return SQLITE_OK;
     }
     if( memcmp(hs->aSlots[slot].data, h->data, PROLLY_HASH_SIZE)==0 ){
-      return SQLITE_OK; 
+      return SQLITE_OK;
     }
   }
   return SQLITE_FULL;
@@ -98,4 +98,4 @@ static int prollyHashSetGrow(ProllyHashSet *hs){
   return SQLITE_OK;
 }
 
-#endif 
+#endif

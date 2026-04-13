@@ -1,3 +1,7 @@
+/* Test-only HTTP server side of the remote protocol. Not hardened
+** for production: single-threaded per-connection handling, no TLS,
+** no auth, no limits beyond MAX_HEADER_SIZE. Used by the fetch/push
+** tests and for local integration work against doltlite_http_remote. */
 
 #ifdef DOLTLITE_PROLLY
 
@@ -17,7 +21,7 @@ DoltliteServer *doltliteServerCreate(const char *z, int p, char **e){
 }
 void doltliteServerDestroy(DoltliteServer *s){ (void)s; }
 int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
-#else 
+#else
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -26,11 +30,11 @@ int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #include <errno.h>
 
 struct DoltliteServer {
-  int listenFd;          
-  int port;              
-  volatile int running;  
-  char *zDir;            
-  pthread_t thread;      
+  int listenFd;
+  int port;
+  volatile int running;
+  char *zDir;
+  pthread_t thread;
 };
 
 static int hexVal(char c){
@@ -114,9 +118,9 @@ static int readExact(int fd, u8 *pBuf, int nBytes){
 
 static int parseRequest(
   int fd,
-  char *zMethod, int nMethodMax,    
-  char *zPath, int nPathMax,        
-  u8 **ppBody, int *pnBody          
+  char *zMethod, int nMethodMax,
+  char *zPath, int nPathMax,
+  u8 **ppBody, int *pnBody
 ){
   char aBuf[MAX_HEADER_SIZE];
   int nBuf = 0;
@@ -127,7 +131,7 @@ static int parseRequest(
   *ppBody = 0;
   *pnBody = 0;
 
-  
+
   while( nBuf < MAX_HEADER_SIZE-1 ){
     int n = (int)read(fd, &aBuf[nBuf], 1);
     if( n <= 0 ) return -1;
@@ -142,7 +146,7 @@ static int parseRequest(
   if( !headerEnd ) return -1;
   aBuf[nBuf] = '\0';
 
-  
+
   p = aBuf;
   {
     char *pSpace = strchr(p, ' ');
@@ -165,13 +169,13 @@ static int parseRequest(
     p = pSpace + 1;
   }
 
-  
+
   {
     const char *zCL = "Content-Length:";
     int nCL = (int)strlen(zCL);
     char *pLine = strstr(aBuf, zCL);
     if( !pLine ){
-      
+
       zCL = "content-length:";
       pLine = strstr(aBuf, zCL);
     }
@@ -182,7 +186,7 @@ static int parseRequest(
     }
   }
 
-  
+
   if( contentLength > 0 ){
     u8 *pBody = (u8*)sqlite3_malloc(contentLength);
     if( !pBody ) return -1;
@@ -209,9 +213,9 @@ static int parsePath(
   int dbLen, epLen;
 
   if( *p != '/' ) return -1;
-  p++; 
+  p++;
 
-  
+
   dbStart = p;
   while( *p && *p != '/' ) p++;
   dbLen = (int)(p - dbStart);
@@ -220,9 +224,9 @@ static int parsePath(
   zDbName[dbLen] = '\0';
 
   if( *p != '/' ) return -1;
-  p++; 
+  p++;
 
-  
+
   epStart = p;
   epLen = (int)strlen(epStart);
   if( epLen <= 0 || epLen >= nEndpointMax ) return -1;
@@ -333,10 +337,10 @@ static void handlePostChunks(ChunkStore *pStore, int fd,
     u32 len;
     ProllyHash hash;
 
-    
+
     offset += PROLLY_HASH_SIZE;
 
-    
+
     len = (u32)pBody[offset]
         | ((u32)pBody[offset+1] << 8)
         | ((u32)pBody[offset+2] << 16)
@@ -356,7 +360,7 @@ static void handlePostChunks(ChunkStore *pStore, int fd,
     offset += (int)len;
   }
 
-  
+
   rc = chunkStoreCommit(pStore);
   if( rc!=SQLITE_OK ){
     sendError(fd);
@@ -414,7 +418,7 @@ static void handlePutRefs(ChunkStore *pStore, int fd,
     return;
   }
 
-  
+
   rc = chunkStoreCommit(pStore);
   if( rc!=SQLITE_OK ){
     sendError(fd);
@@ -439,7 +443,7 @@ static void handleCommit(ChunkStore *pStore, int fd){
     return;
   }
 
-  
+
   {
     const char *zDef = chunkStoreGetDefaultBranch(pStore);
     ProllyHash branchCommit;
@@ -503,7 +507,7 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
     return;
   }
 
-  
+
   if( parsePath(zPath, zDbName, sizeof(zDbName),
                 zEndpoint, sizeof(zEndpoint))!=0 ){
     sendNotFound(fd);
@@ -516,7 +520,7 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
     return;
   }
 
-  
+
   sqlite3_snprintf(sizeof(zDbPath), zDbPath, "%s/%s", pSrv->zDir, zDbName);
   flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
   memset(&store, 0, sizeof(store));
@@ -527,7 +531,7 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
     return;
   }
 
-  
+
   if( strcmp(zMethod, "GET")==0 ){
     if( strcmp(zEndpoint, "root")==0 ){
       handleGetRoot(&store, fd);
@@ -571,13 +575,13 @@ static int serverInit(DoltliteServer *pSrv, const char *zDir, int port){
   memset(pSrv, 0, sizeof(*pSrv));
   pSrv->listenFd = -1;
 
-  
+
   nDir = (int)strlen(zDir);
   pSrv->zDir = sqlite3_malloc(nDir + 1);
   if( !pSrv->zDir ) return SQLITE_NOMEM;
   memcpy(pSrv->zDir, zDir, nDir + 1);
 
-  
+
   pSrv->listenFd = socket(AF_INET, SOCK_STREAM, 0);
   if( pSrv->listenFd < 0 ){
     sqlite3_free(pSrv->zDir);
@@ -603,7 +607,7 @@ static int serverInit(DoltliteServer *pSrv, const char *zDir, int port){
     return SQLITE_ERROR;
   }
 
-  
+
   addrLen = sizeof(addr);
   if( getsockname(pSrv->listenFd, (struct sockaddr*)&addr, &addrLen)==0 ){
     pSrv->port = ntohs(addr.sin_port);
@@ -624,7 +628,7 @@ static void serverLoop(DoltliteServer *pSrv){
     pfd.events = POLLIN;
     pfd.revents = 0;
 
-    
+
     if( poll(&pfd, 1, 1000) <= 0 ) continue;
 
     clientFd = accept(pSrv->listenFd, NULL, NULL);
@@ -688,7 +692,7 @@ DoltliteServer *doltliteServeAsync(const char *zDir, int port){
 void doltliteServerStop(DoltliteServer *pServer){
   if( !pServer ) return;
   pServer->running = 0;
-  
+
   if( pServer->listenFd >= 0 ){
     close(pServer->listenFd);
     pServer->listenFd = -1;
@@ -701,5 +705,5 @@ int doltliteServerPort(DoltliteServer *pServer){
   return pServer ? pServer->port : 0;
 }
 
-#endif 
-#endif 
+#endif
+#endif

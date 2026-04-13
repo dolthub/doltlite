@@ -4,7 +4,7 @@
 #include "prolly_diff.h"
 #include "prolly_record.h"
 
-#include <string.h>  
+#include <string.h>
 
 static int diffBlobKeyCmp(
   const u8 *pA, int nA,
@@ -161,8 +161,6 @@ static int diffSerialTypeSize(u64 st){
   return 0;
 }
 
-/* Compare two SQLite record-format values field-by-field. Returns
-** SQLITE_OK and sets *pEqual, or SQLITE_CORRUPT for malformed records. */
 static int diffRecordsEqualFieldwise(
   const u8 *pA, int nA,
   const u8 *pB, int nB,
@@ -201,8 +199,11 @@ static int diffRecordsEqualFieldwise(
   return SQLITE_OK;
 }
 
-/* Compare two record values: fast memcmp path, then field-wise fallback
-** for records with different varint encodings of the same logical data. */
+/* Fast memcmp first, field-wise fallback second. Two records with
+** the same logical data can have different varint encodings for the
+** header, so memcmp-unequal doesn't imply logically-unequal — we
+** have to parse both and compare field-by-field. memcmp-equal DOES
+** imply logically-equal, which is the hot path. */
 int prollyValuesEqual(
   const u8 *pA, int nA,
   const u8 *pB, int nB,
@@ -244,7 +245,6 @@ static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew){
   return equal ? SQLITE_OK : SQLITE_DONE;
 }
 
-/* Merge-walk two positioned cursors, emitting diffs until both are exhausted. */
 static int diffMergeWalk(
   ProllyCursor *pCurOld, ProllyCursor *pCurNew,
   u8 flags, ProllyDiffCallback xCb, void *pCtx
@@ -443,15 +443,6 @@ static int diffLeaves(
   return rc;
 }
 
-/* Recursive node-level diff. Identical child hashes are skipped (structural
-** sharing). When internal keys align, recurse into changed subtrees. When
-** keys diverge (tree shape changed), fall back to a full cursor walk from
-** pOldRoot/pNewRoot -- this handles inserts/deletes that shifted boundaries. */
-/*
-** Process one level of the diff between two internal nodes. For child
-** pairs with matching key boundaries but different hashes, push them
-** onto the work stack for iterative descent instead of recursing.
-*/
 static int diffNodesOneLevel(
   ChunkStore *pStore, ProllyCache *pCache,
   const ProllyHash *pOldHash, const ProllyHash *pNewHash,
@@ -504,7 +495,7 @@ static int diffNodesOneLevel(
       cmp = diffNodeKeyCmp(&oldNode, i, &newNode, j, flags);
 
       if( cmp==0 ){
-        /* Push child pair onto work stack for iterative processing */
+
         if( *pnStack + 2 > *pnStackAlloc ){
           int nNew = *pnStackAlloc ? *pnStackAlloc * 2 : 32;
           ProllyHash *pNew = sqlite3_realloc(*ppStack,
@@ -517,7 +508,7 @@ static int diffNodesOneLevel(
         (*ppStack)[(*pnStack)++] = newChild;
         i++; j++;
       }else{
-        
+
         {
           ProllyCursor *pCO = sqlite3_malloc(sizeof(ProllyCursor));
           ProllyCursor *pCN = sqlite3_malloc(sizeof(ProllyCursor));
@@ -528,7 +519,7 @@ static int diffNodesOneLevel(
             prollyCursorInit(pCO, pStore, pCache, pOldRoot, flags);
             prollyCursorInit(pCN, pStore, pCache, pNewRoot, flags);
 
-            
+
             if( i > 0 && (flags & PROLLY_NODE_INTKEY) ){
               i64 seekKey = prollyNodeIntKey(&oldNode, i-1);
               int res;
@@ -567,14 +558,14 @@ static int diffNodesOneLevel(
       }
     }
 
-    
+
     while( i < (int)oldNode.nItems && rc==SQLITE_OK ){
       ProllyHash ch;
       prollyNodeChildHash(&oldNode, i, &ch);
       rc = diffEmitSubtree(pStore, pCache, &ch, flags, PROLLY_DIFF_DELETE, xCb, pCtx);
       i++;
     }
-    
+
     while( j < (int)newNode.nItems && rc==SQLITE_OK ){
       ProllyHash ch;
       prollyNodeChildHash(&newNode, j, &ch);
@@ -583,7 +574,7 @@ static int diffNodesOneLevel(
     }
 
   }else{
-    
+
     rc = diffCursorWalk(pStore, pCache, pOldRoot, pNewRoot, flags, xCb, pCtx);
   }
 
@@ -605,15 +596,14 @@ int prollyDiff(
   int nStack = 0, nStackAlloc = 0;
   int rc = SQLITE_OK;
 
-  /* Seed the work stack with the root pair */
+
   aStack = sqlite3_malloc(32 * (int)sizeof(ProllyHash));
   if( !aStack ) return SQLITE_NOMEM;
   nStackAlloc = 32;
   aStack[nStack++] = *pOldRoot;
   aStack[nStack++] = *pNewRoot;
 
-  /* Iterative descent: process each (old, new) hash pair. Each level
-  ** may push child pairs back onto the stack instead of recursing. */
+
   while( nStack >= 2 && rc==SQLITE_OK ){
     ProllyHash newH = aStack[--nStack];
     ProllyHash oldH = aStack[--nStack];
@@ -624,12 +614,6 @@ int prollyDiff(
   sqlite3_free(aStack);
   return rc;
 }
-
-/*
-** Streaming diff iterator implementation.
-** Uses the same cursor merge-walk as diffCursorWalk / diffMergeWalk,
-** but yields one change at a time instead of calling a callback.
-*/
 
 static void diffIterFreeCopies(ProllyDiffIter *pIter){
   sqlite3_free(pIter->pKeyCopy);
@@ -683,7 +667,7 @@ int prollyDiffIterOpen(
     return rc;
   }
 
-  /* If both cursors are empty, we are done immediately. */
+
   if( !prollyCursorIsValid(pIter->pCurOld) &&
       !prollyCursorIsValid(pIter->pCurNew) ){
     pIter->eof = 1;
@@ -692,12 +676,6 @@ int prollyDiffIterOpen(
   return SQLITE_OK;
 }
 
-/*
-** Advance the iterator to produce the next diff change.
-** On success, *ppChange points to the change (valid until the next
-** Step or Close call). Returns SQLITE_ROW when a change is available,
-** SQLITE_DONE when no more changes, or an error code.
-*/
 int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
   ProllyCursor *pOld;
   ProllyCursor *pNew;
@@ -709,14 +687,14 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
   if( pIter->eof ) return SQLITE_DONE;
   if( pIter->rc!=SQLITE_OK ) return pIter->rc;
 
-  /* Free previous value copies */
+
   diffIterFreeCopies(pIter);
 
   pOld = pIter->pCurOld;
   pNew = pIter->pCurNew;
   pCh = &pIter->current;
 
-  /* Loop to skip equal entries without recursion */
+
   for(;;){
     validOld = prollyCursorIsValid(pOld);
     validNew = prollyCursorIsValid(pNew);
@@ -733,7 +711,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
       diffCompareKeys(pOld, pNew, pIter->flags, &cmp);
 
       if( cmp < 0 ){
-        /* Key only in old tree: DELETE */
+
         const u8 *pVal; int nVal;
         pCh->type = PROLLY_DIFF_DELETE;
         pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->flags);
@@ -748,9 +726,9 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
         pCh->pOldVal = pIter->pOldValCopy;
         pCh->nOldVal = pIter->nOldValCopy;
         pIter->rc = prollyCursorNext(pOld);
-        break; /* Found a change */
+        break;
       }else if( cmp > 0 ){
-        /* Key only in new tree: ADD */
+
         const u8 *pVal; int nVal;
         pCh->type = PROLLY_DIFF_ADD;
         pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
@@ -765,16 +743,16 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
         pCh->pNewVal = pIter->pNewValCopy;
         pCh->nNewVal = pIter->nNewValCopy;
         pIter->rc = prollyCursorNext(pNew);
-        break; /* Found a change */
+        break;
       }else{
-        /* Same key in both trees: check if values differ */
+
         pIter->rc = diffValuesEqual(pOld, pNew);
         if( pIter->rc==SQLITE_OK ){
-          /* Values equal — advance both cursors and loop */
+
           pIter->rc = prollyCursorNext(pOld);
           if( pIter->rc==SQLITE_OK ) pIter->rc = prollyCursorNext(pNew);
           if( pIter->rc!=SQLITE_OK ) return pIter->rc;
-          continue; /* Skip to next pair */
+          continue;
         }else if( pIter->rc==SQLITE_DONE ){
           const u8 *pOV; int nOV;
           const u8 *pNV; int nNV;
@@ -802,13 +780,13 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
           pCh->nNewVal = pIter->nNewValCopy;
           pIter->rc = prollyCursorNext(pOld);
           if( pIter->rc==SQLITE_OK ) pIter->rc = prollyCursorNext(pNew);
-          break; /* Found a change */
+          break;
         }else{
           return pIter->rc;
         }
       }
     }else if( validOld ){
-      /* Only old cursor valid: DELETE */
+
       const u8 *pVal; int nVal;
       pCh->type = PROLLY_DIFF_DELETE;
       pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->flags);
@@ -823,9 +801,9 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
       pCh->pOldVal = pIter->pOldValCopy;
       pCh->nOldVal = pIter->nOldValCopy;
       pIter->rc = prollyCursorNext(pOld);
-      break; /* Found a change */
+      break;
     }else{
-      /* Only new cursor valid: ADD */
+
       const u8 *pVal; int nVal;
       pCh->type = PROLLY_DIFF_ADD;
       pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
@@ -840,7 +818,7 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
       pCh->pNewVal = pIter->pNewValCopy;
       pCh->nNewVal = pIter->nNewValCopy;
       pIter->rc = prollyCursorNext(pNew);
-      break; /* Found a change */
+      break;
     }
   }
 

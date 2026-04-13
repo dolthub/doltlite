@@ -11,8 +11,6 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* SchemaEntry struct is declared in doltlite_internal.h */
-
 typedef struct SchemaDiffRow SchemaDiffRow;
 struct SchemaDiffRow {
   char *zFromName;
@@ -136,8 +134,10 @@ static int appendSchemaDiffRow(
   return SQLITE_OK;
 }
 
-
-
+/* Schema records live in the sqlite_master (iTable==1) prolly tree,
+** same layout as stock SQLite: [type, name, tbl_name, rootpage, sql].
+** We pull fields 0 (type), 1 (name), 4 (sql). Callers use this to
+** reproduce a CREATE TABLE for introspection and for schema-merge. */
 int loadSchemaFromCatalog(
   sqlite3 *db,
   ChunkStore *cs,
@@ -157,7 +157,7 @@ int loadSchemaFromCatalog(
   rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ){ *ppEntries = 0; *pnEntries = 0; return rc; }
 
-  
+
   memset(&masterRoot, 0, sizeof(masterRoot));
   for(i=0; i<nTables; i++){
     if( aTables[i].iTable==1 ){
@@ -173,7 +173,7 @@ int loadSchemaFromCatalog(
     return SQLITE_OK;
   }
 
-  
+
   prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
   rc = prollyCursorFirst(&cur, &res);
   if( rc!=SQLITE_OK || res ){ prollyCursorClose(&cur); *ppEntries = 0; *pnEntries = 0; return rc; }
@@ -280,16 +280,7 @@ static int computeSchemaDiff(
     memset(toConsumed, 0, nTo);
   }
 
-  /* Rename detection: ALTER TABLE RENAME TO preserves the table's rootpage
-  ** (iTable) AND its tree root (data content), while changing zName and
-  ** the CREATE-TABLE DDL. Matching a (dropped, added) pair on both
-  ** iTable and root rejects drop+create sequences that happen to reuse
-  ** an iTable via SQLite's rootpage freelist. The collapsed row emits
-  ** from_table_name != to_table_name, matching Dolt's dolt_schema_diff.
-  **
-  ** Views and triggers have iTable==0 and are excluded. Rename + data
-  ** modification in a single commit is not detected here — the root
-  ** hashes differ, so the pair still emits as (dropped, added). */
+
   for(i=0; i<nTo; i++){
     SchemaEntry *fromEntry;
     struct TableEntry *toTE;
@@ -307,9 +298,7 @@ static int computeSchemaDiff(
       if( aFromTables[j].iTable != toTE->iTable ) continue;
       if( !aFromTables[j].zName ) continue;
       if( prollyHashCompare(&aFromTables[j].root, &toTE->root)!=0 ) break;
-      /* The from-side table with this iTable must not still exist under
-      ** its old name in the to-side catalog — otherwise it's a modify or
-      ** a no-op, not a rename. */
+
       if( doltliteFindTableByName(aToTables, nToTables, aFromTables[j].zName) ) break;
 
       dropped = findSchemaEntry(aFrom, nFrom, aFromTables[j].zName);
@@ -327,33 +316,33 @@ static int computeSchemaDiff(
     }
   }
 
-  /* Added or modified: walk the to-side and look for matches in from. */
+
   for(i=0; i<nTo; i++){
     SchemaEntry *fromEntry;
     if( toConsumed && toConsumed[i] ) continue;
     fromEntry = findSchemaEntry(aFrom, nFrom, aTo[i].zName);
 
     if( !fromEntry ){
-      /* Added: from_table_name and from_create_statement are empty. */
+
       rc = appendSchemaDiffRow(pCur, "", aTo[i].zName,
                                "", aTo[i].zSql);
       if( rc!=SQLITE_OK ) goto done;
     }else if( fromEntry->zSql && aTo[i].zSql
            && strcmp(fromEntry->zSql, aTo[i].zSql)!=0 ){
-      /* Modified: both names equal, both SQL strings present. */
+
       rc = appendSchemaDiffRow(pCur, aTo[i].zName, aTo[i].zName,
                                fromEntry->zSql, aTo[i].zSql);
       if( rc!=SQLITE_OK ) goto done;
     }
   }
 
-  /* Dropped: walk the from-side and emit anything missing on the to-side. */
+
   for(i=0; i<nFrom; i++){
     SchemaEntry *toEntry;
     if( fromConsumed && fromConsumed[i] ) continue;
     toEntry = findSchemaEntry(aTo, nTo, aFrom[i].zName);
     if( !toEntry ){
-      /* Dropped: to_table_name and to_create_statement are empty. */
+
       rc = appendSchemaDiffRow(pCur, aFrom[i].zName, "",
                                aFrom[i].zSql, "");
       if( rc!=SQLITE_OK ) goto done;
@@ -374,7 +363,7 @@ static const char *sdSchema =
   "  to_create_statement TEXT,"
   "  from_ref TEXT HIDDEN,"
   "  to_ref TEXT HIDDEN,"
-  "  table_name TEXT HIDDEN"      /* 3rd positional arg: filter to a single table */
+  "  table_name TEXT HIDDEN"
   ")";
 
 static int sdConnect(sqlite3 *db, void *pAux, int argc,
@@ -597,8 +586,7 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
   rc = loadSchemaFromCatalog(db, cs, pCache, &toCatHash, &aTo, &nTo);
   if( rc!=SQLITE_OK ) goto sd_filter_done;
 
-  /* Also load the TableEntry lists so computeSchemaDiff can detect
-  ** renames by matching dropped+added entries on iTable. */
+
   rc = doltliteLoadCatalog(db, &fromCatHash, &aFromTables, &nFromTables, 0);
   if( rc!=SQLITE_OK ) goto sd_filter_done;
   rc = doltliteLoadCatalog(db, &toCatHash, &aToTables, &nToTables, 0);
@@ -649,9 +637,7 @@ static int sdEof(sqlite3_vtab_cursor *cur){ return ((SdCursor*)cur)->iRow >= ((S
 static int sdColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   SdCursor *c = (SdCursor*)cur;
   SchemaDiffRow *r = &c->aRows[c->iRow];
-  /* All four visible columns are emitted as text, never NULL — empty
-  ** string when the row's side of the from/to pair is missing. This
-  ** matches Dolt's dolt_schema_diff column shape. */
+
   switch( col ){
     case 0: sqlite3_result_text(ctx, r->zFromName, -1, SQLITE_TRANSIENT); break;
     case 1: sqlite3_result_text(ctx, r->zToName,   -1, SQLITE_TRANSIENT); break;
@@ -676,4 +662,4 @@ int doltliteSchemaDiffRegister(sqlite3 *db){
   return sqlite3_create_module(db, "dolt_schema_diff", &schemaDiffModule, 0);
 }
 
-#endif 
+#endif

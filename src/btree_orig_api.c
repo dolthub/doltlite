@@ -1,10 +1,4 @@
-/*
-** Bridge between the opaque void* API (btree_orig_api.h) and the
-** renamed original SQLite btree functions (orig_sqlite3Btree*).
-**
-** This file is compiled WITH the btree_orig_prefix.h renames active,
-** so it can reference the original Btree/BtCursor structs directly.
-*/
+
 #ifdef DOLTLITE_PROLLY
 
 #include "btree_orig_prefix.h"
@@ -14,7 +8,6 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Cast helpers */
 #define B(p) ((Btree*)(p))
 #define C(p) ((BtCursor*)(p))
 
@@ -103,7 +96,7 @@ int origBtreeCount(sqlite3 *db, void *pCur, i64 *pn){
   return orig_sqlite3BtreeCount(db, C(pCur), pn);
 }
 int origBtreeClosesWithCursor(void *p, void *pCur){
-  /* Only used in assert() — compiled out in NDEBUG builds */
+
   (void)p; (void)pCur;
   return 1;
 }
@@ -127,7 +120,7 @@ int origBtreeMaxRecordSize(void *pCur){
   return orig_sqlite3BtreeMaxRecordSize(C(pCur));
 }
 void origBtreeCursorHint(void *pCur, unsigned int mask, ...){
-  /* Hints are advisory — safe to ignore for dispatch simplicity */
+
   (void)pCur; (void)mask;
 }
 
@@ -136,10 +129,10 @@ void origBtreeEnter(void *p){ orig_sqlite3BtreeEnter(B(p)); }
 void origBtreeLeave(void *p){ orig_sqlite3BtreeLeave(B(p)); }
 void *origBtreePager(void *p){ return orig_sqlite3BtreePager(B(p)); }
 
-/*
-** Detect if a file is a standard SQLite database by reading the header.
-** Returns 1 if the file starts with "SQLite format 3\0", 0 otherwise.
-*/
+/* Magic-byte sniff used to decide whether an ATTACH target is a
+** plain-SQLite file (route through origBtree*) or a doltlite chunk
+** store (route through the shimmed btree). Checked before the file
+** is opened, so it has to read the raw header itself. */
 int origBtreeIsSqliteFile(const char *zFilename){
   FILE *f;
   char buf[16];
@@ -147,10 +140,10 @@ int origBtreeIsSqliteFile(const char *zFilename){
     return 0;
   }
   f = fopen(zFilename, "rb");
-  if( !f ) return 0;  /* File doesn't exist yet — will be doltlite */
+  if( !f ) return 0;
   if( fread(buf, 1, 16, f) < 16 ){
     fclose(f);
-    return 0;  /* Too small — empty file, will be doltlite */
+    return 0;
   }
   fclose(f);
   return memcmp(buf, "SQLite format 3\000", 16)==0;
@@ -164,4 +157,4 @@ int origBtreeIntegrityCheck(
                                          nRoot, mxErr, pnErr, pzOut);
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif

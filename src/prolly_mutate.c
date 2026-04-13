@@ -4,9 +4,8 @@
 #include "prolly_mutate.h"
 #include <string.h>
 
-/* Encode signed i64 as big-endian sort key. XOR sign bit so memcmp gives
-** correct signed ordering. BIG-ENDIAN despite the rest of the system being
-** little-endian -- sort keys must compare correctly under byte-wise memcmp. */
+/* Big-endian with sign bit flipped: memcmp on the encoded bytes
+** then gives correct signed ordering. */
 static void encodeI64BE(u8 *buf, i64 v){
   u64 u = (u64)v ^ ((u64)1 << 63);
   buf[0] = (u8)(u >> 56);
@@ -47,7 +46,7 @@ static int feedChunker(
   const u8 *pVal, int nVal
 ){
   if( flags & PROLLY_NODE_INTKEY ){
-    
+
     u8 aKeyBuf[8];
     encodeI64BE(aKeyBuf, intKey);
     return prollyChunkerAdd(pCh, aKeyBuf, 8, pVal, nVal);
@@ -103,7 +102,7 @@ static int subtreeHasEdits(
   pEd = prollyMutMapIterEntry(pIter);
   cmp = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
                     pBoundKey, nBoundKey, iBoundKey);
-  return (cmp <= 0);  
+  return (cmp <= 0);
 }
 
 static int chunkerLevelsBelowEmpty(
@@ -147,7 +146,7 @@ static int mergeLeaf(
     }
 
     if( !haveEdit ){
-      
+
       const u8 *pVal; int nVal;
       prollyNodeValue(pLeaf, j, &pVal, &nVal);
       rc = prollyChunkerAdd(pCh, pCurKey, nCurKey, pVal, nVal);
@@ -156,7 +155,7 @@ static int mergeLeaf(
       continue;
     }
 
-    
+
     {
       const u8 *pLastKey; int nLastKey;
       i64 iLastKey = 0;
@@ -172,7 +171,7 @@ static int mergeLeaf(
       pastLeaf = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
                                  pLastKey, nLastKey, iLastKey);
       if( pastLeaf > 0 ){
-        
+
         const u8 *pVal; int nVal;
         prollyNodeValue(pLeaf, j, &pVal, &nVal);
         rc = prollyChunkerAdd(pCh, pCurKey, nCurKey, pVal, nVal);
@@ -182,18 +181,17 @@ static int mergeLeaf(
       }
     }
 
-
     cmp = compareKeys(flags, pCurKey, nCurKey, iCurKey,
                           pEd->pKey, pEd->nKey, pEd->intKey);
     if( cmp < 0 ){
-      
+
       const u8 *pVal; int nVal;
       prollyNodeValue(pLeaf, j, &pVal, &nVal);
       rc = prollyChunkerAdd(pCh, pCurKey, nCurKey, pVal, nVal);
       if( rc!=SQLITE_OK ) return rc;
       j++;
     }else if( cmp == 0 ){
-      
+
       if( pEd->op==PROLLY_EDIT_INSERT ){
         u8 aEditKey[8];
         const u8 *pEK; int nEK;
@@ -209,7 +207,7 @@ static int mergeLeaf(
       j++;
       prollyMutMapIterNext(pIter);
     }else{
-      
+
       if( pEd->op==PROLLY_EDIT_INSERT ){
         u8 aEditKey[8];
         const u8 *pEK; int nEK;
@@ -228,8 +226,6 @@ static int mergeLeaf(
   return SQLITE_OK;
 }
 
-/* Recursively process one internal node's children: skip unmodified subtrees,
-** descend into modified ones. Works at any tree level. */
 static int streamingMergeNode(
   ProllyMutator *pMut,
   const ProllyNode *pNode,
@@ -291,10 +287,6 @@ static int streamingMergeNode(
   return SQLITE_OK;
 }
 
-/* Streaming merge: skip unmodified subtrees by re-linking their hash at the
-** parent level (prollyChunkerAddAtLevel). Only descend into children whose
-** key range overlaps pending edits. O(M*L) when M << N. Falls through to
-** mergeWalk for height-0 (single-leaf) trees. */
 static int streamingMerge(
   ProllyMutator *pMut
 ){
@@ -306,7 +298,7 @@ static int streamingMerge(
   ProllyNode rootNode;
   ProllyCache *pCache = pMut->pCache;
 
-  
+
   rc = chunkStoreGet(pMut->pStore, &pMut->oldRoot, &pRootData, &nRootData);
   if( rc!=SQLITE_OK ) return rc;
   rc = prollyNodeParse(&rootNode, pRootData, nRootData);
@@ -315,7 +307,7 @@ static int streamingMerge(
     return rc;
   }
 
-  
+
   if( rootNode.level == 0 ){
     sqlite3_free(pRootData);
     return mergeWalk(pMut);
@@ -330,7 +322,7 @@ static int streamingMerge(
 
   rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter);
 
-  
+
   while( prollyMutMapIterValid(&iter) ){
     ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&iter);
     if( pEd->op==PROLLY_EDIT_INSERT ){
@@ -364,7 +356,7 @@ static int mergeWalk(
   int curValid;
   int iterValid;
 
-  
+
   prollyCursorInit(&cur, pMut->pStore, pMut->pCache,
                    &pMut->oldRoot, pMut->flags);
   rc = prollyCursorFirst(&cur, &curEmpty);
@@ -478,37 +470,28 @@ merge_cleanup:
   return rc;
 }
 
-/* Apply pending edits to produce a new tree root. Chooses between
-** streamingMerge (skips unchanged subtrees, good when M << N) and
-** mergeWalk (full scan, better when M ~ N) based on estimated tree size. */
+/* streamingMerge skips unchanged subtrees by re-splicing them into a
+** new chunker at their original level. Fast for sparse edits, but
+** because the splice happens at the source level it can accumulate
+** extra depth over many sessions. mergeWalk rebuilds the whole tree
+** so depth stays optimal. Heuristic below uses streamingMerge only
+** when edits are a tiny fraction of leaves AND the absolute count is
+** small — batch inserts always fall through to mergeWalk so the
+** common case stays clean. */
 int prollyMutateFlush(ProllyMutator *pMut){
   if( prollyMutMapIsEmpty(pMut->pEdits) ){
     memcpy(&pMut->newRoot, &pMut->oldRoot, sizeof(ProllyHash));
     return SQLITE_OK;
   }
 
-  
   if( prollyHashIsEmpty(&pMut->oldRoot) ){
     return buildFromEdits(pMut);
   }
 
-  
-  /* Choose between full rebuild (mergeWalk) and incremental (streamingMerge).
-  **
-  ** streamingMerge skips unchanged subtrees — fast when editing a tiny
-  ** fraction of a large tree. But it can produce trees with extra levels
-  ** because it splices old subtrees into a new chunker at their original
-  ** level, which compounds over multiple sessions.
-  **
-  ** mergeWalk rebuilds from scratch — always produces optimal depth.
-  ** Use it when edits are a significant fraction of the tree, or when
-  ** the tree is small enough that a full scan is cheap. */
   {
     int M = prollyMutMapCount(pMut->pEdits);
     int leafCount = 0;
 
-    /* Estimate leaf count from root node. Only use streamingMerge when
-    ** edits are a small fraction of actual leaf entries. */
     {
       u8 *pRootData = 0;
       int nRootData = 0;
@@ -520,24 +503,18 @@ int prollyMutateFlush(ProllyMutator *pMut){
           if( rootNode.level==0 ){
             leafCount = rootNode.nItems;
           }else{
-            /* For deeper trees, use nItems at root * fan-out per level.
-            ** Cap estimate to avoid overflow from deep trees. */
             leafCount = rootNode.nItems * PROLLY_EST_ENTRIES_PER_LEAF;
+            /* Cap at two levels of fan-out; overestimating picks
+            ** streamingMerge too aggressively and deepens the tree. */
             if( rootNode.level > 1 && leafCount < 0x7FFFFFFF / PROLLY_EST_ENTRIES_PER_LEAF ){
               leafCount *= PROLLY_EST_ENTRIES_PER_LEAF;
             }
-            /* Don't extrapolate further — two levels of fan-out is enough
-            ** for a reasonable estimate. Over-estimating causes streaming
-            ** merge to be chosen too aggressively, producing deep trees. */
           }
         }
         sqlite3_free(pRootData);
       }
     }
 
-    /* Use mergeWalk (full rebuild) unless edits are < 1% of leaf count
-    ** AND there are fewer than 10000 edits. This ensures batch inserts
-    ** always rebuild cleanly. */
     if( leafCount <= 0 || M > leafCount / 100 || M > 10000 ){
       return mergeWalk(pMut);
     }else{
@@ -560,7 +537,7 @@ int prollyMutateInsert(
   int rc;
   u8 isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
 
-  
+
   rc = prollyMutMapInit(&mm, isIntKey);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -570,7 +547,7 @@ int prollyMutateInsert(
     return rc;
   }
 
-  
+
   memset(&mut, 0, sizeof(mut));
   mut.pStore = pStore;
   mut.pCache = pCache;
@@ -578,7 +555,7 @@ int prollyMutateInsert(
   mut.pEdits = &mm;
   mut.flags = flags;
 
-  
+
   rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){
     memcpy(pNewRoot, &mut.newRoot, sizeof(ProllyHash));
@@ -601,7 +578,7 @@ int prollyMutateDelete(
   int rc;
   u8 isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
 
-  
+
   rc = prollyMutMapInit(&mm, isIntKey);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -611,7 +588,7 @@ int prollyMutateDelete(
     return rc;
   }
 
-  
+
   memset(&mut, 0, sizeof(mut));
   mut.pStore = pStore;
   mut.pCache = pCache;
@@ -619,7 +596,7 @@ int prollyMutateDelete(
   mut.pEdits = &mm;
   mut.flags = flags;
 
-  
+
   rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){
     memcpy(pNewRoot, &mut.newRoot, sizeof(ProllyHash));
@@ -629,4 +606,4 @@ int prollyMutateDelete(
   return rc;
 }
 
-#endif 
+#endif

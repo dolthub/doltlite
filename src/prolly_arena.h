@@ -8,16 +8,16 @@ typedef struct ProllyArena ProllyArena;
 typedef struct ProllyArenaBlock ProllyArenaBlock;
 
 struct ProllyArenaBlock {
-  ProllyArenaBlock *pNext;  
-  int sz;                   
-  int used;                 
-  
+  ProllyArenaBlock *pNext;
+  int sz;
+  int used;
+
 };
 
 struct ProllyArena {
-  ProllyArenaBlock *pFirst;   
-  ProllyArenaBlock *pCurrent; 
-  int defaultBlockSize;       
+  ProllyArenaBlock *pFirst;
+  ProllyArenaBlock *pCurrent;
+  int defaultBlockSize;
 };
 
 void prollyArenaInit(ProllyArena *a, int defaultBlockSize);
@@ -30,4 +30,4 @@ void prollyArenaReset(ProllyArena *a);
 
 void prollyArenaFree(ProllyArena *a);
 
-#endif 
+#endif

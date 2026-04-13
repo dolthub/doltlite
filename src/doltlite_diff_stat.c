@@ -1,22 +1,4 @@
-/* dolt_diff_stat(from, to [, table])
-** dolt_diff_summary(from, to [, table])
-**
-** Two TVFs that mirror Dolt's per-commit-range diff analytics:
-**
-**   dolt_diff_stat — per-table row/cell change counts. Columns:
-**     table_name, rows_unmodified, rows_added, rows_deleted,
-**     rows_modified, cells_added, cells_deleted, cells_modified,
-**     old_row_count, new_row_count, old_cell_count, new_cell_count
-**
-**   dolt_diff_summary — per-table classification. Columns:
-**     from_table_name, to_table_name, diff_type, data_change,
-**     schema_change
-**
-** Both take (from_ref, to_ref[, table]) and filter to a single table
-** if the third argument is given. Ref resolution uses
-** doltliteResolveRef so hex hashes, branch names, and tag names all
-** work. Missing refs return an error. Empty commit range → no rows.
-*/
+
 
 #ifdef DOLTLITE_PROLLY
 
@@ -31,12 +13,6 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* ──────────────────────────────────────────────────────────────── */
-/*  Shared: load column names at a commit catalog via an in-memory   */
-/*  sqlite instance that parses the CREATE TABLE DDL. Same trick as  */
-/*  doltlite_diff_table.c — keeps us honest about column identity    */
-/*  across schema changes.                                           */
-/* ──────────────────────────────────────────────────────────────── */
 static int dsLoadColNames(sqlite3 *db,
                           const ProllyHash *pCatHash,
                           const char *zTableName,
@@ -111,7 +87,6 @@ static void dsFreeColNames(char **az, int n){
   sqlite3_free(az);
 }
 
-/* Count rows in a prolly tree by iterating. */
 static int dsCountRows(sqlite3 *db, const ProllyHash *pRoot, u8 flags,
                        i64 *pnRow){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -135,9 +110,6 @@ static int dsCountRows(sqlite3 *db, const ProllyHash *pRoot, u8 flags,
   return SQLITE_OK;
 }
 
-/* Compare two record fields by semantic value (same logic as
-** doltlite_diff_table.c's fieldValuesEqual but duplicated here to
-** keep the modules independent). */
 static i64 dsReadInt(const u8 *p, int nBytes){
   i64 v;
   int i;
@@ -147,6 +119,12 @@ static i64 dsReadInt(const u8 *p, int nBytes){
   return v;
 }
 
+/* SQLite packs integers into the narrowest serial type that fits, so
+** 42 may be stored as type-1 (1 byte) on one side and type-2 (2 bytes)
+** on the other. Raw memcmp of fields would call those "modified".
+** Here we coerce any integer-family type (1..6, 8, 9) to a signed
+** int64 and compare numerically, so equal numeric values produce
+** equal cell counts regardless of encoding width. */
 static int dsFieldValuesEqual(
   int aType, const u8 *pA, int nA, int aOff,
   int bType, const u8 *pB, int nB, int bOff
@@ -184,21 +162,6 @@ static int dsFieldValuesEqual(
   return memcmp(pA+aOff, pB+bOff, aLen)==0;
 }
 
-/* Count the number of cells that differ between two records at the
-** row level. This includes:
-**
-**   1. Shared columns (by name on both sides) whose values differ.
-**   2. Columns that exist only in TO (added) whose to-side value is
-**      non-NULL. These represent a row that was updated after an
-**      ADD COLUMN — the user wrote into the new column, making it a
-**      real data modification rather than a schema-encoding artifact.
-**   3. Columns that exist only in FROM (dropped) whose from-side
-**      value was non-NULL. Symmetric to (2): data was lost, not just
-**      a schema removal.
-**
-** This matches Dolt's cells_modified accounting: an UPDATE that only
-** sets the newly-added column still reports rows_modified=1 and
-** cells_modified=1. */
 static int dsCountChangedCells(
   const u8 *pFromRec, int nFromRec,
   const u8 *pToRec,   int nToRec,
@@ -211,17 +174,14 @@ static int dsCountChangedCells(
   doltliteParseRecord(pFromRec, nFromRec, &fromRi);
   doltliteParseRecord(pToRec,   nToRec,   &toRi);
 
-  /* Walk the TO schema: shared cols → compare; new cols → count if
-  ** non-NULL on the to side. */
+
   for(i=0; i<nToCols; i++){
     int fromIdx;
     for(fromIdx=0; fromIdx<nFromCols; fromIdx++){
       if( strcmp(azFromCols[fromIdx], azToCols[i])==0 ) break;
     }
     if( fromIdx>=nFromCols ){
-      /* Column new in to: count as changed iff to-side value is
-      ** non-NULL. Implicit NULL (beyond the record's nField) also
-      ** counts as unchanged. */
+
       if( i<toRi.nField && toRi.aType[i]!=0 ) changed++;
       continue;
     }
@@ -232,23 +192,19 @@ static int dsCountChangedCells(
       changed++;
     }
   }
-  /* Walk the FROM schema for columns dropped in TO: count as changed
-  ** iff from-side value was non-NULL. */
+
   for(i=0; i<nFromCols; i++){
     int toIdx;
     for(toIdx=0; toIdx<nToCols; toIdx++){
       if( strcmp(azToCols[toIdx], azFromCols[i])==0 ) break;
     }
-    if( toIdx<nToCols ) continue;  /* shared, handled above */
+    if( toIdx<nToCols ) continue;
     if( i>=fromRi.nField ) continue;
     if( fromRi.aType[i]!=0 ) changed++;
   }
   return changed;
 }
 
-/* ──────────────────────────────────────────────────────────────── */
-/*  Per-table stat record                                            */
-/* ──────────────────────────────────────────────────────────────── */
 typedef struct DsStatRow DsStatRow;
 struct DsStatRow {
   char *zTableName;
@@ -265,7 +221,6 @@ struct DsStatRow {
   i64 newCellCount;
 };
 
-/* Per-table summary record */
 typedef struct DsSummaryRow DsSummaryRow;
 struct DsSummaryRow {
   char *zFromName;
@@ -275,10 +230,6 @@ struct DsSummaryRow {
   u8 schemaChange;
 };
 
-/* ──────────────────────────────────────────────────────────────── */
-/*  Shared filter/open plumbing. Each vtab uses its own row type     */
-/*  but both load catalogs and resolve refs the same way.            */
-/* ──────────────────────────────────────────────────────────────── */
 static int dsResolveCatHash(sqlite3 *db, const char *zRef,
                             ProllyHash *pOut){
   DoltliteCommit commit;
@@ -306,12 +257,6 @@ static int dsRequireRefs(sqlite3_vtab *pVtab, int idxNum, const char *zName){
   return SQLITE_OK;
 }
 
-/* ──────────────────────────────────────────────────────────────── */
-/*  Per-table work: compute stat counters for a single table across */
-/*  from and to. Returns 1 if the table should be included in the   */
-/*  output (any non-zero counter or non-zero row count on either    */
-/*  side), 0 if entirely unchanged and should be omitted.           */
-/* ──────────────────────────────────────────────────────────────── */
 static int dsComputeTableStats(
   sqlite3 *db,
   const char *zTableName,
@@ -362,7 +307,7 @@ static int dsComputeTableStats(
 
   if( !hasFrom && !hasTo ) return SQLITE_OK;
 
-  /* Column name lists for each side (for semantic cell compare). */
+
   if( hasFrom ){
     rc = dsLoadColNames(db, pFromCatHash, zTableName, &azFromCols, &nFromCols);
     if( rc!=SQLITE_OK ) return rc;
@@ -375,7 +320,7 @@ static int dsComputeTableStats(
     }
   }
 
-  /* Row counts on each side. */
+
   if( hasFrom ){
     rc = dsCountRows(db, &fromRoot, fromFlags, &oldCount);
     if( rc!=SQLITE_OK ) goto done;
@@ -385,7 +330,7 @@ static int dsComputeTableStats(
     if( rc!=SQLITE_OK ) goto done;
   }
 
-  /* Walk the prolly diff iter to count per-row changes. */
+
   if( hasFrom && hasTo
    && prollyHashCompare(&fromRoot, &toRoot)!=0 ){
     ChunkStore *cs = doltliteGetChunkStore(db);
@@ -427,14 +372,11 @@ static int dsComputeTableStats(
     rc = SQLITE_OK;
   }
 
-  /* For schema changes on a table that existed on both sides, the
-  ** schema delta contributes cells to ALL rows that exist on both
-  ** sides (rowsInBoth = oldCount - rowsDel). Matching Dolt's
-  ** accounting, this includes modified rows — their new-column
-  ** cells are counted in cells_added even though the row is also
-  ** reported as modified and the non-NULL-value contribution is
-  ** counted in cells_modified. The two counters can legitimately
-  ** overlap on the same physical cell. */
+
+  /* Column-count delta: if the schema widened/narrowed, every
+  ** surviving row gains or loses cells even if the data is identical.
+  ** Count those as cellsAdded/cellsDeleted so dolt_diff_stat matches
+  ** Dolt's reported totals. */
   if( hasFrom && hasTo ){
     i64 rowsInBoth = oldCount - rowsDel;
     if( rowsInBoth < 0 ) rowsInBoth = 0;
@@ -445,7 +387,7 @@ static int dsComputeTableStats(
     }
   }
 
-  /* For added tables, every row+cell is new; for dropped, all gone. */
+
   if( !hasFrom && hasTo ){
     rowsAdd = newCount;
     cellsAdd = (i64)newCount * nToCols;
@@ -474,10 +416,6 @@ done:
   dsFreeColNames(azToCols, nToCols);
   return rc;
 }
-
-/* ──────────────────────────────────────────────────────────────── */
-/*  dolt_diff_stat vtable                                            */
-/* ──────────────────────────────────────────────────────────────── */
 
 typedef struct DstVtab DstVtab;
 struct DstVtab {
@@ -596,8 +534,6 @@ static int dstAppend(DstCursor *c, const DsStatRow *r){
   return SQLITE_OK;
 }
 
-/* Collect the union of table names from both catalogs. Skips
-** sqlite_master (iTable=1) and any catalog entries without a name. */
 static int dsCollectTableNames(
   sqlite3 *db,
   const ProllyHash *pFromCat,
@@ -712,13 +648,10 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
       goto done;
     }
     if( !row.zTableName ){
-      /* computeTableStats bails early when neither side has the
-      ** table. Shouldn't happen for names collected from either
-      ** catalog, but be defensive. */
+
       continue;
     }
-    /* Omit entries with no change and no row delta (matches Dolt's
-    ** output: only tables that actually moved. */
+
     if( row.rowsAdded==0 && row.rowsDeleted==0 && row.rowsModified==0
      && row.cellsAdded==0 && row.cellsDeleted==0 && row.cellsModified==0 ){
       sqlite3_free(row.zTableName);
@@ -778,10 +711,6 @@ static sqlite3_module diffStatModule = {
   dstColumn, dstRowid,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
-
-/* ──────────────────────────────────────────────────────────────── */
-/*  dolt_diff_summary vtable                                         */
-/* ──────────────────────────────────────────────────────────────── */
 
 typedef struct DssVtab DssVtab;
 struct DssVtab {

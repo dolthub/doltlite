@@ -25,24 +25,31 @@ static int parseCurrentCatalogHeader(
   return 1;
 }
 
+/* Classify a chunk by sniffing its first few bytes. Order of checks
+** matters: PROLLY_NODE_MAGIC is a 4-byte constant that can't collide
+** with any version tag, so it goes first. WORKING_SET is a fixed
+** length so the size check excludes collisions with small catalogs.
+** CATALOG uses a single-byte version tag, COMMIT uses DOLTLITE_COMMIT_V2.
+** Used by GC chunk reachability traversal — unknown chunks are
+** dropped, so a missing case here can silently corrupt the store. */
 DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   u32 m;
 
   if( !data || nData < 4 ) return CHUNK_UNKNOWN;
 
-  /* Check prolly node magic first (4-byte LE) */
+
   m = (u32)data[0] | ((u32)data[1]<<8) |
       ((u32)data[2]<<16) | ((u32)data[3]<<24);
   if( m == PROLLY_NODE_MAGIC && nData >= 8 ){
     return CHUNK_PROLLY_NODE;
   }
 
-  /* Working set: exactly WS_TOTAL_SIZE bytes, current version only. */
+
   if( nData == WS_TOTAL_SIZE && data[0] == WS_FORMAT_VERSION ){
     return CHUNK_WORKING_SET;
   }
 
-  /* Catalog V3 only. */
+
   {
     int nTables; const u8 *pEntries;
     if( parseCurrentCatalogHeader(data, nData, &nTables, &pEntries) ){
@@ -50,12 +57,12 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     }
   }
 
-  /* Commit V2: version byte matches, minimum size 30 */
+
   if( nData >= 30 && data[0] == DOLTLITE_COMMIT_V2 ){
     return CHUNK_COMMIT;
   }
 
-  /* Refs blob: current format is version 6. */
+
   if( nData >= 5 && data[0] == 6 ){
     return CHUNK_REFS;
   }
@@ -75,7 +82,7 @@ static int enumerateProllyNodeChildren(
 
   rc = prollyNodeParse(&node, data, nData);
   if( rc!=SQLITE_OK ) return rc;
-  if( node.level == 0 ) return SQLITE_OK; /* leaf: no child hashes */
+  if( node.level == 0 ) return SQLITE_OK;
 
   for(i=0; i<(int)node.nItems; i++){
     ProllyHash childHash;
@@ -157,27 +164,27 @@ static int enumerateWorkingSetChildren(
 
   (void)nData;
 
-  /* working catalog hash */
+
   memcpy(h.data, data + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
   rc = xChild(ctx, &h);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* working commit hash */
+
   memcpy(h.data, data + WS_WORKING_COMMIT_OFF, PROLLY_HASH_SIZE);
   rc = xChild(ctx, &h);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* staged catalog hash */
+
   memcpy(h.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
   rc = xChild(ctx, &h);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* conflicts catalog hash */
+
   memcpy(h.data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
   rc = xChild(ctx, &h);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* merge commit hash (only if merging) */
+
   if( data[WS_MERGING_OFF] ){
     memcpy(h.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
     rc = xChild(ctx, &h);
@@ -341,4 +348,4 @@ int doltliteEnumerateChunkChildren(
   }
 }
 
-#endif /* DOLTLITE_PROLLY */
+#endif

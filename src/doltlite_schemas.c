@@ -1,22 +1,4 @@
-/* dolt_schemas: projection over sqlite_schema, filtered to views and
-** triggers. Mirrors Dolt's dolt_schemas system table so user-level
-** view/trigger management is visible, diffable, and version-controlled
-** alongside regular table data.
-**
-** Storage layer: sqlite_schema is already branch-scoped in the
-** doltlite catalog (table #1 in each commit), so every branch sees
-** its own view set automatically. This vtable is a read-only
-** projection that runs an internal SELECT against sqlite_schema on
-** every xFilter and caches the result rows for the cursor.
-**
-** Columns (matching Dolt's dolt_schemas for oracle comparability):
-**   type     TEXT  -- 'view' or 'trigger'
-**   name     TEXT  -- object name
-**   fragment TEXT  -- full CREATE statement (Dolt stores the same)
-**   extra    TEXT  -- always NULL in doltlite (Dolt uses this for JSON
-**                    metadata; we don't track it)
-**   sql_mode TEXT  -- always NULL in doltlite (MySQL-specific)
-*/
+
 
 #ifdef DOLTLITE_PROLLY
 
@@ -112,6 +94,10 @@ static int schemasClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
+/* Dolt stores views/triggers in a real dolt_schemas table. Doltlite
+** reuses sqlite_schema instead and synthesizes this vtable on top —
+** type/name/fragment come straight from sqlite_schema WHERE type IN
+** ('view','trigger'). extra/sql_mode always NULL (Dolt-only fields). */
 static int schemasFilter(sqlite3_vtab_cursor *pCursor,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   SchemasCursor *pCur = (SchemasCursor*)pCursor;
@@ -123,9 +109,7 @@ static int schemasFilter(sqlite3_vtab_cursor *pCursor,
   freeRows(pCur);
   pCur->iRow = 0;
 
-  /* Pull view/trigger rows from the live sqlite_schema, which is
-  ** already branch-scoped. Order by (type, name) so the output is
-  ** deterministic across runs — same ordering the oracle test uses. */
+
   rc = sqlite3_prepare_v2(pVtab->db,
     "SELECT type, name, sql FROM sqlite_schema "
     "WHERE type IN ('view','trigger') ORDER BY type, name",
@@ -180,8 +164,8 @@ static int schemasColumn(sqlite3_vtab_cursor *pCursor,
     case 0: sqlite3_result_text(ctx, r->zType,     -1, SQLITE_TRANSIENT); break;
     case 1: sqlite3_result_text(ctx, r->zName,     -1, SQLITE_TRANSIENT); break;
     case 2: sqlite3_result_text(ctx, r->zFragment, -1, SQLITE_TRANSIENT); break;
-    case 3: /* extra: JSON metadata Dolt tracks, doltlite does not. */
-    case 4: /* sql_mode: MySQL-specific. */
+    case 3:
+    case 4:
     default:
       sqlite3_result_null(ctx);
       break;

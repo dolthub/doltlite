@@ -8,23 +8,13 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-/* Historical note: an earlier version of this file built SQL text to
-** apply conflict resolutions — INSERT OR REPLACE strings with literal
-** values inlined per type (%lld, %Q, X'..', %!.15g), handed to
-** sqlite3_exec. That round-tripped the stored record bytes through
-** the parser and VDBE purely to land them in the prolly tree.
-** Resolution now calls doltliteApplyRawRowMutation (prolly_btree.c)
-** which writes the bytes directly into the target table's tree. No
-** SQL engine involvement; triggers and FK checks correctly do NOT
-** fire (they already ran on the original commits). */
-
 typedef struct ConflictTableInfo ConflictTableInfo;
 struct ConflictTableInfo {
   char *zName;
   int nConflicts;
   struct ConflictRow {
     i64 intKey;
-    u8 *pKey; int nKey;       
+    u8 *pKey; int nKey;
     u8 *pBaseVal; int nBaseVal;
     u8 *pOurVal; int nOurVal;
     u8 *pTheirVal; int nTheirVal;
@@ -88,27 +78,6 @@ static void removeConflictTable(ConflictTableInfo *aTables, int *pnTables, int i
   memset(&aTables[*pnTables], 0, sizeof(aTables[*pnTables]));
 }
 
-/* Conflict catalog format:
-**
-**   Header: 4 magic bytes 'D' 'L' 'C' version
-**     - version 1: rows carry (nKey, key, intKey, base, our, their)
-**     - v0 (legacy, before the rename-conformity refactor): (intKey,
-**       base, our, their) with no version header; that format only
-**       worked for INTEGER PK tables and is no longer produced. It
-**       is NOT read by loadAllConflicts — any on-disk conflict
-**       catalog written by a pre-rename-conformity doltlite must be
-**       cleared with dolt_merge('--abort') before upgrading.
-**   Then: uint16 nTables
-**   Per table: uint16 nameLen, name, uint32 nConflicts, rows[]
-**   Per row:  uint32 nKey, keyBytes, int64 intKey,
-**             uint32 nBase, baseVal, uint32 nOur, ourVal,
-**             uint32 nTheir, theirVal
-**
-** The key bytes are needed so the --ours / --theirs resolve paths
-** (which now write directly into the prolly tree via
-** doltliteApplyRawRowMutation) can reach user-PK rows. INTEGER-PK
-** tables still use intKey and store nKey=0.
-*/
 #define DOLTLITE_CONFLICTS_MAGIC0 'D'
 #define DOLTLITE_CONFLICTS_MAGIC1 'L'
 #define DOLTLITE_CONFLICTS_MAGIC2 'C'
@@ -119,7 +88,7 @@ int doltliteSerializeConflicts(
   ConflictTableInfo *aTables, int nTables,
   ProllyHash *pHash
 ){
-  int sz = 4 + 2;  /* magic+version header + nTables */
+  int sz = 4 + 2;
   int i, j, rc;
   u8 *buf, *p;
 
@@ -127,8 +96,8 @@ int doltliteSerializeConflicts(
     int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
     sz += 2 + nl + 4;
     for(j=0; j<aTables[i].nConflicts; j++){
-      sz += 4 + aTables[i].aRows[j].nKey  /* nKey + key bytes */
-              + 8                          /* intKey */
+      sz += 4 + aTables[i].aRows[j].nKey
+              + 8
               + 4 + aTables[i].aRows[j].nBaseVal
               + 4 + aTables[i].aRows[j].nOurVal
               + 4 + aTables[i].aRows[j].nTheirVal;
@@ -194,10 +163,7 @@ static int loadAllConflicts(
   if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
 
   p = data;
-  /* Header: 'D' 'L' 'C' version. Any on-disk catalog without this
-  ** header is from before the rename-conformity refactor and cannot
-  ** be read — those only carried intKey and the user-PK resolve path
-  ** would have no key bytes. */
+
   if( p[0]!=DOLTLITE_CONFLICTS_MAGIC0
    || p[1]!=DOLTLITE_CONFLICTS_MAGIC1
    || p[2]!=DOLTLITE_CONFLICTS_MAGIC2
@@ -342,9 +308,7 @@ static int cfConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   ConflictsVtab *v; int rc;
   (void)pAux;(void)argc;(void)argv;(void)pzErr;
-  /* Column is named "table" to match Dolt; the quoting is required because
-  ** "table" is a reserved keyword in SQL. Callers must quote it on access:
-  ** SELECT "table" FROM dolt_conflicts. */
+
   rc = sqlite3_declare_vtab(db, "CREATE TABLE x(\"table\" TEXT, num_conflicts INTEGER)");
   if(rc!=SQLITE_OK) return rc;
   v = sqlite3_malloc(sizeof(*v)); if(!v) return SQLITE_NOMEM;
@@ -398,30 +362,26 @@ struct CfRowCur {
   sqlite3_vtab_cursor base;
   ConflictTableInfo *aTables;
   int nTables;
-  int iTableIdx;       
-  int iRow;            
+  int iTableIdx;
+  int iRow;
 };
 
-/* Build a dolt-conformant dolt_conflicts_<table> schema by projecting
-** every user column of `t` under three prefixes (base_, our_, their_),
-** plus the standard metadata columns Dolt emits: from_root_ish,
-** our_diff_type, their_diff_type, dolt_conflict_id. */
 static char *cfrBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
   int i;
   char *z;
   if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(from_root_ish TEXT");
-  /* base_* */
+
   for(i=0; i<ci->nCol; i++){
     sqlite3_str_appendf(pStr, ", \"base_%w\"", ci->azName[i]);
   }
-  /* our_* + our_diff_type */
+
   for(i=0; i<ci->nCol; i++){
     sqlite3_str_appendf(pStr, ", \"our_%w\"", ci->azName[i]);
   }
   sqlite3_str_appendall(pStr, ", our_diff_type TEXT");
-  /* their_* + their_diff_type */
+
   for(i=0; i<ci->nCol; i++){
     sqlite3_str_appendf(pStr, ", \"their_%w\"", ci->azName[i]);
   }
@@ -522,7 +482,7 @@ static int cfrFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqli
   rc = loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   for(i=0; i<c->nTables; i++){
     if( c->aTables[i].zName && strcmp(c->aTables[i].zName, vt->zTableName)==0 ){
       c->iTableIdx = i;
@@ -543,9 +503,6 @@ static int cfrEof(sqlite3_vtab_cursor *cur){
   return c->iRow >= c->aTables[c->iTableIdx].nConflicts;
 }
 
-/* Emit one projected column from a record body. If iPkCol>=0 and
-** iUserCol==iPkCol, the PK value comes from intKey (rowid-aliased
-** INTEGER PRIMARY KEY case) rather than the record body. */
 static void cfrEmitRecordCol(
   sqlite3_context *ctx,
   const u8 *pRec, int nRec,
@@ -572,9 +529,6 @@ static void cfrEmitRecordCol(
   }
 }
 
-/* Classify a conflict row on one side as added/modified/removed
-** relative to its base. Dolt uses "added" if the base is missing,
-** "removed" if the side is missing, otherwise "modified". */
 static const char *cfrDiffType(const u8 *pBase, int nBase,
                                const u8 *pSide, int nSide){
   int baseHas = (pBase && nBase>0);
@@ -596,15 +550,7 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   if( c->iRow >= c->aTables[c->iTableIdx].nConflicts ) return SQLITE_OK;
   cr = &c->aTables[c->iTableIdx].aRows[c->iRow];
 
-  /* Schema layout:
-  **   col 0                     : from_root_ish
-  **   col 1..nUserCols          : base_<col>
-  **   col nUserCols+1..2*nUserCols : our_<col>
-  **   col 2*nUserCols+1         : our_diff_type
-  **   col 2*nUserCols+2..3*nUserCols+1 : their_<col>
-  **   col 3*nUserCols+2         : their_diff_type
-  **   col 3*nUserCols+3         : dolt_conflict_id
-  */
+
   nUserCols = v->cols.nCol;
   colBaseStart  = 1;
   colOurStart   = 1 + nUserCols;
@@ -614,8 +560,7 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   colConflictId = 3 + 3*nUserCols;
 
   if( col==0 ){
-    /* from_root_ish: doltlite doesn't track this per-conflict. Emit
-    ** NULL — oracle tests should not compare this column. */
+
     sqlite3_result_null(ctx);
   }else if( col>=colBaseStart && col<colOurStart ){
     cfrEmitRecordCol(ctx, cr->pBaseVal, cr->nBaseVal,
@@ -635,8 +580,7 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       cfrDiffType(cr->pBaseVal, cr->nBaseVal, cr->pTheirVal, cr->nTheirVal),
       -1, SQLITE_STATIC);
   }else if( col==colConflictId ){
-    /* Stable synthetic id: intKey + iRow. Oracle tests should not
-    ** compare this column since Dolt uses a different scheme. */
+
     char buf[64];
     sqlite3_snprintf(sizeof(buf), buf, "%lld:%d", cr->intKey, c->iRow);
     sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
@@ -677,7 +621,7 @@ static int cfrUpdate(
 
   (void)pRowid;
 
-  
+
   if( nArg != 1 ){
     pVtab->zErrMsg = sqlite3_mprintf("only DELETE is supported on conflict tables");
     return SQLITE_ERROR;
@@ -685,11 +629,11 @@ static int cfrUpdate(
 
   deleteRowid = sqlite3_value_int64(apArg[0]);
 
-  
+
   rc = loadAllConflicts(v->db, cs, &aTables, &nTables);
   if( rc!=SQLITE_OK ) return rc;
 
-  
+
   for(i=0; i<nTables; i++){
     if( !aTables[i].zName || strcmp(aTables[i].zName, v->zTableName)!=0 )
       continue;
@@ -698,12 +642,12 @@ static int cfrUpdate(
       if( aTables[i].aRows[j].intKey == deleteRowid ){
         removeConflictRow(&aTables[i], j);
 
-        
+
         if( aTables[i].nConflicts == 0 ){
           removeConflictTable(aTables, &nTables, i);
         }
 
-        
+
         rc = storeUpdatedConflicts(v->db, cs, aTables, nTables);
         freeConflictTables(aTables, nTables);
         return rc;
@@ -713,25 +657,25 @@ static int cfrUpdate(
   }
 
   freeConflictTables(aTables, nTables);
-  return SQLITE_OK; 
+  return SQLITE_OK;
 }
 
 static sqlite3_module cfRowModule = {
-  0,                   
-  cfrConnect,          
-  cfrConnect,          
-  cfrBestIndex,        
-  cfrDisconnect,       
-  cfrDisconnect,       
-  cfrOpen,             
-  cfrClose,            
-  cfrFilter,           
-  cfrNext,             
-  cfrEof,              
-  cfrColumn,           
-  cfrRowid,            
-  cfrUpdate,           
-  0,0,0,0,0,0,0,0,0,0,0  
+  0,
+  cfrConnect,
+  cfrConnect,
+  cfrBestIndex,
+  cfrDisconnect,
+  cfrDisconnect,
+  cfrOpen,
+  cfrClose,
+  cfrFilter,
+  cfrNext,
+  cfrEof,
+  cfrColumn,
+  cfrRowid,
+  cfrUpdate,
+  0,0,0,0,0,0,0,0,0,0,0
 };
 
 int doltliteRegisterConflictTables(sqlite3 *db){
@@ -759,8 +703,13 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     return;
   }
 
+  /* --ours vs --theirs are asymmetric: "ours" is already in the
+  ** working set (the merge left our side intact and logged theirs in
+  ** the conflict entry), so we just drop the conflict table. "theirs"
+  ** below has to apply each entry's theirVal as a real row mutation
+  ** before dropping, otherwise the working set still has our value. */
   if( strcmp(zMode,"--ours")==0 ){
-    
+
     for(i=0; i<nTables; i++){
       if( aTables[i].zName && strcmp(aTables[i].zName, zTable)==0 ){
         removeConflictTable(aTables, &nTables, i);
@@ -776,17 +725,11 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     sqlite3_result_int(ctx, 0);
 
   }else if( strcmp(zMode,"--theirs")==0 ){
-    
+
     for(i=0; i<nTables; i++){
       if( !aTables[i].zName || strcmp(aTables[i].zName, zTable)!=0 ) continue;
 
 
-      /* Write each conflict row's theirs bytes directly into the
-      ** target table's prolly tree. pTheirVal==NULL means theirs is a
-      ** delete — doltliteApplyRawRowMutation stages a tree delete at
-      ** the PK when pVal is NULL. Keys: intKey for INTEGER-PK tables,
-      ** pKey/nKey for user-PK (the merge path captured those into the
-      ** conflict row when the conflict was recorded). */
       for(j=0; j<aTables[i].nConflicts; j++){
         struct ConflictRow *cr = &aTables[i].aRows[j];
         rc = doltliteApplyRawRowMutation(db, zTable,
@@ -822,10 +765,10 @@ int doltliteConflictsRegister(sqlite3 *db){
   if( rc==SQLITE_OK )
     rc = sqlite3_create_function(db, "dolt_conflicts_resolve", -1, SQLITE_UTF8, 0,
                                   conflictsResolveFunc, 0, 0);
-  
+
   if( rc==SQLITE_OK )
     rc = doltliteRegisterConflictTables(db);
   return rc;
 }
 
-#endif 
+#endif

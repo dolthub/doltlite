@@ -64,7 +64,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   arg0 = (const char*)sqlite3_value_text(argv[0]);
   if( !arg0 ){ sqlite3_result_error(ctx, "tag name required", -1); return; }
 
-  /* Delete: dolt_tag('-d', name) — same shape as before. */
+
   if( strcmp(arg0, "-d")==0 || strcmp(arg0, "--delete")==0 ){
     const char *zName;
     if( argc<2 ){ sqlite3_result_error(ctx, "tag name required for delete", -1); return; }
@@ -81,9 +81,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  /* Create: dolt_tag(name [, commit_ref] [, '-m', msg] [, '--author', 'name <email>'])
-  ** The first non-flag positional argument after the name is treated as
-  ** the commit ref to tag; if absent, the session HEAD is used. */
+
   for(i=1; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
     if( !arg ) continue;
@@ -266,4 +264,4 @@ int doltliteTagRegister(sqlite3 *db){
   return rc;
 }
 
-#endif 
+#endif
