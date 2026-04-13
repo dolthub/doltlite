@@ -163,99 +163,37 @@ SELECT * FROM dolt_log;
 -- commit_hash | committer | email | date | message
 ```
 
-### History (dolt_history_&lt;table&gt;)
+### History and Point-in-Time Queries
 
-Time-travel query showing every version of every row across all commits:
-
-```sql
-SELECT * FROM dolt_history_users;
--- rowid_val | value | commit_hash | committer | commit_date
-
--- How many times was row 42 changed?
-SELECT count(*) FROM dolt_history_users WHERE rowid_val = 42;
-
--- What did the table look like at a specific commit?
-SELECT * FROM dolt_history_users WHERE commit_hash = 'abc123...';
-```
-
-### Point-in-Time Queries (AS OF)
-
-Read a table as it existed at any commit, branch, or tag.
-Returns the real table columns (not generic blobs):
+Two per-table virtual tables for time travel:
 
 ```sql
+-- Every version of every row across all commits
+SELECT * FROM dolt_history_users WHERE rowid_val = 42;
+
+-- The table as it existed at a specific commit / branch / tag
 SELECT * FROM dolt_at_users('abc123...');
--- id | name | email (same columns as the actual table)
-
 SELECT * FROM dolt_at_users('feature');
 SELECT * FROM dolt_at_users('v1.0');
-
--- Compare current vs historical
-SELECT count(*) FROM users;                     -- 100
-SELECT count(*) FROM dolt_at_users('v1.0');    -- 42
 ```
 
 ### Diff
 
-Commit-history summary of which tables changed:
+Four ways to ask what changed:
 
 ```sql
-SELECT * FROM dolt_diff;
+-- Which tables changed across the commit history?
 SELECT * FROM dolt_diff WHERE table_name = 'users';
--- commit_hash | committer | email | date | message |
---   data_change | schema_change | table_name
-```
 
-### Diff Stat
-
-Row- and cell-level change counts between any two commits, branches, or tags.
-One row per changed table, with counts of rows added/deleted/modified and
-cells added/deleted/modified:
-
-```sql
+-- Row- and cell-level change counts between two refs (commits, branches, tags)
 SELECT * FROM dolt_diff_stat('v1.0', 'HEAD');
--- table_name | rows_unmodified | rows_added | rows_deleted | rows_modified |
---   cells_added | cells_deleted | cells_modified |
---   old_row_count | new_row_count | old_cell_count | new_cell_count
+SELECT * FROM dolt_diff_stat('v1.0', 'HEAD', 'users');  -- narrow to one table
 
--- Narrow to a single table
-SELECT * FROM dolt_diff_stat('v1.0', 'HEAD', 'users');
-
--- How many rows changed on feature vs main?
-SELECT sum(rows_added + rows_deleted + rows_modified)
-  FROM dolt_diff_stat('main', 'feature');
-```
-
-### Diff Summary
-
-High-level summary of which tables changed between any two commits, branches,
-or tags. One row per changed table, classifying each change as `added`,
-`dropped`, `renamed`, or `modified`, and indicating whether the change
-touched data, schema, or both:
-
-```sql
+-- High-level per-table classification: added / dropped / renamed / modified
 SELECT * FROM dolt_diff_summary('v1.0', 'HEAD');
--- from_table_name | to_table_name | diff_type | data_change | schema_change
 
--- Narrow to a single table
-SELECT * FROM dolt_diff_summary('v1.0', 'HEAD', 'users');
-
--- Which tables had schema changes between two releases?
-SELECT to_table_name FROM dolt_diff_summary('v1.0', 'v2.0')
-  WHERE schema_change = 1;
-```
-
-### Schema Diff
-
-Compare schemas between any two commits, branches, or tags:
-
-```sql
+-- Schema-level diff (tables, views, indexes)
 SELECT * FROM dolt_schema_diff('v1.0', 'v2.0');
--- from_table_name | to_table_name | from_create_statement | to_create_statement
---
--- Added rows have an empty from_table_name; dropped rows have an
--- empty to_table_name; modified rows have both equal.
--- Also detects new indexes and views.
 ```
 
 ### Schemas (dolt_schemas)
@@ -494,11 +432,8 @@ clone — multiple clients can collaborate on the same databases.
 
 The server is also embeddable as a library (`doltliteServeAsync` in
 `doltlite_remotesrv.h`) for applications that want to host remotes in-process.
-
-#### How It Works
-
-Content-addressed chunk transfer — only sends chunks the remote doesn't already
-have. BFS traversal of the DAG with batch `HasMany` pruning.
+Transfers are content-addressed — only chunks the remote doesn't already
+have are sent.
 
 ## Using Existing SQLite Databases
 
@@ -577,23 +512,13 @@ SELECT * FROM dolt_diff WHERE table_name='config';
 
 ## Per-Session Branching Architecture
 
-Each connection gets its own `Btree` and `BtShared` (not shared across
-connections). Doltlite stores the session's branch name, HEAD commit hash,
-and staged catalog hash in the `Btree` struct.
-
-- Each connection can be on a different branch. Cross-branch concurrent
-  access is safe — each branch's working catalog is stored independently
-  in a per-branch working state chunk, so one branch's autocommit never
-  corrupts another branch's reads.
-- `dolt_checkout` reloads the table registry from the target branch's catalog.
-- Write transactions (DML) are serialized via an exclusive file-level lock,
-  matching SQLite's standard behavior. Under that lock, the connection
-  refreshes from disk before writing. Multiple connections can read
-  concurrently; writes from one connection are immediately visible to
-  readers on the same branch.
-- All commit graph mutations (`dolt_commit`, `dolt_merge`, `dolt_reset`,
-  `dolt_branch`, `dolt_tag`, push, pull) are also serialized via the
-  file-level lock, preventing silent data loss from concurrent commits.
+Each connection gets its own `Btree` / `BtShared` pair and independently
+tracks branch name, HEAD commit, and staged catalog hash, so different
+connections can sit on different branches at the same time. Each branch's
+working catalog lives in its own chunk, so one branch's autocommit can
+never corrupt another branch's reads. Writes and commit-graph mutations
+are serialized through an exclusive file-level lock (matching SQLite's
+standard behavior); reads are concurrent.
 
 ## Performance
 
@@ -610,36 +535,36 @@ comment.
 
 | Test | SQLite (ms) | Doltlite (ms) | Multiplier |
 |------|-------------|---------------|------------|
-| oltp_point_select | 145 | 89 | 0.61 |
-| oltp_range_select | 38 | 36 | 0.95 |
-| oltp_sum_range | 21 | 18 | 0.86 |
-| oltp_order_range | 8 | 8 | 1.00 |
-| oltp_distinct_range | 9 | 7 | 0.78 |
-| oltp_index_scan | 15 | 11 | 0.73 |
-| select_random_points | 39 | 48 | 1.23 |
-| select_random_ranges | 17 | 10 | 0.59 |
-| covering_index_scan | 20 | 28 | 1.40 |
-| groupby_scan | 54 | 54 | 1.00 |
-| index_join | 9 | 11 | 1.22 |
+| oltp_point_select | 175 | 106 | 0.61 |
+| oltp_range_select | 46 | 38 | 0.83 |
+| oltp_sum_range | 27 | 18 | 0.67 |
+| oltp_order_range | 6 | 7 | 1.17 |
+| oltp_distinct_range | 7 | 8 | 1.14 |
+| oltp_index_scan | 15 | 13 | 0.87 |
+| select_random_points | 30 | 27 | 0.90 |
+| select_random_ranges | 24 | 12 | 0.50 |
+| covering_index_scan | 26 | 28 | 1.08 |
+| groupby_scan | 49 | 59 | 1.20 |
+| index_join | 11 | 11 | 1.00 |
 | index_join_scan | 3 | 6 | 2.00 |
 | types_table_scan | 13 | 13 | 1.00 |
-| table_scan | 1 | 2 | 2.00 |
-| oltp_read_only | 340 | 259 | 0.76 |
+| table_scan | 2 | 3 | 1.50 |
+| oltp_read_only | 373 | 263 | 0.71 |
 
 #### Writes
 
 | Test | SQLite (ms) | Doltlite (ms) | Multiplier |
 |------|-------------|---------------|------------|
-| oltp_bulk_insert | 32 | 39 | 1.22 |
-| oltp_insert | 21 | 35 | 1.67 |
-| oltp_update_index | 48 | 128 | 2.67 |
-| oltp_update_non_index | 37 | 52 | 1.41 |
-| oltp_delete_insert | 44 | 76 | 1.73 |
-| oltp_write_only | 21 | 35 | 1.67 |
-| types_delete_insert | 28 | 32 | 1.14 |
-| oltp_read_write | 128 | 488 | 3.81 |
+| oltp_bulk_insert | 36 | 39 | 1.08 |
+| oltp_insert | 22 | 34 | 1.55 |
+| oltp_update_index | 47 | 81 | 1.72 |
+| oltp_update_non_index | 35 | 54 | 1.54 |
+| oltp_delete_insert | 45 | 89 | 1.98 |
+| oltp_write_only | 20 | 35 | 1.75 |
+| types_delete_insert | 25 | 28 | 1.12 |
+| oltp_read_write | 108 | 168 | 1.56 |
 
-_10K rows, file-backed, Linux x64 (GitHub Actions). Run `test/sysbench_compare.sh` to reproduce._
+_10K rows, file-backed, Linux x64 (GitHub Actions). Every test lands within a 3× ceiling enforced by CI (`test/sysbench_compare.sh`). Run the same script to reproduce._
 
 ### Algorithmic Complexity
 
@@ -655,38 +580,14 @@ All numbers below have automated assertions in CI (`test/doltlite_perf.sh` and `
 
 ### SQLite Tcl Test Suite
 
-87,000+ SQLite test cases pass with 0 correctness failures.
-
-```bash
-# Install Tcl (macOS)
-brew install tcl-tk
-
-# Configure with Tcl support
-cd build
-../configure --with-tcl=$(brew --prefix tcl-tk)/lib
-
-# Build testfixture
-make testfixture OPTS="-L$(brew --prefix)/lib"
-
-# Run a single test file
-./testfixture ../test/select1.test
-
-# Run with timeout
-perl -e 'alarm(60); exec @ARGV' ./testfixture ../test/select1.test
-
-# Count passes
-./testfixture ../test/func.test 2>&1 | grep -c "Ok$"
-```
-
-Stock SQLite testfixture for comparison:
-
-```
-make testfixture DOLTLITE_PROLLY=0 USE_AMALGAMATION=1
-```
+87,000+ upstream SQLite test cases pass with 0 correctness failures.
+Build `testfixture` and run `bash test/run_testfixture.sh` (CI runs the
+full sweep on every PR; see `.github/workflows/test.yml` for the
+invocation).
 
 ### Doltlite Shell Tests
 
-31 test suites covering all features:
+39 test suites covering all features:
 
 ```bash
 # Run all suites
@@ -702,42 +603,42 @@ bash ../test/doltlite_merge.sh           # Three-way merge
 bash ../test/doltlite_attach_sqlite.sh   # ATTACH standard SQLite databases
 ```
 
-### SQL Logic Test Suite
+### Differential Oracle Tests
 
-Doltlite passes 100% of the
-[sqllogictest](https://www.sqlite.org/sqllogictest/) suite — the same
-5.7 million-statement correctness corpus that SQLite itself uses. Every PR
-runs the full suite in CI, comparing Doltlite's results against stock SQLite
-as a reference. Zero failures, zero errors.
-
-The test works by building the official
-[sqllogictest C runner](https://www.sqlite.org/sqllogictest/) twice — once
-linked against stock SQLite, once against Doltlite's amalgamation — and
-running every `.test` file through both in `--verify` mode. Any result
-divergence from stock SQLite is a failure.
+Doltlite ships a suite of differential oracle tests that run the same SQL
+through doltlite and stock sqlite3 and compare results byte-for-byte. Each
+script is focused on a SQL feature surface — savepoints, foreign keys,
+UPSERT, generated columns, WITHOUT ROWID, large BLOBs at chunk boundaries,
+ATTACH cross-engine queries, TEMP tables, triggers, dot-commands, FTS5 —
+and scenarios are written to hit storage-layer edge cases. The oracles
+drove most of the correctness fixes in recent releases.
 
 ```bash
-# Build both runners and run the full suite (requires Fossil)
-fossil clone https://www.sqlite.org/sqllogictest/ /tmp/sqllogictest.fossil
-mkdir -p /tmp/sqllogictest && cd /tmp/sqllogictest && fossil open /tmp/sqllogictest.fossil
-
-# Build stock runner (reference)
-cd src
-gcc -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
-    -DSQLITE_OMIT_LOAD_EXTENSION -c md5.c sqlite3.c
-gcc -O2 -o sqllogictest-stock sqllogictest.c md5.o sqlite3.o -lpthread -lm
-
-# Build doltlite runner (replace amalgamation)
-cp /path/to/doltlite/build/sqlite3.c sqlite3.c
-cp /path/to/doltlite/build/sqlite3.h sqlite3.h
-gcc -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
-    -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c
-gcc -O2 -o sqllogictest-doltlite sqllogictest.c md5.o sqlite3.o -lpthread -lm -lz
-
-# Run the suite
-bash test/run_sqllogictest.sh \
-    sqllogictest-doltlite sqllogictest-stock /tmp/sqllogictest/test
+cd build
+bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_savepoints_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_foreign_keys_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_upsert_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_generated_columns_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_without_rowid_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_large_blobs_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_attach_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_temp_tables_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_triggers_test.sh ./doltlite ./sqlite3
+bash ../test/oracle_fts5_test.sh ./doltlite ./sqlite3
 ```
+
+A separate CI job builds the same suite with
+`-fsanitize=address,undefined` and runs every oracle under ASan/UBSan to
+catch memory and undefined-behavior bugs before they reach master.
+
+### SQL Logic Test Suite
+
+100% pass on the [sqllogictest](https://www.sqlite.org/sqllogictest/) suite
+— the same 5.7M-statement corpus SQLite itself uses — verified against
+stock SQLite as the reference. CI runs the full suite on every PR; run
+`bash test/run_sqllogictest.sh` locally (requires Fossil for the upstream
+corpus).
 
 ### Concurrent Branch Tests
 
@@ -753,139 +654,15 @@ gcc -o cross_branch_test ../test/cross_branch_test.c \
 
 ## Architecture
 
-### Prolly Tree Engine
+Doltlite implements the same prolly tree design as
+[Dolt](https://github.com/dolthub/dolt) — content-addressed immutable
+nodes with rolling-hash-determined boundaries — adapted for SQLite's
+constraints and C implementation. The prolly tree engine lives in
+`src/prolly_*.c`, the feature-level implementations of `dolt_*` SQL
+functions and vtables live in `src/doltlite_*.c`, and `src/prolly_btree.c`
+is the integration point where prolly dispatches against SQLite's
+`btree.h` API.
 
-| File | Purpose |
-|------|---------|
-| `prolly_hash.c/h` | xxHash32 content addressing |
-| `prolly_node.c/h` | Binary node format (serialization, field access) |
-| `prolly_cache.c/h` | LRU node cache |
-| `prolly_cursor.c/h` | Tree cursor (seek, next, prev) |
-| `prolly_mutmap.c/h` | Skip list write buffer for pending edits |
-| `prolly_chunker.c/h` | Rolling hash tree builder |
-| `prolly_mutate.c/h` | Merge-flush edits into tree |
-| `prolly_diff.c/h` | Tree-level diff (drives `dolt_diff`) |
-| `prolly_arena.c/h` | Arena allocator for tree operations |
-| `prolly_btree.c` | `btree.h` API implementation (main integration point) |
-| `sortkey.c/h` | Sort key encoding for memcmp-sortable index keys |
-| `chunk_store.c` | Single-file content-addressed chunk storage |
-| `pager_shim.c` | Pager facade (satisfies pager API without page-based I/O) |
-| `btree_orig_*.c` | Original SQLite btree compiled with renamed symbols (for ATTACH) |
-| `btree_orig_api.c/h` | Bridge API between prolly dispatch and original btree |
-
-### Doltlite Feature Files
-
-| File | Purpose |
-|------|---------|
-| `doltlite.c` | `dolt_add`, `dolt_commit`, `dolt_reset`, `dolt_merge`, registration |
-| `doltlite_status.c` | `dolt_status` virtual table |
-| `doltlite_log.c` | `dolt_log` virtual table |
-| `doltlite_diff.c` | `dolt_diff` table-valued function |
-| `doltlite_branch.c` | `dolt_branch`, `dolt_checkout`, `active_branch`, `dolt_branches` |
-| `doltlite_tag.c` | `dolt_tag`, `dolt_tags` |
-| `doltlite_merge.c` | Three-way catalog and row-level merge |
-| `doltlite_conflicts.c` | `dolt_conflicts`, `dolt_conflicts_resolve` |
-| `doltlite_ancestor.c` | Common ancestor search, `dolt_merge_base` |
-| `doltlite_commit.h` | Commit object serialization/deserialization |
-| `doltlite_ancestor.h` | Ancestor-finding API |
-| `doltlite_history.c` | `dolt_history_<table>` virtual table |
-| `doltlite_at.c` | `dolt_at_<table>` point-in-time query |
-| `doltlite_schema_diff.c` | `dolt_schema_diff` virtual table |
-| `doltlite_gc.c` | `dolt_gc` garbage collection |
-| `doltlite_remote.c` | Remote management (`dolt_remote`, `dolt_push`, `dolt_fetch`, `dolt_clone`) |
-| `doltlite_http_remote.c` | HTTP remote client (BSD sockets) |
-| `doltlite_remotesrv.c` | Standalone HTTP server for remotes |
-
-## Dolt vs Doltlite: Storage Engine Comparison
-
-Doltlite implements the same prolly tree architecture as
-[Dolt](https://github.com/dolthub/dolt), but adapted for SQLite's constraints
-and C implementation. The core idea is identical — content-addressed immutable
-nodes with rolling-hash-determined boundaries — but the details differ
-significantly.
-
-### Prolly Tree
-
-Both use prolly trees (probabilistic B-trees) where node boundaries are
-determined by a rolling hash over key bytes rather than fixed fan-out. This gives
-content-defined chunking: identical subtrees produce identical hashes regardless
-of where they appear, enabling structural sharing between versions.
-
-| | Dolt | Doltlite |
-|--|------|----------|
-| **Language** | Go | C (inside SQLite) |
-| **Node format** | FlatBuffers | Custom binary (header + offset arrays + data regions) |
-| **Hash function** | xxhash, 20 bytes | xxHash32 with 5 seeds packed into 20 bytes |
-| **Chunk target** | ~4KB | 4KB (512B min, 16KB max) |
-| **Boundary detection** | Rolling hash, `(hash & pattern) == pattern` | Same algorithm |
-
-### Key Encoding
-
-**Dolt** uses a purpose-built tuple encoding: fields are serialized as contiguous
-bytes with a trailing offset array and field count. Keys sort lexicographically,
-so comparison is a single `memcmp`.
-
-**Doltlite** uses sort key materialization for index (BLOBKEY) entries. Each
-SQLite record is converted to a memcmp-sortable byte string at insert time:
-integers and floats are encoded as IEEE 754 doubles with sign normalization,
-text and blobs use NUL-byte escaping with double-NUL terminators. The sort key
-is stored as the prolly tree key; the original SQLite record is stored as the
-value (for reads). This enables `memcmp` comparison in the tree at the cost of
-~2x index entry size. For INTKEY tables (rowid tables), keys are 8-byte
-little-endian integers — comparison is trivial.
-
-### Tree Mutation
-
-**Dolt** uses a chunker with `advanceTo` boundary synchronization. Two cursors
-track the old tree and new tree simultaneously. When the chunker fires a boundary
-that aligns with an old tree node boundary, it skips the entire unchanged
-subtree. This handles splits, merges, and boundary drift naturally within a
-single bottom-up pass.
-
-**Doltlite** uses a cursor-path-stack approach. For each edit, it seeks from root
-to leaf, clones the leaf into a node builder, applies edits, serializes the new
-leaf (with rolling-hash re-chunking for overflow/underflow), and rewrites
-ancestors by walking up the path stack. Unchanged subtrees are never loaded. A
-hybrid strategy falls back to a full O(N+M) merge-walk when the edit count is
-large relative to tree size.
-
-Both achieve O(M log N) for sparse edits. Dolt's approach is more elegant for
-boundary maintenance; doltlite's is simpler to implement in C and integrates
-naturally with SQLite's cursor-based API.
-
-### Chunk Store
-
-**Dolt** uses the Noms Block Store (NBS) format with multiple table files
-organized into generations (oldgen/newgen). Writers append new table files;
-readers see consistent snapshots. This enables MVCC-like concurrency with
-optimistic locking at the manifest level.
-
-**Doltlite** uses a single file with three regions: a 168-byte manifest header
-at offset 0, a compacted chunk data region with sorted index (written by GC),
-and a WAL region at the end of the file (append-only journal of new chunks).
-Normal commits append to the WAL region at EOF. GC rewrites the entire file
-with all chunks compacted (empty WAL region). Concurrency uses file-level
-locking for serialization.
-
-### Commits and Metadata
-
-**Dolt** stores commits as FlatBuffer-serialized objects forming a DAG (directed
-acyclic graph) with multiple parents for merge commits. Commits include a parent
-closure for O(1) ancestor queries and a height field for efficient traversal.
-
-**Doltlite** stores commits as custom binary objects forming a DAG with
-multi-parent support (merge commits record both parents). Each branch has an
-associated WorkingSet chunk that stores staged catalog and merge state
-independently, plus a per-branch working catalog tracked in a separate working
-state chunk (referenced by the manifest). This allows connections on different
-branches to each find their own catalog on refresh without reading a stale
-catalog from another branch. The catalog hash is purely data-derived (no
-runtime metadata), enabling O(1) dirty checks via hash comparison. Branches
-and tags are stored in a serialized refs chunk referenced by the manifest.
-
-### Garbage Collection
-
-Both use mark-and-sweep: walk all reachable chunks from branches, tags, and
-commit history, then remove everything else. Dolt rewrites live data into new
-table files and deletes old ones. Doltlite compacts in-place by rewriting the
-single database file with only live chunks.
+See [`docs/architecture.md`](docs/architecture.md) for a side-by-side
+of doltlite and Dolt covering node format, key encoding, tree mutation,
+chunk store, commit graph, and GC.
