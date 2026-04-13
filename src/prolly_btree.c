@@ -335,7 +335,9 @@ struct BtCursor {
   /* Merge iteration state: mmIdx indexes into the mutmap's sorted order.
   ** mergeSrc says where the current row comes from. */
   int mmIdx;
+  int mmPhysIdx;           /* Physical mutmap entry index for exact hits */
   u8 mmActive;
+  u8 mmPhysActive;
 #define MERGE_SRC_TREE  0
 #define MERGE_SRC_MUT   1
 #define MERGE_SRC_BOTH  2   /* Same key in tree and MutMap; MutMap wins */
@@ -1081,15 +1083,44 @@ static int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData){
 
 static void clearMergeCursorState(BtCursor *pCur){
   pCur->mmIdx = -1;
+  pCur->mmPhysIdx = -1;
   pCur->mmActive = 0;
+  pCur->mmPhysActive = 0;
   pCur->mergeSrc = MERGE_SRC_TREE;
+}
+
+static ProllyMutMapEntry *currentMutMapEntry(BtCursor *pCur){
+  if( pCur->mmPhysActive ){
+    return &pCur->pMutMap->aEntries[pCur->mmPhysIdx];
+  }
+  return prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
+}
+
+static void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
+  ProllyMutMapEntry *pEntry = &pCur->pMutMap->aEntries[physIdx];
+  CLEAR_CACHED_PAYLOAD(pCur);
+  pCur->mmIdx = -1;
+  pCur->mmPhysIdx = physIdx;
+  pCur->mmActive = 1;
+  pCur->mmPhysActive = 1;
+  pCur->mergeSrc = MERGE_SRC_MUT;
+  pCur->eState = CURSOR_VALID;
+  pCur->curFlags &= ~BTCF_AtLast;
+  if( pCur->curIntKey ){
+    pCur->cachedIntKey = pEntry->intKey;
+    pCur->curFlags |= BTCF_ValidNKey;
+  }else{
+    pCur->curFlags &= ~BTCF_ValidNKey;
+  }
 }
 
 static void setCursorToMutMapEntry(BtCursor *pCur, int idx){
   ProllyMutMapEntry *pEntry = prollyMutMapEntryAt(pCur->pMutMap, idx);
   CLEAR_CACHED_PAYLOAD(pCur);
   pCur->mmIdx = idx;
+  pCur->mmPhysIdx = -1;
   pCur->mmActive = 1;
+  pCur->mmPhysActive = 0;
   pCur->mergeSrc = MERGE_SRC_MUT;
   pCur->eState = CURSOR_VALID;
   pCur->curFlags &= ~BTCF_AtLast;
@@ -1223,6 +1254,8 @@ static int syncSavepoints(BtCursor *pCur){
 
 static int ensureMutMap(BtCursor *pCur){
   int rc;
+  struct TableEntry *pTE;
+  int keepSorted;
   if( pCur->pMutMap ){
     return SQLITE_OK;
   }
@@ -1230,7 +1263,9 @@ static int ensureMutMap(BtCursor *pCur){
   if( !pCur->pMutMap ){
     return SQLITE_NOMEM;
   }
-  rc = prollyMutMapInit(pCur->pMutMap, pCur->curIntKey);
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  keepSorted = tableEntryIsTableRoot(pCur->pBtree, pTE);
+  rc = prollyMutMapInitMode(pCur->pMutMap, pCur->curIntKey, (u8)keepSorted);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pCur->pMutMap);
     pCur->pMutMap = 0;
@@ -1271,7 +1306,7 @@ static int saveCursorPosition(BtCursor *pCur){
   if( pCur->curIntKey ){
     if( pCur->mmActive
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-      pCur->nKey = prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx)->intKey;
+      pCur->nKey = currentMutMapEntry(pCur)->intKey;
     }else{
       pCur->nKey = prollyCursorIntKey(&pCur->pCur);
     }
@@ -1281,7 +1316,7 @@ static int saveCursorPosition(BtCursor *pCur){
     int nKey = 0;
     if( pCur->mmActive
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-      ProllyMutMapEntry *pEntry = prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
+      ProllyMutMapEntry *pEntry = currentMutMapEntry(pCur);
       pKey = pEntry->pKey;
       nKey = pEntry->nKey;
     }else{
@@ -1453,7 +1488,7 @@ static int allocEmptyPendingLike(ProllyMutMap *pSrc, ProllyMutMap **ppOut){
   *ppOut = 0;
   pNew = sqlite3_malloc(sizeof(ProllyMutMap));
   if( !pNew ) return SQLITE_NOMEM;
-  rc = prollyMutMapInit(pNew, pSrc->isIntKey);
+  rc = prollyMutMapInitMode(pNew, pSrc->isIntKey, pSrc->keepSorted);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pNew);
     return rc;
@@ -3318,6 +3353,12 @@ static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
 ** If pRes is non-NULL (mergeFirst/mergeLast), sets *pRes=1 if empty.
 ** If pRes is NULL (mergeStep), returns SQLITE_DONE if exhausted. */
 static int mergeScan(BtCursor *pCur, int dir, int *pRes){
+  if( pCur->mmPhysActive ){
+    pCur->mmIdx = prollyMutMapOrderIndexFromEntry(
+        pCur->pMutMap, &pCur->pMutMap->aEntries[pCur->mmPhysIdx]);
+    pCur->mmPhysIdx = -1;
+    pCur->mmPhysActive = 0;
+  }
   for(;;){
     int treeOk = (pCur->pCur.eState==PROLLY_CURSOR_VALID);
     int mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
@@ -3750,8 +3791,6 @@ static int prollyBtCursorTableMoveto(
     ProllyMutMapEntry *pEntry = prollyMutMapFind(pCur->pMutMap, 0, 0, intKey);
     if( pEntry ){
       if( pEntry->op == PROLLY_EDIT_INSERT ){
-        int idx = prollyMutMapOrderIndexFromEntry(pCur->pMutMap, pEntry);
-
         *pRes = 0;
         refreshCursorRoot(pCur);
         {
@@ -3759,7 +3798,7 @@ static int prollyBtCursorTableMoveto(
           rc = prollyCursorSeekInt(&pCur->pCur, intKey, &seekRes);
           if( rc!=SQLITE_OK ) return rc;
         }
-        setCursorToMutMapEntry(pCur, idx);
+        setCursorToMutMapEntryPhys(pCur, (int)(pEntry - pCur->pMutMap->aEntries));
         return SQLITE_OK;
       } else {
 
@@ -4247,10 +4286,10 @@ static int prollyBtCursorIndexMoveto(
     sqlite3_free(pSortKey);
 
     
-    if( mutFound && (!treeFound || treeCmp!=0) ){
+      if( mutFound && (!treeFound || treeCmp!=0) ){
       if( mutFromCursorMap ){
-        setCursorToMutMapEntry(pCur,
-            prollyMutMapOrderIndexFromEntry(pCur->pMutMap, mutE));
+        setCursorToMutMapEntryPhys(
+            pCur, (int)(mutE - pCur->pMutMap->aEntries));
       }else{
         rc = cacheCursorPayloadCopy(pCur, mutKey, mutNKey);
         if( rc!=SQLITE_OK ){
@@ -4299,7 +4338,7 @@ static i64 prollyBtCursorIntegerKey(BtCursor *pCur){
   
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    return prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx)->intKey;
+    return currentMutMapEntry(pCur)->intKey;
   }
   if( !prollyCursorIsValid(&pCur->pCur)
    && (pCur->curFlags & BTCF_ValidNKey) ){
@@ -4328,7 +4367,7 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    ProllyMutMapEntry *e = prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
+    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
     if( pCur->curIntKey ){
       
       *ppData = e->pVal;
@@ -4824,7 +4863,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     if( pCur->curIntKey ){
       if( pCur->mmActive
        && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-        savedIntKey = prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx)->intKey;
+        savedIntKey = currentMutMapEntry(pCur)->intKey;
         hasSavedKey = 1;
       }else if( !prollyCursorIsValid(&pCur->pCur)
        && (pCur->curFlags & BTCF_ValidNKey) ){
@@ -4837,7 +4876,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     } else {
       if( pCur->mmActive
        && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-        ProllyMutMapEntry *e = prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
+        ProllyMutMapEntry *e = currentMutMapEntry(pCur);
         pSavedDelKey = sqlite3_malloc(e->nKey);
         if( !pSavedDelKey ) return SQLITE_NOMEM;
         memcpy(pSavedDelKey, e->pKey, e->nKey);
