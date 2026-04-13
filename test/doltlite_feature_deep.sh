@@ -176,7 +176,7 @@ SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "gc_diff_works" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^1$" "$DB"
 
 db_rm "$DB"

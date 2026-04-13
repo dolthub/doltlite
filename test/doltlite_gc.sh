@@ -202,13 +202,13 @@ echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Inter-commit diff should still work after GC
 run_test_match "gc_diff_works" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^[1-9]" "$DB"
 
 # Working diff: INSERT autocommits at SQL level but is not dolt-committed,
-# so dolt_diff('t') should show it as a working change.
+# so dolt_diff_t should show it as a working change.
 echo "INSERT INTO t VALUES(3,'c');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "gc_diff_working" "SELECT count(*) FROM dolt_diff('t');" "1" "$DB"
+run_test "gc_diff_working" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "1" "$DB"
 
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB" > /dev/null 2>&1
 db_rm "$DB"
@@ -344,7 +344,7 @@ run_test "gc_taghist_data" "SELECT count(*) FROM t;" "3" "$DB"
 
 # Diff between tags should still work (old tree nodes preserved)
 run_test_match "gc_taghist_diff" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT tag_hash FROM dolt_tags WHERE tag_name='v1.0'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v2.0'));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT tag_hash FROM dolt_tags WHERE tag_name='v1.0'), (SELECT tag_hash FROM dolt_tags WHERE tag_name='v2.0'), 't');" \
   "^[1-9]" "$DB"
 
 db_rm "$DB"

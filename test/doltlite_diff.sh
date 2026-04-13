@@ -23,140 +23,109 @@ echo ""
 
 DB=/tmp/test_diff_$$.db; rm -f "$DB"
 
-# Setup: create table, commit, make changes
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# No changes = empty diff
-run_test "empty_diff" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+run_test "empty_working_diff" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "0" "$DB"
 
-# Insert a row
 echo "INSERT INTO t VALUES(4,'d');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "diff_add" \
-  "SELECT diff_type, rowid_val FROM dolt_diff('t');" \
+run_test "working_add" \
+  "SELECT diff_type || '|' || coalesce(to_id, from_id) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "added|4" "$DB"
 
-# Delete a row
 echo "DELETE FROM t WHERE id=2;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "diff_add_and_delete" \
-  "SELECT diff_type FROM dolt_diff('t') ORDER BY rowid_val;" \
+run_test_match "working_add_and_delete" \
+  "SELECT group_concat(diff_type, ',') FROM (SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING' ORDER BY coalesce(to_id, from_id));" \
   "removed" "$DB"
 
-# Update a row
 echo "UPDATE t SET val='A' WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "diff_modify" \
-  "SELECT diff_type FROM dolt_diff('t') WHERE rowid_val=1;" \
+run_test "working_modify" \
+  "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING' AND coalesce(to_id, from_id)=1;" \
   "modified" "$DB"
 
-# Count all changes
-run_test "diff_count_changes" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+run_test "working_change_count" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "3" "$DB"
 
-# Commit, then diff should be empty
 echo "SELECT dolt_commit('-A','-m','changes');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "diff_empty_after_commit" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+run_test "working_empty_after_commit" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "0" "$DB"
 
-# Diff between two commits
-run_test "diff_between_commits" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+run_test "diff_stat_between_commits" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "3" "$DB"
 
-# Diff types between commits
-run_test_match "diff_types_between_commits" \
-  "SELECT diff_type FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1)) ORDER BY rowid_val;" \
-  "modified" "$DB"
+run_test "diff_summary_between_commits" \
+  "SELECT data_change || '|' || schema_change FROM dolt_diff_summary((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
+  "1|0" "$DB"
 
-# Diff nonexistent table = empty
 run_test "diff_no_such_table" \
-  "SELECT count(*) FROM dolt_diff('nonexistent');" \
+  "SELECT count(*) FROM dolt_diff WHERE table_name='nonexistent';" \
   "0" "$DB"
 
-# Bad ref should surface an error, not an empty diff
 run_test_match "diff_bad_ref_errors" \
-  "SELECT count(*) FROM dolt_diff('t', 'definitely_not_a_ref', (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT count(*) FROM dolt_diff_stat('definitely_not_a_ref', (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "Error" "$DB"
 
-# Diff with only adds (new table after commit)
 DB2=/tmp/test_diff2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE t(x); SELECT dolt_commit('-A','-m','empty');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(1),(2),(3);" | $DOLTLITE "$DB2" > /dev/null 2>&1
 run_test "diff_all_adds" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "3" "$DB2"
 
 run_test "diff_all_adds_type" \
-  "SELECT DISTINCT diff_type FROM dolt_diff('t');" \
+  "SELECT DISTINCT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "added" "$DB2"
 
-# Diff with only deletes
 echo "SELECT dolt_commit('-A','-m','added');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "DELETE FROM t;" | $DOLTLITE "$DB2" > /dev/null 2>&1
 run_test "diff_all_deletes" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "3" "$DB2"
 
 run_test "diff_all_deletes_type" \
-  "SELECT DISTINCT diff_type FROM dolt_diff('t');" \
+  "SELECT DISTINCT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "removed" "$DB2"
 
-# --- Diff with branch names as refs ---
 DB3=/tmp/test_diff3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(3,'c'); UPDATE t SET val='A' WHERE id=1; SELECT dolt_commit('-A','-m','feat changes');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 
 run_test "diff_branch_names" \
-  "SELECT count(*) FROM dolt_diff('t', 'main', 'feat');" \
-  "2" "$DB3"
+  "SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('main', 'feat', 't');" \
+  "1|1" "$DB3"
 
-run_test_match "diff_branch_names_types" \
-  "SELECT diff_type FROM dolt_diff('t', 'main', 'feat') ORDER BY rowid_val;" \
-  "modified" "$DB3"
-
-run_test_match "diff_branch_names_added" \
-  "SELECT diff_type FROM dolt_diff('t', 'main', 'feat') ORDER BY rowid_val;" \
-  "added" "$DB3"
-
-# Branch name result matches hex hash result
 run_test "diff_branch_matches_hash" \
-  "SELECT (SELECT group_concat(diff_type||rowid_val) FROM dolt_diff('t', 'main', 'feat'))
-       = (SELECT group_concat(diff_type||rowid_val) FROM dolt_diff('t',
-            (SELECT hash FROM dolt_branches WHERE name='main'),
-            (SELECT hash FROM dolt_branches WHERE name='feat')));" \
+  "SELECT (SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('main', 'feat', 't')) = (SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat((SELECT hash FROM dolt_branches WHERE name='main'), (SELECT hash FROM dolt_branches WHERE name='feat'), 't'));" \
   "1" "$DB3"
 
-# Diff with one branch name and one hash
 run_test "diff_mixed_ref_types" \
-  "SELECT count(*) FROM dolt_diff('t', 'main',
-    (SELECT hash FROM dolt_branches WHERE name='feat'));" \
-  "2" "$DB3"
+  "SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('main', (SELECT hash FROM dolt_branches WHERE name='feat'), 't');" \
+  "1|1" "$DB3"
 
-# Diff from branch to working state (only from_commit, no to_commit)
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(4,'d');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 run_test "diff_branch_to_working" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "1" "$DB3"
 
-# Tag as ref
 DB4=/tmp/test_diff4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','v1');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 echo "SELECT dolt_tag('v1');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','v2');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 
 run_test "diff_tag_ref" \
-  "SELECT count(*) FROM dolt_diff('t', 'v1', 'main');" \
+  "SELECT rows_added FROM dolt_diff_stat('v1', 'main', 't');" \
   "1" "$DB4"
 
 run_test "diff_tag_type" \
-  "SELECT diff_type FROM dolt_diff('t', 'v1', 'main');" \
-  "added" "$DB4"
+  "SELECT diff_type FROM dolt_diff_summary('v1', 'main', 't');" \
+  "modified" "$DB4"
 
-# Cleanup
 rm -f "$DB" "$DB2" "$DB3" "$DB4"
 
 echo ""

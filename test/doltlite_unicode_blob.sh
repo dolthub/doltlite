@@ -26,11 +26,11 @@ run_test "emoji_insert" \
 # Modify emoji row and check diff shows it
 echo "UPDATE t SET val='Goodbye 👋';" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "emoji_diff_type" \
-  "SELECT diff_type FROM dolt_diff('t');" \
+  "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "modified" "$DB"
 
 run_test_match "emoji_diff_to_value" \
-  "SELECT to_value FROM dolt_diff('t') WHERE rowid_val=1;" \
+  "SELECT to_val FROM dolt_diff_t WHERE to_commit='WORKING' AND coalesce(to_id, from_id)=1;" \
   "Goodbye" "$DB"
 
 echo "SELECT dolt_commit('-A','-m','update emoji');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -163,7 +163,7 @@ run_test_match "tab_data" \
 # Diff should work with these characters
 echo "UPDATE t SET val='plain' WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "special_char_diff" \
-  "SELECT diff_type FROM dolt_diff('t');" \
+  "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "modified" "$DB"
 
 echo "SELECT dolt_commit('-A','-m','normalize');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -188,7 +188,7 @@ run_test "100kb_length" \
 # Modify and check diff works
 echo "UPDATE t SET val='short';" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "100kb_diff" \
-  "SELECT diff_type FROM dolt_diff('t');" \
+  "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "modified" "$DB"
 
 echo "SELECT dolt_commit('-A','-m','shorten');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -260,7 +260,7 @@ run_test "wide_table_data" \
 # Diff works on wide table
 echo "UPDATE wide SET c1='modified' WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "wide_table_diff" \
-  "SELECT diff_type FROM dolt_diff('wide');" \
+  "SELECT diff_type FROM dolt_diff_wide WHERE to_commit='WORKING';" \
   "modified" "$DB"
 
 echo "SELECT dolt_commit('-A','-m','update wide');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -337,7 +337,7 @@ echo "UPDATE t SET val=NULL WHERE id=1;
 UPDATE t SET val='' WHERE id=2;" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "swap_diff_count" \
-  "SELECT count(*) FROM dolt_diff('t');" \
+  "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "2" "$DB"
 
 echo "SELECT dolt_commit('-A','-m','swap');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -384,7 +384,7 @@ run_test "int_min" \
 # Diff works with boundary values
 echo "UPDATE t SET val=1 WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "int_boundary_diff" \
-  "SELECT diff_type FROM dolt_diff('t');" \
+  "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "modified" "$DB"
 
 echo "SELECT dolt_commit('-A','-m','update zero');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -434,7 +434,7 @@ run_test_match "real_inf_type" \
 # Diff works with float values
 echo "UPDATE t SET val=42.5 WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "real_diff" \
-  "SELECT diff_type FROM dolt_diff('t');" \
+  "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "modified" "$DB"
 
 echo "SELECT dolt_commit('-A','-m','update reals');" | $DOLTLITE "$DB" > /dev/null 2>&1

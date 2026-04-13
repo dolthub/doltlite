@@ -105,17 +105,6 @@ static int schemaHasAnyViewOrTrigger(sqlite3 *db,
   return found;
 }
 
-/* Per-row diff (legacy form: dolt_diff('table', from, to)). */
-typedef struct DiffRow DiffRow;
-struct DiffRow {
-  u8 type;
-  i64 intKey;
-  u8 *pOldVal;
-  int nOldVal;
-  u8 *pNewVal;
-  int nNewVal;
-};
-
 /* Summary row (no-arg form: SELECT * FROM dolt_diff). One row per
 ** (commit, changed_table) describing whether the table's data and/or
 ** schema changed at that commit relative to its first parent. */
@@ -138,36 +127,18 @@ struct DoltliteDiffVtab {
 };
 
 /* idxNum bit layout:
-**   bit 0: table_name constraint present (per-row legacy mode)
-**   bit 1: from_commit constraint present
-**   bit 2: to_commit  constraint present
-** When bit 0 is clear, the cursor runs in summary mode and walks the
-** commit history. */
+**   bit 0: visible table_name equality constraint present */
 #define DIFF_IDX_TABLE_NAME  0x01
-#define DIFF_IDX_FROM_COMMIT 0x02
-#define DIFF_IDX_TO_COMMIT   0x04
 
 typedef struct DoltliteDiffCursor DoltliteDiffCursor;
 struct DoltliteDiffCursor {
   sqlite3_vtab_cursor base;
-  int isSummary;
-  /* Per-row legacy mode */
-  DiffRow *aRows;
-  int nRows;
-  int iPkField;
-  /* Summary mode */
   DiffSummaryRow *aSummary;
   int nSummary;
-  /* Shared cursor position */
   int iRow;
 };
 
-/* The schema declares both the summary-form columns (visible, matching
-** Dolt's `SELECT * FROM dolt_diff`) and the legacy per-row form columns
-** (visible, retained for the 90+ existing self-tests that select them by
-** name). The HIDDEN trailing columns are the function-call args that
-** trigger per-row mode. In summary-mode rows, the per-row columns are
-** NULL; in per-row-mode rows, the summary columns are NULL. */
+/* Summary-only surface matching Dolt's `SELECT * FROM dolt_diff`. */
 static const char *diffSchema =
   "CREATE TABLE x("
   "  commit_hash   TEXT,"     /* 0  summary */
@@ -177,13 +148,7 @@ static const char *diffSchema =
   "  message       TEXT,"     /* 4  summary */
   "  data_change   INTEGER,"  /* 5  summary */
   "  schema_change INTEGER,"  /* 6  summary */
-  "  diff_type     TEXT,"     /* 7  per-row */
-  "  rowid_val     INTEGER,"  /* 8  per-row */
-  "  from_value    TEXT,"     /* 9  per-row */
-  "  to_value      TEXT,"     /* 10 per-row */
-  "  table_name    TEXT HIDDEN,"  /* 11 constraint */
-  "  from_commit   TEXT HIDDEN,"  /* 12 constraint */
-  "  to_commit     TEXT HIDDEN"   /* 13 constraint */
+  "  table_name    TEXT"      /* 7  summary/filter */
   ")";
 
 #define DIFF_COL_COMMIT_HASH   0
@@ -193,99 +158,7 @@ static const char *diffSchema =
 #define DIFF_COL_MESSAGE       4
 #define DIFF_COL_DATA_CHANGE   5
 #define DIFF_COL_SCHEMA_CHANGE 6
-#define DIFF_COL_DIFF_TYPE     7
-#define DIFF_COL_ROWID_VAL     8
-#define DIFF_COL_FROM_VALUE    9
-#define DIFF_COL_TO_VALUE      10
-#define DIFF_COL_TABLE_NAME    11
-#define DIFF_COL_FROM_COMMIT   12
-#define DIFF_COL_TO_COMMIT     13
-
-static int diffDupValue(const u8 *pIn, int nIn, u8 **ppOut){
-  u8 *pCopy;
-  *ppOut = 0;
-  if( !pIn || nIn<=0 ) return SQLITE_OK;
-  pCopy = sqlite3_malloc(nIn);
-  if( !pCopy ) return SQLITE_NOMEM;
-  memcpy(pCopy, pIn, nIn);
-  *ppOut = pCopy;
-  return SQLITE_OK;
-}
-
-static int detectPkField(sqlite3 *db, const char *zTable){
-  char *zSql;
-  sqlite3_stmt *pStmt = 0;
-  int rc, pkField = -1, colIdx = 0;
-
-  zSql = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTable);
-  if( !zSql ) return -1;
-  rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
-  sqlite3_free(zSql);
-  if( rc!=SQLITE_OK ) return -1;
-
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
-    int pk = sqlite3_column_int(pStmt, 5);
-    if( pk==1 ){
-      const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
-      if( zType && sqlite3_stricmp(zType, "INTEGER")==0 ){
-        
-        sqlite3_finalize(pStmt);
-        return -1;
-      }
-      
-      pkField = colIdx;
-    }
-    colIdx++;
-  }
-  sqlite3_finalize(pStmt);
-  return pkField;
-}
-
-static int diffCollect(void *pCtx, const ProllyDiffChange *pChange){
-  DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCtx;
-  DiffRow *aNew;
-  DiffRow *r;
-  int rc;
-
-  aNew = sqlite3_realloc(pCur->aRows, (pCur->nRows+1)*(int)sizeof(DiffRow));
-  if( !aNew ) return SQLITE_NOMEM;
-  pCur->aRows = aNew;
-  r = &aNew[pCur->nRows];
-  memset(r, 0, sizeof(*r));
-
-  r->type = pChange->type;
-  r->intKey = pChange->intKey;
-
-  if( pChange->pOldVal && pChange->nOldVal>0 ){
-    rc = diffDupValue(pChange->pOldVal, pChange->nOldVal, &r->pOldVal);
-    if( rc!=SQLITE_OK ) return rc;
-    r->nOldVal = pChange->nOldVal;
-  }
-  if( pChange->pNewVal && pChange->nNewVal>0 ){
-    rc = diffDupValue(pChange->pNewVal, pChange->nNewVal, &r->pNewVal);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(r->pOldVal);
-      r->pOldVal = 0;
-      r->nOldVal = 0;
-      return rc;
-    }
-    r->nNewVal = pChange->nNewVal;
-  }
-
-  pCur->nRows++;
-  return SQLITE_OK;
-}
-
-static void freeDiffRows(DoltliteDiffCursor *pCur){
-  int i;
-  for(i=0; i<pCur->nRows; i++){
-    sqlite3_free(pCur->aRows[i].pOldVal);
-    sqlite3_free(pCur->aRows[i].pNewVal);
-  }
-  sqlite3_free(pCur->aRows);
-  pCur->aRows = 0;
-  pCur->nRows = 0;
-}
+#define DIFF_COL_TABLE_NAME    7
 
 static void freeSummaryRows(DoltliteDiffCursor *pCur){
   int i;
@@ -595,27 +468,6 @@ walk_done:
   return rc;
 }
 
-static int resolveCommitToTableRoot(
-  sqlite3 *db, const ProllyHash *pCommitHash, Pgno iTable,
-  ProllyHash *pRoot, u8 *pFlags
-){
-  DoltliteCommit commit;
-  struct TableEntry *aTables = 0;
-  int nTables = 0;
-  int rc;
-
-  rc = doltliteLoadCommit(db, pCommitHash, &commit);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = doltliteLoadCatalog(db, &commit.catalogHash, &aTables, &nTables, 0);
-  doltliteCommitClear(&commit);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = doltliteFindTableRoot(aTables, nTables, iTable, pRoot, pFlags);
-  sqlite3_free(aTables);
-  return rc;
-}
-
 static int diffConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   DoltliteDiffVtab *pVtab;
@@ -638,8 +490,6 @@ static int diffDisconnect(sqlite3_vtab *pVtab){
 
 static int diffBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int iTableName = -1;
-  int iFromCommit = -1;
-  int iToCommit = -1;
   int i;
   int argvIdx = 1;
   (void)pVtab;
@@ -649,8 +499,6 @@ static int diffBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     switch( pInfo->aConstraint[i].iColumn ){
       case DIFF_COL_TABLE_NAME:  iTableName  = i; break;
-      case DIFF_COL_FROM_COMMIT: iFromCommit = i; break;
-      case DIFF_COL_TO_COMMIT:   iToCommit   = i; break;
     }
   }
 
@@ -658,20 +506,8 @@ static int diffBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
     pInfo->aConstraintUsage[iTableName].argvIndex = argvIdx++;
     pInfo->aConstraintUsage[iTableName].omit = 1;
   }
-  if( iFromCommit>=0 ){
-    pInfo->aConstraintUsage[iFromCommit].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iFromCommit].omit = 1;
-  }
-  if( iToCommit>=0 ){
-    pInfo->aConstraintUsage[iToCommit].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iToCommit].omit = 1;
-  }
 
-  pInfo->idxNum = (iTableName>=0  ? DIFF_IDX_TABLE_NAME  : 0)
-                | (iFromCommit>=0 ? DIFF_IDX_FROM_COMMIT : 0)
-                | (iToCommit>=0   ? DIFF_IDX_TO_COMMIT   : 0);
-  /* Summary mode (no table_name) walks the full commit history; per-row
-  ** mode is bounded by a single (table, from, to) lookup. */
+  pInfo->idxNum = (iTableName>=0  ? DIFF_IDX_TABLE_NAME  : 0);
   pInfo->estimatedCost = (iTableName>=0) ? 1000.0 : 100000.0;
   pInfo->estimatedRows = 100;
   return SQLITE_OK;
@@ -689,7 +525,6 @@ static int diffOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
 
 static int diffClose(sqlite3_vtab_cursor *pCursor){
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
-  freeDiffRows(pCur);
   freeSummaryRows(pCur);
   sqlite3_free(pCur);
   return SQLITE_OK;
@@ -700,146 +535,38 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
   DoltliteDiffVtab *pVtab = (DoltliteDiffVtab*)pCursor->pVtab;
   sqlite3 *db = pVtab->db;
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  BtShared *pBt = doltliteGetBtShared(db);
   const char *zTableName = 0;
-  const char *zFromCommit = 0;
-  const char *zToCommit = 0;
-  ProllyHash oldRoot, newRoot, headCatHash, workingCatHash;
-  u8 flags = 0;
-  Pgno iTable;
   int rc = SQLITE_OK;
   int argIdx = 0;
-  struct TableEntry *aHead = 0;
-  struct TableEntry *aWork = 0;
-  int nHead = 0;
-  int nWork = 0;
+  int i;
   (void)idxStr;
 
-  freeDiffRows(pCur);
   freeSummaryRows(pCur);
   pCur->iRow = 0;
-  pCur->isSummary = 0;
-  memset(&oldRoot, 0, sizeof(oldRoot));
-  memset(&newRoot, 0, sizeof(newRoot));
-  memset(&headCatHash, 0, sizeof(headCatHash));
-  memset(&workingCatHash, 0, sizeof(workingCatHash));
-
-  if( !cs || !pBt ) return SQLITE_OK;
-
-  /* No table_name constraint -> commits-touching-tables summary mode. */
-  if( (idxNum & DIFF_IDX_TABLE_NAME)==0 ){
-    pCur->isSummary = 1;
-    return collectSummary(pCur, db);
-  }
+  rc = collectSummary(pCur, db);
+  if( rc!=SQLITE_OK ) return rc;
 
   if( (idxNum & DIFF_IDX_TABLE_NAME) && argIdx<argc ){
     zTableName = (const char*)sqlite3_value_text(argv[argIdx++]);
   }
-  if( (idxNum & DIFF_IDX_FROM_COMMIT) && argIdx<argc ){
-    zFromCommit = (const char*)sqlite3_value_text(argv[argIdx++]);
-  }
-  if( (idxNum & DIFF_IDX_TO_COMMIT) && argIdx<argc ){
-    zToCommit = (const char*)sqlite3_value_text(argv[argIdx++]);
-  }
-
   if( !zTableName ) return SQLITE_OK;
-
-  pCur->iPkField = detectPkField(db, zTableName);
-
-  rc = doltliteResolveTableName(db, zTableName, &iTable);
-  if( rc!=SQLITE_OK ){
-    /* The named object isn't a user table — but the user may be
-    ** filtering dolt_diff's summary output by table_name (e.g.
-    ** `SELECT * FROM dolt_diff WHERE table_name='dolt_schemas'`).
-    ** The HIDDEN column + bestIndex routing can't distinguish a
-    ** filter from a TVF call, so fall through to summary mode and
-    ** filter the result by name. Only do this when no commit bounds
-    ** are specified — a 3-arg call names a missing table for a
-    ** real reason and should stay empty. */
-    if( zFromCommit==0 && zToCommit==0 ){
-      int i;
-      pCur->isSummary = 1;
-      rc = collectSummary(pCur, db);
-      if( rc!=SQLITE_OK ) return rc;
-      /* In-place filter. Shift-compact kept rows to the front. */
-      {
-        int out = 0;
-        for(i=0; i<pCur->nSummary; i++){
-          if( pCur->aSummary[i].zTableName
-           && strcmp(pCur->aSummary[i].zTableName, zTableName)==0 ){
-            if( out!=i ) pCur->aSummary[out] = pCur->aSummary[i];
-            out++;
-          }else{
-            sqlite3_free(pCur->aSummary[i].zTableName);
-            sqlite3_free(pCur->aSummary[i].zCommitter);
-            sqlite3_free(pCur->aSummary[i].zEmail);
-            sqlite3_free(pCur->aSummary[i].zMessage);
-          }
-        }
-        pCur->nSummary = out;
-      }
-    }
-    return SQLITE_OK;
-  }
-
-  
-  if( zFromCommit ){
-    ProllyHash fromCommitHash;
-    rc = doltliteResolveRef(db, zFromCommit, &fromCommitHash);
-    if( rc==SQLITE_OK ){
-      rc = resolveCommitToTableRoot(db, &fromCommitHash, iTable, &oldRoot, &flags);
-      if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
-    }
-  }else{
-    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-    if( rc==SQLITE_OK ){
-      rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
-      if( rc==SQLITE_OK ){
-        rc = doltliteFindTableRoot(aHead, nHead, iTable, &oldRoot, &flags);
-        if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
-      }
-    }
-  }
-  if( rc!=SQLITE_OK ) goto diff_filter_done;
-
-  
-  if( zToCommit ){
-    ProllyHash toCommitHash;
-    u8 f2;
-    rc = doltliteResolveRef(db, zToCommit, &toCommitHash);
-    if( rc==SQLITE_OK ){
-      rc = resolveCommitToTableRoot(db, &toCommitHash, iTable, &newRoot, &f2);
-      if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
-    }
-    if( flags==0 ) flags = f2;
-  }else{
-    rc = doltliteFlushCatalogToHash(db, &workingCatHash);
-    if( rc==SQLITE_OK ){
-      rc = doltliteLoadCatalog(db, &workingCatHash, &aWork, &nWork, 0);
-      if( rc==SQLITE_OK ){
-        rc = doltliteFindTableRoot(aWork, nWork, iTable, &newRoot, &flags);
-        if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
-      }
-    }
-  }
-  if( rc!=SQLITE_OK ) goto diff_filter_done;
-
-  
-  if( prollyHashCompare(&oldRoot, &newRoot)==0 ) goto diff_filter_done;
-
-  
   {
-    ProllyCache *pCache = doltliteGetCache(db);
-
-    rc = prollyDiff(cs, pCache, &oldRoot, &newRoot, flags,
-                    diffCollect, (void*)pCur);
+    int out = 0;
+    for(i=0; i<pCur->nSummary; i++){
+      if( pCur->aSummary[i].zTableName
+       && strcmp(pCur->aSummary[i].zTableName, zTableName)==0 ){
+        if( out!=i ) pCur->aSummary[out] = pCur->aSummary[i];
+        out++;
+      }else{
+        sqlite3_free(pCur->aSummary[i].zTableName);
+        sqlite3_free(pCur->aSummary[i].zCommitter);
+        sqlite3_free(pCur->aSummary[i].zEmail);
+        sqlite3_free(pCur->aSummary[i].zMessage);
+      }
+    }
+    pCur->nSummary = out;
   }
-
-diff_filter_done:
-  sqlite3_free(aHead);
-  sqlite3_free(aWork);
-  return rc;
+  return SQLITE_OK;
 }
 
 static int diffNext(sqlite3_vtab_cursor *pCursor){
@@ -849,8 +576,7 @@ static int diffNext(sqlite3_vtab_cursor *pCursor){
 
 static int diffEof(sqlite3_vtab_cursor *pCursor){
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
-  if( pCur->isSummary ) return pCur->iRow >= pCur->nSummary;
-  return pCur->iRow >= pCur->nRows;
+  return pCur->iRow >= pCur->nSummary;
 }
 
 static int summaryColumn(DoltliteDiffCursor *pCur, sqlite3_context *ctx,
@@ -910,8 +636,6 @@ static int summaryColumn(DoltliteDiffCursor *pCur, sqlite3_context *ctx,
       sqlite3_result_text(ctx, r->zTableName, -1, SQLITE_TRANSIENT);
       break;
     default:
-      /* Per-row legacy columns and the from/to_commit constraint slots
-      ** are NULL in summary mode. */
       sqlite3_result_null(ctx);
       break;
   }
@@ -920,44 +644,7 @@ static int summaryColumn(DoltliteDiffCursor *pCur, sqlite3_context *ctx,
 
 static int diffColumn(sqlite3_vtab_cursor *pCursor,
     sqlite3_context *ctx, int iCol){
-  DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
-  DiffRow *r;
-
-  if( pCur->isSummary ) return summaryColumn(pCur, ctx, iCol);
-
-  if( pCur->iRow >= pCur->nRows ) return SQLITE_OK;
-  r = &pCur->aRows[pCur->iRow];
-
-  switch( iCol ){
-    case DIFF_COL_DIFF_TYPE:
-      switch( r->type ){
-        case PROLLY_DIFF_ADD:    sqlite3_result_text(ctx,"added",-1,SQLITE_STATIC); break;
-        case PROLLY_DIFF_DELETE: sqlite3_result_text(ctx,"removed",-1,SQLITE_STATIC); break;
-        case PROLLY_DIFF_MODIFY: sqlite3_result_text(ctx,"modified",-1,SQLITE_STATIC); break;
-      }
-      break;
-    case DIFF_COL_ROWID_VAL:
-      if( pCur->iPkField >= 0 ){
-        const u8 *pRec = r->pNewVal ? r->pNewVal : r->pOldVal;
-        int nRec = r->pNewVal ? r->nNewVal : r->nOldVal;
-        doltliteResultRecordPkField(ctx, pRec, nRec, pCur->iPkField);
-      }else{
-        sqlite3_result_int64(ctx, r->intKey);
-      }
-      break;
-    case DIFF_COL_FROM_VALUE:
-      doltliteResultRecord(ctx, r->pOldVal, r->nOldVal);
-      break;
-    case DIFF_COL_TO_VALUE:
-      doltliteResultRecord(ctx, r->pNewVal, r->nNewVal);
-      break;
-    default:
-      /* Summary columns and the constraint columns are NULL in per-row
-      ** mode. */
-      sqlite3_result_null(ctx);
-      break;
-  }
-  return SQLITE_OK;
+  return summaryColumn((DoltliteDiffCursor*)pCursor, ctx, iCol);
 }
 
 static int diffRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){

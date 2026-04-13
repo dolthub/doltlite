@@ -104,7 +104,7 @@ SELECT dolt_commit('-A','-m','empty table');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "empty_count" "SELECT count(*) FROM t;" "0" "$DB"
 run_test "empty_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
-run_test "empty_diff" "SELECT count(*) FROM dolt_diff('t');" "0" "$DB"
+run_test "empty_diff" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "0" "$DB"
 
 # Branch empty table
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -296,7 +296,7 @@ run_test "multiupd_count" "SELECT count(*) FROM t;" "1" "$DB"
 
 # Diff should show 1 change (from first to final)
 run_test_match "multiupd_diff" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^1$" "$DB"
 run_test "multiupd_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
@@ -519,7 +519,7 @@ run_test "subq_tag" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
 
 # Diff using subquery for hashes
 run_test_match "subq_diff" \
-  "SELECT count(*) FROM dolt_diff('t', (SELECT tag_hash FROM dolt_tags WHERE tag_name='first'), (SELECT commit_hash FROM dolt_log LIMIT 1));" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT tag_hash FROM dolt_tags WHERE tag_name='first'), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^[1-9]" "$DB"
 
 rm -f "$DB"

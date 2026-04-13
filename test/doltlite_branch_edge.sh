@@ -182,7 +182,7 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Test: dolt_diff between two different branches' commits
 run_test_match "diff_cross_branch" \
-  "SELECT count(*) FROM dolt_diff('t', '$FEAT_HEAD', '$MAIN_HEAD');" \
+  "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat('$FEAT_HEAD', '$MAIN_HEAD', 't');" \
   "^[1-9]" "$DB"
 
 db_rm "$DB"

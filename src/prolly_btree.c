@@ -38,6 +38,7 @@
 
 static void registerDoltiteFunctions(sqlite3 *db);
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
+int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 
 #ifndef TRANS_NONE
@@ -1963,7 +1964,7 @@ static int btreeLoadWorkingSetBlob(
 
   rc = chunkStoreGet(cs, &wsHash, &data, &nData);
   if( rc!=SQLITE_OK ) return rc;
-  if( !data || nData < WS_TOTAL_SIZE || data[0] != 2 ){
+  if( !data || nData < WS_TOTAL_SIZE || data[0] != WS_FORMAT_VERSION ){
     sqlite3_free(data);
     return SQLITE_CORRUPT;
   }
@@ -1993,7 +1994,7 @@ static int btreeStoreWorkingSetBlob(
   static const ProllyHash emptyHash = {{0}};
   int rc;
 
-  buf[0] = 2;
+  buf[0] = WS_FORMAT_VERSION;
   memcpy(buf + WS_WORKING_CAT_OFF,
          (pWorkingCat ? pWorkingCat : &emptyHash)->data, PROLLY_HASH_SIZE);
   memcpy(buf + WS_WORKING_COMMIT_OFF,
@@ -5395,6 +5396,31 @@ int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash){
 
   memcpy(pCatHash, &commit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&commit);
+  return SQLITE_OK;
+}
+
+int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
+                                 ProllyHash *pRoot, u8 *pFlags,
+                                 ProllyHash *pSchemaHash){
+  Btree *pBtree;
+  Pgno iTable;
+  struct TableEntry *pEntry;
+
+  if( pRoot ) memset(pRoot, 0, sizeof(ProllyHash));
+  if( pFlags ) *pFlags = 0;
+  if( pSchemaHash ) memset(pSchemaHash, 0, sizeof(ProllyHash));
+
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  if( doltliteResolveTableName(db, zTable, &iTable)!=SQLITE_OK ){
+    return SQLITE_NOTFOUND;
+  }
+  pEntry = findTable(pBtree, iTable);
+  if( !pEntry ) return SQLITE_NOTFOUND;
+
+  if( pRoot ) memcpy(pRoot, &pEntry->root, sizeof(ProllyHash));
+  if( pFlags ) *pFlags = pEntry->flags;
+  if( pSchemaHash ) memcpy(pSchemaHash, &pEntry->schemaHash, sizeof(ProllyHash));
   return SQLITE_OK;
 }
 
