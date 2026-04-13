@@ -112,6 +112,21 @@ struct TableEntry {
   ProllyMutMap *pPending;
 };
 
+typedef struct SavepointTableEntry SavepointTableEntry;
+struct SavepointTableEntry {
+  Pgno iTable;
+  ProllyHash root;
+  ProllyHash schemaHash;
+  u8 flags;
+  u8 pendingFlushSeekEdits;
+};
+
+typedef struct SavepointPendingSnapshot SavepointPendingSnapshot;
+struct SavepointPendingSnapshot {
+  Pgno iTable;
+  ProllyMutMap *pPending;
+};
+
 /* Shared backend: owns the content-addressed chunk store and node cache.
 ** pPagerShim exists solely to satisfy SQLite's pager-level queries (e.g.,
 ** iDataVersion for schema change detection) -- no actual paging occurs. */
@@ -251,15 +266,13 @@ struct Btree {
   int nSavepointAlloc;
 
   struct SavepointTableState {
-    struct TableEntry *aTables;
-    /* Lazy deep-copy snapshot of each table's pPending mutmap. Populated
-    ** on the first flush of that table under this savepoint (see
-    ** snapshotPendingForSavepoint). NULL slots mean "no flush happened
-    ** under this savepoint" — rollback falls through to per-entry
-    ** undo-log rollback on the live pPending. Required because the
-    ** root-hash snapshot alone would lose entries that were buffered
-    ** in pPending at savepoint time and then flushed away. */
-    ProllyMutMap **aPendingSnapshot;
+    SavepointTableEntry *aTables;
+    /* Sparse set of tables whose pre-flush pending mutmap was moved into
+    ** this savepoint. Populated only on the first flush of a table under
+    ** the innermost savepoint that still needs a snapshot. */
+    SavepointPendingSnapshot *aPendingSnapshot;
+    int nPendingSnapshot;
+    int nPendingSnapshotAlloc;
     int nTables;
     Pgno iNextTable;
     ProllyHash stagedCatalog;
@@ -353,7 +366,9 @@ static int saveCursorPosition(BtCursor *pCur);
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
 static int pushSavepoint(Btree *pBtree);
 static int findTableIndexInArray(struct TableEntry *aTables, int nTables, Pgno iTable);
-static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable, ProllyMutMap *pPending);
+static int findSavepointTableIndexInArray(SavepointTableEntry *aTables, int nTables, Pgno iTable);
+static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable, ProllyMutMap **ppPending,
+                                   ProllyMutMap **ppFlushMap, int *pCaptured);
 static int restoreFromCommitted(Btree *p);
 static void refreshCursorRoot(BtCursor *pCur);
 static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount);
@@ -1091,6 +1106,8 @@ static int advanceTreeCursor(BtCursor *pCur, int dir){
 
 static int flushMutMap(BtCursor *pCur){
   struct TableEntry *pTE;
+  ProllyMutMap *pFlushMap;
+  int captured;
   int rc;
 
   if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
@@ -1107,12 +1124,19 @@ static int flushMutMap(BtCursor *pCur){
   ** cursor open path that transfers pTE->pPending into the cursor).
   ** Capturing the pre-flush state here lets rollback reconstruct
   ** pTE->pPending from the snapshot. */
-  rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot, pCur->pMutMap);
+  pFlushMap = pCur->pMutMap;
+  captured = 0;
+  rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot, &pCur->pMutMap,
+                               &pFlushMap, &captured);
   if( rc!=SQLITE_OK ) return rc;
-  rc = applyMutMapToTableRoot(pCur->pBt, pTE, pCur->pMutMap);
+  rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
   if( rc!=SQLITE_OK ) return rc;
   pCur->pCur.root = pTE->root;
-  prollyMutMapClear(pCur->pMutMap);
+  if( captured ){
+    pCur->flushSeekEdits = 0;
+  }else{
+    prollyMutMapClear(pCur->pMutMap);
+  }
 
   return SQLITE_OK;
 }
@@ -1148,14 +1172,19 @@ static int flushOtherCursorPending(BtCursor *pCur){
   if( pTE && pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     if( !prollyMutMapIsEmpty(pMap) ){
-      rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot, pMap);
+      ProllyMutMap *pFlushMap = pMap;
+      int captured = 0;
+      rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+                                   &pTE->pPending, &pFlushMap, &captured);
       if( rc!=SQLITE_OK ) return rc;
-      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pMap);
+      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
       if( rc!=SQLITE_OK ) return rc;
     }
-    prollyMutMapFree(pMap);
-    sqlite3_free(pMap);
-    pTE->pPending = 0;
+    if( pTE->pPending==pMap ){
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      pTE->pPending = 0;
+    }
     pTE->pendingFlushSeekEdits = 0;
   }
 
@@ -1336,14 +1365,16 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
 static void freeSavepointTables(struct SavepointTableState *pState){
   if( pState->aPendingSnapshot ){
     int i;
-    for(i=0; i<pState->nTables; i++){
-      if( pState->aPendingSnapshot[i] ){
-        prollyMutMapFree(pState->aPendingSnapshot[i]);
-        sqlite3_free(pState->aPendingSnapshot[i]);
+    for(i=0; i<pState->nPendingSnapshot; i++){
+      if( pState->aPendingSnapshot[i].pPending ){
+        prollyMutMapFree(pState->aPendingSnapshot[i].pPending);
+        sqlite3_free(pState->aPendingSnapshot[i].pPending);
       }
     }
     sqlite3_free(pState->aPendingSnapshot);
     pState->aPendingSnapshot = 0;
+    pState->nPendingSnapshot = 0;
+    pState->nPendingSnapshotAlloc = 0;
   }
   if( pState->aTables ){
     sqlite3_free(pState->aTables);
@@ -1377,20 +1408,102 @@ static void pushSavepointOnMutMaps(Btree *pBtree, int level){
 /* Find the smallest-index savepoint in [iFromSavepoint..nSavepoint) that
 ** has a pPending snapshot for iTable. Returns the snapshot pointer (not
 ** ownership — caller clones) or NULL if none found. */
-static ProllyMutMap *findPendingSnapshot(Btree *pBtree, int iFromSavepoint,
-                                          Pgno iTable){
+static int findPendingSnapshotIndex(
+  struct SavepointTableState *pState,
+  Pgno iTable
+){
   int i;
+  for(i=0; i<pState->nPendingSnapshot; i++){
+    if( pState->aPendingSnapshot[i].iTable==iTable ){
+      return i;
+    }
+  }
+  return -1;
+}
+
+static ProllyMutMap *findPendingSnapshot(Btree *pBtree, int iFromSavepoint,
+                                          Pgno iTable, int *piSavepoint,
+                                          int *piSnapshot){
+  int i;
+  if( piSavepoint ) *piSavepoint = -1;
+  if( piSnapshot ) *piSnapshot = -1;
   for(i=iFromSavepoint; i<pBtree->nSavepoint; i++){
     struct SavepointTableState *pState = &pBtree->aSavepointTables[i];
     int j;
     if( !pState->aPendingSnapshot ) continue;
-    j = findTableIndexInArray(pState->aTables, pState->nTables, iTable);
-    if( j < 0 ) continue;
-    if( pState->aPendingSnapshot[j] ){
-      return pState->aPendingSnapshot[j];
+    j = findPendingSnapshotIndex(pState, iTable);
+    if( j >= 0 ){
+      if( piSavepoint ) *piSavepoint = i;
+      if( piSnapshot ) *piSnapshot = j;
+      return pState->aPendingSnapshot[j].pPending;
     }
   }
   return 0;
+}
+
+static int allocEmptyPendingLike(ProllyMutMap *pSrc, ProllyMutMap **ppOut){
+  ProllyMutMap *pNew;
+  int rc;
+  *ppOut = 0;
+  pNew = sqlite3_malloc(sizeof(ProllyMutMap));
+  if( !pNew ) return SQLITE_NOMEM;
+  rc = prollyMutMapInit(pNew, pSrc->isIntKey);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pNew);
+    return rc;
+  }
+  pNew->currentSavepointLevel = pSrc->currentSavepointLevel;
+  *ppOut = pNew;
+  return SQLITE_OK;
+}
+
+static int appendPendingSnapshot(
+  struct SavepointTableState *pState,
+  Pgno iTable,
+  ProllyMutMap *pPending
+){
+  if( pState->nPendingSnapshot >= pState->nPendingSnapshotAlloc ){
+    int nNew = pState->nPendingSnapshotAlloc ? pState->nPendingSnapshotAlloc * 2 : 4;
+    SavepointPendingSnapshot *aNew = sqlite3_realloc(
+        pState->aPendingSnapshot, nNew * (int)sizeof(SavepointPendingSnapshot));
+    if( !aNew ) return SQLITE_NOMEM;
+    pState->aPendingSnapshot = aNew;
+    pState->nPendingSnapshotAlloc = nNew;
+  }
+  pState->aPendingSnapshot[pState->nPendingSnapshot].iTable = iTable;
+  pState->aPendingSnapshot[pState->nPendingSnapshot].pPending = pPending;
+  pState->nPendingSnapshot++;
+  return SQLITE_OK;
+}
+
+static int inheritPendingSnapshots(
+  struct SavepointTableState *pParent,
+  struct SavepointTableState *pChild
+){
+  int i;
+  if( !pParent || !pChild ) return SQLITE_OK;
+  for(i=0; i<pChild->nPendingSnapshot; i++){
+    SavepointPendingSnapshot *pSnap = &pChild->aPendingSnapshot[i];
+    if( !pSnap->pPending ) continue;
+    if( findSavepointTableIndexInArray(pParent->aTables, pParent->nTables,
+                                       pSnap->iTable) < 0 ){
+      prollyMutMapFree(pSnap->pPending);
+      sqlite3_free(pSnap->pPending);
+      pSnap->pPending = 0;
+      continue;
+    }
+    if( findPendingSnapshotIndex(pParent, pSnap->iTable) >= 0 ){
+      prollyMutMapFree(pSnap->pPending);
+      sqlite3_free(pSnap->pPending);
+      pSnap->pPending = 0;
+      continue;
+    }
+    if( appendPendingSnapshot(pParent, pSnap->iTable, pSnap->pPending)!=SQLITE_OK ){
+      return SQLITE_NOMEM;
+    }
+    pSnap->pPending = 0;
+  }
+  return SQLITE_OK;
 }
 
 /* Rollback all live mutmaps to the given savepoint level. For each
@@ -1407,18 +1520,19 @@ static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
   for(k=0; k<pBtree->nTables; k++){
     struct TableEntry *pTE = &pBtree->aTables[k];
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+    int iSavepoint = -1;
+    int iSnapshot = -1;
     ProllyMutMap *pSnap = findPendingSnapshot(pBtree, iFromSavepoint,
-                                               pTE->iTable);
+                                               pTE->iTable,
+                                               &iSavepoint, &iSnapshot);
     if( pSnap ){
-      ProllyMutMap *pClone = 0;
-      rc = prollyMutMapClone(&pClone, pSnap);
-      if( rc!=SQLITE_OK ) return rc;
       if( pMap ){
         prollyMutMapFree(pMap);
         sqlite3_free(pMap);
       }
-      pTE->pPending = pClone;
-      rc = prollyMutMapRollbackToSavepoint(pClone, level);
+      pTE->pPending = pSnap;
+      pBtree->aSavepointTables[iSavepoint].aPendingSnapshot[iSnapshot].pPending = 0;
+      rc = prollyMutMapRollbackToSavepoint(pSnap, level);
       if( rc!=SQLITE_OK ) return rc;
     }else if( pMap ){
       rc = prollyMutMapRollbackToSavepoint(pMap, level);
@@ -1456,22 +1570,38 @@ static void releaseMutMapsToSavepoint(Btree *pBtree, int level){
 ** back the outer savepoints too (applyRollback on the clone walks
 ** the snapshot's internal bornAt stamps and undo log). */
 static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
-                                   ProllyMutMap *pPending){
+                                   ProllyMutMap **ppPending,
+                                   ProllyMutMap **ppFlushMap,
+                                   int *pCaptured){
   int i;
-  if( !pBtree || !pPending ) return SQLITE_OK;
+  ProllyMutMap *pPending;
+  if( pCaptured ) *pCaptured = 0;
+  if( !ppFlushMap ) return SQLITE_MISUSE;
+  *ppFlushMap = 0;
+  if( !pBtree || !ppPending || !*ppPending ) return SQLITE_OK;
+  pPending = *ppPending;
+  *ppFlushMap = pPending;
   if( pBtree->nSavepoint <= 0 ) return SQLITE_OK;
   if( prollyMutMapIsEmpty(pPending) ) return SQLITE_OK;
 
   for(i = pBtree->nSavepoint - 1; i >= 0; i--){
     struct SavepointTableState *pState = &pBtree->aSavepointTables[i];
     int j;
-    if( !pState->aPendingSnapshot ) continue;
-    j = findTableIndexInArray(pState->aTables, pState->nTables, iTable);
+    j = findSavepointTableIndexInArray(pState->aTables, pState->nTables, iTable);
     if( j < 0 ) continue;
-    if( pState->aPendingSnapshot[j] ) return SQLITE_OK;
+    if( findPendingSnapshotIndex(pState, iTable) >= 0 ) return SQLITE_OK;
     {
-      int rc = prollyMutMapClone(&pState->aPendingSnapshot[j], pPending);
+      ProllyMutMap *pNewPending = 0;
+      int rc = allocEmptyPendingLike(pPending, &pNewPending);
       if( rc!=SQLITE_OK ) return rc;
+      rc = appendPendingSnapshot(pState, iTable, pPending);
+      if( rc!=SQLITE_OK ){
+        prollyMutMapFree(pNewPending);
+        sqlite3_free(pNewPending);
+        return rc;
+      }
+      *ppPending = pNewPending;
+      if( pCaptured ) *pCaptured = 1;
     }
     return SQLITE_OK;
   }
@@ -1480,6 +1610,28 @@ static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
 
 static int findTableIndexInArray(
   struct TableEntry *aTables,
+  int nTables,
+  Pgno iTable
+){
+  int lo = 0;
+  int hi = nTables;
+  while( lo < hi ){
+    int mid = lo + ((hi - lo) / 2);
+    Pgno midTable = aTables[mid].iTable;
+    if( midTable==iTable ){
+      return mid;
+    }
+    if( midTable < iTable ){
+      lo = mid + 1;
+    }else{
+      hi = mid;
+    }
+  }
+  return -1;
+}
+
+static int findSavepointTableIndexInArray(
+  SavepointTableEntry *aTables,
   int nTables,
   Pgno iTable
 ){
@@ -1529,7 +1681,7 @@ static int restoreTablesFromSavepoint(
     ProllyMutMap *pMap = pBtree->aTables[k].pPending;
     int iSaved;
     if( !pMap ) continue;
-    iSaved = findTableIndexInArray(
+    iSaved = findSavepointTableIndexInArray(
         pState->aTables, pState->nTables, pBtree->aTables[k].iTable);
     if( iSaved>=0 ){
       /* Mutmap content was already rolled back via the per-entry
@@ -1543,9 +1695,14 @@ static int restoreTablesFromSavepoint(
   }
 
   if( pState->nTables>0 ){
-    memcpy(pBtree->aTables, pState->aTables,
-           pState->nTables * sizeof(struct TableEntry));
     for(k=0; k<pState->nTables; k++){
+      pBtree->aTables[k].iTable = pState->aTables[k].iTable;
+      pBtree->aTables[k].root = pState->aTables[k].root;
+      pBtree->aTables[k].schemaHash = pState->aTables[k].schemaHash;
+      pBtree->aTables[k].flags = pState->aTables[k].flags;
+      pBtree->aTables[k].pendingFlushSeekEdits =
+          pState->aTables[k].pendingFlushSeekEdits;
+      pBtree->aTables[k].zName = 0;
       pBtree->aTables[k].pPending = apPending[k];
     }
   }else{
@@ -1570,6 +1727,7 @@ static int restoreTablesFromSavepoint(
 ** int-writes from pushSavepointOnMutMaps. */
 static int pushSavepoint(Btree *pBtree){
   struct SavepointTableState *pState;
+  int k;
 
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
     int nNew = pBtree->nSavepointAlloc ? pBtree->nSavepointAlloc*2 : 8;
@@ -1583,6 +1741,8 @@ static int pushSavepoint(Btree *pBtree){
   pState = &pBtree->aSavepointTables[pBtree->nSavepoint];
   pState->aTables = 0;
   pState->aPendingSnapshot = 0;
+  pState->nPendingSnapshot = 0;
+  pState->nPendingSnapshotAlloc = 0;
   pState->nTables = 0;
   pState->iNextTable = pBtree->iNextTable;
   pState->stagedCatalog = pBtree->stagedCatalog;
@@ -1590,26 +1750,17 @@ static int pushSavepoint(Btree *pBtree){
   pState->mergeCommitHash = pBtree->mergeCommitHash;
   pState->conflictsCatalogHash = pBtree->conflictsCatalogHash;
   if( pBtree->nTables > 0 ){
-    pState->aTables = sqlite3_malloc(pBtree->nTables * (int)sizeof(struct TableEntry));
+    pState->aTables = sqlite3_malloc(pBtree->nTables * (int)sizeof(SavepointTableEntry));
     if( !pState->aTables ) return SQLITE_NOMEM;
-    pState->aPendingSnapshot = sqlite3_malloc(
-        pBtree->nTables * (int)sizeof(ProllyMutMap*));
-    if( !pState->aPendingSnapshot ){
-      sqlite3_free(pState->aTables);
-      pState->aTables = 0;
-      return SQLITE_NOMEM;
+    for(k=0; k<pBtree->nTables; k++){
+      pState->aTables[k].iTable = pBtree->aTables[k].iTable;
+      pState->aTables[k].root = pBtree->aTables[k].root;
+      pState->aTables[k].schemaHash = pBtree->aTables[k].schemaHash;
+      pState->aTables[k].flags = pBtree->aTables[k].flags;
+      pState->aTables[k].pendingFlushSeekEdits =
+          pBtree->aTables[k].pendingFlushSeekEdits;
     }
-    memset(pState->aPendingSnapshot, 0,
-           pBtree->nTables * sizeof(ProllyMutMap*));
-    memcpy(pState->aTables, pBtree->aTables,
-           pBtree->nTables * sizeof(struct TableEntry));
     pState->nTables = pBtree->nTables;
-    {
-      int k;
-      for(k=0; k<pState->nTables; k++){
-        pState->aTables[k].pPending = 0;
-      }
-    }
   }
 
   pBtree->nSavepoint++;
@@ -2703,6 +2854,13 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
     if( iSavepoint>=0 && iSavepoint<p->nSavepoint ){
       int j;
       releaseMutMapsToSavepoint(p, iSavepoint + 1);
+      if( iSavepoint > 0 ){
+        for(j=iSavepoint; j<p->nSavepoint; j++){
+          int rc = inheritPendingSnapshots(&p->aSavepointTables[iSavepoint-1],
+                                           &p->aSavepointTables[j]);
+          if( rc!=SQLITE_OK ) return rc;
+        }
+      }
       for(j=iSavepoint; j<p->nSavepoint; j++){
         freeSavepointTables(&p->aSavepointTables[j]);
       }
@@ -2967,12 +3125,17 @@ static int prollyBtreeCursor(
 
       ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
       if( !prollyMutMapIsEmpty(pMap) ){
-        int rc2 = snapshotPendingForFlush(p, iTable, pMap);
+        ProllyMutMap *pFlushMap = pMap;
+        int captured = 0;
+        int rc2 = snapshotPendingForFlush(p, iTable, &pTE->pPending,
+                                          &pFlushMap, &captured);
         if( rc2!=SQLITE_OK ) return rc2;
-        rc2 = applyMutMapToTableRoot(pBt, pTE, pMap);
-        prollyMutMapFree(pMap);
-        sqlite3_free(pMap);
-        pTE->pPending = 0;
+        rc2 = applyMutMapToTableRoot(pBt, pTE, pFlushMap);
+        if( pTE->pPending==pMap ){
+          prollyMutMapFree(pMap);
+          sqlite3_free(pMap);
+          pTE->pPending = 0;
+        }
         pTE->pendingFlushSeekEdits = 0;
         if( rc2!=SQLITE_OK ) return rc2;
       }
@@ -3256,12 +3419,17 @@ static int flushTablePending(BtCursor *pCur){
   if( pTE && pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     if( !prollyMutMapIsEmpty(pMap) ){
-      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot, pMap);
+      ProllyMutMap *pFlushMap = pMap;
+      int captured = 0;
+      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+                                       &pTE->pPending, &pFlushMap, &captured);
       if( rc!=SQLITE_OK ) return rc;
-      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pMap);
-      prollyMutMapFree(pMap);
-      sqlite3_free(pMap);
-      pTE->pPending = 0;
+      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
+      if( pTE->pPending==pMap ){
+        prollyMutMapFree(pMap);
+        sqlite3_free(pMap);
+        pTE->pPending = 0;
+      }
       return rc;
     }
     prollyMutMapFree(pMap);
@@ -4548,13 +4716,18 @@ static int flushDeferredEdits(BtShared *pBt){
     for(i=0; i<pBtree->nTables; i++){
       struct TableEntry *pTE = &pBtree->aTables[i];
       if( pTE->pPending && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
-        rc = snapshotPendingForFlush(pBtree, pTE->iTable,
-                                     (ProllyMutMap*)pTE->pPending);
+        ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+        ProllyMutMap *pFlushMap = pMap;
+        int captured = 0;
+        rc = snapshotPendingForFlush(pBtree, pTE->iTable, &pTE->pPending,
+                                     &pFlushMap, &captured);
         if( rc!=SQLITE_OK ) return rc;
-        rc = applyMutMapToTableRoot(pBt, pTE, (ProllyMutMap*)pTE->pPending);
-        prollyMutMapFree((ProllyMutMap*)pTE->pPending);
-        sqlite3_free(pTE->pPending);
-        pTE->pPending = 0;
+        rc = applyMutMapToTableRoot(pBt, pTE, pFlushMap);
+        if( pTE->pPending==pMap ){
+          prollyMutMapFree(pMap);
+          sqlite3_free(pMap);
+          pTE->pPending = 0;
+        }
         if( rc!=SQLITE_OK ) return rc;
       }
     }
@@ -5454,14 +5627,19 @@ int doltliteApplyRawRowMutation(
   if( pTE->pPending ){
     ProllyMutMap *pPend = (ProllyMutMap*)pTE->pPending;
     if( !prollyMutMapIsEmpty(pPend) ){
-      rc = snapshotPendingForFlush(pBtree, pTE->iTable, pPend);
+      ProllyMutMap *pFlushMap = pPend;
+      int captured = 0;
+      rc = snapshotPendingForFlush(pBtree, pTE->iTable, &pTE->pPending,
+                                   &pFlushMap, &captured);
       if( rc!=SQLITE_OK ) return rc;
-      rc = applyMutMapToTableRoot(pBt, pTE, pPend);
+      rc = applyMutMapToTableRoot(pBt, pTE, pFlushMap);
       if( rc!=SQLITE_OK ) return rc;
     }
-    prollyMutMapFree(pPend);
-    sqlite3_free(pPend);
-    pTE->pPending = 0;
+    if( pTE->pPending==pPend ){
+      prollyMutMapFree(pPend);
+      sqlite3_free(pPend);
+      pTE->pPending = 0;
+    }
     pTE->pendingFlushSeekEdits = 0;
   }
 
