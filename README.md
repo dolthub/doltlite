@@ -179,7 +179,7 @@ SELECT * FROM dolt_at_users('v1.0');
 
 ### Diff
 
-Four ways to ask what changed:
+Several ways to ask what changed:
 
 ```sql
 -- Which tables changed across the commit history?
@@ -194,6 +194,24 @@ SELECT * FROM dolt_diff_summary('v1.0', 'HEAD');
 
 -- Schema-level diff (tables, views, indexes)
 SELECT * FROM dolt_schema_diff('v1.0', 'v2.0');
+
+-- Row-level history for a single table: every INSERT / UPDATE / DELETE
+-- that was ever committed, with real per-column to_/from_ pairs plus
+-- commit metadata and a diff_type. One virtual table per user table,
+-- auto-registered on each commit. This is doltlite's form of Dolt's
+-- dolt_diff(from_ref, to_ref, table_name) TVF — filter by to_commit
+-- (including the special 'WORKING' value) or from_commit to get the
+-- equivalent of a single-range slice:
+SELECT * FROM dolt_diff_users;
+-- to_id | to_name | to_email | to_commit | to_commit_date |
+--   from_id | from_name | from_email | from_commit | from_commit_date |
+--   diff_type
+
+SELECT diff_type, to_name, to_email, to_commit
+  FROM dolt_diff_users
+  WHERE to_id = 42;
+
+SELECT * FROM dolt_diff_users WHERE to_commit = 'WORKING';  -- staged+working
 ```
 
 ### Schemas (dolt_schemas)
@@ -219,28 +237,6 @@ SELECT * FROM dolt_schemas;
 Rows are filtered to `type IN ('view','trigger')` — ordinary tables and
 indexes are not reported here. Use `sqlite_schema` directly (or
 `dolt_schema_diff`) if you need the full schema surface.
-
-### Audit Log (dolt_diff_&lt;table&gt;)
-
-Full history of every change to every row, across all commits. For a
-table `users(id, name, email)`, the columns are the real per-column
-to_/from_ pairs plus commit metadata and a `diff_type`:
-
-```sql
-SELECT * FROM dolt_diff_users;
--- to_id | to_name | to_email | to_commit | to_commit_date |
---   from_id | from_name | from_email | from_commit | from_commit_date |
---   diff_type
-
--- Every INSERT, UPDATE, DELETE that was ever committed is here
-SELECT diff_type, to_name, to_email, to_commit
-  FROM dolt_diff_users
-  WHERE to_id = 42;
-```
-
-One `dolt_diff_<table>` virtual table is automatically created for each
-user table. The table walks the full commit history and diffs each
-consecutive pair of commits.
 
 ### Blame (dolt_blame_&lt;table&gt;)
 
