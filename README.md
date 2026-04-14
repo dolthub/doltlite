@@ -198,10 +198,9 @@ SELECT * FROM dolt_schema_diff('v1.0', 'v2.0');
 -- Row-level history for a single table: every INSERT / UPDATE / DELETE
 -- that was ever committed, with real per-column to_/from_ pairs plus
 -- commit metadata and a diff_type. One virtual table per user table,
--- auto-registered on each commit. This is doltlite's form of Dolt's
--- dolt_diff(from_ref, to_ref, table_name) TVF — filter by to_commit
--- (including the special 'WORKING' value) or from_commit to get the
--- equivalent of a single-range slice:
+-- auto-registered on each commit. Filter by to_commit (including the
+-- special 'WORKING' value for staged + working changes) or from_commit
+-- to narrow to a specific slice.
 SELECT * FROM dolt_diff_users;
 -- to_id | to_name | to_email | to_commit | to_commit_date |
 --   from_id | from_name | from_email | from_commit | from_commit_date |
