@@ -11,6 +11,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_ignore.h"
 
 #include <string.h>
 #include <ctype.h>
@@ -493,8 +494,176 @@ static void doltliteAddFunc(
     }
 
     if( stageAll ){
+      /* Filter working through dolt_ignore. An entry is preserved in
+      ** new staged as working's version unless its name matches an
+      ** ignore pattern, in which case the current staged entry (if
+      ** any) is kept instead — ignore blocks new staging but doesn't
+      ** un-stage tables that were already staged. Deletions (in
+      ** staged but not in working) are synced only for non-ignored
+      ** tables; ignored deletions stay in new staged to match Dolt. */
+      struct TableEntry *aWorking = 0;
+      struct TableEntry *aStaged = 0;
+      struct TableEntry *aNew = 0;
+      int nWorking = 0, nStaged = 0, nNew = 0;
+      int k;
+      ProllyHash stagedHash;
 
-      doltliteSetSessionStaged(db, &workingHash);
+      rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(context, "failed to load working catalog", -1);
+        return;
+      }
+
+      doltliteGetSessionStaged(db, &stagedHash);
+      if( prollyHashIsEmpty(&stagedHash) ){
+        ProllyHash headCat;
+        rc = doltliteGetHeadCatalogHash(db, &headCat);
+        if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCat) ){
+          rc = doltliteLoadCatalog(db, &headCat, &aStaged, &nStaged, 0);
+        }
+      }else{
+        rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
+      }
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(aWorking);
+        sqlite3_result_error(context, "failed to load staged catalog", -1);
+        return;
+      }
+
+      for(k=0; k<nWorking; k++){
+        const char *zName = aWorking[k].zName;
+        int ignored = 0;
+        char *zIgnErr = 0;
+        int irc;
+        struct TableEntry *pUse = &aWorking[k];
+        struct TableEntry *aTmp;
+
+        if( aWorking[k].iTable>1 && zName ){
+          irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
+          if( irc==SQLITE_CONSTRAINT ){
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            sqlite3_free(aNew);
+            if( zIgnErr ){
+              sqlite3_result_error(context, zIgnErr, -1);
+              sqlite3_free(zIgnErr);
+            }else{
+              sqlite3_result_error(context, "dolt_ignore conflict", -1);
+            }
+            return;
+          }
+          if( irc!=SQLITE_OK ){
+            sqlite3_free(zIgnErr);
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            sqlite3_free(aNew);
+            sqlite3_result_error_code(context, irc);
+            return;
+          }
+          if( ignored ){
+            /* Keep the existing staged entry if any; otherwise skip. */
+            int j;
+            pUse = 0;
+            for(j=0; j<nStaged; j++){
+              if( aStaged[j].zName && strcmp(aStaged[j].zName, zName)==0 ){
+                pUse = &aStaged[j];
+                break;
+              }
+            }
+            if( !pUse ) continue;
+          }
+        }
+
+        aTmp = sqlite3_realloc(aNew, (nNew+1)*(int)sizeof(struct TableEntry));
+        if( !aTmp ){
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          sqlite3_free(aNew);
+          sqlite3_result_error_nomem(context);
+          return;
+        }
+        aNew = aTmp;
+        aNew[nNew] = *pUse;
+        nNew++;
+      }
+
+      /* Deletions: staged entries absent from working are dropped,
+      ** unless they match an ignore pattern (in which case the
+      ** deletion stays un-synced and staged keeps them). */
+      for(k=0; k<nStaged; k++){
+        const char *zName = aStaged[k].zName;
+        int found = 0;
+        int j;
+        struct TableEntry *aTmp;
+        if( aStaged[k].iTable<=1 || !zName ) continue;
+        for(j=0; j<nWorking; j++){
+          if( aWorking[j].zName && strcmp(aWorking[j].zName, zName)==0 ){
+            found = 1;
+            break;
+          }
+        }
+        if( found ) continue;
+        {
+          int ignored = 0;
+          char *zIgnErr = 0;
+          int irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
+          if( irc==SQLITE_CONSTRAINT ){
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            sqlite3_free(aNew);
+            if( zIgnErr ){
+              sqlite3_result_error(context, zIgnErr, -1);
+              sqlite3_free(zIgnErr);
+            }else{
+              sqlite3_result_error(context, "dolt_ignore conflict", -1);
+            }
+            return;
+          }
+          if( irc!=SQLITE_OK ){
+            sqlite3_free(zIgnErr);
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            sqlite3_free(aNew);
+            sqlite3_result_error_code(context, irc);
+            return;
+          }
+          if( !ignored ) continue;
+        }
+        aTmp = sqlite3_realloc(aNew, (nNew+1)*(int)sizeof(struct TableEntry));
+        if( !aTmp ){
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          sqlite3_free(aNew);
+          sqlite3_result_error_nomem(context);
+          return;
+        }
+        aNew = aTmp;
+        aNew[nNew] = aStaged[k];
+        nNew++;
+      }
+
+      {
+        u8 *buf = 0;
+        int nBuf = 0;
+        ProllyHash newStagedHash;
+        rc = doltliteSerializeCatalogEntries(db, aNew, nNew, &buf, &nBuf);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          sqlite3_free(aNew);
+          sqlite3_result_error_code(context, rc);
+          return;
+        }
+        rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
+        sqlite3_free(buf);
+        if( rc==SQLITE_OK ){
+          doltliteSetSessionStaged(db, &newStagedHash);
+        }
+      }
+
+      sqlite3_free(aWorking);
+      sqlite3_free(aStaged);
+      sqlite3_free(aNew);
     }else{
 
       struct TableEntry *aWorking = 0, *aStaged = 0;
@@ -529,8 +698,35 @@ static void doltliteAddFunc(
         const char *zTable = (const char*)sqlite3_value_text(argv[i]);
         Pgno iTable = 0;
         int j;
+        int ignored = 0;
+        char *zIgnErr = 0;
+        int irc;
 
         if( !zTable || zTable[0]=='-' || strcmp(zTable, ".")==0 ) continue;
+
+        /* Explicit-name add respects dolt_ignore: silent no-op for
+        ** ignored tables; error on conflicting patterns. */
+        irc = doltliteCheckIgnore(db, zTable, &ignored, &zIgnErr);
+        if( irc==SQLITE_CONSTRAINT ){
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          if( zIgnErr ){
+            sqlite3_result_error(context, zIgnErr, -1);
+            sqlite3_free(zIgnErr);
+          }else{
+            sqlite3_result_error(context, "dolt_ignore conflict", -1);
+          }
+          return;
+        }
+        if( irc!=SQLITE_OK ){
+          sqlite3_free(zIgnErr);
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          sqlite3_result_error_code(context, irc);
+          return;
+        }
+        if( ignored ) continue;
+
         rc = doltliteResolveTableName(db, zTable, &iTable);
         if( rc!=SQLITE_OK ){
 
@@ -3068,30 +3264,64 @@ static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value
   }
 }
 
-/* On first open of a writable chunk store with no branches, create
-** an empty initial commit on "main" so a fresh database has a valid
-** HEAD to commit against. Skipped on read-only or in-memory stores
-** and when branches already exist (a previous seed ran, or the file
-** was cloned from a remote). */
-static void doltliteMaybeSeedRepo(sqlite3 *db){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash emptyParent;
-  ProllyHash emptyCatalog;
-  ProllyHash seedHash;
+/* Auto-extension callback that runs after sqlite3_open has set
+** eOpenState to OPEN. sqlite3_exec is legal at this point; btree
+** open alone is too early. Does two things:
+**
+**   1. CREATE TABLE IF NOT EXISTS dolt_ignore — idempotent, runs on
+**      every open to guarantee the table is in sqlite_master for
+**      the current session.
+**
+**   2. On first open (no branches yet), create the initial commit
+**      with the current working catalog (now containing dolt_ignore)
+**      as the seed. This keeps dolt_ignore out of dolt_status — it's
+**      tracked from commit 0, not a pending new table.
+*/
+static int doltliteIgnoreExtInit(
+  sqlite3 *db,
+  char **pzErrMsg,
+  const sqlite3_api_routines *pApi
+){
+  ChunkStore *cs;
+  const char *zFile;
+  int isMemory;
   int rc;
+  (void)pzErrMsg; (void)pApi;
 
-  if( !cs ) return;
-  if( cs->nBranches > 0 ) return;
-  if( sqlite3_db_readonly(db, "main")==1 ) return;
+  /* Skip dolt_ignore creation for in-memory databases. Internal code
+  ** paths (diff_stat, diff_table schema parsers) open :memory: dbs
+  ** to replay a saved CREATE TABLE and read its table_info — they
+  ** don't want our auto-created dolt_ignore colliding with the
+  ** committed sql they re-exec. The seed commit still happens for
+  ** :memory: dbs so basic SQL works (tests open doltlite :memory:
+  ** and expect stock sqlite semantics). */
+  zFile = sqlite3_db_filename(db, "main");
+  isMemory = (!zFile || zFile[0]==0 || strcmp(zFile, ":memory:")==0);
 
-  memset(&emptyParent, 0, sizeof(emptyParent));
-  memset(&emptyCatalog, 0, sizeof(emptyCatalog));
+  if( !isMemory ){
+    rc = doltliteEnsureIgnoreTable(db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
-  rc = doltliteCreateAndStoreCommit(db, &emptyParent, &emptyCatalog,
-      "Initialize data repository", NULL, NULL, 0, 0, &seedHash);
-  if( rc!=SQLITE_OK ) return;
+  cs = doltliteGetChunkStore(db);
+  if( cs && cs->nBranches==0 && sqlite3_db_readonly(db, "main")!=1 ){
+    ProllyHash emptyParent;
+    ProllyHash seedCat;
+    ProllyHash seedHash;
+    memset(&emptyParent, 0, sizeof(emptyParent));
+    rc = doltliteFlushCatalogToHash(db, &seedCat);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = doltliteCreateAndStoreCommit(db, &emptyParent, &seedCat,
+        "Initialize data repository", NULL, NULL, 0, 0, &seedHash);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = doltliteAdvanceBranch(db, &seedHash, &seedCat);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
 
-  (void)doltliteAdvanceBranch(db, &seedHash, &emptyCatalog);
+int doltliteIgnoreInstallAutoExt(void){
+  return sqlite3_auto_extension((void(*)(void))doltliteIgnoreExtInit);
 }
 
 void doltliteRegister(sqlite3 *db){
@@ -3134,7 +3364,9 @@ void doltliteRegister(sqlite3 *db){
     extern int doltliteDbpageInstallAutoExt(void);
     doltliteDbpageInstallAutoExt();
   }
-  doltliteMaybeSeedRepo(db);
+  /* Auto-extension runs after eOpenState=OPEN, creates dolt_ignore,
+  ** and materializes the initial seed commit with it pre-tracked. */
+  doltliteIgnoreInstallAutoExt();
 }
 
 #endif

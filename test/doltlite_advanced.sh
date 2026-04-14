@@ -439,7 +439,7 @@ echo "CREATE TABLE t2(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-A','-m','add t2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "schemaonly_log2" "SELECT count(*) FROM dolt_log;" "3" "$DB"
-run_test "schemaonly_tables" "SELECT count(*) FROM sqlite_master WHERE type='table';" "2" "$DB"
+run_test "schemaonly_tables" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt\_%' ESCAPE '\\';" "2" "$DB"
 
 rm -f "$DB"
 

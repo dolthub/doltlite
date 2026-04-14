@@ -6,6 +6,7 @@
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
+#include "doltlite_ignore.h"
 
 typedef struct StatusRow StatusRow;
 struct StatusRow {
@@ -117,6 +118,31 @@ static int compareCatalogs(
     if( rc==SQLITE_NOTFOUND ) continue;
     if( rc!=SQLITE_OK ) return rc;
     if(!pFrom){
+      /* Unstaged new tables run through dolt_ignore; a CONFLICT
+      ** bubbles up as a query error. Already-staged new tables skip
+      ** the check — staging beat the ignore rule. */
+      if( staged==0 ){
+        int ignored = 0;
+        char *zIgnErr = 0;
+        int irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
+        if( irc==SQLITE_CONSTRAINT ){
+          if( pCur->base.pVtab->zErrMsg ){
+            sqlite3_free(pCur->base.pVtab->zErrMsg);
+          }
+          pCur->base.pVtab->zErrMsg = zIgnErr;
+          sqlite3_free(zName);
+          return SQLITE_ERROR;
+        }
+        if( irc!=SQLITE_OK ){
+          sqlite3_free(zIgnErr);
+          sqlite3_free(zName);
+          return irc;
+        }
+        if( ignored ){
+          sqlite3_free(zName);
+          continue;
+        }
+      }
       rc = addRow(pCur, zName, staged, "new table");
     }else{
       rc = SQLITE_OK;
