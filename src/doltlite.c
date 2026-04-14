@@ -11,6 +11,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "doltlite_ignore.h"
 
 #include <string.h>
 #include <ctype.h>
@@ -493,8 +494,176 @@ static void doltliteAddFunc(
     }
 
     if( stageAll ){
+      /* Filter working through dolt_ignore. An entry is preserved in
+      ** new staged as working's version unless its name matches an
+      ** ignore pattern, in which case the current staged entry (if
+      ** any) is kept instead — ignore blocks new staging but doesn't
+      ** un-stage tables that were already staged. Deletions (in
+      ** staged but not in working) are synced only for non-ignored
+      ** tables; ignored deletions stay in new staged to match Dolt. */
+      struct TableEntry *aWorking = 0;
+      struct TableEntry *aStaged = 0;
+      struct TableEntry *aNew = 0;
+      int nWorking = 0, nStaged = 0, nNew = 0;
+      int k;
+      ProllyHash stagedHash;
 
-      doltliteSetSessionStaged(db, &workingHash);
+      rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(context, "failed to load working catalog", -1);
+        return;
+      }
+
+      doltliteGetSessionStaged(db, &stagedHash);
+      if( prollyHashIsEmpty(&stagedHash) ){
+        ProllyHash headCat;
+        rc = doltliteGetHeadCatalogHash(db, &headCat);
+        if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCat) ){
+          rc = doltliteLoadCatalog(db, &headCat, &aStaged, &nStaged, 0);
+        }
+      }else{
+        rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
+      }
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(aWorking);
+        sqlite3_result_error(context, "failed to load staged catalog", -1);
+        return;
+      }
+
+      for(k=0; k<nWorking; k++){
+        const char *zName = aWorking[k].zName;
+        int ignored = 0;
+        char *zIgnErr = 0;
+        int irc;
+        struct TableEntry *pUse = &aWorking[k];
+        struct TableEntry *aTmp;
+
+        if( aWorking[k].iTable>1 && zName ){
+          irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
+          if( irc==SQLITE_CONSTRAINT ){
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            sqlite3_free(aNew);
+            if( zIgnErr ){
+              sqlite3_result_error(context, zIgnErr, -1);
+              sqlite3_free(zIgnErr);
+            }else{
+              sqlite3_result_error(context, "dolt_ignore conflict", -1);
+            }
+            return;
+          }
+          if( irc!=SQLITE_OK ){
+            sqlite3_free(zIgnErr);
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            sqlite3_free(aNew);
+            sqlite3_result_error_code(context, irc);
+            return;
+          }
+          if( ignored ){
+            /* Keep the existing staged entry if any; otherwise skip. */
+            int j;
+            pUse = 0;
+            for(j=0; j<nStaged; j++){
+              if( aStaged[j].zName && strcmp(aStaged[j].zName, zName)==0 ){
+                pUse = &aStaged[j];
+                break;
+              }
+            }
+            if( !pUse ) continue;
+          }
+        }
+
+        aTmp = sqlite3_realloc(aNew, (nNew+1)*(int)sizeof(struct TableEntry));
+        if( !aTmp ){
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          sqlite3_free(aNew);
+          sqlite3_result_error_nomem(context);
+          return;
+        }
+        aNew = aTmp;
+        aNew[nNew] = *pUse;
+        nNew++;
+      }
+
+      /* Deletions: staged entries absent from working are dropped,
+      ** unless they match an ignore pattern (in which case the
+      ** deletion stays un-synced and staged keeps them). */
+      for(k=0; k<nStaged; k++){
+        const char *zName = aStaged[k].zName;
+        int found = 0;
+        int j;
+        struct TableEntry *aTmp;
+        if( aStaged[k].iTable<=1 || !zName ) continue;
+        for(j=0; j<nWorking; j++){
+          if( aWorking[j].zName && strcmp(aWorking[j].zName, zName)==0 ){
+            found = 1;
+            break;
+          }
+        }
+        if( found ) continue;
+        {
+          int ignored = 0;
+          char *zIgnErr = 0;
+          int irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
+          if( irc==SQLITE_CONSTRAINT ){
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            sqlite3_free(aNew);
+            if( zIgnErr ){
+              sqlite3_result_error(context, zIgnErr, -1);
+              sqlite3_free(zIgnErr);
+            }else{
+              sqlite3_result_error(context, "dolt_ignore conflict", -1);
+            }
+            return;
+          }
+          if( irc!=SQLITE_OK ){
+            sqlite3_free(zIgnErr);
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            sqlite3_free(aNew);
+            sqlite3_result_error_code(context, irc);
+            return;
+          }
+          if( !ignored ) continue;
+        }
+        aTmp = sqlite3_realloc(aNew, (nNew+1)*(int)sizeof(struct TableEntry));
+        if( !aTmp ){
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          sqlite3_free(aNew);
+          sqlite3_result_error_nomem(context);
+          return;
+        }
+        aNew = aTmp;
+        aNew[nNew] = aStaged[k];
+        nNew++;
+      }
+
+      {
+        u8 *buf = 0;
+        int nBuf = 0;
+        ProllyHash newStagedHash;
+        rc = doltliteSerializeCatalogEntries(db, aNew, nNew, &buf, &nBuf);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          sqlite3_free(aNew);
+          sqlite3_result_error_code(context, rc);
+          return;
+        }
+        rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
+        sqlite3_free(buf);
+        if( rc==SQLITE_OK ){
+          doltliteSetSessionStaged(db, &newStagedHash);
+        }
+      }
+
+      sqlite3_free(aWorking);
+      sqlite3_free(aStaged);
+      sqlite3_free(aNew);
     }else{
 
       struct TableEntry *aWorking = 0, *aStaged = 0;
@@ -529,8 +698,35 @@ static void doltliteAddFunc(
         const char *zTable = (const char*)sqlite3_value_text(argv[i]);
         Pgno iTable = 0;
         int j;
+        int ignored = 0;
+        char *zIgnErr = 0;
+        int irc;
 
         if( !zTable || zTable[0]=='-' || strcmp(zTable, ".")==0 ) continue;
+
+        /* Explicit-name add respects dolt_ignore: silent no-op for
+        ** ignored tables; error on conflicting patterns. */
+        irc = doltliteCheckIgnore(db, zTable, &ignored, &zIgnErr);
+        if( irc==SQLITE_CONSTRAINT ){
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          if( zIgnErr ){
+            sqlite3_result_error(context, zIgnErr, -1);
+            sqlite3_free(zIgnErr);
+          }else{
+            sqlite3_result_error(context, "dolt_ignore conflict", -1);
+          }
+          return;
+        }
+        if( irc!=SQLITE_OK ){
+          sqlite3_free(zIgnErr);
+          sqlite3_free(aWorking);
+          sqlite3_free(aStaged);
+          sqlite3_result_error_code(context, irc);
+          return;
+        }
+        if( ignored ) continue;
+
         rc = doltliteResolveTableName(db, zTable, &iTable);
         if( rc!=SQLITE_OK ){
 

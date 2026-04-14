@@ -132,6 +132,26 @@ SELECT dolt_commit('-am', 'Initial commit');
 SELECT dolt_commit('-m', 'Fix data', '--author', 'Alice <alice@example.com>');
 ```
 
+### Ignoring Tables (`dolt_ignore`)
+
+Tables matching a pattern in `dolt_ignore` stay in the working set
+but are skipped by `dolt_add` and hidden from `dolt_status`. Create
+the table once per repo, then `INSERT` patterns:
+
+```sql
+CREATE TABLE dolt_ignore(
+  pattern TEXT NOT NULL,
+  ignored TINYINT NOT NULL,
+  PRIMARY KEY(pattern)
+);
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);    -- ignore tmp_* tables
+INSERT INTO dolt_ignore VALUES ('tmp_keep', 0); -- un-ignore a specific name
+```
+
+Patterns use `*` / `%` for zero-or-more and `?` for exactly one;
+everything else is literal. Most-specific pattern wins (longest
+literal count); equal-specificity disagreements error out.
+
 ### Configuration
 
 ```sql
