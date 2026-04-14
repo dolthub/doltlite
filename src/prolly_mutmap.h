@@ -39,6 +39,7 @@ struct ProllyMutMap {
   u8 orderDirty;
   int nEntries;
   int nAlloc;
+  int levelBase;
   ProllyMutMapEntry *aEntries;
   /* aOrder / aPos form a two-way mapping between sorted position and
   ** physical entry index. aHash is an open-addressing lookup table
