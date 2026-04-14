@@ -68,6 +68,12 @@ int prollyMutMapDelete(ProllyMutMap *mm,
 ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
                                      const u8 *pKey, int nKey, i64 intKey);
 
+int prollyMutMapFindRc(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  ProllyMutMapEntry **ppEntry
+);
+
 ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx);
 
 int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry);

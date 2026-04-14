@@ -247,15 +247,26 @@ static int rankEntryWithoutOrder(ProllyMutMap *mm, int phys){
 static int ensureCapacity(ProllyMutMap *mm){
   if( mm->nEntries >= mm->nAlloc ){
     int nNew = mm->nAlloc ? mm->nAlloc * 2 : MUTMAP_INIT_CAP;
-    ProllyMutMapEntry *aNew = sqlite3_realloc(mm->aEntries,
-                                nNew * sizeof(ProllyMutMapEntry));
+    ProllyMutMapEntry *aNew;
     int *aOrderNew;
     int *aPosNew;
-    if( !aNew ) return SQLITE_NOMEM;
-    aOrderNew = sqlite3_realloc(mm->aOrder, nNew * sizeof(int));
-    if( !aOrderNew ) return SQLITE_NOMEM;
-    aPosNew = sqlite3_realloc(mm->aPos, nNew * sizeof(int));
-    if( !aPosNew ) return SQLITE_NOMEM;
+    aNew = sqlite3_malloc(nNew * sizeof(ProllyMutMapEntry));
+    aOrderNew = sqlite3_malloc(nNew * sizeof(int));
+    aPosNew = sqlite3_malloc(nNew * sizeof(int));
+    if( !aNew || !aOrderNew || !aPosNew ){
+      sqlite3_free(aNew);
+      sqlite3_free(aOrderNew);
+      sqlite3_free(aPosNew);
+      return SQLITE_NOMEM;
+    }
+    if( mm->nEntries > 0 ){
+      memcpy(aNew, mm->aEntries, mm->nEntries * sizeof(ProllyMutMapEntry));
+      memcpy(aOrderNew, mm->aOrder, mm->nEntries * sizeof(int));
+      memcpy(aPosNew, mm->aPos, mm->nEntries * sizeof(int));
+    }
+    sqlite3_free(mm->aEntries);
+    sqlite3_free(mm->aOrder);
+    sqlite3_free(mm->aPos);
     mm->aEntries = aNew;
     mm->aOrder = aOrderNew;
     mm->aPos = aPosNew;
@@ -605,17 +616,32 @@ void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level){
   mm->currentSavepointLevel = target;
 }
 
-ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
-                                     const u8 *pKey, int nKey, i64 intKey){
+int prollyMutMapFindRc(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  ProllyMutMapEntry **ppEntry
+){
   int found, idx, phys, rc;
-  if( mm->nEntries==0 ) return 0;
+  *ppEntry = 0;
+  if( mm->nEntries==0 ) return SQLITE_OK;
   if( mm->keepSorted ){
     idx = bsearch_key(mm, pKey, nKey, intKey, &found);
-    return found ? entryAtOrder(mm, idx) : 0;
+    *ppEntry = found ? entryAtOrder(mm, idx) : 0;
+    return SQLITE_OK;
   }
   rc = findPhysLazy(mm, pKey, nKey, intKey, &phys);
-  if( rc!=SQLITE_OK ) return 0;
-  return phys >= 0 ? &mm->aEntries[phys] : 0;
+  if( rc!=SQLITE_OK ) return rc;
+  *ppEntry = phys >= 0 ? &mm->aEntries[phys] : 0;
+  return SQLITE_OK;
+}
+
+ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
+                                     const u8 *pKey, int nKey, i64 intKey){
+  ProllyMutMapEntry *pEntry = 0;
+  if( prollyMutMapFindRc(mm, pKey, nKey, intKey, &pEntry)!=SQLITE_OK ){
+    return 0;
+  }
+  return pEntry;
 }
 
 ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx){
