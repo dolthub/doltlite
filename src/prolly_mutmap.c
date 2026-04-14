@@ -8,7 +8,6 @@
 
 #define MUTMAP_INIT_CAP 16
 #define MUTMAP_MIN_HASH 32
-
 static int compareEntries(
   u8 isIntKey,
   const u8 *pKeyA, int nKeyA, i64 intKeyA,
@@ -348,9 +347,10 @@ int prollyMutMapInsert(
   if( rc!=SQLITE_OK ) return rc;
 
   {
-    phys = mm->nEntries;
     int i;
-    ProllyMutMapEntry *e = &mm->aEntries[phys];
+    ProllyMutMapEntry *e;
+    phys = mm->nEntries;
+    e = &mm->aEntries[phys];
     memset(e, 0, sizeof(*e));
     e->op = PROLLY_EDIT_INSERT;
     e->isIntKey = mm->isIntKey;
@@ -426,9 +426,10 @@ int prollyMutMapDelete(
   if( rc!=SQLITE_OK ) return rc;
 
   {
-    phys = mm->nEntries;
     int i;
-    ProllyMutMapEntry *e = &mm->aEntries[phys];
+    ProllyMutMapEntry *e;
+    phys = mm->nEntries;
+    e = &mm->aEntries[phys];
     memset(e, 0, sizeof(*e));
     e->op = PROLLY_EDIT_DELETE;
     e->isIntKey = mm->isIntKey;
