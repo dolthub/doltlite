@@ -1140,7 +1140,6 @@ static int serializeUnpackedRecordBuffer(
   *pnOut = nTotal;
   return SQLITE_OK;
 }
-
 static void clearMergeCursorState(BtCursor *pCur){
   pCur->mmIdx = -1;
   pCur->mmPhysIdx = -1;
