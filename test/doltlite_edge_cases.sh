@@ -181,7 +181,7 @@ run_test_match "newtable_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$
 run_test "newtable_base" "SELECT count(*) FROM base;" "2" "$DB"
 run_test "newtable_feat" "SELECT count(*) FROM feat_table;" "2" "$DB"
 run_test "newtable_feat_val" "SELECT f FROM feat_table WHERE id=1;" "feat1" "$DB"
-run_test "newtable_schema" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt\_%' ESCAPE '\\';" "2" "$DB"
+run_test "newtable_schema" "SELECT count(*) FROM sqlite_master WHERE type='table';" "2" "$DB"
 
 # Persists after reopen
 run_test "newtable_persist" "SELECT count(*) FROM feat_table;" "2" "$DB"

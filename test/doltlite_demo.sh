@@ -23,7 +23,7 @@ CREATE TABLE teams(id INTEGER PRIMARY KEY, team_name TEXT);
 CREATE TABLE employees_teams(team_id INTEGER, employee_id INTEGER, PRIMARY KEY(team_id, employee_id));
 SELECT dolt_commit('-A','-m','Created initial schema');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "schema_tables" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'dolt\_%' ESCAPE '\\';" "3" "$DB"
+run_test "schema_tables" "SELECT count(*) FROM sqlite_master WHERE type='table';" "3" "$DB"
 run_test "schema_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test_match "schema_msg" "SELECT message FROM dolt_log;" "Created initial schema" "$DB"
 run_test "schema_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"

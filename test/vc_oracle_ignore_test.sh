@@ -63,6 +63,12 @@ FAILED_NAMES=""
 
 normalize() { tr -d '\r' | grep -v '^S|dolt_ignore|' | sort; }
 
+# doltlite needs the dolt_ignore user table explicitly created by
+# the user; Dolt pre-materializes it as a reserved system name and
+# rejects CREATE TABLE dolt_ignore with "reserved for internal use".
+# So the oracle prepends the CREATE only on the doltlite side.
+DL_IGNORE_PREFIX="CREATE TABLE IF NOT EXISTS dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));"
+
 # oracle: run the same setup on both engines and compare their
 # resulting dolt_status (table_name + staged + status).
 oracle() {
@@ -70,8 +76,11 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
+  local dl_setup="$DL_IGNORE_PREFIX
+$setup"
+
   local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S|' || table_name || '|' || staged || '|' || status FROM dolt_status;\n" "$setup" \
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT 'S|' || table_name || '|' || staged || '|' || status FROM dolt_status;\n" "$dl_setup" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^S|' \
            | normalize)
@@ -107,8 +116,11 @@ oracle_error() {
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
 
+  local dl_setup="$DL_IGNORE_PREFIX
+$setup"
+
   local dl_err=0
-  echo "$setup" | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
+  echo "$dl_setup" | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
   if grep -qiE 'error|fail|conflict' "$dir/dl.out" "$dir/dl.err" 2>/dev/null; then dl_err=1; fi
 
   local dolt_setup

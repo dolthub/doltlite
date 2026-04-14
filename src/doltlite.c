@@ -3264,87 +3264,30 @@ static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value
   }
 }
 
-/* Auto-extension callback that runs after sqlite3_open has set
-** eOpenState to OPEN. sqlite3_exec is legal at this point; btree
-** open alone is too early. Does two things:
-**
-**   1. CREATE TABLE IF NOT EXISTS dolt_ignore — idempotent, runs on
-**      every open to guarantee the table is in sqlite_master for
-**      the current session.
-**
-**   2. On first open (no branches yet), create the initial commit
-**      with the current working catalog (now containing dolt_ignore)
-**      as the seed. This keeps dolt_ignore out of dolt_status — it's
-**      tracked from commit 0, not a pending new table.
-*/
-static int doltliteIgnoreExtInit(
-  sqlite3 *db,
-  char **pzErrMsg,
-  const sqlite3_api_routines *pApi
-){
-  ChunkStore *cs;
-  const char *zFile;
-  int isMemory;
+/* On first open of a writable chunk store with no branches, create
+** an empty initial commit on "main" so a fresh database has a valid
+** HEAD to commit against. Skipped on read-only or in-memory stores
+** and when branches already exist (a previous seed ran, or the file
+** was cloned from a remote). */
+static void doltliteMaybeSeedRepo(sqlite3 *db){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash emptyParent;
+  ProllyHash emptyCatalog;
+  ProllyHash seedHash;
   int rc;
-  (void)pzErrMsg; (void)pApi;
 
-  /* Skip dolt_ignore creation for in-memory databases. Internal code
-  ** paths (diff_stat, diff_table schema parsers) open :memory: dbs
-  ** to replay a saved CREATE TABLE and read its table_info — they
-  ** don't want our auto-created dolt_ignore colliding with the
-  ** committed sql they re-exec. The seed commit still happens for
-  ** :memory: dbs so basic SQL works (tests open doltlite :memory:
-  ** and expect stock sqlite semantics). */
-  zFile = sqlite3_db_filename(db, "main");
-  isMemory = (!zFile || zFile[0]==0 || strcmp(zFile, ":memory:")==0);
+  if( !cs ) return;
+  if( cs->nBranches > 0 ) return;
+  if( sqlite3_db_readonly(db, "main")==1 ) return;
 
-  if( !isMemory ){
-    /* Skip CREATE TABLE if the working-set blob is unreadable —
-    ** almost always corruption, and creating the table here would
-    ** trigger a write-transaction commit that rewrites the bad
-    ** working-set hash with a fresh one, erasing the corruption
-    ** before integrity checks can flag it. Leave the repo alone so
-    ** doltliteCheckRepoGraphIntegrity can diagnose it. */
-    cs = doltliteGetChunkStore(db);
-    if( cs ){
-      int i;
-      int workingOk = 1;
-      for(i=0; i<cs->nBranches; i++){
-        if( !prollyHashIsEmpty(&cs->aBranches[i].workingSetHash)
-         && !chunkStoreHas(cs, &cs->aBranches[i].workingSetHash) ){
-          workingOk = 0;
-          break;
-        }
-      }
-      if( workingOk ){
-        rc = doltliteEnsureIgnoreTable(db);
-        if( rc!=SQLITE_OK ) return rc;
-      }
-    }else{
-      rc = doltliteEnsureIgnoreTable(db);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-  }
+  memset(&emptyParent, 0, sizeof(emptyParent));
+  memset(&emptyCatalog, 0, sizeof(emptyCatalog));
 
-  cs = doltliteGetChunkStore(db);
-  if( cs && cs->nBranches==0 && sqlite3_db_readonly(db, "main")!=1 ){
-    ProllyHash emptyParent;
-    ProllyHash seedCat;
-    ProllyHash seedHash;
-    memset(&emptyParent, 0, sizeof(emptyParent));
-    rc = doltliteFlushCatalogToHash(db, &seedCat);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = doltliteCreateAndStoreCommit(db, &emptyParent, &seedCat,
-        "Initialize data repository", NULL, NULL, 0, 0, &seedHash);
-    if( rc!=SQLITE_OK ) return rc;
-    rc = doltliteAdvanceBranch(db, &seedHash, &seedCat);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  return SQLITE_OK;
-}
+  rc = doltliteCreateAndStoreCommit(db, &emptyParent, &emptyCatalog,
+      "Initialize data repository", NULL, NULL, 0, 0, &seedHash);
+  if( rc!=SQLITE_OK ) return;
 
-int doltliteIgnoreInstallAutoExt(void){
-  return sqlite3_auto_extension((void(*)(void))doltliteIgnoreExtInit);
+  (void)doltliteAdvanceBranch(db, &seedHash, &emptyCatalog);
 }
 
 void doltliteRegister(sqlite3 *db){
@@ -3387,9 +3330,7 @@ void doltliteRegister(sqlite3 *db){
     extern int doltliteDbpageInstallAutoExt(void);
     doltliteDbpageInstallAutoExt();
   }
-  /* Auto-extension runs after eOpenState=OPEN, creates dolt_ignore,
-  ** and materializes the initial seed commit with it pre-tracked. */
-  doltliteIgnoreInstallAutoExt();
+  doltliteMaybeSeedRepo(db);
 }
 
 #endif

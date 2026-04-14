@@ -238,11 +238,9 @@ echo "  After GC: ${SIZE_AFTER_GC} bytes"
 
 # Both branches share most chunks — GC should NOT shrink much
 # (nothing is truly orphaned since both branches are alive)
-# File should stay within 80% of original (streaming merge may
-# produce slightly different chunk boundaries, and auto-created
-# system tables add small amounts of baseline metadata that may or
-# may not end up in the reachability set).
-THRESHOLD=$((SIZE_BEFORE_GC * 80 / 100))
+# File should stay within 85% of original (streaming merge may
+# produce slightly different chunk boundaries)
+THRESHOLD=$((SIZE_BEFORE_GC * 85 / 100))
 assert_greater "gc_preserves_shared" "$SIZE_AFTER_GC" "$THRESHOLD"
 
 # Both branches' data should survive

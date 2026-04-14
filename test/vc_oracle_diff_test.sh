@@ -148,16 +148,10 @@ oracle() {
 # as `true`/`false` in csv; doltlite emits 0/1. Coerce both to 0/1.
 # Then strip CR, drop blank lines, sort.
 normalize_summary() {
-  # Strip dolt_ignore summary rows: doltlite creates dolt_ignore in
-  # its seed commit as a user-visible system table, while Dolt
-  # materializes it lazily on first write, so its appearance in
-  # dolt_diff output diverges by implementation rather than by
-  # row-level semantics. The oracle filters both sides for an
-  # apples-to-apples comparison of user-table diffs.
   tr -d '\r' \
     | sed -e 's/	true$/	1/' -e 's/	true	/	1	/g' \
           -e 's/	false$/	0/' -e 's/	false	/	0	/g' \
-    | awk -F'\t' 'NF >= 5 && $1 == "S" && $2 != "dolt_ignore" { print }' \
+    | awk -F'\t' 'NF >= 5 && $1 == "S" { print }' \
     | sort
 }
 
