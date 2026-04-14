@@ -3,6 +3,7 @@
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
+#include "prolly_hashset.h"
 #include "chunk_store.h"
 #include "prolly_cursor.h"
 #include "prolly_cache.h"
@@ -2138,6 +2139,308 @@ static void doltliteRevertFunc(
   }
 }
 
+/* Collect the set of commits reachable from pHeadHash but NOT from
+** pUpstreamHash. Walks upstream's full ancestor graph into a hash
+** set (BFS), then walks head first-parent backward and records every
+** commit that isn't already in that set. Emits the replay list in
+** oldest-first order (so iteration N's parent is N-1). */
+static int doltliteRebaseCollectReplaySet(
+  sqlite3 *db,
+  const ProllyHash *pHeadHash,
+  const ProllyHash *pUpstreamHash,
+  ProllyHash **paReplay,
+  int *pnReplay
+){
+  ProllyHashSet upstreamAncestors;
+  ProllyHash *queue = 0;
+  int qHead = 0, qTail = 0, qAlloc = 0;
+  ProllyHash *aReplay = 0;
+  int nReplay = 0, nAllocReplay = 0;
+  int rc;
+  int upstreamInit = 0;
+  ProllyHash walk;
+  int i;
+
+  *paReplay = 0;
+  *pnReplay = 0;
+
+  rc = prollyHashSetInit(&upstreamAncestors, 256);
+  if( rc!=SQLITE_OK ) return rc;
+  upstreamInit = 1;
+
+  qAlloc = 64;
+  queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
+  if( !queue ){ rc = SQLITE_NOMEM; goto cleanup; }
+  queue[qTail++] = *pUpstreamHash;
+
+  while( qHead < qTail ){
+    ProllyHash cur = queue[qHead++];
+    DoltliteCommit c;
+
+    if( prollyHashIsEmpty(&cur) ) continue;
+    if( prollyHashSetContains(&upstreamAncestors, &cur) ) continue;
+    rc = prollyHashSetAdd(&upstreamAncestors, &cur);
+    if( rc!=SQLITE_OK ) goto cleanup;
+
+    memset(&c, 0, sizeof(c));
+    if( doltliteLoadCommit(db, &cur, &c)!=SQLITE_OK ) continue;
+    for(i=0; i<doltliteCommitParentCount(&c); i++){
+      const ProllyHash *pp = doltliteCommitParentHash(&c, i);
+      if( !pp || prollyHashIsEmpty(pp) ) continue;
+      if( prollyHashSetContains(&upstreamAncestors, pp) ) continue;
+      if( qTail >= qAlloc ){
+        int nNew = qAlloc * 2;
+        ProllyHash *tmp = sqlite3_realloc(queue, nNew*(int)sizeof(ProllyHash));
+        if( !tmp ){ doltliteCommitClear(&c); rc = SQLITE_NOMEM; goto cleanup; }
+        queue = tmp;
+        qAlloc = nNew;
+      }
+      queue[qTail++] = *pp;
+    }
+    doltliteCommitClear(&c);
+  }
+
+  sqlite3_free(queue);
+  queue = 0;
+
+  /* Walk HEAD backward via first-parent, stopping at the first
+  ** commit that's already in upstream's ancestry. */
+  walk = *pHeadHash;
+  while( !prollyHashIsEmpty(&walk) && !prollyHashSetContains(&upstreamAncestors, &walk) ){
+    DoltliteCommit c;
+    const ProllyHash *pParent;
+
+    if( nReplay >= nAllocReplay ){
+      int nNew = nAllocReplay ? nAllocReplay*2 : 16;
+      ProllyHash *tmp = sqlite3_realloc(aReplay, nNew*(int)sizeof(ProllyHash));
+      if( !tmp ){ rc = SQLITE_NOMEM; goto cleanup; }
+      aReplay = tmp;
+      nAllocReplay = nNew;
+    }
+    aReplay[nReplay++] = walk;
+
+    memset(&c, 0, sizeof(c));
+    rc = doltliteLoadCommit(db, &walk, &c);
+    if( rc!=SQLITE_OK ) goto cleanup;
+    pParent = doltliteCommitParentHash(&c, 0);
+    if( pParent && !prollyHashIsEmpty(pParent) ){
+      walk = *pParent;
+    }else{
+      memset(&walk, 0, sizeof(walk));
+    }
+    doltliteCommitClear(&c);
+  }
+
+  /* Reverse so the output is oldest-first (ancestor-first). */
+  for(i=0; i<nReplay/2; i++){
+    ProllyHash tmp = aReplay[i];
+    aReplay[i] = aReplay[nReplay-1-i];
+    aReplay[nReplay-1-i] = tmp;
+  }
+
+  *paReplay = aReplay;
+  *pnReplay = nReplay;
+  aReplay = 0;
+  rc = SQLITE_OK;
+
+cleanup:
+  sqlite3_free(queue);
+  sqlite3_free(aReplay);
+  if( upstreamInit ) prollyHashSetFree(&upstreamAncestors);
+  return rc;
+}
+
+/* dolt_rebase: replay commits reachable from HEAD but not from the
+** upstream ref on top of the upstream. Shares the per-commit apply
+** logic with cherry-pick/revert via applyMergedCatalogAndCommit.
+** Atomic: if any replay step fails or produces conflicts, restore
+** the pre-rebase state and error out. Interactive mode and
+** --continue / --abort (beyond "no rebase in progress") are not
+** supported in this initial implementation. */
+static void doltliteRebaseFunc(
+  sqlite3_context *context,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zUpstream;
+  ProllyHash upstreamHash, headHash;
+  ProllyHash *aReplay = 0;
+  int nReplay = 0;
+  DoltliteTxnState saved;
+  DoltliteCommit upstreamCommit;
+  int savedInit = 0;
+  int rc;
+  int i;
+
+  memset(&saved, 0, sizeof(saved));
+  memset(&upstreamCommit, 0, sizeof(upstreamCommit));
+
+  if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
+  if( argc<1 ){
+    sqlite3_result_error(context, "usage: dolt_rebase('upstream_branch')", -1);
+    return;
+  }
+
+  zUpstream = (const char*)sqlite3_value_text(argv[0]);
+  if( !zUpstream ){
+    sqlite3_result_error(context, "upstream ref required", -1);
+    return;
+  }
+
+  if( strcmp(zUpstream, "--abort")==0 || strcmp(zUpstream, "--continue")==0 ){
+    sqlite3_result_error(context, "no rebase in progress", -1);
+    return;
+  }
+
+  if( doltliteHasUncommittedChanges(db) ){
+    sqlite3_result_error(context,
+      "cannot start a rebase with uncommitted changes", -1);
+    return;
+  }
+
+  rc = doltliteResolveRef(db, zUpstream, &upstreamHash);
+  if( rc!=SQLITE_OK ){
+    char *zErr = sqlite3_mprintf("branch not found: %s", zUpstream);
+    sqlite3_result_error(context, zErr ? zErr : "branch not found", -1);
+    sqlite3_free(zErr);
+    return;
+  }
+
+  doltliteGetSessionHead(db, &headHash);
+  if( prollyHashIsEmpty(&headHash) ){
+    sqlite3_result_error(context, "no commits on current branch", -1);
+    return;
+  }
+
+  rc = doltliteRebaseCollectReplaySet(db, &headHash, &upstreamHash,
+                                      &aReplay, &nReplay);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  if( nReplay==0 ){
+    sqlite3_free(aReplay);
+    sqlite3_result_error(context, "didn't identify any commits!", -1);
+    return;
+  }
+
+  rc = doltliteSaveTxnState(db, &saved);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(aReplay);
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  savedInit = 1;
+
+  /* Reset the branch to the upstream tip so applyMergedCatalog sees
+  ** a consistent session HEAD for the first replay iteration. The
+  ** saved txn state will undo this on rollback. */
+  rc = doltliteLoadCommit(db, &upstreamHash, &upstreamCommit);
+  if( rc!=SQLITE_OK ) goto rollback;
+
+  rc = doltliteSwitchCatalog(db, &upstreamCommit.catalogHash);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&upstreamCommit);
+    goto rollback;
+  }
+  doltliteSetSessionHead(db, &upstreamHash);
+  doltliteSetSessionStaged(db, &upstreamCommit.catalogHash);
+  rc = doltliteAdvanceBranch(db, &upstreamHash, &upstreamCommit.catalogHash);
+  doltliteCommitClear(&upstreamCommit);
+  memset(&upstreamCommit, 0, sizeof(upstreamCommit));
+  if( rc!=SQLITE_OK ) goto rollback;
+
+  for(i=0; i<nReplay; i++){
+    DoltliteCommit replayCommit, parentCommit, curHeadCommit;
+    ProllyHash curHead;
+    int nConflicts = 0;
+    char hexBuf[PROLLY_HASH_SIZE*2+1];
+
+    memset(&replayCommit, 0, sizeof(replayCommit));
+    memset(&parentCommit, 0, sizeof(parentCommit));
+    memset(&curHeadCommit, 0, sizeof(curHeadCommit));
+
+    rc = doltliteLoadCommit(db, &aReplay[i], &replayCommit);
+    if( rc!=SQLITE_OK ) goto rollback;
+
+    if( replayCommit.nParents==0 || prollyHashIsEmpty(&replayCommit.aParents[0]) ){
+      /* Root commit can't be replayed — no parent to diff against. */
+      doltliteCommitClear(&replayCommit);
+      rc = SQLITE_ERROR;
+      goto rollback;
+    }
+    rc = doltliteLoadCommit(db, &replayCommit.aParents[0], &parentCommit);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&replayCommit);
+      goto rollback;
+    }
+
+    doltliteGetSessionHead(db, &curHead);
+    rc = doltliteLoadCommit(db, &curHead, &curHeadCommit);
+    if( rc!=SQLITE_OK ){
+      doltliteCommitClear(&replayCommit);
+      doltliteCommitClear(&parentCommit);
+      goto rollback;
+    }
+
+    rc = applyMergedCatalogAndCommit(db, context,
+        &parentCommit.catalogHash,
+        &curHeadCommit.catalogHash,
+        &replayCommit.catalogHash,
+        &curHead,
+        replayCommit.zMessage ? replayCommit.zMessage : "",
+        &nConflicts, hexBuf);
+
+    doltliteCommitClear(&replayCommit);
+    doltliteCommitClear(&parentCommit);
+    doltliteCommitClear(&curHeadCommit);
+
+    if( rc!=SQLITE_OK ){
+      goto rollback;
+    }
+    if( nConflicts>0 ){
+      /* Conflict during a replay. applyMerged has staged the
+      ** conflict and set the session to "merging" state; undo all
+      ** of that by restoring the saved pre-rebase state. */
+      rc = SQLITE_ERROR;
+      goto rollback;
+    }
+  }
+
+  doltliteTxnStateClear(&saved);
+  sqlite3_free(aReplay);
+  {
+    char *zMsg = sqlite3_mprintf("Successfully rebased and updated refs/heads/%s",
+                                 doltliteGetSessionBranch(db));
+    if( zMsg ){
+      sqlite3_result_text(context, zMsg, -1, sqlite3_free);
+    }else{
+      sqlite3_result_text(context, "Successfully rebased", -1, SQLITE_STATIC);
+    }
+  }
+  return;
+
+rollback:
+  if( savedInit ){
+    int rc2 = doltliteRestoreTxnState(db, &saved);
+    doltliteTxnStateClear(&saved);
+    (void)rc2;
+  }
+  sqlite3_free(aReplay);
+  {
+    char *zErr = sqlite3_mprintf(
+      "rebase failed (conflict or error during replay) — branch restored to pre-rebase state");
+    if( zErr ){
+      sqlite3_result_error(context, zErr, -1);
+      sqlite3_free(zErr);
+    }else{
+      sqlite3_result_error_code(context, rc);
+    }
+  }
+}
+
 static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(context);
   const char *zKey;
@@ -2216,6 +2519,8 @@ void doltliteRegister(sqlite3 *db){
                                                    doltliteCherryPickFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_revert", -1, SQLITE_UTF8, 0,
                                                    doltliteRevertFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_rebase", -1, SQLITE_UTF8, 0,
+                                                   doltliteRebaseFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_config", -1, SQLITE_UTF8, 0,
                                                    doltliteConfigFunc, 0, 0);
   if( rc!=SQLITE_OK ) return;
