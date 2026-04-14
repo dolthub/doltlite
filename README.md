@@ -211,6 +211,14 @@ SELECT diff_type, to_name, to_email, to_commit
   WHERE to_id = 42;
 
 SELECT * FROM dolt_diff_users WHERE to_commit = 'WORKING';  -- staged+working
+
+-- TVF form: slice between two refs without filtering. Equivalent to
+-- Dolt's dolt_diff(from_ref, to_ref, table) TVF — the table name
+-- rides in the module name (SQLite TVFs declare a static schema at
+-- xConnect, so the per-table column list can't move into the
+-- argument list) and the two refs come through as positional args.
+SELECT * FROM dolt_diff_users('HEAD~1', 'HEAD');
+SELECT * FROM dolt_diff_users('v1.0', 'WORKING');
 ```
 
 ### Schemas (dolt_schemas)
