@@ -507,25 +507,27 @@ static void cfrEmitRecordCol(
   sqlite3_context *ctx,
   const u8 *pRec, int nRec,
   int iUserCol,
-  int iPkCol,
+  const DoltliteColInfo *pCols,
   i64 intKey
 ){
+  int recField;
   if( !pRec || nRec<=0 ){
     sqlite3_result_null(ctx);
     return;
   }
-  if( iUserCol==iPkCol ){
+  if( iUserCol==pCols->iPkCol ){
     sqlite3_result_int64(ctx, intKey);
     return;
   }
+  recField = pCols->aColToRec ? pCols->aColToRec[iUserCol] : iUserCol;
   {
     DoltliteRecordInfo ri;
     doltliteParseRecord(pRec, nRec, &ri);
-    if( iUserCol >= ri.nField ){
+    if( recField >= ri.nField ){
       sqlite3_result_null(ctx);
       return;
     }
-    doltliteResultField(ctx, pRec, nRec, ri.aType[iUserCol], ri.aOffset[iUserCol]);
+    doltliteResultField(ctx, pRec, nRec, ri.aType[recField], ri.aOffset[recField]);
   }
 }
 
@@ -564,17 +566,17 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     sqlite3_result_null(ctx);
   }else if( col>=colBaseStart && col<colOurStart ){
     cfrEmitRecordCol(ctx, cr->pBaseVal, cr->nBaseVal,
-                     col - colBaseStart, v->cols.iPkCol, cr->intKey);
+                     col - colBaseStart, &v->cols, cr->intKey);
   }else if( col>=colOurStart && col<colOurDiff ){
     cfrEmitRecordCol(ctx, cr->pOurVal, cr->nOurVal,
-                     col - colOurStart, v->cols.iPkCol, cr->intKey);
+                     col - colOurStart, &v->cols, cr->intKey);
   }else if( col==colOurDiff ){
     sqlite3_result_text(ctx,
       cfrDiffType(cr->pBaseVal, cr->nBaseVal, cr->pOurVal, cr->nOurVal),
       -1, SQLITE_STATIC);
   }else if( col>=colTheirStart && col<colTheirDiff ){
     cfrEmitRecordCol(ctx, cr->pTheirVal, cr->nTheirVal,
-                     col - colTheirStart, v->cols.iPkCol, cr->intKey);
+                     col - colTheirStart, &v->cols, cr->intKey);
   }else if( col==colTheirDiff ){
     sqlite3_result_text(ctx,
       cfrDiffType(cr->pBaseVal, cr->nBaseVal, cr->pTheirVal, cr->nTheirVal),

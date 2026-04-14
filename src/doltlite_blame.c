@@ -711,10 +711,16 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
       sqlite3_result_int64(ctx, r->intKey);
     }else if( r->pCurVal && r->nCurVal>0 ){
       DoltliteRecordInfo ri;
+      /* Non-rowid PK tables are auto-converted to WITHOUT ROWID in
+      ** build.c, so records store the PK columns first in PRIMARY KEY
+      ** declaration order. aPkColIdx is sorted by pkPos, so iCol is
+      ** exactly the PK col's record-field index regardless of its
+      ** declared cid. (Blame projects only PK cols so non-PK record
+      ** fields never come into play here.) */
       doltliteParseRecord(r->pCurVal, r->nCurVal, &ri);
-      if( cid < ri.nField ){
+      if( iCol < ri.nField ){
         doltliteResultField(ctx, r->pCurVal, r->nCurVal,
-                            ri.aType[cid], ri.aOffset[cid]);
+                            ri.aType[iCol], ri.aOffset[iCol]);
       }else{
         sqlite3_result_null(ctx);
       }

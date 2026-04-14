@@ -13,6 +13,15 @@ struct DoltliteColInfo {
   char **azName;
   int nCol;
   int iPkCol;
+  /* aColToRec[i] is the record field index for the i-th declared
+  ** column. Identity for rowid-aliased and keyless tables. For
+  ** WITHOUT ROWID tables (including all doltlite tables with a
+  ** non-INT-PK, which build.c auto-converts) the layout is
+  ** PK-first: PK columns in PRIMARY KEY declaration order, then
+  ** non-PK columns in declared order — matching aiColumn[] that
+  ** SQLite's convertToWithoutRowidTable builds for the covering
+  ** PK index. */
+  int *aColToRec;
 };
 
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci);

@@ -269,8 +269,10 @@ static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       sqlite3_result_int64(ctx,r->intKey);
     }else{
       if(r->pVal&&r->nVal>0){
-        DoltliteRecordInfo ri; doltliteParseRecord(r->pVal,r->nVal,&ri);
-        if(col<ri.nField) doltliteResultField(ctx,r->pVal,r->nVal,ri.aType[col],ri.aOffset[col]);
+        DoltliteRecordInfo ri;
+        int recField = v->cols.aColToRec ? v->cols.aColToRec[col] : col;
+        doltliteParseRecord(r->pVal,r->nVal,&ri);
+        if(recField<ri.nField) doltliteResultField(ctx,r->pVal,r->nVal,ri.aType[recField],ri.aOffset[recField]);
         else sqlite3_result_null(ctx);
       }else sqlite3_result_null(ctx);
     }

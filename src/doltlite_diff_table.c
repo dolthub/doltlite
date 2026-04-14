@@ -1143,7 +1143,9 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     }else{
       if( r->pNewVal && r->nNewVal > 0 ){
         int st, off;
-        int rc = diffRecordField(r->pNewVal, r->nNewVal, colIdx, &st, &off);
+        int recField = pVtab->cols.aColToRec
+                          ? pVtab->cols.aColToRec[colIdx] : colIdx;
+        int rc = diffRecordField(r->pNewVal, r->nNewVal, recField, &st, &off);
         if( rc==SQLITE_OK ){
           doltliteResultField(ctx, r->pNewVal, r->nNewVal, st, off);
         }else if( rc==SQLITE_NOTFOUND ){
@@ -1182,7 +1184,9 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     }else{
       if( r->pOldVal && r->nOldVal > 0 ){
         int st, off;
-        int rc = diffRecordField(r->pOldVal, r->nOldVal, colIdx, &st, &off);
+        int recField = pVtab->cols.aColToRec
+                          ? pVtab->cols.aColToRec[colIdx] : colIdx;
+        int rc = diffRecordField(r->pOldVal, r->nOldVal, recField, &st, &off);
         if( rc==SQLITE_OK ){
           doltliteResultField(ctx, r->pOldVal, r->nOldVal, st, off);
         }else if( rc==SQLITE_NOTFOUND ){
