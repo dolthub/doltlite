@@ -16,6 +16,13 @@ TMPDIR=$(mktemp -d)
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
 
+fmt_us() {
+  python3 - "$1" <<'PYEOF'
+import sys
+print(f"{int(sys.argv[1]):,}")
+PYEOF
+}
+
 # ============================================================
 # Generate SQL files: each test = prepare + timing markers + workload
 # ============================================================
@@ -262,8 +269,8 @@ run_bench() {
   fi
   local output
   output=$(sed \
-    -e "s/\.print BENCH_START/SELECT 'TS_START:' || (julianday('now')*86400000);/" \
-    -e "s/\.print BENCH_END/SELECT 'TS_END:' || (julianday('now')*86400000);/" \
+    -e "s/\.print BENCH_START/SELECT 'TS_START:' || CAST((julianday('now')*86400000000) AS INTEGER);/" \
+    -e "s/\.print BENCH_END/SELECT 'TS_END:' || CAST((julianday('now')*86400000000) AS INTEGER);/" \
     "$sql_file" | "$binary" "$db" 2>&1)
   if [ "$db" != ":memory:" ]; then rm -f "$db"; fi
   # Extract timestamps and compute delta
@@ -290,8 +297,8 @@ WRITE_TESTS="oltp_bulk_insert oltp_insert oltp_update_index oltp_update_non_inde
 # ============================================================
 run_section() {
   local tests="$1" db_sq="$2" db_dl="$3"
-  echo "| Test | SQLite (ms) | Doltlite (ms) | Multiplier |"
-  echo "|------|-------------|---------------|------------|"
+  echo "| Test | SQLite (us) | Doltlite (us) | Multiplier |"
+  echo "|------|------------:|--------------:|-----------:|"
   for t in $tests; do
   s=$(run_bench sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
   d=$(run_bench doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
@@ -299,6 +306,8 @@ run_section() {
   d_display="$d"
   if [ "$s" -eq -1 ] 2>/dev/null; then s_display="crash"; fi
   if [ "$d" -eq -1 ] 2>/dev/null; then d_display="crash"; fi
+  if [ "$s" -ge 0 ] 2>/dev/null; then s_display=$(fmt_us "$s"); fi
+  if [ "$d" -ge 0 ] 2>/dev/null; then d_display=$(fmt_us "$d"); fi
   if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
     ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
   else
