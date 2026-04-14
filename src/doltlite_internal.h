@@ -130,6 +130,15 @@ void doltliteSetSessionMergeState(sqlite3 *db, u8 isMerging,
                                   const ProllyHash *pMergeCommit,
                                   const ProllyHash *pConflictsCatalog);
 void doltliteClearSessionMergeState(sqlite3 *db);
+void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
+                                   ProllyHash *pPreRebaseCat,
+                                   ProllyHash *pRebaseOnto,
+                                   const char **pzOrigBranch);
+void doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
+                                   const ProllyHash *pPreRebaseCat,
+                                   const ProllyHash *pRebaseOnto,
+                                   const char *zOrigBranch);
+void doltliteClearSessionRebaseState(sqlite3 *db);
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
 void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
 int doltliteSaveWorkingSet(sqlite3 *db);
