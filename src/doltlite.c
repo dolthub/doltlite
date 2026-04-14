@@ -71,6 +71,7 @@ extern int doltliteAncestorRegister(sqlite3 *db);
 extern int doltliteAtRegister(sqlite3 *db);
 extern int doltliteRegisterAtTables(sqlite3 *db);
 extern int doltliteRegisterHistoryTables(sqlite3 *db);
+extern int doltliteRegisterBlameTables(sqlite3 *db);
 extern int doltliteSchemaDiffRegister(sqlite3 *db);
 extern int doltliteRemoteSqlRegister(sqlite3 *db);
 
@@ -1050,6 +1051,11 @@ static void doltliteCommitFunc(
     return;
   }
   rc = doltliteRegisterAtTables(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  rc = doltliteRegisterBlameTables(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;
@@ -2224,6 +2230,7 @@ void doltliteRegister(sqlite3 *db){
   if( doltliteAncestorRegister(db)!=SQLITE_OK ) return;
   if( doltliteAtRegister(db)!=SQLITE_OK ) return;
   if( doltliteRegisterHistoryTables(db)!=SQLITE_OK ) return;
+  if( doltliteRegisterBlameTables(db)!=SQLITE_OK ) return;
   if( doltliteSchemaDiffRegister(db)!=SQLITE_OK ) return;
   if( doltliteSchemasRegister(db)!=SQLITE_OK ) return;
   if( doltliteDiffStatRegister(db)!=SQLITE_OK ) return;
