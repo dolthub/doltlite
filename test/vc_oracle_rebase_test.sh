@@ -240,6 +240,110 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_rebase();
 "
 
+echo "--- interactive rebase ---"
+
+# All interactive scenarios share this setup: three commits f1,f2,f3 on
+# feat atop one commit m on main that diverged after init.
+INTERACTIVE_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f2');
+INSERT INTO t VALUES (4, 4);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f3');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, 10);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
+SELECT dolt_checkout('feat');
+"
+
+# After -i, the working branch is dolt_rebase_feat and dolt_rebase has
+# the default pick plan. Default pick/continue should match non-interactive.
+oracle "interactive_default_plan" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', message) FROM dolt_log;"
+
+oracle "interactive_default_table" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', id) FROM t ORDER BY id;"
+
+# Drop the middle commit f2 from the plan.
+oracle "interactive_drop_one" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action = 'drop' WHERE commit_message = 'f2';
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', message) FROM dolt_log;"
+
+oracle "interactive_drop_table" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action = 'drop' WHERE commit_message = 'f2';
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', id) FROM t ORDER BY id;"
+
+# Reorder: move f3 before f1 using a fractional rebase_order.
+oracle "interactive_reorder" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET rebase_order = 0.5 WHERE commit_message = 'f3';
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', message) FROM dolt_log;"
+
+# Reword f1; message in the plan overrides the original commit message.
+oracle "interactive_reword" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action = 'reword', commit_message = 'f1 renamed' WHERE commit_message = 'f1';
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', message) FROM dolt_log;"
+
+# Squash f2 into f1: expect a single combined commit with message 'f1 | f2'
+# (we replace newlines with ' | ' in the oracle so shell/csv escaping
+# doesn't diverge between engines on the literal newline characters).
+oracle "interactive_squash" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action = 'squash' WHERE commit_message = 'f2';
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', REPLACE(message, CHAR(10), ' | ')) FROM dolt_log;"
+
+# Fixup f3 into f2: combined commit keeps only f2's message.
+oracle "interactive_fixup" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET action = 'fixup' WHERE commit_message = 'f3';
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', message) FROM dolt_log;"
+
+# --abort leaves the original branch untouched and restores us to it.
+oracle "interactive_abort_log" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--abort');
+" "SELECT CONCAT('LOG|', message) FROM dolt_log;"
+
+oracle "interactive_abort_branch" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--abort');
+" "SELECT CONCAT('LOG|', active_branch());"
+
+# --continue is an error when not in an interactive rebase.
+oracle_error "continue_without_active" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_rebase('--continue');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
