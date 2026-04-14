@@ -242,6 +242,21 @@ One `dolt_diff_<table>` virtual table is automatically created for each
 user table. The table walks the full commit history and diffs each
 consecutive pair of commits.
 
+### Blame (dolt_blame_&lt;table&gt;)
+
+For each live row, the most recent commit that introduced its current
+value:
+
+```sql
+SELECT * FROM dolt_blame_users;
+-- id | commit | commit_date | committer | email | message
+```
+
+Walks history first-parent from HEAD; at linear commits a row is
+blamed if it differs from first-parent, at merge commits if it
+differs from the merge base. Schema-only changes (`ALTER TABLE ADD
+COLUMN`) don't update blame.
+
 ### Reset
 
 ```sql
@@ -348,6 +363,32 @@ SELECT dolt_revert('abc123...');
 Revert computes the inverse of the target commit's changes and applies
 them to the current HEAD. The new commit message is
 `Revert '<original message>'`. Cannot revert the initial commit.
+
+### Rebase
+
+Replay the current branch's commits on top of an upstream:
+
+```sql
+SELECT dolt_rebase('main');
+-- "Successfully rebased and updated refs/heads/feat"
+```
+
+Atomic: any conflict or error during the replay restores the branch
+to its pre-rebase state. Interactive mode lets you edit the plan
+before applying it:
+
+```sql
+SELECT dolt_rebase('-i', 'main');
+-- Creates a working branch dolt_rebase_<orig> and a dolt_rebase
+-- table with one row per commit (default action: pick). Edit with
+-- normal SQL: action in ('pick','drop','reword','squash','fixup'),
+-- change commit_message, or reorder with fractional rebase_order.
+
+UPDATE dolt_rebase SET action='drop'   WHERE commit_message='debug';
+UPDATE dolt_rebase SET action='squash' WHERE commit_message='fixup';
+SELECT dolt_rebase('--continue');  -- apply the edited plan
+SELECT dolt_rebase('--abort');     -- throw the working branch away
+```
 
 ### Garbage Collection
 
