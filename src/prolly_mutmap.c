@@ -48,6 +48,18 @@ static u32 hashKey(
 }
 
 static ProllyMutMap *gSortCtx = 0;
+
+static int encodeLevel(ProllyMutMap *mm, int level){
+  if( level<=0 ) return 0;
+  return level + mm->levelBase;
+}
+
+static int decodeLevel(ProllyMutMap *mm, int stored){
+  if( stored<=0 ) return 0;
+  if( stored<=mm->levelBase ) return 0;
+  return stored - mm->levelBase;
+}
+
 static void freeEntryData(ProllyMutMapEntry *e){
   sqlite3_free(e->pKey);
   sqlite3_free(e->pVal);
@@ -278,7 +290,7 @@ static int appendUndoRec(ProllyMutMap *mm, int idx){
   rec = &mm->aUndo[mm->nUndo];
   rec->level = mm->currentSavepointLevel;
   rec->entryIdx = idx;
-  rec->prevBornAt = e->bornAt;
+  rec->prevBornAt = decodeLevel(mm, e->bornAt);
   rec->prevOp = e->op;
   rec->nPrevVal = e->nVal;
   if( e->nVal > 0 && e->pVal ){
@@ -323,7 +335,7 @@ int prollyMutMapInsert(
     ProllyMutMapEntry *e = &mm->aEntries[phys];
 
     if( mm->currentSavepointLevel > 0
-     && e->bornAt < mm->currentSavepointLevel ){
+     && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
       rc = appendUndoRec(mm, phys);
       if( rc!=SQLITE_OK ) return rc;
     }
@@ -337,7 +349,7 @@ int prollyMutMapInsert(
       memcpy(e->pVal, pVal, nVal);
       e->nVal = nVal;
     }
-    e->bornAt = mm->currentSavepointLevel;
+    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
     return SQLITE_OK;
   }
 
@@ -355,7 +367,7 @@ int prollyMutMapInsert(
     e->op = PROLLY_EDIT_INSERT;
     e->isIntKey = mm->isIntKey;
     e->intKey = intKey;
-    e->bornAt = mm->currentSavepointLevel;
+    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
     rc = copyEntryData(e, pKey, nKey, pVal, nVal);
     if( rc!=SQLITE_OK ){
       return rc;
@@ -405,7 +417,7 @@ int prollyMutMapDelete(
     ProllyMutMapEntry *e = &mm->aEntries[phys];
     if( e->op == PROLLY_EDIT_INSERT ){
       if( mm->currentSavepointLevel > 0
-       && e->bornAt < mm->currentSavepointLevel ){
+       && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
         rc = appendUndoRec(mm, phys);
         if( rc!=SQLITE_OK ) return rc;
       }
@@ -413,7 +425,7 @@ int prollyMutMapDelete(
       sqlite3_free(e->pVal);
       e->pVal = 0;
       e->nVal = 0;
-      e->bornAt = mm->currentSavepointLevel;
+      e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
       return SQLITE_OK;
     }
 
@@ -434,7 +446,7 @@ int prollyMutMapDelete(
     e->op = PROLLY_EDIT_DELETE;
     e->isIntKey = mm->isIntKey;
     e->intKey = intKey;
-    e->bornAt = mm->currentSavepointLevel;
+    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
     rc = copyEntryData(e, pKey, nKey, 0, 0);
     if( rc!=SQLITE_OK ){
       return rc;
@@ -483,7 +495,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
     if( idx >= 0 && idx < mm->nEntries ){
       ProllyMutMapEntry *e = &mm->aEntries[idx];
       e->op = rec->prevOp;
-      e->bornAt = rec->prevBornAt;
+      e->bornAt = encodeLevel(mm, rec->prevBornAt);
       sqlite3_free(e->pVal);
       e->pVal = 0;
       e->nVal = 0;
@@ -509,7 +521,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
       if( !aMap ) return SQLITE_NOMEM;
     }
     for(i=0; i<oldN; i++){
-      if( mm->aEntries[i].bornAt >= level ){
+      if( decodeLevel(mm, mm->aEntries[i].bornAt) >= level ){
         freeEntryData(&mm->aEntries[i]);
         aMap[i] = -1;
       }else{
@@ -559,6 +571,17 @@ void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level){
   if( !mm ) return;
   target = level - 1;
 
+  if( level==1 && target==0 ){
+    for(i=0; i<mm->nUndo; i++){
+      sqlite3_free(mm->aUndo[i].prevVal);
+      mm->aUndo[i].prevVal = 0;
+    }
+    mm->nUndo = 0;
+    mm->levelBase++;
+    mm->currentSavepointLevel = 0;
+    return;
+  }
+
   if( target == 0 ){
     for(i=0; i<mm->nUndo; i++){
       sqlite3_free(mm->aUndo[i].prevVal);
@@ -574,8 +597,8 @@ void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level){
   }
 
   for(i=0; i<mm->nEntries; i++){
-    if( mm->aEntries[i].bornAt >= level ){
-      mm->aEntries[i].bornAt = target;
+    if( decodeLevel(mm, mm->aEntries[i].bornAt) >= level ){
+      mm->aEntries[i].bornAt = encodeLevel(mm, target);
     }
   }
 
@@ -668,6 +691,7 @@ void prollyMutMapClear(ProllyMutMap *mm){
     sqlite3_free(mm->aUndo[i].prevVal);
   }
   mm->nUndo = 0;
+  mm->levelBase = 0;
 }
 
 void prollyMutMapFree(ProllyMutMap *mm){
@@ -698,6 +722,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
   dst->isIntKey = src->isIntKey;
   dst->keepSorted = src->keepSorted;
   dst->orderDirty = src->orderDirty;
+  dst->levelBase = src->levelBase;
   dst->currentSavepointLevel = src->currentSavepointLevel;
 
   if( src->nEntries > 0 ){
