@@ -569,43 +569,10 @@ Doltlite is a drop-in replacement for SQLite, so the natural question is: what
 does version control cost?
 
 Every PR runs a [sysbench-style benchmark](test/sysbench_compare.sh) comparing
-doltlite against stock SQLite on 23 OLTP workloads. Results are posted as a PR
-comment.
-
-#### Reads
-
-| Test | SQLite (ms) | Doltlite (ms) | Multiplier |
-|------|-------------|---------------|------------|
-| oltp_point_select | 175 | 106 | 0.61 |
-| oltp_range_select | 46 | 38 | 0.83 |
-| oltp_sum_range | 27 | 18 | 0.67 |
-| oltp_order_range | 6 | 7 | 1.17 |
-| oltp_distinct_range | 7 | 8 | 1.14 |
-| oltp_index_scan | 15 | 13 | 0.87 |
-| select_random_points | 30 | 27 | 0.90 |
-| select_random_ranges | 24 | 12 | 0.50 |
-| covering_index_scan | 26 | 28 | 1.08 |
-| groupby_scan | 49 | 59 | 1.20 |
-| index_join | 11 | 11 | 1.00 |
-| index_join_scan | 3 | 6 | 2.00 |
-| types_table_scan | 13 | 13 | 1.00 |
-| table_scan | 2 | 3 | 1.50 |
-| oltp_read_only | 373 | 263 | 0.71 |
-
-#### Writes
-
-| Test | SQLite (ms) | Doltlite (ms) | Multiplier |
-|------|-------------|---------------|------------|
-| oltp_bulk_insert | 36 | 39 | 1.08 |
-| oltp_insert | 22 | 34 | 1.55 |
-| oltp_update_index | 47 | 81 | 1.72 |
-| oltp_update_non_index | 35 | 54 | 1.54 |
-| oltp_delete_insert | 45 | 89 | 1.98 |
-| oltp_write_only | 20 | 35 | 1.75 |
-| types_delete_insert | 25 | 28 | 1.12 |
-| oltp_read_write | 108 | 168 | 1.56 |
-
-_10K rows, file-backed, Linux x64 (GitHub Actions). Every test lands within a 3× ceiling enforced by CI (`test/sysbench_compare.sh`). Run the same script to reproduce._
+doltlite against stock SQLite on 23 OLTP workloads, with a 3× ceiling enforced
+by CI. The per-release numbers (reads + writes table) are published with each
+release on the [GitHub releases page](https://github.com/timsehn/doltlite/releases).
+Run `test/sysbench_compare.sh` to reproduce locally.
 
 ### Algorithmic Complexity
 
