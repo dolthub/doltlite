@@ -3299,8 +3299,31 @@ static int doltliteIgnoreExtInit(
   isMemory = (!zFile || zFile[0]==0 || strcmp(zFile, ":memory:")==0);
 
   if( !isMemory ){
-    rc = doltliteEnsureIgnoreTable(db);
-    if( rc!=SQLITE_OK ) return rc;
+    /* Skip CREATE TABLE if the working-set blob is unreadable —
+    ** almost always corruption, and creating the table here would
+    ** trigger a write-transaction commit that rewrites the bad
+    ** working-set hash with a fresh one, erasing the corruption
+    ** before integrity checks can flag it. Leave the repo alone so
+    ** doltliteCheckRepoGraphIntegrity can diagnose it. */
+    cs = doltliteGetChunkStore(db);
+    if( cs ){
+      int i;
+      int workingOk = 1;
+      for(i=0; i<cs->nBranches; i++){
+        if( !prollyHashIsEmpty(&cs->aBranches[i].workingSetHash)
+         && !chunkStoreHas(cs, &cs->aBranches[i].workingSetHash) ){
+          workingOk = 0;
+          break;
+        }
+      }
+      if( workingOk ){
+        rc = doltliteEnsureIgnoreTable(db);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+    }else{
+      rc = doltliteEnsureIgnoreTable(db);
+      if( rc!=SQLITE_OK ) return rc;
+    }
   }
 
   cs = doltliteGetChunkStore(db);

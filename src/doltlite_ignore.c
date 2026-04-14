@@ -49,7 +49,7 @@ static int ignoreSpecificity(const char *zPat){
 }
 
 int doltliteEnsureIgnoreTable(sqlite3 *db){
-  /* Fast-exit if the table already lives in sqlite_master. The
+  /* Fast-exit when dolt_ignore already lives in sqlite_master. The
   ** unconditional CREATE TABLE IF NOT EXISTS would still start and
   ** commit an implicit write transaction, which walks through
   ** prollyBtreeCommitPhaseTwo and rewrites the branch working-set
