@@ -163,6 +163,8 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   char *zSql;
   sqlite3_stmt *pStmt = 0;
   int rc, nCol;
+  int nPkCols = 0;
+  int iCandidateAlias = -1;
 
   memset(ci, 0, sizeof(*ci));
   ci->iPkCol = -1;
@@ -191,9 +193,9 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     int pk = sqlite3_column_int(pStmt, 5);
     const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
 
-
+    if( pk>0 ) nPkCols++;
     if( pk==1 && zType && sqlite3_stricmp(zType,"INTEGER")==0 ){
-      ci->iPkCol = ci->nCol;
+      iCandidateAlias = ci->nCol;
     }
 
     ci->azName[ci->nCol] = sqlite3_mprintf("%s", zName ? zName : "");
@@ -208,6 +210,14 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     doltliteFreeColInfo(ci);
     sqlite3_finalize(pStmt);
     return rc;
+  }
+
+  /* A column is a rowid alias only when it's the SOLE PK column and
+  ** has declared type INTEGER. Compound PKs (even if their first
+  ** column is INTEGER) store all fields in the record payload and
+  ** must NOT be treated as rowid-alias projections. */
+  if( nPkCols==1 && iCandidateAlias>=0 ){
+    ci->iPkCol = iCandidateAlias;
   }
 
   sqlite3_finalize(pStmt);

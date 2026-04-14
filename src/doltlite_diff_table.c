@@ -52,7 +52,15 @@ static char *buildDiffSchema(DoltliteColInfo *ci){
     sqlite3_free(zColName);
   }
   sqlite3_str_appendall(pStr, ", from_commit TEXT, from_commit_date TEXT"
-                              ", diff_type TEXT)");
+                              ", diff_type TEXT"
+                              /* Hidden TVF arguments: used to expose the
+                              ** dolt_diff(from_ref, to_ref, table) shape as
+                              ** dolt_diff_<table>(from_ref, to_ref). Both
+                              ** must be supplied together; if either is
+                              ** absent the vtab falls back to its full-
+                              ** history no-arg behavior. */
+                              ", from_ref TEXT HIDDEN"
+                              ", to_ref TEXT HIDDEN)");
   z = sqlite3_str_finish(pStr);
   return z;
 }
@@ -123,6 +131,7 @@ struct DiffTblCursor {
 };
 
 #define DT_IDX_TO_COMMIT_EQ  0x01
+#define DT_IDX_SLICE         0x02
 
 static int diffRecordField(
   const u8 *pData,
@@ -520,6 +529,109 @@ static int buildWorkingDiffPair(
   return rc;
 }
 
+/* TVF slice builder: produce exactly one DiffPair between the two
+** supplied refs. Matches Dolt's dolt_diff(from_ref, to_ref, table)
+** shape — one pair, net diff between endpoints, no history walk.
+** to_ref == 'WORKING' diffs against the current working catalog
+** (staged + pending); from_ref == 'WORKING' is not supported by
+** Dolt either and returns an empty slice. */
+static int buildSliceDiffPair(
+  DiffTblCursor *pCur,
+  sqlite3 *db,
+  const char *zTableName,
+  const char *zFromRef,
+  const char *zToRef
+){
+  ProllyHash fromHash, toHash;
+  ProllyHash fromTblRoot, toTblRoot;
+  ProllyHash fromCatHash, toCatHash;
+  ProllyHash fromSchemaHash, toSchemaHash;
+  DoltliteCommit fromCommit;
+  u8 fromFlags = 0;
+  u8 toFlags = 0;
+  i64 fromDate = 0;
+  i64 toDate = 0;
+  int toIsWorking = 0;
+  char zToLabel[PROLLY_HASH_SIZE*2+1];
+  int rc;
+
+  memset(&fromHash, 0, sizeof(fromHash));
+  memset(&toHash, 0, sizeof(toHash));
+  memset(&fromTblRoot, 0, sizeof(fromTblRoot));
+  memset(&toTblRoot, 0, sizeof(toTblRoot));
+  memset(&fromCatHash, 0, sizeof(fromCatHash));
+  memset(&toCatHash, 0, sizeof(toCatHash));
+  memset(&fromSchemaHash, 0, sizeof(fromSchemaHash));
+  memset(&toSchemaHash, 0, sizeof(toSchemaHash));
+  memset(&fromCommit, 0, sizeof(fromCommit));
+  memset(zToLabel, 0, sizeof(zToLabel));
+
+  if( !zFromRef || !zToRef ) return SQLITE_OK;
+
+  rc = doltliteResolveRef(db, zFromRef, &fromHash);
+  if( rc!=SQLITE_OK ) return SQLITE_OK;
+  rc = doltliteLoadCommit(db, &fromHash, &fromCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  memcpy(&fromCatHash, &fromCommit.catalogHash, sizeof(ProllyHash));
+  fromDate = fromCommit.timestamp;
+  doltliteCommitClear(&fromCommit);
+
+  rc = loadTblRootAtCommit(db, &fromCatHash, zTableName,
+                           &fromTblRoot, &fromFlags, &fromSchemaHash);
+  if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+
+  if( sqlite3_stricmp(zToRef, "WORKING")==0 ){
+    toIsWorking = 1;
+    rc = doltliteGetWorkingTableState(db, zTableName,
+                                      &toTblRoot, &toFlags,
+                                      &toSchemaHash);
+    if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
+    if( rc!=SQLITE_OK ) return rc;
+    /* Flush working catalog only if we need its hash; otherwise
+    ** leave toCatHash empty so column resolution falls back to
+    ** the table root itself. */
+    rc = doltliteFlushCatalogToHash(db, &toCatHash);
+    if( rc!=SQLITE_OK ) return rc;
+    memcpy(zToLabel, "WORKING", 7);
+    toDate = 0;
+  }else{
+    DoltliteCommit toCommit;
+    memset(&toCommit, 0, sizeof(toCommit));
+    rc = doltliteResolveRef(db, zToRef, &toHash);
+    if( rc!=SQLITE_OK ) return SQLITE_OK;
+    rc = doltliteLoadCommit(db, &toHash, &toCommit);
+    if( rc!=SQLITE_OK ) return rc;
+    memcpy(&toCatHash, &toCommit.catalogHash, sizeof(ProllyHash));
+    toDate = toCommit.timestamp;
+    doltliteCommitClear(&toCommit);
+    rc = loadTblRootAtCommit(db, &toCatHash, zTableName,
+                             &toTblRoot, &toFlags, &toSchemaHash);
+    if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ) return rc;
+    doltliteHashToHex(&toHash, zToLabel);
+  }
+
+  /* No-op slice: same endpoint or identical table roots. */
+  if( !toIsWorking
+   && prollyHashCompare(&fromHash, &toHash)==0 ){
+    return SQLITE_OK;
+  }
+  if( prollyHashCompare(&fromTblRoot, &toTblRoot)==0
+   && prollyHashCompare(&fromSchemaHash, &toSchemaHash)==0 ){
+    return SQLITE_OK;
+  }
+
+  /* Use whichever side has a non-zero flags bitfield as the
+  ** diff-iteration flags (both sides should agree for a single
+  ** table, but be tolerant when one side is missing). */
+  if( !fromFlags ) fromFlags = toFlags;
+  if( !toFlags ) toFlags = fromFlags;
+
+  return pairsAppend(pCur, &fromHash, &fromTblRoot, &fromCatHash,
+                     &fromSchemaHash, fromFlags, fromDate,
+                     zToLabel, &toTblRoot, &toCatHash, &toSchemaHash,
+                     toFlags, toDate);
+}
+
 static void freePairCols(DiffTblCursor *pCur){
   int i;
   if( pCur->azFromCols ){
@@ -879,18 +991,46 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   DiffTblVtab *p = (DiffTblVtab*)pVtab;
   int i;
   int iToCommitEq = -1;
-  int toCommitCol = p->cols.nCol;
+  int iFromRefEq = -1;
+  int iToRefEq = -1;
+  int nUser = p->cols.nCol;
+  /* Schema layout after buildDiffSchema():
+  **   0..nUser-1       : user cols (to_<col>)
+  **   nUser            : to_commit
+  **   nUser+1          : to_commit_date
+  **   nUser+2..2n+1    : from_<col>
+  **   2n+2             : from_commit
+  **   2n+3             : from_commit_date
+  **   2n+4             : diff_type
+  **   2n+5             : from_ref  (HIDDEN — TVF arg 1)
+  **   2n+6             : to_ref    (HIDDEN — TVF arg 2)
+  */
+  int toCommitCol = nUser;
+  int fromRefCol  = 2*nUser + 5;
+  int toRefCol    = 2*nUser + 6;
 
   for(i=0; i<pInfo->nConstraint; i++){
     if( !pInfo->aConstraint[i].usable ) continue;
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     if( pInfo->aConstraint[i].iColumn==toCommitCol ){
       iToCommitEq = i;
-      break;
+    }else if( pInfo->aConstraint[i].iColumn==fromRefCol ){
+      iFromRefEq = i;
+    }else if( pInfo->aConstraint[i].iColumn==toRefCol ){
+      iToRefEq = i;
     }
   }
 
-  if( iToCommitEq>=0 ){
+  if( iFromRefEq>=0 && iToRefEq>=0 ){
+    /* TVF slice form: dolt_diff_<table>(from_ref, to_ref). Both
+    ** hidden args are bound; build exactly one diff pair. */
+    pInfo->idxNum = DT_IDX_SLICE;
+    pInfo->aConstraintUsage[iFromRefEq].argvIndex = 1;
+    pInfo->aConstraintUsage[iFromRefEq].omit = 1;
+    pInfo->aConstraintUsage[iToRefEq].argvIndex = 2;
+    pInfo->aConstraintUsage[iToRefEq].omit = 1;
+    pInfo->estimatedCost = 10.0;
+  }else if( iToCommitEq>=0 ){
     pInfo->idxNum = DT_IDX_TO_COMMIT_EQ;
     pInfo->aConstraintUsage[iToCommitEq].argvIndex = 1;
     pInfo->estimatedCost = 100.0;
@@ -949,7 +1089,11 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
     }
   }
 
-  if( (idxNum & DT_IDX_TO_COMMIT_EQ)!=0 && argc>=1 ){
+  if( (idxNum & DT_IDX_SLICE)!=0 && argc>=2 ){
+    const char *zFromRef = (const char*)sqlite3_value_text(argv[0]);
+    const char *zToRef = (const char*)sqlite3_value_text(argv[1]);
+    rc = buildSliceDiffPair(c, db, pVtab->zTableName, zFromRef, zToRef);
+  }else if( (idxNum & DT_IDX_TO_COMMIT_EQ)!=0 && argc>=1 ){
     const char *zToCommit = (const char*)sqlite3_value_text(argv[0]);
     if( zToCommit && sqlite3_stricmp(zToCommit, "WORKING")==0 ){
       rc = buildWorkingDiffPair(c, db, pVtab->zTableName);
@@ -1065,13 +1209,17 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
     }else{
       sqlite3_result_null(ctx);
     }
-  }else{
-
+  }else if( nCols > 0 && col == 2*nCols+4 ){
     switch( r->diffType ){
       case PROLLY_DIFF_ADD:    sqlite3_result_text(ctx,"added",-1,SQLITE_STATIC); break;
       case PROLLY_DIFF_DELETE: sqlite3_result_text(ctx,"removed",-1,SQLITE_STATIC); break;
       case PROLLY_DIFF_MODIFY: sqlite3_result_text(ctx,"modified",-1,SQLITE_STATIC); break;
     }
+  }else{
+    /* Hidden TVF arg columns (from_ref, to_ref) — never materialized
+    ** in the result set, but SQLite may still ask for them during
+    ** query planning. Always return NULL. */
+    sqlite3_result_null(ctx);
   }
 
   return SQLITE_OK;
