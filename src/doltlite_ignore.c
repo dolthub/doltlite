@@ -49,6 +49,24 @@ static int ignoreSpecificity(const char *zPat){
 }
 
 int doltliteEnsureIgnoreTable(sqlite3 *db){
+  /* Fast-exit if the table already lives in sqlite_master. The
+  ** unconditional CREATE TABLE IF NOT EXISTS would still start and
+  ** commit an implicit write transaction, which walks through
+  ** prollyBtreeCommitPhaseTwo and rewrites the branch working-set
+  ** hash — unsafe on re-open of a corrupt-working-set repo that the
+  ** integrity check is supposed to diagnose. */
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  int exists = 0;
+  rc = sqlite3_prepare_v2(db,
+      "SELECT 1 FROM sqlite_master WHERE type='table' AND name='dolt_ignore'",
+      -1, &pStmt, 0);
+  if( rc==SQLITE_OK ){
+    if( sqlite3_step(pStmt)==SQLITE_ROW ) exists = 1;
+    sqlite3_finalize(pStmt);
+  }
+  if( exists ) return SQLITE_OK;
+
   return sqlite3_exec(db,
       "CREATE TABLE IF NOT EXISTS dolt_ignore("
       "pattern TEXT NOT NULL,"
