@@ -3853,7 +3853,9 @@ static int prollyBtCursorTableMoveto(
   CLEAR_CACHED_PAYLOAD(pCur);
 
   if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    ProllyMutMapEntry *pEntry = prollyMutMapFind(pCur->pMutMap, 0, 0, intKey);
+    ProllyMutMapEntry *pEntry = 0;
+    rc = prollyMutMapFindRc(pCur->pMutMap, 0, 0, intKey, &pEntry);
+    if( rc!=SQLITE_OK ) return rc;
     if( pEntry ){
       if( pEntry->op == PROLLY_EDIT_INSERT ){
         *pRes = 0;
@@ -3965,7 +3967,9 @@ static int findMatchingMutMapEntry(
 
   if( pKeyInfo
    && pIdxKey->nField >= pKeyInfo->nAllField ){
-    ProllyMutMapEntry *pEntry = prollyMutMapFind(pMap, pSortKey, nSortKey, 0);
+    ProllyMutMapEntry *pEntry = 0;
+    rc = prollyMutMapFindRc(pMap, pSortKey, nSortKey, 0, &pEntry);
+    if( rc!=SQLITE_OK ) return rc;
     if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
       *ppMatch = pEntry;
     }
@@ -4157,8 +4161,9 @@ static int prollyBtCursorIndexMoveto(
               if( bestIdx < 0 ){
                 int isDeleted = 0;
                 if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-                  ProllyMutMapEntry *mmE = prollyMutMapFind(
-                      pCur->pMutMap, pSK, nSK, 0);
+                  ProllyMutMapEntry *mmE = 0;
+                  rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+                  if( rc!=SQLITE_OK ) break;
                   if( mmE && mmE->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
                 }
                 if( !isDeleted ){
@@ -4190,8 +4195,9 @@ static int prollyBtCursorIndexMoveto(
 
           if( recCmp==0 || pIdxKey->eqSeen ){
             if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-              ProllyMutMapEntry *mmE = prollyMutMapFind(
-                  pCur->pMutMap, pSK, nSK, 0);
+              ProllyMutMapEntry *mmE = 0;
+              rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+              if( rc!=SQLITE_OK ) break;
               if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
                 continue;
               }
@@ -4203,8 +4209,9 @@ static int prollyBtCursorIndexMoveto(
             break;
           } else if( recCmp > 0 ){
             if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-              ProllyMutMapEntry *mmE = prollyMutMapFind(
-                  pCur->pMutMap, pSK, nSK, 0);
+              ProllyMutMapEntry *mmE = 0;
+              rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+              if( rc!=SQLITE_OK ) break;
               if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
                 continue;
               }
@@ -4543,11 +4550,12 @@ static int prollyBtCursorInsert(
 
   {
     int canDefer = (pCur->pgnoRoot > 1);
-    if( canDefer ){
-      if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
+      if( canDefer ){
+        if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
 
-        ProllyMutMapEntry *pEntry = prollyMutMapFind(
-            pCur->pMutMap, NULL, 0, pPayload->nKey);
+        ProllyMutMapEntry *pEntry = 0;
+        rc = prollyMutMapFindRc(pCur->pMutMap, NULL, 0, pPayload->nKey, &pEntry);
+        if( rc!=SQLITE_OK ) return rc;
         pCur->eState = CURSOR_VALID;
         pCur->curFlags |= BTCF_ValidNKey;
         pCur->cachedIntKey = pPayload->nKey;
