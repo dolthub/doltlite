@@ -29,11 +29,25 @@
 #define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32     /* hash(20) + offset(8) + size(4) */
 
-/* Working set blob format:
-**   [version:1]
-**   [working_catalog:20][working_commit:20][staged_hash:20]
-**   [is_merging:1][merge_commit:20][conflicts:20] */
-#define WS_FORMAT_VERSION   2
+/* Working set blob format. v2 only has merge state; v3 adds rebase
+** state alongside it (parallel to Dolt's working set, which
+** contains optional MergeState and RebaseState substructures).
+**
+**   v2 layout (still readable for backward compat):
+**     [version:1]
+**     [working_catalog:20][working_commit:20][staged_hash:20]
+**     [is_merging:1][merge_commit:20][conflicts:20]
+**
+**   v3 layout (current write format):
+**     v2 fields, then:
+**     [is_rebasing:1]
+**     [pre_rebase_working_cat:20]
+**     [rebase_onto_commit:20]
+**     [rebase_orig_branch: WS_REBASE_BRANCH_LEN bytes, null-padded]
+*/
+#define WS_FORMAT_VERSION_V2 2
+#define WS_FORMAT_VERSION_V3 3
+#define WS_FORMAT_VERSION    WS_FORMAT_VERSION_V3
 #define WS_VERSION_SIZE     1
 #define WS_WORKING_CAT_OFF  WS_VERSION_SIZE
 #define WS_WORKING_COMMIT_OFF (WS_WORKING_CAT_OFF + PROLLY_HASH_SIZE)
@@ -41,7 +55,13 @@
 #define WS_MERGING_OFF      (WS_STAGED_OFF + PROLLY_HASH_SIZE)
 #define WS_MERGE_COMMIT_OFF (WS_MERGING_OFF + 1)
 #define WS_CONFLICTS_OFF    (WS_MERGE_COMMIT_OFF + PROLLY_HASH_SIZE)
-#define WS_TOTAL_SIZE       (WS_CONFLICTS_OFF + PROLLY_HASH_SIZE)
+#define WS_TOTAL_SIZE_V2    (WS_CONFLICTS_OFF + PROLLY_HASH_SIZE)
+#define WS_REBASING_OFF     WS_TOTAL_SIZE_V2
+#define WS_PRE_REBASE_CAT_OFF (WS_REBASING_OFF + 1)
+#define WS_REBASE_ONTO_OFF  (WS_PRE_REBASE_CAT_OFF + PROLLY_HASH_SIZE)
+#define WS_REBASE_BRANCH_OFF (WS_REBASE_ONTO_OFF + PROLLY_HASH_SIZE)
+#define WS_REBASE_BRANCH_LEN 64
+#define WS_TOTAL_SIZE       (WS_REBASE_BRANCH_OFF + WS_REBASE_BRANCH_LEN)
 
 /* Catalog (table registry) format:
 **   magic(1) + nTables(4 LE) + entries (sorted by name)
