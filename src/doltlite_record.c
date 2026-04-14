@@ -150,7 +150,9 @@ void doltliteFreeColInfo(DoltliteColInfo *ci){
   int i;
   for(i=0; i<ci->nCol; i++) sqlite3_free(ci->azName[i]);
   sqlite3_free(ci->azName);
+  sqlite3_free(ci->aColToRec);
   ci->azName = 0;
+  ci->aColToRec = 0;
   ci->nCol = 0;
 }
 
@@ -158,13 +160,23 @@ void doltliteFreeColInfo(DoltliteColInfo *ci){
 ** Other PK columns live in the record payload like any user column,
 ** so callers that serialize INT PK values separately (at, history,
 ** diff vtables) use iPkCol to pull the rowid from the cursor
-** instead of the record. */
+** instead of the record.
+**
+** aColToRec maps declared column index → record field index. For
+** rowid-aliased and keyless tables that's the identity; for
+** WITHOUT ROWID tables (compound or single non-INT PK — all
+** auto-converted by build.c) the layout is PK columns first in
+** PRIMARY KEY declaration order, then non-PK columns in declared
+** order, matching the aiColumn[] that convertToWithoutRowidTable
+** builds for the covering PK index. */
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci){
   char *zSql;
   sqlite3_stmt *pStmt = 0;
   int rc, nCol;
   int nPkCols = 0;
   int iCandidateAlias = -1;
+  int *aPk = 0;
+  int i, iNonPk;
 
   memset(ci, 0, sizeof(*ci));
   ci->iPkCol = -1;
@@ -188,6 +200,15 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
   memset(ci->azName, 0, nCol * (int)sizeof(char*));
   ci->nCol = 0;
 
+  if( nCol>0 ){
+    aPk = sqlite3_malloc(nCol * (int)sizeof(int));
+    if( !aPk ){
+      doltliteFreeColInfo(ci);
+      sqlite3_finalize(pStmt);
+      return SQLITE_NOMEM;
+    }
+  }
+
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
     int pk = sqlite3_column_int(pStmt, 5);
@@ -198,8 +219,10 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
       iCandidateAlias = ci->nCol;
     }
 
+    aPk[ci->nCol] = pk;
     ci->azName[ci->nCol] = sqlite3_mprintf("%s", zName ? zName : "");
     if( !ci->azName[ci->nCol] ){
+      sqlite3_free(aPk);
       doltliteFreeColInfo(ci);
       sqlite3_finalize(pStmt);
       return SQLITE_NOMEM;
@@ -207,6 +230,7 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     ci->nCol++;
   }
   if( rc!=SQLITE_DONE ){
+    sqlite3_free(aPk);
     doltliteFreeColInfo(ci);
     sqlite3_finalize(pStmt);
     return rc;
@@ -220,6 +244,31 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     ci->iPkCol = iCandidateAlias;
   }
 
+  if( ci->nCol>0 ){
+    ci->aColToRec = sqlite3_malloc(ci->nCol * (int)sizeof(int));
+    if( !ci->aColToRec ){
+      sqlite3_free(aPk);
+      doltliteFreeColInfo(ci);
+      sqlite3_finalize(pStmt);
+      return SQLITE_NOMEM;
+    }
+    if( ci->iPkCol>=0 || nPkCols==0 ){
+      /* Rowid-aliased or keyless: record stays in declared order. */
+      for(i=0; i<ci->nCol; i++) ci->aColToRec[i] = i;
+    }else{
+      /* WITHOUT ROWID: PK cols first in PK-declaration order, then
+      ** non-PK cols in declared order. */
+      for(i=0; i<ci->nCol; i++){
+        if( aPk[i]>0 ) ci->aColToRec[i] = aPk[i] - 1;
+      }
+      iNonPk = nPkCols;
+      for(i=0; i<ci->nCol; i++){
+        if( aPk[i]==0 ) ci->aColToRec[i] = iNonPk++;
+      }
+    }
+  }
+
+  sqlite3_free(aPk);
   sqlite3_finalize(pStmt);
   return SQLITE_OK;
 }
