@@ -48,7 +48,28 @@ static u32 hashKey(
   return h;
 }
 
+static u64 sortPrefixForKey(
+  u8 isIntKey,
+  const u8 *pKey, int nKey, i64 intKey
+){
+  if( isIntKey ){
+    return ((u64)intKey) ^ (((u64)1) << 63);
+  }else{
+    u64 v = 0;
+    int i;
+    int n = nKey < 8 ? nKey : 8;
+    for(i=0; i<n; i++){
+      v = (v << 8) | pKey[i];
+    }
+    for(; i<8; i++){
+      v <<= 8;
+    }
+    return v;
+  }
+}
+
 static ProllyMutMap *gSortCtx = 0;
+static u64 *gSortPrefix = 0;
 static void freeEntryData(ProllyMutMapEntry *e){
   sqlite3_free(e->pKey);
   sqlite3_free(e->pVal);
@@ -196,6 +217,10 @@ static int compareOrderIndexes(const void *a, const void *b){
   int ib = *(const int*)b;
   ProllyMutMapEntry *ea = &mm->aEntries[ia];
   ProllyMutMapEntry *eb = &mm->aEntries[ib];
+  if( gSortPrefix ){
+    if( gSortPrefix[ia] < gSortPrefix[ib] ) return -1;
+    if( gSortPrefix[ia] > gSortPrefix[ib] ) return 1;
+  }
   return compareEntries(mm->isIntKey,
                         ea->pKey, ea->nKey, ea->intKey,
                         eb->pKey, eb->nKey, eb->intKey);
@@ -203,13 +228,25 @@ static int compareOrderIndexes(const void *a, const void *b){
 
 static int ensureOrder(ProllyMutMap *mm){
   int i;
+  u64 *aPrefix = 0;
   if( mm->keepSorted || !mm->orderDirty ) return SQLITE_OK;
   for(i=0; i<mm->nEntries; i++){
     mm->aOrder[i] = i;
   }
+  if( mm->nEntries > 0 ){
+    aPrefix = sqlite3_malloc64((sqlite3_uint64)mm->nEntries * sizeof(u64));
+    if( !aPrefix ) return SQLITE_NOMEM;
+    for(i=0; i<mm->nEntries; i++){
+      ProllyMutMapEntry *e = &mm->aEntries[i];
+      aPrefix[i] = sortPrefixForKey(mm->isIntKey, e->pKey, e->nKey, e->intKey);
+    }
+  }
   gSortCtx = mm;
+  gSortPrefix = aPrefix;
   qsort(mm->aOrder, mm->nEntries, sizeof(int), compareOrderIndexes);
   gSortCtx = 0;
+  gSortPrefix = 0;
+  sqlite3_free(aPrefix);
   for(i=0; i<mm->nEntries; i++){
     mm->aPos[mm->aOrder[i]] = i;
   }
