@@ -1173,7 +1173,7 @@ static void doltliteCommitFunc(
           "cannot --amend: failed to load HEAD commit", -1);
         return;
       }
-      if( headCommit.nParents == 0 ){
+      if( doltliteCommitParentCount(&headCommit)==0 ){
         doltliteCommitClear(&headCommit);
         sqlite3_result_error(context,
           "cannot --amend: HEAD has no parent (initial commit)", -1);
@@ -2143,7 +2143,7 @@ static int doltliteLoadHeadAndParentedCommit(
   int rc = doltliteLoadCommit(db, pTargetHash, pTargetCommit);
   if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
 
-  if( prollyHashIsEmpty(&pTargetCommit->parentHash) ){
+  if( doltliteCommitParentCount(pTargetCommit)==0 ){
     return SQLITE_EMPTY;
   }
 

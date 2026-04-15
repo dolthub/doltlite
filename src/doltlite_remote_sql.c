@@ -649,7 +649,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       DoltliteCommit c;
       memset(&c, 0, sizeof(c));
       if( doltliteLoadCommit(db, &cs->aBranches[0].commitHash, &c)==SQLITE_OK
-       && prollyHashIsEmpty(&c.parentHash) ){
+       && doltliteCommitParentCount(&c)==0 ){
         virgin = 1;
       }
       doltliteCommitClear(&c);
