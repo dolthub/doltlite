@@ -500,13 +500,26 @@ static void doltliteAddFunc(
       ** any) is kept instead — ignore blocks new staging but doesn't
       ** un-stage tables that were already staged. Deletions (in
       ** staged but not in working) are synced only for non-ignored
-      ** tables; ignored deletions stay in new staged to match Dolt. */
+      ** tables; ignored deletions stay in new staged to match Dolt.
+      **
+      ** zName ownership: doltliteLoadCatalog allocates each entry's
+      ** zName; we dup when copying into aNew so all three arrays
+      ** (aWorking/aStaged/aNew) have independent ownership and can
+      ** each be freed with doltliteFreeCatalog at the end. */
       struct TableEntry *aWorking = 0;
       struct TableEntry *aStaged = 0;
       struct TableEntry *aNew = 0;
       int nWorking = 0, nStaged = 0, nNew = 0;
       int k;
       ProllyHash stagedHash;
+
+      #define DA_FAIL(rc_expr) do { \
+        doltliteFreeCatalog(aWorking, nWorking); \
+        doltliteFreeCatalog(aStaged, nStaged); \
+        doltliteFreeCatalog(aNew, nNew); \
+        rc_expr; \
+        return; \
+      } while(0)
 
       rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
       if( rc!=SQLITE_OK ){
@@ -525,9 +538,7 @@ static void doltliteAddFunc(
         rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
       }
       if( rc!=SQLITE_OK ){
-        sqlite3_free(aWorking);
-        sqlite3_result_error(context, "failed to load staged catalog", -1);
-        return;
+        DA_FAIL(sqlite3_result_error(context, "failed to load staged catalog", -1));
       }
 
       for(k=0; k<nWorking; k++){
@@ -537,28 +548,21 @@ static void doltliteAddFunc(
         int irc;
         struct TableEntry *pUse = &aWorking[k];
         struct TableEntry *aTmp;
+        char *zDup;
 
         if( aWorking[k].iTable>1 && zName ){
           irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
           if( irc==SQLITE_CONSTRAINT ){
-            sqlite3_free(aWorking);
-            sqlite3_free(aStaged);
-            sqlite3_free(aNew);
             if( zIgnErr ){
               sqlite3_result_error(context, zIgnErr, -1);
               sqlite3_free(zIgnErr);
-            }else{
-              sqlite3_result_error(context, "dolt_ignore conflict", -1);
+              DA_FAIL((void)0);
             }
-            return;
+            DA_FAIL(sqlite3_result_error(context, "dolt_ignore conflict", -1));
           }
           if( irc!=SQLITE_OK ){
             sqlite3_free(zIgnErr);
-            sqlite3_free(aWorking);
-            sqlite3_free(aStaged);
-            sqlite3_free(aNew);
-            sqlite3_result_error_code(context, irc);
-            return;
+            DA_FAIL(sqlite3_result_error_code(context, irc));
           }
           if( ignored ){
             /* Keep the existing staged entry if any; otherwise skip. */
@@ -575,15 +579,12 @@ static void doltliteAddFunc(
         }
 
         aTmp = sqlite3_realloc(aNew, (nNew+1)*(int)sizeof(struct TableEntry));
-        if( !aTmp ){
-          sqlite3_free(aWorking);
-          sqlite3_free(aStaged);
-          sqlite3_free(aNew);
-          sqlite3_result_error_nomem(context);
-          return;
-        }
+        if( !aTmp ) DA_FAIL(sqlite3_result_error_nomem(context));
         aNew = aTmp;
+        zDup = pUse->zName ? sqlite3_mprintf("%s", pUse->zName) : 0;
+        if( pUse->zName && !zDup ) DA_FAIL(sqlite3_result_error_nomem(context));
         aNew[nNew] = *pUse;
+        aNew[nNew].zName = zDup;
         nNew++;
       }
 
@@ -595,6 +596,7 @@ static void doltliteAddFunc(
         int found = 0;
         int j;
         struct TableEntry *aTmp;
+        char *zDup;
         if( aStaged[k].iTable<=1 || !zName ) continue;
         for(j=0; j<nWorking; j++){
           if( aWorking[j].zName && strcmp(aWorking[j].zName, zName)==0 ){
@@ -608,37 +610,26 @@ static void doltliteAddFunc(
           char *zIgnErr = 0;
           int irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
           if( irc==SQLITE_CONSTRAINT ){
-            sqlite3_free(aWorking);
-            sqlite3_free(aStaged);
-            sqlite3_free(aNew);
             if( zIgnErr ){
               sqlite3_result_error(context, zIgnErr, -1);
               sqlite3_free(zIgnErr);
-            }else{
-              sqlite3_result_error(context, "dolt_ignore conflict", -1);
+              DA_FAIL((void)0);
             }
-            return;
+            DA_FAIL(sqlite3_result_error(context, "dolt_ignore conflict", -1));
           }
           if( irc!=SQLITE_OK ){
             sqlite3_free(zIgnErr);
-            sqlite3_free(aWorking);
-            sqlite3_free(aStaged);
-            sqlite3_free(aNew);
-            sqlite3_result_error_code(context, irc);
-            return;
+            DA_FAIL(sqlite3_result_error_code(context, irc));
           }
           if( !ignored ) continue;
         }
         aTmp = sqlite3_realloc(aNew, (nNew+1)*(int)sizeof(struct TableEntry));
-        if( !aTmp ){
-          sqlite3_free(aWorking);
-          sqlite3_free(aStaged);
-          sqlite3_free(aNew);
-          sqlite3_result_error_nomem(context);
-          return;
-        }
+        if( !aTmp ) DA_FAIL(sqlite3_result_error_nomem(context));
         aNew = aTmp;
+        zDup = aStaged[k].zName ? sqlite3_mprintf("%s", aStaged[k].zName) : 0;
+        if( aStaged[k].zName && !zDup ) DA_FAIL(sqlite3_result_error_nomem(context));
         aNew[nNew] = aStaged[k];
+        aNew[nNew].zName = zDup;
         nNew++;
       }
 
@@ -648,11 +639,7 @@ static void doltliteAddFunc(
         ProllyHash newStagedHash;
         rc = doltliteSerializeCatalogEntries(db, aNew, nNew, &buf, &nBuf);
         if( rc!=SQLITE_OK ){
-          sqlite3_free(aWorking);
-          sqlite3_free(aStaged);
-          sqlite3_free(aNew);
-          sqlite3_result_error_code(context, rc);
-          return;
+          DA_FAIL(sqlite3_result_error_code(context, rc));
         }
         rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
         sqlite3_free(buf);
@@ -661,9 +648,10 @@ static void doltliteAddFunc(
         }
       }
 
-      sqlite3_free(aWorking);
-      sqlite3_free(aStaged);
-      sqlite3_free(aNew);
+      doltliteFreeCatalog(aWorking, nWorking);
+      doltliteFreeCatalog(aStaged, nStaged);
+      doltliteFreeCatalog(aNew, nNew);
+      #undef DA_FAIL
     }else{
 
       struct TableEntry *aWorking = 0, *aStaged = 0;
