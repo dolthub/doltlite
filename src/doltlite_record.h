@@ -53,6 +53,35 @@ void doltliteResultRecordPkField(sqlite3_context *ctx,
                                  const u8 *pData, int nData,
                                  int iPkField);
 
+/* Project a user-schema column into a SQLite result context.
+**
+** This is the single correct way to project a column from a
+** doltlite catalog record. Callers pass their declared column
+** index (the position of the column in the CREATE TABLE text);
+** the helper knows how that maps to the physical record layout:
+**
+**   - If iDeclaredCol is the rowid-alias column (ci->iPkCol),
+**     the value is the cursor's intKey, not a record field.
+**   - Otherwise the declared index is mapped through
+**     ci->aColToRec to the PK-first record field index, because
+**     doltlite's auto-converted WITHOUT ROWID tables store PK
+**     columns before non-PK columns regardless of their declared
+**     positions (see build.c:2722 and convertToWithoutRowidTable).
+**
+** Callers MUST NOT read ri.aType[iDeclaredCol] directly — that's
+** the whole class of bug this helper exists to close. Use this
+** instead for every per-column projection in a vtab xColumn.
+**
+** If pRec is NULL or empty (diff delete side, missing history
+** row, etc.) every column projects as SQL NULL, except the
+** rowid-alias column which still returns intKey.
+*/
+void doltliteResultUserCol(sqlite3_context *ctx,
+                           const DoltliteColInfo *ci,
+                           const u8 *pRec, int nRec,
+                           i64 intKey,
+                           int iDeclaredCol);
+
 int doltliteBindField(sqlite3_stmt *pStmt, int iParam,
                       const u8 *pData, int nData,
                       int serialType, int offset);

@@ -1154,32 +1154,8 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 
 
   if( nCols > 0 && col < nCols ){
-
-    int colIdx = col;
-    if( colIdx == pVtab->cols.iPkCol ){
-      if( r->pNewVal && r->nNewVal > 0 ){
-        sqlite3_result_int64(ctx, r->intKey);
-      }else{
-        sqlite3_result_null(ctx);
-      }
-    }else{
-      if( r->pNewVal && r->nNewVal > 0 ){
-        int st, off;
-        int recField = pVtab->cols.aColToRec
-                          ? pVtab->cols.aColToRec[colIdx] : colIdx;
-        int rc = diffRecordField(r->pNewVal, r->nNewVal, recField, &st, &off);
-        if( rc==SQLITE_OK ){
-          doltliteResultField(ctx, r->pNewVal, r->nNewVal, st, off);
-        }else if( rc==SQLITE_NOTFOUND ){
-          sqlite3_result_null(ctx);
-        }else{
-          sqlite3_result_error_code(ctx, rc);
-          return rc;
-        }
-      }else{
-        sqlite3_result_null(ctx);
-      }
-    }
+    doltliteResultUserCol(ctx, &pVtab->cols, r->pNewVal, r->nNewVal,
+                          r->intKey, col);
   }else if( nCols > 0 && col == nCols ){
 
     sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
@@ -1195,32 +1171,9 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       sqlite3_result_null(ctx);
     }
   }else if( nCols > 0 && col < 2*nCols+2 ){
-
     int colIdx = col - nCols - 2;
-    if( colIdx == pVtab->cols.iPkCol ){
-      if( r->pOldVal && r->nOldVal > 0 ){
-        sqlite3_result_int64(ctx, r->intKey);
-      }else{
-        sqlite3_result_null(ctx);
-      }
-    }else{
-      if( r->pOldVal && r->nOldVal > 0 ){
-        int st, off;
-        int recField = pVtab->cols.aColToRec
-                          ? pVtab->cols.aColToRec[colIdx] : colIdx;
-        int rc = diffRecordField(r->pOldVal, r->nOldVal, recField, &st, &off);
-        if( rc==SQLITE_OK ){
-          doltliteResultField(ctx, r->pOldVal, r->nOldVal, st, off);
-        }else if( rc==SQLITE_NOTFOUND ){
-          sqlite3_result_null(ctx);
-        }else{
-          sqlite3_result_error_code(ctx, rc);
-          return rc;
-        }
-      }else{
-        sqlite3_result_null(ctx);
-      }
-    }
+    doltliteResultUserCol(ctx, &pVtab->cols, r->pOldVal, r->nOldVal,
+                          r->intKey, colIdx);
   }else if( nCols > 0 && col == 2*nCols+2 ){
 
     sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);
