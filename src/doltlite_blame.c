@@ -432,6 +432,47 @@ static int blameUnresolvedCount(BlameCursor *pCur){
   return n;
 }
 
+/* For merge blame we need the merge base across every parent, not just
+** the first two. Fold pairwise merge-base resolution left-to-right:
+** base(p0,p1,p2) := base(base(p0,p1), p2). If any step has no common
+** ancestor, the merge has no shared base across all parents. */
+static int blameFindAllParentMergeBase(
+  sqlite3 *db,
+  const DoltliteCommit *pCommit,
+  ProllyHash *pBaseHash
+){
+  ProllyHash base;
+  int i;
+  int rc;
+
+  memset(&base, 0, sizeof(base));
+  if( doltliteCommitParentCount(pCommit) < 2 ){
+    memset(pBaseHash, 0, sizeof(*pBaseHash));
+    return SQLITE_OK;
+  }
+
+  base = *doltliteCommitParentHash(pCommit, 0);
+  for(i=1; i<doltliteCommitParentCount(pCommit); i++){
+    ProllyHash nextBase;
+    const ProllyHash *pParent = doltliteCommitParentHash(pCommit, i);
+    if( !pParent || prollyHashIsEmpty(pParent) || prollyHashIsEmpty(&base) ){
+      memset(&base, 0, sizeof(base));
+      break;
+    }
+    memset(&nextBase, 0, sizeof(nextBase));
+    rc = doltliteFindAncestor(db, &base, pParent, &nextBase);
+    if( rc==SQLITE_NOTFOUND || prollyHashIsEmpty(&nextBase) ){
+      memset(&base, 0, sizeof(base));
+      break;
+    }
+    if( rc!=SQLITE_OK ) return rc;
+    base = nextBase;
+  }
+
+  *pBaseHash = base;
+  return SQLITE_OK;
+}
+
 /* Main blame walk. Starts from HEAD, walks first-parent, and at
 ** each commit applies the linear or merge comparison rule. */
 static int blameWalk(
@@ -464,12 +505,12 @@ static int blameWalk(
     }
 
     if( commit.nParents >= 2 ){
-      /* Merge commit: compare against the merge base of parents. */
+      /* Merge commit: compare against the merge base of all parents. */
       ProllyHash baseHash;
       DoltliteCommit baseCommit;
       memset(&baseHash, 0, sizeof(baseHash));
-      rc = doltliteFindAncestor(db, &commit.aParents[0], &commit.aParents[1], &baseHash);
-      if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ){
+      rc = blameFindAllParentMergeBase(db, &commit, &baseHash);
+      if( rc!=SQLITE_OK ){
         doltliteCommitClear(&commit);
         return rc;
       }

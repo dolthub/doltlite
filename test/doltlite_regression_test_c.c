@@ -1026,6 +1026,114 @@ static void run_commit_parent_limit(void){
   sqlite3_free(pBlob);
 }
 
+static void run_blame_all_parents_merge_base(void){
+  sqlite3 *db = 0;
+  ChunkStore *cs = 0;
+  char dbpath[256];
+  ProllyHash b1Hash, b2Hash, b3Hash, curHeadHash, mergeHash;
+  ProllyHash base12Hash, base123Hash;
+  DoltliteCommit b2Commit, mergeCommit;
+  u8 *pCommitData = 0;
+  int nCommitData = 0;
+  int rc;
+  const char *res;
+
+  printf("=== Blame All-Parents Merge Base Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_blame_all_parents_merge_base");
+  remove_db(dbpath);
+
+  memset(&b1Hash, 0, sizeof(b1Hash));
+  memset(&b2Hash, 0, sizeof(b2Hash));
+  memset(&b3Hash, 0, sizeof(b3Hash));
+  memset(&curHeadHash, 0, sizeof(curHeadHash));
+  memset(&mergeHash, 0, sizeof(mergeHash));
+  memset(&base12Hash, 0, sizeof(base12Hash));
+  memset(&base123Hash, 0, sizeof(base123Hash));
+  memset(&b2Commit, 0, sizeof(b2Commit));
+  memset(&mergeCommit, 0, sizeof(mergeCommit));
+
+  check("open_db_for_blame_all_parents", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_base_for_blame_all_parents", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A', '-m', 'BASE');"
+    "SELECT dolt_branch('b1');"
+    "SELECT dolt_checkout('b1');"
+    "UPDATE t SET v='one' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'B1');")==SQLITE_OK);
+  doltliteGetSessionHead(db, &b1Hash);
+  check("have_b1_head_for_blame_all_parents", !prollyHashIsEmpty(&b1Hash));
+
+  check("setup_b2_for_blame_all_parents", execsql(db,
+    "SELECT dolt_branch('b2');"
+    "SELECT dolt_checkout('b2');"
+    "INSERT INTO t VALUES(2,'side');"
+    "SELECT dolt_commit('-A', '-m', 'B2');")==SQLITE_OK);
+  doltliteGetSessionHead(db, &b2Hash);
+  check("have_b2_head_for_blame_all_parents", !prollyHashIsEmpty(&b2Hash));
+
+  check("setup_b3_for_blame_all_parents", execsql(db,
+    "SELECT dolt_checkout('main');"
+    "SELECT dolt_branch('b3');"
+    "SELECT dolt_checkout('b3');"
+    "INSERT INTO t VALUES(3,'other');"
+    "SELECT dolt_commit('-A', '-m', 'B3');")==SQLITE_OK);
+  doltliteGetSessionHead(db, &b3Hash);
+  check("have_b3_head_for_blame_all_parents", !prollyHashIsEmpty(&b3Hash));
+
+  check("ancestor_b1_b2_for_blame_all_parents",
+        doltliteFindAncestor(db, &b1Hash, &b2Hash, &base12Hash)==SQLITE_OK
+        && !prollyHashIsEmpty(&base12Hash)
+        && prollyHashCompare(&base12Hash, &b1Hash)==0);
+  check("ancestor_b12_b3_for_blame_all_parents",
+        doltliteFindAncestor(db, &base12Hash, &b3Hash, &base123Hash)==SQLITE_OK
+        && !prollyHashIsEmpty(&base123Hash)
+        && prollyHashCompare(&base123Hash, &b1Hash)!=0);
+
+  check("checkout_b2_before_synthetic_merge", execsql(db,
+    "SELECT dolt_checkout('b2');")==SQLITE_OK);
+  doltliteGetSessionHead(db, &curHeadHash);
+  check("head_is_b2_before_synthetic_merge",
+        prollyHashCompare(&curHeadHash, &b2Hash)==0);
+  check("load_b2_commit_for_blame_all_parents",
+        doltliteLoadCommit(db, &b2Hash, &b2Commit)==SQLITE_OK);
+
+  cs = doltliteGetChunkStore(db);
+  check("have_chunk_store_for_blame_all_parents", cs!=0);
+  if( cs ){
+    mergeCommit.parentHash = b1Hash;
+    mergeCommit.catalogHash = b2Commit.catalogHash;
+    mergeCommit.timestamp = b2Commit.timestamp + 1;
+    mergeCommit.zName = sqlite3_mprintf("oracle");
+    mergeCommit.zEmail = sqlite3_mprintf("oracle@test");
+    mergeCommit.zMessage = sqlite3_mprintf("OCTO");
+    mergeCommit.nParents = 3;
+    mergeCommit.aParents[0] = b1Hash;
+    mergeCommit.aParents[1] = b2Hash;
+    mergeCommit.aParents[2] = b3Hash;
+    check("serialize_octopus_commit_for_blame_all_parents",
+          doltliteCommitSerialize(&mergeCommit, &pCommitData, &nCommitData)==SQLITE_OK);
+    check("store_octopus_commit_for_blame_all_parents",
+          chunkStorePut(cs, pCommitData, nCommitData, &mergeHash)==SQLITE_OK);
+    check("commit_octopus_commit_for_blame_all_parents",
+          chunkStoreCommit(cs)==SQLITE_OK);
+    doltliteSetSessionHead(db, &mergeHash);
+    doltliteSetSessionStaged(db, &mergeCommit.catalogHash);
+    check("switch_catalog_to_octopus_commit_for_blame_all_parents",
+          doltliteSwitchCatalog(db, &mergeCommit.catalogHash)==SQLITE_OK);
+  }
+
+  res = exec1(db, "SELECT message FROM dolt_blame_t WHERE id = 1;");
+  check("blame_query_returns_row_for_all_parents", res[0]!=0);
+  check("blame_uses_all_parents_merge_base", strcmp(res, "OCTO")==0);
+
+  sqlite3_free(pCommitData);
+  doltliteCommitClear(&b2Commit);
+  doltliteCommitClear(&mergeCommit);
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_merge_persist_failure(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -2905,6 +3013,7 @@ static const RegressionCase aCases[] = {
   { "clone_persist_failure", "Clone Persist Failure Test", run_clone_persist_failure },
   { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
+  { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },
