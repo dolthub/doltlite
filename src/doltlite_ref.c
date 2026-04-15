@@ -229,18 +229,18 @@ int doltliteForEachUserTable(
     if( aTables[i].zName && aTables[i].iTable > 1 ){
       char *zMod = sqlite3_mprintf("%s%s", zPrefix, aTables[i].zName);
       if( !zMod ){
-        sqlite3_free(aTables);
+        doltliteFreeCatalog(aTables, nTables);
         return SQLITE_NOMEM;
       }
       rc = sqlite3_create_module(db, zMod, pModule, 0);
       sqlite3_free(zMod);
       if( rc!=SQLITE_OK ){
-        sqlite3_free(aTables);
+        doltliteFreeCatalog(aTables, nTables);
         return rc;
       }
     }
   }
-  sqlite3_free(aTables);
+  doltliteFreeCatalog(aTables, nTables);
   return SQLITE_OK;
 }
 
