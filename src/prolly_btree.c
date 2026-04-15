@@ -109,6 +109,20 @@ struct TableEntry {
   ProllyMutMap *pPending;
 };
 
+/* Typed container for a Btree's live TableEntry[] plus the monotonic
+** root-page counter they share. Every mutation goes through catAdd /
+** catRemove / catFree so zName and pPending ownership invariants
+** stay in one place — no bare sqlite3_free(a) calls should exist
+** anywhere. iNextTable travels with a/n because every add needs to
+** bump it and every catalog reload has to reset it. */
+typedef struct Catalog Catalog;
+struct Catalog {
+  struct TableEntry *a;
+  int n;
+  int nAlloc;
+  Pgno iNextTable;
+};
+
 typedef struct SavepointTableEntry SavepointTableEntry;
 struct SavepointTableEntry {
   Pgno iTable;
@@ -231,10 +245,7 @@ struct Btree {
   BtLock lock;
   u64 nSeek;
 
-  struct TableEntry *aTables;
-  int nTables;
-  int nTablesAlloc;
-  Pgno iNextTable;
+  Catalog cat;
 
   u32 aMeta[16];
 
@@ -343,9 +354,26 @@ struct BtCursor {
   const struct BtCursorOps *pCurOps;
 };
 
-static struct TableEntry *findTable(Btree *pBtree, Pgno iTable);
-static struct TableEntry *addTable(Btree *pBtree, Pgno iTable, u8 flags);
-static void removeTable(Btree *pBtree, Pgno iTable);
+static struct TableEntry *catFind(Catalog *cat, Pgno iTable);
+static struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags);
+static void catRemove(Catalog *cat, Pgno iTable);
+static void catFree(Catalog *cat);
+
+/* Thin Btree-flavoured wrappers so existing call sites that take a
+** Btree* don't have to spell &p->cat everywhere. Any new code
+** should prefer catFind/catAdd/catRemove/catFree directly. */
+static inline struct TableEntry *findTable(Btree *p, Pgno iTable){
+  return catFind(&p->cat, iTable);
+}
+static inline struct TableEntry *addTable(Btree *p, Pgno iTable, u8 flags){
+  return catAdd(&p->cat, iTable, flags);
+}
+static inline void removeTable(Btree *p, Pgno iTable){
+  catRemove(&p->cat, iTable);
+}
+static inline void btreeFreeCatalogTables(Btree *p){
+  catFree(&p->cat);
+}
 static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode);
 static void invalidateSchema(Btree *pBtree);
 static int flushMutMap(BtCursor *pCur);
@@ -753,13 +781,13 @@ static const struct BtCursorOps origCursorVtOps = {
   origCursorCursorIsValidNNVt,
 };
 
-static struct TableEntry *findTable(Btree *pBtree, Pgno iTable){
-  int lo = 0, hi = pBtree->nTables - 1;
+static struct TableEntry *catFind(Catalog *cat, Pgno iTable){
+  int lo = 0, hi = cat->n - 1;
   while( lo<=hi ){
     int mid = lo + (hi - lo) / 2;
-    Pgno midTable = pBtree->aTables[mid].iTable;
+    Pgno midTable = cat->a[mid].iTable;
     if( midTable==iTable ){
-      return &pBtree->aTables[mid];
+      return &cat->a[mid];
     } else if( midTable<iTable ){
       lo = mid + 1;
     } else {
@@ -769,65 +797,86 @@ static struct TableEntry *findTable(Btree *pBtree, Pgno iTable){
   return 0;
 }
 
-static struct TableEntry *addTable(Btree *pBtree, Pgno iTable, u8 flags){
+static struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags){
   struct TableEntry *pEntry;
 
-
-  pEntry = findTable(pBtree, iTable);
+  pEntry = catFind(cat, iTable);
   if( pEntry ){
     pEntry->flags = flags;
     return pEntry;
   }
 
-
-  if( pBtree->nTables>=pBtree->nTablesAlloc ){
-    int nNew = pBtree->nTablesAlloc ? pBtree->nTablesAlloc*2 : 16;
+  if( cat->n>=cat->nAlloc ){
+    int nNew = cat->nAlloc ? cat->nAlloc*2 : 16;
     struct TableEntry *aNew;
-    aNew = sqlite3_realloc(pBtree->aTables, nNew*(int)sizeof(struct TableEntry));
+    aNew = sqlite3_realloc(cat->a, nNew*(int)sizeof(struct TableEntry));
     if( !aNew ) return 0;
-    pBtree->aTables = aNew;
-    pBtree->nTablesAlloc = nNew;
+    cat->a = aNew;
+    cat->nAlloc = nNew;
   }
 
-
   {
-    int lo = 0, hi = pBtree->nTables;
+    int lo = 0, hi = cat->n;
     while( lo<hi ){
       int mid = lo + (hi - lo) / 2;
-      if( pBtree->aTables[mid].iTable < iTable ){
+      if( cat->a[mid].iTable < iTable ){
         lo = mid + 1;
       } else {
         hi = mid;
       }
     }
 
-    if( lo < pBtree->nTables ){
-      memmove(&pBtree->aTables[lo+1], &pBtree->aTables[lo],
-              (pBtree->nTables - lo) * (int)sizeof(struct TableEntry));
+    if( lo < cat->n ){
+      memmove(&cat->a[lo+1], &cat->a[lo],
+              (cat->n - lo) * (int)sizeof(struct TableEntry));
     }
-    pEntry = &pBtree->aTables[lo];
+    pEntry = &cat->a[lo];
   }
   memset(pEntry, 0, sizeof(*pEntry));
   pEntry->iTable = iTable;
   pEntry->flags = flags;
-  pBtree->nTables++;
+  cat->n++;
 
   return pEntry;
 }
 
-static void removeTable(Btree *pBtree, Pgno iTable){
+static void catRemove(Catalog *cat, Pgno iTable){
   int i;
-  for(i=0; i<pBtree->nTables; i++){
-    if( pBtree->aTables[i].iTable==iTable ){
-      sqlite3_free(pBtree->aTables[i].zName);
-      if( i<pBtree->nTables-1 ){
-        memmove(&pBtree->aTables[i], &pBtree->aTables[i+1],
-                (pBtree->nTables-i-1)*(int)sizeof(struct TableEntry));
+  for(i=0; i<cat->n; i++){
+    if( cat->a[i].iTable==iTable ){
+      sqlite3_free(cat->a[i].zName);
+      if( i<cat->n-1 ){
+        memmove(&cat->a[i], &cat->a[i+1],
+                (cat->n-i-1)*(int)sizeof(struct TableEntry));
       }
-      pBtree->nTables--;
+      cat->n--;
       return;
     }
   }
+}
+
+/* Walk every TableEntry, free its zName and any still-live pending
+** mutmap, then release the array itself. Leaves cat in the zero
+** state. Safe on partially-built catalogs (mid-deserializeCatalog
+** error) because catAdd only bumps n after installing the entry.
+**
+** This is the ONLY place that frees cat->a — callers that want to
+** drop the catalog must go through here, or zName/pPending leak. */
+static void catFree(Catalog *cat){
+  int k;
+  for(k=0; k<cat->n; k++){
+    sqlite3_free(cat->a[k].zName);
+    if( cat->a[k].pPending ){
+      ProllyMutMap *pMap = (ProllyMutMap*)cat->a[k].pPending;
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      cat->a[k].pPending = 0;
+    }
+  }
+  sqlite3_free(cat->a);
+  cat->a = 0;
+  cat->n = 0;
+  cat->nAlloc = 0;
 }
 
 static void invalidateSchema(Btree *pBtree){
@@ -951,7 +1000,7 @@ int doltliteSerializeCatalogEntries(
 
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   return doltliteSerializeCatalogEntries(
-      pBtree->db, pBtree->aTables, pBtree->nTables, ppOut, pnOut);
+      pBtree->db, pBtree->cat.a, pBtree->cat.n, ppOut, pnOut);
 }
 
 static void initDefaultMeta(Btree *pBtree){
@@ -959,28 +1008,6 @@ static void initDefaultMeta(Btree *pBtree){
   pBtree->aMeta[BTREE_FILE_FORMAT] = 4;
   pBtree->aMeta[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
 
-}
-
-/* Walk every TableEntry, free its zName and any still-live pending
-** mutmap, then release the array itself. Leaves pBtree->aTables=NULL
-** and all counters at 0. Safe on partially-built catalogs
-** (mid-deserializeCatalog error) because addTable only advances
-** nTables after installing the entry. */
-static void btreeFreeCatalogTables(Btree *pBtree){
-  int k;
-  for(k=0; k<pBtree->nTables; k++){
-    sqlite3_free(pBtree->aTables[k].zName);
-    if( pBtree->aTables[k].pPending ){
-      ProllyMutMap *pMap = (ProllyMutMap*)pBtree->aTables[k].pPending;
-      prollyMutMapFree(pMap);
-      sqlite3_free(pMap);
-      pBtree->aTables[k].pPending = 0;
-    }
-  }
-  sqlite3_free(pBtree->aTables);
-  pBtree->aTables = 0;
-  pBtree->nTables = 0;
-  pBtree->nTablesAlloc = 0;
 }
 
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
@@ -1044,14 +1071,14 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
 
   {
     Pgno maxPage = 0;
-    for(i=0; i<pBtree->nTables; i++){
-      if( pBtree->aTables[i].iTable > maxPage ){
-        maxPage = pBtree->aTables[i].iTable;
+    for(i=0; i<pBtree->cat.n; i++){
+      if( pBtree->cat.a[i].iTable > maxPage ){
+        maxPage = pBtree->cat.a[i].iTable;
       }
     }
     pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = maxPage;
 
-    pBtree->iNextTable = maxPage + 1;
+    pBtree->cat.iNextTable = maxPage + 1;
   }
 
   return SQLITE_OK;
@@ -1502,7 +1529,7 @@ static void captureSavepointSessionState(
   Btree *pBtree,
   struct SavepointTableState *pState
 ){
-  pState->iNextTable = pBtree->iNextTable;
+  pState->iNextTable = pBtree->cat.iNextTable;
   pState->stagedCatalog = pBtree->stagedCatalog;
   pState->isMerging = pBtree->isMerging;
   pState->mergeCommitHash = pBtree->mergeCommitHash;
@@ -1533,24 +1560,24 @@ static int captureSavepointTables(
   rc = chunkStorePut(&pBtree->pBt->store, catData, nCatData, &pState->catalogHash);
   sqlite3_free(catData);
   if( rc!=SQLITE_OK ) return rc;
-  if( pBtree->nTables<=0 ) return SQLITE_OK;
+  if( pBtree->cat.n<=0 ) return SQLITE_OK;
   pState->aTables = sqlite3_malloc(
-      pBtree->nTables * (int)sizeof(SavepointTableEntry));
+      pBtree->cat.n * (int)sizeof(SavepointTableEntry));
   if( !pState->aTables ) return SQLITE_NOMEM;
-  for(k=0; k<pBtree->nTables; k++){
-    pState->aTables[k].iTable = pBtree->aTables[k].iTable;
+  for(k=0; k<pBtree->cat.n; k++){
+    pState->aTables[k].iTable = pBtree->cat.a[k].iTable;
     pState->aTables[k].pendingFlushSeekEdits =
-        pBtree->aTables[k].pendingFlushSeekEdits;
+        pBtree->cat.a[k].pendingFlushSeekEdits;
   }
-  pState->nTables = pBtree->nTables;
+  pState->nTables = pBtree->cat.n;
   return SQLITE_OK;
 }
 
 static void pushSavepointOnMutMaps(Btree *pBtree, int level){
   int k;
   BtCursor *p;
-  for(k=0; k<pBtree->nTables; k++){
-    ProllyMutMap *pMap = (ProllyMutMap*)pBtree->aTables[k].pPending;
+  for(k=0; k<pBtree->cat.n; k++){
+    ProllyMutMap *pMap = (ProllyMutMap*)pBtree->cat.a[k].pPending;
     if( pMap ) prollyMutMapPushSavepoint(pMap, level);
   }
   for(p = pBtree->pBt->pCursor; p; p = p->pNext){
@@ -1662,8 +1689,8 @@ static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
                                        int iFromSavepoint){
   int k, rc;
   BtCursor *p;
-  for(k=0; k<pBtree->nTables; k++){
-    struct TableEntry *pTE = &pBtree->aTables[k];
+  for(k=0; k<pBtree->cat.n; k++){
+    struct TableEntry *pTE = &pBtree->cat.a[k];
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     int iSavepoint = -1;
     int iSnapshot = -1;
@@ -1696,8 +1723,8 @@ static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
 static void releaseMutMapsToSavepoint(Btree *pBtree, int level){
   int k;
   BtCursor *p;
-  for(k=0; k<pBtree->nTables; k++){
-    ProllyMutMap *pMap = (ProllyMutMap*)pBtree->aTables[k].pPending;
+  for(k=0; k<pBtree->cat.n; k++){
+    ProllyMutMap *pMap = (ProllyMutMap*)pBtree->cat.a[k].pPending;
     if( pMap ) prollyMutMapReleaseSavepoint(pMap, level);
   }
   for(p = pBtree->pBt->pCursor; p; p = p->pNext){
@@ -1804,8 +1831,8 @@ static int restoreTablesFromSavepoint(
   ProllyMutMap **apPending = 0;
   int k;
   int rc;
-  struct TableEntry *aCurrent = pBtree->aTables;
-  int nCurrent = pBtree->nTables;
+  struct TableEntry *aCurrent = pBtree->cat.a;
+  int nCurrent = pBtree->cat.n;
 
   if( pState->nTables>0 ){
     apPending = sqlite3_malloc64(
@@ -1813,15 +1840,15 @@ static int restoreTablesFromSavepoint(
     if( !apPending ) return SQLITE_NOMEM;
     memset(apPending, 0, pState->nTables * sizeof(ProllyMutMap*));
 
-    if( pBtree->nTablesAlloc < pState->nTables ){
+    if( pBtree->cat.nAlloc < pState->nTables ){
       struct TableEntry *aNew = sqlite3_realloc(
-          pBtree->aTables, pState->nTables * (int)sizeof(struct TableEntry));
+          pBtree->cat.a, pState->nTables * (int)sizeof(struct TableEntry));
       if( !aNew ){
         sqlite3_free(apPending);
         return SQLITE_NOMEM;
       }
-      pBtree->aTables = aNew;
-      pBtree->nTablesAlloc = pState->nTables;
+      pBtree->cat.a = aNew;
+      pBtree->cat.nAlloc = pState->nTables;
     }
   }
 
@@ -1847,7 +1874,7 @@ static int restoreTablesFromSavepoint(
   if( prollyHashIsEmpty(&pState->catalogHash) ){
     btreeFreeCatalogTables(pBtree);
     initDefaultMeta(pBtree);
-    pBtree->iNextTable = 2;
+    pBtree->cat.iNextTable = 2;
   }else{
     u8 *catData = 0;
     int nCatData = 0;
@@ -1867,18 +1894,18 @@ static int restoreTablesFromSavepoint(
   if( pState->nTables>0 ){
     for(k=0; k<pState->nTables; k++){
       int idx = findTableIndexInArray(
-          pBtree->aTables, pBtree->nTables, pState->aTables[k].iTable);
+          pBtree->cat.a, pBtree->cat.n, pState->aTables[k].iTable);
       if( idx < 0 ){
         sqlite3_free(apPending);
         return SQLITE_CORRUPT;
       }
-      pBtree->aTables[idx].pendingFlushSeekEdits =
+      pBtree->cat.a[idx].pendingFlushSeekEdits =
           pState->aTables[k].pendingFlushSeekEdits;
-      pBtree->aTables[idx].pPending = apPending[k];
+      pBtree->cat.a[idx].pPending = apPending[k];
     }
   }
 
-  pBtree->iNextTable = pState->iNextTable;
+  pBtree->cat.iNextTable = pState->iNextTable;
   sqlite3_free(apPending);
   return SQLITE_OK;
 }
@@ -2148,7 +2175,7 @@ int sqlite3BtreeOpen(
   }
 
 
-  p->iNextTable = 2;
+  p->cat.iNextTable = 2;
   if( !addTable(p, 1, BTREE_INTKEY) ){
     pagerShimDestroy(pBt->pPagerShim);
     prollyCacheFree(&pBt->cache);
@@ -2328,7 +2355,7 @@ Pgno sqlite3BtreeMaxPageCount(Btree *p, Pgno mxPage){
 }
 
 static Pgno prollyBtreeLastPage(Btree *p){
-  return p->iNextTable + 1000;
+  return p->cat.iNextTable + 1000;
 }
 Pgno sqlite3BtreeLastPage(Btree *p){
   return p->pOps->xLastPage(p);
@@ -2886,7 +2913,7 @@ static int restoreFromCommitted(Btree *p){
   if( prollyHashIsEmpty(&p->committedCatalogHash) ){
     btreeFreeCatalogTables(p);
     initDefaultMeta(p);
-    p->iNextTable = 2;
+    p->cat.iNextTable = 2;
   }else{
     u8 *catData = 0;
     int nCatData = 0;
@@ -3102,8 +3129,8 @@ static int prollyBtreeCreateTable(Btree *p, Pgno *piTable, int flags){
     return SQLITE_ERROR;
   }
 
-  iTable = p->iNextTable;
-  p->iNextTable++;
+  iTable = p->cat.iNextTable;
+  p->cat.iNextTable++;
 
   if( iTable > p->aMeta[BTREE_LARGEST_ROOT_PAGE] ){
     p->aMeta[BTREE_LARGEST_ROOT_PAGE] = iTable;
@@ -4819,8 +4846,8 @@ static int flushDeferredEdits(BtShared *pBt){
   if( pBt->db && pBt->db->nDb>0 && pBt->db->aDb[0].pBt ){
     Btree *pBtree = pBt->db->aDb[0].pBt;
     int i;
-    for(i=0; i<pBtree->nTables; i++){
-      struct TableEntry *pTE = &pBtree->aTables[i];
+    for(i=0; i<pBtree->cat.n; i++){
+      struct TableEntry *pTE = &pBtree->cat.a[i];
       if( pTE->pPending && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
         ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
         ProllyMutMap *pFlushMap = pMap;
@@ -5430,21 +5457,18 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
 
   invalidateCursors(pBtTo, 0, SQLITE_ABORT);
 
-  sqlite3_free(pTo->aTables);
-  pTo->aTables = 0;
-  pTo->nTables = 0;
-  pTo->nTablesAlloc = 0;
+  catFree(&pTo->cat);
 
-  for(i=0; i<pFrom->nTables; i++){
+  for(i=0; i<pFrom->cat.n; i++){
     struct TableEntry *pTE = addTable(pTo,
-                                       pFrom->aTables[i].iTable,
-                                       pFrom->aTables[i].flags);
+                                       pFrom->cat.a[i].iTable,
+                                       pFrom->cat.a[i].flags);
     if( !pTE ) return SQLITE_NOMEM;
-    pTE->root = pFrom->aTables[i].root;
+    pTE->root = pFrom->cat.a[i].root;
   }
 
   memcpy(pTo->aMeta, pFrom->aMeta, sizeof(pTo->aMeta));
-  pTo->iNextTable = pFrom->iNextTable;
+  pTo->cat.iNextTable = pFrom->cat.iNextTable;
 
   pTo->iBDataVersion++;
   if( pBtTo->pPagerShim ){
@@ -5663,9 +5687,9 @@ void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
   int i;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return;
   pBtree = db->aDb[0].pBt;
-  for(i=0; i<pBtree->nTables; i++){
-    if( pBtree->aTables[i].iTable==iTable ){
-      memcpy(&pBtree->aTables[i].schemaHash, pH, sizeof(ProllyHash));
+  for(i=0; i<pBtree->cat.n; i++){
+    if( pBtree->cat.a[i].iTable==iTable ){
+      memcpy(&pBtree->cat.a[i].schemaHash, pH, sizeof(ProllyHash));
       return;
     }
   }
@@ -5694,10 +5718,10 @@ int doltliteApplyRawRowMutation(
   {
     int i;
     pTE = 0;
-    for(i=0; i<pBtree->nTables; i++){
-      if( pBtree->aTables[i].zName
-       && strcmp(pBtree->aTables[i].zName, zTable)==0 ){
-        pTE = &pBtree->aTables[i];
+    for(i=0; i<pBtree->cat.n; i++){
+      if( pBtree->cat.a[i].zName
+       && strcmp(pBtree->cat.a[i].zName, zTable)==0 ){
+        pTE = &pBtree->cat.a[i];
         break;
       }
     }
@@ -5758,11 +5782,11 @@ const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable){
   Btree *pBtree;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
   pBtree = db->aDb[0].pBt;
-  while( *pIdx < pBtree->nTables ){
+  while( *pIdx < pBtree->cat.n ){
     int i = (*pIdx)++;
-    if( pBtree->aTables[i].iTable>1 && pBtree->aTables[i].zName ){
-      *piTable = pBtree->aTables[i].iTable;
-      return pBtree->aTables[i].zName;
+    if( pBtree->cat.a[i].iTable>1 && pBtree->cat.a[i].zName ){
+      *piTable = pBtree->cat.a[i].iTable;
+      return pBtree->cat.a[i].zName;
     }
   }
   return 0;
@@ -5813,9 +5837,9 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
   sqlite3_free(data);
   if( rc!=SQLITE_OK ) return rc;
 
-  *ppTables = temp.aTables;
-  *pnTables = temp.nTables;
-  if( piNextTable ) *piNextTable = temp.iNextTable;
+  *ppTables = temp.cat.a;
+  *pnTables = temp.cat.n;
+  if( piNextTable ) *piNextTable = temp.cat.iNextTable;
   return SQLITE_OK;
 }
 
