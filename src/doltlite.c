@@ -155,6 +155,16 @@ static int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
   return SQLITE_OK;
 }
 
+static int doltliteRestoreTxnStateOnFailure(
+  sqlite3 *db,
+  DoltliteTxnState *pSaved,
+  int opRc
+){
+  int rc = doltliteRestoreTxnState(db, pSaved);
+  doltliteTxnStateClear(pSaved);
+  return rc==SQLITE_OK ? opRc : rc;
+}
+
 /* Commit-race guard. Takes the graph lock, refreshes ref state from
 ** disk, then verifies the session's head still matches the branch
 ** tip. If another connection advanced the branch between the start
@@ -393,9 +403,7 @@ static int doltliteAdvanceBranch(
     rc = chunkStoreUpdateBranch(cs, branch, pNewHead);
   }
   if( rc!=SQLITE_OK ){
-    int rc2 = doltliteRestoreTxnState(db, &saved);
-    doltliteTxnStateClear(&saved);
-    return rc2==SQLITE_OK ? rc : rc2;
+    return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
   }
 
   doltliteSetSessionHead(db, pNewHead);
@@ -403,9 +411,7 @@ static int doltliteAdvanceBranch(
 
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ){
-    int rc2 = doltliteRestoreTxnState(db, &saved);
-    doltliteTxnStateClear(&saved);
-    return rc2==SQLITE_OK ? rc : rc2;
+    return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
   }
 
   doltliteTxnStateClear(&saved);
@@ -1464,10 +1470,9 @@ static int mergeFastForward(
   }
   if( graphLocked ) chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
-    int rc2 = doltliteRestoreTxnState(db, &savedState);
-    doltliteTxnStateClear(&savedState);
     doltliteCommitClear(&theirCommit);
-    sqlite3_result_error_code(context, rc2==SQLITE_OK ? rc : rc2);
+    sqlite3_result_error_code(context,
+        doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
     return rc;
   }
   doltliteTxnStateClear(&savedState);
@@ -1983,15 +1988,13 @@ static void doltliteMergeFunc(
     doltliteCommitClear(&ourCommit);
     doltliteCommitClear(&theirCommit);
     if( rc!=SQLITE_OK ){
-      int rc2;
       if( graphLocked ){
         chunkStoreUnlock(cs);
         graphLocked = 0;
       }
-      rc2 = doltliteRestoreTxnState(db, &savedState);
-      doltliteTxnStateClear(&savedState);
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-      sqlite3_result_error_code(context, rc2==SQLITE_OK ? rc : rc2);
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
       return;
     }
 
@@ -2025,14 +2028,12 @@ static void doltliteMergeFunc(
       }
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       if( rc!=SQLITE_OK ){
-        int rc2;
         if( graphLocked ){
           chunkStoreUnlock(cs);
           graphLocked = 0;
         }
-        rc2 = doltliteRestoreTxnState(db, &savedState);
-        doltliteTxnStateClear(&savedState);
-        sqlite3_result_error_code(context, rc2==SQLITE_OK ? rc : rc2);
+        sqlite3_result_error_code(context,
+            doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
         return;
       }
     }
@@ -2045,9 +2046,8 @@ static void doltliteMergeFunc(
       graphLocked = 0;
     }
     if( rc!=SQLITE_OK ){
-      int rc2 = doltliteRestoreTxnState(db, &savedState);
-      doltliteTxnStateClear(&savedState);
-      sqlite3_result_error_code(context, rc2==SQLITE_OK ? rc : rc2);
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
       return;
     }
     doltliteTxnStateClear(&savedState);
@@ -2077,9 +2077,8 @@ static void doltliteMergeFunc(
       graphLocked = 0;
     }
     if( rc!=SQLITE_OK ){
-      int rc2 = doltliteRestoreTxnState(db, &savedState);
-      doltliteTxnStateClear(&savedState);
-      sqlite3_result_error_code(context, rc2==SQLITE_OK ? rc : rc2);
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
       return;
     }
     doltliteTxnStateClear(&savedState);
@@ -2165,9 +2164,7 @@ apply_rollback:
     chunkStoreUnlock(cs);
   }
   {
-    int rc2 = doltliteRestoreTxnState(db, &savedState);
-    doltliteTxnStateClear(&savedState);
-    return rc2==SQLITE_OK ? rc : rc2;
+    return doltliteRestoreTxnStateOnFailure(db, &savedState, rc);
   }
 }
 
@@ -2637,9 +2634,7 @@ static int doltliteRebaseLinearReplay(
 
 rollback:
   if( savedInit ){
-    int rc2 = doltliteRestoreTxnState(db, &saved);
-    doltliteTxnStateClear(&saved);
-    (void)rc2;
+    (void)doltliteRestoreTxnStateOnFailure(db, &saved, rc);
   }
   (void)cs;
   sqlite3_free(aReplay);
