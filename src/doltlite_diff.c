@@ -274,8 +274,8 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
   struct TableEntry *aChild = 0, *aParent = 0;
   int nChild = 0, nParent = 0;
   int rc, i;
-  int hasParent = (pCommit->nParents > 0
-                   && !prollyHashIsEmpty(&pCommit->aParents[0]));
+  const ProllyHash *pParentHash = doltliteCommitParentHash(pCommit, 0);
+  int hasParent = (pParentHash && !prollyHashIsEmpty(pParentHash));
   (void)pCommitHash;
 
   rc = doltliteLoadCatalog(db, &pCommit->catalogHash, &aChild, &nChild, 0);
@@ -284,7 +284,7 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
   if( hasParent ){
     DoltliteCommit parent;
     memset(&parent, 0, sizeof(parent));
-    rc = doltliteLoadCommit(db, &pCommit->aParents[0], &parent);
+    rc = doltliteLoadCommit(db, pParentHash, &parent);
     if( rc==SQLITE_OK ){
       rc = doltliteLoadCatalog(db, &parent.catalogHash, &aParent, &nParent, 0);
       doltliteCommitClear(&parent);

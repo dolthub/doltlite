@@ -1180,7 +1180,16 @@ static void doltliteCommitFunc(
         return;
       }
 
-      memcpy(&parentHash, &headCommit.aParents[0], sizeof(ProllyHash));
+      {
+        const ProllyHash *pParent = doltliteCommitParentHash(&headCommit, 0);
+        if( !pParent || prollyHashIsEmpty(pParent) ){
+          doltliteCommitClear(&headCommit);
+          sqlite3_result_error(context,
+            "cannot --amend: HEAD has no parent (initial commit)", -1);
+          return;
+        }
+        memcpy(&parentHash, pParent, sizeof(ProllyHash));
+      }
       if( !zMessage || !*zMessage ){
         zMessage = sqlite3_mprintf("%s",
             headCommit.zMessage ? headCommit.zMessage : "");
@@ -1796,6 +1805,40 @@ reset_cleanup:
   }
 }
 
+static int doltliteApplyMergeSchemaActions(
+  sqlite3 *db,
+  const ProllyHash *pAncCatHash,
+  const ProllyHash *pTheirCatHash,
+  SchemaMergeAction *aSchemaActions,
+  int nSchemaActions,
+  ProllyHash *pMergedCatHash
+){
+  int rc = SQLITE_OK;
+  int si;
+
+  for(si=0; si<nSchemaActions && rc==SQLITE_OK; si++){
+    int sj;
+    for(sj=0; sj<aSchemaActions[si].nAddColumns; sj++){
+      char *zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" ADD COLUMN %s",
+                                      aSchemaActions[si].zTableName,
+                                      aSchemaActions[si].azAddColumns[sj]);
+      if( !zAlter ) return SQLITE_NOMEM;
+      rc = sqlite3_exec(db, zAlter, 0, 0, 0);
+      sqlite3_free(zAlter);
+      if( rc!=SQLITE_OK ) break;
+    }
+  }
+
+  if( rc==SQLITE_OK ){
+    rc = migrateSchemaRowData(db, pAncCatHash, pTheirCatHash,
+                              aSchemaActions, nSchemaActions);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteFlushCatalogToHash(db, pMergedCatHash);
+  }
+  return rc;
+}
+
 static void doltliteMergeFunc(
   sqlite3_context *context,
   int argc,
@@ -2012,32 +2055,9 @@ static void doltliteMergeFunc(
 
 
     if( nSchemaActions > 0 ){
-      int si;
-      for(si=0; si<nSchemaActions; si++){
-        int sj;
-        for(sj=0; sj<aSchemaActions[si].nAddColumns; sj++){
-          char *zAlter = sqlite3_mprintf("ALTER TABLE \"%w\" ADD COLUMN %s",
-                                          aSchemaActions[si].zTableName,
-                                          aSchemaActions[si].azAddColumns[sj]);
-          if( zAlter ){
-            rc = sqlite3_exec(db, zAlter, 0, 0, 0);
-            sqlite3_free(zAlter);
-            if( rc!=SQLITE_OK ){
-              break;
-            }
-          }
-        }
-        if( rc!=SQLITE_OK ) break;
-      }
-      if( rc==SQLITE_OK ){
-
-        rc = migrateSchemaRowData(db, &ancCatHash, &theirCatHash, aSchemaActions, nSchemaActions);
-      }
-
-
-      if( rc==SQLITE_OK ){
-        rc = doltliteFlushCatalogToHash(db, &mergedCatHash);
-      }
+      rc = doltliteApplyMergeSchemaActions(db, &ancCatHash, &theirCatHash,
+                                           aSchemaActions, nSchemaActions,
+                                           &mergedCatHash);
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       if( rc!=SQLITE_OK ){
         if( graphLocked ){
@@ -2100,6 +2120,18 @@ static void doltliteMergeFunc(
   }
 }
 
+static int doltliteLoadFirstParentCommit(
+  sqlite3 *db,
+  const DoltliteCommit *pCommit,
+  DoltliteCommit *pParentCommit
+){
+  const ProllyHash *pParent = doltliteCommitParentHash(pCommit, 0);
+  if( !pParent || prollyHashIsEmpty(pParent) ){
+    return SQLITE_EMPTY;
+  }
+  return doltliteLoadCommit(db, pParent, pParentCommit);
+}
+
 static int doltliteLoadHeadAndParentedCommit(
   sqlite3 *db,
   const ProllyHash *pTargetHash,
@@ -2115,7 +2147,7 @@ static int doltliteLoadHeadAndParentedCommit(
     return SQLITE_EMPTY;
   }
 
-  rc = doltliteLoadCommit(db, &pTargetCommit->parentHash, pParentCommit);
+  rc = doltliteLoadFirstParentCommit(db, pTargetCommit, pParentCommit);
   if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
 
   doltliteGetSessionHead(db, pOurHead);
@@ -2606,12 +2638,12 @@ static int doltliteRebaseLinearReplay(
     rc = doltliteLoadCommit(db, &aReplay[i], &replayCommit);
     if( rc!=SQLITE_OK ) goto rollback;
 
-    if( replayCommit.nParents==0 || prollyHashIsEmpty(&replayCommit.aParents[0]) ){
+    if( doltliteCommitParentCount(&replayCommit)==0 ){
       doltliteCommitClear(&replayCommit);
       rc = SQLITE_ERROR;
       goto rollback;
     }
-    rc = doltliteLoadCommit(db, &replayCommit.aParents[0], &parentCommit);
+    rc = doltliteLoadFirstParentCommit(db, &replayCommit, &parentCommit);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&replayCommit);
       goto rollback;
@@ -2819,11 +2851,11 @@ static int rebaseApplyPlanRowCatalog(
 
   rc = doltliteLoadCommit(db, &pRow->commitHash, &replayC);
   if( rc!=SQLITE_OK ) return rc;
-  if( replayC.nParents==0 || prollyHashIsEmpty(&replayC.aParents[0]) ){
+  if( doltliteCommitParentCount(&replayC)==0 ){
     doltliteCommitClear(&replayC);
     return SQLITE_ERROR;
   }
-  rc = doltliteLoadCommit(db, &replayC.aParents[0], &parentC);
+  rc = doltliteLoadFirstParentCommit(db, &replayC, &parentC);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&replayC);
     return rc;
