@@ -2909,6 +2909,49 @@ static void run_delete_current_branch_failure_preserves_durable_state(void){
   remove_db(dbpath);
 }
 
+static void run_branch_create_existing_name_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Branch Create Existing Name Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_branch_create_existing_name_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_branch_create_existing_name", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_branch_create_existing_name", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_branch('feature')");
+  check("branch_create_existing_name_returns_error",
+        strstr(res, "ERROR: branch already exists")!=0);
+  check("branch_create_existing_name_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("branch_create_existing_name_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+  check("branch_create_existing_name_keeps_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_branch_create_existing_name", open_db(dbpath, &db)==SQLITE_OK);
+  check("branch_create_existing_name_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("branch_create_existing_name_persists_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+  check("branch_create_existing_name_persists_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_reset_bad_ref_failure_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -3853,6 +3896,7 @@ static const RegressionCase aCases[] = {
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
   { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
+  { "branch_create_existing_name_preserves_durable_state", "Branch Create Existing Name Preserves Durable State Test", run_branch_create_existing_name_preserves_durable_state },
   { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
