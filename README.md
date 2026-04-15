@@ -265,7 +265,7 @@ Rows are filtered to `type IN ('view','trigger')` — ordinary tables and
 indexes are not reported here. Use `sqlite_schema` directly (or
 `dolt_schema_diff`) if you need the full schema surface.
 
-### Blame (dolt*blame*&lt;table&gt;)
+### Blame (dolt_blame\_&lt;table&gt;)
 
 For each live row, the most recent commit that introduced its current
 value:
