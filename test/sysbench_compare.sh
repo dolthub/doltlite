@@ -12,6 +12,7 @@ SQLITE3=${SQLITE3:-./sqlite3}
 ROWS=${BENCH_ROWS:-10000}
 SEED=42
 TMPDIR=$(mktemp -d)
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2}
 
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
@@ -199,7 +200,8 @@ def w_types_table_scan(f):
         f.write(f"SELECT count(*) FROM sbtest_types WHERE tval LIKE '%{rstr(3)}%';\n")
 
 def w_table_scan(f):
-    f.write("SELECT count(*) FROM sbtest1 WHERE c LIKE '%abc%';\n")
+    for _ in range(100):
+        f.write("SELECT count(*) FROM sbtest1 WHERE c LIKE '%abc%';\n")
 
 def w_read_only(f):
     for _ in range(1000):
@@ -289,6 +291,46 @@ else:
 "
 }
 
+bench_runs_for_test() {
+  case "$1" in
+    table_scan|types_table_scan|oltp_read_write)
+      echo 3
+      ;;
+    *)
+      echo 1
+      ;;
+  esac
+}
+
+median_us() {
+  python3 - "$@" <<'PYEOF'
+import sys
+vals = sorted(int(v) for v in sys.argv[1:] if int(v) >= 0)
+if not vals:
+    print(-1)
+else:
+    print(vals[len(vals)//2])
+PYEOF
+}
+
+run_bench_stable() {
+  local test_name="$1" engine="$2" binary="$3" sql_file="$4" db_template="$5"
+  local runs
+  local i
+  local sample
+  local samples=""
+  runs=$(bench_runs_for_test "$test_name")
+  for ((i=0; i<runs; i++)); do
+    sample=$(run_bench "$engine" "$binary" "$sql_file" "$db_template")
+    if [ -z "$samples" ]; then
+      samples="$sample"
+    else
+      samples="$samples $sample"
+    fi
+  done
+  median_us $samples
+}
+
 READ_TESTS="oltp_point_select oltp_range_select oltp_sum_range oltp_order_range oltp_distinct_range oltp_index_scan select_random_points select_random_ranges covering_index_scan groupby_scan index_join index_join_scan types_table_scan table_scan oltp_read_only"
 WRITE_TESTS="oltp_bulk_insert oltp_insert oltp_update_index oltp_update_non_index oltp_delete_insert oltp_write_only types_delete_insert oltp_read_write"
 
@@ -300,8 +342,8 @@ run_section() {
   echo "| Test | SQLite (us) | Doltlite (us) | Multiplier |"
   echo "|------|------------:|--------------:|-----------:|"
   for t in $tests; do
-  s=$(run_bench sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
-  d=$(run_bench doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
+  s=$(run_bench_stable "$t" sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
+  d=$(run_bench_stable "$t" doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
   s_display="$s"
   d_display="$d"
   if [ "$s" -eq -1 ] 2>/dev/null; then s_display="crash"; fi
@@ -345,19 +387,17 @@ echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQ
 # ============================================================
 # Enforce performance ceiling (exit 1 if any test exceeds limit)
 # ============================================================
-MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-3}
-
 check_ceiling() {
   local tests="$1" db_sq="$2" db_dl="$3"
   local failed=0
   for t in $tests; do
-    s=$(run_bench sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
-    d=$(run_bench doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
+    s=$(run_bench_stable "$t" sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
+    d=$(run_bench_stable "$t" doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
     if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
-      over=$(python3 -c "r=$d/$s; print(1 if r>$MAX_MULTIPLIER else 0)")
+      over=$(python3 -c "r=$d/$s; print(1 if r>$BENCH_MAX_MULTIPLIER else 0)")
       if [ "$over" = "1" ]; then
         ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
-        echo "FAIL: $t = ${ratio}x (ceiling: ${MAX_MULTIPLIER}x)" >&2
+        echo "FAIL: $t = ${ratio}x (ceiling: ${BENCH_MAX_MULTIPLIER}x)" >&2
         failed=1
       fi
     fi
@@ -366,7 +406,7 @@ check_ceiling() {
 }
 
 echo ""
-echo "### Performance Ceiling Check (${MAX_MULTIPLIER}x)"
+echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
 echo ""
 
 ceiling_ok=0
@@ -374,9 +414,9 @@ check_ceiling "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file" || ceiling_ok=1
 check_ceiling "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file" || ceiling_ok=1
 
 if [ "$ceiling_ok" = "0" ]; then
-  echo "All tests within ${MAX_MULTIPLIER}x ceiling."
+  echo "All tests within ${BENCH_MAX_MULTIPLIER}x ceiling."
 else
   echo ""
-  echo "**FAILED**: One or more tests exceeded the ${MAX_MULTIPLIER}x ceiling."
+  echo "**FAILED**: One or more tests exceeded the ${BENCH_MAX_MULTIPLIER}x ceiling."
   exit 1
 fi
