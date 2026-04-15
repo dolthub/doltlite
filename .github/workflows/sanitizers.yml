@@ -80,5 +80,18 @@ jobs:
     - name: SQL oracle tests
       run: cd build && bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3
 
+    # Minimal reproducer that surfaces the ASan leak report the
+    # correctness_test.sh script swallows via 2>/dev/null on its
+    # subprocesses. This step runs one write path likely to leak
+    # and lets stderr flow so the stacks show up in CI logs.
+    - name: Leak reproducer (UPDATE + autocommit)
+      run: |
+        cd build
+        rm -f /tmp/leak.db
+        ./doltlite /tmp/leak.db "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT); \
+          WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<100) \
+          INSERT INTO t SELECT x,x FROM c; \
+          UPDATE t SET val=val+1 WHERE id%2=0;"
+
     - name: Correctness regression tests
       run: cd build && bash ../test/correctness_test.sh ./doltlite
