@@ -494,6 +494,7 @@ static void run_concurrent_refs(void){
 
 static void run_checkout_persist_failure(void){
   sqlite3 *db1 = 0;
+  sqlite3 *db2 = 0;
   char dbpath[256];
   const char *res;
 
@@ -521,8 +522,27 @@ static void run_checkout_persist_failure(void){
   check("checkout_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
   check("session_branch_restored_after_error",
     strcmp(exec1(db1, "SELECT active_branch()"), "main")==0);
+  check("working_rows_preserved_after_checkout_error",
+    strcmp(exec1(db1, "SELECT count(*) FROM t"), "1")==0);
 
   sqlite3_close(db1);
+  db1 = 0;
+
+  check("reopen_db_after_checkout_persist_failure", open_db(dbpath, &db2)==SQLITE_OK);
+  check("active_branch_persists_after_checkout_error",
+    strcmp(exec1(db2, "SELECT active_branch()"), "main")==0);
+  check("main_rows_persist_after_checkout_error",
+    strcmp(exec1(db2, "SELECT count(*) FROM t"), "1")==0);
+  check("feature_tip_still_visible_after_checkout_error",
+    strcmp(exec1(db2,
+      "SELECT latest_commit_message FROM dolt_branches WHERE name='feature'"),
+      "init")==0);
+  check("feature_checkout_still_works_after_checkout_error",
+    strcmp(exec1(db2, "SELECT dolt_checkout('feature')"), "0")==0);
+  check("feature_rows_visible_after_reopen_checkout",
+    strcmp(exec1(db2, "SELECT count(*) FROM t"), "1")==0);
+
+  sqlite3_close(db2);
   remove_db(dbpath);
 }
 

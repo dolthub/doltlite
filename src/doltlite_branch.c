@@ -333,6 +333,22 @@ static void checkoutRestoreSession(sqlite3 *db, CheckoutMutationCtx *p){
   }
 }
 
+static int checkoutRestoreDurableState(
+  sqlite3 *db,
+  ChunkStore *cs,
+  void *pArg
+){
+  CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
+  int rc = chunkStoreSetDefaultBranch(cs, p->zCurrentBranch);
+  if( rc!=SQLITE_OK ) return rc;
+  if( p->haveOldState ){
+    rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
+                                          &p->oldCatHash, &p->oldCommitHash);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+
 static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
   int rc;
@@ -571,9 +587,9 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
 
   {
     u8 *oldCatData = 0; int nOldCat = 0;
-    doltliteGetSessionHead(db, &m.oldCommitHash);
-    zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
-    if( !zCurrentBranch ){
+  doltliteGetSessionHead(db, &m.oldCommitHash);
+  zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
+  if( !zCurrentBranch ){
       sqlite3_result_error_nomem(ctx);
       return;
     }
@@ -603,6 +619,10 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
   if( rc!=SQLITE_OK ){
     checkoutRestoreSession(db, &m);
+    {
+      int restoreRc = doltliteMutateRefs(db, checkoutRestoreDurableState, &m);
+      if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+    }
   }
   sqlite3_free(zCurrentBranch);
   zCurrentBranch = 0;
