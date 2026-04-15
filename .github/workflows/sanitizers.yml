@@ -44,13 +44,15 @@ jobs:
           doltlite
         make sqlite3
 
-    # ASan options: log to stderr, abort on error, disable the
-    # short-lived-leak detector that the stock sqlite shell trips
-    # in its own test mode. UBSan options: print full stack on
-    # first error.
+    # ASan options: log to stderr, abort on error, leak detection
+    # on. A suppressions file (build/lsan.supp) is created right
+    # after to filter stock sqlite shell allocations that leak by
+    # design on exit and aren't where we want leak coverage.
+    # UBSan options: print full stack on first error.
     - name: Set sanitizer env
       run: |
-        echo "ASAN_OPTIONS=abort_on_error=1:detect_leaks=0:halt_on_error=1:print_stacktrace=1" >> $GITHUB_ENV
+        echo "ASAN_OPTIONS=abort_on_error=1:detect_leaks=1:halt_on_error=1:print_stacktrace=1" >> $GITHUB_ENV
+        echo "LSAN_OPTIONS=suppressions=$GITHUB_WORKSPACE/.github/lsan.supp:print_suppressions=0" >> $GITHUB_ENV
         echo "UBSAN_OPTIONS=abort_on_error=1:halt_on_error=1:print_stacktrace=1" >> $GITHUB_ENV
 
     # Run the oracle suite (the most bug-productive subset of

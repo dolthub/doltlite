@@ -1,0 +1,20 @@
+# LeakSanitizer suppressions for doltlite's ASan/UBSan CI.
+#
+# Only suppress allocations that leak by design in code paths we
+# don't control. Every entry here is a known-good case where the
+# allocator intentionally keeps a buffer around until process exit.
+# If you're tempted to add a suppression for a doltlite path, file
+# an issue instead — the whole point of this file is to let real
+# doltlite leaks surface loudly.
+
+# The stock sqlite3 shell allocates its own input line buffer and
+# readline state at startup and never frees it before exit(). Not
+# a doltlite bug and not something we can fix upstream.
+leak:sqlite3_malloc_for_shell
+leak:local_getline
+
+# stock sqlite shell's SQLITE_EXTRA_INIT extension loader for its
+# own test extensions (percentile, series, etc.) registers modules
+# that own state for the process lifetime.
+leak:sqlite3_percentile_init
+leak:sqlite3_series_init
