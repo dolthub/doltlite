@@ -494,7 +494,8 @@ static char *cvrBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
   int i;
   char *z;
-  if( !pStr ) return 0;
+  /* sqlite3_str_new() never returns NULL; OOM propagates through
+  ** sqlite3_str_finish() which returns NULL on failure. */
   sqlite3_str_appendall(pStr, "CREATE TABLE x(violation_type TEXT");
   for(i=0; i<ci->nCol; i++){
     sqlite3_str_appendf(pStr, ", \"%w\"", ci->azName[i]);

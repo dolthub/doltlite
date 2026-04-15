@@ -163,7 +163,7 @@ int sqlite3WhereBreakLabel(WhereInfo *pWInfo){
 ** If the ONEPASS optimization is used (if this routine returns true)
 ** then also write the indices of open cursors used by ONEPASS
 ** into aiCur[0] and aiCur[1].  iaCur[0] gets the cursor of the data
-** table and iaCur[1] gets the cursor used by an auxiliary index.
+** table and aiCur[1] gets the cursor used by an auxiliary index.
 ** Either value may be -1, indicating that cursor is not used.
 ** Any cursors returned will have been opened for writing.
 **
@@ -2449,11 +2449,16 @@ void sqlite3WhereClausePrint(WhereClause *pWC){
 void sqlite3WhereLoopPrint(const WhereLoop *p, const WhereClause *pWC){
   WhereInfo *pWInfo;
   if( pWC ){
+    int nb;
+    SrcItem *pItem;
+    Table *pTab;
+    Bitmask mAll;
+
     pWInfo = pWC->pWInfo;
-    int nb = 1+(pWInfo->pTabList->nSrc+3)/4;
-    SrcItem *pItem = pWInfo->pTabList->a + p->iTab;
-    Table *pTab = pItem->pSTab;
-    Bitmask mAll = (((Bitmask)1)<<(nb*4)) - 1;
+    nb = 1+(pWInfo->pTabList->nSrc+3)/4;
+    pItem = pWInfo->pTabList->a + p->iTab;
+    pTab = pItem->pSTab;
+    mAll = (((Bitmask)1)<<(nb*4)) - 1;
     sqlite3DebugPrintf("%c%2d.%0*llx.%0*llx", p->cId,
                        p->iTab, nb, p->maskSelf, nb, p->prereq & mAll);
     sqlite3DebugPrintf(" %12s",
@@ -4167,7 +4172,12 @@ static int whereLoopAddBtree(
       whereLoopOutputAdjust(pWC, pNew, rSize);
       if( pSrc->fg.isSubquery ){
         if( pSrc->fg.viaCoroutine ) pNew->wsFlags |= WHERE_COROUTINE;
-        pNew->u.btree.pOrderBy = pSrc->u4.pSubq->pSelect->pOrderBy;
+        /* Do not set btree.pOrderBy for a recursive CTE. In this case
+        ** the ORDER BY clause does not determine the overall order that
+        ** rows are emitted from the CTE in.  */
+        if( (pSrc->u4.pSubq->pSelect->selFlags & SF_Recursive)==0 ){
+          pNew->u.btree.pOrderBy = pSrc->u4.pSubq->pSelect->pOrderBy;
+        }
       }else if( pSrc->fg.fromExists ){
         pNew->nOut = 0;
       }

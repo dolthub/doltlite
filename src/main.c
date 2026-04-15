@@ -1136,7 +1136,8 @@ void sqlite3_set_last_insert_rowid(sqlite3 *db, sqlite3_int64 iRowid){
 }
 
 /*
-** Return the number of changes in the most recent call to sqlite3_exec().
+** Return the number of changes in the most recently executed DML
+** statement.
 */
 sqlite3_int64 sqlite3_changes64(sqlite3 *db){
 #ifdef SQLITE_ENABLE_API_ARMOR
@@ -4713,6 +4714,17 @@ int sqlite3_test_control(int op, ...){
       *pI1 = rLogEst;
       *pU64 = sqlite3LogEstToInt(rLogEst);
       *pI2 = sqlite3LogEst(*pU64);
+      break;
+    }
+
+    /* sqlite3_test_control(SQLITE_TESTCTRL_ATOF, const char *z, double *p);
+    **
+    ** Test access to the sqlite3AtoF() routine.
+    */
+    case SQLITE_TESTCTRL_ATOF: {
+      const char *z = va_arg(ap,const char*);
+      double *pR = va_arg(ap,double*);
+      rc = sqlite3AtoF(z,pR);
       break;
     }
 

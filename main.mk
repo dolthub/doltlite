@@ -269,6 +269,11 @@ EXTRA_SRC ?=
 # invocations of $(B.cc)). The configure process does not set either
 # of $(OPTIONS) or $(OPTS).
 #
+# The difference between $(OPT_FEATURE_FLAGS) and $(OPTS) is that the
+# former is historically provided by the configure script, whereas
+# $(OPTS) is intended to be provided as an argument to the make
+# invocation.
+#
 OPT_FEATURE_FLAGS ?=
 #
 # $(SHELL_OPT) =
@@ -331,6 +336,7 @@ lint:
 CFLAGS.core ?=
 CFLAGS.env  = $(CFLAGS)
 T.cc += $(CFLAGS.core) $(CFLAGS.env)
+T.cc += $(OPT_FEATURE_FLAGS) $(OPTS)
 
 #
 # $(LDFLAGS.configure) represents any LDFLAGS=... the client passes to
@@ -351,20 +357,6 @@ T.cc += $(CFLAGS.core) $(CFLAGS.env)
 # set.
 #
 LDFLAGS.configure ?=
-
-#
-# The difference between $(OPT_FEATURE_FLAGS) and $(OPTS) is that the
-# former is historically provided by the configure script, whereas
-# $(OPTS) is intended to be provided as arguments to the make
-# invocation.
-#
-T.cc += $(OPT_FEATURE_FLAGS)
-
-#
-# Add in any optional global compilation flags on the make command
-# line i.e.  make "OPTS=-DSQLITE_ENABLE_FOO=1 -DSQLITE_OMIT_FOO=1".
-#
-T.cc += $(OPTS)
 
 #
 # $(INSTALL) invocation for use with non-executable files.
@@ -390,18 +382,12 @@ T.link.gcov ?=
 T.compile = $(T.cc) $(T.compile.gcov)
 
 #
-# Optionally set by the configure script to include -DSQLITE_DEBUG=1
-# and other debug-related flags.
-#
-T.cc.TARGET_DEBUG ?=
-
-#
 # Extra CFLAGS for both the core sqlite3 components and extensions.
 #
 # Define -D_HAVE_SQLITE_CONFIG_H so that the code knows it
 # can include the generated sqlite_cfg.h.
 #
-T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite $(T.cc.TARGET_DEBUG) \
+T.cc.sqlite.extras = -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
     -Wdeclaration-after-statement
 
 #
@@ -1091,6 +1077,7 @@ FUZZCHECK_SRC = sqlite3.c \
    $(TOP)/ext/recover/dbdata.c \
    $(TOP)/ext/recover/sqlite3recover.c \
    $(TOP)/test/vt02.c \
+   $(TOP)/ext/misc/analyze.c \
    $(TOP)/ext/misc/base64.c \
    $(TOP)/ext/misc/base85.c \
    $(TOP)/ext/misc/completion.c \
@@ -1944,7 +1931,8 @@ tclsqlite3.c:	sqlite3.c tclsqlite-ex.c
 #
 # $(CFLAGS.tclextension) = CFLAGS for the tclextension* targets.
 #
-CFLAGS.tclextension = $(CFLAGS.intree_includes) $(CFLAGS.env) $(OPT_FEATURE_FLAGS) $(OPTS)
+CFLAGS.tclextension = $(CFLAGS.intree_includes) $(CFLAGS.env) \
+  $(OPT_FEATURE_FLAGS) $(OPTS) $(CFLAGS.icu)
 #
 # Build the SQLite TCL extension in a way that make it compatible
 # with whatever version of TCL is running as $TCLSH_CMD, possibly defined
@@ -1952,7 +1940,8 @@ CFLAGS.tclextension = $(CFLAGS.intree_includes) $(CFLAGS.env) $(OPT_FEATURE_FLAG
 #
 tclextension: tclsqlite3.c
 	$(TCLSH_CMD) $(TOP)/tool/buildtclext.tcl --build-only \
-		--tclConfig.sh $(TCL_CONFIG_SH) --cc "$(T.cc)" $(CFLAGS.tclextension)
+		--tclConfig.sh $(TCL_CONFIG_SH) --cc "$(T.cc)" \
+		--extlibs "$(LDFLAGS.icu)" $(CFLAGS.tclextension)
 
 #
 # Install the SQLite TCL extension in a way that is appropriate for $TCLSH_CMD
@@ -1960,7 +1949,8 @@ tclextension: tclsqlite3.c
 #
 tclextension-install: tclsqlite3.c
 	$(TCLSH_CMD) $(TOP)/tool/buildtclext.tcl --destdir "$(DESTDIR)" \
-		--tclConfig.sh $(TCL_CONFIG_SH) --cc "$(T.cc)" $(CFLAGS.tclextension)
+		--tclConfig.sh $(TCL_CONFIG_SH) --cc "$(T.cc)" \
+		--extlibs "$(LDFLAGS.icu)" $(CFLAGS.tclextension)
 
 #
 # Uninstall the SQLite TCL extension that is used by $TCLSH_CMD.
@@ -2178,6 +2168,12 @@ smoketest:	$(TESTPROGS) fuzzcheck$(T.exe)
 shelltest:
 	$(TCLSH_CMD) $(TOP)/test/testrunner.tcl release shell
 
+# Test performance of floating-point conversions.
+#
+fp-speed-test:	fp-speed-1$(T.exe) fp-speed-2$(T.exe)
+	./fp-speed-1 1000000
+	./fp-speed-2 1000000
+
 #
 # sqlite3_analyzer.c build depends on $(LINK_TOOLS_DYNAMICALLY).
 #
@@ -2294,6 +2290,14 @@ speedtest1$(T.exe):	$(TOP)/test/speedtest1.c sqlite3.c Makefile
 	$(T.link) $(ST_OPT) -o $@ $(TOP)/test/speedtest1.c sqlite3.c \
 		$(LDFLAGS.libsqlite3)
 xbin: speedtest1$(T.exe)
+
+fp-speed-1$(T.exe):	$(TOP)/test/fp-speed-1.c sqlite3.o Makefile
+	$(T.link) $(ST_OPT) -o $@ $(TOP)/test/fp-speed-1.c sqlite3.o \
+		$(LDFLAGS.libsqlite3)
+
+fp-speed-2$(T.exe):	$(TOP)/test/fp-speed-2.c sqlite3.o Makefile
+	$(T.link) $(ST_OPT) -o $@ $(TOP)/test/fp-speed-2.c sqlite3.o \
+		$(LDFLAGS.libsqlite3)
 
 startup$(T.exe):	$(TOP)/test/startup.c sqlite3.c
 	$(T.link) -Os -g -USQLITE_THREADSAFE -DSQLITE_THREADSAFE=0 \
@@ -2643,6 +2647,7 @@ SHELL_DEP = \
     $(TOP)/ext/expert/sqlite3expert.h \
     $(TOP)/ext/intck/sqlite3intck.c \
     $(TOP)/ext/intck/sqlite3intck.h \
+    $(TOP)/ext/misc/analyze.c \
     $(TOP)/ext/misc/appendvfs.c \
     $(TOP)/ext/misc/base64.c \
     $(TOP)/ext/misc/base85.c \
@@ -2784,6 +2789,7 @@ tidy:
 	rm -f tclsqlite3$(T.exe) $(TESTPROGS)
 	rm -f LogEst$(T.exe) fts3view$(T.exe) rollback-test$(T.exe) showdb$(T.exe)
 	rm -f showjournal$(T.exe) showstat4$(T.exe) showwal$(T.exe) speedtest1$(T.exe)
+	rm -f fp-speed-1$(T.exe) fp-speed-2$(T.exe)
 	rm -f wordcount$(T.exe) changeset$(T.exe) version-info$(T.exe)
 	rm -f *.exp *.vsix pkgIndex.tcl
 	rm -f sqlite3_analyzer$(T.exe) sqlite3_rsync$(T.exe) sqlite3_expert$(T.exe)
@@ -2806,7 +2812,7 @@ tidy:
 # Removes build products and test logs.  Retains ./configure outputs.
 #
 clean:	tidy
-	rm -rf omittest* testrunner* testdir*
+	rm -rf omittest* testrunner* testrun_* testdir*
 
 #
 # Clean up everything.  No exceptions. From an out-of-tree build which
