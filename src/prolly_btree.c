@@ -112,9 +112,6 @@ struct TableEntry {
 typedef struct SavepointTableEntry SavepointTableEntry;
 struct SavepointTableEntry {
   Pgno iTable;
-  ProllyHash root;
-  ProllyHash schemaHash;
-  u8 flags;
   u8 pendingFlushSeekEdits;
 };
 
@@ -251,6 +248,7 @@ struct Btree {
   int nSavepointAlloc;
 
   struct SavepointTableState {
+    ProllyHash catalogHash;
     SavepointTableEntry *aTables;
 
     SavepointPendingSnapshot *aPendingSnapshot;
@@ -1466,6 +1464,7 @@ static void freeSavepointTables(struct SavepointTableState *pState){
     sqlite3_free(pState->aTables);
     pState->aTables = 0;
   }
+  memset(&pState->catalogHash, 0, sizeof(pState->catalogHash));
   memset(&pState->stagedCatalog, 0, sizeof(pState->stagedCatalog));
   pState->isMerging = 0;
   memset(&pState->mergeCommitHash, 0, sizeof(pState->mergeCommitHash));
@@ -1498,15 +1497,21 @@ static int captureSavepointTables(
   struct SavepointTableState *pState
 ){
   int k;
+  int rc;
+  u8 *catData = 0;
+  int nCatData = 0;
+  memset(&pState->catalogHash, 0, sizeof(pState->catalogHash));
+  rc = serializeCatalog(pBtree, &catData, &nCatData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStorePut(&pBtree->pBt->store, catData, nCatData, &pState->catalogHash);
+  sqlite3_free(catData);
+  if( rc!=SQLITE_OK ) return rc;
   if( pBtree->nTables<=0 ) return SQLITE_OK;
   pState->aTables = sqlite3_malloc(
       pBtree->nTables * (int)sizeof(SavepointTableEntry));
   if( !pState->aTables ) return SQLITE_NOMEM;
   for(k=0; k<pBtree->nTables; k++){
     pState->aTables[k].iTable = pBtree->aTables[k].iTable;
-    pState->aTables[k].root = pBtree->aTables[k].root;
-    pState->aTables[k].schemaHash = pBtree->aTables[k].schemaHash;
-    pState->aTables[k].flags = pBtree->aTables[k].flags;
     pState->aTables[k].pendingFlushSeekEdits =
         pBtree->aTables[k].pendingFlushSeekEdits;
   }
@@ -1771,6 +1776,9 @@ static int restoreTablesFromSavepoint(
 ){
   ProllyMutMap **apPending = 0;
   int k;
+  int rc;
+  struct TableEntry *aCurrent = pBtree->aTables;
+  int nCurrent = pBtree->nTables;
 
   if( pState->nTables>0 ){
     apPending = sqlite3_malloc64(
@@ -1790,12 +1798,12 @@ static int restoreTablesFromSavepoint(
     }
   }
 
-  for(k=0; k<pBtree->nTables; k++){
-    ProllyMutMap *pMap = pBtree->aTables[k].pPending;
+  for(k=0; k<nCurrent; k++){
+    ProllyMutMap *pMap = aCurrent[k].pPending;
     int iSaved;
     if( !pMap ) continue;
     iSaved = findSavepointTableIndexInArray(
-        pState->aTables, pState->nTables, pBtree->aTables[k].iTable);
+        pState->aTables, pState->nTables, aCurrent[k].iTable);
     if( iSaved>=0 ){
 
       apPending[iSaved] = pMap;
@@ -1805,24 +1813,43 @@ static int restoreTablesFromSavepoint(
     }
   }
 
-  if( pState->nTables>0 ){
-    for(k=0; k<pState->nTables; k++){
-      pBtree->aTables[k].iTable = pState->aTables[k].iTable;
-      pBtree->aTables[k].root = pState->aTables[k].root;
-      pBtree->aTables[k].schemaHash = pState->aTables[k].schemaHash;
-      pBtree->aTables[k].flags = pState->aTables[k].flags;
-      pBtree->aTables[k].pendingFlushSeekEdits =
-          pState->aTables[k].pendingFlushSeekEdits;
-      pBtree->aTables[k].zName = 0;
-      pBtree->aTables[k].pPending = apPending[k];
-    }
-  }else{
+  if( prollyHashIsEmpty(&pState->catalogHash) ){
     sqlite3_free(pBtree->aTables);
     pBtree->aTables = 0;
+    pBtree->nTables = 0;
     pBtree->nTablesAlloc = 0;
+    initDefaultMeta(pBtree);
+    pBtree->iNextTable = 2;
+  }else{
+    u8 *catData = 0;
+    int nCatData = 0;
+    rc = chunkStoreGet(&pBtree->pBt->store, &pState->catalogHash, &catData, &nCatData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(apPending);
+      return rc;
+    }
+    rc = deserializeCatalog(pBtree, catData, nCatData);
+    sqlite3_free(catData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(apPending);
+      return rc;
+    }
   }
 
-  pBtree->nTables = pState->nTables;
+  if( pState->nTables>0 ){
+    for(k=0; k<pState->nTables; k++){
+      int idx = findTableIndexInArray(
+          pBtree->aTables, pBtree->nTables, pState->aTables[k].iTable);
+      if( idx < 0 ){
+        sqlite3_free(apPending);
+        return SQLITE_CORRUPT;
+      }
+      pBtree->aTables[idx].pendingFlushSeekEdits =
+          pState->aTables[k].pendingFlushSeekEdits;
+      pBtree->aTables[idx].pPending = apPending[k];
+    }
+  }
+
   pBtree->iNextTable = pState->iNextTable;
   sqlite3_free(apPending);
   return SQLITE_OK;
@@ -1841,6 +1868,7 @@ static int pushSavepoint(Btree *pBtree){
   }
 
   pState = &pBtree->aSavepointTables[pBtree->nSavepoint];
+  memset(&pState->catalogHash, 0, sizeof(pState->catalogHash));
   pState->aTables = 0;
   pState->aPendingSnapshot = 0;
   pState->nPendingSnapshot = 0;
