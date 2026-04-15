@@ -912,6 +912,156 @@ struct MergeConflictTable {
   struct ConflictRow *aRows;
 };
 
+static void freeConflictRows(struct ConflictRow *aRows, int nRows){
+  int i;
+  for(i=0; i<nRows; i++){
+    sqlite3_free(aRows[i].pKey);
+    sqlite3_free(aRows[i].pBaseVal);
+    sqlite3_free(aRows[i].pTheirVal);
+  }
+  sqlite3_free(aRows);
+}
+
+static void freeAddedColumns(char **azCols, int nCols){
+  int i;
+  for(i=0; i<nCols; i++) sqlite3_free(azCols[i]);
+  sqlite3_free(azCols);
+}
+
+static int appendConflictTable(
+  MergeConflictTable **ppConflictTables,
+  int *pnConflictTables,
+  const char *zName,
+  int nConflicts,
+  struct ConflictRow *aConflictRows
+){
+  MergeConflictTable *aNew;
+  aNew = sqlite3_realloc(*ppConflictTables,
+    (*pnConflictTables+1)*(int)sizeof(MergeConflictTable));
+  if( !aNew ){
+    freeConflictRows(aConflictRows, nConflicts);
+    return SQLITE_NOMEM;
+  }
+  *ppConflictTables = aNew;
+  aNew[*pnConflictTables].zName = sqlite3_mprintf("%s", zName);
+  aNew[*pnConflictTables].nConflicts = nConflicts;
+  aNew[*pnConflictTables].aRows = aConflictRows;
+  (*pnConflictTables)++;
+  return SQLITE_OK;
+}
+
+static int recordSchemaAddColumns(
+  SchemaMergeAction **ppSchemaActions,
+  int *pnSchemaActions,
+  const char *zName,
+  char **azAddCols,
+  int nAddCols
+){
+  SchemaMergeAction *aNew;
+  aNew = sqlite3_realloc(*ppSchemaActions,
+    (*pnSchemaActions+1)*(int)sizeof(SchemaMergeAction));
+  if( !aNew ) return SQLITE_NOMEM;
+  *ppSchemaActions = aNew;
+  aNew[*pnSchemaActions].zTableName = sqlite3_mprintf("%s", zName);
+  if( !aNew[*pnSchemaActions].zTableName ) return SQLITE_NOMEM;
+  aNew[*pnSchemaActions].azAddColumns = azAddCols;
+  aNew[*pnSchemaActions].nAddColumns = nAddCols;
+  (*pnSchemaActions)++;
+  return SQLITE_OK;
+}
+
+static int tryResolveSchemaDivergence(
+  sqlite3 *db,
+  const char *zName,
+  const ProllyHash *pCatAnc,
+  const ProllyHash *pCatOurs,
+  const ProllyHash *pCatTheirs,
+  SchemaMergeAction **ppSchemaActions,
+  int *pnSchemaActions,
+  int *pSkipRowMerge,
+  char **pzErrMsg
+){
+  ChunkStore *csLocal;
+  ProllyCache *cacheLocal;
+  SchemaEntry *aAncSchema = 0;
+  SchemaEntry *aOursSchema = 0;
+  SchemaEntry *aTheirsSchema = 0;
+  int nAncSchema = 0;
+  int nOursSchema = 0;
+  int nTheirsSchema = 0;
+  SchemaEntry *ancSchEntry;
+  SchemaEntry *ourSchEntry;
+  SchemaEntry *theirSchEntry;
+  char **azAddCols = 0;
+  int nAddCols = 0;
+  int useTheirSchema = 0;
+  char *zSchemaErr = 0;
+  int rc;
+
+  *pSkipRowMerge = 0;
+  csLocal = doltliteGetChunkStore(db);
+  cacheLocal = doltliteGetCache(db);
+  loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatAnc, &aAncSchema, &nAncSchema);
+  loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatOurs, &aOursSchema, &nOursSchema);
+  loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatTheirs, &aTheirsSchema, &nTheirsSchema);
+
+  ancSchEntry = findSchemaEntry(aAncSchema, nAncSchema, zName);
+  ourSchEntry = findSchemaEntry(aOursSchema, nOursSchema, zName);
+  theirSchEntry = findSchemaEntry(aTheirsSchema, nTheirsSchema, zName);
+
+  if( ancSchEntry && ancSchEntry->zSql
+   && ourSchEntry && ourSchEntry->zSql
+   && theirSchEntry && theirSchEntry->zSql ){
+    rc = trySchemaColumnMerge(
+      ancSchEntry->zSql, ourSchEntry->zSql, theirSchEntry->zSql,
+      &azAddCols, &nAddCols, &useTheirSchema, &zSchemaErr);
+  }else{
+    rc = SQLITE_ERROR;
+    zSchemaErr = sqlite3_mprintf("cannot load schemas for merge");
+  }
+
+  freeSchemaEntries(aAncSchema, nAncSchema);
+  freeSchemaEntries(aOursSchema, nOursSchema);
+  freeSchemaEntries(aTheirsSchema, nTheirsSchema);
+
+  if( rc!=SQLITE_OK ){
+    if( pzErrMsg ){
+      if( zSchemaErr ){
+        *pzErrMsg = sqlite3_mprintf(
+          "schema conflict on table '%s' \xe2\x80\x94 %s",
+          zName ? zName : "(unknown)", zSchemaErr);
+      }else{
+        *pzErrMsg = sqlite3_mprintf(
+          "schema conflict on table '%s'",
+          zName ? zName : "(unknown)");
+      }
+    }
+    sqlite3_free(zSchemaErr);
+    freeAddedColumns(azAddCols, nAddCols);
+    return SQLITE_ERROR;
+  }
+  sqlite3_free(zSchemaErr);
+
+  if( nAddCols>0 ){
+    if( ppSchemaActions && pnSchemaActions ){
+      rc = recordSchemaAddColumns(ppSchemaActions, pnSchemaActions, zName,
+                                  azAddCols, nAddCols);
+      if( rc!=SQLITE_OK ){
+        freeAddedColumns(azAddCols, nAddCols);
+        return rc;
+      }
+      azAddCols = 0;
+      nAddCols = 0;
+    }
+    freeAddedColumns(azAddCols, nAddCols);
+    *pSkipRowMerge = 1;
+    return SQLITE_OK;
+  }
+
+  freeAddedColumns(azAddCols, nAddCols);
+  return SQLITE_OK;
+}
+
 /* Pass 1: walk OUR side, resolving each table against anc/theirs.
 ** For every "ours" table, determine whether row-merge is needed and
 ** invoke mergeTableRows; any rows that can't auto-merge become
@@ -992,85 +1142,12 @@ do_merge_entry:
         if( ourSchemaChanged && theirSchemaChanged
          && prollyHashCompare(&aOurs[i].schemaHash,
                               &theirsEntry->schemaHash)!=0 ){
-
-          ChunkStore *csLocal = doltliteGetChunkStore(db);
-          ProllyCache *cacheLocal = doltliteGetCache(db);
-          SchemaEntry *aAncSchema=0, *aOursSchema=0, *aTheirsSchema=0;
-          int nAncSchema=0, nOursSchema=0, nTheirsSchema=0;
-          SchemaEntry *ancSchEntry=0, *ourSchEntry=0, *theirSchEntry=0;
-          char **azAddCols = 0;
-          int nAddCols = 0;
-          int useTheirSchema = 0;
-          char *zSchemaErr = 0;
-
-          loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatAnc, &aAncSchema, &nAncSchema);
-          loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatOurs, &aOursSchema, &nOursSchema);
-          loadSchemaFromCatalog(db, csLocal, cacheLocal, pCatTheirs, &aTheirsSchema, &nTheirsSchema);
-
-          ancSchEntry = findSchemaEntry(aAncSchema, nAncSchema, zName);
-          ourSchEntry = findSchemaEntry(aOursSchema, nOursSchema, zName);
-          theirSchEntry = findSchemaEntry(aTheirsSchema, nTheirsSchema, zName);
-
-          if( ancSchEntry && ancSchEntry->zSql
-           && ourSchEntry && ourSchEntry->zSql
-           && theirSchEntry && theirSchEntry->zSql ){
-            rc = trySchemaColumnMerge(
-              ancSchEntry->zSql, ourSchEntry->zSql, theirSchEntry->zSql,
-              &azAddCols, &nAddCols, &useTheirSchema, &zSchemaErr);
-          }else{
-            rc = SQLITE_ERROR;
-            zSchemaErr = sqlite3_mprintf(
-              "cannot load schemas for merge");
-          }
-
-          freeSchemaEntries(aAncSchema, nAncSchema);
-          freeSchemaEntries(aOursSchema, nOursSchema);
-          freeSchemaEntries(aTheirsSchema, nTheirsSchema);
-
-          if( rc!=SQLITE_OK ){
-            if( pzErrMsg ){
-              if( zSchemaErr ){
-                *pzErrMsg = sqlite3_mprintf(
-                  "schema conflict on table '%s' \xe2\x80\x94 %s",
-                  zName ? zName : "(unknown)", zSchemaErr);
-              }else{
-                *pzErrMsg = sqlite3_mprintf(
-                  "schema conflict on table '%s'",
-                  zName ? zName : "(unknown)");
-              }
-            }
-            sqlite3_free(zSchemaErr);
-            { int j; for(j=0;j<nAddCols;j++) sqlite3_free(azAddCols[j]); }
-            sqlite3_free(azAddCols);
-            return SQLITE_ERROR;
-          }
-          sqlite3_free(zSchemaErr);
-
-
-          if( nAddCols > 0 ){
-
-            if( ppSchemaActions && pnSchemaActions ){
-              SchemaMergeAction *aNew = sqlite3_realloc(*ppSchemaActions,
-                (*pnSchemaActions+1)*(int)sizeof(SchemaMergeAction));
-              if( aNew ){
-                *ppSchemaActions = aNew;
-                aNew[*pnSchemaActions].zTableName = sqlite3_mprintf("%s", zName);
-                aNew[*pnSchemaActions].azAddColumns = azAddCols;
-                aNew[*pnSchemaActions].nAddColumns = nAddCols;
-                (*pnSchemaActions)++;
-                azAddCols = 0; nAddCols = 0;
-              }
-            }
-            { int j; for(j=0;j<nAddCols;j++) sqlite3_free(azAddCols[j]); }
-            sqlite3_free(azAddCols);
-
-
+          rc = tryResolveSchemaDivergence(
+            db, zName, pCatAnc, pCatOurs, pCatTheirs,
+            ppSchemaActions, pnSchemaActions, &skipRowMerge, pzErrMsg);
+          if( rc!=SQLITE_OK ) return rc;
+          if( skipRowMerge ){
             aMerged[(*pnMerged)++] = aOurs[i];
-            skipRowMerge = 1;
-          }else{
-
-            { int j; for(j=0;j<nAddCols;j++) sqlite3_free(azAddCols[j]); }
-            sqlite3_free(azAddCols);
           }
         }
 
@@ -1101,25 +1178,9 @@ do_merge_entry:
 
             if( nConflicts>0 ){
               *pTotalConflicts += nConflicts;
-              {
-                MergeConflictTable *aNew = sqlite3_realloc(*ppConflictTables,
-                  (*pnConflictTables+1)*(int)sizeof(MergeConflictTable));
-                if( aNew ){
-                  *ppConflictTables = aNew;
-                  aNew[*pnConflictTables].zName = sqlite3_mprintf("%s", zName);
-                  aNew[*pnConflictTables].nConflicts = nConflicts;
-                  aNew[*pnConflictTables].aRows = aConflictRows;
-                  (*pnConflictTables)++;
-                  aConflictRows = 0;
-                }else{
-                  { int j; for(j=0;j<nConflicts;j++){
-                    sqlite3_free(aConflictRows[j].pKey);
-                    sqlite3_free(aConflictRows[j].pBaseVal);
-                    sqlite3_free(aConflictRows[j].pTheirVal);
-                  }}
-                  sqlite3_free(aConflictRows);
-                }
-              }
+              rc = appendConflictTable(ppConflictTables, pnConflictTables,
+                                       zName, nConflicts, aConflictRows);
+              if( rc!=SQLITE_OK ) return rc;
             }
           }else if( theirsChanged ){
             struct TableEntry merged = aOurs[i];
@@ -1189,25 +1250,10 @@ do_merge_entry:
 
         if( nConflicts>0 ){
           *pTotalConflicts += nConflicts;
-          {
-            MergeConflictTable *aNew = sqlite3_realloc(*ppConflictTables,
-              (*pnConflictTables+1)*(int)sizeof(MergeConflictTable));
-            if( aNew ){
-              *ppConflictTables = aNew;
-              aNew[*pnConflictTables].zName = sqlite3_mprintf("%s", "(sqlite_master)");
-              aNew[*pnConflictTables].nConflicts = nConflicts;
-              aNew[*pnConflictTables].aRows = aConflictRows;
-              (*pnConflictTables)++;
-              aConflictRows = 0;
-            }else{
-              { int j; for(j=0;j<nConflicts;j++){
-                sqlite3_free(aConflictRows[j].pKey);
-                sqlite3_free(aConflictRows[j].pBaseVal);
-                sqlite3_free(aConflictRows[j].pTheirVal);
-              }}
-              sqlite3_free(aConflictRows);
-            }
-          }
+          rc = appendConflictTable(ppConflictTables, pnConflictTables,
+                                   "(sqlite_master)", nConflicts,
+                                   aConflictRows);
+          if( rc!=SQLITE_OK ) return rc;
         }
       }else if( theirsChanged ){
         struct TableEntry merged = aOurs[iTable1Idx];
