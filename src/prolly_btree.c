@@ -363,6 +363,7 @@ static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
 static int pushSavepoint(Btree *pBtree);
+static void btreeDiscardAllSavepoints(Btree *pBtree);
 static int findTableIndexInArray(struct TableEntry *aTables, int nTables, Pgno iTable);
 static int findSavepointTableIndexInArray(SavepointTableEntry *aTables, int nTables, Pgno iTable);
 static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable, ProllyMutMap **ppPending,
@@ -818,6 +819,7 @@ static void removeTable(Btree *pBtree, Pgno iTable){
   int i;
   for(i=0; i<pBtree->nTables; i++){
     if( pBtree->aTables[i].iTable==iTable ){
+      sqlite3_free(pBtree->aTables[i].zName);
       if( i<pBtree->nTables-1 ){
         memmove(&pBtree->aTables[i], &pBtree->aTables[i+1],
                 (pBtree->nTables-i-1)*(int)sizeof(struct TableEntry));
@@ -2953,7 +2955,7 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
 
   p->inTrans = TRANS_NONE;
   p->inTransaction = TRANS_NONE;
-  p->nSavepoint = 0;
+  btreeDiscardAllSavepoints(p);
 
   chunkStoreUnlock(&pBt->store);
   pBt->store.snapshotPinned = 0;
@@ -2990,12 +2992,20 @@ static int rollbackCommittedState(Btree *p, BtShared *pBt){
   return SQLITE_OK;
 }
 
-static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
+/* Walk every live savepoint state, release its captured tables,
+** pending-snapshot mutmaps and inner arrays, then reset nSavepoint
+** to 0. The aSavepointTables backing store itself is kept (it's
+** freed in close). */
+static void btreeDiscardAllSavepoints(Btree *p){
   int j;
   for(j=0; j<p->nSavepoint; j++){
     freeSavepointTables(&p->aSavepointTables[j]);
   }
   p->nSavepoint = 0;
+}
+
+static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
+  btreeDiscardAllSavepoints(p);
   return rollbackCommittedState(p, pBt);
 }
 
