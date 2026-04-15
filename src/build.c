@@ -2757,6 +2757,50 @@ void sqlite3EndTable(
     tabOpts |= TF_WithoutRowid;
   }
 
+  /* Doltlite: dolt_ignore is a user-created system table whose
+  ** schema is load-bearing — dolt_add / dolt_status run
+  ** `SELECT pattern, ignored FROM dolt_ignore` and would silently
+  ** ignore all patterns if the columns don't match. Enforce the
+  ** exact shape at CREATE TIME so the failure mode is a clear parse
+  ** error instead of silent mis-configuration. Skipped during
+  ** schema replay (db->init.busy): a previously-validated on-disk
+  ** schema is assumed correct. */
+  if( !db->init.busy
+   && !db->init.imposterTable
+   && iDb!=1
+   && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
+   && IsOrdinaryTable(p)
+   && sqlite3StrICmp(p->zName, "dolt_ignore")==0 ){
+    const char *zFail = 0;
+    if( p->nCol!=2 ){
+      zFail = "dolt_ignore must have exactly two columns";
+    }else if( sqlite3StrICmp(p->aCol[0].zCnName, "pattern")!=0 ){
+      zFail = "dolt_ignore.pattern must be the first column";
+    }else if( sqlite3StrICmp(p->aCol[1].zCnName, "ignored")!=0 ){
+      zFail = "dolt_ignore.ignored must be the second column";
+    }else if( p->aCol[0].affinity!=SQLITE_AFF_TEXT
+           && p->aCol[0].affinity!=SQLITE_AFF_BLOB ){
+      zFail = "dolt_ignore.pattern must be TEXT";
+    }else if( p->aCol[1].affinity!=SQLITE_AFF_INTEGER
+           && p->aCol[1].affinity!=SQLITE_AFF_NUMERIC ){
+      zFail = "dolt_ignore.ignored must be INTEGER";
+    }else if( p->aCol[0].notNull==OE_None ){
+      zFail = "dolt_ignore.pattern must be NOT NULL";
+    }else if( p->aCol[1].notNull==OE_None ){
+      zFail = "dolt_ignore.ignored must be NOT NULL";
+    }else if( (p->aCol[0].colFlags & COLFLAG_PRIMKEY)==0
+           || (p->aCol[1].colFlags & COLFLAG_PRIMKEY)!=0 ){
+      zFail = "dolt_ignore must have PRIMARY KEY(pattern) and no other key columns";
+    }
+    if( zFail ){
+      sqlite3ErrorMsg(pParse,
+          "%s; expected: CREATE TABLE dolt_ignore("
+          "pattern TEXT NOT NULL, ignored TINYINT NOT NULL, "
+          "PRIMARY KEY(pattern))", zFail);
+      return;
+    }
+  }
+
   /* Special processing for WITHOUT ROWID Tables */
   if( tabOpts & TF_WithoutRowid ){
     if( (p->tabFlags & TF_Autoincrement) ){

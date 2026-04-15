@@ -48,6 +48,53 @@ static int ignoreSpecificity(const char *zPat){
   return n;
 }
 
+/* Read-time schema guard. The parse-time check in build.c catches
+** new bad CREATE TABLE statements, but on-disk repos created before
+** the guard landed (or via an older binary) can still have a
+** wrong-shape dolt_ignore. Detect it here and raise an error so the
+** user gets a clear signal instead of a silent "no filtering".
+** Called once per check, cached by the prepare failure path below. */
+static int doltliteIgnoreSchemaOk(sqlite3 *db){
+  sqlite3_stmt *pStmt = 0;
+  int nCol;
+  int ok = 0;
+  if( sqlite3_prepare_v2(db, "PRAGMA table_info(\"dolt_ignore\")",
+                         -1, &pStmt, 0)!=SQLITE_OK ){
+    return 0;
+  }
+  nCol = 0;
+  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
+    const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
+    int notNull = sqlite3_column_int(pStmt, 3);
+    int pkPos = sqlite3_column_int(pStmt, 5);
+    if( !zName || !zType ) goto done;
+    if( nCol==0 ){
+      if( sqlite3_stricmp(zName, "pattern")!=0 ) goto done;
+      if( sqlite3_stricmp(zType, "TEXT")!=0
+       && sqlite3_strnicmp(zType, "VARCHAR", 7)!=0 ) goto done;
+      if( !notNull ) goto done;
+      if( pkPos!=1 ) goto done;
+    }else if( nCol==1 ){
+      if( sqlite3_stricmp(zName, "ignored")!=0 ) goto done;
+      if( sqlite3_stricmp(zType, "TINYINT")!=0
+       && sqlite3_stricmp(zType, "TINYINT(1)")!=0
+       && sqlite3_stricmp(zType, "INT")!=0
+       && sqlite3_stricmp(zType, "INTEGER")!=0
+       && sqlite3_stricmp(zType, "BOOLEAN")!=0 ) goto done;
+      if( !notNull ) goto done;
+      if( pkPos!=0 ) goto done;
+    }else{
+      goto done;
+    }
+    nCol++;
+  }
+  if( nCol==2 ) ok = 1;
+done:
+  sqlite3_finalize(pStmt);
+  return ok;
+}
+
 int doltliteCheckIgnore(
   sqlite3 *db,
   const char *zTable,
@@ -72,6 +119,16 @@ int doltliteCheckIgnore(
     /* Table missing — e.g. legacy repo or pre-seed call. No patterns
     ** means no filtering. */
     return SQLITE_OK;
+  }
+  if( !doltliteIgnoreSchemaOk(db) ){
+    sqlite3_finalize(pStmt);
+    if( pzErr ){
+      *pzErr = sqlite3_mprintf(
+          "dolt_ignore has an unexpected schema; expected: "
+          "CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, "
+          "ignored TINYINT NOT NULL, PRIMARY KEY(pattern))");
+    }
+    return SQLITE_CONSTRAINT;
   }
 
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){

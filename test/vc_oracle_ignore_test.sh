@@ -109,6 +109,28 @@ $setup"
   fi
 }
 
+# doltlite_schema_reject: doltlite-only check that a CREATE TABLE
+# dolt_ignore with a wrong schema is rejected at parse time. Not an
+# oracle comparison — Dolt rejects any `dolt_` name wholesale with
+# "reserved for internal use", so there's no row-level semantics to
+# compare against. We just assert doltlite produces an error that
+# mentions dolt_ignore.
+doltlite_schema_reject() {
+  local name="$1" sql="$2"
+  local dir="$TMPROOT/${name}_rej"
+  mkdir -p "$dir/dl"
+  echo "$sql" | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
+  if grep -qi 'dolt_ignore' "$dir/out" \
+     && grep -qiE 'error|fail' "$dir/out"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected doltlite to reject)"
+    echo "    output:"; sed 's/^/      /' "$dir/out"
+  fi
+}
+
 # oracle_error: both engines must error on the same setup. Exact
 # message text is allowed to differ.
 oracle_error() {
@@ -389,6 +411,85 @@ echo "--- no special-case for dolt_ignore ---"
 oracle "star_hides_dolt_ignore" "
 INSERT INTO dolt_ignore VALUES ('*', 1);
 CREATE TABLE foo(x INT PRIMARY KEY);
+"
+
+# ---------------------------------------------------------------
+# Schema guard: doltlite rejects CREATE TABLE dolt_ignore with the
+# wrong shape so the failure mode is a clear parse error instead of
+# silent "no patterns apply". Doltlite-only — Dolt rejects any
+# dolt_ prefix wholesale so there's nothing to compare against.
+# ---------------------------------------------------------------
+
+echo "--- schema guard ---"
+
+doltlite_schema_reject "schema_one_column" "
+CREATE TABLE dolt_ignore(pattern TEXT NOT NULL PRIMARY KEY);
+"
+
+doltlite_schema_reject "schema_three_columns" "
+CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, extra INT, PRIMARY KEY(pattern));
+"
+
+doltlite_schema_reject "schema_wrong_first_name" "
+CREATE TABLE dolt_ignore(foo TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(foo));
+"
+
+doltlite_schema_reject "schema_wrong_second_name" "
+CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, flagged TINYINT NOT NULL, PRIMARY KEY(pattern));
+"
+
+doltlite_schema_reject "schema_wrong_pattern_type" "
+CREATE TABLE dolt_ignore(pattern INTEGER NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));
+"
+
+doltlite_schema_reject "schema_wrong_ignored_type" "
+CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TEXT NOT NULL, PRIMARY KEY(pattern));
+"
+
+doltlite_schema_reject "schema_pattern_nullable" "
+CREATE TABLE dolt_ignore(pattern TEXT, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));
+"
+
+doltlite_schema_reject "schema_ignored_nullable" "
+CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT, PRIMARY KEY(pattern));
+"
+
+doltlite_schema_reject "schema_compound_pk" "
+CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern, ignored));
+"
+
+doltlite_schema_reject "schema_no_pk" "
+CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL);
+"
+
+# Accepted variants: BOOLEAN, VARCHAR, INTEGER for ignored all map
+# to the right affinities. Not an oracle comparison — just assert
+# doltlite accepts them and INSERT works.
+doltlite_schema_accept() {
+  local name="$1" sql="$2"
+  local dir="$TMPROOT/${name}_acc"
+  mkdir -p "$dir/dl"
+  echo "$sql" | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
+  if ! grep -qiE 'error|fail' "$dir/out"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected doltlite to accept)"
+    echo "    output:"; sed 's/^/      /' "$dir/out"
+  fi
+}
+
+doltlite_schema_accept "schema_varchar_boolean" "
+CREATE TABLE dolt_ignore(pattern VARCHAR(255) NOT NULL, ignored BOOLEAN NOT NULL, PRIMARY KEY(pattern));
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+SELECT * FROM dolt_ignore;
+"
+
+doltlite_schema_accept "schema_integer_ignored" "
+CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored INTEGER NOT NULL, PRIMARY KEY(pattern));
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+SELECT * FROM dolt_ignore;
 "
 
 echo ""
