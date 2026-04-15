@@ -729,7 +729,6 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   if( !prollyHashIsEmpty(&cs->refsHash) ){
     u8 *refsData = 0;
     int nRefsData = 0;
-    ChunkStore tmpRefs;
     int rc2 = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
     if( rc2==SQLITE_OK && refsData ){
       rc2 = csDeserializeRefsIntoTemp(&tmpRefs, refsData, nRefsData);

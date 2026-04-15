@@ -363,6 +363,7 @@ static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
 static int pushSavepoint(Btree *pBtree);
+static void btreeDiscardAllSavepoints(Btree *pBtree);
 static int findTableIndexInArray(struct TableEntry *aTables, int nTables, Pgno iTable);
 static int findSavepointTableIndexInArray(SavepointTableEntry *aTables, int nTables, Pgno iTable);
 static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable, ProllyMutMap **ppPending,
@@ -818,6 +819,7 @@ static void removeTable(Btree *pBtree, Pgno iTable){
   int i;
   for(i=0; i<pBtree->nTables; i++){
     if( pBtree->aTables[i].iTable==iTable ){
+      sqlite3_free(pBtree->aTables[i].zName);
       if( i<pBtree->nTables-1 ){
         memmove(&pBtree->aTables[i], &pBtree->aTables[i+1],
                 (pBtree->nTables-i-1)*(int)sizeof(struct TableEntry));
@@ -829,9 +831,15 @@ static void removeTable(Btree *pBtree, Pgno iTable){
 }
 
 static void invalidateSchema(Btree *pBtree){
+  /* sqlite3SchemaClear resets the hash tables inside the Schema
+  ** struct but leaves the struct itself alive — matches stock
+  ** SQLite behaviour. The struct pointer has to stay put because
+  ** db->aDb[i].pSchema captures it at open time and never
+  ** re-queries, so zeroing pBtree->pSchema here would orphan the
+  ** original and leak it on close. Subsequent schema loads reuse
+  ** the same struct via prollyBtreeSchema's !p->pSchema guard. */
   if( pBtree->pSchema && pBtree->xFreeSchema ){
     pBtree->xFreeSchema(pBtree->pSchema);
-    pBtree->pSchema = 0;
   }
 }
 
@@ -953,6 +961,28 @@ static void initDefaultMeta(Btree *pBtree){
 
 }
 
+/* Walk every TableEntry, free its zName and any still-live pending
+** mutmap, then release the array itself. Leaves pBtree->aTables=NULL
+** and all counters at 0. Safe on partially-built catalogs
+** (mid-deserializeCatalog error) because addTable only advances
+** nTables after installing the entry. */
+static void btreeFreeCatalogTables(Btree *pBtree){
+  int k;
+  for(k=0; k<pBtree->nTables; k++){
+    sqlite3_free(pBtree->aTables[k].zName);
+    if( pBtree->aTables[k].pPending ){
+      ProllyMutMap *pMap = (ProllyMutMap*)pBtree->aTables[k].pPending;
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      pBtree->aTables[k].pPending = 0;
+    }
+  }
+  sqlite3_free(pBtree->aTables);
+  pBtree->aTables = 0;
+  pBtree->nTables = 0;
+  pBtree->nTablesAlloc = 0;
+}
+
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   const u8 *q = data;
   int nTables, i;
@@ -965,10 +995,7 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     q = pEntries;
   }
 
-  sqlite3_free(pBtree->aTables);
-  pBtree->aTables = 0;
-  pBtree->nTables = 0;
-  pBtree->nTablesAlloc = 0;
+  btreeFreeCatalogTables(pBtree);
   initDefaultMeta(pBtree);
 
 
@@ -1801,23 +1828,24 @@ static int restoreTablesFromSavepoint(
   for(k=0; k<nCurrent; k++){
     ProllyMutMap *pMap = aCurrent[k].pPending;
     int iSaved;
-    if( !pMap ) continue;
+    if( !pMap ){
+      continue;
+    }
     iSaved = findSavepointTableIndexInArray(
         pState->aTables, pState->nTables, aCurrent[k].iTable);
     if( iSaved>=0 ){
-
       apPending[iSaved] = pMap;
     }else{
       prollyMutMapFree(pMap);
       sqlite3_free(pMap);
     }
+    /* pPending ownership transferred to apPending or released;
+    ** null the slot so btreeFreeCatalogTables can't double-free. */
+    aCurrent[k].pPending = 0;
   }
 
   if( prollyHashIsEmpty(&pState->catalogHash) ){
-    sqlite3_free(pBtree->aTables);
-    pBtree->aTables = 0;
-    pBtree->nTables = 0;
-    pBtree->nTablesAlloc = 0;
+    btreeFreeCatalogTables(pBtree);
     initDefaultMeta(pBtree);
     pBtree->iNextTable = 2;
   }else{
@@ -2171,11 +2199,16 @@ static int prollyBtreeClose(Btree *p){
   }
 
 
-  if( p->pSchema && p->xFreeSchema ){
-    p->xFreeSchema(p->pSchema);
+  /* Schema cleanup mirrors stock btree.c — xFreeSchema clears the
+  ** Schema object's internal hash tables but does NOT free the
+  ** Schema struct itself; we allocated it via sqlite3_malloc in
+  ** prollyBtreeSchema so we must release it here explicitly. */
+  if( p->pSchema ){
+    if( p->xFreeSchema ) p->xFreeSchema(p->pSchema);
+    sqlite3_free(p->pSchema);
     p->pSchema = 0;
   }
-  sqlite3_free(p->aTables);
+  btreeFreeCatalogTables(p);
   if( p->aSavepointTables ){
     int i;
     for(i=0; i<p->nSavepoint; i++){
@@ -2851,10 +2884,7 @@ int sqlite3BtreeCommit(Btree *p){
 
 static int restoreFromCommitted(Btree *p){
   if( prollyHashIsEmpty(&p->committedCatalogHash) ){
-    sqlite3_free(p->aTables);
-    p->aTables = 0;
-    p->nTables = 0;
-    p->nTablesAlloc = 0;
+    btreeFreeCatalogTables(p);
     initDefaultMeta(p);
     p->iNextTable = 2;
   }else{
@@ -2925,7 +2955,7 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
 
   p->inTrans = TRANS_NONE;
   p->inTransaction = TRANS_NONE;
-  p->nSavepoint = 0;
+  btreeDiscardAllSavepoints(p);
 
   chunkStoreUnlock(&pBt->store);
   pBt->store.snapshotPinned = 0;
@@ -2962,12 +2992,20 @@ static int rollbackCommittedState(Btree *p, BtShared *pBt){
   return SQLITE_OK;
 }
 
-static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
+/* Walk every live savepoint state, release its captured tables,
+** pending-snapshot mutmaps and inner arrays, then reset nSavepoint
+** to 0. The aSavepointTables backing store itself is kept (it's
+** freed in close). */
+static void btreeDiscardAllSavepoints(Btree *p){
   int j;
   for(j=0; j<p->nSavepoint; j++){
     freeSavepointTables(&p->aSavepointTables[j]);
   }
   p->nSavepoint = 0;
+}
+
+static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
+  btreeDiscardAllSavepoints(p);
   return rollbackCommittedState(p, pBt);
 }
 
@@ -5896,11 +5934,9 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
 
   invalidateCursors(pBt, 0, SQLITE_ABORT);
 
-  sqlite3_free(pBtree->aTables);
-  pBtree->aTables = 0;
-  pBtree->nTables = 0;
-  pBtree->nTablesAlloc = 0;
-
+  /* deserializeCatalog walks the current aTables (freeing each
+  ** zName and any live pPending) and replaces it — do not pre-free
+  ** here or the existing entries leak. */
   rc = deserializeCatalog(pBtree, data, nData);
   sqlite3_free(data);
   if( rc!=SQLITE_OK ) return rc;
@@ -5957,18 +5993,13 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
 
   invalidateCursors(pBt, 0, SQLITE_ABORT);
 
-
-  pBtree->aTables = 0;
-  pBtree->nTables = 0;
-  pBtree->nTablesAlloc = 0;
-
+  /* deserializeCatalog walks the current aTables (freeing each
+  ** zName and any live pPending) and replaces it — do not pre-zero
+  ** here or the existing entries leak. */
   rc = deserializeCatalog(pBtree, data, nData);
   sqlite3_free(data);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(pBtree->aTables);
-    pBtree->aTables = 0;
-    pBtree->nTables = 0;
-    pBtree->nTablesAlloc = 0;
+    btreeFreeCatalogTables(pBtree);
     if( oldCatData ){
       rc = deserializeCatalog(pBtree, oldCatData, nOldCatData);
     }
@@ -6010,10 +6041,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     rc = chunkStoreCommit(cs);
   }
   if( rc!=SQLITE_OK ){
-    sqlite3_free(pBtree->aTables);
-    pBtree->aTables = 0;
-    pBtree->nTables = 0;
-    pBtree->nTablesAlloc = 0;
+    btreeFreeCatalogTables(pBtree);
     if( oldCatData ){
       int rc2 = deserializeCatalog(pBtree, oldCatData, nOldCatData);
       if( rc2!=SQLITE_OK ){
@@ -6445,9 +6473,22 @@ static int origCursorClearTableOfCursorVt(BtCursor *pCur){
   return origBtreeClearTableOfCursor(pCur->pOrigCursor);
 }
 static int origCursorCloseCursorVt(BtCursor *pCur){
+  Btree *pWrapper = pCur->pBtree;
+  int willAutoCloseInner =
+      origBtreeCursorIsLastOnSingle(pCur->pOrigCursor);
   int rc = origBtreeCloseCursor(pCur->pOrigCursor);
   sqlite3_free(pCur->pOrigCursor);
   pCur->pOrigCursor = 0;
+  /* Stock btree's cursor close auto-frees the inner Btree on
+  ** BTREE_SINGLE when the last cursor unlinks — which it just
+  ** did. The wrapper Btree we allocated in sqlite3BtreeOpen sits
+  ** on top of that inner and never sees its own xClose in this
+  ** path, so release it here or the 472-byte struct leaks every
+  ** time VDBE OP_OpenEphemeral runs. */
+  if( willAutoCloseInner && pWrapper ){
+    pWrapper->pOrigBtree = 0;
+    sqlite3_free(pWrapper);
+  }
   return rc;
 }
 static int origCursorCursorHasMovedVt(BtCursor *pCur){

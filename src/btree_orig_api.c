@@ -60,6 +60,18 @@ int origBtreeCursor(void *p, Pgno iTable, int wrFlag,
   return orig_sqlite3BtreeCursor(B(p), iTable, wrFlag, pKeyInfo, C(pCur));
 }
 int origBtreeCloseCursor(void *pCur){ return orig_sqlite3BtreeCloseCursor(C(pCur)); }
+int origBtreeCursorIsLastOnSingle(void *pCur){
+  BtCursor *c = C(pCur);
+  BtShared *pBt;
+  if( !c || !c->pBt ) return 0;
+  pBt = c->pBt;
+  /* Stock sqlite3BtreeCloseCursor auto-closes the inner Btree iff
+  ** BTREE_SINGLE is set and pBt->pCursor becomes 0 after unlinking
+  ** this cursor. Peek both preconditions before the close so the
+  ** wrapper caller can free its own struct in the same pass. */
+  if( (pBt->openFlags & BTREE_SINGLE)==0 ) return 0;
+  return pBt->pCursor==c && c->pNext==0;
+}
 int origBtreeCursorHasMoved(void *pCur){ return orig_sqlite3BtreeCursorHasMoved(C(pCur)); }
 int origBtreeCursorRestore(void *pCur, int *pd){ return orig_sqlite3BtreeCursorRestore(C(pCur),pd); }
 int origBtreeFirst(void *pCur, int *pRes){ return orig_sqlite3BtreeFirst(C(pCur),pRes); }

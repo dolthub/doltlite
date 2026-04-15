@@ -79,6 +79,11 @@ int origBtreeMaxRecordSize(void *pCur);
 void origBtreeCursorHint(void *pCur, unsigned int mask, ...);
 
 int origBtreeCursorSize(void);
+/* Returns non-zero if closing pCur will trigger stock btree's
+** BTREE_SINGLE auto-close (last cursor on a BTREE_SINGLE btree).
+** Used by the doltlite wrapper to also release the Btree wrapper
+** struct the VDBE ephemeral sits behind. */
+int origBtreeCursorIsLastOnSingle(void *pCur);
 void origBtreeEnter(void *p);
 void origBtreeLeave(void *p);
 void *origBtreePager(void *p);
