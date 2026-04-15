@@ -1264,6 +1264,86 @@ static void run_cherry_pick_stale_branch(void){
   remove_db(dbpath);
 }
 
+static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  ProllyHash stagedBeforeClose;
+  ProllyHash mergeBeforeClose;
+  ProllyHash conflictsBeforeClose;
+  ProllyHash stagedAfterReopen;
+  ProllyHash mergeAfterReopen;
+  ProllyHash conflictsAfterReopen;
+  u8 isMergingBeforeClose = 0;
+  u8 isMergingAfterReopen = 0;
+
+  printf("=== Failed Cherry-pick Reopen Preserves Conflict State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_failed_cherry_pick_reopen_preserves_conflict_state");
+  remove_db(dbpath);
+
+  check("open_db_for_failed_cherry_pick_reopen", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_failed_cherry_pick_reopen_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_checkout('feature');"
+    "UPDATE t SET v='feature' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'feature edit');"
+    "SELECT dolt_tag('feat-conflict');"
+    "SELECT dolt_checkout('main');"
+    "UPDATE t SET v='main' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'main edit');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_cherry_pick('feat-conflict')");
+  check("failed_cherry_pick_reopen_returns_error",
+        strstr(res, "ERROR:")!=0);
+  check("failed_cherry_pick_reopen_conflicts_summary_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
+  check("failed_cherry_pick_reopen_conflicts_table_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
+  check("failed_cherry_pick_reopen_working_value_before_close",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+  check("failed_cherry_pick_reopen_branch_before_close",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+
+  doltliteGetSessionStaged(db, &stagedBeforeClose);
+  doltliteGetSessionMergeState(db, &isMergingBeforeClose,
+                               &mergeBeforeClose, &conflictsBeforeClose);
+  check("failed_cherry_pick_reopen_staged_hash_before_close_nonempty",
+        !prollyHashIsEmpty(&stagedBeforeClose));
+  check("failed_cherry_pick_reopen_conflicts_hash_before_close_nonempty",
+        !prollyHashIsEmpty(&conflictsBeforeClose));
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_failed_cherry_pick_reopen", open_db(dbpath, &db)==SQLITE_OK);
+  check("failed_cherry_pick_reopen_conflicts_summary_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
+  check("failed_cherry_pick_reopen_conflicts_table_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
+  check("failed_cherry_pick_reopen_working_value_after_reopen",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+  check("failed_cherry_pick_reopen_branch_after_reopen",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+
+  doltliteGetSessionStaged(db, &stagedAfterReopen);
+  doltliteGetSessionMergeState(db, &isMergingAfterReopen,
+                               &mergeAfterReopen, &conflictsAfterReopen);
+  check("failed_cherry_pick_reopen_staged_hash_matches_after_reopen",
+        memcmp(&stagedAfterReopen, &stagedBeforeClose, sizeof(ProllyHash))==0);
+  check("failed_cherry_pick_reopen_merging_flag_matches_after_reopen",
+        isMergingAfterReopen==isMergingBeforeClose);
+  check("failed_cherry_pick_reopen_merge_hash_matches_after_reopen",
+        memcmp(&mergeAfterReopen, &mergeBeforeClose, sizeof(ProllyHash))==0);
+  check("failed_cherry_pick_reopen_conflicts_hash_matches_after_reopen",
+        memcmp(&conflictsAfterReopen, &conflictsBeforeClose, sizeof(ProllyHash))==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_branches_metadata_corruption(void){
   sqlite3 *db = 0;
   ChunkStore cs;
@@ -3492,6 +3572,7 @@ static const RegressionCase aCases[] = {
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
   { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_persists_state },
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
+  { "failed_cherry_pick_reopen_preserves_conflict_state", "Failed Cherry-pick Reopen Preserves Conflict State Test", run_failed_cherry_pick_reopen_preserves_conflict_state },
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },
   { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },
   { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption },
