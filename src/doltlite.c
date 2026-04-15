@@ -1342,89 +1342,6 @@ done:
   return rc;
 }
 
-static int resetMergeUntrackedWorkingTables(
-  sqlite3 *db,
-  ChunkStore *cs,
-  const ProllyHash *pHeadCatHash,
-  ProllyHash *pTargetCatHash
-){
-  struct TableEntry *aHead = 0;
-  int nHead = 0;
-  int nUntracked = 0;
-  char **azUntracked = 0;
-  sqlite3_stmt *pStmt = 0;
-  int j, k;
-  int rc = doltliteLoadCatalog(db, pHeadCatHash, &aHead, &nHead, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = sqlite3_prepare_v2(db,
-      "SELECT name FROM sqlite_master WHERE type='table' "
-      "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
-      -1, &pStmt, 0);
-  if( rc!=SQLITE_OK ) goto done;
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
-    const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
-    int inHead = 0;
-    if( !zName ) continue;
-    for(k=0; k<nHead; k++){
-      if( resetPathMatchesName(&aHead[k], zName) ){
-        inHead = 1;
-        break;
-      }
-    }
-    if( !inHead ){
-      char **aNew = sqlite3_realloc(azUntracked,
-          (nUntracked+1)*(int)sizeof(char*));
-      if( !aNew ){ rc = SQLITE_NOMEM; goto done; }
-      azUntracked = aNew;
-      azUntracked[nUntracked++] = sqlite3_mprintf("%s", zName);
-      if( !azUntracked[nUntracked-1] ){ rc = SQLITE_NOMEM; goto done; }
-    }
-  }
-  if( rc!=SQLITE_DONE && rc!=SQLITE_ROW ) goto done;
-  rc = SQLITE_OK;
-
-  if( nUntracked>0 ){
-    ProllyHash workingHash;
-    struct TableEntry *aWorking = 0, *aTarget = 0;
-    int nWorking = 0, nTarget = 0;
-    rc = doltliteFlushCatalogToHash(db, &workingHash);
-    if( rc==SQLITE_OK ) rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
-    if( rc==SQLITE_OK ) rc = doltliteLoadCatalog(db, pTargetCatHash, &aTarget, &nTarget, 0);
-    if( rc==SQLITE_OK ){
-      for(j=0; j<nWorking; j++){
-        int tgtIdx = -1;
-        if( aWorking[j].iTable==1 ) continue;
-        for(k=0; k<nTarget; k++){
-          if( aTarget[k].zName && aWorking[j].zName
-           && strcmp(aTarget[k].zName, aWorking[j].zName)==0 ){
-            tgtIdx = k;
-            break;
-          }
-        }
-        if( tgtIdx>=0 ) aWorking[j] = aTarget[tgtIdx];
-      }
-    }
-    if( rc==SQLITE_OK ){
-      u8 *buf = 0;
-      int nBuf = 0;
-      ProllyHash mergedHash;
-      rc = doltliteSerializeCatalogEntries(db, aWorking, nWorking, &buf, &nBuf);
-      if( rc==SQLITE_OK ) rc = chunkStorePut(cs, buf, nBuf, &mergedHash);
-      sqlite3_free(buf);
-      if( rc==SQLITE_OK ) *pTargetCatHash = mergedHash;
-    }
-    sqlite3_free(aWorking);
-    sqlite3_free(aTarget);
-  }
-
-done:
-  if( pStmt ) sqlite3_finalize(pStmt);
-  for(j=0; j<nUntracked; j++) sqlite3_free(azUntracked[j]);
-  sqlite3_free(azUntracked);
-  sqlite3_free(aHead);
-  return rc;
-}
-
 static int mergeAbortInPlace(sqlite3 *db){
   ProllyHash headCatHash;
   int rc = doltliteGetHeadCatalogHash(db, &headCatHash);
@@ -1671,8 +1588,93 @@ static void doltliteResetFunc(
     ** CREATE TABLE silently deleted. Merge those tables into the
     ** target catalog before applying the reset. */
     if( havePreResetHead ){
-      rc = resetMergeUntrackedWorkingTables(db, cs, &preResetHeadCatHash,
-                                            &targetCatHash);
+      struct TableEntry *aHead = 0;
+      int nHead = 0;
+      int nUntracked = 0;
+      char **azUntracked = 0;
+      sqlite3_stmt *pStmt = 0;
+      int j, k;
+
+      rc = doltliteLoadCatalog(db, &preResetHeadCatHash, &aHead, &nHead, 0);
+      if( rc==SQLITE_OK ){
+        rc = sqlite3_prepare_v2(db,
+            "SELECT name FROM sqlite_master WHERE type='table' "
+            "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
+            -1, &pStmt, 0);
+      }
+      if( rc==SQLITE_OK ){
+        while( sqlite3_step(pStmt)==SQLITE_ROW ){
+          const char *zName = (const char*)sqlite3_column_text(pStmt, 0);
+          int inHead = 0;
+          if( !zName ) continue;
+          for(k=0; k<nHead; k++){
+            if( aHead[k].zName && strcmp(aHead[k].zName, zName)==0 ){
+              inHead = 1;
+              break;
+            }
+          }
+          if( !inHead ){
+            char **aNew = sqlite3_realloc(azUntracked,
+                (nUntracked+1)*(int)sizeof(char*));
+            if( !aNew ){ rc = SQLITE_NOMEM; break; }
+            azUntracked = aNew;
+            azUntracked[nUntracked++] = sqlite3_mprintf("%s", zName);
+          }
+        }
+        sqlite3_finalize(pStmt);
+      }
+
+      if( rc==SQLITE_OK && nUntracked>0 ){
+        ProllyHash workingHash;
+        struct TableEntry *aWorking = 0, *aTarget = 0;
+        int nWorking = 0, nTarget = 0;
+
+        rc = doltliteFlushCatalogToHash(db, &workingHash);
+        if( rc==SQLITE_OK ){
+          rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
+        }
+        if( rc==SQLITE_OK ){
+          rc = doltliteLoadCatalog(db, &targetCatHash, &aTarget, &nTarget, 0);
+        }
+        if( rc==SQLITE_OK ){
+          for(j=0; j<nWorking; j++){
+            int tgtIdx = -1;
+            if( aWorking[j].iTable==1 ){
+              continue;
+            }
+            for(k=0; k<nTarget; k++){
+              if( aTarget[k].zName && aWorking[j].zName
+               && strcmp(aTarget[k].zName, aWorking[j].zName)==0 ){
+                tgtIdx = k;
+                break;
+              }
+            }
+            if( tgtIdx>=0 ){
+              aWorking[j] = aTarget[tgtIdx];
+            }
+          }
+        }
+        if( rc==SQLITE_OK ){
+          u8 *buf = 0;
+          int nBuf = 0;
+          ProllyHash mergedHash;
+          rc = doltliteSerializeCatalogEntries(db, aWorking, nWorking,
+                                               &buf, &nBuf);
+          if( rc==SQLITE_OK ){
+            rc = chunkStorePut(cs, buf, nBuf, &mergedHash);
+          }
+          sqlite3_free(buf);
+          if( rc==SQLITE_OK ){
+            memcpy(&targetCatHash, &mergedHash, sizeof(ProllyHash));
+          }
+        }
+        sqlite3_free(aWorking);
+        sqlite3_free(aTarget);
+      }
+
+      for(j=0; j<nUntracked; j++) sqlite3_free(azUntracked[j]);
+      sqlite3_free(azUntracked);
+      sqlite3_free(aHead);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
         goto reset_cleanup;
