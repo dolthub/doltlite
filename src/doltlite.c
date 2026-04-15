@@ -2759,6 +2759,148 @@ static int rebaseCheckoutBranch(sqlite3 *db, const char *zBranch){
   return rc;
 }
 
+static int rebaseCreateAndPopulatePlanTable(
+  sqlite3 *db,
+  const ProllyHash *aReplay,
+  int nReplay
+){
+  sqlite3_stmt *pIns = 0;
+  int rc;
+  int i;
+
+  rc = sqlite3_exec(db,
+    "CREATE TABLE dolt_rebase("
+    "  rebase_order REAL PRIMARY KEY,"
+    "  action TEXT,"
+    "  commit_hash TEXT,"
+    "  commit_message TEXT"
+    ")", 0, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = sqlite3_prepare_v2(db,
+    "INSERT INTO dolt_rebase VALUES (?, 'pick', ?, ?)", -1, &pIns, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  for(i=0; i<nReplay; i++){
+    DoltliteCommit c;
+    char zHex[PROLLY_HASH_SIZE*2+1];
+    memset(&c, 0, sizeof(c));
+    rc = doltliteLoadCommit(db, &aReplay[i], &c);
+    if( rc!=SQLITE_OK ) break;
+    doltliteHashToHex(&aReplay[i], zHex);
+
+    sqlite3_reset(pIns);
+    sqlite3_bind_double(pIns, 1, (double)(i + 1));
+    sqlite3_bind_text(pIns, 2, zHex, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(pIns, 3,
+        c.zMessage ? c.zMessage : "", -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(pIns);
+    doltliteCommitClear(&c);
+    if( rc!=SQLITE_DONE ) break;
+    rc = SQLITE_OK;
+  }
+
+  sqlite3_finalize(pIns);
+  return rc;
+}
+
+static int rebaseApplyPlanRowCatalog(
+  sqlite3 *db,
+  const RebasePlanRow *pRow,
+  const ProllyHash *pCurCat,
+  ProllyHash *pMergedCat
+){
+  DoltliteCommit parentC, replayC;
+  int nConflicts = 0;
+  int rc;
+
+  memset(&parentC, 0, sizeof(parentC));
+  memset(&replayC, 0, sizeof(replayC));
+
+  rc = doltliteLoadCommit(db, &pRow->commitHash, &replayC);
+  if( rc!=SQLITE_OK ) return rc;
+  if( replayC.nParents==0 || prollyHashIsEmpty(&replayC.aParents[0]) ){
+    doltliteCommitClear(&replayC);
+    return SQLITE_ERROR;
+  }
+  rc = doltliteLoadCommit(db, &replayC.aParents[0], &parentC);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&replayC);
+    return rc;
+  }
+
+  rc = doltliteMergeCatalogs(db, &parentC.catalogHash, pCurCat,
+                             &replayC.catalogHash, pMergedCat,
+                             &nConflicts, 0, 0, 0);
+  doltliteCommitClear(&parentC);
+  doltliteCommitClear(&replayC);
+  if( rc!=SQLITE_OK ) return rc;
+  if( nConflicts>0 ) return SQLITE_CONSTRAINT;
+  return SQLITE_OK;
+}
+
+static int rebaseReplayPlanGroup(
+  sqlite3 *db,
+  RebasePlanRow *aPlan,
+  int nPlan,
+  int iStart,
+  ProllyHash *pCurCat,
+  ProllyHash *pCurHead,
+  int *piNext
+){
+  char *combinedMsg = 0;
+  int rc;
+  int j;
+
+  rc = rebaseApplyPlanRowCatalog(db, &aPlan[iStart], pCurCat, pCurCat);
+  if( rc!=SQLITE_OK ) return rc;
+
+  combinedMsg = sqlite3_mprintf("%s",
+      aPlan[iStart].zCommitMessage ? aPlan[iStart].zCommitMessage : "");
+  if( !combinedMsg ) return SQLITE_NOMEM;
+
+  j = iStart + 1;
+  while( j < nPlan
+      && (strcmp(aPlan[j].zAction, "squash")==0
+       || strcmp(aPlan[j].zAction, "fixup")==0
+       || strcmp(aPlan[j].zAction, "drop")==0) ){
+    if( strcmp(aPlan[j].zAction, "drop")==0 ){
+      j++;
+      continue;
+    }
+
+    rc = rebaseApplyPlanRowCatalog(db, &aPlan[j], pCurCat, pCurCat);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(combinedMsg);
+      return rc;
+    }
+
+    if( strcmp(aPlan[j].zAction, "squash")==0 ){
+      char *zNew = sqlite3_mprintf("%s\n\n%s", combinedMsg,
+                                   aPlan[j].zCommitMessage ? aPlan[j].zCommitMessage : "");
+      sqlite3_free(combinedMsg);
+      combinedMsg = zNew;
+      if( !combinedMsg ) return SQLITE_NOMEM;
+    }
+    j++;
+  }
+
+  {
+    ProllyHash newCommit;
+    rc = doltliteCreateAndStoreCommit(db, pCurHead, pCurCat, combinedMsg,
+                                      NULL, NULL, NULL, 0, &newCommit);
+    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pCurCat);
+    if( rc==SQLITE_OK ) doltliteSetSessionStaged(db, pCurCat);
+    if( rc==SQLITE_OK ) rc = doltliteAdvanceBranch(db, &newCommit, pCurCat);
+    if( rc==SQLITE_OK ) *pCurHead = newCommit;
+  }
+  sqlite3_free(combinedMsg);
+  if( rc!=SQLITE_OK ) return rc;
+
+  *piNext = j;
+  return SQLITE_OK;
+}
+
 /* Best-effort cleanup for an in-progress interactive rebase working branch.
 ** Used when start or continue fails after the temp branch exists. */
 static void rebaseDiscardWorkingBranch(
@@ -2799,9 +2941,7 @@ static void doltliteRebaseInteractiveStart(
   ProllyHash preRebaseCat;
   ProllyHash *aReplay = 0;
   int nReplay = 0;
-  sqlite3_stmt *pIns = 0;
   int rc;
-  int i;
   u8 curIsRebasing = 0;
   int bWorkingBranchCreated = 0;
   const char *zFailMsg = 0;
@@ -2902,39 +3042,11 @@ static void doltliteRebaseInteractiveStart(
   ** state flip until after the plan table is populated, the
   ** reloads pick up a clean "no rebase yet" state, and the final
   ** persist atomically flips disk to rebase=1 along with the plan. */
-  rc = sqlite3_exec(db,
-    "CREATE TABLE dolt_rebase("
-    "  rebase_order REAL PRIMARY KEY,"
-    "  action TEXT,"
-    "  commit_hash TEXT,"
-    "  commit_message TEXT"
-    ")", 0, 0, 0);
+  rc = rebaseCreateAndPopulatePlanTable(db, aReplay, nReplay);
   if( rc!=SQLITE_OK ){
     zFailMsg = "failed to create dolt_rebase table";
     goto fail;
   }
-
-  rc = sqlite3_prepare_v2(db,
-    "INSERT INTO dolt_rebase VALUES (?, 'pick', ?, ?)", -1, &pIns, 0);
-  if( rc!=SQLITE_OK ) goto fail;
-  for(i=0; i<nReplay; i++){
-    DoltliteCommit c;
-    char zHex[PROLLY_HASH_SIZE*2+1];
-    memset(&c, 0, sizeof(c));
-    rc = doltliteLoadCommit(db, &aReplay[i], &c);
-    if( rc!=SQLITE_OK ){ sqlite3_finalize(pIns); goto fail; }
-    doltliteHashToHex(&aReplay[i], zHex);
-
-    sqlite3_reset(pIns);
-    sqlite3_bind_double(pIns, 1, (double)(i + 1));
-    sqlite3_bind_text(pIns, 2, zHex, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(pIns, 3,
-        c.zMessage ? c.zMessage : "", -1, SQLITE_TRANSIENT);
-    rc = sqlite3_step(pIns);
-    doltliteCommitClear(&c);
-    if( rc!=SQLITE_DONE ){ sqlite3_finalize(pIns); goto fail; }
-  }
-  sqlite3_finalize(pIns);
 
   /* Now set the rebase state on the session and persist it.
   ** Nothing after this triggers a reload before -i returns. */
@@ -3070,113 +3182,14 @@ static void doltliteRebaseInteractiveContinue(
   ** combined commit with the accumulated content and message. */
   i = 0;
   while( i < nPlan ){
-    RebasePlanRow *leader;
-    char *combinedMsg = 0;
-    ProllyHash mergedCat;
-    int nConflicts = 0;
     int j;
-    DoltliteCommit parentC, replayC, curHeadC;
 
     while( i < nPlan && strcmp(aPlan[i].zAction, "drop")==0 ) i++;
     if( i >= nPlan ) break;
 
-    leader = &aPlan[i];
-
-    /* Apply leader. */
-    memset(&parentC, 0, sizeof(parentC));
-    memset(&replayC, 0, sizeof(replayC));
-    rc = doltliteLoadCommit(db, &leader->commitHash, &replayC);
-    if( rc!=SQLITE_OK ){ goto abort_err; }
-    if( replayC.nParents==0 || prollyHashIsEmpty(&replayC.aParents[0]) ){
-      doltliteCommitClear(&replayC);
-      rc = SQLITE_ERROR;
-      goto abort_err;
-    }
-    rc = doltliteLoadCommit(db, &replayC.aParents[0], &parentC);
-    if( rc!=SQLITE_OK ){
-      doltliteCommitClear(&replayC);
-      goto abort_err;
-    }
-
-    rc = doltliteMergeCatalogs(db, &parentC.catalogHash, &curCat,
-                               &replayC.catalogHash, &mergedCat,
-                               &nConflicts, 0, 0, 0);
-    doltliteCommitClear(&parentC);
-    doltliteCommitClear(&replayC);
+    rc = rebaseReplayPlanGroup(db, aPlan, nPlan, i, &curCat, &curHead, &j);
+    if( rc==SQLITE_CONSTRAINT ) goto abort_err_conflict;
     if( rc!=SQLITE_OK ) goto abort_err;
-    if( nConflicts>0 ){ rc = SQLITE_ERROR; goto abort_err_conflict; }
-
-    curCat = mergedCat;
-    combinedMsg = sqlite3_mprintf("%s",
-        leader->zCommitMessage ? leader->zCommitMessage : "");
-    if( !combinedMsg ){ rc = SQLITE_NOMEM; goto abort_err; }
-
-    /* Apply any squash/fixup followers. */
-    j = i + 1;
-    while( j < nPlan
-        && (strcmp(aPlan[j].zAction, "squash")==0
-         || strcmp(aPlan[j].zAction, "fixup")==0
-         || strcmp(aPlan[j].zAction, "drop")==0) ){
-      if( strcmp(aPlan[j].zAction, "drop")==0 ){ j++; continue; }
-
-      memset(&parentC, 0, sizeof(parentC));
-      memset(&replayC, 0, sizeof(replayC));
-      rc = doltliteLoadCommit(db, &aPlan[j].commitHash, &replayC);
-      if( rc!=SQLITE_OK ){ sqlite3_free(combinedMsg); goto abort_err; }
-      if( replayC.nParents==0 || prollyHashIsEmpty(&replayC.aParents[0]) ){
-        doltliteCommitClear(&replayC);
-        sqlite3_free(combinedMsg);
-        rc = SQLITE_ERROR;
-        goto abort_err;
-      }
-      rc = doltliteLoadCommit(db, &replayC.aParents[0], &parentC);
-      if( rc!=SQLITE_OK ){
-        doltliteCommitClear(&replayC);
-        sqlite3_free(combinedMsg);
-        goto abort_err;
-      }
-
-      rc = doltliteMergeCatalogs(db, &parentC.catalogHash, &curCat,
-                                 &replayC.catalogHash, &mergedCat,
-                                 &nConflicts, 0, 0, 0);
-      doltliteCommitClear(&parentC);
-      doltliteCommitClear(&replayC);
-      if( rc!=SQLITE_OK ){ sqlite3_free(combinedMsg); goto abort_err; }
-      if( nConflicts>0 ){
-        sqlite3_free(combinedMsg);
-        rc = SQLITE_ERROR;
-        goto abort_err_conflict;
-      }
-      curCat = mergedCat;
-
-      if( strcmp(aPlan[j].zAction, "squash")==0 ){
-        char *zNew = sqlite3_mprintf("%s\n\n%s", combinedMsg,
-                                     aPlan[j].zCommitMessage ? aPlan[j].zCommitMessage : "");
-        sqlite3_free(combinedMsg);
-        combinedMsg = zNew;
-        if( !combinedMsg ){ rc = SQLITE_NOMEM; goto abort_err; }
-      }
-      /* fixup: message discarded. */
-      j++;
-    }
-
-    /* Create the combined commit and advance the working branch. */
-    memset(&curHeadC, 0, sizeof(curHeadC));
-    {
-      ProllyHash newCommit;
-      rc = doltliteCreateAndStoreCommit(db, &curHead, &curCat, combinedMsg,
-                                        NULL, NULL, NULL, 0, &newCommit);
-      if( rc!=SQLITE_OK ){ sqlite3_free(combinedMsg); goto abort_err; }
-
-      rc = doltliteSwitchCatalog(db, &curCat);
-      if( rc!=SQLITE_OK ){ sqlite3_free(combinedMsg); goto abort_err; }
-      doltliteSetSessionStaged(db, &curCat);
-      rc = doltliteAdvanceBranch(db, &newCommit, &curCat);
-      if( rc!=SQLITE_OK ){ sqlite3_free(combinedMsg); goto abort_err; }
-      curHead = newCommit;
-    }
-    sqlite3_free(combinedMsg);
-
     i = j;
   }
 
