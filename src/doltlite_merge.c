@@ -1424,6 +1424,26 @@ int doltliteMergeCatalogs(
                           ppActions, pnActions);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
+  /* pass1 shallow-copies TableEntry structs from aOurs into aMerged,
+  ** which means zName pointers are aliased — aMerged[k].zName ==
+  ** aOurs[i].zName for some i. serializeMergedCatalog below frees
+  ** those strings via doltliteResolveTableNumber's refresh step,
+  ** leaving aOurs with dangling pointers. Break the aliasing here
+  ** by strdup'ing every aMerged zName so aMerged owns its own
+  ** storage and all four catalogs can be cleaned up independently
+  ** via doltliteFreeCatalog. pass2 already strdup's on append, so
+  ** this loop only needs to fix pass1's output. */
+  {
+    int k;
+    for(k=0; k<nMerged; k++){
+      if( aMerged[k].zName ){
+        char *z = sqlite3_mprintf("%s", aMerged[k].zName);
+        if( !z ){ rc = SQLITE_NOMEM; goto merge_cleanup; }
+        aMerged[k].zName = z;
+      }
+    }
+  }
+
   rc = mergeCatalogPass2(aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
                           aMerged, &nMerged, &iNextMerged);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
@@ -1440,10 +1460,10 @@ int doltliteMergeCatalogs(
 
 merge_cleanup:
   freeConflictTables(aConflictTables, nConflictTables);
-  sqlite3_free(aAnc);
-  sqlite3_free(aOurs);
-  sqlite3_free(aTheirs);
-  sqlite3_free(aMerged);
+  doltliteFreeCatalog(aAnc, nAnc);
+  doltliteFreeCatalog(aOurs, nOurs);
+  doltliteFreeCatalog(aTheirs, nTheirs);
+  doltliteFreeCatalog(aMerged, nMerged);
   return rc;
 }
 
