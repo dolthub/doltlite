@@ -1317,6 +1317,66 @@ static int mergeCatalogPass2(
   return SQLITE_OK;
 }
 
+static void freeConflictTables(
+  MergeConflictTable *aConflictTables,
+  int nConflictTables
+){
+  int ci;
+  for(ci=0; ci<nConflictTables; ci++){
+    freeConflictRows(aConflictTables[ci].aRows, aConflictTables[ci].nConflicts);
+    sqlite3_free(aConflictTables[ci].zName);
+  }
+  sqlite3_free(aConflictTables);
+}
+
+static int loadMergeCatalogs(
+  sqlite3 *db,
+  const ProllyHash *ancestor,
+  const ProllyHash *ours,
+  const ProllyHash *theirs,
+  struct TableEntry **paAnc, int *pnAnc, Pgno *piNextAnc,
+  struct TableEntry **paOurs, int *pnOurs, Pgno *piNextOurs,
+  struct TableEntry **paTheirs, int *pnTheirs, Pgno *piNextTheirs
+){
+  int rc;
+  rc = doltliteLoadCatalog(db, ancestor, paAnc, pnAnc, piNextAnc);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCatalog(db, ours, paOurs, pnOurs, piNextOurs);
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteLoadCatalog(db, theirs, paTheirs, pnTheirs, piNextTheirs);
+}
+
+static int allocMergedCatalogEntries(
+  int nOurs,
+  int nTheirs,
+  struct TableEntry **paMerged
+){
+  int nMergedAlloc = nOurs + nTheirs;
+  if( nMergedAlloc==0 ) nMergedAlloc = 1;
+  *paMerged = sqlite3_malloc(nMergedAlloc * (int)sizeof(struct TableEntry));
+  return *paMerged ? SQLITE_OK : SQLITE_NOMEM;
+}
+
+static void recordMergeConflicts(
+  sqlite3 *db,
+  MergeConflictTable *aConflictTables,
+  int nConflictTables
+){
+  ProllyHash conflictsHash;
+  int rc2;
+
+  rc2 = doltliteSerializeConflicts(
+      doltliteGetChunkStore(db),
+      (ConflictTableInfo*)aConflictTables, nConflictTables,
+      &conflictsHash);
+  if( rc2==SQLITE_OK ){
+    extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
+    extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
+    doltliteSetSessionConflictsCatalog(db, &conflictsHash);
+    doltliteSetSessionMergeState(db, 1, 0, &conflictsHash);
+  }
+}
+
 int doltliteMergeCatalogs(
   sqlite3 *db,
   const ProllyHash *ancestor,
@@ -1340,25 +1400,16 @@ int doltliteMergeCatalogs(
 
   MergeConflictTable *aConflictTables = 0;
   int nConflictTables = 0;
+  (void)nMergedAlloc;
 
-
-  rc = doltliteLoadCatalog(db, ancestor, &aAnc, &nAnc, &iNextAnc);
+  rc = loadMergeCatalogs(db, ancestor, ours, theirs,
+                         &aAnc, &nAnc, &iNextAnc,
+                         &aOurs, &nOurs, &iNextOurs,
+                         &aTheirs, &nTheirs, &iNextTheirs);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
-  rc = doltliteLoadCatalog(db, ours, &aOurs, &nOurs, &iNextOurs);
+  rc = allocMergedCatalogEntries(nOurs, nTheirs, &aMerged);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
-
-  rc = doltliteLoadCatalog(db, theirs, &aTheirs, &nTheirs, &iNextTheirs);
-  if( rc!=SQLITE_OK ) goto merge_cleanup;
-
-
-  nMergedAlloc = nOurs + nTheirs;
-  if( nMergedAlloc==0 ) nMergedAlloc = 1;
-  aMerged = sqlite3_malloc(nMergedAlloc * (int)sizeof(struct TableEntry));
-  if( !aMerged ){
-    rc = SQLITE_NOMEM;
-    goto merge_cleanup;
-  }
 
 
   iNextMerged = iNextOurs > iNextTheirs ? iNextOurs : iNextTheirs;
@@ -1384,38 +1435,11 @@ int doltliteMergeCatalogs(
 
 
   if( totalConflicts>0 && nConflictTables>0 && rc==SQLITE_OK ){
-    ProllyHash conflictsHash;
-
-    int rc2 = doltliteSerializeConflicts(
-        doltliteGetChunkStore(db),
-        (ConflictTableInfo*)aConflictTables, nConflictTables,
-        &conflictsHash);
-    if( rc2==SQLITE_OK ){
-      extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
-      extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
-      doltliteSetSessionConflictsCatalog(db, &conflictsHash);
-      doltliteSetSessionMergeState(db, 1, 0, &conflictsHash);
-    }
-  }
-
-
-  {
-    int ci;
-    for(ci=0; ci<nConflictTables; ci++){
-      int cj;
-      for(cj=0; cj<aConflictTables[ci].nConflicts; cj++){
-        sqlite3_free(aConflictTables[ci].aRows[cj].pKey);
-        sqlite3_free(aConflictTables[ci].aRows[cj].pBaseVal);
-        sqlite3_free(aConflictTables[ci].aRows[cj].pOurVal);
-        sqlite3_free(aConflictTables[ci].aRows[cj].pTheirVal);
-      }
-      sqlite3_free(aConflictTables[ci].aRows);
-      sqlite3_free(aConflictTables[ci].zName);
-    }
-    sqlite3_free(aConflictTables);
+    recordMergeConflicts(db, aConflictTables, nConflictTables);
   }
 
 merge_cleanup:
+  freeConflictTables(aConflictTables, nConflictTables);
   sqlite3_free(aAnc);
   sqlite3_free(aOurs);
   sqlite3_free(aTheirs);

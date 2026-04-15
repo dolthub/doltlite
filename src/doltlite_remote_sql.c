@@ -142,6 +142,46 @@ static void remoteSqlRestoreAndReport(
   remoteSqlResultError(ctx, opRc, zMsg);
 }
 
+static int remoteSqlLoadCommit(
+  ChunkStore *cs,
+  const ProllyHash *pCommitHash,
+  DoltliteCommit *pCommit
+){
+  u8 *data = 0;
+  int nData = 0;
+  int rc = chunkStoreGet(cs, pCommitHash, &data, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteCommitDeserialize(data, nData, pCommit);
+  sqlite3_free(data);
+  return rc;
+}
+
+static int remoteSqlResetSessionToCommit(
+  sqlite3 *db,
+  const char *zBranch,
+  const ProllyHash *pCommitHash
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  DoltliteCommit commit;
+  int rc;
+
+  if( !cs ) return SQLITE_ERROR;
+  memset(&commit, 0, sizeof(commit));
+  rc = remoteSqlLoadCommit(cs, pCommitHash, &commit);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteHardReset(db, &commit.catalogHash);
+  if( rc==SQLITE_OK && zBranch ){
+    doltliteSetSessionBranch(db, zBranch);
+  }
+  if( rc==SQLITE_OK ){
+    doltliteSetSessionHead(db, pCommitHash);
+    doltliteSetSessionStaged(db, &commit.catalogHash);
+  }
+  doltliteCommitClear(&commit);
+  return rc;
+}
+
 static void freeNameList(char **azNames, int nNames);
 
 static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -541,34 +581,12 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
 
   if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
-    DoltliteCommit commit;
-    u8 *data = 0; int nData = 0;
-
-    rc = chunkStoreGet(cs, &trackingCommit, &data, &nData);
+    rc = remoteSqlResetSessionToCommit(db, 0, &trackingCommit);
     if( rc!=SQLITE_OK ){
       remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                                "failed to load commit");
+                                "failed to update working tree from branch");
       return;
     }
-    rc = doltliteCommitDeserialize(data, nData, &commit);
-    sqlite3_free(data);
-    if( rc!=SQLITE_OK ){
-      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                                "failed to deserialize commit");
-      return;
-    }
-
-    rc = doltliteHardReset(db, &commit.catalogHash);
-    if( rc!=SQLITE_OK ){
-      doltliteCommitClear(&commit);
-      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                                "hard reset failed");
-      return;
-    }
-
-    doltliteSetSessionHead(db, &trackingCommit);
-    doltliteSetSessionStaged(db, &commit.catalogHash);
-    doltliteCommitClear(&commit);
   }
 
 
@@ -684,43 +702,18 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
                                   "default branch missing from cloned refs");
         return;
       }
-      {
-
-        u8 *data = 0; int nData = 0;
-        DoltliteCommit commit;
-
-        rc = chunkStoreGet(cs, &branchCommit, &data, &nData);
-        if( rc!=SQLITE_OK || !data ){
-          if( data ) sqlite3_free(data);
-          remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                                    "failed to load default branch commit");
-          return;
-        }
-        rc = doltliteCommitDeserialize(data, nData, &commit);
-        sqlite3_free(data);
-        if( rc!=SQLITE_OK ){
-          remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                                    "failed to deserialize default branch commit");
-          return;
-        }
-        rc = doltliteHardReset(db, &commit.catalogHash);
-        if( rc!=SQLITE_OK ){
-          doltliteCommitClear(&commit);
-          remoteSqlRestoreAndReport(
-              ctx, db, cs, &savedState, SQLITE_ERROR,
-              "failed to initialize working tree from default branch");
-          return;
-        }
-        doltliteSetSessionBranch(db, zDefault);
-        doltliteSetSessionHead(db, &branchCommit);
-        doltliteSetSessionStaged(db, &commit.catalogHash);
-        rc = chunkStoreSetDefaultBranch(cs, zDefault);
-        doltliteCommitClear(&commit);
-        if( rc!=SQLITE_OK ){
-          remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                                    "failed to record default branch");
-          return;
-        }
+      rc = remoteSqlResetSessionToCommit(db, zDefault, &branchCommit);
+      if( rc!=SQLITE_OK ){
+        remoteSqlRestoreAndReport(
+            ctx, db, cs, &savedState, SQLITE_ERROR,
+            "failed to initialize working tree from default branch");
+        return;
+      }
+      rc = chunkStoreSetDefaultBranch(cs, zDefault);
+      if( rc!=SQLITE_OK ){
+        remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
+                                  "failed to record default branch");
+        return;
       }
     }
   }
