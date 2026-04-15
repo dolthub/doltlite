@@ -424,6 +424,12 @@ static int cvsFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqli
   CvSumCur *c = (CvSumCur*)cur;
   CvSumVtab *vt = (CvSumVtab*)cur->pVtab;
   (void)n;(void)s;(void)a;(void)v;
+  /* SQLite may call xFilter more than once per cursor (join rescan,
+  ** re-entry). Drop any tables loaded by the prior call before
+  ** reloading, otherwise we leak them. */
+  freeViolationTables(c->aTables, c->nTables);
+  c->aTables = 0;
+  c->nTables = 0;
   c->iRow = 0;
   return loadAllViolations(vt->db, doltliteGetChunkStore(vt->db),
                            &c->aTables, &c->nTables);
@@ -580,6 +586,9 @@ static int cvrFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqli
   int i, rc;
   (void)n;(void)s;(void)a;(void)vp;
 
+  freeViolationTables(c->aTables, c->nTables);
+  c->aTables = 0;
+  c->nTables = 0;
   c->iRow = 0;
   c->iTableIdx = -1;
   rc = loadAllViolations(v->db, doltliteGetChunkStore(v->db),

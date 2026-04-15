@@ -62,12 +62,24 @@ static int fetchRowByRowid(
   while( prollyCursorIsValid(&cur) ){
     i64 rowid = prollyCursorIntKey(&cur);
     if( rowid == targetRowid ){
-      const u8 *pVal;
-      int nVal;
+      const u8 *pKey, *pVal;
+      int nKey, nVal;
+      prollyCursorKey(&cur, &pKey, &nKey);
       prollyCursorValue(&cur, &pVal, &nVal);
+      if( pKey && nKey > 0 ){
+        *ppKey = sqlite3_malloc(nKey);
+        if( !*ppKey ){
+          prollyCursorClose(&cur);
+          return SQLITE_NOMEM;
+        }
+        memcpy(*ppKey, pKey, nKey);
+        *pnKey = nKey;
+      }
       if( pVal && nVal > 0 ){
         *ppVal = sqlite3_malloc(nVal);
         if( !*ppVal ){
+          sqlite3_free(*ppKey);
+          *ppKey = 0; *pnKey = 0;
           prollyCursorClose(&cur);
           return SQLITE_NOMEM;
         }
@@ -95,59 +107,87 @@ static char *buildFkViolationInfo(
   int fkid
 ){
   sqlite3_stmt *pStmt = 0;
-  sqlite3_str *pJson = sqlite3_str_new(0);
+  sqlite3_str *pJson = 0;
+  sqlite3_str *pCols = 0;
+  sqlite3_str *pRefCols = 0;
+  char *zColsBuf = 0;
+  char *zRefColsBuf = 0;
+  char *zParentBuf = 0;
+  char *zOnUpBuf = 0;
+  char *zOnDelBuf = 0;
   char *zQuery;
   char *zResult;
   int rc;
-  int first = 1;
+  int nMatches = 0;
 
-  if( !pJson ) return 0;
+  pJson = sqlite3_str_new(0);
+  pCols = sqlite3_str_new(0);
+  pRefCols = sqlite3_str_new(0);
+  if( !pJson || !pCols || !pRefCols ) goto done;
 
-  sqlite3_str_appendall(pJson, "{");
-
-  zQuery = sqlite3_mprintf(
-      "PRAGMA foreign_key_list(%Q)", zChildTable);
-  if( !zQuery ){ sqlite3_str_reset(pJson); return 0; }
-
+  zQuery = sqlite3_mprintf("PRAGMA foreign_key_list(%Q)", zChildTable);
+  if( !zQuery ) goto done;
   rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, 0);
   sqlite3_free(zQuery);
-  if( rc != SQLITE_OK ){
-    sqlite3_str_appendf(pJson, "\"error\": \"prepare failed\"}");
-    return sqlite3_str_finish(pJson);
+  if( rc != SQLITE_OK ) goto done;
+
+  /* Walk every row belonging to this fkid, accumulating the child
+  ** column list and the referenced column list into separate
+  ** buffers. Scalar fields (ReferencedTable / OnUpdate / OnDelete)
+  ** only need the first matching row — PRAGMA foreign_key_list
+  ** repeats them identically for each column of a composite FK. */
+  while( sqlite3_step(pStmt) == SQLITE_ROW ){
+    int id = sqlite3_column_int(pStmt, 0);
+    const char *zParent, *zFrom, *zTo, *zOnUp, *zOnDel;
+    if( id != fkid ) continue;
+    zParent = (const char*)sqlite3_column_text(pStmt, 2);
+    zFrom   = (const char*)sqlite3_column_text(pStmt, 3);
+    zTo     = (const char*)sqlite3_column_text(pStmt, 4);
+    zOnUp   = (const char*)sqlite3_column_text(pStmt, 5);
+    zOnDel  = (const char*)sqlite3_column_text(pStmt, 6);
+    if( nMatches>0 ){
+      sqlite3_str_appendall(pCols, ", ");
+      sqlite3_str_appendall(pRefCols, ", ");
+    }
+    sqlite3_str_appendf(pCols, "\"%w\"", zFrom ? zFrom : "");
+    sqlite3_str_appendf(pRefCols, "\"%w\"", zTo ? zTo : "");
+    if( nMatches==0 ){
+      if( zParent ) zParentBuf = sqlite3_mprintf("%s", zParent);
+      zOnUpBuf  = sqlite3_mprintf("%s", zOnUp  ? zOnUp  : "NO ACTION");
+      zOnDelBuf = sqlite3_mprintf("%s", zOnDel ? zOnDel : "NO ACTION");
+    }
+    nMatches++;
   }
 
-  {
-    int foundRefTable = 0;
-    sqlite3_str_appendall(pJson, "\"Columns\": [");
-    while( sqlite3_step(pStmt) == SQLITE_ROW ){
-      int id = sqlite3_column_int(pStmt, 0);
-      const char *zParent, *zFrom, *zTo, *zOnUp, *zOnDel;
-      if( id != fkid ) continue;
-      zParent = (const char*)sqlite3_column_text(pStmt, 2);
-      zFrom   = (const char*)sqlite3_column_text(pStmt, 3);
-      zTo     = (const char*)sqlite3_column_text(pStmt, 4);
-      zOnUp   = (const char*)sqlite3_column_text(pStmt, 5);
-      zOnDel  = (const char*)sqlite3_column_text(pStmt, 6);
-      if( !first ) sqlite3_str_appendall(pJson, ", ");
-      sqlite3_str_appendf(pJson, "\"%w\"", zFrom ? zFrom : "");
-      first = 0;
-      if( !foundRefTable && zParent ){
-        sqlite3_str_appendf(pJson,
-            "], \"ReferencedTable\": \"%w\"", zParent);
-        sqlite3_str_appendf(pJson,
-            ", \"ReferencedColumns\": [\"%w\"]", zTo ? zTo : "");
-        sqlite3_str_appendf(pJson,
-            ", \"OnUpdate\": \"%w\"", zOnUp ? zOnUp : "NO ACTION");
-        sqlite3_str_appendf(pJson,
-            ", \"OnDelete\": \"%w\"", zOnDel ? zOnDel : "NO ACTION");
-        foundRefTable = 1;
-      }
-    }
-    if( !foundRefTable ) sqlite3_str_appendall(pJson, "]");
-  }
+done:
   sqlite3_finalize(pStmt);
-  sqlite3_str_appendall(pJson, "}");
+
+  zColsBuf    = pCols    ? sqlite3_str_finish(pCols)    : 0;
+  zRefColsBuf = pRefCols ? sqlite3_str_finish(pRefCols) : 0;
+  if( !pJson ){
+    sqlite3_free(zColsBuf);
+    sqlite3_free(zRefColsBuf);
+    sqlite3_free(zParentBuf);
+    sqlite3_free(zOnUpBuf);
+    sqlite3_free(zOnDelBuf);
+    return 0;
+  }
+  sqlite3_str_appendall(pJson, "{");
+  sqlite3_str_appendf(pJson,
+      "\"Columns\": [%s], \"ReferencedTable\": \"%w\", "
+      "\"ReferencedColumns\": [%s], "
+      "\"OnUpdate\": \"%w\", \"OnDelete\": \"%w\"}",
+      zColsBuf ? zColsBuf : "",
+      zParentBuf ? zParentBuf : "",
+      zRefColsBuf ? zRefColsBuf : "",
+      zOnUpBuf ? zOnUpBuf : "NO ACTION",
+      zOnDelBuf ? zOnDelBuf : "NO ACTION");
   zResult = sqlite3_str_finish(pJson);
+  sqlite3_free(zColsBuf);
+  sqlite3_free(zRefColsBuf);
+  sqlite3_free(zParentBuf);
+  sqlite3_free(zOnUpBuf);
+  sqlite3_free(zOnDelBuf);
   return zResult;
 }
 

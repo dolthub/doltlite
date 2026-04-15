@@ -1288,6 +1288,18 @@ static void doltliteCommitFunc(
     }
   }
 
+  /* Once the commit lands, any constraint violations that were in
+  ** the working set are now part of committed state (force path)
+  ** or were resolved before the guard let us through (non-force
+  ** path). Either way, clear them so the NEXT commit isn't
+  ** blocked by a stale flag. */
+  {
+    extern int doltliteClearAllConstraintViolations(sqlite3*);
+    if( doltliteSessionHasConstraintViolations(db) ){
+      doltliteClearAllConstraintViolations(db);
+    }
+  }
+
   rc = doltliteAdvanceBranch(db, &commitHash, &catalogHash);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
@@ -1434,6 +1446,12 @@ static int mergeAbortInPlace(sqlite3 *db){
   if( rc!=SQLITE_OK ) return rc;
   doltliteSetSessionStaged(db, &headCatHash);
   doltliteClearSessionMergeState(db);
+  {
+    extern int doltliteClearAllConstraintViolations(sqlite3*);
+    if( doltliteSessionHasConstraintViolations(db) ){
+      doltliteClearAllConstraintViolations(db);
+    }
+  }
   return doltlitePersistWorkingSet(db);
 }
 
@@ -1795,6 +1813,16 @@ static void doltliteResetFunc(
       goto reset_cleanup;
     }
 
+    /* Hard reset discards the working tree, so any post-merge
+    ** constraint violations attached to it go with it. Otherwise
+    ** the session hash lingers and blocks the next commit. */
+    {
+      extern int doltliteClearAllConstraintViolations(sqlite3*);
+      if( doltliteSessionHasConstraintViolations(db) ){
+        doltliteClearAllConstraintViolations(db);
+      }
+    }
+
     doltliteSetSessionStaged(db, &origStagedAfterReset);
     rc = doltlitePersistWorkingSet(db);
     if( rc!=SQLITE_OK ){
@@ -2131,7 +2159,17 @@ static void doltliteMergeFunc(
       }
     }
     if( nViolations + nUnique + nCheck > 0 ){
+      u8 alreadyMerging = 0;
       nMergeConflicts += nViolations + nUnique + nCheck;
+      /* A violation-only merge (no row-level conflicts) otherwise
+      ** wouldn't have been put into merging state by
+      ** recordMergeConflicts, which would leave dolt_merge --abort
+      ** saying "no merge in progress" even though the working set
+      ** is clearly stuck. Stamp the state here so abort works. */
+      doltliteGetSessionMergeState(db, &alreadyMerging, 0, 0);
+      if( !alreadyMerging ){
+        doltliteSetSessionMergeState(db, 1, &theirHead, 0);
+      }
     }
   }
 
