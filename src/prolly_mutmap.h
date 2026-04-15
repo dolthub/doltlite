@@ -47,6 +47,7 @@ struct ProllyMutMap {
   u8 eKind;
   const ProllyMutMapOps *pOps;
   ProllyMutMap *pShadow;
+  void *pImpl;
   int nEntries;
   int nAlloc;
   int levelBase;

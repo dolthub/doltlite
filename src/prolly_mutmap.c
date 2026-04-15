@@ -27,11 +27,23 @@ struct ProllyMutMapOps {
 };
 
 static const ProllyMutMapOps gLegacyMutMapOps;
+static const ProllyMutMapOps gIndexMutMapOps;
 
 #ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
 static int shadowEnsureInit(ProllyMutMap *mm);
 static int shadowValidateMatches(ProllyMutMap *mm);
 #endif
+
+typedef struct IndexMutMapState IndexMutMapState;
+struct IndexMutMapState {
+  int root;
+  int *aLeft;
+  int *aRight;
+  int *aParent;
+  int *aSize;
+  u32 *aPriority;
+  int nAlloc;
+};
 static int compareEntries(
   u8 isIntKey,
   const u8 *pKeyA, int nKeyA, i64 intKeyA,
@@ -299,6 +311,256 @@ static int ensureCapacity(ProllyMutMap *mm){
   return SQLITE_OK;
 }
 
+static IndexMutMapState *indexState(ProllyMutMap *mm){
+  return (IndexMutMapState*)mm->pImpl;
+}
+
+static int indexEnsureStateCapacity(ProllyMutMap *mm, int nMin){
+  IndexMutMapState *st = indexState(mm);
+  int nNew;
+  int *aLeftNew;
+  int *aRightNew;
+  int *aParentNew;
+  int *aSizeNew;
+  u32 *aPriorityNew;
+  if( !st ) return SQLITE_MISUSE;
+  if( st->nAlloc >= nMin ) return SQLITE_OK;
+  nNew = st->nAlloc ? st->nAlloc * 2 : MUTMAP_INIT_CAP;
+  while( nNew < nMin ) nNew *= 2;
+  aLeftNew = sqlite3_malloc(nNew * sizeof(int));
+  aRightNew = sqlite3_malloc(nNew * sizeof(int));
+  aParentNew = sqlite3_malloc(nNew * sizeof(int));
+  aSizeNew = sqlite3_malloc(nNew * sizeof(int));
+  aPriorityNew = sqlite3_malloc(nNew * sizeof(u32));
+  if( !aLeftNew || !aRightNew || !aParentNew || !aSizeNew || !aPriorityNew ){
+    sqlite3_free(aLeftNew);
+    sqlite3_free(aRightNew);
+    sqlite3_free(aParentNew);
+    sqlite3_free(aSizeNew);
+    sqlite3_free(aPriorityNew);
+    return SQLITE_NOMEM;
+  }
+  if( st->nAlloc > 0 ){
+    memcpy(aLeftNew, st->aLeft, st->nAlloc * sizeof(int));
+    memcpy(aRightNew, st->aRight, st->nAlloc * sizeof(int));
+    memcpy(aParentNew, st->aParent, st->nAlloc * sizeof(int));
+    memcpy(aSizeNew, st->aSize, st->nAlloc * sizeof(int));
+    memcpy(aPriorityNew, st->aPriority, st->nAlloc * sizeof(u32));
+  }
+  sqlite3_free(st->aLeft);
+  sqlite3_free(st->aRight);
+  sqlite3_free(st->aParent);
+  sqlite3_free(st->aSize);
+  sqlite3_free(st->aPriority);
+  st->aLeft = aLeftNew;
+  st->aRight = aRightNew;
+  st->aParent = aParentNew;
+  st->aSize = aSizeNew;
+  st->aPriority = aPriorityNew;
+  st->nAlloc = nNew;
+  return SQLITE_OK;
+}
+
+static void indexRefreshSize(IndexMutMapState *st, int idx){
+  int leftSize = st->aLeft[idx] >= 0 ? st->aSize[st->aLeft[idx]] : 0;
+  int rightSize = st->aRight[idx] >= 0 ? st->aSize[st->aRight[idx]] : 0;
+  st->aSize[idx] = leftSize + rightSize + 1;
+}
+
+static void indexRefreshSizeUp(IndexMutMapState *st, int idx){
+  while( idx >= 0 ){
+    indexRefreshSize(st, idx);
+    idx = st->aParent[idx];
+  }
+}
+
+static void indexRotateLeft(IndexMutMapState *st, int x){
+  int y = st->aRight[x];
+  int p = st->aParent[x];
+  st->aRight[x] = st->aLeft[y];
+  if( st->aLeft[y] >= 0 ) st->aParent[st->aLeft[y]] = x;
+  st->aLeft[y] = x;
+  st->aParent[x] = y;
+  st->aParent[y] = p;
+  if( p >= 0 ){
+    if( st->aLeft[p] == x ) st->aLeft[p] = y;
+    else st->aRight[p] = y;
+  }else{
+    st->root = y;
+  }
+  indexRefreshSize(st, x);
+  indexRefreshSize(st, y);
+}
+
+static void indexRotateRight(IndexMutMapState *st, int x){
+  int y = st->aLeft[x];
+  int p = st->aParent[x];
+  st->aLeft[x] = st->aRight[y];
+  if( st->aRight[y] >= 0 ) st->aParent[st->aRight[y]] = x;
+  st->aRight[y] = x;
+  st->aParent[x] = y;
+  st->aParent[y] = p;
+  if( p >= 0 ){
+    if( st->aLeft[p] == x ) st->aLeft[p] = y;
+    else st->aRight[p] = y;
+  }else{
+    st->root = y;
+  }
+  indexRefreshSize(st, x);
+  indexRefreshSize(st, y);
+}
+
+static int indexRankForPhys(ProllyMutMap *mm, int phys){
+  IndexMutMapState *st = indexState(mm);
+  int rank = st->aLeft[phys] >= 0 ? st->aSize[st->aLeft[phys]] : 0;
+  while( st->aParent[phys] >= 0 ){
+    int parent = st->aParent[phys];
+    if( st->aRight[parent] == phys ){
+      rank += 1;
+      if( st->aLeft[parent] >= 0 ) rank += st->aSize[st->aLeft[parent]];
+    }
+    phys = parent;
+  }
+  return rank;
+}
+
+static int indexSelectPhys(IndexMutMapState *st, int rank){
+  int cur = st->root;
+  while( cur >= 0 ){
+    int leftSize = st->aLeft[cur] >= 0 ? st->aSize[st->aLeft[cur]] : 0;
+    if( rank < leftSize ){
+      cur = st->aLeft[cur];
+    }else if( rank > leftSize ){
+      rank -= leftSize + 1;
+      cur = st->aRight[cur];
+    }else{
+      return cur;
+    }
+  }
+  return -1;
+}
+
+static int indexLowerBoundRank(
+  ProllyMutMap *mm, const u8 *pKey, int nKey, i64 intKey, int *pFound, int *pPhys
+){
+  IndexMutMapState *st = indexState(mm);
+  int cur = st->root;
+  int candidate = -1;
+  *pFound = 0;
+  *pPhys = -1;
+  while( cur >= 0 ){
+    ProllyMutMapEntry *e = &mm->aEntries[cur];
+    int c = compareEntries(mm->isIntKey, e->pKey, e->nKey, e->intKey, pKey, nKey, intKey);
+    if( c < 0 ){
+      cur = st->aRight[cur];
+    }else if( c > 0 ){
+      candidate = cur;
+      cur = st->aLeft[cur];
+    }else{
+      *pFound = 1;
+      *pPhys = cur;
+      return indexRankForPhys(mm, cur);
+    }
+  }
+  if( candidate >= 0 ){
+    *pPhys = candidate;
+    return indexRankForPhys(mm, candidate);
+  }
+  return mm->nEntries;
+}
+
+static int indexInsertPhys(ProllyMutMap *mm, int phys){
+  IndexMutMapState *st = indexState(mm);
+  int cur;
+  int parent = -1;
+  int rc;
+  rc = indexEnsureStateCapacity(mm, phys + 1);
+  if( rc!=SQLITE_OK ) return rc;
+  st->aLeft[phys] = -1;
+  st->aRight[phys] = -1;
+  st->aParent[phys] = -1;
+  st->aSize[phys] = 1;
+  st->aPriority[phys] = hashKey(
+      mm->isIntKey, mm->aEntries[phys].pKey, mm->aEntries[phys].nKey, mm->aEntries[phys].intKey);
+  if( st->root < 0 ){
+    st->root = phys;
+    return SQLITE_OK;
+  }
+  cur = st->root;
+  while( cur >= 0 ){
+    ProllyMutMapEntry *e = &mm->aEntries[cur];
+    int c = compareEntries(mm->isIntKey,
+                           mm->aEntries[phys].pKey, mm->aEntries[phys].nKey, mm->aEntries[phys].intKey,
+                           e->pKey, e->nKey, e->intKey);
+    parent = cur;
+    if( c < 0 ){
+      cur = st->aLeft[cur];
+    }else{
+      cur = st->aRight[cur];
+    }
+  }
+  st->aParent[phys] = parent;
+  if( compareEntries(mm->isIntKey,
+                     mm->aEntries[phys].pKey, mm->aEntries[phys].nKey, mm->aEntries[phys].intKey,
+                     mm->aEntries[parent].pKey, mm->aEntries[parent].nKey, mm->aEntries[parent].intKey) < 0 ){
+    st->aLeft[parent] = phys;
+  }else{
+    st->aRight[parent] = phys;
+  }
+  indexRefreshSizeUp(st, parent);
+  while( st->aParent[phys] >= 0 &&
+         st->aPriority[phys] < st->aPriority[st->aParent[phys]] ){
+    int p = st->aParent[phys];
+    if( st->aLeft[p] == phys ) indexRotateRight(st, p);
+    else indexRotateLeft(st, p);
+  }
+  return SQLITE_OK;
+}
+
+static int indexRebuildTree(ProllyMutMap *mm){
+  IndexMutMapState *st = indexState(mm);
+  int i;
+  int rc = indexEnsureStateCapacity(mm, mm->nEntries);
+  if( rc!=SQLITE_OK ) return rc;
+  st->root = -1;
+  for(i=0; i<mm->nEntries; i++){
+    st->aLeft[i] = -1;
+    st->aRight[i] = -1;
+    st->aParent[i] = -1;
+    st->aSize[i] = 1;
+    st->aPriority[i] = hashKey(mm->isIntKey, mm->aEntries[i].pKey, mm->aEntries[i].nKey, mm->aEntries[i].intKey);
+  }
+  for(i=0; i<mm->nEntries; i++){
+    rc = indexInsertPhys(mm, i);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+
+static int indexEnsureInit(ProllyMutMap *mm){
+  if( mm->pImpl ) return SQLITE_OK;
+  mm->pImpl = sqlite3_malloc(sizeof(IndexMutMapState));
+  if( !mm->pImpl ) return SQLITE_NOMEM;
+  memset(mm->pImpl, 0, sizeof(IndexMutMapState));
+  indexState(mm)->root = -1;
+  return SQLITE_OK;
+}
+
+static void indexStateClear(IndexMutMapState *st){
+  if( !st ) return;
+  st->root = -1;
+}
+
+static void indexStateFree(IndexMutMapState *st){
+  if( !st ) return;
+  sqlite3_free(st->aLeft);
+  sqlite3_free(st->aRight);
+  sqlite3_free(st->aParent);
+  sqlite3_free(st->aSize);
+  sqlite3_free(st->aPriority);
+  sqlite3_free(st);
+}
+
 int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey){
   return prollyMutMapInitKind(mm, isIntKey, 1, PROLLY_MUTMAP_KIND_TABLE);
 }
@@ -313,14 +575,21 @@ int prollyMutMapInitMode(ProllyMutMap *mm, u8 isIntKey, u8 keepSorted){
 int prollyMutMapInitKind(
   ProllyMutMap *mm, u8 isIntKey, u8 keepSorted, ProllyMutMapKind eKind
 ){
+  int rc = SQLITE_OK;
   memset(mm, 0, sizeof(*mm));
   mm->isIntKey = isIntKey;
   mm->keepSorted = keepSorted;
   mm->eKind = (u8)eKind;
-  mm->pOps = &gLegacyMutMapOps;
+  mm->pOps = (eKind==PROLLY_MUTMAP_KIND_INDEX)
+    ? &gIndexMutMapOps
+    : &gLegacyMutMapOps;
+  if( eKind==PROLLY_MUTMAP_KIND_INDEX ){
+    rc = indexEnsureInit(mm);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 #ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
   if( eKind==PROLLY_MUTMAP_KIND_INDEX ){
-    int rc = shadowEnsureInit(mm);
+    rc = shadowEnsureInit(mm);
     if( rc!=SQLITE_OK ){
       return rc;
     }
@@ -764,6 +1033,9 @@ void prollyMutMapClear(ProllyMutMap *mm){
     prollyMutMapClear(mm->pShadow);
   }
 #endif
+  if( mm->eKind==PROLLY_MUTMAP_KIND_INDEX ){
+    indexStateClear(indexState(mm));
+  }
   for(i=0; i<mm->nEntries; i++){
     freeEntryData(&mm->aEntries[i]);
   }
@@ -802,6 +1074,8 @@ void prollyMutMapFree(ProllyMutMap *mm){
   mm->aUndo = 0;
   mm->nUndoAlloc = 0;
   mm->currentSavepointLevel = 0;
+  indexStateFree((IndexMutMapState*)mm->pImpl);
+  mm->pImpl = 0;
 }
 
 static int prollyMutMapCloneLegacy(ProllyMutMap **out, const ProllyMutMap *src){
@@ -944,17 +1218,14 @@ int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
 
 #ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
 static int shadowEnsureInit(ProllyMutMap *mm){
-  int rc;
   if( mm->pShadow || mm->eKind!=PROLLY_MUTMAP_KIND_INDEX ) return SQLITE_OK;
   mm->pShadow = sqlite3_malloc(sizeof(ProllyMutMap));
   if( !mm->pShadow ) return SQLITE_NOMEM;
-  rc = prollyMutMapInitKind(
-      mm->pShadow, mm->isIntKey, 1, PROLLY_MUTMAP_KIND_TABLE);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(mm->pShadow);
-    mm->pShadow = 0;
-    return rc;
-  }
+  memset(mm->pShadow, 0, sizeof(ProllyMutMap));
+  mm->pShadow->isIntKey = mm->isIntKey;
+  mm->pShadow->keepSorted = 0;
+  mm->pShadow->eKind = PROLLY_MUTMAP_KIND_INDEX;
+  mm->pShadow->pOps = &gLegacyMutMapOps;
   mm->pShadow->currentSavepointLevel = mm->currentSavepointLevel;
   return SQLITE_OK;
 }
@@ -1010,6 +1281,212 @@ static const ProllyMutMapOps gLegacyMutMapOps = {
   prollyMutMapRollbackToSavepointLegacy,
   prollyMutMapReleaseSavepointLegacy,
   prollyMutMapCloneLegacy
+};
+
+static int prollyMutMapInsertIndex(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  const u8 *pVal, int nVal
+){
+  int rc;
+  int phys = -1;
+  if( !mm->pImpl ){
+    rc = indexEnsureInit(mm);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = findPhysLazy(mm, pKey, nKey, intKey, &phys);
+  if( rc!=SQLITE_OK ) return rc;
+  if( phys >= 0 ){
+    ProllyMutMapEntry *e = &mm->aEntries[phys];
+    if( mm->currentSavepointLevel > 0
+     && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
+      rc = appendUndoRec(mm, phys);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    e->op = PROLLY_EDIT_INSERT;
+    sqlite3_free(e->pVal);
+    e->pVal = 0;
+    e->nVal = 0;
+    if( pVal && nVal>0 ){
+      e->pVal = (u8*)sqlite3_malloc(nVal);
+      if( !e->pVal ) return SQLITE_NOMEM;
+      memcpy(e->pVal, pVal, nVal);
+      e->nVal = nVal;
+    }
+    e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+    return SQLITE_OK;
+  }
+  rc = ensureCapacity(mm);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = ensureHashForInsert(mm);
+  if( rc!=SQLITE_OK ) return rc;
+  phys = mm->nEntries;
+  memset(&mm->aEntries[phys], 0, sizeof(ProllyMutMapEntry));
+  mm->aEntries[phys].op = PROLLY_EDIT_INSERT;
+  mm->aEntries[phys].isIntKey = mm->isIntKey;
+  mm->aEntries[phys].intKey = intKey;
+  mm->aEntries[phys].bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+  rc = copyEntryData(&mm->aEntries[phys], pKey, nKey, pVal, nVal);
+  if( rc!=SQLITE_OK ) return rc;
+  mm->nEntries++;
+  hashInsertPhys(mm, phys);
+  rc = indexInsertPhys(mm, phys);
+  if( rc!=SQLITE_OK ) return rc;
+  return SQLITE_OK;
+}
+
+static int prollyMutMapDeleteIndex(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey
+){
+  int rc;
+  int phys = -1;
+  if( !mm->pImpl ){
+    rc = indexEnsureInit(mm);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = findPhysLazy(mm, pKey, nKey, intKey, &phys);
+  if( rc!=SQLITE_OK ) return rc;
+  if( phys >= 0 ){
+    ProllyMutMapEntry *e = &mm->aEntries[phys];
+    if( e->op == PROLLY_EDIT_INSERT ){
+      if( mm->currentSavepointLevel > 0
+       && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
+        rc = appendUndoRec(mm, phys);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+      e->op = PROLLY_EDIT_DELETE;
+      sqlite3_free(e->pVal);
+      e->pVal = 0;
+      e->nVal = 0;
+      e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+    }
+    return SQLITE_OK;
+  }
+  rc = ensureCapacity(mm);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = ensureHashForInsert(mm);
+  if( rc!=SQLITE_OK ) return rc;
+  phys = mm->nEntries;
+  memset(&mm->aEntries[phys], 0, sizeof(ProllyMutMapEntry));
+  mm->aEntries[phys].op = PROLLY_EDIT_DELETE;
+  mm->aEntries[phys].isIntKey = mm->isIntKey;
+  mm->aEntries[phys].intKey = intKey;
+  mm->aEntries[phys].bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+  rc = copyEntryData(&mm->aEntries[phys], pKey, nKey, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  mm->nEntries++;
+  hashInsertPhys(mm, phys);
+  rc = indexInsertPhys(mm, phys);
+  if( rc!=SQLITE_OK ) return rc;
+  return SQLITE_OK;
+}
+
+static int prollyMutMapFindRcIndex(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  ProllyMutMapEntry **ppEntry
+){
+  int phys = -1;
+  int rc;
+  *ppEntry = 0;
+  if( mm->nEntries==0 ) return SQLITE_OK;
+  rc = findPhysLazy(mm, pKey, nKey, intKey, &phys);
+  if( rc!=SQLITE_OK ) return rc;
+  if( phys >= 0 ) *ppEntry = &mm->aEntries[phys];
+  return SQLITE_OK;
+}
+
+static ProllyMutMapEntry *prollyMutMapFindIndex(
+  ProllyMutMap *mm, const u8 *pKey, int nKey, i64 intKey
+){
+  ProllyMutMapEntry *pEntry = 0;
+  if( prollyMutMapFindRcIndex(mm, pKey, nKey, intKey, &pEntry)!=SQLITE_OK ){
+    return 0;
+  }
+  return pEntry;
+}
+
+static ProllyMutMapEntry *prollyMutMapEntryAtIndex(ProllyMutMap *mm, int idx){
+  int phys;
+  if( idx < 0 || idx >= mm->nEntries ) return 0;
+  phys = indexSelectPhys(indexState(mm), idx);
+  return phys >= 0 ? &mm->aEntries[phys] : 0;
+}
+
+static int prollyMutMapOrderIndexFromEntryIndex(
+  ProllyMutMap *mm, ProllyMutMapEntry *pEntry
+){
+  return indexRankForPhys(mm, (int)(pEntry - mm->aEntries));
+}
+
+static void prollyMutMapIterFirstIndex(ProllyMutMapIter *it, ProllyMutMap *mm){
+  it->pMap = mm;
+  it->idx = 0;
+}
+
+static ProllyMutMapEntry *prollyMutMapIterEntryIndex(ProllyMutMapIter *it){
+  return prollyMutMapEntryAtIndex(it->pMap, it->idx);
+}
+
+static void prollyMutMapIterSeekIndex(
+  ProllyMutMapIter *it, ProllyMutMap *mm, const u8 *pKey, int nKey, i64 intKey
+){
+  int found;
+  int phys;
+  it->pMap = mm;
+  it->idx = indexLowerBoundRank(mm, pKey, nKey, intKey, &found, &phys);
+}
+
+static void prollyMutMapIterLastIndex(ProllyMutMapIter *it, ProllyMutMap *mm){
+  it->pMap = mm;
+  it->idx = mm->nEntries>0 ? mm->nEntries - 1 : 0;
+}
+
+static int prollyMutMapRollbackToSavepointIndex(ProllyMutMap *mm, int level){
+  int rc = prollyMutMapRollbackToSavepointLegacy(mm, level);
+  if( rc!=SQLITE_OK ) return rc;
+  return indexRebuildTree(mm);
+}
+
+static void prollyMutMapReleaseSavepointIndex(ProllyMutMap *mm, int level){
+  prollyMutMapReleaseSavepointLegacy(mm, level);
+}
+
+static int prollyMutMapCloneIndex(ProllyMutMap **out, const ProllyMutMap *src){
+  int rc = prollyMutMapCloneLegacy(out, src);
+  if( rc!=SQLITE_OK ) return rc;
+  (*out)->pOps = &gIndexMutMapOps;
+  rc = indexEnsureInit(*out);
+  if( rc!=SQLITE_OK ){
+    prollyMutMapFree(*out);
+    sqlite3_free(*out);
+    *out = 0;
+    return rc;
+  }
+  rc = indexRebuildTree(*out);
+  if( rc!=SQLITE_OK ){
+    prollyMutMapFree(*out);
+    sqlite3_free(*out);
+    *out = 0;
+  }
+  return rc;
+}
+
+static const ProllyMutMapOps gIndexMutMapOps = {
+  prollyMutMapInsertIndex,
+  prollyMutMapDeleteIndex,
+  prollyMutMapFindRcIndex,
+  prollyMutMapFindIndex,
+  prollyMutMapEntryAtIndex,
+  prollyMutMapOrderIndexFromEntryIndex,
+  prollyMutMapIterFirstIndex,
+  prollyMutMapIterEntryIndex,
+  prollyMutMapIterSeekIndex,
+  prollyMutMapIterLastIndex,
+  prollyMutMapRollbackToSavepointIndex,
+  prollyMutMapReleaseSavepointIndex,
+  prollyMutMapCloneIndex
 };
 
 int prollyMutMapInsert(
