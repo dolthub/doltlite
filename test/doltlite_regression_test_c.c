@@ -2708,6 +2708,55 @@ static void run_hard_reset_failure_restores_memory_state(void){
   remove_db(dbpath);
 }
 
+static void run_revert_bad_ref_failure_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Revert Bad Ref Failure Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_revert_bad_ref_failure_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_revert_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_revert_bad_ref_failure", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  res = exec1(db, "SELECT dolt_revert('does-not-exist')");
+  check("revert_bad_ref_returns_error",
+        strstr(res, "ERROR: invalid commit hash")!=0);
+  check("revert_bad_ref_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("revert_bad_ref_keeps_working_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("revert_bad_ref_keeps_status",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("revert_bad_ref_keeps_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_revert_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("revert_bad_ref_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("revert_bad_ref_persists_working_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("revert_bad_ref_persists_status",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("revert_bad_ref_persists_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_mutmap_empty_reverse_iter(void){
   ProllyMutMap mm;
   ProllyMutMapIter it;
@@ -3601,6 +3650,7 @@ static const RegressionCase aCases[] = {
   { "savepoint_flush_snapshot_rollback_reopen", "Savepoint Flush Snapshot Rollback Reopen Test", run_savepoint_flush_snapshot_rollback_reopen },
   { "savepoint_flush_snapshot_release_reopen", "Savepoint Flush Snapshot Release Reopen Test", run_savepoint_flush_snapshot_release_reopen },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
+  { "revert_bad_ref_failure_preserves_durable_state", "Revert Bad Ref Failure Preserves Durable State Test", run_revert_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },
