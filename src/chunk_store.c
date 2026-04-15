@@ -134,6 +134,7 @@ static int csMergeIndex(ChunkStore *cs, ChunkIndexEntry **ppMerged,
                         int *pnMerged);
 static int csGrowPending(ChunkStore *cs);
 static int csGrowWriteBuf(ChunkStore *cs, int nNeeded);
+static void csPendHTClear(ChunkStore *cs);
 
 static int csReplayWalRegion(ChunkStore *cs, int updateManifest);
 static int csReplayWal(ChunkStore *cs){ return csReplayWalRegion(cs, 1); }
@@ -307,6 +308,70 @@ static void csCaptureReloadState(ChunkStore *cs, ChunkStoreReloadState *pSaved){
   pSaved->aIndex = cs->aIndex;
   pSaved->pWalData = cs->pWalData;
   csCaptureSavedRefsState(cs, &pSaved->refs);
+}
+
+static void csReleaseReplayState(
+  ChunkStore *cs,
+  ChunkStoreReplayState *pSaved
+){
+  if( cs->aIndex!=pSaved->aIndex ) sqlite3_free(pSaved->aIndex);
+  sqlite3_free(pSaved->pWalData);
+  csFreeSavedRefsState(&pSaved->refs);
+  memset(pSaved, 0, sizeof(*pSaved));
+}
+
+static void csRollbackReplayState(
+  ChunkStore *cs,
+  ChunkStoreReplayState *pSaved,
+  int nPendingBefore
+){
+  if( cs->aIndex!=pSaved->aIndex ) sqlite3_free(cs->aIndex);
+  sqlite3_free(cs->pWalData);
+  csRestoreReplayState(cs, pSaved);
+  cs->nPending = nPendingBefore;
+  csPendHTClear(cs);
+}
+
+static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
+  pDst->pFile = pSrc->pFile;
+  pDst->readOnly = pSrc->readOnly;
+  pDst->refsHash = pSrc->refsHash;
+  pDst->committedRefsHash = pSrc->committedRefsHash;
+  pDst->nChunks = pSrc->nChunks;
+  pDst->iIndexOffset = pSrc->iIndexOffset;
+  pDst->nIndexSize = pSrc->nIndexSize;
+  pDst->iWalOffset = pSrc->iWalOffset;
+  pDst->iFileSize = pSrc->iFileSize;
+  pDst->aIndex = pSrc->aIndex;
+  pDst->nIndex = pSrc->nIndex;
+  pDst->nIndexAlloc = pSrc->nIndexAlloc;
+  pDst->pWalData = pSrc->pWalData;
+  pDst->nWalData = pSrc->nWalData;
+  pDst->aBranches = pSrc->aBranches;
+  pDst->nBranches = pSrc->nBranches;
+  pDst->zDefaultBranch = pSrc->zDefaultBranch;
+  pDst->aTags = pSrc->aTags;
+  pDst->nTags = pSrc->nTags;
+  pDst->aRemotes = pSrc->aRemotes;
+  pDst->nRemotes = pSrc->nRemotes;
+  pDst->aTracking = pSrc->aTracking;
+  pDst->nTracking = pSrc->nTracking;
+
+  pSrc->pFile = 0;
+  pSrc->aIndex = 0;
+  pSrc->nIndex = 0;
+  pSrc->nIndexAlloc = 0;
+  pSrc->pWalData = 0;
+  pSrc->nWalData = 0;
+  pSrc->aBranches = 0;
+  pSrc->nBranches = 0;
+  pSrc->zDefaultBranch = 0;
+  pSrc->aTags = 0;
+  pSrc->nTags = 0;
+  pSrc->aRemotes = 0;
+  pSrc->nRemotes = 0;
+  pSrc->aTracking = 0;
+  pSrc->nTracking = 0;
 }
 
 static void csFreeReloadState(ChunkStoreReloadState *pSaved){
@@ -757,19 +822,13 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     }
   }
 
-  if( cs->aIndex!=saved.aIndex ) sqlite3_free(saved.aIndex);
-  sqlite3_free(saved.pWalData);
-  csFreeSavedRefsState(&saved.refs);
+  csReleaseReplayState(cs, &saved);
 
   return SQLITE_OK;
 
 replay_error:
   if( haveTmpRefs ) csFreeRefsState(&tmpRefs);
-  if( cs->aIndex!=saved.aIndex ) sqlite3_free(cs->aIndex);
-  sqlite3_free(cs->pWalData);
-  csRestoreReplayState(cs, &saved);
-  cs->nPending = nPendingBefore;
-  csPendHTClear(cs);
+  csRollbackReplayState(cs, &saved, nPendingBefore);
   return rc;
 }
 
@@ -2050,46 +2109,7 @@ static int csReloadFromDisk(ChunkStore *cs){
   if( rc!=SQLITE_OK ) return rc;
 
   csCaptureReloadState(cs, &saved);
-
-  cs->pFile = tmp.pFile;
-  cs->readOnly = tmp.readOnly;
-  cs->refsHash = tmp.refsHash;
-  cs->committedRefsHash = tmp.committedRefsHash;
-  cs->nChunks = tmp.nChunks;
-  cs->iIndexOffset = tmp.iIndexOffset;
-  cs->nIndexSize = tmp.nIndexSize;
-  cs->iWalOffset = tmp.iWalOffset;
-  cs->iFileSize = tmp.iFileSize;
-  cs->aIndex = tmp.aIndex;
-  cs->nIndex = tmp.nIndex;
-  cs->nIndexAlloc = tmp.nIndexAlloc;
-  cs->pWalData = tmp.pWalData;
-  cs->nWalData = tmp.nWalData;
-  cs->aBranches = tmp.aBranches;
-  cs->nBranches = tmp.nBranches;
-  cs->zDefaultBranch = tmp.zDefaultBranch;
-  cs->aTags = tmp.aTags;
-  cs->nTags = tmp.nTags;
-  cs->aRemotes = tmp.aRemotes;
-  cs->nRemotes = tmp.nRemotes;
-  cs->aTracking = tmp.aTracking;
-  cs->nTracking = tmp.nTracking;
-
-  tmp.pFile = 0;
-  tmp.aIndex = 0;
-  tmp.nIndex = 0;
-  tmp.nIndexAlloc = 0;
-  tmp.pWalData = 0;
-  tmp.nWalData = 0;
-  tmp.aBranches = 0;
-  tmp.nBranches = 0;
-  tmp.zDefaultBranch = 0;
-  tmp.aTags = 0;
-  tmp.nTags = 0;
-  tmp.aRemotes = 0;
-  tmp.nRemotes = 0;
-  tmp.aTracking = 0;
-  tmp.nTracking = 0;
+  csAdoptOpenedStoreState(cs, &tmp);
   chunkStoreClose(&tmp);
 
   csFreeReloadState(&saved);
