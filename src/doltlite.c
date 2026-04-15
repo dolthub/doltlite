@@ -440,6 +440,310 @@ static int doltliteReportConflicts(
   return SQLITE_OK;
 }
 
+static void addFreeEntries(
+  struct TableEntry *aWorking,
+  struct TableEntry *aStaged,
+  struct TableEntry *aNew
+){
+  sqlite3_free(aWorking);
+  sqlite3_free(aStaged);
+  sqlite3_free(aNew);
+}
+
+static void addResultIgnoreConflict(sqlite3_context *context, char *zIgnErr){
+  if( zIgnErr ){
+    sqlite3_result_error(context, zIgnErr, -1);
+    sqlite3_free(zIgnErr);
+  }else{
+    sqlite3_result_error(context, "dolt_ignore conflict", -1);
+  }
+}
+
+static int addCheckIgnore(
+  sqlite3 *db,
+  sqlite3_context *context,
+  const char *zName,
+  int *pIgnored
+){
+  char *zIgnErr = 0;
+  int rc;
+  *pIgnored = 0;
+  rc = doltliteCheckIgnore(db, zName, pIgnored, &zIgnErr);
+  if( rc==SQLITE_CONSTRAINT ){
+    addResultIgnoreConflict(context, zIgnErr);
+  }else if( rc!=SQLITE_OK ){
+    sqlite3_free(zIgnErr);
+    sqlite3_result_error_code(context, rc);
+  }
+  return rc;
+}
+
+static int addAppendTableEntry(
+  sqlite3_context *context,
+  struct TableEntry **paEntries,
+  int *pnEntries,
+  const struct TableEntry *pEntry
+){
+  struct TableEntry *aNew = sqlite3_realloc(
+      *paEntries, (*pnEntries + 1) * (int)sizeof(struct TableEntry));
+  if( !aNew ){
+    sqlite3_result_error_nomem(context);
+    return SQLITE_NOMEM;
+  }
+  *paEntries = aNew;
+  (*paEntries)[*pnEntries] = *pEntry;
+  (*pnEntries)++;
+  return SQLITE_OK;
+}
+
+static struct TableEntry *addFindEntryByName(
+  struct TableEntry *aEntries,
+  int nEntries,
+  const char *zName
+){
+  int i;
+  if( !zName ) return 0;
+  for(i=0; i<nEntries; i++){
+    if( aEntries[i].zName && strcmp(aEntries[i].zName, zName)==0 ){
+      return &aEntries[i];
+    }
+  }
+  return 0;
+}
+
+static int addLoadWorkingAndStagedCatalogs(
+  sqlite3 *db,
+  const ProllyHash *pWorkingHash,
+  struct TableEntry **paWorking,
+  int *pnWorking,
+  struct TableEntry **paStaged,
+  int *pnStaged
+){
+  ProllyHash stagedHash;
+  int rc;
+
+  *paWorking = 0;
+  *pnWorking = 0;
+  *paStaged = 0;
+  *pnStaged = 0;
+
+  rc = doltliteLoadCatalog(db, pWorkingHash, paWorking, pnWorking, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteGetSessionStaged(db, &stagedHash);
+  if( prollyHashIsEmpty(&stagedHash) ){
+    ProllyHash headCat;
+    rc = doltliteGetHeadCatalogHash(db, &headCat);
+    if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCat) ){
+      rc = doltliteLoadCatalog(db, &headCat, paStaged, pnStaged, 0);
+    }
+  }else{
+    rc = doltliteLoadCatalog(db, &stagedHash, paStaged, pnStaged, 0);
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(*paWorking);
+    *paWorking = 0;
+    *pnWorking = 0;
+  }
+  return rc;
+}
+
+static int addWriteStagedCatalog(
+  sqlite3 *db,
+  ChunkStore *cs,
+  struct TableEntry *aEntries,
+  int nEntries
+){
+  u8 *buf = 0;
+  int nBuf = 0;
+  ProllyHash newStagedHash;
+  int rc = doltliteSerializeCatalogEntries(db, aEntries, nEntries, &buf, &nBuf);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
+  }
+  sqlite3_free(buf);
+  if( rc==SQLITE_OK ){
+    doltliteSetSessionStaged(db, &newStagedHash);
+  }
+  return rc;
+}
+
+static int addStageAllTables(
+  sqlite3 *db,
+  sqlite3_context *context,
+  ChunkStore *cs,
+  const ProllyHash *pWorkingHash
+){
+  struct TableEntry *aWorking = 0;
+  struct TableEntry *aStaged = 0;
+  struct TableEntry *aNew = 0;
+  int nWorking = 0;
+  int nStaged = 0;
+  int nNew = 0;
+  int k;
+  int rc;
+
+  rc = addLoadWorkingAndStagedCatalogs(db, pWorkingHash,
+                                       &aWorking, &nWorking,
+                                       &aStaged, &nStaged);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to load staged catalog", -1);
+    return rc;
+  }
+
+  for(k=0; k<nWorking; k++){
+    const char *zName = aWorking[k].zName;
+    struct TableEntry *pUse = &aWorking[k];
+    if( aWorking[k].iTable>1 && zName ){
+      int ignored = 0;
+      rc = addCheckIgnore(db, context, zName, &ignored);
+      if( rc!=SQLITE_OK ){
+        addFreeEntries(aWorking, aStaged, aNew);
+        return rc;
+      }
+      if( ignored ){
+        pUse = addFindEntryByName(aStaged, nStaged, zName);
+        if( !pUse ) continue;
+      }
+    }
+    rc = addAppendTableEntry(context, &aNew, &nNew, pUse);
+    if( rc!=SQLITE_OK ){
+      addFreeEntries(aWorking, aStaged, aNew);
+      return rc;
+    }
+  }
+
+  for(k=0; k<nStaged; k++){
+    const char *zName = aStaged[k].zName;
+    if( aStaged[k].iTable<=1 || !zName ) continue;
+    if( addFindEntryByName(aWorking, nWorking, zName) ) continue;
+    {
+      int ignored = 0;
+      rc = addCheckIgnore(db, context, zName, &ignored);
+      if( rc!=SQLITE_OK ){
+        addFreeEntries(aWorking, aStaged, aNew);
+        return rc;
+      }
+      if( !ignored ) continue;
+    }
+    rc = addAppendTableEntry(context, &aNew, &nNew, &aStaged[k]);
+    if( rc!=SQLITE_OK ){
+      addFreeEntries(aWorking, aStaged, aNew);
+      return rc;
+    }
+  }
+
+  rc = addWriteStagedCatalog(db, cs, aNew, nNew);
+  addFreeEntries(aWorking, aStaged, aNew);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+  }
+  return rc;
+}
+
+static int addStageNamedTables(
+  sqlite3 *db,
+  sqlite3_context *context,
+  ChunkStore *cs,
+  const ProllyHash *pWorkingHash,
+  int argc,
+  sqlite3_value **argv
+){
+  struct TableEntry *aWorking = 0;
+  struct TableEntry *aStaged = 0;
+  int nWorking = 0;
+  int nStaged = 0;
+  int i;
+  int rc;
+
+  rc = addLoadWorkingAndStagedCatalogs(db, pWorkingHash,
+                                       &aWorking, &nWorking,
+                                       &aStaged, &nStaged);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(aWorking);
+    sqlite3_result_error(context, "failed to load staged catalog", -1);
+    return rc;
+  }
+
+  for(i=0; i<argc; i++){
+    const char *zTable = (const char*)sqlite3_value_text(argv[i]);
+    Pgno iTable = 0;
+    int j;
+    if( !zTable || zTable[0]=='-' || strcmp(zTable, ".")==0 ) continue;
+
+    {
+      int ignored = 0;
+      rc = addCheckIgnore(db, context, zTable, &ignored);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(aWorking);
+        sqlite3_free(aStaged);
+        return rc;
+      }
+      if( ignored ) continue;
+    }
+
+    rc = doltliteResolveTableName(db, zTable, &iTable);
+    if( rc!=SQLITE_OK ){
+      int found = 0;
+      for(j=0; j<nStaged; j++){
+        if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
+          if( j+1 < nStaged ){
+            memmove(&aStaged[j], &aStaged[j+1],
+                    (nStaged-j-1) * (int)sizeof(struct TableEntry));
+          }
+          nStaged--;
+          found = 1;
+          break;
+        }
+      }
+      if( !found ){
+        char *zErr = sqlite3_mprintf("table not found: %s", zTable);
+        sqlite3_free(aWorking);
+        sqlite3_free(aStaged);
+        if( zErr ){
+          sqlite3_result_error(context, zErr, -1);
+          sqlite3_free(zErr);
+        }else{
+          sqlite3_result_error_nomem(context);
+        }
+        return SQLITE_ERROR;
+      }
+      continue;
+    }
+
+    for(j=0; j<nWorking; j++){
+      if( aWorking[j].iTable==iTable ){
+        int k;
+        int updated = 0;
+        for(k=0; k<nStaged; k++){
+          if( aStaged[k].iTable==iTable ){
+            aStaged[k] = aWorking[j];
+            updated = 1;
+            break;
+          }
+        }
+        if( !updated ){
+          rc = addAppendTableEntry(context, &aStaged, &nStaged, &aWorking[j]);
+          if( rc!=SQLITE_OK ){
+            sqlite3_free(aWorking);
+            sqlite3_free(aStaged);
+            return rc;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  rc = addWriteStagedCatalog(db, cs, aStaged, nStaged);
+  sqlite3_free(aWorking);
+  sqlite3_free(aStaged);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+  }
+  return rc;
+}
+
 static void doltliteAddFunc(
   sqlite3_context *context,
   int argc,
@@ -493,312 +797,12 @@ static void doltliteAddFunc(
       return;
     }
 
-    if( stageAll ){
-      /* Filter working through dolt_ignore. An entry is preserved in
-      ** new staged as working's version unless its name matches an
-      ** ignore pattern, in which case the current staged entry (if
-      ** any) is kept instead — ignore blocks new staging but doesn't
-      ** un-stage tables that were already staged. Deletions (in
-      ** staged but not in working) are synced only for non-ignored
-      ** tables; ignored deletions stay in new staged to match Dolt.
-      **
-      ** zName ownership: doltliteLoadCatalog allocates each entry's
-      ** zName; we dup when copying into aNew so all three arrays
-      ** (aWorking/aStaged/aNew) have independent ownership and can
-      ** each be freed with doltliteFreeCatalog at the end. */
-      struct TableEntry *aWorking = 0;
-      struct TableEntry *aStaged = 0;
-      struct TableEntry *aNew = 0;
-      int nWorking = 0, nStaged = 0, nNew = 0;
-      int k;
-      ProllyHash stagedHash;
-
-      #define DA_FAIL(rc_expr) do { \
-        doltliteFreeCatalog(aWorking, nWorking); \
-        doltliteFreeCatalog(aStaged, nStaged); \
-        doltliteFreeCatalog(aNew, nNew); \
-        rc_expr; \
-        return; \
-      } while(0)
-
-      rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error(context, "failed to load working catalog", -1);
-        return;
-      }
-
-      doltliteGetSessionStaged(db, &stagedHash);
-      if( prollyHashIsEmpty(&stagedHash) ){
-        ProllyHash headCat;
-        rc = doltliteGetHeadCatalogHash(db, &headCat);
-        if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCat) ){
-          rc = doltliteLoadCatalog(db, &headCat, &aStaged, &nStaged, 0);
-        }
+      if( stageAll ){
+        rc = addStageAllTables(db, context, cs, &workingHash);
+        if( rc!=SQLITE_OK ) return;
       }else{
-        rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
-      }
-      if( rc!=SQLITE_OK ){
-        DA_FAIL(sqlite3_result_error(context, "failed to load staged catalog", -1));
-      }
-
-      for(k=0; k<nWorking; k++){
-        const char *zName = aWorking[k].zName;
-        int ignored = 0;
-        char *zIgnErr = 0;
-        int irc;
-        struct TableEntry *pUse = &aWorking[k];
-        struct TableEntry *aTmp;
-        char *zDup;
-
-        if( aWorking[k].iTable>1 && zName ){
-          irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
-          if( irc==SQLITE_CONSTRAINT ){
-            if( zIgnErr ){
-              sqlite3_result_error(context, zIgnErr, -1);
-              sqlite3_free(zIgnErr);
-              DA_FAIL((void)0);
-            }
-            DA_FAIL(sqlite3_result_error(context, "dolt_ignore conflict", -1));
-          }
-          if( irc!=SQLITE_OK ){
-            sqlite3_free(zIgnErr);
-            DA_FAIL(sqlite3_result_error_code(context, irc));
-          }
-          if( ignored ){
-            /* Keep the existing staged entry if any; otherwise skip. */
-            int j;
-            pUse = 0;
-            for(j=0; j<nStaged; j++){
-              if( aStaged[j].zName && strcmp(aStaged[j].zName, zName)==0 ){
-                pUse = &aStaged[j];
-                break;
-              }
-            }
-            if( !pUse ) continue;
-          }
-        }
-
-        aTmp = sqlite3_realloc(aNew, (nNew+1)*(int)sizeof(struct TableEntry));
-        if( !aTmp ) DA_FAIL(sqlite3_result_error_nomem(context));
-        aNew = aTmp;
-        zDup = pUse->zName ? sqlite3_mprintf("%s", pUse->zName) : 0;
-        if( pUse->zName && !zDup ) DA_FAIL(sqlite3_result_error_nomem(context));
-        aNew[nNew] = *pUse;
-        aNew[nNew].zName = zDup;
-        nNew++;
-      }
-
-      /* Deletions: staged entries absent from working are dropped,
-      ** unless they match an ignore pattern (in which case the
-      ** deletion stays un-synced and staged keeps them). */
-      for(k=0; k<nStaged; k++){
-        const char *zName = aStaged[k].zName;
-        int found = 0;
-        int j;
-        struct TableEntry *aTmp;
-        char *zDup;
-        if( aStaged[k].iTable<=1 || !zName ) continue;
-        for(j=0; j<nWorking; j++){
-          if( aWorking[j].zName && strcmp(aWorking[j].zName, zName)==0 ){
-            found = 1;
-            break;
-          }
-        }
-        if( found ) continue;
-        {
-          int ignored = 0;
-          char *zIgnErr = 0;
-          int irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
-          if( irc==SQLITE_CONSTRAINT ){
-            if( zIgnErr ){
-              sqlite3_result_error(context, zIgnErr, -1);
-              sqlite3_free(zIgnErr);
-              DA_FAIL((void)0);
-            }
-            DA_FAIL(sqlite3_result_error(context, "dolt_ignore conflict", -1));
-          }
-          if( irc!=SQLITE_OK ){
-            sqlite3_free(zIgnErr);
-            DA_FAIL(sqlite3_result_error_code(context, irc));
-          }
-          if( !ignored ) continue;
-        }
-        aTmp = sqlite3_realloc(aNew, (nNew+1)*(int)sizeof(struct TableEntry));
-        if( !aTmp ) DA_FAIL(sqlite3_result_error_nomem(context));
-        aNew = aTmp;
-        zDup = aStaged[k].zName ? sqlite3_mprintf("%s", aStaged[k].zName) : 0;
-        if( aStaged[k].zName && !zDup ) DA_FAIL(sqlite3_result_error_nomem(context));
-        aNew[nNew] = aStaged[k];
-        aNew[nNew].zName = zDup;
-        nNew++;
-      }
-
-      {
-        u8 *buf = 0;
-        int nBuf = 0;
-        ProllyHash newStagedHash;
-        rc = doltliteSerializeCatalogEntries(db, aNew, nNew, &buf, &nBuf);
-        if( rc!=SQLITE_OK ){
-          DA_FAIL(sqlite3_result_error_code(context, rc));
-        }
-        rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
-        sqlite3_free(buf);
-        if( rc==SQLITE_OK ){
-          doltliteSetSessionStaged(db, &newStagedHash);
-        }
-      }
-
-      doltliteFreeCatalog(aWorking, nWorking);
-      doltliteFreeCatalog(aStaged, nStaged);
-      doltliteFreeCatalog(aNew, nNew);
-      #undef DA_FAIL
-    }else{
-
-      struct TableEntry *aWorking = 0, *aStaged = 0;
-      int nWorking = 0, nStaged = 0;
-      ProllyHash stagedHash;
-
-
-      rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error(context, "failed to load working catalog", -1);
-        return;
-      }
-
-      doltliteGetSessionStaged(db, &stagedHash);
-      if( prollyHashIsEmpty(&stagedHash) ){
-
-        ProllyHash headCat;
-        rc = doltliteGetHeadCatalogHash(db, &headCat);
-        if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCat) ){
-          rc = doltliteLoadCatalog(db, &headCat, &aStaged, &nStaged, 0);
-        }
-      }else{
-        rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
-      }
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(aWorking);
-        sqlite3_result_error(context, "failed to load staged catalog", -1);
-        return;
-      }
-
-      for(i=0; i<argc; i++){
-        const char *zTable = (const char*)sqlite3_value_text(argv[i]);
-        Pgno iTable = 0;
-        int j;
-        int ignored = 0;
-        char *zIgnErr = 0;
-        int irc;
-
-        if( !zTable || zTable[0]=='-' || strcmp(zTable, ".")==0 ) continue;
-
-        /* Explicit-name add respects dolt_ignore: silent no-op for
-        ** ignored tables; error on conflicting patterns. */
-        irc = doltliteCheckIgnore(db, zTable, &ignored, &zIgnErr);
-        if( irc==SQLITE_CONSTRAINT ){
-          sqlite3_free(aWorking);
-          sqlite3_free(aStaged);
-          if( zIgnErr ){
-            sqlite3_result_error(context, zIgnErr, -1);
-            sqlite3_free(zIgnErr);
-          }else{
-            sqlite3_result_error(context, "dolt_ignore conflict", -1);
-          }
-          return;
-        }
-        if( irc!=SQLITE_OK ){
-          sqlite3_free(zIgnErr);
-          sqlite3_free(aWorking);
-          sqlite3_free(aStaged);
-          sqlite3_result_error_code(context, irc);
-          return;
-        }
-        if( ignored ) continue;
-
-        rc = doltliteResolveTableName(db, zTable, &iTable);
-        if( rc!=SQLITE_OK ){
-
-          int found = 0;
-          for(j=0; j<nStaged; j++){
-            if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
-              if( j+1 < nStaged ){
-                memmove(&aStaged[j], &aStaged[j+1],
-                        (nStaged-j-1) * (int)sizeof(struct TableEntry));
-              }
-              nStaged--;
-              found = 1;
-              break;
-            }
-          }
-          if( !found ){
-            char *zErr = sqlite3_mprintf(
-                "table not found: %s", zTable);
-            sqlite3_free(aWorking);
-            sqlite3_free(aStaged);
-            if( zErr ){
-              sqlite3_result_error(context, zErr, -1);
-              sqlite3_free(zErr);
-            }else{
-              sqlite3_result_error_nomem(context);
-            }
-            return;
-          }
-          continue;
-        }
-
-
-        for(j=0; j<nWorking; j++){
-          if( aWorking[j].iTable==iTable ){
-
-            int k;
-            int updated = 0;
-            for(k=0; k<nStaged; k++){
-              if( aStaged[k].iTable==iTable ){
-                aStaged[k] = aWorking[j];
-                updated = 1;
-                break;
-              }
-            }
-            if( !updated ){
-
-              struct TableEntry *aNew = sqlite3_realloc(aStaged,
-                  (nStaged+1)*(int)sizeof(struct TableEntry));
-              if( !aNew ){
-                sqlite3_free(aWorking);
-                sqlite3_free(aStaged);
-                sqlite3_result_error_nomem(context);
-                return;
-              }
-              aStaged = aNew;
-              aStaged[nStaged] = aWorking[j];
-              nStaged++;
-            }
-            break;
-          }
-        }
-      }
-
-
-      {
-        u8 *buf = 0;
-        int nBuf = 0;
-        ProllyHash newStagedHash;
-        rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
-        if( rc!=SQLITE_OK ){
-          sqlite3_free(aWorking);
-          sqlite3_free(aStaged);
-          sqlite3_result_error_code(context, rc);
-          return;
-        }
-        rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
-        sqlite3_free(buf);
-        if( rc==SQLITE_OK ){
-          doltliteSetSessionStaged(db, &newStagedHash);
-        }
-      }
-
-      sqlite3_free(aWorking);
-      sqlite3_free(aStaged);
+        rc = addStageNamedTables(db, context, cs, &workingHash, argc, argv);
+        if( rc!=SQLITE_OK ) return;
     }
 
     rc = doltlitePersistWorkingSet(db);
@@ -1249,6 +1253,172 @@ static void doltliteCommitFunc(
   sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
 }
 
+static int resetPathMatchesName(const struct TableEntry *pEntry, const char *zName){
+  return pEntry->zName && strcmp(pEntry->zName, zName)==0;
+}
+
+static int resetFindTableIndex(struct TableEntry *aTables, int nTables,
+                               const char *zTable){
+  int i;
+  for(i=0; i<nTables; i++){
+    if( resetPathMatchesName(&aTables[i], zTable) ) return i;
+  }
+  return -1;
+}
+
+static int resetStageNamedPaths(
+  sqlite3 *db,
+  ChunkStore *cs,
+  const char **azPaths,
+  int nPaths
+){
+  struct TableEntry *aHead = 0, *aStaged = 0;
+  int nHead = 0, nStaged = 0;
+  ProllyHash headCatHash, stagedHash;
+  int p;
+  int rc;
+
+  rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !prollyHashIsEmpty(&headCatHash) ){
+    rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  doltliteGetSessionStaged(db, &stagedHash);
+  if( !prollyHashIsEmpty(&stagedHash) ){
+    rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(aHead);
+      return rc;
+    }
+  }
+
+  for(p=0; p<nPaths; p++){
+    const char *zTable = azPaths[p];
+    int iH = resetFindTableIndex(aHead, nHead, zTable);
+    int iS = resetFindTableIndex(aStaged, nStaged, zTable);
+    if( iH<0 && iS<0 ){
+      rc = SQLITE_NOTFOUND;
+      goto done;
+    }
+    if( iH<0 ){
+      if( iS+1<nStaged ){
+        memmove(&aStaged[iS], &aStaged[iS+1],
+                (nStaged-iS-1)*(int)sizeof(struct TableEntry));
+      }
+      nStaged--;
+    }else if( iS<0 ){
+      struct TableEntry *aNew = sqlite3_realloc(aStaged,
+          (nStaged+1)*(int)sizeof(struct TableEntry));
+      if( !aNew ){
+        rc = SQLITE_NOMEM;
+        goto done;
+      }
+      aStaged = aNew;
+      aStaged[nStaged++] = aHead[iH];
+    }else{
+      aStaged[iS] = aHead[iH];
+    }
+  }
+
+  {
+    u8 *buf = 0;
+    int nBuf = 0;
+    ProllyHash newStagedHash;
+    rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
+    if( rc==SQLITE_OK ){
+      rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
+    }
+    sqlite3_free(buf);
+    if( rc==SQLITE_OK ){
+      doltliteSetSessionStaged(db, &newStagedHash);
+    }
+  }
+
+done:
+  sqlite3_free(aHead);
+  sqlite3_free(aStaged);
+  return rc;
+}
+
+static int mergeAbortInPlace(sqlite3 *db){
+  ProllyHash headCatHash;
+  int rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteHardReset(db, &headCatHash);
+  if( rc!=SQLITE_OK ) return rc;
+  doltliteSetSessionStaged(db, &headCatHash);
+  doltliteClearSessionMergeState(db);
+  return doltlitePersistWorkingSet(db);
+}
+
+static int mergeFastForward(
+  sqlite3 *db,
+  sqlite3_context *context,
+  ChunkStore *cs,
+  const ProllyHash *pOurHead,
+  const ProllyHash *pTheirHead
+){
+  DoltliteCommit theirCommit;
+  DoltliteTxnState savedState;
+  int graphLocked = 0;
+  int rc;
+  char hx[PROLLY_HASH_SIZE*2+1];
+
+  memset(&theirCommit, 0, sizeof(theirCommit));
+  memset(&savedState, 0, sizeof(savedState));
+
+  rc = doltliteLoadCommit(db, pTheirHead, &theirCommit);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to load commit", -1);
+    return rc;
+  }
+  rc = doltliteSaveTxnState(db, &savedState);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&theirCommit);
+    sqlite3_result_error_code(context, rc);
+    return rc;
+  }
+  rc = doltliteRefreshAndConfirmHead(db, cs, pOurHead);
+  if( rc==SQLITE_BUSY ){
+    doltliteTxnStateClear(&savedState);
+    doltliteCommitClear(&theirCommit);
+    sqlite3_result_error(context,
+      "merge conflict: another connection committed to this branch. Please retry your transaction.",
+      -1);
+    return rc;
+  }
+  if( rc!=SQLITE_OK ){
+    doltliteTxnStateClear(&savedState);
+    doltliteCommitClear(&theirCommit);
+    sqlite3_result_error_code(context, rc);
+    return rc;
+  }
+  graphLocked = 1;
+  rc = doltliteSwitchCatalog(db, &theirCommit.catalogHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteUpdateBranchWorkingState(db, doltliteGetSessionBranch(db),
+                                          &theirCommit.catalogHash, NULL);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteAdvanceBranch(db, pTheirHead, &theirCommit.catalogHash);
+  }
+  if( graphLocked ) chunkStoreUnlock(cs);
+  if( rc!=SQLITE_OK ){
+    int rc2 = doltliteRestoreTxnState(db, &savedState);
+    doltliteTxnStateClear(&savedState);
+    doltliteCommitClear(&theirCommit);
+    sqlite3_result_error_code(context, rc2==SQLITE_OK ? rc : rc2);
+    return rc;
+  }
+  doltliteTxnStateClear(&savedState);
+  doltliteCommitClear(&theirCommit);
+  doltliteHashToHex(pTheirHead, hx);
+  sqlite3_result_text(context, hx, -1, SQLITE_TRANSIENT);
+  return SQLITE_OK;
+}
+
 static void doltliteResetFunc(
   sqlite3_context *context,
   int argc,
@@ -1319,113 +1489,18 @@ static void doltliteResetFunc(
 
 
   if( nPaths>0 ){
-    struct TableEntry *aHead = 0, *aStaged = 0;
-    int nHead = 0, nStaged = 0;
-    ProllyHash headCatHash, stagedHash;
-    int p;
-
     if( isHard || isSoft || zRef ){
       sqlite3_result_error(context,
         "table paths cannot be combined with --hard / --soft or a target ref", -1);
       sqlite3_free(azPaths);
       return;
     }
-
-    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(azPaths);
-      sqlite3_result_error(context, "failed to read HEAD", -1);
+    rc = resetStageNamedPaths(db, cs, azPaths, nPaths);
+    sqlite3_free(azPaths);
+    if( rc==SQLITE_NOTFOUND ){
+      sqlite3_result_error(context, "table not found", -1);
       return;
     }
-    if( !prollyHashIsEmpty(&headCatHash) ){
-      rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(azPaths);
-        sqlite3_result_error(context, "failed to load HEAD catalog", -1);
-        return;
-      }
-    }
-
-    doltliteGetSessionStaged(db, &stagedHash);
-    if( !prollyHashIsEmpty(&stagedHash) ){
-      rc = doltliteLoadCatalog(db, &stagedHash, &aStaged, &nStaged, 0);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(aHead);
-        sqlite3_free(azPaths);
-        sqlite3_result_error(context, "failed to load staged catalog", -1);
-        return;
-      }
-    }
-
-    for(p=0; p<nPaths; p++){
-      const char *zTable = azPaths[p];
-      int iH;
-      int iS = -1;
-      int j;
-
-
-      for(j=0; j<nStaged; j++){
-        if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
-          iS = j; break;
-        }
-      }
-      iH = -1;
-      for(j=0; j<nHead; j++){
-        if( aHead[j].zName && strcmp(aHead[j].zName, zTable)==0 ){
-          iH = j; break;
-        }
-      }
-
-      if( iH<0 && iS<0 ){
-        char *zErr = sqlite3_mprintf("table not found: %s", zTable);
-        sqlite3_free(aHead); sqlite3_free(aStaged); sqlite3_free(azPaths);
-        sqlite3_result_error(context, zErr ? zErr : "table not found", -1);
-        sqlite3_free(zErr);
-        return;
-      }
-
-      if( iH<0 ){
-
-        if( iS+1<nStaged ){
-          memmove(&aStaged[iS], &aStaged[iS+1],
-                  (nStaged-iS-1)*(int)sizeof(struct TableEntry));
-        }
-        nStaged--;
-      }else if( iS<0 ){
-
-        struct TableEntry *aNew = sqlite3_realloc(aStaged,
-            (nStaged+1)*(int)sizeof(struct TableEntry));
-        if( !aNew ){
-          sqlite3_free(aHead); sqlite3_free(aStaged); sqlite3_free(azPaths);
-          sqlite3_result_error_nomem(context);
-          return;
-        }
-        aStaged = aNew;
-        aStaged[nStaged] = aHead[iH];
-        nStaged++;
-      }else{
-
-        aStaged[iS] = aHead[iH];
-      }
-    }
-
-    {
-      u8 *buf = 0;
-      int nBuf = 0;
-      ProllyHash newStagedHash;
-      rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
-      if( rc==SQLITE_OK ){
-        rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
-      }
-      sqlite3_free(buf);
-      if( rc==SQLITE_OK ){
-        doltliteSetSessionStaged(db, &newStagedHash);
-      }
-    }
-
-    sqlite3_free(aHead);
-    sqlite3_free(aStaged);
-    sqlite3_free(azPaths);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       return;
@@ -1534,7 +1609,8 @@ static void doltliteResetFunc(
           if( !zName ) continue;
           for(k=0; k<nHead; k++){
             if( aHead[k].zName && strcmp(aHead[k].zName, zName)==0 ){
-              inHead = 1; break;
+              inHead = 1;
+              break;
             }
           }
           if( !inHead ){
@@ -1547,7 +1623,6 @@ static void doltliteResetFunc(
         }
         sqlite3_finalize(pStmt);
       }
-
 
       if( rc==SQLITE_OK && nUntracked>0 ){
         ProllyHash workingHash;
@@ -1562,17 +1637,16 @@ static void doltliteResetFunc(
           rc = doltliteLoadCatalog(db, &targetCatHash, &aTarget, &nTarget, 0);
         }
         if( rc==SQLITE_OK ){
-
           for(j=0; j<nWorking; j++){
             int tgtIdx = -1;
             if( aWorking[j].iTable==1 ){
-
               continue;
             }
             for(k=0; k<nTarget; k++){
               if( aTarget[k].zName && aWorking[j].zName
                && strcmp(aTarget[k].zName, aWorking[j].zName)==0 ){
-                tgtIdx = k; break;
+                tgtIdx = k;
+                break;
               }
             }
             if( tgtIdx>=0 ){
@@ -1584,7 +1658,8 @@ static void doltliteResetFunc(
           u8 *buf = 0;
           int nBuf = 0;
           ProllyHash mergedHash;
-          rc = doltliteSerializeCatalogEntries(db, aWorking, nWorking, &buf, &nBuf);
+          rc = doltliteSerializeCatalogEntries(db, aWorking, nWorking,
+                                               &buf, &nBuf);
           if( rc==SQLITE_OK ){
             rc = chunkStorePut(cs, buf, nBuf, &mergedHash);
           }
@@ -1699,32 +1774,12 @@ static void doltliteMergeFunc(
 
   if( isAbort ){
     u8 isMerging = 0;
-    ProllyHash headCatHash;
-
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
     if( !isMerging ){
       sqlite3_result_error(context, "no merge in progress", -1);
       return;
     }
-
-
-    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(context, "failed to read HEAD", -1);
-      return;
-    }
-    rc = doltliteHardReset(db, &headCatHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(context, "abort reset failed", -1);
-      return;
-    }
-
-
-    doltliteSetSessionStaged(db, &headCatHash);
-
-
-    doltliteClearSessionMergeState(db);
-    rc = doltlitePersistWorkingSet(db);
+    rc = mergeAbortInPlace(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       return;
@@ -1784,61 +1839,7 @@ static void doltliteMergeFunc(
   ** creating a merge commit. --no-ff forces a merge commit even
   ** when ff would be possible (matches git behavior). */
   if( prollyHashCompare(&ancestorHash, &ourHead)==0 && !noFastForward ){
-
-    char hx[PROLLY_HASH_SIZE*2+1];
-
-    rc = doltliteLoadCommit(db, &theirHead, &theirCommit);
-    if( rc!=SQLITE_OK ){ sqlite3_result_error(context, "failed to load commit", -1); return; }
-
-    rc = doltliteSaveTxnState(db, &savedState);
-    if( rc!=SQLITE_OK ){
-      doltliteCommitClear(&theirCommit);
-      sqlite3_result_error_code(context, rc);
-      return;
-    }
-
-    rc = doltliteRefreshAndConfirmHead(db, cs, &ourHead);
-    if( rc==SQLITE_BUSY ){
-      doltliteTxnStateClear(&savedState);
-      doltliteCommitClear(&theirCommit);
-      sqlite3_result_error(context,
-        "merge conflict: another connection committed to this branch. Please retry your transaction.",
-        -1);
-      return;
-    }
-    if( rc!=SQLITE_OK ){
-      doltliteTxnStateClear(&savedState);
-      doltliteCommitClear(&theirCommit);
-      sqlite3_result_error_code(context, rc);
-      return;
-    }
-    graphLocked = 1;
-
-    rc = doltliteSwitchCatalog(db, &theirCommit.catalogHash);
-    if( rc==SQLITE_OK ){
-      rc = doltliteUpdateBranchWorkingState(db,
-          doltliteGetSessionBranch(db), &theirCommit.catalogHash, NULL);
-    }
-    if( rc==SQLITE_OK ){
-      rc = doltliteAdvanceBranch(db, &theirHead, &theirCommit.catalogHash);
-    }
-    if( graphLocked ){
-      chunkStoreUnlock(cs);
-      graphLocked = 0;
-    }
-    if( rc!=SQLITE_OK ){
-      int rc2 = doltliteRestoreTxnState(db, &savedState);
-      doltliteTxnStateClear(&savedState);
-      doltliteCommitClear(&theirCommit);
-      sqlite3_result_error_code(context, rc2==SQLITE_OK ? rc : rc2);
-      return;
-    }
-    doltliteTxnStateClear(&savedState);
-
-    doltliteCommitClear(&theirCommit);
-
-    doltliteHashToHex(&theirHead, hx);
-    sqlite3_result_text(context, hx, -1, SQLITE_TRANSIENT);
+    rc = mergeFastForward(db, context, cs, &ourHead, &theirHead);
     return;
   }
 

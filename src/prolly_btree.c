@@ -1475,6 +1475,48 @@ static void freeSavepointTables(struct SavepointTableState *pState){
   memset(&pState->conflictsCatalogHash, 0, sizeof(pState->conflictsCatalogHash));
 }
 
+static void captureSavepointSessionState(
+  Btree *pBtree,
+  struct SavepointTableState *pState
+){
+  pState->iNextTable = pBtree->iNextTable;
+  pState->stagedCatalog = pBtree->stagedCatalog;
+  pState->isMerging = pBtree->isMerging;
+  pState->mergeCommitHash = pBtree->mergeCommitHash;
+  pState->conflictsCatalogHash = pBtree->conflictsCatalogHash;
+}
+
+static void restoreSavepointSessionState(
+  Btree *pBtree,
+  struct SavepointTableState *pState
+){
+  pBtree->stagedCatalog = pState->stagedCatalog;
+  pBtree->isMerging = pState->isMerging;
+  pBtree->mergeCommitHash = pState->mergeCommitHash;
+  pBtree->conflictsCatalogHash = pState->conflictsCatalogHash;
+}
+
+static int captureSavepointTables(
+  Btree *pBtree,
+  struct SavepointTableState *pState
+){
+  int k;
+  if( pBtree->nTables<=0 ) return SQLITE_OK;
+  pState->aTables = sqlite3_malloc(
+      pBtree->nTables * (int)sizeof(SavepointTableEntry));
+  if( !pState->aTables ) return SQLITE_NOMEM;
+  for(k=0; k<pBtree->nTables; k++){
+    pState->aTables[k].iTable = pBtree->aTables[k].iTable;
+    pState->aTables[k].root = pBtree->aTables[k].root;
+    pState->aTables[k].schemaHash = pBtree->aTables[k].schemaHash;
+    pState->aTables[k].flags = pBtree->aTables[k].flags;
+    pState->aTables[k].pendingFlushSeekEdits =
+        pBtree->aTables[k].pendingFlushSeekEdits;
+  }
+  pState->nTables = pBtree->nTables;
+  return SQLITE_OK;
+}
+
 static void pushSavepointOnMutMaps(Btree *pBtree, int level){
   int k;
   BtCursor *p;
@@ -1791,7 +1833,6 @@ static int restoreTablesFromSavepoint(
 
 static int pushSavepoint(Btree *pBtree){
   struct SavepointTableState *pState;
-  int k;
 
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
     int nNew = pBtree->nSavepointAlloc ? pBtree->nSavepointAlloc*2 : 8;
@@ -1808,24 +1849,8 @@ static int pushSavepoint(Btree *pBtree){
   pState->nPendingSnapshot = 0;
   pState->nPendingSnapshotAlloc = 0;
   pState->nTables = 0;
-  pState->iNextTable = pBtree->iNextTable;
-  pState->stagedCatalog = pBtree->stagedCatalog;
-  pState->isMerging = pBtree->isMerging;
-  pState->mergeCommitHash = pBtree->mergeCommitHash;
-  pState->conflictsCatalogHash = pBtree->conflictsCatalogHash;
-  if( pBtree->nTables > 0 ){
-    pState->aTables = sqlite3_malloc(pBtree->nTables * (int)sizeof(SavepointTableEntry));
-    if( !pState->aTables ) return SQLITE_NOMEM;
-    for(k=0; k<pBtree->nTables; k++){
-      pState->aTables[k].iTable = pBtree->aTables[k].iTable;
-      pState->aTables[k].root = pBtree->aTables[k].root;
-      pState->aTables[k].schemaHash = pBtree->aTables[k].schemaHash;
-      pState->aTables[k].flags = pBtree->aTables[k].flags;
-      pState->aTables[k].pendingFlushSeekEdits =
-          pBtree->aTables[k].pendingFlushSeekEdits;
-    }
-    pState->nTables = pBtree->nTables;
-  }
+  captureSavepointSessionState(pBtree, pState);
+  if( captureSavepointTables(pBtree, pState)!=SQLITE_OK ) return SQLITE_NOMEM;
 
   pBtree->nSavepoint++;
   pushSavepointOnMutMaps(pBtree, pBtree->nSavepoint);
@@ -2907,6 +2932,60 @@ int sqlite3BtreeBeginStmt(Btree *p, int iStatement){
   return p->pOps->xBeginStmt(p, iStatement);
 }
 
+static int rollbackCommittedState(Btree *p, BtShared *pBt){
+  int rc = restoreFromCommitted(p);
+  if( rc!=SQLITE_OK ) return rc;
+  invalidateCursors(pBt, 0, SQLITE_ABORT);
+  invalidateSchema(p);
+  return SQLITE_OK;
+}
+
+static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
+  int j;
+  for(j=0; j<p->nSavepoint; j++){
+    freeSavepointTables(&p->aSavepointTables[j]);
+  }
+  p->nSavepoint = 0;
+  return rollbackCommittedState(p, pBt);
+}
+
+static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
+  struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
+  int j;
+  int rc = rollbackMutMapsToSavepoint(p, iSavepoint + 1, iSavepoint);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pState->aTables ){
+    rc = restoreTablesFromSavepoint(p, pState);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  restoreSavepointSessionState(p, pState);
+  freeSavepointTables(pState);
+  for(j=iSavepoint+1; j<p->nSavepoint; j++){
+    freeSavepointTables(&p->aSavepointTables[j]);
+  }
+  p->nSavepoint = iSavepoint;
+  invalidateCursors(pBt, 0, SQLITE_ABORT);
+  invalidateSchema(p);
+  return SQLITE_OK;
+}
+
+static int releaseSavepointsFrom(Btree *p, int iSavepoint){
+  int j;
+  releaseMutMapsToSavepoint(p, iSavepoint + 1);
+  if( iSavepoint > 0 ){
+    for(j=iSavepoint; j<p->nSavepoint; j++){
+      int rc = inheritPendingSnapshots(&p->aSavepointTables[iSavepoint-1],
+                                       &p->aSavepointTables[j]);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  for(j=iSavepoint; j<p->nSavepoint; j++){
+    freeSavepointTables(&p->aSavepointTables[j]);
+  }
+  p->nSavepoint = iSavepoint;
+  return SQLITE_OK;
+}
+
 static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
   BtShared *pBt;
 
@@ -2927,58 +3006,16 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
 
     if( iSavepoint>=0 && iSavepoint<p->nSavepoint
      && p->aSavepointTables ){
-      struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
-      int rc = rollbackMutMapsToSavepoint(p, iSavepoint + 1, iSavepoint);
-      if( rc!=SQLITE_OK ) return rc;
-      if( pState->aTables ){
-        rc = restoreTablesFromSavepoint(p, pState);
-        if( rc!=SQLITE_OK ) return rc;
-      }
-      p->stagedCatalog = pState->stagedCatalog;
-      p->isMerging = pState->isMerging;
-      p->mergeCommitHash = pState->mergeCommitHash;
-      p->conflictsCatalogHash = pState->conflictsCatalogHash;
-      freeSavepointTables(pState);
-
-      {
-        int j;
-        for(j=iSavepoint+1; j<p->nSavepoint; j++){
-          freeSavepointTables(&p->aSavepointTables[j]);
-        }
-      }
-      p->nSavepoint = iSavepoint;
-      invalidateCursors(pBt, 0, SQLITE_ABORT);
-      invalidateSchema(p);
+      return rollbackNamedSavepoint(p, pBt, iSavepoint);
     } else if( iSavepoint>=0 && iSavepoint>=p->nSavepoint ){
-      { int rc2 = restoreFromCommitted(p); if( rc2 ) return rc2; }
-      invalidateCursors(pBt, 0, SQLITE_ABORT);
-      invalidateSchema(p);
+      return rollbackCommittedState(p, pBt);
     } else if( iSavepoint<0 ){
-      int j;
-      for(j=0; j<p->nSavepoint; j++){
-        freeSavepointTables(&p->aSavepointTables[j]);
-      }
-      { int rc2 = restoreFromCommitted(p); if( rc2 ) return rc2; }
-      p->nSavepoint = 0;
-      invalidateCursors(pBt, 0, SQLITE_ABORT);
-      invalidateSchema(p);
+      return rollbackAllSavepoints(p, pBt);
     }
   } else {
 
     if( iSavepoint>=0 && iSavepoint<p->nSavepoint ){
-      int j;
-      releaseMutMapsToSavepoint(p, iSavepoint + 1);
-      if( iSavepoint > 0 ){
-        for(j=iSavepoint; j<p->nSavepoint; j++){
-          int rc = inheritPendingSnapshots(&p->aSavepointTables[iSavepoint-1],
-                                           &p->aSavepointTables[j]);
-          if( rc!=SQLITE_OK ) return rc;
-        }
-      }
-      for(j=iSavepoint; j<p->nSavepoint; j++){
-        freeSavepointTables(&p->aSavepointTables[j]);
-      }
-      p->nSavepoint = iSavepoint;
+      return releaseSavepointsFrom(p, iSavepoint);
     }
   }
 
