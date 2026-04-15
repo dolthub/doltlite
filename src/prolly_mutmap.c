@@ -3,11 +3,35 @@
 
 #include "prolly_mutmap.h"
 #include "prolly_node.h"
+#include <assert.h>
 #include <string.h>
 #include <stdlib.h>
 
 #define MUTMAP_INIT_CAP 16
 #define MUTMAP_MIN_HASH 32
+
+struct ProllyMutMapOps {
+  int (*xInsert)(ProllyMutMap*, const u8*, int, i64, const u8*, int);
+  int (*xDelete)(ProllyMutMap*, const u8*, int, i64);
+  int (*xFindRc)(ProllyMutMap*, const u8*, int, i64, ProllyMutMapEntry**);
+  ProllyMutMapEntry *(*xFind)(ProllyMutMap*, const u8*, int, i64);
+  ProllyMutMapEntry *(*xEntryAt)(ProllyMutMap*, int);
+  int (*xOrderIndexFromEntry)(ProllyMutMap*, ProllyMutMapEntry*);
+  void (*xIterFirst)(ProllyMutMapIter*, ProllyMutMap*);
+  ProllyMutMapEntry *(*xIterEntry)(ProllyMutMapIter*);
+  void (*xIterSeek)(ProllyMutMapIter*, ProllyMutMap*, const u8*, int, i64);
+  void (*xIterLast)(ProllyMutMapIter*, ProllyMutMap*);
+  int (*xRollbackToSavepoint)(ProllyMutMap*, int);
+  void (*xReleaseSavepoint)(ProllyMutMap*, int);
+  int (*xClone)(ProllyMutMap**, const ProllyMutMap*);
+};
+
+static const ProllyMutMapOps gLegacyMutMapOps;
+
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+static int shadowEnsureInit(ProllyMutMap *mm);
+static int shadowValidateMatches(ProllyMutMap *mm);
+#endif
 static int compareEntries(
   u8 isIntKey,
   const u8 *pKeyA, int nKeyA, i64 intKeyA,
@@ -293,6 +317,15 @@ int prollyMutMapInitKind(
   mm->isIntKey = isIntKey;
   mm->keepSorted = keepSorted;
   mm->eKind = (u8)eKind;
+  mm->pOps = &gLegacyMutMapOps;
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+  if( eKind==PROLLY_MUTMAP_KIND_INDEX ){
+    int rc = shadowEnsureInit(mm);
+    if( rc!=SQLITE_OK ){
+      return rc;
+    }
+  }
+#endif
   return SQLITE_OK;
 }
 
@@ -499,6 +532,11 @@ static int prollyMutMapDeleteLegacy(
 void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level){
   if( !mm ) return;
   mm->currentSavepointLevel = level;
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+  if( mm->pShadow ){
+    mm->pShadow->currentSavepointLevel = level;
+  }
+#endif
 }
 
 /* Order matters: restore in-place mutations from the undo log
@@ -721,6 +759,11 @@ static void prollyMutMapIterLastLegacy(ProllyMutMapIter *it, ProllyMutMap *mm){
 ** attribute to that level. */
 void prollyMutMapClear(ProllyMutMap *mm){
   int i;
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+  if( mm->pShadow ){
+    prollyMutMapClear(mm->pShadow);
+  }
+#endif
   for(i=0; i<mm->nEntries; i++){
     freeEntryData(&mm->aEntries[i]);
   }
@@ -737,6 +780,13 @@ void prollyMutMapClear(ProllyMutMap *mm){
 }
 
 void prollyMutMapFree(ProllyMutMap *mm){
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+  if( mm->pShadow ){
+    prollyMutMapFree(mm->pShadow);
+    sqlite3_free(mm->pShadow);
+    mm->pShadow = 0;
+  }
+#endif
   prollyMutMapClear(mm);
   sqlite3_free(mm->aEntries);
   mm->aEntries = 0;
@@ -765,6 +815,7 @@ static int prollyMutMapCloneLegacy(ProllyMutMap **out, const ProllyMutMap *src){
   dst->keepSorted = src->keepSorted;
   dst->orderDirty = src->orderDirty;
   dst->eKind = src->eKind;
+  dst->pOps = src->pOps;
   dst->levelBase = src->levelBase;
   dst->currentSavepointLevel = src->currentSavepointLevel;
 
@@ -891,52 +942,131 @@ int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
   return SQLITE_OK;
 }
 
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+static int shadowEnsureInit(ProllyMutMap *mm){
+  int rc;
+  if( mm->pShadow || mm->eKind!=PROLLY_MUTMAP_KIND_INDEX ) return SQLITE_OK;
+  mm->pShadow = sqlite3_malloc(sizeof(ProllyMutMap));
+  if( !mm->pShadow ) return SQLITE_NOMEM;
+  rc = prollyMutMapInitKind(
+      mm->pShadow, mm->isIntKey, 1, PROLLY_MUTMAP_KIND_TABLE);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(mm->pShadow);
+    mm->pShadow = 0;
+    return rc;
+  }
+  mm->pShadow->currentSavepointLevel = mm->currentSavepointLevel;
+  return SQLITE_OK;
+}
+
+static int shadowValidateMatches(ProllyMutMap *mm){
+  ProllyMutMapIter aIt;
+  ProllyMutMapIter bIt;
+  int i;
+  if( !mm->pShadow ) return SQLITE_OK;
+  if( mm->nEntries != mm->pShadow->nEntries ) return SQLITE_CORRUPT;
+  mm->pOps->xIterFirst(&aIt, mm);
+  mm->pShadow->pOps->xIterFirst(&bIt, mm->pShadow);
+  for(i=0; i<mm->nEntries; i++){
+    ProllyMutMapEntry *aEntry;
+    ProllyMutMapEntry *bEntry;
+    if( !prollyMutMapIterValid(&aIt) || !prollyMutMapIterValid(&bIt) ){
+      return SQLITE_CORRUPT;
+    }
+    aEntry = mm->pOps->xIterEntry(&aIt);
+    bEntry = mm->pShadow->pOps->xIterEntry(&bIt);
+    if( !aEntry || !bEntry ) return SQLITE_CORRUPT;
+    if( aEntry->op != bEntry->op ) return SQLITE_CORRUPT;
+    if( aEntry->intKey != bEntry->intKey ) return SQLITE_CORRUPT;
+    if( aEntry->nKey != bEntry->nKey ) return SQLITE_CORRUPT;
+    if( aEntry->nVal != bEntry->nVal ) return SQLITE_CORRUPT;
+    if( aEntry->nKey > 0 && memcmp(aEntry->pKey, bEntry->pKey, aEntry->nKey)!=0 ){
+      return SQLITE_CORRUPT;
+    }
+    if( aEntry->nVal > 0 && memcmp(aEntry->pVal, bEntry->pVal, aEntry->nVal)!=0 ){
+      return SQLITE_CORRUPT;
+    }
+    prollyMutMapIterNext(&aIt);
+    prollyMutMapIterNext(&bIt);
+  }
+  if( prollyMutMapIterValid(&aIt) || prollyMutMapIterValid(&bIt) ){
+    return SQLITE_CORRUPT;
+  }
+  return SQLITE_OK;
+}
+#endif
+
+static const ProllyMutMapOps gLegacyMutMapOps = {
+  prollyMutMapInsertLegacy,
+  prollyMutMapDeleteLegacy,
+  prollyMutMapFindRcLegacy,
+  prollyMutMapFindLegacy,
+  prollyMutMapEntryAtLegacy,
+  prollyMutMapOrderIndexFromEntryLegacy,
+  prollyMutMapIterFirstLegacy,
+  prollyMutMapIterEntryLegacy,
+  prollyMutMapIterSeekLegacy,
+  prollyMutMapIterLastLegacy,
+  prollyMutMapRollbackToSavepointLegacy,
+  prollyMutMapReleaseSavepointLegacy,
+  prollyMutMapCloneLegacy
+};
+
 int prollyMutMapInsert(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
   const u8 *pVal, int nVal
 ){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      return prollyMutMapInsertLegacy(mm, pKey, nKey, intKey, pVal, nVal);
-    default:
-      return SQLITE_MISUSE;
+  int rc;
+  if( !mm->pOps ) return SQLITE_MISUSE;
+  rc = mm->pOps->xInsert(mm, pKey, nKey, intKey, pVal, nVal);
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+  if( rc==SQLITE_OK && mm->pShadow ){
+    rc = mm->pShadow->pOps->xInsert(mm->pShadow, pKey, nKey, intKey, pVal, nVal);
+    if( rc==SQLITE_OK ) rc = shadowValidateMatches(mm);
   }
+#endif
+  return rc;
 }
 
 int prollyMutMapDelete(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey
 ){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      return prollyMutMapDeleteLegacy(mm, pKey, nKey, intKey);
-    default:
-      return SQLITE_MISUSE;
+  int rc;
+  if( !mm->pOps ) return SQLITE_MISUSE;
+  rc = mm->pOps->xDelete(mm, pKey, nKey, intKey);
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+  if( rc==SQLITE_OK && mm->pShadow ){
+    rc = mm->pShadow->pOps->xDelete(mm->pShadow, pKey, nKey, intKey);
+    if( rc==SQLITE_OK ) rc = shadowValidateMatches(mm);
   }
+#endif
+  return rc;
 }
 
 int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      return prollyMutMapRollbackToSavepointLegacy(mm, level);
-    default:
-      return SQLITE_MISUSE;
+  int rc;
+  if( !mm->pOps ) return SQLITE_MISUSE;
+  rc = mm->pOps->xRollbackToSavepoint(mm, level);
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+  if( rc==SQLITE_OK && mm->pShadow ){
+    rc = mm->pShadow->pOps->xRollbackToSavepoint(mm->pShadow, level);
+    if( rc==SQLITE_OK ) rc = shadowValidateMatches(mm);
   }
+#endif
+  return rc;
 }
 
 void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      prollyMutMapReleaseSavepointLegacy(mm, level);
-      break;
-    default:
-      break;
+  if( !mm->pOps ) return;
+  mm->pOps->xReleaseSavepoint(mm, level);
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+  if( mm->pShadow ){
+    mm->pShadow->pOps->xReleaseSavepoint(mm->pShadow, level);
+    assert(shadowValidateMatches(mm)==SQLITE_OK);
   }
+#endif
 }
 
 int prollyMutMapFindRc(
@@ -944,109 +1074,80 @@ int prollyMutMapFindRc(
   const u8 *pKey, int nKey, i64 intKey,
   ProllyMutMapEntry **ppEntry
 ){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      return prollyMutMapFindRcLegacy(mm, pKey, nKey, intKey, ppEntry);
-    default:
-      *ppEntry = 0;
-      return SQLITE_MISUSE;
+  if( !mm->pOps ){
+    *ppEntry = 0;
+    return SQLITE_MISUSE;
   }
+  return mm->pOps->xFindRc(mm, pKey, nKey, intKey, ppEntry);
 }
 
 ProllyMutMapEntry *prollyMutMapFind(
   ProllyMutMap *mm, const u8 *pKey, int nKey, i64 intKey
 ){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      return prollyMutMapFindLegacy(mm, pKey, nKey, intKey);
-    default:
-      return 0;
-  }
+  return mm->pOps ? mm->pOps->xFind(mm, pKey, nKey, intKey) : 0;
 }
 
 ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      return prollyMutMapEntryAtLegacy(mm, idx);
-    default:
-      return 0;
-  }
+  return mm->pOps ? mm->pOps->xEntryAt(mm, idx) : 0;
 }
 
 int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      return prollyMutMapOrderIndexFromEntryLegacy(mm, pEntry);
-    default:
-      return -1;
-  }
+  return mm->pOps ? mm->pOps->xOrderIndexFromEntry(mm, pEntry) : -1;
 }
 
 void prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      prollyMutMapIterFirstLegacy(it, mm);
-      break;
-    default:
-      it->pMap = mm;
-      it->idx = 0;
-      break;
+  if( mm->pOps ){
+    mm->pOps->xIterFirst(it, mm);
+  }else{
+    it->pMap = mm;
+    it->idx = 0;
   }
 }
 
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
-  switch( it->pMap->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      return prollyMutMapIterEntryLegacy(it);
-    default:
-      return 0;
-  }
+  return it->pMap->pOps ? it->pMap->pOps->xIterEntry(it) : 0;
 }
 
 void prollyMutMapIterSeek(
   ProllyMutMapIter *it, ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey
 ){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      prollyMutMapIterSeekLegacy(it, mm, pKey, nKey, intKey);
-      break;
-    default:
-      it->pMap = mm;
-      it->idx = 0;
-      break;
+  if( mm->pOps ){
+    mm->pOps->xIterSeek(it, mm, pKey, nKey, intKey);
+  }else{
+    it->pMap = mm;
+    it->idx = 0;
   }
 }
 
 void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
-  switch( mm->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      prollyMutMapIterLastLegacy(it, mm);
-      break;
-    default:
-      it->pMap = mm;
-      it->idx = 0;
-      break;
+  if( mm->pOps ){
+    mm->pOps->xIterLast(it, mm);
+  }else{
+    it->pMap = mm;
+    it->idx = 0;
   }
 }
 
 int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
-  switch( src->eKind ){
-    case PROLLY_MUTMAP_KIND_TABLE:
-    case PROLLY_MUTMAP_KIND_INDEX:
-      return prollyMutMapCloneLegacy(out, src);
-    default:
-      *out = 0;
-      return SQLITE_MISUSE;
+  int rc;
+  if( !src->pOps ){
+    *out = 0;
+    return SQLITE_MISUSE;
   }
+  rc = src->pOps->xClone(out, src);
+#ifdef DOLTLITE_MUTMAP_SHADOW_VALIDATE
+  if( rc==SQLITE_OK && *out && src->pShadow ){
+    rc = prollyMutMapClone(&(*out)->pShadow, src->pShadow);
+    if( rc!=SQLITE_OK ){
+      prollyMutMapFree(*out);
+      sqlite3_free(*out);
+      *out = 0;
+      return rc;
+    }
+  }
+#endif
+  return rc;
 }
 
 #endif

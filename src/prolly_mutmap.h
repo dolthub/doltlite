@@ -9,6 +9,7 @@
 typedef struct ProllyMutMap ProllyMutMap;
 typedef struct ProllyMutMapEntry ProllyMutMapEntry;
 typedef struct ProllyMutMapIter ProllyMutMapIter;
+typedef struct ProllyMutMapOps ProllyMutMapOps;
 typedef enum ProllyMutMapKind ProllyMutMapKind;
 
 enum ProllyMutMapKind {
@@ -44,6 +45,8 @@ struct ProllyMutMap {
   u8 keepSorted;
   u8 orderDirty;
   u8 eKind;
+  const ProllyMutMapOps *pOps;
+  ProllyMutMap *pShadow;
   int nEntries;
   int nAlloc;
   int levelBase;
