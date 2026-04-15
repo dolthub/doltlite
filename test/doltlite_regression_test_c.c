@@ -2525,9 +2525,9 @@ static void run_mutmap_differential_randomized(void){
   memset(&stack, 0, sizeof(stack));
 
   check("mutmap_diff_init_sorted",
-        prollyMutMapInitKind(&sorted, 1, 1, PROLLY_MUTMAP_KIND_TABLE)==SQLITE_OK);
+        prollyMutMapInitMode(&sorted, 1, 1)==SQLITE_OK);
   check("mutmap_diff_init_lazy",
-        prollyMutMapInitKind(&lazy, 1, 0, PROLLY_MUTMAP_KIND_INDEX)==SQLITE_OK);
+        prollyMutMapInitMode(&lazy, 1, 0)==SQLITE_OK);
 
   for(i=0; i<1500; i++){
     unsigned int r = mutmapRandNext(&rng);

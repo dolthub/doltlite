@@ -1,8 +1,7 @@
 # MutMap Design Notes
 
 This document defines the behavioral contract of `ProllyMutMap` as it
-exists today and the staged refactor plan for splitting table and index
-edit tracking behind the same API.
+exists today, and the constraints any future rewrite needs to respect.
 
 ## Purpose
 
@@ -78,59 +77,31 @@ must preserve:
 - continued attribution of subsequent writes to the same active
   savepoint level
 
-## Current Implementations
+## Current Implementation
 
-Today there is still one concrete implementation, but the mutmap now
-records a logical kind:
+Today there is one concrete mutmap implementation. That is deliberate.
+Past performance experiments in this area have shown that carrying two
+implementations in the code at once creates too much complexity and too
+many opportunities for correctness regressions.
 
-- `PROLLY_MUTMAP_KIND_TABLE`
-- `PROLLY_MUTMAP_KIND_INDEX`
+This note exists to make future work safer without changing that fact.
 
-Both kinds currently route through the same legacy array-backed
-implementation. This is intentional. The kind split exists first so we
-can:
+## Future Rewrite Constraints
 
-- document the intended workload split
-- differential-test semantics before changing behavior
-- let `prolly_btree` stop assuming there is only one implementation
+The index path is still the most likely place for a future performance
+rewrite, but any such rewrite should remain off the production path
+until it clearly:
 
-## Planned Split
+- matches the current implementation's correctness
+- matches or beats the current implementation's write-path performance
+- preserves savepoint behavior, clone behavior, and ordered iteration
 
-### Table MutMap
+So the immediate goal is not “split the implementation now.” The
+immediate goal is:
 
-The table path will stay close to the current implementation at first.
-It already behaves correctly, and it is tightly coupled to savepoint
-snapshot behavior.
-
-Near-term goal:
-
-- cleanup and invariant hardening only
-
-### Index MutMap
-
-The index path is the real performance target.
-
-Desired properties:
-
-- cheap exact lookup
-- cheap ordered iteration without global sort materialization
-- stable identity for savepoint undo
-- no rank-conversion hot path just to step a cursor
-
-The intended replacement is an ordered mutable structure, most likely a
-skip-list-like edit set paired with exact-key lookup.
-
-## Refactor Plan
-
-1. Lock down behavior with differential tests.
-2. Keep the current implementation behind kind-aware dispatch.
-3. Add a new index implementation behind the same API.
-4. Run the new index implementation in shadow / differential mode.
-5. Cut non-table roots over only after:
-   - exact lookup matches
-   - ordered iteration matches
-   - savepoint rollback/release matches
-   - clone / snapshot semantics match
+- document the contract precisely
+- strengthen model-based randomized coverage
+- only attempt a rewrite once the safety rails are in place
 
 ## Invariants Worth Asserting
 
@@ -159,5 +130,4 @@ for randomized sequences of:
 - release savepoint
 - rollback savepoint
 
-That harness is the safety rail for the later index implementation
-rewrite.
+That harness is the safety rail for any later mutmap rewrite.

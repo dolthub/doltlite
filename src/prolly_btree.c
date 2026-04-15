@@ -1305,7 +1305,6 @@ static int ensureMutMap(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
   int keepSorted;
-  ProllyMutMapKind eKind;
   if( pCur->pMutMap ){
     return SQLITE_OK;
   }
@@ -1315,8 +1314,7 @@ static int ensureMutMap(BtCursor *pCur){
   }
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   keepSorted = tableEntryIsTableRoot(pCur->pBtree, pTE);
-  eKind = keepSorted ? PROLLY_MUTMAP_KIND_TABLE : PROLLY_MUTMAP_KIND_INDEX;
-  rc = prollyMutMapInitKind(pCur->pMutMap, pCur->curIntKey, (u8)keepSorted, eKind);
+  rc = prollyMutMapInitMode(pCur->pMutMap, pCur->curIntKey, (u8)keepSorted);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pCur->pMutMap);
     pCur->pMutMap = 0;
@@ -1572,8 +1570,7 @@ static int allocEmptyPendingLike(ProllyMutMap *pSrc, ProllyMutMap **ppOut){
   *ppOut = 0;
   pNew = sqlite3_malloc(sizeof(ProllyMutMap));
   if( !pNew ) return SQLITE_NOMEM;
-  rc = prollyMutMapInitKind(
-      pNew, pSrc->isIntKey, pSrc->keepSorted, (ProllyMutMapKind)pSrc->eKind);
+  rc = prollyMutMapInitMode(pNew, pSrc->isIntKey, pSrc->keepSorted);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pNew);
     return rc;
