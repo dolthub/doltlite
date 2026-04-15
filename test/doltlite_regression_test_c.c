@@ -45,6 +45,7 @@
 **   ./doltlite_regression_test_c open_rejects_corrupt_working_set
 **   ./doltlite_regression_test_c prolly_blob_cursor_seek_past_max
 **   ./doltlite_regression_test_c prolly_cursor_empty_leaf_root
+**   ./doltlite_regression_test_c mutmap_differential_randomized
 */
 #include <stdio.h>
 #include <stdlib.h>
@@ -2337,6 +2338,285 @@ static void run_mutmap_empty_reverse_iter(void){
   prollyMutMapFree(&mm);
 }
 
+typedef struct MutMapModelEntry MutMapModelEntry;
+struct MutMapModelEntry {
+  i64 key;
+  u8 op;
+  int val;
+};
+
+typedef struct MutMapModel MutMapModel;
+struct MutMapModel {
+  MutMapModelEntry *a;
+  int n;
+  int nAlloc;
+};
+
+typedef struct MutMapModelStack MutMapModelStack;
+struct MutMapModelStack {
+  MutMapModel *a;
+  int n;
+  int nAlloc;
+};
+
+static void mutmapModelClear(MutMapModel *p){
+  sqlite3_free(p->a);
+  memset(p, 0, sizeof(*p));
+}
+
+static int mutmapModelEnsureCapacity(MutMapModel *p, int nMin){
+  if( p->nAlloc < nMin ){
+    int nNew = p->nAlloc ? p->nAlloc * 2 : 8;
+    MutMapModelEntry *aNew;
+    while( nNew < nMin ) nNew *= 2;
+    aNew = sqlite3_realloc(p->a, nNew * (int)sizeof(MutMapModelEntry));
+    if( !aNew ) return SQLITE_NOMEM;
+    p->a = aNew;
+    p->nAlloc = nNew;
+  }
+  return SQLITE_OK;
+}
+
+static int mutmapModelFindIndex(const MutMapModel *p, i64 key){
+  int lo = 0;
+  int hi = p->n;
+  while( lo < hi ){
+    int mid = lo + (hi - lo) / 2;
+    if( p->a[mid].key < key ){
+      lo = mid + 1;
+    }else if( p->a[mid].key > key ){
+      hi = mid;
+    }else{
+      return mid;
+    }
+  }
+  return ~lo;
+}
+
+static int mutmapModelSet(MutMapModel *p, i64 key, u8 op, int val){
+  int idx = mutmapModelFindIndex(p, key);
+  if( idx >= 0 ){
+    p->a[idx].op = op;
+    p->a[idx].val = val;
+    return SQLITE_OK;
+  }
+  idx = ~idx;
+  if( mutmapModelEnsureCapacity(p, p->n + 1)!=SQLITE_OK ) return SQLITE_NOMEM;
+  if( idx < p->n ){
+    memmove(&p->a[idx + 1], &p->a[idx], (p->n - idx) * (int)sizeof(MutMapModelEntry));
+  }
+  p->a[idx].key = key;
+  p->a[idx].op = op;
+  p->a[idx].val = val;
+  p->n++;
+  return SQLITE_OK;
+}
+
+static int mutmapModelClone(MutMapModel *pDst, const MutMapModel *pSrc){
+  memset(pDst, 0, sizeof(*pDst));
+  if( pSrc->n==0 ) return SQLITE_OK;
+  pDst->a = sqlite3_malloc(pSrc->n * (int)sizeof(MutMapModelEntry));
+  if( !pDst->a ) return SQLITE_NOMEM;
+  memcpy(pDst->a, pSrc->a, pSrc->n * sizeof(MutMapModelEntry));
+  pDst->n = pSrc->n;
+  pDst->nAlloc = pSrc->n;
+  return SQLITE_OK;
+}
+
+static int mutmapModelPush(MutMapModelStack *pStack, const MutMapModel *pCur){
+  MutMapModel snap;
+  memset(&snap, 0, sizeof(snap));
+  if( mutmapModelClone(&snap, pCur)!=SQLITE_OK ) return SQLITE_NOMEM;
+  if( pStack->n >= pStack->nAlloc ){
+    int nNew = pStack->nAlloc ? pStack->nAlloc * 2 : 4;
+    MutMapModel *aNew = sqlite3_realloc(pStack->a, nNew * (int)sizeof(MutMapModel));
+    if( !aNew ){
+      mutmapModelClear(&snap);
+      return SQLITE_NOMEM;
+    }
+    pStack->a = aNew;
+    pStack->nAlloc = nNew;
+  }
+  pStack->a[pStack->n++] = snap;
+  return SQLITE_OK;
+}
+
+static void mutmapModelRestore(MutMapModel *pDst, const MutMapModel *pSrc){
+  mutmapModelClear(pDst);
+  (void)mutmapModelClone(pDst, pSrc);
+}
+
+static void mutmapModelPopRelease(MutMapModelStack *pStack){
+  if( pStack->n<=0 ) return;
+  mutmapModelClear(&pStack->a[pStack->n - 1]);
+  pStack->n--;
+}
+
+static void mutmapModelPopRollback(MutMapModelStack *pStack, MutMapModel *pCur){
+  if( pStack->n<=0 ) return;
+  mutmapModelRestore(pCur, &pStack->a[pStack->n - 1]);
+  mutmapModelClear(&pStack->a[pStack->n - 1]);
+  pStack->n--;
+}
+
+static void mutmapModelStackClear(MutMapModelStack *pStack){
+  int i;
+  for(i=0; i<pStack->n; i++){
+    mutmapModelClear(&pStack->a[i]);
+  }
+  sqlite3_free(pStack->a);
+  memset(pStack, 0, sizeof(*pStack));
+}
+
+static unsigned int mutmapRandNext(unsigned int *pState){
+  *pState = (*pState * 1103515245u) + 12345u;
+  return *pState;
+}
+
+static int mutmapAssertMatchesModel(
+  const char *zLabel,
+  ProllyMutMap *pMap,
+  const MutMapModel *pModel
+){
+  (void)zLabel;
+  int ok = 1;
+  int i;
+  ProllyMutMapIter it;
+  if( prollyMutMapCount(pMap)!=pModel->n ){
+    return 0;
+  }
+  prollyMutMapIterFirst(&it, pMap);
+  for(i=0; i<pModel->n; i++){
+    ProllyMutMapEntry *pEntry;
+    ProllyMutMapEntry *pFind;
+    if( !prollyMutMapIterValid(&it) ) return 0;
+    pEntry = prollyMutMapIterEntry(&it);
+    if( !pEntry ) return 0;
+    ok = ok && pEntry->intKey==pModel->a[i].key;
+    ok = ok && pEntry->op==pModel->a[i].op;
+    ok = ok && ((pEntry->op==PROLLY_EDIT_DELETE)
+             || (pEntry->nVal==(int)sizeof(int) && memcmp(pEntry->pVal, &pModel->a[i].val, sizeof(int))==0));
+    ok = ok && prollyMutMapEntryAt(pMap, i)==pEntry;
+    ok = ok && prollyMutMapOrderIndexFromEntry(pMap, pEntry)==i;
+    pFind = prollyMutMapFind(pMap, 0, 0, pModel->a[i].key);
+    ok = ok && pFind==pEntry;
+    prollyMutMapIterNext(&it);
+  }
+  ok = ok && !prollyMutMapIterValid(&it);
+  for(i=0; i<8; i++){
+    i64 miss = 1000 + i;
+    ok = ok && prollyMutMapFind(pMap, 0, 0, miss)==0;
+  }
+  return ok;
+}
+
+static void run_mutmap_differential_randomized(void){
+  ProllyMutMap sorted;
+  ProllyMutMap lazy;
+  MutMapModel model;
+  MutMapModelStack stack;
+  unsigned int rng = 0x5eed1234u;
+  int level = 0;
+  int rc;
+  int i;
+
+  printf("=== MutMap Differential Randomized Test ===\n\n");
+  memset(&model, 0, sizeof(model));
+  memset(&stack, 0, sizeof(stack));
+
+  check("mutmap_diff_init_sorted",
+        prollyMutMapInitKind(&sorted, 1, 1, PROLLY_MUTMAP_KIND_TABLE)==SQLITE_OK);
+  check("mutmap_diff_init_lazy",
+        prollyMutMapInitKind(&lazy, 1, 0, PROLLY_MUTMAP_KIND_INDEX)==SQLITE_OK);
+
+  for(i=0; i<1500; i++){
+    unsigned int r = mutmapRandNext(&rng);
+    int op = (int)(r % 10);
+    i64 key = (i64)(mutmapRandNext(&rng) % 64);
+    int val = (int)(mutmapRandNext(&rng) % 100000);
+
+    if( op < 4 ){
+      rc = mutmapModelSet(&model, key, PROLLY_EDIT_INSERT, val);
+      check("mutmap_diff_model_insert_rc", rc==SQLITE_OK);
+      check("mutmap_diff_sorted_insert_rc",
+            prollyMutMapInsert(&sorted, 0, 0, key, (const u8*)&val, sizeof(val))==SQLITE_OK);
+      check("mutmap_diff_lazy_insert_rc",
+            prollyMutMapInsert(&lazy, 0, 0, key, (const u8*)&val, sizeof(val))==SQLITE_OK);
+    }else if( op < 7 ){
+      rc = mutmapModelSet(&model, key, PROLLY_EDIT_DELETE, 0);
+      check("mutmap_diff_model_delete_rc", rc==SQLITE_OK);
+      check("mutmap_diff_sorted_delete_rc",
+            prollyMutMapDelete(&sorted, 0, 0, key)==SQLITE_OK);
+      check("mutmap_diff_lazy_delete_rc",
+            prollyMutMapDelete(&lazy, 0, 0, key)==SQLITE_OK);
+    }else if( op == 7 ){
+      level++;
+      check("mutmap_diff_push_snapshot",
+            mutmapModelPush(&stack, &model)==SQLITE_OK);
+      prollyMutMapPushSavepoint(&sorted, level);
+      prollyMutMapPushSavepoint(&lazy, level);
+    }else if( op == 8 ){
+      if( level > 0 ){
+        mutmapModelPopRollback(&stack, &model);
+        check("mutmap_diff_sorted_rollback_rc",
+              prollyMutMapRollbackToSavepoint(&sorted, level)==SQLITE_OK);
+        check("mutmap_diff_lazy_rollback_rc",
+              prollyMutMapRollbackToSavepoint(&lazy, level)==SQLITE_OK);
+        level--;
+      }
+    }else{
+      if( level > 0 ){
+        mutmapModelPopRelease(&stack);
+        prollyMutMapReleaseSavepoint(&sorted, level);
+        prollyMutMapReleaseSavepoint(&lazy, level);
+        level--;
+      }
+    }
+
+    check("mutmap_diff_sorted_matches_model",
+          mutmapAssertMatchesModel("sorted", &sorted, &model));
+    check("mutmap_diff_lazy_matches_model",
+          mutmapAssertMatchesModel("lazy", &lazy, &model));
+
+    if( (i % 97)==0 ){
+      ProllyMutMap *pClone = 0;
+      check("mutmap_diff_clone_sorted_rc", prollyMutMapClone(&pClone, &sorted)==SQLITE_OK);
+      if( pClone ){
+        check("mutmap_diff_clone_sorted_matches_model",
+              mutmapAssertMatchesModel("sorted_clone", pClone, &model));
+        prollyMutMapFree(pClone);
+        sqlite3_free(pClone);
+      }
+      pClone = 0;
+      check("mutmap_diff_clone_lazy_rc", prollyMutMapClone(&pClone, &lazy)==SQLITE_OK);
+      if( pClone ){
+        check("mutmap_diff_clone_lazy_matches_model",
+              mutmapAssertMatchesModel("lazy_clone", pClone, &model));
+        prollyMutMapFree(pClone);
+        sqlite3_free(pClone);
+      }
+    }
+  }
+
+  while( level > 0 ){
+    mutmapModelPopRollback(&stack, &model);
+    check("mutmap_diff_sorted_final_rollback_rc",
+          prollyMutMapRollbackToSavepoint(&sorted, level)==SQLITE_OK);
+    check("mutmap_diff_lazy_final_rollback_rc",
+          prollyMutMapRollbackToSavepoint(&lazy, level)==SQLITE_OK);
+    level--;
+  }
+  check("mutmap_diff_sorted_final_matches_model",
+        mutmapAssertMatchesModel("sorted_final", &sorted, &model));
+  check("mutmap_diff_lazy_final_matches_model",
+        mutmapAssertMatchesModel("lazy_final", &lazy, &model));
+
+  mutmapModelStackClear(&stack);
+  mutmapModelClear(&model);
+  prollyMutMapFree(&sorted);
+  prollyMutMapFree(&lazy);
+}
+
 static void run_prolly_mutate_preserves_order_across_skipped_subtrees(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -2936,6 +3216,7 @@ static const RegressionCase aCases[] = {
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
+  { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },
   { "refs_hash_rollback_restore", "Chunk Store Rollback Restores Refs Hash Test", run_chunk_store_rollback_restores_refs_hash },
   { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
