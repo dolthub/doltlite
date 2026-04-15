@@ -16,6 +16,7 @@
 #
 
 set -u
+set -o pipefail
 
 DOLTLITE="${1:-./doltlite}"
 DOLT="${2:-dolt}"
@@ -23,6 +24,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 # Replace each distinct hash with H1, H2, ... in first-appearance order;
 # strip CRLF.
@@ -54,11 +56,11 @@ oracle() {
            | normalize)
 
   local dolt_setup
-  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
 
   (
     cd "$dir/dt" || exit 1
-    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    vc_oracle_init_repo
     echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat(name, char(9), hash, char(9), latest_commit_message, char(9), remote, char(9), branch, char(9), dirty) FROM dolt_branches ORDER BY name;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
@@ -66,7 +68,7 @@ oracle() {
   # Dolt prints "true"/"false" for the dirty tinyint(1); doltlite prints
   # "0"/"1". Map both to 0/1 before comparison.
   local dt_out
-  dt_out=$(tail -n +2 "$dir/dt.raw" \
+  dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" \
            | tr -d '"' \
            | sed -E 's/\ttrue$/\t1/; s/\tfalse$/\t0/' \
            | normalize)

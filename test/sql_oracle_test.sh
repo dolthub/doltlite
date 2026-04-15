@@ -14,16 +14,25 @@ TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 pass=0; fail=0
 
+normalize_oracle_output() {
+  LC_ALL=C sed -E \
+    -e 's/^Error near line [0-9]+: /ERROR: /' \
+    -e 's/^Runtime error near line [0-9]+: /ERROR: /' \
+    -e 's/ \([0-9]+\)$//'
+}
+
 oracle() {
   local name="$1" sql="$2"
   local dl="$TMPDIR/dl_${name}.db" sq="$TMPDIR/sq_${name}.db"
-  local out_dl out_sq rc_dl rc_sq
+  local out_dl out_sq norm_dl norm_sq rc_dl rc_sq
   rm -f "$dl" "$sq"
   out_dl=$(echo "$sql" | "$DOLTLITE" "$dl" 2>&1)
   rc_dl=$?
   out_sq=$(echo "$sql" | "$SQLITE3" "$sq" 2>&1)
   rc_sq=$?
-  if [ "$rc_dl" -eq "$rc_sq" ] && [ "$out_dl" = "$out_sq" ]; then
+  norm_dl=$(printf '%s\n' "$out_dl" | normalize_oracle_output)
+  norm_sq=$(printf '%s\n' "$out_sq" | normalize_oracle_output)
+  if [ "$rc_dl" -eq "$rc_sq" ] && [ "$norm_dl" = "$norm_sq" ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))

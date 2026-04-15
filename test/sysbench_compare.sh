@@ -34,6 +34,11 @@ random.seed($SEED)
 R = $ROWS
 d = '$TMPDIR'
 
+def rint(a, b):
+    if b < a:
+        b = a
+    return random.randint(a, b)
+
 def rstr(n):
     return ''.join(random.choices(string.ascii_lowercase, k=n))
 
@@ -43,7 +48,7 @@ def write_prepare(f):
     f.write("CREATE INDEX k_idx ON sbtest1(k);\n")
     f.write("BEGIN;\n")
     for i in range(1, R+1):
-        f.write(f"INSERT INTO sbtest1 VALUES({i},{random.randint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest1 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def write_prepare_join(f):
@@ -51,7 +56,7 @@ def write_prepare_join(f):
     f.write("CREATE INDEX k_idx2 ON sbtest2(k);\n")
     f.write("BEGIN;\n")
     for i in range(1, min(R,1000)+1):
-        f.write(f"INSERT INTO sbtest2 VALUES({i},{random.randint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest2 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def write_prepare_types(f):
@@ -90,107 +95,107 @@ def w_bulk_insert(f):
     f.write("CREATE TABLE sbtest_bulk(id INTEGER PRIMARY KEY, k INTEGER, c TEXT, pad TEXT);\n")
     f.write("BEGIN;\n")
     for i in range(1, R+1):
-        f.write(f"INSERT INTO sbtest_bulk VALUES({i},{random.randint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest_bulk VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_point_select(f):
     for _ in range(10000):
-        f.write(f"SELECT c FROM sbtest1 WHERE id={random.randint(1,R)};\n")
+        f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
 
 def w_range_select(f):
     for _ in range(1000):
-        s=random.randint(1,R-100)
+        s=rint(1,R-100)
         f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
 
 def w_sum_range(f):
     for _ in range(1000):
-        s=random.randint(1,R-100)
+        s=rint(1,R-100)
         f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
 
 def w_order_range(f):
     for _ in range(100):
-        s=random.randint(1,R-100)
+        s=rint(1,R-100)
         f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
 
 def w_distinct_range(f):
     for _ in range(100):
-        s=random.randint(1,R-100)
+        s=rint(1,R-100)
         f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
 
 def w_index_scan(f):
     for _ in range(1000):
-        f.write(f"SELECT id, c FROM sbtest1 WHERE k={random.randint(1,R)};\n")
+        f.write(f"SELECT id, c FROM sbtest1 WHERE k={rint(1,R)};\n")
 
 def w_update_index(f):
     f.write("BEGIN;\n")
     for _ in range(10000):
-        f.write(f"UPDATE sbtest1 SET k={random.randint(1,R)} WHERE id={random.randint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
     f.write("COMMIT;\n")
 
 def w_update_non_index(f):
     f.write("BEGIN;\n")
     for _ in range(10000):
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={random.randint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
     f.write("COMMIT;\n")
 
 def w_delete_insert(f):
     f.write("BEGIN;\n")
     for _ in range(5000):
-        id=random.randint(1,R)
+        id=rint(1,R)
         f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{random.randint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_oltp_insert(f):
     f.write("BEGIN;\n")
     for i in range(R+1, R+5001):
-        f.write(f"INSERT INTO sbtest1 VALUES({i},{random.randint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest1 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_write_only(f):
     f.write("BEGIN;\n")
     for _ in range(1000):
-        f.write(f"UPDATE sbtest1 SET k={random.randint(1,R)} WHERE id={random.randint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={random.randint(1,R)};\n")
-        id=random.randint(1,R)
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        id=rint(1,R)
         f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{random.randint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_select_random_points(f):
     for _ in range(1000):
-        pts=','.join(str(random.randint(1,R)) for _ in range(10))
+        pts=','.join(str(rint(1,R)) for _ in range(10))
         f.write(f"SELECT id,k,c,pad FROM sbtest1 WHERE id IN ({pts});\n")
 
 def w_select_random_ranges(f):
     for _ in range(1000):
-        s=random.randint(1,R-10)
+        s=rint(1,R-10)
         f.write(f"SELECT count(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+9};\n")
 
 def w_covering_index_scan(f):
     for _ in range(1000):
-        s=random.randint(1,R-100)
+        s=rint(1,R-100)
         f.write(f"SELECT count(k) FROM sbtest1 WHERE k BETWEEN {s} AND {s+99};\n")
 
 def w_groupby_scan(f):
     for _ in range(100):
-        s=random.randint(1,R-1000)
+        s=rint(1,R-1000)
         f.write(f"SELECT k, count(*) FROM sbtest1 WHERE id BETWEEN {s} AND {s+999} GROUP BY k ORDER BY k;\n")
 
 def w_index_join(f):
     for _ in range(500):
-        s=random.randint(1,R-10)
+        s=rint(1,R-10)
         f.write(f"SELECT a.id, b.id FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE a.id BETWEEN {s} AND {s+9};\n")
 
 def w_index_join_scan(f):
     for _ in range(100):
-        s=random.randint(1,950)
+        s=rint(1,min(R,950))
         f.write(f"SELECT count(*) FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE b.id BETWEEN {s} AND {s+49};\n")
 
 def w_types_delete_insert(f):
     f.write("BEGIN;\n")
     for _ in range(5000):
-        id=random.randint(1,1000)
+        id=rint(1,1000)
         f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
         f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
@@ -206,30 +211,30 @@ def w_table_scan(f):
 def w_read_only(f):
     for _ in range(1000):
         for _ in range(10):
-            f.write(f"SELECT c FROM sbtest1 WHERE id={random.randint(1,R)};\n")
-        s=random.randint(1,R-100)
+            f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
+        s=rint(1,R-100)
         f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s=random.randint(1,R-100)
+        s=rint(1,R-100)
         f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s=random.randint(1,R-100)
+        s=rint(1,R-100)
         f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
-        s=random.randint(1,R-100)
+        s=rint(1,R-100)
         f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
 
 def w_read_write(f):
     f.write("BEGIN;\n")
     for _ in range(1000):
         for _ in range(10):
-            f.write(f"SELECT c FROM sbtest1 WHERE id={random.randint(1,R)};\n")
-        s=random.randint(1,R-100)
+            f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
+        s=rint(1,R-100)
         f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s=random.randint(1,R-100)
+        s=rint(1,R-100)
         f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        f.write(f"UPDATE sbtest1 SET k={random.randint(1,R)} WHERE id={random.randint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={random.randint(1,R)};\n")
-        id=random.randint(1,R)
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        id=rint(1,R)
         f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{random.randint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 # Generate all test SQL files

@@ -28,3 +28,7 @@ vc_oracle_run_dolt_script() {
     printf '%s\n' "$sql" | "$DOLT" sql "$@" >"$out" 2>"$err"
   )
 }
+
+vc_oracle_tail_csv_body() {
+  tail -n +2 "$1" | tr -d '"'
+}

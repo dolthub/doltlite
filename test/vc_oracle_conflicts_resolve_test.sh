@@ -14,6 +14,7 @@
 #
 
 set -u
+set -o pipefail
 
 DOLTLITE="${1:-./doltlite}"
 DOLT="${2:-dolt}"
@@ -21,6 +22,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 # Build a standard merge-conflict setup and add a resolution + query.
 # Compare the final table data (SELECT id, v FROM t ORDER BY id) and
@@ -47,8 +49,7 @@ oracle() {
   # @@autocommit=0 and @@dolt_allow_commit_conflicts=1 persist
   # across the setup, merge, resolution, and query.
   local dolt_all
-  dolt_all=$(printf '%s\n%s' "$setup" "$resolve_and_query" \
-             | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+  dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$setup" "$resolve_and_query")")
 
   local dt_out
   dt_out=$(

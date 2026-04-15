@@ -23,6 +23,7 @@
 #
 
 set -u
+set -o pipefail
 
 DOLTLITE="${1:-./doltlite}"
 DOLT="${2:-dolt}"
@@ -30,6 +31,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() {
   tr -d '\r' | sort
@@ -54,8 +56,7 @@ oracle() {
   # Same scenario piped as a single `dolt sql` invocation so
   # @@autocommit=0 and @@dolt_allow_commit_conflicts=1 persist.
   local dolt_all
-  dolt_all=$(printf '%s\n%s' "$setup" "$query" \
-             | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+  dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$setup" "$query")")
 
   local dt_out
   dt_out=$(
