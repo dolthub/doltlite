@@ -271,6 +271,7 @@ struct Btree {
     u8 isMerging;
     ProllyHash mergeCommitHash;
     ProllyHash conflictsCatalogHash;
+    ProllyHash constraintViolationsHash;
   } *aSavepointTables;
 
   ProllyHash committedCatalogHash;
@@ -278,6 +279,7 @@ struct Btree {
   u8 committedIsMerging;
   ProllyHash committedMergeCommitHash;
   ProllyHash committedConflictsCatalogHash;
+  ProllyHash committedConstraintViolationsHash;
 
 
   char *zBranch;
@@ -299,6 +301,13 @@ struct Btree {
   ProllyHash preRebaseWorkingCat;
   ProllyHash rebaseOntoCommit;
   char *zRebaseOrigBranch;
+
+  /* FK / UNIQUE / CHECK violations detected at merge time. Persisted
+  ** in the v4 working set blob alongside (and independently of) the
+  ** merge-conflicts hash. Non-empty means dolt_commit refuses unless
+  ** --force is passed and the user has cleared the per-table
+  ** dolt_constraint_violations_<table> vtable. */
+  ProllyHash constraintViolationsHash;
 
   const struct BtreeOps *pOps;
   void *pOrigBtree;
@@ -420,7 +429,8 @@ static int btreeLoadWorkingSetBlob(
   u8 *pIsRebasing,
   ProllyHash *pPreRebaseCat,
   ProllyHash *pRebaseOnto,
-  char **pzRebaseOrigBranch
+  char **pzRebaseOrigBranch,
+  ProllyHash *pConstraintViolations
 );
 
 static int canReadCursorOwnPending(BtShared *pBt, struct TableEntry *pTE){
@@ -439,7 +449,8 @@ static int btreeStoreWorkingSetBlob(
   u8 isRebasing,
   const ProllyHash *pPreRebaseCat,
   const ProllyHash *pRebaseOnto,
-  const char *zRebaseOrigBranch
+  const char *zRebaseOrigBranch,
+  const ProllyHash *pConstraintViolations
 );
 static int btreeWriteWorkingState(
   ChunkStore *cs,
@@ -1523,6 +1534,7 @@ static void freeSavepointTables(struct SavepointTableState *pState){
   pState->isMerging = 0;
   memset(&pState->mergeCommitHash, 0, sizeof(pState->mergeCommitHash));
   memset(&pState->conflictsCatalogHash, 0, sizeof(pState->conflictsCatalogHash));
+  memset(&pState->constraintViolationsHash, 0, sizeof(pState->constraintViolationsHash));
 }
 
 static void captureSavepointSessionState(
@@ -1534,6 +1546,7 @@ static void captureSavepointSessionState(
   pState->isMerging = pBtree->isMerging;
   pState->mergeCommitHash = pBtree->mergeCommitHash;
   pState->conflictsCatalogHash = pBtree->conflictsCatalogHash;
+  pState->constraintViolationsHash = pBtree->constraintViolationsHash;
 }
 
 static void restoreSavepointSessionState(
@@ -1544,6 +1557,7 @@ static void restoreSavepointSessionState(
   pBtree->isMerging = pState->isMerging;
   pBtree->mergeCommitHash = pState->mergeCommitHash;
   pBtree->conflictsCatalogHash = pState->conflictsCatalogHash;
+  pBtree->constraintViolationsHash = pState->constraintViolationsHash;
 }
 
 static int captureSavepointTables(
@@ -2100,6 +2114,7 @@ int sqlite3BtreeOpen(
     ProllyHash branchCommit;
     ProllyHash preRebaseCat;
     ProllyHash rebaseOnto;
+    ProllyHash constraintViolationsHash;
     char *zRebaseOrigBranch = 0;
     u8 isRebasing = 0;
     const char *zDef = chunkStoreGetDefaultBranch(&pBt->store);
@@ -2113,11 +2128,13 @@ int sqlite3BtreeOpen(
     memset(&branchCommit, 0, sizeof(branchCommit));
     memset(&preRebaseCat, 0, sizeof(preRebaseCat));
     memset(&rebaseOnto, 0, sizeof(rebaseOnto));
+    memset(&constraintViolationsHash, 0, sizeof(constraintViolationsHash));
     rc = btreeLoadWorkingSetBlob(&pBt->store, zDef, &catHash, &workingCommit,
                                  &stagedCatalog, &isMerging,
                                  &mergeCommitHash, &conflictsCatalogHash,
                                  &isRebasing, &preRebaseCat, &rebaseOnto,
-                                 &zRebaseOrigBranch);
+                                 &zRebaseOrigBranch,
+                                 &constraintViolationsHash);
     if( rc==SQLITE_NOTFOUND ){
       rc = SQLITE_OK;
     }
@@ -2172,6 +2189,7 @@ int sqlite3BtreeOpen(
     p->preRebaseWorkingCat = preRebaseCat;
     p->rebaseOntoCommit = rebaseOnto;
     p->zRebaseOrigBranch = zRebaseOrigBranch;
+    p->constraintViolationsHash = constraintViolationsHash;
   }
 
 
@@ -2452,7 +2470,8 @@ static int btreeLoadWorkingSetBlob(
   u8 *pIsRebasing,
   ProllyHash *pPreRebaseCat,
   ProllyHash *pRebaseOnto,
-  char **pzRebaseOrigBranch
+  char **pzRebaseOrigBranch,
+  ProllyHash *pConstraintViolations
 ){
   ProllyHash wsHash;
   u8 *data = 0;
@@ -2470,6 +2489,7 @@ static int btreeLoadWorkingSetBlob(
   if( pPreRebaseCat ) memset(pPreRebaseCat, 0, sizeof(ProllyHash));
   if( pRebaseOnto ) memset(pRebaseOnto, 0, sizeof(ProllyHash));
   if( pzRebaseOrigBranch ) *pzRebaseOrigBranch = 0;
+  if( pConstraintViolations ) memset(pConstraintViolations, 0, sizeof(ProllyHash));
 
   rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&wsHash) ) return SQLITE_NOTFOUND;
@@ -2481,7 +2501,9 @@ static int btreeLoadWorkingSetBlob(
     return SQLITE_CORRUPT;
   }
   version = data[0];
-  if( version != WS_FORMAT_VERSION_V2 && version != WS_FORMAT_VERSION_V3 ){
+  if( version != WS_FORMAT_VERSION_V2
+   && version != WS_FORMAT_VERSION_V3
+   && version != WS_FORMAT_VERSION_V4 ){
     sqlite3_free(data);
     return SQLITE_CORRUPT;
   }
@@ -2493,7 +2515,8 @@ static int btreeLoadWorkingSetBlob(
   if( pMergeCommit ) memcpy(pMergeCommit->data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
   if( pConflicts ) memcpy(pConflicts->data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
 
-  if( version == WS_FORMAT_VERSION_V3 && nData >= WS_TOTAL_SIZE ){
+  if( (version == WS_FORMAT_VERSION_V3 || version == WS_FORMAT_VERSION_V4)
+   && nData >= WS_TOTAL_SIZE_V3 ){
     if( pIsRebasing ) *pIsRebasing = data[WS_REBASING_OFF];
     if( pPreRebaseCat ) memcpy(pPreRebaseCat->data,
                                 data + WS_PRE_REBASE_CAT_OFF, PROLLY_HASH_SIZE);
@@ -2512,6 +2535,12 @@ static int btreeLoadWorkingSetBlob(
       }
     }
   }
+  if( version == WS_FORMAT_VERSION_V4 && nData >= WS_TOTAL_SIZE ){
+    if( pConstraintViolations ){
+      memcpy(pConstraintViolations->data,
+             data + WS_CONSTRAINT_VIOLATIONS_OFF, PROLLY_HASH_SIZE);
+    }
+  }
   sqlite3_free(data);
   return SQLITE_OK;
 }
@@ -2528,7 +2557,8 @@ static int btreeStoreWorkingSetBlob(
   u8 isRebasing,
   const ProllyHash *pPreRebaseCat,
   const ProllyHash *pRebaseOnto,
-  const char *zRebaseOrigBranch
+  const char *zRebaseOrigBranch,
+  const ProllyHash *pConstraintViolations
 ){
   u8 buf[WS_TOTAL_SIZE];
   ProllyHash wsHash;
@@ -2558,6 +2588,9 @@ static int btreeStoreWorkingSetBlob(
     if( n > WS_REBASE_BRANCH_LEN - 1 ) n = WS_REBASE_BRANCH_LEN - 1;
     memcpy(buf + WS_REBASE_BRANCH_OFF, zRebaseOrigBranch, n);
   }
+  memcpy(buf + WS_CONSTRAINT_VIOLATIONS_OFF,
+         (pConstraintViolations ? pConstraintViolations : &emptyHash)->data,
+         PROLLY_HASH_SIZE);
 
   rc = chunkStorePut(cs, buf, WS_TOTAL_SIZE, &wsHash);
   if( rc != SQLITE_OK ) return rc;
@@ -2575,7 +2608,7 @@ static int btreeReadWorkingCatalog(
   ProllyHash *pCommitHash
 ){
   return btreeLoadWorkingSetBlob(cs, zBranch, pCatHash, pCommitHash,
-                                 0, 0, 0, 0, 0, 0, 0, 0);
+                                 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 static int btreeWriteWorkingState(
@@ -2589,6 +2622,7 @@ static int btreeWriteWorkingState(
   ProllyHash conflictsCatalogHash;
   ProllyHash preRebaseCat;
   ProllyHash rebaseOnto;
+  ProllyHash constraintViolationsHash;
   char *zRebaseOrigBranch = 0;
   u8 isMerging = 0;
   u8 isRebasing = 0;
@@ -2597,7 +2631,8 @@ static int btreeWriteWorkingState(
   rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, &stagedCatalog, &isMerging,
                                &mergeCommitHash, &conflictsCatalogHash,
                                &isRebasing, &preRebaseCat, &rebaseOnto,
-                               &zRebaseOrigBranch);
+                               &zRebaseOrigBranch,
+                               &constraintViolationsHash);
   if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ){
     sqlite3_free(zRebaseOrigBranch);
     return rc;
@@ -2608,6 +2643,7 @@ static int btreeWriteWorkingState(
     memset(&conflictsCatalogHash, 0, sizeof(ProllyHash));
     memset(&preRebaseCat, 0, sizeof(ProllyHash));
     memset(&rebaseOnto, 0, sizeof(ProllyHash));
+    memset(&constraintViolationsHash, 0, sizeof(ProllyHash));
     isMerging = 0;
     isRebasing = 0;
   }
@@ -2616,7 +2652,8 @@ static int btreeWriteWorkingState(
                                 &stagedCatalog, isMerging,
                                 &mergeCommitHash, &conflictsCatalogHash,
                                 isRebasing, &preRebaseCat, &rebaseOnto,
-                                zRebaseOrigBranch);
+                                zRebaseOrigBranch,
+                                &constraintViolationsHash);
   sqlite3_free(zRebaseOrigBranch);
   return rc;
 }
@@ -2629,6 +2666,7 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
   ProllyHash conflictsCatalogHash;
   ProllyHash preRebaseCat;
   ProllyHash rebaseOnto;
+  ProllyHash constraintViolationsHash;
   char *zRebaseOrigBranch = 0;
   const char *zBr = p->zBranch ? p->zBranch : "main";
   u8 isMerging = 0;
@@ -2641,11 +2679,13 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
   memset(&conflictsCatalogHash, 0, sizeof(conflictsCatalogHash));
   memset(&preRebaseCat, 0, sizeof(preRebaseCat));
   memset(&rebaseOnto, 0, sizeof(rebaseOnto));
+  memset(&constraintViolationsHash, 0, sizeof(constraintViolationsHash));
 
   rc = btreeLoadWorkingSetBlob(
       &pBt->store, zBr, &catHash, 0, &stagedCatalog, &isMerging,
       &mergeCommitHash, &conflictsCatalogHash,
-      &isRebasing, &preRebaseCat, &rebaseOnto, &zRebaseOrigBranch);
+      &isRebasing, &preRebaseCat, &rebaseOnto, &zRebaseOrigBranch,
+      &constraintViolationsHash);
   if( rc==SQLITE_NOTFOUND ){
     rc = SQLITE_OK;
   }
@@ -2683,6 +2723,7 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
   p->rebaseOntoCommit = rebaseOnto;
   sqlite3_free(p->zRebaseOrigBranch);
   p->zRebaseOrigBranch = zRebaseOrigBranch;
+  p->constraintViolationsHash = constraintViolationsHash;
   return SQLITE_OK;
 }
 
@@ -2768,6 +2809,7 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     p->committedIsMerging = p->isMerging;
     p->committedMergeCommitHash = p->mergeCommitHash;
     p->committedConflictsCatalogHash = p->conflictsCatalogHash;
+    p->committedConstraintViolationsHash = p->constraintViolationsHash;
 
     if( p->db ){
       while( p->nSavepoint < p->db->nSavepoint ){
@@ -2928,6 +2970,7 @@ static int restoreFromCommitted(Btree *p){
   p->isMerging = p->committedIsMerging;
   p->mergeCommitHash = p->committedMergeCommitHash;
   p->conflictsCatalogHash = p->committedConflictsCatalogHash;
+  p->constraintViolationsHash = p->committedConstraintViolationsHash;
   return SQLITE_OK;
 }
 
@@ -6273,6 +6316,47 @@ void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){
   }
 }
 
+void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHash){
+  if( pHash ) memset(pHash, 0, sizeof(*pHash));
+  if( db && db->nDb>0 && db->aDb[0].pBt && pHash ){
+    memcpy(pHash, &db->aDb[0].pBt->constraintViolationsHash, sizeof(ProllyHash));
+  }
+}
+
+/* Look up a table's current working-catalog prolly root + flags
+** by table number (rowid-alias). Exposed so the post-merge
+** constraint walk can read raw row payloads without needing to
+** reach into private Btree fields. Returns SQLITE_NOTFOUND if
+** the table is absent, SQLITE_OK on success. */
+int doltliteGetSessionTableRoot(
+  sqlite3 *db, Pgno iTable, ProllyHash *pRoot, u8 *pFlags
+){
+  Btree *pBtree;
+  struct TableEntry *pTE;
+  if( pRoot ) memset(pRoot, 0, sizeof(*pRoot));
+  if( pFlags ) *pFlags = 0;
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  pTE = catFind(&pBtree->cat, iTable);
+  if( !pTE ) return SQLITE_NOTFOUND;
+  if( pRoot ) memcpy(pRoot, &pTE->root, sizeof(ProllyHash));
+  if( pFlags ) *pFlags = pTE->flags;
+  return SQLITE_OK;
+}
+
+void doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash *pHash){
+  static const ProllyHash emptyHash = {{0}};
+  if( db && db->nDb>0 && db->aDb[0].pBt ){
+    memcpy(&db->aDb[0].pBt->constraintViolationsHash,
+           pHash ? pHash : &emptyHash, sizeof(ProllyHash));
+  }
+}
+
+int doltliteSessionHasConstraintViolations(sqlite3 *db){
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return 0;
+  return !prollyHashIsEmpty(&db->aDb[0].pBt->constraintViolationsHash);
+}
+
 int doltliteSaveWorkingSet(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;
@@ -6301,7 +6385,8 @@ int doltliteSaveWorkingSet(sqlite3 *db){
                                   pBtree->isRebasing,
                                   &pBtree->preRebaseWorkingCat,
                                   &pBtree->rebaseOntoCommit,
-                                  pBtree->zRebaseOrigBranch);
+                                  pBtree->zRebaseOrigBranch,
+                                  &pBtree->constraintViolationsHash);
 }
 
 int doltlitePersistWorkingSet(sqlite3 *db){
@@ -6333,7 +6418,8 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
                                &pBtree->isRebasing,
                                &pBtree->preRebaseWorkingCat,
                                &pBtree->rebaseOntoCommit,
-                               &zNewRebaseOrigBranch);
+                               &zNewRebaseOrigBranch,
+                               &pBtree->constraintViolationsHash);
   if( rc == SQLITE_NOTFOUND ){
     memset(&pBtree->stagedCatalog, 0, sizeof(ProllyHash));
     pBtree->isMerging = 0;
@@ -6344,6 +6430,7 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
     memset(&pBtree->rebaseOntoCommit, 0, sizeof(ProllyHash));
     sqlite3_free(pBtree->zRebaseOrigBranch);
     pBtree->zRebaseOrigBranch = 0;
+    memset(&pBtree->constraintViolationsHash, 0, sizeof(ProllyHash));
     return SQLITE_OK;
   }
   if( rc==SQLITE_OK ){
