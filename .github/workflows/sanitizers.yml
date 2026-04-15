@@ -82,9 +82,10 @@ jobs:
 
     # Minimal reproducer that surfaces the ASan leak report the
     # correctness_test.sh script swallows via 2>/dev/null on its
-    # subprocesses. This step runs one write path likely to leak
-    # and lets stderr flow so the stacks show up in CI logs.
-    - name: Leak reproducer (UPDATE + autocommit)
+    # subprocesses. Runs the exact sequence the UPDATE correctness
+    # test does — write in one process, reopen in another to read
+    # — with stderr flowing so leak stacks show up in CI logs.
+    - name: Leak reproducer (UPDATE + reopen read)
       run: |
         cd build
         rm -f /tmp/leak.db
@@ -92,6 +93,8 @@ jobs:
           WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<100) \
           INSERT INTO t SELECT x,x FROM c; \
           UPDATE t SET val=val+1 WHERE id%2=0;"
+        echo "--- reopen read ---"
+        ./doltlite /tmp/leak.db "SELECT count(*) FROM t;"
 
     - name: Correctness regression tests
       run: cd build && bash ../test/correctness_test.sh ./doltlite
