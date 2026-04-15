@@ -56,9 +56,6 @@ alter alter-1.5  # ALTER TABLE rowid-preservation semantics
 alter alter-1.6  # ALTER TABLE rowid-preservation semantics
 alter alter-1.7  # ALTER TABLE rowid-preservation semantics
 
-# ── auth ──
-auth auth-1.283  # rowid-based authorization edge case
-
 # ── in ──
 in in-19.40  # IN clause path that hits NOT NULL via rowid lookup
 

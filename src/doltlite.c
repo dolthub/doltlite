@@ -855,6 +855,7 @@ static void doltliteCommitFunc(
   int amend = 0;
   int allowEmpty = 0;
   int skipEmpty = 0;
+  int force = 0;
   ProllyHash commitHash;
   ProllyHash catalogHash;
   ProllyHash sessionHeadBeforeLock;
@@ -879,6 +880,8 @@ static void doltliteCommitFunc(
           addAll = 1;
         }else if( arg[j]=='a' ){
           addModifiedOnly = 1;
+        }else if( arg[j]=='f' ){
+          force = 1;
         }else if( arg[j]=='m' ){
           if( arg[j+1]!=0 ){
             zMessage = &arg[j+1];
@@ -902,12 +905,29 @@ static void doltliteCommitFunc(
       allowEmpty = 1;
     }else if( strcmp(arg, "--skip-empty")==0 ){
       skipEmpty = 1;
+    }else if( strcmp(arg, "-f")==0 || strcmp(arg, "--force")==0 ){
+      force = 1;
     }else if( strcmp(arg, "-A")==0 ){
       addAll = 1;
     }else if( strcmp(arg, "-a")==0 || strcmp(arg, "--all")==0 ){
 
       addModifiedOnly = 1;
     }
+  }
+
+  /* Commit guard: if the working set has any unresolved constraint
+  ** violations from a previous merge, refuse to proceed unless the
+  ** caller passed --force. Matches Dolt's behaviour of blocking
+  ** commits until the user either clears violations by deleting
+  ** the offending rows from dolt_constraint_violations_<table> or
+  ** explicitly forces the commit through. */
+  if( !force && doltliteSessionHasConstraintViolations(db) ){
+    sqlite3_result_error(context,
+      "cannot commit: unresolved entries in dolt_constraint_violations. "
+      "Resolve them (DELETE from the per-table vtable) then retry, or "
+      "pass --force to commit anyway.",
+      -1);
+    return;
   }
 
   if( zDate ){
@@ -1277,6 +1297,18 @@ static void doltliteCommitFunc(
     }
   }
 
+  /* Once the commit lands, any constraint violations that were in
+  ** the working set are now part of committed state (force path)
+  ** or were resolved before the guard let us through (non-force
+  ** path). Either way, clear them so the NEXT commit isn't
+  ** blocked by a stale flag. */
+  {
+    extern int doltliteClearAllConstraintViolations(sqlite3*);
+    if( doltliteSessionHasConstraintViolations(db) ){
+      doltliteClearAllConstraintViolations(db);
+    }
+  }
+
   rc = doltliteAdvanceBranch(db, &commitHash, &catalogHash);
   chunkStoreUnlock(cs);
   if( rc!=SQLITE_OK ){
@@ -1423,6 +1455,12 @@ static int mergeAbortInPlace(sqlite3 *db){
   if( rc!=SQLITE_OK ) return rc;
   doltliteSetSessionStaged(db, &headCatHash);
   doltliteClearSessionMergeState(db);
+  {
+    extern int doltliteClearAllConstraintViolations(sqlite3*);
+    if( doltliteSessionHasConstraintViolations(db) ){
+      doltliteClearAllConstraintViolations(db);
+    }
+  }
   return doltlitePersistWorkingSet(db);
 }
 
@@ -1784,6 +1822,16 @@ static void doltliteResetFunc(
       goto reset_cleanup;
     }
 
+    /* Hard reset discards the working tree, so any post-merge
+    ** constraint violations attached to it go with it. Otherwise
+    ** the session hash lingers and blocks the next commit. */
+    {
+      extern int doltliteClearAllConstraintViolations(sqlite3*);
+      if( doltliteSessionHasConstraintViolations(db) ){
+        doltliteClearAllConstraintViolations(db);
+      }
+    }
+
     doltliteSetSessionStaged(db, &origStagedAfterReset);
     rc = doltlitePersistWorkingSet(db);
     if( rc!=SQLITE_OK ){
@@ -2067,6 +2115,80 @@ static void doltliteMergeFunc(
         sqlite3_result_error_code(context,
             doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
         return;
+      }
+    }
+  }
+
+  /* Post-merge constraint detection. Release the graph lock
+  ** first — detection runs DELETEs against the merged working
+  ** set (eviction of unique-index losers) and those need a
+  ** fully committed btree state to avoid
+  ** SQLITE_CORRUPT ("database disk image is malformed") from
+  ** modifying a btree whose savepoint is still mid-flight.
+  **
+  ** The merged catalog is installed (schema reflects the merged
+  ** DDL, Table.pFKey is loaded), so PRAGMA foreign_key_check
+  ** sees any row where one side's child references a parent
+  ** the other side deleted. Unique-index detection walks each
+  ** table's UNIQUE indexes and evicts duplicates to the
+  ** violations vtable. Each detected violation lands in
+  ** dolt_constraint_violations_<table>; dolt_commit refuses to
+  ** proceed while any violation remains. */
+  if( graphLocked ){
+    chunkStoreUnlock(cs);
+    graphLocked = 0;
+  }
+  {
+    extern int doltliteDetectMergeFkViolations(sqlite3*, int*);
+    extern int doltliteDetectMergeUniqueViolations(sqlite3*, int*);
+    extern int doltliteDetectMergeCheckViolations(sqlite3*, int*);
+    int nViolations = 0;
+    int nUnique = 0;
+    int nCheck = 0;
+    int vrc = doltliteDetectMergeFkViolations(db, &nViolations);
+    if( vrc == SQLITE_OK ){
+      vrc = doltliteDetectMergeUniqueViolations(db, &nUnique);
+    }
+    if( vrc == SQLITE_OK ){
+      vrc = doltliteDetectMergeCheckViolations(db, &nCheck);
+    }
+    if( vrc != SQLITE_OK ){
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, &savedState, vrc));
+      return;
+    }
+    if( nUnique > 0 ){
+      /* The unique-index walker evicts loser rows from the base
+      ** via DELETE — flush those mutations out of the mutmap and
+      ** re-pin the session's working catalog at the new hash so
+      ** the next reopen sees the post-eviction state. */
+      ProllyHash newCatHash;
+      memset(&newCatHash, 0, sizeof(newCatHash));
+      vrc = doltliteFlushCatalogToHash(db, &newCatHash);
+      if( vrc == SQLITE_OK ){
+        doltliteSetSessionStaged(db, &newCatHash);
+        vrc = doltliteUpdateBranchWorkingState(db,
+            doltliteGetSessionBranch(db), &newCatHash, NULL);
+      }
+      if( vrc == SQLITE_OK ){
+        mergedCatHash = newCatHash;
+      }else{
+        sqlite3_result_error_code(context,
+            doltliteRestoreTxnStateOnFailure(db, &savedState, vrc));
+        return;
+      }
+    }
+    if( nViolations + nUnique + nCheck > 0 ){
+      u8 alreadyMerging = 0;
+      nMergeConflicts += nViolations + nUnique + nCheck;
+      /* A violation-only merge (no row-level conflicts) otherwise
+      ** wouldn't have been put into merging state by
+      ** recordMergeConflicts, which would leave dolt_merge --abort
+      ** saying "no merge in progress" even though the working set
+      ** is clearly stuck. Stamp the state here so abort works. */
+      doltliteGetSessionMergeState(db, &alreadyMerging, 0, 0);
+      if( !alreadyMerging ){
+        doltliteSetSessionMergeState(db, 1, &theirHead, 0);
       }
     }
   }
@@ -3457,6 +3579,10 @@ void doltliteRegister(sqlite3 *db){
   {
     extern int doltliteHashofRegister(sqlite3*);
     if( doltliteHashofRegister(db)!=SQLITE_OK ) return;
+  }
+  {
+    extern int doltliteConstraintViolationsRegister(sqlite3*);
+    if( doltliteConstraintViolationsRegister(db)!=SQLITE_OK ) return;
   }
 
   {

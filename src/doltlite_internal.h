@@ -2,6 +2,10 @@
 #ifndef DOLTLITE_INTERNAL_H
 #define DOLTLITE_INTERNAL_H
 
+#include "sqliteInt.h"
+#include "prolly_hash.h"
+#include "chunk_store.h"
+
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
 
@@ -142,6 +146,11 @@ void doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
 void doltliteClearSessionRebaseState(sqlite3 *db);
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
 void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
+void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHash);
+void doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash *pHash);
+int doltliteSessionHasConstraintViolations(sqlite3 *db);
+int doltliteGetSessionTableRoot(sqlite3 *db, Pgno iTable,
+                                 ProllyHash *pRoot, u8 *pFlags);
 int doltliteSaveWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSet(sqlite3 *db);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
