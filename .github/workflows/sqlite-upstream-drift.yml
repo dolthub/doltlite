@@ -1,0 +1,144 @@
+name: SQLite upstream drift check
+
+# Runs at 00:00 UTC on the 1st of every month and counts how many
+# commits the sqlite/sqlite master branch is ahead of the SHA
+# recorded in .sqlite-upstream-base (the last upstream commit we
+# merged into doltlite). If there is drift, opens — or updates —
+# an issue labeled `sqlite-upstream-drift` so we know to schedule
+# a sync merge.
+#
+# The workflow deliberately does NOT auto-close the drift issue
+# when the count hits zero; the human who ran the merge should
+# close it as part of their PR.
+
+on:
+  schedule:
+    - cron: '0 0 1 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out doltlite
+        uses: actions/checkout@v4
+
+      - name: Read tracked upstream base SHA
+        id: base
+        run: |
+          if [ ! -f .sqlite-upstream-base ]; then
+            echo "::error::.sqlite-upstream-base is missing from the repo root. Add it with the SHA of the last upstream SQLite commit we merged."
+            exit 1
+          fi
+          BASE=$(tr -d '[:space:]' < .sqlite-upstream-base)
+          if [ -z "$BASE" ]; then
+            echo "::error::.sqlite-upstream-base is empty"
+            exit 1
+          fi
+          echo "sha=$BASE" >> "$GITHUB_OUTPUT"
+
+      - name: Clone upstream SQLite (metadata only)
+        run: |
+          git clone --filter=blob:none --no-checkout \
+            https://github.com/sqlite/sqlite.git /tmp/sqlite-upstream
+
+      - name: Count divergence
+        id: drift
+        run: |
+          cd /tmp/sqlite-upstream
+          UPSTREAM_SHA=$(git rev-parse HEAD)
+          BASE_SHA="${{ steps.base.outputs.sha }}"
+
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "::error::Base SHA ${BASE_SHA} not found in upstream history. Either .sqlite-upstream-base is wrong or upstream force-pushed."
+            exit 1
+          fi
+
+          COUNT=$(git rev-list --count "${BASE_SHA}..${UPSTREAM_SHA}")
+          echo "Upstream tip:     ${UPSTREAM_SHA}"
+          echo "Our tracked base: ${BASE_SHA}"
+          echo "Commits behind:   ${COUNT}"
+
+          echo "count=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "upstream=${UPSTREAM_SHA}" >> "$GITHUB_OUTPUT"
+          echo "base=${BASE_SHA}" >> "$GITHUB_OUTPUT"
+
+          git log --oneline "${BASE_SHA}..${UPSTREAM_SHA}" | head -30 > /tmp/commit-list.txt
+
+      - name: No drift — exit early
+        if: steps.drift.outputs.count == '0'
+        run: echo "Upstream has not moved since the tracked base — nothing to do."
+
+      - name: Compose report body
+        if: steps.drift.outputs.count != '0'
+        run: |
+          DATE=$(date -u +%Y-%m-%d)
+          COUNT="${{ steps.drift.outputs.count }}"
+          BASE="${{ steps.drift.outputs.base }}"
+          UPSTREAM="${{ steps.drift.outputs.upstream }}"
+          {
+            echo "## SQLite upstream drift check — ${DATE}"
+            echo ""
+            echo "**Our base:** \`${BASE}\`"
+            echo "**Upstream tip:** \`${UPSTREAM}\`"
+            echo "**Commits behind:** ${COUNT}"
+            echo ""
+            echo "### Upstream commits since our base (up to 30, most recent first)"
+            echo ""
+            echo '```'
+            cat /tmp/commit-list.txt
+            echo '```'
+            echo ""
+            echo "[Compare on GitHub](https://github.com/sqlite/sqlite/compare/${BASE}...${UPSTREAM})"
+            echo ""
+            echo "When merging, follow the \`chore/merge-sqlite-upstream\` pattern from the history. After the merge lands, bump \`.sqlite-upstream-base\` to the new upstream SHA so this watcher re-zeros."
+          } > /tmp/body.md
+          cat /tmp/body.md
+
+      - name: Ensure drift label exists
+        if: steps.drift.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create sqlite-upstream-drift \
+            --description "Upstream SQLite has moved ahead of our base" \
+            --color "fbca04" \
+            --repo "${{ github.repository }}" 2>/dev/null || true
+
+      - name: Find existing open drift issue
+        id: existing
+        if: steps.drift.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          NUM=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --state open \
+            --label sqlite-upstream-drift \
+            --json number \
+            --jq '.[0].number // empty')
+          echo "number=${NUM}" >> "$GITHUB_OUTPUT"
+
+      - name: Create new drift issue
+        if: steps.drift.outputs.count != '0' && steps.existing.outputs.number == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "SQLite upstream drift: ${{ steps.drift.outputs.count }} commits behind" \
+            --label sqlite-upstream-drift \
+            --body-file /tmp/body.md
+
+      - name: Comment on existing drift issue
+        if: steps.drift.outputs.count != '0' && steps.existing.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment "${{ steps.existing.outputs.number }}" \
+            --repo "${{ github.repository }}" \
+            --body-file /tmp/body.md
