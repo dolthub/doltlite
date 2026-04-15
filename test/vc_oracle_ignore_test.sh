@@ -492,6 +492,60 @@ INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
 SELECT * FROM dolt_ignore;
 "
 
+# Runtime guard: temp-schema shadowing must not override repo ignore
+# rules, and wrong-shape main objects must error rather than silently
+# disabling filtering. Doltlite-only because Dolt does not expose temp
+# objects through the same SQL surface.
+doltlite_runtime_expect() {
+  local name="$1" sql="$2" expect="$3"
+  local dir="$TMPROOT/${name}_rt"
+  mkdir -p "$dir/dl"
+  printf "%s\n.headers off\n.mode list\n.separator '|'\nSELECT table_name || '|' || staged || '|' || status FROM dolt_status;\n" "$sql" \
+    | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
+  local got
+  got=$(grep '^[^|].*|' "$dir/out" | grep -v '^dolt_ignore|' | sort)
+  if [ "$got" = "$expect" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (unexpected doltlite status)"
+    echo "    expected:"; echo "$expect" | sed 's/^/      /'
+    echo "    got:"; echo "$got" | sed 's/^/      /'
+    echo "    output:"; sed 's/^/      /' "$dir/out"
+  fi
+}
+
+doltlite_runtime_reject() {
+  local name="$1" sql="$2"
+  local dir="$TMPROOT/${name}_rtrej"
+  mkdir -p "$dir/dl"
+  echo "$sql" | "$DOLTLITE" "$dir/dl/db" > "$dir/out" 2>&1
+  if grep -qi 'unexpected schema' "$dir/out" \
+     && grep -qiE 'error|fail' "$dir/out"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected doltlite runtime reject)"
+    echo "    output:"; sed 's/^/      /' "$dir/out"
+  fi
+}
+
+doltlite_runtime_expect "temp_shadow_ignored_main_wins" "
+CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+CREATE TEMP TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));
+INSERT INTO temp.dolt_ignore VALUES ('tmp_*', 0);
+CREATE TABLE tmp_shadowed(x INT PRIMARY KEY);
+" ""
+
+doltlite_runtime_reject "runtime_wrong_shape_view" "
+CREATE VIEW dolt_ignore AS SELECT 'tmp_*' AS pattern;
+CREATE TABLE tmp_bad(x INT PRIMARY KEY);
+SELECT * FROM dolt_status;
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

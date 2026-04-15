@@ -48,51 +48,69 @@ static int ignoreSpecificity(const char *zPat){
   return n;
 }
 
+enum DoltliteIgnoreSchemaState {
+  DOLTLITE_IGNORE_SCHEMA_ABSENT = 0,
+  DOLTLITE_IGNORE_SCHEMA_OK = 1,
+  DOLTLITE_IGNORE_SCHEMA_BAD = 2
+};
+
 /* Read-time schema guard. The parse-time check in build.c catches
 ** new bad CREATE TABLE statements, but on-disk repos created before
 ** the guard landed (or via an older binary) can still have a
 ** wrong-shape dolt_ignore. Detect it here and raise an error so the
-** user gets a clear signal instead of a silent "no filtering".
-** Called once per check, cached by the prepare failure path below. */
-static int doltliteIgnoreSchemaOk(sqlite3 *db){
+** user gets a clear signal instead of a silent "no filtering". */
+static int doltliteIgnoreSchemaState(sqlite3 *db, int *pState){
   sqlite3_stmt *pStmt = 0;
+  int rc;
   int nCol;
-  int ok = 0;
-  if( sqlite3_prepare_v2(db, "PRAGMA table_info(\"dolt_ignore\")",
-                         -1, &pStmt, 0)!=SQLITE_OK ){
-    return 0;
+  *pState = DOLTLITE_IGNORE_SCHEMA_ABSENT;
+  rc = sqlite3_prepare_v2(db, "PRAGMA main.table_info(\"dolt_ignore\")",
+                          -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
+    return rc;
   }
   nCol = 0;
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
     const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
     const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
+    char aff;
     int notNull = sqlite3_column_int(pStmt, 3);
     int pkPos = sqlite3_column_int(pStmt, 5);
-    if( !zName || !zType ) goto done;
+    if( !zName ) goto bad;
+    aff = sqlite3AffinityType(zType ? zType : "", 0);
     if( nCol==0 ){
-      if( sqlite3_stricmp(zName, "pattern")!=0 ) goto done;
-      if( sqlite3_stricmp(zType, "TEXT")!=0
-       && sqlite3_strnicmp(zType, "VARCHAR", 7)!=0 ) goto done;
-      if( !notNull ) goto done;
-      if( pkPos!=1 ) goto done;
+      if( sqlite3_stricmp(zName, "pattern")!=0 ) goto bad;
+      if( aff!=SQLITE_AFF_TEXT && aff!=SQLITE_AFF_BLOB ) goto bad;
+      if( !notNull ) goto bad;
+      if( pkPos!=1 ) goto bad;
     }else if( nCol==1 ){
-      if( sqlite3_stricmp(zName, "ignored")!=0 ) goto done;
-      if( sqlite3_stricmp(zType, "TINYINT")!=0
-       && sqlite3_stricmp(zType, "TINYINT(1)")!=0
-       && sqlite3_stricmp(zType, "INT")!=0
-       && sqlite3_stricmp(zType, "INTEGER")!=0
-       && sqlite3_stricmp(zType, "BOOLEAN")!=0 ) goto done;
-      if( !notNull ) goto done;
-      if( pkPos!=0 ) goto done;
+      if( sqlite3_stricmp(zName, "ignored")!=0 ) goto bad;
+      if( aff!=SQLITE_AFF_INTEGER && aff!=SQLITE_AFF_NUMERIC ) goto bad;
+      if( !notNull ) goto bad;
+      if( pkPos!=0 ) goto bad;
     }else{
-      goto done;
+      goto bad;
     }
     nCol++;
   }
-  if( nCol==2 ) ok = 1;
-done:
+  if( rc!=SQLITE_DONE ){
+    sqlite3_finalize(pStmt);
+    return rc;
+  }
+  if( nCol==0 ){
+    *pState = DOLTLITE_IGNORE_SCHEMA_ABSENT;
+  }else if( nCol==2 ){
+    *pState = DOLTLITE_IGNORE_SCHEMA_OK;
+  }else{
+    *pState = DOLTLITE_IGNORE_SCHEMA_BAD;
+  }
   sqlite3_finalize(pStmt);
-  return ok;
+  return SQLITE_OK;
+
+bad:
+  *pState = DOLTLITE_IGNORE_SCHEMA_BAD;
+  sqlite3_finalize(pStmt);
+  return SQLITE_OK;
 }
 
 int doltliteCheckIgnore(
@@ -103,6 +121,7 @@ int doltliteCheckIgnore(
 ){
   sqlite3_stmt *pStmt = 0;
   int rc;
+  int schemaState;
   int bestSpec = -1;
   int bestIgnored = 0;
   char *zBestPat = 0;
@@ -113,15 +132,14 @@ int doltliteCheckIgnore(
   *pIgnored = 0;
   if( pzErr ) *pzErr = 0;
 
-  rc = sqlite3_prepare_v2(db,
-      "SELECT pattern, ignored FROM dolt_ignore", -1, &pStmt, 0);
+  rc = doltliteIgnoreSchemaState(db, &schemaState);
   if( rc!=SQLITE_OK ){
-    /* Table missing — e.g. legacy repo or pre-seed call. No patterns
-    ** means no filtering. */
+    return rc;
+  }
+  if( schemaState==DOLTLITE_IGNORE_SCHEMA_ABSENT ){
     return SQLITE_OK;
   }
-  if( !doltliteIgnoreSchemaOk(db) ){
-    sqlite3_finalize(pStmt);
+  if( schemaState!=DOLTLITE_IGNORE_SCHEMA_OK ){
     if( pzErr ){
       *pzErr = sqlite3_mprintf(
           "dolt_ignore has an unexpected schema; expected: "
@@ -129,6 +147,11 @@ int doltliteCheckIgnore(
           "ignored TINYINT NOT NULL, PRIMARY KEY(pattern))");
     }
     return SQLITE_CONSTRAINT;
+  }
+  rc = sqlite3_prepare_v2(db,
+      "SELECT pattern, ignored FROM main.dolt_ignore", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
+    return rc;
   }
 
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
