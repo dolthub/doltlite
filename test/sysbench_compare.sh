@@ -292,14 +292,7 @@ else:
 }
 
 bench_runs_for_test() {
-  case "$1" in
-    table_scan|types_table_scan|oltp_read_write)
-      echo 3
-      ;;
-    *)
-      echo 1
-      ;;
-  esac
+  echo 11
 }
 
 median_us() {
