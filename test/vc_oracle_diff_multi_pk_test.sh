@@ -253,6 +253,41 @@ INSERT INTO t VALUES (2, 1, 'three');
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c3');
 " "SELECT CONCAT('R|', a, '|', b, '|', message) FROM dolt_blame_t ORDER BY a, b;"
 
+# ---------------------------------------------------------------
+# Group H: ALTER TABLE on a table with PK cols not leading the
+# declaration. Exercises the schema-only filter in
+# changeIsSchemaOnly(): MODIFY rows emitted by the prolly diff
+# when two commits have different schemas must be compared by
+# the actual record-field layout (PK-first in WITHOUT ROWID),
+# not by the declared-column index. Dropping a middle non-PK
+# column whose only value was NULL should be schema-only on
+# both engines, meaning dolt_diff_t('HEAD~1','HEAD') emits 0
+# rows for the surviving row.
+# ---------------------------------------------------------------
+
+echo "--- Group H: ALTER on non-leading-PK table (schema-only filter) ---"
+
+oracle "h_drop_middle_nonpk_nonleading_pk" "
+CREATE TABLE t(v INT, c INT, a INTEGER, b INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t(v, a, b) VALUES (10, 1, 2), (20, 1, 3);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t DROP COLUMN c;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'drop_c');
+" "SELECT CONCAT('R|', IFNULL(to_v,''), '|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(from_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');"
+
+# ADD COLUMN on a non-leading-PK table. Schema-only change; no
+# rows should appear in the per-table diff slice. Same shape as
+# the PK-leading test in vc_oracle_diff_test.sh, but with v in
+# front of the PK cols so the record layout no longer matches
+# the declared layout.
+oracle "h_add_col_nonleading_pk_no_data" "
+CREATE TABLE t(v INT, a INTEGER, b INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t(v, a, b) VALUES (10, 1, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t ADD COLUMN extra INT;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'add_extra');
+" "SELECT CONCAT('R|', IFNULL(to_v,''), '|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(to_extra,''), '|', IFNULL(from_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
