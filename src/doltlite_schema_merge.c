@@ -170,13 +170,17 @@ int migrateSchemaRowData(
   rc = doltliteLoadCatalog(db, pAncCatHash, &aAncTables, &nAncTables, 0);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCatalog(db, pTheirCatHash, &aTheirTables, &nTheirTables, 0);
-  if( rc!=SQLITE_OK ){ sqlite3_free(aAncTables); return rc; }
+  if( rc!=SQLITE_OK ){
+    doltliteFreeCatalog(aAncTables, nAncTables);
+    return rc;
+  }
 
 
   rc = loadSchemaFromCatalog(db, cs, pCache, pTheirCatHash,
                               &aTheirSchema, &nTheirSchema);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(aTheirTables);
+    doltliteFreeCatalog(aAncTables, nAncTables);
+    doltliteFreeCatalog(aTheirTables, nTheirTables);
     return rc;
   }
 
@@ -405,8 +409,8 @@ next_action:
   }
 
   freeSchemaEntries(aTheirSchema, nTheirSchema);
-  sqlite3_free(aTheirTables);
-  sqlite3_free(aAncTables);
+  doltliteFreeCatalog(aTheirTables, nTheirTables);
+  doltliteFreeCatalog(aAncTables, nAncTables);
   return rc;
 }
 

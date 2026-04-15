@@ -96,7 +96,7 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
     for(i=0; i<4; i++){
       schemaCookie = (schemaCookie << 8) | catHash.data[i];
     }
-    sqlite3_free(aTables);
+    doltliteFreeCatalog(aTables, nTables);
   }
 
   put4byteBE(aHdr + 28, pageCount);

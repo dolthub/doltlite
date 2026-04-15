@@ -166,7 +166,7 @@ int loadSchemaFromCatalog(
       break;
     }
   }
-  sqlite3_free(aTables);
+  doltliteFreeCatalog(aTables, nTables);
 
   if( prollyHashIsEmpty(&masterRoot) ){
     *ppEntries = 0; *pnEntries = 0;
@@ -622,8 +622,8 @@ static int sdFilter(sqlite3_vtab_cursor *cur,
 sd_filter_done:
   freeSchemaEntries(aFrom, nFrom);
   freeSchemaEntries(aTo, nTo);
-  sqlite3_free(aFromTables);
-  sqlite3_free(aToTables);
+  doltliteFreeCatalog(aFromTables, nFromTables);
+  doltliteFreeCatalog(aToTables, nToTables);
   if( freeRangeRefs ){
     sqlite3_free((char*)zFromRef);
     sqlite3_free((char*)zToRef);

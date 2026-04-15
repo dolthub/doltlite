@@ -346,12 +346,12 @@ static int blameLoadTableRoot(
 
   pEntry = doltliteFindTableByName(aTables, nTables, zTableName);
   if( !pEntry ){
-    sqlite3_free(aTables);
+    doltliteFreeCatalog(aTables, nTables);
     return SQLITE_NOTFOUND;
   }
   memcpy(pOutRoot, &pEntry->root, sizeof(ProllyHash));
   *pOutFlags = pEntry->flags;
-  sqlite3_free(aTables);
+  doltliteFreeCatalog(aTables, nTables);
   return SQLITE_OK;
 }
 

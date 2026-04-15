@@ -283,7 +283,7 @@ static int dsComputeTableStats(
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCatalog(db, pToCatHash, &aTo, &nToCat, 0);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(aFrom);
+    doltliteFreeCatalog(aFrom, nFromCat);
     return rc;
   }
 
@@ -302,8 +302,8 @@ static int dsComputeTableStats(
     memcpy(&toRoot, &pToEntry->root, sizeof(ProllyHash));
     toFlags = pToEntry->flags;
   }
-  sqlite3_free(aFrom);
-  sqlite3_free(aTo);
+  doltliteFreeCatalog(aFrom, nFromCat);
+  doltliteFreeCatalog(aTo, nToCat);
 
   if( !hasFrom && !hasTo ) return SQLITE_OK;
 
@@ -553,7 +553,7 @@ static int dsCollectTableNames(
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCatalog(db, pToCat, &aTo, &nTo, 0);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(aFrom);
+    doltliteFreeCatalog(aFrom, nFrom);
     return rc;
   }
 
@@ -592,8 +592,8 @@ static int dsCollectTableNames(
     n++;
   }
 
-  sqlite3_free(aFrom);
-  sqlite3_free(aTo);
+  doltliteFreeCatalog(aFrom, nFrom);
+  doltliteFreeCatalog(aTo, nTo);
   *pazOut = az;
   *pnOut = n;
   return SQLITE_OK;
@@ -601,8 +601,8 @@ static int dsCollectTableNames(
 fail:
   for(j=0; j<n; j++) sqlite3_free(az[j]);
   sqlite3_free(az);
-  sqlite3_free(aFrom);
-  sqlite3_free(aTo);
+  doltliteFreeCatalog(aFrom, nFrom);
+  doltliteFreeCatalog(aTo, nTo);
   return rc;
 }
 
@@ -947,8 +947,8 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
   }
 
 done:
-  sqlite3_free(aFromCat);
-  sqlite3_free(aToCat);
+  doltliteFreeCatalog(aFromCat, nFromCat);
+  doltliteFreeCatalog(aToCat, nToCat);
   dsFilterCtxClear(&fctx);
   return rc;
 }

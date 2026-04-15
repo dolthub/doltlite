@@ -425,7 +425,7 @@ static int doltliteCheckoutTables(
 
   rc = doltliteLoadCatalog(db, &sourceCatHash, &aSource, &nSource, 0);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(aWorking);
+    doltliteFreeCatalog(aWorking, nWorking);
     return rc;
   }
 
@@ -433,6 +433,7 @@ static int doltliteCheckoutTables(
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[i]);
     int srcIdx = -1, workIdx = -1;
+    char *zDup;
     if( !zName ) continue;
 
     for(j=0; j<nSource; j++){
@@ -447,12 +448,13 @@ static int doltliteCheckoutTables(
     }
 
     if( srcIdx<0 && workIdx<0 ){
-      sqlite3_free(aWorking); sqlite3_free(aSource);
+      doltliteFreeCatalog(aWorking, nWorking);
+      doltliteFreeCatalog(aSource, nSource);
       return SQLITE_NOTFOUND;
     }
 
     if( srcIdx<0 ){
-
+      sqlite3_free(aWorking[workIdx].zName);
       if( workIdx+1<nWorking ){
         memmove(&aWorking[workIdx], &aWorking[workIdx+1],
                 (nWorking-workIdx-1)*(int)sizeof(struct TableEntry));
@@ -463,13 +465,32 @@ static int doltliteCheckoutTables(
       struct TableEntry *aNew = sqlite3_realloc(aWorking,
           (nWorking+1)*(int)sizeof(struct TableEntry));
       if( !aNew ){
-        sqlite3_free(aWorking); sqlite3_free(aSource);
+        doltliteFreeCatalog(aWorking, nWorking);
+        doltliteFreeCatalog(aSource, nSource);
         return SQLITE_NOMEM;
       }
       aWorking = aNew;
-      aWorking[nWorking++] = aSource[srcIdx];
+      zDup = aSource[srcIdx].zName
+               ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
+      if( aSource[srcIdx].zName && !zDup ){
+        doltliteFreeCatalog(aWorking, nWorking);
+        doltliteFreeCatalog(aSource, nSource);
+        return SQLITE_NOMEM;
+      }
+      aWorking[nWorking] = aSource[srcIdx];
+      aWorking[nWorking].zName = zDup;
+      nWorking++;
     }else{
+      zDup = aSource[srcIdx].zName
+               ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
+      if( aSource[srcIdx].zName && !zDup ){
+        doltliteFreeCatalog(aWorking, nWorking);
+        doltliteFreeCatalog(aSource, nSource);
+        return SQLITE_NOMEM;
+      }
+      sqlite3_free(aWorking[workIdx].zName);
       aWorking[workIdx] = aSource[srcIdx];
+      aWorking[workIdx].zName = zDup;
     }
   }
 
@@ -491,8 +512,8 @@ static int doltliteCheckoutTables(
     }
   }
 
-  sqlite3_free(aWorking);
-  sqlite3_free(aSource);
+  doltliteFreeCatalog(aWorking, nWorking);
+  doltliteFreeCatalog(aSource, nSource);
   return rc;
 }
 

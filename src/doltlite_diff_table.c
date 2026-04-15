@@ -322,7 +322,7 @@ static int loadTblRootAtCommit(sqlite3 *db, const ProllyHash *pCatHash,
       memcpy(pSchemaHash, &pEntry->schemaHash, sizeof(ProllyHash));
     }
   }
-  sqlite3_free(aTables);
+  doltliteFreeCatalog(aTables, nTables);
   return SQLITE_OK;
 }
 

@@ -213,7 +213,7 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCatalog(db, &workCat, &aWork, &nWork, 0);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(aHead);
+    doltliteFreeCatalog(aHead, nHead);
     return rc;
   }
 
@@ -262,8 +262,8 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
   }
 
 done:
-  sqlite3_free(aHead);
-  sqlite3_free(aWork);
+  doltliteFreeCatalog(aHead, nHead);
+  doltliteFreeCatalog(aWork, nWork);
   return rc;
 }
 
@@ -290,7 +290,7 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
       doltliteCommitClear(&parent);
     }
     if( rc!=SQLITE_OK ){
-      sqlite3_free(aChild);
+      doltliteFreeCatalog(aChild, nChild);
       return rc;
     }
   }
@@ -342,8 +342,8 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
   }
 
 done:
-  sqlite3_free(aChild);
-  sqlite3_free(aParent);
+  doltliteFreeCatalog(aChild, nChild);
+  doltliteFreeCatalog(aParent, nParent);
   return rc;
 }
 

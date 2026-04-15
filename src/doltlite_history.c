@@ -184,7 +184,7 @@ static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
       if(rc==SQLITE_OK){
         if(doltliteFindTableRootByName(aT,nT,zTableName,&tableRoot,&flags)==SQLITE_OK)
           rc = htScanAtCommit(pCur,cs,pCache,&tableRoot,flags,hexBuf,commit.zName,commit.timestamp);
-        sqlite3_free(aT);
+        doltliteFreeCatalog(aT,nT);
       }
       if( rc!=SQLITE_OK ){ doltliteCommitClear(&commit); break; }
     }

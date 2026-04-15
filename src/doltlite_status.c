@@ -260,7 +260,9 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
   }
 
 status_done:
-  sqlite3_free(aHead);sqlite3_free(aStaged);sqlite3_free(aWorking);
+  doltliteFreeCatalog(aHead, nHead);
+  doltliteFreeCatalog(aStaged, nStaged);
+  doltliteFreeCatalog(aWorking, nWorking);
   return rc;
 }
 

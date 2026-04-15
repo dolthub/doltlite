@@ -240,7 +240,7 @@ static int atFilter(sqlite3_vtab_cursor *cur,
 at_find_root:
 
   rc=doltliteFindTableRootByName(aTables,nTables,v->zTableName,&tableRoot,&flags);
-  sqlite3_free(aTables);
+  doltliteFreeCatalog(aTables,nTables);
   if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
   if(rc!=SQLITE_OK) return rc;
 
