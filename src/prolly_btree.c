@@ -264,10 +264,7 @@ struct Btree {
     ProllyHash conflictsCatalogHash;
   } *aSavepointTables;
 
-
-  struct TableEntry *aCommittedTables;
-  int nCommittedTables;
-  Pgno iCommittedNextTable;
+  ProllyHash committedCatalogHash;
   ProllyHash committedStagedCatalog;
   u8 committedIsMerging;
   ProllyHash committedMergeCommitHash;
@@ -2158,7 +2155,6 @@ static int prollyBtreeClose(Btree *p){
     }
     sqlite3_free(p->aSavepointTables);
   }
-  sqlite3_free(p->aCommittedTables);
 
   pBt->nRef--;
   if( pBt->nRef<=0 ){
@@ -2667,19 +2663,19 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       return rc;
     }
 
-    sqlite3_free(p->aCommittedTables);
-    p->aCommittedTables = 0;
-    p->nCommittedTables = 0;
-    if( p->nTables > 0 ){
-      p->aCommittedTables = sqlite3_malloc(
-          p->nTables * (int)sizeof(struct TableEntry));
-      if( p->aCommittedTables ){
-        memcpy(p->aCommittedTables, p->aTables,
-               p->nTables * sizeof(struct TableEntry));
-        p->nCommittedTables = p->nTables;
+    memset(&p->committedCatalogHash, 0, sizeof(ProllyHash));
+    {
+      const char *zBr = p->zBranch ? p->zBranch : "main";
+      int rc2 = btreeReadWorkingCatalog(&pBt->store, zBr,
+                                        &p->committedCatalogHash, 0);
+      if( rc2!=SQLITE_OK && rc2!=SQLITE_NOTFOUND ){
+        chunkStoreUnlock(&pBt->store);
+        return rc2;
+      }
+      if( rc2==SQLITE_NOTFOUND ){
+        memset(&p->committedCatalogHash, 0, sizeof(ProllyHash));
       }
     }
-    p->iCommittedNextTable = p->iNextTable;
     p->committedStagedCatalog = p->stagedCatalog;
     p->committedIsMerging = p->isMerging;
     p->committedMergeCommitHash = p->mergeCommitHash;
@@ -2826,24 +2822,22 @@ int sqlite3BtreeCommit(Btree *p){
 }
 
 static int restoreFromCommitted(Btree *p){
-  if( p->aCommittedTables ){
+  if( prollyHashIsEmpty(&p->committedCatalogHash) ){
     sqlite3_free(p->aTables);
-    if( p->nCommittedTables > 0 ){
-      p->aTables = sqlite3_malloc(
-          p->nCommittedTables * (int)sizeof(struct TableEntry));
-      if( !p->aTables ){
-        p->nTables = 0;
-        p->nTablesAlloc = 0;
-        return SQLITE_NOMEM;
-      }
-      memcpy(p->aTables, p->aCommittedTables,
-             p->nCommittedTables * sizeof(struct TableEntry));
-    } else {
-      p->aTables = 0;
-    }
-    p->nTables = p->nCommittedTables;
-    p->nTablesAlloc = p->nCommittedTables;
-    p->iNextTable = p->iCommittedNextTable;
+    p->aTables = 0;
+    p->nTables = 0;
+    p->nTablesAlloc = 0;
+    initDefaultMeta(p);
+    p->iNextTable = 2;
+  }else{
+    u8 *catData = 0;
+    int nCatData = 0;
+    int rc = chunkStoreGet(&p->pBt->store, &p->committedCatalogHash,
+                           &catData, &nCatData);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = deserializeCatalog(p, catData, nCatData);
+    sqlite3_free(catData);
+    if( rc!=SQLITE_OK ) return rc;
   }
   p->stagedCatalog = p->committedStagedCatalog;
   p->isMerging = p->committedIsMerging;
