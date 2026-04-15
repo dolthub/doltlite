@@ -5759,6 +5759,17 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
   return SQLITE_OK;
 }
 
+/* Free a TableEntry array returned by doltliteLoadCatalog. Each
+** TableEntry owns its zName allocation via deserializeCatalog(); the
+** callers that just did sqlite3_free(a) were leaking N strings per
+** call. Null-tolerant so cleanup paths don't need to guard. */
+void doltliteFreeCatalog(struct TableEntry *a, int n){
+  int i;
+  if( !a ) return;
+  for(i=0; i<n; i++) sqlite3_free(a[i].zName);
+  sqlite3_free(a);
+}
+
 int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headHash;

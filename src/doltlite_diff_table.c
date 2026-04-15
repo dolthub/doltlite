@@ -118,10 +118,16 @@ struct DiffTblCursor {
   int diffIterOpen;
 
 
-  char **azFromCols;
-  int    nFromCols;
-  char **azToCols;
-  int    nToCols;
+  /* Per-pair schema snapshots at the from- and to-commit catalog
+  ** hashes. Populated only when the two commits have a different
+  ** schema hash (needFilter==1) so that changeIsSchemaOnly can
+  ** compare shared columns and filter out modifications that are
+  ** purely schema-level with no data change. Each side carries
+  ** aColToRec[] so record fields can be read by declared-column
+  ** index even when the WITHOUT-ROWID PK-first permutation moves
+  ** columns around relative to the declaration. */
+  DoltliteColInfo fromColInfo;
+  DoltliteColInfo toColInfo;
   int    needFilter;
 
 
@@ -669,28 +675,22 @@ static int buildSliceDiffPair(
 }
 
 static void freePairCols(DiffTblCursor *pCur){
-  int i;
-  if( pCur->azFromCols ){
-    for(i=0; i<pCur->nFromCols; i++) sqlite3_free(pCur->azFromCols[i]);
-    sqlite3_free(pCur->azFromCols);
-    pCur->azFromCols = 0;
-  }
-  pCur->nFromCols = 0;
-  if( pCur->azToCols ){
-    for(i=0; i<pCur->nToCols; i++) sqlite3_free(pCur->azToCols[i]);
-    sqlite3_free(pCur->azToCols);
-    pCur->azToCols = 0;
-  }
-  pCur->nToCols = 0;
+  doltliteFreeColInfo(&pCur->fromColInfo);
+  doltliteFreeColInfo(&pCur->toColInfo);
   pCur->needFilter = 0;
 }
 
-static int loadColNamesAtCatalog(
+/* Load a DoltliteColInfo snapshot (including aColToRec[]) for
+** zTableName at the schema recorded in pCatHash. Opens a fresh
+** in-memory SQLite, replays the recorded CREATE TABLE, then
+** runs doltliteGetColumnNames() against that temp db so the
+** WITHOUT-ROWID PK-first permutation is computed from the same
+** PRAGMA table_info the rest of the engine uses. */
+static int loadColInfoAtCatalog(
   sqlite3 *db,
   const ProllyHash *pCatHash,
   const char *zTableName,
-  char ***pazOut,
-  int *pnOut
+  DoltliteColInfo *pOut
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *pCache = doltliteGetCache(db);
@@ -698,14 +698,9 @@ static int loadColNamesAtCatalog(
   int nSchemas = 0;
   SchemaEntry *pEntry;
   sqlite3 *tmp = 0;
-  sqlite3_stmt *pStmt = 0;
-  char *zPragma = 0;
-  char **az = 0;
-  int n = 0, alloc = 0;
   int rc;
 
-  *pazOut = 0;
-  *pnOut = 0;
+  memset(pOut, 0, sizeof(*pOut));
   if( prollyHashIsEmpty(pCatHash) ) return SQLITE_NOTFOUND;
 
   rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
@@ -721,39 +716,17 @@ static int loadColNamesAtCatalog(
   rc = sqlite3_exec(tmp, pEntry->zSql, 0, 0, 0);
   if( rc!=SQLITE_OK ) goto cleanup;
 
-  zPragma = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTableName);
-  if( !zPragma ){ rc = SQLITE_NOMEM; goto cleanup; }
-  rc = sqlite3_prepare_v2(tmp, zPragma, -1, &pStmt, 0);
+  rc = doltliteGetColumnNames(tmp, zTableName, pOut);
   if( rc!=SQLITE_OK ) goto cleanup;
-
-  while( sqlite3_step(pStmt)==SQLITE_ROW ){
-    const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
-    if( n>=alloc ){
-      int newAlloc = alloc ? alloc*2 : 8;
-      char **aNew = sqlite3_realloc(az, newAlloc*(int)sizeof(char*));
-      if( !aNew ){ rc = SQLITE_NOMEM; break; }
-      az = aNew;
-      alloc = newAlloc;
-    }
-    az[n] = sqlite3_mprintf("%s", zName ? zName : "");
-    if( !az[n] ){ rc = SQLITE_NOMEM; break; }
-    n++;
-  }
+  if( pOut->nCol<=0 ){ rc = SQLITE_NOTFOUND; goto cleanup; }
 
 cleanup:
-  if( pStmt ) sqlite3_finalize(pStmt);
-  sqlite3_free(zPragma);
   if( tmp ) sqlite3_close(tmp);
   freeSchemaEntries(aSchemas, nSchemas);
-  if( rc!=SQLITE_OK && rc!=SQLITE_DONE ){
-    int k;
-    for(k=0; k<n; k++) sqlite3_free(az[k]);
-    sqlite3_free(az);
-    return rc;
+  if( rc!=SQLITE_OK ){
+    doltliteFreeColInfo(pOut);
   }
-  *pazOut = az;
-  *pnOut = n;
-  return SQLITE_OK;
+  return rc;
 }
 
 static i64 sdReadInt(const u8 *p, int nBytes){
@@ -808,53 +781,65 @@ static int fieldValuesEqual(
   return memcmp(pA+aOff, pB+bOff, aLen)==0;
 }
 
+/* Return true if the pOld→pNew MODIFY is purely a schema-level
+** reshape with no data change. Compares shared columns by name
+** and reads each field via the side's aColToRec[] permutation so
+** WITHOUT-ROWID tables (PK-first record layout) map declared
+** indices back to the correct record field. Columns that exist
+** on only one side must be NULL on that side to still qualify
+** as schema-only. */
 static int changeIsSchemaOnly(
   const u8 *pFromRec, int nFromRec,
   const u8 *pToRec,   int nToRec,
-  char **azFromCols,  int nFromCols,
-  char **azToCols,    int nToCols
+  const DoltliteColInfo *pFromCi,
+  const DoltliteColInfo *pToCi
 ){
   DoltliteRecordInfo fromRi, toRi;
   int i;
 
   if( !pFromRec || nFromRec<=0 || !pToRec || nToRec<=0 ) return 0;
+  if( !pFromCi || !pToCi ) return 0;
   doltliteParseRecord(pFromRec, nFromRec, &fromRi);
   doltliteParseRecord(pToRec,   nToRec,   &toRi);
 
 
-  for(i=0; i<nToCols; i++){
+  for(i=0; i<pToCi->nCol; i++){
     int fromIdx;
-    for(fromIdx=0; fromIdx<nFromCols; fromIdx++){
-      if( strcmp(azFromCols[fromIdx], azToCols[i])==0 ) break;
+    int toRec = pToCi->aColToRec ? pToCi->aColToRec[i] : i;
+    int fromRec;
+    for(fromIdx=0; fromIdx<pFromCi->nCol; fromIdx++){
+      if( strcmp(pFromCi->azName[fromIdx], pToCi->azName[i])==0 ) break;
     }
-    if( fromIdx>=nFromCols ){
-
-      if( i<toRi.nField && toRi.aType[i]!=0 ) return 0;
+    if( fromIdx>=pFromCi->nCol ){
+      if( toRec<toRi.nField && toRi.aType[toRec]!=0 ) return 0;
       continue;
     }
-    if( i>=toRi.nField ){
-      if( fromIdx<fromRi.nField && fromRi.aType[fromIdx]!=0 ) return 0;
+    fromRec = pFromCi->aColToRec ? pFromCi->aColToRec[fromIdx] : fromIdx;
+    if( toRec>=toRi.nField ){
+      if( fromRec<fromRi.nField && fromRi.aType[fromRec]!=0 ) return 0;
       continue;
     }
-    if( fromIdx>=fromRi.nField ){
-      if( toRi.aType[i]!=0 ) return 0;
+    if( fromRec>=fromRi.nField ){
+      if( toRi.aType[toRec]!=0 ) return 0;
       continue;
     }
     if( !fieldValuesEqual(
-            fromRi.aType[fromIdx], pFromRec, nFromRec, fromRi.aOffset[fromIdx],
-            toRi.aType[i],         pToRec,   nToRec,   toRi.aOffset[i]) ){
+            fromRi.aType[fromRec], pFromRec, nFromRec, fromRi.aOffset[fromRec],
+            toRi.aType[toRec],     pToRec,   nToRec,   toRi.aOffset[toRec]) ){
       return 0;
     }
   }
 
-  for(i=0; i<nFromCols; i++){
+  for(i=0; i<pFromCi->nCol; i++){
     int toIdx;
-    for(toIdx=0; toIdx<nToCols; toIdx++){
-      if( strcmp(azToCols[toIdx], azFromCols[i])==0 ) break;
+    int fromRec;
+    for(toIdx=0; toIdx<pToCi->nCol; toIdx++){
+      if( strcmp(pToCi->azName[toIdx], pFromCi->azName[i])==0 ) break;
     }
-    if( toIdx<nToCols ) continue;
-    if( i>=fromRi.nField ) continue;
-    if( fromRi.aType[i]!=0 ) return 0;
+    if( toIdx<pToCi->nCol ) continue;
+    fromRec = pFromCi->aColToRec ? pFromCi->aColToRec[i] : i;
+    if( fromRec>=fromRi.nField ) continue;
+    if( fromRi.aType[fromRec]!=0 ) return 0;
   }
   return 1;
 }
@@ -890,19 +875,19 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
     pCur->diffIterOpen = 1;
 
-    if( prollyHashCompare(&p->fromSchemaHash, &p->toSchemaHash)==0 ){
-      return SQLITE_OK;
-    }
-    rc2 = loadColNamesAtCatalog(db, &p->fromCatHash, pVtab->zTableName,
-                                &pCur->azFromCols, &pCur->nFromCols);
-    if( rc2==SQLITE_OK ){
-      rc2 = loadColNamesAtCatalog(db, &p->toCatHash, pVtab->zTableName,
-                                  &pCur->azToCols, &pCur->nToCols);
-    }
-    if( rc2==SQLITE_OK ){
-      pCur->needFilter = 1;
-    }else{
-      freePairCols(pCur);
+    if( prollyHashCompare(&p->fromSchemaHash, &p->toSchemaHash)!=0 ){
+      int rc2;
+      rc2 = loadColInfoAtCatalog(db, &p->fromCatHash, pVtab->zTableName,
+                                 &pCur->fromColInfo);
+      if( rc2==SQLITE_OK ){
+        rc2 = loadColInfoAtCatalog(db, &p->toCatHash, pVtab->zTableName,
+                                   &pCur->toColInfo);
+      }
+      if( rc2==SQLITE_OK ){
+        pCur->needFilter = 1;
+      }else{
+        freePairCols(pCur);
+      }
     }
     return SQLITE_OK;
   }
@@ -924,8 +909,7 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
          && pChange->type==PROLLY_DIFF_MODIFY
          && changeIsSchemaOnly(pChange->pOldVal, pChange->nOldVal,
                                pChange->pNewVal, pChange->nNewVal,
-                               pCur->azFromCols, pCur->nFromCols,
-                               pCur->azToCols,   pCur->nToCols) ){
+                               &pCur->fromColInfo, &pCur->toColInfo) ){
           continue;
         }
 

@@ -797,12 +797,12 @@ static void doltliteAddFunc(
       return;
     }
 
-    if( stageAll ){
-      rc = addStageAllTables(db, context, cs, &workingHash);
-      if( rc!=SQLITE_OK ) return;
-    }else{
-      rc = addStageNamedTables(db, context, cs, &workingHash, argc, argv);
-      if( rc!=SQLITE_OK ) return;
+      if( stageAll ){
+        rc = addStageAllTables(db, context, cs, &workingHash);
+        if( rc!=SQLITE_OK ) return;
+      }else{
+        rc = addStageNamedTables(db, context, cs, &workingHash, argc, argv);
+        if( rc!=SQLITE_OK ) return;
     }
 
     rc = doltlitePersistWorkingSet(db);
