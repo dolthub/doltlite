@@ -34,7 +34,7 @@ echo "=== HTTP remote URL recognition tests ==="
 result=$("$DB" "$TMPDIR/test.db" "SELECT dolt_remote('add','origin','http://localhost:19999/mydb');" 2>/dev/null)
 check "http remote add succeeds" "0" "$result"
 
-result=$("$DB" "$TMPDIR/test.db" "SELECT * FROM dolt_remotes;")
+result=$("$DB" "$TMPDIR/test.db" "SELECT name, url FROM dolt_remotes;")
 check "http remote in list" "origin|http://localhost:19999/mydb" "$result"
 
 result=$("$DB" "$TMPDIR/test.db" "SELECT dolt_push('origin','main');" 2>&1)
@@ -423,8 +423,8 @@ int main(int argc, char **argv) {
     run_sql(deepDb, sql);
   }
   CHECK("deep source has 15 rows", 15, query_int(deepDb, "SELECT count(*) FROM log"));
-  /* 16 commits = 1 create + 15 inserts */
-  CHECK("deep source has 16 commits", 16, query_int(deepDb, "SELECT count(*) FROM dolt_log"));
+  /* 17 commits = 1 initial + 1 create + 15 inserts */
+  CHECK("deep source has 17 commits", 17, query_int(deepDb, "SELECT count(*) FROM dolt_log"));
   sqlite3_close(deepDb);
 
   /* ============================================================
@@ -437,7 +437,7 @@ int main(int argc, char **argv) {
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d/deep.db')", port);
   run_sql(deepClone, sql);
   CHECK("deep clone has 15 rows", 15, query_int(deepClone, "SELECT count(*) FROM log"));
-  CHECK("deep clone has 16 commits", 16, query_int(deepClone, "SELECT count(*) FROM dolt_log"));
+  CHECK("deep clone has 17 commits", 17, query_int(deepClone, "SELECT count(*) FROM dolt_log"));
   CHECK_STR("deep clone latest msg", "step 15",
     query_str(deepClone, "SELECT message FROM dolt_log LIMIT 1"));
   sqlite3_close(deepClone);
