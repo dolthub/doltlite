@@ -88,11 +88,15 @@ $setup"
   local dolt_setup
   dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
 
+  # Run setup AND the status query in a single dolt sql invocation so
+  # that branch checkouts and working-set state persist from setup
+  # into the query (a second dolt sql call would reset to main and
+  # lose the per-branch working set).
   (
     cd "$dir/dt" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
-    "$DOLT" sql -r csv -q "SELECT concat('S|', table_name, '|', staged, '|', status) FROM dolt_status" 2>>"$dir/dt.err"
+    printf "%s\nSELECT concat('S|', table_name, '|', staged, '|', status) FROM dolt_status;\n" "$dolt_setup" \
+      | "$DOLT" sql -r csv 2>"$dir/dt.err"
   ) > "$dir/dt.raw"
 
   local dt_out
@@ -544,6 +548,84 @@ doltlite_runtime_reject "runtime_wrong_shape_view" "
 CREATE VIEW dolt_ignore AS SELECT 'tmp_*' AS pattern;
 CREATE TABLE tmp_bad(x INT PRIMARY KEY);
 SELECT * FROM dolt_status;
+"
+
+# ---------------------------------------------------------------
+# cross-branch + merge + reset
+# ---------------------------------------------------------------
+#
+# These scenarios pin dolt_ignore's behavior across branch, merge,
+# and reset operations. All interactions are checked against Dolt
+# 1.83.5; the oracle helpers already handle doltlite's manual
+# CREATE TABLE dolt_ignore prefix.
+#
+# Note scenario 3 (committed_then_reset): after dolt_reset --hard
+# HEAD~1, both engines leave the previously-untracked matching
+# table in the working tree (reset --hard does not clean untracked
+# files). Once the ignore pattern is gone, both that leftover table
+# and any freshly-created matching table show up in dolt_status.
+# Note scenario 5 (merge_conflicting_patterns): an UPDATE-UPDATE
+# conflict on the same dolt_ignore row surfaces as a merge conflict
+# in Dolt and as "Merge has N conflict(s)" in doltlite; oracle_error
+# only requires both to report an error.
+
+echo "--- cross-branch + merge + reset ---"
+
+oracle "pattern_survives_branch_create" "
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+SELECT dolt_commit('-A', '-m', 'add pattern');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE tmp_foo(x INT PRIMARY KEY);
+CREATE TABLE keep(x INT PRIMARY KEY);
+"
+
+oracle "pattern_different_on_branches" "
+SELECT dolt_checkout('-b', 'bA');
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+SELECT dolt_commit('-A', '-m', 'bA ignores tmp_');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b', 'bB');
+INSERT INTO dolt_ignore VALUES ('cache_*', 1);
+SELECT dolt_commit('-A', '-m', 'bB ignores cache_');
+CREATE TABLE tmp_foo(x INT PRIMARY KEY);
+CREATE TABLE cache_bar(x INT PRIMARY KEY);
+"
+
+oracle "pattern_committed_then_reset" "
+CREATE TABLE sentinel(x INT PRIMARY KEY);
+SELECT dolt_commit('-A', '-m', 'base');
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+SELECT dolt_commit('-A', '-m', 'add pattern');
+CREATE TABLE tmp_foo(x INT PRIMARY KEY);
+SELECT dolt_reset('--hard', 'HEAD~1');
+CREATE TABLE tmp_bar(x INT PRIMARY KEY);
+"
+
+oracle "merge_adds_pattern_ff" "
+CREATE TABLE sentinel(x INT PRIMARY KEY);
+SELECT dolt_commit('-A', '-m', 'base');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
+SELECT dolt_commit('-A', '-m', 'feature adds pattern');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+CREATE TABLE tmp_new(x INT PRIMARY KEY);
+CREATE TABLE keep(x INT PRIMARY KEY);
+"
+
+oracle_error "merge_conflicting_patterns" "
+CREATE TABLE sentinel(x INT PRIMARY KEY);
+SELECT dolt_commit('-A', '-m', 'base');
+SELECT dolt_checkout('-b', 'b1');
+INSERT INTO dolt_ignore VALUES ('shared_pat', 1);
+SELECT dolt_commit('-A', '-m', 'b1 ignores shared_pat');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b', 'b2');
+INSERT INTO dolt_ignore VALUES ('shared_pat', 0);
+SELECT dolt_commit('-A', '-m', 'b2 unignores shared_pat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('b1');
+SELECT dolt_merge('b2');
 "
 
 echo ""
