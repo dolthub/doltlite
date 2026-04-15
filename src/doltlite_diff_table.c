@@ -266,6 +266,35 @@ static int pairsAppend(DiffTblCursor *pCur,
   return SQLITE_OK;
 }
 
+static int stackPushUnique(ProllyHash **paAdded, int *pnAdded,
+                           ProllyHash **paStack, int *pnStack,
+                           const ProllyHash *pHash){
+  ProllyHash *aAddedNew;
+  ProllyHash *aStackNew;
+  int i;
+  for(i=0; i<*pnAdded; i++){
+    if( prollyHashCompare(&(*paAdded)[i], pHash)==0 ) return SQLITE_OK;
+  }
+  aAddedNew = sqlite3_malloc((*pnAdded+1)*(int)sizeof(ProllyHash));
+  if( !aAddedNew ) return SQLITE_NOMEM;
+  aStackNew = sqlite3_malloc((*pnStack+1)*(int)sizeof(ProllyHash));
+  if( !aStackNew ){
+    sqlite3_free(aAddedNew);
+    return SQLITE_NOMEM;
+  }
+  if( *pnAdded>0 ) memcpy(aAddedNew, *paAdded, (*pnAdded)*(int)sizeof(ProllyHash));
+  if( *pnStack>0 ) memcpy(aStackNew, *paStack, (*pnStack)*(int)sizeof(ProllyHash));
+  sqlite3_free(*paAdded);
+  sqlite3_free(*paStack);
+  *paAdded = aAddedNew;
+  *paStack = aStackNew;
+  (*paAdded)[*pnAdded] = *pHash;
+  (*pnAdded)++;
+  (*paStack)[*pnStack] = *pHash;
+  (*pnStack)++;
+  return SQLITE_OK;
+}
+
 static int loadTblRootAtCommit(sqlite3 *db, const ProllyHash *pCatHash,
                                const char *zTableName,
                                ProllyHash *pTblRoot, u8 *pFlags,
@@ -291,6 +320,101 @@ static int loadTblRootAtCommit(sqlite3 *db, const ProllyHash *pCatHash,
   return SQLITE_OK;
 }
 
+static int seedWorkingChildInfo(
+  sqlite3 *db,
+  const ProllyHash *pHeadHash,
+  const char *zTableName,
+  CmTblInfo **paMap,
+  int *pnMap
+){
+  ProllyHash workingCat;
+  ProllyHash workingTblRoot;
+  ProllyHash workingSchemaHash;
+  u8 workingFlags;
+  char zWorking[PROLLY_HASH_SIZE*2+1];
+  int rc;
+
+  memset(&workingCat, 0, sizeof(workingCat));
+  memset(&workingTblRoot, 0, sizeof(workingTblRoot));
+  memset(&workingSchemaHash, 0, sizeof(workingSchemaHash));
+  memset(zWorking, 0, sizeof(zWorking));
+  memcpy(zWorking, "WORKING", 7);
+
+  rc = doltliteFlushCatalogToHash(db, &workingCat);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = loadTblRootAtCommit(db, &workingCat, zTableName, &workingTblRoot,
+                           &workingFlags, &workingSchemaHash);
+  if( rc!=SQLITE_OK ) return rc;
+  return mapPut(paMap, pnMap, pHeadHash, &workingTblRoot, &workingCat,
+                &workingSchemaHash, workingFlags, zWorking, 0);
+}
+
+static int appendCurrentDiffPair(
+  DiffTblCursor *pCur,
+  const ProllyHash *pCurr,
+  const DoltliteCommit *pCommit,
+  const ProllyHash *pCurTblRoot,
+  const ProllyHash *pCurSchemaHash,
+  u8 curFlags,
+  CmTblInfo *aMap,
+  int nMap
+){
+  CmTblInfo *pInfo;
+  int idx;
+  int rootsDiffer;
+  int schemasDiffer;
+  u8 fromFlags;
+
+  idx = mapFind(aMap, nMap, pCurr);
+  if( idx<0 ) return SQLITE_OK;
+  pInfo = &aMap[idx];
+  rootsDiffer = prollyHashCompare(&pInfo->tblRoot, pCurTblRoot)!=0;
+  schemasDiffer = prollyHashCompare(&pInfo->schemaHash, pCurSchemaHash)!=0;
+  if( !rootsDiffer && !schemasDiffer ) return SQLITE_OK;
+
+  fromFlags = curFlags;
+  if( fromFlags==0 ) fromFlags = pInfo->flags;
+  return pairsAppend(pCur, pCurr, pCurTblRoot, &pCommit->catalogHash,
+                     pCurSchemaHash, fromFlags, pCommit->timestamp,
+                     pInfo->zHexName, &pInfo->tblRoot, &pInfo->catHash,
+                     &pInfo->schemaHash, pInfo->flags, pInfo->date);
+}
+
+static int registerCommitParents(
+  CmTblInfo **paMap,
+  int *pnMap,
+  ProllyHash **paStack,
+  int *pnStack,
+  ProllyHash **paAdded,
+  int *pnAdded,
+  const DoltliteCommit *pCommit,
+  const ProllyHash *pCurTblRoot,
+  const ProllyHash *pCurSchemaHash,
+  u8 curFlags,
+  const char *zCurHex
+){
+  int i;
+  int nParents;
+  const ProllyHash *pParent;
+  int rc;
+
+  nParents = pCommit->nParents>0
+               ? pCommit->nParents
+               : (prollyHashIsEmpty(&pCommit->parentHash) ? 0 : 1);
+  for(i=0; i<nParents; i++){
+    pParent = pCommit->nParents>0 ? &pCommit->aParents[i] : &pCommit->parentHash;
+    rc = mapPut(paMap, pnMap, pParent, pCurTblRoot, &pCommit->catalogHash,
+                pCurSchemaHash, curFlags, zCurHex, pCommit->timestamp);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  for(i=0; i<nParents; i++){
+    pParent = pCommit->nParents>0 ? &pCommit->aParents[i] : &pCommit->parentHash;
+    rc = stackPushUnique(paAdded, pnAdded, paStack, pnStack, pParent);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
+}
+
 /* Walk history toward the root, emitting one DiffPair per commit
 ** whose table root (or schema) differs from the commit that follows
 ** it. aMap is keyed by commit hash and stores "what child info do we
@@ -303,8 +427,6 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
                           const char *zTableName){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headHash;
-  ProllyHash workingCat, workingTblRoot;
-  u8 workingFlags = 0;
   CmTblInfo *aMap = 0;
   int nMap = 0;
   ProllyHash *aStack = 0;
@@ -320,39 +442,14 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
 
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ) return SQLITE_OK;
+  rc = seedWorkingChildInfo(db, &headHash, zTableName, &aMap, &nMap);
+  if( rc!=SQLITE_OK ) goto walk_done;
 
-
-  memset(&workingCat, 0, sizeof(workingCat));
-  memset(&workingTblRoot, 0, sizeof(workingTblRoot));
-  rc = doltliteFlushCatalogToHash(db, &workingCat);
-  if( rc!=SQLITE_OK ) return rc;
-  {
-    ProllyHash workingSchemaHash;
-    rc = loadTblRootAtCommit(db, &workingCat, zTableName,
-                             &workingTblRoot, &workingFlags,
-                             &workingSchemaHash);
-    if( rc!=SQLITE_OK ) return rc;
-
-    {
-      char zWorking[PROLLY_HASH_SIZE*2+1];
-      memset(zWorking, 0, sizeof(zWorking));
-      memcpy(zWorking, "WORKING", 7);
-      rc = mapPut(&aMap, &nMap, &headHash, &workingTblRoot,
-                  &workingCat, &workingSchemaHash,
-                  workingFlags, zWorking, 0);
-      if( rc!=SQLITE_OK ) goto walk_done;
-    }
-  }
-
-
-  {
-    ProllyHash *aN = sqlite3_realloc(aAdded, (nAdded+1)*(int)sizeof(ProllyHash));
-    if( !aN ){ rc = SQLITE_NOMEM; goto walk_done; }
-    aAdded = aN;
-    aAdded[nAdded++] = headHash;
-  }
+  rc = stackPushUnique(&aAdded, &nAdded, &aStack, &nStack, &headHash);
+  if( rc!=SQLITE_OK ) goto walk_done;
   curr = headHash;
   currInited = 1;
+  nStack--;
 
   while( currInited ){
     DoltliteCommit commit;
@@ -360,7 +457,6 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
     ProllyHash curSchemaHash;
     u8 curFlags = 0;
     char curHex[PROLLY_HASH_SIZE*2+1];
-    int idx;
 
     memset(&commit, 0, sizeof(commit));
     memset(&curTblRoot, 0, sizeof(curTblRoot));
@@ -377,72 +473,12 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
     }
 
     doltliteHashToHex(&curr, curHex);
-
-
-    idx = mapFind(aMap, nMap, &curr);
-    if( idx>=0 ){
-      CmTblInfo *info = &aMap[idx];
-      int rootsDiffer = (prollyHashCompare(&info->tblRoot, &curTblRoot)!=0);
-      int schemasDiffer = (prollyHashCompare(&info->schemaHash, &curSchemaHash)!=0);
-      if( rootsDiffer || schemasDiffer ){
-        u8 fromFlags = curFlags;
-        if( fromFlags==0 ) fromFlags = info->flags;
-        rc = pairsAppend(pCur, &curr, &curTblRoot, &commit.catalogHash,
-                         &curSchemaHash, fromFlags, commit.timestamp,
-                         info->zHexName, &info->tblRoot, &info->catHash,
-                         &info->schemaHash, info->flags, info->date);
-        if( rc!=SQLITE_OK ){
-          doltliteCommitClear(&commit);
-          break;
-        }
-      }
-    }
-
-
-
-    {
-      int nParents = commit.nParents>0
-                       ? commit.nParents
-                       : (prollyHashIsEmpty(&commit.parentHash) ? 0 : 1);
-      for(i=0; i<nParents; i++){
-        const ProllyHash *pParent = commit.nParents>0
-                                       ? &commit.aParents[i]
-                                       : &commit.parentHash;
-        rc = mapPut(&aMap, &nMap, pParent, &curTblRoot, &commit.catalogHash,
-                    &curSchemaHash, curFlags, curHex, commit.timestamp);
-        if( rc!=SQLITE_OK ) break;
-      }
-      if( rc!=SQLITE_OK ){
-        doltliteCommitClear(&commit);
-        break;
-      }
-
-
-      for(i=0; i<nParents; i++){
-        const ProllyHash *pParent = commit.nParents>0
-                                       ? &commit.aParents[i]
-                                       : &commit.parentHash;
-        int already = 0;
-        int j;
-        for(j=0; j<nAdded; j++){
-          if( prollyHashCompare(&aAdded[j], pParent)==0 ){ already = 1; break; }
-        }
-        if( already ) continue;
-        {
-          ProllyHash *aN = sqlite3_realloc(aAdded,
-                              (nAdded+1)*(int)sizeof(ProllyHash));
-          if( !aN ){ rc = SQLITE_NOMEM; break; }
-          aAdded = aN;
-          aAdded[nAdded++] = *pParent;
-        }
-        {
-          ProllyHash *aN = sqlite3_realloc(aStack,
-                              (nStack+1)*(int)sizeof(ProllyHash));
-          if( !aN ){ rc = SQLITE_NOMEM; break; }
-          aStack = aN;
-          aStack[nStack++] = *pParent;
-        }
-      }
+    rc = appendCurrentDiffPair(pCur, &curr, &commit, &curTblRoot,
+                               &curSchemaHash, curFlags, aMap, nMap);
+    if( rc==SQLITE_OK ){
+      rc = registerCommitParents(&aMap, &nMap, &aStack, &nStack,
+                                 &aAdded, &nAdded, &commit, &curTblRoot,
+                                 &curSchemaHash, curFlags, curHex);
     }
     doltliteCommitClear(&commit);
     if( rc!=SQLITE_OK ) break;
@@ -840,8 +876,11 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   }
 
   {
-    DiffPair *p = &pCur->aPairs[pCur->iPair++];
-    u8 flags = p->fromFlags ? p->fromFlags : p->toFlags;
+    DiffPair *p;
+    u8 flags;
+    int rc2;
+    p = &pCur->aPairs[pCur->iPair++];
+    flags = p->fromFlags ? p->fromFlags : p->toFlags;
     doltliteHashToHex(&p->fromHash, pCur->row.zFromCommit);
     pCur->row.fromDate = p->fromDate;
     memcpy(pCur->row.zToCommit, p->zToCommit, PROLLY_HASH_SIZE*2+1);
@@ -851,20 +890,19 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
     pCur->diffIterOpen = 1;
 
-
-    if( prollyHashCompare(&p->fromSchemaHash, &p->toSchemaHash)!=0 ){
-      int rc2;
-      rc2 = loadColNamesAtCatalog(db, &p->fromCatHash, pVtab->zTableName,
-                                  &pCur->azFromCols, &pCur->nFromCols);
-      if( rc2==SQLITE_OK ){
-        rc2 = loadColNamesAtCatalog(db, &p->toCatHash, pVtab->zTableName,
-                                    &pCur->azToCols, &pCur->nToCols);
-      }
-      if( rc2==SQLITE_OK ){
-        pCur->needFilter = 1;
-      }else{
-        freePairCols(pCur);
-      }
+    if( prollyHashCompare(&p->fromSchemaHash, &p->toSchemaHash)==0 ){
+      return SQLITE_OK;
+    }
+    rc2 = loadColNamesAtCatalog(db, &p->fromCatHash, pVtab->zTableName,
+                                &pCur->azFromCols, &pCur->nFromCols);
+    if( rc2==SQLITE_OK ){
+      rc2 = loadColNamesAtCatalog(db, &p->toCatHash, pVtab->zTableName,
+                                  &pCur->azToCols, &pCur->nToCols);
+    }
+    if( rc2==SQLITE_OK ){
+      pCur->needFilter = 1;
+    }else{
+      freePairCols(pCur);
     }
     return SQLITE_OK;
   }
