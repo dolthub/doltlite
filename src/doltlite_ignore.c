@@ -165,6 +165,7 @@ int doltliteCheckIgnore(
       bestIgnored = ign;
       sqlite3_free(zBestPat);
       zBestPat = sqlite3_mprintf("%s", zPat);
+      if( !zBestPat ){ rc = SQLITE_NOMEM; break; }
       tieDisagrees = 0;
       sqlite3_free(zTiePat);
       zTiePat = 0;
@@ -172,6 +173,7 @@ int doltliteCheckIgnore(
       tieDisagrees = 1;
       sqlite3_free(zTiePat);
       zTiePat = sqlite3_mprintf("%s", zPat);
+      if( !zTiePat ){ rc = SQLITE_NOMEM; break; }
     }
   }
   sqlite3_finalize(pStmt);
