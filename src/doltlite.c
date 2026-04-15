@@ -1180,7 +1180,16 @@ static void doltliteCommitFunc(
         return;
       }
 
-      memcpy(&parentHash, &headCommit.aParents[0], sizeof(ProllyHash));
+      {
+        const ProllyHash *pParent = doltliteCommitParentHash(&headCommit, 0);
+        if( !pParent || prollyHashIsEmpty(pParent) ){
+          doltliteCommitClear(&headCommit);
+          sqlite3_result_error(context,
+            "cannot --amend: HEAD has no parent (initial commit)", -1);
+          return;
+        }
+        memcpy(&parentHash, pParent, sizeof(ProllyHash));
+      }
       if( !zMessage || !*zMessage ){
         zMessage = sqlite3_mprintf("%s",
             headCommit.zMessage ? headCommit.zMessage : "");
@@ -2629,12 +2638,12 @@ static int doltliteRebaseLinearReplay(
     rc = doltliteLoadCommit(db, &aReplay[i], &replayCommit);
     if( rc!=SQLITE_OK ) goto rollback;
 
-    if( replayCommit.nParents==0 || prollyHashIsEmpty(&replayCommit.aParents[0]) ){
+    if( doltliteCommitParentCount(&replayCommit)==0 ){
       doltliteCommitClear(&replayCommit);
       rc = SQLITE_ERROR;
       goto rollback;
     }
-    rc = doltliteLoadCommit(db, &replayCommit.aParents[0], &parentCommit);
+    rc = doltliteLoadFirstParentCommit(db, &replayCommit, &parentCommit);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&replayCommit);
       goto rollback;
@@ -2842,11 +2851,11 @@ static int rebaseApplyPlanRowCatalog(
 
   rc = doltliteLoadCommit(db, &pRow->commitHash, &replayC);
   if( rc!=SQLITE_OK ) return rc;
-  if( replayC.nParents==0 || prollyHashIsEmpty(&replayC.aParents[0]) ){
+  if( doltliteCommitParentCount(&replayC)==0 ){
     doltliteCommitClear(&replayC);
     return SQLITE_ERROR;
   }
-  rc = doltliteLoadCommit(db, &replayC.aParents[0], &parentC);
+  rc = doltliteLoadFirstParentCommit(db, &replayC, &parentC);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&replayC);
     return rc;

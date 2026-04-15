@@ -569,10 +569,13 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       walkRc = doltliteLoadCommit(db, &walk, &commit);
       if( walkRc!=SQLITE_OK ) break;
 
-      if( commit.nParents > 0 ){
-        memcpy(&walk, &commit.aParents[0], sizeof(ProllyHash));
-      }else{
-        memset(&walk, 0, sizeof(ProllyHash));
+      {
+        const ProllyHash *pParent = doltliteCommitParentHash(&commit, 0);
+        if( pParent && !prollyHashIsEmpty(pParent) ){
+          memcpy(&walk, pParent, sizeof(ProllyHash));
+        }else{
+          memset(&walk, 0, sizeof(ProllyHash));
+        }
       }
       doltliteCommitClear(&commit);
     }
