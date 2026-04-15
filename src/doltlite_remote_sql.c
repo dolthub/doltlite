@@ -18,8 +18,6 @@ struct RemoteMutationCtx {
 
 typedef struct RemoteSqlState RemoteSqlState;
 struct RemoteSqlState {
-  u8 *pRefsBlob;
-  int nRefsBlob;
   ProllyHash refsHash;
   char *zSessionBranch;
   ProllyHash sessionHead;
@@ -31,7 +29,6 @@ struct RemoteSqlState {
 };
 
 static void remoteSqlStateClear(RemoteSqlState *p){
-  sqlite3_free(p->pRefsBlob);
   sqlite3_free(p->zSessionBranch);
   memset(p, 0, sizeof(*p));
 }
@@ -41,14 +38,10 @@ static void remoteSqlStateClear(RemoteSqlState *p){
 ** the working set pointing at chunks we're about to roll back —
 ** this state is the snapshot we restore to if something errors. */
 static int remoteSqlStateSave(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
-  u8 *pCatalog = 0;
-  int nCatalog = 0;
   int rc;
 
   memset(p, 0, sizeof(*p));
 
-  rc = chunkStoreSerializeRefsToBlob(cs, &p->pRefsBlob, &p->nRefsBlob);
-  if( rc!=SQLITE_OK ) return rc;
   memcpy(&p->refsHash, &cs->refsHash, sizeof(ProllyHash));
 
   p->zSessionBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
@@ -62,13 +55,7 @@ static int remoteSqlStateSave(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
                                &p->sessionMergeCommit,
                                &p->sessionConflictsCatalog);
 
-  rc = doltliteFlushAndSerializeCatalog(db, &pCatalog, &nCatalog);
-  if( rc!=SQLITE_OK ){
-    remoteSqlStateClear(p);
-    return rc;
-  }
-  rc = chunkStorePut(cs, pCatalog, nCatalog, &p->sessionCatalogHash);
-  sqlite3_free(pCatalog);
+  rc = doltliteFlushCatalogToHash(db, &p->sessionCatalogHash);
   if( rc!=SQLITE_OK ){
     remoteSqlStateClear(p);
   }
@@ -78,9 +65,13 @@ static int remoteSqlStateSave(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
 static int remoteSqlStateRestore(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
   int rc;
 
-  rc = chunkStoreLoadRefsFromBlob(cs, p->pRefsBlob, p->nRefsBlob);
-  if( rc!=SQLITE_OK ) return rc;
   memcpy(&cs->refsHash, &p->refsHash, sizeof(ProllyHash));
+  if( prollyHashIsEmpty(&p->refsHash) ){
+    chunkStoreClearRefs(cs);
+  }else{
+    rc = chunkStoreReloadRefs(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   rc = doltliteSwitchCatalog(db, &p->sessionCatalogHash);
   if( rc!=SQLITE_OK ) return rc;
