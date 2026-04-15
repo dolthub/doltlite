@@ -743,12 +743,11 @@ proc sqlite-setup-default-cflags {} {
   # compiling binaries for the target system (CC a.k.a. $(T.cc)).
   # Normally they're the same, but they will differ when
   # cross-compiling.
-  #
-  # When cross-compiling we default to not using the -g flag, based on a
-  # /chat discussion prompted by
-  # https://sqlite.org/forum/forumpost/9a67df63eda9925c
   set defaultCFlags {-O2}
   if {!$::sqliteConfig(is-cross-compiling)} {
+    # When cross-compiling we default to not using the -g flag, based
+    # on a /chat discussion prompted by
+    # https://sqlite.org/forum/forumpost/9a67df63eda9925c
     lappend defaultCFlags -g
   }
   define CFLAGS [proj-get-env CFLAGS $defaultCFlags]
@@ -1149,7 +1148,7 @@ proc sqlite-check-line-editing {} {
    && ![proj-opt-was-provided editline]
   } {
     set dirlist ../linenoise
-    catch {lappend dirlist [file normalize $::autosetup(srcdir)/../linenoise]}
+    catch {lappend dirlist [file-normalize $::autosetup(srcdir)/../linenoise]}
     catch {lappend dirlist $::env(HOME)/linenoise}
     foreach d $dirlist {
       if {[file exists $d/linenoise.c] && [file exists $d/linenoise.h]} {
@@ -1195,7 +1194,7 @@ proc sqlite-check-line-editing {} {
       define-append CFLAGS_JIMSH -DUSE_LINENOISE [get-define CFLAGS_READLINE]
       user-notice "Adding linenoise support to jimsh."
     } else {
-      msg-result "Using linenoise at [file normalize $dirLn]"
+      msg-result "Using linenoise at [file-normalize $dirLn]"
     }
     return "linenoise ($flavor)"
   } elseif {[opt-bool editline]} {

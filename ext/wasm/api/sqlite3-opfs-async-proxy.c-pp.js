@@ -49,6 +49,36 @@
   versions (approximately) 104-107 are extinct) we should change our
   usage of those methods to remove the "await".
 */
+//#if 0
+/**
+   2026-04-04: this file gets included by both the "opfs" and "opfs-wl"
+   VFSes. It would, in hindsight, hypothetically be possible to restructure
+   it very slightly to support both VFSes via a single Worker instance.
+
+   Some of the changes we would need for that:
+
+   - The xLock/xUnlock "op codes" would need to differ for each impl.
+   i.e. we'd need state.opIds.xLock{,WL} and state.opIds.xUnlock{,WL}
+   to distinguish between the two, rather than doing so when this Worker
+   is loaded.
+
+   - We would need to centralize loading of this Worker, outside of
+   the VFS-specific pieces, and change the handshake in order to be
+   able to distinguish between clients which support
+   Atomics.waitAsync() and those which do not ("opfs-wl" requires
+   waitAsync()).
+
+   One down-side would be for clients which, for whatever reason, want
+   to use both "opfs" and "opfs-wl" within the same session: because
+   both would go through the same Worker, any operations for one VFS
+   would, while they're being processed on this side of the proxy,
+   effectively block the other VFS from doing anything, potentially
+   deadlocking. This use case seems unlikely enough that it can
+   possibly be ruled out (or even reasonably flat-out prohibited by
+   the library).
+*/
+//#/if
+
 "use strict";
 const urlParams = new URL(globalThis.location.href).searchParams;
 const vfsName = urlParams.get('vfs');
@@ -678,9 +708,9 @@ const installAsyncProxy = function(){
       const lockName = "sqlite3-vfs-opfs:" + fh.filenameAbs;
       const oldLockType = fh.xLock;
       return new Promise((resolveWaitLoop) => {
-        //error("xLock() initial promise entered...");
+        //log("xLock() initial promise entered...");
         navigator.locks.request(lockName, { mode: requestedMode }, async (lock) => {
-          //error("xLock() Web Lock entered.", fh);
+          //log("xLock() Web Lock entered.", fh);
           __implicitLocks.delete(fid);
           let rc = 0;
           try{
@@ -726,7 +756,7 @@ const installAsyncProxy = function(){
         storeAndNotify('xUnlock', rc);
         return rc;
       }
-      //error("xUnlock()",fid, lockType, fh);
+      //log("xUnlock()",fid, lockType, fh);
       let rc = 0;
       if( lockType === state.sq3Codes.SQLITE_LOCK_NONE ){
         /* SQLite usually unlocks all the way to NONE */
@@ -736,7 +766,7 @@ const installAsyncProxy = function(){
         fh.xLock = lockType;
       }else if( lockType === state.sq3Codes.SQLITE_LOCK_SHARED
                 && existing.mode === 'exclusive' ){
-        /* downgrade Exclusive -> Shared */
+        /* downgrade EXCLUSIVE -> SHARED */
         rc = await wlCloseHandle(fh);
         if( 0===rc ){
           fh.xLock = lockType;
@@ -882,16 +912,6 @@ const installAsyncProxy = function(){
                   operation */
         ) || [];
         //error("waitLoop() whichOp =",opId, f.opHandlers[opId].key, args);
-//#if 0
-        if( isWebLocker && (opId==opIds.xLock || opIds==opIds.xUnlock) ){
-          /* An expert suggests that this introduces a race condition,
-             but my eyes aren't seeing it. The hope was that this
-             would improve the lock speed a tick, but it does not
-             appear to. */
-          hnd(...args);
-          continue;
-        }
-//#/if
         await hnd(...args);
       }catch(e){
         error('in waitLoop():', e);

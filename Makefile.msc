@@ -1766,6 +1766,7 @@ FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\test\fuzzinvariants.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\test\vt02.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\recover\dbdata.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\recover\sqlite3recover.c
+FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\misc\analyze.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\misc\base64.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\misc\base85.c
 FUZZCHECK_SRC = $(FUZZCHECK_SRC) $(TOP)\ext\misc\completion.c
@@ -2342,6 +2343,7 @@ SHELL_DEP = \
     $(TOP)\ext\expert\sqlite3expert.h \
     $(TOP)\ext\intck\sqlite3intck.c \
     $(TOP)\ext\intck\sqlite3intck.h \
+    $(TOP)\ext\misc\analyze.c \
     $(TOP)\ext\misc\appendvfs.c \
     $(TOP)\ext\misc\base64.c \
     $(TOP)\ext\misc\base85.c \
@@ -2627,6 +2629,12 @@ smoketest:	$(TESTPROGS)
 	@set PATH=$(LIBTCLPATH);$(PATH)
 	.\testfixture.exe $(TOP)\test\main.test $(TESTOPTS)
 
+# Measure the performance of floating-point conversions.
+#
+fp-speed-test:	fp-speed-1.exe fp-speed-2.exe
+	fp-speed-1 1000000
+	fp-speed-2 1000000
+
 shelltest:
 	$(TCLSH_CMD) $(TOP)\test\testrunner.tcl release shell
 
@@ -2718,6 +2726,14 @@ wordcount.exe:	$(TOP)\test\wordcount.c $(SQLITE3C) $(SQLITE3H)
 speedtest1.exe:	$(TOP)\test\speedtest1.c $(SQLITE3C) $(SQLITE3H)
 	$(LTLINK) $(NO_WARN) $(ST_COMPILE_OPTS) -DSQLITE_OMIT_LOAD_EXTENSION \
 		$(TOP)\test\speedtest1.c $(SQLITE3C) /link $(LDFLAGS) $(LTLINKOPTS)
+
+fp-speed-1.exe:	$(TOP)\test\fp-speed-1.c $(SQLITE3C) $(SQLITE3H)
+	$(LTLINK) $(NO_WARN) $(ST_COMPILE_OPTS) -DSQLITE_OMIT_LOAD_EXTENSION \
+		$(TOP)\test\fp-speed-1.c $(SQLITE3C) /link $(LDFLAGS) $(LTLINKOPTS)
+
+fp-speed-2.exe:	$(TOP)\test\fp-speed-2.c $(SQLITE3C) $(SQLITE3H)
+	$(LTLINK) $(NO_WARN) $(ST_COMPILE_OPTS) -DSQLITE_OMIT_LOAD_EXTENSION \
+		$(TOP)\test\fp-speed-2.c $(SQLITE3C) /link $(LDFLAGS) $(LTLINKOPTS)
 
 kvtest.exe:	$(TOP)\test\kvtest.c $(SQLITE3C) $(SQLITE3H)
 	$(LTLINK) $(NO_WARN) $(KV_COMPILE_OPTS) \
@@ -2908,6 +2924,7 @@ clean:
 	del /Q LogEst.exe fts3view.exe rollback-test.exe showdb.exe dbdump.exe 2>NUL
 	del /Q changeset.exe 2>NUL
 	del /Q showjournal.exe showstat4.exe showwal.exe speedtest1.exe 2>NUL
+	del /Q fp-speed-1.exe fp-speed-2.exe 2>NUL
 	del /Q mptester.exe wordcount.exe rbu.exe srcck1.exe 2>NUL
 	del /Q sqlite3.c sqlite3-*.c sqlite3.h 2>NUL
 	del /Q sqlite3rc.h 2>NUL
@@ -2922,4 +2939,5 @@ clean:
 	del /Q fts5.* fts5parse.* 2>NUL
 	del /q src-verify.exe 2>NUL
 	del /q jimsh.exe jimsh0.exe 2>NUL
+	-$(TCLSH_CMD) test/testrunner.tcl clean
 # <</mark>>
