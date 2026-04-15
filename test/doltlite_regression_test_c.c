@@ -2630,6 +2630,155 @@ static void run_hard_reset_failure_restores_memory_state(void){
   remove_db(dbpath);
 }
 
+static void run_hard_reset_command_failure_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Hard Reset Command Failure Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_hard_reset_command_failure_preserves_durable_state");
+  remove_db(dbpath);
+  gFailWriteOnce = 0;
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+
+  check("register_fail_vfs_for_hard_reset_command", registerFailVfs()==SQLITE_OK);
+  check("open_fail_db_for_hard_reset_command", open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_hard_reset_command_failure", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+  check("hard_reset_command_working_rows_before_failure",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("hard_reset_command_status_before_failure",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+
+  gFailHits = 0;
+  gFailWriteOnce = 1;
+  res = exec1(db, "SELECT dolt_reset('--hard')");
+  check("hard_reset_command_failure_injected", gFailHits>0);
+  check("hard_reset_command_returns_error", strstr(res, "ERROR:")!=0);
+  check("hard_reset_command_preserves_memory_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("hard_reset_command_preserves_memory_status",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("hard_reset_command_preserves_memory_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("hard_reset_command_preserves_memory_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_after_failed_hard_reset_command", open_db(dbpath, &db)==SQLITE_OK);
+  check("failed_hard_reset_command_preserves_durable_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("failed_hard_reset_command_preserves_durable_status",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("failed_hard_reset_command_preserves_durable_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("failed_hard_reset_command_preserves_durable_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_delete_current_branch_failure_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Delete Current Branch Failure Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_delete_current_branch_failure_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_delete_current_branch_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_delete_current_branch_failure", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_branch('-d', 'main')");
+  check("delete_current_branch_returns_error",
+        strstr(res, "ERROR: cannot delete the current branch")!=0);
+  check("delete_current_branch_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("delete_current_branch_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+  check("delete_current_branch_keeps_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_delete_current_branch_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("delete_current_branch_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("delete_current_branch_persists_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+  check("delete_current_branch_persists_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_reset_bad_ref_failure_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Reset Bad Ref Failure Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_reset_bad_ref_failure_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_reset_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_reset_bad_ref_failure", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  res = exec1(db, "SELECT dolt_reset('--hard', 'not_a_real_ref')");
+  check("reset_bad_ref_returns_error",
+        strstr(res, "ERROR: commit not found")!=0);
+  check("reset_bad_ref_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("reset_bad_ref_keeps_working_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("reset_bad_ref_keeps_status",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("reset_bad_ref_keeps_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_reset_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("reset_bad_ref_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("reset_bad_ref_persists_working_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("reset_bad_ref_persists_status",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("reset_bad_ref_persists_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_mutmap_empty_reverse_iter(void){
   ProllyMutMap mm;
   ProllyMutMapIter it;
@@ -3522,6 +3671,9 @@ static const RegressionCase aCases[] = {
   { "savepoint_flush_snapshot_rollback_reopen", "Savepoint Flush Snapshot Rollback Reopen Test", run_savepoint_flush_snapshot_rollback_reopen },
   { "savepoint_flush_snapshot_release_reopen", "Savepoint Flush Snapshot Release Reopen Test", run_savepoint_flush_snapshot_release_reopen },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
+  { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
+  { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
+  { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },
