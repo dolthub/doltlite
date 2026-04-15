@@ -3404,6 +3404,10 @@ void doltliteRegister(sqlite3 *db){
   if( doltliteSchemasRegister(db)!=SQLITE_OK ) return;
   if( doltliteDiffStatRegister(db)!=SQLITE_OK ) return;
   if( doltliteRemoteSqlRegister(db)!=SQLITE_OK ) return;
+  {
+    extern int doltliteHashofRegister(sqlite3*);
+    if( doltliteHashofRegister(db)!=SQLITE_OK ) return;
+  }
 
   {
     extern int doltliteDbpageInstallAutoExt(void);

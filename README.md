@@ -434,6 +434,35 @@ Find the common ancestor of two commits:
 SELECT dolt_merge_base('abc123...', 'def456...');
 ```
 
+### Content-Addressed Hashes
+
+Doltlite exposes the content-address of any ref, table, or the whole
+database as a scalar SQL function. The decentralized use case is
+simple: two peers that compute the same hash are at the exact same
+state — no row-level diff required, no metadata roundtrip.
+
+```sql
+-- Commit hash for a branch, tag, raw hash, HEAD, or HEAD~N / HEAD^N
+SELECT dolt_hashof('main');
+SELECT dolt_hashof('HEAD~2');
+
+-- Table root hash. One-arg form reflects uncommitted working edits.
+SELECT dolt_hashof_table('users');
+SELECT dolt_hashof_table('users', 'main');
+
+-- Whole-catalog hash — changes iff any table root moves or a table
+-- is created/dropped.
+SELECT dolt_hashof_db();
+SELECT dolt_hashof_db('HEAD');
+```
+
+All results are 40-char lowercase hex (20-byte prolly hash).
+
+The `_table` and `_db` variants are history-independent: any two
+rowsets that reduce to the same `(key, value)` set hash identically
+regardless of insert order, transient deletions, commit chain, or
+branch. See `test/vc_oracle_hashof_test.sh` for the property tests.
+
 ### Remotes
 
 Doltlite supports Git-like remotes for pushing, fetching, pulling, and cloning

@@ -571,7 +571,7 @@ PROLLY_OBJS = prolly_hash.o prolly_hashset.o prolly_arena.o prolly_node.o prolly
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_schema_merge.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
-              doltlite_ignore.o \
+              doltlite_ignore.o doltlite_hashof.o \
               doltlite_dbpage.o \
               doltlite_remote.o doltlite_remote_sql.o \
               doltlite_http_remote.o doltlite_remotesrv.o
@@ -1420,6 +1420,9 @@ doltlite_record.o:	$(TOP)/src/doltlite_record.c $(DEPS_OBJ_COMMON)
 
 doltlite_ignore.o:	$(TOP)/src/doltlite_ignore.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_ignore.c
+
+doltlite_hashof.o:	$(TOP)/src/doltlite_hashof.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_hashof.c
 
 doltlite_merge.o:	$(TOP)/src/doltlite_merge.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_merge.c
