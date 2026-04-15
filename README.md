@@ -361,6 +361,40 @@ SELECT dolt_commit('-A', '-m', 'msg');
 -- Error: "cannot commit: unresolved merge conflicts"
 ```
 
+### Constraint Violations on Merge
+
+Merges apply cell-by-cell at the prolly layer and don't run
+referential actions inline. After the merge, doltlite walks the
+merged state and records any row that violates a foreign key,
+unique index, or CHECK constraint into per-table
+`dolt_constraint_violations_<table>` vtables. A summary vtable
+`dolt_constraint_violations` reports `(table, num_violations)`.
+
+```sql
+-- Summary of post-merge violations
+SELECT * FROM dolt_constraint_violations;
+-- table | num_violations
+-- child | 1
+
+-- Inspect violations for a specific table
+SELECT violation_type, pk, violation_info
+  FROM dolt_constraint_violations_child;
+-- foreign key | 2 | {"Columns":["v1"],"ReferencedTable":"parent",...}
+
+-- Resolve by deleting the offending rows from the base table,
+-- or clear the violation entry directly:
+DELETE FROM dolt_constraint_violations_child WHERE pk = 2;
+```
+
+`violation_type` values match Dolt: `foreign key`, `unique index`,
+`check constraint`. For foreign-key and CHECK violations the
+offending row remains in the base table; for unique-index
+violations the loser (highest rowid) is evicted from the base
+table into the violations vtable so the remaining value
+stays unique. `dolt_commit` refuses to proceed while any row
+remains in `dolt_constraint_violations_*`; pass `--force` to
+bypass the guard.
+
 ### Cherry-Pick
 
 Apply the changes from a specific commit onto the current branch:
