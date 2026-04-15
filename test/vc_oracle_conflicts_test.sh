@@ -30,6 +30,7 @@
 #
 
 set -u
+set -o pipefail
 
 DOLTLITE="${1:-./doltlite}"
 DOLT="${2:-dolt}"
@@ -37,6 +38,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() {
   tr -d '\r' | awk -F'\t' 'NF >= 2 { print }' | sort
@@ -59,11 +61,11 @@ oracle() {
   # Dolt side: rewrite SELECT dolt_*(...) -> CALL dolt_*(...) and prepend
   # the autocommit override so the conflict state survives the merge.
   local dolt_setup
-  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
 
   (
     cd "$dir/dt" || exit 1
-    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    vc_oracle_init_repo
     {
       printf '%s\n' "SET @@dolt_allow_commit_conflicts = 1;"
       printf '%s\n' "$dolt_setup"
@@ -72,7 +74,7 @@ oracle() {
   ) > "$dir/dt.raw"
 
   local dt_out
-  dt_out=$(tail -n +2 "$dir/dt.raw" | tr -d '"' | normalize)
+  dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" | normalize)
 
   if [ "$dl_out" = "$dt_out" ]; then
     pass=$((pass+1))

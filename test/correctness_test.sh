@@ -17,10 +17,23 @@
 DOLTLITE="${1:-$(dirname "$0")/../build/doltlite}"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
+set -o pipefail
 
 pass=0
 fail=0
 DB="$DOLTLITE"
+
+query_value() {
+  local db="$1" sql="$2"
+  local out rc
+  out=$("$DB" "$db" "$sql" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "__ERROR__: $out"
+    return 1
+  fi
+  printf "%s" "$out"
+}
 
 check() {
   local desc="$1" expected="$2" actual="$3"
@@ -51,19 +64,19 @@ echo ""
 echo "--- 1. INSERT + SELECT round-trip ---"
 for N in 100 2000; do
   rm -f "$TMPDIR/t.db"
-  result=$("$DB" "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+  result=$(query_value "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x FROM c;
-    SELECT count(*), min(id), max(id), sum(val) FROM t;" 2>/dev/null)
+    SELECT count(*), min(id), max(id), sum(val) FROM t;")
   check "INTKEY round-trip N=$N" "$N|1|$N|$((N*(N+1)/2))" "$result"
 done
 
 for N in 100 2000; do
   rm -f "$TMPDIR/t.db"
-  result=$("$DB" "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT);
+  result=$(query_value "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, a INT, b TEXT);
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x,'v'||x FROM c;
-    SELECT count(*), min(id), max(id) FROM t;" 2>/dev/null)
+    SELECT count(*), min(id), max(id) FROM t;")
   check "3-col round-trip N=$N" "$N|1|$N" "$result"
 done
 
@@ -76,8 +89,8 @@ for N in 100 2000; do
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x FROM c;
     UPDATE t SET val=val+1 WHERE id%2=0;" > /dev/null 2>&1
-  count=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t;" 2>/dev/null)
-  changed=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t WHERE val!=id;" 2>/dev/null)
+  count=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM t;")
+  changed=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM t WHERE val!=id;")
   check "UPDATE count N=$N" "$N" "$count"
   check "UPDATE changed N=$N" "$((N/2))" "$changed"
 done
@@ -87,11 +100,11 @@ echo ""
 echo "--- 3. Scan DELETE (no index) ---"
 for N in 100 2000; do
   rm -f "$TMPDIR/t.db"
-  result=$("$DB" "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+  result=$(query_value "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x FROM c;
     DELETE FROM t WHERE id%10=0;
-    SELECT count(*) FROM t;" 2>/dev/null | tail -1)
+    SELECT count(*) FROM t;")
   check "scan DELETE no-idx N=$N" "$((N - N/10))" "$result"
 done
 
@@ -100,12 +113,12 @@ echo ""
 echo "--- 4. Scan DELETE with index ---"
 for N in 100 2000; do
   rm -f "$TMPDIR/t.db"
-  result=$("$DB" "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
+  result=$(query_value "$TMPDIR/t.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
     CREATE INDEX idx ON t(val);
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x FROM c;
     DELETE FROM t WHERE id%10=0;
-    SELECT count(*) FROM t;" 2>/dev/null | tail -1)
+    SELECT count(*) FROM t;")
   check "scan DELETE with-idx N=$N" "$((N - N/10))" "$result"
 done
 
@@ -114,11 +127,11 @@ echo ""
 echo "--- 5. BLOBKEY scan DELETE ---"
 for N in 100 2000; do
   rm -f "$TMPDIR/t.db"
-  result=$("$DB" "$TMPDIR/t.db" "CREATE TABLE t(id PRIMARY KEY, val INT);
+  result=$(query_value "$TMPDIR/t.db" "CREATE TABLE t(id PRIMARY KEY, val INT);
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x FROM c;
     DELETE FROM t WHERE id%10=0;
-    SELECT count(*) FROM t;" 2>/dev/null | tail -1)
+    SELECT count(*) FROM t;")
   check "BLOBKEY DELETE N=$N" "$((N - N/10))" "$result"
 done
 
@@ -132,8 +145,8 @@ for N in 100 2000; do
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x FROM c;
     UPDATE t SET val=-1 WHERE id%10=0;" > /dev/null 2>&1
-  count=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t;" 2>/dev/null)
-  updated=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t WHERE val=-1;" 2>/dev/null)
+  count=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM t;")
+  updated=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM t WHERE val=-1;")
   check "UPDATE+idx count N=$N" "$N" "$count"
   check "UPDATE+idx changed N=$N" "$((N/10))" "$updated"
 done
@@ -148,7 +161,7 @@ for N in 100 2000; do
     INSERT INTO t SELECT x,x,CASE x%3 WHEN 0 THEN 'a' WHEN 1 THEN 'b' ELSE 'c' END FROM c;
     UPDATE t SET status='x' WHERE id%2=0;
     CREATE INDEX idx ON t(status);" > /dev/null 2>&1
-  result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM t;" 2>/dev/null)
+  result=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM t;")
   check "CREATE INDEX count N=$N" "$N" "$result"
 done
 
@@ -163,7 +176,7 @@ for N in 100 2000; do
     SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');
     UPDATE t SET b=1 WHERE id%2=0;
     SELECT dolt_add('-A'); SELECT dolt_commit('-m','update');" > /dev/null 2>&1
-  result=$("$DB" "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';" 2>/dev/null)
+  result=$(query_value "$TMPDIR/t.db" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';")
   check "diff accuracy N=$N" "$((N/2))" "$result"
 done
 
@@ -171,13 +184,13 @@ done
 echo ""
 echo "--- 9. CTE correctness ---"
 rm -f "$TMPDIR/t.db"
-result=$("$DB" "$TMPDIR/t.db" "CREATE TABLE tree(id INT, name TEXT, parent INT);
+result=$(query_value "$TMPDIR/t.db" "CREATE TABLE tree(id INT, name TEXT, parent INT);
   INSERT INTO tree VALUES(1,'root',0),(2,'a',1),(3,'b',1),(4,'c',2);
   WITH RECURSIVE hier(id,name,parent) AS (
     SELECT id,name,parent FROM tree WHERE parent=0
     UNION ALL
     SELECT t.id,t.name,t.parent FROM tree t JOIN hier h ON t.parent=h.id
-  ) SELECT count(*) FROM hier;" 2>/dev/null)
+  ) SELECT count(*) FROM hier;")
 check "CTE recursion" "4" "$result"
 
 # ── 10. EXISTS subquery ───────────────────────────────────

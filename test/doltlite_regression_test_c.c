@@ -1170,6 +1170,51 @@ static void run_merge_persist_failure(void){
   remove_db(dbpath);
 }
 
+static void run_merge_conflict_surfaces_error_and_persists_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Merge Conflict Surfaces Error Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_merge_conflict_surfaces_error");
+  remove_db(dbpath);
+
+  check("open_db_for_merge_conflict_error", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_merge_conflict_repo", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "UPDATE t SET v='main' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'main edit');"
+    "SELECT dolt_checkout('feature');"
+    "UPDATE t SET v='feature' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'feature edit');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_merge('feature')");
+  check("merge_conflict_returns_error",
+        strstr(res, "ERROR: Merge has 1 conflict(s).")!=0);
+  check("merge_conflict_registers_summary_table",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
+  check("merge_conflict_registers_per_table_view",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
+  check("merge_conflict_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_merge_conflict_error", open_db(dbpath, &db)==SQLITE_OK);
+  check("merge_conflict_persists_summary_table",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
+  check("merge_conflict_persists_per_table_view",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_cherry_pick_stale_branch(void){
   sqlite3 *db1 = 0;
   sqlite3 *db2 = 0;
@@ -3295,6 +3340,7 @@ static const RegressionCase aCases[] = {
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
+  { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_persists_state },
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },
   { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },

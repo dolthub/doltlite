@@ -27,6 +27,7 @@
 #
 
 set -u
+set -o pipefail
 
 DOLTLITE="${1:-./doltlite}"
 DOLT="${2:-dolt}"
@@ -34,6 +35,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() {
   tr -d '\r' \
@@ -60,13 +62,13 @@ oracle() {
 
   # ── Dolt query: t AS OF '<ref>' ──
   local dolt_setup
-  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   local dt_q="SELECT concat('A', char(9), coalesce(id,''), char(9), coalesce(v,'')) FROM t AS OF '${ref}' ORDER BY id"
 
   local dt_out
   dt_out=$(
     cd "$dir/dt" || exit 1
-    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    vc_oracle_init_repo
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$dt_q"
@@ -98,36 +100,28 @@ oracle_error() {
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  local dl_err=0
-  printf "%s\nSELECT * FROM dolt_at_t WHERE commit_ref = '%s';\n" "$setup" "$ref" \
-    | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
-  if grep -qiE 'error|fail|invalid|not found' "$dir/dl.out" "$dir/dl.err" 2>/dev/null; then dl_err=1; fi
-  # An "empty result" from doltlite (when the ref silently doesn't
-  # resolve) is also a failure mode for this comparison — we want
-  # both engines to surface SOMETHING the user can act on.
-  if [ ! -s "$dir/dl.out" ] && [ ! -s "$dir/dl.err" ]; then dl_err=1; fi
+  local dl_sql
+  local dl_rc
+  dl_sql=$(printf "%s\nSELECT * FROM dolt_at_t WHERE commit_ref = '%s';\n" "$setup" "$ref")
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_sql"
+  dl_rc=$?
 
   local dolt_setup
-  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
-  local dt_err=0
-  (
-    cd "$dir/dt" || exit 1
-    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    {
-      printf '%s\n' "$dolt_setup"
-      printf "SELECT * FROM t AS OF '%s';\n" "$ref"
-    } | "$DOLT" sql >"$dir/dt.out" 2>"$dir/dt.err"
-  )
-  if grep -qiE 'error|fail|invalid|not found' "$dir/dt.out" "$dir/dt.err" 2>/dev/null; then dt_err=1; fi
+  local dt_sql
+  local dt_rc
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  dt_sql=$(printf "%s\nSELECT * FROM t AS OF '%s';\n" "$dolt_setup" "$ref")
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dt_sql"
+  dt_rc=$?
 
-  if [ "$dl_err" = 1 ] && [ "$dt_err" = 1 ]; then
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
     FAILED_NAMES="$FAILED_NAMES $name"
     echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite errored: $([ $dl_err = 1 ] && echo yes || echo NO)"
-    echo "    dolt errored:     $([ $dt_err = 1 ] && echo yes || echo NO)"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
   fi
 }
 
