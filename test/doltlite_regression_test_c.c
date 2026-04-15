@@ -2909,6 +2909,70 @@ static void run_delete_current_branch_failure_preserves_durable_state(void){
   remove_db(dbpath);
 }
 
+static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isRebasing = 0;
+  const char *zOrigBranch = 0;
+
+  printf("=== Rebase Continue Invalid Plan Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_rebase_continue_invalid_plan_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_rebase_invalid_plan", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_invalid_plan", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES (1, 1);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
+    "SELECT dolt_checkout('-b', 'feat');"
+    "INSERT INTO t VALUES (2, 2);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');"
+    "INSERT INTO t VALUES (3, 3);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f2');"
+    "INSERT INTO t VALUES (4, 4);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f3');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES (10, 10);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');"
+    "SELECT dolt_checkout('feat');"
+    "SELECT dolt_rebase('-i', 'main');"
+    "UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  check("rebase_invalid_plan_returns_error",
+        strstr(res, "ERROR: first non-drop action must be pick or reword")!=0);
+  check("rebase_invalid_plan_keeps_working_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+  check("rebase_invalid_plan_keeps_plan_table",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_invalid_plan_keeps_rebase_flag", isRebasing==1);
+  check("rebase_invalid_plan_keeps_orig_branch",
+        zOrigBranch && strcmp(zOrigBranch, "feat")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_rebase_invalid_plan", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_invalid_plan_persists_working_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+  check("rebase_invalid_plan_persists_plan_table",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_invalid_plan_persists_rebase_flag", isRebasing==1);
+  check("rebase_invalid_plan_persists_orig_branch",
+        zOrigBranch && strcmp(zOrigBranch, "feat")==0);
+  check("rebase_invalid_plan_abort_after_reopen",
+        strcmp(exec1(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
+  check("rebase_invalid_plan_abort_restores_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_reset_bad_ref_failure_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -3853,6 +3917,7 @@ static const RegressionCase aCases[] = {
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
   { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
+  { "rebase_continue_invalid_plan_preserves_durable_state", "Rebase Continue Invalid Plan Preserves Durable State Test", run_rebase_continue_invalid_plan_preserves_durable_state },
   { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
