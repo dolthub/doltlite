@@ -133,6 +133,38 @@ static void remoteSqlRestoreAndReport(
   remoteSqlResultError(ctx, opRc, zMsg);
 }
 
+static void remoteSqlClearAndSucceed(
+  sqlite3_context *ctx,
+  RemoteSqlState *pSavedState
+){
+  remoteSqlStateClear(pSavedState);
+  sqlite3_result_int(ctx, 0);
+}
+
+static int remoteSqlOpenNamedRemote(
+  ChunkStore *cs,
+  const char *zRemoteName,
+  const char **pzUrl,
+  DoltliteRemote **ppRemote
+){
+  int rc = chunkStoreFindRemote(cs, zRemoteName, pzUrl);
+  if( rc!=SQLITE_OK || !*pzUrl ){
+    return SQLITE_NOTFOUND;
+  }
+
+  *ppRemote = openRemoteByUrl(cs->pVfs, *pzUrl);
+  if( !*ppRemote ){
+    return SQLITE_CANTOPEN;
+  }
+  return SQLITE_OK;
+}
+
+static int remoteSqlPersistRefs(ChunkStore *cs){
+  int rc = chunkStoreSerializeRefs(cs);
+  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+  return rc;
+}
+
 static int remoteSqlLoadCommit(
   ChunkStore *cs,
   const ProllyHash *pCommitHash,
@@ -463,16 +495,13 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-
-  rc = chunkStoreFindRemote(cs, zRemoteName, &zUrl);
-  if( rc!=SQLITE_OK || !zUrl ){
+  rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
+  if( rc==SQLITE_NOTFOUND ){
     remoteSqlStateClear(&savedState);
     sqlite3_result_error(ctx, "remote not found", -1);
     return;
   }
-
-  pRemote = openRemoteByUrl(cs->pVfs, zUrl);
-  if( !pRemote ){
+  if( rc==SQLITE_CANTOPEN ){
     remoteSqlStateClear(&savedState);
     sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
@@ -509,8 +538,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
 
   if( prollyHashCompare(&localCommit, &trackingCommit)==0 ){
-    remoteSqlStateClear(&savedState);
-    sqlite3_result_int(ctx, 0);
+    remoteSqlClearAndSucceed(ctx, &savedState);
     return;
   }
 
@@ -581,14 +609,12 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
 
-  rc = chunkStoreSerializeRefs(cs);
-  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+  rc = remoteSqlPersistRefs(cs);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
     return;
   }
-  remoteSqlStateClear(&savedState);
-  sqlite3_result_int(ctx, 0);
+  remoteSqlClearAndSucceed(ctx, &savedState);
 }
 
 static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -709,15 +735,12 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-
-  rc = chunkStoreSerializeRefs(cs);
-  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+  rc = remoteSqlPersistRefs(cs);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
     return;
   }
-  remoteSqlStateClear(&savedState);
-  sqlite3_result_int(ctx, 0);
+  remoteSqlClearAndSucceed(ctx, &savedState);
 }
 
 typedef struct RemVtab RemVtab;
