@@ -127,7 +127,6 @@ int doltliteCheckIgnore(
   char *zBestPat = 0;
   int tieDisagrees = 0;
   char *zTiePat = 0;
-  int tieIgnored = 0;
 
   *pIgnored = 0;
   if( pzErr ) *pzErr = 0;
@@ -173,7 +172,6 @@ int doltliteCheckIgnore(
       tieDisagrees = 1;
       sqlite3_free(zTiePat);
       zTiePat = sqlite3_mprintf("%s", zPat);
-      tieIgnored = ign;
     }
   }
   sqlite3_finalize(pStmt);
@@ -195,7 +193,6 @@ int doltliteCheckIgnore(
     }
     sqlite3_free(zBestPat);
     sqlite3_free(zTiePat);
-    (void)tieIgnored;
     return SQLITE_CONSTRAINT;
   }
 
