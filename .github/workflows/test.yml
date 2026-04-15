@@ -165,6 +165,10 @@ jobs:
       run: cd build && bash ../test/vc_oracle_hashof_test.sh ./doltlite
       timeout-minutes: 5
 
+    - name: Version control oracle tests (dolt_version)
+      run: cd build && bash ../test/vc_oracle_version_test.sh ./doltlite dolt
+      timeout-minutes: 5
+
     - name: Oracle tests (.import dot-command)
       run: cd build && bash ../test/oracle_import_test.sh ./doltlite dolt
       timeout-minutes: 5
