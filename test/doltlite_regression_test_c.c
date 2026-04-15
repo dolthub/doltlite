@@ -2439,6 +2439,156 @@ static void run_savepoint_restores_session_metadata(void){
   remove_db(dbpath);
 }
 
+static void run_savepoint_flush_snapshot_rollback_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Savepoint Flush Snapshot Rollback Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_flush_snapshot_rollback_reopen");
+  remove_db(dbpath);
+
+  check("open_db_for_flush_snapshot_rollback", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_flush_snapshot_rollback", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
+    "CREATE INDEX k_idx ON t(k);"
+    "INSERT INTO t VALUES(1, 1, 'a');"
+    "INSERT INTO t VALUES(2, 2, 'b');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  check("begin_txn_for_flush_snapshot_rollback",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_flush_snapshot_rollback",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_index_update_for_flush_snapshot_rollback",
+        execsql(db, "UPDATE t SET k=11, v='outer' WHERE id=1;")==SQLITE_OK);
+  check("savepoint_inner_for_flush_snapshot_rollback",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_index_edits_for_flush_snapshot_rollback",
+        execsql(db,
+          "UPDATE t SET k=22, v='inner' WHERE id=2;"
+          "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
+  check("mid_savepoint_commit_for_flush_snapshot_rollback",
+        execsql(db, "SELECT dolt_commit('-A', '-m', 'mid-savepoint');")==SQLITE_OK);
+  check("rollback_inner_after_flush_snapshot",
+        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+  check("release_inner_after_flush_snapshot",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("commit_outer_after_flush_snapshot",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("rollback_path_outer_row_visible_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("rollback_path_inner_row_reverted_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+  check("rollback_path_insert_reverted_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+  check("rollback_path_index_lookup_outer_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("rollback_path_index_lookup_inner_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+  check("rollback_path_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_flush_snapshot_rollback", open_db(dbpath, &db)==SQLITE_OK);
+  check("rollback_path_outer_row_visible_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("rollback_path_inner_row_reverted_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+  check("rollback_path_insert_reverted_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+  check("rollback_path_index_lookup_outer_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("rollback_path_index_lookup_inner_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+  check("rollback_path_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_savepoint_flush_snapshot_release_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Savepoint Flush Snapshot Release Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_flush_snapshot_release_reopen");
+  remove_db(dbpath);
+
+  check("open_db_for_flush_snapshot_release", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_flush_snapshot_release", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
+    "CREATE INDEX k_idx ON t(k);"
+    "INSERT INTO t VALUES(1, 1, 'a');"
+    "INSERT INTO t VALUES(2, 2, 'b');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  check("begin_txn_for_flush_snapshot_release",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_flush_snapshot_release",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_index_update_for_flush_snapshot_release",
+        execsql(db, "UPDATE t SET k=11, v='outer' WHERE id=1;")==SQLITE_OK);
+  check("savepoint_inner_for_flush_snapshot_release",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_index_edits_for_flush_snapshot_release",
+        execsql(db,
+          "UPDATE t SET k=22, v='inner' WHERE id=2;"
+          "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
+  check("mid_savepoint_commit_for_flush_snapshot_release",
+        execsql(db, "SELECT dolt_commit('-A', '-m', 'mid-savepoint');")==SQLITE_OK);
+  check("release_inner_after_flush_snapshot",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("release_outer_after_flush_snapshot",
+        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+  check("commit_after_flush_snapshot_release",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("release_path_outer_row_visible_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("release_path_inner_row_visible_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "22")==0);
+  check("release_path_insert_visible_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+  check("release_path_index_lookup_outer_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("release_path_index_lookup_inner_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
+  check("release_path_index_lookup_insert_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
+  check("release_path_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+  check("release_path_clean_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_flush_snapshot_release", open_db(dbpath, &db)==SQLITE_OK);
+  check("release_path_outer_row_visible_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("release_path_inner_row_visible_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "22")==0);
+  check("release_path_insert_visible_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+  check("release_path_index_lookup_outer_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("release_path_index_lookup_inner_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
+  check("release_path_index_lookup_insert_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
+  check("release_path_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+  check("release_path_clean_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_hard_reset_failure_restores_memory_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -3369,6 +3519,8 @@ static const RegressionCase aCases[] = {
   { "index_moveto_mutmap_exact_keeps_iteration_aligned", "Index Moveto MutMap Exact Keeps Iteration Aligned Test", run_index_moveto_mutmap_exact_keeps_iteration_aligned },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
+  { "savepoint_flush_snapshot_rollback_reopen", "Savepoint Flush Snapshot Rollback Reopen Test", run_savepoint_flush_snapshot_rollback_reopen },
+  { "savepoint_flush_snapshot_release_reopen", "Savepoint Flush Snapshot Release Reopen Test", run_savepoint_flush_snapshot_release_reopen },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
