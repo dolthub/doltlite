@@ -25,6 +25,7 @@
 #
 
 set -u
+set -o pipefail
 
 DOLTLITE="${1:-./doltlite}"
 DOLT="${2:-dolt}"
@@ -32,6 +33,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 # Input row (built by the harness query):
 #   $1=H, $2=table, $3=id, $4=v, $5=msg, $6=committer
@@ -85,7 +87,7 @@ oracle() {
 
   # ── Dolt query ──
   local dolt_setup
-  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
 
   local dt_q=""
   for tn in "${tarr[@]}"; do
@@ -100,7 +102,7 @@ oracle() {
   local dt_out
   dt_out=$(
     cd "$dir/dt" || exit 1
-    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    vc_oracle_init_repo
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$dt_q"

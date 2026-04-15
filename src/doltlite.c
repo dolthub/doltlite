@@ -433,7 +433,7 @@ static int doltliteReportConflicts(
   sqlite3_snprintf(sizeof(msg), msg,
     "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
     zOp, nConflicts);
-  sqlite3_result_text(ctx, msg, -1, SQLITE_TRANSIENT);
+  sqlite3_result_error(ctx, msg, -1);
   return SQLITE_OK;
 }
 

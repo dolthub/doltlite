@@ -332,6 +332,9 @@ WRITE_TESTS="oltp_bulk_insert oltp_insert oltp_update_index oltp_update_non_inde
 # ============================================================
 run_section() {
   local tests="$1" db_sq="$2" db_dl="$3"
+  local ratio_sum=0
+  local ratio_count=0
+  local avg_ratio="--"
   echo "| Test | SQLite (us) | Doltlite (us) | Multiplier |"
   echo "|------|------------:|--------------:|-----------:|"
   for t in $tests; do
@@ -345,11 +348,17 @@ run_section() {
   if [ "$d" -ge 0 ] 2>/dev/null; then d_display=$(fmt_us "$d"); fi
   if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
     ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
+    ratio_sum=$(python3 -c "print($ratio_sum + ($d/$s))")
+    ratio_count=$((ratio_count + 1))
   else
     ratio="--"
   fi
   echo "| $t | $s_display | $d_display | ${ratio} |"
   done
+  if [ "$ratio_count" -gt 0 ]; then
+    avg_ratio=$(python3 -c "print(f'{($ratio_sum/$ratio_count):.2f}')")
+  fi
+  echo "| Average |  |  | ${avg_ratio} |"
 }
 
 echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"

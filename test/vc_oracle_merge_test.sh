@@ -24,6 +24,7 @@
 #
 
 set -u
+set -o pipefail
 
 DOLTLITE="${1:-./doltlite}"
 DOLT="${2:-dolt}"
@@ -31,6 +32,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() {
   # 1. Strip CRs.
@@ -71,11 +73,11 @@ oracle() {
            | normalize)
 
   local dolt_setup
-  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
 
   (
     cd "$dir/dt" || exit 1
-    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    vc_oracle_init_repo
     echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat(commit_hash, char(9), message) FROM dolt_log ORDER BY commit_order DESC;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
@@ -105,21 +107,29 @@ oracle_no_merge_commit() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   local dl_count
-  dl_count=$(printf "%s\n.headers off\n.mode list\nSELECT count(*) FROM dolt_log;\n" "$setup" \
-             | "$DOLTLITE" "$dir/dl/db" 2>/dev/null \
+  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/dl/db" >/dev/null 2>"$dir/dl.err" || true
+  dl_count=$(printf ".headers off\n.mode list\nSELECT count(*) FROM dolt_log;\n" \
+             | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
              | grep -E '^[0-9]+$' | tail -1)
 
   local dolt_setup
-  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
 
   local dt_count
   dt_count=$(
     cd "$dir/dt" || exit 1
-    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>&1
-    "$DOLT" sql -r csv -q "SELECT count(*) FROM dolt_log;" 2>/dev/null \
+    vc_oracle_init_repo
+    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err" || true
+    "$DOLT" sql -r csv -q "SELECT count(*) FROM dolt_log;" 2>>"$dir/dt.err" \
       | tail -n +2
   )
+
+  if [ -z "$dl_count" ] || [ -z "$dt_count" ]; then
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (count query failed)"
+    return
+  fi
 
   if [ "$dl_count" = "$dt_count" ]; then
     pass=$((pass+1))
@@ -137,28 +147,24 @@ oracle_error() {
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  local dl_err=0
-  echo "$setup" | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
-  if grep -qiE 'error|fail' "$dir/dl.out" "$dir/dl.err" 2>/dev/null; then dl_err=1; fi
+  local dl_rc
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
 
   local dolt_setup
-  dolt_setup=$(echo "$setup" | sed -E 's/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g')
-  local dt_err=0
-  (
-    cd "$dir/dt" || exit 1
-    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$dolt_setup" | "$DOLT" sql >"$dir/dt.out" 2>"$dir/dt.err"
-  )
-  if grep -qiE 'error|fail' "$dir/dt.out" "$dir/dt.err" 2>/dev/null; then dt_err=1; fi
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_rc
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
 
-  if [ "$dl_err" = 1 ] && [ "$dt_err" = 1 ]; then
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
     FAILED_NAMES="$FAILED_NAMES $name"
     echo "  FAIL: $name (expected both to error)"
-    echo "    doltlite errored: $([ $dl_err = 1 ] && echo yes || echo NO)"
-    echo "    dolt errored:     $([ $dt_err = 1 ] && echo yes || echo NO)"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
   fi
 }
 

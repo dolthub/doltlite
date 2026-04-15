@@ -201,6 +201,8 @@ static int raw_http_status(int port, const char *path) {
   else { printf("  FAIL: %s\n    expected: |%s|\n    actual:   |%s|\n", desc, _e, _a); fail++; } \
 } while(0)
 
+#define HTTP_TEST_EXPECTED_ASSERTIONS 54
+
 int main(int argc, char **argv) {
   int pass = 0, fail = 0;
   char tmpdir[512], srvdir[512], sql[2048], path[512];
@@ -653,6 +655,7 @@ int main(int argc, char **argv) {
   CHECK("server stopped", 1, 1);
 
   printf("\n=======================================\n");
+  printf("Assertions: %d / %d expected\n", pass + fail, HTTP_TEST_EXPECTED_ASSERTIONS);
   printf("Results: %d passed, %d failed\n", pass, fail);
   printf("=======================================\n");
   return fail > 0 ? 1 : 0;
@@ -679,8 +682,24 @@ else
     # Count passes/fails from the "  PASS:" and "  FAIL:" lines only
     embedded_pass=$(echo "$http_output" | grep -c "^  PASS:")
     embedded_fail=$(echo "$http_output" | grep -c "^  FAIL:")
-    pass=$((pass + embedded_pass))
-    fail=$((fail + embedded_fail))
+    embedded_assertions=$(echo "$http_output" | awk '/^Assertions: [0-9][0-9]* \/ [0-9][0-9]* expected$/ { print $2, $4 }' | tail -1)
+    if [ -z "$embedded_assertions" ]; then
+      echo "  FAIL: http_test did not report assertion count"
+      fail=$((fail+1))
+    else
+      embedded_actual=$(echo "$embedded_assertions" | awk '{print $1}')
+      embedded_expected=$(echo "$embedded_assertions" | awk '{print $2}')
+      if [ "$embedded_actual" -ne "$embedded_expected" ]; then
+        echo "  FAIL: http_test ran $embedded_actual assertions, expected $embedded_expected"
+        fail=$((fail+1))
+      elif [ "$embedded_actual" -ne $((embedded_pass + embedded_fail)) ]; then
+        echo "  FAIL: http_test reported $embedded_actual assertions but emitted $((embedded_pass + embedded_fail)) PASS/FAIL lines"
+        fail=$((fail+1))
+      else
+        pass=$((pass + embedded_pass))
+        fail=$((fail + embedded_fail))
+      fi
+    fi
   else
     echo "  FAIL: http_test exited with $test_exit"
     fail=$((fail+1))

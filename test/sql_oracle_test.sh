@@ -17,15 +17,20 @@ pass=0; fail=0
 oracle() {
   local name="$1" sql="$2"
   local dl="$TMPDIR/dl_${name}.db" sq="$TMPDIR/sq_${name}.db"
+  local out_dl out_sq rc_dl rc_sq
   rm -f "$dl" "$sq"
-  out_dl=$(echo "$sql" | "$DOLTLITE" "$dl" 2>/dev/null)
-  out_sq=$(echo "$sql" | "$SQLITE3" "$sq" 2>/dev/null)
-  if [ "$out_dl" = "$out_sq" ]; then
+  out_dl=$(echo "$sql" | "$DOLTLITE" "$dl" 2>&1)
+  rc_dl=$?
+  out_sq=$(echo "$sql" | "$SQLITE3" "$sq" 2>&1)
+  rc_sq=$?
+  if [ "$rc_dl" -eq "$rc_sq" ] && [ "$out_dl" = "$out_sq" ]; then
     pass=$((pass+1))
   else
     fail=$((fail+1))
     echo "  FAIL: $name"
+    echo "    doltlite rc: $rc_dl"
     echo "    doltlite: $(echo "$out_dl" | head -3)"
+    echo "    sqlite3 rc:  $rc_sq"
     echo "    sqlite3:  $(echo "$out_sq" | head -3)"
   fi
 }
