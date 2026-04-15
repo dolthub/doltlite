@@ -606,43 +606,81 @@ fail:
   return rc;
 }
 
+typedef struct DsFilterCtx DsFilterCtx;
+struct DsFilterCtx {
+  const char *zFromRef;
+  const char *zToRef;
+  const char *zTblFilter;
+  ProllyHash fromCat;
+  ProllyHash toCat;
+  char **azNames;
+  int nNames;
+};
+
+static void dsFilterCtxClear(DsFilterCtx *pCtx){
+  int i;
+  for(i=0; i<pCtx->nNames; i++) sqlite3_free(pCtx->azNames[i]);
+  sqlite3_free(pCtx->azNames);
+  memset(pCtx, 0, sizeof(*pCtx));
+}
+
+static int dsFilterInit(
+  sqlite3 *db,
+  sqlite3_vtab *pVtab,
+  int idxNum,
+  int argc,
+  sqlite3_value **argv,
+  const char *zName,
+  DsFilterCtx *pCtx
+){
+  int rc;
+  int argIdx = 0;
+
+  memset(pCtx, 0, sizeof(*pCtx));
+  rc = dsRequireRefs(pVtab, idxNum, zName);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( (idxNum & 1) && argIdx<argc ){
+    pCtx->zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);
+  }
+  if( (idxNum & 2) && argIdx<argc ){
+    pCtx->zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
+  }
+  if( (idxNum & 4) && argIdx<argc ){
+    pCtx->zTblFilter = (const char*)sqlite3_value_text(argv[argIdx++]);
+  }
+
+  rc = dsResolveCatHash(db, pCtx->zFromRef, &pCtx->fromCat);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = dsResolveCatHash(db, pCtx->zToRef, &pCtx->toCat);
+  if( rc!=SQLITE_OK ) return rc;
+  return dsCollectTableNames(db, &pCtx->fromCat, &pCtx->toCat,
+                             &pCtx->azNames, &pCtx->nNames);
+}
+
+static int dsTableNameMatchesFilter(const DsFilterCtx *pCtx, const char *zName){
+  return !pCtx->zTblFilter || strcmp(zName, pCtx->zTblFilter)==0;
+}
+
 static int dstFilter(sqlite3_vtab_cursor *cur,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   DstCursor *c = (DstCursor*)cur;
   DstVtab *v = (DstVtab*)cur->pVtab;
   sqlite3 *db = v->db;
-  const char *zFromRef = 0, *zToRef = 0, *zTblFilter = 0;
-  ProllyHash fromCat, toCat;
-  char **azNames = 0;
-  int nNames = 0;
-  int rc, argIdx = 0, i;
+  DsFilterCtx fctx;
+  int rc, i;
   (void)idxStr;
 
   dstFreeRows(c);
   c->iRow = 0;
 
-  rc = dsRequireRefs(&v->base, idxNum, "dolt_diff_stat");
+  rc = dsFilterInit(db, &v->base, idxNum, argc, argv, "dolt_diff_stat", &fctx);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( (idxNum & 1) && argIdx<argc )
-    zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);
-  if( (idxNum & 2) && argIdx<argc )
-    zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
-  if( (idxNum & 4) && argIdx<argc )
-    zTblFilter = (const char*)sqlite3_value_text(argv[argIdx++]);
-
-  rc = dsResolveCatHash(db, zFromRef, &fromCat);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = dsResolveCatHash(db, zToRef, &toCat);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = dsCollectTableNames(db, &fromCat, &toCat, &azNames, &nNames);
-  if( rc!=SQLITE_OK ) return rc;
-
-  for(i=0; i<nNames; i++){
+  for(i=0; i<fctx.nNames; i++){
     DsStatRow row;
-    if( zTblFilter && strcmp(azNames[i], zTblFilter)!=0 ) continue;
-    rc = dsComputeTableStats(db, azNames[i], &fromCat, &toCat, &row);
+    if( !dsTableNameMatchesFilter(&fctx, fctx.azNames[i]) ) continue;
+    rc = dsComputeTableStats(db, fctx.azNames[i], &fctx.fromCat, &fctx.toCat, &row);
     if( rc!=SQLITE_OK ){
       sqlite3_free(row.zTableName);
       goto done;
@@ -662,8 +700,7 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
   }
 
 done:
-  for(i=0; i<nNames; i++) sqlite3_free(azNames[i]);
-  sqlite3_free(azNames);
+  dsFilterCtxClear(&fctx);
   return rc;
 }
 
@@ -836,84 +873,75 @@ static int dssAppend(DssCursor *c, const char *zFrom, const char *zTo,
   return SQLITE_OK;
 }
 
+static int dssAppendTableChange(
+  DssCursor *c,
+  sqlite3 *db,
+  const char *zTableName,
+  struct TableEntry *pFromEntry,
+  struct TableEntry *pToEntry
+){
+  int rc;
+  i64 rowCount = 0;
+  int dataChange;
+  int schemaChange;
+  const char *zDiffType;
+
+  if( pFromEntry && pToEntry ){
+    int rootsDiffer = prollyHashCompare(&pFromEntry->root, &pToEntry->root)!=0;
+    int schemasDiffer = prollyHashCompare(&pFromEntry->schemaHash,
+                                          &pToEntry->schemaHash)!=0;
+    if( !rootsDiffer && !schemasDiffer ) return SQLITE_OK;
+    return dssAppend(c, zTableName, zTableName, "modified",
+                     rootsDiffer, schemasDiffer);
+  }
+
+  if( pToEntry ){
+    rc = dsCountRows(db, &pToEntry->root, pToEntry->flags, &rowCount);
+    if( rc!=SQLITE_OK ) return rc;
+    dataChange = rowCount > 0;
+    schemaChange = 1;
+    zDiffType = "added";
+    return dssAppend(c, "", zTableName, zDiffType, dataChange, schemaChange);
+  }
+
+  rc = dsCountRows(db, &pFromEntry->root, pFromEntry->flags, &rowCount);
+  if( rc!=SQLITE_OK ) return rc;
+  dataChange = rowCount > 0;
+  schemaChange = 1;
+  zDiffType = "dropped";
+  return dssAppend(c, zTableName, "", zDiffType, dataChange, schemaChange);
+}
+
 static int dssFilter(sqlite3_vtab_cursor *cur,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   DssCursor *c = (DssCursor*)cur;
   DssVtab *v = (DssVtab*)cur->pVtab;
   sqlite3 *db = v->db;
-  const char *zFromRef = 0, *zToRef = 0, *zTblFilter = 0;
-  ProllyHash fromCat, toCat;
+  DsFilterCtx fctx;
   struct TableEntry *aFromCat = 0, *aToCat = 0;
   int nFromCat = 0, nToCat = 0;
-  char **azNames = 0;
-  int nNames = 0;
-  int rc, argIdx = 0, i;
+  int rc, i;
   (void)idxStr;
 
   dssFreeRows(c);
   c->iRow = 0;
 
-  rc = dsRequireRefs(&v->base, idxNum, "dolt_diff_summary");
+  rc = dsFilterInit(db, &v->base, idxNum, argc, argv,
+                    "dolt_diff_summary", &fctx);
   if( rc!=SQLITE_OK ) return rc;
-
-  if( (idxNum & 1) && argIdx<argc )
-    zFromRef = (const char*)sqlite3_value_text(argv[argIdx++]);
-  if( (idxNum & 2) && argIdx<argc )
-    zToRef = (const char*)sqlite3_value_text(argv[argIdx++]);
-  if( (idxNum & 4) && argIdx<argc )
-    zTblFilter = (const char*)sqlite3_value_text(argv[argIdx++]);
-
-  rc = dsResolveCatHash(db, zFromRef, &fromCat);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = dsResolveCatHash(db, zToRef, &toCat);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = dsCollectTableNames(db, &fromCat, &toCat, &azNames, &nNames);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadCatalog(db, &fromCat, &aFromCat, &nFromCat, 0);
+  rc = doltliteLoadCatalog(db, &fctx.fromCat, &aFromCat, &nFromCat, 0);
   if( rc!=SQLITE_OK ) goto done;
-  rc = doltliteLoadCatalog(db, &toCat, &aToCat, &nToCat, 0);
+  rc = doltliteLoadCatalog(db, &fctx.toCat, &aToCat, &nToCat, 0);
   if( rc!=SQLITE_OK ) goto done;
 
-  for(i=0; i<nNames; i++){
+  for(i=0; i<fctx.nNames; i++){
     struct TableEntry *pFromEntry, *pToEntry;
-    i64 oldCount = 0, newCount = 0;
-    int dataChange, schemaChange;
-    const char *zDiffType;
 
-    if( zTblFilter && strcmp(azNames[i], zTblFilter)!=0 ) continue;
+    if( !dsTableNameMatchesFilter(&fctx, fctx.azNames[i]) ) continue;
 
-    pFromEntry = doltliteFindTableByName(aFromCat, nFromCat, azNames[i]);
-    pToEntry   = doltliteFindTableByName(aToCat,   nToCat,   azNames[i]);
-
-    if( pFromEntry && pToEntry ){
-      int rootsDiffer = (prollyHashCompare(&pFromEntry->root,
-                                           &pToEntry->root)!=0);
-      int schemasDiffer = (prollyHashCompare(&pFromEntry->schemaHash,
-                                             &pToEntry->schemaHash)!=0);
-      if( !rootsDiffer && !schemasDiffer ){
-        continue;
-      }
-      dataChange = rootsDiffer;
-      schemaChange = schemasDiffer;
-      zDiffType = "modified";
-      rc = dssAppend(c, azNames[i], azNames[i], zDiffType,
-                     dataChange, schemaChange);
-    }else if( !pFromEntry && pToEntry ){
-      rc = dsCountRows(db, &pToEntry->root, pToEntry->flags, &newCount);
-      if( rc!=SQLITE_OK ) goto done;
-      dataChange = newCount > 0;
-      schemaChange = 1;
-      rc = dssAppend(c, "", azNames[i], "added",
-                     dataChange, schemaChange);
-    }else if( pFromEntry && !pToEntry ){
-      rc = dsCountRows(db, &pFromEntry->root, pFromEntry->flags, &oldCount);
-      if( rc!=SQLITE_OK ) goto done;
-      dataChange = oldCount > 0;
-      schemaChange = 1;
-      rc = dssAppend(c, azNames[i], "", "dropped",
-                     dataChange, schemaChange);
-    }
+    pFromEntry = doltliteFindTableByName(aFromCat, nFromCat, fctx.azNames[i]);
+    pToEntry   = doltliteFindTableByName(aToCat,   nToCat,   fctx.azNames[i]);
+    rc = dssAppendTableChange(c, db, fctx.azNames[i], pFromEntry, pToEntry);
 
     if( rc!=SQLITE_OK ) goto done;
   }
@@ -921,8 +949,7 @@ static int dssFilter(sqlite3_vtab_cursor *cur,
 done:
   sqlite3_free(aFromCat);
   sqlite3_free(aToCat);
-  for(i=0; i<nNames; i++) sqlite3_free(azNames[i]);
-  sqlite3_free(azNames);
+  dsFilterCtxClear(&fctx);
   return rc;
 }
 
