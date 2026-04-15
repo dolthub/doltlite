@@ -80,5 +80,27 @@ jobs:
     - name: SQL oracle tests
       run: cd build && bash ../test/sql_oracle_test.sh ./doltlite ./sqlite3
 
+    # Focused leak reproducer for the write sequence that aborts
+    # inside correctness_test.sh but whose stderr is silenced by
+    # the harness. Mirrors the "Merge correctness" sub-test at
+    # correctness_test.sh:210. Lets stderr flow so the LSan stack
+    # shows up in CI logs directly.
+    - name: Leak reproducer (branch + update + merge)
+      run: |
+        cd build
+        rm -f /tmp/leak.db
+        ./doltlite /tmp/leak.db "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT); \
+          WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<100) \
+          INSERT INTO t SELECT x,x FROM c; \
+          SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); \
+          SELECT dolt_branch('feat'); \
+          SELECT dolt_checkout('feat'); \
+          INSERT INTO t VALUES(101,999); \
+          SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat'); \
+          SELECT dolt_checkout('main'); \
+          UPDATE t SET val=0 WHERE id=1; \
+          SELECT dolt_add('-A'); SELECT dolt_commit('-m','main'); \
+          SELECT dolt_merge('feat');"
+
     - name: Correctness regression tests
       run: cd build && bash ../test/correctness_test.sh ./doltlite
