@@ -400,10 +400,11 @@ static int collectSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
       break;
     }
 
-    for(i=0; i<commit.nParents; i++){
-      if( prollyHashIsEmpty(&commit.aParents[i]) ) continue;
-      if( prollyHashSetContains(&visited, &commit.aParents[i]) ) continue;
-      if( prollyHashSetContains(&queued,  &commit.aParents[i]) ) continue;
+    for(i=0; i<doltliteCommitParentCount(&commit); i++){
+      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
+      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
+      if( prollyHashSetContains(&visited, pParent) ) continue;
+      if( prollyHashSetContains(&queued,  pParent) ) continue;
       if( qTail>=qAlloc ){
         int newAlloc = qAlloc*2;
         ProllyHash *tmp = sqlite3_realloc(queue,
@@ -411,8 +412,8 @@ static int collectSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
         if( !tmp ){ rc = SQLITE_NOMEM; break; }
         queue = tmp; qAlloc = newAlloc;
       }
-      queue[qTail++] = commit.aParents[i];
-      rc = prollyHashSetAdd(&queued, &commit.aParents[i]);
+      queue[qTail++] = *pParent;
+      rc = prollyHashSetAdd(&queued, pParent);
       if( rc!=SQLITE_OK ) break;
     }
     doltliteCommitClear(&commit);
