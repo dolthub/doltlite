@@ -3375,6 +3375,22 @@ static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value
   }
 }
 
+/* dolt_version() — 0-arg scalar returning the build's version
+** string (DOLTLITE_VERSION macro, set from `git describe` at
+** compile time). Used for peer version negotiation in the
+** decentralized setup, bug-report ergonomics, and schema
+** migrations that branch on engine version. Dolt ships an
+** equivalent DOLT_VERSION() with the same argcount contract. */
+static void doltliteVersionFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  (void)argv;
+  if( argc!=0 ){
+    sqlite3_result_error(ctx,
+        "dolt_version() takes exactly zero arguments", -1);
+    return;
+  }
+  sqlite3_result_text(ctx, DOLTLITE_VERSION, -1, SQLITE_STATIC);
+}
+
 /* On first open of a writable chunk store with no branches, create
 ** an empty initial commit on "main" so a fresh database has a valid
 ** HEAD to commit against. Skipped on read-only or in-memory stores
@@ -3419,6 +3435,8 @@ void doltliteRegister(sqlite3 *db){
                                                    doltliteRebaseFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_config", -1, SQLITE_UTF8, 0,
                                                    doltliteConfigFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_version", 0, SQLITE_UTF8, 0,
+                                                   doltliteVersionFunc, 0, 0);
   if( rc!=SQLITE_OK ) return;
   if( doltliteLogRegister(db)!=SQLITE_OK ) return;
   if( doltliteStatusRegister(db)!=SQLITE_OK ) return;

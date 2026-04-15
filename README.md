@@ -463,6 +463,19 @@ rowsets that reduce to the same `(key, value)` set hash identically
 regardless of insert order, transient deletions, commit chain, or
 branch. See `test/vc_oracle_hashof_test.sh` for the property tests.
 
+### Version String
+
+```sql
+SELECT dolt_version();
+-- "v0.7.3-68-g43e9da475"
+```
+
+Zero-arg scalar returning the build's version string (from
+`git describe` at compile time). Useful for peer negotiation in
+decentralized setups, bug-report ergonomics, and migrations
+that branch on engine version. Matches Dolt's `DOLT_VERSION()`
+argcount contract.
+
 ### Remotes
 
 Doltlite supports Git-like remotes for pushing, fetching, pulling, and cloning
