@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="doltlite_logo.webp" alt="Doltlite" width="600">
+  <img src="doltlite-logo.png" alt="Doltlite" width="600">
 </p>
 
 # Doltlite
@@ -265,7 +265,7 @@ Rows are filtered to `type IN ('view','trigger')` — ordinary tables and
 indexes are not reported here. Use `sqlite_schema` directly (or
 `dolt_schema_diff`) if you need the full schema surface.
 
-### Blame (dolt_blame_&lt;table&gt;)
+### Blame (dolt*blame*&lt;table&gt;)
 
 For each live row, the most recent commit that introduced its current
 value:
