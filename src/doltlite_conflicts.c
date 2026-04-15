@@ -503,6 +503,10 @@ static int cfrEof(sqlite3_vtab_cursor *cur){
   return c->iRow >= c->aTables[c->iTableIdx].nConflicts;
 }
 
+/* Thin wrapper around doltliteResultUserCol kept for call-site
+** readability — the cfr column projection has four call sites
+** (base, ours, theirs, and the diff-type bookkeeping) that all
+** want the same argument order. */
 static void cfrEmitRecordCol(
   sqlite3_context *ctx,
   const u8 *pRec, int nRec,
@@ -510,25 +514,7 @@ static void cfrEmitRecordCol(
   const DoltliteColInfo *pCols,
   i64 intKey
 ){
-  int recField;
-  if( !pRec || nRec<=0 ){
-    sqlite3_result_null(ctx);
-    return;
-  }
-  if( iUserCol==pCols->iPkCol ){
-    sqlite3_result_int64(ctx, intKey);
-    return;
-  }
-  recField = pCols->aColToRec ? pCols->aColToRec[iUserCol] : iUserCol;
-  {
-    DoltliteRecordInfo ri;
-    doltliteParseRecord(pRec, nRec, &ri);
-    if( recField >= ri.nField ){
-      sqlite3_result_null(ctx);
-      return;
-    }
-    doltliteResultField(ctx, pRec, nRec, ri.aType[recField], ri.aOffset[recField]);
-  }
+  doltliteResultUserCol(ctx, pCols, pRec, nRec, intKey, iUserCol);
 }
 
 static const char *cfrDiffType(const u8 *pBase, int nBase,

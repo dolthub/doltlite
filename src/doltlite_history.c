@@ -291,20 +291,7 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 
 
   if(nCols>0 && col<nCols){
-
-    if(col==v->cols.iPkCol){
-
-      sqlite3_result_int64(ctx,r->intKey);
-    }else{
-
-      if(r->pVal&&r->nVal>0){
-        DoltliteRecordInfo ri;
-        int recField = v->cols.aColToRec ? v->cols.aColToRec[col] : col;
-        doltliteParseRecord(r->pVal,r->nVal,&ri);
-        if(recField<ri.nField) doltliteResultField(ctx,r->pVal,r->nVal,ri.aType[recField],ri.aOffset[recField]);
-        else sqlite3_result_null(ctx);
-      }else sqlite3_result_null(ctx);
-    }
+    doltliteResultUserCol(ctx, &v->cols, r->pVal, r->nVal, r->intKey, col);
   }else{
     int fixedCol=col-nCols;
     switch(fixedCol){

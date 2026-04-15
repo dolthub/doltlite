@@ -386,6 +386,54 @@ void doltliteResultRecordPkField(
                       ri.aType[iPkField], ri.aOffset[iPkField]);
 }
 
+void doltliteResultUserCol(
+  sqlite3_context *ctx,
+  const DoltliteColInfo *ci,
+  const u8 *pRec, int nRec,
+  i64 intKey,
+  int iDeclaredCol
+){
+  int iRecField;
+  DoltliteRecordInfo ri;
+
+  /* Missing record ⇒ row not present ⇒ every column projects as
+  ** SQL NULL, including the rowid-alias column. This matches the
+  ** diff vtable contract: from_* columns on an ADD and to_*
+  ** columns on a DELETE are NULL across the board. */
+  if( !pRec || nRec<=0 || !ci || iDeclaredCol<0 || iDeclaredCol>=ci->nCol ){
+    sqlite3_result_null(ctx);
+    return;
+  }
+
+  /* Rowid-aliased INTEGER PRIMARY KEY column: value lives in the
+  ** cursor's intKey rather than the record payload — SQLite
+  ** stores the rowid as a NULL serial in the record itself, so
+  ** reading it via the normal field path would return NULL. */
+  if( iDeclaredCol==ci->iPkCol && ci->iPkCol>=0 ){
+    sqlite3_result_int64(ctx, intKey);
+    return;
+  }
+
+  /* Map declared column index → physical record field index. The
+  ** aColToRec permutation is identity for rowid-aliased and
+  ** keyless tables and PK-first for WITHOUT ROWID tables. Without
+  ** this mapping step, projecting by declared index on a schema
+  ** whose PK cols aren't leading returns the wrong field. */
+  iRecField = ci->aColToRec ? ci->aColToRec[iDeclaredCol] : iDeclaredCol;
+  if( iRecField<0 ){
+    sqlite3_result_null(ctx);
+    return;
+  }
+
+  doltliteParseRecord(pRec, nRec, &ri);
+  if( iRecField>=ri.nField ){
+    sqlite3_result_null(ctx);
+    return;
+  }
+  doltliteResultField(ctx, pRec, nRec,
+                      ri.aType[iRecField], ri.aOffset[iRecField]);
+}
+
 int doltliteBindField(
   sqlite3_stmt *pStmt, int iParam,
   const u8 *pData, int nData,
