@@ -87,8 +87,6 @@ int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
 
 typedef struct DoltliteTxnState DoltliteTxnState;
 struct DoltliteTxnState {
-  u8 *pRefsBlob;
-  int nRefsBlob;
   ProllyHash refsHash;
   char *zSessionBranch;
   ProllyHash sessionHead;
@@ -100,22 +98,17 @@ struct DoltliteTxnState {
 };
 
 static void doltliteTxnStateClear(DoltliteTxnState *p){
-  sqlite3_free(p->pRefsBlob);
   sqlite3_free(p->zSessionBranch);
   memset(p, 0, sizeof(*p));
 }
 
 static int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  u8 *pCatalog = 0;
-  int nCatalog = 0;
   int rc;
 
   memset(p, 0, sizeof(*p));
   if( !cs ) return SQLITE_ERROR;
 
-  rc = chunkStoreSerializeRefsToBlob(cs, &p->pRefsBlob, &p->nRefsBlob);
-  if( rc!=SQLITE_OK ) return rc;
   memcpy(&p->refsHash, &cs->refsHash, sizeof(ProllyHash));
 
   p->zSessionBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
@@ -129,13 +122,7 @@ static int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
                                &p->sessionMergeCommit,
                                &p->sessionConflictsCatalog);
 
-  rc = doltliteFlushAndSerializeCatalog(db, &pCatalog, &nCatalog);
-  if( rc!=SQLITE_OK ){
-    doltliteTxnStateClear(p);
-    return rc;
-  }
-  rc = chunkStorePut(cs, pCatalog, nCatalog, &p->sessionCatalogHash);
-  sqlite3_free(pCatalog);
+  rc = doltliteFlushCatalogToHash(db, &p->sessionCatalogHash);
   if( rc!=SQLITE_OK ){
     doltliteTxnStateClear(p);
   }
@@ -148,9 +135,13 @@ static int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
 
   if( !cs ) return SQLITE_ERROR;
 
-  rc = chunkStoreLoadRefsFromBlob(cs, p->pRefsBlob, p->nRefsBlob);
-  if( rc!=SQLITE_OK ) return rc;
   memcpy(&cs->refsHash, &p->refsHash, sizeof(ProllyHash));
+  if( prollyHashIsEmpty(&p->refsHash) ){
+    chunkStoreClearRefs(cs);
+  }else{
+    rc = chunkStoreReloadRefs(cs);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   rc = doltliteSwitchCatalog(db, &p->sessionCatalogHash);
   if( rc!=SQLITE_OK ) return rc;
