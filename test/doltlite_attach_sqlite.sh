@@ -2,9 +2,10 @@
 #
 # Tests for ATTACH standard SQLite databases (#181)
 #
-DOLTLITE=./doltlite
+DOLTLITE="${1:-./doltlite}"
 SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
 PASS=0; FAIL=0; ERRORS=""
+SKIP=0
 
 run_test() {
   local n="$1" s="$2" e="$3" d="$4"
@@ -18,6 +19,11 @@ echo ""
 
 if [ ! -x "$SQLITE3" ]; then
   echo "SKIP: sqlite3 not found"
+  SKIP=$((SKIP+1))
+  echo ""
+  echo "======================================="
+  echo "Results: $PASS passed, $FAIL failed, $SKIP skipped"
+  echo "======================================="
   exit 0
 fi
 
