@@ -2909,6 +2909,303 @@ static void run_delete_current_branch_failure_preserves_durable_state(void){
   remove_db(dbpath);
 }
 
+static void run_delete_missing_branch_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Delete Missing Branch Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_delete_missing_branch_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_delete_missing_branch", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_delete_missing_branch", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_branch('-d', 'nope')");
+  check("delete_missing_branch_returns_error",
+        strstr(res, "ERROR: branch not found")!=0);
+  check("delete_missing_branch_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("delete_missing_branch_keeps_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("delete_missing_branch_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_delete_missing_branch", open_db(dbpath, &db)==SQLITE_OK);
+  check("delete_missing_branch_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("delete_missing_branch_persists_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("delete_missing_branch_persists_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_force_delete_missing_branch_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Force Delete Missing Branch Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_force_delete_missing_branch_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_force_delete_missing_branch", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_force_delete_missing_branch", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_branch('-D', 'nope')");
+  check("force_delete_missing_branch_returns_error",
+        strstr(res, "ERROR: branch not found")!=0);
+  check("force_delete_missing_branch_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("force_delete_missing_branch_keeps_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("force_delete_missing_branch_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_force_delete_missing_branch", open_db(dbpath, &db)==SQLITE_OK);
+  check("force_delete_missing_branch_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("force_delete_missing_branch_persists_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("force_delete_missing_branch_persists_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isRebasing = 0;
+  const char *zOrigBranch = 0;
+
+  printf("=== Rebase Continue Invalid Plan Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_rebase_continue_invalid_plan_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_rebase_invalid_plan", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_invalid_plan", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES (1, 1);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
+    "SELECT dolt_checkout('-b', 'feat');"
+    "INSERT INTO t VALUES (2, 2);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');"
+    "INSERT INTO t VALUES (3, 3);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f2');"
+    "INSERT INTO t VALUES (4, 4);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f3');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES (10, 10);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');"
+    "SELECT dolt_checkout('feat');"
+    "SELECT dolt_rebase('-i', 'main');"
+    "UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  check("rebase_invalid_plan_returns_error",
+        strstr(res, "ERROR: first non-drop action must be pick or reword")!=0);
+  check("rebase_invalid_plan_keeps_working_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+  check("rebase_invalid_plan_keeps_plan_table",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_invalid_plan_keeps_rebase_flag", isRebasing==1);
+  check("rebase_invalid_plan_keeps_orig_branch",
+        zOrigBranch && strcmp(zOrigBranch, "feat")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_rebase_invalid_plan", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_invalid_plan_persists_working_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+  check("rebase_invalid_plan_persists_plan_table",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_invalid_plan_persists_rebase_flag", isRebasing==1);
+  check("rebase_invalid_plan_persists_orig_branch",
+        zOrigBranch && strcmp(zOrigBranch, "feat")==0);
+  check("rebase_invalid_plan_abort_after_reopen",
+        strcmp(exec1(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
+  check("rebase_invalid_plan_abort_restores_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_branch_copy_existing_dest_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Branch Copy Existing Dest Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_branch_copy_existing_dest_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_branch_copy_existing_dest", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_branch_copy_existing_dest", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "SELECT dolt_branch('clone');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_branch('-c', 'feature', 'clone')");
+  check("branch_copy_existing_dest_returns_error",
+        strstr(res, "ERROR: branch already exists")!=0);
+  check("branch_copy_existing_dest_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("branch_copy_existing_dest_keeps_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("branch_copy_existing_dest_keeps_clone_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='clone'"), "1")==0);
+  check("branch_copy_existing_dest_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "3")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_branch_copy_existing_dest", open_db(dbpath, &db)==SQLITE_OK);
+  check("branch_copy_existing_dest_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("branch_copy_existing_dest_persists_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("branch_copy_existing_dest_persists_clone_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='clone'"), "1")==0);
+  check("branch_copy_existing_dest_persists_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "3")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_branch_copy_missing_source_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Branch Copy Missing Source Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_branch_copy_missing_source_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_branch_copy_missing_source", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_branch_copy_missing_source", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('clone');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_branch('-c', 'missing', 'clone2')");
+  check("branch_copy_missing_source_returns_error",
+        strstr(res, "ERROR: source branch not found")!=0);
+  check("branch_copy_missing_source_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("branch_copy_missing_source_keeps_clone_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='clone'"), "1")==0);
+  check("branch_copy_missing_source_keeps_missing_absent",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='clone2'"), "0")==0);
+  check("branch_copy_missing_source_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_branch_copy_missing_source", open_db(dbpath, &db)==SQLITE_OK);
+  check("branch_copy_missing_source_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("branch_copy_missing_source_persists_clone_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='clone'"), "1")==0);
+  check("branch_copy_missing_source_persists_missing_absent",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='clone2'"), "0")==0);
+  check("branch_copy_missing_source_persists_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_branch_rename_missing_source_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Branch Rename Missing Source Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_branch_rename_missing_source_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_branch_rename_missing_source", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_branch_rename_missing_source", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('other');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_branch('-m', 'missing', 'renamed')");
+  check("branch_rename_missing_source_returns_error",
+        strstr(res, "ERROR: source branch not found")!=0);
+  check("branch_rename_missing_source_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("branch_rename_missing_source_keeps_other_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='other'"), "1")==0);
+  check("branch_rename_missing_source_keeps_renamed_absent",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='renamed'"), "0")==0);
+  check("branch_rename_missing_source_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_branch_rename_missing_source", open_db(dbpath, &db)==SQLITE_OK);
+  check("branch_rename_missing_source_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("branch_rename_missing_source_persists_other_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='other'"), "1")==0);
+  check("branch_rename_missing_source_persists_renamed_absent",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='renamed'"), "0")==0);
+  check("branch_rename_missing_source_persists_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
 static void run_branch_create_existing_name_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -2952,6 +3249,376 @@ static void run_branch_create_existing_name_preserves_durable_state(void){
   remove_db(dbpath);
 }
 
+static void run_branch_create_bad_start_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Branch Create Bad Start Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_branch_create_bad_start_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_branch_create_bad_start", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_branch_create_bad_start", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_branch('bad_start', 'does-not-exist')");
+  check("branch_create_bad_start_returns_error",
+        strstr(res, "ERROR: start point not found")!=0);
+  check("branch_create_bad_start_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("branch_create_bad_start_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "1")==0);
+  check("branch_create_bad_start_keeps_new_branch_absent",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='bad_start'"), "0")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_revert_bad_ref_failure_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Revert Bad Ref Failure Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_revert_bad_ref_failure_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_revert_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_revert_bad_ref_failure", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m', 'second');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  res = exec1(db, "SELECT dolt_revert('does-not-exist')");
+  check("revert_bad_ref_returns_error",
+        strstr(res, "ERROR:")!=0);
+  check("revert_bad_ref_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("revert_bad_ref_keeps_working_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("revert_bad_ref_keeps_status_clean",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("revert_bad_ref_keeps_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_revert_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("revert_bad_ref_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("revert_bad_ref_persists_working_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("revert_bad_ref_persists_status_clean",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("revert_bad_ref_persists_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_checkout_nonexistent_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Checkout Nonexistent Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_checkout_nonexistent_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_checkout_nonexistent", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_checkout_nonexistent", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_checkout('nope')");
+  check("checkout_nonexistent_returns_error", strstr(res, "ERROR:")!=0);
+  check("checkout_nonexistent_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("checkout_nonexistent_keeps_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+  check("checkout_nonexistent_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "1")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_checkout_nonexistent", open_db(dbpath, &db)==SQLITE_OK);
+  check("checkout_nonexistent_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("checkout_nonexistent_persists_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+  check("checkout_nonexistent_persists_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "1")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_checkout_dash_b_existing_branch_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Checkout -b Existing Branch Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_checkout_dash_b_existing_branch_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_checkout_dash_b_existing_branch", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_checkout_dash_b_existing_branch", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_checkout('-b', 'feature')");
+  check("checkout_dash_b_existing_branch_returns_error", strstr(res, "ERROR:")!=0);
+  check("checkout_dash_b_existing_branch_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("checkout_dash_b_existing_branch_keeps_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("checkout_dash_b_existing_branch_keeps_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_checkout_dash_b_existing_branch", open_db(dbpath, &db)==SQLITE_OK);
+  check("checkout_dash_b_existing_branch_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("checkout_dash_b_existing_branch_persists_feature_branch",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  check("checkout_dash_b_existing_branch_persists_branch_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_cherry_pick_bad_ref_failure_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Cherry-pick Bad Ref Failure Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_cherry_pick_bad_ref_failure_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_cherry_pick_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_cherry_pick_bad_ref_failure", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m', 'second');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  res = exec1(db, "SELECT dolt_cherry_pick('does-not-exist')");
+  check("cherry_pick_bad_ref_returns_error",
+        strstr(res, "ERROR:")!=0);
+  check("cherry_pick_bad_ref_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("cherry_pick_bad_ref_keeps_working_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("cherry_pick_bad_ref_keeps_status_clean",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("cherry_pick_bad_ref_keeps_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_cherry_pick_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("cherry_pick_bad_ref_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("cherry_pick_bad_ref_persists_working_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("cherry_pick_bad_ref_persists_status_clean",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("cherry_pick_bad_ref_persists_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_merge_nonexistent_branch_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Merge Nonexistent Branch Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_merge_nonexistent_branch_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_merge_nonexistent_branch", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_merge_nonexistent_branch", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  res = exec1(db, "SELECT dolt_merge('nope')");
+  check("merge_nonexistent_branch_returns_error",
+        strstr(res, "ERROR:")!=0);
+  check("merge_nonexistent_branch_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("merge_nonexistent_branch_keeps_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+  check("merge_nonexistent_branch_keeps_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_merge_nonexistent_branch", open_db(dbpath, &db)==SQLITE_OK);
+  check("merge_nonexistent_branch_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("merge_nonexistent_branch_persists_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+  check("merge_nonexistent_branch_persists_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_rebase_continue_without_active_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Rebase Continue Without Active Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_continue_without_active_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_rebase_continue_without_active", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_continue_without_active", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY);"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m', 'init');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  check("rebase_continue_without_active_returns_error",
+        strstr(res, "ERROR:")!=0);
+  check("rebase_continue_without_active_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("rebase_continue_without_active_keeps_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("rebase_continue_without_active_keeps_no_plan",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_rebase_continue_without_active", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_continue_without_active_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("rebase_continue_without_active_persists_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("rebase_continue_without_active_persists_no_plan",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_remote_add_duplicate_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Remote Add Duplicate Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_remote_add_duplicate_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_remote_add_duplicate", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_remote_add_duplicate", execsql(db,
+    "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_other')");
+  check("remote_add_duplicate_returns_error", strstr(res, "ERROR:")!=0);
+  check("remote_add_duplicate_keeps_remote_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+  check("remote_add_duplicate_keeps_origin_url",
+        strcmp(exec1(db,
+          "SELECT url FROM dolt_remotes WHERE name='origin'"), "file:///tmp/oracle_origin")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_remote_add_duplicate", open_db(dbpath, &db)==SQLITE_OK);
+  check("remote_add_duplicate_persists_remote_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+  check("remote_add_duplicate_persists_origin_url",
+        strcmp(exec1(db,
+          "SELECT url FROM dolt_remotes WHERE name='origin'"), "file:///tmp/oracle_origin")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_remote_remove_missing_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Remote Remove Missing Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_remote_remove_missing_preserves_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_remote_remove_missing", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_remote_remove_missing", execsql(db,
+    "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_remote('remove', 'nonexistent')");
+  check("remote_remove_missing_returns_error", strstr(res, "ERROR:")!=0);
+  check("remote_remove_missing_keeps_remote_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+  check("remote_remove_missing_keeps_origin",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_remotes WHERE name='origin'"), "1")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_remote_remove_missing", open_db(dbpath, &db)==SQLITE_OK);
+  check("remote_remove_missing_persists_remote_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+  check("remote_remove_missing_persists_origin",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_remotes WHERE name='origin'"), "1")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
 static void run_reset_bad_ref_failure_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -3896,7 +4563,22 @@ static const RegressionCase aCases[] = {
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
   { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
+  { "delete_missing_branch_preserves_durable_state", "Delete Missing Branch Preserves Durable State Test", run_delete_missing_branch_preserves_durable_state },
+  { "force_delete_missing_branch_preserves_durable_state", "Force Delete Missing Branch Preserves Durable State Test", run_force_delete_missing_branch_preserves_durable_state },
+  { "rebase_continue_invalid_plan_preserves_durable_state", "Rebase Continue Invalid Plan Preserves Durable State Test", run_rebase_continue_invalid_plan_preserves_durable_state },
+  { "branch_copy_existing_dest_preserves_durable_state", "Branch Copy Existing Dest Preserves Durable State Test", run_branch_copy_existing_dest_preserves_durable_state },
+  { "branch_copy_missing_source_preserves_durable_state", "Branch Copy Missing Source Preserves Durable State Test", run_branch_copy_missing_source_preserves_durable_state },
+  { "branch_rename_missing_source_preserves_durable_state", "Branch Rename Missing Source Preserves Durable State Test", run_branch_rename_missing_source_preserves_durable_state },
   { "branch_create_existing_name_preserves_durable_state", "Branch Create Existing Name Preserves Durable State Test", run_branch_create_existing_name_preserves_durable_state },
+  { "branch_create_bad_start_preserves_durable_state", "Branch Create Bad Start Preserves Durable State Test", run_branch_create_bad_start_preserves_durable_state },
+  { "revert_bad_ref_failure_preserves_durable_state", "Revert Bad Ref Failure Preserves Durable State Test", run_revert_bad_ref_failure_preserves_durable_state },
+  { "cherry_pick_bad_ref_failure_preserves_durable_state", "Cherry-pick Bad Ref Failure Preserves Durable State Test", run_cherry_pick_bad_ref_failure_preserves_durable_state },
+  { "merge_nonexistent_branch_preserves_durable_state", "Merge Nonexistent Branch Preserves Durable State Test", run_merge_nonexistent_branch_preserves_durable_state },
+  { "rebase_continue_without_active_preserves_durable_state", "Rebase Continue Without Active Preserves Durable State Test", run_rebase_continue_without_active_preserves_durable_state },
+  { "remote_add_duplicate_preserves_durable_state", "Remote Add Duplicate Preserves Durable State Test", run_remote_add_duplicate_preserves_durable_state },
+  { "remote_remove_missing_preserves_durable_state", "Remote Remove Missing Preserves Durable State Test", run_remote_remove_missing_preserves_durable_state },
+  { "checkout_nonexistent_preserves_durable_state", "Checkout Nonexistent Preserves Durable State Test", run_checkout_nonexistent_preserves_durable_state },
+  { "checkout_dash_b_existing_branch_preserves_durable_state", "Checkout -b Existing Branch Preserves Durable State Test", run_checkout_dash_b_existing_branch_preserves_durable_state },
   { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
