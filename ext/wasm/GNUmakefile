@@ -1723,9 +1723,7 @@ npm: $(sqlite3.canonical.c)
 	$(MAKE) clean
 	$(MAKE) -e "emcc_opt=-Oz $(emcc-opt-extra)" $(npm_files)
 	@if grep -q "__dirname" $(dir.dout)/sqlite3-node.mjs; then \
-	  awk '{gsub(/__dirname \\+ '\\''\\//, \"require('\\''node:path'\'').dirname(require('\\''node:url'\'').fileURLToPath(import.meta.url)) + '\\''/'\''); print}' \
-	    $(dir.dout)/sqlite3-node.mjs > $(dir.dout)/sqlite3-node.mjs.tmp && \
-	  mv $(dir.dout)/sqlite3-node.mjs.tmp $(dir.dout)/sqlite3-node.mjs; \
+	  python3 -c "from pathlib import Path; p = Path('$(dir.dout)/sqlite3-node.mjs'); s = p.read_text(); s = s.replace(\"__dirname + '/'\", \"require('node:path').dirname(require('node:url').fileURLToPath(import.meta.url)) + '/'\"); p.write_text(s)"; \
 	fi
 	rm -f $(npm.bundle.zip); zip -r $(npm.bundle.zip) $(npm_files)
 	unzip -l $(npm.bundle.zip)

@@ -495,7 +495,6 @@ static void mk_prologue(void){
       ** Performance gains or losses are _not_ taken into account
       ** here, only wasm file size.
       */
-      "--enable-bulk-memory-opt " /* required */
       "--all-features "           /* required */
       "--post-emscripten "        /* Saves roughly 12kb */
       "--strip-debug "            /* We already wasm-strip, but in
