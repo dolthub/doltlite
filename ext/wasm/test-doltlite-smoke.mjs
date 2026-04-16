@@ -23,7 +23,7 @@ const dbFile = path.join(
   fs.mkdtempSync(path.join(os.tmpdir(), 'doltlite-wasm-')),
   'smoke.db'
 );
-const db = new sqlite3.oo1.DB(dbFile, 'ct');
+const db = new sqlite3.oo1.DB(dbFile, 'c');
 
 function fail(msg){
   throw new Error(msg);
