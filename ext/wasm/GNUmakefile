@@ -332,8 +332,10 @@ sqlite3.h = $(dir $(sqlite3.c))sqlite3.h
 # back to the stock upstream sqlite3.c path.
 #
 DOLTLITE_WASM ?= 1
+DOLTLITE_VERSION ?= $(shell git -C $(dir.top) describe --tags --always 2>/dev/null || echo "dev")
 doltlite.wasm.lib = $(dir.doltlite.build)/libdoltlite.a
 doltlite.wasm.options = \
+  '-DDOLTLITE_VERSION="$(DOLTLITE_VERSION)"' \
   -DSQLITE_ENABLE_BYTECODE_VTAB \
   -DSQLITE_ENABLE_COLUMN_METADATA \
   -DSQLITE_ENABLE_DBPAGE_VTAB \
@@ -443,6 +445,7 @@ SQLITE_OPT.common += -DSQLITE_WASM_ENABLE_C_TESTS
 ifeq (1,$(DOLTLITE_WASM))
   SQLITE_OPT.common += \
     -DDOLTLITE_PROLLY=1 \
+    '-DDOLTLITE_VERSION="$(DOLTLITE_VERSION)"' \
     -DSQLITE_WASM_SPLIT_BUILD \
     -D_HAVE_SQLITE_CONFIG_H \
     -DBUILD_sqlite \
