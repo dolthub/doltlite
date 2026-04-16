@@ -1029,7 +1029,6 @@ static void mk_fiddle(void){
            "$(dir.fiddle)/index.html "
            "$(dir.fiddle)/fiddle.js "
            "$(dir.fiddle)/fiddle-worker.js "
-           "$(dir.fiddle)/sqlite3-opfs-async-proxy.js,"
            "$(dir $@)"
            ")\n",
            zBuildName);

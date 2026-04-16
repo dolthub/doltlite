@@ -98,6 +98,7 @@ emo.cleanup   = 🧼
 # sqlite.org/fiddle.
 #
 OPTIMIZED_TARGETS = dist snapshot fiddle fiddle.debug
+RELEASE_QUALITY_TARGETS = dist snapshot
 
 ifeq (1,$(MAKING_CLEAN))
   bin.wasm-strip = echo "not stripping"
@@ -140,7 +141,7 @@ else
     $(info $(achtung): on Ubuntu-like systems it can be installed with:)
     $(info $(achtung):    sudo apt install wabt)
     $(info $(achtung): *******************************************************************)
-    ifneq (,$(filter $(OPTIMIZED_TARGETS),$(MAKECMDGOALS)))
+    ifneq (,$(filter $(RELEASE_QUALITY_TARGETS),$(MAKECMDGOALS)))
       $(error Cannot make release-quality binary because wasm-strip is not available.)
     endif
     bin.wasm-strip = echo "not wasm-stripping"
@@ -335,7 +336,6 @@ DOLTLITE_WASM ?= 1
 DOLTLITE_VERSION ?= $(shell git -C $(dir.top) describe --tags --always 2>/dev/null || echo "dev")
 doltlite.wasm.lib = $(dir.doltlite.build)/libdoltlite.a
 doltlite.wasm.options = \
-  '-DDOLTLITE_VERSION="$(DOLTLITE_VERSION)"' \
   -DSQLITE_ENABLE_BYTECODE_VTAB \
   -DSQLITE_ENABLE_COLUMN_METADATA \
   -DSQLITE_ENABLE_DBPAGE_VTAB \
@@ -408,12 +408,13 @@ endif
 #
 #.NOTPARALLEL: $(sqlite3.h)
 #
-$(sqlite3.h):
-	@echo "$(sqlite3.h) is out of date. "; \
-	echo "To avoid problems with parallel builds, we're exiting now. Please do:"; \
-	echo "  $(MAKE) -C $(dir.top) sqlite3.c"; \
-	echo "and try again."; exit 1
-#	$(MAKE) -C $(dir.top) sqlite3.c
+$(dir.top)/Makefile: $(dir.top)/configure $(dir.top)/Makefile.in
+	@echo "[$(emo.tool) configure] generating top-level Makefile"
+	@cd $(dir.top) && ./configure
+
+$(sqlite3.h): $(dir.top)/Makefile
+	@echo "[$(emo.tool) sqlite] generating top-level sqlite3.c/h"
+	@$(MAKE) -C $(dir.top) sqlite3.c sqlite3.h sqlite3ext.h
 $(sqlite3.c): $(sqlite3.h)
 
 #
@@ -670,6 +671,12 @@ emcc.MEMORY64 ?= 0
 #
 ifeq (,$(filter $(OPTIMIZED_TARGETS),$(MAKECMDGOALS)))
   emcc_opt ?= -O0
+else ifneq (,$(filter fiddle fiddle.debug,$(MAKECMDGOALS)))
+  ifeq (,$(bin.wasm-strip))
+    emcc_opt ?= -O1
+  else
+    emcc_opt ?= -Oz
+  endif
 else
   emcc_opt ?= -Oz
 endif
@@ -739,6 +746,16 @@ emcc.cflags += -std=c99 -fPIC
 # for variadic macros and snprintf() to implement
 # sqlite3__wasm_enum_json().
 emcc.cflags += -I. -I$(dir.top)
+ifeq (1,$(DOLTLITE_WASM))
+  emcc.cflags += \
+    -I$(dir.top)/src \
+    -I$(dir.doltlite.build) \
+    -I$(dir.top)/ext/rtree \
+    -I$(dir.top)/ext/icu \
+    -I$(dir.top)/ext/fts3 \
+    -I$(dir.top)/ext/session \
+    -I$(dir.top)/ext/misc
+endif
 
 #
 # emcc flags specific to building .js/.wasm files...
@@ -1040,7 +1057,8 @@ EXPORTED_FUNCTIONS.speedtest1 = $(abspath $(dir.tmp)/EXPORTED_FUNCTIONS.speedtes
 # them in ./config.make. The problem with that is that SHELL_OPT is
 # generated at make-time, not configure-time.
 ifneq (1,$(MAKING_CLEAN))
-  make-np-0 = make -C  $(dir.top) -n -p
+  $(dir.top)/shell.c: $(dir.top)/Makefile
+  make-np-0 = if test ! -f $(dir.top)/Makefile; then cd $(dir.top) && ./configure >/dev/null; fi; make -C $(dir.top) -n -p
   make-np-1 = sed -e 's/(TOP)/(dir.top)/g'
   # Extract SHELL_OPT and SHELL_DEP from the top-most makefile and import
   # them as vars here...
@@ -1064,6 +1082,9 @@ endif
 #
 
 fiddle.c.in = $(dir.top)/shell.c $(sqlite3-wasm.c)
+ifeq (1,$(DOLTLITE_WASM))
+fiddle.c.in += $(doltlite.wasm.lib)
+endif
 
 EXPORTED_FUNCTIONS.fiddle = $(dir.tmp)/EXPORTED_FUNCTIONS.fiddle
 $(EXPORTED_FUNCTIONS.fiddle): $(EXPORTED_FUNCTIONS.api.in) \

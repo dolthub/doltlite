@@ -30,7 +30,7 @@ jobs:
 
     - name: Build DoltLite wasm targets
       run: |
-        make -C ext/wasm b-vanilla b-esm b-bundler
+        make -C ext/wasm b-vanilla b-esm b-bundler fiddle npm
 
     - name: Build wasm distribution zip
       run: |
