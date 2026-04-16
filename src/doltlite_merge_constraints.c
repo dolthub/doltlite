@@ -206,6 +206,71 @@ static char *buildFkViolationInfo(
   return zResult;
 }
 
+/* Look up (zTable, rowid) in a previously-loaded ancestor catalog
+** and return SQLITE_OK with the row's raw pVal bytes if the row
+** existed in the ancestor at the same rowid, SQLITE_NOTFOUND
+** otherwise. `aAnc`/`nAnc` are the result of
+** doltliteLoadCatalog(&ancCatHash). The caller owns *ppAncVal on
+** success. Used by the post-merge walkers to decide whether a
+** candidate violation is merge-introduced (row changed or new)
+** or pre-existing (row unchanged since ancestor). */
+static int fetchAncestorRowByName(
+  sqlite3 *db,
+  struct TableEntry *aAnc, int nAnc,
+  const char *zTable,
+  i64 rowid,
+  u8 **ppAncVal, int *pnAncVal
+){
+  ChunkStore *cs;
+  ProllyCache *pCache;
+  struct TableEntry *pTE;
+  u8 *pAncKey = 0; int nAncKey = 0;
+  int rc;
+
+  *ppAncVal = 0;
+  *pnAncVal = 0;
+
+  if( !aAnc || nAnc==0 ) return SQLITE_NOTFOUND;
+
+  cs = doltliteGetChunkStore(db);
+  pCache = doltliteGetCache(db);
+  if( !cs || !pCache ) return SQLITE_ERROR;
+
+  pTE = doltliteFindTableByName(aAnc, nAnc, zTable);
+  if( !pTE ) return SQLITE_NOTFOUND;
+
+  rc = fetchRowByRowid(cs, pCache, &pTE->root, pTE->flags, rowid,
+                       &pAncKey, &nAncKey, ppAncVal, pnAncVal);
+  sqlite3_free(pAncKey);
+  return rc;
+}
+
+/* Decide whether a candidate violation is pre-existing: the row
+** exists in the ancestor catalog at the same rowid with byte-for-
+** byte identical value payload. Returns 1 if pre-existing (the
+** caller should skip flagging), 0 if merge-introduced or the
+** ancestor state can't be consulted. Empty ancCatHash short-
+** circuits to 0 (no ancestor — treat every violation as fresh).
+**
+** Known hole: this rule is the "child row unchanged" filter
+** only. It does not catch the case where a parent row is
+** deleted on one side while the child row is unchanged — in
+** that scenario the merge DID introduce the orphan, but this
+** filter will still flag it because the child is unchanged.
+** That is a strict improvement over the prior state where every
+** pre-existing orphan blocked every unrelated merge, and can be
+** tightened later (see GitHub issue for the semantics-drift
+** tracking item). */
+static int isRowPreExisting(
+  const u8 *pMergedVal, int nMergedVal,
+  const u8 *pAncVal, int nAncVal
+){
+  if( !pMergedVal || !pAncVal ) return 0;
+  if( nMergedVal != nAncVal ) return 0;
+  if( nMergedVal == 0 ) return 1;
+  return memcmp(pMergedVal, pAncVal, nMergedVal)==0 ? 1 : 0;
+}
+
 /* Resolve a (zTable, rowid) pair to the raw prolly row by looking
 ** the table up in the current btree's catalog via the public
 ** doltliteGetSessionTableRoot accessor and walking its prolly
@@ -256,6 +321,7 @@ static int fetchOrphanRow(
 ** grouping ourselves in the driver. */
 static int detectUniqueViolationsForIndex(
   sqlite3 *db,
+  struct TableEntry *aAnc, int nAnc,
   const char *zTable,
   const char *zIndexName,
   const char *zCols,
@@ -314,6 +380,23 @@ static int detectUniqueViolationsForIndex(
       if( rc == SQLITE_NOTFOUND ){ rc = SQLITE_OK; continue; }
       if( rc != SQLITE_OK ) break;
 
+      /* Skip the eviction if the loser row already existed in
+      ** ancestor with identical bytes — the duplicate predates
+      ** this merge and isn't ours to flag (or destroy). */
+      if( aAnc ){
+        u8 *pAncVal = 0; int nAncVal = 0;
+        int ancRc = fetchAncestorRowByName(db, aAnc, nAnc, zTable,
+                                            rowid, &pAncVal, &nAncVal);
+        int preExisting = (ancRc==SQLITE_OK)
+            && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
+        sqlite3_free(pAncVal);
+        if( preExisting ){
+          sqlite3_free(pKey);
+          sqlite3_free(pVal);
+          continue;
+        }
+      }
+
       zInfo = sqlite3_mprintf(
           "{\"Columns\": [%s], \"Name\": \"%w\"}",
           zCols, zIndexName);
@@ -342,18 +425,37 @@ static int detectUniqueViolationsForIndex(
 
 /* For every user table in the session's catalog, walk its
 ** UNIQUE indexes via PRAGMA index_list / PRAGMA index_xinfo
-** and feed each into detectUniqueViolationsForIndex. */
-int doltliteDetectMergeUniqueViolations(sqlite3 *db, int *pnFound){
+** and feed each into detectUniqueViolationsForIndex. The
+** ancestor catalog is loaded once and shared across all
+** per-index scans so repeated lookups are cheap. */
+int doltliteDetectMergeUniqueViolations(
+  sqlite3 *db,
+  const ProllyHash *pAncCatHash,
+  int *pnFound
+){
   sqlite3_stmt *pTbls = 0;
+  struct TableEntry *aAnc = 0;
+  int nAnc = 0;
+  Pgno iNextAnc = 0;
+  int haveAnc = 0;
   int rc;
 
   if( pnFound ) *pnFound = 0;
+
+  if( pAncCatHash && !prollyHashIsEmpty(pAncCatHash) ){
+    if( doltliteLoadCatalog(db, pAncCatHash, &aAnc, &nAnc, &iNextAnc)==SQLITE_OK ){
+      haveAnc = 1;
+    }
+  }
 
   rc = sqlite3_prepare_v2(db,
       "SELECT name FROM sqlite_master WHERE type='table' "
       "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
       -1, &pTbls, 0);
-  if( rc != SQLITE_OK ) return rc;
+  if( rc != SQLITE_OK ){
+    if( haveAnc ) doltliteFreeCatalog(aAnc, nAnc);
+    return rc;
+  }
 
   while( (rc = sqlite3_step(pTbls)) == SQLITE_ROW ){
     const char *zTableRaw = (const char*)sqlite3_column_text(pTbls, 0);
@@ -415,7 +517,8 @@ int doltliteDetectMergeUniqueViolations(sqlite3 *db, int *pnFound){
       sqlite3_finalize(pCols);
       zColList = sqlite3_str_finish(pColList);
       if( zColList && *zColList ){
-        rc = detectUniqueViolationsForIndex(db, zTable, zIdx, zColList, pnFound);
+        rc = detectUniqueViolationsForIndex(db, aAnc, nAnc, zTable,
+                                             zIdx, zColList, pnFound);
       }
       sqlite3_free(zColList);
       sqlite3_free(zIdx);
@@ -543,19 +646,39 @@ static int nextCheckClause(
 ** row in the merged result that doesn't satisfy one. Emit each
 ** as a 'check constraint' violation. Unlike unique detection we
 ** keep the row in the base table — Dolt's CHECK semantics leave
-** violating rows present and block commit until resolved. */
-int doltliteDetectMergeCheckViolations(sqlite3 *db, int *pnFound){
+** violating rows present and block commit until resolved.
+** Ancestor filter is the same shape as the FK walker: any
+** violating row that already existed unchanged in ancestor was
+** already broken before the merge started and is skipped. */
+int doltliteDetectMergeCheckViolations(
+  sqlite3 *db,
+  const ProllyHash *pAncCatHash,
+  int *pnFound
+){
   sqlite3_stmt *pTbls = 0;
+  struct TableEntry *aAnc = 0;
+  int nAnc = 0;
+  Pgno iNextAnc = 0;
+  int haveAnc = 0;
   int rc;
   int stepRc;
 
   if( pnFound ) *pnFound = 0;
 
+  if( pAncCatHash && !prollyHashIsEmpty(pAncCatHash) ){
+    if( doltliteLoadCatalog(db, pAncCatHash, &aAnc, &nAnc, &iNextAnc)==SQLITE_OK ){
+      haveAnc = 1;
+    }
+  }
+
   rc = sqlite3_prepare_v2(db,
       "SELECT name, sql FROM sqlite_master WHERE type='table' "
       "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
       -1, &pTbls, 0);
-  if( rc != SQLITE_OK ) return rc;
+  if( rc != SQLITE_OK ){
+    if( haveAnc ) doltliteFreeCatalog(aAnc, nAnc);
+    return rc;
+  }
 
   while( (stepRc = sqlite3_step(pTbls)) == SQLITE_ROW ){
     const char *zTableRaw = (const char*)sqlite3_column_text(pTbls, 0);
@@ -620,6 +743,20 @@ int doltliteDetectMergeCheckViolations(sqlite3 *db, int *pnFound){
           break;
         }
 
+        if( haveAnc ){
+          u8 *pAncVal = 0; int nAncVal = 0;
+          int ancRc = fetchAncestorRowByName(db, aAnc, nAnc, zTable,
+                                              rowid, &pAncVal, &nAncVal);
+          int preExisting = (ancRc==SQLITE_OK)
+              && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
+          sqlite3_free(pAncVal);
+          if( preExisting ){
+            sqlite3_free(pKey);
+            sqlite3_free(pVal);
+            continue;
+          }
+        }
+
         zInfo = sqlite3_mprintf(
             "{\"Name\": \"%w\", \"Expression\": \"%w\"}",
             zCkName ? zCkName : "", zExpr);
@@ -646,6 +783,7 @@ int doltliteDetectMergeCheckViolations(sqlite3 *db, int *pnFound){
     rc = stepRc;
   }
   sqlite3_finalize(pTbls);
+  if( haveAnc ) doltliteFreeCatalog(aAnc, nAnc);
   return rc;
 }
 
@@ -653,17 +791,43 @@ int doltliteDetectMergeCheckViolations(sqlite3 *db, int *pnFound){
 ** orphan row across all tables, fetches each row's raw payload
 ** from the prolly store, and appends one violation per orphan
 ** into the session-scoped dolt_constraint_violations blob.
-** Returns the number of violations appended via *pnFound.
-** Returns SQLITE_OK on success even if the count is zero. */
-int doltliteDetectMergeFkViolations(sqlite3 *db, int *pnFound){
+**
+** `pAncCatHash` points at the three-way-merge ancestor catalog
+** hash. For each candidate orphan the walker asks whether the
+** same row existed unchanged in ancestor — if so, the row was
+** already an orphan before either side started and the merge
+** is not introducing anything new, so it is skipped.
+**
+** Passing an empty/zero hash disables the filter entirely, which
+** is fine for call sites that don't have a three-way ancestor
+** (e.g. cherry-pick onto empty). Returns the number of violations
+** appended via *pnFound. Returns SQLITE_OK on success. */
+int doltliteDetectMergeFkViolations(
+  sqlite3 *db,
+  const ProllyHash *pAncCatHash,
+  int *pnFound
+){
   sqlite3_stmt *pStmt = 0;
+  struct TableEntry *aAnc = 0;
+  int nAnc = 0;
+  Pgno iNextAnc = 0;
+  int haveAnc = 0;
   int rc;
   int nFound = 0;
 
   if( pnFound ) *pnFound = 0;
 
+  if( pAncCatHash && !prollyHashIsEmpty(pAncCatHash) ){
+    if( doltliteLoadCatalog(db, pAncCatHash, &aAnc, &nAnc, &iNextAnc)==SQLITE_OK ){
+      haveAnc = 1;
+    }
+  }
+
   rc = sqlite3_prepare_v2(db, "PRAGMA foreign_key_check", -1, &pStmt, 0);
-  if( rc != SQLITE_OK ) return rc;
+  if( rc != SQLITE_OK ){
+    if( haveAnc ) doltliteFreeCatalog(aAnc, nAnc);
+    return rc;
+  }
 
   while( (rc = sqlite3_step(pStmt)) == SQLITE_ROW ){
     const char *zTable = (const char*)sqlite3_column_text(pStmt, 0);
@@ -699,6 +863,21 @@ int doltliteDetectMergeFkViolations(sqlite3 *db, int *pnFound){
         break;
       }
 
+      if( haveAnc ){
+        u8 *pAncVal = 0; int nAncVal = 0;
+        int ancRc = fetchAncestorRowByName(db, aAnc, nAnc, zTableCopy,
+                                            rowid, &pAncVal, &nAncVal);
+        int preExisting = (ancRc==SQLITE_OK)
+            && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
+        sqlite3_free(pAncVal);
+        if( preExisting ){
+          sqlite3_free(pKey);
+          sqlite3_free(pVal);
+          sqlite3_free(zTableCopy);
+          continue;
+        }
+      }
+
       zInfo = buildFkViolationInfo(db, zTableCopy, fkid);
       appendRc = doltliteAppendConstraintViolation(
           db, zTableCopy, DOLTLITE_CV_FOREIGN_KEY,
@@ -714,6 +893,7 @@ int doltliteDetectMergeFkViolations(sqlite3 *db, int *pnFound){
   if( rc == SQLITE_DONE ) rc = SQLITE_OK;
 
   sqlite3_finalize(pStmt);
+  if( haveAnc ) doltliteFreeCatalog(aAnc, nAnc);
   if( pnFound ) *pnFound = nFound;
   return rc;
 }

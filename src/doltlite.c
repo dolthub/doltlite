@@ -2139,18 +2139,27 @@ static void doltliteMergeFunc(
     graphLocked = 0;
   }
   {
-    extern int doltliteDetectMergeFkViolations(sqlite3*, int*);
-    extern int doltliteDetectMergeUniqueViolations(sqlite3*, int*);
-    extern int doltliteDetectMergeCheckViolations(sqlite3*, int*);
+    extern int doltliteDetectMergeFkViolations(
+        sqlite3*, const ProllyHash*, int*);
+    extern int doltliteDetectMergeUniqueViolations(
+        sqlite3*, const ProllyHash*, int*);
+    extern int doltliteDetectMergeCheckViolations(
+        sqlite3*, const ProllyHash*, int*);
     int nViolations = 0;
     int nUnique = 0;
     int nCheck = 0;
-    int vrc = doltliteDetectMergeFkViolations(db, &nViolations);
+    /* Pass the three-way-merge ancestor catalog hash so each
+    ** walker can filter out pre-existing violations — rows that
+    ** were already broken before either side of the merge
+    ** started. Dolt's semantics only flag merge-introduced
+    ** violations, not any violating row that happens to be in
+    ** the post-merge tree. */
+    int vrc = doltliteDetectMergeFkViolations(db, &ancCatHash, &nViolations);
     if( vrc == SQLITE_OK ){
-      vrc = doltliteDetectMergeUniqueViolations(db, &nUnique);
+      vrc = doltliteDetectMergeUniqueViolations(db, &ancCatHash, &nUnique);
     }
     if( vrc == SQLITE_OK ){
-      vrc = doltliteDetectMergeCheckViolations(db, &nCheck);
+      vrc = doltliteDetectMergeCheckViolations(db, &ancCatHash, &nCheck);
     }
     if( vrc != SQLITE_OK ){
       sqlite3_result_error_code(context,

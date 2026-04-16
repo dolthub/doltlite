@@ -326,6 +326,91 @@ N_REOPEN=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE
 expect_eq "violations_persist_across_reopen" "1" "$N_REOPEN"
 
 echo ""
+
+# ── Scenario G: Pre-existing FK orphan is NOT re-flagged ─
+#
+# An orphan that already existed in the ancestor (e.g. because
+# FKs were off when the parent got deleted) must not be flagged
+# by an unrelated merge that touches different rows. Dolt's
+# model: merge-introduced violations only — a row that was
+# broken before either side started working is not this merge's
+# problem. Without the ancestor filter, the current walker sees
+# the orphan in the post-merge tree and mis-flags it.
+echo "--- G. FK: pre-existing orphan is not re-flagged by unrelated merge ---"
+
+DB="$TMPROOT/fk_preexisting.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "fk_preexisting"
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, v1 INT, UNIQUE(v1));
+CREATE TABLE child(pk INTEGER PRIMARY KEY, v1 INT, FOREIGN KEY(v1) REFERENCES parent(v1));
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child  VALUES (1,1),(99,2);
+DELETE FROM parent WHERE pk=2;
+SELECT dolt_commit('-Am','ancestor_with_orphan');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO parent VALUES (3,3);
+SELECT dolt_commit('-Am','feat_add_parent');
+SELECT dolt_checkout('main');
+INSERT INTO child VALUES (5,1);
+SELECT dolt_commit('-Am','main_add_child');
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations;" "fk_preexisting_count")
+expect_eq "fk_preexisting_orphan_not_reflagged" "0" "$N"
+
+# A follow-up commit should succeed — there's no dolt_constraint_violations
+# block in effect. Insert an unrelated row first so there's actually
+# something to commit (the merge above auto-commits on clean merge, so
+# we need real working-set state for the followup commit to be non-empty).
+dl "$DB" "INSERT INTO parent VALUES (7,7);" "fk_preexisting_insert" >/dev/null
+if dl_errors "$DB" "SELECT dolt_commit('-Am','followup');" "fk_preexisting_commit"; then
+  fail_name "fk_preexisting_commit_not_blocked"
+else
+  pass_name "fk_preexisting_commit_not_blocked"
+fi
+
+echo ""
+
+# ── Scenario H: Pre-existing CHECK failure (via force) ───
+#
+# If a previous merge landed a CHECK violation and the user
+# force-committed past it, the offending row lives in committed
+# state. A subsequent unrelated merge must not re-flag it —
+# same "merge-introduced only" rule as scenario G.
+echo "--- H. CHECK: force-committed violation is not re-flagged ---"
+
+DB="$TMPROOT/check_preexisting.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "check_preexisting"
+CREATE TABLE t(pk INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1,10);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2,-5);
+SELECT dolt_commit('-Am','feat_add_neg');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD CONSTRAINT positive_v CHECK (v > 0);
+SELECT dolt_commit('-Am','main_add_check');
+SELECT dolt_merge('feat');
+DELETE FROM dolt_constraint_violations_t;
+SELECT dolt_commit('--force','-m','accept_preexisting');
+SELECT dolt_branch('feat2');
+SELECT dolt_checkout('feat2');
+INSERT INTO t VALUES (3,30);
+SELECT dolt_commit('-Am','feat2_add_pos');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (4,40);
+SELECT dolt_commit('-Am','main_add_pos');
+SELECT dolt_merge('feat2');
+SQL
+
+N=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations;" "check_preexisting_count")
+expect_eq "check_preexisting_not_reflagged" "0" "$N"
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
