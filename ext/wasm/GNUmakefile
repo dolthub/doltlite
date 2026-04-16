@@ -561,7 +561,11 @@ endif
 #
 # See example_extra_init.c for an example implementation.
 #
+ifeq (1,$(DOLTLITE_WASM))
 sqlite3_wasm_extra_init.c ?= $(wildcard sqlite3_wasm_extra_init.c)
+else
+sqlite3_wasm_extra_init.c ?=
+endif
 cflags.wasm_extra_init =
 ifneq (,$(sqlite3_wasm_extra_init.c))
   $(info Enabling SQLITE_EXTRA_INIT via $(sqlite3_wasm_extra_init.c).)
