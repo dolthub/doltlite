@@ -1722,6 +1722,11 @@ npm: $(sqlite3.canonical.c)
 	@echo "$(emo.cleanup) Forcing a clean rebuild to ensure consistent optimization flags."
 	$(MAKE) clean
 	$(MAKE) -e "emcc_opt=-Oz $(emcc-opt-extra)" $(npm_files)
+	@if grep -q "__dirname" $(dir.dout)/sqlite3-node.mjs; then \
+	  awk '{gsub(/__dirname \\+ '\\''\\//, \"require('\\''node:path'\'').dirname(require('\\''node:url'\'').fileURLToPath(import.meta.url)) + '\\''/'\''); print}' \
+	    $(dir.dout)/sqlite3-node.mjs > $(dir.dout)/sqlite3-node.mjs.tmp && \
+	  mv $(dir.dout)/sqlite3-node.mjs.tmp $(dir.dout)/sqlite3-node.mjs; \
+	fi
 	rm -f $(npm.bundle.zip); zip -r $(npm.bundle.zip) $(npm_files)
 	unzip -l $(npm.bundle.zip)
 

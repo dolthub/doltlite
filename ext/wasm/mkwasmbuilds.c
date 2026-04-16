@@ -75,7 +75,7 @@ enum BuildDefFlags {
   F_WASMFS           = 1<<6,
 
   /*
-  ** Which compiled files from $(dir.dout)/buildName/*.{js,mjs,wasm}
+  ** Which compiled files from $(dir.dout)/buildName/{js,mjs,wasm}
   ** to copy to $(dir.dout) after creating them. This should only be
   ** applied to builds which result in end-user deliverables.  Some
   ** builds, like the bundler-friendly ones, are a hybrid: we keep
@@ -323,7 +323,6 @@ const BuildDefs oBuildDefs = {
     " $(speedtest1.exit-runtime0)"
     " $(speedtest1.c.in)"
     " -lm",
-    .zEmccExtra  = 0,
     .zEmccExtra  = 0,
     .zEnv        = 0,
     .zDeps       =
