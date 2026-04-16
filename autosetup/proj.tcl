@@ -1053,12 +1053,8 @@ proc proj-affirm-files-exist {args} {
 # (which gets set by the emsdk_env.sh script from the SDK) or that
 # same var passed to configure.
 #
-# If the given directory is found, it expects to find either:
-#
-# - emsdk_env.sh in that directory, as well as the emcc compiler
-#   somewhere under there, or
-# - a package-manager style installation with bin/emcc directly under
-#   that directory.
+# If the given directory is found, it expects to find emsdk_env.sh in
+# that directory, as well as the emcc compiler somewhere under there.
 #
 # If the --with-emsdk[=DIR] flag is explicitly provided and the SDK is
 # not found then a fatal error is generated, otherwise failure to find
@@ -1069,12 +1065,12 @@ proc proj-affirm-files-exist {args} {
 # - HAVE_EMSDK = 0 or 1 (this function's return value)
 # - EMSDK_HOME = "" or top dir of the emsdk
 # - EMSDK_ENV_SH = "" or $EMSDK_HOME/emsdk_env.sh
-# - BIN_EMCC = "" or discovered emcc under $EMSDK_HOME
+# - BIN_EMCC = "" or $EMSDK_HOME/upstream/emscripten/emcc
 #
-# Returns 1 if a usable SDK or package-manager installation is found,
-# else 0. If EMSDK_HOME is not empty but BIN_EMCC is empty then emcc
-# was not found in EMSDK_HOME, in which case we have to rely on the
-# fact that sourcing EMSDK_ENV_SH from a shell will add emcc to PATH.
+# Returns 1 if EMSDK_ENV_SH is found, else 0.  If EMSDK_HOME is not empty
+# but BIN_EMCC is then emcc was not found in the EMSDK_HOME, in which
+# case we have to rely on the fact that sourcing $EMSDK_ENV_SH from a
+# shell will add emcc to the $PATH.
 #
 proc proj-check-emsdk {} {
   set emsdkHome [opt-val with-emsdk]
@@ -1091,32 +1087,16 @@ proc proj-check-emsdk {} {
   if {$emsdkHome ne ""} {
     define EMSDK_HOME $emsdkHome
     set emsdkEnv "$emsdkHome/emsdk_env.sh"
-    set emccCandidates [list \
-                          "$emsdkHome/upstream/emscripten/emcc" \
-                          "$emsdkHome/bin/emcc" \
-                          "$emsdkHome/emcc"]
     if {[file exists $emsdkEnv]} {
       msg-result "$emsdkHome"
       define EMSDK_ENV_SH $emsdkEnv
       set rc 1
-      foreach emcc $emccCandidates {
-        if {[file exists $emcc]} {
-          define BIN_EMCC $emcc
-          break
-        }
-      }
-    } elseif {[file exists [lindex $emccCandidates 1]]
-              || [file exists [lindex $emccCandidates 2]]} {
-      msg-result "$emsdkHome (package-manager layout)"
-      set rc 1
-      foreach emcc $emccCandidates {
-        if {[file exists $emcc]} {
-          define BIN_EMCC $emcc
-          break
-        }
+      set emcc "$emsdkHome/upstream/emscripten/emcc"
+      if {[file exists $emcc]} {
+        define BIN_EMCC $emcc
       }
     } else {
-      msg-result "emsdk_env.sh/emcc not found in $emsdkHome"
+      msg-result "emsdk_env.sh not found in $emsdkHome"
     }
   } else {
     msg-result "not found"
