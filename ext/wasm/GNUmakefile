@@ -833,7 +833,7 @@ emcc.jsflags += -sINITIAL_MEMORY=$(emcc.INITIAL_MEMORY.$(emcc.INITIAL_MEMORY))
 #
 
 emcc.jsflags += $(emcc.environment)
-emcc.jsflags += -sSTACK_SIZE=512KB
+emcc.jsflags += -sSTACK_MAX=512KB
 # ^^^ ACHTUNG: emsdk 3.1.27 reduced the default stack size from 5MB to
 # a mere 64KB, which leads to silent memory corruption via the kvvfs
 # VFS, which requires twice that for its xRead() and xWrite() methods.
@@ -1339,7 +1339,7 @@ emcc.speedtest1.common += -Wno-limited-postlink-optimizations
 emcc.speedtest1.common += -Wno-unused-main
 # ^^^^ -Wno-unused-main is for emcc 3.1.52+. speedtest1 has a wasm_main() which is
 # exported and called by the JS code.
-emcc.speedtest1.common += -sSTACK_SIZE=512KB
+emcc.speedtest1.common += -sSTACK_MAX=512KB
 emcc.speedtest1.common += -sEXPORTED_FUNCTIONS=@$(EXPORTED_FUNCTIONS.speedtest1)
 emcc.speedtest1.common += $(emcc.exportedRuntimeMethods)
 emcc.speedtest1.common += -sALLOW_TABLE_GROWTH
