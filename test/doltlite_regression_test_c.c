@@ -3149,6 +3149,638 @@ static void run_savepoint_failed_commit_release_reopen(void){
   remove_db(dbpath);
 }
 
+static void run_savepoint_failed_commit_outer_rollback_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Savepoint Failed Commit Outer Rollback Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_savepoint_failed_commit_outer_rollback_reopen");
+  remove_db(dbpath);
+  gFailWriteOnce = 0;
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+
+  check("register_fail_vfs_for_savepoint_failed_commit_outer_rollback",
+        registerFailVfs()==SQLITE_OK);
+  check("open_fail_db_for_savepoint_failed_commit_outer_rollback",
+        open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_savepoint_failed_commit_outer_rollback", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
+    "CREATE INDEX k_idx ON t(k);"
+    "INSERT INTO t VALUES(1, 1, 'a');"
+    "INSERT INTO t VALUES(2, 2, 'b');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  check("begin_txn_for_savepoint_failed_commit_outer_rollback",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_savepoint_failed_commit_outer_rollback",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_edits_for_savepoint_failed_commit_outer_rollback",
+        execsql(db,
+          "UPDATE t SET k=11, v='outer' WHERE id=1;"
+          "INSERT INTO t VALUES(4, 44, 'outer4');")==SQLITE_OK);
+  check("savepoint_inner_for_savepoint_failed_commit_outer_rollback",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_edits_for_savepoint_failed_commit_outer_rollback",
+        execsql(db,
+          "UPDATE t SET k=22, v='inner' WHERE id=2;"
+          "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
+
+  gFailHits = 0;
+  gFailWriteOnce = 1;
+  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'failing-mid-savepoint')");
+  check("savepoint_failed_commit_outer_rollback_injected", gFailHits>0);
+  check("savepoint_failed_commit_outer_rollback_returns_error",
+        strstr(res, "ERROR:")!=0);
+
+  check("rollback_outer_after_failed_commit",
+        execsql(db, "ROLLBACK TO outer_sp;")==SQLITE_OK);
+  check("release_outer_after_failed_commit_outer_rollback",
+        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+  check("commit_after_failed_commit_outer_rollback",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("failed_commit_outer_rollback_row1_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "1")==0);
+  check("failed_commit_outer_rollback_row2_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+  check("failed_commit_outer_rollback_row3_absent_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+  check("failed_commit_outer_rollback_row4_absent_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
+  check("failed_commit_outer_rollback_k11_absent_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
+  check("failed_commit_outer_rollback_k22_absent_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+  check("failed_commit_outer_rollback_head_unchanged_before_close",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("failed_commit_outer_rollback_status_clean_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("failed_commit_outer_rollback_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_savepoint_failed_commit_outer_rollback",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("failed_commit_outer_rollback_row1_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "1")==0);
+  check("failed_commit_outer_rollback_row2_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+  check("failed_commit_outer_rollback_row3_absent_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+  check("failed_commit_outer_rollback_row4_absent_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
+  check("failed_commit_outer_rollback_k11_absent_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
+  check("failed_commit_outer_rollback_k22_absent_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+  check("failed_commit_outer_rollback_head_unchanged_after_reopen",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("failed_commit_outer_rollback_status_clean_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("failed_commit_outer_rollback_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_savepoint_flush_snapshot_multi_table_rollback_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Savepoint Flush Snapshot Multi Table Rollback Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_savepoint_flush_snapshot_multi_table_rollback_reopen");
+  remove_db(dbpath);
+
+  check("open_db_for_flush_snapshot_multi_table_rollback",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_flush_snapshot_multi_table_rollback", execsql(db,
+    "CREATE TABLE a(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
+    "CREATE INDEX a_k_idx ON a(k);"
+    "CREATE TABLE b(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
+    "CREATE INDEX b_k_idx ON b(k);"
+    "INSERT INTO a VALUES(1, 1, 'a1');"
+    "INSERT INTO a VALUES(2, 2, 'a2');"
+    "INSERT INTO b VALUES(1, 10, 'b1');"
+    "INSERT INTO b VALUES(2, 20, 'b2');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  check("begin_txn_for_flush_snapshot_multi_table_rollback",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_flush_snapshot_multi_table_rollback",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_edits_for_flush_snapshot_multi_table_rollback",
+        execsql(db,
+          "UPDATE a SET k=11, v='outer-a' WHERE id=1;"
+          "INSERT INTO b VALUES(3, 30, 'outer-b3');")==SQLITE_OK);
+  check("savepoint_inner_for_flush_snapshot_multi_table_rollback",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_edits_for_flush_snapshot_multi_table_rollback",
+        execsql(db,
+          "UPDATE a SET k=22, v='inner-a' WHERE id=2;"
+          "INSERT INTO a VALUES(3, 33, 'inner-a3');"
+          "UPDATE b SET k=33, v='inner-b' WHERE id=2;")==SQLITE_OK);
+  check("mid_savepoint_commit_for_flush_snapshot_multi_table_rollback",
+        execsql(db, "SELECT dolt_commit('-A', '-m', 'mid-savepoint');")==SQLITE_OK);
+  check("rollback_inner_after_flush_snapshot_multi_table",
+        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+  check("release_inner_after_flush_snapshot_multi_table",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("release_outer_after_flush_snapshot_multi_table",
+        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+  check("commit_after_flush_snapshot_multi_table_rollback",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("flush_snapshot_multi_table_a1_before_close",
+        strcmp(exec1(db, "SELECT k FROM a WHERE id=1"), "11")==0);
+  check("flush_snapshot_multi_table_a2_before_close",
+        strcmp(exec1(db, "SELECT k FROM a WHERE id=2"), "2")==0);
+  check("flush_snapshot_multi_table_a3_absent_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM a WHERE id=3"), "0")==0);
+  check("flush_snapshot_multi_table_b2_before_close",
+        strcmp(exec1(db, "SELECT k FROM b WHERE id=2"), "20")==0);
+  check("flush_snapshot_multi_table_b3_present_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM b WHERE id=3"), "1")==0);
+  check("flush_snapshot_multi_table_a11_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM a WHERE k=11"), "1")==0);
+  check("flush_snapshot_multi_table_a22_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM a WHERE k=22"), "0")==0);
+  check("flush_snapshot_multi_table_b30_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM b WHERE k=30"), "1")==0);
+  check("flush_snapshot_multi_table_b33_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM b WHERE k=33"), "0")==0);
+  check("flush_snapshot_multi_table_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_flush_snapshot_multi_table_rollback",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("flush_snapshot_multi_table_a1_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM a WHERE id=1"), "11")==0);
+  check("flush_snapshot_multi_table_a2_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM a WHERE id=2"), "2")==0);
+  check("flush_snapshot_multi_table_a3_absent_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM a WHERE id=3"), "0")==0);
+  check("flush_snapshot_multi_table_b2_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM b WHERE id=2"), "20")==0);
+  check("flush_snapshot_multi_table_b3_present_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM b WHERE id=3"), "1")==0);
+  check("flush_snapshot_multi_table_a11_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM a WHERE k=11"), "1")==0);
+  check("flush_snapshot_multi_table_a22_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM a WHERE k=22"), "0")==0);
+  check("flush_snapshot_multi_table_b30_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM b WHERE k=30"), "1")==0);
+  check("flush_snapshot_multi_table_b33_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM b WHERE k=33"), "0")==0);
+  check("flush_snapshot_multi_table_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_savepoint_same_name_shadowing_index_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Savepoint Same Name Shadowing Index Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_savepoint_same_name_shadowing_index_reopen");
+  remove_db(dbpath);
+
+  check("open_db_for_savepoint_same_name_shadowing",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_savepoint_same_name_shadowing", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
+    "CREATE INDEX k_idx ON t(k);"
+    "INSERT INTO t VALUES(1, 1, 'a');"
+    "INSERT INTO t VALUES(2, 2, 'b');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  check("begin_txn_for_savepoint_same_name_shadowing",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_shadow_outer",
+        execsql(db, "SAVEPOINT same_sp;")==SQLITE_OK);
+  check("shadow_outer_edits",
+        execsql(db,
+          "UPDATE t SET k=11, v='outer' WHERE id=1;"
+          "INSERT INTO t VALUES(3, 33, 'outer3');")==SQLITE_OK);
+  check("savepoint_shadow_inner",
+        execsql(db, "SAVEPOINT same_sp;")==SQLITE_OK);
+  check("shadow_inner_edits",
+        execsql(db,
+          "UPDATE t SET k=22, v='inner' WHERE id=2;"
+          "INSERT INTO t VALUES(4, 44, 'inner4');")==SQLITE_OK);
+  check("rollback_shadow_inner",
+        execsql(db, "ROLLBACK TO same_sp;")==SQLITE_OK);
+  check("release_shadow_inner",
+        execsql(db, "RELEASE same_sp;")==SQLITE_OK);
+  check("release_shadow_outer",
+        execsql(db, "RELEASE same_sp;")==SQLITE_OK);
+  check("commit_shadow_same_name",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("shadow_same_name_id1_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("shadow_same_name_id2_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+  check("shadow_same_name_id3_present_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+  check("shadow_same_name_id4_absent_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
+  check("shadow_same_name_k11_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("shadow_same_name_k22_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+  check("shadow_same_name_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_savepoint_same_name_shadowing",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("shadow_same_name_id1_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("shadow_same_name_id2_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+  check("shadow_same_name_id3_present_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+  check("shadow_same_name_id4_absent_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
+  check("shadow_same_name_k11_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("shadow_same_name_k22_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+  check("shadow_same_name_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_savepoint_schema_rollback_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Savepoint Schema Rollback Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_schema_rollback_reopen");
+  remove_db(dbpath);
+
+  check("open_db_for_savepoint_schema_rollback", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_savepoint_schema_rollback", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1, 'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  check("begin_txn_for_savepoint_schema_rollback",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_schema_rollback",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_schema_rollback_edit",
+        execsql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
+  check("savepoint_inner_for_schema_rollback",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_schema_changes",
+        execsql(db,
+          "ALTER TABLE t ADD COLUMN extra TEXT;"
+          "CREATE TABLE aux(id INTEGER PRIMARY KEY, note TEXT);"
+          "INSERT INTO aux VALUES(1, 'tmp');")==SQLITE_OK);
+  check("rollback_inner_schema_changes",
+        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+  check("release_inner_schema_changes",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("release_outer_schema_changes",
+        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+  check("commit_schema_rollback",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("schema_rollback_row_before_close",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+  check("schema_rollback_extra_absent_before_close",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra'"), "0")==0);
+  check("schema_rollback_aux_absent_before_close",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='aux'"), "0")==0);
+  check("schema_rollback_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_savepoint_schema_rollback", open_db(dbpath, &db)==SQLITE_OK);
+  check("schema_rollback_row_after_reopen",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+  check("schema_rollback_extra_absent_after_reopen",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra'"), "0")==0);
+  check("schema_rollback_aux_absent_after_reopen",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='aux'"), "0")==0);
+  check("schema_rollback_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_savepoint_trigger_rollback_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Savepoint Trigger Rollback Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_trigger_rollback_reopen");
+  remove_db(dbpath);
+
+  check("open_db_for_savepoint_trigger_rollback", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_savepoint_trigger_rollback", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "CREATE TABLE audit(msg TEXT);"
+    "CREATE TRIGGER t_au AFTER UPDATE ON t BEGIN "
+      "INSERT INTO audit VALUES('u:' || NEW.id || ':' || NEW.v);"
+    "END;"
+    "INSERT INTO t VALUES(1, 'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  check("begin_txn_for_savepoint_trigger_rollback",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_trigger_rollback",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_trigger_edit",
+        execsql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
+  check("savepoint_inner_for_trigger_rollback",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_trigger_edit",
+        execsql(db, "UPDATE t SET v='inner' WHERE id=1;")==SQLITE_OK);
+  check("rollback_inner_trigger_edit",
+        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+  check("release_inner_trigger_edit",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("release_outer_trigger_edit",
+        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+  check("commit_trigger_rollback",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("trigger_rollback_row_before_close",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+  check("trigger_rollback_audit_count_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM audit"), "1")==0);
+  check("trigger_rollback_audit_msg_before_close",
+        strcmp(exec1(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
+  check("trigger_rollback_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_savepoint_trigger_rollback", open_db(dbpath, &db)==SQLITE_OK);
+  check("trigger_rollback_row_after_reopen",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+  check("trigger_rollback_audit_count_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM audit"), "1")==0);
+  check("trigger_rollback_audit_msg_after_reopen",
+        strcmp(exec1(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
+  check("trigger_rollback_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_begin_release_then_outer_rollback_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Begin Release Then Outer Rollback Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_begin_release_then_outer_rollback_reopen");
+  remove_db(dbpath);
+
+  check("open_db_for_begin_release_then_outer_rollback", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_begin_release_then_outer_rollback", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
+    "CREATE INDEX k_idx ON t(k);"
+    "INSERT INTO t VALUES(1, 1, 'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  check("begin_txn_for_begin_release_then_outer_rollback",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_begin_release_then_outer_rollback",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_edit_for_begin_release_then_outer_rollback",
+        execsql(db, "UPDATE t SET k=11, v='outer' WHERE id=1;")==SQLITE_OK);
+  check("savepoint_inner_for_begin_release_then_outer_rollback",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_edit_for_begin_release_then_outer_rollback",
+        execsql(db, "INSERT INTO t VALUES(2, 22, 'inner2');")==SQLITE_OK);
+  check("release_inner_for_begin_release_then_outer_rollback",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("rollback_outer_for_begin_release_then_outer_rollback",
+        execsql(db, "ROLLBACK;")==SQLITE_OK);
+
+  check("begin_release_outer_rollback_row1_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "1")==0);
+  check("begin_release_outer_rollback_row2_absent_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
+  check("begin_release_outer_rollback_k11_absent_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
+  check("begin_release_outer_rollback_status_clean_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("begin_release_outer_rollback_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_begin_release_then_outer_rollback", open_db(dbpath, &db)==SQLITE_OK);
+  check("begin_release_outer_rollback_row1_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "1")==0);
+  check("begin_release_outer_rollback_row2_absent_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
+  check("begin_release_outer_rollback_k11_absent_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
+  check("begin_release_outer_rollback_status_clean_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("begin_release_outer_rollback_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_savepoint_failed_commit_schema_rollback_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Savepoint Failed Commit Schema Rollback Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_savepoint_failed_commit_schema_rollback_reopen");
+  remove_db(dbpath);
+  gFailWriteOnce = 0;
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+
+  check("register_fail_vfs_for_savepoint_failed_commit_schema_rollback",
+        registerFailVfs()==SQLITE_OK);
+  check("open_fail_db_for_savepoint_failed_commit_schema_rollback",
+        open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_savepoint_failed_commit_schema_rollback", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1, 'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  check("begin_txn_for_savepoint_failed_commit_schema_rollback",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_savepoint_failed_commit_schema_rollback",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_edit_for_savepoint_failed_commit_schema_rollback",
+        execsql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
+  check("savepoint_inner_for_savepoint_failed_commit_schema_rollback",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_schema_for_savepoint_failed_commit_schema_rollback",
+        execsql(db,
+          "ALTER TABLE t ADD COLUMN extra TEXT;"
+          "CREATE TABLE aux(id INTEGER PRIMARY KEY, note TEXT);"
+          "INSERT INTO aux VALUES(1, 'tmp');")==SQLITE_OK);
+
+  gFailHits = 0;
+  gFailWriteOnce = 1;
+  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'failing-mid-savepoint')");
+  check("savepoint_failed_commit_schema_rollback_injected", gFailHits>0);
+  check("savepoint_failed_commit_schema_rollback_returns_error",
+        strstr(res, "ERROR:")!=0);
+
+  check("rollback_inner_schema_after_failed_commit",
+        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+  check("release_inner_schema_after_failed_commit",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("release_outer_schema_after_failed_commit",
+        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+  check("commit_after_failed_commit_schema_rollback",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("failed_commit_schema_row_before_close",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+  check("failed_commit_schema_extra_absent_before_close",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra'"), "0")==0);
+  check("failed_commit_schema_aux_absent_before_close",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='aux'"), "0")==0);
+  check("failed_commit_schema_head_unchanged_before_close",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("failed_commit_schema_status_dirty_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("failed_commit_schema_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_savepoint_failed_commit_schema_rollback",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("failed_commit_schema_row_after_reopen",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+  check("failed_commit_schema_extra_absent_after_reopen",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra'"), "0")==0);
+  check("failed_commit_schema_aux_absent_after_reopen",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='aux'"), "0")==0);
+  check("failed_commit_schema_head_unchanged_after_reopen",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("failed_commit_schema_status_dirty_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("failed_commit_schema_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_savepoint_nested_trigger_inner_rollback_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Savepoint Nested Trigger Inner Rollback Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_savepoint_nested_trigger_inner_rollback_reopen");
+  remove_db(dbpath);
+
+  check("open_db_for_savepoint_nested_trigger_inner_rollback",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_savepoint_nested_trigger_inner_rollback", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "CREATE TABLE audit(msg TEXT);"
+    "CREATE TRIGGER t_au AFTER UPDATE ON t BEGIN "
+      "INSERT INTO audit VALUES('u:' || NEW.id || ':' || NEW.v);"
+    "END;"
+    "INSERT INTO t VALUES(1, 'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  check("begin_txn_for_savepoint_nested_trigger_inner_rollback",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_nested_trigger_inner_rollback",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_trigger_edit_for_nested_trigger_inner_rollback",
+        execsql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
+  check("savepoint_inner_for_nested_trigger_inner_rollback",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_trigger_edit_for_nested_trigger_inner_rollback",
+        execsql(db, "UPDATE t SET v='inner' WHERE id=1;")==SQLITE_OK);
+  check("rollback_inner_for_nested_trigger_inner_rollback",
+        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+  check("release_inner_for_nested_trigger_inner_rollback",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("release_outer_for_nested_trigger_inner_rollback",
+        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+  check("commit_nested_trigger_inner_rollback",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("nested_trigger_row_before_close",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+  check("nested_trigger_audit_count_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM audit"), "1")==0);
+  check("nested_trigger_audit_msg_before_close",
+        strcmp(exec1(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
+  check("nested_trigger_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_savepoint_nested_trigger_inner_rollback",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("nested_trigger_row_after_reopen",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+  check("nested_trigger_audit_count_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM audit"), "1")==0);
+  check("nested_trigger_audit_msg_after_reopen",
+        strcmp(exec1(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
+  check("nested_trigger_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_hard_reset_failure_restores_memory_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -5189,6 +5821,14 @@ static const RegressionCase aCases[] = {
   { "savepoint_flush_snapshot_release_reopen", "Savepoint Flush Snapshot Release Reopen Test", run_savepoint_flush_snapshot_release_reopen },
   { "savepoint_failed_commit_rollback_reopen", "Savepoint Failed Commit Rollback Reopen Test", run_savepoint_failed_commit_rollback_reopen },
   { "savepoint_failed_commit_release_reopen", "Savepoint Failed Commit Release Reopen Test", run_savepoint_failed_commit_release_reopen },
+  { "savepoint_failed_commit_outer_rollback_reopen", "Savepoint Failed Commit Outer Rollback Reopen Test", run_savepoint_failed_commit_outer_rollback_reopen },
+  { "savepoint_flush_snapshot_multi_table_rollback_reopen", "Savepoint Flush Snapshot Multi Table Rollback Reopen Test", run_savepoint_flush_snapshot_multi_table_rollback_reopen },
+  { "savepoint_same_name_shadowing_index_reopen", "Savepoint Same Name Shadowing Index Reopen Test", run_savepoint_same_name_shadowing_index_reopen },
+  { "savepoint_schema_rollback_reopen", "Savepoint Schema Rollback Reopen Test", run_savepoint_schema_rollback_reopen },
+  { "savepoint_trigger_rollback_reopen", "Savepoint Trigger Rollback Reopen Test", run_savepoint_trigger_rollback_reopen },
+  { "begin_release_then_outer_rollback_reopen", "Begin Release Then Outer Rollback Reopen Test", run_begin_release_then_outer_rollback_reopen },
+  { "savepoint_failed_commit_schema_rollback_reopen", "Savepoint Failed Commit Schema Rollback Reopen Test", run_savepoint_failed_commit_schema_rollback_reopen },
+  { "savepoint_nested_trigger_inner_rollback_reopen", "Savepoint Nested Trigger Inner Rollback Reopen Test", run_savepoint_nested_trigger_inner_rollback_reopen },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
   { "amend_persist_failure_preserves_durable_state", "Amend Persist Failure Preserves Durable State Test", run_amend_persist_failure_preserves_durable_state },
