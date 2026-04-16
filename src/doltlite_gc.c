@@ -11,6 +11,10 @@
 
 #include <string.h>
 #include <stdio.h>
+#if !defined(_WIN32) && !defined(WIN32)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 extern void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 #include "doltlite_internal.h"
@@ -331,6 +335,27 @@ static int gcRewriteFile(
         if( rename(zTmp, cs->zFilename)!=0 ){
           rc = SQLITE_IOERR;
         }
+
+        /* Fsync the parent directory so the rename is durable.
+        ** Without this, a kernel crash after rename() returns
+        ** can lose the directory entry — the old file reappears
+        ** and the compacted file is gone, losing the database.
+        ** Windows NTFS journals metadata, so this is Unix-only. */
+#if !defined(_WIN32) && !defined(WIN32)
+        if( rc==SQLITE_OK ){
+          char *zDir = sqlite3_mprintf("%s", cs->zFilename);
+          if( zDir ){
+            int k = (int)strlen(zDir);
+            while( k>0 && zDir[k-1]!='/' ) k--;
+            if( k>0 ) zDir[k-1] = 0; else{ zDir[0]='.'; zDir[1]=0; }
+            {
+              int dfd = open(zDir, O_RDONLY);
+              if( dfd>=0 ){ fsync(dfd); close(dfd); }
+            }
+            sqlite3_free(zDir);
+          }
+        }
+#endif
 
         if( rc==SQLITE_OK ){
           sqlite3_free(cs->pWalData);
