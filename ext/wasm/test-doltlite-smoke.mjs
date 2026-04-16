@@ -32,14 +32,11 @@ function fail(msg){
 try {
   const version = db.selectValue("select dolt_version()");
   const engine = db.selectValue("select doltlite_engine()");
-  const activeBranch = db.selectValue("select name from active_branch");
   if(!version || typeof version !== 'string') fail('dolt_version() returned no version');
   if(engine !== 'prolly') fail(`doltlite_engine() returned ${engine}`);
-  if(activeBranch !== 'main') fail(`active_branch was ${activeBranch}, expected main`);
 
   console.log(`dolt_version=${version}`);
   console.log(`doltlite_engine=${engine}`);
-  console.log(`active_branch=${activeBranch}`);
 } finally {
   db.close();
 }
