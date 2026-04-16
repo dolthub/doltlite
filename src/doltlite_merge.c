@@ -1115,6 +1115,11 @@ do_merge_entry:
 
         if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0
          || prollyHashCompare(&aOurs[i].schemaHash, &theirsEntry->schemaHash)!=0 ){
+          if( pzErrMsg ){
+            *pzErrMsg = sqlite3_mprintf(
+              "schema conflict: table '%s' added on both branches with "
+              "different definitions", zName);
+          }
           return SQLITE_ERROR;
         }
 
@@ -1127,6 +1132,11 @@ do_merge_entry:
       if( !theirsEntry ){
 
         if( oursChanged ){
+          if( pzErrMsg ){
+            *pzErrMsg = sqlite3_mprintf(
+              "schema conflict: table '%s' modified on one branch "
+              "and deleted on the other", zName);
+          }
           return SQLITE_ERROR;
         }
 
@@ -1422,7 +1432,15 @@ int doltliteMergeCatalogs(
                           &totalConflicts, pzErrMsg,
                           ancestor, ours, theirs,
                           ppActions, pnActions);
-  if( rc!=SQLITE_OK ) goto merge_cleanup;
+  if( rc!=SQLITE_OK ){
+    /* pass1 shallow-copies zName pointers from aOurs into aMerged.
+    ** The strdup loop below (which breaks the aliasing) hasn't run
+    ** yet, so NULL out the shallow copies before merge_cleanup frees
+    ** both arrays — otherwise it's a double-free. */
+    int k;
+    for(k=0; k<nMerged; k++) aMerged[k].zName = 0;
+    goto merge_cleanup;
+  }
 
   /* pass1 shallow-copies TableEntry structs from aOurs into aMerged,
   ** which means zName pointers are aliased — aMerged[k].zName ==
