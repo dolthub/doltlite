@@ -53,48 +53,45 @@ static int fetchRowByRowid(
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_NOTFOUND;
 
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
-  rc = prollyCursorFirst(&cur, &res);
-  if( rc!=SQLITE_OK || res ){
+  rc = prollyCursorSeekInt(&cur, targetRowid, &res);
+  if( rc!=SQLITE_OK ){
     prollyCursorClose(&cur);
-    return rc==SQLITE_OK ? SQLITE_NOTFOUND : rc;
+    return rc;
+  }
+  if( res!=0 ){
+    prollyCursorClose(&cur);
+    return SQLITE_NOTFOUND;
   }
 
-  while( prollyCursorIsValid(&cur) ){
-    i64 rowid = prollyCursorIntKey(&cur);
-    if( rowid == targetRowid ){
-      const u8 *pKey, *pVal;
-      int nKey, nVal;
-      prollyCursorKey(&cur, &pKey, &nKey);
-      prollyCursorValue(&cur, &pVal, &nVal);
-      if( pKey && nKey > 0 ){
-        *ppKey = sqlite3_malloc(nKey);
-        if( !*ppKey ){
-          prollyCursorClose(&cur);
-          return SQLITE_NOMEM;
-        }
-        memcpy(*ppKey, pKey, nKey);
-        *pnKey = nKey;
+  {
+    const u8 *pKey, *pVal;
+    int nKey, nVal;
+    prollyCursorKey(&cur, &pKey, &nKey);
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( pKey && nKey > 0 ){
+      *ppKey = sqlite3_malloc(nKey);
+      if( !*ppKey ){
+        prollyCursorClose(&cur);
+        return SQLITE_NOMEM;
       }
-      if( pVal && nVal > 0 ){
-        *ppVal = sqlite3_malloc(nVal);
-        if( !*ppVal ){
-          sqlite3_free(*ppKey);
-          *ppKey = 0; *pnKey = 0;
-          prollyCursorClose(&cur);
-          return SQLITE_NOMEM;
-        }
-        memcpy(*ppVal, pVal, nVal);
-        *pnVal = nVal;
-      }
-      prollyCursorClose(&cur);
-      return SQLITE_OK;
+      memcpy(*ppKey, pKey, nKey);
+      *pnKey = nKey;
     }
-    rc = prollyCursorNext(&cur);
-    if( rc != SQLITE_OK ) break;
+    if( pVal && nVal > 0 ){
+      *ppVal = sqlite3_malloc(nVal);
+      if( !*ppVal ){
+        sqlite3_free(*ppKey);
+        *ppKey = 0; *pnKey = 0;
+        prollyCursorClose(&cur);
+        return SQLITE_NOMEM;
+      }
+      memcpy(*ppVal, pVal, nVal);
+      *pnVal = nVal;
+    }
   }
 
   prollyCursorClose(&cur);
-  return SQLITE_NOTFOUND;
+  return SQLITE_OK;
 }
 
 /* Build the violation_info JSON string for one FK orphan. The
