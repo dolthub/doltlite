@@ -962,7 +962,7 @@ $(sqlite3-api-build-version.js): $(bin.version-info) $(MAKEFILE)
 	@echo '$(logtag.@) $(emo.disk)'; { \
 		$(call b.mkdir@); \
 		echo 'globalThis.sqlite3ApiBootstrap.initializers.push(function(sqlite3){'; \
-		echo -n '  sqlite3.version = '; \
+		printf '%s' '  sqlite3.version = '; \
 		$(bin.version-info) --json; \
 		echo ';'; \
 		echo '});'; \
@@ -1169,10 +1169,10 @@ sqlite3-wasm.c.in += $(doltlite.wasm.lib)
 endif
 
 ifeq (1,$(DOLTLITE_WASM))
-$(dir.doltlite.build)/Makefile: $(dir.top)/build/Makefile
+$(dir.doltlite.build)/Makefile: $(dir.top)/Makefile
 	@mkdir -p $(dir.doltlite.build)
-	@cp $(dir.top)/build/Makefile $(dir.doltlite.build)/Makefile
-	@find $(dir.top)/build -maxdepth 1 \( -name '*.h' -o -name '*.c' \) -exec cp {} $(dir.doltlite.build) \;
+	@cp $(dir.top)/Makefile $(dir.doltlite.build)/Makefile
+	@find $(dir.top) -maxdepth 1 \( -name '*.h' -o -name '*.c' \) -exec cp {} $(dir.doltlite.build) \;
 
 $(doltlite.wasm.lib): $(dir.doltlite.build)/Makefile
 	@echo "[$(emo.tool) doltlite] building wasm libdoltlite.a"
