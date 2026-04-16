@@ -75,7 +75,7 @@ enum BuildDefFlags {
   F_WASMFS           = 1<<6,
 
   /*
-  ** Which compiled files from $(dir.dout)/buildName/*.{js,mjs,wasm}
+  ** Which compiled files from $(dir.dout)/buildName/{js,mjs,wasm}
   ** to copy to $(dir.dout) after creating them. This should only be
   ** applied to builds which result in end-user deliverables.  Some
   ** builds, like the bundler-friendly ones, are a hybrid: we keep
@@ -324,7 +324,6 @@ const BuildDefs oBuildDefs = {
     " $(speedtest1.c.in)"
     " -lm",
     .zEmccExtra  = 0,
-    .zEmccExtra  = 0,
     .zEnv        = 0,
     .zDeps       =
     "$(speedtest1.c.in)"
@@ -496,7 +495,6 @@ static void mk_prologue(void){
       ** Performance gains or losses are _not_ taken into account
       ** here, only wasm file size.
       */
-      "--enable-bulk-memory-opt " /* required */
       "--all-features "           /* required */
       "--post-emscripten "        /* Saves roughly 12kb */
       "--strip-debug "            /* We already wasm-strip, but in
@@ -1029,7 +1027,6 @@ static void mk_fiddle(void){
            "$(dir.fiddle)/index.html "
            "$(dir.fiddle)/fiddle.js "
            "$(dir.fiddle)/fiddle-worker.js "
-           "$(dir.fiddle)/sqlite3-opfs-async-proxy.js,"
            "$(dir $@)"
            ")\n",
            zBuildName);

@@ -16,21 +16,21 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y build-essential zlib1g-dev tcl-dev
+      run: sudo apt-get update && sudo apt-get install -y build-essential zlib1g-dev tcl-dev emscripten wabt
 
-    - name: Build amalgamation
+    - name: Build amalgamation and wasm artifacts
       run: |
-        mkdir -p build && cd build
-        ../configure
-        make sqlite3.c sqlite3.h
+        ./configure
+        make sqlite3.c sqlite3.h sqlite3ext.h
+        make -C ext/wasm dist
         # sqlite3.c/h IS the doltlite amalgamation (built with DOLTLITE_PROLLY=1)
 
     - name: Package amalgamation
       run: |
         VERSION=${GITHUB_REF_NAME#v}
         mkdir doltlite-amalgamation-${VERSION}
-        cp build/sqlite3.c doltlite-amalgamation-${VERSION}/doltlite.c
-        cp build/sqlite3.h doltlite-amalgamation-${VERSION}/doltlite.h
+        cp sqlite3.c doltlite-amalgamation-${VERSION}/doltlite.c
+        cp sqlite3.h doltlite-amalgamation-${VERSION}/doltlite.h
         zip -r doltlite-amalgamation-${VERSION}.zip doltlite-amalgamation-${VERSION}/
 
     - name: Package autoconf source
@@ -39,7 +39,13 @@ jobs:
         tar czf doltlite-autoconf-${VERSION}.tar.gz \
           --transform "s,^,doltlite-autoconf-${VERSION}/," \
           configure Makefile.in main.mk src/ ext/ \
-          build/sqlite3.c build/sqlite3.h
+          sqlite3.c sqlite3.h
+
+    - name: Package wasm distribution
+      run: |
+        VERSION=${GITHUB_REF_NAME#v}
+        WASM_ZIP=$(ls ext/wasm/sqlite-wasm-*.zip | head -1)
+        cp "$WASM_ZIP" "doltlite-wasm-${VERSION}.zip"
 
     - name: Upload source artifacts
       uses: actions/upload-artifact@v4
@@ -48,6 +54,7 @@ jobs:
         path: |
           doltlite-amalgamation-*.zip
           doltlite-autoconf-*.tar.gz
+          doltlite-wasm-*.zip
 
   # ── Binary builds (per-platform) ─────────────────────────
   build:

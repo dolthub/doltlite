@@ -44,6 +44,37 @@ To build stock SQLite instead (for comparison):
 make DOLTLITE_PROLLY=0 sqlite3
 ```
 
+### WebAssembly (`ext/wasm`)
+
+Doltlite vendors SQLite's `ext/wasm` build and defaults it to the Doltlite
+engine path in this repo. Build the top-level generated SQLite files first,
+then build the wasm package:
+
+```bash
+./configure
+make sqlite3.c sqlite3.h sqlite3ext.h
+make -C ext/wasm
+```
+
+That produces the browser-consumable artifacts under
+[`ext/wasm/jswasm`](ext/wasm/jswasm), including:
+
+- `sqlite3.js`
+- `sqlite3.mjs`
+- `sqlite3.wasm`
+
+To build the upstream SQLite wasm path instead of Doltlite's split build:
+
+```bash
+make -C ext/wasm DOLTLITE_WASM=0
+```
+
+To package the generated wasm distribution as a zip:
+
+```bash
+make -C ext/wasm dist
+```
+
 ## Using as a C Library
 
 Doltlite is designed as a drop-in replacement for SQLite. It uses the same

@@ -249,20 +249,31 @@
 ** have access to private API internals (namely for kvvfs and
 ** SQLTester pieces).
 **
+** DoltLite's ext/wasm integration may instead build against a
+** separately-compiled library. In that split-build mode we only pull
+** in sqliteInt.h here and must elide helpers which depend on private
+** sqlite3.c internals.
+**
 ** The caveat here is that custom variants need to account for
 ** exporting any necessary symbols (e.g. sqlite3_activate_see()).  We
 ** cannot export them from here using SQLITE_WASM_EXPORT because that
 ** attribute (apparently) has to be part of the function definition.
 */
-#ifndef SQLITE_C
-# define SQLITE_C sqlite3.c /* yes, .c instead of .h. */
+#if defined(SQLITE_WASM_SPLIT_BUILD)
+# include "sqliteInt.h"
+# define SQLITE_WASM_HAS_PRIVATE_KVVFS 0
+#else
+# ifndef SQLITE_C
+#  define SQLITE_C sqlite3.c /* yes, .c instead of .h. */
+# endif
+# define INC__STRINGIFY_(f) #f
+# define INC__STRINGIFY(f) INC__STRINGIFY_(f)
+# include INC__STRINGIFY(SQLITE_C)
+# undef INC__STRINGIFY_
+# undef INC__STRINGIFY
+# undef SQLITE_C
+# define SQLITE_WASM_HAS_PRIVATE_KVVFS 1
 #endif
-#define INC__STRINGIFY_(f) #f
-#define INC__STRINGIFY(f) INC__STRINGIFY_(f)
-#include INC__STRINGIFY(SQLITE_C)
-#undef INC__STRINGIFY_
-#undef INC__STRINGIFY
-#undef SQLITE_C
 
 /*
 ** State for the "pseudo-stack" allocator implemented in
@@ -1056,6 +1067,7 @@ SQLITE_WASM_EXPORT2(const char *,sqlite3__wasm_enum_json,(void)){
     } _StructBinder;
 #undef CurrentStruct
 
+#if SQLITE_WASM_HAS_PRIVATE_KVVFS
 #define CurrentStruct sqlite3_kvvfs_methods
     /* From os_kv.c */
     StructBinder {
@@ -1083,6 +1095,7 @@ SQLITE_WASM_EXPORT2(const char *,sqlite3__wasm_enum_json,(void)){
       M(aData,              "p");
     } _StructBinder;
 #undef CurrentStruct
+#endif
 
 #if SQLITE_WASM_HAS_VTAB
 #define CurrentStruct sqlite3_vtab
@@ -1554,6 +1567,7 @@ SQLITE_WASM_EXPORT2(int,sqlite3__wasm_posix_create_file,
 ** This returns either a pointer to a static buffer or zKeyIn directly
 ** (if zClass is NULL or empty).
 */
+#if SQLITE_WASM_HAS_PRIVATE_KVVFS
 SQLITE_WASM_EXPORT2(const char *,sqlite3__wasm_kvvfsMakeKey,
                     (const char *zClass, const char *zKeyIn)){
   static char buf[SQLITE_KVOS_SZ+1] = {0};
@@ -1587,6 +1601,7 @@ SQLITE_WASM_EXPORT2(const char *,sqlite3__wasm_kvvfsMakeKey,
 SQLITE_WASM_EXPORT2(sqlite3_kvvfs_methods *,sqlite3__wasm_kvvfs_methods,(void)){
   return &sqlite3KvvfsMethods;
 }
+#endif
 
 #if SQLITE_WASM_HAS_VTAB
 /*
@@ -1742,12 +1757,14 @@ SQLITE_WASM_EXPORT2(char *,sqlite3__wasm_qfmt_token,(char *z, int addQuotes)){
 ** A WASM wrapper for the interal os_kv.c:kvvfsDecode() for internal
 ** use by the kvvfs v2 API.
 */
+#if SQLITE_WASM_HAS_PRIVATE_KVVFS
 SQLITE_WASM_EXPORT2(int,sqlite3__wasm_kvvfs_decode,(const char *a, char *aOut, int nOut)){
   return kvvfsDecode(a, aOut, nOut);
 }
 SQLITE_WASM_EXPORT2(int,sqlite3__wasm_kvvfs_encode,(const char *a, int nA, char *aOut)){
   return kvvfsEncode(a, nA, aOut);
 }
+#endif
 
 
 #if defined(__EMSCRIPTEN__) && defined(SQLITE_ENABLE_WASMFS)

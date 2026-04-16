@@ -2324,7 +2324,6 @@ int sqlite3BtreeSetSpillSize(Btree *p, int mxPage){
   return p->pOps->xSetSpillSize(p, mxPage);
 }
 
-#if SQLITE_MAX_MMAP_SIZE>0
 static int prollyBtreeSetMmapLimit(Btree *p, sqlite3_int64 szMmap){
   (void)p; (void)szMmap;
   return SQLITE_OK;
@@ -2333,7 +2332,6 @@ int sqlite3BtreeSetMmapLimit(Btree *p, sqlite3_int64 szMmap){
   if( !p ) return SQLITE_OK;
   return p->pOps->xSetMmapLimit(p, szMmap);
 }
-#endif
 
 static int prollyBtreeSetPagerFlags(Btree *p, unsigned pgFlags){
   (void)p; (void)pgFlags;
@@ -6715,6 +6713,21 @@ static void registerDoltiteFunctions(sqlite3 *db){
   sqlite3_create_function(db, "doltlite_engine", 0, SQLITE_UTF8, 0,
                           doltiteEngineFunc, 0, 0);
   doltliteRegister(db);
+}
+
+static int doltliteExtInit(
+  sqlite3 *db,
+  char **pzErrMsg,
+  const sqlite3_api_routines *pApi
+){
+  (void)pzErrMsg;
+  (void)pApi;
+  registerDoltiteFunctions(db);
+  return SQLITE_OK;
+}
+
+int doltliteInstallAutoExt(void){
+  return sqlite3_auto_extension((void(*)(void))doltliteExtInit);
 }
 
 #endif
