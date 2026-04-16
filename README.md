@@ -501,7 +501,7 @@ branch. See `test/vc_oracle_hashof_test.sh` for the property tests.
 
 ```sql
 SELECT dolt_version();
--- "v0.7.3-68-g43e9da475"
+-- "v0.7.4"
 ```
 
 Zero-arg scalar returning the build's version string (from
@@ -668,9 +668,9 @@ Doltlite is a drop-in replacement for SQLite, so the natural question is: what
 does version control cost?
 
 Every PR runs a [sysbench-style benchmark](test/sysbench_compare.sh) comparing
-doltlite against stock SQLite on 23 OLTP workloads, with a 3× ceiling enforced
+doltlite against stock SQLite on 23 OLTP workloads, with a 2× ceiling enforced
 by CI. The per-release numbers (reads + writes table) are published with each
-release on the [GitHub releases page](https://github.com/timsehn/doltlite/releases).
+release on the [GitHub releases page](https://github.com/dolthub/doltlite/releases).
 Run `test/sysbench_compare.sh` to reproduce locally.
 
 ### Algorithmic Complexity
