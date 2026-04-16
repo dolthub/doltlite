@@ -865,9 +865,6 @@ emcc.jsflags += -sGLOBAL_BASE=4096 # HYPOTHETICALLY keep func table indexes from
 #emcc.jsflags += -sABORTING_MALLOC # only for experimentation
 emcc.jsflags += -sALLOW_TABLE_GROWTH
 # ^^^^ -sALLOW_TABLE_GROWTH is required for installing new SQL UDFs
-emcc.jsflags += -Wno-limited-postlink-optimizations
-# ^^^^ emcc likes to warn when we have "limited optimizations" via the
-# -g3 flag.
 # emcc.jsflags += -sSTANDALONE_WASM # causes OOM errors, not sure why.
 
 # Re. undefined symbol handling, see: https://lld.llvm.org/WebAssembly.html
@@ -1107,7 +1104,6 @@ emcc.flags.fiddle = \
   -sDYNAMIC_EXECUTION=0 \
   -sWASM_BIGINT=$(emcc.WASM_BIGINT) \
   -sEXPORT_NAME=$(sqlite3.js.init-func) \
-  -Wno-limited-postlink-optimizations \
   $(emcc.exportedRuntimeMethods),FS \
   -sEXPORTED_FUNCTIONS=@$(abspath $(EXPORTED_FUNCTIONS.fiddle)) \
   $(SQLITE_OPT.full-featured) \
@@ -1334,7 +1330,6 @@ emcc.speedtest1.common += --no-entry
 emcc.speedtest1.common += -sABORTING_MALLOC
 emcc.speedtest1.common += -sSTRICT_JS=0
 emcc.speedtest1.common += -sMODULARIZE
-emcc.speedtest1.common += -Wno-limited-postlink-optimizations
 emcc.speedtest1.common += -Wno-unused-main
 # ^^^^ -Wno-unused-main is for emcc 3.1.52+. speedtest1 has a wasm_main() which is
 # exported and called by the JS code.
