@@ -30,7 +30,10 @@ jobs:
 
     - name: Build native DoltLite
       run: |
-        make -C build doltlite
+        mkdir -p build
+        cd build
+        ../configure
+        make doltlite
 
     - name: Build DoltLite wasm targets
       run: |
