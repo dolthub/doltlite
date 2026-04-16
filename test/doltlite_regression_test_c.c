@@ -5452,6 +5452,8 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
   check("commit_failure_surfaces_for_refs_commit_failure", rc!=SQLITE_OK);
   check("refs_hash_restored_on_commit_failure",
         memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
+  check("in_memory_tag_absent_after_commit_failure",
+        chunkStoreFindTag(&cs, "v1", &foundHash)!=SQLITE_OK);
 
   chunkStoreRollback(&cs);
   check("reload_refs_after_commit_failure_rollback",
