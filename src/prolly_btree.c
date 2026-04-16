@@ -2324,7 +2324,6 @@ int sqlite3BtreeSetSpillSize(Btree *p, int mxPage){
   return p->pOps->xSetSpillSize(p, mxPage);
 }
 
-#if SQLITE_MAX_MMAP_SIZE>0
 static int prollyBtreeSetMmapLimit(Btree *p, sqlite3_int64 szMmap){
   (void)p; (void)szMmap;
   return SQLITE_OK;
@@ -2333,7 +2332,6 @@ int sqlite3BtreeSetMmapLimit(Btree *p, sqlite3_int64 szMmap){
   if( !p ) return SQLITE_OK;
   return p->pOps->xSetMmapLimit(p, szMmap);
 }
-#endif
 
 static int prollyBtreeSetPagerFlags(Btree *p, unsigned pgFlags){
   (void)p; (void)pgFlags;

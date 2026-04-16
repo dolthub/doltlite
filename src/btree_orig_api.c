@@ -20,7 +20,15 @@ int origBtreeClose(void *p){ return orig_sqlite3BtreeClose(B(p)); }
 int origBtreeNewDb(void *p){ return orig_sqlite3BtreeNewDb(B(p)); }
 int origBtreeSetCacheSize(void *p, int n){ return orig_sqlite3BtreeSetCacheSize(B(p),n); }
 int origBtreeSetSpillSize(void *p, int n){ return orig_sqlite3BtreeSetSpillSize(B(p),n); }
-int origBtreeSetMmapLimit(void *p, sqlite3_int64 sz){ return orig_sqlite3BtreeSetMmapLimit(B(p),sz); }
+int origBtreeSetMmapLimit(void *p, sqlite3_int64 sz){
+#if SQLITE_MAX_MMAP_SIZE>0
+  return orig_sqlite3BtreeSetMmapLimit(B(p),sz);
+#else
+  (void)p;
+  (void)sz;
+  return SQLITE_OK;
+#endif
+}
 int origBtreeSetPagerFlags(void *p, unsigned f){ return orig_sqlite3BtreeSetPagerFlags(B(p),f); }
 int origBtreeSetPageSize(void *p, int n, int r, int e){ return orig_sqlite3BtreeSetPageSize(B(p),n,r,e); }
 int origBtreeGetPageSize(void *p){ return orig_sqlite3BtreeGetPageSize(B(p)); }

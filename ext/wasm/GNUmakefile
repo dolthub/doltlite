@@ -64,6 +64,7 @@ dir.dout = $(dir.wasm)/jswasm
 # end-user deliverables.
 dir.tmp = $(dir.wasm)/bld
 dir.wasmfs = $(dir.dout)
+dir.doltlite.build = $(dir.tmp)/doltlite-build
 
 #
 # Emoji for log messages.
@@ -289,9 +290,10 @@ c-pp.D.64bit = -Dbits64
 ifeq (1,1)
 define b.strip-js-emcc-bindings
 echo "$(1) $(emo.garbage) Stripping export wrappers."; \
-sed -i -e '/var _sqlite3.*makeInvalidEarly.*;/d' \
--e '/assert.*sqlite3.*missing.*;/d' \
--e '/_sqlite.*createExportWrapper.*;/d' $@
+awk '!/var _sqlite3.*makeInvalidEarly.*;/ \
+     && !/assert.*sqlite3.*missing.*;/ \
+     && !/_sqlite.*createExportWrapper.*;/' $@ > $@.tmp \
+&& mv $@.tmp $@
 endef
 else
 b.strip-js-emcc-bindings = \
@@ -319,6 +321,27 @@ endif
 sqlite3.canonical.c = $(dir.top)/sqlite3.c
 sqlite3.c ?= $(firstword $(wildcard $(dir.top)/sqlite3-see.c) $(sqlite3.canonical.c))
 sqlite3.h = $(dir $(sqlite3.c))sqlite3.h
+
+#
+# DOLTLITE_WASM=1 builds ext/wasm against a separately-compiled
+# libdoltlite.a instead of directly compiling sqlite3.c into
+# sqlite3-wasm.c. In this repo we default that on because the wasm
+# build is expected to target DoltLite. Pass DOLTLITE_WASM=0 to fall
+# back to the stock upstream sqlite3.c path.
+#
+DOLTLITE_WASM ?= 1
+doltlite.wasm.lib = $(dir.doltlite.build)/libdoltlite.a
+doltlite.wasm.options = \
+  -DSQLITE_ENABLE_BYTECODE_VTAB \
+  -DSQLITE_ENABLE_COLUMN_METADATA \
+  -DSQLITE_ENABLE_DBPAGE_VTAB \
+  -DSQLITE_ENABLE_DBSTAT_VTAB \
+  -DSQLITE_ENABLE_FTS4 \
+  -DSQLITE_ENABLE_FTS5 \
+  -DSQLITE_ENABLE_PREUPDATE_HOOK \
+  -DSQLITE_ENABLE_RTREE \
+  -DSQLITE_ENABLE_SESSION \
+  -DSQLITE_ENABLE_STMTVTAB
 
 #
 # bin.version-info = binary to output various sqlite3 version info for
@@ -414,6 +437,24 @@ SQLITE_OPT.common = \
 # to be able to run without this:
 #
 SQLITE_OPT.common += -DSQLITE_WASM_ENABLE_C_TESTS
+
+ifeq (1,$(DOLTLITE_WASM))
+  SQLITE_OPT.common += \
+    -DDOLTLITE_PROLLY=1 \
+    -DSQLITE_WASM_SPLIT_BUILD \
+    -D_HAVE_SQLITE_CONFIG_H \
+    -DBUILD_sqlite \
+    -DSQLITE_ENABLE_BYTECODE_VTAB \
+    -DSQLITE_ENABLE_COLUMN_METADATA \
+    -DSQLITE_ENABLE_DBPAGE_VTAB \
+    -DSQLITE_ENABLE_DBSTAT_VTAB \
+    -DSQLITE_ENABLE_FTS4 \
+    -DSQLITE_ENABLE_FTS5 \
+    -DSQLITE_ENABLE_PREUPDATE_HOOK \
+    -DSQLITE_ENABLE_RTREE \
+    -DSQLITE_ENABLE_SESSION \
+    -DSQLITE_ENABLE_STMTVTAB
+endif
 
 #
 # Extra flags for full-featured builds...
@@ -587,6 +628,16 @@ endif
 #
 # cflags.common = C compiler flags for all builds
 cflags.common =  -I. -I$(dir $(sqlite3.c)) -std=c99 -fPIC
+ifeq (1,$(DOLTLITE_WASM))
+  cflags.common += \
+    -I$(dir.top)/src \
+    -I$(dir.doltlite.build) \
+    -I$(dir.top)/ext/rtree \
+    -I$(dir.top)/ext/icu \
+    -I$(dir.top)/ext/fts3 \
+    -I$(dir.top)/ext/session \
+    -I$(dir.top)/ext/misc
+endif
 # emcc.WASM_BIGINT = 1 for BigInt (C int64) support, else 0.  The API
 # disables certain features if BigInt is not enabled and such builds
 # _are not tested_ on any regular basis.
@@ -912,7 +963,9 @@ sqlite3-api.jses += $(dir.api)/sqlite3-vfs-helper.c-pp.js
 ifeq (0,$(wasm-bare-bones))
   sqlite3-api.jses += $(dir.api)/sqlite3-vtab-helper.c-pp.js
 endif
+ifeq (0,$(DOLTLITE_WASM))
 sqlite3-api.jses += $(dir.api)/sqlite3-vfs-kvvfs.c-pp.js
+endif
 sqlite3-api.jses += $(dir.api)/opfs-common-shared.c-pp.js
 sqlite3-api.jses += $(dir.api)/sqlite3-vfs-opfs.c-pp.js
 sqlite3-api.jses += $(dir.api)/sqlite3-vfs-opfs-sahpool.c-pp.js
@@ -1085,6 +1138,29 @@ sqlite3-wasm.c = $(dir.api)/sqlite3-wasm.c
 # List of input files for compiling $(sqlite3-wasm.c). That file
 # #include's sqlite3.c directly, so it's implicitly includes here.
 sqlite3-wasm.c.in = $(sqlite3-wasm.c) $(sqlite3_wasm_extra_init.c)
+ifeq (1,$(DOLTLITE_WASM))
+sqlite3-wasm.c.in += $(doltlite.wasm.lib)
+endif
+
+ifeq (1,$(DOLTLITE_WASM))
+$(dir.doltlite.build)/Makefile: $(dir.top)/build/Makefile
+	@mkdir -p $(dir.doltlite.build)
+	@cp $(dir.top)/build/Makefile $(dir.doltlite.build)/Makefile
+	@find $(dir.top)/build -maxdepth 1 \( -name '*.h' -o -name '*.c' \) -exec cp {} $(dir.doltlite.build) \;
+
+$(doltlite.wasm.lib): $(dir.doltlite.build)/Makefile
+	@echo "[$(emo.tool) doltlite] building wasm libdoltlite.a"
+	@$(MAKE) -C $(dir.doltlite.build) libdoltlite.a \
+		CC='$(bin.emcc)' AR=emar \
+		CFLAGS='$(CFLAGS)' \
+		CFLAGS.core='$(CFLAGS.core)' \
+		OPTIONS='$(doltlite.wasm.options)' \
+		LDFLAGS.zlib='$(LDFLAGS.zlib)' \
+		LDFLAGS.math='$(LDFLAGS.math)' \
+		LDFLAGS.pthread='$(LDFLAGS.pthread)'
+CLEAN_FILES += $(doltlite.wasm.lib)
+DISTCLEAN_FILES += $(dir.doltlite.build)/Makefile
+endif
 
 #
 # $(bin.mkwb) is used for generating much of the makefile code for the
