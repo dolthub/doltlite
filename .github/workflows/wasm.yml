@@ -28,6 +28,13 @@ jobs:
       run: |
         make sqlite3.c sqlite3.h sqlite3ext.h
 
+    - name: Build native DoltLite
+      run: |
+        mkdir -p build
+        cd build
+        ../configure
+        make doltlite
+
     - name: Build DoltLite wasm targets
       run: |
         make -C ext/wasm fiddle npm
@@ -35,6 +42,14 @@ jobs:
     - name: Smoke test DoltLite wasm runtime
       run: |
         node ext/wasm/test-doltlite-smoke.mjs
+
+    - name: End-to-end test DoltLite wasm writes
+      run: |
+        node ext/wasm/test-doltlite-write-e2e.mjs
+
+    - name: Roundtrip exported wasm DB into native DoltLite
+      run: |
+        node ext/wasm/test-doltlite-export-roundtrip.mjs
 
     - name: Build wasm distribution zip
       run: |
