@@ -902,6 +902,7 @@ static void run_pull_persist_failure(void){
   char remotePath[256];
   char sql[1024];
   const char *res;
+  char zHeadBefore[128];
 
   printf("=== Pull Persist Failure Test ===\n\n");
   make_dbpath(localPath, sizeof(localPath), "test_pull_persist_failure_local");
@@ -930,6 +931,8 @@ static void run_pull_persist_failure(void){
   check("advance_remote", execsql(remoteDb,
     "INSERT INTO t VALUES(2,'b');"
     "SELECT dolt_commit('-A', '-m', 'remote update');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
   gFailHits = 0;
   gFailSyncOnce = 2;
@@ -940,8 +943,26 @@ static void run_pull_persist_failure(void){
     strcmp(exec1(localDb, "SELECT active_branch()"), "main")==0);
   check("pull_head_data_restored",
     strcmp(exec1(localDb, "SELECT count(*) FROM t"), "1")==0);
+  check("pull_head_hash_restored",
+    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("pull_remote_kept",
+    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
 
   sqlite3_close(remoteDb);
+  remoteDb = 0;
+  sqlite3_close(localDb);
+  localDb = 0;
+
+  check("reopen_local_after_pull_failure", open_db(localPath, &localDb)==SQLITE_OK);
+  check("pull_failure_persists_branch_after_reopen",
+    strcmp(exec1(localDb, "SELECT active_branch()"), "main")==0);
+  check("pull_failure_persists_rows_after_reopen",
+    strcmp(exec1(localDb, "SELECT count(*) FROM t"), "1")==0);
+  check("pull_failure_persists_head_after_reopen",
+    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("pull_failure_persists_remote_after_reopen",
+    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+
   sqlite3_close(localDb);
   remove_db(localPath);
   remove_db(remotePath);
@@ -982,6 +1003,16 @@ static void run_clone_persist_failure(void){
   check("clone_does_not_leave_origin_remote",
     strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "0")==0);
   check("clone_restores_empty_catalog",
+    strcmp(exec1(localDb,
+      "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t'"), "0")==0);
+
+  sqlite3_close(localDb);
+  localDb = 0;
+
+  check("reopen_local_after_clone_failure", open_db(localPath, &localDb)==SQLITE_OK);
+  check("clone_failure_persists_no_origin_after_reopen",
+    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "0")==0);
+  check("clone_failure_persists_empty_catalog_after_reopen",
     strcmp(exec1(localDb,
       "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t'"), "0")==0);
 
@@ -1308,6 +1339,89 @@ static void run_failed_merge_reopen_preserves_working_set_state(void){
         memcmp(&mergeAfterReopen, &mergeBeforeClose, sizeof(ProllyHash))==0);
   check("failed_merge_reopen_conflicts_hash_matches_after_reopen",
         memcmp(&conflictsAfterReopen, &conflictsBeforeClose, sizeof(ProllyHash))==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_merge_abort_after_reopen_restores_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isMerging = 0;
+  ProllyHash mergeHash;
+  ProllyHash conflictsHash;
+  char zHeadBefore[128];
+
+  printf("=== Merge Abort After Reopen Restores Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_merge_abort_after_reopen_restores_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_merge_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_merge_abort_after_reopen", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'base');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_branch('feature');"
+    "UPDATE t SET v='main' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'main edit');"
+    "SELECT dolt_checkout('feature');"
+    "UPDATE t SET v='feature' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'feature edit');"
+    "SELECT dolt_checkout('main');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  res = exec1(db, "SELECT dolt_merge('feature')");
+  check("merge_abort_after_reopen_setup_conflict",
+        strstr(res, "ERROR: Merge has 1 conflict(s).")!=0);
+  check("merge_abort_after_reopen_has_conflicts_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_merge_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
+  check("merge_abort_after_reopen_conflicts_persist_before_abort",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
+  check("merge_abort_after_reopen_branch_before_abort",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  doltliteGetSessionMergeState(db, &isMerging, &mergeHash, &conflictsHash);
+  check("merge_abort_after_reopen_merging_flag_before_abort", isMerging==1);
+  check("merge_abort_after_reopen_conflicts_hash_before_abort",
+        !prollyHashIsEmpty(&conflictsHash));
+
+  check("merge_abort_after_reopen_returns_success",
+        strcmp(exec1(db, "SELECT dolt_merge('--abort')"), "0")==0);
+  check("merge_abort_after_reopen_clears_conflicts",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+  check("merge_abort_after_reopen_restores_rows",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+  check("merge_abort_after_reopen_restores_status_clean",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("merge_abort_after_reopen_restores_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  doltliteGetSessionMergeState(db, &isMerging, &mergeHash, &conflictsHash);
+  check("merge_abort_after_reopen_clears_merge_flag", isMerging==0);
+  check("merge_abort_after_reopen_clears_conflicts_hash",
+        prollyHashIsEmpty(&conflictsHash));
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_merge_abort", open_db(dbpath, &db)==SQLITE_OK);
+  check("merge_abort_persists_no_conflicts",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+  check("merge_abort_persists_rows",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+  check("merge_abort_persists_status_clean",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+  check("merge_abort_persists_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  doltliteGetSessionMergeState(db, &isMerging, &mergeHash, &conflictsHash);
+  check("merge_abort_persists_merge_flag_cleared", isMerging==0);
+  check("merge_abort_persists_conflicts_hash_cleared",
+        prollyHashIsEmpty(&conflictsHash));
 
   sqlite3_close(db);
   remove_db(dbpath);
@@ -2866,6 +2980,61 @@ static void run_hard_reset_command_failure_preserves_durable_state(void){
   remove_db(dbpath);
 }
 
+static void run_amend_persist_failure_preserves_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Amend Persist Failure Preserves Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_amend_persist_failure_preserves_durable_state");
+  remove_db(dbpath);
+  gFailWriteOnce = 0;
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+
+  check("register_fail_vfs_for_amend", registerFailVfs()==SQLITE_OK);
+  check("open_fail_db_for_amend", open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_amend_failure", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  gFailHits = 0;
+  gFailWriteOnce = 1;
+  res = exec1(db, "SELECT dolt_commit('--amend', '-m', 'amended')");
+  check("amend_failure_was_injected", gFailHits>0);
+  check("amend_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
+  check("amend_failure_keeps_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("amend_failure_keeps_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("amend_failure_keeps_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("amend_failure_keeps_message",
+        strcmp(exec1(db, "SELECT message FROM dolt_log LIMIT 1"), "second")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_amend_failure", open_db(dbpath, &db)==SQLITE_OK);
+  check("amend_failure_persists_active_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("amend_failure_persists_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+  check("amend_failure_persists_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("amend_failure_persists_message",
+        strcmp(exec1(db, "SELECT message FROM dolt_log LIMIT 1"), "second")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_delete_current_branch_failure_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -3054,6 +3223,87 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
         strcmp(exec1(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
   check("rebase_invalid_plan_abort_restores_branch",
         strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_rebase_abort_after_reopen_restores_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  u8 isRebasing = 0;
+  const char *zOrigBranch = 0;
+  char zHeadBefore[128];
+
+  printf("=== Rebase Abort After Reopen Restores Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_abort_after_reopen_restores_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_rebase_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_abort_after_reopen", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES (1, 1);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
+    "SELECT dolt_checkout('-b', 'feat');"
+    "INSERT INTO t VALUES (2, 2);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');"
+    "INSERT INTO t VALUES (3, 3);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f2');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES (10, 10);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');"
+    "SELECT dolt_checkout('feat');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  check("start_interactive_rebase_for_abort_after_reopen",
+        strstr(exec1(db, "SELECT dolt_rebase('-i', 'main')"),
+               "interactive rebase started on branch dolt_rebase_feat")!=0);
+  check("rebase_abort_after_reopen_branch_before_close",
+        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+  check("rebase_abort_after_reopen_plan_table_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_abort_after_reopen_flag_before_close", isRebasing==1);
+  check("rebase_abort_after_reopen_orig_branch_before_close",
+        zOrigBranch && strcmp(zOrigBranch, "feat")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_rebase_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_abort_after_reopen_branch_before_abort",
+        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+  check("rebase_abort_after_reopen_plan_before_abort",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_abort_after_reopen_flag_before_abort", isRebasing==1);
+
+  check("rebase_abort_after_reopen_returns_success",
+        strcmp(exec1(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
+  check("rebase_abort_after_reopen_restores_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_abort_after_reopen_restores_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("rebase_abort_after_reopen_drops_plan",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_abort_after_reopen_clears_flag", isRebasing==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_after_rebase_abort", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_abort_persists_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_abort_persists_head",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("rebase_abort_persists_no_plan",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_abort_persists_flag_cleared", isRebasing==0);
 
   sqlite3_close(db);
   remove_db(dbpath);
@@ -4562,6 +4812,7 @@ static const RegressionCase aCases[] = {
   { "savepoint_flush_snapshot_release_reopen", "Savepoint Flush Snapshot Release Reopen Test", run_savepoint_flush_snapshot_release_reopen },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
+  { "amend_persist_failure_preserves_durable_state", "Amend Persist Failure Preserves Durable State Test", run_amend_persist_failure_preserves_durable_state },
   { "delete_current_branch_failure_preserves_durable_state", "Delete Current Branch Failure Preserves Durable State Test", run_delete_current_branch_failure_preserves_durable_state },
   { "delete_missing_branch_preserves_durable_state", "Delete Missing Branch Preserves Durable State Test", run_delete_missing_branch_preserves_durable_state },
   { "force_delete_missing_branch_preserves_durable_state", "Force Delete Missing Branch Preserves Durable State Test", run_force_delete_missing_branch_preserves_durable_state },
@@ -4574,7 +4825,9 @@ static const RegressionCase aCases[] = {
   { "revert_bad_ref_failure_preserves_durable_state", "Revert Bad Ref Failure Preserves Durable State Test", run_revert_bad_ref_failure_preserves_durable_state },
   { "cherry_pick_bad_ref_failure_preserves_durable_state", "Cherry-pick Bad Ref Failure Preserves Durable State Test", run_cherry_pick_bad_ref_failure_preserves_durable_state },
   { "merge_nonexistent_branch_preserves_durable_state", "Merge Nonexistent Branch Preserves Durable State Test", run_merge_nonexistent_branch_preserves_durable_state },
+  { "merge_abort_after_reopen_restores_durable_state", "Merge Abort After Reopen Restores Durable State Test", run_merge_abort_after_reopen_restores_durable_state },
   { "rebase_continue_without_active_preserves_durable_state", "Rebase Continue Without Active Preserves Durable State Test", run_rebase_continue_without_active_preserves_durable_state },
+  { "rebase_abort_after_reopen_restores_durable_state", "Rebase Abort After Reopen Restores Durable State Test", run_rebase_abort_after_reopen_restores_durable_state },
   { "remote_add_duplicate_preserves_durable_state", "Remote Add Duplicate Preserves Durable State Test", run_remote_add_duplicate_preserves_durable_state },
   { "remote_remove_missing_preserves_durable_state", "Remote Remove Missing Preserves Durable State Test", run_remote_remove_missing_preserves_durable_state },
   { "checkout_nonexistent_preserves_durable_state", "Checkout Nonexistent Preserves Durable State Test", run_checkout_nonexistent_preserves_durable_state },
