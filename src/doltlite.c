@@ -74,6 +74,7 @@ extern int doltliteAtRegister(sqlite3 *db);
 extern int doltliteRegisterAtTables(sqlite3 *db);
 extern int doltliteRegisterHistoryTables(sqlite3 *db);
 extern int doltliteRegisterBlameTables(sqlite3 *db);
+extern int doltliteRefreshConstraintViolationTables(sqlite3 *db);
 extern int doltliteSchemaDiffRegister(sqlite3 *db);
 extern int doltliteRemoteSqlRegister(sqlite3 *db);
 
@@ -1338,6 +1339,11 @@ static void doltliteCommitFunc(
     sqlite3_result_error_code(context, rc);
     return;
   }
+  rc = doltliteRefreshConstraintViolationTables(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
 
   sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
 }
@@ -2140,32 +2146,47 @@ static void doltliteMergeFunc(
   }
   {
     extern int doltliteDetectMergeFkViolations(
-        sqlite3*, const ProllyHash*, int*);
+        sqlite3*, const ProllyHash*, char**, int*);
     extern int doltliteDetectMergeUniqueViolations(
-        sqlite3*, const ProllyHash*, int*);
+        sqlite3*, const ProllyHash*, char**, int*);
     extern int doltliteDetectMergeCheckViolations(
-        sqlite3*, const ProllyHash*, int*);
+        sqlite3*, const ProllyHash*, char**, int*);
     int nViolations = 0;
     int nUnique = 0;
     int nCheck = 0;
+    char *zDetectErrMsg = 0;
     /* Pass the three-way-merge ancestor catalog hash so each
     ** walker can filter out pre-existing violations — rows that
     ** were already broken before either side of the merge
     ** started. Dolt's semantics only flag merge-introduced
     ** violations, not any violating row that happens to be in
-    ** the post-merge tree. */
-    int vrc = doltliteDetectMergeFkViolations(db, &ancCatHash, &nViolations);
+    ** the post-merge tree. zDetectErrMsg captures any user-facing
+    ** error text a walker wants to surface (e.g. the WITHOUT
+    ** ROWID refusal) — we pass it through to the merge result
+    ** so users get an actionable message instead of "SQL logic
+    ** error". */
+    int vrc = doltliteDetectMergeFkViolations(db, &ancCatHash,
+                                              &zDetectErrMsg, &nViolations);
     if( vrc == SQLITE_OK ){
-      vrc = doltliteDetectMergeUniqueViolations(db, &ancCatHash, &nUnique);
+      vrc = doltliteDetectMergeUniqueViolations(db, &ancCatHash,
+                                                &zDetectErrMsg, &nUnique);
     }
     if( vrc == SQLITE_OK ){
-      vrc = doltliteDetectMergeCheckViolations(db, &ancCatHash, &nCheck);
+      vrc = doltliteDetectMergeCheckViolations(db, &ancCatHash,
+                                               &zDetectErrMsg, &nCheck);
     }
     if( vrc != SQLITE_OK ){
-      sqlite3_result_error_code(context,
-          doltliteRestoreTxnStateOnFailure(db, &savedState, vrc));
+      if( zDetectErrMsg ){
+        sqlite3_result_error(context, zDetectErrMsg, -1);
+        sqlite3_free(zDetectErrMsg);
+        doltliteRestoreTxnStateOnFailure(db, &savedState, vrc);
+      }else{
+        sqlite3_result_error_code(context,
+            doltliteRestoreTxnStateOnFailure(db, &savedState, vrc));
+      }
       return;
     }
+    sqlite3_free(zDetectErrMsg);
     if( nUnique > 0 ){
       /* The unique-index walker evicts loser rows from the base
       ** via DELETE — flush those mutations out of the mutmap and

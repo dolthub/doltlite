@@ -71,6 +71,15 @@ dl_setup() {
   "$DOLTLITE" "$db" 2>"$TMPROOT/$tag.err" >/dev/null
 }
 
+# Bulk setup capturing stdout too. Used by the single-session
+# scenarios (e.g. the vtable-auto-register tests) where the
+# setup statements and the assertion queries must run in the
+# same process to exercise in-session registration.
+dl_setup_capture() {
+  local db="$1" tag="$2"
+  "$DOLTLITE" "$db" >"$TMPROOT/$tag.out" 2>"$TMPROOT/$tag.err"
+}
+
 # Does the given SQL error out? Returns 0 (true) if any error
 # token shows up in stdout/stderr, 1 otherwise.
 dl_errors() {
@@ -409,6 +418,80 @@ SQL
 
 N=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations;" "check_preexisting_count")
 expect_eq "check_preexisting_not_reflagged" "0" "$N"
+
+echo ""
+
+# ── Scenario I: vtable auto-register after mid-session CREATE + commit ─
+#
+# Per #494: dolt_constraint_violations_<table> used to register
+# only at db open time via doltliteForEachUserTable, so a table
+# created in a live session never got its per-table vtable
+# until the next reopen. Post-commit refresh now re-runs the
+# registration walker, matching how dolt_diff_<table> and
+# friends behave. Everything in this scenario runs in a single
+# doltlite process so we actually exercise in-session state.
+echo "--- I. dolt_constraint_violations_<table> auto-registers after in-session CREATE + commit ---"
+
+DB="$TMPROOT/vtable_autoreg.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup_capture "$DB" "vtable_autoreg"
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, v1 INT, UNIQUE(v1));
+CREATE TABLE child(pk INTEGER PRIMARY KEY, v1 INT, FOREIGN KEY(v1) REFERENCES parent(v1));
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child VALUES (1,1);
+SELECT dolt_commit('-Am','init');
+SELECT '=== query after commit ===' AS marker;
+SELECT count(*) FROM dolt_constraint_violations_child;
+SELECT count(*) FROM dolt_constraint_violations_parent;
+SQL
+
+if grep -q "no such table: dolt_constraint_violations_" "$TMPROOT/vtable_autoreg.out" \
+                                                         "$TMPROOT/vtable_autoreg.err" 2>/dev/null; then
+  fail_name "vtable_autoreg_after_commit"
+  echo "    (in-session query after commit still reports no such table)"
+else
+  pass_name "vtable_autoreg_after_commit"
+fi
+
+echo ""
+
+# ── Scenario J: WITHOUT ROWID FK merge refused loudly ────
+#
+# Per #495: constraint-violation detection assumes every table
+# has a rowid and breaks silently on WITHOUT ROWID tables.
+# Until prolly-layer-level support lands, the walker refuses
+# the merge loudly with an actionable error instead of
+# silently committing over missed violations. This scenario
+# verifies that behavior: a merge that would produce an FK
+# orphan on a WITHOUT ROWID child table must fail with the
+# issue-495 error message, not silently commit.
+echo "--- J. WITHOUT ROWID FK merge is refused loudly ---"
+
+DB="$TMPROOT/without_rowid_fk.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup_capture "$DB" "without_rowid_fk"
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, v1 INT, UNIQUE(v1));
+CREATE TABLE child(pk TEXT PRIMARY KEY, v1 INT, FOREIGN KEY(v1) REFERENCES parent(v1)) WITHOUT ROWID;
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child VALUES ('a',1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO child VALUES ('b',2);
+SELECT dolt_commit('-Am','feat_add_child');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE pk=2;
+SELECT dolt_commit('-Am','main_drop_parent');
+SELECT dolt_merge('feat');
+SQL
+
+if grep -q "WITHOUT ROWID" "$TMPROOT/without_rowid_fk.out" \
+                            "$TMPROOT/without_rowid_fk.err" 2>/dev/null; then
+  pass_name "without_rowid_fk_refused"
+else
+  fail_name "without_rowid_fk_refused"
+  echo "    (merge did not surface the WITHOUT ROWID refusal)"
+fi
 
 echo ""
 echo "======================================="
