@@ -8,7 +8,7 @@ let nodeEntryText = fs.readFileSync(nodeEntry, 'utf8');
 if(nodeEntryText.includes("__dirname + '/'")){
   nodeEntryText = nodeEntryText.replaceAll(
     "__dirname + '/'",
-    "require('node:path').dirname(require('node:url').fileURLToPath(import.meta.url)) + '/'"
+    "new URL('.', import.meta.url).href"
   );
   fs.writeFileSync(nodeEntry, nodeEntryText);
 }
