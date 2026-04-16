@@ -2881,6 +2881,214 @@ static void run_savepoint_flush_snapshot_release_reopen(void){
   remove_db(dbpath);
 }
 
+static void run_savepoint_failed_commit_rollback_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Savepoint Failed Commit Rollback Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_failed_commit_rollback_reopen");
+  remove_db(dbpath);
+  gFailWriteOnce = 0;
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+
+  check("register_fail_vfs_for_savepoint_failed_commit_rollback",
+        registerFailVfs()==SQLITE_OK);
+  check("open_fail_db_for_savepoint_failed_commit_rollback",
+        open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_savepoint_failed_commit_rollback", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
+    "CREATE INDEX k_idx ON t(k);"
+    "INSERT INTO t VALUES(1, 1, 'a');"
+    "INSERT INTO t VALUES(2, 2, 'b');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  check("begin_txn_for_savepoint_failed_commit_rollback",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_savepoint_failed_commit_rollback",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_edits_for_savepoint_failed_commit_rollback",
+        execsql(db,
+          "UPDATE t SET k=11, v='outer' WHERE id=1;"
+          "INSERT INTO t VALUES(4, 44, 'outer4');")==SQLITE_OK);
+  check("savepoint_inner_for_savepoint_failed_commit_rollback",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_edits_for_savepoint_failed_commit_rollback",
+        execsql(db,
+          "UPDATE t SET k=22, v='inner' WHERE id=2;"
+          "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
+
+  gFailHits = 0;
+  gFailWriteOnce = 1;
+  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'failing-mid-savepoint')");
+  check("savepoint_failed_commit_rollback_injected", gFailHits>0);
+  check("savepoint_failed_commit_rollback_returns_error",
+        strstr(res, "ERROR:")!=0);
+
+  check("rollback_inner_after_failed_commit",
+        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+  check("release_inner_after_failed_commit_rollback",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("release_outer_after_failed_commit_rollback",
+        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+  check("commit_after_failed_commit_rollback",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("failed_commit_rollback_outer_update_visible_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("failed_commit_rollback_inner_update_reverted_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+  check("failed_commit_rollback_inner_insert_reverted_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+  check("failed_commit_rollback_outer_insert_visible_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
+  check("failed_commit_rollback_outer_index_visible_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("failed_commit_rollback_inner_index_reverted_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+  check("failed_commit_rollback_head_unchanged_before_close",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("failed_commit_rollback_status_dirty_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("failed_commit_rollback_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_savepoint_failed_commit_rollback", open_db(dbpath, &db)==SQLITE_OK);
+  check("failed_commit_rollback_outer_update_visible_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("failed_commit_rollback_inner_update_reverted_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+  check("failed_commit_rollback_inner_insert_reverted_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+  check("failed_commit_rollback_outer_insert_visible_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
+  check("failed_commit_rollback_outer_index_visible_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("failed_commit_rollback_inner_index_reverted_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+  check("failed_commit_rollback_head_unchanged_after_reopen",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("failed_commit_rollback_status_dirty_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("failed_commit_rollback_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_savepoint_failed_commit_release_reopen(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Savepoint Failed Commit Release Reopen Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_failed_commit_release_reopen");
+  remove_db(dbpath);
+  gFailWriteOnce = 0;
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+
+  check("register_fail_vfs_for_savepoint_failed_commit_release",
+        registerFailVfs()==SQLITE_OK);
+  check("open_fail_db_for_savepoint_failed_commit_release",
+        open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_savepoint_failed_commit_release", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
+    "CREATE INDEX k_idx ON t(k);"
+    "INSERT INTO t VALUES(1, 1, 'a');"
+    "INSERT INTO t VALUES(2, 2, 'b');"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  check("begin_txn_for_savepoint_failed_commit_release",
+        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("savepoint_outer_for_savepoint_failed_commit_release",
+        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+  check("outer_edits_for_savepoint_failed_commit_release",
+        execsql(db,
+          "UPDATE t SET k=11, v='outer' WHERE id=1;"
+          "INSERT INTO t VALUES(4, 44, 'outer4');")==SQLITE_OK);
+  check("savepoint_inner_for_savepoint_failed_commit_release",
+        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+  check("inner_edits_for_savepoint_failed_commit_release",
+        execsql(db,
+          "UPDATE t SET k=22, v='inner' WHERE id=2;"
+          "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
+
+  gFailHits = 0;
+  gFailWriteOnce = 1;
+  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'failing-mid-savepoint')");
+  check("savepoint_failed_commit_release_injected", gFailHits>0);
+  check("savepoint_failed_commit_release_returns_error",
+        strstr(res, "ERROR:")!=0);
+
+  check("release_inner_after_failed_commit_release",
+        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+  check("release_outer_after_failed_commit_release",
+        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+  check("commit_after_failed_commit_release",
+        execsql(db, "COMMIT;")==SQLITE_OK);
+
+  check("failed_commit_release_outer_update_visible_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("failed_commit_release_inner_update_visible_before_close",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "22")==0);
+  check("failed_commit_release_inner_insert_visible_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+  check("failed_commit_release_outer_insert_visible_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
+  check("failed_commit_release_outer_index_visible_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("failed_commit_release_inner_index_visible_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
+  check("failed_commit_release_insert_index_visible_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
+  check("failed_commit_release_head_unchanged_before_close",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("failed_commit_release_status_dirty_before_close",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("failed_commit_release_integrity_before_close",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_savepoint_failed_commit_release", open_db(dbpath, &db)==SQLITE_OK);
+  check("failed_commit_release_outer_update_visible_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+  check("failed_commit_release_inner_update_visible_after_reopen",
+        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "22")==0);
+  check("failed_commit_release_inner_insert_visible_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+  check("failed_commit_release_outer_insert_visible_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
+  check("failed_commit_release_outer_index_visible_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+  check("failed_commit_release_inner_index_visible_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
+  check("failed_commit_release_insert_index_visible_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
+  check("failed_commit_release_head_unchanged_after_reopen",
+        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+  check("failed_commit_release_status_dirty_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+  check("failed_commit_release_integrity_after_reopen",
+        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_hard_reset_failure_restores_memory_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -4810,6 +5018,8 @@ static const RegressionCase aCases[] = {
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
   { "savepoint_flush_snapshot_rollback_reopen", "Savepoint Flush Snapshot Rollback Reopen Test", run_savepoint_flush_snapshot_rollback_reopen },
   { "savepoint_flush_snapshot_release_reopen", "Savepoint Flush Snapshot Release Reopen Test", run_savepoint_flush_snapshot_release_reopen },
+  { "savepoint_failed_commit_rollback_reopen", "Savepoint Failed Commit Rollback Reopen Test", run_savepoint_failed_commit_rollback_reopen },
+  { "savepoint_failed_commit_release_reopen", "Savepoint Failed Commit Release Reopen Test", run_savepoint_failed_commit_release_reopen },
   { "hard_reset_failure_restores_memory_state", "Hard Reset Failure Restores Memory State Test", run_hard_reset_failure_restores_memory_state },
   { "hard_reset_command_failure_preserves_durable_state", "Hard Reset Command Failure Preserves Durable State Test", run_hard_reset_command_failure_preserves_durable_state },
   { "amend_persist_failure_preserves_durable_state", "Amend Persist Failure Preserves Durable State Test", run_amend_persist_failure_preserves_durable_state },
