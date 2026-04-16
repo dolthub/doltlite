@@ -1246,6 +1246,23 @@ void sqlite3Pragma(
         assert( pColExpr==0 || pColExpr->op==TK_SPAN || isHidden>=2 );
         assert( pColExpr==0 || !ExprHasProperty(pColExpr, EP_IntValue)
                   || isHidden>=2 );
+#ifdef DOLTLITE_PROLLY
+        {
+          /* Report the user-declared NOT NULL state, not the internal
+          ** state which may include an implicit NOT NULL added by
+          ** doltlite's auto-WITHOUT-ROWID conversion. */
+          int reportedNotNull = pCol->notNull ? 1 : 0;
+          if( pCol->colFlags & COLFLAG_AUTONOTNULL ) reportedNotNull = 0;
+          sqlite3VdbeMultiLoad(v, 1, pPragma->iArg ? "issisii" : "issisi",
+                 i-nHidden,
+                 pCol->zCnName,
+                 sqlite3ColumnType(pCol,""),
+                 reportedNotNull,
+                 (isHidden>=2 || pColExpr==0) ? 0 : pColExpr->u.zToken,
+                 k,
+                 isHidden);
+        }
+#else
         sqlite3VdbeMultiLoad(v, 1, pPragma->iArg ? "issisii" : "issisi",
                i-nHidden,
                pCol->zCnName,
@@ -1254,6 +1271,7 @@ void sqlite3Pragma(
                (isHidden>=2 || pColExpr==0) ? 0 : pColExpr->u.zToken,
                k,
                isHidden);
+#endif
       }
     }
   }

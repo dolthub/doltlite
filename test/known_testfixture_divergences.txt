@@ -175,8 +175,7 @@ e_fkey e_fkey-57.7
 e_fkey e_fkey-58.3
 
 # ── pragma ──
-pragma pragma-6.2.2   # table_info notnull shape on auto-converted WITHOUT-ROWID
-pragma pragma-6.8     # table_info shape on auto-converted WITHOUT-ROWID
+pragma pragma-6.8     # pk numbering with duplicate PK column refs (PRIMARY KEY(a,b,a,c) → c gets pk=3 not pk=4)
 pragma pragma-22.2    # integrity_check on injected corruption (doesn't reach prolly)
 pragma pragma-22.3.1
 pragma pragma-22.3.3

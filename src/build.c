@@ -2755,6 +2755,18 @@ void sqlite3EndTable(
    && (p->tabFlags & TF_HasPrimaryKey)!=0
    && p->iPKey<0
    && (tabOpts & TF_WithoutRowid)==0 ){
+    /* Tag PK columns that don't already carry NOT NULL so
+    ** PRAGMA table_info reports the user-declared state, not the
+    ** implicit constraint added by the conversion below. */
+    {
+      int ii;
+      for(ii=0; ii<p->nCol; ii++){
+        if( (p->aCol[ii].colFlags & COLFLAG_PRIMKEY)!=0
+         && (p->aCol[ii].notNull==OE_None) ){
+          p->aCol[ii].colFlags |= COLFLAG_AUTONOTNULL;
+        }
+      }
+    }
     tabOpts |= TF_WithoutRowid;
   }
 

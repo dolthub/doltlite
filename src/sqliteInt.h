@@ -2287,6 +2287,9 @@ struct Column {
 #define COLFLAG_BUSY      0x0100   /* Blocks recursion on GENERATED columns */
 #define COLFLAG_HASCOLL   0x0200   /* Has collating sequence name in zCnName */
 #define COLFLAG_NOEXPAND  0x0400   /* Omit this column when expanding "*" */
+#ifdef DOLTLITE_PROLLY
+#define COLFLAG_AUTONOTNULL 0x0800 /* NOT NULL added by auto-WITHOUT-ROWID */
+#endif
 #define COLFLAG_GENERATED 0x0060   /* Combo: _STORED, _VIRTUAL */
 #define COLFLAG_NOINSERT  0x0062   /* Combo: _HIDDEN, _STORED, _VIRTUAL */
 
