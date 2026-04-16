@@ -1394,6 +1394,105 @@ SQLITE_WASM_EXPORT2(int,sqlite3__wasm_db_serialize,
                    (sqlite3 *pDb, const char *zSchema,
                     unsigned char **pOut,
                     sqlite3_int64 *nOut, unsigned int mFlags)){
+#ifdef DOLTLITE_PROLLY
+  sqlite3_vfs *pVfs = 0;
+  const char *zDb = zSchema ? zSchema : "main";
+  int rc;
+  if( !pDb || !pOut ) return SQLITE_MISUSE;
+  if( nOut ) *nOut = 0;
+  rc = sqlite3_file_control(pDb, zDb, SQLITE_FCNTL_VFS_POINTER, &pVfs);
+  if( rc==SQLITE_OK && pVfs && pVfs->xOpen ){
+    sqlite3 *pSnapDb = 0;
+    sqlite3_backup *pBackup = 0;
+    sqlite3_file *pFile = 0;
+    sqlite3_int64 nSize = 0;
+    unsigned char *z = 0;
+    int iOutFlags = 0;
+    unsigned int rnd = 0;
+    char *zTmp = 0;
+
+    sqlite3_randomness(sizeof(rnd), &rnd);
+    zTmp = sqlite3_mprintf("/sqlite3-wasm-export-%08x.sqlite3", rnd);
+    if( !zTmp ) return SQLITE_NOMEM;
+
+    rc = sqlite3_open_v2(
+      zTmp, &pSnapDb, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, pVfs->zName
+    );
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zTmp);
+      if( pSnapDb ) sqlite3_close(pSnapDb);
+      return rc;
+    }
+    pBackup = sqlite3_backup_init(pSnapDb, "main", pDb, zDb);
+    if( !pBackup ){
+      rc = sqlite3_errcode(pSnapDb);
+      sqlite3_close(pSnapDb);
+      pVfs->xDelete(pVfs, zTmp, 0);
+      sqlite3_free(zTmp);
+      return rc;
+    }
+    rc = sqlite3_backup_step(pBackup, -1);
+    if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+    {
+      int rc2 = sqlite3_backup_finish(pBackup);
+      if( rc==SQLITE_OK ) rc = rc2;
+    }
+    {
+      int rc2 = sqlite3_close(pSnapDb);
+      if( rc==SQLITE_OK ) rc = rc2;
+      pSnapDb = 0;
+    }
+    if( rc!=SQLITE_OK ){
+      pVfs->xDelete(pVfs, zTmp, 0);
+      sqlite3_free(zTmp);
+      return rc;
+    }
+    if( SQLITE_SERIALIZE_NOCOPY & mFlags ){
+      *pOut = 0;
+      if( nOut ) *nOut = 0;
+      pVfs->xDelete(pVfs, zTmp, 0);
+      sqlite3_free(zTmp);
+      return 0;
+    }
+    pFile = sqlite3_malloc64((sqlite3_uint64)pVfs->szOsFile);
+    if( !pFile ){
+      pVfs->xDelete(pVfs, zTmp, 0);
+      sqlite3_free(zTmp);
+      return SQLITE_NOMEM;
+    }
+    memset(pFile, 0, pVfs->szOsFile);
+    rc = pVfs->xOpen(pVfs, zTmp, pFile, SQLITE_OPEN_READONLY, &iOutFlags);
+    if( rc==SQLITE_OK && pFile->pMethods ){
+      rc = pFile->pMethods->xFileSize(pFile, &nSize);
+    }
+    if( rc==SQLITE_OK ){
+      z = nSize ? sqlite3_malloc64((sqlite3_uint64)nSize) : 0;
+      if( nSize && !z ) rc = SQLITE_NOMEM;
+    }
+    if( rc==SQLITE_OK && nSize ){
+      sqlite3_int64 nPos = 0;
+      int nChunk = 1024 * 8;
+      for( ; 0==rc && nPos<nSize; nPos += nChunk ){
+        if( (nSize - nPos) < nChunk ) nChunk = (int)(nSize - nPos);
+        rc = pFile->pMethods->xRead(pFile, z + nPos, nChunk, nPos);
+        if( SQLITE_IOERR_SHORT_READ==rc ){
+          rc = (nPos + nChunk) < nSize ? rc : 0;
+        }
+      }
+    }
+    if( pFile && pFile->pMethods ) pFile->pMethods->xClose(pFile);
+    sqlite3_free(pFile);
+    pVfs->xDelete(pVfs, zTmp, 0);
+    sqlite3_free(zTmp);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(z);
+      return rc;
+    }
+    if( nOut ) *nOut = nSize;
+    *pOut = z;
+    return SQLITE_OK;
+  }
+#endif
   unsigned char * z;
   if( !pDb || !pOut ) return SQLITE_MISUSE;
   if( nOut ) *nOut = 0;
