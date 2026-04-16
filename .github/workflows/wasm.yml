@@ -1,0 +1,45 @@
+name: Wasm Build
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  wasm-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential zlib1g-dev tcl-dev emscripten wabt
+
+    - name: Configure
+      run: |
+        ./configure
+
+    - name: Build generated SQLite files
+      run: |
+        make sqlite3.c sqlite3.h sqlite3ext.h
+
+    - name: Build DoltLite wasm targets
+      run: |
+        make -C ext/wasm b-vanilla b-esm b-bundler
+
+    - name: Build wasm distribution zip
+      run: |
+        make -C ext/wasm dist
+
+    - name: Upload wasm artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: wasm-build
+        path: |
+          ext/wasm/jswasm/*
+          ext/wasm/sqlite-wasm-*.zip
