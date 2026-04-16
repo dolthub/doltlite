@@ -2860,6 +2860,96 @@ struct RebasePlanRow {
   char *zCommitMessage;
 };
 
+enum DoltliteRebaseSchemaState {
+  DOLTLITE_REBASE_SCHEMA_ABSENT = 0,
+  DOLTLITE_REBASE_SCHEMA_OK = 1,
+  DOLTLITE_REBASE_SCHEMA_BAD = 2
+};
+
+static int doltliteRebaseSchemaState(sqlite3 *db, int *pState){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  int nCol = 0;
+
+  *pState = DOLTLITE_REBASE_SCHEMA_ABSENT;
+  rc = sqlite3_prepare_v2(db, "PRAGMA main.table_info(\"dolt_rebase\")",
+                          -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+    const char *zName = (const char*)sqlite3_column_text(pStmt, 1);
+    const char *zType = (const char*)sqlite3_column_text(pStmt, 2);
+    int notNull = sqlite3_column_int(pStmt, 3);
+    int pkPos = sqlite3_column_int(pStmt, 5);
+    char aff;
+    if( !zName ) goto bad;
+    aff = sqlite3AffinityType(zType ? zType : "", 0);
+    if( nCol==0 ){
+      if( sqlite3_stricmp(zName, "rebase_order")!=0 ) goto bad;
+      if( aff!=SQLITE_AFF_REAL && aff!=SQLITE_AFF_NUMERIC ) goto bad;
+      if( !notNull ) goto bad;
+      if( pkPos!=1 ) goto bad;
+    }else if( nCol==1 ){
+      if( sqlite3_stricmp(zName, "action")!=0 ) goto bad;
+      if( aff!=SQLITE_AFF_TEXT ) goto bad;
+      if( pkPos!=0 ) goto bad;
+    }else if( nCol==2 ){
+      if( sqlite3_stricmp(zName, "commit_hash")!=0 ) goto bad;
+      if( aff!=SQLITE_AFF_TEXT ) goto bad;
+      if( pkPos!=0 ) goto bad;
+    }else if( nCol==3 ){
+      if( sqlite3_stricmp(zName, "commit_message")!=0 ) goto bad;
+      if( aff!=SQLITE_AFF_TEXT ) goto bad;
+      if( pkPos!=0 ) goto bad;
+    }else{
+      goto bad;
+    }
+    nCol++;
+  }
+  if( rc!=SQLITE_DONE ){
+    sqlite3_finalize(pStmt);
+    return rc;
+  }
+  sqlite3_finalize(pStmt);
+
+  if( nCol==0 ){
+    *pState = DOLTLITE_REBASE_SCHEMA_ABSENT;
+  }else if( nCol==4 ){
+    *pState = DOLTLITE_REBASE_SCHEMA_OK;
+  }else{
+    *pState = DOLTLITE_REBASE_SCHEMA_BAD;
+  }
+  return SQLITE_OK;
+
+bad:
+  *pState = DOLTLITE_REBASE_SCHEMA_BAD;
+  sqlite3_finalize(pStmt);
+  return SQLITE_OK;
+}
+
+static int doltliteValidateRebasePlanTable(sqlite3 *db, char **pzErr){
+  int rc;
+  int state;
+  if( pzErr ) *pzErr = 0;
+  rc = doltliteRebaseSchemaState(db, &state);
+  if( rc!=SQLITE_OK ) return rc;
+  if( state==DOLTLITE_REBASE_SCHEMA_OK ) return SQLITE_OK;
+  if( state==DOLTLITE_REBASE_SCHEMA_ABSENT ){
+    if( pzErr ) *pzErr = sqlite3_mprintf("no rebase plan found");
+    return SQLITE_NOTFOUND;
+  }
+  if( pzErr ){
+    *pzErr = sqlite3_mprintf(
+      "dolt_rebase has an unexpected schema; expected: "
+      "CREATE TABLE dolt_rebase("
+      "rebase_order REAL PRIMARY KEY, "
+      "action TEXT, "
+      "commit_hash TEXT, "
+      "commit_message TEXT)");
+  }
+  return SQLITE_CONSTRAINT;
+}
+
 static void rebaseFreePlan(RebasePlanRow *aPlan, int nPlan){
   int i;
   for(i=0; i<nPlan; i++){
@@ -2876,13 +2966,20 @@ static int rebaseReadPlan(sqlite3 *db, RebasePlanRow **paPlan, int *pnPlan){
   RebasePlanRow *aPlan = 0;
   int nPlan = 0, nAlloc = 0;
   int rc;
+  char *zErr = 0;
 
   *paPlan = 0;
   *pnPlan = 0;
 
+  rc = doltliteValidateRebasePlanTable(db, &zErr);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zErr);
+    return rc;
+  }
+
   rc = sqlite3_prepare_v2(db,
     "SELECT rebase_order, action, commit_hash, commit_message "
-    "FROM dolt_rebase ORDER BY rebase_order", -1, &pStmt, 0);
+    "FROM main.dolt_rebase ORDER BY rebase_order", -1, &pStmt, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
@@ -2953,7 +3050,7 @@ static int rebaseCreateAndPopulatePlanTable(
   int i;
 
   rc = sqlite3_exec(db,
-    "CREATE TABLE dolt_rebase("
+    "CREATE TABLE main.dolt_rebase("
     "  rebase_order REAL PRIMARY KEY,"
     "  action TEXT,"
     "  commit_hash TEXT,"
@@ -2962,7 +3059,7 @@ static int rebaseCreateAndPopulatePlanTable(
   if( rc!=SQLITE_OK ) return rc;
 
   rc = sqlite3_prepare_v2(db,
-    "INSERT INTO dolt_rebase VALUES (?, 'pick', ?, ?)", -1, &pIns, 0);
+    "INSERT INTO main.dolt_rebase VALUES (?, 'pick', ?, ?)", -1, &pIns, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<nReplay; i++){
@@ -3093,8 +3190,9 @@ static void rebaseDiscardWorkingBranch(
   const char *zWorkingBranch
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  char *zErr = 0;
 
-  (void)sqlite3_exec(db, "DROP TABLE IF EXISTS dolt_rebase", 0, 0, 0);
+  (void)sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
   doltliteClearSessionRebaseState(db);
   (void)doltlitePersistWorkingSet(db);
 
@@ -3323,6 +3421,7 @@ static void doltliteRebaseInteractiveContinue(
   int bPlanDropped = 0;
   ProllyHash curCat;
   ProllyHash curHead;
+  char *zPlanErr = 0;
 
   memset(&curCat, 0, sizeof(curCat));
   memset(&curHead, 0, sizeof(curHead));
@@ -3335,6 +3434,13 @@ static void doltliteRebaseInteractiveContinue(
   zOrigBranch = sqlite3_mprintf("%s", zOrigBranchConst);
   zWorking = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zOrigBranch || !zWorking ){ rc = SQLITE_NOMEM; goto abort_err; }
+
+  rc = doltliteValidateRebasePlanTable(db, &zPlanErr);
+  if( rc!=SQLITE_OK ){
+    if( zPlanErr ) sqlite3_result_error(context, zPlanErr, -1);
+    sqlite3_free(zPlanErr);
+    goto abort_err_silent;
+  }
 
   rc = rebaseReadPlan(db, &aPlan, &nPlan);
   if( rc!=SQLITE_OK ) goto abort_err;
@@ -3352,7 +3458,7 @@ static void doltliteRebaseInteractiveContinue(
     goto abort_err_silent;
   }
 
-  rc = sqlite3_exec(db, "DROP TABLE dolt_rebase", 0, 0, 0);
+  rc = sqlite3_exec(db, "DROP TABLE main.dolt_rebase", 0, 0, 0);
   if( rc!=SQLITE_OK ) goto abort_err;
   bPlanDropped = 1;
 

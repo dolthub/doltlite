@@ -493,19 +493,20 @@ static int syncIsAncestor(
       memset(&commit, 0, sizeof(commit));
       if( doltliteCommitDeserialize(data, nData, &commit)==SQLITE_OK ){
         int pi;
-        for(pi=0; pi<commit.nParents; pi++){
-          if( prollyHashIsEmpty(&commit.aParents[pi]) ) continue;
-          if( prollyHashCompare(&commit.aParents[pi], pAncestor)==0 ){
+        for(pi=0; pi<doltliteCommitParentCount(&commit); pi++){
+          const ProllyHash *pParent = doltliteCommitParentHash(&commit, pi);
+          if( !pParent || prollyHashIsEmpty(pParent) ) continue;
+          if( prollyHashCompare(pParent, pAncestor)==0 ){
             found = 1;
             break;
           }
-          if( !prollyHashSetContains(&visited, &commit.aParents[pi]) ){
-            rc = prollyHashSetAdd(&visited, &commit.aParents[pi]);
+          if( !prollyHashSetContains(&visited, pParent) ){
+            rc = prollyHashSetAdd(&visited, pParent);
             if( rc!=SQLITE_OK ){
               found = -1;
               break;
             }
-            rc = syncQueuePush(&queue, &commit.aParents[pi]);
+            rc = syncQueuePush(&queue, pParent);
             if( rc!=SQLITE_OK ){
               found = -1;
               break;

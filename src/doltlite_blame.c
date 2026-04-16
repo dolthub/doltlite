@@ -504,7 +504,7 @@ static int blameWalk(
       return rc;
     }
 
-    if( commit.nParents >= 2 ){
+    if( doltliteCommitParentCount(&commit) >= 2 ){
       /* Merge commit: compare against the merge base of all parents. */
       ProllyHash baseHash;
       DoltliteCommit baseCommit;

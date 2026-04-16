@@ -400,21 +400,19 @@ static int registerCommitParents(
   const char *zCurHex
 ){
   int i;
-  int nParents;
   const ProllyHash *pParent;
   int rc;
 
-  nParents = pCommit->nParents>0
-               ? pCommit->nParents
-               : (prollyHashIsEmpty(&pCommit->parentHash) ? 0 : 1);
-  for(i=0; i<nParents; i++){
-    pParent = pCommit->nParents>0 ? &pCommit->aParents[i] : &pCommit->parentHash;
+  for(i=0; i<doltliteCommitParentCount(pCommit); i++){
+    pParent = doltliteCommitParentHash(pCommit, i);
+    if( !pParent ) continue;
     rc = mapPut(paMap, pnMap, pParent, pCurTblRoot, &pCommit->catalogHash,
                 pCurSchemaHash, curFlags, zCurHex, pCommit->timestamp);
     if( rc!=SQLITE_OK ) return rc;
   }
-  for(i=0; i<nParents; i++){
-    pParent = pCommit->nParents>0 ? &pCommit->aParents[i] : &pCommit->parentHash;
+  for(i=0; i<doltliteCommitParentCount(pCommit); i++){
+    pParent = doltliteCommitParentHash(pCommit, i);
+    if( !pParent ) continue;
     rc = stackPushUnique(paAdded, pnAdded, paStack, pnStack, pParent);
     if( rc!=SQLITE_OK ) return rc;
   }
