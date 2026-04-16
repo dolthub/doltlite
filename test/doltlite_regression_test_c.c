@@ -150,11 +150,65 @@ struct DiffCountCtx {
   int nChange;
 };
 
+typedef struct RepoStateSnapshot RepoStateSnapshot;
+struct RepoStateSnapshot {
+  char zBranch[128];
+  char zHead[128];
+  char zStatusCount[32];
+  char zConflictsCount[32];
+  char zRemotesCount[32];
+  char zRebasePlanCount[32];
+  u8 isMerging;
+  u8 isRebasing;
+  ProllyHash mergeHash;
+  ProllyHash conflictsHash;
+  ProllyHash rebaseOntoHash;
+  char zOrigBranch[128];
+};
+
 static int count_diff_change(void *pCtx, const ProllyDiffChange *pChange){
   DiffCountCtx *p = (DiffCountCtx*)pCtx;
   (void)pChange;
   p->nChange++;
   return SQLITE_OK;
+}
+
+static void capture_repo_state_snapshot(sqlite3 *db, RepoStateSnapshot *p){
+  const char *zOrigBranch = 0;
+  memset(p, 0, sizeof(*p));
+  sqlite3_snprintf(sizeof(p->zBranch), p->zBranch, "%s",
+                   exec1(db, "SELECT active_branch()"));
+  sqlite3_snprintf(sizeof(p->zHead), p->zHead, "%s",
+                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+  sqlite3_snprintf(sizeof(p->zStatusCount), p->zStatusCount, "%s",
+                   exec1(db, "SELECT count(*) FROM dolt_status"));
+  sqlite3_snprintf(sizeof(p->zConflictsCount), p->zConflictsCount, "%s",
+                   exec1(db, "SELECT count(*) FROM dolt_conflicts"));
+  sqlite3_snprintf(sizeof(p->zRemotesCount), p->zRemotesCount, "%s",
+                   exec1(db, "SELECT count(*) FROM dolt_remotes"));
+  sqlite3_snprintf(sizeof(p->zRebasePlanCount), p->zRebasePlanCount, "%s",
+                   exec1(db, "SELECT count(*) FROM sqlite_master "
+                             "WHERE type='table' AND name='dolt_rebase'"));
+  doltliteGetSessionMergeState(db, &p->isMerging, &p->mergeHash, &p->conflictsHash);
+  doltliteGetSessionRebaseState(db, &p->isRebasing, 0, &p->rebaseOntoHash, &zOrigBranch);
+  if( zOrigBranch ){
+    sqlite3_snprintf(sizeof(p->zOrigBranch), p->zOrigBranch, "%s", zOrigBranch);
+  }
+}
+
+static int repo_state_snapshot_eq(const RepoStateSnapshot *a, const RepoStateSnapshot *b){
+  return strcmp(a->zBranch, b->zBranch)==0
+      && strcmp(a->zHead, b->zHead)==0
+      && strcmp(a->zStatusCount, b->zStatusCount)==0
+      && strcmp(a->zConflictsCount, b->zConflictsCount)==0
+      && strcmp(a->zRemotesCount, b->zRemotesCount)==0
+      && strcmp(a->zRebasePlanCount, b->zRebasePlanCount)==0
+      && a->isMerging==b->isMerging
+      && a->isRebasing==b->isRebasing
+      && prollyHashCompare(&a->mergeHash, &b->mergeHash)==0
+      && prollyHashCompare(&a->conflictsHash, &b->conflictsHash)==0
+      && prollyHashCompare(&a->rebaseOntoHash, &b->rebaseOntoHash)==0
+      && strcmp(a->zOrigBranch, b->zOrigBranch)==0;
 }
 
 static void make_dbpath(char *zBuf, size_t nBuf, const char *zBase){
@@ -1352,6 +1406,8 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
   ProllyHash mergeHash;
   ProllyHash conflictsHash;
   char zHeadBefore[128];
+  RepoStateSnapshot beforeReopenAbort;
+  RepoStateSnapshot afterReopenAbort;
 
   printf("=== Merge Abort After Reopen Restores Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_merge_abort_after_reopen_restores_durable_state");
@@ -1405,6 +1461,7 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
   check("merge_abort_after_reopen_clears_merge_flag", isMerging==0);
   check("merge_abort_after_reopen_clears_conflicts_hash",
         prollyHashIsEmpty(&conflictsHash));
+  capture_repo_state_snapshot(db, &beforeReopenAbort);
 
   sqlite3_close(db);
   db = 0;
@@ -1422,6 +1479,9 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
   check("merge_abort_persists_merge_flag_cleared", isMerging==0);
   check("merge_abort_persists_conflicts_hash_cleared",
         prollyHashIsEmpty(&conflictsHash));
+  capture_repo_state_snapshot(db, &afterReopenAbort);
+  check("merge_abort_reopen_snapshot_matches",
+        repo_state_snapshot_eq(&beforeReopenAbort, &afterReopenAbort));
 
   sqlite3_close(db);
   remove_db(dbpath);
@@ -3442,6 +3502,8 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
   u8 isRebasing = 0;
   const char *zOrigBranch = 0;
   char zHeadBefore[128];
+  RepoStateSnapshot beforeReopenAbort;
+  RepoStateSnapshot afterReopenAbort;
 
   printf("=== Rebase Abort After Reopen Restores Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_rebase_abort_after_reopen_restores_durable_state");
@@ -3498,6 +3560,7 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
   check("rebase_abort_after_reopen_clears_flag", isRebasing==0);
+  capture_repo_state_snapshot(db, &beforeReopenAbort);
 
   sqlite3_close(db);
   db = 0;
@@ -3512,6 +3575,112 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
   check("rebase_abort_persists_flag_cleared", isRebasing==0);
+  capture_repo_state_snapshot(db, &afterReopenAbort);
+  check("rebase_abort_reopen_snapshot_matches",
+        repo_state_snapshot_eq(&beforeReopenAbort, &afterReopenAbort));
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_rebase_main_table_schema_guard(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isRebasing = 0;
+  const char *zOrigBranch = 0;
+
+  printf("=== Rebase Main Table Schema Guard Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_main_table_schema_guard");
+  remove_db(dbpath);
+
+  check("open_db_for_rebase_schema_guard", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_schema_guard", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES (1, 1);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
+    "SELECT dolt_checkout('-b', 'feat');"
+    "INSERT INTO t VALUES (2, 2);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES (10, 10);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');"
+    "SELECT dolt_checkout('feat');"
+    "SELECT dolt_rebase('-i', 'main');"
+    "DROP TABLE main.dolt_rebase;"
+    "CREATE TABLE main.dolt_rebase(id INTEGER PRIMARY KEY);")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  check("rebase_schema_guard_returns_error",
+        strstr(res, "ERROR: dolt_rebase has an unexpected schema")!=0);
+  check("rebase_schema_guard_keeps_working_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_schema_guard_keeps_rebase_flag", isRebasing==1);
+  check("rebase_schema_guard_keeps_orig_branch",
+        zOrigBranch && strcmp(zOrigBranch, "feat")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_rebase_schema_guard", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_schema_guard_persists_working_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+  check("rebase_schema_guard_abort_works",
+        strcmp(exec1(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
+  check("rebase_schema_guard_abort_restores_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
+static void run_rebase_temp_shadow_ignored(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+
+  printf("=== Rebase Temp Shadow Ignored Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_rebase_temp_shadow_ignored");
+  remove_db(dbpath);
+
+  check("open_db_for_rebase_temp_shadow", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_temp_shadow", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES (1, 1);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
+    "SELECT dolt_checkout('-b', 'feat');"
+    "INSERT INTO t VALUES (2, 2);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');"
+    "INSERT INTO t VALUES (3, 3);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f2');"
+    "SELECT dolt_checkout('main');"
+    "INSERT INTO t VALUES (10, 10);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');"
+    "SELECT dolt_checkout('feat');"
+    "SELECT dolt_rebase('-i', 'main');"
+    "CREATE TEMP TABLE dolt_rebase(rebase_order REAL PRIMARY KEY, action TEXT, commit_hash TEXT, commit_message TEXT);"
+    "INSERT INTO temp.dolt_rebase VALUES(1, 'oops', 'badbadbadbadbadbadbadbadbadbadbadbadbadb', 'shadow');")==SQLITE_OK);
+
+  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  check("rebase_temp_shadow_ignored_continue_succeeds",
+        strstr(res, "Successfully rebased and updated refs/heads/feat")!=0);
+  check("rebase_temp_shadow_ignored_restores_branch",
+        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_temp_shadow_ignored_rows_rebased",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "4")==0);
+  check("rebase_temp_shadow_ignored_main_plan_gone",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM main.sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_rebase_temp_shadow", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_temp_shadow_ignored_branch_after_reopen",
+        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_temp_shadow_ignored_rows_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "4")==0);
 
   sqlite3_close(db);
   remove_db(dbpath);
@@ -5038,6 +5207,8 @@ static const RegressionCase aCases[] = {
   { "merge_abort_after_reopen_restores_durable_state", "Merge Abort After Reopen Restores Durable State Test", run_merge_abort_after_reopen_restores_durable_state },
   { "rebase_continue_without_active_preserves_durable_state", "Rebase Continue Without Active Preserves Durable State Test", run_rebase_continue_without_active_preserves_durable_state },
   { "rebase_abort_after_reopen_restores_durable_state", "Rebase Abort After Reopen Restores Durable State Test", run_rebase_abort_after_reopen_restores_durable_state },
+  { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },
+  { "rebase_temp_shadow_ignored", "Rebase Temp Shadow Ignored Test", run_rebase_temp_shadow_ignored },
   { "remote_add_duplicate_preserves_durable_state", "Remote Add Duplicate Preserves Durable State Test", run_remote_add_duplicate_preserves_durable_state },
   { "remote_remove_missing_preserves_durable_state", "Remote Remove Missing Preserves Durable State Test", run_remote_remove_missing_preserves_durable_state },
   { "checkout_nonexistent_preserves_durable_state", "Checkout Nonexistent Preserves Durable State Test", run_checkout_nonexistent_preserves_durable_state },
