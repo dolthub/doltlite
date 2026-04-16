@@ -6715,4 +6715,19 @@ static void registerDoltiteFunctions(sqlite3 *db){
   doltliteRegister(db);
 }
 
+static int doltliteExtInit(
+  sqlite3 *db,
+  char **pzErrMsg,
+  const sqlite3_api_routines *pApi
+){
+  (void)pzErrMsg;
+  (void)pApi;
+  registerDoltiteFunctions(db);
+  return SQLITE_OK;
+}
+
+int doltliteInstallAutoExt(void){
+  return sqlite3_auto_extension((void(*)(void))doltliteExtInit);
+}
+
 #endif

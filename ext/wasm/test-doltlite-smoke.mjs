@@ -30,9 +30,9 @@ function fail(msg){
 }
 
 try {
-  const version = db.selectValue("select doltlite_version()");
+  const version = db.selectValue("select dolt_version()");
   const engine = db.selectValue("select doltlite_engine()");
-  if(!version || typeof version !== 'string') fail('doltlite_version() returned no version');
+  if(!version || typeof version !== 'string') fail('dolt_version() returned no version');
   if(engine !== 'prolly') fail(`doltlite_engine() returned ${engine}`);
 
   db.exec("select dolt_config('user.name','Wasm Test')");
@@ -49,7 +49,7 @@ try {
   if(logCount !== 1) fail(`dolt_log count was ${logCount}, expected 1`);
   if(activeBranch !== 'main') fail(`active_branch was ${activeBranch}, expected main`);
 
-  console.log(`doltlite_version=${version}`);
+  console.log(`dolt_version=${version}`);
   console.log(`doltlite_engine=${engine}`);
   console.log(`dolt_commit=${commit}`);
   console.log(`dolt_log_count=${logCount}`);
