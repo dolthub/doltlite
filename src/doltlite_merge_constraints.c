@@ -271,6 +271,56 @@ static int isRowPreExisting(
   return memcmp(pMergedVal, pAncVal, nMergedVal)==0 ? 1 : 0;
 }
 
+/* Probe whether zTable exposes a `rowid` column. Returns 1 if
+** the table has a rowid (standard SQLite tables), 0 if it is
+** declared WITHOUT ROWID. The post-merge walkers lean heavily
+** on rowid to identify specific violating rows and to fetch
+** their prolly-layer payload; WITHOUT ROWID tables break every
+** piece of that pipeline, so detection refuses to proceed
+** rather than silently miss violations. Tracked in GitHub
+** issue #495 — proper WITHOUT ROWID support requires a prolly-
+** layer-level walker that keys on the composite PK instead. */
+static int tableHasRowid(sqlite3 *db, const char *zTable){
+  sqlite3_stmt *pStmt = 0;
+  char *zQuery;
+  int rc;
+  zQuery = sqlite3_mprintf("SELECT rowid FROM \"%w\" LIMIT 0", zTable);
+  if( !zQuery ) return 1; /* treat OOM as rowid — caller will fail elsewhere */
+  rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, 0);
+  sqlite3_free(zQuery);
+  if( pStmt ) sqlite3_finalize(pStmt);
+  return rc == SQLITE_OK ? 1 : 0;
+}
+
+/* Emit a descriptive error and return SQLITE_ERROR. Used when a
+** walker refuses to process a WITHOUT ROWID table. Writes a
+** user-facing message into *ppzErrMsg (owned by sqlite3_free)
+** so the merge function can surface it via sqlite3_result_error
+** instead of falling back to the generic "SQL logic error"
+** text. Safe to pass a NULL ppzErrMsg. */
+static int refuseWithoutRowid(
+  sqlite3 *db,
+  char **ppzErrMsg,
+  const char *zTable,
+  const char *zWhich
+){
+  char *zMsg = sqlite3_mprintf(
+      "constraint-violation detection on WITHOUT ROWID tables is not "
+      "yet supported (%s check on \"%s\"); see GitHub issue #495. "
+      "Drop WITHOUT ROWID or use INTEGER PRIMARY KEY to keep merges flowing.",
+      zWhich, zTable);
+  if( zMsg ){
+    sqlite3_log(SQLITE_ERROR, "%s", zMsg);
+    if( ppzErrMsg && !*ppzErrMsg ){
+      *ppzErrMsg = zMsg;
+    }else{
+      sqlite3_free(zMsg);
+    }
+  }
+  (void)db;
+  return SQLITE_ERROR;
+}
+
 /* Resolve a (zTable, rowid) pair to the raw prolly row by looking
 ** the table up in the current btree's catalog via the public
 ** doltliteGetSessionTableRoot accessor and walking its prolly
@@ -325,12 +375,14 @@ static int detectUniqueViolationsForIndex(
   const char *zTable,
   const char *zIndexName,
   const char *zCols,
+  char **pzErrMsg,
   int *pnFound
 ){
   sqlite3_stmt *pScan = 0;
   char *zQuery;
   char *zWinnerKey = 0;
   int rc;
+  (void)pzErrMsg;
 
   zQuery = sqlite3_mprintf(
     "SELECT rowid, %s FROM \"%w\" NOT INDEXED ORDER BY %s, rowid",
@@ -431,6 +483,7 @@ static int detectUniqueViolationsForIndex(
 int doltliteDetectMergeUniqueViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
+  char **pzErrMsg,
   int *pnFound
 ){
   sqlite3_stmt *pTbls = 0;
@@ -496,6 +549,17 @@ int doltliteDetectMergeUniqueViolations(
       zOrigin = (const char*)sqlite3_column_text(pIdxList, 3);
       if( zOrigin && strcmp(zOrigin, "pk")==0 ) continue;
 
+      /* We've found a non-PK unique index to walk. That means we
+      ** actually need a way to identify violating rows by rowid —
+      ** which fails on WITHOUT ROWID / non-INTEGER-PK tables.
+      ** Refuse loudly rather than silently walking garbage.
+      ** (Tables with only the PK autoindex don't trip this
+      ** branch and still merge cleanly on WITHOUT ROWID.) */
+      if( !tableHasRowid(db, zTable) ){
+        rc = refuseWithoutRowid(db, pzErrMsg, zTable, "unique index");
+        break;
+      }
+
       zIdx = sqlite3_mprintf("%s", zIdxRaw);
       if( !zIdx ) break;
       zColsQ = sqlite3_mprintf("PRAGMA index_xinfo(%Q)", zIdx);
@@ -518,7 +582,8 @@ int doltliteDetectMergeUniqueViolations(
       zColList = sqlite3_str_finish(pColList);
       if( zColList && *zColList ){
         rc = detectUniqueViolationsForIndex(db, aAnc, nAnc, zTable,
-                                             zIdx, zColList, pnFound);
+                                             zIdx, zColList, pzErrMsg,
+                                             pnFound);
       }
       sqlite3_free(zColList);
       sqlite3_free(zIdx);
@@ -653,6 +718,7 @@ static int nextCheckClause(
 int doltliteDetectMergeCheckViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
+  char **pzErrMsg,
   int *pnFound
 ){
   sqlite3_stmt *pTbls = 0;
@@ -695,6 +761,25 @@ int doltliteDetectMergeCheckViolations(
       sqlite3_free(zSql);
       rc = SQLITE_NOMEM;
       break;
+    }
+
+    /* Refuse WITHOUT ROWID tables that carry a CHECK clause.
+    ** Tables with no CHECK expressions pass through unharmed
+    ** because nextCheckClause returns 0 on the first call and
+    ** the main loop exits immediately. */
+    {
+      char *zPeekExpr = 0;
+      char *zPeekName = 0;
+      int peekOffset = 0;
+      int peekRc = nextCheckClause(zSql, &peekOffset, &zPeekExpr, &zPeekName);
+      sqlite3_free(zPeekExpr);
+      sqlite3_free(zPeekName);
+      if( peekRc > 0 && !tableHasRowid(db, zTable) ){
+        rc = refuseWithoutRowid(db, pzErrMsg, zTable, "check constraint");
+        sqlite3_free(zTable);
+        sqlite3_free(zSql);
+        break;
+      }
     }
 
     for(;;){
@@ -805,6 +890,7 @@ int doltliteDetectMergeCheckViolations(
 int doltliteDetectMergeFkViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
+  char **pzErrMsg,
   int *pnFound
 ){
   sqlite3_stmt *pStmt = 0;
@@ -839,7 +925,17 @@ int doltliteDetectMergeFkViolations(
     int appendRc;
 
     if( !zTable ) continue;
-    if( sqlite3_column_type(pStmt, 1) == SQLITE_NULL ) continue;
+    /* PRAGMA foreign_key_check reports rowid=NULL for WITHOUT
+    ** ROWID child tables, which means we lose the ability to
+    ** identify and fetch the specific orphan row via the
+    ** existing rowid-keyed machinery. Fail the detection pass
+    ** rather than silently skipping — a passing merge that
+    ** leaves an FK orphan in place is worse than a merge that
+    ** refuses to run. */
+    if( sqlite3_column_type(pStmt, 1) == SQLITE_NULL ){
+      rc = refuseWithoutRowid(db, pzErrMsg, zTable, "foreign key");
+      break;
+    }
     rowid = sqlite3_column_int64(pStmt, 1);
     fkid  = sqlite3_column_int(pStmt, 3);
 

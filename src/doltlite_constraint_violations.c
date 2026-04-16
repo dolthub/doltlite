@@ -732,7 +732,15 @@ static sqlite3_module cvRowModule = {
   0,0,0,0,0,0,0,0,0,0,0
 };
 
-static int doltliteRegisterConstraintViolationTables(sqlite3 *db){
+/* Walk the session's user tables and register a
+** dolt_constraint_violations_<table> vtable for each one that
+** doesn't already have one. Safe to call repeatedly —
+** doltliteForEachUserTable skips tables whose module is
+** already registered. Exposed so the commit / checkout / merge
+** / reset flows can refresh the surface for tables created
+** mid-session, matching how the diff / history / at / blame
+** / conflicts vtables get refreshed. */
+int doltliteRefreshConstraintViolationTables(sqlite3 *db){
   return doltliteForEachUserTable(db, "dolt_constraint_violations_", &cvRowModule);
 }
 
@@ -741,7 +749,7 @@ int doltliteConstraintViolationsRegister(sqlite3 *db){
   rc = sqlite3_create_module(db, "dolt_constraint_violations",
                              &cvSummaryModule, 0);
   if( rc==SQLITE_OK ){
-    rc = doltliteRegisterConstraintViolationTables(db);
+    rc = doltliteRefreshConstraintViolationTables(db);
   }
   return rc;
 }
