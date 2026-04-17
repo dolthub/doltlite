@@ -4350,6 +4350,18 @@ void sqlite3CreateIndex(
       goto exit_create_index;
     }
     pIndex->azColl[i] = zColl;
+#ifdef DOLTLITE_PROLLY
+    /* Prolly-tree sort keys only support BINARY, NOCASE, and RTRIM.
+    ** Reject indexes on columns with user-defined collations — they
+    ** would produce wrong results on index lookups. */
+    if( sqlite3StrICmp(zColl, "BINARY")!=0
+     && sqlite3StrICmp(zColl, "NOCASE")!=0
+     && sqlite3StrICmp(zColl, "RTRIM")!=0 ){
+      sqlite3ErrorMsg(pParse,
+        "doltlite does not support indexes with custom collation '%s'", zColl);
+      goto exit_create_index;
+    }
+#endif
     requestedSortOrder = pListItem->fg.sortFlags & sortOrderMask;
     pIndex->aSortOrder[i] = (u8)requestedSortOrder;
   }
