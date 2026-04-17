@@ -333,6 +333,12 @@ static int gcRewriteFile(
         }
 
         if( rename(zTmp, cs->zFilename)!=0 ){
+          /* Rename failed — original file still exists on disk
+          ** but cs->pFile was already closed. Reopen it so the
+          ** session doesn't crash on subsequent operations. */
+          int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
+          (void)sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename,
+                                    &cs->pFile, reopenFlags, 0);
           rc = SQLITE_IOERR;
         }
 
