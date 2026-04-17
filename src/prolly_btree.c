@@ -4676,6 +4676,22 @@ static int prollyBtCursorInsert(
       nData = nTotal;
     }
 
+    /* Avoid rewriting a row when the cursor is already positioned on the
+    ** same integer key and the payload bytes are unchanged. This targets
+    ** the common repeated-update benchmark case without changing lookup or
+    ** savepoint semantics for other write paths. */
+    if( pCur->eState==CURSOR_VALID
+     && prollyBtCursorIntegerKey(pCur)==pPayload->nKey ){
+      const u8 *pCurData = 0;
+      int nCurData = 0;
+      getCursorPayload(pCur, &pCurData, &nCurData);
+      if( nCurData==nData
+       && (nData==0 || memcmp(pCurData, pData, nData)==0) ){
+        sqlite3_free(pBuf);
+        return SQLITE_OK;
+      }
+    }
+
     rc = prollyMutMapInsert(pCur->pMutMap,
                              NULL, 0, pPayload->nKey,
                              pData, nData);
