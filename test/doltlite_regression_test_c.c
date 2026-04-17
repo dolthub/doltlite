@@ -953,8 +953,10 @@ static void run_ancestor_missing_start(void){
 static void run_pull_persist_failure(void){
   sqlite3 *localDb = 0;
   sqlite3 *remoteDb = 0;
+  sqlite3 *remoteClientDb = 0;
   char localPath[256];
   char remotePath[256];
+  char remoteClientPath[256];
   char sql[1024];
   const char *res;
   char zHeadBefore[128];
@@ -962,8 +964,10 @@ static void run_pull_persist_failure(void){
   printf("=== Pull Persist Failure Test ===\n\n");
   make_dbpath(localPath, sizeof(localPath), "test_pull_persist_failure_local");
   make_dbpath(remotePath, sizeof(remotePath), "test_pull_persist_failure_remote");
+  make_dbpath(remoteClientPath, sizeof(remoteClientPath), "test_pull_persist_failure_remote_client");
   remove_db(localPath);
   remove_db(remotePath);
+  remove_db(remoteClientPath);
 
   gFailSyncOnce = 0;
   gFailHits = 0;
@@ -980,12 +984,14 @@ static void run_pull_persist_failure(void){
     remotePath);
   check("setup_local_and_push", execsql(localDb, sql)==SQLITE_OK);
 
-  sqlite3_close(remoteDb);
-  remoteDb = 0;
-  check("reopen_remote_db", open_db(remotePath, &remoteDb)==SQLITE_OK);
-  check("advance_remote", execsql(remoteDb,
+  check("open_remote_client_db", open_db(remoteClientPath, &remoteClientDb)==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  check("clone_remote_into_remote_client", execsql(remoteClientDb, sql)==SQLITE_OK);
+  check("advance_remote", execsql(remoteClientDb,
     "INSERT INTO t VALUES(2,'b');"
-    "SELECT dolt_commit('-A', '-m', 'remote update');")==SQLITE_OK);
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m', 'remote update');"
+    "SELECT dolt_push('origin','main');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
                    exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
@@ -1003,6 +1009,8 @@ static void run_pull_persist_failure(void){
   check("pull_remote_kept",
     strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
 
+  sqlite3_close(remoteClientDb);
+  remoteClientDb = 0;
   sqlite3_close(remoteDb);
   remoteDb = 0;
   sqlite3_close(localDb);
@@ -1021,6 +1029,156 @@ static void run_pull_persist_failure(void){
   sqlite3_close(localDb);
   remove_db(localPath);
   remove_db(remotePath);
+  remove_db(remoteClientPath);
+}
+
+static void run_pull_dirty_working_set_fails(void){
+  sqlite3 *localDb = 0;
+  sqlite3 *remoteDb = 0;
+  sqlite3 *remoteClientDb = 0;
+  char localPath[256];
+  char remotePath[256];
+  char remoteClientPath[256];
+  char sql[1024];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Pull Dirty Working Set Fails Test ===\n\n");
+  make_dbpath(localPath, sizeof(localPath), "test_pull_dirty_working_set_local");
+  make_dbpath(remotePath, sizeof(remotePath), "test_pull_dirty_working_set_remote");
+  make_dbpath(remoteClientPath, sizeof(remoteClientPath), "test_pull_dirty_working_set_remote_client");
+  remove_db(localPath);
+  remove_db(remotePath);
+  remove_db(remoteClientPath);
+
+  check("open_local_db_for_pull_dirty", open_db(localPath, &localDb)==SQLITE_OK);
+  check("open_remote_db_for_pull_dirty", open_db(remotePath, &remoteDb)==SQLITE_OK);
+
+  snprintf(sql, sizeof(sql),
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_remote('add','origin','file://%s');"
+    "SELECT dolt_push('origin','main');",
+    remotePath);
+  check("setup_local_and_push_for_pull_dirty", execsql(localDb, sql)==SQLITE_OK);
+
+  check("open_remote_client_db_for_pull_dirty", open_db(remoteClientPath, &remoteClientDb)==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  check("clone_remote_into_remote_client_for_pull_dirty", execsql(remoteClientDb, sql)==SQLITE_OK);
+  check("advance_remote_for_pull_dirty", execsql(remoteClientDb,
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m', 'remote update');"
+    "SELECT dolt_push('origin','main');")==SQLITE_OK);
+
+  check("make_local_working_dirty", execsql(localDb,
+    "UPDATE t SET v='local dirty' WHERE id=1;")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  res = exec1(localDb, "SELECT dolt_pull('origin','main')");
+  check("pull_dirty_working_returns_error", strstr(res, "ERROR:")!=0);
+  check("pull_dirty_working_reports_uncommitted", strstr(res, "uncommitted changes")!=0);
+  check("pull_dirty_working_branch_stays_main",
+    strcmp(exec1(localDb, "SELECT active_branch()"), "main")==0);
+  check("pull_dirty_working_keeps_local_rows",
+    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local dirty")==0);
+  check("pull_dirty_working_keeps_head",
+    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(remoteClientDb);
+  remoteClientDb = 0;
+  sqlite3_close(remoteDb);
+  remoteDb = 0;
+  sqlite3_close(localDb);
+  localDb = 0;
+
+  check("reopen_local_after_pull_dirty_working", open_db(localPath, &localDb)==SQLITE_OK);
+  check("pull_dirty_working_persists_local_rows_after_reopen",
+    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local dirty")==0);
+  check("pull_dirty_working_persists_head_after_reopen",
+    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(localDb);
+  remove_db(localPath);
+  remove_db(remotePath);
+  remove_db(remoteClientPath);
+}
+
+static void run_pull_staged_changes_fails(void){
+  sqlite3 *localDb = 0;
+  sqlite3 *remoteDb = 0;
+  sqlite3 *remoteClientDb = 0;
+  char localPath[256];
+  char remotePath[256];
+  char remoteClientPath[256];
+  char sql[1024];
+  const char *res;
+  char zHeadBefore[128];
+
+  printf("=== Pull Staged Changes Fails Test ===\n\n");
+  make_dbpath(localPath, sizeof(localPath), "test_pull_staged_changes_local");
+  make_dbpath(remotePath, sizeof(remotePath), "test_pull_staged_changes_remote");
+  make_dbpath(remoteClientPath, sizeof(remoteClientPath), "test_pull_staged_changes_remote_client");
+  remove_db(localPath);
+  remove_db(remotePath);
+  remove_db(remoteClientPath);
+
+  check("open_local_db_for_pull_staged", open_db(localPath, &localDb)==SQLITE_OK);
+  check("open_remote_db_for_pull_staged", open_db(remotePath, &remoteDb)==SQLITE_OK);
+
+  snprintf(sql, sizeof(sql),
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_remote('add','origin','file://%s');"
+    "SELECT dolt_push('origin','main');",
+    remotePath);
+  check("setup_local_and_push_for_pull_staged", execsql(localDb, sql)==SQLITE_OK);
+
+  check("open_remote_client_db_for_pull_staged", open_db(remoteClientPath, &remoteClientDb)==SQLITE_OK);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
+  check("clone_remote_into_remote_client_for_pull_staged", execsql(remoteClientDb, sql)==SQLITE_OK);
+  check("advance_remote_for_pull_staged", execsql(remoteClientDb,
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_add('-A');"
+    "SELECT dolt_commit('-m', 'remote update');"
+    "SELECT dolt_push('origin','main');")==SQLITE_OK);
+
+  check("make_local_staged_dirty", execsql(localDb,
+    "UPDATE t SET v='local staged' WHERE id=1;"
+    "SELECT dolt_add('-A');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
+                   exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+
+  res = exec1(localDb, "SELECT dolt_pull('origin','main')");
+  check("pull_staged_returns_error", strstr(res, "ERROR:")!=0);
+  check("pull_staged_reports_uncommitted", strstr(res, "uncommitted changes")!=0);
+  check("pull_staged_branch_stays_main",
+    strcmp(exec1(localDb, "SELECT active_branch()"), "main")==0);
+  check("pull_staged_keeps_local_rows",
+    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local staged")==0);
+  check("pull_staged_keeps_head",
+    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(remoteClientDb);
+  remoteClientDb = 0;
+  sqlite3_close(remoteDb);
+  remoteDb = 0;
+  sqlite3_close(localDb);
+  localDb = 0;
+
+  check("reopen_local_after_pull_staged", open_db(localPath, &localDb)==SQLITE_OK);
+  check("pull_staged_persists_local_rows_after_reopen",
+    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local staged")==0);
+  check("pull_staged_persists_head_after_reopen",
+    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+
+  sqlite3_close(localDb);
+  remove_db(localPath);
+  remove_db(remotePath);
+  remove_db(remoteClientPath);
 }
 
 static void run_push_persist_failure(void){
@@ -5859,6 +6017,9 @@ static const RegressionCase aCases[] = {
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },
+  { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },
+  { "pull_dirty_working_set_fails", "Pull Dirty Working Set Fails Test", run_pull_dirty_working_set_fails },
+  { "pull_staged_changes_fails", "Pull Staged Changes Fails Test", run_pull_staged_changes_fails },
   { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },
   { "clone_persist_failure", "Clone Persist Failure Test", run_clone_persist_failure },
   { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },

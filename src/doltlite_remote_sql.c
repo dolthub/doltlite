@@ -594,6 +594,13 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
 
+  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0
+   && doltliteHasUncommittedChanges(db) ){
+    remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
+                              "cannot pull with uncommitted changes");
+    return;
+  }
+
   rc = chunkStoreUpdateBranch(cs, zBranch, &trackingCommit);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
