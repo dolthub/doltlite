@@ -315,3 +315,7 @@ crash7 crash7-2.17.1
 crash7 crash7-2.18.1
 crash7 crash7-2.19.1
 crash7 crash7-2.20.1
+select9 select9-2.1.1  # CREATE INDEX with COLLATE REVERSE
+select9 select9-2.X
+select9 select9-3.1    # depends on index dropped in select9-2.X
+select9 select9-4.1
