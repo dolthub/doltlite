@@ -24,6 +24,10 @@
 ** Uses POSIX fork()/kill(SIGKILL) to simulate crashes. The parent
 ** process reopens the database and verifies invariants hold.
 **
+** The GC cases in this file are best-effort async-kill tests around
+** dolt_gc(). Deterministic crash-at-write coverage for the rewrite path
+** lives in test/crash_injection_test.sh under SQLITE_TEST builds.
+**
 ** Build from build/ directory:
 **   cc -I. -o crash_recovery_test \
 **     ../test/crash_recovery_test.c libdoltlite.a -lz -lpthread
@@ -792,7 +796,7 @@ static void test_11_increasing_data_kill(void){
 ** ==================================================================== */
 
 /*
-** Test 12: Commit, GC, commit. Kill during GC.
+** Test 12: Commit, GC, commit. Asynchronously kill around GC.
 ** Database should be usable afterward.
 */
 static void test_12_gc_crash(void){
@@ -894,7 +898,7 @@ static void test_13_gc_then_crash(void){
 }
 
 /*
-** Test 14: GC with branches. Kill during GC.
+** Test 14: GC with branches. Asynchronously kill around GC.
 ** Both branches' data must remain reachable.
 */
 static void test_14_gc_with_branches_crash(void){
@@ -1676,7 +1680,7 @@ static void test_28_rapid_small_commits(void){
 }
 
 /*
-** Test 29: GC after many small commits. Kill during GC.
+** Test 29: GC after many small commits. Asynchronously kill around GC.
 ** All committed data must remain accessible.
 */
 static void test_29_gc_after_many_commits(void){
