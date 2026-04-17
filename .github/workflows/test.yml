@@ -386,7 +386,10 @@ jobs:
     - name: Build crash-test binaries
       run: |
         cd build-crash
-        make OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' doltlite-lib doltlite-crashtest
+        . ./.tclenv.sh
+        make OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' \
+          OPTS="$TCL_INCLUDE_SPEC" \
+          doltlite-lib doltlite-crashtest
 
     - name: Native crash recovery test (SQLITE_TEST)
       run: |
