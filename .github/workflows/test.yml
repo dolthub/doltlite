@@ -395,8 +395,11 @@ jobs:
     - name: Native crash recovery test (SQLITE_TEST)
       run: |
         cd build-crash
-        cc -I. -o crash_recovery_test ../test/crash_recovery_test.c \
-          libdoltlite.a -lz -lpthread -lm
+        TCL_CONFIG=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/share -name tclConfig.sh 2>/dev/null | grep -v miniconda | head -1)
+        . "$TCL_CONFIG"
+        cc -I. $TCL_INCLUDE_SPEC -o crash_recovery_test ../test/crash_recovery_test.c \
+          libdoltlite.a ../ext/fts3/fts3_term.c \
+          $TCL_LIB_SPEC $TCL_LIBS -lz -lpthread -lm
         ./crash_recovery_test
       timeout-minutes: 10
 
