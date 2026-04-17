@@ -517,6 +517,166 @@ for N in 1 2 3 4 5 6 7 8 9 10 11 12; do
 done
 
 echo ""
+
+# ── Scenario 9: Crash during push persist ────────────────
+#
+# A push writes refs/chunks to the remote store. Crash at each
+# remote commit write point and verify the remote is either
+# unchanged or fully updated — never partially advanced.
+echo "--- Scenario 9: Crash during push persist ---"
+
+REMOTE9="$TMPROOT/s9_remote.db"
+LOCAL9="$TMPROOT/s9_local.db"
+rm -f "$REMOTE9" "$LOCAL9"
+"$DOLTLITE" "$REMOTE9" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'remote');
+SELECT dolt_commit('-Am','remote_init');
+SQL
+"$DOLTLITE" "$LOCAL9" >/dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'local');
+SELECT dolt_commit('-Am','local_init');
+SELECT dolt_remote('add','origin','file://$REMOTE9');
+UPDATE t SET v='local pushed' WHERE id=1;
+SELECT dolt_commit('-Am','local_update');
+SQL
+
+BASE_REMOTE_V=$("$DOLTLITE" "$REMOTE9" "SELECT v FROM t WHERE id=1;" 2>/dev/null)
+BASE_REMOTE_LOG=$("$DOLTLITE" "$REMOTE9" "SELECT count(*) FROM dolt_log;" 2>/dev/null)
+BASE_REMOTE_HEAD=$("$DOLTLITE" "$REMOTE9" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+FINAL_REMOTE_HEAD=$("$DOLTLITE" "$LOCAL9" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+
+for N in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  DB_REMOTE="$TMPROOT/s9_n${N}_remote.db"
+  DB_LOCAL="$TMPROOT/s9_n${N}_local.db"
+  cp "$REMOTE9" "$DB_REMOTE"
+  cp "$LOCAL9" "$DB_LOCAL"
+
+  DOLTLITE_CRASH_WRITE=$N "$DOLTLITE" "$DB_LOCAL" \
+    "SELECT dolt_remote('add','crash','file://$DB_REMOTE');
+     SELECT dolt_push('crash','main','--force');" >/dev/null 2>&1
+  RC=$?
+
+  REMOTE_V=$("$DOLTLITE" "$DB_REMOTE" "SELECT v FROM t WHERE id=1;" 2>/dev/null)
+  REMOTE_LOG=$("$DOLTLITE" "$DB_REMOTE" "SELECT count(*) FROM dolt_log;" 2>/dev/null)
+  REMOTE_HEAD=$("$DOLTLITE" "$DB_REMOTE" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+
+  if [ "$REMOTE_V" = "$BASE_REMOTE_V" ] && [ "$REMOTE_HEAD" = "$BASE_REMOTE_HEAD" ] && [ "$REMOTE_LOG" = "$BASE_REMOTE_LOG" ]; then
+    pass_name "s9_write${N}_push_crash_preserves_remote"
+  elif [ "$REMOTE_V" = "local pushed" ] && [ "$REMOTE_HEAD" = "$FINAL_REMOTE_HEAD" ] && [ "$REMOTE_LOG" = "$BASE_REMOTE_LOG" ]; then
+    if [ "$RC" = "99" ]; then
+      pass_name "s9_write${N}_push_crash_after_full_persist"
+    else
+      pass_name "s9_write${N}_push_completed"
+      break
+    fi
+  else
+    fail_name "s9_write${N}_push_partial_state"
+    echo "    rc=$RC v=$REMOTE_V log=$REMOTE_LOG/$BASE_REMOTE_LOG base_head=$BASE_REMOTE_HEAD head=$REMOTE_HEAD final_head=$FINAL_REMOTE_HEAD"
+  fi
+done
+
+echo ""
+
+# ── Scenario 10: Crash during clone persist ──────────────
+#
+# Clone hydrates chunks and then persists refs/default branch
+# locally. Crash at each write point and verify the destination
+# is either still empty or fully cloned.
+echo "--- Scenario 10: Crash during clone persist ---"
+
+REMOTE10="$TMPROOT/s10_remote.db"
+rm -f "$REMOTE10"
+"$DOLTLITE" "$REMOTE10" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'from_remote');
+SELECT dolt_commit('-Am','remote_init');
+SQL
+
+for N in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  DB_LOCAL="$TMPROOT/s10_n${N}_local.db"
+  rm -f "$DB_LOCAL"
+
+  DOLTLITE_CRASH_WRITE=$N "$DOLTLITE" "$DB_LOCAL" \
+    "SELECT dolt_clone('file://$REMOTE10');" >/dev/null 2>&1
+  RC=$?
+
+  TABLE_COUNT=$("$DOLTLITE" "$DB_LOCAL" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t';" 2>/dev/null)
+  REMOTE_COUNT=$("$DOLTLITE" "$DB_LOCAL" "SELECT count(*) FROM dolt_remotes;" 2>/dev/null)
+  ROW_COUNT=$("$DOLTLITE" "$DB_LOCAL" "SELECT count(*) FROM t;" 2>/dev/null)
+
+  if [ "$TABLE_COUNT" = "0" ] && { [ -z "$REMOTE_COUNT" ] || [ "$REMOTE_COUNT" = "0" ]; }; then
+    pass_name "s10_write${N}_clone_crash_restores_empty"
+  elif [ "$TABLE_COUNT" = "1" ] && [ "$REMOTE_COUNT" = "1" ] && [ "$ROW_COUNT" = "1" ]; then
+    if [ "$RC" = "99" ]; then
+      pass_name "s10_write${N}_clone_crash_after_full_persist"
+    else
+      pass_name "s10_write${N}_clone_completed"
+      break
+    fi
+  else
+    fail_name "s10_write${N}_clone_partial_state"
+    echo "    rc=$RC tables=$TABLE_COUNT remotes=$REMOTE_COUNT rows=$ROW_COUNT"
+  fi
+done
+
+echo ""
+
+# ── Scenario 11: Crash during pull persist ───────────────
+#
+# Pull fast-forwards local refs and working state. Crash during
+# the final refs persist and verify local state is either the
+# old tip or the fully pulled tip.
+echo "--- Scenario 11: Crash during pull persist ---"
+
+REMOTE11="$TMPROOT/s11_remote.db"
+LOCAL11="$TMPROOT/s11_local.db"
+REMOTE_CLIENT11="$TMPROOT/s11_remote_client.db"
+rm -f "$REMOTE11" "$LOCAL11" "$REMOTE_CLIENT11"
+"$DOLTLITE" "$LOCAL11" >/dev/null 2>&1 <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_remote('add','origin','file://$REMOTE11');
+SELECT dolt_push('origin','main');
+SQL
+"$DOLTLITE" "$REMOTE_CLIENT11" "SELECT dolt_clone('file://$REMOTE11');" >/dev/null 2>&1
+"$DOLTLITE" "$REMOTE_CLIENT11" \
+  "INSERT INTO t VALUES(2,'b'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','remote update'); SELECT dolt_push('origin','main');" >/dev/null 2>&1
+
+BASE_LOCAL_COUNT=$("$DOLTLITE" "$LOCAL11" "SELECT count(*) FROM t;" 2>/dev/null)
+BASE_LOCAL_HEAD=$("$DOLTLITE" "$LOCAL11" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+FINAL_LOCAL_HEAD=$("$DOLTLITE" "$REMOTE_CLIENT11" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+
+for N in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  DB_LOCAL="$TMPROOT/s11_n${N}_local.db"
+  cp "$LOCAL11" "$DB_LOCAL"
+
+  DOLTLITE_CRASH_WRITE=$N "$DOLTLITE" "$DB_LOCAL" \
+    "SELECT dolt_pull('origin','main');" >/dev/null 2>&1
+  RC=$?
+
+  LOCAL_COUNT=$("$DOLTLITE" "$DB_LOCAL" "SELECT count(*) FROM t;" 2>/dev/null)
+  LOCAL_HEAD=$("$DOLTLITE" "$DB_LOCAL" "SELECT commit_hash FROM dolt_log LIMIT 1;" 2>/dev/null)
+  REMOTE_COUNT=$("$DOLTLITE" "$DB_LOCAL" "SELECT count(*) FROM dolt_remotes;" 2>/dev/null)
+
+  if [ "$LOCAL_COUNT" = "$BASE_LOCAL_COUNT" ] && [ "$LOCAL_HEAD" = "$BASE_LOCAL_HEAD" ] && [ "$REMOTE_COUNT" = "1" ]; then
+    pass_name "s11_write${N}_pull_crash_keeps_old_tip"
+  elif [ "$LOCAL_COUNT" = "2" ] && [ "$LOCAL_HEAD" = "$FINAL_LOCAL_HEAD" ] && [ "$REMOTE_COUNT" = "1" ]; then
+    if [ "$RC" = "99" ]; then
+      pass_name "s11_write${N}_pull_crash_after_full_persist"
+    else
+      pass_name "s11_write${N}_pull_completed"
+      break
+    fi
+  else
+    fail_name "s11_write${N}_pull_partial_state"
+    echo "    rc=$RC count=$LOCAL_COUNT base_count=$BASE_LOCAL_COUNT head=$LOCAL_HEAD base_head=$BASE_LOCAL_HEAD final_head=$FINAL_LOCAL_HEAD remotes=$REMOTE_COUNT"
+  fi
+done
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
