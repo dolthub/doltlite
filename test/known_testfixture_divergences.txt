@@ -315,3 +315,57 @@ crash7 crash7-2.17.1
 crash7 crash7-2.18.1
 crash7 crash7-2.19.1
 crash7 crash7-2.20.1
+# Custom collation indexes rejected: doltlite's prolly-tree sort keys
+# only support BINARY, NOCASE, and RTRIM. CREATE INDEX with a custom
+# collation now errors rather than silently producing wrong results.
+enc enc-11.1
+collate3 collate3-1.6.1
+collate3 collate3-1.6.3
+collate3 collate3-1.6.4
+collate3 collate3-1.7.1
+collate3 collate3-1.7.3
+collate3 collate3-1.7.4
+collate3 collate3-3.0
+collate3 collate3-3.1
+collate3 collate3-3.2
+collate3 collate3-3.4
+collate3 collate3-3.5
+collate3 collate3-3.8
+collate3 collate3-3.10
+collate3 collate3-3.11
+collate3 collate3-3.12
+collate3 collate3-3.13
+collate3 collate3-3.14
+collate3 collate3-4.6
+collate4 collate4-1.1.0
+collate4 collate4-1.1.4
+collate4 collate4-1.1.5
+collate4 collate4-1.1.21
+collate4 collate4-1.1.24
+collate4 collate4-1.1.27
+collate4 collate4-1.1.30
+collate4 collate4-1.2.0
+collate4 collate4-1.2.1
+collate4 collate4-1.2.2
+collate4 collate4-1.2.4
+collate4 collate4-1.2.6
+collate4 collate4-1.2.14
+collate4 collate4-1.2.17
+collate4 collate4-1.2.19
+collate4 collate4-1.2.21
+collate4 collate4-1.2.24
+collate4 collate4-1.2.25
+collate4 collate4-2.1.4
+collate4 collate4-2.1.5
+collate4 collate4-2.1.7
+collate4 collate4-2.1.8
+collate4 collate4-2.1.9
+collate4 collate4-2.2.1b
+collate4 collate4-2.2.2
+collate4 collate4-4.3
+collate4 collate4-4.4
+collate4 collate4-4.5
+select9 select9-2.1.1  # CREATE INDEX with COLLATE REVERSE
+select9 select9-2.X
+select9 select9-3.1    # depends on index dropped in select9-2.X
+select9 select9-4.1
