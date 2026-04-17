@@ -565,6 +565,29 @@ $SEED
 SELECT dolt_cherry_pick('does-not-exist');
 "
 
+oracle_error "cherry_pick_dirty_working_set" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_2');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 11 WHERE id = 1;
+SELECT dolt_cherry_pick('feature');
+"
+
+oracle_error "cherry_pick_staged_changes" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_2');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 11 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_cherry_pick('feature');
+"
+
 # Dolt's dolt_revert() with no args is a silent no-op rather than
 # an error (likely an undocumented quirk — there's no defined
 # semantics for "revert nothing"). doltlite matches Dolt for
@@ -577,6 +600,25 @@ SELECT dolt_revert();
 oracle_error "revert_nonexistent_ref" "
 $SEED
 SELECT dolt_revert('does-not-exist');
+"
+
+oracle_error "revert_dirty_working_set" "
+$SEED
+UPDATE t SET v = 50 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_set_50');
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_revert('HEAD');
+"
+
+oracle_error "revert_staged_changes" "
+$SEED
+UPDATE t SET v = 50 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_set_50');
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_revert('HEAD');
 "
 
 # Reverting the initial commit has no parent to diff against — should
