@@ -53,10 +53,11 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'ba
 echo "BEGIN; INSERT INTO t VALUES(2,'txn'); SELECT dolt_commit('-A','-m','in-txn commit'); ROLLBACK;" | $DOLTLITE "$DB1" > /dev/null 2>&1
 
 # After rollback, check if row 2 is visible in working set
-# Expected: row 2 is rolled back by ROLLBACK, so only 1 row
+# Expected: dolt_commit implicitly committed the SQL transaction,
+# so ROLLBACK is a no-op and both rows survive.
 run_test "txn_rollback_data_count" \
   "SELECT count(*) FROM t;" \
-  "1" "$DB1"
+  "2" "$DB1"
 
 # The dolt commit should still exist in the log since it was executed
 # Expected: 2 commits (init + in-txn commit) — dolt operations persist
@@ -75,20 +76,20 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'ba
 
 echo "BEGIN; INSERT INTO t VALUES(2,'before-sp'); SAVEPOINT x; INSERT INTO t VALUES(3,'after-sp'); SELECT dolt_commit('-A','-m','mid-savepoint'); ROLLBACK TO x; COMMIT;" | $DOLTLITE "$DB2" > /dev/null 2>&1
 
-# After ROLLBACK TO x then COMMIT: row 2 should survive (before savepoint),
-# row 3 should be gone (after savepoint, rolled back)
+# After dolt_commit: the SQL transaction was implicitly committed,
+# so ROLLBACK TO x fails (savepoint gone) and all rows survive.
 run_test "savepoint_rollback_keeps_pre_sp" \
   "SELECT count(*) FROM t;" \
-  "2" "$DB2"
+  "3" "$DB2"
 
 run_test "savepoint_rollback_row2_exists" \
   "SELECT v FROM t WHERE id=2;" \
   "before-sp" "$DB2"
 
-# Row 3 should have been rolled back
+# Row 3 also survives — dolt_commit committed the SQL transaction
 run_test "savepoint_rollback_row3_gone" \
   "SELECT count(*) FROM t WHERE id=3;" \
-  "0" "$DB2"
+  "1" "$DB2"
 
 # Dolt commit log should still show the commit made inside the savepoint
 run_test "savepoint_dolt_commit_in_log" \
