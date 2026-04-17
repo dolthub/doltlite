@@ -4,6 +4,7 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "doltlite_ancestor.h"
 #include "doltlite_remote.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
@@ -543,49 +544,17 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
 
-  /* dolt_pull is fast-forward-only; we walk the tracking branch's
-  ** first-parent chain back to the local tip. If we hit the local
-  ** commit, the local side has no unique commits and FF is safe.
-  ** Otherwise the user must dolt_merge to reconcile. maxDepth is
-  ** a safety cap against malformed cycles — legitimate histories
-  ** don't exceed it in practice. */
+  /* dolt_pull is fast-forward-only. A fast-forward is valid if the
+  ** local tip is any ancestor of the fetched tracking tip, not just
+  ** part of its first-parent chain. */
   {
-    ProllyHash walk;
-    int maxDepth = 1000;
-    int canFF = 0;
-    int walkRc = SQLITE_OK;
-    memcpy(&walk, &trackingCommit, sizeof(ProllyHash));
-
-    while( maxDepth-- > 0 ){
-      DoltliteCommit commit;
-
-      if( prollyHashCompare(&walk, &localCommit)==0 ){
-        canFF = 1;
-        break;
-      }
-      if( prollyHashIsEmpty(&walk) ) break;
-
-      memset(&commit, 0, sizeof(commit));
-      walkRc = doltliteLoadCommit(db, &walk, &commit);
-      if( walkRc!=SQLITE_OK ) break;
-
-      {
-        const ProllyHash *pParent = doltliteCommitParentHash(&commit, 0);
-        if( pParent && !prollyHashIsEmpty(pParent) ){
-          memcpy(&walk, pParent, sizeof(ProllyHash));
-        }else{
-          memset(&walk, 0, sizeof(ProllyHash));
-        }
-      }
-      doltliteCommitClear(&commit);
-    }
-
-    if( walkRc!=SQLITE_OK ){
-      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, walkRc, 0);
+    ProllyHash ancestor;
+    rc = doltliteFindAncestor(db, &trackingCommit, &localCommit, &ancestor);
+    if( rc!=SQLITE_OK ){
+      remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
       return;
     }
-
-    if( !canFF ){
+    if( prollyHashCompare(&ancestor, &localCommit)!=0 ){
       remoteSqlRestoreAndReport(
         ctx, db, cs, &savedState, SQLITE_ERROR,
         "cannot fast-forward — use dolt_merge with the tracking branch instead");
@@ -648,7 +617,11 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
   memset(&savedState, 0, sizeof(savedState));
 
-
+  if( doltliteHasUncommittedChanges(db) ){
+    sqlite3_result_error(ctx,
+      "database has uncommitted changes — clone into a fresh database", -1);
+    return;
+  }
 
   if( !chunkStoreIsEmpty(cs) ){
     int virgin = 0;

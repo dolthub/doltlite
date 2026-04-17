@@ -210,7 +210,23 @@ int doltliteHasUncommittedChanges(sqlite3 *db){
   int rc;
 
   rc = doltliteGetHeadCatalogHash(db, &headCatHash);
-  if( rc!=SQLITE_OK || prollyHashIsEmpty(&headCatHash) ) return 0;
+  if( rc!=SQLITE_OK ) return 0;
+  if( prollyHashIsEmpty(&headCatHash) ){
+    sqlite3_stmt *pStmt = 0;
+    int hasUserTables = 0;
+    rc = sqlite3_prepare_v2(db,
+      "SELECT 1 FROM sqlite_master "
+      "WHERE type='table' "
+      "AND name NOT LIKE 'sqlite_%' "
+      "AND name NOT LIKE 'dolt_%' "
+      "LIMIT 1",
+      -1, &pStmt, 0);
+    if( rc==SQLITE_OK && sqlite3_step(pStmt)==SQLITE_ROW ){
+      hasUserTables = 1;
+    }
+    sqlite3_finalize(pStmt);
+    return hasUserTables;
+  }
 
 
   doltliteGetSessionStaged(db, &stagedHash);
@@ -2422,6 +2438,12 @@ static void doltliteCherryPickFunc(
     return;
   }
 
+  if( doltliteHasUncommittedChanges(db) ){
+    sqlite3_result_error(context,
+      "cannot cherry-pick with uncommitted changes", -1);
+    return;
+  }
+
   rc = doltliteResolveRef(db,zRef, &pickHash);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "invalid commit hash", -1);
@@ -2518,6 +2540,12 @@ static void doltliteRevertFunc(
   zRef = (const char*)sqlite3_value_text(argv[0]);
   if( !zRef ){
     sqlite3_result_int(context, 0);
+    return;
+  }
+
+  if( doltliteHasUncommittedChanges(db) ){
+    sqlite3_result_error(context,
+      "cannot revert with uncommitted changes", -1);
     return;
   }
 

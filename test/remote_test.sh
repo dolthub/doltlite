@@ -229,7 +229,67 @@ result=$("$DB" "$TMPDIR/clone.db" "SELECT email FROM users WHERE id=1;")
 check "clone pulled schema change" "alice@test.com" "$result"
 
 # ============================================================
-echo "=== 14. Error cases ==="
+echo "=== 14. Pull full-ancestry fast-forward ==="
+# ============================================================
+"$DB" "$TMPDIR/anc_src.db" <<ENDSQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_branch('side');
+SELECT dolt_checkout('side');
+INSERT INTO t VALUES(2,'side');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','side commit');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main commit');
+SELECT dolt_remote('add','origin','$R/anc_remote.db');
+SELECT dolt_push('origin','main');
+SELECT dolt_push('origin','side');
+.quit
+ENDSQL
+
+"$DB" "$TMPDIR/anc_remote_client.db" <<ENDSQL
+SELECT dolt_clone('$R/anc_remote.db');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('side');
+SELECT dolt_branch('--force','side','main');
+SELECT dolt_push('origin','side');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/anc_src.db" "SELECT dolt_checkout('side'); SELECT dolt_pull('origin','side'); SELECT count(*) FROM t;")
+check "pull with non-first-parent ancestry succeeds" "0
+0
+3" "$result"
+
+result=$("$DB" "$TMPDIR/anc_src.db" "SELECT v FROM t ORDER BY id;")
+check "pull with non-first-parent ancestry brings merged rows" "base
+side
+main" "$result"
+
+# ============================================================
+echo "=== 15. Clone into seeded dirty db fails safely ==="
+# ============================================================
+"$DB" "$TMPDIR/seeded_dirty.db" <<'ENDSQL'
+CREATE TABLE local_only(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO local_only VALUES(1,'local');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/seeded_dirty.db" "SELECT dolt_clone('$R/remote.db');" 2>&1)
+check "clone into seeded dirty db errors" "1" "$(echo "$result" | grep -c 'uncommitted changes')"
+
+result=$("$DB" "$TMPDIR/seeded_dirty.db" "SELECT count(*) FROM local_only;")
+check "clone into seeded dirty db keeps local rows" "1" "$result"
+
+result=$("$DB" "$TMPDIR/seeded_dirty.db" "SELECT count(*) FROM dolt_remotes;")
+check "clone into seeded dirty db keeps remotes empty" "0" "$result"
+
+# ============================================================
+echo "=== 16. Error cases ==="
 # ============================================================
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('nonexistent','main');" 2>&1)
 check "push to unknown remote errors" "1" "$(echo "$result" | grep -c 'remote not found')"
@@ -254,7 +314,7 @@ result=$("$DB" "$TMPDIR/err2.db" "SELECT dolt_clone('file:///nonexistent/path.db
 check "clone nonexistent file errors" "1" "$(echo "$result" | grep -c 'clone failed')"
 
 # ============================================================
-echo "=== 15. Empty table push/clone ==="
+echo "=== 17. Empty table push/clone ==="
 # ============================================================
 "$DB" "$TMPDIR/empty_src.db" <<ENDSQL
 CREATE TABLE empty_t(id INTEGER PRIMARY KEY);
@@ -271,7 +331,7 @@ result=$("$DB" "$TMPDIR/empty_clone.db" "SELECT count(*) FROM empty_t;")
 check "empty table exists in clone" "0" "$result"
 
 # ============================================================
-echo "=== 16. Large data push/clone ==="
+echo "=== 18. Large data push/clone ==="
 # ============================================================
 "$DB" "$TMPDIR/large_src.db" <<ENDSQL
 CREATE TABLE big(id INTEGER PRIMARY KEY, data TEXT);
@@ -290,7 +350,7 @@ result=$("$DB" "$TMPDIR/large_clone.db" "SELECT count(*) FROM big;")
 check "clone has 500 rows" "500" "$result"
 
 # ============================================================
-echo "=== 17. Push to second remote ==="
+echo "=== 19. Push to second remote ==="
 # ============================================================
 "$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add','mirror','$R/mirror.db'); SELECT dolt_push('mirror','main');" > /dev/null
 src_head=$("$DB" "$TMPDIR/src.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
@@ -298,7 +358,7 @@ result=$("$DB" "$TMPDIR/mirror.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
 check "mirror head matches pushed main" "$src_head" "$result"
 
 # ============================================================
-echo "=== 18. Clone preserves multiple branches ==="
+echo "=== 20. Clone preserves multiple branches ==="
 # ============================================================
 result=$("$DB" "$TMPDIR/multi_clone.db" "SELECT dolt_clone('$R/remote.db');")
 check "multi-branch clone returns 0" "0" "$result"
@@ -307,7 +367,7 @@ result=$("$DB" "$TMPDIR/multi_clone.db" "SELECT count(*) FROM dolt_branches;")
 check "clone has 2 branches" "2" "$result"
 
 # ============================================================
-echo "=== 19. Deep history push/clone (20 commits) ==="
+echo "=== 21. Deep history push/clone (20 commits) ==="
 # ============================================================
 "$DB" "$TMPDIR/deep_src.db" <<ENDSQL
 CREATE TABLE log(id INTEGER PRIMARY KEY, step INTEGER, msg TEXT);
@@ -331,7 +391,7 @@ result=$("$DB" "$TMPDIR/deep_clone.db" "SELECT count(*) FROM dolt_log;")
 check "deep clone has 22 commits" "22" "$result"
 
 # ============================================================
-echo "=== 20. Diverged branches: push both, clone gets all ==="
+echo "=== 22. Diverged branches: push both, clone gets all ==="
 # ============================================================
 "$DB" "$TMPDIR/div_src.db" <<ENDSQL
 CREATE TABLE items(id INTEGER PRIMARY KEY, val TEXT);
@@ -384,7 +444,7 @@ check "div clone main has 1 item" "0
 1" "$result"
 
 # ============================================================
-echo "=== 21. Incremental fetch: push more, fetch only new ==="
+echo "=== 23. Incremental fetch: push more, fetch only new ==="
 # ============================================================
 # Add 5 more commits on branchA in source
 "$DB" "$TMPDIR/div_src.db" "SELECT dolt_checkout('branchA');" > /dev/null
@@ -404,7 +464,7 @@ check "incremental pull has 16 items" "0
 16" "$result"
 
 # ============================================================
-echo "=== 22. Push after merge ==="
+echo "=== 24. Push after merge ==="
 # ============================================================
 "$DB" "$TMPDIR/merge_src.db" <<ENDSQL
 CREATE TABLE doc(id INTEGER PRIMARY KEY, text TEXT);
@@ -438,7 +498,7 @@ result=$("$DB" "$TMPDIR/merge_clone.db" "SELECT count(*) FROM dolt_log;")
 check "merge clone has commit history" "5" "$result"
 
 # ============================================================
-echo "=== 23. Round-trip: A→remote→B→remote→A (3 hops) ==="
+echo "=== 25. Round-trip: A→remote→B→remote→A (3 hops) ==="
 # ============================================================
 "$DB" "$TMPDIR/hop_a.db" <<ENDSQL
 CREATE TABLE chain(id INTEGER PRIMARY KEY, who TEXT);
