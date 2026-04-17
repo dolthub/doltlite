@@ -68,6 +68,10 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( strcmp(arg0, "-d")==0 || strcmp(arg0, "--delete")==0 ){
     const char *zName;
     if( argc<2 ){ sqlite3_result_error(ctx, "tag name required for delete", -1); return; }
+    if( argc!=2 ){
+      sqlite3_result_error(ctx, "too many positional arguments to dolt_tag", -1);
+      return;
+    }
     zName = (const char*)sqlite3_value_text(argv[1]);
     if( !zName ){ sqlite3_result_error(ctx, "tag name required", -1); return; }
     m.zName = zName;

@@ -32,6 +32,11 @@ run_test_match "tag_missing_commit" \
 # Delete tag
 run_test "delete_tag" "SELECT dolt_tag('-d','v0.9');" "0" "$DB"
 run_test "one_tag_left" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
+run_test_match "delete_tag_extra_arg" \
+  "SELECT dolt_tag('-d','v1.0','extra');" \
+  "too many positional arguments to dolt_tag" "$DB"
+run_test "delete_extra_arg_keeps_tag" \
+  "SELECT count(*) FROM dolt_tags WHERE tag_name='v1.0';" "1" "$DB"
 
 # Delete nonexistent
 run_test_match "delete_missing" "SELECT dolt_tag('-d','nope');" "not found" "$DB"
