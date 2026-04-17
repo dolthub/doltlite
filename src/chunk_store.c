@@ -120,6 +120,8 @@
 static int csOpenFile(sqlite3_vfs *pVfs, const char *zPath,
                       sqlite3_file **ppFile, int flags);
 static void csCloseFile(sqlite3_file *pFile);
+static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize);
+static int csRestoreCommittedRefsState(ChunkStore *cs);
 static int csReadManifest(ChunkStore *cs);
 static int csReadIndex(ChunkStore *cs);
 static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData);
@@ -410,6 +412,54 @@ static void csCloseFile(sqlite3_file *pFile){
   if( pFile ){
     sqlite3OsCloseFree(pFile);
   }
+}
+
+static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
+  sqlite3_int64 sizeNow = -1;
+  int rc = SQLITE_OK;
+
+  if( !cs->pFile ) return SQLITE_OK;
+
+  rc = sqlite3OsTruncate(cs->pFile, origFileSize);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsFileSize(cs->pFile, &sizeNow);
+  }
+  if( rc==SQLITE_OK && sizeNow==origFileSize ){
+    (void)sqlite3OsSync(cs->pFile, SQLITE_SYNC_NORMAL);
+    return SQLITE_OK;
+  }
+
+  csCloseFile(cs->pFile);
+  cs->pFile = 0;
+  rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile,
+                  SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = sqlite3OsTruncate(cs->pFile, origFileSize);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsFileSize(cs->pFile, &sizeNow);
+  }
+  if( rc==SQLITE_OK && sizeNow==origFileSize ){
+    (void)sqlite3OsSync(cs->pFile, SQLITE_SYNC_NORMAL);
+    return SQLITE_OK;
+  }
+  return rc==SQLITE_OK ? SQLITE_IOERR_TRUNCATE : rc;
+}
+
+static int csRestoreCommittedRefsState(ChunkStore *cs){
+  csRestoreCommittedRefsHash(cs);
+  if( prollyHashIsEmpty(&cs->committedRefsHash) ){
+    csFreeBranches(cs);
+    csFreeTags(cs);
+    csFreeRemotes(cs);
+    csFreeTracking(cs);
+    if( !cs->zDefaultBranch ){
+      cs->zDefaultBranch = sqlite3_mprintf("main");
+      if( !cs->zDefaultBranch ) return SQLITE_NOMEM;
+    }
+    return SQLITE_OK;
+  }
+  return chunkStoreReloadRefs(cs);
 }
 
 static int csSearchIndex(
@@ -1771,7 +1821,8 @@ static int csCommitToFile(ChunkStore *cs){
   int rc;
   int i;
   i64 fileSize = 0;
-  i64 writeOff;
+  i64 origFileSize = 0;
+  i64 writeOff = 0;
   int lockFd = -1;
   int hadFile = (cs->pFile != 0);
   i64 newWalSize = cs->nWalData;
@@ -1805,6 +1856,7 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc != SQLITE_OK ) goto commit_done;
     fileSize = cs->iFileSize;
   }
+  origFileSize = fileSize;
 
   if( cs->nPending > 0 ){
     ChunkStore mergeView;
@@ -1916,7 +1968,10 @@ commit_done:
   csFileUnlock(lockFd);
 
   if( rc != SQLITE_OK ){
-    csRestoreCommittedRefsHash(cs);
+    if( cs->pFile && writeOff > origFileSize ){
+      (void)csRollbackFailedAppend(cs, origFileSize);
+    }
+    (void)csRestoreCommittedRefsState(cs);
     sqlite3_free(aCommittedPending);
     sqlite3_free(aMerged);
     sqlite3_free(pNewWalData);
@@ -1973,7 +2028,7 @@ void chunkStoreRollback(ChunkStore *cs){
   }else{
     cs->nWriteBuf = 0;
   }
-  csRestoreCommittedRefsHash(cs);
+  (void)csRestoreCommittedRefsState(cs);
 }
 
 int chunkStoreIsEmpty(ChunkStore *cs){

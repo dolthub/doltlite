@@ -17,6 +17,7 @@
 **   ./doltlite_regression_test_c chunk_walk_corruption
 **   ./doltlite_regression_test_c ancestor_missing_start
 **   ./doltlite_regression_test_c pull_persist_failure
+**   ./doltlite_regression_test_c push_persist_failure
 **   ./doltlite_regression_test_c clone_persist_failure
 **   ./doltlite_regression_test_c resolve_ref_non_commit
 **   ./doltlite_regression_test_c commit_parent_limit
@@ -1018,6 +1019,72 @@ static void run_pull_persist_failure(void){
     strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
 
   sqlite3_close(localDb);
+  remove_db(localPath);
+  remove_db(remotePath);
+}
+
+static void run_push_persist_failure(void){
+  sqlite3 *localDb = 0;
+  sqlite3 *remoteDb = 0;
+  char localPath[256];
+  char remotePath[256];
+  char sql[1024];
+  const char *res;
+  char zRemoteHeadBefore[128];
+
+  printf("=== Push Persist Failure Test ===\n\n");
+  make_dbpath(localPath, sizeof(localPath), "test_push_persist_failure_local");
+  make_dbpath(remotePath, sizeof(remotePath), "test_push_persist_failure_remote");
+  remove_db(localPath);
+  remove_db(remotePath);
+
+  gFailWriteOnce = 0;
+  gFailSyncOnce = 0;
+  gFailHits = 0;
+  check("register_fail_vfs_for_push", registerFailVfs()==SQLITE_OK);
+  check("open_remote_db_for_push", open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("setup_remote_repo_for_push", execsql(remoteDb,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'remote');"
+    "SELECT dolt_commit('-A', '-m', 'remote init');")==SQLITE_OK);
+  sqlite3_snprintf(sizeof(zRemoteHeadBefore), zRemoteHeadBefore, "%s",
+                   exec1(remoteDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+  sqlite3_close(remoteDb);
+  remoteDb = 0;
+
+  check("open_local_fail_db_for_push", open_fail_db(localPath, &localDb)==SQLITE_OK);
+  snprintf(sql, sizeof(sql),
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'local');"
+    "SELECT dolt_commit('-A', '-m', 'local init');"
+    "SELECT dolt_remote('add','origin','file://%s');"
+    "UPDATE t SET v='local pushed' WHERE id=1;"
+    "SELECT dolt_commit('-A', '-m', 'local update');",
+    remotePath);
+  check("setup_local_repo_for_push", execsql(localDb, sql)==SQLITE_OK);
+
+  gFailHits = 0;
+  gFailSyncOnce = 1;
+  res = exec1(localDb, "SELECT dolt_push('origin','main','--force')");
+  check("push_failure_was_injected", gFailHits>0);
+  check("push_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
+  check("push_keeps_local_rows",
+    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local pushed")==0);
+  check("push_keeps_local_remote",
+    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+
+  sqlite3_close(localDb);
+  localDb = 0;
+
+  check("reopen_remote_after_push_failure", open_db(remotePath, &remoteDb)==SQLITE_OK);
+  check("push_failure_preserves_remote_rows_after_reopen",
+    strcmp(exec1(remoteDb, "SELECT v FROM t WHERE id=1"), "remote")==0);
+  check("push_failure_preserves_remote_head_after_reopen",
+    strcmp(exec1(remoteDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zRemoteHeadBefore)==0);
+  check("push_failure_preserves_remote_log_count_after_reopen",
+    strcmp(exec1(remoteDb, "SELECT count(*) FROM dolt_log"), "2")==0);
+
+  sqlite3_close(remoteDb);
   remove_db(localPath);
   remove_db(remotePath);
 }
@@ -5342,6 +5409,7 @@ static void run_chunk_store_rollback_restores_refs_hash(void){
 
 static void run_chunk_store_commit_failure_restores_refs_hash(void){
   ChunkStore cs;
+  ChunkStore reopened;
   ProllyHash emptyHash;
   ProllyHash refsHashBefore;
   ProllyHash foundHash;
@@ -5384,6 +5452,8 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
   check("commit_failure_surfaces_for_refs_commit_failure", rc!=SQLITE_OK);
   check("refs_hash_restored_on_commit_failure",
         memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
+  check("in_memory_tag_absent_after_commit_failure",
+        chunkStoreFindTag(&cs, "v1", &foundHash)!=SQLITE_OK);
 
   chunkStoreRollback(&cs);
   check("reload_refs_after_commit_failure_rollback",
@@ -5392,6 +5462,14 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
         chunkStoreFindTag(&cs, "v1", &foundHash)!=SQLITE_OK);
 
   chunkStoreClose(&cs);
+  check("reopen_store_after_refs_commit_failure",
+        chunkStoreOpen(&reopened, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("reopened_store_has_no_failed_tag",
+        chunkStoreFindTag(&reopened, "v1", &foundHash)!=SQLITE_OK);
+  check("reopened_store_keeps_default_branch",
+        reopened.zDefaultBranch!=0 && strcmp(reopened.zDefaultBranch, "main")==0);
+  chunkStoreClose(&reopened);
   remove_db(dbpath);
 }
 
@@ -5781,6 +5859,7 @@ static const RegressionCase aCases[] = {
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },
+  { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },
   { "clone_persist_failure", "Clone Persist Failure Test", run_clone_persist_failure },
   { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
