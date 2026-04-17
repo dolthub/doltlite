@@ -8,8 +8,6 @@
 #include "doltlite_internal.h"
 #include "doltlite_ignore.h"
 
-extern void doltliteGetSessionStaged(sqlite3*, ProllyHash*);
-
 typedef struct StatusRow StatusRow;
 struct StatusRow {
   char *zName;
