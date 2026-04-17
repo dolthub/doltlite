@@ -104,6 +104,13 @@ run_test_match "conflict_base_decoded" "SELECT base_name FROM dolt_conflicts_t;"
 run_test_match "conflict_our_decoded" "SELECT our_name FROM dolt_conflicts_t;" "CHARLIE" "$DB7"
 run_test_match "conflict_their_decoded" "SELECT their_name FROM dolt_conflicts_t;" "BOB" "$DB7"
 
+# Temp table shadowing the user table must not affect dolt_conflicts_<table>
+# projection. The conflict view should derive its schema from main.t.
+echo "CREATE TEMP TABLE t(fake TEXT PRIMARY KEY);" | $DOLTLITE "$DB7" > /dev/null 2>&1
+run_test_match "conflict_temp_shadow_base_ignored" "SELECT base_name FROM dolt_conflicts_t;" "alice" "$DB7"
+run_test_match "conflict_temp_shadow_our_ignored" "SELECT our_name FROM dolt_conflicts_t;" "CHARLIE" "$DB7"
+run_test_match "conflict_temp_shadow_their_ignored" "SELECT their_name FROM dolt_conflicts_t;" "BOB" "$DB7"
+
 # --- Multiple conflicting rows in one table ---
 DB8=/tmp/test_conflicts8_$$.db; rm -f "$DB8"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
