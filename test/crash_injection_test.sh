@@ -606,7 +606,7 @@ for N in 1 2 3 4 5 6 7 8 9 10 11 12; do
   REMOTE_COUNT=$("$DOLTLITE" "$DB_LOCAL" "SELECT count(*) FROM dolt_remotes;" 2>/dev/null)
   ROW_COUNT=$("$DOLTLITE" "$DB_LOCAL" "SELECT count(*) FROM t;" 2>/dev/null)
 
-  if [ "$TABLE_COUNT" = "0" ] && [ "$REMOTE_COUNT" = "0" ]; then
+  if [ "$TABLE_COUNT" = "0" ] && { [ -z "$REMOTE_COUNT" ] || [ "$REMOTE_COUNT" = "0" ]; }; then
     pass_name "s10_write${N}_clone_crash_restores_empty"
   elif [ "$TABLE_COUNT" = "1" ] && [ "$REMOTE_COUNT" = "1" ] && [ "$ROW_COUNT" = "1" ]; then
     if [ "$RC" = "99" ]; then
