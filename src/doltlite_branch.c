@@ -4,6 +4,7 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include "doltlite_ancestor.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 #include <string.h>
@@ -22,6 +23,10 @@ struct BranchMutationCtx {
   int isDelete;
   int force;
 };
+
+static int branchNameEmpty(const char *zName){
+  return zName==0 || zName[0]==0;
+}
 
 static void branchResultError(
   sqlite3_context *ctx,
@@ -163,12 +168,29 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   switch( mode ){
     case MODE_DELETE: {
       BranchMutationCtx m;
+      ProllyHash branchHead, currentHead, ancestor;
       if( nPositional<1 ){
+        sqlite3_result_error(ctx, "branch name required", -1); return;
+      }
+      if( branchNameEmpty(aPositional[0]) ){
         sqlite3_result_error(ctx, "branch name required", -1); return;
       }
       if( strcmp(aPositional[0], doltliteGetSessionBranch(db))==0 ){
         sqlite3_result_error(ctx, "cannot delete the current branch", -1);
         return;
+      }
+      if( !force ){
+        rc = chunkStoreFindBranch(cs, aPositional[0], &branchHead);
+        if( rc!=SQLITE_OK ){
+          branchResultError(ctx, rc, "branch not found", 0);
+          return;
+        }
+        doltliteGetSessionHead(db, &currentHead);
+        rc = doltliteFindAncestor(db, &currentHead, &branchHead, &ancestor);
+        if( rc!=SQLITE_OK || prollyHashCompare(&ancestor, &branchHead)!=0 ){
+          sqlite3_result_error(ctx, "branch is not fully merged", -1);
+          return;
+        }
       }
       memset(&m, 0, sizeof(m));
       m.zName = aPositional[0];
@@ -185,6 +207,10 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       BranchCopyCtx m;
       if( nPositional<2 ){
         sqlite3_result_error(ctx, "copy requires source and destination", -1);
+        return;
+      }
+      if( branchNameEmpty(aPositional[0]) || branchNameEmpty(aPositional[1]) ){
+        sqlite3_result_error(ctx, "branch name required", -1);
         return;
       }
       memset(&m, 0, sizeof(m));
@@ -204,6 +230,10 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       int renamingCurrent;
       if( nPositional<2 ){
         sqlite3_result_error(ctx, "move requires source and destination", -1);
+        return;
+      }
+      if( branchNameEmpty(aPositional[0]) || branchNameEmpty(aPositional[1]) ){
+        sqlite3_result_error(ctx, "branch name required", -1);
         return;
       }
       memset(&m, 0, sizeof(m));
@@ -229,6 +259,9 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         sqlite3_result_error(ctx, "branch name required", -1); return;
       }
       zName = aPositional[0];
+      if( branchNameEmpty(zName) ){
+        sqlite3_result_error(ctx, "branch name required", -1); return;
+      }
       zStart = nPositional>=2 ? aPositional[1] : 0;
       memset(&m, 0, sizeof(m));
       if( zStart ){
@@ -564,7 +597,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   if( strcmp(zBranch, "-b")==0 ){
     if( argc<2 ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
     zBranch = (const char*)sqlite3_value_text(argv[1]);
-    if( !zBranch ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
+    if( branchNameEmpty(zBranch) ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
 
     doltliteGetSessionHead(db, &branchCreate.head);
     if( prollyHashIsEmpty(&branchCreate.head) ){

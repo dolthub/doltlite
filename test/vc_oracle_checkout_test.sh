@@ -264,6 +264,11 @@ $SEED
 SELECT dolt_checkout('-b');
 "
 
+oracle_error "dash_b_empty_name" "
+$SEED
+SELECT dolt_checkout('-b', '');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

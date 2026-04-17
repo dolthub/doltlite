@@ -29,7 +29,8 @@ run_test "feature_two_rows" "SELECT count(*) FROM t;" "2" "$DB"
 run_test_match "dup_branch" "SELECT dolt_branch('feature');" "already exists" "$DB"
 run_test_match "del_current" "SELECT dolt_branch('-d','feature');" "cannot delete" "$DB"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "delete_branch" "SELECT dolt_branch('-d','feature');" "0" "$DB"
+run_test_match "delete_unmerged_branch" "SELECT dolt_branch('-d','feature');" "not fully merged" "$DB"
+run_test "force_delete_branch" "SELECT dolt_branch('-D','feature');" "0" "$DB"
 run_test "one_branch" "SELECT count(*) FROM dolt_branches;" "1" "$DB"
 run_test_match "checkout_gone" "SELECT dolt_checkout('feature');" "no such branch or table" "$DB"
 
@@ -99,6 +100,12 @@ run_test "checkout_b_main_data" "SELECT count(*) FROM t;" "1" "$DB9"
 
 # checkout -b with existing name errors
 run_test_match "checkout_b_dup" "SELECT dolt_checkout('-b','main');" "already exists" "$DB9"
+run_test_match "create_empty_branch_name" "SELECT dolt_branch('');" "branch name required" "$DB9"
+run_test_match "copy_empty_source" "SELECT dolt_branch('-c','','copy');" "branch name required" "$DB9"
+run_test_match "copy_empty_dest" "SELECT dolt_branch('-c','main','');" "branch name required" "$DB9"
+run_test_match "move_empty_source" "SELECT dolt_branch('-m','','renamed');" "branch name required" "$DB9"
+run_test_match "move_empty_dest" "SELECT dolt_branch('-m','main','');" "branch name required" "$DB9"
+run_test_match "checkout_b_empty_name" "SELECT dolt_checkout('-b','');" "branch name required" "$DB9"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9"
 echo ""
