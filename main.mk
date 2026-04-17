@@ -2469,6 +2469,15 @@ doltlite-crashtest$(T.exe): $(T.tcl.env.sh) has_tclsh85 shell_renamed.c $(TOP)/s
 		-L/usr/local/lib -L/opt/homebrew/lib \
 		$(LDFLAGS.libsqlite3) $(LDFLAGS.readline)
 
+crash_recovery_test_sqlite_test$(T.exe): $(T.tcl.env.sh) has_tclsh85 $(TOP)/test/crash_recovery_test.c $(LIBOBJS0) $(TOP)/ext/fts3/fts3_term.c
+	$(T.link.tcl) -DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1 \
+		-DSQLITE_CORE -DBUILD_sqlite -DSQLITE_PRIVATE="" -o $@ \
+		$(TOP)/test/crash_recovery_test.c $(TOP)/ext/fts3/fts3_term.c $(LIBOBJS0) \
+		$(SHELL_OPT) \
+		$$TCL_LIB_SPEC $$TCL_INCLUDE_SPEC $$TCL_LIBS \
+		-L/usr/local/lib -L/opt/homebrew/lib \
+		-lz -lpthread -lm
+
 #
 # libdoltlite: static and shared libraries with prolly tree engine.
 # These use the non-amalgamation objects (LIBOBJS0) which include the
