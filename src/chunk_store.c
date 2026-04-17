@@ -734,6 +734,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   i64 pos;
   int nPendingBefore = cs->nPending;
   int nRootedPending = cs->nPending;
+  int nRootRecordsSeen = 0;
   ChunkStore tmpRefs;
   int haveTmpRefs = 0;
   int rc = SQLITE_OK;
@@ -749,7 +750,21 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     walSize = fileSize - cs->iWalOffset;
     cs->iFileSize = fileSize;
   }
-  if( walSize <= 0 ) return SQLITE_OK;
+  if( walSize <= 0 ){
+    /* WAL region is empty. Two possibilities:
+    **   (a) Compacted database — all data in main body, manifest
+    **       and index are authoritative. cs->nIndex > 0.
+    **   (b) Brand-new file — manifest written but crash before
+    **       any WAL data. cs->nIndex == 0 and cs->nChunks == 0.
+    ** For (b), the manifest's refs hash may point to a chunk that
+    ** was prepared but never committed. Reset it. For (a), the
+    ** manifest is correct — leave it alone. */
+    if( updateManifest && cs->nIndex==0 && cs->nChunks==0
+     && !prollyHashIsEmpty(&cs->refsHash) ){
+      memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
+    }
+    return SQLITE_OK;
+  }
 
   walData = (u8*)sqlite3_malloc64(walSize);
   if( !walData ) return SQLITE_NOMEM;
@@ -773,16 +788,17 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
       ProllyHash hash;
       u32 len;
       if( pos + 20 + 4 > walSize ){
-        rc = SQLITE_CORRUPT;
-        goto replay_error;
+        /* Truncated chunk header — crash during write. Stop
+        ** scanning and use the last valid root record. */
+        break;
       }
       memcpy(&hash, walData + pos, 20);
       pos += 20;
       len = CS_READ_U32(walData + pos);
       pos += 4;
       if( pos < 0 || (u64)pos + len > (u64)walSize ){
-        rc = SQLITE_CORRUPT;
-        goto replay_error;
+        /* Truncated chunk data — partial write. Same treatment. */
+        break;
       }
 
       {
@@ -802,15 +818,19 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
 
     } else if( tag == CS_WAL_TAG_ROOT ){
       if( pos + CHUNK_MANIFEST_SIZE > walSize ){
-        rc = SQLITE_CORRUPT;
-        goto replay_error;
+        /* Truncated root record — crash during the commit
+        ** point write. Stop and use the previous root. */
+        break;
       }
       if( updateManifest ){
         u8 *m = walData + pos;
         u32 magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
-          rc = SQLITE_CORRUPT;
-          goto replay_error;
+          /* Corrupt root record — torn write garbled the
+          ** magic. Content-addressing protects us: any refs
+          ** hash read from this record would fail to resolve.
+          ** Stop scanning. */
+          break;
         }
 
         cs->nChunks = (int)CS_READ_U32(m + 28);
@@ -820,14 +840,30 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
       }
       pos += CHUNK_MANIFEST_SIZE;
       nRootedPending = cs->nPending;
+      nRootRecordsSeen++;
 
     } else {
+      /* Unknown tag. This is genuine WAL corruption (bit-rot or
+      ** tampering), not a crash truncation — truncated records
+      ** are caught above by the length checks. Report corrupt. */
       rc = SQLITE_CORRUPT;
       goto replay_error;
     }
   }
 
   cs->nPending = nRootedPending;
+
+  /* If no root records were found in the WAL AND this is a new
+  ** database (no compacted chunks in the index), the manifest's
+  ** refs hash is unconfirmed. Reset it. For databases that went
+  ** through GC (nIndex > 0), the WAL may be empty because all
+  ** data was compacted into the main body — the manifest is
+  ** authoritative in that case. */
+  if( nRootRecordsSeen == 0 && updateManifest
+   && nPendingBefore == 0 && cs->nIndex == 0 ){
+    memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
+    cs->nChunks = 0;
+  }
 
   if( cs->nPending > 0 ){
     ChunkIndexEntry *aMerged = 0;
@@ -1909,10 +1945,37 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc!=SQLITE_OK ) goto commit_done;
   }
 
+  /* Crash injection for durability tests. When the environment
+  ** variable DOLTLITE_CRASH_WRITE is set to N, the Nth
+  ** sqlite3OsWrite call inside this commit will _exit(99)
+  ** WITHOUT flushing buffers — simulating a power-loss crash
+  ** at that exact point. The test harness then reopens the
+  ** database and verifies that either the old committed state
+  ** is intact or the new commit landed fully (never partial).
+  ** Only active under SQLITE_TEST builds. */
+#ifdef SQLITE_TEST
+  {
+    static int crashWriteTarget = -2; /* -2 = not yet checked */
+    static int crashWriteCount = 0;
+    if( crashWriteTarget == -2 ){
+      const char *zEnv = getenv("DOLTLITE_CRASH_WRITE");
+      crashWriteTarget = zEnv ? atoi(zEnv) : -1;
+    }
+    if( crashWriteTarget > 0 ) crashWriteCount = 0;
+#define CRASH_CHECK_WRITE() do{ \
+  if( crashWriteTarget>0 && ++crashWriteCount>=crashWriteTarget ){ \
+    _exit(99); \
+  } \
+}while(0)
+#else
+#define CRASH_CHECK_WRITE() ((void)0)
+#endif
+
   if( fileSize == 0 ){
     u8 manifest[CHUNK_MANIFEST_SIZE];
     cs->iWalOffset = CHUNK_MANIFEST_SIZE;
     csSerializeManifest(cs, manifest);
+    CRASH_CHECK_WRITE();
     rc = sqlite3OsWrite(cs->pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
     if( rc != SQLITE_OK ) goto commit_done;
     fileSize = CHUNK_MANIFEST_SIZE;
@@ -1930,6 +1993,7 @@ static int csCommitToFile(ChunkStore *cs){
     CS_WRITE_U32(recHdr + 21, (u32)pe->size);
 
     bufOff = pe->offset + 4;
+    CRASH_CHECK_WRITE();
     rc = sqlite3OsWrite(cs->pFile, recHdr, 25, writeOff);
     if( rc != SQLITE_OK ) goto commit_done;
     writeOff += 25;
@@ -1939,6 +2003,7 @@ static int csCommitToFile(ChunkStore *cs){
       int remaining = pe->size;
       while( remaining > 0 && rc==SQLITE_OK ){
         int toWrite = remaining > 65536 ? 65536 : remaining;
+        CRASH_CHECK_WRITE();
         rc = sqlite3OsWrite(cs->pFile, pSrc, toWrite, writeOff);
         pSrc += toWrite;
         writeOff += toWrite;
@@ -1953,13 +2018,20 @@ static int csCommitToFile(ChunkStore *cs){
     u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
     rootRec[0] = CS_WAL_TAG_ROOT;
     csSerializeManifest(cs, rootRec + 1);
+    CRASH_CHECK_WRITE();
     rc = sqlite3OsWrite(cs->pFile, rootRec, sizeof(rootRec), writeOff);
     if( rc != SQLITE_OK ) goto commit_done;
     writeOff += sizeof(rootRec);
   }
 
 
+  CRASH_CHECK_WRITE();
   rc = sqlite3OsSync(cs->pFile, SQLITE_SYNC_NORMAL);
+
+#ifdef SQLITE_TEST
+  }
+#undef CRASH_CHECK_WRITE
+#endif
   if( rc != SQLITE_OK ) goto commit_done;
 
   cs->iFileSize = writeOff;
