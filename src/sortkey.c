@@ -269,31 +269,26 @@ int sortKeyFromRecordPrefixCollBuffer(
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
   int nSize;
-  u8 *pBuf;
+  int nEstimate;
 
   *pnOut = 0;
 
-  nSize = sortKeyEncode(pRec, nRec, NULL, nKeyField, pKeyInfo);
-  if( nSize < 0 ) return SQLITE_CORRUPT;
-  if( nSize == 0 ){
-    if( *pnAlloc < 1 ){
-      u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, 1);
-      if( !pNew ) return SQLITE_NOMEM;
-      *ppBuf = pNew;
-      *pnAlloc = 1;
-    }
-    *pnOut = 0;
-    return SQLITE_OK;
-  }
+  /* Upper bound: worst case is a record of serial-type-8 fields
+  ** (integer zero) — each is 1 header byte, 0 data bytes, but
+  ** encodes to 9 sort key bytes. So the expansion factor per
+  ** record byte is up to 9. Use 9*nRec as the safe bound. */
+  nEstimate = 9 * nRec + 16;
+  if( nEstimate < 64 ) nEstimate = 64;
 
-  if( *pnAlloc < nSize ){
-    u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nSize);
+  if( *pnAlloc < nEstimate ){
+    u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nEstimate);
     if( !pNew ) return SQLITE_NOMEM;
     *ppBuf = pNew;
-    *pnAlloc = nSize;
+    *pnAlloc = nEstimate;
   }
-  pBuf = *ppBuf;
-  sortKeyEncode(pRec, nRec, pBuf, nKeyField, pKeyInfo);
+
+  nSize = sortKeyEncode(pRec, nRec, *ppBuf, nKeyField, pKeyInfo);
+  if( nSize < 0 ) return SQLITE_CORRUPT;
   *pnOut = nSize;
   return SQLITE_OK;
 }
