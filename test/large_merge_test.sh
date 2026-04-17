@@ -375,6 +375,72 @@ fi
 
 echo ""
 
+# ── Scenario 6b: Repeated merge abort/retry across multiple tables ──
+echo "--- Scenario 6b: Repeated merge abort/retry across multiple tables ---"
+
+DB="$TMPROOT/s6b.db"
+rm -f "$DB"
+
+"$DOLTLITE" "$DB" "$(
+  echo "CREATE TABLE t1(id INTEGER PRIMARY KEY, v TEXT);"
+  echo "CREATE TABLE t2(id INTEGER PRIMARY KEY, v TEXT);"
+  echo "CREATE TABLE t3(id INTEGER PRIMARY KEY, v TEXT);"
+  gen_inserts 1 1000 base | sed 's/INTO t/INTO t1/'
+  gen_inserts 1 1000 base | sed 's/INTO t/INTO t2/'
+  gen_inserts 1 1000 base | sed 's/INTO t/INTO t3/'
+  echo "SELECT dolt_commit('-Am','base');"
+)" >/dev/null 2>&1
+
+"$DOLTLITE" "$DB" "$(
+  echo "SELECT dolt_branch('feat');"
+  echo "SELECT dolt_checkout('feat');"
+  echo "BEGIN;"
+  gen_updates 201 500 feat | sed 's/UPDATE t/UPDATE t1/'
+  gen_updates 201 500 feat | sed 's/UPDATE t/UPDATE t2/'
+  gen_updates 201 500 feat | sed 's/UPDATE t/UPDATE t3/'
+  echo "COMMIT;"
+  echo "SELECT dolt_commit('-Am','feat conflicts');"
+  echo "SELECT dolt_checkout('main');"
+)" >/dev/null 2>&1
+
+"$DOLTLITE" "$DB" "$(
+  echo "BEGIN;"
+  gen_updates 201 500 main | sed 's/UPDATE t/UPDATE t1/'
+  gen_updates 201 500 main | sed 's/UPDATE t/UPDATE t2/'
+  gen_updates 201 500 main | sed 's/UPDATE t/UPDATE t3/'
+  echo "COMMIT;"
+  echo "SELECT dolt_commit('-Am','main conflicts');"
+)" >/dev/null 2>&1
+
+for attempt in 1 2 3; do
+  "$DOLTLITE" "$DB" "SELECT dolt_merge('feat');" >/dev/null 2>&1
+  CONFLICTS=$("$DOLTLITE" "$DB" "SELECT count(*) FROM dolt_conflicts;" 2>/dev/null)
+  V1=$("$DOLTLITE" "$DB" "SELECT v FROM t1 WHERE id=250;" 2>/dev/null)
+  V2=$("$DOLTLITE" "$DB" "SELECT v FROM t2 WHERE id=250;" 2>/dev/null)
+  V3=$("$DOLTLITE" "$DB" "SELECT v FROM t3 WHERE id=250;" 2>/dev/null)
+  if [ "$CONFLICTS" = "3" ] && [ "$V1" = "main_250" ] && [ "$V2" = "main_250" ] && [ "$V3" = "main_250" ]; then
+    pass_name "s6b_attempt_${attempt}_merge_conflicts"
+  else
+    fail_name "s6b_attempt_${attempt}_merge_conflicts"
+    echo "    conflicts=$CONFLICTS t1=$V1 t2=$V2 t3=$V3"
+  fi
+
+  ABORT=$("$DOLTLITE" "$DB" "SELECT dolt_merge('--abort');" 2>/dev/null)
+  CONFLICTS_AFTER=$("$DOLTLITE" "$DB" "SELECT count(*) FROM dolt_conflicts;" 2>/dev/null)
+  V1_AFTER=$("$DOLTLITE" "$DB" "SELECT v FROM t1 WHERE id=250;" 2>/dev/null)
+  V2_AFTER=$("$DOLTLITE" "$DB" "SELECT v FROM t2 WHERE id=250;" 2>/dev/null)
+  V3_AFTER=$("$DOLTLITE" "$DB" "SELECT v FROM t3 WHERE id=250;" 2>/dev/null)
+  if [ "$ABORT" = "0" ] && [ "$CONFLICTS_AFTER" = "0" ] \
+     && [ "$V1_AFTER" = "main_250" ] && [ "$V2_AFTER" = "main_250" ] && [ "$V3_AFTER" = "main_250" ]; then
+    pass_name "s6b_attempt_${attempt}_abort_restores"
+  else
+    fail_name "s6b_attempt_${attempt}_abort_restores"
+    echo "    abort=$ABORT conflicts_after=$CONFLICTS_AFTER t1=$V1_AFTER t2=$V2_AFTER t3=$V3_AFTER"
+  fi
+done
+
+echo ""
+
 if [ "$QUICK" = "1" ]; then
   echo "(skipping 50K+ row scenarios in --quick mode)"
   echo ""

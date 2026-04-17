@@ -341,6 +341,54 @@ UPDATE dolt_rebase SET action = 'fixup' WHERE commit_message = 'f3';
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', message) FROM dolt_log;"
 
+# Longer plan with mixed actions to stress replay ordering and state
+# transitions. We intentionally combine reorder, drop, squash, reword,
+# and fixup in one plan.
+LONG_INTERACTIVE_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+INSERT INTO t VALUES (3, 3);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f2');
+INSERT INTO t VALUES (4, 4);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f3');
+INSERT INTO t VALUES (5, 5);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f4');
+INSERT INTO t VALUES (6, 6);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f5');
+INSERT INTO t VALUES (7, 7);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f6');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (100, 100);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
+SELECT dolt_checkout('feat');
+"
+
+oracle "interactive_long_mixed_plan_log" "
+$LONG_INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET rebase_order = 0.5 WHERE commit_message = 'f6';
+UPDATE dolt_rebase SET action = 'drop' WHERE commit_message = 'f2';
+UPDATE dolt_rebase SET action = 'squash' WHERE commit_message = 'f4';
+UPDATE dolt_rebase SET action = 'reword', commit_message = 'f5 renamed' WHERE commit_message = 'f5';
+UPDATE dolt_rebase SET action = 'fixup' WHERE commit_message = 'f3';
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', REPLACE(message, CHAR(10), ' | ')) FROM dolt_log;"
+
+oracle "interactive_long_mixed_plan_table" "
+$LONG_INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+UPDATE dolt_rebase SET rebase_order = 0.5 WHERE commit_message = 'f6';
+UPDATE dolt_rebase SET action = 'drop' WHERE commit_message = 'f2';
+UPDATE dolt_rebase SET action = 'squash' WHERE commit_message = 'f4';
+UPDATE dolt_rebase SET action = 'reword', commit_message = 'f5 renamed' WHERE commit_message = 'f5';
+UPDATE dolt_rebase SET action = 'fixup' WHERE commit_message = 'f3';
+SELECT dolt_rebase('--continue');
+" "SELECT CONCAT('LOG|', id) FROM t ORDER BY id;"
+
 # --abort leaves the original branch untouched and restores us to it.
 oracle "interactive_abort_log" "
 $INTERACTIVE_SETUP
