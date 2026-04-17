@@ -263,8 +263,11 @@ static u8 *tryCellMerge(
 
         winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
       }else{
-
-        continue;
+        /* Both sides dropped this field (baseHas && !oursHas &&
+        ** !theirsHas), or the impossible (0,0,0) case. Field-level
+        ** merge can't represent a dropped field in the output —
+        ** fall back to row-level conflict handling. */
+        sqlite3_free(winners); goto fail;
       }
     }
 
