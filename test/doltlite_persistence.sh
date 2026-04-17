@@ -290,7 +290,7 @@ SELECT dolt_checkout('temp');
 INSERT INTO t VALUES(2,'temp');
 SELECT dolt_commit('-A','-m','temp');
 SELECT dolt_checkout('main');
-SELECT dolt_branch('-d','temp');
+SELECT dolt_branch('-D','temp');
 SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "gc_data" "SELECT v FROM t WHERE id=1;" "keep" "$DB"

@@ -129,7 +129,7 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_BEFORE=$(db_size "$DB")
 
-echo "SELECT dolt_branch('-d','big');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('-D','big');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_AFTER=$(db_size "$DB")

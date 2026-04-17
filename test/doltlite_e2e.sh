@@ -158,7 +158,7 @@ run_test_match "e2e_commit_all" "SELECT dolt_commit('-A','-m','Add Dave');" "^[0
 
 run_test "e2e_branch_count" "SELECT count(*) FROM dolt_branches;" "3" "$DB"
 
-echo "SELECT dolt_branch('-d','hotfix');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('-D','hotfix');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "e2e_deleted_branch" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
 run_test_match "e2e_delete_gone" "SELECT dolt_checkout('hotfix');" "no such branch or table" "$DB"
 

@@ -143,6 +143,28 @@ SELECT dolt_branch('feature');
 SELECT dolt_branch('-D', 'feature');
 "
 
+oracle_error "delete_unmerged_requires_force" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+SELECT dolt_branch('-d', 'feature');
+"
+
+oracle "delete_unmerged_force" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+SELECT dolt_branch('-D', 'feature');
+"
+
 echo "--- copy ---"
 
 oracle "copy_from_main" "
@@ -211,6 +233,31 @@ oracle_error "create_duplicate" "
 $SEED
 SELECT dolt_branch('feature');
 SELECT dolt_branch('feature');
+"
+
+oracle_error "create_empty_name" "
+$SEED
+SELECT dolt_branch('');
+"
+
+oracle_error "copy_empty_source" "
+$SEED
+SELECT dolt_branch('-c', '', 'dest');
+"
+
+oracle_error "copy_empty_dest" "
+$SEED
+SELECT dolt_branch('-c', 'main', '');
+"
+
+oracle_error "move_empty_source" "
+$SEED
+SELECT dolt_branch('-m', '', 'dest');
+"
+
+oracle_error "move_empty_dest" "
+$SEED
+SELECT dolt_branch('-m', 'main', '');
 "
 
 oracle_error "no_args" "
