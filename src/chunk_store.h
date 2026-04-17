@@ -25,7 +25,7 @@
 #include "prolly_hash.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443  /* "DLTC" little-endian */
-#define CHUNK_STORE_VERSION 8
+#define CHUNK_STORE_VERSION 9
 #define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32     /* hash(20) + offset(8) + size(4) */
 

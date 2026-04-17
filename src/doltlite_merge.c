@@ -12,6 +12,7 @@
 #include "prolly_cache.h"
 #include "doltlite_record.h"
 #include "doltlite_internal.h"
+#include "sortkey.h"
 #include <string.h>
 #include <ctype.h>
 
@@ -27,10 +28,166 @@ static struct TableEntry *findTableEntry(
   return doltliteFindTableByNumber(aEntries, nEntries, iTable);
 }
 
+/* Per-index state carried through the merge callback so that
+** index edits are applied incrementally from the main table diff
+** rather than via independent three-way merge. */
+typedef struct MergeIndexInfo MergeIndexInfo;
+struct MergeIndexInfo {
+  Pgno iTable;           /* catalog iTable for this index */
+  ProllyHash oursRoot;   /* ours-side index root */
+  ProllyHash mergedRoot; /* result (filled after flush) */
+  ProllyMutMap *pEdits;  /* accumulated index edits */
+  int nColumn;           /* number of index columns (excl PK tail) */
+  i16 *aiColumn;         /* column mapping: index position → table col */
+  KeyInfo *pKeyInfo;     /* collation info for sort key encoding */
+};
+
+/* Build an index sort key from a table row record.
+** Extracts the columns specified by aiColumn, appends the remaining
+** columns (the PK tail), builds a new record, and encodes it as a
+** sort key with all fields (matching the insert encoding). */
+static int buildIndexSortKey(
+  const u8 *pRec, int nRec,
+  const i16 *aiColumn, int nIdxCol,
+  KeyInfo *pKeyInfo,
+  u8 **ppKey, int *pnKey
+){
+  DoltliteRecordInfo info;
+  u8 *pIdxRec = 0;
+  int nIdxRec = 0;
+  int rc;
+
+  doltliteParseRecord(pRec, nRec, &info);
+  if( info.nField==0 ) return SQLITE_CORRUPT;
+
+  /* Build a new record with fields in index order (index cols +
+  ** all remaining cols as the PK tail). The SQLite index record
+  ** format is: [header][field1][field2]... where the header
+  ** contains varint serial types. */
+  {
+    int i, hdrLen = 0, bodyLen = 0;
+    int nTotal;
+    u8 *p;
+
+    /* Compute total number of fields: index cols + all table cols
+    ** (the full record is the value in the prolly tree, and all
+    ** fields go into the sort key for uniqueness). We reorder:
+    ** first the aiColumn fields, then all remaining fields. */
+    int nOutField = info.nField;
+    int *aFieldOrder = sqlite3_malloc(nOutField * sizeof(int));
+    u8 *aUsed = sqlite3_malloc(info.nField);
+    if( !aFieldOrder || !aUsed ){
+      sqlite3_free(aFieldOrder);
+      sqlite3_free(aUsed);
+      return SQLITE_NOMEM;
+    }
+    memset(aUsed, 0, info.nField);
+
+    /* First: index columns in index order */
+    {
+      int out = 0;
+      for(i=0; i<nIdxCol; i++){
+        int col = aiColumn[i];
+        if( col>=0 && col<info.nField ){
+          aFieldOrder[out++] = col;
+          aUsed[col] = 1;
+        }
+      }
+      /* Then: remaining columns (PK tail + any others) */
+      for(i=0; i<info.nField; i++){
+        if( !aUsed[i] ) aFieldOrder[out++] = i;
+      }
+      nOutField = out;
+    }
+
+    /* Measure header and body sizes */
+    for(i=0; i<nOutField; i++){
+      int col = aFieldOrder[i];
+      int st = info.aType[col];
+      int flen;
+      hdrLen += sqlite3VarintLen(st);
+      /* Compute field length from serial type */
+      if( st<=0 ){ flen = 0; }
+      else if( st==1 ){ flen = 1; }
+      else if( st==2 ){ flen = 2; }
+      else if( st==3 ){ flen = 3; }
+      else if( st==4 ){ flen = 4; }
+      else if( st==5 ){ flen = 6; }
+      else if( st==6 || st==7 ){ flen = 8; }
+      else if( st==8 || st==9 ){ flen = 0; }
+      else if( st>=12 && (st&1)==0 ){ flen = (st-12)/2; }
+      else if( st>=13 && (st&1)==1 ){ flen = (st-13)/2; }
+      else{ flen = 0; }
+      bodyLen += flen;
+    }
+
+    /* Header size includes the header-size varint itself */
+    {
+      int tentative = hdrLen + 1;
+      if( tentative > 126 ) tentative++;
+      hdrLen = tentative;
+    }
+
+    nTotal = hdrLen + bodyLen;
+    pIdxRec = sqlite3_malloc(nTotal);
+    if( !pIdxRec ){
+      sqlite3_free(aFieldOrder);
+      sqlite3_free(aUsed);
+      return SQLITE_NOMEM;
+    }
+
+    /* Write header */
+    p = pIdxRec;
+    {
+      int hs = hdrLen;
+      if( hs <= 0x7f ){ *p++ = (u8)hs; }
+      else{ *p++ = (u8)(0x80|(hs>>7)); *p++ = (u8)(hs&0x7f); }
+    }
+    for(i=0; i<nOutField; i++){
+      int col = aFieldOrder[i];
+      int st = info.aType[col];
+      p += sqlite3PutVarint(p, st);
+    }
+
+    /* Write body */
+    for(i=0; i<nOutField; i++){
+      int col = aFieldOrder[i];
+      int st = info.aType[col];
+      int flen;
+      if( st<=0 ){ flen = 0; }
+      else if( st==1 ){ flen = 1; }
+      else if( st==2 ){ flen = 2; }
+      else if( st==3 ){ flen = 3; }
+      else if( st==4 ){ flen = 4; }
+      else if( st==5 ){ flen = 6; }
+      else if( st==6 || st==7 ){ flen = 8; }
+      else if( st==8 || st==9 ){ flen = 0; }
+      else if( st>=12 && (st&1)==0 ){ flen = (st-12)/2; }
+      else if( st>=13 && (st&1)==1 ){ flen = (st-13)/2; }
+      else{ flen = 0; }
+      if( flen>0 ){
+        memcpy(p, pRec + info.aOffset[col], flen);
+        p += flen;
+      }
+    }
+    nIdxRec = (int)(p - pIdxRec);
+    sqlite3_free(aFieldOrder);
+    sqlite3_free(aUsed);
+  }
+
+  /* Encode the projected record as a sort key (all fields). */
+  rc = sortKeyFromRecordPrefixColl(pIdxRec, nIdxRec, 0, pKeyInfo,
+                                    ppKey, pnKey);
+  sqlite3_free(pIdxRec);
+  return rc;
+}
+
 typedef struct RowMergeCtx RowMergeCtx;
 struct RowMergeCtx {
   ProllyMutMap *pEdits;
   u8 isIntKey;
+  MergeIndexInfo *aIndexes;
+  int nIndexes;
   int nConflicts;
 
   struct ConflictRow {
@@ -311,6 +468,23 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pChange->pTheirVal, pChange->nTheirVal);
+      /* Apply add to each secondary index. */
+      if( rc==SQLITE_OK && ctx->nIndexes>0
+       && pChange->pTheirVal && pChange->nTheirVal>0 ){
+        int ix;
+        for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
+          u8 *pIK = 0; int nIK = 0;
+          MergeIndexInfo *mi = &ctx->aIndexes[ix];
+          rc = buildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
+                                 mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                 &pIK, &nIK);
+          if( rc==SQLITE_OK ){
+            rc = prollyMutMapInsert(mi->pEdits, pIK, nIK, 0,
+                                    pChange->pTheirVal, pChange->nTheirVal);
+            sqlite3_free(pIK);
+          }
+        }
+      }
       break;
 
     case THREE_WAY_RIGHT_MODIFY:
@@ -318,12 +492,57 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pChange->pTheirVal, pChange->nTheirVal);
+      /* Update each index: delete old entry, insert new. */
+      if( rc==SQLITE_OK && ctx->nIndexes>0 ){
+        int ix;
+        for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
+          MergeIndexInfo *mi = &ctx->aIndexes[ix];
+          if( pChange->pBaseVal && pChange->nBaseVal>0 ){
+            u8 *pOK = 0; int nOK = 0;
+            rc = buildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
+                                   mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                   &pOK, &nOK);
+            if( rc==SQLITE_OK ){
+              rc = prollyMutMapDelete(mi->pEdits, pOK, nOK, 0);
+              sqlite3_free(pOK);
+            }
+          }
+          if( rc==SQLITE_OK
+           && pChange->pTheirVal && pChange->nTheirVal>0 ){
+            u8 *pNK = 0; int nNK = 0;
+            rc = buildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
+                                   mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                   &pNK, &nNK);
+            if( rc==SQLITE_OK ){
+              rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0,
+                                      pChange->pTheirVal, pChange->nTheirVal);
+              sqlite3_free(pNK);
+            }
+          }
+        }
+      }
       break;
 
     case THREE_WAY_RIGHT_DELETE:
 
       rc = prollyMutMapDelete(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey);
+      /* Delete from each index. */
+      if( rc==SQLITE_OK && ctx->nIndexes>0
+       && pChange->pBaseVal && pChange->nBaseVal>0 ){
+        int ix;
+        for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
+          u8 *pIK = 0; int nIK = 0;
+          MergeIndexInfo *mi = &ctx->aIndexes[ix];
+          rc = buildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
+                                 mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                 &pIK, &nIK);
+          if( rc==SQLITE_OK ){
+            rc = prollyMutMapDelete(mi->pEdits, pIK, nIK, 0);
+            sqlite3_free(pIK);
+          }
+        }
+      }
       break;
 
     case THREE_WAY_CONVERGENT:
@@ -349,6 +568,35 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         rc = prollyMutMapInsert(ctx->pEdits,
             pChange->pKey, pChange->nKey, pChange->intKey,
             pMerged, nMerged);
+        /* Cell merge resolved: update indexes with the merged record.
+        ** Delete base entry, insert merged entry. */
+        if( rc==SQLITE_OK && ctx->nIndexes>0 ){
+          int ix;
+          for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
+            MergeIndexInfo *mi = &ctx->aIndexes[ix];
+            if( pChange->pBaseVal && pChange->nBaseVal>0 ){
+              u8 *pOK = 0; int nOK = 0;
+              rc = buildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
+                                     mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                     &pOK, &nOK);
+              if( rc==SQLITE_OK ){
+                rc = prollyMutMapDelete(mi->pEdits, pOK, nOK, 0);
+                sqlite3_free(pOK);
+              }
+            }
+            if( rc==SQLITE_OK ){
+              u8 *pNK = 0; int nNK = 0;
+              rc = buildIndexSortKey(pMerged, nMerged,
+                                     mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                     &pNK, &nNK);
+              if( rc==SQLITE_OK ){
+                rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0,
+                                        pMerged, nMerged);
+                sqlite3_free(pNK);
+              }
+            }
+          }
+        }
         sqlite3_free(pMerged);
         break;
       }
@@ -434,7 +682,9 @@ static int mergeTableRows(
   u8 flags,
   ProllyHash *pMergedRoot,
   int *pnConflicts,
-  struct ConflictRow **ppConflicts
+  struct ConflictRow **ppConflicts,
+  MergeIndexInfo *aIndexes,
+  int nIndexes
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyCache *cache = doltliteGetCache(db);
@@ -442,21 +692,29 @@ static int mergeTableRows(
   RowMergeCtx ctx;
   ProllyMutator mut;
   int rc;
+  int i;
 
   memset(&ctx, 0, sizeof(ctx));
   ctx.isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
+  ctx.aIndexes = aIndexes;
+  ctx.nIndexes = nIndexes;
   ctx.pEdits = sqlite3_malloc(sizeof(ProllyMutMap));
   if( !ctx.pEdits ) return SQLITE_NOMEM;
   rc = prollyMutMapInit(ctx.pEdits, ctx.isIntKey);
   if( rc!=SQLITE_OK ){ sqlite3_free(ctx.pEdits); return rc; }
 
+  /* Initialize a mutmap for each index. */
+  for(i=0; i<nIndexes; i++){
+    aIndexes[i].pEdits = sqlite3_malloc(sizeof(ProllyMutMap));
+    if( !aIndexes[i].pEdits ){ rc = SQLITE_NOMEM; goto merge_err; }
+    rc = prollyMutMapInit(aIndexes[i].pEdits, 0);
+    if( rc!=SQLITE_OK ) goto merge_err;
+  }
+
 
   rc = prollyThreeWayDiff(cs, cache, pAncRoot, pOursRoot, pTheirsRoot,
                           flags, rowMergeCallback, &ctx);
-  if( rc!=SQLITE_OK ){
-    freeRowMergeCtx(&ctx);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) goto merge_err;
 
 
   if( !prollyMutMapIsEmpty(ctx.pEdits) ){
@@ -471,8 +729,26 @@ static int mergeTableRows(
       memcpy(pMergedRoot, &mut.newRoot, sizeof(ProllyHash));
     }
   }else{
-
     memcpy(pMergedRoot, pOursRoot, sizeof(ProllyHash));
+  }
+
+  /* Flush each index's accumulated edits. */
+  for(i=0; i<nIndexes && rc==SQLITE_OK; i++){
+    if( !prollyMutMapIsEmpty(aIndexes[i].pEdits) ){
+      ProllyMutator idxMut;
+      memset(&idxMut, 0, sizeof(idxMut));
+      idxMut.pStore = cs;
+      idxMut.pCache = cache;
+      memcpy(&idxMut.oldRoot, &aIndexes[i].oursRoot, sizeof(ProllyHash));
+      idxMut.pEdits = aIndexes[i].pEdits;
+      idxMut.flags = 0;  /* blob keys */
+      rc = prollyMutateFlush(&idxMut);
+      if( rc==SQLITE_OK ){
+        memcpy(&aIndexes[i].mergedRoot, &idxMut.newRoot, sizeof(ProllyHash));
+      }
+    }else{
+      memcpy(&aIndexes[i].mergedRoot, &aIndexes[i].oursRoot, sizeof(ProllyHash));
+    }
   }
 
   *pnConflicts = ctx.nConflicts;
@@ -480,6 +756,14 @@ static int mergeTableRows(
   ctx.aConflicts = 0;
   ctx.nConflicts = 0;
 
+merge_err:
+  for(i=0; i<nIndexes; i++){
+    if( aIndexes[i].pEdits ){
+      prollyMutMapFree(aIndexes[i].pEdits);
+      sqlite3_free(aIndexes[i].pEdits);
+      aIndexes[i].pEdits = 0;
+    }
+  }
   freeRowMergeCtx(&ctx);
   return rc;
 }
@@ -1102,10 +1386,11 @@ static int mergeCatalogPass1(
 
 
     if( !zName ){
-      /* Nameless catalog entry — secondary index. Match by iTable
-      ** number across ancestor/theirs and three-way merge the index
-      ** tree just like a named table. Without this, the feat-side
-      ** index entries are lost on merge. */
+      /* Nameless catalog entry — secondary index. Three-way merge
+      ** by iTable number. With PK-suffix sort keys, the three-way
+      ** merge handles non-conflict cases correctly. For conflicts,
+      ** the parent table's mergeTableRows overwrites the root with
+      ** the incrementally-computed result. */
       ancEntry = findTableEntry(aAnc, nAnc, aOurs[i].iTable);
       theirsEntry = findTableEntry(aTheirs, nTheirs, aOurs[i].iTable);
       goto do_merge_entry;
@@ -1176,9 +1461,57 @@ do_merge_entry:
             int nConflicts = 0;
             struct ConflictRow *aConflictRows = 0;
 
+            /* Collect secondary indexes for this table so they can
+            ** be updated incrementally during the row merge. */
+            MergeIndexInfo *aIdxInfo = 0;
+            int nIdxInfo = 0;
+            if( zName && db ){
+              Table *pTab = sqlite3FindTable(db, zName, 0);
+              if( pTab ){
+                Index *pIdx;
+                int nIdx = 0;
+                for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext) nIdx++;
+                if( nIdx>0 ){
+                  aIdxInfo = sqlite3_malloc(nIdx * (int)sizeof(MergeIndexInfo));
+                  if( aIdxInfo ){
+                    memset(aIdxInfo, 0, nIdx*(int)sizeof(MergeIndexInfo));
+                    for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
+                      struct TableEntry *oursIdx = findTableEntry(aOurs, nOurs, pIdx->tnum);
+                      if( oursIdx ){
+                        MergeIndexInfo *mi = &aIdxInfo[nIdxInfo];
+                        mi->iTable = pIdx->tnum;
+                        memcpy(&mi->oursRoot, &oursIdx->root, sizeof(ProllyHash));
+                        mi->nColumn = pIdx->nKeyCol;
+                        mi->aiColumn = pIdx->aiColumn;
+                        mi->pKeyInfo = 0; /* BINARY collation; NOCASE TBD */
+                        nIdxInfo++;
+                      }
+                    }
+                  }
+                }
+              }
+            }
+
             rc = mergeTableRows(db, &ancEntry->root, &aOurs[i].root,
                                 &theirsEntry->root, aOurs[i].flags,
-                                &mergedTableRoot, &nConflicts, &aConflictRows);
+                                &mergedTableRoot, &nConflicts, &aConflictRows,
+                                aIdxInfo, nIdxInfo);
+
+            /* Store merged index roots back into aMerged catalog. */
+            if( rc==SQLITE_OK ){
+              int ix;
+              for(ix=0; ix<nIdxInfo; ix++){
+                int k;
+                for(k=0; k<*pnMerged; k++){
+                  if( aMerged[k].iTable==aIdxInfo[ix].iTable ){
+                    memcpy(&aMerged[k].root, &aIdxInfo[ix].mergedRoot,
+                           sizeof(ProllyHash));
+                    break;
+                  }
+                }
+              }
+            }
+            sqlite3_free(aIdxInfo);
             if( rc!=SQLITE_OK ) return rc;
 
             {
@@ -1250,7 +1583,8 @@ do_merge_entry:
 
         rc = mergeTableRows(db, &ancEntry->root, &aOurs[iTable1Idx].root,
                             &theirsEntry->root, aOurs[iTable1Idx].flags,
-                            &mergedTableRoot, &nConflicts, &aConflictRows);
+                            &mergedTableRoot, &nConflicts, &aConflictRows,
+                            NULL, 0);
         if( rc!=SQLITE_OK ) return rc;
 
         {

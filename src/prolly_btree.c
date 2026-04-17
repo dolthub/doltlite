@@ -4686,14 +4686,24 @@ static int prollyBtCursorInsert(
     int nSortKey = 0;
     int nKeyField = 0;
     int splitKey = 0;
+    int isIndex = 0;
     if( pCur->pKeyInfo
      && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
       nKeyField = (int)pCur->pKeyInfo->nKeyField;
       splitKey = 1;
+      /* Distinguish secondary indexes from non-INTEGER-PK tables.
+      ** Index entries have no name in the catalog; tables do.
+      ** For indexes, encode ALL fields (index cols + PK cols) into
+      ** the sort key so every entry is unique — matching Dolt's
+      ** encoding and making three-way merge work correctly. */
+      {
+        struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+        isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
+      }
     }
     rc = sortKeyFromRecordPrefixColl((const u8*)pPayload->pKey,
                                       (int)pPayload->nKey,
-                                      splitKey ? nKeyField : 0,
+                                      isIndex ? 0 : (splitKey ? nKeyField : 0),
                                       pCur->pKeyInfo,
                                       &pSortKey, &nSortKey);
     if( rc==SQLITE_OK ){
@@ -4996,7 +5006,14 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         int nDelKeyField = 0;
         if( pCur->pKeyInfo
          && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
-          nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
+          /* For indexes (no name in catalog), encode all fields to
+          ** match the insert encoding. For tables, use the PK prefix. */
+          struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+          if( pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE) ){
+            nDelKeyField = 0;  /* index: all fields */
+          }else{
+            nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
+          }
         }
         rc = sortKeyFromRecordPrefixColl(pCur->pCachedPayload, pCur->nCachedPayload,
                                           nDelKeyField, pCur->pKeyInfo,
