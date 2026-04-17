@@ -180,7 +180,7 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
 
   memset(ci, 0, sizeof(*ci));
   ci->iPkCol = -1;
-  zSql = sqlite3_mprintf("PRAGMA table_info(\"%w\")", zTable);
+  zSql = sqlite3_mprintf("PRAGMA main.table_info(\"%w\")", zTable);
   if( !zSql ) return SQLITE_NOMEM;
 
   rc = sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0);
