@@ -224,6 +224,31 @@ CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'CREATE');
 " "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t;"
 
+echo "--- temp shadow table does not spoof blame PK schema ---"
+
+{
+  dir="$TMPROOT/temp_shadow_pk"
+  mkdir -p "$dir"
+  out=$(printf "%s\n" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_commit('-Am', 'INIT');
+UPDATE t SET v = 'b' WHERE id = 1;
+SELECT dolt_commit('-Am', 'UPDATE');
+CREATE TEMP TABLE t(x TEXT PRIMARY KEY, y INT);
+SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t;
+" | "$DOLTLITE" "$dir/db" 2>"$dir/err" | tr -d '\r' | grep '^BL|')
+  if [ "$out" = "BL|1|UPDATE" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES temp_shadow_pk"
+    echo "  FAIL: temp_shadow_pk"
+    echo "    doltlite:"
+    echo "$out" | sed 's/^/      /'
+  fi
+}
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
