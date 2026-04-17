@@ -104,6 +104,14 @@ static void sendError(int fd){
                (const u8*)"Internal Server Error", 21);
 }
 
+static int remoteSrvCommitPending(ChunkStore *pStore){
+  int rc = chunkStoreCommit(pStore);
+  if( rc!=SQLITE_OK ){
+    chunkStoreRollback(pStore);
+  }
+  return rc;
+}
+
 #define MAX_HEADER_SIZE 4096
 
 static int readExact(int fd, u8 *pBuf, int nBytes){
@@ -354,6 +362,7 @@ static void handlePostChunks(ChunkStore *pStore, int fd,
 
     rc = chunkStorePut(pStore, pBody + offset, (int)len, &hash);
     if( rc!=SQLITE_OK ){
+      chunkStoreRollback(pStore);
       sendError(fd);
       return;
     }
@@ -361,7 +370,7 @@ static void handlePostChunks(ChunkStore *pStore, int fd,
   }
 
 
-  rc = chunkStoreCommit(pStore);
+  rc = remoteSrvCommitPending(pStore);
   if( rc!=SQLITE_OK ){
     sendError(fd);
     return;
@@ -396,13 +405,29 @@ static void handleGetRefs(ChunkStore *pStore, int fd){
 
 static int remoteSrvPersistRefs(ChunkStore *pStore){
   int rc = chunkStoreSerializeRefs(pStore);
-  if( rc==SQLITE_OK ) rc = chunkStoreCommit(pStore);
+  if( rc==SQLITE_OK ) rc = remoteSrvCommitPending(pStore);
+  else chunkStoreRollback(pStore);
   return rc;
 }
 
+static int remoteSrvApplyRefs(ChunkStore *pStore, const u8 *pBody, int nBody){
+  ProllyHash hash;
+  int rc;
+
+  if( nBody<=0 ) return SQLITE_ERROR;
+  rc = chunkStorePut(pStore, pBody, nBody, &hash);
+  if( rc==SQLITE_OK ){
+    pStore->refsHash = hash;
+    rc = chunkStoreReloadRefs(pStore);
+  }
+  if( rc!=SQLITE_OK ){
+    chunkStoreRollback(pStore);
+    return rc;
+  }
+  return remoteSrvCommitPending(pStore);
+}
 static void handlePutRefs(ChunkStore *pStore, int fd,
                           const u8 *pBody, int nBody){
-  ProllyHash hash;
   int rc;
 
   if( nBody<=0 ){
@@ -410,28 +435,23 @@ static void handlePutRefs(ChunkStore *pStore, int fd,
     return;
   }
 
-  rc = chunkStorePut(pStore, pBody, nBody, &hash);
-  if( rc!=SQLITE_OK ){
-    sendError(fd);
-    return;
-  }
-
-  pStore->refsHash = hash;
-
-  rc = chunkStoreReloadRefs(pStore);
-  if( rc!=SQLITE_OK ){
-    sendError(fd);
-    return;
-  }
-
-
-  rc = chunkStoreCommit(pStore);
+  rc = remoteSrvApplyRefs(pStore, pBody, nBody);
   if( rc!=SQLITE_OK ){
     sendError(fd);
     return;
   }
 
   sendOk(fd, 0, 0);
+}
+
+int doltliteRemoteSrvCommitPendingForTest(ChunkStore *pStore){
+  return remoteSrvCommitPending(pStore);
+}
+
+int doltliteRemoteSrvApplyRefsForTest(
+  ChunkStore *pStore, const u8 *pBody, int nBody
+){
+  return remoteSrvApplyRefs(pStore, pBody, nBody);
 }
 
 static void handleCommit(ChunkStore *pStore, int fd){

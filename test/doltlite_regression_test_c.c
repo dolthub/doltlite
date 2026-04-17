@@ -73,6 +73,10 @@ typedef unsigned int Pgno;
 
 extern int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
+extern int doltliteRemoteSrvCommitPendingForTest(ChunkStore *pStore);
+extern int doltliteRemoteSrvApplyRefsForTest(
+  ChunkStore *pStore, const u8 *pBody, int nBody
+);
 
 static int nPass = 0;
 static int nFail = 0;
@@ -5631,6 +5635,126 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
   remove_db(dbpath);
 }
 
+static void run_remotesrv_put_refs_failure_restores_state(void){
+  ChunkStore cs;
+  ChunkStore reopened;
+  ProllyHash emptyHash;
+  ProllyHash refsHashBefore;
+  ProllyHash foundHash;
+  char dbpath[256];
+  int rc;
+  static const u8 aBadRefs[] = { 'n','o','t','-','r','e','f','s' };
+
+  printf("=== RemoteSrv Put Refs Failure Restores State Test ===\n\n");
+
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  make_dbpath(dbpath, sizeof(dbpath), "test_remotesrv_put_refs_failure_restore");
+  remove_db(dbpath);
+
+  check("register_fail_vfs_for_remotesrv_put_refs", registerFailVfs()==SQLITE_OK);
+  check("open_fail_store_for_remotesrv_put_refs",
+        chunkStoreOpen(&cs, &gFailVfs, dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("set_default_branch_for_remotesrv_put_refs",
+        chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
+  check("add_main_branch_for_remotesrv_put_refs",
+        chunkStoreAddBranch(&cs, "main", &emptyHash)==SQLITE_OK);
+  check("serialize_initial_refs_for_remotesrv_put_refs",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("commit_initial_refs_for_remotesrv_put_refs",
+        chunkStoreCommit(&cs)==SQLITE_OK);
+  refsHashBefore = cs.refsHash;
+
+  rc = doltliteRemoteSrvApplyRefsForTest(&cs, aBadRefs, (int)sizeof(aBadRefs));
+  check("remotesrv_put_refs_reload_failure_surfaces", rc!=SQLITE_OK);
+  check("remotesrv_put_refs_restores_refs_hash",
+        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
+  check("remotesrv_put_refs_keeps_default_branch",
+        cs.zDefaultBranch!=0 && strcmp(cs.zDefaultBranch, "main")==0);
+  check("remotesrv_put_refs_keeps_main_branch",
+        chunkStoreFindBranch(&cs, "main", &foundHash)==SQLITE_OK);
+  check("remotesrv_put_refs_does_not_leave_failed_tag",
+        chunkStoreFindTag(&cs, "v1", &foundHash)!=SQLITE_OK);
+
+  chunkStoreClose(&cs);
+  check("reopen_store_after_remotesrv_put_refs_failure",
+        chunkStoreOpen(&reopened, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("reopened_store_after_remotesrv_put_refs_keeps_main",
+        chunkStoreFindBranch(&reopened, "main", &foundHash)==SQLITE_OK);
+  check("reopened_store_after_remotesrv_put_refs_has_no_failed_tag",
+        chunkStoreFindTag(&reopened, "v1", &foundHash)!=SQLITE_OK);
+  chunkStoreClose(&reopened);
+  remove_db(dbpath);
+}
+
+static void run_remotesrv_chunk_commit_failure_clears_pending(void){
+  ChunkStore cs;
+  ChunkStore reopened;
+  ProllyHash emptyHash;
+  ProllyHash foundHash;
+  ProllyHash chunkHash;
+  char dbpath[256];
+  int rc;
+  static const u8 aChunk[] = { 'o','r','p','h','a','n' };
+
+  printf("=== RemoteSrv Chunk Commit Failure Clears Pending Test ===\n\n");
+
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  memset(&chunkHash, 0, sizeof(chunkHash));
+  make_dbpath(dbpath, sizeof(dbpath), "test_remotesrv_chunk_commit_failure");
+  remove_db(dbpath);
+
+  gFailHits = 0;
+  gFailSyncOnce = 0;
+  check("register_fail_vfs_for_remotesrv_chunk_commit", registerFailVfs()==SQLITE_OK);
+  check("open_fail_store_for_remotesrv_chunk_commit",
+        chunkStoreOpen(&cs, &gFailVfs, dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("set_default_branch_for_remotesrv_chunk_commit",
+        chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
+  check("add_main_branch_for_remotesrv_chunk_commit",
+        chunkStoreAddBranch(&cs, "main", &emptyHash)==SQLITE_OK);
+  check("serialize_initial_refs_for_remotesrv_chunk_commit",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("commit_initial_refs_for_remotesrv_chunk_commit",
+        chunkStoreCommit(&cs)==SQLITE_OK);
+  check("queue_pending_chunk_for_remotesrv_chunk_commit",
+        chunkStorePut(&cs, aChunk, (int)sizeof(aChunk), &chunkHash)==SQLITE_OK);
+  check("pending_chunk_visible_before_failed_commit",
+        chunkStoreHas(&cs, &chunkHash));
+
+  gFailHits = 0;
+  gFailSyncOnce = 1;
+  rc = doltliteRemoteSrvCommitPendingForTest(&cs);
+  check("remotesrv_chunk_commit_failure_injected", gFailHits>0);
+  check("remotesrv_chunk_commit_failure_surfaces", rc!=SQLITE_OK);
+  check("remotesrv_chunk_commit_rolls_back_pending_visibility",
+        !chunkStoreHas(&cs, &chunkHash));
+  check("remotesrv_chunk_commit_clears_pending_count", cs.nPending==0);
+
+  gFailSyncOnce = 0;
+  check("serialize_followup_refs_for_remotesrv_chunk_commit",
+        chunkStoreAddTag(&cs, "v1", &emptyHash)==SQLITE_OK);
+  check("serialize_followup_refs_for_remotesrv_chunk_commit_2",
+        chunkStoreSerializeRefs(&cs)==SQLITE_OK);
+  check("commit_followup_refs_for_remotesrv_chunk_commit",
+        chunkStoreCommit(&cs)==SQLITE_OK);
+  check("failed_chunk_not_visible_after_followup_commit",
+        !chunkStoreHas(&cs, &chunkHash));
+
+  chunkStoreClose(&cs);
+  check("reopen_store_after_remotesrv_chunk_commit_failure",
+        chunkStoreOpen(&reopened, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  check("reopened_store_after_remotesrv_chunk_commit_has_tag",
+        chunkStoreFindTag(&reopened, "v1", &foundHash)==SQLITE_OK);
+  check("reopened_store_after_remotesrv_chunk_commit_has_no_failed_chunk",
+        !chunkStoreHas(&reopened, &chunkHash));
+  chunkStoreClose(&reopened);
+  remove_db(dbpath);
+}
+
 static void run_prolly_blob_cursor_seek_across_internal_boundary(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -6099,6 +6223,8 @@ static const RegressionCase aCases[] = {
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },
   { "refs_hash_rollback_restore", "Chunk Store Rollback Restores Refs Hash Test", run_chunk_store_rollback_restores_refs_hash },
   { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
+  { "remotesrv_put_refs_failure_restore", "RemoteSrv Put Refs Failure Restores State Test", run_remotesrv_put_refs_failure_restores_state },
+  { "remotesrv_chunk_commit_failure_clears_pending", "RemoteSrv Chunk Commit Failure Clears Pending Test", run_remotesrv_chunk_commit_failure_clears_pending },
   { "prolly_blob_cursor_boundary", "Prolly Blob Cursor Internal Boundary Test", run_prolly_blob_cursor_seek_across_internal_boundary },
   { "prolly_blob_cursor_seek_past_max", "Prolly Blob Cursor Seek Past Max Test", run_prolly_blob_cursor_seek_past_max },
   { "prolly_cursor_empty_leaf_root", "Prolly Cursor Empty Leaf Root Test", run_prolly_cursor_empty_leaf_root },
