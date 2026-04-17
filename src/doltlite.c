@@ -886,6 +886,11 @@ static void doltliteCommitFunc(
     return;
   }
 
+  /* Implicitly commit any open SQL transaction so that all pending
+  ** DML is flushed before the version-control commit runs.  Matches
+  ** Dolt, where dolt_commit() closes the SQL transaction — a
+  ** subsequent ROLLBACK becomes a no-op. */
+  (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
 
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);

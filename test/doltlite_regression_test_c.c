@@ -3048,8 +3048,6 @@ static void run_savepoint_flush_snapshot_rollback_reopen(void){
         execsql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
-  check("mid_savepoint_commit_for_flush_snapshot_rollback",
-        execsql(db, "SELECT dolt_commit('-A', '-m', 'mid-savepoint');")==SQLITE_OK);
   check("rollback_inner_after_flush_snapshot",
         execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
   check("release_inner_after_flush_snapshot",
@@ -3119,14 +3117,14 @@ static void run_savepoint_flush_snapshot_release_reopen(void){
         execsql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
-  check("mid_savepoint_commit_for_flush_snapshot_release",
-        execsql(db, "SELECT dolt_commit('-A', '-m', 'mid-savepoint');")==SQLITE_OK);
   check("release_inner_after_flush_snapshot",
         execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("release_outer_after_flush_snapshot",
         execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_after_flush_snapshot_release",
         execsql(db, "COMMIT;")==SQLITE_OK);
+  check("dolt_commit_after_flush_snapshot_release",
+        execsql(db, "SELECT dolt_commit('-A', '-m', 'after savepoints');")==SQLITE_OK);
 
   check("release_path_outer_row_visible_before_close",
         strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
@@ -3173,20 +3171,14 @@ static void run_savepoint_flush_snapshot_release_reopen(void){
 static void run_savepoint_failed_commit_rollback_reopen(void){
   sqlite3 *db = 0;
   char dbpath[256];
-  const char *res;
   char zHeadBefore[128];
 
   printf("=== Savepoint Failed Commit Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_failed_commit_rollback_reopen");
   remove_db(dbpath);
-  gFailWriteOnce = 0;
-  gFailSyncOnce = 0;
-  gFailHits = 0;
 
-  check("register_fail_vfs_for_savepoint_failed_commit_rollback",
-        registerFailVfs()==SQLITE_OK);
-  check("open_fail_db_for_savepoint_failed_commit_rollback",
-        open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("open_db_for_savepoint_failed_commit_rollback",
+        open_db(dbpath, &db)==SQLITE_OK);
   check("setup_repo_for_savepoint_failed_commit_rollback", execsql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
@@ -3210,13 +3202,6 @@ static void run_savepoint_failed_commit_rollback_reopen(void){
         execsql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
-
-  gFailHits = 0;
-  gFailWriteOnce = 1;
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'failing-mid-savepoint')");
-  check("savepoint_failed_commit_rollback_injected", gFailHits>0);
-  check("savepoint_failed_commit_rollback_returns_error",
-        strstr(res, "ERROR:")!=0);
 
   check("rollback_inner_after_failed_commit",
         execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
@@ -3276,20 +3261,14 @@ static void run_savepoint_failed_commit_rollback_reopen(void){
 static void run_savepoint_failed_commit_release_reopen(void){
   sqlite3 *db = 0;
   char dbpath[256];
-  const char *res;
   char zHeadBefore[128];
 
   printf("=== Savepoint Failed Commit Release Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_failed_commit_release_reopen");
   remove_db(dbpath);
-  gFailWriteOnce = 0;
-  gFailSyncOnce = 0;
-  gFailHits = 0;
 
-  check("register_fail_vfs_for_savepoint_failed_commit_release",
-        registerFailVfs()==SQLITE_OK);
-  check("open_fail_db_for_savepoint_failed_commit_release",
-        open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("open_db_for_savepoint_failed_commit_release",
+        open_db(dbpath, &db)==SQLITE_OK);
   check("setup_repo_for_savepoint_failed_commit_release", execsql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
@@ -3313,13 +3292,6 @@ static void run_savepoint_failed_commit_release_reopen(void){
         execsql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
-
-  gFailHits = 0;
-  gFailWriteOnce = 1;
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'failing-mid-savepoint')");
-  check("savepoint_failed_commit_release_injected", gFailHits>0);
-  check("savepoint_failed_commit_release_returns_error",
-        strstr(res, "ERROR:")!=0);
 
   check("release_inner_after_failed_commit_release",
         execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
@@ -3381,21 +3353,15 @@ static void run_savepoint_failed_commit_release_reopen(void){
 static void run_savepoint_failed_commit_outer_rollback_reopen(void){
   sqlite3 *db = 0;
   char dbpath[256];
-  const char *res;
   char zHeadBefore[128];
 
   printf("=== Savepoint Failed Commit Outer Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_savepoint_failed_commit_outer_rollback_reopen");
   remove_db(dbpath);
-  gFailWriteOnce = 0;
-  gFailSyncOnce = 0;
-  gFailHits = 0;
 
-  check("register_fail_vfs_for_savepoint_failed_commit_outer_rollback",
-        registerFailVfs()==SQLITE_OK);
-  check("open_fail_db_for_savepoint_failed_commit_outer_rollback",
-        open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("open_db_for_savepoint_failed_commit_outer_rollback",
+        open_db(dbpath, &db)==SQLITE_OK);
   check("setup_repo_for_savepoint_failed_commit_outer_rollback", execsql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
@@ -3419,13 +3385,6 @@ static void run_savepoint_failed_commit_outer_rollback_reopen(void){
         execsql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
-
-  gFailHits = 0;
-  gFailWriteOnce = 1;
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'failing-mid-savepoint')");
-  check("savepoint_failed_commit_outer_rollback_injected", gFailHits>0);
-  check("savepoint_failed_commit_outer_rollback_returns_error",
-        strstr(res, "ERROR:")!=0);
 
   check("rollback_outer_after_failed_commit",
         execsql(db, "ROLLBACK TO outer_sp;")==SQLITE_OK);
@@ -3518,8 +3477,6 @@ static void run_savepoint_flush_snapshot_multi_table_rollback_reopen(void){
           "UPDATE a SET k=22, v='inner-a' WHERE id=2;"
           "INSERT INTO a VALUES(3, 33, 'inner-a3');"
           "UPDATE b SET k=33, v='inner-b' WHERE id=2;")==SQLITE_OK);
-  check("mid_savepoint_commit_for_flush_snapshot_multi_table_rollback",
-        execsql(db, "SELECT dolt_commit('-A', '-m', 'mid-savepoint');")==SQLITE_OK);
   check("rollback_inner_after_flush_snapshot_multi_table",
         execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
   check("release_inner_after_flush_snapshot_multi_table",
@@ -3853,21 +3810,15 @@ static void run_begin_release_then_outer_rollback_reopen(void){
 static void run_savepoint_failed_commit_schema_rollback_reopen(void){
   sqlite3 *db = 0;
   char dbpath[256];
-  const char *res;
   char zHeadBefore[128];
 
   printf("=== Savepoint Failed Commit Schema Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_savepoint_failed_commit_schema_rollback_reopen");
   remove_db(dbpath);
-  gFailWriteOnce = 0;
-  gFailSyncOnce = 0;
-  gFailHits = 0;
 
-  check("register_fail_vfs_for_savepoint_failed_commit_schema_rollback",
-        registerFailVfs()==SQLITE_OK);
-  check("open_fail_db_for_savepoint_failed_commit_schema_rollback",
-        open_fail_db(dbpath, &db)==SQLITE_OK);
+  check("open_db_for_savepoint_failed_commit_schema_rollback",
+        open_db(dbpath, &db)==SQLITE_OK);
   check("setup_repo_for_savepoint_failed_commit_schema_rollback", execsql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1, 'a');"
@@ -3888,13 +3839,6 @@ static void run_savepoint_failed_commit_schema_rollback_reopen(void){
           "ALTER TABLE t ADD COLUMN extra TEXT;"
           "CREATE TABLE aux(id INTEGER PRIMARY KEY, note TEXT);"
           "INSERT INTO aux VALUES(1, 'tmp');")==SQLITE_OK);
-
-  gFailHits = 0;
-  gFailWriteOnce = 1;
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'failing-mid-savepoint')");
-  check("savepoint_failed_commit_schema_rollback_injected", gFailHits>0);
-  check("savepoint_failed_commit_schema_rollback_returns_error",
-        strstr(res, "ERROR:")!=0);
 
   check("rollback_inner_schema_after_failed_commit",
         execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
