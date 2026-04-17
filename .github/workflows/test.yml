@@ -266,7 +266,7 @@ jobs:
       run: |
         cd build
         cc -I. -o crash_recovery_test ../test/crash_recovery_test.c \
-          libdoltlite.a -lz -lpthread
+          libdoltlite.a -lz -lpthread -lm
         ./crash_recovery_test
       timeout-minutes: 10
 
@@ -390,13 +390,13 @@ jobs:
         . "$TCL_CONFIG"
         make OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' \
           OPTS="$TCL_INCLUDE_SPEC" \
-          doltlite-lib doltlite-crashtest
+          libdoltlite.a doltlite-crashtest
 
     - name: Native crash recovery test (SQLITE_TEST)
       run: |
         cd build-crash
         cc -I. -o crash_recovery_test ../test/crash_recovery_test.c \
-          libdoltlite.a -lz -lpthread
+          libdoltlite.a -lz -lpthread -lm
         ./crash_recovery_test
       timeout-minutes: 10
 
