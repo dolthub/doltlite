@@ -3662,6 +3662,11 @@ static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value
     sqlite3_result_error(context, "usage: dolt_config(key [, value])", -1);
     return;
   }
+  if( argc>2 ){
+    sqlite3_result_error(context,
+      "too many positional arguments to dolt_config", -1);
+    return;
+  }
   zKey = (const char*)sqlite3_value_text(argv[0]);
   if( !zKey ){
     sqlite3_result_error(context, "key required", -1);

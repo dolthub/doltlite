@@ -265,6 +265,15 @@ result=$("$DB" "$TMPDIR/t14.db" "SELECT committer FROM dolt_log LIMIT 1;")
 check "-A commit uses config" "Quick Author" "$result"
 
 # ============================================================
+echo "=== 15. Error: extra config args ==="
+# ============================================================
+result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.name', 'Alice', 'Extra');" 2>&1)
+check "extra config args error" "1" "$(echo "$result" | grep -c 'too many positional arguments to dolt_config')"
+
+result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.name');")
+check "extra config args preserve session value" "doltlite" "$result"
+
+# ============================================================
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
