@@ -231,6 +231,32 @@ static int verify_commit_count(const char *dbpath, const char *label,
   return cnt;
 }
 
+/* dolt_log includes the automatic repository initialization commit.
+** Crash tests generally care about user commits after that seed. */
+static int exec_user_commit_count(sqlite3 *db){
+  int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+  if( nLog<0 ) return nLog;
+  return nLog>0 ? nLog-1 : 0;
+}
+
+static int verify_user_commit_count(const char *dbpath, const char *label,
+                                    int expected){
+  sqlite3 *db = 0;
+  char desc[256];
+  int rc, cnt;
+
+  rc = sqlite3_open(dbpath, &db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_close(db);
+    return -1;
+  }
+  cnt = exec_user_commit_count(db);
+  snprintf(desc, sizeof(desc), "%s: user commit count is %d", label, expected);
+  check(desc, cnt==expected);
+  sqlite3_close(db);
+  return cnt;
+}
+
 /* ====================================================================
 ** GROUP 1: Single commit crash recovery
 ** ==================================================================== */
@@ -266,7 +292,7 @@ static void test_01_clean_commit(void){
   }
   verify_consistency(dbpath, "test_01");
   verify_row_count(dbpath, "test_01", "t", 3);
-  verify_commit_count(dbpath, "test_01", 1);
+  verify_user_commit_count(dbpath, "test_01", 1);
   remove_db(dbpath);
 }
 
@@ -304,7 +330,7 @@ static void test_02_kill_after_commit(void){
   }
   verify_consistency(dbpath, "test_02");
   verify_row_count(dbpath, "test_02", "t", 2);
-  verify_commit_count(dbpath, "test_02", 1);
+  verify_user_commit_count(dbpath, "test_02", 1);
   remove_db(dbpath);
 }
 
@@ -351,7 +377,7 @@ static void test_03_kill_during_commit(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_03: db opens after crash", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       /* Commit is either fully present (1 commit) or fully absent (0 commits).
       ** 0 means the initial state (no user commit), 1 means the commit landed. */
       check("test_03: commit atomic (0 or 1)",
@@ -400,7 +426,7 @@ static void test_04_two_commits_kill_after_second(void){
   {
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
-    int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+    int nLog = exec_user_commit_count(db);
     check("test_04: at least commit-1 present", nLog>=1);
     /* If both commits landed, verify both rows. */
     if( nLog>=2 ){
@@ -460,7 +486,7 @@ static void test_05_kill_during_second_commit(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_05: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_05: at least stable-commit present", nLog>=1);
       /* The stable row must always be present. */
       int hasStable = exec_int(db,
@@ -568,7 +594,7 @@ static void test_07_five_commits_random_kill(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_07: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_07: commit count in [0..5]", nLog>=0 && nLog<=5);
 
       /* If there are N commits, there should be N rows. */
@@ -638,7 +664,7 @@ static void test_08_branch_crash(void){
       sqlite3_finalize(stmt);
 
       /* dolt_log must be consistent. */
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_08: dolt_log consistent", nLog>=0);
     }
     sqlite3_close(db);
@@ -717,7 +743,7 @@ static void test_10_very_early_kill(void){
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       /* Whatever number of commits landed, data must be consistent. */
       check("test_10: commit count non-negative", nLog>=0);
       if( nLog>0 ){
@@ -774,7 +800,7 @@ static void test_11_increasing_data_kill(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_11: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_11: commit count in [0..5]", nLog>=0 && nLog<=5);
       /* Verify data is self-consistent: all queryable rows belong to
       ** committed batches. */
@@ -845,7 +871,7 @@ static void test_12_gc_crash(void){
       int cnt = exec_int(db, "SELECT count(*) FROM t", -1);
       check("test_12: table queryable after GC crash", cnt>=0);
       /* dolt_log must still work. */
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_12: dolt_log works after GC crash", nLog>=1);
     }
     sqlite3_close(db);
@@ -889,7 +915,7 @@ static void test_13_gc_then_crash(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_13: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_13: at least 2 commits (pre-GC)", nLog>=2);
     }
     sqlite3_close(db);
@@ -993,7 +1019,7 @@ static void test_15_large_insert_crash(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_15: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_15: commit atomic (0 or 1)", nLog==0 || nLog==1);
       if( nLog==1 ){
         int cnt = exec_int(db, "SELECT count(*) FROM t", -1);
@@ -1037,7 +1063,7 @@ static void test_16_large_insert_complete_then_kill(void){
 
   verify_consistency(dbpath, "test_16");
   verify_row_count(dbpath, "test_16", "t", 1000);
-  verify_commit_count(dbpath, "test_16", 1);
+  verify_user_commit_count(dbpath, "test_16", 1);
   remove_db(dbpath);
 }
 
@@ -1081,7 +1107,7 @@ static void test_17_multiple_large_commits(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_17: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_17: commit count in [0..3]", nLog>=0 && nLog<=3);
       if( nLog>0 ){
         int nRows = exec_int(db, "SELECT count(*) FROM t", -1);
@@ -1130,7 +1156,7 @@ static void test_18_schema_change_crash(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_18: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_18: at least 1 commit", nLog>=1);
       /* If both commits landed, the extra column must exist. */
       if( nLog==2 ){
@@ -1192,7 +1218,7 @@ static void test_19_delete_all_crash(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_19: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       int cnt = exec_int(db, "SELECT count(*) FROM t", -1);
       /* Either the delete committed (0 rows, 2 log entries) or
       ** only the initial state remains (3 rows, 1 log entry). */
@@ -1333,7 +1359,7 @@ static void test_22_multi_table_commit_crash(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_22: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       if( nLog==1 ){
         /* If committed, all 10 tables must exist with data. */
         int i;
@@ -1462,7 +1488,7 @@ static void test_24_repeated_crash_cycles(void){
       snprintf(desc, sizeof(desc), "test_24_cycle%d: db opens", cycle);
       check(desc, rc==SQLITE_OK);
       if( rc==SQLITE_OK ){
-        int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+        int nLog = exec_user_commit_count(db);
         snprintf(desc, sizeof(desc),
                  "test_24_cycle%d: log non-negative", cycle);
         check(desc, nLog>=1);
@@ -1513,7 +1539,7 @@ static void test_25_tag_crash(void){
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
     /* Commit must be present. Tag may or may not have persisted. */
-    int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+    int nLog = exec_user_commit_count(db);
     check("test_25: commit present", nLog>=1);
     int cnt = exec_int(db, "SELECT count(*) FROM t", -1);
     check("test_25: data intact", cnt==1);
@@ -1559,7 +1585,7 @@ static void test_26_blob_data_crash(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_26: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_26: commit atomic (0 or 1)", nLog==0 || nLog==1);
       if( nLog==1 ){
         int cnt = exec_int(db, "SELECT count(*) FROM t", -1);
@@ -1617,7 +1643,7 @@ static void test_27_uncommitted_changes_crash(void){
   {
     sqlite3 *db = 0;
     sqlite3_open(dbpath, &db);
-    int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+    int nLog = exec_user_commit_count(db);
     check("test_27: only baseline commit", nLog==1);
     /* The committed row must be present. The uncommitted rows may or
     ** may not be in the SQL layer (WAL recovery), but dolt state should
@@ -1667,7 +1693,7 @@ static void test_28_rapid_small_commits(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_28: db opens", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_28: commit count in [0..10]", nLog>=0 && nLog<=10);
       if( nLog>0 ){
         int nRows = exec_int(db, "SELECT count(*) FROM t", -1);
@@ -1728,7 +1754,7 @@ static void test_29_gc_after_many_commits(void){
     int rc = sqlite3_open(dbpath, &db);
     check("test_29: db opens after GC crash", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
-      int nLog = exec_int(db, "SELECT count(*) FROM dolt_log", -1);
+      int nLog = exec_user_commit_count(db);
       check("test_29: all 10 commits present", nLog==10);
       int cnt = exec_int(db, "SELECT count(*) FROM t", -1);
       check("test_29: all 10 rows present", cnt==10);

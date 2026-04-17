@@ -262,6 +262,14 @@ jobs:
           libdoltlite.a -lz -lpthread -lm
         ./concurrent_write_test
 
+    - name: Native crash recovery test
+      run: |
+        cd build
+        cc -I. -o crash_recovery_test ../test/crash_recovery_test.c \
+          libdoltlite.a -lz -lpthread
+        ./crash_recovery_test
+      timeout-minutes: 10
+
     - name: Prepared statement reuse test
       run: |
         cd build
