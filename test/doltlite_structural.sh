@@ -176,7 +176,7 @@ SIZE_WITH_BRANCH=$(file_size "$DB")
 echo "  With branch (2K rows): ${SIZE_WITH_BRANCH} bytes"
 
 # Delete branch and GC
-echo "SELECT dolt_branch('-d','big');
+echo "SELECT dolt_branch('-D','big');
 SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_AFTER_GC=$(file_size "$DB")
@@ -368,7 +368,7 @@ SELECT dolt_checkout('feat');
 INSERT INTO t VALUES(9999,'feat');
 SELECT dolt_commit('-A','-m','feat');
 SELECT dolt_checkout('main');
-SELECT dolt_branch('-d','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_branch('-D','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 SIZE_FIRST_GC=$(file_size "$DB")

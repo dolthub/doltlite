@@ -34,7 +34,7 @@ SELECT dolt_commit('-A','-m','old branch commit');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Delete the branch
-echo "SELECT dolt_branch('-d','temp');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('-D','temp');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Recreate with same name -- should start from main's HEAD (1 row)
 echo "SELECT dolt_branch('temp');

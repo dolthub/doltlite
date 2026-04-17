@@ -81,7 +81,7 @@ run_test "merge_5_has_b5" "SELECT val FROM t WHERE id=5;" "5" "$DB"
 
 echo "  Deleting 90 branches..."
 for i in $(seq 6 95); do
-  echo "SELECT dolt_branch('-d','b$i');" | $DOLTLITE "$DB" > /dev/null 2>&1
+  echo "SELECT dolt_branch('-D','b$i');" | $DOLTLITE "$DB" > /dev/null 2>&1
 done
 echo "  Done deleting branches."
 
@@ -167,7 +167,7 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_WITH_BULK=$(file_size "$DB")
 
-echo "SELECT dolt_branch('-d','bulk');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_branch('-D','bulk');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_AFTER_BULK_GC=$(file_size "$DB")
@@ -310,7 +310,7 @@ for cycle in $(seq 1 10); do
   echo "INSERT INTO t VALUES($((cycle + 100)),'cycle_$cycle');
 SELECT dolt_commit('-A','-m','cycle $cycle');" | $DOLTLITE "$DB" > /dev/null 2>&1
   echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-  echo "SELECT dolt_branch('-d','recycled');" | $DOLTLITE "$DB" > /dev/null 2>&1
+  echo "SELECT dolt_branch('-D','recycled');" | $DOLTLITE "$DB" > /dev/null 2>&1
 done
 
 # After 10 create/delete cycles, only main should remain
