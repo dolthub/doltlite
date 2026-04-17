@@ -1099,8 +1099,13 @@ static int mergeCatalogPass1(
 
 
     if( !zName ){
-      aMerged[(*pnMerged)++] = aOurs[i];
-      continue;
+      /* Nameless catalog entry — secondary index. Match by iTable
+      ** number across ancestor/theirs and three-way merge the index
+      ** tree just like a named table. Without this, the feat-side
+      ** index entries are lost on merge. */
+      ancEntry = findTableEntry(aAnc, nAnc, aOurs[i].iTable);
+      theirsEntry = findTableEntry(aTheirs, nTheirs, aOurs[i].iTable);
+      goto do_merge_entry;
     }
 
 
