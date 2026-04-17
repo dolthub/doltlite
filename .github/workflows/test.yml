@@ -47,6 +47,10 @@ jobs:
         # Stock sqlite3 shell for dot-command oracle test
         make sqlite3
 
+    - name: Lint
+      run: cd build && make lint
+      timeout-minutes: 1
+
     # ── Doltlite feature tests ──────────────────────────────
 
     - name: Doltlite feature tests
