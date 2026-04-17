@@ -33,7 +33,7 @@
 #define SERIAL_TYPE_ONE       9
 #define SERIAL_TYPE_TEXT_BASE 13
 #define SERIAL_TYPE_BLOB_BASE 12
-#define MAX_RECORD_FIELDS     64
+#define MAX_RECORD_FIELDS    256
 #define MAX_ONEBYTE_HEADER   126
 
 static void registerDoltiteFunctions(sqlite3 *db);
