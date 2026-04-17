@@ -238,6 +238,25 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_rebase();
 "
 
+oracle_error "too_many_args" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main', 'extra');
+"
+
+oracle_error "unknown_flag" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_rebase('--bogus');
+"
+
 echo "--- interactive rebase ---"
 
 # All interactive scenarios share this setup: three commits f1,f2,f3 on
@@ -340,6 +359,11 @@ oracle_error "continue_without_active" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
 SELECT dolt_rebase('--continue');
+"
+
+oracle_error "interactive_too_many_args" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main', 'extra');
 "
 
 echo ""
