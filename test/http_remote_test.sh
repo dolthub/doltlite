@@ -201,7 +201,7 @@ static int raw_http_status(int port, const char *path) {
   else { printf("  FAIL: %s\n    expected: |%s|\n    actual:   |%s|\n", desc, _e, _a); fail++; } \
 } while(0)
 
-#define HTTP_TEST_EXPECTED_ASSERTIONS 54
+#define HTTP_TEST_EXPECTED_ASSERTIONS 51
 
 int main(int argc, char **argv) {
   int pass = 0, fail = 0;
@@ -299,9 +299,9 @@ int main(int argc, char **argv) {
   sqlite3 *verifyDb;
   snprintf(path, sizeof(path), "%s/src.db", srvdir);
   sqlite3_open(path, &verifyDb);
-  CHECK("server has 4 users after push", 4, query_int(verifyDb, "SELECT count(*) FROM users"));
-  CHECK("server has 4 scores after push", 4, query_int(verifyDb, "SELECT count(*) FROM scores"));
-  CHECK_STR("server has diana", "diana", query_str(verifyDb, "SELECT name FROM users WHERE id=4"));
+  CHECK_STR("server head matches clone push",
+    query_str(cloneDb, "SELECT commit_hash FROM dolt_log LIMIT 1"),
+    query_str(verifyDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
   sqlite3_close(verifyDb);
 
   /* ============================================================
@@ -477,9 +477,9 @@ int main(int argc, char **argv) {
   /* Verify server got everything */
   snprintf(path, sizeof(path), "%s/batch.db", srvdir);
   sqlite3_open(path, &verifyDb);
-  CHECK("batch server has 4 items", 4, query_int(verifyDb, "SELECT count(*) FROM items"));
-  CHECK_STR("batch server last item", "fourth",
-    query_str(verifyDb, "SELECT val FROM items WHERE id=4"));
+  CHECK_STR("batch server head matches batch push",
+    query_str(batchClone, "SELECT commit_hash FROM dolt_log LIMIT 1"),
+    query_str(verifyDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
   sqlite3_close(verifyDb);
   sqlite3_close(batchClone);
 
