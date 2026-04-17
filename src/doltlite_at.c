@@ -55,41 +55,60 @@ struct AtCursor {
   char *zCommitRef;
 };
 
-static void freeAtRows(AtCursor *c){
-  int i; for(i=0;i<c->nRows;i++) sqlite3_free(c->aRows[i].pVal);
-  sqlite3_free(c->aRows); c->aRows=0; c->nRows=0; c->nAlloc=0;
-  sqlite3_free(c->zCommitRef); c->zCommitRef=0;
+static void freeAtRows(AtCursor *pCur){
+  int i;
+  for( i = 0; i < pCur->nRows; i++ ){
+    sqlite3_free(pCur->aRows[i].pVal);
+  }
+  sqlite3_free(pCur->aRows);
+  pCur->aRows = 0;
+  pCur->nRows = 0;
+  pCur->nAlloc = 0;
+  sqlite3_free(pCur->zCommitRef);
+  pCur->zCommitRef = 0;
 }
 
 static int atScanTree(AtCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
                       const ProllyHash *pRoot, u8 flags){
-  ProllyCursor cur; int res, rc;
-  if(prollyHashIsEmpty(pRoot)) return SQLITE_OK;
-  prollyCursorInit(&cur,cs,pCache,pRoot,flags);
-  rc=prollyCursorFirst(&cur,&res);
-  if(rc!=SQLITE_OK||res){prollyCursorClose(&cur);return rc;}
-  while(prollyCursorIsValid(&cur)){
-    const u8 *pVal; int nVal; AtRow *r;
-    if(pCur->nRows>=pCur->nAlloc){
-      int nNew=pCur->nAlloc?pCur->nAlloc*2:128;
-      AtRow *aNew=sqlite3_realloc(pCur->aRows,nNew*(int)sizeof(AtRow));
-      if(!aNew){prollyCursorClose(&cur);return SQLITE_NOMEM;}
-      pCur->aRows=aNew; pCur->nAlloc=nNew;
+  ProllyCursor cur;
+  int res, rc;
+  if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
+  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
+  rc = prollyCursorFirst(&cur, &res);
+  if( rc != SQLITE_OK || res ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+  while( prollyCursorIsValid(&cur) ){
+    const u8 *pVal;
+    int nVal;
+    AtRow *r;
+    if( pCur->nRows >= pCur->nAlloc ){
+      int nNew = pCur->nAlloc ? pCur->nAlloc * 2 : 128;
+      AtRow *aNew = sqlite3_realloc(pCur->aRows, nNew * (int)sizeof(AtRow));
+      if( !aNew ){
+        prollyCursorClose(&cur);
+        return SQLITE_NOMEM;
+      }
+      pCur->aRows = aNew;
+      pCur->nAlloc = nNew;
     }
-    r=&pCur->aRows[pCur->nRows]; memset(r,0,sizeof(*r));
-    r->intKey=prollyCursorIntKey(&cur);
-    prollyCursorValue(&cur,&pVal,&nVal);
-    if( pVal && nVal>0 ){
+    r = &pCur->aRows[pCur->nRows];
+    memset(r, 0, sizeof(*r));
+    r->intKey = prollyCursorIntKey(&cur);
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( pVal && nVal > 0 ){
       r->pVal = sqlite3_malloc(nVal);
       if( !r->pVal ){
         prollyCursorClose(&cur);
         return SQLITE_NOMEM;
       }
-      memcpy(r->pVal,pVal,nVal);
-      r->nVal=nVal;
+      memcpy(r->pVal, pVal, nVal);
+      r->nVal = nVal;
     }
     pCur->nRows++;
-    rc=prollyCursorNext(&cur); if(rc!=SQLITE_OK) break;
+    rc = prollyCursorNext(&cur);
+    if( rc != SQLITE_OK ) break;
   }
   prollyCursorClose(&cur);
   return rc;
@@ -97,30 +116,52 @@ static int atScanTree(AtCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
 
 static int atConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  AtVtab *v; int rc; const char *zMod; char *zSchema;
+  AtVtab *pVtab;
+  int rc;
+  const char *zMod;
+  char *zSchema;
   (void)pAux;
 
-  v=sqlite3_malloc(sizeof(*v)); if(!v) return SQLITE_NOMEM;
-  memset(v,0,sizeof(*v)); v->db=db;
+  pVtab = sqlite3_malloc(sizeof(*pVtab));
+  if( !pVtab ) return SQLITE_NOMEM;
+  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab->db = db;
 
-  zMod=argv[0];
-  if(zMod&&strncmp(zMod,"dolt_at_",8)==0)
-    v->zTableName=sqlite3_mprintf("%s",zMod+8);
-  else if(argc>3) v->zTableName=sqlite3_mprintf("%s",argv[3]);
-  else v->zTableName=sqlite3_mprintf("");
+  zMod = argv[0];
+  if( zMod && strncmp(zMod, "dolt_at_", 8) == 0 ){
+    pVtab->zTableName = sqlite3_mprintf("%s", zMod + 8);
+  }else if( argc > 3 ){
+    pVtab->zTableName = sqlite3_mprintf("%s", argv[3]);
+  }else{
+    pVtab->zTableName = sqlite3_mprintf("");
+  }
 
-  rc = doltliteLoadUserTableColumns(db, v->zTableName, &v->cols, pzErr);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);
+  rc = doltliteLoadUserTableColumns(db, pVtab->zTableName, &pVtab->cols, pzErr);
+  if( rc != SQLITE_OK ){
+    sqlite3_free(pVtab->zTableName);
+    doltliteFreeColInfo(&pVtab->cols);
+    sqlite3_free(pVtab);
     return rc;
   }
-  zSchema=atBuildSchema(&v->cols);
-  if(!zSchema){sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);return SQLITE_NOMEM;}
+  zSchema = atBuildSchema(&pVtab->cols);
+  if( !zSchema ){
+    sqlite3_free(pVtab->zTableName);
+    doltliteFreeColInfo(&pVtab->cols);
+    sqlite3_free(pVtab);
+    return SQLITE_NOMEM;
+  }
 
-  rc=sqlite3_declare_vtab(db,zSchema); sqlite3_free(zSchema);
-  if(rc!=SQLITE_OK){sqlite3_free(v->zTableName);doltliteFreeColInfo(&v->cols);sqlite3_free(v);return rc;}
+  rc = sqlite3_declare_vtab(db, zSchema);
+  sqlite3_free(zSchema);
+  if( rc != SQLITE_OK ){
+    sqlite3_free(pVtab->zTableName);
+    doltliteFreeColInfo(&pVtab->cols);
+    sqlite3_free(pVtab);
+    return rc;
+  }
 
-  *ppVtab=&v->base; return SQLITE_OK;
+  *ppVtab = &pVtab->base;
+  return SQLITE_OK;
 }
 
 static int atDisconnect(sqlite3_vtab *pVtab){

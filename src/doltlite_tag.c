@@ -171,8 +171,12 @@ struct TagCur { sqlite3_vtab_cursor base; int iRow; };
 
 static int tagConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
-  TagVtab *v; int rc;
-  (void)pAux; (void)argc; (void)argv; (void)pzErr;
+  TagVtab *pVtab;
+  int rc;
+  (void)pAux;
+  (void)argc;
+  (void)argv;
+  (void)pzErr;
   rc = sqlite3_declare_vtab(db,
     "CREATE TABLE x("
       "tag_name TEXT, "
@@ -182,35 +186,55 @@ static int tagConnect(sqlite3 *db, void *pAux, int argc,
       "date TEXT, "
       "message TEXT"
     ")");
-  if( rc!=SQLITE_OK ) return rc;
-  v = sqlite3_malloc(sizeof(*v));
-  if( !v ) return SQLITE_NOMEM;
-  memset(v, 0, sizeof(*v)); v->db = db;
-  *ppVtab = &v->base;
+  if( rc != SQLITE_OK ) return rc;
+  pVtab = sqlite3_malloc(sizeof(*pVtab));
+  if( !pVtab ) return SQLITE_NOMEM;
+  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab->db = db;
+  *ppVtab = &pVtab->base;
   return SQLITE_OK;
 }
-static int tagDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
-static int tagOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
-  TagCur *c = sqlite3_malloc(sizeof(*c)); (void)v;
-  if(!c) return SQLITE_NOMEM; memset(c,0,sizeof(*c)); *pp=&c->base; return SQLITE_OK;
+static int tagDisconnect(sqlite3_vtab *pVtab){
+  sqlite3_free(pVtab);
+  return SQLITE_OK;
 }
-static int tagClose(sqlite3_vtab_cursor *c){ sqlite3_free(c); return SQLITE_OK; }
-static int tagFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3_value **v){
-  (void)n;(void)s;(void)a;(void)v;
-  ((TagCur*)c)->iRow=0; return SQLITE_OK;
+static int tagOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
+  TagCur *pCur;
+  (void)pVtab;
+  pCur = sqlite3_malloc(sizeof(*pCur));
+  if( !pCur ) return SQLITE_NOMEM;
+  memset(pCur, 0, sizeof(*pCur));
+  *ppCursor = &pCur->base;
+  return SQLITE_OK;
 }
-static int tagNext(sqlite3_vtab_cursor *c){ ((TagCur*)c)->iRow++; return SQLITE_OK; }
-static int tagEof(sqlite3_vtab_cursor *c){
-  TagVtab *v = (TagVtab*)c->pVtab;
-  ChunkStore *cs = doltliteGetChunkStore(v->db);
-  return !cs || ((TagCur*)c)->iRow >= cs->nTags;
+static int tagClose(sqlite3_vtab_cursor *pCursor){
+  sqlite3_free(pCursor);
+  return SQLITE_OK;
 }
-static int tagColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
-  TagVtab *v = (TagVtab*)c->pVtab;
-  ChunkStore *cs = doltliteGetChunkStore(v->db);
+static int tagFilter(sqlite3_vtab_cursor *pCursor, int idxNum,
+    const char *idxStr, int argc, sqlite3_value **argv){
+  (void)idxNum;
+  (void)idxStr;
+  (void)argc;
+  (void)argv;
+  ((TagCur*)pCursor)->iRow = 0;
+  return SQLITE_OK;
+}
+static int tagNext(sqlite3_vtab_cursor *pCursor){
+  ((TagCur*)pCursor)->iRow++;
+  return SQLITE_OK;
+}
+static int tagEof(sqlite3_vtab_cursor *pCursor){
+  TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
+  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
+  return !cs || ((TagCur*)pCursor)->iRow >= cs->nTags;
+}
+static int tagColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int col){
+  TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
+  ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
   struct TagRef *t;
-  if(!cs) return SQLITE_OK;
-  t = &cs->aTags[((TagCur*)c)->iRow];
+  if( !cs ) return SQLITE_OK;
+  t = &cs->aTags[((TagCur*)pCursor)->iRow];
   switch(col){
     case 0:
       sqlite3_result_text(ctx, t->zName, -1, SQLITE_TRANSIENT);
@@ -248,11 +272,15 @@ static int tagColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
   }
   return SQLITE_OK;
 }
-static int tagRowid(sqlite3_vtab_cursor *c, sqlite3_int64 *r){
-  *r=((TagCur*)c)->iRow; return SQLITE_OK;
+static int tagRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
+  *pRowid = ((TagCur*)pCursor)->iRow;
+  return SQLITE_OK;
 }
-static int tagBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
-  (void)v; p->estimatedCost=10; p->estimatedRows=5; return SQLITE_OK;
+static int tagBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  (void)pVtab;
+  pInfo->estimatedCost = 10;
+  pInfo->estimatedRows = 5;
+  return SQLITE_OK;
 }
 
 static sqlite3_module tagModule = {
