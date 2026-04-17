@@ -1886,6 +1886,20 @@ static int csCommitToFile(ChunkStore *cs){
   rc = cs->pFile->pMethods->xFileSize(cs->pFile, &fileSize);
   if( rc != SQLITE_OK ) goto commit_done;
 
+  /* Detect file replacement by another process (e.g. GC compaction
+  ** renamed a new file over the original). Our fd still points at
+  ** the orphaned inode — writes would be lost. Reload from the
+  ** current file at this path. */
+  if( hadFile ){
+    int bMoved = 0;
+    int rc2 = sqlite3OsFileControl(cs->pFile, SQLITE_FCNTL_HAS_MOVED,
+                                   &bMoved);
+    if( rc2==SQLITE_OK && bMoved ){
+      rc = csReloadFromDisk(cs);
+      if( rc != SQLITE_OK ) goto commit_done;
+      fileSize = cs->iFileSize;
+    }
+  }
 
   if( fileSize > cs->iFileSize && hadFile ){
     rc = csReloadFromDisk(cs);
