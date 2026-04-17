@@ -238,6 +238,16 @@
 
 #define sqlite3_database_file_object orig_sqlite3_database_file_object
 #define sqlite3_enable_shared_cache orig_sqlite3_enable_shared_cache
+
+#ifdef SQLITE_TEST
+#define sqlite3SharedCacheList orig_sqlite3SharedCacheList
+#define sqlite3_pager_readdb_count orig_sqlite3_pager_readdb_count
+#define sqlite3_pager_writedb_count orig_sqlite3_pager_writedb_count
+#define sqlite3_pager_writej_count orig_sqlite3_pager_writej_count
+#define sqlite3_opentemp_count orig_sqlite3_opentemp_count
+#define disable_simulated_io_errors orig_disable_simulated_io_errors
+#define enable_simulated_io_errors orig_enable_simulated_io_errors
+#endif
 #define sqlite3HeaderSizeBtree orig_sqlite3HeaderSizeBtree
 #define sqlite3SectorSize orig_sqlite3SectorSize
 

@@ -465,14 +465,56 @@ done
 
 echo ""
 
-# Note: GC crash testing is not covered here. GC writes to a temp
-# file via sqlite3OsWrite directly (not through chunkStoreCommit),
-# so the DOLTLITE_CRASH_WRITE injection doesn't reach it. GC
-# durability is ensured by the atomic-rename pattern: write temp +
-# fsync temp + rename. A separate injection mechanism (hooking
-# sqlite3OsWrite globally or using a fault-injection VFS) would
-# be needed to test GC crashes. The directory-fsync fix (PR #509)
-# addresses the one known gap in that path.
+# ── Scenario 8: Crash during GC rewrite/rename ───────────
+#
+# GC is a pure storage rewrite. Crashing at any write/sync/rename
+# point must preserve identical logical state after reopen.
+echo "--- Scenario 8: Crash during GC rewrite ---"
+
+BASELINE8="$TMPROOT/s8_baseline.db"
+rm -f "$BASELINE8"
+"$DOLTLITE" "$BASELINE8" >/dev/null 2>&1 <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'main-1');
+SELECT dolt_commit('-Am','c1');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,'feat-2');
+SELECT dolt_commit('-Am','c2');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'main-3');
+SELECT dolt_commit('-Am','c3');
+SELECT dolt_gc();
+SQL
+
+BASE_COUNT=$("$DOLTLITE" "$BASELINE8" "SELECT count(*) FROM t;" 2>/dev/null)
+BASE_LOG=$("$DOLTLITE" "$BASELINE8" "SELECT count(*) FROM dolt_log;" 2>/dev/null)
+BASE_BRANCHES=$("$DOLTLITE" "$BASELINE8" "SELECT count(*) FROM dolt_branches;" 2>/dev/null)
+
+for N in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  DB="$TMPROOT/s8_n${N}.db"
+  cp "$BASELINE8" "$DB"
+
+  DOLTLITE_CRASH_GC_WRITE=$N "$DOLTLITE" "$DB" \
+    "SELECT dolt_gc();" >/dev/null 2>&1
+  RC=$?
+
+  COUNT=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t;" 2>/dev/null)
+  LOGCOUNT=$("$DOLTLITE" "$DB" "SELECT count(*) FROM dolt_log;" 2>/dev/null)
+  BRANCHES=$("$DOLTLITE" "$DB" "SELECT count(*) FROM dolt_branches;" 2>/dev/null)
+
+  if [ "$COUNT" = "$BASE_COUNT" ] && [ "$LOGCOUNT" = "$BASE_LOG" ] && [ "$BRANCHES" = "$BASE_BRANCHES" ]; then
+    if [ "$RC" = "99" ]; then
+      pass_name "s8_write${N}_gc_crash_preserves_state"
+    else
+      pass_name "s8_write${N}_gc_completed_preserves_state"
+      break
+    fi
+  else
+    fail_name "s8_write${N}_gc_state_changed"
+    echo "    rc=$RC count=$COUNT/$BASE_COUNT log=$LOGCOUNT/$BASE_LOG branches=$BRANCHES/$BASE_BRANCHES"
+  fi
+done
 
 echo ""
 echo "======================================="

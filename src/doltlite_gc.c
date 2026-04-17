@@ -231,6 +231,27 @@ static int gcRewriteFile(
   ChunkStore manifestCs;
   int rc = SQLITE_OK;
 
+  /* Deterministic crash injection for GC rewrite durability tests.
+  ** DOLTLITE_CRASH_GC_WRITE=N crashes at the Nth write/sync/rename
+  ** step in the compaction rewrite path. */
+#ifdef SQLITE_TEST
+  {
+    static int crashGcTarget = -2;
+    static int crashGcCount = 0;
+    if( crashGcTarget == -2 ){
+      const char *zEnv = getenv("DOLTLITE_CRASH_GC_WRITE");
+      crashGcTarget = zEnv ? atoi(zEnv) : -1;
+    }
+    if( crashGcTarget > 0 ) crashGcCount = 0;
+#define GC_CRASH_CHECK() do{ \
+  if( crashGcTarget>0 && ++crashGcCount>=crashGcTarget ){ \
+    _exit(99); \
+  } \
+}while(0)
+#else
+#define GC_CRASH_CHECK() ((void)0)
+#endif
+
 
   indexBuf = sqlite3_malloc(indexSize);
   if( !indexBuf ) return SQLITE_NOMEM;
@@ -289,6 +310,7 @@ static int gcRewriteFile(
       }
 
 
+      GC_CRASH_CHECK();
       rc = sqlite3OsWrite(pTmpFile, manifest, CHUNK_MANIFEST_SIZE, writeOff);
       writeOff += CHUNK_MANIFEST_SIZE;
 
@@ -298,6 +320,7 @@ static int gcRewriteFile(
         int remaining = nNewData;
         while( remaining > 0 && rc==SQLITE_OK ){
           int toWrite = remaining > 65536 ? 65536 : remaining;
+          GC_CRASH_CHECK();
           rc = sqlite3OsWrite(pTmpFile, p, toWrite, writeOff);
           p += toWrite;
           writeOff += toWrite;
@@ -311,6 +334,7 @@ static int gcRewriteFile(
         int remaining = indexSize;
         while( remaining > 0 && rc==SQLITE_OK ){
           int toWrite = remaining > 65536 ? 65536 : remaining;
+          GC_CRASH_CHECK();
           rc = sqlite3OsWrite(pTmpFile, p, toWrite, writeOff);
           p += toWrite;
           writeOff += toWrite;
@@ -320,6 +344,7 @@ static int gcRewriteFile(
 
 
       if( rc==SQLITE_OK ){
+        GC_CRASH_CHECK();
         rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
       }
       sqlite3OsCloseFree(pTmpFile);
@@ -332,6 +357,7 @@ static int gcRewriteFile(
           cs->pFile = 0;
         }
 
+        GC_CRASH_CHECK();
         if( rename(zTmp, cs->zFilename)!=0 ){
           /* Rename failed — original file still exists on disk
           ** but cs->pFile was already closed. Reopen it so the
@@ -356,7 +382,11 @@ static int gcRewriteFile(
             if( k>0 ) zDir[k-1] = 0; else{ zDir[0]='.'; zDir[1]=0; }
             {
               int dfd = open(zDir, O_RDONLY);
-              if( dfd>=0 ){ fsync(dfd); close(dfd); }
+              if( dfd>=0 ){
+                GC_CRASH_CHECK();
+                fsync(dfd);
+                close(dfd);
+              }
             }
             sqlite3_free(zDir);
           }
@@ -383,6 +413,10 @@ static int gcRewriteFile(
   }
 
   sqlite3_free(indexBuf);
+#ifdef SQLITE_TEST
+  }
+#undef GC_CRASH_CHECK
+#endif
   return rc;
 }
 
