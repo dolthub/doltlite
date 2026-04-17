@@ -1635,7 +1635,18 @@ static int mergeCatalogPass2(
     const char *zName = aTheirs[i].zName;
     struct TableEntry *oursEntry;
 
-    if( aTheirs[i].iTable<=1 || !zName ) continue;
+    if( aTheirs[i].iTable<=1 ) continue;
+
+    if( !zName ){
+      /* Nameless entry (secondary index). If ours doesn't have this
+      ** iTable, it's a new index from theirs — add it. */
+      if( !findTableEntry(aOurs, nOurs, aTheirs[i].iTable) ){
+        struct TableEntry newEntry = aTheirs[i];
+        if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
+        aMerged[(*pnMerged)++] = newEntry;
+      }
+      continue;
+    }
 
     oursEntry = findTableByName(aOurs, nOurs, zName);
     if( oursEntry ) continue;
