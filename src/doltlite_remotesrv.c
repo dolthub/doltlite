@@ -400,37 +400,6 @@ static int remoteSrvPersistRefs(ChunkStore *pStore){
   return rc;
 }
 
-static int remoteSrvPersistDefaultBranchCatalog(ChunkStore *pStore){
-  const char *zDef = chunkStoreGetDefaultBranch(pStore);
-  ProllyHash branchCommit;
-  int rc;
-
-  if( !zDef || chunkStoreFindBranch(pStore, zDef, &branchCommit)!=SQLITE_OK ){
-    return SQLITE_OK;
-  }
-
-  {
-    u8 *cdata = 0;
-    int ncdata = 0;
-    rc = chunkStoreGet(pStore, &branchCommit, &cdata, &ncdata);
-    if( rc!=SQLITE_OK ) return rc;
-    if( cdata ){
-      DoltliteCommit commit;
-      rc = doltliteCommitDeserialize(cdata, ncdata, &commit);
-      if( rc==SQLITE_OK ){
-        rc = chunkStoreWriteBranchWorkingCatalog(
-          pStore, zDef, &commit.catalogHash, NULL
-        );
-        doltliteCommitClear(&commit);
-      }
-      sqlite3_free(cdata);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-  }
-
-  return remoteSrvPersistRefs(pStore);
-}
-
 static void handlePutRefs(ChunkStore *pStore, int fd,
                           const u8 *pBody, int nBody){
   ProllyHash hash;
@@ -469,11 +438,6 @@ static void handleCommit(ChunkStore *pStore, int fd){
   int rc;
 
   rc = remoteSrvPersistRefs(pStore);
-  if( rc!=SQLITE_OK ){
-    sendError(fd);
-    return;
-  }
-  rc = remoteSrvPersistDefaultBranchCatalog(pStore);
   if( rc!=SQLITE_OK ){
     sendError(fd);
     return;
