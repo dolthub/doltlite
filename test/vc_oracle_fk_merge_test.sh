@@ -242,6 +242,37 @@ expect_eq "unique_violation_main_side_kept" "1" "$BASE_KEEPS_MAIN"
 
 echo ""
 
+# ── Scenario C2: Unique violation survives temp shadowing ─
+echo "--- C2. UNIQUE: temp shadow table cannot hide merge violation ---"
+
+DB="$TMPROOT/uniq_shadow.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "uniq_shadow"
+CREATE TABLE t(pk INTEGER PRIMARY KEY, v1 INT, UNIQUE(v1));
+INSERT INTO t VALUES (1,10);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (3,20);
+SELECT dolt_commit('-Am','feat_add_3_20');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2,20);
+SELECT dolt_commit('-Am','main_add_2_20');
+CREATE TEMP TABLE t(x INT);
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t';" "uniq_shadow_count")
+expect_eq "unique_shadow_violation_summary_count" "1" "$N"
+
+TYPE=$(dl "$DB" "SELECT violation_type FROM dolt_constraint_violations_t;" "uniq_shadow_type")
+expect_eq "unique_shadow_violation_type" "unique index" "$TYPE"
+
+BASE_COUNT=$(dl "$DB" "SELECT count(*) FROM t;" "uniq_shadow_base")
+expect_eq "unique_shadow_loser_not_in_base" "2" "$BASE_COUNT"
+
+echo ""
+
 # ── Scenario D: CHECK constraint violation ───────────────
 echo "--- D. CHECK: one side adds constraint, other side commits a violating row ---"
 
@@ -278,6 +309,37 @@ if dl_errors "$DB" "SELECT dolt_commit('-m','post-merge');" "check_commit_block"
 else
   fail_name "check_violation_commit_blocked"
 fi
+
+echo ""
+
+# ── Scenario D2: CHECK violation survives temp shadowing ──
+echo "--- D2. CHECK: temp shadow table cannot hide merge violation ---"
+
+DB="$TMPROOT/check_shadow.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "check_shadow"
+CREATE TABLE t(pk INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1,10);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2,-5);
+SELECT dolt_commit('-Am','feat_add_neg');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD CONSTRAINT positive_v CHECK (v > 0);
+SELECT dolt_commit('-Am','main_add_check');
+CREATE TEMP TABLE t(x INT);
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t';" "check_shadow_count")
+expect_eq "check_shadow_violation_summary_count" "1" "$N"
+
+TYPE=$(dl "$DB" "SELECT violation_type FROM dolt_constraint_violations_t WHERE pk=2;" "check_shadow_type")
+expect_eq "check_shadow_violation_type" "check constraint" "$TYPE"
+
+BASE_COUNT=$(dl "$DB" "SELECT count(*) FROM t WHERE pk=2;" "check_shadow_base")
+expect_eq "check_shadow_row_present_in_table" "1" "$BASE_COUNT"
 
 echo ""
 
