@@ -688,6 +688,21 @@ oracle_error "merge_no_args" "
 SELECT dolt_merge();
 "
 
+oracle_error "merge_abort_with_extra_args" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_commit('-A', '-m', 'init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 100 WHERE id = 1;
+SELECT dolt_commit('-A', '-m', 'feat1');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 999 WHERE id = 1;
+SELECT dolt_commit('-A', '-m', 'main2');
+SELECT dolt_merge('feature');
+SELECT dolt_merge('--abort', 'extra');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

@@ -1904,6 +1904,7 @@ static void doltliteMergeFunc(
   const char *zMessage = 0;
   int isAbort = 0;
   int noFastForward = 0;
+  u8 isMerging = 0;
   ProllyHash ourHead, theirHead, ancestorHash;
   ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
   DoltliteTxnState savedState;
@@ -1953,7 +1954,11 @@ static void doltliteMergeFunc(
   }
 
   if( isAbort ){
-    u8 isMerging = 0;
+    if( zBranch || zMessage || noFastForward ){
+      sqlite3_result_error(context,
+        "--abort does not take other arguments", -1);
+      return;
+    }
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
     if( !isMerging ){
       sqlite3_result_error(context, "no merge in progress", -1);
@@ -3577,12 +3582,33 @@ static void doltliteRebaseFunc(
         "dolt_rebase('-i', 'upstream')", -1);
       return;
     }
+    if( argc!=2 ){
+      sqlite3_result_error(context,
+        "interactive rebase takes exactly one upstream branch", -1);
+      return;
+    }
     zUpstream = (const char*)sqlite3_value_text(argv[1]);
     if( !zUpstream ){
       sqlite3_result_error(context, "upstream ref required", -1);
       return;
     }
     doltliteRebaseInteractiveStart(context, db, zUpstream);
+    return;
+  }
+
+  if( zArg0[0]=='-' ){
+    char *zErr = sqlite3_mprintf("unknown option `%s`", zArg0);
+    if( zErr ){
+      sqlite3_result_error(context, zErr, -1);
+      sqlite3_free(zErr);
+    }else{
+      sqlite3_result_error_nomem(context);
+    }
+    return;
+  }
+  if( argc!=1 ){
+    sqlite3_result_error(context,
+      "too many positional arguments to dolt_rebase", -1);
     return;
   }
 
