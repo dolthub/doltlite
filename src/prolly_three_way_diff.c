@@ -4,83 +4,24 @@
 #include "prolly_three_way_diff.h"
 #include <string.h>
 
-typedef struct DiffEntry DiffEntry;
-struct DiffEntry {
-  u8 type;
-  u8 *pKey;
-  int nKey;
-  i64 intKey;
-  u8 *pOldVal;
-  int nOldVal;
-  u8 *pNewVal;
-  int nNewVal;
-};
+/* Streaming three-way diff.
+**
+** Instead of collecting all changes from both sides into memory
+** arrays (O(n) memory), this implementation runs two ProllyDiffIter
+** cursors in parallel and merge-joins them on the fly.  Memory usage
+** is O(1) — only the two "current change" structs from the iterators
+** are alive at any point. */
 
-typedef struct DiffCollector DiffCollector;
-struct DiffCollector {
-  DiffEntry *aEntry;
-  int nEntry;
-  int nAlloc;
-  u8 flags;
-};
-
-static u8 *dupBlob(const u8 *pSrc, int nSrc){
-  u8 *pDst;
-  if( !pSrc || nSrc<=0 ) return 0;
-  pDst = (u8*)sqlite3_malloc(nSrc);
-  if( pDst ) memcpy(pDst, pSrc, nSrc);
-  return pDst;
+static int valuesEqual(const u8 *pA, int nA, const u8 *pB, int nB){
+  int equal = 0;
+  return prollyValuesEqual(pA, nA, pB, nB, &equal)==SQLITE_OK && equal;
 }
 
-static int diffCollectCallback(void *pCtx, const ProllyDiffChange *pChange){
-  DiffCollector *pColl = (DiffCollector*)pCtx;
-  DiffEntry *pEntry;
-
-
-  if( pColl->nEntry >= pColl->nAlloc ){
-    int nNew = pColl->nAlloc ? pColl->nAlloc*2 : 32;
-    DiffEntry *aNew = (DiffEntry*)sqlite3_realloc(pColl->aEntry,
-                                                   nNew*sizeof(DiffEntry));
-    if( !aNew ) return SQLITE_NOMEM;
-    pColl->aEntry = aNew;
-    pColl->nAlloc = nNew;
-  }
-
-  pEntry = &pColl->aEntry[pColl->nEntry++];
-  memset(pEntry, 0, sizeof(*pEntry));
-  pEntry->type = pChange->type;
-  pEntry->intKey = pChange->intKey;
-  pEntry->pKey = dupBlob(pChange->pKey, pChange->nKey);
-  pEntry->nKey = pChange->nKey;
-  pEntry->pOldVal = dupBlob(pChange->pOldVal, pChange->nOldVal);
-  pEntry->nOldVal = pChange->nOldVal;
-  pEntry->pNewVal = dupBlob(pChange->pNewVal, pChange->nNewVal);
-  pEntry->nNewVal = pChange->nNewVal;
-
-
-  if( (pChange->pKey && pChange->nKey>0 && !pEntry->pKey)
-   || (pChange->pOldVal && pChange->nOldVal>0 && !pEntry->pOldVal)
-   || (pChange->pNewVal && pChange->nNewVal>0 && !pEntry->pNewVal) ){
-    return SQLITE_NOMEM;
-  }
-
-  return SQLITE_OK;
-}
-
-static void diffCollectorFree(DiffCollector *pColl){
-  int i;
-  for(i=0; i<pColl->nEntry; i++){
-    sqlite3_free(pColl->aEntry[i].pKey);
-    sqlite3_free(pColl->aEntry[i].pOldVal);
-    sqlite3_free(pColl->aEntry[i].pNewVal);
-  }
-  sqlite3_free(pColl->aEntry);
-  pColl->aEntry = 0;
-  pColl->nEntry = 0;
-  pColl->nAlloc = 0;
-}
-
-static int diffEntryKeyCmp(const DiffEntry *pA, const DiffEntry *pB, u8 flags){
+static int diffChangeKeyCmp(
+  const ProllyDiffChange *pA,
+  const ProllyDiffChange *pB,
+  u8 flags
+){
   if( flags & PROLLY_NODE_INTKEY ){
     if( pA->intKey < pB->intKey ) return -1;
     if( pA->intKey > pB->intKey ) return 1;
@@ -93,25 +34,21 @@ static int diffEntryKeyCmp(const DiffEntry *pA, const DiffEntry *pB, u8 flags){
   }
 }
 
-static int valuesEqual(const u8 *pA, int nA, const u8 *pB, int nB){
-  int equal = 0;
-  return prollyValuesEqual(pA, nA, pB, nB, &equal)==SQLITE_OK && equal;
-}
-
-static void fillKeyFromEntry(ThreeWayChange *pOut, const DiffEntry *pEntry){
-  pOut->pKey = pEntry->pKey;
-  pOut->nKey = pEntry->nKey;
-  pOut->intKey = pEntry->intKey;
+static void fillKeyFromChange(ThreeWayChange *pOut,
+                              const ProllyDiffChange *pCh){
+  pOut->pKey = pCh->pKey;
+  pOut->nKey = pCh->nKey;
+  pOut->intKey = pCh->intKey;
 }
 
 static int emitLeftOnly(
-  const DiffEntry *pLeft,
+  const ProllyDiffChange *pLeft,
   ThreeWayDiffCallback xCallback,
   void *pCtx
 ){
   ThreeWayChange change;
   memset(&change, 0, sizeof(change));
-  fillKeyFromEntry(&change, pLeft);
+  fillKeyFromChange(&change, pLeft);
 
   switch( pLeft->type ){
     case PROLLY_DIFF_ADD:
@@ -136,13 +73,13 @@ static int emitLeftOnly(
 }
 
 static int emitRightOnly(
-  const DiffEntry *pRight,
+  const ProllyDiffChange *pRight,
   ThreeWayDiffCallback xCallback,
   void *pCtx
 ){
   ThreeWayChange change;
   memset(&change, 0, sizeof(change));
-  fillKeyFromEntry(&change, pRight);
+  fillKeyFromChange(&change, pRight);
 
   switch( pRight->type ){
     case PROLLY_DIFF_ADD:
@@ -168,42 +105,38 @@ static int emitRightOnly(
 
 /* Classification when both branches touched the same key:
 **
-**   ADD vs ADD        → CONVERGENT if same value, else CONFLICT_MM
-**   DELETE vs DELETE  → CONVERGENT
-**   MODIFY vs MODIFY  → CONVERGENT if same new value, else CONFLICT_MM
-**   DELETE vs MODIFY  → CONFLICT_DM
-**   MODIFY vs DELETE  → CONFLICT_DM
-**   anything else     → CONFLICT_MM (fallback)
+**   ADD vs ADD        -> CONVERGENT if same value, else CONFLICT_MM
+**   DELETE vs DELETE  -> CONVERGENT
+**   MODIFY vs MODIFY  -> CONVERGENT if same new value, else CONFLICT_MM
+**   DELETE vs MODIFY  -> CONFLICT_DM
+**   MODIFY vs DELETE  -> CONFLICT_DM
+**   anything else     -> CONFLICT_MM (fallback)
 **
 ** "Both sides made the same change" (convergent) is the one case
-** merge can silently accept — everything else either needs user
+** merge can silently accept -- everything else either needs user
 ** resolution or is impossible given the diff semantics. */
 static int emitBothSides(
-  const DiffEntry *pLeft,
-  const DiffEntry *pRight,
+  const ProllyDiffChange *pLeft,
+  const ProllyDiffChange *pRight,
   ThreeWayDiffCallback xCallback,
   void *pCtx
 ){
   ThreeWayChange change;
   memset(&change, 0, sizeof(change));
-  fillKeyFromEntry(&change, pLeft);
+  fillKeyFromChange(&change, pLeft);
 
 
   if( pLeft->type==PROLLY_DIFF_ADD && pRight->type==PROLLY_DIFF_ADD ){
     if( valuesEqual(pLeft->pNewVal, pLeft->nNewVal,
                     pRight->pNewVal, pRight->nNewVal) ){
       change.type = THREE_WAY_CONVERGENT;
-      change.pOurVal = pLeft->pNewVal;
-      change.nOurVal = pLeft->nNewVal;
-      change.pTheirVal = pRight->pNewVal;
-      change.nTheirVal = pRight->nNewVal;
     }else{
       change.type = THREE_WAY_CONFLICT_MM;
-      change.pOurVal = pLeft->pNewVal;
-      change.nOurVal = pLeft->nNewVal;
-      change.pTheirVal = pRight->pNewVal;
-      change.nTheirVal = pRight->nNewVal;
     }
+    change.pOurVal = pLeft->pNewVal;
+    change.nOurVal = pLeft->nNewVal;
+    change.pTheirVal = pRight->pNewVal;
+    change.nTheirVal = pRight->nNewVal;
     return xCallback(pCtx, &change);
   }
 
@@ -269,68 +202,67 @@ int prollyThreeWayDiff(
   ThreeWayDiffCallback xCallback,
   void *pCtx
 ){
-  DiffCollector left;
-  DiffCollector right;
-  int rc;
-  int iL, iR;
+  ProllyDiffIter iterL;
+  ProllyDiffIter iterR;
+  ProllyDiffChange *pL = 0;
+  ProllyDiffChange *pR = 0;
+  int rcL, rcR;
+  int rc = SQLITE_OK;
 
-  memset(&left, 0, sizeof(left));
-  memset(&right, 0, sizeof(right));
-  left.flags = flags;
-  right.flags = flags;
+  rcL = prollyDiffIterOpen(&iterL, pStore, pCache,
+                           pAncestorRoot, pOursRoot, flags);
+  if( rcL!=SQLITE_OK ){
+    rc = rcL;
+    goto cleanup;
+  }
+  rcR = prollyDiffIterOpen(&iterR, pStore, pCache,
+                           pAncestorRoot, pTheirsRoot, flags);
+  if( rcR!=SQLITE_OK ){
+    rc = rcR;
+    goto cleanup;
+  }
 
+  /* Prime both iterators. */
+  rcL = prollyDiffIterStep(&iterL, &pL);
+  rcR = prollyDiffIterStep(&iterR, &pR);
 
-  rc = prollyDiff(pStore, pCache, pAncestorRoot, pOursRoot,
-                  flags, diffCollectCallback, &left);
-  if( rc!=SQLITE_OK ) goto cleanup;
-
-
-  rc = prollyDiff(pStore, pCache, pAncestorRoot, pTheirsRoot,
-                  flags, diffCollectCallback, &right);
-  if( rc!=SQLITE_OK ) goto cleanup;
-
-
-  iL = 0;
-  iR = 0;
-  while( iL < left.nEntry && iR < right.nEntry ){
-    int cmp = diffEntryKeyCmp(&left.aEntry[iL], &right.aEntry[iR], flags);
+  while( rcL==SQLITE_ROW && rcR==SQLITE_ROW ){
+    int cmp = diffChangeKeyCmp(pL, pR, flags);
     if( cmp < 0 ){
-
-      rc = emitLeftOnly(&left.aEntry[iL], xCallback, pCtx);
+      rc = emitLeftOnly(pL, xCallback, pCtx);
       if( rc!=SQLITE_OK ) goto cleanup;
-      iL++;
+      rcL = prollyDiffIterStep(&iterL, &pL);
     }else if( cmp > 0 ){
-
-      rc = emitRightOnly(&right.aEntry[iR], xCallback, pCtx);
+      rc = emitRightOnly(pR, xCallback, pCtx);
       if( rc!=SQLITE_OK ) goto cleanup;
-      iR++;
+      rcR = prollyDiffIterStep(&iterR, &pR);
     }else{
-
-      rc = emitBothSides(&left.aEntry[iL], &right.aEntry[iR],
-                         xCallback, pCtx);
+      rc = emitBothSides(pL, pR, xCallback, pCtx);
       if( rc!=SQLITE_OK ) goto cleanup;
-      iL++;
-      iR++;
+      rcL = prollyDiffIterStep(&iterL, &pL);
+      rcR = prollyDiffIterStep(&iterR, &pR);
     }
   }
 
-
-  while( iL < left.nEntry ){
-    rc = emitLeftOnly(&left.aEntry[iL], xCallback, pCtx);
+  /* Drain whichever side has remaining entries. */
+  while( rcL==SQLITE_ROW ){
+    rc = emitLeftOnly(pL, xCallback, pCtx);
     if( rc!=SQLITE_OK ) goto cleanup;
-    iL++;
+    rcL = prollyDiffIterStep(&iterL, &pL);
+  }
+  while( rcR==SQLITE_ROW ){
+    rc = emitRightOnly(pR, xCallback, pCtx);
+    if( rc!=SQLITE_OK ) goto cleanup;
+    rcR = prollyDiffIterStep(&iterR, &pR);
   }
 
-
-  while( iR < right.nEntry ){
-    rc = emitRightOnly(&right.aEntry[iR], xCallback, pCtx);
-    if( rc!=SQLITE_OK ) goto cleanup;
-    iR++;
-  }
+  /* Propagate any iterator error (not SQLITE_DONE). */
+  if( rcL!=SQLITE_DONE ) rc = rcL;
+  if( rc==SQLITE_OK && rcR!=SQLITE_DONE ) rc = rcR;
 
 cleanup:
-  diffCollectorFree(&left);
-  diffCollectorFree(&right);
+  prollyDiffIterClose(&iterL);
+  prollyDiffIterClose(&iterR);
   return rc;
 }
 
