@@ -386,7 +386,8 @@ jobs:
     - name: Build crash-test binaries
       run: |
         cd build-crash
-        . ./.tclenv.sh
+        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        . "$TCL_CONFIG"
         make OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' \
           OPTS="$TCL_INCLUDE_SPEC" \
           doltlite-lib doltlite-crashtest
