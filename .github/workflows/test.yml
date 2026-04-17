@@ -360,3 +360,44 @@ jobs:
           tkt-80e031a00f tkt-80ba201079 tkt-31338dca7e \
           tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
           tkt-f3e5abed55
+
+  crash-sqlite-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install crash-test dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tcl-dev libtommath-dev build-essential zlib1g-dev
+
+    - name: Configure SQLITE_TEST build
+      run: |
+        mkdir -p build-crash && cd build-crash
+        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname "$TCL_CONFIG")
+        else
+          ../configure
+        fi
+
+    - name: Build crash-test binaries
+      run: |
+        cd build-crash
+        make OPTIONS='-DSQLITE_TEST=1 -DSQLITE_CRASH_TEST=1' doltlite-lib doltlite-crashtest
+
+    - name: Native crash recovery test (SQLITE_TEST)
+      run: |
+        cd build-crash
+        cc -I. -o crash_recovery_test ../test/crash_recovery_test.c \
+          libdoltlite.a -lz -lpthread
+        ./crash_recovery_test
+      timeout-minutes: 10
+
+    - name: Crash injection durability test (SQLITE_TEST)
+      run: |
+        cd build-crash
+        bash ../test/crash_injection_test.sh ./doltlite-crashtest
+      timeout-minutes: 15
