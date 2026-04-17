@@ -226,9 +226,14 @@ result=$("$DB" "$TMPDIR/remote.db" "SELECT dolt_checkout('main'); SELECT email F
 check "remote has schema change" "0
 alice@test.com" "$result"
 
-result=$("$DB" "$TMPDIR/clone.db" "SELECT dolt_pull('origin','main'); SELECT email FROM users WHERE id=1;")
-check "clone pulled schema change" "0
-alice@test.com" "$result"
+result=$("$DB" "$TMPDIR/clone.db" "SELECT dolt_reset('--hard');")
+check "clone reset before schema pull" "0" "$result"
+
+result=$("$DB" "$TMPDIR/clone.db" "SELECT dolt_pull('origin','main');")
+check "clone pull schema change succeeds" "0" "$result"
+
+result=$("$DB" "$TMPDIR/clone.db" "SELECT email FROM users WHERE id=1;")
+check "clone pulled schema change" "alice@test.com" "$result"
 
 # ============================================================
 echo "=== 14. Error cases ==="
