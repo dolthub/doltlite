@@ -273,11 +273,12 @@ int sortKeyFromRecordPrefixCollBuffer(
 
   *pnOut = 0;
 
-  /* Upper bound: each record byte can at most double (0x00 escape)
-  ** plus 9 bytes per field (numeric) plus tag+terminator overhead.
-  ** 3*nRec is a safe overestimate that avoids the measure pass. */
-  nEstimate = 3 * nRec + 16;
-  if( nEstimate < 32 ) nEstimate = 32;
+  /* Upper bound: worst case is a record of serial-type-8 fields
+  ** (integer zero) — each is 1 header byte, 0 data bytes, but
+  ** encodes to 9 sort key bytes. So the expansion factor per
+  ** record byte is up to 9. Use 9*nRec as the safe bound. */
+  nEstimate = 9 * nRec + 16;
+  if( nEstimate < 64 ) nEstimate = 64;
 
   if( *pnAlloc < nEstimate ){
     u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nEstimate);
