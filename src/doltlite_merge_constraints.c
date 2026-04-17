@@ -125,7 +125,7 @@ static char *buildFkViolationInfo(
   pCols = sqlite3_str_new(0);
   pRefCols = sqlite3_str_new(0);
 
-  zQuery = sqlite3_mprintf("PRAGMA foreign_key_list(%Q)", zChildTable);
+  zQuery = sqlite3_mprintf("PRAGMA main.foreign_key_list(%Q)", zChildTable);
   if( !zQuery ){
     fatal = 1;
   }else{
@@ -281,7 +281,7 @@ static int tableHasRowid(sqlite3 *db, const char *zTable){
   sqlite3_stmt *pStmt = 0;
   char *zQuery;
   int rc;
-  zQuery = sqlite3_mprintf("SELECT rowid FROM \"%w\" LIMIT 0", zTable);
+  zQuery = sqlite3_mprintf("SELECT rowid FROM main.\"%w\" LIMIT 0", zTable);
   if( !zQuery ) return 1; /* treat OOM as rowid — caller will fail elsewhere */
   rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, 0);
   sqlite3_free(zQuery);
@@ -382,7 +382,7 @@ static int detectUniqueViolationsForIndex(
   (void)pzErrMsg;
 
   zQuery = sqlite3_mprintf(
-    "SELECT rowid, %s FROM \"%w\" NOT INDEXED ORDER BY %s, rowid",
+    "SELECT rowid, %s FROM main.\"%w\" NOT INDEXED ORDER BY %s, rowid",
     zCols, zTable, zCols);
   if( !zQuery ) return SQLITE_NOMEM;
   rc = sqlite3_prepare_v2(db, zQuery, -1, &pScan, 0);
@@ -499,7 +499,7 @@ int doltliteDetectMergeUniqueViolations(
   }
 
   rc = sqlite3_prepare_v2(db,
-      "SELECT name FROM sqlite_master WHERE type='table' "
+      "SELECT name FROM main.sqlite_master WHERE type='table' "
       "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
       -1, &pTbls, 0);
   if( rc != SQLITE_OK ){
@@ -517,7 +517,7 @@ int doltliteDetectMergeUniqueViolations(
     zTable = sqlite3_mprintf("%s", zTableRaw);
     if( !zTable ){ rc = SQLITE_NOMEM; break; }
 
-    zIdxQ = sqlite3_mprintf("PRAGMA index_list(%Q)", zTable);
+    zIdxQ = sqlite3_mprintf("PRAGMA main.index_list(%Q)", zTable);
     if( !zIdxQ ){ sqlite3_free(zTable); rc = SQLITE_NOMEM; break; }
     rc = sqlite3_prepare_v2(db, zIdxQ, -1, &pIdxList, 0);
     sqlite3_free(zIdxQ);
@@ -559,7 +559,7 @@ int doltliteDetectMergeUniqueViolations(
 
       zIdx = sqlite3_mprintf("%s", zIdxRaw);
       if( !zIdx ) break;
-      zColsQ = sqlite3_mprintf("PRAGMA index_xinfo(%Q)", zIdx);
+      zColsQ = sqlite3_mprintf("PRAGMA main.index_xinfo(%Q)", zIdx);
       if( !zColsQ ){ sqlite3_free(zIdx); break; }
       idxRc = sqlite3_prepare_v2(db, zColsQ, -1, &pCols, 0);
       sqlite3_free(zColsQ);
@@ -735,7 +735,7 @@ int doltliteDetectMergeCheckViolations(
   }
 
   rc = sqlite3_prepare_v2(db,
-      "SELECT name, sql FROM sqlite_master WHERE type='table' "
+      "SELECT name, sql FROM main.sqlite_master WHERE type='table' "
       "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%'",
       -1, &pTbls, 0);
   if( rc != SQLITE_OK ){
@@ -794,7 +794,7 @@ int doltliteDetectMergeCheckViolations(
       }
 
       zQuery = sqlite3_mprintf(
-          "SELECT rowid FROM \"%w\" NOT INDEXED WHERE NOT (%s)",
+          "SELECT rowid FROM main.\"%w\" NOT INDEXED WHERE NOT (%s)",
           zTable, zExpr);
       if( !zQuery ){
         sqlite3_free(zExpr);
@@ -906,7 +906,7 @@ int doltliteDetectMergeFkViolations(
     }
   }
 
-  rc = sqlite3_prepare_v2(db, "PRAGMA foreign_key_check", -1, &pStmt, 0);
+  rc = sqlite3_prepare_v2(db, "PRAGMA main.foreign_key_check", -1, &pStmt, 0);
   if( rc != SQLITE_OK ){
     if( haveAnc ) doltliteFreeCatalog(aAnc, nAnc);
     return rc;
