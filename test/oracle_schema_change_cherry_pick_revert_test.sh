@@ -81,16 +81,14 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1
 [ "$(dl "$DB" "SELECT count(*) FROM t;")" = "2" ] && pass_name "7_count" || fail_name "7_count"
 [ "$(dl "$DB" "SELECT v FROM t WHERE id=2;")" = "b" ] && pass_name "7_deleted_back" || fail_name "7_deleted_back"
 
-# ── 8: Cherry-pick CREATE INDEX (known issue) ────────────
-# Cherry-picking a commit that adds an index currently leaves
-# the index empty. Tracked for fix.
+# ── 8: Cherry-pick CREATE INDEX ───────────────────────────
 echo ""
 echo "--- 8: Cherry-pick CREATE INDEX ---"
 DB="$TMPROOT/8.db"
 dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT); INSERT INTO t VALUES(1,10),(2,20); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE INDEX idx_k ON t(k); INSERT INTO t VALUES(3,30); SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main'); SELECT dolt_cherry_pick(dolt_hashof('feat'));" >/dev/null
 [ "$(dl "$DB" "SELECT count(*) FROM t;")" = "3" ] && pass_name "8_count" || fail_name "8_count"
 INTEG=$(dl "$DB" "PRAGMA integrity_check;")
-[ "$INTEG" = "ok" ] && pass_name "8_integrity" || fail_name "8_integrity (known: cherry-pick CREATE INDEX leaves empty index)"
+[ "$INTEG" = "ok" ] && pass_name "8_integrity" || fail_name "8_integrity"
 
 # ── 9: Revert CREATE INDEX ──────────────────────────────
 echo ""
