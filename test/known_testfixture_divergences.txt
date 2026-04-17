@@ -365,3 +365,7 @@ collate4 collate4-2.2.2
 collate4 collate4-4.3
 collate4 collate4-4.4
 collate4 collate4-4.5
+select9 select9-2.1.1  # CREATE INDEX with COLLATE REVERSE
+select9 select9-2.X
+select9 select9-3.1    # depends on index dropped in select9-2.X
+select9 select9-4.1
