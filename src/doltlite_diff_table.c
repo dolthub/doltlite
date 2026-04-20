@@ -3,6 +3,7 @@
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
+#include "prolly_hashset.h"
 #include "prolly_diff.h"
 #include "prolly_cache.h"
 #include "chunk_store.h"
@@ -272,27 +273,19 @@ static int pairsAppend(DiffTblCursor *pCur,
   return SQLITE_OK;
 }
 
-static int stackPushUnique(ProllyHash **paAdded, int *pnAdded, int *pnAddedAlloc,
+static int stackPushUnique(ProllyHashSet *pSeen,
                            ProllyHash **paStack, int *pnStack, int *pnStackAlloc,
                            const ProllyHash *pHash){
-  int i;
-  for(i=0; i<*pnAdded; i++){
-    if( prollyHashCompare(&(*paAdded)[i], pHash)==0 ) return SQLITE_OK;
-  }
-  if( *pnAdded >= *pnAddedAlloc ){
-    int nNew = *pnAddedAlloc ? (*pnAddedAlloc)*2 : 16;
-    ProllyHash *tmp = sqlite3_realloc(*paAdded, nNew*(int)sizeof(ProllyHash));
-    if( !tmp ) return SQLITE_NOMEM;
-    *paAdded = tmp; *pnAddedAlloc = nNew;
-  }
+  int rc;
+  if( prollyHashSetContains(pSeen, pHash) ) return SQLITE_OK;
+  rc = prollyHashSetAdd(pSeen, pHash);
+  if( rc!=SQLITE_OK ) return rc;
   if( *pnStack >= *pnStackAlloc ){
     int nNew = *pnStackAlloc ? (*pnStackAlloc)*2 : 16;
     ProllyHash *tmp = sqlite3_realloc(*paStack, nNew*(int)sizeof(ProllyHash));
     if( !tmp ) return SQLITE_NOMEM;
     *paStack = tmp; *pnStackAlloc = nNew;
   }
-  (*paAdded)[*pnAdded] = *pHash;
-  (*pnAdded)++;
   (*paStack)[*pnStack] = *pHash;
   (*pnStack)++;
   return SQLITE_OK;
@@ -386,12 +379,10 @@ static int appendCurrentDiffPair(
 static int registerCommitParents(
   CmTblInfo **paMap,
   int *pnMap,
+  ProllyHashSet *pSeen,
   ProllyHash **paStack,
   int *pnStack,
   int *pnStackAlloc,
-  ProllyHash **paAdded,
-  int *pnAdded,
-  int *pnAddedAlloc,
   const DoltliteCommit *pCommit,
   const ProllyHash *pCurTblRoot,
   const ProllyHash *pCurSchemaHash,
@@ -412,8 +403,7 @@ static int registerCommitParents(
   for(i=0; i<doltliteCommitParentCount(pCommit); i++){
     pParent = doltliteCommitParentHash(pCommit, i);
     if( !pParent ) continue;
-    rc = stackPushUnique(paAdded, pnAdded, pnAddedAlloc,
-                         paStack, pnStack, pnStackAlloc, pParent);
+    rc = stackPushUnique(pSeen, paStack, pnStack, pnStackAlloc, pParent);
     if( rc!=SQLITE_OK ) return rc;
   }
   return SQLITE_OK;
@@ -435,8 +425,8 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
   int nMap = 0;
   ProllyHash *aStack = 0;
   int nStack = 0, nStackAlloc = 0;
-  ProllyHash *aAdded = 0;
-  int nAdded = 0, nAddedAlloc = 0;
+  ProllyHashSet seen;
+  int seenInit = 0;
   int currInited = 0;
   ProllyHash curr;
   int rc = SQLITE_OK;
@@ -449,8 +439,11 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
   rc = seedWorkingChildInfo(db, &headHash, zTableName, &aMap, &nMap);
   if( rc!=SQLITE_OK ) goto walk_done;
 
-  rc = stackPushUnique(&aAdded, &nAdded, &nAddedAlloc,
-                       &aStack, &nStack, &nStackAlloc, &headHash);
+  rc = prollyHashSetInit(&seen, 64);
+  if( rc!=SQLITE_OK ) goto walk_done;
+  seenInit = 1;
+
+  rc = stackPushUnique(&seen, &aStack, &nStack, &nStackAlloc, &headHash);
   if( rc!=SQLITE_OK ) goto walk_done;
   curr = headHash;
   currInited = 1;
@@ -481,9 +474,9 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
     rc = appendCurrentDiffPair(pCur, &curr, &commit, &curTblRoot,
                                &curSchemaHash, curFlags, aMap, nMap);
     if( rc==SQLITE_OK ){
-      rc = registerCommitParents(&aMap, &nMap, &aStack, &nStack,
-                                 &nStackAlloc, &aAdded, &nAdded,
-                                 &nAddedAlloc, &commit, &curTblRoot,
+      rc = registerCommitParents(&aMap, &nMap, &seen,
+                                 &aStack, &nStack, &nStackAlloc,
+                                 &commit, &curTblRoot,
                                  &curSchemaHash, curFlags, curHex);
     }
     doltliteCommitClear(&commit);
@@ -501,7 +494,7 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
 walk_done:
   sqlite3_free(aMap);
   sqlite3_free(aStack);
-  sqlite3_free(aAdded);
+  if( seenInit ) prollyHashSetFree(&seen);
   return rc;
 }
 
