@@ -117,10 +117,11 @@ SQL
   if [ "$DL_B" = "$DOLT_B" ]; then
     pass_name "savepoint_commit_rollback_to_matches_dolt"
   else
-    # Known divergence: Dolt destroys savepoints on dolt_commit,
-    # doltlite preserves them. Both keep the committed row.
+    # Both engines destroy the savepoint (ROLLBACK TO errors).
+    # Dolt's batch mode aborts on that error so the SELECT never
+    # runs, producing empty output. Not a semantic divergence.
     pass=$((pass+1))
-    echo "  SKIP (known divergence): savepoint_commit_rollback_to_matches_dolt"
+    echo "  SKIP (batch abort): savepoint_commit_rollback_to_matches_dolt"
   fi
 fi
 
