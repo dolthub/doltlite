@@ -1904,6 +1904,11 @@ static void doltliteResetFunc(
       goto reset_cleanup;
     }
 
+    /* Hard reset discards any in-progress merge working state.
+    ** Otherwise a conflicted working set can be rewound to HEAD
+    ** while the stale conflicts catalog is still persisted. */
+    doltliteClearSessionMergeState(db);
+
     /* Hard reset discards the working tree, so any post-merge
     ** constraint violations attached to it go with it. Otherwise
     ** the session hash lingers and blocks the next commit. */
