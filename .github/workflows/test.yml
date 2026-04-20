@@ -407,3 +407,41 @@ jobs:
         cd build-crash
         bash ../test/crash_injection_test.sh ./doltlite-crashtest
       timeout-minutes: 15
+
+  oracle-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential zlib1g-dev
+
+    - name: Install Dolt
+      run: |
+        DOLT_VERSION=1.86.0
+        curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/dolt-linux-amd64.tar.gz" \
+          | sudo tar -xz -C /usr/local --strip-components=1
+        dolt version
+
+    - name: Configure and Build
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make doltlite
+
+    - name: Version control oracle tests
+      run: |
+        cd build
+        for f in ../test/vc_oracle_*_test.sh; do
+          echo "--- $(basename $f) ---"
+          if grep -q 'dolt"' "$f" || grep -q '\$DOLT' "$f"; then
+            bash "$f" ./doltlite dolt || exit 1
+          else
+            bash "$f" ./doltlite || exit 1
+          fi
+        done
+      timeout-minutes: 20
