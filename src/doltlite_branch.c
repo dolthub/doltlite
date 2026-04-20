@@ -169,6 +169,10 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     case MODE_DELETE: {
       BranchMutationCtx m;
       ProllyHash branchHead, currentHead, ancestor;
+      if( nPositional>1 ){
+        sqlite3_result_error(ctx, "too many arguments", -1);
+        return;
+      }
       if( nPositional<1 ){
         sqlite3_result_error(ctx, "branch name required", -1); return;
       }
@@ -205,6 +209,10 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
 
     case MODE_COPY: {
       BranchCopyCtx m;
+      if( nPositional>2 ){
+        sqlite3_result_error(ctx, "too many arguments", -1);
+        return;
+      }
       if( nPositional<2 ){
         sqlite3_result_error(ctx, "copy requires source and destination", -1);
         return;
@@ -228,6 +236,10 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     case MODE_MOVE: {
       BranchMoveCtx m;
       int renamingCurrent;
+      if( nPositional>2 ){
+        sqlite3_result_error(ctx, "too many arguments", -1);
+        return;
+      }
       if( nPositional<2 ){
         sqlite3_result_error(ctx, "move requires source and destination", -1);
         return;
@@ -255,6 +267,10 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     case MODE_CREATE: {
       BranchMutationCtx m;
       const char *zName, *zStart;
+      if( nPositional>2 ){
+        sqlite3_result_error(ctx, "too many arguments", -1);
+        return;
+      }
       if( nPositional<1 ){
         sqlite3_result_error(ctx, "branch name required", -1); return;
       }
@@ -438,12 +454,15 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
 ** working catalog, mirroring Dolt's reset-a-single-table semantics. */
 static int doltliteCheckoutTables(
   sqlite3 *db,
+  const char *zSourceRef,
   sqlite3_value **argv,
+  int iFirstName,
   int nNames
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash workingHash, headCatHash, stagedHash;
   ProllyHash sourceCatHash;
+  ProllyHash newWorkingHash;
   struct TableEntry *aWorking = 0, *aSource = 0;
   int nWorking = 0, nSource = 0;
   int i, j;
@@ -453,17 +472,28 @@ static int doltliteCheckoutTables(
   if( nNames<=0 ) return SQLITE_NOTFOUND;
 
 
-  doltliteGetSessionStaged(db, &stagedHash);
-  if( !prollyHashIsEmpty(&stagedHash) ){
-    memcpy(&sourceCatHash, &stagedHash, sizeof(ProllyHash));
-  }else{
-    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  if( zSourceRef ){
+    ProllyHash sourceCommit;
+    DoltliteCommit sourceC;
+    memset(&sourceC, 0, sizeof(sourceC));
+    rc = doltliteResolveRef(db, zSourceRef, &sourceCommit);
+    if( rc!=SQLITE_OK ) return SQLITE_NOTFOUND;
+    rc = doltliteLoadCommit(db, &sourceCommit, &sourceC);
     if( rc!=SQLITE_OK ) return rc;
-    memcpy(&sourceCatHash, &headCatHash, sizeof(ProllyHash));
-  }
-  if( prollyHashIsEmpty(&sourceCatHash) ){
-
-    return SQLITE_NOTFOUND;
+    memcpy(&sourceCatHash, &sourceC.catalogHash, sizeof(ProllyHash));
+    doltliteCommitClear(&sourceC);
+  }else{
+    doltliteGetSessionStaged(db, &stagedHash);
+    if( !prollyHashIsEmpty(&stagedHash) ){
+      memcpy(&sourceCatHash, &stagedHash, sizeof(ProllyHash));
+    }else{
+      rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+      if( rc!=SQLITE_OK ) return rc;
+      memcpy(&sourceCatHash, &headCatHash, sizeof(ProllyHash));
+    }
+    if( prollyHashIsEmpty(&sourceCatHash) ){
+      return SQLITE_NOTFOUND;
+    }
   }
 
 
@@ -480,7 +510,7 @@ static int doltliteCheckoutTables(
 
 
   for(i=0; i<nNames; i++){
-    const char *zName = (const char*)sqlite3_value_text(argv[i]);
+    const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     int srcIdx = -1, workIdx = -1;
     char *zDup;
     if( !zName ) continue;
@@ -547,7 +577,6 @@ static int doltliteCheckoutTables(
   {
     u8 *buf = 0;
     int nBuf = 0;
-    ProllyHash newWorkingHash;
     rc = doltliteSerializeCatalogEntries(db, aWorking, nWorking, &buf, &nBuf);
     if( rc==SQLITE_OK ){
       rc = chunkStorePut(cs, buf, nBuf, &newWorkingHash);
@@ -555,6 +584,9 @@ static int doltliteCheckoutTables(
     sqlite3_free(buf);
     if( rc==SQLITE_OK ){
       rc = doltliteSwitchCatalog(db, &newWorkingHash);
+    }
+    if( rc==SQLITE_OK && zSourceRef ){
+      doltliteSetSessionStaged(db, &newWorkingHash);
     }
     if( rc==SQLITE_OK ){
       rc = doltliteSaveWorkingSet(db);
@@ -573,6 +605,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   BranchMutationCtx branchCreate;
   const char *zBranch;
   char *zCurrentBranch = 0;
+  int isCreateAndSwitch = 0;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -596,13 +629,27 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
 
   if( strcmp(zBranch, "-b")==0 ){
     if( argc<2 ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
+    if( argc>3 ){ sqlite3_result_error(ctx, "too many arguments", -1); return; }
     zBranch = (const char*)sqlite3_value_text(argv[1]);
     if( branchNameEmpty(zBranch) ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
 
-    doltliteGetSessionHead(db, &branchCreate.head);
-    if( prollyHashIsEmpty(&branchCreate.head) ){
-      sqlite3_result_error(ctx, "no commits yet — commit first", -1);
-      return;
+    if( argc>=3 ){
+      const char *zStart = (const char*)sqlite3_value_text(argv[2]);
+      if( !zStart ){
+        sqlite3_result_error(ctx, "start point not found", -1);
+        return;
+      }
+      rc = doltliteResolveRef(db, zStart, &branchCreate.head);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(ctx, "start point not found", -1);
+        return;
+      }
+    }else{
+      doltliteGetSessionHead(db, &branchCreate.head);
+      if( prollyHashIsEmpty(&branchCreate.head) ){
+        sqlite3_result_error(ctx, "no commits yet — commit first", -1);
+        return;
+      }
     }
     branchCreate.zName = zBranch;
     rc = doltliteMutateRefs(db, mutateBranchRef, &branchCreate);
@@ -610,9 +657,27 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       sqlite3_result_error(ctx, "branch already exists", -1);
       return;
     }
+    isCreateAndSwitch = 1;
   }
 
-  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
+  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 && argc==1 ){
+    sqlite3_result_int(ctx, 0);
+    return;
+  }
+
+  if( argc>1 && !isCreateAndSwitch ){
+    rc = doltliteCheckoutTables(db, zBranch, argv, 1, argc-1);
+    if( rc==SQLITE_NOTFOUND ){
+      char *zErr = sqlite3_mprintf(
+          "no such branch or table: %s", zBranch);
+      sqlite3_result_error(ctx, zErr ? zErr : "no such branch or table", -1);
+      sqlite3_free(zErr);
+      return;
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
     sqlite3_result_int(ctx, 0);
     return;
   }
@@ -661,7 +726,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   zCurrentBranch = 0;
   if( rc==SQLITE_NOTFOUND ){
 
-    rc = doltliteCheckoutTables(db, argv, argc);
+    rc = doltliteCheckoutTables(db, 0, argv, 0, argc);
     if( rc==SQLITE_NOTFOUND ){
       char *zErr = sqlite3_mprintf(
           "no such branch or table: %s", zBranch);

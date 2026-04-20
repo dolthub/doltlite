@@ -260,6 +260,29 @@ $SEED
 SELECT dolt_branch('-m', 'main', '');
 "
 
+oracle_error "create_extra_arg" "
+$SEED
+SELECT dolt_branch('feature', 'main', 'extra');
+"
+
+oracle_error "copy_extra_arg" "
+$SEED
+SELECT dolt_branch('src');
+SELECT dolt_branch('-c', 'src', 'dest', 'extra');
+"
+
+oracle_error "move_extra_arg" "
+$SEED
+SELECT dolt_branch('src');
+SELECT dolt_branch('-m', 'src', 'dest', 'extra');
+"
+
+oracle_error "delete_extra_arg" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_branch('-d', 'feature', 'extra');
+"
+
 oracle_error "no_args" "
 SELECT dolt_branch();
 "

@@ -565,6 +565,11 @@ $SEED
 SELECT dolt_cherry_pick('does-not-exist');
 "
 
+oracle_error "cherry_pick_extra_arg" "
+$SEED
+SELECT dolt_cherry_pick('HEAD', 'extra');
+"
+
 oracle_error "cherry_pick_dirty_working_set" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -600,6 +605,11 @@ SELECT dolt_revert();
 oracle_error "revert_nonexistent_ref" "
 $SEED
 SELECT dolt_revert('does-not-exist');
+"
+
+oracle_error "revert_extra_arg" "
+$SEED
+SELECT dolt_revert('HEAD', 'extra');
 "
 
 oracle_error "revert_dirty_working_set" "

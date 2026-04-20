@@ -218,6 +218,17 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_checkout('main');
 "
 
+oracle "dash_b_from_start_point" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 'feature_a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_feat');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b', 'newfeat', 'feature');
+"
+
 echo "--- per-table checkout ---"
 
 oracle "revert_single_table_working" "
@@ -239,6 +250,17 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 DELETE FROM t WHERE id=2;
 SELECT dolt_checkout('t');
+"
+
+oracle "checkout_table_from_branch_ref" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 'feature_a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_feat');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature', 't');
 "
 
 echo "--- error paths ---"
@@ -267,6 +289,22 @@ SELECT dolt_checkout('-b');
 oracle_error "dash_b_empty_name" "
 $SEED
 SELECT dolt_checkout('-b', '');
+"
+
+oracle_error "dash_b_bad_start_point" "
+$SEED
+SELECT dolt_checkout('-b', 'newfeat', 'does-not-exist');
+"
+
+oracle_error "checkout_table_from_missing_ref" "
+$SEED
+SELECT dolt_checkout('does-not-exist', 't');
+"
+
+oracle_error "checkout_branch_with_missing_table" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature', 'nope');
 "
 
 echo ""

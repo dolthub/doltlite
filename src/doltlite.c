@@ -2441,6 +2441,11 @@ static void doltliteCherryPickFunc(
     sqlite3_result_error(context, "usage: dolt_cherry_pick('commit_hash')", -1);
     return;
   }
+  if( argc>1 ){
+    sqlite3_result_error(context,
+      "cherry-picking multiple commits is not supported yet.", -1);
+    return;
+  }
 
   zRef = (const char*)sqlite3_value_text(argv[0]);
   if( !zRef ){
@@ -2544,6 +2549,17 @@ static void doltliteRevertFunc(
 
   if( argc<1 ){
     sqlite3_result_int(context, 0);
+    return;
+  }
+  if( argc>1 ){
+    char *zErr = sqlite3_mprintf("branch not found: %s",
+        (const char*)sqlite3_value_text(argv[1]));
+    if( zErr ){
+      sqlite3_result_error(context, zErr, -1);
+      sqlite3_free(zErr);
+    }else{
+      sqlite3_result_error_nomem(context);
+    }
     return;
   }
 
