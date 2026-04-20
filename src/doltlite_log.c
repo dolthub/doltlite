@@ -17,19 +17,20 @@ struct DoltliteLogVtab {
   sqlite3 *db;
 };
 
-typedef struct LogEntry LogEntry;
-struct LogEntry {
-  ProllyHash hash;
-  char zHex[PROLLY_HASH_SIZE*2+1];
-  DoltliteCommit commit;
-};
-
 typedef struct DoltliteLogCursor DoltliteLogCursor;
 struct DoltliteLogCursor {
   sqlite3_vtab_cursor base;
-  LogEntry *aEntries;
-  int nEntries;
-  int iCur;
+  /* BFS queue */
+  ProllyHash *aQueue;
+  int qHead, qTail, qAlloc;
+  ProllyHashSet visited;
+  int visitedInit;
+  /* Current row */
+  ProllyHash curHash;
+  char zHex[PROLLY_HASH_SIZE*2+1];
+  DoltliteCommit curCommit;
+  int hasRow;
+  i64 iRowid;
 };
 
 static const char *doltliteLogSchema =
@@ -40,100 +41,6 @@ static const char *doltliteLogSchema =
   "  date TEXT,"
   "  message TEXT"
   ")";
-
-/* BFS from HEAD across the parent graph. Output is arrival-order,
-** NOT chronological — in merge histories a later commit may land
-** before an older one. Callers must ORDER BY date for git-log order. */
-static int logCollectAll(sqlite3 *db, const ProllyHash *pHead,
-                         LogEntry **ppOut, int *pnOut){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash *queue = 0;
-  int qHead = 0, qTail = 0, qAlloc = 0;
-  ProllyHashSet visited;
-  LogEntry *aEntries = 0;
-  int nEntries = 0, nAlloc = 0;
-  int rc = SQLITE_OK;
-  int i, visitedInit = 0;
-
-  if( !cs || prollyHashIsEmpty(pHead) ){
-    *ppOut = 0; *pnOut = 0;
-    return SQLITE_OK;
-  }
-
-
-  qAlloc = 16;
-  queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
-  if( !queue ) return SQLITE_NOMEM;
-  queue[qTail++] = *pHead;
-  rc = prollyHashSetInit(&visited, 64);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(queue);
-    return rc;
-  }
-  visitedInit = 1;
-
-  while( qHead < qTail ){
-    ProllyHash cur = queue[qHead++];
-    DoltliteCommit commit;
-    LogEntry *pEntry;
-
-
-    if( prollyHashSetContains(&visited, &cur) ) continue;
-    rc = prollyHashSetAdd(&visited, &cur);
-    if( rc!=SQLITE_OK ){
-      break;
-    }
-
-
-    memset(&commit, 0, sizeof(commit));
-    rc = doltliteLoadCommit(db, &cur, &commit);
-    if( rc!=SQLITE_OK ) break;
-
-
-    if( nEntries >= nAlloc ){
-      int newAlloc = nAlloc ? nAlloc*2 : 16;
-      LogEntry *tmp = sqlite3_realloc(aEntries, newAlloc*(int)sizeof(LogEntry));
-      if( !tmp ){
-        doltliteCommitClear(&commit);
-        rc = SQLITE_NOMEM; break;
-      }
-      aEntries = tmp; nAlloc = newAlloc;
-    }
-    pEntry = &aEntries[nEntries++];
-    pEntry->hash = cur;
-    doltliteHashToHex(&cur, pEntry->zHex);
-    pEntry->commit = commit;
-
-
-    for(i = 0; i < doltliteCommitParentCount(&commit); i++){
-      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
-      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
-      if( qTail >= qAlloc ){
-        int newAlloc = qAlloc*2;
-        ProllyHash *tmp = sqlite3_realloc(queue, newAlloc*(int)sizeof(ProllyHash));
-        if( !tmp ){ rc = SQLITE_NOMEM; break; }
-        queue = tmp; qAlloc = newAlloc;
-      }
-      queue[qTail++] = *pParent;
-    }
-    if( rc!=SQLITE_OK ) break;
-  }
-
-  sqlite3_free(queue);
-  if( visitedInit ) prollyHashSetFree(&visited);
-
-  if( rc!=SQLITE_OK ){
-    for(i = 0; i < nEntries; i++) doltliteCommitClear(&aEntries[i].commit);
-    sqlite3_free(aEntries);
-    *ppOut = 0; *pnOut = 0;
-    return rc;
-  }
-
-
-  *ppOut = aEntries;
-  *pnOut = nEntries;
-  return SQLITE_OK;
-}
 
 static int doltliteLogConnect(
   sqlite3 *db, void *pAux,
@@ -171,27 +78,74 @@ static int doltliteLogOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
   return SQLITE_OK;
 }
 
-static void logCursorFree(DoltliteLogCursor *pCur){
-  int i;
-  for(i = 0; i < pCur->nEntries; i++){
-    doltliteCommitClear(&pCur->aEntries[i].commit);
+static void logCursorReset(DoltliteLogCursor *pCur){
+  doltliteCommitClear(&pCur->curCommit);
+  memset(&pCur->curCommit, 0, sizeof(pCur->curCommit));
+  sqlite3_free(pCur->aQueue);
+  pCur->aQueue = 0;
+  pCur->qHead = pCur->qTail = pCur->qAlloc = 0;
+  if( pCur->visitedInit ){
+    prollyHashSetFree(&pCur->visited);
+    pCur->visitedInit = 0;
   }
-  sqlite3_free(pCur->aEntries);
-  pCur->aEntries = 0;
-  pCur->nEntries = 0;
+  pCur->hasRow = 0;
+  pCur->iRowid = 0;
 }
 
 static int doltliteLogClose(sqlite3_vtab_cursor *pCursor){
   DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
-  logCursorFree(pCur);
+  logCursorReset(pCur);
   sqlite3_free(pCur);
+  return SQLITE_OK;
+}
+
+/* Advance the BFS by one commit. Sets hasRow=1 on success, hasRow=0
+** when the graph is exhausted. */
+static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
+  int i, rc;
+
+  doltliteCommitClear(&pCur->curCommit);
+  memset(&pCur->curCommit, 0, sizeof(pCur->curCommit));
+  pCur->hasRow = 0;
+
+  while( pCur->qHead < pCur->qTail ){
+    ProllyHash cur = pCur->aQueue[pCur->qHead++];
+
+    if( prollyHashSetContains(&pCur->visited, &cur) ) continue;
+    rc = prollyHashSetAdd(&pCur->visited, &cur);
+    if( rc!=SQLITE_OK ) return rc;
+
+    rc = doltliteLoadCommit(db, &cur, &pCur->curCommit);
+    if( rc!=SQLITE_OK ) return rc;
+
+    pCur->curHash = cur;
+    doltliteHashToHex(&cur, pCur->zHex);
+    pCur->hasRow = 1;
+
+    /* Enqueue parents for future visits. */
+    for(i = 0; i < doltliteCommitParentCount(&pCur->curCommit); i++){
+      const ProllyHash *pParent = doltliteCommitParentHash(&pCur->curCommit, i);
+      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
+      if( pCur->qTail >= pCur->qAlloc ){
+        int nNew = pCur->qAlloc ? pCur->qAlloc*2 : 16;
+        ProllyHash *tmp = sqlite3_realloc(pCur->aQueue,
+                                           nNew*(int)sizeof(ProllyHash));
+        if( !tmp ) return SQLITE_NOMEM;
+        pCur->aQueue = tmp;
+        pCur->qAlloc = nNew;
+      }
+      pCur->aQueue[pCur->qTail++] = *pParent;
+    }
+    return SQLITE_OK;
+  }
   return SQLITE_OK;
 }
 
 static int doltliteLogNext(sqlite3_vtab_cursor *pCursor){
   DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
-  pCur->iCur++;
-  return SQLITE_OK;
+  DoltliteLogVtab *pVtab = (DoltliteLogVtab*)pCursor->pVtab;
+  pCur->iRowid++;
+  return logAdvance(pCur, pVtab->db);
 }
 
 static int doltliteLogFilter(
@@ -202,18 +156,35 @@ static int doltliteLogFilter(
   DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
   DoltliteLogVtab *pVtab = (DoltliteLogVtab*)pCursor->pVtab;
   ProllyHash head;
+  ChunkStore *cs;
+  int rc;
   (void)idxNum; (void)idxStr; (void)argc; (void)argv;
 
-  logCursorFree(pCur);
-  pCur->iCur = 0;
+  logCursorReset(pCur);
+
+  cs = doltliteGetChunkStore(pVtab->db);
+  if( !cs ) return SQLITE_OK;
 
   doltliteGetSessionHead(pVtab->db, &head);
-  return logCollectAll(pVtab->db, &head, &pCur->aEntries, &pCur->nEntries);
+  if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+
+  /* Initialize BFS state. */
+  rc = prollyHashSetInit(&pCur->visited, 64);
+  if( rc!=SQLITE_OK ) return rc;
+  pCur->visitedInit = 1;
+
+  pCur->qAlloc = 16;
+  pCur->aQueue = sqlite3_malloc(pCur->qAlloc * (int)sizeof(ProllyHash));
+  if( !pCur->aQueue ) return SQLITE_NOMEM;
+  pCur->aQueue[0] = head;
+  pCur->qTail = 1;
+
+  /* Prime the first row. */
+  return logAdvance(pCur, pVtab->db);
 }
 
 static int doltliteLogEof(sqlite3_vtab_cursor *pCursor){
-  DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
-  return pCur->iCur >= pCur->nEntries;
+  return !((DoltliteLogCursor*)pCursor)->hasRow;
 }
 
 static int doltliteLogColumn(
@@ -222,26 +193,26 @@ static int doltliteLogColumn(
   int iCol
 ){
   DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
-  LogEntry *e;
+  DoltliteCommit *c;
 
-  if( pCur->iCur >= pCur->nEntries ) return SQLITE_OK;
-  e = &pCur->aEntries[pCur->iCur];
+  if( !pCur->hasRow ) return SQLITE_OK;
+  c = &pCur->curCommit;
 
   switch( iCol ){
     case 0:
-      sqlite3_result_text(ctx, e->zHex, -1, SQLITE_TRANSIENT);
+      sqlite3_result_text(ctx, pCur->zHex, -1, SQLITE_TRANSIENT);
       break;
     case 1:
-      sqlite3_result_text(ctx, e->commit.zName ? e->commit.zName : "",
+      sqlite3_result_text(ctx, c->zName ? c->zName : "",
                           -1, SQLITE_TRANSIENT);
       break;
     case 2:
-      sqlite3_result_text(ctx, e->commit.zEmail ? e->commit.zEmail : "",
+      sqlite3_result_text(ctx, c->zEmail ? c->zEmail : "",
                           -1, SQLITE_TRANSIENT);
       break;
     case 3:
       {
-        time_t t = (time_t)e->commit.timestamp;
+        time_t t = (time_t)c->timestamp;
         struct tm *tm = gmtime(&t);
         if( tm ){
           char buf[32];
@@ -253,7 +224,7 @@ static int doltliteLogColumn(
       }
       break;
     case 4:
-      sqlite3_result_text(ctx, e->commit.zMessage ? e->commit.zMessage : "",
+      sqlite3_result_text(ctx, c->zMessage ? c->zMessage : "",
                           -1, SQLITE_TRANSIENT);
       break;
   }
@@ -261,7 +232,7 @@ static int doltliteLogColumn(
 }
 
 static int doltliteLogRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((DoltliteLogCursor*)pCursor)->iCur;
+  *pRowid = ((DoltliteLogCursor*)pCursor)->iRowid;
   return SQLITE_OK;
 }
 
