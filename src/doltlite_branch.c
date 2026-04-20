@@ -102,9 +102,15 @@ static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( rc!=SQLITE_OK ) return rc;
   if( !prollyHashIsEmpty(&srcWorkingSet) ){
     rc = chunkStoreSetBranchWorkingSet(cs, p->zDest, &srcWorkingSet);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      chunkStoreDeleteBranch(cs, p->zDest);
+      return rc;
+    }
   }
   rc = chunkStoreDeleteBranch(cs, p->zSrc);
+  if( rc!=SQLITE_OK ){
+    chunkStoreDeleteBranch(cs, p->zDest);
+  }
   return rc;
 }
 
