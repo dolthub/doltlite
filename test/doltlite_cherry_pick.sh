@@ -480,6 +480,51 @@ run_test "cp_newtbl_val" "SELECT w FROM t2 WHERE id=1;" "new_table" "$DB"
 rm -f "$DB"
 
 # ============================================================
+# Cherry-pick / revert: constraint violations roll back
+# ============================================================
+
+DB=/tmp/test_cp_violation_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
+INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET u=9, v='feat2' WHERE id=2;
+SELECT dolt_commit('-A','-m','feat_unique');
+SELECT dolt_checkout('main');
+UPDATE t SET u=9, v='main1' WHERE id=1;
+SELECT dolt_commit('-A','-m','main_unique');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "cp_violation_err" \
+  "SELECT dolt_cherry_pick('feat');" \
+  "Error near line 1" "$DB"
+run_test "cp_violation_none" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB"
+run_test "cp_violation_state" \
+  "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id);" \
+  "1:9:main1,2:2:base2" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_rv_violation_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
+INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2');
+SELECT dolt_commit('-A','-m','init');
+UPDATE t SET u=9, v='c1' WHERE id=1;
+SELECT dolt_commit('-A','-m','c1_set_9');
+UPDATE t SET u=1, v='c2_take_1' WHERE id=2;
+SELECT dolt_commit('-A','-m','c2_take_1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "rv_violation_err" \
+  "SELECT dolt_revert('HEAD~1');" \
+  "Error near line 1" "$DB"
+run_test "rv_violation_none" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB"
+run_test "rv_violation_state" \
+  "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id);" \
+  "1:9:c1,2:1:c2_take_1" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Done
 # ============================================================
 

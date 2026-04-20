@@ -2434,6 +2434,68 @@ static int applyMergedCatalogAndCommit(
       doltliteGetSessionBranch(db), &mergedCatHash, NULL);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
+  if( graphLocked ){
+    chunkStoreUnlock(cs);
+    graphLocked = 0;
+  }
+
+  {
+    extern int doltliteDetectMergeFkViolations(
+        sqlite3*, const ProllyHash*, char**, int*);
+    extern int doltliteDetectMergeUniqueViolations(
+        sqlite3*, const ProllyHash*, char**, int*);
+    extern int doltliteDetectMergeCheckViolations(
+        sqlite3*, const ProllyHash*, char**, int*);
+    int nViolations = 0;
+    int nUnique = 0;
+    int nCheck = 0;
+    char *zDetectErrMsg = 0;
+
+    rc = doltliteDetectMergeFkViolations(db, ancCatHash,
+                                         &zDetectErrMsg, &nViolations);
+    if( rc==SQLITE_OK ){
+      rc = doltliteDetectMergeUniqueViolations(db, ancCatHash,
+                                               &zDetectErrMsg, &nUnique);
+    }
+    if( rc==SQLITE_OK ){
+      rc = doltliteDetectMergeCheckViolations(db, ancCatHash,
+                                              &zDetectErrMsg, &nCheck);
+    }
+    if( rc!=SQLITE_OK ){
+      if( zDetectErrMsg ){
+        sqlite3_result_error(context, zDetectErrMsg, -1);
+        sqlite3_free(zDetectErrMsg);
+      }
+      goto apply_rollback;
+    }
+    sqlite3_free(zDetectErrMsg);
+
+    if( nViolations + nUnique + nCheck > 0 ){
+      rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
+      if( rc==SQLITE_OK ){
+        doltliteSetSessionBranch(db, savedState.zSessionBranch);
+        doltliteSetSessionHead(db, &savedState.sessionHead);
+        doltliteSetSessionStaged(db, &savedState.sessionStaged);
+        doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
+                                     &savedState.sessionMergeCommit,
+                                     &savedState.sessionConflictsCatalog);
+        {
+          extern int doltliteClearAllConstraintViolations(sqlite3*);
+          doltliteClearAllConstraintViolations(db);
+        }
+        rc = doltlitePersistWorkingSet(db);
+      }
+      doltliteTxnStateClear(&savedState);
+      if( rc!=SQLITE_OK ){
+        return rc;
+      }
+      sqlite3_result_error(context,
+        "Committing this transaction resulted in a working set with "
+        "constraint violations, transaction rolled back.", -1);
+      return SQLITE_OK;
+    }
+  }
+
   if( *pnConflicts > 0 ){
     rc = doltliteReportConflicts(db, context, *pnConflicts,
                                  sqlite3_strnicmp(zMessage, "Revert", 6)==0
