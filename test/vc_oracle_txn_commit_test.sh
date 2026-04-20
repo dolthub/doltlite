@@ -55,7 +55,7 @@ DL_A=$(dl_query "$DB" "SELECT count(*) FROM t;")
 if [ -n "$DOLT" ]; then
   DOLT_A_DIR="$TMPROOT/dolt_a"
   mkdir -p "$DOLT_A_DIR" && cd "$DOLT_A_DIR" && dolt init >/dev/null 2>&1
-  DOLT_A=$(dolt sql -r csv 2>/dev/null <<'SQL' | grep '^[0-9]*$' | tail -1
+  DOLT_A=$(dolt sql -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 BEGIN;
@@ -102,7 +102,7 @@ DL_B=$(dl_query "$DB" "SELECT count(*) FROM t;")
 if [ -n "$DOLT" ]; then
   DOLT_B_DIR="$TMPROOT/dolt_b"
   mkdir -p "$DOLT_B_DIR" && cd "$DOLT_B_DIR" && dolt init >/dev/null 2>&1
-  DOLT_B=$(dolt sql -r csv 2>/dev/null <<'SQL' | grep '^[0-9]*$' | tail -1
+  DOLT_B=$(dolt sql -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SAVEPOINT sp1;
