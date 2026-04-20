@@ -141,6 +141,28 @@ oracle_error() {
   fi
 }
 
+oracle_error_match() {
+  local name="$1" setup="$2" pattern="$3"
+  local dir="$TMPROOT/${name}_err"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+
+  if grep -qE "$pattern" "$dir/dl.err" "$dir/dl.out" \
+    && grep -qE "$pattern" "$dir/dt.err" "$dir/dt.out"; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both to match error pattern)"
+    echo "    pattern: $pattern"
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_reset ==="
 echo ""
 
@@ -313,6 +335,44 @@ oracle_error "reset_soft_hard_mutually_exclusive_with_ref" "
 $SEED
 SELECT dolt_reset('--soft', '--hard', 'HEAD');
 "
+
+echo "--- merge conflict guards ---"
+
+oracle_error_match "reset_no_args_during_merge_conflict" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 11 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+SELECT dolt_reset();
+" "Merge conflict detected"
+
+oracle_error_match "reset_soft_during_merge_conflict" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 11 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+SELECT dolt_reset('--soft');
+" "Merge conflict detected"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

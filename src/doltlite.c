@@ -1731,6 +1731,7 @@ static void doltliteResetFunc(
   int rc;
   int i;
   int graphLocked = 0;
+  u8 isMerging = 0;
 
   if( !cs ){
     sqlite3_result_error(context, "no database open", -1);
@@ -1784,6 +1785,17 @@ static void doltliteResetFunc(
     return;
   }
 
+  doltliteGetSessionMergeState(db, &isMerging, 0, 0);
+  if( isMerging && !isHard ){
+    sqlite3_free(azPaths);
+    sqlite3_result_error(context,
+      "Merge conflict detected, transaction rolled back. "
+      "Merge conflicts must be resolved using the dolt_conflicts and "
+      "dolt_schema_conflicts tables before committing a transaction. "
+      "To commit transactions with merge conflicts, set "
+      "@@dolt_allow_commit_conflicts = 1", -1);
+    return;
+  }
 
   if( nPaths>0 ){
     if( isHard || isSoft || zRef ){
