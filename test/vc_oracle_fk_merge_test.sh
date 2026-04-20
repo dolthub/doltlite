@@ -13,12 +13,13 @@
 # DoltLite now intentionally matches that behavior. This suite locks
 # that down across rowid and WITHOUT ROWID table shapes.
 #
-# Usage: bash vc_oracle_fk_merge_test.sh [path/to/doltlite]
+# Usage: bash vc_oracle_fk_merge_test.sh [path/to/doltlite] [path/to/dolt]
 #
 
 set -u
 
 DOLTLITE="${1:-./doltlite}"
+DOLT="${2:-dolt}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
@@ -70,6 +71,32 @@ expect_error_match() {
     echo "    stdout: |$out|"
     echo "    stderr: |$(cat "$TMPROOT/$tag.err")|"
   fi
+}
+
+run_tx_oracle_case() {
+  local name="$1" dl_setup_sql="$2" dl_tx_sql="$3" dolt_tx_sql="${4:-$3}" dolt_setup_sql="${5:-$2}"
+  local dl_db="$TMPROOT/${name}_dl.db"
+  local dt_dir="$TMPROOT/${name}_dt"
+  rm -f "$dl_db"
+  rm -rf "$dt_dir"
+  mkdir -p "$dt_dir"
+
+  printf '%s\n' "$dl_setup_sql" | dl_setup "$dl_db" "${name}_dl_setup"
+  local dl_out
+  dl_out=$(printf '%s\n' "$dl_tx_sql" | "$DOLTLITE" "$dl_db" 2>"$TMPROOT/${name}_dl.err" | grep -E '^[0-9]+\|[0-9]+\|' | tail -n 1 | tr -d '\r')
+
+  (
+    cd "$dt_dir" || exit 1
+    "$DOLT" init >/dev/null 2>&1
+    "$DOLT" sql <<SQL >/dev/null 2>"$TMPROOT/${name}_dt_setup.err"
+$dolt_setup_sql
+SQL
+    "$DOLT" sql -r csv -q "$dolt_tx_sql" 2>"$TMPROOT/${name}_dt.err"
+  ) > "$TMPROOT/${name}_dt.out"
+  local dt_out
+  dt_out=$(tr -d '"' < "$TMPROOT/${name}_dt.out" | grep -E '^[0-9]+\|[0-9]+\|' | tail -n 1 | tr -d '\r')
+
+  expect_eq "${name}_tx_matches_dolt" "$dt_out" "$dl_out"
 }
 
 echo "=== Version Control Oracle Tests: merge constraint rollback ==="
@@ -245,6 +272,39 @@ SELECT dolt_commit('-Am','main');" \
        AND (SELECT group_concat(pk || ':' || u, ',')
               FROM (SELECT pk,u FROM p ORDER BY pk))='p1:3'
       THEN 'OK' ELSE 'BAD' END;"
+echo ""
+
+echo "--- H. Explicit transaction keeps merge constraint state live ---"
+run_tx_oracle_case \
+  "tx_unique_persists" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
+INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET u=9, v='feat2' WHERE id=2;
+SELECT dolt_commit('-Am','feat_unique');
+SELECT dolt_checkout('main');
+UPDATE t SET u=9, v='main1' WHERE id=1;
+SELECT dolt_commit('-Am','main_unique');" \
+"BEGIN;
+SELECT dolt_merge('feat');
+SELECT (SELECT count(*) FROM dolt_conflicts) || '|' ||
+       (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+       (SELECT group_concat(id || ':' || u || ':' || v, ',')
+          FROM (SELECT id,u,v FROM t ORDER BY id));
+ROLLBACK;" \
+  "START TRANSACTION; CALL DOLT_MERGE('feat'); SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t)); ROLLBACK;" \
+  "CREATE TABLE t(id INT PRIMARY KEY, u INT UNIQUE, v TEXT);
+INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
+CALL DOLT_COMMIT('-Am','init');
+CALL DOLT_BRANCH('feat');
+CALL DOLT_CHECKOUT('feat');
+UPDATE t SET u=9, v='feat2' WHERE id=2;
+CALL DOLT_COMMIT('-Am','feat_unique');
+CALL DOLT_CHECKOUT('main');
+UPDATE t SET u=9, v='main1' WHERE id=1;
+CALL DOLT_COMMIT('-Am','main_unique');"
 echo ""
 
 echo "======================================="
