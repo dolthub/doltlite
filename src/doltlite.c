@@ -909,18 +909,50 @@ static void doltliteCommitFunc(
             zMessage = &arg[j+1];
           }else if( i+1<argc ){
             zMessage = (const char*)sqlite3_value_text(argv[++i]);
+          }else{
+            sqlite3_result_error(context, "no value for option `message'", -1);
+            return;
           }
           break;
+        }else{
+          char *zErr = sqlite3_mprintf("unknown option `-%c'", arg[j]);
+          if( zErr ){
+            sqlite3_result_error(context, zErr, -1);
+            sqlite3_free(zErr);
+          }else{
+            sqlite3_result_error_nomem(context);
+          }
+          return;
         }
       }
-    }else if( strcmp(arg, "-m")==0 && i+1<argc ){
-      zMessage = (const char*)sqlite3_value_text(argv[++i]);
-    }else if( strcmp(arg, "--message")==0 && i+1<argc ){
-      zMessage = (const char*)sqlite3_value_text(argv[++i]);
-    }else if( strcmp(arg, "--author")==0 && i+1<argc ){
-      zAuthor = (const char*)sqlite3_value_text(argv[++i]);
-    }else if( strcmp(arg, "--date")==0 && i+1<argc ){
-      zDate = (const char*)sqlite3_value_text(argv[++i]);
+    }else if( strcmp(arg, "-m")==0 ){
+      if( i+1<argc ){
+        zMessage = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "no value for option `message'", -1);
+        return;
+      }
+    }else if( strcmp(arg, "--message")==0 ){
+      if( i+1<argc ){
+        zMessage = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "no value for option `message'", -1);
+        return;
+      }
+    }else if( strcmp(arg, "--author")==0 ){
+      if( i+1<argc ){
+        zAuthor = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "no value for option `author'", -1);
+        return;
+      }
+    }else if( strcmp(arg, "--date")==0 ){
+      if( i+1<argc ){
+        zDate = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "no value for option `date'", -1);
+        return;
+      }
     }else if( strcmp(arg, "--amend")==0 ){
       amend = 1;
     }else if( strcmp(arg, "--allow-empty")==0 ){
@@ -934,6 +966,25 @@ static void doltliteCommitFunc(
     }else if( strcmp(arg, "-a")==0 || strcmp(arg, "--all")==0 ){
 
       addModifiedOnly = 1;
+    }else if( arg[0]=='-' ){
+      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
+      if( zErr ){
+        sqlite3_result_error(context, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(context);
+      }
+      return;
+    }else{
+      char *zErr = sqlite3_mprintf(
+          "commit does not take positional arguments, but found 1: %s", arg);
+      if( zErr ){
+        sqlite3_result_error(context, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(context);
+      }
+      return;
     }
   }
 
@@ -1674,7 +1725,6 @@ static void doltliteResetFunc(
   int havePreResetHead = 0;
   int isHard = 0;
   int isSoft = 0;
-  int isMixed = 0;
   const char *zRef = 0;
   const char **azPaths = 0;
   int nPaths = 0;
@@ -1701,7 +1751,6 @@ static void doltliteResetFunc(
     if( !arg ) continue;
     if( strcmp(arg, "--hard")==0 ){ isHard = 1; }
     else if( strcmp(arg, "--soft")==0 ){ isSoft = 1; }
-    else if( strcmp(arg, "--mixed")==0 ){ isMixed = 1; }
     else if( arg[0]=='-' ){
       char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
       sqlite3_result_error(context, zErr ? zErr : "unknown option", -1);
@@ -1711,7 +1760,7 @@ static void doltliteResetFunc(
     }
     else if( !zRef ){
 
-      if( isHard || isSoft || isMixed ){
+      if( isHard || isSoft ){
         zRef = arg;
       }else{
         ProllyHash probe;
@@ -1726,6 +1775,13 @@ static void doltliteResetFunc(
 
       azPaths[nPaths++] = arg;
     }
+  }
+
+  if( isHard && isSoft ){
+    sqlite3_result_error(context,
+      "--hard and --soft are mutually exclusive options.", -1);
+    sqlite3_free(azPaths);
+    return;
   }
 
 
@@ -1761,7 +1817,6 @@ static void doltliteResetFunc(
     sqlite3_result_int(context, 0);
     return;
   }
-  (void)isMixed;
 
   if( zRef ){
     DoltliteCommit commit;
@@ -2441,6 +2496,11 @@ static void doltliteCherryPickFunc(
     sqlite3_result_error(context, "usage: dolt_cherry_pick('commit_hash')", -1);
     return;
   }
+  if( argc>1 ){
+    sqlite3_result_error(context,
+      "cherry-picking multiple commits is not supported yet.", -1);
+    return;
+  }
 
   zRef = (const char*)sqlite3_value_text(argv[0]);
   if( !zRef ){
@@ -2544,6 +2604,17 @@ static void doltliteRevertFunc(
 
   if( argc<1 ){
     sqlite3_result_int(context, 0);
+    return;
+  }
+  if( argc>1 ){
+    char *zErr = sqlite3_mprintf("branch not found: %s",
+        (const char*)sqlite3_value_text(argv[1]));
+    if( zErr ){
+      sqlite3_result_error(context, zErr, -1);
+      sqlite3_free(zErr);
+    }else{
+      sqlite3_result_error_nomem(context);
+    }
     return;
   }
 

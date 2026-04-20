@@ -23,6 +23,18 @@ check() {
   fi
 }
 
+check_match() {
+  local desc="$1" pattern="$2" actual="$3"
+  if echo "$actual" | grep -qE "$pattern"; then
+    echo "  PASS: $desc"; pass=$((pass+1))
+  else
+    echo "  FAIL: $desc"
+    echo "    pattern: |$pattern|"
+    echo "    actual:  |$(echo "$actual" | head -5)|"
+    fail=$((fail+1))
+  fi
+}
+
 DB="$DOLTLITE"
 R="file://$TMPDIR"
 
@@ -54,11 +66,29 @@ check "two remotes" "2" "$result"
 result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM dolt_remotes;")
 check "remote removed" "1" "$result"
 
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('add','backup','$R/backup.db','extra');" 2>&1)
+check_match "remote add extra arg errors" "too many arguments|invalid argument|ERROR" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM dolt_remotes;")
+check "remote add extra arg preserves remotes" "1" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_remote('remove','origin','extra');" 2>&1)
+check_match "remote remove extra arg errors" "too many arguments|invalid argument|ERROR" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM dolt_remotes;")
+check "remote remove extra arg preserves remotes" "1" "$result"
+
 # ============================================================
 echo "=== 2. Push ==="
 # ============================================================
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('origin','main');")
 check "push returns 0" "0" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('origin','main','--bogus');" 2>&1)
+check_match "push unknown option errors" "unknown option|ERROR" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_push('origin','main','--force','extra');" 2>&1)
+check_match "push extra arg errors" "too many arguments|ERROR" "$result"
 
 src_head=$("$DB" "$TMPDIR/src.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
 result=$("$DB" "$TMPDIR/remote.db" "SELECT commit_hash FROM dolt_log LIMIT 1;")
@@ -69,6 +99,9 @@ echo "=== 3. Clone ==="
 # ============================================================
 result=$("$DB" "$TMPDIR/clone.db" "SELECT dolt_clone('$R/remote.db');")
 check "clone returns 0" "0" "$result"
+
+result=$("$DB" "$TMPDIR/clone_extra.db" "SELECT dolt_clone('$R/remote.db','extra');" 2>&1)
+check_match "clone extra arg errors" "too many arguments|ERROR" "$result"
 
 result=$("$DB" "$TMPDIR/clone.db" "SELECT active_branch();")
 check "clone branch is main" "main" "$result"
@@ -108,6 +141,9 @@ echo "=== 5. Fetch ==="
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_fetch('origin','main');")
 check "fetch returns 0" "0" "$result"
 
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_fetch('origin','main','extra');" 2>&1)
+check_match "fetch extra arg errors" "too many arguments|ERROR" "$result"
+
 result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM users;")
 check "data unchanged before pull" "3" "$result"
 
@@ -116,6 +152,9 @@ echo "=== 6. Pull (fast-forward) ==="
 # ============================================================
 result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_pull('origin','main');")
 check "pull returns 0" "0" "$result"
+
+result=$("$DB" "$TMPDIR/src.db" "SELECT dolt_pull('origin','main','extra');" 2>&1)
+check_match "pull extra arg errors" "too many arguments|ERROR" "$result"
 
 result=$("$DB" "$TMPDIR/src.db" "SELECT count(*) FROM users;")
 check "src has 4 users after pull" "4" "$result"

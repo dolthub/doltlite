@@ -390,6 +390,55 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', '');
 "
 
+oracle_error "commit_extra_positional_arg" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first', 'extra');
+"
+
+oracle_error "commit_missing_short_message_value" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m');
+"
+
+oracle_error "commit_missing_long_message_value" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('--message');
+"
+
+oracle_error "commit_missing_author_value" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first', '--author');
+"
+
+oracle_error "commit_missing_date_value" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first', '--date');
+"
+
+oracle_error "commit_unknown_short_flag" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-z', '-m', 'first');
+"
+
+oracle_error "commit_unknown_long_flag" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('--bogus', '-m', 'first');
+"
+
 # No staged changes, no --allow-empty: both should error
 oracle_error "commit_nothing_staged" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
