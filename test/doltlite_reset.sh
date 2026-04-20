@@ -165,8 +165,28 @@ run_test_match "reset_bad_ref" \
   "SELECT dolt_reset('--hard','not_a_real_ref');" \
   "not found" "$DB6"
 
+DB7=/tmp/test_reset7_$$.db; rm -f "$DB7"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); UPDATE t SET v='main'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+echo "SELECT dolt_merge('feat');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+run_test "merge_conflicts_present_before_hard_reset" \
+  "SELECT count(*) FROM dolt_conflicts_t;" \
+  "1" "$DB7"
+
+echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+run_test "hard_reset_clears_conflicts_without_ref" \
+  "SELECT count(*) FROM dolt_conflicts_t;" \
+  "0" "$DB7"
+
+run_test "hard_reset_restores_head_row_after_conflict" \
+  "SELECT v FROM t;" \
+  "main" "$DB7"
+
 # Cleanup
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
