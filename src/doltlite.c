@@ -2207,18 +2207,16 @@ static void doltliteMergeFunc(
   }
 
   /* Post-merge constraint detection. Release the graph lock
-  ** first — detection runs DELETEs against the merged working
-  ** set (eviction of unique-index losers) and those need a
-  ** fully committed btree state to avoid
-  ** SQLITE_CORRUPT ("database disk image is malformed") from
-  ** modifying a btree whose savepoint is still mid-flight.
+  ** first so the merged catalog and working set are fully
+  ** visible to the walkers.
   **
   ** The merged catalog is installed (schema reflects the merged
   ** DDL, Table.pFKey is loaded), so PRAGMA foreign_key_check
   ** sees any row where one side's child references a parent
   ** the other side deleted. Unique-index detection walks each
-  ** table's UNIQUE indexes and evicts duplicates to the
-  ** violations vtable. Each detected violation lands in
+  ** table's UNIQUE indexes and records merge-introduced
+  ** duplicates in the violations vtable without rewriting the
+  ** base table. Each detected violation lands in
   ** dolt_constraint_violations_<table>; dolt_commit refuses to
   ** proceed while any violation remains. */
   if( graphLocked ){
@@ -2268,27 +2266,6 @@ static void doltliteMergeFunc(
       return;
     }
     sqlite3_free(zDetectErrMsg);
-    if( nUnique > 0 ){
-      /* The unique-index walker evicts loser rows from the base
-      ** via DELETE — flush those mutations out of the mutmap and
-      ** re-pin the session's working catalog at the new hash so
-      ** the next reopen sees the post-eviction state. */
-      ProllyHash newCatHash;
-      memset(&newCatHash, 0, sizeof(newCatHash));
-      vrc = doltliteFlushCatalogToHash(db, &newCatHash);
-      if( vrc == SQLITE_OK ){
-        doltliteSetSessionStaged(db, &newCatHash);
-        vrc = doltliteUpdateBranchWorkingState(db,
-            doltliteGetSessionBranch(db), &newCatHash, NULL);
-      }
-      if( vrc == SQLITE_OK ){
-        mergedCatHash = newCatHash;
-      }else{
-        sqlite3_result_error_code(context,
-            doltliteRestoreTxnStateOnFailure(db, &savedState, vrc));
-        return;
-      }
-    }
     if( nViolations + nUnique + nCheck > 0 ){
       u8 alreadyMerging = 0;
       nMergeConflicts += nViolations + nUnique + nCheck;

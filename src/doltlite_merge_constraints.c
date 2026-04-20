@@ -790,12 +790,113 @@ static int fetchRowByPkFromTable(
                             ppKey, pnKey, ppVal, pnVal);
 }
 
+static int appendUniqueViolationByRowid(
+  sqlite3 *db,
+  struct TableEntry *aAnc, int nAnc,
+  const char *zTable,
+  const char *zIndexName,
+  const char *zCols,
+  sqlite3_int64 rowid,
+  int *pAppended
+){
+  u8 *pKey = 0;
+  int nKey = 0;
+  u8 *pVal = 0;
+  int nVal = 0;
+  char *zInfo = 0;
+  int rc;
+
+  if( pAppended ) *pAppended = 0;
+  rc = fetchOrphanRow(db, zTable, rowid, &pKey, &nKey, &pVal, &nVal);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( aAnc ){
+    u8 *pAncVal = 0;
+    int nAncVal = 0;
+    int ancRc = fetchAncestorRowByName(db, aAnc, nAnc, zTable,
+                                       rowid, &pAncVal, &nAncVal);
+    int preExisting = (ancRc==SQLITE_OK)
+        && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
+    sqlite3_free(pAncVal);
+    if( preExisting ){
+      sqlite3_free(pKey);
+      sqlite3_free(pVal);
+      return SQLITE_OK;
+    }
+  }
+
+  zInfo = sqlite3_mprintf(
+      "{\"Columns\": [%s], \"Name\": \"%w\"}",
+      zCols, zIndexName);
+  rc = doltliteAppendConstraintViolation(
+      db, zTable, DOLTLITE_CV_UNIQUE_INDEX,
+      rowid, pKey, nKey, pVal, nVal, zInfo);
+  sqlite3_free(zInfo);
+  sqlite3_free(pKey);
+  sqlite3_free(pVal);
+  if( rc==SQLITE_OK && pAppended ) *pAppended = 1;
+  return rc;
+}
+
+static int appendUniqueViolationByPk(
+  sqlite3 *db,
+  struct TableEntry *aAnc, int nAnc,
+  const char *zTable,
+  const char *zIndexName,
+  const char *zCols,
+  const MergePkInfo *pPk,
+  const u8 *pPkRec, int nPkRec,
+  int *pAppended
+){
+  u8 *pKey = 0;
+  int nKey = 0;
+  u8 *pVal = 0;
+  int nVal = 0;
+  char *zInfo = 0;
+  int rc;
+
+  if( pAppended ) *pAppended = 0;
+  rc = fetchRowByPkFromTable(db, zTable, pPkRec, nPkRec, pPk->nPk,
+                             &pKey, &nKey, &pVal, &nVal);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( aAnc ){
+    u8 *pAncVal = 0;
+    int nAncVal = 0;
+    int ancRc = fetchAncestorRowByKey(db, aAnc, nAnc, zTable,
+                                      pKey, nKey, &pAncVal, &nAncVal);
+    int preExisting = (ancRc==SQLITE_OK)
+        && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
+    sqlite3_free(pAncVal);
+    if( preExisting ){
+      sqlite3_free(pKey);
+      sqlite3_free(pVal);
+      return SQLITE_OK;
+    }
+  }
+
+  zInfo = sqlite3_mprintf(
+      "{\"Columns\": [%s], \"Name\": \"%w\"}",
+      zCols, zIndexName);
+  rc = doltliteAppendConstraintViolation(
+      db, zTable, DOLTLITE_CV_UNIQUE_INDEX,
+      0, pKey, nKey, pVal, nVal, zInfo);
+  sqlite3_free(zInfo);
+  sqlite3_free(pKey);
+  sqlite3_free(pVal);
+  if( rc==SQLITE_OK && pAppended ) *pAppended = 1;
+  return rc;
+}
+
 /* Walk every row in zTable and look for duplicate values on the
 ** given UNIQUE index columns. When a duplicate group is found,
-** the row with the lowest rowid is kept (treated as the "main
-** side" row) and every other row in the group is evicted from
-** the base table into dolt_constraint_violations_<table> with
-** violation_type = 'unique index'.
+** every merge-introduced row in that group is recorded in
+** dolt_constraint_violations_<table> with
+** violation_type = 'unique index'. The base table keeps all
+** merged rows intact; users resolve the violation by deleting
+** rows from the violation vtable and then committing.
 **
 ** We can't just `GROUP BY` the index columns here — SQLite's
 ** query planner sees the UNIQUE constraint and optimizes on the
@@ -815,6 +916,8 @@ static int detectUniqueViolationsForIndex(
   sqlite3_stmt *pScan = 0;
   char *zQuery;
   char *zWinnerKey = 0;
+  sqlite3_int64 winnerRowid = 0;
+  int winnerHandled = 0;
   int rc;
   (void)pzErrMsg;
 
@@ -851,56 +954,27 @@ static int detectUniqueViolationsForIndex(
       /* New group — this row wins, remember its value set. */
       sqlite3_free(zWinnerKey);
       zWinnerKey = zRowKey;
+      winnerRowid = rowid;
+      winnerHandled = 0;
       continue;
     }
     sqlite3_free(zRowKey);
 
-    /* Evict the loser row. */
+    if( !winnerHandled ){
+      int appended = 0;
+      rc = appendUniqueViolationByRowid(db, aAnc, nAnc, zTable, zIndexName,
+                                        zCols, winnerRowid, &appended);
+      if( rc != SQLITE_OK ) break;
+      if( appended && pnFound ) (*pnFound)++;
+      winnerHandled = 1;
+    }
+
     {
-      u8 *pKey = 0; int nKey = 0;
-      u8 *pVal = 0; int nVal = 0;
-      char *zInfo;
-      int appendRc;
-
-      rc = fetchOrphanRow(db, zTable, rowid, &pKey, &nKey, &pVal, &nVal);
-      if( rc == SQLITE_NOTFOUND ){ rc = SQLITE_OK; continue; }
+      int appended = 0;
+      rc = appendUniqueViolationByRowid(db, aAnc, nAnc, zTable, zIndexName,
+                                        zCols, rowid, &appended);
       if( rc != SQLITE_OK ) break;
-
-      /* Skip the eviction if the loser row already existed in
-      ** ancestor with identical bytes — the duplicate predates
-      ** this merge and isn't ours to flag (or destroy). */
-      if( aAnc ){
-        u8 *pAncVal = 0; int nAncVal = 0;
-        int ancRc = fetchAncestorRowByName(db, aAnc, nAnc, zTable,
-                                            rowid, &pAncVal, &nAncVal);
-        int preExisting = (ancRc==SQLITE_OK)
-            && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
-        sqlite3_free(pAncVal);
-        if( preExisting ){
-          sqlite3_free(pKey);
-          sqlite3_free(pVal);
-          continue;
-        }
-      }
-
-      zInfo = sqlite3_mprintf(
-          "{\"Columns\": [%s], \"Name\": \"%w\"}",
-          zCols, zIndexName);
-      appendRc = doltliteAppendConstraintViolation(
-          db, zTable, DOLTLITE_CV_UNIQUE_INDEX,
-          rowid, pKey, nKey, pVal, nVal, zInfo);
-      sqlite3_free(zInfo);
-      if( appendRc != SQLITE_OK ){ rc = appendRc; break; }
-
-      /* Evict via doltliteApplyRawRowMutation — goes straight
-      ** through the prolly layer, unlike SQL DELETE which hits
-      ** the mid-merge btree state and returns SQLITE_CORRUPT. */
-      rc = doltliteApplyRawRowMutation(db, zTable, pKey, nKey, rowid, 0, 0);
-      sqlite3_free(pKey);
-      sqlite3_free(pVal);
-      if( rc != SQLITE_OK ) break;
-
-      if( pnFound ) (*pnFound)++;
+      if( appended && pnFound ) (*pnFound)++;
     }
   }
   sqlite3_free(zWinnerKey);
@@ -922,6 +996,9 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   sqlite3_str *pSql = 0;
   char *zQuery = 0;
   char *zWinnerKey = 0;
+  u8 *pWinnerPkRec = 0;
+  int nWinnerPkRec = 0;
+  int winnerHandled = 0;
   int rc;
 
   pSql = sqlite3_str_new(0);
@@ -955,64 +1032,53 @@ static int detectUniqueViolationsForIndexWithoutRowid(
 
     isDup = zWinnerKey && strcmp(zWinnerKey, zRowKey)==0;
     if( !isDup ){
+      u8 *pPkRec = 0;
+      int nPkRec = 0;
+      pPkRec = buildRecordFromStmtCols(pScan, nDupKeyCol, pPk->nPk, &nPkRec);
+      if( !pPkRec ){
+        sqlite3_free(zRowKey);
+        rc = SQLITE_NOMEM;
+        break;
+      }
       sqlite3_free(zWinnerKey);
+      sqlite3_free(pWinnerPkRec);
       zWinnerKey = zRowKey;
+      pWinnerPkRec = pPkRec;
+      nWinnerPkRec = nPkRec;
+      winnerHandled = 0;
       continue;
     }
     sqlite3_free(zRowKey);
 
     {
       u8 *pPkRec = 0; int nPkRec = 0;
-      u8 *pKey = 0; int nKey = 0;
-      u8 *pVal = 0; int nVal = 0;
-      char *zInfo;
-      int appendRc;
-
       pPkRec = buildRecordFromStmtCols(pScan, nDupKeyCol, pPk->nPk, &nPkRec);
       if( !pPkRec ){ rc = SQLITE_NOMEM; break; }
-      rc = fetchRowByPkFromTable(db, zTable, pPkRec, nPkRec, pPk->nPk,
-                                 &pKey, &nKey, &pVal, &nVal);
-      sqlite3_free(pPkRec);
-      if( rc == SQLITE_NOTFOUND ){ rc = SQLITE_OK; continue; }
-      if( rc != SQLITE_OK ) break;
-
-      if( aAnc ){
-        u8 *pAncVal = 0; int nAncVal = 0;
-        int ancRc = fetchAncestorRowByKey(db, aAnc, nAnc, zTable,
-                                          pKey, nKey, &pAncVal, &nAncVal);
-        int preExisting = (ancRc==SQLITE_OK)
-            && isRowPreExisting(pVal, nVal, pAncVal, nAncVal);
-        sqlite3_free(pAncVal);
-        if( preExisting ){
-          sqlite3_free(pKey);
-          sqlite3_free(pVal);
-          continue;
+      if( !winnerHandled ){
+        int appended = 0;
+        rc = appendUniqueViolationByPk(db, aAnc, nAnc, zTable, zIndexName,
+                                       zCols, pPk, pWinnerPkRec, nWinnerPkRec,
+                                       &appended);
+        if( rc != SQLITE_OK ){
+          sqlite3_free(pPkRec);
+          break;
         }
+        if( appended && pnFound ) (*pnFound)++;
+        winnerHandled = 1;
       }
-
-      zInfo = sqlite3_mprintf(
-          "{\"Columns\": [%s], \"Name\": \"%w\"}",
-          zCols, zIndexName);
-      appendRc = doltliteAppendConstraintViolation(
-          db, zTable, DOLTLITE_CV_UNIQUE_INDEX,
-          0, pKey, nKey, pVal, nVal, zInfo);
-      sqlite3_free(zInfo);
-      if( appendRc != SQLITE_OK ){
-        sqlite3_free(pKey);
-        sqlite3_free(pVal);
-        rc = appendRc;
-        break;
+      {
+        int appended = 0;
+        rc = appendUniqueViolationByPk(db, aAnc, nAnc, zTable, zIndexName,
+                                       zCols, pPk, pPkRec, nPkRec, &appended);
+        sqlite3_free(pPkRec);
+        if( rc != SQLITE_OK ) break;
+        if( appended && pnFound ) (*pnFound)++;
       }
-
-      rc = doltliteApplyRawRowMutation(db, zTable, pKey, nKey, 0, 0, 0);
-      sqlite3_free(pKey);
-      sqlite3_free(pVal);
-      if( rc != SQLITE_OK ) break;
-      if( pnFound ) (*pnFound)++;
     }
   }
 
   sqlite3_free(zWinnerKey);
+  sqlite3_free(pWinnerPkRec);
   if( rc == SQLITE_DONE ) rc = SQLITE_OK;
   sqlite3_finalize(pScan);
   return rc;

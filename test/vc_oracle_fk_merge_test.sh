@@ -20,7 +20,7 @@
 #
 #   - violation_type values (matching Dolt, lowercase):
 #       'foreign key'       FK orphan — row IS in the base table
-#       'unique index'      duplicate — row is NOT in the base table
+#       'unique index'      duplicate — row IS in the base table
 #       'check constraint'  CHECK failure — row IS in the base table
 #
 #   - `dolt_commit` MUST fail while any dolt_constraint_violations
@@ -37,7 +37,8 @@
 #     1. Existence of violation row(s) in the per-table vtable
 #     2. The summary vtable reports the right count
 #     3. The base table's post-merge content matches the rule
-#        (FK/CHECK: row present; UNIQUE: row absent)
+#        (FK/CHECK/UNIQUE: row present; UNIQUE duplicates stay
+#         in the base table until the user resolves them)
 #     4. `dolt_commit` refuses to proceed while violations exist
 #     5. Deleting violations from the per-table vtable allows
 #        commit to succeed
@@ -229,16 +230,19 @@ SELECT dolt_merge('feat');
 SQL
 
 N=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t';" "uniq_count")
-expect_eq "unique_violation_summary_count" "1" "$N"
+expect_eq "unique_violation_summary_count" "2" "$N"
 
-TYPE=$(dl "$DB" "SELECT violation_type FROM dolt_constraint_violations_t;" "uniq_type")
+TYPE=$(dl "$DB" "SELECT group_concat(violation_type, ',') FROM (SELECT DISTINCT violation_type FROM dolt_constraint_violations_t ORDER BY violation_type);" "uniq_type")
 expect_eq "unique_violation_type" "unique index" "$TYPE"
 
 BASE_COUNT=$(dl "$DB" "SELECT count(*) FROM t;" "uniq_base")
-expect_eq "unique_violation_loser_not_in_base" "1" "$BASE_COUNT"
+expect_eq "unique_violation_rows_kept_in_base" "2" "$BASE_COUNT"
 
-BASE_KEEPS_MAIN=$(dl "$DB" "SELECT pk FROM t;" "uniq_base_pk")
-expect_eq "unique_violation_main_side_kept" "1" "$BASE_KEEPS_MAIN"
+BASE_ROWS=$(dl "$DB" "SELECT group_concat(pk, ',') FROM (SELECT pk FROM t ORDER BY pk);" "uniq_base_pk")
+expect_eq "unique_violation_base_rows" "1,2" "$BASE_ROWS"
+
+VIOL_ROWS=$(dl "$DB" "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_constraint_violations_t ORDER BY pk);" "uniq_viol_rows")
+expect_eq "unique_violation_rows" "1,2" "$VIOL_ROWS"
 
 echo ""
 
@@ -263,13 +267,16 @@ SELECT dolt_merge('feat');
 SQL
 
 N=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t';" "uniq_shadow_count")
-expect_eq "unique_shadow_violation_summary_count" "1" "$N"
+expect_eq "unique_shadow_violation_summary_count" "2" "$N"
 
-TYPE=$(dl "$DB" "SELECT violation_type FROM dolt_constraint_violations_t;" "uniq_shadow_type")
+TYPE=$(dl "$DB" "SELECT group_concat(violation_type, ',') FROM (SELECT DISTINCT violation_type FROM dolt_constraint_violations_t ORDER BY violation_type);" "uniq_shadow_type")
 expect_eq "unique_shadow_violation_type" "unique index" "$TYPE"
 
-BASE_COUNT=$(dl "$DB" "SELECT count(*) FROM t;" "uniq_shadow_base")
-expect_eq "unique_shadow_loser_not_in_base" "2" "$BASE_COUNT"
+BASE_ROWS=$(dl "$DB" "SELECT group_concat(pk, ',') FROM (SELECT pk FROM t ORDER BY pk);" "uniq_shadow_base")
+expect_eq "unique_shadow_rows_kept_in_base" "1,2,3" "$BASE_ROWS"
+
+VIOL_ROWS=$(dl "$DB" "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_constraint_violations_t ORDER BY pk);" "uniq_shadow_viol")
+expect_eq "unique_shadow_rows" "2,3" "$VIOL_ROWS"
 
 echo ""
 
@@ -568,13 +575,81 @@ SELECT dolt_merge('feat');
 SQL
 
 N=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t';" "without_rowid_unique_count")
-expect_eq "without_rowid_unique_summary_count" "1" "$N"
+expect_eq "without_rowid_unique_summary_count" "2" "$N"
 
-TYPE=$(dl "$DB" "SELECT violation_type FROM dolt_constraint_violations_t;" "without_rowid_unique_type")
+TYPE=$(dl "$DB" "SELECT group_concat(violation_type, ',') FROM (SELECT DISTINCT violation_type FROM dolt_constraint_violations_t ORDER BY violation_type);" "without_rowid_unique_type")
 expect_eq "without_rowid_unique_type" "unique index" "$TYPE"
 
 BASE_COUNT=$(dl "$DB" "SELECT count(*) FROM t;" "without_rowid_unique_base")
-expect_eq "without_rowid_unique_base_count" "1" "$BASE_COUNT"
+expect_eq "without_rowid_unique_base_count" "2" "$BASE_COUNT"
+
+VIOL_ROWS=$(dl "$DB" "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_constraint_violations_t ORDER BY pk);" "without_rowid_unique_rows")
+expect_eq "without_rowid_unique_rows" "feat,main" "$VIOL_ROWS"
+
+echo ""
+
+# ── Scenario O: WITHOUT ROWID UNIQUE multi-row groups work ──
+echo "--- O. WITHOUT ROWID UNIQUE merge records every duplicate row ---"
+
+DB="$TMPROOT/without_rowid_unique_multi.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "without_rowid_unique_multi"
+CREATE TABLE t(pk TEXT PRIMARY KEY, v1 INT UNIQUE) WITHOUT ROWID;
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES ('feat1',1),('feat2',2);
+SELECT dolt_commit('-Am','feat_add');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES ('main1',1),('main2',2);
+SELECT dolt_commit('-Am','main_add');
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t';" "without_rowid_unique_multi_count")
+expect_eq "without_rowid_unique_multi_summary_count" "4" "$N"
+
+VIOL_ROWS=$(dl "$DB" "SELECT group_concat(pk, ',') FROM (SELECT pk FROM dolt_constraint_violations_t ORDER BY pk);" "without_rowid_unique_multi_rows")
+expect_eq "without_rowid_unique_multi_rows" "feat1,feat2,main1,main2" "$VIOL_ROWS"
+
+BASE_ROWS=$(dl "$DB" "SELECT group_concat(pk, ',') FROM (SELECT pk FROM t ORDER BY pk);" "without_rowid_unique_multi_base")
+expect_eq "without_rowid_unique_multi_base_rows" "feat1,feat2,main1,main2" "$BASE_ROWS"
+
+echo ""
+
+# ── Scenario P: mixed WITHOUT ROWID FK + UNIQUE violations ──
+echo "--- P. Mixed WITHOUT ROWID FK + UNIQUE violations both block commit ---"
+
+DB="$TMPROOT/without_rowid_mixed_violations.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "without_rowid_mixed_violations"
+CREATE TABLE parent(pk TEXT PRIMARY KEY, v1 INT UNIQUE) WITHOUT ROWID;
+CREATE TABLE child(pk TEXT PRIMARY KEY, pv INT,
+  FOREIGN KEY(pv) REFERENCES parent(v1)) WITHOUT ROWID;
+CREATE TABLE u(pk TEXT PRIMARY KEY, v1 INT UNIQUE) WITHOUT ROWID;
+INSERT INTO parent VALUES ('p1',1),('p2',2);
+INSERT INTO child VALUES ('c1',1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO child VALUES ('c2',2);
+INSERT INTO u VALUES ('uf',7);
+SELECT dolt_commit('-Am','feat_add');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE pk='p2';
+INSERT INTO u VALUES ('um',7);
+SELECT dolt_commit('-Am','main_add');
+SELECT dolt_merge('feat');
+SQL
+
+SUMMARY=$(dl "$DB" "SELECT group_concat(\"table\" || ':' || num_violations, ',') FROM (SELECT \"table\", num_violations FROM dolt_constraint_violations ORDER BY \"table\");" "without_rowid_mixed_summary")
+expect_eq "without_rowid_mixed_summary" "child:1,u:2" "$SUMMARY"
+
+if dl_errors "$DB" "SELECT dolt_commit('-m','post-merge');" "without_rowid_mixed_commit"; then
+  pass_name "without_rowid_mixed_commit_blocked"
+else
+  fail_name "without_rowid_mixed_commit_blocked"
+fi
 
 echo ""
 
