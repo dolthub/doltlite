@@ -74,6 +74,35 @@ oracle() {
   fi
 }
 
+oracle_error() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_err"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_rc
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" \
+    "SET @@autocommit = 0;
+SET @@dolt_allow_commit_conflicts = 1;
+$dolt_setup"
+  dt_rc=$?
+
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both to error)"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+  fi
+}
+
 # Standard conflict setup: both sides modify the same row differently.
 CONFLICT_SETUP="
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -146,6 +175,18 @@ oracle "resolve_and_commit" \
 SELECT dolt_commit('-A', '-m', 'resolved');
 SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;
 SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
+
+echo "--- error paths ---"
+
+oracle_error "resolve_missing_table" \
+  "$CONFLICT_SETUP
+SELECT dolt_conflicts_resolve('--ours', 'nope');
+"
+
+oracle_error "resolve_extra_positional_arg" \
+  "$CONFLICT_SETUP
+SELECT dolt_conflicts_resolve('--ours', 't', 'extra');
+"
 
 echo "--- TEXT primary key ---"
 
