@@ -4136,6 +4136,63 @@ SELECT dolt_merge('feat');
 " "SELECT grp, count(*), sum(val) FROM t GROUP BY grp ORDER BY grp;"
 
 
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 112: Net-no-op commits (empty commit rejected, merge no-op)
+# ═══════════════════════════════════════════════════════════════════
+echo "--- net-no-op commit + merge ---"
+
+oracle "roundtrip_update_no_net_change" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'original');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET val='temp';
+UPDATE t SET val='original';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat no-op roundtrip');
+SELECT dolt_checkout('main');
+UPDATE t SET val='main_change' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "delete_reinsert_same_value_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'keep'),(2,'target');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+DELETE FROM t WHERE id=2;
+INSERT INTO t VALUES(2,'target');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat recreate');
+SELECT dolt_checkout('main');
+UPDATE t SET val='MAIN' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "insert_delete_net_zero_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(99,'temp');
+DELETE FROM t WHERE id=99;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat no net change');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, val FROM t ORDER BY id;"
+
 # ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
