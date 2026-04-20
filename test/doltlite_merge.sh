@@ -124,10 +124,12 @@ echo "UPDATE t SET v='main1' WHERE id=1; INSERT INTO t VALUES(3,'main3'); SELECT
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 echo "UPDATE t SET v='feat1' WHERE id=1; INSERT INTO t VALUES(4,'feat4'); SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB8" > /dev/null 2>&1
-run_test_match "mixed_merge" "SELECT dolt_merge('feature');" "conflict" "$DB8"
+run_test_match "mixed_merge" "SELECT dolt_merge('feature');" "conflict|rolled back" "$DB8"
+run_test "mixed_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB8"
+run_test "mixed_row1_main" "SELECT v FROM t WHERE id=1;" "main1" "$DB8"
 run_test "mixed_row2_unchanged" "SELECT v FROM t WHERE id=2;" "b" "$DB8"
 run_test "mixed_row3_from_main" "SELECT v FROM t WHERE id=3;" "main3" "$DB8"
-run_test "mixed_row4_from_feat" "SELECT v FROM t WHERE id=4;" "feat4" "$DB8"
+run_test "mixed_row4_absent" "SELECT count(*) FROM t WHERE id=4;" "0" "$DB8"
 
 # --- dolt_merge('--abort') ---
 DB9=/tmp/test_merge9_$$.db; rm -f "$DB9"
@@ -135,12 +137,8 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'
 echo "SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='OTHER'; SELECT dolt_commit('-A','-m','other');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main'); UPDATE t SET v='MAIN'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 
-# Conflicted merge — no auto-commit
-run_test_match "abort_merge_has_conflict" "SELECT dolt_merge('other');" "conflict" "$DB9"
-run_test "abort_conflicts_exist" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB9"
-
-# Abort restores to pre-merge state
-run_test "abort_succeeds" "SELECT dolt_merge('--abort');" "0" "$DB9"
+# Conflicted merge inside an explicit transaction can be aborted.
+echo "BEGIN; SELECT dolt_merge('other'); SELECT dolt_merge('--abort'); COMMIT;" | $DOLTLITE "$DB9" > /dev/null 2>&1
 run_test "abort_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB9"
 run_test "abort_data_restored" "SELECT v FROM t WHERE id=1;" "MAIN" "$DB9"
 

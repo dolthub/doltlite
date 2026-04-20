@@ -475,6 +475,30 @@ static int doltliteReportConstraintViolations(
   return SQLITE_OK;
 }
 
+static void doltliteReportAutocommitConflictRollback(sqlite3_context *ctx){
+  sqlite3_result_error(ctx,
+    "Merge conflict detected, @autocommit transaction rolled back. "
+    "@autocommit must be disabled so that merge conflicts can be "
+    "resolved using the dolt_conflicts and dolt_schema_conflicts "
+    "tables before manually committing the transaction. "
+    "Alternatively, to commit transactions with merge conflicts, set "
+    "@@dolt_allow_commit_conflicts = 1",
+    -1);
+}
+
+static int doltliteRollbackAutocommitConflict(
+  sqlite3 *db,
+  sqlite3_context *ctx,
+  DoltliteTxnState *pSaved
+){
+  int rc = doltliteRestoreTxnState(db, pSaved);
+  doltliteTxnStateClear(pSaved);
+  if( rc==SQLITE_OK ){
+    doltliteReportAutocommitConflictRollback(ctx);
+  }
+  return rc;
+}
+
 static void addFreeEntries(
   struct TableEntry *aWorking, int nWorking,
   struct TableEntry *aStaged,  int nStaged,
@@ -2340,11 +2364,14 @@ static void doltliteMergeFunc(
   }
 
   if( nMergeConflicts > 0 ){
-    rc = doltliteReportConflicts(db, context, nMergeConflicts, "Merge");
-    if( graphLocked ){
-      chunkStoreUnlock(cs);
-      graphLocked = 0;
+    if( db->autoCommit ){
+      rc = doltliteRollbackAutocommitConflict(db, context, &savedState);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(context, rc);
+      }
+      return;
     }
+    rc = doltliteReportConflicts(db, context, nMergeConflicts, "Merge");
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
@@ -2538,11 +2565,19 @@ static int applyMergedCatalogAndCommit(
   }
 
   if( *pnConflicts > 0 ){
+    if( graphLocked ){
+      chunkStoreUnlock(cs);
+      graphLocked = 0;
+    }
+    if( db->autoCommit ){
+      rc = doltliteRollbackAutocommitConflict(db, context, &savedState);
+      if( rc!=SQLITE_OK ) return rc;
+      return SQLITE_OK;
+    }
     rc = doltliteReportConflicts(db, context, *pnConflicts,
                                  sqlite3_strnicmp(zMessage, "Revert", 6)==0
                                    ? "Revert" : "Cherry-pick");
     if( rc!=SQLITE_OK ) goto apply_rollback;
-    chunkStoreUnlock(cs);
     doltliteTxnStateClear(&savedState);
     return SQLITE_OK;
   }
