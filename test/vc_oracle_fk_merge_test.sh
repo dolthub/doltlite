@@ -697,6 +697,51 @@ else
 fi
 
 echo ""
+
+# ── Scenario O: one row with two FK violations deletes cleanly ─
+echo "--- O. WITHOUT ROWID row with two FK violations clears all matching rows ---"
+
+DB="$TMPROOT/without_rowid_multi_fk_delete.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "without_rowid_multi_fk_delete"
+CREATE TABLE p1(pk INT PRIMARY KEY, v1 INT UNIQUE);
+CREATE TABLE p2(pk INT PRIMARY KEY, v2 INT UNIQUE);
+CREATE TABLE child(
+  pk TEXT PRIMARY KEY,
+  f1 INT,
+  f2 INT,
+  FOREIGN KEY(f1) REFERENCES p1(v1),
+  FOREIGN KEY(f2) REFERENCES p2(v2)
+) WITHOUT ROWID;
+INSERT INTO p1 VALUES (1,1),(2,2);
+INSERT INTO p2 VALUES (1,10),(2,20);
+INSERT INTO child VALUES ('ok',1,10);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO child VALUES ('bad',2,20);
+SELECT dolt_commit('-Am','feat_bad_child');
+SELECT dolt_checkout('main');
+DELETE FROM p1 WHERE pk=2;
+DELETE FROM p2 WHERE pk=2;
+SELECT dolt_commit('-Am','main_drop_parents');
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_child WHERE pk='bad';" "without_rowid_multi_fk_delete_count")
+expect_eq "without_rowid_multi_fk_delete_initial_count" "2" "$N"
+
+dl "$DB" "DELETE FROM dolt_constraint_violations_child WHERE pk='bad';" "without_rowid_multi_fk_delete_target" >/dev/null
+N_ZERO=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_child WHERE pk='bad';" "without_rowid_multi_fk_delete_after")
+expect_eq "without_rowid_multi_fk_delete_cleared" "0" "$N_ZERO"
+
+if dl_errors "$DB" "SELECT dolt_commit('-m','post-merge-cleared');" "without_rowid_multi_fk_delete_commit"; then
+  fail_name "without_rowid_multi_fk_delete_commit_after_clear"
+else
+  pass_name "without_rowid_multi_fk_delete_commit_after_clear"
+fi
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="

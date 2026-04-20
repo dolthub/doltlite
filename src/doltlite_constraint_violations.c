@@ -650,10 +650,47 @@ static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   return SQLITE_OK;
 }
 
+/* Per-row DELETE on dolt_constraint_violations_<table> needs a stable unique
+** rowid even when:
+**   1) the user PK is not SQLite's integer rowid, and/or
+**   2) one user row produces multiple violation rows.
+**
+** So the synthetic rowid must include both the offending row identity and
+** the specific violation identity. */
+static sqlite3_int64 cvrViolationRowid(const ConstraintViolationRow *r){
+  u64 h = 1469598103934665603ULL;
+  int i;
+
+  if( r->nKey>0 && r->pKey ){
+    for(i=0; i<r->nKey; i++){
+      h ^= (u64)r->pKey[i];
+      h *= 1099511628211ULL;
+    }
+  }else{
+    const u8 *p = (const u8*)&r->intKey;
+    for(i=0; i<(int)sizeof(r->intKey); i++){
+      h ^= (u64)p[i];
+      h *= 1099511628211ULL;
+    }
+  }
+
+  h ^= (u64)r->violationType;
+  h *= 1099511628211ULL;
+  if( r->zInfo ){
+    for(i=0; r->zInfo[i]; i++){
+      h ^= (u64)(u8)r->zInfo[i];
+      h *= 1099511628211ULL;
+    }
+  }
+
+  if( h==0 ) h = 1;
+  return (sqlite3_int64)(h & 0x7fffffffffffffffULL);
+}
+
 static int cvrRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
   CvRowCur *c = (CvRowCur*)cur;
   if( c->iTableIdx >= 0 && c->iRow < c->aTables[c->iTableIdx].nRows ){
-    *r = c->aTables[c->iTableIdx].aRows[c->iRow].intKey;
+    *r = cvrViolationRowid(&c->aTables[c->iTableIdx].aRows[c->iRow]);
   }else{
     *r = 0;
   }
@@ -667,8 +704,9 @@ static int cvrBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
 }
 
 /* DELETE support: user clears a violation from the per-table
-** vtable to signal "I've resolved this". Matches dolt_conflicts
-** DELETE semantics — rowid comes from the row's intKey. */
+** vtable to signal "I've resolved this". The synthetic rowid
+** includes both the offending row and the specific violation,
+** so compare against the same computed rowid here. */
 static int cvrUpdate(
   sqlite3_vtab *pVtab,
   int nArg,
@@ -697,7 +735,7 @@ static int cvrUpdate(
     if( !aTables[i].zName
      || strcmp(aTables[i].zName, v->zTableName)!=0 ) continue;
     for(j=0; j<aTables[i].nRows; j++){
-      if( aTables[i].aRows[j].intKey == deleteRowid ){
+      if( cvrViolationRowid(&aTables[i].aRows[j]) == deleteRowid ){
         removeViolationRow(&aTables[i], j);
         if( aTables[i].nRows == 0 ){
           removeViolationTable(aTables, &nTables, i);
