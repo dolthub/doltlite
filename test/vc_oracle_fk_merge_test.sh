@@ -742,6 +742,57 @@ else
 fi
 
 echo ""
+
+# ── Scenario P: one selective delete leaves sibling violation row ─
+echo "--- P. WITHOUT ROWID selective violation delete leaves sibling row ---"
+
+DB="$TMPROOT/without_rowid_multi_fk_delete_one.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "without_rowid_multi_fk_delete_one"
+CREATE TABLE p1(pk INT PRIMARY KEY, v1 INT UNIQUE);
+CREATE TABLE p2(pk INT PRIMARY KEY, v2 INT UNIQUE);
+CREATE TABLE child(
+  pk TEXT PRIMARY KEY,
+  f1 INT,
+  f2 INT,
+  FOREIGN KEY(f1) REFERENCES p1(v1),
+  FOREIGN KEY(f2) REFERENCES p2(v2)
+) WITHOUT ROWID;
+INSERT INTO p1 VALUES (1,1),(2,2);
+INSERT INTO p2 VALUES (1,10),(2,20);
+INSERT INTO child VALUES ('ok',1,10);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO child VALUES ('bad',2,20);
+SELECT dolt_commit('-Am','feat_bad_child');
+SELECT dolt_checkout('main');
+DELETE FROM p1 WHERE pk=2;
+DELETE FROM p2 WHERE pk=2;
+SELECT dolt_commit('-Am','main_drop_parents');
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_child WHERE pk='bad';" "without_rowid_multi_fk_delete_one_count")
+expect_eq "without_rowid_multi_fk_delete_one_initial_count" "2" "$N"
+
+dl "$DB" "DELETE FROM dolt_constraint_violations_child WHERE pk='bad' AND violation_info LIKE '%\"f1\"%';" "without_rowid_multi_fk_delete_one_target" >/dev/null
+N_ONE=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_child WHERE pk='bad';" "without_rowid_multi_fk_delete_one_after")
+expect_eq "without_rowid_multi_fk_delete_one_left" "1" "$N_ONE"
+
+LEFT_INFO=$(dl "$DB" "SELECT violation_info FROM dolt_constraint_violations_child WHERE pk='bad';" "without_rowid_multi_fk_delete_one_info")
+case "$LEFT_INFO" in
+  *"\"f2\""*) pass_name "without_rowid_multi_fk_delete_one_keeps_f2" ;;
+  *) fail_name "without_rowid_multi_fk_delete_one_keeps_f2" ;;
+esac
+
+if dl_errors "$DB" "SELECT dolt_commit('-m','still-blocked');" "without_rowid_multi_fk_delete_one_commit"; then
+  pass_name "without_rowid_multi_fk_delete_one_commit_still_blocked"
+else
+  fail_name "without_rowid_multi_fk_delete_one_commit_still_blocked"
+fi
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
