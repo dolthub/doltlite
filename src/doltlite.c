@@ -1725,7 +1725,6 @@ static void doltliteResetFunc(
   int havePreResetHead = 0;
   int isHard = 0;
   int isSoft = 0;
-  int isMixed = 0;
   const char *zRef = 0;
   const char **azPaths = 0;
   int nPaths = 0;
@@ -1752,7 +1751,6 @@ static void doltliteResetFunc(
     if( !arg ) continue;
     if( strcmp(arg, "--hard")==0 ){ isHard = 1; }
     else if( strcmp(arg, "--soft")==0 ){ isSoft = 1; }
-    else if( strcmp(arg, "--mixed")==0 ){ isMixed = 1; }
     else if( arg[0]=='-' ){
       char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
       sqlite3_result_error(context, zErr ? zErr : "unknown option", -1);
@@ -1762,7 +1760,7 @@ static void doltliteResetFunc(
     }
     else if( !zRef ){
 
-      if( isHard || isSoft || isMixed ){
+      if( isHard || isSoft ){
         zRef = arg;
       }else{
         ProllyHash probe;
@@ -1812,7 +1810,6 @@ static void doltliteResetFunc(
     sqlite3_result_int(context, 0);
     return;
   }
-  (void)isMixed;
 
   if( zRef ){
     DoltliteCommit commit;

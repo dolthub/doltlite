@@ -294,6 +294,16 @@ $SEED
 SELECT dolt_reset('--bogus');
 "
 
+oracle_error "reset_mixed_no_ref_unsupported" "
+$SEED
+SELECT dolt_reset('--mixed');
+"
+
+oracle_error "reset_mixed_with_ref_unsupported" "
+$SEED
+SELECT dolt_reset('--mixed', 'HEAD');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
