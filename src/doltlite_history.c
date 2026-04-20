@@ -32,15 +32,6 @@ static char *htBuildSchema(DoltliteColInfo *ci){
   return z;
 }
 
-typedef struct HistoryRow HistoryRow;
-struct HistoryRow {
-  i64 intKey;
-  u8 *pVal; int nVal;
-  char zCommit[PROLLY_HASH_SIZE*2+1];
-  char *zCommitter;
-  i64 commitDate;
-};
-
 typedef struct HistVtab HistVtab;
 struct HistVtab {
   sqlite3_vtab base;
@@ -52,167 +43,190 @@ struct HistVtab {
 typedef struct HistCursor HistCursor;
 struct HistCursor {
   sqlite3_vtab_cursor base;
-  HistoryRow *aRows;
-  int nRows;
-  int nAlloc;
-  int iRow;
+  /* BFS state for commit graph */
+  ProllyHash *aQueue;
+  int qHead, qTail, qAlloc;
+  ProllyHashSet visited, queued;
+  int visitedInit, queuedInit;
+  /* Current commit metadata */
+  char zCommitHex[PROLLY_HASH_SIZE*2+1];
+  char *zCommitter;
+  i64 commitDate;
+  /* Table row cursor at current commit */
+  ProllyCursor tblCur;
+  int tblCurOpen;
+  /* Current row (copied from cursor) */
+  i64 intKey;
+  u8 *pVal; int nVal;
+  int hasRow;
+  i64 iRowid;
 };
 
-static void freeHistoryRow(HistoryRow *r){
-  sqlite3_free(r->pVal);
-  sqlite3_free(r->zCommitter);
-  memset(r, 0, sizeof(*r));
-}
-
-static void freeHistoryRows(HistCursor *c){
-  int i;
-  for(i=0;i<c->nRows;i++){
-    freeHistoryRow(&c->aRows[i]);
+static void htCursorReset(HistCursor *c){
+  if( c->tblCurOpen ){
+    prollyCursorClose(&c->tblCur);
+    c->tblCurOpen = 0;
   }
-  sqlite3_free(c->aRows);
-  c->aRows=0; c->nRows=0; c->nAlloc=0;
-}
-
-static int htScanAtCommit(
-  HistCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
-  const ProllyHash *pRoot, u8 flags,
-  const char *zCommitHex, const char *zCommitter, i64 commitDate
-){
-  ProllyCursor cur; int res, rc;
-  if(prollyHashIsEmpty(pRoot)) return SQLITE_OK;
-  prollyCursorInit(&cur,cs,pCache,pRoot,flags);
-  rc=prollyCursorFirst(&cur,&res);
-  if(rc!=SQLITE_OK||res){prollyCursorClose(&cur);return rc;}
-  while(prollyCursorIsValid(&cur)){
-    const u8 *pVal; int nVal; HistoryRow *r;
-    if(pCur->nRows>=pCur->nAlloc){
-      int nNew=pCur->nAlloc?pCur->nAlloc*2:128;
-      HistoryRow *aNew=sqlite3_realloc(pCur->aRows,nNew*(int)sizeof(HistoryRow));
-      if(!aNew){prollyCursorClose(&cur);return SQLITE_NOMEM;}
-      pCur->aRows=aNew; pCur->nAlloc=nNew;
-    }
-    r=&pCur->aRows[pCur->nRows]; memset(r,0,sizeof(*r));
-    r->intKey=prollyCursorIntKey(&cur);
-    prollyCursorValue(&cur,&pVal,&nVal);
-    if(pVal&&nVal>0){
-      r->pVal=sqlite3_malloc(nVal);
-      if( !r->pVal ){
-        freeHistoryRow(r);
-        prollyCursorClose(&cur);
-        return SQLITE_NOMEM;
-      }
-      memcpy(r->pVal,pVal,nVal);
-      r->nVal=nVal;
-    }
-    memcpy(r->zCommit,zCommitHex,PROLLY_HASH_SIZE*2+1);
-    r->zCommitter=sqlite3_mprintf("%s",zCommitter?zCommitter:"");
-    if( !r->zCommitter ){
-      freeHistoryRow(r);
-      prollyCursorClose(&cur);
-      return SQLITE_NOMEM;
-    }
-    r->commitDate=commitDate;
-    pCur->nRows++;
-    rc=prollyCursorNext(&cur); if(rc!=SQLITE_OK) break;
+  sqlite3_free(c->pVal);
+  c->pVal = 0; c->nVal = 0;
+  sqlite3_free(c->zCommitter);
+  c->zCommitter = 0;
+  sqlite3_free(c->aQueue);
+  c->aQueue = 0;
+  c->qHead = c->qTail = c->qAlloc = 0;
+  if( c->visitedInit ){
+    prollyHashSetFree(&c->visited);
+    c->visitedInit = 0;
   }
-  prollyCursorClose(&cur); return rc;
+  if( c->queuedInit ){
+    prollyHashSetFree(&c->queued);
+    c->queuedInit = 0;
+  }
+  c->hasRow = 0;
+  c->iRowid = 0;
 }
 
-/* dolt_history_<table> expands to one row per (commit, live row) in
-** the table's history — so a 100-row table over 10 commits emits
-** 1000 rows. The scan walks the commit graph BFS, reloads the table
-** root at each visited commit, and emits every live row with that
-** commit's metadata attached. No de-duplication: unchanged rows
-** reappear under every commit, matching Dolt's dolt_history_T
-** semantics. */
-static int htWalkHistory(HistCursor *pCur, sqlite3 *db, const char *zTableName){
-  ChunkStore *cs=doltliteGetChunkStore(db);
-  ProllyCache *pCache;
-  ProllyHash *queue=0;
-  ProllyHashSet visited, queued;
-  int qHead=0, qTail=0, qAlloc=0;
-  int rc=SQLITE_OK;
-  ProllyHash head;
+/* Capture current table-cursor row into the cursor struct.
+** The prolly cursor's value pointer may be invalidated on next
+** step, so we copy the bytes. */
+static int htCaptureRow(HistCursor *c){
+  const u8 *pVal; int nVal;
+  sqlite3_free(c->pVal);
+  c->pVal = 0; c->nVal = 0;
+  c->intKey = prollyCursorIntKey(&c->tblCur);
+  prollyCursorValue(&c->tblCur, &pVal, &nVal);
+  if( pVal && nVal>0 ){
+    c->pVal = sqlite3_malloc(nVal);
+    if( !c->pVal ) return SQLITE_NOMEM;
+    memcpy(c->pVal, pVal, nVal);
+    c->nVal = nVal;
+  }
+  c->hasRow = 1;
+  return SQLITE_OK;
+}
 
-  if(!cs) return SQLITE_OK;
-  pCache=doltliteGetCache(db);
-  if(!pCache) return SQLITE_OK;
-  memset(&visited, 0, sizeof(visited));
-  memset(&queued, 0, sizeof(queued));
+/* Open a table cursor at the given commit and position it on the
+** first row. Returns SQLITE_OK with tblCurOpen=1 if rows exist,
+** or tblCurOpen=0 if the table is empty at this commit. */
+static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
+    const char *zTableName, const ProllyHash *pCommitHash){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  DoltliteCommit commit;
+  struct TableEntry *aT = 0; int nT = 0;
+  ProllyHash tableRoot; u8 flags = 0;
+  int rc, res;
 
-  doltliteGetSessionHead(db, &head);
-  if(prollyHashIsEmpty(&head)) return SQLITE_OK;
-
-  rc = prollyHashSetInit(&visited, 64);
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommit(db, pCommitHash, &commit);
   if( rc!=SQLITE_OK ) return rc;
-  rc = prollyHashSetInit(&queued, 64);
-  if( rc!=SQLITE_OK ){
-    prollyHashSetFree(&visited);
-    return rc;
-  }
 
-  qAlloc=16;
-  queue=sqlite3_malloc(qAlloc*(int)sizeof(ProllyHash));
-  if(!queue){
-    prollyHashSetFree(&visited);
-    prollyHashSetFree(&queued);
+  /* Save commit metadata for column output. */
+  doltliteHashToHex(pCommitHash, c->zCommitHex);
+  sqlite3_free(c->zCommitter);
+  c->zCommitter = sqlite3_mprintf("%s", commit.zName ? commit.zName : "");
+  c->commitDate = commit.timestamp;
+  if( !c->zCommitter ){
+    doltliteCommitClear(&commit);
     return SQLITE_NOMEM;
   }
-  queue[qTail++]=head;
-  rc = prollyHashSetAdd(&queued, &head);
-  if( rc!=SQLITE_OK ) goto history_done;
 
-  while(qHead<qTail){
-    ProllyHash cur=queue[qHead++];
-    DoltliteCommit commit;
-    ProllyHash tableRoot; u8 flags=0;
-    char hexBuf[PROLLY_HASH_SIZE*2+1];
+  /* Enqueue parents for later BFS visits. */
+  {
     int i;
-
-    if( prollyHashSetContains(&visited, &cur) ) continue;
-    rc = prollyHashSetAdd(&visited, &cur);
-    if( rc!=SQLITE_OK ) break;
-
-    memset(&commit,0,sizeof(commit));
-    rc=doltliteLoadCommit(db,&cur,&commit);
-    if(rc!=SQLITE_OK) break;
-
-    doltliteHashToHex(&cur,hexBuf);
-    {
-      struct TableEntry *aT=0; int nT=0;
-      rc=doltliteLoadCatalog(db,&commit.catalogHash,&aT,&nT,0);
-      if(rc==SQLITE_OK){
-        if(doltliteFindTableRootByName(aT,nT,zTableName,&tableRoot,&flags)==SQLITE_OK)
-          rc = htScanAtCommit(pCur,cs,pCache,&tableRoot,flags,hexBuf,commit.zName,commit.timestamp);
-        doltliteFreeCatalog(aT,nT);
-      }
-      if( rc!=SQLITE_OK ){ doltliteCommitClear(&commit); break; }
-    }
-
     for(i=0; i<doltliteCommitParentCount(&commit); i++){
       const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
       if( !pParent || prollyHashIsEmpty(pParent) ) continue;
-      if( prollyHashSetContains(&visited, pParent) ) continue;
-      if( prollyHashSetContains(&queued, pParent) ) continue;
-      if(qTail>=qAlloc){
-        int na=qAlloc*2;
-        ProllyHash *tmp=sqlite3_realloc(queue,na*(int)sizeof(ProllyHash));
-        if(!tmp){rc=SQLITE_NOMEM;break;}
-        queue=tmp; qAlloc=na;
+      if( prollyHashSetContains(&c->visited, pParent) ) continue;
+      if( prollyHashSetContains(&c->queued, pParent) ) continue;
+      if( c->qTail >= c->qAlloc ){
+        int nNew = c->qAlloc ? c->qAlloc*2 : 16;
+        ProllyHash *tmp = sqlite3_realloc(c->aQueue,
+                                           nNew*(int)sizeof(ProllyHash));
+        if( !tmp ){
+          doltliteCommitClear(&commit);
+          return SQLITE_NOMEM;
+        }
+        c->aQueue = tmp; c->qAlloc = nNew;
       }
-      queue[qTail++]=*pParent;
-      rc = prollyHashSetAdd(&queued, pParent);
-      if( rc!=SQLITE_OK ) break;
+      c->aQueue[c->qTail++] = *pParent;
+      rc = prollyHashSetAdd(&c->queued, pParent);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&commit);
+        return rc;
+      }
     }
-    doltliteCommitClear(&commit);
-    if(rc!=SQLITE_OK) break;
   }
 
-history_done:
-  sqlite3_free(queue);
-  prollyHashSetFree(&visited);
-  prollyHashSetFree(&queued);
-  return rc;
+  /* Find the table in this commit's catalog. */
+  rc = doltliteLoadCatalog(db, &commit.catalogHash, &aT, &nT, 0);
+  doltliteCommitClear(&commit);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( doltliteFindTableRootByName(aT, nT, zTableName, &tableRoot, &flags)
+      !=SQLITE_OK || prollyHashIsEmpty(&tableRoot) ){
+    doltliteFreeCatalog(aT, nT);
+    return SQLITE_OK; /* Table doesn't exist at this commit — skip. */
+  }
+  doltliteFreeCatalog(aT, nT);
+
+  /* Open prolly cursor on the table. */
+  prollyCursorInit(&c->tblCur, cs, pCache, &tableRoot, flags);
+  rc = prollyCursorFirst(&c->tblCur, &res);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&c->tblCur);
+    return rc;
+  }
+  if( res ){
+    /* Table exists but is empty. */
+    prollyCursorClose(&c->tblCur);
+    return SQLITE_OK;
+  }
+  c->tblCurOpen = 1;
+  return SQLITE_OK;
+}
+
+/* Advance to the next row. Tries the table cursor first; if exhausted,
+** moves to the next commit in BFS order and opens a new table cursor. */
+static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
+  int rc;
+
+  /* If we have an open table cursor, try to advance within it. */
+  if( c->tblCurOpen ){
+    rc = prollyCursorNext(&c->tblCur);
+    if( rc!=SQLITE_OK ){
+      prollyCursorClose(&c->tblCur);
+      c->tblCurOpen = 0;
+      return rc;
+    }
+    if( prollyCursorIsValid(&c->tblCur) ){
+      return htCaptureRow(c);
+    }
+    /* Exhausted this commit's rows. */
+    prollyCursorClose(&c->tblCur);
+    c->tblCurOpen = 0;
+  }
+
+  /* Walk BFS to find the next commit that has rows. */
+  while( c->qHead < c->qTail ){
+    ProllyHash cur = c->aQueue[c->qHead++];
+
+    if( prollyHashSetContains(&c->visited, &cur) ) continue;
+    rc = prollyHashSetAdd(&c->visited, &cur);
+    if( rc!=SQLITE_OK ) return rc;
+
+    rc = htOpenTableAtCommit(c, db, zTableName, &cur);
+    if( rc!=SQLITE_OK ) return rc;
+
+    if( c->tblCurOpen ){
+      return htCaptureRow(c);
+    }
+    /* Table didn't exist or was empty at this commit — continue BFS. */
+  }
+
+  /* BFS exhausted. */
+  c->hasRow = 0;
+  return SQLITE_OK;
 }
 
 static int htConnect(sqlite3 *db, void *pAux, int argc,
@@ -261,48 +275,78 @@ static int htOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
 
 static int htClose(sqlite3_vtab_cursor *cur){
   HistCursor *c=(HistCursor*)cur;
-  freeHistoryRows(c); sqlite3_free(c); return SQLITE_OK;
+  htCursorReset(c); sqlite3_free(c); return SQLITE_OK;
 }
 
 static int htFilter(sqlite3_vtab_cursor *cur,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   HistCursor *c=(HistCursor*)cur;
   HistVtab *v=(HistVtab*)cur->pVtab;
+  ProllyHash head;
+  ChunkStore *cs;
+  int rc;
   (void)idxNum;(void)idxStr;(void)argc;(void)argv;
-  freeHistoryRows(c); c->iRow=0;
-  return htWalkHistory(c,v->db,v->zTableName);
+
+  htCursorReset(c);
+
+  cs = doltliteGetChunkStore(v->db);
+  if( !cs ) return SQLITE_OK;
+
+  doltliteGetSessionHead(v->db, &head);
+  if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+
+  /* Initialize BFS state. */
+  rc = prollyHashSetInit(&c->visited, 64);
+  if( rc!=SQLITE_OK ) return rc;
+  c->visitedInit = 1;
+
+  rc = prollyHashSetInit(&c->queued, 64);
+  if( rc!=SQLITE_OK ) return rc;
+  c->queuedInit = 1;
+
+  c->qAlloc = 16;
+  c->aQueue = sqlite3_malloc(c->qAlloc * (int)sizeof(ProllyHash));
+  if( !c->aQueue ) return SQLITE_NOMEM;
+  c->aQueue[0] = head;
+  c->qTail = 1;
+  rc = prollyHashSetAdd(&c->queued, &head);
+  if( rc!=SQLITE_OK ) return rc;
+
+  /* Prime the first row. */
+  return htAdvance(c, v->db, v->zTableName);
 }
 
-static int htNext(sqlite3_vtab_cursor *cur){((HistCursor*)cur)->iRow++;return SQLITE_OK;}
+static int htNext(sqlite3_vtab_cursor *cur){
+  HistCursor *c=(HistCursor*)cur;
+  HistVtab *v=(HistVtab*)cur->pVtab;
+  c->iRowid++;
+  return htAdvance(c, v->db, v->zTableName);
+}
 
 static int htEof(sqlite3_vtab_cursor *cur){
-  HistCursor *c=(HistCursor*)cur; return c->iRow>=c->nRows;
+  return !((HistCursor*)cur)->hasRow;
 }
 
 static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   HistCursor *c=(HistCursor*)cur;
   HistVtab *v=(HistVtab*)cur->pVtab;
-  HistoryRow *r;
   int nCols;
-  if( c->iRow>=c->nRows ) return SQLITE_OK;
-  r=&c->aRows[c->iRow];
+  if( !c->hasRow ) return SQLITE_OK;
   nCols=v->cols.nCol;
 
-
-
   if(nCols>0 && col<nCols){
-    doltliteResultUserCol(ctx, &v->cols, r->pVal, r->nVal, r->intKey, col);
+    doltliteResultUserCol(ctx, &v->cols, c->pVal, c->nVal, c->intKey, col);
   }else{
     int fixedCol=col-nCols;
     switch(fixedCol){
       case 0:
-        sqlite3_result_text(ctx,r->zCommit,-1,SQLITE_TRANSIENT);
+        sqlite3_result_text(ctx,c->zCommitHex,-1,SQLITE_TRANSIENT);
         break;
       case 1:
-        sqlite3_result_text(ctx,r->zCommitter,-1,SQLITE_TRANSIENT);
+        sqlite3_result_text(ctx,c->zCommitter,-1,SQLITE_TRANSIENT);
         break;
       case 2:
-        {time_t t=(time_t)r->commitDate;struct tm *tm=gmtime(&t);
+        {time_t t=(time_t)c->commitDate;struct tm *tm=gmtime(&t);
           if(tm){char b[32];strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",tm);
             sqlite3_result_text(ctx,b,-1,SQLITE_TRANSIENT);
           }else sqlite3_result_null(ctx);}
@@ -313,7 +357,7 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 }
 
 static int htRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
-  *r=((HistCursor*)cur)->iRow; return SQLITE_OK;
+  *r=((HistCursor*)cur)->iRowid; return SQLITE_OK;
 }
 
 static sqlite3_module historyModule = {
