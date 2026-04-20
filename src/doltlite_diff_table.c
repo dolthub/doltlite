@@ -272,28 +272,25 @@ static int pairsAppend(DiffTblCursor *pCur,
   return SQLITE_OK;
 }
 
-static int stackPushUnique(ProllyHash **paAdded, int *pnAdded,
-                           ProllyHash **paStack, int *pnStack,
+static int stackPushUnique(ProllyHash **paAdded, int *pnAdded, int *pnAddedAlloc,
+                           ProllyHash **paStack, int *pnStack, int *pnStackAlloc,
                            const ProllyHash *pHash){
-  ProllyHash *aAddedNew;
-  ProllyHash *aStackNew;
   int i;
   for(i=0; i<*pnAdded; i++){
     if( prollyHashCompare(&(*paAdded)[i], pHash)==0 ) return SQLITE_OK;
   }
-  aAddedNew = sqlite3_malloc((*pnAdded+1)*(int)sizeof(ProllyHash));
-  if( !aAddedNew ) return SQLITE_NOMEM;
-  aStackNew = sqlite3_malloc((*pnStack+1)*(int)sizeof(ProllyHash));
-  if( !aStackNew ){
-    sqlite3_free(aAddedNew);
-    return SQLITE_NOMEM;
+  if( *pnAdded >= *pnAddedAlloc ){
+    int nNew = *pnAddedAlloc ? (*pnAddedAlloc)*2 : 16;
+    ProllyHash *tmp = sqlite3_realloc(*paAdded, nNew*(int)sizeof(ProllyHash));
+    if( !tmp ) return SQLITE_NOMEM;
+    *paAdded = tmp; *pnAddedAlloc = nNew;
   }
-  if( *pnAdded>0 ) memcpy(aAddedNew, *paAdded, (*pnAdded)*(int)sizeof(ProllyHash));
-  if( *pnStack>0 ) memcpy(aStackNew, *paStack, (*pnStack)*(int)sizeof(ProllyHash));
-  sqlite3_free(*paAdded);
-  sqlite3_free(*paStack);
-  *paAdded = aAddedNew;
-  *paStack = aStackNew;
+  if( *pnStack >= *pnStackAlloc ){
+    int nNew = *pnStackAlloc ? (*pnStackAlloc)*2 : 16;
+    ProllyHash *tmp = sqlite3_realloc(*paStack, nNew*(int)sizeof(ProllyHash));
+    if( !tmp ) return SQLITE_NOMEM;
+    *paStack = tmp; *pnStackAlloc = nNew;
+  }
   (*paAdded)[*pnAdded] = *pHash;
   (*pnAdded)++;
   (*paStack)[*pnStack] = *pHash;
@@ -391,8 +388,10 @@ static int registerCommitParents(
   int *pnMap,
   ProllyHash **paStack,
   int *pnStack,
+  int *pnStackAlloc,
   ProllyHash **paAdded,
   int *pnAdded,
+  int *pnAddedAlloc,
   const DoltliteCommit *pCommit,
   const ProllyHash *pCurTblRoot,
   const ProllyHash *pCurSchemaHash,
@@ -413,7 +412,8 @@ static int registerCommitParents(
   for(i=0; i<doltliteCommitParentCount(pCommit); i++){
     pParent = doltliteCommitParentHash(pCommit, i);
     if( !pParent ) continue;
-    rc = stackPushUnique(paAdded, pnAdded, paStack, pnStack, pParent);
+    rc = stackPushUnique(paAdded, pnAdded, pnAddedAlloc,
+                         paStack, pnStack, pnStackAlloc, pParent);
     if( rc!=SQLITE_OK ) return rc;
   }
   return SQLITE_OK;
@@ -434,9 +434,9 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
   CmTblInfo *aMap = 0;
   int nMap = 0;
   ProllyHash *aStack = 0;
-  int nStack = 0;
+  int nStack = 0, nStackAlloc = 0;
   ProllyHash *aAdded = 0;
-  int nAdded = 0;
+  int nAdded = 0, nAddedAlloc = 0;
   int currInited = 0;
   ProllyHash curr;
   int rc = SQLITE_OK;
@@ -449,7 +449,8 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
   rc = seedWorkingChildInfo(db, &headHash, zTableName, &aMap, &nMap);
   if( rc!=SQLITE_OK ) goto walk_done;
 
-  rc = stackPushUnique(&aAdded, &nAdded, &aStack, &nStack, &headHash);
+  rc = stackPushUnique(&aAdded, &nAdded, &nAddedAlloc,
+                       &aStack, &nStack, &nStackAlloc, &headHash);
   if( rc!=SQLITE_OK ) goto walk_done;
   curr = headHash;
   currInited = 1;
@@ -481,7 +482,8 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
                                &curSchemaHash, curFlags, aMap, nMap);
     if( rc==SQLITE_OK ){
       rc = registerCommitParents(&aMap, &nMap, &aStack, &nStack,
-                                 &aAdded, &nAdded, &commit, &curTblRoot,
+                                 &nStackAlloc, &aAdded, &nAdded,
+                                 &nAddedAlloc, &commit, &curTblRoot,
                                  &curSchemaHash, curFlags, curHex);
     }
     doltliteCommitClear(&commit);
