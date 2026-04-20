@@ -46,7 +46,7 @@ CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 BEGIN;
 INSERT INTO t VALUES(2,'in_txn');
-SELECT dolt_commit('-Am','c1');
+SELECT dolt_commit('-A','-m','c1');
 ROLLBACK;
 SQL
 )" >/dev/null
@@ -60,7 +60,7 @@ CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 BEGIN;
 INSERT INTO t VALUES(2,'in_txn');
-CALL dolt_commit('-Am','c1');
+CALL dolt_commit('-A','-m','c1');
 ROLLBACK;
 SQL
   DOLT_A=$(dolt_query "$DOLT_A_DIR" "SELECT count(*) FROM t")
@@ -92,7 +92,7 @@ CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SAVEPOINT sp1;
 INSERT INTO t VALUES(2,'in_sp');
-SELECT dolt_commit('-Am','c1');
+SELECT dolt_commit('-A','-m','c1');
 ROLLBACK TO sp1;
 SQL
 )" >/dev/null
@@ -106,7 +106,7 @@ CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SAVEPOINT sp1;
 INSERT INTO t VALUES(2,'in_sp');
-CALL dolt_commit('-Am','c1');
+CALL dolt_commit('-A','-m','c1');
 ROLLBACK TO sp1;
 SQL
   DOLT_B=$(dolt_query "$DOLT_B_DIR" "SELECT count(*) FROM t")
@@ -137,7 +137,7 @@ dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 INSERT INTO t VALUES(2,'b');
-SELECT dolt_commit('-Am','c1');
+SELECT dolt_commit('-A','-m','c1');
 SQL
 )" >/dev/null
 DL_C=$(dl_query "$DB" "SELECT count(*) FROM t;")
@@ -161,7 +161,7 @@ BEGIN;
 INSERT INTO t VALUES(1,'a');
 INSERT INTO t VALUES(2,'b');
 INSERT INTO t VALUES(3,'c');
-SELECT dolt_commit('-Am','c1');
+SELECT dolt_commit('-A','-m','c1');
 ROLLBACK;
 SQL
 )" >/dev/null
@@ -186,7 +186,7 @@ SAVEPOINT outer;
 INSERT INTO t VALUES(1,'a');
 SAVEPOINT inner;
 INSERT INTO t VALUES(2,'b');
-SELECT dolt_commit('-Am','c1');
+SELECT dolt_commit('-A','-m','c1');
 ROLLBACK TO inner;
 ROLLBACK TO outer;
 SQL
@@ -209,9 +209,9 @@ rm -f "$DB"
 dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
-SELECT dolt_commit('-Am','c1');
+SELECT dolt_commit('-A','-m','c1');
 INSERT INTO t VALUES(2,'b');
-SELECT dolt_commit('-Am','c2');
+SELECT dolt_commit('-A','-m','c2');
 SQL
 )" >/dev/null
 DL_F=$(dl_query "$DB" "SELECT count(*) FROM t;")
@@ -233,7 +233,7 @@ dl_query "$DB" "$(cat <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;
 INSERT INTO t VALUES(1,'persisted');
-SELECT dolt_commit('-Am','c1');
+SELECT dolt_commit('-A','-m','c1');
 SQL
 )" >/dev/null
 
