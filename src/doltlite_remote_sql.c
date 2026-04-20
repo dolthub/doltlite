@@ -234,6 +234,10 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       sqlite3_result_error(ctx, "url required for add", -1);
       return;
     }
+    if( argc>3 ){
+      sqlite3_result_error(ctx, "too many arguments", -1);
+      return;
+    }
     zUrl = (const char*)sqlite3_value_text(argv[2]);
     if( !zUrl ){
       sqlite3_result_error(ctx, "url required for add", -1);
@@ -248,6 +252,10 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       return;
     }
   }else if( strcmp(zAction, "remove")==0 ){
+    if( argc>2 ){
+      sqlite3_result_error(ctx, "too many arguments", -1);
+      return;
+    }
     m.zName = zName;
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateRemoteRef, &m);
@@ -289,7 +297,22 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   if( argc>=3 ){
     const char *zOpt = (const char*)sqlite3_value_text(argv[2]);
-    if( zOpt && strcmp(zOpt, "--force")==0 ) bForce = 1;
+    if( argc>3 ){
+      sqlite3_result_error(ctx, "too many arguments", -1);
+      return;
+    }
+    if( zOpt && strcmp(zOpt, "--force")==0 ){
+      bForce = 1;
+    }else{
+      char *zErr = sqlite3_mprintf("unknown option `%s`", zOpt ? zOpt : "");
+      if( zErr ){
+        sqlite3_result_error(ctx, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(ctx);
+      }
+      return;
+    }
   }
 
   rc = chunkStoreFindRemote(cs, zRemoteName, &zUrl);
@@ -398,6 +421,10 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     sqlite3_result_error(ctx, "remote name required", -1);
     return;
   }
+  if( argc>2 ){
+    sqlite3_result_error(ctx, "too many arguments", -1);
+    return;
+  }
 
   rc = chunkStoreFindRemote(cs, zRemoteName, &zUrl);
   if( rc!=SQLITE_OK || !zUrl ){
@@ -486,6 +513,10 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   zBranch = (const char*)sqlite3_value_text(argv[1]);
   if( !zRemoteName || !zBranch ){
     sqlite3_result_error(ctx, "remote and branch required", -1);
+    return;
+  }
+  if( argc>2 ){
+    sqlite3_result_error(ctx, "too many arguments", -1);
     return;
   }
   memset(&savedState, 0, sizeof(savedState));
@@ -613,6 +644,10 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   zUrl = (const char*)sqlite3_value_text(argv[0]);
   if( !zUrl ){
     sqlite3_result_error(ctx, "url required", -1);
+    return;
+  }
+  if( argc>1 ){
+    sqlite3_result_error(ctx, "too many arguments", -1);
     return;
   }
   memset(&savedState, 0, sizeof(savedState));
