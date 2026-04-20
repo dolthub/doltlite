@@ -31,12 +31,6 @@ static char *atBuildSchema(DoltliteColInfo *ci){
   return z;
 }
 
-typedef struct AtRow AtRow;
-struct AtRow {
-  i64 intKey;
-  u8 *pVal; int nVal;
-};
-
 typedef struct AtVtab AtVtab;
 struct AtVtab {
   sqlite3_vtab base;
@@ -48,70 +42,45 @@ struct AtVtab {
 typedef struct AtCursor AtCursor;
 struct AtCursor {
   sqlite3_vtab_cursor base;
-  AtRow *aRows;
-  int nRows;
-  int nAlloc;
-  int iRow;
+  ProllyCursor tblCur;
+  int tblCurOpen;
+  /* Current row (copied from cursor) */
+  i64 intKey;
+  u8 *pVal; int nVal;
+  int hasRow;
+  i64 iRowid;
   char *zCommitRef;
 };
 
-static void freeAtRows(AtCursor *pCur){
-  int i;
-  for( i = 0; i < pCur->nRows; i++ ){
-    sqlite3_free(pCur->aRows[i].pVal);
+static void atCursorReset(AtCursor *c){
+  if( c->tblCurOpen ){
+    prollyCursorClose(&c->tblCur);
+    c->tblCurOpen = 0;
   }
-  sqlite3_free(pCur->aRows);
-  pCur->aRows = 0;
-  pCur->nRows = 0;
-  pCur->nAlloc = 0;
-  sqlite3_free(pCur->zCommitRef);
-  pCur->zCommitRef = 0;
+  sqlite3_free(c->pVal);
+  c->pVal = 0; c->nVal = 0;
+  sqlite3_free(c->zCommitRef);
+  c->zCommitRef = 0;
+  c->hasRow = 0;
+  c->iRowid = 0;
 }
 
-static int atScanTree(AtCursor *pCur, ChunkStore *cs, ProllyCache *pCache,
-                      const ProllyHash *pRoot, u8 flags){
-  ProllyCursor cur;
-  int res, rc;
-  if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
-  prollyCursorInit(&cur, cs, pCache, pRoot, flags);
-  rc = prollyCursorFirst(&cur, &res);
-  if( rc != SQLITE_OK || res ){
-    prollyCursorClose(&cur);
-    return rc;
+/* Capture current cursor row. The prolly cursor's value pointer
+** may be invalidated on next step, so we copy the bytes. */
+static int atCaptureRow(AtCursor *c){
+  const u8 *pVal; int nVal;
+  sqlite3_free(c->pVal);
+  c->pVal = 0; c->nVal = 0;
+  c->intKey = prollyCursorIntKey(&c->tblCur);
+  prollyCursorValue(&c->tblCur, &pVal, &nVal);
+  if( pVal && nVal>0 ){
+    c->pVal = sqlite3_malloc(nVal);
+    if( !c->pVal ) return SQLITE_NOMEM;
+    memcpy(c->pVal, pVal, nVal);
+    c->nVal = nVal;
   }
-  while( prollyCursorIsValid(&cur) ){
-    const u8 *pVal;
-    int nVal;
-    AtRow *r;
-    if( pCur->nRows >= pCur->nAlloc ){
-      int nNew = pCur->nAlloc ? pCur->nAlloc * 2 : 128;
-      AtRow *aNew = sqlite3_realloc(pCur->aRows, nNew * (int)sizeof(AtRow));
-      if( !aNew ){
-        prollyCursorClose(&cur);
-        return SQLITE_NOMEM;
-      }
-      pCur->aRows = aNew;
-      pCur->nAlloc = nNew;
-    }
-    r = &pCur->aRows[pCur->nRows];
-    memset(r, 0, sizeof(*r));
-    r->intKey = prollyCursorIntKey(&cur);
-    prollyCursorValue(&cur, &pVal, &nVal);
-    if( pVal && nVal > 0 ){
-      r->pVal = sqlite3_malloc(nVal);
-      if( !r->pVal ){
-        prollyCursorClose(&cur);
-        return SQLITE_NOMEM;
-      }
-      memcpy(r->pVal, pVal, nVal);
-      r->nVal = nVal;
-    }
-    pCur->nRows++;
-    rc = prollyCursorNext(&cur);
-    if( rc != SQLITE_OK ) break;
-  }
-  prollyCursorClose(&cur);
-  return rc;
+  c->hasRow = 1;
+  return SQLITE_OK;
 }
 
 static int atConnect(sqlite3 *db, void *pAux, int argc,
@@ -203,7 +172,7 @@ static int atOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
 
 static int atClose(sqlite3_vtab_cursor *cur){
   AtCursor *c=(AtCursor*)cur;
-  freeAtRows(c); sqlite3_free(c); return SQLITE_OK;
+  atCursorReset(c); sqlite3_free(c); return SQLITE_OK;
 }
 
 static int atFilter(sqlite3_vtab_cursor *cur,
@@ -218,10 +187,10 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   DoltliteCommit commit;
   struct TableEntry *aTables=0; int nTables=0;
   ProllyHash tableRoot; u8 flags=0;
-  u8 *data=0; int nData=0; int rc;
+  int rc, res;
   (void)idxStr;
 
-  freeAtRows(c); c->iRow=0;
+  atCursorReset(c);
   if(!cs||idxNum!=1||argc<1) return SQLITE_OK;
 
   pBt=doltliteGetBtShared(db);
@@ -232,7 +201,6 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   if(!zRef) return SQLITE_OK;
   c->zCommitRef = sqlite3_mprintf("%s", zRef);
   if( !c->zCommitRef ) return SQLITE_NOMEM;
-
 
   rc=doltliteResolveRef(db,zRef,&commitHash);
   if(rc==SQLITE_NOTFOUND){
@@ -245,7 +213,6 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   memset(&commit,0,sizeof(commit));
   rc=doltliteLoadCommit(db,&commitHash,&commit);
   if(rc!=SQLITE_OK) return rc;
-
 
   /* When the ref is a branch name (not a commit hash or tag), prefer
   ** its working catalog over the committed catalog IF the working set
@@ -285,34 +252,70 @@ at_find_root:
   if(rc==SQLITE_NOTFOUND) return SQLITE_OK;
   if(rc!=SQLITE_OK) return rc;
 
-  rc = atScanTree(c,cs,pCache,&tableRoot,flags);
-  return rc;
+  if( prollyHashIsEmpty(&tableRoot) ) return SQLITE_OK;
+
+  /* Open streaming cursor on the table at this commit. */
+  prollyCursorInit(&c->tblCur, cs, pCache, &tableRoot, flags);
+  rc = prollyCursorFirst(&c->tblCur, &res);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&c->tblCur);
+    return rc;
+  }
+  if( res ){
+    prollyCursorClose(&c->tblCur);
+    return SQLITE_OK;
+  }
+  c->tblCurOpen = 1;
+  return atCaptureRow(c);
 }
 
-static int atNext(sqlite3_vtab_cursor *cur){((AtCursor*)cur)->iRow++;return SQLITE_OK;}
+static int atNext(sqlite3_vtab_cursor *cur){
+  AtCursor *c=(AtCursor*)cur;
+  int rc;
+  c->iRowid++;
+  if( !c->tblCurOpen ){
+    c->hasRow = 0;
+    return SQLITE_OK;
+  }
+  rc = prollyCursorNext(&c->tblCur);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&c->tblCur);
+    c->tblCurOpen = 0;
+    c->hasRow = 0;
+    return rc;
+  }
+  if( !prollyCursorIsValid(&c->tblCur) ){
+    prollyCursorClose(&c->tblCur);
+    c->tblCurOpen = 0;
+    c->hasRow = 0;
+    return SQLITE_OK;
+  }
+  return atCaptureRow(c);
+}
 
 static int atEof(sqlite3_vtab_cursor *cur){
-  AtCursor *c=(AtCursor*)cur; return c->iRow>=c->nRows;
+  return !((AtCursor*)cur)->hasRow;
 }
 
 static int atColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   AtCursor *c=(AtCursor*)cur;
   AtVtab *v=(AtVtab*)cur->pVtab;
-  AtRow *r=&c->aRows[c->iRow];
   int nCols=v->cols.nCol;
+
+  if( !c->hasRow ) return SQLITE_OK;
 
   if( col==nCols ){
     sqlite3_result_text(ctx, c->zCommitRef ? c->zCommitRef : "",
                         -1, SQLITE_TRANSIENT);
   }else if(nCols>0 && col<nCols){
-    doltliteResultUserCol(ctx, &v->cols, r->pVal, r->nVal, r->intKey, col);
+    doltliteResultUserCol(ctx, &v->cols, c->pVal, c->nVal, c->intKey, col);
   }
 
   return SQLITE_OK;
 }
 
 static int atRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
-  *r=((AtCursor*)cur)->iRow; return SQLITE_OK;
+  *r=((AtCursor*)cur)->iRowid; return SQLITE_OK;
 }
 
 static sqlite3_module atModule = {
