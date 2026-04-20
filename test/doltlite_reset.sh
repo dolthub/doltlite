@@ -185,8 +185,34 @@ run_test "hard_reset_restores_head_row_after_conflict" \
   "SELECT v FROM t;" \
   "main" "$DB7"
 
+DB8=/tmp/test_reset8_$$.db; rm -f "$DB8"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); UPDATE t SET v='main'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "SELECT dolt_merge('feat');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+
+run_test "merge_conflicts_present_before_reset_guard" \
+  "SELECT count(*) FROM dolt_conflicts_t;" \
+  "1" "$DB8"
+
+run_test_match "no_arg_reset_rejected_during_merge_conflict" \
+  "SELECT dolt_reset();" \
+  "Merge conflict detected" "$DB8"
+
+run_test_match "soft_reset_rejected_during_merge_conflict" \
+  "SELECT dolt_reset('--soft');" \
+  "Merge conflict detected" "$DB8"
+
+run_test "reset_guard_preserves_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts_t;" \
+  "1" "$DB8"
+
+run_test "reset_guard_preserves_working_row" \
+  "SELECT v FROM t;" \
+  "main" "$DB8"
+
 # Cleanup
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
