@@ -909,18 +909,50 @@ static void doltliteCommitFunc(
             zMessage = &arg[j+1];
           }else if( i+1<argc ){
             zMessage = (const char*)sqlite3_value_text(argv[++i]);
+          }else{
+            sqlite3_result_error(context, "no value for option `message'", -1);
+            return;
           }
           break;
+        }else{
+          char *zErr = sqlite3_mprintf("unknown option `-%c'", arg[j]);
+          if( zErr ){
+            sqlite3_result_error(context, zErr, -1);
+            sqlite3_free(zErr);
+          }else{
+            sqlite3_result_error_nomem(context);
+          }
+          return;
         }
       }
-    }else if( strcmp(arg, "-m")==0 && i+1<argc ){
-      zMessage = (const char*)sqlite3_value_text(argv[++i]);
-    }else if( strcmp(arg, "--message")==0 && i+1<argc ){
-      zMessage = (const char*)sqlite3_value_text(argv[++i]);
-    }else if( strcmp(arg, "--author")==0 && i+1<argc ){
-      zAuthor = (const char*)sqlite3_value_text(argv[++i]);
-    }else if( strcmp(arg, "--date")==0 && i+1<argc ){
-      zDate = (const char*)sqlite3_value_text(argv[++i]);
+    }else if( strcmp(arg, "-m")==0 ){
+      if( i+1<argc ){
+        zMessage = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "no value for option `message'", -1);
+        return;
+      }
+    }else if( strcmp(arg, "--message")==0 ){
+      if( i+1<argc ){
+        zMessage = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "no value for option `message'", -1);
+        return;
+      }
+    }else if( strcmp(arg, "--author")==0 ){
+      if( i+1<argc ){
+        zAuthor = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "no value for option `author'", -1);
+        return;
+      }
+    }else if( strcmp(arg, "--date")==0 ){
+      if( i+1<argc ){
+        zDate = (const char*)sqlite3_value_text(argv[++i]);
+      }else{
+        sqlite3_result_error(context, "no value for option `date'", -1);
+        return;
+      }
     }else if( strcmp(arg, "--amend")==0 ){
       amend = 1;
     }else if( strcmp(arg, "--allow-empty")==0 ){
@@ -934,6 +966,25 @@ static void doltliteCommitFunc(
     }else if( strcmp(arg, "-a")==0 || strcmp(arg, "--all")==0 ){
 
       addModifiedOnly = 1;
+    }else if( arg[0]=='-' ){
+      char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
+      if( zErr ){
+        sqlite3_result_error(context, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(context);
+      }
+      return;
+    }else{
+      char *zErr = sqlite3_mprintf(
+          "commit does not take positional arguments, but found 1: %s", arg);
+      if( zErr ){
+        sqlite3_result_error(context, zErr, -1);
+        sqlite3_free(zErr);
+      }else{
+        sqlite3_result_error_nomem(context);
+      }
+      return;
     }
   }
 
