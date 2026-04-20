@@ -610,6 +610,93 @@ BASE_COUNT=$(dl "$DB" "SELECT count(*) FROM t WHERE pk='b' AND v1=-5;" "without_
 expect_eq "without_rowid_check_row_present" "1" "$BASE_COUNT"
 
 echo ""
+
+# ── Scenario M: WITHOUT ROWID FK targeted/full delete works ─
+echo "--- M. WITHOUT ROWID FK violations delete by text PK ---"
+
+DB="$TMPROOT/without_rowid_fk_delete.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "without_rowid_fk_delete"
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, v1 INT, UNIQUE(v1));
+CREATE TABLE child(pk TEXT PRIMARY KEY, v1 INT, FOREIGN KEY(v1) REFERENCES parent(v1)) WITHOUT ROWID;
+INSERT INTO parent VALUES (1,1),(2,2),(3,3);
+INSERT INTO child VALUES ('a',1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO child VALUES ('b',2),('c',3);
+SELECT dolt_commit('-Am','feat_add_children');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE pk IN (2,3);
+SELECT dolt_commit('-Am','main_drop_parents');
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_child;" "without_rowid_fk_delete_count")
+expect_eq "without_rowid_fk_delete_initial_count" "2" "$N"
+
+dl "$DB" "DELETE FROM dolt_constraint_violations_child WHERE pk='b';" "without_rowid_fk_delete_target" >/dev/null
+N_ONE=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_child;" "without_rowid_fk_delete_after_one")
+expect_eq "without_rowid_fk_delete_one_left" "1" "$N_ONE"
+
+REMAINING_PK=$(dl "$DB" "SELECT pk FROM dolt_constraint_violations_child;" "without_rowid_fk_delete_remaining")
+expect_eq "without_rowid_fk_delete_keeps_c" "c" "$REMAINING_PK"
+
+dl "$DB" "DELETE FROM dolt_constraint_violations_child;" "without_rowid_fk_delete_all" >/dev/null
+N_ZERO=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_child;" "without_rowid_fk_delete_after_all")
+expect_eq "without_rowid_fk_delete_cleared" "0" "$N_ZERO"
+
+if dl_errors "$DB" "SELECT dolt_commit('-m','post-merge-cleared');" "without_rowid_fk_delete_commit"; then
+  fail_name "without_rowid_fk_delete_commit_after_clear"
+else
+  pass_name "without_rowid_fk_delete_commit_after_clear"
+fi
+
+echo ""
+
+# ── Scenario N: WITHOUT ROWID CHECK targeted/full delete works ─
+echo "--- N. WITHOUT ROWID CHECK violations delete by composite PK ---"
+
+DB="$TMPROOT/without_rowid_check_composite_delete.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "without_rowid_check_composite_delete"
+CREATE TABLE t(a INT, b TEXT, v1 INT, PRIMARY KEY(a,b)) WITHOUT ROWID;
+INSERT INTO t VALUES (1,'a',1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2,'b',-5),(3,'c',-6);
+SELECT dolt_commit('-Am','feat_bad_rows');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(a INT, b TEXT, v1 INT CHECK(v1 > 0), PRIMARY KEY(a,b)) WITHOUT ROWID;
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_commit('-Am','main_add_check');
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_t;" "without_rowid_check_composite_count")
+expect_eq "without_rowid_check_composite_initial_count" "2" "$N"
+
+dl "$DB" "DELETE FROM dolt_constraint_violations_t WHERE a=2 AND b='b';" "without_rowid_check_composite_target" >/dev/null
+N_ONE=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_t;" "without_rowid_check_composite_after_one")
+expect_eq "without_rowid_check_composite_one_left" "1" "$N_ONE"
+
+REMAINING_PK=$(dl "$DB" "SELECT a || '|' || b FROM dolt_constraint_violations_t;" "without_rowid_check_composite_remaining")
+expect_eq "without_rowid_check_composite_keeps_other" "3|c" "$REMAINING_PK"
+
+dl "$DB" "DELETE FROM dolt_constraint_violations_t;" "without_rowid_check_composite_all" >/dev/null
+N_ZERO=$(dl "$DB" "SELECT count(*) FROM dolt_constraint_violations_t;" "without_rowid_check_composite_after_all")
+expect_eq "without_rowid_check_composite_cleared" "0" "$N_ZERO"
+
+if dl_errors "$DB" "SELECT dolt_commit('-m','post-merge-cleared');" "without_rowid_check_composite_commit"; then
+  fail_name "without_rowid_check_composite_commit_after_clear"
+else
+  pass_name "without_rowid_check_composite_commit_after_clear"
+fi
+
+echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
 echo "======================================="
