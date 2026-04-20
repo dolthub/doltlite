@@ -109,9 +109,21 @@ struct DoltliteDiffVtab {
 typedef struct DoltliteDiffCursor DoltliteDiffCursor;
 struct DoltliteDiffCursor {
   sqlite3_vtab_cursor base;
-  DiffSummaryRow *aSummary;
-  int nSummary;
-  int iRow;
+  /* BFS state for commit walk */
+  ProllyHash *aQueue;
+  int qHead, qTail, qAlloc;
+  ProllyHashSet visited, queued;
+  int visitedInit, queuedInit;
+  /* Per-commit summary rows (typically 1-5 per commit) */
+  DiffSummaryRow *aBatch;
+  int nBatch;
+  int iBatch;
+  /* Table name filter (NULL = no filter) */
+  char *zFilterTable;
+  /* Phase: 0=working set, 1=commit BFS */
+  int phase;
+  int hasRow;
+  i64 iRowid;
 };
 
 static const char *diffSchema =
@@ -135,30 +147,34 @@ static const char *diffSchema =
 #define DIFF_COL_SCHEMA_CHANGE 6
 #define DIFF_COL_TABLE_NAME    7
 
-static void freeSummaryRows(DoltliteDiffCursor *pCur){
+static void freeBatch(DoltliteDiffCursor *pCur){
   int i;
-  for(i=0; i<pCur->nSummary; i++){
-    sqlite3_free(pCur->aSummary[i].zTableName);
-    sqlite3_free(pCur->aSummary[i].zCommitter);
-    sqlite3_free(pCur->aSummary[i].zEmail);
-    sqlite3_free(pCur->aSummary[i].zMessage);
+  for(i=0; i<pCur->nBatch; i++){
+    sqlite3_free(pCur->aBatch[i].zTableName);
+    sqlite3_free(pCur->aBatch[i].zCommitter);
+    sqlite3_free(pCur->aBatch[i].zEmail);
+    sqlite3_free(pCur->aBatch[i].zMessage);
   }
-  sqlite3_free(pCur->aSummary);
-  pCur->aSummary = 0;
-  pCur->nSummary = 0;
+  sqlite3_free(pCur->aBatch);
+  pCur->aBatch = 0;
+  pCur->nBatch = 0;
+  pCur->iBatch = 0;
 }
 
-static int appendSummaryRow(DoltliteDiffCursor *pCur,
-                            const char *zCommitHex,
-                            const char *zTableName,
-                            const DoltliteCommit *pCommit,
-                            u8 dataChange, u8 schemaChange){
+static int batchAppend(DoltliteDiffCursor *pCur,
+                       const char *zCommitHex,
+                       const char *zTableName,
+                       const DoltliteCommit *pCommit,
+                       u8 dataChange, u8 schemaChange){
   DiffSummaryRow *aNew, *r;
-  aNew = sqlite3_realloc(pCur->aSummary,
-                         (pCur->nSummary+1)*(int)sizeof(DiffSummaryRow));
+  if( pCur->zFilterTable && strcmp(pCur->zFilterTable, zTableName)!=0 ){
+    return SQLITE_OK;
+  }
+  aNew = sqlite3_realloc(pCur->aBatch,
+                         (pCur->nBatch+1)*(int)sizeof(DiffSummaryRow));
   if( !aNew ) return SQLITE_NOMEM;
-  pCur->aSummary = aNew;
-  r = &aNew[pCur->nSummary];
+  pCur->aBatch = aNew;
+  r = &aNew[pCur->nBatch];
   memset(r, 0, sizeof(*r));
   memcpy(r->zCommitHex, zCommitHex, PROLLY_HASH_SIZE*2+1);
   r->zTableName = sqlite3_mprintf("%s", zTableName ? zTableName : "");
@@ -176,18 +192,14 @@ static int appendSummaryRow(DoltliteDiffCursor *pCur,
     }
     r->timestamp = pCommit->timestamp;
   }
-
   r->dataChange   = dataChange;
   r->schemaChange = schemaChange;
-  pCur->nSummary++;
+  pCur->nBatch++;
   return SQLITE_OK;
 }
 
-/* Emit summary rows for the working set (uncommitted changes). The
-** commit_hash column gets the sentinel "WORKING" so callers can
-** filter uncommitted rows without a second scan. Reached before the
-** commit-walk so WORKING rows appear first in the result set. */
-static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
+/* Compute summary rows for the working set (uncommitted changes). */
+static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
   ProllyHash headCat, workCat;
   struct TableEntry *aHead = 0, *aWork = 0;
   int nHead = 0, nWork = 0;
@@ -199,13 +211,9 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
   memset(&workCat, 0, sizeof(workCat));
 
   rc = doltliteGetHeadCatalogHash(db, &headCat);
-  if( rc!=SQLITE_OK ){
-
-    return SQLITE_OK;
-  }
+  if( rc!=SQLITE_OK ) return SQLITE_OK;
   rc = doltliteFlushCatalogToHash(db, &workCat);
   if( rc!=SQLITE_OK ) return rc;
-
 
   if( prollyHashCompare(&headCat, &workCat)==0 ) return SQLITE_OK;
 
@@ -225,7 +233,6 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
     struct TableEntry *p;
     u8 dataChange, schemaChange;
     if( !e->zName ){
-
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
@@ -235,8 +242,8 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
       if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
         u8 schemaChangeFlag =
           schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags) ? 0 : 1;
-        rc = appendSummaryRow(pCur, zHexBuf, "dolt_schemas", 0,
-                              1, schemaChangeFlag);
+        rc = batchAppend(pCur, zHexBuf, "dolt_schemas", 0,
+                         1, schemaChangeFlag);
         if( rc!=SQLITE_OK ) goto done;
       }
       continue;
@@ -250,14 +257,14 @@ static int collectWorkingSetSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
       schemaChange = (prollyHashCompare(&e->schemaHash, &p->schemaHash) != 0) ? 1 : 0;
       if( !dataChange && !schemaChange ) continue;
     }
-    rc = appendSummaryRow(pCur, zHexBuf, e->zName, 0, dataChange, schemaChange);
+    rc = batchAppend(pCur, zHexBuf, e->zName, 0, dataChange, schemaChange);
     if( rc!=SQLITE_OK ) goto done;
   }
   for(i=0; i<nHead; i++){
     struct TableEntry *p = &aHead[i];
     if( !p->zName ) continue;
     if( doltliteFindTableByName(aWork, nWork, p->zName) ) continue;
-    rc = appendSummaryRow(pCur, zHexBuf, p->zName, 0, 1, 1);
+    rc = batchAppend(pCur, zHexBuf, p->zName, 0, 1, 1);
     if( rc!=SQLITE_OK ) goto done;
   }
 
@@ -267,10 +274,11 @@ done:
   return rc;
 }
 
-static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
-                                   const ProllyHash *pCommitHash,
-                                   const DoltliteCommit *pCommit,
-                                   const char *zCommitHex){
+/* Compute summary rows for a single commit (vs its first parent). */
+static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
+                              const ProllyHash *pCommitHash,
+                              const DoltliteCommit *pCommit,
+                              const char *zCommitHex){
   struct TableEntry *aChild = 0, *aParent = 0;
   int nChild = 0, nParent = 0;
   int rc, i;
@@ -295,13 +303,11 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
     }
   }
 
-
   for(i=0; i<nChild; i++){
     struct TableEntry *e = &aChild[i];
     struct TableEntry *p;
     u8 dataChange, schemaChange;
     if( !e->zName ){
-
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
@@ -311,15 +317,14 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
       if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
         u8 schemaChangeFlag =
           schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags) ? 0 : 1;
-        rc = appendSummaryRow(pCur, zCommitHex, "dolt_schemas", pCommit,
-                              1, schemaChangeFlag);
+        rc = batchAppend(pCur, zCommitHex, "dolt_schemas", pCommit,
+                         1, schemaChangeFlag);
         if( rc!=SQLITE_OK ) goto done;
       }
       continue;
     }
     p = doltliteFindTableByName(aParent, nParent, e->zName);
     if( !p ){
-
       dataChange = 1;
       schemaChange = 1;
     }else{
@@ -327,17 +332,16 @@ static int collectSummaryForCommit(DoltliteDiffCursor *pCur, sqlite3 *db,
       schemaChange = (prollyHashCompare(&e->schemaHash, &p->schemaHash) != 0) ? 1 : 0;
       if( !dataChange && !schemaChange ) continue;
     }
-    rc = appendSummaryRow(pCur, zCommitHex, e->zName, pCommit,
-                          dataChange, schemaChange);
+    rc = batchAppend(pCur, zCommitHex, e->zName, pCommit,
+                     dataChange, schemaChange);
     if( rc!=SQLITE_OK ) goto done;
   }
-
 
   for(i=0; i<nParent; i++){
     struct TableEntry *p = &aParent[i];
     if( !p->zName ) continue;
     if( doltliteFindTableByName(aChild, nChild, p->zName) ) continue;
-    rc = appendSummaryRow(pCur, zCommitHex, p->zName, pCommit, 1, 1);
+    rc = batchAppend(pCur, zCommitHex, p->zName, pCommit, 1, 1);
     if( rc!=SQLITE_OK ) goto done;
   }
 
@@ -347,84 +351,108 @@ done:
   return rc;
 }
 
-static int collectSummary(DoltliteDiffCursor *pCur, sqlite3 *db){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyHash head;
-  ProllyHash *queue = 0;
-  int qHead = 0, qTail = 0, qAlloc = 0;
-  ProllyHashSet visited, queued;
-  int visInit = 0, queInit = 0;
-  int rc = SQLITE_OK;
-  int i;
+/* Advance the cursor to the next summary row. Moves through the
+** current batch, then advances BFS to the next commit. */
+static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
+  int rc;
 
-  if( !cs ) return SQLITE_OK;
+  /* Try next row in current batch. */
+  if( pCur->iBatch < pCur->nBatch ){
+    pCur->hasRow = 1;
+    return SQLITE_OK;
+  }
 
+  /* Current batch exhausted — free and compute next. */
+  freeBatch(pCur);
 
-  rc = collectWorkingSetSummary(pCur, db);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Phase 0: working set. */
+  if( pCur->phase==0 ){
+    pCur->phase = 1;
+    rc = computeWorkingBatch(pCur, db);
+    if( rc!=SQLITE_OK ) return rc;
+    if( pCur->nBatch>0 ){
+      pCur->hasRow = 1;
+      return SQLITE_OK;
+    }
+    /* Fall through to BFS if working set had no changes. */
+  }
 
-  doltliteGetSessionHead(db, &head);
-  if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
-
-  rc = prollyHashSetInit(&visited, 64);
-  if( rc!=SQLITE_OK ) return rc;
-  visInit = 1;
-  rc = prollyHashSetInit(&queued, 64);
-  if( rc!=SQLITE_OK ) goto walk_done;
-  queInit = 1;
-
-  qAlloc = 16;
-  queue = sqlite3_malloc(qAlloc*(int)sizeof(ProllyHash));
-  if( !queue ){ rc = SQLITE_NOMEM; goto walk_done; }
-  queue[qTail++] = head;
-  rc = prollyHashSetAdd(&queued, &head);
-  if( rc!=SQLITE_OK ) goto walk_done;
-
-  while( qHead<qTail ){
-    ProllyHash cur = queue[qHead++];
+  /* Phase 1: BFS commit walk. */
+  while( pCur->qHead < pCur->qTail ){
+    ProllyHash cur = pCur->aQueue[pCur->qHead++];
     DoltliteCommit commit;
     char zHex[PROLLY_HASH_SIZE*2+1];
+    int i;
 
-    if( prollyHashSetContains(&visited, &cur) ) continue;
-    rc = prollyHashSetAdd(&visited, &cur);
-    if( rc!=SQLITE_OK ) break;
+    if( prollyHashSetContains(&pCur->visited, &cur) ) continue;
+    rc = prollyHashSetAdd(&pCur->visited, &cur);
+    if( rc!=SQLITE_OK ) return rc;
 
     memset(&commit, 0, sizeof(commit));
     rc = doltliteLoadCommit(db, &cur, &commit);
-    if( rc!=SQLITE_OK ) break;
+    if( rc!=SQLITE_OK ) return rc;
 
     doltliteHashToHex(&cur, zHex);
-    rc = collectSummaryForCommit(pCur, db, &cur, &commit, zHex);
+    rc = computeCommitBatch(pCur, db, &cur, &commit, zHex);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&commit);
-      break;
+      return rc;
     }
 
+    /* Enqueue parents. */
     for(i=0; i<doltliteCommitParentCount(&commit); i++){
       const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
       if( !pParent || prollyHashIsEmpty(pParent) ) continue;
-      if( prollyHashSetContains(&visited, pParent) ) continue;
-      if( prollyHashSetContains(&queued,  pParent) ) continue;
-      if( qTail>=qAlloc ){
-        int newAlloc = qAlloc*2;
-        ProllyHash *tmp = sqlite3_realloc(queue,
-                                          newAlloc*(int)sizeof(ProllyHash));
-        if( !tmp ){ rc = SQLITE_NOMEM; break; }
-        queue = tmp; qAlloc = newAlloc;
+      if( prollyHashSetContains(&pCur->visited, pParent) ) continue;
+      if( prollyHashSetContains(&pCur->queued,  pParent) ) continue;
+      if( pCur->qTail >= pCur->qAlloc ){
+        int nNew = pCur->qAlloc*2;
+        ProllyHash *tmp = sqlite3_realloc(pCur->aQueue,
+                                          nNew*(int)sizeof(ProllyHash));
+        if( !tmp ){
+          doltliteCommitClear(&commit);
+          return SQLITE_NOMEM;
+        }
+        pCur->aQueue = tmp; pCur->qAlloc = nNew;
       }
-      queue[qTail++] = *pParent;
-      rc = prollyHashSetAdd(&queued, pParent);
-      if( rc!=SQLITE_OK ) break;
+      pCur->aQueue[pCur->qTail++] = *pParent;
+      rc = prollyHashSetAdd(&pCur->queued, pParent);
+      if( rc!=SQLITE_OK ){
+        doltliteCommitClear(&commit);
+        return rc;
+      }
     }
     doltliteCommitClear(&commit);
-    if( rc!=SQLITE_OK ) break;
+
+    if( pCur->nBatch>0 ){
+      pCur->hasRow = 1;
+      return SQLITE_OK;
+    }
+    /* This commit had no table changes (or all filtered out) — continue. */
   }
 
-walk_done:
-  sqlite3_free(queue);
-  if( visInit ) prollyHashSetFree(&visited);
-  if( queInit ) prollyHashSetFree(&queued);
-  return rc;
+  pCur->hasRow = 0;
+  return SQLITE_OK;
+}
+
+static void diffCursorReset(DoltliteDiffCursor *pCur){
+  freeBatch(pCur);
+  sqlite3_free(pCur->aQueue);
+  pCur->aQueue = 0;
+  pCur->qHead = pCur->qTail = pCur->qAlloc = 0;
+  if( pCur->visitedInit ){
+    prollyHashSetFree(&pCur->visited);
+    pCur->visitedInit = 0;
+  }
+  if( pCur->queuedInit ){
+    prollyHashSetFree(&pCur->queued);
+    pCur->queuedInit = 0;
+  }
+  sqlite3_free(pCur->zFilterTable);
+  pCur->zFilterTable = 0;
+  pCur->phase = 0;
+  pCur->hasRow = 0;
+  pCur->iRowid = 0;
 }
 
 static int diffConnect(sqlite3 *db, void *pAux, int argc,
@@ -484,7 +512,7 @@ static int diffOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
 
 static int diffClose(sqlite3_vtab_cursor *pCursor){
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
-  freeSummaryRows(pCur);
+  diffCursorReset(pCur);
   sqlite3_free(pCur);
   return SQLITE_OK;
 }
@@ -494,55 +522,69 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
   DoltliteDiffVtab *pVtab = (DoltliteDiffVtab*)pCursor->pVtab;
   sqlite3 *db = pVtab->db;
-  const char *zTableName = 0;
-  int rc = SQLITE_OK;
+  ChunkStore *cs;
+  ProllyHash head;
   int argIdx = 0;
-  int i;
+  int rc;
   (void)idxStr;
 
-  freeSummaryRows(pCur);
-  pCur->iRow = 0;
-  rc = collectSummary(pCur, db);
+  diffCursorReset(pCur);
+
+  /* Capture table_name filter if present. */
+  if( (idxNum & DIFF_IDX_TABLE_NAME) && argIdx<argc ){
+    const char *z = (const char*)sqlite3_value_text(argv[argIdx++]);
+    if( z ){
+      pCur->zFilterTable = sqlite3_mprintf("%s", z);
+      if( !pCur->zFilterTable ) return SQLITE_NOMEM;
+    }
+  }
+
+  cs = doltliteGetChunkStore(db);
+  if( !cs ) return SQLITE_OK;
+
+  doltliteGetSessionHead(db, &head);
+  if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+
+  /* Initialize BFS state. */
+  rc = prollyHashSetInit(&pCur->visited, 64);
+  if( rc!=SQLITE_OK ) return rc;
+  pCur->visitedInit = 1;
+
+  rc = prollyHashSetInit(&pCur->queued, 64);
+  if( rc!=SQLITE_OK ) return rc;
+  pCur->queuedInit = 1;
+
+  pCur->qAlloc = 16;
+  pCur->aQueue = sqlite3_malloc(pCur->qAlloc * (int)sizeof(ProllyHash));
+  if( !pCur->aQueue ) return SQLITE_NOMEM;
+  pCur->aQueue[0] = head;
+  pCur->qTail = 1;
+  rc = prollyHashSetAdd(&pCur->queued, &head);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( (idxNum & DIFF_IDX_TABLE_NAME) && argIdx<argc ){
-    zTableName = (const char*)sqlite3_value_text(argv[argIdx++]);
-  }
-  if( !zTableName ) return SQLITE_OK;
-  {
-    int out = 0;
-    for(i=0; i<pCur->nSummary; i++){
-      if( pCur->aSummary[i].zTableName
-       && strcmp(pCur->aSummary[i].zTableName, zTableName)==0 ){
-        if( out!=i ) pCur->aSummary[out] = pCur->aSummary[i];
-        out++;
-      }else{
-        sqlite3_free(pCur->aSummary[i].zTableName);
-        sqlite3_free(pCur->aSummary[i].zCommitter);
-        sqlite3_free(pCur->aSummary[i].zEmail);
-        sqlite3_free(pCur->aSummary[i].zMessage);
-      }
-    }
-    pCur->nSummary = out;
-  }
-  return SQLITE_OK;
+  /* Prime the first row (working set first, then BFS). */
+  pCur->phase = 0;
+  return diffAdvance(pCur, db);
 }
 
 static int diffNext(sqlite3_vtab_cursor *pCursor){
-  ((DoltliteDiffCursor*)pCursor)->iRow++;
-  return SQLITE_OK;
+  DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
+  DoltliteDiffVtab *pVtab = (DoltliteDiffVtab*)pCursor->pVtab;
+  pCur->iRowid++;
+  pCur->iBatch++;
+  return diffAdvance(pCur, pVtab->db);
 }
 
 static int diffEof(sqlite3_vtab_cursor *pCursor){
-  DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
-  return pCur->iRow >= pCur->nSummary;
+  return !((DoltliteDiffCursor*)pCursor)->hasRow;
 }
 
-static int summaryColumn(DoltliteDiffCursor *pCur, sqlite3_context *ctx,
-                         int iCol){
+static int diffColumn(sqlite3_vtab_cursor *pCursor,
+    sqlite3_context *ctx, int iCol){
+  DoltliteDiffCursor *pCur = (DoltliteDiffCursor*)pCursor;
   DiffSummaryRow *r;
-  if( pCur->iRow >= pCur->nSummary ) return SQLITE_OK;
-  r = &pCur->aSummary[pCur->iRow];
+  if( !pCur->hasRow || pCur->iBatch >= pCur->nBatch ) return SQLITE_OK;
+  r = &pCur->aBatch[pCur->iBatch];
   switch( iCol ){
     case DIFF_COL_COMMIT_HASH:
       sqlite3_result_text(ctx, r->zCommitHex, -1, SQLITE_TRANSIENT);
@@ -562,7 +604,6 @@ static int summaryColumn(DoltliteDiffCursor *pCur, sqlite3_context *ctx,
       }
       break;
     case DIFF_COL_DATE: {
-
       if( r->timestamp==0 && r->zCommitter==0 ){
         sqlite3_result_null(ctx);
       }else{
@@ -601,13 +642,8 @@ static int summaryColumn(DoltliteDiffCursor *pCur, sqlite3_context *ctx,
   return SQLITE_OK;
 }
 
-static int diffColumn(sqlite3_vtab_cursor *pCursor,
-    sqlite3_context *ctx, int iCol){
-  return summaryColumn((DoltliteDiffCursor*)pCursor, ctx, iCol);
-}
-
 static int diffRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
-  *pRowid = ((DoltliteDiffCursor*)pCursor)->iRow;
+  *pRowid = ((DoltliteDiffCursor*)pCursor)->iRowid;
   return SQLITE_OK;
 }
 
