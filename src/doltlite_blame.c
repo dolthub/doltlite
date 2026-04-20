@@ -57,6 +57,7 @@ struct BlameCursor {
   BlameRow *aRows;
   int nRows;
   int nAlloc;
+  int nUnresolved;
   int iRow;
 };
 
@@ -418,18 +419,14 @@ static int blameCompareAgainstRef(
     if( !blameRowValueEqual(r->pCurVal, r->nCurVal, pRefVal, nRefVal) ){
       rc = blameAssign(r, pCommitHash, pCommit);
       if( rc!=SQLITE_OK ) return rc;
+      pCur->nUnresolved--;
     }
   }
   return SQLITE_OK;
 }
 
-/* Count rows still awaiting a blame. Used as the walk terminator. */
 static int blameUnresolvedCount(BlameCursor *pCur){
-  int i, n = 0;
-  for(i=0; i<pCur->nRows; i++){
-    if( !pCur->aRows[i].blamed ) n++;
-  }
-  return n;
+  return pCur->nUnresolved;
 }
 
 /* For merge blame we need the merge base across every parent, not just
@@ -717,6 +714,7 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
 
   rc = blameCollectLiveRows(c, cs, pCache, &tableRoot, tableFlags);
   if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }
+  c->nUnresolved = c->nRows;
 
   rc = blameWalk(c, db, v->zTableName);
   if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }
