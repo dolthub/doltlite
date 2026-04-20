@@ -29,7 +29,7 @@ dl_query() {
 
 dolt_query() {
   local dir="$1"; shift
-  cd "$dir" && dolt sql -q "$@" -r csv 2>/dev/null | tail -1
+  cd "$dir" && dolt sql -c -q "$@" -r csv 2>/dev/null | tail -1
   cd - >/dev/null
 }
 
@@ -55,7 +55,7 @@ DL_A=$(dl_query "$DB" "SELECT count(*) FROM t;")
 if [ -n "$DOLT" ]; then
   DOLT_A_DIR="$TMPROOT/dolt_a"
   mkdir -p "$DOLT_A_DIR" && cd "$DOLT_A_DIR" && dolt init >/dev/null 2>&1
-  DOLT_A=$(dolt sql -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
+  DOLT_A=$(dolt sql -c -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 BEGIN;
@@ -102,7 +102,7 @@ DL_B=$(dl_query "$DB" "SELECT count(*) FROM t;")
 if [ -n "$DOLT" ]; then
   DOLT_B_DIR="$TMPROOT/dolt_b"
   mkdir -p "$DOLT_B_DIR" && cd "$DOLT_B_DIR" && dolt init >/dev/null 2>&1
-  DOLT_B=$(dolt sql -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
+  DOLT_B=$(dolt sql -c -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SAVEPOINT sp1;
@@ -117,11 +117,8 @@ SQL
   if [ "$DL_B" = "$DOLT_B" ]; then
     pass_name "savepoint_commit_rollback_to_matches_dolt"
   else
-    # Both engines destroy the savepoint (ROLLBACK TO errors).
-    # Dolt's batch mode aborts on that error so the SELECT never
-    # runs, producing empty output. Not a semantic divergence.
-    pass=$((pass+1))
-    echo "  SKIP (batch abort): savepoint_commit_rollback_to_matches_dolt"
+    fail_name "savepoint_commit_rollback_to_matches_dolt"
+    echo "    doltlite=$DL_B dolt=$DOLT_B"
   fi
 fi
 
