@@ -5,34 +5,41 @@
 #include "doltlite_ignore.h"
 #include <string.h>
 
-/* Match zStr against zPat. '*' and '%' match zero or more characters,
-** '?' matches exactly one, everything else is literal. Returns 1 on
-** match, 0 otherwise. Recursive on wildcard to keep the code short;
-** table names are bounded by sqlite_master so pathological nesting
-** isn't a concern. */
+static unsigned char ignoreLower(unsigned char c){
+  return (c>='A' && c<='Z') ? c + 32 : c;
+}
+
+/* Match zStr against zPat (case-insensitive). '*' and '%' match zero
+** or more characters, '?' matches exactly one, everything else is a
+** case-folded literal. Uses iterative backtracking instead of
+** recursion to avoid stack overflow on pathological patterns. */
 static int ignorePatternMatch(const char *zPat, const char *zStr){
-  while( *zPat ){
-    char c = *zPat;
+  const char *pStar = 0;   /* Last '*' position in pattern */
+  const char *sStar = 0;   /* String position at last '*' */
+
+  while( *zStr ){
+    unsigned char c = (unsigned char)*zPat;
     if( c=='*' || c=='%' ){
       while( *(zPat+1)=='*' || *(zPat+1)=='%' ) zPat++;
+      pStar = zPat;
+      sStar = zStr;
       zPat++;
-      if( !*zPat ) return 1;
-      while( *zStr ){
-        if( ignorePatternMatch(zPat, zStr) ) return 1;
-        zStr++;
-      }
-      return 0;
     }else if( c=='?' ){
-      if( !*zStr ) return 0;
       zPat++;
       zStr++;
+    }else if( ignoreLower(c)==ignoreLower((unsigned char)*zStr) ){
+      zPat++;
+      zStr++;
+    }else if( pStar ){
+      zPat = pStar + 1;
+      sStar++;
+      zStr = sStar;
     }else{
-      if( *zStr != c ) return 0;
-      zPat++;
-      zStr++;
+      return 0;
     }
   }
-  return *zStr == 0;
+  while( *zPat=='*' || *zPat=='%' ) zPat++;
+  return *zPat == 0;
 }
 
 /* Specificity score = count of literal (non-wildcard) chars. Higher
