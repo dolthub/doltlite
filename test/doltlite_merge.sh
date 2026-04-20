@@ -157,7 +157,17 @@ run_test_match "clean_ff_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB10"
 run_test "clean_ff_log" "SELECT message FROM dolt_log LIMIT 1;" "feat" "$DB10"
 run_test "clean_ff_data" "SELECT count(*) FROM t;" "2" "$DB10"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
+# Constraint-violation merge rolls back under autocommit
+DB11=/tmp/test_merge11_$$.db; rm -f "$DB11"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT); INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB11" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET u=9, v='feat2' WHERE id=2; SELECT dolt_commit('-A','-m','feat_unique');" | $DOLTLITE "$DB11" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); UPDATE t SET u=9, v='main1' WHERE id=1; SELECT dolt_commit('-A','-m','main_unique');" | $DOLTLITE "$DB11" > /dev/null 2>&1
+run_test_match "constraint_violation_merge_errors" "SELECT dolt_merge('feat');" "constraint violations|rolled back" "$DB11"
+run_test "constraint_violation_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB11"
+run_test "constraint_violation_no_violations" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB11"
+run_test "constraint_violation_state_restored" "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id, u, v FROM t ORDER BY id);" "1:9:main1,2:2:base2" "$DB11"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

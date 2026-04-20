@@ -94,6 +94,7 @@ struct DoltliteTxnState {
   ProllyHash sessionStaged;
   ProllyHash sessionMergeCommit;
   ProllyHash sessionConflictsCatalog;
+  ProllyHash sessionConstraintViolationsCatalog;
   ProllyHash sessionCatalogHash;
   u8 sessionIsMerging;
 };
@@ -122,6 +123,8 @@ static int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
   doltliteGetSessionMergeState(db, &p->sessionIsMerging,
                                &p->sessionMergeCommit,
                                &p->sessionConflictsCatalog);
+  doltliteGetSessionConstraintViolationsCatalog(
+      db, &p->sessionConstraintViolationsCatalog);
 
   rc = doltliteFlushCatalogToHash(db, &p->sessionCatalogHash);
   if( rc!=SQLITE_OK ){
@@ -153,6 +156,8 @@ static int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
   doltliteSetSessionMergeState(db, p->sessionIsMerging,
                                &p->sessionMergeCommit,
                                &p->sessionConflictsCatalog);
+  doltliteSetSessionConstraintViolationsCatalog(
+      db, &p->sessionConstraintViolationsCatalog);
   return SQLITE_OK;
 }
 
@@ -2284,17 +2289,27 @@ static void doltliteMergeFunc(
     }
     sqlite3_free(zDetectErrMsg);
     if( nViolations + nUnique + nCheck > 0 ){
-      u8 alreadyMerging = 0;
-      nMergeConflicts += nViolations + nUnique + nCheck;
-      /* A violation-only merge (no row-level conflicts) otherwise
-      ** wouldn't have been put into merging state by
-      ** recordMergeConflicts, which would leave dolt_merge --abort
-      ** saying "no merge in progress" even though the working set
-      ** is clearly stuck. Stamp the state here so abort works. */
-      doltliteGetSessionMergeState(db, &alreadyMerging, 0, 0);
-      if( !alreadyMerging ){
-        doltliteSetSessionMergeState(db, 1, &theirHead, 0);
+      rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
+      if( rc==SQLITE_OK ){
+        doltliteSetSessionBranch(db, savedState.zSessionBranch);
+        doltliteSetSessionHead(db, &savedState.sessionHead);
+        doltliteSetSessionStaged(db, &savedState.sessionStaged);
+        doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
+                                     &savedState.sessionMergeCommit,
+                                     &savedState.sessionConflictsCatalog);
+        doltliteSetSessionConstraintViolationsCatalog(
+            db, &savedState.sessionConstraintViolationsCatalog);
+        rc = doltlitePersistWorkingSet(db);
       }
+      doltliteTxnStateClear(&savedState);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(context, rc);
+      }else{
+        sqlite3_result_error(context,
+          "Committing this transaction resulted in a working set with "
+          "constraint violations, transaction rolled back.", -1);
+      }
+      return;
     }
   }
 
