@@ -438,10 +438,6 @@ jobs:
         cd build
         for f in ../test/vc_oracle_*_test.sh; do
           echo "--- $(basename $f) ---"
-          if grep -q 'dolt"' "$f" || grep -q '\$DOLT' "$f"; then
-            bash "$f" ./doltlite dolt || exit 1
-          else
-            bash "$f" ./doltlite || exit 1
-          fi
+          bash "$f" ./doltlite dolt || exit 1
         done
       timeout-minutes: 20
