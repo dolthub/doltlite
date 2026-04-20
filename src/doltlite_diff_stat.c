@@ -273,7 +273,7 @@ static int dsComputeTableStats(
   char **azFromCols = 0, **azToCols = 0;
   int nFromCols = 0, nToCols = 0;
   i64 oldCount = 0, newCount = 0;
-  int rowsMod = 0, rowsAdd = 0, rowsDel = 0;
+  i64 rowsMod = 0, rowsAdd = 0, rowsDel = 0;
   i64 cellsMod = 0, cellsAdd = 0, cellsDel = 0;
   int rc;
 
