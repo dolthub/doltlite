@@ -260,6 +260,55 @@ SELECT dolt_merge('feature');
   "SELECT dolt_conflicts_resolve('--ours', 't');
 SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
+echo "--- per-row DELETE on conflict tables (TEXT primary key) ---"
+
+oracle "delete_conflict_row_text_pk" \
+"CREATE TABLE t(id VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('alice', 10);
+INSERT INTO t VALUES('bob', 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=200 WHERE id='alice';
+UPDATE t SET v=201 WHERE id='bob';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_update');
+SELECT dolt_checkout('main');
+UPDATE t SET v=300 WHERE id='alice';
+UPDATE t SET v=301 WHERE id='bob';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_update');
+SELECT dolt_merge('feature');
+" \
+  "DELETE FROM dolt_conflicts_t WHERE our_id='alice';
+SELECT CONCAT('R|row|', our_id, '|', our_v, '|', their_v) FROM dolt_conflicts_t ORDER BY our_id;
+SELECT CONCAT('R|table|', id, '|', v) FROM t ORDER BY id;
+SELECT CONCAT('R|count|', count(*)) FROM dolt_conflicts;"
+
+oracle "delete_all_conflict_rows_text_pk" \
+"CREATE TABLE t(id VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('alice', 10);
+INSERT INTO t VALUES('bob', 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=200 WHERE id='alice';
+UPDATE t SET v=201 WHERE id='bob';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_update');
+SELECT dolt_checkout('main');
+UPDATE t SET v=300 WHERE id='alice';
+UPDATE t SET v=301 WHERE id='bob';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_update');
+SELECT dolt_merge('feature');
+" \
+  "DELETE FROM dolt_conflicts_t;
+SELECT CONCAT('R|table|', id, '|', v) FROM t ORDER BY id;
+SELECT CONCAT('R|count|', count(*)) FROM dolt_conflicts;"
+
 echo "--- composite primary key (two INT columns) ---"
 
 # Composite PK exercises the path where the tree key alone can't
@@ -310,6 +359,57 @@ SELECT dolt_merge('feature');
 " \
   "SELECT dolt_conflicts_resolve('--ours', 't');
 SELECT CONCAT('R|', a, '|', b, '|', v) FROM t ORDER BY a, b;"
+
+echo "--- per-row DELETE on conflict tables (composite primary key) ---"
+
+oracle "delete_conflict_row_composite_pk" \
+"CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a, b));
+INSERT INTO t VALUES(1, 1, 11);
+INSERT INTO t VALUES(1, 2, 12);
+INSERT INTO t VALUES(2, 1, 21);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=110 WHERE a=1 AND b=1;
+UPDATE t SET v=120 WHERE a=1 AND b=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v=1100 WHERE a=1 AND b=1;
+UPDATE t SET v=1200 WHERE a=1 AND b=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'mainu');
+SELECT dolt_merge('feature');
+" \
+  "DELETE FROM dolt_conflicts_t WHERE our_a=1 AND our_b=1;
+SELECT CONCAT('R|row|', our_a, '|', our_b, '|', our_v, '|', their_v) FROM dolt_conflicts_t ORDER BY our_a, our_b;
+SELECT CONCAT('R|table|', a, '|', b, '|', v) FROM t ORDER BY a, b;
+SELECT CONCAT('R|count|', count(*)) FROM dolt_conflicts;"
+
+oracle "delete_all_conflict_rows_composite_pk" \
+"CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a, b));
+INSERT INTO t VALUES(1, 1, 11);
+INSERT INTO t VALUES(1, 2, 12);
+INSERT INTO t VALUES(2, 1, 21);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v=110 WHERE a=1 AND b=1;
+UPDATE t SET v=120 WHERE a=1 AND b=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v=1100 WHERE a=1 AND b=1;
+UPDATE t SET v=1200 WHERE a=1 AND b=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'mainu');
+SELECT dolt_merge('feature');
+" \
+  "DELETE FROM dolt_conflicts_t;
+SELECT CONCAT('R|table|', a, '|', b, '|', v) FROM t ORDER BY a, b;
+SELECT CONCAT('R|count|', count(*)) FROM dolt_conflicts;"
 
 echo "--- composite PK mixing INT and TEXT ---"
 

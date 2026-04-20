@@ -526,6 +526,24 @@ static const char *cfrDiffType(const u8 *pBase, int nBase,
   return "modified";
 }
 
+/* For row-wise DELETE on dolt_conflicts_<table>, the vtab rowid must uniquely
+** identify a conflict row even when the user PK is not SQLite's integer
+** rowid. Use the raw serialized prolly key when present; integer PK conflicts
+** continue to use intKey directly. */
+static sqlite3_int64 cfrConflictRowid(const struct ConflictRow *cr){
+  if( cr->nKey>0 && cr->pKey ){
+    u64 h = 1469598103934665603ULL;
+    int i;
+    for(i=0; i<cr->nKey; i++){
+      h ^= (u64)cr->pKey[i];
+      h *= 1099511628211ULL;
+    }
+    if( h==0 ) h = 1;
+    return (sqlite3_int64)(h & 0x7fffffffffffffffULL);
+  }
+  return (sqlite3_int64)cr->intKey;
+}
+
 static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   CfRowCur *c = (CfRowCur*)cur;
   CfRowVtab *v = (CfRowVtab*)cur->pVtab;
@@ -581,7 +599,7 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 static int cfrRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
   CfRowCur *c = (CfRowCur*)cur;
   if( c->iTableIdx >= 0 && c->iRow < c->aTables[c->iTableIdx].nConflicts ){
-    *r = c->aTables[c->iTableIdx].aRows[c->iRow].intKey;
+    *r = cfrConflictRowid(&c->aTables[c->iTableIdx].aRows[c->iRow]);
   }else{
     *r = 0;
   }
@@ -627,7 +645,7 @@ static int cfrUpdate(
       continue;
 
     for(j=0; j<aTables[i].nConflicts; j++){
-      if( aTables[i].aRows[j].intKey == deleteRowid ){
+      if( cfrConflictRowid(&aTables[i].aRows[j]) == deleteRowid ){
         removeConflictRow(&aTables[i], j);
 
 
