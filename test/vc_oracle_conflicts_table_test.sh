@@ -88,6 +88,43 @@ oracle() {
   fi
 }
 
+oracle_mutate() {
+  local name="$1" setup="$2" mutate="$3" query="$4"
+  local dir="$TMPROOT/$name"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out
+  dl_out=$(printf "%s\n%s\n%s\n" "$setup" "$mutate" "$query" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | grep '^R|' \
+           | normalize)
+
+  local dolt_all
+  dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s\n%s' "$setup" "$mutate" "$query")")
+
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    {
+      printf 'SET @@autocommit = 0;\n'
+      printf 'SET @@dolt_allow_commit_conflicts = 1;\n'
+      printf '%s\n' "$dolt_all"
+    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+  )
+  dt_out=$(echo "$dt_out" | tr -d '"' | grep '^R|' | normalize)
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_conflicts_<table> ==="
 echo ""
 
@@ -295,6 +332,44 @@ SELECT dolt_commit('-A','-m','mainu');
 SELECT dolt_merge('feat');
 " \
 "SELECT CONCAT('R|', base_id, '|', IFNULL(base_v,'NULL'), '|', IFNULL(base_note,'NULL'), '|', IFNULL(our_v,'NULL'), '|', IFNULL(our_note,'NULL'), '|', our_diff_type, '|', IFNULL(their_v,'NULL'), '|', IFNULL(their_note,'NULL'), '|', their_diff_type) FROM dolt_conflicts_t ORDER BY base_id;"
+
+echo "--- delete targeted conflict row, text PK ---"
+
+oracle_mutate "delete_text_pk_row" \
+"CREATE TABLE t(id VARCHAR(32) PRIMARY KEY, v INT);
+INSERT INTO t VALUES('alice',10),('bob',20);
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET v=100 WHERE id='alice';
+UPDATE t SET v=200 WHERE id='bob';
+SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v=1000 WHERE id='alice';
+UPDATE t SET v=2000 WHERE id='bob';
+SELECT dolt_commit('-A','-m','mainu');
+SELECT dolt_merge('feat');" \
+"DELETE FROM dolt_conflicts_t WHERE base_id='alice';" \
+"SELECT CONCAT('R|', base_id, '|', base_v, '|', our_id, '|', our_v, '|', our_diff_type, '|', their_id, '|', their_v, '|', their_diff_type) FROM dolt_conflicts_t ORDER BY base_id;"
+
+echo "--- delete targeted conflict row, composite PK ---"
+
+oracle_mutate "delete_composite_pk_row" \
+"CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a, b));
+INSERT INTO t VALUES(1,1,11),(1,2,12),(2,1,21);
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET v=110 WHERE a=1 AND b=1;
+UPDATE t SET v=120 WHERE a=1 AND b=2;
+SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v=1100 WHERE a=1 AND b=1;
+UPDATE t SET v=1200 WHERE a=1 AND b=2;
+SELECT dolt_commit('-A','-m','mainu');
+SELECT dolt_merge('feat');" \
+"DELETE FROM dolt_conflicts_t WHERE base_a=1 AND base_b=1;" \
+"SELECT CONCAT('R|', base_a, '|', base_b, '|', base_v, '|', our_a, '|', our_b, '|', our_v, '|', our_diff_type, '|', their_a, '|', their_b, '|', their_v, '|', their_diff_type) FROM dolt_conflicts_t ORDER BY base_a, base_b;"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

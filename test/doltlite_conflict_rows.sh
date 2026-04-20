@@ -310,6 +310,62 @@ run_test_match "flow_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB"
 rm -f "$DB"
 
 # ============================================================
+# Text PK conflicts delete by synthetic rowid
+# ============================================================
+
+DB=/tmp/test_cfrow_textpk_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES('a','orig_a'),('b','orig_b');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('hf');
+SELECT dolt_checkout('hf');
+UPDATE t SET v='hf_a' WHERE id='a';
+UPDATE t SET v='hf_b' WHERE id='b';
+SELECT dolt_commit('-A','-m','hf');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main_a' WHERE id='a';
+UPDATE t SET v='main_b' WHERE id='b';
+SELECT dolt_commit('-A','-m','main');
+SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "textpk_conflict_count" "SELECT count(*) FROM dolt_conflicts_t;" "2" "$DB"
+echo "DELETE FROM dolt_conflicts_t WHERE base_id='a';" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "textpk_target_delete_leaves_one" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
+run_test "textpk_target_delete_keeps_b" "SELECT base_id FROM dolt_conflicts_t;" "b" "$DB"
+echo "DELETE FROM dolt_conflicts_t;" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "textpk_full_delete_clears" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
+# Composite PK conflicts delete by synthetic rowid
+# ============================================================
+
+DB=/tmp/test_cfrow_compositepk_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a,b));
+INSERT INTO t VALUES(1,1,'orig_a'),(2,2,'orig_b');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('hf');
+SELECT dolt_checkout('hf');
+UPDATE t SET v='hf_a' WHERE a=1 AND b=1;
+UPDATE t SET v='hf_b' WHERE a=2 AND b=2;
+SELECT dolt_commit('-A','-m','hf');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main_a' WHERE a=1 AND b=1;
+UPDATE t SET v='main_b' WHERE a=2 AND b=2;
+SELECT dolt_commit('-A','-m','main');
+SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "compositepk_conflict_count" "SELECT count(*) FROM dolt_conflicts_t;" "2" "$DB"
+echo "DELETE FROM dolt_conflicts_t WHERE base_a=1 AND base_b=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "compositepk_target_delete_leaves_one" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
+run_test "compositepk_target_delete_keeps_other" "SELECT base_a || ',' || base_b FROM dolt_conflicts_t;" "2,2" "$DB"
+echo "DELETE FROM dolt_conflicts_t;" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "compositepk_full_delete_clears" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Done
 # ============================================================
 
