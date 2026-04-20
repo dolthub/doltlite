@@ -176,6 +176,28 @@ SELECT dolt_commit('-A', '-m', 'resolved');
 SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;
 SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
 
+echo "--- no-op on existing table with no conflicts ---"
+
+oracle "resolve_ours_no_conflicts_noop" \
+"CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10), (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+" \
+  "SELECT dolt_conflicts_resolve('--ours', 't');
+SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
+
+oracle "resolve_theirs_no_conflicts_noop" \
+"CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10), (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+" \
+  "SELECT dolt_conflicts_resolve('--theirs', 't');
+SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;"
+
 echo "--- error paths ---"
 
 oracle_error "resolve_missing_table" \
