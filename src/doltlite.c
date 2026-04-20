@@ -1777,6 +1777,13 @@ static void doltliteResetFunc(
     }
   }
 
+  if( isHard && isSoft ){
+    sqlite3_result_error(context,
+      "--hard and --soft are mutually exclusive options.", -1);
+    sqlite3_free(azPaths);
+    return;
+  }
+
 
   if( nPaths>0 ){
     if( isHard || isSoft || zRef ){

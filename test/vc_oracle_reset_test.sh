@@ -304,6 +304,16 @@ $SEED
 SELECT dolt_reset('--mixed', 'HEAD');
 "
 
+oracle_error "reset_soft_hard_mutually_exclusive" "
+$SEED
+SELECT dolt_reset('--soft', '--hard');
+"
+
+oracle_error "reset_soft_hard_mutually_exclusive_with_ref" "
+$SEED
+SELECT dolt_reset('--soft', '--hard', 'HEAD');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
