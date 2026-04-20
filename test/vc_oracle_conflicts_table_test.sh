@@ -66,7 +66,7 @@ oracle() {
       printf 'SET @@autocommit = 0;\n'
       printf 'SET @@dolt_allow_commit_conflicts = 1;\n'
       printf '%s\n' "$dolt_all"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^R|' | normalize)
 
@@ -110,7 +110,7 @@ oracle_mutate() {
       printf 'SET @@autocommit = 0;\n'
       printf 'SET @@dolt_allow_commit_conflicts = 1;\n'
       printf '%s\n' "$dolt_all"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^R|' | normalize)
 

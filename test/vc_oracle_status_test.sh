@@ -47,7 +47,7 @@ oracle() {
   (
     cd "$dir/dt" || exit 1
     vc_oracle_init_repo
-    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
+    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat(table_name, char(9), staged, char(9), status) FROM dolt_status ORDER BY table_name, staged, status;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
 

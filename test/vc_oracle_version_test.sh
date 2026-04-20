@@ -62,7 +62,7 @@ dolt_scalar() {
   (
     cd "$dir" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$sql" | "$DOLT" sql -r csv 2>"$TMPROOT/$name.dt.err" \
+    echo "$sql" | "$DOLT" sql -c -r csv 2>"$TMPROOT/$name.dt.err" \
       | tail -1 \
       | tr -d '"'
   )
@@ -86,7 +86,7 @@ dolt_errored() {
   (
     cd "$dir" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$sql" | "$DOLT" sql >"$TMPROOT/${name}.dt.out" 2>"$TMPROOT/${name}.dt.err"
+    echo "$sql" | "$DOLT" sql -c >"$TMPROOT/${name}.dt.out" 2>"$TMPROOT/${name}.dt.err"
   )
   grep -qiE 'error|Error' "$TMPROOT/${name}.dt.out" "$TMPROOT/${name}.dt.err" 2>/dev/null
 }

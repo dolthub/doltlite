@@ -55,8 +55,8 @@ oracle() {
   dt_out=$(
     cd "$dir/dt" || exit 1
     vc_oracle_init_repo
-    printf "%s\n" "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
-    printf "%s\n" "$dolt_query" | "$DOLT" sql -r csv 2>>"$dir/dt.err" \
+    printf "%s\n" "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
+    printf "%s\n" "$dolt_query" | "$DOLT" sql -c -r csv 2>>"$dir/dt.err" \
       | tail -n +2 | tr -d '"'
   ) 2>/dev/null
   dt_out=$(echo "$dt_out" | normalize)

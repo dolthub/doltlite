@@ -66,7 +66,7 @@ oracle() {
     {
       echo "$dolt_setup"
       echo "$select_sql"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^BL|' | sort)
 

@@ -79,7 +79,7 @@ oracle_schemas() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$q_dolt"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^S' | normalize)
 
@@ -124,7 +124,7 @@ oracle_diff_touches_schemas() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$q_dolt"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^D.*dolt_schemas' \
            | sed -e 's/	true$/	1/' -e 's/	false$/	0/' \
@@ -173,7 +173,7 @@ oracle_schemas_dual() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$q_dolt"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^S' | normalize)
 
@@ -217,7 +217,7 @@ oracle_diff_touches_schemas_dual() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$q_dolt"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^D.*dolt_schemas' \
            | sed -e 's/	true$/	1/' -e 's/	false$/	0/' \

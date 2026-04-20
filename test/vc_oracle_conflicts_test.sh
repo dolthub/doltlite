@@ -69,7 +69,7 @@ oracle() {
     {
       printf '%s\n' "SET @@dolt_allow_commit_conflicts = 1;"
       printf '%s\n' "$dolt_setup"
-    } | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
+    } | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat(\`table\`, char(9), num_conflicts) FROM dolt_conflicts ORDER BY \`table\`;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
 
