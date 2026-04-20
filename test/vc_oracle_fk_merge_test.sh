@@ -517,21 +517,12 @@ fi
 
 echo ""
 
-# ── Scenario J: WITHOUT ROWID FK merge refused loudly ────
-#
-# Per #495: constraint-violation detection assumes every table
-# has a rowid and breaks silently on WITHOUT ROWID tables.
-# Until prolly-layer-level support lands, the walker refuses
-# the merge loudly with an actionable error instead of
-# silently committing over missed violations. This scenario
-# verifies that behavior: a merge that would produce an FK
-# orphan on a WITHOUT ROWID child table must fail with the
-# issue-495 error message, not silently commit.
-echo "--- J. WITHOUT ROWID FK merge is refused loudly ---"
+# ── Scenario J: WITHOUT ROWID FK violation works ─────────
+echo "--- J. WITHOUT ROWID FK merge records orphan violation ---"
 
 DB="$TMPROOT/without_rowid_fk.db"
 rm -f "$DB"
-cat <<'SQL' | dl_setup_capture "$DB" "without_rowid_fk"
+cat <<'SQL' | dl_setup "$DB" "without_rowid_fk"
 CREATE TABLE parent(pk INTEGER PRIMARY KEY, v1 INT, UNIQUE(v1));
 CREATE TABLE child(pk TEXT PRIMARY KEY, v1 INT, FOREIGN KEY(v1) REFERENCES parent(v1)) WITHOUT ROWID;
 INSERT INTO parent VALUES (1,1),(2,2);
@@ -547,13 +538,76 @@ SELECT dolt_commit('-Am','main_drop_parent');
 SELECT dolt_merge('feat');
 SQL
 
-if grep -q "WITHOUT ROWID" "$TMPROOT/without_rowid_fk.out" \
-                            "$TMPROOT/without_rowid_fk.err" 2>/dev/null; then
-  pass_name "without_rowid_fk_refused"
-else
-  fail_name "without_rowid_fk_refused"
-  echo "    (merge did not surface the WITHOUT ROWID refusal)"
-fi
+N=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='child';" "without_rowid_fk_count")
+expect_eq "without_rowid_fk_summary_count" "1" "$N"
+
+TYPE=$(dl "$DB" "SELECT violation_type FROM dolt_constraint_violations_child WHERE pk='b';" "without_rowid_fk_type")
+expect_eq "without_rowid_fk_type" "foreign key" "$TYPE"
+
+ROW_PRESENT=$(dl "$DB" "SELECT count(*) FROM child WHERE pk='b';" "without_rowid_fk_row_present")
+expect_eq "without_rowid_fk_row_present" "1" "$ROW_PRESENT"
+
+echo ""
+
+# ── Scenario K: WITHOUT ROWID UNIQUE violation works ─────
+echo "--- K. WITHOUT ROWID UNIQUE merge records loser row ---"
+
+DB="$TMPROOT/without_rowid_unique.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "without_rowid_unique"
+CREATE TABLE t(pk TEXT PRIMARY KEY, v1 INT UNIQUE) WITHOUT ROWID;
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES ('feat',1);
+SELECT dolt_commit('-Am','feat_add');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES ('main',1);
+SELECT dolt_commit('-Am','main_add');
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t';" "without_rowid_unique_count")
+expect_eq "without_rowid_unique_summary_count" "1" "$N"
+
+TYPE=$(dl "$DB" "SELECT violation_type FROM dolt_constraint_violations_t;" "without_rowid_unique_type")
+expect_eq "without_rowid_unique_type" "unique index" "$TYPE"
+
+BASE_COUNT=$(dl "$DB" "SELECT count(*) FROM t;" "without_rowid_unique_base")
+expect_eq "without_rowid_unique_base_count" "1" "$BASE_COUNT"
+
+echo ""
+
+# ── Scenario L: WITHOUT ROWID CHECK violation works ──────
+echo "--- L. WITHOUT ROWID CHECK merge records violating row ---"
+
+DB="$TMPROOT/without_rowid_check.db"
+rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "without_rowid_check"
+CREATE TABLE t(pk TEXT PRIMARY KEY, v1 INT) WITHOUT ROWID;
+INSERT INTO t VALUES ('a', 1);
+SELECT dolt_commit('-Am','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES ('b', -5);
+SELECT dolt_commit('-Am','feat_bad_row');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(pk TEXT PRIMARY KEY, v1 INT CHECK(v1 > 0)) WITHOUT ROWID;
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_commit('-Am','main_add_check');
+SELECT dolt_merge('feat');
+SQL
+
+N=$(dl "$DB" "SELECT num_violations FROM dolt_constraint_violations WHERE \"table\"='t';" "without_rowid_check_count")
+expect_eq "without_rowid_check_summary_count" "1" "$N"
+
+TYPE=$(dl "$DB" "SELECT violation_type FROM dolt_constraint_violations_t WHERE pk='b';" "without_rowid_check_type")
+expect_eq "without_rowid_check_type" "check constraint" "$TYPE"
+
+BASE_COUNT=$(dl "$DB" "SELECT count(*) FROM t WHERE pk='b' AND v1=-5;" "without_rowid_check_base")
+expect_eq "without_rowid_check_row_present" "1" "$BASE_COUNT"
 
 echo ""
 echo "======================================="
