@@ -769,10 +769,20 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   walData = (u8*)sqlite3_malloc64(walSize);
   if( !walData ) return SQLITE_NOMEM;
   {
-    int rc = sqlite3OsRead(cs->pFile, walData, (int)walSize, cs->iWalOffset);
-    if( rc != SQLITE_OK ){
-      sqlite3_free(walData);
-      return rc;
+    /* Read in chunks of at most 1GB to avoid truncating walSize to int. */
+    i64 remaining = walSize;
+    i64 off = cs->iWalOffset;
+    u8 *p = walData;
+    while( remaining > 0 ){
+      int n = (remaining > 0x40000000) ? 0x40000000 : (int)remaining;
+      int rc = sqlite3OsRead(cs->pFile, p, n, off);
+      if( rc != SQLITE_OK ){
+        sqlite3_free(walData);
+        return rc;
+      }
+      p += n;
+      off += n;
+      remaining -= n;
     }
   }
 
