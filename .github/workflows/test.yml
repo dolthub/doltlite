@@ -21,7 +21,7 @@ jobs:
 
     - name: Install Dolt
       run: |
-        DOLT_VERSION=1.86.0
+        DOLT_VERSION=1.86.2
         curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/dolt-linux-amd64.tar.gz" \
           | sudo tar -xz -C /usr/local --strip-components=1
         dolt version
@@ -422,7 +422,7 @@ jobs:
 
     - name: Install Dolt
       run: |
-        DOLT_VERSION=1.86.0
+        DOLT_VERSION=1.86.2
         curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/dolt-linux-amd64.tar.gz" \
           | sudo tar -xz -C /usr/local --strip-components=1
         dolt version
