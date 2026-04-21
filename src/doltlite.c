@@ -2364,6 +2364,10 @@ static void doltliteMergeFunc(
   }
 
   if( nMergeConflicts > 0 ){
+    if( graphLocked ){
+      chunkStoreUnlock(cs);
+      graphLocked = 0;
+    }
     if( db->autoCommit ){
       rc = doltliteRollbackAutocommitConflict(db, context, &savedState);
       if( rc!=SQLITE_OK ){
@@ -2539,27 +2543,35 @@ static int applyMergedCatalogAndCommit(
     sqlite3_free(zDetectErrMsg);
 
     if( nViolations + nUnique + nCheck > 0 ){
-      rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
-      if( rc==SQLITE_OK ){
-        doltliteSetSessionBranch(db, savedState.zSessionBranch);
-        doltliteSetSessionHead(db, &savedState.sessionHead);
-        doltliteSetSessionStaged(db, &savedState.sessionStaged);
-        doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
-                                     &savedState.sessionMergeCommit,
-                                     &savedState.sessionConflictsCatalog);
-        {
-          extern int doltliteClearAllConstraintViolations(sqlite3*);
-          doltliteClearAllConstraintViolations(db);
+      if( db->autoCommit ){
+        rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
+        if( rc==SQLITE_OK ){
+          doltliteSetSessionBranch(db, savedState.zSessionBranch);
+          doltliteSetSessionHead(db, &savedState.sessionHead);
+          doltliteSetSessionStaged(db, &savedState.sessionStaged);
+          doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
+                                       &savedState.sessionMergeCommit,
+                                       &savedState.sessionConflictsCatalog);
+          {
+            extern int doltliteClearAllConstraintViolations(sqlite3*);
+            doltliteClearAllConstraintViolations(db);
+          }
+          rc = doltlitePersistWorkingSet(db);
         }
-        rc = doltlitePersistWorkingSet(db);
+        doltliteTxnStateClear(&savedState);
+        if( rc!=SQLITE_OK ){
+          return rc;
+        }
+        sqlite3_result_error(context,
+          "Committing this transaction resulted in a working set with "
+          "constraint violations, transaction rolled back.", -1);
+      }else{
+        rc = doltliteReportConstraintViolations(db, context,
+                                 sqlite3_strnicmp(zMessage, "Revert", 6)==0
+                                   ? "Revert" : "Cherry-pick");
+        if( rc!=SQLITE_OK ) goto apply_rollback;
+        doltliteTxnStateClear(&savedState);
       }
-      doltliteTxnStateClear(&savedState);
-      if( rc!=SQLITE_OK ){
-        return rc;
-      }
-      sqlite3_result_error(context,
-        "Committing this transaction resulted in a working set with "
-        "constraint violations, transaction rolled back.", -1);
       return SQLITE_OK;
     }
   }
