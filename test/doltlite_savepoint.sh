@@ -237,6 +237,18 @@ run_test_match "branch_dirty_rollback_data" \
   "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_branch('txb'); ROLLBACK; SELECT v FROM t WHERE id=1;" \
   "^dirty$" "$DB6e"
 
+DB6f=/tmp/test_savepoint6f_$$.db; rm -f "$DB6f"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6f" > /dev/null 2>&1
+run_test_match "tag_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_tag('v1'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6f"
+run_test_match "tag_savepoint_row_persists" \
+  "SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6f"
+run_test_match "tag_savepoint_tag_persists" \
+  "SELECT group_concat(tag_name, ',') FROM dolt_tags;" \
+  "^v1$" "$DB6f"
+
 # ============================================================
 # Test 7: dolt_merge inside a BEGIN/COMMIT block
 # Expected: dolt_merge operates at the dolt storage layer. It should

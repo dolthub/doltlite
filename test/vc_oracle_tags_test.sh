@@ -78,6 +78,38 @@ oracle() {
   fi
 }
 
+oracle_savepoint_tag_poststate() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_sp"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc dt_rc dl_v dl_tags dt_v dt_tags
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+  dl_v=$(printf ".headers off\n.mode list\nSELECT v FROM t WHERE id=1;\n" \
+         | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
+  dl_tags=$(printf ".headers off\n.mode list\nSELECT coalesce(group_concat(tag_name, ','), '') FROM dolt_tags;\n" \
+            | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+  dt_v=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT v FROM t WHERE id=1;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
+  dt_tags=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT coalesce(group_concat(tag_name, ','), '') FROM dolt_tags;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
+
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_v" = "$dt_v" ] && [ "$dl_tags" = "$dt_tags" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc/v/tags:"; { echo "$dl_rc"; echo "$dl_v"; echo "$dl_tags"; } | sed 's/^/      /'
+    echo "    dolt rc/v/tags:"; { echo "$dt_rc"; echo "$dt_v"; echo "$dt_tags"; } | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_tags ==="
 echo ""
 
@@ -168,6 +200,19 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('keep');
 SELECT dolt_tag('drop');
 SELECT dolt_tag('-d', 'drop');
+"
+
+echo "--- savepoint parity ---"
+
+oracle_savepoint_tag_poststate "tag_inside_savepoint_releases_savepoint" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SAVEPOINT sp1;
+UPDATE t SET v='dirty' WHERE id=1;
+SELECT dolt_tag('v1');
+ROLLBACK TO sp1;
 "
 
 echo ""
