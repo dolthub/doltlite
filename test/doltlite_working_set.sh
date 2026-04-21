@@ -102,21 +102,15 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','feature edit');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Merge feature into main — should create conflict
-echo "SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-# Main should be in merge state
+# Merge feature into main — conflict state is available in-session and can be aborted
 run_test_match "main_has_conflicts" \
-  "SELECT count(*) FROM dolt_conflicts;" "^[1-9]" "$DB"
+  "SELECT dolt_merge('feature'); SELECT 'CF|' || count(*) FROM dolt_conflicts;" "CF\\|1" "$DB"
 
-# Abort the merge
-echo "SELECT dolt_merge('--abort');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test_match "main_clean_after_abort" \
+  "SELECT dolt_merge('feature'); SELECT dolt_merge('--abort'); SELECT 'ST|' || count(*) FROM dolt_status;" "ST\\|0" "$DB"
 
-run_test "main_clean_after_abort" \
-  "SELECT count(*) FROM dolt_status;" "0" "$DB"
-
-run_test "main_val_after_abort" \
-  "SELECT val FROM t WHERE id=1;" "main_change" "$DB"
+run_test_match "main_val_after_abort" \
+  "SELECT dolt_merge('feature'); SELECT dolt_merge('--abort'); SELECT 'VAL|' || val FROM t WHERE id=1;" "VAL\\|main_change" "$DB"
 
 rm -f "$DB"
 

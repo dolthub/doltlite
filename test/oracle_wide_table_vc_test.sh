@@ -55,8 +55,24 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1,
 echo ""
 echo "--- 3: 100-column conflict (same column both sides) ---"
 DB="$TMPROOT/3.db"
-dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1, $VALS); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET c50=1000 WHERE id=1; SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main'); UPDATE t SET c50=2000 WHERE id=1; SELECT dolt_commit('-Am','main'); SELECT dolt_merge('feat');" >/dev/null
-[ "$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")" = "1" ] && pass_name "3_conflict" || fail_name "3_conflict"
+CONF=$(
+  "$DOLTLITE" "$DB" 2>/dev/null <<SQL | awk -F'|' '$1=="CONF"{print $2}'
+BEGIN;
+CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS);
+INSERT INTO t VALUES(1, $VALS);
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET c50=1000 WHERE id=1;
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET c50=2000 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feat');
+SELECT 'CONF', count(*) FROM dolt_conflicts;
+SQL
+)
+[ "$CONF" = "1" ] && pass_name "3_conflict" || fail_name "3_conflict"
 [ "$(dl "$DB" "SELECT c50 FROM t WHERE id=1;")" = "2000" ] && pass_name "3_ours_wins" || fail_name "3_ours_wins"
 
 # ── 4: 200-column merge (near limit) ────────────────────

@@ -46,8 +46,10 @@ oracle() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   # -- doltlite --
+  local dl_script
   local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$query" \
+  dl_script=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$query" | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
+  dl_out=$(printf "%s" "$dl_script" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^R|' \
            | normalize)
@@ -93,8 +95,10 @@ oracle_mutate() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
+  local dl_script
   local dl_out
-  dl_out=$(printf "%s\n%s\n%s\n" "$setup" "$mutate" "$query" \
+  dl_script=$(printf "%s\n%s\n%s\n" "$setup" "$mutate" "$query" | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
+  dl_out=$(printf "%s" "$dl_script" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^R|' \
            | normalize)

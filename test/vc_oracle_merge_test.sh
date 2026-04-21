@@ -14,11 +14,10 @@
 # doltlite encodes the storage key from the user PK columns rather
 # than from sqlite's auto-allocated rowid.
 #
-# Conflict scenarios are checked via oracle_no_merge_commit because
-# doltlite enters a merge state on conflict while Dolt rolls back the
-# transaction under autocommit. The two engines diverge in HOW the
-# conflict is surfaced, but both refuse to produce a clean merge
-# commit, which is the property the oracle gates on.
+# Conflict scenarios are checked in two ways:
+# 1. oracle_no_merge_commit: neither engine should advance history.
+# 2. oracle_error_poststate: under autocommit, both should roll back
+#    and leave no persisted conflict state.
 #
 # Usage: bash vc_oracle_merge_test.sh [path/to/doltlite] [path/to/dolt]
 #
@@ -391,6 +390,20 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
+
+oracle_error_poststate "modify_modify_conflict_rolls_back" "
+$SEED
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 11 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feature');
+" "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered_rows)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
 echo "--- already up to date ---"
 

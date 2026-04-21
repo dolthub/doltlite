@@ -131,6 +131,7 @@ SELECT dolt_commit('-Am','feat: x=100');
 SELECT dolt_checkout('main');
 UPDATE t SET x=200 WHERE id=1;
 SELECT dolt_commit('-Am','main: x=200');
+BEGIN;
 SELECT dolt_merge('feat');
 SQL
 )" >/dev/null

@@ -392,11 +392,7 @@ SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message = 'c3_add_3')
 
 echo "--- conflicts ---"
 
-# A conflicted cherry-pick / revert should NOT advance the branch
-# (no new merge commit) and SHOULD leave dolt_conflicts populated.
-# Both engines use the same harness pattern as the merge oracle's
-# `oracle_no_merge_commit`: count commits before and after, expect
-# them to match.
+# A conflicted cherry-pick / revert should NOT advance the branch.
 oracle_no_merge_commit() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_nm"
@@ -415,10 +411,7 @@ oracle_no_merge_commit() {
   dt_count=$(
     cd "$dir/dt" || exit 1
     vc_oracle_init_repo
-    {
-      printf '%s\n' "SET @@dolt_allow_commit_conflicts = 1;"
-      printf '%s\n' "$dolt_setup"
-    } | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err" || true
+    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err" || true
     "$DOLT" sql -r csv -q "SELECT count(*) FROM dolt_log;" 2>>"$dir/dt.err" \
       | tail -n +2
   )
@@ -467,52 +460,9 @@ SELECT dolt_commit('-m', 'c3_set_99');
 SELECT dolt_revert('HEAD~1');
 "
 
-# After a conflicting cherry-pick, dolt_conflicts should show one
-# row for the conflicting table, and a follow-up
-# dolt_conflicts_resolve('--ours', 't') should clear it. The full
-# count check would pass even if the conflict surface was empty
-# (zero commits added either way), so the comparison query is the
-# conflicts vtable instead.
-oracle_conflicts_count() {
-  local name="$1" setup="$2"
-  local dir="$TMPROOT/${name}_cc"
-  mkdir -p "$dir/dl" "$dir/dt"
-
-  local dl_count
-  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/dl/db" >/dev/null 2>"$dir/dl.err" || true
-  dl_count=$(printf ".headers off\n.mode list\nSELECT count(*) FROM dolt_conflicts;\n" \
-             | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
-             | grep -E '^[0-9]+$' | tail -1)
-
-  local dolt_setup
-  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-
-  local dt_count
-  dt_count=$(
-    cd "$dir/dt" || exit 1
-    vc_oracle_init_repo
-    {
-      printf '%s\n' "SET @@dolt_allow_commit_conflicts = 1;"
-      printf '%s\n' "$dolt_setup"
-    } | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err" || true
-    "$DOLT" sql -r csv -q "SELECT count(*) FROM dolt_conflicts;" 2>>"$dir/dt.err" \
-      | tail -n +2
-  )
-
-  if [ "$dl_count" = "$dt_count" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite conflicts: $dl_count"
-    echo "    dolt conflicts:     $dt_count"
-  fi
-}
-
-# After a conflicted cherry-pick, both engines should report
-# exactly one conflicting table in dolt_conflicts.
-oracle_conflicts_count "cherry_pick_conflict_populates_dolt_conflicts" "
+# Under autocommit, a conflicted cherry-pick should roll back and
+# leave no persisted conflict rows behind.
+oracle_error_poststate "cherry_pick_conflict_rolls_back" "
 $SEED
 SELECT dolt_checkout('feature');
 UPDATE t SET v = 99 WHERE id = 1;
@@ -524,48 +474,10 @@ UPDATE t SET v = 11 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_11');
 SELECT dolt_cherry_pick('feat-conflict');
-"
+ " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered_rows)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
-# Resolving --ours should clear dolt_conflicts.
-oracle_conflicts_count "cherry_pick_conflict_resolved_ours_clears" "
-$SEED
-SELECT dolt_checkout('feature');
-UPDATE t SET v = 99 WHERE id = 1;
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m', 'feat_99');
-SELECT dolt_tag('feat-conflict');
-SELECT dolt_checkout('main');
-UPDATE t SET v = 11 WHERE id = 1;
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m', 'main_11');
-SELECT dolt_cherry_pick('feat-conflict');
-SELECT dolt_conflicts_resolve('--ours', 't');
-"
-
-# Revert conflict surface is not stable across the two engines yet.
-# Keep the cross-engine invariant above (`oracle_no_merge_commit`) and
-# pin doltlite's stronger conflict-table behavior here as a local
-# regression instead of an oracle comparison.
-doltlite_conflicts_count() {
-  local name="$1" setup="$2" expected="$3"
-  local dir="$TMPROOT/${name}_dl"
-  mkdir -p "$dir"
-  printf '%s\n' "$setup" | "$DOLTLITE" "$dir/db" >/dev/null 2>"$dir.err" || true
-  local count
-  count=$(printf ".headers off\n.mode list\nSELECT count(*) FROM dolt_conflicts;\n" \
-          | "$DOLTLITE" "$dir/db" 2>>"$dir.err" | grep -E '^[0-9]+$' | tail -1)
-  if [ "$count" = "$expected" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite conflicts: $count"
-    echo "    expected:           $expected"
-  fi
-}
-
-doltlite_conflicts_count "revert_conflict_populates_dolt_conflicts" "
+oracle_error_poststate "revert_conflict_rolls_back" "
 $SEED
 UPDATE t SET v = 50 WHERE id = 1;
 SELECT dolt_add('-A');
@@ -574,19 +486,8 @@ UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c3_set_99');
 SELECT dolt_revert('HEAD~1');
- " "1"
-
-doltlite_conflicts_count "revert_conflict_resolved_theirs_clears" "
-$SEED
-UPDATE t SET v = 50 WHERE id = 1;
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m', 'c2_set_50');
-UPDATE t SET v = 99 WHERE id = 1;
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m', 'c3_set_99');
-SELECT dolt_revert('HEAD~1');
-SELECT dolt_conflicts_resolve('--theirs', 't');
-" "0"
+" "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered_rows)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
 echo "--- error paths ---"
 

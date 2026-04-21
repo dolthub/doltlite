@@ -103,6 +103,7 @@ SELECT dolt_commit('-Am','feat');
 SELECT dolt_checkout('main');
 UPDATE t SET v='main_val' WHERE a=X'DEADBEEF';
 SELECT dolt_commit('-Am','main');
+BEGIN;
 SELECT dolt_merge('feat');
 SQL
 )" >/dev/null
@@ -129,6 +130,7 @@ SELECT dolt_commit('-Am','feat');
 SELECT dolt_checkout('main');
 UPDATE t SET v='modified' WHERE a=X'AABB';
 SELECT dolt_commit('-Am','main');
+BEGIN;
 SELECT dolt_merge('feat');
 SQL
 )" >/dev/null

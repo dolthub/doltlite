@@ -30,24 +30,21 @@ SELECT dolt_commit('-A','-m','feat edit');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Now we have unresolved conflicts; checkout should fail
+# In the same SQL session, unresolved conflicts block checkout
 run_test_match "checkout_blocked_conflict" \
-  "SELECT dolt_checkout('feature');" \
-  "conflict|merge" "$DB"
+  "SELECT dolt_merge('feature'); SELECT dolt_checkout('feature');" \
+  "unresolved merge conflicts" "$DB"
 
 run_test_match "checkout_create_blocked_conflict" \
-  "SELECT dolt_checkout('-b','blocked_branch');" \
-  "conflict|merge" "$DB"
+  "SELECT dolt_merge('feature'); SELECT dolt_checkout('-b','blocked_branch');" \
+  "unresolved merge conflicts" "$DB"
 
-run_test "checkout_create_no_branch_on_conflict" \
-  "SELECT count(*) FROM dolt_branches WHERE name='blocked_branch';" \
-  "0" "$DB"
+run_test_match "checkout_create_no_branch_on_conflict" \
+  "SELECT dolt_merge('feature'); SELECT dolt_checkout('-b','blocked_branch'); SELECT 'CNT|' || count(*) FROM dolt_branches WHERE name='blocked_branch';" \
+  "^CNT\\|0$" "$DB"
 
-# Test 2: Resolve conflicts, then checkout should succeed
-echo "SELECT dolt_conflicts_resolve('--ours','t');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "SELECT dolt_commit('-A','-m','resolved');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-run_test "checkout_after_resolve" \
+# Test 2: In a new session after autocommit rollback, checkout should succeed
+run_test "checkout_after_rollback" \
   "SELECT dolt_checkout('feature'); SELECT active_branch();" \
   "0
 feature" "$DB"
@@ -71,11 +68,8 @@ SELECT dolt_commit('-A','-m','feat2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Abort the merge
-echo "SELECT dolt_merge('--abort');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-# Checkout should now succeed
-run_test "checkout_after_abort" \
+# Merge rolled back across sessions; checkout should still succeed
+run_test "checkout_after_rolled_back_merge" \
   "SELECT dolt_checkout('feature'); SELECT active_branch();" \
   "0
 feature" "$DB"

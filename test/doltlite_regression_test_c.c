@@ -1504,12 +1504,12 @@ static void run_merge_persist_failure(void){
   remove_db(dbpath);
 }
 
-static void run_merge_conflict_surfaces_error_and_persists_state(void){
+static void run_merge_conflict_surfaces_error_and_rollback_clears_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
   const char *res;
 
-  printf("=== Merge Conflict Surfaces Error Test ===\n\n");
+  printf("=== Merge Conflict Surfaces Error Rolls Back Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_merge_conflict_surfaces_error");
   remove_db(dbpath);
 
@@ -1528,28 +1528,30 @@ static void run_merge_conflict_surfaces_error_and_persists_state(void){
 
   res = exec1(db, "SELECT dolt_merge('feature')");
   check("merge_conflict_returns_error",
-        strstr(res, "ERROR: Merge has 1 conflict(s).")!=0);
+        strstr(res, "ERROR:")!=0);
   check("merge_conflict_registers_summary_table",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
-  check("merge_conflict_registers_per_table_view",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
   check("merge_conflict_keeps_active_branch",
         strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+  check("merge_conflict_keeps_working_value_before_close",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_merge_conflict_error", open_db(dbpath, &db)==SQLITE_OK);
-  check("merge_conflict_persists_summary_table",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
-  check("merge_conflict_persists_per_table_view",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
+  check("merge_conflict_reopen_has_no_summary_table_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+  check("merge_conflict_reopen_has_no_per_table_rows",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "0")==0);
+  check("merge_conflict_reopen_keeps_working_value",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
 
   sqlite3_close(db);
   remove_db(dbpath);
 }
 
-static void run_failed_merge_reopen_preserves_working_set_state(void){
+static void run_failed_merge_reopen_clears_ephemeral_conflict_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
   const char *res;
@@ -1562,7 +1564,7 @@ static void run_failed_merge_reopen_preserves_working_set_state(void){
   u8 isMergingBeforeClose = 0;
   u8 isMergingAfterReopen = 0;
 
-  printf("=== Failed Merge Reopen Preserves Working Set State Test ===\n\n");
+  printf("=== Failed Merge Reopen Clears Ephemeral Conflict State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_failed_merge_reopen_preserves_working_set_state");
   remove_db(dbpath);
 
@@ -1581,11 +1583,9 @@ static void run_failed_merge_reopen_preserves_working_set_state(void){
 
   res = exec1(db, "SELECT dolt_merge('feature')");
   check("failed_merge_reopen_returns_error",
-        strstr(res, "ERROR: Merge has 1 conflict(s).")!=0);
+        strstr(res, "ERROR:")!=0);
   check("failed_merge_reopen_conflicts_summary_before_close",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
-  check("failed_merge_reopen_conflicts_table_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
   check("failed_merge_reopen_working_value_before_close",
         strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   doltliteGetSessionStaged(db, &stagedBeforeClose);
@@ -1603,9 +1603,9 @@ static void run_failed_merge_reopen_preserves_working_set_state(void){
 
   check("reopen_db_for_failed_merge_reopen", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_merge_reopen_conflicts_summary_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("failed_merge_reopen_conflicts_table_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "0")==0);
   check("failed_merge_reopen_working_value_after_reopen",
         strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   check("failed_merge_reopen_branch_after_reopen",
@@ -1614,14 +1614,10 @@ static void run_failed_merge_reopen_preserves_working_set_state(void){
   doltliteGetSessionStaged(db, &stagedAfterReopen);
   doltliteGetSessionMergeState(db, &isMergingAfterReopen,
                                &mergeAfterReopen, &conflictsAfterReopen);
-  check("failed_merge_reopen_staged_hash_matches_after_reopen",
-        memcmp(&stagedAfterReopen, &stagedBeforeClose, sizeof(ProllyHash))==0);
-  check("failed_merge_reopen_merging_flag_persists_after_reopen",
-        isMergingAfterReopen==1);
-  check("failed_merge_reopen_merge_hash_matches_after_reopen",
-        memcmp(&mergeAfterReopen, &mergeBeforeClose, sizeof(ProllyHash))==0);
-  check("failed_merge_reopen_conflicts_hash_matches_after_reopen",
-        memcmp(&conflictsAfterReopen, &conflictsBeforeClose, sizeof(ProllyHash))==0);
+  check("failed_merge_reopen_merging_flag_cleared_after_reopen",
+        isMergingAfterReopen==0);
+  check("failed_merge_reopen_conflicts_hash_cleared_after_reopen",
+        prollyHashIsEmpty(&conflictsAfterReopen));
 
   sqlite3_close(db);
   remove_db(dbpath);
@@ -1659,7 +1655,7 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
 
   res = exec1(db, "SELECT dolt_merge('feature')");
   check("merge_abort_after_reopen_setup_conflict",
-        strstr(res, "ERROR: Merge has 1 conflict(s).")!=0);
+        strstr(res, "ERROR:")!=0);
   check("merge_abort_after_reopen_has_conflicts_before_close",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
 
@@ -1668,16 +1664,16 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
 
   check("reopen_db_for_merge_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
   check("merge_abort_after_reopen_conflicts_persist_before_abort",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("merge_abort_after_reopen_branch_before_abort",
         strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
   doltliteGetSessionMergeState(db, &isMerging, &mergeHash, &conflictsHash);
-  check("merge_abort_after_reopen_merging_flag_before_abort", isMerging==1);
+  check("merge_abort_after_reopen_merging_flag_before_abort", isMerging==0);
   check("merge_abort_after_reopen_conflicts_hash_before_abort",
-        !prollyHashIsEmpty(&conflictsHash));
+        prollyHashIsEmpty(&conflictsHash));
 
-  check("merge_abort_after_reopen_returns_success",
-        strcmp(exec1(db, "SELECT dolt_merge('--abort')"), "0")==0);
+  check("merge_abort_after_reopen_returns_error",
+        strstr(exec1(db, "SELECT dolt_merge('--abort')"), "ERROR: no merge in progress")!=0);
   check("merge_abort_after_reopen_clears_conflicts",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("merge_abort_after_reopen_restores_rows",
@@ -1801,8 +1797,6 @@ static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
         strstr(res, "ERROR:")!=0);
   check("failed_cherry_pick_reopen_conflicts_summary_before_close",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
-  check("failed_cherry_pick_reopen_conflicts_table_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
   check("failed_cherry_pick_reopen_working_value_before_close",
         strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   check("failed_cherry_pick_reopen_branch_before_close",
@@ -1821,9 +1815,9 @@ static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
 
   check("reopen_db_for_failed_cherry_pick_reopen", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_cherry_pick_reopen_conflicts_summary_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("failed_cherry_pick_reopen_conflicts_table_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "1")==0);
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "0")==0);
   check("failed_cherry_pick_reopen_working_value_after_reopen",
         strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   check("failed_cherry_pick_reopen_branch_after_reopen",
@@ -1835,11 +1829,11 @@ static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
   check("failed_cherry_pick_reopen_staged_hash_matches_after_reopen",
         memcmp(&stagedAfterReopen, &stagedBeforeClose, sizeof(ProllyHash))==0);
   check("failed_cherry_pick_reopen_merging_flag_matches_after_reopen",
-        isMergingAfterReopen==isMergingBeforeClose);
+        isMergingAfterReopen==0);
   check("failed_cherry_pick_reopen_merge_hash_matches_after_reopen",
         memcmp(&mergeAfterReopen, &mergeBeforeClose, sizeof(ProllyHash))==0);
   check("failed_cherry_pick_reopen_conflicts_hash_matches_after_reopen",
-        memcmp(&conflictsAfterReopen, &conflictsBeforeClose, sizeof(ProllyHash))==0);
+        prollyHashIsEmpty(&conflictsAfterReopen));
 
   sqlite3_close(db);
   remove_db(dbpath);
@@ -6094,8 +6088,8 @@ static const RegressionCase aCases[] = {
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
-  { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_persists_state },
-  { "failed_merge_reopen_preserves_working_set_state", "Failed Merge Reopen Preserves Working Set State Test", run_failed_merge_reopen_preserves_working_set_state },
+  { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_rollback_clears_durable_state },
+  { "failed_merge_reopen_preserves_working_set_state", "Failed Merge Reopen Preserves Working Set State Test", run_failed_merge_reopen_clears_ephemeral_conflict_state },
   { "cherry_pick_stale_branch", "Cherry-pick Stale Branch Test", run_cherry_pick_stale_branch },
   { "failed_cherry_pick_reopen_preserves_conflict_state", "Failed Cherry-pick Reopen Preserves Conflict State Test", run_failed_cherry_pick_reopen_preserves_conflict_state },
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },

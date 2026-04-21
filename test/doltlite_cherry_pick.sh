@@ -87,13 +87,7 @@ SELECT dolt_commit('-A','-m','main modifies row 1');" | $DOLTLITE "$DB" > /dev/n
 
 run_test_match "cp_conflict_msg" \
   "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" \
-  "conflict" "$DB"
-
-run_test_match "cp_conflict_count" "SELECT count(*) FROM dolt_conflicts;" "^[1-9]" "$DB"
-run_test_match "cp_conflict_blocked" "SELECT dolt_commit('-A','-m','fail');" "unresolved" "$DB"
-
-# Resolve with ours
-echo "SELECT dolt_conflicts_resolve('--ours','t');" | $DOLTLITE "$DB" > /dev/null 2>&1
+  "conflict|rolled back" "$DB"
 run_test "cp_conflict_resolved" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 run_test "cp_conflict_ours" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
 
@@ -266,12 +260,8 @@ SELECT dolt_commit('-A','-m','update to v3');" | $DOLTLITE "$DB" > /dev/null 2>&
 # this should conflict.
 run_test_match "rv_conf_msg" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1));" \
-  "conflict" "$DB"
-
-run_test_match "rv_conf_count" "SELECT count(*) FROM dolt_conflicts;" "^[1-9]" "$DB"
-
-# Resolve with ours (keep v3)
-echo "SELECT dolt_conflicts_resolve('--ours','t');" | $DOLTLITE "$DB" > /dev/null 2>&1
+  "conflict|rolled back" "$DB"
+run_test "rv_conf_count" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 run_test "rv_conf_ours" "SELECT v FROM t WHERE id=1;" "v3" "$DB"
 
 rm -f "$DB"
