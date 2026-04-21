@@ -69,9 +69,9 @@ CALL dolt_checkout('main');
 SQL
   (
     cd "$dir/dt" &&
+    "$DOLT" config --global --add user.name "CI" >/dev/null &&
+    "$DOLT" config --global --add user.email "ci@example.com" >/dev/null &&
     "$DOLT" init >/dev/null &&
-    "$DOLT" config --local --add user.name "CI" >/dev/null &&
-    "$DOLT" config --local --add user.email "ci@example.com" >/dev/null &&
     "$DOLT" sql <"$dir/setup_dt.sql" >/dev/null 2>"$dir/dt.err"
   )
 }
