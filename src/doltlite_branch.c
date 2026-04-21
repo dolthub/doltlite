@@ -403,6 +403,51 @@ static int checkoutLoadAndApply(
   return rc;
 }
 
+int doltliteConnectBranch(sqlite3 *db, const char *zBranch){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash targetCommit;
+  ProllyHash targetCatHash;
+  ProllyHash staged;
+  int rc;
+
+  if( !cs ) return SQLITE_OK;
+  if( !zBranch || zBranch[0]==0 ) zBranch = "main";
+
+  memset(&targetCommit, 0, sizeof(targetCommit));
+  memset(&targetCatHash, 0, sizeof(targetCatHash));
+
+  rc = chunkStoreFindBranch(cs, zBranch, &targetCommit);
+  if( rc==SQLITE_NOTFOUND ){
+    if( chunkStoreIsEmpty(cs) && strcmp(zBranch, "main")==0 ){
+      doltliteSetSessionBranch(db, zBranch);
+      doltliteSetSessionHead(db, &targetCommit);
+      doltliteSetSessionStaged(db, &targetCatHash);
+      doltliteClearSessionMergeState(db);
+      doltliteClearSessionRebaseState(db);
+      doltliteSetSessionConstraintViolationsCatalog(db, &targetCatHash);
+      return SQLITE_OK;
+    }
+    return rc;
+  }
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = checkoutLoadAndApply(db, cs, zBranch, &targetCommit, &targetCatHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteSetSessionBranch(db, zBranch);
+  doltliteSetSessionHead(db, &targetCommit);
+
+  rc = doltliteLoadWorkingSet(db, zBranch);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteGetSessionStaged(db, &staged);
+  if( prollyHashIsEmpty(&staged) ){
+    doltliteSetSessionStaged(db, &targetCatHash);
+  }
+
+  return SQLITE_OK;
+}
+
 /* Checkout is a multi-step mutation: persist outgoing branch state,
 ** update refs, load target branch, reload session. If any step fails
 ** we must unwind every prior step — the saved* fields are the

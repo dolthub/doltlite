@@ -4685,15 +4685,69 @@ static void shellModuleSchema(
 #define OPEN_DB_KEEPALIVE   0x001   /* Return after error if true */
 #define OPEN_DB_ZIPFILE     0x002   /* Open as ZIP if name matches *.zip */
 
+extern int doltliteConnectBranch(sqlite3 *db, const char *zBranch);
+
+static const char *findLastPathSep(const char *zPath){
+  const char *zSlash = zPath ? strrchr(zPath, '/') : 0;
+#if defined(_WIN32) || defined(WIN32)
+  const char *zBackslash = zPath ? strrchr(zPath, '\\') : 0;
+  if( zBackslash && (!zSlash || zBackslash > zSlash) ) return zBackslash;
+#endif
+  return zSlash;
+}
+
+static void parseDoltiteDbBranch(
+  const char *zInput,
+  char **pzFilename,
+  char **pzBranch
+){
+  const char *zSep;
+  char *zBase;
+
+  *pzFilename = 0;
+  *pzBranch = 0;
+  if( !zInput ){
+    return;
+  }
+
+  zSep = findLastPathSep(zInput);
+  {
+    const char *zAt = strrchr(zInput, '@');
+    if( zAt && zAt[1]!=0 && (!zSep || zAt > zSep) ){
+      *pzFilename = sqlite3_mprintf("%.*s", (int)(zAt - zInput), zInput);
+      *pzBranch = sqlite3_mprintf("%s", zAt + 1);
+      return;
+    }
+  }
+
+  zSep = findLastPathSep(zInput);
+  if( zSep && zSep[1]!=0 ){
+    struct stat x;
+    zBase = sqlite3_mprintf("%.*s", (int)(zSep - zInput), zInput);
+    if( zBase && stat(zBase, &x)==0 && !S_ISDIR(x.st_mode) ){
+      *pzFilename = zBase;
+      *pzBranch = sqlite3_mprintf("%s", zSep + 1);
+      return;
+    }
+    sqlite3_free(zBase);
+  }
+
+  *pzFilename = sqlite3_mprintf("%s", zInput);
+}
+
 /*
 ** Make sure the database is open.  If it is not, then open it.  If
 ** the database fails to open, print an error message and exit.
 */
 static void open_db(ShellState *p, int openFlags){
   if( p->db==0 ){
-    const char *zDbFilename = p->pAuxDb->zDbFilename;
+    const char *zRequestedFilename = p->pAuxDb->zDbFilename;
+    const char *zDbFilename = zRequestedFilename;
     const char *zHOME;    /* Value of HOME environment variable */
     char *zToFree = 0;    /* Filename with ~/ prefix expansion */
+    char *zParsedFilename = 0;
+    char *zParsedBranch = 0;
+    int rc;
 
     /* If the zDbFilename does not exist and begins with ~/ then replace
     ** the ~ with the home directory.
@@ -4714,6 +4768,13 @@ static void open_db(ShellState *p, int openFlags){
         memcpy(zToFree, zHOME, nHOME);
         memcpy(zToFree+nHOME, zDbFilename+1, nFN);
         zDbFilename = zToFree;
+      }
+    }
+
+    if( zDbFilename && zDbFilename[0]!=0 && zDbFilename[0]!=':' ){
+      parseDoltiteDbBranch(zDbFilename, &zParsedFilename, &zParsedBranch);
+      if( zParsedFilename ){
+        zDbFilename = zParsedFilename;
       }
     }
 
@@ -4751,7 +4812,10 @@ static void open_db(ShellState *p, int openFlags){
     }
     if( p->db==0 || SQLITE_OK!=sqlite3_errcode(p->db) ){
       cli_printf(stderr,"Error: unable to open database \"%s\": %s\n",
-            zDbFilename, sqlite3_errmsg(p->db));
+            zRequestedFilename ? zRequestedFilename : zDbFilename,
+            sqlite3_errmsg(p->db));
+      sqlite3_free(zParsedFilename);
+      sqlite3_free(zParsedBranch);
       if( (openFlags & OPEN_DB_KEEPALIVE)==0 ){
         cli_exit(1);
       }
@@ -4764,9 +4828,21 @@ static void open_db(ShellState *p, int openFlags){
       }else{
         cli_printf(stderr,
               "Notice: using substitute in-memory database instead of \"%s\"\n",
-              zDbFilename);
+              zRequestedFilename ? zRequestedFilename : zDbFilename);
       }
     }
+    rc = doltliteConnectBranch(p->db, zParsedBranch ? zParsedBranch : "main");
+    if( rc!=SQLITE_OK ){
+      cli_printf(stderr, "Error: unable to select branch \"%s\": %s\n",
+                 zParsedBranch ? zParsedBranch : "main", sqlite3_errstr(rc));
+      sqlite3_free(zParsedFilename);
+      sqlite3_free(zParsedBranch);
+      if( (openFlags & OPEN_DB_KEEPALIVE)==0 ){
+        cli_exit(1);
+      }
+    }
+    sqlite3_free(zParsedFilename);
+    sqlite3_free(zParsedBranch);
     globalDb = p->db;
     sqlite3_db_config(p->db, SQLITE_DBCONFIG_STMT_SCANSTATUS, (int)0, (int*)0);
 
