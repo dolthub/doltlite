@@ -104,13 +104,13 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Merge feature into main — conflict state is available in-session and can be aborted
 run_test_match "main_has_conflicts" \
-  "SELECT dolt_merge('feature'); SELECT 'CF|' || count(*) FROM dolt_conflicts;" "CF\\|1" "$DB"
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'CF|' || count(*) FROM dolt_conflicts; ROLLBACK;" "CF\\|1" "$DB"
 
 run_test_match "main_clean_after_abort" \
-  "SELECT dolt_merge('feature'); SELECT dolt_merge('--abort'); SELECT 'ST|' || count(*) FROM dolt_status;" "ST\\|0" "$DB"
+  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_merge('--abort'); SELECT 'ST|' || count(*) FROM dolt_status; ROLLBACK;" "ST\\|0" "$DB"
 
 run_test_match "main_val_after_abort" \
-  "SELECT dolt_merge('feature'); SELECT dolt_merge('--abort'); SELECT 'VAL|' || val FROM t WHERE id=1;" "VAL\\|main_change" "$DB"
+  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_merge('--abort'); SELECT 'VAL|' || val FROM t WHERE id=1; ROLLBACK;" "VAL\\|main_change" "$DB"
 
 rm -f "$DB"
 

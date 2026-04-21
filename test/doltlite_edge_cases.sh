@@ -513,12 +513,12 @@ SELECT dolt_commit('-A','-m','main: v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Merge should conflict on both tables in-session
 run_test_match "multi_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
 run_test_match "multi_conflict_count" \
-  "SELECT dolt_merge('hotfix'); SELECT 'MC|' || count(*) FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('hotfix'); SELECT 'MC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^MC\\|2$" "$DB"
 
 # Commit should be blocked in-session
 run_test_match "multi_conflict_blocked" \
-  "SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
+  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
   "unresolved" "$DB"
 
 # Resolve users and orders with ours in the same session
@@ -556,7 +556,7 @@ SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Merge and get conflict in-session
 run_test_match "ours_conflict_merge" "SELECT dolt_merge('hf');" "conflict" "$DB"
 run_test_match "ours_conflict_exists" \
-  "SELECT dolt_merge('hf'); SELECT 'OC|' || count(*) FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('hf'); SELECT 'OC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^OC\\|1$" "$DB"
 
 # Resolve with ours in-session

@@ -16,23 +16,23 @@ echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "conflicts_table" \
-  "SELECT dolt_merge('feature'); SELECT 'CT|' || \"table\" FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'CT|' || \"table\" FROM dolt_conflicts; ROLLBACK;" \
   "^CT\\|t$" "$DB"
 run_test_match "conflicts_count" \
-  "SELECT dolt_merge('feature'); SELECT 'CC|' || num_conflicts FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'CC|' || num_conflicts FROM dolt_conflicts; ROLLBACK;" \
   "^CC\\|1$" "$DB"
 
 # Test 2: Commit blocked with conflicts in the same SQL session
 run_test_match "commit_blocked" \
-  "SELECT dolt_merge('feature'); SELECT dolt_commit('-A','-m','fail');" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_commit('-A','-m','fail');" \
   "unresolved merge conflicts" "$DB"
 
 # Test 3: Resolve --ours keeps our value in-session
 run_test_match "resolved_no_conflicts" \
-  "SELECT dolt_merge('feature'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'RC|' || count(*) FROM dolt_conflicts; SELECT 'RV|' || v FROM t;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'RC|' || count(*) FROM dolt_conflicts; SELECT 'RV|' || v FROM t; ROLLBACK;" \
   "^RC\\|0$" "$DB"
 run_test_match "ours_value_kept" \
-  "SELECT dolt_merge('feature'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'RV|' || v FROM t;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'RV|' || v FROM t; ROLLBACK;" \
   "^RV\\|main$" "$DB"
 
 # Test 4: Resolve --theirs (new scenario)
@@ -44,10 +44,10 @@ echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "UPDATE t SET v='feat2'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 run_test_match "theirs_has_conflict" \
-  "SELECT dolt_merge('feature'); SELECT 'TC|' || num_conflicts FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'TC|' || num_conflicts FROM dolt_conflicts; ROLLBACK;" \
   "^TC\\|1$" "$DB2"
 run_test_match "theirs_resolved" \
-  "SELECT dolt_merge('feature'); SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TR|' || count(*) FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TR|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^TR\\|0$" "$DB2"
 
 # Test 5: No conflict when different rows modified
@@ -73,14 +73,14 @@ echo "UPDATE t SET v='feat1' WHERE id=1; INSERT INTO t VALUES(4,'feat4'); SELECT
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 run_test_match "mixed_conflict" "SELECT dolt_merge('feature');" "conflict" "$DB4"
 run_test_match "mixed_conflict_count" \
-  "SELECT dolt_merge('feature'); SELECT 'MC|' || num_conflicts FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'MC|' || num_conflicts FROM dolt_conflicts; ROLLBACK;" \
   "^MC\\|1$" "$DB4"
 run_test_match "mixed_auto_row3" \
-  "SELECT dolt_merge('feature'); SELECT 'MR3|' || v FROM t WHERE id=3;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'MR3|' || v FROM t WHERE id=3; ROLLBACK;" \
   "^MR3\\|main3$" "$DB4"
 run_test_match "mixed_auto_row4" \
-  "SELECT dolt_merge('feature'); SELECT 'MR4|' || count(*) FROM t WHERE id=4;" \
-  "^MR4\\|0$" "$DB4"
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'MR4|' || count(*) FROM t WHERE id=4; ROLLBACK;" \
+  "^MR4\\|1$" "$DB4"
 
 # --- Cell-level merge: non-overlapping column changes auto-merge ---
 DB5=/tmp/test_conflicts5_$$.db; rm -f "$DB5"
@@ -113,30 +113,30 @@ echo "SELECT dolt_checkout('main'); UPDATE t SET name='CHARLIE' WHERE id=1; SELE
 
 run_test_match "real_conflict" "SELECT dolt_merge('c');" "conflict" "$DB7"
 run_test_match "real_conflict_count" \
-  "SELECT dolt_merge('c'); SELECT 'RC|' || num_conflicts FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('c'); SELECT 'RC|' || num_conflicts FROM dolt_conflicts; ROLLBACK;" \
   "^RC\\|1$" "$DB7"
 
 # User columns are now projected individually (Dolt-compatible schema).
 run_test_match "conflict_base_decoded" \
-  "SELECT dolt_merge('c'); SELECT 'BASE|' || base_name FROM dolt_conflicts_t;" \
+  "BEGIN; SELECT dolt_merge('c'); SELECT 'BASE|' || base_name FROM dolt_conflicts_t; ROLLBACK;" \
   "^BASE\\|alice$" "$DB7"
 run_test_match "conflict_our_decoded" \
-  "SELECT dolt_merge('c'); SELECT 'OUR|' || our_name FROM dolt_conflicts_t;" \
+  "BEGIN; SELECT dolt_merge('c'); SELECT 'OUR|' || our_name FROM dolt_conflicts_t; ROLLBACK;" \
   "^OUR\\|CHARLIE$" "$DB7"
 run_test_match "conflict_their_decoded" \
-  "SELECT dolt_merge('c'); SELECT 'THEIR|' || their_name FROM dolt_conflicts_t;" \
+  "BEGIN; SELECT dolt_merge('c'); SELECT 'THEIR|' || their_name FROM dolt_conflicts_t; ROLLBACK;" \
   "^THEIR\\|BOB$" "$DB7"
 
 # Temp table shadowing the user table must not affect dolt_conflicts_<table>
 # projection. The conflict view should derive its schema from main.t.
 run_test_match "conflict_temp_shadow_base_ignored" \
-  "SELECT dolt_merge('c'); CREATE TEMP TABLE t(fake TEXT PRIMARY KEY); SELECT 'TSB|' || base_name FROM dolt_conflicts_t;" \
+  "BEGIN; SELECT dolt_merge('c'); CREATE TEMP TABLE t(fake TEXT PRIMARY KEY); SELECT 'TSB|' || base_name FROM dolt_conflicts_t; ROLLBACK;" \
   "^TSB\\|alice$" "$DB7"
 run_test_match "conflict_temp_shadow_our_ignored" \
-  "SELECT dolt_merge('c'); CREATE TEMP TABLE t(fake TEXT PRIMARY KEY); SELECT 'TSO|' || our_name FROM dolt_conflicts_t;" \
+  "BEGIN; SELECT dolt_merge('c'); CREATE TEMP TABLE t(fake TEXT PRIMARY KEY); SELECT 'TSO|' || our_name FROM dolt_conflicts_t; ROLLBACK;" \
   "^TSO\\|CHARLIE$" "$DB7"
 run_test_match "conflict_temp_shadow_their_ignored" \
-  "SELECT dolt_merge('c'); CREATE TEMP TABLE t(fake TEXT PRIMARY KEY); SELECT 'TST|' || their_name FROM dolt_conflicts_t;" \
+  "BEGIN; SELECT dolt_merge('c'); CREATE TEMP TABLE t(fake TEXT PRIMARY KEY); SELECT 'TST|' || their_name FROM dolt_conflicts_t; ROLLBACK;" \
   "^TST\\|BOB$" "$DB7"
 
 # --- Multiple conflicting rows in one table ---
@@ -147,19 +147,19 @@ echo "SELECT dolt_checkout('main'); UPDATE t SET name='a2' WHERE id=1; UPDATE t 
 
 run_test_match "multi_row_conflict" "SELECT dolt_merge('other');" "Merge conflict detected" "$DB8"
 run_test_match "multi_row_conflict_count" \
-  "SELECT dolt_merge('other'); SELECT 'MRC|' || num_conflicts FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('other'); SELECT 'MRC|' || num_conflicts FROM dolt_conflicts; ROLLBACK;" \
   "^MRC\\|3$" "$DB8"
 run_test_match "multi_row_all_rows" \
-  "SELECT dolt_merge('other'); SELECT 'MRA|' || count(*) FROM dolt_conflicts_t;" \
+  "BEGIN; SELECT dolt_merge('other'); SELECT 'MRA|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" \
   "^MRA\\|3$" "$DB8"
 run_test_match "multi_row_has_row1" \
-  "SELECT dolt_merge('other'); SELECT 'MR1|' || their_name FROM dolt_conflicts_t WHERE base_id=1;" \
+  "BEGIN; SELECT dolt_merge('other'); SELECT 'MR1|' || their_name FROM dolt_conflicts_t WHERE base_id=1; ROLLBACK;" \
   "^MR1\\|A$" "$DB8"
 run_test_match "multi_row_has_row2" \
-  "SELECT dolt_merge('other'); SELECT 'MR2|' || their_name FROM dolt_conflicts_t WHERE base_id=2;" \
+  "BEGIN; SELECT dolt_merge('other'); SELECT 'MR2|' || their_name FROM dolt_conflicts_t WHERE base_id=2; ROLLBACK;" \
   "^MR2\\|B$" "$DB8"
 run_test_match "multi_row_has_row3" \
-  "SELECT dolt_merge('other'); SELECT 'MR3|' || their_name FROM dolt_conflicts_t WHERE base_id=3;" \
+  "BEGIN; SELECT dolt_merge('other'); SELECT 'MR3|' || their_name FROM dolt_conflicts_t WHERE base_id=3; ROLLBACK;" \
   "^MR3\\|C$" "$DB8"
 
 # Test 9: triggers on the target table do NOT fire during conflict
@@ -182,16 +182,16 @@ SELECT dolt_checkout('main');
 UPDATE t SET v='main' WHERE id=1;
 SELECT dolt_commit('-A','-m','main update');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 run_test_match "theirs_delete_conflict_present" \
-  "SELECT dolt_merge('feature'); SELECT 'TDC|' || count(*) FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT 'TDC|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^TDC\\|1$" "$DB9"
 run_test_match "theirs_delete_clears_conflict" \
-  "SELECT dolt_merge('feature'); SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TDR|' || count(*) FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TDR|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^TDR\\|0$" "$DB9"
 run_test_match "theirs_delete_removes_row" \
-  "SELECT dolt_merge('feature'); DROP TRIGGER IF EXISTS audit_delete; CREATE TRIGGER audit_delete BEFORE DELETE ON t BEGIN INSERT INTO trig_log VALUES('fired'); END; SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TDD|' || count(*) FROM t WHERE id=1;" \
+  "BEGIN; SELECT dolt_merge('feature'); DROP TRIGGER IF EXISTS audit_delete; CREATE TRIGGER audit_delete BEFORE DELETE ON t BEGIN INSERT INTO trig_log VALUES('fired'); END; SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TDD|' || count(*) FROM t WHERE id=1; ROLLBACK;" \
   "^TDD\\|0$" "$DB9"
 run_test_match "theirs_delete_trigger_skipped" \
-  "SELECT dolt_merge('feature'); DROP TRIGGER IF EXISTS audit_delete; CREATE TRIGGER audit_delete BEFORE DELETE ON t BEGIN INSERT INTO trig_log VALUES('fired'); END; SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TDT|' || count(*) FROM trig_log;" \
+  "BEGIN; SELECT dolt_merge('feature'); DROP TRIGGER IF EXISTS audit_delete; CREATE TRIGGER audit_delete BEFORE DELETE ON t BEGIN INSERT INTO trig_log VALUES('fired'); END; SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TDT|' || count(*) FROM trig_log; ROLLBACK;" \
   "^TDT\\|0$" "$DB9"
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9"

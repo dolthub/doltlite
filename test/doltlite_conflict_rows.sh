@@ -81,28 +81,28 @@ SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # View individual conflict rows
 DB=/tmp/test_cfrow_view_$$.db
 setup_row_conflict_repo "$DB"
-run_test_match "view_count" "SELECT dolt_merge('hf'); SELECT 'VC|' || count(*) FROM dolt_conflicts_t;" "^VC\\|1$" "$DB"
-run_test_match "view_base_id" "SELECT dolt_merge('hf'); SELECT 'VB|' || base_id FROM dolt_conflicts_t;" "^VB\\|1$" "$DB"
-run_test_match "view_our_id" "SELECT dolt_merge('hf'); SELECT 'VO|' || our_id FROM dolt_conflicts_t;" "^VO\\|1$" "$DB"
-run_test_match "view_their_id" "SELECT dolt_merge('hf'); SELECT 'VT|' || their_id FROM dolt_conflicts_t;" "^VT\\|1$" "$DB"
-run_test_match "view_base_val" "SELECT dolt_merge('hf'); SELECT 'VBT|' || typeof(base_v) FROM dolt_conflicts_t;" "^VBT\\|(text|null)$" "$DB"
-run_test_match "view_their_val" "SELECT dolt_merge('hf'); SELECT 'VTT|' || typeof(their_v) FROM dolt_conflicts_t;" "^VTT\\|text$" "$DB"
+run_test_match "view_count" "BEGIN; SELECT dolt_merge('hf'); SELECT 'VC|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" "^VC\\|1$" "$DB"
+run_test_match "view_base_id" "BEGIN; SELECT dolt_merge('hf'); SELECT 'VB|' || base_id FROM dolt_conflicts_t; ROLLBACK;" "^VB\\|1$" "$DB"
+run_test_match "view_our_id" "BEGIN; SELECT dolt_merge('hf'); SELECT 'VO|' || our_id FROM dolt_conflicts_t; ROLLBACK;" "^VO\\|1$" "$DB"
+run_test_match "view_their_id" "BEGIN; SELECT dolt_merge('hf'); SELECT 'VT|' || their_id FROM dolt_conflicts_t; ROLLBACK;" "^VT\\|1$" "$DB"
+run_test_match "view_base_val" "BEGIN; SELECT dolt_merge('hf'); SELECT 'VBT|' || typeof(base_v) FROM dolt_conflicts_t; ROLLBACK;" "^VBT\\|(text|null)$" "$DB"
+run_test_match "view_their_val" "BEGIN; SELECT dolt_merge('hf'); SELECT 'VTT|' || typeof(their_v) FROM dolt_conflicts_t; ROLLBACK;" "^VTT\\|text$" "$DB"
 rm -f "$DB"
 
 # DELETE resolves individual conflict (keeps ours)
 DB=/tmp/test_cfrow_del_$$.db
 setup_row_conflict_repo "$DB"
-run_test_match "del_summary_cleared" "SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DC|' || count(*) FROM dolt_conflicts;" "^DC\\|0$" "$DB"
-run_test_match "del_ours_kept" "SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DV|' || v FROM t WHERE id=1;" "^DV\\|main_val$" "$DB"
-run_test_match "del_other_ok" "SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DK|' || v FROM t WHERE id=2;" "^DK\\|keep$" "$DB"
-run_test_match "del_clean" "SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DS|' || count(*) FROM dolt_status;" "^DS\\|0$" "$DB"
+run_test_match "del_summary_cleared" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DC|' || count(*) FROM dolt_conflicts; ROLLBACK;" "^DC\\|0$" "$DB"
+run_test_match "del_ours_kept" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DV|' || v FROM t WHERE id=1; ROLLBACK;" "^DV\\|main_val$" "$DB"
+run_test_match "del_other_ok" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DK|' || v FROM t WHERE id=2; ROLLBACK;" "^DK\\|keep$" "$DB"
+run_test_match "del_clean" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DS|' || count(*) FROM dolt_status; ROLLBACK;" "^DS\\|0$" "$DB"
 rm -f "$DB"
 
 # --ours resolution clears per-table
 DB=/tmp/test_cfrow_ours_$$.db
 setup_row_conflict_repo "$DB"
-run_test_match "ours_cleared" "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OC|' || count(*) FROM dolt_conflicts;" "^OC\\|0$" "$DB"
-run_test_match "ours_val" "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OV|' || v FROM t WHERE id=1;" "^OV\\|main_val$" "$DB"
+run_test_match "ours_cleared" "BEGIN; SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OC|' || count(*) FROM dolt_conflicts; ROLLBACK;" "^OC\\|0$" "$DB"
+run_test_match "ours_val" "BEGIN; SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OV|' || v FROM t WHERE id=1; ROLLBACK;" "^OV\\|main_val$" "$DB"
 rm -f "$DB"
 
 # No conflict table when no conflicts
@@ -140,7 +140,7 @@ rm -f "$DB"
 # Text PK conflicts delete by synthetic rowid
 DB=/tmp/test_cfrow_textpk_$$.db
 setup_text_pk_conflict_repo "$DB"
-run_test_match "textpk_conflict_count" "SELECT dolt_merge('hf'); SELECT 'TC|' || count(*) FROM dolt_conflicts_t;" "^TC\\|2$" "$DB"
+run_test_match "textpk_conflict_count" "BEGIN; SELECT dolt_merge('hf'); SELECT 'TC|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" "^TC\\|2$" "$DB"
 run_test_match "textpk_target_delete_leaves_one" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id='a'; SELECT 'TL|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" "^TL\\|1$" "$DB"
 run_test_match "textpk_target_delete_keeps_b" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id='a'; SELECT 'TK|' || base_id FROM dolt_conflicts_t; ROLLBACK;" "^TK\\|b$" "$DB"
 run_test_match "textpk_full_delete_clears" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t; SELECT 'TF|' || count(*) FROM dolt_conflicts; ROLLBACK;" "^TF\\|0$" "$DB"
@@ -149,7 +149,7 @@ rm -f "$DB"
 # Composite PK conflicts delete by synthetic rowid
 DB=/tmp/test_cfrow_compositepk_$$.db
 setup_composite_pk_conflict_repo "$DB"
-run_test_match "compositepk_conflict_count" "SELECT dolt_merge('hf'); SELECT 'CC|' || count(*) FROM dolt_conflicts_t;" "^CC\\|2$" "$DB"
+run_test_match "compositepk_conflict_count" "BEGIN; SELECT dolt_merge('hf'); SELECT 'CC|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" "^CC\\|2$" "$DB"
 run_test_match "compositepk_target_delete_leaves_one" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_a=1 AND base_b=1; SELECT 'CL|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" "^CL\\|1$" "$DB"
 run_test_match "compositepk_target_delete_keeps_other" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_a=1 AND base_b=1; SELECT 'CK|' || base_a || ',' || base_b FROM dolt_conflicts_t; ROLLBACK;" "^CK\\|2,2$" "$DB"
 run_test_match "compositepk_full_delete_clears" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t; SELECT 'CF|' || count(*) FROM dolt_conflicts; ROLLBACK;" "^CF\\|0$" "$DB"

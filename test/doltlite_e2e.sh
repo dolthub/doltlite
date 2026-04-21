@@ -110,20 +110,20 @@ SELECT dolt_commit('-A','-m','Main: update Alice name');" | $DOLTLITE "$DB" > /d
 run_test_match "e2e_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
 
 run_test_match "e2e_has_conflicts" \
-  "SELECT dolt_merge('hotfix'); SELECT 'EC|' || num_conflicts FROM dolt_conflicts WHERE \"table\"='users';" \
+  "BEGIN; SELECT dolt_merge('hotfix'); SELECT 'EC|' || num_conflicts FROM dolt_conflicts WHERE \"table\"='users'; ROLLBACK;" \
   "^EC\\|1$" "$DB"
 
 # Commit should be blocked in-session
 run_test_match "e2e_commit_blocked" \
-  "SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
+  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
   "unresolved" "$DB"
 
 # Resolve with --ours in-session
 run_test_match "e2e_conflicts_cleared" \
-  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'ER|' || count(*) FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'ER|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^ER\\|0$" "$DB"
 run_test_match "e2e_ours_kept" \
-  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'EU|' || name FROM users WHERE id=1;" \
+  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'EU|' || name FROM users WHERE id=1; ROLLBACK;" \
   "^EU\\|alice_updated$" "$DB"
 
 # ============================================================
