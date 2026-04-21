@@ -322,6 +322,33 @@ run_test_match "checkout_missing_savepoint_branch_stays_main" \
   "SELECT active_branch();" \
   "^main$" "$DB6g6"
 
+DB6g7=/tmp/test_savepoint6g7_$$.db; rm -f "$DB6g7"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g7" > /dev/null 2>&1
+run_test_match "push_missing_remote_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; SELECT dolt_push('missing','main'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g7"
+run_test_match "push_missing_remote_savepoint_branch_stays_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6g7"
+
+DB6g8=/tmp/test_savepoint6g8_$$.db; rm -f "$DB6g8"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g8" > /dev/null 2>&1
+run_test_match "fetch_missing_remote_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; SELECT dolt_fetch('missing'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g8"
+run_test_match "fetch_missing_remote_savepoint_branch_stays_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6g8"
+
+DB6g9=/tmp/test_savepoint6g9_$$.db; rm -f "$DB6g9"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g9" > /dev/null 2>&1
+run_test_match "pull_missing_remote_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; SELECT dolt_pull('missing','main'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g9"
+run_test_match "pull_missing_remote_savepoint_branch_stays_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6g9"
+
 DB6h=/tmp/test_savepoint6h_$$.db; rm -f "$DB6h"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='other'; SELECT dolt_commit('-A','-m','other'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6h" > /dev/null 2>&1
 run_test_match "checkout_savepoint_rollback_to_errors" \
@@ -459,7 +486,7 @@ run_test_match "branch_name_after_rollback" \
 # Cleanup
 # ============================================================
 rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" \
-  "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6"
+  "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
