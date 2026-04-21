@@ -2892,6 +2892,188 @@ SELECT dolt_revert('HEAD');
 SELECT dolt_revert('bogus2');
 " "SELECT id, v FROM t ORDER BY id;"
 # ═══════════════════════════════════════════════════════════════════
+# Section 90: Set operation errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- set op error probes ---"
+
+oracle "bad_union_then_ok_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT v FROM t UNION SELECT bogus FROM nonexistent;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 91: Error between successive commits
+# ═══════════════════════════════════════════════════════════════════
+echo "--- error between commits ---"
+
+oracle "error_right_after_commit_then_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT * FROM bogus;
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+SELECT * FROM bogus;
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 92: Error on UPDATE with bad subquery
+# ═══════════════════════════════════════════════════════════════════
+echo "--- UPDATE with bad subquery probes ---"
+
+oracle "update_subquery_bogus_col_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+UPDATE t SET v = (SELECT bogus_col FROM t LIMIT 1);
+UPDATE t SET v = 99 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 93: Error on CAST / arithmetic
+# ═══════════════════════════════════════════════════════════════════
+echo "--- arithmetic error probes ---"
+
+oracle "divide_by_zero_update_skipped" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+UPDATE t SET n = n / (SELECT count(*) - 2 FROM t) WHERE id=1;
+INSERT INTO t VALUES(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 94: Error with nonexistent tag in reset
+# ═══════════════════════════════════════════════════════════════════
+echo "--- reset to nonexistent tag ---"
+
+oracle "reset_to_deleted_tag_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_tag('snap','HEAD');
+SELECT dolt_tag('-d','snap');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+SELECT dolt_reset('--hard','snap');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 95: Error on merge_base bogus branches
+# ═══════════════════════════════════════════════════════════════════
+echo "--- bad merge_base args ---"
+
+oracle "merge_base_bogus_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_merge_base('main','bogus');
+SELECT dolt_merge_base('bogus','main');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 96: Error on INSERT into view
+# ═══════════════════════════════════════════════════════════════════
+echo "--- INSERT into view probes ---"
+
+oracle "insert_into_view_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE VIEW v_pos AS SELECT id, v FROM t WHERE id > 0;
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO v_pos VALUES(2,'b');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 97: Error on DROP VIEW nonexistent
+# ═══════════════════════════════════════════════════════════════════
+echo "--- drop view errors ---"
+
+oracle "drop_nonexistent_view_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+DROP VIEW nonexistent_view;
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 98: Error storm on merge operations
+# ═══════════════════════════════════════════════════════════════════
+echo "--- merge error storm ---"
+
+oracle "ten_bogus_merges_then_real" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('b1');
+SELECT dolt_merge('b2');
+SELECT dolt_merge('b3');
+SELECT dolt_merge('b4');
+SELECT dolt_merge('b5');
+SELECT dolt_merge('b6');
+SELECT dolt_merge('b7');
+SELECT dolt_merge('b8');
+SELECT dolt_merge('b9');
+SELECT dolt_merge('b10');
+SELECT dolt_merge('feat');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 99: Error on wrong arity dolt functions
+# ═══════════════════════════════════════════════════════════════════
+echo "--- wrong arity probes ---"
+
+oracle "hashof_no_args_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_hashof();
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
