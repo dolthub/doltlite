@@ -194,6 +194,20 @@ SELECT dolt_commit('-m', 'c2_feat');
 SELECT dolt_checkout('main');
 "
 
+oracle "txn_checkout_rollback_keeps_checked_out_branch_state" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v='feature_v' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_feat');
+SELECT dolt_checkout('main');
+BEGIN;
+UPDATE t SET v='dirty' WHERE id=1;
+SELECT dolt_checkout('feature');
+ROLLBACK;
+"
+
 echo "--- create-and-switch (-b) ---"
 
 oracle "dash_b_creates_and_switches" "

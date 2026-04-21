@@ -604,6 +604,15 @@ static int doltliteCheckoutTables(
   return rc;
 }
 
+static int checkoutRestartTxnIfNeeded(sqlite3 *db){
+  int rc;
+  if( db->autoCommit ) return SQLITE_OK;
+  rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
+  return rc;
+}
+
 static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -612,6 +621,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   const char *zBranch;
   char *zCurrentBranch = 0;
   int isCreateAndSwitch = 0;
+  int hadExplicitTxn = !db->autoCommit;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -683,6 +693,13 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
       return;
+    }
+    if( hadExplicitTxn ){
+      rc = checkoutRestartTxnIfNeeded(db);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
     }
     sqlite3_result_int(ctx, 0);
     return;
@@ -758,6 +775,13 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(ctx, "checkout failed", -1);
     return;
+  }
+  if( hadExplicitTxn ){
+    rc = checkoutRestartTxnIfNeeded(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
   }
   sqlite3_result_int(ctx, 0);
 }

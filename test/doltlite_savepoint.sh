@@ -212,6 +212,19 @@ run_test "checkout_dirty_in_txn" \
   "BEGIN; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_checkout('other'); COMMIT;" \
   "0" "$DB6b"
 
+DB6c=/tmp/test_savepoint6c_$$.db; rm -f "$DB6c"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6c" > /dev/null 2>&1
+echo "SELECT dolt_branch('other');" | $DOLTLITE "$DB6c" > /dev/null 2>&1
+echo "SELECT dolt_checkout('other'); UPDATE t SET v='other'; SELECT dolt_commit('-A','-m','other'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6c" > /dev/null 2>&1
+
+run_test_match "checkout_dirty_rollback_branch" \
+  "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_checkout('other'); ROLLBACK; SELECT active_branch();" \
+  "^other$" "$DB6c"
+
+run_test_match "checkout_dirty_rollback_data" \
+  "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_checkout('other'); ROLLBACK; SELECT v FROM t WHERE id=1;" \
+  "^other$" "$DB6c"
+
 # ============================================================
 # Test 7: dolt_merge inside a BEGIN/COMMIT block
 # Expected: dolt_merge operates at the dolt storage layer. It should
