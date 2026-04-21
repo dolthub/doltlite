@@ -3074,6 +3074,172 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 # ═══════════════════════════════════════════════════════════════════
+# Section 100: Cherry-pick with no-op commit
+# ═══════════════════════════════════════════════════════════════════
+echo "--- cherry-pick no-op probes ---"
+
+oracle "cherry_pick_then_cherry_pick_noop" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('feat');
+SELECT dolt_cherry_pick('feat');
+INSERT INTO t VALUES(3,'post');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','post');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 101: ALTER errors during merge prep
+# ═══════════════════════════════════════════════════════════════════
+echo "--- alter errors ---"
+
+oracle "alter_bad_keyword_then_ok_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE t BOGUS_KEYWORD extra INTEGER;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "add_col_name_clash_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE t ADD COLUMN id INTEGER;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after dup col');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 102: DROP INDEX cases
+# ═══════════════════════════════════════════════════════════════════
+echo "--- drop index probes ---"
+
+oracle "drop_index_twice_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX idx ON t(v);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DROP INDEX idx;
+DROP INDEX idx;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 103: Window function with syntax errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- bad window funcs ---"
+
+oracle "bad_window_partition_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT id, ROW_NUMBER() OVER (PARTITION BY nonexistent) FROM t;
+INSERT INTO t VALUES(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 104: Errors with UNION of different-arity selects
+# ═══════════════════════════════════════════════════════════════════
+echo "--- UNION arity error probes ---"
+
+oracle "union_arity_mismatch_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT id FROM t UNION SELECT id, v FROM t;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 105: Invalid CTE then ok
+# ═══════════════════════════════════════════════════════════════════
+echo "--- CTE error probes ---"
+
+oracle "bad_cte_self_ref_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+WITH bad AS (SELECT id FROM bad) SELECT * FROM bad;
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 106: Error during JOIN on nonexistent col
+# ═══════════════════════════════════════════════════════════════════
+echo "--- JOIN errors ---"
+
+oracle "join_on_nonexistent_col_then_ok" "
+CREATE TABLE a(id INTEGER PRIMARY KEY);
+CREATE TABLE b(id INTEGER PRIMARY KEY);
+INSERT INTO a VALUES(1);
+INSERT INTO b VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT a.id FROM a JOIN b ON a.bogus=b.id;
+INSERT INTO a VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM a ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 107: Error storms around dolt_add
+# ═══════════════════════════════════════════════════════════════════
+echo "--- dolt_add error probes ---"
+
+oracle "many_bad_adds_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('nonexistent1');
+SELECT dolt_add('nonexistent2');
+SELECT dolt_add('nonexistent3');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','survived');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 108: Errors in dolt_log-aware workflows
+# ═══════════════════════════════════════════════════════════════════
+echo "--- log-aware workflow errors ---"
+
+oracle "log_query_after_bad_ref_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+SELECT commit_hash FROM dolt_log WHERE commit_hash = 'not_a_real_hash';
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+" "SELECT count(*) FROM dolt_log;"
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
