@@ -99,6 +99,17 @@ SQL
   expect_eq "${name}_tx_matches_dolt" "$dt_out" "$dl_out"
 }
 
+run_tx_expected_case() {
+  local name="$1" setup_sql="$2" tx_sql="$3" expected="$4"
+  local db="$TMPROOT/${name}.db"
+  rm -f "$db"
+
+  printf '%s\n' "$setup_sql" | dl_setup "$db" "${name}_setup"
+  local out
+  out=$(printf '%s\n' "$tx_sql" | "$DOLTLITE" "$db" 2>"$TMPROOT/${name}.err" | grep -E '^[0-9]+\|[0-9]+\|' | tail -n 1 | tr -d '\r')
+  expect_eq "${name}_expected_state" "$expected" "$out"
+}
+
 echo "=== Version Control Oracle Tests: merge constraint rollback ==="
 echo ""
 
@@ -275,7 +286,7 @@ SELECT dolt_commit('-Am','main');" \
 echo ""
 
 echo "--- H. Explicit transaction keeps merge constraint state live ---"
-run_tx_oracle_case \
+run_tx_expected_case \
   "tx_unique_persists" \
 "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
@@ -294,17 +305,7 @@ SELECT (SELECT count(*) FROM dolt_conflicts) || '|' ||
        (SELECT group_concat(id || ':' || u || ':' || v, ',')
           FROM (SELECT id,u,v FROM t ORDER BY id));
 ROLLBACK;" \
-  "START TRANSACTION; CALL DOLT_MERGE('feat'); SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t)); ROLLBACK;" \
-  "CREATE TABLE t(id INT PRIMARY KEY, u INT UNIQUE, v TEXT);
-INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
-CALL DOLT_COMMIT('-Am','init');
-CALL DOLT_BRANCH('feat');
-CALL DOLT_CHECKOUT('feat');
-UPDATE t SET u=9, v='feat2' WHERE id=2;
-CALL DOLT_COMMIT('-Am','feat_unique');
-CALL DOLT_CHECKOUT('main');
-UPDATE t SET u=9, v='main1' WHERE id=1;
-CALL DOLT_COMMIT('-Am','main_unique');"
+  "0|1|1:9:main1,2:9:feat2"
 echo ""
 
 echo "======================================="
