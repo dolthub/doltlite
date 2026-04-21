@@ -160,6 +160,52 @@ oracle_with_rows() {
   fi
 }
 
+oracle_same_session() {
+  local name="$1" setup="$2" dl_query="${3:-}"
+  local dolt_query="${4:-$dl_query}"
+  local dir="$TMPROOT/${name}_ss"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out
+  dl_out=$(
+    {
+      printf "%s\n.headers off\n.mode list\n.separator '\t'\n" "$setup"
+      if [ -n "$dl_query" ]; then
+        printf "%s\n" "$dl_query"
+      fi
+    } | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+      | tr -d '\r' \
+      | awk -F'\t' '$1=="Q"{print}'
+  )
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      printf "%s\n" "$dolt_setup"
+      if [ -n "$dolt_query" ]; then
+        printf "%s\n" "$dolt_query"
+      fi
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" \
+      | tail -n +2 \
+      | tr -d '"\r' \
+      | awk -F'\t' '$1=="Q"{print}'
+  )
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite: |$dl_out|"
+    echo "    dolt:     |$dt_out|"
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_branch ==="
 echo ""
 
@@ -274,6 +320,30 @@ UPDATE t SET v = 11 WHERE id = 1;
 SELECT dolt_branch('txb');
 ROLLBACK;
 "
+
+echo "--- savepoint error parity ---"
+
+oracle_same_session "delete_current_inside_savepoint_invalidates" "
+$SEED
+SAVEPOINT sp1;
+SELECT dolt_branch('-d', 'main');
+SELECT 'Q' || char(9) || 'after_delete' || char(9) || active_branch();
+ROLLBACK TO sp1;
+SELECT 'Q' || char(9) || 'after_rb' || char(9) || active_branch();
+" "" "SELECT concat('Q', char(9), 'after_delete', char(9), active_branch());
+ROLLBACK TO sp1;
+SELECT concat('Q', char(9), 'after_rb', char(9), active_branch());"
+
+oracle_same_session "delete_missing_inside_savepoint_invalidates" "
+$SEED
+SAVEPOINT sp1;
+SELECT dolt_branch('-d', 'nope');
+SELECT 'Q' || char(9) || 'after_delete' || char(9) || active_branch();
+ROLLBACK TO sp1;
+SELECT 'Q' || char(9) || 'after_rb' || char(9) || active_branch();
+" "" "SELECT concat('Q', char(9), 'after_delete', char(9), active_branch());
+ROLLBACK TO sp1;
+SELECT concat('Q', char(9), 'after_rb', char(9), active_branch());"
 
 echo "--- error paths ---"
 
