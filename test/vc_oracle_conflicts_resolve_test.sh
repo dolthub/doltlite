@@ -35,8 +35,10 @@ oracle() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   # -- doltlite --
+  local dl_script
   local dl_out
-  dl_out=$(printf "%s\n%s\n" "$setup" "$resolve_and_query" \
+  dl_script=$(printf "%s\n%s\n" "$setup" "$resolve_and_query" | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
+  dl_out=$(printf "%s" "$dl_script" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
@@ -79,8 +81,10 @@ oracle_error() {
   local dir="$TMPROOT/${name}_err"
   mkdir -p "$dir/dl" "$dir/dt"
 
+  local dl_setup
   local dl_rc
-  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_setup=$(printf "%s\n" "$setup" | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$dl_setup"
   dl_rc=$?
 
   local dolt_setup
