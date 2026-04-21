@@ -3240,6 +3240,178 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM dolt_log;"
 # ═══════════════════════════════════════════════════════════════════
+# Section 109: GROUP_CONCAT error flows
+# ═══════════════════════════════════════════════════════════════════
+echo "--- GROUP_CONCAT error probes ---"
+
+oracle "group_concat_on_nonexistent_col_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT GROUP_CONCAT(bogus) FROM t;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 110: Self-join error flows
+# ═══════════════════════════════════════════════════════════════════
+echo "--- self-join error probes ---"
+
+oracle "self_join_bogus_alias_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, pid INTEGER);
+INSERT INTO t VALUES(1,NULL),(2,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT bogus.id FROM t a JOIN t b ON a.pid=b.id;
+INSERT INTO t VALUES(3,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 111: VIEW chain error
+# ═══════════════════════════════════════════════════════════════════
+echo "--- view chain error probes ---"
+
+oracle "drop_base_view_then_query_dependent_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10);
+CREATE VIEW base AS SELECT id, v FROM t;
+CREATE VIEW derived AS SELECT id FROM base WHERE v>0;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DROP VIEW base;
+SELECT * FROM derived;
+CREATE VIEW base AS SELECT id, v FROM t;
+INSERT INTO t VALUES(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','restored');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 112: Scalar subquery returning multiple rows
+# ═══════════════════════════════════════════════════════════════════
+echo "--- scalar subquery multiple rows probes ---"
+
+oracle "scalar_subquery_returning_multiple_rows_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT (SELECT id FROM t) FROM t;
+INSERT INTO t VALUES(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 113: Errors during merge with many branches
+# ═══════════════════════════════════════════════════════════════════
+echo "--- merge errors with many branches ---"
+
+oracle "errors_across_5_branch_merge_chain" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(0);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','a');
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','a');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','c');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('a');
+SELECT dolt_merge('bogus1');
+SELECT dolt_merge('b');
+SELECT dolt_merge('bogus2');
+SELECT dolt_merge('c');
+SELECT dolt_merge('bogus3');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 114: Transaction errors (ROLLBACK in autocommit)
+# ═══════════════════════════════════════════════════════════════════
+echo "--- txn error probes ---"
+
+oracle "rollback_outside_txn_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+ROLLBACK;
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+
+oracle "commit_outside_txn_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+COMMIT;
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 115: Errors with nested JOINs
+# ═══════════════════════════════════════════════════════════════════
+echo "--- nested JOIN errors ---"
+
+oracle "nested_join_bogus_table_then_ok" "
+CREATE TABLE a(id INTEGER PRIMARY KEY);
+CREATE TABLE b(id INTEGER PRIMARY KEY);
+INSERT INTO a VALUES(1);
+INSERT INTO b VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT a.id FROM a JOIN b ON a.id=b.id JOIN bogus ON a.id=bogus.id;
+INSERT INTO a VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM a;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 116: Errors in CREATE INDEX
+# ═══════════════════════════════════════════════════════════════════
+echo "--- create index error probes ---"
+
+oracle "create_index_on_nonexistent_col_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+CREATE INDEX idx_bogus ON t(nonexistent_col);
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "create_index_on_nonexistent_table_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+CREATE INDEX idx ON nonexistent_table(col);
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
