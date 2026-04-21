@@ -483,6 +483,10 @@ static int doltliteMergeActsAutocommitLike(sqlite3 *db){
   return db->autoCommit || doltliteSavepointIsTopLevelTxn(db);
 }
 
+static int doltliteHasNestedSavepoint(sqlite3 *db){
+  return db->pSavepoint!=0 && !doltliteSavepointIsTopLevelTxn(db);
+}
+
 static int doltliteReleaseActiveSavepoints(sqlite3 *db){
   int rc = SQLITE_OK;
   while( rc==SQLITE_OK && db->pSavepoint ){
@@ -2379,12 +2383,18 @@ static void doltliteMergeFunc(
             "Committing this transaction resulted in a working set with "
             "constraint violations, transaction rolled back.", -1);
         }
+      }else if( doltliteHasNestedSavepoint(db) ){
+        rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error_code(context, rc);
+        }else{
+          sqlite3_result_error(context,
+            "Merge resulted in constraint violations. Resolve the rows in "
+            "dolt_constraint_violations and then commit with dolt_commit.",
+            -1);
+        }
       }else{
-        sqlite3_result_error(context,
-          "Merge resulted in constraint violations. Resolve the rows in "
-          "dolt_constraint_violations and then commit with dolt_commit.",
-          -1);
-        rc = SQLITE_OK;
+        rc = doltliteReportConstraintViolations(db, context, "Merge");
         if( rc!=SQLITE_OK ){
           sqlite3_result_error_code(context,
               doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
@@ -2408,14 +2418,20 @@ static void doltliteMergeFunc(
       }
       return;
     }
-    rc = doltliteRegisterConflictTables(db);
-    if( rc==SQLITE_OK ){
-      char msg[256];
-      sqlite3_snprintf(sizeof(msg), msg,
-        "Merge has %d conflict(s). Resolve and then commit with dolt_commit.",
-        nMergeConflicts);
-      sqlite3_result_error(context, msg, -1);
+    if( doltliteHasNestedSavepoint(db) ){
+      rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(context, rc);
+      }else{
+        char msg[256];
+        sqlite3_snprintf(sizeof(msg), msg,
+          "Merge has %d conflict(s). Resolve and then commit with dolt_commit.",
+          nMergeConflicts);
+        sqlite3_result_error(context, msg, -1);
+      }
+      return;
     }
+    rc = doltliteReportConflicts(db, context, nMergeConflicts, "Merge");
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
