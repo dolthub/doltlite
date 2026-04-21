@@ -303,8 +303,9 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   int bForce = 0;
   int rc;
 
-  if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
+  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<2 ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "usage: dolt_push(remote, branch [, '--force'])", -1);
     return;
   }
@@ -312,6 +313,7 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   zRemoteName = (const char*)sqlite3_value_text(argv[0]);
   zBranch = (const char*)sqlite3_value_text(argv[1]);
   if( !zRemoteName || !zBranch ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "remote and branch required", -1);
     return;
   }
@@ -319,6 +321,7 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( argc>=3 ){
     const char *zOpt = (const char*)sqlite3_value_text(argv[2]);
     if( argc>3 ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "too many arguments", -1);
       return;
     }
@@ -327,6 +330,7 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }else{
       char *zErr = sqlite3_mprintf("unknown option `%s`", zOpt ? zOpt : "");
       if( zErr ){
+        (void)doltliteVcSealSavepointError(db);
         sqlite3_result_error(ctx, zErr, -1);
         sqlite3_free(zErr);
       }else{
@@ -338,12 +342,14 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   rc = chunkStoreFindRemote(cs, zRemoteName, &zUrl);
   if( rc!=SQLITE_OK || !zUrl ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "remote not found", -1);
     return;
   }
 
   pRemote = openRemoteByUrl(cs->pVfs, zUrl);
   if( !pRemote ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
   }
@@ -352,6 +358,7 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   pRemote->xClose(pRemote);
 
   if( rc!=SQLITE_OK ){
+    (void)doltliteVcSealSavepointError(db);
     remoteSqlResultError(ctx, rc,
       rc==SQLITE_ERROR ? "push failed (not a fast-forward?)" : 0);
     return;
@@ -431,30 +438,35 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   const char *zRemoteName;
   int rc;
 
-  if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
+  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<1 ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "usage: dolt_fetch(remote [, branch])", -1);
     return;
   }
 
   zRemoteName = (const char*)sqlite3_value_text(argv[0]);
   if( !zRemoteName ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "remote name required", -1);
     return;
   }
   if( argc>2 ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "too many arguments", -1);
     return;
   }
 
   rc = chunkStoreFindRemote(cs, zRemoteName, &zUrl);
   if( rc!=SQLITE_OK || !zUrl ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "remote not found", -1);
     return;
   }
 
   pRemote = openRemoteByUrl(cs->pVfs, zUrl);
   if( !pRemote ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
   }
@@ -464,12 +476,14 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     const char *zBranch = (const char*)sqlite3_value_text(argv[1]);
     if( !zBranch ){
       pRemote->xClose(pRemote);
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "branch name required", -1);
       return;
     }
     rc = doltliteFetch(cs, pRemote, zRemoteName, zBranch);
     if( rc!=SQLITE_OK ){
       pRemote->xClose(pRemote);
+      (void)doltliteVcSealSavepointError(db);
       remoteSqlResultError(ctx, rc,
         rc==SQLITE_NOTFOUND ? "fetch failed: branch not found on remote" : 0);
       return;
@@ -483,6 +497,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     rc = parseRemoteBranchNames(pRemote, &azNames, &nNames);
     if( rc!=SQLITE_OK ){
       pRemote->xClose(pRemote);
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "failed to read remote refs", -1);
       return;
     }
@@ -495,6 +510,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       DoltliteRemote *pBrRemote = openRemoteByUrl(cs->pVfs, zUrl);
       if( !pBrRemote ){
         freeNameList(azNames, nNames);
+        (void)doltliteVcSealSavepointError(db);
         sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
         return;
       }
@@ -502,6 +518,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       pBrRemote->xClose(pBrRemote);
       if( rc!=SQLITE_OK ){
         freeNameList(azNames, nNames);
+        (void)doltliteVcSealSavepointError(db);
         remoteSqlResultError(ctx, rc, "fetch failed");
         return;
       }
@@ -524,8 +541,9 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   RemoteSqlState savedState;
   int rc;
 
-  if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
+  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<2 ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "usage: dolt_pull(remote, branch)", -1);
     return;
   }
@@ -533,10 +551,12 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   zRemoteName = (const char*)sqlite3_value_text(argv[0]);
   zBranch = (const char*)sqlite3_value_text(argv[1]);
   if( !zRemoteName || !zBranch ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "remote and branch required", -1);
     return;
   }
   if( argc>2 ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "too many arguments", -1);
     return;
   }
@@ -544,17 +564,20 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   rc = remoteSqlStateSave(db, cs, &savedState);
   if( rc!=SQLITE_OK ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error_code(ctx, rc);
     return;
   }
 
   rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
   if( rc==SQLITE_NOTFOUND ){
+    (void)doltliteVcSealSavepointError(db);
     remoteSqlStateClear(&savedState);
     sqlite3_result_error(ctx, "remote not found", -1);
     return;
   }
   if( rc==SQLITE_CANTOPEN ){
+    (void)doltliteVcSealSavepointError(db);
     remoteSqlStateClear(&savedState);
     sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
