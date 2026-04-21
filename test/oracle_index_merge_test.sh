@@ -113,10 +113,30 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT, v TEXT); CREATE INDEX id
 echo ""
 echo "--- 10: Modify-modify conflict with index ---"
 DB="$TMPROOT/10.db"
-dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, k INT, v TEXT); CREATE INDEX idx ON t(k); INSERT INTO t VALUES(1,10,'base'); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET k=100 WHERE id=1; SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main'); UPDATE t SET k=200 WHERE id=1; SELECT dolt_commit('-Am','main'); SELECT dolt_merge('feat');" >/dev/null
-[ "$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")" = "1" ] && pass_name "10_conflict" || fail_name "10_conflict"
-# Resolve conflict, then verify integrity
-dl "$DB" "DELETE FROM dolt_conflicts_t; REINDEX; SELECT dolt_commit('-Am','resolved');" >/dev/null
+CONF=$(
+  {
+    cat <<'SQL'
+BEGIN;
+CREATE TABLE t(id INTEGER PRIMARY KEY, k INT, v TEXT);
+CREATE INDEX idx ON t(k);
+INSERT INTO t VALUES(1,10,'base');
+SELECT dolt_commit('-Am','base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET k=100 WHERE id=1;
+SELECT dolt_commit('-Am','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET k=200 WHERE id=1;
+SELECT dolt_commit('-Am','main');
+SELECT dolt_merge('feat');
+SELECT 'CONF', count(*) FROM dolt_conflicts;
+DELETE FROM dolt_conflicts_t;
+REINDEX;
+SELECT dolt_commit('-Am','resolved');
+SQL
+  } | dl_pipe "$DB" | awk -F'|' '$1=="CONF"{print $2}'
+)
+[ "$CONF" = "1" ] && pass_name "10_conflict" || fail_name "10_conflict"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "10_integrity_after_resolve" || fail_name "10_integrity_after_resolve"
 
 # ── 11: Multiple indexes on same table ──
