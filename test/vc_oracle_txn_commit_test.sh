@@ -29,7 +29,7 @@ dl_query() {
 
 dolt_query() {
   local dir="$1"; shift
-  cd "$dir" && dolt sql -c -q "$@" -r csv 2>/dev/null | tail -1
+  cd "$dir" && "$DOLT" sql -c -q "$@" -r csv 2>/dev/null | tail -1
   cd - >/dev/null
 }
 
@@ -54,8 +54,8 @@ DL_A=$(dl_query "$DB" "SELECT count(*) FROM t;")
 
 if [ -n "$DOLT" ]; then
   DOLT_A_DIR="$TMPROOT/dolt_a"
-  mkdir -p "$DOLT_A_DIR" && cd "$DOLT_A_DIR" && dolt init >/dev/null 2>&1
-  DOLT_A=$(dolt sql -c -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
+  mkdir -p "$DOLT_A_DIR" && cd "$DOLT_A_DIR" && "$DOLT" init >/dev/null 2>&1
+  DOLT_A=$("$DOLT" sql -c -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 BEGIN;
@@ -101,8 +101,8 @@ DL_B=$(dl_query "$DB" "SELECT count(*) FROM t;")
 
 if [ -n "$DOLT" ]; then
   DOLT_B_DIR="$TMPROOT/dolt_b"
-  mkdir -p "$DOLT_B_DIR" && cd "$DOLT_B_DIR" && dolt init >/dev/null 2>&1
-  DOLT_B=$(dolt sql -c -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
+  mkdir -p "$DOLT_B_DIR" && cd "$DOLT_B_DIR" && "$DOLT" init >/dev/null 2>&1
+  DOLT_B=$("$DOLT" sql -c -r csv 2>/dev/null <<'SQL' | grep '^[0-9][0-9]*$' | tail -1
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SAVEPOINT sp1;
