@@ -6322,7 +6322,26 @@ void doltliteClearSessionRebaseState(sqlite3 *db){
 }
 
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
-  doltliteGetSessionMergeState(db, 0, 0, pHash);
+  u8 isMerging = 0;
+  if( pHash ) memset(pHash, 0, sizeof(*pHash));
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt || !pHash ) return;
+
+  if( db->autoCommit ){
+    Btree *p = db->aDb[0].pBt;
+    const char *zBr = p->zBranch ? p->zBranch : "main";
+    int rc = btreeLoadWorkingSetBlob(&p->pBt->store, zBr,
+                                     0, 0, 0, &isMerging,
+                                     0, pHash, 0, 0, 0, 0, 0);
+    if( rc!=SQLITE_OK || !isMerging ){
+      memset(pHash, 0, sizeof(*pHash));
+    }
+    return;
+  }
+
+  doltliteGetSessionMergeState(db, &isMerging, 0, pHash);
+  if( !isMerging ){
+    memset(pHash, 0, sizeof(*pHash));
+  }
 }
 
 void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){
