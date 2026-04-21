@@ -212,8 +212,7 @@ R3=$(dl "$DB" "SELECT y FROM t WHERE id=3;")
 [ "$R3" = "90" ] && pass_name "h_main_expression" || fail_name "h_main_expression; got $R3"
 
 # Switch to other and check
-dl "$DB" "SELECT dolt_checkout('other');" >/dev/null
-R2=$(dl "$DB" "SELECT y FROM t WHERE id=2;")
+R2=$(dl "$DB/other" "SELECT y FROM t WHERE id=2;")
 [ "$R2" = "60" ] && pass_name "h_other_expression" || fail_name "h_other_expression; got $R2"
 
 # ── I: Convergent merge (both sides same update) ──────────

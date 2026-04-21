@@ -84,7 +84,7 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(100,'feat_only');
-SELECT dolt_commit('-A','-m','feat commit');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feat commit');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_WITH_BRANCH=$(db_size "$DB")
@@ -122,7 +122,7 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,'dev_data');
-SELECT dolt_commit('-A','-m','dev commit');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','dev commit');" | $DOLTLITE "$DB/dev" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_tag('v1.0');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -137,7 +137,7 @@ run_test "gc_preserve_tags" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
 
 # Dev branch data preserved
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "gc_preserve_dev" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "gc_preserve_dev" "SELECT count(*) FROM t;" "2" "$DB/dev"
 
 # After reopen, everything still works
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1

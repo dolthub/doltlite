@@ -47,20 +47,20 @@ run_test "main_committed" \
 echo "SELECT dolt_checkout('feature');
 INSERT INTO t VALUES(3,'c');
 SELECT dolt_add('-A');
-SELECT dolt_commit('-m','feature add');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-m','feature add');" | $DOLTLITE "$DB/feature" > /dev/null 2>&1
 
 run_test "feature_committed" \
   "SELECT count(*) FROM dolt_status;" "0" "$DB"
 
 # Now stage but DON'T commit on feature
 echo "INSERT INTO t VALUES(4,'d');
-SELECT dolt_add('t');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_add('t');" | $DOLTLITE "$DB/feature" > /dev/null 2>&1
 
 run_test "feature_has_staged" \
-  "SELECT count(*) FROM dolt_status WHERE staged=1;" "1" "$DB"
+  "SELECT count(*) FROM dolt_status WHERE staged=1;" "1" "$DB/feature"
 
 # Commit on feature so we can switch
-echo "SELECT dolt_commit('-m','feature staged');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_commit('-m','feature staged');" | $DOLTLITE "$DB/feature" > /dev/null 2>&1
 
 # Switch back to main — main should be clean
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -73,11 +73,11 @@ echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Feature was committed clean — should be clean
 run_test "feature_clean_after_switch" \
-  "SELECT count(*) FROM dolt_status;" "0" "$DB"
+  "SELECT count(*) FROM dolt_status;" "0" "$DB/feature"
 
 # Verify data: feature should have rows 1-4
 run_test "feature_data_count" \
-  "SELECT count(*) FROM t;" "4" "$DB"
+  "SELECT count(*) FROM t;" "4" "$DB/feature"
 
 rm -f "$DB"
 
@@ -205,12 +205,12 @@ SELECT dolt_branch('b2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('b1');
 UPDATE t SET val='b1_val' WHERE id=1;
 SELECT dolt_add('-A');
-SELECT dolt_commit('-m','b1 edit');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-m','b1 edit');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('b2');
 INSERT INTO t VALUES(2,'b2_new');
 SELECT dolt_add('-A');
-SELECT dolt_commit('-m','b2 add');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-m','b2 add');" | $DOLTLITE "$DB/b2" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -221,18 +221,18 @@ run_test "multi_main_count" \
 echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "multi_b1_val" \
-  "SELECT val FROM t WHERE id=1;" "b1_val" "$DB"
+  "SELECT val FROM t WHERE id=1;" "b1_val" "$DB/b1"
 
 run_test "multi_b1_count" \
-  "SELECT count(*) FROM t;" "1" "$DB"
+  "SELECT count(*) FROM t;" "1" "$DB/b1"
 
 echo "SELECT dolt_checkout('b2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "multi_b2_count" \
-  "SELECT count(*) FROM t;" "2" "$DB"
+  "SELECT count(*) FROM t;" "2" "$DB/b2"
 
 run_test "multi_b2_new_row" \
-  "SELECT val FROM t WHERE id=2;" "b2_new" "$DB"
+  "SELECT val FROM t WHERE id=2;" "b2_new" "$DB/b2"
 
 rm -f "$DB"
 

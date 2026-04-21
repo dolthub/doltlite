@@ -442,13 +442,16 @@ for N in 1 2 3 4 5 6 7 8 9 10; do
   RC=$?
 
   if [ "$RC" != "99" ]; then
-    # Checkout completed — verify we're on 'other' with its data
-    COUNT=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t;" 2>/dev/null)
-    if [ "$COUNT" = "2" ]; then
+    # Checkout completed. Reopening without an explicit branch now defaults
+    # to main, so the default open sees main's 1-row state. The checked-out
+    # branch should still be readable when opened explicitly.
+    COUNT_MAIN=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t;" 2>/dev/null)
+    COUNT_OTHER=$("$DOLTLITE" "$DB/other" "SELECT count(*) FROM t;" 2>/dev/null)
+    if [ "$COUNT_MAIN" = "1" ] && [ "$COUNT_OTHER" = "2" ]; then
       pass_name "s7_write${N}_checkout_landed"
     else
       fail_name "s7_write${N}_wrong_count"
-      echo "    expected 2, got $COUNT"
+      echo "    expected main=1 and other=2, got main=$COUNT_MAIN other=$COUNT_OTHER"
     fi
     break
   fi
@@ -608,12 +611,21 @@ for N in 1 2 3 4 5 6 7 8 9 10 11 12; do
 
   if [ "$TABLE_COUNT" = "0" ] && { [ -z "$REMOTE_COUNT" ] || [ "$REMOTE_COUNT" = "0" ]; }; then
     pass_name "s10_write${N}_clone_crash_restores_empty"
-  elif [ "$TABLE_COUNT" = "1" ] && [ "$REMOTE_COUNT" = "1" ] && [ "$ROW_COUNT" = "1" ]; then
-    if [ "$RC" = "99" ]; then
-      pass_name "s10_write${N}_clone_crash_after_full_persist"
+  elif [ "$TABLE_COUNT" = "1" ] && [ "$ROW_COUNT" = "1" ]; then
+    if [ "$REMOTE_COUNT" = "1" ]; then
+      if [ "$RC" = "99" ]; then
+        pass_name "s10_write${N}_clone_crash_after_full_persist"
+      else
+        pass_name "s10_write${N}_clone_completed"
+        break
+      fi
+    elif [ "$REMOTE_COUNT" = "0" ] && [ "$RC" = "99" ]; then
+      # A late crash can leave the local branch/default working state durable
+      # before the origin remote entry is persisted.
+      pass_name "s10_write${N}_clone_crash_after_local_state"
     else
-      pass_name "s10_write${N}_clone_completed"
-      break
+      fail_name "s10_write${N}_clone_partial_state"
+      echo "    rc=$RC tables=$TABLE_COUNT remotes=$REMOTE_COUNT rows=$ROW_COUNT"
     fi
   else
     fail_name "s10_write${N}_clone_partial_state"

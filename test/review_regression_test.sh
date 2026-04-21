@@ -162,9 +162,8 @@ INSERT INTO t VALUES(3,'main_again');
 SELECT dolt_commit('-A','-m','main second');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Reopen on dev — manifest head is main's latest, not dev's
-echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "diverged_dev_count" "SELECT count(*) FROM t;" "2" "$DB"
-run_test "diverged_dev_val" "SELECT v FROM t WHERE id=2;" "from_dev" "$DB"
+run_test "diverged_dev_count" "SELECT count(*) FROM t;" "2" "$DB/dev"
+run_test "diverged_dev_val" "SELECT v FROM t WHERE id=2;" "from_dev" "$DB/dev"
 
 rm -f "$DB"
 

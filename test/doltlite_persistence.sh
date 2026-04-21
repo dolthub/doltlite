@@ -174,8 +174,8 @@ run_test "branch_main" "SELECT count(*) FROM t;" "1" "$DB"
 
 # Switch to feat and verify
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "branch_feat" "SELECT count(*) FROM t;" "2" "$DB"
-run_test "branch_feat_val" "SELECT v FROM t WHERE id=2;" "feat_data" "$DB"
+run_test "branch_feat" "SELECT count(*) FROM t;" "2" "$DB/feat"
+run_test "branch_feat_val" "SELECT v FROM t WHERE id=2;" "feat_data" "$DB/feat"
 
 rm -f "$DB"
 
@@ -423,9 +423,8 @@ INSERT INTO t VALUES(3,'main_again');
 SELECT dolt_commit('-A','-m','main second');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Reopen on dev — manifest head is main's latest, not dev's
-echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "diverged_dev_count" "SELECT count(*) FROM t;" "2" "$DB"
-run_test "diverged_dev_val" "SELECT v FROM t WHERE id=2;" "from_dev" "$DB"
+run_test "diverged_dev_count" "SELECT count(*) FROM t;" "2" "$DB/dev"
+run_test "diverged_dev_val" "SELECT v FROM t WHERE id=2;" "from_dev" "$DB/dev"
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "diverged_main_count" "SELECT count(*) FROM t;" "2" "$DB"

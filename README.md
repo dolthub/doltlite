@@ -343,6 +343,31 @@ SELECT * FROM dolt_branches;
 SELECT dolt_branch('-d', 'feature');
 ```
 
+#### Opening a Specific Branch
+
+By default, Doltlite opens a database on the `main` branch. To connect
+directly to another branch, put the branch name in the database target:
+
+```bash
+./doltlite my.db@feature
+./doltlite my.db/feature
+```
+
+The same syntax works through the SQLite C API and language bindings, since
+the branch is parsed from the database filename passed to `sqlite3_open()`:
+
+```c
+sqlite3_open("my.db@feature", &db);
+sqlite3_open("my.db/feature", &db);
+```
+
+After opening, `active_branch()` reflects the selected branch:
+
+```sql
+SELECT active_branch();
+-- feature
+```
+
 ### Tags
 
 Immutable named pointers to commits:

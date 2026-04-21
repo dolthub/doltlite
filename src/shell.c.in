@@ -4685,15 +4685,151 @@ static void shellModuleSchema(
 #define OPEN_DB_KEEPALIVE   0x001   /* Return after error if true */
 #define OPEN_DB_ZIPFILE     0x002   /* Open as ZIP if name matches *.zip */
 
+static const char *findLastPathSep(const char *zPath){
+  const char *zSlash = zPath ? strrchr(zPath, '/') : 0;
+#if defined(_WIN32) || defined(WIN32)
+  const char *zBackslash = zPath ? strrchr(zPath, '\\') : 0;
+  if( zBackslash && (!zSlash || zBackslash > zSlash) ) return zBackslash;
+#endif
+  return zSlash;
+}
+
+#ifdef DOLTLITE_PROLLY
+static void parseDoltiteDbBranch(
+  const char *zInput,
+  char **pzFilename,
+  char **pzBranch
+){
+  const char *zSep;
+  char *zBase;
+
+  *pzFilename = 0;
+  *pzBranch = 0;
+  if( !zInput ){
+    return;
+  }
+
+  zSep = findLastPathSep(zInput);
+  {
+    const char *zAt = strrchr(zInput, '@');
+    if( zAt && zAt[1]!=0 && (!zSep || zAt > zSep) ){
+      *pzFilename = sqlite3_mprintf("%.*s", (int)(zAt - zInput), zInput);
+      *pzBranch = sqlite3_mprintf("%s", zAt + 1);
+      return;
+    }
+  }
+
+  zSep = findLastPathSep(zInput);
+  if( zSep && zSep[1]!=0 ){
+    struct stat x;
+    zBase = sqlite3_mprintf("%.*s", (int)(zSep - zInput), zInput);
+    if( zBase && stat(zBase, &x)==0 && !S_ISDIR(x.st_mode) ){
+      *pzFilename = zBase;
+      *pzBranch = sqlite3_mprintf("%s", zSep + 1);
+      return;
+    }
+    sqlite3_free(zBase);
+  }
+
+  *pzFilename = sqlite3_mprintf("%s", zInput);
+}
+
+static int doltliteCountBranches(sqlite3 *db, int *pnBranch){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  *pnBranch = 0;
+  rc = sqlite3_prepare_v2(db, "SELECT count(*) FROM dolt_branches", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_finalize(pStmt);
+    return rc;
+  }
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    *pnBranch = sqlite3_column_int(pStmt, 0);
+    rc = SQLITE_OK;
+  }else{
+    rc = SQLITE_ERROR;
+  }
+  sqlite3_finalize(pStmt);
+  return rc;
+}
+
+static int doltliteGetCurrentBranch(sqlite3 *db, char **pzBranch){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  *pzBranch = 0;
+  rc = sqlite3_prepare_v2(db, "SELECT active_branch()", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_finalize(pStmt);
+    return rc;
+  }
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    const unsigned char *zText = sqlite3_column_text(pStmt, 0);
+    *pzBranch = sqlite3_mprintf("%s", zText ? (const char *)zText : "");
+    rc = SQLITE_OK;
+  }else{
+    rc = SQLITE_ERROR;
+  }
+  sqlite3_finalize(pStmt);
+  return rc;
+}
+
+static int doltliteSelectConnectBranch(sqlite3 *db, const char *zBranch){
+  sqlite3_stmt *pStmt = 0;
+  char *zCurrent = 0;
+  int nBranch = 0;
+  int rc;
+
+  if( zBranch==0 || zBranch[0]==0 ) zBranch = "main";
+
+  rc = doltliteCountBranches(db, &nBranch);
+  if( rc!=SQLITE_OK ){
+    return SQLITE_OK;
+  }
+  if( nBranch==0 && strcmp(zBranch, "main")==0 ){
+    return SQLITE_OK;
+  }
+
+  rc = doltliteGetCurrentBranch(db, &zCurrent);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zCurrent);
+    return SQLITE_OK;
+  }
+  if( zCurrent && strcmp(zCurrent, zBranch)==0 ){
+    sqlite3_free(zCurrent);
+    return SQLITE_OK;
+  }
+  sqlite3_free(zCurrent);
+
+  rc = sqlite3_prepare_v2(db, "SELECT dolt_checkout(?)", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_finalize(pStmt);
+    return SQLITE_OK;
+  }
+  sqlite3_bind_text(pStmt, 1, zBranch, -1, SQLITE_STATIC);
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW || rc==SQLITE_DONE ){
+    rc = SQLITE_OK;
+  }
+  sqlite3_finalize(pStmt);
+  return rc;
+}
+#endif /* DOLTLITE_PROLLY */
+
 /*
 ** Make sure the database is open.  If it is not, then open it.  If
 ** the database fails to open, print an error message and exit.
 */
 static void open_db(ShellState *p, int openFlags){
   if( p->db==0 ){
-    const char *zDbFilename = p->pAuxDb->zDbFilename;
+    const char *zRequestedFilename = p->pAuxDb->zDbFilename;
+    const char *zDbFilename = zRequestedFilename;
     const char *zHOME;    /* Value of HOME environment variable */
     char *zToFree = 0;    /* Filename with ~/ prefix expansion */
+    char *zParsedFilename = 0;
+    char *zParsedBranch = 0;
+    int rc;
 
     /* If the zDbFilename does not exist and begins with ~/ then replace
     ** the ~ with the home directory.
@@ -4715,6 +4851,15 @@ static void open_db(ShellState *p, int openFlags){
         memcpy(zToFree+nHOME, zDbFilename+1, nFN);
         zDbFilename = zToFree;
       }
+    }
+
+    if( zDbFilename && zDbFilename[0]!=0 && zDbFilename[0]!=':' ){
+#ifdef DOLTLITE_PROLLY
+      parseDoltiteDbBranch(zDbFilename, &zParsedFilename, &zParsedBranch);
+      if( zParsedFilename ){
+        zDbFilename = zParsedFilename;
+      }
+#endif /* DOLTLITE_PROLLY */
     }
 
     if( p->openMode==SHELL_OPEN_UNSPEC ){
@@ -4751,7 +4896,10 @@ static void open_db(ShellState *p, int openFlags){
     }
     if( p->db==0 || SQLITE_OK!=sqlite3_errcode(p->db) ){
       cli_printf(stderr,"Error: unable to open database \"%s\": %s\n",
-            zDbFilename, sqlite3_errmsg(p->db));
+            zRequestedFilename ? zRequestedFilename : zDbFilename,
+            sqlite3_errmsg(p->db));
+      sqlite3_free(zParsedFilename);
+      sqlite3_free(zParsedBranch);
       if( (openFlags & OPEN_DB_KEEPALIVE)==0 ){
         cli_exit(1);
       }
@@ -4764,9 +4912,23 @@ static void open_db(ShellState *p, int openFlags){
       }else{
         cli_printf(stderr,
               "Notice: using substitute in-memory database instead of \"%s\"\n",
-              zDbFilename);
+              zRequestedFilename ? zRequestedFilename : zDbFilename);
       }
     }
+#ifdef DOLTLITE_PROLLY
+    rc = doltliteSelectConnectBranch(p->db, zParsedBranch ? zParsedBranch : "main");
+    if( rc!=SQLITE_OK ){
+      cli_printf(stderr, "Error: unable to select branch \"%s\": %s\n",
+                 zParsedBranch ? zParsedBranch : "main", sqlite3_errstr(rc));
+      sqlite3_free(zParsedFilename);
+      sqlite3_free(zParsedBranch);
+      if( (openFlags & OPEN_DB_KEEPALIVE)==0 ){
+        cli_exit(1);
+      }
+    }
+#endif /* DOLTLITE_PROLLY */
+    sqlite3_free(zParsedFilename);
+    sqlite3_free(zParsedBranch);
     globalDb = p->db;
     sqlite3_db_config(p->db, SQLITE_DBCONFIG_STMT_SCANSTATUS, (int)0, (int*)0);
 

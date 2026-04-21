@@ -40,7 +40,7 @@ for i in $(seq 1 100); do
   echo "SELECT dolt_branch('b$i');" | $DOLTLITE "$DB" > /dev/null 2>&1
   echo "SELECT dolt_checkout('b$i');" | $DOLTLITE "$DB" > /dev/null 2>&1
   echo "INSERT INTO t VALUES($i,'b$i',$i);
-SELECT dolt_commit('-A','-m','commit on b$i');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','commit on b$i');" | $DOLTLITE "$DB/b$i" > /dev/null 2>&1
   echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 done
 echo "  Done creating branches."
@@ -56,10 +56,10 @@ run_test "many_branches_count" "SELECT count(*) FROM dolt_branches;" "101" "$DB"
 # ============================================================
 
 echo "SELECT dolt_checkout('b50');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "checkout_b50_data" "SELECT val FROM t WHERE id=50;" "50" "$DB"
-run_test "checkout_b50_name" "SELECT branch_name FROM t WHERE id=50;" "b50" "$DB"
+run_test "checkout_b50_data" "SELECT val FROM t WHERE id=50;" "50" "$DB/b50"
+run_test "checkout_b50_name" "SELECT branch_name FROM t WHERE id=50;" "b50" "$DB/b50"
 # b50 should have 2 rows: the init row and its own row
-run_test "checkout_b50_count" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "checkout_b50_count" "SELECT count(*) FROM t;" "2" "$DB/b50"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # ============================================================
@@ -119,8 +119,8 @@ run_test "post_gc_main_b3" "SELECT val FROM t WHERE id=3;" "3" "$DB"
 
 # Check an unmerged surviving branch
 echo "SELECT dolt_checkout('b98');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "post_gc_b98_data" "SELECT val FROM t WHERE id=98;" "98" "$DB"
-run_test "post_gc_b98_count" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "post_gc_b98_data" "SELECT val FROM t WHERE id=98;" "98" "$DB/b98"
+run_test "post_gc_b98_count" "SELECT count(*) FROM t;" "2" "$DB/b98"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # ============================================================
@@ -160,9 +160,9 @@ for batch in $(seq 0 9); do
     id=$((batch * 100 + j + 1))
     SQL="${SQL}INSERT INTO t VALUES($id,'data_$id');"
   done
-  echo "$SQL" | $DOLTLITE "$DB" > /dev/null 2>&1
+  echo "$SQL" | $DOLTLITE "$DB/bulk" > /dev/null 2>&1
 done
-echo "SELECT dolt_commit('-A','-m','1000 rows');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_commit('-A','-m','1000 rows');" | $DOLTLITE "$DB/bulk" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_WITH_BULK=$(file_size "$DB")
@@ -229,10 +229,10 @@ fi
 
 echo "SELECT dolt_checkout('share_a');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET data='modified_a' WHERE id=1;
-SELECT dolt_commit('-A','-m','mod a');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','mod a');" | $DOLTLITE "$DB/share_a" > /dev/null 2>&1
 echo "SELECT dolt_checkout('share_b');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET data='modified_b' WHERE id=100;
-SELECT dolt_commit('-A','-m','mod b');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','mod b');" | $DOLTLITE "$DB/share_b" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_AFTER_MODS=$(file_size "$DB")
@@ -308,7 +308,7 @@ for cycle in $(seq 1 10); do
   echo "SELECT dolt_branch('recycled');" | $DOLTLITE "$DB" > /dev/null 2>&1
   echo "SELECT dolt_checkout('recycled');" | $DOLTLITE "$DB" > /dev/null 2>&1
   echo "INSERT INTO t VALUES($((cycle + 100)),'cycle_$cycle');
-SELECT dolt_commit('-A','-m','cycle $cycle');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','cycle $cycle');" | $DOLTLITE "$DB/recycled" > /dev/null 2>&1
   echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
   echo "SELECT dolt_branch('-D','recycled');" | $DOLTLITE "$DB" > /dev/null 2>&1
 done

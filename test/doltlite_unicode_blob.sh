@@ -66,7 +66,7 @@ run_test "japanese_data" \
 echo "SELECT dolt_branch('intl');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('intl');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(6,'Кириллица');
-SELECT dolt_commit('-A','-m','add cyrillic');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','add cyrillic');" | $DOLTLITE "$DB/intl" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "pre_merge_count" \
@@ -119,10 +119,10 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 result=$(echo "SELECT dolt_branch('feature/日本語');" | perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$DB" 2>&1)
 if [ "$result" = "0" ]; then
   # It worked - verify we can checkout and use it
-  echo "SELECT dolt_checkout('feature/日本語');" | $DOLTLITE "$DB" > /dev/null 2>&1
   run_test "unicode_branch_active" \
-    "SELECT active_branch();" \
-    "feature/日本語" "$DB"
+    "SELECT dolt_checkout('feature/日本語'); SELECT active_branch();" \
+    "0
+feature/日本語" "$DB"
   PASS=$((PASS+1))  # count the branch creation as pass
   echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 else
@@ -216,11 +216,11 @@ echo "SELECT dolt_checkout('blobcheck');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Data should survive branch checkout
 run_test "1mb_blob_on_branch" \
   "SELECT length(data) FROM t WHERE id=1;" \
-  "1048576" "$DB"
+  "1048576" "$DB/blobcheck"
 
 # Add more data on branch, merge back
 echo "INSERT INTO t VALUES(2, randomblob(512));
-SELECT dolt_commit('-A','-m','add small blob');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','add small blob');" | $DOLTLITE "$DB/blobcheck" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('blobcheck');" | $DOLTLITE "$DB" > /dev/null 2>&1
 

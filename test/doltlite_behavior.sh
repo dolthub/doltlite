@@ -26,7 +26,7 @@ echo "UPDATE t SET v='main_val';
 SELECT dolt_commit('-A','-m','main edit');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='feat_val';
-SELECT dolt_commit('-A','-m','feat edit');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feat edit');" | $DOLTLITE "$DB/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -64,7 +64,7 @@ echo "UPDATE t SET v='main2';
 SELECT dolt_commit('-A','-m','main2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='feat2';
-SELECT dolt_commit('-A','-m','feat2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feat2');" | $DOLTLITE "$DB/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -98,7 +98,7 @@ SELECT dolt_commit('-A','-m','add x');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN y INTEGER;
 UPDATE t SET y=42;
-SELECT dolt_commit('-A','-m','add y');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','add y');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 # Back to main, merge should succeed with schema merge
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -139,7 +139,7 @@ echo "ALTER TABLE t ADD COLUMN y INTEGER;
 UPDATE t SET y=10 WHERE id=1;
 UPDATE t SET y=20 WHERE id=2;
 UPDATE t SET y=30 WHERE id=3;
-SELECT dolt_commit('-A','-m','add y');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','add y');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -182,7 +182,7 @@ echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN y INTEGER;
 UPDATE t SET y=7 WHERE id=1;
 INSERT INTO t VALUES(3,'b1_new',77);
-SELECT dolt_commit('-A','-m','add y with new row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','add y with new row');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_merge('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -214,7 +214,7 @@ SELECT dolt_commit('-A','-m','add extra');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # b1 only changes data
 echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,'b');
-SELECT dolt_commit('-A','-m','data only');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','data only');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "schema_one_side_ok" \
@@ -239,7 +239,7 @@ SELECT dolt_commit('-A','-m','t1 change');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # b1 changes t2
 echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t2 SET v='X';
-SELECT dolt_commit('-A','-m','t2 change');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','t2 change');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "diff_tables_merge_ok" \
@@ -267,7 +267,7 @@ SELECT dolt_commit('-A','-m','add z on main');" | $DOLTLITE "$DB" > /dev/null 2>
 echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN z TEXT;
 UPDATE t SET z='b1_z';
-SELECT dolt_commit('-A','-m','add z on b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','add z on b1');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Merge should succeed (same column added on both) — row conflict may occur
@@ -292,7 +292,7 @@ SELECT dolt_commit('-A','-m','add w TEXT');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # b1 adds column 'w' as INTEGER
 echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "ALTER TABLE t ADD COLUMN w INTEGER;
-SELECT dolt_commit('-A','-m','add w INTEGER');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','add w INTEGER');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "schema_merge_same_col_diff_type" \
@@ -315,7 +315,7 @@ SELECT dolt_commit('-A','-m','add newcol');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # b1 only changes data (can't drop columns easily in SQLite, so just data change)
 echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='b';
-SELECT dolt_commit('-A','-m','data change');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','data change');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "schema_add_col_other_data" \
@@ -395,7 +395,7 @@ FEAT_HASH=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0;" | $DOLTLIT
 # But first we need the feature branch commit hash, not main's
 # Switch to feature, get the hash, switch back
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
-FEAT_HASH=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB" 2>&1)
+FEAT_HASH=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB/feature" 2>&1)
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "at_commit_hash_count" \

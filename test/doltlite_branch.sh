@@ -15,19 +15,19 @@ run_test "list_branches" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
 run_test "main_current" "SELECT active_branch();" "main" "$DB"
 
 run_test "checkout_feature" "SELECT dolt_checkout('feature');" "0" "$DB"
-run_test "active_feature" "SELECT active_branch();" "feature" "$DB"
+run_test "active_feature" "SELECT active_branch();" "feature" "$DB/feature"
 
-echo "INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','on feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "data_on_feature" "SELECT count(*) FROM t;" "2" "$DB"
+echo "INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','on feature');" | $DOLTLITE "$DB/feature" > /dev/null 2>&1
+run_test "data_on_feature" "SELECT count(*) FROM t;" "2" "$DB/feature"
 
 run_test "checkout_main" "SELECT dolt_checkout('main');" "0" "$DB"
 run_test "main_one_row" "SELECT count(*) FROM t;" "1" "$DB"
 
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "feature_two_rows" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "feature_two_rows" "SELECT count(*) FROM t;" "2" "$DB/feature"
 
 run_test_match "dup_branch" "SELECT dolt_branch('feature');" "already exists" "$DB"
-run_test_match "del_current" "SELECT dolt_branch('-d','feature');" "cannot delete" "$DB"
+run_test_match "del_current" "SELECT dolt_branch('-d','feature');" "cannot delete" "$DB/feature"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "delete_unmerged_branch" "SELECT dolt_branch('-d','feature');" "not fully merged" "$DB"
 run_test "force_delete_branch" "SELECT dolt_branch('-D','feature');" "0" "$DB"
@@ -48,7 +48,7 @@ echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a')
 echo "INSERT INTO t VALUES(2,'b'); SELECT dolt_add('-A'); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 run_test "checkout_after_hard_reset" "SELECT dolt_checkout('feat');" "0" "$DB4"
-run_test "active_after_hard_reset" "SELECT active_branch();" "feat" "$DB4"
+run_test "active_after_hard_reset" "SELECT active_branch();" "feat" "$DB4/feat"
 
 # Checkout back should also work (clean state)
 run_test "checkout_back_after_hard_reset" "SELECT dolt_checkout('main');" "0" "$DB4"
@@ -89,12 +89,12 @@ DB9=/tmp/test_branch9_$$.db; rm -f "$DB9"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 
 run_test "checkout_b_creates" "SELECT dolt_checkout('-b','newbr');" "0" "$DB9"
-run_test "checkout_b_active" "SELECT active_branch();" "newbr" "$DB9"
+run_test "checkout_b_active" "SELECT active_branch();" "newbr" "$DB9/newbr"
 run_test "checkout_b_listed" "SELECT count(*) FROM dolt_branches;" "2" "$DB9"
 
 # Work on the new branch, switch back, verify isolation
-echo "INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','on newbr');" | $DOLTLITE "$DB9" > /dev/null 2>&1
-run_test "checkout_b_data" "SELECT count(*) FROM t;" "2" "$DB9"
+echo "INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','on newbr');" | $DOLTLITE "$DB9/newbr" > /dev/null 2>&1
+run_test "checkout_b_data" "SELECT count(*) FROM t;" "2" "$DB9/newbr"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 run_test "checkout_b_main_data" "SELECT count(*) FROM t;" "1" "$DB9"
 
@@ -115,13 +115,13 @@ DB10=/tmp/test_branch10_$$.db; rm -f "$DB10"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB10" > /dev/null 2>&1
 echo "SELECT dolt_checkout('-b','other');" | $DOLTLITE "$DB10" > /dev/null 2>&1
 
-run_test_match "delete_main_rejected" "SELECT dolt_branch('-d','main');" "cannot delete branch 'main'" "$DB10"
-run_test_match "force_delete_main_rejected" "SELECT dolt_branch('-D','main');" "cannot delete branch 'main'" "$DB10"
-run_test_match "rename_main_rejected" "SELECT dolt_branch('-m','main','trunk');" "cannot rename branch 'main'" "$DB10"
-run_test "main_still_exists" "SELECT count(*) FROM dolt_branches WHERE name='main';" "1" "$DB10"
+run_test_match "delete_main_rejected" "SELECT dolt_branch('-d','main');" "cannot delete branch 'main'" "$DB10/other"
+run_test_match "force_delete_main_rejected" "SELECT dolt_branch('-D','main');" "cannot delete branch 'main'" "$DB10/other"
+run_test_match "rename_main_rejected" "SELECT dolt_branch('-m','main','trunk');" "cannot rename branch 'main'" "$DB10/other"
+run_test "main_still_exists" "SELECT count(*) FROM dolt_branches WHERE name='main';" "1" "$DB10/other"
 
 # Reopening still works — main resolves
-run_test "reopen_after_blocked_ops_active" "SELECT active_branch();" "other" "$DB10"
+run_test "reopen_after_blocked_ops_active" "SELECT active_branch();" "other" "$DB10/other"
 
 # Non-main rename and delete still work
 DB11=/tmp/test_branch11_$$.db; rm -f "$DB11"
