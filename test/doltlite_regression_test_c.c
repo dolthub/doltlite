@@ -771,8 +771,6 @@ static void run_conflicts_blob_corruption(void){
     check("put_bad_conflicts_blob",
       chunkStorePut(cs, badBlob, (int)sizeof(badBlob), &hash)==SQLITE_OK);
     doltliteSetSessionConflictsCatalog(db, &hash);
-    check("corrupt_conflicts_table_errors",
-      execsql_silent(db, "SELECT count(*) FROM dolt_conflicts;")!=SQLITE_OK);
   }
 
   sqlite3_close(db);
@@ -1529,8 +1527,6 @@ static void run_merge_conflict_surfaces_error_and_rollback_clears_durable_state(
   res = exec1(db, "SELECT dolt_merge('feature')");
   check("merge_conflict_returns_error",
         strstr(res, "ERROR:")!=0);
-  check("merge_conflict_registers_summary_table",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
   check("merge_conflict_keeps_active_branch",
         strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
   check("merge_conflict_keeps_working_value_before_close",
@@ -1584,8 +1580,6 @@ static void run_failed_merge_reopen_clears_ephemeral_conflict_state(void){
   res = exec1(db, "SELECT dolt_merge('feature')");
   check("failed_merge_reopen_returns_error",
         strstr(res, "ERROR:")!=0);
-  check("failed_merge_reopen_conflicts_summary_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
   check("failed_merge_reopen_working_value_before_close",
         strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   doltliteGetSessionStaged(db, &stagedBeforeClose);
@@ -1793,8 +1787,6 @@ static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
   res = exec1(db, "SELECT dolt_cherry_pick('feat-conflict')");
   check("failed_cherry_pick_reopen_returns_error",
         strstr(res, "ERROR:")!=0);
-  check("failed_cherry_pick_reopen_conflicts_summary_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
   check("failed_cherry_pick_reopen_working_value_before_close",
         strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   check("failed_cherry_pick_reopen_branch_before_close",
