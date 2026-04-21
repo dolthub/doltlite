@@ -48,11 +48,21 @@ oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
+  local dl_setup="$setup"
+
+  # DoltLite now rolls back autocommit merge conflicts, so scenarios that
+  # inspect live conflict summary must run in an explicit transaction on the
+  # DoltLite side only. Inject BEGIN before the final merge sequence while
+  # leaving the Dolt side unchanged.
+  if printf '%s' "$setup" | grep -q "SELECT dolt_merge('"; then
+    dl_setup=$(printf '%s' "$setup" | perl -0pe \
+      "s/(SELECT dolt_merge\\('[^']+'\\);)(?!.*SELECT dolt_merge\\('[^']+'\\);)/BEGIN;\\n\$1/s")
+  fi
 
   # doltlite side: scenario as written. The vtable column "table" needs
   # double-quote escaping in the SELECT.
   local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT \"table\" || char(9) || num_conflicts FROM dolt_conflicts ORDER BY \"table\";\n" "$setup" \
+  dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT \"table\" || char(9) || num_conflicts FROM dolt_conflicts ORDER BY \"table\";\n" "$dl_setup" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
