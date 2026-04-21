@@ -962,6 +962,1026 @@ SELECT dolt_commit('-m','commit both');
 " "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
 
 # ═══════════════════════════════════════════════════════════════════
+# Section 24: DROP TABLE error recovery
+# ═══════════════════════════════════════════════════════════════════
+echo "--- drop table error recovery ---"
+
+oracle "drop_nonexistent_table_other_tables_intact" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t1 VALUES(1,'a');
+INSERT INTO t2 VALUES(1,'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DROP TABLE nonexistent;
+INSERT INTO t1 VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad drop');
+" "SELECT id, val FROM t1 ORDER BY id;"
+
+oracle "drop_table_after_failed_commit" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t1 VALUES(1,'a');
+INSERT INTO t2 VALUES(1,'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_commit('-m','fail empty');
+DROP TABLE t2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','dropped t2');
+INSERT INTO t1 VALUES(2,'post_drop');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after drop');
+" "SELECT id, val FROM t1 ORDER BY id;"
+
+oracle "create_then_drop_then_create_after_error" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_commit('-m','empty fail');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(99,'recreated');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','recreated');
+" "SELECT id, val FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 25: ALTER TABLE error recovery
+# ═══════════════════════════════════════════════════════════════════
+echo "--- alter table error recovery ---"
+
+oracle "alter_add_duplicate_col_data_intact" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE t ADD COLUMN val TEXT;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad alter');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "alter_add_col_to_nonexistent_table" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE nonexistent ADD COLUMN x INTEGER;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad alter');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "alter_then_commit_after_prior_failure" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_cherry_pick('bad_ref');
+ALTER TABLE t ADD COLUMN extra INTEGER DEFAULT 7;
+INSERT INTO t VALUES(2,'b',99);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','altered');
+" "SELECT id, val, extra FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 26: Tag error recovery
+# ═══════════════════════════════════════════════════════════════════
+echo "--- tag error recovery ---"
+
+oracle "tag_duplicate_data_intact" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_tag('v1','HEAD');
+SELECT dolt_tag('v1','HEAD');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after dup tag');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "tag_bad_ref_then_good_tag" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_tag('badtag','nonexistent_ref');
+SELECT dolt_tag('goodtag','HEAD');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "delete_nonexistent_tag_then_ops" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_tag('-d','nonexistent');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad tag delete');
+" "SELECT id, val FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 27: Invalid SQL syntax recovery
+# ═══════════════════════════════════════════════════════════════════
+echo "--- invalid SQL recovery ---"
+
+oracle "insert_wrong_col_count_others_succeed" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2,'b','extra');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after type error');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "select_from_nonexistent_then_real_work" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT * FROM nonexistent;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad select');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "update_nonexistent_col_others_work" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+UPDATE t SET nonexistent_col='x' WHERE id=1;
+UPDATE t SET val='updated' WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad update');
+" "SELECT id, val FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 28: CREATE TABLE error recovery
+# ═══════════════════════════════════════════════════════════════════
+echo "--- create table error recovery ---"
+
+oracle "create_duplicate_table_original_intact" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+CREATE TABLE t(id INTEGER PRIMARY KEY, other TEXT);
+INSERT INTO t VALUES(2,'still_has_val_col');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after dup create');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "create_if_not_exists_idempotent" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+CREATE TABLE IF NOT EXISTS t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after idempotent create');
+" "SELECT id, val FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 29: Error during multi-branch work
+# ═══════════════════════════════════════════════════════════════════
+echo "--- error during multi-branch work ---"
+
+oracle "error_on_feat_branch_then_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+SELECT dolt_commit('-m','empty fail');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_commit('-m','forgot add');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "errors_on_multiple_branches" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','b1');
+INSERT INTO t VALUES(2,'b1');
+SELECT dolt_commit('-m','forgot add b1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b1 ok');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b2');
+INSERT INTO t VALUES(3,'b2');
+SELECT dolt_commit('-m','forgot add b2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b2 ok');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('b1');
+SELECT dolt_merge('b2');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "mixed_errors_then_successful_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_revert('bogus');
+SELECT dolt_reset('--hard','bogus');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat despite errors');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id, val FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 30: Long error sequences
+# ═══════════════════════════════════════════════════════════════════
+echo "--- long error sequences ---"
+
+oracle "ten_failed_commits_then_real" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_commit('-m','f1');
+SELECT dolt_commit('-m','f2');
+SELECT dolt_commit('-m','f3');
+SELECT dolt_commit('-m','f4');
+SELECT dolt_commit('-m','f5');
+SELECT dolt_commit('-m','f6');
+SELECT dolt_commit('-m','f7');
+SELECT dolt_commit('-m','f8');
+SELECT dolt_commit('-m','f9');
+SELECT dolt_commit('-m','f10');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','real');
+" "SELECT count(*) FROM dolt_log;"
+
+oracle "many_bad_checkouts_then_real_work" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('b1');
+SELECT dolt_checkout('b2');
+SELECT dolt_checkout('b3');
+SELECT dolt_checkout('b4');
+SELECT dolt_checkout('b5');
+SELECT dolt_checkout('b6');
+SELECT dolt_checkout('b7');
+INSERT INTO t VALUES(2,'still_main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','still on main');
+" "SELECT id, val FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 31: Errors + data type integrity
+# ═══════════════════════════════════════════════════════════════════
+echo "--- errors + data type integrity ---"
+
+oracle "text_values_preserved_through_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'with space'),(2,'with,comma'),(3,'with''quote');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_commit('-m','empty fail');
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_revert('bogus');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "unicode_preserved_through_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'héllo'),(2,'日本'),(3,'👋');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='FEAT' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='MAIN' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, v FROM t WHERE id>=2 ORDER BY id;"
+
+oracle "large_int_preserved_through_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, big INTEGER);
+INSERT INTO t VALUES(1, 2147483647),(2, -2147483648);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_commit('-m','empty fail');
+SELECT dolt_checkout('nonexistent');
+SELECT dolt_reset('--hard','bogus');
+" "SELECT id, big FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 32: Error in aggregate/join queries - doesn't corrupt VC
+# ═══════════════════════════════════════════════════════════════════
+echo "--- aggregate/join errors ---"
+
+oracle "count_on_nonexistent_then_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT count(*) FROM nonexistent_t;
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad agg');
+" "SELECT count(*) FROM t;"
+
+oracle "join_on_nonexistent_then_commit" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t1 VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT t1.v FROM t1 JOIN t2 ON t1.id=t2.id;
+INSERT INTO t1 VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad join');
+" "SELECT id, v FROM t1 ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 33: Error flows with UPDATE/DELETE
+# ═══════════════════════════════════════════════════════════════════
+echo "--- update/delete error flows ---"
+
+oracle "update_then_fail_commit_update_again" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'orig');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+UPDATE t SET val='first_update' WHERE id=1;
+SELECT dolt_commit('-m','forgot add');
+UPDATE t SET val='second_update' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','with add');
+" "SELECT id, val FROM t;"
+
+oracle "delete_fail_commit_delete_all" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DELETE FROM t WHERE id=1;
+SELECT dolt_commit('-m','forgot add');
+DELETE FROM t WHERE id>=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','delete all');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 34: Reset + error + reset
+# ═══════════════════════════════════════════════════════════════════
+echo "--- reset + error + reset ---"
+
+oracle "reset_after_error_after_reset" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+SELECT dolt_reset('--hard','HEAD~1');
+SELECT dolt_reset('--hard','bogus_ref');
+SELECT dolt_reset('--hard','HEAD~1');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "reset_soft_hard_error_mix" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+SELECT dolt_reset('--soft','HEAD~1');
+SELECT dolt_reset('--hard','bogus');
+SELECT dolt_reset('--hard','HEAD');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 35: Error during conflict state
+# ═══════════════════════════════════════════════════════════════════
+echo "--- errors during conflict state ---"
+
+oracle "failed_commit_during_conflict_unchanged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET val='F' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET val='M' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+SELECT dolt_commit('-m','invalid mid-conflict');
+SELECT dolt_reset('--hard','HEAD');
+INSERT INTO t VALUES(2,'after_cleanup');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','cleanup');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "bad_checkout_during_conflict" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET val='F' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET val='M' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+SELECT dolt_checkout('nonexistent');
+SELECT dolt_reset('--hard','HEAD');
+" "SELECT id, val FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 36: Errors preserve commit hash stability
+# ═══════════════════════════════════════════════════════════════════
+echo "--- errors + commit log stability ---"
+
+oracle "hash_of_last_commit_stable_through_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','only_commit');
+SELECT dolt_commit('-m','fail1');
+SELECT dolt_commit('-m','fail2');
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_revert('bogus');
+SELECT dolt_reset('--hard','bogus');
+" "SELECT count(*) FROM dolt_log;"
+
+oracle "message_list_unchanged_by_failed_commits" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','m1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','m2');
+SELECT dolt_commit('-m','fail_empty');
+SELECT dolt_commit('-m','fail_empty_2');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','m3');
+" "SELECT message FROM dolt_log WHERE message LIKE 'm%' ORDER BY message;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 37: Recovery from staged-modified mix
+# ═══════════════════════════════════════════════════════════════════
+echo "--- recovery from staged-modified mix ---"
+
+oracle "modify_after_add_error_no_reset" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2,'staged');
+SELECT dolt_add('-A');
+UPDATE t SET val='modified_after_add' WHERE id=2;
+SELECT dolt_commit('-m','empty fail should not happen');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','final');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "add_specific_fail_fallback_to_all" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t1 VALUES(1,'a');
+INSERT INTO t2 VALUES(1,'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t1 VALUES(2,'b');
+INSERT INTO t2 VALUES(2,'y');
+SELECT dolt_add('does_not_exist');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','both');
+" "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 38: Errors with mixed DDL/DML
+# ═══════════════════════════════════════════════════════════════════
+echo "--- mixed DDL/DML errors ---"
+
+oracle "ddl_error_then_dml_success" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','dml after ddl error');
+" "SELECT id, val FROM t ORDER BY id;"
+
+oracle "dml_error_then_ddl_success" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(1,'duplicate_pk');
+CREATE TABLE other(x INTEGER);
+INSERT INTO other VALUES(42);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after dml err');
+" "SELECT x FROM other;"
+
+oracle "alternating_ddl_dml_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DROP TABLE nonexistent;
+INSERT INTO t VALUES(1,'duplicate');
+CREATE TABLE t(x INTEGER);
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after alternating errors');
+" "SELECT id, val FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 39: Orphan SELECT errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- orphan SELECT errors ---"
+
+oracle "bad_select_before_any_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+SELECT * FROM nonexistent;
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad select');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "select_ambiguous_col_doesnt_block_commit" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t1 VALUES(1,'a');
+INSERT INTO t2 VALUES(1,'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT v FROM t1, t2;
+INSERT INTO t1 VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad select');
+" "SELECT id, v FROM t1 ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 40: Error right before commit
+# ═══════════════════════════════════════════════════════════════════
+echo "--- error right before commit ---"
+
+oracle "error_between_add_and_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT * FROM bogus;
+SELECT dolt_commit('-m','should still work');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "error_between_insert_and_add" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2,'b');
+SELECT count(*) FROM bogus;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','ok');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 41: Error on main after successful branch merge
+# ═══════════════════════════════════════════════════════════════════
+echo "--- error after successful merge ---"
+
+oracle "error_after_successful_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+SELECT dolt_commit('-m','empty after merge');
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_revert('bogus');
+INSERT INTO t VALUES(3,'after_err');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 42: Errors during reset flow
+# ═══════════════════════════════════════════════════════════════════
+echo "--- errors during reset flow ---"
+
+oracle "error_after_soft_reset_before_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+SELECT dolt_reset('--soft','HEAD~1');
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_commit('-m','recommit');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "error_after_hard_reset_then_work" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+SELECT dolt_reset('--hard','HEAD~1');
+SELECT dolt_commit('-m','empty fail');
+SELECT dolt_checkout('nonexistent');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after reset+errors');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 43: Errors with NULL values in WHERE
+# ═══════════════════════════════════════════════════════════════════
+echo "--- NULL-related error recovery ---"
+
+oracle "update_matching_null_no_rows_then_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,NULL),(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+UPDATE t SET v='matched_null' WHERE v=NULL;
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after null compare');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "insert_with_null_into_not_null_col" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT NOT NULL);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2,NULL);
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 44: Rapid branch switches with errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- rapid branch switches with errors ---"
+
+oracle "rapid_checkouts_mixed_good_bad" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('bogus1');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('bogus2');
+SELECT dolt_checkout('feat');
+SELECT dolt_checkout('bogus3');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 45: Error inside nested branch work
+# ═══════════════════════════════════════════════════════════════════
+echo "--- nested branch work errors ---"
+
+oracle "errors_on_each_branch_then_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','b1');
+SELECT dolt_cherry_pick('bogus');
+INSERT INTO t VALUES(2,'b1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b1');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b2');
+SELECT dolt_revert('bogus');
+INSERT INTO t VALUES(3,'b2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b2');
+SELECT dolt_checkout('main');
+SELECT dolt_reset('--hard','bogus');
+SELECT dolt_merge('b1');
+SELECT dolt_merge('b2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 46: Error does not affect dolt_branches table
+# ═══════════════════════════════════════════════════════════════════
+echo "--- dolt_branches stable through errors ---"
+
+oracle "branches_listed_through_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_branch('b1');
+SELECT dolt_branch('b2');
+SELECT dolt_branch('b3');
+SELECT dolt_branch('b1');
+SELECT dolt_checkout('bogus');
+SELECT dolt_reset('--hard','bogus');
+" "SELECT name FROM dolt_branches ORDER BY name;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 47: GROUP BY / HAVING errors + commit flow
+# ═══════════════════════════════════════════════════════════════════
+echo "--- GROUP BY/HAVING errors ---"
+
+oracle "bad_group_by_no_effect" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT v FROM t GROUP BY nonexistent_col;
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad group');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 48: Sequential reset errors don't break checkout
+# ═══════════════════════════════════════════════════════════════════
+echo "--- multiple bad resets ---"
+
+oracle "three_bad_resets_then_good" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+SELECT dolt_reset('--hard','bogus1');
+SELECT dolt_reset('--hard','bogus2');
+SELECT dolt_reset('--hard','bogus3');
+SELECT dolt_reset('--hard','HEAD~1');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "mixed_reset_variants_with_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+SELECT dolt_reset('--soft','bogus');
+SELECT dolt_reset('--hard','bogus');
+SELECT dolt_reset('bogus');
+SELECT dolt_reset('--hard','HEAD');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 49: Error during branch creation
+# ═══════════════════════════════════════════════════════════════════
+echo "--- branch creation errors ---"
+
+oracle "create_branch_bad_start_point" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_branch('feat','bogus_start');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad branch create');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "checkout_b_duplicate_no_effect" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3,'main_after');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main after dup');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 50: Many-error stress
+# ═══════════════════════════════════════════════════════════════════
+echo "--- many-error stress ---"
+
+oracle "twenty_mixed_errors_then_success" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_commit('-m','e1');
+SELECT dolt_cherry_pick('e2');
+SELECT dolt_revert('e3');
+SELECT dolt_reset('--hard','e4');
+SELECT dolt_checkout('e5');
+SELECT dolt_branch('-d','e6');
+DROP TABLE e7;
+ALTER TABLE e8 ADD COLUMN x INTEGER;
+SELECT * FROM e9;
+UPDATE e10 SET x=1;
+DELETE FROM e11;
+INSERT INTO t VALUES(1,'duplicate e12');
+CREATE TABLE t(x INTEGER);
+SELECT dolt_tag('e13','bogus');
+SELECT dolt_commit('-m','e14');
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_revert('bogus');
+SELECT dolt_checkout('bogus');
+SELECT dolt_reset('--hard','bogus');
+INSERT INTO t VALUES(2,'finally');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','survived');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "error_storm_commit_log_intact" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','good1');
+SELECT dolt_commit('-m','e');
+SELECT dolt_commit('-m','e');
+SELECT dolt_commit('-m','e');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','good2');
+SELECT dolt_commit('-m','e');
+SELECT dolt_commit('-m','e');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','good3');
+" "SELECT message FROM dolt_log WHERE message LIKE 'good%' ORDER BY message;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 51: Error + fresh CREATE after DROP
+# ═══════════════════════════════════════════════════════════════════
+echo "--- drop + error + recreate ---"
+
+oracle "drop_error_recreate_different_schema" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DROP TABLE t;
+SELECT dolt_commit('-m','empty fail');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, extra INTEGER);
+INSERT INTO t VALUES(1,'new',99);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','recreate schema');
+" "SELECT id, v, extra FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 52: Errors during merge-prep
+# ═══════════════════════════════════════════════════════════════════
+echo "--- errors during merge prep ---"
+
+oracle "error_before_noff_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_merge('feat','--no-ff','-m','merged');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "error_between_merges" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','b1');
+INSERT INTO t VALUES(2,'b1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b1');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b2');
+INSERT INTO t VALUES(3,'b2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('b1');
+SELECT dolt_merge('bogus');
+SELECT dolt_revert('bogus');
+SELECT dolt_merge('b2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 53: Errors after dolt_tag succeeds
+# ═══════════════════════════════════════════════════════════════════
+echo "--- errors after tag success ---"
+
+oracle "errors_after_tag_tag_still_listed" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_tag('v1','HEAD');
+SELECT dolt_commit('-m','empty fail');
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_tag('v2','HEAD');
+SELECT dolt_revert('bogus');
+" "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 54: Errors + sqlite-style constraints
+# ═══════════════════════════════════════════════════════════════════
+echo "--- errors + constraint variants ---"
+
+oracle "default_value_after_error" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER DEFAULT 42);
+INSERT INTO t VALUES(1,'a',1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_cherry_pick('bogus');
+INSERT INTO t(id,v) VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after error, default used');
+" "SELECT id, v, n FROM t ORDER BY id;"
+
+oracle "check_fail_others_succeed" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER CHECK(n >= 0));
+INSERT INTO t VALUES(1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2, -1);
+INSERT INTO t VALUES(3, 5);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after check fail');
+" "SELECT id, n FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
