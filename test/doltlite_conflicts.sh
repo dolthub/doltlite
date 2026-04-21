@@ -13,7 +13,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'or
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='main'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "UPDATE t SET v='feat'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "conflicts_table" \
   "BEGIN; SELECT dolt_merge('feature'); SELECT 'CT|' || \"table\" FROM dolt_conflicts; ROLLBACK;" \
@@ -41,7 +41,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'or
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "UPDATE t SET v='main2'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB2" > /dev/null 2>&1
-echo "UPDATE t SET v='feat2'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB2" > /dev/null 2>&1
+echo "UPDATE t SET v='feat2'; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB2/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 run_test_match "theirs_has_conflict" \
   "BEGIN; SELECT dolt_merge('feature'); SELECT 'TC|' || num_conflicts FROM dolt_conflicts; ROLLBACK;" \
@@ -56,7 +56,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "UPDATE t SET v='MAIN' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB3" > /dev/null 2>&1
-echo "UPDATE t SET v='FEAT' WHERE id=2; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+echo "UPDATE t SET v='FEAT' WHERE id=2; SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB3/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 run_test_match "no_conflict_merge" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB3"
 run_test "no_conflicts_table" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB3"
@@ -69,7 +69,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 echo "UPDATE t SET v='main1' WHERE id=1; UPDATE t SET v='main3' WHERE id=3; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB4" > /dev/null 2>&1
-echo "UPDATE t SET v='feat1' WHERE id=1; INSERT INTO t VALUES(4,'feat4'); SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB4" > /dev/null 2>&1
+echo "UPDATE t SET v='feat1' WHERE id=1; INSERT INTO t VALUES(4,'feat4'); SELECT dolt_commit('-A','-m','feat');" | $DOLTLITE "$DB4/feature" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 run_test_match "mixed_conflict" "SELECT dolt_merge('feature');" "conflict" "$DB4"
 run_test_match "mixed_conflict_count" \

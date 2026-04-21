@@ -32,7 +32,7 @@ INSERT INTO base VALUES(2,'y');
 SELECT dolt_commit('-A','-m','main work');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
-HASH=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB" 2>&1)
+HASH=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB/feat" 2>&1)
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "cp_newtbl_hash" "SELECT dolt_cherry_pick('$HASH');" "^[0-9a-f]{40}$" "$DB"
@@ -124,7 +124,7 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('big');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('big');" | $DOLTLITE "$DB" > /dev/null 2>&1
 SQL=""; for i in $(seq 2 100); do SQL="$SQL INSERT INTO t VALUES($i,'row_$i');"; done
-echo "$SQL SELECT dolt_commit('-A','-m','100 rows');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "$SQL SELECT dolt_commit('-A','-m','100 rows');" | $DOLTLITE "$DB/big" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_BEFORE=$(db_size "$DB")
@@ -531,13 +531,13 @@ SELECT dolt_commit('-A','-m','b adds row 20');" | $DOLTLITE "$DB" > /dev/null 2>
 
 # Cherry-pick a's commit onto b
 echo "SELECT dolt_checkout('a');" | $DOLTLITE "$DB" > /dev/null 2>&1
-A_HASH=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB" 2>&1)
+A_HASH=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB/a" 2>&1)
 echo "SELECT dolt_checkout('b');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "cp_branch_hash" "SELECT dolt_cherry_pick('$A_HASH');" "^[0-9a-f]{40}$" "$DB"
-run_test "cp_branch_count" "SELECT count(*) FROM t;" "3" "$DB"
-run_test "cp_branch_has10" "SELECT v FROM t WHERE id=10;" "from_a" "$DB"
-run_test "cp_branch_has20" "SELECT v FROM t WHERE id=20;" "from_b" "$DB"
+run_test_match "cp_branch_hash" "SELECT dolt_cherry_pick('$A_HASH');" "^[0-9a-f]{40}$" "$DB/b"
+run_test "cp_branch_count" "SELECT count(*) FROM t;" "3" "$DB/b"
+run_test "cp_branch_has10" "SELECT v FROM t WHERE id=10;" "from_a" "$DB/b"
+run_test "cp_branch_has20" "SELECT v FROM t WHERE id=20;" "from_b" "$DB/b"
 
 db_rm "$DB"
 

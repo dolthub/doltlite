@@ -93,7 +93,7 @@ run_test "diff_all_deletes_type" \
 DB3=/tmp/test_diff3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB3" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(3,'c'); UPDATE t SET val='A' WHERE id=1; SELECT dolt_commit('-A','-m','feat changes');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(3,'c'); UPDATE t SET val='A' WHERE id=1; SELECT dolt_commit('-A','-m','feat changes');" | $DOLTLITE "$DB3/feat" > /dev/null 2>&1
 
 run_test "diff_branch_names" \
   "SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('main', 'feat', 't');" \
@@ -108,10 +108,10 @@ run_test "diff_mixed_ref_types" \
   "1|1" "$DB3"
 
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB3" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(4,'d');" | $DOLTLITE "$DB3" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(4,'d');" | $DOLTLITE "$DB3/feat" > /dev/null 2>&1
 run_test "diff_branch_to_working" \
   "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
-  "1" "$DB3"
+  "1" "$DB3/feat"
 
 DB4=/tmp/test_diff4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','v1');" | $DOLTLITE "$DB4" > /dev/null 2>&1

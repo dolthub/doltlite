@@ -76,9 +76,9 @@ DELETE FROM employees_teams WHERE employee_id=0 AND team_id=1;
 SELECT dolt_commit('-A','-m','Modifications on a branch');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Verify modifications branch
-run_test "mod_branch" "SELECT active_branch();" "modifications" "$DB"
-run_test "mod_emp_count" "SELECT count(*) FROM employees;" "5" "$DB"
-run_test "mod_timothy" "SELECT first_name FROM employees WHERE id=0;" "Timothy" "$DB"
+run_test "mod_branch" "SELECT active_branch();" "modifications" "$DB/modifications"
+run_test "mod_emp_count" "SELECT count(*) FROM employees;" "5" "$DB/modifications"
+run_test "mod_timothy" "SELECT first_name FROM employees WHERE id=0;" "Timothy" "$DB/modifications"
 
 # ============================================================
 # Phase 4: Back to main — data unchanged

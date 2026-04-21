@@ -246,7 +246,7 @@ assert_greater "gc_preserves_shared" "$SIZE_AFTER_GC" "$THRESHOLD"
 # Both branches' data should survive
 MAIN_COUNT=$(echo "SELECT count(*) FROM t WHERE id=8888;" | $DOLTLITE "$DB" 2>&1)
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
-FEAT_COUNT=$(echo "SELECT count(*) FROM t WHERE id=9999;" | $DOLTLITE "$DB" 2>&1)
+FEAT_COUNT=$(echo "SELECT count(*) FROM t WHERE id=9999;" | $DOLTLITE "$DB/feat" 2>&1)
 if [ "$MAIN_COUNT" = "1" ] && [ "$FEAT_COUNT" = "1" ]; then
   PASS=$((PASS+1)); echo "  PASS: gc_both_branches_intact"
 else

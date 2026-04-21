@@ -43,14 +43,14 @@ run_test "e2e_tag_exists" "SELECT tag_name FROM dolt_tags;" "v0.1" "$DB"
 echo "SELECT dolt_branch('add-comments');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('add-comments');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test "e2e_on_feature" "SELECT active_branch();" "add-comments" "$DB"
+run_test "e2e_on_feature" "SELECT active_branch();" "add-comments" "$DB/add-comments"
 
 echo "CREATE TABLE comments(id INTEGER PRIMARY KEY, post_id INTEGER, body TEXT);
 INSERT INTO comments VALUES(1,1,'Great post Alice!');
 INSERT INTO comments VALUES(2,1,'Thanks!');
-SELECT dolt_commit('-A','-m','Add comments table');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','Add comments table');" | $DOLTLITE "$DB/add-comments" > /dev/null 2>&1
 
-run_test "e2e_feature_comments" "SELECT count(*) FROM comments;" "2" "$DB"
+run_test "e2e_feature_comments" "SELECT count(*) FROM comments;" "2" "$DB/add-comments"
 
 # Main branch shouldn't have comments
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -100,7 +100,7 @@ run_test_match "e2e_diff_users_v01_v02" \
 echo "SELECT dolt_branch('hotfix');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('hotfix');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE users SET name='ALICE' WHERE id=1;
-SELECT dolt_commit('-A','-m','Hotfix: capitalize Alice');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','Hotfix: capitalize Alice');" | $DOLTLITE "$DB/hotfix" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE users SET name='alice_updated' WHERE id=1;

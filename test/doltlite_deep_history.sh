@@ -107,7 +107,7 @@ echo "INSERT INTO t VALUES(1000,'main_extra'); SELECT dolt_commit('-A','-m','mai
 
 # Switch to branch, make a change there
 echo "SELECT dolt_checkout('deep_branch');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(2000,'branch_extra'); SELECT dolt_commit('-A','-m','branch_change');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2000,'branch_extra'); SELECT dolt_commit('-A','-m','branch_change');" | $DOLTLITE "$DB/deep_branch" > /dev/null 2>&1
 
 # Get branch heads
 MAIN_HEAD=$(echo "SELECT hash FROM dolt_branches WHERE name='main';" | $DOLTLITE "$DB" 2>/dev/null)
