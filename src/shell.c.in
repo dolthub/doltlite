@@ -4694,6 +4694,7 @@ static const char *findLastPathSep(const char *zPath){
   return zSlash;
 }
 
+#ifdef DOLTLITE_PROLLY
 static void parseDoltiteDbBranch(
   const char *zInput,
   char **pzFilename,
@@ -4814,6 +4815,7 @@ static int doltliteSelectConnectBranch(sqlite3 *db, const char *zBranch){
   sqlite3_finalize(pStmt);
   return rc;
 }
+#endif /* DOLTLITE_PROLLY */
 
 /*
 ** Make sure the database is open.  If it is not, then open it.  If
@@ -4852,10 +4854,12 @@ static void open_db(ShellState *p, int openFlags){
     }
 
     if( zDbFilename && zDbFilename[0]!=0 && zDbFilename[0]!=':' ){
+#ifdef DOLTLITE_PROLLY
       parseDoltiteDbBranch(zDbFilename, &zParsedFilename, &zParsedBranch);
       if( zParsedFilename ){
         zDbFilename = zParsedFilename;
       }
+#endif /* DOLTLITE_PROLLY */
     }
 
     if( p->openMode==SHELL_OPEN_UNSPEC ){
@@ -4911,6 +4915,7 @@ static void open_db(ShellState *p, int openFlags){
               zRequestedFilename ? zRequestedFilename : zDbFilename);
       }
     }
+#ifdef DOLTLITE_PROLLY
     rc = doltliteSelectConnectBranch(p->db, zParsedBranch ? zParsedBranch : "main");
     if( rc!=SQLITE_OK ){
       cli_printf(stderr, "Error: unable to select branch \"%s\": %s\n",
@@ -4921,6 +4926,7 @@ static void open_db(ShellState *p, int openFlags){
         cli_exit(1);
       }
     }
+#endif /* DOLTLITE_PROLLY */
     sqlite3_free(zParsedFilename);
     sqlite3_free(zParsedBranch);
     globalDb = p->db;
