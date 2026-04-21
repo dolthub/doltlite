@@ -8131,6 +8131,444 @@ SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
 # ═══════════════════════════════════════════════════════════════════
+# Section 215: Views + VC
+# ═══════════════════════════════════════════════════════════════════
+echo "--- views + VC ---"
+
+oracle "view_created_on_feat_queried_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10),(2,20),(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+CREATE VIEW vbig AS SELECT id, v FROM t WHERE v >= 20;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat view');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(4,40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main row');
+SELECT dolt_merge('feat');
+" "SELECT id, v FROM vbig ORDER BY id;"
+
+oracle "view_both_sides_same_definition" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+CREATE VIEW vpos AS SELECT id, v FROM t WHERE v > 0;
+INSERT INTO t VALUES(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat view + row');
+SELECT dolt_checkout('main');
+CREATE VIEW vpos AS SELECT id, v FROM t WHERE v > 0;
+INSERT INTO t VALUES(4,40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main view + row');
+SELECT dolt_merge('feat');
+" "SELECT count(*) FROM vpos;"
+
+oracle "view_on_multi_table_after_merge" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INTEGER);
+CREATE TABLE b(id INTEGER PRIMARY KEY, aid INTEGER, w INTEGER);
+INSERT INTO a VALUES(1,10),(2,20);
+INSERT INTO b VALUES(1,1,100),(2,2,200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+CREATE VIEW ab AS SELECT a.id AS aid, a.v AS av, b.w AS bw FROM a JOIN b ON a.id=b.aid;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat view');
+SELECT dolt_checkout('main');
+INSERT INTO a VALUES(3,30);
+INSERT INTO b VALUES(3,3,300);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main data');
+SELECT dolt_merge('feat');
+" "SELECT aid, av, bw FROM ab ORDER BY aid;"
+
+oracle "drop_view_convergent_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+CREATE VIEW vdoomed AS SELECT id, v FROM t;
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base with view');
+SELECT dolt_checkout('-b','feat');
+DROP VIEW vdoomed;
+INSERT INTO t VALUES(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat drops view');
+SELECT dolt_checkout('main');
+DROP VIEW vdoomed;
+INSERT INTO t VALUES(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main drops view');
+SELECT dolt_merge('feat');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "view_created_main_row_added_feat_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, grp TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a',5);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'a',15),(3,'b',25);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat rows');
+SELECT dolt_checkout('main');
+CREATE VIEW agg AS SELECT grp, count(*) AS c FROM t GROUP BY grp;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main view');
+SELECT dolt_merge('feat');
+" "SELECT grp, c FROM agg ORDER BY grp;"
+
+oracle "view_references_dropped_table_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE keep(id INTEGER PRIMARY KEY);
+CREATE VIEW vt AS SELECT id, v FROM t;
+INSERT INTO t VALUES(1,'a');
+INSERT INTO keep VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+DROP VIEW vt;
+DROP TABLE t;
+INSERT INTO keep VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat drops both');
+SELECT dolt_checkout('main');
+INSERT INTO keep VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main keeps');
+SELECT dolt_merge('feat');
+" "SELECT id FROM keep ORDER BY id;"
+
+oracle "view_with_aggregation_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, grp TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a',10),(2,'a',20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+CREATE VIEW totals AS SELECT grp, sum(n) AS s FROM t GROUP BY grp;
+INSERT INTO t VALUES(3,'b',5),(4,'a',30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5,'c',100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT grp, s FROM totals ORDER BY grp;"
+
+oracle "view_with_where_and_order_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, flag INTEGER, v TEXT);
+INSERT INTO t VALUES(1,1,'a'),(2,0,'b'),(3,1,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+CREATE VIEW active AS SELECT id, v FROM t WHERE flag=1 ORDER BY id DESC;
+INSERT INTO t VALUES(4,1,'d');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5,1,'e');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, v FROM active;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 216: Generated columns + VC
+# ═══════════════════════════════════════════════════════════════════
+echo "--- generated columns + merge ---"
+
+oracle "stored_generated_col_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, doubled INTEGER GENERATED ALWAYS AS (a*2) STORED);
+INSERT INTO t(id,a) VALUES(1,5);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t(id,a) VALUES(2,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t(id,a) VALUES(3,7);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, a, doubled FROM t ORDER BY id;"
+
+oracle "virtual_generated_col_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, sum INTEGER GENERATED ALWAYS AS (a+b) VIRTUAL);
+INSERT INTO t(id,a,b) VALUES(1,1,2),(2,3,4);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET a=10 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET b=20 WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, a, b, sum FROM t ORDER BY id;"
+
+oracle "generated_col_referencing_col_updated_other_side" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, base_val INTEGER, plus_ten INTEGER GENERATED ALWAYS AS (base_val+10) STORED);
+INSERT INTO t(id,base_val) VALUES(1,5);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t(id,base_val) VALUES(2,50);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat adds');
+SELECT dolt_checkout('main');
+UPDATE t SET base_val=100 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main updates');
+SELECT dolt_merge('feat');
+" "SELECT id, base_val, plus_ten FROM t ORDER BY id;"
+
+oracle "generated_string_col_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, first TEXT, last TEXT, full TEXT GENERATED ALWAYS AS (first) STORED);
+INSERT INTO t(id,first,last) VALUES(1,'Ada','L');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t(id,first,last) VALUES(2,'Grace','H');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t(id,first,last) VALUES(3,'Linus','T');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, first, last, full FROM t ORDER BY id;"
+
+oracle "generated_col_in_where_clause_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, squared INTEGER GENERATED ALWAYS AS (a*a) STORED);
+INSERT INTO t(id,a) VALUES(1,2),(2,3),(3,4);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t(id,a) VALUES(4,5),(5,6);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id FROM t WHERE squared > 10 ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 217: FK cascade actions + merge
+# ═══════════════════════════════════════════════════════════════════
+echo "--- FK cascade actions + merge ---"
+
+oracle "on_delete_cascade_parent_delete_one_side" "
+PRAGMA foreign_keys=1;
+CREATE TABLE parent(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, v TEXT, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE CASCADE);
+INSERT INTO parent VALUES(1,'p1'),(2,'p2');
+INSERT INTO child VALUES(1,1,'c1'),(2,2,'c2'),(3,2,'c2b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+DELETE FROM parent WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat cascades delete');
+SELECT dolt_checkout('main');
+UPDATE child SET v='main' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, pid, v FROM child ORDER BY id;"
+
+oracle "on_delete_set_null_one_side" "
+PRAGMA foreign_keys=1;
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, v TEXT, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE SET NULL);
+INSERT INTO parent VALUES(1),(2);
+INSERT INTO child VALUES(1,1,'c1'),(2,2,'c2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+DELETE FROM parent WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat set null');
+SELECT dolt_checkout('main');
+INSERT INTO parent VALUES(3);
+INSERT INTO child VALUES(3,3,'c3');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, pid, v FROM child ORDER BY id;"
+
+oracle "on_update_cascade_parent_id_change" "
+PRAGMA foreign_keys=1;
+CREATE TABLE parent(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, v TEXT, FOREIGN KEY(pid) REFERENCES parent(id) ON UPDATE CASCADE);
+INSERT INTO parent VALUES(1,'p1');
+INSERT INTO child VALUES(1,1,'c1'),(2,1,'c2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE parent SET id=99 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat update id');
+SELECT dolt_checkout('main');
+UPDATE child SET v='main' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, pid, v FROM child ORDER BY id;"
+
+oracle "cascade_delete_with_unaffected_siblings_merge" "
+PRAGMA foreign_keys=1;
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, v TEXT, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE CASCADE);
+INSERT INTO parent VALUES(1),(2),(3);
+INSERT INTO child VALUES(1,1,'c1'),(2,2,'c2'),(3,3,'c3');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+DELETE FROM parent WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat deletes p2');
+SELECT dolt_checkout('main');
+UPDATE child SET v='MAIN' WHERE id=3;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main updates c3');
+SELECT dolt_merge('feat');
+" "SELECT id, pid, v FROM child ORDER BY id;"
+
+oracle "cascade_delete_nested_child_layers" "
+PRAGMA foreign_keys=1;
+CREATE TABLE a(id INTEGER PRIMARY KEY);
+CREATE TABLE b(id INTEGER PRIMARY KEY, aid INTEGER, FOREIGN KEY(aid) REFERENCES a(id) ON DELETE CASCADE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, bid INTEGER, v TEXT, FOREIGN KEY(bid) REFERENCES b(id) ON DELETE CASCADE);
+INSERT INTO a VALUES(1),(2);
+INSERT INTO b VALUES(1,1),(2,1),(3,2);
+INSERT INTO c VALUES(1,1,'c1'),(2,2,'c2'),(3,3,'c3');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+DELETE FROM a WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat cascades through');
+SELECT dolt_checkout('main');
+UPDATE c SET v='MAIN' WHERE id=3;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, bid, v FROM c ORDER BY id;"
+
+oracle "cherry_pick_cascade_delete" "
+PRAGMA foreign_keys=1;
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE CASCADE);
+INSERT INTO parent VALUES(1),(2);
+INSERT INTO child VALUES(1,1),(2,2),(3,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+DELETE FROM parent WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat cascade');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('feat');
+" "SELECT count(*) FROM child;"
+
+oracle "set_null_then_update_merge" "
+PRAGMA foreign_keys=1;
+CREATE TABLE parent(id INTEGER PRIMARY KEY);
+CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER, v TEXT, FOREIGN KEY(pid) REFERENCES parent(id) ON DELETE SET NULL);
+INSERT INTO parent VALUES(1),(2);
+INSERT INTO child VALUES(1,1,'c1'),(2,2,'c2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+DELETE FROM parent WHERE id=1;
+UPDATE child SET v='post_null' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE child SET v='main_keep' WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, pid, v FROM child ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 218: Conflict resolution in explicit transaction
+# ═══════════════════════════════════════════════════════════════════
+echo "--- conflict resolution in txn probes ---"
+
+oracle "resolve_conflict_via_update_their_in_txn" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='feat' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+BEGIN;
+SELECT dolt_merge('feat');
+UPDATE t SET v='resolved' WHERE id=1;
+DELETE FROM dolt_conflicts_t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','resolved');
+COMMIT;
+" "SELECT id, v FROM t;"
+
+oracle "resolve_conflict_commit_conflicts_flag" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='feat' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SET @@dolt_allow_commit_conflicts=1;
+SELECT dolt_merge('feat');
+SELECT dolt_reset('--hard','HEAD');
+INSERT INTO t VALUES(2,'post');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','clean post');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "txn_merge_rollback_leaves_clean_state" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='f' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='m' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+BEGIN;
+SELECT dolt_merge('feat');
+ROLLBACK;
+INSERT INTO t VALUES(2,'post_rollback');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','post');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
