@@ -98,6 +98,38 @@ oracle_error() {
   fi
 }
 
+oracle_savepoint_remote_poststate() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_sp"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc dt_rc dl_v dl_remotes dt_v dt_remotes
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+  dl_v=$(printf ".headers off\n.mode list\nSELECT v FROM t WHERE id=1;\n" \
+         | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
+  dl_remotes=$(printf ".headers off\n.mode list\nSELECT coalesce(group_concat(name, ','), '') FROM dolt_remotes;\n" \
+               | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+  dt_v=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT v FROM t WHERE id=1;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
+  dt_remotes=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "SELECT coalesce(group_concat(name, ','), '') FROM dolt_remotes;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
+
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_v" = "$dt_v" ] && [ "$dl_remotes" = "$dt_remotes" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc/v/remotes:"; { echo "$dl_rc"; echo "$dl_v"; echo "$dl_remotes"; } | sed 's/^/      /'
+    echo "    dolt rc/v/remotes:"; { echo "$dt_rc"; echo "$dt_v"; echo "$dt_remotes"; } | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_remotes ==="
 echo ""
 
@@ -161,6 +193,19 @@ SELECT dolt_remote('remove', 'nonexistent');
 
 oracle_error "unknown_action" "
 SELECT dolt_remote('whatever', 'origin', 'file:///tmp/oracle_origin');
+"
+
+echo "--- savepoint parity ---"
+
+oracle_savepoint_remote_poststate "remote_add_inside_savepoint_releases_savepoint" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SAVEPOINT sp1;
+UPDATE t SET v='dirty' WHERE id=1;
+SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');
+ROLLBACK TO sp1;
 "
 
 echo ""

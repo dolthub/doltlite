@@ -249,6 +249,18 @@ run_test_match "tag_savepoint_tag_persists" \
   "SELECT group_concat(tag_name, ',') FROM dolt_tags;" \
   "^v1$" "$DB6f"
 
+DB6g=/tmp/test_savepoint6g_$$.db; rm -f "$DB6g"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g" > /dev/null 2>&1
+run_test_match "remote_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_remote('add','origin','file:///tmp/savepoint-remote'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g"
+run_test_match "remote_savepoint_row_persists" \
+  "SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6g"
+run_test_match "remote_savepoint_remote_persists" \
+  "SELECT group_concat(name, ',') FROM dolt_remotes;" \
+  "^origin$" "$DB6g"
+
 # ============================================================
 # Test 7: dolt_merge inside a BEGIN/COMMIT block
 # Expected: dolt_merge operates at the dolt storage layer. It should
