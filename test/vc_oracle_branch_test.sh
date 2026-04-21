@@ -57,7 +57,7 @@ oracle() {
   (
     cd "$dir/dt" || exit 1
     vc_oracle_init_repo
-    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
+    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat(name, char(9), hash, char(9), dirty) FROM dolt_branches ORDER BY name;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
 
@@ -90,7 +90,7 @@ oracle_error() {
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   local dt_rc
-  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
   dt_rc=$?
 
   if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then

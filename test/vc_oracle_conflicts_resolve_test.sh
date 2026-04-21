@@ -59,7 +59,7 @@ oracle() {
       printf 'SET @@autocommit = 0;\n'
       printf 'SET @@dolt_allow_commit_conflicts = 1;\n'
       printf '%s\n' "$dolt_all"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^R|' | tr -d '\r' | sort)
 
@@ -86,7 +86,7 @@ oracle_error() {
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   local dt_rc
-  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" \
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" \
     "SET @@autocommit = 0;
 SET @@dolt_allow_commit_conflicts = 1;
 $dolt_setup"

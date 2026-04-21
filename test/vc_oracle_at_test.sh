@@ -72,7 +72,7 @@ oracle() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$dt_q"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err" | tr -d '"' | normalize
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize
   )
 
   if [ -z "$dl_out" ] && [ -z "$dt_out" ]; then
@@ -111,7 +111,7 @@ oracle_error() {
   local dt_rc
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   dt_sql=$(printf "%s\nSELECT * FROM t AS OF '%s';\n" "$dolt_setup" "$ref")
-  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dt_sql"
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dt_sql"
   dt_rc=$?
 
   if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then

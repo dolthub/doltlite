@@ -91,7 +91,7 @@ oracle() {
       echo "SELECT concat('B', char(9), active_branch());"
       echo "SELECT concat('R', char(9), id, char(9), v) FROM t ORDER BY id;"
       echo "SELECT concat('S', char(9), table_name, char(9), staged, char(9), status) FROM dolt_status;"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   ) > "$dir/dt.raw"
   dt_branch=$(tr -d '"' < "$dir/dt.raw" | normalize_branch)
   dt_rows=$(tr -d '"' < "$dir/dt.raw" | normalize_rows)
@@ -128,7 +128,7 @@ oracle_error() {
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   local dt_rc
-  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
   dt_rc=$?
 
   if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then

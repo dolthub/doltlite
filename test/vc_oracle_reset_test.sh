@@ -85,7 +85,7 @@ oracle() {
   (
     cd "$dir/dt" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
+    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat('L', char(9), commit_hash, char(9), message) FROM dolt_log ORDER BY commit_order DESC;" 2>>"$dir/dt.err"
   ) > "$dir/dt.log.raw"
   dt_log=$(tail -n +2 "$dir/dt.log.raw" | tr -d '"' | normalize_log)
@@ -93,7 +93,7 @@ oracle() {
   (
     cd "$dir/dt.s" 2>/dev/null || mkdir -p "$dir/dt.s" && cd "$dir/dt.s" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.s.err"
+    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.s.err"
     "$DOLT" sql -r csv -q "SELECT concat('S', char(9), table_name, char(9), staged, char(9), status) FROM dolt_status;" 2>>"$dir/dt.s.err"
   ) > "$dir/dt.status.raw"
   dt_status=$(tail -n +2 "$dir/dt.status.raw" | tr -d '"' | normalize_status)
@@ -127,7 +127,7 @@ oracle_error() {
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   local dt_rc
-  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
   dt_rc=$?
 
   if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then

@@ -124,7 +124,7 @@ oracle() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$dt_table_q"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_diff_table
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_diff_table
   )
 
   # Empty-on-both-sides safeguard.
@@ -189,7 +189,7 @@ oracle_summary() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$q_dolt"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
   )
 
   if [ -z "$dl_out" ] && [ -z "$dt_out" ]; then
@@ -241,7 +241,7 @@ oracle_summary_filter_name() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$q_dolt"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
   )
 
   if [ "$dl_out" = "$dt_out" ]; then

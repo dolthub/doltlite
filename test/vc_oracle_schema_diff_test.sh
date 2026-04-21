@@ -80,7 +80,7 @@ oracle() {
     {
       echo "$dolt_setup"
       echo "$q"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^ROW|' | sort)
 
@@ -111,7 +111,7 @@ oracle_error() {
   local dt_sql
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   dt_sql=$(printf "%s\n%s\n" "$dolt_setup" "$q")
-  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dt_sql"
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dt_sql"
   dt_rc=$?
 
   if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
@@ -147,7 +147,7 @@ oracle_query() {
     {
       echo "$dolt_setup"
       echo "$q"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^ROW|' | sort)
 

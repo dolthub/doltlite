@@ -79,7 +79,7 @@ oracle_stat() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$q_dolt"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_stat
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_stat
   )
 
   if [ "$dl_out" = "$dt_out" ]; then
@@ -120,7 +120,7 @@ oracle_summary() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$q_dolt"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
   )
 
   if [ "$dl_out" = "$dt_out" ]; then

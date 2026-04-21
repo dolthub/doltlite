@@ -42,7 +42,7 @@ oracle() {
     {
       printf '%s\n' "$dolt_setup"
       printf 'SELECT active_branch();\n'
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   )
   dt_out=$(echo "$dt_out" | tail -1 | tr -d '"\r')
 

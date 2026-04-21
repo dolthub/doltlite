@@ -112,7 +112,7 @@ oracle() {
   (
     cd "$dir/dt" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.err"
+    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat('L', char(9), commit_hash, char(9), message) FROM dolt_log ORDER BY commit_order DESC;" 2>>"$dir/dt.err"
   ) > "$dir/dt.log.raw"
   dt_log=$(tail -n +2 "$dir/dt.log.raw" | tr -d '"' | normalize_log)
@@ -120,7 +120,7 @@ oracle() {
   (
     mkdir -p "$dir/dt.s" && cd "$dir/dt.s" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.s.err"
+    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.s.err"
     "$DOLT" sql -r csv -q "SELECT concat('S', char(9), table_name, char(9), staged, char(9), status) FROM dolt_status;" 2>>"$dir/dt.s.err"
   ) > "$dir/dt.status.raw"
   dt_status=$(tail -n +2 "$dir/dt.status.raw" | tr -d '"' | normalize_status)
@@ -138,7 +138,7 @@ oracle() {
   (
     mkdir -p "$dir/dt.t" && cd "$dir/dt.t" || exit 1
     "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
-    echo "$dolt_setup" | "$DOLT" sql >/dev/null 2>"$dir/dt.t.err"
+    echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.t.err"
     "$DOLT" sql -r csv -q "$dolt_table_query;" 2>>"$dir/dt.t.err"
   ) > "$dir/dt.table.raw"
   dt_table=$(tail -n +2 "$dir/dt.table.raw" | tr -d '"' | normalize_table)

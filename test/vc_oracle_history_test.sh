@@ -106,7 +106,7 @@ oracle() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$dt_q"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_history
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_history
   )
 
   # Empty-on-both-sides safeguard.

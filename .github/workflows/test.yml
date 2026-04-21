@@ -21,8 +21,7 @@ jobs:
 
     - name: Install Dolt
       run: |
-        DOLT_VERSION=1.86.0
-        curl -fsSL "https://github.com/dolthub/dolt/releases/download/v${DOLT_VERSION}/dolt-linux-amd64.tar.gz" \
+        curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/dolt-linux-amd64.tar.gz \
           | sudo tar -xz -C /usr/local --strip-components=1
         dolt version
 
@@ -69,113 +68,7 @@ jobs:
       run: cd build && bash ../test/sql_oracle_test.sh ./doltlite sqlite3
       timeout-minutes: 5
 
-    - name: Version control oracle tests (dolt_log)
-      run: cd build && bash ../test/vc_oracle_log_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_status)
-      run: cd build && bash ../test/vc_oracle_status_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_add)
-      run: cd build && bash ../test/vc_oracle_add_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_branches)
-      run: cd build && bash ../test/vc_oracle_branches_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_tags)
-      run: cd build && bash ../test/vc_oracle_tags_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_remotes)
-      run: cd build && bash ../test/vc_oracle_remotes_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_branch)
-      run: cd build && bash ../test/vc_oracle_branch_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_checkout)
-      run: cd build && bash ../test/vc_oracle_checkout_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_merge)
-      run: cd build && bash ../test/vc_oracle_merge_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_merge_base)
-      run: cd build && bash ../test/vc_oracle_merge_base_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_conflicts)
-      run: cd build && bash ../test/vc_oracle_conflicts_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_conflicts_resolve)
-      run: cd build && bash ../test/vc_oracle_conflicts_resolve_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_conflicts_<table>)
-      run: cd build && bash ../test/vc_oracle_conflicts_table_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_constraint_violations)
-      run: cd build && bash ../test/vc_oracle_fk_merge_test.sh ./doltlite
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (active_branch)
-      run: cd build && bash ../test/vc_oracle_active_branch_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_reset)
-      run: cd build && bash ../test/vc_oracle_reset_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_revert / dolt_cherry_pick)
-      run: cd build && bash ../test/vc_oracle_revert_cherrypick_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_commit)
-      run: cd build && bash ../test/vc_oracle_commit_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (state transitions)
-      run: cd build && bash ../test/vc_oracle_state_transitions_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_diff_<table>)
-      run: cd build && bash ../test/vc_oracle_diff_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_schema_diff)
-      run: cd build && bash ../test/vc_oracle_schema_diff_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_schemas)
-      run: cd build && bash ../test/vc_oracle_schemas_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_diff_stat / dolt_diff_summary)
-      run: cd build && bash ../test/vc_oracle_diff_stat_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_history_<table>)
-      run: cd build && bash ../test/vc_oracle_history_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_at_<table>)
-      run: cd build && bash ../test/vc_oracle_at_test.sh ./doltlite dolt
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_hashof suite)
-      run: cd build && bash ../test/vc_oracle_hashof_test.sh ./doltlite
-      timeout-minutes: 5
-
-    - name: Version control oracle tests (dolt_version)
-      run: cd build && bash ../test/vc_oracle_version_test.sh ./doltlite dolt
-      timeout-minutes: 5
+    # Version control oracle tests run in the parallel oracle-tests job
 
     - name: Oracle tests (.import dot-command)
       run: cd build && bash ../test/oracle_import_test.sh ./doltlite dolt
@@ -407,3 +300,36 @@ jobs:
         cd build-crash
         bash ../test/crash_injection_test.sh ./doltlite-crashtest
       timeout-minutes: 15
+
+  oracle-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential zlib1g-dev
+
+    - name: Install Dolt
+      run: |
+        curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/dolt-linux-amd64.tar.gz \
+          | sudo tar -xz -C /usr/local --strip-components=1
+        dolt version
+
+    - name: Configure and Build
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make doltlite
+
+    - name: Version control oracle tests
+      run: |
+        cd build
+        for f in ../test/vc_oracle_*_test.sh; do
+          echo "--- $(basename $f) ---"
+          bash "$f" ./doltlite dolt || exit 1
+        done
+      timeout-minutes: 20

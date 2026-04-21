@@ -68,7 +68,7 @@ oracle() {
     {
       printf '%s\n' "$dolt_setup"
       printf '%s;\n' "$dt_q"
-    } | "$DOLT" sql -r csv 2>"$dir/dt.err"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
   ) > "$dir/dt.raw"
 
   local dt_out
