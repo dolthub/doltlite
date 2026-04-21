@@ -131,6 +131,7 @@ static void remoteSqlRestoreAndReport(
     sqlite3_result_error_code(ctx, restoreRc);
     return;
   }
+  (void)doltliteVcSealSavepointError(db);
   remoteSqlResultError(ctx, opRc, zMsg);
 }
 
@@ -679,24 +680,28 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   RemoteSqlState savedState;
   int rc;
 
-  if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
+  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
   if( argc<1 ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "usage: dolt_clone(url)", -1);
     return;
   }
 
   zUrl = (const char*)sqlite3_value_text(argv[0]);
   if( !zUrl ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "url required", -1);
     return;
   }
   if( argc>1 ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "too many arguments", -1);
     return;
   }
   memset(&savedState, 0, sizeof(savedState));
 
   if( doltliteHasUncommittedChanges(db) ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx,
       "database has uncommitted changes — clone into a fresh database", -1);
     return;
@@ -714,6 +719,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       doltliteCommitClear(&c);
     }
     if( !virgin ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "database is not empty — clone into a fresh database", -1);
       return;
     }
@@ -721,6 +727,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
 
   rc = remoteSqlStateSave(db, cs, &savedState);
   if( rc!=SQLITE_OK ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error_code(ctx, rc);
     return;
   }

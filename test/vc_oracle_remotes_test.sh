@@ -130,6 +130,36 @@ oracle_savepoint_remote_poststate() {
   fi
 }
 
+oracle_savepoint_clone_poststate() {
+  local name="$1" setup="$2" query="$3"
+  local dir="$TMPROOT/${name}_clone_sp"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc dt_rc dl_post dt_post
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+  dl_post=$(printf ".headers off\n.mode list\n%s\n" "$query" \
+            | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+            | tr -d '\r')
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+  dt_post=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "$query" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"\r')
+
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_post" = "$dt_post" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc/post:"; { echo "$dl_rc"; echo "$dl_post"; } | sed 's/^/      /'
+    echo "    dolt rc/post:"; { echo "$dt_rc"; echo "$dt_post"; } | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_remotes ==="
 echo ""
 
@@ -247,6 +277,12 @@ SAVEPOINT sp1;
 SELECT dolt_pull('missing', 'main');
 ROLLBACK TO sp1;
 "
+
+oracle_savepoint_clone_poststate "clone_bad_url_inside_savepoint_invalidates" "
+SAVEPOINT sp1;
+SELECT dolt_clone('bogus://remote');
+ROLLBACK TO sp1;
+" "SELECT active_branch();"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
