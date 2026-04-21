@@ -2745,6 +2745,153 @@ SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
 # ═══════════════════════════════════════════════════════════════════
+# Section 85: RENAME errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- rename error probes ---"
+
+oracle "rename_col_that_does_not_exist_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE t RENAME COLUMN nonexistent TO val;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad rename');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "rename_table_that_does_not_exist" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE nonexistent RENAME TO something;
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad rename table');
+" "SELECT id FROM t ORDER BY id;"
+
+oracle "rename_table_to_existing_name" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY);
+CREATE TABLE t2(id INTEGER PRIMARY KEY);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE t1 RENAME TO t2;
+INSERT INTO t1 VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad rename');
+" "SELECT id FROM t1 ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 86: Errors on empty / fresh database
+# ═══════════════════════════════════════════════════════════════════
+echo "--- empty db error probes ---"
+
+oracle "merge_on_empty_repo" "
+SELECT dolt_merge('bogus');
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+" "SELECT count(*) FROM t;"
+
+oracle "tag_on_empty_repo_then_commit" "
+SELECT dolt_tag('premature','HEAD');
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_tag('now','HEAD');
+" "SELECT count(*) FROM dolt_tags;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 87: Errors during sequential merges
+# ═══════════════════════════════════════════════════════════════════
+echo "--- sequential merge error probes ---"
+
+oracle "bad_then_good_then_bad_then_good_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','b1');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b1');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b2');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('bogus1');
+SELECT dolt_merge('b1');
+SELECT dolt_merge('bogus2');
+SELECT dolt_merge('b2');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 88: Errors with DROP INDEX / DROP COLUMN
+# ═══════════════════════════════════════════════════════════════════
+echo "--- drop index/col error probes ---"
+
+oracle "drop_column_nonexistent_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE t DROP COLUMN nonexistent;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad drop col');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "drop_index_nonexistent_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DROP INDEX IF EXISTS nonexistent_idx;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after drop idx');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 89: Errors after partial cherry-pick attempts
+# ═══════════════════════════════════════════════════════════════════
+echo "--- partial cherry-pick errors ---"
+
+oracle "cherry_pick_bad_then_good_chain" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('bogus1');
+SELECT dolt_cherry_pick('feat');
+SELECT dolt_cherry_pick('bogus2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "revert_bad_then_good_chain" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+SELECT dolt_revert('bogus1');
+SELECT dolt_revert('HEAD');
+SELECT dolt_revert('bogus2');
+" "SELECT id, v FROM t ORDER BY id;"
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
