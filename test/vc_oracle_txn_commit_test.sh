@@ -54,8 +54,9 @@ DL_A=$(dl_query "$DB" "SELECT count(*) FROM t;")
 
 if [ -n "$DOLT" ]; then
   DOLT_A_DIR="$TMPROOT/dolt_a"
-  mkdir -p "$DOLT_A_DIR" && cd "$DOLT_A_DIR" && "$DOLT" init >/dev/null 2>&1
-  cat > "$TMPROOT/a.sql" <<'SQL'
+  mkdir -p "$DOLT_A_DIR"
+  (cd "$DOLT_A_DIR" && "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1)
+  DOLT_A=$(cd "$DOLT_A_DIR" && "$DOLT" sql -c -r csv <<'SQL' 2>/dev/null | grep '^[0-9][0-9]*$' | tail -1
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 BEGIN;
@@ -64,8 +65,7 @@ CALL dolt_commit('-A','-m','c1');
 ROLLBACK;
 SELECT count(*) AS c FROM t;
 SQL
-  DOLT_A=$(cd "$DOLT_A_DIR" && "$DOLT" sql -c -r csv < "$TMPROOT/a.sql" 2>/dev/null | grep '^[0-9][0-9]*$' | tail -1)
-  cd - >/dev/null
+)
 
   if [ "$DL_A" = "$DOLT_A" ]; then
     pass_name "begin_commit_rollback_matches_dolt"
@@ -101,8 +101,9 @@ DL_B=$(dl_query "$DB" "SELECT count(*) FROM t;")
 
 if [ -n "$DOLT" ]; then
   DOLT_B_DIR="$TMPROOT/dolt_b"
-  mkdir -p "$DOLT_B_DIR" && cd "$DOLT_B_DIR" && "$DOLT" init >/dev/null 2>&1
-  cat > "$TMPROOT/b.sql" <<'SQL'
+  mkdir -p "$DOLT_B_DIR"
+  (cd "$DOLT_B_DIR" && "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1)
+  DOLT_B=$(cd "$DOLT_B_DIR" && "$DOLT" sql -c -r csv <<'SQL' 2>/dev/null | grep '^[0-9][0-9]*$' | tail -1
 CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
 SAVEPOINT sp1;
@@ -111,8 +112,7 @@ CALL dolt_commit('-A','-m','c1');
 ROLLBACK TO sp1;
 SELECT count(*) AS c FROM t;
 SQL
-  DOLT_B=$(cd "$DOLT_B_DIR" && "$DOLT" sql -c -r csv < "$TMPROOT/b.sql" 2>/dev/null | grep '^[0-9][0-9]*$' | tail -1)
-  cd - >/dev/null
+)
 
   if [ "$DL_B" = "$DOLT_B" ]; then
     pass_name "savepoint_commit_rollback_to_matches_dolt"

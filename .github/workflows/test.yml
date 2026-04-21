@@ -434,8 +434,6 @@ jobs:
     - name: Version control oracle tests
       run: |
         cd build
-        echo "--- vc_oracle_txn_commit_test.sh ---"
-        bash ../test/vc_oracle_txn_commit_test.sh ./doltlite dolt || exit 1
         for f in ../test/vc_oracle_*_test.sh; do
           echo "--- $(basename $f) ---"
           bash "$f" ./doltlite dolt || exit 1
