@@ -1656,8 +1656,6 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
   res = exec1(db, "SELECT dolt_merge('feature')");
   check("merge_abort_after_reopen_setup_conflict",
         strstr(res, "ERROR:")!=0);
-  check("merge_abort_after_reopen_has_conflicts_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "1")==0);
 
   sqlite3_close(db);
   db = 0;

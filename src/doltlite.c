@@ -491,7 +491,9 @@ static int doltliteRollbackAutocommitConflict(
   sqlite3_context *ctx,
   DoltliteTxnState *pSaved
 ){
-  int rc = doltliteRestoreTxnState(db, pSaved);
+  int rc;
+  sqlite3RollbackAll(db, SQLITE_OK);
+  rc = doltliteRestoreTxnState(db, pSaved);
   doltliteTxnStateClear(pSaved);
   if( rc==SQLITE_OK ){
     doltliteReportAutocommitConflictRollback(ctx);
