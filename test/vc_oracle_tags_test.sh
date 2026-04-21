@@ -215,6 +215,16 @@ SELECT dolt_tag('v1');
 ROLLBACK TO sp1;
 "
 
+oracle_savepoint_tag_poststate "tag_delete_missing_inside_savepoint_invalidates" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SAVEPOINT sp1;
+SELECT dolt_tag('-d', 'missing');
+ROLLBACK TO sp1;
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
