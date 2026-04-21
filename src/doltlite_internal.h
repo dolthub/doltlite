@@ -9,6 +9,13 @@
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
 
+typedef enum DoltliteVcTxnMode DoltliteVcTxnMode;
+enum DoltliteVcTxnMode {
+  DOLTLITE_VC_TXN_PLAIN = 0,
+  DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE = 1,
+  DOLTLITE_VC_TXN_NESTED_SAVEPOINT = 2
+};
+
 /* iTable is the rowid-alias of the table in sqlite_master and
 ** survives renames (used by dolt_status to detect renames as same
 ** iTable + different name). pPending is the in-memory ProllyMutMap
@@ -154,6 +161,9 @@ int doltliteGetSessionTableRoot(sqlite3 *db, Pgno iTable,
 int doltliteSaveWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSet(sqlite3 *db);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
+DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db);
+int doltliteVcSealActiveSavepoints(sqlite3 *db);
+int doltliteVcSealBranchStyleTxn(sqlite3 *db);
 
 typedef int (*DoltliteRefsMutation)(sqlite3 *db, ChunkStore *cs, void *pArg);
 int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg);

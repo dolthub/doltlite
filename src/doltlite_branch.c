@@ -43,25 +43,6 @@ static void branchResultError(
   }
 }
 
-static int branchRestartTxnIfNeeded(sqlite3 *db){
-  int rc;
-  if( db->autoCommit ) return SQLITE_OK;
-  if( db->pSavepoint ){
-    while( db->pSavepoint ){
-      char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"", db->pSavepoint->zName);
-      if( !zSql ) return SQLITE_NOMEM;
-      rc = sqlite3_exec(db, zSql, 0, 0, 0);
-      sqlite3_free(zSql);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-    return SQLITE_OK;
-  }
-  rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
-  return rc;
-}
-
 static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMutationCtx *p = (BranchMutationCtx*)pArg;
   int rc;
@@ -352,7 +333,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   }
 
   if( hadExplicitTxn ){
-    rc = branchRestartTxnIfNeeded(db);
+    rc = doltliteVcSealBranchStyleTxn(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
       return;
@@ -739,7 +720,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       return;
     }
     if( hadExplicitTxn ){
-      rc = branchRestartTxnIfNeeded(db);
+      rc = doltliteVcSealBranchStyleTxn(db);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(ctx, rc);
         return;
@@ -821,7 +802,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     return;
   }
   if( hadExplicitTxn ){
-    rc = branchRestartTxnIfNeeded(db);
+    rc = doltliteVcSealBranchStyleTxn(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
       return;

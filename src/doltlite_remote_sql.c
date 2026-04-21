@@ -117,17 +117,6 @@ static void remoteSqlResultError(
   }
 }
 
-static int remoteSqlReleaseSavepoints(sqlite3 *db){
-  int rc = SQLITE_OK;
-  while( rc==SQLITE_OK && db->pSavepoint ){
-    char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"", db->pSavepoint->zName);
-    if( !zSql ) return SQLITE_NOMEM;
-    rc = sqlite3_exec(db, zSql, 0, 0, 0);
-    sqlite3_free(zSql);
-  }
-  return rc;
-}
-
 static void remoteSqlRestoreAndReport(
   sqlite3_context *ctx,
   sqlite3 *db,
@@ -280,7 +269,7 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     return;
   }
 
-  rc = remoteSqlReleaseSavepoints(db);
+  rc = doltliteVcSealActiveSavepoints(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(ctx, rc);
     return;

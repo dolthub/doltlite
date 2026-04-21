@@ -479,15 +479,17 @@ static int doltliteSavepointIsTopLevelTxn(sqlite3 *db){
   return db->pSavepoint!=0 && db->isTransactionSavepoint && db->nSavepoint==0;
 }
 
-static int doltliteMergeActsAutocommitLike(sqlite3 *db){
-  return db->autoCommit || doltliteSavepointIsTopLevelTxn(db);
+DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db){
+  if( db->autoCommit || doltliteSavepointIsTopLevelTxn(db) ){
+    return DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE;
+  }
+  if( db->pSavepoint ){
+    return DOLTLITE_VC_TXN_NESTED_SAVEPOINT;
+  }
+  return DOLTLITE_VC_TXN_PLAIN;
 }
 
-static int doltliteHasNestedSavepoint(sqlite3 *db){
-  return db->pSavepoint!=0 && !doltliteSavepointIsTopLevelTxn(db);
-}
-
-static int doltliteReleaseActiveSavepoints(sqlite3 *db){
+int doltliteVcSealActiveSavepoints(sqlite3 *db){
   int rc = SQLITE_OK;
   while( rc==SQLITE_OK && db->pSavepoint ){
     char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"", db->pSavepoint->zName);
@@ -496,6 +498,17 @@ static int doltliteReleaseActiveSavepoints(sqlite3 *db){
     sqlite3_free(zSql);
   }
   return rc;
+}
+
+int doltliteVcSealBranchStyleTxn(sqlite3 *db){
+  int rc;
+  if( db->autoCommit ) return SQLITE_OK;
+  if( db->pSavepoint ){
+    return doltliteVcSealActiveSavepoints(db);
+  }
+  rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  return sqlite3_exec(db, "BEGIN", 0, 0, 0);
 }
 
 static void doltliteReportAutocommitConflictRollback(sqlite3_context *ctx){
@@ -1611,7 +1624,7 @@ static int mergeAbortInPlace(sqlite3 *db){
   }
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) return rc;
-  return doltliteReleaseActiveSavepoints(db);
+  return doltliteVcSealActiveSavepoints(db);
 }
 
 static int mergeFastForward(
@@ -1672,7 +1685,7 @@ static int mergeFastForward(
         doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
     return rc;
   }
-  rc = doltliteReleaseActiveSavepoints(db);
+  rc = doltliteVcSealActiveSavepoints(db);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&theirCommit);
     sqlite3_result_error_code(context, rc);
@@ -2362,7 +2375,8 @@ static void doltliteMergeFunc(
     }
     sqlite3_free(zDetectErrMsg);
     if( nViolations + nUnique + nCheck > 0 ){
-      if( doltliteMergeActsAutocommitLike(db) ){
+      switch( doltliteVcTxnMode(db) ){
+      case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
         rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
         if( rc==SQLITE_OK ){
           doltliteSetSessionBranch(db, savedState.zSessionBranch);
@@ -2383,7 +2397,8 @@ static void doltliteMergeFunc(
             "Committing this transaction resulted in a working set with "
             "constraint violations, transaction rolled back.", -1);
         }
-      }else if( doltliteHasNestedSavepoint(db) ){
+        break;
+      case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
         rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
         if( rc!=SQLITE_OK ){
           sqlite3_result_error_code(context, rc);
@@ -2393,7 +2408,8 @@ static void doltliteMergeFunc(
             "dolt_constraint_violations and then commit with dolt_commit.",
             -1);
         }
-      }else{
+        break;
+      case DOLTLITE_VC_TXN_PLAIN:
         rc = doltliteReportConstraintViolations(db, context, "Merge");
         if( rc!=SQLITE_OK ){
           sqlite3_result_error_code(context,
@@ -2401,6 +2417,7 @@ static void doltliteMergeFunc(
           return;
         }
         doltliteTxnStateClear(&savedState);
+        break;
       }
       return;
     }
@@ -2411,14 +2428,14 @@ static void doltliteMergeFunc(
       chunkStoreUnlock(cs);
       graphLocked = 0;
     }
-    if( doltliteMergeActsAutocommitLike(db) ){
+    switch( doltliteVcTxnMode(db) ){
+    case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
       rc = doltliteRollbackAutocommitConflict(db, context, &savedState);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
       }
       return;
-    }
-    if( doltliteHasNestedSavepoint(db) ){
+    case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
       rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
@@ -2430,14 +2447,16 @@ static void doltliteMergeFunc(
         sqlite3_result_error(context, msg, -1);
       }
       return;
+    case DOLTLITE_VC_TXN_PLAIN:
+      rc = doltliteReportConflicts(db, context, nMergeConflicts, "Merge");
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(context,
+            doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+        return;
+      }
+      doltliteTxnStateClear(&savedState);
+      break;
     }
-    rc = doltliteReportConflicts(db, context, nMergeConflicts, "Merge");
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context,
-          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
-      return;
-    }
-    doltliteTxnStateClear(&savedState);
   }else{
     ProllyHash commitHash;
     char hexBuf[PROLLY_HASH_SIZE*2+1];
@@ -2468,7 +2487,7 @@ static void doltliteMergeFunc(
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
       return;
     }
-    rc = doltliteReleaseActiveSavepoints(db);
+    rc = doltliteVcSealActiveSavepoints(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       return;
@@ -2604,7 +2623,8 @@ static int applyMergedCatalogAndCommit(
     sqlite3_free(zDetectErrMsg);
 
     if( nViolations + nUnique + nCheck > 0 ){
-      if( db->autoCommit ){
+      switch( doltliteVcTxnMode(db) ){
+      case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
         rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
         if( rc==SQLITE_OK ){
           doltliteSetSessionBranch(db, savedState.zSessionBranch);
@@ -2626,23 +2646,24 @@ static int applyMergedCatalogAndCommit(
         sqlite3_result_error(context,
           "Committing this transaction resulted in a working set with "
           "constraint violations, transaction rolled back.", -1);
-      }else{
+        break;
+      case DOLTLITE_VC_TXN_PLAIN:
         rc = doltliteReportConstraintViolations(db, context,
                                  sqlite3_strnicmp(zMessage, "Revert", 6)==0
                                    ? "Revert" : "Cherry-pick");
         if( rc!=SQLITE_OK ) goto apply_rollback;
-        while( rc==SQLITE_OK && db->pSavepoint ){
-          char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"",
-                                       db->pSavepoint->zName);
-          if( !zSql ){
-            rc = SQLITE_NOMEM;
-            break;
-          }
-          rc = sqlite3_exec(db, zSql, 0, 0, 0);
-          sqlite3_free(zSql);
-        }
+        rc = doltliteVcSealActiveSavepoints(db);
         if( rc!=SQLITE_OK ) goto apply_rollback;
         doltliteTxnStateClear(&savedState);
+        break;
+      case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
+        rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
+        if( rc!=SQLITE_OK ) return rc;
+        sqlite3_result_error(context,
+          "Merge resulted in constraint violations. Resolve the rows in "
+          "dolt_constraint_violations and then commit with dolt_commit.",
+          -1);
+        break;
       }
       return SQLITE_OK;
     }
@@ -2653,28 +2674,33 @@ static int applyMergedCatalogAndCommit(
       chunkStoreUnlock(cs);
       graphLocked = 0;
     }
-    if( db->autoCommit ){
+    switch( doltliteVcTxnMode(db) ){
+    case DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE:
       rc = doltliteRollbackAutocommitConflict(db, context, &savedState);
       if( rc!=SQLITE_OK ) return rc;
       return SQLITE_OK;
-    }
-    rc = doltliteReportConflicts(db, context, *pnConflicts,
-                                 sqlite3_strnicmp(zMessage, "Revert", 6)==0
-                                   ? "Revert" : "Cherry-pick");
-    if( rc!=SQLITE_OK ) goto apply_rollback;
-    while( rc==SQLITE_OK && db->pSavepoint ){
-      char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"",
-                                   db->pSavepoint->zName);
-      if( !zSql ){
-        rc = SQLITE_NOMEM;
-        break;
+    case DOLTLITE_VC_TXN_PLAIN:
+      rc = doltliteReportConflicts(db, context, *pnConflicts,
+                                   sqlite3_strnicmp(zMessage, "Revert", 6)==0
+                                     ? "Revert" : "Cherry-pick");
+      if( rc!=SQLITE_OK ) goto apply_rollback;
+      rc = doltliteVcSealActiveSavepoints(db);
+      if( rc!=SQLITE_OK ) goto apply_rollback;
+      doltliteTxnStateClear(&savedState);
+      return SQLITE_OK;
+    case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
+      rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
+      if( rc!=SQLITE_OK ) return rc;
+      {
+        char msg[256];
+        sqlite3_snprintf(sizeof(msg), msg,
+          "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
+          sqlite3_strnicmp(zMessage, "Revert", 6)==0 ? "Revert" : "Cherry-pick",
+          *pnConflicts);
+        sqlite3_result_error(context, msg, -1);
       }
-      rc = sqlite3_exec(db, zSql, 0, 0, 0);
-      sqlite3_free(zSql);
+      return SQLITE_OK;
     }
-    if( rc!=SQLITE_OK ) goto apply_rollback;
-    doltliteTxnStateClear(&savedState);
-    return SQLITE_OK;
   }
 
   rc = doltliteCreateAndStoreCommit(db, ourHead, &mergedCatHash,
@@ -2684,16 +2710,7 @@ static int applyMergedCatalogAndCommit(
   rc = doltliteAdvanceBranch(db, &commitHash, &mergedCatHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
-  while( rc==SQLITE_OK && db->pSavepoint ){
-    char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"",
-                                 db->pSavepoint->zName);
-    if( !zSql ){
-      rc = SQLITE_NOMEM;
-      break;
-    }
-    rc = sqlite3_exec(db, zSql, 0, 0, 0);
-    sqlite3_free(zSql);
-  }
+  rc = doltliteVcSealActiveSavepoints(db);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   if( graphLocked ){
