@@ -202,6 +202,46 @@ oracle_error_poststate() {
   fi
 }
 
+oracle_same_session() {
+  local name="$1" setup="$2" dl_query="$3" dolt_query="${4:-$3}"
+  local dir="$TMPROOT/${name}_ss"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out
+  dl_out=$(
+    {
+      printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s\n" "$setup" "$dl_query"
+    } | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+      | tr -d '\r' \
+      | awk -F'\t' '$1=="Q"{print}'
+  )
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      printf "%s\n" "$dolt_setup"
+      printf "%s\n" "$dolt_query"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" \
+      | tail -n +2 \
+      | tr -d '"\r' \
+      | awk -F'\t' '$1=="Q"{print}'
+  )
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite: |$dl_out|"
+    echo "    dolt:     |$dt_out|"
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_merge ==="
 echo ""
 
@@ -404,6 +444,70 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
+
+echo "--- savepoint parity ---"
+
+oracle_same_session "merge_savepoint_success_invalidated" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+SAVEPOINT sp1;
+SELECT dolt_merge('feature');
+ROLLBACK TO sp1;
+" "SELECT 'Q' || char(9) || count(*) FROM t;
+SELECT 'Q' || char(9) || count(*) FROM dolt_log;" \
+"SELECT concat('Q', char(9), count(*)) FROM t;
+SELECT concat('Q', char(9), count(*)) FROM dolt_log;"
+
+oracle_same_session "merge_abort_savepoint_invalidated" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 'feat' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main');
+BEGIN;
+SELECT dolt_merge('feature');
+SAVEPOINT sp1;
+SELECT dolt_merge('--abort');
+ROLLBACK TO sp1;
+" "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts);
+SELECT 'Q' || char(9) || (SELECT v FROM t WHERE id = 1);" \
+"SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts));
+SELECT concat('Q', char(9), (SELECT v FROM t WHERE id = 1));"
+
+oracle_same_session "merge_conflict_nested_savepoint_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 'feat' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main');
+BEGIN;
+SAVEPOINT sp1;
+SELECT dolt_merge('feature');
+ROLLBACK TO sp1;
+" "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts);
+SELECT 'Q' || char(9) || (SELECT v FROM t WHERE id = 1);" \
+"SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts));
+SELECT concat('Q', char(9), (SELECT v FROM t WHERE id = 1));"
 
 echo "--- already up to date ---"
 

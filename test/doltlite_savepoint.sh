@@ -340,6 +340,37 @@ run_test "merge_in_txn_log" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "feature work" "$DB7"
 
+DB7b=/tmp/test_savepoint7b_$$.db; rm -f "$DB7b"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB7b" > /dev/null 2>&1
+run_test_match "merge_savepoint_success_rollback_to_errors" \
+  "SAVEPOINT sp1; SELECT dolt_merge('feat'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB7b"
+run_test "merge_savepoint_success_rows_persist" \
+  "SELECT count(*) FROM t;" \
+  "2" "$DB7b"
+run_test "merge_savepoint_success_log_persists" \
+  "SELECT count(*) FROM dolt_log;" \
+  "3" "$DB7b"
+
+DB7c=/tmp/test_savepoint7c_$$.db; rm -f "$DB7c"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET v='feat' WHERE id=1; SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); UPDATE t SET v='main' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB7c" > /dev/null 2>&1
+run_test_match "merge_abort_savepoint_rollback_to_errors" \
+  "BEGIN; SELECT dolt_merge('feat'); SAVEPOINT sp1; SELECT dolt_merge('--abort'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB7c"
+run_test "merge_abort_savepoint_clears_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" \
+  "0" "$DB7c"
+run_test "merge_abort_savepoint_restores_rows" \
+  "SELECT v FROM t WHERE id=1;" \
+  "main" "$DB7c"
+
+DB7d=/tmp/test_savepoint7d_$$.db; rm -f "$DB7d"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET v='feat' WHERE id=1; SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); UPDATE t SET v='main' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB7d" > /dev/null 2>&1
+run_test_match "merge_conflict_nested_savepoint_allows_rollback" \
+  "BEGIN; SAVEPOINT sp1; SELECT dolt_merge('feat'); ROLLBACK TO sp1; SELECT count(*) FROM dolt_conflicts; SELECT v FROM t WHERE id=1;" \
+  "0
+main$" "$DB7d"
+
 # ============================================================
 # Test 8: ROLLBACK after dolt_branch — does the branch creation persist?
 # Expected: dolt_branch creates a branch at the storage layer.
