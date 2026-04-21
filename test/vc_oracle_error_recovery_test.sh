@@ -2566,6 +2566,185 @@ SELECT dolt_commit('-m','after batch');
 " "SELECT id, n FROM t ORDER BY id;"
 
 # ═══════════════════════════════════════════════════════════════════
+# Section 78: SAVEPOINT error flows
+# ═══════════════════════════════════════════════════════════════════
+echo "--- SAVEPOINT error flow probes ---"
+
+oracle "rollback_to_nonexistent_savepoint" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+BEGIN;
+INSERT INTO t VALUES(2);
+ROLLBACK TO sp_missing;
+INSERT INTO t VALUES(3);
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad sp');
+" "SELECT count(*) FROM t;"
+
+oracle "release_nonexistent_savepoint" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+BEGIN;
+INSERT INTO t VALUES(2);
+RELEASE sp_missing;
+INSERT INTO t VALUES(3);
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad release');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 79: Error inside REPLACE
+# ═══════════════════════════════════════════════════════════════════
+echo "--- REPLACE error flow probes ---"
+
+oracle "replace_with_check_violation_others_survive" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER CHECK(n >= 0));
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+REPLACE INTO t VALUES(1,-5);
+REPLACE INTO t VALUES(2,20);
+REPLACE INTO t VALUES(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after replace err');
+" "SELECT id, n FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 80: Errors during txn with mixed dolt ops
+# ═══════════════════════════════════════════════════════════════════
+echo "--- txn + mixed error probes ---"
+
+oracle "txn_with_bogus_cherry_pick_then_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+BEGIN;
+INSERT INTO t VALUES(2);
+SELECT dolt_cherry_pick('bogus');
+INSERT INTO t VALUES(3);
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after mixed');
+" "SELECT count(*) FROM t;"
+
+oracle "txn_bogus_merge_then_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+BEGIN;
+INSERT INTO t VALUES(2);
+SELECT dolt_merge('bogus');
+ROLLBACK;
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','post');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 81: Errors with JSON columns
+# ═══════════════════════════════════════════════════════════════════
+echo "--- JSON error probes ---"
+
+oracle "json_extract_bad_path_then_ok_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, j JSON);
+INSERT INTO t VALUES(1,'{\"a\":1}');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT json_extract(j,'not_a_path') FROM t;
+INSERT INTO t VALUES(2,'{\"a\":2}');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after bad json');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 82: Repeat DROP of already-dropped table
+# ═══════════════════════════════════════════════════════════════════
+echo "--- repeat drop probes ---"
+
+oracle "drop_same_table_twice" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE TABLE other(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+INSERT INTO other VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DROP TABLE t;
+DROP TABLE t;
+INSERT INTO other VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after double drop');
+" "SELECT id FROM other ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 83: Long sequence of mixed errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- long mixed error sequence probes ---"
+
+oracle "fifteen_errors_then_one_success" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_cherry_pick('e1');
+SELECT dolt_revert('e2');
+SELECT dolt_reset('--hard','e3');
+SELECT dolt_checkout('e4');
+SELECT dolt_branch('-d','e5');
+DROP TABLE e6;
+ALTER TABLE e7 ADD COLUMN x INTEGER;
+SELECT * FROM e8;
+UPDATE e9 SET x=1;
+DELETE FROM e10;
+INSERT INTO t VALUES(1,'dup');
+CREATE TABLE t(x);
+SELECT dolt_tag('e11','bogus');
+SELECT dolt_commit('-m','e12');
+SELECT dolt_merge('e13');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','success');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 84: Error during checkout of detached / invalid refs
+# ═══════════════════════════════════════════════════════════════════
+echo "--- bad checkout target probes ---"
+
+oracle "checkout_hash_prefix_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('abc');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM t;"
+
+oracle "bad_checkout_then_merge_good" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('not_a_branch');
+SELECT dolt_merge('feat');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
