@@ -277,6 +277,24 @@ run_test_match "remote_savepoint_remote_persists" \
   "SELECT group_concat(name, ',') FROM dolt_remotes;" \
   "^origin$" "$DB6g"
 
+DB6g2=/tmp/test_savepoint6g2_$$.db; rm -f "$DB6g2"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g2" > /dev/null 2>&1
+run_test_match "branch_delete_current_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; SELECT dolt_branch('-d','main'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g2"
+run_test_match "branch_delete_current_savepoint_branch_stays_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6g2"
+
+DB6g3=/tmp/test_savepoint6g3_$$.db; rm -f "$DB6g3"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g3" > /dev/null 2>&1
+run_test_match "branch_delete_missing_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; SELECT dolt_branch('-d','nope'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g3"
+run_test_match "branch_delete_missing_savepoint_branch_stays_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6g3"
+
 DB6h=/tmp/test_savepoint6h_$$.db; rm -f "$DB6h"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='other'; SELECT dolt_commit('-A','-m','other'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6h" > /dev/null 2>&1
 run_test_match "checkout_savepoint_rollback_to_errors" \
@@ -413,7 +431,8 @@ run_test_match "branch_name_after_rollback" \
 # ============================================================
 # Cleanup
 # ============================================================
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8"
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" \
+  "$DB6g2" "$DB6g3"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
