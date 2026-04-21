@@ -106,19 +106,25 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE users SET name='alice_updated' WHERE id=1;
 SELECT dolt_commit('-A','-m','Main: update Alice name');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Merge hotfix — should conflict on users row 1
+# Merge hotfix — conflict state is available in-session
 run_test_match "e2e_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
 
-# Verify conflict state
-run_test "e2e_has_conflicts" "SELECT num_conflicts FROM dolt_conflicts WHERE \"table\"='users';" "1" "$DB"
+run_test_match "e2e_has_conflicts" \
+  "SELECT dolt_merge('hotfix'); SELECT 'EC|' || num_conflicts FROM dolt_conflicts WHERE \"table\"='users';" \
+  "^EC\\|1$" "$DB"
 
-# Commit should be blocked
-run_test_match "e2e_commit_blocked" "SELECT dolt_commit('-A','-m','fail');" "unresolved" "$DB"
+# Commit should be blocked in-session
+run_test_match "e2e_commit_blocked" \
+  "SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
+  "unresolved" "$DB"
 
-# Resolve with --ours
-echo "SELECT dolt_conflicts_resolve('--ours','users');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "e2e_conflicts_cleared" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-run_test "e2e_ours_kept" "SELECT name FROM users WHERE id=1;" "alice_updated" "$DB"
+# Resolve with --ours in-session
+run_test_match "e2e_conflicts_cleared" \
+  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'ER|' || count(*) FROM dolt_conflicts;" \
+  "^ER\\|0$" "$DB"
+run_test_match "e2e_ours_kept" \
+  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'EU|' || name FROM users WHERE id=1;" \
+  "^EU\\|alice_updated$" "$DB"
 
 # ============================================================
 # Phase 7: Reset

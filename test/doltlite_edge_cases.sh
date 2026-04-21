@@ -510,25 +510,27 @@ echo "UPDATE users SET name='alice_v2' WHERE id=1;
 UPDATE orders SET item='hat_v2' WHERE id=1;
 SELECT dolt_commit('-A','-m','main: v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Merge should conflict on both tables
+# Merge should conflict on both tables in-session
 run_test_match "multi_conflict_merge" "SELECT dolt_merge('hotfix');" "conflict" "$DB"
-run_test_match "multi_conflict_count" "SELECT count(*) FROM dolt_conflicts;" "^[1-2]$" "$DB"
+run_test_match "multi_conflict_count" \
+  "SELECT dolt_merge('hotfix'); SELECT 'MC|' || count(*) FROM dolt_conflicts;" \
+  "^MC\\|2$" "$DB"
 
-# Commit should be blocked
-run_test_match "multi_conflict_blocked" "SELECT dolt_commit('-A','-m','fail');" "unresolved" "$DB"
+# Commit should be blocked in-session
+run_test_match "multi_conflict_blocked" \
+  "SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
+  "unresolved" "$DB"
 
-# Resolve users with ours
-echo "SELECT dolt_conflicts_resolve('--ours','users');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "multi_conflict_users_ours" "SELECT name FROM users WHERE id=1;" "alice_v2" "$DB"
-
-# Resolve orders with ours too (theirs resolution keeps ours data when --ours)
-echo "SELECT dolt_conflicts_resolve('--ours','orders');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-# All conflicts resolved
-run_test "multi_conflict_resolved" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-
-# Verify ours values kept
-run_test "multi_conflict_orders_ours" "SELECT item FROM orders WHERE id=1;" "hat_v2" "$DB"
+# Resolve users and orders with ours in the same session
+run_test_match "multi_conflict_users_ours" \
+  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'U|' || name FROM users WHERE id=1;" \
+  "^U\\|alice_v2$" "$DB"
+run_test_match "multi_conflict_resolved" \
+  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'R|' || count(*) FROM dolt_conflicts;" \
+  "^R\\|0$" "$DB"
+run_test_match "multi_conflict_orders_ours" \
+  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'O|' || item FROM orders WHERE id=1;" \
+  "^O\\|hat_v2$" "$DB"
 
 rm -f "$DB"
 
@@ -551,16 +553,25 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='main_val' WHERE id=1;
 SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Merge and get conflict
+# Merge and get conflict in-session
 run_test_match "ours_conflict_merge" "SELECT dolt_merge('hf');" "conflict" "$DB"
-run_test "ours_conflict_exists" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB"
+run_test_match "ours_conflict_exists" \
+  "SELECT dolt_merge('hf'); SELECT 'OC|' || count(*) FROM dolt_conflicts;" \
+  "^OC\\|1$" "$DB"
 
-# Resolve with ours
-echo "SELECT dolt_conflicts_resolve('--ours','t');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "ours_conflicts_cleared" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-run_test "ours_value_kept" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
-run_test "ours_other_row_ok" "SELECT v FROM t WHERE id=2;" "keep" "$DB"
-run_test "ours_branch_ok" "SELECT active_branch();" "main" "$DB"
+# Resolve with ours in-session
+run_test_match "ours_conflicts_cleared" \
+  "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OCC|' || count(*) FROM dolt_conflicts;" \
+  "^OCC\\|0$" "$DB"
+run_test_match "ours_value_kept" \
+  "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OV|' || v FROM t WHERE id=1;" \
+  "^OV\\|main_val$" "$DB"
+run_test_match "ours_other_row_ok" \
+  "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OR|' || v FROM t WHERE id=2;" \
+  "^OR\\|keep$" "$DB"
+run_test_match "ours_branch_ok" \
+  "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OB|' || active_branch();" \
+  "^OB\\|main$" "$DB"
 
 rm -f "$DB"
 

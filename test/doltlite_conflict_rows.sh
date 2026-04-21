@@ -1,8 +1,8 @@
 #!/bin/bash
 #
 # Tests for per-row conflict resolution via dolt_conflicts_<tablename>.
-# Uses DELETE FROM dolt_conflicts_<table> WHERE base_id=N to resolve
-# individual conflict rows.
+# Autocommit conflict state is session-local, so all conflict-row checks
+# happen in a single SQL invocation.
 #
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
@@ -12,8 +12,7 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 echo "=== Doltlite Per-Row Conflict Resolution Tests ==="
 echo ""
 
-# Helper: create a merge conflict on row 1 of table t
-setup_conflict() {
+setup_row_conflict_repo() {
   local DB="$1"
   rm -f "$DB"
   echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -26,295 +25,29 @@ UPDATE t SET v='hf_val' WHERE id=1;
 SELECT dolt_commit('-A','-m','hf');
 SELECT dolt_checkout('main');
 UPDATE t SET v='main_val' WHERE id=1;
-SELECT dolt_commit('-A','-m','main');
-SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 }
 
-# ============================================================
-# View individual conflict rows
-# ============================================================
-
-DB=/tmp/test_cfrow_view_$$.db
-setup_conflict "$DB"
-
-run_test "view_count" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "view_base_id" "SELECT base_id FROM dolt_conflicts_t;" "1" "$DB"
-run_test "view_our_id" "SELECT our_id FROM dolt_conflicts_t;" "1" "$DB"
-run_test "view_their_id" "SELECT their_id FROM dolt_conflicts_t;" "1" "$DB"
-# User columns are projected individually now (Dolt-compatible schema).
-# The v column is declared TEXT so typeof(base_v) is "text".
-run_test_match "view_base_val" "SELECT typeof(base_v) FROM dolt_conflicts_t;" "text|null" "$DB"
-run_test_match "view_their_val" "SELECT typeof(their_v) FROM dolt_conflicts_t;" "text" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# DELETE resolves individual conflict (keeps ours)
-# ============================================================
-
-DB=/tmp/test_cfrow_del_$$.db
-setup_conflict "$DB"
-
-echo "DELETE FROM dolt_conflicts_t WHERE base_id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-# After deleting all conflicts, the conflict table module is removed
-run_test "del_summary_cleared" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-run_test "del_ours_kept" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
-run_test "del_other_ok" "SELECT v FROM t WHERE id=2;" "keep" "$DB"
-# Merge commit was already created; no new commit needed after resolving
-run_test "del_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# --ours resolution clears per-table (not all)
-# ============================================================
-
-DB=/tmp/test_cfrow_ours_$$.db
-setup_conflict "$DB"
-
-echo "SELECT dolt_conflicts_resolve('--ours','t');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-run_test "ours_cleared" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-run_test "ours_val" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# Conflict table not present when no conflicts
-# ============================================================
-
-DB=/tmp/test_cfrow_noconf_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
-INSERT INTO t VALUES(1,'a');
-SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-run_test "noconf_table" "SELECT count(*) FROM dolt_conflicts_t;" "0" "$DB"
-run_test "noconf_summary" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# Conflict table persists across reopen
-# ============================================================
-
-DB=/tmp/test_cfrow_persist_$$.db
-setup_conflict "$DB"
-
-# Reopen — conflicts visible
-run_test "persist_summary" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB"
-run_test "persist_rows" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "persist_rowid" "SELECT base_id FROM dolt_conflicts_t;" "1" "$DB"
-
-# Delete via new session
-echo "DELETE FROM dolt_conflicts_t WHERE base_id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-# Verify cleared after another reopen
-run_test "persist_after_del" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# DELETE with no matching row is a no-op
-# ============================================================
-
-DB=/tmp/test_cfrow_noop_$$.db
-setup_conflict "$DB"
-
-echo "DELETE FROM dolt_conflicts_t WHERE base_id=999;" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-run_test "noop_still_there" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "noop_rowid" "SELECT base_id FROM dolt_conflicts_t;" "1" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# Cherry-pick conflict with per-row resolution
-# ============================================================
-
-DB=/tmp/test_cfrow_cp_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+setup_delete_conflict_repo() {
+  local DB="$1"
+  rm -f "$DB"
+  echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE trig_log(note TEXT);
 INSERT INTO t VALUES(1,'orig');
 SELECT dolt_commit('-A','-m','init');
-SELECT dolt_branch('feat');
-SELECT dolt_checkout('feat');
-UPDATE t SET v='feat_val' WHERE id=1;
-SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_branch('hf');
+SELECT dolt_checkout('hf');
+DELETE FROM t WHERE id=1;
+SELECT dolt_commit('-A','-m','hf delete');
 SELECT dolt_checkout('main');
 UPDATE t SET v='main_val' WHERE id=1;
-SELECT dolt_commit('-A','-m','main');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','main update');" | $DOLTLITE "$DB" > /dev/null 2>&1
+}
 
-run_test "cp_has_conflict" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-
-echo "DELETE FROM dolt_conflicts_t WHERE base_id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "cp_resolved" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-run_test "cp_val" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# Conflict on non-trivial rowid
-# ============================================================
-
-DB=/tmp/test_cfrow_bigid_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
-INSERT INTO t VALUES(1000,'orig');
-SELECT dolt_commit('-A','-m','init');
-SELECT dolt_branch('hf');
-SELECT dolt_checkout('hf');
-UPDATE t SET v='hf_val' WHERE id=1000;
-SELECT dolt_commit('-A','-m','hf');
-SELECT dolt_checkout('main');
-UPDATE t SET v='main_val' WHERE id=1000;
-SELECT dolt_commit('-A','-m','main');
-SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-run_test "bigid_rowid" "SELECT base_id FROM dolt_conflicts_t;" "1000" "$DB"
-
-echo "DELETE FROM dolt_conflicts_t WHERE base_id=1000;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "bigid_cleared" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-run_test "bigid_val" "SELECT v FROM t WHERE id=1000;" "main_val" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# DELETE resolves targeted TEXT PK conflict row
-# ============================================================
-
-DB=/tmp/test_cfrow_textpk_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(id VARCHAR(32) PRIMARY KEY, v TEXT);
-INSERT INTO t VALUES('alice','orig');
-INSERT INTO t VALUES('bob','keep');
-SELECT dolt_commit('-A','-m','init');
-SELECT dolt_branch('hf');
-SELECT dolt_checkout('hf');
-UPDATE t SET v='hf_alice' WHERE id='alice';
-UPDATE t SET v='hf_bob' WHERE id='bob';
-SELECT dolt_commit('-A','-m','hf');
-SELECT dolt_checkout('main');
-UPDATE t SET v='main_alice' WHERE id='alice';
-UPDATE t SET v='main_bob' WHERE id='bob';
-SELECT dolt_commit('-A','-m','main');
-SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-run_test "textpk_conflict_rows" "SELECT count(*) FROM dolt_conflicts_t;" "2" "$DB"
-echo "DELETE FROM dolt_conflicts_t WHERE our_id='alice';" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "textpk_one_conflict_left" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "textpk_remaining_conflict" "SELECT our_id FROM dolt_conflicts_t;" "bob" "$DB"
-run_test "textpk_deleted_row_kept_ours" "SELECT v FROM t WHERE id='alice';" "main_alice" "$DB"
-run_test "textpk_remaining_row_still_conflicted" "SELECT v FROM t WHERE id='bob';" "main_bob" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# DELETE ALL resolves all TEXT PK conflict rows
-# ============================================================
-
-DB=/tmp/test_cfrow_textpk_all_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(id VARCHAR(32) PRIMARY KEY, v TEXT);
-INSERT INTO t VALUES('alice','orig');
-INSERT INTO t VALUES('bob','keep');
-SELECT dolt_commit('-A','-m','init');
-SELECT dolt_branch('hf');
-SELECT dolt_checkout('hf');
-UPDATE t SET v='hf_alice' WHERE id='alice';
-UPDATE t SET v='hf_bob' WHERE id='bob';
-SELECT dolt_commit('-A','-m','hf');
-SELECT dolt_checkout('main');
-UPDATE t SET v='main_alice' WHERE id='alice';
-UPDATE t SET v='main_bob' WHERE id='bob';
-SELECT dolt_commit('-A','-m','main');
-SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-echo "DELETE FROM dolt_conflicts_t;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "textpk_all_conflicts_cleared" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-run_test "textpk_all_kept_ours_alice" "SELECT v FROM t WHERE id='alice';" "main_alice" "$DB"
-run_test "textpk_all_kept_ours_bob" "SELECT v FROM t WHERE id='bob';" "main_bob" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# DELETE resolves targeted composite PK conflict row
-# ============================================================
-
-DB=/tmp/test_cfrow_compoundpk_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a,b));
-INSERT INTO t VALUES(1,1,'orig11');
-INSERT INTO t VALUES(1,2,'orig12');
-SELECT dolt_commit('-A','-m','init');
-SELECT dolt_branch('hf');
-SELECT dolt_checkout('hf');
-UPDATE t SET v='hf11' WHERE a=1 AND b=1;
-UPDATE t SET v='hf12' WHERE a=1 AND b=2;
-SELECT dolt_commit('-A','-m','hf');
-SELECT dolt_checkout('main');
-UPDATE t SET v='main11' WHERE a=1 AND b=1;
-UPDATE t SET v='main12' WHERE a=1 AND b=2;
-SELECT dolt_commit('-A','-m','main');
-SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-run_test "compoundpk_conflict_rows" "SELECT count(*) FROM dolt_conflicts_t;" "2" "$DB"
-echo "DELETE FROM dolt_conflicts_t WHERE our_a=1 AND our_b=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "compoundpk_one_conflict_left" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "compoundpk_remaining_conflict" "SELECT our_a || ':' || our_b FROM dolt_conflicts_t;" "1:2" "$DB"
-run_test "compoundpk_deleted_row_kept_ours" "SELECT v FROM t WHERE a=1 AND b=1;" "main11" "$DB"
-run_test "compoundpk_remaining_row_still_conflicted" "SELECT v FROM t WHERE a=1 AND b=2;" "main12" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# DELETE ALL resolves all composite PK conflict rows
-# ============================================================
-
-DB=/tmp/test_cfrow_compoundpk_all_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a,b));
-INSERT INTO t VALUES(1,1,'orig11');
-INSERT INTO t VALUES(1,2,'orig12');
-SELECT dolt_commit('-A','-m','init');
-SELECT dolt_branch('hf');
-SELECT dolt_checkout('hf');
-UPDATE t SET v='hf11' WHERE a=1 AND b=1;
-UPDATE t SET v='hf12' WHERE a=1 AND b=2;
-SELECT dolt_commit('-A','-m','hf');
-SELECT dolt_checkout('main');
-UPDATE t SET v='main11' WHERE a=1 AND b=1;
-UPDATE t SET v='main12' WHERE a=1 AND b=2;
-SELECT dolt_commit('-A','-m','main');
-SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-echo "DELETE FROM dolt_conflicts_t;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "compoundpk_all_conflicts_cleared" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-run_test "compoundpk_all_kept_ours_11" "SELECT v FROM t WHERE a=1 AND b=1;" "main11" "$DB"
-run_test "compoundpk_all_kept_ours_12" "SELECT v FROM t WHERE a=1 AND b=2;" "main12" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# Resolve, then make new commit, then verify log
-# ============================================================
-
-DB=/tmp/test_cfrow_fullflow_$$.db
-setup_conflict "$DB"
-
-echo "DELETE FROM dolt_conflicts_t WHERE base_id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-# Conflicts resolved but merge not committed yet — user must commit
-run_test "flow_val" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
-run_test "flow_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-
-# Commit the resolved merge
-echo "SELECT dolt_commit('-A','-m','Merge resolved');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "flow_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# Text PK conflicts delete by synthetic rowid
-# ============================================================
-
-DB=/tmp/test_cfrow_textpk_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT);
+setup_text_pk_conflict_repo() {
+  local DB="$1"
+  rm -f "$DB"
+  echo "CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES('a','orig_a'),('b','orig_b');
 SELECT dolt_commit('-A','-m','init');
 SELECT dolt_branch('hf');
@@ -325,24 +58,13 @@ SELECT dolt_commit('-A','-m','hf');
 SELECT dolt_checkout('main');
 UPDATE t SET v='main_a' WHERE id='a';
 UPDATE t SET v='main_b' WHERE id='b';
-SELECT dolt_commit('-A','-m','main');
-SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+}
 
-run_test "textpk_conflict_count" "SELECT count(*) FROM dolt_conflicts_t;" "2" "$DB"
-echo "DELETE FROM dolt_conflicts_t WHERE base_id='a';" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "textpk_target_delete_leaves_one" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "textpk_target_delete_keeps_b" "SELECT base_id FROM dolt_conflicts_t;" "b" "$DB"
-echo "DELETE FROM dolt_conflicts_t;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "textpk_full_delete_clears" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-
-rm -f "$DB"
-
-# ============================================================
-# Composite PK conflicts delete by synthetic rowid
-# ============================================================
-
-DB=/tmp/test_cfrow_compositepk_$$.db; rm -f "$DB"
-echo "CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a,b));
+setup_composite_pk_conflict_repo() {
+  local DB="$1"
+  rm -f "$DB"
+  echo "CREATE TABLE t(a INT, b INT, v TEXT, PRIMARY KEY(a,b));
 INSERT INTO t VALUES(1,1,'orig_a'),(2,2,'orig_b');
 SELECT dolt_commit('-A','-m','init');
 SELECT dolt_branch('hf');
@@ -353,21 +75,85 @@ SELECT dolt_commit('-A','-m','hf');
 SELECT dolt_checkout('main');
 UPDATE t SET v='main_a' WHERE a=1 AND b=1;
 UPDATE t SET v='main_b' WHERE a=2 AND b=2;
-SELECT dolt_commit('-A','-m','main');
-SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB" > /dev/null 2>&1
+}
 
-run_test "compositepk_conflict_count" "SELECT count(*) FROM dolt_conflicts_t;" "2" "$DB"
-echo "DELETE FROM dolt_conflicts_t WHERE base_a=1 AND base_b=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "compositepk_target_delete_leaves_one" "SELECT count(*) FROM dolt_conflicts_t;" "1" "$DB"
-run_test "compositepk_target_delete_keeps_other" "SELECT base_a || ',' || base_b FROM dolt_conflicts_t;" "2,2" "$DB"
-echo "DELETE FROM dolt_conflicts_t;" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "compositepk_full_delete_clears" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
-
+# View individual conflict rows
+DB=/tmp/test_cfrow_view_$$.db
+setup_row_conflict_repo "$DB"
+run_test_match "view_count" "SELECT dolt_merge('hf'); SELECT 'VC|' || count(*) FROM dolt_conflicts_t;" "^VC\\|1$" "$DB"
+run_test_match "view_base_id" "SELECT dolt_merge('hf'); SELECT 'VB|' || base_id FROM dolt_conflicts_t;" "^VB\\|1$" "$DB"
+run_test_match "view_our_id" "SELECT dolt_merge('hf'); SELECT 'VO|' || our_id FROM dolt_conflicts_t;" "^VO\\|1$" "$DB"
+run_test_match "view_their_id" "SELECT dolt_merge('hf'); SELECT 'VT|' || their_id FROM dolt_conflicts_t;" "^VT\\|1$" "$DB"
+run_test_match "view_base_val" "SELECT dolt_merge('hf'); SELECT 'VBT|' || typeof(base_v) FROM dolt_conflicts_t;" "^VBT\\|(text|null)$" "$DB"
+run_test_match "view_their_val" "SELECT dolt_merge('hf'); SELECT 'VTT|' || typeof(their_v) FROM dolt_conflicts_t;" "^VTT\\|text$" "$DB"
 rm -f "$DB"
 
-# ============================================================
-# Done
-# ============================================================
+# DELETE resolves individual conflict (keeps ours)
+DB=/tmp/test_cfrow_del_$$.db
+setup_row_conflict_repo "$DB"
+run_test_match "del_summary_cleared" "SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DC|' || count(*) FROM dolt_conflicts;" "^DC\\|0$" "$DB"
+run_test_match "del_ours_kept" "SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DV|' || v FROM t WHERE id=1;" "^DV\\|main_val$" "$DB"
+run_test_match "del_other_ok" "SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DK|' || v FROM t WHERE id=2;" "^DK\\|keep$" "$DB"
+run_test_match "del_clean" "SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=1; SELECT 'DS|' || count(*) FROM dolt_status;" "^DS\\|0$" "$DB"
+rm -f "$DB"
+
+# --ours resolution clears per-table
+DB=/tmp/test_cfrow_ours_$$.db
+setup_row_conflict_repo "$DB"
+run_test_match "ours_cleared" "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OC|' || count(*) FROM dolt_conflicts;" "^OC\\|0$" "$DB"
+run_test_match "ours_val" "SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--ours','t'); SELECT 'OV|' || v FROM t WHERE id=1;" "^OV\\|main_val$" "$DB"
+rm -f "$DB"
+
+# No conflict table when no conflicts
+DB=/tmp/test_cfrow_noconf_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "noconf_table" "SELECT count(*) FROM dolt_conflicts_t;" "0" "$DB"
+run_test "noconf_summary" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+rm -f "$DB"
+
+# Conflict rows do not persist across reopen after autocommit rollback
+DB=/tmp/test_cfrow_persist_$$.db
+setup_row_conflict_repo "$DB"
+echo "SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
+run_test "persist_summary" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+run_test "persist_rows" "SELECT count(*) FROM dolt_conflicts_t;" "0" "$DB"
+rm -f "$DB"
+
+# DELETE with no matching row is a no-op
+DB=/tmp/test_cfrow_noop_$$.db
+setup_row_conflict_repo "$DB"
+run_test_match "noop_still_there" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=999; SELECT 'NC|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" "^NC\\|1$" "$DB"
+run_test_match "noop_rowid" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id=999; SELECT 'NR|' || base_id FROM dolt_conflicts_t; ROLLBACK;" "^NR\\|1$" "$DB"
+rm -f "$DB"
+
+# Delete/delete conflict with --theirs keeps delete and skips triggers
+DB=/tmp/test_cfrow_delete_$$.db
+setup_delete_conflict_repo "$DB"
+run_test_match "theirs_delete_clears" "BEGIN; SELECT dolt_merge('hf'); SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TC|' || count(*) FROM dolt_conflicts; ROLLBACK;" "^TC\\|0$" "$DB"
+run_test_match "theirs_delete_removes_row" "BEGIN; SELECT dolt_merge('hf'); CREATE TRIGGER audit_delete BEFORE DELETE ON t BEGIN INSERT INTO trig_log VALUES('fired'); END; SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TD|' || count(*) FROM t WHERE id=1; ROLLBACK;" "^TD\\|0$" "$DB"
+run_test_match "theirs_delete_trigger_skipped" "BEGIN; SELECT dolt_merge('hf'); CREATE TRIGGER audit_delete BEFORE DELETE ON t BEGIN INSERT INTO trig_log VALUES('fired'); END; SELECT dolt_conflicts_resolve('--theirs','t'); SELECT 'TT|' || count(*) FROM trig_log; ROLLBACK;" "^TT\\|0$" "$DB"
+rm -f "$DB"
+
+# Text PK conflicts delete by synthetic rowid
+DB=/tmp/test_cfrow_textpk_$$.db
+setup_text_pk_conflict_repo "$DB"
+run_test_match "textpk_conflict_count" "SELECT dolt_merge('hf'); SELECT 'TC|' || count(*) FROM dolt_conflicts_t;" "^TC\\|2$" "$DB"
+run_test_match "textpk_target_delete_leaves_one" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id='a'; SELECT 'TL|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" "^TL\\|1$" "$DB"
+run_test_match "textpk_target_delete_keeps_b" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_id='a'; SELECT 'TK|' || base_id FROM dolt_conflicts_t; ROLLBACK;" "^TK\\|b$" "$DB"
+run_test_match "textpk_full_delete_clears" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t; SELECT 'TF|' || count(*) FROM dolt_conflicts; ROLLBACK;" "^TF\\|0$" "$DB"
+rm -f "$DB"
+
+# Composite PK conflicts delete by synthetic rowid
+DB=/tmp/test_cfrow_compositepk_$$.db
+setup_composite_pk_conflict_repo "$DB"
+run_test_match "compositepk_conflict_count" "SELECT dolt_merge('hf'); SELECT 'CC|' || count(*) FROM dolt_conflicts_t;" "^CC\\|2$" "$DB"
+run_test_match "compositepk_target_delete_leaves_one" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_a=1 AND base_b=1; SELECT 'CL|' || count(*) FROM dolt_conflicts_t; ROLLBACK;" "^CL\\|1$" "$DB"
+run_test_match "compositepk_target_delete_keeps_other" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t WHERE base_a=1 AND base_b=1; SELECT 'CK|' || base_a || ',' || base_b FROM dolt_conflicts_t; ROLLBACK;" "^CK\\|2,2$" "$DB"
+run_test_match "compositepk_full_delete_clears" "BEGIN; SELECT dolt_merge('hf'); DELETE FROM dolt_conflicts_t; SELECT 'CF|' || count(*) FROM dolt_conflicts; ROLLBACK;" "^CF\\|0$" "$DB"
+rm -f "$DB"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

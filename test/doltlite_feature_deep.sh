@@ -229,14 +229,11 @@ UPDATE t SET v='main' WHERE id=1;
 SELECT dolt_commit('-A','-m','main');
 SELECT dolt_merge('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Reopen — conflicts should be there
-run_test "cfr_reopen_exists" "SELECT count(*) FROM dolt_conflicts;" "1" "$DB"
-run_test "cfr_reopen_row" "SELECT base_id FROM dolt_conflicts_t;" "1" "$DB"
+# Reopen after autocommit conflict rollback — session should be clean
+run_test "cfr_reopen_exists" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
+run_test "cfr_reopen_row" "SELECT count(*) FROM dolt_conflicts_t;" "0" "$DB"
 
-# Resolve in this session
-echo "DELETE FROM dolt_conflicts_t WHERE base_id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-# Reopen again — should be clean
+# Reopen again — should still be clean
 run_test "cfr_reopen_clean" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 run_test "cfr_reopen_val" "SELECT v FROM t WHERE id=1;" "main" "$DB"
 
