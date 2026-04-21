@@ -607,6 +607,39 @@ SELECT dolt_revert('HEAD~1');
 " "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
+echo "--- savepoint parity ---"
+
+oracle_error_poststate "cherry_pick_savepoint_invalidated" "
+$SEED
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_2');
+SELECT dolt_checkout('main');
+SAVEPOINT sp1;
+SELECT dolt_cherry_pick('feature');
+ROLLBACK TO sp1;
+" "SELECT active_branch() || '|' ||
+          (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered) || '|' ||
+          (SELECT count(*) FROM dolt_log);" \
+  "SELECT CONCAT(active_branch(), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT COUNT(*) FROM dolt_log))"
+
+oracle_error_poststate "revert_savepoint_invalidated" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE t SET v = 20 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SAVEPOINT sp1;
+SELECT dolt_revert('HEAD');
+ROLLBACK TO sp1;
+" "SELECT active_branch() || '|' ||
+          (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered) || '|' ||
+          (SELECT count(*) FROM dolt_log);" \
+  "SELECT CONCAT(active_branch(), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT COUNT(*) FROM dolt_log))"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

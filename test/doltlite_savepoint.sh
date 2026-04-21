@@ -288,6 +288,30 @@ run_test_match "checkout_b_savepoint_branch_created" \
   "SELECT group_concat(name, ',') FROM dolt_branches;" \
   "^main,side$|^side,main$" "$DB6i"
 
+DB6j=/tmp/test_savepoint6j_$$.db; rm -f "$DB6j"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6j" > /dev/null 2>&1
+run_test_match "cherry_pick_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; SELECT dolt_cherry_pick('feat'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6j"
+run_test_match "cherry_pick_savepoint_rows_persist" \
+  "SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered;" \
+  "^1:main,2:feat$" "$DB6j"
+run_test_match "cherry_pick_savepoint_log_persists" \
+  "SELECT count(*) FROM dolt_log;" \
+  "^3$" "$DB6j"
+
+DB6k=/tmp/test_savepoint6k_$$.db; rm -f "$DB6k"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); UPDATE t SET v='c2' WHERE id=1; SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB6k" > /dev/null 2>&1
+run_test_match "revert_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; SELECT dolt_revert('HEAD'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6k"
+run_test_match "revert_savepoint_rows_persist" \
+  "SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered;" \
+  "^1:base$" "$DB6k"
+run_test_match "revert_savepoint_log_persists" \
+  "SELECT count(*) FROM dolt_log;" \
+  "^4$" "$DB6k"
+
 # ============================================================
 # Test 7: dolt_merge inside a BEGIN/COMMIT block
 # Expected: dolt_merge operates at the dolt storage layer. It should

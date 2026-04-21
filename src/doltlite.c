@@ -2572,6 +2572,17 @@ static int applyMergedCatalogAndCommit(
                                  sqlite3_strnicmp(zMessage, "Revert", 6)==0
                                    ? "Revert" : "Cherry-pick");
         if( rc!=SQLITE_OK ) goto apply_rollback;
+        while( rc==SQLITE_OK && db->pSavepoint ){
+          char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"",
+                                       db->pSavepoint->zName);
+          if( !zSql ){
+            rc = SQLITE_NOMEM;
+            break;
+          }
+          rc = sqlite3_exec(db, zSql, 0, 0, 0);
+          sqlite3_free(zSql);
+        }
+        if( rc!=SQLITE_OK ) goto apply_rollback;
         doltliteTxnStateClear(&savedState);
       }
       return SQLITE_OK;
@@ -2592,6 +2603,17 @@ static int applyMergedCatalogAndCommit(
                                  sqlite3_strnicmp(zMessage, "Revert", 6)==0
                                    ? "Revert" : "Cherry-pick");
     if( rc!=SQLITE_OK ) goto apply_rollback;
+    while( rc==SQLITE_OK && db->pSavepoint ){
+      char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"",
+                                   db->pSavepoint->zName);
+      if( !zSql ){
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      rc = sqlite3_exec(db, zSql, 0, 0, 0);
+      sqlite3_free(zSql);
+    }
+    if( rc!=SQLITE_OK ) goto apply_rollback;
     doltliteTxnStateClear(&savedState);
     return SQLITE_OK;
   }
@@ -2601,6 +2623,18 @@ static int applyMergedCatalogAndCommit(
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteAdvanceBranch(db, &commitHash, &mergedCatHash);
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  while( rc==SQLITE_OK && db->pSavepoint ){
+    char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"",
+                                 db->pSavepoint->zName);
+    if( !zSql ){
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    sqlite3_free(zSql);
+  }
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   if( graphLocked ){
