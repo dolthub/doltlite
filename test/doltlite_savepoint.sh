@@ -212,6 +212,82 @@ run_test "checkout_dirty_in_txn" \
   "BEGIN; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_checkout('other'); COMMIT;" \
   "0" "$DB6b"
 
+DB6c=/tmp/test_savepoint6c_$$.db; rm -f "$DB6c"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6c" > /dev/null 2>&1
+echo "SELECT dolt_branch('other');" | $DOLTLITE "$DB6c" > /dev/null 2>&1
+echo "SELECT dolt_checkout('other'); UPDATE t SET v='other'; SELECT dolt_commit('-A','-m','other'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6c" > /dev/null 2>&1
+
+run_test_match "checkout_dirty_rollback_branch" \
+  "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_checkout('other'); ROLLBACK; SELECT active_branch();" \
+  "^other$" "$DB6c"
+
+run_test_match "checkout_dirty_rollback_data" \
+  "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_checkout('other'); ROLLBACK; SELECT v FROM t WHERE id=1;" \
+  "^other$" "$DB6c"
+
+DB6d=/tmp/test_savepoint6d_$$.db; rm -f "$DB6d"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6d" > /dev/null 2>&1
+run_test_match "branch_dirty_rollback_branch" \
+  "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_branch('txb'); ROLLBACK; SELECT group_concat(name, ',') FROM dolt_branches;" \
+  "^main,txb$|^txb,main$" "$DB6d"
+
+DB6e=/tmp/test_savepoint6e_$$.db; rm -f "$DB6e"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6e" > /dev/null 2>&1
+run_test_match "branch_dirty_rollback_data" \
+  "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_branch('txb'); ROLLBACK; SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6e"
+
+DB6f=/tmp/test_savepoint6f_$$.db; rm -f "$DB6f"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6f" > /dev/null 2>&1
+run_test_match "tag_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_tag('v1'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6f"
+run_test_match "tag_savepoint_row_persists" \
+  "SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6f"
+run_test_match "tag_savepoint_tag_persists" \
+  "SELECT group_concat(tag_name, ',') FROM dolt_tags;" \
+  "^v1$" "$DB6f"
+
+DB6g=/tmp/test_savepoint6g_$$.db; rm -f "$DB6g"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g" > /dev/null 2>&1
+run_test_match "remote_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_remote('add','origin','file:///tmp/savepoint-remote'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g"
+run_test_match "remote_savepoint_row_persists" \
+  "SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6g"
+run_test_match "remote_savepoint_remote_persists" \
+  "SELECT group_concat(name, ',') FROM dolt_remotes;" \
+  "^origin$" "$DB6g"
+
+DB6h=/tmp/test_savepoint6h_$$.db; rm -f "$DB6h"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='other'; SELECT dolt_commit('-A','-m','other'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6h" > /dev/null 2>&1
+run_test_match "checkout_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_checkout('other'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6h"
+run_test_match "checkout_savepoint_branch_reopens_on_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6h"
+run_test_match "checkout_savepoint_row_reopens_dirty" \
+  "SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6h"
+
+DB6i=/tmp/test_savepoint6i_$$.db; rm -f "$DB6i"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6i" > /dev/null 2>&1
+run_test_match "checkout_b_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_checkout('-b','side'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6i"
+run_test_match "checkout_b_savepoint_branch_reopens_on_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6i"
+run_test_match "checkout_b_savepoint_row_reopens_dirty" \
+  "SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6i"
+run_test_match "checkout_b_savepoint_branch_created" \
+  "SELECT group_concat(name, ',') FROM dolt_branches;" \
+  "^main,side$|^side,main$" "$DB6i"
+
 # ============================================================
 # Test 7: dolt_merge inside a BEGIN/COMMIT block
 # Expected: dolt_merge operates at the dolt storage layer. It should

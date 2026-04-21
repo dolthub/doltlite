@@ -142,6 +142,36 @@ oracle_error() {
   fi
 }
 
+oracle_savepoint_poststate() {
+  local name="$1" setup="$2" query="$3"
+  local dir="$TMPROOT/${name}_sp"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc dt_rc dl_post dt_post
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+  dl_post=$(printf ".headers off\n.mode list\n.separator '\t'\n%s\n" "$query" \
+            | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+            | tr -d '\r')
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+  dt_post=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "$query" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"' | tr -d '\r')
+
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_post" = "$dt_post" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc/post:"; { echo "$dl_rc"; echo "$dl_post"; } | sed 's/^/      /'
+    echo "    dolt rc/post:"; { echo "$dt_rc"; echo "$dt_post"; } | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_checkout ==="
 echo ""
 
@@ -192,6 +222,20 @@ INSERT INTO t VALUES (2, 'feature_only');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_feat');
 SELECT dolt_checkout('main');
+"
+
+oracle "txn_checkout_rollback_keeps_checked_out_branch_state" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v='feature_v' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_feat');
+SELECT dolt_checkout('main');
+BEGIN;
+UPDATE t SET v='dirty' WHERE id=1;
+SELECT dolt_checkout('feature');
+ROLLBACK;
 "
 
 echo "--- create-and-switch (-b) ---"
@@ -306,6 +350,30 @@ $SEED
 SELECT dolt_branch('feature');
 SELECT dolt_checkout('feature', 'nope');
 "
+
+echo "--- savepoint parity ---"
+
+oracle_savepoint_poststate "savepoint_checkout_existing_branch_reopens_on_original_branch" "
+$SEED
+SELECT dolt_branch('other');
+SELECT dolt_checkout('other');
+UPDATE t SET v='other' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'other');
+SELECT dolt_checkout('main');
+SAVEPOINT sp1;
+UPDATE t SET v='dirty' WHERE id=1;
+SELECT dolt_checkout('other');
+ROLLBACK TO sp1;
+" "SELECT concat(active_branch(), char(9), (SELECT v FROM t WHERE id=1));"
+
+oracle_savepoint_poststate "savepoint_checkout_dash_b_keeps_new_branch_but_reopens_original_branch" "
+$SEED
+SAVEPOINT sp1;
+UPDATE t SET v='dirty' WHERE id=1;
+SELECT dolt_checkout('-b', 'side');
+ROLLBACK TO sp1;
+" "SELECT concat(active_branch(), char(9), (SELECT v FROM t WHERE id=1), char(9), (SELECT group_concat(name, ',') FROM dolt_branches));"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

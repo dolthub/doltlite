@@ -44,6 +44,17 @@ static int mutateTagRef(sqlite3 *db, ChunkStore *cs, void *pArg){
                               p->timestamp, p->zMessage);
 }
 
+static int tagReleaseSavepoints(sqlite3 *db){
+  int rc = SQLITE_OK;
+  while( rc==SQLITE_OK && db->pSavepoint ){
+    char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"", db->pSavepoint->zName);
+    if( !zSql ) return SQLITE_NOMEM;
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    sqlite3_free(zSql);
+  }
+  return rc;
+}
+
 static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -79,6 +90,11 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     rc = doltliteMutateRefs(db, mutateTagRef, &m);
     if( rc!=SQLITE_OK ){
       tagResultError(ctx, rc, "tag not found", 0);
+      return;
+    }
+    rc = tagReleaseSavepoints(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
       return;
     }
     sqlite3_result_int(ctx, 0);
@@ -159,6 +175,11 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3_free(zParsedEmail);
   if( rc!=SQLITE_OK ){
     tagResultError(ctx, rc, "tag not found", "tag already exists");
+    return;
+  }
+  rc = tagReleaseSavepoints(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
     return;
   }
   sqlite3_result_int(ctx, 0);

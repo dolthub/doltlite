@@ -43,6 +43,25 @@ static void branchResultError(
   }
 }
 
+static int branchRestartTxnIfNeeded(sqlite3 *db){
+  int rc;
+  if( db->autoCommit ) return SQLITE_OK;
+  if( db->pSavepoint ){
+    while( db->pSavepoint ){
+      char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"", db->pSavepoint->zName);
+      if( !zSql ) return SQLITE_NOMEM;
+      rc = sqlite3_exec(db, zSql, 0, 0, 0);
+      sqlite3_free(zSql);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    return SQLITE_OK;
+  }
+  rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
+  return rc;
+}
+
 static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMutationCtx *p = (BranchMutationCtx*)pArg;
   int rc;
@@ -121,6 +140,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   int force = 0;
   const char *aPositional[3] = {0, 0, 0};
   int nPositional = 0;
+  int hadExplicitTxn = !db->autoCommit;
   int i, rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -310,6 +330,13 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     }
   }
 
+  if( hadExplicitTxn ){
+    rc = branchRestartTxnIfNeeded(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+  }
   sqlite3_result_int(ctx, 0);
 }
 
@@ -406,6 +433,7 @@ static int checkoutRestoreDurableState(
 
 static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
+  int bSavepoint = db->pSavepoint!=0;
   int rc;
 
   rc = chunkStoreFindBranch(cs, p->zTargetBranch, &p->targetCommit);
@@ -430,11 +458,13 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     }
   }
 
-  rc = chunkStoreSetDefaultBranch(cs, p->zTargetBranch);
-  if( rc!=SQLITE_OK ) return rc;
+  if( !bSavepoint ){
+    rc = chunkStoreSetDefaultBranch(cs, p->zTargetBranch);
+    if( rc!=SQLITE_OK ) return rc;
 
-  rc = doltliteSaveWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
+    rc = doltliteSaveWorkingSet(db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   if( p->haveOldState ){
     rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
@@ -445,10 +475,12 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     }
   }
 
-  rc = doltliteUpdateBranchWorkingState(db, p->zTargetBranch,
-                                        &p->targetCatHash, &p->targetCommit);
-  if( rc!=SQLITE_OK ){
-    checkoutRestoreSession(db, p);
+  if( !bSavepoint ){
+    rc = doltliteUpdateBranchWorkingState(db, p->zTargetBranch,
+                                          &p->targetCatHash, &p->targetCommit);
+    if( rc!=SQLITE_OK ){
+      checkoutRestoreSession(db, p);
+    }
   }
   return rc;
 }
@@ -612,6 +644,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   const char *zBranch;
   char *zCurrentBranch = 0;
   int isCreateAndSwitch = 0;
+  int hadExplicitTxn = !db->autoCommit;
   int rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -683,6 +716,13 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
       return;
+    }
+    if( hadExplicitTxn ){
+      rc = branchRestartTxnIfNeeded(db);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
     }
     sqlite3_result_int(ctx, 0);
     return;
@@ -758,6 +798,13 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(ctx, "checkout failed", -1);
     return;
+  }
+  if( hadExplicitTxn ){
+    rc = branchRestartTxnIfNeeded(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
   }
   sqlite3_result_int(ctx, 0);
 }
