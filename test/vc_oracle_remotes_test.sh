@@ -208,6 +208,16 @@ SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');
 ROLLBACK TO sp1;
 "
 
+oracle_savepoint_remote_poststate "remote_remove_missing_inside_savepoint_invalidates" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SAVEPOINT sp1;
+SELECT dolt_remote('remove', 'missing');
+ROLLBACK TO sp1;
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

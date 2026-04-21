@@ -35,6 +35,11 @@ static void tagResultError(
   }
 }
 
+static void tagSealSavepointError(sqlite3_context *ctx){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  (void)doltliteVcSealSavepointError(db);
+}
+
 static int mutateTagRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   TagMutationCtx *p = (TagMutationCtx*)pArg;
   (void)db;
@@ -56,28 +61,30 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   char *zParsedEmail = 0;
   int rc, i;
 
-  if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
-  if( argc<1 ){ sqlite3_result_error(ctx, "tag name required", -1); return; }
+  if( !cs ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "no database", -1); return; }
+  if( argc<1 ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "tag name required", -1); return; }
 
   memset(&m, 0, sizeof(m));
 
   arg0 = (const char*)sqlite3_value_text(argv[0]);
-  if( !arg0 ){ sqlite3_result_error(ctx, "tag name required", -1); return; }
+  if( !arg0 ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "tag name required", -1); return; }
 
 
   if( strcmp(arg0, "-d")==0 || strcmp(arg0, "--delete")==0 ){
     const char *zName;
-    if( argc<2 ){ sqlite3_result_error(ctx, "tag name required for delete", -1); return; }
+    if( argc<2 ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "tag name required for delete", -1); return; }
     if( argc!=2 ){
+      tagSealSavepointError(ctx);
       sqlite3_result_error(ctx, "too many positional arguments to dolt_tag", -1);
       return;
     }
     zName = (const char*)sqlite3_value_text(argv[1]);
-    if( !zName ){ sqlite3_result_error(ctx, "tag name required", -1); return; }
+    if( !zName ){ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "tag name required", -1); return; }
     m.zName = zName;
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateTagRef, &m);
     if( rc!=SQLITE_OK ){
+      tagSealSavepointError(ctx);
       tagResultError(ctx, rc, "tag not found", 0);
       return;
     }
@@ -96,13 +103,14 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     if( !arg ) continue;
     if( strcmp(arg, "-m")==0 || strcmp(arg, "--message")==0 ){
       if( i+1<argc ) zMessage = (const char*)sqlite3_value_text(argv[++i]);
-      else{ sqlite3_result_error(ctx, "-m requires a message", -1); return; }
+      else{ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "-m requires a message", -1); return; }
     }else if( strcmp(arg, "--author")==0 ){
       if( i+1<argc ) zAuthor = (const char*)sqlite3_value_text(argv[++i]);
-      else{ sqlite3_result_error(ctx, "--author requires 'name <email>'", -1); return; }
+      else{ tagSealSavepointError(ctx); sqlite3_result_error(ctx, "--author requires 'name <email>'", -1); return; }
     }else if( arg[0]=='-' ){
       char *zErr = sqlite3_mprintf("unknown option `%s`", arg);
       if( zErr ){
+        tagSealSavepointError(ctx);
         sqlite3_result_error(ctx, zErr, -1);
         sqlite3_free(zErr);
       }else{
@@ -112,6 +120,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }else if( !zCommitRef ){
       zCommitRef = arg;
     }else{
+      tagSealSavepointError(ctx);
       sqlite3_result_error(ctx, "too many positional arguments to dolt_tag", -1);
       return;
     }
@@ -120,12 +129,14 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( zCommitRef ){
     rc = doltliteResolveRef(db, zCommitRef, &m.commitHash);
     if( rc!=SQLITE_OK ){
+      tagSealSavepointError(ctx);
       sqlite3_result_error(ctx, "commit not found", -1);
       return;
     }
   }else{
     doltliteGetSessionHead(db, &m.commitHash);
     if( prollyHashIsEmpty(&m.commitHash) ){
+      tagSealSavepointError(ctx);
       sqlite3_result_error(ctx, "no commits to tag", -1);
       return;
     }
@@ -146,6 +157,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     if( !zParsedTagger || !zParsedEmail ){
       sqlite3_free(zParsedTagger);
       sqlite3_free(zParsedEmail);
+      tagSealSavepointError(ctx);
       sqlite3_result_error_nomem(ctx);
       return;
     }
@@ -163,6 +175,7 @@ static void doltTagFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3_free(zParsedTagger);
   sqlite3_free(zParsedEmail);
   if( rc!=SQLITE_OK ){
+    tagSealSavepointError(ctx);
     tagResultError(ctx, rc, "tag not found", "tag already exists");
     return;
   }

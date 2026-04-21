@@ -500,6 +500,13 @@ int doltliteVcSealActiveSavepoints(sqlite3 *db){
   return rc;
 }
 
+int doltliteVcSealSavepointError(sqlite3 *db){
+  if( db->pSavepoint ){
+    return doltliteVcSealActiveSavepoints(db);
+  }
+  return SQLITE_OK;
+}
+
 int doltliteVcSealBranchStyleTxn(sqlite3 *db){
   int rc;
   if( db->autoCommit ) return SQLITE_OK;

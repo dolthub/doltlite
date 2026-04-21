@@ -679,10 +679,10 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   int hadExplicitTxn = !db->autoCommit;
   int rc;
 
-  if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
-  if( argc<1 ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
+  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
+  if( argc<1 ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "branch name required", -1); return; }
   zBranch = (const char*)sqlite3_value_text(argv[0]);
-  if( !zBranch ){ sqlite3_result_error(ctx, "branch name required", -1); return; }
+  if( !zBranch ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "branch name required", -1); return; }
 
   memset(&m, 0, sizeof(m));
   memset(&branchCreate, 0, sizeof(branchCreate));
@@ -692,6 +692,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     u8 isMerging = 0;
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
     if( isMerging ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "unresolved merge conflicts \xe2\x80\x94 commit or abort first", -1);
       return;
     }
@@ -699,25 +700,28 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
 
 
   if( strcmp(zBranch, "-b")==0 ){
-    if( argc<2 ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
-    if( argc>3 ){ sqlite3_result_error(ctx, "too many arguments", -1); return; }
+    if( argc<2 ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
+    if( argc>3 ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "too many arguments", -1); return; }
     zBranch = (const char*)sqlite3_value_text(argv[1]);
-    if( branchNameEmpty(zBranch) ){ sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
+    if( branchNameEmpty(zBranch) ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
 
     if( argc>=3 ){
       const char *zStart = (const char*)sqlite3_value_text(argv[2]);
       if( !zStart ){
+        (void)doltliteVcSealSavepointError(db);
         sqlite3_result_error(ctx, "start point not found", -1);
         return;
       }
       rc = doltliteResolveRef(db, zStart, &branchCreate.head);
       if( rc!=SQLITE_OK ){
+        (void)doltliteVcSealSavepointError(db);
         sqlite3_result_error(ctx, "start point not found", -1);
         return;
       }
     }else{
       doltliteGetSessionHead(db, &branchCreate.head);
       if( prollyHashIsEmpty(&branchCreate.head) ){
+        (void)doltliteVcSealSavepointError(db);
         sqlite3_result_error(ctx, "no commits yet — commit first", -1);
         return;
       }
@@ -725,6 +729,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     branchCreate.zName = zBranch;
     rc = doltliteMutateRefs(db, mutateBranchRef, &branchCreate);
     if( rc!=SQLITE_OK ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "branch already exists", -1);
       return;
     }
@@ -741,11 +746,13 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     if( rc==SQLITE_NOTFOUND ){
       char *zErr = sqlite3_mprintf(
           "no such branch or table: %s", zBranch);
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, zErr ? zErr : "no such branch or table", -1);
       sqlite3_free(zErr);
       return;
     }
     if( rc!=SQLITE_OK ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error_code(ctx, rc);
       return;
     }
@@ -766,12 +773,14 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   doltliteGetSessionHead(db, &m.oldCommitHash);
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zCurrentBranch ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error_nomem(ctx);
       return;
     }
     rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zCurrentBranch);
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
       return;
     }
@@ -779,6 +788,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     sqlite3_free(oldCatData);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zCurrentBranch);
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
       return;
     }
@@ -808,11 +818,13 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     if( rc==SQLITE_NOTFOUND ){
       char *zErr = sqlite3_mprintf(
           "no such branch or table: %s", zBranch);
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, zErr ? zErr : "no such branch or table", -1);
       sqlite3_free(zErr);
       return;
     }
     if( rc!=SQLITE_OK ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error_code(ctx, rc);
       return;
     }
@@ -820,14 +832,17 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     return;
   }
   if( rc==SQLITE_EMPTY ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "target branch has no commits", -1);
     return;
   }
   if( rc==SQLITE_BUSY ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "database is locked by another connection", -1);
     return;
   }
   if( rc!=SQLITE_OK ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "checkout failed", -1);
     return;
   }

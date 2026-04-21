@@ -216,14 +216,23 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   const char *zName;
   int rc;
 
-  if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
-  if( argc<2 ){ sqlite3_result_error(ctx, "usage: dolt_remote(action, name [, url])", -1); return; }
+  if( !cs ){
+    (void)doltliteVcSealSavepointError(db);
+    sqlite3_result_error(ctx, "no database", -1);
+    return;
+  }
+  if( argc<2 ){
+    (void)doltliteVcSealSavepointError(db);
+    sqlite3_result_error(ctx, "usage: dolt_remote(action, name [, url])", -1);
+    return;
+  }
 
   memset(&m, 0, sizeof(m));
 
   zAction = (const char*)sqlite3_value_text(argv[0]);
   zName = (const char*)sqlite3_value_text(argv[1]);
   if( !zAction || !zName ){
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "action and name required", -1);
     return;
   }
@@ -231,15 +240,18 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   if( strcmp(zAction, "add")==0 ){
     const char *zUrl;
     if( argc<3 ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "url required for add", -1);
       return;
     }
     if( argc>3 ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "too many arguments", -1);
       return;
     }
     zUrl = (const char*)sqlite3_value_text(argv[2]);
     if( !zUrl ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "url required for add", -1);
       return;
     }
@@ -247,12 +259,14 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     m.zUrl = zUrl;
     rc = doltliteMutateRefs(db, mutateRemoteRef, &m);
     if( rc!=SQLITE_OK ){
+      (void)doltliteVcSealSavepointError(db);
       remoteSqlResultError(ctx, rc,
         rc==SQLITE_ERROR ? "remote already exists" : 0);
       return;
     }
   }else if( strcmp(zAction, "remove")==0 ){
     if( argc>2 ){
+      (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, "too many arguments", -1);
       return;
     }
@@ -260,11 +274,13 @@ static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     m.isDelete = 1;
     rc = doltliteMutateRefs(db, mutateRemoteRef, &m);
     if( rc!=SQLITE_OK ){
+      (void)doltliteVcSealSavepointError(db);
       remoteSqlResultError(ctx, rc,
         rc==SQLITE_NOTFOUND ? "remote not found" : 0);
       return;
     }
   }else{
+    (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "unknown action: use 'add' or 'remove'", -1);
     return;
   }

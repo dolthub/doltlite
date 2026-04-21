@@ -375,6 +375,13 @@ SELECT dolt_checkout('-b', 'side');
 ROLLBACK TO sp1;
 " "SELECT concat(active_branch(), char(9), (SELECT v FROM t WHERE id=1), char(9), (SELECT group_concat(name, ',') FROM dolt_branches));"
 
+oracle_savepoint_poststate "savepoint_checkout_missing_invalidates" "
+$SEED
+SAVEPOINT sp1;
+SELECT dolt_checkout('does-not-exist');
+ROLLBACK TO sp1;
+" "SELECT active_branch();"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
