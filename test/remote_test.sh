@@ -304,7 +304,7 @@ check "pull with non-first-parent ancestry succeeds" "0
 0
 3" "$result"
 
-result=$("$DB" "$TMPDIR/anc_src.db" "SELECT v FROM t ORDER BY id;")
+result=$("$DB" "$TMPDIR/anc_src.db/side" "SELECT v FROM t ORDER BY id;")
 check "pull with non-first-parent ancestry brings merged rows" "base
 side
 main" "$result"
@@ -445,13 +445,13 @@ ENDSQL
 # Build 10 commits on branchA
 "$DB" "$TMPDIR/div_src.db" "SELECT dolt_checkout('branchA');" > /dev/null
 for i in $(seq 2 11); do
-  "$DB" "$TMPDIR/div_src.db" "INSERT INTO items VALUES($i,'A_$i'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','A step $i');" > /dev/null
+  "$DB" "$TMPDIR/div_src.db/branchA" "INSERT INTO items VALUES($i,'A_$i'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','A step $i');" > /dev/null
 done
 
 # Build 10 different commits on branchB
 "$DB" "$TMPDIR/div_src.db" "SELECT dolt_checkout('branchB');" > /dev/null
 for i in $(seq 100 109); do
-  "$DB" "$TMPDIR/div_src.db" "INSERT INTO items VALUES($i,'B_$i'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','B step $i');" > /dev/null
+  "$DB" "$TMPDIR/div_src.db/branchB" "INSERT INTO items VALUES($i,'B_$i'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','B step $i');" > /dev/null
 done
 
 # Push all three branches
@@ -488,9 +488,9 @@ echo "=== 23. Incremental fetch: push more, fetch only new ==="
 # Add 5 more commits on branchA in source
 "$DB" "$TMPDIR/div_src.db" "SELECT dolt_checkout('branchA');" > /dev/null
 for i in $(seq 12 16); do
-  "$DB" "$TMPDIR/div_src.db" "INSERT INTO items VALUES($i,'A_$i'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','A step $i');" > /dev/null
+  "$DB" "$TMPDIR/div_src.db/branchA" "INSERT INTO items VALUES($i,'A_$i'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','A step $i');" > /dev/null
 done
-"$DB" "$TMPDIR/div_src.db" "SELECT dolt_push('origin','branchA');" > /dev/null
+"$DB" "$TMPDIR/div_src.db/branchA" "SELECT dolt_push('origin','branchA');" > /dev/null
 
 # Fetch in clone (should only transfer 5 new commits, not all)
 result=$("$DB" "$TMPDIR/div_clone.db" "SELECT dolt_fetch('origin','branchA');")
@@ -498,7 +498,7 @@ check "incremental fetch returns 0" "0" "$result"
 
 # Pull to see new data
 "$DB" "$TMPDIR/div_clone.db" "SELECT dolt_checkout('branchA');" > /dev/null
-result=$("$DB" "$TMPDIR/div_clone.db" "SELECT dolt_pull('origin','branchA'); SELECT count(*) FROM items;")
+result=$("$DB" "$TMPDIR/div_clone.db/branchA" "SELECT dolt_pull('origin','branchA'); SELECT count(*) FROM items;")
 check "incremental pull has 16 items" "0
 16" "$result"
 
