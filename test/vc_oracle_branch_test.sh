@@ -187,7 +187,9 @@ SELECT dolt_branch('-m', 'feature', 'renamed');
 
 oracle "move_current_branch" "
 $SEED
-SELECT dolt_branch('-m', 'main', 'trunk');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+SELECT dolt_branch('-m', 'feature', 'renamed');
 "
 
 oracle "move_long_flag" "
