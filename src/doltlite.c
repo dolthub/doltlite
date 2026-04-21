@@ -475,6 +475,25 @@ static int doltliteReportConstraintViolations(
   return SQLITE_OK;
 }
 
+static int doltliteSavepointIsTopLevelTxn(sqlite3 *db){
+  return db->pSavepoint!=0 && db->isTransactionSavepoint && db->nSavepoint==0;
+}
+
+static int doltliteMergeActsAutocommitLike(sqlite3 *db){
+  return db->autoCommit || doltliteSavepointIsTopLevelTxn(db);
+}
+
+static int doltliteReleaseActiveSavepoints(sqlite3 *db){
+  int rc = SQLITE_OK;
+  while( rc==SQLITE_OK && db->pSavepoint ){
+    char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"", db->pSavepoint->zName);
+    if( !zSql ) return SQLITE_NOMEM;
+    rc = sqlite3_exec(db, zSql, 0, 0, 0);
+    sqlite3_free(zSql);
+  }
+  return rc;
+}
+
 static void doltliteReportAutocommitConflictRollback(sqlite3_context *ctx){
   sqlite3_result_error(ctx,
     "Merge conflict detected, @autocommit transaction rolled back. "
@@ -1582,11 +1601,13 @@ static int mergeAbortInPlace(sqlite3 *db){
   doltliteClearSessionMergeState(db);
   {
     extern int doltliteClearAllConstraintViolations(sqlite3*);
-    if( doltliteSessionHasConstraintViolations(db) ){
+  if( doltliteSessionHasConstraintViolations(db) ){
       doltliteClearAllConstraintViolations(db);
     }
   }
-  return doltlitePersistWorkingSet(db);
+  rc = doltlitePersistWorkingSet(db);
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteReleaseActiveSavepoints(db);
 }
 
 static int mergeFastForward(
@@ -1645,6 +1666,12 @@ static int mergeFastForward(
     doltliteCommitClear(&theirCommit);
     sqlite3_result_error_code(context,
         doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+    return rc;
+  }
+  rc = doltliteReleaseActiveSavepoints(db);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&theirCommit);
+    sqlite3_result_error_code(context, rc);
     return rc;
   }
   doltliteTxnStateClear(&savedState);
@@ -2331,7 +2358,7 @@ static void doltliteMergeFunc(
     }
     sqlite3_free(zDetectErrMsg);
     if( nViolations + nUnique + nCheck > 0 ){
-      if( db->autoCommit ){
+      if( doltliteMergeActsAutocommitLike(db) ){
         rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
         if( rc==SQLITE_OK ){
           doltliteSetSessionBranch(db, savedState.zSessionBranch);
@@ -2353,7 +2380,11 @@ static void doltliteMergeFunc(
             "constraint violations, transaction rolled back.", -1);
         }
       }else{
-        rc = doltliteReportConstraintViolations(db, context, "Merge");
+        sqlite3_result_error(context,
+          "Merge resulted in constraint violations. Resolve the rows in "
+          "dolt_constraint_violations and then commit with dolt_commit.",
+          -1);
+        rc = SQLITE_OK;
         if( rc!=SQLITE_OK ){
           sqlite3_result_error_code(context,
               doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
@@ -2370,14 +2401,21 @@ static void doltliteMergeFunc(
       chunkStoreUnlock(cs);
       graphLocked = 0;
     }
-    if( db->autoCommit ){
+    if( doltliteMergeActsAutocommitLike(db) ){
       rc = doltliteRollbackAutocommitConflict(db, context, &savedState);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
       }
       return;
     }
-    rc = doltliteReportConflicts(db, context, nMergeConflicts, "Merge");
+    rc = doltliteRegisterConflictTables(db);
+    if( rc==SQLITE_OK ){
+      char msg[256];
+      sqlite3_snprintf(sizeof(msg), msg,
+        "Merge has %d conflict(s). Resolve and then commit with dolt_commit.",
+        nMergeConflicts);
+      sqlite3_result_error(context, msg, -1);
+    }
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
@@ -2412,6 +2450,11 @@ static void doltliteMergeFunc(
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context,
           doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+      return;
+    }
+    rc = doltliteReleaseActiveSavepoints(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
       return;
     }
     doltliteTxnStateClear(&savedState);
