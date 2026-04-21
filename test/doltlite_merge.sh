@@ -167,7 +167,23 @@ run_test "constraint_violation_no_conflicts" "SELECT count(*) FROM dolt_conflict
 run_test "constraint_violation_no_violations" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB11"
 run_test "constraint_violation_state_restored" "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id, u, v FROM t ORDER BY id);" "1:9:main1,2:2:base2" "$DB11"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
+# Constraint-violation merge persists state inside an explicit transaction
+DB12=/tmp/test_merge12_$$.db; rm -f "$DB12"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT); INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB12" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET u=9, v='feat2' WHERE id=2; SELECT dolt_commit('-A','-m','feat_unique');" | $DOLTLITE "$DB12" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); UPDATE t SET u=9, v='main1' WHERE id=1; SELECT dolt_commit('-A','-m','main_unique');" | $DOLTLITE "$DB12" > /dev/null 2>&1
+TX_OUT=$(echo "BEGIN;
+SELECT dolt_merge('feat');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id));
+ROLLBACK;" | $DOLTLITE "$DB12" 2>&1 | grep '^TX|')
+if [ "$TX_OUT" = "TX|0|1|1:9:main1,2:9:feat2" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: constraint_violation_merge_tx_persists\n  expected: TX|0|1|1:9:main1,2:9:feat2\n  got:      $TX_OUT"
+fi
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

@@ -459,6 +459,22 @@ static int doltliteReportConflicts(
   return SQLITE_OK;
 }
 
+static int doltliteReportConstraintViolations(
+  sqlite3 *db,
+  sqlite3_context *ctx,
+  const char *zOp
+){
+  char msg[256];
+  int rc = doltlitePersistWorkingSet(db);
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_snprintf(sizeof(msg), msg,
+    "%s resulted in constraint violations. Resolve the rows in "
+    "dolt_constraint_violations and then commit with dolt_commit.",
+    zOp);
+  sqlite3_result_error(ctx, msg, -1);
+  return SQLITE_OK;
+}
+
 static void addFreeEntries(
   struct TableEntry *aWorking, int nWorking,
   struct TableEntry *aStaged,  int nStaged,
@@ -2289,25 +2305,35 @@ static void doltliteMergeFunc(
     }
     sqlite3_free(zDetectErrMsg);
     if( nViolations + nUnique + nCheck > 0 ){
-      rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
-      if( rc==SQLITE_OK ){
-        doltliteSetSessionBranch(db, savedState.zSessionBranch);
-        doltliteSetSessionHead(db, &savedState.sessionHead);
-        doltliteSetSessionStaged(db, &savedState.sessionStaged);
-        doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
-                                     &savedState.sessionMergeCommit,
-                                     &savedState.sessionConflictsCatalog);
-        doltliteSetSessionConstraintViolationsCatalog(
-            db, &savedState.sessionConstraintViolationsCatalog);
-        rc = doltlitePersistWorkingSet(db);
-      }
-      doltliteTxnStateClear(&savedState);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(context, rc);
+      if( db->autoCommit ){
+        rc = doltliteHardReset(db, &savedState.sessionCatalogHash);
+        if( rc==SQLITE_OK ){
+          doltliteSetSessionBranch(db, savedState.zSessionBranch);
+          doltliteSetSessionHead(db, &savedState.sessionHead);
+          doltliteSetSessionStaged(db, &savedState.sessionStaged);
+          doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
+                                       &savedState.sessionMergeCommit,
+                                       &savedState.sessionConflictsCatalog);
+          doltliteSetSessionConstraintViolationsCatalog(
+              db, &savedState.sessionConstraintViolationsCatalog);
+          rc = doltlitePersistWorkingSet(db);
+        }
+        doltliteTxnStateClear(&savedState);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error_code(context, rc);
+        }else{
+          sqlite3_result_error(context,
+            "Committing this transaction resulted in a working set with "
+            "constraint violations, transaction rolled back.", -1);
+        }
       }else{
-        sqlite3_result_error(context,
-          "Committing this transaction resulted in a working set with "
-          "constraint violations, transaction rolled back.", -1);
+        rc = doltliteReportConstraintViolations(db, context, "Merge");
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error_code(context,
+              doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+          return;
+        }
+        doltliteTxnStateClear(&savedState);
       }
       return;
     }
