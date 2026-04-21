@@ -4685,8 +4685,6 @@ static void shellModuleSchema(
 #define OPEN_DB_KEEPALIVE   0x001   /* Return after error if true */
 #define OPEN_DB_ZIPFILE     0x002   /* Open as ZIP if name matches *.zip */
 
-extern int doltliteConnectBranch(sqlite3 *db, const char *zBranch);
-
 static const char *findLastPathSep(const char *zPath){
   const char *zSlash = zPath ? strrchr(zPath, '/') : 0;
 #if defined(_WIN32) || defined(WIN32)
@@ -4733,6 +4731,88 @@ static void parseDoltiteDbBranch(
   }
 
   *pzFilename = sqlite3_mprintf("%s", zInput);
+}
+
+static int doltliteCountBranches(sqlite3 *db, int *pnBranch){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  *pnBranch = 0;
+  rc = sqlite3_prepare_v2(db, "SELECT count(*) FROM dolt_branches", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_finalize(pStmt);
+    return rc;
+  }
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    *pnBranch = sqlite3_column_int(pStmt, 0);
+    rc = SQLITE_OK;
+  }else{
+    rc = SQLITE_ERROR;
+  }
+  sqlite3_finalize(pStmt);
+  return rc;
+}
+
+static int doltliteGetCurrentBranch(sqlite3 *db, char **pzBranch){
+  sqlite3_stmt *pStmt = 0;
+  int rc;
+  *pzBranch = 0;
+  rc = sqlite3_prepare_v2(db, "SELECT active_branch()", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_finalize(pStmt);
+    return rc;
+  }
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    const unsigned char *zText = sqlite3_column_text(pStmt, 0);
+    *pzBranch = sqlite3_mprintf("%s", zText ? (const char *)zText : "");
+    rc = SQLITE_OK;
+  }else{
+    rc = SQLITE_ERROR;
+  }
+  sqlite3_finalize(pStmt);
+  return rc;
+}
+
+static int doltliteSelectConnectBranch(sqlite3 *db, const char *zBranch){
+  sqlite3_stmt *pStmt = 0;
+  char *zCurrent = 0;
+  int nBranch = 0;
+  int rc;
+
+  if( zBranch==0 || zBranch[0]==0 ) zBranch = "main";
+
+  rc = doltliteCountBranches(db, &nBranch);
+  if( rc!=SQLITE_OK ){
+    return SQLITE_OK;
+  }
+  if( nBranch==0 && strcmp(zBranch, "main")==0 ){
+    return SQLITE_OK;
+  }
+
+  rc = doltliteGetCurrentBranch(db, &zCurrent);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zCurrent);
+    return SQLITE_OK;
+  }
+  if( zCurrent && strcmp(zCurrent, zBranch)==0 ){
+    sqlite3_free(zCurrent);
+    return SQLITE_OK;
+  }
+  sqlite3_free(zCurrent);
+
+  rc = sqlite3_prepare_v2(db, "SELECT dolt_checkout(?)", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_finalize(pStmt);
+    return SQLITE_OK;
+  }
+  sqlite3_bind_text(pStmt, 1, zBranch, -1, SQLITE_STATIC);
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW || rc==SQLITE_DONE ){
+    rc = SQLITE_OK;
+  }
+  sqlite3_finalize(pStmt);
+  return rc;
 }
 
 /*
@@ -4831,7 +4911,7 @@ static void open_db(ShellState *p, int openFlags){
               zRequestedFilename ? zRequestedFilename : zDbFilename);
       }
     }
-    rc = doltliteConnectBranch(p->db, zParsedBranch ? zParsedBranch : "main");
+    rc = doltliteSelectConnectBranch(p->db, zParsedBranch ? zParsedBranch : "main");
     if( rc!=SQLITE_OK ){
       cli_printf(stderr, "Error: unable to select branch \"%s\": %s\n",
                  zParsedBranch ? zParsedBranch : "main", sqlite3_errstr(rc));
