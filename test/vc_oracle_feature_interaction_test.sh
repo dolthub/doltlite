@@ -8569,6 +8569,444 @@ SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
 
 # ═══════════════════════════════════════════════════════════════════
+# Section 219: dolt_hashof / dolt_hashof_table properties
+# ═══════════════════════════════════════════════════════════════════
+echo "--- dolt_hashof property probes ---"
+
+oracle "hashof_head_matches_log_top" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD');"
+
+oracle "hashof_main_equals_hashof_head_on_main" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+" "SELECT CASE WHEN dolt_hashof('main') = dolt_hashof('HEAD') THEN 1 ELSE 0 END;"
+
+oracle "hashof_head_changes_after_new_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(DISTINCT commit_hash) FROM dolt_log;"
+
+oracle "hashof_tilde_traverses_parents" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+" "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD~1');"
+
+oracle "hashof_table_nonempty_after_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+" "SELECT CASE WHEN length(dolt_hashof_table('t')) > 0 THEN 1 ELSE 0 END;"
+
+oracle "hashof_table_changes_with_update" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_hashof_table('t');
+UPDATE t SET v=99 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(DISTINCT commit_hash) FROM dolt_log;"
+
+oracle "hashof_same_across_noop_queries" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT 1;
+SELECT 2;
+SELECT 3;
+" "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD');"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 220: Many-branch fan-in
+# ═══════════════════════════════════════════════════════════════════
+echo "--- many-branch fan-in probes ---"
+
+oracle "ten_branch_fan_in" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(0,'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','b1');
+INSERT INTO t VALUES(1,'b1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b1');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b2');
+INSERT INTO t VALUES(2,'b2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b2');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b3');
+INSERT INTO t VALUES(3,'b3');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b3');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b4');
+INSERT INTO t VALUES(4,'b4');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b4');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b5');
+INSERT INTO t VALUES(5,'b5');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b5');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b6');
+INSERT INTO t VALUES(6,'b6');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b6');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b7');
+INSERT INTO t VALUES(7,'b7');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b7');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b8');
+INSERT INTO t VALUES(8,'b8');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b8');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b9');
+INSERT INTO t VALUES(9,'b9');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b9');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','b10');
+INSERT INTO t VALUES(10,'b10');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','b10');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('b1');
+SELECT dolt_merge('b2');
+SELECT dolt_merge('b3');
+SELECT dolt_merge('b4');
+SELECT dolt_merge('b5');
+SELECT dolt_merge('b6');
+SELECT dolt_merge('b7');
+SELECT dolt_merge('b8');
+SELECT dolt_merge('b9');
+SELECT dolt_merge('b10');
+" "SELECT count(*) AS n, sum(id) AS s FROM t;"
+
+oracle "fan_in_branch_list_grows" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_branch('b1');
+SELECT dolt_branch('b2');
+SELECT dolt_branch('b3');
+SELECT dolt_branch('b4');
+SELECT dolt_branch('b5');
+SELECT dolt_branch('b6');
+SELECT dolt_branch('b7');
+SELECT dolt_branch('b8');
+" "SELECT count(*) FROM dolt_branches;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 221: Schema merge corners
+# ═══════════════════════════════════════════════════════════════════
+echo "--- schema merge corner probes ---"
+
+oracle "type_widen_int_to_bigint_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2, 2000);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET n=999 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, n FROM t ORDER BY id;"
+
+oracle "add_col_with_default_then_merge_into_branch_with_more_rows" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'b'),(3,'c'),(4,'d');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat rows');
+SELECT dolt_checkout('main');
+ALTER TABLE t ADD COLUMN flag INTEGER DEFAULT 7;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main adds col');
+SELECT dolt_merge('feat');
+" "SELECT id, v, flag FROM t ORDER BY id;"
+
+oracle "drop_nullable_col_one_side" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, notes TEXT);
+INSERT INTO t VALUES(1,'a','n1'),(2,'b','n2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+ALTER TABLE t DROP COLUMN notes;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat drops');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'c','n3');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main adds row');
+SELECT dolt_merge('feat');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 222: Math functions after merge
+# ═══════════════════════════════════════════════════════════════════
+echo "--- math function probes ---"
+
+oracle "abs_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1,-5),(2,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3,-20),(4,15);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id, abs(n) AS a FROM t ORDER BY id;"
+
+oracle "mod_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1,17),(2,22),(3,100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(4,49);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id, n % 7 AS r FROM t ORDER BY id;"
+
+oracle "negate_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1,17),(2,100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3,50);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id, -n AS neg FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 223: Tag semantics
+# ═══════════════════════════════════════════════════════════════════
+echo "--- tag semantics probes ---"
+
+oracle "tag_points_to_commit_hash" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_tag('snap','HEAD');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('snap');"
+
+oracle "tag_count_after_multiple_tags" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_tag('t1','HEAD');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+SELECT dolt_tag('t2','HEAD');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+SELECT dolt_tag('t3','HEAD');
+" "SELECT count(*) FROM dolt_tags;"
+
+oracle "tag_deleted_doesnt_affect_commits" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_tag('doomed','HEAD');
+SELECT dolt_tag('-d','doomed');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 224: Merge-base in complex topologies
+# ═══════════════════════════════════════════════════════════════════
+echo "--- complex merge base topology ---"
+
+oracle "merge_base_after_merged_branch" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(10,'main1');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main1');
+SELECT dolt_merge('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(3,'feat2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "merge_base_grandchild_branch" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat1');
+SELECT dolt_checkout('-b','grandchild');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','g1');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('grandchild');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 225: Unicode sort + merge
+# ═══════════════════════════════════════════════════════════════════
+echo "--- unicode sort probes ---"
+
+oracle "unicode_text_sort_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(32));
+INSERT INTO t VALUES(1,'alpha'),(2,'ALPHA'),(3,'beta');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(4,'gamma'),(5,'GAMMA');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id FROM t ORDER BY v, id;"
+
+oracle "ascii_punctuation_sort_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v VARCHAR(32));
+INSERT INTO t VALUES(1,'a-b'),(2,'a_b'),(3,'ab');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(4,'a!b'),(5,'a.b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id FROM t ORDER BY v;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 226: Deeper log filters
+# ═══════════════════════════════════════════════════════════════════
+echo "--- log filter probes ---"
+
+oracle "log_commit_hash_prefix_match" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD');"
+
+oracle "log_ordered_by_time_stable_count" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+" "SELECT count(*) FROM (SELECT commit_hash FROM dolt_log ORDER BY date DESC) sub;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 227: Post-merge data invariants
+# ═══════════════════════════════════════════════════════════════════
+echo "--- post-merge invariant probes ---"
+
+oracle "row_count_after_ff_merge_unchanged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3,'c'),(4,'d');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT count(*) FROM t;"
+
+oracle "row_count_after_three_way_merge_disjoint" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1),(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(100),(101);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(10),(11);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
