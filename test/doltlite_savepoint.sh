@@ -277,6 +277,15 @@ run_test_match "remote_savepoint_remote_persists" \
   "SELECT group_concat(name, ',') FROM dolt_remotes;" \
   "^origin$" "$DB6g"
 
+DB6g1=/tmp/test_savepoint6g1_$$.db; rm -f "$DB6g1"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1" > /dev/null 2>&1
+run_test_match "add_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_add('.'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g1"
+run_test_match "add_savepoint_row_persists" \
+  "SELECT count(*) FROM t;" \
+  "^2$" "$DB6g1"
+
 DB6g2=/tmp/test_savepoint6g2_$$.db; rm -f "$DB6g2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g2" > /dev/null 2>&1
 run_test_match "branch_delete_current_savepoint_rollback_to_errors" \
@@ -492,7 +501,7 @@ run_test_match "branch_name_after_rollback" \
 # Cleanup
 # ============================================================
 rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" \
-  "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9" "$DB6g10"
+  "$DB6g1" "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9" "$DB6g10"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

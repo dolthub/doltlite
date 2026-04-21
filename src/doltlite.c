@@ -942,6 +942,13 @@ static void doltliteAddFunc(
       sqlite3_result_error_code(context, rc);
       return;
     }
+    if( doltliteSavepointIsTopLevelTxn(db) ){
+      rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(context, rc);
+        return;
+      }
+    }
   }
 
   sqlite3_result_int(context, 0);

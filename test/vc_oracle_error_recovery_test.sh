@@ -3073,6 +3073,22 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 100: SAVEPOINT + dolt_add parity
+# ═══════════════════════════════════════════════════════════════════
+echo "--- savepoint add parity ---"
+
+oracle "savepoint_add_releases_savepoint" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SAVEPOINT sp1;
+INSERT INTO t VALUES(2,'dirty');
+SELECT dolt_add('.');
+ROLLBACK TO sp1;
+" "SELECT 'ROWS', count(*) FROM t;"
 # ═══════════════════════════════════════════════════════════════════
 # Section 100: Cherry-pick with no-op commit
 # ═══════════════════════════════════════════════════════════════════
