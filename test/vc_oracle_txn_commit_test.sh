@@ -64,8 +64,7 @@ CALL dolt_commit('-A','-m','c1');
 ROLLBACK;
 SELECT count(*) AS c FROM t;
 SQL
-  echo "DEBUG_A_RAW:" $("$DOLT" sql -c -r csv < "$TMPROOT/a.sql" 2>&1 | cat -A) 1>&2
-  DOLT_A=$("$DOLT" sql -c -r csv < "$TMPROOT/a.sql" 2>/dev/null | grep '^[0-9][0-9]*$' | tail -1)
+  DOLT_A=$(cd "$DOLT_A_DIR" && "$DOLT" sql -c -r csv < "$TMPROOT/a.sql" 2>/dev/null | grep '^[0-9][0-9]*$' | tail -1)
   cd - >/dev/null
 
   if [ "$DL_A" = "$DOLT_A" ]; then
@@ -112,7 +111,7 @@ CALL dolt_commit('-A','-m','c1');
 ROLLBACK TO sp1;
 SELECT count(*) AS c FROM t;
 SQL
-  DOLT_B=$("$DOLT" sql -c -r csv < "$TMPROOT/b.sql" 2>/dev/null | grep '^[0-9][0-9]*$' | tail -1)
+  DOLT_B=$(cd "$DOLT_B_DIR" && "$DOLT" sql -c -r csv < "$TMPROOT/b.sql" 2>/dev/null | grep '^[0-9][0-9]*$' | tail -1)
   cd - >/dev/null
 
   if [ "$DL_B" = "$DOLT_B" ]; then
