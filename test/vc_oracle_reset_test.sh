@@ -163,6 +163,44 @@ oracle_error_match() {
   fi
 }
 
+oracle_same_session() {
+  local name="$1" dl_setup="$2" dl_query="$3" dolt_setup="${4:-$2}" dolt_query="${5:-$3}"
+  local dir="$TMPROOT/${name}_ss"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out
+  dl_out=$(
+    {
+      printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s\n" "$dl_setup" "$dl_query"
+    } | "$DOLTLITE" "$dir/dl/db" 2>&1 \
+      | tr -d '\r' \
+      | awk '/^Q\|/ {print; next} /[Nn]o such savepoint:|SAVEPOINT .*does not exist/ {print "E|savepoint"}'
+  )
+
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    {
+      printf '%s\n' "$(vc_oracle_translate_for_dolt "$dolt_setup")"
+      printf '%s\n' "$dolt_query"
+    } | "$DOLT" sql -c -r csv 2>&1 \
+      | tail -n +2 \
+      | tr -d '"\r' \
+      | awk '/^Q\|/ {print; next} /[Nn]o such savepoint:|SAVEPOINT .*does not exist/ {print "E|savepoint"}'
+  )
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_reset ==="
 echo ""
 
@@ -373,6 +411,42 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 SELECT dolt_reset('--soft');
 " "Merge conflict detected"
+
+echo "--- savepoint parity ---"
+
+oracle_same_session "reset_hard_savepoint_invalidated" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-A', '-m', 'c1');
+SAVEPOINT sp1;
+SELECT dolt_reset('--hard', 'HEAD');
+" "SELECT 'Q|' || v FROM t;
+ROLLBACK TO sp1;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+CALL dolt_commit('-A', '-m', 'c1');
+SAVEPOINT sp1;
+CALL dolt_reset('--hard', 'HEAD');
+" "SELECT concat('Q|', v) FROM t;
+ROLLBACK TO sp1;"
+
+oracle_same_session "reset_bad_ref_savepoint_invalidated" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-A', '-m', 'c1');
+UPDATE t SET v='dirty';
+SAVEPOINT sp1;
+SELECT dolt_reset('--hard', 'bogus');
+" "SELECT 'Q|' || v FROM t;
+ROLLBACK TO sp1;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+CALL dolt_commit('-A', '-m', 'c1');
+UPDATE t SET v='dirty';
+SAVEPOINT sp1;
+CALL dolt_reset('--hard', 'bogus');
+" "SELECT concat('Q|', v) FROM t;
+ROLLBACK TO sp1;"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

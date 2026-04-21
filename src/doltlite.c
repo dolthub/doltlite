@@ -1826,7 +1826,7 @@ static void doltliteResetFunc(
 
   if( !cs ){
     sqlite3_result_error(context, "no database open", -1);
-    return;
+    goto reset_cleanup;
   }
 
 
@@ -1837,7 +1837,7 @@ static void doltliteResetFunc(
 
 
   azPaths = (const char**)sqlite3_malloc(sizeof(char*) * (argc>0?argc:1));
-  if( !azPaths ){ sqlite3_result_error_nomem(context); return; }
+  if( !azPaths ){ sqlite3_result_error_nomem(context); goto reset_cleanup; }
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
     if( !arg ) continue;
@@ -1848,7 +1848,8 @@ static void doltliteResetFunc(
       sqlite3_result_error(context, zErr ? zErr : "unknown option", -1);
       sqlite3_free(zErr);
       sqlite3_free(azPaths);
-      return;
+      azPaths = 0;
+      goto reset_cleanup;
     }
     else if( !zRef ){
 
@@ -1873,19 +1874,21 @@ static void doltliteResetFunc(
     sqlite3_result_error(context,
       "--hard and --soft are mutually exclusive options.", -1);
     sqlite3_free(azPaths);
-    return;
+    azPaths = 0;
+    goto reset_cleanup;
   }
 
   doltliteGetSessionMergeState(db, &isMerging, 0, 0);
   if( isMerging && !isHard ){
     sqlite3_free(azPaths);
+    azPaths = 0;
     sqlite3_result_error(context,
       "Merge conflict detected, transaction rolled back. "
       "Merge conflicts must be resolved using the dolt_conflicts and "
       "dolt_schema_conflicts tables before committing a transaction. "
       "To commit transactions with merge conflicts, set "
       "@@dolt_allow_commit_conflicts = 1", -1);
-    return;
+    goto reset_cleanup;
   }
 
   if( nPaths>0 ){
@@ -1893,32 +1896,35 @@ static void doltliteResetFunc(
       sqlite3_result_error(context,
         "table paths cannot be combined with --hard / --soft or a target ref", -1);
       sqlite3_free(azPaths);
-      return;
+      azPaths = 0;
+      goto reset_cleanup;
     }
     rc = resetStageNamedPaths(db, cs, azPaths, nPaths);
     sqlite3_free(azPaths);
+    azPaths = 0;
     if( rc==SQLITE_NOTFOUND ){
       sqlite3_result_error(context, "table not found", -1);
-      return;
+      goto reset_cleanup;
     }
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
-      return;
+      goto reset_cleanup;
     }
     rc = doltlitePersistWorkingSet(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
-      return;
+      goto reset_cleanup;
     }
     sqlite3_result_int(context, 0);
-    return;
+    goto reset_cleanup;
   }
   sqlite3_free(azPaths);
+  azPaths = 0;
 
 
   if( isSoft && !zRef ){
     sqlite3_result_int(context, 0);
-    return;
+    goto reset_cleanup;
   }
 
   if( zRef ){
@@ -1927,13 +1933,13 @@ static void doltliteResetFunc(
     rc = doltliteResolveRef(db,zRef, &targetCommit);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "commit not found", -1);
-      return;
+      goto reset_cleanup;
     }
 
     rc = doltliteLoadCommit(db, &targetCommit, &commit);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to load commit", -1);
-      return;
+      goto reset_cleanup;
     }
     memcpy(&targetCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
@@ -1944,11 +1950,11 @@ static void doltliteResetFunc(
       sqlite3_result_error(context,
         "reset conflict: another connection moved this branch. "
         "Please retry your transaction.", -1);
-      return;
+      goto reset_cleanup;
     }
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
-      return;
+      goto reset_cleanup;
     }
     graphLocked = 1;
 
@@ -1964,7 +1970,7 @@ static void doltliteResetFunc(
     rc = doltliteGetHeadCatalogHash(db, &targetCatHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to read HEAD", -1);
-      return;
+      goto reset_cleanup;
     }
   }
 
@@ -2038,8 +2044,13 @@ static void doltliteResetFunc(
 
   sqlite3_result_int(context, 0);
 reset_cleanup:
+  sqlite3_free(azPaths);
   if( graphLocked ){
     chunkStoreUnlock(cs);
+  }
+  rc = doltliteVcSealActiveSavepoints(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
   }
 }
 

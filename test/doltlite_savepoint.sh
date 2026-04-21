@@ -182,6 +182,22 @@ run_test "hard_reset_in_txn_status_clean" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB5"
 
+# Savepoint around reset should be invalidated, matching Dolt.
+DB5b=/tmp/test_savepoint5b_$$.db; rm -f "$DB5b"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5b" > /dev/null 2>&1
+run_test_match "hard_reset_savepoint_invalidated" \
+  "SAVEPOINT sp1; SELECT dolt_reset('--hard','HEAD'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB5b"
+
+DB5c=/tmp/test_savepoint5c_$$.db; rm -f "$DB5c"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); UPDATE t SET v='dirty';" | $DOLTLITE "$DB5c" > /dev/null 2>&1
+run_test_match "bad_reset_savepoint_invalidated" \
+  "SAVEPOINT sp1; SELECT dolt_reset('--hard','bogus'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB5c"
+run_test "bad_reset_savepoint_row_persists" \
+  "SELECT v FROM t WHERE id=1;" \
+  "dirty" "$DB5c"
+
 # ============================================================
 # Test 6: dolt_checkout inside a transaction
 # Expected: dolt_checkout requires a clean working set and switches
