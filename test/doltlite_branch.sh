@@ -107,7 +107,34 @@ run_test_match "move_empty_source" "SELECT dolt_branch('-m','','renamed');" "bra
 run_test_match "move_empty_dest" "SELECT dolt_branch('-m','main','');" "branch name required" "$DB9"
 run_test_match "checkout_b_empty_name" "SELECT dolt_checkout('-b','');" "branch name required" "$DB9"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9"
+# --- main protection: cannot delete or rename main ---
+# doltlite's session-branch resolver falls back to literal "main" on reopen,
+# so allowing main to go away would leave the repo unopenable. Reject until
+# proper default-branch logic lands.
+DB10=/tmp/test_branch10_$$.db; rm -f "$DB10"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+echo "SELECT dolt_checkout('-b','other');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+
+run_test_match "delete_main_rejected" "SELECT dolt_branch('-d','main');" "cannot delete branch 'main'" "$DB10"
+run_test_match "force_delete_main_rejected" "SELECT dolt_branch('-D','main');" "cannot delete branch 'main'" "$DB10"
+run_test_match "rename_main_rejected" "SELECT dolt_branch('-m','main','trunk');" "cannot rename branch 'main'" "$DB10"
+run_test "main_still_exists" "SELECT count(*) FROM dolt_branches WHERE name='main';" "1" "$DB10"
+
+# Reopening still works — main resolves
+run_test "reopen_after_blocked_ops_active" "SELECT active_branch();" "other" "$DB10"
+
+# Non-main rename and delete still work
+DB11=/tmp/test_branch11_$$.db; rm -f "$DB11"
+echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB11" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB11" > /dev/null 2>&1
+run_test "rename_non_main_works" "SELECT dolt_branch('-m','feat','renamed');" "0" "$DB11"
+run_test "renamed_listed" "SELECT count(*) FROM dolt_branches WHERE name='renamed';" "1" "$DB11"
+run_test "delete_non_main_works" "SELECT dolt_branch('-d','renamed');" "0" "$DB11"
+
+# Copy from main is still allowed — it doesn't remove main
+run_test "copy_from_main_works" "SELECT dolt_branch('-c','main','snapshot');" "0" "$DB11"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

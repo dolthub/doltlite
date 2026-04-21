@@ -209,6 +209,18 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         sqlite3_result_error(ctx, "cannot delete the current branch", -1);
         return;
       }
+      /* Short-term guard: doltlite does not yet have stable default-branch
+      ** resolution, so on reopen p->zBranch initializes from the last-active
+      ** branch (tracked via chunkStoreGetDefaultBranch, which dolt_checkout
+      ** updates). If "main" is deleted, opening the DB would leave the
+      ** session pointing at a nonexistent branch. Reject until we have real
+      ** default-branch logic. */
+      if( strcmp(aPositional[0], "main")==0 ){
+        sqlite3_result_error(ctx,
+          "cannot delete branch 'main' (doltlite requires main to exist)",
+          -1);
+        return;
+      }
       if( !force ){
         rc = chunkStoreFindBranch(cs, aPositional[0], &branchHead);
         if( rc!=SQLITE_OK ){
@@ -277,6 +289,15 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       memset(&m, 0, sizeof(m));
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
+      /* Same guard as MODE_DELETE: renaming "main" away would leave the
+      ** repo with no main branch, and reopening would fail to resolve a
+      ** session branch. Reject until default-branch logic is reworked. */
+      if( strcmp(m.zSrc, "main")==0 ){
+        sqlite3_result_error(ctx,
+          "cannot rename branch 'main' (doltlite requires main to exist)",
+          -1);
+        return;
+      }
       renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
       rc = doltliteMutateRefs(db, mutateBranchMove, &m);
       if( rc!=SQLITE_OK ){
