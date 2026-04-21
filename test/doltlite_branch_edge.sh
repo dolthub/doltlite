@@ -64,7 +64,7 @@ DB=/tmp/test_bedge_delcur_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "delete_current_branch" "SELECT dolt_branch('-d','feat');" "cannot delete" "$DB"
+run_test_match "delete_current_branch" "SELECT dolt_branch('-d','feat');" "cannot delete" "$DB/feat"
 db_rm "$DB"
 
 # Test: Branch from a specific tag
@@ -115,8 +115,8 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Session 2: checkout dev, verify data
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "xsess_branch_count" "SELECT count(*) FROM t;" "2" "$DB"
-run_test "xsess_branch_val" "SELECT v FROM t WHERE id=2;" "dev_data" "$DB"
+run_test "xsess_branch_count" "SELECT count(*) FROM t;" "2" "$DB/dev"
+run_test "xsess_branch_val" "SELECT v FROM t WHERE id=2;" "dev_data" "$DB/dev"
 db_rm "$DB"
 
 # Test: Session 1 merges; Session 2 verifies merge result
@@ -177,7 +177,7 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Get commit hashes for cross-branch diff
 MAIN_HEAD=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB" 2>&1)
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
-FEAT_HEAD=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB" 2>&1)
+FEAT_HEAD=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1;" | $DOLTLITE "$DB/feat" 2>&1)
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Test: dolt_diff between two different branches' commits
@@ -309,8 +309,8 @@ C1=$(echo "SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1;" | $DOLTLITE "$DB"
 echo "SELECT dolt_reset('--hard','$C1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "reset_then_checkout" "SELECT dolt_checkout('other');" "0" "$DB"
-run_test "reset_then_checkout_branch" "SELECT active_branch();" "other" "$DB"
-run_test "reset_then_checkout_data" "SELECT count(*) FROM t;" "1" "$DB"
+run_test "reset_then_checkout_branch" "SELECT active_branch();" "other" "$DB/other"
+run_test "reset_then_checkout_data" "SELECT count(*) FROM t;" "1" "$DB/other"
 db_rm "$DB"
 
 echo ""
@@ -341,8 +341,8 @@ run_test "schema_main_no_extra" \
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "schema_feat_has_extra" \
   "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra';" \
-  "1" "$DB"
-run_test "schema_feat_extra_val" "SELECT extra FROM t WHERE id=1;" "new" "$DB"
+  "1" "$DB/feat"
+run_test "schema_feat_extra_val" "SELECT extra FROM t WHERE id=1;" "new" "$DB/feat"
 db_rm "$DB"
 
 # Test: Create table on branch, merge to main -- main should have the new table

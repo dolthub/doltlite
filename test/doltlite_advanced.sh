@@ -110,7 +110,7 @@ run_test "empty_diff" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(1,'feat_row');
-SELECT dolt_commit('-A','-m','feat adds row');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feat adds row');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -207,7 +207,7 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET a='feat_a' WHERE id=1;
-SELECT dolt_commit('-A','-m','feat: update a');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feat: update a');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 
 # Main updates column c on row 2
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -455,21 +455,21 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,'dev_data');
-SELECT dolt_commit('-A','-m','dev work');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','dev work');" | $DOLTLITE "$DB/dev" > /dev/null 2>&1
 
 # Switch back and forth — data should be correct each time
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "preserve_main1" "SELECT count(*) FROM t;" "1" "$DB"
 
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "preserve_dev1" "SELECT count(*) FROM t;" "2" "$DB"
+run_test "preserve_dev1" "SELECT count(*) FROM t;" "2" "$DB/dev"
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "preserve_main2" "SELECT count(*) FROM t;" "1" "$DB"
 
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "preserve_dev2" "SELECT count(*) FROM t;" "2" "$DB"
-run_test "preserve_dev_val" "SELECT v FROM t WHERE id=2;" "dev_data" "$DB"
+run_test "preserve_dev2" "SELECT count(*) FROM t;" "2" "$DB/dev"
+run_test "preserve_dev_val" "SELECT v FROM t WHERE id=2;" "dev_data" "$DB/dev"
 
 rm -f "$DB"
 
@@ -618,10 +618,10 @@ echo "SELECT dolt_branch('featA');
 SELECT dolt_branch('featB');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('featA');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(10,'A'); SELECT dolt_commit('-A','-m','featA');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(10,'A'); SELECT dolt_commit('-A','-m','featA');" | $DOLTLITE "$DB/featA" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('featB');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(20,'B'); SELECT dolt_commit('-A','-m','featB');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(20,'B'); SELECT dolt_commit('-A','-m','featB');" | $DOLTLITE "$DB/featB" > /dev/null 2>&1
 
 # Merge A into main
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -683,7 +683,7 @@ run_test "oneside_count" "SELECT count(*) FROM t;" "2" "$DB"
 # Now make feat ahead: checkout feat, add data, merge into main
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(3,'feat_only');
-SELECT dolt_commit('-A','-m','feat adds');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feat adds');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Now merge feat into main — three-way merge needed
@@ -726,7 +726,7 @@ SELECT dolt_commit('-A','-m','init with index');" | $DOLTLITE "$DB" > /dev/null 
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(3,'c',30);
-SELECT dolt_commit('-A','-m','feat add');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feat add');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(4,'d',5);

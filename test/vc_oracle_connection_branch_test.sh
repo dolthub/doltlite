@@ -67,7 +67,13 @@ UPDATE t SET v='side' WHERE id=1;
 CALL dolt_commit('-Am', 'side');
 CALL dolt_checkout('main');
 SQL
-  ( cd "$dir/dt" && "$DOLT" init >/dev/null && "$DOLT" sql <"$dir/setup_dt.sql" >/dev/null 2>"$dir/dt.err" )
+  (
+    cd "$dir/dt" &&
+    "$DOLT" init >/dev/null &&
+    "$DOLT" config --local --add user.name "CI" >/dev/null &&
+    "$DOLT" config --local --add user.email "ci@example.com" >/dev/null &&
+    "$DOLT" sql <"$dir/setup_dt.sql" >/dev/null 2>"$dir/dt.err"
+  )
 }
 
 oracle() {

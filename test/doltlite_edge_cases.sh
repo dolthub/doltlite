@@ -43,7 +43,7 @@ run_test "val_to_null" "SELECT count(*) FROM t WHERE a IS NULL;" "1" "$DB"
 # NULL in merge scenario
 echo "SELECT dolt_branch('nullbranch');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('nullbranch');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "UPDATE t SET b=999 WHERE id=3; SELECT dolt_commit('-A','-m','branch change');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "UPDATE t SET b=999 WHERE id=3; SELECT dolt_commit('-A','-m','branch change');" | $DOLTLITE "$DB/nullbranch" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET c=9.9 WHERE id=1; SELECT dolt_commit('-A','-m','main change');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -107,7 +107,7 @@ run_test "special_updated" "SELECT val FROM t WHERE id=1;" "updated" "$DB"
 # Branch and merge with special chars
 echo "SELECT dolt_branch('sp');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('sp');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(6,'sp_val'); SELECT dolt_commit('-A','-m','sp commit');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(6,'sp_val'); SELECT dolt_commit('-A','-m','sp commit');" | $DOLTLITE "$DB/sp" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(7,'main_val'); SELECT dolt_commit('-A','-m','main commit');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -135,7 +135,7 @@ echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO a VALUES(2,'a2_feat');
 INSERT INTO b VALUES(2,'b2_feat');
-SELECT dolt_commit('-A','-m','feat: add to a and b');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feat: add to a and b');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO b VALUES(3,'b3_main');
@@ -171,7 +171,7 @@ echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "CREATE TABLE feat_table(id INTEGER PRIMARY KEY, f TEXT);
 INSERT INTO feat_table VALUES(1,'feat1');
 INSERT INTO feat_table VALUES(2,'feat2');
-SELECT dolt_commit('-A','-m','add feat_table');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','add feat_table');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO base VALUES(2,'y');
@@ -202,7 +202,7 @@ echo "SELECT dolt_checkout('ahead');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,'second');
 SELECT dolt_commit('-A','-m','second');
 INSERT INTO t VALUES(3,'third');
-SELECT dolt_commit('-A','-m','third');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','third');" | $DOLTLITE "$DB/ahead" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -344,7 +344,7 @@ run_test "schema_new_row" "SELECT email FROM t WHERE id=2;" "bob@test.com" "$DB"
 echo "SELECT dolt_branch('post-schema');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('post-schema');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(3,'Charlie','charlie@test.com');
-SELECT dolt_commit('-A','-m','charlie on branch');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','charlie on branch');" | $DOLTLITE "$DB/post-schema" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(4,'Dave','dave@test.com');
@@ -460,10 +460,10 @@ run_test "branch_multi" "SELECT count(*) FROM dolt_branches;" "4" "$DB"
 
 # Switch between branches rapidly
 echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "branch_on_b1" "SELECT active_branch();" "b1" "$DB"
+run_test "branch_on_b1" "SELECT active_branch();" "b1" "$DB/b1"
 
 echo "SELECT dolt_checkout('b2');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "branch_on_b2" "SELECT active_branch();" "b2" "$DB"
+run_test "branch_on_b2" "SELECT active_branch();" "b2" "$DB/b2"
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "branch_back_main" "SELECT active_branch();" "main" "$DB"
@@ -479,7 +479,7 @@ run_test_match "branch_names" "SELECT name FROM dolt_branches ORDER BY name;" "b
 # Commit on b1 doesn't affect main
 echo "SELECT dolt_checkout('b1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(99);
-SELECT dolt_commit('-A','-m','b1 commit');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','b1 commit');" | $DOLTLITE "$DB/b1" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "branch_isolation" "SELECT count(*) FROM t;" "1" "$DB"
@@ -503,7 +503,7 @@ echo "SELECT dolt_branch('hotfix');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('hotfix');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE users SET name='ALICE' WHERE id=1;
 UPDATE orders SET item='HAT' WHERE id=1;
-SELECT dolt_commit('-A','-m','hotfix: uppercase');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','hotfix: uppercase');" | $DOLTLITE "$DB/hotfix" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE users SET name='alice_v2' WHERE id=1;
@@ -547,7 +547,7 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='hf_val' WHERE id=1;
-SELECT dolt_commit('-A','-m','hf');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','hf');" | $DOLTLITE "$DB/hf" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='main_val' WHERE id=1;
@@ -611,7 +611,7 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Merge 1
 echo "SELECT dolt_branch('f1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('f1');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(2,'f1'); SELECT dolt_commit('-A','-m','f1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(2,'f1'); SELECT dolt_commit('-A','-m','f1');" | $DOLTLITE "$DB/f1" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "seqmerge_1" "SELECT dolt_merge('f1');" "^[0-9a-f]{40}$" "$DB"
 run_test "seqmerge_1_count" "SELECT count(*) FROM t;" "2" "$DB"
@@ -619,7 +619,7 @@ run_test "seqmerge_1_count" "SELECT count(*) FROM t;" "2" "$DB"
 # Merge 2
 echo "SELECT dolt_branch('f2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('f2');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(3,'f2'); SELECT dolt_commit('-A','-m','f2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(3,'f2'); SELECT dolt_commit('-A','-m','f2');" | $DOLTLITE "$DB/f2" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "seqmerge_2" "SELECT dolt_merge('f2');" "^[0-9a-f]{40}$" "$DB"
 run_test "seqmerge_2_count" "SELECT count(*) FROM t;" "3" "$DB"
@@ -627,7 +627,7 @@ run_test "seqmerge_2_count" "SELECT count(*) FROM t;" "3" "$DB"
 # Merge 3
 echo "SELECT dolt_branch('f3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('f3');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(4,'f3'); SELECT dolt_commit('-A','-m','f3');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(4,'f3'); SELECT dolt_commit('-A','-m','f3');" | $DOLTLITE "$DB/f3" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "seqmerge_3" "SELECT dolt_merge('f3');" "^[0-9a-f]{40}$" "$DB"
 run_test "seqmerge_3_count" "SELECT count(*) FROM t;" "4" "$DB"
@@ -651,7 +651,7 @@ echo "SELECT dolt_checkout('cleanup');" | $DOLTLITE "$DB" > /dev/null 2>&1
 # Delete individual rows to avoid WHERE clause bug
 echo "DELETE FROM t WHERE id=2;
 DELETE FROM t WHERE id=4;
-SELECT dolt_commit('-A','-m','delete 2 and 4');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','delete 2 and 4');" | $DOLTLITE "$DB/cleanup" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(5,'e');
@@ -755,9 +755,9 @@ SELECT dolt_checkout('dev');
 INSERT INTO t VALUES(4,'round4_dev');
 SELECT dolt_commit('-A','-m','dev commit');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Checkout sets default branch, so reopen stays on dev
-run_test "persist_reopen_branch" "SELECT active_branch();" "dev" "$DB"
-run_test "persist_reopen_data" "SELECT count(*) FROM t;" "4" "$DB"
+# Reopen dev explicitly and verify its data
+run_test "persist_reopen_branch" "SELECT active_branch();" "dev" "$DB/dev"
+run_test "persist_reopen_data" "SELECT count(*) FROM t;" "4" "$DB/dev"
 
 # Switch back to main and verify
 run_test "persist_main_data" "SELECT dolt_checkout('main'); SELECT count(*) FROM t;" "0
@@ -802,8 +802,8 @@ echo "INSERT INTO t VALUES(3,'main2'); SELECT dolt_commit('-A','-m','main2');" |
 
 # Two commits on feat
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(10,'feat1'); SELECT dolt_commit('-A','-m','feat1');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(11,'feat2'); SELECT dolt_commit('-A','-m','feat2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(10,'feat1'); SELECT dolt_commit('-A','-m','feat1');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
+echo "INSERT INTO t VALUES(11,'feat2'); SELECT dolt_commit('-A','-m','feat2');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -886,7 +886,7 @@ SELECT dolt_commit('-A','-m','main change');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET v='same_change' WHERE id=1;
 INSERT INTO t VALUES(3,'feat_only');
-SELECT dolt_commit('-A','-m','feat change');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feat change');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -957,18 +957,18 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,'dev1');
-SELECT dolt_commit('-A','-m','dev1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','dev1');" | $DOLTLITE "$DB/dev" > /dev/null 2>&1
 
 # Branch from dev (not main!)
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(3,'feature1');
-SELECT dolt_commit('-A','-m','feature1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_commit('-A','-m','feature1');" | $DOLTLITE "$DB/feature" > /dev/null 2>&1
 
 # Merge feature back into dev
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "branchfrom_merge" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB"
-run_test "branchfrom_count" "SELECT count(*) FROM t;" "3" "$DB"
+run_test_match "branchfrom_merge" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB/dev"
+run_test "branchfrom_count" "SELECT count(*) FROM t;" "3" "$DB/dev"
 
 # Main should still only have 1 row
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
