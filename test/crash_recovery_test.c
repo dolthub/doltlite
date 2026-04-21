@@ -748,7 +748,12 @@ static void test_10_very_early_kill(void){
       check("test_10: commit count non-negative", nLog>=0);
       if( nLog>0 ){
         int nRows = exec_int(db, "SELECT count(*) FROM t", -1);
-        check("test_10: row count matches commits", nRows==nLog);
+        /* The INSERT for the next would-be commit may already have
+        ** autocommitted before the process is killed inside
+        ** dolt_commit(). In that case recovery can legitimately see one
+        ** extra row beyond the durable Dolt commit count. */
+        check("test_10: row count matches commits or next insert",
+              nRows==nLog || nRows==nLog+1);
       }
     }else{
       /* If we killed before the file was created, that's OK. */

@@ -57,7 +57,6 @@ echo "--- 3: 100-column conflict (same column both sides) ---"
 DB="$TMPROOT/3.db"
 CONF=$(
   "$DOLTLITE" "$DB" 2>/dev/null <<SQL | awk -F'|' '$1=="CONF"{print $2}'
-BEGIN;
 CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS);
 INSERT INTO t VALUES(1, $VALS);
 SELECT dolt_commit('-Am','base');
@@ -68,6 +67,7 @@ SELECT dolt_commit('-Am','feat');
 SELECT dolt_checkout('main');
 UPDATE t SET c50=2000 WHERE id=1;
 SELECT dolt_commit('-Am','main');
+BEGIN;
 SELECT dolt_merge('feat');
 SELECT 'CONF', count(*) FROM dolt_conflicts;
 SQL

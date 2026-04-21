@@ -6322,7 +6322,38 @@ void doltliteClearSessionRebaseState(sqlite3 *db){
 }
 
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
-  doltliteGetSessionMergeState(db, 0, 0, pHash);
+  u8 isMerging = 0;
+  if( pHash ) memset(pHash, 0, sizeof(*pHash));
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt || !pHash ) return;
+  if( db->autoCommit && sqlite3_txn_state(db, "main")==SQLITE_TXN_NONE ){
+    sqlite3 *db2 = 0;
+    const char *zFilename = sqlite3_db_filename(db, "main");
+    if( zFilename && sqlite3_open_v2(zFilename, &db2, SQLITE_OPEN_READONLY, 0)==SQLITE_OK
+        && db2 && db2->nDb>0 && db2->aDb[0].pBt ){
+      Btree *p2 = db2->aDb[0].pBt;
+      Btree *p = db->aDb[0].pBt;
+      const char *zBr = p->zBranch ? p->zBranch : "main";
+      int rc = btreeLoadWorkingSetBlob(&p2->pBt->store, zBr,
+                                       0, 0, 0, &isMerging,
+                                       0, pHash, 0, 0, 0, 0, 0);
+      sqlite3_close(db2);
+      if( rc!=SQLITE_OK || !isMerging ){
+        memset(pHash, 0, sizeof(*pHash));
+      }
+      return;
+    }
+    if( db2 ) sqlite3_close(db2);
+  }
+  {
+    Btree *p = db->aDb[0].pBt;
+    const char *zBr = p->zBranch ? p->zBranch : "main";
+    int rc = btreeLoadWorkingSetBlob(&p->pBt->store, zBr,
+                                     0, 0, 0, &isMerging,
+                                     0, pHash, 0, 0, 0, 0, 0);
+    if( rc!=SQLITE_OK || !isMerging ){
+      memset(pHash, 0, sizeof(*pHash));
+    }
+  }
 }
 
 void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash){

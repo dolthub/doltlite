@@ -131,6 +131,34 @@ run_test "mixed_row2_unchanged" "SELECT v FROM t WHERE id=2;" "b" "$DB8"
 run_test "mixed_row3_from_main" "SELECT v FROM t WHERE id=3;" "main3" "$DB8"
 run_test "mixed_row4_absent" "SELECT count(*) FROM t WHERE id=4;" "0" "$DB8"
 
+DB8B=/tmp/test_merge8b_$$.db; rm -f "$DB8B"
+TX_OUT=$({
+cat <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v='feat1' WHERE id=1;
+INSERT INTO t VALUES(4,'feat4');
+SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main1' WHERE id=1;
+INSERT INTO t VALUES(3,'main3');
+SELECT dolt_commit('-A','-m','main');
+SELECT dolt_merge('feature');
+SELECT 'TX|' || (SELECT count(*) FROM dolt_conflicts) || '|' ||
+       (SELECT v FROM t WHERE id=1) || '|' ||
+       (SELECT count(*) FROM t WHERE id=4);
+SQL
+} | $DOLTLITE "$DB8B" 2>&1 | grep '^TX|')
+if [ "$TX_OUT" = "TX|0|main1|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: mixed_merge_same_session_summary_cleared\n  expected: TX|0|main1|0\n  got:      $TX_OUT"
+fi
+
 # --- dolt_merge('--abort') ---
 DB9=/tmp/test_merge9_$$.db; rm -f "$DB9"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
@@ -181,7 +209,7 @@ else
   ERRORS="$ERRORS\nFAIL: constraint_violation_merge_tx_persists\n  expected: TX|0|1|1:9:main1,2:9:feat2\n  got:      $TX_OUT"
 fi
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

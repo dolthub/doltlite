@@ -116,7 +116,6 @@ DB="$TMPROOT/10.db"
 CONF=$(
   {
     cat <<'SQL'
-BEGIN;
 CREATE TABLE t(id INTEGER PRIMARY KEY, k INT, v TEXT);
 CREATE INDEX idx ON t(k);
 INSERT INTO t VALUES(1,10,'base');
@@ -128,6 +127,7 @@ SELECT dolt_commit('-Am','feat');
 SELECT dolt_checkout('main');
 UPDATE t SET k=200 WHERE id=1;
 SELECT dolt_commit('-Am','main');
+BEGIN;
 SELECT dolt_merge('feat');
 SELECT 'CONF', count(*) FROM dolt_conflicts;
 DELETE FROM dolt_conflicts_t;

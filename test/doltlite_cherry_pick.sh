@@ -91,6 +91,31 @@ run_test_match "cp_conflict_msg" \
 run_test "cp_conflict_resolved" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 run_test "cp_conflict_ours" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
 
+DB=/tmp/test_cp_conflict_same_session_$$.db; rm -f "$DB"
+TX_OUT=$({
+cat <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'orig');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+UPDATE t SET v='feat_val' WHERE id=1;
+SELECT dolt_commit('-A','-m','feat modifies row 1');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main_val' WHERE id=1;
+SELECT dolt_commit('-A','-m','main modifies row 1');
+SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT 'TX|' || (SELECT count(*) FROM dolt_conflicts) || '|' ||
+       (SELECT v FROM t WHERE id=1);
+SQL
+} | $DOLTLITE "$DB" 2>&1 | grep '^TX|')
+if [ "$TX_OUT" = "TX|0|main_val" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: cp_conflict_same_session_summary_cleared\n  expected: TX|0|main_val\n  got:      $TX_OUT"
+fi
+
 rm -f "$DB"
 
 # ============================================================
