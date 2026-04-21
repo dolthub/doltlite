@@ -46,6 +46,16 @@ static void branchResultError(
 static int branchRestartTxnIfNeeded(sqlite3 *db){
   int rc;
   if( db->autoCommit ) return SQLITE_OK;
+  if( db->pSavepoint ){
+    while( db->pSavepoint ){
+      char *zSql = sqlite3_mprintf("RELEASE SAVEPOINT \"%w\"", db->pSavepoint->zName);
+      if( !zSql ) return SQLITE_NOMEM;
+      rc = sqlite3_exec(db, zSql, 0, 0, 0);
+      sqlite3_free(zSql);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    return SQLITE_OK;
+  }
   rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
   if( rc!=SQLITE_OK ) return rc;
   rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
@@ -423,6 +433,7 @@ static int checkoutRestoreDurableState(
 
 static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
+  int bSavepoint = db->pSavepoint!=0;
   int rc;
 
   rc = chunkStoreFindBranch(cs, p->zTargetBranch, &p->targetCommit);
@@ -447,11 +458,13 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     }
   }
 
-  rc = chunkStoreSetDefaultBranch(cs, p->zTargetBranch);
-  if( rc!=SQLITE_OK ) return rc;
+  if( !bSavepoint ){
+    rc = chunkStoreSetDefaultBranch(cs, p->zTargetBranch);
+    if( rc!=SQLITE_OK ) return rc;
 
-  rc = doltliteSaveWorkingSet(db);
-  if( rc!=SQLITE_OK ) return rc;
+    rc = doltliteSaveWorkingSet(db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   if( p->haveOldState ){
     rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
@@ -462,10 +475,12 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     }
   }
 
-  rc = doltliteUpdateBranchWorkingState(db, p->zTargetBranch,
-                                        &p->targetCatHash, &p->targetCommit);
-  if( rc!=SQLITE_OK ){
-    checkoutRestoreSession(db, p);
+  if( !bSavepoint ){
+    rc = doltliteUpdateBranchWorkingState(db, p->zTargetBranch,
+                                          &p->targetCatHash, &p->targetCommit);
+    if( rc!=SQLITE_OK ){
+      checkoutRestoreSession(db, p);
+    }
   }
   return rc;
 }

@@ -261,6 +261,33 @@ run_test_match "remote_savepoint_remote_persists" \
   "SELECT group_concat(name, ',') FROM dolt_remotes;" \
   "^origin$" "$DB6g"
 
+DB6h=/tmp/test_savepoint6h_$$.db; rm -f "$DB6h"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='other'; SELECT dolt_commit('-A','-m','other'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6h" > /dev/null 2>&1
+run_test_match "checkout_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_checkout('other'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6h"
+run_test_match "checkout_savepoint_branch_reopens_on_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6h"
+run_test_match "checkout_savepoint_row_reopens_dirty" \
+  "SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6h"
+
+DB6i=/tmp/test_savepoint6i_$$.db; rm -f "$DB6i"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6i" > /dev/null 2>&1
+run_test_match "checkout_b_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; UPDATE t SET v='dirty'; SELECT dolt_checkout('-b','side'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6i"
+run_test_match "checkout_b_savepoint_branch_reopens_on_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6i"
+run_test_match "checkout_b_savepoint_row_reopens_dirty" \
+  "SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6i"
+run_test_match "checkout_b_savepoint_branch_created" \
+  "SELECT group_concat(name, ',') FROM dolt_branches;" \
+  "^main,side$|^side,main$" "$DB6i"
+
 # ============================================================
 # Test 7: dolt_merge inside a BEGIN/COMMIT block
 # Expected: dolt_merge operates at the dolt storage layer. It should
