@@ -43,6 +43,15 @@ static void branchResultError(
   }
 }
 
+static int branchRestartTxnIfNeeded(sqlite3 *db){
+  int rc;
+  if( db->autoCommit ) return SQLITE_OK;
+  rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
+  return rc;
+}
+
 static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMutationCtx *p = (BranchMutationCtx*)pArg;
   int rc;
@@ -121,6 +130,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   int force = 0;
   const char *aPositional[3] = {0, 0, 0};
   int nPositional = 0;
+  int hadExplicitTxn = !db->autoCommit;
   int i, rc;
 
   if( !cs ){ sqlite3_result_error(ctx, "no database", -1); return; }
@@ -310,6 +320,13 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     }
   }
 
+  if( hadExplicitTxn ){
+    rc = branchRestartTxnIfNeeded(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+  }
   sqlite3_result_int(ctx, 0);
 }
 
@@ -604,15 +621,6 @@ static int doltliteCheckoutTables(
   return rc;
 }
 
-static int checkoutRestartTxnIfNeeded(sqlite3 *db){
-  int rc;
-  if( db->autoCommit ) return SQLITE_OK;
-  rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = sqlite3_exec(db, "BEGIN", 0, 0, 0);
-  return rc;
-}
-
 static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -695,7 +703,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       return;
     }
     if( hadExplicitTxn ){
-      rc = checkoutRestartTxnIfNeeded(db);
+      rc = branchRestartTxnIfNeeded(db);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(ctx, rc);
         return;
@@ -777,7 +785,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     return;
   }
   if( hadExplicitTxn ){
-    rc = checkoutRestartTxnIfNeeded(db);
+    rc = branchRestartTxnIfNeeded(db);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(ctx, rc);
       return;

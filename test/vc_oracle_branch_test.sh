@@ -104,6 +104,62 @@ oracle_error() {
   fi
 }
 
+oracle_with_rows() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_rows"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local q_br='SELECT name || char(9) || hash || char(9) || dirty FROM dolt_branches ORDER BY name'
+  local q_rows="SELECT id || char(9) || v FROM t ORDER BY id"
+
+  local dl_br dl_rows
+  dl_br=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q_br" \
+          | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+          | grep -v '^[0-9]*$' \
+          | grep -v '^[0-9a-f]\{40\}$' \
+          | normalize)
+  dl_rows=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$q_rows" \
+            | "$DOLTLITE" "$dir/dl/db.rows" 2>>"$dir/dl.err" \
+            | grep -v '^[0-9]*$' \
+            | grep -v '^[0-9a-f]\{40\}$')
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      echo "$dolt_setup"
+      echo "SELECT concat(name, char(9), hash, char(9), dirty) FROM dolt_branches ORDER BY name;"
+      echo "SELECT concat(id, char(9), v) FROM t ORDER BY id;"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+
+  local dt_br dt_rows
+  dt_br=$(tr -d '"' < "$dir/dt.raw" \
+          | awk -F'\t' 'NF==3 && $1 !~ /^[0-9]+$/ {print}' \
+          | sed -E 's/\ttrue$/\t1/; s/\tfalse$/\t0/' \
+          | normalize)
+  dt_rows=$(tr -d '"' < "$dir/dt.raw" \
+            | awk -F'\t' 'NF==2 && $1 ~ /^[0-9]+$/ {print}')
+
+  local dl_combined dt_combined
+  dl_combined="$dl_br"$'\n'"$dl_rows"
+  dt_combined="$dt_br"$'\n'"$dt_rows"
+
+  if [ "$dl_combined" = "$dt_combined" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite branches:"; echo "$dl_br" | sed 's/^/      /'
+    echo "    dolt branches:"; echo "$dt_br" | sed 's/^/      /'
+    echo "    doltlite rows:"; echo "$dl_rows" | sed 's/^/      /'
+    echo "    dolt rows:"; echo "$dt_rows" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_branch ==="
 echo ""
 
@@ -205,6 +261,16 @@ INSERT INTO t VALUES (2, 20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 SELECT dolt_branch('-f', 'feature');
+"
+
+echo "--- explicit transaction parity ---"
+
+oracle_with_rows "branch_create_inside_txn_seals_row_state" "
+$SEED
+BEGIN;
+UPDATE t SET v = 11 WHERE id = 1;
+SELECT dolt_branch('txb');
+ROLLBACK;
 "
 
 echo "--- error paths ---"

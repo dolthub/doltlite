@@ -225,6 +225,18 @@ run_test_match "checkout_dirty_rollback_data" \
   "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_checkout('other'); ROLLBACK; SELECT v FROM t WHERE id=1;" \
   "^other$" "$DB6c"
 
+DB6d=/tmp/test_savepoint6d_$$.db; rm -f "$DB6d"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6d" > /dev/null 2>&1
+run_test_match "branch_dirty_rollback_branch" \
+  "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_branch('txb'); ROLLBACK; SELECT group_concat(name, ',') FROM dolt_branches;" \
+  "^main,txb$|^txb,main$" "$DB6d"
+
+DB6e=/tmp/test_savepoint6e_$$.db; rm -f "$DB6e"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6e" > /dev/null 2>&1
+run_test_match "branch_dirty_rollback_data" \
+  "BEGIN; UPDATE t SET v='dirty'; SELECT dolt_branch('txb'); ROLLBACK; SELECT v FROM t WHERE id=1;" \
+  "^dirty$" "$DB6e"
+
 # ============================================================
 # Test 7: dolt_merge inside a BEGIN/COMMIT block
 # Expected: dolt_merge operates at the dolt storage layer. It should
