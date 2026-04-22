@@ -476,7 +476,7 @@ static int doltliteReportConstraintViolations(
 }
 
 static int doltliteSavepointIsTopLevelTxn(sqlite3 *db){
-  return db->pSavepoint!=0 && db->isTransactionSavepoint && db->nSavepoint==0;
+  return db->pSavepoint!=0 && db->nSavepoint==0;
 }
 
 static int doltliteVcSealTopLevelSavepointTxn(sqlite3 *db){
@@ -889,17 +889,18 @@ static void doltliteAddFunc(
 ){
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
+  int sealTopLevel = doltliteSavepointIsTopLevelTxn(db);
   int rc;
   int i;
   int stageAll = 0;
 
   if( !cs ){
     sqlite3_result_error(context, "no database open", -1);
-    return;
+    goto add_cleanup;
   }
   if( argc==0 ){
     sqlite3_result_error(context, "dolt_add requires table name or '-A'", -1);
-    return;
+    goto add_cleanup;
   }
 
 
@@ -919,7 +920,7 @@ static void doltliteAddFunc(
       }else{
         sqlite3_result_error_nomem(context);
       }
-      return;
+      goto add_cleanup;
     }
   }
 
@@ -932,33 +933,34 @@ static void doltliteAddFunc(
     rc = doltliteFlushCatalogToHash(db, &workingHash);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to flush", -1);
-      return;
+      goto add_cleanup;
     }
 
       if( stageAll ){
         rc = addStageAllTables(db, context, cs, &workingHash);
-        if( rc!=SQLITE_OK ) return;
+        if( rc!=SQLITE_OK ) goto add_cleanup;
       }else{
         rc = addStageNamedTables(db, context, cs, &workingHash, argc, argv);
-        if( rc!=SQLITE_OK ) return;
+        if( rc!=SQLITE_OK ) goto add_cleanup;
       }
 
     rc = doltlitePersistWorkingSet(db);
     if( rc!=SQLITE_OK ){
       doltliteSetSessionStaged(db, &savedStaged);
       sqlite3_result_error_code(context, rc);
-      return;
-    }
-    if( doltliteSavepointIsTopLevelTxn(db) ){
-      rc = sqlite3_exec(db, "COMMIT", 0, 0, 0);
-      if( rc!=SQLITE_OK ){
-        sqlite3_result_error_code(context, rc);
-        return;
-      }
+      goto add_cleanup;
     }
   }
 
   sqlite3_result_int(context, 0);
+
+add_cleanup:
+  if( sealTopLevel ){
+    rc = doltliteVcSealTopLevelSavepointTxn(db);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, rc);
+    }
+  }
 }
 
 static void doltliteCommitFunc(

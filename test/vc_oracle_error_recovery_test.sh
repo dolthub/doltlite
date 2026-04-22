@@ -659,6 +659,17 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','works');
 " "SELECT id, val FROM t ORDER BY id;"
 
+oracle "add_top_level_savepoint_bad_option_persists_rows" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SAVEPOINT sp1;
+INSERT INTO t VALUES(2,'dirty');
+SELECT dolt_add('--bogus');
+ROLLBACK TO sp1;
+" "SELECT count(*) FROM t;"
+
 # ═══════════════════════════════════════════════════════════════════
 # Section 17: Branch operations after errors
 # ═══════════════════════════════════════════════════════════════════
