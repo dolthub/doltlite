@@ -325,6 +325,24 @@ run_test_match "commit_begin_bad_option_count_after_reopen" \
   "SELECT count(*) FROM t;" \
   "^1$" "$DB6g1e"
 
+DB6g1r=/tmp/test_savepoint6g1r_$$.db; rm -f "$DB6g1r"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1r" > /dev/null 2>&1
+run_test_match "rebase_missing_upstream_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_rebase('nope'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g1r"
+run_test_match "rebase_missing_upstream_savepoint_row_persists" \
+  "SELECT count(*) FROM t;" \
+  "^2$" "$DB6g1r"
+
+DB6g1s=/tmp/test_savepoint6g1s_$$.db; rm -f "$DB6g1s"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1s" > /dev/null 2>&1
+run_test_match "rebase_bad_option_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_rebase('--bogus'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g1s"
+run_test_match "rebase_bad_option_savepoint_row_persists" \
+  "SELECT count(*) FROM t;" \
+  "^2$" "$DB6g1s"
+
 DB6g2=/tmp/test_savepoint6g2_$$.db; rm -f "$DB6g2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g2" > /dev/null 2>&1
 run_test_match "branch_delete_current_savepoint_rollback_to_errors" \

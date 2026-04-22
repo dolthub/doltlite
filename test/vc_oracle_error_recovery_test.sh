@@ -670,6 +670,17 @@ SELECT dolt_add('--bogus');
 ROLLBACK TO sp1;
 " "SELECT count(*) FROM t;"
 
+oracle "rebase_top_level_savepoint_unknown_upstream_persists_rows" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SAVEPOINT sp1;
+INSERT INTO t VALUES(2,'dirty');
+SELECT dolt_rebase('nope');
+ROLLBACK TO sp1;
+" "SELECT count(*) FROM t;"
+
 # ═══════════════════════════════════════════════════════════════════
 # Section 17: Branch operations after errors
 # ═══════════════════════════════════════════════════════════════════

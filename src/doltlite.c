@@ -3123,6 +3123,7 @@ static int doltliteRebaseLinearReplay(
   char **pzFinalMessage
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  int sealTopLevel = db->pSavepoint!=0 && db->nSavepoint==0;
   ProllyHash upstreamHash, headHash;
   ProllyHash *aReplay = 0;
   int nReplay = 0;
@@ -3139,6 +3140,7 @@ static int doltliteRebaseLinearReplay(
   if( doltliteHasUncommittedChanges(db) ){
     sqlite3_result_error(context,
       "cannot start a rebase with uncommitted changes", -1);
+    if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
     return SQLITE_ERROR;
   }
 
@@ -3147,12 +3149,14 @@ static int doltliteRebaseLinearReplay(
     char *zErr = sqlite3_mprintf("branch not found: %s", zUpstream);
     sqlite3_result_error(context, zErr ? zErr : "branch not found", -1);
     sqlite3_free(zErr);
+    if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
     return SQLITE_ERROR;
   }
 
   doltliteGetSessionHead(db, &headHash);
   if( prollyHashIsEmpty(&headHash) ){
     sqlite3_result_error(context, "no commits on current branch", -1);
+    if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
     return SQLITE_ERROR;
   }
 
@@ -3160,11 +3164,13 @@ static int doltliteRebaseLinearReplay(
                                       &aReplay, &nReplay);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
+    if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
     return rc;
   }
   if( nReplay==0 ){
     sqlite3_free(aReplay);
     sqlite3_result_error(context, "didn't identify any commits!", -1);
+    if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
     return SQLITE_ERROR;
   }
 
@@ -3172,6 +3178,7 @@ static int doltliteRebaseLinearReplay(
   if( rc!=SQLITE_OK ){
     sqlite3_free(aReplay);
     sqlite3_result_error_code(context, rc);
+    if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
     return rc;
   }
   savedInit = 1;
@@ -3262,6 +3269,7 @@ rollback:
       sqlite3_result_error_code(context, rc);
     }
   }
+  if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
   return SQLITE_ERROR;
 }
 
@@ -3962,26 +3970,27 @@ static void doltliteRebaseFunc(
   sqlite3 *db = sqlite3_context_db_handle(context);
   ChunkStore *cs = doltliteGetChunkStore(db);
   const char *zArg0;
+  int sealTopLevel = db->pSavepoint!=0 && db->nSavepoint==0;
 
-  if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
+  if( !cs ){ sqlite3_result_error(context, "no database", -1); goto rebase_cleanup; }
   if( argc<1 ){
     sqlite3_result_error(context, "usage: dolt_rebase('upstream_branch')", -1);
-    return;
+    goto rebase_cleanup;
   }
 
   zArg0 = (const char*)sqlite3_value_text(argv[0]);
   if( !zArg0 ){
     sqlite3_result_error(context, "upstream ref required", -1);
-    return;
+    goto rebase_cleanup;
   }
 
   if( strcmp(zArg0, "--abort")==0 ){
     doltliteRebaseInteractiveAbort(context, db);
-    return;
+    goto rebase_cleanup;
   }
   if( strcmp(zArg0, "--continue")==0 ){
     doltliteRebaseInteractiveContinue(context, db);
-    return;
+    goto rebase_cleanup;
   }
   if( strcmp(zArg0, "-i")==0 || strcmp(zArg0, "--interactive")==0 ){
     const char *zUpstream;
@@ -3989,20 +3998,20 @@ static void doltliteRebaseFunc(
       sqlite3_result_error(context,
         "interactive rebase requires upstream branch: "
         "dolt_rebase('-i', 'upstream')", -1);
-      return;
+      goto rebase_cleanup;
     }
     if( argc!=2 ){
       sqlite3_result_error(context,
         "interactive rebase takes exactly one upstream branch", -1);
-      return;
+      goto rebase_cleanup;
     }
     zUpstream = (const char*)sqlite3_value_text(argv[1]);
     if( !zUpstream ){
       sqlite3_result_error(context, "upstream ref required", -1);
-      return;
+      goto rebase_cleanup;
     }
     doltliteRebaseInteractiveStart(context, db, zUpstream);
-    return;
+    goto rebase_cleanup;
   }
 
   if( zArg0[0]=='-' ){
@@ -4013,12 +4022,12 @@ static void doltliteRebaseFunc(
     }else{
       sqlite3_result_error_nomem(context);
     }
-    return;
+    goto rebase_cleanup;
   }
   if( argc!=1 ){
     sqlite3_result_error(context,
       "too many positional arguments to dolt_rebase", -1);
-    return;
+    goto rebase_cleanup;
   }
 
   {
@@ -4028,6 +4037,9 @@ static void doltliteRebaseFunc(
       sqlite3_result_text(context, zFinalMessage, -1, sqlite3_free);
     }
   }
+
+rebase_cleanup:
+  if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
 }
 
 static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value **argv){
