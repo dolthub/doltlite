@@ -143,7 +143,26 @@ CGO_CFLAGS="-I../../build" CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread"
 
 Version control operations are exposed as SQL functions and virtual tables.
 
-### Staging and Committing
+### The basic commit loop
+
+#### Configuration
+
+```sql
+-- Set committer name and email (per-session)
+SELECT dolt_config('user.name', 'Tim Sehn');
+SELECT dolt_config('user.email', 'tim@dolthub.com');
+
+-- Read current config
+SELECT dolt_config('user.name');
+-- Tim Sehn
+```
+
+All commit-creating operations (`dolt_commit`, `dolt_merge`, `dolt_cherry_pick`,
+`dolt_revert`) use these values. The `--author` flag on `dolt_commit` overrides
+the session config for a single commit. Config is per-connection and not
+persisted — set it at the start of each session.
+
+#### Staging and Committing
 
 ```sql
 -- Stage specific tables or all changes
@@ -163,7 +182,17 @@ SELECT dolt_commit('-am', 'Initial commit');
 SELECT dolt_commit('-m', 'Fix data', '--author', 'Alice <alice@example.com>');
 ```
 
-### Ignoring Tables (`dolt_ignore`)
+#### Status
+
+```sql
+-- Working/staged changes
+SELECT * FROM dolt_status;
+-- table_name | staged | status
+-- users      | 1      | modified
+-- orders     | 0      | new table
+```
+
+#### Ignoring Tables (`dolt_ignore`)
 
 Tables matching a pattern in `dolt_ignore` stay in the working set
 but are skipped by `dolt_add` and hidden from `dolt_status`. Create
@@ -183,52 +212,9 @@ Patterns use `*` / `%` for zero-or-more and `?` for exactly one;
 everything else is literal. Most-specific pattern wins (longest
 literal count); equal-specificity disagreements error out.
 
-### Configuration
+### Inspecting what's there
 
-```sql
--- Set committer name and email (per-session)
-SELECT dolt_config('user.name', 'Tim Sehn');
-SELECT dolt_config('user.email', 'tim@dolthub.com');
-
--- Read current config
-SELECT dolt_config('user.name');
--- Tim Sehn
-```
-
-All commit-creating operations (`dolt_commit`, `dolt_merge`, `dolt_cherry_pick`,
-`dolt_revert`) use these values. The `--author` flag on `dolt_commit` overrides
-the session config for a single commit. Config is per-connection and not
-persisted — set it at the start of each session.
-
-### Status and History
-
-```sql
--- Working/staged changes
-SELECT * FROM dolt_status;
--- table_name | staged | status
--- users      | 1      | modified
--- orders     | 0      | new table
-
--- Commit history
-SELECT * FROM dolt_log;
--- commit_hash | committer | email | date | message
-```
-
-### History and Point-in-Time Queries
-
-Two per-table virtual tables for time travel:
-
-```sql
--- Every version of every row across all commits
-SELECT * FROM dolt_history_users WHERE rowid_val = 42;
-
--- The table as it existed at a specific commit / branch / tag
-SELECT * FROM dolt_at_users('abc123...');
-SELECT * FROM dolt_at_users('feature');
-SELECT * FROM dolt_at_users('v1.0');
-```
-
-### Diff
+#### Diff
 
 Several ways to ask what changed:
 
@@ -272,7 +258,42 @@ SELECT * FROM dolt_diff_users('HEAD~1', 'HEAD');
 SELECT * FROM dolt_diff_users('v1.0', 'WORKING');
 ```
 
-### Schemas (dolt_schemas)
+#### Log and History
+
+```sql
+-- Commit history
+SELECT * FROM dolt_log;
+-- commit_hash | committer | email | date | message
+```
+
+Two per-table virtual tables for time travel:
+
+```sql
+-- Every version of every row across all commits
+SELECT * FROM dolt_history_users WHERE rowid_val = 42;
+
+-- The table as it existed at a specific commit / branch / tag
+SELECT * FROM dolt_at_users('abc123...');
+SELECT * FROM dolt_at_users('feature');
+SELECT * FROM dolt_at_users('v1.0');
+```
+
+#### Blame (dolt_blame\_&lt;table&gt;)
+
+For each live row, the most recent commit that introduced its current
+value:
+
+```sql
+SELECT * FROM dolt_blame_users;
+-- id | commit | commit_date | committer | email | message
+```
+
+Walks history first-parent from HEAD; at linear commits a row is
+blamed if it differs from first-parent, at merge commits if it
+differs from the merge base. Schema-only changes (`ALTER TABLE ADD
+COLUMN`) don't update blame.
+
+#### Schema History (dolt_schemas)
 
 Projection of views and triggers from `sqlite_schema`. This is the Dolt-style
 surface for browsing non-table schema objects. Because `sqlite_schema` lives
@@ -296,29 +317,31 @@ Rows are filtered to `type IN ('view','trigger')` — ordinary tables and
 indexes are not reported here. Use `sqlite_schema` directly (or
 `dolt_schema_diff`) if you need the full schema surface.
 
-### Blame (dolt_blame\_&lt;table&gt;)
+### Undoing on one branch
 
-For each live row, the most recent commit that introduced its current
-value:
-
-```sql
-SELECT * FROM dolt_blame_users;
--- id | commit | commit_date | committer | email | message
-```
-
-Walks history first-parent from HEAD; at linear commits a row is
-blamed if it differs from first-parent, at merge commits if it
-differs from the merge base. Schema-only changes (`ALTER TABLE ADD
-COLUMN`) don't update blame.
-
-### Reset
+#### Reset
 
 ```sql
 SELECT dolt_reset('--soft');   -- unstage all, keep working changes
 SELECT dolt_reset('--hard');   -- discard all uncommitted changes
 ```
 
-### Branching (Per-Session)
+#### Revert
+
+Create a new commit that undoes the changes from a specific commit:
+
+```sql
+SELECT dolt_revert('abc123...');
+-- Returns new commit hash, or "Revert completed with N conflict(s)"
+```
+
+Revert computes the inverse of the target commit's changes and applies
+them to the current HEAD. The new commit message is
+`Revert '<original message>'`. Cannot revert the initial commit.
+
+### Parallel development
+
+#### Branching (Per-Session)
 
 Each connection tracks its own active branch. Branch state (active branch
 name, HEAD commit, staged catalog hash) lives in the `Btree` struct
@@ -343,7 +366,7 @@ SELECT * FROM dolt_branches;
 SELECT dolt_branch('-d', 'feature');
 ```
 
-#### Opening a Specific Branch
+##### Opening a Specific Branch
 
 By default, Doltlite opens a database on the `main` branch. To connect
 directly to another branch, put the branch name in the database target:
@@ -368,7 +391,7 @@ SELECT active_branch();
 -- feature
 ```
 
-### Tags
+#### Tags
 
 Immutable named pointers to commits:
 
@@ -379,7 +402,7 @@ SELECT dolt_tag('-d', 'v1.0');            -- delete tag
 SELECT * FROM dolt_tags;                  -- list tags
 ```
 
-### Merge
+#### Merge
 
 Three-way merge of another branch into the current branch. Merges at the
 **row level** — non-conflicting changes to different rows of the same table
@@ -391,7 +414,7 @@ SELECT dolt_merge('feature');
 -- Returns commit hash (clean merge), or "Merge completed with N conflict(s)"
 ```
 
-### Conflicts
+#### Conflicts
 
 View and resolve merge conflicts:
 
@@ -417,7 +440,7 @@ SELECT dolt_commit('-A', '-m', 'msg');
 -- Error: "cannot commit: unresolved merge conflicts"
 ```
 
-### Constraint Violations on Merge
+#### Constraint Violations on Merge
 
 Merges apply cell-by-cell at the prolly layer and don't run
 referential actions inline. After the merge, doltlite walks the
@@ -451,7 +474,7 @@ stays unique. `dolt_commit` refuses to proceed while any row
 remains in `dolt_constraint_violations_*`; pass `--force` to
 bypass the guard.
 
-### Cherry-Pick
+#### Cherry-Pick
 
 Apply the changes from a specific commit onto the current branch:
 
@@ -464,20 +487,7 @@ Cherry-pick works by computing the diff between the target commit and its
 parent, then applying that diff to the current HEAD as a three-way merge.
 Conflicts are handled the same way as `dolt_merge`.
 
-### Revert
-
-Create a new commit that undoes the changes from a specific commit:
-
-```sql
-SELECT dolt_revert('abc123...');
--- Returns new commit hash, or "Revert completed with N conflict(s)"
-```
-
-Revert computes the inverse of the target commit's changes and applies
-them to the current HEAD. The new commit message is
-`Revert '<original message>'`. Cannot revert the initial commit.
-
-### Rebase
+#### Rebase
 
 Replay the current branch's commits on top of an upstream:
 
@@ -503,20 +513,7 @@ SELECT dolt_rebase('--continue');  -- apply the edited plan
 SELECT dolt_rebase('--abort');     -- throw the working branch away
 ```
 
-### Garbage Collection
-
-Remove unreachable chunks from the store to reclaim space:
-
-```sql
-SELECT dolt_gc();
--- "12 chunks removed, 45 chunks kept"
-```
-
-Stop-the-world mark-and-sweep: walks all branches, tags, commit
-history, catalogs, and prolly tree nodes to find reachable chunks,
-then rewrites the file with only live data. Safe and idempotent.
-
-### Merge Base
+#### Merge Base
 
 Find the common ancestor of two commits:
 
@@ -524,7 +521,9 @@ Find the common ancestor of two commits:
 SELECT dolt_merge_base('abc123...', 'def456...');
 ```
 
-### Content-Addressed Hashes
+### Introspection and ops
+
+#### Content-Addressed Hashes
 
 Doltlite exposes the content-address of any ref, table, or the whole
 database as a scalar SQL function. The decentralized use case is
@@ -553,25 +552,25 @@ rowsets that reduce to the same `(key, value)` set hash identically
 regardless of insert order, transient deletions, commit chain, or
 branch. See `test/vc_oracle_hashof_test.sh` for the property tests.
 
-### Version String
+#### Garbage Collection
+
+Remove unreachable chunks from the store to reclaim space:
 
 ```sql
-SELECT dolt_version();
--- "v0.7.4"
+SELECT dolt_gc();
+-- "12 chunks removed, 45 chunks kept"
 ```
 
-Zero-arg scalar returning the build's version string (from
-`git describe` at compile time). Useful for peer negotiation in
-decentralized setups, bug-report ergonomics, and migrations
-that branch on engine version. Matches Dolt's `DOLT_VERSION()`
-argcount contract.
+Stop-the-world mark-and-sweep: walks all branches, tags, commit
+history, catalogs, and prolly tree nodes to find reachable chunks,
+then rewrites the file with only live data. Safe and idempotent.
 
-### Remotes
+#### Remotes
 
 Doltlite supports Git-like remotes for pushing, fetching, pulling, and cloning
 between databases.
 
-#### Filesystem Remotes
+##### Filesystem Remotes
 
 ```sql
 -- Add a remote
@@ -593,7 +592,7 @@ SELECT dolt_pull('origin', 'main');
 SELECT * FROM dolt_remotes;
 ```
 
-#### HTTP Remotes
+##### HTTP Remotes
 
 ```sql
 -- Add an HTTP remote (URL includes database name)
@@ -606,7 +605,7 @@ SELECT dolt_fetch('origin', 'main');
 SELECT dolt_pull('origin', 'main');
 ```
 
-#### Remote Server (`doltlite-remotesrv`)
+##### Remote Server (`doltlite-remotesrv`)
 
 Doltlite includes a standalone HTTP server for serving databases over the
 network. Build it alongside doltlite:
@@ -630,6 +629,19 @@ The server is also embeddable as a library (`doltliteServeAsync` in
 `doltlite_remotesrv.h`) for applications that want to host remotes in-process.
 Transfers are content-addressed — only chunks the remote doesn't already
 have are sent.
+
+#### Version String
+
+```sql
+SELECT dolt_version();
+-- "v0.7.4"
+```
+
+Zero-arg scalar returning the build's version string (from
+`git describe` at compile time). Useful for peer negotiation in
+decentralized setups, bug-report ergonomics, and migrations
+that branch on engine version. Matches Dolt's `DOLT_VERSION()`
+argcount contract.
 
 ## Using Existing SQLite Databases
 
