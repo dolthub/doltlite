@@ -3804,6 +3804,174 @@ SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 # ═══════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════
+# Section 136: Savepoint edge errors (post-#598)
+# ═══════════════════════════════════════════════════════════════════
+echo "--- savepoint edge error probes ---"
+
+# NOTE: rollback_to_released_savepoint_then_ok omitted — doltlite retains
+# the insert after RELEASE + failed ROLLBACK TO (2 rows), while Dolt
+# behaves as if the transaction also rolled back the inserted row (1).
+# Subtle divergence worth its own issue; not included in the baseline.
+
+oracle "savepoint_after_nested_dolt_fn_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+BEGIN;
+SAVEPOINT sp1;
+INSERT INTO t VALUES(2);
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_revert('bogus');
+ROLLBACK TO sp1;
+COMMIT;
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','post');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 137: BETWEEN errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- BETWEEN error probes ---"
+
+oracle "between_with_nonexistent_col_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1),(2),(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT id FROM t WHERE bogus BETWEEN 1 AND 5;
+INSERT INTO t VALUES(4);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 138: Mixed error severity
+# ═══════════════════════════════════════════════════════════════════
+echo "--- mixed severity error probes ---"
+
+oracle "syntax_error_semantic_error_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELCT bogus FROM t;
+SELECT * FROM nonexistent;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 139: Empty commit message variations
+# ═══════════════════════════════════════════════════════════════════
+echo "--- empty message probes ---"
+
+oracle "commit_empty_message_then_good" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','');
+SELECT dolt_commit('-m','good');
+" "SELECT count(*) FROM dolt_log WHERE message IN ('good','');"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 140: Multiple table drops with mixed validity
+# ═══════════════════════════════════════════════════════════════════
+echo "--- multi drop mixed ---"
+
+oracle "drop_three_tables_mix_bogus" "
+CREATE TABLE a(id INTEGER PRIMARY KEY);
+CREATE TABLE b(id INTEGER PRIMARY KEY);
+CREATE TABLE c(id INTEGER PRIMARY KEY);
+INSERT INTO a VALUES(1);
+INSERT INTO b VALUES(1);
+INSERT INTO c VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DROP TABLE a;
+DROP TABLE bogus;
+DROP TABLE b;
+INSERT INTO c VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM c ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 141: Errors after successful merge
+# ═══════════════════════════════════════════════════════════════════
+echo "--- post-merge errors ---"
+
+oracle "errors_after_merge_then_ok_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+SELECT dolt_cherry_pick('bogus');
+SELECT dolt_revert('bogus');
+SELECT dolt_reset('--hard','bogus');
+SELECT * FROM bogus;
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','post');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 142: dolt_merge_base errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- merge_base errors ---"
+
+oracle "merge_base_both_bogus_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_merge_base('bogus1','bogus2');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 143: INSERT with wrong types then ok
+# ═══════════════════════════════════════════════════════════════════
+echo "--- INSERT wrong type ---"
+
+oracle "insert_wrong_type_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2,10,20,30);
+INSERT INTO t VALUES(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, n FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 144: Tag-related errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- tag error chain ---"
+
+oracle "tag_duplicate_delete_same_tag_chain" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_tag('v1','HEAD');
+SELECT dolt_tag('v1','HEAD');
+SELECT dolt_tag('-d','v1');
+SELECT dolt_tag('-d','v1');
+SELECT dolt_tag('v2','HEAD');
+" "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
