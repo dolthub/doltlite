@@ -564,6 +564,28 @@ SELECT 'Q' || char(9) || (SELECT v FROM t WHERE id = 1);" \
 "SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts));
 SELECT concat('Q', char(9), (SELECT v FROM t WHERE id = 1));"
 
+oracle_same_session "merge_conflict_top_savepoint_invalidated" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 'feat' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main');
+SAVEPOINT sp1;
+SELECT dolt_merge('feature');
+ROLLBACK TO sp1;
+" "SELECT 'Q' || char(9) || (SELECT count(*) FROM dolt_conflicts);
+SELECT 'Q' || char(9) || (SELECT v FROM t WHERE id = 1);" \
+"SELECT concat('Q', char(9), (SELECT count(*) FROM dolt_conflicts));
+SELECT concat('Q', char(9), (SELECT v FROM t WHERE id = 1));"
+
 echo "--- already up to date ---"
 
 oracle "merge_same_branch_no_op" "

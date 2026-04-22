@@ -551,6 +551,7 @@ static int doltliteRollbackAutocommitConflict(
   DoltliteTxnState *pSaved
 ){
   int rc;
+  int hadTopLevelSavepoint = db->pSavepoint!=0 && db->nSavepoint==0;
   sqlite3RollbackAll(db, SQLITE_OK);
   rc = doltliteRestoreTxnState(db, pSaved);
   if( rc==SQLITE_OK ){
@@ -561,6 +562,9 @@ static int doltliteRollbackAutocommitConflict(
         db, &pSaved->sessionConstraintViolationsCatalog);
   }
   doltliteTxnStateClear(pSaved);
+  if( rc==SQLITE_OK && hadTopLevelSavepoint ){
+    rc = doltliteVcSealTopLevelSavepointTxn(db);
+  }
   if( rc==SQLITE_OK ){
     doltliteReportAutocommitConflictRollback(ctx);
   }
