@@ -32,16 +32,28 @@ echo "SELECT dolt_merge('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # In the same SQL session, unresolved conflicts block checkout
 run_test_match "checkout_blocked_conflict" \
-  "SELECT dolt_merge('feature'); SELECT dolt_checkout('feature');" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_checkout('feature'); ROLLBACK;" \
   "unresolved merge conflicts" "$DB"
 
 run_test_match "checkout_create_blocked_conflict" \
-  "SELECT dolt_merge('feature'); SELECT dolt_checkout('-b','blocked_branch');" \
+  "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_checkout('-b','blocked_branch_tx'); ROLLBACK;" \
   "unresolved merge conflicts" "$DB"
 
-run_test_match "checkout_create_no_branch_on_conflict" \
-  "SELECT dolt_merge('feature'); SELECT dolt_checkout('-b','blocked_branch'); SELECT 'CNT|' || count(*) FROM dolt_branches WHERE name='blocked_branch';" \
-  "^CNT\\|0$" "$DB"
+TX_OUT=$({
+cat <<'SQL'
+BEGIN;
+SELECT dolt_merge('feature');
+SELECT dolt_checkout('-b','blocked_branch_tx');
+SELECT 'CNT|' || count(*) FROM dolt_branches WHERE name='blocked_branch_tx';
+ROLLBACK;
+SQL
+} | $DOLTLITE "$DB" 2>&1 | grep '^CNT|')
+if [ "$TX_OUT" = "CNT|0" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: checkout_create_no_branch_on_conflict\n  expected: CNT|0\n  got:      $TX_OUT"
+fi
 
 # Test 2: In a new session after autocommit rollback, checkout should succeed
 run_test "checkout_after_rollback" \

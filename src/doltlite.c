@@ -553,6 +553,13 @@ static int doltliteRollbackAutocommitConflict(
   int rc;
   sqlite3RollbackAll(db, SQLITE_OK);
   rc = doltliteRestoreTxnState(db, pSaved);
+  if( rc==SQLITE_OK ){
+    doltliteSetSessionMergeState(db, pSaved->sessionIsMerging,
+                                 &pSaved->sessionMergeCommit,
+                                 &pSaved->sessionConflictsCatalog);
+    doltliteSetSessionConstraintViolationsCatalog(
+        db, &pSaved->sessionConstraintViolationsCatalog);
+  }
   doltliteTxnStateClear(pSaved);
   if( rc==SQLITE_OK ){
     doltliteReportAutocommitConflictRollback(ctx);
@@ -2638,12 +2645,15 @@ static int applyMergedCatalogAndCommit(
 
   memset(&savedState, 0, sizeof(savedState));
 
-  rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
-                              &mergedCatHash, pnConflicts, 0, 0, 0);
-  if( rc!=SQLITE_OK ) return rc;
-
   rc = doltliteSaveTxnState(db, &savedState);
   if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
+                              &mergedCatHash, pnConflicts, 0, 0, 0);
+  if( rc!=SQLITE_OK ){
+    doltliteTxnStateClear(&savedState);
+    return rc;
+  }
 
   rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
   if( rc!=SQLITE_OK ){
