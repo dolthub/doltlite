@@ -3983,6 +3983,170 @@ SELECT dolt_tag('-d','v1');
 SELECT dolt_tag('v2','HEAD');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
 # ═══════════════════════════════════════════════════════════════════
+# Section 145: Revert errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- revert error probes ---"
+
+oracle "revert_on_empty_repo_then_ok" "
+SELECT dolt_revert('HEAD');
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+" "SELECT count(*) FROM t;"
+
+oracle "revert_tilde_past_end_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_revert('HEAD~5');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 146: Error during merge rollback
+# ═══════════════════════════════════════════════════════════════════
+echo "--- merge rollback error probes ---"
+
+oracle "merge_conflict_then_extra_bogus_then_reset" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='f' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='m' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+SELECT dolt_cherry_pick('bogus1');
+SELECT dolt_revert('bogus2');
+SELECT dolt_reset('--hard','HEAD');
+INSERT INTO t VALUES(2,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 147: Errors with INSERT into view
+# ═══════════════════════════════════════════════════════════════════
+echo "--- view INSERT errors ---"
+
+oracle "insert_into_view_agg_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+CREATE VIEW total AS SELECT sum(v) AS s FROM t;
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO total VALUES(100);
+INSERT INTO t VALUES(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT sum(v) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 148: DELETE without WHERE then error
+# ═══════════════════════════════════════════════════════════════════
+echo "--- DELETE all error probes ---"
+
+oracle "delete_all_then_bogus_then_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+DELETE FROM t;
+SELECT * FROM bogus;
+INSERT INTO t VALUES(4,'d');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 149: FK violation error recovery
+# ═══════════════════════════════════════════════════════════════════
+echo "--- FK violation recovery ---"
+
+# NOTE: fk_violation_insert_child_then_ok — doltlite rejects the FK-
+# violating INSERT (PRAGMA foreign_keys=1) while Dolt under `dolt sql -c`
+# lets it through in this test-harness flow, keeping (2,999) in child.
+# Diverges on enforcement timing; probe omitted from baseline.
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 150: INSERT with expression errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- INSERT expr error probes ---"
+
+oracle "insert_with_bogus_func_expression_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2, bogus_func(5));
+INSERT INTO t VALUES(2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 151: Branches conflict on checkout
+# ═══════════════════════════════════════════════════════════════════
+echo "--- branch checkout error ---"
+
+oracle "checkout_then_branch_delete_self_error" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_checkout('-b','feat');
+SELECT dolt_branch('-d','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 152: Repeated hashof errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- hashof error chain ---"
+
+oracle "hashof_chain_of_bad_refs_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_hashof('bogus1');
+SELECT dolt_hashof('bogus2');
+SELECT dolt_hashof('bogus3');
+SELECT dolt_hashof('HEAD');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 153: Concurrent-style conflict from bad checkout
+# ═══════════════════════════════════════════════════════════════════
+echo "--- checkout conflict recovery ---"
+
+oracle "bad_checkout_uncommitted_work_preserved" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2);
+SELECT dolt_checkout('nonexistent');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','kept');
+" "SELECT id FROM t ORDER BY id;"
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
