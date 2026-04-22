@@ -198,6 +198,12 @@ run_test "bad_reset_savepoint_row_persists" \
   "SELECT v FROM t WHERE id=1;" \
   "dirty" "$DB5c"
 
+DB5d=/tmp/test_savepoint5d_$$.db; rm -f "$DB5d"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5d" > /dev/null 2>&1
+run_test_match "bad_reset_nested_savepoint_allows_rollback" \
+  "BEGIN; SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_reset('--hard','bogus'); ROLLBACK TO sp1; COMMIT; SELECT count(*) FROM t;" \
+  "^1$" "$DB5d"
+
 # ============================================================
 # Test 6: dolt_checkout inside a transaction
 # Expected: dolt_checkout requires a clean working set and switches
