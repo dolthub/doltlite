@@ -283,16 +283,21 @@ static int storeUpdatedConflicts(
     int rc;
     extern void doltliteSetSessionConflictsCatalog(sqlite3*, const ProllyHash*);
     extern void doltliteSetSessionMergeState(sqlite3*, u8, const ProllyHash*, const ProllyHash*);
+    rc = doltliteEnsureWriteTxnAndSavepoints(db);
+    if( rc!=SQLITE_OK ) return rc;
     if( totalConflicts==0 ){
       doltliteSetSessionConflictsCatalog(db, &(ProllyHash){{0}});
     }else{
       ProllyHash newHash;
-      int rc = doltliteSerializeConflicts(cs, aTables, nTables, &newHash);
+      rc = doltliteSerializeConflicts(cs, aTables, nTables, &newHash);
       if( rc!=SQLITE_OK ) return rc;
       doltliteSetSessionConflictsCatalog(db, &newHash);
       doltliteSetSessionMergeState(db, 1, 0, &newHash);
     }
-    return doltlitePersistWorkingSet(db);
+    if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+      return doltlitePersistWorkingSet(db);
+    }
+    return doltliteSaveWorkingSet(db);
   }
 }
 

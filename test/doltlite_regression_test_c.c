@@ -1587,10 +1587,10 @@ static void run_failed_merge_reopen_clears_ephemeral_conflict_state(void){
                                &mergeBeforeClose, &conflictsBeforeClose);
   check("failed_merge_reopen_staged_hash_before_close_nonempty",
         !prollyHashIsEmpty(&stagedBeforeClose));
-  check("failed_merge_reopen_sets_merging_flag_before_close",
-        isMergingBeforeClose==1);
-  check("failed_merge_reopen_conflicts_hash_before_close_nonempty",
-        !prollyHashIsEmpty(&conflictsBeforeClose));
+  check("failed_merge_reopen_merging_flag_cleared_before_close",
+        isMergingBeforeClose==0);
+  check("failed_merge_reopen_conflicts_hash_cleared_before_close",
+        prollyHashIsEmpty(&conflictsBeforeClose));
 
   sqlite3_close(db);
   db = 0;
@@ -1797,8 +1797,8 @@ static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
                                &mergeBeforeClose, &conflictsBeforeClose);
   check("failed_cherry_pick_reopen_staged_hash_before_close_nonempty",
         !prollyHashIsEmpty(&stagedBeforeClose));
-  check("failed_cherry_pick_reopen_conflicts_hash_before_close_nonempty",
-        !prollyHashIsEmpty(&conflictsBeforeClose));
+  check("failed_cherry_pick_reopen_conflicts_hash_cleared_before_close",
+        prollyHashIsEmpty(&conflictsBeforeClose));
 
   sqlite3_close(db);
   db = 0;

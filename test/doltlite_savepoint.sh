@@ -204,6 +204,40 @@ run_test_match "bad_reset_nested_savepoint_allows_rollback" \
   "BEGIN; SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_reset('--hard','bogus'); ROLLBACK TO sp1; COMMIT; SELECT count(*) FROM t;" \
   "^1$" "$DB5d"
 
+# Conflict resolution inside a named savepoint should roll back both
+# row state and conflict catalog state to the pre-resolution merge state.
+DB5e=/tmp/test_savepoint5e_$$.db; rm -f "$DB5e"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v='feat' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='main' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');" | $DOLTLITE "$DB5e" > /dev/null 2>&1
+run_test "conflicts_resolve_ours_named_savepoint_rollback" \
+  "BEGIN; SELECT dolt_merge('feature'); SAVEPOINT sp1; SELECT dolt_conflicts_resolve('--ours','t'); ROLLBACK TO sp1; SELECT 'C|'||count(*) FROM dolt_conflicts; SELECT 'V|'||v FROM t WHERE id=1;" \
+  "Error near line 1: Merge has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+C|1
+V|main" "$DB5e"
+run_test "conflicts_resolve_theirs_named_savepoint_rollback" \
+  "BEGIN; SELECT dolt_merge('feature'); SAVEPOINT sp1; SELECT dolt_conflicts_resolve('--theirs','t'); ROLLBACK TO sp1; SELECT 'C|'||count(*) FROM dolt_conflicts; SELECT 'V|'||v FROM t WHERE id=1;" \
+  "Error near line 1: Merge has 1 conflict(s). Resolve and then commit with dolt_commit.
+0
+C|1
+V|main" "$DB5e"
+run_test "conflicts_delete_named_savepoint_rollback" \
+  "BEGIN; SELECT dolt_merge('feature'); SAVEPOINT sp1; DELETE FROM dolt_conflicts_t WHERE our_id=1; ROLLBACK TO sp1; SELECT 'C|'||count(*) FROM dolt_conflicts; SELECT 'V|'||v FROM t WHERE id=1;" \
+  "Error near line 1: Merge has 1 conflict(s). Resolve and then commit with dolt_commit.
+C|1
+V|main" "$DB5e"
+
 # ============================================================
 # Test 6: dolt_checkout inside a transaction
 # Expected: dolt_checkout requires a clean working set and switches
