@@ -3428,6 +3428,200 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 # ═══════════════════════════════════════════════════════════════════
+# Section 117: DATE format error flows
+# ═══════════════════════════════════════════════════════════════════
+echo "--- DATE error probes ---"
+
+oracle "bad_date_value_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, d DATE);
+INSERT INTO t VALUES(1,'2024-01-15');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,'not-a-date');
+INSERT INTO t VALUES(3,'2024-06-01');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, d FROM t WHERE id IN (1,3) ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 118: UPDATE with bad subquery then good
+# ═══════════════════════════════════════════════════════════════════
+echo "--- UPDATE subquery error chain ---"
+
+oracle "update_bogus_subquery_table_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+UPDATE t SET v = (SELECT n FROM nonexistent WHERE id=t.id);
+UPDATE t SET v = 99 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 119: DELETE errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- DELETE error probes ---"
+
+oracle "delete_with_bogus_subquery_table_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1),(2),(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DELETE FROM t WHERE id IN (SELECT id FROM bogus);
+DELETE FROM t WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 120: Errors during schema change chain
+# ═══════════════════════════════════════════════════════════════════
+echo "--- schema change error chain ---"
+
+oracle "alter_add_drop_alter_chain_with_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE t ADD COLUMN x INTEGER DEFAULT 0;
+ALTER TABLE t ADD COLUMN x INTEGER;
+ALTER TABLE t DROP COLUMN nonexistent;
+ALTER TABLE t DROP COLUMN x;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 121: Tag errors
+# ═══════════════════════════════════════════════════════════════════
+echo "--- tag error probes ---"
+
+oracle "tag_empty_name_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_tag('','HEAD');
+SELECT dolt_tag('good','HEAD');
+" "SELECT count(*) FROM dolt_tags WHERE tag_name='good';"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 122: Error inside repeated merge
+# ═══════════════════════════════════════════════════════════════════
+echo "--- repeated merge errors ---"
+
+oracle "merge_twice_bogus_twice_real" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('bogus');
+SELECT dolt_merge('bogus');
+SELECT dolt_merge('feat');
+SELECT dolt_merge('feat');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 123: Errors with DROP TABLE chain
+# ═══════════════════════════════════════════════════════════════════
+echo "--- drop chain probes ---"
+
+oracle "drop_table_chain_with_errors" "
+CREATE TABLE a(id INTEGER PRIMARY KEY);
+CREATE TABLE b(id INTEGER PRIMARY KEY);
+CREATE TABLE c(id INTEGER PRIMARY KEY);
+INSERT INTO a VALUES(1);
+INSERT INTO b VALUES(1);
+INSERT INTO c VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+DROP TABLE a;
+DROP TABLE a;
+DROP TABLE bogus;
+DROP TABLE b;
+DROP TABLE b;
+INSERT INTO c VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after chain');
+" "SELECT id FROM c ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 124: Errors during hash-of queries
+# ═══════════════════════════════════════════════════════════════════
+echo "--- hashof error probes ---"
+
+oracle "hashof_too_many_args_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_hashof('a','b','c');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 125: Long error streak in explicit txn
+# ═══════════════════════════════════════════════════════════════════
+echo "--- txn long error streak ---"
+
+oracle "txn_many_errors_then_commit" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+BEGIN;
+INSERT INTO t VALUES(2);
+SELECT * FROM bogus1;
+SELECT * FROM bogus2;
+INSERT INTO t VALUES(3);
+DELETE FROM bogus3;
+INSERT INTO t VALUES(4);
+UPDATE bogus4 SET x=1;
+INSERT INTO t VALUES(5);
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','post');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 126: Errors around VIEW creation
+# ═══════════════════════════════════════════════════════════════════
+echo "--- view create errors ---"
+
+oracle "create_view_dup_name_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+CREATE VIEW v AS SELECT id FROM t;
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+CREATE VIEW v AS SELECT id FROM t;
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM v;"
+
+oracle "create_view_bad_source_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+CREATE VIEW v_bad AS SELECT * FROM nonexistent;
+CREATE VIEW v_good AS SELECT id FROM t;
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM v_good;"
+# ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
 echo ""
