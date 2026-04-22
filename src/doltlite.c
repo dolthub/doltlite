@@ -984,6 +984,7 @@ static void doltliteCommitFunc(
   ProllyHash sessionHeadBeforeLock;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
   i64 explicitTimestamp = 0;
+  int sealTopLevel = doltliteSavepointIsTopLevelTxn(db);
   int rc;
   int i;
 
@@ -992,11 +993,13 @@ static void doltliteCommitFunc(
     return;
   }
 
-  /* Implicitly commit any open SQL transaction so that all pending
-  ** DML is flushed before the version-control commit runs.  Matches
-  ** Dolt, where dolt_commit() closes the SQL transaction — a
-  ** subsequent ROLLBACK becomes a no-op. */
-  (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  /* Top-level SAVEPOINT acts as the transaction boundary. Dolt seals
+  ** that boundary even when dolt_commit() later errors, so persist it
+  ** up front. Plain BEGIN / nested SAVEPOINT cases defer COMMIT until
+  ** after argument validation succeeds. */
+  if( sealTopLevel ){
+    (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  }
 
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
@@ -1132,6 +1135,12 @@ static void doltliteCommitFunc(
     sqlite3_result_error(context,
       "dolt_commit requires a message: SELECT dolt_commit('-m', 'msg')", -1);
     return;
+  }
+
+  if( !sealTopLevel ){
+    /* For BEGIN / nested SAVEPOINT, only close the SQL transaction once
+    ** dolt_commit() has survived argument parsing and basic validation. */
+    (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
   }
 
   if( addAll ){

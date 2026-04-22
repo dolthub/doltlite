@@ -310,6 +310,21 @@ run_test_match "add_savepoint_missing_table_row_persists" \
   "SELECT count(*) FROM t;" \
   "^2$" "$DB6g1c"
 
+DB6g1d=/tmp/test_savepoint6g1d_$$.db; rm -f "$DB6g1d"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1d" > /dev/null 2>&1
+run_test_match "commit_nested_savepoint_bad_option_rollback_to_succeeds" \
+  "BEGIN; SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_commit('--bogus'); ROLLBACK TO sp1; SELECT count(*) FROM t; ROLLBACK;" \
+  "^1$" "$DB6g1d"
+
+DB6g1e=/tmp/test_savepoint6g1e_$$.db; rm -f "$DB6g1e"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g1e" > /dev/null 2>&1
+run_test_match "commit_begin_bad_option_reopen_row_rolled_back" \
+  "BEGIN; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_commit('--bogus');" \
+  "unknown option \`--bogus\`" "$DB6g1e"
+run_test_match "commit_begin_bad_option_count_after_reopen" \
+  "SELECT count(*) FROM t;" \
+  "^1$" "$DB6g1e"
+
 DB6g2=/tmp/test_savepoint6g2_$$.db; rm -f "$DB6g2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g2" > /dev/null 2>&1
 run_test_match "branch_delete_current_savepoint_rollback_to_errors" \

@@ -249,6 +249,100 @@ else
   echo "    expected 1, got $DL_G"
 fi
 
+# ── Test H: BEGIN + bad dolt_commit option should not persist txn ──
+echo ""
+echo "--- BEGIN + bad dolt_commit option ---"
+
+DB="$TMPROOT/h.db"
+rm -f "$DB"
+dl_query "$DB" "$(cat <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','c1');
+BEGIN;
+INSERT INTO t VALUES(2,'dirty');
+SELECT dolt_commit('--bogus');
+SQL
+)" >/dev/null
+DL_H=$(dl_query "$DB" "SELECT count(*) FROM t;")
+
+if [ -n "$DOLT" ]; then
+  DOLT_H_DIR="$TMPROOT/dolt_h"
+  mkdir -p "$DOLT_H_DIR" && cd "$DOLT_H_DIR" && dolt init >/dev/null 2>&1
+  dolt sql 2>/dev/null <<'SQL'
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+CALL dolt_commit('-Am','c1');
+BEGIN;
+INSERT INTO t VALUES(2,'dirty');
+CALL dolt_commit('--bogus');
+SQL
+  DOLT_H=$(dolt_query "$DOLT_H_DIR" "SELECT count(*) FROM t")
+  cd - >/dev/null
+
+  if [ "$DL_H" = "$DOLT_H" ]; then
+    pass_name "begin_bad_commit_option_matches_dolt"
+  else
+    fail_name "begin_bad_commit_option_matches_dolt"
+    echo "    doltlite=$DL_H dolt=$DOLT_H"
+  fi
+fi
+
+if [ "$DL_H" = "1" ]; then
+  pass_name "begin_bad_commit_option_rolls_back_on_reopen"
+else
+  fail_name "begin_bad_commit_option_rolls_back_on_reopen"
+  echo "    expected 1, got $DL_H"
+fi
+
+# ── Test I: Nested savepoint + bad dolt_commit option ───────
+echo ""
+echo "--- Nested savepoint + bad dolt_commit option ---"
+
+DB="$TMPROOT/i.db"
+rm -f "$DB"
+dl_query "$DB" "$(cat <<'SQL'
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-Am','c1');
+BEGIN;
+SAVEPOINT sp1;
+INSERT INTO t VALUES(2,'dirty');
+SELECT dolt_commit('--bogus');
+SQL
+)" >/dev/null
+DL_I=$(dl_query "$DB" "SELECT count(*) FROM t;")
+
+if [ -n "$DOLT" ]; then
+  DOLT_I_DIR="$TMPROOT/dolt_i"
+  mkdir -p "$DOLT_I_DIR" && cd "$DOLT_I_DIR" && dolt init >/dev/null 2>&1
+  dolt sql 2>/dev/null <<'SQL'
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+CALL dolt_commit('-Am','c1');
+BEGIN;
+SAVEPOINT sp1;
+INSERT INTO t VALUES(2,'dirty');
+CALL dolt_commit('--bogus');
+SQL
+  DOLT_I=$(dolt_query "$DOLT_I_DIR" "SELECT count(*) FROM t")
+  cd - >/dev/null
+
+  if [ "$DL_I" = "$DOLT_I" ]; then
+    pass_name "nested_savepoint_bad_commit_option_matches_dolt"
+  else
+    fail_name "nested_savepoint_bad_commit_option_matches_dolt"
+    echo "    doltlite=$DL_I dolt=$DOLT_I"
+  fi
+fi
+
+if [ "$DL_I" = "1" ]; then
+  pass_name "nested_savepoint_bad_commit_option_rolls_back_on_reopen"
+else
+  fail_name "nested_savepoint_bad_commit_option_rolls_back_on_reopen"
+  echo "    expected 1, got $DL_I"
+fi
+
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
