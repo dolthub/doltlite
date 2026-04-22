@@ -3632,6 +3632,177 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM v_good;"
+# Section 127: UPDATE with invalid SET expression
+# ═══════════════════════════════════════════════════════════════════
+echo "--- UPDATE invalid SET probes ---"
+
+oracle "update_set_nonexistent_col_assigned_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+UPDATE t SET bogus=99 WHERE id=1;
+UPDATE t SET v=99 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 128: INSERT with wrong arity
+# ═══════════════════════════════════════════════════════════════════
+echo "--- INSERT arity probes ---"
+
+oracle "insert_too_few_values_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER);
+INSERT INTO t VALUES(1,10,100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2,20);
+INSERT INTO t VALUES(3,30,300);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, a, b FROM t ORDER BY id;"
+
+oracle "insert_too_many_values_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2,20,30,40);
+INSERT INTO t VALUES(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 129: WHERE with bogus function
+# ═══════════════════════════════════════════════════════════════════
+echo "--- WHERE bogus func ---"
+
+oracle "where_bogus_func_then_ok_insert" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT id FROM t WHERE bogus_function(id)>0;
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 130: CREATE TABLE with bad column list
+# ═══════════════════════════════════════════════════════════════════
+echo "--- CREATE TABLE bad cols ---"
+
+oracle "create_table_bad_syntax_then_good" "
+CREATE TABLE keep(id INTEGER PRIMARY KEY);
+INSERT INTO keep VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+CREATE TABLE bad(,,);
+CREATE TABLE good(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO good VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM good;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 131: Nested transaction confusion
+# ═══════════════════════════════════════════════════════════════════
+echo "--- nested txn probes ---"
+
+oracle "begin_begin_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+BEGIN;
+BEGIN;
+INSERT INTO t VALUES(2);
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 132: Error during CTE
+# ═══════════════════════════════════════════════════════════════════
+echo "--- CTE error probes ---"
+
+oracle "cte_with_bogus_inner_ref_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+WITH x AS (SELECT bogus FROM t) SELECT * FROM x;
+INSERT INTO t VALUES(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 133: Errors during add specific tables
+# ═══════════════════════════════════════════════════════════════════
+echo "--- dolt_add specific errors ---"
+
+oracle "add_mix_of_good_bad_tables_then_commit_a" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY);
+CREATE TABLE t2(id INTEGER PRIMARY KEY);
+INSERT INTO t1 VALUES(1);
+INSERT INTO t2 VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t1 VALUES(2);
+INSERT INTO t2 VALUES(2);
+SELECT dolt_add('t1','nonexistent','t2');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 134: Errors after dolt_checkout to existing
+# ═══════════════════════════════════════════════════════════════════
+echo "--- checkout existing probes ---"
+
+oracle "checkout_existing_twice_with_errors" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('feat');
+SELECT dolt_checkout('bogus');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat c2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 135: Errors with mixed DDL
+# ═══════════════════════════════════════════════════════════════════
+echo "--- mixed DDL error probes ---"
+
+oracle "ddl_mix_with_errors_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+CREATE TABLE bad(;
+ALTER TABLE bogus ADD COLUMN x INTEGER;
+CREATE INDEX bad_idx ON bogus(x);
+DROP TABLE bogus;
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+# ═══════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
