@@ -448,6 +448,28 @@ CALL dolt_reset('--hard', 'bogus');
 " "SELECT concat('Q|', v) FROM t;
 ROLLBACK TO sp1;"
 
+oracle_same_session "reset_bad_ref_nested_savepoint_rolls_back_locally" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_commit('-A', '-m', 'c1');
+BEGIN;
+SAVEPOINT sp1;
+INSERT INTO t VALUES (2, 'dirty');
+SELECT dolt_reset('--hard', 'bogus');
+" "ROLLBACK TO sp1;
+COMMIT;
+SELECT 'Q|' || count(*) FROM t;" \
+"CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+CALL dolt_commit('-A', '-m', 'c1');
+BEGIN;
+SAVEPOINT sp1;
+INSERT INTO t VALUES (2, 'dirty');
+CALL dolt_reset('--hard', 'bogus');
+" "ROLLBACK TO sp1;
+COMMIT;
+SELECT concat('Q|', count(*)) FROM t;"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

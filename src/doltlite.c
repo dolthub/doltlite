@@ -479,6 +479,13 @@ static int doltliteSavepointIsTopLevelTxn(sqlite3 *db){
   return db->pSavepoint!=0 && db->isTransactionSavepoint && db->nSavepoint==0;
 }
 
+static int doltliteVcSealTopLevelSavepointTxn(sqlite3 *db){
+  if( doltliteSavepointIsTopLevelTxn(db) ){
+    return sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  }
+  return SQLITE_OK;
+}
+
 DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db){
   if( db->autoCommit || doltliteSavepointIsTopLevelTxn(db) ){
     return DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE;
@@ -1837,6 +1844,7 @@ static void doltliteResetFunc(
   int i;
   int graphLocked = 0;
   u8 isMerging = 0;
+  int bSucceeded = 0;
 
   if( !cs ){
     sqlite3_result_error(context, "no database open", -1);
@@ -2057,12 +2065,17 @@ static void doltliteResetFunc(
   }
 
   sqlite3_result_int(context, 0);
+  bSucceeded = 1;
 reset_cleanup:
   sqlite3_free(azPaths);
   if( graphLocked ){
     chunkStoreUnlock(cs);
   }
-  rc = doltliteVcSealActiveSavepoints(db);
+  if( bSucceeded ){
+    rc = doltliteVcSealActiveSavepoints(db);
+  }else{
+    rc = doltliteVcSealTopLevelSavepointTxn(db);
+  }
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
   }
