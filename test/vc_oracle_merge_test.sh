@@ -242,6 +242,44 @@ oracle_same_session() {
   fi
 }
 
+oracle_reopen_state() {
+  local name="$1" setup="$2" dl_query="$3" dolt_query="${4:-$3}"
+  local dir="$TMPROOT/${name}_reopen"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" || true
+  local dl_out
+  dl_out=$(
+    {
+      printf ".headers off\n.mode list\n.separator '\t'\n%s\n" "$dl_query"
+    } | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | tr -d '\r' \
+      | awk -F'\t' '$1=="Q"{print}'
+  )
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" || true
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" sql -r csv -q "$dolt_query" 2>>"$dir/dt.err" \
+      | tail -n +2 \
+      | tr -d '"\r' \
+      | awk -F'\t' '$1=="Q"{print}'
+  )
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_merge ==="
 echo ""
 
@@ -444,6 +482,23 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
+
+oracle_reopen_state "modify_modify_conflict_explicit_txn_reconnect_rolls_back" "
+$SEED
+UPDATE t SET v = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 11 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+BEGIN;
+SELECT dolt_merge('feature');
+" "SELECT 'Q' || char(9) || v FROM t WHERE id = 1;
+SELECT 'Q' || char(9) || count(*) FROM dolt_conflicts;" \
+"SELECT concat('Q', char(9), v) FROM t WHERE id = 1;
+SELECT concat('Q', char(9), count(*)) FROM dolt_conflicts;"
 
 echo "--- savepoint parity ---"
 

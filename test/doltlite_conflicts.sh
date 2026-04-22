@@ -25,7 +25,7 @@ run_test_match "conflicts_count" \
 # Test 2: Commit blocked with conflicts in the same SQL session
 run_test_match "commit_blocked" \
   "BEGIN; SELECT dolt_merge('feature'); SELECT dolt_commit('-A','-m','fail');" \
-  "unresolved merge conflicts" "$DB"
+  "Resolve and then commit with dolt_commit" "$DB"
 
 # Test 3: Resolve --ours keeps our value in-session
 run_test_match "resolved_no_conflicts" \

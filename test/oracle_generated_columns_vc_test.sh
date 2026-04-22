@@ -25,6 +25,11 @@ dl() {
   "$DOLTLITE" "$db" "$@" 2>/dev/null
 }
 
+dlq() {
+  local db="$1" sql="$2"
+  printf ".headers off\n.mode list\n%s\n" "$sql" | "$DOLTLITE" "$db" 2>/dev/null
+}
+
 echo "=== Generated Columns + Version Control Tests ==="
 
 # ── A: STORED generated column survives commit + reopen ────
@@ -136,9 +141,18 @@ SELECT dolt_merge('feat');
 SQL
 )" >/dev/null
 
-CONFLICTS=$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")
-XVAL=$(dl "$DB" "SELECT x FROM t WHERE id=1;")
-YVAL=$(dl "$DB" "SELECT y FROM t WHERE id=1;")
+CONFLICTS=$(dlq "$DB" "BEGIN;
+SELECT dolt_merge('feat');
+SELECT count(*) FROM dolt_conflicts;
+ROLLBACK;")
+XVAL=$(dlq "$DB" "BEGIN;
+SELECT dolt_merge('feat');
+SELECT x FROM t WHERE id=1;
+ROLLBACK;")
+YVAL=$(dlq "$DB" "BEGIN;
+SELECT dolt_merge('feat');
+SELECT y FROM t WHERE id=1;
+ROLLBACK;")
 [ "$CONFLICTS" = "1" ] && pass_name "e_conflict_detected" || fail_name "e_conflict_detected; got $CONFLICTS"
 # Ours wins in working set; y should match
 [ "$YVAL" = "$((XVAL*2))" ] && pass_name "e_generated_consistent" || fail_name "e_generated_consistent; x=$XVAL y=$YVAL"

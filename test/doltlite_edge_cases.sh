@@ -519,7 +519,7 @@ run_test_match "multi_conflict_count" \
 # Commit should be blocked in-session
 run_test_match "multi_conflict_blocked" \
   "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
-  "unresolved" "$DB"
+  "Resolve and then commit with dolt_commit" "$DB"
 
 # Resolve users and orders with ours in the same session
 run_test_match "multi_conflict_users_ours" \

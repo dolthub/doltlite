@@ -450,7 +450,11 @@ static int doltliteReportConflicts(
   int rc;
   rc = doltliteRegisterConflictTables(db);
   if( rc!=SQLITE_OK ) return rc;
-  rc = doltlitePersistWorkingSet(db);
+  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    rc = doltlitePersistWorkingSet(db);
+  }else{
+    rc = doltliteSaveWorkingSet(db);
+  }
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
     "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
@@ -465,7 +469,12 @@ static int doltliteReportConstraintViolations(
   const char *zOp
 ){
   char msg[256];
-  int rc = doltlitePersistWorkingSet(db);
+  int rc;
+  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    rc = doltlitePersistWorkingSet(db);
+  }else{
+    rc = doltliteSaveWorkingSet(db);
+  }
   if( rc!=SQLITE_OK ) return rc;
   sqlite3_snprintf(sizeof(msg), msg,
     "%s resulted in constraint violations. Resolve the rows in "
