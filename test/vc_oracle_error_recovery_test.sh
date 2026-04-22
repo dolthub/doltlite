@@ -4327,6 +4327,188 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 # ═══════════════════════════════════════════════════════════════════
+# Section 164: Merge base bad args deeper
+# ═══════════════════════════════════════════════════════════════════
+echo "--- merge_base deeper errors ---"
+
+oracle "merge_base_same_branch_twice_after_ff_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_merge_base('main','main');
+SELECT dolt_merge_base('bogus','main');
+SELECT dolt_merge_base('main','bogus');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM dolt_log;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 165: Insert with expression error sources
+# ═══════════════════════════════════════════════════════════════════
+echo "--- insert expr error source ---"
+
+oracle "insert_scalar_bogus_subquery_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+INSERT INTO t VALUES(2, (SELECT bogus_col FROM t));
+INSERT INTO t VALUES(2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 166: Errors around dolt_diff
+# ═══════════════════════════════════════════════════════════════════
+echo "--- dolt_diff errors ---"
+
+oracle "dolt_diff_filter_bogus_col_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT * FROM dolt_diff WHERE bogus='x';
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 167: HAVING with bogus col then ok
+# ═══════════════════════════════════════════════════════════════════
+echo "--- HAVING errors ---"
+
+oracle "having_bogus_col_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, grp TEXT, n INTEGER);
+INSERT INTO t VALUES(1,'a',10),(2,'a',20),(3,'b',5);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT grp, sum(n) FROM t GROUP BY grp HAVING bogus>0;
+INSERT INTO t VALUES(4,'a',30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 168: Errors on VIEW referring to dropped table
+# ═══════════════════════════════════════════════════════════════════
+echo "--- view after dropped source ---"
+
+oracle "view_references_dropped_source_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE VIEW vt AS SELECT id, v FROM t;
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+DROP TABLE t;
+SELECT id FROM vt;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 169: Error inside conflict state rollback flow
+# ═══════════════════════════════════════════════════════════════════
+echo "--- conflict state rollback error ---"
+
+oracle "conflict_rolled_back_then_error_storm_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v='f' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v='m' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+SELECT * FROM bogus1;
+SELECT dolt_cherry_pick('bogus2');
+SELECT dolt_reset('--hard','bogus3');
+INSERT INTO t VALUES(2,'post');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','post');
+" "SELECT id, v FROM t ORDER BY id;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 170: Tag on deleted branch
+# ═══════════════════════════════════════════════════════════════════
+echo "--- tag on deleted branch ---"
+
+oracle "tag_after_branch_deleted_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+SELECT dolt_branch('-d','feat');
+SELECT dolt_tag('v1','feat');
+SELECT dolt_tag('v1','HEAD');
+" "SELECT count(*) FROM dolt_tags WHERE tag_name='v1';"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 171: UPDATE + CTE bogus
+# ═══════════════════════════════════════════════════════════════════
+echo "--- UPDATE cte bogus ---"
+
+oracle "update_via_bogus_cte_subquery_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+UPDATE t SET v = (WITH x AS (SELECT bogus FROM nonexistent) SELECT * FROM x);
+UPDATE t SET v=99 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, v FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 172: DELETE from VIEW
+# ═══════════════════════════════════════════════════════════════════
+echo "--- DELETE from view ---"
+
+oracle "delete_from_view_then_delete_from_table" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE VIEW v AS SELECT id, v FROM t;
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+DELETE FROM v WHERE id=1;
+DELETE FROM t WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT count(*) FROM t;"
+
+# ═══════════════════════════════════════════════════════════════════
+# Section 173: Rename non-existing col in nested ALTER
+# ═══════════════════════════════════════════════════════════════════
+echo "--- ALTER rename non-existing ---"
+
+oracle "alter_rename_bogus_col_then_real" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+ALTER TABLE t RENAME COLUMN bogus TO something;
+ALTER TABLE t RENAME COLUMN v TO val;
+INSERT INTO t(id,val) VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+" "SELECT id, val FROM t ORDER BY id;"
+# ═══════════════════════════════════════════════════════════════════
 # ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
