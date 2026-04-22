@@ -2283,6 +2283,14 @@ static void doltliteMergeFunc(
   memcpy(&ancCatHash, &ancCommit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&ancCommit);
 
+  rc = doltliteSaveTxnState(db, &savedState);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&ourCommit);
+    doltliteCommitClear(&theirCommit);
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+
   {
     char *zMergeErr = 0;
     SchemaMergeAction *aSchemaActions = 0;
@@ -2299,19 +2307,11 @@ static void doltliteMergeFunc(
       }else{
         sqlite3_result_error(context, "merge failed", -1);
       }
+      doltliteTxnStateClear(&savedState);
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
       return;
     }
     sqlite3_free(zMergeErr);
-
-    rc = doltliteSaveTxnState(db, &savedState);
-    if( rc!=SQLITE_OK ){
-      doltliteCommitClear(&ourCommit);
-      doltliteCommitClear(&theirCommit);
-      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
-      sqlite3_result_error_code(context, rc);
-      return;
-    }
 
     rc = doltliteRefreshAndConfirmHead(db, cs, &ourHead);
     if( rc==SQLITE_BUSY ){
@@ -2457,7 +2457,15 @@ static void doltliteMergeFunc(
         }
         break;
       case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-        rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
+        rc = doltliteRestoreTxnState(db, &savedState);
+        if( rc==SQLITE_OK ){
+          doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
+                                       &savedState.sessionMergeCommit,
+                                       &savedState.sessionConflictsCatalog);
+          doltliteSetSessionConstraintViolationsCatalog(
+              db, &savedState.sessionConstraintViolationsCatalog);
+        }
+        doltliteTxnStateClear(&savedState);
         if( rc!=SQLITE_OK ){
           sqlite3_result_error_code(context, rc);
         }else{
@@ -2494,7 +2502,15 @@ static void doltliteMergeFunc(
       }
       return;
     case DOLTLITE_VC_TXN_NESTED_SAVEPOINT:
-      rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
+      rc = doltliteRestoreTxnState(db, &savedState);
+      if( rc==SQLITE_OK ){
+        doltliteSetSessionMergeState(db, savedState.sessionIsMerging,
+                                     &savedState.sessionMergeCommit,
+                                     &savedState.sessionConflictsCatalog);
+        doltliteSetSessionConstraintViolationsCatalog(
+            db, &savedState.sessionConstraintViolationsCatalog);
+      }
+      doltliteTxnStateClear(&savedState);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(context, rc);
       }else{
