@@ -343,6 +343,16 @@ run_test_match "rebase_bad_option_savepoint_row_persists" \
   "SELECT count(*) FROM t;" \
   "^2$" "$DB6g1s"
 
+DB6g1t=/tmp/test_savepoint6g1t_$$.db; rm -f "$DB6g1t"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_checkout('-b','feature'); UPDATE t SET v='feat' WHERE id=1; SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); UPDATE t SET v='main' WHERE id=1; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB6g1t" > /dev/null 2>&1
+echo "BEGIN; SELECT dolt_merge('feature');" | $DOLTLITE "$DB6g1t" > /dev/null 2>&1
+run_test "merge_conflict_reopen_restores_main" \
+  "SELECT v FROM t WHERE id=1;" \
+  "main" "$DB6g1t"
+run_test "merge_conflict_reopen_no_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" \
+  "0" "$DB6g1t"
+
 DB6g2=/tmp/test_savepoint6g2_$$.db; rm -f "$DB6g2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g2" > /dev/null 2>&1
 run_test_match "branch_delete_current_savepoint_rollback_to_errors" \
