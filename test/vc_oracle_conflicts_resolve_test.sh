@@ -214,6 +214,32 @@ oracle_error "resolve_extra_positional_arg" \
 SELECT dolt_conflicts_resolve('--ours', 't', 'extra');
 "
 
+echo "--- named savepoint rollback parity ---"
+
+oracle "resolve_ours_savepoint_rollback" \
+  "$CONFLICT_SETUP" \
+  "SAVEPOINT sp1;
+SELECT dolt_conflicts_resolve('--ours', 't');
+ROLLBACK TO sp1;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;
+SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
+
+oracle "resolve_theirs_savepoint_rollback" \
+  "$CONFLICT_SETUP" \
+  "SAVEPOINT sp1;
+SELECT dolt_conflicts_resolve('--theirs', 't');
+ROLLBACK TO sp1;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;
+SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
+
+oracle "delete_conflict_row_savepoint_rollback" \
+  "$CONFLICT_SETUP" \
+  "SAVEPOINT sp1;
+DELETE FROM dolt_conflicts_t WHERE our_id=1;
+ROLLBACK TO sp1;
+SELECT CONCAT('R|conflicts|', count(*)) FROM dolt_conflicts;
+SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
+
 echo "--- TEXT primary key ---"
 
 # TEXT PK exercises the conflict-apply path for non-integer keys.

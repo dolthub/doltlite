@@ -502,6 +502,7 @@ static struct Pager *prollyBtreePager(Btree*);
 #ifdef SQLITE_DEBUG
 static int prollyBtreeClosesWithCursor(Btree*, BtCursor*);
 #endif
+int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db);
 
 static int origBtreeCloseVt(Btree*);
 static int origBtreeNewDbVt(Btree*);
@@ -5772,6 +5773,8 @@ int doltliteApplyRawRowMutation(
   pBtree = db->aDb[0].pBt;
   pBt = pBtree->pBt;
   if( !pBt ) return SQLITE_ERROR;
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ) return rc;
 
   {
     int i;
@@ -5834,6 +5837,30 @@ int doltliteApplyRawRowMutation(
 
   prollyMutMapFree(&mm);
   return rc;
+}
+
+int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
+  Btree *pBtree;
+  int rc = SQLITE_OK;
+  int target;
+
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  if( pBtree->inTrans!=TRANS_WRITE ){
+    rc = sqlite3BtreeBeginTrans(pBtree, 2, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  /* Direct VC helpers need the named savepoint stack captured before
+  ** they mutate session working-set state. Do not mirror statement
+  ** savepoints here: releaseSavepointsFrom() only inherits pending-row
+  ** snapshots, not session hashes like conflictsCatalogHash. */
+  target = db->nSavepoint;
+  while( pBtree->nSavepoint < target ){
+    rc = pushSavepoint(pBtree);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return SQLITE_OK;
 }
 
 const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable){
@@ -6325,6 +6352,15 @@ void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
   u8 isMerging = 0;
   if( pHash ) memset(pHash, 0, sizeof(*pHash));
   if( !db || db->nDb<=0 || !db->aDb[0].pBt || !pHash ) return;
+  {
+    Btree *p = db->aDb[0].pBt;
+    if( !db->autoCommit || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE || db->pSavepoint ){
+      if( p->isMerging ){
+        memcpy(pHash, &p->conflictsCatalogHash, sizeof(*pHash));
+      }
+      return;
+    }
+  }
   if( db->autoCommit && sqlite3_txn_state(db, "main")==SQLITE_TXN_NONE ){
     sqlite3 *db2 = 0;
     const char *zFilename = sqlite3_db_filename(db, "main");
