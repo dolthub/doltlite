@@ -26,6 +26,11 @@ dl() {
   "$DOLTLITE" "$db" "$@" 2>/dev/null
 }
 
+dlq() {
+  local db="$1" sql="$2"
+  printf ".headers off\n.mode list\n%s\n" "$sql" | "$DOLTLITE" "$db" 2>/dev/null
+}
+
 echo "=== BLOB Composite PK + Version Control Tests ==="
 
 # ── A: Commit + reopen ────────────────────────────────────
@@ -108,8 +113,14 @@ SELECT dolt_merge('feat');
 SQL
 )" >/dev/null
 
-CONF=$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")
-VAL=$(dl "$DB" "SELECT v FROM t WHERE a=X'DEADBEEF';")
+CONF=$(dlq "$DB" "BEGIN;
+SELECT dolt_merge('feat');
+SELECT count(*) FROM dolt_conflicts;
+ROLLBACK;")
+VAL=$(dlq "$DB" "BEGIN;
+SELECT dolt_merge('feat');
+SELECT v FROM t WHERE a=X'DEADBEEF';
+ROLLBACK;")
 [ "$CONF" = "1" ] && pass_name "c_conflict" || fail_name "c_conflict; got $CONF"
 [ "$VAL" = "main_val" ] && pass_name "c_ours_wins" || fail_name "c_ours_wins; got $VAL"
 
@@ -135,7 +146,10 @@ SELECT dolt_merge('feat');
 SQL
 )" >/dev/null
 
-CONF=$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")
+CONF=$(dlq "$DB" "BEGIN;
+SELECT dolt_merge('feat');
+SELECT count(*) FROM dolt_conflicts;
+ROLLBACK;")
 KEEP=$(dl "$DB" "SELECT v FROM t WHERE a=X'CCDD';")
 [ "$CONF" = "1" ] && pass_name "d_dm_conflict" || fail_name "d_dm_conflict; got $CONF"
 [ "$KEEP" = "bystander" ] && pass_name "d_bystander_ok" || fail_name "d_bystander_ok; got $KEEP"
