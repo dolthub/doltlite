@@ -2294,6 +2294,14 @@ static void doltliteMergeFunc(
   memcpy(&ancCatHash, &ancCommit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&ancCommit);
 
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&ourCommit);
+    doltliteCommitClear(&theirCommit);
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+
   rc = doltliteSaveTxnState(db, &savedState);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&ourCommit);
@@ -2648,6 +2656,10 @@ static int applyMergedCatalogAndCommit(
   int rc;
 
   memset(&savedState, 0, sizeof(savedState));
+  if( hexBuf ) hexBuf[0] = '\0';
+
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteSaveTxnState(db, &savedState);
   if( rc!=SQLITE_OK ) return rc;
@@ -2921,7 +2933,7 @@ static void doltliteCherryPickFunc(
 
   if( nConflicts > 0 ){
     return;
-  }else{
+  }else if( hexBuf[0] ){
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
   }
 }
@@ -3035,7 +3047,7 @@ static void doltliteRevertFunc(
 
   if( nConflicts > 0 ){
     return;
-  }else{
+  }else if( hexBuf[0] ){
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
   }
 }

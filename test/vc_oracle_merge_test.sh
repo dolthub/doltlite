@@ -950,6 +950,46 @@ SELECT dolt_merge('feature');
 " "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id, u, v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
+oracle_error_poststate "merge_conflict_txn_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 'feature' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feature edit');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main edit');
+BEGIN;
+SELECT dolt_merge('feature');
+ROLLBACK;
+" "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT v FROM t WHERE id = 1)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT v FROM t WHERE id = 1))"
+
+oracle_error_poststate "merge_constraint_violation_txn_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
+INSERT INTO t VALUES (1, 1, 'base1'), (2, 2, 'base2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET u = 9, v = 'feat2' WHERE id = 2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_unique');
+SELECT dolt_checkout('main');
+UPDATE t SET u = 9, v = 'main1' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_unique');
+BEGIN;
+SELECT dolt_merge('feature');
+ROLLBACK;
+" "SELECT (SELECT count(*) FROM dolt_conflicts) || '|' || (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id, u, v FROM t ORDER BY id) AS ordered_rows)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_conflicts), '|', (SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

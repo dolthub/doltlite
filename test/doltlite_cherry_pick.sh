@@ -512,7 +512,7 @@ SELECT dolt_commit('-A','-m','main_unique');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "cp_violation_err" \
   "SELECT dolt_cherry_pick('feat');" \
-  "Error near line 1" "$DB"
+  "constraint violations|rolled back" "$DB"
 run_test "cp_violation_none" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB"
 run_test "cp_violation_state" \
   "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id);" \
@@ -531,7 +531,7 @@ SELECT dolt_commit('-A','-m','c2_take_1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "rv_violation_err" \
   "SELECT dolt_revert('HEAD~1');" \
-  "Error near line 1" "$DB"
+  "constraint violations|rolled back" "$DB"
 run_test "rv_violation_none" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB"
 run_test "rv_violation_state" \
   "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id);" \

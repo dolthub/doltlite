@@ -607,6 +607,43 @@ SELECT dolt_revert('HEAD~1');
 " "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
+oracle_error_poststate "cherry_pick_constraint_violation_txn_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
+INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET u=9, v='feat2' WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_unique');
+SELECT dolt_checkout('main');
+UPDATE t SET u=9, v='main1' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_unique');
+BEGIN;
+SELECT dolt_cherry_pick('feature');
+ROLLBACK;
+" "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
+
+oracle_error_poststate "revert_constraint_violation_txn_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
+INSERT INTO t VALUES (1,1,'base1'),(2,2,'base2');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+UPDATE t SET u=9, v='c1' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1_set_9');
+UPDATE t SET u=1, v='c2_take_1' WHERE id=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2_take_1');
+BEGIN;
+SELECT dolt_revert('HEAD~1');
+ROLLBACK;
+" "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
+
 echo "--- savepoint parity ---"
 
 oracle_error_poststate "cherry_pick_savepoint_invalidated" "
