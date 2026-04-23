@@ -13951,169 +13951,6 @@ echo "--- INSERT SELECT LIMIT ---"
 oracle "insert_select_limit_after_merge" "
 CREATE TABLE src(id INTEGER PRIMARY KEY, v INTEGER);
 CREATE TABLE dst(id INTEGER PRIMARY KEY, v INTEGER);
-# ═══════════════════════════════════════════════════════════════════
-# Section 425: Final push — crossing 1000 tests
-# ═══════════════════════════════════════════════════════════════════
-echo "--- final probes ---"
-
-oracle "one_k_update_after_ff_merge" "
-CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
-INSERT INTO t VALUES(1,1);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','base');
-SELECT dolt_checkout('-b','feat');
-UPDATE t SET n=1000 WHERE id=1;
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','feat');
-SELECT dolt_checkout('main');
-SELECT dolt_merge('feat');
-" "SELECT id, n FROM t;"
-
-oracle "one_k_distinct_cat_after_merge" "
-CREATE TABLE t(id INTEGER PRIMARY KEY, cat VARCHAR(8));
-INSERT INTO t VALUES(1,'a'),(2,'a'),(3,'b');
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','base');
-SELECT dolt_checkout('-b','feat');
-INSERT INTO t VALUES(4,'c'),(5,'b');
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','feat');
-SELECT dolt_checkout('main');
-SELECT dolt_merge('feat');
-" "SELECT count(DISTINCT cat) AS d FROM t;"
-
-oracle "one_k_nested_or_filter_after_merge" "
-CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER);
-INSERT INTO t VALUES(1,1,1),(2,2,2),(3,3,3);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','base');
-SELECT dolt_checkout('-b','feat');
-INSERT INTO t VALUES(4,4,4),(5,5,5);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','feat');
-SELECT dolt_checkout('main');
-SELECT dolt_merge('feat');
-" "SELECT id FROM t WHERE (a>2 OR b<2) AND id <> 4 ORDER BY id;"
-
-oracle "one_k_varchar_pk_order_after_merge" "
-CREATE TABLE t(k VARCHAR(8) PRIMARY KEY, v INTEGER);
-INSERT INTO t VALUES('alpha',1),('bravo',2);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','base');
-SELECT dolt_checkout('-b','feat');
-INSERT INTO t VALUES('charlie',3),('delta',4);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','feat');
-SELECT dolt_checkout('main');
-SELECT dolt_merge('feat');
-" "SELECT k FROM t ORDER BY k;"
-
-oracle "one_k_cherry_pick_preserves_log_count" "
-CREATE TABLE t(id INTEGER PRIMARY KEY);
-INSERT INTO t VALUES(1);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','base');
-SELECT dolt_checkout('-b','feat');
-INSERT INTO t VALUES(2);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','feat');
-SELECT dolt_checkout('main');
-SELECT dolt_cherry_pick('feat');
-" "SELECT count(*) FROM dolt_log;"
-
-oracle "one_k_union_all_merge" "
-CREATE TABLE a(v INTEGER);
-CREATE TABLE b(v INTEGER);
-INSERT INTO a VALUES(1),(2);
-INSERT INTO b VALUES(2),(3);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','base');
-SELECT dolt_checkout('-b','feat');
-INSERT INTO a VALUES(4);
-INSERT INTO b VALUES(5);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','feat');
-SELECT dolt_checkout('main');
-SELECT dolt_merge('feat');
-" "SELECT v FROM a UNION ALL SELECT v FROM b ORDER BY v;"
-
-oracle "one_k_three_parent_fk_chain_merge" "
-PRAGMA foreign_keys=1;
-CREATE TABLE a(id INTEGER PRIMARY KEY);
-CREATE TABLE b(id INTEGER PRIMARY KEY, aid INTEGER REFERENCES a(id));
-CREATE TABLE c(id INTEGER PRIMARY KEY, bid INTEGER REFERENCES b(id));
-CREATE TABLE d(id INTEGER PRIMARY KEY, cid INTEGER REFERENCES c(id));
-INSERT INTO a VALUES(1);
-INSERT INTO b VALUES(1,1);
-INSERT INTO c VALUES(1,1);
-INSERT INTO d VALUES(1,1);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','base');
-SELECT dolt_checkout('-b','feat');
-INSERT INTO a VALUES(2);
-INSERT INTO b VALUES(2,2);
-INSERT INTO c VALUES(2,2);
-INSERT INTO d VALUES(2,2);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','feat');
-SELECT dolt_checkout('main');
-SELECT dolt_merge('feat');
-" "SELECT count(*) FROM d;"
-
-oracle "one_k_coalesce_aggregate_after_merge" "
-CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
-INSERT INTO t VALUES(1,NULL),(2,20),(3,NULL);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','base');
-SELECT dolt_checkout('-b','feat');
-INSERT INTO t VALUES(4,40),(5,NULL);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','feat');
-SELECT dolt_checkout('main');
-SELECT dolt_merge('feat');
-" "SELECT sum(COALESCE(v, 0)) AS s FROM t;"
-
-oracle "one_k_reset_branch_forward_merge" "
-CREATE TABLE t(id INTEGER PRIMARY KEY);
-INSERT INTO t VALUES(1);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','c1');
-SELECT dolt_branch('snap');
-INSERT INTO t VALUES(2);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','c2');
-INSERT INTO t VALUES(3);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','c3');
-SELECT dolt_reset('--hard','snap');
-INSERT INTO t VALUES(99);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','alt c2');
-" "SELECT id FROM t ORDER BY id;"
-
-oracle "one_k_merge_base_across_diamond" "
-CREATE TABLE t(id INTEGER PRIMARY KEY);
-INSERT INTO t VALUES(1);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','base');
-SELECT dolt_checkout('-b','left');
-INSERT INTO t VALUES(2);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','l');
-SELECT dolt_checkout('main');
-SELECT dolt_checkout('-b','right');
-INSERT INTO t VALUES(3);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','r');
-SELECT dolt_checkout('main');
-" "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_merge_base('left','right');"
-
-oracle "one_k_final_milestone_count_check" "
-CREATE TABLE t(id INTEGER PRIMARY KEY);
-INSERT INTO t VALUES(1),(2),(3);
-SELECT dolt_add('-A');
-SELECT dolt_commit('-m','milestone');
-" "SELECT count(*) AS n FROM t;"
 INSERT INTO src VALUES(1,10),(2,20),(3,30),(4,40),(5,50);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','base');
@@ -14519,6 +14356,169 @@ INSERT INTO t VALUES(15);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c15');
 " "SELECT CASE WHEN count(DISTINCT commit_hash) = count(*) THEN 1 ELSE 0 END FROM dolt_log;"
+# ═══════════════════════════════════════════════════════════════════
+# Section 425: Final push — crossing 1000 tests
+# ═══════════════════════════════════════════════════════════════════
+echo "--- final probes ---"
+
+oracle "one_k_update_after_ff_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET n=1000 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id, n FROM t;"
+
+oracle "one_k_distinct_cat_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, cat VARCHAR(8));
+INSERT INTO t VALUES(1,'a'),(2,'a'),(3,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(4,'c'),(5,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT count(DISTINCT cat) AS d FROM t;"
+
+oracle "one_k_nested_or_filter_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER);
+INSERT INTO t VALUES(1,1,1),(2,2,2),(3,3,3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(4,4,4),(5,5,5);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id FROM t WHERE (a>2 OR b<2) AND id <> 4 ORDER BY id;"
+
+oracle "one_k_varchar_pk_order_after_merge" "
+CREATE TABLE t(k VARCHAR(8) PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES('alpha',1),('bravo',2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES('charlie',3),('delta',4);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT k FROM t ORDER BY k;"
+
+oracle "one_k_cherry_pick_preserves_log_count" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_cherry_pick('feat');
+" "SELECT count(*) FROM dolt_log;"
+
+oracle "one_k_union_all_merge" "
+CREATE TABLE a(v INTEGER);
+CREATE TABLE b(v INTEGER);
+INSERT INTO a VALUES(1),(2);
+INSERT INTO b VALUES(2),(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO a VALUES(4);
+INSERT INTO b VALUES(5);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT v FROM a UNION ALL SELECT v FROM b ORDER BY v;"
+
+oracle "one_k_three_parent_fk_chain_merge" "
+PRAGMA foreign_keys=1;
+CREATE TABLE a(id INTEGER PRIMARY KEY);
+CREATE TABLE b(id INTEGER PRIMARY KEY, aid INTEGER REFERENCES a(id));
+CREATE TABLE c(id INTEGER PRIMARY KEY, bid INTEGER REFERENCES b(id));
+CREATE TABLE d(id INTEGER PRIMARY KEY, cid INTEGER REFERENCES c(id));
+INSERT INTO a VALUES(1);
+INSERT INTO b VALUES(1,1);
+INSERT INTO c VALUES(1,1);
+INSERT INTO d VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO a VALUES(2);
+INSERT INTO b VALUES(2,2);
+INSERT INTO c VALUES(2,2);
+INSERT INTO d VALUES(2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT count(*) FROM d;"
+
+oracle "one_k_coalesce_aggregate_after_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,NULL),(2,20),(3,NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(4,40),(5,NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT sum(COALESCE(v, 0)) AS s FROM t;"
+
+oracle "one_k_reset_branch_forward_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+SELECT dolt_branch('snap');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+SELECT dolt_reset('--hard','snap');
+INSERT INTO t VALUES(99);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','alt c2');
+" "SELECT id FROM t ORDER BY id;"
+
+oracle "one_k_merge_base_across_diamond" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','left');
+INSERT INTO t VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','l');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('-b','right');
+INSERT INTO t VALUES(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','r');
+SELECT dolt_checkout('main');
+" "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_merge_base('left','right');"
+
+oracle "one_k_final_milestone_count_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1),(2),(3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','milestone');
+" "SELECT count(*) AS n FROM t;"
 # ═══════════════════════════════════════════════════════════════════
 # Results
 # ═══════════════════════════════════════════════════════════════════
