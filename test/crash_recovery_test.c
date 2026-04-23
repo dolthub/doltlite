@@ -1041,9 +1041,12 @@ static void test_15_large_insert_crash(void){
 */
 static void test_16_large_insert_complete_then_kill(void){
   const char *dbpath = fresh_db();
+  char donepath[1024];
   pid_t pid;
 
   printf("--- Test 16: 1000-row commit completes, then kill ---\n");
+  snprintf(donepath, sizeof(donepath), "%s.done", dbpath);
+  unlink(donepath);
 
   pid = fork();
   if( pid==0 ){
@@ -1058,17 +1061,35 @@ static void test_16_large_insert_complete_then_kill(void){
       execsql(db, sql);
     }
     exec1(db, "SELECT dolt_commit('-A', '-m', 'thousand rows')");
+    {
+      FILE *f = fopen(donepath, "w");
+      if( f ){
+        fputs("done\n", f);
+        fclose(f);
+      }
+    }
     sqlite3_sleep(500);
     sqlite3_sleep(60000);
     _exit(0);
   }
-  sqlite3_sleep(5000);
+  {
+    int i, sawDone = 0;
+    for( i=0; i<200; i++ ){
+      if( access(donepath, F_OK)==0 ){
+        sawDone = 1;
+        break;
+      }
+      sqlite3_sleep(100);
+    }
+    check("test_16: commit returned before kill", sawDone);
+  }
   kill(pid, SIGKILL);
   { int status; waitpid(pid, &status, 0); }
 
   verify_consistency(dbpath, "test_16");
   verify_row_count(dbpath, "test_16", "t", 1000);
   verify_user_commit_count(dbpath, "test_16", 1);
+  unlink(donepath);
   remove_db(dbpath);
 }
 
