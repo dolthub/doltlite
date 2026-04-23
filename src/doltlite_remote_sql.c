@@ -669,7 +669,13 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
     return;
   }
-  remoteSqlClearAndSucceed(ctx, &savedState);
+  remoteSqlStateClear(&savedState);
+  rc = doltliteVcSealBranchStyleTxn(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+  sqlite3_result_int(ctx, 0);
 }
 
 static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){

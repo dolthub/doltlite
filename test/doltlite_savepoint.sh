@@ -465,6 +465,23 @@ run_test_match "clone_bad_url_savepoint_rollback_to_errors" \
 run_test_match "clone_bad_url_savepoint_branch_stays_main" \
   "SELECT active_branch();" \
   "^main$" "$DB6g10"
+
+DB6g11_DIR=/tmp/test_savepoint6g11_$$; rm -rf "$DB6g11_DIR"; mkdir -p "$DB6g11_DIR"
+DB6g11="$DB6g11_DIR/src.db"
+DB6g11_OTHER="$DB6g11_DIR/other.db"
+DB6g11_REMOTE="file://$DB6g11_DIR/remote.db"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_remote('add','origin','$DB6g11_REMOTE'); SELECT dolt_push('origin','main');" | $DOLTLITE "$DB6g11" > /dev/null 2>&1
+echo "SELECT dolt_clone('$DB6g11_REMOTE'); INSERT INTO t VALUES(2,'other'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','other'); SELECT dolt_push('origin','main');" | $DOLTLITE "$DB6g11_OTHER" > /dev/null 2>&1
+run_test_match "pull_nested_savepoint_rollback_to_errors" \
+  "BEGIN; SAVEPOINT sp1; SELECT dolt_pull('origin','main'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g11"
+run_test_match "pull_nested_savepoint_rows_persist" \
+  "SELECT count(*) FROM t;" \
+  "^2$" "$DB6g11"
+run_test_match "pull_nested_savepoint_log_persists" \
+  "SELECT count(*)-1 FROM dolt_log;" \
+  "^2$" "$DB6g11"
+
 DB6h=/tmp/test_savepoint6h_$$.db; rm -f "$DB6h"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='other'; SELECT dolt_commit('-A','-m','other'); SELECT dolt_checkout('main');" | $DOLTLITE "$DB6h" > /dev/null 2>&1
 run_test_match "checkout_savepoint_rollback_to_errors" \
