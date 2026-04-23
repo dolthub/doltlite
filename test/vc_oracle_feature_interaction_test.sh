@@ -7274,14 +7274,41 @@ SELECT dolt_commit('-m','newer c2');
 # ═══════════════════════════════════════════════════════════════════
 echo "--- NULL + UNIQUE merge probes ---"
 
-# NOTE: unique_allows_multiple_nulls_merge is a known doltlite bug —
-# when two branches each add a row with NULL in a UNIQUE column,
-# doltlite's merge constraint-violation check treats the NULLs as
-# equal and rolls back, violating the SQL standard (NULL != NULL for
-# UNIQUE). Plain INSERT of multiple NULLs works correctly; the bug is
-# only in the merge-time constraint check. Omitted from suite pending
-# fix. Minimal repro: base=(1,'a'); feat adds (2,NULL); main adds
-# (3,NULL); merge feat.
+oracle "unique_allows_multiple_nulls_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, code VARCHAR(32) UNIQUE);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT id, code FROM t ORDER BY id;"
+
+# A multi-column UNIQUE index with one column NULL per row also
+# must not flag a duplicate — SQL standard exempts any row with a
+# NULL in any of the index columns.
+oracle "unique_multi_col_with_one_null_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a VARCHAR(8), b VARCHAR(8), UNIQUE(a,b));
+INSERT INTO t VALUES(1,'x','y');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'x',NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'x',NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main');
+SELECT dolt_merge('feat');
+" "SELECT count(*) FROM t;"
+
 
 # ═══════════════════════════════════════════════════════════════════
 # Section 187: Merging a branch whose only change is an alter
