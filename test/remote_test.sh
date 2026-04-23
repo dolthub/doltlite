@@ -496,6 +496,12 @@ done
 result=$("$DB" "$TMPDIR/div_clone.db" "SELECT dolt_fetch('origin','branchA');")
 check "incremental fetch returns 0" "0" "$result"
 
+# Fetched tracking branch should be usable as a checkout start point
+result=$("$DB" "$TMPDIR/div_clone.db" "SELECT dolt_checkout('-b','trackA','origin/branchA'); SELECT active_branch(); SELECT count(*) FROM items;")
+check "checkout from fetched tracking branch" "0
+trackA
+16" "$result"
+
 # Pull to see new data
 "$DB" "$TMPDIR/div_clone.db" "SELECT dolt_checkout('branchA');" > /dev/null
 result=$("$DB" "$TMPDIR/div_clone.db/branchA" "SELECT dolt_pull('origin','branchA'); SELECT count(*) FROM items;")

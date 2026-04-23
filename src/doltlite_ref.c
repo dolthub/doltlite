@@ -55,6 +55,22 @@ static int doltliteResolveBaseRef(
     return rc;
   }
 
+  {
+    const char *zSlash = strchr(zRef, '/');
+    if( zSlash && zSlash!=zRef && zSlash[1] ){
+      char *zRemote = sqlite3_mprintf("%.*s", (int)(zSlash - zRef), zRef);
+      const char *zBranch = zSlash + 1;
+      if( !zRemote ) return SQLITE_NOMEM;
+      rc = chunkStoreFindTracking(cs, zRemote, zBranch, pCommit);
+      sqlite3_free(zRemote);
+      if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
+        rc = doltliteValidateCommitHash(db, pCommit);
+        if( rc==SQLITE_OK ) return SQLITE_OK;
+        return rc;
+      }
+    }
+  }
+
 
   rc = chunkStoreFindTag(cs, zRef, pCommit);
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
