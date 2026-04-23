@@ -3006,7 +3006,15 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       }
       sqlite3_free(catData);
       if( rc==SQLITE_OK ){
-        rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash, &p->headCommit);
+        rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
+                                      &p->headCommit, &p->stagedCatalog,
+                                      p->isMerging, &p->mergeCommitHash,
+                                      &p->conflictsCatalogHash,
+                                      p->isRebasing,
+                                      &p->preRebaseWorkingCat,
+                                      &p->rebaseOntoCommit,
+                                      p->zRebaseOrigBranch,
+                                      &p->constraintViolationsHash);
       }
       if( rc==SQLITE_OK ){
         rc = chunkStoreSerializeRefs(&pBt->store);

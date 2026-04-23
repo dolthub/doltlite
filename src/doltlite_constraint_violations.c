@@ -313,7 +313,10 @@ static int storeUpdatedViolations(
     if( rc!=SQLITE_OK ) return rc;
     doltliteSetSessionConstraintViolationsCatalog(db, &newHash);
   }
-  return doltlitePersistWorkingSet(db);
+  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    return doltlitePersistWorkingSet(db);
+  }
+  return doltliteSaveWorkingSet(db);
 }
 
 /* Public append API — used by the post-merge walk (Phase 4) to
@@ -375,7 +378,10 @@ int doltliteAppendConstraintViolation(
 int doltliteClearAllConstraintViolations(sqlite3 *db){
   static const ProllyHash emptyHash = {{0}};
   doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
-  return doltlitePersistWorkingSet(db);
+  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    return doltlitePersistWorkingSet(db);
+  }
+  return doltliteSaveWorkingSet(db);
 }
 
 /* ── Summary vtable: dolt_constraint_violations ──────────── */
