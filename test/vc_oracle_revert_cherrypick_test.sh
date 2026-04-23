@@ -640,6 +640,48 @@ ROLLBACK TO sp1;
           (SELECT count(*) FROM dolt_log);" \
   "SELECT CONCAT(active_branch(), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT COUNT(*) FROM dolt_log))"
 
+oracle_error_poststate "cherry_pick_conflict_top_savepoint_invalidated" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+UPDATE t SET v = 'feature' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feature edit');
+SELECT dolt_tag('feat-conflict');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 'main' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main edit');
+SAVEPOINT sp1;
+SELECT dolt_cherry_pick('feat-conflict');
+ROLLBACK TO sp1;
+" "SELECT active_branch() || '|' ||
+          (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered) || '|' ||
+          (SELECT count(*) FROM dolt_conflicts);" \
+  "SELECT CONCAT(active_branch(), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT COUNT(*) FROM dolt_conflicts))"
+
+oracle_error_poststate "revert_conflict_top_savepoint_invalidated" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+UPDATE t SET v = 'mid' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'mid edit');
+UPDATE t SET v = 'head' WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'head edit');
+SAVEPOINT sp1;
+SELECT dolt_revert('HEAD~1');
+ROLLBACK TO sp1;
+" "SELECT active_branch() || '|' ||
+          (SELECT group_concat(id || ':' || v, ',') FROM (SELECT id, v FROM t ORDER BY id) AS ordered) || '|' ||
+          (SELECT count(*) FROM dolt_conflicts);" \
+  "SELECT CONCAT(active_branch(), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', v) ORDER BY id SEPARATOR ',') FROM t), '|', (SELECT COUNT(*) FROM dolt_conflicts))"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
