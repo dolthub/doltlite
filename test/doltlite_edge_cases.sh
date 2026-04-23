@@ -519,17 +519,17 @@ run_test_match "multi_conflict_count" \
 # Commit should be blocked in-session
 run_test_match "multi_conflict_blocked" \
   "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
-  "Resolve and then commit with dolt_commit" "$DB"
+  "cannot commit: unresolved merge conflicts|Use dolt_conflicts_resolve" "$DB"
 
 # Resolve users and orders with ours in the same session
 run_test_match "multi_conflict_users_ours" \
-  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'U|' || name FROM users WHERE id=1;" \
+  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT 'U|' || name FROM users WHERE id=1; ROLLBACK;" \
   "^U\\|alice_v2$" "$DB"
 run_test_match "multi_conflict_resolved" \
-  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'R|' || count(*) FROM dolt_conflicts;" \
+  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'R|' || count(*) FROM dolt_conflicts; ROLLBACK;" \
   "^R\\|0$" "$DB"
 run_test_match "multi_conflict_orders_ours" \
-  "SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'O|' || item FROM orders WHERE id=1;" \
+  "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_conflicts_resolve('--ours','users'); SELECT dolt_conflicts_resolve('--ours','orders'); SELECT 'O|' || item FROM orders WHERE id=1; ROLLBACK;" \
   "^O\\|hat_v2$" "$DB"
 
 rm -f "$DB"

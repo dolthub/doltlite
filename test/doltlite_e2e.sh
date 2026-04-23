@@ -116,7 +116,7 @@ run_test_match "e2e_has_conflicts" \
 # Commit should be blocked in-session
 run_test_match "e2e_commit_blocked" \
   "BEGIN; SELECT dolt_merge('hotfix'); SELECT dolt_commit('-A','-m','fail');" \
-  "Resolve and then commit with dolt_commit" "$DB"
+  "cannot commit: unresolved merge conflicts|Use dolt_conflicts_resolve" "$DB"
 
 # Resolve with --ours in-session
 run_test_match "e2e_conflicts_cleared" \
