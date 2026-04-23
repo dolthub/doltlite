@@ -3819,10 +3819,20 @@ SELECT dolt_commit('-m','c2');
 # ═══════════════════════════════════════════════════════════════════
 echo "--- savepoint edge error probes ---"
 
-# NOTE: rollback_to_released_savepoint_then_ok omitted — doltlite retains
-# the insert after RELEASE + failed ROLLBACK TO (2 rows), while Dolt
-# behaves as if the transaction also rolled back the inserted row (1).
-# Subtle divergence worth its own issue; not included in the baseline.
+oracle "rollback_to_released_savepoint_then_ok" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES(1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+BEGIN;
+SAVEPOINT sp1;
+INSERT INTO t VALUES(2);
+RELEASE SAVEPOINT sp1;
+ROLLBACK TO sp1;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','post');
+" "SELECT count(*) FROM t;"
 
 oracle "savepoint_after_nested_dolt_fn_errors" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -4072,10 +4082,6 @@ SELECT dolt_commit('-m','c2');
 # ═══════════════════════════════════════════════════════════════════
 echo "--- FK violation recovery ---"
 
-# NOTE: fk_violation_insert_child_then_ok — doltlite rejects the FK-
-# violating INSERT (PRAGMA foreign_keys=1) while Dolt under `dolt sql -c`
-# lets it through in this test-harness flow, keeping (2,999) in child.
-# Diverges on enforcement timing; probe omitted from baseline.
 
 # ═══════════════════════════════════════════════════════════════════
 # Section 150: INSERT with expression errors
