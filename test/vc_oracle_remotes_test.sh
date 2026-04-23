@@ -160,6 +160,102 @@ oracle_savepoint_clone_poststate() {
   fi
 }
 
+oracle_nested_pull_rollback_poststate() {
+  local name="$1"
+  local dir="$TMPROOT/${name}_pull_nested"
+  local dl_remote_url="file://$dir/dl_remote.db"
+  local dt_remote_dir="$dir/dt_remote"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rows dl_log dt_rows dt_log
+
+  cat >"$dir/dl_setup.sql" <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_remote('add', 'origin', '$dl_remote_url');
+SELECT dolt_push('origin', 'main');
+SQL
+  "$DOLTLITE" "$dir/dl/db" <"$dir/dl_setup.sql" >/dev/null 2>"$dir/dl_setup.err"
+
+  cat >"$dir/dl_other.sql" <<SQL
+SELECT dolt_clone('$dl_remote_url');
+INSERT INTO t VALUES (2, 'other');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'other');
+SELECT dolt_push('origin', 'main');
+SQL
+  "$DOLTLITE" "$dir/dl_other.db" <"$dir/dl_other.sql" >/dev/null 2>"$dir/dl_other.err"
+
+  cat >"$dir/dl_pull.sql" <<SQL
+BEGIN;
+SAVEPOINT sp1;
+SELECT dolt_pull('origin', 'main');
+ROLLBACK TO sp1;
+SQL
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$(cat "$dir/dl_pull.sql")"
+  dl_rows=$(printf ".headers off\n.mode list\nSELECT count(*) FROM t;\n" | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
+  dl_log=$(printf ".headers off\n.mode list\nSELECT count(*)-1 FROM dolt_log;\n" | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err")
+
+  (
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    cat >setup.sql <<SQL
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'init');
+CALL dolt_remote('add', 'origin', 'file://$dt_remote_dir');
+CALL dolt_push('origin', 'main');
+SQL
+    mkdir -p "$dt_remote_dir"
+    (
+      cd "$dt_remote_dir" || exit 1
+      "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    )
+    "$DOLT" sql -c < setup.sql >/dev/null 2>"$dir/dt_setup.err"
+  )
+  (
+    mkdir -p "$dir/dt_other"
+    cd "$dir/dt_other" || exit 1
+    "$DOLT" clone "file://$dt_remote_dir" clone_repo >/dev/null 2>&1 || exit 1
+    cd clone_repo || exit 1
+    cat >other.sql <<SQL
+INSERT INTO t VALUES (2, 'other');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'other');
+CALL dolt_push('origin', 'main');
+SQL
+    "$DOLT" sql -c < other.sql >/dev/null 2>"$dir/dt_other.err"
+  )
+  (
+    cd "$dir/dt" || exit 1
+    cat >pull.sql <<SQL
+BEGIN;
+SAVEPOINT sp1;
+CALL dolt_pull('origin', 'main');
+ROLLBACK TO sp1;
+SQL
+    "$DOLT" sql -c < pull.sql >/dev/null 2>"$dir/dt.err" || true
+    dt_rows=$("$DOLT" sql -r csv -q "SELECT count(*) FROM t;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
+    dt_log=$("$DOLT" sql -r csv -q "SELECT count(*)-1 FROM dolt_log;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"')
+    printf "%s\n%s\n" "$dt_rows" "$dt_log" >"$dir/dt.post"
+  )
+  dt_rows=$(sed -n '1p' "$dir/dt.post")
+  dt_log=$(sed -n '2p' "$dir/dt.post")
+
+  if [ "$dl_rows" = "$dt_rows" ] && [ "$dl_log" = "$dt_log" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rows/log:"; { echo "$dl_rows"; echo "$dl_log"; } | sed 's/^/      /'
+    echo "    dolt rows/log:"; { echo "$dt_rows"; echo "$dt_log"; } | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_remotes ==="
 echo ""
 
@@ -283,6 +379,8 @@ SAVEPOINT sp1;
 SELECT dolt_clone('bogus://remote');
 ROLLBACK TO sp1;
 " "SELECT active_branch();"
+
+oracle_nested_pull_rollback_poststate "pull_nested_savepoint_rollback_restores_state"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
