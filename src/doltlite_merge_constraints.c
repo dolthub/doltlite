@@ -890,6 +890,20 @@ static int appendUniqueViolationByPk(
   return rc;
 }
 
+/* Return 1 if any column in [colFirst, colLast) of the current
+** row is NULL. Per SQL standard, a row with NULL in any column
+** of a UNIQUE index is exempt from that uniqueness check
+** (NULL != NULL for UNIQUE). Such rows cannot participate in a
+** duplicate group and must be skipped by the merge-time dup
+** detection below. */
+static int uniqueIndexRowHasNull(sqlite3_stmt *pScan, int colFirst, int colLast){
+  int i;
+  for(i=colFirst; i<colLast; i++){
+    if( sqlite3_column_type(pScan, i) == SQLITE_NULL ) return 1;
+  }
+  return 0;
+}
+
 /* Walk every row in zTable and look for duplicate values on the
 ** given UNIQUE index columns. When a duplicate group is found,
 ** every merge-introduced row in that group is recorded in
@@ -933,18 +947,16 @@ static int detectUniqueViolationsForIndex(
     sqlite3_int64 rowid = sqlite3_column_int64(pScan, 0);
     int nc = sqlite3_column_count(pScan);
     int i;
-    sqlite3_str *pS = sqlite3_str_new(0);
+    sqlite3_str *pS;
     char *zRowKey;
     int isDup;
 
+    if( uniqueIndexRowHasNull(pScan, 1, nc) ) continue;
+
+    pS = sqlite3_str_new(0);
     for(i=1; i<nc; i++){
       const char *zV = (const char*)sqlite3_column_text(pScan, i);
-      int type = sqlite3_column_type(pScan, i);
-      if( type == SQLITE_NULL ){
-        sqlite3_str_appendf(pS, "%sNULL", i>1?"|":"");
-      }else{
-        sqlite3_str_appendf(pS, "%s%Q", i>1?"|":"", zV ? zV : "");
-      }
+      sqlite3_str_appendf(pS, "%s%Q", i>1?"|":"", zV ? zV : "");
     }
     zRowKey = sqlite3_str_finish(pS);
     if( !zRowKey ){ rc = SQLITE_NOMEM; break; }
@@ -1014,18 +1026,16 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   while( (rc = sqlite3_step(pScan)) == SQLITE_ROW ){
     int nc = sqlite3_column_count(pScan);
     int nDupKeyCol = nc - pPk->nPk;
-    sqlite3_str *pS = sqlite3_str_new(0);
+    sqlite3_str *pS;
     char *zRowKey = 0;
     int i, isDup;
 
+    if( uniqueIndexRowHasNull(pScan, 0, nDupKeyCol) ) continue;
+
+    pS = sqlite3_str_new(0);
     for(i=0; i<nDupKeyCol; i++){
       const char *zV = (const char*)sqlite3_column_text(pScan, i);
-      int type = sqlite3_column_type(pScan, i);
-      if( type == SQLITE_NULL ){
-        sqlite3_str_appendf(pS, "%sNULL", i>0?"|":"");
-      }else{
-        sqlite3_str_appendf(pS, "%s%Q", i>0?"|":"", zV ? zV : "");
-      }
+      sqlite3_str_appendf(pS, "%s%Q", i>0?"|":"", zV ? zV : "");
     }
     zRowKey = sqlite3_str_finish(pS);
     if( !zRowKey ){ rc = SQLITE_NOMEM; break; }
