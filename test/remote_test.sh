@@ -118,6 +118,46 @@ check "clone has origin" "origin" "$result"
 result=$("$DB" "$TMPDIR/clone.db" "SELECT message FROM dolt_log LIMIT 1;")
 check "clone has commit history" "initial: two tables with data" "$result"
 
+result=$("$DB" "$TMPDIR/clone_followup.db" "SELECT dolt_clone('$R/remote.db'); SELECT active_branch(); SELECT count(*) FROM users; SELECT count(*) FROM dolt_remotes;")
+check "clone same-session followup queries work" "0
+main
+3
+1" "$result"
+
+"$DB" "$TMPDIR/clone_followup.db" <<'ENDSQL'
+INSERT INTO users VALUES(4,'diana',28);
+INSERT INTO scores VALUES(4,99.1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','after clone');
+.quit
+ENDSQL
+result=$("$DB" "$TMPDIR/clone_followup.db" "SELECT count(*) FROM users;")
+check "clone same-session commit keeps new row" "4" "$result"
+result=$("$DB" "$TMPDIR/clone_followup.db" "SELECT count(*) FROM dolt_log;")
+check "clone same-session commit writes log" "3" "$result"
+
+result=$("$DB" "$TMPDIR/clone_twice.db" "SELECT dolt_clone('$R/remote.db'); SELECT dolt_clone('$R/remote.db');" 2>&1)
+check_match "clone twice errors on second clone" "database is not empty" "$result"
+result=$("$DB" "$TMPDIR/clone_twice.db" "SELECT active_branch(); SELECT count(*) FROM users;")
+check "clone twice leaves first clone usable" "main
+3" "$result"
+
+result=$("$DB" "$TMPDIR/attach_then_clone.db" "ATTACH DATABASE ':memory:' AS aux; CREATE TABLE aux.q(x INT); INSERT INTO aux.q VALUES(1); SELECT dolt_clone('$R/remote.db'); PRAGMA database_list; SELECT active_branch(); SELECT count(*) FROM users; SELECT count(*) FROM aux.q;" | sed 's#^0|main|.*#0|main|PATH#')
+check "attach then clone keeps aux attached" "0
+0|main|PATH
+2|aux|
+main
+3
+1" "$result"
+
+result=$("$DB" "$TMPDIR/clone_then_attach.db" "SELECT dolt_clone('$R/remote.db'); ATTACH DATABASE ':memory:' AS aux; CREATE TABLE aux.q(x INT); INSERT INTO aux.q VALUES(1); PRAGMA database_list; SELECT active_branch(); SELECT count(*) FROM users; SELECT count(*) FROM aux.q;" | sed 's#^0|main|.*#0|main|PATH#')
+check "clone then attach works" "0
+0|main|PATH
+2|aux|
+main
+3
+1" "$result"
+
 # ============================================================
 echo "=== 4. Push from clone ==="
 # ============================================================

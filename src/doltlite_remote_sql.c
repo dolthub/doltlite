@@ -143,6 +143,10 @@ static void remoteSqlClearAndSucceed(
   sqlite3_result_int(ctx, 0);
 }
 
+static void remoteSqlExpireCurrentStatement(sqlite3 *db){
+  sqlite3ExpirePreparedStatements(db, 1);
+}
+
 static int remoteSqlOpenNamedRemote(
   ChunkStore *cs,
   const char *zRemoteName,
@@ -815,6 +819,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
     return;
   }
+  remoteSqlExpireCurrentStatement(db);
   remoteSqlClearAndSucceed(ctx, &savedState);
 }
 
