@@ -466,6 +466,35 @@ run_test_match "clone_bad_url_savepoint_branch_stays_main" \
   "SELECT active_branch();" \
   "^main$" "$DB6g10"
 
+DB6g10s_DIR=/tmp/test_savepoint6g10s_$$; rm -rf "$DB6g10s_DIR"; mkdir -p "$DB6g10s_DIR"
+DB6g10s_SEED="$DB6g10s_DIR/seed.db"
+DB6g10s_REMOTE="file://$DB6g10s_DIR/remote.db"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_remote('add','origin','$DB6g10s_REMOTE'); SELECT dolt_push('origin','main');" | $DOLTLITE "$DB6g10s_SEED" > /dev/null 2>&1
+
+DB6g10s_TOP="$DB6g10s_DIR/top.db"; rm -f "$DB6g10s_TOP"
+run_test "clone_savepoint_rollback_to_succeeds" \
+  "SAVEPOINT sp1; SELECT dolt_clone('$DB6g10s_REMOTE'); ROLLBACK TO sp1; SELECT active_branch(); SELECT count(*) FROM t; SELECT count(*) FROM dolt_remotes;" \
+  "0
+main
+1
+1" "$DB6g10s_TOP"
+
+DB6g10s_BEGIN="$DB6g10s_DIR/begin.db"; rm -f "$DB6g10s_BEGIN"
+run_test "clone_begin_rollback_keeps_clone" \
+  "BEGIN; SELECT dolt_clone('$DB6g10s_REMOTE'); ROLLBACK; SELECT active_branch(); SELECT count(*) FROM t; SELECT count(*) FROM dolt_remotes;" \
+  "0
+main
+1
+1" "$DB6g10s_BEGIN"
+
+DB6g10s_NESTED="$DB6g10s_DIR/nested.db"; rm -f "$DB6g10s_NESTED"
+run_test "clone_nested_savepoint_rollback_to_succeeds" \
+  "BEGIN; SAVEPOINT sp1; SELECT dolt_clone('$DB6g10s_REMOTE'); ROLLBACK TO sp1; COMMIT; SELECT active_branch(); SELECT count(*) FROM t; SELECT count(*) FROM dolt_remotes;" \
+  "0
+main
+1
+1" "$DB6g10s_NESTED"
+
 DB6g11_DIR=/tmp/test_savepoint6g11_$$; rm -rf "$DB6g11_DIR"; mkdir -p "$DB6g11_DIR"
 DB6g11="$DB6g11_DIR/src.db"
 DB6g11_OTHER="$DB6g11_DIR/other.db"
