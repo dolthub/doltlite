@@ -4751,41 +4751,40 @@ static int prollyBtCursorInsert(
     }
     if( canDefer ){
       if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
+        ProllyMutMapEntry *pEntry = 0;
+        rc = prollyMutMapFindRc(pCur->pMutMap, NULL, 0, pPayload->nKey, &pEntry);
+        if( rc!=SQLITE_OK ) return rc;
+        pCur->eState = CURSOR_VALID;
+        pCur->curFlags |= BTCF_ValidNKey;
+        pCur->cachedIntKey = pPayload->nKey;
+        rc = cacheCursorPayloadCopy(
+            pCur,
+            (pEntry && pEntry->nVal > 0 && pEntry->pVal) ? pEntry->pVal : 0,
+            (pEntry && pEntry->nVal > 0 && pEntry->pVal) ? pEntry->nVal : 0);
+        if( rc!=SQLITE_OK ) return rc;
 
-      ProllyMutMapEntry *pEntry = 0;
-      rc = prollyMutMapFindRc(pCur->pMutMap, NULL, 0, pPayload->nKey, &pEntry);
-      if( rc!=SQLITE_OK ) return rc;
-      pCur->eState = CURSOR_VALID;
-      pCur->curFlags |= BTCF_ValidNKey;
-      pCur->cachedIntKey = pPayload->nKey;
-      rc = cacheCursorPayloadCopy(
-          pCur,
-          (pEntry && pEntry->nVal > 0 && pEntry->pVal) ? pEntry->pVal : 0,
-          (pEntry && pEntry->nVal > 0 && pEntry->pVal) ? pEntry->nVal : 0);
-      if( rc!=SQLITE_OK ) return rc;
-
-      pCur->mmActive = 0;
-      pCur->flushSeekEdits = 0;
-    } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
-
-      CLEAR_CACHED_PAYLOAD(pCur);
-      if( prollyCursorIsValid(&pCur->pCur) ){
-        int trc = prollyCursorNext(&pCur->pCur);
-        if( trc==SQLITE_OK
-         && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-          pCur->eState = CURSOR_SKIPNEXT;
-          pCur->skipNext = 1;
+        pCur->mmActive = 0;
+        pCur->flushSeekEdits = 0;
+      } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
+        CLEAR_CACHED_PAYLOAD(pCur);
+        if( prollyCursorIsValid(&pCur->pCur) ){
+          int trc = prollyCursorNext(&pCur->pCur);
+          if( trc==SQLITE_OK
+           && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+            pCur->eState = CURSOR_SKIPNEXT;
+            pCur->skipNext = 1;
+          } else {
+            pCur->eState = CURSOR_INVALID;
+          }
         } else {
           pCur->eState = CURSOR_INVALID;
         }
+        pCur->mmActive = 0;
+        pCur->flushSeekEdits = 0;
       } else {
         pCur->eState = CURSOR_INVALID;
+        pCur->flushSeekEdits = 0;
       }
-      pCur->mmActive = 0;
-      pCur->flushSeekEdits = 0;
-    } else {
-      pCur->eState = CURSOR_INVALID;
-      pCur->flushSeekEdits = 0;
       return SQLITE_OK;
     }
   }
