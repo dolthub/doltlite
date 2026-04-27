@@ -678,6 +678,33 @@ run_test "rebase_abort_savepoint_reopen_no_plan_table" \
   "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase';" \
   "0" "$DB7e"
 
+DB7e1=/tmp/test_savepoint7e1_$$.db; rm -f "$DB7e1"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','m1'); SELECT dolt_checkout('feat'); SELECT dolt_rebase('-i','main'); BEGIN; SELECT dolt_rebase('--abort'); COMMIT;" | $DOLTLITE "$DB7e1" > /dev/null 2>&1
+run_test "rebase_abort_explicit_txn_reopen_main" \
+  "SELECT active_branch();" \
+  "main" "$DB7e1"
+run_test "rebase_abort_explicit_txn_reopen_no_rebase_branch" \
+  "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "0" "$DB7e1"
+run_test "rebase_abort_explicit_txn_reopen_main_rows" \
+  "SELECT count(*) FROM t;" \
+  "2" "$DB7e1"
+
+DB7e2=/tmp/test_savepoint7e2_$$.db; rm -f "$DB7e2"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); UPDATE t SET v=2 WHERE id=1; SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); SELECT dolt_checkout('main'); UPDATE t SET v=3 WHERE id=1; SELECT dolt_add('-A'); SELECT dolt_commit('-m','m1'); SELECT dolt_checkout('feat'); SELECT dolt_rebase('-i','main'); SELECT dolt_conflicts_resolve('--theirs','t'); BEGIN; SELECT dolt_rebase('--abort'); COMMIT;" | $DOLTLITE "$DB7e2" > /dev/null 2>&1
+run_test "rebase_abort_after_resolve_explicit_txn_reopen_main" \
+  "SELECT active_branch();" \
+  "main" "$DB7e2"
+run_test "rebase_abort_after_resolve_explicit_txn_reopen_no_rebase_branch" \
+  "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "0" "$DB7e2"
+run_test "rebase_abort_after_resolve_explicit_txn_reopen_no_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" \
+  "0" "$DB7e2"
+run_test "rebase_abort_after_resolve_explicit_txn_reopen_main_value" \
+  "SELECT v FROM t WHERE id=1;" \
+  "3" "$DB7e2"
+
 DB7f=/tmp/test_savepoint7f_$$.db; rm -f "$DB7f"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','m1'); SELECT dolt_checkout('feat'); SAVEPOINT sp1; SELECT dolt_rebase('-i','main'); SELECT dolt_rebase('--continue'); ROLLBACK TO sp1;" | $DOLTLITE "$DB7f" > /dev/null 2>&1
 run_test "rebase_continue_top_savepoint_reopen_main" \
