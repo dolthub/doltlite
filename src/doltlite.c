@@ -3416,7 +3416,7 @@ static int doltliteValidateRebasePlanTable(sqlite3 *db, char **pzErr){
       "dolt_rebase has an unexpected schema; expected: "
       "CREATE TABLE dolt_rebase("
       "rebase_order REAL PRIMARY KEY, "
-      "action TEXT, "
+      "action TEXT CHECK(action IN ('pick','drop','reword','squash','fixup')), "
       "commit_hash TEXT, "
       "commit_message TEXT)");
   }
@@ -3525,7 +3525,7 @@ static int rebaseCreateAndPopulatePlanTable(
   rc = sqlite3_exec(db,
     "CREATE TABLE main.dolt_rebase("
     "  rebase_order REAL PRIMARY KEY,"
-    "  action TEXT,"
+    "  action TEXT CHECK(action IN ('pick','drop','reword','squash','fixup')),"
     "  commit_hash TEXT,"
     "  commit_message TEXT"
     ")", 0, 0, 0);

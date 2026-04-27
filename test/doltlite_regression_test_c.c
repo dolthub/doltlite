@@ -4249,12 +4249,11 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
     "INSERT INTO t VALUES (10, 10);"
     "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');"
     "SELECT dolt_checkout('feat');"
-    "SELECT dolt_rebase('-i', 'main');"
-    "UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1';")==SQLITE_OK);
+    "SELECT dolt_rebase('-i', 'main');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  res = exec1(db, "UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1'");
   check("rebase_invalid_plan_returns_error",
-        strstr(res, "ERROR: first non-drop action must be pick or reword")!=0);
+        strstr(res, "ERROR: CHECK constraint failed")!=0);
   check("rebase_invalid_plan_keeps_working_branch",
         strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
   check("rebase_invalid_plan_keeps_plan_table",
