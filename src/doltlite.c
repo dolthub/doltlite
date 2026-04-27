@@ -484,6 +484,40 @@ static int doltliteReportConstraintViolations(
   return SQLITE_OK;
 }
 
+static int doltliteDetectPostMergeConstraintViolations(
+  sqlite3 *db,
+  const ProllyHash *pAncCatHash,
+  int *pnViolations
+){
+  extern int doltliteDetectMergeFkViolations(
+      sqlite3*, const ProllyHash*, char**, int*);
+  extern int doltliteDetectMergeUniqueViolations(
+      sqlite3*, const ProllyHash*, char**, int*);
+  extern int doltliteDetectMergeCheckViolations(
+      sqlite3*, const ProllyHash*, char**, int*);
+  int nViolations = 0;
+  int nUnique = 0;
+  int nCheck = 0;
+  char *zDetectErrMsg = 0;
+  int rc;
+
+  rc = doltliteDetectMergeFkViolations(db, pAncCatHash,
+                                       &zDetectErrMsg, &nViolations);
+  if( rc==SQLITE_OK ){
+    rc = doltliteDetectMergeUniqueViolations(db, pAncCatHash,
+                                             &zDetectErrMsg, &nUnique);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteDetectMergeCheckViolations(db, pAncCatHash,
+                                            &zDetectErrMsg, &nCheck);
+  }
+  sqlite3_free(zDetectErrMsg);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( pnViolations ) *pnViolations = nViolations + nUnique + nCheck;
+  return SQLITE_OK;
+}
+
 static int doltliteSavepointIsTopLevelTxn(sqlite3 *db){
   return db->pSavepoint!=0 && db->nSavepoint==0;
 }
@@ -3513,6 +3547,29 @@ static int rebaseCheckoutBranch(sqlite3 *db, const char *zBranch){
   return rc;
 }
 
+static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash headHash;
+  ProllyHash emptyHash;
+  DoltliteCommit headCommit;
+  int rc;
+
+  if( !cs || !zBranch || !zBranch[0] ) return SQLITE_ERROR;
+  rc = chunkStoreFindBranch(cs, zBranch, &headHash);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCommit(db, &headHash, &headCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteSwitchCatalog(db, &headCommit.catalogHash);
+  if( rc!=SQLITE_OK ) return rc;
+  doltliteSetSessionBranch(db, zBranch);
+  doltliteSetSessionHead(db, &headHash);
+  doltliteSetSessionStaged(db, &headCommit.catalogHash);
+  doltliteClearSessionMergeState(db);
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
+  return SQLITE_OK;
+}
+
 static int rebaseCreateAndPopulatePlanTable(
   sqlite3 *db,
   const ProllyHash *aReplay,
@@ -3566,6 +3623,7 @@ static int rebaseApplyPlanRowCatalog(
 ){
   DoltliteCommit parentC, replayC;
   int nConflicts = 0;
+  int nViolations = 0;
   int rc;
 
   memset(&parentC, 0, sizeof(parentC));
@@ -3586,10 +3644,18 @@ static int rebaseApplyPlanRowCatalog(
   rc = doltliteMergeCatalogs(db, &parentC.catalogHash, pCurCat,
                              &replayC.catalogHash, pMergedCat,
                              &nConflicts, 0, 0, 0);
+  if( rc==SQLITE_OK && nConflicts==0 ){
+    rc = doltliteSwitchCatalog(db, pMergedCat);
+  }
+  if( rc==SQLITE_OK && nConflicts==0 ){
+    rc = doltliteDetectPostMergeConstraintViolations(db,
+                                                     &parentC.catalogHash,
+                                                     &nViolations);
+  }
   doltliteCommitClear(&parentC);
   doltliteCommitClear(&replayC);
   if( rc!=SQLITE_OK ) return rc;
-  if( nConflicts>0 ) return SQLITE_CONSTRAINT;
+  if( nConflicts>0 || nViolations>0 ) return SQLITE_CONSTRAINT;
   return SQLITE_OK;
 }
 
@@ -3669,7 +3735,32 @@ static void rebaseDiscardWorkingBranch(
   (void)doltlitePersistWorkingSet(db);
 
   if( zOrigBranch && zOrigBranch[0] ){
-    (void)rebaseCheckoutBranch(db, zOrigBranch);
+    if( rebaseCheckoutBranch(db, zOrigBranch)!=SQLITE_OK ){
+      (void)rebaseRestoreBranchState(db, zOrigBranch);
+    }
+  }
+  if( cs && zWorkingBranch && zWorkingBranch[0] ){
+    (void)chunkStoreDeleteBranch(cs, zWorkingBranch);
+    (void)chunkStoreSerializeRefs(cs);
+    (void)chunkStoreCommit(cs);
+    (void)doltlitePersistWorkingSet(db);
+  }
+}
+
+static void rebaseAbortConflictedContinue(
+  sqlite3 *db,
+  const char *zOrigBranch,
+  const char *zWorkingBranch
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+
+  (void)sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
+  doltliteClearSessionRebaseState(db);
+  doltliteClearSessionMergeState(db);
+  if( zOrigBranch && zOrigBranch[0] ){
+    (void)rebaseRestoreBranchState(db, zOrigBranch);
+    doltliteClearSessionRebaseState(db);
+    if( cs ) (void)chunkStoreSetDefaultBranch(cs, zOrigBranch);
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
     (void)chunkStoreDeleteBranch(cs, zWorkingBranch);
@@ -3993,7 +4084,10 @@ static void doltliteRebaseInteractiveContinue(
 
 abort_err_conflict:
   rebaseFreePlan(aPlan, nPlan);
-  rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
+  rebaseAbortConflictedContinue(db, zOrigBranch, zWorking);
+  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  }
   sqlite3_free(zOrigBranch);
   sqlite3_free(zWorking);
   sqlite3_result_error(context,
