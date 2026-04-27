@@ -3663,7 +3663,6 @@ static void rebaseDiscardWorkingBranch(
   const char *zWorkingBranch
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  char *zErr = 0;
 
   (void)sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
   doltliteClearSessionRebaseState(db);
@@ -3676,6 +3675,11 @@ static void rebaseDiscardWorkingBranch(
     (void)chunkStoreDeleteBranch(cs, zWorkingBranch);
     (void)chunkStoreSerializeRefs(cs);
     (void)chunkStoreCommit(cs);
+    /* Refresh the surviving branch's working-set blob against the final
+    ** post-delete ref graph. Without this, rebase abort under savepoint can
+    ** reopen with stale metadata that still references the discarded temp
+    ** branch state. */
+    (void)doltlitePersistWorkingSet(db);
   }
 }
 

@@ -110,6 +110,43 @@ oracle_error() {
   fi
 }
 
+oracle_savepoint_abort_poststate() {
+  local name="$1" setup="$2"
+  local dir="$TMPROOT/${name}_sp"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out dolt_setup dt_out
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_out=$(printf ".headers off\n.mode list\nSELECT active_branch() || '|AB';\nSELECT count(*) || '|RB' FROM dolt_branches WHERE name='dolt_rebase_feat';\nSELECT count(*) || '|T' FROM t;\n" \
+           | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+           | tr -d '\r')
+
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  (
+    cd "$dir/dt" || exit 1
+    {
+      "$DOLT" sql -r csv -q "SELECT active_branch();" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"'
+      "$DOLT" sql -r csv -q "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"'
+      "$DOLT" sql -r csv -q "SELECT count(*) FROM t;" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"'
+    } > "$dir/dt.post"
+  )
+  dt_out=$(awk 'NR==1{print $0 "|AB"} NR==2{print $0 "|RB"} NR==3{print $0 "|T"}' "$dir/dt.post")
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite:"
+    echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:"
+    echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_rebase ==="
 echo ""
 
@@ -401,6 +438,14 @@ $INTERACTIVE_SETUP
 SELECT dolt_rebase('-i', 'main');
 SELECT dolt_rebase('--abort');
 " "SELECT CONCAT('LOG|', active_branch());"
+
+oracle_savepoint_abort_poststate "interactive_abort_savepoint_poststate" "
+$INTERACTIVE_SETUP
+SAVEPOINT sp1;
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--abort');
+ROLLBACK TO sp1;
+"
 
 # --continue is an error when not in an interactive rebase.
 oracle_error "continue_without_active" "
