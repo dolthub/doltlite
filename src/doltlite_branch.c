@@ -712,7 +712,7 @@ static int doltliteCheckoutTables(
       doltliteSetSessionStaged(db, &newWorkingHash);
     }
     if( rc==SQLITE_OK ){
-      rc = doltliteSaveWorkingSet(db);
+      rc = doltlitePersistWorkingSet(db);
     }
   }
 
@@ -809,7 +809,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       sqlite3_result_error_code(ctx, rc);
       return;
     }
-    if( hadExplicitTxn ){
+    if( !db->autoCommit || db->pSavepoint ){
       rc = doltliteVcSealBranchStyleTxn(db);
       if( rc!=SQLITE_OK ){
         sqlite3_result_error_code(ctx, rc);
@@ -880,6 +880,13 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error_code(ctx, rc);
       return;
+    }
+    if( !db->autoCommit || db->pSavepoint ){
+      rc = doltliteVcSealBranchStyleTxn(db);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error_code(ctx, rc);
+        return;
+      }
     }
     sqlite3_result_int(ctx, 0);
     return;

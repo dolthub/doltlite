@@ -34,6 +34,14 @@ run_test "force_delete_branch" "SELECT dolt_branch('-D','feature');" "0" "$DB"
 run_test "one_branch" "SELECT count(*) FROM dolt_branches;" "1" "$DB"
 run_test_match "checkout_gone" "SELECT dolt_checkout('feature');" "no such branch or table" "$DB"
 
+DB2=/tmp/test_branch2_$$.db; rm -f "$DB2"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); UPDATE t SET v='dirty' WHERE id=1; SELECT dolt_checkout('t');" | $DOLTLITE "$DB2" > /dev/null 2>&1
+run_test "checkout_table_persists_across_reopen" "SELECT v FROM t WHERE id=1;" "base" "$DB2"
+
+DB2B=/tmp/test_branch2b_$$.db; rm -f "$DB2B"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_checkout('-b','feature'); INSERT INTO t VALUES(2,'feature'); SELECT dolt_commit('-A','-m','feature'); SELECT dolt_checkout('main'); SELECT dolt_checkout('feature','t');" | $DOLTLITE "$DB2B" > /dev/null 2>&1
+run_test "checkout_table_from_branch_ref_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB2B"
+
 DB3=/tmp/test_branch3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','i');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB3" > /dev/null 2>&1
@@ -134,7 +142,7 @@ run_test "delete_non_main_works" "SELECT dolt_branch('-d','renamed');" "0" "$DB1
 # Copy from main is still allowed — it doesn't remove main
 run_test "copy_from_main_works" "SELECT dolt_branch('-c','main','snapshot');" "0" "$DB11"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
+rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
