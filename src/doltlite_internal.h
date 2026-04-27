@@ -162,6 +162,7 @@ int doltliteGetSessionTableRoot(sqlite3 *db, Pgno iTable,
 int doltliteSaveWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSet(sqlite3 *db);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
+int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch);
 DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db);
 int doltliteVcSealActiveSavepoints(sqlite3 *db);
 int doltliteVcSealSavepointError(sqlite3 *db);

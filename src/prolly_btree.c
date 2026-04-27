@@ -3081,6 +3081,34 @@ static int rollbackCommittedState(Btree *p, BtShared *pBt){
   return SQLITE_OK;
 }
 
+static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
+  u8 *catData = 0;
+  int nCatData = 0;
+  ProllyHash catHash;
+  const char *zBr = p->zBranch ? p->zBranch : "main";
+  int rc;
+
+  rc = serializeCatalog(p, &catData, &nCatData);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
+  }
+  sqlite3_free(catData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
+                                &p->headCommit, &p->stagedCatalog,
+                                p->isMerging, &p->mergeCommitHash,
+                                &p->conflictsCatalogHash,
+                                p->isRebasing,
+                                &p->preRebaseWorkingCat,
+                                &p->rebaseOntoCommit,
+                                p->zRebaseOrigBranch,
+                                &p->constraintViolationsHash);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreSerializeRefs(&pBt->store);
+  if( rc!=SQLITE_OK ) return rc;
+  return chunkStoreCommit(&pBt->store);
+}
+
 /* Walk every live savepoint state, release its captured tables,
 ** pending-snapshot mutmaps and inner arrays, then reset nSavepoint
 ** to 0. The aSavepointTables backing store itself is kept (it's
@@ -3094,8 +3122,14 @@ static void btreeDiscardAllSavepoints(Btree *p){
 }
 
 static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
+  int rc;
   btreeDiscardAllSavepoints(p);
-  return rollbackCommittedState(p, pBt);
+  rc = rollbackCommittedState(p, pBt);
+  if( rc!=SQLITE_OK ) return rc;
+  if( p->db && p->db->isTransactionSavepoint ){
+    return persistRolledBackSessionState(p, pBt);
+  }
+  return SQLITE_OK;
 }
 
 static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
