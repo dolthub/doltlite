@@ -387,6 +387,21 @@ run_test "merge_conflict_reopen_no_conflicts" \
   "SELECT count(*) FROM dolt_conflicts;" \
   "0" "$DB6g1t"
 
+DB6g1u=/tmp/test_savepoint6g1u_$$.db; rm -f "$DB6g1u"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,'feat'); SELECT dolt_commit('-A','-m','f1'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,'main'); SELECT dolt_commit('-A','-m','m1'); SELECT dolt_checkout('feat'); SELECT dolt_rebase('-i','main'); BEGIN; SAVEPOINT sp1; SELECT dolt_rebase('--continue'); COMMIT;" | $DOLTLITE "$DB6g1u" > /dev/null 2>&1
+run_test_match "rebase_continue_nested_savepoint_reopens_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6g1u"
+run_test_match "rebase_continue_nested_savepoint_no_temp_branch" \
+  "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "^0$" "$DB6g1u"
+run_test_match "rebase_continue_nested_savepoint_rows_persist" \
+  "SELECT count(*) FROM t;" \
+  "^2$" "$DB6g1u"
+run_test_match "rebase_continue_nested_savepoint_log_persists" \
+  "SELECT count(*)-1 FROM dolt_log;" \
+  "^2$" "$DB6g1u"
+
 DB6g2=/tmp/test_savepoint6g2_$$.db; rm -f "$DB6g2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g2" > /dev/null 2>&1
 run_test_match "branch_delete_current_savepoint_rollback_to_errors" \

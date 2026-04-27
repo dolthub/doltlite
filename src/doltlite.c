@@ -4003,6 +4003,9 @@ static void doltliteRebaseInteractiveContinue(
   zWorking = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zOrigBranch || !zWorking ){ rc = SQLITE_NOMEM; goto abort_err; }
 
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ) goto abort_err;
+
   rc = doltliteValidateRebasePlanTable(db, &zPlanErr);
   if( rc!=SQLITE_OK ){
     if( zPlanErr ) sqlite3_result_error(context, zPlanErr, -1);
@@ -4063,6 +4066,8 @@ static void doltliteRebaseInteractiveContinue(
   doltliteClearSessionRebaseState(db);
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto abort_err;
+  rc = doltliteVcSealBranchStyleTxn(db);
+  if( rc!=SQLITE_OK ) goto abort_err;
 
   rc = rebaseCheckoutBranch(db, zOrigBranch);
   if( rc!=SQLITE_OK ) goto abort_err;
@@ -4070,6 +4075,10 @@ static void doltliteRebaseInteractiveContinue(
   (void)chunkStoreDeleteBranch(cs, zWorking);
   (void)chunkStoreSerializeRefs(cs);
   (void)chunkStoreCommit(cs);
+  /* Refresh the surviving branch's working-set blob against the final
+  ** ref graph after dropping the temp rebase branch. */
+  rc = doltlitePersistWorkingSet(db);
+  if( rc!=SQLITE_OK ) goto abort_err;
 
   rebaseFreePlan(aPlan, nPlan);
   {
