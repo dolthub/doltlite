@@ -593,6 +593,35 @@ BEGIN;
 CALL dolt_merge('origin/branchA');
 ROLLBACK;" \
   "SELECT concat(active_branch(), char(9), (SELECT count(*) FROM dolt_branches WHERE name='topic'), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_ref_consumer_poststate \
+  "fetch_then_branch_remote_tracking_ref_savepoint_invalidates" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SAVEPOINT sp1;
+SELECT dolt_branch('topic', 'origin/branchA');
+ROLLBACK TO sp1;" \
+  "CALL dolt_fetch('origin', 'branchA');
+SAVEPOINT sp1;
+CALL dolt_branch('topic', 'origin/branchA');
+ROLLBACK TO sp1;" \
+  "SELECT concat(active_branch(), char(9), (SELECT count(*) FROM dolt_branches WHERE name='topic'), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_ref_consumer_poststate \
+  "fetch_then_merge_remote_tracking_ref_savepoint_invalidates" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SAVEPOINT sp1;
+SELECT dolt_merge('origin/branchA');
+ROLLBACK TO sp1;" \
+  "CALL dolt_fetch('origin', 'branchA');
+SAVEPOINT sp1;
+CALL dolt_merge('origin/branchA');
+ROLLBACK TO sp1;" \
+  "SELECT concat(active_branch(), char(9), (SELECT count(*) FROM dolt_branches WHERE name='topic'), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_ref_consumer_poststate \
+  "fetch_then_rebase_remote_tracking_ref_errors_cleanly" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SELECT dolt_rebase('origin/branchA');" \
+  "CALL dolt_fetch('origin', 'branchA');
+CALL dolt_rebase('origin/branchA');" \
+  "SELECT concat(active_branch(), char(9), (SELECT count(*) FROM dolt_branches WHERE name='topic'), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
