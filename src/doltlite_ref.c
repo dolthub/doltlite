@@ -28,6 +28,7 @@ static int doltliteResolveBaseRef(
   ProllyHash *pCommit
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
+  static const char zTrackingPrefix[] = "refs/remotes/";
   int rc;
 
 
@@ -56,9 +57,16 @@ static int doltliteResolveBaseRef(
   }
 
   {
-    const char *zSlash = strchr(zRef, '/');
+    const char *zTrackingRef = zRef;
+    const char *zSlash;
+    if( strncmp(zRef, zTrackingPrefix, sizeof(zTrackingPrefix)-1)==0 ){
+      zTrackingRef = zRef + sizeof(zTrackingPrefix)-1;
+    }
+    zSlash = strchr(zTrackingRef, '/');
     if( zSlash && zSlash!=zRef && zSlash[1] ){
-      char *zRemote = sqlite3_mprintf("%.*s", (int)(zSlash - zRef), zRef);
+      char *zRemote = sqlite3_mprintf("%.*s",
+                                      (int)(zSlash - zTrackingRef),
+                                      zTrackingRef);
       const char *zBranch = zSlash + 1;
       if( !zRemote ) return SQLITE_NOMEM;
       rc = chunkStoreFindTracking(cs, zRemote, zBranch, pCommit);

@@ -431,6 +431,187 @@ SQL
   fi
 }
 
+oracle_fetch_ref_consumer_reopen_poststate() {
+  local name="$1" dl_test_sql="$2" dt_test_sql="$3" query="$4"
+  local dir="$TMPROOT/${name}_fetch_consumer_reopen"
+  local dl_remote_url="file://$dir/dl_remote.db"
+  local dt_remote_dir="$dir/dt_remote"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_post dt_post
+
+  cat >"$dir/dl_setup.sql" <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_remote('add', 'origin', '$dl_remote_url');
+SELECT dolt_push('origin', 'main');
+SELECT dolt_branch('branchA');
+SELECT dolt_checkout('branchA');
+INSERT INTO t VALUES (2, 'branchA');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'branchA');
+SELECT dolt_push('origin', 'branchA');
+SELECT dolt_checkout('main');
+SQL
+  "$DOLTLITE" "$dir/dl/db" <"$dir/dl_setup.sql" >/dev/null 2>"$dir/dl_setup.err"
+  "$DOLTLITE" "$dir/dl_clone.db" "SELECT dolt_clone('$dl_remote_url');" >/dev/null 2>"$dir/dl_clone.err"
+
+  vc_oracle_run_doltlite_script "$dir/dl_clone.db" "$dir/dl.out" "$dir/dl.err" "$dl_test_sql"
+  dl_post=$(printf ".headers off\n.mode list\n%s\n" "$query" \
+            | "$DOLTLITE" "$dir/dl_clone.db" 2>>"$dir/dl.err" \
+            | tr -d '\r')
+
+  mkdir -p "$dt_remote_dir"
+  (
+    cd "$dt_remote_dir" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+  )
+  (
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    cat >setup.sql <<SQL
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'init');
+CALL dolt_remote('add', 'origin', 'file://$dt_remote_dir');
+CALL dolt_push('origin', 'main');
+CALL dolt_branch('branchA');
+CALL dolt_checkout('branchA');
+INSERT INTO t VALUES (2, 'branchA');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'branchA');
+CALL dolt_push('origin', 'branchA');
+CALL dolt_checkout('main');
+SQL
+    "$DOLT" sql -c < setup.sql >/dev/null 2>"$dir/dt_setup.err"
+  )
+  (
+    cd "$dir" || exit 1
+    "$DOLT" clone "file://$dt_remote_dir" dt_clone >/dev/null 2>&1
+    cd dt_clone || exit 1
+    cat >test.sql <<SQL
+$dt_test_sql
+SQL
+    "$DOLT" sql -c < test.sql >/dev/null 2>"$dir/dt.err" || true
+    dt_post=$("$DOLT" sql -r csv -q "$query" 2>>"$dir/dt.err" | tail -n +2 | tr -d '\"\r')
+    printf "%s\n" "$dt_post" >"$dir/dt.post"
+  )
+  dt_post=$(cat "$dir/dt.post")
+
+  if [ "$dl_post" = "$dt_post" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite post:"; echo "$dl_post" | sed 's/^/      /'
+    echo "    dolt post:"; echo "$dt_post" | sed 's/^/      /'
+  fi
+}
+
+oracle_fetch_refresh_ref_consumer_poststate() {
+  local name="$1" dl_test_sql="$2" dt_test_sql="$3" query="$4"
+  local dir="$TMPROOT/${name}_fetch_refresh"
+  local dl_remote_url="file://$dir/dl_remote.db"
+  local dt_remote_dir="$dir/dt_remote"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_post dt_post
+
+  cat >"$dir/dl_setup.sql" <<SQL
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_remote('add', 'origin', '$dl_remote_url');
+SELECT dolt_push('origin', 'main');
+SELECT dolt_branch('branchA');
+SELECT dolt_checkout('branchA');
+INSERT INTO t VALUES (2, 'branchA');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'branchA1');
+SELECT dolt_push('origin', 'branchA');
+SELECT dolt_checkout('main');
+SQL
+  "$DOLTLITE" "$dir/dl/db" <"$dir/dl_setup.sql" >/dev/null 2>"$dir/dl_setup.err"
+  "$DOLTLITE" "$dir/dl_clone.db" "SELECT dolt_clone('$dl_remote_url'); SELECT dolt_fetch('origin', 'branchA');" >/dev/null 2>"$dir/dl_clone.err"
+  "$DOLTLITE" "$dir/dl/db" "SELECT dolt_checkout('branchA'); INSERT INTO t VALUES(3, 'branchA2'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','branchA2'); SELECT dolt_push('origin','branchA');" >/dev/null 2>"$dir/dl_advance.err"
+
+  vc_oracle_run_doltlite_script "$dir/dl_clone.db" "$dir/dl.out" "$dir/dl.err" "$dl_test_sql"
+  dl_post=$(printf ".headers off\n.mode list\n%s\n" "$query" \
+            | "$DOLTLITE" "$dir/dl_clone.db" 2>>"$dir/dl.err" \
+            | tr -d '\r')
+
+  mkdir -p "$dt_remote_dir"
+  (
+    cd "$dt_remote_dir" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+  )
+  (
+    cd "$dir/dt" || exit 1
+    "$DOLT" init --name oracle --email oracle@test >/dev/null 2>&1
+    cat >setup.sql <<SQL
+CREATE TABLE t(id INT PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'init');
+CALL dolt_remote('add', 'origin', 'file://$dt_remote_dir');
+CALL dolt_push('origin', 'main');
+CALL dolt_branch('branchA');
+CALL dolt_checkout('branchA');
+INSERT INTO t VALUES (2, 'branchA');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'branchA1');
+CALL dolt_push('origin', 'branchA');
+CALL dolt_checkout('main');
+SQL
+    "$DOLT" sql -c < setup.sql >/dev/null 2>"$dir/dt_setup.err"
+  )
+  (
+    cd "$dir" || exit 1
+    "$DOLT" clone "file://$dt_remote_dir" dt_clone >/dev/null 2>&1
+    cd dt_clone || exit 1
+    "$DOLT" sql -c -q "CALL dolt_fetch('origin', 'branchA');" >/dev/null 2>"$dir/dt_clone.err"
+  )
+  (
+    mkdir -p "$dir/dt_adv"
+    cd "$dir/dt_adv" || exit 1
+    "$DOLT" clone "file://$dt_remote_dir" adv >/dev/null 2>&1
+    cd adv || exit 1
+    cat >advance.sql <<SQL
+CALL dolt_checkout('branchA');
+INSERT INTO t VALUES (3, 'branchA2');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'branchA2');
+CALL dolt_push('origin', 'branchA');
+SQL
+    "$DOLT" sql -c < advance.sql >/dev/null 2>"$dir/dt_advance.err"
+  )
+  (
+    cd "$dir/dt_clone" || exit 1
+    cat >test.sql <<SQL
+$dt_test_sql
+SQL
+    "$DOLT" sql -c < test.sql >/dev/null 2>"$dir/dt.err" || true
+    dt_post=$("$DOLT" sql -r csv -q "$query" 2>>"$dir/dt.err" | tail -n +2 | tr -d '\"\r')
+    printf "%s\n" "$dt_post" >"$dir/dt.post"
+  )
+  dt_post=$(cat "$dir/dt.post")
+
+  if [ "$dl_post" = "$dt_post" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite post:"; echo "$dl_post" | sed 's/^/      /'
+    echo "    dolt post:"; echo "$dt_post" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_remotes ==="
 echo ""
 
@@ -622,6 +803,59 @@ SELECT dolt_rebase('origin/branchA');" \
   "CALL dolt_fetch('origin', 'branchA');
 CALL dolt_rebase('origin/branchA');" \
   "SELECT concat(active_branch(), char(9), (SELECT count(*) FROM dolt_branches WHERE name='topic'), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_ref_consumer_poststate \
+  "fetch_then_branch_full_remote_ref" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SELECT dolt_branch('topic', 'refs/remotes/origin/branchA');" \
+  "CALL dolt_fetch('origin', 'branchA');
+CALL dolt_branch('topic', 'refs/remotes/origin/branchA');" \
+  "SELECT concat(active_branch(), char(9), (SELECT count(*) FROM dolt_branches WHERE name='topic'), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_ref_consumer_poststate \
+  "fetch_then_merge_full_remote_ref" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SELECT dolt_merge('refs/remotes/origin/branchA');" \
+  "CALL dolt_fetch('origin', 'branchA');
+CALL dolt_merge('refs/remotes/origin/branchA');" \
+  "SELECT concat(active_branch(), char(9), (SELECT count(*) FROM dolt_branches WHERE name='topic'), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_ref_consumer_poststate \
+  "fetch_then_checkout_branch_full_remote_ref" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SELECT dolt_checkout('-b', 'topic', 'refs/remotes/origin/branchA');" \
+  "CALL dolt_fetch('origin', 'branchA');
+CALL dolt_checkout('-b', 'topic', 'refs/remotes/origin/branchA');" \
+  "SELECT concat(active_branch(), char(9), (SELECT count(*) FROM dolt_branches WHERE name='topic'), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_ref_consumer_reopen_poststate \
+  "fetch_then_checkout_table_remote_tracking_ref_reopens" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SELECT dolt_checkout('origin/branchA', 't');" \
+  "CALL dolt_fetch('origin', 'branchA');
+CALL dolt_checkout('origin/branchA', 't');" \
+  "SELECT concat(active_branch(), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_refresh_ref_consumer_poststate \
+  "fetch_refresh_then_branch_tracking_ref_then_checkout" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SELECT dolt_branch('topic', 'origin/branchA');
+SELECT dolt_checkout('topic');" \
+  "CALL dolt_fetch('origin', 'branchA');
+CALL dolt_branch('topic', 'origin/branchA');
+CALL dolt_checkout('topic');" \
+  "SELECT concat(active_branch(), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_refresh_ref_consumer_poststate \
+  "fetch_refresh_then_merge_tracking_ref" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SELECT dolt_merge('origin/branchA');" \
+  "CALL dolt_fetch('origin', 'branchA');
+CALL dolt_merge('origin/branchA');" \
+  "SELECT concat(active_branch(), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
+oracle_fetch_ref_consumer_poststate \
+  "fetch_branch_checkout_sequence" \
+  "SELECT dolt_fetch('origin', 'branchA');
+SELECT dolt_branch('topic', 'origin/branchA');
+SELECT dolt_checkout('topic');" \
+  "CALL dolt_fetch('origin', 'branchA');
+CALL dolt_branch('topic', 'origin/branchA');
+CALL dolt_checkout('topic');" \
+  "SELECT concat(active_branch(), char(9), count(*), char(9), (SELECT count(*)-1 FROM dolt_log)) FROM t;"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
