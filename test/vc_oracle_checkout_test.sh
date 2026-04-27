@@ -142,6 +142,36 @@ oracle_error() {
   fi
 }
 
+oracle_error_poststate() {
+  local name="$1" setup="$2" query="$3"
+  local dir="$TMPROOT/${name}_errpost"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc dt_rc dl_post dt_post
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+  dl_post=$(printf ".headers off\n.mode list\n.separator '\t'\n%s\n" "$query" \
+            | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+            | tr -d '\r')
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script_for_error "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+  dt_post=$(cd "$dir/dt" && "$DOLT" sql -r csv -q "$query" 2>>"$dir/dt.err" | tail -n +2 | tr -d '"' | tr -d '\r')
+
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_post" = "$dt_post" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc/post:"; { echo "$dl_rc"; echo "$dl_post"; } | sed 's/^/      /'
+    echo "    dolt rc/post:"; { echo "$dt_rc"; echo "$dt_post"; } | sed 's/^/      /'
+  fi
+}
+
 oracle_savepoint_poststate() {
   local name="$1" setup="$2" query="$3"
   local dir="$TMPROOT/${name}_sp"
@@ -389,6 +419,19 @@ $SEED
 SELECT dolt_branch('feature');
 SELECT dolt_checkout('feature', 'nope');
 "
+
+oracle_error_poststate "checkout_explicit_source_missing_table_no_partial_mutation" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO a VALUES (2, 'main_a');
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO b VALUES (1, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout('HEAD~1', 'a', 'b');
+" "SELECT concat((SELECT count(*) FROM a), char(9), (SELECT count(*) FROM b));"
 
 echo "--- savepoint parity ---"
 
