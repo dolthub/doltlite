@@ -581,6 +581,28 @@ SELECT CONCAT('LOG|CV|', count(*)) FROM dolt_constraint_violations;
 SELECT CONCAT('LOG|T|', count(*)) FROM t;
 "
 
+oracle_error_reopen "interactive_resolve_theirs_top_savepoint_poststate" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+UPDATE t SET v = 2 WHERE id = 1;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 3 WHERE id = 1;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm1');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+SAVEPOINT sp1;
+SELECT dolt_conflicts_resolve('--theirs', 't');
+ROLLBACK TO sp1;
+" "
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT CONCAT('LOG|C|', count(*)) FROM dolt_conflicts;
+SELECT CONCAT('LOG|V|', v) FROM t WHERE id = 1;
+"
+
 oracle_reopen "interactive_continue_nested_savepoint_success_reopen" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
