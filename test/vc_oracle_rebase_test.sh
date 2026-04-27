@@ -529,6 +529,43 @@ SELECT dolt_rebase('--abort');
 ROLLBACK TO sp1;
 "
 
+oracle_reopen "interactive_abort_explicit_txn_reopen" "
+$INTERACTIVE_SETUP
+SELECT dolt_rebase('-i', 'main');
+BEGIN;
+SELECT dolt_rebase('--abort');
+COMMIT;
+" "
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT CONCAT('LOG|T|', count(*)) FROM t;
+SELECT CONCAT('LOG|L|', count(*)-1) FROM dolt_log;
+"
+
+oracle_reopen "interactive_abort_after_resolve_explicit_txn_reopen" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+UPDATE t SET v = 2 WHERE id = 1;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+SELECT dolt_checkout('main');
+UPDATE t SET v = 3 WHERE id = 1;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm1');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_conflicts_resolve('--theirs', 't');
+BEGIN;
+SELECT dolt_rebase('--abort');
+COMMIT;
+" "
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT CONCAT('LOG|C|', count(*)) FROM dolt_conflicts;
+SELECT CONCAT('LOG|V|', v) FROM t WHERE id = 1;
+SELECT CONCAT('LOG|L|', count(*)-1) FROM dolt_log;
+"
+
 # --continue is an error when not in an interactive rebase.
 oracle_error "continue_without_active" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);

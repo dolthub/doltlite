@@ -3968,6 +3968,14 @@ static void doltliteRebaseInteractiveAbort(
   ** doesn't leak stale values. */
   rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
 
+  rc = doltliteVcSealBranchStyleTxn(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zOrigBranch);
+    sqlite3_free(zWorking);
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+
   sqlite3_free(zOrigBranch);
   sqlite3_free(zWorking);
   sqlite3_result_text(context, "Interactive rebase aborted", -1, SQLITE_STATIC);
