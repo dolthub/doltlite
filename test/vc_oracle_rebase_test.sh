@@ -188,6 +188,47 @@ oracle_error_reopen() {
   fi
 }
 
+oracle_reopen() {
+  local name="$1" setup="$2" query="$3"
+  local dir="$TMPROOT/${name}_reopen_ok"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+  local dl_out
+  dl_out=$(printf ".headers off\n.mode list\n%s\n" "$query" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.post.err" \
+           | tr -d '\r' \
+           | grep '^LOG|')
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_rc
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+  local dt_out
+  (
+    cd "$dir/dt" || exit 1
+    printf "%s\n" "$query" | "$DOLT" sql -c -r csv 2>"$dir/dt.post.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^LOG|')
+
+  if [ "$dl_rc" -eq 0 ] && [ "$dt_rc" -eq 0 ] && [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+    echo "    doltlite:"
+    echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:"
+    echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_rebase ==="
 echo ""
 
@@ -538,6 +579,29 @@ SELECT CONCAT('LOG|B|', active_branch());
 SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
 SELECT CONCAT('LOG|CV|', count(*)) FROM dolt_constraint_violations;
 SELECT CONCAT('LOG|T|', count(*)) FROM t;
+"
+
+oracle_reopen "interactive_continue_nested_savepoint_success_reopen" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, 10);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm1');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+BEGIN;
+SAVEPOINT sp1;
+SELECT dolt_rebase('--continue');
+COMMIT;
+" "
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT CONCAT('LOG|T|', count(*)) FROM t;
+SELECT CONCAT('LOG|L|', count(*)-1) FROM dolt_log;
 "
 
 echo ""
