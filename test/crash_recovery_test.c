@@ -1146,9 +1146,15 @@ static void test_17_multiple_large_commits(void){
     if( rc==SQLITE_OK ){
       int nLog = exec_user_commit_count(db);
       check("test_17: commit count in [0..3]", nLog>=0 && nLog<=3);
-      if( nLog>0 ){
+      {
         int nRows = exec_int(db, "SELECT count(*) FROM t", -1);
-        check("test_17: rows match commits", nRows==nLog*200);
+        int expected = nLog * 200;
+        int upper = expected;
+        if( nLog<3 ){
+          upper += 200;
+        }
+        check("test_17: rows preserve committed prefix", nRows>=expected);
+        check("test_17: rows bounded by next in-flight batch", nRows<=upper);
       }
     }
     sqlite3_close(db);

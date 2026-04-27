@@ -3873,10 +3873,11 @@ static void doltliteRebaseInteractiveStart(
   rc = doltliteFlushCatalogToHash(db, &preRebaseCat);
   if( rc!=SQLITE_OK ) goto fail;
 
-  /* Create the working branch at upstream and switch to it. Interactive
-  ** rebase start remains rollbackable inside explicit transactions /
-  ** savepoints, so avoid the normal branch/checkout SQL path here
-  ** because it seals branch-style transactions on success. */
+  /* Create the working branch at upstream and switch to it. We still
+  ** use the rollback-safe checkout helper so that abort/failure cleanup
+  ** can restore state precisely, but successful interactive rebase start
+  ** follows Dolt's branch-style transaction policy and seals the current
+  ** SQL txn/savepoint state before returning. */
   rc = chunkStoreAddBranch(cs, zWorking, &upstreamHash);
   if( rc!=SQLITE_OK ){
     zFailMsg = "rebase working branch already exists";
@@ -3904,6 +3905,8 @@ static void doltliteRebaseInteractiveStart(
   ** Nothing after this triggers a reload before -i returns. */
   doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &upstreamHash, zOrig);
   rc = doltlitePersistWorkingSet(db);
+  if( rc!=SQLITE_OK ) goto fail;
+  rc = doltliteVcSealBranchStyleTxn(db);
   if( rc!=SQLITE_OK ) goto fail;
 
   sqlite3_free(zOrig);
@@ -4064,16 +4067,13 @@ static void doltliteRebaseInteractiveContinue(
   if( rc!=SQLITE_OK ) goto abort_err;
 
   /* Clear rebase state on the working branch's session state before we
-  ** switch back to the original branch. In explicit transactions,
-  ** interactive rebase remains rollbackable in Dolt, so we avoid the
-  ** normal checkout SQL path here because it seals savepoints /
-  ** transactions on success. */
+  ** switch back to the original branch. We still use the rollback-safe
+  ** checkout helper for correctness during the internal handoff, but a
+  ** successful interactive continue follows Dolt's branch-style txn
+  ** policy and seals the caller's savepoints / explicit transaction
+  ** before returning. */
   doltliteClearSessionRebaseState(db);
-  if( db->autoCommit ){
-    rc = doltlitePersistWorkingSet(db);
-  }else{
-    rc = doltliteSaveWorkingSet(db);
-  }
+  rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rc = doltliteCheckoutBranchForRebase(db, zOrigBranch);
@@ -4081,15 +4081,9 @@ static void doltliteRebaseInteractiveContinue(
 
   rc = chunkStoreDeleteBranch(cs, zWorking);
   if( rc!=SQLITE_OK ) goto abort_err;
-  if( db->autoCommit ){
-    rc = chunkStoreSerializeRefs(cs);
-    if( rc!=SQLITE_OK ) goto abort_err;
-    rc = chunkStoreCommit(cs);
-    if( rc!=SQLITE_OK ) goto abort_err;
-    rc = doltlitePersistWorkingSet(db);
-  }else{
-    rc = doltliteSaveWorkingSet(db);
-  }
+  rc = doltlitePersistWorkingSet(db);
+  if( rc!=SQLITE_OK ) goto abort_err;
+  rc = doltliteVcSealBranchStyleTxn(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rebaseFreePlan(aPlan, nPlan);
