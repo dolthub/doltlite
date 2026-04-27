@@ -604,6 +604,52 @@ SELECT CONCAT('LOG|T|', count(*)) FROM t;
 SELECT CONCAT('LOG|L|', count(*)-1) FROM dolt_log;
 "
 
+oracle_reopen "interactive_continue_top_savepoint_success_reopen" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, 10);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm1');
+SELECT dolt_checkout('feat');
+SAVEPOINT sp1;
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--continue');
+ROLLBACK TO sp1;
+" "
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT CONCAT('LOG|T|', count(*)) FROM t;
+SELECT CONCAT('LOG|L|', count(*)-1) FROM dolt_log;
+"
+
+oracle_reopen "interactive_continue_preexisting_nested_savepoint_success_reopen" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, 10);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm1');
+SELECT dolt_checkout('feat');
+BEGIN;
+SAVEPOINT sp1;
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--continue');
+ROLLBACK TO sp1;
+COMMIT;
+" "
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT CONCAT('LOG|T|', count(*)) FROM t;
+SELECT CONCAT('LOG|L|', count(*)-1) FROM dolt_log;
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

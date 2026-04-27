@@ -3735,7 +3735,7 @@ static void rebaseDiscardWorkingBranch(
   (void)doltlitePersistWorkingSet(db);
 
   if( zOrigBranch && zOrigBranch[0] ){
-    if( rebaseCheckoutBranch(db, zOrigBranch)!=SQLITE_OK ){
+    if( doltliteCheckoutBranchForRebase(db, zOrigBranch)!=SQLITE_OK ){
       (void)rebaseRestoreBranchState(db, zOrigBranch);
     }
   }
@@ -3805,6 +3805,12 @@ static void doltliteRebaseInteractiveStart(
     return;
   }
 
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+
   if( doltliteHasUncommittedChanges(db) ){
     sqlite3_result_error(context,
       "cannot start a rebase with uncommitted changes", -1);
@@ -3867,22 +3873,18 @@ static void doltliteRebaseInteractiveStart(
   rc = doltliteFlushCatalogToHash(db, &preRebaseCat);
   if( rc!=SQLITE_OK ) goto fail;
 
-  /* Create the working branch at upstream and switch to it. We do
-  ** this via SQL so the session state flips cleanly via the existing
-  ** checkout machinery. */
-  {
-    char *zSql = sqlite3_mprintf(
-      "SELECT dolt_branch('%q', '%q'); SELECT dolt_checkout('%q');",
-      zWorking, zUpstream, zWorking);
-    if( !zSql ){ rc = SQLITE_NOMEM; goto fail; }
-    rc = sqlite3_exec(db, zSql, 0, 0, 0);
-    sqlite3_free(zSql);
-    if( rc!=SQLITE_OK ){
-      rc = SQLITE_ERROR;
-      goto fail;
-    }
-    bWorkingBranchCreated = 1;
+  /* Create the working branch at upstream and switch to it. Interactive
+  ** rebase start remains rollbackable inside explicit transactions /
+  ** savepoints, so avoid the normal branch/checkout SQL path here
+  ** because it seals branch-style transactions on success. */
+  rc = chunkStoreAddBranch(cs, zWorking, &upstreamHash);
+  if( rc!=SQLITE_OK ){
+    zFailMsg = "rebase working branch already exists";
+    goto fail;
   }
+  bWorkingBranchCreated = 1;
+  rc = doltliteCheckoutBranchForRebase(db, zWorking);
+  if( rc!=SQLITE_OK ) goto fail;
 
   /* Materialize the default plan as a real SQL table on the
   ** working branch. Create and populate BEFORE setting the rebase
@@ -4061,23 +4063,33 @@ static void doltliteRebaseInteractiveContinue(
   rc = chunkStoreWriteBranchWorkingCatalog(cs, zOrigBranch, &curCat, &curHead);
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  /* Clear rebase state on the working branch's session state so it
-  ** doesn't leak into the checkout that follows. */
+  /* Clear rebase state on the working branch's session state before we
+  ** switch back to the original branch. In explicit transactions,
+  ** interactive rebase remains rollbackable in Dolt, so we avoid the
+  ** normal checkout SQL path here because it seals savepoints /
+  ** transactions on success. */
   doltliteClearSessionRebaseState(db);
-  rc = doltlitePersistWorkingSet(db);
-  if( rc!=SQLITE_OK ) goto abort_err;
-  rc = doltliteVcSealBranchStyleTxn(db);
+  if( db->autoCommit ){
+    rc = doltlitePersistWorkingSet(db);
+  }else{
+    rc = doltliteSaveWorkingSet(db);
+  }
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  rc = rebaseCheckoutBranch(db, zOrigBranch);
+  rc = doltliteCheckoutBranchForRebase(db, zOrigBranch);
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  (void)chunkStoreDeleteBranch(cs, zWorking);
-  (void)chunkStoreSerializeRefs(cs);
-  (void)chunkStoreCommit(cs);
-  /* Refresh the surviving branch's working-set blob against the final
-  ** ref graph after dropping the temp rebase branch. */
-  rc = doltlitePersistWorkingSet(db);
+  rc = chunkStoreDeleteBranch(cs, zWorking);
+  if( rc!=SQLITE_OK ) goto abort_err;
+  if( db->autoCommit ){
+    rc = chunkStoreSerializeRefs(cs);
+    if( rc!=SQLITE_OK ) goto abort_err;
+    rc = chunkStoreCommit(cs);
+    if( rc!=SQLITE_OK ) goto abort_err;
+    rc = doltlitePersistWorkingSet(db);
+  }else{
+    rc = doltliteSaveWorkingSet(db);
+  }
   if( rc!=SQLITE_OK ) goto abort_err;
 
   rebaseFreePlan(aPlan, nPlan);
@@ -4129,6 +4141,7 @@ static void doltliteRebaseFunc(
   ChunkStore *cs = doltliteGetChunkStore(db);
   const char *zArg0;
   int sealTopLevel = db->pSavepoint!=0 && db->nSavepoint==0;
+  int keepTopLevelSavepoint = 0;
 
   if( !cs ){ sqlite3_result_error(context, "no database", -1); goto rebase_cleanup; }
   if( argc<1 ){
@@ -4147,11 +4160,13 @@ static void doltliteRebaseFunc(
     goto rebase_cleanup;
   }
   if( strcmp(zArg0, "--continue")==0 ){
+    keepTopLevelSavepoint = 1;
     doltliteRebaseInteractiveContinue(context, db);
     goto rebase_cleanup;
   }
   if( strcmp(zArg0, "-i")==0 || strcmp(zArg0, "--interactive")==0 ){
     const char *zUpstream;
+    keepTopLevelSavepoint = 1;
     if( argc<2 ){
       sqlite3_result_error(context,
         "interactive rebase requires upstream branch: "
@@ -4197,7 +4212,9 @@ static void doltliteRebaseFunc(
   }
 
 rebase_cleanup:
-  if( sealTopLevel ) (void)doltliteVcSealTopLevelSavepointTxn(db);
+  if( sealTopLevel && !keepTopLevelSavepoint ){
+    (void)doltliteVcSealTopLevelSavepointTxn(db);
+  }
 }
 
 static void doltliteConfigFunc(sqlite3_context *context, int argc, sqlite3_value **argv){

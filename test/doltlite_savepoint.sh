@@ -654,6 +654,21 @@ run_test "rebase_abort_savepoint_reopen_no_plan_table" \
   "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase';" \
   "0" "$DB7e"
 
+DB7f=/tmp/test_savepoint7f_$$.db; rm -f "$DB7f"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','m1'); SELECT dolt_checkout('feat'); SAVEPOINT sp1; SELECT dolt_rebase('-i','main'); SELECT dolt_rebase('--continue'); ROLLBACK TO sp1;" | $DOLTLITE "$DB7f" > /dev/null 2>&1
+run_test "rebase_continue_top_savepoint_reopen_main" \
+  "SELECT active_branch();" \
+  "main" "$DB7f"
+run_test "rebase_continue_top_savepoint_reopen_no_temp_branch" \
+  "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "0" "$DB7f"
+run_test "rebase_continue_top_savepoint_rows_rolled_back" \
+  "SELECT count(*) FROM t;" \
+  "2" "$DB7f"
+run_test "rebase_continue_top_savepoint_log_rolled_back" \
+  "SELECT count(*)-1 FROM dolt_log;" \
+  "2" "$DB7f"
+
 # ============================================================
 # Test 8: Large deferred mutmap drains must still rollback correctly
 # Expected: once pending edits cross the internal drain threshold, the
@@ -705,7 +720,7 @@ run_test_match "branch_name_after_rollback" \
 # ============================================================
 rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" "$DB9" \
   "$DB6g1" "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9" "$DB6g10" \
-  "$DB7d" "$DB7e"
+  "$DB7d" "$DB7e" "$DB7f"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
