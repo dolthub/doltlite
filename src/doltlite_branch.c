@@ -631,6 +631,25 @@ static int doltliteCheckoutTables(
     return rc;
   }
 
+  if( zSourceRef ){
+    for(i=0; i<nNames; i++){
+      const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
+      int srcIdx = -1;
+      if( !zName ) continue;
+      for(j=0; j<nSource; j++){
+        if( aSource[j].zName && strcmp(aSource[j].zName, zName)==0 ){
+          srcIdx = j;
+          break;
+        }
+      }
+      if( srcIdx<0 ){
+        doltliteFreeCatalog(aWorking, nWorking);
+        doltliteFreeCatalog(aSource, nSource);
+        return SQLITE_NOTFOUND;
+      }
+    }
+  }
+
 
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
