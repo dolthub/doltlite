@@ -622,32 +622,55 @@ run_test_match "merge_conflict_nested_savepoint_allows_rollback" \
 main$" "$DB7d"
 
 # ============================================================
-# Test 8: ROLLBACK after dolt_branch — does the branch creation persist?
+# Test 8: Large deferred mutmap drains must still rollback correctly
+# Expected: once pending edits cross the internal drain threshold, the
+# mutmap flushes to the prolly tree mid-savepoint. ROLLBACK TO must still
+# restore the pre-savepoint state even after that early flush.
+# ============================================================
+DB8=/tmp/test_savepoint8_$$.db; rm -f "$DB8"
+run_test "bulk_threshold_savepoint_rollback" \
+  "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+   BEGIN;
+   SAVEPOINT sp1;
+   WITH RECURSIVE gen(x) AS (
+     VALUES(1)
+     UNION ALL
+     SELECT x+1 FROM gen WHERE x<66000
+   )
+   INSERT INTO t
+   SELECT x, printf('row-%d', x) FROM gen;
+   ROLLBACK TO sp1;
+   COMMIT;
+   SELECT count(*) FROM t;" \
+  "0" "$DB8"
+
+# ============================================================
+# Test 9: ROLLBACK after dolt_branch — does the branch creation persist?
 # Expected: dolt_branch creates a branch at the storage layer.
 # A SQLite ROLLBACK should not undo the branch creation since
 # it's a dolt metadata operation, not a SQL data change.
 # ============================================================
-DB8=/tmp/test_savepoint8_$$.db; rm -f "$DB8"
-echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+DB9=/tmp/test_savepoint9_$$.db; rm -f "$DB9"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 
 # Create branch inside a transaction, then rollback
-echo "BEGIN; SELECT dolt_branch('ephemeral'); ROLLBACK;" | $DOLTLITE "$DB8" > /dev/null 2>&1
+echo "BEGIN; SELECT dolt_branch('ephemeral'); ROLLBACK;" | $DOLTLITE "$DB9" > /dev/null 2>&1
 
 # Check if the branch persists despite the rollback
 # Expected: branch persists because dolt_branch is a storage-level operation
 run_test_match "branch_survives_rollback" \
   "SELECT count(*) FROM dolt_branches;" \
-  "^[12]$" "$DB8"
+  "^[12]$" "$DB9"
 
 # If branch survived, verify by name
 run_test_match "branch_name_after_rollback" \
   "SELECT name FROM dolt_branches ORDER BY name;" \
-  "main" "$DB8"
+  "main" "$DB9"
 
 # ============================================================
 # Cleanup
 # ============================================================
-rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" \
+rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" "$DB9" \
   "$DB6g1" "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9" "$DB6g10"
 
 echo ""

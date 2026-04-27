@@ -460,6 +460,18 @@ static int btreeWriteWorkingState(
 );
 static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
 
+/*
+** Bound deferred per-table edit growth by forcing a mutmap drain once the
+** pending delta becomes large. flushMutMap() already snapshots mid-savepoint
+** state, so early drains remain rollback-safe.
+*/
+#define PROLLY_MUTMAP_PENDING_FLUSH_LIMIT 65536
+
+static int mutMapShouldDrain(BtCursor *pCur){
+  return pCur && pCur->pMutMap
+      && prollyMutMapCount(pCur->pMutMap) >= PROLLY_MUTMAP_PENDING_FLUSH_LIMIT;
+}
+
 static int prollyBtreeClose(Btree*);
 static int prollyBtreeNewDb(Btree*);
 static int prollyBtreeSetCacheSize(Btree*, int);
@@ -4734,9 +4746,11 @@ static int prollyBtCursorInsert(
 
   {
     int canDefer = (pCur->pgnoRoot > 1);
-      if( canDefer ){
-        if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
-
+    if( canDefer && mutMapShouldDrain(pCur) ){
+      canDefer = 0;
+    }
+    if( canDefer ){
+      if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
         ProllyMutMapEntry *pEntry = 0;
         rc = prollyMutMapFindRc(pCur->pMutMap, NULL, 0, pPayload->nKey, &pEntry);
         if( rc!=SQLITE_OK ) return rc;
@@ -4752,7 +4766,6 @@ static int prollyBtCursorInsert(
         pCur->mmActive = 0;
         pCur->flushSeekEdits = 0;
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
-
         CLEAR_CACHED_PAYLOAD(pCur);
         if( prollyCursorIsValid(&pCur->pCur) ){
           int trc = prollyCursorNext(&pCur->pCur);
@@ -5071,6 +5084,9 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
 
   {
     int canDefer = (pCur->pgnoRoot > 1);
+    if( canDefer && mutMapShouldDrain(pCur) ){
+      canDefer = 0;
+    }
     if( canDefer ){
       CLEAR_CACHED_PAYLOAD(pCur);
       pCur->curFlags &= ~(BTCF_ValidNKey|BTCF_AtLast);
