@@ -484,6 +484,40 @@ static int doltliteReportConstraintViolations(
   return SQLITE_OK;
 }
 
+static int doltliteDetectPostMergeConstraintViolations(
+  sqlite3 *db,
+  const ProllyHash *pAncCatHash,
+  int *pnViolations
+){
+  extern int doltliteDetectMergeFkViolations(
+      sqlite3*, const ProllyHash*, char**, int*);
+  extern int doltliteDetectMergeUniqueViolations(
+      sqlite3*, const ProllyHash*, char**, int*);
+  extern int doltliteDetectMergeCheckViolations(
+      sqlite3*, const ProllyHash*, char**, int*);
+  int nViolations = 0;
+  int nUnique = 0;
+  int nCheck = 0;
+  char *zDetectErrMsg = 0;
+  int rc;
+
+  rc = doltliteDetectMergeFkViolations(db, pAncCatHash,
+                                       &zDetectErrMsg, &nViolations);
+  if( rc==SQLITE_OK ){
+    rc = doltliteDetectMergeUniqueViolations(db, pAncCatHash,
+                                             &zDetectErrMsg, &nUnique);
+  }
+  if( rc==SQLITE_OK ){
+    rc = doltliteDetectMergeCheckViolations(db, pAncCatHash,
+                                            &zDetectErrMsg, &nCheck);
+  }
+  sqlite3_free(zDetectErrMsg);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( pnViolations ) *pnViolations = nViolations + nUnique + nCheck;
+  return SQLITE_OK;
+}
+
 static int doltliteSavepointIsTopLevelTxn(sqlite3 *db){
   return db->pSavepoint!=0 && db->nSavepoint==0;
 }
@@ -3516,6 +3550,7 @@ static int rebaseCheckoutBranch(sqlite3 *db, const char *zBranch){
 static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headHash;
+  ProllyHash emptyHash;
   DoltliteCommit headCommit;
   int rc;
 
@@ -3530,6 +3565,8 @@ static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   doltliteSetSessionHead(db, &headHash);
   doltliteSetSessionStaged(db, &headCommit.catalogHash);
   doltliteClearSessionMergeState(db);
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  doltliteSetSessionConstraintViolationsCatalog(db, &emptyHash);
   return SQLITE_OK;
 }
 
@@ -3586,6 +3623,7 @@ static int rebaseApplyPlanRowCatalog(
 ){
   DoltliteCommit parentC, replayC;
   int nConflicts = 0;
+  int nViolations = 0;
   int rc;
 
   memset(&parentC, 0, sizeof(parentC));
@@ -3606,10 +3644,18 @@ static int rebaseApplyPlanRowCatalog(
   rc = doltliteMergeCatalogs(db, &parentC.catalogHash, pCurCat,
                              &replayC.catalogHash, pMergedCat,
                              &nConflicts, 0, 0, 0);
+  if( rc==SQLITE_OK && nConflicts==0 ){
+    rc = doltliteSwitchCatalog(db, pMergedCat);
+  }
+  if( rc==SQLITE_OK && nConflicts==0 ){
+    rc = doltliteDetectPostMergeConstraintViolations(db,
+                                                     &parentC.catalogHash,
+                                                     &nViolations);
+  }
   doltliteCommitClear(&parentC);
   doltliteCommitClear(&replayC);
   if( rc!=SQLITE_OK ) return rc;
-  if( nConflicts>0 ) return SQLITE_CONSTRAINT;
+  if( nConflicts>0 || nViolations>0 ) return SQLITE_CONSTRAINT;
   return SQLITE_OK;
 }
 

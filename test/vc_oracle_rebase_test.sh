@@ -520,6 +520,26 @@ SELECT CONCAT('LOG|C|', count(*)) FROM dolt_conflicts;
 SELECT CONCAT('LOG|V|', v) FROM t WHERE id = 1;
 "
 
+oracle_error_reopen "interactive_continue_constraint_abort_poststate" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v INT);
+INSERT INTO t VALUES (1, 1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 2, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 2, 3);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm1');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('-i', 'main');
+SELECT dolt_rebase('--continue');
+" "
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT CONCAT('LOG|CV|', count(*)) FROM dolt_constraint_violations;
+SELECT CONCAT('LOG|T|', count(*)) FROM t;
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
