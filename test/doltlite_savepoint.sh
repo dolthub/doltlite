@@ -621,6 +621,24 @@ run_test_match "merge_conflict_nested_savepoint_allows_rollback" \
   "0
 main$" "$DB7d"
 
+DB7e=/tmp/test_savepoint7e_$$.db; rm -f "$DB7e"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); INSERT INTO t VALUES(2,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); INSERT INTO t VALUES(3,3); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f2'); INSERT INTO t VALUES(4,4); SELECT dolt_add('-A'); SELECT dolt_commit('-m','f3'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','m'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB7e" > /dev/null 2>&1
+run_test_match "rebase_abort_savepoint_rollback_to_errors" \
+  "SAVEPOINT sp1; SELECT dolt_rebase('-i','main'); SELECT dolt_rebase('--abort'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB7e"
+run_test "rebase_abort_savepoint_reopen_main" \
+  "SELECT active_branch();" \
+  "main" "$DB7e"
+run_test "rebase_abort_savepoint_reopen_no_rebase_branch" \
+  "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "0" "$DB7e"
+run_test "rebase_abort_savepoint_reopen_main_rows" \
+  "SELECT count(*) FROM t;" \
+  "2" "$DB7e"
+run_test "rebase_abort_savepoint_reopen_no_plan_table" \
+  "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase';" \
+  "0" "$DB7e"
+
 # ============================================================
 # Test 8: Large deferred mutmap drains must still rollback correctly
 # Expected: once pending edits cross the internal drain threshold, the
@@ -671,7 +689,8 @@ run_test_match "branch_name_after_rollback" \
 # Cleanup
 # ============================================================
 rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" "$DB9" \
-  "$DB6g1" "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9" "$DB6g10"
+  "$DB6g1" "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9" "$DB6g10" \
+  "$DB7d" "$DB7e"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
