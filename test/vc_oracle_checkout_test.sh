@@ -376,6 +376,37 @@ UNION ALL
 SELECT id + 10, v FROM b;
 "
 
+oracle "checkout_multitable_from_tag_ref" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_tag('v1');
+UPDATE a SET v='main_a' WHERE id=1;
+UPDATE b SET v='main_b' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout('v1', 'a', 'b');
+SELECT (SELECT v FROM a WHERE id=1) AS id, (SELECT v FROM b WHERE id=1) AS v;
+"
+
+oracle "checkout_multitable_from_commit_ish" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE a SET v='main_a' WHERE id=1;
+UPDATE b SET v='main_b' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout('HEAD~1', 'a', 'b');
+SELECT (SELECT v FROM a WHERE id=1) AS id, (SELECT v FROM b WHERE id=1) AS v;
+"
+
 echo "--- error paths ---"
 
 oracle_error "checkout_nonexistent" "
@@ -433,6 +464,21 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_checkout('HEAD~1', 'a', 'b');
 " "SELECT concat((SELECT count(*) FROM a), char(9), (SELECT count(*) FROM b));"
 
+oracle_error_poststate "checkout_tag_source_missing_table_no_partial_mutation" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_tag('v1');
+UPDATE a SET v='main_a' WHERE id=1;
+UPDATE b SET v='main_b' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout('v1', 'a', 'missing');
+" "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1));"
+
 echo "--- savepoint parity ---"
 
 oracle_savepoint_poststate "savepoint_checkout_existing_branch_reopens_on_original_branch" "
@@ -463,6 +509,23 @@ SAVEPOINT sp1;
 SELECT dolt_checkout('does-not-exist');
 ROLLBACK TO sp1;
 " "SELECT active_branch();"
+
+oracle_savepoint_poststate "savepoint_checkout_tag_source_invalidates" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_tag('v1');
+UPDATE a SET v='main_a' WHERE id=1;
+UPDATE b SET v='main_b' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SAVEPOINT sp1;
+SELECT dolt_checkout('v1', 'a', 'b');
+ROLLBACK TO sp1;
+" "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1));"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
