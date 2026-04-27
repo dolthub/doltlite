@@ -795,10 +795,18 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   }
 
   if( argc>1 && !isCreateAndSwitch ){
-    rc = doltliteCheckoutTables(db, zBranch, argv, 1, argc-1);
+    ProllyHash sourceRef;
+    int bHasSourceRef = 0;
+    rc = doltliteResolveRef(db, zBranch, &sourceRef);
+    if( rc==SQLITE_OK ){
+      bHasSourceRef = 1;
+      rc = doltliteCheckoutTables(db, zBranch, argv, 1, argc-1);
+    }else{
+      rc = doltliteCheckoutTables(db, 0, argv, 0, argc);
+    }
     if( rc==SQLITE_NOTFOUND ){
-      char *zErr = sqlite3_mprintf(
-          "no such branch or table: %s", zBranch);
+      const char *zMissing = bHasSourceRef ? zBranch : zBranch;
+      char *zErr = sqlite3_mprintf("no such branch or table: %s", zMissing);
       (void)doltliteVcSealSavepointError(db);
       sqlite3_result_error(ctx, zErr ? zErr : "no such branch or table", -1);
       sqlite3_free(zErr);

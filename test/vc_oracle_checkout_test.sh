@@ -281,6 +281,23 @@ UPDATE t SET v='dirty' WHERE id=1;
 SELECT dolt_checkout('t');
 "
 
+oracle "revert_multiple_tables_working" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE a SET v='dirty_a' WHERE id=1;
+UPDATE b SET v='dirty_b' WHERE id=1;
+SELECT dolt_checkout('a', 'b');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t
+SELECT id, v FROM a
+UNION ALL
+SELECT id + 10, v FROM b;
+"
+
 oracle "revert_table_with_uncommitted_insert" "
 $SEED
 INSERT INTO t VALUES (2, 'uncommitted');
@@ -305,6 +322,28 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_feat');
 SELECT dolt_checkout('main');
 SELECT dolt_checkout('feature', 't');
+"
+
+oracle "checkout_multiple_tables_from_branch_ref" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO a VALUES (2, 'feature_a');
+INSERT INTO b VALUES (2, 'feature_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2_feat');
+SELECT dolt_checkout('main');
+SELECT dolt_checkout('feature', 'a', 'b');
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t
+SELECT id, v FROM a
+UNION ALL
+SELECT id + 10, v FROM b;
 "
 
 echo "--- error paths ---"
