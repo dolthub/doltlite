@@ -426,6 +426,21 @@ run_test_match "rebase_continue_preexisting_savepoint_log_persists" \
   "SELECT count(*)-1 FROM dolt_log;" \
   "^2$" "$DB6g1w"
 
+DB6g1x=/tmp/test_savepoint6g1x_$$.db; rm -f "$DB6g1x"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init'); SELECT dolt_checkout('-b','feat'); UPDATE t SET v=2 WHERE id=1; SELECT dolt_add('-A'); SELECT dolt_commit('-m','f1'); SELECT dolt_checkout('main'); UPDATE t SET v=3 WHERE id=1; SELECT dolt_add('-A'); SELECT dolt_commit('-m','m1'); SELECT dolt_checkout('feat');" | $DOLTLITE "$DB6g1x" > /dev/null 2>&1
+run_test_match "rebase_resolve_theirs_top_savepoint_rollback_to_errors" \
+  "SELECT dolt_rebase('-i','main'); SAVEPOINT sp1; SELECT dolt_conflicts_resolve('--theirs','t'); ROLLBACK TO sp1;" \
+  "no such savepoint: sp1" "$DB6g1x/feat"
+run_test_match "rebase_resolve_theirs_top_savepoint_reopen_main" \
+  "SELECT active_branch();" \
+  "^main$" "$DB6g1x"
+run_test_match "rebase_resolve_theirs_top_savepoint_temp_branch_survives" \
+  "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
+  "^1$" "$DB6g1x"
+run_test_match "rebase_resolve_theirs_top_savepoint_reopen_no_conflicts" \
+  "SELECT count(*) FROM dolt_conflicts;" \
+  "^0$" "$DB6g1x"
+
 DB6g2=/tmp/test_savepoint6g2_$$.db; rm -f "$DB6g2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'main'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6g2" > /dev/null 2>&1
 run_test_match "branch_delete_current_savepoint_rollback_to_errors" \

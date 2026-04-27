@@ -277,6 +277,7 @@ static int storeUpdatedConflicts(
 ){
   int totalConflicts = 0;
   int i;
+  DoltliteVcTxnMode mode;
   for(i=0; i<nTables; i++) totalConflicts += aTables[i].nConflicts;
 
   {
@@ -294,8 +295,11 @@ static int storeUpdatedConflicts(
       doltliteSetSessionConflictsCatalog(db, &newHash);
       doltliteSetSessionMergeState(db, 1, 0, &newHash);
     }
-    if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
-      return doltlitePersistWorkingSet(db);
+    mode = doltliteVcTxnMode(db);
+    if( mode==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+      rc = doltlitePersistWorkingSet(db);
+      if( rc!=SQLITE_OK ) return rc;
+      return doltliteVcSealActiveSavepoints(db);
     }
     return doltliteSaveWorkingSet(db);
   }
@@ -716,6 +720,13 @@ static int conflictsResolveTableExists(sqlite3 *db, const char *zTable, int *pEx
   return rc;
 }
 
+static int conflictsResolveSealSuccessfulTopSavepoint(sqlite3 *db){
+  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    return doltliteVcSealActiveSavepoints(db);
+  }
+  return SQLITE_OK;
+}
+
 static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -761,6 +772,11 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
         return;
       }
       if( tableExists ){
+        rc = conflictsResolveSealSuccessfulTopSavepoint(db);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error_code(ctx, rc);
+          return;
+        }
         sqlite3_result_int(ctx, 0);
         return;
       }
@@ -805,6 +821,11 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
         return;
       }
       if( tableExists ){
+        rc = conflictsResolveSealSuccessfulTopSavepoint(db);
+        if( rc!=SQLITE_OK ){
+          sqlite3_result_error_code(ctx, rc);
+          return;
+        }
         sqlite3_result_int(ctx, 0);
         return;
       }
