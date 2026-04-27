@@ -4474,6 +4474,70 @@ static void run_rebase_temp_shadow_ignored(void){
   remove_db(dbpath);
 }
 
+static void run_rebase_continue_conflict_abort_restores_durable_state(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  const char *res;
+  u8 isRebasing = 0;
+  const char *zOrigBranch = 0;
+
+  printf("=== Rebase Continue Conflict Abort Restores Durable State Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath),
+              "test_rebase_continue_conflict_abort_restores_durable_state");
+  remove_db(dbpath);
+
+  check("open_db_for_rebase_continue_conflict_abort", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_rebase_continue_conflict_abort", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES (1, 1);"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
+    "SELECT dolt_checkout('-b', 'feat');"
+    "UPDATE t SET v = 2 WHERE id = 1;"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'f1');"
+    "SELECT dolt_checkout('main');"
+    "UPDATE t SET v = 3 WHERE id = 1;"
+    "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm1');"
+    "SELECT dolt_checkout('feat');")==SQLITE_OK);
+
+  check("start_interactive_rebase_for_conflict_abort",
+        strstr(exec1(db, "SELECT dolt_rebase('-i', 'main')"),
+               "interactive rebase started on branch dolt_rebase_feat")!=0);
+
+  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  check("rebase_continue_conflict_abort_returns_error",
+        strstr(res, "data conflicts from rebase")!=0);
+  check("rebase_continue_conflict_abort_restores_branch_same_session",
+        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_continue_conflict_abort_drops_plan_same_session",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
+  check("rebase_continue_conflict_abort_clears_conflicts_same_session",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+  check("rebase_continue_conflict_abort_restores_row_same_session",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "2")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_continue_conflict_abort_clears_flag_same_session", isRebasing==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("reopen_db_for_rebase_continue_conflict_abort", open_db(dbpath, &db)==SQLITE_OK);
+  check("rebase_continue_conflict_abort_restores_branch_after_reopen",
+        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+  check("rebase_continue_conflict_abort_drops_plan_after_reopen",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
+  check("rebase_continue_conflict_abort_clears_conflicts_after_reopen",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+  check("rebase_continue_conflict_abort_restores_row_after_reopen",
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "2")==0);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  check("rebase_continue_conflict_abort_clears_flag_after_reopen", isRebasing==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_branch_copy_existing_dest_preserves_durable_state(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -6138,6 +6202,7 @@ static const RegressionCase aCases[] = {
   { "merge_abort_after_reopen_restores_durable_state", "Merge Abort After Reopen Restores Durable State Test", run_merge_abort_after_reopen_restores_durable_state },
   { "rebase_continue_without_active_preserves_durable_state", "Rebase Continue Without Active Preserves Durable State Test", run_rebase_continue_without_active_preserves_durable_state },
   { "rebase_abort_after_reopen_restores_durable_state", "Rebase Abort After Reopen Restores Durable State Test", run_rebase_abort_after_reopen_restores_durable_state },
+  { "rebase_continue_conflict_abort_restores_durable_state", "Rebase Continue Conflict Abort Restores Durable State Test", run_rebase_continue_conflict_abort_restores_durable_state },
   { "rebase_main_table_schema_guard", "Rebase Main Table Schema Guard Test", run_rebase_main_table_schema_guard },
   { "rebase_temp_shadow_ignored", "Rebase Temp Shadow Ignored Test", run_rebase_temp_shadow_ignored },
   { "remote_add_duplicate_preserves_durable_state", "Remote Add Duplicate Preserves Durable State Test", run_remote_add_duplicate_preserves_durable_state },

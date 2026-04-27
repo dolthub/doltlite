@@ -3513,6 +3513,26 @@ static int rebaseCheckoutBranch(sqlite3 *db, const char *zBranch){
   return rc;
 }
 
+static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash headHash;
+  DoltliteCommit headCommit;
+  int rc;
+
+  if( !cs || !zBranch || !zBranch[0] ) return SQLITE_ERROR;
+  rc = chunkStoreFindBranch(cs, zBranch, &headHash);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCommit(db, &headHash, &headCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteSwitchCatalog(db, &headCommit.catalogHash);
+  if( rc!=SQLITE_OK ) return rc;
+  doltliteSetSessionBranch(db, zBranch);
+  doltliteSetSessionHead(db, &headHash);
+  doltliteSetSessionStaged(db, &headCommit.catalogHash);
+  doltliteClearSessionMergeState(db);
+  return SQLITE_OK;
+}
+
 static int rebaseCreateAndPopulatePlanTable(
   sqlite3 *db,
   const ProllyHash *aReplay,
@@ -3669,7 +3689,32 @@ static void rebaseDiscardWorkingBranch(
   (void)doltlitePersistWorkingSet(db);
 
   if( zOrigBranch && zOrigBranch[0] ){
-    (void)rebaseCheckoutBranch(db, zOrigBranch);
+    if( rebaseCheckoutBranch(db, zOrigBranch)!=SQLITE_OK ){
+      (void)rebaseRestoreBranchState(db, zOrigBranch);
+    }
+  }
+  if( cs && zWorkingBranch && zWorkingBranch[0] ){
+    (void)chunkStoreDeleteBranch(cs, zWorkingBranch);
+    (void)chunkStoreSerializeRefs(cs);
+    (void)chunkStoreCommit(cs);
+    (void)doltlitePersistWorkingSet(db);
+  }
+}
+
+static void rebaseAbortConflictedContinue(
+  sqlite3 *db,
+  const char *zOrigBranch,
+  const char *zWorkingBranch
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+
+  (void)sqlite3_exec(db, "DROP TABLE IF EXISTS main.dolt_rebase", 0, 0, 0);
+  doltliteClearSessionRebaseState(db);
+  doltliteClearSessionMergeState(db);
+  if( zOrigBranch && zOrigBranch[0] ){
+    (void)rebaseRestoreBranchState(db, zOrigBranch);
+    doltliteClearSessionRebaseState(db);
+    if( cs ) (void)chunkStoreSetDefaultBranch(cs, zOrigBranch);
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
     (void)chunkStoreDeleteBranch(cs, zWorkingBranch);
@@ -3993,7 +4038,10 @@ static void doltliteRebaseInteractiveContinue(
 
 abort_err_conflict:
   rebaseFreePlan(aPlan, nPlan);
-  rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
+  rebaseAbortConflictedContinue(db, zOrigBranch, zWorking);
+  if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
+    (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  }
   sqlite3_free(zOrigBranch);
   sqlite3_free(zWorking);
   sqlite3_result_error(context,
