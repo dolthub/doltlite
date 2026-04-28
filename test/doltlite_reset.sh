@@ -207,8 +207,26 @@ run_test_match "reset_guard_preserves_working_row" \
   "BEGIN; SELECT dolt_merge('feat'); SELECT dolt_reset('--soft'); SELECT 'GV|' || v FROM t; ROLLBACK;" \
   "^GV\\|main$" "$DB8"
 
+DB9=/tmp/test_reset9_$$.db; rm -f "$DB9"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); DROP TABLE a; SELECT dolt_reset('a');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+run_test "path_reset_dropped_table_stays_dropped" \
+  "SELECT count(*) FROM dolt_status WHERE table_name='a' AND staged=0 AND status='deleted';" \
+  "1" "$DB9"
+run_test "path_reset_dropped_table_not_restored_on_reopen" \
+  "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='a';" \
+  "0" "$DB9"
+
+DB10=/tmp/test_reset10_$$.db; rm -f "$DB10"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); DROP TABLE a; CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER); INSERT INTO a VALUES(7,70); SELECT dolt_reset('a');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+run_test "path_reset_recreated_table_keeps_live_schema" \
+  "SELECT group_concat(name || ':' || type, '|') FROM pragma_table_info('a');" \
+  "k:INTEGER|n:INTEGER" "$DB10"
+run_test "path_reset_recreated_table_keeps_live_row" \
+  "SELECT k || '|' || n FROM a;" \
+  "7|70" "$DB10"
+
 # Cleanup
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

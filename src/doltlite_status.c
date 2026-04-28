@@ -155,15 +155,15 @@ static int compareCatalogs(
       }
       rc = addRow(pCur, zName, staged, "new table");
     }else{
+      int bRootChanged =
+        prollyHashCompare(&pFrom->root, &aTo[i].root)!=0;
+      int bSchemaChanged =
+        !prollyHashIsEmpty(&pFrom->schemaHash)
+        && !prollyHashIsEmpty(&aTo[i].schemaHash)
+        && prollyHashCompare(&pFrom->schemaHash, &aTo[i].schemaHash)!=0;
       rc = SQLITE_OK;
-      if(prollyHashCompare(&pFrom->root, &aTo[i].root)!=0){
+      if( bRootChanged || bSchemaChanged ){
         rc = addRow(pCur, zName, staged, "modified");
-      }
-      if(rc==SQLITE_OK
-       && !prollyHashIsEmpty(&pFrom->schemaHash)
-       && !prollyHashIsEmpty(&aTo[i].schemaHash)
-       && prollyHashCompare(&pFrom->schemaHash, &aTo[i].schemaHash)!=0){
-        rc = addRow(pCur, zName, staged, "schema modified");
       }
     }
     sqlite3_free(zName);
