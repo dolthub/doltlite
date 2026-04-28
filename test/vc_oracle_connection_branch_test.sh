@@ -35,7 +35,7 @@ run_dt() {
   local parent repo_name
   parent=$(dirname "$repo")
   repo_name=$(basename "$repo")
-  ( cd "$parent" && "$DOLT" --use-db "$repo_name/$branch" sql -r csv -q "$query" ) \
+  ( cd "$parent" && printf "%s\n" "$query" | "$DOLT" --use-db "$repo_name/$branch" sql -r csv -c ) \
     | tail -n +2 | tr -d '"' | tr -d '\r'
 }
 
@@ -98,12 +98,103 @@ oracle() {
   fi
 }
 
+oracle_with_query() {
+  local name="$1" dbspec="$2" branch="$3" query="$4"
+  local dir="$TMPROOT/$name"
+  local dl_out dt_out
+
+  setup_pair "$dir"
+
+  dl_out=$(run_dl "$dbspec" "$query" 2>>"$dir/dl.err" | tr -d '\r')
+  dt_out=$(run_dt "$dir/dt" "$branch" "$query" 2>>"$dir/dt.err")
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
+oracle_with_mutation() {
+  local name="$1" setup_extra="$2" dbspec="$3" branch="$4" query="$5"
+  local dir="$TMPROOT/$name"
+  local dl_out dt_out
+
+  setup_pair "$dir"
+  if [ -n "$setup_extra" ]; then
+    run_dl "$dir/dl/db.sqlite" "$setup_extra" >/dev/null 2>>"$dir/dl.err"
+    (
+      cd "$dir/dt" || exit 1
+      printf "%s\n" "$(printf "%s" "$setup_extra" | sed "s/SELECT dolt_/CALL dolt_/g")" | "$DOLT" sql -c >/dev/null 2>>"$dir/dt.err"
+    )
+  fi
+
+  dl_out=$(run_dl "$dbspec" "$query" 2>>"$dir/dl.err" | tr -d '\r')
+  dt_out=$(run_dt "$dir/dt" "$branch" "$query" 2>>"$dir/dt.err")
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
+oracle_error() {
+  local name="$1" setup_extra="$2" dbspec="$3" branch="$4" query="$5"
+  local dir="$TMPROOT/$name"
+  local dl_rc dt_rc
+
+  setup_pair "$dir"
+  if [ -n "$setup_extra" ]; then
+    run_dl "$dir/dl/db.sqlite" "$setup_extra" >/dev/null 2>>"$dir/dl.err"
+    (
+      cd "$dir/dt" || exit 1
+      printf "%s\n" "$(printf "%s" "$setup_extra" | sed "s/SELECT dolt_/CALL dolt_/g")" | "$DOLT" sql -c >/dev/null 2>>"$dir/dt.err"
+    )
+  fi
+
+  run_dl "$dbspec" "$query" >/dev/null 2>>"$dir/dl.err"
+  dl_rc=$?
+  run_dt "$dir/dt" "$branch" "$query" >/dev/null 2>>"$dir/dt.err"
+  dt_rc=$?
+
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both to error)"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+  fi
+}
+
 echo "=== Oracle Tests: Connection Branch Selection ==="
 echo ""
 
 oracle "default_open_uses_main" "$TMPROOT/default_open_uses_main/dl/db.sqlite" "main"
 oracle "at_branch_selects_branch" "$TMPROOT/at_branch_selects_branch/dl/db.sqlite@side" "side"
 oracle "slash_branch_selects_branch" "$TMPROOT/slash_branch_selects_branch/dl/db.sqlite/side" "side"
+
+oracle_with_mutation "renamed_branch_open_selects_branch" \
+  "SELECT dolt_branch('-m','side','renamed');" \
+  "$TMPROOT/renamed_branch_open_selects_branch/dl/db.sqlite@renamed" \
+  "renamed" \
+  "SELECT active_branch() AS value UNION ALL SELECT v FROM t WHERE id=1;"
+
+oracle_with_mutation "copied_branch_open_selects_branch" \
+  "SELECT dolt_branch('-c','side','copy');" \
+  "$TMPROOT/copied_branch_open_selects_branch/dl/db.sqlite/copy" \
+  "copy" \
+  "SELECT active_branch() AS value UNION ALL SELECT v FROM t WHERE id=1;"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
