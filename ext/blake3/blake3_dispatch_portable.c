@@ -1,4 +1,7 @@
-/* doltlite vendor: portable-only dispatch.
+/* SPDX-License-Identifier: Apache-2.0
+** Copyright 2026 DoltHub, Inc.
+**
+** doltlite vendor: portable-only dispatch.
 **
 ** Replaces upstream blake3_dispatch.c (which does runtime CPU feature
 ** detection and selects SSE/AVX/NEON paths) with thin wrappers that

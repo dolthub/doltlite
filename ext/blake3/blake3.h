@@ -1,3 +1,8 @@
+/* SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception OR CC0-1.0
+**
+** Vendored verbatim from https://github.com/BLAKE3-team/BLAKE3 (1.8.5).
+** See ext/blake3/LICENSE and ext/blake3/README.md. */
+
 #ifndef BLAKE3_H
 #define BLAKE3_H
 

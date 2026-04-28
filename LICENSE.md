@@ -94,6 +94,15 @@ Non-public-domain code included in this respository includes:
      software found in the legacy autoconf/ directory and its
      subdirectories.
 
+  *  The vendored BLAKE3 reference implementation under `ext/blake3/`,
+     used by the prolly tree's content-addressing layer. Upstream is
+     dual-licensed under Apache License 2.0 (with LLVM exception) or
+     CC0 1.0 Universal — DoltLite redistributes under Apache 2.0
+     (the project-wide license). Source: BLAKE3 v1.8.5 from
+     https://github.com/BLAKE3-team/BLAKE3. See `ext/blake3/LICENSE`
+     and `ext/blake3/README.md` for the full license texts and a
+     description of DoltLite-specific modifications.
+
 The following unix shell command can be run from the top-level
 of this source repository in order to remove all non-public-domain
 code:

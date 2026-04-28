@@ -1,3 +1,10 @@
+/* SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception OR CC0-1.0
+**
+** Modified from https://github.com/BLAKE3-team/BLAKE3 (1.8.5):
+** the SIMD (SSE2/SSE4.1/AVX2/AVX-512/NEON) function declarations and
+** their MAX_SIMD_DEGREE branches have been removed. DoltLite ships
+** only the portable implementation. See ext/blake3/README.md. */
+
 #ifndef BLAKE3_IMPL_H
 #define BLAKE3_IMPL_H
 
