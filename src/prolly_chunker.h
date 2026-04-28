@@ -8,25 +8,20 @@
 #include "prolly_cursor.h"
 #include "chunk_store.h"
 
-/* Target is the expected chunk size; MIN/MAX bracket it so a
-** degenerate rolling hash (long runs of zero bytes, repeated keys)
-** still produces bounded chunks. PATTERN is the bitmask the rolling
-** hash is tested against: on average 1/(2^bits) positions match, so
-** 12 zero bits → ~4096 expected chunk size. Changing PATTERN here
-** re-hashes every tree on next write — it's part of the on-disk
-** content-addressing, not a tuning knob. */
-#define PROLLY_CHUNK_TARGET  4096
+/* MIN/MAX bracket the chunk size so degenerate inputs (adversarial
+** keys, hash collisions) still produce bounded chunks. Inside that
+** range, the boundary decision is made by prollyWeibullCheck which
+** biases the distribution toward 4096 bytes (PROLLY_WEIBULL_L in
+** prolly_hash.c). All three values are part of the on-disk content
+** addressing — changing them re-hashes every tree on next write. */
 #define PROLLY_CHUNK_MIN     512
 #define PROLLY_CHUNK_MAX     16384
-
-#define PROLLY_CHUNK_PATTERN 0x00000FFF
 
 typedef struct ProllyChunker ProllyChunker;
 typedef struct ProllyChunkerLevel ProllyChunkerLevel;
 
 struct ProllyChunkerLevel {
   ProllyNodeBuilder builder;
-  ProllyRollingHash rh;
   int nItems;
   int nBytes;
 };
