@@ -127,6 +127,84 @@ run_test "log_after_alter" \
   "SELECT count(*) FROM dolt_log;" \
   "3" "$DB2"
 
+# --- Reopen after rename + edit commit ---
+
+DB7=/tmp/test_dolt_commit_rename_reopen_$$.db
+rm -f "$DB7"
+
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES(1,'base');
+SELECT dolt_commit('-A','-m','init');
+ALTER TABLE a RENAME TO b;
+INSERT INTO b VALUES(2,'x');
+SELECT dolt_add('b');
+SELECT dolt_commit('-m','rename and edit');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+run_test "reopen_rename_commit_status_clean" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB7"
+
+run_test "reopen_rename_commit_schema" \
+  "SELECT group_concat(name || ':' || lower(type), '|') FROM pragma_table_info('b');" \
+  "id:integer|s:text" "$DB7"
+
+run_test "reopen_rename_commit_rows" \
+  "SELECT s FROM b ORDER BY id;" \
+  "base
+x" "$DB7"
+
+# --- Reopen after drop/recreate commit ---
+
+DB8=/tmp/test_dolt_commit_recreate_reopen_$$.db
+rm -f "$DB8"
+
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES(1,'base');
+SELECT dolt_commit('-A','-m','init');
+DROP TABLE a;
+CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO a VALUES(7,70);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m','recreate a');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+
+run_test "reopen_recreate_commit_status_clean" \
+  "SELECT count(*) FROM dolt_status;" \
+  "0" "$DB8"
+
+run_test "reopen_recreate_commit_schema" \
+  "SELECT group_concat(name || ':' || lower(type), '|') FROM pragma_table_info('a');" \
+  "k:integer|n:integer" "$DB8"
+
+run_test "reopen_recreate_commit_rows" \
+  "SELECT k || '|' || n FROM a;" \
+  "7|70" "$DB8"
+
+# --- Reopen after schema-only staged commit with unstaged data left behind ---
+
+DB9=/tmp/test_dolt_commit_schema_only_$$.db
+rm -f "$DB9"
+
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-A','-m','init');
+ALTER TABLE t ADD COLUMN n INTEGER;
+SELECT dolt_add('t');
+INSERT INTO t VALUES(2,'x',2);
+SELECT dolt_commit('-m','schema only staged');" | $DOLTLITE "$DB9" > /dev/null 2>&1
+
+run_test "reopen_schema_only_commit_status_preserves_unstaged" \
+  "SELECT table_name || '|' || staged || '|' || status FROM dolt_status ORDER BY table_name, staged, status;" \
+  "t|0|modified" "$DB9"
+
+run_test "reopen_schema_only_commit_schema" \
+  "SELECT group_concat(name || ':' || lower(type), '|') FROM pragma_table_info('t');" \
+  "id:integer|s:text|n:integer" "$DB9"
+
+run_test "reopen_schema_only_commit_rows" \
+  "SELECT id || '|' || s || '|' || coalesce(n,'NULL') FROM t ORDER BY id;" \
+  "1|base|NULL
+2|x|2" "$DB9"
+
 # --- Empty log before first commit ---
 
 run_test "empty_log" \

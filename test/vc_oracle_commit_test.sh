@@ -372,6 +372,55 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first', '--date', '2024-01-15T10:00:00Z');
 "
 
+echo "--- schema edge commits ---"
+
+oracle "commit_renamed_and_modified_table" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+ALTER TABLE a RENAME TO b;
+INSERT INTO b VALUES (2, 'x');
+SELECT dolt_add('b');
+SELECT dolt_commit('-m', 'rename and edit');
+"
+
+oracle "commit_recreated_same_name_table" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+DROP TABLE a;
+CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO a VALUES (7, 70);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'recreate a');
+"
+
+oracle "commit_schema_staged_data_unstaged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+ALTER TABLE t ADD COLUMN n INTEGER;
+SELECT dolt_add('t');
+INSERT INTO t VALUES (2, 'x', 2);
+SELECT dolt_commit('-m', 'schema only staged');
+"
+
+oracle "commit_drop_one_modify_one" "
+CREATE TABLE a(id INTEGER PRIMARY KEY);
+CREATE TABLE b(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1);
+INSERT INTO b VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+DROP TABLE a;
+INSERT INTO b VALUES (2, 'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop and edit');
+"
+
 echo "--- error paths ---"
 
 # Bare commit with no -m / --message: both should error
