@@ -625,7 +625,14 @@ static int csReadManifest(ChunkStore *cs){
   magic = CS_READ_U32(aBuf + 0);
   version = CS_READ_U32(aBuf + 4);
   if( magic != CHUNK_STORE_MAGIC ) return SQLITE_NOTADB;
-  if( version != CHUNK_STORE_VERSION ) return SQLITE_NOTADB;
+  if( version != CHUNK_STORE_VERSION ){
+    sqlite3_log(SQLITE_NOTADB,
+      "doltlite: chunk store format version %u, expected %u "
+      "(database written by an incompatible doltlite version; "
+      "this build refuses to open it to prevent corruption)",
+      version, CHUNK_STORE_VERSION);
+    return SQLITE_NOTADB;
+  }
 
   cs->nChunks = (int)CS_READ_U32(aBuf + 28);
   cs->iIndexOffset = CS_READ_I64(aBuf + 32);
