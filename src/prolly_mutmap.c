@@ -47,8 +47,6 @@ static u32 hashKey(
   return h;
 }
 
-static ProllyMutMap *gSortCtx = 0;
-
 static int encodeLevel(ProllyMutMap *mm, int level){
   if( level<=0 ) return 0;
   return level + mm->levelBase;
@@ -201,16 +199,99 @@ static int findPhysLazy(ProllyMutMap *mm,
   return SQLITE_OK;
 }
 
-static int compareOrderIndexes(const void *a, const void *b){
-  ProllyMutMap *mm = gSortCtx;
-  int ia = *(const int*)a;
-  int ib = *(const int*)b;
-  ProllyMutMapEntry *ea = &mm->aEntries[ia];
-  ProllyMutMapEntry *eb = &mm->aEntries[ib];
-  return compareEntries(mm->isIntKey,
-                        ea->pKey, ea->nKey, ea->intKey,
-                        eb->pKey, eb->nKey, eb->intKey);
+/* Type-specialized inline quicksort over aOrder[].
+**
+** The libc qsort path was the dominant write-side hotspot (~30% of
+** total CPU on oltp_insert with a single secondary index): every
+** comparison paid an indirect function-pointer call into
+** compareOrderIndexes, which itself dereferenced a global ProllyMutMap*
+** and then branched on isIntKey. Profiling showed those overheads
+** dwarfed the actual key compare.
+**
+** Replacing with two type-specialized quicksorts (one for INT keys,
+** one for blob keys) lets the comparator inline directly into the
+** sort, eliminates the function-pointer dispatch, and drops the
+** isIntKey branch — which is constant for the duration of any one
+** sort. Same algorithm and asymptotic behavior; just a tighter inner
+** loop. */
+
+#define MUTSORT_INSERT_THRESHOLD 16
+#define MUTSORT_STACK_DEPTH 64
+
+/* Inline blob comparison: 1 if entry a sorts before entry b. */
+static SQLITE_INLINE int mutBlobLess(ProllyMutMapEntry *e, int ia, int ib){
+  ProllyMutMapEntry *ea = &e[ia];
+  ProllyMutMapEntry *eb = &e[ib];
+  int n = ea->nKey < eb->nKey ? ea->nKey : eb->nKey;
+  int c = memcmp(ea->pKey, eb->pKey, n);
+  if( c < 0 ) return 1;
+  if( c > 0 ) return 0;
+  return ea->nKey < eb->nKey;
 }
+
+/* Generate a type-specialized quicksort over aOrder[]. LESS_AB(ia, ib)
+** must expand to a boolean: "is the entry indexed by ia strictly less
+** than the entry indexed by ib?" — using `e` from the enclosing
+** function for the entry array. */
+#define DEFINE_MUT_SORT(NAME, LESS_AB)                                  \
+static void NAME(int *a, int n, ProllyMutMapEntry *e){                  \
+  struct { int lo, hi; } stk[MUTSORT_STACK_DEPTH];                       \
+  int sp = 0;                                                            \
+  if( n < 2 ) return;                                                    \
+  stk[sp].lo = 0; stk[sp].hi = n - 1; sp++;                              \
+  while( sp > 0 ){                                                       \
+    int lo, hi, k;                                                       \
+    sp--;                                                                \
+    lo = stk[sp].lo;                                                     \
+    hi = stk[sp].hi;                                                     \
+    while( hi - lo > MUTSORT_INSERT_THRESHOLD ){                         \
+      int mid, pivot, i, j;                                              \
+      mid = lo + ((hi - lo) >> 1);                                       \
+      /* Median-of-three pivot. After these swaps:                       \
+      ** a[lo] is the smallest, a[hi] is the largest, a[mid] is median.  \
+      ** Both a[lo] and a[hi] then act as sentinels for the partition. */ \
+      if( LESS_AB(a[mid], a[lo]) ){ int t=a[mid]; a[mid]=a[lo]; a[lo]=t; }\
+      if( LESS_AB(a[hi], a[lo])  ){ int t=a[hi];  a[hi]=a[lo];  a[lo]=t; }\
+      if( LESS_AB(a[hi], a[mid]) ){ int t=a[hi];  a[hi]=a[mid]; a[mid]=t;}\
+      /* Move pivot to position hi-1. */                                 \
+      { int t=a[mid]; a[mid]=a[hi-1]; a[hi-1]=t; }                       \
+      pivot = a[hi-1];                                                   \
+      i = lo; j = hi - 1;                                                \
+      for(;;){                                                           \
+        while( LESS_AB(a[++i], pivot) ){}                                \
+        while( LESS_AB(pivot, a[--j]) ){}                                \
+        if( i >= j ) break;                                              \
+        { int t=a[i]; a[i]=a[j]; a[j]=t; }                               \
+      }                                                                  \
+      { int t=a[i]; a[i]=a[hi-1]; a[hi-1]=t; }                           \
+      /* Push the larger side, recurse on the smaller one — keeps the    \
+      ** stack bounded by O(log n). */                                   \
+      if( i - lo > hi - i ){                                             \
+        stk[sp].lo = lo;    stk[sp].hi = i - 1; sp++;                    \
+        lo = i + 1;                                                      \
+      }else{                                                             \
+        stk[sp].lo = i + 1; stk[sp].hi = hi;    sp++;                    \
+        hi = i - 1;                                                      \
+      }                                                                  \
+    }                                                                    \
+    /* Insertion sort tail for short ranges. */                          \
+    for( k = lo + 1; k <= hi; k++ ){                                     \
+      int x = a[k];                                                      \
+      int kk = k;                                                        \
+      while( kk > lo && LESS_AB(x, a[kk-1]) ){                           \
+        a[kk] = a[kk-1];                                                 \
+        kk--;                                                            \
+      }                                                                  \
+      a[kk] = x;                                                         \
+    }                                                                    \
+  }                                                                      \
+}
+
+#define MUT_INT_LESS(ia, ib)  (e[ia].intKey < e[ib].intKey)
+#define MUT_BLOB_LESS(ia, ib) (mutBlobLess(e, ia, ib))
+
+DEFINE_MUT_SORT(mutSortByIntKey,  MUT_INT_LESS)
+DEFINE_MUT_SORT(mutSortByBlobKey, MUT_BLOB_LESS)
 
 static int ensureOrder(ProllyMutMap *mm){
   int i;
@@ -218,9 +299,11 @@ static int ensureOrder(ProllyMutMap *mm){
   for(i=0; i<mm->nEntries; i++){
     mm->aOrder[i] = i;
   }
-  gSortCtx = mm;
-  qsort(mm->aOrder, mm->nEntries, sizeof(int), compareOrderIndexes);
-  gSortCtx = 0;
+  if( mm->isIntKey ){
+    mutSortByIntKey(mm->aOrder, mm->nEntries, mm->aEntries);
+  }else{
+    mutSortByBlobKey(mm->aOrder, mm->nEntries, mm->aEntries);
+  }
   for(i=0; i<mm->nEntries; i++){
     mm->aPos[mm->aOrder[i]] = i;
   }
