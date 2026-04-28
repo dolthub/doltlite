@@ -117,6 +117,21 @@ run_test "default_is_soft" \
   "SELECT staged FROM dolt_status;" \
   "0" "$DB3"
 
+DB3B=/tmp/test_reset3b_$$.db; rm -f "$DB3B"
+echo "CREATE TABLE a(x); CREATE TABLE b(y); INSERT INTO a VALUES(1); INSERT INTO b VALUES(1); SELECT dolt_commit('-A','-m','init'); INSERT INTO a VALUES(2); INSERT INTO b VALUES(2); SELECT dolt_add('-A'); SELECT dolt_reset('a','nope');" | $DOLTLITE "$DB3B" > /dev/null 2>&1
+run_test "multipath_reset_with_missing_unstages_all" \
+  "SELECT count(*) FROM dolt_status WHERE staged=1;" \
+  "0" "$DB3B"
+run_test "multipath_reset_with_missing_leaves_both_unstaged" \
+  "SELECT count(*) FROM dolt_status WHERE staged=0;" \
+  "2" "$DB3B"
+
+DB3C=/tmp/test_reset3c_$$.db; rm -f "$DB3C"
+echo "CREATE TABLE a(x); INSERT INTO a VALUES(1); SELECT dolt_commit('-A','-m','init'); INSERT INTO a VALUES(2); SELECT dolt_add('-A'); SELECT dolt_reset('nope','nope2');" | $DOLTLITE "$DB3C" > /dev/null 2>&1
+run_test "multipath_reset_all_missing_unstages_all" \
+  "SELECT count(*) FROM dolt_status WHERE staged=1;" \
+  "0" "$DB3C"
+
 # --- Hard reset persists across reopen ---
 DB4=/tmp/test_reset4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
@@ -226,7 +241,7 @@ run_test "path_reset_recreated_table_keeps_live_row" \
   "7|70" "$DB10"
 
 # Cleanup
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
+rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

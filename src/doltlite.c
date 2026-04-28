@@ -1978,6 +1978,15 @@ static void doltliteResetFunc(
     goto reset_cleanup;
   }
 
+  /* Dolt's SQL reset only has true path-limited semantics for the
+  ** single-path form. With multiple positional paths it falls back to
+  ** the no-arg unstage-all behavior, even if some names are missing.
+  ** Match that contract instead of treating multi-path reset as an
+  ** atomic per-path operation. */
+  if( nPaths>1 && !isHard && !isSoft && !zRef ){
+    nPaths = 0;
+  }
+
   if( nPaths>0 ){
     if( isHard || isSoft || zRef ){
       sqlite3_result_error(context,
