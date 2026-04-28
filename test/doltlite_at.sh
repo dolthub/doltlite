@@ -144,6 +144,51 @@ run_test "tag_v2" "SELECT count(*) FROM dolt_at_t( 'v2.0');" "2" "$DB"
 rm -f "$DB"
 
 # ============================================================
+# Parent refs and raw hashes
+# ============================================================
+
+DB=/tmp/test_at_parents_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'init');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'main');
+SELECT dolt_commit('-A','-m','main');
+SELECT dolt_merge('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "parent_first_ref" "SELECT count(*) FROM dolt_at_t( 'HEAD^1');" "2" "$DB"
+run_test "parent_second_ref" "SELECT count(*) FROM dolt_at_t( 'HEAD^2');" "2" "$DB"
+run_test "parent_first_has_main_row" "SELECT count(*) FROM dolt_at_t( 'HEAD^1') WHERE id=3;" "1" "$DB"
+run_test "parent_second_has_feat_row" "SELECT count(*) FROM dolt_at_t( 'HEAD^2') WHERE id=2;" "1" "$DB"
+
+HASH=$(echo "SELECT dolt_hashof('HEAD^2');" | $DOLTLITE "$DB" 2>&1)
+run_test "parent_second_hash" "SELECT count(*) FROM dolt_at_t( '$HASH');" "2" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
+# Branch created from tag persists across reopen
+# ============================================================
+
+DB=/tmp/test_at_branch_from_tag_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'v1');
+SELECT dolt_commit('-A','-m','c1');
+INSERT INTO t VALUES(2,'v2');
+SELECT dolt_commit('-A','-m','c2');
+SELECT dolt_tag('v1.0','HEAD~1');
+SELECT dolt_branch('from_tag','v1.0');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "branch_from_tag_reopen_at_head" "SELECT count(*) FROM dolt_at_t( 'HEAD');" "1" "$DB/from_tag"
+run_test "branch_from_tag_reopen_at_main" "SELECT count(*) FROM dolt_at_t( 'main');" "2" "$DB/from_tag"
+
+rm -f "$DB"
+
+# ============================================================
 # Updated rows show old values at old commits
 # ============================================================
 
