@@ -342,6 +342,42 @@ SELECT dolt_add('-A');
 SELECT dolt_reset('a');
 "
 
+oracle "reset_multiple_paths_unstages_all" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO a VALUES (2, 20);
+INSERT INTO b VALUES (2, 200);
+SELECT dolt_add('-A');
+SELECT dolt_reset('a', 'b');
+"
+
+oracle "reset_multiple_paths_with_missing_unstages_all" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO a VALUES (2, 20);
+INSERT INTO b VALUES (2, 200);
+SELECT dolt_add('-A');
+SELECT dolt_reset('a', 'nope');
+"
+
+oracle "reset_multiple_missing_paths_unstages_all" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO a VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_reset('nope', 'nope2');
+"
+
 oracle_same_session "reset_path_dropped_table_stays_dropped" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
 INSERT INTO a VALUES (1, 10);
