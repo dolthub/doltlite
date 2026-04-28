@@ -7,6 +7,8 @@
 #include "doltlite_ancestor.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
+#include "doltlite_record.h"
+#include "prolly_cursor.h"
 #include <string.h>
 #include <time.h>
 
@@ -140,6 +142,156 @@ static int mutateBranchMove(sqlite3 *db, ChunkStore *cs, void *pArg){
     chunkStoreDeleteBranch(cs, p->zDest);
   }
   return rc;
+}
+
+typedef struct CheckoutSchemaInfo CheckoutSchemaInfo;
+struct CheckoutSchemaInfo {
+  int hasCurrent;
+  int hasSource;
+  int rebuilt;
+  char *zCurrentSql;
+  char *zSourceSql;
+};
+
+static void checkoutSchemaInfoClear(CheckoutSchemaInfo *aInfo, int nInfo){
+  int i;
+  if( !aInfo ) return;
+  for(i=0; i<nInfo; i++){
+    sqlite3_free(aInfo[i].zCurrentSql);
+    sqlite3_free(aInfo[i].zSourceSql);
+  }
+  sqlite3_free(aInfo);
+}
+
+static int checkoutSchemaTextField(
+  const u8 *pVal, int nVal,
+  const DoltliteRecordInfo *pRi,
+  int iField,
+  char **pzOut
+){
+  int st, off, n;
+  *pzOut = 0;
+  if( iField<0 || iField>=pRi->nField ) return SQLITE_CORRUPT;
+  st = pRi->aType[iField];
+  off = pRi->aOffset[iField];
+  if( off<0 || off>nVal ) return SQLITE_CORRUPT;
+  if( st==0 ){
+    *pzOut = sqlite3_mprintf("");
+    return *pzOut ? SQLITE_OK : SQLITE_NOMEM;
+  }
+  if( st<13 || (st&1)==0 ) return SQLITE_CORRUPT;
+  n = (st - 13) / 2;
+  if( n<0 || off+n>nVal ) return SQLITE_CORRUPT;
+  *pzOut = sqlite3_malloc(n + 1);
+  if( !*pzOut ) return SQLITE_NOMEM;
+  memcpy(*pzOut, pVal + off, n);
+  (*pzOut)[n] = 0;
+  return SQLITE_OK;
+}
+
+static int checkoutLoadLiveTableSql(
+  sqlite3 *db,
+  const char *zName,
+  int *pFound,
+  char **pzSql
+){
+  sqlite3_stmt *pStmt = 0;
+  char *zQry;
+  int rc;
+
+  *pFound = 0;
+  *pzSql = 0;
+  zQry = sqlite3_mprintf(
+      "SELECT sql FROM main.sqlite_master "
+      "WHERE type='table' AND name='%q'",
+      zName);
+  if( !zQry ) return SQLITE_NOMEM;
+  rc = sqlite3_prepare_v2(db, zQry, -1, &pStmt, 0);
+  sqlite3_free(zQry);
+  if( rc!=SQLITE_OK ) return rc;
+  if( sqlite3_step(pStmt)==SQLITE_ROW ){
+    const char *zSql = (const char*)sqlite3_column_text(pStmt, 0);
+    *pFound = 1;
+    *pzSql = sqlite3_mprintf("%s", zSql ? zSql : "");
+    if( !*pzSql ){
+      sqlite3_finalize(pStmt);
+      return SQLITE_NOMEM;
+    }
+  }
+  sqlite3_finalize(pStmt);
+  return SQLITE_OK;
+}
+
+static int checkoutLoadSourceTableSql(
+  sqlite3 *db,
+  struct TableEntry *aSource,
+  int nSource,
+  const char *zName,
+  int *pFound,
+  char **pzSql
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  ProllyHash masterRoot;
+  u8 masterFlags = 0;
+  ProllyCursor cur;
+  int i, rc, res;
+
+  *pFound = 0;
+  *pzSql = 0;
+  memset(&masterRoot, 0, sizeof(masterRoot));
+  for(i=0; i<nSource; i++){
+    if( aSource[i].iTable==1 ){
+      memcpy(&masterRoot, &aSource[i].root, sizeof(masterRoot));
+      masterFlags = aSource[i].flags;
+      break;
+    }
+  }
+  if( !cs || !pCache || prollyHashIsEmpty(&masterRoot) ) return SQLITE_OK;
+
+  prollyCursorInit(&cur, cs, pCache, &masterRoot, masterFlags);
+  rc = prollyCursorFirst(&cur, &res);
+  if( rc!=SQLITE_OK || res ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+  while( prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0;
+    int nVal = 0;
+    DoltliteRecordInfo ri;
+    char *zType = 0;
+    char *zEntryName = 0;
+
+    prollyCursorValue(&cur, &pVal, &nVal);
+    doltliteParseRecord(pVal, nVal, &ri);
+    if( ri.nField >= 5 ){
+      rc = checkoutSchemaTextField(pVal, nVal, &ri, 0, &zType);
+      if( rc==SQLITE_OK ) rc = checkoutSchemaTextField(pVal, nVal, &ri, 1, &zEntryName);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zType);
+        sqlite3_free(zEntryName);
+        prollyCursorClose(&cur);
+        return rc;
+      }
+      if( strcmp(zType, "table")==0 && strcmp(zEntryName, zName)==0 ){
+        *pFound = 1;
+        rc = checkoutSchemaTextField(pVal, nVal, &ri, 4, pzSql);
+        sqlite3_free(zType);
+        sqlite3_free(zEntryName);
+        prollyCursorClose(&cur);
+        return rc;
+      }
+    }
+    sqlite3_free(zType);
+    sqlite3_free(zEntryName);
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ){
+      prollyCursorClose(&cur);
+      return rc;
+    }
+  }
+  prollyCursorClose(&cur);
+  return SQLITE_OK;
 }
 
 static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -586,6 +738,7 @@ static int doltliteCheckoutTables(
   ProllyHash workingHash, headCatHash, stagedHash;
   ProllyHash sourceCatHash;
   ProllyHash newWorkingHash;
+  CheckoutSchemaInfo *aSchema = 0;
   struct TableEntry *aWorking = 0, *aSource = 0;
   int nWorking = 0, nSource = 0;
   int i, j;
@@ -620,16 +773,8 @@ static int doltliteCheckoutTables(
   }
 
 
-  rc = doltliteFlushCatalogToHash(db, &workingHash);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
-  if( rc!=SQLITE_OK ) return rc;
-
   rc = doltliteLoadCatalog(db, &sourceCatHash, &aSource, &nSource, 0);
-  if( rc!=SQLITE_OK ){
-    doltliteFreeCatalog(aWorking, nWorking);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) return rc;
 
   if( zSourceRef ){
     for(i=0; i<nNames; i++){
@@ -643,11 +788,86 @@ static int doltliteCheckoutTables(
         }
       }
       if( srcIdx<0 ){
-        doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
         return SQLITE_NOTFOUND;
       }
     }
+  }
+
+  aSchema = sqlite3_malloc64((sqlite3_uint64)nNames * sizeof(CheckoutSchemaInfo));
+  if( !aSchema ){
+    doltliteFreeCatalog(aSource, nSource);
+    return SQLITE_NOMEM;
+  }
+  memset(aSchema, 0, (size_t)nNames * sizeof(CheckoutSchemaInfo));
+
+  for(i=0; i<nNames; i++){
+    const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
+    if( !zName ) continue;
+    rc = checkoutLoadLiveTableSql(db, zName,
+                                  &aSchema[i].hasCurrent,
+                                  &aSchema[i].zCurrentSql);
+    if( rc==SQLITE_OK ){
+      rc = checkoutLoadSourceTableSql(db, aSource, nSource, zName,
+                                      &aSchema[i].hasSource,
+                                      &aSchema[i].zSourceSql);
+    }
+    if( rc!=SQLITE_OK ){
+      checkoutSchemaInfoClear(aSchema, nNames);
+      doltliteFreeCatalog(aSource, nSource);
+      return rc;
+    }
+  }
+
+  for(i=0; i<nNames; i++){
+    const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
+    int bSchemaChanged;
+    char *zDrop;
+    if( !zName ) continue;
+    bSchemaChanged =
+      (aSchema[i].hasCurrent != aSchema[i].hasSource)
+      || (aSchema[i].hasCurrent && aSchema[i].hasSource
+          && strcmp(aSchema[i].zCurrentSql ? aSchema[i].zCurrentSql : "",
+                    aSchema[i].zSourceSql ? aSchema[i].zSourceSql : "")!=0);
+    if( !bSchemaChanged ) continue;
+
+    if( aSchema[i].hasCurrent ){
+      zDrop = sqlite3_mprintf("DROP TABLE \"%w\"", zName);
+      if( !zDrop ){
+        checkoutSchemaInfoClear(aSchema, nNames);
+        doltliteFreeCatalog(aSource, nSource);
+        return SQLITE_NOMEM;
+      }
+      rc = sqlite3_exec(db, zDrop, 0, 0, 0);
+      sqlite3_free(zDrop);
+      if( rc!=SQLITE_OK ){
+        checkoutSchemaInfoClear(aSchema, nNames);
+        doltliteFreeCatalog(aSource, nSource);
+        return rc;
+      }
+    }
+    if( aSchema[i].hasSource ){
+      rc = sqlite3_exec(db, aSchema[i].zSourceSql, 0, 0, 0);
+      if( rc!=SQLITE_OK ){
+        checkoutSchemaInfoClear(aSchema, nNames);
+        doltliteFreeCatalog(aSource, nSource);
+        return rc;
+      }
+    }
+    aSchema[i].rebuilt = 1;
+  }
+
+  rc = doltliteFlushCatalogToHash(db, &workingHash);
+  if( rc!=SQLITE_OK ){
+    checkoutSchemaInfoClear(aSchema, nNames);
+    doltliteFreeCatalog(aSource, nSource);
+    return rc;
+  }
+  rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
+  if( rc!=SQLITE_OK ){
+    checkoutSchemaInfoClear(aSchema, nNames);
+    doltliteFreeCatalog(aSource, nSource);
+    return rc;
   }
 
 
@@ -669,6 +889,10 @@ static int doltliteCheckoutTables(
     }
 
     if( srcIdx<0 && workIdx<0 ){
+      if( aSchema[i].rebuilt && !aSchema[i].hasSource ){
+        continue;
+      }
+      checkoutSchemaInfoClear(aSchema, nNames);
       doltliteFreeCatalog(aWorking, nWorking);
       doltliteFreeCatalog(aSource, nSource);
       return SQLITE_NOTFOUND;
@@ -686,6 +910,7 @@ static int doltliteCheckoutTables(
       struct TableEntry *aNew = sqlite3_realloc(aWorking,
           (nWorking+1)*(int)sizeof(struct TableEntry));
       if( !aNew ){
+        checkoutSchemaInfoClear(aSchema, nNames);
         doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
         return SQLITE_NOMEM;
@@ -694,6 +919,7 @@ static int doltliteCheckoutTables(
       zDup = aSource[srcIdx].zName
                ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
       if( aSource[srcIdx].zName && !zDup ){
+        checkoutSchemaInfoClear(aSchema, nNames);
         doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
         return SQLITE_NOMEM;
@@ -705,13 +931,20 @@ static int doltliteCheckoutTables(
       zDup = aSource[srcIdx].zName
                ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
       if( aSource[srcIdx].zName && !zDup ){
+        checkoutSchemaInfoClear(aSchema, nNames);
         doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
         return SQLITE_NOMEM;
       }
-      sqlite3_free(aWorking[workIdx].zName);
-      aWorking[workIdx] = aSource[srcIdx];
-      aWorking[workIdx].zName = zDup;
+      {
+        Pgno iCurrentTable = aWorking[workIdx].iTable;
+        sqlite3_free(aWorking[workIdx].zName);
+        aWorking[workIdx] = aSource[srcIdx];
+        if( aSchema[i].rebuilt ){
+          aWorking[workIdx].iTable = iCurrentTable;
+        }
+        aWorking[workIdx].zName = zDup;
+      }
     }
   }
 
@@ -735,6 +968,7 @@ static int doltliteCheckoutTables(
     }
   }
 
+  checkoutSchemaInfoClear(aSchema, nNames);
   doltliteFreeCatalog(aWorking, nWorking);
   doltliteFreeCatalog(aSource, nSource);
   return rc;

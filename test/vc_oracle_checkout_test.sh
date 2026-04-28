@@ -354,6 +354,17 @@ SELECT dolt_checkout('main');
 SELECT dolt_checkout('feature', 't');
 "
 
+oracle "checkout_table_from_commit_ish_restores_dropped_table" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_t');
+SELECT dolt_checkout('HEAD~1', 't');
+"
+
 oracle "checkout_multiple_tables_from_branch_ref" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
