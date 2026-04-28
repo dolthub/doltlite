@@ -531,6 +531,20 @@ SELECT dolt_add('a');
 SELECT dolt_checkout('feature', 'a', 'missing');
 " "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='a' AND staged=1 AND status='modified'), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='b' AND staged=0 AND status='modified'));"
 
+oracle_error_poststate "checkout_raw_hash_source_missing_table_no_partial_mutation" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE a SET v='main_a' WHERE id=1;
+UPDATE b SET v='main_b' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout(dolt_hashof('HEAD~1'), 'a', 'missing');
+" "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1));"
+
 echo "--- savepoint parity ---"
 
 oracle_savepoint_poststate "savepoint_checkout_existing_branch_reopens_on_original_branch" "
@@ -597,6 +611,22 @@ UPDATE a SET v='dirty_a' WHERE id=1;
 UPDATE b SET v='dirty_b' WHERE id=1;
 SAVEPOINT sp1;
 SELECT dolt_checkout('feature', 'a', 'b');
+ROLLBACK TO sp1;
+" "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1));"
+
+oracle_savepoint_poststate "savepoint_checkout_raw_hash_source_invalidates" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE a SET v='main_a' WHERE id=1;
+UPDATE b SET v='main_b' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SAVEPOINT sp1;
+SELECT dolt_checkout(dolt_hashof('HEAD~1'), 'a', 'b');
 ROLLBACK TO sp1;
 " "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1));"
 
