@@ -190,6 +190,25 @@ SELECT dolt_commit('-m', 'seed');
 ALTER TABLE t RENAME TO t2;
 "
 
+oracle "renamed_and_modified_unstaged" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE a RENAME TO b;
+INSERT INTO b VALUES (2, 20);
+"
+
+oracle "renamed_and_modified_staged" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE a RENAME TO b;
+INSERT INTO b VALUES (2, 20);
+SELECT dolt_add('b');
+"
+
 echo "--- multi-table ---"
 
 oracle "multi_table_mixed_states" "
@@ -203,6 +222,16 @@ INSERT INTO a VALUES (2, 20);
 DROP TABLE b;
 CREATE TABLE c(id INTEGER PRIMARY KEY);
 INSERT INTO c VALUES (1);
+"
+
+oracle "drop_recreate_same_schema_not_renamed" "
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO b VALUES (1, 10);
+SELECT dolt_add('b');
+SELECT dolt_commit('-m', 'seed');
+DROP TABLE b;
+CREATE TABLE c(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO c VALUES (2, 20);
 "
 
 echo ""

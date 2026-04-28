@@ -3,6 +3,7 @@
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
+#include "prolly_cursor.h"
 #include "chunk_store.h"
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
@@ -74,16 +75,119 @@ static int addRow(DoltliteStatusCursor *pCur, const char *zName,
   return SQLITE_OK;
 }
 
-/* Detect a rename by iTable identity: a table that keeps the same
-** rootpage number and data hash but gains a new name is the same
-** table renamed. Without this detection, a rename would show up as
-** "deleted <old> + new table <new>" which is noisy and loses the
-** continuity git status gets from rename heuristics. */
-static int isRenamePair(const struct TableEntry *pA, const struct TableEntry *pB){
+static int statusLoadLiveTableSql(
+  sqlite3 *db,
+  const char *zName,
+  int *pFound,
+  char **pzSql
+){
+  sqlite3_stmt *pStmt = 0;
+  char *zQuery;
+  int rc;
+
+  *pFound = 0;
+  *pzSql = 0;
+  zQuery = sqlite3_mprintf(
+    "SELECT sql FROM sqlite_master WHERE type='table' AND tbl_name='%q'",
+    zName
+  );
+  if( !zQuery ) return SQLITE_NOMEM;
+  rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, 0);
+  sqlite3_free(zQuery);
+  if( rc!=SQLITE_OK ) return rc;
+  if( sqlite3_step(pStmt)==SQLITE_ROW ){
+    const unsigned char *zSql = sqlite3_column_text(pStmt, 0);
+    *pFound = 1;
+    if( zSql ){
+      *pzSql = sqlite3_mprintf("%s", zSql);
+      if( !*pzSql ){
+        sqlite3_finalize(pStmt);
+        return SQLITE_NOMEM;
+      }
+    }
+  }
+  sqlite3_finalize(pStmt);
+  return SQLITE_OK;
+}
+
+static int statusCreateNameQuoted(const char *zSql){
+  const char *z = zSql;
+  if( !z ) return 0;
+  if( sqlite3_strnicmp(z, "CREATE TABLE", 12)!=0 ) return 0;
+  z += 12;
+  while( sqlite3Isspace(*z) ) z++;
+  if( sqlite3_strnicmp(z, "IF NOT EXISTS", 13)==0 ){
+    z += 13;
+    while( sqlite3Isspace(*z) ) z++;
+  }
+  return *z=='"' || *z=='`' || *z=='[';
+}
+
+static int statusSchemaHashMatchesRename(
+  const ProllyHash *pOldSchemaHash,
+  const char *zCurrentSql,
+  const char *zOldName
+){
+  static const char *azFmt[] = {
+    "CREATE TABLE %w%s",
+    "CREATE TABLE \"%w\"%s",
+    "CREATE TABLE `%w`%s",
+    "CREATE TABLE [%w]%s"
+  };
+  const char *zParen;
+  int i;
+
+  if( !pOldSchemaHash || !zCurrentSql || !zOldName ) return 0;
+  zParen = strchr(zCurrentSql, '(');
+  if( !zParen ) return 0;
+
+  for(i=0; i<(int)(sizeof(azFmt)/sizeof(azFmt[0])); i++){
+    char *zCandidate = sqlite3_mprintf(azFmt[i], zOldName, zParen);
+    if( zCandidate ){
+      ProllyHash h;
+      prollyHashCompute(zCandidate, (int)strlen(zCandidate), &h);
+      sqlite3_free(zCandidate);
+      if( prollyHashCompare(&h, pOldSchemaHash)==0 ){
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+/* Detect a rename by stable table identity plus name-insensitive CREATE
+** TABLE SQL. This preserves rename+edit classification while rejecting
+** drop+create churn that happens to reuse the same table number. */
+static int isRenamePair(
+  sqlite3 *db,
+  struct TableEntry *aFrom, int nFrom,
+  struct TableEntry *aTo, int nTo,
+  const struct TableEntry *pA,
+  const struct TableEntry *pB
+){
+  int rc;
+  int foundLive = 0;
+  char *zLiveSql = 0;
+  int bMatch = 0;
+
   if( pA->iTable != pB->iTable ) return 0;
   if( !pA->zName || !pB->zName ) return 0;
   if( strcmp(pA->zName, pB->zName)==0 ) return 0;
-  return prollyHashCompare(&pA->root, &pB->root)==0;
+  if( prollyHashCompare(&pA->root, &pB->root)==0 ){
+    bMatch = 1;
+    goto rename_done;
+  }
+
+  rc = statusLoadLiveTableSql(db, pB->zName, &foundLive, &zLiveSql);
+  if( rc!=SQLITE_OK || !foundLive ) goto rename_done;
+  if( statusCreateNameQuoted(zLiveSql)
+   && statusSchemaHashMatchesRename(&pA->schemaHash, zLiveSql, pA->zName) ){
+    bMatch = 1;
+  }
+
+rename_done:
+  sqlite3_free(zLiveSql);
+  return bMatch;
 }
 
 static int compareCatalogs(
@@ -104,7 +208,7 @@ static int compareCatalogs(
       if( aFrom[i].iTable<=1 || fromHandled[i] ) continue;
       for(j=0; j<nTo; j++){
         if( aTo[j].iTable<=1 || toHandled[j] ) continue;
-        if( isRenamePair(&aFrom[i], &aTo[j]) ){
+        if( isRenamePair(db, aFrom, nFrom, aTo, nTo, &aFrom[i], &aTo[j]) ){
           char *zCompound = sqlite3_mprintf("%s -> %s", aFrom[i].zName, aTo[j].zName);
           if( !zCompound ) return SQLITE_NOMEM;
           rc = addRow(pCur, zCompound, staged, "renamed");
