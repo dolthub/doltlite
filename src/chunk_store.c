@@ -173,12 +173,19 @@ struct ChunkStoreReplayState {
   ChunkIndexEntry *aIndex;
   int nIndex;
   int nIndexAlloc;
+  /* Carried alongside aIndex so save/restore knows whether the
+  ** snapshotted pointer was mmapped or malloc'd. NULL/0 means
+  ** malloc'd. See csReleaseIndexBuf. */
+  void *aIndexMmapBase;
+  i64 aIndexMmapSize;
   SavedRefsState refs;
 };
 
 struct ChunkStoreReloadState {
   sqlite3_file *pFile;
   ChunkIndexEntry *aIndex;
+  void *aIndexMmapBase;
+  i64 aIndexMmapSize;
   u8 *pWalData;
   SavedRefsState refs;
 };
@@ -188,9 +195,151 @@ struct ChunkStoreReloadState {
 ** walPos 0 encodes to -1, 1 to -2, etc., which keeps 0 available as
 ** "no offset". A negative offset means the chunk data lives in the
 ** in-memory pWalData buffer, not on disk at a direct position. */
+/* On hosts where the in-memory ChunkIndexEntry layout matches the
+** on-disk encoding, the persisted index is mapped and used directly.
+** Catch any future struct-layout change at compile time before it
+** silently corrupts the mapping. */
+#if CHUNK_STORE_LE_PACKING
+typedef char chunk_index_entry_size_check[
+  (sizeof(ChunkIndexEntry) == CHUNK_INDEX_ENTRY_SIZE) ? 1 : -1
+];
+#endif
+
 static i64 csEncodeWalOffset(i64 walPos){ return -(walPos) - 1; }
 static i64 csDecodeWalOffset(i64 encoded){ return -(encoded + 1); }
 static int csIsWalOffset(i64 offset){ return offset < 0; }
+
+/* ── chunk-index mmap helpers ────────────────────────────────────
+**
+** csMapIndex maps `nBytes` of `zPath` starting at `offset` into the
+** process address space, read-only and private. On success it sets
+** *ppData to the first byte of the requested range (which may sit
+** at a non-zero offset within the page-aligned mapping base) and
+** writes the mapping base + size into *ppMapBase / *pnMapSize for a
+** later csUnmapIndex.
+**
+** Returns SQLITE_OK on success, or a non-OK SQLite error if mmap is
+** unavailable / the platform is big-endian (where in-memory and
+** on-disk ChunkIndexEntry encodings differ) / mmap fails. Callers
+** fall back to the malloc + read path on any failure.
+*/
+#if CHUNK_STORE_LE_PACKING
+#  if defined(_WIN32)
+#    include <windows.h>
+static int csMapIndex(const char *zPath, i64 offset, i64 nBytes,
+                      void **ppMapBase, i64 *pnMapSize,
+                      const u8 **ppData){
+  HANDLE hFile = CreateFileA(zPath, GENERIC_READ, FILE_SHARE_READ,
+                              NULL, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, NULL);
+  HANDLE hMap;
+  void *pMap;
+  SYSTEM_INFO si;
+  i64 alignOffset, alignPad, mapSize;
+
+  if( hFile==INVALID_HANDLE_VALUE ) return SQLITE_CANTOPEN;
+
+  GetSystemInfo(&si);
+  alignOffset = (offset / si.dwAllocationGranularity)
+              * si.dwAllocationGranularity;
+  alignPad = offset - alignOffset;
+  mapSize = nBytes + alignPad;
+
+  hMap = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+  CloseHandle(hFile);
+  if( hMap==NULL ) return SQLITE_IOERR;
+
+  pMap = MapViewOfFile(hMap, FILE_MAP_READ,
+                        (DWORD)(alignOffset >> 32),
+                        (DWORD)(alignOffset & 0xFFFFFFFF),
+                        (SIZE_T)mapSize);
+  CloseHandle(hMap);
+  if( pMap==NULL ) return SQLITE_IOERR;
+
+  *ppMapBase = pMap;
+  *pnMapSize = mapSize;
+  *ppData = (const u8 *)pMap + alignPad;
+  return SQLITE_OK;
+}
+
+static void csUnmapIndex(void *pMapBase, i64 nMapSize){
+  (void)nMapSize;
+  if( pMapBase ) UnmapViewOfFile(pMapBase);
+}
+#  else
+#    include <sys/mman.h>
+#    include <fcntl.h>
+#    include <unistd.h>
+static int csMapIndex(const char *zPath, i64 offset, i64 nBytes,
+                      void **ppMapBase, i64 *pnMapSize,
+                      const u8 **ppData){
+  int fd;
+  long pageSize;
+  i64 alignOffset, alignPad, mapSize;
+  void *pMap;
+
+  fd = open(zPath, O_RDONLY);
+  if( fd < 0 ) return SQLITE_CANTOPEN;
+
+  pageSize = sysconf(_SC_PAGESIZE);
+  if( pageSize <= 0 ) pageSize = 4096;
+
+  alignOffset = (offset / pageSize) * pageSize;
+  alignPad = offset - alignOffset;
+  mapSize = nBytes + alignPad;
+
+  pMap = mmap(NULL, (size_t)mapSize, PROT_READ, MAP_PRIVATE, fd,
+              (off_t)alignOffset);
+  close(fd);   /* mapping survives close */
+  if( pMap == MAP_FAILED ) return SQLITE_IOERR;
+
+  *ppMapBase = pMap;
+  *pnMapSize = mapSize;
+  *ppData = (const u8 *)pMap + alignPad;
+  return SQLITE_OK;
+}
+
+static void csUnmapIndex(void *pMapBase, i64 nMapSize){
+  if( pMapBase ) munmap(pMapBase, (size_t)nMapSize);
+}
+#  endif
+#else
+/* Big-endian / non-LE-packing host: no mmap path. csMapIndex always
+** signals "fall back to malloc+read+deserialize". */
+static int csMapIndex(const char *zPath, i64 offset, i64 nBytes,
+                      void **ppMapBase, i64 *pnMapSize,
+                      const u8 **ppData){
+  (void)zPath; (void)offset; (void)nBytes;
+  (void)ppMapBase; (void)pnMapSize; (void)ppData;
+  return SQLITE_NOTFOUND;
+}
+static void csUnmapIndex(void *pMapBase, i64 nMapSize){
+  (void)pMapBase; (void)nMapSize;
+}
+#endif
+
+/* Releases an aIndex pointer + its mmap state in the right way for
+** how it was acquired: if mmapBase is non-NULL the index lives in a
+** mmapped region (munmap it), else the index is a malloc'd array
+** from sqlite3_malloc (sqlite3_free it). aIndex itself is *not*
+** sqlite3_freed in the mmap case — it points inside the mapping. */
+static void csReleaseIndexBuf(ChunkIndexEntry *aIndex,
+                              void *mmapBase, i64 mmapSize){
+  if( mmapBase ){
+    csUnmapIndex(mmapBase, mmapSize);
+  }else{
+    sqlite3_free(aIndex);
+  }
+}
+
+static void csReleaseLiveIndex(ChunkStore *cs){
+  csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
+  cs->aIndex = 0;
+  cs->aIndexMmapBase = 0;
+  cs->aIndexMmapSize = 0;
+  cs->nIndex = 0;
+  cs->nIndexAlloc = 0;
+}
 
 static void csFreeBranches(ChunkStore *cs){
   int k;
@@ -290,6 +439,8 @@ static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
   pSaved->aIndex = cs->aIndex;
   pSaved->nIndex = cs->nIndex;
   pSaved->nIndexAlloc = cs->nIndexAlloc;
+  pSaved->aIndexMmapBase = cs->aIndexMmapBase;
+  pSaved->aIndexMmapSize = cs->aIndexMmapSize;
   csCaptureSavedRefsState(cs, &pSaved->refs);
 }
 
@@ -301,6 +452,8 @@ static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pS
   cs->aIndex = pSaved->aIndex;
   cs->nIndex = pSaved->nIndex;
   cs->nIndexAlloc = pSaved->nIndexAlloc;
+  cs->aIndexMmapBase = pSaved->aIndexMmapBase;
+  cs->aIndexMmapSize = pSaved->aIndexMmapSize;
   csRestoreSavedRefsState(cs, &pSaved->refs);
 }
 
@@ -308,6 +461,8 @@ static void csCaptureReloadState(ChunkStore *cs, ChunkStoreReloadState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
   pSaved->pFile = cs->pFile;
   pSaved->aIndex = cs->aIndex;
+  pSaved->aIndexMmapBase = cs->aIndexMmapBase;
+  pSaved->aIndexMmapSize = cs->aIndexMmapSize;
   pSaved->pWalData = cs->pWalData;
   csCaptureSavedRefsState(cs, &pSaved->refs);
 }
@@ -316,7 +471,10 @@ static void csReleaseReplayState(
   ChunkStore *cs,
   ChunkStoreReplayState *pSaved
 ){
-  if( cs->aIndex!=pSaved->aIndex ) sqlite3_free(pSaved->aIndex);
+  if( cs->aIndex!=pSaved->aIndex ){
+    csReleaseIndexBuf(pSaved->aIndex, pSaved->aIndexMmapBase,
+                       pSaved->aIndexMmapSize);
+  }
   sqlite3_free(pSaved->pWalData);
   csFreeSavedRefsState(&pSaved->refs);
   memset(pSaved, 0, sizeof(*pSaved));
@@ -327,7 +485,9 @@ static void csRollbackReplayState(
   ChunkStoreReplayState *pSaved,
   int nPendingBefore
 ){
-  if( cs->aIndex!=pSaved->aIndex ) sqlite3_free(cs->aIndex);
+  if( cs->aIndex!=pSaved->aIndex ){
+    csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
+  }
   sqlite3_free(cs->pWalData);
   csRestoreReplayState(cs, pSaved);
   cs->nPending = nPendingBefore;
@@ -347,6 +507,8 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->aIndex = pSrc->aIndex;
   pDst->nIndex = pSrc->nIndex;
   pDst->nIndexAlloc = pSrc->nIndexAlloc;
+  pDst->aIndexMmapBase = pSrc->aIndexMmapBase;
+  pDst->aIndexMmapSize = pSrc->aIndexMmapSize;
   pDst->pWalData = pSrc->pWalData;
   pDst->nWalData = pSrc->nWalData;
   pDst->aBranches = pSrc->aBranches;
@@ -363,6 +525,8 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->aIndex = 0;
   pSrc->nIndex = 0;
   pSrc->nIndexAlloc = 0;
+  pSrc->aIndexMmapBase = 0;
+  pSrc->aIndexMmapSize = 0;
   pSrc->pWalData = 0;
   pSrc->nWalData = 0;
   pSrc->aBranches = 0;
@@ -378,7 +542,8 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
 
 static void csFreeReloadState(ChunkStoreReloadState *pSaved){
   csCloseFile(pSaved->pFile);
-  sqlite3_free(pSaved->aIndex);
+  csReleaseIndexBuf(pSaved->aIndex, pSaved->aIndexMmapBase,
+                     pSaved->aIndexMmapSize);
   sqlite3_free(pSaved->pWalData);
   csFreeSavedRefsState(&pSaved->refs);
   memset(pSaved, 0, sizeof(*pSaved));
@@ -649,6 +814,9 @@ static int csReadIndex(ChunkStore *cs){
   int nEntries;
   u8 *aBuf;
   int i;
+  void *pMapBase = 0;
+  i64 nMapSize = 0;
+  const u8 *pMapData = 0;
 
   if( cs->nIndexSize == 0 || cs->nChunks == 0 ){
     cs->nIndex = 0;
@@ -660,12 +828,33 @@ static int csReadIndex(ChunkStore *cs){
     return SQLITE_CORRUPT;
   }
 
+  /* Fast path: on hosts where in-memory ChunkIndexEntry encoding
+  ** matches the on-disk byte layout (little-endian + 32-byte
+  ** packing), mmap the index region and use it as the live index.
+  ** This skips the open-time malloc + read + per-entry deserialize
+  ** loop entirely; pages are paged in lazily by the OS as bsearch
+  ** touches them. Falls through to the malloc path on big-endian or
+  ** when mmap fails for any reason (read-only fs, no fd available,
+  ** etc.). */
+  if( cs->zFilename
+   && csMapIndex(cs->zFilename, cs->iIndexOffset, cs->nIndexSize,
+                  &pMapBase, &nMapSize, &pMapData) == SQLITE_OK ){
+    cs->aIndex = (ChunkIndexEntry *)pMapData;
+    cs->nIndex = nEntries;
+    cs->nIndexAlloc = nEntries;
+    cs->aIndexMmapBase = pMapBase;
+    cs->aIndexMmapSize = nMapSize;
+    return SQLITE_OK;
+  }
+
   cs->aIndex = (ChunkIndexEntry *)sqlite3_malloc(
     nEntries * (int)sizeof(ChunkIndexEntry)
   );
   if( cs->aIndex == 0 ) return SQLITE_NOMEM;
   cs->nIndex = nEntries;
   cs->nIndexAlloc = nEntries;
+  cs->aIndexMmapBase = 0;
+  cs->aIndexMmapSize = 0;
 
   aBuf = (u8 *)sqlite3_malloc(cs->nIndexSize);
   if( aBuf == 0 ){
@@ -887,9 +1076,14 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     int nMerged = 0;
     rc = csMergeIndex(cs, &aMerged, &nMerged);
     if( rc != SQLITE_OK ) goto replay_error;
+    /* The old aIndex/mmap state is owned by `saved` for rollback
+    ** purposes — don't release here. Just clear the live mmap
+    ** tracking so cs reflects the new malloc'd merged array. */
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
     cs->nIndexAlloc = nMerged;
+    cs->aIndexMmapBase = 0;
+    cs->aIndexMmapSize = 0;
     cs->nPending = 0;
     csPendHTClear(cs);
   }
@@ -1116,7 +1310,10 @@ int chunkStoreClose(ChunkStore *cs){
   }
   sqlite3_free(cs->pWalData);
   sqlite3_free(cs->zFilename);
-  sqlite3_free(cs->aIndex);
+  csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
+  cs->aIndex = 0;
+  cs->aIndexMmapBase = 0;
+  cs->aIndexMmapSize = 0;
   sqlite3_free(cs->aPending);
   csPendHTClear(cs);
   sqlite3_free(cs->pWriteBuf);
@@ -1858,10 +2055,12 @@ static int csCommitToMemory(ChunkStore *cs){
     int nMem = 0;
     int rc = csMergeIndex(cs, &aMem, &nMem);
     if( rc!=SQLITE_OK ) return rc;
-    sqlite3_free(cs->aIndex);
+    csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
     cs->aIndex = aMem;
     cs->nIndex = nMem;
     cs->nIndexAlloc = nMem;
+    cs->aIndexMmapBase = 0;
+    cs->aIndexMmapSize = 0;
     cs->nPending = 0;
     csPendHTClear(cs);
     cs->nCommittedWriteBuf = cs->nWriteBuf;
@@ -2083,10 +2282,12 @@ commit_done:
 
   sqlite3_free(aCommittedPending);
   if( cs->nPending > 0 ){
-    sqlite3_free(cs->aIndex);
+    csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
     cs->nIndexAlloc = nMerged;
+    cs->aIndexMmapBase = 0;
+    cs->aIndexMmapSize = 0;
     sqlite3_free(cs->pWalData);
     cs->pWalData = pNewWalData;
     cs->nWalData = newWalSize;
