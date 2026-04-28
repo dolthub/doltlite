@@ -551,7 +551,7 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
 #
 # Prolly tree engine objects (when DOLTLITE_PROLLY=1)
 #
-PROLLY_OBJS = prolly_hash.o prolly_hashset.o prolly_arena.o prolly_node.o prolly_cache.o \
+PROLLY_OBJS = prolly_hash.o prolly_xxhash.o prolly_hashset.o prolly_arena.o prolly_node.o prolly_cache.o \
               chunk_store.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_status.o \
@@ -723,6 +723,8 @@ SRC = \
 SRC += \
   $(TOP)/src/prolly_hash.c \
   $(TOP)/src/prolly_hash.h \
+  $(TOP)/src/prolly_xxhash.c \
+  $(TOP)/src/prolly_xxhash.h \
   $(TOP)/src/prolly_arena.c \
   $(TOP)/src/prolly_arena.h \
   $(TOP)/src/prolly_node.c \
@@ -976,6 +978,7 @@ HDR = \
 # Prolly tree engine headers
 HDR += \
    $(TOP)/src/prolly_hash.h \
+   $(TOP)/src/prolly_xxhash.h \
    $(TOP)/src/prolly_arena.h \
    $(TOP)/src/prolly_node.h \
    $(TOP)/src/prolly_cache.h \
@@ -1283,6 +1286,9 @@ btree.o:	$(TOP)/src/btree.c $(DEPS_OBJ_COMMON) $(TOP)/src/pager.h
 # Prolly tree engine compilation rules
 prolly_hash.o:	$(TOP)/src/prolly_hash.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_hash.c
+
+prolly_xxhash.o:	$(TOP)/src/prolly_xxhash.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/prolly_xxhash.c
 
 prolly_hashset.o:	$(TOP)/src/prolly_hashset.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_hashset.c

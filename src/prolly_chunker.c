@@ -3,11 +3,10 @@
 
 #include "prolly_chunker.h"
 #include "prolly_cursor.h"
+#include "prolly_xxhash.h"
 
 #include <string.h>
 #include <assert.h>
-
-#define CHUNKER_WINDOW_SIZE 64
 
 static int initLevel(ProllyChunker *ch, int level);
 static int flushLevel(ProllyChunker *ch, int level);
@@ -30,12 +29,6 @@ static int initLevel(ProllyChunker *ch, int level){
 
 
   prollyNodeBuilderInit(&pLevel->builder, (u8)level, ch->flags);
-
-  rc = prollyRollingHashInit(&pLevel->rh, CHUNKER_WINDOW_SIZE);
-  if( rc!=SQLITE_OK ){
-    prollyNodeBuilderFree(&pLevel->builder);
-    return rc;
-  }
 
   pLevel->nItems = 0;
   pLevel->nBytes = 0;
@@ -91,7 +84,6 @@ static int flushLevel(ProllyChunker *ch, int level){
 
 
   prollyNodeBuilderReset(&pLevel->builder);
-  prollyRollingHashReset(&pLevel->rh);
   pLevel->nItems = 0;
   pLevel->nBytes = 0;
 
@@ -145,7 +137,6 @@ static int finishPropagateLevel(ProllyChunker *ch, int level){
   if( rc!=SQLITE_OK ) return rc;
 
   prollyNodeBuilderReset(&pLevel->builder);
-  prollyRollingHashReset(&pLevel->rh);
   pLevel->nItems = 0;
   pLevel->nBytes = 0;
   return SQLITE_OK;
@@ -156,7 +147,7 @@ static int addToLevel(ProllyChunker *ch, int level,
                       const u8 *pVal, int nVal){
   ProllyChunkerLevel *pLevel;
   int rc;
-  int i;
+  int thisSize;
 
   assert( level >= 0 && level < PROLLY_CURSOR_MAX_DEPTH );
 
@@ -177,22 +168,24 @@ static int addToLevel(ProllyChunker *ch, int level,
 
   pLevel->nItems++;
 
+  thisSize = nKey + nVal;
+  pLevel->nBytes += thisSize;
 
-  for(i = 0; i < nKey; i++){
-    prollyRollingHashUpdate(&pLevel->rh, pKey[i]);
-  }
-
-
-  pLevel->nBytes += nKey + nVal;
-
-  /* Content-defined chunking: the boundary depends on the rolling
-  ** hash of the key bytes, not the byte position. An insertion only
-  ** invalidates chunks whose content changed, not every chunk after
-  ** it — this is what gives prolly trees their structural sharing. */
+  /* Content-defined chunking via Weibull-distribution boundary check.
+  ** Hash is keyed on the row's key bytes (not value), salted by the
+  ** tree level so boundaries don't align across levels. Only chunks
+  ** whose contents changed get re-emitted on edit — this is what
+  ** gives prolly trees their structural sharing. */
   if( pLevel->nBytes >= PROLLY_CHUNK_MIN ){
-    int atBoundary = prollyRollingHashAtBoundary(&pLevel->rh,
-                                                  PROLLY_CHUNK_PATTERN);
-    if( atBoundary || pLevel->nBytes >= PROLLY_CHUNK_MAX ){
+    int atBoundary;
+    if( pLevel->nBytes >= PROLLY_CHUNK_MAX ){
+      atBoundary = 1;
+    } else {
+      u32 h = prollyXXH32(pKey, nKey, (u32)level);
+      atBoundary = prollyWeibullCheck((u32)pLevel->nBytes,
+                                       (u32)thisSize, h);
+    }
+    if( atBoundary ){
       rc = flushLevel(ch, level);
       if( rc!=SQLITE_OK ) return rc;
     }
@@ -258,7 +251,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
 
 
         prollyNodeBuilderReset(&pLevel->builder);
-        prollyRollingHashReset(&pLevel->rh);
         pLevel->nItems = 0;
         pLevel->nBytes = 0;
         return SQLITE_OK;
@@ -293,7 +285,6 @@ void prollyChunkerFree(ProllyChunker *ch){
   int i;
   for(i = 0; i < ch->nLevels; i++){
     prollyNodeBuilderFree(&ch->aLevel[i].builder);
-    prollyRollingHashFree(&ch->aLevel[i].rh);
   }
   ch->nLevels = 0;
 }
