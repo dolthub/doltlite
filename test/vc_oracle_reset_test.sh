@@ -325,6 +325,97 @@ INSERT INTO t VALUES (3, 30);
 SELECT dolt_reset('--hard');
 "
 
+echo "--- schema-edge hard reset ---"
+
+oracle_same_session "reset_hard_head_parent_restores_dropped_table" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE a;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop-a');
+SELECT dolt_reset('--hard', 'HEAD~1');
+" "SELECT 'Q|cols|' || group_concat(name || ':' || replace(lower(type), 'integer', 'int'), '|')
+       FROM pragma_table_info('a');
+SELECT 'Q|rows|' || count(*) FROM a;
+SELECT 'Q|val|' || s FROM a;" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+DROP TABLE a;
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'drop-a');
+CALL dolt_reset('--hard', 'HEAD~1');
+" "SELECT concat('Q|cols|', group_concat(concat(column_name, ':', replace(lower(column_type), 'integer', 'int')) ORDER BY ordinal_position SEPARATOR '|'))
+       FROM information_schema.columns
+      WHERE table_schema = database() AND table_name = 'a';
+SELECT concat('Q|rows|', count(*)) FROM a;
+SELECT concat('Q|val|', s) FROM a;"
+
+oracle_same_session "reset_hard_head_parent_restores_recreated_table_schema" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE a;
+CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO a VALUES (7, 70);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'recreate-a');
+SELECT dolt_reset('--hard', 'HEAD~1');
+" "SELECT 'Q|cols|' || group_concat(name || ':' || replace(lower(type), 'integer', 'int'), '|')
+       FROM pragma_table_info('a');
+SELECT 'Q|rows|' || count(*) FROM a;
+SELECT 'Q|val|' || s FROM a;" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+DROP TABLE a;
+CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO a VALUES (7, 70);
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'recreate-a');
+CALL dolt_reset('--hard', 'HEAD~1');
+" "SELECT concat('Q|cols|', group_concat(concat(column_name, ':', replace(lower(column_type), 'integer', 'int')) ORDER BY ordinal_position SEPARATOR '|'))
+       FROM information_schema.columns
+      WHERE table_schema = database() AND table_name = 'a';
+SELECT concat('Q|rows|', count(*)) FROM a;
+SELECT concat('Q|val|', s) FROM a;"
+
+oracle_same_session "reset_hard_tag_restores_pre_alter_schema" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_tag('v1');
+ALTER TABLE a ADD COLUMN extra INT;
+UPDATE a SET extra = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_reset('--hard', 'v1');
+" "SELECT 'Q|cols|' || group_concat(name || ':' || replace(lower(type), 'integer', 'int'), '|')
+       FROM pragma_table_info('a');
+SELECT 'Q|rows|' || count(*) FROM a;
+SELECT 'Q|val|' || s FROM a;" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+CALL dolt_tag('v1');
+ALTER TABLE a ADD COLUMN extra INT;
+UPDATE a SET extra = 99 WHERE id = 1;
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c2');
+CALL dolt_reset('--hard', 'v1');
+" "SELECT concat('Q|cols|', group_concat(concat(column_name, ':', replace(lower(column_type), 'integer', 'int')) ORDER BY ordinal_position SEPARATOR '|'))
+       FROM information_schema.columns
+      WHERE table_schema = database() AND table_name = 'a';
+SELECT concat('Q|rows|', count(*)) FROM a;
+SELECT concat('Q|val|', s) FROM a;"
+
 echo "--- table-name positional unstage ---"
 
 # Stage two new tables, then reset only one of them. The other
