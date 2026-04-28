@@ -172,6 +172,21 @@ SELECT dolt_commit('-Am','main_update');
 SQL
 expect_merge_ok "table_both_modify_identical" "$DB"
 
+# T5b: Each branch adds a different new table → auto-resolve
+DB="$TMPROOT/t5b.db"; rm -f "$DB"
+cat <<'SQL' | dl_setup "$DB" "t5b"
+CREATE TABLE anchor(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-Am','ancestor');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE TABLE feat_tbl(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-Am','feat_add_table');
+SELECT dolt_checkout('main');
+CREATE TABLE main_tbl(id INTEGER PRIMARY KEY, v TEXT);
+SELECT dolt_commit('-Am','main_add_table');
+SQL
+expect_merge_ok "table_both_add_different_tables" "$DB"
+
 echo ""
 
 # ════════════════════════════════════════════════════

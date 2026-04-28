@@ -209,7 +209,18 @@ else
   ERRORS="$ERRORS\nFAIL: constraint_violation_merge_tx_persists\n  expected: TX|0|1|1:9:main1,2:9:feat2\n  got:      $TX_OUT"
 fi
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12"
+# Disjoint new-table additions on both branches should auto-merge and persist
+DB13=/tmp/test_merge13_$$.db; rm -f "$DB13"
+echo "CREATE TABLE anchor(id INTEGER PRIMARY KEY); INSERT INTO anchor VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB13" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE TABLE feat_tbl(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO feat_tbl VALUES(1,'f'); SELECT dolt_commit('-A','-m','feat_add_table');" | $DOLTLITE "$DB13" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); CREATE TABLE main_tbl(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO main_tbl VALUES(1,'m'); SELECT dolt_commit('-A','-m','main_add_table');" | $DOLTLITE "$DB13" > /dev/null 2>&1
+run_test_match "disjoint_new_tables_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB13"
+run_test "disjoint_new_tables_main_present" "SELECT v FROM main_tbl;" "m" "$DB13"
+run_test "disjoint_new_tables_feat_present" "SELECT v FROM feat_tbl;" "f" "$DB13"
+run_test "disjoint_new_tables_reopen_main" "SELECT v FROM main_tbl;" "m" "$DB13"
+run_test "disjoint_new_tables_reopen_feat" "SELECT v FROM feat_tbl;" "f" "$DB13"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
