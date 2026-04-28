@@ -172,7 +172,18 @@ run_test "delete_non_main_works" "SELECT dolt_branch('-d','renamed');" "0" "$DB1
 # Copy from main is still allowed — it doesn't remove main
 run_test "copy_from_main_works" "SELECT dolt_branch('-c','main','snapshot');" "0" "$DB11"
 
-rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
+# --- branch creation from refs persists across reopen ---
+DB12=/tmp/test_branch12_$$.db; rm -f "$DB12"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); INSERT INTO t VALUES(2,'c2'); SELECT dolt_commit('-A','-m','c2'); SELECT dolt_tag('v1','HEAD~1'); SELECT dolt_branch('from_tag','v1');" | $DOLTLITE "$DB12" > /dev/null 2>&1
+run_test "branch_from_tag_persists_across_reopen" "SELECT count(*) FROM t;" "1" "$DB12/from_tag"
+
+DB13=/tmp/test_branch13_$$.db; rm -f "$DB13"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_branch('feature'); SELECT dolt_checkout('feature'); INSERT INTO t VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(3,'main'); SELECT dolt_commit('-A','-m','main'); SELECT dolt_merge('feature'); SELECT dolt_branch('from_p1','HEAD^1'); SELECT dolt_branch('from_p2','HEAD^2'); SELECT dolt_branch('from_hash', dolt_hashof('HEAD^2'));" | $DOLTLITE "$DB13" > /dev/null 2>&1
+run_test "branch_from_first_parent_ref_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_p1"
+run_test "branch_from_second_parent_ref_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_p2"
+run_test "branch_from_second_parent_hash_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_hash"
+
+rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
