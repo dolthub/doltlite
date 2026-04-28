@@ -42,6 +42,14 @@ DB2B=/tmp/test_branch2b_$$.db; rm -f "$DB2B"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_checkout('-b','feature'); INSERT INTO t VALUES(2,'feature'); SELECT dolt_commit('-A','-m','feature'); SELECT dolt_checkout('main'); SELECT dolt_checkout('feature','t');" | $DOLTLITE "$DB2B" > /dev/null 2>&1
 run_test "checkout_table_from_branch_ref_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB2B"
 
+DB2C=/tmp/test_branch2c_$$.db; rm -f "$DB2C"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO a VALUES(1,'base_a'); INSERT INTO b VALUES(1,'base_b'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_tag('v1'); UPDATE a SET v='main_a' WHERE id=1; UPDATE b SET v='main_b' WHERE id=1; SELECT dolt_commit('-A','-m','c2'); SELECT dolt_checkout('v1','a','b'); CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t SELECT id, v FROM a UNION ALL SELECT id+10, v FROM b;" | $DOLTLITE "$DB2C" > /dev/null 2>&1
+run_test "checkout_table_from_tag_ref_persists_across_reopen" "SELECT group_concat(v, ',') FROM (SELECT v FROM t ORDER BY id);" "base_a,base_b" "$DB2C"
+
+DB2D=/tmp/test_branch2d_$$.db; rm -f "$DB2D"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO a VALUES(1,'base_a'); INSERT INTO b VALUES(1,'base_b'); SELECT dolt_commit('-A','-m','init'); UPDATE a SET v='main_a' WHERE id=1; UPDATE b SET v='main_b' WHERE id=1; SELECT dolt_commit('-A','-m','c2'); SELECT dolt_checkout(dolt_hashof('HEAD~1'),'a','b'); CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t SELECT id, v FROM a UNION ALL SELECT id+10, v FROM b;" | $DOLTLITE "$DB2D" > /dev/null 2>&1
+run_test "checkout_table_from_raw_hash_persists_across_reopen" "SELECT group_concat(v, ',') FROM (SELECT v FROM t ORDER BY id);" "base_a,base_b" "$DB2D"
+
 DB3=/tmp/test_branch3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','i');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB3" > /dev/null 2>&1
