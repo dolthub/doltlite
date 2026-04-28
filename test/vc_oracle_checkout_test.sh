@@ -407,6 +407,36 @@ SELECT dolt_checkout('HEAD~1', 'a', 'b');
 SELECT (SELECT v FROM a WHERE id=1) AS id, (SELECT v FROM b WHERE id=1) AS v;
 "
 
+oracle "checkout_multitable_from_first_parent_shorthand" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE a SET v='main_a' WHERE id=1;
+UPDATE b SET v='main_b' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout('HEAD^', 'a', 'b');
+SELECT (SELECT v FROM a WHERE id=1) AS id, (SELECT v FROM b WHERE id=1) AS v;
+"
+
+oracle "checkout_multitable_from_first_parent_explicit" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE a SET v='main_a' WHERE id=1;
+UPDATE b SET v='main_b' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout('HEAD^1', 'a', 'b');
+SELECT (SELECT v FROM a WHERE id=1) AS id, (SELECT v FROM b WHERE id=1) AS v;
+"
+
 oracle "checkout_multitable_from_raw_commit_hash" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
@@ -419,6 +449,21 @@ UPDATE b SET v='main_b' WHERE id=1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 SELECT dolt_checkout(dolt_hashof('HEAD~1'), 'a', 'b');
+SELECT (SELECT v FROM a WHERE id=1) AS id, (SELECT v FROM b WHERE id=1) AS v;
+"
+
+oracle "checkout_multitable_from_raw_first_parent_hash" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE a SET v='main_a' WHERE id=1;
+UPDATE b SET v='main_b' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_checkout(dolt_hashof('HEAD^1'), 'a', 'b');
 SELECT (SELECT v FROM a WHERE id=1) AS id, (SELECT v FROM b WHERE id=1) AS v;
 "
 
