@@ -101,6 +101,20 @@ static SQLITE_INLINE int catalogParseHeader(
 typedef struct ChunkStore ChunkStore;
 typedef struct ChunkIndexEntry ChunkIndexEntry;
 typedef struct ConflictEntry ConflictEntry;
+typedef struct ProllyBloom ProllyBloom;
+
+/* Bloom filter over the persisted-index hashes. Used to short-circuit
+** negative csSearchIndex lookups (prime example: chunkStorePut's
+** "is this new chunk already in the persisted region?" dedup check,
+** which is negative for any genuinely new content). Built lazily on
+** first use, invalidated whenever cs->aIndex is replaced. NULL bits
+** means "no filter, always fall through to bsearch". */
+struct ProllyBloom {
+  u8 *bits;
+  i64 nBits;
+  int nHashes;
+  int nEntries;
+};
 
 struct ConflictEntry {
   u8 *pKey;
@@ -206,6 +220,11 @@ struct ChunkStore {
   ** in-memory commits replace aIndex with a fresh merged array. */
   void *aIndexMmapBase;
   i64 aIndexMmapSize;
+
+  /* Bloom filter built lazily over cs->aIndex hashes — see
+  ** ProllyBloom. csBloomInvalidate is called wherever aIndex is
+  ** replaced; the next negative-lookup-prone search rebuilds it. */
+  ProllyBloom indexBloom;
 
 
   ChunkIndexEntry *aPending;

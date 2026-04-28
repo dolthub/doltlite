@@ -341,6 +341,104 @@ static void csReleaseLiveIndex(ChunkStore *cs){
   cs->nIndexAlloc = 0;
 }
 
+/* ── persisted-index bloom filter ─────────────────────────────────
+**
+** k=7, 10 bits per entry → ~0.82% false-positive rate. For 200K
+** chunks the filter is 250KB and fits comfortably in L2. Build cost
+** is N × k bit-set ops, ~3ms for 200K — paid once per aIndex
+** replacement and amortized across the negative lookups that follow.
+**
+** Below BLOOM_MIN_ENTRIES the filter isn't worth it: a small bsearch
+** is ~5 cache misses, and the build/maintenance cost dominates. */
+#define BLOOM_BITS_PER_ENTRY  10
+#define BLOOM_K               7
+#define BLOOM_MIN_ENTRIES     256
+
+static void csBloomFree(ProllyBloom *b){
+  sqlite3_free(b->bits);
+  b->bits = 0;
+  b->nBits = 0;
+  b->nHashes = 0;
+  b->nEntries = 0;
+}
+
+static void csBloomInvalidate(ChunkStore *cs){
+  csBloomFree(&cs->indexBloom);
+}
+
+static int csBloomBuild(ProllyBloom *b, ChunkIndexEntry *aIndex, int nIndex){
+  i64 nBits;
+  i64 nBytes;
+  int i, k;
+
+  csBloomFree(b);
+  if( nIndex < BLOOM_MIN_ENTRIES ) return SQLITE_OK;
+
+  nBits = (i64)nIndex * BLOOM_BITS_PER_ENTRY;
+  nBytes = (nBits + 7) / 8;
+  b->bits = (u8 *)sqlite3_malloc64(nBytes);
+  if( !b->bits ) return SQLITE_NOMEM;
+  memset(b->bits, 0, (size_t)nBytes);
+  b->nBits = nBits;
+  b->nHashes = BLOOM_K;
+  b->nEntries = nIndex;
+
+  /* Double-hashing (Kirsch-Mitzenmacher): derive k bit positions
+  ** from two 32-bit halves of the chunk hash. The chunk hash is
+  ** already a uniform digest, so reusing its bytes for the bloom
+  ** positions is statistically equivalent to running independent
+  ** hash functions over the data. */
+  for( i = 0; i < nIndex; i++ ){
+    const u8 *p = aIndex[i].hash.data;
+    u32 h1 = (u32)p[0] | ((u32)p[1] << 8)
+           | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+    u32 h2 = (u32)p[4] | ((u32)p[5] << 8)
+           | ((u32)p[6] << 16) | ((u32)p[7] << 24);
+    for( k = 0; k < BLOOM_K; k++ ){
+      u64 pos = ((u64)h1 + (u64)k * (u64)h2) % (u64)nBits;
+      b->bits[pos >> 3] |= (u8)(1u << (pos & 7));
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int csBloomMaybeContains(const ProllyBloom *b, const ProllyHash *ph){
+  const u8 *p;
+  u32 h1, h2;
+  int k;
+
+  if( !b->bits ) return 1;     /* no filter built — must check */
+
+  p = ph->data;
+  h1 = (u32)p[0] | ((u32)p[1] << 8)
+     | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+  h2 = (u32)p[4] | ((u32)p[5] << 8)
+     | ((u32)p[6] << 16) | ((u32)p[7] << 24);
+
+  for( k = 0; k < b->nHashes; k++ ){
+    u64 pos = ((u64)h1 + (u64)k * (u64)h2) % (u64)b->nBits;
+    if( !(b->bits[pos >> 3] & (1u << (pos & 7))) ) return 0;
+  }
+  return 1;
+}
+
+/* Bloom-shortcircuited bsearch over the persisted index. Returns
+** -1 if the bloom proves the hash isn't present; otherwise falls
+** through to the real csSearchIndex. Builds the bloom on first
+** call after an aIndex replacement. */
+static int csSearchIndexFiltered(ChunkStore *cs, const ProllyHash *hash){
+  if( !cs->indexBloom.bits && cs->nIndex >= BLOOM_MIN_ENTRIES ){
+    /* Best-effort build. If it fails (OOM), we just skip the
+    ** filter forever for this aIndex and pay full bsearch cost. */
+    (void)csBloomBuild(&cs->indexBloom, cs->aIndex, cs->nIndex);
+  }
+  if( cs->indexBloom.bits
+   && !csBloomMaybeContains(&cs->indexBloom, hash) ){
+    return -1;
+  }
+  return csSearchIndex(cs->aIndex, cs->nIndex, hash);
+}
+
 static void csFreeBranches(ChunkStore *cs){
   int k;
   for(k=0; k<cs->nBranches; k++) sqlite3_free(cs->aBranches[k].zName);
@@ -454,6 +552,7 @@ static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pS
   cs->nIndexAlloc = pSaved->nIndexAlloc;
   cs->aIndexMmapBase = pSaved->aIndexMmapBase;
   cs->aIndexMmapSize = pSaved->aIndexMmapSize;
+  csBloomInvalidate(cs);
   csRestoreSavedRefsState(cs, &pSaved->refs);
 }
 
@@ -520,6 +619,10 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->nRemotes = pSrc->nRemotes;
   pDst->aTracking = pSrc->aTracking;
   pDst->nTracking = pSrc->nTracking;
+
+  /* The adopted aIndex is fresh; whatever bloom pDst had referred
+  ** to its previous aIndex and is stale now. */
+  csBloomInvalidate(pDst);
 
   pSrc->pFile = 0;
   pSrc->aIndex = 0;
@@ -1084,6 +1187,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     cs->nIndexAlloc = nMerged;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
+    csBloomInvalidate(cs);
     cs->nPending = 0;
     csPendHTClear(cs);
   }
@@ -1314,6 +1418,7 @@ int chunkStoreClose(ChunkStore *cs){
   cs->aIndex = 0;
   cs->aIndexMmapBase = 0;
   cs->aIndexMmapSize = 0;
+  csBloomFree(&cs->indexBloom);
   sqlite3_free(cs->aPending);
   csPendHTClear(cs);
   sqlite3_free(cs->pWriteBuf);
@@ -1905,7 +2010,7 @@ int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
 }
 
 int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash){
-  if( csSearchIndex(cs->aIndex, cs->nIndex, hash) >= 0 ) return 1;
+  if( csSearchIndexFiltered(cs, hash) >= 0 ) return 1;
   if( csSearchPending(cs, hash) >= 0 ) return 1;
   return 0;
 }
@@ -2023,7 +2128,7 @@ int chunkStorePut(
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
 
-  if( csSearchIndex(cs->aIndex, cs->nIndex, &h) >= 0 ) return SQLITE_OK;
+  if( csSearchIndexFiltered(cs, &h) >= 0 ) return SQLITE_OK;
   if( csSearchPending(cs, &h) >= 0 ) return SQLITE_OK;
 
   rc = csGrowPending(cs);
@@ -2061,6 +2166,7 @@ static int csCommitToMemory(ChunkStore *cs){
     cs->nIndexAlloc = nMem;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
+    csBloomInvalidate(cs);
     cs->nPending = 0;
     csPendHTClear(cs);
     cs->nCommittedWriteBuf = cs->nWriteBuf;
@@ -2288,6 +2394,7 @@ commit_done:
     cs->nIndexAlloc = nMerged;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
+    csBloomInvalidate(cs);
     sqlite3_free(cs->pWalData);
     cs->pWalData = pNewWalData;
     cs->nWalData = newWalSize;
