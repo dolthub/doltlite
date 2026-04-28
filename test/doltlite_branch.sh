@@ -62,6 +62,16 @@ DB2G=/tmp/test_branch2g_$$.db; rm -f "$DB2G"
 echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO a VALUES(1,'base_a'); INSERT INTO b VALUES(1,'base_b'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_checkout('-b','feature'); INSERT INTO a VALUES(2,'feat_a'); INSERT INTO b VALUES(2,'feat_b'); SELECT dolt_commit('-A','-m','c2f'); SELECT dolt_checkout('main'); INSERT INTO a VALUES(3,'main_a'); INSERT INTO b VALUES(3,'main_b'); SELECT dolt_commit('-A','-m','c2m'); SELECT dolt_merge('feature'); SELECT dolt_checkout(dolt_hashof('HEAD^2'),'a','b'); CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t SELECT id, v FROM a UNION ALL SELECT id+10, v FROM b;" | $DOLTLITE "$DB2G" > /dev/null 2>&1
 run_test "checkout_table_from_raw_second_parent_hash_persists_across_reopen" "SELECT group_concat(v, ',') FROM (SELECT v FROM t ORDER BY id);" "base_a,feat_a,base_b,feat_b" "$DB2G"
 
+DB2H=/tmp/test_branch2h_$$.db; rm -f "$DB2H"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); DROP TABLE a; SELECT dolt_commit('-A','-m','drop a'); SELECT dolt_checkout('HEAD~1','a');" | $DOLTLITE "$DB2H" > /dev/null 2>&1
+run_test "checkout_dropped_table_restores_rows_across_reopen" "SELECT count(*) FROM a;" "1" "$DB2H"
+run_test "checkout_dropped_table_restores_schema_across_reopen" "SELECT group_concat(name || ':' || type, '|') FROM pragma_table_info('a');" "id:INTEGER|s:TEXT" "$DB2H"
+
+DB2I=/tmp/test_branch2i_$$.db; rm -f "$DB2I"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); DROP TABLE a; CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER); INSERT INTO a VALUES(7,70); SELECT dolt_commit('-A','-m','recreate a'); SELECT dolt_checkout('HEAD~1','a');" | $DOLTLITE "$DB2I" > /dev/null 2>&1
+run_test "checkout_recreated_table_restores_rows_across_reopen" "SELECT group_concat(id || ':' || s, ',') FROM a;" "1:base" "$DB2I"
+run_test "checkout_recreated_table_restores_schema_across_reopen" "SELECT group_concat(name || ':' || type, '|') FROM pragma_table_info('a');" "id:INTEGER|s:TEXT" "$DB2I"
+
 DB3=/tmp/test_branch3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','i');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB3" > /dev/null 2>&1
