@@ -422,6 +422,50 @@ static int csBloomMaybeContains(const ProllyBloom *b, const ProllyHash *ph){
   return 1;
 }
 
+/* Insert one entry into an existing bloom. Bloom filters support
+** insertion (set bits, never clear) — only deletion is unsupported.
+** Used by csCommitToMemory and the merge paths to extend the filter
+** with newly-committed pending hashes instead of invalidating and
+** paying a full O(N) rebuild on every commit. */
+static void csBloomAdd(ProllyBloom *b, const ProllyHash *ph){
+  const u8 *p;
+  u32 h1, h2;
+  int k;
+
+  if( !b->bits ) return;       /* no filter; nothing to extend */
+
+  p = ph->data;
+  h1 = (u32)p[0] | ((u32)p[1] << 8)
+     | ((u32)p[2] << 16) | ((u32)p[3] << 24);
+  h2 = (u32)p[4] | ((u32)p[5] << 8)
+     | ((u32)p[6] << 16) | ((u32)p[7] << 24);
+
+  for( k = 0; k < b->nHashes; k++ ){
+    u64 pos = ((u64)h1 + (u64)k * (u64)h2) % (u64)b->nBits;
+    b->bits[pos >> 3] |= (u8)(1u << (pos & 7));
+  }
+  b->nEntries++;
+}
+
+/* Extend the bloom by every entry in `aAdd[0..nAdd)`. If extending
+** would overshoot the original sizing by 2x — at which point the
+** false-positive rate has roughly doubled — invalidate the filter
+** so the next lookup rebuilds at the right size. That keeps FP
+** bounded without paying a rebuild on every commit. */
+static void csBloomExtend(ChunkStore *cs,
+                           const ChunkIndexEntry *aAdd, int nAdd){
+  int i;
+  if( !cs->indexBloom.bits || nAdd <= 0 ) return;
+  if( cs->indexBloom.nEntries + nAdd
+      > cs->indexBloom.nEntries * 2 + BLOOM_MIN_ENTRIES ){
+    csBloomInvalidate(cs);
+    return;
+  }
+  for( i = 0; i < nAdd; i++ ){
+    csBloomAdd(&cs->indexBloom, &aAdd[i].hash);
+  }
+}
+
 /* Bloom-shortcircuited bsearch over the persisted index. Returns
 ** -1 if the bloom proves the hash isn't present; otherwise falls
 ** through to the real csSearchIndex. Builds the bloom on first
@@ -1187,7 +1231,10 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     cs->nIndexAlloc = nMerged;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
-    csBloomInvalidate(cs);
+    /* Extend the existing bloom by the just-merged-in hashes
+    ** instead of paying a full O(N) rebuild. cs->aPending still
+    ** holds them at this point — read it before clearing nPending. */
+    csBloomExtend(cs, cs->aPending, cs->nPending);
     cs->nPending = 0;
     csPendHTClear(cs);
   }
@@ -2166,7 +2213,10 @@ static int csCommitToMemory(ChunkStore *cs){
     cs->nIndexAlloc = nMem;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
-    csBloomInvalidate(cs);
+    /* Extend bloom by the just-committed pending hashes instead
+    ** of invalidating. The full-rebuild cost would otherwise wipe
+    ** out the per-lookup savings on tight commit loops. */
+    csBloomExtend(cs, cs->aPending, cs->nPending);
     cs->nPending = 0;
     csPendHTClear(cs);
     cs->nCommittedWriteBuf = cs->nWriteBuf;
@@ -2394,7 +2444,10 @@ commit_done:
     cs->nIndexAlloc = nMerged;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
-    csBloomInvalidate(cs);
+    /* Extend bloom by the just-committed pending hashes instead of
+    ** invalidating. aCommittedPending was already freed above; the
+    ** committed entries are also still in cs->aPending. */
+    csBloomExtend(cs, cs->aPending, cs->nPending);
     sqlite3_free(cs->pWalData);
     cs->pWalData = pNewWalData;
     cs->nWalData = newWalSize;
