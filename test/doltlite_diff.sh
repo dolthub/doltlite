@@ -126,7 +126,32 @@ run_test "diff_tag_type" \
   "SELECT diff_type FROM dolt_diff_summary('v1', 'main', 't');" \
   "modified" "$DB4"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4"
+DB5=/tmp/test_diff5_$$.db; rm -f "$DB5"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat changes'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(3,'main'); SELECT dolt_commit('-A','-m','main changes'); SELECT dolt_merge('feat');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+
+run_test "diff_first_parent_ref" \
+  "SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('HEAD^1', 'HEAD', 't');" \
+  "1|0" "$DB5"
+
+run_test "diff_second_parent_ref" \
+  "SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('HEAD^2', 'HEAD', 't');" \
+  "1|0" "$DB5"
+
+DB6=/tmp/test_diff6_$$.db; rm -f "$DB6"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','c1'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','c2'); SELECT dolt_tag('v1','HEAD~1'); SELECT dolt_branch('from_tag','v1');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+
+run_test "diff_branch_created_from_tag" \
+  "SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('from_tag', 'main', 't');" \
+  "1|0" "$DB6"
+
+DB7=/tmp/test_diff7_$$.db; rm -f "$DB7"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','c1'); ALTER TABLE t RENAME TO u; CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(7,'z'); SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+run_test "diff_rename_recreate_family_count" \
+  "SELECT count(*) FROM dolt_diff_stat('HEAD~1', 'HEAD');" \
+  "2" "$DB7"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

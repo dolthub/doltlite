@@ -310,6 +310,59 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat1');
 " "main" "feature"
 
+oracle_both "diff_branch_created_from_tag_to_main" "
+$SEED
+INSERT INTO t VALUES(4, 40, 'dave');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_tag('v1', 'HEAD~1');
+SELECT dolt_branch('from_tag', 'v1');
+" "from_tag" "main"
+
+echo "--- merge parent refs ---"
+
+oracle_both "diff_first_parent_to_merge_head" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES(4, 40, 'dave');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5, 50, 'erin');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feature');
+" "HEAD^1" "HEAD" "t"
+
+oracle_both "diff_second_parent_to_merge_head" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES(4, 40, 'dave');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(5, 50, 'erin');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feature');
+" "HEAD^2" "HEAD" "t"
+
+echo "--- schema churn ---"
+
+oracle_both "rename_then_recreate_same_name_family" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE t RENAME TO u;
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+INSERT INTO t VALUES(7, 70);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
