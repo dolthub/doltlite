@@ -898,7 +898,9 @@ static int addStageNamedTables(
         int k;
         int updated = 0;
         for(k=0; k<nStaged; k++){
-          if( aStaged[k].iTable==iTable ){
+          if( aStaged[k].iTable==iTable
+           || (aStaged[k].zName && aWorking[j].zName
+               && strcmp(aStaged[k].zName, aWorking[j].zName)==0) ){
             char *zDup = aWorking[j].zName
                            ? sqlite3_mprintf("%s", aWorking[j].zName) : 0;
             if( aWorking[j].zName && !zDup ){
