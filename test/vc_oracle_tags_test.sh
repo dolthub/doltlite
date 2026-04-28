@@ -181,6 +181,42 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_tag('historical', (SELECT commit_hash FROM dolt_log WHERE message='c1'));
 "
 
+oracle "tag_parent_ref_head_parent" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES (2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_tag('parent', 'HEAD^1');
+"
+
+oracle "tag_parent_ref_head_tilde" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES (2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_tag('parenttilde', 'HEAD~1');
+"
+
+oracle "tag_branch_ref" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+SELECT dolt_tag('feat-tag', 'feat');
+"
+
 echo "--- deletion ---"
 
 oracle "delete_tag" "
@@ -200,6 +236,16 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('keep');
 SELECT dolt_tag('drop');
 SELECT dolt_tag('-d', 'drop');
+"
+
+oracle "delete_and_recreate_same_name" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'first');
+SELECT dolt_tag('temp');
+SELECT dolt_tag('-d', 'temp');
+SELECT dolt_tag('temp');
 "
 
 echo "--- savepoint parity ---"
