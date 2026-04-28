@@ -50,6 +50,18 @@ DB2D=/tmp/test_branch2d_$$.db; rm -f "$DB2D"
 echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO a VALUES(1,'base_a'); INSERT INTO b VALUES(1,'base_b'); SELECT dolt_commit('-A','-m','init'); UPDATE a SET v='main_a' WHERE id=1; UPDATE b SET v='main_b' WHERE id=1; SELECT dolt_commit('-A','-m','c2'); SELECT dolt_checkout(dolt_hashof('HEAD~1'),'a','b'); CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t SELECT id, v FROM a UNION ALL SELECT id+10, v FROM b;" | $DOLTLITE "$DB2D" > /dev/null 2>&1
 run_test "checkout_table_from_raw_hash_persists_across_reopen" "SELECT group_concat(v, ',') FROM (SELECT v FROM t ORDER BY id);" "base_a,base_b" "$DB2D"
 
+DB2E=/tmp/test_branch2e_$$.db; rm -f "$DB2E"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO a VALUES(1,'base_a'); INSERT INTO b VALUES(1,'base_b'); SELECT dolt_commit('-A','-m','init'); UPDATE a SET v='main_a' WHERE id=1; UPDATE b SET v='main_b' WHERE id=1; SELECT dolt_commit('-A','-m','c2'); SELECT dolt_checkout('HEAD^1','a','b'); CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t SELECT id, v FROM a UNION ALL SELECT id+10, v FROM b;" | $DOLTLITE "$DB2E" > /dev/null 2>&1
+run_test "checkout_table_from_first_parent_ref_persists_across_reopen" "SELECT group_concat(v, ',') FROM (SELECT v FROM t ORDER BY id);" "base_a,base_b" "$DB2E"
+
+DB2F=/tmp/test_branch2f_$$.db; rm -f "$DB2F"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO a VALUES(1,'base_a'); INSERT INTO b VALUES(1,'base_b'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_checkout('-b','feature'); INSERT INTO a VALUES(2,'feat_a'); INSERT INTO b VALUES(2,'feat_b'); SELECT dolt_commit('-A','-m','c2f'); SELECT dolt_checkout('main'); INSERT INTO a VALUES(3,'main_a'); INSERT INTO b VALUES(3,'main_b'); SELECT dolt_commit('-A','-m','c2m'); SELECT dolt_merge('feature'); SELECT dolt_checkout('HEAD^2','a','b'); CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t SELECT id, v FROM a UNION ALL SELECT id+10, v FROM b;" | $DOLTLITE "$DB2F" > /dev/null 2>&1
+run_test "checkout_table_from_second_parent_ref_persists_across_reopen" "SELECT group_concat(v, ',') FROM (SELECT v FROM t ORDER BY id);" "base_a,feat_a,base_b,feat_b" "$DB2F"
+
+DB2G=/tmp/test_branch2g_$$.db; rm -f "$DB2G"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT); CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO a VALUES(1,'base_a'); INSERT INTO b VALUES(1,'base_b'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_checkout('-b','feature'); INSERT INTO a VALUES(2,'feat_a'); INSERT INTO b VALUES(2,'feat_b'); SELECT dolt_commit('-A','-m','c2f'); SELECT dolt_checkout('main'); INSERT INTO a VALUES(3,'main_a'); INSERT INTO b VALUES(3,'main_b'); SELECT dolt_commit('-A','-m','c2m'); SELECT dolt_merge('feature'); SELECT dolt_checkout(dolt_hashof('HEAD^2'),'a','b'); CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t SELECT id, v FROM a UNION ALL SELECT id+10, v FROM b;" | $DOLTLITE "$DB2G" > /dev/null 2>&1
+run_test "checkout_table_from_raw_second_parent_hash_persists_across_reopen" "SELECT group_concat(v, ',') FROM (SELECT v FROM t ORDER BY id);" "base_a,feat_a,base_b,feat_b" "$DB2G"
+
 DB3=/tmp/test_branch3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','i');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB3" > /dev/null 2>&1

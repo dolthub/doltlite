@@ -585,6 +585,20 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_checkout('v1', 'a', 'missing');
 " "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1));"
 
+oracle_error_poststate "checkout_tag_source_missing_table_preserves_staged_and_working_state" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_tag('v1');
+UPDATE a SET v='stage_a' WHERE id=1;
+UPDATE b SET v='dirty_b' WHERE id=1;
+SELECT dolt_add('a');
+SELECT dolt_checkout('v1', 'a', 'missing');
+" "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='a' AND staged=1 AND status='modified'), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='b' AND staged=0 AND status='modified'));"
+
 oracle_error_poststate "checkout_branch_source_missing_table_no_partial_mutation" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
@@ -635,6 +649,61 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 SELECT dolt_checkout(dolt_hashof('HEAD~1'), 'a', 'missing');
 " "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1));"
+
+oracle_error_poststate "checkout_raw_hash_source_missing_table_preserves_staged_and_working_state" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+UPDATE a SET v='stage_a' WHERE id=1;
+UPDATE b SET v='dirty_b' WHERE id=1;
+SELECT dolt_add('a');
+SELECT dolt_checkout(dolt_hashof('HEAD'), 'a', 'missing');
+" "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='a' AND staged=1 AND status='modified'), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='b' AND staged=0 AND status='modified'));"
+
+oracle_error_poststate "checkout_second_parent_source_missing_table_no_partial_mutation" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO a VALUES (2, 'feat_a');
+INSERT INTO b VALUES (2, 'feat_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2f');
+SELECT dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main_a');
+INSERT INTO b VALUES (3, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2m');
+SELECT dolt_merge('feature');
+SELECT dolt_checkout('HEAD^2', 'a', 'missing');
+" "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM a WHERE id=2), char(9), (SELECT v FROM a WHERE id=3), char(9), (SELECT v FROM b WHERE id=1), char(9), (SELECT v FROM b WHERE id=2), char(9), (SELECT v FROM b WHERE id=3));"
+
+oracle_error_poststate "checkout_raw_second_parent_hash_missing_table_no_partial_mutation" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO a VALUES (2, 'feat_a');
+INSERT INTO b VALUES (2, 'feat_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2f');
+SELECT dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main_a');
+INSERT INTO b VALUES (3, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2m');
+SELECT dolt_merge('feature');
+SELECT dolt_checkout(dolt_hashof('HEAD^2'), 'a', 'missing');
+" "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM a WHERE id=2), char(9), (SELECT v FROM a WHERE id=3), char(9), (SELECT v FROM b WHERE id=1), char(9), (SELECT v FROM b WHERE id=2), char(9), (SELECT v FROM b WHERE id=3));"
 
 echo "--- savepoint parity ---"
 
@@ -720,6 +789,52 @@ SAVEPOINT sp1;
 SELECT dolt_checkout(dolt_hashof('HEAD~1'), 'a', 'b');
 ROLLBACK TO sp1;
 " "SELECT concat((SELECT v FROM a WHERE id=1), char(9), (SELECT v FROM b WHERE id=1));"
+
+oracle_savepoint_poststate "savepoint_checkout_second_parent_source_invalidates" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO a VALUES (2, 'feat_a');
+INSERT INTO b VALUES (2, 'feat_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2f');
+SELECT dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main_a');
+INSERT INTO b VALUES (3, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2m');
+SELECT dolt_merge('feature');
+SAVEPOINT sp1;
+SELECT dolt_checkout('HEAD^2', 'a', 'b');
+ROLLBACK TO sp1;
+" "SELECT concat(active_branch(), char(9), IFNULL((SELECT v FROM a WHERE id=1), ''), char(9), IFNULL((SELECT v FROM a WHERE id=2), ''), char(9), IFNULL((SELECT v FROM a WHERE id=3), ''), char(9), IFNULL((SELECT v FROM b WHERE id=1), ''), char(9), IFNULL((SELECT v FROM b WHERE id=2), ''), char(9), IFNULL((SELECT v FROM b WHERE id=3), ''), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='a' AND staged=1 AND status='modified'), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='b' AND staged=1 AND status='modified'));"
+
+oracle_savepoint_poststate "savepoint_checkout_raw_second_parent_hash_invalidates" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO a VALUES (2, 'feat_a');
+INSERT INTO b VALUES (2, 'feat_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2f');
+SELECT dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main_a');
+INSERT INTO b VALUES (3, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2m');
+SELECT dolt_merge('feature');
+SAVEPOINT sp1;
+SELECT dolt_checkout(dolt_hashof('HEAD^2'), 'a', 'b');
+ROLLBACK TO sp1;
+" "SELECT concat(active_branch(), char(9), IFNULL((SELECT v FROM a WHERE id=1), ''), char(9), IFNULL((SELECT v FROM a WHERE id=2), ''), char(9), IFNULL((SELECT v FROM a WHERE id=3), ''), char(9), IFNULL((SELECT v FROM b WHERE id=1), ''), char(9), IFNULL((SELECT v FROM b WHERE id=2), ''), char(9), IFNULL((SELECT v FROM b WHERE id=3), ''), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='a' AND staged=1 AND status='modified'), char(9), (SELECT count(*) FROM dolt_status WHERE table_name='b' AND staged=1 AND status='modified'));"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
