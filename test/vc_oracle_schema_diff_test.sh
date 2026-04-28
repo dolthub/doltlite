@@ -326,6 +326,16 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat_add');
 " "main" "feat"
 
+oracle "branch_from_tag_diff" "
+$SEED
+SELECT dolt_tag('v1');
+SELECT dolt_branch('tagfeat', 'v1');
+SELECT dolt_checkout('tagfeat');
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'tagfeat_add_col');
+" "v1" "tagfeat"
+
 echo "--- tag refs ---"
 
 oracle "tag_diff" "
@@ -370,6 +380,45 @@ SELECT dolt_commit('-m', 'add_u');
       CASE WHEN from_create_statement IS NULL OR from_create_statement='' THEN 'N' ELSE 'Y' END, '|', \
       CASE WHEN to_create_statement   IS NULL OR to_create_statement=''   THEN 'N' ELSE 'Y' END \
     ) FROM dolt_schema_diff('HEAD~1..HEAD') ORDER BY from_table_name, to_table_name;"
+
+echo "--- merge parent refs ---"
+
+oracle "first_parent_to_merge" "
+$SEED
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_data_only');
+SELECT dolt_merge('feat');
+" "HEAD^1" "HEAD"
+
+oracle "second_parent_to_merge" "
+$SEED
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_data_only');
+SELECT dolt_checkout('main');
+CREATE TABLE m(id INTEGER PRIMARY KEY, y TEXT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_add_m');
+SELECT dolt_merge('feat');
+" "HEAD^2" "HEAD"
+
+echo "--- same-name drop / recreate ---"
+
+oracle "drop_recreate_same_name" "
+$SEED
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, vv TEXT, extra INT);
+INSERT INTO t VALUES (1, 'recreated', 7);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'recreate_t');
+" "HEAD~1" "HEAD"
 
 echo "--- error paths ---"
 
