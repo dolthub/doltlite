@@ -10,6 +10,9 @@ above SQLite's `btree.h` interface (VDBE, query planner, parser) is untouched.
 Everything below it -- the pager and on-disk format -- is replaced with a
 prolly tree engine backed by a single-file content-addressed chunk store.
 
+[Why DoltLite?](https://www.dolthub.com/blog/2026-04-27-why-doltlite/) DoltLite
+can be embedded in any language enabling local-first use cases for Dolt.
+
 ## Building
 
 ### macOS / Linux
