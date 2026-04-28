@@ -160,6 +160,35 @@ run_test "reset_to_hash_log" "SELECT count(*) FROM dolt_log;" "2" "$DB5"
 run_test "reset_to_hash_head" "SELECT commit_hash FROM dolt_log LIMIT 1;" "$C1" "$DB5"
 run_test "reset_to_hash_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB5"
 
+# Reopen after reset-to-hash should stay clean and on the old data.
+run_test "reset_to_hash_reopen_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB5"
+run_test "reset_to_hash_reopen_rows" "SELECT v FROM t;" "v1" "$DB5"
+
+# --- Hard reset to HEAD^1 after schema change ---
+DB5B=/tmp/test_reset5b_$$.db; rm -f "$DB5B"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); ALTER TABLE a ADD COLUMN extra INTEGER; UPDATE a SET extra=99 WHERE id=1; SELECT dolt_commit('-A','-m','c2'); SELECT dolt_reset('--hard','HEAD^1');" | $DOLTLITE "$DB5B" > /dev/null 2>&1
+run_test "reset_head_parent_schema" \
+  "SELECT group_concat(name || ':' || lower(type), '|') FROM pragma_table_info('a');" \
+  "id:integer|s:text" "$DB5B"
+run_test "reset_head_parent_rows" \
+  "SELECT s FROM a;" \
+  "base" "$DB5B"
+
+# --- Hard reset to HEAD^2 and raw second-parent hash after merge ---
+DB5C=/tmp/test_reset5c_$$.db; rm -f "$DB5C"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO a VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); INSERT INTO a VALUES(3,'main'); SELECT dolt_commit('-A','-m','main'); SELECT dolt_merge('feat');" | $DOLTLITE "$DB5C" > /dev/null 2>&1
+run_test "reset_head_second_parent" \
+  "SELECT dolt_reset('--hard','HEAD^2'); SELECT group_concat(s, '|') FROM (SELECT s FROM a ORDER BY id);" \
+  "0
+base|feat" "$DB5C"
+
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO a VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); INSERT INTO a VALUES(3,'main'); SELECT dolt_commit('-A','-m','main'); SELECT dolt_merge('feat');" | $DOLTLITE "$DB5C.hash" > /dev/null 2>&1
+H2=$(echo "SELECT dolt_hashof('HEAD^2');" | $DOLTLITE "$DB5C.hash" 2>/dev/null)
+run_test "reset_raw_second_parent_hash" \
+  "SELECT dolt_reset('--hard','$H2'); SELECT group_concat(s, '|') FROM (SELECT s FROM a ORDER BY id);" \
+  "0
+base|feat" "$DB5C.hash"
+
 # --- Reset to commit hash clears merge state ---
 DB6=/tmp/test_reset6_$$.db; rm -f "$DB6"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
@@ -241,7 +270,7 @@ run_test "path_reset_recreated_table_keeps_live_row" \
   "7|70" "$DB10"
 
 # Cleanup
-rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
+rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
