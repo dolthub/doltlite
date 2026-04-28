@@ -416,6 +416,107 @@ CALL dolt_reset('--hard', 'v1');
 SELECT concat('Q|rows|', count(*)) FROM a;
 SELECT concat('Q|val|', s) FROM a;"
 
+oracle_same_session "reset_hard_head_parent_ref_restores_pre_alter_schema" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+ALTER TABLE a ADD COLUMN extra INT;
+UPDATE a SET extra = 99 WHERE id = 1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_reset('--hard', 'HEAD^1');
+" "SELECT 'Q|cols|' || group_concat(name || ':' || replace(lower(type), 'integer', 'int'), '|')
+       FROM pragma_table_info('a');
+SELECT 'Q|rows|' || count(*) FROM a;
+SELECT 'Q|val|' || s FROM a;" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+ALTER TABLE a ADD COLUMN extra INT;
+UPDATE a SET extra = 99 WHERE id = 1;
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c2');
+CALL dolt_reset('--hard', 'HEAD^1');
+" "SELECT concat('Q|cols|', group_concat(concat(column_name, ':', replace(lower(column_type), 'integer', 'int')) ORDER BY ordinal_position SEPARATOR '|'))
+       FROM information_schema.columns
+      WHERE table_schema = database() AND table_name = 'a';
+SELECT concat('Q|rows|', count(*)) FROM a;
+SELECT concat('Q|val|', s) FROM a;"
+
+oracle_same_session "reset_hard_head_second_parent_restores_merge_parent" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO a VALUES (2, 'feat');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main');
+SELECT dolt_merge('feat');
+SELECT dolt_reset('--hard', 'HEAD^2');
+" "SELECT 'Q|count|' || count(*) FROM a;
+SELECT 'Q|vals|' || group_concat(s, '|') FROM (SELECT s FROM a ORDER BY id);" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'base');
+CALL dolt_branch('feat');
+CALL dolt_checkout('feat');
+INSERT INTO a VALUES (2, 'feat');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'feat');
+CALL dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'main');
+CALL dolt_merge('feat');
+CALL dolt_reset('--hard', 'HEAD^2');
+" "SELECT concat('Q|count|', count(*)) FROM a;
+SELECT concat('Q|vals|', group_concat(s ORDER BY id SEPARATOR '|')) FROM a;"
+
+oracle_same_session "reset_hard_raw_hash_second_parent_restores_merge_parent" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO a VALUES (2, 'feat');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main');
+SELECT dolt_merge('feat');
+SELECT dolt_reset('--hard', (SELECT dolt_hashof('HEAD^2')));
+" "SELECT 'Q|count|' || count(*) FROM a;
+SELECT 'Q|vals|' || group_concat(s, '|') FROM (SELECT s FROM a ORDER BY id);" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'base');
+CALL dolt_branch('feat');
+CALL dolt_checkout('feat');
+INSERT INTO a VALUES (2, 'feat');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'feat');
+CALL dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'main');
+CALL dolt_merge('feat');
+CALL dolt_reset('--hard', HASHOF('HEAD^2'));
+" "SELECT concat('Q|count|', count(*)) FROM a;
+SELECT concat('Q|vals|', group_concat(s ORDER BY id SEPARATOR '|')) FROM a;"
+
 echo "--- table-name positional unstage ---"
 
 # Stage two new tables, then reset only one of them. The other
