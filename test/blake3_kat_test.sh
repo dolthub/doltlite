@@ -132,6 +132,7 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 cc -O2 "$TMP/blake3_kat.c" \
    prolly_hash.o blake3.o blake3_portable.o blake3_dispatch_portable.o \
    -I "$HERE/src" -I "$HERE/ext/blake3" -DDOLTLITE_PROLLY=1 \
+   -lm \
    -o "$TMP/blake3_kat" 2>"$TMP/build.err" || {
     echo "  build failed:"
     cat "$TMP/build.err"
