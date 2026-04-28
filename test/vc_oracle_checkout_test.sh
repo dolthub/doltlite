@@ -467,6 +467,52 @@ SELECT dolt_checkout(dolt_hashof('HEAD^1'), 'a', 'b');
 SELECT (SELECT v FROM a WHERE id=1) AS id, (SELECT v FROM b WHERE id=1) AS v;
 "
 
+oracle "checkout_multitable_from_second_parent_ref" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO a VALUES (2, 'feat_a');
+INSERT INTO b VALUES (2, 'feat_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2f');
+SELECT dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main_a');
+INSERT INTO b VALUES (3, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2m');
+SELECT dolt_merge('feature');
+SELECT dolt_checkout('HEAD^2', 'a', 'b');
+SELECT (SELECT group_concat(v, ',') FROM (SELECT v FROM a ORDER BY id)) AS id,
+       (SELECT group_concat(v, ',') FROM (SELECT v FROM b ORDER BY id)) AS v;
+"
+
+oracle "checkout_multitable_from_raw_second_parent_hash" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO a VALUES (1, 'base_a');
+INSERT INTO b VALUES (1, 'base_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feature');
+INSERT INTO a VALUES (2, 'feat_a');
+INSERT INTO b VALUES (2, 'feat_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2f');
+SELECT dolt_checkout('main');
+INSERT INTO a VALUES (3, 'main_a');
+INSERT INTO b VALUES (3, 'main_b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2m');
+SELECT dolt_merge('feature');
+SELECT dolt_checkout(dolt_hashof('HEAD^2'), 'a', 'b');
+SELECT (SELECT group_concat(v, ',') FROM (SELECT v FROM a ORDER BY id)) AS id,
+       (SELECT group_concat(v, ',') FROM (SELECT v FROM b ORDER BY id)) AS v;
+"
+
 echo "--- error paths ---"
 
 oracle_error "checkout_nonexistent" "
