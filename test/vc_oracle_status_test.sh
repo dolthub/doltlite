@@ -125,6 +125,42 @@ SELECT dolt_add('t');
 INSERT INTO t VALUES (3, 30);
 "
 
+oracle "schema_only_unstaged_is_modified" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE a ADD COLUMN n INT;
+"
+
+oracle "schema_only_staged_is_modified" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE a ADD COLUMN n INT;
+SELECT dolt_add('a');
+"
+
+oracle "schema_and_data_unstaged_is_modified" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'seed');
+UPDATE a SET s = 'x' WHERE id = 1;
+ALTER TABLE a ADD COLUMN n INT;
+"
+
+oracle "drop_recreate_unstaged_is_modified" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('a');
+SELECT dolt_commit('-m', 'seed');
+DROP TABLE a;
+CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO a VALUES (7, 70);
+"
+
 echo "--- deletions ---"
 
 oracle "deleted_unstaged" "

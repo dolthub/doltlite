@@ -342,6 +342,52 @@ SELECT dolt_add('-A');
 SELECT dolt_reset('a');
 "
 
+oracle_same_session "reset_path_dropped_table_stays_dropped" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE a;
+SELECT dolt_reset('a');
+" "SELECT 'Q|' || count(*) FROM dolt_status
+      WHERE table_name='a' AND staged=0 AND status='deleted';
+SELECT 'Q|' || count(*) FROM dolt_status
+      WHERE table_name='a' AND staged=1;" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 10);
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+DROP TABLE a;
+CALL dolt_reset('a');
+" "SELECT concat('Q|', count(*)) FROM dolt_status
+      WHERE table_name='a' AND staged=false AND status='deleted';
+SELECT concat('Q|', count(*)) FROM dolt_status
+      WHERE table_name='a' AND staged=true;"
+
+oracle_same_session "reset_path_recreated_table_stays_recreated" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE a;
+CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO a VALUES (7, 70);
+SELECT dolt_reset('a');
+" "SELECT 'Q|' || k || '|' || n FROM a;
+SELECT 'Q|' || count(*) FROM dolt_status
+      WHERE table_name='a' AND staged=0 AND status='modified';" \
+"CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT);
+INSERT INTO a VALUES (1, 'base');
+CALL dolt_add('-A');
+CALL dolt_commit('-m', 'c1');
+DROP TABLE a;
+CREATE TABLE a(k INTEGER PRIMARY KEY, n INTEGER);
+INSERT INTO a VALUES (7, 70);
+CALL dolt_reset('a');
+" "SELECT concat('Q|', k, '|', n) FROM a;
+SELECT concat('Q|', count(*)) FROM dolt_status
+      WHERE table_name='a' AND staged=false AND status='modified';"
+
 echo "--- error paths ---"
 
 oracle_error "reset_to_nonexistent_ref" "
