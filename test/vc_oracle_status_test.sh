@@ -209,6 +209,44 @@ INSERT INTO b VALUES (2, 20);
 SELECT dolt_add('b');
 "
 
+oracle "renamed_staged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('t');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_add('t2');
+"
+
+oracle "renamed_staged_then_modified_again" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('t');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t RENAME TO t2;
+SELECT dolt_add('t2');
+INSERT INTO t2 VALUES (2, 20);
+"
+
+oracle "rename_chain_unstaged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('t');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t RENAME TO t2;
+ALTER TABLE t2 RENAME TO t3;
+"
+
+oracle "rename_chain_staged" "
+CREATE TABLE t(id INTEGER PRIMARY KEY);
+INSERT INTO t VALUES (1);
+SELECT dolt_add('t');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE t RENAME TO t2;
+ALTER TABLE t2 RENAME TO t3;
+SELECT dolt_add('t3');
+"
+
 echo "--- multi-table ---"
 
 oracle "multi_table_mixed_states" "
@@ -231,6 +269,22 @@ SELECT dolt_add('b');
 SELECT dolt_commit('-m', 'seed');
 DROP TABLE b;
 CREATE TABLE c(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO c VALUES (2, 20);
+"
+
+oracle "multi_table_rename_drop_create_mix" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE c(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 10);
+INSERT INTO c VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'seed');
+ALTER TABLE a RENAME TO a2;
+DROP TABLE b;
+CREATE TABLE d(id INTEGER PRIMARY KEY);
+INSERT INTO d VALUES (1);
 INSERT INTO c VALUES (2, 20);
 "
 

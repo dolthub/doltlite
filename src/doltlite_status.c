@@ -8,6 +8,7 @@
 #include "doltlite_commit.h"
 #include "doltlite_internal.h"
 #include "doltlite_ignore.h"
+#include "prolly_cursor.h"
 
 typedef struct StatusRow StatusRow;
 struct StatusRow {
@@ -155,6 +156,52 @@ static int statusSchemaHashMatchesRename(
   return 0;
 }
 
+static int statusRootsShareAnyKey(
+  sqlite3 *db,
+  const struct TableEntry *pOld,
+  const struct TableEntry *pNew
+){
+  ChunkStore *cs;
+  ProllyCache *cache;
+  ProllyCursor curOld, curNew;
+  int rc, res;
+
+  if( !pOld || !pNew ) return 0;
+  if( prollyHashIsEmpty(&pOld->root) || prollyHashIsEmpty(&pNew->root) ) return 0;
+
+  cs = doltliteGetChunkStore(db);
+  cache = doltliteGetCache(db);
+  if( !cs || !cache ) return 0;
+
+  prollyCursorInit(&curOld, cs, cache, &pOld->root, pOld->flags);
+  rc = prollyCursorFirst(&curOld, &res);
+  if( rc!=SQLITE_OK || res!=0 || !prollyCursorIsValid(&curOld) ){
+    prollyCursorClose(&curOld);
+    return 0;
+  }
+
+  prollyCursorInit(&curNew, cs, cache, &pNew->root, pNew->flags);
+  if( pOld->flags & BTREE_INTKEY ){
+    i64 iKey = prollyCursorIntKey(&curOld);
+    rc = prollyCursorSeekInt(&curNew, iKey, &res);
+  }else{
+    const u8 *pKey = 0;
+    int nKey = 0;
+    prollyCursorKey(&curOld, &pKey, &nKey);
+    rc = prollyCursorSeekBlob(&curNew, pKey, nKey, &res);
+  }
+
+  prollyCursorClose(&curOld);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&curNew);
+    return 0;
+  }
+
+  rc = (res==0 && prollyCursorIsValid(&curNew));
+  prollyCursorClose(&curNew);
+  return rc;
+}
+
 /* Detect a rename by stable table identity plus name-insensitive CREATE
 ** TABLE SQL. This preserves rename+edit classification while rejecting
 ** drop+create churn that happens to reuse the same table number. */
@@ -180,8 +227,8 @@ static int isRenamePair(
 
   rc = statusLoadLiveTableSql(db, pB->zName, &foundLive, &zLiveSql);
   if( rc!=SQLITE_OK || !foundLive ) goto rename_done;
-  if( statusCreateNameQuoted(zLiveSql)
-   && statusSchemaHashMatchesRename(&pA->schemaHash, zLiveSql, pA->zName) ){
+  if( statusSchemaHashMatchesRename(&pA->schemaHash, zLiveSql, pA->zName)
+   && statusRootsShareAnyKey(db, pA, pB) ){
     bMatch = 1;
   }
 
