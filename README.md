@@ -5,7 +5,8 @@
 # Doltlite
 
 A SQLite fork that replaces the B-tree storage engine with a content-addressed
-prolly tree, enabling Git-like version control on a SQL database. Everything
+[prolly tree](https://docs.dolthub.com/architecture/storage-engine/prolly-tree),
+enabling Git-like version control on a SQL database. Everything
 above SQLite's `btree.h` interface (VDBE, query planner, parser) is untouched.
 Everything below it -- the pager and on-disk format -- is replaced with a
 prolly tree engine backed by a single-file content-addressed chunk store.
