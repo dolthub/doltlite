@@ -111,7 +111,24 @@ struct ConflictEntry {
   int nTheirVal;
 };
 
-struct ChunkIndexEntry {
+/* Packed to 32 bytes so the in-memory layout matches the on-disk
+** index entry encoding (hash[20] + offset[8 LE] + size[4 LE]).
+** That lets the persisted index be mmapped and used directly without
+** an open-time malloc + deserialize pass. The packing introduces
+** unaligned field access on archs that care; x86_64 and ARM64 don't.
+** On big-endian hosts the in-memory and on-disk encodings still
+** differ, so csReadIndex falls back to the old read+deserialize path
+** there — see CHUNK_STORE_LE_PACKING below. */
+#if defined(__GNUC__) || defined(__clang__)
+#  define DOLTLITE_PACKED __attribute__((__packed__))
+#elif defined(_MSC_VER)
+#  define DOLTLITE_PACKED
+#  pragma pack(push, 1)
+#else
+#  define DOLTLITE_PACKED
+#endif
+
+struct DOLTLITE_PACKED ChunkIndexEntry {
   ProllyHash hash;
   /* File offset of the 4-byte length prefix, or negative for a
   ** WAL-encoded offset pointing into cs->pWalData / cs->pWriteBuf —
@@ -119,6 +136,19 @@ struct ChunkIndexEntry {
   i64 offset;
   int size;
 };
+
+#if defined(_MSC_VER)
+#  pragma pack(pop)
+#endif
+
+/* True iff in-memory ChunkIndexEntry layout matches the on-disk
+** encoding byte-for-byte (little-endian + 32-byte packing). On such
+** hosts the persisted index can be mmapped and cast directly. */
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#  define CHUNK_STORE_LE_PACKING 1
+#else
+#  define CHUNK_STORE_LE_PACKING 0
+#endif
 
 struct ChunkStore {
   char *zFilename;
@@ -167,6 +197,15 @@ struct ChunkStore {
   ChunkIndexEntry *aIndex;
   int nIndex;
   int nIndexAlloc;
+
+  /* When the persisted index is mmapped, aIndexMmapBase is the page-
+  ** aligned base of the mapping (which can differ from aIndex if
+  ** iIndexOffset isn't page-aligned) and aIndexMmapSize is the byte
+  ** length of the mapping. Both NULL/0 when aIndex is malloc'd
+  ** instead — that's the fallback path on big-endian hosts and after
+  ** in-memory commits replace aIndex with a fresh merged array. */
+  void *aIndexMmapBase;
+  i64 aIndexMmapSize;
 
 
   ChunkIndexEntry *aPending;
