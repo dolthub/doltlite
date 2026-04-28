@@ -166,6 +166,7 @@ echo "--- tag refs ---"
 WITH_TAG="
 $LINEAR
 SELECT dolt_tag('v1', (SELECT commit_hash FROM dolt_log WHERE message='c1'));
+SELECT dolt_branch('from_tag', 'v1');
 INSERT INTO t VALUES (4, 40);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c4');
@@ -173,12 +174,31 @@ SELECT dolt_commit('-m', 'c4');
 
 oracle "tag_vs_head" "$WITH_TAG" "'v1'" "'HEAD'"
 oracle "tag_vs_tag" "$WITH_TAG" "'v1'" "'v1'"
+oracle "branch_from_tag_vs_main" "$WITH_TAG" "'from_tag'" "'main'"
 
 echo "--- bare commit hash ref ---"
 
 # Use a subquery to look up a hash from log so we don't have to
 # embed an unknown hash literal.
 oracle "hash_vs_branch" "$LINEAR" "(SELECT commit_hash FROM dolt_log WHERE message='c1')" "'main'"
+
+echo "--- copied and renamed branches ---"
+
+WITH_COPY="
+$LINEAR
+SELECT dolt_branch('src');
+SELECT dolt_branch('-c', 'src', 'copy');
+"
+
+oracle "copied_branch_vs_source" "$WITH_COPY" "'src'" "'copy'"
+
+WITH_RENAME="
+$LINEAR
+SELECT dolt_branch('old');
+SELECT dolt_branch('-m', 'old', 'renamed');
+"
+
+oracle "renamed_branch_vs_main" "$WITH_RENAME" "'main'" "'renamed'"
 
 echo "--- error paths ---"
 
