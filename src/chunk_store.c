@@ -2079,6 +2079,7 @@ static int csCommitToFile(ChunkStore *cs){
   int hadFile = (cs->pFile != 0);
   i64 newWalSize = cs->nWalData;
   u8 *pNewWalData = 0;
+  u8 *batchBuf = 0;
   ChunkIndexEntry *aCommittedPending = 0;
   ChunkIndexEntry *aMerged = 0;
   int nMerged = 0;
@@ -2214,45 +2215,110 @@ static int csCommitToFile(ChunkStore *cs){
   writeOff = fileSize;
 
 
-  for( i = 0; i < cs->nPending; i++ ){
-    ChunkIndexEntry *pe = &cs->aPending[i];
-    u8 recHdr[25];
-    i64 bufOff;
-    recHdr[0] = CS_WAL_TAG_CHUNK;
-    memcpy(recHdr + 1, &pe->hash, 20);
-    CS_WRITE_U32(recHdr + 21, (u32)pe->size);
-
-    bufOff = pe->offset + 4;
-    CRASH_CHECK_WRITE();
-    rc = sqlite3OsWrite(cs->pFile, recHdr, 25, writeOff);
-    if( rc != SQLITE_OK ) goto commit_done;
-    writeOff += 25;
-
-    {
-      const u8 *pSrc = cs->pWriteBuf + bufOff;
-      int remaining = pe->size;
-      while( remaining > 0 && rc==SQLITE_OK ){
-        int toWrite = remaining > 65536 ? 65536 : remaining;
-        CRASH_CHECK_WRITE();
-        rc = sqlite3OsWrite(cs->pFile, pSrc, toWrite, writeOff);
-        pSrc += toWrite;
-        writeOff += toWrite;
-        remaining -= toWrite;
-      }
-    }
-    if( rc != SQLITE_OK ) goto commit_done;
-  }
-
-
+  /* Batched WAL append: assemble multiple chunk records (and the
+  ** root record) into a single buffer and ship via one xWrite per
+  ** ~4 MB instead of 2N+1 xWrite calls per commit. The byte stream
+  ** that lands on disk is identical; the final xSync below provides
+  ** the same durability contract. Drops syscall overhead on tight
+  ** commit loops where N pending chunks per commit can be hundreds
+  ** to thousands. */
+  /* Stay within sqlite3OsWrite's no-loop-on-partial-write limit,
+  ** matching the 65536-byte chunking the per-chunk-data path in the
+  ** original loop already used. The win is in coalescing many small
+  ** chunk records (each header + its data) into one xWrite, which
+  ** dominates on workloads where individual records are << 64 KB. */
+  #define WAL_BATCH_CAP (64 * 1024)
   {
-    u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
-    rootRec[0] = CS_WAL_TAG_ROOT;
-    csSerializeManifest(cs, rootRec + 1);
-    CRASH_CHECK_WRITE();
-    rc = sqlite3OsWrite(cs->pFile, rootRec, sizeof(rootRec), writeOff);
-    if( rc != SQLITE_OK ) goto commit_done;
-    writeOff += sizeof(rootRec);
+    i64 batchUsed = 0;
+    batchBuf = (u8 *)sqlite3_malloc64(WAL_BATCH_CAP);
+    if( !batchBuf ){
+      rc = SQLITE_NOMEM;
+      goto commit_done;
+    }
+
+    for( i = 0; i < cs->nPending; i++ ){
+      ChunkIndexEntry *pe = &cs->aPending[i];
+      i64 chunkRecSize = (i64)25 + (i64)pe->size;
+
+      /* If a single chunk record exceeds the batch cap (huge BLOB),
+      ** fall back to the original direct-write path for that one
+      ** chunk and resume batching afterward. */
+      if( chunkRecSize > WAL_BATCH_CAP ){
+        if( batchUsed > 0 ){
+          CRASH_CHECK_WRITE();
+          rc = sqlite3OsWrite(cs->pFile, batchBuf, (int)batchUsed, writeOff);
+          if( rc != SQLITE_OK ) goto commit_done;
+          writeOff += batchUsed;
+          batchUsed = 0;
+        }
+        {
+          u8 recHdr[25];
+          const u8 *pSrc = cs->pWriteBuf + pe->offset + 4;
+          int remaining = pe->size;
+          recHdr[0] = CS_WAL_TAG_CHUNK;
+          memcpy(recHdr + 1, &pe->hash, 20);
+          CS_WRITE_U32(recHdr + 21, (u32)pe->size);
+          CRASH_CHECK_WRITE();
+          rc = sqlite3OsWrite(cs->pFile, recHdr, 25, writeOff);
+          if( rc != SQLITE_OK ) goto commit_done;
+          writeOff += 25;
+          while( remaining > 0 && rc == SQLITE_OK ){
+            int toWrite = remaining > 65536 ? 65536 : remaining;
+            CRASH_CHECK_WRITE();
+            rc = sqlite3OsWrite(cs->pFile, pSrc, toWrite, writeOff);
+            pSrc += toWrite;
+            writeOff += toWrite;
+            remaining -= toWrite;
+          }
+          if( rc != SQLITE_OK ) goto commit_done;
+        }
+        continue;
+      }
+
+      /* If adding this chunk would overflow the batch buffer,
+      ** flush what we have first. */
+      if( batchUsed + chunkRecSize > WAL_BATCH_CAP ){
+        CRASH_CHECK_WRITE();
+        rc = sqlite3OsWrite(cs->pFile, batchBuf, (int)batchUsed, writeOff);
+        if( rc != SQLITE_OK ) goto commit_done;
+        writeOff += batchUsed;
+        batchUsed = 0;
+      }
+
+      /* Append [tag(1) + hash(20) + len(4 LE) + data(size)]. */
+      batchBuf[batchUsed] = CS_WAL_TAG_CHUNK;
+      batchUsed += 1;
+      memcpy(batchBuf + batchUsed, &pe->hash, 20);
+      batchUsed += 20;
+      CS_WRITE_U32(batchBuf + batchUsed, (u32)pe->size);
+      batchUsed += 4;
+      memcpy(batchBuf + batchUsed,
+             cs->pWriteBuf + pe->offset + 4, pe->size);
+      batchUsed += pe->size;
+    }
+
+    /* Append the root record. Flush first if it doesn't fit. */
+    if( batchUsed + 1 + CHUNK_MANIFEST_SIZE > WAL_BATCH_CAP ){
+      CRASH_CHECK_WRITE();
+      rc = sqlite3OsWrite(cs->pFile, batchBuf, (int)batchUsed, writeOff);
+      if( rc != SQLITE_OK ) goto commit_done;
+      writeOff += batchUsed;
+      batchUsed = 0;
+    }
+    batchBuf[batchUsed] = CS_WAL_TAG_ROOT;
+    batchUsed += 1;
+    csSerializeManifest(cs, batchBuf + batchUsed);
+    batchUsed += CHUNK_MANIFEST_SIZE;
+
+    /* Final flush of the remaining batch. */
+    if( batchUsed > 0 ){
+      CRASH_CHECK_WRITE();
+      rc = sqlite3OsWrite(cs->pFile, batchBuf, (int)batchUsed, writeOff);
+      if( rc != SQLITE_OK ) goto commit_done;
+      writeOff += batchUsed;
+    }
   }
+  #undef WAL_BATCH_CAP
 
 
   CRASH_CHECK_WRITE();
@@ -2277,9 +2343,11 @@ commit_done:
     sqlite3_free(aCommittedPending);
     sqlite3_free(aMerged);
     sqlite3_free(pNewWalData);
+    sqlite3_free(batchBuf);
     return rc;
   }
 
+  sqlite3_free(batchBuf);
   sqlite3_free(aCommittedPending);
   if( cs->nPending > 0 ){
     csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
