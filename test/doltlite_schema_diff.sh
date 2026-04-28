@@ -282,6 +282,93 @@ run_test_match "stmt_cols" \
 rm -f "$DB"
 
 # ============================================================
+# Branch created from tag ref
+# ============================================================
+
+DB=/tmp/test_sd_branch_from_tag_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_tag('v1');
+SELECT dolt_branch('tagfeat','v1');
+SELECT dolt_checkout('tagfeat');
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_commit('-A','-m','tagfeat add col');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "branch_from_tag_count" \
+  "SELECT count(*) FROM dolt_schema_diff('v1','tagfeat');" "1" "$DB"
+run_test "branch_from_tag_name" \
+  "SELECT to_table_name FROM dolt_schema_diff('v1','tagfeat');" "t" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
+# Merge parent refs
+# ============================================================
+
+DB=/tmp/test_sd_parents_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
+SELECT dolt_commit('-A','-m','feat add u');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(2,'main');
+SELECT dolt_commit('-A','-m','main data');
+SELECT dolt_merge('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "first_parent_to_merge_count" \
+  "SELECT count(*) FROM dolt_schema_diff('HEAD^1','HEAD');" "1" "$DB"
+run_test "first_parent_to_merge_name" \
+  "SELECT to_table_name FROM dolt_schema_diff('HEAD^1','HEAD');" "u" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_sd_second_parent_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_commit('-A','-m','feat data');
+SELECT dolt_checkout('main');
+CREATE TABLE m(id INTEGER PRIMARY KEY, y TEXT);
+SELECT dolt_commit('-A','-m','main add m');
+SELECT dolt_merge('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "second_parent_to_merge_count" \
+  "SELECT count(*) FROM dolt_schema_diff('HEAD^2','HEAD');" "1" "$DB"
+run_test "second_parent_to_merge_name" \
+  "SELECT to_table_name FROM dolt_schema_diff('HEAD^2','HEAD');" "m" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
+# Same-name drop / recreate reports old and new schema
+# ============================================================
+
+DB=/tmp/test_sd_drop_recreate_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-A','-m','c1');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY, vv TEXT, extra INT);
+INSERT INTO t VALUES(1,'recreated',7);
+SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "drop_recreate_same_name_count" \
+  "SELECT count(*) FROM dolt_schema_diff('HEAD~1','HEAD');" "1" "$DB"
+run_test_match "drop_recreate_from_stmt" \
+  "SELECT from_create_statement FROM dolt_schema_diff('HEAD~1','HEAD');" \
+  "CREATE TABLE t.*v TEXT" "$DB"
+run_test_match "drop_recreate_to_stmt" \
+  "SELECT to_create_statement FROM dolt_schema_diff('HEAD~1','HEAD');" \
+  "CREATE TABLE t.*vv TEXT.*extra INT" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Done
 # ============================================================
 
