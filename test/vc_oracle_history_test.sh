@@ -243,6 +243,16 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat1');
 "
 
+oracle "history_on_branch_created_from_tag" "
+$SEED
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_tag('v1', 'HEAD~1');
+SELECT dolt_branch('from_tag', 'v1');
+SELECT dolt_checkout('from_tag');
+"
+
 # After a merge, history on main includes commits from both sides
 # (including the merge commit itself).
 oracle "history_after_merge" "
@@ -257,6 +267,38 @@ INSERT INTO t VALUES (4, 40);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feature');
+"
+
+oracle "history_on_branch_created_from_first_parent" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (4, 40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feature');
+SELECT dolt_branch('from_p1', 'HEAD^1');
+SELECT dolt_checkout('from_p1');
+"
+
+oracle "history_on_branch_created_from_second_parent" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (4, 40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feature');
+SELECT dolt_branch('from_p2', 'HEAD^2');
+SELECT dolt_checkout('from_p2');
 "
 
 echo "--- edge cases ---"

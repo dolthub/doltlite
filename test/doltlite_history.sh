@@ -158,6 +158,46 @@ run_test_match "merge_count" "SELECT count(*) FROM dolt_history_t;" "^[6-9]" "$D
 rm -f "$DB"
 
 # ============================================================
+# History on branches created from tags and merge parents
+# ============================================================
+
+DB=/tmp/test_hist_ref_branches_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-A','-m','c1');
+INSERT INTO t VALUES(2,'c2');
+SELECT dolt_commit('-A','-m','c2');
+SELECT dolt_tag('v1','HEAD~1');
+SELECT dolt_branch('from_tag','v1');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "history_from_tag_branch_reopen_distinct_commits" "SELECT count(DISTINCT commit_hash) FROM dolt_history_t;" "1" "$DB/from_tag"
+
+rm -f "$DB"
+
+DB=/tmp/test_hist_parent_branches_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'base');
+SELECT dolt_commit('-A','-m','c1');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(2,'feat');
+SELECT dolt_commit('-A','-m','feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(3,'main');
+SELECT dolt_commit('-A','-m','main2');
+SELECT dolt_merge('feat');
+SELECT dolt_branch('from_p1','HEAD^1');
+SELECT dolt_branch('from_p2','HEAD^2');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "history_from_first_parent_branch_reopen_distinct_commits" "SELECT count(DISTINCT commit_hash) FROM dolt_history_t;" "2" "$DB/from_p1"
+run_test "history_from_second_parent_branch_reopen_distinct_commits" "SELECT count(DISTINCT commit_hash) FROM dolt_history_t;" "2" "$DB/from_p2"
+
+HASH=$(echo "SELECT dolt_hashof('HEAD^2');" | $DOLTLITE "$DB" 2>&1)
+run_test "history_filter_second_parent_hash" "SELECT count(DISTINCT commit_hash) FROM dolt_history_t WHERE commit_hash='$HASH';" "1" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Empty table has no history
 # ============================================================
 
