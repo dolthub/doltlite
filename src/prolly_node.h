@@ -76,8 +76,6 @@ void prollyNodeBuilderReset(ProllyNodeBuilder *b);
 
 void prollyNodeBuilderFree(ProllyNodeBuilder *b);
 
-void prollyNodeComputeHash(const u8 *pData, int nData, ProllyHash *pOut);
-
 int prollyCompareKeys(
   u8 flags,
   const u8 *pKey1, int nKey1, i64 iKey1,

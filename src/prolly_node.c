@@ -408,10 +408,6 @@ void prollyNodeBuilderFree(ProllyNodeBuilder *b){
   memset(b, 0, sizeof(*b));
 }
 
-void prollyNodeComputeHash(const u8 *pData, int nData, ProllyHash *pOut){
-  prollyHashCompute(pData, nData, pOut);
-}
-
 int prollyCompareKeys(
   u8 flags,
   const u8 *pKey1, int nKey1, i64 iKey1,

@@ -61,21 +61,6 @@ static SQLITE_INLINE int tableEntryNameCmp(const void *a, const void *b){
   return strcmp(ea->zName, eb->zName);
 }
 
-static SQLITE_INLINE int doltliteFindTableRoot(
-  struct TableEntry *a, int n, Pgno iTable,
-  ProllyHash *pRoot, u8 *pFlags
-){
-  struct TableEntry *e = doltliteFindTableByNumber(a, n, iTable);
-  if( e ){
-    memcpy(pRoot, &e->root, sizeof(ProllyHash));
-    if( pFlags ) *pFlags = e->flags;
-    return SQLITE_OK;
-  }
-  memset(pRoot, 0, sizeof(ProllyHash));
-  if( pFlags ) *pFlags = 0;
-  return SQLITE_NOTFOUND;
-}
-
 static SQLITE_INLINE int doltliteFindTableRootByName(
   struct TableEntry *a, int n, const char *zName,
   ProllyHash *pRoot, u8 *pFlags
