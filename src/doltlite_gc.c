@@ -394,8 +394,6 @@ static int gcRewriteFile(
 #endif
 
         if( rc==SQLITE_OK ){
-          sqlite3_free(cs->pWalData);
-          cs->pWalData = 0;
           cs->nWalData = 0;
         }
 
