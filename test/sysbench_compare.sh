@@ -516,20 +516,15 @@ check_ceiling() {
   return $failed
 }
 
-# Both wrapped and autocommit suites gate at 2x. The autocommit-shape
-# per-commit overhead used to push some tests past 3x — dropping the
-# in-memory WAL buffer (perf/drop-wal-buffer-impl-v2) brought them
-# under 1.1x, so they share the strict ceiling now.
-AC_MAX_MULTIPLIER=${AC_MAX_MULTIPLIER:-2}
-
+# Wrapped and autocommit suites share the same ceiling.
 echo ""
-echo "### Performance Ceiling Check (wrapped: ${BENCH_MAX_MULTIPLIER}x, autocommit: ${AC_MAX_MULTIPLIER}x)"
+echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
 echo ""
 
 ceiling_ok=0
 check_ceiling "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 check_ceiling "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$AC_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 
 if [ "$ceiling_ok" = "0" ]; then
   echo "All tests within ceilings."
