@@ -626,6 +626,74 @@ SELECT dolt_commit('-m', 'main_add_col');
 SELECT dolt_merge('feature');
 "
 
+# Replay a disjoint add-table commit through a merge while the main
+# side independently rewrites another table's schema. The added table
+# should remain visible in row-history diffs after the merge.
+oracle "diff_schema_replay_after_merge_add_table_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+CREATE TABLE u(id INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO u VALUES (1, 'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_table');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feature');
+" "u"
+
+# Same disjoint schema replay shape as above, but through
+# cherry-pick instead of merge.
+oracle "diff_schema_replay_after_cherrypick_add_table_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+CREATE TABLE u(id INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO u VALUES (1, 'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_table');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feature'));
+" "u"
+
+# Non-interactive rebase of disjoint index additions. Current Dolt
+# behavior only preserves the upstream-side index, so row-history
+# for table b should still be limited to its initial add.
+oracle "diff_schema_replay_after_rebase_disjoint_indexes" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feature');
+CREATE INDEX idx_a_v ON a(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_idx');
+SELECT dolt_checkout('feature');
+CREATE INDEX idx_b_v ON b(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_idx');
+SELECT dolt_rebase('main');
+" "b"
+
 # Stage an ALTER in the working set, then query dolt_diff_<table>.
 # The WORKING row should show schema-only change (no data diff).
 oracle "diff_alter_add_col_working_set_only" "
