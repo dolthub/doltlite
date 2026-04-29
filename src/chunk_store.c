@@ -168,7 +168,6 @@ struct SavedRefsState {
 struct ChunkStoreReplayState {
   i64 nWalData;
   int nChunks;
-  ProllyHash refsHash;
   ChunkIndexEntry *aIndex;
   int nIndex;
   int nIndexAlloc;
@@ -425,7 +424,6 @@ static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
   pSaved->nWalData = cs->nWalData;
   pSaved->nChunks = cs->nChunks;
-  pSaved->refsHash = cs->refsHash;
   pSaved->aIndex = cs->aIndex;
   pSaved->nIndex = cs->nIndex;
   pSaved->nIndexAlloc = cs->nIndexAlloc;
@@ -437,7 +435,6 @@ static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
 static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pSaved){
   cs->nWalData = pSaved->nWalData;
   cs->nChunks = pSaved->nChunks;
-  cs->refsHash = pSaved->refsHash;
   cs->aIndex = pSaved->aIndex;
   cs->nIndex = pSaved->nIndex;
   cs->nIndexAlloc = pSaved->nIndexAlloc;
