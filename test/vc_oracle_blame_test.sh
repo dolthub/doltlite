@@ -217,6 +217,64 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'MAINADD');
 SELECT dolt_merge('feat', '--no-ff', '-m', 'MERGE');
 " "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t ORDER BY id;"
 
+echo "--- schema replay after merge preserves blame visibility ---"
+
+oracle "merge_replay_add_table_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO u VALUES (1, 'feat');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feat');
+" "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_u ORDER BY id;"
+
+echo "--- schema replay after cherry-pick preserves blame visibility ---"
+
+oracle "cherrypick_replay_add_table_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO u VALUES (1, 'feat');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+" "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_u ORDER BY id;"
+
+echo "--- schema replay after rebase preserves blame visibility ---"
+
+oracle "rebase_replay_add_table_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO u VALUES (1, 'feat');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+" "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_u ORDER BY id;"
+
 echo "--- empty table returns no rows ---"
 
 oracle "empty_table" "
