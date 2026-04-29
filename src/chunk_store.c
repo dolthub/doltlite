@@ -138,8 +138,7 @@ static int csGrowPending(ChunkStore *cs);
 static int csGrowWriteBuf(ChunkStore *cs, int nNeeded);
 static void csPendHTClear(ChunkStore *cs);
 
-static int csReplayWalRegion(ChunkStore *cs, int updateManifest);
-static int csReplayWal(ChunkStore *cs){ return csReplayWalRegion(cs, 1); }
+static int csReplayWal(ChunkStore *cs);
 static void csFreeRefsState(ChunkStore *cs);
 static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData);
 static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc);
@@ -895,7 +894,7 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
 ** common chunkStoreGet pread path serves them with no special-casing.
 ** ROOT records do NOT update iWalOffset / iIndexOffset — those describe
 ** the compacted region on disk and only move on GC. */
-static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
+static int csReplayWal(ChunkStore *cs){
   i64 walSize;
   u8 *walData;
   ChunkStoreReplayState saved;
@@ -927,7 +926,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     ** For (b), the manifest's refs hash may point to a chunk that
     ** was prepared but never committed. Reset it. For (a), the
     ** manifest is correct — leave it alone. */
-    if( updateManifest && cs->nIndex==0 && cs->nChunks==0
+    if( cs->nIndex==0 && cs->nChunks==0
      && !prollyHashIsEmpty(&cs->refsHash) ){
       memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
     }
@@ -1009,7 +1008,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         ** point write. Stop and use the previous root. */
         break;
       }
-      if( updateManifest ){
+      {
         u8 *m = walData + pos;
         u32 magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
@@ -1023,7 +1022,6 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         cs->nChunks = (int)CS_READ_U32(m + 28);
 
         memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
-
       }
       pos += CHUNK_MANIFEST_SIZE;
       nRootedPending = cs->nPending;
@@ -1046,7 +1044,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   ** through GC (nIndex > 0), the WAL may be empty because all
   ** data was compacted into the main body — the manifest is
   ** authoritative in that case. */
-  if( nRootRecordsSeen == 0 && updateManifest
+  if( nRootRecordsSeen == 0
    && nPendingBefore == 0 && cs->nIndex == 0 ){
     memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
     cs->nChunks = 0;
