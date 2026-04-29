@@ -33,14 +33,6 @@ struct ProllyCursor {
   ProllyCursorLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];
 
   u8 eState;
-
-  /* Saved logical position for prollyCursorSave/Restore. After a
-  ** write invalidates cache pointers, the cursor reseeks by key
-  ** rather than by cached node pointers. */
-  u8 *pSavedKey;
-  int nSavedKey;
-  i64 iSavedIntKey;
-  u8 hasSavedPosition;
 };
 
 #define PROLLY_CURSOR_VALID    0
@@ -70,8 +62,6 @@ void prollyCursorKey(ProllyCursor *cur, const u8 **ppKey, int *pnKey);
 i64 prollyCursorIntKey(ProllyCursor *cur);
 
 void prollyCursorValue(ProllyCursor *cur, const u8 **ppVal, int *pnVal);
-
-int prollyCursorSave(ProllyCursor *cur);
 
 void prollyCursorReleaseAll(ProllyCursor *cur);
 

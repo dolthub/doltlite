@@ -1383,8 +1383,6 @@ static int ensureMutMap(BtCursor *pCur){
 }
 
 static int saveCursorPosition(BtCursor *pCur){
-  int rc = SQLITE_OK;
-
   if( pCur->eState!=CURSOR_VALID && pCur->eState!=CURSOR_SKIPNEXT ){
     return SQLITE_OK;
   }
@@ -1439,10 +1437,7 @@ static int saveCursorPosition(BtCursor *pCur){
     }
   }
 
-  rc = prollyCursorSave(&pCur->pCur);
-  if( rc!=SQLITE_OK ){
-    return rc;
-  }
+  prollyCursorReleaseAll(&pCur->pCur);
 
   pCur->eState = CURSOR_REQUIRESEEK;
   return SQLITE_OK;
