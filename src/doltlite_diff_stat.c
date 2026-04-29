@@ -81,6 +81,36 @@ cleanup:
   return SQLITE_OK;
 }
 
+static int dsLoadCreateSql(
+  sqlite3 *db,
+  const ProllyHash *pCatHash,
+  const char *zTableName,
+  char **pzSqlOut
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyCache *pCache = doltliteGetCache(db);
+  SchemaEntry *aSchemas = 0;
+  int nSchemas = 0;
+  SchemaEntry *pEntry;
+  int rc;
+
+  *pzSqlOut = 0;
+  if( prollyHashIsEmpty(pCatHash) ) return SQLITE_OK;
+
+  rc = loadSchemaFromCatalog(db, cs, pCache, pCatHash, &aSchemas, &nSchemas);
+  if( rc!=SQLITE_OK ) return rc;
+  pEntry = findSchemaEntry(aSchemas, nSchemas, zTableName);
+  if( pEntry && pEntry->zSql ){
+    *pzSqlOut = sqlite3_mprintf("%s", pEntry->zSql);
+    if( !*pzSqlOut ){
+      freeSchemaEntries(aSchemas, nSchemas);
+      return SQLITE_NOMEM;
+    }
+  }
+  freeSchemaEntries(aSchemas, nSchemas);
+  return SQLITE_OK;
+}
+
 static void dsFreeColNames(char **az, int n){
   int i;
   for(i=0; i<n; i++) sqlite3_free(az[i]);
@@ -208,6 +238,7 @@ static int dsCountChangedCells(
 typedef struct DsStatRow DsStatRow;
 struct DsStatRow {
   char *zTableName;
+  int schemaChanged;
   i64 rowsUnmodified;
   i64 rowsAdded;
   i64 rowsDeleted;
@@ -268,8 +299,10 @@ static int dsComputeTableStats(
   int nFromCat = 0, nToCat = 0;
   struct TableEntry *pFromEntry, *pToEntry;
   int hasFrom = 0, hasTo = 0;
+  int schemaChanged = 0;
   ProllyHash fromRoot, toRoot;
   u8 fromFlags = 0, toFlags = 0;
+  char *zFromSql = 0, *zToSql = 0;
   char **azFromCols = 0, **azToCols = 0;
   int nFromCols = 0, nToCols = 0;
   i64 oldCount = 0, newCount = 0;
@@ -309,16 +342,23 @@ static int dsComputeTableStats(
 
 
   if( hasFrom ){
-    rc = dsLoadColNames(db, pFromCatHash, zTableName, &azFromCols, &nFromCols);
+    rc = dsLoadCreateSql(db, pFromCatHash, zTableName, &zFromSql);
     if( rc!=SQLITE_OK ) return rc;
+    rc = dsLoadColNames(db, pFromCatHash, zTableName, &azFromCols, &nFromCols);
+    if( rc!=SQLITE_OK ) goto done;
   }
   if( hasTo ){
+    rc = dsLoadCreateSql(db, pToCatHash, zTableName, &zToSql);
+    if( rc!=SQLITE_OK ) goto done;
     rc = dsLoadColNames(db, pToCatHash, zTableName, &azToCols, &nToCols);
     if( rc!=SQLITE_OK ){
-      dsFreeColNames(azFromCols, nFromCols);
-      return rc;
+      goto done;
     }
   }
+
+  schemaChanged =
+    hasFrom && hasTo &&
+    strcmp(zFromSql ? zFromSql : "", zToSql ? zToSql : "")!=0;
 
 
   if( hasFrom ){
@@ -398,6 +438,7 @@ static int dsComputeTableStats(
   }
 
   pOut->zTableName     = sqlite3_mprintf("%s", zTableName);
+  pOut->schemaChanged  = schemaChanged;
   pOut->rowsAdded      = rowsAdd;
   pOut->rowsDeleted    = rowsDel;
   pOut->rowsModified   = rowsMod;
@@ -411,7 +452,19 @@ static int dsComputeTableStats(
   pOut->oldCellCount   = (i64)oldCount * nFromCols;
   pOut->newCellCount   = (i64)newCount * nToCols;
 
+  if( schemaChanged
+   && rowsAdd==0 && rowsDel==0 && rowsMod==0
+   && cellsAdd==0 && cellsDel==0 && cellsMod==0 ){
+    pOut->rowsUnmodified = 0;
+    pOut->oldRowCount = 0;
+    pOut->newRowCount = 0;
+    pOut->oldCellCount = 0;
+    pOut->newCellCount = 0;
+  }
+
 done:
+  sqlite3_free(zFromSql);
+  sqlite3_free(zToSql);
   dsFreeColNames(azFromCols, nFromCols);
   dsFreeColNames(azToCols, nToCols);
   return rc;
@@ -692,8 +745,10 @@ static int dstFilter(sqlite3_vtab_cursor *cur,
 
     if( row.rowsAdded==0 && row.rowsDeleted==0 && row.rowsModified==0
      && row.cellsAdded==0 && row.cellsDeleted==0 && row.cellsModified==0 ){
-      sqlite3_free(row.zTableName);
-      continue;
+      if( !row.schemaChanged ){
+        sqlite3_free(row.zTableName);
+        continue;
+      }
     }
     rc = dstAppend(c, &row);
     if( rc!=SQLITE_OK ){ sqlite3_free(row.zTableName); goto done; }
