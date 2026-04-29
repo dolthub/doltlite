@@ -3543,21 +3543,6 @@ fail:
   return rc;
 }
 
-/* Checkout helper used by rebase to switch the session back to the
-** original branch after --continue or --abort. Delegates to the
-** existing dolt_checkout function so we don't reimplement the full
-** state transition (working set load, catalog switch, branch ref
-** lookup, etc.). */
-static int rebaseCheckoutBranch(sqlite3 *db, const char *zBranch){
-  char *zSql;
-  int rc;
-  zSql = sqlite3_mprintf("SELECT dolt_checkout('%q')", zBranch);
-  if( !zSql ) return SQLITE_NOMEM;
-  rc = sqlite3_exec(db, zSql, 0, 0, 0);
-  sqlite3_free(zSql);
-  return rc;
-}
-
 static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headHash;

@@ -1257,22 +1257,6 @@ static int recordSchemaAddColumns(
   return SQLITE_OK;
 }
 
-static int schemaHasTableNamed(
-  SchemaEntry *aSchema, int nSchema,
-  const char *zName
-){
-  int i;
-  for(i=0; i<nSchema; i++){
-    if( aSchema[i].zName
-     && aSchema[i].zType
-     && strcmp(aSchema[i].zType, "table")==0
-     && strcmp(aSchema[i].zName, zName)==0 ){
-      return 1;
-    }
-  }
-  return 0;
-}
-
 static int schemaEntryChangedByName(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aSide, int nSide,

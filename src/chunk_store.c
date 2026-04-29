@@ -515,7 +515,6 @@ static void csFreeRefsState(ChunkStore *cs){
   cs->zDefaultBranch = 0;
 }
 
-#define CS_INIT_INDEX_ALLOC   64
 #define CS_INIT_PENDING_ALLOC 16
 #define CS_INIT_WRITEBUF_SIZE 4096
 
