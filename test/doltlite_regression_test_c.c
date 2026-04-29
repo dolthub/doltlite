@@ -2742,7 +2742,7 @@ static void run_wal_offset_corruption_is_rejected(void){
   {
     int i;
     for(i=0; i<cs.nIndex; i++){
-      if( cs.aIndex[i].offset < 0 ){
+      if( cs.aIndex[i].offset >= cs.iWalOffset ){
         iWal = i;
         break;
       }
@@ -2750,7 +2750,7 @@ static void run_wal_offset_corruption_is_rejected(void){
   }
   check("have_wal_backed_index_entry", iWal >= 0);
   if( iWal >= 0 ){
-    cs.aIndex[iWal].offset = -(cs.nWalData + cs.aIndex[iWal].size + 2);
+    cs.aIndex[iWal].offset = cs.iFileSize + 1024;
     rc = chunkStoreGet(&cs, &cs.aIndex[iWal].hash, &pData, &nData);
     check("corrupt_wal_offset_returns_error", rc!=SQLITE_OK);
   }

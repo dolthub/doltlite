@@ -516,12 +516,11 @@ check_ceiling() {
   return $failed
 }
 
-# Wrapped tests (BEGIN/COMMIT amortizes per-commit overhead) gate at the
-# stricter BENCH_MAX_MULTIPLIER (default 2x). The autocommit section
-# gates at AC_MAX_MULTIPLIER (4x): per-commit fixed costs aren't yet
-# at parity with SQLite, but a 4x ceiling catches gross regressions
-# while we work the optimization rounds down.
-AC_MAX_MULTIPLIER=${AC_MAX_MULTIPLIER:-4}
+# Both wrapped and autocommit suites gate at 2x. The autocommit-shape
+# per-commit overhead used to push some tests past 3x — dropping the
+# in-memory WAL buffer (perf/drop-wal-buffer-impl-v2) brought them
+# under 1.1x, so they share the strict ceiling now.
+AC_MAX_MULTIPLIER=${AC_MAX_MULTIPLIER:-2}
 
 echo ""
 echo "### Performance Ceiling Check (wrapped: ${BENCH_MAX_MULTIPLIER}x, autocommit: ${AC_MAX_MULTIPLIER}x)"
