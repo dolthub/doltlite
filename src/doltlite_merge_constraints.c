@@ -693,35 +693,6 @@ static int tableHasRowid(sqlite3 *db, const char *zTable){
   return rc == SQLITE_OK ? 1 : 0;
 }
 
-/* Emit a descriptive error and return SQLITE_ERROR. Used when a
-** walker refuses to process a WITHOUT ROWID table. Writes a
-** user-facing message into *ppzErrMsg (owned by sqlite3_free)
-** so the merge function can surface it via sqlite3_result_error
-** instead of falling back to the generic "SQL logic error"
-** text. Safe to pass a NULL ppzErrMsg. */
-static int refuseWithoutRowid(
-  sqlite3 *db,
-  char **ppzErrMsg,
-  const char *zTable,
-  const char *zWhich
-){
-  char *zMsg = sqlite3_mprintf(
-      "constraint-violation detection on WITHOUT ROWID tables is not "
-      "yet supported (%s check on \"%s\"); see GitHub issue #495. "
-      "Drop WITHOUT ROWID or use INTEGER PRIMARY KEY to keep merges flowing.",
-      zWhich, zTable);
-  if( zMsg ){
-    sqlite3_log(SQLITE_ERROR, "%s", zMsg);
-    if( ppzErrMsg && !*ppzErrMsg ){
-      *ppzErrMsg = zMsg;
-    }else{
-      sqlite3_free(zMsg);
-    }
-  }
-  (void)db;
-  return SQLITE_ERROR;
-}
-
 /* Resolve a (zTable, rowid) pair to the raw prolly row by looking
 ** the table up in the current btree's catalog via the public
 ** doltliteGetSessionTableRoot accessor and walking its prolly

@@ -1266,24 +1266,6 @@ static void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
   }
 }
 
-static void setCursorToMutMapEntry(BtCursor *pCur, int idx){
-  ProllyMutMapEntry *pEntry = prollyMutMapEntryAt(pCur->pMutMap, idx);
-  CLEAR_CACHED_PAYLOAD(pCur);
-  pCur->mmIdx = idx;
-  pCur->mmPhysIdx = -1;
-  pCur->mmActive = 1;
-  pCur->mmPhysActive = 0;
-  pCur->mergeSrc = MERGE_SRC_MUT;
-  pCur->eState = CURSOR_VALID;
-  pCur->curFlags &= ~BTCF_AtLast;
-  if( pCur->curIntKey ){
-    pCur->cachedIntKey = pEntry->intKey;
-    pCur->curFlags |= BTCF_ValidNKey;
-  }else{
-    pCur->curFlags &= ~BTCF_ValidNKey;
-  }
-}
-
 static int advanceTreeCursor(BtCursor *pCur, int dir){
   if( dir>0 ){
     return prollyCursorNext(&pCur->pCur);
@@ -4156,12 +4138,6 @@ static u32 btreeSerialType(Mem *pMem, u32 *pLen){
     return n*2 + SERIAL_TYPE_BLOB_BASE;
   }
   *pLen = 0; return SERIAL_TYPE_NULL;
-}
-
-static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut){
-  int nAlloc = 0;
-  *ppOut = 0;
-  return serializeUnpackedRecordBuffer(pRec, ppOut, &nAlloc, pnOut);
 }
 
 static int findMatchingMutMapEntry(

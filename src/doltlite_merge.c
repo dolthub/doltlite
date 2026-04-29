@@ -1273,54 +1273,6 @@ static int schemaHasTableNamed(
   return 0;
 }
 
-static int catalogHasDisjointNewTables(
-  sqlite3 *db,
-  const ProllyHash *pCatAnc,
-  const ProllyHash *pCatOurs,
-  const ProllyHash *pCatTheirs
-){
-  ChunkStore *cs = doltliteGetChunkStore(db);
-  ProllyCache *pCache = doltliteGetCache(db);
-  SchemaEntry *aAncSchema = 0, *aOursSchema = 0, *aTheirsSchema = 0;
-  int nAncSchema = 0, nOursSchema = 0, nTheirsSchema = 0;
-  int i, rc;
-  int sawOursNew = 0, sawTheirsNew = 0;
-  int result = 0;
-
-  if( !cs || !pCache ) return 0;
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatAnc, &aAncSchema, &nAncSchema);
-  if( rc!=SQLITE_OK ) goto done;
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatOurs, &aOursSchema, &nOursSchema);
-  if( rc!=SQLITE_OK ) goto done;
-  rc = loadSchemaFromCatalog(db, cs, pCache, pCatTheirs, &aTheirsSchema, &nTheirsSchema);
-  if( rc!=SQLITE_OK ) goto done;
-
-  for(i=0; i<nOursSchema; i++){
-    const char *zName = aOursSchema[i].zName;
-    if( !zName || !aOursSchema[i].zType ) continue;
-    if( strcmp(aOursSchema[i].zType, "table")!=0 ) continue;
-    if( schemaHasTableNamed(aAncSchema, nAncSchema, zName) ) continue;
-    sawOursNew = 1;
-    if( schemaHasTableNamed(aTheirsSchema, nTheirsSchema, zName) ) goto done;
-  }
-
-  for(i=0; i<nTheirsSchema; i++){
-    const char *zName = aTheirsSchema[i].zName;
-    if( !zName || !aTheirsSchema[i].zType ) continue;
-    if( strcmp(aTheirsSchema[i].zType, "table")!=0 ) continue;
-    if( schemaHasTableNamed(aAncSchema, nAncSchema, zName) ) continue;
-    sawTheirsNew = 1;
-    if( schemaHasTableNamed(aOursSchema, nOursSchema, zName) ) goto done;
-  }
-
-  result = sawOursNew && sawTheirsNew;
-done:
-  freeSchemaEntries(aAncSchema, nAncSchema);
-  freeSchemaEntries(aOursSchema, nOursSchema);
-  freeSchemaEntries(aTheirsSchema, nTheirsSchema);
-  return result;
-}
-
 static int schemaEntryChangedByName(
   SchemaEntry *aAnc, int nAnc,
   SchemaEntry *aSide, int nSide,

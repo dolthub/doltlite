@@ -315,15 +315,6 @@ static int appendUndoRec(ProllyMutMap *mm, int idx){
   return SQLITE_OK;
 }
 
-static void shiftUndoIndices(ProllyMutMap *mm, int idx, int delta){
-  int i;
-  for(i=0; i<mm->nUndo; i++){
-    if( mm->aUndo[i].entryIdx >= idx ){
-      mm->aUndo[i].entryIdx += delta;
-    }
-  }
-}
-
 int prollyMutMapInsert(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
