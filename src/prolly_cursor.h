@@ -73,8 +73,6 @@ void prollyCursorValue(ProllyCursor *cur, const u8 **ppVal, int *pnVal);
 
 int prollyCursorSave(ProllyCursor *cur);
 
-int prollyCursorRestore(ProllyCursor *cur, int *pDifferentRow);
-
 void prollyCursorReleaseAll(ProllyCursor *cur);
 
 void prollyCursorClose(ProllyCursor *cur);

@@ -131,21 +131,6 @@ char *doltliteDecodeRecord(const u8 *pData, int nData){
   return buf.z;
 }
 
-void doltliteResultRecord(sqlite3_context *ctx, const u8 *pData, int nData){
-  if( !pData || nData<=0 ){
-    sqlite3_result_null(ctx);
-    return;
-  }
-  {
-    char *z = doltliteDecodeRecord(pData, nData);
-    if( z ){
-      sqlite3_result_text(ctx, z, -1, sqlite3_free);
-    }else{
-      sqlite3_result_null(ctx);
-    }
-  }
-}
-
 void doltliteFreeColInfo(DoltliteColInfo *ci){
   int i;
   for(i=0; i<ci->nCol; i++) sqlite3_free(ci->azName[i]);

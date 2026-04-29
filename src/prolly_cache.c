@@ -195,25 +195,6 @@ void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry){
   entry->nRef--;
 }
 
-void prollyCachePurge(ProllyCache *cache){
-  ProllyCacheEntry *pEntry;
-  ProllyCacheEntry *pPrev;
-
-  if( cache->aBucket==0 ) return;
-
-  pEntry = cache->lruTail.pLruPrev;
-  while( pEntry!=&cache->lruHead ){
-    pPrev = pEntry->pLruPrev;
-    if( pEntry->nRef==0 ){
-      lruRemove(pEntry);
-      hashRemove(cache, pEntry);
-      cacheEntryFree(pEntry);
-      cache->nUsed--;
-    }
-    pEntry = pPrev;
-  }
-}
-
 void prollyCacheFree(ProllyCache *cache){
   ProllyCacheEntry *pEntry;
   ProllyCacheEntry *pNext;

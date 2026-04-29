@@ -275,12 +275,6 @@ int prollyChunkerAddAtLevel(ProllyChunker *ch, int level,
   return addToLevel(ch, level, pKey, nKey, pVal, nVal);
 }
 
-int prollyChunkerFlushLevel(ProllyChunker *ch, int level){
-  if( level >= ch->nLevels ) return SQLITE_OK;
-  if( ch->aLevel[level].builder.nItems == 0 ) return SQLITE_OK;
-  return flushLevel(ch, level);
-}
-
 void prollyChunkerFree(ProllyChunker *ch){
   int i;
   for(i = 0; i < ch->nLevels; i++){

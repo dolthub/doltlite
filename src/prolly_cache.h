@@ -44,8 +44,6 @@ ProllyCacheEntry *prollyCachePut(ProllyCache *cache,
 
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry);
 
-void prollyCachePurge(ProllyCache *cache);
-
 void prollyCacheFree(ProllyCache *cache);
 
 #endif

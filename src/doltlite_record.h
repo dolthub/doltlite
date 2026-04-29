@@ -6,8 +6,6 @@
 
 char *doltliteDecodeRecord(const u8 *pData, int nData);
 
-void doltliteResultRecord(sqlite3_context *ctx, const u8 *pData, int nData);
-
 typedef struct DoltliteColInfo DoltliteColInfo;
 struct DoltliteColInfo {
   char **azName;

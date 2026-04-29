@@ -410,40 +410,6 @@ int prollyCursorSave(ProllyCursor *cur){
   return SQLITE_OK;
 }
 
-int prollyCursorRestore(ProllyCursor *cur, int *pDifferentRow){
-  int rc;
-  int res;
-
-  if( !cur->hasSavedPosition ){
-    *pDifferentRow = 1;
-    cur->eState = PROLLY_CURSOR_INVALID;
-    return SQLITE_OK;
-  }
-
-  if( cur->flags & PROLLY_NODE_INTKEY ){
-    rc = prollyCursorSeekInt(cur, cur->iSavedIntKey, &res);
-  } else {
-    rc = prollyCursorSeekBlob(cur, cur->pSavedKey, cur->nSavedKey, &res);
-  }
-  if( rc!=SQLITE_OK ) return rc;
-
-  if( res==0 ){
-    *pDifferentRow = 0;
-  } else {
-    *pDifferentRow = 1;
-  }
-
-
-  if( cur->pSavedKey ){
-    sqlite3_free(cur->pSavedKey);
-    cur->pSavedKey = 0;
-    cur->nSavedKey = 0;
-  }
-  cur->hasSavedPosition = 0;
-
-  return SQLITE_OK;
-}
-
 void prollyCursorReleaseAll(ProllyCursor *cur){
   int i;
   for(i=0; i<PROLLY_CURSOR_MAX_DEPTH; i++){
