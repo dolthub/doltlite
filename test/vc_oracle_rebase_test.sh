@@ -229,6 +229,44 @@ oracle_reopen() {
   fi
 }
 
+oracle_poststate() {
+  local name="$1" setup="$2" dl_query="$3" dolt_query="${4:-$3}"
+  local dir="$TMPROOT/${name}_post"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup"
+  dl_rc=$?
+  local dl_out
+  dl_out=$(printf ".headers off\n.mode list\n%s\n" "$dl_query" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.post.err" \
+           | tr -d '\r')
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  local dt_rc
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup"
+  dt_rc=$?
+  local dt_out
+  (
+    cd "$dir/dt" || exit 1
+    "$DOLT" sql -r csv -q "$dolt_query" 2>"$dir/dt.post.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tail -n +2 "$dir/dt.raw" | tr -d '"\r')
+
+  if [ "$dl_rc" -eq 0 ] && [ "$dt_rc" -eq 0 ] && [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+    echo "    doltlite: |$dl_out|"
+    echo "    dolt:     |$dt_out|"
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_rebase ==="
 echo ""
 
@@ -296,6 +334,45 @@ oracle "multi_commit_log" "$MULTI_SETUP" \
 
 oracle "multi_commit_table" "$MULTI_SETUP" \
   "SELECT CONCAT('LOG|', id) FROM t ORDER BY id;"
+
+echo "--- schema-edge replay ---"
+
+oracle_poststate "rebase_disjoint_add_table_plus_check" "
+CREATE TABLE base(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO base VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+CREATE TABLE base_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO base_new SELECT * FROM base;
+DROP TABLE base;
+ALTER TABLE base_new RENAME TO base;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main check');
+SELECT dolt_checkout('feat');
+CREATE TABLE feat_tbl(k INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO feat_tbl VALUES (1, 'x');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat table');
+SELECT dolt_rebase('main');
+" "SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='feat_tbl') || '|' ||
+          (SELECT count(*) FROM feat_tbl) || '|' ||
+          (SELECT count(*) FROM base)" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.tables WHERE table_name='feat_tbl'), '|', (SELECT COUNT(*) FROM feat_tbl), '|', (SELECT COUNT(*) FROM base))"
+
+oracle_poststate "rebase_disjoint_add_indexes_current_dolt_behavior" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 20);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+CREATE INDEX idx_a_v ON a(v);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main idx');
+SELECT dolt_checkout('feat');
+CREATE INDEX idx_b_v ON b(v);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat idx');
+SELECT dolt_rebase('main');
+" "SELECT (SELECT count(*) FROM pragma_index_list('a') WHERE name='idx_a_v') || '|' ||
+          (SELECT count(*) FROM pragma_index_list('b') WHERE name='idx_b_v')" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.statistics WHERE table_name='a' AND index_name='idx_a_v'), '|', (SELECT COUNT(*) FROM information_schema.statistics WHERE table_name='b' AND index_name='idx_b_v'))"
 
 echo "--- error paths ---"
 
