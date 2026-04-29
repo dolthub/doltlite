@@ -464,7 +464,6 @@ static int gcSweep(
     sqlite3_free(cs->aIndex);
     cs->aIndex = aNewIndex;
     cs->nIndex = nNewIndex;
-    cs->nIndexAlloc = nNewIndex;
     cs->nChunks = nNewIndex;
     cs->iIndexOffset = CHUNK_MANIFEST_SIZE + nBuf;
     cs->nIndexSize = indexSize;

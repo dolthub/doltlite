@@ -197,7 +197,6 @@ struct ChunkStore {
 
   ChunkIndexEntry *aIndex;
   int nIndex;
-  int nIndexAlloc;
 
   /* When the persisted index is mmapped, aIndexMmapBase is the page-
   ** aligned base of the mapping (which can differ from aIndex if

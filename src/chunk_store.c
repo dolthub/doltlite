@@ -138,8 +138,7 @@ static int csGrowPending(ChunkStore *cs);
 static int csGrowWriteBuf(ChunkStore *cs, int nNeeded);
 static void csPendHTClear(ChunkStore *cs);
 
-static int csReplayWalRegion(ChunkStore *cs, int updateManifest);
-static int csReplayWal(ChunkStore *cs){ return csReplayWalRegion(cs, 1); }
+static int csReplayWal(ChunkStore *cs);
 static void csFreeRefsState(ChunkStore *cs);
 static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData);
 static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc);
@@ -166,14 +165,10 @@ struct SavedRefsState {
 };
 
 struct ChunkStoreReplayState {
-  i64 nWalData;
-  int nChunks;
   ChunkIndexEntry *aIndex;
   int nIndex;
-  int nIndexAlloc;
-  /* Carried alongside aIndex so save/restore knows whether the
-  ** snapshotted pointer was mmapped or malloc'd. NULL/0 means
-  ** malloc'd. See csReleaseIndexBuf. */
+  /* aIndexMmapBase is the page-aligned base when aIndex is mmapped
+  ** (NULL/0 when malloc'd) — csReleaseIndexBuf branches on it. */
   void *aIndexMmapBase;
   i64 aIndexMmapSize;
   SavedRefsState refs;
@@ -322,15 +317,6 @@ static void csReleaseIndexBuf(ChunkIndexEntry *aIndex,
   }
 }
 
-static void csReleaseLiveIndex(ChunkStore *cs){
-  csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
-  cs->aIndex = 0;
-  cs->aIndexMmapBase = 0;
-  cs->aIndexMmapSize = 0;
-  cs->nIndex = 0;
-  cs->nIndexAlloc = 0;
-}
-
 static void csFreeBranches(ChunkStore *cs){
   int k;
   for(k=0; k<cs->nBranches; k++) sqlite3_free(cs->aBranches[k].zName);
@@ -422,22 +408,16 @@ static void csFreeSavedRefsState(SavedRefsState *pSaved){
 
 static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
-  pSaved->nWalData = cs->nWalData;
-  pSaved->nChunks = cs->nChunks;
   pSaved->aIndex = cs->aIndex;
   pSaved->nIndex = cs->nIndex;
-  pSaved->nIndexAlloc = cs->nIndexAlloc;
   pSaved->aIndexMmapBase = cs->aIndexMmapBase;
   pSaved->aIndexMmapSize = cs->aIndexMmapSize;
   csCaptureSavedRefsState(cs, &pSaved->refs);
 }
 
 static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pSaved){
-  cs->nWalData = pSaved->nWalData;
-  cs->nChunks = pSaved->nChunks;
   cs->aIndex = pSaved->aIndex;
   cs->nIndex = pSaved->nIndex;
-  cs->nIndexAlloc = pSaved->nIndexAlloc;
   cs->aIndexMmapBase = pSaved->aIndexMmapBase;
   cs->aIndexMmapSize = pSaved->aIndexMmapSize;
   csRestoreSavedRefsState(cs, &pSaved->refs);
@@ -489,7 +469,6 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->iFileSize = pSrc->iFileSize;
   pDst->aIndex = pSrc->aIndex;
   pDst->nIndex = pSrc->nIndex;
-  pDst->nIndexAlloc = pSrc->nIndexAlloc;
   pDst->aIndexMmapBase = pSrc->aIndexMmapBase;
   pDst->aIndexMmapSize = pSrc->aIndexMmapSize;
   pDst->nWalData = pSrc->nWalData;
@@ -506,7 +485,6 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->pFile = 0;
   pSrc->aIndex = 0;
   pSrc->nIndex = 0;
-  pSrc->nIndexAlloc = 0;
   pSrc->aIndexMmapBase = 0;
   pSrc->aIndexMmapSize = 0;
   pSrc->nWalData = 0;
@@ -821,7 +799,6 @@ static int csReadIndex(ChunkStore *cs){
                   &pMapBase, &nMapSize, &pMapData) == SQLITE_OK ){
     cs->aIndex = (ChunkIndexEntry *)pMapData;
     cs->nIndex = nEntries;
-    cs->nIndexAlloc = nEntries;
     cs->aIndexMmapBase = pMapBase;
     cs->aIndexMmapSize = nMapSize;
     return SQLITE_OK;
@@ -832,7 +809,6 @@ static int csReadIndex(ChunkStore *cs){
   );
   if( cs->aIndex == 0 ) return SQLITE_NOMEM;
   cs->nIndex = nEntries;
-  cs->nIndexAlloc = nEntries;
   cs->aIndexMmapBase = 0;
   cs->aIndexMmapSize = 0;
 
@@ -904,7 +880,7 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
 ** common chunkStoreGet pread path serves them with no special-casing.
 ** ROOT records do NOT update iWalOffset / iIndexOffset — those describe
 ** the compacted region on disk and only move on GC. */
-static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
+static int csReplayWal(ChunkStore *cs){
   i64 walSize;
   u8 *walData;
   ChunkStoreReplayState saved;
@@ -936,7 +912,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     ** For (b), the manifest's refs hash may point to a chunk that
     ** was prepared but never committed. Reset it. For (a), the
     ** manifest is correct — leave it alone. */
-    if( updateManifest && cs->nIndex==0 && cs->nChunks==0
+    if( cs->nIndex==0 && cs->nChunks==0
      && !prollyHashIsEmpty(&cs->refsHash) ){
       memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
     }
@@ -1018,7 +994,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         ** point write. Stop and use the previous root. */
         break;
       }
-      if( updateManifest ){
+      {
         u8 *m = walData + pos;
         u32 magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
@@ -1032,7 +1008,6 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
         cs->nChunks = (int)CS_READ_U32(m + 28);
 
         memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
-
       }
       pos += CHUNK_MANIFEST_SIZE;
       nRootedPending = cs->nPending;
@@ -1055,7 +1030,7 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
   ** through GC (nIndex > 0), the WAL may be empty because all
   ** data was compacted into the main body — the manifest is
   ** authoritative in that case. */
-  if( nRootRecordsSeen == 0 && updateManifest
+  if( nRootRecordsSeen == 0
    && nPendingBefore == 0 && cs->nIndex == 0 ){
     memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
     cs->nChunks = 0;
@@ -1071,7 +1046,6 @@ static int csReplayWalRegion(ChunkStore *cs, int updateManifest){
     ** tracking so cs reflects the new malloc'd merged array. */
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
-    cs->nIndexAlloc = nMerged;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
     cs->nPending = 0;
@@ -2037,7 +2011,6 @@ static int csCommitToMemory(ChunkStore *cs){
     csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
     cs->aIndex = aMem;
     cs->nIndex = nMem;
-    cs->nIndexAlloc = nMem;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
     cs->nPending = 0;
@@ -2265,7 +2238,6 @@ commit_done:
     csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
-    cs->nIndexAlloc = nMerged;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
     cs->nWalData = newWalSize;
