@@ -165,8 +165,6 @@ struct SavedRefsState {
 };
 
 struct ChunkStoreReplayState {
-  i64 nWalData;
-  int nChunks;
   ChunkIndexEntry *aIndex;
   int nIndex;
   /* aIndexMmapBase is the page-aligned base when aIndex is mmapped
@@ -410,8 +408,6 @@ static void csFreeSavedRefsState(SavedRefsState *pSaved){
 
 static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
-  pSaved->nWalData = cs->nWalData;
-  pSaved->nChunks = cs->nChunks;
   pSaved->aIndex = cs->aIndex;
   pSaved->nIndex = cs->nIndex;
   pSaved->aIndexMmapBase = cs->aIndexMmapBase;
@@ -420,8 +416,6 @@ static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
 }
 
 static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pSaved){
-  cs->nWalData = pSaved->nWalData;
-  cs->nChunks = pSaved->nChunks;
   cs->aIndex = pSaved->aIndex;
   cs->nIndex = pSaved->nIndex;
   cs->aIndexMmapBase = pSaved->aIndexMmapBase;
