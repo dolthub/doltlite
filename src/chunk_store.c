@@ -169,10 +169,8 @@ struct ChunkStoreReplayState {
   int nChunks;
   ChunkIndexEntry *aIndex;
   int nIndex;
-  int nIndexAlloc;
-  /* Carried alongside aIndex so save/restore knows whether the
-  ** snapshotted pointer was mmapped or malloc'd. NULL/0 means
-  ** malloc'd. See csReleaseIndexBuf. */
+  /* aIndexMmapBase is the page-aligned base when aIndex is mmapped
+  ** (NULL/0 when malloc'd) — csReleaseIndexBuf branches on it. */
   void *aIndexMmapBase;
   i64 aIndexMmapSize;
   SavedRefsState refs;
@@ -416,7 +414,6 @@ static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
   pSaved->nChunks = cs->nChunks;
   pSaved->aIndex = cs->aIndex;
   pSaved->nIndex = cs->nIndex;
-  pSaved->nIndexAlloc = cs->nIndexAlloc;
   pSaved->aIndexMmapBase = cs->aIndexMmapBase;
   pSaved->aIndexMmapSize = cs->aIndexMmapSize;
   csCaptureSavedRefsState(cs, &pSaved->refs);
@@ -427,7 +424,6 @@ static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pS
   cs->nChunks = pSaved->nChunks;
   cs->aIndex = pSaved->aIndex;
   cs->nIndex = pSaved->nIndex;
-  cs->nIndexAlloc = pSaved->nIndexAlloc;
   cs->aIndexMmapBase = pSaved->aIndexMmapBase;
   cs->aIndexMmapSize = pSaved->aIndexMmapSize;
   csRestoreSavedRefsState(cs, &pSaved->refs);
@@ -479,7 +475,6 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->iFileSize = pSrc->iFileSize;
   pDst->aIndex = pSrc->aIndex;
   pDst->nIndex = pSrc->nIndex;
-  pDst->nIndexAlloc = pSrc->nIndexAlloc;
   pDst->aIndexMmapBase = pSrc->aIndexMmapBase;
   pDst->aIndexMmapSize = pSrc->aIndexMmapSize;
   pDst->nWalData = pSrc->nWalData;
@@ -496,7 +491,6 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->pFile = 0;
   pSrc->aIndex = 0;
   pSrc->nIndex = 0;
-  pSrc->nIndexAlloc = 0;
   pSrc->aIndexMmapBase = 0;
   pSrc->aIndexMmapSize = 0;
   pSrc->nWalData = 0;
@@ -811,7 +805,6 @@ static int csReadIndex(ChunkStore *cs){
                   &pMapBase, &nMapSize, &pMapData) == SQLITE_OK ){
     cs->aIndex = (ChunkIndexEntry *)pMapData;
     cs->nIndex = nEntries;
-    cs->nIndexAlloc = nEntries;
     cs->aIndexMmapBase = pMapBase;
     cs->aIndexMmapSize = nMapSize;
     return SQLITE_OK;
@@ -822,7 +815,6 @@ static int csReadIndex(ChunkStore *cs){
   );
   if( cs->aIndex == 0 ) return SQLITE_NOMEM;
   cs->nIndex = nEntries;
-  cs->nIndexAlloc = nEntries;
   cs->aIndexMmapBase = 0;
   cs->aIndexMmapSize = 0;
 
@@ -1060,7 +1052,6 @@ static int csReplayWal(ChunkStore *cs){
     ** tracking so cs reflects the new malloc'd merged array. */
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
-    cs->nIndexAlloc = nMerged;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
     cs->nPending = 0;
@@ -2026,7 +2017,6 @@ static int csCommitToMemory(ChunkStore *cs){
     csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
     cs->aIndex = aMem;
     cs->nIndex = nMem;
-    cs->nIndexAlloc = nMem;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
     cs->nPending = 0;
@@ -2254,7 +2244,6 @@ commit_done:
     csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
-    cs->nIndexAlloc = nMerged;
     cs->aIndexMmapBase = 0;
     cs->aIndexMmapSize = 0;
     cs->nWalData = newWalSize;
