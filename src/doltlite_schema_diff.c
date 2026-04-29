@@ -60,6 +60,40 @@ static int schemaTextField(
   return SQLITE_OK;
 }
 
+static i64 schemaIntField(
+  const u8 *pVal,
+  int nVal,
+  DoltliteRecordInfo *pRi,
+  int iField
+){
+  const u8 *pBody;
+  int st, off, nByte, i;
+  i64 v;
+
+  if( iField>=pRi->nField ) return 0;
+  st = pRi->aType[iField];
+  off = pRi->aOffset[iField];
+  switch( st ){
+    case 0:
+    case 8: return 0;
+    case 9: return 1;
+    case 1: nByte = 1; break;
+    case 2: nByte = 2; break;
+    case 3: nByte = 3; break;
+    case 4: nByte = 4; break;
+    case 5: nByte = 6; break;
+    case 6: nByte = 8; break;
+    default: return 0;
+  }
+  if( off<0 || off+nByte>nVal ) return 0;
+  pBody = pVal + off;
+  v = (pBody[0] & 0x80) ? -1 : 0;
+  for(i=0; i<nByte; i++){
+    v = (v << 8) | pBody[i];
+  }
+  return v;
+}
+
 static void freeSchemaDiffRows(SdCursor *c){
   int i;
   for(i=0; i<c->nRows; i++){
@@ -79,8 +113,10 @@ static int appendSchemaEntry(
   int *pnEntries,
   int *pnAlloc,
   char *zName,
+  char *zTblName,
   char *zSql,
-  char *zType
+  char *zType,
+  Pgno iRootpage
 ){
   SchemaEntry *aEntries = *paEntries;
   int nEntries = *pnEntries;
@@ -93,8 +129,10 @@ static int appendSchemaEntry(
     nAlloc = nNew;
   }
   aEntries[nEntries].zName = zName;
+  aEntries[nEntries].zTblName = zTblName;
   aEntries[nEntries].zSql = zSql;
   aEntries[nEntries].zType = zType;
+  aEntries[nEntries].iRootpage = iRootpage;
   *paEntries = aEntries;
   *pnEntries = nEntries + 1;
   *pnAlloc = nAlloc;
@@ -191,7 +229,8 @@ int loadSchemaFromCatalog(
         rc = SQLITE_CORRUPT;
         goto load_schema_done;
       }else{
-        char *zType = 0, *zName = 0, *zSql = 0;
+        char *zType = 0, *zName = 0, *zTblName = 0, *zSql = 0;
+        i64 iRootpage = 0;
 
         rc = schemaTextField(pVal, nVal, &ri, 0, &zType);
         if( rc!=SQLITE_OK ) goto load_schema_done;
@@ -200,22 +239,34 @@ int loadSchemaFromCatalog(
           sqlite3_free(zType);
           goto load_schema_done;
         }
-        rc = schemaTextField(pVal, nVal, &ri, 4, &zSql);
+        rc = schemaTextField(pVal, nVal, &ri, 2, &zTblName);
         if( rc!=SQLITE_OK ){
           sqlite3_free(zType);
           sqlite3_free(zName);
           goto load_schema_done;
         }
+        iRootpage = schemaIntField(pVal, nVal, &ri, 3);
+        rc = schemaTextField(pVal, nVal, &ri, 4, &zSql);
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(zType);
+          sqlite3_free(zName);
+          sqlite3_free(zTblName);
+          goto load_schema_done;
+        }
 
         if( zName ){
-          rc = appendSchemaEntry(&aEntries, &nEntries, &nAlloc, zName, zSql, zType);
+          rc = appendSchemaEntry(&aEntries, &nEntries, &nAlloc,
+                                 zName, zTblName, zSql, zType,
+                                 (Pgno)iRootpage);
           if( rc!=SQLITE_OK ) goto load_schema_done;
           zName = 0;
+          zTblName = 0;
           zSql = 0;
           zType = 0;
         }
         sqlite3_free(zType);
         sqlite3_free(zName);
+        sqlite3_free(zTblName);
         sqlite3_free(zSql);
       }
     }
@@ -241,6 +292,7 @@ void freeSchemaEntries(SchemaEntry *a, int n){
   int i;
   for(i=0; i<n; i++){
     sqlite3_free(a[i].zName);
+    sqlite3_free(a[i].zTblName);
     sqlite3_free(a[i].zSql);
     sqlite3_free(a[i].zType);
   }
