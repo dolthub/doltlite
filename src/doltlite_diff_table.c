@@ -140,47 +140,6 @@ struct DiffTblCursor {
 #define DT_IDX_TO_COMMIT_EQ  0x01
 #define DT_IDX_SLICE         0x02
 
-static int diffRecordField(
-  const u8 *pData,
-  int nData,
-  int iField,
-  int *pType,
-  int *pOff
-){
-  const u8 *p = pData;
-  const u8 *pEnd = pData + nData;
-  const u8 *pHdrEnd;
-  u64 hdrSize;
-  int hdrBytes;
-  int off;
-  int i;
-
-  if( !pData || nData < 1 || iField < 0 ) return SQLITE_CORRUPT;
-  hdrBytes = dlReadVarint(p, pEnd, &hdrSize);
-  if( hdrBytes <= 0 || hdrSize < (u64)hdrBytes || hdrSize > (u64)nData ){
-    return SQLITE_CORRUPT;
-  }
-  p += hdrBytes;
-  pHdrEnd = pData + (int)hdrSize;
-  off = (int)hdrSize;
-  for(i=0; p < pHdrEnd; i++){
-    u64 st;
-    int stBytes = dlReadVarint(p, pHdrEnd, &st);
-    int len;
-    if( stBytes <= 0 ) return SQLITE_CORRUPT;
-    p += stBytes;
-    len = dlSerialTypeLen(st);
-    if( off < 0 || off + len > nData ) return SQLITE_CORRUPT;
-    if( i==iField ){
-      *pType = (int)st;
-      *pOff = off;
-      return SQLITE_OK;
-    }
-    off += len;
-  }
-  return SQLITE_NOTFOUND;
-}
-
 static void clearAuditRow(AuditRow *r){
   memset(r, 0, sizeof(*r));
 }
