@@ -83,14 +83,6 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
   (pCur)->cachedPayloadOwned = 0; \
 }while(0)
 
-typedef struct BtLock BtLock;
-struct BtLock {
-  Btree *pBtree;
-  Pgno iTable;
-  u8 eLock;
-  BtLock *pNext;
-};
-
 #define PROLLY_DEFAULT_CACHE_SIZE 1024
 
 #define PROLLY_DEFAULT_PAGE_SIZE 4096
@@ -141,7 +133,6 @@ struct BtShared {
   PagerShim *pPagerShim;
   sqlite3 *db;
   BtCursor *pCursor;
-  u8 openFlags;
   u16 btsFlags;
   u32 pageSize;
   int nRef;
@@ -236,13 +227,8 @@ struct Btree {
   sqlite3 *db;
   BtShared *pBt;
   u8 inTrans;
-  u8 sharable;
-  int wantToLock;
-  int nBackup;
   u32 iBDataVersion;
   Btree *pNext;
-  Btree *pPrev;
-  BtLock lock;
   u64 nSeek;
 
   Catalog cat;
@@ -2072,7 +2058,6 @@ int sqlite3BtreeOpen(
   pBt->db = db;
   pBt->pageSize = PROLLY_DEFAULT_PAGE_SIZE;
   pBt->nRef = 1;
-  pBt->openFlags = (u8)flags;
   p->inTransaction = TRANS_NONE;
 
   if( pBt->store.readOnly ){
@@ -2197,9 +2182,6 @@ int sqlite3BtreeOpen(
   p->pBt = pBt;
   p->pOps = &prollyBtreeOps;
   p->inTrans = TRANS_NONE;
-  p->sharable = 0;
-  p->wantToLock = 0;
-  p->nBackup = 0;
   p->iBDataVersion = 1;
   p->nSeek = 0;
 
@@ -5175,9 +5157,7 @@ static int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
 }
 
 #ifndef SQLITE_OMIT_SHARED_CACHE
-static void prollyBtreeEnter(Btree *p){
-  p->wantToLock++;
-}
+static void prollyBtreeEnter(Btree *p){ (void)p; }
 void sqlite3BtreeEnter(Btree *p){
   if( p ) p->pOps->xEnter(p);
 }
@@ -5193,9 +5173,7 @@ int sqlite3BtreeConnectionCount(Btree *p){ (void)p; return 1; }
 #endif
 
 #if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
-static void prollyBtreeLeave(Btree *p){
-  p->wantToLock--;
-}
+static void prollyBtreeLeave(Btree *p){ (void)p; }
 void sqlite3BtreeLeave(Btree *p){
   if( p ) p->pOps->xLeave(p);
 }
@@ -5567,7 +5545,9 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
 }
 
 int sqlite3BtreeIsInBackup(Btree *p){
-  return p->nBackup > 0;
+  /* prolly_btree doesn't implement the SQLite backup API. */
+  (void)p;
+  return 0;
 }
 
 #ifndef SQLITE_OMIT_WAL
@@ -6675,11 +6655,9 @@ static int origBtreeCursorVt(Btree *p, Pgno iTable, int wrFlag,
 }
 static void origBtreeEnterVt(Btree *p){
   origBtreeEnter(p->pOrigBtree);
-  p->wantToLock++;
 }
 static void origBtreeLeaveVt(Btree *p){
   origBtreeLeave(p->pOrigBtree);
-  p->wantToLock--;
 }
 static struct Pager *origBtreePagerVt(Btree *p){
   return (struct Pager*)origBtreePager(p->pOrigBtree);
