@@ -322,15 +322,6 @@ static void csReleaseIndexBuf(ChunkIndexEntry *aIndex,
   }
 }
 
-static void csReleaseLiveIndex(ChunkStore *cs){
-  csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
-  cs->aIndex = 0;
-  cs->aIndexMmapBase = 0;
-  cs->aIndexMmapSize = 0;
-  cs->nIndex = 0;
-  cs->nIndexAlloc = 0;
-}
-
 static void csFreeBranches(ChunkStore *cs){
   int k;
   for(k=0; k<cs->nBranches; k++) sqlite3_free(cs->aBranches[k].zName);
