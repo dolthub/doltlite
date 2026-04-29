@@ -151,7 +151,47 @@ run_test "diff_rename_recreate_family_count" \
   "SELECT count(*) FROM dolt_diff_stat('HEAD~1', 'HEAD');" \
   "2" "$DB7"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
+DB8=/tmp/test_diff8_$$.db; rm -f "$DB8"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_checkout('-b','feat'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'feat'); SELECT dolt_commit('-A','-m','feat_add_u'); SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); SELECT dolt_merge('feat');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+
+run_test "diff_merge_replay_stat" \
+  "SELECT rows_added || '|' || rows_modified || '|' || rows_deleted FROM dolt_diff_stat('HEAD^1', 'HEAD', 'u');" \
+  "1|0|0" "$DB8"
+run_test "diff_merge_replay_summary" \
+  "SELECT coalesce(from_table_name,'') || '|' || coalesce(to_table_name,'') || '|' || diff_type || '|' || data_change || '|' || schema_change FROM dolt_diff_summary('HEAD^1', 'HEAD', 'u');" \
+  "|u|added|1|1" "$DB8"
+
+DB9=/tmp/test_diff9_$$.db; rm -f "$DB9"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_checkout('-b','feat'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'feat'); SELECT dolt_commit('-A','-m','feat_add_u'); SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB9" > /dev/null 2>&1
+
+run_test "diff_cherrypick_replay_stat" \
+  "SELECT rows_added || '|' || rows_modified || '|' || rows_deleted FROM dolt_diff_stat('HEAD~1', 'HEAD', 'u');" \
+  "1|0|0" "$DB9"
+run_test "diff_cherrypick_replay_summary" \
+  "SELECT coalesce(from_table_name,'') || '|' || coalesce(to_table_name,'') || '|' || diff_type || '|' || data_change || '|' || schema_change FROM dolt_diff_summary('HEAD~1', 'HEAD', 'u');" \
+  "|u|added|1|1" "$DB9"
+
+DB10=/tmp/test_diff10_$$.db; rm -f "$DB10"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_checkout('-b','feat'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'feat'); SELECT dolt_commit('-A','-m','feat_add_u'); SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); SELECT dolt_checkout('feat'); SELECT dolt_rebase('main');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+
+run_test "diff_rebase_replay_stat" \
+  "SELECT rows_added || '|' || rows_modified || '|' || rows_deleted FROM dolt_diff_stat('main', 'feat', 'u');" \
+  "1|0|0" "$DB10/feat"
+run_test "diff_rebase_replay_summary" \
+  "SELECT coalesce(from_table_name,'') || '|' || coalesce(to_table_name,'') || '|' || diff_type || '|' || data_change || '|' || schema_change FROM dolt_diff_summary('main', 'feat', 'u');" \
+  "|u|added|1|1" "$DB10/feat"
+
+DB11=/tmp/test_diff11_$$.db; rm -f "$DB11"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'later'); SELECT dolt_commit('-A','-m','add_u'); SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='main_check' LIMIT 1));" | $DOLTLITE "$DB11" > /dev/null 2>&1
+
+run_test "diff_revert_schema_only_replay_stat_count" \
+  "SELECT count(*) FROM dolt_diff_stat('HEAD~1', 'HEAD');" \
+  "1" "$DB11"
+run_test "diff_revert_schema_only_replay_stat_row" \
+  "SELECT table_name || '|' || rows_added || '|' || rows_modified || '|' || rows_deleted FROM dolt_diff_stat('HEAD~1', 'HEAD');" \
+  "t|0|0|0" "$DB11"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
