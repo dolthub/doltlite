@@ -68,11 +68,7 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 #define BTCF_Pinned     0x40
 
 #define BTS_READ_ONLY       0x0001
-#define BTS_PAGESIZE_FIXED  0x0002
-#define BTS_SECURE_DELETE   0x0004
-#define BTS_OVERWRITE       0x0008
 #define BTS_INITIALLY_EMPTY 0x0010
-#define BTS_NO_WAL          0x0020
 
 #define CLEAR_CACHED_PAYLOAD(pCur) do{ \
   if( (pCur)->cachedPayloadOwned && (pCur)->pCachedPayload ){ \
