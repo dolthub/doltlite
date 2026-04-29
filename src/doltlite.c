@@ -2696,6 +2696,7 @@ static int applyMergedCatalogAndCommit(
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteTxnState savedState;
   ProllyHash mergedCatHash;
+  ProllyHash liveMergedCatHash;
   ProllyHash commitHash;
   int graphLocked = 0;
   int rc;
@@ -2726,9 +2727,12 @@ static int applyMergedCatalogAndCommit(
   rc = doltliteSwitchCatalog(db, &mergedCatHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
-  doltliteSetSessionStaged(db, &mergedCatHash);
+  rc = doltliteFlushCatalogToHash(db, &liveMergedCatHash);
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  doltliteSetSessionStaged(db, &liveMergedCatHash);
   rc = doltliteUpdateBranchWorkingState(db,
-      doltliteGetSessionBranch(db), &mergedCatHash, NULL);
+      doltliteGetSessionBranch(db), &liveMergedCatHash, NULL);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   if( graphLocked ){
@@ -2848,11 +2852,11 @@ static int applyMergedCatalogAndCommit(
     }
   }
 
-  rc = doltliteCreateAndStoreCommit(db, ourHead, &mergedCatHash,
+  rc = doltliteCreateAndStoreCommit(db, ourHead, &liveMergedCatHash,
       zMessage, NULL, NULL, NULL, 0, &commitHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
-  rc = doltliteAdvanceBranch(db, &commitHash, &mergedCatHash);
+  rc = doltliteAdvanceBranch(db, &commitHash, &liveMergedCatHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteVcSealActiveSavepoints(db);

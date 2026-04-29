@@ -426,7 +426,7 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "main" "feat" "u"
 
-oracle_both "diff_stat_revert_schema_change_with_later_added_table" "
+oracle_stat "diff_stat_revert_schema_change_with_later_added_table" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1, 'base');
 SELECT dolt_add('-A');

@@ -191,7 +191,27 @@ run_test "diff_revert_schema_only_replay_stat_row" \
   "SELECT table_name || '|' || rows_added || '|' || rows_modified || '|' || rows_deleted FROM dolt_diff_stat('HEAD~1', 'HEAD');" \
   "t|0|0|0" "$DB11"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11"
+DB12=/tmp/test_diff12_$$.db; rm -f "$DB12"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_checkout('-b','feat'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'feat'); SELECT dolt_commit('-A','-m','feat_add_u'); SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); SELECT dolt_merge('feat');" | $DOLTLITE "$DB12" > /dev/null 2>&1
+
+run_test "diff_summary_merge_replay_count" \
+  "SELECT count(*) FROM dolt_diff;" \
+  "4" "$DB12"
+run_test "diff_summary_merge_replay_merge_row" \
+  "SELECT table_name || '|' || data_change || '|' || schema_change FROM dolt_diff WHERE message=\"Merge branch 'feat' into main\";" \
+  "u|1|1" "$DB12"
+
+DB13=/tmp/test_diff13_$$.db; rm -f "$DB13"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'later'); SELECT dolt_commit('-A','-m','add_u'); SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='main_check' LIMIT 1));" | $DOLTLITE "$DB13" > /dev/null 2>&1
+
+run_test "diff_summary_revert_replay_count" \
+  "SELECT count(*) FROM dolt_diff;" \
+  "4" "$DB13"
+run_test "diff_summary_revert_schema_only_row" \
+  "SELECT table_name || '|' || data_change || '|' || schema_change FROM dolt_diff WHERE message='main_check';" \
+  "t|0|1" "$DB13"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
