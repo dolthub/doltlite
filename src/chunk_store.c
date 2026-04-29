@@ -130,7 +130,6 @@ static int csSearchIndex(const ChunkIndexEntry *aIdx, int nIdx,
 static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash);
 static int csIndexEntryCmp(const void *a, const void *b);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
-static void csSerializeIndexEntry(const ChunkIndexEntry *e, u8 *aBuf);
 static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e);
 static int csMergeIndex(ChunkStore *cs, ChunkIndexEntry **ppMerged,
                         int *pnMerged);
@@ -709,12 +708,6 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
 
   CS_WRITE_I64(aBuf + 84, cs->iWalOffset);
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
-}
-
-static void csSerializeIndexEntry(const ChunkIndexEntry *e, u8 *aBuf){
-  memcpy(aBuf, e->hash.data, PROLLY_HASH_SIZE);
-  CS_WRITE_I64(aBuf + PROLLY_HASH_SIZE, e->offset);
-  CS_WRITE_U32(aBuf + PROLLY_HASH_SIZE + 8, (u32)e->size);
 }
 
 static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e){
