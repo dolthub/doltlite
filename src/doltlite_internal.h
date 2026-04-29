@@ -179,8 +179,10 @@ void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
 typedef struct SchemaEntry SchemaEntry;
 struct SchemaEntry {
   char *zName;
+  char *zTblName;
   char *zSql;
   char *zType;
+  Pgno iRootpage;
 };
 
 int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
