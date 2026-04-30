@@ -798,6 +798,52 @@ ROLLBACK;
 " "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
 
+oracle_error_poststate "cherry_pick_fk_violation_rolls_back" "
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES parent(u));
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child VALUES (1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO child VALUES (2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_add_child');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE pk=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_drop_parent');
+SELECT dolt_cherry_pick('feature');
+" "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+          (SELECT group_concat(pk || ':' || u, ',') FROM (SELECT pk,u FROM parent ORDER BY pk) AS ordered_parent) || '|' ||
+          (SELECT group_concat(pk || ':' || u, ',') FROM (SELECT pk,u FROM child ORDER BY pk) AS ordered_child)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM parent), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM child))"
+
+oracle_error_poststate "cherry_pick_fk_violation_txn_rollback" "
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES parent(u));
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child VALUES (1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO child VALUES (2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_add_child');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE pk=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_drop_parent');
+BEGIN;
+SELECT dolt_cherry_pick('feature');
+ROLLBACK;
+" "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+          (SELECT group_concat(pk || ':' || u, ',') FROM (SELECT pk,u FROM parent ORDER BY pk) AS ordered_parent) || '|' ||
+          (SELECT group_concat(pk || ':' || u, ',') FROM (SELECT pk,u FROM child ORDER BY pk) AS ordered_child)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM parent), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM child))"
+
 echo "--- savepoint parity ---"
 
 oracle_error_poststate "cherry_pick_savepoint_invalidated" "
