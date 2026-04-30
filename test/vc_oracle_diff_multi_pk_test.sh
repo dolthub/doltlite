@@ -342,6 +342,177 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "SELECT CONCAT('R|', to_a, '|', to_b, '|', to_v, '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_u('main', 'feat') ORDER BY to_a, to_b;"
 
+# ---------------------------------------------------------------
+# Group J: replay of an added multi-PK table through merge,
+# cherry-pick, and rebase for diff-stat / diff-summary surfaces.
+# ---------------------------------------------------------------
+
+echo "--- Group J: replay on multi-col PK stat/summary ---"
+
+oracle "j_merge_replay_multi_pk_stat" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feat');
+" "SELECT CONCAT('R|', table_name, '|', rows_added, '|', rows_deleted, '|', rows_modified, '|', cells_added, '|', cells_deleted, '|', cells_modified) FROM dolt_diff_stat('HEAD^1', 'HEAD', 'u');"
+
+oracle "j_merge_replay_multi_pk_summary" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feat');
+" "SELECT CONCAT('R|', IFNULL(from_table_name,''), '|', IFNULL(to_table_name,''), '|', diff_type, '|', CASE WHEN data_change THEN 1 ELSE 0 END, '|', CASE WHEN schema_change THEN 1 ELSE 0 END) FROM dolt_diff_summary('HEAD^1', 'HEAD', 'u');"
+
+oracle "j_cherrypick_replay_multi_pk_stat" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+" "SELECT CONCAT('R|', table_name, '|', rows_added, '|', rows_deleted, '|', rows_modified, '|', cells_added, '|', cells_deleted, '|', cells_modified) FROM dolt_diff_stat('HEAD~1', 'HEAD', 'u');"
+
+oracle "j_cherrypick_replay_multi_pk_summary" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+" "SELECT CONCAT('R|', IFNULL(from_table_name,''), '|', IFNULL(to_table_name,''), '|', diff_type, '|', CASE WHEN data_change THEN 1 ELSE 0 END, '|', CASE WHEN schema_change THEN 1 ELSE 0 END) FROM dolt_diff_summary('HEAD~1', 'HEAD', 'u');"
+
+oracle "j_rebase_replay_multi_pk_stat" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+" "SELECT CONCAT('R|', table_name, '|', rows_added, '|', rows_deleted, '|', rows_modified, '|', cells_added, '|', cells_deleted, '|', cells_modified) FROM dolt_diff_stat('main', 'feat', 'u');"
+
+oracle "j_rebase_replay_multi_pk_summary" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+" "SELECT CONCAT('R|', IFNULL(from_table_name,''), '|', IFNULL(to_table_name,''), '|', diff_type, '|', CASE WHEN data_change THEN 1 ELSE 0 END, '|', CASE WHEN schema_change THEN 1 ELSE 0 END) FROM dolt_diff_summary('main', 'feat', 'u');"
+
+# ---------------------------------------------------------------
+# Group K: replay history for a replayed added multi-PK table.
+# This covers dolt_history_<table> for the same schema-replay
+# shapes as the diff / blame hardening work.
+# ---------------------------------------------------------------
+
+echo "--- Group K: replay history on multi-col PK table additions ---"
+
+oracle "k_merge_replay_multi_pk_history" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feat');
+" "SELECT CONCAT('R|', a, '|', b, '|', v, '|', message) FROM dolt_history_u ORDER BY a, b, message;"
+
+oracle "k_cherrypick_replay_multi_pk_history" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+" "SELECT CONCAT('R|', a, '|', b, '|', v, '|', message) FROM dolt_history_u ORDER BY a, b, message;"
+
+oracle "k_rebase_replay_multi_pk_history" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'base');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'one');
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+" "SELECT CONCAT('R|', a, '|', b, '|', v, '|', message) FROM dolt_history_u ORDER BY a, b, message;"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
