@@ -830,6 +830,60 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
+oracle_same_session "merge_disjoint_fk_tables_plus_check_same_session" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES p(u));
+INSERT INTO p VALUES (1, 100);
+INSERT INTO c VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_fk_tables');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feat');
+" "SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM p) || '|' ||
+          (SELECT count(*) FROM c) || '|' ||
+          (SELECT count(*) FROM pragma_foreign_key_list('c'))" \
+  "SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c), '|', (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE table_name = 'c' AND referenced_table_name = 'p'))"
+
+oracle_reopen_state "merge_disjoint_fk_tables_plus_check_reopen" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES p(u));
+INSERT INTO p VALUES (1, 100);
+INSERT INTO c VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_fk_tables');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feat');
+" "SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM p) || '|' ||
+          (SELECT count(*) FROM c) || '|' ||
+          (SELECT count(*) FROM pragma_foreign_key_list('c'))" \
+  "SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c), '|', (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE table_name = 'c' AND referenced_table_name = 'p'))"
+
 echo "--- non-branch merge sources ---"
 
 # Merge from a tag instead of a branch. Tags were promoted to first-

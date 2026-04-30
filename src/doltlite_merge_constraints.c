@@ -1614,6 +1614,7 @@ int doltliteDetectMergeFkViolations(
   char **pzErrMsg,
   int *pnFound
 ){
+  sqlite3_stmt *pQuick = 0;
   sqlite3_stmt *pTbls = 0;
   struct TableEntry *aAnc = 0;
   int nAnc = 0;
@@ -1626,6 +1627,20 @@ int doltliteDetectMergeFkViolations(
   (void)pzErrMsg;
 
   if( pnFound ) *pnFound = 0;
+
+  rc = sqlite3_prepare_v2(db, "PRAGMA main.foreign_key_check", -1, &pQuick, 0);
+  if( rc!=SQLITE_OK ){
+    return rc;
+  }
+  stepRc = sqlite3_step(pQuick);
+  sqlite3_finalize(pQuick);
+  pQuick = 0;
+  if( stepRc==SQLITE_DONE ){
+    return SQLITE_OK;
+  }
+  if( stepRc!=SQLITE_ROW ){
+    return stepRc;
+  }
 
   if( pAncCatHash && !prollyHashIsEmpty(pAncCatHash) ){
     if( doltliteLoadCatalog(db, pAncCatHash, &aAnc, &nAnc, &iNextAnc)==SQLITE_OK ){

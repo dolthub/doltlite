@@ -1184,7 +1184,7 @@ static int serializeMergedCatalog(
   (void)oursCatHash;
   (void)iNextTable;
 
-  rc = doltliteSerializeCatalogEntries(db, aMerged, nMerged, &buf, &nBuf);
+  rc = doltliteSerializeCatalogEntries(NULL, aMerged, nMerged, &buf, &nBuf);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStorePut(cs, buf, nBuf, pOutHash);
@@ -1473,7 +1473,15 @@ static u8 *buildSchemaCatalogRecord(
   aMem[1].eType = SQLITE_TEXT;    aMem[1].p = zName;    aMem[1].n = (int)strlen(zName);
   aMem[2].eType = SQLITE_TEXT;    aMem[2].p = zTblName; aMem[2].n = (int)strlen(zTblName);
   aMem[3].eType = SQLITE_INTEGER; aMem[3].i = iRootpage;
-  aMem[4].eType = SQLITE_TEXT;    aMem[4].p = zSql;     aMem[4].n = (int)strlen(zSql);
+  if( zSql ){
+    aMem[4].eType = SQLITE_TEXT;
+    aMem[4].p = zSql;
+    aMem[4].n = (int)strlen(zSql);
+  }else{
+    aMem[4].eType = SQLITE_NULL;
+    aMem[4].p = 0;
+    aMem[4].n = 0;
+  }
 
   for(i=0; i<5; i++){
     aType[i] = mergeCatalogSerialType(&aMem[i], &aLen[i]);
@@ -1532,7 +1540,7 @@ static int appendMergedSchemaCatalogRecord(
   int nRec = 0;
   int rc;
 
-  if( !pSe || !pSe->zName || !pSe->zType || !pSe->zSql ) return SQLITE_OK;
+  if( !pSe || !pSe->zName || !pSe->zType ) return SQLITE_OK;
   pRec = buildSchemaCatalogRecord(pSe->zType, pSe->zName,
                                   pSe->zTblName ? pSe->zTblName : pSe->zName,
                                   (i64)iRootpage, pSe->zSql, &nRec);
@@ -2013,6 +2021,27 @@ static int mergeCatalogPass2(
       ** iTable, it's a new index from theirs — add it. */
       if( !findTableEntry(aOurs, nOurs, aTheirs[i].iTable) ){
         struct TableEntry newEntry = aTheirs[i];
+        int j, conflict = 0;
+        Pgno oldPg = newEntry.iTable;
+        int forceRemap = bDisjointSchemaChanges;
+        for(j=0; j<*pnMerged; j++){
+          if( aMerged[j].iTable==newEntry.iTable ){
+            conflict = 1;
+            break;
+          }
+        }
+        if( conflict || forceRemap ){
+          SchemaRootpageRemap *aNew;
+          int nOld = *pnRemap;
+          newEntry.iTable = (*piNextMerged)++;
+          aNew = sqlite3_realloc(*ppaRemap,
+                                 (nOld+1)*(int)sizeof(SchemaRootpageRemap));
+          if( !aNew ) return SQLITE_NOMEM;
+          *ppaRemap = aNew;
+          aNew[nOld].oldPg = oldPg;
+          aNew[nOld].newPg = newEntry.iTable;
+          *pnRemap = nOld + 1;
+        }
         if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
         aMerged[(*pnMerged)++] = newEntry;
       }else if( bDisjointSchemaChanges ){
@@ -2046,12 +2075,13 @@ static int mergeCatalogPass2(
       if( !ancEntry ){
 
         struct TableEntry newEntry = aTheirs[i];
+        int forceRemap = bDisjointSchemaChanges;
         {
           int j, conflict = 0;
           for(j=0; j<*pnMerged; j++){
             if( aMerged[j].iTable==newEntry.iTable ){ conflict = 1; break; }
           }
-          if( conflict ) newEntry.iTable = (*piNextMerged)++;
+          if( conflict || forceRemap ) newEntry.iTable = (*piNextMerged)++;
         }
         if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
 

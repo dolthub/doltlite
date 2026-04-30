@@ -520,6 +520,36 @@ run_test "cp_violation_state" \
 
 rm -f "$DB"
 
+DB=/tmp/test_cp_fk_tables_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO p VALUES(1,100);
+INSERT INTO c VALUES(1,100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_add_fk_tables');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK(v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_check');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "cp_fk_tables_hash" \
+  "SELECT dolt_cherry_pick('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "cp_fk_tables_parent" "SELECT count(*) FROM p;" "1" "$DB"
+run_test "cp_fk_tables_child" "SELECT count(*) FROM c;" "1" "$DB"
+run_test "cp_fk_tables_fk" "SELECT count(*) FROM pragma_foreign_key_list('c');" "1" "$DB"
+
+rm -f "$DB"
+
 DB=/tmp/test_rv_violation_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2');

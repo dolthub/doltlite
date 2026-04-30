@@ -131,6 +131,50 @@ SELECT dolt_rebase('main');" | perl -e 'alarm(10);exec @ARGV' "$DOLTLITE" "$db" 
   fi
 }
 
+FK_TABLES_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main check');
+SELECT dolt_checkout('feat');
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO p VALUES(1,100);
+INSERT INTO c VALUES(1,100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat fk tables');
+"
+
+run_db_match "rebase_schema_fk_tables_hash" "
+$FK_TABLES_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased|^[0-9a-f]{40}$"
+
+run_db_eq "rebase_schema_fk_tables_parent" "
+$FK_TABLES_SETUP
+SELECT dolt_rebase('main');
+SELECT count(*) FROM p;
+" "1"
+
+run_db_eq "rebase_schema_fk_tables_child" "
+$FK_TABLES_SETUP
+SELECT dolt_rebase('main');
+SELECT count(*) FROM c;
+" "1"
+
+run_db_eq "rebase_schema_fk_tables_fk" "
+$FK_TABLES_SETUP
+SELECT dolt_rebase('main');
+SELECT count(*) FROM pragma_foreign_key_list('c');
+" "1"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
