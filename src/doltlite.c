@@ -2400,11 +2400,6 @@ static void doltliteMergeFunc(
 
 
     rc = doltliteSwitchCatalog(db, &mergedCatHash);
-    if( rc==SQLITE_OK ){
-      doltliteSetSessionStaged(db, &mergedCatHash);
-      rc = doltliteUpdateBranchWorkingState(db,
-          doltliteGetSessionBranch(db), &mergedCatHash, NULL);
-    }
     doltliteCommitClear(&ourCommit);
     doltliteCommitClear(&theirCommit);
     if( rc!=SQLITE_OK ){
@@ -2433,6 +2428,25 @@ static void doltliteMergeFunc(
             doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
         return;
       }
+    }
+
+    rc = doltliteFlushCatalogToHash(db, &mergedCatHash);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSwitchCatalog(db, &mergedCatHash);
+    }
+    if( rc==SQLITE_OK ){
+      doltliteSetSessionStaged(db, &mergedCatHash);
+      rc = doltliteUpdateBranchWorkingState(db,
+          doltliteGetSessionBranch(db), &mergedCatHash, NULL);
+    }
+    if( rc!=SQLITE_OK ){
+      if( graphLocked ){
+        chunkStoreUnlock(cs);
+        graphLocked = 0;
+      }
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+      return;
     }
   }
 
@@ -2728,6 +2742,9 @@ static int applyMergedCatalogAndCommit(
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteFlushCatalogToHash(db, &liveMergedCatHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSwitchCatalog(db, &liveMergedCatHash);
+  }
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   doltliteSetSessionStaged(db, &liveMergedCatHash);

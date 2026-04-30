@@ -387,6 +387,32 @@ SELECT dolt_cherry_pick('feat');
           (SELECT count(*) FROM pragma_index_list('b') WHERE name = 'idx_b_v')" \
   "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'a' AND index_name = 'idx_a_v'), '|', (SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'b' AND index_name = 'idx_b_v'))"
 
+oracle_poststate "cherry_pick_disjoint_fk_tables_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES p(u));
+INSERT INTO p VALUES (1, 100);
+INSERT INTO c VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_fk_tables');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_cherry_pick('feat');
+" "SELECT (SELECT count(*) FROM p) || '|' ||
+          (SELECT count(*) FROM c) || '|' ||
+          (SELECT count(*) FROM pragma_foreign_key_list('c'))" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c), '|', (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE table_name = 'c' AND referenced_table_name = 'p'))"
+
 echo "--- revert: basic ---"
 
 # Revert the most recent commit. Should produce a new commit that
