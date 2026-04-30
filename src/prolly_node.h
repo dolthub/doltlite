@@ -30,7 +30,6 @@ struct ProllyNode {
   const u32 *aValOff;
   const u8 *pKeyData;
   const u8 *pValData;
-  ProllyHash addr;
 };
 
 int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData);
