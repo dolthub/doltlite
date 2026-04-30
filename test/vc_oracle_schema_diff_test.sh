@@ -501,6 +501,67 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "main" "feat" "u"
 
+oracle "merge_replay_multi_pk_add_table_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, w TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feat');
+" "HEAD^1" "HEAD" "u"
+
+oracle "cherrypick_replay_multi_pk_add_table_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, w TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+" "HEAD~1" "HEAD" "u"
+
+oracle "rebase_replay_multi_pk_add_table_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE u(a INTEGER, b INTEGER, w TEXT, PRIMARY KEY(a, b));
+INSERT INTO u VALUES (1, 1, 'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_u');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+" "main" "feat" "u"
+
 echo "--- error paths ---"
 
 oracle_error "bad_from_ref" "$SEED" \
