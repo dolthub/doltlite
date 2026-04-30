@@ -13,7 +13,6 @@
 #define PROLLY_DIFF_DELETE  2
 #define PROLLY_DIFF_MODIFY  3
 
-typedef struct ProllyDiff ProllyDiff;
 typedef struct ProllyDiffChange ProllyDiffChange;
 
 struct ProllyDiffChange {
