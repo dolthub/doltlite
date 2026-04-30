@@ -6,8 +6,6 @@
 
 char *doltliteDecodeRecord(const u8 *pData, int nData);
 
-void doltliteResultRecord(sqlite3_context *ctx, const u8 *pData, int nData);
-
 typedef struct DoltliteColInfo DoltliteColInfo;
 struct DoltliteColInfo {
   char **azName;
@@ -49,9 +47,6 @@ void doltliteFreeColInfo(DoltliteColInfo *ci);
 
 void doltliteResultField(sqlite3_context *ctx, const u8 *pData, int nData,
                          int serialType, int offset);
-void doltliteResultRecordPkField(sqlite3_context *ctx,
-                                 const u8 *pData, int nData,
-                                 int iPkField);
 
 /* Project a user-schema column into a SQLite result context.
 **

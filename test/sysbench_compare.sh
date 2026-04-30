@@ -261,6 +261,90 @@ make_test("types_table_scan",    prep_with_types, w_types_table_scan)
 make_test("table_scan",          prep_main, w_table_scan)
 make_test("oltp_read_only",      prep_main, w_read_only)
 make_test("oltp_read_write",     prep_main, w_read_write)
+
+# ----------------------------------------------------------------
+# Autocommit variants — every statement is its own transaction.
+# Same workload shapes as the file-backed write tests, but the
+# wrapping BEGIN/COMMIT is removed so each statement fsyncs.
+# This is the shape that real CLI traffic and short-lived
+# connections produce, and it's where per-commit fixed costs
+# (manifest update, refs blob rewrite, WAL bookkeeping) become
+# the dominant signal instead of being amortized over thousands
+# of statements in one transaction.
+#
+# Inner loop counts are reduced (each statement now does an fsync,
+# so the same wall-time budget buys far fewer statements) — total
+# stays near the existing tests' wall time per iteration.
+# ----------------------------------------------------------------
+AC = 200  # statements per autocommit test
+
+def w_bulk_insert_autocommit(f):
+    f.write("CREATE TABLE sbtest_ac_bulk(id INTEGER PRIMARY KEY, k INTEGER, c TEXT, pad TEXT);\n")
+    for i in range(1, AC+1):
+        f.write(f"INSERT INTO sbtest_ac_bulk VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+
+def w_oltp_insert_autocommit(f):
+    for i in range(R+1, R+AC+1):
+        f.write(f"INSERT INTO sbtest1 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+
+def w_update_index_autocommit(f):
+    for _ in range(AC):
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
+
+def w_update_non_index_autocommit(f):
+    for _ in range(AC):
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+
+def w_delete_insert_autocommit(f):
+    # Each iteration emits 2 statements (DELETE + INSERT OR REPLACE).
+    # Halve the loop so total commits ≈ AC.
+    for _ in range(AC // 2):
+        id = rint(1, R)
+        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+
+def w_write_only_autocommit(f):
+    # Each iteration emits 4 statements; quarter the loop so total commits ≈ AC.
+    for _ in range(AC // 4):
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        id = rint(1, R)
+        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+
+def w_types_delete_insert_autocommit(f):
+    # 2 statements per iteration; halve the loop.
+    for _ in range(AC // 2):
+        id = rint(1, 1000)
+        f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
+
+def w_read_write_autocommit(f):
+    # The mix is ~16 statements per iteration (10 point selects, 3 ranges,
+    # 2 updates, 1 delete, 1 insert). Reads are cheap at autocommit (no
+    # commit needed) but writes each fsync. Sized so total writes ≈ AC.
+    iters = AC // 4
+    for _ in range(iters):
+        for _ in range(10):
+            f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
+        s = rint(1, R-100)
+        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
+        s = rint(1, R-100)
+        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        id = rint(1, R)
+        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+
+make_test("oltp_bulk_insert_ac",      prep_main, w_bulk_insert_autocommit)
+make_test("oltp_insert_ac",           prep_main, w_oltp_insert_autocommit)
+make_test("oltp_update_index_ac",     prep_main, w_update_index_autocommit)
+make_test("oltp_update_non_index_ac", prep_main, w_update_non_index_autocommit)
+make_test("oltp_delete_insert_ac",    prep_main, w_delete_insert_autocommit)
+make_test("oltp_write_only_ac",       prep_main, w_write_only_autocommit)
+make_test("types_delete_insert_ac",   prep_with_types, w_types_delete_insert_autocommit)
+make_test("oltp_read_write_ac",       prep_main, w_read_write_autocommit)
 PYEOF
 
 # ============================================================
@@ -297,7 +381,8 @@ else:
 }
 
 bench_runs_for_test() {
-  echo 11
+  # BENCH_RUNS=1 for fast local iteration; default 11 for stable median.
+  echo "${BENCH_RUNS:-11}"
 }
 
 median_us() {
@@ -331,6 +416,7 @@ run_bench_stable() {
 
 READ_TESTS="oltp_point_select oltp_range_select oltp_sum_range oltp_order_range oltp_distinct_range oltp_index_scan select_random_points select_random_ranges covering_index_scan groupby_scan index_join index_join_scan types_table_scan table_scan oltp_read_only"
 WRITE_TESTS="oltp_bulk_insert oltp_insert oltp_update_index oltp_update_non_index oltp_delete_insert oltp_write_only types_delete_insert oltp_read_write"
+WRITE_TESTS_AC="oltp_bulk_insert_ac oltp_insert_ac oltp_update_index_ac oltp_update_non_index_ac oltp_delete_insert_ac oltp_write_only_ac types_delete_insert_ac oltp_read_write_ac"
 
 # ============================================================
 # Output markdown table
@@ -389,22 +475,40 @@ echo ""
 run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
+echo "### File-Backed (autocommit)"
+echo ""
+echo "_Each statement runs as its own transaction — exposes per-commit_"
+echo "_fixed costs that the wrapped-in-BEGIN/COMMIT tests amortize away._"
+echo ""
+echo "#### Reads"
+echo ""
+echo "_Reads have no commit cost; these are the same SQL files as the_"
+echo "_File-Backed Reads section, included here for symmetry and to_"
+echo "_catch any per-statement overhead doltlite pays on the read path._"
+echo ""
+run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+echo ""
+echo "#### Writes"
+echo ""
+run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
+
+echo ""
 echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"
 
 # ============================================================
 # Enforce performance ceiling (exit 1 if any test exceeds limit)
 # ============================================================
 check_ceiling() {
-  local tests="$1" db_sq="$2" db_dl="$3"
+  local tests="$1" db_sq="$2" db_dl="$3" max="$4"
   local failed=0
   for t in $tests; do
     s=$(run_bench_stable "$t" sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
     d=$(run_bench_stable "$t" doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
     if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
-      over=$(python3 -c "r=$d/$s; print(1 if r>$BENCH_MAX_MULTIPLIER else 0)")
+      over=$(python3 -c "r=$d/$s; print(1 if r>$max else 0)")
       if [ "$over" = "1" ]; then
         ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
-        echo "FAIL: $t = ${ratio}x (ceiling: ${BENCH_MAX_MULTIPLIER}x)" >&2
+        echo "FAIL: $t = ${ratio}x (ceiling: ${max}x)" >&2
         failed=1
       fi
     fi
@@ -412,18 +516,20 @@ check_ceiling() {
   return $failed
 }
 
+# Wrapped and autocommit suites share the same ceiling.
 echo ""
 echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
 echo ""
 
 ceiling_ok=0
-check_ceiling "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file" || ceiling_ok=1
-check_ceiling "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file" || ceiling_ok=1
+check_ceiling "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 
 if [ "$ceiling_ok" = "0" ]; then
-  echo "All tests within ${BENCH_MAX_MULTIPLIER}x ceiling."
+  echo "All tests within ceilings."
 else
   echo ""
-  echo "**FAILED**: One or more tests exceeded the ${BENCH_MAX_MULTIPLIER}x ceiling."
+  echo "**FAILED**: One or more tests exceeded their ceiling."
   exit 1
 fi

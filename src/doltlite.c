@@ -2400,11 +2400,6 @@ static void doltliteMergeFunc(
 
 
     rc = doltliteSwitchCatalog(db, &mergedCatHash);
-    if( rc==SQLITE_OK ){
-      doltliteSetSessionStaged(db, &mergedCatHash);
-      rc = doltliteUpdateBranchWorkingState(db,
-          doltliteGetSessionBranch(db), &mergedCatHash, NULL);
-    }
     doltliteCommitClear(&ourCommit);
     doltliteCommitClear(&theirCommit);
     if( rc!=SQLITE_OK ){
@@ -2433,6 +2428,25 @@ static void doltliteMergeFunc(
             doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
         return;
       }
+    }
+
+    rc = doltliteFlushCatalogToHash(db, &mergedCatHash);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSwitchCatalog(db, &mergedCatHash);
+    }
+    if( rc==SQLITE_OK ){
+      doltliteSetSessionStaged(db, &mergedCatHash);
+      rc = doltliteUpdateBranchWorkingState(db,
+          doltliteGetSessionBranch(db), &mergedCatHash, NULL);
+    }
+    if( rc!=SQLITE_OK ){
+      if( graphLocked ){
+        chunkStoreUnlock(cs);
+        graphLocked = 0;
+      }
+      sqlite3_result_error_code(context,
+          doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
+      return;
     }
   }
 
@@ -2696,6 +2710,7 @@ static int applyMergedCatalogAndCommit(
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteTxnState savedState;
   ProllyHash mergedCatHash;
+  ProllyHash liveMergedCatHash;
   ProllyHash commitHash;
   int graphLocked = 0;
   int rc;
@@ -2726,9 +2741,15 @@ static int applyMergedCatalogAndCommit(
   rc = doltliteSwitchCatalog(db, &mergedCatHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
-  doltliteSetSessionStaged(db, &mergedCatHash);
+  rc = doltliteFlushCatalogToHash(db, &liveMergedCatHash);
+  if( rc==SQLITE_OK ){
+    rc = doltliteSwitchCatalog(db, &liveMergedCatHash);
+  }
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  doltliteSetSessionStaged(db, &liveMergedCatHash);
   rc = doltliteUpdateBranchWorkingState(db,
-      doltliteGetSessionBranch(db), &mergedCatHash, NULL);
+      doltliteGetSessionBranch(db), &liveMergedCatHash, NULL);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   if( graphLocked ){
@@ -2848,11 +2869,11 @@ static int applyMergedCatalogAndCommit(
     }
   }
 
-  rc = doltliteCreateAndStoreCommit(db, ourHead, &mergedCatHash,
+  rc = doltliteCreateAndStoreCommit(db, ourHead, &liveMergedCatHash,
       zMessage, NULL, NULL, NULL, 0, &commitHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
-  rc = doltliteAdvanceBranch(db, &commitHash, &mergedCatHash);
+  rc = doltliteAdvanceBranch(db, &commitHash, &liveMergedCatHash);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteVcSealActiveSavepoints(db);
@@ -3540,21 +3561,6 @@ static int rebaseReadPlan(sqlite3 *db, RebasePlanRow **paPlan, int *pnPlan){
 fail:
   sqlite3_finalize(pStmt);
   rebaseFreePlan(aPlan, nPlan);
-  return rc;
-}
-
-/* Checkout helper used by rebase to switch the session back to the
-** original branch after --continue or --abort. Delegates to the
-** existing dolt_checkout function so we don't reimplement the full
-** state transition (working set load, catalog switch, branch ref
-** lookup, etc.). */
-static int rebaseCheckoutBranch(sqlite3 *db, const char *zBranch){
-  char *zSql;
-  int rc;
-  zSql = sqlite3_mprintf("SELECT dolt_checkout('%q')", zBranch);
-  if( !zSql ) return SQLITE_NOMEM;
-  rc = sqlite3_exec(db, zSql, 0, 0, 0);
-  sqlite3_free(zSql);
   return rc;
 }
 

@@ -111,19 +111,6 @@ static int statusLoadLiveTableSql(
   return SQLITE_OK;
 }
 
-static int statusCreateNameQuoted(const char *zSql){
-  const char *z = zSql;
-  if( !z ) return 0;
-  if( sqlite3_strnicmp(z, "CREATE TABLE", 12)!=0 ) return 0;
-  z += 12;
-  while( sqlite3Isspace(*z) ) z++;
-  if( sqlite3_strnicmp(z, "IF NOT EXISTS", 13)==0 ){
-    z += 13;
-    while( sqlite3Isspace(*z) ) z++;
-  }
-  return *z=='"' || *z=='`' || *z=='[';
-}
-
 static int statusSchemaHashMatchesRename(
   const ProllyHash *pOldSchemaHash,
   const char *zCurrentSql,

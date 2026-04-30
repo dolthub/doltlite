@@ -126,7 +126,92 @@ run_test "diff_tag_type" \
   "SELECT diff_type FROM dolt_diff_summary('v1', 'main', 't');" \
   "modified" "$DB4"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4"
+DB5=/tmp/test_diff5_$$.db; rm -f "$DB5"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat changes'); SELECT dolt_checkout('main'); INSERT INTO t VALUES(3,'main'); SELECT dolt_commit('-A','-m','main changes'); SELECT dolt_merge('feat');" | $DOLTLITE "$DB5" > /dev/null 2>&1
+
+run_test "diff_first_parent_ref" \
+  "SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('HEAD^1', 'HEAD', 't');" \
+  "1|0" "$DB5"
+
+run_test "diff_second_parent_ref" \
+  "SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('HEAD^2', 'HEAD', 't');" \
+  "1|0" "$DB5"
+
+DB6=/tmp/test_diff6_$$.db; rm -f "$DB6"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','c1'); INSERT INTO t VALUES(2,'b'); SELECT dolt_commit('-A','-m','c2'); SELECT dolt_tag('v1','HEAD~1'); SELECT dolt_branch('from_tag','v1');" | $DOLTLITE "$DB6" > /dev/null 2>&1
+
+run_test "diff_branch_created_from_tag" \
+  "SELECT rows_added || '|' || rows_modified FROM dolt_diff_stat('from_tag', 'main', 't');" \
+  "1|0" "$DB6"
+
+DB7=/tmp/test_diff7_$$.db; rm -f "$DB7"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','c1'); ALTER TABLE t RENAME TO u; CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT); INSERT INTO t VALUES(7,'z'); SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB7" > /dev/null 2>&1
+
+run_test "diff_rename_recreate_family_count" \
+  "SELECT count(*) FROM dolt_diff_stat('HEAD~1', 'HEAD');" \
+  "2" "$DB7"
+
+DB8=/tmp/test_diff8_$$.db; rm -f "$DB8"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_checkout('-b','feat'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'feat'); SELECT dolt_commit('-A','-m','feat_add_u'); SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); SELECT dolt_merge('feat');" | $DOLTLITE "$DB8" > /dev/null 2>&1
+
+run_test "diff_merge_replay_stat" \
+  "SELECT rows_added || '|' || rows_modified || '|' || rows_deleted FROM dolt_diff_stat('HEAD^1', 'HEAD', 'u');" \
+  "1|0|0" "$DB8"
+run_test "diff_merge_replay_summary" \
+  "SELECT coalesce(from_table_name,'') || '|' || coalesce(to_table_name,'') || '|' || diff_type || '|' || data_change || '|' || schema_change FROM dolt_diff_summary('HEAD^1', 'HEAD', 'u');" \
+  "|u|added|1|1" "$DB8"
+
+DB9=/tmp/test_diff9_$$.db; rm -f "$DB9"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_checkout('-b','feat'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'feat'); SELECT dolt_commit('-A','-m','feat_add_u'); SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB9" > /dev/null 2>&1
+
+run_test "diff_cherrypick_replay_stat" \
+  "SELECT rows_added || '|' || rows_modified || '|' || rows_deleted FROM dolt_diff_stat('HEAD~1', 'HEAD', 'u');" \
+  "1|0|0" "$DB9"
+run_test "diff_cherrypick_replay_summary" \
+  "SELECT coalesce(from_table_name,'') || '|' || coalesce(to_table_name,'') || '|' || diff_type || '|' || data_change || '|' || schema_change FROM dolt_diff_summary('HEAD~1', 'HEAD', 'u');" \
+  "|u|added|1|1" "$DB9"
+
+DB10=/tmp/test_diff10_$$.db; rm -f "$DB10"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_checkout('-b','feat'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'feat'); SELECT dolt_commit('-A','-m','feat_add_u'); SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); SELECT dolt_checkout('feat'); SELECT dolt_rebase('main');" | $DOLTLITE "$DB10" > /dev/null 2>&1
+
+run_test "diff_rebase_replay_stat" \
+  "SELECT rows_added || '|' || rows_modified || '|' || rows_deleted FROM dolt_diff_stat('main', 'feat', 'u');" \
+  "1|0|0" "$DB10/feat"
+run_test "diff_rebase_replay_summary" \
+  "SELECT coalesce(from_table_name,'') || '|' || coalesce(to_table_name,'') || '|' || diff_type || '|' || data_change || '|' || schema_change FROM dolt_diff_summary('main', 'feat', 'u');" \
+  "|u|added|1|1" "$DB10/feat"
+
+DB11=/tmp/test_diff11_$$.db; rm -f "$DB11"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'later'); SELECT dolt_commit('-A','-m','add_u'); SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='main_check' LIMIT 1));" | $DOLTLITE "$DB11" > /dev/null 2>&1
+
+run_test "diff_revert_schema_only_replay_stat_count" \
+  "SELECT count(*) FROM dolt_diff_stat('HEAD~1', 'HEAD');" \
+  "1" "$DB11"
+run_test "diff_revert_schema_only_replay_stat_row" \
+  "SELECT table_name || '|' || rows_added || '|' || rows_modified || '|' || rows_deleted FROM dolt_diff_stat('HEAD~1', 'HEAD');" \
+  "t|0|0|0" "$DB11"
+
+DB12=/tmp/test_diff12_$$.db; rm -f "$DB12"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_checkout('-b','feat'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'feat'); SELECT dolt_commit('-A','-m','feat_add_u'); SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); SELECT dolt_merge('feat');" | $DOLTLITE "$DB12" > /dev/null 2>&1
+
+run_test "diff_summary_merge_replay_count" \
+  "SELECT count(*) FROM dolt_diff;" \
+  "4" "$DB12"
+run_test "diff_summary_merge_replay_merge_row" \
+  "SELECT table_name || '|' || data_change || '|' || schema_change FROM dolt_diff WHERE message=\"Merge branch 'feat' into main\";" \
+  "u|1|1" "$DB12"
+
+DB13=/tmp/test_diff13_$$.db; rm -f "$DB13"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT CHECK (length(v) > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_commit('-A','-m','main_check'); CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO u VALUES(1,'later'); SELECT dolt_commit('-A','-m','add_u'); SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='main_check' LIMIT 1));" | $DOLTLITE "$DB13" > /dev/null 2>&1
+
+run_test "diff_summary_revert_replay_count" \
+  "SELECT count(*) FROM dolt_diff;" \
+  "4" "$DB13"
+run_test "diff_summary_revert_schema_only_row" \
+  "SELECT table_name || '|' || data_change || '|' || schema_change FROM dolt_diff WHERE message='main_check';" \
+  "t|0|1" "$DB13"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

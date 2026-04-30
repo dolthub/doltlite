@@ -203,6 +203,51 @@ oracle_error_poststate() {
   fi
 }
 
+oracle_poststate() {
+  local name="$1" setup="$2" dl_query="$3" dolt_query="${4:-$3}"
+  local dir="$TMPROOT/${name}_okpost"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  vc_oracle_run_doltlite_script "$dir/dl/db" "$dir/dl.out" "$dir/dl.err" "$setup" || {
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (doltlite setup failed)"
+    return
+  }
+  local dl_out
+  dl_out=$(
+    printf ".headers off\n.mode list\n%s;\n" "$dl_query" \
+      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | tr -d '\r'
+  )
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" "$dolt_setup" || {
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (dolt setup failed)"
+    return
+  }
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    "$DOLT" sql -r csv -q "$dolt_query" 2>>"$dir/dt.err" \
+      | tail -n +2 \
+      | tr -d '"\r'
+  )
+
+  if [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite: |$dl_out|"
+    echo "    dolt:     |$dt_out|"
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_revert / dolt_cherry_pick ==="
 echo ""
 
@@ -297,6 +342,77 @@ SELECT dolt_cherry_pick('feature~1');
 SELECT dolt_cherry_pick('feature');
 "
 
+oracle_poststate "cherry_pick_disjoint_add_table_plus_check" "
+CREATE TABLE base(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO base VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE TABLE feat_tbl(k INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO feat_tbl VALUES (1, 'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat adds table');
+SELECT dolt_checkout('main');
+CREATE TABLE base_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO base_new SELECT * FROM base;
+DROP TABLE base;
+ALTER TABLE base_new RENAME TO base;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main adds check');
+SELECT dolt_cherry_pick('feat');
+" "SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='feat_tbl') || '|' ||
+          (SELECT count(*) FROM feat_tbl) || '|' ||
+          (SELECT count(*) FROM base)" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'feat_tbl'), '|', (SELECT COUNT(*) FROM feat_tbl), '|', (SELECT COUNT(*) FROM base))"
+
+oracle_poststate "cherry_pick_disjoint_add_indexes" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE INDEX idx_b_v ON b(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat idx');
+SELECT dolt_checkout('main');
+CREATE INDEX idx_a_v ON a(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main idx');
+SELECT dolt_cherry_pick('feat');
+" "SELECT (SELECT count(*) FROM pragma_index_list('a') WHERE name = 'idx_a_v') || '|' ||
+          (SELECT count(*) FROM pragma_index_list('b') WHERE name = 'idx_b_v')" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'a' AND index_name = 'idx_a_v'), '|', (SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'b' AND index_name = 'idx_b_v'))"
+
+oracle_poststate "cherry_pick_disjoint_fk_tables_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES p(u));
+INSERT INTO p VALUES (1, 100);
+INSERT INTO c VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_fk_tables');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_cherry_pick('feat');
+" "SELECT (SELECT count(*) FROM p) || '|' ||
+          (SELECT count(*) FROM c) || '|' ||
+          (SELECT count(*) FROM pragma_foreign_key_list('c'))" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c), '|', (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE table_name = 'c' AND referenced_table_name = 'p'))"
+
 echo "--- revert: basic ---"
 
 # Revert the most recent commit. Should produce a new commit that
@@ -377,6 +493,44 @@ SELECT dolt_commit('-m', 'c4_add_4');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message = 'c4_add_4'));
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message = 'c3_add_3'));
 "
+
+oracle_poststate "revert_old_add_table_preserves_later_check" "
+CREATE TABLE base(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO base VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE TABLE feat_tbl(k INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO feat_tbl VALUES (1, 'x');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add table');
+CREATE TABLE base_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO base_new SELECT * FROM base;
+DROP TABLE base;
+ALTER TABLE base_new RENAME TO base;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add check');
+SELECT dolt_revert('HEAD~1');
+" "SELECT (SELECT count(*) FROM sqlite_master WHERE type='table' AND name='feat_tbl') || '|' ||
+          (SELECT count(*) FROM base)" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'feat_tbl'), '|', (SELECT COUNT(*) FROM base))"
+
+oracle_poststate "revert_old_index_preserves_later_index" "
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES (1, 10);
+INSERT INTO b VALUES (1, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+CREATE INDEX idx_b_v ON b(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add idx b');
+CREATE INDEX idx_a_v ON a(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add idx a');
+SELECT dolt_revert('HEAD~1');
+" "SELECT (SELECT count(*) FROM pragma_index_list('a') WHERE name = 'idx_a_v') || '|' ||
+          (SELECT count(*) FROM pragma_index_list('b') WHERE name = 'idx_b_v')" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'a' AND index_name = 'idx_a_v'), '|', (SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'b' AND index_name = 'idx_b_v'))"
 
 # Reverting a revert ("undo the undo") would be the natural test
 # here, but Dolt and doltlite format the nested commit message
@@ -643,6 +797,52 @@ SELECT dolt_revert('HEAD~1');
 ROLLBACK;
 " "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' || (SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id,u,v FROM t ORDER BY id) AS ordered_rows)" \
 "SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', u, ':', v) ORDER BY id SEPARATOR ',') FROM t))"
+
+oracle_error_poststate "cherry_pick_fk_violation_rolls_back" "
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES parent(u));
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child VALUES (1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO child VALUES (2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_add_child');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE pk=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_drop_parent');
+SELECT dolt_cherry_pick('feature');
+" "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+          (SELECT group_concat(pk || ':' || u, ',') FROM (SELECT pk,u FROM parent ORDER BY pk) AS ordered_parent) || '|' ||
+          (SELECT group_concat(pk || ':' || u, ',') FROM (SELECT pk,u FROM child ORDER BY pk) AS ordered_child)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM parent), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM child))"
+
+oracle_error_poststate "cherry_pick_fk_violation_txn_rollback" "
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES parent(u));
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child VALUES (1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO child VALUES (2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_add_child');
+SELECT dolt_checkout('main');
+DELETE FROM parent WHERE pk=2;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_drop_parent');
+BEGIN;
+SELECT dolt_cherry_pick('feature');
+ROLLBACK;
+" "SELECT (SELECT count(*) FROM dolt_constraint_violations) || '|' ||
+          (SELECT group_concat(pk || ':' || u, ',') FROM (SELECT pk,u FROM parent ORDER BY pk) AS ordered_parent) || '|' ||
+          (SELECT group_concat(pk || ':' || u, ',') FROM (SELECT pk,u FROM child ORDER BY pk) AS ordered_child)" \
+"SELECT CONCAT((SELECT COUNT(*) FROM dolt_constraint_violations), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM parent), '|', (SELECT GROUP_CONCAT(CONCAT(pk, ':', u) ORDER BY pk SEPARATOR ',') FROM child))"
 
 echo "--- savepoint parity ---"
 

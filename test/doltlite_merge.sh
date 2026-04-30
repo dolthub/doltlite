@@ -209,7 +209,88 @@ else
   ERRORS="$ERRORS\nFAIL: constraint_violation_merge_tx_persists\n  expected: TX|0|1|1:9:main1,2:9:feat2\n  got:      $TX_OUT"
 fi
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12"
+# Disjoint new-table additions on both branches should auto-merge and persist
+DB13=/tmp/test_merge13_$$.db; rm -f "$DB13"
+echo "CREATE TABLE anchor(id INTEGER PRIMARY KEY); INSERT INTO anchor VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB13" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE TABLE feat_tbl(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO feat_tbl VALUES(1,'f'); SELECT dolt_commit('-A','-m','feat_add_table');" | $DOLTLITE "$DB13" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); CREATE TABLE main_tbl(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO main_tbl VALUES(1,'m'); SELECT dolt_commit('-A','-m','main_add_table');" | $DOLTLITE "$DB13" > /dev/null 2>&1
+run_test_match "disjoint_new_tables_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB13"
+run_test "disjoint_new_tables_main_present" "SELECT v FROM main_tbl;" "m" "$DB13"
+run_test "disjoint_new_tables_feat_present" "SELECT v FROM feat_tbl;" "f" "$DB13"
+run_test "disjoint_new_tables_reopen_main" "SELECT v FROM main_tbl;" "m" "$DB13"
+run_test "disjoint_new_tables_reopen_feat" "SELECT v FROM feat_tbl;" "f" "$DB13"
+
+# Disjoint index additions on different existing tables should auto-merge.
+DB14=/tmp/test_merge14_$$.db; rm -f "$DB14"
+echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v INT); CREATE TABLE b(id INTEGER PRIMARY KEY, v INT); INSERT INTO a VALUES(1,10); INSERT INTO b VALUES(1,20); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); CREATE INDEX idx_a_v ON a(v); SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_idx');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+echo "SELECT dolt_checkout('feat'); CREATE INDEX idx_b_v ON b(v); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_idx');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB14" > /dev/null 2>&1
+run_test_match "disjoint_indexes_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB14"
+run_test "disjoint_indexes_visible" "SELECT count(*) FROM sqlite_master WHERE type='index' AND name IN ('idx_a_v','idx_b_v');" "2" "$DB14"
+run_test "disjoint_indexes_reopen_data_a" "SELECT count(*) FROM a;" "1" "$DB14"
+run_test "disjoint_indexes_reopen_data_b" "SELECT count(*) FROM b;" "1" "$DB14"
+
+# Disjoint foreign-key additions on different existing tables should auto-merge.
+DB15=/tmp/test_merge15_$$.db; rm -f "$DB15"
+echo "CREATE TABLE p1(id INTEGER PRIMARY KEY); CREATE TABLE c1(id INTEGER PRIMARY KEY, p1_id INT); CREATE TABLE p2(id INTEGER PRIMARY KEY); CREATE TABLE c2(id INTEGER PRIMARY KEY, p2_id INT); INSERT INTO p1 VALUES(1); INSERT INTO p2 VALUES(1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); ALTER TABLE c1 RENAME TO c1_old; CREATE TABLE c1(id INTEGER PRIMARY KEY, p1_id INT, CONSTRAINT fk_c1 FOREIGN KEY (p1_id) REFERENCES p1(id)); INSERT INTO c1 SELECT id,p1_id FROM c1_old; DROP TABLE c1_old; SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_fk');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+echo "SELECT dolt_checkout('feat'); ALTER TABLE c2 RENAME TO c2_old; CREATE TABLE c2(id INTEGER PRIMARY KEY, p2_id INT, CONSTRAINT fk_c2 FOREIGN KEY (p2_id) REFERENCES p2(id)); INSERT INTO c2 SELECT id,p2_id FROM c2_old; DROP TABLE c2_old; SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_fk');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB15" > /dev/null 2>&1
+run_test_match "disjoint_fks_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB15"
+run_test "disjoint_fks_c1" "SELECT count(*) FROM pragma_foreign_key_list('c1');" "1" "$DB15"
+run_test "disjoint_fks_c2" "SELECT count(*) FROM pragma_foreign_key_list('c2');" "1" "$DB15"
+
+# New table on one branch plus index on an existing table on the other should auto-merge.
+DB16=/tmp/test_merge16_$$.db; rm -f "$DB16"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB16" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE INDEX idx_t_v ON t(v); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_idx');" | $DOLTLITE "$DB16" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); CREATE TABLE main_only(id INTEGER PRIMARY KEY, v INT); INSERT INTO main_only VALUES(1,11); SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_add_table');" | $DOLTLITE "$DB16" > /dev/null 2>&1
+run_test_match "table_plus_index_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB16"
+run_test "table_plus_index_table_visible" "SELECT count(*) FROM main_only;" "1" "$DB16"
+run_test "table_plus_index_index_visible" "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_t_v';" "1" "$DB16"
+
+# New table on one branch plus unrelated CHECK constraint change on the other should auto-merge.
+DB17=/tmp/test_merge17_$$.db; rm -f "$DB17"
+echo "CREATE TABLE base(id INTEGER PRIMARY KEY, v INT); INSERT INTO base VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB17" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE TABLE feat_tbl(id INTEGER PRIMARY KEY, v INT); INSERT INTO feat_tbl VALUES(1,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_add_table');" | $DOLTLITE "$DB17" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); ALTER TABLE base RENAME TO base_old; CREATE TABLE base(id INTEGER PRIMARY KEY, v INT, CONSTRAINT chk_base CHECK (v > 0)); INSERT INTO base SELECT * FROM base_old; DROP TABLE base_old; SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_add_check');" | $DOLTLITE "$DB17" > /dev/null 2>&1
+run_test_match "table_plus_check_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB17"
+run_test "table_plus_check_table_visible" "SELECT count(*) FROM feat_tbl;" "1" "$DB17"
+run_test "table_plus_check_constraint_visible" "SELECT instr(sql,'CHECK')>0 FROM sqlite_master WHERE type='table' AND name='base';" "1" "$DB17"
+
+# New table on one branch plus unrelated rename on the other should auto-merge.
+DB18=/tmp/test_merge18_$$.db; rm -f "$DB18"
+echo "CREATE TABLE base(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO base VALUES(1,'x'); CREATE TABLE keep_main(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO keep_main VALUES(1,'m'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); ALTER TABLE keep_main RENAME TO renamed_main; SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_rename');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+echo "SELECT dolt_checkout('feat'); CREATE TABLE feat_tbl(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO feat_tbl VALUES(1,'f'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_add_table');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB18" > /dev/null 2>&1
+run_test_match "table_plus_rename_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB18"
+run_test "table_plus_rename_feat_visible" "SELECT count(*) FROM feat_tbl;" "1" "$DB18"
+run_test "table_plus_rename_new_name_visible" "SELECT count(*) FROM renamed_main;" "1" "$DB18"
+
+# New table on one branch plus unrelated drop/recreate on the other should auto-merge.
+DB19=/tmp/test_merge19_$$.db; rm -f "$DB19"
+echo "CREATE TABLE base(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO base VALUES(1,'x'); CREATE TABLE churn(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO churn VALUES(1,'m'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB19" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); DROP TABLE churn; CREATE TABLE churn(k INTEGER PRIMARY KEY, n INT); INSERT INTO churn VALUES(7,70); SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_recreate');" | $DOLTLITE "$DB19" > /dev/null 2>&1
+echo "SELECT dolt_checkout('feat'); CREATE TABLE feat_tbl(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO feat_tbl VALUES(1,'f'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_add_table');" | $DOLTLITE "$DB19" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB19" > /dev/null 2>&1
+run_test_match "table_plus_recreate_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB19"
+run_test "table_plus_recreate_feat_visible" "SELECT count(*) FROM feat_tbl;" "1" "$DB19"
+run_test "table_plus_recreate_schema_visible" "SELECT instr(sql,'k INTEGER PRIMARY KEY')>0 FROM sqlite_master WHERE type='table' AND name='churn';" "1" "$DB19"
+
+# New FK-bearing parent/child tables on one branch plus unrelated CHECK
+# change on the other should auto-merge and remain visible.
+DB20=/tmp/test_merge20_$$.db; rm -f "$DB20"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB20" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE); CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u)); INSERT INTO p VALUES(1,100); INSERT INTO c VALUES(1,100); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_add_fk_tables');" | $DOLTLITE "$DB20" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK(v > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_check');" | $DOLTLITE "$DB20" > /dev/null 2>&1
+run_test_match "fk_tables_plus_check_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB20"
+run_test "fk_tables_plus_check_parent_visible" "SELECT count(*) FROM p;" "1" "$DB20"
+run_test "fk_tables_plus_check_child_visible" "SELECT count(*) FROM c;" "1" "$DB20"
+run_test "fk_tables_plus_check_fk_visible" "SELECT count(*) FROM pragma_foreign_key_list('c');" "1" "$DB20"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi

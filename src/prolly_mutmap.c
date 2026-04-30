@@ -69,14 +69,14 @@ static void freeEntryData(ProllyMutMapEntry *e){
   e->nVal = 0;
 }
 
-static int copyEntryData(ProllyMutMapEntry *e,
+static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
                          const u8 *pKey, int nKey,
                          const u8 *pVal, int nVal){
   e->pKey = 0;
   e->nKey = 0;
   e->pVal = 0;
   e->nVal = 0;
-  if( !e->isIntKey && pKey && nKey>0 ){
+  if( !mm->isIntKey && pKey && nKey>0 ){
     e->pKey = (u8*)sqlite3_malloc(nKey);
     if( !e->pKey ) return SQLITE_NOMEM;
     memcpy(e->pKey, pKey, nKey);
@@ -315,15 +315,6 @@ static int appendUndoRec(ProllyMutMap *mm, int idx){
   return SQLITE_OK;
 }
 
-static void shiftUndoIndices(ProllyMutMap *mm, int idx, int delta){
-  int i;
-  for(i=0; i<mm->nUndo; i++){
-    if( mm->aUndo[i].entryIdx >= idx ){
-      mm->aUndo[i].entryIdx += delta;
-    }
-  }
-}
-
 int prollyMutMapInsert(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
@@ -376,10 +367,9 @@ int prollyMutMapInsert(
     e = &mm->aEntries[phys];
     memset(e, 0, sizeof(*e));
     e->op = PROLLY_EDIT_INSERT;
-    e->isIntKey = mm->isIntKey;
     e->intKey = intKey;
     e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
-    rc = copyEntryData(e, pKey, nKey, pVal, nVal);
+    rc = copyEntryData(mm, e, pKey, nKey, pVal, nVal);
     if( rc!=SQLITE_OK ){
       return rc;
     }
@@ -455,10 +445,9 @@ int prollyMutMapDelete(
     e = &mm->aEntries[phys];
     memset(e, 0, sizeof(*e));
     e->op = PROLLY_EDIT_DELETE;
-    e->isIntKey = mm->isIntKey;
     e->intKey = intKey;
     e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
-    rc = copyEntryData(e, pKey, nKey, 0, 0);
+    rc = copyEntryData(mm, e, pKey, nKey, 0, 0);
     if( rc!=SQLITE_OK ){
       return rc;
     }
@@ -768,7 +757,6 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
       ProllyMutMapEntry *se = &src->aEntries[i];
       ProllyMutMapEntry *de = &dst->aEntries[i];
       de->op = se->op;
-      de->isIntKey = se->isIntKey;
       de->intKey = se->intKey;
       de->bornAt = se->bornAt;
       de->nKey = 0;

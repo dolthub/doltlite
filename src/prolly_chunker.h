@@ -50,6 +50,4 @@ int prollyChunkerAddAtLevel(ProllyChunker *ch, int level,
                             const u8 *pKey, int nKey,
                             const u8 *pVal, int nVal);
 
-int prollyChunkerFlushLevel(ProllyChunker *ch, int level);
-
 #endif

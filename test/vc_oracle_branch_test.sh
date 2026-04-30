@@ -231,6 +231,37 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_branch('historical', (SELECT commit_hash FROM dolt_log WHERE message='c1'));
 "
 
+oracle "create_at_tag_ref" "
+$SEED
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_tag('v1', 'HEAD~1');
+SELECT dolt_branch('from_tag', 'v1');
+"
+
+oracle "create_at_parent_ref" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main');
+SELECT dolt_merge('feature');
+SELECT dolt_branch('p1', 'HEAD^1');
+SELECT dolt_branch('p2', 'HEAD^2');
+"
+
+oracle "create_from_branch_ref" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_branch('copy_of_feature', 'feature');
+"
+
 echo "--- delete ---"
 
 oracle "delete_existing" "

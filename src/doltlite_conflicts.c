@@ -32,17 +32,6 @@ static void freeConflictRow(struct ConflictRow *pRow){
   memset(pRow, 0, sizeof(*pRow));
 }
 
-static int dupConflictBytes(const u8 *pIn, int nIn, u8 **ppOut){
-  u8 *pCopy;
-  *ppOut = 0;
-  if( !pIn || nIn<=0 ) return SQLITE_OK;
-  pCopy = sqlite3_malloc(nIn);
-  if( !pCopy ) return SQLITE_NOMEM;
-  memcpy(pCopy, pIn, nIn);
-  *ppOut = pCopy;
-  return SQLITE_OK;
-}
-
 static void removeConflictRow(ConflictTableInfo *pTable, int iRow){
   if( !pTable || iRow<0 || iRow>=pTable->nConflicts ) return;
   freeConflictRow(&pTable->aRows[iRow]);

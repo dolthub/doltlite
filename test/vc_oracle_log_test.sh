@@ -262,6 +262,55 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat1');
 "
 
+oracle "log_on_branch_created_from_tag_ref" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_tag('v1', 'HEAD~1');
+SELECT dolt_branch('from_tag', 'v1');
+SELECT dolt_checkout('from_tag');
+"
+
+oracle "log_on_branch_created_from_first_parent" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feat');
+SELECT dolt_branch('from_p1', 'HEAD^1');
+SELECT dolt_checkout('from_p1');
+"
+
+oracle "log_on_branch_created_from_second_parent" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feat');
+SELECT dolt_branch('from_p2', 'HEAD^2');
+SELECT dolt_checkout('from_p2');
+"
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

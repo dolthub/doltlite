@@ -247,6 +247,129 @@ run_test_match "revert_alter_msg" "SELECT message FROM dolt_log LIMIT 1;" "Rever
 rm -f "$DB"
 
 # ============================================================
+# Test 6b: Cherry-pick disjoint new-table addition across unrelated check change
+# ============================================================
+
+DB=/tmp/test_alter_cp_disjoint_table_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE base(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO base VALUES(1,1);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE TABLE feat_tbl(k INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO feat_tbl VALUES(1,'x');
+SELECT dolt_commit('-A','-m','feat adds table');
+SELECT dolt_checkout('main');
+CREATE TABLE base_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO base_new SELECT * FROM base;
+DROP TABLE base;
+ALTER TABLE base_new RENAME TO base;
+SELECT dolt_commit('-A','-m','main adds check');
+EOF
+
+run_test_match "cp_disjoint_table_hash" \
+  "SELECT dolt_cherry_pick('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "cp_disjoint_table_exists" \
+  "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='feat_tbl';" \
+  "1" "$DB"
+run_test "cp_disjoint_table_rows" "SELECT count(*) FROM feat_tbl;" "1" "$DB"
+run_test "cp_disjoint_table_reopen" "SELECT count(*) FROM feat_tbl;" "1" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
+# Test 6c: Cherry-pick disjoint index addition across unrelated index change
+# ============================================================
+
+DB=/tmp/test_alter_cp_disjoint_idx_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES(1,10);
+INSERT INTO b VALUES(1,20);
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+CREATE INDEX idx_b_v ON b(v);
+SELECT dolt_commit('-A','-m','feat idx');
+SELECT dolt_checkout('main');
+CREATE INDEX idx_a_v ON a(v);
+SELECT dolt_commit('-A','-m','main idx');
+EOF
+
+run_test_match "cp_disjoint_idx_hash" \
+  "SELECT dolt_cherry_pick('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "cp_disjoint_idx_a" \
+  "SELECT count(*) FROM pragma_index_list('a') WHERE name='idx_a_v';" \
+  "1" "$DB"
+run_test "cp_disjoint_idx_b" \
+  "SELECT count(*) FROM pragma_index_list('b') WHERE name='idx_b_v';" \
+  "1" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
+# Test 6d: Revert old add-table commit while preserving later unrelated check change
+# ============================================================
+
+DB=/tmp/test_alter_revert_disjoint_table_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE base(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO base VALUES(1,1);
+SELECT dolt_commit('-A','-m','init');
+CREATE TABLE feat_tbl(k INTEGER PRIMARY KEY, w TEXT);
+INSERT INTO feat_tbl VALUES(1,'x');
+SELECT dolt_commit('-A','-m','add table');
+CREATE TABLE base_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO base_new SELECT * FROM base;
+DROP TABLE base;
+ALTER TABLE base_new RENAME TO base;
+SELECT dolt_commit('-A','-m','add check');
+EOF
+
+run_test_match "revert_disjoint_table_hash" \
+  "SELECT dolt_revert('HEAD~1');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "revert_disjoint_table_gone" \
+  "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='feat_tbl';" \
+  "0" "$DB"
+run_test "revert_disjoint_table_base" "SELECT count(*) FROM base;" "1" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
+# Test 6e: Revert old index commit while preserving later unrelated index
+# ============================================================
+
+DB=/tmp/test_alter_revert_disjoint_idx_$$.db; rm -f "$DB"
+cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
+CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
+CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO a VALUES(1,10);
+INSERT INTO b VALUES(1,20);
+SELECT dolt_commit('-A','-m','init');
+CREATE INDEX idx_b_v ON b(v);
+SELECT dolt_commit('-A','-m','add idx b');
+CREATE INDEX idx_a_v ON a(v);
+SELECT dolt_commit('-A','-m','add idx a');
+EOF
+
+run_test_match "revert_disjoint_idx_hash" \
+  "SELECT dolt_revert('HEAD~1');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "revert_disjoint_idx_a" \
+  "SELECT count(*) FROM pragma_index_list('a') WHERE name='idx_a_v';" \
+  "1" "$DB"
+run_test "revert_disjoint_idx_b" \
+  "SELECT count(*) FROM pragma_index_list('b') WHERE name='idx_b_v';" \
+  "0" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Test 7: dolt_diff and dolt_history across a schema change
 # ============================================================
 

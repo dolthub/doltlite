@@ -30,7 +30,6 @@ struct ProllyNode {
   const u32 *aValOff;
   const u8 *pKeyData;
   const u8 *pValData;
-  ProllyHash addr;
 };
 
 int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData);
@@ -75,8 +74,6 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut);
 void prollyNodeBuilderReset(ProllyNodeBuilder *b);
 
 void prollyNodeBuilderFree(ProllyNodeBuilder *b);
-
-void prollyNodeComputeHash(const u8 *pData, int nData, ProllyHash *pOut);
 
 int prollyCompareKeys(
   u8 flags,

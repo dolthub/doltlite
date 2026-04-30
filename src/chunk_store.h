@@ -130,9 +130,10 @@ struct ConflictEntry {
 
 struct DOLTLITE_PACKED ChunkIndexEntry {
   ProllyHash hash;
-  /* File offset of the 4-byte length prefix, or negative for a
-  ** WAL-encoded offset pointing into cs->pWalData / cs->pWriteBuf —
-  ** see csEncodeWalOffset in chunk_store.c. */
+  /* File offset of the 4-byte length prefix. The chunk data follows
+  ** immediately at offset+4. Same convention for entries pointing
+  ** into the main chunk region and entries pointing into the file's
+  ** WAL region — chunkStoreGet doesn't differentiate. */
   i64 offset;
   int size;
 };
@@ -196,7 +197,6 @@ struct ChunkStore {
 
   ChunkIndexEntry *aIndex;
   int nIndex;
-  int nIndexAlloc;
 
   /* When the persisted index is mmapped, aIndexMmapBase is the page-
   ** aligned base of the mapping (which can differ from aIndex if
@@ -226,8 +226,11 @@ struct ChunkStore {
   int graphLockFd;
   i64 nCommittedWriteBuf;
 
-
-  u8 *pWalData;
+  /* Total bytes in the file's WAL region (the trailing append-only
+  ** part of the chunk store file, where WAL chunk records live).
+  ** Tracked so commits know where to start writing the next batch
+  ** without an extra fstat. There is no in-memory mirror — reads
+  ** of WAL-region chunks pread directly from the file. */
   i64 nWalData;
 };
 

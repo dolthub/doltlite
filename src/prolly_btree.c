@@ -68,11 +68,7 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 #define BTCF_Pinned     0x40
 
 #define BTS_READ_ONLY       0x0001
-#define BTS_PAGESIZE_FIXED  0x0002
-#define BTS_SECURE_DELETE   0x0004
-#define BTS_OVERWRITE       0x0008
 #define BTS_INITIALLY_EMPTY 0x0010
-#define BTS_NO_WAL          0x0020
 
 #define CLEAR_CACHED_PAYLOAD(pCur) do{ \
   if( (pCur)->cachedPayloadOwned && (pCur)->pCachedPayload ){ \
@@ -82,14 +78,6 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
   (pCur)->nCachedPayload = 0; \
   (pCur)->cachedPayloadOwned = 0; \
 }while(0)
-
-typedef struct BtLock BtLock;
-struct BtLock {
-  Btree *pBtree;
-  Pgno iTable;
-  u8 eLock;
-  BtLock *pNext;
-};
 
 #define PROLLY_DEFAULT_CACHE_SIZE 1024
 
@@ -141,7 +129,6 @@ struct BtShared {
   PagerShim *pPagerShim;
   sqlite3 *db;
   BtCursor *pCursor;
-  u8 openFlags;
   u16 btsFlags;
   u32 pageSize;
   int nRef;
@@ -236,13 +223,8 @@ struct Btree {
   sqlite3 *db;
   BtShared *pBt;
   u8 inTrans;
-  u8 sharable;
-  int wantToLock;
-  int nBackup;
   u32 iBDataVersion;
   Btree *pNext;
-  Btree *pPrev;
-  BtLock lock;
   u64 nSeek;
 
   Catalog cat;
@@ -458,7 +440,7 @@ static int btreeWriteWorkingState(
   const ProllyHash *pCatHash,
   const ProllyHash *pCommitHash
 );
-static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
+static int btreeDeleteImmediate(BtCursor *pCur);
 
 /*
 ** Bound deferred per-table edit growth by forcing a mutmap drain once the
@@ -1266,24 +1248,6 @@ static void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
   }
 }
 
-static void setCursorToMutMapEntry(BtCursor *pCur, int idx){
-  ProllyMutMapEntry *pEntry = prollyMutMapEntryAt(pCur->pMutMap, idx);
-  CLEAR_CACHED_PAYLOAD(pCur);
-  pCur->mmIdx = idx;
-  pCur->mmPhysIdx = -1;
-  pCur->mmActive = 1;
-  pCur->mmPhysActive = 0;
-  pCur->mergeSrc = MERGE_SRC_MUT;
-  pCur->eState = CURSOR_VALID;
-  pCur->curFlags &= ~BTCF_AtLast;
-  if( pCur->curIntKey ){
-    pCur->cachedIntKey = pEntry->intKey;
-    pCur->curFlags |= BTCF_ValidNKey;
-  }else{
-    pCur->curFlags &= ~BTCF_ValidNKey;
-  }
-}
-
 static int advanceTreeCursor(BtCursor *pCur, int dir){
   if( dir>0 ){
     return prollyCursorNext(&pCur->pCur);
@@ -1401,8 +1365,6 @@ static int ensureMutMap(BtCursor *pCur){
 }
 
 static int saveCursorPosition(BtCursor *pCur){
-  int rc = SQLITE_OK;
-
   if( pCur->eState!=CURSOR_VALID && pCur->eState!=CURSOR_SKIPNEXT ){
     return SQLITE_OK;
   }
@@ -1457,10 +1419,7 @@ static int saveCursorPosition(BtCursor *pCur){
     }
   }
 
-  rc = prollyCursorSave(&pCur->pCur);
-  if( rc!=SQLITE_OK ){
-    return rc;
-  }
+  prollyCursorReleaseAll(&pCur->pCur);
 
   pCur->eState = CURSOR_REQUIRESEEK;
   return SQLITE_OK;
@@ -2095,7 +2054,6 @@ int sqlite3BtreeOpen(
   pBt->db = db;
   pBt->pageSize = PROLLY_DEFAULT_PAGE_SIZE;
   pBt->nRef = 1;
-  pBt->openFlags = (u8)flags;
   p->inTransaction = TRANS_NONE;
 
   if( pBt->store.readOnly ){
@@ -2220,9 +2178,6 @@ int sqlite3BtreeOpen(
   p->pBt = pBt;
   p->pOps = &prollyBtreeOps;
   p->inTrans = TRANS_NONE;
-  p->sharable = 0;
-  p->wantToLock = 0;
-  p->nBackup = 0;
   p->iBDataVersion = 1;
   p->nSeek = 0;
 
@@ -4158,12 +4113,6 @@ static u32 btreeSerialType(Mem *pMem, u32 *pLen){
   *pLen = 0; return SERIAL_TYPE_NULL;
 }
 
-static int serializeUnpackedRecord(UnpackedRecord *pRec, u8 **ppOut, int *pnOut){
-  int nAlloc = 0;
-  *ppOut = 0;
-  return serializeUnpackedRecordBuffer(pRec, ppOut, &nAlloc, pnOut);
-}
-
 static int findMatchingMutMapEntry(
   ProllyMutMap *pMap,
   KeyInfo *pKeyInfo,
@@ -4205,7 +4154,7 @@ static int findMatchingMutMapEntry(
     int nRec = pEntry->nVal;
     int isLess;
 
-    if( pEntry->isIntKey ){
+    if( pMap->isIntKey ){
       lo = mid + 1;
       continue;
     }
@@ -4231,7 +4180,7 @@ static int findMatchingMutMapEntry(
     const u8 *pRec = pEntry->pVal;
     int nRec = pEntry->nVal;
 
-    if( pEntry->isIntKey ){
+    if( pMap->isIntKey ){
       lo++;
       continue;
     }
@@ -4975,11 +4924,8 @@ static int flushDeferredEdits(BtShared *pBt){
   return rc;
 }
 
-static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey){
+static int btreeDeleteImmediate(BtCursor *pCur){
   int rc;
-  (void)pKey;
-  (void)nKey;
-  (void)iKey;
 
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ){
@@ -5137,7 +5083,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   }
 
 
-  rc = btreeDeleteImmediate(pCur, pKey, nKey, iKey);
+  rc = btreeDeleteImmediate(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
   if( flags & BTREE_SAVEPOSITION ){
@@ -5204,9 +5150,7 @@ static int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
 }
 
 #ifndef SQLITE_OMIT_SHARED_CACHE
-static void prollyBtreeEnter(Btree *p){
-  p->wantToLock++;
-}
+static void prollyBtreeEnter(Btree *p){ (void)p; }
 void sqlite3BtreeEnter(Btree *p){
   if( p ) p->pOps->xEnter(p);
 }
@@ -5222,9 +5166,7 @@ int sqlite3BtreeConnectionCount(Btree *p){ (void)p; return 1; }
 #endif
 
 #if !defined(SQLITE_OMIT_SHARED_CACHE) && SQLITE_THREADSAFE
-static void prollyBtreeLeave(Btree *p){
-  p->wantToLock--;
-}
+static void prollyBtreeLeave(Btree *p){ (void)p; }
 void sqlite3BtreeLeave(Btree *p){
   if( p ) p->pOps->xLeave(p);
 }
@@ -5467,7 +5409,6 @@ int sqlite3BtreeIntegrityCheck(
   }
 
   (void)aCnt;
-  (void)mxErr;
 
   if( !p->pBt ){
     if( pnErr ) *pnErr = 0;
@@ -5596,7 +5537,9 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
 }
 
 int sqlite3BtreeIsInBackup(Btree *p){
-  return p->nBackup > 0;
+  /* prolly_btree doesn't implement the SQLite backup API. */
+  (void)p;
+  return 0;
 }
 
 #ifndef SQLITE_OMIT_WAL
@@ -5716,7 +5659,7 @@ sqlite3_uint64 sqlite3BtreeSeekCount(Btree *p){
 
 #ifdef SQLITE_TEST
 int sqlite3BtreeCursorInfo(BtCursor *pCur, int *aResult, int upCnt){
-  (void)pCur; (void)upCnt;
+  (void)pCur;
   if( aResult ){
     aResult[0] = 0;
     aResult[1] = 0;
@@ -6704,11 +6647,9 @@ static int origBtreeCursorVt(Btree *p, Pgno iTable, int wrFlag,
 }
 static void origBtreeEnterVt(Btree *p){
   origBtreeEnter(p->pOrigBtree);
-  p->wantToLock++;
 }
 static void origBtreeLeaveVt(Btree *p){
   origBtreeLeave(p->pOrigBtree);
-  p->wantToLock--;
 }
 static struct Pager *origBtreePagerVt(Btree *p){
   return (struct Pager*)origBtreePager(p->pOrigBtree);

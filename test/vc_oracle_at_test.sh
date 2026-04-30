@@ -207,6 +207,15 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "v1"
 
+oracle "at_branch_created_from_tag" "
+$SEED
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+SELECT dolt_tag('v1', 'HEAD~1');
+SELECT dolt_branch('from_tag', 'v1');
+" "from_tag"
+
 echo "--- bare commit hash ref ---"
 
 # View at a literal commit hash. Both engines accept hex hashes
@@ -221,6 +230,13 @@ INSERT INTO t VALUES (3, 30);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "HEAD"
+
+oracle "at_raw_hash_head_minus_1" "
+$SEED
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1"
 
 echo "--- working set is NOT visible at any ref ---"
 
@@ -271,6 +287,34 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feature');
 " "HEAD~1"
+
+oracle "at_head_first_parent_after_merge" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (4, 40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feature');
+" "HEAD^1"
+
+oracle "at_head_second_parent_after_merge" "
+$SEED
+SELECT dolt_branch('feature');
+SELECT dolt_checkout('feature');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat1');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (4, 40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main2');
+SELECT dolt_merge('feature');
+" "HEAD^2"
 
 echo "--- error paths ---"
 
