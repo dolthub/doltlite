@@ -4154,7 +4154,7 @@ static int findMatchingMutMapEntry(
     int nRec = pEntry->nVal;
     int isLess;
 
-    if( pEntry->isIntKey ){
+    if( pMap->isIntKey ){
       lo = mid + 1;
       continue;
     }
@@ -4180,7 +4180,7 @@ static int findMatchingMutMapEntry(
     const u8 *pRec = pEntry->pVal;
     int nRec = pEntry->nVal;
 
-    if( pEntry->isIntKey ){
+    if( pMap->isIntKey ){
       lo++;
       continue;
     }
