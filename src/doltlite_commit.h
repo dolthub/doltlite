@@ -6,7 +6,6 @@
 #include "prolly_hash.h"
 
 #define DOLTLITE_COMMIT_V2 2
-#define DOLTLITE_COMMIT_VERSION DOLTLITE_COMMIT_V2
 
 #define DOLTLITE_MAX_PARENTS 8
 
