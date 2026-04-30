@@ -386,6 +386,73 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "u"
 
+oracle "history_replay_merge_fk_tables_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE p(id INTEGER PRIMARY KEY, v INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, v INT, FOREIGN KEY (v) REFERENCES p(v));
+INSERT INTO p VALUES (1, 100);
+INSERT INTO c VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_fk_tables');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_merge('feat');
+" "c"
+
+oracle "history_replay_cherrypick_fk_tables_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE p(id INTEGER PRIMARY KEY, v INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, v INT, FOREIGN KEY (v) REFERENCES p(v));
+INSERT INTO p VALUES (1, 100);
+INSERT INTO c VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_fk_tables');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+" "c"
+
+oracle "history_replay_rebase_fk_tables_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_checkout('-b', 'feat');
+CREATE TABLE p(id INTEGER PRIMARY KEY, v INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, v INT, FOREIGN KEY (v) REFERENCES p(v));
+INSERT INTO p VALUES (1, 100);
+INSERT INTO c VALUES (1, 100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_fk_tables');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_checkout('feat');
+SELECT dolt_rebase('main');
+" "c"
+
 echo "--- edge cases ---"
 
 # Single-row table at single commit.
