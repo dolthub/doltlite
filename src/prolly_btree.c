@@ -440,7 +440,7 @@ static int btreeWriteWorkingState(
   const ProllyHash *pCatHash,
   const ProllyHash *pCommitHash
 );
-static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey);
+static int btreeDeleteImmediate(BtCursor *pCur);
 
 /*
 ** Bound deferred per-table edit growth by forcing a mutmap drain once the
@@ -4924,11 +4924,8 @@ static int flushDeferredEdits(BtShared *pBt){
   return rc;
 }
 
-static int btreeDeleteImmediate(BtCursor *pCur, const u8 *pKey, int nKey, i64 iKey){
+static int btreeDeleteImmediate(BtCursor *pCur){
   int rc;
-  (void)pKey;
-  (void)nKey;
-  (void)iKey;
 
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ){
@@ -5086,7 +5083,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   }
 
 
-  rc = btreeDeleteImmediate(pCur, pKey, nKey, iKey);
+  rc = btreeDeleteImmediate(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
   if( flags & BTREE_SAVEPOSITION ){
@@ -5412,7 +5409,6 @@ int sqlite3BtreeIntegrityCheck(
   }
 
   (void)aCnt;
-  (void)mxErr;
 
   if( !p->pBt ){
     if( pnErr ) *pnErr = 0;
@@ -5663,7 +5659,7 @@ sqlite3_uint64 sqlite3BtreeSeekCount(Btree *p){
 
 #ifdef SQLITE_TEST
 int sqlite3BtreeCursorInfo(BtCursor *pCur, int *aResult, int upCnt){
-  (void)pCur; (void)upCnt;
+  (void)pCur;
   if( aResult ){
     aResult[0] = 0;
     aResult[1] = 0;

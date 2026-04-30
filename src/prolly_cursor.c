@@ -59,7 +59,6 @@ static int initCursorAtRoot(ProllyCursor *cur, ProllyCacheEntry **ppRoot){
   if( rc!=SQLITE_OK ) return rc;
 
   cur->iLevel = 0;
-  cur->nLevel = 1;
   cur->aLevel[0].pEntry = pRoot;
   cur->aLevel[0].idx = 0;
   if( ppRoot ) *ppRoot = pRoot;
@@ -85,7 +84,6 @@ static int descendToChild(ProllyCursor *cur, int childSlot,
 
   cur->aLevel[cur->iLevel].pEntry = pChild;
   cur->aLevel[cur->iLevel].idx = childIdx;
-  cur->nLevel = cur->iLevel + 1;
   if( ppChild ) *ppChild = pChild;
   return SQLITE_OK;
 }
@@ -378,7 +376,6 @@ void prollyCursorReleaseAll(ProllyCursor *cur){
       cur->aLevel[i].idx = 0;
     }
   }
-  cur->nLevel = 0;
   cur->iLevel = 0;
 
   cur->eState = PROLLY_CURSOR_INVALID;

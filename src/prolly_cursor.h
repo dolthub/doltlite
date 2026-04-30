@@ -18,9 +18,9 @@ struct ProllyCursorLevel {
   int idx;
 };
 
-/* iLevel is the CURRENT depth (leaf when fully descended), nLevel is
-** the depth the tree was loaded to. aLevel[0..iLevel] each hold a
-** pinned ProllyCacheEntry — they must be released on cursor close or
+/* iLevel is the current cursor depth (0 = root, iLevel = leaf when
+** fully descended). aLevel[0..iLevel] each hold a pinned
+** ProllyCacheEntry — they must be released on cursor close or
 ** re-seek or the cache entries leak their node buffer. */
 struct ProllyCursor {
   ChunkStore *pStore;
@@ -28,7 +28,6 @@ struct ProllyCursor {
   ProllyHash root;
   u8 flags;
 
-  int nLevel;
   int iLevel;
   ProllyCursorLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];
 
