@@ -884,6 +884,132 @@ SELECT dolt_merge('feat');
           (SELECT count(*) FROM pragma_foreign_key_list('c'))" \
   "SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c), '|', (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE table_name = 'c' AND referenced_table_name = 'p'))"
 
+oracle_same_session "merge_self_ref_fk_cascade_same_session" "
+PRAGMA foreign_keys = ON;
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  parent_id INTEGER,
+  FOREIGN KEY (parent_id) REFERENCES t(id) ON DELETE CASCADE
+);
+INSERT INTO t VALUES (1, NULL), (2, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (3, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_descendant');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_add_root');
+SELECT dolt_merge('feat');
+DELETE FROM t WHERE id = 1;
+" "SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM t) || '|' ||
+          (SELECT group_concat(id || ':' || ifnull(parent_id, -1), ',') FROM (SELECT id, parent_id FROM t ORDER BY id))" \
+  "SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM t), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', IFNULL(parent_id, -1)) ORDER BY id SEPARATOR ',') FROM t))"
+
+oracle_reopen_state "merge_self_ref_fk_cascade_reopen" "
+PRAGMA foreign_keys = ON;
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  parent_id INTEGER,
+  FOREIGN KEY (parent_id) REFERENCES t(id) ON DELETE CASCADE
+);
+INSERT INTO t VALUES (1, NULL), (2, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (3, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_descendant');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (10, NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_add_root');
+SELECT dolt_merge('feat');
+DELETE FROM t WHERE id = 1;
+" "PRAGMA foreign_keys = ON;
+SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM t) || '|' ||
+          (SELECT group_concat(id || ':' || ifnull(parent_id, -1), ',') FROM (SELECT id, parent_id FROM t ORDER BY id))" \
+  "SET @@foreign_key_checks = 1;
+SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM t), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', IFNULL(parent_id, -1)) ORDER BY id SEPARATOR ',') FROM t))"
+
+oracle_same_session "merge_fk_chain_cascade_same_session" "
+PRAGMA foreign_keys = ON;
+CREATE TABLE gp(id INTEGER PRIMARY KEY);
+CREATE TABLE p(
+  id INTEGER PRIMARY KEY,
+  gp_id INTEGER,
+  FOREIGN KEY (gp_id) REFERENCES gp(id) ON DELETE CASCADE
+);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  p_id INTEGER,
+  FOREIGN KEY (p_id) REFERENCES p(id) ON DELETE CASCADE
+);
+INSERT INTO gp VALUES (1);
+INSERT INTO p VALUES (1, 1);
+INSERT INTO c VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO c VALUES (2, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_child');
+SELECT dolt_checkout('main');
+INSERT INTO gp VALUES (2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_add_root');
+SELECT dolt_merge('feat');
+DELETE FROM gp WHERE id = 1;
+" "SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM gp) || '|' ||
+          (SELECT count(*) FROM p) || '|' ||
+          (SELECT count(*) FROM c)" \
+  "SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM gp), '|', (SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c))"
+
+oracle_reopen_state "merge_fk_chain_cascade_reopen" "
+PRAGMA foreign_keys = ON;
+CREATE TABLE gp(id INTEGER PRIMARY KEY);
+CREATE TABLE p(
+  id INTEGER PRIMARY KEY,
+  gp_id INTEGER,
+  FOREIGN KEY (gp_id) REFERENCES gp(id) ON DELETE CASCADE
+);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  p_id INTEGER,
+  FOREIGN KEY (p_id) REFERENCES p(id) ON DELETE CASCADE
+);
+INSERT INTO gp VALUES (1);
+INSERT INTO p VALUES (1, 1);
+INSERT INTO c VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO c VALUES (2, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat_add_child');
+SELECT dolt_checkout('main');
+INSERT INTO gp VALUES (2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main_add_root');
+SELECT dolt_merge('feat');
+DELETE FROM gp WHERE id = 1;
+" "PRAGMA foreign_keys = ON;
+SELECT 'Q' || char(9) ||
+          (SELECT count(*) FROM gp) || '|' ||
+          (SELECT count(*) FROM p) || '|' ||
+          (SELECT count(*) FROM c)" \
+  "SET @@foreign_key_checks = 1;
+SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM gp), '|', (SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c))"
+
 echo "--- non-branch merge sources ---"
 
 # Merge from a tag instead of a branch. Tags were promoted to first-

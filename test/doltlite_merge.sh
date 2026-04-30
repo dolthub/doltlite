@@ -290,7 +290,27 @@ run_test "fk_tables_plus_check_parent_visible" "SELECT count(*) FROM p;" "1" "$D
 run_test "fk_tables_plus_check_child_visible" "SELECT count(*) FROM c;" "1" "$DB20"
 run_test "fk_tables_plus_check_fk_visible" "SELECT count(*) FROM pragma_foreign_key_list('c');" "1" "$DB20"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20"
+# Self-referential FK cascade should remain valid after merge and reopen.
+DB21=/tmp/test_merge21_$$.db; rm -f "$DB21"
+echo "PRAGMA foreign_keys=ON; CREATE TABLE t(id INTEGER PRIMARY KEY, parent_id INT, FOREIGN KEY(parent_id) REFERENCES t(id) ON DELETE CASCADE); INSERT INTO t VALUES(1,NULL),(2,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB21" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(3,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_add_descendant');" | $DOLTLITE "$DB21" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); INSERT INTO t VALUES(10,NULL); SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_add_root');" | $DOLTLITE "$DB21" > /dev/null 2>&1
+run_test_match "self_ref_fk_merge_hash" "PRAGMA foreign_keys=ON; SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB21"
+run_test "self_ref_fk_delete_cascades_same_session" "PRAGMA foreign_keys=ON; DELETE FROM t WHERE id=1; SELECT group_concat(id || ':' || ifnull(parent_id,-1), ',') FROM (SELECT id,parent_id FROM t ORDER BY id);" "10:-1" "$DB21"
+run_test "self_ref_fk_reopen_state" "PRAGMA foreign_keys=ON; SELECT group_concat(id || ':' || ifnull(parent_id,-1), ',') FROM (SELECT id,parent_id FROM t ORDER BY id);" "10:-1" "$DB21"
+run_test "self_ref_fk_reopen_delete_last_root" "PRAGMA foreign_keys=ON; DELETE FROM t WHERE id=10; SELECT count(*) FROM t;" "0" "$DB21"
+
+# Multi-level FK chain cascade should remain valid after merge and reopen.
+DB22=/tmp/test_merge22_$$.db; rm -f "$DB22"
+echo "PRAGMA foreign_keys=ON; CREATE TABLE gp(id INTEGER PRIMARY KEY); CREATE TABLE p(id INTEGER PRIMARY KEY, gp_id INT, FOREIGN KEY(gp_id) REFERENCES gp(id) ON DELETE CASCADE); CREATE TABLE c(id INTEGER PRIMARY KEY, p_id INT, FOREIGN KEY(p_id) REFERENCES p(id) ON DELETE CASCADE); INSERT INTO gp VALUES(1); INSERT INTO p VALUES(1,1); INSERT INTO c VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB22" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO c VALUES(2,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_add_child');" | $DOLTLITE "$DB22" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); INSERT INTO gp VALUES(2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_add_root');" | $DOLTLITE "$DB22" > /dev/null 2>&1
+run_test_match "fk_chain_merge_hash" "PRAGMA foreign_keys=ON; SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB22"
+run_test "fk_chain_delete_cascades_same_session" "PRAGMA foreign_keys=ON; DELETE FROM gp WHERE id=1; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" "1|0|0" "$DB22"
+run_test "fk_chain_reopen_state" "PRAGMA foreign_keys=ON; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" "1|0|0" "$DB22"
+run_test "fk_chain_reopen_delete_last_root" "PRAGMA foreign_keys=ON; DELETE FROM gp WHERE id=2; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" "0|0|0" "$DB22"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
