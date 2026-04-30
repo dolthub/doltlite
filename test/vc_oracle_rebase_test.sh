@@ -396,6 +396,27 @@ SELECT dolt_rebase('main');
           (SELECT count(*) FROM pragma_foreign_key_list('c'))" \
   "SELECT CONCAT((SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c), '|', (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE table_name = 'c' AND referenced_table_name = 'p'))"
 
+oracle_error_reopen "rebase_fk_violation_rolls_back" "
+CREATE TABLE parent(pk INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES parent(u));
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child VALUES (1,1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+DELETE FROM parent WHERE pk=2;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_drop_parent');
+SELECT dolt_checkout('feat');
+INSERT INTO child VALUES (2,2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_child');
+SELECT dolt_rebase('main');
+" "
+SELECT CONCAT('LOG|B|', active_branch());
+SELECT CONCAT('LOG|W|', count(*)) FROM dolt_branches WHERE name='dolt_rebase_feat';
+SELECT CONCAT('LOG|CV|', count(*)) FROM dolt_constraint_violations;
+SELECT CONCAT('LOG|P|', pk, ':', u) FROM parent ORDER BY pk;
+SELECT CONCAT('LOG|C|', pk, ':', u) FROM child ORDER BY pk;
+"
+
 echo "--- error paths ---"
 
 oracle_error "no_divergent_commits" "
