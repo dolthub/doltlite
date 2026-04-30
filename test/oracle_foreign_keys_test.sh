@@ -15,8 +15,9 @@
 # storage layer (prolly btree vs stock btree).
 #
 # Coverage:
-#   - PRAGMA foreign_keys = ON is set by every scenario
-#     (SQLite defaults to OFF; doltlite matches that default)
+#   - PRAGMA foreign_keys = ON is set by every cross-engine scenario
+#     (SQLite defaults to OFF; DoltLite now enables FK checks by
+#     default, but the oracle still sets it explicitly for parity)
 #   - Basic INSERT / UPDATE / DELETE with valid / invalid references
 #   - ON DELETE actions: NO ACTION, RESTRICT, CASCADE, SET NULL,
 #     SET DEFAULT

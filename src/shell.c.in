@@ -4930,6 +4930,13 @@ static void open_db(ShellState *p, int openFlags){
     sqlite3_free(zParsedFilename);
     sqlite3_free(zParsedBranch);
     globalDb = p->db;
+
+#ifdef DOLTLITE_PROLLY
+    /* DoltLite should enforce foreign keys by default on user-facing
+    ** connections, even if stock SQLite would default them off. */
+    sqlite3_db_config(p->db, SQLITE_DBCONFIG_ENABLE_FKEY, 1, 0);
+#endif
+
     sqlite3_db_config(p->db, SQLITE_DBCONFIG_STMT_SCANSTATUS, (int)0, (int*)0);
 
     /* Reflect the use or absence of --unsafe-testing invocation. */
