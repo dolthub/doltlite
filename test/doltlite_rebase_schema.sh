@@ -175,6 +175,78 @@ SELECT dolt_rebase('main');
 SELECT count(*) FROM pragma_foreign_key_list('c');
 " "1"
 
+SELF_REF_SETUP="
+PRAGMA foreign_keys = ON;
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  parent_id INTEGER,
+  FOREIGN KEY (parent_id) REFERENCES t(id) ON DELETE CASCADE
+);
+INSERT INTO t VALUES (1, NULL), (2, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (10, NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main root');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (3, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat descendant');
+"
+
+run_db_match "rebase_schema_self_ref_fk_hash" "
+$SELF_REF_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased|^[0-9a-f]{40}$"
+
+run_db_eq "rebase_schema_self_ref_fk_cascade" "
+$SELF_REF_SETUP
+SELECT dolt_rebase('main');
+DELETE FROM t WHERE id = 1;
+SELECT group_concat(id || ':' || ifnull(parent_id, -1), ',') FROM (SELECT id, parent_id FROM t ORDER BY id);
+" "10:-1"
+
+CHAIN_SETUP="
+PRAGMA foreign_keys = ON;
+CREATE TABLE gp(id INTEGER PRIMARY KEY);
+CREATE TABLE p(
+  id INTEGER PRIMARY KEY,
+  gp_id INTEGER,
+  FOREIGN KEY (gp_id) REFERENCES gp(id) ON DELETE CASCADE
+);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  p_id INTEGER,
+  FOREIGN KEY (p_id) REFERENCES p(id) ON DELETE CASCADE
+);
+INSERT INTO gp VALUES (1);
+INSERT INTO p VALUES (1, 1);
+INSERT INTO c VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+INSERT INTO gp VALUES (2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main root');
+SELECT dolt_checkout('feat');
+INSERT INTO c VALUES (2, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat child');
+"
+
+run_db_match "rebase_schema_fk_chain_hash" "
+$CHAIN_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased|^[0-9a-f]{40}$"
+
+run_db_eq "rebase_schema_fk_chain_cascade" "
+$CHAIN_SETUP
+SELECT dolt_rebase('main');
+DELETE FROM gp WHERE id = 1;
+SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);
+" "1|0|0"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then
