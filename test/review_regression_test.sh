@@ -488,6 +488,135 @@ run_test "interleaved_wor_b_kept" \
 rm -rf "$TMPROOT"
 
 # ============================================================
+# GUARD 14: .read savepoint-heavy composite-PK stream keeps exact state
+# Bug shape: the #710 fix touched released mutmap savepoint metadata.
+# Invariant: repeated SAVEPOINT / RELEASE / ROLLBACK TO around large
+#            composite-PK DML streams preserves only the intended rows.
+# ============================================================
+
+echo "--- Guard 14: .read savepoint-heavy composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/savepoint_blobkey.db"
+SQL="$TMPROOT/savepoint_blobkey.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(a,b)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 1200); do
+    echo "INSERT INTO t VALUES($i,$i,'base$i');"
+  done
+  echo "SAVEPOINT sp1;"
+  for i in $(seq 1201 2400); do
+    echo "INSERT INTO t VALUES($i,$i,'keep$i');"
+  done
+  echo "RELEASE sp1;"
+  echo "SAVEPOINT sp2;"
+  for i in $(seq 2401 3200); do
+    echo "INSERT INTO t VALUES($i,$i,'drop$i');"
+  done
+  for i in $(seq 401 1800); do
+    echo "UPDATE t SET v='u$i' WHERE a=$i AND b=$i;"
+  done
+  echo "ROLLBACK TO sp2;"
+  echo "RELEASE sp2;"
+  echo "SAVEPOINT sp3;"
+  for i in $(seq 6 6 2400); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  echo "RELEASE sp3;"
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','savepoint blobkey');" > /dev/null 2>&1
+
+run_test "savepoint_blobkey_count" \
+  "SELECT COUNT(*) FROM t;" "2000" "$DB"
+run_test "savepoint_blobkey_kept" \
+  "SELECT v FROM t WHERE a=1201 AND b=1201;" "keep1201" "$DB"
+run_test "savepoint_blobkey_rolled_back_insert" \
+  "SELECT COUNT(*) FROM t WHERE a=2500 AND b=2500;" "0" "$DB"
+run_test "savepoint_blobkey_rolled_back_update" \
+  "SELECT v FROM t WHERE a=1000 AND b=1000;" "base1000" "$DB"
+run_test "savepoint_blobkey_released_insert_survives_rollback" \
+  "SELECT v FROM t WHERE a=1501 AND b=1501;" "keep1501" "$DB"
+run_test "savepoint_blobkey_delete" \
+  "SELECT COUNT(*) FROM t WHERE a=1200 AND b=1200;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 15: .read savepoint-heavy WITHOUT ROWID composite-PK stream
+# Invariant: the same release/rollback pattern works on non-rowid
+#            blob-key tables and reopens with exact expected rows.
+# ============================================================
+
+echo "--- Guard 15: .read savepoint-heavy WITHOUT ROWID composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/savepoint_wor.db"
+SQL="$TMPROOT/savepoint_wor.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 1000); do
+    echo "INSERT INTO t VALUES($i,$i,'base$i');"
+  done
+  echo "SAVEPOINT sp1;"
+  for i in $(seq 1001 2200); do
+    echo "INSERT INTO t VALUES($i,$i,'keep$i');"
+  done
+  echo "RELEASE sp1;"
+  echo "SAVEPOINT sp2;"
+  for i in $(seq 2201 3000); do
+    echo "INSERT INTO t VALUES($i,$i,'drop$i');"
+  done
+  for i in $(seq 301 1600); do
+    echo "UPDATE t SET v='wu$i' WHERE a=$i AND b=$i;"
+  done
+  echo "ROLLBACK TO sp2;"
+  echo "RELEASE sp2;"
+  echo "SAVEPOINT sp3;"
+  for i in $(seq 5 5 2200); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  echo "RELEASE sp3;"
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','savepoint wor');" > /dev/null 2>&1
+
+run_test "savepoint_wor_count" \
+  "SELECT COUNT(*) FROM t;" "1760" "$DB"
+run_test "savepoint_wor_kept" \
+  "SELECT v FROM t WHERE a=1001 AND b=1001;" "keep1001" "$DB"
+run_test "savepoint_wor_rolled_back_insert" \
+  "SELECT COUNT(*) FROM t WHERE a=2500 AND b=2500;" "0" "$DB"
+run_test "savepoint_wor_rolled_back_update" \
+  "SELECT v FROM t WHERE a=901 AND b=901;" "base901" "$DB"
+run_test "savepoint_wor_released_insert_survives_rollback" \
+  "SELECT v FROM t WHERE a=1501 AND b=1501;" "keep1501" "$DB"
+run_test "savepoint_wor_delete" \
+  "SELECT COUNT(*) FROM t WHERE a=2200 AND b=2200;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # GUARD 8: Encoding consistency (LE macros match inline code)
 # Bug: encoding was done inline with inconsistent patterns
 # Fix: shared PROLLY_GET/PUT_U16/U32 macros
