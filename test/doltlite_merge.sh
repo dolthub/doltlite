@@ -290,6 +290,20 @@ run_test "fk_tables_plus_check_parent_visible" "SELECT count(*) FROM p;" "1" "$D
 run_test "fk_tables_plus_check_child_visible" "SELECT count(*) FROM c;" "1" "$DB20"
 run_test "fk_tables_plus_check_fk_visible" "SELECT count(*) FROM pragma_foreign_key_list('c');" "1" "$DB20"
 
+# Same-name FK family recreate on one branch plus unrelated check on the other
+# should merge cleanly and keep the recreated parent's unique index live.
+DB20B=/tmp/test_merge20b_$$.db; rm -f "$DB20B"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,10); CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE); CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u)); INSERT INTO p VALUES(1,100); INSERT INTO c VALUES(1,100); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB20B" > /dev/null 2>&1
+echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); DROP TABLE c; DROP TABLE p; CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE, label TEXT); CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u)); INSERT INTO p VALUES(2,200,'x'); INSERT INTO c VALUES(2,200); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_recreate_fk_family');" | $DOLTLITE "$DB20B" > /dev/null 2>&1
+echo "SELECT dolt_checkout('main'); CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK(v > 0)); INSERT INTO t_new SELECT * FROM t; DROP TABLE t; ALTER TABLE t_new RENAME TO t; SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_check');" | $DOLTLITE "$DB20B" > /dev/null 2>&1
+run_test_match "recreate_fk_family_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB20B"
+run_test "recreate_fk_family_parent_visible" "SELECT count(*) FROM p;" "1" "$DB20B"
+run_test "recreate_fk_family_child_visible" "SELECT count(*) FROM c;" "1" "$DB20B"
+run_test "recreate_fk_family_fk_visible" "SELECT count(*) FROM pragma_foreign_key_list('c');" "1" "$DB20B"
+run_test "recreate_fk_family_parent_schema_visible" "SELECT instr(sql,'label TEXT')>0 FROM sqlite_master WHERE type='table' AND name='p';" "1" "$DB20B"
+run_test "recreate_fk_family_parent_unique_index_live" "SELECT count(*) FROM p INDEXED BY sqlite_autoindex_p_1 WHERE u=200;" "1" "$DB20B"
+run_test "recreate_fk_family_fk_check_clean" "SELECT count(*) FROM pragma_foreign_key_check;" "0" "$DB20B"
+
 # Self-referential FK cascade should remain valid after merge and reopen.
 DB21=/tmp/test_merge21_$$.db; rm -f "$DB21"
 echo "PRAGMA foreign_keys=ON; CREATE TABLE t(id INTEGER PRIMARY KEY, parent_id INT, FOREIGN KEY(parent_id) REFERENCES t(id) ON DELETE CASCADE); INSERT INTO t VALUES(1,NULL),(2,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB21" > /dev/null 2>&1
@@ -310,7 +324,7 @@ run_test "fk_chain_delete_cascades_same_session" "PRAGMA foreign_keys=ON; DELETE
 run_test "fk_chain_reopen_state" "PRAGMA foreign_keys=ON; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" "1|0|0" "$DB22"
 run_test "fk_chain_reopen_delete_last_root" "PRAGMA foreign_keys=ON; DELETE FROM gp WHERE id=2; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" "0|0|0" "$DB22"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB21" "$DB22"
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB8B" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17" "$DB18" "$DB19" "$DB20" "$DB20B" "$DB21" "$DB22"
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
