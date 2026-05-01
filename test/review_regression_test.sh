@@ -617,6 +617,120 @@ run_test "savepoint_wor_delete" \
 rm -rf "$TMPROOT"
 
 # ============================================================
+# GUARD 16: .read mixed DML preserves composite-PK secondary indexes
+# Bug shape: large streamed writes on blob-key table roots can also
+#            desynchronize secondary indexes from table contents.
+# Invariant: after reopen, forced indexed lookups and range counts
+#            match the exact expected row set.
+# ============================================================
+
+echo "--- Guard 16: .read mixed DML on composite PK with indexes ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml_idx.db"
+SQL="$TMPROOT/mixed_dml_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 4200); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 1201 3100); do
+    echo "UPDATE t SET d=-$i, e='hot$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 9 9 4200); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 4201 5200); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml idx');" > /dev/null 2>&1
+
+run_test "mixed_dml_idx_count" \
+  "SELECT COUNT(*) FROM t;" "4734" "$DB"
+run_test "mixed_dml_idx_forced_hot" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='hot1201';" "-1201|hot1201" "$DB"
+run_test "mixed_dml_idx_forced_tail_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tail';" "1000" "$DB"
+run_test "mixed_dml_idx_forced_cd_lookup" \
+  "SELECT e FROM t INDEXED BY idx_t_cd WHERE c=2401 AND d=-2401;" "hot2401" "$DB"
+run_test "mixed_dml_idx_deleted_missing" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_cd WHERE c=1800 AND d=-1800;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 17: .read mixed DML preserves WITHOUT ROWID secondary indexes
+# Invariant: the same indexed reopen checks work on non-rowid
+#            composite-PK tables with secondary indexes.
+# ============================================================
+
+echo "--- Guard 17: .read mixed DML on WITHOUT ROWID composite PK with indexes ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml_wor_idx.db"
+SQL="$TMPROOT/mixed_dml_wor_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3600); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 901 2600); do
+    echo "UPDATE t SET d=-$i, e='warm$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 8 8 3600); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 3601 4300); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml wor idx');" > /dev/null 2>&1
+
+run_test "mixed_dml_wor_idx_count" \
+  "SELECT COUNT(*) FROM t;" "3850" "$DB"
+run_test "mixed_dml_wor_idx_forced_hot" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='warm901';" "-901|warm901" "$DB"
+run_test "mixed_dml_wor_idx_forced_tail_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tail';" "700" "$DB"
+run_test "mixed_dml_wor_idx_forced_cd_lookup" \
+  "SELECT e FROM t INDEXED BY idx_t_cd WHERE c=1501 AND d=-1501;" "warm1501" "$DB"
+run_test "mixed_dml_wor_idx_deleted_missing" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_cd WHERE c=1200 AND d=-1200;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # GUARD 8: Encoding consistency (LE macros match inline code)
 # Bug: encoding was done inline with inconsistent patterns
 # Fix: shared PROLLY_GET/PUT_U16/U32 macros
