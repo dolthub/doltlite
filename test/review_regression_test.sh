@@ -237,6 +237,386 @@ run_test_match "chain_reopen_log" \
 rm -f "$DB"
 
 # ============================================================
+# GUARD 10: .read mixed DML preserves composite-PK tables
+# Bug shape: statement-streamed blob-key mutations could lose older
+#            rows once many small edits accumulated in-session.
+# Invariant: large insert/update/delete streams preserve full table
+#            contents and exact point-lookups after reopen.
+# ============================================================
+
+echo "--- Guard 10: .read mixed DML on composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml.db"
+SQL="$TMPROOT/mixed_dml.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 5000); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,NULL);"
+  done
+  for i in $(seq 1001 4000); do
+    echo "UPDATE t SET d=-$i, e='u$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 4 4 5000); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 5001 6500); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml');" > /dev/null 2>&1
+
+run_test "mixed_dml_count" \
+  "SELECT COUNT(*) FROM t;" "5250" "$DB"
+run_test "mixed_dml_min" \
+  "SELECT MIN(a) FROM t;" "1" "$DB"
+run_test "mixed_dml_max" \
+  "SELECT MAX(a) FROM t;" "6500" "$DB"
+run_test "mixed_dml_updated_row" \
+  "SELECT printf('%d|%s', d, e) FROM t WHERE a=1025 AND b=1025;" "-1025|u1025" "$DB"
+run_test "mixed_dml_deleted_row" \
+  "SELECT COUNT(*) FROM t WHERE a=2000 AND b=2000;" "0" "$DB"
+run_test "mixed_dml_tail_row" \
+  "SELECT e FROM t WHERE a=6400 AND b=6400;" "tail" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 11: .read interleaved mixed DML keeps per-table state separate
+# Bug shape: large statement streams might corrupt deferred edits when
+#            switching between blob-key tables repeatedly.
+# Invariant: interleaved edits to multiple composite-PK tables reopen
+#            with the exact expected counts and point rows.
+# ============================================================
+
+echo "--- Guard 11: .read interleaved composite-PK tables ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/interleaved_dml.db"
+SQL="$TMPROOT/interleaved_dml.sql"
+
+echo "CREATE TABLE a(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+);
+CREATE TABLE b(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3000); do
+    echo "INSERT INTO a VALUES($i,$i,'a$i');"
+    echo "INSERT INTO b VALUES($i,$i,'b$i');"
+  done
+  for i in $(seq 501 2500); do
+    echo "UPDATE a SET v='au$i' WHERE k1=$i AND k2=$i;"
+    echo "UPDATE b SET v='bu$i' WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 3 3 3000); do
+    echo "DELETE FROM a WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 5 5 3000); do
+    echo "DELETE FROM b WHERE k1=$i AND k2=$i;"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','interleaved dml');" > /dev/null 2>&1
+
+run_test "interleaved_a_count" \
+  "SELECT COUNT(*) FROM a;" "2000" "$DB"
+run_test "interleaved_b_count" \
+  "SELECT COUNT(*) FROM b;" "2400" "$DB"
+run_test "interleaved_a_updated" \
+  "SELECT v FROM a WHERE k1=1001 AND k2=1001;" "au1001" "$DB"
+run_test "interleaved_b_updated" \
+  "SELECT v FROM b WHERE k1=1001 AND k2=1001;" "bu1001" "$DB"
+run_test "interleaved_a_deleted" \
+  "SELECT COUNT(*) FROM a WHERE k1=1500 AND k2=1500;" "0" "$DB"
+run_test "interleaved_b_deleted" \
+  "SELECT COUNT(*) FROM b WHERE k1=1500 AND k2=1500;" "0" "$DB"
+run_test "interleaved_a_kept" \
+  "SELECT v FROM a WHERE k1=1499 AND k2=1499;" "au1499" "$DB"
+run_test "interleaved_b_kept" \
+  "SELECT v FROM b WHERE k1=1499 AND k2=1499;" "bu1499" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 12: .read mixed DML preserves WITHOUT ROWID composite-PK tables
+# Bug shape: statement-streamed blob-key mutations are especially risky
+#            on non-rowid layouts because the PK record is the full key.
+# Invariant: large mixed insert/update/delete streams keep exact row
+#            counts and point lookups after reopen.
+# ============================================================
+
+echo "--- Guard 12: .read mixed DML on WITHOUT ROWID composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml_wor.db"
+SQL="$TMPROOT/mixed_dml_wor.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3600); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,NULL);"
+  done
+  for i in $(seq 801 2800); do
+    echo "UPDATE t SET d=-$i, e='wu$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 6 6 3600); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 3601 4800); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml wor');" > /dev/null 2>&1
+
+run_test "mixed_dml_wor_count" \
+  "SELECT COUNT(*) FROM t;" "4200" "$DB"
+run_test "mixed_dml_wor_min" \
+  "SELECT MIN(a) FROM t;" "1" "$DB"
+run_test "mixed_dml_wor_max" \
+  "SELECT MAX(a) FROM t;" "4800" "$DB"
+run_test "mixed_dml_wor_updated" \
+  "SELECT printf('%d|%s', d, e) FROM t WHERE a=1001 AND b=1001;" "-1001|wu1001" "$DB"
+run_test "mixed_dml_wor_deleted" \
+  "SELECT COUNT(*) FROM t WHERE a=1800 AND b=1800;" "0" "$DB"
+run_test "mixed_dml_wor_tail" \
+  "SELECT e FROM t WHERE a=4700 AND b=4700;" "tail" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 13: .read interleaved WITHOUT ROWID composite-PK tables
+# Bug shape: deferred edits could bleed across tables while switching
+#            between non-rowid blob-key roots in a long statement file.
+# Invariant: both tables keep exact counts and point rows after reopen.
+# ============================================================
+
+echo "--- Guard 13: .read interleaved WITHOUT ROWID tables ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/interleaved_wor.db"
+SQL="$TMPROOT/interleaved_wor.sql"
+
+echo "CREATE TABLE a(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+) WITHOUT ROWID;
+CREATE TABLE b(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+) WITHOUT ROWID;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 2400); do
+    echo "INSERT INTO a VALUES($i,$i,'a$i');"
+    echo "INSERT INTO b VALUES($i,$i,'b$i');"
+  done
+  for i in $(seq 401 2000); do
+    echo "UPDATE a SET v='awu$i' WHERE k1=$i AND k2=$i;"
+    echo "UPDATE b SET v='bwu$i' WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 7 7 2400); do
+    echo "DELETE FROM a WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 8 8 2400); do
+    echo "DELETE FROM b WHERE k1=$i AND k2=$i;"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','interleaved wor');" > /dev/null 2>&1
+
+run_test "interleaved_wor_a_count" \
+  "SELECT COUNT(*) FROM a;" "2058" "$DB"
+run_test "interleaved_wor_b_count" \
+  "SELECT COUNT(*) FROM b;" "2100" "$DB"
+run_test "interleaved_wor_a_updated" \
+  "SELECT v FROM a WHERE k1=999 AND k2=999;" "awu999" "$DB"
+run_test "interleaved_wor_b_updated" \
+  "SELECT v FROM b WHERE k1=999 AND k2=999;" "bwu999" "$DB"
+run_test "interleaved_wor_a_deleted" \
+  "SELECT COUNT(*) FROM a WHERE k1=1400 AND k2=1400;" "0" "$DB"
+run_test "interleaved_wor_b_deleted" \
+  "SELECT COUNT(*) FROM b WHERE k1=1600 AND k2=1600;" "0" "$DB"
+run_test "interleaved_wor_a_kept" \
+  "SELECT v FROM a WHERE k1=1000 AND k2=1000;" "awu1000" "$DB"
+run_test "interleaved_wor_b_kept" \
+  "SELECT v FROM b WHERE k1=1001 AND k2=1001;" "bwu1001" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 14: .read savepoint-heavy composite-PK stream keeps exact state
+# Bug shape: the #710 fix touched released mutmap savepoint metadata.
+# Invariant: repeated SAVEPOINT / RELEASE / ROLLBACK TO around large
+#            composite-PK DML streams preserves only the intended rows.
+# ============================================================
+
+echo "--- Guard 14: .read savepoint-heavy composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/savepoint_blobkey.db"
+SQL="$TMPROOT/savepoint_blobkey.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(a,b)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 1200); do
+    echo "INSERT INTO t VALUES($i,$i,'base$i');"
+  done
+  echo "SAVEPOINT sp1;"
+  for i in $(seq 1201 2400); do
+    echo "INSERT INTO t VALUES($i,$i,'keep$i');"
+  done
+  echo "RELEASE sp1;"
+  echo "SAVEPOINT sp2;"
+  for i in $(seq 2401 3200); do
+    echo "INSERT INTO t VALUES($i,$i,'drop$i');"
+  done
+  for i in $(seq 401 1800); do
+    echo "UPDATE t SET v='u$i' WHERE a=$i AND b=$i;"
+  done
+  echo "ROLLBACK TO sp2;"
+  echo "RELEASE sp2;"
+  echo "SAVEPOINT sp3;"
+  for i in $(seq 6 6 2400); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  echo "RELEASE sp3;"
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','savepoint blobkey');" > /dev/null 2>&1
+
+run_test "savepoint_blobkey_count" \
+  "SELECT COUNT(*) FROM t;" "2000" "$DB"
+run_test "savepoint_blobkey_kept" \
+  "SELECT v FROM t WHERE a=1201 AND b=1201;" "keep1201" "$DB"
+run_test "savepoint_blobkey_rolled_back_insert" \
+  "SELECT COUNT(*) FROM t WHERE a=2500 AND b=2500;" "0" "$DB"
+run_test "savepoint_blobkey_rolled_back_update" \
+  "SELECT v FROM t WHERE a=1000 AND b=1000;" "base1000" "$DB"
+run_test "savepoint_blobkey_released_insert_survives_rollback" \
+  "SELECT v FROM t WHERE a=1501 AND b=1501;" "keep1501" "$DB"
+run_test "savepoint_blobkey_delete" \
+  "SELECT COUNT(*) FROM t WHERE a=1200 AND b=1200;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 15: .read savepoint-heavy WITHOUT ROWID composite-PK stream
+# Invariant: the same release/rollback pattern works on non-rowid
+#            blob-key tables and reopens with exact expected rows.
+# ============================================================
+
+echo "--- Guard 15: .read savepoint-heavy WITHOUT ROWID composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/savepoint_wor.db"
+SQL="$TMPROOT/savepoint_wor.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 1000); do
+    echo "INSERT INTO t VALUES($i,$i,'base$i');"
+  done
+  echo "SAVEPOINT sp1;"
+  for i in $(seq 1001 2200); do
+    echo "INSERT INTO t VALUES($i,$i,'keep$i');"
+  done
+  echo "RELEASE sp1;"
+  echo "SAVEPOINT sp2;"
+  for i in $(seq 2201 3000); do
+    echo "INSERT INTO t VALUES($i,$i,'drop$i');"
+  done
+  for i in $(seq 301 1600); do
+    echo "UPDATE t SET v='wu$i' WHERE a=$i AND b=$i;"
+  done
+  echo "ROLLBACK TO sp2;"
+  echo "RELEASE sp2;"
+  echo "SAVEPOINT sp3;"
+  for i in $(seq 5 5 2200); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  echo "RELEASE sp3;"
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','savepoint wor');" > /dev/null 2>&1
+
+run_test "savepoint_wor_count" \
+  "SELECT COUNT(*) FROM t;" "1760" "$DB"
+run_test "savepoint_wor_kept" \
+  "SELECT v FROM t WHERE a=1001 AND b=1001;" "keep1001" "$DB"
+run_test "savepoint_wor_rolled_back_insert" \
+  "SELECT COUNT(*) FROM t WHERE a=2500 AND b=2500;" "0" "$DB"
+run_test "savepoint_wor_rolled_back_update" \
+  "SELECT v FROM t WHERE a=901 AND b=901;" "base901" "$DB"
+run_test "savepoint_wor_released_insert_survives_rollback" \
+  "SELECT v FROM t WHERE a=1501 AND b=1501;" "keep1501" "$DB"
+run_test "savepoint_wor_delete" \
+  "SELECT COUNT(*) FROM t WHERE a=2200 AND b=2200;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # GUARD 8: Encoding consistency (LE macros match inline code)
 # Bug: encoding was done inline with inconsistent patterns
 # Fix: shared PROLLY_GET/PUT_U16/U32 macros
