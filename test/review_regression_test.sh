@@ -237,6 +237,132 @@ run_test_match "chain_reopen_log" \
 rm -f "$DB"
 
 # ============================================================
+# GUARD 10: .read mixed DML preserves composite-PK tables
+# Bug shape: statement-streamed blob-key mutations could lose older
+#            rows once many small edits accumulated in-session.
+# Invariant: large insert/update/delete streams preserve full table
+#            contents and exact point-lookups after reopen.
+# ============================================================
+
+echo "--- Guard 10: .read mixed DML on composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml.db"
+SQL="$TMPROOT/mixed_dml.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 5000); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,NULL);"
+  done
+  for i in $(seq 1001 4000); do
+    echo "UPDATE t SET d=-$i, e='u$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 4 4 5000); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 5001 6500); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml');" > /dev/null 2>&1
+
+run_test "mixed_dml_count" \
+  "SELECT COUNT(*) FROM t;" "5250" "$DB"
+run_test "mixed_dml_min" \
+  "SELECT MIN(a) FROM t;" "1" "$DB"
+run_test "mixed_dml_max" \
+  "SELECT MAX(a) FROM t;" "6500" "$DB"
+run_test "mixed_dml_updated_row" \
+  "SELECT printf('%d|%s', d, e) FROM t WHERE a=1025 AND b=1025;" "-1025|u1025" "$DB"
+run_test "mixed_dml_deleted_row" \
+  "SELECT COUNT(*) FROM t WHERE a=2000 AND b=2000;" "0" "$DB"
+run_test "mixed_dml_tail_row" \
+  "SELECT e FROM t WHERE a=6400 AND b=6400;" "tail" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 11: .read interleaved mixed DML keeps per-table state separate
+# Bug shape: large statement streams might corrupt deferred edits when
+#            switching between blob-key tables repeatedly.
+# Invariant: interleaved edits to multiple composite-PK tables reopen
+#            with the exact expected counts and point rows.
+# ============================================================
+
+echo "--- Guard 11: .read interleaved composite-PK tables ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/interleaved_dml.db"
+SQL="$TMPROOT/interleaved_dml.sql"
+
+echo "CREATE TABLE a(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+);
+CREATE TABLE b(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3000); do
+    echo "INSERT INTO a VALUES($i,$i,'a$i');"
+    echo "INSERT INTO b VALUES($i,$i,'b$i');"
+  done
+  for i in $(seq 501 2500); do
+    echo "UPDATE a SET v='au$i' WHERE k1=$i AND k2=$i;"
+    echo "UPDATE b SET v='bu$i' WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 3 3 3000); do
+    echo "DELETE FROM a WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 5 5 3000); do
+    echo "DELETE FROM b WHERE k1=$i AND k2=$i;"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','interleaved dml');" > /dev/null 2>&1
+
+run_test "interleaved_a_count" \
+  "SELECT COUNT(*) FROM a;" "2000" "$DB"
+run_test "interleaved_b_count" \
+  "SELECT COUNT(*) FROM b;" "2400" "$DB"
+run_test "interleaved_a_updated" \
+  "SELECT v FROM a WHERE k1=1001 AND k2=1001;" "au1001" "$DB"
+run_test "interleaved_b_updated" \
+  "SELECT v FROM b WHERE k1=1001 AND k2=1001;" "bu1001" "$DB"
+run_test "interleaved_a_deleted" \
+  "SELECT COUNT(*) FROM a WHERE k1=1500 AND k2=1500;" "0" "$DB"
+run_test "interleaved_b_deleted" \
+  "SELECT COUNT(*) FROM b WHERE k1=1500 AND k2=1500;" "0" "$DB"
+run_test "interleaved_a_kept" \
+  "SELECT v FROM a WHERE k1=1499 AND k2=1499;" "au1499" "$DB"
+run_test "interleaved_b_kept" \
+  "SELECT v FROM b WHERE k1=1499 AND k2=1499;" "bu1499" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # GUARD 8: Encoding consistency (LE macros match inline code)
 # Bug: encoding was done inline with inconsistent patterns
 # Fix: shared PROLLY_GET/PUT_U16/U32 macros
