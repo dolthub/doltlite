@@ -731,6 +731,130 @@ run_test "mixed_dml_wor_idx_deleted_missing" \
 rm -rf "$TMPROOT"
 
 # ============================================================
+# GUARD 18: bulk .read indexed rowid tables survive VC state transitions
+# Bug shape: shell-streamed blob-key writes can look correct in-table
+#            but still drift when staged/committed/persisted through VC.
+# Invariant: status, add, commit, and reopen all preserve the same
+#            secondary-index-visible row set.
+# ============================================================
+
+echo "--- Guard 18: .read indexed composite PK through add/commit/reopen ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_vc_idx.db"
+SQL="$TMPROOT/bulk_vc_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3200); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 801 2200); do
+    echo "UPDATE t SET d=-$i, e='hot$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 10 10 3200); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 3201 3800); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT COUNT(*) FROM dolt_status;" \
+  "SELECT dolt_add('-A');" \
+  "SELECT COUNT(*) FROM dolt_status;" \
+  "SELECT dolt_commit('-A','-m','bulk vc idx');" > /dev/null 2>&1
+
+run_test "bulk_vc_idx_count" \
+  "SELECT COUNT(*) FROM t;" "3480" "$DB"
+run_test "bulk_vc_idx_forced_hot" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='hot901';" "-901|hot901" "$DB"
+run_test "bulk_vc_idx_forced_tail_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tail';" "600" "$DB"
+run_test "bulk_vc_idx_forced_cd_lookup" \
+  "SELECT e FROM t INDEXED BY idx_t_cd WHERE c=1501 AND d=-1501;" "hot1501" "$DB"
+run_test "bulk_vc_idx_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "2" "$DB"
+run_test "bulk_vc_idx_status_clean" \
+  "SELECT COUNT(*) FROM dolt_status;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 19: bulk .read indexed WITHOUT ROWID tables survive VC states
+# Invariant: the same add/commit/reopen checks work on non-rowid
+#            composite-PK tables with secondary indexes.
+# ============================================================
+
+echo "--- Guard 19: .read indexed WITHOUT ROWID composite PK through add/commit/reopen ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_vc_wor_idx.db"
+SQL="$TMPROOT/bulk_vc_wor_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 2800); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 701 1900); do
+    echo "UPDATE t SET d=-$i, e='warm$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 12 12 2800); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2801 3400); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT COUNT(*) FROM dolt_status;" \
+  "SELECT dolt_add('-A');" \
+  "SELECT COUNT(*) FROM dolt_status;" \
+  "SELECT dolt_commit('-A','-m','bulk vc wor idx');" > /dev/null 2>&1
+
+run_test "bulk_vc_wor_idx_count" \
+  "SELECT COUNT(*) FROM t;" "3167" "$DB"
+run_test "bulk_vc_wor_idx_forced_hot" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='warm777';" "-777|warm777" "$DB"
+run_test "bulk_vc_wor_idx_forced_tail_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tail';" "600" "$DB"
+run_test "bulk_vc_wor_idx_forced_cd_lookup" \
+  "SELECT e FROM t INDEXED BY idx_t_cd WHERE c=1501 AND d=-1501;" "warm1501" "$DB"
+run_test "bulk_vc_wor_idx_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "2" "$DB"
+run_test "bulk_vc_wor_idx_status_clean" \
+  "SELECT COUNT(*) FROM dolt_status;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # GUARD 8: Encoding consistency (LE macros match inline code)
 # Bug: encoding was done inline with inconsistent patterns
 # Fix: shared PROLLY_GET/PUT_U16/U32 macros
