@@ -159,6 +159,8 @@ static int fetchRowByBlobKey(
   return rc;
 }
 
+static int tableHasRowid(sqlite3 *db, const char *zTable);
+
 static int fkRefreshAppendName(char ***pazNames, int *pnNames, const char *zName){
   char **azNames = *pazNames;
   int nNames = *pnNames;
@@ -217,6 +219,9 @@ static int fkRefreshCandidateTables(sqlite3 *db, int *pChanged){
   }
 
   for(i=0; i<nNames; i++){
+    if( !tableHasRowid(db, azNames[i]) ){
+      continue;
+    }
     char *zSql = sqlite3_mprintf("REINDEX \"%w\"", azNames[i]);
     if( !zSql ){
       fkRefreshFreeNames(azNames, nNames);
