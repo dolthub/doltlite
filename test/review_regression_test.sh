@@ -363,6 +363,131 @@ run_test "interleaved_b_kept" \
 rm -rf "$TMPROOT"
 
 # ============================================================
+# GUARD 12: .read mixed DML preserves WITHOUT ROWID composite-PK tables
+# Bug shape: statement-streamed blob-key mutations are especially risky
+#            on non-rowid layouts because the PK record is the full key.
+# Invariant: large mixed insert/update/delete streams keep exact row
+#            counts and point lookups after reopen.
+# ============================================================
+
+echo "--- Guard 12: .read mixed DML on WITHOUT ROWID composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml_wor.db"
+SQL="$TMPROOT/mixed_dml_wor.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3600); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,NULL);"
+  done
+  for i in $(seq 801 2800); do
+    echo "UPDATE t SET d=-$i, e='wu$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 6 6 3600); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 3601 4800); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml wor');" > /dev/null 2>&1
+
+run_test "mixed_dml_wor_count" \
+  "SELECT COUNT(*) FROM t;" "4200" "$DB"
+run_test "mixed_dml_wor_min" \
+  "SELECT MIN(a) FROM t;" "1" "$DB"
+run_test "mixed_dml_wor_max" \
+  "SELECT MAX(a) FROM t;" "4800" "$DB"
+run_test "mixed_dml_wor_updated" \
+  "SELECT printf('%d|%s', d, e) FROM t WHERE a=1001 AND b=1001;" "-1001|wu1001" "$DB"
+run_test "mixed_dml_wor_deleted" \
+  "SELECT COUNT(*) FROM t WHERE a=1800 AND b=1800;" "0" "$DB"
+run_test "mixed_dml_wor_tail" \
+  "SELECT e FROM t WHERE a=4700 AND b=4700;" "tail" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 13: .read interleaved WITHOUT ROWID composite-PK tables
+# Bug shape: deferred edits could bleed across tables while switching
+#            between non-rowid blob-key roots in a long statement file.
+# Invariant: both tables keep exact counts and point rows after reopen.
+# ============================================================
+
+echo "--- Guard 13: .read interleaved WITHOUT ROWID tables ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/interleaved_wor.db"
+SQL="$TMPROOT/interleaved_wor.sql"
+
+echo "CREATE TABLE a(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+) WITHOUT ROWID;
+CREATE TABLE b(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+) WITHOUT ROWID;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 2400); do
+    echo "INSERT INTO a VALUES($i,$i,'a$i');"
+    echo "INSERT INTO b VALUES($i,$i,'b$i');"
+  done
+  for i in $(seq 401 2000); do
+    echo "UPDATE a SET v='awu$i' WHERE k1=$i AND k2=$i;"
+    echo "UPDATE b SET v='bwu$i' WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 7 7 2400); do
+    echo "DELETE FROM a WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 8 8 2400); do
+    echo "DELETE FROM b WHERE k1=$i AND k2=$i;"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','interleaved wor');" > /dev/null 2>&1
+
+run_test "interleaved_wor_a_count" \
+  "SELECT COUNT(*) FROM a;" "2058" "$DB"
+run_test "interleaved_wor_b_count" \
+  "SELECT COUNT(*) FROM b;" "2100" "$DB"
+run_test "interleaved_wor_a_updated" \
+  "SELECT v FROM a WHERE k1=999 AND k2=999;" "awu999" "$DB"
+run_test "interleaved_wor_b_updated" \
+  "SELECT v FROM b WHERE k1=999 AND k2=999;" "bwu999" "$DB"
+run_test "interleaved_wor_a_deleted" \
+  "SELECT COUNT(*) FROM a WHERE k1=1400 AND k2=1400;" "0" "$DB"
+run_test "interleaved_wor_b_deleted" \
+  "SELECT COUNT(*) FROM b WHERE k1=1600 AND k2=1600;" "0" "$DB"
+run_test "interleaved_wor_a_kept" \
+  "SELECT v FROM a WHERE k1=1000 AND k2=1000;" "awu1000" "$DB"
+run_test "interleaved_wor_b_kept" \
+  "SELECT v FROM b WHERE k1=1001 AND k2=1001;" "bwu1001" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # GUARD 8: Encoding consistency (LE macros match inline code)
 # Bug: encoding was done inline with inconsistent patterns
 # Fix: shared PROLLY_GET/PUT_U16/U32 macros
