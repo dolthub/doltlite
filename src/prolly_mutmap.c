@@ -571,18 +571,23 @@ void prollyMutMapReleaseSavepoint(ProllyMutMap *mm, int level){
   if( !mm ) return;
   target = level - 1;
 
+  if( level==1 && target==0 ){
+    for(i=0; i<mm->nUndo; i++){
+      sqlite3_free(mm->aUndo[i].prevVal);
+      mm->aUndo[i].prevVal = 0;
+    }
+    mm->nUndo = 0;
+    mm->levelBase++;
+    mm->currentSavepointLevel = 0;
+    return;
+  }
+
   if( target == 0 ){
     for(i=0; i<mm->nUndo; i++){
       sqlite3_free(mm->aUndo[i].prevVal);
       mm->aUndo[i].prevVal = 0;
     }
     mm->nUndo = 0;
-    for(i=0; i<mm->nEntries; i++){
-      mm->aEntries[i].bornAt = 0;
-    }
-    mm->levelBase = 0;
-    mm->currentSavepointLevel = 0;
-    return;
   }else{
     for(i=0; i<mm->nUndo; i++){
       if( mm->aUndo[i].level >= level ){
