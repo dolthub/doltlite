@@ -492,6 +492,10 @@ int prollyMutateFlush(ProllyMutator *pMut){
     int M = prollyMutMapCount(pMut->pEdits);
     int leafCount = 0;
 
+    if( pMut->forceMergeWalk ){
+      return mergeWalk(pMut);
+    }
+
     {
       u8 *pRootData = 0;
       int nRootData = 0;

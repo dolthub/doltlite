@@ -298,6 +298,50 @@ run_test "gc_reopen_data" "SELECT count(*) FROM t;" "2" "$DB"
 rm -f "$DB"
 
 # ============================================================
+# GUARD 10: .read bulk INSERT VALUES preserves all rows
+# Bug: repeated INSERT ... VALUES statements streamed through
+#      the shell could silently drop older rows in composite-PK
+#      tables once sparse blob-key edits were applied one row at a time.
+# Fix: avoid the streaming sparse-edit path for non-intkey roots and
+#      flatten released savepoint bornAt state back to level 0.
+# ============================================================
+
+echo "--- Guard 10: .read bulk INSERT VALUES ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_read.db"
+SQL="$TMPROOT/bulk_read.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 5000); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,NULL);"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','bulk read');" > /dev/null 2>&1
+
+run_test "bulk_read_row_count" \
+  "SELECT COUNT(*) FROM t;" "5000" "$DB"
+run_test "bulk_read_min_pk" \
+  "SELECT MIN(a) FROM t;" "1" "$DB"
+run_test "bulk_read_max_pk" \
+  "SELECT MAX(a) FROM t;" "5000" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # Done
 # ============================================================
 

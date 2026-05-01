@@ -19,6 +19,7 @@ struct ProllyMutator {
   ProllyHash oldRoot;
   ProllyMutMap *pEdits;
   u8 flags;
+  u8 forceMergeWalk;
   ProllyHash newRoot;
 };
 
