@@ -855,6 +855,167 @@ run_test "bulk_vc_wor_idx_status_clean" \
 rm -rf "$TMPROOT"
 
 # ============================================================
+# GUARD 20: bulk .read indexed rowid tables survive branch divergence
+# Bug shape: shell-streamed blob-key writes may persist on main but
+#            drift once a branch checkout, branch commit, and reopen
+#            switch the selected root and index set.
+# Invariant: main and feat reopen independently with their own exact
+#            indexed rows after divergence.
+# ============================================================
+
+echo "--- Guard 20: .read indexed composite PK through branch divergence ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_branch_idx.db"
+SQL="$TMPROOT/bulk_branch_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 2400); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 601 1600); do
+    echo "UPDATE t SET d=-$i, e='base$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 10 10 2400); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2401 2800); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail0');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','bulk branch base');" > /dev/null 2>&1
+
+{
+  echo "SELECT dolt_branch('feat');"
+  echo "SELECT dolt_checkout('feat');"
+  for i in $(seq 1701 2200); do
+    echo "UPDATE t SET d=-$i, e='feat$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 13 13 2800); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2801 3200); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tailf');"
+  done
+  echo "SELECT dolt_commit('-A','-m','feat bulk branch');"
+} | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "bulk_branch_idx_main_count" \
+  "SELECT COUNT(*) FROM t;" "2560" "$DB"
+run_test "bulk_branch_idx_main_forced_base" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='base777';" "-777|base777" "$DB"
+run_test "bulk_branch_idx_main_tailf_absent" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tailf';" "0" "$DB"
+run_test "bulk_branch_idx_main_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "2" "$DB"
+run_test "bulk_branch_idx_feat_count" \
+  "SELECT COUNT(*) FROM t;" "2763" "$DB/feat"
+run_test "bulk_branch_idx_forced_feat" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='feat1702';" "-1702|feat1702" "$DB/feat"
+run_test "bulk_branch_idx_tailf_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tailf';" "400" "$DB/feat"
+run_test "bulk_branch_idx_deleted_missing" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_cd WHERE c=1807 AND d=-1807;" "0" "$DB/feat"
+run_test "bulk_branch_idx_feat_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "3" "$DB/feat"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 21: bulk .read indexed WITHOUT ROWID tables survive branches
+# Invariant: the same checkout/commit/reopen isolation works on
+#            non-rowid composite-PK tables with secondary indexes.
+# ============================================================
+
+echo "--- Guard 21: .read indexed WITHOUT ROWID composite PK through branch divergence ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_branch_wor_idx.db"
+SQL="$TMPROOT/bulk_branch_wor_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 2100); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 501 1400); do
+    echo "UPDATE t SET d=-$i, e='base$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 12 12 2100); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2101 2400); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail0');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','bulk branch wor base');" > /dev/null 2>&1
+
+{
+  echo "SELECT dolt_branch('feat');"
+  echo "SELECT dolt_checkout('feat');"
+  for i in $(seq 1501 2000); do
+    echo "UPDATE t SET d=-$i, e='feat$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 14 14 2400); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2401 2700); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tailf');"
+  done
+  echo "SELECT dolt_commit('-A','-m','feat bulk wor branch');"
+} | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "bulk_branch_wor_idx_main_count" \
+  "SELECT COUNT(*) FROM t;" "2225" "$DB"
+run_test "bulk_branch_wor_idx_main_forced_base" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='base777';" "-777|base777" "$DB"
+run_test "bulk_branch_wor_idx_main_tailf_absent" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tailf';" "0" "$DB"
+run_test "bulk_branch_wor_idx_main_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "2" "$DB"
+run_test "bulk_branch_wor_idx_feat_count" \
+  "SELECT COUNT(*) FROM t;" "2379" "$DB/feat"
+run_test "bulk_branch_wor_idx_forced_feat" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='feat1703';" "-1703|feat1703" "$DB/feat"
+run_test "bulk_branch_wor_idx_tailf_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tailf';" "300" "$DB/feat"
+run_test "bulk_branch_wor_idx_deleted_missing" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_cd WHERE c=1764 AND d=-1764;" "0" "$DB/feat"
+run_test "bulk_branch_wor_idx_feat_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "3" "$DB/feat"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # GUARD 8: Encoding consistency (LE macros match inline code)
 # Bug: encoding was done inline with inconsistent patterns
 # Fix: shared PROLLY_GET/PUT_U16/U32 macros
