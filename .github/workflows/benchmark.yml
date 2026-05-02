@@ -41,11 +41,33 @@ jobs:
         make DOLTLITE_PROLLY=0 sqlite3
 
     - name: Run benchmark
+      id: bench
       run: |
         cd build
-        bash ../test/sysbench_compare.sh | tee /tmp/bench_results.md
+        set +e
+        bash ../test/sysbench_compare.sh > /tmp/bench_results.md 2> /tmp/bench_stderr.txt
+        status=$?
+        set -e
+        cat /tmp/bench_results.md
+        if [ -s /tmp/bench_stderr.txt ]; then
+          echo ""
+          echo "--- benchmark stderr ---"
+          cat /tmp/bench_stderr.txt
+        fi
+        if [ "$status" -ne 0 ]; then
+          {
+            echo ""
+            echo "> Benchmark step failed with exit code $status"
+            echo ""
+            echo '```text'
+            cat /tmp/bench_stderr.txt
+            echo '```'
+          } >> /tmp/bench_results.md
+        fi
+        echo "exit_code=$status" >> "$GITHUB_OUTPUT"
 
     - name: Comment PR with results
+      if: always()
       continue-on-error: true
       uses: actions/github-script@v7
       with:
@@ -86,3 +108,9 @@ jobs:
               body: body,
             });
           }
+
+    - name: Fail if benchmark exceeded ceiling
+      if: steps.bench.outputs.exit_code != '0'
+      run: |
+        cat /tmp/bench_stderr.txt
+        exit 1
