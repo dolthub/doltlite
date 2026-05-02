@@ -5308,6 +5308,7 @@ static int mutmapAssertMatchesModel(
   for(i=0; i<pModel->n; i++){
     ProllyMutMapEntry *pEntry;
     ProllyMutMapEntry *pFind;
+    int rc;
     if( !prollyMutMapIterValid(&it) ) return 0;
     pEntry = prollyMutMapIterEntry(&it);
     if( !pEntry ) return 0;
@@ -5317,14 +5318,18 @@ static int mutmapAssertMatchesModel(
              || (pEntry->nVal==(int)sizeof(int) && memcmp(pEntry->pVal, &pModel->a[i].val, sizeof(int))==0));
     ok = ok && prollyMutMapEntryAt(pMap, i)==pEntry;
     ok = ok && prollyMutMapOrderIndexFromEntry(pMap, pEntry)==i;
-    pFind = prollyMutMapFind(pMap, 0, 0, pModel->a[i].key);
+    rc = prollyMutMapFindRc(pMap, 0, 0, pModel->a[i].key, &pFind);
+    ok = ok && rc==SQLITE_OK;
     ok = ok && pFind==pEntry;
     prollyMutMapIterNext(&it);
   }
   ok = ok && !prollyMutMapIterValid(&it);
   for(i=0; i<8; i++){
     i64 miss = 1000 + i;
-    ok = ok && prollyMutMapFind(pMap, 0, 0, miss)==0;
+    ProllyMutMapEntry *pFind = 0;
+    int rc = prollyMutMapFindRc(pMap, 0, 0, miss, &pFind);
+    ok = ok && rc==SQLITE_OK;
+    ok = ok && pFind==0;
   }
   return ok;
 }
@@ -5712,16 +5717,25 @@ static void run_remotesrv_chunk_commit_failure_clears_pending(void){
         chunkStoreCommit(&cs)==SQLITE_OK);
   check("queue_pending_chunk_for_remotesrv_chunk_commit",
         chunkStorePut(&cs, aChunk, (int)sizeof(aChunk), &chunkHash)==SQLITE_OK);
-  check("pending_chunk_visible_before_failed_commit",
-        chunkStoreHas(&cs, &chunkHash));
+  {
+    int hasChunk = 0;
+    check("pending_chunk_visible_before_failed_commit_rc",
+          chunkStoreHas(&cs, &chunkHash, &hasChunk)==SQLITE_OK);
+    check("pending_chunk_visible_before_failed_commit", hasChunk);
+  }
 
   gFailHits = 0;
   gFailSyncOnce = 1;
   rc = doltliteRemoteSrvCommitPendingForTest(&cs);
   check("remotesrv_chunk_commit_failure_injected", gFailHits>0);
   check("remotesrv_chunk_commit_failure_surfaces", rc!=SQLITE_OK);
-  check("remotesrv_chunk_commit_rolls_back_pending_visibility",
-        !chunkStoreHas(&cs, &chunkHash));
+  {
+    int hasChunk = 1;
+    check("remotesrv_chunk_commit_rolls_back_pending_visibility_rc",
+          chunkStoreHas(&cs, &chunkHash, &hasChunk)==SQLITE_OK);
+    check("remotesrv_chunk_commit_rolls_back_pending_visibility",
+          !hasChunk);
+  }
   check("remotesrv_chunk_commit_clears_pending_count", cs.nPending==0);
 
   gFailSyncOnce = 0;
@@ -5731,8 +5745,13 @@ static void run_remotesrv_chunk_commit_failure_clears_pending(void){
         chunkStoreSerializeRefs(&cs)==SQLITE_OK);
   check("commit_followup_refs_for_remotesrv_chunk_commit",
         chunkStoreCommit(&cs)==SQLITE_OK);
-  check("failed_chunk_not_visible_after_followup_commit",
-        !chunkStoreHas(&cs, &chunkHash));
+  {
+    int hasChunk = 1;
+    check("failed_chunk_not_visible_after_followup_commit_rc",
+          chunkStoreHas(&cs, &chunkHash, &hasChunk)==SQLITE_OK);
+    check("failed_chunk_not_visible_after_followup_commit",
+          !hasChunk);
+  }
 
   chunkStoreClose(&cs);
   check("reopen_store_after_remotesrv_chunk_commit_failure",
@@ -5740,8 +5759,13 @@ static void run_remotesrv_chunk_commit_failure_clears_pending(void){
           SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
   check("reopened_store_after_remotesrv_chunk_commit_has_tag",
         chunkStoreFindTag(&reopened, "v1", &foundHash)==SQLITE_OK);
-  check("reopened_store_after_remotesrv_chunk_commit_has_no_failed_chunk",
-        !chunkStoreHas(&reopened, &chunkHash));
+  {
+    int hasChunk = 1;
+    check("reopened_store_after_remotesrv_chunk_commit_has_no_failed_chunk_rc",
+          chunkStoreHas(&reopened, &chunkHash, &hasChunk)==SQLITE_OK);
+    check("reopened_store_after_remotesrv_chunk_commit_has_no_failed_chunk",
+          !hasChunk);
+  }
   chunkStoreClose(&reopened);
   remove_db(dbpath);
 }

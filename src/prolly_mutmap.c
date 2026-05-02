@@ -624,15 +624,6 @@ int prollyMutMapFindRc(
   return SQLITE_OK;
 }
 
-ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
-                                     const u8 *pKey, int nKey, i64 intKey){
-  ProllyMutMapEntry *pEntry = 0;
-  if( prollyMutMapFindRc(mm, pKey, nKey, intKey, &pEntry)!=SQLITE_OK ){
-    return 0;
-  }
-  return pEntry;
-}
-
 ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx){
   ensureOrder(mm);
   return entryAtOrder(mm, idx);
