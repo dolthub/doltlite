@@ -41,23 +41,20 @@ jobs:
         make DOLTLITE_PROLLY=0 sqlite3
 
     - name: Run benchmark
-      id: bench
       run: |
         cd build
-        bash ../test/sysbench_compare.sh > /tmp/bench_results.md
-        cat /tmp/bench_results.md
-        {
-          echo "results<<EOF"
-          cat /tmp/bench_results.md
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
+        bash ../test/sysbench_compare.sh | tee /tmp/bench_results.md
 
     - name: Comment PR with results
       continue-on-error: true
       uses: actions/github-script@v7
       with:
         script: |
-          const body = `${{ steps.bench.outputs.results }}`;
+          // Read from file so the multi-line markdown (and any backticks /
+          // template-literal-unsafe chars in it) never has to round-trip
+          // through YAML scalars or JS template-literal parsing.
+          const fs = require('fs');
+          const body = fs.readFileSync('/tmp/bench_results.md', 'utf8');
 
           if (!context.issue.number) {
             console.log('No PR context (push event) — skipping comment');
