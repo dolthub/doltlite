@@ -1,0 +1,94 @@
+name: Benchmark Extra
+
+# Companion to Benchmark. Runs the TEXT PK variant of the sysbench suite
+# (test/sysbench_compare_textpk.sh) — every workload against tables with
+# a 32-char hex TEXT PRIMARY KEY. Reporting only; no ceiling check until
+# the non-INTKEY perf work brings ratios in.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  benchmark-extra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tcl-dev build-essential zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    - name: Build doltlite and stock SQLite
+      run: |
+        cd build
+        make doltlite
+        make DOLTLITE_PROLLY=0 sqlite3
+
+    - name: Run benchmark
+      run: |
+        cd build
+        bash ../test/sysbench_compare_textpk.sh | tee /tmp/bench_textpk_results.md
+
+    - name: Comment PR with results
+      continue-on-error: true
+      uses: actions/github-script@v7
+      with:
+        script: |
+          // Read from file so the multi-line markdown (and any backticks /
+          // template-literal-unsafe chars in it) never has to round-trip
+          // through YAML scalars or JS template-literal parsing.
+          const fs = require('fs');
+          const body = fs.readFileSync('/tmp/bench_textpk_results.md', 'utf8');
+
+          if (!context.issue.number) {
+            console.log('No PR context (push event) — skipping comment');
+            return;
+          }
+
+          // Find existing benchmark-extra comment (distinct from the classic
+          // Benchmark workflow's comment, which uses a different header).
+          const comments = await github.rest.issues.listComments({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+          });
+          const botComment = comments.data.find(c =>
+            c.body.includes('Sysbench-Style Benchmark (TEXT PK)')
+          );
+
+          if (botComment) {
+            await github.rest.issues.updateComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              comment_id: botComment.id,
+              body: body,
+            });
+          } else {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body,
+            });
+          }
