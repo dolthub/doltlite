@@ -1104,7 +1104,6 @@ static int applyMutMapToTableRoot(
   mut.oldRoot = pTE->root;
   mut.pEdits = pMap;
   mut.flags = pTE->flags;
-  mut.forceMergeWalk = pTE->zName!=0 && !(pTE->flags & PROLLY_NODE_INTKEY);
 
   rc = prollyMutateFlush(&mut);
   if( rc!=SQLITE_OK ) return rc;
@@ -5831,7 +5830,6 @@ int doltliteApplyRawRowMutation(
   memcpy(&mut.oldRoot, &pTE->root, sizeof(ProllyHash));
   mut.pEdits = &mm;
   mut.flags = pTE->flags;
-  mut.forceMergeWalk = tableEntryIsTableRoot(pBtree, pTE) && !isIntKey;
 
   rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){
