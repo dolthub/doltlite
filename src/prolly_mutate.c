@@ -122,7 +122,8 @@ static int mergeLeaf(
   ProllyMutator *pMut,
   ProllyNode *pLeaf,
   ProllyChunker *pCh,
-  ProllyMutMapIter *pIter
+  ProllyMutMapIter *pIter,
+  int isLast
 ){
   int rc = SQLITE_OK;
   int j;
@@ -223,6 +224,32 @@ static int mergeLeaf(
       prollyMutMapIterNext(pIter);
     }
   }
+
+  /* Drain trailing edits past the leaf's last key when this is the
+  ** rightmost leaf of an isLast subtree. Feeding them at level 0
+  ** here lets them chunk up alongside the leaf's items, instead of
+  ** the previous "trailing-append at level 0 + propagate up through
+  ** every intermediate level" path that grew tree depth by 1 per
+  ** flush in the worst case. */
+  if( isLast ){
+    while( prollyMutMapIterValid(pIter) ){
+      ProllyMutMapEntry *pEd = prollyMutMapIterEntry(pIter);
+      if( pEd->op==PROLLY_EDIT_INSERT ){
+        u8 aEditKey[8];
+        const u8 *pEK; int nEK;
+        if( flags & PROLLY_NODE_INTKEY ){
+          encodeI64BE(aEditKey, pEd->intKey);
+          pEK = aEditKey; nEK = 8;
+        }else{
+          pEK = pEd->pKey; nEK = pEd->nKey;
+        }
+        rc = prollyChunkerAdd(pCh, pEK, nEK, pEd->pVal, pEd->nVal);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+      prollyMutMapIterNext(pIter);
+    }
+  }
+
   return SQLITE_OK;
 }
 
@@ -230,7 +257,8 @@ static int streamingMergeNode(
   ProllyMutator *pMut,
   const ProllyNode *pNode,
   ProllyChunker *pChunker,
-  ProllyMutMapIter *pIter
+  ProllyMutMapIter *pIter,
+  int isLast
 ){
   ProllyCache *pCache = pMut->pCache;
   int rc = SQLITE_OK;
@@ -241,6 +269,8 @@ static int streamingMergeNode(
     const u8 *pChildVal; int nChildVal;
     i64 iBoundKey = 0;
     u8 aBoundBuf[8];
+    int childIsLast;
+    int forceDescend;
 
     prollyNodeKey(pNode, i, &pBoundKey, &nBoundKey);
     prollyNodeValue(pNode, i, &pChildVal, &nChildVal);
@@ -251,7 +281,18 @@ static int streamingMergeNode(
       pBoundKey = aBoundBuf; nBoundKey = 8;
     }
 
-    if( !subtreeHasEdits(pMut->flags, pIter,
+    childIsLast = isLast && (i == pNode->nItems - 1);
+
+    /* The rightmost child of an isLast subtree must absorb any
+    ** trailing edits past pBoundKey. If we splice it instead, those
+    ** edits get appended at chunker level 0 and propagate up through
+    ** every intermediate level as a column of single-entry chunks —
+    ** which is what produced the depth pathology that hit MAX_DEPTH
+    ** at ~1900 single-row inserts. */
+    forceDescend = childIsLast && prollyMutMapIterValid(pIter);
+
+    if( !forceDescend
+     && !subtreeHasEdits(pMut->flags, pIter,
                          pBoundKey, nBoundKey, iBoundKey)
      && chunkerLevelsBelowEmpty(pChunker, pNode->level) ){
       rc = prollyChunkerAddAtLevel(pChunker, pNode->level,
@@ -276,9 +317,9 @@ static int streamingMergeNode(
       }
 
       if( pChildEntry->node.level == 0 ){
-        rc = mergeLeaf(pMut, &pChildEntry->node, pChunker, pIter);
+        rc = mergeLeaf(pMut, &pChildEntry->node, pChunker, pIter, childIsLast);
       }else{
-        rc = streamingMergeNode(pMut, &pChildEntry->node, pChunker, pIter);
+        rc = streamingMergeNode(pMut, &pChildEntry->node, pChunker, pIter, childIsLast);
       }
       prollyCacheRelease(pCache, pChildEntry);
       if( rc!=SQLITE_OK ) return rc;
@@ -320,19 +361,12 @@ static int streamingMerge(
     return rc;
   }
 
-  rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter);
-
-
-  while( prollyMutMapIterValid(&iter) ){
-    ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&iter);
-    if( pEd->op==PROLLY_EDIT_INSERT ){
-      rc = feedChunker(&chunker, pMut->flags,
-                       pEd->pKey, pEd->nKey, pEd->intKey,
-                       pEd->pVal, pEd->nVal);
-      if( rc!=SQLITE_OK ) goto streaming_cleanup;
-    }
-    prollyMutMapIterNext(&iter);
-  }
+  /* isLast=1 marks the root as the rightmost subtree at this level
+  ** of recursion, propagating down through the rightmost child of
+  ** each visited node. mergeLeaf at the bottom drains any trailing
+  ** edits past the rightmost leaf's last key. */
+  rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter, /*isLast=*/1);
+  if( rc!=SQLITE_OK ) goto streaming_cleanup;
 
   rc = prollyChunkerFinish(&chunker);
   if( rc==SQLITE_OK ){
@@ -491,10 +525,6 @@ int prollyMutateFlush(ProllyMutator *pMut){
   {
     int M = prollyMutMapCount(pMut->pEdits);
     int leafCount = 0;
-
-    if( pMut->forceMergeWalk ){
-      return mergeWalk(pMut);
-    }
 
     {
       u8 *pRootData = 0;

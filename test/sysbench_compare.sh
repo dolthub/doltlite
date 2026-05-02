@@ -32,6 +32,13 @@ import random, string, os
 
 random.seed($SEED)
 R = $ROWS
+# TEXT-PK section uses smaller row/op counts so the bench job stays
+# within CI's 15-minute limit. Each non-INTKEY insert on doltlite
+# currently goes through a per-statement flush whose cost scales with
+# tree size, so full-scale R blows the budget in the prepare phase
+# alone. Smaller TPR/TPN still surfaces the regression.
+TPR = max(R // 10, 100)
+TPN = max(R // 10, 100)
 d = '$TMPDIR'
 
 def rint(a, b):
@@ -88,6 +95,25 @@ def prep_with_join(f):
 def prep_with_types(f):
     write_prepare(f)
     write_prepare_types(f)
+
+def write_prepare_textpk(f):
+    # Same shape as sbtest1, but PK is a 32-char hex string (UUID-shaped).
+    # Lights up the non-INTKEY mutmap-flush path (issue #718).
+    # Sized smaller than the INTKEY suite (TPR rows vs R) because each
+    # non-INTKEY insert on doltlite goes through a per-statement flush
+    # whose cost scales with tree size, and the section's job is to
+    # surface the regression — full-scale R would push the bench job
+    # past CI's 15-minute limit. Keep the workload N relative to TPR
+    # so per-test wall time stays comparable to the INTKEY tests.
+    f.write("CREATE TABLE sbtest_textpk(id TEXT PRIMARY KEY, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '');\n")
+    f.write("CREATE INDEX k_idx_textpk ON sbtest_textpk(k);\n")
+    f.write("BEGIN;\n")
+    for i in range(1, TPR+1):
+        f.write(f"INSERT INTO sbtest_textpk VALUES('{i:032x}',{rint(1,TPR)},'{rstr(60)}','{rstr(30)}');\n")
+    f.write("COMMIT;\n")
+
+def prep_textpk(f):
+    write_prepare_textpk(f)
 
 # --- Tests ---
 
@@ -337,6 +363,41 @@ def w_read_write_autocommit(f):
         f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
         f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
+# TEXT-PK writes: same workload shapes as the INTEGER-PK writes, but the
+# PK is a 32-char hex string. Issue #718: non-INTKEY tables route through
+# mergeWalk on every flush, which is 10-1000x slower than streamingMerge.
+# Reporting only (not gated) until the fix lands.
+def w_update_index_textpk(f):
+    f.write("BEGIN;\n")
+    for _ in range(TPN):
+        f.write(f"UPDATE sbtest_textpk SET k={rint(1,TPR)} WHERE id='{rint(1,TPR):032x}';\n")
+    f.write("COMMIT;\n")
+
+def w_update_non_index_textpk(f):
+    f.write("BEGIN;\n")
+    for _ in range(TPN):
+        f.write(f"UPDATE sbtest_textpk SET c='{rstr(60)}' WHERE id='{rint(1,TPR):032x}';\n")
+    f.write("COMMIT;\n")
+
+def w_oltp_insert_textpk(f):
+    f.write("BEGIN;\n")
+    for i in range(TPR+1, TPR+TPN+1):
+        f.write(f"INSERT INTO sbtest_textpk VALUES('{i:032x}',{rint(1,TPR)},'{rstr(60)}','{rstr(30)}');\n")
+    f.write("COMMIT;\n")
+
+def w_delete_insert_textpk(f):
+    f.write("BEGIN;\n")
+    for _ in range(TPN):
+        i = rint(1, TPR)
+        f.write(f"DELETE FROM sbtest_textpk WHERE id='{i:032x}';\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest_textpk VALUES('{i:032x}',{rint(1,TPR)},'{rstr(60)}','{rstr(30)}');\n")
+    f.write("COMMIT;\n")
+
+make_test("oltp_update_index_textpk",     prep_textpk, w_update_index_textpk)
+make_test("oltp_update_non_index_textpk", prep_textpk, w_update_non_index_textpk)
+make_test("oltp_insert_textpk",           prep_textpk, w_oltp_insert_textpk)
+make_test("oltp_delete_insert_textpk",    prep_textpk, w_delete_insert_textpk)
+
 make_test("oltp_bulk_insert_ac",      prep_main, w_bulk_insert_autocommit)
 make_test("oltp_insert_ac",           prep_main, w_oltp_insert_autocommit)
 make_test("oltp_update_index_ac",     prep_main, w_update_index_autocommit)
@@ -381,8 +442,9 @@ else:
 }
 
 bench_runs_for_test() {
-  # BENCH_RUNS=1 for fast local iteration; default 11 for stable median.
-  echo "${BENCH_RUNS:-11}"
+  # BENCH_RUNS=1 for fast local iteration; default 7 for stable median
+  # while keeping the bench job under CI's 15-minute limit.
+  echo "${BENCH_RUNS:-7}"
 }
 
 median_us() {
@@ -417,6 +479,7 @@ run_bench_stable() {
 READ_TESTS="oltp_point_select oltp_range_select oltp_sum_range oltp_order_range oltp_distinct_range oltp_index_scan select_random_points select_random_ranges covering_index_scan groupby_scan index_join index_join_scan types_table_scan table_scan oltp_read_only"
 WRITE_TESTS="oltp_bulk_insert oltp_insert oltp_update_index oltp_update_non_index oltp_delete_insert oltp_write_only types_delete_insert oltp_read_write"
 WRITE_TESTS_AC="oltp_bulk_insert_ac oltp_insert_ac oltp_update_index_ac oltp_update_non_index_ac oltp_delete_insert_ac oltp_write_only_ac types_delete_insert_ac oltp_read_write_ac"
+WRITE_TESTS_TEXTPK="oltp_update_index_textpk oltp_update_non_index_textpk oltp_insert_textpk oltp_delete_insert_textpk"
 
 # ============================================================
 # Output markdown table
@@ -491,6 +554,16 @@ echo ""
 echo "#### Writes"
 echo ""
 run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
+
+echo ""
+echo "### File-Backed (TEXT PK writes)"
+echo ""
+echo "_Same workload shapes as the File-Backed Writes section, but on a_"
+echo "_table with a 32-char hex \`TEXT PRIMARY KEY\`. Surfaces the non-INTKEY_"
+echo "_mutmap-flush path (issue #718). Reporting only — not gated by the_"
+echo "_ceiling check below until the fix lands._"
+echo ""
+run_section "$WRITE_TESTS_TEXTPK" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
 echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"
