@@ -127,7 +127,7 @@ static int csReadIndex(ChunkStore *cs);
 static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData);
 static int csSearchIndex(const ChunkIndexEntry *aIdx, int nIdx,
                          const ProllyHash *pHash);
-static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash);
+static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
 static int csIndexEntryCmp(const void *a, const void *b);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e);
@@ -539,7 +539,7 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   sqlite3_int64 sizeNow = -1;
   int rc = SQLITE_OK;
 
-  if( !cs->pFile ) return SQLITE_OK;
+  if( !cs->pFile ) return SQLITE_IOERR;
 
   rc = sqlite3OsTruncate(cs->pFile, origFileSize);
   if( rc==SQLITE_OK ){
@@ -677,23 +677,31 @@ static int csPendHTEnsure(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
-  int i; u32 b;
-  if( cs->nPending==0 ) return -1;
-  if( csPendHTEnsure(cs)!=SQLITE_OK ){
+static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
+  int i; u32 b; int rc;
+  *pIdx = -1;
+  if( cs->nPending==0 ) return SQLITE_OK;
+  rc = csPendHTEnsure(cs);
+  if( rc!=SQLITE_OK ){
 
     for(i=0; i<cs->nPending; i++){
-      if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ) return i;
+      if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ){
+        *pIdx = i;
+        return SQLITE_OK;
+      }
     }
-    return -1;
+    return rc;
   }
   b = csPendBucket(pHash, cs->nPendingHTSize - 1);
   i = cs->aPendingHT[b];
   while( i>=0 ){
-    if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ) return i;
+    if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ){
+      *pIdx = i;
+      return SQLITE_OK;
+    }
     i = cs->aPendingHTNext[i];
   }
-  return -1;
+  return SQLITE_OK;
 }
 
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
@@ -1536,7 +1544,10 @@ int chunkStoreDeleteTracking(ChunkStore *cs, const char *zRemote,
 int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aResult){
   int i;
   for(i=0; i<nHash; i++){
-    aResult[i] = chunkStoreHas(cs, &aHash[i]) ? 1 : 0;
+    int has = 0;
+    int rc = chunkStoreHas(cs, &aHash[i], &has);
+    if( rc!=SQLITE_OK ) return rc;
+    aResult[i] = has ? 1 : 0;
   }
   return SQLITE_OK;
 }
@@ -1861,10 +1872,18 @@ int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   return csSerializeRefsBlob(cs, ppOut, pnOut);
 }
 
-int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash){
-  if( csSearchIndex(cs->aIndex, cs->nIndex, hash) >= 0 ) return 1;
-  if( csSearchPending(cs, hash) >= 0 ) return 1;
-  return 0;
+int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
+  int idx = -1;
+  int rc;
+  *pHas = 0;
+  if( csSearchIndex(cs->aIndex, cs->nIndex, hash) >= 0 ){
+    *pHas = 1;
+    return SQLITE_OK;
+  }
+  rc = csSearchPending(cs, hash, &idx);
+  if( rc!=SQLITE_OK ) return rc;
+  if( idx >= 0 ) *pHas = 1;
+  return SQLITE_OK;
 }
 
 /* Lookup order matters: pending (uncommitted write buffer) first,
@@ -1882,7 +1901,8 @@ int chunkStoreGet(
   *ppData = 0;
   *pnData = 0;
 
-  idx = csSearchPending(cs, hash);
+  rc = csSearchPending(cs, hash, &idx);
+  if( rc!=SQLITE_OK ) return rc;
   if( idx >= 0 ){
     ChunkIndexEntry *e = &cs->aPending[idx];
     i64 off = e->offset;
@@ -1969,7 +1989,12 @@ int chunkStorePut(
 
 
   if( csSearchIndex(cs->aIndex, cs->nIndex, &h) >= 0 ) return SQLITE_OK;
-  if( csSearchPending(cs, &h) >= 0 ) return SQLITE_OK;
+  {
+    int idx = -1;
+    rc = csSearchPending(cs, &h, &idx);
+    if( rc!=SQLITE_OK ) return rc;
+    if( idx >= 0 ) return SQLITE_OK;
+  }
 
   rc = csGrowPending(cs);
   if( rc != SQLITE_OK ) return rc;
@@ -2353,8 +2378,12 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     if( rc!=SQLITE_OK ) return rc;
     if( exists ){
       struct stat mainStat;
-      if( stat(cs->zFilename, &mainStat)==0 && mainStat.st_size > 0 ){
-        *pChanged = 1;
+      if( stat(cs->zFilename, &mainStat)==0 ){
+        if( mainStat.st_size > 0 ){
+          *pChanged = 1;
+        }
+      }else{
+        return SQLITE_IOERR;
       }
     }
     return SQLITE_OK;

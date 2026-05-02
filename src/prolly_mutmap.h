@@ -64,9 +64,6 @@ int prollyMutMapInsert(ProllyMutMap *mm,
 int prollyMutMapDelete(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey);
 
-ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
-                                     const u8 *pKey, int nKey, i64 intKey);
-
 int prollyMutMapFindRc(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
