@@ -66,15 +66,15 @@ jobs:
             return;
           }
 
-          // Find existing benchmark-extra comment (distinct from the classic
-          // Benchmark workflow's comment, which uses a different header).
+          // Find existing benchmark-extra comment.
           const comments = await github.rest.issues.listComments({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
           });
           const botComment = comments.data.find(c =>
-            c.body.includes('Sysbench-Style Benchmark (TEXT PK)')
+            c.body.includes('<!-- benchmark:textpk -->') ||
+            c.body.includes('## Sysbench-Style Benchmark (TEXT PK): Doltlite vs SQLite')
           );
 
           if (botComment) {

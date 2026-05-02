@@ -475,6 +475,7 @@ run_section() {
   echo "| Average |  |  | ${avg_ratio} |"
 }
 
+echo "<!-- benchmark:textpk -->"
 echo "## Sysbench-Style Benchmark (TEXT PK): Doltlite vs SQLite"
 echo ""
 echo "_Companion to the classic Sysbench-Style Benchmark. Every workload here"

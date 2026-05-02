@@ -61,14 +61,15 @@ jobs:
             return;
           }
 
-          // Find existing benchmark comment
+          // Find existing classic benchmark comment
           const comments = await github.rest.issues.listComments({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
           });
           const botComment = comments.data.find(c =>
-            c.body.includes('Sysbench-Style Benchmark')
+            c.body.includes('<!-- benchmark:classic -->') ||
+            c.body.includes('## Sysbench-Style Benchmark: Doltlite vs SQLite')
           );
 
           if (botComment) {

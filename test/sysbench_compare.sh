@@ -452,6 +452,7 @@ run_section() {
   echo "| Average |  |  | ${avg_ratio} |"
 }
 
+echo "<!-- benchmark:classic -->"
 echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
 echo ""
 echo "### In-Memory"
