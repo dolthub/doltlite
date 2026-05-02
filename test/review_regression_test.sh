@@ -1016,6 +1016,78 @@ run_test "bulk_branch_wor_idx_feat_log" \
 rm -rf "$TMPROOT"
 
 # ============================================================
+# GUARD 22: databases larger than 2 GiB still open
+# Bug: open-time WAL replay slurped the entire WAL into one malloc,
+#      tripping SQLite's allocator ceiling around 2^31 bytes and
+#      surfacing as a bogus "out of memory".
+# Invariant: a sparse synthetic chunk-store file just over 2 GiB with
+#            a valid WAL chunk+root frame opens and answers queries.
+# ============================================================
+
+echo "--- Guard 22: sparse >2GiB database opens ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/large_open.db"
+
+perl -e '
+  use strict;
+  use warnings;
+  my ($path) = @ARGV;
+  my $MAGIC = 0x444C5443;
+  my $VERSION = 10;
+  my $MANIFEST_SIZE = 168;
+  my $WAL_OFF = $MANIFEST_SIZE;
+  my $CHUNK_LEN = 2147483400; # just under INT_MAX, pushes file > 2^31
+  my $ROOT_OFF = $WAL_OFF + 25 + $CHUNK_LEN;
+
+  sub put_u32 {
+    my ($bufref, $off, $v) = @_;
+    substr($$bufref, $off, 4) = pack("V", $v);
+  }
+  sub put_u64 {
+    my ($bufref, $off, $v) = @_;
+    substr($$bufref, $off, 8) = pack("Q<", $v);
+  }
+
+  open my $fh, "+>", $path or die $!;
+  binmode $fh;
+
+  my $manifest = "\0" x $MANIFEST_SIZE;
+  put_u32(\$manifest, 0, $MAGIC);
+  put_u32(\$manifest, 4, $VERSION);
+  put_u32(\$manifest, 28, 1);
+  put_u64(\$manifest, 32, 0);
+  put_u32(\$manifest, 40, 0);
+  put_u64(\$manifest, 84, $WAL_OFF);
+  print {$fh} $manifest or die $!;
+
+  seek($fh, $WAL_OFF, 0) or die $!;
+  print {$fh} chr(1), ("\x11" x 20), pack("V", $CHUNK_LEN) or die $!;
+
+  seek($fh, $ROOT_OFF, 0) or die $!;
+  print {$fh} chr(2), $manifest or die $!;
+  close $fh or die $!;
+' "$DB"
+
+LARGE_SIZE=$(stat -c%s "$DB" 2>/dev/null || stat -f%z "$DB")
+if [ "$LARGE_SIZE" -gt 2147483648 ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: large_db_sparse_size\n  expected: >2147483648\n  got:      $LARGE_SIZE"
+fi
+
+LARGE_OPEN_RESULT=$(echo "SELECT 1;" | $DOLTLITE "$DB" 2>&1)
+if [ "$LARGE_OPEN_RESULT" = "1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: large_db_sparse_open\n  expected: 1\n  got:      $LARGE_OPEN_RESULT"
+fi
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # GUARD 8: Encoding consistency (LE macros match inline code)
 # Bug: encoding was done inline with inconsistent patterns
 # Fix: shared PROLLY_GET/PUT_U16/U32 macros

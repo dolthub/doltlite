@@ -751,7 +751,7 @@ static int csReadManifest(ChunkStore *cs){
 
   cs->nChunks = (int)CS_READ_U32(aBuf + 28);
   cs->iIndexOffset = CS_READ_I64(aBuf + 32);
-  cs->nIndexSize = (int)CS_READ_U32(aBuf + 40);
+  cs->nIndexSize = (i64)CS_READ_U32(aBuf + 40);
 
   cs->iWalOffset = CS_READ_I64(aBuf + 84);
   memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
@@ -761,6 +761,7 @@ static int csReadManifest(ChunkStore *cs){
 
 static int csReadIndex(ChunkStore *cs){
   int rc;
+  i64 nEntries64;
   int nEntries;
   u8 *aBuf;
   int i;
@@ -773,10 +774,14 @@ static int csReadIndex(ChunkStore *cs){
     return SQLITE_OK;
   }
 
-  nEntries = cs->nIndexSize / CHUNK_INDEX_ENTRY_SIZE;
-  if( nEntries * CHUNK_INDEX_ENTRY_SIZE != cs->nIndexSize ){
+  nEntries64 = cs->nIndexSize / CHUNK_INDEX_ENTRY_SIZE;
+  if( nEntries64 * CHUNK_INDEX_ENTRY_SIZE != cs->nIndexSize ){
     return SQLITE_CORRUPT;
   }
+  if( nEntries64 > INT_MAX ){
+    return SQLITE_TOOBIG;
+  }
+  nEntries = (int)nEntries64;
 
   /* Fast path: on hosts where in-memory ChunkIndexEntry encoding
   ** matches the on-disk byte layout (little-endian + 32-byte
@@ -804,7 +809,7 @@ static int csReadIndex(ChunkStore *cs){
   cs->aIndexMmapBase = 0;
   cs->aIndexMmapSize = 0;
 
-  aBuf = (u8 *)sqlite3_malloc(cs->nIndexSize);
+  aBuf = (u8 *)sqlite3_malloc64(cs->nIndexSize);
   if( aBuf == 0 ){
     sqlite3_free(cs->aIndex);
     cs->aIndex = 0;
@@ -874,7 +879,6 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
 ** the compacted region on disk and only move on GC. */
 static int csReplayWal(ChunkStore *cs){
   i64 walSize;
-  u8 *walData;
   ChunkStoreReplayState saved;
   i64 pos;
   int nPendingBefore = cs->nPending;
@@ -911,40 +915,22 @@ static int csReplayWal(ChunkStore *cs){
     return SQLITE_OK;
   }
 
-  walData = (u8*)sqlite3_malloc64(walSize);
-  if( !walData ) return SQLITE_NOMEM;
-  {
-    /* Read in chunks of at most 1GB to avoid truncating walSize to int. */
-    i64 remaining = walSize;
-    i64 off = cs->iWalOffset;
-    u8 *p = walData;
-    while( remaining > 0 ){
-      int n = (remaining > 0x40000000) ? 0x40000000 : (int)remaining;
-      int rc = sqlite3OsRead(cs->pFile, p, n, off);
-      if( rc != SQLITE_OK ){
-        sqlite3_free(walData);
-        return rc;
-      }
-      p += n;
-      off += n;
-      remaining -= n;
-    }
-  }
-
-  /* walData is a temporary scan buffer. Once we've extracted the
-  ** chunk index entries into cs->aPending below, we can free it —
-  ** subsequent reads will go through the chunk store's normal pread
-  ** path against the file's WAL region. The aIndex offsets we
-  ** install point at the on-disk length prefix of each chunk record,
-  ** matching the convention used for committed-region entries. */
+  /* Do not materialize the entire WAL in memory. Large databases can
+  ** have multi-gigabyte WAL regions; reading them into one malloc
+  ** trips SQLite's allocator ceiling around 2 GiB and misreports
+  ** SQLITE_NOMEM during open. Replay only needs sequential headers:
+  ** chunk payloads are skipped, not inspected. */
   cs->nWalData = walSize;
 
   pos = 0;
   while( pos < walSize ){
-    u8 tag = walData[pos];
+    u8 tag = 0;
+    rc = sqlite3OsRead(cs->pFile, &tag, 1, cs->iWalOffset + pos);
+    if( rc != SQLITE_OK ) goto replay_error;
     pos++;
 
     if( tag == CS_WAL_TAG_CHUNK ){
+      u8 aHdr[24];
       ProllyHash hash;
       u32 len;
       if( pos + 20 + 4 > walSize ){
@@ -952,10 +938,11 @@ static int csReplayWal(ChunkStore *cs){
         ** scanning and use the last valid root record. */
         break;
       }
-      memcpy(&hash, walData + pos, 20);
-      pos += 20;
-      len = CS_READ_U32(walData + pos);
-      pos += 4;
+      rc = sqlite3OsRead(cs->pFile, aHdr, sizeof(aHdr), cs->iWalOffset + pos);
+      if( rc != SQLITE_OK ) goto replay_error;
+      memcpy(&hash, aHdr, 20);
+      len = CS_READ_U32(aHdr + 20);
+      pos += 24;
       if( pos < 0 || (u64)pos + len > (u64)walSize ){
         /* Truncated chunk data — partial write. Same treatment. */
         break;
@@ -981,13 +968,15 @@ static int csReplayWal(ChunkStore *cs){
       pos += len;
 
     } else if( tag == CS_WAL_TAG_ROOT ){
+      u8 m[CHUNK_MANIFEST_SIZE];
       if( pos + CHUNK_MANIFEST_SIZE > walSize ){
         /* Truncated root record — crash during the commit
         ** point write. Stop and use the previous root. */
         break;
       }
       {
-        u8 *m = walData + pos;
+        rc = sqlite3OsRead(cs->pFile, m, sizeof(m), cs->iWalOffset + pos);
+        if( rc != SQLITE_OK ) goto replay_error;
         u32 magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
           /* Corrupt root record — torn write garbled the
@@ -1076,14 +1065,11 @@ static int csReplayWal(ChunkStore *cs){
   }
 
   csReleaseReplayState(cs, &saved);
-
-  sqlite3_free(walData);
   return SQLITE_OK;
 
 replay_error:
   if( haveTmpRefs ) csFreeRefsState(&tmpRefs);
   csRollbackReplayState(cs, &saved, nPendingBefore);
-  sqlite3_free(walData);
   return rc;
 }
 

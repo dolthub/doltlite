@@ -191,7 +191,7 @@ struct ChunkStore {
 
   int nChunks;
   i64 iIndexOffset;
-  int nIndexSize;
+  i64 nIndexSize;
   i64 iWalOffset;
   i64 iFileSize;
 
