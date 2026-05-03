@@ -281,6 +281,18 @@ int prollyChunkerAddAtLevel(ProllyChunker *ch, int level,
   return addToLevel(ch, level, pKey, nKey, pVal, nVal);
 }
 
+int prollyChunkerDrainBelow(ProllyChunker *ch, int targetLevel){
+  int level;
+  int rc;
+  for( level = 0; level < targetLevel && level < ch->nLevels; level++ ){
+    while( ch->aLevel[level].builder.nItems > 0 ){
+      rc = flushLevel(ch, level);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
+}
+
 void prollyChunkerFree(ProllyChunker *ch){
   int i;
   for(i = 0; i < ch->nLevels; i++){

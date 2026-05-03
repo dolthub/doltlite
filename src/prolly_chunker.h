@@ -50,4 +50,18 @@ int prollyChunkerAddAtLevel(ProllyChunker *ch, int level,
                             const u8 *pKey, int nKey,
                             const u8 *pVal, int nVal);
 
+/* Force-flush any pending content at levels < targetLevel. Each
+** affected level emits a chunk (possibly below PROLLY_CHUNK_MIN —
+** the boundary here is "we need to splice at targetLevel" rather
+** than the natural Weibull split) and propagates its (lastKey, hash)
+** to the level above.
+**
+** streamingMergeNode calls this before splicing a right-side sibling
+** at the parent level after mergeLeaf has put content in level 0:
+** without it the chunker can't accept the splice (the existing splice
+** condition was `chunkerLevelsBelowEmpty`), so the loop falls through
+** to recurse — walking every right-side leaf instead of an O(1)
+** splice per sibling. */
+int prollyChunkerDrainBelow(ProllyChunker *ch, int targetLevel);
+
 #endif

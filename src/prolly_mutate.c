@@ -105,19 +105,6 @@ static int subtreeHasEdits(
   return (cmp <= 0);
 }
 
-static int chunkerLevelsBelowEmpty(
-  const ProllyChunker *pChunker,
-  int level
-){
-  int i;
-  for( i = 0; i < level && i < pChunker->nLevels; i++ ){
-    if( pChunker->aLevel[i].builder.nItems > 0 ){
-      return 0;
-    }
-  }
-  return 1;
-}
-
 static int mergeLeaf(
   ProllyMutator *pMut,
   ProllyNode *pLeaf,
@@ -293,8 +280,14 @@ static int streamingMergeNode(
 
     if( !forceDescend
      && !subtreeHasEdits(pMut->flags, pIter,
-                         pBoundKey, nBoundKey, iBoundKey)
-     && chunkerLevelsBelowEmpty(pChunker, pNode->level) ){
+                         pBoundKey, nBoundKey, iBoundKey) ){
+      /* Splice. After a previous mergeLeaf in this iteration, levels
+      ** below pNode->level can have pending content; the chunker
+      ** can't reach this level cleanly until that drains. Force the
+      ** drain so right-side siblings get O(1) splice instead of
+      ** falling through to the recurse branch and walking every leaf. */
+      rc = prollyChunkerDrainBelow(pChunker, pNode->level);
+      if( rc!=SQLITE_OK ) return rc;
       rc = prollyChunkerAddAtLevel(pChunker, pNode->level,
                                     pBoundKey, nBoundKey,
                                     pChildVal, nChildVal);
