@@ -89,7 +89,7 @@ static int buildFromEdits(
   return rc;
 }
 
-static int mergeWalk(ProllyMutator *pMut);
+/* mergeWalk removed: streamingMerge now handles all flush shapes. */
 
 static int subtreeHasEdits(
   u8 flags,
@@ -349,11 +349,6 @@ static int streamingMerge(
   }
 
 
-  if( rootNode.level == 0 ){
-    sqlite3_free(pRootData);
-    return mergeWalk(pMut);
-  }
-
   prollyMutMapIterFirst(&iter, pMut->pEdits);
   rc = prollyChunkerInit(&chunker, pMut->pStore, pMut->flags);
   if( rc!=SQLITE_OK ){
@@ -364,8 +359,16 @@ static int streamingMerge(
   /* isLast=1 marks the root as the rightmost subtree at this level
   ** of recursion, propagating down through the rightmost child of
   ** each visited node. mergeLeaf at the bottom drains any trailing
-  ** edits past the rightmost leaf's last key. */
-  rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter, /*isLast=*/1);
+  ** edits past the rightmost leaf's last key.
+  **
+  ** A root that is itself a leaf (level == 0) is just the rightmost
+  ** leaf at the top of the tree — drain edits into it via mergeLeaf
+  ** directly, no need for streamingMergeNode's child-iteration. */
+  if( rootNode.level == 0 ){
+    rc = mergeLeaf(pMut, &rootNode, &chunker, &iter, /*isLast=*/1);
+  }else{
+    rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter, /*isLast=*/1);
+  }
   if( rc!=SQLITE_OK ) goto streaming_cleanup;
 
   rc = prollyChunkerFinish(&chunker);
@@ -379,139 +382,17 @@ streaming_cleanup:
   return rc;
 }
 
-static int mergeWalk(
-  ProllyMutator *pMut
-){
-  ProllyCursor cur;
-  ProllyMutMapIter iter;
-  ProllyChunker chunker;
-  int rc;
-  int curEmpty = 0;
-  int curValid;
-  int iterValid;
 
-
-  prollyCursorInit(&cur, pMut->pStore, pMut->pCache,
-                   &pMut->oldRoot, pMut->flags);
-  rc = prollyCursorFirst(&cur, &curEmpty);
-  if( rc!=SQLITE_OK ){
-    prollyCursorClose(&cur);
-    return rc;
-  }
-  if( curEmpty ){
-    prollyCursorClose(&cur);
-    return buildFromEdits(pMut);
-  }
-
-  prollyMutMapIterFirst(&iter, pMut->pEdits);
-
-  rc = prollyChunkerInit(&chunker, pMut->pStore, pMut->flags);
-  if( rc!=SQLITE_OK ){
-    prollyCursorClose(&cur);
-    return rc;
-  }
-
-  for(;;){
-    curValid = prollyCursorIsValid(&cur);
-    iterValid = prollyMutMapIterValid(&iter);
-    if( !curValid && !iterValid ) break;
-
-    if( curValid && !iterValid ){
-      const u8 *pKey; int nKey;
-      const u8 *pVal; int nVal;
-      i64 intKey = 0;
-      if( pMut->flags & PROLLY_NODE_INTKEY ){
-        intKey = prollyCursorIntKey(&cur);
-        pKey = 0; nKey = 0;
-      }else{
-        prollyCursorKey(&cur, &pKey, &nKey);
-      }
-      prollyCursorValue(&cur, &pVal, &nVal);
-      rc = feedChunker(&chunker, pMut->flags, pKey, nKey, intKey, pVal, nVal);
-      if( rc!=SQLITE_OK ) goto merge_cleanup;
-      rc = prollyCursorNext(&cur);
-      if( rc!=SQLITE_OK ) goto merge_cleanup;
-      continue;
-    }
-
-    if( !curValid && iterValid ){
-      ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
-      if( pEntry->op==PROLLY_EDIT_INSERT ){
-        rc = feedChunker(&chunker, pMut->flags,
-                         pEntry->pKey, pEntry->nKey, pEntry->intKey,
-                         pEntry->pVal, pEntry->nVal);
-        if( rc!=SQLITE_OK ) goto merge_cleanup;
-      }
-      prollyMutMapIterNext(&iter);
-      continue;
-    }
-
-    {
-      ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
-      const u8 *pCurKey; int nCurKey;
-      i64 iCurKey = 0;
-      int cmp;
-
-      if( pMut->flags & PROLLY_NODE_INTKEY ){
-        iCurKey = prollyCursorIntKey(&cur);
-        pCurKey = 0; nCurKey = 0;
-      }else{
-        prollyCursorKey(&cur, &pCurKey, &nCurKey);
-      }
-
-      cmp = compareKeys(pMut->flags,
-                         pCurKey, nCurKey, iCurKey,
-                         pEntry->pKey, pEntry->nKey, pEntry->intKey);
-
-      if( cmp < 0 ){
-        const u8 *pVal; int nVal;
-        prollyCursorValue(&cur, &pVal, &nVal);
-        rc = feedChunker(&chunker, pMut->flags,
-                         pCurKey, nCurKey, iCurKey, pVal, nVal);
-        if( rc!=SQLITE_OK ) goto merge_cleanup;
-        rc = prollyCursorNext(&cur);
-        if( rc!=SQLITE_OK ) goto merge_cleanup;
-      }else if( cmp == 0 ){
-        if( pEntry->op==PROLLY_EDIT_INSERT ){
-          rc = feedChunker(&chunker, pMut->flags,
-                           pEntry->pKey, pEntry->nKey, pEntry->intKey,
-                           pEntry->pVal, pEntry->nVal);
-          if( rc!=SQLITE_OK ) goto merge_cleanup;
-        }
-        rc = prollyCursorNext(&cur);
-        if( rc!=SQLITE_OK ) goto merge_cleanup;
-        prollyMutMapIterNext(&iter);
-      }else{
-        if( pEntry->op==PROLLY_EDIT_INSERT ){
-          rc = feedChunker(&chunker, pMut->flags,
-                           pEntry->pKey, pEntry->nKey, pEntry->intKey,
-                           pEntry->pVal, pEntry->nVal);
-          if( rc!=SQLITE_OK ) goto merge_cleanup;
-        }
-        prollyMutMapIterNext(&iter);
-      }
-    }
-  }
-
-  rc = prollyChunkerFinish(&chunker);
-  if( rc==SQLITE_OK ){
-    prollyChunkerGetRoot(&chunker, &pMut->newRoot);
-  }
-
-merge_cleanup:
-  prollyChunkerFree(&chunker);
-  prollyCursorClose(&cur);
-  return rc;
-}
-
-/* streamingMerge skips unchanged subtrees by re-splicing them into a
-** new chunker at their original level. Fast for sparse edits, but
-** because the splice happens at the source level it can accumulate
-** extra depth over many sessions. mergeWalk rebuilds the whole tree
-** so depth stays optimal. Heuristic below uses streamingMerge only
-** when edits are a tiny fraction of leaves AND the absolute count is
-** small — batch inserts always fall through to mergeWalk so the
-** common case stays clean. */
+/* streamingMerge is now the only flush strategy. It walks the tree once,
+** splicing unchanged subtrees by re-emitting their hash references at the
+** matched level (Dolt's chunker.advanceTo equivalent), and drains trailing
+** edits into the rightmost leaf to avoid the depth pathology that the
+** earlier mergeWalk fallback was guarding against. With those correctness
+** properties in place there is no shape on which a full-rebuild walk would
+** be required for correctness, so the per-flush strategy choice (which had
+** been pessimizing toward mergeWalk for any non-trivial edit ratio) is
+** dropped in favor of the unified path — matching Dolt's "one algorithm,
+** no INTKEY/non-INTKEY split" property. */
 int prollyMutateFlush(ProllyMutator *pMut){
   if( prollyMutMapIsEmpty(pMut->pEdits) ){
     memcpy(&pMut->newRoot, &pMut->oldRoot, sizeof(ProllyHash));
@@ -522,39 +403,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
     return buildFromEdits(pMut);
   }
 
-  {
-    int M = prollyMutMapCount(pMut->pEdits);
-    int leafCount = 0;
-
-    {
-      u8 *pRootData = 0;
-      int nRootData = 0;
-      int rcEst = chunkStoreGet(pMut->pStore, &pMut->oldRoot,
-                                &pRootData, &nRootData);
-      if( rcEst==SQLITE_OK && pRootData ){
-        ProllyNode rootNode;
-        if( prollyNodeParse(&rootNode, pRootData, nRootData)==SQLITE_OK ){
-          if( rootNode.level==0 ){
-            leafCount = rootNode.nItems;
-          }else{
-            leafCount = rootNode.nItems * PROLLY_EST_ENTRIES_PER_LEAF;
-            /* Cap at two levels of fan-out; overestimating picks
-            ** streamingMerge too aggressively and deepens the tree. */
-            if( rootNode.level > 1 && leafCount < 0x7FFFFFFF / PROLLY_EST_ENTRIES_PER_LEAF ){
-              leafCount *= PROLLY_EST_ENTRIES_PER_LEAF;
-            }
-          }
-        }
-        sqlite3_free(pRootData);
-      }
-    }
-
-    if( leafCount <= 0 || M > leafCount / 100 || M > 10000 ){
-      return mergeWalk(pMut);
-    }else{
-      return streamingMerge(pMut);
-    }
-  }
+  return streamingMerge(pMut);
 }
 
 int prollyMutateInsert(
