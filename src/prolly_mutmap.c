@@ -8,42 +8,61 @@
 
 #define MUTMAP_INIT_CAP 16
 #define MUTMAP_MIN_HASH 32
+
+/* Sortable 8-byte big-endian encoding of an i64 — the high bit is
+** flipped so unsigned byte-lex order matches signed integer order.
+** Matches the on-disk INTKEY layout in prolly_node.c (see
+** prollyNodeIntKey, which decodes via `u ^ (1<<63)`). */
+static void encodeIntKeyBE(i64 v, u8 buf[8]){
+  u64 u = ((u64)v) ^ ((u64)1 << 63);
+  buf[0] = (u8)(u >> 56);
+  buf[1] = (u8)(u >> 48);
+  buf[2] = (u8)(u >> 40);
+  buf[3] = (u8)(u >> 32);
+  buf[4] = (u8)(u >> 24);
+  buf[5] = (u8)(u >> 16);
+  buf[6] = (u8)(u >> 8);
+  buf[7] = (u8)u;
+}
+
+/* Rebinds (pKey, nKey) to point at a sortable encoding of intKey when
+** the map is in INT mode and the caller passed only the integer value.
+** Callers that already supplied byte-form keys are passed through. */
+static void prepKey(ProllyMutMap *mm,
+                    const u8 **ppKey, int *pnKey,
+                    i64 intKey, u8 buf[8]){
+  if( mm->isIntKey && (*ppKey == 0 || *pnKey == 0) ){
+    encodeIntKeyBE(intKey, buf);
+    *ppKey = buf;
+    *pnKey = 8;
+  }
+}
+
 static int compareEntries(
-  u8 isIntKey,
-  const u8 *pKeyA, int nKeyA, i64 intKeyA,
-  const u8 *pKeyB, int nKeyB, i64 intKeyB
+  const u8 *pKeyA, int nKeyA,
+  const u8 *pKeyB, int nKeyB
 ){
-  u8 flags = isIntKey ? PROLLY_NODE_INTKEY : PROLLY_NODE_BLOBKEY;
-  return prollyCompareKeys(flags, pKeyA, nKeyA, intKeyA,
-                           pKeyB, nKeyB, intKeyB);
+  int n = nKeyA < nKeyB ? nKeyA : nKeyB;
+  int c = memcmp(pKeyA, pKeyB, n);
+  if( c != 0 ) return c;
+  if( nKeyA < nKeyB ) return -1;
+  if( nKeyA > nKeyB ) return 1;
+  return 0;
 }
 
 static ProllyMutMapEntry *entryAtOrder(ProllyMutMap *mm, int idx){
   return &mm->aEntries[mm->aOrder[idx]];
 }
 
-static u32 hashKey(
-  u8 isIntKey,
-  const u8 *pKey, int nKey, i64 intKey
-){
+static u32 hashKey(const u8 *pKey, int nKey){
   u32 h = 2166136261u;
-  if( isIntKey ){
-    u64 x = (u64)intKey;
-    int i;
-    for(i=0; i<8; i++){
-      h ^= (u8)(x & 0xff);
-      h *= 16777619u;
-      x >>= 8;
-    }
-  }else{
-    int i;
-    for(i=0; i<nKey; i++){
-      h ^= pKey[i];
-      h *= 16777619u;
-    }
-    h ^= (u32)nKey;
+  int i;
+  for(i=0; i<nKey; i++){
+    h ^= pKey[i];
     h *= 16777619u;
   }
+  h ^= (u32)nKey;
+  h *= 16777619u;
   return h;
 }
 
@@ -76,7 +95,7 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
   e->nKey = 0;
   e->pVal = 0;
   e->nVal = 0;
-  if( !mm->isIntKey && pKey && nKey>0 ){
+  if( pKey && nKey>0 ){
     e->pKey = (u8*)sqlite3_malloc(nKey);
     if( !e->pKey ) return SQLITE_NOMEM;
     memcpy(e->pKey, pKey, nKey);
@@ -96,16 +115,14 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
 }
 
 static int bsearch_key(ProllyMutMap *mm,
-                       const u8 *pKey, int nKey, i64 intKey,
+                       const u8 *pKey, int nKey,
                        int *pFound){
   int lo = 0, hi = mm->nEntries;
   *pFound = 0;
   while( lo < hi ){
     int mid = lo + (hi - lo) / 2;
     ProllyMutMapEntry *e = entryAtOrder(mm, mid);
-    int c = compareEntries(mm->isIntKey,
-                           e->pKey, e->nKey, e->intKey,
-                           pKey, nKey, intKey);
+    int c = compareEntries(e->pKey, e->nKey, pKey, nKey);
     if( c < 0 ){
       lo = mid + 1;
     }else if( c > 0 ){
@@ -120,12 +137,10 @@ static int bsearch_key(ProllyMutMap *mm,
 
 static int hashEntryMatches(
   ProllyMutMap *mm, int phys,
-  const u8 *pKey, int nKey, i64 intKey
+  const u8 *pKey, int nKey
 ){
   ProllyMutMapEntry *e = &mm->aEntries[phys];
-  return compareEntries(mm->isIntKey,
-                        e->pKey, e->nKey, e->intKey,
-                        pKey, nKey, intKey)==0;
+  return compareEntries(e->pKey, e->nKey, pKey, nKey)==0;
 }
 
 static int rebuildHash(ProllyMutMap *mm){
@@ -140,8 +155,7 @@ static int rebuildHash(ProllyMutMap *mm){
   }
   memset(mm->aHash, 0, mm->nHashAlloc * sizeof(int));
   for(i=0; i<mm->nEntries; i++){
-    u32 h = hashKey(mm->isIntKey,
-                    mm->aEntries[i].pKey, mm->aEntries[i].nKey, mm->aEntries[i].intKey);
+    u32 h = hashKey(mm->aEntries[i].pKey, mm->aEntries[i].nKey);
     int mask = mm->nHashAlloc - 1;
     int slot = (int)(h & (u32)mask);
     while( mm->aHash[slot] != 0 ){
@@ -165,9 +179,7 @@ static void hashInsertPhys(ProllyMutMap *mm, int phys){
   int mask;
   int slot;
   if( mm->keepSorted || mm->nHashAlloc==0 ) return;
-  h = hashKey(mm->isIntKey,
-              mm->aEntries[phys].pKey, mm->aEntries[phys].nKey,
-              mm->aEntries[phys].intKey);
+  h = hashKey(mm->aEntries[phys].pKey, mm->aEntries[phys].nKey);
   mask = mm->nHashAlloc - 1;
   slot = (int)(h & (u32)mask);
   while( mm->aHash[slot] != 0 ){
@@ -177,7 +189,7 @@ static void hashInsertPhys(ProllyMutMap *mm, int phys){
 }
 
 static int findPhysLazy(ProllyMutMap *mm,
-                        const u8 *pKey, int nKey, i64 intKey,
+                        const u8 *pKey, int nKey,
                         int *pPhys){
   *pPhys = -1;
   if( mm->nEntries==0 ) return SQLITE_OK;
@@ -186,12 +198,12 @@ static int findPhysLazy(ProllyMutMap *mm,
     if( rc!=SQLITE_OK ) return rc;
   }
   {
-    u32 h = hashKey(mm->isIntKey, pKey, nKey, intKey);
+    u32 h = hashKey(pKey, nKey);
     int mask = mm->nHashAlloc - 1;
     int slot = (int)(h & (u32)mask);
     while( mm->aHash[slot] != 0 ){
       int phys = mm->aHash[slot] - 1;
-      if( hashEntryMatches(mm, phys, pKey, nKey, intKey) ){
+      if( hashEntryMatches(mm, phys, pKey, nKey) ){
         *pPhys = phys;
         return SQLITE_OK;
       }
@@ -207,9 +219,7 @@ static int compareOrderIndexes(const void *a, const void *b){
   int ib = *(const int*)b;
   ProllyMutMapEntry *ea = &mm->aEntries[ia];
   ProllyMutMapEntry *eb = &mm->aEntries[ib];
-  return compareEntries(mm->isIntKey,
-                        ea->pKey, ea->nKey, ea->intKey,
-                        eb->pKey, eb->nKey, eb->intKey);
+  return compareEntries(ea->pKey, ea->nKey, eb->pKey, eb->nKey);
 }
 
 static int ensureOrder(ProllyMutMap *mm){
@@ -234,10 +244,8 @@ static int rankEntryWithoutOrder(ProllyMutMap *mm, int phys){
   int i;
   for(i=0; i<mm->nEntries; i++){
     if( i==phys ) continue;
-    if( compareEntries(mm->isIntKey,
-                       mm->aEntries[i].pKey, mm->aEntries[i].nKey,
-                       mm->aEntries[i].intKey,
-                       target->pKey, target->nKey, target->intKey) < 0 ){
+    if( compareEntries(mm->aEntries[i].pKey, mm->aEntries[i].nKey,
+                       target->pKey, target->nKey) < 0 ){
       rank++;
     }
   }
@@ -321,14 +329,16 @@ int prollyMutMapInsert(
   const u8 *pVal, int nVal
 ){
   int found = 0, idx = 0, rc, phys = -1;
+  u8 keyBuf[8];
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
 
   if( mm->keepSorted ){
-    idx = bsearch_key(mm, pKey, nKey, intKey, &found);
+    idx = bsearch_key(mm, pKey, nKey, &found);
     if( found ){
       phys = mm->aOrder[idx];
     }
   }else{
-    rc = findPhysLazy(mm, pKey, nKey, intKey, &phys);
+    rc = findPhysLazy(mm, pKey, nKey, &phys);
     if( rc!=SQLITE_OK ) return rc;
     found = (phys >= 0);
   }
@@ -402,14 +412,16 @@ int prollyMutMapDelete(
   const u8 *pKey, int nKey, i64 intKey
 ){
   int found = 0, idx = 0, rc, phys = -1;
+  u8 keyBuf[8];
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
 
   if( mm->keepSorted ){
-    idx = bsearch_key(mm, pKey, nKey, intKey, &found);
+    idx = bsearch_key(mm, pKey, nKey, &found);
     if( found ){
       phys = mm->aOrder[idx];
     }
   }else{
-    rc = findPhysLazy(mm, pKey, nKey, intKey, &phys);
+    rc = findPhysLazy(mm, pKey, nKey, &phys);
     if( rc!=SQLITE_OK ) return rc;
     found = (phys >= 0);
   }
@@ -611,14 +623,16 @@ int prollyMutMapFindRc(
   ProllyMutMapEntry **ppEntry
 ){
   int found, idx, phys, rc;
+  u8 keyBuf[8];
   *ppEntry = 0;
   if( mm->nEntries==0 ) return SQLITE_OK;
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
   if( mm->keepSorted ){
-    idx = bsearch_key(mm, pKey, nKey, intKey, &found);
+    idx = bsearch_key(mm, pKey, nKey, &found);
     *ppEntry = found ? entryAtOrder(mm, idx) : 0;
     return SQLITE_OK;
   }
-  rc = findPhysLazy(mm, pKey, nKey, intKey, &phys);
+  rc = findPhysLazy(mm, pKey, nKey, &phys);
   if( rc!=SQLITE_OK ) return rc;
   *ppEntry = phys >= 0 ? &mm->aEntries[phys] : 0;
   return SQLITE_OK;
@@ -668,9 +682,11 @@ ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
 void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
                           const u8 *pKey, int nKey, i64 intKey){
   int found = 0;
+  u8 keyBuf[8];
   ensureOrder(mm);
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
   it->pMap = mm;
-  it->idx = bsearch_key(mm, pKey, nKey, intKey, &found);
+  it->idx = bsearch_key(mm, pKey, nKey, &found);
 }
 
 void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
