@@ -1,18 +1,26 @@
 #!/bin/bash
 #
-# Sysbench-style OLTP benchmark: doltlite vs stock SQLite
+# Sysbench-style OLTP benchmark (TEXT PK variant): doltlite vs stock SQLite
 #
-# Uses a single CLI invocation per test to avoid multi-connection issues.
-# Each test gets its own database with identical pre-populated data.
+# Same shapes as test/sysbench_compare.sh, but every workload runs against
+# tables with a 32-char hex TEXT PRIMARY KEY (UUID-shaped). Surfaces the
+# non-INTKEY mutmap-flush cost; companion to issue #718's followup work.
+#
+# Default row count (BENCH_ROWS) is smaller than the classic suite because
+# every doltlite write here goes through the per-statement non-INTKEY flush
+# path, and full-scale R blows the CI 15-minute budget in the prepare phase
+# alone.
+#
+# No ceiling enforcement — this suite is reporting-only until the perf work
+# brings the ratios in.
 #
 set -e
 
 DOLTLITE=${DOLTLITE:-./doltlite}
 SQLITE3=${SQLITE3:-./sqlite3}
-ROWS=${BENCH_ROWS:-10000}
+ROWS=${BENCH_ROWS:-1000}
 SEED=42
 TMPDIR=$(mktemp -d)
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2}
 
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
@@ -42,27 +50,35 @@ def rint(a, b):
 def rstr(n):
     return ''.join(random.choices(string.ascii_lowercase, k=n))
 
-# Common schema + data
+# Hex-encode an integer as a 32-char string (left-padded). Same shape as a
+# UUID hex without dashes — gives sqlite/doltlite a wide TEXT key without
+# random ordering noise from a real UUID generator.
+def hk(i):
+    return f"{i:032x}"
+
+# Common schema + data — sbtest1 / sbtest2 use TEXT PRIMARY KEY here.
+# sbtest_types keeps INTEGER PK because that table tests value-type
+# coverage, not PK shape.
 def write_prepare(f):
-    f.write("CREATE TABLE sbtest1(id INTEGER PRIMARY KEY, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '');\n")
+    f.write("CREATE TABLE sbtest1(id TEXT PRIMARY KEY, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '');\n")
     f.write("CREATE INDEX k_idx ON sbtest1(k);\n")
     f.write("BEGIN;\n")
     for i in range(1, R+1):
-        f.write(f"INSERT INTO sbtest1 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest1 VALUES('{hk(i)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def write_prepare_join(f):
-    f.write("CREATE TABLE sbtest2(id INTEGER PRIMARY KEY, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '');\n")
+    f.write("CREATE TABLE sbtest2(id TEXT PRIMARY KEY, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '');\n")
     f.write("CREATE INDEX k_idx2 ON sbtest2(k);\n")
     f.write("BEGIN;\n")
     for i in range(1, min(R,1000)+1):
-        f.write(f"INSERT INTO sbtest2 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest2 VALUES('{hk(i)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def write_prepare_types(f):
     f.write("CREATE TABLE sbtest_types(id INTEGER PRIMARY KEY, ival INTEGER, rval REAL, tval TEXT);\n")
     f.write("BEGIN;\n")
-    for i in range(1, 1001):
+    for i in range(1, min(R,1000)+1):
         f.write(f"INSERT INTO sbtest_types VALUES({i},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
 
@@ -90,37 +106,41 @@ def prep_with_types(f):
     write_prepare_types(f)
 
 # --- Tests ---
+# All sbtest1 / sbtest2 lookups go through the TEXT PK; ranges use the
+# hk-encoded keys' lexicographic ordering. With keys from hk(1) up to
+# hk(R), BETWEEN hk(s) AND hk(s+99) covers the same logical row range
+# as the integer-PK suite.
 
 def w_bulk_insert(f):
-    f.write("CREATE TABLE sbtest_bulk(id INTEGER PRIMARY KEY, k INTEGER, c TEXT, pad TEXT);\n")
+    f.write("CREATE TABLE sbtest_bulk(id TEXT PRIMARY KEY, k INTEGER, c TEXT, pad TEXT);\n")
     f.write("BEGIN;\n")
     for i in range(1, R+1):
-        f.write(f"INSERT INTO sbtest_bulk VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest_bulk VALUES('{hk(i)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_point_select(f):
     for _ in range(10000):
-        f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
+        f.write(f"SELECT c FROM sbtest1 WHERE id='{hk(rint(1,R))}';\n")
 
 def w_range_select(f):
     for _ in range(1000):
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}';\n")
 
 def w_sum_range(f):
     for _ in range(1000):
-        s=rint(1,R-100)
-        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}';\n")
 
 def w_order_range(f):
     for _ in range(100):
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}' ORDER BY c;\n")
 
 def w_distinct_range(f):
     for _ in range(100):
-        s=rint(1,R-100)
-        f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}' ORDER BY c;\n")
 
 def w_index_scan(f):
     for _ in range(1000):
@@ -129,73 +149,73 @@ def w_index_scan(f):
 def w_update_index(f):
     f.write("BEGIN;\n")
     for _ in range(10000):
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id='{hk(rint(1,R))}';\n")
     f.write("COMMIT;\n")
 
 def w_update_non_index(f):
     f.write("BEGIN;\n")
     for _ in range(10000):
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id='{hk(rint(1,R))}';\n")
     f.write("COMMIT;\n")
 
 def w_delete_insert(f):
     f.write("BEGIN;\n")
     for _ in range(5000):
         id=rint(1,R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE id='{hk(id)}';\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES('{hk(id)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_oltp_insert(f):
     f.write("BEGIN;\n")
     for i in range(R+1, R+5001):
-        f.write(f"INSERT INTO sbtest1 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest1 VALUES('{hk(i)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_write_only(f):
     f.write("BEGIN;\n")
     for _ in range(1000):
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id='{hk(rint(1,R))}';\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id='{hk(rint(1,R))}';\n")
         id=rint(1,R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE id='{hk(id)}';\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES('{hk(id)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_select_random_points(f):
     for _ in range(1000):
-        pts=','.join(str(rint(1,R)) for _ in range(10))
+        pts=','.join(f"'{hk(rint(1,R))}'" for _ in range(10))
         f.write(f"SELECT id,k,c,pad FROM sbtest1 WHERE id IN ({pts});\n")
 
 def w_select_random_ranges(f):
     for _ in range(1000):
-        s=rint(1,R-10)
-        f.write(f"SELECT count(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+9};\n")
+        s=rint(1,max(R-10,1))
+        f.write(f"SELECT count(k) FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+9)}';\n")
 
 def w_covering_index_scan(f):
     for _ in range(1000):
-        s=rint(1,R-100)
+        s=rint(1,max(R-100,1))
         f.write(f"SELECT count(k) FROM sbtest1 WHERE k BETWEEN {s} AND {s+99};\n")
 
 def w_groupby_scan(f):
     for _ in range(100):
-        s=rint(1,R-1000)
-        f.write(f"SELECT k, count(*) FROM sbtest1 WHERE id BETWEEN {s} AND {s+999} GROUP BY k ORDER BY k;\n")
+        s=rint(1,max(R-1000,1))
+        f.write(f"SELECT k, count(*) FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+999)}' GROUP BY k ORDER BY k;\n")
 
 def w_index_join(f):
     for _ in range(500):
-        s=rint(1,R-10)
-        f.write(f"SELECT a.id, b.id FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE a.id BETWEEN {s} AND {s+9};\n")
+        s=rint(1,max(R-10,1))
+        f.write(f"SELECT a.id, b.id FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE a.id BETWEEN '{hk(s)}' AND '{hk(s+9)}';\n")
 
 def w_index_join_scan(f):
     for _ in range(100):
         s=rint(1,min(R,950))
-        f.write(f"SELECT count(*) FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE b.id BETWEEN {s} AND {s+49};\n")
+        f.write(f"SELECT count(*) FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE b.id BETWEEN '{hk(s)}' AND '{hk(s+49)}';\n")
 
 def w_types_delete_insert(f):
     f.write("BEGIN;\n")
     for _ in range(5000):
-        id=rint(1,1000)
+        id=rint(1,min(R,1000))
         f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
         f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
@@ -211,30 +231,30 @@ def w_table_scan(f):
 def w_read_only(f):
     for _ in range(1000):
         for _ in range(10):
-            f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
+            f.write(f"SELECT c FROM sbtest1 WHERE id='{hk(rint(1,R))}';\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}';\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}';\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}' ORDER BY c;\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}' ORDER BY c;\n")
 
 def w_read_write(f):
     f.write("BEGIN;\n")
     for _ in range(1000):
         for _ in range(10):
-            f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+            f.write(f"SELECT c FROM sbtest1 WHERE id='{hk(rint(1,R))}';\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}';\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}';\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id='{hk(rint(1,R))}';\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id='{hk(rint(1,R))}';\n")
         id=rint(1,R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE id='{hk(id)}';\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES('{hk(id)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 # Generate all test SQL files
@@ -279,43 +299,43 @@ make_test("oltp_read_write",     prep_main, w_read_write)
 AC = 200  # statements per autocommit test
 
 def w_bulk_insert_autocommit(f):
-    f.write("CREATE TABLE sbtest_ac_bulk(id INTEGER PRIMARY KEY, k INTEGER, c TEXT, pad TEXT);\n")
+    f.write("CREATE TABLE sbtest_ac_bulk(id TEXT PRIMARY KEY, k INTEGER, c TEXT, pad TEXT);\n")
     for i in range(1, AC+1):
-        f.write(f"INSERT INTO sbtest_ac_bulk VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest_ac_bulk VALUES('{hk(i)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_oltp_insert_autocommit(f):
     for i in range(R+1, R+AC+1):
-        f.write(f"INSERT INTO sbtest1 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest1 VALUES('{hk(i)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_update_index_autocommit(f):
     for _ in range(AC):
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id='{hk(rint(1,R))}';\n")
 
 def w_update_non_index_autocommit(f):
     for _ in range(AC):
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id='{hk(rint(1,R))}';\n")
 
 def w_delete_insert_autocommit(f):
     # Each iteration emits 2 statements (DELETE + INSERT OR REPLACE).
     # Halve the loop so total commits ≈ AC.
     for _ in range(AC // 2):
         id = rint(1, R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE id='{hk(id)}';\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES('{hk(id)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_write_only_autocommit(f):
     # Each iteration emits 4 statements; quarter the loop so total commits ≈ AC.
     for _ in range(AC // 4):
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id='{hk(rint(1,R))}';\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id='{hk(rint(1,R))}';\n")
         id = rint(1, R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE id='{hk(id)}';\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES('{hk(id)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_types_delete_insert_autocommit(f):
     # 2 statements per iteration; halve the loop.
     for _ in range(AC // 2):
-        id = rint(1, 1000)
+        id = rint(1, min(R, 1000))
         f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
         f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
 
@@ -326,16 +346,16 @@ def w_read_write_autocommit(f):
     iters = AC // 4
     for _ in range(iters):
         for _ in range(10):
-            f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
-        s = rint(1, R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s = rint(1, R-100)
-        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+            f.write(f"SELECT c FROM sbtest1 WHERE id='{hk(rint(1,R))}';\n")
+        s = rint(1, max(R-100, 1))
+        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}';\n")
+        s = rint(1, max(R-100, 1))
+        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN '{hk(s)}' AND '{hk(s+99)}';\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id='{hk(rint(1,R))}';\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id='{hk(rint(1,R))}';\n")
         id = rint(1, R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE id='{hk(id)}';\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES('{hk(id)}',{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 make_test("oltp_bulk_insert_ac",      prep_main, w_bulk_insert_autocommit)
 make_test("oltp_insert_ac",           prep_main, w_oltp_insert_autocommit)
@@ -381,8 +401,11 @@ else:
 }
 
 bench_runs_for_test() {
-  # BENCH_RUNS=1 for fast local iteration; default 11 for stable median.
-  echo "${BENCH_RUNS:-11}"
+  # BENCH_RUNS=1 for fast local iteration; default 5 for the TEXT PK
+  # suite — each non-INTKEY write on doltlite goes through a per-statement
+  # mutmap flush, so 11 runs blow the CI budget. Median of 5 is still
+  # stable enough for tracking ratios across PRs.
+  echo "${BENCH_RUNS:-5}"
 }
 
 median_us() {
@@ -452,8 +475,12 @@ run_section() {
   echo "| Average |  |  | ${avg_ratio} |"
 }
 
-echo "<!-- benchmark:classic -->"
-echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
+echo "<!-- benchmark:textpk -->"
+echo "## Sysbench-Style Benchmark (TEXT PK): Doltlite vs SQLite"
+echo ""
+echo "_Companion to the classic Sysbench-Style Benchmark. Every workload here"
+echo "runs against tables with a 32-char hex \`TEXT PRIMARY KEY\` (UUID-shaped)._"
+echo "_Reporting only — not gated by a ceiling check._"
 echo ""
 echo "### In-Memory"
 echo ""
@@ -495,42 +522,3 @@ run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
 echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"
-
-# ============================================================
-# Enforce performance ceiling (exit 1 if any test exceeds limit)
-# ============================================================
-check_ceiling() {
-  local tests="$1" db_sq="$2" db_dl="$3" max="$4"
-  local failed=0
-  for t in $tests; do
-    s=$(run_bench_stable "$t" sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
-    d=$(run_bench_stable "$t" doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
-    if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
-      over=$(python3 -c "r=$d/$s; print(1 if r>$max else 0)")
-      if [ "$over" = "1" ]; then
-        ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
-        echo "FAIL: $t = ${ratio}x (ceiling: ${max}x)" >&2
-        failed=1
-      fi
-    fi
-  done
-  return $failed
-}
-
-# Wrapped and autocommit suites share the same ceiling.
-echo ""
-echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
-echo ""
-
-ceiling_ok=0
-check_ceiling "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-check_ceiling "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-
-if [ "$ceiling_ok" = "0" ]; then
-  echo "All tests within ceilings."
-else
-  echo ""
-  echo "**FAILED**: One or more tests exceeded their ceiling."
-  exit 1
-fi
