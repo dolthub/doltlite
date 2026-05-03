@@ -13,6 +13,7 @@ ROWS=${BENCH_ROWS:-10000}
 SEED=42
 TMPDIR=$(mktemp -d)
 BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2}
+BENCH_SECTION_MODE=${BENCH_SECTION_MODE:-full}
 
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
@@ -452,46 +453,99 @@ run_section() {
   echo "| Average |  |  | ${avg_ratio} |"
 }
 
-echo "<!-- benchmark:classic -->"
-echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
-echo ""
-echo "### In-Memory"
-echo ""
-echo "#### Reads"
-echo ""
-run_section "$READ_TESTS" ":memory:" ":memory:"
-echo ""
-echo "#### Writes"
-echo ""
-run_section "$WRITE_TESTS" ":memory:" ":memory:"
-echo ""
-echo "### File-Backed"
-echo ""
-echo "#### Reads"
-echo ""
-run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
-echo ""
-echo "#### Writes"
-echo ""
-run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
-
-echo ""
-echo "### File-Backed (autocommit)"
-echo ""
-echo "_Each statement runs as its own transaction — exposes per-commit_"
-echo "_fixed costs that the wrapped-in-BEGIN/COMMIT tests amortize away._"
-echo ""
-echo "#### Reads"
-echo ""
-echo "_Reads have no commit cost; these are the same SQL files as the_"
-echo "_File-Backed Reads section, included here for symmetry and to_"
-echo "_catch any per-statement overhead doltlite pays on the read path._"
-echo ""
-run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
-echo ""
-echo "#### Writes"
-echo ""
-run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
+case "$BENCH_SECTION_MODE" in
+  full)
+    echo "<!-- benchmark:classic -->"
+    echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
+    echo ""
+    echo "### In-Memory"
+    echo ""
+    echo "#### Reads"
+    echo ""
+    run_section "$READ_TESTS" ":memory:" ":memory:"
+    echo ""
+    echo "#### Writes"
+    echo ""
+    run_section "$WRITE_TESTS" ":memory:" ":memory:"
+    echo ""
+    echo "### File-Backed"
+    echo ""
+    echo "#### Reads"
+    echo ""
+    run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    echo ""
+    echo "#### Writes"
+    echo ""
+    run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    echo ""
+    echo "### File-Backed (autocommit)"
+    echo ""
+    echo "_Each statement runs as its own transaction — exposes per-commit_"
+    echo "_fixed costs that the wrapped-in-BEGIN/COMMIT tests amortize away._"
+    echo ""
+    echo "#### Reads"
+    echo ""
+    echo "_Reads have no commit cost; these are the same SQL files as the_"
+    echo "_File-Backed Reads section, included here for symmetry and to_"
+    echo "_catch any per-statement overhead doltlite pays on the read path._"
+    echo ""
+    run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    echo ""
+    echo "#### Writes"
+    echo ""
+    run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
+    ;;
+  wrapped)
+    echo "<!-- benchmark:classic -->"
+    echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
+    echo ""
+    echo "### In-Memory"
+    echo ""
+    echo "#### Reads"
+    echo ""
+    run_section "$READ_TESTS" ":memory:" ":memory:"
+    echo ""
+    echo "#### Writes"
+    echo ""
+    run_section "$WRITE_TESTS" ":memory:" ":memory:"
+    echo ""
+    echo "### File-Backed"
+    echo ""
+    echo "#### Reads"
+    echo ""
+    run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    echo ""
+    echo "#### Writes"
+    echo ""
+    run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    ;;
+  autocommit)
+    echo "## Sysbench-Style Benchmark (autocommit): Doltlite vs SQLite"
+    echo ""
+    echo "_Moved out of the classic benchmark job so per-commit costs report separately._"
+    echo ""
+    echo "### File-Backed (autocommit)"
+    echo ""
+    echo "_Each statement runs as its own transaction — exposes per-commit_"
+    echo "_fixed costs that the wrapped-in-BEGIN/COMMIT tests amortize away._"
+    echo ""
+    echo "#### Reads"
+    echo ""
+    echo "_Reads have no commit cost; these are the same SQL files as the_"
+    echo "_File-Backed Reads section, included here for symmetry and to_"
+    echo "_catch any per-statement overhead doltlite pays on the read path._"
+    echo ""
+    run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    echo ""
+    echo "#### Writes"
+    echo ""
+    run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
+    ;;
+  *)
+    echo "unknown BENCH_SECTION_MODE: $BENCH_SECTION_MODE" >&2
+    exit 2
+    ;;
+esac
 
 echo ""
 echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"
@@ -517,20 +571,23 @@ check_ceiling() {
   return $failed
 }
 
-# Wrapped and autocommit suites share the same ceiling.
-echo ""
-echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
-echo ""
-
-ceiling_ok=0
-check_ceiling "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-check_ceiling "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-
-if [ "$ceiling_ok" = "0" ]; then
-  echo "All tests within ceilings."
-else
+if [ "$BENCH_SECTION_MODE" != "autocommit" ]; then
   echo ""
-  echo "**FAILED**: One or more tests exceeded their ceiling."
-  exit 1
+  echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
+  echo ""
+
+  ceiling_ok=0
+  check_ceiling "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+  check_ceiling "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+  if [ "$BENCH_SECTION_MODE" = "full" ]; then
+    check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+  fi
+
+  if [ "$ceiling_ok" = "0" ]; then
+    echo "All tests within ceilings."
+  else
+    echo ""
+    echo "**FAILED**: One or more tests exceeded their ceiling."
+    exit 1
+  fi
 fi

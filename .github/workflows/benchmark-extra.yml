@@ -45,10 +45,12 @@ jobs:
         make doltlite
         make DOLTLITE_PROLLY=0 sqlite3
 
-    - name: Run benchmark
+    - name: Run benchmarks
       run: |
         cd build
-        bash ../test/sysbench_compare_textpk.sh | tee /tmp/bench_textpk_results.md
+        bash ../test/sysbench_compare_textpk.sh > /tmp/bench_textpk_results.md
+        BENCH_SECTION_MODE=autocommit bash ../test/sysbench_compare.sh > /tmp/bench_autocommit_results.md
+        cat /tmp/bench_textpk_results.md /tmp/bench_autocommit_results.md | tee /tmp/bench_textpk_results.md
 
     - name: Comment PR with results
       continue-on-error: true
