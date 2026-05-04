@@ -11,14 +11,16 @@
 # path, and full-scale R blows the CI 15-minute budget in the prepare phase
 # alone.
 #
-# No ceiling enforcement — this suite is reporting-only until the perf work
-# brings the ratios in.
+# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 2×) on file-backed
+# reads + writes (wrapped) and autocommit writes. In-memory and reads-
+# in-autocommit are reporting-only.
 #
 set -e
 
 DOLTLITE=${DOLTLITE:-./doltlite}
 SQLITE3=${SQLITE3:-./sqlite3}
 ROWS=${BENCH_ROWS:-1000}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2}
 SEED=42
 TMPDIR=$(mktemp -d)
 
@@ -480,7 +482,8 @@ echo "## Sysbench-Style Benchmark (TEXT PK): Doltlite vs SQLite"
 echo ""
 echo "_Companion to the classic Sysbench-Style Benchmark. Every workload here"
 echo "runs against tables with a 32-char hex \`TEXT PRIMARY KEY\` (UUID-shaped)._"
-echo "_Reporting only — not gated by a ceiling check._"
+echo "_File-backed sections gated at ${BENCH_MAX_MULTIPLIER}× — in-memory_"
+echo "_and autocommit reads are reporting-only._"
 echo ""
 echo "### In-Memory"
 echo ""
@@ -522,3 +525,43 @@ run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
 echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"
+
+# ============================================================
+# Enforce performance ceiling — gates the same shape sysbench_compare.sh
+# does (file-backed wrapped reads + writes, plus autocommit writes), so
+# a regression on TEXT PK shows up as a CI failure.
+# ============================================================
+check_ceiling() {
+  local tests="$1" db_sq="$2" db_dl="$3" max="$4"
+  local failed=0
+  for t in $tests; do
+    s=$(run_bench_stable "$t" sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
+    d=$(run_bench_stable "$t" doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
+    if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
+      over=$(python3 -c "r=$d/$s; print(1 if r>$max else 0)")
+      if [ "$over" = "1" ]; then
+        ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
+        echo "FAIL: $t = ${ratio}x (ceiling: ${max}x)" >&2
+        failed=1
+      fi
+    fi
+  done
+  return $failed
+}
+
+echo ""
+echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
+echo ""
+
+ceiling_ok=0
+check_ceiling "$READ_TESTS"     "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "$WRITE_TESTS"    "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+
+if [ "$ceiling_ok" = "0" ]; then
+  echo "All tests within ceilings."
+else
+  echo ""
+  echo "**FAILED**: One or more tests exceeded their ceiling."
+  exit 1
+fi

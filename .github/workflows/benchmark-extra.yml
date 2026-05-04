@@ -45,11 +45,26 @@ jobs:
         make DOLTLITE_PROLLY=0 sqlite3
 
     - name: Run benchmarks
+      id: bench
       run: |
         cd build
+        # textpk script now enforces a 2× ceiling; capture its rc so we
+        # can propagate it after the PR-comment step. Autocommit run is
+        # reporting-only (sysbench_compare.sh skips ceiling on autocommit).
+        set +e
         bash ../test/sysbench_compare_textpk.sh > /tmp/bench_textpk_results.md
+        textpk_rc=$?
         BENCH_SECTION_MODE=autocommit bash ../test/sysbench_compare.sh > /tmp/bench_autocommit_results.md
-        cat /tmp/bench_textpk_results.md /tmp/bench_autocommit_results.md | tee /tmp/bench_textpk_results.md
+        ac_rc=$?
+        set -e
+        # Concatenate into the file the comment step reads from, then
+        # echo to the job log so results are visible on red builds.
+        cat /tmp/bench_textpk_results.md /tmp/bench_autocommit_results.md > /tmp/bench_combined.md
+        mv /tmp/bench_combined.md /tmp/bench_textpk_results.md
+        cat /tmp/bench_textpk_results.md
+        bench_rc=$textpk_rc
+        if [ "$bench_rc" = "0" ]; then bench_rc=$ac_rc; fi
+        echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
 
     - name: Comment PR with results
       continue-on-error: true
@@ -93,3 +108,11 @@ jobs:
               body: body,
             });
           }
+
+    - name: Enforce ceiling
+      run: |
+        rc="${{ steps.bench.outputs.bench_rc }}"
+        if [ "$rc" != "0" ]; then
+          echo "Benchmark exceeded performance ceiling (rc=$rc)" >&2
+          exit "$rc"
+        fi
