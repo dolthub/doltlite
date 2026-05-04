@@ -43,7 +43,7 @@ jobs:
     - name: Run benchmark
       run: |
         cd build
-        bash ../test/sysbench_compare.sh | tee /tmp/bench_results.md
+        BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh | tee /tmp/bench_results.md
 
     - name: Comment PR with results
       continue-on-error: true
