@@ -4270,20 +4270,6 @@ static int prollyBtCursorIndexMoveto(
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  /* Re-seek after a same-cursor mutation (AUXDELETE sets flushSeekEdits)
-  ** still needs to apply pending edits to the tree first. The per-table
-  ** mutmap removed the *peer-cursor* flush dance, but the same-cursor
-  ** path needs to drain its own pending edits before re-seeking — without
-  ** this, multi-row DELETE through a secondary index loses subsequent
-  ** matches when the tree+mutmap merge sees a half-mutated state. */
-  if( pCur->flushSeekEdits
-   && (pCur->curFlags & BTCF_WriteFlag)
-   && pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    rc = flushMutMap(pCur);
-    if( rc!=SQLITE_OK ) return rc;
-    pCur->mmActive = 0;
-    pCur->flushSeekEdits = 0;
-  }
   refreshCursorRoot(pCur);
 
 
