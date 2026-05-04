@@ -3444,16 +3444,15 @@ static int prollyBtreeCursor(
   }
 
 
+  /* Per-table mutmap: peer cursors all alias the same pTE->pPending.
+  ** The old per-cursor flush of every peer (to make their edits
+  ** visible to the new cursor's reads) is redundant. */
   {
     BtCursor *pOther;
     for(pOther = pBt->pCursor; pOther; pOther = pOther->pNext){
       if( pOther->pgnoRoot==iTable ){
         hasPeerCursor = 1;
-      }
-      if( pOther->pgnoRoot==iTable && pOther->pMutMap
-          && !prollyMutMapIsEmpty(pOther->pMutMap) ){
-        int rc = flushMutMap(pOther);
-        if( rc!=SQLITE_OK ) return rc;
+        break;
       }
     }
   }
@@ -3797,11 +3796,12 @@ static int flushTablePending(BtCursor *pCur){
 static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
-  rc = flushTablePending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = flushOtherCursorPending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Per-table mutmap: pCur aliases pTE->pPending so other cursors'
+  ** edits are immediately visible via the shared buffer. The old
+  ** flushTablePending + flushOtherCursorPending pair was the per-
+  ** cursor-visibility dance — applying pending edits to the tree
+  ** before reading. With shared mutmap there's nothing to flush:
+  ** the merge cursor reads tree + pTE->pPending directly. */
   refreshCursorRoot(pCur);
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -3825,11 +3825,7 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
-  rc = flushTablePending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = flushOtherCursorPending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Visibility flushes deleted — see prollyBtCursorFirst. */
   refreshCursorRoot(pCur);
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -4103,9 +4099,8 @@ static int prollyBtCursorTableMoveto(
   }
 
 
-  rc = flushOtherCursorPending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
-
+  /* Visibility flush deleted — shared pTE->pPending is read directly
+  ** by the merge cursor below. */
   refreshCursorRoot(pCur);
 
   rc = prollyCursorSeekInt(&pCur->pCur, intKey, pRes);
@@ -4275,33 +4270,10 @@ static int prollyBtCursorIndexMoveto(
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  if( pCur->flushSeekEdits
-   && (pCur->curFlags & BTCF_WriteFlag)
-   && pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    rc = flushMutMap(pCur);
-    if( rc!=SQLITE_OK ) return rc;
-    pCur->mmActive = 0;
-    pCur->flushSeekEdits = 0;
-  }
-
-  /* Per-table mutmap: every cursor on this table aliases the same
-  ** pTE->pPending. The old per-cursor-walk that flushed each peer's
-  ** map separately would, in the shared model, run the SAME flush
-  ** multiple times — applying pending edits to the tree mid-seek and
-  ** leaving the merge cursor seeing both the just-applied tree row
-  ** and the mutmap entry it was about to consume.
-  **
-  ** In the new model the only legitimate flush at this point is "if
-  ** the tree root is empty, materialize pending edits so the seek
-  ** has something to bisect against." */
-  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-    if( pTE && prollyHashIsEmpty(&pTE->root) ){
-      rc = flushMutMap(pCur);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-  }
-
+  /* Per-table mutmap: shared pTE->pPending is read directly by the
+  ** merge cursor logic below — no need to apply pending edits to the
+  ** tree before seeking. The old "flushSeekEdits then peer flush"
+  ** pair was the per-cursor-visibility dance. */
   refreshCursorRoot(pCur);
 
 
@@ -4853,26 +4825,21 @@ static int prollyBtCursorInsert(
 static int flushIfNeeded(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
-  int anyFlushed = 0;
-  int needFlush = 0;
 
-
-  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    needFlush = 1;
+  /* Per-table mutmap: pCur->pMutMap aliases pTE->pPending and every
+  ** other cursor on this pgnoRoot does too. A single flushMutMap on
+  ** any cursor flushes the whole table. Old code did a peer walk
+  ** (O(cursors per pgnoRoot)) and then flushAllPending called
+  ** flushIfNeeded on every cursor, making the total O(N^2). With
+  ** shared mutmap each invocation either flushes (first one) or
+  ** finds empty (rest), so the peer walk is redundant. */
+  if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
+    return SQLITE_OK;
   }
-  if( !needFlush ){
-    BtCursor *p;
-    for(p = pCur->pBt->pCursor; p; p = p->pNext){
-      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
-       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-        needFlush = 1;
-        break;
-      }
-    }
-  }
-  if( !needFlush ) return SQLITE_OK;
 
-
+  /* Save peer cursors' positions before we change the tree out
+  ** from under them. Same logic as before — applies to every cursor
+  ** on this pgnoRoot regardless of whose mutmap is being flushed. */
   {
     BtCursor *p;
     for(p = pCur->pBt->pCursor; p; p = p->pNext){
@@ -4885,43 +4852,22 @@ static int flushIfNeeded(BtCursor *pCur){
           if( rc!=SQLITE_OK ) return rc;
         } else if( p->eState!=CURSOR_REQUIRESEEK
                 && p->eState!=CURSOR_INVALID ){
-
           prollyCursorReleaseAll(&p->pCur);
         }
       }
     }
   }
 
+  rc = flushMutMap(pCur);
+  if( rc!=SQLITE_OK ) return rc;
 
-  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    rc = flushMutMap(pCur);
-    if( rc!=SQLITE_OK ) return rc;
-    anyFlushed = 1;
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( pTE ){
+    prollyCursorClose(&pCur->pCur);
+    prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
+                     &pTE->root, pTE->flags);
   }
-
-
-  {
-    BtCursor *p;
-    for(p = pCur->pBt->pCursor; p; p = p->pNext){
-      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
-       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-        rc = flushMutMap(p);
-        if( rc!=SQLITE_OK ) return rc;
-        p->eState = CURSOR_INVALID;
-        anyFlushed = 1;
-      }
-    }
-  }
-
-  if( anyFlushed ){
-    pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-    if( pTE ){
-      prollyCursorClose(&pCur->pCur);
-      prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
-                       &pTE->root, pTE->flags);
-    }
-    pCur->eState = CURSOR_INVALID;
-  }
+  pCur->eState = CURSOR_INVALID;
   return SQLITE_OK;
 }
 
