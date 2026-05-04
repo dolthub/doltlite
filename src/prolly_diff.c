@@ -22,19 +22,12 @@ static void diffCompareKeys(
   u8 flags,
   int *pCmp
 ){
-  if( flags & PROLLY_NODE_INTKEY ){
-    i64 iOld = prollyCursorIntKey(pOld);
-    i64 iNew = prollyCursorIntKey(pNew);
-    if( iOld < iNew )      *pCmp = -1;
-    else if( iOld > iNew )  *pCmp =  1;
-    else                     *pCmp =  0;
-  }else{
-    const u8 *pKeyOld; int nKeyOld;
-    const u8 *pKeyNew; int nKeyNew;
-    prollyCursorKey(pOld, &pKeyOld, &nKeyOld);
-    prollyCursorKey(pNew, &pKeyNew, &nKeyNew);
-    *pCmp = diffBlobKeyCmp(pKeyOld, nKeyOld, pKeyNew, nKeyNew);
-  }
+  const u8 *pKeyOld; int nKeyOld;
+  const u8 *pKeyNew; int nKeyNew;
+  (void)flags;
+  prollyCursorKey(pOld, &pKeyOld, &nKeyOld);
+  prollyCursorKey(pNew, &pKeyNew, &nKeyNew);
+  *pCmp = diffBlobKeyCmp(pKeyOld, nKeyOld, pKeyNew, nKeyNew);
 }
 
 static void diffFillKey(
@@ -42,17 +35,11 @@ static void diffFillKey(
   ProllyCursor *pCur,
   u8 flags
 ){
-  if( flags & PROLLY_NODE_INTKEY ){
-    pChange->intKey = prollyCursorIntKey(pCur);
-    pChange->pKey   = 0;
-    pChange->nKey   = 0;
-  }else{
-    const u8 *pKey; int nKey;
-    prollyCursorKey(pCur, &pKey, &nKey);
-    pChange->pKey   = pKey;
-    pChange->nKey   = nKey;
-    pChange->intKey = 0;
-  }
+  const u8 *pKey; int nKey;
+  prollyCursorKey(pCur, &pKey, &nKey);
+  pChange->pKey   = pKey;
+  pChange->nKey   = nKey;
+  pChange->intKey = (flags & PROLLY_NODE_INTKEY) ? prollyCursorIntKey(pCur) : 0;
 }
 
 static int diffIterCopyKey(
@@ -61,26 +48,19 @@ static int diffIterCopyKey(
   ProllyCursor *pCur,
   u8 flags
 ){
-  if( flags & PROLLY_NODE_INTKEY ){
-    pChange->intKey = prollyCursorIntKey(pCur);
-    pChange->pKey = 0;
-    pChange->nKey = 0;
-    return SQLITE_OK;
-  }else{
-    const u8 *pKey;
-    int nKey;
-    prollyCursorKey(pCur, &pKey, &nKey);
-    if( nKey>0 ){
-      pIter->pKeyCopy = sqlite3_malloc(nKey);
-      if( !pIter->pKeyCopy ) return SQLITE_NOMEM;
-      memcpy(pIter->pKeyCopy, pKey, nKey);
-      pIter->nKeyCopy = nKey;
-    }
-    pChange->pKey = pIter->pKeyCopy;
-    pChange->nKey = pIter->nKeyCopy;
-    pChange->intKey = 0;
-    return SQLITE_OK;
+  const u8 *pKey;
+  int nKey;
+  prollyCursorKey(pCur, &pKey, &nKey);
+  if( nKey>0 ){
+    pIter->pKeyCopy = sqlite3_malloc(nKey);
+    if( !pIter->pKeyCopy ) return SQLITE_NOMEM;
+    memcpy(pIter->pKeyCopy, pKey, nKey);
+    pIter->nKeyCopy = nKey;
   }
+  pChange->pKey = pIter->pKeyCopy;
+  pChange->nKey = pIter->nKeyCopy;
+  pChange->intKey = (flags & PROLLY_NODE_INTKEY) ? prollyCursorIntKey(pCur) : 0;
+  return SQLITE_OK;
 }
 
 static int diffEmitDelete(
@@ -347,16 +327,25 @@ static int diffNodeKeyCmp(
   const ProllyNode *pB, int iB,
   u8 flags
 ){
+  const u8 *pKA; int nKA;
+  const u8 *pKB; int nKB;
+  (void)flags;
+  prollyNodeKey(pA, iA, &pKA, &nKA);
+  prollyNodeKey(pB, iB, &pKB, &nKB);
+  return diffBlobKeyCmp(pKA, nKA, pKB, nKB);
+}
+
+/* Populates a ProllyDiffChange's key fields from a node entry.
+** Always sets pKey/nKey to the on-disk key bytes (which for INT mode
+** is the sortable 8-byte BE form, see prolly_node.c). For INT mode
+** also sets intKey to the decoded i64 — preserves the long-standing
+** consumer contract while letting internal compare go byte-only. */
+static void diffEmitKey(ProllyDiffChange *ch, const ProllyNode *pN, int i, u8 flags){
+  prollyNodeKey(pN, i, &ch->pKey, &ch->nKey);
   if( flags & PROLLY_NODE_INTKEY ){
-    i64 a = prollyNodeIntKey(pA, iA);
-    i64 b = prollyNodeIntKey(pB, iB);
-    return (a < b) ? -1 : (a > b) ? 1 : 0;
+    ch->intKey = prollyNodeIntKey(pN, i);
   }else{
-    const u8 *pKA; int nKA;
-    const u8 *pKB; int nKB;
-    prollyNodeKey(pA, iA, &pKA, &nKA);
-    prollyNodeKey(pB, iB, &pKB, &nKB);
-    return diffBlobKeyCmp(pKA, nKA, pKB, nKB);
+    ch->intKey = 0;
   }
 }
 
@@ -368,11 +357,7 @@ static int diffLeaves(
 
   while( i < (int)pOld->nItems && j < (int)pNew->nItems ){
     int cmp;
-    if( flags & PROLLY_NODE_INTKEY ){
-      i64 ik = prollyNodeIntKey(pOld, i);
-      i64 jk = prollyNodeIntKey(pNew, j);
-      cmp = (ik < jk) ? -1 : (ik > jk) ? 1 : 0;
-    }else{
+    {
       const u8 *pKA; int nKA; const u8 *pKB; int nKB;
       prollyNodeKey(pOld, i, &pKA, &nKA);
       prollyNodeKey(pNew, j, &pKB, &nKB);
@@ -383,8 +368,7 @@ static int diffLeaves(
       ProllyDiffChange ch; const u8 *pV; int nV;
       memset(&ch, 0, sizeof(ch));
       ch.type = PROLLY_DIFF_DELETE;
-      if( flags & PROLLY_NODE_INTKEY ) ch.intKey = prollyNodeIntKey(pOld, i);
-      else prollyNodeKey(pOld, i, &ch.pKey, &ch.nKey);
+      diffEmitKey(&ch, pOld, i, flags);
       prollyNodeValue(pOld, i, &pV, &nV);
       ch.pOldVal = pV; ch.nOldVal = nV;
       rc = xCb(pCtx, &ch); i++;
@@ -392,8 +376,7 @@ static int diffLeaves(
       ProllyDiffChange ch; const u8 *pV; int nV;
       memset(&ch, 0, sizeof(ch));
       ch.type = PROLLY_DIFF_ADD;
-      if( flags & PROLLY_NODE_INTKEY ) ch.intKey = prollyNodeIntKey(pNew, j);
-      else prollyNodeKey(pNew, j, &ch.pKey, &ch.nKey);
+      diffEmitKey(&ch, pNew, j, flags);
       prollyNodeValue(pNew, j, &pV, &nV);
       ch.pNewVal = pV; ch.nNewVal = nV;
       rc = xCb(pCtx, &ch); j++;
@@ -409,8 +392,7 @@ static int diffLeaves(
         ProllyDiffChange ch;
         memset(&ch, 0, sizeof(ch));
         ch.type = PROLLY_DIFF_MODIFY;
-        if( flags & PROLLY_NODE_INTKEY ) ch.intKey = prollyNodeIntKey(pNew, j);
-        else prollyNodeKey(pNew, j, &ch.pKey, &ch.nKey);
+        diffEmitKey(&ch, pNew, j, flags);
         ch.pOldVal = pOV; ch.nOldVal = nOV;
         ch.pNewVal = pNV; ch.nNewVal = nNV;
         rc = xCb(pCtx, &ch);
@@ -424,8 +406,7 @@ static int diffLeaves(
     ProllyDiffChange ch; const u8 *pV; int nV;
     memset(&ch, 0, sizeof(ch));
     ch.type = PROLLY_DIFF_DELETE;
-    if( flags & PROLLY_NODE_INTKEY ) ch.intKey = prollyNodeIntKey(pOld, i);
-    else prollyNodeKey(pOld, i, &ch.pKey, &ch.nKey);
+    diffEmitKey(&ch, pOld, i, flags);
     prollyNodeValue(pOld, i, &pV, &nV);
     ch.pOldVal = pV; ch.nOldVal = nV;
     rc = xCb(pCtx, &ch); i++;
@@ -434,8 +415,7 @@ static int diffLeaves(
     ProllyDiffChange ch; const u8 *pV; int nV;
     memset(&ch, 0, sizeof(ch));
     ch.type = PROLLY_DIFF_ADD;
-    if( flags & PROLLY_NODE_INTKEY ) ch.intKey = prollyNodeIntKey(pNew, j);
-    else prollyNodeKey(pNew, j, &ch.pKey, &ch.nKey);
+    diffEmitKey(&ch, pNew, j, flags);
     prollyNodeValue(pNew, j, &pV, &nV);
     ch.pNewVal = pV; ch.nNewVal = nV;
     rc = xCb(pCtx, &ch); j++;

@@ -5312,7 +5312,7 @@ static int mutmapAssertMatchesModel(
     if( !prollyMutMapIterValid(&it) ) return 0;
     pEntry = prollyMutMapIterEntry(&it);
     if( !pEntry ) return 0;
-    ok = ok && pEntry->intKey==pModel->a[i].key;
+    ok = ok && prollyMutMapEntryIntKey(pEntry)==pModel->a[i].key;
     ok = ok && pEntry->op==pModel->a[i].op;
     ok = ok && ((pEntry->op==PROLLY_EDIT_DELETE)
              || (pEntry->nVal==(int)sizeof(int) && memcmp(pEntry->pVal, &pModel->a[i].val, sizeof(int))==0));

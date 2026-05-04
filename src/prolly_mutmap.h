@@ -12,13 +12,17 @@ typedef struct ProllyMutMapIter ProllyMutMapIter;
 
 struct ProllyMutMapEntry {
   u8 op;
-  i64 intKey;
   u8 *pKey;
   int nKey;
   u8 *pVal;
   int nVal;
   int bornAt;
 };
+
+/* Decodes a sortable 8-byte BE entry key back to i64. Only valid for
+** entries in an INT-mode map; the bytes layout matches the on-disk
+** PROLLY_NODE_INTKEY encoding (sign-flipped big-endian). */
+i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e);
 
 /* Lazy — allocated only when an in-place mutation under an active
 ** savepoint is about to overwrite the previous (op, value). */
