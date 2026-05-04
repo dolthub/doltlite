@@ -47,6 +47,12 @@ int prollyNodeSearchBlob(const ProllyNode *pNode,
 
 int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes);
 
+/* Encodes an i64 into the sortable 8-byte big-endian form used by
+** PROLLY_NODE_INTKEY on-disk layout (sign-flipped, so unsigned byte
+** lex order matches signed integer order). The inverse of
+** prollyNodeIntKey at the byte level. */
+void prollyEncodeIntKey(i64 v, u8 buf[8]);
+
 typedef struct ProllyNodeBuilder ProllyNodeBuilder;
 struct ProllyNodeBuilder {
   u8 level;
