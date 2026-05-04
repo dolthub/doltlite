@@ -21,38 +21,23 @@ static void encodeI64BE(u8 *buf, i64 v){
 #define PROLLY_EST_ENTRIES_PER_LEAF 50
 
 static int compareKeys(
-  u8 flags,
-  const u8 *pKey1, int nKey1, i64 iKey1,
-  const u8 *pKey2, int nKey2, i64 iKey2
+  const u8 *pKey1, int nKey1,
+  const u8 *pKey2, int nKey2
 ){
-  if( flags & PROLLY_NODE_INTKEY ){
-    if( iKey1 < iKey2 ) return -1;
-    if( iKey1 > iKey2 ) return +1;
-    return 0;
-  }else{
-    int n = nKey1 < nKey2 ? nKey1 : nKey2;
-    int c = memcmp(pKey1, pKey2, n);
-    if( c != 0 ) return c;
-    if( nKey1 < nKey2 ) return -1;
-    if( nKey1 > nKey2 ) return 1;
-    return 0;
-  }
+  int n = nKey1 < nKey2 ? nKey1 : nKey2;
+  int c = memcmp(pKey1, pKey2, n);
+  if( c != 0 ) return c;
+  if( nKey1 < nKey2 ) return -1;
+  if( nKey1 > nKey2 ) return 1;
+  return 0;
 }
 
 static int feedChunker(
   ProllyChunker *pCh,
-  u8 flags,
-  const u8 *pKey, int nKey, i64 intKey,
+  const u8 *pKey, int nKey,
   const u8 *pVal, int nVal
 ){
-  if( flags & PROLLY_NODE_INTKEY ){
-
-    u8 aKeyBuf[8];
-    encodeI64BE(aKeyBuf, intKey);
-    return prollyChunkerAdd(pCh, aKeyBuf, 8, pVal, nVal);
-  }else{
-    return prollyChunkerAdd(pCh, pKey, nKey, pVal, nVal);
-  }
+  return prollyChunkerAdd(pCh, pKey, nKey, pVal, nVal);
 }
 
 static int buildFromEdits(
@@ -69,9 +54,7 @@ static int buildFromEdits(
   while( prollyMutMapIterValid(&iter) ){
     ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
     if( pEntry->op==PROLLY_EDIT_INSERT ){
-      rc = feedChunker(&chunker, pMut->flags,
-                       pEntry->pKey, pEntry->nKey,
-                       prollyMutMapEntryIntKey(pEntry),
+      rc = feedChunker(&chunker, pEntry->pKey, pEntry->nKey,
                        pEntry->pVal, pEntry->nVal);
       if( rc!=SQLITE_OK ){
         prollyChunkerFree(&chunker);
@@ -93,16 +76,14 @@ static int buildFromEdits(
 /* mergeWalk removed: streamingMerge now handles all flush shapes. */
 
 static int subtreeHasEdits(
-  u8 flags,
   ProllyMutMapIter *pIter,
-  const u8 *pBoundKey, int nBoundKey, i64 iBoundKey
+  const u8 *pBoundKey, int nBoundKey
 ){
   ProllyMutMapEntry *pEd;
   int cmp;
   if( !prollyMutMapIterValid(pIter) ) return 0;
   pEd = prollyMutMapIterEntry(pIter);
-  cmp = compareKeys(flags, pEd->pKey, pEd->nKey, prollyMutMapEntryIntKey(pEd),
-                    pBoundKey, nBoundKey, iBoundKey);
+  cmp = compareKeys(pEd->pKey, pEd->nKey, pBoundKey, nBoundKey);
   return (cmp <= 0);
 }
 
@@ -136,16 +117,9 @@ static int mergeLeaf(
 
     const u8 *pCurKey; int nCurKey;
     i64 iCurKey = 0;
-    u8 aKeyBuf[8];
     int cmp;
 
-    if( flags & PROLLY_NODE_INTKEY ){
-      iCurKey = prollyNodeIntKey(pLeaf, j);
-      encodeI64BE(aKeyBuf, iCurKey);
-      pCurKey = aKeyBuf; nCurKey = 8;
-    }else{
-      prollyNodeKey(pLeaf, j, &pCurKey, &nCurKey);
-    }
+    prollyNodeKey(pLeaf, j, &pCurKey, &nCurKey);
 
     if( !haveEdit ){
 
@@ -160,18 +134,9 @@ static int mergeLeaf(
 
     {
       const u8 *pLastKey; int nLastKey;
-      i64 iLastKey = 0;
-      u8 aLastBuf[8];
       int pastLeaf;
-      if( flags & PROLLY_NODE_INTKEY ){
-        iLastKey = prollyNodeIntKey(pLeaf, pLeaf->nItems - 1);
-        encodeI64BE(aLastBuf, iLastKey);
-        pLastKey = aLastBuf; nLastKey = 8;
-      }else{
-        prollyNodeKey(pLeaf, pLeaf->nItems - 1, &pLastKey, &nLastKey);
-      }
-      pastLeaf = compareKeys(flags, pEd->pKey, pEd->nKey, prollyMutMapEntryIntKey(pEd),
-                                 pLastKey, nLastKey, iLastKey);
+      prollyNodeKey(pLeaf, pLeaf->nItems - 1, &pLastKey, &nLastKey);
+      pastLeaf = compareKeys(pEd->pKey, pEd->nKey, pLastKey, nLastKey);
       if( pastLeaf > 0 ){
 
         const u8 *pVal; int nVal;
@@ -183,8 +148,7 @@ static int mergeLeaf(
       }
     }
 
-    cmp = compareKeys(flags, pCurKey, nCurKey, iCurKey,
-                          pEd->pKey, pEd->nKey, prollyMutMapEntryIntKey(pEd));
+    cmp = compareKeys(pCurKey, nCurKey, pEd->pKey, pEd->nKey);
     if( cmp < 0 ){
 
       const u8 *pVal; int nVal;
@@ -195,15 +159,7 @@ static int mergeLeaf(
     }else if( cmp == 0 ){
 
       if( pEd->op==PROLLY_EDIT_INSERT ){
-        u8 aEditKey[8];
-        const u8 *pEK; int nEK;
-        if( flags & PROLLY_NODE_INTKEY ){
-          encodeI64BE(aEditKey, prollyMutMapEntryIntKey(pEd));
-          pEK = aEditKey; nEK = 8;
-        }else{
-          pEK = pEd->pKey; nEK = pEd->nKey;
-        }
-        rc = prollyChunkerAdd(pCh, pEK, nEK, pEd->pVal, pEd->nVal);
+        rc = prollyChunkerAdd(pCh, pEd->pKey, pEd->nKey, pEd->pVal, pEd->nVal);
         if( rc!=SQLITE_OK ) return rc;
       }
       j++;
@@ -211,15 +167,7 @@ static int mergeLeaf(
     }else{
 
       if( pEd->op==PROLLY_EDIT_INSERT ){
-        u8 aEditKey[8];
-        const u8 *pEK; int nEK;
-        if( flags & PROLLY_NODE_INTKEY ){
-          encodeI64BE(aEditKey, prollyMutMapEntryIntKey(pEd));
-          pEK = aEditKey; nEK = 8;
-        }else{
-          pEK = pEd->pKey; nEK = pEd->nKey;
-        }
-        rc = prollyChunkerAdd(pCh, pEK, nEK, pEd->pVal, pEd->nVal);
+        rc = prollyChunkerAdd(pCh, pEd->pKey, pEd->nKey, pEd->pVal, pEd->nVal);
         if( rc!=SQLITE_OK ) return rc;
       }
       prollyMutMapIterNext(pIter);
@@ -236,15 +184,7 @@ static int mergeLeaf(
     while( prollyMutMapIterValid(pIter) ){
       ProllyMutMapEntry *pEd = prollyMutMapIterEntry(pIter);
       if( pEd->op==PROLLY_EDIT_INSERT ){
-        u8 aEditKey[8];
-        const u8 *pEK; int nEK;
-        if( flags & PROLLY_NODE_INTKEY ){
-          encodeI64BE(aEditKey, prollyMutMapEntryIntKey(pEd));
-          pEK = aEditKey; nEK = 8;
-        }else{
-          pEK = pEd->pKey; nEK = pEd->nKey;
-        }
-        rc = prollyChunkerAdd(pCh, pEK, nEK, pEd->pVal, pEd->nVal);
+        rc = prollyChunkerAdd(pCh, pEd->pKey, pEd->nKey, pEd->pVal, pEd->nVal);
         if( rc!=SQLITE_OK ) return rc;
       }
       prollyMutMapIterNext(pIter);
@@ -268,19 +208,11 @@ static int streamingMergeNode(
   for( i = 0; i < pNode->nItems; i++ ){
     const u8 *pBoundKey; int nBoundKey;
     const u8 *pChildVal; int nChildVal;
-    i64 iBoundKey = 0;
-    u8 aBoundBuf[8];
     int childIsLast;
     int forceDescend;
 
     prollyNodeKey(pNode, i, &pBoundKey, &nBoundKey);
     prollyNodeValue(pNode, i, &pChildVal, &nChildVal);
-
-    if( pMut->flags & PROLLY_NODE_INTKEY ){
-      iBoundKey = prollyNodeIntKey(pNode, i);
-      encodeI64BE(aBoundBuf, iBoundKey);
-      pBoundKey = aBoundBuf; nBoundKey = 8;
-    }
 
     childIsLast = isLast && (i == pNode->nItems - 1);
 
@@ -293,8 +225,7 @@ static int streamingMergeNode(
     forceDescend = childIsLast && prollyMutMapIterValid(pIter);
 
     if( !forceDescend
-     && !subtreeHasEdits(pMut->flags, pIter,
-                         pBoundKey, nBoundKey, iBoundKey)
+     && !subtreeHasEdits(pIter, pBoundKey, nBoundKey)
      && chunkerLevelsBelowEmpty(pChunker, pNode->level) ){
       rc = prollyChunkerAddAtLevel(pChunker, pNode->level,
                                     pBoundKey, nBoundKey,
