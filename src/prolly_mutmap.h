@@ -61,9 +61,8 @@ struct ProllyMutMap {
   ** entries). NOT bumped by in-place value updates or savepoint
   ** release (which only relabels bornAt). Cursors snapshot this value
   ** when they record an mmIdx, then re-resolve their position by key
-  ** if the snapshot is stale. Staleness is impossible while the
-  ** mutmap has a single owning cursor (today's per-cursor model) but
-  ** matters once the mutmap is shared across cursors. */
+  ** if the snapshot is stale. This matters now that per-table mutmaps
+  ** are shared across cursors. */
   u32 generation;
 };
 

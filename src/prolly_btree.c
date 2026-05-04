@@ -1616,15 +1616,9 @@ static int captureSavepointTables(
 
 static void pushSavepointOnMutMaps(Btree *pBtree, int level){
   int k;
-  BtCursor *p;
   for(k=0; k<pBtree->cat.n; k++){
     ProllyMutMap *pMap = (ProllyMutMap*)pBtree->cat.a[k].pPending;
     if( pMap ) prollyMutMapPushSavepoint(pMap, level);
-  }
-  for(p = pBtree->pBt->pCursor; p; p = p->pNext){
-    if( p->pBtree==pBtree && p->pMutMap ){
-      prollyMutMapPushSavepoint(p->pMutMap, level);
-    }
   }
 }
 
@@ -1729,7 +1723,6 @@ static int inheritPendingSnapshots(
 static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
                                        int iFromSavepoint){
   int k, rc;
-  BtCursor *p;
   for(k=0; k<pBtree->cat.n; k++){
     struct TableEntry *pTE = &pBtree->cat.a[k];
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
@@ -1752,26 +1745,14 @@ static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
       if( rc!=SQLITE_OK ) return rc;
     }
   }
-  for(p = pBtree->pBt->pCursor; p; p = p->pNext){
-    if( p->pBtree==pBtree && p->pMutMap ){
-      rc = prollyMutMapRollbackToSavepoint(p->pMutMap, level);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-  }
   return SQLITE_OK;
 }
 
 static void releaseMutMapsToSavepoint(Btree *pBtree, int level){
   int k;
-  BtCursor *p;
   for(k=0; k<pBtree->cat.n; k++){
     ProllyMutMap *pMap = (ProllyMutMap*)pBtree->cat.a[k].pPending;
     if( pMap ) prollyMutMapReleaseSavepoint(pMap, level);
-  }
-  for(p = pBtree->pBt->pCursor; p; p = p->pNext){
-    if( p->pBtree==pBtree && p->pMutMap ){
-      prollyMutMapReleaseSavepoint(p->pMutMap, level);
-    }
   }
 }
 
@@ -3418,7 +3399,6 @@ static int prollyBtreeCursor(
 ){
   BtShared *pBt = p->pBt;
   struct TableEntry *pTE;
-  int hasPeerCursor = 0;
 
   assert( p->inTrans>=TRANS_READ );
 
@@ -3443,19 +3423,6 @@ static int prollyBtreeCursor(
     pCur->curFlags = BTCF_WriteFlag;
   }
 
-
-  /* Per-table mutmap: peer cursors all alias the same pTE->pPending.
-  ** The old per-cursor flush of every peer (to make their edits
-  ** visible to the new cursor's reads) is redundant. */
-  {
-    BtCursor *pOther;
-    for(pOther = pBt->pCursor; pOther; pOther = pOther->pNext){
-      if( pOther->pgnoRoot==iTable ){
-        hasPeerCursor = 1;
-        break;
-      }
-    }
-  }
   /* Per-table mutmap: pTE->pPending is the canonical edit buffer
   ** owned by pTE for the lifetime of the transaction. The new cursor
   ** simply aliases the existing buffer (no ownership transfer). The
