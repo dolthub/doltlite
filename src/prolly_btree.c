@@ -4270,10 +4270,20 @@ static int prollyBtCursorIndexMoveto(
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  /* Per-table mutmap: shared pTE->pPending is read directly by the
-  ** merge cursor logic below — no need to apply pending edits to the
-  ** tree before seeking. The old "flushSeekEdits then peer flush"
-  ** pair was the per-cursor-visibility dance. */
+  /* Re-seek after a same-cursor mutation (AUXDELETE sets flushSeekEdits)
+  ** still needs to apply pending edits to the tree first. The per-table
+  ** mutmap removed the *peer-cursor* flush dance, but the same-cursor
+  ** path needs to drain its own pending edits before re-seeking — without
+  ** this, multi-row DELETE through a secondary index loses subsequent
+  ** matches when the tree+mutmap merge sees a half-mutated state. */
+  if( pCur->flushSeekEdits
+   && (pCur->curFlags & BTCF_WriteFlag)
+   && pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    rc = flushMutMap(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+    pCur->mmActive = 0;
+    pCur->flushSeekEdits = 0;
+  }
   refreshCursorRoot(pCur);
 
 
@@ -4437,6 +4447,12 @@ static int prollyBtCursorIndexMoveto(
          || (pPending && pPending!=pCur->pMutMap
              && !prollyMutMapIsEmpty(pPending)))
        && !(treeFound && treeCmp==0) ){
+      /* findMatchingMutMapEntry runs sqlite3VdbeRecordCompare against
+      ** mutmap entries, which clobbers pIdxKey->eqSeen. The tree-match
+      ** decision above already consumed eqSeen, so save its post-tree-
+      ** seek value and restore it on exit — OP_SeekGE (eqOnly path)
+      ** reads eqSeen to decide whether the seek hit an equality match. */
+      int savedEqSeen = pIdxKey->eqSeen;
       rc = findMatchingMutMapEntry((ProllyMutMap*)pCur->pMutMap,
                                    pCur->pKeyInfo,
                                    pIdxKey, pSortKey, nSortKey,
@@ -4471,6 +4487,7 @@ static int prollyBtCursorIndexMoveto(
           mutFound = 1;
         }
       }
+      pIdxKey->eqSeen = savedEqSeen;
     }
     }
 
@@ -4487,6 +4504,11 @@ static int prollyBtCursorIndexMoveto(
         pCur->eState = CURSOR_VALID;
       }
       *pRes = mutCmp;
+      /* OP_SeekGE/SeekLE eqOnly path reads eqSeen to decide whether the
+      ** seek hit an equality match. A mutmap match means equality was
+      ** seen, but findMatchingMutMapEntry leaves eqSeen reflecting its
+      ** internal bsearch's last comparison. */
+      pIdxKey->eqSeen = 1;
       return SQLITE_OK;
     }
     if( treeFound ){
