@@ -1338,7 +1338,6 @@ static int flushPendingForTable(
   pTE->pendingFlushSeekEdits = 0;
   return SQLITE_OK;
 }
-
 static int syncSavepoints(BtCursor *pCur){
   Btree *pBtree = pCur->pBtree;
   sqlite3 *db = pBtree ? pBtree->db : 0;
@@ -3721,18 +3720,12 @@ static int mergeLast(BtCursor *pCur, int *pRes){
   return mergeScan(pCur, -1, pRes);
 }
 
-static int flushTablePending(BtCursor *pCur){
-  struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-  return flushPendingForTable(pCur->pBtree, pCur->pBt, pTE, 1);
-}
-
 static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
   /* Per-table mutmap: pCur aliases pTE->pPending so other cursors'
   ** edits are immediately visible via the shared buffer. The old
-  ** flushTablePending + flushOtherCursorPending pair was the per-
-  ** cursor-visibility dance — applying pending edits to the tree
+  ** per-cursor visibility dance applied pending edits to the tree
   ** before reading. With shared mutmap there's nothing to flush:
   ** the merge cursor reads tree + pTE->pPending directly. */
   refreshCursorRoot(pCur);
@@ -5175,9 +5168,30 @@ struct Pager *sqlite3BtreePager(Btree *p){
 }
 
 static int prollyBtCursorCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
+  struct TableEntry *pTE;
   (void)db;
 
-  flushTablePending(pCur);
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( pTE && pTE->pPending ){
+    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+    if( !prollyMutMapIsEmpty(pMap) ){
+      ProllyMutMap *pFlushMap = pMap;
+      int captured = 0;
+      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+                                       (ProllyMutMap**)&pTE->pPending,
+                                       &pFlushMap, &captured);
+      if( rc!=SQLITE_OK ) return rc;
+      if( captured ){
+        refreshCursorMutMapAliases(pCur->pBt, pCur->pgnoRoot,
+                                   (ProllyMutMap*)pTE->pPending);
+      }
+      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
+      if( rc!=SQLITE_OK ) return rc;
+      if( pTE->pPending==pMap ){
+        prollyMutMapClear(pMap);
+      }
+    }
+  }
   flushIfNeeded(pCur);
   return countTreeEntries(pCur->pBtree, pCur->pgnoRoot, pnEntry);
 }
