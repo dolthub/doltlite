@@ -116,7 +116,6 @@ static int mergeLeaf(
     ProllyMutMapEntry *pEd = haveEdit ? prollyMutMapIterEntry(pIter) : 0;
 
     const u8 *pCurKey; int nCurKey;
-    i64 iCurKey = 0;
     int cmp;
 
     prollyNodeKey(pLeaf, j, &pCurKey, &nCurKey);

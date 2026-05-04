@@ -34,17 +34,26 @@ static void encodeIntKeyBE(i64 v, u8 buf[8]){
   buf[7] = (u8)u;
 }
 
-/* Rebinds (pKey, nKey) to point at a sortable encoding of intKey when
-** the map is in INT mode and the caller passed only the integer value.
-** Callers that already supplied byte-form keys are passed through. */
+/* Rebinds (pKey, nKey) to a sortable encoding of intKey when the map is
+** in INT mode. INT-mode callers MUST pass (NULL, 0, intKey) — passing
+** byte-form keys with a meaningful intKey alongside is ambiguous and
+** would silently let bytes win, corrupting key order. The assert catches
+** that misuse during development; for INT-mode entries originating from
+** Merge re-insert (where pKey is already the encoded 8 bytes) callers
+** pass intKey=0 and the assert holds. */
 static void prepKey(ProllyMutMap *mm,
                     const u8 **ppKey, int *pnKey,
                     i64 intKey, u8 buf[8]){
-  if( mm->isIntKey && (*ppKey == 0 || *pnKey == 0) ){
-    encodeIntKeyBE(intKey, buf);
-    *ppKey = buf;
-    *pnKey = 8;
+  if( !mm->isIntKey ) return;
+  if( *ppKey != 0 && *pnKey > 0 ){
+    /* Caller passed pre-encoded bytes (Merge re-insert path). intKey
+    ** must be 0 by convention so we don't have two key sources. */
+    assert( intKey == 0 );
+    return;
   }
+  encodeIntKeyBE(intKey, buf);
+  *ppKey = buf;
+  *pnKey = 8;
 }
 
 static int compareEntries(
