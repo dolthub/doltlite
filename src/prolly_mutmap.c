@@ -793,6 +793,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
   dst->orderDirty = src->orderDirty;
   dst->levelBase = src->levelBase;
   dst->currentSavepointLevel = src->currentSavepointLevel;
+  dst->generation = src->generation;
 
   if( src->nEntries > 0 ){
     dst->aEntries = (ProllyMutMapEntry*)sqlite3_malloc(
