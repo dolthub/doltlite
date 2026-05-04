@@ -4,20 +4,6 @@
 #include "prolly_mutate.h"
 #include <string.h>
 
-/* Big-endian with sign bit flipped: memcmp on the encoded bytes
-** then gives correct signed ordering. */
-static void encodeI64BE(u8 *buf, i64 v){
-  u64 u = (u64)v ^ ((u64)1 << 63);
-  buf[0] = (u8)(u >> 56);
-  buf[1] = (u8)(u >> 48);
-  buf[2] = (u8)(u >> 40);
-  buf[3] = (u8)(u >> 32);
-  buf[4] = (u8)(u >> 24);
-  buf[5] = (u8)(u >> 16);
-  buf[6] = (u8)(u >> 8);
-  buf[7] = (u8)(u);
-}
-
 #define PROLLY_EST_ENTRIES_PER_LEAF 50
 
 static int compareKeys(
@@ -30,14 +16,6 @@ static int compareKeys(
   if( nKey1 < nKey2 ) return -1;
   if( nKey1 > nKey2 ) return 1;
   return 0;
-}
-
-static int feedChunker(
-  ProllyChunker *pCh,
-  const u8 *pKey, int nKey,
-  const u8 *pVal, int nVal
-){
-  return prollyChunkerAdd(pCh, pKey, nKey, pVal, nVal);
 }
 
 static int buildFromEdits(
@@ -54,8 +32,8 @@ static int buildFromEdits(
   while( prollyMutMapIterValid(&iter) ){
     ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
     if( pEntry->op==PROLLY_EDIT_INSERT ){
-      rc = feedChunker(&chunker, pEntry->pKey, pEntry->nKey,
-                       pEntry->pVal, pEntry->nVal);
+      rc = prollyChunkerAdd(&chunker, pEntry->pKey, pEntry->nKey,
+                            pEntry->pVal, pEntry->nVal);
       if( rc!=SQLITE_OK ){
         prollyChunkerFree(&chunker);
         return rc;

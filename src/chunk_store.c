@@ -141,6 +141,8 @@ static int csReplayWal(ChunkStore *cs);
 static void csFreeRefsState(ChunkStore *cs);
 static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData);
 static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc);
+static int csReplaceRefsStateFromBlob(ChunkStore *cs, const u8 *data, int nData,
+                                      int markCommitted);
 static int csReloadFromDisk(ChunkStore *cs);
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged);
 
@@ -896,6 +898,8 @@ static int csReplayWal(ChunkStore *cs){
   int haveTmpRefs = 0;
   int rc = SQLITE_OK;
 
+  memset(&tmpRefs, 0, sizeof(tmpRefs));
+
   csCaptureReplayState(cs, &saved);
 
   if( cs->iWalOffset <= 0 || !cs->pFile ) return SQLITE_OK;
@@ -1046,10 +1050,9 @@ static int csReplayWal(ChunkStore *cs){
     int nRefsData = 0;
     int rc2 = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
     if( rc2==SQLITE_OK && refsData ){
-      rc2 = csDeserializeRefsIntoTemp(&tmpRefs, refsData, nRefsData);
+      rc2 = csReplaceRefsStateFromBlob(&tmpRefs, refsData, nRefsData, 0);
       sqlite3_free(refsData);
       if( rc2!=SQLITE_OK ){
-        csFreeRefsState(&tmpRefs);
         rc = rc2;
         goto replay_error;
       }
@@ -1841,7 +1844,12 @@ static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->nTracking = 0;
 }
 
-int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
+static int csReplaceRefsStateFromBlob(
+  ChunkStore *cs,
+  const u8 *data,
+  int nData,
+  int markCommitted
+){
   ChunkStore tmp;
   int rc = csDeserializeRefsIntoTemp(&tmp, data, nData);
   if( rc!=SQLITE_OK ){
@@ -1850,8 +1858,14 @@ int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
   }
   csFreeRefsState(cs);
   csAdoptRefsState(cs, &tmp);
-  csMarkRefsCommitted(cs);
+  if( markCommitted ){
+    csMarkRefsCommitted(cs);
+  }
   return SQLITE_OK;
+}
+
+int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
+  return csReplaceRefsStateFromBlob(cs, data, nData, 1);
 }
 
 int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
@@ -2302,7 +2316,6 @@ void chunkStoreClearRefs(ChunkStore *cs){
 int chunkStoreReloadRefs(ChunkStore *cs){
   u8 *refsData = 0;
   int nRefsData = 0;
-  ChunkStore tmp;
   int rc;
 
   if( prollyHashIsEmpty(&cs->refsHash) ) return SQLITE_OK;
@@ -2310,16 +2323,9 @@ int chunkStoreReloadRefs(ChunkStore *cs){
   rc = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = csDeserializeRefsIntoTemp(&tmp, refsData, nRefsData);
+  rc = csReplaceRefsStateFromBlob(cs, refsData, nRefsData, 0);
   sqlite3_free(refsData);
-  if( rc!=SQLITE_OK ){
-    csFreeRefsState(&tmp);
-    return rc;
-  }
-
-  csFreeRefsState(cs);
-  csAdoptRefsState(cs, &tmp);
-  return SQLITE_OK;
+  return rc;
 }
 
 const char *chunkStoreFilename(ChunkStore *cs){
