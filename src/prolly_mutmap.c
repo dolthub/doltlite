@@ -13,6 +13,15 @@
 ** flipped so unsigned byte-lex order matches signed integer order.
 ** Matches the on-disk INTKEY layout in prolly_node.c (see
 ** prollyNodeIntKey, which decodes via `u ^ (1<<63)`). */
+i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e){
+  const u8 *p = e->pKey;
+  u64 u;
+  if( e->nKey != 8 || p == 0 ) return 0;
+  u = ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40) | ((u64)p[3]<<32)
+    | ((u64)p[4]<<24) | ((u64)p[5]<<16) | ((u64)p[6]<<8) | (u64)p[7];
+  return (i64)(u ^ ((u64)1 << 63));
+}
+
 static void encodeIntKeyBE(i64 v, u8 buf[8]){
   u64 u = ((u64)v) ^ ((u64)1 << 63);
   buf[0] = (u8)(u >> 56);
@@ -377,7 +386,6 @@ int prollyMutMapInsert(
     e = &mm->aEntries[phys];
     memset(e, 0, sizeof(*e));
     e->op = PROLLY_EDIT_INSERT;
-    e->intKey = intKey;
     e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
     rc = copyEntryData(mm, e, pKey, nKey, pVal, nVal);
     if( rc!=SQLITE_OK ){
@@ -457,7 +465,6 @@ int prollyMutMapDelete(
     e = &mm->aEntries[phys];
     memset(e, 0, sizeof(*e));
     e->op = PROLLY_EDIT_DELETE;
-    e->intKey = intKey;
     e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
     rc = copyEntryData(mm, e, pKey, nKey, 0, 0);
     if( rc!=SQLITE_OK ){
@@ -764,7 +771,6 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
       ProllyMutMapEntry *se = &src->aEntries[i];
       ProllyMutMapEntry *de = &dst->aEntries[i];
       de->op = se->op;
-      de->intKey = se->intKey;
       de->bornAt = se->bornAt;
       de->nKey = 0;
       de->nVal = 0;
@@ -857,11 +863,13 @@ int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
   int i, rc;
   for(i=0; i<pSrc->nEntries; i++){
     ProllyMutMapEntry *e = &pSrc->aEntries[i];
+    /* Entry's pKey/nKey are already in encoded byte form for both INT
+    ** and BLOB maps, so prepKey in the callee is a no-op. */
     if( e->op==PROLLY_EDIT_INSERT ){
-      rc = prollyMutMapInsert(pDst, e->pKey, e->nKey, e->intKey,
+      rc = prollyMutMapInsert(pDst, e->pKey, e->nKey, 0,
                                e->pVal, e->nVal);
     }else{
-      rc = prollyMutMapDelete(pDst, e->pKey, e->nKey, e->intKey);
+      rc = prollyMutMapDelete(pDst, e->pKey, e->nKey, 0);
     }
     if( rc!=SQLITE_OK ) return rc;
   }

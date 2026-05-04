@@ -70,7 +70,8 @@ static int buildFromEdits(
     ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
     if( pEntry->op==PROLLY_EDIT_INSERT ){
       rc = feedChunker(&chunker, pMut->flags,
-                       pEntry->pKey, pEntry->nKey, pEntry->intKey,
+                       pEntry->pKey, pEntry->nKey,
+                       prollyMutMapEntryIntKey(pEntry),
                        pEntry->pVal, pEntry->nVal);
       if( rc!=SQLITE_OK ){
         prollyChunkerFree(&chunker);
@@ -100,7 +101,7 @@ static int subtreeHasEdits(
   int cmp;
   if( !prollyMutMapIterValid(pIter) ) return 0;
   pEd = prollyMutMapIterEntry(pIter);
-  cmp = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
+  cmp = compareKeys(flags, pEd->pKey, pEd->nKey, prollyMutMapEntryIntKey(pEd),
                     pBoundKey, nBoundKey, iBoundKey);
   return (cmp <= 0);
 }
@@ -169,7 +170,7 @@ static int mergeLeaf(
       }else{
         prollyNodeKey(pLeaf, pLeaf->nItems - 1, &pLastKey, &nLastKey);
       }
-      pastLeaf = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
+      pastLeaf = compareKeys(flags, pEd->pKey, pEd->nKey, prollyMutMapEntryIntKey(pEd),
                                  pLastKey, nLastKey, iLastKey);
       if( pastLeaf > 0 ){
 
@@ -183,7 +184,7 @@ static int mergeLeaf(
     }
 
     cmp = compareKeys(flags, pCurKey, nCurKey, iCurKey,
-                          pEd->pKey, pEd->nKey, pEd->intKey);
+                          pEd->pKey, pEd->nKey, prollyMutMapEntryIntKey(pEd));
     if( cmp < 0 ){
 
       const u8 *pVal; int nVal;
@@ -197,7 +198,7 @@ static int mergeLeaf(
         u8 aEditKey[8];
         const u8 *pEK; int nEK;
         if( flags & PROLLY_NODE_INTKEY ){
-          encodeI64BE(aEditKey, pEd->intKey);
+          encodeI64BE(aEditKey, prollyMutMapEntryIntKey(pEd));
           pEK = aEditKey; nEK = 8;
         }else{
           pEK = pEd->pKey; nEK = pEd->nKey;
@@ -213,7 +214,7 @@ static int mergeLeaf(
         u8 aEditKey[8];
         const u8 *pEK; int nEK;
         if( flags & PROLLY_NODE_INTKEY ){
-          encodeI64BE(aEditKey, pEd->intKey);
+          encodeI64BE(aEditKey, prollyMutMapEntryIntKey(pEd));
           pEK = aEditKey; nEK = 8;
         }else{
           pEK = pEd->pKey; nEK = pEd->nKey;
@@ -238,7 +239,7 @@ static int mergeLeaf(
         u8 aEditKey[8];
         const u8 *pEK; int nEK;
         if( flags & PROLLY_NODE_INTKEY ){
-          encodeI64BE(aEditKey, pEd->intKey);
+          encodeI64BE(aEditKey, prollyMutMapEntryIntKey(pEd));
           pEK = aEditKey; nEK = 8;
         }else{
           pEK = pEd->pKey; nEK = pEd->nKey;

@@ -1241,7 +1241,7 @@ static void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
   pCur->eState = CURSOR_VALID;
   pCur->curFlags &= ~BTCF_AtLast;
   if( pCur->curIntKey ){
-    pCur->cachedIntKey = pEntry->intKey;
+    pCur->cachedIntKey = prollyMutMapEntryIntKey(pEntry);
     pCur->curFlags |= BTCF_ValidNKey;
   }else{
     pCur->curFlags &= ~BTCF_ValidNKey;
@@ -1389,7 +1389,7 @@ static int saveCursorPosition(BtCursor *pCur){
   if( pCur->curIntKey ){
     if( pCur->mmActive
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-      pCur->nKey = currentMutMapEntry(pCur)->intKey;
+      pCur->nKey = prollyMutMapEntryIntKey(currentMutMapEntry(pCur));
     }else{
       pCur->nKey = prollyCursorIntKey(&pCur->pCur);
     }
@@ -3587,8 +3587,9 @@ int sqlite3BtreeClosesWithCursor(Btree *p, BtCursor *pCur){
 static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
   if( pCur->curIntKey ){
     i64 tk = prollyCursorIntKey(&pCur->pCur);
-    if( tk < e->intKey ) return -1;
-    if( tk > e->intKey ) return 1;
+    i64 ek = prollyMutMapEntryIntKey(e);
+    if( tk < ek ) return -1;
+    if( tk > ek ) return 1;
     return 0;
   }else{
     const u8 *pK; int nK;
@@ -4508,7 +4509,7 @@ static i64 prollyBtCursorIntegerKey(BtCursor *pCur){
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    return currentMutMapEntry(pCur)->intKey;
+    return prollyMutMapEntryIntKey(currentMutMapEntry(pCur));
   }
   if( !prollyCursorIsValid(&pCur->pCur)
    && (pCur->curFlags & BTCF_ValidNKey) ){
@@ -4985,7 +4986,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     if( pCur->curIntKey ){
       if( pCur->mmActive
        && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-        savedIntKey = currentMutMapEntry(pCur)->intKey;
+        savedIntKey = prollyMutMapEntryIntKey(currentMutMapEntry(pCur));
         hasSavedKey = 1;
       }else if( !prollyCursorIsValid(&pCur->pCur)
        && (pCur->curFlags & BTCF_ValidNKey) ){
