@@ -5334,6 +5334,115 @@ static int mutmapAssertMatchesModel(
   return ok;
 }
 
+static void run_mutmap_resolve_sorted_pos(void){
+  /* Validates two new mutmap APIs that the per-table-mutmap migration
+  ** in subsequent commits depends on: (a) generation counter bumps
+  ** on every shift-inducing mutation but NOT on in-place op flips,
+  ** (b) prollyMutMapResolveSortedPos returns the right (idx, found)
+  ** for any key against either keepSorted=1 or keepSorted=0 maps. */
+  ProllyMutMap sorted, lazy;
+  i64 keys[] = { 10, 30, 20, 50, 40 };
+  int n = sizeof(keys)/sizeof(keys[0]);
+  int val = 1;
+  int i;
+  u32 gen0;
+  int idx, found;
+
+  printf("=== MutMap ResolveSortedPos Test ===\n\n");
+
+  check("rsp_init_sorted", prollyMutMapInitMode(&sorted, 1, 1)==SQLITE_OK);
+  check("rsp_init_lazy",   prollyMutMapInitMode(&lazy,   1, 0)==SQLITE_OK);
+  check("rsp_initial_gen_sorted_zero", sorted.generation == 0);
+  check("rsp_initial_gen_lazy_zero",   lazy.generation   == 0);
+
+  for(i=0; i<n; i++){
+    gen0 = sorted.generation;
+    check("rsp_insert_sorted_rc",
+          prollyMutMapInsert(&sorted, 0, 0, keys[i], (const u8*)&val, sizeof(val))==SQLITE_OK);
+    check("rsp_insert_bumps_gen_sorted", sorted.generation > gen0);
+
+    gen0 = lazy.generation;
+    check("rsp_insert_lazy_rc",
+          prollyMutMapInsert(&lazy,   0, 0, keys[i], (const u8*)&val, sizeof(val))==SQLITE_OK);
+    check("rsp_insert_bumps_gen_lazy",   lazy.generation   > gen0);
+  }
+
+  /* In-place value update on existing key does NOT bump generation —
+  ** the entry stays at the same sorted position so cursors don't
+  ** become stale. */
+  gen0 = sorted.generation;
+  val = 999;
+  check("rsp_inplace_update_sorted_rc",
+        prollyMutMapInsert(&sorted, 0, 0, 30, (const u8*)&val, sizeof(val))==SQLITE_OK);
+  check("rsp_inplace_does_not_bump_sorted", sorted.generation == gen0);
+
+  gen0 = lazy.generation;
+  check("rsp_inplace_update_lazy_rc",
+        prollyMutMapInsert(&lazy,   0, 0, 30, (const u8*)&val, sizeof(val))==SQLITE_OK);
+  check("rsp_inplace_does_not_bump_lazy",   lazy.generation == gen0);
+
+  /* ResolveSortedPos: keys present and absent, both modes. The
+  ** sorted order across both maps is {10,20,30,40,50} so positions
+  ** 0..4 should map to those keys in that order. */
+  check("rsp_resolve_present_10_sorted",
+        prollyMutMapResolveSortedPos(&sorted, 0, 0, 10, &idx, &found)==SQLITE_OK
+          && idx==0 && found);
+  check("rsp_resolve_present_30_sorted",
+        prollyMutMapResolveSortedPos(&sorted, 0, 0, 30, &idx, &found)==SQLITE_OK
+          && idx==2 && found);
+  check("rsp_resolve_present_50_sorted",
+        prollyMutMapResolveSortedPos(&sorted, 0, 0, 50, &idx, &found)==SQLITE_OK
+          && idx==4 && found);
+  check("rsp_resolve_absent_25_sorted",
+        prollyMutMapResolveSortedPos(&sorted, 0, 0, 25, &idx, &found)==SQLITE_OK
+          && idx==2 && !found);
+  check("rsp_resolve_absent_5_sorted",
+        prollyMutMapResolveSortedPos(&sorted, 0, 0,  5, &idx, &found)==SQLITE_OK
+          && idx==0 && !found);
+  check("rsp_resolve_absent_999_sorted",
+        prollyMutMapResolveSortedPos(&sorted, 0, 0, 999, &idx, &found)==SQLITE_OK
+          && idx==5 && !found);
+
+  /* Same expectations on the lazy (keepSorted=0) map — Resolve must
+  ** ensureOrder internally before bisecting. */
+  check("rsp_resolve_present_30_lazy",
+        prollyMutMapResolveSortedPos(&lazy,   0, 0, 30, &idx, &found)==SQLITE_OK
+          && idx==2 && found);
+  check("rsp_resolve_absent_25_lazy",
+        prollyMutMapResolveSortedPos(&lazy,   0, 0, 25, &idx, &found)==SQLITE_OK
+          && idx==2 && !found);
+  check("rsp_resolve_absent_999_lazy",
+        prollyMutMapResolveSortedPos(&lazy,   0, 0, 999, &idx, &found)==SQLITE_OK
+          && idx==5 && !found);
+
+  /* Empty map: idx=0, found=0 regardless of key. */
+  {
+    ProllyMutMap empty;
+    check("rsp_init_empty", prollyMutMapInitMode(&empty, 1, 1)==SQLITE_OK);
+    check("rsp_resolve_empty",
+          prollyMutMapResolveSortedPos(&empty, 0, 0, 42, &idx, &found)==SQLITE_OK
+            && idx==0 && !found);
+    prollyMutMapFree(&empty);
+  }
+
+  /* Delete-creates-DELETE-entry on an absent key bumps generation
+  ** because it adds an entry. */
+  gen0 = sorted.generation;
+  check("rsp_delete_absent_sorted_rc",
+        prollyMutMapDelete(&sorted, 0, 0, 999)==SQLITE_OK);
+  check("rsp_delete_absent_bumps_gen_sorted", sorted.generation > gen0);
+
+  /* Delete-flips-existing-entry-to-DELETE does NOT bump generation —
+  ** entry stays in place, only its op flips. */
+  gen0 = sorted.generation;
+  check("rsp_delete_existing_sorted_rc",
+        prollyMutMapDelete(&sorted, 0, 0, 30)==SQLITE_OK);
+  check("rsp_delete_existing_does_not_bump_sorted", sorted.generation == gen0);
+
+  prollyMutMapFree(&sorted);
+  prollyMutMapFree(&lazy);
+}
+
 static void run_mutmap_differential_randomized(void){
   ProllyMutMap sorted;
   ProllyMutMap lazy;
@@ -6235,6 +6344,7 @@ static const RegressionCase aCases[] = {
   { "checkout_dash_b_existing_branch_preserves_durable_state", "Checkout -b Existing Branch Preserves Durable State Test", run_checkout_dash_b_existing_branch_preserves_durable_state },
   { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
+  { "mutmap_resolve_sorted_pos", "MutMap ResolveSortedPos Test", run_mutmap_resolve_sorted_pos },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },
   { "refs_hash_rollback_restore", "Chunk Store Rollback Restores Refs Hash Test", run_chunk_store_rollback_restores_refs_hash },
