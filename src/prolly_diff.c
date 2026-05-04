@@ -22,19 +22,12 @@ static void diffCompareKeys(
   u8 flags,
   int *pCmp
 ){
-  if( flags & PROLLY_NODE_INTKEY ){
-    i64 iOld = prollyCursorIntKey(pOld);
-    i64 iNew = prollyCursorIntKey(pNew);
-    if( iOld < iNew )      *pCmp = -1;
-    else if( iOld > iNew )  *pCmp =  1;
-    else                     *pCmp =  0;
-  }else{
-    const u8 *pKeyOld; int nKeyOld;
-    const u8 *pKeyNew; int nKeyNew;
-    prollyCursorKey(pOld, &pKeyOld, &nKeyOld);
-    prollyCursorKey(pNew, &pKeyNew, &nKeyNew);
-    *pCmp = diffBlobKeyCmp(pKeyOld, nKeyOld, pKeyNew, nKeyNew);
-  }
+  const u8 *pKeyOld; int nKeyOld;
+  const u8 *pKeyNew; int nKeyNew;
+  (void)flags;
+  prollyCursorKey(pOld, &pKeyOld, &nKeyOld);
+  prollyCursorKey(pNew, &pKeyNew, &nKeyNew);
+  *pCmp = diffBlobKeyCmp(pKeyOld, nKeyOld, pKeyNew, nKeyNew);
 }
 
 static void diffFillKey(
@@ -347,17 +340,12 @@ static int diffNodeKeyCmp(
   const ProllyNode *pB, int iB,
   u8 flags
 ){
-  if( flags & PROLLY_NODE_INTKEY ){
-    i64 a = prollyNodeIntKey(pA, iA);
-    i64 b = prollyNodeIntKey(pB, iB);
-    return (a < b) ? -1 : (a > b) ? 1 : 0;
-  }else{
-    const u8 *pKA; int nKA;
-    const u8 *pKB; int nKB;
-    prollyNodeKey(pA, iA, &pKA, &nKA);
-    prollyNodeKey(pB, iB, &pKB, &nKB);
-    return diffBlobKeyCmp(pKA, nKA, pKB, nKB);
-  }
+  const u8 *pKA; int nKA;
+  const u8 *pKB; int nKB;
+  (void)flags;
+  prollyNodeKey(pA, iA, &pKA, &nKA);
+  prollyNodeKey(pB, iB, &pKB, &nKB);
+  return diffBlobKeyCmp(pKA, nKA, pKB, nKB);
 }
 
 static int diffLeaves(
@@ -368,11 +356,7 @@ static int diffLeaves(
 
   while( i < (int)pOld->nItems && j < (int)pNew->nItems ){
     int cmp;
-    if( flags & PROLLY_NODE_INTKEY ){
-      i64 ik = prollyNodeIntKey(pOld, i);
-      i64 jk = prollyNodeIntKey(pNew, j);
-      cmp = (ik < jk) ? -1 : (ik > jk) ? 1 : 0;
-    }else{
+    {
       const u8 *pKA; int nKA; const u8 *pKB; int nKB;
       prollyNodeKey(pOld, i, &pKA, &nKA);
       prollyNodeKey(pNew, j, &pKB, &nKB);
