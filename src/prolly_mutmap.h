@@ -56,6 +56,15 @@ struct ProllyMutMap {
   ProllyMutMapUndoRec *aUndo;
   int nUndo;
   int nUndoAlloc;
+  /* Bumped on every mutation that can shift cursor positions: insert
+  ** of a new key, delete of an existing key, savepoint rollback (drops
+  ** entries). NOT bumped by in-place value updates or savepoint
+  ** release (which only relabels bornAt). Cursors snapshot this value
+  ** when they record an mmIdx, then re-resolve their position by key
+  ** if the snapshot is stale. Staleness is impossible while the
+  ** mutmap has a single owning cursor (today's per-cursor model) but
+  ** matters once the mutmap is shared across cursors. */
+  u32 generation;
 };
 
 int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey);
@@ -72,6 +81,18 @@ int prollyMutMapFindRc(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
   ProllyMutMapEntry **ppEntry
+);
+
+/* Resolve a key to its current sorted-order index in the mutmap, or
+** the position where it would be inserted if absent. Output (*pIdx)
+** is in [0, nEntries]; (*pFound) is non-zero iff the key is present.
+** Used by cursors that cached an mmIdx at an earlier generation —
+** when generation has advanced, the cached idx may point at the
+** wrong entry, so the cursor re-resolves by its cached key. */
+int prollyMutMapResolveSortedPos(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  int *pIdx, int *pFound
 );
 
 ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx);

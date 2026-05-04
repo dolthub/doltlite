@@ -421,6 +421,10 @@ int prollyMutMapInsert(
   if( !mm->keepSorted ){
     hashInsertPhys(mm, phys);
   }
+  /* New entry shifts every later sorted position by +1 — invalidate any
+  ** mmIdx caches held by other cursors. In-place updates above this
+  ** branch don't reach here so they correctly leave generation alone. */
+  mm->generation++;
   return SQLITE_OK;
 }
 
@@ -500,6 +504,7 @@ int prollyMutMapDelete(
   if( !mm->keepSorted ){
     hashInsertPhys(mm, phys);
   }
+  mm->generation++;
   return SQLITE_OK;
 }
 
@@ -589,6 +594,11 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
     if( rc!=SQLITE_OK ) return rc;
   }
 
+  /* Rollback both reorders entries (compaction) and applies undo-log
+  ** in-place restorations — both can change what cursors see at any
+  ** mmIdx, so unconditionally invalidate cached positions. */
+  mm->generation++;
+
   mm->currentSavepointLevel = level - 1;
   return SQLITE_OK;
 }
@@ -659,6 +669,26 @@ ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx){
   return entryAtOrder(mm, idx);
 }
 
+int prollyMutMapResolveSortedPos(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  int *pIdx, int *pFound
+){
+  u8 keyBuf[8];
+  int rc;
+  *pIdx = 0;
+  *pFound = 0;
+  if( mm->nEntries==0 ) return SQLITE_OK;
+  prepKey(mm, &pKey, &nKey, intKey, keyBuf);
+  /* bsearch_key reads through aOrder; for unsorted maps we need to
+  ** materialize the sort first. ensureOrder is a no-op when keepSorted
+  ** is set or when the order is already clean. */
+  rc = ensureOrder(mm);
+  if( rc!=SQLITE_OK ) return rc;
+  *pIdx = bsearch_key(mm, pKey, nKey, pFound);
+  return SQLITE_OK;
+}
+
 int prollyMutMapOrderIndexFromEntry(ProllyMutMap *mm, ProllyMutMapEntry *pEntry){
   int phys = (int)(pEntry - mm->aEntries);
   if( !mm->keepSorted && mm->orderDirty ){
@@ -722,6 +752,7 @@ void prollyMutMapClear(ProllyMutMap *mm){
   }
   mm->nEntries = 0;
   mm->orderDirty = 0;
+  mm->generation++;
   if( mm->aHash && mm->nHashAlloc>0 ){
     memset(mm->aHash, 0, mm->nHashAlloc * sizeof(int));
   }

@@ -40,9 +40,20 @@ jobs:
         make DOLTLITE_PROLLY=0 sqlite3
 
     - name: Run benchmark
+      id: bench
       run: |
         cd build
-        BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh | tee /tmp/bench_results.md
+        # Capture script exit code separately from the output capture.
+        # Piping to `tee` would mask a ceiling-check failure (tee always
+        # exits 0), letting the job report green on a regression. Stash
+        # the rc and propagate it after the PR-comment step has run, so
+        # results are still visible on a failing run.
+        set +e
+        BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh > /tmp/bench_results.md
+        bench_rc=$?
+        set -e
+        cat /tmp/bench_results.md
+        echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
 
     - name: Comment PR with results
       continue-on-error: true
@@ -86,3 +97,11 @@ jobs:
               body: body,
             });
           }
+
+    - name: Enforce ceiling
+      run: |
+        rc="${{ steps.bench.outputs.bench_rc }}"
+        if [ "$rc" != "0" ]; then
+          echo "Benchmark exceeded performance ceiling (rc=$rc)" >&2
+          exit "$rc"
+        fi

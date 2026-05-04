@@ -1740,7 +1740,12 @@ static void test_28_rapid_small_commits(void){
       check("test_28: commit count in [0..10]", nLog>=0 && nLog<=10);
       if( nLog>0 ){
         int nRows = exec_int(db, "SELECT count(*) FROM t", -1);
-        check("test_28: rows match commits", nRows==nLog);
+        /* INSERT autocommits before the surrounding dolt_commit() runs;
+        ** SIGKILL can land in the gap, leaving the row durable in the
+        ** working set but no Dolt commit recorded for it (same race as
+        ** test_10). */
+        check("test_28: rows match commits or next insert",
+              nRows==nLog || nRows==nLog+1);
       }
     }
     sqlite3_close(db);
