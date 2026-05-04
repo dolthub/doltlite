@@ -396,6 +396,85 @@ SELECT dolt_rebase('main');
           (SELECT count(*) FROM pragma_foreign_key_list('c'))" \
   "SELECT CONCAT((SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c), '|', (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE table_name = 'c' AND referenced_table_name = 'p'))"
 
+oracle_poststate "rebase_recreate_fk_family_plus_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES p(u));
+INSERT INTO p VALUES (1, 100);
+INSERT INTO c VALUES (1, 100);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
+SELECT dolt_checkout('feat');
+DROP TABLE c;
+DROP TABLE p;
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE, label TEXT);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES p(u));
+INSERT INTO p VALUES (2, 200, 'x');
+INSERT INTO c VALUES (2, 200);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_recreate_fk_family');
+SELECT dolt_rebase('main');
+" "SELECT (SELECT count(*) FROM p) || '|' ||
+          (SELECT count(*) FROM c) || '|' ||
+          (SELECT count(*) FROM pragma_foreign_key_list('c'))" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c), '|', (SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE WHERE table_name = 'c' AND referenced_table_name = 'p'))"
+
+oracle_poststate "rebase_self_ref_fk_cascade" "
+PRAGMA foreign_keys = ON;
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  parent_id INTEGER,
+  FOREIGN KEY (parent_id) REFERENCES t(id) ON DELETE CASCADE
+);
+INSERT INTO t VALUES (1, NULL), (2, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (10, NULL);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_add_root');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (3, 2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_descendant');
+SELECT dolt_rebase('main');
+DELETE FROM t WHERE id = 1;
+" "SELECT (SELECT count(*) FROM t) || '|' ||
+          (SELECT group_concat(id || ':' || ifnull(parent_id, -1), ',') FROM (SELECT id, parent_id FROM t ORDER BY id) AS ordered_rows)" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM t), '|', (SELECT GROUP_CONCAT(CONCAT(id, ':', IFNULL(parent_id, -1)) ORDER BY id SEPARATOR ',') FROM t))"
+
+oracle_poststate "rebase_fk_chain_cascade" "
+PRAGMA foreign_keys = ON;
+CREATE TABLE gp(id INTEGER PRIMARY KEY);
+CREATE TABLE p(
+  id INTEGER PRIMARY KEY,
+  gp_id INTEGER,
+  FOREIGN KEY (gp_id) REFERENCES gp(id) ON DELETE CASCADE
+);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  p_id INTEGER,
+  FOREIGN KEY (p_id) REFERENCES p(id) ON DELETE CASCADE
+);
+INSERT INTO gp VALUES (1);
+INSERT INTO p VALUES (1, 1);
+INSERT INTO c VALUES (1, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');
+SELECT dolt_branch('feat');
+INSERT INTO gp VALUES (2);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_add_root');
+SELECT dolt_checkout('feat');
+INSERT INTO c VALUES (2, 1);
+SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_add_child');
+SELECT dolt_rebase('main');
+DELETE FROM gp WHERE id = 1;
+" "SELECT (SELECT count(*) FROM gp) || '|' ||
+          (SELECT count(*) FROM p) || '|' ||
+          (SELECT count(*) FROM c)" \
+  "SELECT CONCAT((SELECT COUNT(*) FROM gp), '|', (SELECT COUNT(*) FROM p), '|', (SELECT COUNT(*) FROM c))"
+
 oracle_error_reopen "rebase_fk_violation_rolls_back" "
 CREATE TABLE parent(pk INTEGER PRIMARY KEY, u INT UNIQUE);
 CREATE TABLE child(pk INTEGER PRIMARY KEY, u INT, FOREIGN KEY (u) REFERENCES parent(u));

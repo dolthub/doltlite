@@ -254,7 +254,10 @@ static int fsHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
   FsRemote *p = (FsRemote*)pRemote;
   int i;
   for(i=0; i<nHash; i++){
-    aResult[i] = chunkStoreHas(&p->store, &aHash[i]) ? 1 : 0;
+    int has = 0;
+    int rc = chunkStoreHas(&p->store, &aHash[i], &has);
+    if( rc!=SQLITE_OK ) return rc;
+    aResult[i] = has ? 1 : 0;
   }
   return SQLITE_OK;
 }
@@ -358,7 +361,10 @@ static int localHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
   LocalAsRemote *p = (LocalAsRemote*)pRemote;
   int i;
   for(i=0; i<nHash; i++){
-    aResult[i] = chunkStoreHas(p->pStore, &aHash[i]) ? 1 : 0;
+    int has = 0;
+    int rc = chunkStoreHas(p->pStore, &aHash[i], &has);
+    if( rc!=SQLITE_OK ) return rc;
+    aResult[i] = has ? 1 : 0;
   }
   return SQLITE_OK;
 }

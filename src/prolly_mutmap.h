@@ -12,13 +12,17 @@ typedef struct ProllyMutMapIter ProllyMutMapIter;
 
 struct ProllyMutMapEntry {
   u8 op;
-  i64 intKey;
   u8 *pKey;
   int nKey;
   u8 *pVal;
   int nVal;
   int bornAt;
 };
+
+/* Decodes a sortable 8-byte BE entry key back to i64. Only valid for
+** entries in an INT-mode map; the bytes layout matches the on-disk
+** PROLLY_NODE_INTKEY encoding (sign-flipped big-endian). */
+i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e);
 
 /* Lazy — allocated only when an in-place mutation under an active
 ** savepoint is about to overwrite the previous (op, value). */
@@ -52,6 +56,14 @@ struct ProllyMutMap {
   ProllyMutMapUndoRec *aUndo;
   int nUndo;
   int nUndoAlloc;
+  /* Bumped on every mutation that can shift cursor positions: insert
+  ** of a new key, delete of an existing key, savepoint rollback (drops
+  ** entries). NOT bumped by in-place value updates or savepoint
+  ** release (which only relabels bornAt). Cursors snapshot this value
+  ** when they record an mmIdx, then re-resolve their position by key
+  ** if the snapshot is stale. This matters now that per-table mutmaps
+  ** are shared across cursors. */
+  u32 generation;
 };
 
 int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey);
@@ -64,13 +76,22 @@ int prollyMutMapInsert(ProllyMutMap *mm,
 int prollyMutMapDelete(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey);
 
-ProllyMutMapEntry *prollyMutMapFind(ProllyMutMap *mm,
-                                     const u8 *pKey, int nKey, i64 intKey);
-
 int prollyMutMapFindRc(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
   ProllyMutMapEntry **ppEntry
+);
+
+/* Resolve a key to its current sorted-order index in the mutmap, or
+** the position where it would be inserted if absent. Output (*pIdx)
+** is in [0, nEntries]; (*pFound) is non-zero iff the key is present.
+** Used by cursors that cached an mmIdx at an earlier generation —
+** when generation has advanced, the cached idx may point at the
+** wrong entry, so the cursor re-resolves by its cached key. */
+int prollyMutMapResolveSortedPos(
+  ProllyMutMap *mm,
+  const u8 *pKey, int nKey, i64 intKey,
+  int *pIdx, int *pFound
 );
 
 ProllyMutMapEntry *prollyMutMapEntryAt(ProllyMutMap *mm, int idx);

@@ -1,19 +1,32 @@
 #!/bin/bash
 #
-# Sysbench-style OLTP benchmark: doltlite vs stock SQLite
+# Sysbench-style OLTP benchmark (composite PK variant): doltlite vs stock SQLite
 #
-# Uses a single CLI invocation per test to avoid multi-connection issues.
-# Each test gets its own database with identical pre-populated data.
+# Same shapes as test/sysbench_compare.sh, but every workload runs against
+# tables with a 2-column INTEGER composite PRIMARY KEY((a,b)). Companion to
+# the TEXT PK / BLOB PK suites — verifies the non-INTKEY perf work
+# generalizes to multi-column keys.
+#
+# Logical id i is split as (a, b) = (i // 10000, i %% 10000) so lex (a,b)
+# tuple ordering matches integer ordering for any R below 10**8.
+#
+# Default row count (BENCH_ROWS) is smaller than the classic suite because
+# every doltlite write here goes through the per-statement non-INTKEY flush
+# path, and full-scale R blows the CI 15-minute budget in the prepare phase
+# alone.
+#
+# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 2×) on file-backed
+# reads + writes (wrapped) and autocommit writes. In-memory and reads-
+# in-autocommit are reporting-only.
 #
 set -e
 
 DOLTLITE=${DOLTLITE:-./doltlite}
 SQLITE3=${SQLITE3:-./sqlite3}
-ROWS=${BENCH_ROWS:-10000}
+ROWS=${BENCH_ROWS:-1000}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2}
 SEED=42
 TMPDIR=$(mktemp -d)
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2}
-BENCH_SECTION_MODE=${BENCH_SECTION_MODE:-full}
 
 cleanup() { rm -rf "$TMPDIR"; }
 trap cleanup EXIT
@@ -43,27 +56,49 @@ def rint(a, b):
 def rstr(n):
     return ''.join(random.choices(string.ascii_lowercase, k=n))
 
-# Common schema + data
+# Split an integer i into (a, b) where (a, b) tuple-compares the same
+# as i. With B=10000, this works for any R < 10**8 (we never go past
+# the CI's BENCH_ROWS=1000 default).
+B = 10000
+def parts(i):
+    return (i // B, i % B)
+def kw(i):
+    a, b = parts(i)
+    return f"a={a} AND b={b}"
+def kvals(i):
+    a, b = parts(i)
+    return f"{a},{b}"
+def ktuple(i):
+    a, b = parts(i)
+    return f"({a},{b})"
+def kbetween(s, e):
+    sa, sb = parts(s)
+    ea, eb = parts(e)
+    return f"(a,b) BETWEEN ({sa},{sb}) AND ({ea},{eb})"
+
+# Common schema + data — sbtest1 / sbtest2 use a 2-column composite PK.
+# sbtest_types keeps INTEGER PK because that table tests value-type
+# coverage, not PK shape.
 def write_prepare(f):
-    f.write("CREATE TABLE sbtest1(id INTEGER PRIMARY KEY, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '');\n")
+    f.write("CREATE TABLE sbtest1(a INTEGER NOT NULL, b INTEGER NOT NULL, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '', PRIMARY KEY(a,b)) WITHOUT ROWID;\n")
     f.write("CREATE INDEX k_idx ON sbtest1(k);\n")
     f.write("BEGIN;\n")
     for i in range(1, R+1):
-        f.write(f"INSERT INTO sbtest1 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest1 VALUES({kvals(i)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def write_prepare_join(f):
-    f.write("CREATE TABLE sbtest2(id INTEGER PRIMARY KEY, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '');\n")
+    f.write("CREATE TABLE sbtest2(a INTEGER NOT NULL, b INTEGER NOT NULL, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '', PRIMARY KEY(a,b)) WITHOUT ROWID;\n")
     f.write("CREATE INDEX k_idx2 ON sbtest2(k);\n")
     f.write("BEGIN;\n")
     for i in range(1, min(R,1000)+1):
-        f.write(f"INSERT INTO sbtest2 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest2 VALUES({kvals(i)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def write_prepare_types(f):
     f.write("CREATE TABLE sbtest_types(id INTEGER PRIMARY KEY, ival INTEGER, rval REAL, tval TEXT);\n")
     f.write("BEGIN;\n")
-    for i in range(1, 1001):
+    for i in range(1, min(R,1000)+1):
         f.write(f"INSERT INTO sbtest_types VALUES({i},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
 
@@ -91,37 +126,42 @@ def prep_with_types(f):
     write_prepare_types(f)
 
 # --- Tests ---
+# All sbtest1 / sbtest2 lookups go through the (a,b) composite PK;
+# ranges use SQL tuple ordering, which sqlite implements as
+# component-wise lex compare. With keys from parts(1) up to parts(R),
+# (a,b) BETWEEN parts(s) AND parts(s+99) covers the same logical row
+# range as the integer-PK suite.
 
 def w_bulk_insert(f):
-    f.write("CREATE TABLE sbtest_bulk(id INTEGER PRIMARY KEY, k INTEGER, c TEXT, pad TEXT);\n")
+    f.write("CREATE TABLE sbtest_bulk(a INTEGER, b INTEGER, k INTEGER, c TEXT, pad TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;\n")
     f.write("BEGIN;\n")
     for i in range(1, R+1):
-        f.write(f"INSERT INTO sbtest_bulk VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest_bulk VALUES({kvals(i)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_point_select(f):
     for _ in range(10000):
-        f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
+        f.write(f"SELECT c FROM sbtest1 WHERE {kw(rint(1,R))};\n")
 
 def w_range_select(f):
     for _ in range(1000):
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE {kbetween(s, s+99)};\n")
 
 def w_sum_range(f):
     for _ in range(1000):
-        s=rint(1,R-100)
-        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE {kbetween(s, s+99)};\n")
 
 def w_order_range(f):
     for _ in range(100):
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE {kbetween(s, s+99)} ORDER BY c;\n")
 
 def w_distinct_range(f):
     for _ in range(100):
-        s=rint(1,R-100)
-        f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE {kbetween(s, s+99)} ORDER BY c;\n")
 
 def w_index_scan(f):
     for _ in range(1000):
@@ -130,73 +170,75 @@ def w_index_scan(f):
 def w_update_index(f):
     f.write("BEGIN;\n")
     for _ in range(10000):
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE {kw(rint(1,R))};\n")
     f.write("COMMIT;\n")
 
 def w_update_non_index(f):
     f.write("BEGIN;\n")
     for _ in range(10000):
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE {kw(rint(1,R))};\n")
     f.write("COMMIT;\n")
 
 def w_delete_insert(f):
     f.write("BEGIN;\n")
     for _ in range(5000):
         id=rint(1,R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE {kw(id)};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({kvals(id)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_oltp_insert(f):
     f.write("BEGIN;\n")
     for i in range(R+1, R+5001):
-        f.write(f"INSERT INTO sbtest1 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest1 VALUES({kvals(i)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_write_only(f):
     f.write("BEGIN;\n")
     for _ in range(1000):
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE {kw(rint(1,R))};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE {kw(rint(1,R))};\n")
         id=rint(1,R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE {kw(id)};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({kvals(id)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def w_select_random_points(f):
     for _ in range(1000):
-        pts=','.join(str(rint(1,R)) for _ in range(10))
-        f.write(f"SELECT id,k,c,pad FROM sbtest1 WHERE id IN ({pts});\n")
+        pts=','.join(ktuple(rint(1,R)) for _ in range(10))
+        f.write(f"SELECT a,b,k,c,pad FROM sbtest1 WHERE (a,b) IN ({pts});\n")
 
 def w_select_random_ranges(f):
     for _ in range(1000):
-        s=rint(1,R-10)
-        f.write(f"SELECT count(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+9};\n")
+        s=rint(1,max(R-10,1))
+        f.write(f"SELECT count(k) FROM sbtest1 WHERE {kbetween(s, s+9)};\n")
 
 def w_covering_index_scan(f):
     for _ in range(1000):
-        s=rint(1,R-100)
+        s=rint(1,max(R-100,1))
         f.write(f"SELECT count(k) FROM sbtest1 WHERE k BETWEEN {s} AND {s+99};\n")
 
 def w_groupby_scan(f):
     for _ in range(100):
-        s=rint(1,R-1000)
-        f.write(f"SELECT k, count(*) FROM sbtest1 WHERE id BETWEEN {s} AND {s+999} GROUP BY k ORDER BY k;\n")
+        s=rint(1,max(R-1000,1))
+        f.write(f"SELECT k, count(*) FROM sbtest1 WHERE {kbetween(s, s+999)} GROUP BY k ORDER BY k;\n")
 
 def w_index_join(f):
     for _ in range(500):
-        s=rint(1,R-10)
-        f.write(f"SELECT a.id, b.id FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE a.id BETWEEN {s} AND {s+9};\n")
+        s=rint(1,max(R-10,1))
+        sa,sb=parts(s); ea,eb=parts(s+9)
+        f.write(f"SELECT a.a, a.b, b.a, b.b FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE (a.a,a.b) BETWEEN ({sa},{sb}) AND ({ea},{eb});\n")
 
 def w_index_join_scan(f):
     for _ in range(100):
         s=rint(1,min(R,950))
-        f.write(f"SELECT count(*) FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE b.id BETWEEN {s} AND {s+49};\n")
+        sa,sb=parts(s); ea,eb=parts(s+49)
+        f.write(f"SELECT count(*) FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE (b.a,b.b) BETWEEN ({sa},{sb}) AND ({ea},{eb});\n")
 
 def w_types_delete_insert(f):
     f.write("BEGIN;\n")
     for _ in range(5000):
-        id=rint(1,1000)
+        id=rint(1,min(R,1000))
         f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
         f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
@@ -212,30 +254,30 @@ def w_table_scan(f):
 def w_read_only(f):
     for _ in range(1000):
         for _ in range(10):
-            f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99} ORDER BY c;\n")
+            f.write(f"SELECT c FROM sbtest1 WHERE {kw(rint(1,R))};\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE {kbetween(s, s+99)};\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE {kbetween(s, s+99)};\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE {kbetween(s, s+99)} ORDER BY c;\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT DISTINCT c FROM sbtest1 WHERE {kbetween(s, s+99)} ORDER BY c;\n")
 
 def w_read_write(f):
     f.write("BEGIN;\n")
     for _ in range(1000):
         for _ in range(10):
-            f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s=rint(1,R-100)
-        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+            f.write(f"SELECT c FROM sbtest1 WHERE {kw(rint(1,R))};\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT c FROM sbtest1 WHERE {kbetween(s, s+99)};\n")
+        s=rint(1,max(R-100,1))
+        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE {kbetween(s, s+99)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE {kw(rint(1,R))};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE {kw(rint(1,R))};\n")
         id=rint(1,R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE {kw(id)};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({kvals(id)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 # Generate all test SQL files
@@ -280,43 +322,43 @@ make_test("oltp_read_write",     prep_main, w_read_write)
 AC = 200  # statements per autocommit test
 
 def w_bulk_insert_autocommit(f):
-    f.write("CREATE TABLE sbtest_ac_bulk(id INTEGER PRIMARY KEY, k INTEGER, c TEXT, pad TEXT);\n")
+    f.write("CREATE TABLE sbtest_ac_bulk(a INTEGER, b INTEGER, k INTEGER, c TEXT, pad TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;\n")
     for i in range(1, AC+1):
-        f.write(f"INSERT INTO sbtest_ac_bulk VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest_ac_bulk VALUES({kvals(i)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_oltp_insert_autocommit(f):
     for i in range(R+1, R+AC+1):
-        f.write(f"INSERT INTO sbtest1 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"INSERT INTO sbtest1 VALUES({kvals(i)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_update_index_autocommit(f):
     for _ in range(AC):
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE {kw(rint(1,R))};\n")
 
 def w_update_non_index_autocommit(f):
     for _ in range(AC):
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE {kw(rint(1,R))};\n")
 
 def w_delete_insert_autocommit(f):
     # Each iteration emits 2 statements (DELETE + INSERT OR REPLACE).
     # Halve the loop so total commits ≈ AC.
     for _ in range(AC // 2):
         id = rint(1, R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE {kw(id)};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({kvals(id)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_write_only_autocommit(f):
     # Each iteration emits 4 statements; quarter the loop so total commits ≈ AC.
     for _ in range(AC // 4):
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE {kw(rint(1,R))};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE {kw(rint(1,R))};\n")
         id = rint(1, R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE {kw(id)};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({kvals(id)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 def w_types_delete_insert_autocommit(f):
     # 2 statements per iteration; halve the loop.
     for _ in range(AC // 2):
-        id = rint(1, 1000)
+        id = rint(1, min(R, 1000))
         f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
         f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
 
@@ -327,16 +369,16 @@ def w_read_write_autocommit(f):
     iters = AC // 4
     for _ in range(iters):
         for _ in range(10):
-            f.write(f"SELECT c FROM sbtest1 WHERE id={rint(1,R)};\n")
-        s = rint(1, R-100)
-        f.write(f"SELECT c FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        s = rint(1, R-100)
-        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE id BETWEEN {s} AND {s+99};\n")
-        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE id={rint(1,R)};\n")
-        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE id={rint(1,R)};\n")
+            f.write(f"SELECT c FROM sbtest1 WHERE {kw(rint(1,R))};\n")
+        s = rint(1, max(R-100, 1))
+        f.write(f"SELECT c FROM sbtest1 WHERE {kbetween(s, s+99)};\n")
+        s = rint(1, max(R-100, 1))
+        f.write(f"SELECT SUM(k) FROM sbtest1 WHERE {kbetween(s, s+99)};\n")
+        f.write(f"UPDATE sbtest1 SET k={rint(1,R)} WHERE {kw(rint(1,R))};\n")
+        f.write(f"UPDATE sbtest1 SET c='{rstr(60)}' WHERE {kw(rint(1,R))};\n")
         id = rint(1, R)
-        f.write(f"DELETE FROM sbtest1 WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({id},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
+        f.write(f"DELETE FROM sbtest1 WHERE {kw(id)};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest1 VALUES({kvals(id)},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
 
 make_test("oltp_bulk_insert_ac",      prep_main, w_bulk_insert_autocommit)
 make_test("oltp_insert_ac",           prep_main, w_oltp_insert_autocommit)
@@ -382,8 +424,11 @@ else:
 }
 
 bench_runs_for_test() {
-  # BENCH_RUNS=1 for fast local iteration; default 11 for stable median.
-  echo "${BENCH_RUNS:-11}"
+  # BENCH_RUNS=1 for fast local iteration; default 5 for non-INTKEY
+  # suites — each non-INTKEY write on doltlite goes through a per-
+  # statement flush path, so 11 runs blow the CI budget. Median of 5
+  # is still stable enough for tracking ratios across PRs.
+  echo "${BENCH_RUNS:-5}"
 }
 
 median_us() {
@@ -453,105 +498,59 @@ run_section() {
   echo "| Average |  |  | ${avg_ratio} |"
 }
 
-case "$BENCH_SECTION_MODE" in
-  full)
-    echo "<!-- benchmark:classic -->"
-    echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
-    echo ""
-    echo "### In-Memory"
-    echo ""
-    echo "#### Reads"
-    echo ""
-    run_section "$READ_TESTS" ":memory:" ":memory:"
-    echo ""
-    echo "#### Writes"
-    echo ""
-    run_section "$WRITE_TESTS" ":memory:" ":memory:"
-    echo ""
-    echo "### File-Backed"
-    echo ""
-    echo "#### Reads"
-    echo ""
-    run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
-    echo ""
-    echo "#### Writes"
-    echo ""
-    run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
-    echo ""
-    echo "### File-Backed (autocommit)"
-    echo ""
-    echo "_Each statement runs as its own transaction — exposes per-commit_"
-    echo "_fixed costs that the wrapped-in-BEGIN/COMMIT tests amortize away._"
-    echo ""
-    echo "#### Reads"
-    echo ""
-    echo "_Reads have no commit cost; these are the same SQL files as the_"
-    echo "_File-Backed Reads section, included here for symmetry and to_"
-    echo "_catch any per-statement overhead doltlite pays on the read path._"
-    echo ""
-    run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
-    echo ""
-    echo "#### Writes"
-    echo ""
-    run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
-    ;;
-  wrapped)
-    echo "<!-- benchmark:classic -->"
-    echo "## Sysbench-Style Benchmark: Doltlite vs SQLite"
-    echo ""
-    echo "### In-Memory"
-    echo ""
-    echo "#### Reads"
-    echo ""
-    run_section "$READ_TESTS" ":memory:" ":memory:"
-    echo ""
-    echo "#### Writes"
-    echo ""
-    run_section "$WRITE_TESTS" ":memory:" ":memory:"
-    echo ""
-    echo "### File-Backed"
-    echo ""
-    echo "#### Reads"
-    echo ""
-    run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
-    echo ""
-    echo "#### Writes"
-    echo ""
-    run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
-    ;;
-  autocommit)
-    echo "## Sysbench-Style Benchmark (autocommit): Doltlite vs SQLite"
-    echo ""
-    echo "_Moved out of the classic benchmark job so per-commit costs report separately._"
-    echo ""
-    echo "### File-Backed (autocommit)"
-    echo ""
-    echo "_Each statement runs as its own transaction — exposes per-commit_"
-    echo "_fixed costs that the wrapped-in-BEGIN/COMMIT tests amortize away._"
-    echo ""
-    echo "#### Reads"
-    echo ""
-    echo "_Reads have no commit cost; these are the same SQL files as the_"
-    echo "_File-Backed Reads section, included here for symmetry and to_"
-    echo "_catch any per-statement overhead doltlite pays on the read path._"
-    echo ""
-    run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
-    echo ""
-    echo "#### Writes"
-    echo ""
-    run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
-    ;;
-  *)
-    echo "unknown BENCH_SECTION_MODE: $BENCH_SECTION_MODE" >&2
-    exit 2
-    ;;
-esac
+echo "<!-- benchmark:compositepk -->"
+echo "## Sysbench-Style Benchmark (composite PK): Doltlite vs SQLite"
+echo ""
+echo "_Companion to the classic Sysbench-Style Benchmark. Every workload here"
+echo "runs against tables with a 2-column INTEGER \`PRIMARY KEY(a, b) WITHOUT ROWID\`._"
+echo "_File-backed sections gated at ${BENCH_MAX_MULTIPLIER}× — in-memory_"
+echo "_and autocommit reads are reporting-only._"
+echo ""
+echo "### In-Memory"
+echo ""
+echo "#### Reads"
+echo ""
+run_section "$READ_TESTS" ":memory:" ":memory:"
+echo ""
+echo "#### Writes"
+echo ""
+run_section "$WRITE_TESTS" ":memory:" ":memory:"
+echo ""
+echo "### File-Backed"
+echo ""
+echo "#### Reads"
+echo ""
+run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+echo ""
+echo "#### Writes"
+echo ""
+run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+
+echo ""
+echo "### File-Backed (autocommit)"
+echo ""
+echo "_Each statement runs as its own transaction — exposes per-commit_"
+echo "_fixed costs that the wrapped-in-BEGIN/COMMIT tests amortize away._"
+echo ""
+echo "#### Reads"
+echo ""
+echo "_Reads have no commit cost; these are the same SQL files as the_"
+echo "_File-Backed Reads section, included here for symmetry and to_"
+echo "_catch any per-statement overhead doltlite pays on the read path._"
+echo ""
+run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+echo ""
+echo "#### Writes"
+echo ""
+run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
 echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"
 
 # ============================================================
-# Enforce performance ceiling (exit 1 if any test exceeds limit)
+# Enforce performance ceiling — gates the same shape sysbench_compare.sh
+# does (file-backed wrapped reads + writes, plus autocommit writes), so
+# a regression on composite PK shows up as a CI failure.
 # ============================================================
 check_ceiling() {
   local tests="$1" db_sq="$2" db_dl="$3" max="$4"
@@ -571,23 +570,19 @@ check_ceiling() {
   return $failed
 }
 
-if [ "$BENCH_SECTION_MODE" != "autocommit" ]; then
-  echo ""
-  echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
-  echo ""
+echo ""
+echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
+echo ""
 
-  ceiling_ok=0
-  check_ceiling "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-  check_ceiling "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-  if [ "$BENCH_SECTION_MODE" = "full" ]; then
-    check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-  fi
+ceiling_ok=0
+check_ceiling "$READ_TESTS"     "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "$WRITE_TESTS"    "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 
-  if [ "$ceiling_ok" = "0" ]; then
-    echo "All tests within ceilings."
-  else
-    echo ""
-    echo "**FAILED**: One or more tests exceeded their ceiling."
-    exit 1
-  fi
+if [ "$ceiling_ok" = "0" ]; then
+  echo "All tests within ceilings."
+else
+  echo ""
+  echo "**FAILED**: One or more tests exceeded their ceiling."
+  exit 1
 fi

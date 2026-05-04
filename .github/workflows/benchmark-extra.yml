@@ -1,4 +1,14 @@
-name: Benchmark
+name: Benchmark Extra
+
+# Companion to Benchmark. Runs three non-INTKEY sysbench variants
+# (TEXT PK, BLOB PK, composite PK) plus the autocommit suite. Each
+# non-INTKEY variant is gated at 3× sqlite on file-backed sections —
+# 2× is too flaky here because three sequential write-heavy suites on
+# a shared GitHub runner produce enough variance that individual tests
+# regularly land between 2× and 3× without any underlying perf change.
+# Local script defaults stay at 2×; loosen only on CI.
+# BENCH_RUNS=5 across the job — each non-INTKEY write is a per-
+# statement flush, so the default 11 runs blows the 15-minute budget.
 
 on:
   push:
@@ -10,10 +20,14 @@ permissions:
   issues: write
   pull-requests: write
 
+env:
+  BENCH_RUNS: 5
+  BENCH_MAX_MULTIPLIER: 3
+
 jobs:
-  benchmark:
+  benchmark-extra:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
 
     steps:
     - uses: actions/checkout@v4
@@ -39,20 +53,33 @@ jobs:
         make doltlite
         make DOLTLITE_PROLLY=0 sqlite3
 
-    - name: Run benchmark
+    - name: Run benchmarks
       id: bench
       run: |
         cd build
-        # Capture script exit code separately from the output capture.
-        # Piping to `tee` would mask a ceiling-check failure (tee always
-        # exits 0), letting the job report green on a regression. Stash
-        # the rc and propagate it after the PR-comment step has run, so
-        # results are still visible on a failing run.
+        # Each non-INTKEY script enforces a 2× ceiling; capture rc per
+        # script and merge so a single ceiling break fails the job after
+        # the PR-comment step has run. Autocommit suite is reporting-
+        # only (sysbench_compare.sh skips ceiling on autocommit).
         set +e
-        BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh > /tmp/bench_results.md
-        bench_rc=$?
+        bash ../test/sysbench_compare_textpk.sh      > /tmp/bench_textpk.md
+        textpk_rc=$?
+        bash ../test/sysbench_compare_blobpk.sh      > /tmp/bench_blobpk.md
+        blobpk_rc=$?
+        bash ../test/sysbench_compare_compositepk.sh > /tmp/bench_compositepk.md
+        compositepk_rc=$?
+        BENCH_SECTION_MODE=autocommit \
+          bash ../test/sysbench_compare.sh           > /tmp/bench_autocommit.md
+        ac_rc=$?
         set -e
-        cat /tmp/bench_results.md
+        cat /tmp/bench_textpk.md /tmp/bench_blobpk.md \
+            /tmp/bench_compositepk.md /tmp/bench_autocommit.md \
+            > /tmp/bench_extra_results.md
+        cat /tmp/bench_extra_results.md
+        bench_rc=0
+        for rc in "$textpk_rc" "$blobpk_rc" "$compositepk_rc" "$ac_rc"; do
+          if [ "$rc" != "0" ]; then bench_rc=$rc; fi
+        done
         echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
 
     - name: Comment PR with results
@@ -64,22 +91,25 @@ jobs:
           // template-literal-unsafe chars in it) never has to round-trip
           // through YAML scalars or JS template-literal parsing.
           const fs = require('fs');
-          const body = fs.readFileSync('/tmp/bench_results.md', 'utf8');
+          const body = fs.readFileSync('/tmp/bench_extra_results.md', 'utf8');
 
           if (!context.issue.number) {
             console.log('No PR context (push event) — skipping comment');
             return;
           }
 
-          // Find existing classic benchmark comment
+          // Find existing benchmark-extra comment. Markers used to be
+          // textpk-only; now we look for any of the non-INTKEY markers.
           const comments = await github.rest.issues.listComments({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
           });
           const botComment = comments.data.find(c =>
-            c.body.includes('<!-- benchmark:classic -->') ||
-            c.body.includes('## Sysbench-Style Benchmark: Doltlite vs SQLite')
+            c.body.includes('<!-- benchmark:textpk -->') ||
+            c.body.includes('<!-- benchmark:blobpk -->') ||
+            c.body.includes('<!-- benchmark:compositepk -->') ||
+            c.body.includes('## Sysbench-Style Benchmark (TEXT PK): Doltlite vs SQLite')
           );
 
           if (botComment) {

@@ -130,6 +130,18 @@ void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVa
   *pnVal = (int)(off1 - off0);
 }
 
+void prollyEncodeIntKey(i64 v, u8 buf[8]){
+  u64 u = ((u64)v) ^ ((u64)1 << 63);
+  buf[0] = (u8)(u >> 56);
+  buf[1] = (u8)(u >> 48);
+  buf[2] = (u8)(u >> 40);
+  buf[3] = (u8)(u >> 32);
+  buf[4] = (u8)(u >> 24);
+  buf[5] = (u8)(u >> 16);
+  buf[6] = (u8)(u >> 8);
+  buf[7] = (u8)u;
+}
+
 i64 prollyNodeIntKey(const ProllyNode *pNode, int i){
   u32 off;
   const u8 *p;

@@ -127,7 +127,7 @@ static int csReadIndex(ChunkStore *cs);
 static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData);
 static int csSearchIndex(const ChunkIndexEntry *aIdx, int nIdx,
                          const ProllyHash *pHash);
-static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash);
+static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
 static int csIndexEntryCmp(const void *a, const void *b);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
 static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e);
@@ -141,6 +141,8 @@ static int csReplayWal(ChunkStore *cs);
 static void csFreeRefsState(ChunkStore *cs);
 static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData);
 static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc);
+static int csReplaceRefsStateFromBlob(ChunkStore *cs, const u8 *data, int nData,
+                                      int markCommitted);
 static int csReloadFromDisk(ChunkStore *cs);
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged);
 
@@ -539,7 +541,7 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   sqlite3_int64 sizeNow = -1;
   int rc = SQLITE_OK;
 
-  if( !cs->pFile ) return SQLITE_OK;
+  if( !cs->pFile ) return SQLITE_IOERR;
 
   rc = sqlite3OsTruncate(cs->pFile, origFileSize);
   if( rc==SQLITE_OK ){
@@ -677,23 +679,31 @@ static int csPendHTEnsure(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash){
-  int i; u32 b;
-  if( cs->nPending==0 ) return -1;
-  if( csPendHTEnsure(cs)!=SQLITE_OK ){
+static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
+  int i; u32 b; int rc;
+  *pIdx = -1;
+  if( cs->nPending==0 ) return SQLITE_OK;
+  rc = csPendHTEnsure(cs);
+  if( rc!=SQLITE_OK ){
 
     for(i=0; i<cs->nPending; i++){
-      if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ) return i;
+      if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ){
+        *pIdx = i;
+        return SQLITE_OK;
+      }
     }
-    return -1;
+    return rc;
   }
   b = csPendBucket(pHash, cs->nPendingHTSize - 1);
   i = cs->aPendingHT[b];
   while( i>=0 ){
-    if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ) return i;
+    if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ){
+      *pIdx = i;
+      return SQLITE_OK;
+    }
     i = cs->aPendingHTNext[i];
   }
-  return -1;
+  return SQLITE_OK;
 }
 
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
@@ -751,7 +761,7 @@ static int csReadManifest(ChunkStore *cs){
 
   cs->nChunks = (int)CS_READ_U32(aBuf + 28);
   cs->iIndexOffset = CS_READ_I64(aBuf + 32);
-  cs->nIndexSize = (int)CS_READ_U32(aBuf + 40);
+  cs->nIndexSize = (i64)CS_READ_U32(aBuf + 40);
 
   cs->iWalOffset = CS_READ_I64(aBuf + 84);
   memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
@@ -761,6 +771,7 @@ static int csReadManifest(ChunkStore *cs){
 
 static int csReadIndex(ChunkStore *cs){
   int rc;
+  i64 nEntries64;
   int nEntries;
   u8 *aBuf;
   int i;
@@ -773,10 +784,14 @@ static int csReadIndex(ChunkStore *cs){
     return SQLITE_OK;
   }
 
-  nEntries = cs->nIndexSize / CHUNK_INDEX_ENTRY_SIZE;
-  if( nEntries * CHUNK_INDEX_ENTRY_SIZE != cs->nIndexSize ){
+  nEntries64 = cs->nIndexSize / CHUNK_INDEX_ENTRY_SIZE;
+  if( nEntries64 * CHUNK_INDEX_ENTRY_SIZE != cs->nIndexSize ){
     return SQLITE_CORRUPT;
   }
+  if( nEntries64 > INT_MAX ){
+    return SQLITE_TOOBIG;
+  }
+  nEntries = (int)nEntries64;
 
   /* Fast path: on hosts where in-memory ChunkIndexEntry encoding
   ** matches the on-disk byte layout (little-endian + 32-byte
@@ -804,7 +819,7 @@ static int csReadIndex(ChunkStore *cs){
   cs->aIndexMmapBase = 0;
   cs->aIndexMmapSize = 0;
 
-  aBuf = (u8 *)sqlite3_malloc(cs->nIndexSize);
+  aBuf = (u8 *)sqlite3_malloc64(cs->nIndexSize);
   if( aBuf == 0 ){
     sqlite3_free(cs->aIndex);
     cs->aIndex = 0;
@@ -874,7 +889,6 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
 ** the compacted region on disk and only move on GC. */
 static int csReplayWal(ChunkStore *cs){
   i64 walSize;
-  u8 *walData;
   ChunkStoreReplayState saved;
   i64 pos;
   int nPendingBefore = cs->nPending;
@@ -883,6 +897,8 @@ static int csReplayWal(ChunkStore *cs){
   ChunkStore tmpRefs;
   int haveTmpRefs = 0;
   int rc = SQLITE_OK;
+
+  memset(&tmpRefs, 0, sizeof(tmpRefs));
 
   csCaptureReplayState(cs, &saved);
 
@@ -911,40 +927,22 @@ static int csReplayWal(ChunkStore *cs){
     return SQLITE_OK;
   }
 
-  walData = (u8*)sqlite3_malloc64(walSize);
-  if( !walData ) return SQLITE_NOMEM;
-  {
-    /* Read in chunks of at most 1GB to avoid truncating walSize to int. */
-    i64 remaining = walSize;
-    i64 off = cs->iWalOffset;
-    u8 *p = walData;
-    while( remaining > 0 ){
-      int n = (remaining > 0x40000000) ? 0x40000000 : (int)remaining;
-      int rc = sqlite3OsRead(cs->pFile, p, n, off);
-      if( rc != SQLITE_OK ){
-        sqlite3_free(walData);
-        return rc;
-      }
-      p += n;
-      off += n;
-      remaining -= n;
-    }
-  }
-
-  /* walData is a temporary scan buffer. Once we've extracted the
-  ** chunk index entries into cs->aPending below, we can free it —
-  ** subsequent reads will go through the chunk store's normal pread
-  ** path against the file's WAL region. The aIndex offsets we
-  ** install point at the on-disk length prefix of each chunk record,
-  ** matching the convention used for committed-region entries. */
+  /* Do not materialize the entire WAL in memory. Large databases can
+  ** have multi-gigabyte WAL regions; reading them into one malloc
+  ** trips SQLite's allocator ceiling around 2 GiB and misreports
+  ** SQLITE_NOMEM during open. Replay only needs sequential headers:
+  ** chunk payloads are skipped, not inspected. */
   cs->nWalData = walSize;
 
   pos = 0;
   while( pos < walSize ){
-    u8 tag = walData[pos];
+    u8 tag = 0;
+    rc = sqlite3OsRead(cs->pFile, &tag, 1, cs->iWalOffset + pos);
+    if( rc != SQLITE_OK ) goto replay_error;
     pos++;
 
     if( tag == CS_WAL_TAG_CHUNK ){
+      u8 aHdr[24];
       ProllyHash hash;
       u32 len;
       if( pos + 20 + 4 > walSize ){
@@ -952,10 +950,11 @@ static int csReplayWal(ChunkStore *cs){
         ** scanning and use the last valid root record. */
         break;
       }
-      memcpy(&hash, walData + pos, 20);
-      pos += 20;
-      len = CS_READ_U32(walData + pos);
-      pos += 4;
+      rc = sqlite3OsRead(cs->pFile, aHdr, sizeof(aHdr), cs->iWalOffset + pos);
+      if( rc != SQLITE_OK ) goto replay_error;
+      memcpy(&hash, aHdr, 20);
+      len = CS_READ_U32(aHdr + 20);
+      pos += 24;
       if( pos < 0 || (u64)pos + len > (u64)walSize ){
         /* Truncated chunk data — partial write. Same treatment. */
         break;
@@ -981,13 +980,15 @@ static int csReplayWal(ChunkStore *cs){
       pos += len;
 
     } else if( tag == CS_WAL_TAG_ROOT ){
+      u8 m[CHUNK_MANIFEST_SIZE];
       if( pos + CHUNK_MANIFEST_SIZE > walSize ){
         /* Truncated root record — crash during the commit
         ** point write. Stop and use the previous root. */
         break;
       }
       {
-        u8 *m = walData + pos;
+        rc = sqlite3OsRead(cs->pFile, m, sizeof(m), cs->iWalOffset + pos);
+        if( rc != SQLITE_OK ) goto replay_error;
         u32 magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
           /* Corrupt root record — torn write garbled the
@@ -1049,10 +1050,9 @@ static int csReplayWal(ChunkStore *cs){
     int nRefsData = 0;
     int rc2 = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
     if( rc2==SQLITE_OK && refsData ){
-      rc2 = csDeserializeRefsIntoTemp(&tmpRefs, refsData, nRefsData);
+      rc2 = csReplaceRefsStateFromBlob(&tmpRefs, refsData, nRefsData, 0);
       sqlite3_free(refsData);
       if( rc2!=SQLITE_OK ){
-        csFreeRefsState(&tmpRefs);
         rc = rc2;
         goto replay_error;
       }
@@ -1076,14 +1076,11 @@ static int csReplayWal(ChunkStore *cs){
   }
 
   csReleaseReplayState(cs, &saved);
-
-  sqlite3_free(walData);
   return SQLITE_OK;
 
 replay_error:
   if( haveTmpRefs ) csFreeRefsState(&tmpRefs);
   csRollbackReplayState(cs, &saved, nPendingBefore);
-  sqlite3_free(walData);
   return rc;
 }
 
@@ -1536,7 +1533,10 @@ int chunkStoreDeleteTracking(ChunkStore *cs, const char *zRemote,
 int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aResult){
   int i;
   for(i=0; i<nHash; i++){
-    aResult[i] = chunkStoreHas(cs, &aHash[i]) ? 1 : 0;
+    int has = 0;
+    int rc = chunkStoreHas(cs, &aHash[i], &has);
+    if( rc!=SQLITE_OK ) return rc;
+    aResult[i] = has ? 1 : 0;
   }
   return SQLITE_OK;
 }
@@ -1844,7 +1844,12 @@ static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->nTracking = 0;
 }
 
-int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
+static int csReplaceRefsStateFromBlob(
+  ChunkStore *cs,
+  const u8 *data,
+  int nData,
+  int markCommitted
+){
   ChunkStore tmp;
   int rc = csDeserializeRefsIntoTemp(&tmp, data, nData);
   if( rc!=SQLITE_OK ){
@@ -1853,18 +1858,32 @@ int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
   }
   csFreeRefsState(cs);
   csAdoptRefsState(cs, &tmp);
-  csMarkRefsCommitted(cs);
+  if( markCommitted ){
+    csMarkRefsCommitted(cs);
+  }
   return SQLITE_OK;
+}
+
+int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData){
+  return csReplaceRefsStateFromBlob(cs, data, nData, 1);
 }
 
 int chunkStoreSerializeRefsToBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   return csSerializeRefsBlob(cs, ppOut, pnOut);
 }
 
-int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash){
-  if( csSearchIndex(cs->aIndex, cs->nIndex, hash) >= 0 ) return 1;
-  if( csSearchPending(cs, hash) >= 0 ) return 1;
-  return 0;
+int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
+  int idx = -1;
+  int rc;
+  *pHas = 0;
+  if( csSearchIndex(cs->aIndex, cs->nIndex, hash) >= 0 ){
+    *pHas = 1;
+    return SQLITE_OK;
+  }
+  rc = csSearchPending(cs, hash, &idx);
+  if( rc!=SQLITE_OK ) return rc;
+  if( idx >= 0 ) *pHas = 1;
+  return SQLITE_OK;
 }
 
 /* Lookup order matters: pending (uncommitted write buffer) first,
@@ -1882,7 +1901,8 @@ int chunkStoreGet(
   *ppData = 0;
   *pnData = 0;
 
-  idx = csSearchPending(cs, hash);
+  rc = csSearchPending(cs, hash, &idx);
+  if( rc!=SQLITE_OK ) return rc;
   if( idx >= 0 ){
     ChunkIndexEntry *e = &cs->aPending[idx];
     i64 off = e->offset;
@@ -1969,7 +1989,12 @@ int chunkStorePut(
 
 
   if( csSearchIndex(cs->aIndex, cs->nIndex, &h) >= 0 ) return SQLITE_OK;
-  if( csSearchPending(cs, &h) >= 0 ) return SQLITE_OK;
+  {
+    int idx = -1;
+    rc = csSearchPending(cs, &h, &idx);
+    if( rc!=SQLITE_OK ) return rc;
+    if( idx >= 0 ) return SQLITE_OK;
+  }
 
   rc = csGrowPending(cs);
   if( rc != SQLITE_OK ) return rc;
@@ -2291,7 +2316,6 @@ void chunkStoreClearRefs(ChunkStore *cs){
 int chunkStoreReloadRefs(ChunkStore *cs){
   u8 *refsData = 0;
   int nRefsData = 0;
-  ChunkStore tmp;
   int rc;
 
   if( prollyHashIsEmpty(&cs->refsHash) ) return SQLITE_OK;
@@ -2299,16 +2323,9 @@ int chunkStoreReloadRefs(ChunkStore *cs){
   rc = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = csDeserializeRefsIntoTemp(&tmp, refsData, nRefsData);
+  rc = csReplaceRefsStateFromBlob(cs, refsData, nRefsData, 0);
   sqlite3_free(refsData);
-  if( rc!=SQLITE_OK ){
-    csFreeRefsState(&tmp);
-    return rc;
-  }
-
-  csFreeRefsState(cs);
-  csAdoptRefsState(cs, &tmp);
-  return SQLITE_OK;
+  return rc;
 }
 
 const char *chunkStoreFilename(ChunkStore *cs){
@@ -2353,8 +2370,12 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     if( rc!=SQLITE_OK ) return rc;
     if( exists ){
       struct stat mainStat;
-      if( stat(cs->zFilename, &mainStat)==0 && mainStat.st_size > 0 ){
-        *pChanged = 1;
+      if( stat(cs->zFilename, &mainStat)==0 ){
+        if( mainStat.st_size > 0 ){
+          *pChanged = 1;
+        }
+      }else{
+        return SQLITE_IOERR;
       }
     }
     return SQLITE_OK;

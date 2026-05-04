@@ -368,10 +368,14 @@ static inline void btreeFreeCatalogTables(Btree *p){
 static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode);
 static void invalidateSchema(Btree *pBtree);
 static int flushMutMap(BtCursor *pCur);
+static void refreshCursorMutMapAliases(BtShared *pBt, Pgno iTable,
+                                        ProllyMutMap *pNewMap);
 static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
 static int flushIfNeeded(BtCursor *pCur);
 static int flushAllPending(BtShared *pBt, Pgno iTable);
 static int applyMutMapToTableRoot(BtShared *pBt, struct TableEntry *pTE, ProllyMutMap *pMap);
+static int flushPendingForTable(Btree *pBtree, BtShared *pBt,
+                                struct TableEntry *pTE, int clearInPlace);
 static int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData);
 static int serializeUnpackedRecordBuffer(
   UnpackedRecord *pRec, u8 **ppBuf, int *pnAlloc, int *pnOut
@@ -415,10 +419,6 @@ static int btreeLoadWorkingSetBlob(
   ProllyHash *pConstraintViolations
 );
 
-static int canReadCursorOwnPending(BtShared *pBt, struct TableEntry *pTE){
-  if( !pBt || !pBt->db || !pTE || !pTE->zName ) return 0;
-  return sqlite3ShadowTableName(pBt->db, pTE->zName)==0;
-}
 static int btreeStoreWorkingSetBlob(
   ChunkStore *cs,
   const char *zBranch,
@@ -1241,7 +1241,7 @@ static void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
   pCur->eState = CURSOR_VALID;
   pCur->curFlags &= ~BTCF_AtLast;
   if( pCur->curIntKey ){
-    pCur->cachedIntKey = pEntry->intKey;
+    pCur->cachedIntKey = prollyMutMapEntryIntKey(pEntry);
     pCur->curFlags |= BTCF_ValidNKey;
   }else{
     pCur->curFlags &= ~BTCF_ValidNKey;
@@ -1262,66 +1262,80 @@ static int flushMutMap(BtCursor *pCur){
   int captured;
   int rc;
 
-  if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
-    return SQLITE_OK;
-  }
-
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE ){
     return SQLITE_INTERNAL;
   }
+  if( !pTE->pPending || prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
+    return SQLITE_OK;
+  }
 
-
-  pFlushMap = pCur->pMutMap;
+  /* Per-table mutmap: every cursor on this table aliases pTE->pPending.
+  ** snapshotPendingForFlush may swap pTE->pPending for a fresh empty
+  ** map (when capturing the pre-flush state into an active savepoint);
+  ** if that happens we refresh every cursor's alias to point at the
+  ** new pTE->pPending. */
+  pFlushMap = (ProllyMutMap*)pTE->pPending;
   captured = 0;
-  rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot, &pCur->pMutMap,
+  rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+                               (ProllyMutMap**)&pTE->pPending,
                                &pFlushMap, &captured);
   if( rc!=SQLITE_OK ) return rc;
+  if( captured ){
+    refreshCursorMutMapAliases(pCur->pBt, pCur->pgnoRoot,
+                               (ProllyMutMap*)pTE->pPending);
+  }
   rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
   if( rc!=SQLITE_OK ) return rc;
   pCur->pCur.root = pTE->root;
   if( captured ){
     pCur->flushSeekEdits = 0;
   }else{
-    prollyMutMapClear(pCur->pMutMap);
+    prollyMutMapClear((ProllyMutMap*)pTE->pPending);
   }
 
   return SQLITE_OK;
 }
 
-static int flushOtherCursorPending(BtCursor *pCur){
-  struct TableEntry *pTE;
-  BtCursor *p;
+static int flushPendingForTable(
+  Btree *pBtree,
+  BtShared *pBt,
+  struct TableEntry *pTE,
+  int clearInPlace
+){
+  ProllyMutMap *pMap;
+  ProllyMutMap *pFlushMap;
+  int captured = 0;
   int rc;
 
-  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-  if( pTE && pTE->pPending ){
-    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-    if( !prollyMutMapIsEmpty(pMap) ){
-      ProllyMutMap *pFlushMap = pMap;
-      int captured = 0;
-      rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
-                                   &pTE->pPending, &pFlushMap, &captured);
-      if( rc!=SQLITE_OK ) return rc;
-      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-    if( pTE->pPending==pMap ){
+  if( !pTE || !pTE->pPending ) return SQLITE_OK;
+  pMap = (ProllyMutMap*)pTE->pPending;
+  if( prollyMutMapIsEmpty(pMap) ) return SQLITE_OK;
+
+  pFlushMap = pMap;
+  rc = snapshotPendingForFlush(pBtree, pTE->iTable,
+                               (ProllyMutMap**)&pTE->pPending,
+                               &pFlushMap, &captured);
+  if( rc!=SQLITE_OK ) return rc;
+  if( captured ){
+    refreshCursorMutMapAliases(pBt, pTE->iTable,
+                               (ProllyMutMap*)pTE->pPending);
+  }
+
+  rc = applyMutMapToTableRoot(pBt, pTE, pFlushMap);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( pTE->pPending==pMap ){
+    if( clearInPlace ){
+      prollyMutMapClear(pMap);
+    }else{
       prollyMutMapFree(pMap);
       sqlite3_free(pMap);
       pTE->pPending = 0;
-    }
-    pTE->pendingFlushSeekEdits = 0;
-  }
-
-  for(p = pCur->pBt->pCursor; p; p = p->pNext){
-    if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
-     && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-      rc = flushMutMap(p);
-      if( rc!=SQLITE_OK ) return rc;
-      p->eState = CURSOR_INVALID;
+      refreshCursorMutMapAliases(pBt, pTE->iTable, 0);
     }
   }
+  pTE->pendingFlushSeekEdits = 0;
   return SQLITE_OK;
 }
 
@@ -1338,29 +1352,63 @@ static int syncSavepoints(BtCursor *pCur){
   return SQLITE_OK;
 }
 
+/* Refresh every cursor on iTable so its pMutMap field aliases the
+** current pTE->pPending (which may itself be NULL after a flush).
+** Called after any mutation to the pTE->pPending pointer — flush,
+** savepoint snapshot/restore, catalog free. The invariant after this
+** call is: for every cursor c on iTable, c->pMutMap == pTE->pPending.
+**
+** Walking pBt->pCursor is O(cursors); usually a handful per Btree. */
+static void refreshCursorMutMapAliases(BtShared *pBt, Pgno iTable,
+                                        ProllyMutMap *pNewMap){
+  BtCursor *p;
+  for(p = pBt->pCursor; p; p = p->pNext){
+    if( p->pgnoRoot==iTable ){
+      p->pMutMap = pNewMap;
+      /* mmActive / mmIdx may now point at a stale (or freed) entry.
+      ** Reset cursor's mutmap-side position; the merge cursor will
+      ** re-establish on the next access, picking up any new entries
+      ** another cursor may have added. */
+      p->mmActive = 0;
+      p->mmPhysActive = 0;
+      p->mmIdx = -1;
+      p->mmPhysIdx = -1;
+    }
+  }
+}
+
 static int ensureMutMap(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
   int keepSorted;
-  if( pCur->pMutMap ){
+  ProllyMutMap *pMap;
+
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( !pTE ) return SQLITE_INTERNAL;
+
+  /* Per-table mutmap: the table entry owns it for the lifetime of the
+  ** transaction (or until a flush clears it). Multiple cursors on the
+  ** same table all alias to pTE->pPending so writes by one cursor are
+  ** immediately visible to reads via another — no per-statement
+  ** visibility flush needed. */
+  if( pTE->pPending ){
+    pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
     return SQLITE_OK;
   }
-  pCur->pMutMap = sqlite3_malloc(sizeof(ProllyMutMap));
-  if( !pCur->pMutMap ){
-    return SQLITE_NOMEM;
-  }
-  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+
+  pMap = sqlite3_malloc(sizeof(ProllyMutMap));
+  if( !pMap ) return SQLITE_NOMEM;
   keepSorted = tableEntryIsTableRoot(pCur->pBtree, pTE);
-  rc = prollyMutMapInitMode(pCur->pMutMap, pCur->curIntKey, (u8)keepSorted);
+  rc = prollyMutMapInitMode(pMap, pCur->curIntKey, (u8)keepSorted);
   if( rc!=SQLITE_OK ){
-    sqlite3_free(pCur->pMutMap);
-    pCur->pMutMap = 0;
+    sqlite3_free(pMap);
     return rc;
   }
-
   if( pCur->pBtree ){
-    pCur->pMutMap->currentSavepointLevel = pCur->pBtree->nSavepoint;
+    pMap->currentSavepointLevel = pCur->pBtree->nSavepoint;
   }
+  pTE->pPending = pMap;
+  refreshCursorMutMapAliases(pCur->pBt, pCur->pgnoRoot, pMap);
   return SQLITE_OK;
 }
 
@@ -1389,7 +1437,7 @@ static int saveCursorPosition(BtCursor *pCur){
   if( pCur->curIntKey ){
     if( pCur->mmActive
      && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-      pCur->nKey = currentMutMapEntry(pCur)->intKey;
+      pCur->nKey = prollyMutMapEntryIntKey(currentMutMapEntry(pCur));
     }else{
       pCur->nKey = prollyCursorIntKey(&pCur->pCur);
     }
@@ -1561,15 +1609,9 @@ static int captureSavepointTables(
 
 static void pushSavepointOnMutMaps(Btree *pBtree, int level){
   int k;
-  BtCursor *p;
   for(k=0; k<pBtree->cat.n; k++){
     ProllyMutMap *pMap = (ProllyMutMap*)pBtree->cat.a[k].pPending;
     if( pMap ) prollyMutMapPushSavepoint(pMap, level);
-  }
-  for(p = pBtree->pBt->pCursor; p; p = p->pNext){
-    if( p->pBtree==pBtree && p->pMutMap ){
-      prollyMutMapPushSavepoint(p->pMutMap, level);
-    }
   }
 }
 
@@ -1674,7 +1716,6 @@ static int inheritPendingSnapshots(
 static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
                                        int iFromSavepoint){
   int k, rc;
-  BtCursor *p;
   for(k=0; k<pBtree->cat.n; k++){
     struct TableEntry *pTE = &pBtree->cat.a[k];
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
@@ -1697,26 +1738,14 @@ static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
       if( rc!=SQLITE_OK ) return rc;
     }
   }
-  for(p = pBtree->pBt->pCursor; p; p = p->pNext){
-    if( p->pBtree==pBtree && p->pMutMap ){
-      rc = prollyMutMapRollbackToSavepoint(p->pMutMap, level);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-  }
   return SQLITE_OK;
 }
 
 static void releaseMutMapsToSavepoint(Btree *pBtree, int level){
   int k;
-  BtCursor *p;
   for(k=0; k<pBtree->cat.n; k++){
     ProllyMutMap *pMap = (ProllyMutMap*)pBtree->cat.a[k].pPending;
     if( pMap ) prollyMutMapReleaseSavepoint(pMap, level);
-  }
-  for(p = pBtree->pBt->pCursor; p; p = p->pNext){
-    if( p->pBtree==pBtree && p->pMutMap ){
-      prollyMutMapReleaseSavepoint(p->pMutMap, level);
-    }
   }
 }
 
@@ -3363,7 +3392,6 @@ static int prollyBtreeCursor(
 ){
   BtShared *pBt = p->pBt;
   struct TableEntry *pTE;
-  int hasPeerCursor = 0;
 
   assert( p->inTrans>=TRANS_READ );
 
@@ -3388,53 +3416,23 @@ static int prollyBtreeCursor(
     pCur->curFlags = BTCF_WriteFlag;
   }
 
-
-  {
-    BtCursor *pOther;
-    for(pOther = pBt->pCursor; pOther; pOther = pOther->pNext){
-      if( pOther->pgnoRoot==iTable ){
-        hasPeerCursor = 1;
-      }
-      if( pOther->pgnoRoot==iTable && pOther->pMutMap
-          && !prollyMutMapIsEmpty(pOther->pMutMap) ){
-        int rc = flushMutMap(pOther);
-        if( rc!=SQLITE_OK ) return rc;
-      }
-    }
-  }
+  /* Per-table mutmap: pTE->pPending is the canonical edit buffer
+  ** owned by pTE for the lifetime of the transaction. The new cursor
+  ** simply aliases the existing buffer (no ownership transfer). The
+  ** old code transferred pTE->pPending into the cursor's private
+  ** pMutMap and zeroed pTE->pPending — that was the per-cursor
+  ** ownership model and is incompatible with per-table sharing. */
   if( pTE->pPending ){
+    pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
     if( wrFlag & BTREE_WRCSR ){
-      pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
-      pTE->pPending = 0;
       pCur->flushSeekEdits = pTE->pendingFlushSeekEdits;
       if( !pCur->curIntKey
        && tableEntryIsTableRoot(p, pTE)
        && !prollyMutMapIsEmpty(pCur->pMutMap) ){
         pCur->flushSeekEdits = 1;
       }
-      pTE->pendingFlushSeekEdits = 0;
     }else{
-      ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-      if( !hasPeerCursor && canReadCursorOwnPending(pBt, pTE) ){
-        pCur->pMutMap = pMap;
-        pCur->flushSeekEdits = pTE->pendingFlushSeekEdits;
-        pTE->pPending = 0;
-        pTE->pendingFlushSeekEdits = 0;
-      }else if( !prollyMutMapIsEmpty(pMap) ){
-        ProllyMutMap *pFlushMap = pMap;
-        int captured = 0;
-        int rc2 = snapshotPendingForFlush(p, iTable, &pTE->pPending,
-                                          &pFlushMap, &captured);
-        if( rc2!=SQLITE_OK ) return rc2;
-        rc2 = applyMutMapToTableRoot(pBt, pTE, pFlushMap);
-        if( pTE->pPending==pMap ){
-          prollyMutMapFree(pMap);
-          sqlite3_free(pMap);
-          pTE->pPending = 0;
-        }
-        pTE->pendingFlushSeekEdits = 0;
-        if( rc2!=SQLITE_OK ) return rc2;
-      }
+      pCur->flushSeekEdits = pTE->pendingFlushSeekEdits;
     }
   }
 
@@ -3464,32 +3462,19 @@ static int prollyBtCursorCloseCursor(BtCursor *pCur){
   pBt = pCur->pBt;
   if( !pBt ) return SQLITE_OK;
 
-  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+  /* pCur->pMutMap is an alias to pTE->pPending — pTE owns the map
+  ** across the transaction. flushSeekEdits is per-table state, so
+  ** propagate any pending request from this cursor onto pTE; the
+  ** alias itself is just dropped. */
+  if( pCur->pMutMap && pCur->flushSeekEdits ){
     struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-    if( pTE && !pTE->pPending ){
-      pTE->pPending = pCur->pMutMap;
-      pTE->pendingFlushSeekEdits = pCur->flushSeekEdits;
-      pCur->pMutMap = 0;
-    }else if( pTE && pTE->pPending ){
-      int rc = prollyMutMapMerge((ProllyMutMap*)pTE->pPending, pCur->pMutMap);
-      if( rc!=SQLITE_OK ) return rc;
+    if( pTE ){
       pTE->pendingFlushSeekEdits |= pCur->flushSeekEdits;
-      prollyMutMapFree(pCur->pMutMap);
-      sqlite3_free(pCur->pMutMap);
-      pCur->pMutMap = 0;
-    }else{
-      int rc = flushMutMap(pCur);
-      if( rc!=SQLITE_OK ) return rc;
     }
   }
+  pCur->pMutMap = 0;
 
   prollyCursorClose(&pCur->pCur);
-
-  if( pCur->pMutMap ){
-    prollyMutMapFree(pCur->pMutMap);
-    sqlite3_free(pCur->pMutMap);
-    pCur->pMutMap = 0;
-  }
 
   CLEAR_CACHED_PAYLOAD(pCur);
   if( pCur->pReconPayload ){
@@ -3587,8 +3572,9 @@ int sqlite3BtreeClosesWithCursor(Btree *p, BtCursor *pCur){
 static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
   if( pCur->curIntKey ){
     i64 tk = prollyCursorIntKey(&pCur->pCur);
-    if( tk < e->intKey ) return -1;
-    if( tk > e->intKey ) return 1;
+    i64 ek = prollyMutMapEntryIntKey(e);
+    if( tk < ek ) return -1;
+    if( tk > ek ) return 1;
     return 0;
   }else{
     const u8 *pK; int nK;
@@ -3654,8 +3640,23 @@ static int mergeScan(BtCursor *pCur, int dir, int *pRes){
   }
 }
 
+/* If the cursor was positioned via setCursorToMutMapEntryPhys (mmPhysActive
+** set, mmIdx unset), normalize to mmIdx-only before stepping. mergeScan
+** would otherwise overwrite our about-to-be-incremented mmIdx with the
+** physIdx-derived sorted position, parking the cursor back on the entry
+** we just consumed. */
+static void cursorNormalizeMmPhys(BtCursor *pCur){
+  if( pCur->mmPhysActive ){
+    pCur->mmIdx = prollyMutMapOrderIndexFromEntry(
+        pCur->pMutMap, &pCur->pMutMap->aEntries[pCur->mmPhysIdx]);
+    pCur->mmPhysIdx = -1;
+    pCur->mmPhysActive = 0;
+  }
+}
+
 static int mergeStepForward(BtCursor *pCur){
   int rc = SQLITE_OK;
+  cursorNormalizeMmPhys(pCur);
   if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
     rc = advanceTreeCursor(pCur, 1);
     if( rc!=SQLITE_OK ) return rc;
@@ -3667,6 +3668,7 @@ static int mergeStepForward(BtCursor *pCur){
 
 static int mergeStepBackward(BtCursor *pCur){
   int rc = SQLITE_OK;
+  cursorNormalizeMmPhys(pCur);
   if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
     rc = advanceTreeCursor(pCur, -1);
     if( rc!=SQLITE_OK ) return rc;
@@ -3721,37 +3723,18 @@ static int mergeLast(BtCursor *pCur, int *pRes){
 
 static int flushTablePending(BtCursor *pCur){
   struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-  if( pTE && pTE->pPending ){
-    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-    if( !prollyMutMapIsEmpty(pMap) ){
-      ProllyMutMap *pFlushMap = pMap;
-      int captured = 0;
-      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
-                                       &pTE->pPending, &pFlushMap, &captured);
-      if( rc!=SQLITE_OK ) return rc;
-      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
-      if( pTE->pPending==pMap ){
-        prollyMutMapFree(pMap);
-        sqlite3_free(pMap);
-        pTE->pPending = 0;
-      }
-      return rc;
-    }
-    prollyMutMapFree(pMap);
-    sqlite3_free(pMap);
-    pTE->pPending = 0;
-  }
-  return SQLITE_OK;
+  return flushPendingForTable(pCur->pBtree, pCur->pBt, pTE, 1);
 }
 
 static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
-  rc = flushTablePending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = flushOtherCursorPending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Per-table mutmap: pCur aliases pTE->pPending so other cursors'
+  ** edits are immediately visible via the shared buffer. The old
+  ** flushTablePending + flushOtherCursorPending pair was the per-
+  ** cursor-visibility dance — applying pending edits to the tree
+  ** before reading. With shared mutmap there's nothing to flush:
+  ** the merge cursor reads tree + pTE->pPending directly. */
   refreshCursorRoot(pCur);
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -3775,11 +3758,7 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
-  rc = flushTablePending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = flushOtherCursorPending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+  /* Visibility flushes deleted — see prollyBtCursorFirst. */
   refreshCursorRoot(pCur);
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -4053,9 +4032,8 @@ static int prollyBtCursorTableMoveto(
   }
 
 
-  rc = flushOtherCursorPending(pCur);
-  if( rc!=SQLITE_OK ) return rc;
-
+  /* Visibility flush deleted — shared pTE->pPending is read directly
+  ** by the merge cursor below. */
   refreshCursorRoot(pCur);
 
   rc = prollyCursorSeekInt(&pCur->pCur, intKey, pRes);
@@ -4225,36 +4203,6 @@ static int prollyBtCursorIndexMoveto(
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  if( pCur->flushSeekEdits
-   && (pCur->curFlags & BTCF_WriteFlag)
-   && pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    rc = flushMutMap(pCur);
-    if( rc!=SQLITE_OK ) return rc;
-    pCur->mmActive = 0;
-    pCur->flushSeekEdits = 0;
-  }
-
-  {
-    BtCursor *p;
-    for(p = pCur->pBt->pCursor; p; p = p->pNext){
-      if( p->pgnoRoot==pCur->pgnoRoot
-       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-        if( p==pCur ){
-
-          struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-          if( pTE && prollyHashIsEmpty(&pTE->root) ){
-            rc = flushMutMap(p);
-            if( rc!=SQLITE_OK ) return rc;
-          }
-        }else{
-          rc = flushMutMap(p);
-          if( rc!=SQLITE_OK ) return rc;
-          p->eState = CURSOR_INVALID;
-        }
-      }
-    }
-  }
-
   refreshCursorRoot(pCur);
 
 
@@ -4418,6 +4366,12 @@ static int prollyBtCursorIndexMoveto(
          || (pPending && pPending!=pCur->pMutMap
              && !prollyMutMapIsEmpty(pPending)))
        && !(treeFound && treeCmp==0) ){
+      /* findMatchingMutMapEntry runs sqlite3VdbeRecordCompare against
+      ** mutmap entries, which clobbers pIdxKey->eqSeen. The tree-match
+      ** decision above already consumed eqSeen, so save its post-tree-
+      ** seek value and restore it on exit — OP_SeekGE (eqOnly path)
+      ** reads eqSeen to decide whether the seek hit an equality match. */
+      int savedEqSeen = pIdxKey->eqSeen;
       rc = findMatchingMutMapEntry((ProllyMutMap*)pCur->pMutMap,
                                    pCur->pKeyInfo,
                                    pIdxKey, pSortKey, nSortKey,
@@ -4452,6 +4406,7 @@ static int prollyBtCursorIndexMoveto(
           mutFound = 1;
         }
       }
+      pIdxKey->eqSeen = savedEqSeen;
     }
     }
 
@@ -4468,6 +4423,11 @@ static int prollyBtCursorIndexMoveto(
         pCur->eState = CURSOR_VALID;
       }
       *pRes = mutCmp;
+      /* OP_SeekGE/SeekLE eqOnly path reads eqSeen to decide whether the
+      ** seek hit an equality match. A mutmap match means equality was
+      ** seen, but findMatchingMutMapEntry leaves eqSeen reflecting its
+      ** internal bsearch's last comparison. */
+      pIdxKey->eqSeen = 1;
       return SQLITE_OK;
     }
     if( treeFound ){
@@ -4508,7 +4468,7 @@ static i64 prollyBtCursorIntegerKey(BtCursor *pCur){
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-    return currentMutMapEntry(pCur)->intKey;
+    return prollyMutMapEntryIntKey(currentMutMapEntry(pCur));
   }
   if( !prollyCursorIsValid(&pCur->pCur)
    && (pCur->curFlags & BTCF_ValidNKey) ){
@@ -4806,26 +4766,21 @@ static int prollyBtCursorInsert(
 static int flushIfNeeded(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
-  int anyFlushed = 0;
-  int needFlush = 0;
 
-
-  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    needFlush = 1;
+  /* Per-table mutmap: pCur->pMutMap aliases pTE->pPending and every
+  ** other cursor on this pgnoRoot does too. A single flushMutMap on
+  ** any cursor flushes the whole table. Old code did a peer walk
+  ** (O(cursors per pgnoRoot)) and then flushAllPending called
+  ** flushIfNeeded on every cursor, making the total O(N^2). With
+  ** shared mutmap each invocation either flushes (first one) or
+  ** finds empty (rest), so the peer walk is redundant. */
+  if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
+    return SQLITE_OK;
   }
-  if( !needFlush ){
-    BtCursor *p;
-    for(p = pCur->pBt->pCursor; p; p = p->pNext){
-      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
-       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-        needFlush = 1;
-        break;
-      }
-    }
-  }
-  if( !needFlush ) return SQLITE_OK;
 
-
+  /* Save peer cursors' positions before we change the tree out
+  ** from under them. Same logic as before — applies to every cursor
+  ** on this pgnoRoot regardless of whose mutmap is being flushed. */
   {
     BtCursor *p;
     for(p = pCur->pBt->pCursor; p; p = p->pNext){
@@ -4838,43 +4793,22 @@ static int flushIfNeeded(BtCursor *pCur){
           if( rc!=SQLITE_OK ) return rc;
         } else if( p->eState!=CURSOR_REQUIRESEEK
                 && p->eState!=CURSOR_INVALID ){
-
           prollyCursorReleaseAll(&p->pCur);
         }
       }
     }
   }
 
+  rc = flushMutMap(pCur);
+  if( rc!=SQLITE_OK ) return rc;
 
-  if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
-    rc = flushMutMap(pCur);
-    if( rc!=SQLITE_OK ) return rc;
-    anyFlushed = 1;
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( pTE ){
+    prollyCursorClose(&pCur->pCur);
+    prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
+                     &pTE->root, pTE->flags);
   }
-
-
-  {
-    BtCursor *p;
-    for(p = pCur->pBt->pCursor; p; p = p->pNext){
-      if( p!=pCur && p->pgnoRoot==pCur->pgnoRoot
-       && p->pMutMap && !prollyMutMapIsEmpty(p->pMutMap) ){
-        rc = flushMutMap(p);
-        if( rc!=SQLITE_OK ) return rc;
-        p->eState = CURSOR_INVALID;
-        anyFlushed = 1;
-      }
-    }
-  }
-
-  if( anyFlushed ){
-    pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-    if( pTE ){
-      prollyCursorClose(&pCur->pCur);
-      prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
-                       &pTE->root, pTE->flags);
-    }
-    pCur->eState = CURSOR_INVALID;
-  }
+  pCur->eState = CURSOR_INVALID;
   return SQLITE_OK;
 }
 
@@ -4904,21 +4838,8 @@ static int flushDeferredEdits(BtShared *pBt){
     int i;
     for(i=0; i<pBtree->cat.n; i++){
       struct TableEntry *pTE = &pBtree->cat.a[i];
-      if( pTE->pPending && !prollyMutMapIsEmpty((ProllyMutMap*)pTE->pPending) ){
-        ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-        ProllyMutMap *pFlushMap = pMap;
-        int captured = 0;
-        rc = snapshotPendingForFlush(pBtree, pTE->iTable, &pTE->pPending,
-                                     &pFlushMap, &captured);
-        if( rc!=SQLITE_OK ) return rc;
-        rc = applyMutMapToTableRoot(pBt, pTE, pFlushMap);
-        if( pTE->pPending==pMap ){
-          prollyMutMapFree(pMap);
-          sqlite3_free(pMap);
-          pTE->pPending = 0;
-        }
-        if( rc!=SQLITE_OK ) return rc;
-      }
+      rc = flushPendingForTable(pBtree, pBt, pTE, 0);
+      if( rc!=SQLITE_OK ) return rc;
     }
   }
   return rc;
@@ -4985,7 +4906,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     if( pCur->curIntKey ){
       if( pCur->mmActive
        && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
-        savedIntKey = currentMutMapEntry(pCur)->intKey;
+        savedIntKey = prollyMutMapEntryIntKey(currentMutMapEntry(pCur));
         hasSavedKey = 1;
       }else if( !prollyCursorIsValid(&pCur->pCur)
        && (pCur->curFlags & BTCF_ValidNKey) ){
@@ -5561,7 +5482,12 @@ static int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, voi
     return SQLITE_ABORT;
   }
 
-  prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+  /* Must use the merge-cursor-aware payload accessor: when the cursor
+  ** is positioned on a mutmap entry (FTS5's blob cursor hits this on
+  ** every auto-merge — its long-lived read cursor lands on a freshly
+  ** buffered segment row), prollyCursorValue would read the empty tree
+  ** slot and the blob read would silently return stale bytes. */
+  getCursorPayload(pCur, &pVal, &nVal);
 
   if( (i64)offset + (i64)amt > (i64)nVal ){
     return SQLITE_CORRUPT_BKPT;
@@ -5791,24 +5717,8 @@ int doltliteApplyRawRowMutation(
   if( !pTE ) return SQLITE_NOTFOUND;
 
 
-  if( pTE->pPending ){
-    ProllyMutMap *pPend = (ProllyMutMap*)pTE->pPending;
-    if( !prollyMutMapIsEmpty(pPend) ){
-      ProllyMutMap *pFlushMap = pPend;
-      int captured = 0;
-      rc = snapshotPendingForFlush(pBtree, pTE->iTable, &pTE->pPending,
-                                   &pFlushMap, &captured);
-      if( rc!=SQLITE_OK ) return rc;
-      rc = applyMutMapToTableRoot(pBt, pTE, pFlushMap);
-      if( rc!=SQLITE_OK ) return rc;
-    }
-    if( pTE->pPending==pPend ){
-      prollyMutMapFree(pPend);
-      sqlite3_free(pPend);
-      pTE->pPending = 0;
-    }
-    pTE->pendingFlushSeekEdits = 0;
-  }
+  rc = flushPendingForTable(pBtree, pBt, pTE, 0);
+  if( rc!=SQLITE_OK ) return rc;
 
   isIntKey = (pTE->flags & PROLLY_NODE_INTKEY) ? 1 : 0;
   rc = prollyMutMapInit(&mm, isIntKey);

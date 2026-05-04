@@ -237,6 +237,857 @@ run_test_match "chain_reopen_log" \
 rm -f "$DB"
 
 # ============================================================
+# GUARD 10: .read mixed DML preserves composite-PK tables
+# Bug shape: statement-streamed blob-key mutations could lose older
+#            rows once many small edits accumulated in-session.
+# Invariant: large insert/update/delete streams preserve full table
+#            contents and exact point-lookups after reopen.
+# ============================================================
+
+echo "--- Guard 10: .read mixed DML on composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml.db"
+SQL="$TMPROOT/mixed_dml.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 5000); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,NULL);"
+  done
+  for i in $(seq 1001 4000); do
+    echo "UPDATE t SET d=-$i, e='u$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 4 4 5000); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 5001 6500); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml');" > /dev/null 2>&1
+
+run_test "mixed_dml_count" \
+  "SELECT COUNT(*) FROM t;" "5250" "$DB"
+run_test "mixed_dml_min" \
+  "SELECT MIN(a) FROM t;" "1" "$DB"
+run_test "mixed_dml_max" \
+  "SELECT MAX(a) FROM t;" "6500" "$DB"
+run_test "mixed_dml_updated_row" \
+  "SELECT printf('%d|%s', d, e) FROM t WHERE a=1025 AND b=1025;" "-1025|u1025" "$DB"
+run_test "mixed_dml_deleted_row" \
+  "SELECT COUNT(*) FROM t WHERE a=2000 AND b=2000;" "0" "$DB"
+run_test "mixed_dml_tail_row" \
+  "SELECT e FROM t WHERE a=6400 AND b=6400;" "tail" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 11: .read interleaved mixed DML keeps per-table state separate
+# Bug shape: large statement streams might corrupt deferred edits when
+#            switching between blob-key tables repeatedly.
+# Invariant: interleaved edits to multiple composite-PK tables reopen
+#            with the exact expected counts and point rows.
+# ============================================================
+
+echo "--- Guard 11: .read interleaved composite-PK tables ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/interleaved_dml.db"
+SQL="$TMPROOT/interleaved_dml.sql"
+
+echo "CREATE TABLE a(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+);
+CREATE TABLE b(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3000); do
+    echo "INSERT INTO a VALUES($i,$i,'a$i');"
+    echo "INSERT INTO b VALUES($i,$i,'b$i');"
+  done
+  for i in $(seq 501 2500); do
+    echo "UPDATE a SET v='au$i' WHERE k1=$i AND k2=$i;"
+    echo "UPDATE b SET v='bu$i' WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 3 3 3000); do
+    echo "DELETE FROM a WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 5 5 3000); do
+    echo "DELETE FROM b WHERE k1=$i AND k2=$i;"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','interleaved dml');" > /dev/null 2>&1
+
+run_test "interleaved_a_count" \
+  "SELECT COUNT(*) FROM a;" "2000" "$DB"
+run_test "interleaved_b_count" \
+  "SELECT COUNT(*) FROM b;" "2400" "$DB"
+run_test "interleaved_a_updated" \
+  "SELECT v FROM a WHERE k1=1001 AND k2=1001;" "au1001" "$DB"
+run_test "interleaved_b_updated" \
+  "SELECT v FROM b WHERE k1=1001 AND k2=1001;" "bu1001" "$DB"
+run_test "interleaved_a_deleted" \
+  "SELECT COUNT(*) FROM a WHERE k1=1500 AND k2=1500;" "0" "$DB"
+run_test "interleaved_b_deleted" \
+  "SELECT COUNT(*) FROM b WHERE k1=1500 AND k2=1500;" "0" "$DB"
+run_test "interleaved_a_kept" \
+  "SELECT v FROM a WHERE k1=1499 AND k2=1499;" "au1499" "$DB"
+run_test "interleaved_b_kept" \
+  "SELECT v FROM b WHERE k1=1499 AND k2=1499;" "bu1499" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 12: .read mixed DML preserves WITHOUT ROWID composite-PK tables
+# Bug shape: statement-streamed blob-key mutations are especially risky
+#            on non-rowid layouts because the PK record is the full key.
+# Invariant: large mixed insert/update/delete streams keep exact row
+#            counts and point lookups after reopen.
+# ============================================================
+
+echo "--- Guard 12: .read mixed DML on WITHOUT ROWID composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml_wor.db"
+SQL="$TMPROOT/mixed_dml_wor.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3600); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,NULL);"
+  done
+  for i in $(seq 801 2800); do
+    echo "UPDATE t SET d=-$i, e='wu$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 6 6 3600); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 3601 4800); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml wor');" > /dev/null 2>&1
+
+run_test "mixed_dml_wor_count" \
+  "SELECT COUNT(*) FROM t;" "4200" "$DB"
+run_test "mixed_dml_wor_min" \
+  "SELECT MIN(a) FROM t;" "1" "$DB"
+run_test "mixed_dml_wor_max" \
+  "SELECT MAX(a) FROM t;" "4800" "$DB"
+run_test "mixed_dml_wor_updated" \
+  "SELECT printf('%d|%s', d, e) FROM t WHERE a=1001 AND b=1001;" "-1001|wu1001" "$DB"
+run_test "mixed_dml_wor_deleted" \
+  "SELECT COUNT(*) FROM t WHERE a=1800 AND b=1800;" "0" "$DB"
+run_test "mixed_dml_wor_tail" \
+  "SELECT e FROM t WHERE a=4700 AND b=4700;" "tail" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 13: .read interleaved WITHOUT ROWID composite-PK tables
+# Bug shape: deferred edits could bleed across tables while switching
+#            between non-rowid blob-key roots in a long statement file.
+# Invariant: both tables keep exact counts and point rows after reopen.
+# ============================================================
+
+echo "--- Guard 13: .read interleaved WITHOUT ROWID tables ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/interleaved_wor.db"
+SQL="$TMPROOT/interleaved_wor.sql"
+
+echo "CREATE TABLE a(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+) WITHOUT ROWID;
+CREATE TABLE b(
+  k1 INTEGER NOT NULL,
+  k2 INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(k1,k2)
+) WITHOUT ROWID;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 2400); do
+    echo "INSERT INTO a VALUES($i,$i,'a$i');"
+    echo "INSERT INTO b VALUES($i,$i,'b$i');"
+  done
+  for i in $(seq 401 2000); do
+    echo "UPDATE a SET v='awu$i' WHERE k1=$i AND k2=$i;"
+    echo "UPDATE b SET v='bwu$i' WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 7 7 2400); do
+    echo "DELETE FROM a WHERE k1=$i AND k2=$i;"
+  done
+  for i in $(seq 8 8 2400); do
+    echo "DELETE FROM b WHERE k1=$i AND k2=$i;"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','interleaved wor');" > /dev/null 2>&1
+
+run_test "interleaved_wor_a_count" \
+  "SELECT COUNT(*) FROM a;" "2058" "$DB"
+run_test "interleaved_wor_b_count" \
+  "SELECT COUNT(*) FROM b;" "2100" "$DB"
+run_test "interleaved_wor_a_updated" \
+  "SELECT v FROM a WHERE k1=999 AND k2=999;" "awu999" "$DB"
+run_test "interleaved_wor_b_updated" \
+  "SELECT v FROM b WHERE k1=999 AND k2=999;" "bwu999" "$DB"
+run_test "interleaved_wor_a_deleted" \
+  "SELECT COUNT(*) FROM a WHERE k1=1400 AND k2=1400;" "0" "$DB"
+run_test "interleaved_wor_b_deleted" \
+  "SELECT COUNT(*) FROM b WHERE k1=1600 AND k2=1600;" "0" "$DB"
+run_test "interleaved_wor_a_kept" \
+  "SELECT v FROM a WHERE k1=1000 AND k2=1000;" "awu1000" "$DB"
+run_test "interleaved_wor_b_kept" \
+  "SELECT v FROM b WHERE k1=1001 AND k2=1001;" "bwu1001" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 14: .read savepoint-heavy composite-PK stream keeps exact state
+# Bug shape: the #710 fix touched released mutmap savepoint metadata.
+# Invariant: repeated SAVEPOINT / RELEASE / ROLLBACK TO around large
+#            composite-PK DML streams preserves only the intended rows.
+# ============================================================
+
+echo "--- Guard 14: .read savepoint-heavy composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/savepoint_blobkey.db"
+SQL="$TMPROOT/savepoint_blobkey.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(a,b)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 1200); do
+    echo "INSERT INTO t VALUES($i,$i,'base$i');"
+  done
+  echo "SAVEPOINT sp1;"
+  for i in $(seq 1201 2400); do
+    echo "INSERT INTO t VALUES($i,$i,'keep$i');"
+  done
+  echo "RELEASE sp1;"
+  echo "SAVEPOINT sp2;"
+  for i in $(seq 2401 3200); do
+    echo "INSERT INTO t VALUES($i,$i,'drop$i');"
+  done
+  for i in $(seq 401 1800); do
+    echo "UPDATE t SET v='u$i' WHERE a=$i AND b=$i;"
+  done
+  echo "ROLLBACK TO sp2;"
+  echo "RELEASE sp2;"
+  echo "SAVEPOINT sp3;"
+  for i in $(seq 6 6 2400); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  echo "RELEASE sp3;"
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','savepoint blobkey');" > /dev/null 2>&1
+
+run_test "savepoint_blobkey_count" \
+  "SELECT COUNT(*) FROM t;" "2000" "$DB"
+run_test "savepoint_blobkey_kept" \
+  "SELECT v FROM t WHERE a=1201 AND b=1201;" "keep1201" "$DB"
+run_test "savepoint_blobkey_rolled_back_insert" \
+  "SELECT COUNT(*) FROM t WHERE a=2500 AND b=2500;" "0" "$DB"
+run_test "savepoint_blobkey_rolled_back_update" \
+  "SELECT v FROM t WHERE a=1000 AND b=1000;" "base1000" "$DB"
+run_test "savepoint_blobkey_released_insert_survives_rollback" \
+  "SELECT v FROM t WHERE a=1501 AND b=1501;" "keep1501" "$DB"
+run_test "savepoint_blobkey_delete" \
+  "SELECT COUNT(*) FROM t WHERE a=1200 AND b=1200;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 15: .read savepoint-heavy WITHOUT ROWID composite-PK stream
+# Invariant: the same release/rollback pattern works on non-rowid
+#            blob-key tables and reopens with exact expected rows.
+# ============================================================
+
+echo "--- Guard 15: .read savepoint-heavy WITHOUT ROWID composite PK ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/savepoint_wor.db"
+SQL="$TMPROOT/savepoint_wor.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  v TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 1000); do
+    echo "INSERT INTO t VALUES($i,$i,'base$i');"
+  done
+  echo "SAVEPOINT sp1;"
+  for i in $(seq 1001 2200); do
+    echo "INSERT INTO t VALUES($i,$i,'keep$i');"
+  done
+  echo "RELEASE sp1;"
+  echo "SAVEPOINT sp2;"
+  for i in $(seq 2201 3000); do
+    echo "INSERT INTO t VALUES($i,$i,'drop$i');"
+  done
+  for i in $(seq 301 1600); do
+    echo "UPDATE t SET v='wu$i' WHERE a=$i AND b=$i;"
+  done
+  echo "ROLLBACK TO sp2;"
+  echo "RELEASE sp2;"
+  echo "SAVEPOINT sp3;"
+  for i in $(seq 5 5 2200); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  echo "RELEASE sp3;"
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','savepoint wor');" > /dev/null 2>&1
+
+run_test "savepoint_wor_count" \
+  "SELECT COUNT(*) FROM t;" "1760" "$DB"
+run_test "savepoint_wor_kept" \
+  "SELECT v FROM t WHERE a=1001 AND b=1001;" "keep1001" "$DB"
+run_test "savepoint_wor_rolled_back_insert" \
+  "SELECT COUNT(*) FROM t WHERE a=2500 AND b=2500;" "0" "$DB"
+run_test "savepoint_wor_rolled_back_update" \
+  "SELECT v FROM t WHERE a=901 AND b=901;" "base901" "$DB"
+run_test "savepoint_wor_released_insert_survives_rollback" \
+  "SELECT v FROM t WHERE a=1501 AND b=1501;" "keep1501" "$DB"
+run_test "savepoint_wor_delete" \
+  "SELECT COUNT(*) FROM t WHERE a=2200 AND b=2200;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 16: .read mixed DML preserves composite-PK secondary indexes
+# Bug shape: large streamed writes on blob-key table roots can also
+#            desynchronize secondary indexes from table contents.
+# Invariant: after reopen, forced indexed lookups and range counts
+#            match the exact expected row set.
+# ============================================================
+
+echo "--- Guard 16: .read mixed DML on composite PK with indexes ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml_idx.db"
+SQL="$TMPROOT/mixed_dml_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 4200); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 1201 3100); do
+    echo "UPDATE t SET d=-$i, e='hot$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 9 9 4200); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 4201 5200); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml idx');" > /dev/null 2>&1
+
+run_test "mixed_dml_idx_count" \
+  "SELECT COUNT(*) FROM t;" "4734" "$DB"
+run_test "mixed_dml_idx_forced_hot" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='hot1201';" "-1201|hot1201" "$DB"
+run_test "mixed_dml_idx_forced_tail_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tail';" "1000" "$DB"
+run_test "mixed_dml_idx_forced_cd_lookup" \
+  "SELECT e FROM t INDEXED BY idx_t_cd WHERE c=2401 AND d=-2401;" "hot2401" "$DB"
+run_test "mixed_dml_idx_deleted_missing" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_cd WHERE c=1800 AND d=-1800;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 17: .read mixed DML preserves WITHOUT ROWID secondary indexes
+# Invariant: the same indexed reopen checks work on non-rowid
+#            composite-PK tables with secondary indexes.
+# ============================================================
+
+echo "--- Guard 17: .read mixed DML on WITHOUT ROWID composite PK with indexes ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/mixed_dml_wor_idx.db"
+SQL="$TMPROOT/mixed_dml_wor_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3600); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 901 2600); do
+    echo "UPDATE t SET d=-$i, e='warm$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 8 8 3600); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 3601 4300); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','mixed dml wor idx');" > /dev/null 2>&1
+
+run_test "mixed_dml_wor_idx_count" \
+  "SELECT COUNT(*) FROM t;" "3850" "$DB"
+run_test "mixed_dml_wor_idx_forced_hot" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='warm901';" "-901|warm901" "$DB"
+run_test "mixed_dml_wor_idx_forced_tail_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tail';" "700" "$DB"
+run_test "mixed_dml_wor_idx_forced_cd_lookup" \
+  "SELECT e FROM t INDEXED BY idx_t_cd WHERE c=1501 AND d=-1501;" "warm1501" "$DB"
+run_test "mixed_dml_wor_idx_deleted_missing" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_cd WHERE c=1200 AND d=-1200;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 18: bulk .read indexed rowid tables survive VC state transitions
+# Bug shape: shell-streamed blob-key writes can look correct in-table
+#            but still drift when staged/committed/persisted through VC.
+# Invariant: status, add, commit, and reopen all preserve the same
+#            secondary-index-visible row set.
+# ============================================================
+
+echo "--- Guard 18: .read indexed composite PK through add/commit/reopen ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_vc_idx.db"
+SQL="$TMPROOT/bulk_vc_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 3200); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 801 2200); do
+    echo "UPDATE t SET d=-$i, e='hot$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 10 10 3200); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 3201 3800); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT COUNT(*) FROM dolt_status;" \
+  "SELECT dolt_add('-A');" \
+  "SELECT COUNT(*) FROM dolt_status;" \
+  "SELECT dolt_commit('-A','-m','bulk vc idx');" > /dev/null 2>&1
+
+run_test "bulk_vc_idx_count" \
+  "SELECT COUNT(*) FROM t;" "3480" "$DB"
+run_test "bulk_vc_idx_forced_hot" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='hot901';" "-901|hot901" "$DB"
+run_test "bulk_vc_idx_forced_tail_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tail';" "600" "$DB"
+run_test "bulk_vc_idx_forced_cd_lookup" \
+  "SELECT e FROM t INDEXED BY idx_t_cd WHERE c=1501 AND d=-1501;" "hot1501" "$DB"
+run_test "bulk_vc_idx_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "2" "$DB"
+run_test "bulk_vc_idx_status_clean" \
+  "SELECT COUNT(*) FROM dolt_status;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 19: bulk .read indexed WITHOUT ROWID tables survive VC states
+# Invariant: the same add/commit/reopen checks work on non-rowid
+#            composite-PK tables with secondary indexes.
+# ============================================================
+
+echo "--- Guard 19: .read indexed WITHOUT ROWID composite PK through add/commit/reopen ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_vc_wor_idx.db"
+SQL="$TMPROOT/bulk_vc_wor_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 2800); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 701 1900); do
+    echo "UPDATE t SET d=-$i, e='warm$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 12 12 2800); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2801 3400); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT COUNT(*) FROM dolt_status;" \
+  "SELECT dolt_add('-A');" \
+  "SELECT COUNT(*) FROM dolt_status;" \
+  "SELECT dolt_commit('-A','-m','bulk vc wor idx');" > /dev/null 2>&1
+
+run_test "bulk_vc_wor_idx_count" \
+  "SELECT COUNT(*) FROM t;" "3167" "$DB"
+run_test "bulk_vc_wor_idx_forced_hot" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='warm777';" "-777|warm777" "$DB"
+run_test "bulk_vc_wor_idx_forced_tail_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tail';" "600" "$DB"
+run_test "bulk_vc_wor_idx_forced_cd_lookup" \
+  "SELECT e FROM t INDEXED BY idx_t_cd WHERE c=1501 AND d=-1501;" "warm1501" "$DB"
+run_test "bulk_vc_wor_idx_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "2" "$DB"
+run_test "bulk_vc_wor_idx_status_clean" \
+  "SELECT COUNT(*) FROM dolt_status;" "0" "$DB"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 20: bulk .read indexed rowid tables survive branch divergence
+# Bug shape: shell-streamed blob-key writes may persist on main but
+#            drift once a branch checkout, branch commit, and reopen
+#            switch the selected root and index set.
+# Invariant: main and feat reopen independently with their own exact
+#            indexed rows after divergence.
+# ============================================================
+
+echo "--- Guard 20: .read indexed composite PK through branch divergence ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_branch_idx.db"
+SQL="$TMPROOT/bulk_branch_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 2400); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 601 1600); do
+    echo "UPDATE t SET d=-$i, e='base$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 10 10 2400); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2401 2800); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail0');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','bulk branch base');" > /dev/null 2>&1
+
+{
+  echo "SELECT dolt_branch('feat');"
+  echo "SELECT dolt_checkout('feat');"
+  for i in $(seq 1701 2200); do
+    echo "UPDATE t SET d=-$i, e='feat$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 13 13 2800); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2801 3200); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tailf');"
+  done
+  echo "SELECT dolt_commit('-A','-m','feat bulk branch');"
+} | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "bulk_branch_idx_main_count" \
+  "SELECT COUNT(*) FROM t;" "2560" "$DB"
+run_test "bulk_branch_idx_main_forced_base" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='base777';" "-777|base777" "$DB"
+run_test "bulk_branch_idx_main_tailf_absent" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tailf';" "0" "$DB"
+run_test "bulk_branch_idx_main_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "2" "$DB"
+run_test "bulk_branch_idx_feat_count" \
+  "SELECT COUNT(*) FROM t;" "2763" "$DB/feat"
+run_test "bulk_branch_idx_forced_feat" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='feat1702';" "-1702|feat1702" "$DB/feat"
+run_test "bulk_branch_idx_tailf_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tailf';" "400" "$DB/feat"
+run_test "bulk_branch_idx_deleted_missing" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_cd WHERE c=1807 AND d=-1807;" "0" "$DB/feat"
+run_test "bulk_branch_idx_feat_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "3" "$DB/feat"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 21: bulk .read indexed WITHOUT ROWID tables survive branches
+# Invariant: the same checkout/commit/reopen isolation works on
+#            non-rowid composite-PK tables with secondary indexes.
+# ============================================================
+
+echo "--- Guard 21: .read indexed WITHOUT ROWID composite PK through branch divergence ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_branch_wor_idx.db"
+SQL="$TMPROOT/bulk_branch_wor_idx.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+) WITHOUT ROWID;
+CREATE INDEX idx_t_e ON t(e);
+CREATE INDEX idx_t_cd ON t(c,d);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 2100); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'seed');"
+  done
+  for i in $(seq 501 1400); do
+    echo "UPDATE t SET d=-$i, e='base$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 12 12 2100); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2101 2400); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tail0');"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','bulk branch wor base');" > /dev/null 2>&1
+
+{
+  echo "SELECT dolt_branch('feat');"
+  echo "SELECT dolt_checkout('feat');"
+  for i in $(seq 1501 2000); do
+    echo "UPDATE t SET d=-$i, e='feat$i' WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 14 14 2400); do
+    echo "DELETE FROM t WHERE a=$i AND b=$i;"
+  done
+  for i in $(seq 2401 2700); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,'tailf');"
+  done
+  echo "SELECT dolt_commit('-A','-m','feat bulk wor branch');"
+} | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "bulk_branch_wor_idx_main_count" \
+  "SELECT COUNT(*) FROM t;" "2225" "$DB"
+run_test "bulk_branch_wor_idx_main_forced_base" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='base777';" "-777|base777" "$DB"
+run_test "bulk_branch_wor_idx_main_tailf_absent" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tailf';" "0" "$DB"
+run_test "bulk_branch_wor_idx_main_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "2" "$DB"
+run_test "bulk_branch_wor_idx_feat_count" \
+  "SELECT COUNT(*) FROM t;" "2379" "$DB/feat"
+run_test "bulk_branch_wor_idx_forced_feat" \
+  "SELECT printf('%d|%s', d, e) FROM t INDEXED BY idx_t_e WHERE e='feat1703';" "-1703|feat1703" "$DB/feat"
+run_test "bulk_branch_wor_idx_tailf_count" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_e WHERE e='tailf';" "300" "$DB/feat"
+run_test "bulk_branch_wor_idx_deleted_missing" \
+  "SELECT COUNT(*) FROM t INDEXED BY idx_t_cd WHERE c=1764 AND d=-1764;" "0" "$DB/feat"
+run_test "bulk_branch_wor_idx_feat_log" \
+  "SELECT COUNT(*) FROM dolt_log;" "3" "$DB/feat"
+
+rm -rf "$TMPROOT"
+
+# ============================================================
+# GUARD 22: databases larger than 2 GiB still open
+# Bug: open-time WAL replay slurped the entire WAL into one malloc,
+#      tripping SQLite's allocator ceiling around 2^31 bytes and
+#      surfacing as a bogus "out of memory".
+# Invariant: a sparse synthetic chunk-store file just over 2 GiB with
+#            a valid WAL chunk+root frame opens and answers queries.
+# ============================================================
+
+echo "--- Guard 22: sparse >2GiB database opens ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/large_open.db"
+
+perl -e '
+  use strict;
+  use warnings;
+  my ($path) = @ARGV;
+  my $MAGIC = 0x444C5443;
+  my $VERSION = 10;
+  my $MANIFEST_SIZE = 168;
+  my $WAL_OFF = $MANIFEST_SIZE;
+  my $CHUNK_LEN = 2147483400; # just under INT_MAX, pushes file > 2^31
+  my $ROOT_OFF = $WAL_OFF + 25 + $CHUNK_LEN;
+
+  sub put_u32 {
+    my ($bufref, $off, $v) = @_;
+    substr($$bufref, $off, 4) = pack("V", $v);
+  }
+  sub put_u64 {
+    my ($bufref, $off, $v) = @_;
+    substr($$bufref, $off, 8) = pack("Q<", $v);
+  }
+
+  open my $fh, "+>", $path or die $!;
+  binmode $fh;
+
+  my $manifest = "\0" x $MANIFEST_SIZE;
+  put_u32(\$manifest, 0, $MAGIC);
+  put_u32(\$manifest, 4, $VERSION);
+  put_u32(\$manifest, 28, 1);
+  put_u64(\$manifest, 32, 0);
+  put_u32(\$manifest, 40, 0);
+  put_u64(\$manifest, 84, $WAL_OFF);
+  print {$fh} $manifest or die $!;
+
+  seek($fh, $WAL_OFF, 0) or die $!;
+  print {$fh} chr(1), ("\x11" x 20), pack("V", $CHUNK_LEN) or die $!;
+
+  seek($fh, $ROOT_OFF, 0) or die $!;
+  print {$fh} chr(2), $manifest or die $!;
+  close $fh or die $!;
+' "$DB"
+
+LARGE_SIZE=$(stat -c%s "$DB" 2>/dev/null || stat -f%z "$DB")
+if [ "$LARGE_SIZE" -gt 2147483648 ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: large_db_sparse_size\n  expected: >2147483648\n  got:      $LARGE_SIZE"
+fi
+
+LARGE_OPEN_RESULT=$(echo "SELECT 1;" | $DOLTLITE "$DB" 2>&1)
+if [ "$LARGE_OPEN_RESULT" = "1" ]; then
+  PASS=$((PASS+1))
+else
+  FAIL=$((FAIL+1))
+  ERRORS="$ERRORS\nFAIL: large_db_sparse_open\n  expected: 1\n  got:      $LARGE_OPEN_RESULT"
+fi
+
+rm -rf "$TMPROOT"
+
+# ============================================================
 # GUARD 8: Encoding consistency (LE macros match inline code)
 # Bug: encoding was done inline with inconsistent patterns
 # Fix: shared PROLLY_GET/PUT_U16/U32 macros
@@ -296,6 +1147,50 @@ run_test "gc_val_intact" "SELECT v FROM t WHERE id=1;" "before gc" "$DB"
 run_test "gc_reopen_data" "SELECT count(*) FROM t;" "2" "$DB"
 
 rm -f "$DB"
+
+# ============================================================
+# GUARD 10: .read bulk INSERT VALUES preserves all rows
+# Bug: repeated INSERT ... VALUES statements streamed through
+#      the shell could silently drop older rows in composite-PK
+#      tables once sparse blob-key edits were applied one row at a time.
+# Fix: avoid the streaming sparse-edit path for non-intkey roots and
+#      flatten released savepoint bornAt state back to level 0.
+# ============================================================
+
+echo "--- Guard 10: .read bulk INSERT VALUES ---"
+
+TMPROOT=$(mktemp -d)
+DB="$TMPROOT/bulk_read.db"
+SQL="$TMPROOT/bulk_read.sql"
+
+echo "CREATE TABLE t(
+  a INTEGER NOT NULL,
+  b INTEGER NOT NULL,
+  c INTEGER,
+  d INTEGER,
+  e TEXT,
+  PRIMARY KEY(a,b)
+);" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+{
+  echo "BEGIN;"
+  for i in $(seq 1 5000); do
+    echo "INSERT INTO t(a,b,c,d,e) VALUES($i,$i,$i,$i,NULL);"
+  done
+  echo "COMMIT;"
+} > "$SQL"
+
+$DOLTLITE -bail "$DB" -cmd ".read $SQL" \
+  "SELECT dolt_commit('-A','-m','bulk read');" > /dev/null 2>&1
+
+run_test "bulk_read_row_count" \
+  "SELECT COUNT(*) FROM t;" "5000" "$DB"
+run_test "bulk_read_min_pk" \
+  "SELECT MIN(a) FROM t;" "1" "$DB"
+run_test "bulk_read_max_pk" \
+  "SELECT MAX(a) FROM t;" "5000" "$DB"
+
+rm -rf "$TMPROOT"
 
 # ============================================================
 # Done

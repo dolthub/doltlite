@@ -4,55 +4,18 @@
 #include "prolly_mutate.h"
 #include <string.h>
 
-/* Big-endian with sign bit flipped: memcmp on the encoded bytes
-** then gives correct signed ordering. */
-static void encodeI64BE(u8 *buf, i64 v){
-  u64 u = (u64)v ^ ((u64)1 << 63);
-  buf[0] = (u8)(u >> 56);
-  buf[1] = (u8)(u >> 48);
-  buf[2] = (u8)(u >> 40);
-  buf[3] = (u8)(u >> 32);
-  buf[4] = (u8)(u >> 24);
-  buf[5] = (u8)(u >> 16);
-  buf[6] = (u8)(u >> 8);
-  buf[7] = (u8)(u);
-}
-
 #define PROLLY_EST_ENTRIES_PER_LEAF 50
 
 static int compareKeys(
-  u8 flags,
-  const u8 *pKey1, int nKey1, i64 iKey1,
-  const u8 *pKey2, int nKey2, i64 iKey2
+  const u8 *pKey1, int nKey1,
+  const u8 *pKey2, int nKey2
 ){
-  if( flags & PROLLY_NODE_INTKEY ){
-    if( iKey1 < iKey2 ) return -1;
-    if( iKey1 > iKey2 ) return +1;
-    return 0;
-  }else{
-    int n = nKey1 < nKey2 ? nKey1 : nKey2;
-    int c = memcmp(pKey1, pKey2, n);
-    if( c != 0 ) return c;
-    if( nKey1 < nKey2 ) return -1;
-    if( nKey1 > nKey2 ) return 1;
-    return 0;
-  }
-}
-
-static int feedChunker(
-  ProllyChunker *pCh,
-  u8 flags,
-  const u8 *pKey, int nKey, i64 intKey,
-  const u8 *pVal, int nVal
-){
-  if( flags & PROLLY_NODE_INTKEY ){
-
-    u8 aKeyBuf[8];
-    encodeI64BE(aKeyBuf, intKey);
-    return prollyChunkerAdd(pCh, aKeyBuf, 8, pVal, nVal);
-  }else{
-    return prollyChunkerAdd(pCh, pKey, nKey, pVal, nVal);
-  }
+  int n = nKey1 < nKey2 ? nKey1 : nKey2;
+  int c = memcmp(pKey1, pKey2, n);
+  if( c != 0 ) return c;
+  if( nKey1 < nKey2 ) return -1;
+  if( nKey1 > nKey2 ) return 1;
+  return 0;
 }
 
 static int buildFromEdits(
@@ -69,9 +32,8 @@ static int buildFromEdits(
   while( prollyMutMapIterValid(&iter) ){
     ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
     if( pEntry->op==PROLLY_EDIT_INSERT ){
-      rc = feedChunker(&chunker, pMut->flags,
-                       pEntry->pKey, pEntry->nKey, pEntry->intKey,
-                       pEntry->pVal, pEntry->nVal);
+      rc = prollyChunkerAdd(&chunker, pEntry->pKey, pEntry->nKey,
+                            pEntry->pVal, pEntry->nVal);
       if( rc!=SQLITE_OK ){
         prollyChunkerFree(&chunker);
         return rc;
@@ -89,19 +51,17 @@ static int buildFromEdits(
   return rc;
 }
 
-static int mergeWalk(ProllyMutator *pMut);
+/* mergeWalk removed: streamingMerge now handles all flush shapes. */
 
 static int subtreeHasEdits(
-  u8 flags,
   ProllyMutMapIter *pIter,
-  const u8 *pBoundKey, int nBoundKey, i64 iBoundKey
+  const u8 *pBoundKey, int nBoundKey
 ){
   ProllyMutMapEntry *pEd;
   int cmp;
   if( !prollyMutMapIterValid(pIter) ) return 0;
   pEd = prollyMutMapIterEntry(pIter);
-  cmp = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
-                    pBoundKey, nBoundKey, iBoundKey);
+  cmp = compareKeys(pEd->pKey, pEd->nKey, pBoundKey, nBoundKey);
   return (cmp <= 0);
 }
 
@@ -122,7 +82,8 @@ static int mergeLeaf(
   ProllyMutator *pMut,
   ProllyNode *pLeaf,
   ProllyChunker *pCh,
-  ProllyMutMapIter *pIter
+  ProllyMutMapIter *pIter,
+  int isLast
 ){
   int rc = SQLITE_OK;
   int j;
@@ -133,17 +94,9 @@ static int mergeLeaf(
     ProllyMutMapEntry *pEd = haveEdit ? prollyMutMapIterEntry(pIter) : 0;
 
     const u8 *pCurKey; int nCurKey;
-    i64 iCurKey = 0;
-    u8 aKeyBuf[8];
     int cmp;
 
-    if( flags & PROLLY_NODE_INTKEY ){
-      iCurKey = prollyNodeIntKey(pLeaf, j);
-      encodeI64BE(aKeyBuf, iCurKey);
-      pCurKey = aKeyBuf; nCurKey = 8;
-    }else{
-      prollyNodeKey(pLeaf, j, &pCurKey, &nCurKey);
-    }
+    prollyNodeKey(pLeaf, j, &pCurKey, &nCurKey);
 
     if( !haveEdit ){
 
@@ -158,18 +111,9 @@ static int mergeLeaf(
 
     {
       const u8 *pLastKey; int nLastKey;
-      i64 iLastKey = 0;
-      u8 aLastBuf[8];
       int pastLeaf;
-      if( flags & PROLLY_NODE_INTKEY ){
-        iLastKey = prollyNodeIntKey(pLeaf, pLeaf->nItems - 1);
-        encodeI64BE(aLastBuf, iLastKey);
-        pLastKey = aLastBuf; nLastKey = 8;
-      }else{
-        prollyNodeKey(pLeaf, pLeaf->nItems - 1, &pLastKey, &nLastKey);
-      }
-      pastLeaf = compareKeys(flags, pEd->pKey, pEd->nKey, pEd->intKey,
-                                 pLastKey, nLastKey, iLastKey);
+      prollyNodeKey(pLeaf, pLeaf->nItems - 1, &pLastKey, &nLastKey);
+      pastLeaf = compareKeys(pEd->pKey, pEd->nKey, pLastKey, nLastKey);
       if( pastLeaf > 0 ){
 
         const u8 *pVal; int nVal;
@@ -181,8 +125,7 @@ static int mergeLeaf(
       }
     }
 
-    cmp = compareKeys(flags, pCurKey, nCurKey, iCurKey,
-                          pEd->pKey, pEd->nKey, pEd->intKey);
+    cmp = compareKeys(pCurKey, nCurKey, pEd->pKey, pEd->nKey);
     if( cmp < 0 ){
 
       const u8 *pVal; int nVal;
@@ -193,15 +136,7 @@ static int mergeLeaf(
     }else if( cmp == 0 ){
 
       if( pEd->op==PROLLY_EDIT_INSERT ){
-        u8 aEditKey[8];
-        const u8 *pEK; int nEK;
-        if( flags & PROLLY_NODE_INTKEY ){
-          encodeI64BE(aEditKey, pEd->intKey);
-          pEK = aEditKey; nEK = 8;
-        }else{
-          pEK = pEd->pKey; nEK = pEd->nKey;
-        }
-        rc = prollyChunkerAdd(pCh, pEK, nEK, pEd->pVal, pEd->nVal);
+        rc = prollyChunkerAdd(pCh, pEd->pKey, pEd->nKey, pEd->pVal, pEd->nVal);
         if( rc!=SQLITE_OK ) return rc;
       }
       j++;
@@ -209,20 +144,30 @@ static int mergeLeaf(
     }else{
 
       if( pEd->op==PROLLY_EDIT_INSERT ){
-        u8 aEditKey[8];
-        const u8 *pEK; int nEK;
-        if( flags & PROLLY_NODE_INTKEY ){
-          encodeI64BE(aEditKey, pEd->intKey);
-          pEK = aEditKey; nEK = 8;
-        }else{
-          pEK = pEd->pKey; nEK = pEd->nKey;
-        }
-        rc = prollyChunkerAdd(pCh, pEK, nEK, pEd->pVal, pEd->nVal);
+        rc = prollyChunkerAdd(pCh, pEd->pKey, pEd->nKey, pEd->pVal, pEd->nVal);
         if( rc!=SQLITE_OK ) return rc;
       }
       prollyMutMapIterNext(pIter);
     }
   }
+
+  /* Drain trailing edits past the leaf's last key when this is the
+  ** rightmost leaf of an isLast subtree. Feeding them at level 0
+  ** here lets them chunk up alongside the leaf's items, instead of
+  ** the previous "trailing-append at level 0 + propagate up through
+  ** every intermediate level" path that grew tree depth by 1 per
+  ** flush in the worst case. */
+  if( isLast ){
+    while( prollyMutMapIterValid(pIter) ){
+      ProllyMutMapEntry *pEd = prollyMutMapIterEntry(pIter);
+      if( pEd->op==PROLLY_EDIT_INSERT ){
+        rc = prollyChunkerAdd(pCh, pEd->pKey, pEd->nKey, pEd->pVal, pEd->nVal);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+      prollyMutMapIterNext(pIter);
+    }
+  }
+
   return SQLITE_OK;
 }
 
@@ -230,7 +175,8 @@ static int streamingMergeNode(
   ProllyMutator *pMut,
   const ProllyNode *pNode,
   ProllyChunker *pChunker,
-  ProllyMutMapIter *pIter
+  ProllyMutMapIter *pIter,
+  int isLast
 ){
   ProllyCache *pCache = pMut->pCache;
   int rc = SQLITE_OK;
@@ -239,20 +185,24 @@ static int streamingMergeNode(
   for( i = 0; i < pNode->nItems; i++ ){
     const u8 *pBoundKey; int nBoundKey;
     const u8 *pChildVal; int nChildVal;
-    i64 iBoundKey = 0;
-    u8 aBoundBuf[8];
+    int childIsLast;
+    int forceDescend;
 
     prollyNodeKey(pNode, i, &pBoundKey, &nBoundKey);
     prollyNodeValue(pNode, i, &pChildVal, &nChildVal);
 
-    if( pMut->flags & PROLLY_NODE_INTKEY ){
-      iBoundKey = prollyNodeIntKey(pNode, i);
-      encodeI64BE(aBoundBuf, iBoundKey);
-      pBoundKey = aBoundBuf; nBoundKey = 8;
-    }
+    childIsLast = isLast && (i == pNode->nItems - 1);
 
-    if( !subtreeHasEdits(pMut->flags, pIter,
-                         pBoundKey, nBoundKey, iBoundKey)
+    /* The rightmost child of an isLast subtree must absorb any
+    ** trailing edits past pBoundKey. If we splice it instead, those
+    ** edits get appended at chunker level 0 and propagate up through
+    ** every intermediate level as a column of single-entry chunks —
+    ** which is what produced the depth pathology that hit MAX_DEPTH
+    ** at ~1900 single-row inserts. */
+    forceDescend = childIsLast && prollyMutMapIterValid(pIter);
+
+    if( !forceDescend
+     && !subtreeHasEdits(pIter, pBoundKey, nBoundKey)
      && chunkerLevelsBelowEmpty(pChunker, pNode->level) ){
       rc = prollyChunkerAddAtLevel(pChunker, pNode->level,
                                     pBoundKey, nBoundKey,
@@ -276,9 +226,9 @@ static int streamingMergeNode(
       }
 
       if( pChildEntry->node.level == 0 ){
-        rc = mergeLeaf(pMut, &pChildEntry->node, pChunker, pIter);
+        rc = mergeLeaf(pMut, &pChildEntry->node, pChunker, pIter, childIsLast);
       }else{
-        rc = streamingMergeNode(pMut, &pChildEntry->node, pChunker, pIter);
+        rc = streamingMergeNode(pMut, &pChildEntry->node, pChunker, pIter, childIsLast);
       }
       prollyCacheRelease(pCache, pChildEntry);
       if( rc!=SQLITE_OK ) return rc;
@@ -308,11 +258,6 @@ static int streamingMerge(
   }
 
 
-  if( rootNode.level == 0 ){
-    sqlite3_free(pRootData);
-    return mergeWalk(pMut);
-  }
-
   prollyMutMapIterFirst(&iter, pMut->pEdits);
   rc = prollyChunkerInit(&chunker, pMut->pStore, pMut->flags);
   if( rc!=SQLITE_OK ){
@@ -320,19 +265,20 @@ static int streamingMerge(
     return rc;
   }
 
-  rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter);
-
-
-  while( prollyMutMapIterValid(&iter) ){
-    ProllyMutMapEntry *pEd = prollyMutMapIterEntry(&iter);
-    if( pEd->op==PROLLY_EDIT_INSERT ){
-      rc = feedChunker(&chunker, pMut->flags,
-                       pEd->pKey, pEd->nKey, pEd->intKey,
-                       pEd->pVal, pEd->nVal);
-      if( rc!=SQLITE_OK ) goto streaming_cleanup;
-    }
-    prollyMutMapIterNext(&iter);
+  /* isLast=1 marks the root as the rightmost subtree at this level
+  ** of recursion, propagating down through the rightmost child of
+  ** each visited node. mergeLeaf at the bottom drains any trailing
+  ** edits past the rightmost leaf's last key.
+  **
+  ** A root that is itself a leaf (level == 0) is just the rightmost
+  ** leaf at the top of the tree — drain edits into it via mergeLeaf
+  ** directly, no need for streamingMergeNode's child-iteration. */
+  if( rootNode.level == 0 ){
+    rc = mergeLeaf(pMut, &rootNode, &chunker, &iter, /*isLast=*/1);
+  }else{
+    rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter, /*isLast=*/1);
   }
+  if( rc!=SQLITE_OK ) goto streaming_cleanup;
 
   rc = prollyChunkerFinish(&chunker);
   if( rc==SQLITE_OK ){
@@ -345,139 +291,17 @@ streaming_cleanup:
   return rc;
 }
 
-static int mergeWalk(
-  ProllyMutator *pMut
-){
-  ProllyCursor cur;
-  ProllyMutMapIter iter;
-  ProllyChunker chunker;
-  int rc;
-  int curEmpty = 0;
-  int curValid;
-  int iterValid;
 
-
-  prollyCursorInit(&cur, pMut->pStore, pMut->pCache,
-                   &pMut->oldRoot, pMut->flags);
-  rc = prollyCursorFirst(&cur, &curEmpty);
-  if( rc!=SQLITE_OK ){
-    prollyCursorClose(&cur);
-    return rc;
-  }
-  if( curEmpty ){
-    prollyCursorClose(&cur);
-    return buildFromEdits(pMut);
-  }
-
-  prollyMutMapIterFirst(&iter, pMut->pEdits);
-
-  rc = prollyChunkerInit(&chunker, pMut->pStore, pMut->flags);
-  if( rc!=SQLITE_OK ){
-    prollyCursorClose(&cur);
-    return rc;
-  }
-
-  for(;;){
-    curValid = prollyCursorIsValid(&cur);
-    iterValid = prollyMutMapIterValid(&iter);
-    if( !curValid && !iterValid ) break;
-
-    if( curValid && !iterValid ){
-      const u8 *pKey; int nKey;
-      const u8 *pVal; int nVal;
-      i64 intKey = 0;
-      if( pMut->flags & PROLLY_NODE_INTKEY ){
-        intKey = prollyCursorIntKey(&cur);
-        pKey = 0; nKey = 0;
-      }else{
-        prollyCursorKey(&cur, &pKey, &nKey);
-      }
-      prollyCursorValue(&cur, &pVal, &nVal);
-      rc = feedChunker(&chunker, pMut->flags, pKey, nKey, intKey, pVal, nVal);
-      if( rc!=SQLITE_OK ) goto merge_cleanup;
-      rc = prollyCursorNext(&cur);
-      if( rc!=SQLITE_OK ) goto merge_cleanup;
-      continue;
-    }
-
-    if( !curValid && iterValid ){
-      ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
-      if( pEntry->op==PROLLY_EDIT_INSERT ){
-        rc = feedChunker(&chunker, pMut->flags,
-                         pEntry->pKey, pEntry->nKey, pEntry->intKey,
-                         pEntry->pVal, pEntry->nVal);
-        if( rc!=SQLITE_OK ) goto merge_cleanup;
-      }
-      prollyMutMapIterNext(&iter);
-      continue;
-    }
-
-    {
-      ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&iter);
-      const u8 *pCurKey; int nCurKey;
-      i64 iCurKey = 0;
-      int cmp;
-
-      if( pMut->flags & PROLLY_NODE_INTKEY ){
-        iCurKey = prollyCursorIntKey(&cur);
-        pCurKey = 0; nCurKey = 0;
-      }else{
-        prollyCursorKey(&cur, &pCurKey, &nCurKey);
-      }
-
-      cmp = compareKeys(pMut->flags,
-                         pCurKey, nCurKey, iCurKey,
-                         pEntry->pKey, pEntry->nKey, pEntry->intKey);
-
-      if( cmp < 0 ){
-        const u8 *pVal; int nVal;
-        prollyCursorValue(&cur, &pVal, &nVal);
-        rc = feedChunker(&chunker, pMut->flags,
-                         pCurKey, nCurKey, iCurKey, pVal, nVal);
-        if( rc!=SQLITE_OK ) goto merge_cleanup;
-        rc = prollyCursorNext(&cur);
-        if( rc!=SQLITE_OK ) goto merge_cleanup;
-      }else if( cmp == 0 ){
-        if( pEntry->op==PROLLY_EDIT_INSERT ){
-          rc = feedChunker(&chunker, pMut->flags,
-                           pEntry->pKey, pEntry->nKey, pEntry->intKey,
-                           pEntry->pVal, pEntry->nVal);
-          if( rc!=SQLITE_OK ) goto merge_cleanup;
-        }
-        rc = prollyCursorNext(&cur);
-        if( rc!=SQLITE_OK ) goto merge_cleanup;
-        prollyMutMapIterNext(&iter);
-      }else{
-        if( pEntry->op==PROLLY_EDIT_INSERT ){
-          rc = feedChunker(&chunker, pMut->flags,
-                           pEntry->pKey, pEntry->nKey, pEntry->intKey,
-                           pEntry->pVal, pEntry->nVal);
-          if( rc!=SQLITE_OK ) goto merge_cleanup;
-        }
-        prollyMutMapIterNext(&iter);
-      }
-    }
-  }
-
-  rc = prollyChunkerFinish(&chunker);
-  if( rc==SQLITE_OK ){
-    prollyChunkerGetRoot(&chunker, &pMut->newRoot);
-  }
-
-merge_cleanup:
-  prollyChunkerFree(&chunker);
-  prollyCursorClose(&cur);
-  return rc;
-}
-
-/* streamingMerge skips unchanged subtrees by re-splicing them into a
-** new chunker at their original level. Fast for sparse edits, but
-** because the splice happens at the source level it can accumulate
-** extra depth over many sessions. mergeWalk rebuilds the whole tree
-** so depth stays optimal. Heuristic below uses streamingMerge only
-** when edits are a tiny fraction of leaves AND the absolute count is
-** small — batch inserts always fall through to mergeWalk so the
-** common case stays clean. */
+/* streamingMerge is now the only flush strategy. It walks the tree once,
+** splicing unchanged subtrees by re-emitting their hash references at the
+** matched level (Dolt's chunker.advanceTo equivalent), and drains trailing
+** edits into the rightmost leaf to avoid the depth pathology that the
+** earlier mergeWalk fallback was guarding against. With those correctness
+** properties in place there is no shape on which a full-rebuild walk would
+** be required for correctness, so the per-flush strategy choice (which had
+** been pessimizing toward mergeWalk for any non-trivial edit ratio) is
+** dropped in favor of the unified path — matching Dolt's "one algorithm,
+** no INTKEY/non-INTKEY split" property. */
 int prollyMutateFlush(ProllyMutator *pMut){
   if( prollyMutMapIsEmpty(pMut->pEdits) ){
     memcpy(&pMut->newRoot, &pMut->oldRoot, sizeof(ProllyHash));
@@ -488,39 +312,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
     return buildFromEdits(pMut);
   }
 
-  {
-    int M = prollyMutMapCount(pMut->pEdits);
-    int leafCount = 0;
-
-    {
-      u8 *pRootData = 0;
-      int nRootData = 0;
-      int rcEst = chunkStoreGet(pMut->pStore, &pMut->oldRoot,
-                                &pRootData, &nRootData);
-      if( rcEst==SQLITE_OK && pRootData ){
-        ProllyNode rootNode;
-        if( prollyNodeParse(&rootNode, pRootData, nRootData)==SQLITE_OK ){
-          if( rootNode.level==0 ){
-            leafCount = rootNode.nItems;
-          }else{
-            leafCount = rootNode.nItems * PROLLY_EST_ENTRIES_PER_LEAF;
-            /* Cap at two levels of fan-out; overestimating picks
-            ** streamingMerge too aggressively and deepens the tree. */
-            if( rootNode.level > 1 && leafCount < 0x7FFFFFFF / PROLLY_EST_ENTRIES_PER_LEAF ){
-              leafCount *= PROLLY_EST_ENTRIES_PER_LEAF;
-            }
-          }
-        }
-        sqlite3_free(pRootData);
-      }
-    }
-
-    if( leafCount <= 0 || M > leafCount / 100 || M > 10000 ){
-      return mergeWalk(pMut);
-    }else{
-      return streamingMerge(pMut);
-    }
-  }
+  return streamingMerge(pMut);
 }
 
 int prollyMutateInsert(

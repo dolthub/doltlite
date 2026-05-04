@@ -75,12 +75,18 @@ static int flushLevel(ProllyChunker *ch, int level){
   /* Parent level keyed on the LAST child key: prolly internal keys
   ** are the max key of their subtree, matching the cursor's seek
   ** contract. */
-  if( level + 1 < PROLLY_CURSOR_MAX_DEPTH ){
-    rc = addToLevel(ch, level + 1,
-                    pLastKey, nLastKey,
-                    hash.data, PROLLY_HASH_SIZE);
-    if( rc!=SQLITE_OK ) return rc;
+  /* If we've hit MAX_DEPTH the parent level can't accept this chunk's
+  ** reference. Returning SQLITE_OK here would silently drop the chunk —
+  ** every key under it disappears from the tree. Bail with an error so
+  ** the caller can fall back to the rebuild path (mergeWalk). */
+  if( level + 1 >= PROLLY_CURSOR_MAX_DEPTH ){
+    return SQLITE_FULL;
   }
+
+  rc = addToLevel(ch, level + 1,
+                  pLastKey, nLastKey,
+                  hash.data, PROLLY_HASH_SIZE);
+  if( rc!=SQLITE_OK ) return rc;
 
 
   prollyNodeBuilderReset(&pLevel->builder);

@@ -175,6 +175,146 @@ SELECT dolt_rebase('main');
 SELECT count(*) FROM pragma_foreign_key_list('c');
 " "1"
 
+RECREATE_FK_SETUP="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10);
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO p VALUES(1,100);
+INSERT INTO c VALUES(1,100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK (v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_check');
+SELECT dolt_checkout('feat');
+DROP TABLE c;
+DROP TABLE p;
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE, label TEXT);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO p VALUES(2,200,'x');
+INSERT INTO c VALUES(2,200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_recreate_fk_family');
+"
+
+run_db_match "rebase_schema_recreate_fk_family_hash" "
+$RECREATE_FK_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased|^[0-9a-f]{40}$"
+
+run_db_eq "rebase_schema_recreate_fk_family_parent" "
+$RECREATE_FK_SETUP
+SELECT dolt_rebase('main');
+SELECT count(*) FROM p;
+" "1"
+
+run_db_eq "rebase_schema_recreate_fk_family_child" "
+$RECREATE_FK_SETUP
+SELECT dolt_rebase('main');
+SELECT count(*) FROM c;
+" "1"
+
+run_db_eq "rebase_schema_recreate_fk_family_fk" "
+$RECREATE_FK_SETUP
+SELECT dolt_rebase('main');
+SELECT count(*) FROM pragma_foreign_key_list('c');
+" "1"
+
+run_db_eq "rebase_schema_recreate_fk_family_schema" "
+$RECREATE_FK_SETUP
+SELECT dolt_rebase('main');
+SELECT instr(sql,'label TEXT')>0 FROM sqlite_master WHERE type='table' AND name='p';
+" "1"
+
+run_db_eq "rebase_schema_recreate_fk_family_parent_unique_index_live" "
+$RECREATE_FK_SETUP
+SELECT dolt_rebase('main');
+SELECT count(*) FROM p INDEXED BY sqlite_autoindex_p_1 WHERE u=200;
+" "1"
+
+run_db_eq "rebase_schema_recreate_fk_family_fk_check_clean" "
+$RECREATE_FK_SETUP
+SELECT dolt_rebase('main');
+SELECT count(*) FROM pragma_foreign_key_check;
+" "0"
+
+SELF_REF_SETUP="
+PRAGMA foreign_keys = ON;
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  parent_id INTEGER,
+  FOREIGN KEY (parent_id) REFERENCES t(id) ON DELETE CASCADE
+);
+INSERT INTO t VALUES (1, NULL), (2, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+INSERT INTO t VALUES (10, NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main root');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (3, 2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat descendant');
+"
+
+run_db_match "rebase_schema_self_ref_fk_hash" "
+$SELF_REF_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased|^[0-9a-f]{40}$"
+
+run_db_eq "rebase_schema_self_ref_fk_cascade" "
+$SELF_REF_SETUP
+SELECT dolt_rebase('main');
+DELETE FROM t WHERE id = 1;
+SELECT group_concat(id || ':' || ifnull(parent_id, -1), ',') FROM (SELECT id, parent_id FROM t ORDER BY id);
+" "10:-1"
+
+CHAIN_SETUP="
+PRAGMA foreign_keys = ON;
+CREATE TABLE gp(id INTEGER PRIMARY KEY);
+CREATE TABLE p(
+  id INTEGER PRIMARY KEY,
+  gp_id INTEGER,
+  FOREIGN KEY (gp_id) REFERENCES gp(id) ON DELETE CASCADE
+);
+CREATE TABLE c(
+  id INTEGER PRIMARY KEY,
+  p_id INTEGER,
+  FOREIGN KEY (p_id) REFERENCES p(id) ON DELETE CASCADE
+);
+INSERT INTO gp VALUES (1);
+INSERT INTO p VALUES (1, 1);
+INSERT INTO c VALUES (1, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+INSERT INTO gp VALUES (2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main root');
+SELECT dolt_checkout('feat');
+INSERT INTO c VALUES (2, 1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat child');
+"
+
+run_db_match "rebase_schema_fk_chain_hash" "
+$CHAIN_SETUP
+SELECT dolt_rebase('main');
+" "Successfully rebased|^[0-9a-f]{40}$"
+
+run_db_eq "rebase_schema_fk_chain_cascade" "
+$CHAIN_SETUP
+SELECT dolt_rebase('main');
+DELETE FROM gp WHERE id = 1;
+SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);
+" "1|0|0"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 if [ $FAIL -gt 0 ]; then

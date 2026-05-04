@@ -550,6 +550,105 @@ run_test "cp_fk_tables_fk" "SELECT count(*) FROM pragma_foreign_key_list('c');" 
 
 rm -f "$DB"
 
+DB=/tmp/test_cp_recreate_fk_family_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES(1,10);
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO p VALUES(1,100);
+INSERT INTO c VALUES(1,100);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+DROP TABLE c;
+DROP TABLE p;
+CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE, label TEXT);
+CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u));
+INSERT INTO p VALUES(2,200,'x');
+INSERT INTO c VALUES(2,200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_recreate_fk_family');
+SELECT dolt_checkout('main');
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v INT CHECK(v > 0));
+INSERT INTO t_new SELECT * FROM t;
+DROP TABLE t;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_check');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "cp_recreate_fk_family_hash" \
+  "SELECT dolt_cherry_pick('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "cp_recreate_fk_family_parent" "SELECT count(*) FROM p;" "1" "$DB"
+run_test "cp_recreate_fk_family_child" "SELECT count(*) FROM c;" "1" "$DB"
+run_test "cp_recreate_fk_family_fk" "SELECT count(*) FROM pragma_foreign_key_list('c');" "1" "$DB"
+run_test "cp_recreate_fk_family_schema" "SELECT instr(sql,'label TEXT')>0 FROM sqlite_master WHERE type='table' AND name='p';" "1" "$DB"
+run_test "cp_recreate_fk_family_parent_unique_index_live" "SELECT count(*) FROM p INDEXED BY sqlite_autoindex_p_1 WHERE u=200;" "1" "$DB"
+run_test "cp_recreate_fk_family_fk_check_clean" "SELECT count(*) FROM pragma_foreign_key_check;" "0" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_cp_self_ref_fk_$$.db; rm -f "$DB"
+echo "PRAGMA foreign_keys=ON;
+CREATE TABLE t(id INTEGER PRIMARY KEY, parent_id INT, FOREIGN KEY(parent_id) REFERENCES t(id) ON DELETE CASCADE);
+INSERT INTO t VALUES(1,NULL),(2,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(3,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_add_descendant');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES(10,NULL);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_add_root');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "cp_self_ref_fk_hash" \
+  "PRAGMA foreign_keys=ON; SELECT dolt_cherry_pick('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "cp_self_ref_fk_delete_cascades" \
+  "PRAGMA foreign_keys=ON; DELETE FROM t WHERE id=1; SELECT group_concat(id || ':' || ifnull(parent_id,-1), ',') FROM (SELECT id,parent_id FROM t ORDER BY id);" \
+  "10:-1" "$DB"
+run_test "cp_self_ref_fk_reopen_state" \
+  "PRAGMA foreign_keys=ON; SELECT group_concat(id || ':' || ifnull(parent_id,-1), ',') FROM (SELECT id,parent_id FROM t ORDER BY id);" \
+  "10:-1" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_cp_fk_chain_$$.db; rm -f "$DB"
+echo "PRAGMA foreign_keys=ON;
+CREATE TABLE gp(id INTEGER PRIMARY KEY);
+CREATE TABLE p(id INTEGER PRIMARY KEY, gp_id INT, FOREIGN KEY(gp_id) REFERENCES gp(id) ON DELETE CASCADE);
+CREATE TABLE c(id INTEGER PRIMARY KEY, p_id INT, FOREIGN KEY(p_id) REFERENCES p(id) ON DELETE CASCADE);
+INSERT INTO gp VALUES(1);
+INSERT INTO p VALUES(1,1);
+INSERT INTO c VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO c VALUES(2,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat_add_child');
+SELECT dolt_checkout('main');
+INSERT INTO gp VALUES(2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main_add_root');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "cp_fk_chain_hash" \
+  "PRAGMA foreign_keys=ON; SELECT dolt_cherry_pick('feat');" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "cp_fk_chain_delete_cascades" \
+  "PRAGMA foreign_keys=ON; DELETE FROM gp WHERE id=1; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" \
+  "1|0|0" "$DB"
+run_test "cp_fk_chain_reopen_state" \
+  "PRAGMA foreign_keys=ON; SELECT (SELECT count(*) FROM gp) || '|' || (SELECT count(*) FROM p) || '|' || (SELECT count(*) FROM c);" \
+  "1|0|0" "$DB"
+
+rm -f "$DB"
+
 DB=/tmp/test_rv_violation_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT);
 INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2');
