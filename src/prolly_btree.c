@@ -5584,7 +5584,12 @@ static int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, voi
     return SQLITE_ABORT;
   }
 
-  prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+  /* Must use the merge-cursor-aware payload accessor: when the cursor
+  ** is positioned on a mutmap entry (FTS5's blob cursor hits this on
+  ** every auto-merge — its long-lived read cursor lands on a freshly
+  ** buffered segment row), prollyCursorValue would read the empty tree
+  ** slot and the blob read would silently return stale bytes. */
+  getCursorPayload(pCur, &pVal, &nVal);
 
   if( (i64)offset + (i64)amt > (i64)nVal ){
     return SQLITE_CORRUPT_BKPT;
