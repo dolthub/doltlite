@@ -58,6 +58,7 @@ TESTS=(
   doltlite_index_prefix.sh
   doltlite_regression_test_c.sh
   review_regression_test.sh
+  fast_merge_predicate_test.sh
 )
 
 total_pass=0
