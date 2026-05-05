@@ -7,7 +7,7 @@
 #   identical regardless of the SQL history used to produce that state.
 #
 # Current phase:
-#   - DML only
+#   - DML and initial DDL coverage
 #   - small datasets for PR-speed baseline coverage
 #   - direct-write and branch/merge histories
 #   - key families:
@@ -21,11 +21,8 @@
 #   2. dolt_hashof_db() matches across distinct histories
 #
 # Planned expansion phases:
-#   - branch / merge histories
-#   - large database variants
-#   - .read / streamed import variants
-#   - secondary-index-heavy variants
-#   - DDL history independence
+#   - richer DDL branch / merge histories
+#   - larger DDL recreate / rename matrices
 #   - clone / fetch / push / pull histories
 #
 
@@ -278,6 +275,54 @@ run_index_case() {
   assert_hash_shape "${family}_idx_db_hash_shape_c" "$hash_c"
   assert_equal "${family}_idx_db_hash_a_vs_b" "$hash_a" "$hash_b"
   assert_equal "${family}_idx_db_hash_a_vs_c" "$hash_a" "$hash_c"
+
+  echo ""
+}
+
+run_ddl_case() {
+  local family="$1"
+  local data_sql="$2"
+  local schema_sql="$3"
+  local history_a="$4"
+  local history_b="$5"
+  local history_c="$6"
+
+  local db_a="$TMPROOT/${family}_ddl_a.db"
+  local db_b="$TMPROOT/${family}_ddl_b.db"
+  local db_c="$TMPROOT/${family}_ddl_c.db"
+
+  echo "--- $family ddl histories ---"
+
+  run_setup "$db_a" "${family}_ddl_a" "$history_a"
+  run_setup "$db_b" "${family}_ddl_b" "$history_b"
+  run_setup "$db_c" "${family}_ddl_c" "$history_c"
+
+  local data_a data_b data_c
+  data_a=$(canonical_digest "$db_a" "${family}_ddl_a_data" "$data_sql")
+  data_b=$(canonical_digest "$db_b" "${family}_ddl_b_data" "$data_sql")
+  data_c=$(canonical_digest "$db_c" "${family}_ddl_c_data" "$data_sql")
+
+  assert_equal "${family}_ddl_data_a_vs_b" "$data_a" "$data_b"
+  assert_equal "${family}_ddl_data_a_vs_c" "$data_a" "$data_c"
+
+  local schema_a schema_b schema_c
+  schema_a=$(canonical_digest "$db_a" "${family}_ddl_a_schema" "$schema_sql")
+  schema_b=$(canonical_digest "$db_b" "${family}_ddl_b_schema" "$schema_sql")
+  schema_c=$(canonical_digest "$db_c" "${family}_ddl_c_schema" "$schema_sql")
+
+  assert_equal "${family}_ddl_schema_a_vs_b" "$schema_a" "$schema_b"
+  assert_equal "${family}_ddl_schema_a_vs_c" "$schema_a" "$schema_c"
+
+  local hash_a hash_b hash_c
+  hash_a=$(db_hash "$db_a" "${family}_ddl_a_hash")
+  hash_b=$(db_hash "$db_b" "${family}_ddl_b_hash")
+  hash_c=$(db_hash "$db_c" "${family}_ddl_c_hash")
+
+  assert_hash_shape "${family}_ddl_db_hash_shape_a" "$hash_a"
+  assert_hash_shape "${family}_ddl_db_hash_shape_b" "$hash_b"
+  assert_hash_shape "${family}_ddl_db_hash_shape_c" "$hash_c"
+  assert_equal "${family}_ddl_db_hash_a_vs_b" "$hash_a" "$hash_b"
+  assert_equal "${family}_ddl_db_hash_a_vs_c" "$hash_a" "$hash_c"
 
   echo ""
 }
@@ -1314,6 +1359,276 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'final');
 " \
   "SELECT printf('%s|%d|%s|%d', a, b, v, n) FROM t INDEXED BY idx_v WHERE v IN ('v00001','v01000','v02500','v05000') ORDER BY v;"
+
+echo "--- ddl histories ---"
+
+run_ddl_case \
+  "ddl_int_pk" \
+  "SELECT printf('%d|%s|%d|%s', id, v, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_v|%d|%s', seqno, name) FROM pragma_index_info('idx_t_v') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  v TEXT,
+  n INTEGER,
+  extra TEXT DEFAULT 'seed'
+);
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (1, 'alpha', 10, 'seed');
+INSERT INTO t VALUES (2, 'bravo', 20, 'seed');
+INSERT INTO t VALUES (3, 'charlie', 30, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(
+  id INTEGER PRIMARY KEY,
+  v TEXT,
+  n INTEGER
+);
+INSERT INTO t(id, v, n) VALUES (1, 'alpha', 10);
+INSERT INTO t(id, v, n) VALUES (2, 'bravo', 20);
+INSERT INTO t(id, v, n) VALUES (3, 'charlie', 30);
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(
+  id INTEGER PRIMARY KEY,
+  v TEXT,
+  n INTEGER
+);
+INSERT INTO t_old VALUES (1, 'alpha', 10);
+INSERT INTO t_old VALUES (2, 'bravo', 20);
+INSERT INTO t_old VALUES (3, 'charlie', 30);
+CREATE TABLE t_new(
+  id INTEGER PRIMARY KEY,
+  v TEXT,
+  n INTEGER,
+  extra TEXT DEFAULT 'seed'
+);
+INSERT INTO t_new(id, v, n, extra)
+SELECT id, v, n, 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_text_pk" \
+  "SELECT printf('%s|%s|%d|%s', id, v, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_v|%d|%s', seqno, name) FROM pragma_index_info('idx_t_v') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(
+  id TEXT PRIMARY KEY,
+  v TEXT,
+  n INTEGER,
+  extra TEXT DEFAULT 'seed'
+);
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES ('a-key', 'alpha', 10, 'seed');
+INSERT INTO t VALUES ('b-key', 'bravo', 20, 'seed');
+INSERT INTO t VALUES ('c-key', 'charlie', 30, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(
+  id TEXT PRIMARY KEY,
+  v TEXT,
+  n INTEGER
+);
+INSERT INTO t(id, v, n) VALUES ('a-key', 'alpha', 10);
+INSERT INTO t(id, v, n) VALUES ('b-key', 'bravo', 20);
+INSERT INTO t(id, v, n) VALUES ('c-key', 'charlie', 30);
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(
+  id TEXT PRIMARY KEY,
+  v TEXT,
+  n INTEGER
+);
+INSERT INTO t_old VALUES ('a-key', 'alpha', 10);
+INSERT INTO t_old VALUES ('b-key', 'bravo', 20);
+INSERT INTO t_old VALUES ('c-key', 'charlie', 30);
+CREATE TABLE t_new(
+  id TEXT PRIMARY KEY,
+  v TEXT,
+  n INTEGER,
+  extra TEXT DEFAULT 'seed'
+);
+INSERT INTO t_new(id, v, n, extra)
+SELECT id, v, n, 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_blob_pk" \
+  "SELECT printf('%s|%s|%d|%s', hex(id), v, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_v|%d|%s', seqno, name) FROM pragma_index_info('idx_t_v') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(
+  id BLOB PRIMARY KEY,
+  v TEXT,
+  n INTEGER,
+  extra TEXT DEFAULT 'seed'
+);
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (x'01', 'alpha', 10, 'seed');
+INSERT INTO t VALUES (x'02', 'bravo', 20, 'seed');
+INSERT INTO t VALUES (x'03', 'charlie', 30, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(
+  id BLOB PRIMARY KEY,
+  v TEXT,
+  n INTEGER
+);
+INSERT INTO t(id, v, n) VALUES (x'01', 'alpha', 10);
+INSERT INTO t(id, v, n) VALUES (x'02', 'bravo', 20);
+INSERT INTO t(id, v, n) VALUES (x'03', 'charlie', 30);
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(
+  id BLOB PRIMARY KEY,
+  v TEXT,
+  n INTEGER
+);
+INSERT INTO t_old VALUES (x'01', 'alpha', 10);
+INSERT INTO t_old VALUES (x'02', 'bravo', 20);
+INSERT INTO t_old VALUES (x'03', 'charlie', 30);
+CREATE TABLE t_new(
+  id BLOB PRIMARY KEY,
+  v TEXT,
+  n INTEGER,
+  extra TEXT DEFAULT 'seed'
+);
+INSERT INTO t_new(id, v, n, extra)
+SELECT id, v, n, 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_composite_pk" \
+  "SELECT printf('%s|%d|%s|%d|%s', a, b, v, n, extra) FROM t ORDER BY a, b;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_v|%d|%s', seqno, name) FROM pragma_index_info('idx_t_v') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(
+  a TEXT,
+  b INTEGER,
+  v TEXT,
+  n INTEGER,
+  extra TEXT DEFAULT 'seed',
+  PRIMARY KEY(a, b)
+);
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES ('a', 1, 'alpha', 10, 'seed');
+INSERT INTO t VALUES ('b', 2, 'bravo', 20, 'seed');
+INSERT INTO t VALUES ('c', 3, 'charlie', 30, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(
+  a TEXT,
+  b INTEGER,
+  v TEXT,
+  n INTEGER,
+  PRIMARY KEY(a, b)
+);
+INSERT INTO t(a, b, v, n) VALUES ('a', 1, 'alpha', 10);
+INSERT INTO t(a, b, v, n) VALUES ('b', 2, 'bravo', 20);
+INSERT INTO t(a, b, v, n) VALUES ('c', 3, 'charlie', 30);
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(
+  a TEXT,
+  b INTEGER,
+  v TEXT,
+  n INTEGER,
+  PRIMARY KEY(a, b)
+);
+INSERT INTO t_old VALUES ('a', 1, 'alpha', 10);
+INSERT INTO t_old VALUES ('b', 2, 'bravo', 20);
+INSERT INTO t_old VALUES ('c', 3, 'charlie', 30);
+CREATE TABLE t_new(
+  a TEXT,
+  b INTEGER,
+  v TEXT,
+  n INTEGER,
+  extra TEXT DEFAULT 'seed',
+  PRIMARY KEY(a, b)
+);
+INSERT INTO t_new(a, b, v, n, extra)
+SELECT a, b, v, n, 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
 
 echo "======================================="
 echo "Results: $PASS passed, $FAIL failed"
