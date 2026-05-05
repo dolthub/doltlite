@@ -144,6 +144,34 @@ SELECT dolt_checkout('main');
 EOF
 }
 
+# 50% range overlap with disjoint rows:
+#   left  updates EVEN rows in [1, 0.6R]
+#   right updates ODD  rows in [0.4R, R]
+# Both ranges overlap by 20% of R, but the rows touched are disjoint
+# (ours touches evens, theirs touches odds). Bulk updates on this
+# scale rebalance interior chunks so boundary keys at the level
+# above the affected leaves don't align across the three trees,
+# making this case fall through to cursor-based 3-way recovery.
+# Conflict-free by construction, so the cursor walk emits cleanly.
+build_overlap_disjoint_rows() {
+  local R="$1"
+  local lo_end=$((R * 6 / 10))
+  local hi_start=$((R * 4 / 10))
+  cat <<EOF
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<$R)
+INSERT INTO t SELECT n, 'init_'||n FROM seq;
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+UPDATE t SET v='main_'||id WHERE id<=$lo_end AND id%2=0;
+SELECT dolt_commit('-A','-m','main_evens');
+SELECT dolt_checkout('feat');
+UPDATE t SET v='feat_'||id WHERE id>=$hi_start AND id%2=1;
+SELECT dolt_commit('-A','-m','feat_odds');
+SELECT dolt_checkout('main');
+EOF
+}
+
 # Adjacent edits in the same leaf chunk:
 #   left  edits 5 rows starting at id=1
 #   right edits 5 rows starting at id=10
@@ -282,12 +310,13 @@ scenario_row() {
 }
 
 # Run the scenarios.
-scenario_row "Non-overlapping PK ranges"  "$(build_nonoverlap "$ROWS")"          "10.00"
-scenario_row "Same-leaf disjoint edits"   "$(build_same_leaf_disjoint "$ROWS")"  "10.00"
-scenario_row "50% overlap"                "$(build_overlap_partial "$ROWS")"     "10.00"
-scenario_row "Full overlap"               "$(build_overlap_full "$ROWS")"        "$CEILING_OVERLAP"
-scenario_row "Opt-out: secondary index"   "$(build_optout_index "$ROWS")"        "$CEILING_OPTOUT"
-scenario_row "Opt-out: FK CASCADE"        "$(build_optout_fk "$ROWS")"           "$CEILING_OPTOUT"
+scenario_row "Non-overlapping PK ranges"      "$(build_nonoverlap "$ROWS")"             "10.00"
+scenario_row "Same-leaf disjoint edits"       "$(build_same_leaf_disjoint "$ROWS")"     "10.00"
+scenario_row "50% range overlap, disjoint rows" "$(build_overlap_disjoint_rows "$ROWS")" "10.00"
+scenario_row "50% overlap (same rows, conflicts)" "$(build_overlap_partial "$ROWS")"    "10.00"
+scenario_row "Full overlap"                   "$(build_overlap_full "$ROWS")"           "$CEILING_OVERLAP"
+scenario_row "Opt-out: secondary index"       "$(build_optout_index "$ROWS")"           "$CEILING_OPTOUT"
+scenario_row "Opt-out: FK CASCADE"            "$(build_optout_fk "$ROWS")"              "$CEILING_OPTOUT"
 
 echo ""
 echo "_Ceilings of 10× on speedup scenarios are reporting-only; only the no-regression ceilings (full-overlap and opt-out) are gated. Variance on shared runners is too high to assert speedup floors._"
