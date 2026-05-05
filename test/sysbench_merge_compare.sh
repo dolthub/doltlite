@@ -144,6 +144,30 @@ SELECT dolt_checkout('main');
 EOF
 }
 
+# Adjacent edits in the same leaf chunk:
+#   left  edits 5 rows starting at id=1
+#   right edits 5 rows starting at id=10
+# Both batches likely land in the same leaf chunk. The walker
+# descends to that leaf, finds all three differ, and runs bounded
+# leaf merge — exercising the row-level 3-way merge path while
+# still splicing the rest of the tree.
+build_same_leaf_disjoint() {
+  local R="$1"
+  cat <<EOF
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<$R)
+INSERT INTO t SELECT n, 'init_'||n FROM seq;
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+UPDATE t SET v='main_changed' WHERE id IN (1,2,3,4,5);
+SELECT dolt_commit('-A','-m','main_low');
+SELECT dolt_checkout('feat');
+UPDATE t SET v='feat_changed' WHERE id IN (10,11,12,13,14);
+SELECT dolt_commit('-A','-m','feat_low');
+SELECT dolt_checkout('main');
+EOF
+}
+
 # 50% overlap: left edits [1, 0.6R], right edits [0.4R, R].
 build_overlap_partial() {
   local R="$1"
@@ -258,11 +282,12 @@ scenario_row() {
 }
 
 # Run the scenarios.
-scenario_row "Non-overlapping PK ranges" "$(build_nonoverlap "$ROWS")"        "10.00"
-scenario_row "50% overlap"               "$(build_overlap_partial "$ROWS")"   "10.00"
-scenario_row "Full overlap"              "$(build_overlap_full "$ROWS")"      "$CEILING_OVERLAP"
-scenario_row "Opt-out: secondary index"  "$(build_optout_index "$ROWS")"      "$CEILING_OPTOUT"
-scenario_row "Opt-out: FK CASCADE"       "$(build_optout_fk "$ROWS")"         "$CEILING_OPTOUT"
+scenario_row "Non-overlapping PK ranges"  "$(build_nonoverlap "$ROWS")"          "10.00"
+scenario_row "Same-leaf disjoint edits"   "$(build_same_leaf_disjoint "$ROWS")"  "10.00"
+scenario_row "50% overlap"                "$(build_overlap_partial "$ROWS")"     "10.00"
+scenario_row "Full overlap"               "$(build_overlap_full "$ROWS")"        "$CEILING_OVERLAP"
+scenario_row "Opt-out: secondary index"   "$(build_optout_index "$ROWS")"        "$CEILING_OPTOUT"
+scenario_row "Opt-out: FK CASCADE"        "$(build_optout_fk "$ROWS")"           "$CEILING_OPTOUT"
 
 echo ""
 echo "_Ceilings of 10× on speedup scenarios are reporting-only; only the no-regression ceilings (full-overlap and opt-out) are gated. Variance on shared runners is too high to assert speedup floors._"
