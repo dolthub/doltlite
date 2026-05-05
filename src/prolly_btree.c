@@ -14,7 +14,7 @@
 #include "prolly_chunk_walk.h"
 #include "pager_shim.h"
 #include "doltlite_commit.h"
-#include "doltlite_record.h"
+#include "record_codec.h"
 #include "sortkey.h"
 #include "btree_orig_api.h"
 #include "vdbeInt.h"
@@ -400,7 +400,6 @@ static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount);
 static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept);
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
-static int canonicalizeLiveCatalog(sqlite3 *db);
 static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE);
 static int btreeRefreshFromDisk(Btree *p);
 static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog);
@@ -1608,172 +1607,6 @@ int doltliteSerializeCatalogEntries(
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   return doltliteSerializeCatalogEntries(
       pBtree->db, pBtree->cat.a, pBtree->cat.n, ppOut, pnOut);
-}
-
-typedef struct CanonSchemaRow CanonSchemaRow;
-struct CanonSchemaRow {
-  char *zType;
-  char *zName;
-  char *zTblName;
-  char *zSql;
-  Pgno oldPg;
-  Pgno newPg;
-};
-
-static int canonSchemaRowCmp(const void *a, const void *b){
-  const CanonSchemaRow *ra = (const CanonSchemaRow*)a;
-  const CanonSchemaRow *rb = (const CanonSchemaRow*)b;
-  int c = strcmp(ra->zType ? ra->zType : "", rb->zType ? rb->zType : "");
-  if( c ) return c;
-  c = strcmp(ra->zTblName ? ra->zTblName : "", rb->zTblName ? rb->zTblName : "");
-  if( c ) return c;
-  return strcmp(ra->zName ? ra->zName : "", rb->zName ? rb->zName : "");
-}
-
-static int tableEntryPgnoCmp(const void *a, const void *b){
-  const struct TableEntry *ea = (const struct TableEntry*)a;
-  const struct TableEntry *eb = (const struct TableEntry*)b;
-  if( ea->iTable < eb->iTable ) return -1;
-  if( ea->iTable > eb->iTable ) return 1;
-  return 0;
-}
-
-static void freeCanonSchemaRows(CanonSchemaRow *aRows, int nRows){
-  int i;
-  for(i=0; i<nRows; i++){
-    sqlite3_free(aRows[i].zType);
-    sqlite3_free(aRows[i].zName);
-    sqlite3_free(aRows[i].zTblName);
-    sqlite3_free(aRows[i].zSql);
-  }
-  sqlite3_free(aRows);
-}
-
-static int canonicalizeLiveCatalog(sqlite3 *db){
-  Btree *pBtree;
-  BtShared *pBt;
-  sqlite3_stmt *pScan = 0;
-  sqlite3_stmt *pUpd = 0;
-  CanonSchemaRow *aRows = 0;
-  int nRows = 0;
-  int nAlloc = 0;
-  int i;
-  int rc = SQLITE_OK;
-  Pgno iNext = 2;
-  int changed = 0;
-
-  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
-  pBtree = db->aDb[0].pBt;
-  pBt = pBtree->pBt;
-
-  rc = sqlite3_prepare_v2(db,
-      "SELECT type, name, tbl_name, rootpage, sql "
-      "FROM sqlite_master "
-      "WHERE name NOT LIKE 'dolt_%' "
-      "AND type IN ('table','index') "
-      "ORDER BY type, tbl_name, name",
-      -1, &pScan, 0);
-  if( rc!=SQLITE_OK ) return rc;
-
-  while( (rc = sqlite3_step(pScan))==SQLITE_ROW ){
-    const char *zType = (const char*)sqlite3_column_text(pScan, 0);
-    const char *zName = (const char*)sqlite3_column_text(pScan, 1);
-    const char *zTbl = (const char*)sqlite3_column_text(pScan, 2);
-    const char *zSql = (const char*)sqlite3_column_text(pScan, 4);
-    char *zCanon = doltliteCanonicalizeSchemaSql(zSql, zName);
-    CanonSchemaRow *aNew;
-    if( !zCanon ){ rc = SQLITE_NOMEM; break; }
-    if( nRows>=nAlloc ){
-      int nNew = nAlloc ? nAlloc*2 : 16;
-      aNew = sqlite3_realloc(aRows, nNew * (int)sizeof(CanonSchemaRow));
-      if( !aNew ){
-        sqlite3_free(zCanon);
-        rc = SQLITE_NOMEM;
-        break;
-      }
-      aRows = aNew;
-      nAlloc = nNew;
-    }
-    memset(&aRows[nRows], 0, sizeof(CanonSchemaRow));
-    aRows[nRows].zType = sqlite3_mprintf("%s", zType ? zType : "");
-    aRows[nRows].zName = sqlite3_mprintf("%s", zName ? zName : "");
-    aRows[nRows].zTblName = sqlite3_mprintf("%s", zTbl ? zTbl : "");
-    aRows[nRows].zSql = zCanon;
-    aRows[nRows].oldPg = (Pgno)sqlite3_column_int(pScan, 3);
-    if( !aRows[nRows].zType || !aRows[nRows].zName || !aRows[nRows].zTblName ){
-      rc = SQLITE_NOMEM;
-      break;
-    }
-    nRows++;
-  }
-  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
-  sqlite3_finalize(pScan);
-  pScan = 0;
-  if( rc!=SQLITE_OK ){
-    freeCanonSchemaRows(aRows, nRows);
-    return rc;
-  }
-
-  qsort(aRows, nRows, sizeof(CanonSchemaRow), canonSchemaRowCmp);
-  for(i=0; i<nRows; i++){
-    aRows[i].newPg = iNext++;
-    if( aRows[i].newPg != aRows[i].oldPg ) changed = 1;
-  }
-
-  rc = sqlite3_exec(db, "PRAGMA writable_schema=ON", 0, 0, 0);
-  if( rc!=SQLITE_OK ){
-    freeCanonSchemaRows(aRows, nRows);
-    return rc;
-  }
-  rc = sqlite3_prepare_v2(db,
-      "UPDATE sqlite_master SET rootpage=?, sql=? WHERE type=? AND name=?",
-      -1, &pUpd, 0);
-  if( rc!=SQLITE_OK ){
-    sqlite3_exec(db, "PRAGMA writable_schema=OFF", 0, 0, 0);
-    freeCanonSchemaRows(aRows, nRows);
-    return rc;
-  }
-  for(i=0; i<nRows && rc==SQLITE_OK; i++){
-    sqlite3_bind_int(pUpd, 1, (int)aRows[i].newPg);
-    sqlite3_bind_text(pUpd, 2, aRows[i].zSql, -1, SQLITE_STATIC);
-    sqlite3_bind_text(pUpd, 3, aRows[i].zType, -1, SQLITE_STATIC);
-    sqlite3_bind_text(pUpd, 4, aRows[i].zName, -1, SQLITE_STATIC);
-    rc = sqlite3_step(pUpd);
-    if( rc==SQLITE_DONE ) rc = SQLITE_OK;
-    sqlite3_reset(pUpd);
-    sqlite3_clear_bindings(pUpd);
-  }
-  sqlite3_finalize(pUpd);
-  sqlite3_exec(db, "PRAGMA writable_schema=OFF", 0, 0, 0);
-  if( rc!=SQLITE_OK ){
-    freeCanonSchemaRows(aRows, nRows);
-    return rc;
-  }
-
-  for(i=0; i<pBtree->cat.n; i++){
-    int j;
-    if( pBtree->cat.a[i].iTable<=1 ) continue;
-    for(j=0; j<nRows; j++){
-      if( pBtree->cat.a[i].iTable==aRows[j].oldPg ){
-        pBtree->cat.a[i].iTable = aRows[j].newPg;
-        break;
-      }
-    }
-  }
-  qsort(pBtree->cat.a, pBtree->cat.n, sizeof(struct TableEntry), tableEntryPgnoCmp);
-  pBtree->cat.iNextTable = iNext;
-
-  if( changed ){
-    invalidateCursors(pBt, 0, SQLITE_ABORT);
-    if( pBtree->db ){
-      sqlite3ResetAllSchemasOfConnection(pBtree->db);
-    }else{
-      invalidateSchema(pBtree);
-    }
-  }
-
-  freeCanonSchemaRows(aRows, nRows);
-  return SQLITE_OK;
 }
 
 static void initDefaultMeta(Btree *pBtree){
