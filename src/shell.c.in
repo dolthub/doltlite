@@ -5082,7 +5082,7 @@ static int doltliteSelectConnectBranch(sqlite3 *db, const char *zBranch){
   }
   sqlite3_free(zCurrent);
 
-  rc = sqlite3_prepare_v2(db, "SELECT dolt_checkout(?)", -1, &pStmt, 0);
+  rc = sqlite3_prepare_v2(db, "SELECT dolt_connect_branch(?)", -1, &pStmt, 0);
   if( rc!=SQLITE_OK ){
     sqlite3_finalize(pStmt);
     return SQLITE_OK;

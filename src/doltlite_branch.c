@@ -672,6 +672,58 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   return rc;
 }
 
+static void doltConnectBranchFunc(
+  sqlite3_context *ctx,
+  int argc,
+  sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zBranch;
+  ProllyHash targetCommit;
+  ProllyHash targetCatHash;
+  int rc;
+
+  (void)argc;
+  if( !cs ){
+    sqlite3_result_error(ctx, "no database open", -1);
+    return;
+  }
+  zBranch = (const char*)sqlite3_value_text(argv[0]);
+  if( branchNameEmpty(zBranch) ){
+    sqlite3_result_error(ctx, "branch name required", -1);
+    return;
+  }
+
+  rc = chunkStoreFindBranch(cs, zBranch, &targetCommit);
+  if( rc!=SQLITE_OK || prollyHashIsEmpty(&targetCommit) ){
+    sqlite3_result_error(ctx, "branch not found", -1);
+    return;
+  }
+
+  rc = checkoutLoadAndApply(db, cs, zBranch, &targetCommit, &targetCatHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+
+  doltliteSetSessionBranch(db, zBranch);
+  doltliteSetSessionHead(db, &targetCommit);
+  rc = doltliteLoadWorkingSet(db, zBranch);
+  if( rc==SQLITE_OK ){
+    ProllyHash staged;
+    doltliteGetSessionStaged(db, &staged);
+    if( prollyHashIsEmpty(&staged) ){
+      doltliteSetSessionStaged(db, &targetCatHash);
+    }
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
+  sqlite3_result_int(ctx, 0);
+}
+
 int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   CheckoutMutationCtx m;
@@ -1360,6 +1412,7 @@ int doltliteBranchRegister(sqlite3 *db){
   rc = sqlite3_create_function(db, "dolt_branch", -1, SQLITE_UTF8, 0, doltBranchFunc, 0, 0);
   if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "dolt_checkout", -1, SQLITE_UTF8, 0, doltCheckoutFunc, 0, 0);
   if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "active_branch", 0, SQLITE_UTF8, 0, activeBranchFunc, 0, 0);
+  if(rc==SQLITE_OK) rc = sqlite3_create_function(db, "dolt_connect_branch", 1, SQLITE_UTF8, 0, doltConnectBranchFunc, 0, 0);
   if(rc==SQLITE_OK) rc = sqlite3_create_module(db, "dolt_branches", &brMod, 0);
   return rc;
 }

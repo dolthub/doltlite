@@ -1385,6 +1385,68 @@ static int loadSchemaCatalogRows(
   return SQLITE_OK;
 }
 
+static int appendMissingSchemaCatalogRows(
+  SchemaCatalogRow **paRows,
+  int *pnRows,
+  CatalogEntryMeta *aMeta,
+  int nMeta
+){
+  SchemaCatalogRow *aRows = *paRows;
+  int nRows = *pnRows;
+  int nAlloc = nRows;
+  i64 iNextRowid = 1;
+  int i, j;
+
+  for(i=0; i<nRows; i++){
+    if( aRows[i].iRowid >= iNextRowid ) iNextRowid = aRows[i].iRowid + 1;
+  }
+
+  for(i=0; i<nMeta; i++){
+    SchemaCatalogRow *pRow;
+    if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ) continue;
+    if( !aMeta[i].zType || !aMeta[i].zName || !aMeta[i].zTblName ) continue;
+    if( strcmp(aMeta[i].zType, "table")!=0 && strcmp(aMeta[i].zType, "index")!=0 ){
+      continue;
+    }
+    if( nRows>=nAlloc ){
+      int nNew = nAlloc ? nAlloc*2 : 16;
+      SchemaCatalogRow *aNew = sqlite3_realloc(aRows, nNew*(int)sizeof(SchemaCatalogRow));
+      if( !aNew ){
+        freeSchemaCatalogRows(aRows, nRows);
+        return SQLITE_NOMEM;
+      }
+      aRows = aNew;
+      nAlloc = nNew;
+    }
+    pRow = &aRows[nRows];
+    memset(pRow, 0, sizeof(*pRow));
+    pRow->iRowid = iNextRowid++;
+    pRow->oldPg = aMeta[i].iTable;
+    pRow->zType = sqlite3_mprintf("%s", aMeta[i].zType);
+    pRow->zName = sqlite3_mprintf("%s", aMeta[i].zName);
+    pRow->zTblName = sqlite3_mprintf("%s", aMeta[i].zTblName);
+    pRow->zSql = 0;
+    if( !pRow->zType || !pRow->zName || !pRow->zTblName ){
+      sqlite3_free(pRow->zType);
+      sqlite3_free(pRow->zName);
+      sqlite3_free(pRow->zTblName);
+      for(j=0; j<nRows; j++){
+        sqlite3_free(aRows[j].zType);
+        sqlite3_free(aRows[j].zName);
+        sqlite3_free(aRows[j].zTblName);
+        sqlite3_free(aRows[j].zSql);
+      }
+      sqlite3_free(aRows);
+      return SQLITE_NOMEM;
+    }
+    nRows++;
+  }
+
+  *paRows = aRows;
+  *pnRows = nRows;
+  return SQLITE_OK;
+}
+
 int doltliteSerializeCatalogEntries(
   sqlite3 *db,
   struct TableEntry *aTables,
@@ -1414,18 +1476,25 @@ int doltliteSerializeCatalogEntries(
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
   }
+  rc = appendMissingSchemaCatalogRows(&aRows, &nRows, aMeta, nMeta);
+  if( rc!=SQLITE_OK ){
+    freeCatalogEntryMeta(aMeta, nMeta);
+    return rc;
+  }
   if( nRows>0 ){
     ProllyMutMap mm;
     struct TableEntry masterEntry;
     qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
     for(i=0; i<nRows; i++){
-      char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
-      if( !zCanon ){
-        freeSchemaCatalogRows(aRows, nRows);
-        return SQLITE_NOMEM;
+      if( aRows[i].zSql ){
+        char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
+        if( !zCanon ){
+          freeSchemaCatalogRows(aRows, nRows);
+          return SQLITE_NOMEM;
+        }
+        sqlite3_free(aRows[i].zSql);
+        aRows[i].zSql = zCanon;
       }
-      sqlite3_free(aRows[i].zSql);
-      aRows[i].zSql = zCanon;
       aRows[i].newPg = (Pgno)(i + 2);
     }
 
@@ -1704,6 +1773,24 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = maxPage;
 
     pBtree->cat.iNextTable = maxPage + 1;
+  }
+
+  if( getenv("DOLTLITE_DEBUG_CAT") ){
+    fprintf(stderr, "deserializeCatalog: n=%d\n", pBtree->cat.n);
+    for(i=0; i<pBtree->cat.n; i++){
+      char zRoot[PROLLY_HASH_SIZE*2 + 1];
+      int k;
+      for(k=0; k<PROLLY_HASH_SIZE; k++){
+        static const char zHex[] = "0123456789abcdef";
+        zRoot[k*2] = zHex[(pBtree->cat.a[i].root.data[k] >> 4) & 0xF];
+        zRoot[k*2 + 1] = zHex[pBtree->cat.a[i].root.data[k] & 0xF];
+      }
+      zRoot[PROLLY_HASH_SIZE*2] = 0;
+      fprintf(stderr, "  cat[%d]: iTable=%u name=%s flags=%u root=%s\n",
+              i, (unsigned)pBtree->cat.a[i].iTable,
+              pBtree->cat.a[i].zName ? pBtree->cat.a[i].zName : "(null)",
+              (unsigned)pBtree->cat.a[i].flags, zRoot);
+    }
   }
 
   return SQLITE_OK;
@@ -2584,10 +2671,27 @@ static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount){
     return SQLITE_OK;
   }
 
+  if( getenv("DOLTLITE_DEBUG_COUNT") && iTable==3 ){
+    char zRoot[PROLLY_HASH_SIZE*2 + 1];
+    int k;
+    static const char zHex[] = "0123456789abcdef";
+    for(k=0; k<PROLLY_HASH_SIZE; k++){
+      zRoot[k*2] = zHex[(pTE->root.data[k] >> 4) & 0xF];
+      zRoot[k*2 + 1] = zHex[pTE->root.data[k] & 0xF];
+    }
+    zRoot[PROLLY_HASH_SIZE*2] = 0;
+    fprintf(stderr, "countTreeEntries: branch=%s iTable=%u flags=%u root=%s\n",
+            pBtree->zBranch ? pBtree->zBranch : "(null)",
+            (unsigned)iTable, (unsigned)pTE->flags, zRoot);
+  }
+
   prollyCursorInit(&tempCur, &pBt->store, &pBt->cache,
                     &pTE->root, pTE->flags);
 
   rc = prollyCursorFirst(&tempCur, &res);
+  if( getenv("DOLTLITE_DEBUG_COUNT") && iTable==3 ){
+    fprintf(stderr, "countTreeEntries: rc=%d res=%d state=%d\n", rc, res, tempCur.eState);
+  }
   if( rc!=SQLITE_OK ){
     prollyCursorClose(&tempCur);
     *pCount = 0;
@@ -7042,7 +7146,7 @@ int doltliteSessionHasConstraintViolations(sqlite3 *db){
   return !prollyHashIsEmpty(&db->aDb[0].pBt->constraintViolationsHash);
 }
 
-int doltliteSaveWorkingSet(sqlite3 *db){
+int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;
   u8 *catData = 0;
@@ -7057,11 +7161,15 @@ int doltliteSaveWorkingSet(sqlite3 *db){
 
   zBranch = pBtree->zBranch ? pBtree->zBranch : "main";
 
-  rc = serializeCatalog(pBtree, &catData, &nCatData);
-  if( rc != SQLITE_OK ) return rc;
-  rc = chunkStorePut(cs, catData, nCatData, &workingCatHash);
-  sqlite3_free(catData);
-  if( rc != SQLITE_OK ) return rc;
+  if( pWorkingCatHash ){
+    workingCatHash = *pWorkingCatHash;
+  }else{
+    rc = serializeCatalog(pBtree, &catData, &nCatData);
+    if( rc != SQLITE_OK ) return rc;
+    rc = chunkStorePut(cs, catData, nCatData, &workingCatHash);
+    sqlite3_free(catData);
+    if( rc != SQLITE_OK ) return rc;
+  }
 
   return btreeStoreWorkingSetBlob(cs, zBranch, &workingCatHash,
                                   &pBtree->headCommit, &pBtree->stagedCatalog,
@@ -7075,16 +7183,24 @@ int doltliteSaveWorkingSet(sqlite3 *db){
                                   &pBtree->constraintViolationsHash);
 }
 
-int doltlitePersistWorkingSet(sqlite3 *db){
+int doltliteSaveWorkingSet(sqlite3 *db){
+  return doltliteSaveWorkingSetWithHash(db, 0);
+}
+
+int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc;
 
   if( !cs ) return SQLITE_ERROR;
-  rc = doltliteSaveWorkingSet(db);
+  rc = doltliteSaveWorkingSetWithHash(db, pWorkingCatHash);
   if( rc!=SQLITE_OK ) return rc;
   rc = chunkStoreSerializeRefs(cs);
   if( rc!=SQLITE_OK ) return rc;
   return chunkStoreCommit(cs);
+}
+
+int doltlitePersistWorkingSet(sqlite3 *db){
+  return doltlitePersistWorkingSetWithHash(db, 0);
 }
 
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){

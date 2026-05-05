@@ -132,6 +132,52 @@ static int ciStartsWith(const char *z, const char *zPrefix){
   return 1;
 }
 
+static void appendQuotedIdent(sqlite3_str *pStr, const char *zName){
+  const char *z = zName ? zName : "";
+  sqlite3_str_appendchar(pStr, 1, '"');
+  while( *z ){
+    if( *z=='"' ){
+      sqlite3_str_appendall(pStr, "\"\"");
+    }else{
+      sqlite3_str_appendchar(pStr, 1, *z);
+    }
+    z++;
+  }
+  sqlite3_str_appendchar(pStr, 1, '"');
+}
+
+static const char *skipSchemaIdent(const char *z){
+  if( !z ) return z;
+  if( *z=='"' || *z=='`' ){
+    char q = *z++;
+    while( *z ){
+      if( *z==q ){
+        if( z[1]==q ){
+          z += 2;
+          continue;
+        }
+        z++;
+        break;
+      }
+      z++;
+    }
+    return z;
+  }
+  if( *z=='[' ){
+    z++;
+    while( *z ){
+      if( *z==']' ){
+        z++;
+        break;
+      }
+      z++;
+    }
+    return z;
+  }
+  while( *z && !isspace((unsigned char)*z) && *z!='(' ) z++;
+  return z;
+}
+
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
   sqlite3_str *pStr;
   const char *z = zSql;
@@ -146,43 +192,22 @@ char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
 
   if( zName && ciStartsWith(z, "CREATE TABLE") ){
     sqlite3_str_appendall(pStr, "CREATE TABLE ");
-    sqlite3_str_appendf(pStr, "%s", zName);
+    appendQuotedIdent(pStr, zName);
     z += 12;
     while( *z && isspace((unsigned char)*z) ) z++;
-    if( *z=='"' || *z=='`' || *z=='[' ){
-      char end = (*z=='[') ? ']' : *z;
-      z++;
-      while( *z && *z!=end ) z++;
-      if( *z==end ) z++;
-    }else{
-      while( *z && !isspace((unsigned char)*z) && *z!='(' ) z++;
-    }
+    z = skipSchemaIdent(z);
   }else if( zName && ciStartsWith(z, "CREATE UNIQUE INDEX") ){
     sqlite3_str_appendall(pStr, "CREATE UNIQUE INDEX ");
-    sqlite3_str_appendf(pStr, "%s", zName);
+    appendQuotedIdent(pStr, zName);
     z += 19;
     while( *z && isspace((unsigned char)*z) ) z++;
-    if( *z=='"' || *z=='`' || *z=='[' ){
-      char end = (*z=='[') ? ']' : *z;
-      z++;
-      while( *z && *z!=end ) z++;
-      if( *z==end ) z++;
-    }else{
-      while( *z && !isspace((unsigned char)*z) && *z!='(' ) z++;
-    }
+    z = skipSchemaIdent(z);
   }else if( zName && ciStartsWith(z, "CREATE INDEX") ){
     sqlite3_str_appendall(pStr, "CREATE INDEX ");
-    sqlite3_str_appendf(pStr, "%s", zName);
+    appendQuotedIdent(pStr, zName);
     z += 12;
     while( *z && isspace((unsigned char)*z) ) z++;
-    if( *z=='"' || *z=='`' || *z=='[' ){
-      char end = (*z=='[') ? ']' : *z;
-      z++;
-      while( *z && *z!=end ) z++;
-      if( *z==end ) z++;
-    }else{
-      while( *z && !isspace((unsigned char)*z) && *z!='(' ) z++;
-    }
+    z = skipSchemaIdent(z);
   }
 
   for(; *z; z++){

@@ -697,7 +697,7 @@ static const char *fastMergeIneligibleReason(
   if( !schemaUnchangedBothSides ) return "schema_divergence";
   if( !zName || !db ) return "no_table_handle";
 
-  pTab = sqlite3FindTable(db, zName, 0);
+  pTab = sqlite3FindTable(db, zName, "main");
   if( !pTab ) return "table_not_found";
 
   if( pTab->pIndex ) return "secondary_index";
@@ -1914,7 +1914,7 @@ do_merge_entry:
             MergeIndexInfo *aIdxInfo = 0;
             int nIdxInfo = 0;
             if( zName && db ){
-              Table *pTab = sqlite3FindTable(db, zName, 0);
+              Table *pTab = sqlite3FindTable(db, zName, "main");
               if( pTab ){
                 Index *pIdx;
                 int nIdx = 0;

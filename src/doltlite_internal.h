@@ -148,6 +148,8 @@ int doltliteGetSessionTableRoot(sqlite3 *db, Pgno iTable,
                                  ProllyHash *pRoot, u8 *pFlags);
 int doltliteSaveWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSet(sqlite3 *db);
+int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
+int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
 int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch);
 DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db);

@@ -50,6 +50,9 @@ check_eq "at_selects_side" $'side\nside' "$res"
 res=$("$DOLTLITE" "$DB/side" "SELECT active_branch(); SELECT v FROM t WHERE id=1;")
 check_eq "slash_selects_side" $'side\nside' "$res"
 
+res=$("$DOLTLITE" "$DB" "SELECT active_branch(); SELECT v FROM t WHERE id=1;")
+check_eq "branch_open_does_not_change_default" $'main\nmain' "$res"
+
 res=$("$DOLTLITE" "$DB@missing" "SELECT active_branch();" 2>&1 || true)
 check_match "missing_branch_errors" "unable to select branch|branch.*not found|SQLITE_NOTFOUND" "$res"
 
