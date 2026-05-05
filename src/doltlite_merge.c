@@ -7,6 +7,7 @@
 #include "doltlite_commit.h"
 
 #include "prolly_three_way_diff.h"
+#include "prolly_three_way_merge.h"
 #include "prolly_mutmap.h"
 #include "prolly_mutate.h"
 #include "prolly_cache.h"
@@ -14,7 +15,9 @@
 #include "doltlite_internal.h"
 #include "sortkey.h"
 #include <string.h>
+#include <stdio.h>
 #include <ctype.h>
+#include <stdlib.h>
 
 typedef struct ConflictTableInfo ConflictTableInfo;
 extern int doltliteSerializeConflicts(ChunkStore *cs, ConflictTableInfo *aTables,
@@ -657,6 +660,77 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     }
   }
   return rc;
+}
+
+/* Return NULL if the table merge can take the (future) tree-walking
+** fast-merge path — non-NULL is a short reason string for the
+** ineligibility, used by the DOLTLITE_FAST_MERGE_DEBUG observability
+** path.
+**
+** Disqualifying conditions, any one of which forces the row-by-row path:
+**   1. DOLTLITE_FORCE_ROW_MERGE env var (parity-test hook).
+**   2. Either side's schema hash diverges from the ancestor — a wholesale
+**      subtree splice can't reconcile encoding differences.
+**   3. Any secondary index — fast-merge would have to drive parallel
+**      index edits per row, defeating the purpose.
+**   4. CHECK constraints — splicing in theirs's rows wholesale skips
+**      CHECK evaluation on the spliced range.
+**   5. FK with non-NO-ACTION referential actions, on either parent or
+**      child side — CASCADE/SET NULL/SET DEFAULT/RESTRICT need per-row
+**      trigger semantics. Plain NO-ACTION FKs are still safe because
+**      they're enforced by the merge_constraints post-pass against the
+**      finished tree regardless of how it was built.
+**
+** Conservative on errors: any unrecognized state returns ineligible.
+** False negatives (saying ineligible when actually OK) just cost perf;
+** false positives are wrong answers, so the gate stays strict.
+*/
+static const char *fastMergeIneligibleReason(
+  sqlite3 *db,
+  const char *zName,
+  int schemaUnchangedBothSides
+){
+  Table *pTab;
+  FKey *pFK;
+
+  if( getenv("DOLTLITE_FORCE_ROW_MERGE") ) return "force_row_merge_env";
+  if( !schemaUnchangedBothSides ) return "schema_divergence";
+  if( !zName || !db ) return "no_table_handle";
+
+  pTab = sqlite3FindTable(db, zName, 0);
+  if( !pTab ) return "table_not_found";
+
+  if( pTab->pIndex ) return "secondary_index";
+  if( pTab->pCheck && pTab->pCheck->nExpr>0 ) return "check_constraint";
+
+  for(pFK=pTab->u.tab.pFKey; pFK; pFK=pFK->pNextFrom){
+    if( pFK->aAction[0]!=OE_None || pFK->aAction[1]!=OE_None ){
+      return "fk_action_child";
+    }
+  }
+  for(pFK=sqlite3FkReferences(pTab); pFK; pFK=pFK->pNextTo){
+    if( pFK->aAction[0]!=OE_None || pFK->aAction[1]!=OE_None ){
+      return "fk_action_parent";
+    }
+  }
+
+  return 0;  /* eligible */
+}
+
+/* Emit a one-line stderr trace per merged-table decision when
+** DOLTLITE_FAST_MERGE_DEBUG is set. The format is intentionally
+** stable so test/fast_merge_predicate_test.sh can grep it. Skip
+** entries with no zName — those are catalog rows for secondary
+** indexes that flow through the same merge path but aren't a
+** user-visible table-level decision. */
+static void logFastMergeDecision(const char *zName, const char *zReason){
+  if( !zName ) return;
+  if( !getenv("DOLTLITE_FAST_MERGE_DEBUG") ) return;
+  fprintf(stderr, "fast_merge: %s '%s'%s%s\n",
+          zReason ? "ineligible" : "eligible",
+          zName,
+          zReason ? ": " : "",
+          zReason ? zReason : "");
 }
 
 static void freeRowMergeCtx(RowMergeCtx *ctx){
@@ -1866,10 +1940,47 @@ do_merge_entry:
               }
             }
 
+            /* Try the tree-walking fast merge first when the
+            ** predicate says it's safe. On SQLITE_NOTSUPPORTED, fall
+            ** through to the row-by-row path. The predicate guarantees
+            ** no secondary indexes, so we don't need to drive the
+            ** aIdxInfo array on the fast path. */
+            {
+              const char *zReason = fastMergeIneligibleReason(
+                db, zName, !ourSchemaChanged && !theirSchemaChanged);
+              logFastMergeDecision(zName, zReason);
+              if( !zReason ){
+                int handled = 0;
+                rc = prollyThreeWayMergeFast(
+                  doltliteGetChunkStore(db), doltliteGetCache(db),
+                  &ancEntry->root, &aOurs[i].root, &theirsEntry->root,
+                  aOurs[i].flags, &mergedTableRoot, &handled);
+                if( rc != SQLITE_OK ){
+                  sqlite3_free(aIdxInfo);
+                  return rc;
+                }
+                if( getenv("DOLTLITE_FAST_MERGE_DEBUG") ){
+                  fprintf(stderr, "fast_merge: %s '%s'\n",
+                          handled ? "handled" : "fell_back", zName);
+                }
+                if( handled ){
+                  /* Fast path produced the merged root. Predicate
+                  ** guarantees no secondary indexes, so aIdxInfo is
+                  ** empty and there's no per-index work to do. */
+                  nConflicts = 0;
+                  aConflictRows = 0;
+                  goto post_merge_table_rows;
+                }
+                /* Not handled — fall through to row path. */
+              }
+            }
+
             rc = mergeTableRows(db, &ancEntry->root, &aOurs[i].root,
                                 &theirsEntry->root, aOurs[i].flags,
                                 &mergedTableRoot, &nConflicts, &aConflictRows,
                                 aIdxInfo, nIdxInfo);
+
+post_merge_table_rows:;
 
             /* Store merged index roots back into aMerged catalog. */
             if( rc==SQLITE_OK ){
