@@ -273,7 +273,12 @@ jobs:
         mkdir -p build && cd build
         ../configure
         make doltlite
-        make sqlite3
+        # The SQL oracle compares doltlite to STOCK SQLite. Build the
+        # sqlite3 CLI with DOLTLITE_PROLLY=0 so it has the upstream
+        # btree/pager/wal — without this flag, main.mk swaps in the
+        # prolly engine and the "oracle" is doltlite-vs-doltlite,
+        # which trivially passes regardless of doltlite divergence.
+        make DOLTLITE_PROLLY=0 sqlite3
 
     - name: Version control oracle tests (vs Dolt)
       run: |
