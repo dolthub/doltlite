@@ -744,6 +744,7 @@ SELECT dolt_commit('-m','after unique violation');
 " "SELECT id, val FROM t ORDER BY id;"
 
 oracle "fk_violation_doesnt_break_commit" "
+PRAGMA foreign_keys = ON;
 CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT);
 CREATE TABLE child(id INTEGER PRIMARY KEY, pid INTEGER REFERENCES parent(id), val TEXT);
 INSERT INTO parent VALUES(1,'p1');

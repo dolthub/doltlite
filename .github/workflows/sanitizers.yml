@@ -41,7 +41,10 @@ jobs:
           CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all" \
           LDFLAGS="-fsanitize=address,undefined" \
           doltlite
-        make sqlite3
+        # Build true stock sqlite3 (without the prolly engine swap)
+        # so the SQL oracle compares against upstream behavior, not
+        # against another doltlite build.
+        make DOLTLITE_PROLLY=0 sqlite3
 
     # ASan options: log to stderr, abort on error, leak detection
     # on. A suppressions file (build/lsan.supp) is created right
