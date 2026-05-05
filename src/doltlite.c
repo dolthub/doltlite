@@ -1494,33 +1494,20 @@ static void doltliteCommitFunc(
 
 
     {
-      const char *pStart = zMessage;
-      const char *pEnd;
-      int len;
-      while( *pStart==' ' || *pStart=='\t'
-          || *pStart=='\n' || *pStart=='\r' ) pStart++;
-      pEnd = pStart + strlen(pStart);
-      while( pEnd>pStart
-          && (pEnd[-1]==' ' || pEnd[-1]=='\t'
-           || pEnd[-1]=='\n' || pEnd[-1]=='\r') ) pEnd--;
-      if( pEnd==pStart ){
+      /* Reject all-whitespace messages, but otherwise preserve the
+      ** message verbatim — Dolt 1.87.0 dropped its trim-on-store
+      ** behavior, so doltlite stores the message bytes as given.
+      ** zTrimmedMessage stays unset; the original zMessage flows
+      ** straight into doltliteCreateAndStoreCommitWithTime below. */
+      const char *p = zMessage;
+      while( *p==' ' || *p=='\t' || *p=='\n' || *p=='\r' ) p++;
+      if( *p==0 ){
         sqlite3_free(zParsedName);
         sqlite3_free(zParsedEmail);
         sqlite3_result_error(context,
           "dolt_commit requires a non-empty message", -1);
         return;
       }
-      len = (int)(pEnd - pStart);
-      zTrimmedMessage = sqlite3_malloc(len+1);
-      if( !zTrimmedMessage ){
-        sqlite3_free(zParsedName);
-        sqlite3_free(zParsedEmail);
-        sqlite3_result_error_code(context, SQLITE_NOMEM);
-        return;
-      }
-      memcpy(zTrimmedMessage, pStart, len);
-      zTrimmedMessage[len] = 0;
-      zMessage = zTrimmedMessage;
     }
 
     rc = doltliteCreateAndStoreCommitWithTime(db, &parentHash, &catalogHash,
