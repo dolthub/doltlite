@@ -1,15 +1,15 @@
 #!/bin/bash
 #
-# History independence smoke suite.
+# History independence suite.
 #
 # Goal:
 #   For a fixed final logical database state, dolt_hashof_db() must be
 #   identical regardless of the SQL history used to produce that state.
 #
-# Current scope:
+# Current phase:
 #   - DML only
 #   - single branch
-#   - small datasets for PR-speed smoke coverage
+#   - small datasets for PR-speed baseline coverage
 #   - key families:
 #       * INTEGER PRIMARY KEY
 #       * TEXT PRIMARY KEY
@@ -20,7 +20,7 @@
 #   1. final user-visible state matches, by hashing canonical ordered rows
 #   2. dolt_hashof_db() matches across distinct histories
 #
-# Planned follow-on phases:
+# Planned expansion phases:
 #   - branch / merge histories
 #   - large database variants
 #   - .read / streamed import variants
