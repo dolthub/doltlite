@@ -7,6 +7,7 @@
 #include "doltlite_commit.h"
 
 #include "prolly_three_way_diff.h"
+#include "prolly_three_way_merge.h"
 #include "prolly_mutmap.h"
 #include "prolly_mutate.h"
 #include "prolly_cache.h"
@@ -1939,21 +1940,47 @@ do_merge_entry:
               }
             }
 
-            /* Compute the fast-merge eligibility decision so it's visible
-            ** under DOLTLITE_FAST_MERGE_DEBUG. The decision currently has
-            ** no effect on behavior; later commits add the tree-walking
-            ** fast path that consults it. */
+            /* Try the tree-walking fast merge first when the
+            ** predicate says it's safe. On SQLITE_NOTSUPPORTED, fall
+            ** through to the row-by-row path. The predicate guarantees
+            ** no secondary indexes, so we don't need to drive the
+            ** aIdxInfo array on the fast path. */
             {
               const char *zReason = fastMergeIneligibleReason(
                 db, zName, !ourSchemaChanged && !theirSchemaChanged);
               logFastMergeDecision(zName, zReason);
-              (void)zReason;
+              if( !zReason ){
+                int handled = 0;
+                rc = prollyThreeWayMergeFast(
+                  doltliteGetChunkStore(db), doltliteGetCache(db),
+                  &ancEntry->root, &aOurs[i].root, &theirsEntry->root,
+                  aOurs[i].flags, &mergedTableRoot, &handled);
+                if( rc != SQLITE_OK ){
+                  sqlite3_free(aIdxInfo);
+                  return rc;
+                }
+                if( getenv("DOLTLITE_FAST_MERGE_DEBUG") ){
+                  fprintf(stderr, "fast_merge: %s '%s'\n",
+                          handled ? "handled" : "fell_back", zName);
+                }
+                if( handled ){
+                  /* Fast path produced the merged root. Predicate
+                  ** guarantees no secondary indexes, so aIdxInfo is
+                  ** empty and there's no per-index work to do. */
+                  nConflicts = 0;
+                  aConflictRows = 0;
+                  goto post_merge_table_rows;
+                }
+                /* Not handled — fall through to row path. */
+              }
             }
 
             rc = mergeTableRows(db, &ancEntry->root, &aOurs[i].root,
                                 &theirsEntry->root, aOurs[i].flags,
                                 &mergedTableRoot, &nConflicts, &aConflictRows,
                                 aIdxInfo, nIdxInfo);
+
+post_merge_table_rows:;
 
             /* Store merged index roots back into aMerged catalog. */
             if( rc==SQLITE_OK ){
