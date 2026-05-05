@@ -1067,7 +1067,9 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
       if( rc!=SQLITE_OK ) goto done;
     }
   }
-  qsort(aMeta, nMeta, sizeof(CatalogEntryMeta), catalogEntryMetaCmp);
+  if( nMeta>1 ){
+    qsort(aMeta, nMeta, sizeof(CatalogEntryMeta), catalogEntryMetaCmp);
+  }
   for(i=0; i<nMeta; i++){
     aMeta[i].iPersistTable = 0;
   }
