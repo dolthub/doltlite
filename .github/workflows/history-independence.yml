@@ -7,7 +7,7 @@ on:
     branches: [master]
 
 jobs:
-  history-independence-dml-smoke:
+  history-independence-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -34,7 +34,7 @@ jobs:
         cd build
         make doltlite
 
-    - name: History independence smoke tests
+    - name: History independence tests
       run: |
         cd build
         bash ../test/history_independence_test.sh ./doltlite
