@@ -84,6 +84,12 @@ db_hash() {
   run_query "$db" "$name" "SELECT dolt_hashof_db();" | tr -d '\n'
 }
 
+table_hash() {
+  local db="$1"
+  local name="$2"
+  run_query "$db" "$name" "SELECT dolt_hashof_table('t');" | tr -d '\n'
+}
+
 assert_equal() {
   local name="$1"
   local a="$2"
@@ -312,6 +318,17 @@ run_ddl_case() {
 
   assert_equal "${family}_ddl_schema_a_vs_b" "$schema_a" "$schema_b"
   assert_equal "${family}_ddl_schema_a_vs_c" "$schema_a" "$schema_c"
+
+  local table_a table_b table_c
+  table_a=$(table_hash "$db_a" "${family}_ddl_a_table_hash")
+  table_b=$(table_hash "$db_b" "${family}_ddl_b_table_hash")
+  table_c=$(table_hash "$db_c" "${family}_ddl_c_table_hash")
+
+  assert_hash_shape "${family}_ddl_table_hash_shape_a" "$table_a"
+  assert_hash_shape "${family}_ddl_table_hash_shape_b" "$table_b"
+  assert_hash_shape "${family}_ddl_table_hash_shape_c" "$table_c"
+  assert_equal "${family}_ddl_table_hash_a_vs_b" "$table_a" "$table_b"
+  assert_equal "${family}_ddl_table_hash_a_vs_c" "$table_a" "$table_c"
 
   local hash_a hash_b hash_c
   hash_a=$(db_hash "$db_a" "${family}_ddl_a_hash")
