@@ -10,7 +10,7 @@
 #include <string.h>
 #include <ctype.h>
 
-static char *canonicalizeSchemaSql(const char *zSql, const char *zName);
+char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 
 /* dolt_hashof(ref) → commit hash hex for the named ref. Accepts
 ** branch names, tag names, raw commit hashes, HEAD, and HEAD~N /
@@ -100,7 +100,7 @@ static int hashofTableInCatalog(
   }
   pSchema = findSchemaEntry(aSchema, nSchema, zTable);
   if( pSchema ){
-    char *zCanon = canonicalizeSchemaSql(pSchema->zSql, pSchema->zName);
+    char *zCanon = doltliteCanonicalizeSchemaSql(pSchema->zSql, pSchema->zName);
     if( !zCanon ){
       freeSchemaEntries(aSchema, nSchema);
       doltliteFreeCatalog(aTables, nTables);
@@ -132,7 +132,7 @@ static int ciStartsWith(const char *z, const char *zPrefix){
   return 1;
 }
 
-static char *canonicalizeSchemaSql(const char *zSql, const char *zName){
+char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
   sqlite3_str *pStr;
   const char *z = zSql;
   int inSingle = 0;
@@ -312,7 +312,7 @@ static int canonicalizeCatalogForDbHash(
       struct TableEntry *pTE = doltliteFindTableByName(aTables, nTables, aSchema[i].zName);
       if( pTE ){
         ProllyHash h;
-        zCanon = canonicalizeSchemaSql(aSchema[i].zSql, aSchema[i].zName);
+        zCanon = doltliteCanonicalizeSchemaSql(aSchema[i].zSql, aSchema[i].zName);
         if( !zCanon ){
           freeSchemaEntries(aSchema, nSchema);
           return SQLITE_NOMEM;
@@ -345,7 +345,7 @@ static int canonicalizeCatalogForDbHash(
     const char *zType = aSorted[i].zType ? aSorted[i].zType : "";
     const char *zName = aSorted[i].zName ? aSorted[i].zName : "";
     const char *zTbl = aSorted[i].zTblName ? aSorted[i].zTblName : "";
-    zCanon = canonicalizeSchemaSql(aSorted[i].zSql, aSorted[i].zName);
+    zCanon = doltliteCanonicalizeSchemaSql(aSorted[i].zSql, aSorted[i].zName);
     if( !zCanon ){
       sqlite3_str_finish(pStr);
       sqlite3_free(aSorted);
@@ -432,10 +432,11 @@ static int hashofDbInCatalog(
 ){
   struct TableEntry *aTables = 0;
   int nTables = 0;
-  u8 *pCatData = 0;
-  int nCatData = 0;
+  struct TableEntry *aSorted = 0;
+  sqlite3_str *pStr = 0;
   ProllyHash h;
   int rc;
+  int i;
 
   rc = doltliteLoadCatalog(db, pCatHash, &aTables, &nTables, 0);
   if( rc!=SQLITE_OK ) return rc;
@@ -449,11 +450,51 @@ static int hashofDbInCatalog(
     doltliteFreeCatalog(aTables, nTables);
     return rc;
   }
-  rc = doltliteSerializeCatalogEntries(0, aTables, nTables, &pCatData, &nCatData);
+  if( nTables>0 ){
+    aSorted = sqlite3_malloc64((sqlite3_uint64)nTables * sizeof(struct TableEntry));
+    if( !aSorted ){
+      doltliteFreeCatalog(aTables, nTables);
+      return SQLITE_NOMEM;
+    }
+    memcpy(aSorted, aTables, (sqlite3_uint64)nTables * sizeof(struct TableEntry));
+    qsort(aSorted, nTables, sizeof(struct TableEntry), tableEntryLogicalCmp);
+  }
+  pStr = sqlite3_str_new(0);
+  if( !pStr ){
+    sqlite3_free(aSorted);
+    doltliteFreeCatalog(aTables, nTables);
+    return SQLITE_NOMEM;
+  }
+  for(i=0; i<nTables; i++){
+    char zRoot[PROLLY_HASH_SIZE*2+1];
+    char zSchema[PROLLY_HASH_SIZE*2+1];
+    doltliteHashToHex(&aSorted[i].root, zRoot);
+    doltliteHashToHex(&aSorted[i].schemaHash, zSchema);
+    sqlite3_str_appendf(pStr, "%u|%u|%s|%s|%s\n",
+        (unsigned)aSorted[i].iTable,
+        (unsigned)aSorted[i].flags,
+        zRoot,
+        zSchema,
+        aSorted[i].zName ? aSorted[i].zName : "");
+    if( sqlite3_str_errcode(pStr)!=SQLITE_OK ){
+      sqlite3_str_finish(pStr);
+      sqlite3_free(aSorted);
+      doltliteFreeCatalog(aTables, nTables);
+      return SQLITE_NOMEM;
+    }
+  }
+  {
+    char *zCanon = sqlite3_str_finish(pStr);
+    if( !zCanon && nTables>0 ){
+      sqlite3_free(aSorted);
+      doltliteFreeCatalog(aTables, nTables);
+      return SQLITE_NOMEM;
+    }
+    prollyHashCompute(zCanon ? zCanon : "", zCanon ? (int)strlen(zCanon) : 0, &h);
+    sqlite3_free(zCanon);
+  }
+  sqlite3_free(aSorted);
   doltliteFreeCatalog(aTables, nTables);
-  if( rc!=SQLITE_OK ) return rc;
-  prollyHashCompute(pCatData, nCatData, &h);
-  sqlite3_free(pCatData);
   doltliteHashToHex(&h, pHex);
   return SQLITE_OK;
 }
@@ -620,6 +661,67 @@ static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
 
+/* dolt_hashof_catalog()
+** dolt_hashof_catalog(ref)
+**
+** Raw stored catalog hash. Unlike dolt_hashof_db(), this does not
+** canonicalize anything at query time. It exists so storage-level
+** history-independence tests can compare the actual persisted catalog
+** identity rather than commit metadata or logical normalized views. */
+static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
+  sqlite3 *db;
+  ProllyHash catHash;
+  char hex[PROLLY_HASH_SIZE*2+1];
+  int rc;
+
+  if( argc!=0 && argc!=1 ){
+    sqlite3_result_error(ctx, "dolt_hashof_catalog() takes 0 or 1 argument", -1);
+    return;
+  }
+  db = sqlite3_context_db_handle(ctx);
+
+  if( argc==0 ){
+    rc = doltliteFlushCatalogToHash(db, &catHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(ctx, "dolt_hashof_catalog: catalog flush failed", -1);
+      return;
+    }
+  }else{
+    const char *zRef;
+    ProllyHash commitHash;
+    DoltliteCommit commit;
+    if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
+      sqlite3_result_null(ctx);
+      return;
+    }
+    zRef = (const char*)sqlite3_value_text(argv[0]);
+    if( !zRef ){
+      sqlite3_result_null(ctx);
+      return;
+    }
+    rc = doltliteResolveRef(db, zRef, &commitHash);
+    if( rc==SQLITE_NOTFOUND ){
+      sqlite3_result_null(ctx);
+      return;
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(ctx, "dolt_hashof_catalog: ref resolve failed", -1);
+      return;
+    }
+    memset(&commit, 0, sizeof(commit));
+    rc = doltliteLoadCommit(db, &commitHash, &commit);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(ctx, "dolt_hashof_catalog: commit load failed", -1);
+      return;
+    }
+    catHash = commit.catalogHash;
+    doltliteCommitClear(&commit);
+  }
+
+  doltliteHashToHex(&catHash, hex);
+  sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
+}
+
 int doltliteHashofRegister(sqlite3 *db){
   int rc;
   rc = sqlite3_create_function(db, "dolt_hashof", 1, SQLITE_UTF8, 0,
@@ -639,6 +741,14 @@ int doltliteHashofRegister(sqlite3 *db){
   if( rc==SQLITE_OK ){
     rc = sqlite3_create_function(db, "dolt_hashof_db", 1, SQLITE_UTF8, 0,
                                  doltliteHashofDbFunc, 0, 0);
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_create_function(db, "dolt_hashof_catalog", 0, SQLITE_UTF8, 0,
+                                 doltliteHashofCatalogFunc, 0, 0);
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3_create_function(db, "dolt_hashof_catalog", 1, SQLITE_UTF8, 0,
+                                 doltliteHashofCatalogFunc, 0, 0);
   }
   return rc;
 }

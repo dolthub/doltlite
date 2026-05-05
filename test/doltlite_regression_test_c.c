@@ -195,7 +195,7 @@ static void capture_repo_state_snapshot(sqlite3 *db, RepoStateSnapshot *p){
                    exec1(db, "SELECT count(*) FROM sqlite_master "
                              "WHERE type='table' AND name='dolt_rebase'"));
   doltliteGetSessionMergeState(db, &p->isMerging, &p->mergeHash, &p->conflictsHash);
-  doltliteGetSessionRebaseState(db, &p->isRebasing, 0, &p->rebaseOntoHash, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &p->isRebasing, 0, &p->rebaseOntoHash, &zOrigBranch, 0);
   if( zOrigBranch ){
     sqlite3_snprintf(sizeof(p->zOrigBranch), p->zOrigBranch, "%s", zOrigBranch);
   }
@@ -4258,7 +4258,7 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
         strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
   check("rebase_invalid_plan_keeps_plan_table",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_invalid_plan_keeps_rebase_flag", isRebasing==1);
   check("rebase_invalid_plan_keeps_orig_branch",
         zOrigBranch && strcmp(zOrigBranch, "feat")==0);
@@ -4271,7 +4271,7 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
         strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
   check("rebase_invalid_plan_persists_plan_table",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_invalid_plan_persists_rebase_flag", isRebasing==1);
   check("rebase_invalid_plan_persists_orig_branch",
         zOrigBranch && strcmp(zOrigBranch, "feat")==0);
@@ -4321,7 +4321,7 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
         strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
   check("rebase_abort_after_reopen_plan_table_before_close",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_abort_after_reopen_flag_before_close", isRebasing==1);
   check("rebase_abort_after_reopen_orig_branch_before_close",
         zOrigBranch && strcmp(zOrigBranch, "feat")==0);
@@ -4334,7 +4334,7 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
         strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
   check("rebase_abort_after_reopen_plan_before_abort",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_abort_after_reopen_flag_before_abort", isRebasing==1);
 
   check("rebase_abort_after_reopen_returns_success",
@@ -4346,7 +4346,7 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
   check("rebase_abort_after_reopen_drops_plan",
         strcmp(exec1(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_abort_after_reopen_clears_flag", isRebasing==0);
   capture_repo_state_snapshot(db, &beforeReopenAbort);
 
@@ -4361,7 +4361,7 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
   check("rebase_abort_persists_no_plan",
         strcmp(exec1(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_abort_persists_flag_cleared", isRebasing==0);
   capture_repo_state_snapshot(db, &afterReopenAbort);
   check("rebase_abort_reopen_snapshot_matches",
@@ -4403,7 +4403,7 @@ static void run_rebase_main_table_schema_guard(void){
         strstr(res, "ERROR: dolt_rebase has an unexpected schema")!=0);
   check("rebase_schema_guard_keeps_working_branch",
         strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_schema_guard_keeps_rebase_flag", isRebasing==1);
   check("rebase_schema_guard_keeps_orig_branch",
         zOrigBranch && strcmp(zOrigBranch, "feat")==0);
@@ -4515,7 +4515,7 @@ static void run_rebase_continue_conflict_abort_restores_durable_state(void){
         strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("rebase_continue_conflict_abort_restores_row_same_session",
         strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "2")==0);
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_continue_conflict_abort_clears_flag_same_session", isRebasing==0);
 
   sqlite3_close(db);
@@ -4531,7 +4531,7 @@ static void run_rebase_continue_conflict_abort_restores_durable_state(void){
         strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("rebase_continue_conflict_abort_restores_row_after_reopen",
         strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "2")==0);
-  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch);
+  doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_continue_conflict_abort_clears_flag_after_reopen", isRebasing==0);
 
   sqlite3_close(db);

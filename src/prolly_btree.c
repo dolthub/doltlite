@@ -14,6 +14,7 @@
 #include "prolly_chunk_walk.h"
 #include "pager_shim.h"
 #include "doltlite_commit.h"
+#include "doltlite_record.h"
 #include "sortkey.h"
 #include "btree_orig_api.h"
 #include "vdbeInt.h"
@@ -38,6 +39,7 @@
 
 static void registerDoltiteFunctions(sqlite3 *db);
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
+char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 
@@ -283,6 +285,7 @@ struct Btree {
   ProllyHash preRebaseWorkingCat;
   ProllyHash rebaseOntoCommit;
   char *zRebaseOrigBranch;
+  char *zRebaseReturnBranch;
 
   /* FK / UNIQUE / CHECK violations detected at merge time. Persisted
   ** in the v4 working set blob alongside (and independently of) the
@@ -397,6 +400,7 @@ static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount);
 static int saveAllCursors(BtShared *pBt, Pgno iRoot, BtCursor *pExcept);
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
+static int canonicalizeLiveCatalog(sqlite3 *db);
 static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE);
 static int btreeRefreshFromDisk(Btree *p);
 static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog);
@@ -416,6 +420,7 @@ static int btreeLoadWorkingSetBlob(
   ProllyHash *pPreRebaseCat,
   ProllyHash *pRebaseOnto,
   char **pzRebaseOrigBranch,
+  char **pzRebaseReturnBranch,
   ProllyHash *pConstraintViolations
 );
 
@@ -432,6 +437,7 @@ static int btreeStoreWorkingSetBlob(
   const ProllyHash *pPreRebaseCat,
   const ProllyHash *pRebaseOnto,
   const char *zRebaseOrigBranch,
+  const char *zRebaseReturnBranch,
   const ProllyHash *pConstraintViolations
 );
 static int btreeWriteWorkingState(
@@ -918,6 +924,27 @@ static void refreshCursorRoot(BtCursor *pCur){
   }
 }
 
+typedef struct CatalogEntryMeta CatalogEntryMeta;
+struct CatalogEntryMeta {
+  Pgno iTable;
+  Pgno iPersistTable;
+  char *zType;
+  char *zName;
+  char *zTblName;
+  ProllyHash schemaHash;
+};
+
+typedef struct CatalogSerializeEntry CatalogSerializeEntry;
+struct CatalogSerializeEntry {
+  Pgno iTable;
+  ProllyHash root;
+  ProllyHash schemaHash;
+  u8 flags;
+  const char *zType;
+  const char *zName;
+  const char *zTblName;
+};
+
 static int tableEntryNameCmp(const void *a, const void *b){
   const struct TableEntry *ea = (const struct TableEntry *)a;
   const struct TableEntry *eb = (const struct TableEntry *)b;
@@ -925,6 +952,438 @@ static int tableEntryNameCmp(const void *a, const void *b){
   if( !ea->zName ) return -1;
   if( !eb->zName ) return 1;
   return strcmp(ea->zName, eb->zName);
+}
+
+static void freeCatalogEntryMeta(CatalogEntryMeta *aMeta, int nMeta){
+  int i;
+  for(i=0; i<nMeta; i++){
+    sqlite3_free(aMeta[i].zType);
+    sqlite3_free(aMeta[i].zName);
+    sqlite3_free(aMeta[i].zTblName);
+  }
+  sqlite3_free(aMeta);
+}
+
+static int catalogEntryMetaCmp(const void *a, const void *b){
+  const CatalogEntryMeta *ea = (const CatalogEntryMeta*)a;
+  const CatalogEntryMeta *eb = (const CatalogEntryMeta*)b;
+  int c = strcmp(ea->zType ? ea->zType : "", eb->zType ? eb->zType : "");
+  if( c ) return c;
+  c = strcmp(ea->zTblName ? ea->zTblName : "", eb->zTblName ? eb->zTblName : "");
+  if( c ) return c;
+  c = strcmp(ea->zName ? ea->zName : "", eb->zName ? eb->zName : "");
+  if( c ) return c;
+  if( ea->iTable < eb->iTable ) return -1;
+  if( ea->iTable > eb->iTable ) return 1;
+  return 0;
+}
+
+static const CatalogEntryMeta *findCatalogEntryMetaByPgno(
+  CatalogEntryMeta *aMeta,
+  int nMeta,
+  Pgno iTable
+){
+  int i;
+  for(i=0; i<nMeta; i++){
+    if( aMeta[i].iTable==iTable ) return &aMeta[i];
+  }
+  return 0;
+}
+
+static const CatalogEntryMeta *findCatalogEntryMetaByObject(
+  CatalogEntryMeta *aMeta,
+  int nMeta,
+  const char *zType,
+  const char *zName,
+  const char *zTblName
+){
+  int i;
+  for(i=0; i<nMeta; i++){
+    if( strcmp(aMeta[i].zType ? aMeta[i].zType : "", zType ? zType : "")!=0 ) continue;
+    if( strcmp(aMeta[i].zName ? aMeta[i].zName : "", zName ? zName : "")!=0 ) continue;
+    if( strcmp(aMeta[i].zTblName ? aMeta[i].zTblName : "", zTblName ? zTblName : "")!=0 ) continue;
+    return &aMeta[i];
+  }
+  return 0;
+}
+
+static int addCatalogEntryMeta(
+  CatalogEntryMeta **paMeta,
+  int *pnMeta,
+  int *pnAlloc,
+  Pgno iTable,
+  const char *zType,
+  const char *zName,
+  const char *zTblName
+){
+  CatalogEntryMeta *aMeta = *paMeta;
+  CatalogEntryMeta *pNew;
+  if( findCatalogEntryMetaByPgno(aMeta, *pnMeta, iTable) ) return SQLITE_OK;
+  if( *pnMeta>=*pnAlloc ){
+    int nNew = *pnAlloc ? *pnAlloc*2 : 16;
+    pNew = sqlite3_realloc(aMeta, nNew*(int)sizeof(CatalogEntryMeta));
+    if( !pNew ) return SQLITE_NOMEM;
+    aMeta = pNew;
+    *paMeta = aMeta;
+    *pnAlloc = nNew;
+  }
+  memset(&aMeta[*pnMeta], 0, sizeof(CatalogEntryMeta));
+  aMeta[*pnMeta].iTable = iTable;
+  aMeta[*pnMeta].iPersistTable = iTable;
+  aMeta[*pnMeta].zType = sqlite3_mprintf("%s", zType ? zType : "");
+  aMeta[*pnMeta].zName = sqlite3_mprintf("%s", zName ? zName : "");
+  aMeta[*pnMeta].zTblName = sqlite3_mprintf("%s", zTblName ? zTblName : "");
+  if( !aMeta[*pnMeta].zType || !aMeta[*pnMeta].zName || !aMeta[*pnMeta].zTblName ){
+    return SQLITE_NOMEM;
+  }
+  (*pnMeta)++;
+  return SQLITE_OK;
+}
+
+static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, int *pnMeta){
+  sqlite3 *db;
+  Schema *pSchema;
+  HashElem *k;
+  CatalogEntryMeta *aMeta = 0;
+  int nMeta = 0, nAlloc = 0, rc = SQLITE_OK, i;
+  Pgno iNext = 2;
+  if( !pBtree || !(db = pBtree->db) || db->nDb<=0 || !(pSchema = db->aDb[0].pSchema) ){
+    *ppMeta = 0;
+    *pnMeta = 0;
+    return SQLITE_OK;
+  }
+  for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
+    Table *pTab = (Table*)sqliteHashData(k);
+    Index *pIdx;
+    if( !pTab ) continue;
+    if( pTab->tnum>1 ){
+      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, pTab->tnum, "table", pTab->zName, "");
+      if( rc!=SQLITE_OK ) goto done;
+    }
+    for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
+      if( pIdx->tnum<=1 ) continue;
+      if( pIdx->tnum==pTab->tnum ) continue;
+      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, pIdx->tnum, "index",
+                               pIdx->zName, pTab->zName);
+      if( rc!=SQLITE_OK ) goto done;
+    }
+  }
+  qsort(aMeta, nMeta, sizeof(CatalogEntryMeta), catalogEntryMetaCmp);
+  for(i=0; i<nMeta; i++){
+    aMeta[i].iPersistTable = 0;
+  }
+done:
+  if( rc!=SQLITE_OK ){
+    freeCatalogEntryMeta(aMeta, nMeta);
+    return rc;
+  }
+  *ppMeta = aMeta;
+  *pnMeta = nMeta;
+  return SQLITE_OK;
+}
+
+static int catalogSerializeEntryCmp(const void *a, const void *b){
+  const CatalogSerializeEntry *ea = (const CatalogSerializeEntry*)a;
+  const CatalogSerializeEntry *eb = (const CatalogSerializeEntry*)b;
+  int c = strcmp(ea->zType ? ea->zType : "", eb->zType ? eb->zType : "");
+  if( c ) return c;
+  c = strcmp(ea->zTblName ? ea->zTblName : "", eb->zTblName ? eb->zTblName : "");
+  if( c ) return c;
+  c = strcmp(ea->zName ? ea->zName : "", eb->zName ? eb->zName : "");
+  if( c ) return c;
+  if( ea->iTable < eb->iTable ) return -1;
+  if( ea->iTable > eb->iTable ) return 1;
+  return 0;
+}
+
+typedef struct SchemaCatalogRow SchemaCatalogRow;
+struct SchemaCatalogRow {
+  i64 iRowid;
+  Pgno oldPg;
+  Pgno newPg;
+  char *zType;
+  char *zName;
+  char *zTblName;
+  char *zSql;
+};
+
+static int schemaCatalogHasPgno(SchemaCatalogRow *aRows, int nRows, Pgno iTable){
+  int i;
+  for(i=0; i<nRows; i++){
+    if( aRows[i].oldPg==iTable ) return 1;
+  }
+  return 0;
+}
+
+static int schemaCatalogTextField(
+  const u8 *pVal, int nVal, DoltliteRecordInfo *pRi, int iField, char **pzOut
+){
+  int st, off, len;
+  char *zOut;
+  *pzOut = 0;
+  if( iField>=pRi->nField ) return SQLITE_CORRUPT;
+  st = pRi->aType[iField];
+  off = pRi->aOffset[iField];
+  if( st==0 ) return SQLITE_OK;
+  if( st<13 || (st&1)==0 ) return SQLITE_CORRUPT;
+  len = (st-13)/2;
+  if( off<0 || off+len>nVal ) return SQLITE_CORRUPT;
+  zOut = sqlite3_malloc(len+1);
+  if( !zOut ) return SQLITE_NOMEM;
+  memcpy(zOut, pVal+off, len);
+  zOut[len] = 0;
+  *pzOut = zOut;
+  return SQLITE_OK;
+}
+
+static i64 schemaCatalogIntField(
+  const u8 *pVal, int nVal, DoltliteRecordInfo *pRi, int iField
+){
+  const u8 *pBody;
+  int st, off, nByte, i;
+  i64 v;
+  if( iField>=pRi->nField ) return 0;
+  st = pRi->aType[iField];
+  off = pRi->aOffset[iField];
+  switch( st ){
+    case 0:
+    case 8: return 0;
+    case 9: return 1;
+    case 1: nByte = 1; break;
+    case 2: nByte = 2; break;
+    case 3: nByte = 3; break;
+    case 4: nByte = 4; break;
+    case 5: nByte = 6; break;
+    case 6: nByte = 8; break;
+    default: return 0;
+  }
+  if( off<0 || off+nByte>nVal ) return 0;
+  pBody = pVal + off;
+  v = (pBody[0] & 0x80) ? -1 : 0;
+  for(i=0; i<nByte; i++) v = (v << 8) | pBody[i];
+  return v;
+}
+
+static void freeSchemaCatalogRows(SchemaCatalogRow *aRows, int nRows){
+  int i;
+  for(i=0; i<nRows; i++){
+    sqlite3_free(aRows[i].zType);
+    sqlite3_free(aRows[i].zName);
+    sqlite3_free(aRows[i].zTblName);
+    sqlite3_free(aRows[i].zSql);
+  }
+  sqlite3_free(aRows);
+}
+
+static int schemaCatalogRowCmp(const void *a, const void *b){
+  const SchemaCatalogRow *ra = (const SchemaCatalogRow*)a;
+  const SchemaCatalogRow *rb = (const SchemaCatalogRow*)b;
+  const char *za = ra->zType ? ra->zType : "";
+  const char *zb = rb->zType ? rb->zType : "";
+  int raRank = strcmp(za, "table")==0 ? 0 : strcmp(za, "index")==0 ? 1 : 2;
+  int rbRank = strcmp(zb, "table")==0 ? 0 : strcmp(zb, "index")==0 ? 1 : 2;
+  int c = raRank - rbRank;
+  if( c ) return c;
+  c = strcmp(ra->zTblName ? ra->zTblName : "", rb->zTblName ? rb->zTblName : "");
+  if( c ) return c;
+  c = strcmp(ra->zName ? ra->zName : "", rb->zName ? rb->zName : "");
+  if( c ) return c;
+  if( ra->iRowid < rb->iRowid ) return -1;
+  if( ra->iRowid > rb->iRowid ) return 1;
+  return 0;
+}
+
+typedef struct SchemaFieldValue SchemaFieldValue;
+struct SchemaFieldValue {
+  int eType;
+  i64 i;
+  const void *p;
+  int n;
+};
+
+static u32 schemaCatalogSerialType(const SchemaFieldValue *pMem, u32 *pLen){
+  if( pMem->eType == SQLITE_NULL ){ *pLen = 0; return 0; }
+  if( pMem->eType == SQLITE_INTEGER ){
+    i64 v = pMem->i;
+    if( v==0 ){ *pLen = 0; return 8; }
+    if( v==1 ){ *pLen = 0; return 9; }
+    if( v>=-128 && v<=127 ){ *pLen = 1; return 1; }
+    if( v>=-32768 && v<=32767 ){ *pLen = 2; return 2; }
+    if( v>=-8388608 && v<=8388607 ){ *pLen = 3; return 3; }
+    if( v>=-2147483648LL && v<=2147483647LL ){ *pLen = 4; return 4; }
+    if( v>=-140737488355328LL && v<=140737488355327LL ){ *pLen = 6; return 5; }
+    *pLen = 8; return 6;
+  }
+  if( pMem->eType == SQLITE_TEXT ){
+    *pLen = (u32)pMem->n;
+    return (u32)(pMem->n * 2 + 13);
+  }
+  *pLen = 0;
+  return 0;
+}
+
+static void schemaCatalogWriteIntBe(u8 *pOut, i64 v, int nByte){
+  int i;
+  for(i=nByte-1; i>=0; i--){
+    pOut[i] = (u8)(v & 0xFF);
+    v >>= 8;
+  }
+}
+
+static void schemaCatalogSerialPut(u8 *pOut, const SchemaFieldValue *pMem, u32 serialType){
+  switch( serialType ){
+    case 0:
+    case 8:
+    case 9:
+      return;
+    case 1: schemaCatalogWriteIntBe(pOut, pMem->i, 1); return;
+    case 2: schemaCatalogWriteIntBe(pOut, pMem->i, 2); return;
+    case 3: schemaCatalogWriteIntBe(pOut, pMem->i, 3); return;
+    case 4: schemaCatalogWriteIntBe(pOut, pMem->i, 4); return;
+    case 5: schemaCatalogWriteIntBe(pOut, pMem->i, 6); return;
+    case 6: schemaCatalogWriteIntBe(pOut, pMem->i, 8); return;
+    default:
+      if( serialType>=13 ) memcpy(pOut, pMem->p, (size_t)pMem->n);
+      return;
+  }
+}
+
+static u8 *buildSchemaCatalogRecord(
+  const char *zType,
+  const char *zName,
+  const char *zTblName,
+  i64 iRootpage,
+  const char *zSql,
+  int *pnOut
+){
+  SchemaFieldValue aMem[5];
+  u32 aType[5];
+  u32 aLen[5];
+  int i, hdrSize = 0, bodySize = 0, pos;
+  u8 *pOut, *pHdr, *pBody;
+
+  memset(aMem, 0, sizeof(aMem));
+  *pnOut = 0;
+  aMem[0].eType = SQLITE_TEXT;    aMem[0].p = zType;    aMem[0].n = (int)strlen(zType);
+  aMem[1].eType = SQLITE_TEXT;    aMem[1].p = zName;    aMem[1].n = (int)strlen(zName);
+  aMem[2].eType = SQLITE_TEXT;    aMem[2].p = zTblName; aMem[2].n = (int)strlen(zTblName);
+  aMem[3].eType = SQLITE_INTEGER; aMem[3].i = iRootpage;
+  if( zSql ){
+    aMem[4].eType = SQLITE_TEXT;
+    aMem[4].p = zSql;
+    aMem[4].n = (int)strlen(zSql);
+  }else{
+    aMem[4].eType = SQLITE_NULL;
+  }
+
+  for(i=0; i<5; i++){
+    aType[i] = schemaCatalogSerialType(&aMem[i], &aLen[i]);
+    hdrSize += sqlite3VarintLen(aType[i]);
+    bodySize += (int)aLen[i];
+  }
+  hdrSize += sqlite3VarintLen(hdrSize);
+  pOut = sqlite3_malloc(hdrSize + bodySize);
+  if( !pOut ) return 0;
+  pos = sqlite3PutVarint(pOut, hdrSize);
+  pHdr = pOut + pos;
+  pBody = pOut + hdrSize;
+  for(i=0; i<5; i++){
+    pHdr += sqlite3PutVarint(pHdr, aType[i]);
+    if( aLen[i]>0 ){
+      schemaCatalogSerialPut(pBody, &aMem[i], aType[i]);
+      pBody += aLen[i];
+    }
+  }
+  *pnOut = hdrSize + bodySize;
+  return pOut;
+}
+
+static int loadSchemaCatalogRows(
+  Btree *pBtree,
+  struct TableEntry *aTables,
+  int nTables,
+  SchemaCatalogRow **ppRows,
+  int *pnRows,
+  ProllyHash *pMasterRoot,
+  u8 *pMasterFlags
+){
+  ChunkStore *cs = &pBtree->pBt->store;
+  ProllyCache *pCache = &pBtree->pBt->cache;
+  ProllyCursor cur;
+  SchemaCatalogRow *aRows = 0;
+  int nRows = 0, nAlloc = 0, i, rc, res;
+
+  *ppRows = 0;
+  *pnRows = 0;
+  memset(pMasterRoot, 0, sizeof(*pMasterRoot));
+  *pMasterFlags = 0;
+  for(i=0; i<nTables; i++){
+    if( aTables[i].iTable==1 ){
+      *pMasterRoot = aTables[i].root;
+      *pMasterFlags = aTables[i].flags;
+      break;
+    }
+  }
+  if( prollyHashIsEmpty(pMasterRoot) ) return SQLITE_OK;
+
+  prollyCursorInit(&cur, cs, pCache, pMasterRoot, *pMasterFlags);
+  rc = prollyCursorFirst(&cur, &res);
+  if( rc!=SQLITE_OK || res ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+  while( prollyCursorIsValid(&cur) ){
+    const u8 *pVal;
+    int nVal;
+    DoltliteRecordInfo ri;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( pVal && nVal>0 ){
+      char *zType = 0, *zName = 0, *zTblName = 0, *zSql = 0;
+      i64 iRootpage = 0;
+      doltliteParseRecord(pVal, nVal, &ri);
+      if( ri.nField<5 ){ rc = SQLITE_CORRUPT; break; }
+      rc = schemaCatalogTextField(pVal, nVal, &ri, 0, &zType);
+      if( rc!=SQLITE_OK ) break;
+      rc = schemaCatalogTextField(pVal, nVal, &ri, 1, &zName);
+      if( rc!=SQLITE_OK ){ sqlite3_free(zType); break; }
+      rc = schemaCatalogTextField(pVal, nVal, &ri, 2, &zTblName);
+      if( rc!=SQLITE_OK ){ sqlite3_free(zType); sqlite3_free(zName); break; }
+      iRootpage = schemaCatalogIntField(pVal, nVal, &ri, 3);
+      rc = schemaCatalogTextField(pVal, nVal, &ri, 4, &zSql);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTblName); break;
+      }
+      if( nRows>=nAlloc ){
+        int nNew = nAlloc ? nAlloc*2 : 16;
+        SchemaCatalogRow *aNew = sqlite3_realloc(aRows, nNew*(int)sizeof(SchemaCatalogRow));
+        if( !aNew ){
+          sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTblName); sqlite3_free(zSql);
+          rc = SQLITE_NOMEM;
+          break;
+        }
+        aRows = aNew;
+        nAlloc = nNew;
+      }
+      memset(&aRows[nRows], 0, sizeof(SchemaCatalogRow));
+      aRows[nRows].iRowid = prollyCursorIntKey(&cur);
+      aRows[nRows].oldPg = (Pgno)iRootpage;
+      aRows[nRows].zType = zType;
+      aRows[nRows].zName = zName;
+      aRows[nRows].zTblName = zTblName;
+      aRows[nRows].zSql = zSql;
+      nRows++;
+    }
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ) break;
+  }
+  prollyCursorClose(&cur);
+  if( rc!=SQLITE_OK ){
+    freeSchemaCatalogRows(aRows, nRows);
+    return rc;
+  }
+  *ppRows = aRows;
+  *pnRows = nRows;
+  return SQLITE_OK;
 }
 
 int doltliteSerializeCatalogEntries(
@@ -936,69 +1395,211 @@ int doltliteSerializeCatalogEntries(
 ){
   int sz = CAT_HEADER_SIZE_V3;
   u8 *buf, *q;
-  struct TableEntry *aSorted;
-  int i;
+  Btree *pBtree;
+  SchemaCatalogRow *aRows = 0;
+  CatalogEntryMeta *aMeta = 0;
+  ProllyHash masterRoot;
+  u8 masterFlags = 0;
+  CatalogSerializeEntry *aSorted = 0;
+  int nRows = 0, nMeta = 0;
+  int i, j;
+  int rc;
 
+  if( !db ) return SQLITE_MISUSE;
+  if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = loadSchemaCatalogRows(pBtree, aTables, nTables, &aRows, &nRows, &masterRoot, &masterFlags);
+  if( rc!=SQLITE_OK ){
+    freeCatalogEntryMeta(aMeta, nMeta);
+    return rc;
+  }
+  if( nRows>0 ){
+    ProllyMutMap mm;
+    struct TableEntry masterEntry;
+    qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
+    for(i=0; i<nRows; i++){
+      char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
+      if( !zCanon ){
+        freeSchemaCatalogRows(aRows, nRows);
+        return SQLITE_NOMEM;
+      }
+      sqlite3_free(aRows[i].zSql);
+      aRows[i].zSql = zCanon;
+      aRows[i].newPg = (Pgno)(i + 2);
+    }
 
-  if( db ){
+    memset(&mm, 0, sizeof(mm));
+    rc = prollyMutMapInit(&mm, 1);
+    if( rc!=SQLITE_OK ){
+      freeSchemaCatalogRows(aRows, nRows);
+      return rc;
+    }
+    for(i=0; i<nRows; i++){
+      int nRec = 0;
+      u8 *pRec;
+      ProllyHash h;
+      if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
+        prollyHashCompute(aRows[i].zSql ? (const u8*)aRows[i].zSql : (const u8*)"",
+                          aRows[i].zSql ? (int)strlen(aRows[i].zSql) : 0, &h);
+      }else{
+        memset(&h, 0, sizeof(h));
+      }
+      for(j=0; j<nTables; j++){
+        if( aTables[j].iTable==aRows[i].oldPg ){
+          aTables[j].schemaHash = h;
+          break;
+        }
+      }
+      if( aRows[i].newPg==aRows[i].oldPg ){
+        aRows[i].newPg = aRows[i].oldPg;
+      }
+      pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
+                                      aRows[i].zTblName, aRows[i].newPg,
+                                      aRows[i].zSql, &nRec);
+      if( !pRec ){
+        prollyMutMapFree(&mm);
+        freeSchemaCatalogRows(aRows, nRows);
+        freeCatalogEntryMeta(aMeta, nMeta);
+        return SQLITE_NOMEM;
+      }
+      rc = prollyMutMapInsert(&mm, 0, 0, (i64)(i + 1), pRec, nRec);
+      sqlite3_free(pRec);
+      if( rc!=SQLITE_OK ){
+        prollyMutMapFree(&mm);
+        freeSchemaCatalogRows(aRows, nRows);
+        freeCatalogEntryMeta(aMeta, nMeta);
+        return rc;
+      }
+    }
+    memset(&masterEntry, 0, sizeof(masterEntry));
+    masterEntry.iTable = 1;
+    memset(&masterEntry.root, 0, sizeof(masterEntry.root));
+    masterEntry.flags = masterFlags;
+    rc = applyMutMapToTableRoot(pBtree->pBt, &masterEntry, &mm);
+    prollyMutMapFree(&mm);
+    if( rc!=SQLITE_OK ){
+      freeSchemaCatalogRows(aRows, nRows);
+      freeCatalogEntryMeta(aMeta, nMeta);
+      return rc;
+    }
+    masterRoot = masterEntry.root;
+  }
+
+  if( nMeta>0 ){
+    Pgno iNextHidden = 2;
+    for(i=0; i<nRows; i++){
+      if( aRows[i].newPg >= iNextHidden ) iNextHidden = aRows[i].newPg + 1;
+    }
+    for(i=0; i<nMeta; i++){
+      if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ) continue;
+      aMeta[i].iPersistTable = iNextHidden++;
+    }
+  }
+
+  if( nTables > 0 ){
+    aSorted = sqlite3_malloc(nTables * (int)sizeof(CatalogSerializeEntry));
+    if( !aSorted ){
+      freeSchemaCatalogRows(aRows, nRows);
+      return SQLITE_NOMEM;
+    }
+    memset(aSorted, 0, nTables * (int)sizeof(CatalogSerializeEntry));
     for(i=0; i<nTables; i++){
-      if( aTables[i].iTable>1 ){
-        char *zCur = doltliteResolveTableNumber(db, aTables[i].iTable);
-        if( zCur ){
-          sqlite3_free(aTables[i].zName);
-          aTables[i].zName = zCur;
+      const SchemaCatalogRow *pRow = 0;
+      const CatalogEntryMeta *pMeta = 0;
+      aSorted[i].iTable = aTables[i].iTable;
+      aSorted[i].root = aTables[i].root;
+      aSorted[i].schemaHash = aTables[i].schemaHash;
+      aSorted[i].flags = aTables[i].flags;
+      if( aTables[i].iTable==1 ){
+        aSorted[i].root = masterRoot;
+        aSorted[i].zType = "catalog";
+        aSorted[i].zName = "sqlite_master";
+        aSorted[i].zTblName = "";
+        continue;
+      }
+      for(j=0; j<nRows; j++){
+        if( aRows[j].oldPg==aTables[i].iTable ){
+          pRow = &aRows[j];
+          break;
+        }
+      }
+      if( pRow ){
+        aSorted[i].iTable = pRow->newPg;
+        aSorted[i].zType = pRow->zType;
+        aSorted[i].zName = pRow->zName;
+        aSorted[i].zTblName = pRow->zTblName;
+      }else{
+        pMeta = findCatalogEntryMetaByPgno(aMeta, nMeta, aTables[i].iTable);
+        if( pMeta && pMeta->iPersistTable>0 ){
+          aSorted[i].iTable = pMeta->iPersistTable;
+          aSorted[i].zType = pMeta->zType;
+          aSorted[i].zName = pMeta->zName;
+          aSorted[i].zTblName = pMeta->zTblName;
+        }else{
+          aSorted[i].zType = "unknown";
+          aSorted[i].zName = aTables[i].zName ? aTables[i].zName : "";
+          aSorted[i].zTblName = "";
         }
       }
     }
-  }
-
-
-  if( nTables > 0 ){
-    aSorted = sqlite3_malloc(nTables * (int)sizeof(struct TableEntry));
-    if( !aSorted ) return SQLITE_NOMEM;
-    memcpy(aSorted, aTables, nTables * (int)sizeof(struct TableEntry));
-    qsort(aSorted, nTables, sizeof(struct TableEntry), tableEntryNameCmp);
-  }else{
-    aSorted = 0;
+    qsort(aSorted, nTables, sizeof(CatalogSerializeEntry), catalogSerializeEntryCmp);
   }
 
   for(i=0; i<nTables; i++){
-    int nLen = aSorted[i].zName ? (int)strlen(aSorted[i].zName) : 0;
-    if( sz > 0x7FFFFFFF - (4 + 1 + PROLLY_HASH_SIZE*2 + 2 + nLen) ){
+    int nType = aSorted[i].zType ? (int)strlen(aSorted[i].zType) : 0;
+    int nName = aSorted[i].zName ? (int)strlen(aSorted[i].zName) : 0;
+    int nTbl = aSorted[i].zTblName ? (int)strlen(aSorted[i].zTblName) : 0;
+    if( sz > 0x7FFFFFFF - (4 + 1 + PROLLY_HASH_SIZE*2 + 6 + nType + nName + nTbl) ){
       sqlite3_free(aSorted);
+      freeSchemaCatalogRows(aRows, nRows);
+      freeCatalogEntryMeta(aMeta, nMeta);
       return SQLITE_TOOBIG;
     }
-    sz += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2 + nLen;
+    sz += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 6 + nType + nName + nTbl;
   }
 
   buf = sqlite3_malloc(sz);
   if( !buf ){
     sqlite3_free(aSorted);
+    freeSchemaCatalogRows(aRows, nRows);
+    freeCatalogEntryMeta(aMeta, nMeta);
     return SQLITE_NOMEM;
   }
   q = buf;
 
-  *q++ = CATALOG_FORMAT_V3;
+  *q++ = CATALOG_FORMAT_V4;
   q[0]=(u8)nTables; q[1]=(u8)(nTables>>8);
   q[2]=(u8)(nTables>>16); q[3]=(u8)(nTables>>24);
   q += 4;
 
   for(i=0; i<nTables; i++){
-    struct TableEntry *t = &aSorted[i];
-    u32 pg = t->iTable;
-    int nLen = t->zName ? (int)strlen(t->zName) : 0;
+    const CatalogSerializeEntry *e = &aSorted[i];
+    u32 pg = e->iTable;
+    int nType = e->zType ? (int)strlen(e->zType) : 0;
+    int nName = e->zName ? (int)strlen(e->zName) : 0;
+    int nTbl = e->zTblName ? (int)strlen(e->zTblName) : 0;
     q[0]=(u8)pg; q[1]=(u8)(pg>>8); q[2]=(u8)(pg>>16); q[3]=(u8)(pg>>24);
     q += 4;
-    *q++ = t->flags;
-    memcpy(q, t->root.data, PROLLY_HASH_SIZE);
+    *q++ = e->flags;
+    memcpy(q, e->root.data, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
-    memcpy(q, t->schemaHash.data, PROLLY_HASH_SIZE);
+    memcpy(q, e->schemaHash.data, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
-    q[0]=(u8)nLen; q[1]=(u8)(nLen>>8); q+=2;
-    if( nLen>0 ) memcpy(q, t->zName, nLen);
-    q += nLen;
+    q[0]=(u8)nType; q[1]=(u8)(nType>>8); q+=2;
+    q[0]=(u8)nName; q[1]=(u8)(nName>>8); q+=2;
+    q[0]=(u8)nTbl; q[1]=(u8)(nTbl>>8); q+=2;
+    if( nType>0 ) memcpy(q, e->zType, nType);
+    q += nType;
+    if( nName>0 ) memcpy(q, e->zName, nName);
+    q += nName;
+    if( nTbl>0 ) memcpy(q, e->zTblName, nTbl);
+    q += nTbl;
   }
   sqlite3_free(aSorted);
+  freeSchemaCatalogRows(aRows, nRows);
+  freeCatalogEntryMeta(aMeta, nMeta);
   *ppOut = buf;
   *pnOut = (int)(q - buf);
   return SQLITE_OK;
@@ -1007,6 +1608,172 @@ int doltliteSerializeCatalogEntries(
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   return doltliteSerializeCatalogEntries(
       pBtree->db, pBtree->cat.a, pBtree->cat.n, ppOut, pnOut);
+}
+
+typedef struct CanonSchemaRow CanonSchemaRow;
+struct CanonSchemaRow {
+  char *zType;
+  char *zName;
+  char *zTblName;
+  char *zSql;
+  Pgno oldPg;
+  Pgno newPg;
+};
+
+static int canonSchemaRowCmp(const void *a, const void *b){
+  const CanonSchemaRow *ra = (const CanonSchemaRow*)a;
+  const CanonSchemaRow *rb = (const CanonSchemaRow*)b;
+  int c = strcmp(ra->zType ? ra->zType : "", rb->zType ? rb->zType : "");
+  if( c ) return c;
+  c = strcmp(ra->zTblName ? ra->zTblName : "", rb->zTblName ? rb->zTblName : "");
+  if( c ) return c;
+  return strcmp(ra->zName ? ra->zName : "", rb->zName ? rb->zName : "");
+}
+
+static int tableEntryPgnoCmp(const void *a, const void *b){
+  const struct TableEntry *ea = (const struct TableEntry*)a;
+  const struct TableEntry *eb = (const struct TableEntry*)b;
+  if( ea->iTable < eb->iTable ) return -1;
+  if( ea->iTable > eb->iTable ) return 1;
+  return 0;
+}
+
+static void freeCanonSchemaRows(CanonSchemaRow *aRows, int nRows){
+  int i;
+  for(i=0; i<nRows; i++){
+    sqlite3_free(aRows[i].zType);
+    sqlite3_free(aRows[i].zName);
+    sqlite3_free(aRows[i].zTblName);
+    sqlite3_free(aRows[i].zSql);
+  }
+  sqlite3_free(aRows);
+}
+
+static int canonicalizeLiveCatalog(sqlite3 *db){
+  Btree *pBtree;
+  BtShared *pBt;
+  sqlite3_stmt *pScan = 0;
+  sqlite3_stmt *pUpd = 0;
+  CanonSchemaRow *aRows = 0;
+  int nRows = 0;
+  int nAlloc = 0;
+  int i;
+  int rc = SQLITE_OK;
+  Pgno iNext = 2;
+  int changed = 0;
+
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  pBt = pBtree->pBt;
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT type, name, tbl_name, rootpage, sql "
+      "FROM sqlite_master "
+      "WHERE name NOT LIKE 'dolt_%' "
+      "AND type IN ('table','index') "
+      "ORDER BY type, tbl_name, name",
+      -1, &pScan, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  while( (rc = sqlite3_step(pScan))==SQLITE_ROW ){
+    const char *zType = (const char*)sqlite3_column_text(pScan, 0);
+    const char *zName = (const char*)sqlite3_column_text(pScan, 1);
+    const char *zTbl = (const char*)sqlite3_column_text(pScan, 2);
+    const char *zSql = (const char*)sqlite3_column_text(pScan, 4);
+    char *zCanon = doltliteCanonicalizeSchemaSql(zSql, zName);
+    CanonSchemaRow *aNew;
+    if( !zCanon ){ rc = SQLITE_NOMEM; break; }
+    if( nRows>=nAlloc ){
+      int nNew = nAlloc ? nAlloc*2 : 16;
+      aNew = sqlite3_realloc(aRows, nNew * (int)sizeof(CanonSchemaRow));
+      if( !aNew ){
+        sqlite3_free(zCanon);
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      aRows = aNew;
+      nAlloc = nNew;
+    }
+    memset(&aRows[nRows], 0, sizeof(CanonSchemaRow));
+    aRows[nRows].zType = sqlite3_mprintf("%s", zType ? zType : "");
+    aRows[nRows].zName = sqlite3_mprintf("%s", zName ? zName : "");
+    aRows[nRows].zTblName = sqlite3_mprintf("%s", zTbl ? zTbl : "");
+    aRows[nRows].zSql = zCanon;
+    aRows[nRows].oldPg = (Pgno)sqlite3_column_int(pScan, 3);
+    if( !aRows[nRows].zType || !aRows[nRows].zName || !aRows[nRows].zTblName ){
+      rc = SQLITE_NOMEM;
+      break;
+    }
+    nRows++;
+  }
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  sqlite3_finalize(pScan);
+  pScan = 0;
+  if( rc!=SQLITE_OK ){
+    freeCanonSchemaRows(aRows, nRows);
+    return rc;
+  }
+
+  qsort(aRows, nRows, sizeof(CanonSchemaRow), canonSchemaRowCmp);
+  for(i=0; i<nRows; i++){
+    aRows[i].newPg = iNext++;
+    if( aRows[i].newPg != aRows[i].oldPg ) changed = 1;
+  }
+
+  rc = sqlite3_exec(db, "PRAGMA writable_schema=ON", 0, 0, 0);
+  if( rc!=SQLITE_OK ){
+    freeCanonSchemaRows(aRows, nRows);
+    return rc;
+  }
+  rc = sqlite3_prepare_v2(db,
+      "UPDATE sqlite_master SET rootpage=?, sql=? WHERE type=? AND name=?",
+      -1, &pUpd, 0);
+  if( rc!=SQLITE_OK ){
+    sqlite3_exec(db, "PRAGMA writable_schema=OFF", 0, 0, 0);
+    freeCanonSchemaRows(aRows, nRows);
+    return rc;
+  }
+  for(i=0; i<nRows && rc==SQLITE_OK; i++){
+    sqlite3_bind_int(pUpd, 1, (int)aRows[i].newPg);
+    sqlite3_bind_text(pUpd, 2, aRows[i].zSql, -1, SQLITE_STATIC);
+    sqlite3_bind_text(pUpd, 3, aRows[i].zType, -1, SQLITE_STATIC);
+    sqlite3_bind_text(pUpd, 4, aRows[i].zName, -1, SQLITE_STATIC);
+    rc = sqlite3_step(pUpd);
+    if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+    sqlite3_reset(pUpd);
+    sqlite3_clear_bindings(pUpd);
+  }
+  sqlite3_finalize(pUpd);
+  sqlite3_exec(db, "PRAGMA writable_schema=OFF", 0, 0, 0);
+  if( rc!=SQLITE_OK ){
+    freeCanonSchemaRows(aRows, nRows);
+    return rc;
+  }
+
+  for(i=0; i<pBtree->cat.n; i++){
+    int j;
+    if( pBtree->cat.a[i].iTable<=1 ) continue;
+    for(j=0; j<nRows; j++){
+      if( pBtree->cat.a[i].iTable==aRows[j].oldPg ){
+        pBtree->cat.a[i].iTable = aRows[j].newPg;
+        break;
+      }
+    }
+  }
+  qsort(pBtree->cat.a, pBtree->cat.n, sizeof(struct TableEntry), tableEntryPgnoCmp);
+  pBtree->cat.iNextTable = iNext;
+
+  if( changed ){
+    invalidateCursors(pBt, 0, SQLITE_ABORT);
+    if( pBtree->db ){
+      sqlite3ResetAllSchemasOfConnection(pBtree->db);
+    }else{
+      invalidateSchema(pBtree);
+    }
+  }
+
+  freeCanonSchemaRows(aRows, nRows);
+  return SQLITE_OK;
 }
 
 static void initDefaultMeta(Btree *pBtree){
@@ -1019,10 +1786,11 @@ static void initDefaultMeta(Btree *pBtree){
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   const u8 *q = data;
   int nTables, i;
+  int iFormat = 0;
 
   {
     const u8 *pEntries;
-    if( !catalogParseHeader(data, nData, &nTables, &pEntries) ){
+    if( !catalogParseHeaderEx(data, nData, &iFormat, &nTables, &pEntries) ){
       return SQLITE_CORRUPT;
     }
     q = pEntries;
@@ -1059,7 +1827,25 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
       q += PROLLY_HASH_SIZE;
     }
-    if( q+2 <= data+nData ){
+    if( iFormat==CATALOG_FORMAT_V4 ){
+      int nType, nName, nTbl;
+      const u8 *pType, *pName, *pTbl;
+      if( q+6 > data+nData ) return SQLITE_CORRUPT;
+      nType = q[0] | (q[1]<<8); q += 2;
+      nName = q[0] | (q[1]<<8); q += 2;
+      nTbl = q[0] | (q[1]<<8); q += 2;
+      if( q+nType+nName+nTbl > data+nData ) return SQLITE_CORRUPT;
+      pType = q; q += nType;
+      pName = q; q += nName;
+      pTbl = q; q += nTbl;
+      (void)pTbl;
+      if( nType==5 && memcmp(pType, "table", 5)==0 && nName>0 ){
+        pTE->zName = sqlite3_malloc(nName+1);
+        if( !pTE->zName ) return SQLITE_NOMEM;
+        memcpy(pTE->zName, pName, nName);
+        pTE->zName[nName] = 0;
+      }
+    }else if( q+2 <= data+nData ){
       nLen = q[0] | (q[1]<<8); q += 2;
       if( nLen>0 && q+nLen<=data+nData ){
         pTE->zName = sqlite3_malloc(nLen+1);
@@ -2115,6 +2901,7 @@ int sqlite3BtreeOpen(
     ProllyHash rebaseOnto;
     ProllyHash constraintViolationsHash;
     char *zRebaseOrigBranch = 0;
+    char *zRebaseReturnBranch = 0;
     u8 isRebasing = 0;
     const char *zDef = chunkStoreGetDefaultBranch(&pBt->store);
     u8 isMerging = 0;
@@ -2132,7 +2919,7 @@ int sqlite3BtreeOpen(
                                  &stagedCatalog, &isMerging,
                                  &mergeCommitHash, &conflictsCatalogHash,
                                  &isRebasing, &preRebaseCat, &rebaseOnto,
-                                 &zRebaseOrigBranch,
+                                 &zRebaseOrigBranch, &zRebaseReturnBranch,
                                  &constraintViolationsHash);
     if( rc==SQLITE_NOTFOUND ){
       rc = SQLITE_OK;
@@ -2188,6 +2975,7 @@ int sqlite3BtreeOpen(
     p->preRebaseWorkingCat = preRebaseCat;
     p->rebaseOntoCommit = rebaseOnto;
     p->zRebaseOrigBranch = zRebaseOrigBranch;
+    p->zRebaseReturnBranch = zRebaseReturnBranch;
     p->constraintViolationsHash = constraintViolationsHash;
   }
 
@@ -2273,6 +3061,7 @@ static int prollyBtreeClose(Btree *p){
   sqlite3_free(p->zAuthorName);
   sqlite3_free(p->zAuthorEmail);
   sqlite3_free(p->zRebaseOrigBranch);
+  sqlite3_free(p->zRebaseReturnBranch);
   sqlite3_free(p);
   return SQLITE_OK;
 }
@@ -2465,6 +3254,7 @@ static int btreeLoadWorkingSetBlob(
   ProllyHash *pPreRebaseCat,
   ProllyHash *pRebaseOnto,
   char **pzRebaseOrigBranch,
+  char **pzRebaseReturnBranch,
   ProllyHash *pConstraintViolations
 ){
   ProllyHash wsHash;
@@ -2483,6 +3273,7 @@ static int btreeLoadWorkingSetBlob(
   if( pPreRebaseCat ) memset(pPreRebaseCat, 0, sizeof(ProllyHash));
   if( pRebaseOnto ) memset(pRebaseOnto, 0, sizeof(ProllyHash));
   if( pzRebaseOrigBranch ) *pzRebaseOrigBranch = 0;
+  if( pzRebaseReturnBranch ) *pzRebaseReturnBranch = 0;
   if( pConstraintViolations ) memset(pConstraintViolations, 0, sizeof(ProllyHash));
 
   rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
@@ -2497,7 +3288,8 @@ static int btreeLoadWorkingSetBlob(
   version = data[0];
   if( version != WS_FORMAT_VERSION_V2
    && version != WS_FORMAT_VERSION_V3
-   && version != WS_FORMAT_VERSION_V4 ){
+   && version != WS_FORMAT_VERSION_V4
+   && version != WS_FORMAT_VERSION_V5 ){
     sqlite3_free(data);
     return SQLITE_CORRUPT;
   }
@@ -2509,7 +3301,9 @@ static int btreeLoadWorkingSetBlob(
   if( pMergeCommit ) memcpy(pMergeCommit->data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
   if( pConflicts ) memcpy(pConflicts->data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
 
-  if( (version == WS_FORMAT_VERSION_V3 || version == WS_FORMAT_VERSION_V4)
+  if( (version == WS_FORMAT_VERSION_V3
+    || version == WS_FORMAT_VERSION_V4
+    || version == WS_FORMAT_VERSION_V5)
    && nData >= WS_TOTAL_SIZE_V3 ){
     if( pIsRebasing ) *pIsRebasing = data[WS_REBASING_OFF];
     if( pPreRebaseCat ) memcpy(pPreRebaseCat->data,
@@ -2529,7 +3323,24 @@ static int btreeLoadWorkingSetBlob(
       }
     }
   }
-  if( version == WS_FORMAT_VERSION_V4 && nData >= WS_TOTAL_SIZE ){
+  if( version == WS_FORMAT_VERSION_V4 && nData >= WS_TOTAL_SIZE_V4 ){
+    if( pConstraintViolations ){
+      memcpy(pConstraintViolations->data,
+             data + WS_CONSTRAINT_VIOLATIONS_OFF_V4, PROLLY_HASH_SIZE);
+    }
+  }else if( version == WS_FORMAT_VERSION_V5 && nData >= WS_TOTAL_SIZE ){
+    if( pzRebaseReturnBranch ){
+      const char *src = (const char*)(data + WS_REBASE_RETURN_BRANCH_OFF);
+      int n = 0;
+      while( n < WS_REBASE_BRANCH_LEN && src[n] ) n++;
+      if( n > 0 ){
+        char *z = sqlite3_malloc(n + 1);
+        if( !z ){ sqlite3_free(data); return SQLITE_NOMEM; }
+        memcpy(z, src, n);
+        z[n] = 0;
+        *pzRebaseReturnBranch = z;
+      }
+    }
     if( pConstraintViolations ){
       memcpy(pConstraintViolations->data,
              data + WS_CONSTRAINT_VIOLATIONS_OFF, PROLLY_HASH_SIZE);
@@ -2552,6 +3363,7 @@ static int btreeStoreWorkingSetBlob(
   const ProllyHash *pPreRebaseCat,
   const ProllyHash *pRebaseOnto,
   const char *zRebaseOrigBranch,
+  const char *zRebaseReturnBranch,
   const ProllyHash *pConstraintViolations
 ){
   u8 buf[WS_TOTAL_SIZE];
@@ -2582,6 +3394,11 @@ static int btreeStoreWorkingSetBlob(
     if( n > WS_REBASE_BRANCH_LEN - 1 ) n = WS_REBASE_BRANCH_LEN - 1;
     memcpy(buf + WS_REBASE_BRANCH_OFF, zRebaseOrigBranch, n);
   }
+  if( zRebaseReturnBranch ){
+    int n = (int)strlen(zRebaseReturnBranch);
+    if( n > WS_REBASE_BRANCH_LEN - 1 ) n = WS_REBASE_BRANCH_LEN - 1;
+    memcpy(buf + WS_REBASE_RETURN_BRANCH_OFF, zRebaseReturnBranch, n);
+  }
   memcpy(buf + WS_CONSTRAINT_VIOLATIONS_OFF,
          (pConstraintViolations ? pConstraintViolations : &emptyHash)->data,
          PROLLY_HASH_SIZE);
@@ -2602,7 +3419,7 @@ static int btreeReadWorkingCatalog(
   ProllyHash *pCommitHash
 ){
   return btreeLoadWorkingSetBlob(cs, zBranch, pCatHash, pCommitHash,
-                                 0, 0, 0, 0, 0, 0, 0, 0, 0);
+                                 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 
 static int btreeWriteWorkingState(
@@ -2618,6 +3435,7 @@ static int btreeWriteWorkingState(
   ProllyHash rebaseOnto;
   ProllyHash constraintViolationsHash;
   char *zRebaseOrigBranch = 0;
+  char *zRebaseReturnBranch = 0;
   u8 isMerging = 0;
   u8 isRebasing = 0;
   int rc;
@@ -2625,10 +3443,11 @@ static int btreeWriteWorkingState(
   rc = btreeLoadWorkingSetBlob(cs, zBranch, 0, 0, &stagedCatalog, &isMerging,
                                &mergeCommitHash, &conflictsCatalogHash,
                                &isRebasing, &preRebaseCat, &rebaseOnto,
-                               &zRebaseOrigBranch,
+                               &zRebaseOrigBranch, &zRebaseReturnBranch,
                                &constraintViolationsHash);
   if( rc!=SQLITE_OK && rc!=SQLITE_NOTFOUND ){
     sqlite3_free(zRebaseOrigBranch);
+    sqlite3_free(zRebaseReturnBranch);
     return rc;
   }
   if( rc==SQLITE_NOTFOUND ){
@@ -2646,9 +3465,10 @@ static int btreeWriteWorkingState(
                                 &stagedCatalog, isMerging,
                                 &mergeCommitHash, &conflictsCatalogHash,
                                 isRebasing, &preRebaseCat, &rebaseOnto,
-                                zRebaseOrigBranch,
+                                zRebaseOrigBranch, zRebaseReturnBranch,
                                 &constraintViolationsHash);
   sqlite3_free(zRebaseOrigBranch);
+  sqlite3_free(zRebaseReturnBranch);
   return rc;
 }
 
@@ -2662,6 +3482,7 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
   ProllyHash rebaseOnto;
   ProllyHash constraintViolationsHash;
   char *zRebaseOrigBranch = 0;
+  char *zRebaseReturnBranch = 0;
   const char *zBr = p->zBranch ? p->zBranch : "main";
   u8 isMerging = 0;
   u8 isRebasing = 0;
@@ -2679,12 +3500,14 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
       &pBt->store, zBr, &catHash, 0, &stagedCatalog, &isMerging,
       &mergeCommitHash, &conflictsCatalogHash,
       &isRebasing, &preRebaseCat, &rebaseOnto, &zRebaseOrigBranch,
+      &zRebaseReturnBranch,
       &constraintViolationsHash);
   if( rc==SQLITE_NOTFOUND ){
     rc = SQLITE_OK;
   }
   if( rc!=SQLITE_OK ){
     sqlite3_free(zRebaseOrigBranch);
+    sqlite3_free(zRebaseReturnBranch);
     return rc;
   }
 
@@ -2697,12 +3520,14 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
       sqlite3_free(catData);
       if( rc!=SQLITE_OK ){
         sqlite3_free(zRebaseOrigBranch);
+        sqlite3_free(zRebaseReturnBranch);
         return rc;
       }
     }else{
       sqlite3_free(catData);
       if( rc!=SQLITE_OK ){
         sqlite3_free(zRebaseOrigBranch);
+        sqlite3_free(zRebaseReturnBranch);
         return rc;
       }
     }
@@ -2717,6 +3542,8 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
   p->rebaseOntoCommit = rebaseOnto;
   sqlite3_free(p->zRebaseOrigBranch);
   p->zRebaseOrigBranch = zRebaseOrigBranch;
+  sqlite3_free(p->zRebaseReturnBranch);
+  p->zRebaseReturnBranch = zRebaseReturnBranch;
   p->constraintViolationsHash = constraintViolationsHash;
   return SQLITE_OK;
 }
@@ -2852,6 +3679,9 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
   int rcRollback = SQLITE_OK;
+  u8 *catData = 0;
+  int nCatData = 0;
+  ProllyHash catHash;
   (void)bCleanup;
 
   if( p->inTrans==TRANS_WRITE ){
@@ -2860,13 +3690,9 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
     if( rc!=SQLITE_OK ) return rc;
 
     {
-      u8 *catData = 0;
-      int nCatData = 0;
-      ProllyHash catHash;
       rc = serializeCatalog(p, &catData, &nCatData);
       if( rc==SQLITE_OK ){
         rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
-        sqlite3_free(catData);
       }
       if( rc!=SQLITE_OK ) return rc;
 
@@ -2881,6 +3707,17 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
 
     rc = chunkStoreCommit(&pBt->store);
     if( rc==SQLITE_OK ){
+      int rcReload = deserializeCatalog(p, catData, nCatData);
+      if( rcReload!=SQLITE_OK ){
+        sqlite3_free(catData);
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rcReload;
+      }
+      invalidateSchema(p);
+      if( p->db ){
+        sqlite3ResetAllSchemasOfConnection(p->db);
+      }
       p->iBDataVersion++;
       if( pBt->pPagerShim ){
         pBt->pPagerShim->iDataVersion++;
@@ -2889,11 +3726,13 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       p->inTransaction = TRANS_NONE;
       p->nSavepoint = 0;
 
+      sqlite3_free(catData);
       chunkStoreUnlock(&pBt->store);
       pBt->store.snapshotPinned = 0;
     }else{
-
-      int rc2 = restoreFromCommitted(p);
+      int rc2;
+      sqlite3_free(catData);
+      rc2 = restoreFromCommitted(p);
       if( rc2!=SQLITE_OK ){
         chunkStoreRollback(&pBt->store);
         chunkStoreUnlock(&pBt->store);
@@ -3009,6 +3848,7 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
                                       &p->preRebaseWorkingCat,
                                       &p->rebaseOntoCommit,
                                       p->zRebaseOrigBranch,
+                                      p->zRebaseReturnBranch,
                                       &p->constraintViolationsHash);
       }
       if( rc==SQLITE_OK ){
@@ -3085,6 +3925,7 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
                                 &p->preRebaseWorkingCat,
                                 &p->rebaseOntoCommit,
                                 p->zRebaseOrigBranch,
+                                p->zRebaseReturnBranch,
                                 &p->constraintViolationsHash);
   if( rc!=SQLITE_OK ) return rc;
   rc = chunkStoreSerializeRefs(&pBt->store);
@@ -5804,11 +6645,9 @@ const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable){
 
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   BtShared *pBt = doltliteGetBtShared(db);
-  Btree *pBtree;
   int rc;
   if( !pBt ) return SQLITE_ERROR;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
-  pBtree = db->aDb[0].pBt;
   rc = flushAllPending(pBt, 0);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -5819,7 +6658,7 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
     extern void doltliteUpdateSchemaHashes(sqlite3 *db);
     doltliteUpdateSchemaHashes(db);
   }
-  return serializeCatalog(pBtree, ppOut, pnOut);
+  return serializeCatalog(db->aDb[0].pBt, ppOut, pnOut);
 }
 
 int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
@@ -6238,25 +7077,29 @@ void doltliteClearSessionMergeState(sqlite3 *db){
 void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
                                     ProllyHash *pPreRebaseCat,
                                     ProllyHash *pRebaseOnto,
-                                    const char **pzOrigBranch){
+                                    const char **pzOrigBranch,
+                                    const char **pzReturnBranch){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *p = db->aDb[0].pBt;
     if( pIsRebasing ) *pIsRebasing = p->isRebasing;
     if( pPreRebaseCat ) memcpy(pPreRebaseCat, &p->preRebaseWorkingCat, sizeof(ProllyHash));
     if( pRebaseOnto ) memcpy(pRebaseOnto, &p->rebaseOntoCommit, sizeof(ProllyHash));
     if( pzOrigBranch ) *pzOrigBranch = p->zRebaseOrigBranch;
+    if( pzReturnBranch ) *pzReturnBranch = p->zRebaseReturnBranch;
   }else{
     if( pIsRebasing ) *pIsRebasing = 0;
     if( pPreRebaseCat ) memset(pPreRebaseCat, 0, sizeof(ProllyHash));
     if( pRebaseOnto ) memset(pRebaseOnto, 0, sizeof(ProllyHash));
     if( pzOrigBranch ) *pzOrigBranch = 0;
+    if( pzReturnBranch ) *pzReturnBranch = 0;
   }
 }
 
 void doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
                                     const ProllyHash *pPreRebaseCat,
                                     const ProllyHash *pRebaseOnto,
-                                    const char *zOrigBranch){
+                                    const char *zOrigBranch,
+                                    const char *zReturnBranch){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *p = db->aDb[0].pBt;
     p->isRebasing = isRebasing;
@@ -6266,11 +7109,13 @@ void doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
     else memset(&p->rebaseOntoCommit, 0, sizeof(ProllyHash));
     sqlite3_free(p->zRebaseOrigBranch);
     p->zRebaseOrigBranch = zOrigBranch ? sqlite3_mprintf("%s", zOrigBranch) : 0;
+    sqlite3_free(p->zRebaseReturnBranch);
+    p->zRebaseReturnBranch = zReturnBranch ? sqlite3_mprintf("%s", zReturnBranch) : 0;
   }
 }
 
 void doltliteClearSessionRebaseState(sqlite3 *db){
-  doltliteSetSessionRebaseState(db, 0, 0, 0, 0);
+  doltliteSetSessionRebaseState(db, 0, 0, 0, 0, 0);
 }
 
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
@@ -6296,7 +7141,7 @@ void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
       const char *zBr = p->zBranch ? p->zBranch : "main";
       int rc = btreeLoadWorkingSetBlob(&p2->pBt->store, zBr,
                                        0, 0, 0, &isMerging,
-                                       0, pHash, 0, 0, 0, 0, 0);
+                                       0, pHash, 0, 0, 0, 0, 0, 0);
       sqlite3_close(db2);
       if( rc!=SQLITE_OK || !isMerging ){
         memset(pHash, 0, sizeof(*pHash));
@@ -6310,7 +7155,7 @@ void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash){
     const char *zBr = p->zBranch ? p->zBranch : "main";
     int rc = btreeLoadWorkingSetBlob(&p->pBt->store, zBr,
                                      0, 0, 0, &isMerging,
-                                     0, pHash, 0, 0, 0, 0, 0);
+                                     0, pHash, 0, 0, 0, 0, 0, 0);
     if( rc!=SQLITE_OK || !isMerging ){
       memset(pHash, 0, sizeof(*pHash));
     }
@@ -6393,6 +7238,7 @@ int doltliteSaveWorkingSet(sqlite3 *db){
                                   &pBtree->preRebaseWorkingCat,
                                   &pBtree->rebaseOntoCommit,
                                   pBtree->zRebaseOrigBranch,
+                                  pBtree->zRebaseReturnBranch,
                                   &pBtree->constraintViolationsHash);
 }
 
@@ -6412,6 +7258,7 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;
   char *zNewRebaseOrigBranch = 0;
+  char *zNewRebaseReturnBranch = 0;
   int rc;
 
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
@@ -6426,6 +7273,7 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
                                &pBtree->preRebaseWorkingCat,
                                &pBtree->rebaseOntoCommit,
                                &zNewRebaseOrigBranch,
+                               &zNewRebaseReturnBranch,
                                &pBtree->constraintViolationsHash);
   if( rc == SQLITE_NOTFOUND ){
     memset(&pBtree->stagedCatalog, 0, sizeof(ProllyHash));
@@ -6437,14 +7285,19 @@ int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch){
     memset(&pBtree->rebaseOntoCommit, 0, sizeof(ProllyHash));
     sqlite3_free(pBtree->zRebaseOrigBranch);
     pBtree->zRebaseOrigBranch = 0;
+    sqlite3_free(pBtree->zRebaseReturnBranch);
+    pBtree->zRebaseReturnBranch = 0;
     memset(&pBtree->constraintViolationsHash, 0, sizeof(ProllyHash));
     return SQLITE_OK;
   }
   if( rc==SQLITE_OK ){
     sqlite3_free(pBtree->zRebaseOrigBranch);
     pBtree->zRebaseOrigBranch = zNewRebaseOrigBranch;
+    sqlite3_free(pBtree->zRebaseReturnBranch);
+    pBtree->zRebaseReturnBranch = zNewRebaseReturnBranch;
   }else{
     sqlite3_free(zNewRebaseOrigBranch);
+    sqlite3_free(zNewRebaseReturnBranch);
   }
   return rc;
 }

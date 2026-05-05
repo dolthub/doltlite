@@ -13,12 +13,14 @@
 static int parseCurrentCatalogHeader(
   const u8 *data,
   int nData,
+  int *pVersion,
   int *pnTables,
   const u8 **ppEntries
 ){
   const u8 *q;
   if( nData < CAT_HEADER_SIZE_V3 ) return 0;
-  if( data[0] != CATALOG_FORMAT_V3 ) return 0;
+  if( data[0] != CATALOG_FORMAT_V3 && data[0] != CATALOG_FORMAT_V4 ) return 0;
+  if( pVersion ) *pVersion = data[0];
   q = data + CAT_HEADER_SIZE_V3 - 4;
   *pnTables = (int)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
   *ppEntries = data + CAT_HEADER_SIZE_V3;
@@ -51,8 +53,8 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
 
 
   {
-    int nTables; const u8 *pEntries;
-    if( parseCurrentCatalogHeader(data, nData, &nTables, &pEntries) ){
+    int nTables; const u8 *pEntries; int iFormat;
+    if( parseCurrentCatalogHeader(data, nData, &iFormat, &nTables, &pEntries) ){
       return CHUNK_CATALOG;
     }
   }
@@ -124,18 +126,20 @@ static int enumerateCatalogChildren(
   void *ctx
 ){
   int nTables;
+  int iFormat;
   const u8 *p;
   int i;
   int rc = SQLITE_OK;
 
-  if( !parseCurrentCatalogHeader(data, nData, &nTables, &p) ) return SQLITE_CORRUPT;
+  if( !parseCurrentCatalogHeader(data, nData, &iFormat, &nTables, &p) ) return SQLITE_CORRUPT;
   if( nTables < 0 || nTables >= 10000 ) return SQLITE_CORRUPT;
   for(i=0; i<nTables && rc==SQLITE_OK; i++){
-    int nameLen;
     ProllyHash tableRoot;
     const u8 *pEnd = data + nData;
 
-    if( p + CAT_ENTRY_FIXED_SIZE > pEnd ) return SQLITE_CORRUPT;
+    if( p + (iFormat==CATALOG_FORMAT_V4 ? CAT_ENTRY_FIXED_SIZE_V4 : CAT_ENTRY_FIXED_SIZE_V3) > pEnd ){
+      return SQLITE_CORRUPT;
+    }
 
     memcpy(tableRoot.data,
            p + CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE,
@@ -145,10 +149,21 @@ static int enumerateCatalogChildren(
 
     p += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
        + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
-    if( p + 2 > pEnd ) return SQLITE_CORRUPT;
-    nameLen = p[0] | (p[1]<<8);
-    if( p + 2 + nameLen > pEnd ) return SQLITE_CORRUPT;
-    p += 2 + nameLen;
+    if( iFormat==CATALOG_FORMAT_V4 ){
+      int nType, nName, nTbl;
+      if( p + 6 > pEnd ) return SQLITE_CORRUPT;
+      nType = p[0] | (p[1]<<8); p += 2;
+      nName = p[0] | (p[1]<<8); p += 2;
+      nTbl = p[0] | (p[1]<<8); p += 2;
+      if( p + nType + nName + nTbl > pEnd ) return SQLITE_CORRUPT;
+      p += nType + nName + nTbl;
+    }else{
+      int nameLen;
+      if( p + 2 > pEnd ) return SQLITE_CORRUPT;
+      nameLen = p[0] | (p[1]<<8);
+      if( p + 2 + nameLen > pEnd ) return SQLITE_CORRUPT;
+      p += 2 + nameLen;
+    }
   }
   return rc;
 }

@@ -131,11 +131,13 @@ void doltliteClearSessionMergeState(sqlite3 *db);
 void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
                                    ProllyHash *pPreRebaseCat,
                                    ProllyHash *pRebaseOnto,
-                                   const char **pzOrigBranch);
+                                   const char **pzOrigBranch,
+                                   const char **pzReturnBranch);
 void doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
                                    const ProllyHash *pPreRebaseCat,
                                    const ProllyHash *pRebaseOnto,
-                                   const char *zOrigBranch);
+                                   const char *zOrigBranch,
+                                   const char *zReturnBranch);
 void doltliteClearSessionRebaseState(sqlite3 *db);
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
 void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
@@ -175,6 +177,7 @@ int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
                           SchemaEntry **ppEntries, int *pnEntries);
 SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName);
 void freeSchemaEntries(SchemaEntry *a, int n);
+char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 
 typedef struct SchemaMergeAction SchemaMergeAction;
 struct SchemaMergeAction {

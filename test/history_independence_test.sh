@@ -16,9 +16,10 @@
 #       * BLOB PRIMARY KEY
 #       * composite PRIMARY KEY
 #
-# This suite deliberately proves two things for each case:
+# This suite deliberately proves three things for each case:
 #   1. final user-visible state matches, by hashing canonical ordered rows
 #   2. dolt_hashof_db() matches across distinct histories
+#   3. dolt_hashof_catalog() eventually matches too, proving stored catalog identity
 #
 # Planned expansion phases:
 #   - richer DDL branch / merge histories
@@ -90,6 +91,12 @@ table_hash() {
   run_query "$db" "$name" "SELECT dolt_hashof_table('t');" | tr -d '\n'
 }
 
+catalog_hash() {
+  local db="$1"
+  local name="$2"
+  run_query "$db" "$name" "SELECT dolt_hashof_catalog();" | tr -d '\n'
+}
+
 assert_equal() {
   local name="$1"
   local a="$2"
@@ -155,6 +162,17 @@ run_family_case() {
   assert_hash_shape "${family}_db_hash_shape_c" "$hash_c"
   assert_equal "${family}_db_hash_a_vs_b" "$hash_a" "$hash_b"
   assert_equal "${family}_db_hash_a_vs_c" "$hash_a" "$hash_c"
+
+  local cat_a cat_b cat_c
+  cat_a=$(catalog_hash "$db_a" "${family}_a_catalog")
+  cat_b=$(catalog_hash "$db_b" "${family}_b_catalog")
+  cat_c=$(catalog_hash "$db_c" "${family}_c_catalog")
+
+  assert_hash_shape "${family}_catalog_hash_shape_a" "$cat_a"
+  assert_hash_shape "${family}_catalog_hash_shape_b" "$cat_b"
+  assert_hash_shape "${family}_catalog_hash_shape_c" "$cat_c"
+  assert_equal "${family}_catalog_hash_a_vs_b" "$cat_a" "$cat_b"
+  assert_equal "${family}_catalog_hash_a_vs_c" "$cat_a" "$cat_c"
 
   echo ""
 }
@@ -340,6 +358,17 @@ run_ddl_case() {
   assert_hash_shape "${family}_ddl_db_hash_shape_c" "$hash_c"
   assert_equal "${family}_ddl_db_hash_a_vs_b" "$hash_a" "$hash_b"
   assert_equal "${family}_ddl_db_hash_a_vs_c" "$hash_a" "$hash_c"
+
+  local cat_a cat_b cat_c
+  cat_a=$(catalog_hash "$db_a" "${family}_ddl_a_catalog")
+  cat_b=$(catalog_hash "$db_b" "${family}_ddl_b_catalog")
+  cat_c=$(catalog_hash "$db_c" "${family}_ddl_c_catalog")
+
+  assert_hash_shape "${family}_ddl_catalog_hash_shape_a" "$cat_a"
+  assert_hash_shape "${family}_ddl_catalog_hash_shape_b" "$cat_b"
+  assert_hash_shape "${family}_ddl_catalog_hash_shape_c" "$cat_c"
+  assert_equal "${family}_ddl_catalog_hash_a_vs_b" "$cat_a" "$cat_b"
+  assert_equal "${family}_ddl_catalog_hash_a_vs_c" "$cat_a" "$cat_c"
 
   echo ""
 }

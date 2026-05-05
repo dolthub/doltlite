@@ -1258,7 +1258,7 @@ static int serializeMergedCatalog(
   (void)oursCatHash;
   (void)iNextTable;
 
-  rc = doltliteSerializeCatalogEntries(NULL, aMerged, nMerged, &buf, &nBuf);
+  rc = doltliteSerializeCatalogEntries(db, aMerged, nMerged, &buf, &nBuf);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStorePut(cs, buf, nBuf, pOutHash);
