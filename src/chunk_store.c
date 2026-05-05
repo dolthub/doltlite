@@ -143,6 +143,7 @@ static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData
 static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc);
 static int csReplaceRefsStateFromBlob(ChunkStore *cs, const u8 *data, int nData,
                                       int markCommitted);
+static int csEnsureDefaultBranch(ChunkStore *cs);
 static int csReloadFromDisk(ChunkStore *cs);
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged);
 
@@ -516,6 +517,14 @@ static void csFreeRefsState(ChunkStore *cs){
   cs->zDefaultBranch = 0;
 }
 
+static int csEnsureDefaultBranch(ChunkStore *cs){
+  if( !cs->zDefaultBranch ){
+    cs->zDefaultBranch = sqlite3_mprintf("main");
+    if( !cs->zDefaultBranch ) return SQLITE_NOMEM;
+  }
+  return SQLITE_OK;
+}
+
 #define CS_INIT_PENDING_ALLOC 16
 #define CS_INIT_WRITEBUF_SIZE 4096
 
@@ -576,11 +585,7 @@ static int csRestoreCommittedRefsState(ChunkStore *cs){
     csFreeTags(cs);
     csFreeRemotes(cs);
     csFreeTracking(cs);
-    if( !cs->zDefaultBranch ){
-      cs->zDefaultBranch = sqlite3_mprintf("main");
-      if( !cs->zDefaultBranch ) return SQLITE_NOMEM;
-    }
-    return SQLITE_OK;
+    return csEnsureDefaultBranch(cs);
   }
   return chunkStoreReloadRefs(cs);
 }
@@ -1067,13 +1072,8 @@ static int csReplayWal(ChunkStore *cs){
     csAdoptRefsState(cs, &tmpRefs);
     haveTmpRefs = 0;
   }
-  if( !cs->zDefaultBranch ){
-    cs->zDefaultBranch = sqlite3_mprintf("main");
-    if( !cs->zDefaultBranch ){
-      rc = SQLITE_NOMEM;
-      goto replay_error;
-    }
-  }
+  rc = csEnsureDefaultBranch(cs);
+  if( rc!=SQLITE_OK ) goto replay_error;
 
   csReleaseReplayState(cs, &saved);
   return SQLITE_OK;
@@ -1237,7 +1237,11 @@ int chunkStoreOpen(
         return rc;
       }
     }
-    if( !cs->zDefaultBranch ) cs->zDefaultBranch = sqlite3_mprintf("main");
+    rc = csEnsureDefaultBranch(cs);
+    if( rc!=SQLITE_OK ){
+      chunkStoreClose(cs);
+      return rc;
+    }
   }else{
     if( !(flags & SQLITE_OPEN_CREATE) ){
       sqlite3_free(cs->zFilename);
