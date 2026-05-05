@@ -1029,12 +1029,16 @@ echo "--- Guard 22: sparse >2GiB database opens ---"
 TMPROOT=$(mktemp -d)
 DB="$TMPROOT/large_open.db"
 
+# Read CHUNK_STORE_VERSION from the header so the test tracks format bumps.
+GUARD22_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GUARD22_VERSION=$(grep '^#define CHUNK_STORE_VERSION ' "$GUARD22_SCRIPT_DIR/../src/chunk_store.h" | awk '{print $3}')
+
 perl -e '
   use strict;
   use warnings;
-  my ($path) = @ARGV;
+  my ($path, $version) = @ARGV;
   my $MAGIC = 0x444C5443;
-  my $VERSION = 10;
+  my $VERSION = $version;
   my $MANIFEST_SIZE = 168;
   my $WAL_OFF = $MANIFEST_SIZE;
   my $CHUNK_LEN = 2147483400; # just under INT_MAX, pushes file > 2^31
@@ -1067,7 +1071,7 @@ perl -e '
   seek($fh, $ROOT_OFF, 0) or die $!;
   print {$fh} chr(2), $manifest or die $!;
   close $fh or die $!;
-' "$DB"
+' "$DB" "$GUARD22_VERSION"
 
 LARGE_SIZE=$(stat -c%s "$DB" 2>/dev/null || stat -f%z "$DB")
 if [ "$LARGE_SIZE" -gt 2147483648 ]; then
