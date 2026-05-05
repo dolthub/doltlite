@@ -51,6 +51,10 @@
 #      altering a schema all MUST change the table hash. If
 #      they don't, the hash is stale and worthless.
 #
+#   7b. Equivalent DDL histories: if two histories converge on the
+#      same logical schema and rowset, dolt_hashof_table must also
+#      converge even if one path used ALTER or recreate/copy/rename.
+#
 #   8. Ref resolution: dolt_hashof accepts branch names, tag
 #      names, commit hashes, and HEAD~N shorthand. Missing refs
 #      return NULL or an error (we accept either, as long as it
@@ -381,6 +385,49 @@ H_ALT=$(run_hash "neg_alt" "$ALTER_SCHEMA" "SELECT dolt_hashof_table('t');")
 different "add_row_changes_table_hash"   "$H_BASE" "$H_ADD"
 different "update_cell_changes_table_hash" "$H_BASE" "$H_UPD"
 different "alter_schema_changes_table_hash" "$H_BASE" "$H_ALT"
+
+echo ""
+
+# ── 7b. Equivalent DDL histories converge ─────────────────
+echo "--- 7b. Equivalent DDL histories converge ---"
+
+DDL_DIRECT="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (1, 'one', 10, 'seed'), (2, 'two', 20, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'direct');
+"
+
+DDL_ALTER="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (1, 'one', 10), (2, 'two', 20);
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'alter');
+"
+
+DDL_RECREATE="
+CREATE TABLE t_old(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES (1, 'one', 10), (2, 'two', 20);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+INSERT INTO t SELECT id, v, n, 'seed' FROM t_old;
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+DROP TABLE t_old;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'recreate');
+"
+
+H_DDL_DIRECT=$(run_hash "ddl_direct" "$DDL_DIRECT" "SELECT dolt_hashof_table('t');")
+H_DDL_ALTER=$(run_hash "ddl_alter" "$DDL_ALTER" "SELECT dolt_hashof_table('t');")
+H_DDL_RECREATE=$(run_hash "ddl_recreate" "$DDL_RECREATE" "SELECT dolt_hashof_table('t');")
+same "ddl_direct_vs_alter_table_hash" "$H_DDL_DIRECT" "$H_DDL_ALTER"
+same "ddl_direct_vs_recreate_table_hash" "$H_DDL_DIRECT" "$H_DDL_RECREATE"
 
 echo ""
 
