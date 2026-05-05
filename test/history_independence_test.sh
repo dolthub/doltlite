@@ -8,8 +8,8 @@
 #
 # Current phase:
 #   - DML only
-#   - single branch
 #   - small datasets for PR-speed baseline coverage
+#   - direct-write and branch/merge histories
 #   - key families:
 #       * INTEGER PRIMARY KEY
 #       * TEXT PRIMARY KEY
@@ -32,6 +32,8 @@
 set -euo pipefail
 
 DOLTLITE="${1:-./doltlite}"
+LARGE_N="${HISTORY_INDEPENDENCE_LARGE_N:-5000}"
+LARGE_TEMP_END=$((LARGE_N + 500))
 TMPROOT=$(mktemp -d)
 trap 'rm -rf "$TMPROOT"' EXIT
 
@@ -53,6 +55,16 @@ run_setup() {
   local sql="$3"
   rm -f "$db"
   printf '%s\n' "$sql" | "$DOLTLITE" "$db" >"$TMPROOT/$name.out" 2>"$TMPROOT/$name.err"
+}
+
+run_setup_read() {
+  local db="$1"
+  local name="$2"
+  local sql="$3"
+  local script="$TMPROOT/$name.sql"
+  rm -f "$db" "$script"
+  printf '%s\n' "$sql" >"$script"
+  printf '.read %s\n' "$script" | "$DOLTLITE" "$db" >"$TMPROOT/$name.out" 2>"$TMPROOT/$name.err"
 }
 
 run_query() {
@@ -144,7 +156,133 @@ run_family_case() {
   echo ""
 }
 
-echo "=== History Independence Smoke Tests ==="
+run_branch_case() {
+  local family="$1"
+  local canonical_sql="$2"
+  local history_a="$3"
+  local history_b="$4"
+  local history_c="$5"
+
+  local db_a="$TMPROOT/${family}_branch_a.db"
+  local db_b="$TMPROOT/${family}_branch_b.db"
+  local db_c="$TMPROOT/${family}_branch_c.db"
+
+  echo "--- $family branch histories ---"
+
+  run_setup "$db_a" "${family}_branch_a" "$history_a"
+  run_setup "$db_b" "${family}_branch_b" "$history_b"
+  run_setup "$db_c" "${family}_branch_c" "$history_c"
+
+  local digest_a digest_b digest_c
+  digest_a=$(canonical_digest "$db_a" "${family}_branch_a_canon" "$canonical_sql")
+  digest_b=$(canonical_digest "$db_b" "${family}_branch_b_canon" "$canonical_sql")
+  digest_c=$(canonical_digest "$db_c" "${family}_branch_c_canon" "$canonical_sql")
+
+  assert_equal "${family}_branch_visible_state_a_vs_b" "$digest_a" "$digest_b"
+  assert_equal "${family}_branch_visible_state_a_vs_c" "$digest_a" "$digest_c"
+
+  local hash_a hash_b hash_c
+  hash_a=$(db_hash "$db_a" "${family}_branch_a_hash")
+  hash_b=$(db_hash "$db_b" "${family}_branch_b_hash")
+  hash_c=$(db_hash "$db_c" "${family}_branch_c_hash")
+
+  assert_hash_shape "${family}_branch_db_hash_shape_a" "$hash_a"
+  assert_hash_shape "${family}_branch_db_hash_shape_b" "$hash_b"
+  assert_hash_shape "${family}_branch_db_hash_shape_c" "$hash_c"
+  assert_equal "${family}_branch_db_hash_a_vs_b" "$hash_a" "$hash_b"
+  assert_equal "${family}_branch_db_hash_a_vs_c" "$hash_a" "$hash_c"
+
+  echo ""
+}
+
+run_read_case() {
+  local family="$1"
+  local canonical_sql="$2"
+  local history_a="$3"
+  local history_b="$4"
+  local history_c="$5"
+
+  local db_a="$TMPROOT/${family}_read_a.db"
+  local db_b="$TMPROOT/${family}_read_b.db"
+  local db_c="$TMPROOT/${family}_read_c.db"
+
+  echo "--- $family .read histories ---"
+
+  run_setup "$db_a" "${family}_read_a" "$history_a"
+  run_setup_read "$db_b" "${family}_read_b" "$history_b"
+  run_setup_read "$db_c" "${family}_read_c" "$history_c"
+
+  local digest_a digest_b digest_c
+  digest_a=$(canonical_digest "$db_a" "${family}_read_a_canon" "$canonical_sql")
+  digest_b=$(canonical_digest "$db_b" "${family}_read_b_canon" "$canonical_sql")
+  digest_c=$(canonical_digest "$db_c" "${family}_read_c_canon" "$canonical_sql")
+
+  assert_equal "${family}_read_visible_state_a_vs_b" "$digest_a" "$digest_b"
+  assert_equal "${family}_read_visible_state_a_vs_c" "$digest_a" "$digest_c"
+
+  local hash_a hash_b hash_c
+  hash_a=$(db_hash "$db_a" "${family}_read_a_hash")
+  hash_b=$(db_hash "$db_b" "${family}_read_b_hash")
+  hash_c=$(db_hash "$db_c" "${family}_read_c_hash")
+
+  assert_hash_shape "${family}_read_db_hash_shape_a" "$hash_a"
+  assert_hash_shape "${family}_read_db_hash_shape_b" "$hash_b"
+  assert_hash_shape "${family}_read_db_hash_shape_c" "$hash_c"
+  assert_equal "${family}_read_db_hash_a_vs_b" "$hash_a" "$hash_b"
+  assert_equal "${family}_read_db_hash_a_vs_c" "$hash_a" "$hash_c"
+
+  echo ""
+}
+
+run_index_case() {
+  local family="$1"
+  local canonical_sql="$2"
+  local history_a="$3"
+  local history_b="$4"
+  local history_c="$5"
+  local index_probe_sql="$6"
+
+  local db_a="$TMPROOT/${family}_idx_a.db"
+  local db_b="$TMPROOT/${family}_idx_b.db"
+  local db_c="$TMPROOT/${family}_idx_c.db"
+
+  echo "--- $family indexed histories ---"
+
+  run_setup "$db_a" "${family}_idx_a" "$history_a"
+  run_setup "$db_b" "${family}_idx_b" "$history_b"
+  run_setup "$db_c" "${family}_idx_c" "$history_c"
+
+  local digest_a digest_b digest_c
+  digest_a=$(canonical_digest "$db_a" "${family}_idx_a_canon" "$canonical_sql")
+  digest_b=$(canonical_digest "$db_b" "${family}_idx_b_canon" "$canonical_sql")
+  digest_c=$(canonical_digest "$db_c" "${family}_idx_c_canon" "$canonical_sql")
+
+  assert_equal "${family}_idx_visible_state_a_vs_b" "$digest_a" "$digest_b"
+  assert_equal "${family}_idx_visible_state_a_vs_c" "$digest_a" "$digest_c"
+
+  local probe_a probe_b probe_c
+  probe_a=$(canonical_digest "$db_a" "${family}_idx_a_probe" "$index_probe_sql")
+  probe_b=$(canonical_digest "$db_b" "${family}_idx_b_probe" "$index_probe_sql")
+  probe_c=$(canonical_digest "$db_c" "${family}_idx_c_probe" "$index_probe_sql")
+
+  assert_equal "${family}_idx_index_probe_a_vs_b" "$probe_a" "$probe_b"
+  assert_equal "${family}_idx_index_probe_a_vs_c" "$probe_a" "$probe_c"
+
+  local hash_a hash_b hash_c
+  hash_a=$(db_hash "$db_a" "${family}_idx_a_hash")
+  hash_b=$(db_hash "$db_b" "${family}_idx_b_hash")
+  hash_c=$(db_hash "$db_c" "${family}_idx_c_hash")
+
+  assert_hash_shape "${family}_idx_db_hash_shape_a" "$hash_a"
+  assert_hash_shape "${family}_idx_db_hash_shape_b" "$hash_b"
+  assert_hash_shape "${family}_idx_db_hash_shape_c" "$hash_c"
+  assert_equal "${family}_idx_db_hash_a_vs_b" "$hash_a" "$hash_b"
+  assert_equal "${family}_idx_db_hash_a_vs_c" "$hash_a" "$hash_c"
+
+  echo ""
+}
+
+echo "=== History Independence Tests ==="
 echo ""
 
 run_family_case \
@@ -314,6 +452,868 @@ UPDATE t SET n = 20 WHERE a = 'b' AND b = 2;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'final');
 "
+
+run_branch_case \
+  "int_pk" \
+  "SELECT printf('%d|%s|%d', id, v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (1, 'alpha', 10), (2, 'bravo', 20), (3, 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+SELECT dolt_commit('-A', '-m', 'schema');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (1, 'alpha', 10), (2, 'bravo', 20), (3, 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (1, 'alpha', 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (2, 'bravo', 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main rows');
+SELECT dolt_merge('feat');
+"
+
+run_branch_case \
+  "text_pk" \
+  "SELECT printf('%s|%s|%d', id, v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES ('a-key', 'alpha', 10), ('b-key', 'bravo', 20), ('c-key', 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+SELECT dolt_commit('-A', '-m', 'schema');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES ('a-key', 'alpha', 10), ('b-key', 'bravo', 20), ('c-key', 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES ('a-key', 'alpha', 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES ('b-key', 'bravo', 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES ('c-key', 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main rows');
+SELECT dolt_merge('feat');
+"
+
+run_branch_case \
+  "blob_pk" \
+  "SELECT printf('%s|%s|%d', hex(id), v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (x'01', 'alpha', 10), (x'02', 'bravo', 20), (x'03', 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+SELECT dolt_commit('-A', '-m', 'schema');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (x'01', 'alpha', 10), (x'02', 'bravo', 20), (x'03', 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (x'01', 'alpha', 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (x'02', 'bravo', 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (x'03', 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main rows');
+SELECT dolt_merge('feat');
+"
+
+run_branch_case \
+  "composite_pk" \
+  "SELECT printf('%s|%d|%s|%d', a, b, v, n) FROM t ORDER BY a, b;" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t VALUES ('a', 1, 'alpha', 10), ('b', 2, 'bravo', 20), ('c', 3, 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+SELECT dolt_commit('-A', '-m', 'schema');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES ('a', 1, 'alpha', 10), ('b', 2, 'bravo', 20), ('c', 3, 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t VALUES ('a', 1, 'alpha', 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES ('b', 2, 'bravo', 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES ('c', 3, 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'main rows');
+SELECT dolt_merge('feat');
+"
+
+echo "--- large datasets (${LARGE_N} rows) ---"
+
+run_family_case \
+  "large_int_pk" \
+  "SELECT printf('%d|%s|%d', id, v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT x, printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT x, printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT x,
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT x, printf('temp%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t SET n = n - 1 WHERE id <= ${LARGE_N} AND id % 10 = 0;
+DELETE FROM t WHERE id > ${LARGE_N};
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_family_case \
+  "large_text_pk" \
+  "SELECT printf('%s|%s|%d', id, v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('k%05d', x), printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('k%05d', x), printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('k%05d', x),
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT printf('temp%05d', x), printf('tempv%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t SET n = n - 1 WHERE id <= printf('k%05d', ${LARGE_N}) AND CAST(substr(id, 2) AS INTEGER) % 10 = 0;
+DELETE FROM t WHERE id LIKE 'temp%';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_family_case \
+  "large_blob_pk" \
+  "SELECT printf('%s|%s|%d', hex(id), v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT CAST(printf('k%05d', x) AS BLOB), printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT CAST(printf('k%05d', x) AS BLOB), printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT CAST(printf('k%05d', x) AS BLOB),
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT CAST(printf('temp%05d', x) AS BLOB), printf('tempv%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t
+SET n = n - 1
+WHERE CAST(substr(CAST(id AS TEXT), 2) AS INTEGER) <= ${LARGE_N}
+  AND CAST(substr(CAST(id AS TEXT), 2) AS INTEGER) % 10 = 0;
+DELETE FROM t WHERE CAST(id AS TEXT) LIKE 'temp%';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_family_case \
+  "large_composite_pk" \
+  "SELECT printf('%s|%d|%s|%d', a, b, v, n) FROM t ORDER BY a, b;" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('grp%02d', (x - 1) / 1000), x, printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('grp%02d', (x - 1) / 1000), x, printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('grp%02d', (x - 1) / 1000),
+       x,
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT 'temp', x, printf('tempv%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t SET n = n - 1 WHERE a != 'temp' AND b % 10 = 0;
+DELETE FROM t WHERE a = 'temp';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+echo "--- large .read histories (${LARGE_N} rows) ---"
+
+run_read_case \
+  "read_large_int_pk" \
+  "SELECT printf('%d|%s|%d', id, v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT x, printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT x, printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT x,
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT x, printf('temp%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t SET n = n - 1 WHERE id <= ${LARGE_N} AND id % 10 = 0;
+DELETE FROM t WHERE id > ${LARGE_N};
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_read_case \
+  "read_large_text_pk" \
+  "SELECT printf('%s|%s|%d', id, v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('k%05d', x), printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('k%05d', x), printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('k%05d', x),
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT printf('temp%05d', x), printf('tempv%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t SET n = n - 1 WHERE id <= printf('k%05d', ${LARGE_N}) AND CAST(substr(id, 2) AS INTEGER) % 10 = 0;
+DELETE FROM t WHERE id LIKE 'temp%';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_read_case \
+  "read_large_blob_pk" \
+  "SELECT printf('%s|%s|%d', hex(id), v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT CAST(printf('k%05d', x) AS BLOB), printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT CAST(printf('k%05d', x) AS BLOB), printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT CAST(printf('k%05d', x) AS BLOB),
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT CAST(printf('temp%05d', x) AS BLOB), printf('tempv%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t
+SET n = n - 1
+WHERE CAST(substr(CAST(id AS TEXT), 2) AS INTEGER) <= ${LARGE_N}
+  AND CAST(substr(CAST(id AS TEXT), 2) AS INTEGER) % 10 = 0;
+DELETE FROM t WHERE CAST(id AS TEXT) LIKE 'temp%';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_read_case \
+  "read_large_composite_pk" \
+  "SELECT printf('%s|%d|%s|%d', a, b, v, n) FROM t ORDER BY a, b;" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('grp%02d', (x - 1) / 1000), x, printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('grp%02d', (x - 1) / 1000), x, printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('grp%02d', (x - 1) / 1000),
+       x,
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT 'temp', x, printf('tempv%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t SET n = n - 1 WHERE a != 'temp' AND b % 10 = 0;
+DELETE FROM t WHERE a = 'temp';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+echo "--- large indexed histories (${LARGE_N} rows) ---"
+
+run_index_case \
+  "idx_large_text_pk" \
+  "SELECT printf('%s|%s|%d', id, v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+CREATE INDEX idx_v ON t(v);
+CREATE INDEX idx_n ON t(n);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('k%05d', x), printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+CREATE INDEX idx_v ON t(v);
+CREATE INDEX idx_n ON t(n);
+SELECT dolt_commit('-A', '-m', 'schema');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('k%05d', x), printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+CREATE INDEX idx_v ON t(v);
+CREATE INDEX idx_n ON t(n);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('k%05d', x),
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT printf('temp%05d', x), printf('tempv%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t SET n = n - 1 WHERE CAST(substr(id, 2) AS INTEGER) <= ${LARGE_N} AND CAST(substr(id, 2) AS INTEGER) % 10 = 0;
+DELETE FROM t WHERE id LIKE 'temp%';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "SELECT printf('%s|%s|%d', id, v, n) FROM t INDEXED BY idx_v WHERE v IN ('v00001','v01000','v02500','v05000') ORDER BY v;"
+
+run_index_case \
+  "idx_large_blob_pk" \
+  "SELECT printf('%s|%s|%d', hex(id), v, n) FROM t ORDER BY id;" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+CREATE INDEX idx_v ON t(v);
+CREATE INDEX idx_n ON t(n);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT CAST(printf('k%05d', x) AS BLOB), printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+CREATE INDEX idx_v ON t(v);
+CREATE INDEX idx_n ON t(n);
+SELECT dolt_commit('-A', '-m', 'schema');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT CAST(printf('k%05d', x) AS BLOB), printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+CREATE INDEX idx_v ON t(v);
+CREATE INDEX idx_n ON t(n);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT CAST(printf('k%05d', x) AS BLOB),
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT CAST(printf('temp%05d', x) AS BLOB), printf('tempv%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t
+SET n = n - 1
+WHERE CAST(substr(CAST(id AS TEXT), 2) AS INTEGER) <= ${LARGE_N}
+  AND CAST(substr(CAST(id AS TEXT), 2) AS INTEGER) % 10 = 0;
+DELETE FROM t WHERE CAST(id AS TEXT) LIKE 'temp%';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "SELECT printf('%s|%s|%d', hex(id), v, n) FROM t INDEXED BY idx_v WHERE v IN ('v00001','v01000','v02500','v05000') ORDER BY v;"
+
+run_index_case \
+  "idx_large_composite_pk" \
+  "SELECT printf('%s|%d|%s|%d', a, b, v, n) FROM t ORDER BY a, b;" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+CREATE INDEX idx_v ON t(v);
+CREATE INDEX idx_n ON t(n);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('grp%02d', (x - 1) / 1000), x, printf('v%05d', x), x * 10 FROM seq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+CREATE INDEX idx_v ON t(v);
+CREATE INDEX idx_n ON t(n);
+SELECT dolt_commit('-A', '-m', 'schema');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('grp%02d', (x - 1) / 1000), x, printf('v%05d', x), x * 10 FROM seq ORDER BY x DESC;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'feat rows');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+CREATE INDEX idx_v ON t(v);
+CREATE INDEX idx_n ON t(n);
+BEGIN;
+WITH RECURSIVE seq(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x + 1 FROM seq WHERE x < ${LARGE_N}
+)
+INSERT INTO t
+SELECT printf('grp%02d', (x - 1) / 1000),
+       x,
+       printf('v%05d', x),
+       x * 10 + CASE WHEN x % 10 = 0 THEN 1 ELSE 0 END
+FROM seq;
+WITH RECURSIVE tempseq(x) AS (
+  SELECT ${LARGE_N} + 1
+  UNION ALL
+  SELECT x + 1 FROM tempseq WHERE x < ${LARGE_TEMP_END}
+)
+INSERT INTO t
+SELECT 'temp', x, printf('tempv%05d', x), x * 10 FROM tempseq;
+COMMIT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'intermediate');
+UPDATE t SET n = n - 1 WHERE a != 'temp' AND b % 10 = 0;
+DELETE FROM t WHERE a = 'temp';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "SELECT printf('%s|%d|%s|%d', a, b, v, n) FROM t INDEXED BY idx_v WHERE v IN ('v00001','v01000','v02500','v05000') ORDER BY v;"
 
 echo "======================================="
 echo "Results: $PASS passed, $FAIL failed"
