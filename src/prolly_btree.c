@@ -1083,6 +1083,7 @@ done:
   return SQLITE_OK;
 }
 
+
 static int catalogSerializeEntryCmp(const void *a, const void *b){
   const CatalogSerializeEntry *ea = (const CatalogSerializeEntry*)a;
   const CatalogSerializeEntry *eb = (const CatalogSerializeEntry*)b;
@@ -6760,6 +6761,7 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
   }
 
   if( pBtree->db ){
+    sqlite3ExpirePreparedStatements(pBtree->db, 0);
     sqlite3ResetAllSchemasOfConnection(pBtree->db);
   }else{
     invalidateSchema(pBtree);
@@ -6832,6 +6834,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
 
 
   if( pBtree->db ){
+    sqlite3ExpirePreparedStatements(pBtree->db, 0);
     sqlite3ResetAllSchemasOfConnection(pBtree->db);
   }else{
     invalidateSchema(pBtree);
@@ -6867,6 +6870,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     pBtree->mergeCommitHash = oldMergeCommitHash;
     pBtree->conflictsCatalogHash = oldConflictsCatalogHash;
     if( pBtree->db ){
+      sqlite3ExpirePreparedStatements(pBtree->db, 0);
       sqlite3ResetAllSchemasOfConnection(pBtree->db);
     }else{
       invalidateSchema(pBtree);

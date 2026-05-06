@@ -2474,6 +2474,8 @@ static void doltliteMergeFunc(
             doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
         return;
       }
+    }else{
+      freeSchemaMergeActions(aSchemaActions, nSchemaActions);
     }
 
     rc = doltliteFlushCatalogToHash(db, &mergedCatHash);
@@ -2758,6 +2760,7 @@ static int applyMergedCatalogAndCommit(
   ProllyHash mergedCatHash;
   ProllyHash liveMergedCatHash;
   ProllyHash commitHash;
+  char *zMergeErr = 0;
   int graphLocked = 0;
   int rc;
 
@@ -2771,11 +2774,13 @@ static int applyMergedCatalogAndCommit(
   if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
-                              &mergedCatHash, pnConflicts, 0, 0, 0);
+                              &mergedCatHash, pnConflicts, &zMergeErr, 0, 0);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zMergeErr);
     doltliteTxnStateClear(&savedState);
     return rc;
   }
+  sqlite3_free(zMergeErr);
 
   rc = doltliteRefreshAndConfirmHead(db, cs, ourHead);
   if( rc!=SQLITE_OK ){
