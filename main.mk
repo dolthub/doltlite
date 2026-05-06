@@ -551,7 +551,7 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
 #
 # Prolly tree engine objects (when DOLTLITE_PROLLY=1)
 #
-PROLLY_OBJS = prolly_hash.o prolly_xxhash.o prolly_hashset.o prolly_node.o prolly_cache.o \
+PROLLY_OBJS = prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch_portable.o prolly_hashset.o prolly_node.o prolly_cache.o \
               chunk_store.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_status.o \
@@ -1284,11 +1284,31 @@ btree.o:	$(TOP)/src/btree.c $(DEPS_OBJ_COMMON) $(TOP)/src/pager.h
 	$(T.cc.sqlite) -c $(TOP)/src/btree.c
 
 # Prolly tree engine compilation rules
-prolly_hash.o:	$(TOP)/src/prolly_hash.c $(DEPS_OBJ_COMMON)
-	$(T.cc.sqlite) -c $(TOP)/src/prolly_hash.c
+prolly_hash.o:	$(TOP)/src/prolly_hash.c $(DEPS_OBJ_COMMON) \
+		$(TOP)/ext/blake3/blake3.h
+	$(T.cc.sqlite) -I$(TOP)/ext/blake3 -c $(TOP)/src/prolly_hash.c
 
 prolly_xxhash.o:	$(TOP)/src/prolly_xxhash.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_xxhash.c
+
+# Vendored BLAKE3 sources use C99 mid-block declarations that the
+# rest of doltlite's tree bans via -Wdeclaration-after-statement.
+# Disable that warning for the blake3/ ext sources only.
+BLAKE3_CFLAGS = -Wno-declaration-after-statement -I$(TOP)/ext/blake3
+
+blake3.o:	$(TOP)/ext/blake3/blake3.c $(TOP)/ext/blake3/blake3.h \
+		$(TOP)/ext/blake3/blake3_impl.h
+	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -c $(TOP)/ext/blake3/blake3.c
+
+blake3_portable.o:	$(TOP)/ext/blake3/blake3_portable.c \
+		$(TOP)/ext/blake3/blake3.h \
+		$(TOP)/ext/blake3/blake3_impl.h
+	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -c $(TOP)/ext/blake3/blake3_portable.c
+
+blake3_dispatch_portable.o:	$(TOP)/ext/blake3/blake3_dispatch_portable.c \
+		$(TOP)/ext/blake3/blake3.h \
+		$(TOP)/ext/blake3/blake3_impl.h
+	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -c $(TOP)/ext/blake3/blake3_dispatch_portable.c
 
 prolly_hashset.o:	$(TOP)/src/prolly_hashset.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_hashset.c

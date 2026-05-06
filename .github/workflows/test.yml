@@ -83,6 +83,10 @@ jobs:
       run: cd build && bash ../test/config_test.sh ./doltlite
       timeout-minutes: 2
 
+    - name: BLAKE3 known-answer test
+      run: cd build && bash ../test/blake3_kat_test.sh ./doltlite
+      timeout-minutes: 2
+
     - name: Remote integration tests
       run: cd build && bash ../test/remote_test.sh ./doltlite
       timeout-minutes: 5
