@@ -374,6 +374,9 @@ static struct TableEntry *catFind(Catalog *cat, Pgno iTable);
 static struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags);
 static void catRemove(Catalog *cat, Pgno iTable);
 static void catFree(Catalog *cat);
+static int btreeLoadBranchHeadCatalog(ChunkStore *cs, const char *zBranch,
+                                      ProllyHash *pCatHash,
+                                      ProllyHash *pHeadCommit);
 
 /* Thin Btree-flavoured wrappers so existing call sites that take a
 ** Btree* don't have to spell &p->cat everywhere. Any new code
@@ -3218,6 +3221,20 @@ int sqlite3BtreeOpen(
       sqlite3_free(p);
       return rc;
     }
+    if( prollyHashIsEmpty(&catHash) ){
+      rc = btreeLoadBranchHeadCatalog(&pBt->store, zDef, &catHash, 0);
+      if( rc==SQLITE_NOTFOUND ){
+        rc = SQLITE_OK;
+      }
+      if( rc!=SQLITE_OK ){
+        pagerShimDestroy(pBt->pPagerShim);
+        prollyCacheFree(&pBt->cache);
+        chunkStoreClose(&pBt->store);
+        sqlite3_free(pBt);
+        sqlite3_free(p);
+        return rc;
+      }
+    }
     if( !prollyHashIsEmpty(&catHash) ){
       u8 *catData = 0;
       int nCatData = 0;
@@ -3636,6 +3653,41 @@ static int btreeLoadWorkingSetBlob(
   return SQLITE_OK;
 }
 
+static int btreeLoadBranchHeadCatalog(
+  ChunkStore *cs,
+  const char *zBranch,
+  ProllyHash *pCatHash,
+  ProllyHash *pHeadCommit
+){
+  ProllyHash headCommit;
+  u8 *pData = 0;
+  int nData = 0;
+  DoltliteCommit c;
+  int rc;
+
+  if( pCatHash ) memset(pCatHash, 0, sizeof(*pCatHash));
+  if( pHeadCommit ) memset(pHeadCommit, 0, sizeof(*pHeadCommit));
+  if( !cs || !zBranch ) return SQLITE_ERROR;
+
+  rc = chunkStoreFindBranch(cs, zBranch, &headCommit);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStoreGet(cs, &headCommit, &pData, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+
+  memset(&c, 0, sizeof(c));
+  rc = doltliteCommitDeserialize(pData, nData, &c);
+  sqlite3_free(pData);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&c);
+    return rc;
+  }
+
+  if( pCatHash ) memcpy(pCatHash, &c.catalogHash, sizeof(*pCatHash));
+  if( pHeadCommit ) memcpy(pHeadCommit, &headCommit, sizeof(*pHeadCommit));
+  doltliteCommitClear(&c);
+  return SQLITE_OK;
+}
+
 static int btreeStoreWorkingSetBlob(
   ChunkStore *cs,
   const char *zBranch,
@@ -3796,6 +3848,17 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
     sqlite3_free(zRebaseReturnBranch);
     return rc;
   }
+  if( prollyHashIsEmpty(&catHash) ){
+    rc = btreeLoadBranchHeadCatalog(&pBt->store, zBr, &catHash, 0);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = SQLITE_OK;
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zRebaseOrigBranch);
+      sqlite3_free(zRebaseReturnBranch);
+      return rc;
+    }
+  }
 
   if( bLoadCatalog
    && !prollyHashIsEmpty(&catHash)
@@ -3911,8 +3974,15 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
         chunkStoreUnlock(&pBt->store);
         return rc2;
       }
+      if( rc2==SQLITE_NOTFOUND || prollyHashIsEmpty(&p->committedCatalogHash) ){
+        rc2 = btreeLoadBranchHeadCatalog(&pBt->store, zBr,
+                                         &p->committedCatalogHash, 0);
+      }
       if( rc2==SQLITE_NOTFOUND ){
         memset(&p->committedCatalogHash, 0, sizeof(ProllyHash));
+      }else if( rc2!=SQLITE_OK ){
+        chunkStoreUnlock(&pBt->store);
+        return rc2;
       }
     }
     p->committedStagedCatalog = p->stagedCatalog;
