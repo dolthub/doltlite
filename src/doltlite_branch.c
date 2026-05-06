@@ -566,6 +566,22 @@ static int checkoutLoadAndApply(
   return rc;
 }
 
+static int refreshBranchScopedTables(sqlite3 *db){
+  int rc;
+  extern int doltliteRegisterDiffTables(sqlite3 *db);
+  extern int doltliteRegisterHistoryTables(sqlite3 *db);
+  extern int doltliteRegisterAtTables(sqlite3 *db);
+  extern int doltliteRegisterBlameTables(sqlite3 *db);
+
+  rc = doltliteRegisterDiffTables(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteRegisterHistoryTables(db);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteRegisterAtTables(db);
+  if( rc!=SQLITE_OK ) return rc;
+  return doltliteRegisterBlameTables(db);
+}
+
 /* Checkout is a multi-step mutation: persist outgoing branch state,
 ** update refs, load target branch, reload session. If any step fails
 ** we must unwind every prior step — the saved* fields are the
@@ -586,7 +602,6 @@ struct CheckoutMutationCtx {
   u8 savedIsMerging;
   int haveOldState;
   int bPersistUnderSavepoint;
-  int bSetDefaultBranch;
 };
 
 static void checkoutRestoreSession(sqlite3 *db, CheckoutMutationCtx *p){
@@ -607,8 +622,8 @@ static int checkoutRestoreDurableState(
   void *pArg
 ){
   CheckoutMutationCtx *p = (CheckoutMutationCtx*)pArg;
-  int rc = chunkStoreSetDefaultBranch(cs, p->zCurrentBranch);
-  if( rc!=SQLITE_OK ) return rc;
+  int rc = SQLITE_OK;
+  UNUSED_PARAMETER(cs);
   if( p->haveOldState ){
     rc = doltliteUpdateBranchWorkingState(db, p->zCurrentBranch,
                                           &p->oldCatHash, &p->oldCommitHash);
@@ -644,11 +659,10 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
     }
   }
 
+  rc = refreshBranchScopedTables(db);
+  if( rc!=SQLITE_OK ) return rc;
+
   if( !bSavepoint || p->bPersistUnderSavepoint ){
-    if( !bSavepoint || p->bSetDefaultBranch ){
-      rc = chunkStoreSetDefaultBranch(cs, p->zTargetBranch);
-      if( rc!=SQLITE_OK ) return rc;
-    }
     rc = doltliteSaveWorkingSet(db);
     if( rc!=SQLITE_OK ) return rc;
   }
@@ -721,6 +735,11 @@ static void doltConnectBranchFunc(
     sqlite3_result_error_code(ctx, rc);
     return;
   }
+  rc = refreshBranchScopedTables(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(ctx, rc);
+    return;
+  }
   sqlite3_result_int(ctx, 0);
 }
 
@@ -755,7 +774,6 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   m.zTargetBranch = zBranch;
   m.zCurrentBranch = zCurrentBranch;
   m.bPersistUnderSavepoint = 1;
-  m.bSetDefaultBranch = 1;
   doltliteGetSessionHead(db, &m.savedSessionHead);
   doltliteGetSessionStaged(db, &m.savedSessionStaged);
   doltliteGetSessionMergeState(db, &m.savedIsMerging,

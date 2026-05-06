@@ -207,6 +207,8 @@ static int isRenamePair(
   if( pA->iTable != pB->iTable ) return 0;
   if( !pA->zName || !pB->zName ) return 0;
   if( strcmp(pA->zName, pB->zName)==0 ) return 0;
+  if( doltliteFindTableByName(aFrom, nFrom, pB->zName)!=0 ) return 0;
+  if( doltliteFindTableByName(aTo, nTo, pA->zName)!=0 ) return 0;
   if( prollyHashCompare(&pA->root, &pB->root)==0 ){
     bMatch = 1;
     goto rename_done;

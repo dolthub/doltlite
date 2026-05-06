@@ -509,6 +509,35 @@ static int doltliteDetectPostMergeConstraintViolations(
   int nCheck = 0;
   char *zDetectErrMsg = 0;
   int rc;
+  sqlite3_stmt *pStmt = 0;
+  int needsDetection = 0;
+
+  rc = sqlite3_prepare_v2(db,
+      "SELECT 1 "
+      "FROM main.sqlite_master "
+      "WHERE (type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'dolt_%' "
+      "       AND sql IS NOT NULL "
+      "       AND (instr(upper(sql), 'REFERENCES')>0 "
+      "            OR instr(upper(sql), 'CHECK')>0 "
+      "            OR instr(upper(sql), 'UNIQUE')>0)) "
+      "   OR (type='index' AND sql IS NOT NULL "
+      "       AND instr(upper(sql), 'CREATE UNIQUE INDEX')>0) "
+      "LIMIT 1",
+      -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    needsDetection = 1;
+    rc = SQLITE_OK;
+  }else if( rc==SQLITE_DONE ){
+    rc = SQLITE_OK;
+  }
+  sqlite3_finalize(pStmt);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !needsDetection ){
+    if( pnViolations ) *pnViolations = 0;
+    return SQLITE_OK;
+  }
 
   rc = doltliteDetectMergeFkViolations(db, pAncCatHash,
                                        &zDetectErrMsg, &nViolations);
@@ -991,6 +1020,42 @@ static int addStageNamedTables(
   return rc;
 }
 
+static int doltliteStageArgsAndPersist(
+  sqlite3 *db,
+  sqlite3_context *context,
+  ChunkStore *cs,
+  int argc,
+  sqlite3_value **argv,
+  int stageAll
+){
+  ProllyHash workingHash;
+  ProllyHash savedStaged;
+  int rc;
+
+  doltliteGetSessionStaged(db, &savedStaged);
+
+  rc = doltliteFlushCatalogToHash(db, &workingHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to flush", -1);
+    return rc;
+  }
+
+  if( stageAll ){
+    rc = addStageAllTables(db, context, cs, &workingHash);
+  }else{
+    rc = addStageNamedTables(db, context, cs, &workingHash, argc, argv);
+  }
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltlitePersistWorkingSet(db);
+  if( rc!=SQLITE_OK ){
+    doltliteSetSessionStaged(db, &savedStaged);
+    sqlite3_result_error_code(context, rc);
+    return rc;
+  }
+  return SQLITE_OK;
+}
+
 static void doltliteAddFunc(
   sqlite3_context *context,
   int argc,
@@ -1002,6 +1067,7 @@ static void doltliteAddFunc(
   int rc;
   int i;
   int stageAll = 0;
+  int opRc = SQLITE_OK;
 
   if( !cs ){
     sqlite3_result_error(context, "no database open", -1);
@@ -1033,42 +1099,27 @@ static void doltliteAddFunc(
     }
   }
 
-  {
-    ProllyHash workingHash;
-    ProllyHash savedStaged;
-
-    doltliteGetSessionStaged(db, &savedStaged);
-
-    rc = doltliteFlushCatalogToHash(db, &workingHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(context, "failed to flush", -1);
-      goto add_cleanup;
-    }
-
-      if( stageAll ){
-        rc = addStageAllTables(db, context, cs, &workingHash);
-        if( rc!=SQLITE_OK ) goto add_cleanup;
-      }else{
-        rc = addStageNamedTables(db, context, cs, &workingHash, argc, argv);
-        if( rc!=SQLITE_OK ) goto add_cleanup;
-      }
-
-    rc = doltlitePersistWorkingSet(db);
-    if( rc!=SQLITE_OK ){
-      doltliteSetSessionStaged(db, &savedStaged);
-      sqlite3_result_error_code(context, rc);
-      goto add_cleanup;
-    }
-  }
+  opRc = doltliteStageArgsAndPersist(db, context, cs, argc, argv, stageAll);
+  if( opRc!=SQLITE_OK ) goto add_cleanup;
 
   sqlite3_result_int(context, 0);
 
 add_cleanup:
   if( sealTopLevel ){
     rc = doltliteVcSealTopLevelSavepointTxn(db);
+    if( rc==SQLITE_OK && opRc==SQLITE_OK ){
+      rc = doltliteStageArgsAndPersist(db, context, cs, argc, argv, stageAll);
+      if( rc!=SQLITE_OK ){
+        opRc = rc;
+      }
+    }
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
+    }else if( opRc!=SQLITE_OK ){
+      sqlite3_result_error_code(context, opRc);
     }
+  }else if( opRc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, opRc);
   }
 }
 
@@ -3695,12 +3746,14 @@ static int rebaseApplyPlanRowCatalog(
   sqlite3 *db,
   const RebasePlanRow *pRow,
   const ProllyHash *pCurCat,
-  ProllyHash *pMergedCat
+  ProllyHash *pMergedCat,
+  int bSkipConstraintDetect
 ){
   DoltliteCommit parentC, replayC;
   int nConflicts = 0;
   int nViolations = 0;
   int rc;
+  const char *zStep = "load replay commit";
 
   memset(&parentC, 0, sizeof(parentC));
   memset(&replayC, 0, sizeof(replayC));
@@ -3711,19 +3764,23 @@ static int rebaseApplyPlanRowCatalog(
     doltliteCommitClear(&replayC);
     return SQLITE_ERROR;
   }
+  zStep = "load parent commit";
   rc = doltliteLoadFirstParentCommit(db, &replayC, &parentC);
   if( rc!=SQLITE_OK ){
     doltliteCommitClear(&replayC);
     return rc;
   }
 
+  zStep = "merge catalogs";
   rc = doltliteMergeCatalogs(db, &parentC.catalogHash, pCurCat,
                              &replayC.catalogHash, pMergedCat,
                              &nConflicts, 0, 0, 0);
   if( rc==SQLITE_OK && nConflicts==0 ){
+    zStep = "switch merged catalog";
     rc = doltliteSwitchCatalog(db, pMergedCat);
   }
-  if( rc==SQLITE_OK && nConflicts==0 ){
+  if( rc==SQLITE_OK && nConflicts==0 && !bSkipConstraintDetect ){
+    zStep = "detect constraints";
     rc = doltliteDetectPostMergeConstraintViolations(db,
                                                      &parentC.catalogHash,
                                                      &nViolations);
@@ -3742,13 +3799,15 @@ static int rebaseReplayPlanGroup(
   int iStart,
   ProllyHash *pCurCat,
   ProllyHash *pCurHead,
-  int *piNext
+  int *piNext,
+  int bSkipConstraintDetect
 ){
   char *combinedMsg = 0;
   int rc;
   int j;
 
-  rc = rebaseApplyPlanRowCatalog(db, &aPlan[iStart], pCurCat, pCurCat);
+  rc = rebaseApplyPlanRowCatalog(db, &aPlan[iStart], pCurCat, pCurCat,
+                                 bSkipConstraintDetect);
   if( rc!=SQLITE_OK ) return rc;
 
   combinedMsg = sqlite3_mprintf("%s",
@@ -3765,7 +3824,8 @@ static int rebaseReplayPlanGroup(
       continue;
     }
 
-    rc = rebaseApplyPlanRowCatalog(db, &aPlan[j], pCurCat, pCurCat);
+    rc = rebaseApplyPlanRowCatalog(db, &aPlan[j], pCurCat, pCurCat,
+                                   bSkipConstraintDetect);
     if( rc!=SQLITE_OK ){
       sqlite3_free(combinedMsg);
       return rc;
@@ -3785,9 +3845,15 @@ static int rebaseReplayPlanGroup(
     ProllyHash newCommit;
     rc = doltliteCreateAndStoreCommit(db, pCurHead, pCurCat, combinedMsg,
                                       NULL, NULL, NULL, 0, &newCommit);
-    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pCurCat);
-    if( rc==SQLITE_OK ) doltliteSetSessionStaged(db, pCurCat);
-    if( rc==SQLITE_OK ) rc = doltliteAdvanceBranch(db, &newCommit, pCurCat, 0);
+    if( rc==SQLITE_OK ){
+      rc = doltliteSwitchCatalog(db, pCurCat);
+    }
+    if( rc==SQLITE_OK ){
+      doltliteSetSessionStaged(db, pCurCat);
+    }
+    if( rc==SQLITE_OK ){
+      rc = doltliteAdvanceBranch(db, &newCommit, pCurCat, 0);
+    }
     if( rc==SQLITE_OK ) *pCurHead = newCommit;
   }
   sqlite3_free(combinedMsg);
@@ -3814,7 +3880,7 @@ static int rebaseFinalizeContinueRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   rc = chunkStoreWriteBranchWorkingCatalog(cs, p->zOrigBranch,
                                            p->pCurCat, p->pCurHead);
   if( rc!=SQLITE_OK ) return rc;
-  return chunkStoreSetDefaultBranch(cs, p->zOrigBranch);
+  return SQLITE_OK;
 }
 
 static int rebaseDeleteWorkingBranchRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
@@ -3852,6 +3918,7 @@ static void rebaseDiscardWorkingBranch(
 static void rebaseAbortConflictedContinue(
   sqlite3 *db,
   const char *zOrigBranch,
+  const char *zReturnBranch,
   const char *zWorkingBranch
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -3862,7 +3929,9 @@ static void rebaseAbortConflictedContinue(
   if( zOrigBranch && zOrigBranch[0] ){
     (void)rebaseRestoreBranchState(db, zOrigBranch);
     doltliteClearSessionRebaseState(db);
-    if( cs ) (void)chunkStoreSetDefaultBranch(cs, zOrigBranch);
+  }
+  if( cs && zReturnBranch && zReturnBranch[0] ){
+    (void)chunkStoreSetDefaultBranch(cs, zReturnBranch);
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
     (void)chunkStoreDeleteBranch(cs, zWorkingBranch);
@@ -3888,6 +3957,7 @@ static void doltliteRebaseInteractiveStart(
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
   char *zOrig = 0;
+  char *zReturnBranch = 0;
   char *zWorking = 0;
   ProllyHash upstreamHash, headHash;
   ProllyHash preRebaseCat;
@@ -3950,9 +4020,11 @@ static void doltliteRebaseInteractiveStart(
   ** current p->zBranch pointer, and any uncopied reference we hold
   ** would dangle into freed memory. */
   zOrig = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
+  zReturnBranch = sqlite3_mprintf("%s", chunkStoreGetDefaultBranch(cs));
   zWorking = sqlite3_mprintf("dolt_rebase_%s", zOrig ? zOrig : "");
-  if( !zOrig || !zWorking ){
+  if( !zOrig || !zWorking || !zReturnBranch ){
     sqlite3_free(zOrig);
+    sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
     sqlite3_free(aReplay);
     sqlite3_result_error_code(context, SQLITE_NOMEM);
@@ -3962,6 +4034,7 @@ static void doltliteRebaseInteractiveStart(
     ProllyHash probe;
     if( chunkStoreFindBranch(cs, zWorking, &probe)==SQLITE_OK ){
       sqlite3_free(zOrig);
+      sqlite3_free(zReturnBranch);
       sqlite3_free(zWorking);
       sqlite3_free(aReplay);
       sqlite3_result_error(context,
@@ -4006,15 +4079,16 @@ static void doltliteRebaseInteractiveStart(
   /* Now set the rebase state on the session and persist it.
   ** Nothing after this triggers a reload before -i returns. */
   doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &upstreamHash,
-                                zOrig, zUpstream);
-  rc = chunkStoreSetDefaultBranch(cs, zWorking);
-  if( rc!=SQLITE_OK ) goto fail;
+                                zOrig, zReturnBranch);
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto fail;
   rc = doltliteVcSealBranchStyleTxn(db);
   if( rc!=SQLITE_OK ) goto fail;
+  sqlite3ExpirePreparedStatements(db, 0);
+  sqlite3ResetAllSchemasOfConnection(db);
 
   sqlite3_free(zOrig);
+  sqlite3_free(zReturnBranch);
   sqlite3_free(aReplay);
   {
     char *zMsg = sqlite3_mprintf(
@@ -4032,6 +4106,7 @@ fail:
     rebaseDiscardWorkingBranch(db, zOrig, zWorking);
   }
   sqlite3_free(zOrig);
+  sqlite3_free(zReturnBranch);
   sqlite3_free(zWorking);
   sqlite3_free(aReplay);
   if( zFailMsg ){
@@ -4047,6 +4122,7 @@ static void doltliteRebaseInteractiveAbort(
   sqlite3_context *context,
   sqlite3 *db
 ){
+  ChunkStore *cs = doltliteGetChunkStore(db);
   u8 isRebasing = 0;
   const char *zOrigBranchConst = 0;
   const char *zReturnBranchConst = 0;
@@ -4077,6 +4153,9 @@ static void doltliteRebaseInteractiveAbort(
   ** clear the session rebase state so the post-checkout persist
   ** doesn't leak stale values. */
   rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
+  if( cs && zReturnBranch && zReturnBranch[0] ){
+    (void)chunkStoreSetDefaultBranch(cs, zReturnBranch);
+  }
 
   rc = doltliteVcSealBranchStyleTxn(db);
   if( rc!=SQLITE_OK ){
@@ -4114,6 +4193,8 @@ static void doltliteRebaseInteractiveContinue(
   int rc;
   int i;
   int bPlanDropped = 0;
+  int bSkipConstraintDetect = (!db->autoCommit || db->pSavepoint!=0);
+  const char *zStep = "start";
   ProllyHash curCat;
   ProllyHash curHead;
   RebaseFinalizeRefsCtx refsCtx;
@@ -4133,9 +4214,14 @@ static void doltliteRebaseInteractiveContinue(
   zWorking = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zReturnBranch || !zWorking || !zOrigBranch ){ rc = SQLITE_NOMEM; goto abort_err; }
 
-  rc = doltliteEnsureWriteTxnAndSavepoints(db);
-  if( rc!=SQLITE_OK ) goto abort_err;
+  /* The plan table was created by the preceding -i call inside a VC helper
+  ** statement. On some paths the next VC helper statement does not see that
+  ** new schema object until something touches the table directly first.
+  ** Warm it up before validating so --continue works without requiring the
+  ** caller to query dolt_rebase manually. */
+  (void)sqlite3_exec(db, "SELECT 1 FROM main.dolt_rebase LIMIT 0", 0, 0, 0);
 
+  zStep = "validate plan";
   rc = doltliteValidateRebasePlanTable(db, &zPlanErr);
   if( rc!=SQLITE_OK ){
     if( zPlanErr ) sqlite3_result_error(context, zPlanErr, -1);
@@ -4143,7 +4229,16 @@ static void doltliteRebaseInteractiveContinue(
     goto abort_err_silent;
   }
 
+  zStep = "read plan";
   rc = rebaseReadPlan(db, &aPlan, &nPlan);
+  if( rc!=SQLITE_OK ) goto abort_err;
+
+  zStep = "seal branch-style txn";
+  rc = doltliteVcSealBranchStyleTxnMaybeKeepTopLevelSavepoint(db);
+  if( rc!=SQLITE_OK ) goto abort_err;
+
+  zStep = "ensure write txn";
+  rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
   /* Flush catalog (now without dolt_rebase) to get the clean base
@@ -4159,10 +4254,12 @@ static void doltliteRebaseInteractiveContinue(
     goto abort_err_silent;
   }
 
+  zStep = "drop plan";
   rc = sqlite3_exec(db, "DROP TABLE main.dolt_rebase", 0, 0, 0);
   if( rc!=SQLITE_OK ) goto abort_err;
   bPlanDropped = 1;
 
+  zStep = "flush clean catalog";
   rc = doltliteFlushCatalogToHash(db, &curCat);
   if( rc!=SQLITE_OK ) goto abort_err;
   doltliteGetSessionHead(db, &curHead);
@@ -4178,7 +4275,9 @@ static void doltliteRebaseInteractiveContinue(
     while( i < nPlan && strcmp(aPlan[i].zAction, "drop")==0 ) i++;
     if( i >= nPlan ) break;
 
-    rc = rebaseReplayPlanGroup(db, aPlan, nPlan, i, &curCat, &curHead, &j);
+    zStep = "replay group";
+    rc = rebaseReplayPlanGroup(db, aPlan, nPlan, i, &curCat, &curHead, &j,
+                               bSkipConstraintDetect);
     if( rc==SQLITE_CONSTRAINT ) goto abort_err_conflict;
     if( rc!=SQLITE_OK ) goto abort_err;
     i = j;
@@ -4189,6 +4288,7 @@ static void doltliteRebaseInteractiveContinue(
   refsCtx.zWorkingBranch = zWorking;
   refsCtx.pCurHead = &curHead;
   refsCtx.pCurCat = &curCat;
+  zStep = "finalize refs";
   rc = doltliteMutateRefs(db, rebaseFinalizeContinueRefs, &refsCtx);
   if( rc!=SQLITE_OK ) goto abort_err;
 
@@ -4199,15 +4299,23 @@ static void doltliteRebaseInteractiveContinue(
   ** policy and seals the caller's savepoints / explicit transaction
   ** before returning. */
   doltliteClearSessionRebaseState(db);
+  zStep = "persist cleared rebase state";
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
-  rc = doltliteCheckoutBranchForRebase(db, zReturnBranch);
+  zStep = "checkout original branch";
+  rc = doltliteCheckoutBranchForRebase(db, zOrigBranch);
   if( rc!=SQLITE_OK ) goto abort_err;
+  zStep = "delete working branch";
   rc = doltliteMutateRefs(db, rebaseDeleteWorkingBranchRefs, zWorking);
   if( rc!=SQLITE_OK ) goto abort_err;
+  zStep = "restore default branch";
+  rc = chunkStoreSetDefaultBranch(cs, zReturnBranch);
+  if( rc!=SQLITE_OK ) goto abort_err;
+  zStep = "persist final working set";
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto abort_err;
+  zStep = "seal txn";
   rc = doltliteVcSealBranchStyleTxnMaybeKeepTopLevelSavepoint(db);
   if( rc!=SQLITE_OK ) goto abort_err;
 
@@ -4225,7 +4333,7 @@ static void doltliteRebaseInteractiveContinue(
 
 abort_err_conflict:
   rebaseFreePlan(aPlan, nPlan);
-  rebaseAbortConflictedContinue(db, zOrigBranch, zWorking);
+  rebaseAbortConflictedContinue(db, zOrigBranch, zReturnBranch, zWorking);
   if( doltliteVcTxnMode(db)==DOLTLITE_VC_TXN_AUTOCOMMIT_LIKE ){
     (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
   }
@@ -4239,7 +4347,10 @@ abort_err_conflict:
 abort_err:
   rebaseFreePlan(aPlan, nPlan);
   if( bPlanDropped ){
-    rebaseDiscardWorkingBranch(db, zReturnBranch ? zReturnBranch : "main", zWorking);
+    rebaseDiscardWorkingBranch(db, zOrigBranch ? zOrigBranch : "main", zWorking);
+    if( cs && zReturnBranch && zReturnBranch[0] ){
+      (void)chunkStoreSetDefaultBranch(cs, zReturnBranch);
+    }
   }
   sqlite3_free(zOrigBranch);
   sqlite3_free(zReturnBranch);

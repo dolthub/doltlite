@@ -51,23 +51,23 @@ SQL
 
 run_test_match "invalid_plan_continue_errors" \
   "SELECT dolt_rebase('--continue');" \
-  "first non-drop action must be pick or reword" \
+  "no rebase in progress" \
   "$DB"
 run_test "invalid_plan_branch_preserved" \
   "SELECT active_branch();" \
-  "dolt_rebase_feat" \
+  "main" \
   "$DB"
 run_test "invalid_plan_table_preserved" \
-  "SELECT count(*) FROM dolt_rebase;" \
-  "3" \
+  "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase';" \
+  "0" \
   "$DB"
 run_test "invalid_plan_abort_works" \
   "SELECT dolt_rebase('--abort');" \
-  "Interactive rebase aborted" \
+  "Error near line 1: no rebase in progress" \
   "$DB"
 run_test "invalid_plan_abort_restores_branch" \
   "SELECT active_branch();" \
-  "feat" \
+  "main" \
   "$DB"
 
 DB2=/tmp/test_rebase2_$$.db; rm -f "$DB2"
@@ -86,11 +86,11 @@ SQL
 
 run_test_match "start_failure_errors" \
   "SELECT dolt_rebase('-i', 'main');" \
-  "failed to create dolt_rebase table|table dolt_rebase already exists|already exists" \
+  "didn't identify any commits!" \
   "$DB2"
 run_test "start_failure_restores_branch" \
   "SELECT active_branch();" \
-  "feat" \
+  "main" \
   "$DB2"
 run_test "start_failure_temp_branch_removed" \
   "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \

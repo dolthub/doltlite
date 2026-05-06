@@ -1388,7 +1388,59 @@ static int loadSchemaCatalogRows(
   return SQLITE_OK;
 }
 
+static int loadLiveSchemaSql(
+  sqlite3 *db,
+  const char *zType,
+  const char *zName,
+  const char *zTblName,
+  char **pzSql
+){
+  sqlite3_stmt *pStmt = 0;
+  char *zQuery = 0;
+  int rc;
+
+  *pzSql = 0;
+  if( !db || !zType || !zName ) return SQLITE_OK;
+
+  if( zTblName && zTblName[0] ){
+    zQuery = sqlite3_mprintf(
+      "SELECT sql FROM main.sqlite_master "
+      "WHERE type=%Q AND name=%Q AND tbl_name=%Q",
+      zType, zName, zTblName
+    );
+  }else{
+    zQuery = sqlite3_mprintf(
+      "SELECT sql FROM main.sqlite_master "
+      "WHERE type=%Q AND name=%Q",
+      zType, zName
+    );
+  }
+  if( !zQuery ) return SQLITE_NOMEM;
+
+  rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, 0);
+  sqlite3_free(zQuery);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    const char *zSql = (const char*)sqlite3_column_text(pStmt, 0);
+    if( zSql ){
+      *pzSql = sqlite3_mprintf("%s", zSql);
+      if( !*pzSql ){
+        sqlite3_finalize(pStmt);
+        return SQLITE_NOMEM;
+      }
+    }
+    rc = SQLITE_OK;
+  }else if( rc==SQLITE_DONE ){
+    rc = SQLITE_OK;
+  }
+  sqlite3_finalize(pStmt);
+  return rc;
+}
+
 static int appendMissingSchemaCatalogRows(
+  sqlite3 *db,
   SchemaCatalogRow **paRows,
   int *pnRows,
   CatalogEntryMeta *aMeta,
@@ -1398,7 +1450,7 @@ static int appendMissingSchemaCatalogRows(
   int nRows = *pnRows;
   int nAlloc = nRows;
   i64 iNextRowid = 1;
-  int i, j;
+  int i, j, rc;
 
   for(i=0; i<nRows; i++){
     if( aRows[i].iRowid >= iNextRowid ) iNextRowid = aRows[i].iRowid + 1;
@@ -1442,6 +1494,12 @@ static int appendMissingSchemaCatalogRows(
       sqlite3_free(aRows);
       return SQLITE_NOMEM;
     }
+    rc = loadLiveSchemaSql(db, pRow->zType, pRow->zName, pRow->zTblName,
+                           &pRow->zSql);
+    if( rc!=SQLITE_OK ){
+      freeSchemaCatalogRows(aRows, nRows+1);
+      return rc;
+    }
     nRows++;
   }
 
@@ -1479,7 +1537,7 @@ int doltliteSerializeCatalogEntries(
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
   }
-  rc = appendMissingSchemaCatalogRows(&aRows, &nRows, aMeta, nMeta);
+  rc = appendMissingSchemaCatalogRows(db, &aRows, &nRows, aMeta, nMeta);
   if( rc!=SQLITE_OK ){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
@@ -1489,15 +1547,6 @@ int doltliteSerializeCatalogEntries(
     struct TableEntry masterEntry;
     qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
     for(i=0; i<nRows; i++){
-      if( aRows[i].zSql ){
-        char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
-        if( !zCanon ){
-          freeSchemaCatalogRows(aRows, nRows);
-          return SQLITE_NOMEM;
-        }
-        sqlite3_free(aRows[i].zSql);
-        aRows[i].zSql = zCanon;
-      }
       aRows[i].newPg = (Pgno)(i + 2);
     }
 
@@ -1512,8 +1561,15 @@ int doltliteSerializeCatalogEntries(
       u8 *pRec;
       ProllyHash h;
       if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
-        prollyHashCompute(aRows[i].zSql ? (const u8*)aRows[i].zSql : (const u8*)"",
-                          aRows[i].zSql ? (int)strlen(aRows[i].zSql) : 0, &h);
+        char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
+        if( !zCanon ){
+          prollyMutMapFree(&mm);
+          freeSchemaCatalogRows(aRows, nRows);
+          freeCatalogEntryMeta(aMeta, nMeta);
+          return SQLITE_NOMEM;
+        }
+        prollyHashCompute((const u8*)zCanon, (int)strlen(zCanon), &h);
+        sqlite3_free(zCanon);
       }else{
         memset(&h, 0, sizeof(h));
       }
@@ -3638,7 +3694,16 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
 
       {
         const char *zBr = p->zBranch ? p->zBranch : "main";
-        rc = btreeWriteWorkingState(&pBt->store, zBr, &catHash, NULL);
+        rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash, NULL,
+                                      &p->stagedCatalog, p->isMerging,
+                                      &p->mergeCommitHash,
+                                      &p->conflictsCatalogHash,
+                                      p->isRebasing,
+                                      &p->preRebaseWorkingCat,
+                                      &p->rebaseOntoCommit,
+                                      p->zRebaseOrigBranch,
+                                      p->zRebaseReturnBranch,
+                                      &p->constraintViolationsHash);
         if( rc!=SQLITE_OK ) return rc;
         rc = chunkStoreSerializeRefs(&pBt->store);
         if( rc!=SQLITE_OK ) return rc;
