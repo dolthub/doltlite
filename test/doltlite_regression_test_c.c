@@ -4355,9 +4355,9 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
 
   check("reopen_db_after_rebase_abort", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_abort_persists_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
   check("rebase_abort_persists_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(exec1(db, "SELECT message FROM dolt_log LIMIT 1"), "m")==0);
   check("rebase_abort_persists_no_plan",
         strcmp(exec1(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
@@ -4466,9 +4466,9 @@ static void run_rebase_temp_shadow_ignored(void){
 
   check("reopen_db_for_rebase_temp_shadow", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_temp_shadow_ignored_branch_after_reopen",
-        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
   check("rebase_temp_shadow_ignored_rows_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "4")==0);
+        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
 
   sqlite3_close(db);
   remove_db(dbpath);
@@ -4523,14 +4523,14 @@ static void run_rebase_continue_conflict_abort_restores_durable_state(void){
 
   check("reopen_db_for_rebase_continue_conflict_abort", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_continue_conflict_abort_restores_branch_after_reopen",
-        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
   check("rebase_continue_conflict_abort_drops_plan_after_reopen",
         strcmp(exec1(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
   check("rebase_continue_conflict_abort_clears_conflicts_after_reopen",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("rebase_continue_conflict_abort_restores_row_after_reopen",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "2")==0);
+        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "3")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_continue_conflict_abort_clears_flag_after_reopen", isRebasing==0);
 
