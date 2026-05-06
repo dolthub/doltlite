@@ -1057,15 +1057,39 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
   for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
     Table *pTab = (Table*)sqliteHashData(k);
     Index *pIdx;
+    Pgno iTable = 0;
     if( !pTab ) continue;
-    if( pTab->tnum>1 ){
-      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, pTab->tnum, "table", pTab->zName, "");
+    if( pBtree->cat.a ){
+      for(i=0; i<pBtree->cat.n; i++){
+        if( pBtree->cat.a[i].zName
+         && strcmp(pBtree->cat.a[i].zName, pTab->zName)==0 ){
+          iTable = pBtree->cat.a[i].iTable;
+          break;
+        }
+      }
+    }
+    if( iTable==0 ) iTable = pTab->tnum;
+    if( iTable>1 ){
+      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, iTable,
+                               "table", pTab->zName, "");
       if( rc!=SQLITE_OK ) goto done;
     }
     for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
-      if( pIdx->tnum<=1 ) continue;
-      if( pIdx->tnum==pTab->tnum ) continue;
-      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, pIdx->tnum, "index",
+      Pgno iIndexTable = 0;
+      if( pBtree->cat.a ){
+        for(i=0; i<pBtree->cat.n; i++){
+          if( pBtree->cat.a[i].zName
+           && pIdx->zName
+           && strcmp(pBtree->cat.a[i].zName, pIdx->zName)==0 ){
+            iIndexTable = pBtree->cat.a[i].iTable;
+            break;
+          }
+        }
+      }
+      if( iIndexTable==0 ) iIndexTable = pIdx->tnum;
+      if( iIndexTable<=1 ) continue;
+      if( iIndexTable==iTable ) continue;
+      rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, iIndexTable, "index",
                                pIdx->zName, pTab->zName);
       if( rc!=SQLITE_OK ) goto done;
     }
@@ -1446,7 +1470,9 @@ static int appendMissingSchemaCatalogRows(
   SchemaCatalogRow **paRows,
   int *pnRows,
   CatalogEntryMeta *aMeta,
-  int nMeta
+  int nMeta,
+  struct TableEntry *aTables,
+  int nTables
 ){
   SchemaCatalogRow *aRows = *paRows;
   int nRows = *pnRows;
@@ -1460,11 +1486,32 @@ static int appendMissingSchemaCatalogRows(
 
   for(i=0; i<nMeta; i++){
     SchemaCatalogRow *pRow;
+    int wanted = 0;
     if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ) continue;
     if( !aMeta[i].zType || !aMeta[i].zName || !aMeta[i].zTblName ) continue;
     if( strcmp(aMeta[i].zType, "table")!=0 && strcmp(aMeta[i].zType, "index")!=0 ){
       continue;
     }
+    for(j=0; j<nTables; j++){
+      if( aTables[j].iTable==aMeta[i].iTable ){
+        wanted = 1;
+        break;
+      }
+      if( aTables[j].zName==0 ) continue;
+      if( strcmp(aMeta[i].zType, "table")==0 ){
+        if( strcmp(aTables[j].zName, aMeta[i].zName)==0 ){
+          wanted = 1;
+          break;
+        }
+      }else if( strcmp(aMeta[i].zType, "index")==0 ){
+        if( strcmp(aTables[j].zName, aMeta[i].zName)==0
+         || strcmp(aTables[j].zName, aMeta[i].zTblName)==0 ){
+          wanted = 1;
+          break;
+        }
+      }
+    }
+    if( !wanted ) continue;
     if( nRows>=nAlloc ){
       int nNew = nAlloc ? nAlloc*2 : 16;
       SchemaCatalogRow *aNew = sqlite3_realloc(aRows, nNew*(int)sizeof(SchemaCatalogRow));
@@ -1540,7 +1587,8 @@ int doltliteSerializeCatalogEntries(
     return rc;
   }
   filterSchemaCatalogRows(aRows, &nRows, aTables, nTables);
-  rc = appendMissingSchemaCatalogRows(db, &aRows, &nRows, aMeta, nMeta);
+  rc = appendMissingSchemaCatalogRows(db, &aRows, &nRows, aMeta, nMeta,
+                                      aTables, nTables);
   if( rc!=SQLITE_OK ){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
@@ -1676,7 +1724,11 @@ int doltliteSerializeCatalogEntries(
         }
       }
       if( pRow ){
-        aSorted[i].iTable = pRow->newPg;
+        if( pRow->oldPg==aTables[i].iTable ){
+          aSorted[i].iTable = pRow->newPg;
+        }else{
+          aSorted[i].iTable = aTables[i].iTable;
+        }
         aSorted[i].zType = pRow->zType;
         aSorted[i].zName = pRow->zName;
         aSorted[i].zTblName = pRow->zTblName;
@@ -1781,7 +1833,8 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
   }
-  rc = appendMissingSchemaCatalogRows(pBtree->db, &aRows, &nRows, aMeta, nMeta);
+  rc = appendMissingSchemaCatalogRows(pBtree->db, &aRows, &nRows, aMeta, nMeta,
+                                      pBtree->cat.a, pBtree->cat.n);
   if( rc!=SQLITE_OK ){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
@@ -6916,9 +6969,21 @@ int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
 }
 
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
+  Btree *pBtree;
   Schema *pSchema;
   HashElem *k;
+  int i;
   if( !db || db->nDb<=0 ) return SQLITE_ERROR;
+  pBtree = db->aDb[0].pBt;
+  if( pBtree && pBtree->cat.a ){
+    for(i=0; i<pBtree->cat.n; i++){
+      if( pBtree->cat.a[i].zName
+       && strcmp(pBtree->cat.a[i].zName, zTable)==0 ){
+        *piTable = pBtree->cat.a[i].iTable;
+        return SQLITE_OK;
+      }
+    }
+  }
   pSchema = db->aDb[0].pSchema;
   if( !pSchema ) return SQLITE_ERROR;
   for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
@@ -6932,9 +6997,19 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
 }
 
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
+  Btree *pBtree;
   Schema *pSchema;
   HashElem *k;
+  int i;
   if( !db || db->nDb<=0 ) return 0;
+  pBtree = db->aDb[0].pBt;
+  if( pBtree && pBtree->cat.a ){
+    for(i=0; i<pBtree->cat.n; i++){
+      if( pBtree->cat.a[i].iTable==iTable && pBtree->cat.a[i].zName ){
+        return sqlite3_mprintf("%s", pBtree->cat.a[i].zName);
+      }
+    }
+  }
   pSchema = db->aDb[0].pSchema;
   if( !pSchema ) return 0;
   for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
