@@ -18,7 +18,6 @@ on:
       - 'src/**'
       - 'main.mk'
       - '.github/workflows/npm.yml'
-  workflow_call:  # so release.yml can invoke this and reuse artifacts
 
 jobs:
   build-prebuild:
