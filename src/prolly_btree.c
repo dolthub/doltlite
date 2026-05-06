@@ -140,6 +140,16 @@ struct SavepointTableEntry {
   u8 pendingFlushSeekEdits;
 };
 
+typedef struct SavepointCatalogEntry SavepointCatalogEntry;
+struct SavepointCatalogEntry {
+  Pgno iTable;
+  ProllyHash root;
+  ProllyHash schemaHash;
+  u8 flags;
+  u8 pendingFlushSeekEdits;
+  char *zName;
+};
+
 typedef struct SavepointPendingSnapshot SavepointPendingSnapshot;
 struct SavepointPendingSnapshot {
   Pgno iTable;
@@ -267,6 +277,8 @@ struct Btree {
   struct SavepointTableState {
     ProllyHash catalogHash;
     SavepointTableEntry *aTables;
+    SavepointCatalogEntry *aCatalogSnapshot;
+    u8 bCatalogSnapshot;
 
     SavepointPendingSnapshot *aPendingSnapshot;
     int nPendingSnapshot;
@@ -413,7 +425,7 @@ static int flushDeferredEdits(BtShared *pBt);
 static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow);
-static int pushSavepoint(Btree *pBtree);
+static int pushSavepoint(Btree *pBtree, int bStatement);
 static void btreeDiscardAllSavepoints(Btree *pBtree);
 static int findTableIndexInArray(struct TableEntry *aTables, int nTables, Pgno iTable);
 static int findSavepointTableIndexInArray(SavepointTableEntry *aTables, int nTables, Pgno iTable);
@@ -2403,7 +2415,7 @@ static int syncSavepoints(BtCursor *pCur){
   if( db ){
     int target = db->nSavepoint + db->nStatement;
     while( pBtree->nSavepoint < target ){
-      int rc = pushSavepoint(pBtree);
+      int rc = pushSavepoint(pBtree, pBtree->nSavepoint >= db->nSavepoint);
       if( rc!=SQLITE_OK ) return rc;
     }
   }
@@ -2590,6 +2602,15 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
 }
 
 static void freeSavepointTables(struct SavepointTableState *pState){
+  if( pState->aCatalogSnapshot ){
+    int i;
+    for(i=0; i<pState->nTables; i++){
+      sqlite3_free(pState->aCatalogSnapshot[i].zName);
+    }
+    sqlite3_free(pState->aCatalogSnapshot);
+    pState->aCatalogSnapshot = 0;
+    pState->bCatalogSnapshot = 0;
+  }
   if( pState->aPendingSnapshot ){
     int i;
     for(i=0; i<pState->nPendingSnapshot; i++){
@@ -2613,6 +2634,45 @@ static void freeSavepointTables(struct SavepointTableState *pState){
   memset(&pState->mergeCommitHash, 0, sizeof(pState->mergeCommitHash));
   memset(&pState->conflictsCatalogHash, 0, sizeof(pState->conflictsCatalogHash));
   memset(&pState->constraintViolationsHash, 0, sizeof(pState->constraintViolationsHash));
+}
+
+static int captureSavepointCatalogSnapshot(
+  Btree *pBtree,
+  struct SavepointTableState *pState
+){
+  int i;
+  int n = pBtree->cat.n;
+  SavepointCatalogEntry *aSnapshot = 0;
+
+  if( n<=0 ) return SQLITE_OK;
+  aSnapshot = sqlite3_malloc64((sqlite3_uint64)n * sizeof(SavepointCatalogEntry));
+  if( !aSnapshot ) return SQLITE_NOMEM;
+  memset(aSnapshot, 0, (size_t)n * sizeof(SavepointCatalogEntry));
+
+  for(i=0; i<n; i++){
+    struct TableEntry *pSrc = &pBtree->cat.a[i];
+    SavepointCatalogEntry *pDst = &aSnapshot[i];
+    pDst->iTable = pSrc->iTable;
+    pDst->root = pSrc->root;
+    pDst->schemaHash = pSrc->schemaHash;
+    pDst->flags = pSrc->flags;
+    pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
+    if( pSrc->zName ){
+      pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
+      if( !pDst->zName ){
+        int j;
+        for(j=0; j<=i; j++){
+          sqlite3_free(aSnapshot[j].zName);
+        }
+        sqlite3_free(aSnapshot);
+        return SQLITE_NOMEM;
+      }
+    }
+  }
+
+  pState->aCatalogSnapshot = aSnapshot;
+  pState->bCatalogSnapshot = 1;
+  return SQLITE_OK;
 }
 
 static void captureSavepointSessionState(
@@ -2640,18 +2700,24 @@ static void restoreSavepointSessionState(
 
 static int captureSavepointTables(
   Btree *pBtree,
-  struct SavepointTableState *pState
+  struct SavepointTableState *pState,
+  int bStatement
 ){
   int k;
   int rc;
   u8 *catData = 0;
   int nCatData = 0;
   memset(&pState->catalogHash, 0, sizeof(pState->catalogHash));
-  rc = serializeCatalog(pBtree, &catData, &nCatData);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = chunkStorePut(&pBtree->pBt->store, catData, nCatData, &pState->catalogHash);
-  sqlite3_free(catData);
-  if( rc!=SQLITE_OK ) return rc;
+  if( bStatement ){
+    rc = captureSavepointCatalogSnapshot(pBtree, pState);
+    if( rc!=SQLITE_OK ) return rc;
+  }else{
+    rc = serializeCatalog(pBtree, &catData, &nCatData);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = chunkStorePut(&pBtree->pBt->store, catData, nCatData, &pState->catalogHash);
+    sqlite3_free(catData);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( pBtree->cat.n<=0 ) return SQLITE_OK;
   pState->aTables = sqlite3_malloc(
       pBtree->cat.n * (int)sizeof(SavepointTableEntry));
@@ -2945,9 +3011,47 @@ static int restoreTablesFromSavepoint(
   }
 
   if( prollyHashIsEmpty(&pState->catalogHash) ){
-    btreeFreeCatalogTables(pBtree);
-    initDefaultMeta(pBtree);
-    pBtree->cat.iNextTable = 2;
+    if( pState->bCatalogSnapshot ){
+      btreeFreeCatalogTables(pBtree);
+      initDefaultMeta(pBtree);
+      if( pState->nTables>0 ){
+        if( pBtree->cat.nAlloc < pState->nTables ){
+          struct TableEntry *aNew = sqlite3_realloc(
+              pBtree->cat.a, pState->nTables * (int)sizeof(struct TableEntry));
+          if( !aNew ){
+            sqlite3_free(apPending);
+            return SQLITE_NOMEM;
+          }
+          pBtree->cat.a = aNew;
+          pBtree->cat.nAlloc = pState->nTables;
+        }
+        memset(pBtree->cat.a, 0, pState->nTables * sizeof(struct TableEntry));
+        for(k=0; k<pState->nTables; k++){
+          struct TableEntry *pDst = &pBtree->cat.a[k];
+          SavepointCatalogEntry *pSrc = &pState->aCatalogSnapshot[k];
+          pDst->iTable = pSrc->iTable;
+          pDst->root = pSrc->root;
+          pDst->schemaHash = pSrc->schemaHash;
+          pDst->flags = pSrc->flags;
+          pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
+          if( pSrc->zName ){
+            pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
+            if( !pDst->zName ){
+              sqlite3_free(apPending);
+              btreeFreeCatalogTables(pBtree);
+              initDefaultMeta(pBtree);
+              return SQLITE_NOMEM;
+            }
+          }
+        }
+      }
+      pBtree->cat.n = pState->nTables;
+      pBtree->cat.iNextTable = pState->iNextTable;
+    }else{
+      btreeFreeCatalogTables(pBtree);
+      initDefaultMeta(pBtree);
+      pBtree->cat.iNextTable = 2;
+    }
   }else{
     u8 *catData = 0;
     int nCatData = 0;
@@ -2983,7 +3087,7 @@ static int restoreTablesFromSavepoint(
   return SQLITE_OK;
 }
 
-static int pushSavepoint(Btree *pBtree){
+static int pushSavepoint(Btree *pBtree, int bStatement){
   struct SavepointTableState *pState;
 
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
@@ -2998,12 +3102,17 @@ static int pushSavepoint(Btree *pBtree){
   pState = &pBtree->aSavepointTables[pBtree->nSavepoint];
   memset(&pState->catalogHash, 0, sizeof(pState->catalogHash));
   pState->aTables = 0;
+  pState->aCatalogSnapshot = 0;
+  pState->bCatalogSnapshot = 0;
   pState->aPendingSnapshot = 0;
   pState->nPendingSnapshot = 0;
   pState->nPendingSnapshotAlloc = 0;
   pState->nTables = 0;
   captureSavepointSessionState(pBtree, pState);
-  if( captureSavepointTables(pBtree, pState)!=SQLITE_OK ) return SQLITE_NOMEM;
+  {
+    int rc = captureSavepointTables(pBtree, pState, bStatement);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   pBtree->nSavepoint++;
   pushSavepointOnMutMaps(pBtree, pBtree->nSavepoint);
@@ -3993,7 +4102,7 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
 
     if( p->db ){
       while( p->nSavepoint < p->db->nSavepoint ){
-        int rc2 = pushSavepoint(p);
+        int rc2 = pushSavepoint(p, 0);
         if( rc2!=SQLITE_OK ){
           while( p->nSavepoint > nSavepointStart ){
             p->nSavepoint--;
@@ -4281,7 +4390,7 @@ static int prollyBtreeBeginStmt(Btree *p, int iStatement){
 
 
   while( p->nSavepoint < iStatement ){
-    int rc = pushSavepoint(p);
+    int rc = pushSavepoint(p, 1);
     if( rc!=SQLITE_OK ) return rc;
   }
   return SQLITE_OK;
@@ -4398,7 +4507,7 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
 
   if( op==SAVEPOINT_BEGIN ){
     while( p->nSavepoint < iSavepoint ){
-      int rc = pushSavepoint(p);
+      int rc = pushSavepoint(p, 0);
       if( rc!=SQLITE_OK ) return rc;
     }
     return SQLITE_OK;
@@ -7019,7 +7128,7 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
   ** snapshots, not session hashes like conflictsCatalogHash. */
   target = db->nSavepoint;
   while( pBtree->nSavepoint < target ){
-    rc = pushSavepoint(pBtree);
+    rc = pushSavepoint(pBtree, 0);
     if( rc!=SQLITE_OK ) return rc;
   }
   return SQLITE_OK;
