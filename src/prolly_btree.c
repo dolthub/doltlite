@@ -1391,6 +1391,56 @@ static int loadSchemaCatalogRows(
   return SQLITE_OK;
 }
 
+static int schemaCatalogRowWanted(
+  const SchemaCatalogRow *pRow,
+  struct TableEntry *aTables,
+  int nTables
+){
+  int i;
+  if( !pRow ) return 0;
+  if( !pRow->zType ) return 0;
+  if( strcmp(pRow->zType, "table")!=0 && strcmp(pRow->zType, "index")!=0 ){
+    return 1;
+  }
+  for(i=0; i<nTables; i++){
+    if( aTables[i].iTable==pRow->oldPg ) return 1;
+  }
+  if( pRow->zType && strcmp(pRow->zType, "table")==0 && pRow->zName ){
+    for(i=0; i<nTables; i++){
+      if( aTables[i].zName && strcmp(aTables[i].zName, pRow->zName)==0 ){
+        return 1;
+      }
+    }
+  }
+  return 0;
+}
+
+static void filterSchemaCatalogRows(
+  SchemaCatalogRow *aRows,
+  int *pnRows,
+  struct TableEntry *aTables,
+  int nTables
+){
+  int i, nOut = 0;
+  int nRows = *pnRows;
+  for(i=0; i<nRows; i++){
+    if( schemaCatalogRowWanted(&aRows[i], aTables, nTables) ){
+      if( nOut!=i ){
+        aRows[nOut] = aRows[i];
+        memset(&aRows[i], 0, sizeof(aRows[i]));
+      }
+      nOut++;
+    }else{
+      sqlite3_free(aRows[i].zType);
+      sqlite3_free(aRows[i].zName);
+      sqlite3_free(aRows[i].zTblName);
+      sqlite3_free(aRows[i].zSql);
+      memset(&aRows[i], 0, sizeof(aRows[i]));
+    }
+  }
+  *pnRows = nOut;
+}
+
 static int appendMissingSchemaCatalogRows(
   sqlite3 *db,
   SchemaCatalogRow **paRows,
@@ -1489,6 +1539,7 @@ int doltliteSerializeCatalogEntries(
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
   }
+  filterSchemaCatalogRows(aRows, &nRows, aTables, nTables);
   rc = appendMissingSchemaCatalogRows(db, &aRows, &nRows, aMeta, nMeta);
   if( rc!=SQLITE_OK ){
     freeCatalogEntryMeta(aMeta, nMeta);
@@ -1608,8 +1659,18 @@ int doltliteSerializeCatalogEntries(
         aSorted[i].zTblName = "";
         continue;
       }
+      if( aTables[i].zName ){
+        for(j=0; j<nRows; j++){
+          if( strcmp(aRows[j].zType, "table")==0
+           && aRows[j].zName
+           && strcmp(aRows[j].zName, aTables[i].zName)==0 ){
+            pRow = &aRows[j];
+            break;
+          }
+        }
+      }
       for(j=0; j<nRows; j++){
-        if( aRows[j].oldPg==aTables[i].iTable ){
+        if( !pRow && aRows[j].oldPg==aTables[i].iTable ){
           pRow = &aRows[j];
           break;
         }

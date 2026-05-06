@@ -195,10 +195,11 @@ struct SchemaMergeAction {
 void freeSchemaMergeActions(SchemaMergeAction *a, int n);
 
 int doltliteMergeCatalogs(sqlite3 *db,
-  const ProllyHash *ancestor, const ProllyHash *ours,
-  const ProllyHash *theirs, ProllyHash *pMergedHash,
-  int *pnConflicts, char **pzErrMsg,
-  SchemaMergeAction **ppActions, int *pnActions);
+    const ProllyHash *ancestor, const ProllyHash *ours,
+    const ProllyHash *theirs, ProllyHash *pMergedHash,
+    int *pnConflicts, char **pzErrMsg,
+    SchemaMergeAction **ppActions, int *pnActions,
+    int bPreferOurMaster);
 
 struct ProllyDiffChange;
 

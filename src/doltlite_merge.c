@@ -1349,6 +1349,43 @@ static int schemaEntryChangedByName(
   return 0;
 }
 
+static int hasSchemaObject(
+  SchemaEntry *aSchema,
+  int nSchema,
+  const char *zType,
+  const char *zName,
+  const char *zTblName
+){
+  int i;
+  for(i=0; i<nSchema; i++){
+    if( strcmp(aSchema[i].zType ? aSchema[i].zType : "", zType ? zType : "")!=0 ) continue;
+    if( strcmp(aSchema[i].zName ? aSchema[i].zName : "", zName ? zName : "")!=0 ) continue;
+    if( strcmp(aSchema[i].zTblName ? aSchema[i].zTblName : "",
+               zTblName ? zTblName : "")!=0 ) continue;
+    return 1;
+  }
+  return 0;
+}
+
+static int replayDropsDisjointSchemaObject(
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema
+){
+  int i;
+  for(i=0; i<nAncSchema; i++){
+    const char *zType = aAncSchema[i].zType;
+    if( !zType ) continue;
+    if( strcmp(zType, "table")!=0 && strcmp(zType, "index")!=0 ) continue;
+    if( !hasSchemaObject(aTheirsSchema, nTheirsSchema,
+                         aAncSchema[i].zType,
+                         aAncSchema[i].zName,
+                         aAncSchema[i].zTblName) ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static SchemaEntry *findSchemaEntryByRootpage(
   SchemaEntry *aSchema,
   int nSchema,
@@ -1905,7 +1942,8 @@ static int mergeCatalogPass1(
   const ProllyHash *pCatOurs,
   const ProllyHash *pCatTheirs,
   SchemaMergeAction **ppSchemaActions, int *pnSchemaActions,
-  int bDisjointSchemaChanges
+  int bDisjointSchemaChanges,
+  int bPreferOurMaster
 ){
   int i, rc = SQLITE_OK;
   int iTable1Idx = -1;
@@ -2147,6 +2185,9 @@ post_merge_table_rows:;
     struct TableEntry *ancEntry = findTableEntry(aAnc, nAnc, 1);
     struct TableEntry *theirsEntry = findTableEntry(aTheirs, nTheirs, 1);
     int hasSchemaActions = (ppSchemaActions && pnSchemaActions && *pnSchemaActions > 0);
+    int bPreferOurMasterHere = bPreferOurMaster
+        && replayDropsDisjointSchemaObject(aAncSchema, nAncSchema,
+                                           aTheirsSchema, nTheirsSchema);
 
     if( !ancEntry ){
       if( theirsEntry ){
@@ -2164,6 +2205,10 @@ post_merge_table_rows:;
     }else{
       int oursChanged = prollyHashCompare(&aOurs[iTable1Idx].root, &ancEntry->root)!=0;
       int theirsChanged = prollyHashCompare(&theirsEntry->root, &ancEntry->root)!=0;
+      if( bPreferOurMasterHere ){
+        aMerged[(*pnMerged)++] = aOurs[iTable1Idx];
+        return rc;
+      }
       if( oursChanged && theirsChanged && hasSchemaActions ){
 
         aMerged[(*pnMerged)++] = aOurs[iTable1Idx];
@@ -2439,7 +2484,8 @@ int doltliteMergeCatalogs(
   int *pnConflicts,
   char **pzErrMsg,
   SchemaMergeAction **ppActions,
-  int *pnActions
+  int *pnActions,
+  int bPreferOurMaster
 ){
   struct TableEntry *aAnc = 0, *aOurs = 0, *aTheirs = 0;
   int nAnc = 0, nOurs = 0, nTheirs = 0;
@@ -2493,7 +2539,8 @@ int doltliteMergeCatalogs(
                           &totalConflicts, pzErrMsg,
                           ancestor, ours, theirs,
                           ppActions, pnActions,
-                          bDisjointSchemaChanges);
+                          bDisjointSchemaChanges,
+                          bPreferOurMaster);
   if( rc!=SQLITE_OK ){
     /* pass1 shallow-copies zName pointers from aOurs into aMerged.
     ** The strdup loop below (which breaks the aliasing) hasn't run

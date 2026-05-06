@@ -438,7 +438,7 @@ run_test "revert_replay_t_count" \
   "SELECT count(*) FROM dolt_schema_diff('HEAD~1','HEAD','t');" "1" "$DB"
 run_test_match "revert_replay_from_stmt" \
   "SELECT from_create_statement FROM dolt_schema_diff('HEAD~1','HEAD','t');" \
-  "CHECK \\(v > 0\\)" "$DB"
+  "CHECK ?\\(v > 0\\)" "$DB"
 run_test_match "revert_replay_to_stmt" \
   "SELECT to_create_statement FROM dolt_schema_diff('HEAD~1','HEAD','t');" \
   "CREATE TABLE t.*v INT\\)" "$DB"

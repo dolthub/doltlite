@@ -486,7 +486,11 @@ static int doltliteAdvanceBranch(
 
   doltliteSetSessionHead(db, pNewHead);
   doltliteSetSessionStaged(db, pCatalogHash);
-  rc = doltliteSwitchCatalog(db, pCatalogHash);
+  if( pWorkingCatHash && !prollyHashIsEmpty(pWorkingCatHash) ){
+    rc = doltliteSwitchCatalog(db, pWorkingCatHash);
+  }else{
+    rc = doltliteSwitchCatalog(db, pCatalogHash);
+  }
   if( rc!=SQLITE_OK ){
     return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
   }
@@ -1372,7 +1376,10 @@ static void doltliteCommitFunc(
     return;
   }
 
-  if( !sealTopLevel ){
+  if( !sealTopLevel
+   && (!db->autoCommit
+       || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE
+       || db->pSavepoint) ){
     /* For BEGIN / nested SAVEPOINT, only close the SQL transaction once
     ** dolt_commit() has survived argument parsing and basic validation. */
     (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
@@ -2533,7 +2540,7 @@ static void doltliteMergeFunc(
     int nSchemaActions = 0;
     rc = doltliteMergeCatalogs(db, &ancCatHash, &ourCatHash, &theirCatHash,
                                 &mergedCatHash, &nMergeConflicts, &zMergeErr,
-                                &aSchemaActions, &nSchemaActions);
+                                &aSchemaActions, &nSchemaActions, 0);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&ourCommit);
       doltliteCommitClear(&theirCommit);
@@ -2888,10 +2895,12 @@ static int applyMergedCatalogAndCommit(
   ProllyHash commitHash;
   char *zMergeErr = 0;
   int graphLocked = 0;
+  int bPreferOurMaster;
   int rc;
 
   memset(&savedState, 0, sizeof(savedState));
   if( hexBuf ) hexBuf[0] = '\0';
+  bPreferOurMaster = (sqlite3_strnicmp(zMessage, "Revert", 6)==0);
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) return rc;
@@ -2900,7 +2909,8 @@ static int applyMergedCatalogAndCommit(
   if( rc!=SQLITE_OK ) return rc;
 
   rc = doltliteMergeCatalogs(db, ancCatHash, ourCatHash, theirCatHash,
-                              &mergedCatHash, pnConflicts, &zMergeErr, 0, 0);
+                              &mergedCatHash, pnConflicts, &zMergeErr, 0, 0,
+                              bPreferOurMaster);
   if( rc!=SQLITE_OK ){
     sqlite3_free(zMergeErr);
     doltliteTxnStateClear(&savedState);
@@ -3849,7 +3859,7 @@ static int rebaseApplyPlanRowCatalog(
   zStep = "merge catalogs";
   rc = doltliteMergeCatalogs(db, &parentC.catalogHash, pCurCat,
                              &replayC.catalogHash, pMergedCat,
-                             &nConflicts, 0, 0, 0);
+                             &nConflicts, 0, 0, 0, 0);
   if( rc==SQLITE_OK && nConflicts==0 ){
     zStep = "switch merged catalog";
     rc = doltliteSwitchCatalog(db, pMergedCat);
