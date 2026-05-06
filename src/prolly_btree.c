@@ -1240,6 +1240,17 @@ static int schemaCatalogRowCmp(const void *a, const void *b){
   return 0;
 }
 
+static int schemaCatalogRowIsVirtualTable(const SchemaCatalogRow *pRow){
+  const char *zSql;
+  if( !pRow || !pRow->zType || !pRow->zSql ) return 0;
+  if( strcmp(pRow->zType, "table")!=0 ) return 0;
+  zSql = pRow->zSql;
+  while( zSql[0]==' ' || zSql[0]=='\t' || zSql[0]=='\n' || zSql[0]=='\r' ){
+    zSql++;
+  }
+  return sqlite3_strnicmp(zSql, "CREATE VIRTUAL TABLE ", 21)==0;
+}
+
 typedef struct SchemaFieldValue SchemaFieldValue;
 struct SchemaFieldValue {
   int eType;
@@ -1441,6 +1452,7 @@ static int schemaCatalogRowWanted(
   int i;
   if( !pRow ) return 0;
   if( !pRow->zType ) return 0;
+  if( schemaCatalogRowIsVirtualTable(pRow) ) return 1;
   if( strcmp(pRow->zType, "table")!=0 && strcmp(pRow->zType, "index")!=0 ){
     return 1;
   }
@@ -1694,7 +1706,9 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
     struct TableEntry masterEntry;
     qsort(aRows, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
     for(i=0; i<nRows; i++){
-      if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
+      if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
+        aRows[i].newPg = 0;
+      }else if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
         aRows[i].newPg = (Pgno)(i + 2);
       }else{
         aRows[i].newPg = aRows[i].oldPg;
@@ -1950,7 +1964,9 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
   memcpy(aCanon, aRows, nRows * (int)sizeof(SchemaCatalogRow));
   qsort(aCanon, nRows, sizeof(SchemaCatalogRow), schemaCatalogRowCmp);
   for(i=0; i<nRows; i++){
-    if( strcmp(aCanon[i].zType, "table")==0 || strcmp(aCanon[i].zType, "index")==0 ){
+    if( schemaCatalogRowIsVirtualTable(&aCanon[i]) ){
+      aCanon[i].newPg = 0;
+    }else if( strcmp(aCanon[i].zType, "table")==0 || strcmp(aCanon[i].zType, "index")==0 ){
       aCanon[i].newPg = (Pgno)(i + 2);
     }else{
       aCanon[i].newPg = aCanon[i].oldPg;
@@ -1958,7 +1974,9 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
   }
   for(i=0; i<nRows; i++){
     aRows[i].newPg = aRows[i].oldPg;
-    if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
+    if( schemaCatalogRowIsVirtualTable(&aRows[i]) ){
+      aRows[i].newPg = 0;
+    }else if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
       for(j=0; j<nRows; j++){
         if( aCanon[j].oldPg==aRows[i].oldPg ){
           aRows[i].newPg = aCanon[j].newPg;
