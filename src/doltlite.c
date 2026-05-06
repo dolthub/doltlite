@@ -3846,6 +3846,11 @@ static char *rebaseDeriveOrigBranchFromWorking(const char *zWorking){
   return sqlite3_mprintf("%s", zWorking + nPrefix);
 }
 
+static char *rebaseBuildWorkingBranchName(const char *zOrigBranch){
+  if( !zOrigBranch ) return 0;
+  return sqlite3_mprintf("dolt_rebase_%s", zOrigBranch);
+}
+
 static int rebaseRestoreBranchState(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash headHash;
@@ -4312,7 +4317,7 @@ static void doltliteRebaseInteractiveAbort(
   }
   zOrigBranch = sqlite3_mprintf("%s", zOrigBranchConst);
   zReturnBranch = sqlite3_mprintf("%s", zReturnBranchConst);
-  zWorking = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
+  zWorking = rebaseBuildWorkingBranchName(zOrigBranchConst);
   if( !zReturnBranch || !zWorking || !zOrigBranch ){
     sqlite3_free(zReturnBranch);
     sqlite3_free(zWorking);
@@ -4407,7 +4412,7 @@ static void doltliteRebaseInteractiveContinue(
   }
   zOrigBranch = sqlite3_mprintf("%s", zOrigBranchConst);
   zReturnBranch = sqlite3_mprintf("%s", zReturnBranchConst);
-  zWorking = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
+  zWorking = rebaseBuildWorkingBranchName(zOrigBranchConst);
   if( !zReturnBranch || !zWorking || !zOrigBranch ){ rc = SQLITE_NOMEM; goto abort_err; }
 
   /* The plan table was created by the preceding -i call inside a VC helper
