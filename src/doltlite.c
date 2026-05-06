@@ -810,6 +810,26 @@ static struct TableEntry *addFindEntryByName(
   return 0;
 }
 
+/* Rebind staged entries to the current working catalog's runtime iTable before
+** serializing a staged catalog. This keeps partial staging from re-emitting
+** stale rootpage identity loaded from HEAD or an older staged snapshot. */
+static void addAlignStagedEntriesToWorking(
+  struct TableEntry *aWorking,
+  int nWorking,
+  struct TableEntry *aStaged,
+  int nStaged
+){
+  int i;
+  for(i=0; i<nStaged; i++){
+    struct TableEntry *pWorking;
+    if( !aStaged[i].zName ) continue;
+    pWorking = addFindEntryByName(aWorking, nWorking, aStaged[i].zName);
+    if( pWorking ){
+      aStaged[i].iTable = pWorking->iTable;
+    }
+  }
+}
+
 static int addLoadWorkingAndStagedCatalogs(
   sqlite3 *db,
   const ProllyHash *pWorkingHash,
@@ -902,9 +922,9 @@ static int addStageAllTables(
         return rc;
       }
       if( ignored ){
+        useWorkingHash = 0;
         pUse = addFindEntryByName(aStaged, nStaged, zName);
         if( !pUse ) continue;
-        useWorkingHash = 0;
       }
     }
     rc = addAppendTableEntry(context, &aNew, &nNew, pUse);
@@ -939,6 +959,7 @@ static int addStageAllTables(
     doltliteSetSessionStaged(db, pWorkingHash);
     rc = SQLITE_OK;
   }else{
+    addAlignStagedEntriesToWorking(aWorking, nWorking, aNew, nNew);
     rc = addWriteStagedCatalog(db, cs, aNew, nNew);
   }
   addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
@@ -1101,6 +1122,7 @@ static int addStageNamedTables(
     }
   }
 
+  addAlignStagedEntriesToWorking(aWorking, nWorking, aStaged, nStaged);
   rc = addWriteStagedCatalog(db, cs, aStaged, nStaged);
   doltliteFreeCatalog(aWorking, nWorking);
   doltliteFreeCatalog(aStaged, nStaged);
@@ -4260,7 +4282,22 @@ static void doltliteRebaseInteractiveAbort(
   ** doesn't leak stale values. */
   rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
   if( cs && zReturnBranch && zReturnBranch[0] ){
-    (void)chunkStoreSetDefaultBranch(cs, zReturnBranch);
+    rc = chunkStoreSetDefaultBranch(cs, zReturnBranch);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zReturnBranch);
+      sqlite3_free(zWorking);
+      sqlite3_free(zOrigBranch);
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
+  }
+  rc = doltlitePersistWorkingSet(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zReturnBranch);
+    sqlite3_free(zWorking);
+    sqlite3_free(zOrigBranch);
+    sqlite3_result_error_code(context, rc);
+    return;
   }
 
   rc = doltliteVcSealBranchStyleTxn(db);
