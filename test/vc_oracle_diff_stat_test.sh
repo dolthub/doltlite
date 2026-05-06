@@ -402,7 +402,7 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "HEAD~1" "HEAD" "u"
 
 oracle_both "diff_stat_rebase_replay_add_table_plus_check" "

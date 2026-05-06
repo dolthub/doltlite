@@ -259,7 +259,7 @@ SELECT dolt_commit('-A','-m','feat add');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Cherry-pick
-echo "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Revert the cherry-pick
 echo "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" | $DOLTLITE "$DB" > /dev/null 2>&1

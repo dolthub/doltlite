@@ -56,12 +56,12 @@ INSERT INTO t VALUES(2,'feat');
 SELECT dolt_commit('-A','-m','feat add');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-echo "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "cp_twice_first" "SELECT count(*) FROM t;" "2" "$DB"
 
 # Second cherry-pick of same commit — row 2 already exists, should be convergent or no-op
 run_test_match "cp_twice_second" \
-  "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" \
+  "SELECT dolt_cherry_pick('feat');" \
   "^[0-9a-f]{40}$" "$DB"
 run_test "cp_twice_still2" "SELECT count(*) FROM t;" "2" "$DB"
 

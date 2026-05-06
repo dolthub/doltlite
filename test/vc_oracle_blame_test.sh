@@ -276,7 +276,7 @@ INSERT INTO t_new SELECT * FROM t;
 DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_u ORDER BY id;"
 
 echo "--- schema replay after rebase preserves blame visibility ---"
@@ -338,7 +338,7 @@ INSERT INTO t_new SELECT * FROM t;
 DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_c ORDER BY id;"
 
 echo "--- FK replay after rebase preserves blame visibility ---"
@@ -398,7 +398,7 @@ INSERT INTO t_new SELECT * FROM t;
 DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "SELECT CONCAT('BL|', a, '|', b, '|', message) FROM dolt_blame_u ORDER BY a, b;"
 
 echo "--- composite-PK replay after rebase preserves blame visibility ---"

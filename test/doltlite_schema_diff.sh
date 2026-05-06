@@ -410,7 +410,7 @@ INSERT INTO t_new SELECT * FROM t;
 DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_commit('-A','-m','main check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "cherrypick_replay_u_count" \
   "SELECT count(*) FROM dolt_schema_diff('HEAD~1','HEAD','u');" "1" "$DB"

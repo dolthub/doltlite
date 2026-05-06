@@ -321,7 +321,7 @@ INSERT INTO t_new SELECT * FROM t;
 DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "SELECT CONCAT('R|', to_a, '|', to_b, '|', to_v, '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_u('HEAD~1', 'HEAD') ORDER BY to_a, to_b;"
 
 oracle "i_rebase_replay_multi_pk_add_table" "
@@ -397,7 +397,7 @@ INSERT INTO t_new SELECT * FROM t;
 DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "SELECT CONCAT('R|', table_name, '|', rows_added, '|', rows_deleted, '|', rows_modified, '|', cells_added, '|', cells_deleted, '|', cells_modified) FROM dolt_diff_stat('HEAD~1', 'HEAD', 'u');"
 
 oracle "j_cherrypick_replay_multi_pk_summary" "
@@ -414,7 +414,7 @@ INSERT INTO t_new SELECT * FROM t;
 DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "SELECT CONCAT('R|', IFNULL(from_table_name,''), '|', IFNULL(to_table_name,''), '|', diff_type, '|', CASE WHEN data_change THEN 1 ELSE 0 END, '|', CASE WHEN schema_change THEN 1 ELSE 0 END) FROM dolt_diff_summary('HEAD~1', 'HEAD', 'u');"
 
 oracle "j_rebase_replay_multi_pk_stat" "
@@ -492,7 +492,7 @@ INSERT INTO t_new SELECT * FROM t;
 DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "SELECT CONCAT('R|', a, '|', b, '|', v, '|', message) FROM dolt_history_u ORDER BY a, b, message;"
 
 oracle "k_rebase_replay_multi_pk_history" "
