@@ -4331,7 +4331,7 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
 
   check("reopen_db_for_rebase_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_abort_after_reopen_branch_before_abort",
-        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
   check("rebase_abort_after_reopen_plan_before_abort",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);

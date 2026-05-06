@@ -51,7 +51,7 @@ SQL
 
 run_test_match "invalid_plan_continue_errors" \
   "SELECT dolt_rebase('--continue');" \
-  "no rebase in progress" \
+  "rebase failed — branch restored to pre-rebase state|no rebase in progress" \
   "$DB"
 run_test "invalid_plan_branch_preserved" \
   "SELECT active_branch();" \

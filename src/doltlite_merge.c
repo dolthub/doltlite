@@ -1993,6 +1993,7 @@ static int mergeCatalogPass1(
   for(i=0; i<nOurs; i++){
     const char *zName = aOurs[i].zName;
     const char *zLogicalName = zName;
+    const char *zSchemaMergeName = zName;
     struct TableEntry *ancEntry;
     struct TableEntry *theirsEntry;
 
@@ -2009,6 +2010,7 @@ static int mergeCatalogPass1(
       if( pOurSe && pOurSe->zName && pOurSe->zType
        && strcmp(pOurSe->zType, "index")==0 ){
         zLogicalName = pOurSe->zName;
+        zSchemaMergeName = pOurSe->zName;
         ancEntry = findCatalogEntryBySchemaObject(
             aAnc, nAnc, aAncSchema, nAncSchema,
             pOurSe->zType, pOurSe->zName, pOurSe->zTblName);
@@ -2075,14 +2077,23 @@ do_merge_entry:
             &aOurs[i].schemaHash, &ancEntry->schemaHash)!=0;
         int theirSchemaChanged = prollyHashCompare(
             &theirsEntry->schemaHash, &ancEntry->schemaHash)!=0;
+        int bNamedSchemaObject = (!zName && zSchemaMergeName && zSchemaMergeName[0]);
         int skipRowMerge = 0;
+
+        if( zSchemaMergeName && zSchemaMergeName[0] ){
+          ourSchemaChanged = ourSchemaChanged || schemaEntryChangedByName(
+              aAncSchema, nAncSchema, aOursSchema, nOursSchema, zSchemaMergeName);
+          theirSchemaChanged = theirSchemaChanged || schemaEntryChangedByName(
+              aAncSchema, nAncSchema, aTheirsSchema, nTheirsSchema, zSchemaMergeName);
+        }
 
 
         if( ourSchemaChanged && theirSchemaChanged
-         && prollyHashCompare(&aOurs[i].schemaHash,
-                              &theirsEntry->schemaHash)!=0 ){
+         && (bNamedSchemaObject
+             || prollyHashCompare(&aOurs[i].schemaHash,
+                                  &theirsEntry->schemaHash)!=0) ){
           rc = tryResolveSchemaDivergence(
-            db, zName, pCatAnc, pCatOurs, pCatTheirs,
+            db, zSchemaMergeName, pCatAnc, pCatOurs, pCatTheirs,
             ppSchemaActions, pnSchemaActions, &skipRowMerge, pzErrMsg);
           if( rc!=SQLITE_OK ) return rc;
           if( skipRowMerge ){

@@ -284,6 +284,33 @@ void doltliteUpdateSchemaHashes(sqlite3 *db){
       sqlite3_free(zSql);
     }
   }
+
+  {
+    sqlite3_stmt *pStmt = 0;
+    if( sqlite3_prepare_v2(
+          db,
+          "SELECT name, rootpage, sql "
+          "FROM main.sqlite_master "
+          "WHERE type='index' AND sql IS NOT NULL",
+          -1, &pStmt, 0
+        )==SQLITE_OK ){
+      while( sqlite3_step(pStmt)==SQLITE_ROW ){
+        const char *zIdxName = (const char*)sqlite3_column_text(pStmt, 0);
+        Pgno iRoot = (Pgno)sqlite3_column_int(pStmt, 1);
+        const char *zCreate = (const char*)sqlite3_column_text(pStmt, 2);
+        if( zIdxName && zCreate ){
+          ProllyHash h;
+          char *zCanon = doltliteCanonicalizeSchemaSql(zCreate, zIdxName);
+          if( zCanon ){
+            prollyHashCompute(zCanon, (int)strlen(zCanon), &h);
+            sqlite3_free(zCanon);
+            doltliteSetTableSchemaHash(db, iRoot, &h);
+          }
+        }
+      }
+      sqlite3_finalize(pStmt);
+    }
+  }
 }
 
 int doltliteLoadLiveSchemaSql(
