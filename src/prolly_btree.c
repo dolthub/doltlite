@@ -1516,6 +1516,7 @@ int doltliteSerializeCatalogEntries(
       int nRec = 0;
       u8 *pRec;
       ProllyHash h;
+      const char *zRecordSql = aRows[i].zSql;
       if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
         char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
         if( !zCanon ){
@@ -1525,9 +1526,16 @@ int doltliteSerializeCatalogEntries(
           return SQLITE_NOMEM;
         }
         prollyHashCompute((const u8*)zCanon, (int)strlen(zCanon), &h);
+        zRecordSql = zCanon;
+        pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
+                                        aRows[i].zTblName, aRows[i].newPg,
+                                        zRecordSql, &nRec);
         sqlite3_free(zCanon);
       }else{
         memset(&h, 0, sizeof(h));
+        pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
+                                        aRows[i].zTblName, aRows[i].newPg,
+                                        zRecordSql, &nRec);
       }
       for(j=0; j<nTables; j++){
         if( aTables[j].iTable==aRows[i].oldPg ){
@@ -1538,9 +1546,6 @@ int doltliteSerializeCatalogEntries(
       if( aRows[i].newPg==aRows[i].oldPg ){
         aRows[i].newPg = aRows[i].oldPg;
       }
-      pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
-                                      aRows[i].zTblName, aRows[i].newPg,
-                                      aRows[i].zSql, &nRec);
       if( !pRec ){
         prollyMutMapFree(&mm);
         freeSchemaCatalogRows(aRows, nRows);
