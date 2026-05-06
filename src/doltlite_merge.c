@@ -1248,6 +1248,8 @@ static int serializeMergedCatalog(
   struct TableEntry *aMerged,
   int nMerged,
   Pgno iNextTable,
+  SchemaEntry *aFallbackSchema,
+  int nFallbackSchema,
   ProllyHash *pOutHash
 ){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -1258,7 +1260,8 @@ static int serializeMergedCatalog(
   (void)oursCatHash;
   (void)iNextTable;
 
-  rc = doltliteSerializeCatalogEntries(db, aMerged, nMerged, &buf, &nBuf);
+  rc = doltliteSerializeCatalogEntriesWithFallbackSchema(
+      db, aMerged, nMerged, aFallbackSchema, nFallbackSchema, &buf, &nBuf);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStorePut(cs, buf, nBuf, pOutHash);
@@ -1673,6 +1676,7 @@ static int appendMergedSchemaCatalogRecord(
   sqlite3 *db,
   ProllyHash *pRoot,
   u8 flags,
+  i64 iRowid,
   const SchemaEntry *pSe,
   Pgno iRootpage
 ){
@@ -1688,7 +1692,7 @@ static int appendMergedSchemaCatalogRecord(
                                   (i64)iRootpage, pSe->zSql, &nRec);
   if( !pRec ) return SQLITE_NOMEM;
   rc = prollyMutateInsert(cs, pCache, pRoot, flags, 0, 0,
-                          (i64)iRootpage, pRec, nRec, pRoot);
+                          iRowid, pRec, nRec, pRoot);
   sqlite3_free(pRec);
   return rc;
 }
@@ -1697,6 +1701,7 @@ static int appendMergedHiddenIndexRow(
   sqlite3 *db,
   ProllyHash *pRoot,
   u8 flags,
+  i64 *piNextRowid,
   SchemaEntry *aAncSchema, int nAncSchema,
   SchemaEntry *aOursSchema, int nOursSchema,
   SchemaEntry *aTheirsSchema, int nTheirsSchema,
@@ -1719,7 +1724,38 @@ static int appendMergedHiddenIndexRow(
   if( pSe>=aTheirsSchema && pSe<aTheirsSchema+nTheirsSchema ){
     iRootpage = remapSchemaRootpage(aRemap, nRemap, iRootpage);
   }
-  return appendMergedSchemaCatalogRecord(db, pRoot, flags, pSe, iRootpage);
+  return appendMergedSchemaCatalogRecord(db, pRoot, flags, (*piNextRowid)++, pSe, iRootpage);
+}
+
+static int appendMergedAuxSchemaRow(
+  sqlite3 *db,
+  ProllyHash *pRoot,
+  u8 flags,
+  i64 *piNextRowid,
+  SchemaEntry *aAncSchema, int nAncSchema,
+  SchemaEntry *aOursSchema, int nOursSchema,
+  SchemaEntry *aTheirsSchema, int nTheirsSchema,
+  SchemaRootpageRemap *aRemap, int nRemap,
+  const char *zName
+){
+  SchemaEntry *pSe;
+  Pgno iRootpage;
+
+  if( !zName ) return SQLITE_OK;
+  pSe = mergedSchemaChoice(aAncSchema, nAncSchema,
+                           aOursSchema, nOursSchema,
+                           aTheirsSchema, nTheirsSchema,
+                           zName);
+  if( !pSe || !pSe->zType || !pSe->zName ) return SQLITE_OK;
+  if( strcmp(pSe->zType, "table")==0 || strcmp(pSe->zType, "index")==0 ){
+    return SQLITE_OK;
+  }
+
+  iRootpage = pSe->iRootpage;
+  if( pSe>=aTheirsSchema && pSe<aTheirsSchema+nTheirsSchema ){
+    iRootpage = remapSchemaRootpage(aRemap, nRemap, iRootpage);
+  }
+  return appendMergedSchemaCatalogRecord(db, pRoot, flags, (*piNextRowid)++, pSe, iRootpage);
 }
 
 static int rebuildDisjointSchemaRows(
@@ -1732,6 +1768,7 @@ static int rebuildDisjointSchemaRows(
 ){
   struct TableEntry *pMaster = 0;
   ProllyHash root;
+  i64 iNextRowid = 1;
   int i, rc = SQLITE_OK;
 
   for(i=0; i<nMerged; i++){
@@ -1752,7 +1789,7 @@ static int rebuildDisjointSchemaRows(
                              aOursSchema, nOursSchema,
                              aTheirsSchema, nTheirsSchema,
                              zName);
-    rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags,
+    rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags, iNextRowid++,
                                          pSe, aMerged[i].iTable);
     if( rc!=SQLITE_OK ) return rc;
   }
@@ -1766,7 +1803,7 @@ static int rebuildDisjointSchemaRows(
                                   pSe->zName) ){
       continue;
     }
-    rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags,
+    rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags, iNextRowid++,
                                          pSe, pSe->iRootpage);
     if( rc!=SQLITE_OK ) return rc;
   }
@@ -1787,13 +1824,13 @@ static int rebuildDisjointSchemaRows(
       continue;
     }
     iRootpage = remapSchemaRootpage(aRemap, nRemap, pSe->iRootpage);
-    rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags,
+    rc = appendMergedSchemaCatalogRecord(db, &root, pMaster->flags, iNextRowid++,
                                          pSe, iRootpage);
     if( rc!=SQLITE_OK ) return rc;
   }
 
   for(i=0; i<nAncSchema; i++){
-    rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags,
+    rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags, &iNextRowid,
                                     aAncSchema, nAncSchema,
                                     aOursSchema, nOursSchema,
                                     aTheirsSchema, nTheirsSchema,
@@ -1803,7 +1840,7 @@ static int rebuildDisjointSchemaRows(
   }
   for(i=0; i<nOursSchema; i++){
     if( findSchemaEntry(aAncSchema, nAncSchema, aOursSchema[i].zName) ) continue;
-    rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags,
+    rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags, &iNextRowid,
                                     aAncSchema, nAncSchema,
                                     aOursSchema, nOursSchema,
                                     aTheirsSchema, nTheirsSchema,
@@ -1814,12 +1851,43 @@ static int rebuildDisjointSchemaRows(
   for(i=0; i<nTheirsSchema; i++){
     if( findSchemaEntry(aAncSchema, nAncSchema, aTheirsSchema[i].zName) ) continue;
     if( findSchemaEntry(aOursSchema, nOursSchema, aTheirsSchema[i].zName) ) continue;
-    rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags,
+    rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags, &iNextRowid,
                                     aAncSchema, nAncSchema,
                                     aOursSchema, nOursSchema,
                                     aTheirsSchema, nTheirsSchema,
                                     aRemap, nRemap,
                                     aTheirsSchema[i].zName);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  for(i=0; i<nAncSchema; i++){
+    rc = appendMergedAuxSchemaRow(db, &root, pMaster->flags, &iNextRowid,
+                                  aAncSchema, nAncSchema,
+                                  aOursSchema, nOursSchema,
+                                  aTheirsSchema, nTheirsSchema,
+                                  aRemap, nRemap,
+                                  aAncSchema[i].zName);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  for(i=0; i<nOursSchema; i++){
+    if( findSchemaEntry(aAncSchema, nAncSchema, aOursSchema[i].zName) ) continue;
+    rc = appendMergedAuxSchemaRow(db, &root, pMaster->flags, &iNextRowid,
+                                  aAncSchema, nAncSchema,
+                                  aOursSchema, nOursSchema,
+                                  aTheirsSchema, nTheirsSchema,
+                                  aRemap, nRemap,
+                                  aOursSchema[i].zName);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  for(i=0; i<nTheirsSchema; i++){
+    if( findSchemaEntry(aAncSchema, nAncSchema, aTheirsSchema[i].zName) ) continue;
+    if( findSchemaEntry(aOursSchema, nOursSchema, aTheirsSchema[i].zName) ) continue;
+    rc = appendMergedAuxSchemaRow(db, &root, pMaster->flags, &iNextRowid,
+                                  aAncSchema, nAncSchema,
+                                  aOursSchema, nOursSchema,
+                                  aTheirsSchema, nTheirsSchema,
+                                  aRemap, nRemap,
+                                  aTheirsSchema[i].zName);
     if( rc!=SQLITE_OK ) return rc;
   }
 
@@ -2580,17 +2648,15 @@ int doltliteMergeCatalogs(
                           &aRemap, &nRemap);
   if( rc!=SQLITE_OK ) goto merge_cleanup;
 
-  if( bDisjointSchemaChanges ){
-    rc = rebuildDisjointSchemaRows(db, aMerged, nMerged,
-                                   aTheirsSchema, nTheirsSchema,
-                                   aAncSchema, nAncSchema,
-                                   aOursSchema, nOursSchema,
-                                   aRemap, nRemap);
-    if( rc!=SQLITE_OK ) goto merge_cleanup;
-  }
+  rc = rebuildDisjointSchemaRows(db, aMerged, nMerged,
+                                 aTheirsSchema, nTheirsSchema,
+                                 aAncSchema, nAncSchema,
+                                 aOursSchema, nOursSchema,
+                                 aRemap, nRemap);
+  if( rc!=SQLITE_OK ) goto merge_cleanup;
 
   rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
-                              pMergedHash);
+                              aTheirsSchema, nTheirsSchema, pMergedHash);
   if( pnConflicts ) *pnConflicts = totalConflicts;
 
 

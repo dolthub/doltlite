@@ -8,6 +8,7 @@
 
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
+typedef struct SchemaEntry SchemaEntry;
 
 typedef enum DoltliteVcTxnMode DoltliteVcTxnMode;
 enum DoltliteVcTxnMode {
@@ -85,6 +86,10 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
 void doltliteFreeCatalog(struct TableEntry *a, int n);
 int doltliteSerializeCatalogEntries(sqlite3 *db, struct TableEntry *aTables,
                                     int nTables, u8 **ppOut, int *pnOut);
+int doltliteSerializeCatalogEntriesWithFallbackSchema(
+    sqlite3 *db, struct TableEntry *aTables, int nTables,
+    SchemaEntry *aFallbackSchema, int nFallbackSchema,
+    u8 **ppOut, int *pnOut);
 int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
@@ -166,7 +171,6 @@ void doltliteSetAuthorName(sqlite3 *db, const char *zName);
 const char *doltliteGetAuthorEmail(sqlite3 *db);
 void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
 
-typedef struct SchemaEntry SchemaEntry;
 struct SchemaEntry {
   char *zName;
   char *zTblName;

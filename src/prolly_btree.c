@@ -45,6 +45,24 @@ int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
                               char **pzSql);
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
+struct TableEntry;
+typedef struct SchemaEntry SchemaEntry;
+struct SchemaEntry {
+  char *zName;
+  char *zTblName;
+  char *zSql;
+  char *zType;
+  Pgno iRootpage;
+};
+int doltliteSerializeCatalogEntriesWithFallbackSchema(
+  sqlite3 *db,
+  struct TableEntry *aTables,
+  int nTables,
+  SchemaEntry *aFallbackSchema,
+  int nFallbackSchema,
+  u8 **ppOut,
+  int *pnOut
+);
 
 #ifndef TRANS_NONE
 #define TRANS_NONE  0
@@ -1557,10 +1575,84 @@ static int appendMissingSchemaCatalogRows(
   return SQLITE_OK;
 }
 
+static int appendFallbackSchemaCatalogRows(
+  SchemaCatalogRow **paRows,
+  int *pnRows,
+  struct TableEntry *aTables,
+  int nTables,
+  SchemaEntry *aFallback,
+  int nFallback
+){
+  SchemaCatalogRow *aRows = *paRows;
+  int nRows = *pnRows;
+  int nAlloc = nRows;
+  i64 iNextRowid = 1;
+  int i, j;
+
+  if( !aFallback || nFallback<=0 ) return SQLITE_OK;
+  for(i=0; i<nRows; i++){
+    if( aRows[i].iRowid >= iNextRowid ) iNextRowid = aRows[i].iRowid + 1;
+  }
+
+  for(i=0; i<nTables; i++){
+    SchemaEntry *pSe = 0;
+    SchemaCatalogRow *pRow;
+    if( aTables[i].iTable<=1 || !aTables[i].zName ) continue;
+    if( schemaCatalogHasPgno(aRows, nRows, aTables[i].iTable) ) continue;
+    for(j=0; j<nFallback; j++){
+      if( !aFallback[j].zName || !aFallback[j].zType ) continue;
+      if( strcmp(aFallback[j].zName, aTables[i].zName)!=0 ) continue;
+      pSe = &aFallback[j];
+      break;
+    }
+    if( !pSe ) continue;
+    if( nRows>=nAlloc ){
+      int nNew = nAlloc ? nAlloc*2 : 16;
+      SchemaCatalogRow *aNew = sqlite3_realloc(aRows, nNew*(int)sizeof(SchemaCatalogRow));
+      if( !aNew ){
+        freeSchemaCatalogRows(aRows, nRows);
+        return SQLITE_NOMEM;
+      }
+      aRows = aNew;
+      nAlloc = nNew;
+    }
+    pRow = &aRows[nRows];
+    memset(pRow, 0, sizeof(*pRow));
+    pRow->iRowid = iNextRowid++;
+    pRow->oldPg = aTables[i].iTable;
+    pRow->zType = sqlite3_mprintf("%s", pSe->zType ? pSe->zType : "");
+    pRow->zName = sqlite3_mprintf("%s", pSe->zName ? pSe->zName : "");
+    pRow->zTblName = sqlite3_mprintf("%s", pSe->zTblName ? pSe->zTblName : "");
+    pRow->zSql = pSe->zSql ? sqlite3_mprintf("%s", pSe->zSql) : 0;
+    if( !pRow->zType || !pRow->zName || !pRow->zTblName || (pSe->zSql && !pRow->zSql) ){
+      freeSchemaCatalogRows(aRows, nRows+1);
+      return SQLITE_NOMEM;
+    }
+    nRows++;
+  }
+
+  *paRows = aRows;
+  *pnRows = nRows;
+  return SQLITE_OK;
+}
+
 int doltliteSerializeCatalogEntries(
   sqlite3 *db,
   struct TableEntry *aTables,
   int nTables,
+  u8 **ppOut,
+  int *pnOut
+){
+  return doltliteSerializeCatalogEntriesWithFallbackSchema(
+      db, aTables, nTables, 0, 0, ppOut, pnOut);
+}
+
+int doltliteSerializeCatalogEntriesWithFallbackSchema(
+  sqlite3 *db,
+  struct TableEntry *aTables,
+  int nTables,
+  SchemaEntry *aFallbackSchema,
+  int nFallbackSchema,
   u8 **ppOut,
   int *pnOut
 ){
@@ -1589,6 +1681,10 @@ int doltliteSerializeCatalogEntries(
   filterSchemaCatalogRows(aRows, &nRows, aTables, nTables);
   rc = appendMissingSchemaCatalogRows(db, &aRows, &nRows, aMeta, nMeta,
                                       aTables, nTables);
+  if( rc==SQLITE_OK ){
+    rc = appendFallbackSchemaCatalogRows(&aRows, &nRows, aTables, nTables,
+                                         aFallbackSchema, nFallbackSchema);
+  }
   if( rc!=SQLITE_OK ){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;

@@ -674,6 +674,17 @@ static int doltliteSetDefaultBranchRefs(sqlite3 *db, ChunkStore *cs, void *pArg)
   return chunkStoreSetDefaultBranch(cs, zBranch);
 }
 
+static int doltlitePrimeSchemaCache(sqlite3 *db){
+  sqlite3_stmt *pStmt = 0;
+  int rc = sqlite3_prepare_v2(
+      db, "SELECT name FROM main.sqlite_master LIMIT 1", -1, &pStmt, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){}
+  if( rc==SQLITE_DONE ) rc = SQLITE_OK;
+  sqlite3_finalize(pStmt);
+  return rc;
+}
+
 static void doltliteReportAutocommitConflictRollback(sqlite3_context *ctx){
   sqlite3_result_error(ctx,
     "Merge conflict detected, @autocommit transaction rolled back. "
@@ -2616,6 +2627,9 @@ static void doltliteMergeFunc(
       rc = doltliteSwitchCatalog(db, &mergedCatHash);
     }
     if( rc==SQLITE_OK ){
+      rc = doltlitePrimeSchemaCache(db);
+    }
+    if( rc==SQLITE_OK ){
       doltliteSetSessionStaged(db, &mergedCatHash);
       rc = doltliteUpdateBranchWorkingState(db,
           doltliteGetSessionBranch(db), &mergedCatHash, NULL);
@@ -2926,6 +2940,9 @@ static int applyMergedCatalogAndCommit(
   graphLocked = 1;
 
   rc = doltliteSwitchCatalog(db, &mergedCatHash);
+  if( rc!=SQLITE_OK ) goto apply_rollback;
+
+  rc = doltlitePrimeSchemaCache(db);
   if( rc!=SQLITE_OK ) goto apply_rollback;
 
   rc = doltliteFlushCatalogToHash(db, &liveMergedCatHash);
