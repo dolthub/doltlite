@@ -1,5 +1,5 @@
 {
-  "name": "doltlite",
+  "name": "@dolthub/doltlite",
   "version": "0.0.1",
   "description": "Node native binding for DoltLite — SQLite with Dolt-style version control",
   "main": "lib/index.js",

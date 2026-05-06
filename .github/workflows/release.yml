@@ -200,6 +200,143 @@ jobs:
         name: benchmark
         path: /tmp/bench_file.md
 
+  # ── npm prebuilds (per-platform .node) ────────────────────
+  # Mirrors the matrix in .github/workflows/npm.yml. Kept inline
+  # here so the release flow doesn't depend on cross-workflow
+  # artifact passing — at release time we want everything in one
+  # workflow run for atomicity.
+  npm-prebuild:
+    if: github.event_name != 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+            shell: bash
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            shell: bash
+          - os: macos-latest
+            target: darwin-arm64
+            shell: bash
+          - os: windows-latest
+            target: win32-x64
+            shell: 'msys2 {0}'
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y build-essential zlib1g-dev tcl-dev
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install zlib tcl-tk || true
+
+    - name: Setup MSYS2 (Windows)
+      if: runner.os == 'Windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-zlib
+          make
+          tcl
+          zip
+
+    - name: Build libdoltlite
+      shell: ${{ matrix.shell }}
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite-lib
+
+    - name: Build prebuild
+      shell: ${{ matrix.shell }}
+      env:
+        DOLTLITE_BUILD: ${{ github.workspace }}/build
+      run: |
+        cd npm
+        npm install --ignore-scripts
+        npx prebuildify --napi --strip
+
+    - name: Upload prebuild
+      uses: actions/upload-artifact@v4
+      with:
+        name: npm-prebuild-${{ matrix.target }}
+        path: npm/prebuilds/
+        if-no-files-found: error
+
+  # ── npm publish ───────────────────────────────────────────
+  # Aggregates the prebuilds, sets package.json version from the
+  # tag, then publishes to the public npm registry. Requires an
+  # NPM_TOKEN secret with publish access to the `doltlite` package.
+  npm-publish:
+    if: github.event_name != 'workflow_dispatch'
+    needs: [npm-prebuild]
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        registry-url: 'https://registry.npmjs.org'
+
+    - name: Download all npm prebuilds
+      uses: actions/download-artifact@v4
+      with:
+        path: npm/prebuilds-staging
+        pattern: npm-prebuild-*
+        merge-multiple: false
+
+    - name: Assemble prebuilds tree
+      run: |
+        cd npm
+        mkdir -p prebuilds
+        # Each artifact contains its <target>/ subdir at top level.
+        for d in prebuilds-staging/npm-prebuild-*/*; do
+          if [ -d "$d" ]; then
+            cp -r "$d" prebuilds/
+          fi
+        done
+        echo "Final prebuilds layout:"
+        find prebuilds -type f | sort
+
+    - name: Set package version from git tag
+      run: |
+        cd npm
+        VERSION=${GITHUB_REF_NAME#v}
+        # In-place update of package.json's version field.
+        node -e "
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          pkg.version = '${VERSION}';
+          fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+        "
+        echo "Set version to ${VERSION}"
+        node -p "require('./package.json').version"
+
+    - name: Publish
+      env:
+        NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      run: |
+        cd npm
+        # --access public is required the first time a new scoped or
+        # unscoped public package is pushed to the registry. Subsequent
+        # publishes don't need it but it's harmless.
+        npm publish --access public
+
   # ── Create GitHub release ─────────────────────────────────
   release:
     if: github.event_name != 'workflow_dispatch'

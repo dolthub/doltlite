@@ -4,10 +4,14 @@ Node.js native binding for [DoltLite](https://github.com/dolthub/doltlite) — S
 
 API mirrors a subset of [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3): synchronous, prepared-statement-driven, no callbacks.
 
+## Status
+
+Pre-`1.0`. Released alongside the parent DoltLite repo on tag pushes; each tag triggers prebuilds for all supported platforms and an `npm publish`.
+
 ## Install
 
 ```bash
-npm install doltlite
+npm install @dolthub/doltlite
 ```
 
 Pre-built binaries ship for:
@@ -24,7 +28,7 @@ For other platforms (e.g. `darwin-x64`, `linux-musl`, BSD), the package falls ba
 ## Usage
 
 ```javascript
-const Database = require('doltlite');
+const Database = require('@dolthub/doltlite');
 
 const db = new Database('app.db');
 
