@@ -1517,7 +1517,8 @@ int doltliteSerializeCatalogEntries(
       u8 *pRec;
       ProllyHash h;
       const char *zRecordSql = aRows[i].zSql;
-      if( strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0 ){
+      if( (strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0)
+       && aRows[i].zSql!=0 && aRows[i].zSql[0]!=0 ){
         char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
         if( !zCanon ){
           prollyMutMapFree(&mm);
@@ -3757,7 +3758,8 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
 
       {
         const char *zBr = p->zBranch ? p->zBranch : "main";
-        rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash, NULL,
+        rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
+                                      &p->headCommit,
                                       &p->stagedCatalog, p->isMerging,
                                       &p->mergeCommitHash,
                                       &p->conflictsCatalogHash,

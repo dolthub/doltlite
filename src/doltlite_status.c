@@ -50,7 +50,7 @@ static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **
     return SQLITE_NOTFOUND;
   }
   *pzName = doltliteResolveTableNumber(db, pEntry->iTable);
-  return *pzName ? SQLITE_OK : SQLITE_NOMEM;
+  return *pzName ? SQLITE_OK : SQLITE_NOTFOUND;
 }
 
 static struct TableEntry *findCatalogEntry(

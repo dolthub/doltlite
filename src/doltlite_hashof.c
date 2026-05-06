@@ -146,6 +146,27 @@ static void appendQuotedIdent(sqlite3_str *pStr, const char *zName){
   sqlite3_str_appendchar(pStr, 1, '"');
 }
 
+static int isSimpleSqlIdent(const char *zName){
+  int i;
+  unsigned char c;
+  if( !zName || !zName[0] ) return 0;
+  c = (unsigned char)zName[0];
+  if( !(sqlite3Isalpha(c) || c=='_') ) return 0;
+  for(i=1; zName[i]; i++){
+    c = (unsigned char)zName[i];
+    if( !(sqlite3Isalnum(c) || c=='_') ) return 0;
+  }
+  return 1;
+}
+
+static void appendCanonicalIdent(sqlite3_str *pStr, const char *zName){
+  if( isSimpleSqlIdent(zName) ){
+    sqlite3_str_appendall(pStr, zName);
+  }else{
+    appendQuotedIdent(pStr, zName);
+  }
+}
+
 static const char *skipSchemaIdent(const char *z){
   if( !z ) return z;
   if( *z=='"' || *z=='`' ){
@@ -192,19 +213,19 @@ char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName){
 
   if( zName && ciStartsWith(z, "CREATE TABLE") ){
     sqlite3_str_appendall(pStr, "CREATE TABLE ");
-    appendQuotedIdent(pStr, zName);
+    appendCanonicalIdent(pStr, zName);
     z += 12;
     while( *z && isspace((unsigned char)*z) ) z++;
     z = skipSchemaIdent(z);
   }else if( zName && ciStartsWith(z, "CREATE UNIQUE INDEX") ){
     sqlite3_str_appendall(pStr, "CREATE UNIQUE INDEX ");
-    appendQuotedIdent(pStr, zName);
+    appendCanonicalIdent(pStr, zName);
     z += 19;
     while( *z && isspace((unsigned char)*z) ) z++;
     z = skipSchemaIdent(z);
   }else if( zName && ciStartsWith(z, "CREATE INDEX") ){
     sqlite3_str_appendall(pStr, "CREATE INDEX ");
-    appendQuotedIdent(pStr, zName);
+    appendCanonicalIdent(pStr, zName);
     z += 12;
     while( *z && isspace((unsigned char)*z) ) z++;
     z = skipSchemaIdent(z);

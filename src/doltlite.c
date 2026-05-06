@@ -865,6 +865,7 @@ static int addStageAllTables(
   int nStaged = 0;
   int nNew = 0;
   int k;
+  int useWorkingHash = 1;
   int rc;
 
   rc = addLoadWorkingAndStagedCatalogs(db, pWorkingHash,
@@ -888,6 +889,7 @@ static int addStageAllTables(
       if( ignored ){
         pUse = addFindEntryByName(aStaged, nStaged, zName);
         if( !pUse ) continue;
+        useWorkingHash = 0;
       }
     }
     rc = addAppendTableEntry(context, &aNew, &nNew, pUse);
@@ -910,6 +912,7 @@ static int addStageAllTables(
       }
       if( !ignored ) continue;
     }
+    useWorkingHash = 0;
     rc = addAppendTableEntry(context, &aNew, &nNew, &aStaged[k]);
     if( rc!=SQLITE_OK ){
       addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
@@ -917,7 +920,12 @@ static int addStageAllTables(
     }
   }
 
-  rc = addWriteStagedCatalog(db, cs, aNew, nNew);
+  if( useWorkingHash ){
+    doltliteSetSessionStaged(db, pWorkingHash);
+    rc = SQLITE_OK;
+  }else{
+    rc = addWriteStagedCatalog(db, cs, aNew, nNew);
+  }
   addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
@@ -969,18 +977,34 @@ static int addStageNamedTables(
     rc = doltliteResolveTableName(db, zTable, &iTable);
     if( rc!=SQLITE_OK ){
       int found = 0;
+      Pgno iDroppedTable = 0;
       for(j=0; j<nStaged; j++){
         if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
-          sqlite3_free(aStaged[j].zName);
-          if( j+1 < nStaged ){
-            memmove(&aStaged[j], &aStaged[j+1],
-                    (nStaged-j-1) * (int)sizeof(struct TableEntry));
-          }
-          nStaged--;
+          iDroppedTable = aStaged[j].iTable;
           found = 1;
-          updateMaster = 1;
           break;
         }
+      }
+      if( found ){
+        for(j=0; j<nStaged; ){
+          int removeEntry = 0;
+          if( iDroppedTable!=0 && aStaged[j].iTable==iDroppedTable ){
+            removeEntry = 1;
+          }else if( aStaged[j].zName && strcmp(aStaged[j].zName, zTable)==0 ){
+            removeEntry = 1;
+          }
+          if( removeEntry ){
+            sqlite3_free(aStaged[j].zName);
+            if( j+1 < nStaged ){
+              memmove(&aStaged[j], &aStaged[j+1],
+                      (nStaged-j-1) * (int)sizeof(struct TableEntry));
+            }
+            nStaged--;
+            continue;
+          }
+          j++;
+        }
+        updateMaster = 1;
       }
       if( !found ){
         char *zErr = sqlite3_mprintf("table not found: %s", zTable);

@@ -663,7 +663,7 @@ static int checkoutMutateRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
   if( rc!=SQLITE_OK ) return rc;
 
   if( !bSavepoint || p->bPersistUnderSavepoint ){
-    rc = doltliteSaveWorkingSet(db);
+    rc = doltlitePersistWorkingSetWithHash(db, &p->targetCatHash);
     if( rc!=SQLITE_OK ) return rc;
   }
 
@@ -758,16 +758,27 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zCurrentBranch ) return SQLITE_NOMEM;
 
-  rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zCurrentBranch);
-    return rc;
-  }
-  rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
-  sqlite3_free(oldCatData);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(zCurrentBranch);
-    return rc;
+  if( doltliteHasUncommittedChanges(db) ){
+    rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      return rc;
+    }
+    rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
+    sqlite3_free(oldCatData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      return rc;
+    }
+  }else{
+    rc = doltliteGetPersistedWorkingCatalogHash(db, &m.oldCatHash);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = doltliteGetHeadCatalogHash(db, &m.oldCatHash);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      return rc;
+    }
   }
 
   m.haveOldState = 1;
@@ -1161,20 +1172,33 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       sqlite3_result_error_nomem(ctx);
       return;
     }
-    rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zCurrentBranch);
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
-      return;
-    }
-    rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
-    sqlite3_free(oldCatData);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zCurrentBranch);
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
-      return;
+    if( doltliteHasUncommittedChanges(db) ){
+      rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zCurrentBranch);
+        (void)doltliteVcSealSavepointError(db);
+        sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
+        return;
+      }
+      rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
+      sqlite3_free(oldCatData);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zCurrentBranch);
+        (void)doltliteVcSealSavepointError(db);
+        sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
+        return;
+      }
+    }else{
+      rc = doltliteGetPersistedWorkingCatalogHash(db, &m.oldCatHash);
+      if( rc==SQLITE_NOTFOUND ){
+        rc = doltliteGetHeadCatalogHash(db, &m.oldCatHash);
+      }
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zCurrentBranch);
+        (void)doltliteVcSealSavepointError(db);
+        sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
+        return;
+      }
     }
     m.haveOldState = 1;
   }
