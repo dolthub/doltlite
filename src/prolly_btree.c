@@ -241,15 +241,6 @@ struct Btree {
 
   u8 inTransaction;
   u8 bSchemaChangedTxn;
-  struct RuntimeSchemaOrder {
-    char *zType;
-    char *zName;
-    char *zTblName;
-    i64 iOrder;
-  } *aRuntimeSchemaOrder;
-  int nRuntimeSchemaOrder;
-  int nRuntimeSchemaOrderAlloc;
-  i64 iNextRuntimeSchemaOrder;
 
 
   int nSavepoint;
@@ -916,75 +907,6 @@ static void invalidateSchema(Btree *pBtree){
   }
 }
 
-static void freeRuntimeSchemaOrder(Btree *pBtree){
-  int i;
-  for(i=0; i<pBtree->nRuntimeSchemaOrder; i++){
-    sqlite3_free(pBtree->aRuntimeSchemaOrder[i].zType);
-    sqlite3_free(pBtree->aRuntimeSchemaOrder[i].zName);
-    sqlite3_free(pBtree->aRuntimeSchemaOrder[i].zTblName);
-  }
-  sqlite3_free(pBtree->aRuntimeSchemaOrder);
-  pBtree->aRuntimeSchemaOrder = 0;
-  pBtree->nRuntimeSchemaOrder = 0;
-  pBtree->nRuntimeSchemaOrderAlloc = 0;
-  pBtree->iNextRuntimeSchemaOrder = 1;
-}
-
-static int findRuntimeSchemaOrder(
-  Btree *pBtree,
-  const char *zType,
-  const char *zName,
-  const char *zTblName
-){
-  int i;
-  for(i=0; i<pBtree->nRuntimeSchemaOrder; i++){
-    struct RuntimeSchemaOrder *p = &pBtree->aRuntimeSchemaOrder[i];
-    if( strcmp(p->zType ? p->zType : "", zType ? zType : "")!=0 ) continue;
-    if( strcmp(p->zName ? p->zName : "", zName ? zName : "")!=0 ) continue;
-    if( strcmp(p->zTblName ? p->zTblName : "", zTblName ? zTblName : "")!=0 ) continue;
-    return i;
-  }
-  return -1;
-}
-
-static int appendRuntimeSchemaOrder(
-  Btree *pBtree,
-  const char *zType,
-  const char *zName,
-  const char *zTblName,
-  i64 *piOrder
-){
-  struct RuntimeSchemaOrder *pNew;
-  int i = findRuntimeSchemaOrder(pBtree, zType, zName, zTblName);
-  if( i>=0 ){
-    if( piOrder ) *piOrder = pBtree->aRuntimeSchemaOrder[i].iOrder;
-    return SQLITE_OK;
-  }
-  if( pBtree->nRuntimeSchemaOrder>=pBtree->nRuntimeSchemaOrderAlloc ){
-    int nNew = pBtree->nRuntimeSchemaOrderAlloc ? pBtree->nRuntimeSchemaOrderAlloc * 2 : 16;
-    pNew = sqlite3_realloc(pBtree->aRuntimeSchemaOrder,
-                           nNew * (int)sizeof(*pBtree->aRuntimeSchemaOrder));
-    if( !pNew ) return SQLITE_NOMEM;
-    pBtree->aRuntimeSchemaOrder = pNew;
-    pBtree->nRuntimeSchemaOrderAlloc = nNew;
-  }
-  pNew = &pBtree->aRuntimeSchemaOrder[pBtree->nRuntimeSchemaOrder];
-  memset(pNew, 0, sizeof(*pNew));
-  pNew->zType = sqlite3_mprintf("%s", zType ? zType : "");
-  pNew->zName = sqlite3_mprintf("%s", zName ? zName : "");
-  pNew->zTblName = sqlite3_mprintf("%s", zTblName ? zTblName : "");
-  if( !pNew->zType || !pNew->zName || !pNew->zTblName ){
-    sqlite3_free(pNew->zType);
-    sqlite3_free(pNew->zName);
-    sqlite3_free(pNew->zTblName);
-    return SQLITE_NOMEM;
-  }
-  pNew->iOrder = pBtree->iNextRuntimeSchemaOrder++;
-  if( piOrder ) *piOrder = pNew->iOrder;
-  pBtree->nRuntimeSchemaOrder++;
-  return SQLITE_OK;
-}
-
 static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
   BtCursor *p;
   for(p=pBt->pCursor; p; p=p->pNext){
@@ -1127,7 +1049,6 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
   HashElem *k;
   CatalogEntryMeta *aMeta = 0;
   int nMeta = 0, nAlloc = 0, rc = SQLITE_OK, i;
-  Pgno iNext = 2;
   if( !pBtree || !(db = pBtree->db) || db->nDb<=0 || !(pSchema = db->aDb[0].pSchema) ){
     *ppMeta = 0;
     *pnMeta = 0;
@@ -1190,15 +1111,6 @@ struct SchemaCatalogRow {
   char *zTblName;
   char *zSql;
 };
-
-static int syncRuntimeSchemaOrder(Btree *pBtree, SchemaCatalogRow *aRows, int nRows){
-  int i, rc;
-  for(i=0; i<nRows; i++){
-    rc = appendRuntimeSchemaOrder(pBtree, aRows[i].zType, aRows[i].zName, aRows[i].zTblName, 0);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  return SQLITE_OK;
-}
 
 static int schemaCatalogHasPgno(SchemaCatalogRow *aRows, int nRows, Pgno iTable){
   int i;
@@ -1807,12 +1719,6 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
   }
-  rc = syncRuntimeSchemaOrder(pBtree, aRows, nRows);
-  if( rc!=SQLITE_OK ){
-    freeSchemaCatalogRows(aRows, nRows);
-    freeCatalogEntryMeta(aMeta, nMeta);
-    return rc;
-  }
   if( nRows<=0 ){
     freeSchemaCatalogRows(aRows, nRows);
     freeCatalogEntryMeta(aMeta, nMeta);
@@ -1856,7 +1762,6 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
   }
   for(i=0; i<nRows; i++){
     int nRec = 0;
-    i64 iOrder = 0;
     u8 *pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
                                         aRows[i].zTblName, aRows[i].newPg,
                                         aRows[i].zSql, &nRec);
@@ -1866,11 +1771,7 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
       freeCatalogEntryMeta(aMeta, nMeta);
       return SQLITE_NOMEM;
     }
-    rc = appendRuntimeSchemaOrder(pBtree, aRows[i].zType, aRows[i].zName,
-                                  aRows[i].zTblName, &iOrder);
-    if( rc==SQLITE_OK ){
-      rc = prollyMutMapInsert(&mm, 0, 0, iOrder, pRec, nRec);
-    }
+    rc = prollyMutMapInsert(&mm, 0, 0, aRows[i].iRowid, pRec, nRec);
     sqlite3_free(pRec);
     if( rc!=SQLITE_OK ){
       prollyMutMapFree(&mm);
@@ -3040,9 +2941,6 @@ int sqlite3BtreeOpen(
   p->aMeta[BTREE_USER_VERSION] = 0;
   p->aMeta[BTREE_INCR_VACUUM] = 0;
   p->aMeta[BTREE_APPLICATION_ID] = 0;
-  p->iNextRuntimeSchemaOrder = 1;
-
-
 
   {
     ProllyHash catHash;
@@ -3191,7 +3089,6 @@ static int prollyBtreeClose(Btree *p){
     sqlite3_free(p->pSchema);
     p->pSchema = 0;
   }
-  freeRuntimeSchemaOrder(p);
   btreeFreeCatalogTables(p);
   if( p->aSavepointTables ){
     int i;
@@ -3906,11 +3803,10 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           struct TableEntry *pMaster = findTable(p, 1);
           if( pMaster ) pMaster->root = runtimeMasterRoot;
         }
+        invalidateSchema(p);
         if( p->db ){
           sqlite3ExpirePreparedStatements(p->db, 0);
           sqlite3ResetAllSchemasOfConnection(p->db);
-        }else{
-          invalidateSchema(p);
         }
       }
       p->inTrans = TRANS_NONE;
