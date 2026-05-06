@@ -285,11 +285,17 @@ struct Btree {
     int nPendingSnapshotAlloc;
     int nTables;
     Pgno iNextTable;
+    Pgno iLargestRootPage;
     ProllyHash stagedCatalog;
     u8 isMerging;
     ProllyHash mergeCommitHash;
     ProllyHash conflictsCatalogHash;
     ProllyHash constraintViolationsHash;
+    u8 isRebasing;
+    ProllyHash preRebaseWorkingCat;
+    ProllyHash rebaseOntoCommit;
+    char *zRebaseOrigBranch;
+    char *zRebaseReturnBranch;
   } *aSavepointTables;
 
   ProllyHash committedCatalogHash;
@@ -2602,6 +2608,10 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
 }
 
 static void freeSavepointTables(struct SavepointTableState *pState){
+  sqlite3_free(pState->zRebaseOrigBranch);
+  pState->zRebaseOrigBranch = 0;
+  sqlite3_free(pState->zRebaseReturnBranch);
+  pState->zRebaseReturnBranch = 0;
   if( pState->aCatalogSnapshot ){
     int i;
     for(i=0; i<pState->nTables; i++){
@@ -2634,6 +2644,9 @@ static void freeSavepointTables(struct SavepointTableState *pState){
   memset(&pState->mergeCommitHash, 0, sizeof(pState->mergeCommitHash));
   memset(&pState->conflictsCatalogHash, 0, sizeof(pState->conflictsCatalogHash));
   memset(&pState->constraintViolationsHash, 0, sizeof(pState->constraintViolationsHash));
+  pState->isRebasing = 0;
+  memset(&pState->preRebaseWorkingCat, 0, sizeof(pState->preRebaseWorkingCat));
+  memset(&pState->rebaseOntoCommit, 0, sizeof(pState->rebaseOntoCommit));
 }
 
 static int captureSavepointCatalogSnapshot(
@@ -2680,11 +2693,21 @@ static void captureSavepointSessionState(
   struct SavepointTableState *pState
 ){
   pState->iNextTable = pBtree->cat.iNextTable;
+  pState->iLargestRootPage = pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE];
   pState->stagedCatalog = pBtree->stagedCatalog;
   pState->isMerging = pBtree->isMerging;
   pState->mergeCommitHash = pBtree->mergeCommitHash;
   pState->conflictsCatalogHash = pBtree->conflictsCatalogHash;
   pState->constraintViolationsHash = pBtree->constraintViolationsHash;
+  pState->isRebasing = pBtree->isRebasing;
+  pState->preRebaseWorkingCat = pBtree->preRebaseWorkingCat;
+  pState->rebaseOntoCommit = pBtree->rebaseOntoCommit;
+  sqlite3_free(pState->zRebaseOrigBranch);
+  pState->zRebaseOrigBranch = pBtree->zRebaseOrigBranch
+      ? sqlite3_mprintf("%s", pBtree->zRebaseOrigBranch) : 0;
+  sqlite3_free(pState->zRebaseReturnBranch);
+  pState->zRebaseReturnBranch = pBtree->zRebaseReturnBranch
+      ? sqlite3_mprintf("%s", pBtree->zRebaseReturnBranch) : 0;
 }
 
 static void restoreSavepointSessionState(
@@ -2696,6 +2719,16 @@ static void restoreSavepointSessionState(
   pBtree->mergeCommitHash = pState->mergeCommitHash;
   pBtree->conflictsCatalogHash = pState->conflictsCatalogHash;
   pBtree->constraintViolationsHash = pState->constraintViolationsHash;
+  pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = pState->iLargestRootPage;
+  pBtree->isRebasing = pState->isRebasing;
+  pBtree->preRebaseWorkingCat = pState->preRebaseWorkingCat;
+  pBtree->rebaseOntoCommit = pState->rebaseOntoCommit;
+  sqlite3_free(pBtree->zRebaseOrigBranch);
+  pBtree->zRebaseOrigBranch = pState->zRebaseOrigBranch
+      ? sqlite3_mprintf("%s", pState->zRebaseOrigBranch) : 0;
+  sqlite3_free(pBtree->zRebaseReturnBranch);
+  pBtree->zRebaseReturnBranch = pState->zRebaseReturnBranch
+      ? sqlite3_mprintf("%s", pState->zRebaseReturnBranch) : 0;
 }
 
 static int captureSavepointTables(
@@ -3108,6 +3141,12 @@ static int pushSavepoint(Btree *pBtree, int bStatement){
   pState->nPendingSnapshot = 0;
   pState->nPendingSnapshotAlloc = 0;
   pState->nTables = 0;
+  pState->iLargestRootPage = 0;
+  pState->isRebasing = 0;
+  memset(&pState->preRebaseWorkingCat, 0, sizeof(pState->preRebaseWorkingCat));
+  memset(&pState->rebaseOntoCommit, 0, sizeof(pState->rebaseOntoCommit));
+  pState->zRebaseOrigBranch = 0;
+  pState->zRebaseReturnBranch = 0;
   captureSavepointSessionState(pBtree, pState);
   {
     int rc = captureSavepointTables(pBtree, pState, bStatement);

@@ -595,11 +595,16 @@ struct CheckoutMutationCtx {
   ProllyHash savedSessionStaged;
   ProllyHash savedMergeCommit;
   ProllyHash savedConflictsCatalog;
+  ProllyHash savedPreRebaseCat;
+  ProllyHash savedRebaseOnto;
   ProllyHash oldCatHash;
   ProllyHash oldCommitHash;
   ProllyHash targetCommit;
   ProllyHash targetCatHash;
   u8 savedIsMerging;
+  u8 savedIsRebasing;
+  const char *zSavedRebaseOrigBranch;
+  const char *zSavedRebaseReturnBranch;
   int haveOldState;
   int bPersistUnderSavepoint;
 };
@@ -611,6 +616,11 @@ static void checkoutRestoreSession(sqlite3 *db, CheckoutMutationCtx *p){
   doltliteSetSessionMergeState(db, p->savedIsMerging,
                                &p->savedMergeCommit,
                                &p->savedConflictsCatalog);
+  doltliteSetSessionRebaseState(db, p->savedIsRebasing,
+                                &p->savedPreRebaseCat,
+                                &p->savedRebaseOnto,
+                                p->zSavedRebaseOrigBranch,
+                                p->zSavedRebaseReturnBranch);
   if( p->haveOldState ){
     doltliteSwitchCatalog(db, &p->oldCatHash);
   }
@@ -693,12 +703,17 @@ static void doltConnectBranchFunc(
 ){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
+  CheckoutMutationCtx m;
   const char *zBranch;
+  char *zCurrentBranch = 0;
   ProllyHash targetCommit;
   ProllyHash targetCatHash;
+  u8 *oldCatData = 0;
+  int nOldCat = 0;
   int rc;
 
   (void)argc;
+  memset(&m, 0, sizeof(m));
   if( !cs ){
     sqlite3_result_error(ctx, "no database open", -1);
     return;
@@ -715,8 +730,52 @@ static void doltConnectBranchFunc(
     return;
   }
 
+  zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
+  if( !zCurrentBranch ){
+    sqlite3_result_error_code(ctx, SQLITE_NOMEM);
+    return;
+  }
+  m.zCurrentBranch = zCurrentBranch;
+  m.haveOldState = 1;
+  doltliteGetSessionHead(db, &m.savedSessionHead);
+  doltliteGetSessionStaged(db, &m.savedSessionStaged);
+  doltliteGetSessionMergeState(db, &m.savedIsMerging,
+                               &m.savedMergeCommit,
+                               &m.savedConflictsCatalog);
+  doltliteGetSessionRebaseState(db, &m.savedIsRebasing,
+                                &m.savedPreRebaseCat,
+                                &m.savedRebaseOnto,
+                                &m.zSavedRebaseOrigBranch,
+                                &m.zSavedRebaseReturnBranch);
+  if( doltliteHasUncommittedChanges(db) ){
+    rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
+    sqlite3_free(oldCatData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+  }else{
+    rc = doltliteGetPersistedWorkingCatalogHash(db, &m.oldCatHash);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = doltliteGetHeadCatalogHash(db, &m.oldCatHash);
+    }
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zCurrentBranch);
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+  }
+
   rc = checkoutLoadAndApply(db, cs, zBranch, &targetCommit, &targetCatHash);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zCurrentBranch);
     sqlite3_result_error_code(ctx, rc);
     return;
   }
@@ -732,14 +791,19 @@ static void doltConnectBranchFunc(
     }
   }
   if( rc!=SQLITE_OK ){
+    checkoutRestoreSession(db, &m);
+    sqlite3_free(zCurrentBranch);
     sqlite3_result_error_code(ctx, rc);
     return;
   }
   rc = refreshBranchScopedTables(db);
   if( rc!=SQLITE_OK ){
+    checkoutRestoreSession(db, &m);
+    sqlite3_free(zCurrentBranch);
     sqlite3_result_error_code(ctx, rc);
     return;
   }
+  sqlite3_free(zCurrentBranch);
   sqlite3_result_int(ctx, 0);
 }
 
@@ -790,6 +854,11 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   doltliteGetSessionMergeState(db, &m.savedIsMerging,
                                &m.savedMergeCommit,
                                &m.savedConflictsCatalog);
+  doltliteGetSessionRebaseState(db, &m.savedIsRebasing,
+                                &m.savedPreRebaseCat,
+                                &m.savedRebaseOnto,
+                                &m.zSavedRebaseOrigBranch,
+                                &m.zSavedRebaseReturnBranch);
 
   rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
   if( rc!=SQLITE_OK ){
@@ -1207,6 +1276,11 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   doltliteGetSessionMergeState(db, &m.savedIsMerging,
                                &m.savedMergeCommit,
                                &m.savedConflictsCatalog);
+  doltliteGetSessionRebaseState(db, &m.savedIsRebasing,
+                                &m.savedPreRebaseCat,
+                                &m.savedRebaseOnto,
+                                &m.zSavedRebaseOrigBranch,
+                                &m.zSavedRebaseReturnBranch);
 
   m.zTargetBranch = zBranch;
   m.zCurrentBranch = zCurrentBranch;
