@@ -19,9 +19,10 @@ Pre-built binaries ship for:
 - `linux-x64`
 - `linux-arm64`
 - `darwin-arm64`  (Apple Silicon)
-- `win32-x64`     (built with MSYS2/MinGW; loads in stock Node for Windows)
 
 If you're on one of those, no toolchain is needed.
+
+**Windows is not supported in 0.x.** The DoltLite build is unix-y (`autosetup` + `lemon` + `tcl`) and requires MSYS2/MinGW to compile, but `node-gyp` on Windows defaults to MSVC and can't link MinGW-built archives. WSL2 works as a workaround. Native Windows support is on the roadmap (likely via cmake-js once the binding stabilizes).
 
 For other platforms (e.g. `darwin-x64`, `linux-musl`, BSD), the package falls back to building from source via `node-gyp`. That requires a checkout of the DoltLite source tree at `../build` (or path set via `DOLTLITE_BUILD`), with `libdoltlite.a` already built — `make doltlite-lib` from a configured doltlite build dir.
 

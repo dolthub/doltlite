@@ -31,8 +31,14 @@ jobs:
             target: linux-arm64
           - os: macos-latest
             target: darwin-arm64
-          - os: windows-latest
-            target: win32-x64
+          # win32-x64 is deferred. The doltlite build is unix-y
+          # (autosetup, lemon, tcl) and needs MSYS2/MinGW to compile;
+          # node-gyp on Windows defaults to MSVC and can't link a
+          # MinGW-built libdoltlite.a (different archive format and
+          # C ABI). Supporting Windows requires either porting the
+          # doltlite build to MSVC or moving the binding to cmake-js
+          # — both out of scope for the initial publish. WSL2 works
+          # in the meantime.
 
     name: prebuild ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
@@ -52,46 +58,14 @@ jobs:
       if: runner.os == 'macOS'
       run: brew install zlib tcl-tk || true
 
-    # Windows: MSYS2/MinGW64 builds libdoltlite the same way release.yml
-    # does. The resulting libdoltlite.a is a MinGW64 archive and the
-    # binding is built with the same MinGW64 gcc so symbols line up.
-    # The .node file is a Windows DLL with N-API entry points and
-    # loads in standard MSVC-built Node on Windows.
-    - name: Setup MSYS2 (Windows)
-      if: runner.os == 'Windows'
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        # Inherit Windows PATH so the MSYS2 shell can find `npm` (installed
-        # by actions/setup-node into the runner's tool cache, not into
-        # MSYS2's own PATH).
-        path-type: inherit
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-zlib
-          make
-          tcl
-          zip
-
-    - name: Build libdoltlite (Unix)
-      if: runner.os != 'Windows'
+    - name: Build libdoltlite
       shell: bash
       run: |
         mkdir -p build && cd build
         ../configure
         make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite-lib
 
-    - name: Build libdoltlite (Windows MSYS2)
-      if: runner.os == 'Windows'
-      shell: 'msys2 {0}'
-      run: |
-        mkdir -p build && cd build
-        ../configure
-        make -j$(nproc) doltlite-lib
-
-    - name: Build prebuild (Unix)
-      if: runner.os != 'Windows'
+    - name: Build prebuild
       shell: bash
       env:
         DOLTLITE_BUILD: ${{ github.workspace }}/build
@@ -101,30 +75,8 @@ jobs:
         npx prebuildify --napi --strip
         ls -la prebuilds/
 
-    - name: Build prebuild (Windows MSYS2)
-      if: runner.os == 'Windows'
-      shell: 'msys2 {0}'
-      env:
-        DOLTLITE_BUILD: ${{ github.workspace }}/build
-      run: |
-        cd npm
-        npm install --ignore-scripts
-        npx prebuildify --napi --strip
-        ls -la prebuilds/
-
-    - name: Run smoke test (Unix)
-      if: runner.os != 'Windows'
+    - name: Run smoke test
       shell: bash
-      env:
-        DOLTLITE_BUILD: ${{ github.workspace }}/build
-      run: |
-        cd npm
-        rm -rf build/Release || true
-        node test/basic.js
-
-    - name: Run smoke test (Windows MSYS2)
-      if: runner.os == 'Windows'
-      shell: 'msys2 {0}'
       env:
         DOLTLITE_BUILD: ${{ github.workspace }}/build
       run: |

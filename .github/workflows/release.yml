@@ -217,8 +217,7 @@ jobs:
             target: linux-arm64
           - os: macos-latest
             target: darwin-arm64
-          - os: windows-latest
-            target: win32-x64
+          # win32-x64 deferred — see comment in npm.yml.
 
     runs-on: ${{ matrix.os }}
 
@@ -237,51 +236,15 @@ jobs:
       if: runner.os == 'macOS'
       run: brew install zlib tcl-tk || true
 
-    - name: Setup MSYS2 (Windows)
-      if: runner.os == 'Windows'
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        # Inherit Windows PATH so the MSYS2 shell can find `npm`
-        # installed by actions/setup-node.
-        path-type: inherit
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-zlib
-          make
-          tcl
-          zip
-
-    - name: Build libdoltlite (Unix)
-      if: runner.os != 'Windows'
+    - name: Build libdoltlite
       shell: bash
       run: |
         mkdir -p build && cd build
         ../configure
         make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite-lib
 
-    - name: Build libdoltlite (Windows MSYS2)
-      if: runner.os == 'Windows'
-      shell: 'msys2 {0}'
-      run: |
-        mkdir -p build && cd build
-        ../configure
-        make -j$(nproc) doltlite-lib
-
-    - name: Build prebuild (Unix)
-      if: runner.os != 'Windows'
+    - name: Build prebuild
       shell: bash
-      env:
-        DOLTLITE_BUILD: ${{ github.workspace }}/build
-      run: |
-        cd npm
-        npm install --ignore-scripts
-        npx prebuildify --napi --strip
-
-    - name: Build prebuild (Windows MSYS2)
-      if: runner.os == 'Windows'
-      shell: 'msys2 {0}'
       env:
         DOLTLITE_BUILD: ${{ github.workspace }}/build
       run: |
