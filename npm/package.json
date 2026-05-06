@@ -5,15 +5,19 @@
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
   "scripts": {
-    "install": "node-gyp rebuild",
+    "install": "node-gyp-build",
+    "rebuild": "node-gyp rebuild",
+    "prebuild": "prebuildify --napi --strip",
     "test": "node test/basic.js"
   },
   "gypfile": true,
   "dependencies": {
-    "node-addon-api": "^7.1.0"
+    "node-addon-api": "^7.1.0",
+    "node-gyp-build": "^4.8.1"
   },
   "devDependencies": {
-    "node-gyp": "^10.0.0"
+    "node-gyp": "^10.0.0",
+    "prebuildify": "^6.0.1"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -37,9 +41,7 @@
     "binding.gyp",
     "src/",
     "lib/",
-    "vendor/sqlite3.c",
-    "vendor/sqlite3.h",
-    "vendor/sqlite3ext.h",
+    "prebuilds/",
     "README.md"
   ]
 }

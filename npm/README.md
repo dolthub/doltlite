@@ -10,7 +10,16 @@ API mirrors a subset of [`better-sqlite3`](https://github.com/WiseLibs/better-sq
 npm install doltlite
 ```
 
-The native binding is built from the vendored DoltLite amalgamation at install time, so you'll need a working C/C++ toolchain (`gcc`/`clang` on Linux/macOS, MSVC or MinGW on Windows). Pre-built binaries will land in a future release.
+Pre-built binaries ship for:
+
+- `linux-x64`
+- `linux-arm64`
+- `darwin-arm64`  (Apple Silicon)
+- `win32-x64`     (built with MSYS2/MinGW; loads in stock Node for Windows)
+
+If you're on one of those, no toolchain is needed.
+
+For other platforms (e.g. `darwin-x64`, `linux-musl`, BSD), the package falls back to building from source via `node-gyp`. That requires a checkout of the DoltLite source tree at `../build` (or path set via `DOLTLITE_BUILD`), with `libdoltlite.a` already built — `make doltlite-lib` from a configured doltlite build dir.
 
 ## Usage
 
