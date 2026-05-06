@@ -153,7 +153,7 @@ SELECT dolt_checkout('feat');
 INSERT INTO t VALUES(2,'feat_val');
 SELECT dolt_commit('-A','-m','feat add');
 SELECT dolt_checkout('main');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Should show the cherry-picked row as added
 run_test_match "cp_count" "SELECT count(*) FROM dolt_diff_t;" "^[2-9]" "$DB"

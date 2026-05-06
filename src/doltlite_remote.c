@@ -113,6 +113,37 @@ static int remoteCollectRootsFromRefsBlob(
   return SQLITE_OK;
 }
 
+static int remoteLoadCommitCatalogHash(
+  ChunkStore *cs,
+  const ProllyHash *pCommitHash,
+  ProllyHash *pCatalogHash
+){
+  u8 *pData = 0;
+  int nData = 0;
+  DoltliteCommit c;
+  int rc;
+
+  if( pCatalogHash ) memset(pCatalogHash, 0, sizeof(*pCatalogHash));
+  if( !cs || !pCommitHash || prollyHashIsEmpty(pCommitHash) || !pCatalogHash ){
+    return SQLITE_ERROR;
+  }
+
+  rc = chunkStoreGet(cs, pCommitHash, &pData, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+
+  memset(&c, 0, sizeof(c));
+  rc = doltliteCommitDeserialize(pData, nData, &c);
+  sqlite3_free(pData);
+  if( rc!=SQLITE_OK ){
+    doltliteCommitClear(&c);
+    return rc;
+  }
+
+  memcpy(pCatalogHash, &c.catalogHash, sizeof(*pCatalogHash));
+  doltliteCommitClear(&c);
+  return SQLITE_OK;
+}
+
 typedef struct SyncEnqCtx SyncEnqCtx;
 struct SyncEnqCtx {
   SyncQueue *q;
@@ -510,6 +541,7 @@ int doltlitePush(
   int bForce
 ){
   ProllyHash localCommit;
+  ProllyHash localCatalog;
   ProllyHash remoteCommit;
   int rc;
   int i;
@@ -519,6 +551,9 @@ int doltlitePush(
   if( rc!=SQLITE_OK ){
     return SQLITE_ERROR;
   }
+
+  rc = remoteLoadCommitCatalogHash(pLocal, &localCommit, &localCatalog);
+  if( rc!=SQLITE_OK ) return rc;
 
 
   if( !bForce ){
@@ -567,6 +602,8 @@ int doltlitePush(
     {
       ChunkStore tmpCs;
       u8 *newRefs = 0; int nNewRefs = 0;
+      u8 *wsData = 0; int nWsData = 0;
+      ProllyHash wsHash;
       memset(&tmpCs, 0, sizeof(tmpCs));
       if( refsData2 && nRefsData2 > 0 ){
         rc = chunkStoreLoadRefsFromBlob(&tmpCs, refsData2, nRefsData2);
@@ -585,6 +622,29 @@ int doltlitePush(
       if( rc==SQLITE_NOTFOUND ){
         rc = chunkStoreAddBranch(&tmpCs, zBranch, &localCommit);
       }
+      if( rc!=SQLITE_OK ){
+        chunkStoreClose(&tmpCs);
+        return rc;
+      }
+
+      rc = chunkStoreWriteBranchWorkingCatalog(
+        &tmpCs, zBranch, &localCatalog, &localCommit);
+      if( rc!=SQLITE_OK ){
+        chunkStoreClose(&tmpCs);
+        return rc;
+      }
+      rc = chunkStoreGetBranchWorkingSet(&tmpCs, zBranch, &wsHash);
+      if( rc!=SQLITE_OK ){
+        chunkStoreClose(&tmpCs);
+        return rc;
+      }
+      rc = chunkStoreGet(&tmpCs, &wsHash, &wsData, &nWsData);
+      if( rc!=SQLITE_OK ){
+        chunkStoreClose(&tmpCs);
+        return rc;
+      }
+      rc = pRemote->xPutChunk(pRemote, &wsHash, wsData, nWsData);
+      sqlite3_free(wsData);
       if( rc!=SQLITE_OK ){
         chunkStoreClose(&tmpCs);
         return rc;

@@ -203,7 +203,7 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Cherry-pick the alter commit
 run_test_match "cp_alter_hash" \
-  "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" \
+  "SELECT dolt_cherry_pick('feat');" \
   "^[0-9a-f]{40}$" "$DB"
 
 # Column should exist on main now

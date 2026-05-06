@@ -50,7 +50,7 @@ static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **
     return SQLITE_NOTFOUND;
   }
   *pzName = doltliteResolveTableNumber(db, pEntry->iTable);
-  return *pzName ? SQLITE_OK : SQLITE_NOMEM;
+  return *pzName ? SQLITE_OK : SQLITE_NOTFOUND;
 }
 
 static struct TableEntry *findCatalogEntry(
@@ -207,6 +207,8 @@ static int isRenamePair(
   if( pA->iTable != pB->iTable ) return 0;
   if( !pA->zName || !pB->zName ) return 0;
   if( strcmp(pA->zName, pB->zName)==0 ) return 0;
+  if( doltliteFindTableByName(aFrom, nFrom, pB->zName)!=0 ) return 0;
+  if( doltliteFindTableByName(aTo, nTo, pA->zName)!=0 ) return 0;
   if( prollyHashCompare(&pA->root, &pB->root)==0 ){
     bMatch = 1;
     goto rename_done;

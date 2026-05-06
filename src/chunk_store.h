@@ -51,11 +51,17 @@
 **   v4 layout (current write format):
 **     v3 fields, then:
 **     [constraint_violations:20]
+**
+**   v5 layout:
+**     v4 fields, then:
+**     [rebase_return_branch: WS_REBASE_BRANCH_LEN bytes, null-padded]
+**     [constraint_violations:20]
 */
 #define WS_FORMAT_VERSION_V2 2
 #define WS_FORMAT_VERSION_V3 3
 #define WS_FORMAT_VERSION_V4 4
-#define WS_FORMAT_VERSION    WS_FORMAT_VERSION_V4
+#define WS_FORMAT_VERSION_V5 5
+#define WS_FORMAT_VERSION    WS_FORMAT_VERSION_V5
 #define WS_VERSION_SIZE     1
 #define WS_WORKING_CAT_OFF  WS_VERSION_SIZE
 #define WS_WORKING_COMMIT_OFF (WS_WORKING_CAT_OFF + PROLLY_HASH_SIZE)
@@ -70,32 +76,54 @@
 #define WS_REBASE_BRANCH_OFF (WS_REBASE_ONTO_OFF + PROLLY_HASH_SIZE)
 #define WS_REBASE_BRANCH_LEN 64
 #define WS_TOTAL_SIZE_V3    (WS_REBASE_BRANCH_OFF + WS_REBASE_BRANCH_LEN)
-#define WS_CONSTRAINT_VIOLATIONS_OFF WS_TOTAL_SIZE_V3
+#define WS_CONSTRAINT_VIOLATIONS_OFF_V4 WS_TOTAL_SIZE_V3
+#define WS_TOTAL_SIZE_V4    (WS_CONSTRAINT_VIOLATIONS_OFF_V4 + PROLLY_HASH_SIZE)
+#define WS_REBASE_RETURN_BRANCH_OFF WS_TOTAL_SIZE_V4
+#define WS_CONSTRAINT_VIOLATIONS_OFF (WS_REBASE_RETURN_BRANCH_OFF + WS_REBASE_BRANCH_LEN)
 #define WS_TOTAL_SIZE       (WS_CONSTRAINT_VIOLATIONS_OFF + PROLLY_HASH_SIZE)
 
-/* Catalog (table registry) format:
-**   magic(1) + nTables(4 LE) + entries (sorted by name)
+/* Catalog (table registry) formats:
+** V3:
+**   magic(1) + nTables(4 LE) + entries (sorted by table name)
 ** Per entry: iTable(4 LE) + flags(1) + root(20) + schema(20)
 **          + nameLen(2 LE) + name
-** Entries are sorted by name for deterministic content hashing. */
+**
+** V4:
+**   magic(1) + nTables(4 LE) + entries (sorted by logical object key)
+** Per entry: iTable(4 LE) + flags(1) + root(20) + schema(20)
+**          + typeLen(2 LE) + nameLen(2 LE) + tblNameLen(2 LE)
+**          + type + name + tblName
+**
+** V4 keeps iTable for runtime plumbing but makes persistent catalog
+** identity depend on stable schema object metadata instead of creation
+** order or "table names only". */
 #define CATALOG_FORMAT_V3       0x44
+#define CATALOG_FORMAT_V4       0x45
 #define CAT_HEADER_SIZE_V3      5
 #define CAT_ENTRY_ITABLE_SIZE   4
 #define CAT_ENTRY_FLAGS_SIZE    1
-#define CAT_ENTRY_FIXED_SIZE    (CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2)
+#define CAT_ENTRY_FIXED_SIZE_V3 (CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 2)
+#define CAT_ENTRY_FIXED_SIZE_V4 (CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 6)
 
-static SQLITE_INLINE int catalogParseHeader(
-  const u8 *data, int nData, int *pnTables, const u8 **ppEntries
+static SQLITE_INLINE int catalogParseHeaderEx(
+  const u8 *data, int nData, int *pVersion, int *pnTables, const u8 **ppEntries
 ){
   const u8 *q;
   if( nData < CAT_HEADER_SIZE_V3 ) return 0;
-  if( data[0] != CATALOG_FORMAT_V3 ){
+  if( data[0] != CATALOG_FORMAT_V3 && data[0] != CATALOG_FORMAT_V4 ){
     return 0;
   }
+  if( pVersion ) *pVersion = data[0];
   q = data + CAT_HEADER_SIZE_V3 - 4;
   *pnTables = (int)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
   *ppEntries = data + CAT_HEADER_SIZE_V3;
   return 1;
+}
+
+static SQLITE_INLINE int catalogParseHeader(
+  const u8 *data, int nData, int *pnTables, const u8 **ppEntries
+){
+  return catalogParseHeaderEx(data, nData, 0, pnTables, ppEntries);
 }
 
 typedef struct ChunkStore ChunkStore;

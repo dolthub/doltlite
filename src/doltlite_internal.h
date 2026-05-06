@@ -8,6 +8,7 @@
 
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
+typedef struct SchemaEntry SchemaEntry;
 
 typedef enum DoltliteVcTxnMode DoltliteVcTxnMode;
 enum DoltliteVcTxnMode {
@@ -85,6 +86,10 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
 void doltliteFreeCatalog(struct TableEntry *a, int n);
 int doltliteSerializeCatalogEntries(sqlite3 *db, struct TableEntry *aTables,
                                     int nTables, u8 **ppOut, int *pnOut);
+int doltliteSerializeCatalogEntriesWithFallbackSchema(
+    sqlite3 *db, struct TableEntry *aTables, int nTables,
+    SchemaEntry *aFallbackSchema, int nFallbackSchema,
+    u8 **ppOut, int *pnOut);
 int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
@@ -113,6 +118,9 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
 int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
                                      const ProllyHash *pCatHash,
                                      const ProllyHash *pCommitHash);
+int doltliteWriteBranchCleanWorkingState(sqlite3 *db, const char *zBranch,
+                                         const ProllyHash *pCatHash,
+                                         const ProllyHash *pCommitHash);
 int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr);
 
 const char *doltliteGetSessionBranch(sqlite3 *db);
@@ -131,11 +139,13 @@ void doltliteClearSessionMergeState(sqlite3 *db);
 void doltliteGetSessionRebaseState(sqlite3 *db, u8 *pIsRebasing,
                                    ProllyHash *pPreRebaseCat,
                                    ProllyHash *pRebaseOnto,
-                                   const char **pzOrigBranch);
+                                   const char **pzOrigBranch,
+                                   const char **pzReturnBranch);
 void doltliteSetSessionRebaseState(sqlite3 *db, u8 isRebasing,
                                    const ProllyHash *pPreRebaseCat,
                                    const ProllyHash *pRebaseOnto,
-                                   const char *zOrigBranch);
+                                   const char *zOrigBranch,
+                                   const char *zReturnBranch);
 void doltliteClearSessionRebaseState(sqlite3 *db);
 void doltliteGetSessionConflictsCatalog(sqlite3 *db, ProllyHash *pHash);
 void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
@@ -146,7 +156,10 @@ int doltliteGetSessionTableRoot(sqlite3 *db, Pgno iTable,
                                  ProllyHash *pRoot, u8 *pFlags);
 int doltliteSaveWorkingSet(sqlite3 *db);
 int doltlitePersistWorkingSet(sqlite3 *db);
+int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
+int doltlitePersistWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash);
 int doltliteLoadWorkingSet(sqlite3 *db, const char *zBranch);
+int doltliteGetPersistedWorkingCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch);
 DoltliteVcTxnMode doltliteVcTxnMode(sqlite3 *db);
 int doltliteVcSealActiveSavepoints(sqlite3 *db);
@@ -161,7 +174,6 @@ void doltliteSetAuthorName(sqlite3 *db, const char *zName);
 const char *doltliteGetAuthorEmail(sqlite3 *db);
 void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
 
-typedef struct SchemaEntry SchemaEntry;
 struct SchemaEntry {
   char *zName;
   char *zTblName;
@@ -175,6 +187,10 @@ int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
                           SchemaEntry **ppEntries, int *pnEntries);
 SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName);
 void freeSchemaEntries(SchemaEntry *a, int n);
+char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
+int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
+                              const char *zName, const char *zTblName,
+                              char **pzSql);
 
 typedef struct SchemaMergeAction SchemaMergeAction;
 struct SchemaMergeAction {
@@ -186,10 +202,11 @@ struct SchemaMergeAction {
 void freeSchemaMergeActions(SchemaMergeAction *a, int n);
 
 int doltliteMergeCatalogs(sqlite3 *db,
-  const ProllyHash *ancestor, const ProllyHash *ours,
-  const ProllyHash *theirs, ProllyHash *pMergedHash,
-  int *pnConflicts, char **pzErrMsg,
-  SchemaMergeAction **ppActions, int *pnActions);
+    const ProllyHash *ancestor, const ProllyHash *ours,
+    const ProllyHash *theirs, ProllyHash *pMergedHash,
+    int *pnConflicts, char **pzErrMsg,
+    SchemaMergeAction **ppActions, int *pnActions,
+    int bPreferOurMaster);
 
 struct ProllyDiffChange;
 

@@ -236,7 +236,7 @@ INSERT INTO t_new SELECT * FROM t;
 DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_commit('-A','-m','main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB" > /dev/null 2>&1
+SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "history_cherrypick_replay_u_rows" "SELECT count(*) FROM dolt_history_u;" "1" "$DB"
 run_test "history_cherrypick_replay_u_distinct_commits" "SELECT count(DISTINCT commit_hash) FROM dolt_history_u;" "1" "$DB"

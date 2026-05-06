@@ -442,16 +442,16 @@ for N in 1 2 3 4 5 6 7 8 9 10; do
   RC=$?
 
   if [ "$RC" != "99" ]; then
-    # Checkout completed. Reopening without an explicit branch now defaults
-    # to main, so the default open sees main's 1-row state. The checked-out
-    # branch should still be readable when opened explicitly.
-    COUNT_MAIN=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t;" 2>/dev/null)
+    # Checkout completed. Plain reopen should still use the default branch,
+    # while explicit branch opens should continue to work.
+    COUNT_DEFAULT=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t;" 2>/dev/null)
+    COUNT_MAIN=$("$DOLTLITE" "$DB/main" "SELECT count(*) FROM t;" 2>/dev/null)
     COUNT_OTHER=$("$DOLTLITE" "$DB/other" "SELECT count(*) FROM t;" 2>/dev/null)
-    if [ "$COUNT_MAIN" = "1" ] && [ "$COUNT_OTHER" = "2" ]; then
+    if [ "$COUNT_DEFAULT" = "1" ] && [ "$COUNT_MAIN" = "1" ] && [ "$COUNT_OTHER" = "2" ]; then
       pass_name "s7_write${N}_checkout_landed"
     else
       fail_name "s7_write${N}_wrong_count"
-      echo "    expected main=1 and other=2, got main=$COUNT_MAIN other=$COUNT_OTHER"
+      echo "    expected default=1 main=1 other=2, got default=$COUNT_DEFAULT main=$COUNT_MAIN other=$COUNT_OTHER"
     fi
     break
   fi

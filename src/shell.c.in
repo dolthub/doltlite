@@ -5058,18 +5058,21 @@ static int doltliteSelectConnectBranch(sqlite3 *db, const char *zBranch){
   int nBranch = 0;
   int rc;
 
-  if( zBranch==0 || zBranch[0]==0 ) zBranch = "main";
-
   rc = doltliteCountBranches(db, &nBranch);
   if( rc!=SQLITE_OK ){
-    return SQLITE_OK;
-  }
-  if( nBranch==0 && strcmp(zBranch, "main")==0 ){
     return SQLITE_OK;
   }
 
   rc = doltliteGetCurrentBranch(db, &zCurrent);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(zCurrent);
+    return SQLITE_OK;
+  }
+  if( zBranch==0 || zBranch[0]==0 ){
+    sqlite3_free(zCurrent);
+    return SQLITE_OK;
+  }
+  if( nBranch==0 && strcmp(zBranch, "main")==0 ){
     sqlite3_free(zCurrent);
     return SQLITE_OK;
   }
@@ -5079,7 +5082,7 @@ static int doltliteSelectConnectBranch(sqlite3 *db, const char *zBranch){
   }
   sqlite3_free(zCurrent);
 
-  rc = sqlite3_prepare_v2(db, "SELECT dolt_checkout(?)", -1, &pStmt, 0);
+  rc = sqlite3_prepare_v2(db, "SELECT dolt_connect_branch(?)", -1, &pStmt, 0);
   if( rc!=SQLITE_OK ){
     sqlite3_finalize(pStmt);
     return SQLITE_OK;
@@ -5193,7 +5196,7 @@ static void open_db(ShellState *p, int openFlags){
       }
     }
 #ifdef DOLTLITE_PROLLY
-    rc = doltliteSelectConnectBranch(p->db, zParsedBranch ? zParsedBranch : "main");
+    rc = doltliteSelectConnectBranch(p->db, zParsedBranch);
     if( rc!=SQLITE_OK ){
       cli_printf(stderr, "Error: unable to select branch \"%s\": %s\n",
                  zParsedBranch ? zParsedBranch : "main", sqlite3_errstr(rc));

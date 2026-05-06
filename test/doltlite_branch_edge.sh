@@ -424,7 +424,7 @@ SELECT dolt_commit('-A','-m','feat: add cherry');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Cherry-pick the feat commit onto main
-echo "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Now merge feat into main -- the cherry-picked row already exists
 # This should succeed without conflict (either "already up to date" or clean merge)

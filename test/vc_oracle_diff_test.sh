@@ -676,7 +676,7 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feature'));
+SELECT dolt_cherry_pick('feature');
 " "u"
 
 # Non-interactive rebase of disjoint index additions. Current Dolt
@@ -743,7 +743,7 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feature'));
+SELECT dolt_cherry_pick('feature');
 " "c"
 
 oracle "diff_schema_replay_after_rebase_fk_tables_plus_check" "
@@ -905,7 +905,7 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 "
 
 oracle_summary "summary_rebase_replay_add_table_plus_check" "
@@ -970,7 +970,7 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 "
 
 oracle_summary "summary_rebase_replay_fk_tables_plus_check" "

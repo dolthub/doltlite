@@ -16,9 +16,10 @@
 #       * BLOB PRIMARY KEY
 #       * composite PRIMARY KEY
 #
-# This suite deliberately proves two things for each case:
+# This suite deliberately proves three things for each case:
 #   1. final user-visible state matches, by hashing canonical ordered rows
 #   2. dolt_hashof_db() matches across distinct histories
+#   3. dolt_hashof_catalog() eventually matches too, proving stored catalog identity
 #
 # Planned expansion phases:
 #   - richer DDL branch / merge histories
@@ -90,6 +91,12 @@ table_hash() {
   run_query "$db" "$name" "SELECT dolt_hashof_table('t');" | tr -d '\n'
 }
 
+catalog_hash() {
+  local db="$1"
+  local name="$2"
+  run_query "$db" "$name" "SELECT dolt_hashof_catalog();" | tr -d '\n'
+}
+
 assert_equal() {
   local name="$1"
   local a="$2"
@@ -155,6 +162,17 @@ run_family_case() {
   assert_hash_shape "${family}_db_hash_shape_c" "$hash_c"
   assert_equal "${family}_db_hash_a_vs_b" "$hash_a" "$hash_b"
   assert_equal "${family}_db_hash_a_vs_c" "$hash_a" "$hash_c"
+
+  local cat_a cat_b cat_c
+  cat_a=$(catalog_hash "$db_a" "${family}_a_catalog")
+  cat_b=$(catalog_hash "$db_b" "${family}_b_catalog")
+  cat_c=$(catalog_hash "$db_c" "${family}_c_catalog")
+
+  assert_hash_shape "${family}_catalog_hash_shape_a" "$cat_a"
+  assert_hash_shape "${family}_catalog_hash_shape_b" "$cat_b"
+  assert_hash_shape "${family}_catalog_hash_shape_c" "$cat_c"
+  assert_equal "${family}_catalog_hash_a_vs_b" "$cat_a" "$cat_b"
+  assert_equal "${family}_catalog_hash_a_vs_c" "$cat_a" "$cat_c"
 
   echo ""
 }
@@ -340,6 +358,17 @@ run_ddl_case() {
   assert_hash_shape "${family}_ddl_db_hash_shape_c" "$hash_c"
   assert_equal "${family}_ddl_db_hash_a_vs_b" "$hash_a" "$hash_b"
   assert_equal "${family}_ddl_db_hash_a_vs_c" "$hash_a" "$hash_c"
+
+  local cat_a cat_b cat_c
+  cat_a=$(catalog_hash "$db_a" "${family}_ddl_a_catalog")
+  cat_b=$(catalog_hash "$db_b" "${family}_ddl_b_catalog")
+  cat_c=$(catalog_hash "$db_c" "${family}_ddl_c_catalog")
+
+  assert_hash_shape "${family}_ddl_catalog_hash_shape_a" "$cat_a"
+  assert_hash_shape "${family}_ddl_catalog_hash_shape_b" "$cat_b"
+  assert_hash_shape "${family}_ddl_catalog_hash_shape_c" "$cat_c"
+  assert_equal "${family}_ddl_catalog_hash_a_vs_b" "$cat_a" "$cat_b"
+  assert_equal "${family}_ddl_catalog_hash_a_vs_c" "$cat_a" "$cat_c"
 
   echo ""
 }
@@ -1642,6 +1671,570 @@ SELECT a, b, v, n, 'seed' FROM t_old;
 DROP TABLE t_old;
 ALTER TABLE t_new RENAME TO t;
 CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_rename_int_pk" \
+  "SELECT printf('%d|%s|%d|%s', id, payload, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('idx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (1, 'alpha', 10, 'seed');
+INSERT INTO t VALUES (2, 'bravo', 20, 'seed');
+INSERT INTO t VALUES (3, 'charlie', 30, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (1, 'alpha', 10);
+INSERT INTO t VALUES (2, 'bravo', 20);
+INSERT INTO t VALUES (3, 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES (1, 'alpha', 10);
+INSERT INTO t_old VALUES (2, 'bravo', 20);
+INSERT INTO t_old VALUES (3, 'charlie', 30);
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, payload, n, extra) SELECT id, v, n, 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_rename_text_pk" \
+  "SELECT printf('%s|%s|%d|%s', id, payload, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('idx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES ('a-key', 'alpha', 10, 'seed');
+INSERT INTO t VALUES ('b-key', 'bravo', 20, 'seed');
+INSERT INTO t VALUES ('c-key', 'charlie', 30, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES ('a-key', 'alpha', 10);
+INSERT INTO t VALUES ('b-key', 'bravo', 20);
+INSERT INTO t VALUES ('c-key', 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES ('a-key', 'alpha', 10);
+INSERT INTO t_old VALUES ('b-key', 'bravo', 20);
+INSERT INTO t_old VALUES ('c-key', 'charlie', 30);
+CREATE TABLE t_new(id TEXT PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, payload, n, extra) SELECT id, v, n, 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_rename_blob_pk" \
+  "SELECT printf('%s|%s|%d|%s', hex(id), payload, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('idx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (x'01', 'alpha', 10, 'seed');
+INSERT INTO t VALUES (x'02', 'bravo', 20, 'seed');
+INSERT INTO t VALUES (x'03', 'charlie', 30, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (x'01', 'alpha', 10);
+INSERT INTO t VALUES (x'02', 'bravo', 20);
+INSERT INTO t VALUES (x'03', 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES (x'01', 'alpha', 10);
+INSERT INTO t_old VALUES (x'02', 'bravo', 20);
+INSERT INTO t_old VALUES (x'03', 'charlie', 30);
+CREATE TABLE t_new(id BLOB PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, payload, n, extra) SELECT id, v, n, 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_rename_composite_pk" \
+  "SELECT printf('%s|%d|%s|%d|%s', a, b, payload, n, extra) FROM t ORDER BY a, b;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('idx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed', PRIMARY KEY(a, b));
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES ('a', 1, 'alpha', 10, 'seed');
+INSERT INTO t VALUES ('b', 2, 'bravo', 20, 'seed');
+INSERT INTO t VALUES ('c', 3, 'charlie', 30, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t VALUES ('a', 1, 'alpha', 10);
+INSERT INTO t VALUES ('b', 2, 'bravo', 20);
+INSERT INTO t VALUES ('c', 3, 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t_old VALUES ('a', 1, 'alpha', 10);
+INSERT INTO t_old VALUES ('b', 2, 'bravo', 20);
+INSERT INTO t_old VALUES ('c', 3, 'charlie', 30);
+CREATE TABLE t_new(a TEXT, b INTEGER, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed', PRIMARY KEY(a, b));
+INSERT INTO t_new(a, b, payload, n, extra) SELECT a, b, v, n, 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_twocol_int_pk" \
+  "SELECT printf('%d|%s|%d|%s|%s', id, v, n, tag, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_v|%d|%s', seqno, name) FROM pragma_index_info('idx_t_v') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_tag|%d|%s', seqno, name) FROM pragma_index_info('idx_t_tag') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+INSERT INTO t VALUES (1, 'alpha', 10, 'tag0', 'seed');
+INSERT INTO t VALUES (2, 'bravo', 20, 'tag0', 'seed');
+INSERT INTO t VALUES (3, 'charlie', 30, 'tag0', 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (1, 'alpha', 10);
+INSERT INTO t VALUES (2, 'bravo', 20);
+INSERT INTO t VALUES (3, 'charlie', 30);
+ALTER TABLE t ADD COLUMN tag TEXT DEFAULT 'tag0';
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+UPDATE t SET tag = 'tag0', extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES (1, 'alpha', 10);
+INSERT INTO t_old VALUES (2, 'bravo', 20);
+INSERT INTO t_old VALUES (3, 'charlie', 30);
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, v TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, v, n, tag, extra) SELECT id, v, n, 'tag0', 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_twocol_text_pk" \
+  "SELECT printf('%s|%s|%d|%s|%s', id, v, n, tag, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_v|%d|%s', seqno, name) FROM pragma_index_info('idx_t_v') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_tag|%d|%s', seqno, name) FROM pragma_index_info('idx_t_tag') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+INSERT INTO t VALUES ('a-key', 'alpha', 10, 'tag0', 'seed');
+INSERT INTO t VALUES ('b-key', 'bravo', 20, 'tag0', 'seed');
+INSERT INTO t VALUES ('c-key', 'charlie', 30, 'tag0', 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES ('a-key', 'alpha', 10);
+INSERT INTO t VALUES ('b-key', 'bravo', 20);
+INSERT INTO t VALUES ('c-key', 'charlie', 30);
+ALTER TABLE t ADD COLUMN tag TEXT DEFAULT 'tag0';
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+UPDATE t SET tag = 'tag0', extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES ('a-key', 'alpha', 10);
+INSERT INTO t_old VALUES ('b-key', 'bravo', 20);
+INSERT INTO t_old VALUES ('c-key', 'charlie', 30);
+CREATE TABLE t_new(id TEXT PRIMARY KEY, v TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, v, n, tag, extra) SELECT id, v, n, 'tag0', 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_twocol_blob_pk" \
+  "SELECT printf('%s|%s|%d|%s|%s', hex(id), v, n, tag, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_v|%d|%s', seqno, name) FROM pragma_index_info('idx_t_v') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_tag|%d|%s', seqno, name) FROM pragma_index_info('idx_t_tag') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+INSERT INTO t VALUES (x'01', 'alpha', 10, 'tag0', 'seed');
+INSERT INTO t VALUES (x'02', 'bravo', 20, 'tag0', 'seed');
+INSERT INTO t VALUES (x'03', 'charlie', 30, 'tag0', 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (x'01', 'alpha', 10);
+INSERT INTO t VALUES (x'02', 'bravo', 20);
+INSERT INTO t VALUES (x'03', 'charlie', 30);
+ALTER TABLE t ADD COLUMN tag TEXT DEFAULT 'tag0';
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+UPDATE t SET tag = 'tag0', extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES (x'01', 'alpha', 10);
+INSERT INTO t_old VALUES (x'02', 'bravo', 20);
+INSERT INTO t_old VALUES (x'03', 'charlie', 30);
+CREATE TABLE t_new(id BLOB PRIMARY KEY, v TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, v, n, tag, extra) SELECT id, v, n, 'tag0', 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_twocol_composite_pk" \
+  "SELECT printf('%s|%d|%s|%d|%s|%s', a, b, v, n, tag, extra) FROM t ORDER BY a, b;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_v|%d|%s', seqno, name) FROM pragma_index_info('idx_t_v') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_tag|%d|%s', seqno, name) FROM pragma_index_info('idx_t_tag') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', extra TEXT DEFAULT 'seed', PRIMARY KEY(a, b));
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+INSERT INTO t VALUES ('a', 1, 'alpha', 10, 'tag0', 'seed');
+INSERT INTO t VALUES ('b', 2, 'bravo', 20, 'tag0', 'seed');
+INSERT INTO t VALUES ('c', 3, 'charlie', 30, 'tag0', 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t VALUES ('a', 1, 'alpha', 10);
+INSERT INTO t VALUES ('b', 2, 'bravo', 20);
+INSERT INTO t VALUES ('c', 3, 'charlie', 30);
+ALTER TABLE t ADD COLUMN tag TEXT DEFAULT 'tag0';
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+UPDATE t SET tag = 'tag0', extra = 'seed';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t_old VALUES ('a', 1, 'alpha', 10);
+INSERT INTO t_old VALUES ('b', 2, 'bravo', 20);
+INSERT INTO t_old VALUES ('c', 3, 'charlie', 30);
+CREATE TABLE t_new(a TEXT, b INTEGER, v TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', extra TEXT DEFAULT 'seed', PRIMARY KEY(a, b));
+INSERT INTO t_new(a, b, v, n, tag, extra) SELECT a, b, v, n, 'tag0', 'seed' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_v ON t(v);
+CREATE INDEX idx_t_tag ON t(tag);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_unique_int_pk" \
+  "SELECT printf('%d|%s|%d|%s', id, payload, n, tag) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|uidx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('uidx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER, tag TEXT DEFAULT 'tag0');
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (1, 'alpha', 10, 'tag0');
+INSERT INTO t VALUES (2, 'bravo', 20, 'tag0');
+INSERT INTO t VALUES (3, 'charlie', 30, 'tag0');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (1, 'alpha', 10);
+INSERT INTO t VALUES (2, 'bravo', 20);
+INSERT INTO t VALUES (3, 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN tag TEXT DEFAULT 'tag0';
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET tag = 'tag0';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES (1, 'alpha', 10);
+INSERT INTO t_old VALUES (2, 'bravo', 20);
+INSERT INTO t_old VALUES (3, 'charlie', 30);
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER, tag TEXT DEFAULT 'tag0');
+INSERT INTO t_new(id, payload, n, tag) SELECT id, v, n, 'tag0' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_unique_text_pk" \
+  "SELECT printf('%s|%s|%d|%s', id, payload, n, tag) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|uidx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('uidx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, payload TEXT, n INTEGER, tag TEXT DEFAULT 'tag0');
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES ('a-key', 'alpha', 10, 'tag0');
+INSERT INTO t VALUES ('b-key', 'bravo', 20, 'tag0');
+INSERT INTO t VALUES ('c-key', 'charlie', 30, 'tag0');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES ('a-key', 'alpha', 10);
+INSERT INTO t VALUES ('b-key', 'bravo', 20);
+INSERT INTO t VALUES ('c-key', 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN tag TEXT DEFAULT 'tag0';
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET tag = 'tag0';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES ('a-key', 'alpha', 10);
+INSERT INTO t_old VALUES ('b-key', 'bravo', 20);
+INSERT INTO t_old VALUES ('c-key', 'charlie', 30);
+CREATE TABLE t_new(id TEXT PRIMARY KEY, payload TEXT, n INTEGER, tag TEXT DEFAULT 'tag0');
+INSERT INTO t_new(id, payload, n, tag) SELECT id, v, n, 'tag0' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_unique_blob_pk" \
+  "SELECT printf('%s|%s|%d|%s', hex(id), payload, n, tag) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|uidx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('uidx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, payload TEXT, n INTEGER, tag TEXT DEFAULT 'tag0');
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (x'01', 'alpha', 10, 'tag0');
+INSERT INTO t VALUES (x'02', 'bravo', 20, 'tag0');
+INSERT INTO t VALUES (x'03', 'charlie', 30, 'tag0');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (x'01', 'alpha', 10);
+INSERT INTO t VALUES (x'02', 'bravo', 20);
+INSERT INTO t VALUES (x'03', 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN tag TEXT DEFAULT 'tag0';
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET tag = 'tag0';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t_old VALUES (x'01', 'alpha', 10);
+INSERT INTO t_old VALUES (x'02', 'bravo', 20);
+INSERT INTO t_old VALUES (x'03', 'charlie', 30);
+CREATE TABLE t_new(id BLOB PRIMARY KEY, payload TEXT, n INTEGER, tag TEXT DEFAULT 'tag0');
+INSERT INTO t_new(id, payload, n, tag) SELECT id, v, n, 'tag0' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_unique_composite_pk" \
+  "SELECT printf('%s|%d|%s|%d|%s', a, b, payload, n, tag) FROM t ORDER BY a, b;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|uidx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('uidx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, payload TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', PRIMARY KEY(a, b));
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES ('a', 1, 'alpha', 10, 'tag0');
+INSERT INTO t VALUES ('b', 2, 'bravo', 20, 'tag0');
+INSERT INTO t VALUES ('c', 3, 'charlie', 30, 'tag0');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t VALUES ('a', 1, 'alpha', 10);
+INSERT INTO t VALUES ('b', 2, 'bravo', 20);
+INSERT INTO t VALUES ('c', 3, 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN tag TEXT DEFAULT 'tag0';
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+UPDATE t SET tag = 'tag0';
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t_old(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t_old VALUES ('a', 1, 'alpha', 10);
+INSERT INTO t_old VALUES ('b', 2, 'bravo', 20);
+INSERT INTO t_old VALUES ('c', 3, 'charlie', 30);
+CREATE TABLE t_new(a TEXT, b INTEGER, payload TEXT, n INTEGER, tag TEXT DEFAULT 'tag0', PRIMARY KEY(a, b));
+INSERT INTO t_new(a, b, payload, n, tag) SELECT a, b, v, n, 'tag0' FROM t_old;
+DROP TABLE t_old;
+ALTER TABLE t_new RENAME TO t;
+CREATE UNIQUE INDEX uidx_t_payload ON t(payload);
 CREATE INDEX idx_t_n ON t(n);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'final');

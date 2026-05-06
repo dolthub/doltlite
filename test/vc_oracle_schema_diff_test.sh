@@ -459,7 +459,7 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "HEAD~1" "HEAD" "u"
 
 oracle "revert_schema_change_with_later_added_table" "
@@ -538,7 +538,7 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "HEAD~1" "HEAD" "u"
 
 oracle "rebase_replay_multi_pk_add_table_plus_check" "
@@ -603,7 +603,7 @@ DROP TABLE t;
 ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 " "HEAD~1" "HEAD" "p,c"
 
 oracle "rebase_replay_fk_tables_plus_check" "

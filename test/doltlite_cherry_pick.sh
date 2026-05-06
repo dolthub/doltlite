@@ -26,7 +26,7 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Cherry-pick the feat commit onto main
 run_test_match "cp_basic_hash" \
-  "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" \
+  "SELECT dolt_cherry_pick('feat');" \
   "^[0-9a-f]{40}$" "$DB"
 run_test "cp_basic_count" "SELECT count(*) FROM t;" "2" "$DB"
 run_test "cp_basic_val" "SELECT v FROM t WHERE id=2;" "feat_row" "$DB"
@@ -86,7 +86,7 @@ UPDATE t SET v='main_val' WHERE id=1;
 SELECT dolt_commit('-A','-m','main modifies row 1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "cp_conflict_msg" \
-  "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" \
+  "SELECT dolt_cherry_pick('feat');" \
   "conflict|rolled back" "$DB"
 run_test "cp_conflict_resolved" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB"
 run_test "cp_conflict_ours" "SELECT v FROM t WHERE id=1;" "main_val" "$DB"
@@ -104,7 +104,7 @@ SELECT dolt_commit('-A','-m','feat modifies row 1');
 SELECT dolt_checkout('main');
 UPDATE t SET v='main_val' WHERE id=1;
 SELECT dolt_commit('-A','-m','main modifies row 1');
-SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));
+SELECT dolt_cherry_pick('feat');
 SELECT 'TX|' || (SELECT count(*) FROM dolt_conflicts) || '|' ||
        (SELECT v FROM t WHERE id=1);
 SQL
@@ -137,7 +137,7 @@ SELECT dolt_commit('-A','-m','main updates row 1');" | $DOLTLITE "$DB" > /dev/nu
 
 # Cherry-pick should cleanly add row 3 without conflicting with row 1 change
 run_test_match "cp_noc_hash" \
-  "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" \
+  "SELECT dolt_cherry_pick('feat');" \
   "^[0-9a-f]{40}$" "$DB"
 
 run_test "cp_noc_count" "SELECT count(*) FROM t;" "3" "$DB"
@@ -182,7 +182,7 @@ INSERT INTO t VALUES(2,'feat_data');
 SELECT dolt_commit('-A','-m','feat add');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-echo "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Verify data persists after reopen
 run_test "cp_persist_count" "SELECT count(*) FROM t;" "2" "$DB"
@@ -343,7 +343,7 @@ SELECT dolt_commit('-A','-m','feat add');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 # Cherry-pick feat onto main
-echo "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" | $DOLTLITE "$DB" > /dev/null 2>&1
+echo "SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "combo_after_cp" "SELECT count(*) FROM t;" "2" "$DB"
 
 # Now revert the cherry-pick
@@ -485,7 +485,7 @@ SELECT dolt_commit('-A','-m','feat: add t2');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "cp_newtbl_hash" \
-  "SELECT dolt_cherry_pick((SELECT hash FROM dolt_branches WHERE name='feat'));" \
+  "SELECT dolt_cherry_pick('feat');" \
   "^[0-9a-f]{40}$" "$DB"
 
 run_test "cp_newtbl_t" "SELECT count(*) FROM t;" "1" "$DB"
