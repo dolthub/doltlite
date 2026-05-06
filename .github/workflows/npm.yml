@@ -1,0 +1,71 @@
+name: NPM Native Binding
+
+# Verifies the npm/ Node native binding builds and the smoke test
+# passes on each supported platform. Also runs on PR so we know if
+# a doltlite-side change broke the binding ABI.
+#
+# Does NOT publish to npm — that's a manual step on tagged releases.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'npm/**'
+      - 'src/**'
+      - 'main.mk'
+      - '.github/workflows/npm.yml'
+  pull_request:
+    paths:
+      - 'npm/**'
+      - 'src/**'
+      - 'main.mk'
+      - '.github/workflows/npm.yml'
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: macos-latest
+            target: osx-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+
+    - name: Install dependencies (Linux)
+      if: runner.os == 'Linux'
+      run: sudo apt-get update && sudo apt-get install -y build-essential zlib1g-dev tcl-dev
+
+    - name: Install dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install zlib tcl-tk || true
+
+    - name: Build libdoltlite
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite-lib
+
+    - name: Build npm binding
+      env:
+        DOLTLITE_BUILD: ${{ github.workspace }}/build
+      run: |
+        cd npm
+        npm install
+        ls -la build/Release/doltlite.node
+
+    - name: Run smoke test
+      env:
+        DOLTLITE_BUILD: ${{ github.workspace }}/build
+      run: |
+        cd npm
+        node test/basic.js

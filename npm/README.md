@@ -1,0 +1,76 @@
+# doltlite
+
+Node.js native binding for [DoltLite](https://github.com/dolthub/doltlite) — SQLite with Dolt-style version control.
+
+API mirrors a subset of [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3): synchronous, prepared-statement-driven, no callbacks.
+
+## Install
+
+```bash
+npm install doltlite
+```
+
+The native binding is built from the vendored DoltLite amalgamation at install time, so you'll need a working C/C++ toolchain (`gcc`/`clang` on Linux/macOS, MSVC or MinGW on Windows). Pre-built binaries will land in a future release.
+
+## Usage
+
+```javascript
+const Database = require('doltlite');
+
+const db = new Database('app.db');
+
+db.exec(`CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT)`);
+db.prepare(`INSERT INTO users(name) VALUES (?)`).run('alice');
+
+// Standard SQLite queries.
+const rows = db.prepare(`SELECT * FROM users`).all();
+console.log(rows);  // [{ id: 1, name: 'alice' }]
+
+// DoltLite version-control procedures, exposed via the same surface.
+db.exec(`SELECT dolt_commit('-A', '-m', 'initial users')`);
+db.exec(`SELECT dolt_branch('feat')`);
+db.exec(`SELECT dolt_checkout('feat')`);
+
+db.prepare(`INSERT INTO users(name) VALUES (?)`).run('bob');
+db.exec(`SELECT dolt_commit('-A', '-m', 'add bob')`);
+
+db.exec(`SELECT dolt_checkout('main')`);
+db.exec(`SELECT dolt_merge('feat')`);
+
+// Inspect the log.
+const log = db.prepare(`SELECT message FROM dolt_log ORDER BY date DESC`).all();
+```
+
+## API
+
+### `new Database(path)`
+
+Opens or creates a database at the given filesystem path. Use `':memory:'` for an in-memory database.
+
+### `db.prepare(sql)` → `Statement`
+
+Compile a SQL statement. The returned `Statement` has `.run()`, `.get()`, `.all()`, and `.finalize()`.
+
+### `db.exec(sql)` → `db`
+
+Execute one or more SQL statements without returning results. Useful for DDL and `SELECT dolt_commit(...)`-style fire-and-forget calls.
+
+### `db.close()` → `db`
+
+Close the underlying handle.
+
+### `stmt.run(...params)` → `{ changes, lastInsertRowid }`
+
+Execute a write statement with positional `?` bindings.
+
+### `stmt.get(...params)` → `Object | undefined`
+
+Execute a read statement and return the first row as a plain object, or `undefined` if no rows match.
+
+### `stmt.all(...params)` → `Array<Object>`
+
+Execute a read statement and return all rows as an array of plain objects.
+
+## License
+
+Apache-2.0. See [LICENSE](https://github.com/dolthub/doltlite/blob/master/LICENSE) in the parent repo.
