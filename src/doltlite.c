@@ -321,18 +321,27 @@ int doltliteMaterializeDefaultColumns(sqlite3 *db){
   const char *zName;
   int rc = SQLITE_OK;
   while( (zName = doltliteNextTableForSchema(db, &idx, &iTable)) != 0 ){
+    char *zLiveName = 0;
+    const char *zTableName = zName;
     sqlite3_stmt *pStmt = 0;
     char *zPragma = 0;
     char *zUpdate = 0;
     sqlite3_str *pSet = 0;
     int nCols = 0;
-    (void)iTable;
+    zLiveName = doltliteResolveTableNumber(db, iTable);
+    if( zLiveName ) zTableName = zLiveName;
 
-    zPragma = sqlite3_mprintf("PRAGMA main.table_info(%Q)", zName);
-    if( !zPragma ) return SQLITE_NOMEM;
+    zPragma = sqlite3_mprintf("PRAGMA main.table_info(%Q)", zTableName);
+    if( !zPragma ){
+      sqlite3_free(zLiveName);
+      return SQLITE_NOMEM;
+    }
     rc = sqlite3_prepare_v2(db, zPragma, -1, &pStmt, 0);
     sqlite3_free(zPragma);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zLiveName);
+      return rc;
+    }
 
     while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
       const char *zCol = (const char*)sqlite3_column_text(pStmt, 1);
@@ -342,6 +351,7 @@ int doltliteMaterializeDefaultColumns(sqlite3 *db){
           pSet = sqlite3_str_new(db);
           if( !pSet ){
             sqlite3_finalize(pStmt);
+            sqlite3_free(zLiveName);
             return SQLITE_NOMEM;
           }
         }
@@ -353,19 +363,30 @@ int doltliteMaterializeDefaultColumns(sqlite3 *db){
     if( rc!=SQLITE_DONE ){
       sqlite3_finalize(pStmt);
       if( pSet ) sqlite3_str_finish(pSet);
+      sqlite3_free(zLiveName);
       return rc;
     }
     sqlite3_finalize(pStmt);
     if( nCols>0 ){
       char *zSet = sqlite3_str_finish(pSet);
-      if( !zSet ) return SQLITE_NOMEM;
-      zUpdate = sqlite3_mprintf("UPDATE \"%w\" SET %s", zName, zSet);
+      if( !zSet ){
+        sqlite3_free(zLiveName);
+        return SQLITE_NOMEM;
+      }
+      zUpdate = sqlite3_mprintf("UPDATE \"%w\" SET %s", zTableName, zSet);
       sqlite3_free(zSet);
-      if( !zUpdate ) return SQLITE_NOMEM;
+      if( !zUpdate ){
+        sqlite3_free(zLiveName);
+        return SQLITE_NOMEM;
+      }
       rc = sqlite3_exec(db, zUpdate, 0, 0, 0);
       sqlite3_free(zUpdate);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zLiveName);
+        return rc;
+      }
     }
+    sqlite3_free(zLiveName);
   }
   return SQLITE_OK;
 }
@@ -560,7 +581,9 @@ static int doltliteAdvanceBranch(
 
   if( cs->nBranches==0 ){
     rc = chunkStoreAddBranch(cs, branch, pNewHead);
-    if( rc==SQLITE_OK ) rc = chunkStoreSetDefaultBranch(cs, branch);
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreSetDefaultBranch(cs, branch);
+    }
   }else{
     rc = chunkStoreUpdateBranch(cs, branch, pNewHead);
   }
@@ -4026,6 +4049,27 @@ static int rebaseApplyPlanRowCatalog(
   return SQLITE_OK;
 }
 
+static int rebaseAdvanceWorkingBranch(
+  sqlite3 *db,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zBranch = doltliteGetSessionBranch(db);
+  int rc;
+
+  if( !cs ) return SQLITE_ERROR;
+  rc = chunkStoreUpdateBranch(cs, zBranch, pNewHead);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteSetSessionHead(db, pNewHead);
+  doltliteSetSessionStaged(db, pCatalogHash);
+  rc = doltliteSwitchCatalog(db, pCatalogHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  return doltlitePersistWorkingSetWithHash(db, 0);
+}
+
 static int rebaseReplayPlanGroup(
   sqlite3 *db,
   RebasePlanRow *aPlan,
@@ -4086,7 +4130,7 @@ static int rebaseReplayPlanGroup(
       doltliteSetSessionStaged(db, pCurCat);
     }
     if( rc==SQLITE_OK ){
-      rc = doltliteAdvanceBranch(db, &newCommit, pCurCat, 0);
+      rc = rebaseAdvanceWorkingBranch(db, &newCommit, pCurCat);
     }
     if( rc==SQLITE_OK ) *pCurHead = newCommit;
   }

@@ -7194,16 +7194,9 @@ const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable){
   pBtree = db->aDb[0].pBt;
   while( *pIdx < pBtree->cat.n ){
     int i = (*pIdx)++;
-    if( pBtree->cat.a[i].iTable>1 ){
-      char *zLive = resolveLiveSchemaTableNumber(db, pBtree->cat.a[i].iTable);
-      if( zLive ){
-        sqlite3_free(pBtree->cat.a[i].zName);
-        pBtree->cat.a[i].zName = zLive;
-      }
-      if( pBtree->cat.a[i].zName ){
-        *piTable = pBtree->cat.a[i].iTable;
-        return pBtree->cat.a[i].zName;
-      }
+    if( pBtree->cat.a[i].iTable>1 && pBtree->cat.a[i].zName ){
+      *piTable = pBtree->cat.a[i].iTable;
+      return pBtree->cat.a[i].zName;
     }
   }
   return 0;
