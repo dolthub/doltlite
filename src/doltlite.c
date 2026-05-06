@@ -4163,6 +4163,8 @@ static void doltliteRebaseInteractiveStart(
 
   /* Now set the rebase state on the session and persist it.
   ** Nothing after this triggers a reload before -i returns. */
+  rc = chunkStoreSetDefaultBranch(cs, zWorking);
+  if( rc!=SQLITE_OK ) goto fail;
   doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &upstreamHash,
                                 zOrig, zReturnBranch);
   rc = doltlitePersistWorkingSet(db);
@@ -4187,6 +4189,9 @@ static void doltliteRebaseInteractiveStart(
   return;
 
 fail:
+  if( cs && zReturnBranch && zReturnBranch[0] ){
+    (void)chunkStoreSetDefaultBranch(cs, zReturnBranch);
+  }
   if( bWorkingBranchCreated ){
     rebaseDiscardWorkingBranch(db, zOrig, zWorking);
   }
