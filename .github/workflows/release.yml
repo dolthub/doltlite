@@ -243,6 +243,9 @@ jobs:
       with:
         msystem: MINGW64
         update: true
+        # Inherit Windows PATH so the MSYS2 shell can find `npm`
+        # installed by actions/setup-node.
+        path-type: inherit
         install: >-
           mingw-w64-x86_64-gcc
           mingw-w64-x86_64-zlib
