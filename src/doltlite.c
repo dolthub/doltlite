@@ -4182,6 +4182,10 @@ static void doltliteRebaseInteractiveStart(
   ** Nothing after this triggers a reload before -i returns. */
   doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &upstreamHash,
                                 zOrig, zReturnBranch);
+  if( cs ){
+    rc = chunkStoreSetDefaultBranch(cs, zWorking);
+    if( rc!=SQLITE_OK ) goto fail;
+  }
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto fail;
   rc = doltliteVcSealBranchStyleTxn(db);
