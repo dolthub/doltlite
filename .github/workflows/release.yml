@@ -213,16 +213,12 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x64
-            shell: bash
           - os: ubuntu-24.04-arm
             target: linux-arm64
-            shell: bash
           - os: macos-latest
             target: darwin-arm64
-            shell: bash
           - os: windows-latest
             target: win32-x64
-            shell: 'msys2 {0}'
 
     runs-on: ${{ matrix.os }}
 
@@ -254,15 +250,35 @@ jobs:
           tcl
           zip
 
-    - name: Build libdoltlite
-      shell: ${{ matrix.shell }}
+    - name: Build libdoltlite (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
       run: |
         mkdir -p build && cd build
         ../configure
         make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite-lib
 
-    - name: Build prebuild
-      shell: ${{ matrix.shell }}
+    - name: Build libdoltlite (Windows MSYS2)
+      if: runner.os == 'Windows'
+      shell: 'msys2 {0}'
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make -j$(nproc) doltlite-lib
+
+    - name: Build prebuild (Unix)
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        DOLTLITE_BUILD: ${{ github.workspace }}/build
+      run: |
+        cd npm
+        npm install --ignore-scripts
+        npx prebuildify --napi --strip
+
+    - name: Build prebuild (Windows MSYS2)
+      if: runner.os == 'Windows'
+      shell: 'msys2 {0}'
       env:
         DOLTLITE_BUILD: ${{ github.workspace }}/build
       run: |
