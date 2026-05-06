@@ -180,6 +180,9 @@ int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
 SchemaEntry *findSchemaEntry(SchemaEntry *a, int n, const char *zName);
 void freeSchemaEntries(SchemaEntry *a, int n);
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
+int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
+                              const char *zName, const char *zTblName,
+                              char **pzSql);
 
 typedef struct SchemaMergeAction SchemaMergeAction;
 struct SchemaMergeAction {

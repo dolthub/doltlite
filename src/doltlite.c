@@ -286,6 +286,57 @@ void doltliteUpdateSchemaHashes(sqlite3 *db){
   }
 }
 
+int doltliteLoadLiveSchemaSql(
+  sqlite3 *db,
+  const char *zType,
+  const char *zName,
+  const char *zTblName,
+  char **pzSql
+){
+  sqlite3_stmt *pStmt = 0;
+  char *zQuery = 0;
+  int rc;
+
+  *pzSql = 0;
+  if( !db || !zType || !zName ) return SQLITE_OK;
+
+  if( zTblName && zTblName[0] ){
+    zQuery = sqlite3_mprintf(
+      "SELECT sql FROM main.sqlite_master "
+      "WHERE type=%Q AND name=%Q AND tbl_name=%Q",
+      zType, zName, zTblName
+    );
+  }else{
+    zQuery = sqlite3_mprintf(
+      "SELECT sql FROM main.sqlite_master "
+      "WHERE type=%Q AND name=%Q",
+      zType, zName
+    );
+  }
+  if( !zQuery ) return SQLITE_NOMEM;
+
+  rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, 0);
+  sqlite3_free(zQuery);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = sqlite3_step(pStmt);
+  if( rc==SQLITE_ROW ){
+    const char *zSql = (const char*)sqlite3_column_text(pStmt, 0);
+    if( zSql ){
+      *pzSql = sqlite3_mprintf("%s", zSql);
+      if( !*pzSql ){
+        sqlite3_finalize(pStmt);
+        return SQLITE_NOMEM;
+      }
+    }
+    rc = SQLITE_OK;
+  }else if( rc==SQLITE_DONE ){
+    rc = SQLITE_OK;
+  }
+  sqlite3_finalize(pStmt);
+  return rc;
+}
+
 int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc;
