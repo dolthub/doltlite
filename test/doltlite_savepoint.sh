@@ -433,7 +433,7 @@ run_test_match "rebase_resolve_theirs_top_savepoint_rollback_to_errors" \
   "no such savepoint: sp1" "$DB6g1x/feat"
 run_test_match "rebase_resolve_theirs_top_savepoint_reopen_main" \
   "SELECT active_branch();" \
-  "^dolt_rebase_feat$" "$DB6g1x"
+  "^main$" "$DB6g1x"
 run_test_match "rebase_resolve_theirs_top_savepoint_temp_branch_survives" \
   "SELECT count(*) FROM dolt_branches WHERE name='dolt_rebase_feat';" \
   "^1$" "$DB6g1x"

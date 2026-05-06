@@ -674,6 +674,27 @@ static int doltliteSetDefaultBranchRefs(sqlite3 *db, ChunkStore *cs, void *pArg)
   return chunkStoreSetDefaultBranch(cs, zBranch);
 }
 
+static int rebaseRestoreReturnBranchWorkingState(
+  sqlite3 *db,
+  const char *zBranch
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  DoltliteCommit c;
+  ProllyHash headHash;
+  int rc;
+
+  if( !cs || !zBranch || !zBranch[0] ) return SQLITE_OK;
+  rc = chunkStoreFindBranch(cs, zBranch, &headHash);
+  if( rc!=SQLITE_OK ) return rc;
+  memset(&c, 0, sizeof(c));
+  rc = doltliteLoadCommit(db, &headHash, &c);
+  if( rc==SQLITE_OK ){
+    rc = doltliteWriteBranchCleanWorkingState(db, zBranch, &c.catalogHash, &headHash);
+  }
+  doltliteCommitClear(&c);
+  return rc;
+}
+
 static int doltlitePrimeSchemaCache(sqlite3 *db){
   sqlite3_stmt *pStmt = 0;
   int rc = sqlite3_prepare_v2(
@@ -4056,6 +4077,7 @@ static void rebaseAbortConflictedContinue(
   }
   if( cs && zReturnBranch && zReturnBranch[0] ){
     (void)chunkStoreSetDefaultBranch(cs, zReturnBranch);
+    (void)rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
     (void)chunkStoreDeleteBranch(cs, zWorkingBranch);
@@ -4204,10 +4226,6 @@ static void doltliteRebaseInteractiveStart(
   ** Nothing after this triggers a reload before -i returns. */
   doltliteSetSessionRebaseState(db, 1, &preRebaseCat, &upstreamHash,
                                 zOrig, zReturnBranch);
-  if( cs ){
-    rc = chunkStoreSetDefaultBranch(cs, zWorking);
-    if( rc!=SQLITE_OK ) goto fail;
-  }
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto fail;
   rc = doltliteVcSealBranchStyleTxn(db);
@@ -4283,6 +4301,14 @@ static void doltliteRebaseInteractiveAbort(
   rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
   if( cs && zReturnBranch && zReturnBranch[0] ){
     rc = chunkStoreSetDefaultBranch(cs, zReturnBranch);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zReturnBranch);
+      sqlite3_free(zWorking);
+      sqlite3_free(zOrigBranch);
+      sqlite3_result_error_code(context, rc);
+      return;
+    }
+    rc = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zReturnBranch);
       sqlite3_free(zWorking);
@@ -4455,6 +4481,9 @@ static void doltliteRebaseInteractiveContinue(
   zStep = "restore default branch";
   rc = chunkStoreSetDefaultBranch(cs, zReturnBranch);
   if( rc!=SQLITE_OK ) goto abort_err;
+  zStep = "restore return branch working set";
+  rc = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
+  if( rc!=SQLITE_OK ) goto abort_err;
   zStep = "persist final working set";
   rc = doltlitePersistWorkingSet(db);
   if( rc!=SQLITE_OK ) goto abort_err;
@@ -4493,6 +4522,7 @@ abort_err:
     rebaseDiscardWorkingBranch(db, zOrigBranch ? zOrigBranch : "main", zWorking);
     if( cs && zReturnBranch && zReturnBranch[0] ){
       (void)chunkStoreSetDefaultBranch(cs, zReturnBranch);
+      (void)rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
     }
   }
   sqlite3_free(zOrigBranch);

@@ -4268,7 +4268,7 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
 
   check("reopen_db_after_rebase_invalid_plan", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_invalid_plan_persists_working_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
   check("rebase_invalid_plan_persists_plan_table",
         strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
@@ -4416,7 +4416,7 @@ static void run_rebase_main_table_schema_guard(void){
 
   check("reopen_db_for_rebase_schema_guard", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_schema_guard_persists_working_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
   check("rebase_schema_guard_abort_works",
         strcmp(exec1(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
   check("rebase_schema_guard_abort_restores_branch",

@@ -7287,6 +7287,20 @@ int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
   return btreeWriteWorkingState(cs, zBranch, pCatHash, pCommitHash);
 }
 
+int doltliteWriteBranchCleanWorkingState(sqlite3 *db, const char *zBranch,
+                                         const ProllyHash *pCatHash,
+                                         const ProllyHash *pCommitHash){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash emptyHash;
+  if( !cs ) return SQLITE_ERROR;
+  memset(&emptyHash, 0, sizeof(emptyHash));
+  return btreeStoreWorkingSetBlob(cs, zBranch, pCatHash, pCommitHash,
+                                  &emptyHash, 0,
+                                  &emptyHash, &emptyHash,
+                                  0, &emptyHash, &emptyHash,
+                                  0, 0, &emptyHash);
+}
+
 int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                         const ProllyHash *pCatHash,
                                         const ProllyHash *pCommitHash){
@@ -7548,6 +7562,7 @@ int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHas
   u8 *catData = 0;
   int nCatData = 0;
   ProllyHash workingCatHash;
+  ProllyHash wsHash;
   const char *zBranch;
   int rc;
 
@@ -7567,16 +7582,29 @@ int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHas
     if( rc != SQLITE_OK ) return rc;
   }
 
-  return btreeStoreWorkingSetBlob(cs, zBranch, &workingCatHash,
-                                  &pBtree->headCommit, &pBtree->stagedCatalog,
-                                  pBtree->isMerging, &pBtree->mergeCommitHash,
-                                  &pBtree->conflictsCatalogHash,
-                                  pBtree->isRebasing,
-                                  &pBtree->preRebaseWorkingCat,
-                                  &pBtree->rebaseOntoCommit,
-                                  pBtree->zRebaseOrigBranch,
-                                  pBtree->zRebaseReturnBranch,
-                                  &pBtree->constraintViolationsHash);
+  rc = btreeStoreWorkingSetBlob(cs, zBranch, &workingCatHash,
+                                &pBtree->headCommit, &pBtree->stagedCatalog,
+                                pBtree->isMerging, &pBtree->mergeCommitHash,
+                                &pBtree->conflictsCatalogHash,
+                                pBtree->isRebasing,
+                                &pBtree->preRebaseWorkingCat,
+                                &pBtree->rebaseOntoCommit,
+                                pBtree->zRebaseOrigBranch,
+                                pBtree->zRebaseReturnBranch,
+                                &pBtree->constraintViolationsHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( pBtree->isRebasing
+   && pBtree->zRebaseReturnBranch
+   && pBtree->zRebaseReturnBranch[0]
+   && sqlite3_stricmp(zBranch, pBtree->zRebaseReturnBranch)!=0 ){
+    rc = chunkStoreGetBranchWorkingSet(cs, zBranch, &wsHash);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = chunkStoreSetBranchWorkingSet(cs, pBtree->zRebaseReturnBranch, &wsHash);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  return SQLITE_OK;
 }
 
 int doltliteSaveWorkingSet(sqlite3 *db){

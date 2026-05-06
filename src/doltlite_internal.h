@@ -118,6 +118,9 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
 int doltliteUpdateBranchWorkingState(sqlite3 *db, const char *zBranch,
                                      const ProllyHash *pCatHash,
                                      const ProllyHash *pCommitHash);
+int doltliteWriteBranchCleanWorkingState(sqlite3 *db, const char *zBranch,
+                                         const ProllyHash *pCatHash,
+                                         const ProllyHash *pCommitHash);
 int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr);
 
 const char *doltliteGetSessionBranch(sqlite3 *db);
