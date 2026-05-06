@@ -86,6 +86,8 @@ extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHas
 
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
 
+int doltliteMaterializeDefaultColumns(sqlite3 *db);
+
 typedef struct DoltliteTxnState DoltliteTxnState;
 struct DoltliteTxnState {
   ProllyHash refsHash;
@@ -311,6 +313,61 @@ void doltliteUpdateSchemaHashes(sqlite3 *db){
       sqlite3_finalize(pStmt);
     }
   }
+}
+
+int doltliteMaterializeDefaultColumns(sqlite3 *db){
+  int idx = 0;
+  Pgno iTable;
+  const char *zName;
+  int rc = SQLITE_OK;
+  while( (zName = doltliteNextTableForSchema(db, &idx, &iTable)) != 0 ){
+    sqlite3_stmt *pStmt = 0;
+    char *zPragma = 0;
+    char *zUpdate = 0;
+    sqlite3_str *pSet = 0;
+    int nCols = 0;
+    (void)iTable;
+
+    zPragma = sqlite3_mprintf("PRAGMA main.table_info(%Q)", zName);
+    if( !zPragma ) return SQLITE_NOMEM;
+    rc = sqlite3_prepare_v2(db, zPragma, -1, &pStmt, 0);
+    sqlite3_free(zPragma);
+    if( rc!=SQLITE_OK ) return rc;
+
+    while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+      const char *zCol = (const char*)sqlite3_column_text(pStmt, 1);
+      const char *zDflt = (const char*)sqlite3_column_text(pStmt, 4);
+      if( zCol && zDflt ){
+        if( !pSet ){
+          pSet = sqlite3_str_new(db);
+          if( !pSet ){
+            sqlite3_finalize(pStmt);
+            return SQLITE_NOMEM;
+          }
+        }
+        if( nCols>0 ) sqlite3_str_appendall(pSet, ", ");
+        sqlite3_str_appendf(pSet, "\"%w\"=\"%w\"", zCol, zCol);
+        nCols++;
+      }
+    }
+    if( rc!=SQLITE_DONE ){
+      sqlite3_finalize(pStmt);
+      if( pSet ) sqlite3_str_finish(pSet);
+      return rc;
+    }
+    sqlite3_finalize(pStmt);
+    if( nCols>0 ){
+      char *zSet = sqlite3_str_finish(pSet);
+      if( !zSet ) return SQLITE_NOMEM;
+      zUpdate = sqlite3_mprintf("UPDATE \"%w\" SET %s", zName, zSet);
+      sqlite3_free(zSet);
+      if( !zUpdate ) return SQLITE_NOMEM;
+      rc = sqlite3_exec(db, zUpdate, 0, 0, 0);
+      sqlite3_free(zUpdate);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
 }
 
 int doltliteLoadLiveSchemaSql(

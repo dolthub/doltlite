@@ -2974,6 +2974,21 @@ static int findTableIndexInArray(
   return -1;
 }
 
+static char *resolveLiveSchemaTableNumber(sqlite3 *db, Pgno iTable){
+  Schema *pSchema;
+  HashElem *k;
+  if( !db || db->nDb<=0 ) return 0;
+  pSchema = db->aDb[0].pSchema;
+  if( !pSchema ) return 0;
+  for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
+    Table *pTab = (Table*)sqliteHashData(k);
+    if( pTab && pTab->tnum==(Pgno)iTable ){
+      return sqlite3_mprintf("%s", pTab->zName);
+    }
+  }
+  return 0;
+}
+
 static int findSavepointTableIndexInArray(
   SavepointTableEntry *aTables,
   int nTables,
@@ -7179,9 +7194,16 @@ const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable){
   pBtree = db->aDb[0].pBt;
   while( *pIdx < pBtree->cat.n ){
     int i = (*pIdx)++;
-    if( pBtree->cat.a[i].iTable>1 && pBtree->cat.a[i].zName ){
-      *piTable = pBtree->cat.a[i].iTable;
-      return pBtree->cat.a[i].zName;
+    if( pBtree->cat.a[i].iTable>1 ){
+      char *zLive = resolveLiveSchemaTableNumber(db, pBtree->cat.a[i].iTable);
+      if( zLive ){
+        sqlite3_free(pBtree->cat.a[i].zName);
+        pBtree->cat.a[i].zName = zLive;
+      }
+      if( pBtree->cat.a[i].zName ){
+        *piTable = pBtree->cat.a[i].iTable;
+        return pBtree->cat.a[i].zName;
+      }
     }
   }
   return 0;
@@ -7192,6 +7214,11 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   int rc;
   if( !pBt ) return SQLITE_ERROR;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  {
+    extern int doltliteMaterializeDefaultColumns(sqlite3 *db);
+    rc = doltliteMaterializeDefaultColumns(db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   rc = flushAllPending(pBt, 0);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -7330,24 +7357,18 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
 
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
   Btree *pBtree;
-  Schema *pSchema;
-  HashElem *k;
   int i;
   if( !db || db->nDb<=0 ) return 0;
+  {
+    char *zLive = resolveLiveSchemaTableNumber(db, iTable);
+    if( zLive ) return zLive;
+  }
   pBtree = db->aDb[0].pBt;
   if( pBtree && pBtree->cat.a ){
     for(i=0; i<pBtree->cat.n; i++){
       if( pBtree->cat.a[i].iTable==iTable && pBtree->cat.a[i].zName ){
         return sqlite3_mprintf("%s", pBtree->cat.a[i].zName);
       }
-    }
-  }
-  pSchema = db->aDb[0].pSchema;
-  if( !pSchema ) return 0;
-  for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
-    Table *pTab = (Table*)sqliteHashData(k);
-    if( pTab && pTab->tnum==(Pgno)iTable ){
-      return sqlite3_mprintf("%s", pTab->zName);
     }
   }
   return 0;
