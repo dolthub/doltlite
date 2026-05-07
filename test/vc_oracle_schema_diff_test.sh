@@ -382,6 +382,46 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'multi');
 " "HEAD~1" "HEAD"
 
+# Issue #739 wants to enumerate "which tables changed?" without a
+# table_name filter. Cover the combinations a consumer needs to
+# handle: add+drop+modify in one commit, two modifications side-
+# by-side, rename column with a peer change.
+oracle "multi_change_add_drop_modify" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, x INT);
+INSERT INTO u VALUES(1,10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_u');
+ALTER TABLE t ADD COLUMN extra TEXT;
+DROP TABLE u;
+CREATE TABLE w(id INTEGER PRIMARY KEY, z TEXT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_drop_modify');
+" "HEAD~1" "HEAD"
+
+# Modify two existing tables in one commit. Rename column on one,
+# add column on another. Both rows must appear in a no-filter diff.
+oracle "modify_two_tables_one_commit" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, x INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_u');
+ALTER TABLE t RENAME COLUMN v TO vv;
+ALTER TABLE u ADD COLUMN y TEXT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'modify_two');
+" "HEAD~1" "HEAD"
+
+# Rename a column AND add another in the same table in the same
+# commit. Should emit a single 'modified' row for that table.
+oracle "rename_and_add_col_same_commit" "
+$SEED
+ALTER TABLE t RENAME COLUMN v TO vv;
+ALTER TABLE t ADD COLUMN extra TEXT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'rename_plus_add');
+" "HEAD~1" "HEAD"
+
 echo "--- no changes ---"
 
 oracle "no_changes" "
