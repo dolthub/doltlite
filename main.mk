@@ -555,17 +555,22 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
 # BLAKE3 SIMD object selection. The vendored BLAKE3 ships a runtime
 # dispatcher that picks the best path on the current CPU; we only need
 # to compile the SIMD source files that are valid for the target
-# architecture. We detect arch from $(B.cc) -dumpmachine so this works
-# under cross-compilation (e.g. emcc → wasm32) instead of host uname.
+# architecture. We probe via $(CC) (not $(B.cc)) because the wasm
+# cross-compile path overrides only CC on the make command line, while
+# B.cc stays bound to the host's cc from the autoconf-generated
+# Makefile.
 #
-BLAKE3_TARGET_TRIPLE := $(shell $(B.cc) -dumpmachine 2>/dev/null)
-ifneq (,$(filter x86_64% amd64% i686% i386%,$(BLAKE3_TARGET_TRIPLE)))
+BLAKE3_TARGET_TRIPLE := $(shell $(CC) -dumpmachine 2>/dev/null)
+ifneq (,$(findstring wasm,$(BLAKE3_TARGET_TRIPLE))$(findstring emscripten,$(BLAKE3_TARGET_TRIPLE)))
+  # emcc/wasm32: SIMD intrinsics need -msimd128, which we don't want
+  # to require. Stick to portable; dispatch.c compiles down to direct
+  # portable calls when neither IS_X86 nor BLAKE3_USE_NEON is set.
+  BLAKE3_SIMD_OBJS =
+else ifneq (,$(filter x86_64% amd64% i686% i386%,$(BLAKE3_TARGET_TRIPLE)))
   BLAKE3_SIMD_OBJS = blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o
 else ifneq (,$(filter aarch64% arm64%,$(BLAKE3_TARGET_TRIPLE)))
   BLAKE3_SIMD_OBJS = blake3_neon.o
 else
-  # wasm32, riscv, etc. — portable path only; dispatch.c compiles to
-  # straight portable calls under these arch macros.
   BLAKE3_SIMD_OBJS =
 endif
 
