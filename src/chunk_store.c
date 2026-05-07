@@ -992,9 +992,10 @@ static int csReplayWal(ChunkStore *cs){
         break;
       }
       {
+        u32 magic;
         rc = sqlite3OsRead(cs->pFile, m, sizeof(m), cs->iWalOffset + pos);
         if( rc != SQLITE_OK ) goto replay_error;
-        u32 magic = CS_READ_U32(m);
+        magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
           /* Corrupt root record — torn write garbled the
           ** magic. Content-addressing protects us: any refs
