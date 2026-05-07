@@ -126,11 +126,14 @@ int main(int argc, char **argv) {
 }
 EOF
 
-# Build harness against vendored BLAKE3 + prollyHashCompute
-echo "=== BLAKE3 KAT (vendored portable) ==="
+# Build harness against vendored BLAKE3 + prollyHashCompute. We glob
+# blake3*.o so the test picks up whatever SIMD object set the build
+# selected for this host (sse2/sse41/avx2/avx512 on x86_64, neon on
+# aarch64, none on wasm32) plus the runtime dispatcher.
+echo "=== BLAKE3 KAT (vendored) ==="
 HERE=$(cd "$(dirname "$0")/.." && pwd)
 cc -O2 "$TMP/blake3_kat.c" \
-   prolly_hash.o blake3.o blake3_portable.o blake3_dispatch_portable.o \
+   prolly_hash.o blake3*.o \
    -I "$HERE/src" -I "$HERE/ext/blake3" -DDOLTLITE_PROLLY=1 \
    -lm \
    -o "$TMP/blake3_kat" 2>"$TMP/build.err" || {
