@@ -223,6 +223,7 @@ static void freeEntryData(ProllyMutMapEntry *e){
   e->pKey = 0;
   e->pVal = 0;
   e->nKey = 0;
+  e->keyHash = 0;
   e->nVal = 0;
   e->nValAlloc = 0;
 }
@@ -232,6 +233,7 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
                          const u8 *pVal, int nVal){
   e->pKey = 0;
   e->nKey = 0;
+  e->keyHash = 0;
   e->pVal = 0;
   e->nVal = 0;
   if( pKey && nKey>0 ){
@@ -239,6 +241,7 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
     if( !e->pKey ) return SQLITE_NOMEM;
     memcpy(e->pKey, pKey, nKey);
     e->nKey = nKey;
+    e->keyHash = hashKey(pKey, nKey);
   }
   if( pVal && nVal>0 ){
     e->pVal = (u8*)sqlite3_malloc(nVal);
@@ -296,10 +299,13 @@ static int bsearch_key(ProllyMutMap *mm,
 
 static int hashEntryMatches(
   ProllyMutMap *mm, int phys,
-  const u8 *pKey, int nKey
+  const u8 *pKey, int nKey,
+  u32 h
 ){
   ProllyMutMapEntry *e = &mm->aEntries[phys];
-  return compareEntries(e->pKey, e->nKey, pKey, nKey)==0;
+  return e->keyHash==h
+      && e->nKey==nKey
+      && memcmp(e->pKey, pKey, nKey)==0;
 }
 
 static int rebuildHash(ProllyMutMap *mm){
@@ -314,7 +320,7 @@ static int rebuildHash(ProllyMutMap *mm){
   }
   memset(mm->aHash, 0, mm->nHashAlloc * sizeof(int));
   for(i=0; i<mm->nEntries; i++){
-    u32 h = hashKey(mm->aEntries[i].pKey, mm->aEntries[i].nKey);
+    u32 h = mm->aEntries[i].keyHash;
     int mask = mm->nHashAlloc - 1;
     int slot = (int)(h & (u32)mask);
     while( mm->aHash[slot] != 0 ){
@@ -338,7 +344,7 @@ static void hashInsertPhys(ProllyMutMap *mm, int phys){
   int mask;
   int slot;
   if( mm->keepSorted || mm->nHashAlloc==0 ) return;
-  h = hashKey(mm->aEntries[phys].pKey, mm->aEntries[phys].nKey);
+  h = mm->aEntries[phys].keyHash;
   mask = mm->nHashAlloc - 1;
   slot = (int)(h & (u32)mask);
   while( mm->aHash[slot] != 0 ){
@@ -362,7 +368,7 @@ static int findPhysLazy(ProllyMutMap *mm,
     int slot = (int)(h & (u32)mask);
     while( mm->aHash[slot] != 0 ){
       int phys = mm->aHash[slot] - 1;
-      if( hashEntryMatches(mm, phys, pKey, nKey) ){
+      if( hashEntryMatches(mm, phys, pKey, nKey, h) ){
         *pPhys = phys;
         return SQLITE_OK;
       }
@@ -934,6 +940,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
       de->op = se->op;
       de->bornAt = se->bornAt;
       de->nKey = 0;
+      de->keyHash = 0;
       de->nVal = 0;
       de->nValAlloc = 0;
       de->pKey = 0;
@@ -948,6 +955,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
         }
         memcpy(de->pKey, se->pKey, se->nKey);
         de->nKey = se->nKey;
+        de->keyHash = se->keyHash;
       }
       if( se->pVal && se->nVal > 0 ){
         de->pVal = (u8*)sqlite3_malloc(se->nVal);

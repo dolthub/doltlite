@@ -5639,7 +5639,8 @@ static int prollyBtCursorIndexMoveto(
     int nSortKey = 0;
     int nSeekKeyField = 0;
     if( pCur->pKeyInfo
-     && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
+     && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField
+     && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
       nSeekKeyField = (int)pCur->pKeyInfo->nKeyField;
     }
     rc = serializeUnpackedRecordBuffer(
@@ -5715,6 +5716,22 @@ static int prollyBtCursorIndexMoveto(
                   bestCmp = sqlite3VdbeRecordCompare(nVal2, pVal2, pIdxKey);
                 }
               }
+              break;
+            }
+            if( nSeekKeyField>0 && prefixCmp==0 && nSK>=nSortKey ){
+              if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+                ProllyMutMapEntry *mmE = 0;
+                rc = prollyMutMapFindRc(pCur->pMutMap, pSK, nSK, 0, &mmE);
+                if( rc!=SQLITE_OK ) break;
+                if( mmE && mmE->op==PROLLY_EDIT_DELETE ){
+                  continue;
+                }
+              }
+              pIdxKey->eqSeen = 1;
+              bestIdx = i;
+              bestCmp = pIdxKey->default_rc;
+              treeFound = 1;
+              treeCmp = bestCmp;
               break;
             }
           }
@@ -5811,7 +5828,9 @@ static int prollyBtCursorIndexMoveto(
 
         const u8 *pMutVal = mutE->pVal;
         int nMutVal = mutE->nVal;
-        if( nMutVal==0 ){
+        if( mutFromCursorMap && nMutVal==0 ){
+          mutFound = 1;
+        }else if( nMutVal==0 ){
           rc = recordFromSortKeyBuffer(
               mutE->pKey, mutE->nKey,
               &pCur->pMovetoRec, &pCur->nMovetoRecAlloc, &nMutVal);
