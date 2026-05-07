@@ -551,7 +551,25 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
 #
 # Prolly tree engine objects (when DOLTLITE_PROLLY=1)
 #
-PROLLY_OBJS = prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch_portable.o prolly_hashset.o prolly_node.o prolly_cache.o \
+#
+# BLAKE3 SIMD object selection. The vendored BLAKE3 ships a runtime
+# dispatcher that picks the best path on the current CPU; we only need
+# to compile the SIMD source files that are valid for the target
+# architecture. We detect arch from $(B.cc) -dumpmachine so this works
+# under cross-compilation (e.g. emcc → wasm32) instead of host uname.
+#
+BLAKE3_TARGET_TRIPLE := $(shell $(B.cc) -dumpmachine 2>/dev/null)
+ifneq (,$(filter x86_64% amd64% i686% i386%,$(BLAKE3_TARGET_TRIPLE)))
+  BLAKE3_SIMD_OBJS = blake3_sse2.o blake3_sse41.o blake3_avx2.o blake3_avx512.o
+else ifneq (,$(filter aarch64% arm64%,$(BLAKE3_TARGET_TRIPLE)))
+  BLAKE3_SIMD_OBJS = blake3_neon.o
+else
+  # wasm32, riscv, etc. — portable path only; dispatch.c compiles to
+  # straight portable calls under these arch macros.
+  BLAKE3_SIMD_OBJS =
+endif
+
+PROLLY_OBJS = prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
               chunk_store.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
@@ -1305,10 +1323,41 @@ blake3_portable.o:	$(TOP)/ext/blake3/blake3_portable.c \
 		$(TOP)/ext/blake3/blake3_impl.h
 	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -c $(TOP)/ext/blake3/blake3_portable.c
 
-blake3_dispatch_portable.o:	$(TOP)/ext/blake3/blake3_dispatch_portable.c \
+blake3_dispatch.o:	$(TOP)/ext/blake3/blake3_dispatch.c \
 		$(TOP)/ext/blake3/blake3.h \
 		$(TOP)/ext/blake3/blake3_impl.h
-	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -c $(TOP)/ext/blake3/blake3_dispatch_portable.c
+	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -c $(TOP)/ext/blake3/blake3_dispatch.c
+
+# BLAKE3 SIMD source files. Each needs its own -m flag so the
+# corresponding intrinsics header is enabled even when the rest of
+# the tree is compiled with a baseline ISA. The dispatcher only calls
+# these at runtime when the host CPU advertises support, so it's safe
+# to compile them unconditionally on x86_64.
+blake3_sse2.o:	$(TOP)/ext/blake3/blake3_sse2.c \
+		$(TOP)/ext/blake3/blake3.h \
+		$(TOP)/ext/blake3/blake3_impl.h
+	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -msse2 -c $(TOP)/ext/blake3/blake3_sse2.c
+
+blake3_sse41.o:	$(TOP)/ext/blake3/blake3_sse41.c \
+		$(TOP)/ext/blake3/blake3.h \
+		$(TOP)/ext/blake3/blake3_impl.h
+	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -msse4.1 -c $(TOP)/ext/blake3/blake3_sse41.c
+
+blake3_avx2.o:	$(TOP)/ext/blake3/blake3_avx2.c \
+		$(TOP)/ext/blake3/blake3.h \
+		$(TOP)/ext/blake3/blake3_impl.h
+	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -mavx2 -c $(TOP)/ext/blake3/blake3_avx2.c
+
+blake3_avx512.o:	$(TOP)/ext/blake3/blake3_avx512.c \
+		$(TOP)/ext/blake3/blake3.h \
+		$(TOP)/ext/blake3/blake3_impl.h
+	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -mavx512f -mavx512vl -c $(TOP)/ext/blake3/blake3_avx512.c
+
+# NEON is part of the AArch64 baseline, so no extra -m flag is needed.
+blake3_neon.o:	$(TOP)/ext/blake3/blake3_neon.c \
+		$(TOP)/ext/blake3/blake3.h \
+		$(TOP)/ext/blake3/blake3_impl.h
+	$(T.cc.sqlite) $(BLAKE3_CFLAGS) -c $(TOP)/ext/blake3/blake3_neon.c
 
 prolly_hashset.o:	$(TOP)/src/prolly_hashset.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_hashset.c
