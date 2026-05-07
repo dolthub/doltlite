@@ -5287,6 +5287,23 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
       if( rc==SQLITE_OK ){
         if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
           pCur->eState = CURSOR_VALID;
+          /* Table scans call xPayloadSize then xPayloadFetch on every
+          ** advanced row. Both go through getCursorPayload which has
+          ** a multi-branch chain (cache, mutmap, intkey). Cache the
+          ** (pData, nData) pair eagerly here so both subsequent
+          ** trips hit the early-return at the top of getCursorPayload.
+          ** The pointer borrows the leaf node memory; the cache is
+          ** invalidated by CLEAR_CACHED_PAYLOAD on the next move.
+          ** INTKEY-only — non-INTKEY may need reconstruction which
+          ** the original path handles. */
+          if( pCur->curIntKey ){
+            const u8 *pVal; int nVal;
+            prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+            if( nVal > 0 ){
+              pCur->pCachedPayload = (u8*)pVal;
+              pCur->nCachedPayload = nVal;
+            }
+          }
         } else {
           pCur->eState = CURSOR_INVALID;
           return SQLITE_DONE;
