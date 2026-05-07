@@ -3607,6 +3607,112 @@ CREATE INDEX idx_t_n ON t(n);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'final');
 "
+
+run_ddl_case \
+  "ddl_committed_evolution_int_pk" \
+  "SELECT printf('%d|%s|%d|%s', id, payload, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('idx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (1, 'alpha', 10, 'seed');
+INSERT INTO t VALUES (2, 'bravo', 20, 'seed');
+INSERT INTO t VALUES (3, 'charlie', 30, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (1, 'alpha', 10);
+INSERT INTO t VALUES (2, 'bravo', 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base shape');
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+UPDATE t SET extra = 'seed';
+INSERT INTO t VALUES (3, 'charlie', 30, 'seed');
+CREATE INDEX idx_t_payload ON t(payload);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'renamed with payload index');
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE src(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO src VALUES (1, 'alpha', 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'source seed');
+INSERT INTO src VALUES (2, 'bravo', 20), (3, 'charlie', 30);
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, payload, n, extra)
+SELECT id, v, n, 'seed' FROM src;
+DROP TABLE src;
+ALTER TABLE t_new RENAME TO t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'recreated final table');
+CREATE INDEX idx_t_n ON t(n);
+CREATE INDEX idx_t_payload ON t(payload);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_transient_schema_noise_int_pk" \
+  "SELECT printf('%d|%s|%d', id, v, n) FROM t ORDER BY id;" \
+  "
+SELECT printf('obj|%s|%s', type, name) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name;
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_v|%d|%s', seqno, name) FROM pragma_index_info('idx_t_v') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+CREATE INDEX idx_t_v ON t(v);
+INSERT INTO t VALUES (1, 'alpha', 10), (2, 'bravo', 20), (3, 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+CREATE INDEX idx_t_v ON t(v);
+INSERT INTO t VALUES (1, 'alpha', 10), (2, 'bravo', 20), (3, 'charlie', 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base final');
+CREATE TABLE scratch(id INTEGER PRIMARY KEY, note TEXT);
+CREATE INDEX idx_scratch_note ON scratch(note);
+CREATE VIEW scratch_v AS SELECT id, note FROM scratch;
+CREATE TRIGGER scratch_ai AFTER INSERT ON scratch BEGIN SELECT 1; END;
+INSERT INTO scratch VALUES (1, 'temporary');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'transient schema');
+DROP TRIGGER scratch_ai;
+DROP VIEW scratch_v;
+DROP INDEX idx_scratch_note;
+DROP TABLE scratch;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE scratch(id INTEGER PRIMARY KEY, note TEXT);
+CREATE INDEX idx_scratch_note ON scratch(note);
+INSERT INTO scratch VALUES (1, 'temporary');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'scratch first');
+DROP INDEX idx_scratch_note;
+DROP TABLE scratch;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (3, 'charlie', 30), (1, 'alpha', 10), (2, 'bravo', 20);
+CREATE INDEX idx_t_v ON t(v);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
 echo "======================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "======================================="
