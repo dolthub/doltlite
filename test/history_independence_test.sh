@@ -3363,6 +3363,250 @@ CREATE UNIQUE INDEX uidx_t_payload_n ON t(payload, n);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'final');
 "
+
+run_ddl_case \
+  "ddl_dml_mix_int_pk" \
+  "SELECT printf('%d|%s|%d|%s', id, payload, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('idx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (1, 'alpha', 10, 'seed');
+INSERT INTO t VALUES (2, 'bravo', 20, 'seed');
+INSERT INTO t VALUES (3, 'charlie', 30, 'seed');
+UPDATE t SET payload = 'alpha2', n = 11 WHERE id = 1;
+UPDATE t SET n = 22 WHERE id = 2;
+DELETE FROM t WHERE id = 3;
+INSERT INTO t VALUES (4, 'delta', 40, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (9, 'temp', 999);
+INSERT INTO t VALUES (1, 'alpha', 10);
+INSERT INTO t VALUES (2, 'bravo', 20);
+INSERT INTO t VALUES (3, 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+UPDATE t SET extra = 'seed';
+UPDATE t SET payload = 'alpha2', n = 11 WHERE id = 1;
+UPDATE t SET n = 22 WHERE id = 2;
+DELETE FROM t WHERE id IN (3, 9);
+INSERT INTO t VALUES (4, 'delta', 40, 'seed');
+CREATE INDEX idx_t_n ON t(n);
+CREATE INDEX idx_t_payload ON t(payload);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE src(id INTEGER PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO src VALUES (1, 'alpha', 10);
+INSERT INTO src VALUES (2, 'bravo', 20);
+INSERT INTO src VALUES (3, 'charlie', 30);
+UPDATE src SET v = 'alpha2', n = 11 WHERE id = 1;
+UPDATE src SET n = 22 WHERE id = 2;
+DELETE FROM src WHERE id = 3;
+INSERT INTO src VALUES (4, 'delta', 40);
+CREATE TABLE t_new(id INTEGER PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, payload, n, extra)
+SELECT id, v, n, 'seed' FROM src;
+DROP TABLE src;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_dml_mix_text_pk" \
+  "SELECT printf('%s|%s|%d|%s', id, payload, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('idx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES ('a-key', 'alpha', 10, 'seed');
+INSERT INTO t VALUES ('b-key', 'bravo', 20, 'seed');
+INSERT INTO t VALUES ('c-key', 'charlie', 30, 'seed');
+UPDATE t SET payload = 'alpha2', n = 11 WHERE id = 'a-key';
+UPDATE t SET n = 22 WHERE id = 'b-key';
+DELETE FROM t WHERE id = 'c-key';
+INSERT INTO t VALUES ('d-key', 'delta', 40, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES ('temp-key', 'temp', 999);
+INSERT INTO t VALUES ('a-key', 'alpha', 10);
+INSERT INTO t VALUES ('b-key', 'bravo', 20);
+INSERT INTO t VALUES ('c-key', 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+UPDATE t SET extra = 'seed';
+UPDATE t SET payload = 'alpha2', n = 11 WHERE id = 'a-key';
+UPDATE t SET n = 22 WHERE id = 'b-key';
+DELETE FROM t WHERE id IN ('c-key', 'temp-key');
+INSERT INTO t VALUES ('d-key', 'delta', 40, 'seed');
+CREATE INDEX idx_t_n ON t(n);
+CREATE INDEX idx_t_payload ON t(payload);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE src(id TEXT PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO src VALUES ('a-key', 'alpha', 10);
+INSERT INTO src VALUES ('b-key', 'bravo', 20);
+INSERT INTO src VALUES ('c-key', 'charlie', 30);
+UPDATE src SET v = 'alpha2', n = 11 WHERE id = 'a-key';
+UPDATE src SET n = 22 WHERE id = 'b-key';
+DELETE FROM src WHERE id = 'c-key';
+INSERT INTO src VALUES ('d-key', 'delta', 40);
+CREATE TABLE t_new(id TEXT PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, payload, n, extra)
+SELECT id, v, n, 'seed' FROM src;
+DROP TABLE src;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_dml_mix_blob_pk" \
+  "SELECT printf('%s|%s|%d|%s', hex(id), payload, n, extra) FROM t ORDER BY id;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('idx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES (x'01', 'alpha', 10, 'seed');
+INSERT INTO t VALUES (x'02', 'bravo', 20, 'seed');
+INSERT INTO t VALUES (x'03', 'charlie', 30, 'seed');
+UPDATE t SET payload = 'alpha2', n = 11 WHERE id = x'01';
+UPDATE t SET n = 22 WHERE id = x'02';
+DELETE FROM t WHERE id = x'03';
+INSERT INTO t VALUES (x'04', 'delta', 40, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO t VALUES (x'09', 'temp', 999);
+INSERT INTO t VALUES (x'01', 'alpha', 10);
+INSERT INTO t VALUES (x'02', 'bravo', 20);
+INSERT INTO t VALUES (x'03', 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+UPDATE t SET extra = 'seed';
+UPDATE t SET payload = 'alpha2', n = 11 WHERE id = x'01';
+UPDATE t SET n = 22 WHERE id = x'02';
+DELETE FROM t WHERE id IN (x'03', x'09');
+INSERT INTO t VALUES (x'04', 'delta', 40, 'seed');
+CREATE INDEX idx_t_n ON t(n);
+CREATE INDEX idx_t_payload ON t(payload);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE src(id BLOB PRIMARY KEY, v TEXT, n INTEGER);
+INSERT INTO src VALUES (x'01', 'alpha', 10);
+INSERT INTO src VALUES (x'02', 'bravo', 20);
+INSERT INTO src VALUES (x'03', 'charlie', 30);
+UPDATE src SET v = 'alpha2', n = 11 WHERE id = x'01';
+UPDATE src SET n = 22 WHERE id = x'02';
+DELETE FROM src WHERE id = x'03';
+INSERT INTO src VALUES (x'04', 'delta', 40);
+CREATE TABLE t_new(id BLOB PRIMARY KEY, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed');
+INSERT INTO t_new(id, payload, n, extra)
+SELECT id, v, n, 'seed' FROM src;
+DROP TABLE src;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
+
+run_ddl_case \
+  "ddl_dml_mix_composite_pk" \
+  "SELECT printf('%s|%d|%s|%d|%s', a, b, payload, n, extra) FROM t ORDER BY a, b;" \
+  "
+SELECT printf('col|%d|%s|%s|%d|%s|%d', cid, name, type, \"notnull\", COALESCE(dflt_value,'NULL'), pk) FROM pragma_table_info('t') ORDER BY cid;
+SELECT printf('idx|%s|%d|%s|%d', name, \"unique\", origin, partial) FROM pragma_index_list('t') WHERE origin!='pk' ORDER BY name;
+SELECT printf('idxcol|idx_t_payload|%d|%s', seqno, name) FROM pragma_index_info('idx_t_payload') ORDER BY seqno;
+SELECT printf('idxcol|idx_t_n|%d|%s', seqno, name) FROM pragma_index_info('idx_t_n') ORDER BY seqno;
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed', PRIMARY KEY(a, b));
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+INSERT INTO t VALUES ('a', 1, 'alpha', 10, 'seed');
+INSERT INTO t VALUES ('b', 2, 'bravo', 20, 'seed');
+INSERT INTO t VALUES ('c', 3, 'charlie', 30, 'seed');
+UPDATE t SET payload = 'alpha2', n = 11 WHERE a = 'a' AND b = 1;
+UPDATE t SET n = 22 WHERE a = 'b' AND b = 2;
+DELETE FROM t WHERE a = 'c' AND b = 3;
+INSERT INTO t VALUES ('d', 4, 'delta', 40, 'seed');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE t(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO t VALUES ('temp', 9, 'temp', 999);
+INSERT INTO t VALUES ('a', 1, 'alpha', 10);
+INSERT INTO t VALUES ('b', 2, 'bravo', 20);
+INSERT INTO t VALUES ('c', 3, 'charlie', 30);
+ALTER TABLE t RENAME COLUMN v TO payload;
+ALTER TABLE t ADD COLUMN extra TEXT DEFAULT 'seed';
+UPDATE t SET extra = 'seed';
+UPDATE t SET payload = 'alpha2', n = 11 WHERE a = 'a' AND b = 1;
+UPDATE t SET n = 22 WHERE a = 'b' AND b = 2;
+DELETE FROM t WHERE (a = 'c' AND b = 3) OR (a = 'temp' AND b = 9);
+INSERT INTO t VALUES ('d', 4, 'delta', 40, 'seed');
+CREATE INDEX idx_t_n ON t(n);
+CREATE INDEX idx_t_payload ON t(payload);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+" \
+  "
+CREATE TABLE src(a TEXT, b INTEGER, v TEXT, n INTEGER, PRIMARY KEY(a, b));
+INSERT INTO src VALUES ('a', 1, 'alpha', 10);
+INSERT INTO src VALUES ('b', 2, 'bravo', 20);
+INSERT INTO src VALUES ('c', 3, 'charlie', 30);
+UPDATE src SET v = 'alpha2', n = 11 WHERE a = 'a' AND b = 1;
+UPDATE src SET n = 22 WHERE a = 'b' AND b = 2;
+DELETE FROM src WHERE a = 'c' AND b = 3;
+INSERT INTO src VALUES ('d', 4, 'delta', 40);
+CREATE TABLE t_new(a TEXT, b INTEGER, payload TEXT, n INTEGER, extra TEXT DEFAULT 'seed', PRIMARY KEY(a, b));
+INSERT INTO t_new(a, b, payload, n, extra)
+SELECT a, b, v, n, 'seed' FROM src;
+DROP TABLE src;
+ALTER TABLE t_new RENAME TO t;
+CREATE INDEX idx_t_payload ON t(payload);
+CREATE INDEX idx_t_n ON t(n);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'final');
+"
 echo "======================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "======================================="
