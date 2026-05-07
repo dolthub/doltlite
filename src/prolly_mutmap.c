@@ -104,6 +104,7 @@ static void freeEntryData(ProllyMutMapEntry *e){
   e->pVal = 0;
   e->nKey = 0;
   e->nVal = 0;
+  e->nValAlloc = 0;
 }
 
 static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
@@ -128,7 +129,27 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
     }
     memcpy(e->pVal, pVal, nVal);
     e->nVal = nVal;
+    e->nValAlloc = nVal;
   }
+  return SQLITE_OK;
+}
+
+static int replaceEntryValue(ProllyMutMapEntry *e, const u8 *pVal, int nVal){
+  if( !pVal || nVal<=0 ){
+    sqlite3_free(e->pVal);
+    e->pVal = 0;
+    e->nVal = 0;
+    e->nValAlloc = 0;
+    return SQLITE_OK;
+  }
+  if( e->nValAlloc < nVal ){
+    u8 *pNew = (u8*)sqlite3_realloc(e->pVal, nVal);
+    if( !pNew ) return SQLITE_NOMEM;
+    e->pVal = pNew;
+    e->nValAlloc = nVal;
+  }
+  memcpy(e->pVal, pVal, nVal);
+  e->nVal = nVal;
   return SQLITE_OK;
 }
 
@@ -370,15 +391,8 @@ int prollyMutMapInsert(
       if( rc!=SQLITE_OK ) return rc;
     }
     e->op = PROLLY_EDIT_INSERT;
-    sqlite3_free(e->pVal);
-    e->pVal = 0;
-    e->nVal = 0;
-    if( pVal && nVal>0 ){
-      e->pVal = (u8*)sqlite3_malloc(nVal);
-      if( !e->pVal ) return SQLITE_NOMEM;
-      memcpy(e->pVal, pVal, nVal);
-      e->nVal = nVal;
-    }
+    rc = replaceEntryValue(e, pVal, nVal);
+    if( rc!=SQLITE_OK ) return rc;
     e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
     return SQLITE_OK;
   }
@@ -459,6 +473,7 @@ int prollyMutMapDelete(
       sqlite3_free(e->pVal);
       e->pVal = 0;
       e->nVal = 0;
+      e->nValAlloc = 0;
       e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
       return SQLITE_OK;
     }
@@ -519,6 +534,7 @@ void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level){
 ** undo record gets applied, losing the restored state. */
 int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
   int i;
+  int rc;
   if( !mm ) return SQLITE_OK;
 
   while( mm->nUndo > 0
@@ -529,15 +545,8 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
       ProllyMutMapEntry *e = &mm->aEntries[idx];
       e->op = rec->prevOp;
       e->bornAt = encodeLevel(mm, rec->prevBornAt);
-      sqlite3_free(e->pVal);
-      e->pVal = 0;
-      e->nVal = 0;
-      if( rec->prevVal && rec->nPrevVal > 0 ){
-        e->pVal = (u8*)sqlite3_malloc(rec->nPrevVal);
-        if( !e->pVal ) return SQLITE_NOMEM;
-        memcpy(e->pVal, rec->prevVal, rec->nPrevVal);
-        e->nVal = rec->nPrevVal;
-      }
+      rc = replaceEntryValue(e, rec->prevVal, rec->nPrevVal);
+      if( rc!=SQLITE_OK ) return rc;
     }
     sqlite3_free(rec->prevVal);
     rec->prevVal = 0;
@@ -815,6 +824,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
       de->bornAt = se->bornAt;
       de->nKey = 0;
       de->nVal = 0;
+      de->nValAlloc = 0;
       de->pKey = 0;
       de->pVal = 0;
       if( se->pKey && se->nKey > 0 ){
@@ -840,6 +850,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
         }
         memcpy(de->pVal, se->pVal, se->nVal);
         de->nVal = se->nVal;
+        de->nValAlloc = se->nVal;
       }
       dst->nEntries++;
     }
