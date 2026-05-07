@@ -190,6 +190,85 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_t');
 " "HEAD~1" "HEAD"
 
+# Two tables exist; drop one. Issue #738 boiled down: this exact
+# shape was reported as 'unknown operation'. Now expected: one row
+# with from_table_name='t', empty to_create_statement; the surviving
+# 'u' table doesn't appear.
+oracle "drop_one_of_two_tables" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_u');
+DROP TABLE t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_t');
+" "HEAD~1" "HEAD"
+
+# Two tables dropped in a single commit.
+oracle "drop_multiple_in_one_commit" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
+CREATE TABLE w(id INTEGER PRIMARY KEY, y TEXT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_u_w');
+DROP TABLE t;
+DROP TABLE u;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_t_u');
+" "HEAD~1" "HEAD"
+
+# Drop a populated table — schema diff is data-agnostic, the row
+# count shouldn't affect output.
+oracle "drop_table_with_data" "
+$SEED
+INSERT INTO t VALUES (2, 20), (3, 30), (4, 40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_rows');
+DROP TABLE t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_with_data');
+" "HEAD~1" "HEAD"
+
+# Drop using the single-arg range-syntax form 'from..to'.
+# oracle_query is needed because the standard 'oracle' helper always
+# passes at least two arguments to dolt_schema_diff(...).
+oracle_query "drop_via_range_syntax" "
+$SEED
+DROP TABLE t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_t');
+" "SELECT CONCAT('ROW|', from_table_name, '|', to_table_name, '|',
+       CASE WHEN from_create_statement IS NULL OR from_create_statement='' THEN 'N' ELSE 'Y' END, '|',
+       CASE WHEN to_create_statement   IS NULL OR to_create_statement=''   THEN 'N' ELSE 'Y' END
+     ) FROM dolt_schema_diff('HEAD~1..HEAD');"
+
+# Issue #738's exact shape: filter the diff by table_name. dolt-
+# replay needs this filter so it can ask 'is THIS named table
+# dropped between these two refs?' without paging through the
+# whole diff.
+oracle "drop_filter_by_table_name" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_u');
+DROP TABLE t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_t');
+" "HEAD~1" "HEAD" "t"
+
+# Drop a table the filter is asking about, BUT also keep an unrelated
+# table around. Filter should suppress the unrelated row too.
+oracle "drop_filter_excludes_other_changes" "
+$SEED
+CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'add_u');
+DROP TABLE t;
+ALTER TABLE u ADD COLUMN extra TEXT;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'drop_t_alter_u');
+" "HEAD~1" "HEAD" "t"
+
 echo "--- modified table (add column) ---"
 
 oracle "modified_add_col" "

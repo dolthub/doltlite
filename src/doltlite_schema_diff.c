@@ -504,18 +504,45 @@ static int sdResolveRefs(
   }
 
   rc = doltliteResolveRef(db, zFromRef, &commitHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    /* Translate SQLITE_NOTFOUND ("unknown operation") and any other
+    ** ref-resolution failure into a vtable error with a usable
+    ** message — the bare SQLITE_NOTFOUND gets mapped to the cryptic
+    ** "unknown operation" string by the SQLite shell, which is
+    ** what surfaced in dolthub/doltlite#738. */
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf(
+      "dolt_schema_diff: from_ref '%s' could not be resolved", zFromRef);
+    return SQLITE_ERROR;
+  }
   memset(&commit, 0, sizeof(commit));
   rc = doltliteLoadCommit(db, &commitHash, &commit);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf(
+      "dolt_schema_diff: from_ref '%s' resolved to a hash but the "
+      "commit could not be loaded", zFromRef);
+    return SQLITE_ERROR;
+  }
   memcpy(pFromCatHash, &commit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&commit);
 
   rc = doltliteResolveRef(db, zToRef, &commitHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf(
+      "dolt_schema_diff: to_ref '%s' could not be resolved", zToRef);
+    return SQLITE_ERROR;
+  }
   memset(&commit, 0, sizeof(commit));
   rc = doltliteLoadCommit(db, &commitHash, &commit);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pVtab->zErrMsg);
+    pVtab->zErrMsg = sqlite3_mprintf(
+      "dolt_schema_diff: to_ref '%s' resolved to a hash but the "
+      "commit could not be loaded", zToRef);
+    return SQLITE_ERROR;
+  }
   memcpy(pToCatHash, &commit.catalogHash, sizeof(ProllyHash));
   doltliteCommitClear(&commit);
 
