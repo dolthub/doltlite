@@ -219,10 +219,11 @@ static int fkRefreshCandidateTables(sqlite3 *db, int *pChanged){
   }
 
   for(i=0; i<nNames; i++){
+    char *zSql;
     if( !tableHasRowid(db, azNames[i]) ){
       continue;
     }
-    char *zSql = sqlite3_mprintf("REINDEX \"%w\"", azNames[i]);
+    zSql = sqlite3_mprintf("REINDEX \"%w\"", azNames[i]);
     if( !zSql ){
       fkRefreshFreeNames(azNames, nNames);
       return SQLITE_NOMEM;
