@@ -483,6 +483,10 @@ int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
   return rc;
 }
 
+static int doltlitePrepareCatalogForPersistence(sqlite3 *db){
+  return doltliteMaterializeDefaultColumns(db);
+}
+
 void freeSchemaMergeActions(SchemaMergeAction *a, int n){
   int i, j;
   for(i=0; i<n; i++){
@@ -1274,6 +1278,12 @@ static int doltliteStageArgsAndPersist(
 
   doltliteGetSessionStaged(db, &savedStaged);
 
+  rc = doltlitePrepareCatalogForPersistence(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to prepare catalog", -1);
+    return rc;
+  }
+
   rc = doltliteFlushCatalogToHash(db, &workingHash);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "failed to flush", -1);
@@ -1544,6 +1554,12 @@ static void doltliteCommitFunc(
     /* For BEGIN / nested SAVEPOINT, only close the SQL transaction once
     ** dolt_commit() has survived argument parsing and basic validation. */
     (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  }
+
+  rc = doltlitePrepareCatalogForPersistence(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to prepare catalog", -1);
+    return;
   }
 
   if( addAll ){

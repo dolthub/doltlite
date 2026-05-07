@@ -7207,11 +7207,6 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   int rc;
   if( !pBt ) return SQLITE_ERROR;
   if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
-  {
-    extern int doltliteMaterializeDefaultColumns(sqlite3 *db);
-    rc = doltliteMaterializeDefaultColumns(db);
-    if( rc!=SQLITE_OK ) return rc;
-  }
   rc = flushAllPending(pBt, 0);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -7352,10 +7347,6 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
   Btree *pBtree;
   int i;
   if( !db || db->nDb<=0 ) return 0;
-  {
-    char *zLive = resolveLiveSchemaTableNumber(db, iTable);
-    if( zLive ) return zLive;
-  }
   pBtree = db->aDb[0].pBt;
   if( pBtree && pBtree->cat.a ){
     for(i=0; i<pBtree->cat.n; i++){
@@ -7363,6 +7354,10 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
         return sqlite3_mprintf("%s", pBtree->cat.a[i].zName);
       }
     }
+  }
+  {
+    char *zLive = resolveLiveSchemaTableNumber(db, iTable);
+    if( zLive ) return zLive;
   }
   return 0;
 }
