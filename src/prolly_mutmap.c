@@ -93,6 +93,17 @@ static ProllyMutMapEntry *entryAtOrder(ProllyMutMap *mm, int idx){
   return &mm->aEntries[mm->aOrder[idx]];
 }
 
+static int compareEntryToKey(
+  const ProllyMutMapEntry *e,
+  const u8 *pKey, int nKey,
+  u64 keyPrefix
+){
+  if( e->keyPrefix != keyPrefix ){
+    return e->keyPrefix < keyPrefix ? -1 : 1;
+  }
+  return compareEntries(e->pKey, e->nKey, pKey, nKey);
+}
+
 static u32 hashKey(const u8 *pKey, int nKey){
   u32 h = 2166136261u;
   int i;
@@ -195,7 +206,7 @@ static int mutmapSortOrder(ProllyMutMap *mm){
   scratch = (OrderPair*)mm->aSortScratch;
   for(i=0; i<n; i++){
     ProllyMutMapEntry *e = &mm->aEntries[i];
-    scratch[i].prefix = keyPrefix64(e->pKey, e->nKey);
+    scratch[i].prefix = e->keyPrefix;
     scratch[i].phys = i;
     scratch[i].pad = 0;
   }
@@ -223,6 +234,7 @@ static void freeEntryData(ProllyMutMapEntry *e){
   e->pKey = 0;
   e->pVal = 0;
   e->nKey = 0;
+  e->keyPrefix = 0;
   e->keyHash = 0;
   e->nVal = 0;
   e->nValAlloc = 0;
@@ -233,6 +245,7 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
                          const u8 *pVal, int nVal){
   e->pKey = 0;
   e->nKey = 0;
+  e->keyPrefix = 0;
   e->keyHash = 0;
   e->pVal = 0;
   e->nVal = 0;
@@ -241,6 +254,7 @@ static int copyEntryData(ProllyMutMap *mm, ProllyMutMapEntry *e,
     if( !e->pKey ) return SQLITE_NOMEM;
     memcpy(e->pKey, pKey, nKey);
     e->nKey = nKey;
+    e->keyPrefix = keyPrefix64(pKey, nKey);
     e->keyHash = hashKey(pKey, nKey);
   }
   if( pVal && nVal>0 ){
@@ -280,11 +294,12 @@ static int bsearch_key(ProllyMutMap *mm,
                        const u8 *pKey, int nKey,
                        int *pFound){
   int lo = 0, hi = mm->nEntries;
+  u64 prefix = keyPrefix64(pKey, nKey);
   *pFound = 0;
   while( lo < hi ){
     int mid = lo + (hi - lo) / 2;
     ProllyMutMapEntry *e = entryAtOrder(mm, mid);
-    int c = compareEntries(e->pKey, e->nKey, pKey, nKey);
+    int c = compareEntryToKey(e, pKey, nKey, prefix);
     if( c < 0 ){
       lo = mid + 1;
     }else if( c > 0 ){
@@ -940,6 +955,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
       de->op = se->op;
       de->bornAt = se->bornAt;
       de->nKey = 0;
+      de->keyPrefix = 0;
       de->keyHash = 0;
       de->nVal = 0;
       de->nValAlloc = 0;
@@ -955,6 +971,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
         }
         memcpy(de->pKey, se->pKey, se->nKey);
         de->nKey = se->nKey;
+        de->keyPrefix = se->keyPrefix;
         de->keyHash = se->keyHash;
       }
       if( se->pVal && se->nVal > 0 ){

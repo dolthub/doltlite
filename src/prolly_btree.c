@@ -5653,6 +5653,41 @@ static int prollyBtCursorIndexMoveto(
     if( rc!=SQLITE_OK ) return rc;
     pSortKey = pCur->pSeekSortKey;
 
+    if( pCur->pKeyInfo
+     && pIdxKey->nField >= pCur->pKeyInfo->nAllField ){
+      struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+      ProllyMutMap *pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
+      ProllyMutMapEntry *pEntry = 0;
+      if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+        rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
+        if( rc!=SQLITE_OK ) return rc;
+        if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+          setCursorToMutMapEntryPhys(
+              pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+          *pRes = 0;
+          pIdxKey->eqSeen = 1;
+          return SQLITE_OK;
+        }
+      }
+      if( pPending && pPending!=pCur->pMutMap
+       && !prollyMutMapIsEmpty(pPending) ){
+        rc = prollyMutMapFindRc(pPending, pSortKey, nSortKey, 0, &pEntry);
+        if( rc!=SQLITE_OK ) return rc;
+        if( pEntry && pEntry->op==PROLLY_EDIT_INSERT ){
+          if( pEntry->nVal>0 && pEntry->pVal ){
+            rc = cacheCursorPayloadCopy(pCur, pEntry->pVal, pEntry->nVal);
+          }else{
+            rc = cacheCursorPayloadReconstructed(
+                pCur, pEntry->pKey, pEntry->nKey);
+          }
+          if( rc!=SQLITE_OK ) return rc;
+          pCur->eState = CURSOR_VALID;
+          *pRes = 0;
+          pIdxKey->eqSeen = 1;
+          return SQLITE_OK;
+        }
+      }
+    }
 
     rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &(int){0});
     if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
