@@ -2787,7 +2787,6 @@ CREATE INDEX idx_t_payload ON t(payload);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'final');
 "
-
 echo "======================================="
 echo "Results: $PASS passed, $FAIL failed"
 echo "======================================="
