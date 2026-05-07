@@ -5160,6 +5160,38 @@ static void run_mutmap_empty_reverse_iter(void){
   prollyMutMapFree(&mm);
 }
 
+static void run_mutmap_delete_reinsert_reuses_entry(void){
+  int mode;
+  static const u8 aFirst[] = { 1, 2, 3, 4 };
+  static const u8 aSecond[] = { 5, 6, 7, 8 };
+
+  printf("=== MutMap Delete Reinsert Reuses Entry Test ===\n\n");
+  for( mode = 0; mode < 2; mode++ ){
+    ProllyMutMap mm;
+    ProllyMutMapEntry *e = 0;
+    int rc;
+
+    check("mutmap_delete_reinsert_init",
+          prollyMutMapInitMode(&mm, 1, (u8)mode)==SQLITE_OK);
+    check("mutmap_delete_reinsert_insert",
+          prollyMutMapInsert(&mm, 0, 0, 42, aFirst, sizeof(aFirst))==SQLITE_OK);
+    check("mutmap_delete_reinsert_delete",
+          prollyMutMapDelete(&mm, 0, 0, 42)==SQLITE_OK);
+    check("mutmap_delete_reinsert_insert_again",
+          prollyMutMapInsert(&mm, 0, 0, 42, aSecond, sizeof(aSecond))==SQLITE_OK);
+
+    rc = prollyMutMapFindRc(&mm, 0, 0, 42, &e);
+    check("mutmap_delete_reinsert_find", rc==SQLITE_OK && e!=0);
+    check("mutmap_delete_reinsert_value",
+          e!=0
+       && e->op==PROLLY_EDIT_INSERT
+       && e->nVal==(int)sizeof(aSecond)
+       && memcmp(e->pVal, aSecond, sizeof(aSecond))==0);
+
+    prollyMutMapFree(&mm);
+  }
+}
+
 typedef struct MutMapModelEntry MutMapModelEntry;
 struct MutMapModelEntry {
   i64 key;
@@ -6347,6 +6379,7 @@ static const RegressionCase aCases[] = {
   { "checkout_dash_b_existing_branch_preserves_durable_state", "Checkout -b Existing Branch Preserves Durable State Test", run_checkout_dash_b_existing_branch_preserves_durable_state },
   { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
+  { "mutmap_delete_reinsert_reuses_entry", "MutMap Delete Reinsert Reuses Entry Test", run_mutmap_delete_reinsert_reuses_entry },
   { "mutmap_resolve_sorted_pos", "MutMap ResolveSortedPos Test", run_mutmap_resolve_sorted_pos },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },

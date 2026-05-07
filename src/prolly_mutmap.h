@@ -16,6 +16,7 @@ struct ProllyMutMapEntry {
   int nKey;
   u8 *pVal;
   int nVal;
+  int nValAlloc;
   int bornAt;
 };
 
