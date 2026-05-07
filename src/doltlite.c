@@ -59,6 +59,7 @@ static time_t dlWinTimegm(struct tm *pTm){
 #endif
 
 extern int doltliteLogRegister(sqlite3 *db);
+extern int doltliteCommitAncestorsRegister(sqlite3 *db);
 extern int doltliteStatusRegister(sqlite3 *db);
 extern int doltliteDiffRegister(sqlite3 *db);
 extern int doltliteSchemasRegister(sqlite3 *db);
@@ -4763,6 +4764,7 @@ void doltliteRegister(sqlite3 *db){
                                                    doltliteVersionFunc, 0, 0);
   if( rc!=SQLITE_OK ) return;
   if( doltliteLogRegister(db)!=SQLITE_OK ) return;
+  if( doltliteCommitAncestorsRegister(db)!=SQLITE_OK ) return;
   if( doltliteStatusRegister(db)!=SQLITE_OK ) return;
   if( doltliteDiffRegister(db)!=SQLITE_OK ) return;
   if( doltliteBranchRegister(db)!=SQLITE_OK ) return;
