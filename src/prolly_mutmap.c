@@ -68,6 +68,27 @@ static int compareEntries(
   return 0;
 }
 
+/* Big-endian zero-padded 8-byte prefix of a key.
+** Lex order on this u64 matches lex order on the first min(nKey,8) key
+** bytes when both keys are zero-padded to 8 bytes. Used as a fast-path
+** for sort/compare so most pairs resolve without falling through to
+** memcmp. Reads no bytes past nKey. */
+static u64 keyPrefix64(const u8 *pKey, int nKey){
+  u64 r = 0;
+  switch( nKey>=8 ? 8 : nKey ){
+    case 8: r |= (u64)pKey[7];        /* fall through */
+    case 7: r |= (u64)pKey[6] << 8;   /* fall through */
+    case 6: r |= (u64)pKey[5] << 16;  /* fall through */
+    case 5: r |= (u64)pKey[4] << 24;  /* fall through */
+    case 4: r |= (u64)pKey[3] << 32;  /* fall through */
+    case 3: r |= (u64)pKey[2] << 40;  /* fall through */
+    case 2: r |= (u64)pKey[1] << 48;  /* fall through */
+    case 1: r |= (u64)pKey[0] << 56;  /* fall through */
+    case 0: break;
+  }
+  return r;
+}
+
 static ProllyMutMapEntry *entryAtOrder(ProllyMutMap *mm, int idx){
   return &mm->aEntries[mm->aOrder[idx]];
 }
@@ -84,7 +105,106 @@ static u32 hashKey(const u8 *pKey, int nKey){
   return h;
 }
 
-static ProllyMutMap *gSortCtx = 0;
+/* (prefix, phys) pair packed for cache-friendly sort. Lex order on
+** prefix matches the first 8 bytes of the key; when prefixes tie we
+** fall through to a full compareEntries() against mm->aEntries. */
+typedef struct OrderPair {
+  u64 prefix;
+  int phys;
+  int pad;
+} OrderPair;
+
+static int orderPairCmp(ProllyMutMap *mm, const OrderPair *a, const OrderPair *b){
+  ProllyMutMapEntry *ea, *eb;
+  if( a->prefix != b->prefix ) return a->prefix < b->prefix ? -1 : 1;
+  ea = &mm->aEntries[a->phys];
+  eb = &mm->aEntries[b->phys];
+  return compareEntries(ea->pKey, ea->nKey, eb->pKey, eb->nKey);
+}
+
+static void mutmapInsertionSort(ProllyMutMap *mm, OrderPair *a, int lo, int hi){
+  int i, j;
+  OrderPair x;
+  for(i = lo + 1; i <= hi; i++){
+    x = a[i];
+    for(j = i; j > lo && orderPairCmp(mm, &a[j-1], &x) > 0; j--){
+      a[j] = a[j-1];
+    }
+    a[j] = x;
+  }
+}
+
+/* Quicksort with median-of-3 pivot, insertion-sort fallback for small
+** ranges, and tail-call elimination on the larger partition to bound
+** stack depth at O(log N). Compare is inlined via orderPairCmp — no
+** function pointer or global context. */
+static void mutmapQuickSort(ProllyMutMap *mm, OrderPair *a, int lo, int hi){
+  while( hi - lo > 16 ){
+    int mid = lo + ((hi - lo) >> 1);
+    int i, j;
+    OrderPair pivot, t;
+    /* Median-of-3 pivot selection: order a[lo], a[mid], a[hi] then
+    ** stash the median at a[hi-1] as the pivot. */
+    if( orderPairCmp(mm, &a[lo], &a[mid]) > 0 ){ t=a[lo]; a[lo]=a[mid]; a[mid]=t; }
+    if( orderPairCmp(mm, &a[lo], &a[hi]) > 0 ){ t=a[lo]; a[lo]=a[hi]; a[hi]=t; }
+    if( orderPairCmp(mm, &a[mid], &a[hi]) > 0 ){ t=a[mid]; a[mid]=a[hi]; a[hi]=t; }
+    t = a[mid]; a[mid] = a[hi-1]; a[hi-1] = t;
+    pivot = a[hi-1];
+    /* Partition. a[lo] <= pivot, a[hi] >= pivot already, so we scan
+    ** the interior. */
+    i = lo;
+    j = hi - 1;
+    for(;;){
+      while( orderPairCmp(mm, &a[++i], &pivot) < 0 );
+      while( orderPairCmp(mm, &a[--j], &pivot) > 0 );
+      if( i >= j ) break;
+      t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    /* Restore pivot to its final position. */
+    t = a[i]; a[i] = a[hi-1]; a[hi-1] = t;
+    /* Recurse on the smaller side, iterate on the larger. */
+    if( i - lo < hi - i ){
+      mutmapQuickSort(mm, a, lo, i - 1);
+      lo = i + 1;
+    } else {
+      mutmapQuickSort(mm, a, i + 1, hi);
+      hi = i - 1;
+    }
+  }
+  mutmapInsertionSort(mm, a, lo, hi);
+}
+
+/* Sort mm->aOrder[0..nEntries-1] by key. Builds a (prefix, phys)
+** scratch array, sorts that with a typed compare, then writes the
+** phys indices back to aOrder. The scratch buffer is cached on the
+** mutmap and grows in lockstep with nAlloc — flush-then-reuse loops
+** pay one alloc total, not one per flush. */
+static int mutmapSortOrder(ProllyMutMap *mm){
+  int n = mm->nEntries;
+  OrderPair *scratch;
+  int needBytes;
+  int i;
+  if( n <= 1 ) return SQLITE_OK;
+  needBytes = (int)(mm->nAlloc * sizeof(OrderPair));
+  if( mm->nSortScratchBytes < needBytes ){
+    void *p = sqlite3_realloc(mm->aSortScratch, needBytes);
+    if( !p ) return SQLITE_NOMEM;
+    mm->aSortScratch = p;
+    mm->nSortScratchBytes = needBytes;
+  }
+  scratch = (OrderPair*)mm->aSortScratch;
+  for(i=0; i<n; i++){
+    ProllyMutMapEntry *e = &mm->aEntries[i];
+    scratch[i].prefix = keyPrefix64(e->pKey, e->nKey);
+    scratch[i].phys = i;
+    scratch[i].pad = 0;
+  }
+  mutmapQuickSort(mm, scratch, 0, n - 1);
+  for(i=0; i<n; i++){
+    mm->aOrder[i] = scratch[i].phys;
+  }
+  return SQLITE_OK;
+}
 
 static int encodeLevel(ProllyMutMap *mm, int level){
   if( level<=0 ) return 0;
@@ -231,24 +351,12 @@ static int findPhysLazy(ProllyMutMap *mm,
   return SQLITE_OK;
 }
 
-static int compareOrderIndexes(const void *a, const void *b){
-  ProllyMutMap *mm = gSortCtx;
-  int ia = *(const int*)a;
-  int ib = *(const int*)b;
-  ProllyMutMapEntry *ea = &mm->aEntries[ia];
-  ProllyMutMapEntry *eb = &mm->aEntries[ib];
-  return compareEntries(ea->pKey, ea->nKey, eb->pKey, eb->nKey);
-}
-
 static int ensureOrder(ProllyMutMap *mm){
   int i;
+  int rc;
   if( mm->keepSorted || !mm->orderDirty ) return SQLITE_OK;
-  for(i=0; i<mm->nEntries; i++){
-    mm->aOrder[i] = i;
-  }
-  gSortCtx = mm;
-  qsort(mm->aOrder, mm->nEntries, sizeof(int), compareOrderIndexes);
-  gSortCtx = 0;
+  rc = mutmapSortOrder(mm);
+  if( rc!=SQLITE_OK ) return rc;
   for(i=0; i<mm->nEntries; i++){
     mm->aPos[mm->aOrder[i]] = i;
   }
@@ -774,6 +882,9 @@ void prollyMutMapFree(ProllyMutMap *mm){
   sqlite3_free(mm->aHash);
   mm->aHash = 0;
   mm->nHashAlloc = 0;
+  sqlite3_free(mm->aSortScratch);
+  mm->aSortScratch = 0;
+  mm->nSortScratchBytes = 0;
   mm->nAlloc = 0;
   sqlite3_free(mm->aUndo);
   mm->aUndo = 0;

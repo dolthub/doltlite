@@ -51,6 +51,11 @@ struct ProllyMutMap {
   int *aPos;
   int *aHash;
   int nHashAlloc;
+  /* Reusable scratch for the typed mutmap sort (see ensureOrder /
+  ** mutmapSortOrder in prolly_mutmap.c). Allocated lazily on first
+  ** sort; grows in lockstep with nAlloc. Bytes; opaque to callers. */
+  void *aSortScratch;
+  int nSortScratchBytes;
   /* 0 disables the undo-log path entirely — the autocommit fast path. */
   int currentSavepointLevel;
   ProllyMutMapUndoRec *aUndo;
