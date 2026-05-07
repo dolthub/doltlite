@@ -5,6 +5,7 @@
 #include "btree.h"
 #include "prolly_hash.h"
 #include "prolly_node.h"
+#include "prolly_encoding.h"
 #include "prolly_cache.h"
 #include "chunk_store.h"
 #include "prolly_cursor.h"
@@ -428,6 +429,21 @@ static int serializeUnpackedRecordBuffer(
   UnpackedRecord *pRec, u8 **ppBuf, int *pnAlloc, int *pnOut
 );
 static u32 btreeSerialType(Mem *pMem, u32 *pLen);
+
+static SQLITE_INLINE void cursorCurrentTreeValue(
+  BtCursor *pCur,
+  const u8 **ppData,
+  int *pnData
+){
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  ProllyNode *pNode = &pLeaf->node;
+  int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  u32 off0 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
+  u32 off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
+  *ppData = pNode->pValData + off0;
+  *pnData = (int)(off1 - off0);
+}
 static int flushDeferredEdits(BtShared *pBt);
 static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
@@ -5236,6 +5252,20 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
     pCur->skipNext = 0;
   }
 
+  if( !pCur->mmActive && pCur->pMutMap==0 ){
+    rc = prollyCursorNext(&pCur->pCur);
+    if( rc==SQLITE_OK ){
+      if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+        pCur->eState = CURSOR_VALID;
+      } else {
+        pCur->eState = CURSOR_INVALID;
+        return SQLITE_DONE;
+      }
+    }
+    pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
+    return rc;
+  }
+
   if( pCur->mmActive ){
     rc = mergeStepForward(pCur);
     if( rc==SQLITE_DONE ){
@@ -6006,11 +6036,11 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   }
 
   if( pCur->curIntKey ){
-    prollyCursorValue(&pCur->pCur, ppData, pnData);
+    cursorCurrentTreeValue(pCur, ppData, pnData);
   }else{
 
     const u8 *pVal; int nVal;
-    prollyCursorValue(&pCur->pCur, &pVal, &nVal);
+    cursorCurrentTreeValue(pCur, &pVal, &nVal);
     if( nVal > 0 ){
       *ppData = pVal;
       *pnData = nVal;
