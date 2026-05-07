@@ -251,6 +251,11 @@ struct ChunkStore {
   u8 readOnly;
   u8 isMemory;
   u8 snapshotPinned;
+  /* Once a successful HAS_MOVED check has confirmed the file at our
+  ** open fd matches the path, subsequent BeginTrans calls within
+  ** this connection skip the stat() syscall and rely on fstat-based
+  ** size checks to detect appends. Reset by csReloadFromDisk. */
+  u8 hasMovedChecked;
   int graphLockFd;
   i64 nCommittedWriteBuf;
 

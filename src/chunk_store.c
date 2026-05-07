@@ -2386,11 +2386,21 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
 
-  rc = sqlite3OsFileControl(cs->pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
-  if( rc!=SQLITE_OK ) return rc;
-  if( bMoved ){
-    *pChanged = 1;
-    return SQLITE_OK;
+  /* HAS_MOVED detects atomic file replacement (rename-over) by another
+  ** process — needs a stat() syscall on the path. For autocommit-heavy
+  ** read workloads this fires per-statement and dominates time. After
+  ** the first confirmation that the fd matches the path, cache the
+  ** "not moved" answer until csReloadFromDisk forces a re-open. The
+  ** fstat-based size check below still runs every call and catches all
+  ** append-only changes from cooperative writers. */
+  if( !cs->hasMovedChecked ){
+    rc = sqlite3OsFileControl(cs->pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
+    if( rc!=SQLITE_OK ) return rc;
+    if( bMoved ){
+      *pChanged = 1;
+      return SQLITE_OK;
+    }
+    cs->hasMovedChecked = 1;
   }
 
   {
@@ -2437,6 +2447,11 @@ static int csReloadFromDisk(ChunkStore *cs){
   csCaptureReloadState(cs, &saved);
   csAdoptOpenedStoreState(cs, &tmp);
   chunkStoreClose(&tmp);
+
+  /* New fd from re-open — invalidate the cached HAS_MOVED answer so
+  ** the next external-changes check runs the stat() once on the new
+  ** path/fd pair before resuming the cached fast-path. */
+  cs->hasMovedChecked = 0;
 
   csFreeReloadState(&saved);
   return SQLITE_OK;
