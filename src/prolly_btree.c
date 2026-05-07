@@ -4098,6 +4098,9 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     return SQLITE_OK;
   }
 
+  if( p->inTrans==TRANS_READ && !wrFlag ){
+    return SQLITE_OK;
+  }
 
   rc = btreeRefreshFromDisk(p);
   if( rc!=SQLITE_OK ) return rc;

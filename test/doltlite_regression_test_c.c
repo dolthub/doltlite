@@ -67,6 +67,7 @@
 #include "prolly_mutate.h"
 #include "prolly_node.h"
 #include "prolly_mutmap.h"
+#include "sortkey.h"
 
 typedef unsigned char u8;
 typedef unsigned int Pgno;
@@ -1942,6 +1943,38 @@ static void run_record_decode_corruption(void){
   z = doltliteDecodeRecord(badRecord, (int)sizeof(badRecord));
   check("corrupt_record_decodes_to_null", z==0);
   sqlite3_free(z);
+}
+
+static void run_sortkey_two_numeric_roundtrip(void){
+  static const u8 record[] = {
+    0x03,       /* header size */
+    0x01,       /* 1-byte integer */
+    0x03,       /* 3-byte integer */
+    0x7b,       /* 123 */
+    0x06, 0xf8, 0x55  /* 456789 */
+  };
+  u8 *pSortKey = 0;
+  u8 *pRoundTrip = 0;
+  int nSortKey = 0;
+  int nRoundTrip = 0;
+  int rc;
+
+  printf("=== Sortkey Two Numeric Roundtrip Test ===\n\n");
+
+  rc = sortKeyFromRecord(record, (int)sizeof(record), &pSortKey, &nSortKey);
+  check("two_numeric_sortkey_encode_ok", rc==SQLITE_OK);
+  check("two_numeric_sortkey_has_expected_width", nSortKey==18);
+
+  if( rc==SQLITE_OK ){
+    rc = recordFromSortKey(pSortKey, nSortKey, &pRoundTrip, &nRoundTrip);
+    check("two_numeric_sortkey_decode_ok", rc==SQLITE_OK);
+    check("two_numeric_sortkey_roundtrips",
+      nRoundTrip==(int)sizeof(record)
+      && memcmp(pRoundTrip, record, sizeof(record))==0);
+  }
+
+  sqlite3_free(pSortKey);
+  sqlite3_free(pRoundTrip);
 }
 
 static void run_reload_refs_transactional(void){
@@ -6349,6 +6382,7 @@ static const RegressionCase aCases[] = {
   { "branches_metadata_corruption", "Branches Metadata Corruption Test", run_branches_metadata_corruption },
   { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },
   { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption },
+  { "sortkey_two_numeric_roundtrip", "Sortkey Two Numeric Roundtrip Test", run_sortkey_two_numeric_roundtrip },
   { "reload_refs_transactional", "Reload Refs Transactional Test", run_reload_refs_transactional },
   { "refresh_refs_corruption_preserves_state", "Refresh Corrupt Refs State Preservation Test", run_refresh_refs_corruption_preserves_state },
   { "prolly_node_corruption", "Prolly Node Corruption Test", run_prolly_node_corruption },
