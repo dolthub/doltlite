@@ -86,6 +86,8 @@ extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHas
 
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
 
+int doltliteMaterializeDefaultColumns(sqlite3 *db);
+
 typedef struct DoltliteTxnState DoltliteTxnState;
 struct DoltliteTxnState {
   ProllyHash refsHash;
@@ -313,6 +315,82 @@ void doltliteUpdateSchemaHashes(sqlite3 *db){
   }
 }
 
+int doltliteMaterializeDefaultColumns(sqlite3 *db){
+  int idx = 0;
+  Pgno iTable;
+  const char *zName;
+  int rc = SQLITE_OK;
+  while( (zName = doltliteNextTableForSchema(db, &idx, &iTable)) != 0 ){
+    char *zLiveName = 0;
+    const char *zTableName = zName;
+    sqlite3_stmt *pStmt = 0;
+    char *zPragma = 0;
+    char *zUpdate = 0;
+    sqlite3_str *pSet = 0;
+    int nCols = 0;
+    zLiveName = doltliteResolveTableNumber(db, iTable);
+    if( zLiveName ) zTableName = zLiveName;
+
+    zPragma = sqlite3_mprintf("PRAGMA main.table_info(%Q)", zTableName);
+    if( !zPragma ){
+      sqlite3_free(zLiveName);
+      return SQLITE_NOMEM;
+    }
+    rc = sqlite3_prepare_v2(db, zPragma, -1, &pStmt, 0);
+    sqlite3_free(zPragma);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(zLiveName);
+      return rc;
+    }
+
+    while( (rc = sqlite3_step(pStmt))==SQLITE_ROW ){
+      const char *zCol = (const char*)sqlite3_column_text(pStmt, 1);
+      const char *zDflt = (const char*)sqlite3_column_text(pStmt, 4);
+      if( zCol && zDflt ){
+        if( !pSet ){
+          pSet = sqlite3_str_new(db);
+          if( !pSet ){
+            sqlite3_finalize(pStmt);
+            sqlite3_free(zLiveName);
+            return SQLITE_NOMEM;
+          }
+        }
+        if( nCols>0 ) sqlite3_str_appendall(pSet, ", ");
+        sqlite3_str_appendf(pSet, "\"%w\"=\"%w\"", zCol, zCol);
+        nCols++;
+      }
+    }
+    if( rc!=SQLITE_DONE ){
+      sqlite3_finalize(pStmt);
+      if( pSet ) sqlite3_str_finish(pSet);
+      sqlite3_free(zLiveName);
+      return rc;
+    }
+    sqlite3_finalize(pStmt);
+    if( nCols>0 ){
+      char *zSet = sqlite3_str_finish(pSet);
+      if( !zSet ){
+        sqlite3_free(zLiveName);
+        return SQLITE_NOMEM;
+      }
+      zUpdate = sqlite3_mprintf("UPDATE \"%w\" SET %s", zTableName, zSet);
+      sqlite3_free(zSet);
+      if( !zUpdate ){
+        sqlite3_free(zLiveName);
+        return SQLITE_NOMEM;
+      }
+      rc = sqlite3_exec(db, zUpdate, 0, 0, 0);
+      sqlite3_free(zUpdate);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(zLiveName);
+        return rc;
+      }
+    }
+    sqlite3_free(zLiveName);
+  }
+  return SQLITE_OK;
+}
+
 int doltliteLoadLiveSchemaSql(
   sqlite3 *db,
   const char *zType,
@@ -403,6 +481,10 @@ int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash){
   rc = chunkStorePut(cs, catData, nCatData, pHash);
   sqlite3_free(catData);
   return rc;
+}
+
+static int doltlitePrepareCatalogForPersistence(sqlite3 *db){
+  return doltliteMaterializeDefaultColumns(db);
 }
 
 void freeSchemaMergeActions(SchemaMergeAction *a, int n){
@@ -503,7 +585,9 @@ static int doltliteAdvanceBranch(
 
   if( cs->nBranches==0 ){
     rc = chunkStoreAddBranch(cs, branch, pNewHead);
-    if( rc==SQLITE_OK ) rc = chunkStoreSetDefaultBranch(cs, branch);
+    if( rc==SQLITE_OK ){
+      rc = chunkStoreSetDefaultBranch(cs, branch);
+    }
   }else{
     rc = chunkStoreUpdateBranch(cs, branch, pNewHead);
   }
@@ -1194,6 +1278,12 @@ static int doltliteStageArgsAndPersist(
 
   doltliteGetSessionStaged(db, &savedStaged);
 
+  rc = doltlitePrepareCatalogForPersistence(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to prepare catalog", -1);
+    return rc;
+  }
+
   rc = doltliteFlushCatalogToHash(db, &workingHash);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error(context, "failed to flush", -1);
@@ -1464,6 +1554,12 @@ static void doltliteCommitFunc(
     /* For BEGIN / nested SAVEPOINT, only close the SQL transaction once
     ** dolt_commit() has survived argument parsing and basic validation. */
     (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
+  }
+
+  rc = doltlitePrepareCatalogForPersistence(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error(context, "failed to prepare catalog", -1);
+    return;
   }
 
   if( addAll ){
@@ -3969,6 +4065,27 @@ static int rebaseApplyPlanRowCatalog(
   return SQLITE_OK;
 }
 
+static int rebaseAdvanceWorkingBranch(
+  sqlite3 *db,
+  const ProllyHash *pNewHead,
+  const ProllyHash *pCatalogHash
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  const char *zBranch = doltliteGetSessionBranch(db);
+  int rc;
+
+  if( !cs ) return SQLITE_ERROR;
+  rc = chunkStoreUpdateBranch(cs, zBranch, pNewHead);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteSetSessionHead(db, pNewHead);
+  doltliteSetSessionStaged(db, pCatalogHash);
+  rc = doltliteSwitchCatalog(db, pCatalogHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  return doltlitePersistWorkingSetWithHash(db, 0);
+}
+
 static int rebaseReplayPlanGroup(
   sqlite3 *db,
   RebasePlanRow *aPlan,
@@ -4029,7 +4146,7 @@ static int rebaseReplayPlanGroup(
       doltliteSetSessionStaged(db, pCurCat);
     }
     if( rc==SQLITE_OK ){
-      rc = doltliteAdvanceBranch(db, &newCommit, pCurCat, 0);
+      rc = rebaseAdvanceWorkingBranch(db, &newCommit, pCurCat);
     }
     if( rc==SQLITE_OK ) *pCurHead = newCommit;
   }

@@ -2974,6 +2974,21 @@ static int findTableIndexInArray(
   return -1;
 }
 
+static char *resolveLiveSchemaTableNumber(sqlite3 *db, Pgno iTable){
+  Schema *pSchema;
+  HashElem *k;
+  if( !db || db->nDb<=0 ) return 0;
+  pSchema = db->aDb[0].pSchema;
+  if( !pSchema ) return 0;
+  for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
+    Table *pTab = (Table*)sqliteHashData(k);
+    if( pTab && pTab->tnum==(Pgno)iTable ){
+      return sqlite3_mprintf("%s", pTab->zName);
+    }
+  }
+  return 0;
+}
+
 static int findSavepointTableIndexInArray(
   SavepointTableEntry *aTables,
   int nTables,
@@ -7330,8 +7345,6 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable){
 
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
   Btree *pBtree;
-  Schema *pSchema;
-  HashElem *k;
   int i;
   if( !db || db->nDb<=0 ) return 0;
   pBtree = db->aDb[0].pBt;
@@ -7342,13 +7355,9 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable){
       }
     }
   }
-  pSchema = db->aDb[0].pSchema;
-  if( !pSchema ) return 0;
-  for(k=sqliteHashFirst(&pSchema->tblHash); k; k=sqliteHashNext(k)){
-    Table *pTab = (Table*)sqliteHashData(k);
-    if( pTab && pTab->tnum==(Pgno)iTable ){
-      return sqlite3_mprintf("%s", pTab->zName);
-    }
+  {
+    char *zLive = resolveLiveSchemaTableNumber(db, iTable);
+    if( zLive ) return zLive;
   }
   return 0;
 }
