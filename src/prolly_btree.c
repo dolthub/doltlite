@@ -375,6 +375,7 @@ struct BtCursor {
   int mmPhysIdx;
   u8 mmActive;
   u8 mmPhysActive;
+  u8 deferredTreeSeek;
 #define MERGE_SRC_TREE  0
 #define MERGE_SRC_MUT   1
 #define MERGE_SRC_BOTH  2
@@ -2297,6 +2298,7 @@ static void clearMergeCursorState(BtCursor *pCur){
   pCur->mmPhysIdx = -1;
   pCur->mmActive = 0;
   pCur->mmPhysActive = 0;
+  pCur->deferredTreeSeek = 0;
   pCur->mergeSrc = MERGE_SRC_TREE;
 }
 
@@ -2314,6 +2316,7 @@ static void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
   pCur->mmPhysIdx = physIdx;
   pCur->mmActive = 1;
   pCur->mmPhysActive = 1;
+  pCur->deferredTreeSeek = 0;
   pCur->mergeSrc = MERGE_SRC_MUT;
   pCur->eState = CURSOR_VALID;
   pCur->curFlags &= ~BTCF_AtLast;
@@ -2447,6 +2450,7 @@ static void refreshCursorMutMapAliases(BtShared *pBt, Pgno iTable,
       ** another cursor may have added. */
       p->mmActive = 0;
       p->mmPhysActive = 0;
+      p->deferredTreeSeek = 0;
       p->mmIdx = -1;
       p->mmPhysIdx = -1;
     }
@@ -2544,6 +2548,7 @@ static int saveCursorPosition(BtCursor *pCur){
   }
 
   prollyCursorReleaseAll(&pCur->pCur);
+  pCur->deferredTreeSeek = 0;
 
   pCur->eState = CURSOR_REQUIRESEEK;
   return SQLITE_OK;
@@ -5053,9 +5058,32 @@ static void cursorNormalizeMmPhys(BtCursor *pCur){
   }
 }
 
+static int materializeDeferredTreeSeek(BtCursor *pCur, int dir){
+  int rc;
+  int res = 0;
+  if( !pCur->deferredTreeSeek ) return SQLITE_OK;
+  pCur->deferredTreeSeek = 0;
+  refreshCursorRoot(pCur);
+  rc = prollyCursorSeekInt(&pCur->pCur, pCur->cachedIntKey, &res);
+  if( rc!=SQLITE_OK ) return rc;
+  if( res==0 ){
+    pCur->mergeSrc = MERGE_SRC_BOTH;
+  }else{
+    pCur->mergeSrc = MERGE_SRC_MUT;
+    if( dir>0 && res<0 && prollyCursorIsValid(&pCur->pCur) ){
+      rc = prollyCursorNext(&pCur->pCur);
+    }else if( dir<0 && res>0 && prollyCursorIsValid(&pCur->pCur) ){
+      rc = prollyCursorPrev(&pCur->pCur);
+    }
+  }
+  return rc;
+}
+
 static int mergeStepForward(BtCursor *pCur){
   int rc = SQLITE_OK;
   cursorNormalizeMmPhys(pCur);
+  rc = materializeDeferredTreeSeek(pCur, 1);
+  if( rc!=SQLITE_OK ) return rc;
   if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
     rc = advanceTreeCursor(pCur, 1);
     if( rc!=SQLITE_OK ) return rc;
@@ -5068,6 +5096,8 @@ static int mergeStepForward(BtCursor *pCur){
 static int mergeStepBackward(BtCursor *pCur){
   int rc = SQLITE_OK;
   cursorNormalizeMmPhys(pCur);
+  rc = materializeDeferredTreeSeek(pCur, -1);
+  if( rc!=SQLITE_OK ) return rc;
   if( pCur->mergeSrc==MERGE_SRC_TREE || pCur->mergeSrc==MERGE_SRC_BOTH ){
     rc = advanceTreeCursor(pCur, -1);
     if( rc!=SQLITE_OK ) return rc;
@@ -5406,13 +5436,8 @@ static int prollyBtCursorTableMoveto(
     if( pEntry ){
       if( pEntry->op == PROLLY_EDIT_INSERT ){
         *pRes = 0;
-        refreshCursorRoot(pCur);
-        {
-          int seekRes = 0;
-          rc = prollyCursorSeekInt(&pCur->pCur, intKey, &seekRes);
-          if( rc!=SQLITE_OK ) return rc;
-        }
         setCursorToMutMapEntryPhys(pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+        pCur->deferredTreeSeek = 1;
         return SQLITE_OK;
       } else {
 

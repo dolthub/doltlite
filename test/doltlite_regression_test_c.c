@@ -2846,6 +2846,39 @@ static void run_table_moveto_mutmap_delete_preserves_neighbors(void){
   remove_db(dbpath);
 }
 
+static void run_table_moveto_mutmap_exact_keeps_iteration_aligned(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+
+  printf("=== Table Moveto MutMap Exact Keeps Iteration Aligned Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_table_moveto_mutmap_exact_keeps_iteration_aligned");
+  remove_db(dbpath);
+
+  check("open_db_for_table_moveto_exact", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_table_for_table_moveto_exact", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "INSERT INTO t VALUES(2,'b');"
+    "INSERT INTO t VALUES(3,'c');")==SQLITE_OK);
+  check("begin_txn_for_table_moveto_exact", execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("update_existing_row_for_table_moveto_exact",
+        execsql(db, "UPDATE t SET v='bb' WHERE id=2;")==SQLITE_OK);
+  check("table_moveto_exact_forward_iteration",
+        strcmp(exec1(db,
+          "SELECT group_concat(id || ':' || v, ',') "
+          "FROM (SELECT id, v FROM t WHERE id>=2 ORDER BY id)"),
+          "2:bb,3:c")==0);
+  check("table_moveto_exact_reverse_iteration",
+        strcmp(exec1(db,
+          "SELECT group_concat(id || ':' || v, ',') "
+          "FROM (SELECT id, v FROM t WHERE id<=2 ORDER BY id DESC)"),
+          "2:bb,1:a")==0);
+  check("rollback_table_moveto_exact_txn", execsql(db, "ROLLBACK;")==SQLITE_OK);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_index_moveto_mutmap_exact_keeps_iteration_aligned(void){
   sqlite3 *db = 0;
   sqlite3_stmt *stmt = 0;
@@ -6305,6 +6338,7 @@ static const RegressionCase aCases[] = {
   { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
   { "diff_stat_surfaces_corrupt_root", "Diff Stat Surfaces Corrupt Root Test", run_diff_stat_surfaces_corrupt_root },
   { "table_moveto_mutmap_delete_preserves_neighbors", "Table Moveto MutMap Delete Preserves Neighbors Test", run_table_moveto_mutmap_delete_preserves_neighbors },
+  { "table_moveto_mutmap_exact_keeps_iteration_aligned", "Table Moveto MutMap Exact Keeps Iteration Aligned Test", run_table_moveto_mutmap_exact_keeps_iteration_aligned },
   { "index_moveto_mutmap_exact_keeps_iteration_aligned", "Index Moveto MutMap Exact Keeps Iteration Aligned Test", run_index_moveto_mutmap_exact_keeps_iteration_aligned },
   { "btree_commit_failure_transactional", "Btree Commit Failure Transaction Test", run_btree_commit_failure_transactional },
   { "savepoint_restores_session_metadata", "Savepoint Restores Session Metadata Test", run_savepoint_restores_session_metadata },
