@@ -445,6 +445,10 @@ static SQLITE_INLINE void cursorCurrentTreeValue(
   *pnData = (int)(off1 - off0);
 }
 
+static int cacheCursorPayloadReconstructed(
+  BtCursor *pCur, const u8 *pSortKey, int nSortKey
+);
+
 static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   if( pCur->curIntKey ){
     const u8 *pVal; int nVal;
@@ -454,6 +458,28 @@ static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
       pCur->nCachedPayload = nVal;
       pCur->cachedPayloadOwned = 0;
     }
+  }
+}
+
+/* Non-INTKEY clean-cursor variant: index entries store data in the
+** sort-key with an empty value field. Reconstruct the record once into
+** pCur->pReconPayload so the per-row xPayloadSize + xPayloadFetch pair
+** from covering / range index scans both hit the early-return at the
+** top of getCursorPayload. Errors are best-effort — leave the cache
+** empty and let the lazy path retry / propagate. */
+static void cacheCurrentTreePayloadNonIntKey(BtCursor *pCur){
+  const u8 *pVal; int nVal;
+  cursorCurrentTreeValue(pCur, &pVal, &nVal);
+  if( nVal > 0 ){
+    pCur->pCachedPayload = (u8*)pVal;
+    pCur->nCachedPayload = nVal;
+    pCur->cachedPayloadOwned = 0;
+    return;
+  }
+  {
+    const u8 *pKey; int nKey;
+    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+    (void)cacheCursorPayloadReconstructed(pCur, pKey, nKey);
   }
 }
 
@@ -5280,7 +5306,11 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
     if( rc==SQLITE_OK ){
       if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
         pCur->eState = CURSOR_VALID;
-        cacheCurrentTreePayloadIfIntKey(pCur);
+        if( pCur->curIntKey ){
+          cacheCurrentTreePayloadIfIntKey(pCur);
+        }else{
+          cacheCurrentTreePayloadNonIntKey(pCur);
+        }
       } else {
         pCur->eState = CURSOR_INVALID;
         return SQLITE_DONE;
@@ -5341,7 +5371,11 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
       if( rc==SQLITE_OK ){
         if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
           pCur->eState = CURSOR_VALID;
-          cacheCurrentTreePayloadIfIntKey(pCur);
+          if( pCur->curIntKey ){
+            cacheCurrentTreePayloadIfIntKey(pCur);
+          }else{
+            cacheCurrentTreePayloadNonIntKey(pCur);
+          }
         } else {
           pCur->eState = CURSOR_INVALID;
           return SQLITE_DONE;
