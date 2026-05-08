@@ -5621,7 +5621,7 @@ static int findMatchingMutMapEntry(
   ** seen and stays. Freed once at function exit. */
   u8 *pRecBuf = 0;
   int nRecBufAlloc = 0;
-  int lo, hi;
+  int lo = 0, found = 0;
 
   *ppMatch = 0;
   *pCmp = 0;
@@ -5640,43 +5640,24 @@ static int findMatchingMutMapEntry(
     return SQLITE_OK;
   }
 
-  lo = 0;
-  hi = pMap->nEntries;
-  while( lo < hi ){
-    int mid = lo + (hi - lo) / 2;
-    ProllyMutMapEntry *pEntry = prollyMutMapEntryAt(pMap, mid);
-    const u8 *pRec = pEntry->pVal;
-    int nRec = pEntry->nVal;
-    int isLess;
-
-    if( pMap->isIntKey ){
-      lo = mid + 1;
-      continue;
-    }
-    if( nRec==0 ){
-      rc = recordFromSortKeyBuffer(pEntry->pKey, pEntry->nKey,
-                                    &pRecBuf, &nRecBufAlloc, &nRec);
-      if( rc!=SQLITE_OK ) break;
-      pRec = pRecBuf;
-    }
-    pIdxKey->eqSeen = 0;
-    cmp = sqlite3VdbeRecordCompare(nRec, pRec, pIdxKey);
-    isLess = (cmp<0 && !pIdxKey->eqSeen);
-    if( isLess ){
-      lo = mid + 1;
-    }else{
-      hi = mid;
-    }
-  }
+  rc = prollyMutMapResolveSortedPos(pMap, pSortKey, nSortKey, 0,
+                                    &lo, &found);
 
   while( rc==SQLITE_OK && lo < pMap->nEntries ){
     ProllyMutMapEntry *pEntry = prollyMutMapEntryAt(pMap, lo);
     const u8 *pRec = pEntry->pVal;
     int nRec = pEntry->nVal;
+    int cmpLen;
+    int prefixCmp;
 
     if( pMap->isIntKey ){
       lo++;
       continue;
+    }
+    cmpLen = pEntry->nKey < nSortKey ? pEntry->nKey : nSortKey;
+    prefixCmp = memcmp(pEntry->pKey, pSortKey, cmpLen);
+    if( prefixCmp>0 || (prefixCmp==0 && pEntry->nKey < nSortKey) ){
+      break;
     }
     if( nRec==0 ){
       rc = recordFromSortKeyBuffer(pEntry->pKey, pEntry->nKey,
