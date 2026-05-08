@@ -5983,6 +5983,7 @@ static int prollyBtCursorIndexMoveto(
     if( treeFound ){
       *pRes = treeCmp;
       pCur->eState = CURSOR_VALID;
+      cacheCurrentTreePayloadNonIntKey(pCur);
       return SQLITE_OK;
     }
   }
@@ -5996,6 +5997,7 @@ no_match:
     if( lastRes==0 ){
       pCur->eState = CURSOR_VALID;
       *pRes = -1;
+      cacheCurrentTreePayloadNonIntKey(pCur);
     } else {
       pCur->eState = CURSOR_INVALID;
       *pRes = -1;
