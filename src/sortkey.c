@@ -403,7 +403,7 @@ static int recordFromTwoNumericSortKeyBuffer(
   return SQLITE_OK;
 }
 
-static int recordFromNumericTextSortKeyBuffer(
+static int recordFromNumericVarlenSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
@@ -412,28 +412,64 @@ static int recordFromNumericTextSortKeyBuffer(
   u32 aType1;
   u32 aLen1;
   u8 aBuf0[8];
+  u8 tag1;
+  const u8 *pData1;
+  int nEnc1;
+  int hasEscape = 0;
   int nHdr;
   int nTotal;
   int off;
   u8 *pOut;
-  const u8 *pZero;
+  int pos;
 
   if( nSortKey<12
    || pSortKey[0]!=SORTKEY_NUM
-   || pSortKey[9]!=SORTKEY_TEXT
    || pSortKey[nSortKey-2]!=0x00
    || pSortKey[nSortKey-1]!=0x00 ){
     return SQLITE_NOTFOUND;
   }
+  tag1 = pSortKey[9];
+  if( tag1!=SORTKEY_TEXT && tag1!=SORTKEY_BLOB ){
+    return SQLITE_NOTFOUND;
+  }
 
-  aLen1 = (u32)(nSortKey - 12);
-  pZero = (const u8*)memchr(pSortKey + 10, 0x00, (size_t)(aLen1 + 2));
-  if( pZero!=(pSortKey + nSortKey - 2) ){
+  pData1 = pSortKey + 10;
+  aLen1 = 0;
+  {
+    const u8 *pZero = (const u8*)memchr(pData1, 0x00,
+                                        (size_t)(nSortKey - 10));
+    if( pZero==0 ) return SQLITE_NOTFOUND;
+    if( pZero==pSortKey + nSortKey - 2 ){
+      nEnc1 = (int)(pZero - pData1);
+      aLen1 = (u32)nEnc1;
+      pos = nSortKey;
+    }else{
+      pos = 10;
+      while( pos < nSortKey ){
+        u8 b = pSortKey[pos++];
+        if( b==0x00 ){
+          if( pos >= nSortKey ) return SQLITE_NOTFOUND;
+          if( pSortKey[pos]==0x00 ){
+            nEnc1 = pos - 1 - 10;
+            pos++;
+            break;
+          }
+          if( pSortKey[pos]!=0x01 ){
+            return SQLITE_NOTFOUND;
+          }
+          hasEscape = 1;
+          pos++;
+        }
+        aLen1++;
+      }
+    }
+  }
+  if( pos!=nSortKey ){
     return SQLITE_NOTFOUND;
   }
 
   decodeNumericSortKeyToRecord(pSortKey + 1, &aType0, &aLen0, aBuf0);
-  aType1 = aLen1 * 2 + 13;
+  aType1 = aLen1 * 2 + (tag1==SORTKEY_TEXT ? 13 : 12);
 
   nHdr = 1 + sqlite3VarintLen(aType0) + sqlite3VarintLen(aType1);
   if( nHdr > 126 ) nHdr++;
@@ -454,7 +490,21 @@ static int recordFromNumericTextSortKeyBuffer(
     off += (int)aLen0;
   }
   if( aLen1>0 ){
-    memcpy(pOut + off, pSortKey + 10, aLen1);
+    if( !hasEscape ){
+      memcpy(pOut + off, pData1, aLen1);
+    }else{
+      const u8 *pSrc = pData1;
+      const u8 *pEnd = pData1 + nEnc1;
+      u8 *pDst = pOut + off;
+      while( pSrc < pEnd ){
+        if( pSrc+1 < pEnd && pSrc[0]==0x00 && pSrc[1]==0x01 ){
+          *pDst++ = 0x00;
+          pSrc += 2;
+        }else{
+          *pDst++ = *pSrc++;
+        }
+      }
+    }
   }
 
   *pnOut = nTotal;
@@ -504,8 +554,8 @@ int recordFromSortKeyBuffer(
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
   {
-    int rc = recordFromNumericTextSortKeyBuffer(pSortKey, nSortKey,
-                                                ppBuf, pnAlloc, pnOut);
+    int rc = recordFromNumericVarlenSortKeyBuffer(pSortKey, nSortKey,
+                                                  ppBuf, pnAlloc, pnOut);
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
 
