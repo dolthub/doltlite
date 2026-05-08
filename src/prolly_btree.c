@@ -5579,7 +5579,14 @@ static int findMatchingMutMapEntry(
   int rc = SQLITE_OK;
   int cmp = 0;
   ProllyMutMapEntry *pMatch = 0;
+  /* Single scratch reused across both the binary-search and post-scan
+  ** linear loops. The original code freed and re-allocated per mid
+  ** iteration; for index seeks against an N-entry mutmap that's
+  ** ~log2(N) malloc/free pairs and ~log2(N) sort-key→record transcodes
+  ** per Seek. With reuse, the buffer grows to fit the largest record
+  ** seen and stays. Freed once at function exit. */
   u8 *pRecBuf = 0;
+  int nRecBufAlloc = 0;
   int lo, hi;
 
   *ppMatch = 0;
@@ -5613,9 +5620,8 @@ static int findMatchingMutMapEntry(
       continue;
     }
     if( nRec==0 ){
-      sqlite3_free(pRecBuf);
-      pRecBuf = 0;
-      rc = recordFromSortKey(pEntry->pKey, pEntry->nKey, &pRecBuf, &nRec);
+      rc = recordFromSortKeyBuffer(pEntry->pKey, pEntry->nKey,
+                                    &pRecBuf, &nRecBufAlloc, &nRec);
       if( rc!=SQLITE_OK ) break;
       pRec = pRecBuf;
     }
@@ -5639,9 +5645,8 @@ static int findMatchingMutMapEntry(
       continue;
     }
     if( nRec==0 ){
-      sqlite3_free(pRecBuf);
-      pRecBuf = 0;
-      rc = recordFromSortKey(pEntry->pKey, pEntry->nKey, &pRecBuf, &nRec);
+      rc = recordFromSortKeyBuffer(pEntry->pKey, pEntry->nKey,
+                                    &pRecBuf, &nRecBufAlloc, &nRec);
       if( rc!=SQLITE_OK ) break;
       pRec = pRecBuf;
     }
@@ -6176,7 +6181,6 @@ static int prollyBtCursorInsert(
     sqlite3_free(pBuf);
   } else {
 
-    u8 *pSortKey = 0;
     int nSortKey = 0;
     int nKeyField = 0;
     int splitKey = 0;
@@ -6195,22 +6199,24 @@ static int prollyBtCursorInsert(
         isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
       }
     }
-    rc = sortKeyFromRecordPrefixColl((const u8*)pPayload->pKey,
-                                      (int)pPayload->nKey,
-                                      isIndex ? 0 : (splitKey ? nKeyField : 0),
-                                      pCur->pKeyInfo,
-                                      &pSortKey, &nSortKey);
+    /* Reuse the cursor's scratch sort-key buffer (also used by
+    ** IndexMoveto) so transaction-scale Insert loops avoid a
+    ** malloc/free pair per row. Owned by the cursor; freed at close. */
+    rc = sortKeyFromRecordPrefixCollBuffer(
+        (const u8*)pPayload->pKey, (int)pPayload->nKey,
+        isIndex ? 0 : (splitKey ? nKeyField : 0),
+        pCur->pKeyInfo,
+        &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
     if( rc==SQLITE_OK ){
       if( splitKey ){
         rc = prollyMutMapInsert(pCur->pMutMap,
-                                 pSortKey, nSortKey, 0,
+                                 pCur->pSeekSortKey, nSortKey, 0,
                                  (const u8*)pPayload->pKey, (int)pPayload->nKey);
       }else{
         rc = prollyMutMapInsert(pCur->pMutMap,
-                                 pSortKey, nSortKey, 0,
+                                 pCur->pSeekSortKey, nSortKey, 0,
                                  NULL, 0);
       }
-      sqlite3_free(pSortKey);
     }
   }
 
