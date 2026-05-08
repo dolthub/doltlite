@@ -411,6 +411,13 @@ int recordFromSortKeyBuffer(
   u32 aLen[64];
 
   const u8 *aFieldPtr[64];
+  /* Encoded byte-length of each TEXT/BLOB field in the sort-key, NOT
+  ** including the 0x00 0x00 terminator. Equal to aLen[i] when the
+  ** field has no 0x00 0x01 escapes — the common case for ASCII /
+  ** hex / utf-8 keys without embedded NULs — letting the data-write
+  ** loop below replace its byte-by-byte un-escape with a single
+  ** memcpy. Set to 0 for non-text fields (unused). */
+  int aEncLen[64];
   u8 aIntBuf[64][8];
   int nFields = 0;
   int pos = 0;
@@ -447,6 +454,7 @@ int recordFromSortKeyBuffer(
       aType[nFields] = 0;
       aLen[nFields] = 0;
       aFieldPtr[nFields] = 0;
+      aEncLen[nFields] = 0;
       nFields++;
 
     }else if( tag == SORTKEY_NUM ){
@@ -457,6 +465,7 @@ int recordFromSortKeyBuffer(
                                    aIntBuf[nFields]);
       pos += 8;
       aFieldPtr[nFields] = aIntBuf[nFields];
+      aEncLen[nFields] = 0;
       nFields++;
 
     }else if( tag == SORTKEY_TEXT || tag == SORTKEY_BLOB ){
@@ -492,6 +501,11 @@ int recordFromSortKeyBuffer(
 
 
       aFieldPtr[nFields] = pSortKey + start;
+      /* Encoded length excludes the trailing 0x00 0x00 terminator
+      ** (subtract 2 from pos). Equal to dataLen iff no escape
+      ** sequences appeared — that case skips the byte-by-byte
+      ** un-escape loop below. */
+      aEncLen[nFields] = (pos - 2) - start;
       nFields++;
 
     }else{
@@ -541,6 +555,12 @@ int recordFromSortKeyBuffer(
       if( serialType <= 6 || serialType == 7 ){
 
         memcpy(pOut + off, aIntBuf[i], fieldLen);
+        off += (int)fieldLen;
+      }else if( (u32)aEncLen[i] == fieldLen ){
+        /* No escape sequences in the encoded text — most common
+        ** case for ASCII / hex / utf-8 keys without embedded NULs.
+        ** Skip the byte-by-byte un-escape loop and copy directly. */
+        memcpy(pOut + off, aFieldPtr[i], fieldLen);
         off += (int)fieldLen;
       }else{
 
