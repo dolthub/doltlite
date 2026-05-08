@@ -403,6 +403,64 @@ static int recordFromTwoNumericSortKeyBuffer(
   return SQLITE_OK;
 }
 
+static int recordFromNumericTextSortKeyBuffer(
+  const u8 *pSortKey, int nSortKey,
+  u8 **ppBuf, int *pnAlloc, int *pnOut
+){
+  u32 aType0;
+  u32 aLen0;
+  u32 aType1;
+  u32 aLen1;
+  u8 aBuf0[8];
+  int nHdr;
+  int nTotal;
+  int off;
+  u8 *pOut;
+  const u8 *pZero;
+
+  if( nSortKey<12
+   || pSortKey[0]!=SORTKEY_NUM
+   || pSortKey[9]!=SORTKEY_TEXT
+   || pSortKey[nSortKey-2]!=0x00
+   || pSortKey[nSortKey-1]!=0x00 ){
+    return SQLITE_NOTFOUND;
+  }
+
+  aLen1 = (u32)(nSortKey - 12);
+  pZero = (const u8*)memchr(pSortKey + 10, 0x00, (size_t)(aLen1 + 2));
+  if( pZero!=(pSortKey + nSortKey - 2) ){
+    return SQLITE_NOTFOUND;
+  }
+
+  decodeNumericSortKeyToRecord(pSortKey + 1, &aType0, &aLen0, aBuf0);
+  aType1 = aLen1 * 2 + 13;
+
+  nHdr = 1 + sqlite3VarintLen(aType0) + sqlite3VarintLen(aType1);
+  if( nHdr > 126 ) nHdr++;
+  nTotal = nHdr + (int)aLen0 + (int)aLen1;
+  if( *pnAlloc < nTotal ){
+    u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nTotal);
+    if( !pNew ) return SQLITE_NOMEM;
+    *ppBuf = pNew;
+    *pnAlloc = nTotal;
+  }
+  pOut = *ppBuf;
+
+  off = putVarint32(pOut, (u32)nHdr);
+  off += putVarint32(pOut + off, aType0);
+  off += putVarint32(pOut + off, aType1);
+  if( aLen0>0 ){
+    memcpy(pOut + off, aBuf0, aLen0);
+    off += (int)aLen0;
+  }
+  if( aLen1>0 ){
+    memcpy(pOut + off, pSortKey + 10, aLen1);
+  }
+
+  *pnOut = nTotal;
+  return SQLITE_OK;
+}
+
 int recordFromSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
@@ -443,6 +501,11 @@ int recordFromSortKeyBuffer(
   {
     int rc = recordFromTwoNumericSortKeyBuffer(pSortKey, nSortKey,
                                                ppBuf, pnAlloc, pnOut);
+    if( rc!=SQLITE_NOTFOUND ) return rc;
+  }
+  {
+    int rc = recordFromNumericTextSortKeyBuffer(pSortKey, nSortKey,
+                                                ppBuf, pnAlloc, pnOut);
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
 
