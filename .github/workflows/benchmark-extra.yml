@@ -22,7 +22,7 @@ permissions:
 
 env:
   BENCH_RUNS: 5
-  BENCH_MAX_MULTIPLIER: 3
+  BENCH_MAX_MULTIPLIER: 2
 
 jobs:
   benchmark-extra:
