@@ -473,23 +473,31 @@ int recordFromSortKeyBuffer(
 
       int start = pos;
       int dataLen = 0;
+      /* Skip ahead to the next 0x00 sentinel via memchr — vectorized
+      ** on most platforms — instead of walking byte-by-byte. The 0x00
+      ** is either a terminator (followed by 0x00) or an escape
+      ** (followed by 0x01); only those positions need branch logic.
+      ** For ASCII / hex / utf-8 TEXT without embedded NULs the loop
+      ** runs exactly once: memchr finds the terminator, accumulate
+      ** dataLen, break. */
       while( pos < nSortKey ){
-        if( pSortKey[pos] == 0x00 ){
-          if( pos + 1 >= nSortKey ) return SQLITE_CORRUPT;
-          if( pSortKey[pos+1] == 0x00 ){
-
-            pos += 2;
-            break;
-          }else if( pSortKey[pos+1] == 0x01 ){
-
-            dataLen++;
-            pos += 2;
-          }else{
-            return SQLITE_CORRUPT;
-          }
-        }else{
+        const u8 *p0 = pSortKey + pos;
+        const u8 *pZero = (const u8*)memchr(p0, 0x00, (size_t)(nSortKey - pos));
+        if( pZero==0 ) return SQLITE_CORRUPT;
+        {
+          int gap = (int)(pZero - p0);
+          dataLen += gap;
+          pos += gap;
+        }
+        if( pos + 1 >= nSortKey ) return SQLITE_CORRUPT;
+        if( pSortKey[pos+1] == 0x00 ){
+          pos += 2;
+          break;
+        }else if( pSortKey[pos+1] == 0x01 ){
           dataLen++;
-          pos++;
+          pos += 2;
+        }else{
+          return SQLITE_CORRUPT;
         }
       }
       if( tag == SORTKEY_TEXT ){
