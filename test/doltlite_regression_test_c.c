@@ -1977,6 +1977,55 @@ static void run_sortkey_two_numeric_roundtrip(void){
   sqlite3_free(pRoundTrip);
 }
 
+static void run_sortkey_numeric_text_roundtrip(void){
+  static const u8 fastRecord[] = {
+    0x03,       /* header size */
+    0x01,       /* 1-byte integer */
+    0x13,       /* 3-byte text */
+    0x7b,       /* 123 */
+    'a', 'b', 'c'
+  };
+  static const u8 escapedRecord[] = {
+    0x03,       /* header size */
+    0x01,       /* 1-byte integer */
+    0x13,       /* 3-byte text */
+    0x7b,       /* 123 */
+    'x', 0x00, 'y'
+  };
+  const u8 *aRecord[] = { fastRecord, escapedRecord };
+  int aRecordSize[] = { (int)sizeof(fastRecord), (int)sizeof(escapedRecord) };
+  const char *aName[] = { "numeric_text_fast", "numeric_text_escaped" };
+  int i;
+
+  printf("=== Sortkey Numeric Text Roundtrip Test ===\n\n");
+
+  for(i=0; i<2; i++){
+    u8 *pSortKey = 0;
+    u8 *pRoundTrip = 0;
+    char zCheck[80];
+    int nSortKey = 0;
+    int nRoundTrip = 0;
+    int rc;
+
+    rc = sortKeyFromRecord(aRecord[i], aRecordSize[i], &pSortKey, &nSortKey);
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_sortkey_encode_ok", aName[i]);
+    check(zCheck, rc==SQLITE_OK);
+
+    if( rc==SQLITE_OK ){
+      rc = recordFromSortKey(pSortKey, nSortKey, &pRoundTrip, &nRoundTrip);
+      sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_sortkey_decode_ok", aName[i]);
+      check(zCheck, rc==SQLITE_OK);
+      sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_sortkey_roundtrips", aName[i]);
+      check(zCheck,
+        nRoundTrip==aRecordSize[i]
+        && memcmp(pRoundTrip, aRecord[i], (size_t)aRecordSize[i])==0);
+    }
+
+    sqlite3_free(pSortKey);
+    sqlite3_free(pRoundTrip);
+  }
+}
+
 static void run_reload_refs_transactional(void){
   ChunkStore cs;
   ProllyHash emptyHash;
@@ -6383,6 +6432,7 @@ static const RegressionCase aCases[] = {
   { "gc_rewrite_failure", "GC Rewrite Failure Test", run_gc_rewrite_failure },
   { "record_decode_corruption", "Record Decode Corruption Test", run_record_decode_corruption },
   { "sortkey_two_numeric_roundtrip", "Sortkey Two Numeric Roundtrip Test", run_sortkey_two_numeric_roundtrip },
+  { "sortkey_numeric_text_roundtrip", "Sortkey Numeric Text Roundtrip Test", run_sortkey_numeric_text_roundtrip },
   { "reload_refs_transactional", "Reload Refs Transactional Test", run_reload_refs_transactional },
   { "refresh_refs_corruption_preserves_state", "Refresh Corrupt Refs State Preservation Test", run_refresh_refs_corruption_preserves_state },
   { "prolly_node_corruption", "Prolly Node Corruption Test", run_prolly_node_corruption },
