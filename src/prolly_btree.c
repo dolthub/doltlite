@@ -456,6 +456,17 @@ static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
     }
   }
 }
+
+static SQLITE_INLINE int prollyCursorNextFastLeaf(ProllyCursor *pCur){
+  ProllyCursorLevel *pLevel = &pCur->aLevel[pCur->iLevel];
+  ProllyCacheEntry *pLeaf = pLevel->pEntry;
+  assert( pCur->eState==PROLLY_CURSOR_VALID );
+  if( pLevel->idx < pLeaf->node.nItems - 1 ){
+    pLevel->idx++;
+    return SQLITE_OK;
+  }
+  return prollyCursorNext(pCur);
+}
 static int flushDeferredEdits(BtShared *pBt);
 static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
@@ -5265,7 +5276,7 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
   }
 
   if( !pCur->mmActive && pCur->pMutMap==0 ){
-    rc = prollyCursorNext(&pCur->pCur);
+    rc = prollyCursorNextFastLeaf(&pCur->pCur);
     if( rc==SQLITE_OK ){
       if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
         pCur->eState = CURSOR_VALID;
@@ -5326,7 +5337,7 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
         pCur->eState = CURSOR_VALID;
       }
     }else{
-      rc = prollyCursorNext(&pCur->pCur);
+      rc = prollyCursorNextFastLeaf(&pCur->pCur);
       if( rc==SQLITE_OK ){
         if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
           pCur->eState = CURSOR_VALID;
