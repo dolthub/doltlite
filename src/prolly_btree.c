@@ -6075,6 +6075,9 @@ static u32 prollyBtCursorPayloadSize(BtCursor *pCur){
   const u8 *pData;
   int nData;
   assert( pCur->eState==CURSOR_VALID );
+  if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
+    return (u32)pCur->nCachedPayload;
+  }
   getCursorPayload(pCur, &pData, &nData);
   return (u32)nData;
 }
@@ -6106,6 +6109,10 @@ static const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
   int nData;
 
   assert( pCur->eState==CURSOR_VALID );
+  if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
+    if( pAmt ) *pAmt = (u32)pCur->nCachedPayload;
+    return (const void*)pCur->pCachedPayload;
+  }
   getCursorPayload(pCur, &pData, &nData);
 
   if( pAmt ) *pAmt = (u32)nData;
