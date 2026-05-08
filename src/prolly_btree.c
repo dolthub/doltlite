@@ -444,6 +444,18 @@ static SQLITE_INLINE void cursorCurrentTreeValue(
   *ppData = pNode->pValData + off0;
   *pnData = (int)(off1 - off0);
 }
+
+static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
+  if( pCur->curIntKey ){
+    const u8 *pVal; int nVal;
+    cursorCurrentTreeValue(pCur, &pVal, &nVal);
+    if( nVal > 0 ){
+      pCur->pCachedPayload = (u8*)pVal;
+      pCur->nCachedPayload = nVal;
+      pCur->cachedPayloadOwned = 0;
+    }
+  }
+}
 static int flushDeferredEdits(BtShared *pBt);
 static int ensureMutMap(BtCursor *pCur);
 static int saveCursorPosition(BtCursor *pCur);
@@ -5257,23 +5269,7 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
     if( rc==SQLITE_OK ){
       if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
         pCur->eState = CURSOR_VALID;
-        /* Pre-populate the payload cache for INTKEY clean-read scans
-        ** (same idea as PR #770, restored on Tim's no-mutmap fast
-        ** path). xPayloadSize then xPayloadFetch are both called per
-        ** row during OP_Column / table scans; both go through
-        ** getCursorPayload's multi-branch chain. Caching the
-        ** (pData, nData) pair here makes both subsequent trips hit
-        ** the early-return at the top of getCursorPayload. The
-        ** pointer borrows the leaf node memory; CLEAR_CACHED_PAYLOAD
-        ** on the next move keeps it valid for exactly one row. */
-        if( pCur->curIntKey ){
-          const u8 *pVal; int nVal;
-          cursorCurrentTreeValue(pCur, &pVal, &nVal);
-          if( nVal > 0 ){
-            pCur->pCachedPayload = (u8*)pVal;
-            pCur->nCachedPayload = nVal;
-          }
-        }
+        cacheCurrentTreePayloadIfIntKey(pCur);
       } else {
         pCur->eState = CURSOR_INVALID;
         return SQLITE_DONE;
@@ -5334,23 +5330,7 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
       if( rc==SQLITE_OK ){
         if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
           pCur->eState = CURSOR_VALID;
-          /* Table scans call xPayloadSize then xPayloadFetch on every
-          ** advanced row. Both go through getCursorPayload which has
-          ** a multi-branch chain (cache, mutmap, intkey). Cache the
-          ** (pData, nData) pair eagerly here so both subsequent
-          ** trips hit the early-return at the top of getCursorPayload.
-          ** The pointer borrows the leaf node memory; the cache is
-          ** invalidated by CLEAR_CACHED_PAYLOAD on the next move.
-          ** INTKEY-only — non-INTKEY may need reconstruction which
-          ** the original path handles. */
-          if( pCur->curIntKey ){
-            const u8 *pVal; int nVal;
-            prollyCursorValue(&pCur->pCur, &pVal, &nVal);
-            if( nVal > 0 ){
-              pCur->pCachedPayload = (u8*)pVal;
-              pCur->nCachedPayload = nVal;
-            }
-          }
+          cacheCurrentTreePayloadIfIntKey(pCur);
         } else {
           pCur->eState = CURSOR_INVALID;
           return SQLITE_DONE;
