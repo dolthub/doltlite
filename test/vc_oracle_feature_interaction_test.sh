@@ -34,12 +34,19 @@ oracle() {
   mkdir -p "$dir/dl" "$dir/dt"
 
   # --- doltlite ---
+  # Mirror the dolt path below: run setup first with its output
+  # discarded, then run the query in a fresh invocation against the
+  # same db file with only its output captured. The earlier single-
+  # invocation form mixed dolt_add / dolt_commit return values with
+  # the query result and tried to filter the noise out post-hoc;
+  # that filter also stripped legitimate count(*) / scalar results,
+  # which made any test whose query returned a bare integer compare
+  # an empty doltlite output against dolt's actual value.
+  printf "%s\n" "$setup" | "$DOLTLITE" "$dir/dl/db" \
+      >/dev/null 2>"$dir/dl.err"
   local dl_out
-  dl_out=$(printf "%s\n.headers off\n.mode csv\n%s\n" "$setup" "$query" \
-           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
-           | grep -v '^[0-9]*$' \
-           | grep -v '^[0-9a-f]\{40\}$' \
-           | grep -v '^$' \
+  dl_out=$(printf ".headers off\n.mode csv\n%s\n" "$query" \
+           | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
            | grep -vi 'already up to date' \
            | grep -vi 'Fast-forward' \
            | tr -d '"' \
@@ -5996,6 +6003,7 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','wrong message');
 SELECT dolt_reset('--soft','HEAD~1');
+SELECT dolt_add('-A');
 SELECT dolt_commit('-m','amended');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('original','amended','wrong message');"
 
