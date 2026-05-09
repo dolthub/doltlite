@@ -2,11 +2,7 @@ name: Benchmark Extra
 
 # Companion to Benchmark. Runs three non-INTKEY sysbench variants
 # (TEXT PK, BLOB PK, composite PK) plus the autocommit suite. Each
-# non-INTKEY variant is gated at 3× sqlite on file-backed sections —
-# 2× is too flaky here because three sequential write-heavy suites on
-# a shared GitHub runner produce enough variance that individual tests
-# regularly land between 2× and 3× without any underlying perf change.
-# Local script defaults stay at 2×; loosen only on CI.
+# non-INTKEY variant is gated at 2× sqlite on file-backed sections.
 # BENCH_RUNS=5 across the job — each non-INTKEY write is a per-
 # statement flush, so the default 11 runs blows the 15-minute budget.
 
