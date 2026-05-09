@@ -5779,23 +5779,16 @@ static int prollyBtCursorIndexMoveto(
       int bestCmp = 0;
       {
 
-        int lo = 0, hi = nItems;
+        /* prollyCursorSeekBlob's leaf-level prollyNodeSearchBlob has
+        ** already binary-searched this leaf with the same key and
+        ** stored its lower-bound result in seekIdx. Reuse that
+        ** position instead of repeating a 7+-iteration memcmp loop
+        ** per Seek — for index_join_scan-style nested seeks that
+        ** loop showed up at ~14% of CPU. */
+        int lo = seekIdx;
         u8 *pRecBuf = pCur->pMovetoRec;
         int nRecBufAlloc = pCur->nMovetoRecAlloc;
         int i;
-        while( lo < hi ){
-          int mid = lo + (hi - lo) / 2;
-          const u8 *pSK; int nSK;
-          int cmpLen; int keyCmp;
-          prollyNodeKey(&pLeaf->node, mid, &pSK, &nSK);
-          cmpLen = nSK < nSortKey ? nSK : nSortKey;
-          keyCmp = memcmp(pSK, pSortKey, cmpLen);
-          if( keyCmp < 0 || (keyCmp==0 && nSK < nSortKey) ){
-            lo = mid + 1;
-          }else{
-            hi = mid;
-          }
-        }
 
         for( i = lo; i < nItems; i++ ){
           const u8 *pSK; int nSK;
