@@ -58,8 +58,8 @@ jobs:
         cd build
         # Each non-INTKEY script enforces a 2× ceiling; capture rc per
         # script and merge so a single ceiling break fails the job after
-        # the PR-comment step has run. Autocommit suite is reporting-
-        # only (sysbench_compare.sh skips ceiling on autocommit).
+        # the PR-comment step has run. Autocommit writes are gated too;
+        # autocommit reads remain reporting-only.
         set +e
         bash ../test/sysbench_compare_textpk.sh      > /tmp/bench_textpk.md
         textpk_rc=$?

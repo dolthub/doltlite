@@ -529,7 +529,7 @@ echo ""
 echo "_Companion to the classic Sysbench-Style Benchmark. Every workload here"
 echo "runs against tables with a 2-column INTEGER \`PRIMARY KEY(a, b) WITHOUT ROWID\`._"
 echo "_File-backed sections gated at ${BENCH_MAX_MULTIPLIER}× — in-memory_"
-echo "_and autocommit reads are reporting-only._"
+echo "_and autocommit reads are reporting-only; autocommit writes are gated._"
 echo ""
 echo "### In-Memory"
 echo ""
@@ -608,6 +608,7 @@ echo ""
 ceiling_ok=0
 check_ceiling "file_reads"  "$READ_TESTS"     "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 check_ceiling "file_writes" "$WRITE_TESTS"    "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "ac_writes"   "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 
 if [ "$ceiling_ok" = "0" ]; then
   echo "All tests within ceilings."

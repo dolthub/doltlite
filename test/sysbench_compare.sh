@@ -604,20 +604,25 @@ check_ceiling() {
   return $failed
 }
 
-if [ "$BENCH_SECTION_MODE" != "autocommit" ]; then
-  echo ""
-  echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
-  echo ""
+echo ""
+echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
+echo ""
 
-  ceiling_ok=0
+ceiling_ok=0
+if [ "$BENCH_SECTION_MODE" = "autocommit" ]; then
+  check_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+else
   check_ceiling "file_reads" "$READ_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
   check_ceiling "file_writes" "$WRITE_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-
-  if [ "$ceiling_ok" = "0" ]; then
-    echo "All tests within ceilings."
-  else
-    echo ""
-    echo "**FAILED**: One or more tests exceeded their ceiling."
-    exit 1
+  if [ "$BENCH_SECTION_MODE" = "full" ]; then
+    check_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
   fi
+fi
+
+if [ "$ceiling_ok" = "0" ]; then
+  echo "All tests within ceilings."
+else
+  echo ""
+  echo "**FAILED**: One or more tests exceeded their ceiling."
+  exit 1
 fi
