@@ -9447,6 +9447,65 @@ SELECT dolt_commit('-m','c2');
 SELECT dolt_reset('--soft','HEAD~1');
 " "SELECT id FROM t ORDER BY id;"
 
+# Issue #790 regression coverage: --soft must preserve the staged set
+# so the canonical "amend by soft-reset + recommit" flow works without
+# an explicit re-stage. Previously dolt_reset --soft realigned staged
+# to the target catalog, which made the next dolt_commit fail with
+# "nothing to commit" because the diff against staged was empty.
+
+oracle "soft_reset_recommit_no_explicit_add" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','original');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','wrong message');
+SELECT dolt_reset('--soft','HEAD~1');
+SELECT dolt_commit('-m','amended');
+" "SELECT count(*) FROM dolt_log WHERE message IN ('original','amended','wrong message');"
+
+oracle "soft_reset_recommit_amended_data_present" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','original');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','wrong message');
+SELECT dolt_reset('--soft','HEAD~1');
+SELECT dolt_commit('-m','amended');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "soft_reset_two_levels_recommit_no_add" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INTEGER);
+INSERT INTO t VALUES(1,1);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c1');
+INSERT INTO t VALUES(2,2);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c2');
+INSERT INTO t VALUES(3,3);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','c3');
+SELECT dolt_reset('--soft','HEAD~2');
+SELECT dolt_commit('-m','squashed');
+" "SELECT count(*) FROM dolt_log;"
+
+oracle "soft_reset_recommit_combines_prior_stage" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','original');
+INSERT INTO t VALUES(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','wrong message');
+SELECT dolt_reset('--soft','HEAD~1');
+INSERT INTO t VALUES(3,'c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','amended_with_extra');
+" "SELECT id, v FROM t ORDER BY id;"
+
 # ═══════════════════════════════════════════════════════════════════
 # Section 228: JSON functions after merge
 # ═══════════════════════════════════════════════════════════════════

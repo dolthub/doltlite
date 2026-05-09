@@ -2429,7 +2429,15 @@ static void doltliteResetFunc(
     }
   }
 
-  doltliteSetSessionStaged(db, &targetCatHash);
+  /* --soft preserves the existing staged set so the changes that were
+  ** in the orphaned commit can be re-committed (the canonical
+  ** "amend a commit message" / "rewrite the last commit" flow:
+  ** soft-reset, then re-commit with corrections). --mixed (the
+  ** no-flag form) and --hard both reset staged to the target. See
+  ** issue #790. */
+  if( !isSoft ){
+    doltliteSetSessionStaged(db, &targetCatHash);
+  }
 
   if( isHard ){
 
