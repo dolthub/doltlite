@@ -9,6 +9,8 @@ set -e
 
 DOLTLITE=${DOLTLITE:-./doltlite}
 SQLITE3=${SQLITE3:-./sqlite3}
+BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
+BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 ROWS=${BENCH_ROWS:-10000}
 SEED=42
 TMPDIR=$(mktemp -d)
@@ -349,7 +351,8 @@ make_test("oltp_read_write_ac",       prep_main, w_read_write_autocommit)
 PYEOF
 
 # ============================================================
-# Run each test: single CLI invocation, SQL timestamps for timing
+# Run each test: single invocation, host-clock timing when the timer
+# helper is available. Fall back to SQL timestamps for local ad hoc runs.
 # ============================================================
 run_bench() {
   local engine="$1" binary="$2" sql_file="$3" db_template="$4"
@@ -358,6 +361,17 @@ run_bench() {
   if [ "$db" != ":memory:" ]; then
     db="/tmp/bench_${engine}_${RANDOM}_$$.db"
     rm -f "$db"
+  fi
+  local timer=""
+  if [ "$engine" = "sqlite" ] && [ -x "$BENCH_TIMER_SQLITE" ]; then
+    timer="$BENCH_TIMER_SQLITE"
+  elif [ "$engine" = "doltlite" ] && [ -x "$BENCH_TIMER_DOLTLITE" ]; then
+    timer="$BENCH_TIMER_DOLTLITE"
+  fi
+  if [ -n "$timer" ]; then
+    "$timer" "$db" "$sql_file"
+    if [ "$db" != ":memory:" ]; then rm -f "$db"; fi
+    return
   fi
   local output
   output=$(sed \
@@ -548,7 +562,7 @@ case "$BENCH_SECTION_MODE" in
 esac
 
 echo ""
-echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"
+echo "_${ROWS} rows, single invocation per test, workload-only timing via host monotonic clock when available._"
 
 # ============================================================
 # Enforce performance ceiling (exit 1 if any test exceeds limit)

@@ -38,6 +38,8 @@ jobs:
         cd build
         make doltlite
         make DOLTLITE_PROLLY=0 sqlite3
+        cc -O2 -I. -I../src -o bench_timer_doltlite ../test/sysbench_timer.c libdoltlite.a -lpthread -lz -lm
+        cc -O2 -I. -I../src -o bench_timer_sqlite ../test/sysbench_timer.c sqlite3.o -lpthread -lz -lm
 
     - name: Run benchmark
       id: bench
