@@ -15,9 +15,9 @@
 # path, and full-scale R blows the CI 15-minute budget in the prepare phase
 # alone.
 #
-# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 2×) on file-backed
-# reads + writes (wrapped) and autocommit writes. In-memory and reads-
-# in-autocommit are reporting-only.
+# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 2.25×) on individual
+# read/write ratios and BENCH_AVG_MAX_MULTIPLIER (default 1.75×) on
+# section averages.
 #
 set -e
 
@@ -27,7 +27,8 @@ BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
 ROWS=${BENCH_ROWS:-1000}
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.25}
+BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-1.75}
 SEED=42
 TMPDIR=$(mktemp -d)
 
@@ -528,8 +529,7 @@ echo "## Sysbench-Style Benchmark (composite PK): Doltlite vs SQLite"
 echo ""
 echo "_Companion to the classic Sysbench-Style Benchmark. Every workload here"
 echo "runs against tables with a 2-column INTEGER \`PRIMARY KEY(a, b) WITHOUT ROWID\`._"
-echo "_File-backed sections gated at ${BENCH_MAX_MULTIPLIER}× — in-memory_"
-echo "_and autocommit reads are reporting-only._"
+echo "_Individual ratios gated at ${BENCH_MAX_MULTIPLIER}×; section averages gated at ${BENCH_AVG_MAX_MULTIPLIER}×._"
 echo ""
 echo "### In-Memory"
 echo ""
@@ -601,13 +601,55 @@ check_ceiling() {
   return $failed
 }
 
+check_average_ceiling() {
+  local section="$1" tests="$2" max="$3"
+  local ratio
+  ratio=$(python3 - "$BENCH_RESULTS_FILE" "$section" "$tests" <<'PYEOF'
+import sys
+path, section, tests = sys.argv[1], sys.argv[2], sys.argv[3].split()
+wanted = set(tests)
+ratios = []
+with open(path) as f:
+    for line in f:
+        cols = line.rstrip("\n").split("\t")
+        if len(cols) < 4 or cols[0] != section or cols[1] not in wanted:
+            continue
+        s, d = int(cols[2]), int(cols[3])
+        if s > 0 and d >= 0:
+            ratios.append(d / s)
+if ratios:
+    print(f"{sum(ratios) / len(ratios):.2f}")
+else:
+    print("")
+PYEOF
+)
+  if [ -n "$ratio" ]; then
+    over=$(python3 -c "r=$ratio; print(1 if r>$max else 0)")
+    if [ "$over" = "1" ]; then
+      echo "FAIL: $section average = ${ratio}x (ceiling: ${max}x)" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
+
 echo ""
-echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
+echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x individual, ${BENCH_AVG_MAX_MULTIPLIER}x average)"
 echo ""
 
 ceiling_ok=0
+check_ceiling "mem_reads"   "$READ_TESTS"     "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "mem_writes"  "$WRITE_TESTS"    "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 check_ceiling "file_reads"  "$READ_TESTS"     "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 check_ceiling "file_writes" "$WRITE_TESTS"    "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "ac_reads"    "$READ_TESTS"     "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "ac_writes"   "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_average_ceiling "mem_reads"   "$READ_TESTS"     "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+check_average_ceiling "mem_writes"  "$WRITE_TESTS"    "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+check_average_ceiling "file_reads"  "$READ_TESTS"     "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+check_average_ceiling "file_writes" "$WRITE_TESTS"    "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+check_average_ceiling "ac_reads"    "$READ_TESTS"     "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+check_average_ceiling "ac_writes"   "$WRITE_TESTS_AC" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
 
 if [ "$ceiling_ok" = "0" ]; then
   echo "All tests within ceilings."

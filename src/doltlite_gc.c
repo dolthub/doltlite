@@ -127,6 +127,58 @@ static int gcMarkReachable(
   return rc;
 }
 
+static int gcAppendMarkedChunk(
+  ChunkStore *cs,
+  const ProllyHash *pHash,
+  ProllyHashSet *marked,
+  u8 **ppBuf,
+  int *pnBuf,
+  int *pnBufAlloc,
+  i64 dataOffset,
+  ChunkIndexEntry *aNewIndex,
+  int *pnNewIndex
+){
+  u8 *chunkData = 0;
+  int nChunkData = 0;
+  int need;
+  int rc;
+
+  if( !prollyHashSetContains(marked, pHash) ) return SQLITE_OK;
+
+  rc = chunkStoreGet(cs, pHash, &chunkData, &nChunkData);
+  if( rc!=SQLITE_OK ) return rc;
+
+  need = *pnBuf + 4 + nChunkData;
+  if( need > *pnBufAlloc ){
+    int newAlloc = *pnBufAlloc ? *pnBufAlloc * 2 : 65536;
+    u8 *pNew;
+    while( newAlloc < need ) newAlloc *= 2;
+    pNew = sqlite3_realloc(*ppBuf, newAlloc);
+    if( !pNew ){
+      sqlite3_free(chunkData);
+      return SQLITE_NOMEM;
+    }
+    *ppBuf = pNew;
+    *pnBufAlloc = newAlloc;
+  }
+
+  (*ppBuf)[*pnBuf]   = (u8)(nChunkData);
+  (*ppBuf)[*pnBuf+1] = (u8)(nChunkData>>8);
+  (*ppBuf)[*pnBuf+2] = (u8)(nChunkData>>16);
+  (*ppBuf)[*pnBuf+3] = (u8)(nChunkData>>24);
+
+  memcpy(&aNewIndex[*pnNewIndex].hash, pHash, sizeof(ProllyHash));
+  aNewIndex[*pnNewIndex].offset = dataOffset + *pnBuf;
+  aNewIndex[*pnNewIndex].size = nChunkData;
+  (*pnNewIndex)++;
+
+  memcpy(*ppBuf + *pnBuf + 4, chunkData, nChunkData);
+  *pnBuf += 4 + nChunkData;
+
+  sqlite3_free(chunkData);
+  return SQLITE_OK;
+}
+
 static int gcBuildCompactedData(
   ChunkStore *cs,
   ProllyHashSet *marked,
@@ -148,54 +200,30 @@ static int gcBuildCompactedData(
   for(i=0; i<cs->nIndex; i++){
     if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ) kept++;
   }
+  for(i=0; i<cs->nRecent; i++){
+    if( prollyHashSetContains(marked, &cs->aRecent[i].hash) ) kept++;
+  }
 
-  aNewIndex = sqlite3_malloc(kept * (int)sizeof(ChunkIndexEntry));
+  aNewIndex = sqlite3_malloc((kept ? kept : 1) * (int)sizeof(ChunkIndexEntry));
   if( !aNewIndex ) return SQLITE_NOMEM;
 
   for(i=0; i<cs->nIndex; i++){
-    u8 *chunkData = 0;
-    int nChunkData = 0;
-
-    if( !prollyHashSetContains(marked, &cs->aIndex[i].hash) ) continue;
-
-    rc = chunkStoreGet(cs, &cs->aIndex[i].hash, &chunkData, &nChunkData);
+    rc = gcAppendMarkedChunk(cs, &cs->aIndex[i].hash, marked, &buf, &nBuf,
+                             &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
     if( rc!=SQLITE_OK ){
       sqlite3_free(aNewIndex);
       sqlite3_free(buf);
       return rc;
     }
-
-
-    {
-      int need = nBuf + 4 + nChunkData;
-      if( need > nBufAlloc ){
-        int newAlloc = nBufAlloc ? nBufAlloc * 2 : 65536;
-        while( newAlloc < need ) newAlloc *= 2;
-        buf = sqlite3_realloc(buf, newAlloc);
-        if( !buf ){
-          sqlite3_free(chunkData);
-          sqlite3_free(aNewIndex);
-          return SQLITE_NOMEM;
-        }
-        nBufAlloc = newAlloc;
-      }
+  }
+  for(i=0; i<cs->nRecent; i++){
+    rc = gcAppendMarkedChunk(cs, &cs->aRecent[i].hash, marked, &buf, &nBuf,
+                             &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(aNewIndex);
+      sqlite3_free(buf);
+      return rc;
     }
-
-
-    buf[nBuf]   = (u8)(nChunkData);
-    buf[nBuf+1] = (u8)(nChunkData>>8);
-    buf[nBuf+2] = (u8)(nChunkData>>16);
-    buf[nBuf+3] = (u8)(nChunkData>>24);
-
-    memcpy(&aNewIndex[nNewIndex].hash, &cs->aIndex[i].hash, sizeof(ProllyHash));
-    aNewIndex[nNewIndex].offset = dataOffset + nBuf;
-    aNewIndex[nNewIndex].size = nChunkData;
-    nNewIndex++;
-
-    memcpy(buf + nBuf + 4, chunkData, nChunkData);
-    nBuf += 4 + nChunkData;
-
-    sqlite3_free(chunkData);
   }
 
 
@@ -444,8 +472,13 @@ static int gcSweep(
       kept++;
     }
   }
+  for(i=0; i<cs->nRecent; i++){
+    if( prollyHashSetContains(marked, &cs->aRecent[i].hash) ){
+      kept++;
+    }
+  }
 
-  if( removed==0 ){
+  if( removed==0 && cs->nRecent==0 ){
     *pKept = kept;
     *pRemoved = 0;
     return SQLITE_OK;
@@ -471,6 +504,14 @@ static int gcSweep(
     aNewIndex = 0;
 
     cs->nPending = 0;
+    cs->nRecent = 0;
+    sqlite3_free(cs->aRecentHT);
+    sqlite3_free(cs->aRecentHTNext);
+    cs->aRecentHT = 0;
+    cs->aRecentHTNext = 0;
+    cs->nRecentHTBuilt = 0;
+    cs->nRecentHTNextAlloc = 0;
+    cs->nRecentHTSize = 0;
     cs->nWriteBuf = 0;
   }
 

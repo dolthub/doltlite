@@ -2,7 +2,9 @@ name: Benchmark Extra
 
 # Companion to Benchmark. Runs three non-INTKEY sysbench variants
 # (TEXT PK, BLOB PK, composite PK) plus the autocommit suite. Each
-# non-INTKEY variant is gated at 2× sqlite on file-backed sections.
+# non-INTKEY variant is gated on both individual ratios and section
+# average ratios. The current ceilings leave room for runner noise while
+# still catching broad regressions.
 # BENCH_RUNS=5 across the job — each non-INTKEY write is a per-
 # statement flush, so the default 11 runs blows the 15-minute budget.
 
@@ -18,7 +20,8 @@ permissions:
 
 env:
   BENCH_RUNS: 5
-  BENCH_MAX_MULTIPLIER: 2
+  BENCH_MAX_MULTIPLIER: 2.25
+  BENCH_AVG_MAX_MULTIPLIER: 1.75
 
 jobs:
   benchmark-extra:
@@ -56,10 +59,9 @@ jobs:
       id: bench
       run: |
         cd build
-        # Each non-INTKEY script enforces a 2× ceiling; capture rc per
-        # script and merge so a single ceiling break fails the job after
-        # the PR-comment step has run. Autocommit suite is reporting-
-        # only (sysbench_compare.sh skips ceiling on autocommit).
+        # Each script enforces the configured individual and average
+        # ceilings; capture rc per script and merge so a single ceiling
+        # break fails the job after the PR-comment step has run.
         set +e
         bash ../test/sysbench_compare_textpk.sh      > /tmp/bench_textpk.md
         textpk_rc=$?
