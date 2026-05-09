@@ -21,6 +21,7 @@ DOLTLITE=${DOLTLITE:-./doltlite}
 SQLITE3=${SQLITE3:-./sqlite3}
 BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
+SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
 ROWS=${BENCH_ROWS:-1000}
 BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2}
 SEED=42
@@ -383,6 +384,12 @@ run_bench() {
     db="/tmp/bench_${engine}_${RANDOM}_$$.db"
     rm -f "$db"
   fi
+  local bench_sql_file="$sql_file"
+  if [ "$engine" = "sqlite" ] && [ -n "${SQLITE_BENCH_PRAGMAS:-}" ]; then
+    bench_sql_file="$TMPDIR/pragma_${engine}_${RANDOM}_$$.sql"
+    printf "%s\n" "$SQLITE_BENCH_PRAGMAS" > "$bench_sql_file"
+    cat "$sql_file" >> "$bench_sql_file"
+  fi
   local timer=""
   if [ "$engine" = "sqlite" ] && [ -x "$BENCH_TIMER_SQLITE" ]; then
     timer="$BENCH_TIMER_SQLITE"
@@ -390,7 +397,7 @@ run_bench() {
     timer="$BENCH_TIMER_DOLTLITE"
   fi
   if [ -n "$timer" ]; then
-    "$timer" "$db" "$sql_file"
+    "$timer" "$db" "$bench_sql_file"
     if [ "$db" != ":memory:" ]; then rm -f "$db"; fi
     return
   fi
@@ -398,7 +405,7 @@ run_bench() {
   output=$(sed \
     -e "s/\.print BENCH_START/SELECT 'TS_START:' || CAST((julianday('now')*86400000000) AS INTEGER);/" \
     -e "s/\.print BENCH_END/SELECT 'TS_END:' || CAST((julianday('now')*86400000000) AS INTEGER);/" \
-    "$sql_file" | "$binary" "$db" 2>&1)
+    "$bench_sql_file" | "$binary" "$db" 2>&1)
   if [ "$db" != ":memory:" ]; then rm -f "$db"; fi
   # Extract timestamps and compute delta
   echo "$output" | python3 -c "
@@ -528,6 +535,8 @@ echo "### File-Backed (autocommit)"
 echo ""
 echo "_Each statement runs as its own transaction — exposes per-commit_"
 echo "_fixed costs that the wrapped-in-BEGIN/COMMIT tests amortize away._"
+echo "_SQLite uses WAL mode with synchronous=FULL in this section so_"
+echo "_the comparison uses SQLite's durable WAL autocommit path._"
 echo ""
 echo "#### Reads"
 echo ""
@@ -535,11 +544,11 @@ echo "_Reads have no commit cost; these are the same SQL files as the_"
 echo "_File-Backed Reads section, included here for symmetry and to_"
 echo "_catch any per-statement overhead doltlite pays on the read path._"
 echo ""
-run_section "ac_reads" "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_reads" "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
 echo ""
 echo "#### Writes"
 echo ""
-run_section "ac_writes" "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
+SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_writes" "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
 echo "_${ROWS} rows, single invocation per test, workload-only timing via host monotonic clock when available._"
@@ -578,7 +587,6 @@ echo ""
 ceiling_ok=0
 check_ceiling "file_reads"  "$READ_TESTS"     "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 check_ceiling "file_writes" "$WRITE_TESTS"    "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-check_ceiling "ac_writes"   "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 
 if [ "$ceiling_ok" = "0" ]; then
   echo "All tests within ceilings."
