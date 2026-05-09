@@ -443,11 +443,14 @@ READ_TESTS="oltp_point_select oltp_range_select oltp_sum_range oltp_order_range 
 WRITE_TESTS="oltp_bulk_insert oltp_insert oltp_update_index oltp_update_non_index oltp_delete_insert oltp_write_only types_delete_insert oltp_read_write"
 WRITE_TESTS_AC="oltp_bulk_insert_ac oltp_insert_ac oltp_update_index_ac oltp_update_non_index_ac oltp_delete_insert_ac oltp_write_only_ac types_delete_insert_ac oltp_read_write_ac"
 
+BENCH_RESULTS_FILE="$TMPDIR/bench_results.tsv"
+: > "$BENCH_RESULTS_FILE"
+
 # ============================================================
 # Output markdown table
 # ============================================================
 run_section() {
-  local tests="$1" db_sq="$2" db_dl="$3"
+  local section="$1" tests="$2" db_sq="$3" db_dl="$4"
   local ratio_sum=0
   local ratio_count=0
   local avg_ratio="--"
@@ -469,6 +472,7 @@ run_section() {
   else
     ratio="--"
   fi
+  printf '%s\t%s\t%s\t%s\n' "$section" "$t" "$s" "$d" >> "$BENCH_RESULTS_FILE"
   echo "| $t | $s_display | $d_display | ${ratio} |"
   done
   if [ "$ratio_count" -gt 0 ]; then
@@ -489,21 +493,21 @@ echo "### In-Memory"
 echo ""
 echo "#### Reads"
 echo ""
-run_section "$READ_TESTS" ":memory:" ":memory:"
+run_section "mem_reads" "$READ_TESTS" ":memory:" ":memory:"
 echo ""
 echo "#### Writes"
 echo ""
-run_section "$WRITE_TESTS" ":memory:" ":memory:"
+run_section "mem_writes" "$WRITE_TESTS" ":memory:" ":memory:"
 echo ""
 echo "### File-Backed"
 echo ""
 echo "#### Reads"
 echo ""
-run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+run_section "file_reads" "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
 echo ""
 echo "#### Writes"
 echo ""
-run_section "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+run_section "file_writes" "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
 echo "### File-Backed (autocommit)"
@@ -517,11 +521,11 @@ echo "_Reads have no commit cost; these are the same SQL files as the_"
 echo "_File-Backed Reads section, included here for symmetry and to_"
 echo "_catch any per-statement overhead doltlite pays on the read path._"
 echo ""
-run_section "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+run_section "ac_reads" "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
 echo ""
 echo "#### Writes"
 echo ""
-run_section "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
+run_section "ac_writes" "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
 
 echo ""
 echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQL timestamps._"
@@ -532,16 +536,20 @@ echo "_${ROWS} rows, single CLI invocation per test, workload-only timing via SQ
 # a regression on TEXT PK shows up as a CI failure.
 # ============================================================
 check_ceiling() {
-  local tests="$1" db_sq="$2" db_dl="$3" max="$4"
+  local section="$1" tests="$2" max="$3"
   local failed=0
   for t in $tests; do
-    s=$(run_bench_stable "$t" sqlite "$SQLITE3" "$TMPDIR/$t.sql" "$db_sq")
-    d=$(run_bench_stable "$t" doltlite "$DOLTLITE" "$TMPDIR/$t.sql" "$db_dl")
+    local line
+    line=$(awk -F '\t' -v section="$section" -v test="$t" \
+      '$1==section && $2==test {print $3 "\t" $4; exit}' \
+      "$BENCH_RESULTS_FILE")
+    s="${line%%$'\t'*}"
+    d="${line#*$'\t'}"
     if [ "$s" -gt 0 ] 2>/dev/null && [ "$d" -ge 0 ] 2>/dev/null; then
       over=$(python3 -c "r=$d/$s; print(1 if r>$max else 0)")
       if [ "$over" = "1" ]; then
         ratio=$(python3 -c "print(f'{$d/$s:.2f}')")
-        echo "FAIL: $t = ${ratio}x (ceiling: ${max}x)" >&2
+        echo "FAIL: $section/$t = ${ratio}x (ceiling: ${max}x)" >&2
         failed=1
       fi
     fi
@@ -554,9 +562,9 @@ echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
 echo ""
 
 ceiling_ok=0
-check_ceiling "$READ_TESTS"     "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-check_ceiling "$WRITE_TESTS"    "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-check_ceiling "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "file_reads"  "$READ_TESTS"     "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "file_writes" "$WRITE_TESTS"    "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "ac_writes"   "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 
 if [ "$ceiling_ok" = "0" ]; then
   echo "All tests within ceilings."
