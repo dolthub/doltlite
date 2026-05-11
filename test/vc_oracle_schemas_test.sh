@@ -1,42 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -51,9 +14,6 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 normalize() {
   tr -d '\r' | sort
 }
-
-
-
 
 oracle_schemas() {
   local name="$1" setup="$2"
@@ -93,11 +53,6 @@ oracle_schemas() {
     echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
   fi
 }
-
-
-
-
-
 
 oracle_diff_touches_schemas() {
   local name="$1" setup="$2"
@@ -141,14 +96,6 @@ oracle_diff_touches_schemas() {
   fi
 }
 
-
-
-
-
-
-
-
-
 oracle_schemas_dual() {
   local name="$1" dl_setup="$2" dt_setup="$3"
   local dir="$TMPROOT/${name}_schemas_dual"
@@ -187,10 +134,6 @@ oracle_schemas_dual() {
     echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
   fi
 }
-
-
-
-
 
 oracle_diff_touches_schemas_dual() {
   local name="$1" dl_setup="$2" dt_setup="$3"
@@ -281,8 +224,6 @@ CREATE VIEW pending AS SELECT * FROM t;
 
 echo "--- dolt_diff visibility of view-touching commits ---"
 
-
-
 oracle_diff_touches_schemas "view_only_commit" "
 $SEED
 CREATE VIEW high AS SELECT * FROM t WHERE v > 15;
@@ -290,13 +231,11 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'just_view');
 "
 
-
 oracle_diff_touches_schemas "table_only_no_schemas_touch" "
 CREATE TABLE t(id INT PRIMARY KEY);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'just_table');
 "
-
 
 oracle_diff_touches_schemas "mixed_commits" "
 $SEED
@@ -312,8 +251,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'view_commit_2');
 "
 
-
-
 oracle_diff_touches_schemas "combined_table_and_view" "
 $SEED
 INSERT INTO t VALUES(3, 30);
@@ -321,19 +258,6 @@ CREATE VIEW high AS SELECT * FROM t WHERE v > 15;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'combined');
 "
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 SEED_TRIG="
 $SEED
@@ -396,7 +320,6 @@ $SEED_TRIG
 CREATE TRIGGER t_ai AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES(new.id, new.v);
 "
 
-
 oracle_schemas_dual "trigger_and_view" "
 $SEED_TRIG
 CREATE VIEW high AS SELECT * FROM t WHERE v > 15;
@@ -410,9 +333,6 @@ CREATE TRIGGER t_ai AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES(new.id
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_view_and_trigger');
 "
-
-
-
 
 oracle_schemas_dual "trigger_on_feature_branch_only" "
 $SEED_TRIG
@@ -431,11 +351,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_trigger_on_feat');
 SELECT dolt_checkout('main');
 "
-
-
-
-
-
 
 oracle_schemas_dual "modify_trigger_single_commit" "
 $SEED_TRIG
@@ -459,8 +374,6 @@ SELECT dolt_commit('-m', 'replaced_trigger');
 
 echo "--- dolt_diff visibility of trigger-touching commits ---"
 
-
-
 oracle_diff_touches_schemas_dual "trigger_only_commit" "
 $SEED_TRIG
 CREATE TRIGGER t_ai AFTER INSERT ON t BEGIN INSERT INTO log VALUES(new.id, new.v); END;
@@ -472,7 +385,6 @@ CREATE TRIGGER t_ai AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES(new.id
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'just_trigger');
 "
-
 
 oracle_diff_touches_schemas_dual "mixed_trigger_commits" "
 $SEED_TRIG
@@ -499,10 +411,6 @@ CREATE TRIGGER t2 AFTER DELETE ON t FOR EACH ROW INSERT INTO log VALUES(old.id, 
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'trigger_commit_2');
 "
-
-
-
-
 
 oracle_diff_touches_schemas_dual "combined_table_and_trigger" "
 $SEED_TRIG

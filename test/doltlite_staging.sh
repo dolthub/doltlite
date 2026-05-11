@@ -37,55 +37,45 @@ run_test_match() {
 echo "=== Doltlite Staging Workflow Tests ==="
 echo ""
 
-
 DB=/tmp/test_staging_$$.db
 rm -f "$DB"
 echo "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users VALUES(1,'Alice'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test "status_clean_after_commit" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB"
-
 
 echo "INSERT INTO users VALUES(2,'Bob');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "status_unstaged_modify" \
   "SELECT table_name, staged, status FROM dolt_status;" \
   "users|0|modified" "$DB"
 
-
 echo "SELECT dolt_add('users');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "status_after_add" \
   "SELECT table_name, staged, status FROM dolt_status;" \
   "users|1|modified" "$DB"
 
-
 run_test_match "commit_staged" \
   "SELECT dolt_commit('-m','Add Bob');" \
   "^[0-9a-f]{40}$" "$DB"
-
 
 run_test "status_clean_after_staged_commit" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB"
 
-
 run_test "log_two_commits" \
   "SELECT count(*) FROM dolt_log;" \
   "3" "$DB"
-
 
 echo "CREATE TABLE orders(id INTEGER PRIMARY KEY, item TEXT); INSERT INTO orders VALUES(1,'hat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "status_new_table" \
   "SELECT table_name, staged, status FROM dolt_status WHERE table_name='orders';" \
   "orders|0|new table" "$DB"
 
-
 echo "SELECT dolt_add('orders');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "status_orders_staged" \
   "SELECT table_name, staged FROM dolt_status WHERE table_name='orders';" \
   "orders|1" "$DB"
-
 
 run_test_match "commit_orders" \
   "SELECT dolt_commit('-m','Add orders');" \
@@ -94,7 +84,6 @@ run_test_match "commit_orders" \
 run_test "log_three_commits" \
   "SELECT count(*) FROM dolt_log;" \
   "4" "$DB"
-
 
 DB2=/tmp/test_staging2_$$.db
 rm -f "$DB2"
@@ -118,7 +107,6 @@ run_test "clean_after_add_all_commit" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB2"
 
-
 DB3=/tmp/test_staging3_$$.db
 rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB3" > /dev/null 2>&1
@@ -136,7 +124,6 @@ run_test "log_after_dash_a" \
   "SELECT count(*) FROM dolt_log;" \
   "3" "$DB3"
 
-
 DB4=/tmp/test_staging4_$$.db
 rm -f "$DB4"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
@@ -146,11 +133,9 @@ run_test_match "commit_without_add_fails" \
   "SELECT dolt_commit('-m','should fail');" \
   "nothing to commit" "$DB4"
 
-
 run_test "data_survives_failed_commit" \
   "SELECT count(*) FROM t;" \
   "2" "$DB4"
-
 
 DB5=/tmp/test_staging5_$$.db
 rm -f "$DB5"
@@ -179,17 +164,14 @@ run_test "b_still_unstaged_after_commit" \
   "SELECT table_name, staged, status FROM dolt_status;" \
   "b|0|modified" "$DB5"
 
-
 DB6=/tmp/test_staging6_$$.db
 rm -f "$DB6"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2); SELECT dolt_add('t');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 
-
 run_test "staged_persists" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB6"
-
 
 DB6B=/tmp/test_staging6b_$$.db
 rm -f "$DB6B"
@@ -213,7 +195,6 @@ run_test "dropped_table_gone_after_commit" \
   "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='drop_t';" \
   "0" "$DB6B"
 
-
 DB7=/tmp/test_staging7_$$.db
 rm -f "$DB7"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
@@ -224,7 +205,6 @@ run_test "add_dot_stages_all" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB7"
 
-
 DB9=/tmp/test_staging_9_$$.db
 rm -f "$DB9"
 echo "CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT);
@@ -234,7 +214,6 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 run_test "status_clean_composite_pk_schema" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB9"
-
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB6B" "$DB7" "$DB8" "$DB9"
 

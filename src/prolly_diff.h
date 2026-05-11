@@ -38,11 +38,6 @@ int prollyValuesEqual(
   int *pEqual
 );
 
-
-
-
-
-
 typedef struct ProllyDiffIter ProllyDiffIter;
 struct ProllyDiffIter {
   ChunkStore *pStore;

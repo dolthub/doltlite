@@ -44,7 +44,6 @@ struct AtCursor {
   sqlite3_vtab_cursor base;
   ProllyCursor tblCur;
   int tblCurOpen;
-
   i64 intKey;
   u8 *pVal; int nVal;
   int hasRow;
@@ -64,8 +63,6 @@ static void atCursorReset(AtCursor *c){
   c->hasRow = 0;
   c->iRowid = 0;
 }
-
-
 
 static int atCaptureRow(AtCursor *c){
   const u8 *pVal; int nVal;
@@ -214,12 +211,6 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   rc=doltliteLoadCommit(db,&commitHash,&commit);
   if(rc!=SQLITE_OK) return rc;
 
-
-
-
-
-
-
   {
     ProllyHash branchCommit;
     int isBranch = (chunkStoreFindBranch(cs,zRef,&branchCommit)==SQLITE_OK
@@ -253,7 +244,6 @@ at_find_root:
   if(rc!=SQLITE_OK) return rc;
 
   if( prollyHashIsEmpty(&tableRoot) ) return SQLITE_OK;
-
 
   prollyCursorInit(&c->tblCur, cs, pCache, &tableRoot, flags);
   rc = prollyCursorFirst(&c->tblCur, &res);

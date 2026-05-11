@@ -1,8 +1,4 @@
 #!/bin/bash
-
-
-
-
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
@@ -10,10 +6,6 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 
 echo "=== Doltlite ALTER TABLE Merge Tests ==="
 echo ""
-
-
-
-
 
 DB=/tmp/test_alter_merge1_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -27,13 +19,11 @@ INSERT INTO t VALUES(2,'b','hello');
 SELECT dolt_commit('-A','-m','add extra column');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test "alter_merge_pre_cols" \
   "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra';" \
   "0" "$DB"
 
 run_test_match "alter_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
-
 
 run_test "alter_merge_post_cols" \
   "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra';" \
@@ -43,10 +33,6 @@ run_test "alter_merge_row2" "SELECT extra FROM t WHERE id=2;" "hello" "$DB"
 run_test "alter_merge_count" "SELECT count(*) FROM t;" "2" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_alter_merge1b_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -65,10 +51,6 @@ run_test_match "alter_merge_quoted_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]
 run_test "alter_merge_quoted_val" 'SELECT "odd""name" FROM t WHERE id=1;' "quoted" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_alter_merge1c_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -92,21 +74,15 @@ run_test "alter_merge_escaped_feat_val" 'SELECT "feat""col" FROM t WHERE id=1;' 
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_alter_merge2_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','init');
 SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "ALTER TABLE t ADD COLUMN extra TEXT;
 UPDATE t SET extra='main_val';
 SELECT dolt_commit('-A','-m','main adds extra');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "SELECT dolt_checkout('feat');
 ALTER TABLE t ADD COLUMN extra TEXT;
@@ -114,15 +90,9 @@ UPDATE t SET extra='feat_val';
 SELECT dolt_commit('-A','-m','feat adds extra');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "alter_same_col_merge" "SELECT dolt_merge('feat');" "conflict|merge failed|Error" "$DB"
 
 rm -f "$DB"
-
-
-
-
-
 
 DB=/tmp/test_alter_merge3_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -130,11 +100,9 @@ INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','init');
 SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "ALTER TABLE t ADD COLUMN col_main TEXT;
 UPDATE t SET col_main='m';
 SELECT dolt_commit('-A','-m','main adds col_main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "SELECT dolt_checkout('feat');
 ALTER TABLE t ADD COLUMN col_feat TEXT;
@@ -142,9 +110,7 @@ UPDATE t SET col_feat='f';
 SELECT dolt_commit('-A','-m','feat adds col_feat');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "schema_diff_cols_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB"
-
 
 run_test_match "schema_diff_cols_has_col_main" \
   "SELECT col_main FROM t WHERE id=1;" \
@@ -156,10 +122,6 @@ run_test_match "schema_diff_cols_has_col_feat" \
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_alter_merge4_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 CREATE TABLE keep(id INTEGER PRIMARY KEY, w TEXT);
@@ -168,27 +130,19 @@ INSERT INTO keep VALUES(1,'x');
 SELECT dolt_commit('-A','-m','init');
 SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "DROP TABLE t;
 SELECT dolt_commit('-A','-m','drop t');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "SELECT dolt_checkout('feat');
 INSERT INTO t VALUES(2,'b');
 SELECT dolt_commit('-A','-m','insert into t');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "drop_vs_modify_merge" "SELECT dolt_merge('feat');" "conflict|merge failed|Error" "$DB"
-
 
 run_test "drop_vs_modify_keep" "SELECT w FROM keep WHERE id=1;" "x" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_alter_cp_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -201,11 +155,9 @@ UPDATE t SET extra='cp' WHERE id=1;
 SELECT dolt_commit('-A','-m','alter add extra');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "cp_alter_hash" \
   "SELECT dolt_cherry_pick('feat');" \
   "^[0-9a-f]{40}$" "$DB"
-
 
 run_test "cp_alter_col_exists" \
   "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra';" \
@@ -215,10 +167,6 @@ run_test_match "cp_alter_msg" "SELECT message FROM dolt_log LIMIT 1;" "^alter ad
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_alter_revert_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -227,16 +175,13 @@ ALTER TABLE t ADD COLUMN extra TEXT;
 UPDATE t SET extra='rev' WHERE id=1;
 SELECT dolt_commit('-A','-m','alter add extra');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test "revert_alter_pre" \
   "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra';" \
   "1" "$DB"
 
-
 run_test_match "revert_alter_hash" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "^[0-9a-f]{40}$" "$DB"
-
 
 run_test "revert_alter_col_gone" \
   "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra';" \
@@ -245,10 +190,6 @@ run_test "revert_alter_data" "SELECT v FROM t WHERE id=1;" "a" "$DB"
 run_test_match "revert_alter_msg" "SELECT message FROM dolt_log LIMIT 1;" "Revert" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_alter_cp_disjoint_table_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -279,10 +220,6 @@ run_test "cp_disjoint_table_reopen" "SELECT count(*) FROM feat_tbl;" "1" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_alter_cp_disjoint_idx_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
@@ -311,10 +248,6 @@ run_test "cp_disjoint_idx_b" \
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_alter_revert_disjoint_table_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE base(id INTEGER PRIMARY KEY, v INT);
@@ -339,10 +272,6 @@ run_test "revert_disjoint_table_gone" \
 run_test "revert_disjoint_table_base" "SELECT count(*) FROM base;" "1" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_alter_revert_disjoint_idx_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -369,10 +298,6 @@ run_test "revert_disjoint_idx_b" \
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_alter_diff_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -384,31 +309,23 @@ INSERT INTO t VALUES(2,'b','y');
 SELECT dolt_commit('-A','-m','c2');
 SELECT dolt_tag('after');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "diff_across_alter" \
   "SELECT diff_type FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1) LIMIT 1;" \
   "modified|added" "$DB"
-
 
 run_test_match "diff_across_alter_count" \
   "SELECT count(*) FROM dolt_diff_t WHERE to_commit=(SELECT commit_hash FROM dolt_log LIMIT 1);" \
   "^[1-9]" "$DB"
 
-
 run_test_match "history_across_alter" \
   "SELECT count(*) FROM dolt_history_t;" \
   "^[2-9]" "$DB"
-
 
 run_test "history_commits" \
   "SELECT count(DISTINCT commit_hash) FROM dolt_history_t;" \
   "2" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_alter_at_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -421,26 +338,19 @@ INSERT INTO t VALUES(2,'two','ext');
 SELECT dolt_commit('-A','-m','c2');
 SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test "at_before_alter_count" \
   "SELECT count(*) FROM dolt_at_t('v1');" \
   "1" "$DB"
 
-
 run_test "at_after_alter_count" \
   "SELECT count(*) FROM dolt_at_t('v2');" \
   "2" "$DB"
-
 
 run_test_match "at_after_alter_extra" \
   "SELECT extra FROM dolt_at_t('v2') WHERE id=1;" \
   "new" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_alter_sd_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -451,7 +361,6 @@ ALTER TABLE t ADD COLUMN extra TEXT;
 SELECT dolt_commit('-A','-m','c2');
 SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "schema_diff_alter_count" \
   "SELECT count(*) FROM dolt_schema_diff('v1','v2');" \
   "^[1-9]" "$DB"
@@ -460,22 +369,15 @@ run_test_match "schema_diff_alter_table" \
   "SELECT to_table_name FROM dolt_schema_diff('v1','v2') WHERE to_table_name='t';" \
   "^t$" "$DB"
 
-
 run_test_match "schema_diff_alter_to_stmt" \
   "SELECT to_create_statement FROM dolt_schema_diff('v1','v2') WHERE to_table_name='t';" \
   "extra" "$DB"
-
 
 run_test_match "schema_diff_alter_from_stmt" \
   "SELECT from_create_statement FROM dolt_schema_diff('v1','v2') WHERE to_table_name='t';" \
   "v TEXT" "$DB"
 
 rm -f "$DB"
-
-
-
-
-
 
 DB=/tmp/test_schema_merge10_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -505,7 +407,6 @@ run_test "schema_merge_diff_cols_count" \
   "2" "$DB"
 rm -f "$DB"
 
-
 DB=/tmp/test_schema_merge11_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -526,7 +427,6 @@ run_test "schema_merge_same_col_exists" \
   "1" "$DB"
 rm -f "$DB"
 
-
 DB=/tmp/test_schema_merge12_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -543,11 +443,6 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "schema_merge_same_col_diff_type" "SELECT dolt_merge('feat');" "schema conflict|conflict|Error" "$DB"
 rm -f "$DB"
-
-
-
-
-
 
 DB=/tmp/test_schema_merge13_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -575,7 +470,6 @@ run_test "schema_merge_onesided_row_count" "SELECT count(*) FROM t;" "3" "$DB"
 run_test "schema_merge_onesided_data_main" "SELECT v FROM t WHERE id=1;" "a2" "$DB"
 rm -f "$DB"
 
-
 DB=/tmp/test_schema_merge14_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, extra TEXT);
 INSERT INTO t VALUES(1,'a','e1');
@@ -588,15 +482,9 @@ INSERT INTO t VALUES(3,'c','e3');
 SELECT dolt_commit('-A','-m','feat adds data');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "schema_merge_ff_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]|Fast-forward" "$DB"
 run_test "schema_merge_ff_count" "SELECT count(*) FROM t;" "3" "$DB"
 rm -f "$DB"
-
-
-
-
-
 
 DB=/tmp/test_schema_merge15_$$.db; rm -f "$DB"
 echo "CREATE TABLE t1(id INTEGER PRIMARY KEY, v TEXT);
@@ -626,14 +514,7 @@ run_test "schema_merge_multi_t2_col" \
 run_test "schema_merge_multi_t1_data" "SELECT col_main FROM t1 WHERE id=1;" "m1" "$DB"
 rm -f "$DB"
 
-
-
-
-
-
-
 DB=/tmp/test_schema_merge16_$$.db; rm -f "$DB"
-
 
 INSERTS=""
 for i in $(seq 1 50); do
@@ -645,7 +526,6 @@ ${INSERTS}
 SELECT dolt_commit('-A','-m','init');
 SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 UPDATES=""
 for i in $(seq 1 50); do
   UPDATES="${UPDATES}UPDATE t SET score=$((i*10)) WHERE id=$i;"
@@ -655,7 +535,6 @@ echo "ALTER TABLE t ADD COLUMN score INTEGER;
 ${UPDATES}
 INSERT INTO t VALUES(51,'row51',510);
 SELECT dolt_commit('-A','-m','main adds score + row51');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "SELECT dolt_checkout('feat');
 INSERT INTO t VALUES(52,'row52');
@@ -673,10 +552,6 @@ run_test "schema_merge_many_rows_score_col" \
   "SELECT count(*) FROM pragma_table_info('t') WHERE name='score';" \
   "1" "$DB"
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

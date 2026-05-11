@@ -1,53 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5534,11 +5484,6 @@ static int mutmapAssertMatchesModel(
 }
 
 static void run_mutmap_resolve_sorted_pos(void){
-
-
-
-
-
   ProllyMutMap sorted, lazy;
   i64 keys[] = { 10, 30, 20, 50, 40 };
   int n = sizeof(keys)/sizeof(keys[0]);
@@ -5566,9 +5511,6 @@ static void run_mutmap_resolve_sorted_pos(void){
     check("rsp_insert_bumps_gen_lazy",   lazy.generation   > gen0);
   }
 
-
-
-
   gen0 = sorted.generation;
   val = 999;
   check("rsp_inplace_update_sorted_rc",
@@ -5579,9 +5521,6 @@ static void run_mutmap_resolve_sorted_pos(void){
   check("rsp_inplace_update_lazy_rc",
         prollyMutMapInsert(&lazy,   0, 0, 30, (const u8*)&val, sizeof(val))==SQLITE_OK);
   check("rsp_inplace_does_not_bump_lazy",   lazy.generation == gen0);
-
-
-
 
   check("rsp_resolve_present_10_sorted",
         prollyMutMapResolveSortedPos(&sorted, 0, 0, 10, &idx, &found)==SQLITE_OK
@@ -5602,8 +5541,6 @@ static void run_mutmap_resolve_sorted_pos(void){
         prollyMutMapResolveSortedPos(&sorted, 0, 0, 999, &idx, &found)==SQLITE_OK
           && idx==5 && !found);
 
-
-
   check("rsp_resolve_present_30_lazy",
         prollyMutMapResolveSortedPos(&lazy,   0, 0, 30, &idx, &found)==SQLITE_OK
           && idx==2 && found);
@@ -5614,7 +5551,6 @@ static void run_mutmap_resolve_sorted_pos(void){
         prollyMutMapResolveSortedPos(&lazy,   0, 0, 999, &idx, &found)==SQLITE_OK
           && idx==5 && !found);
 
-
   {
     ProllyMutMap empty;
     check("rsp_init_empty", prollyMutMapInitMode(&empty, 1, 1)==SQLITE_OK);
@@ -5624,14 +5560,10 @@ static void run_mutmap_resolve_sorted_pos(void){
     prollyMutMapFree(&empty);
   }
 
-
-
   gen0 = sorted.generation;
   check("rsp_delete_absent_sorted_rc",
         prollyMutMapDelete(&sorted, 0, 0, 999)==SQLITE_OK);
   check("rsp_delete_absent_bumps_gen_sorted", sorted.generation > gen0);
-
-
 
   gen0 = sorted.generation;
   check("rsp_delete_existing_sorted_rc",

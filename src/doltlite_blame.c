@@ -13,19 +13,6 @@
 #include <string.h>
 #include <time.h>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 typedef struct BlameRow BlameRow;
 struct BlameRow {
   i64 intKey;
@@ -68,11 +55,6 @@ struct BlamePkTmp {
   int pkPos;
   int isIntegerType;
 };
-
-
-
-
-
 
 static int blameLoadPkColumns(
   sqlite3 *db,
@@ -125,7 +107,6 @@ static int blameLoadPkColumns(
     return rc;
   }
 
-
   for(i=1; i<nTmp; i++){
     BlamePkTmp t = tmp[i];
     j = i - 1;
@@ -151,10 +132,6 @@ static int blameLoadPkColumns(
     aCid[i] = tmp[i].cid;
     n++;
   }
-
-
-
-
 
   if( nTmp == 1 && tmp[0].isIntegerType ){
     intPkCid = tmp[0].cid;
@@ -214,8 +191,6 @@ static void blameFreeRows(BlameCursor *c){
   c->nAlloc = 0;
 }
 
-
-
 static int blameCollectLiveRows(
   BlameCursor *pCur,
   ChunkStore *cs,
@@ -274,10 +249,6 @@ static int blameCollectLiveRows(
   return SQLITE_OK;
 }
 
-
-
-
-
 static int blameSeekRowInTree(
   ChunkStore *cs,
   ProllyCache *pCache,
@@ -313,9 +284,6 @@ static int blameSeekRowInTree(
   return SQLITE_OK;
 }
 
-
-
-
 static int blameRowValueEqual(const u8 *pA, int nA, const u8 *pB, int nB){
   int isA = (pA && nA>0);
   int isB = (pB && nB>0);
@@ -324,8 +292,6 @@ static int blameRowValueEqual(const u8 *pA, int nA, const u8 *pB, int nB){
   if( nA != nB ) return 0;
   return memcmp(pA, pB, nA)==0;
 }
-
-
 
 static int blameLoadTableRoot(
   sqlite3 *db,
@@ -356,8 +322,6 @@ static int blameLoadTableRoot(
   return SQLITE_OK;
 }
 
-
-
 static int blameAssign(
   BlameRow *pRow,
   const ProllyHash *pCommitHash,
@@ -376,9 +340,6 @@ static int blameAssign(
   if( !pRow->zCommitter || !pRow->zEmail || !pRow->zMessage ) return SQLITE_NOMEM;
   return SQLITE_OK;
 }
-
-
-
 
 static int blameCompareAgainstRef(
   sqlite3 *db,
@@ -429,10 +390,6 @@ static int blameUnresolvedCount(BlameCursor *pCur){
   return pCur->nUnresolved;
 }
 
-
-
-
-
 static int blameFindAllParentMergeBase(
   sqlite3 *db,
   const DoltliteCommit *pCommit,
@@ -470,8 +427,6 @@ static int blameFindAllParentMergeBase(
   return SQLITE_OK;
 }
 
-
-
 static int blameWalk(
   BlameCursor *pCur,
   sqlite3 *db,
@@ -502,7 +457,6 @@ static int blameWalk(
     }
 
     if( doltliteCommitParentCount(&commit) >= 2 ){
-
       ProllyHash baseHash;
       DoltliteCommit baseCommit;
       memset(&baseHash, 0, sizeof(baseHash));
@@ -527,8 +481,6 @@ static int blameWalk(
           return rc;
         }
       }else if( haveCurTable ){
-
-
         rc = blameCompareAgainstRef(db, pCur, zTableName,
                                     &curTableRoot, curFlags,
                                     0, &walk, &commit);
@@ -538,7 +490,6 @@ static int blameWalk(
         }
       }
     }else{
-
       const ProllyHash *pParent = doltliteCommitParentHash(&commit, 0);
       if( pParent && !prollyHashIsEmpty(pParent) ){
         DoltliteCommit parentCommit;
@@ -556,8 +507,6 @@ static int blameWalk(
           return rc;
         }
       }else if( haveCurTable ){
-
-
         rc = blameCompareAgainstRef(db, pCur, zTableName,
                                     &curTableRoot, curFlags,
                                     0, &walk, &commit);
@@ -567,7 +516,6 @@ static int blameWalk(
         }
       }
     }
-
 
     {
       const ProllyHash *pParent = doltliteCommitParentHash(&commit, 0);
@@ -745,17 +693,9 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
   if( iCol < nPk ){
     int cid = v->aPkColIdx[iCol];
     if( cid == v->intPkCid ){
-
-
       sqlite3_result_int64(ctx, r->intKey);
     }else if( r->pCurVal && r->nCurVal>0 ){
       DoltliteRecordInfo ri;
-
-
-
-
-
-
       doltliteParseRecord(r->pCurVal, r->nCurVal, &ri);
       if( iCol < ri.nField ){
         doltliteResultField(ctx, r->pCurVal, r->nCurVal,

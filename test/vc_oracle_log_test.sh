@@ -1,14 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -19,9 +10,6 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
-
-
-
 
 normalize() {
   tr -d '\r' | awk -F'\t' '
@@ -34,22 +22,13 @@ normalize() {
   '
 }
 
-
-
-
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-
-
-
-
-
   local dl_q="SELECT 'LOG|' || commit_hash || char(9) || message FROM dolt_log"
   local dt_q="SELECT concat('LOG|', commit_hash, char(9), message) FROM dolt_log ORDER BY commit_order DESC"
-
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$dl_q" \
@@ -57,7 +36,6 @@ oracle() {
            | grep '^LOG|' \
            | sed 's/^LOG|//' \
            | normalize)
-
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -88,14 +66,12 @@ oracle() {
 echo "=== Version Control Oracle Tests: dolt_log ==="
 echo ""
 
-
 echo "--- fresh repo ---"
 
 oracle "fresh_db_has_seed_commit" "
 -- no user commits; both sides should report a single seed commit
 SELECT 1;
 "
-
 
 echo "--- linear chains ---"
 
@@ -128,13 +104,6 @@ INSERT INTO t VALUES (2, 20);
 SELECT dolt_commit('-a', '-m', 'second');
 "
 
-
-
-
-
-
-
-
 oracle "message_with_special_chars" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
@@ -155,7 +124,6 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'three');
 "
 
-
 echo "--- message edge cases ---"
 
 oracle "unicode_message" "
@@ -172,17 +140,12 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'this is a deliberately very long commit message that goes on and on and on to exercise any buffer-size assumptions in the log walker or in either engine|s output format and should still come back intact');
 "
 
-
-
 oracle "internal_whitespace_preserved" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
 SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'one    two     three');
 "
-
-
-
 
 oracle "leading_trailing_whitespace_trimmed" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -191,11 +154,7 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', '   hello world   ');
 "
 
-
 echo "--- merge commits ---"
-
-
-
 
 oracle "merge_commit_in_log" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -213,8 +172,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feature');
 "
-
-
 
 oracle "merge_then_more_commits" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -236,10 +193,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'post_merge');
 "
 
-
 echo "--- tags and branches ---"
-
-
 
 oracle "tag_does_not_add_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -248,8 +202,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c1');
 SELECT dolt_tag('v1');
 "
-
-
 
 oracle "log_on_feature_branch" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

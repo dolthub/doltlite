@@ -17,17 +17,6 @@ int prollyHashCompare(const ProllyHash *a, const ProllyHash *b);
 
 int prollyHashIsEmpty(const ProllyHash *h);
 
-
-
-
-
-
-
-
-
-
-
-
 int prollyWeibullCheck(u32 size, u32 thisSize, u32 hash);
 
 #endif

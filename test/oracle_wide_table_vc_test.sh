@@ -1,13 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
 set -u
 DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
@@ -22,12 +14,10 @@ fail_name() {
 
 dl() { "$DOLTLITE" "$1" "$2" 2>/dev/null; }
 
-
 gen_cols() { local n=$1; for i in $(seq 1 $n); do echo -n "c$i INT"; [ $i -lt $n ] && echo -n ", "; done; }
 gen_vals() { local n=$1; for i in $(seq 1 $n); do echo -n "$i"; [ $i -lt $n ] && echo -n ","; done; }
 
 echo "=== Wide Table + Version Control Tests ==="
-
 
 echo ""
 echo "--- 1: 100-column commit + reopen ---"
@@ -41,7 +31,6 @@ R100=$(dl "$DB" "SELECT c100 FROM t WHERE id=1;")
 [ "$R65" = "65" ] && pass_name "1_c65" || fail_name "1_c65; got $R65"
 [ "$R100" = "100" ] && pass_name "1_c100" || fail_name "1_c100; got $R100"
 
-
 echo ""
 echo "--- 2: 100-column non-overlapping merge ---"
 DB="$TMPROOT/2.db"
@@ -50,7 +39,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1,
 [ "$(dl "$DB" "SELECT c75 FROM t WHERE id=1;")" = "888" ] && pass_name "2_main_col" || fail_name "2_main_col"
 [ "$(dl "$DB" "SELECT c50 FROM t WHERE id=1;")" = "50" ] && pass_name "2_unchanged" || fail_name "2_unchanged"
 [ "$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")" = "0" ] && pass_name "2_no_conflicts" || fail_name "2_no_conflicts"
-
 
 echo ""
 echo "--- 3: 100-column conflict (same column both sides) ---"
@@ -75,7 +63,6 @@ SQL
 [ "$CONF" = "1" ] && pass_name "3_conflict" || fail_name "3_conflict"
 [ "$(dl "$DB" "SELECT c50 FROM t WHERE id=1;")" = "2000" ] && pass_name "3_ours_wins" || fail_name "3_ours_wins"
 
-
 echo ""
 echo "--- 4: 200-column non-overlapping merge ---"
 DB="$TMPROOT/4.db"
@@ -88,7 +75,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS200); INSERT INTO t VALUES
 [ "$(dl "$DB" "SELECT c200 FROM t WHERE id=1;")" = "333" ] && pass_name "4_c200" || fail_name "4_c200"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "4_integrity" || fail_name "4_integrity"
 
-
 echo ""
 echo "--- 5: 80-column cherry-pick ---"
 DB="$TMPROOT/5.db"
@@ -98,7 +84,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS80); INSERT INTO t VALUES(
 [ "$(dl "$DB" "SELECT c40 FROM t WHERE id=1;")" = "222" ] && pass_name "5_c40" || fail_name "5_c40"
 [ "$(dl "$DB" "SELECT c80 FROM t WHERE id=1;")" = "333" ] && pass_name "5_c80" || fail_name "5_c80"
 
-
 echo ""
 echo "--- 6: 80-column revert ---"
 DB="$TMPROOT/6.db"
@@ -107,7 +92,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS80); INSERT INTO t VALUES(
 [ "$(dl "$DB" "SELECT c1 FROM t WHERE id=1;")" = "1" ] && pass_name "6_c1_reverted" || fail_name "6_c1_reverted"
 [ "$(dl "$DB" "SELECT c80 FROM t WHERE id=1;")" = "80" ] && pass_name "6_c80_reverted" || fail_name "6_c80_reverted"
 
-
 echo ""
 echo "--- 7: 80-column table with index ---"
 DB="$TMPROOT/7.db"
@@ -115,7 +99,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS80); CREATE INDEX idx ON t
 [ "$(dl "$DB" "SELECT count(*) FROM t;")" = "3" ] && pass_name "7_count" || fail_name "7_count"
 [ "$(dl "$DB" "SELECT c40 FROM t WHERE id=1;")" = "999" ] && pass_name "7_updated" || fail_name "7_updated"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "7_integrity" || fail_name "7_integrity"
-
 
 echo ""
 echo "--- 8: 100-column, multiple rows, both sides add ---"
@@ -126,14 +109,12 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1,
 [ "$(dl "$DB" "SELECT c50 FROM t WHERE id=4;")" = "80" ] && pass_name "8_main_row" || fail_name "8_main_row"
 [ "$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")" = "0" ] && pass_name "8_no_conflicts" || fail_name "8_no_conflicts"
 
-
 echo ""
 echo "--- 9: 100-column convergent merge ---"
 DB="$TMPROOT/9.db"
 dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1, $VALS); SELECT dolt_commit('-Am','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET c99=777 WHERE id=1; SELECT dolt_commit('-Am','feat'); SELECT dolt_checkout('main'); UPDATE t SET c99=777 WHERE id=1; SELECT dolt_commit('-Am','main'); SELECT dolt_merge('feat');" >/dev/null
 [ "$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")" = "0" ] && pass_name "9_no_conflict" || fail_name "9_no_conflict"
 [ "$(dl "$DB" "SELECT c99 FROM t WHERE id=1;")" = "777" ] && pass_name "9_converged" || fail_name "9_converged"
-
 
 echo ""
 echo "--- 10: Reopen after 100-column merge ---"

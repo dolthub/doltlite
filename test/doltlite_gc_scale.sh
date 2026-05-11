@@ -1,9 +1,4 @@
 #!/bin/bash
-
-
-
-
-
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 
@@ -16,10 +11,6 @@ run_test() {
 
 echo "=== GC Tests at Scale ==="
 echo ""
-
-
-
-
 
 DB1=/tmp/test_gc1_$$.db; rm -f "$DB1"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -42,10 +33,6 @@ run_test "gc_10k_data_intact" \
   "SELECT count(*) FROM t WHERE length(v) > 0;" \
   "10000" "$DB1"
 
-
-
-
-
 DB2=/tmp/test_gc2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t SELECT x, hex(randomblob(50))
@@ -67,10 +54,6 @@ run_test "gc_branch_count" \
 run_test "gc_branch_integrity" \
   "PRAGMA integrity_check;" \
   "ok" "$DB2"
-
-
-
-
 
 DB3=/tmp/test_gc3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE events(
@@ -99,10 +82,6 @@ run_test "gc_index_seek" \
   "SELECT count(*) FROM events WHERE tid='thread-25';" \
   "200" "$DB3"
 
-
-
-
-
 DB4=/tmp/test_gc4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t SELECT x, hex(randomblob(50))
@@ -122,10 +101,6 @@ run_test "gc_multi_count" \
 run_test "gc_multi_integrity" \
   "PRAGMA integrity_check;" \
   "ok" "$DB4"
-
-
-
-
 
 SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
 if [ -x "$SQLITE3" ]; then
@@ -152,7 +127,6 @@ SELECT dolt_gc();" | $DOLTLITE "$DB5" > /dev/null 2>&1
 
   rm -f "$DB5" "$SQLDB"
 fi
-
 
 rm -f "$DB1" "$DB2" "$DB3" "$DB4"
 

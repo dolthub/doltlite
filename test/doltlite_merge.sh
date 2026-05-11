@@ -7,7 +7,6 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 echo "=== Doltlite Merge Tests ==="
 echo ""
 
-
 DB=/tmp/test_merge_$$.db; rm -f "$DB"
 echo "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT); CREATE TABLE orders(id INTEGER PRIMARY KEY, item TEXT); INSERT INTO users VALUES(1,'Alice'); INSERT INTO orders VALUES(1,'hat'); SELECT dolt_commit('-A','-m','initial');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -22,7 +21,6 @@ run_test "merge_orders" "SELECT count(*) FROM orders;" "2" "$DB"
 run_test "merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge branch 'feature' into main" "$DB"
 run_test "merge_log_count" "SELECT count(*) FROM dolt_log;" "5" "$DB"
 
-
 DB2=/tmp/test_merge2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB2" > /dev/null 2>&1
@@ -35,9 +33,7 @@ run_test "ff_after" "SELECT count(*) FROM t;" "2" "$DB2"
 run_test "ff_no_merge_commit" "SELECT message FROM dolt_log LIMIT 1;" "feature" "$DB2"
 run_test "ff_log_count" "SELECT count(*) FROM dolt_log;" "3" "$DB2"
 
-
 run_test "up_to_date" "SELECT dolt_merge('feature');" "Already up to date" "$DB2"
-
 
 DB3=/tmp/test_merge3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB3" > /dev/null 2>&1
@@ -49,9 +45,7 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 run_test_match "conflict" "SELECT dolt_merge('feature');" "conflict" "$DB3"
 run_test "conflict_ours_preserved" "SELECT v FROM t;" "main" "$DB3"
 
-
 run_test_match "no_branch" "SELECT dolt_merge('nope');" "not found" "$DB3"
-
 
 DB4=/tmp/test_merge4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
@@ -63,7 +57,6 @@ run_test_match "new_table_merge" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$
 run_test "new_table_visible" "SELECT y FROM new_t;" "42" "$DB4"
 run_test "original_intact" "SELECT x FROM t;" "1" "$DB4"
 
-
 DB5=/tmp/test_merge5_$$.db; rm -f "$DB5"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB5" > /dev/null 2>&1
@@ -74,7 +67,6 @@ run_test "pre_merge_rows" "SELECT count(*) FROM t;" "2" "$DB5"
 run_test_match "merge_del" "SELECT dolt_merge('feature');" "^[0-9a-f]{40}$" "$DB5"
 run_test "post_merge_rows" "SELECT count(*) FROM t;" "1" "$DB5"
 
-
 run_test "diff_3way_users" \
   "SELECT rows_modified FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 3), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 'users');" \
   "1" "$DB"
@@ -82,16 +74,13 @@ run_test "diff_3way_orders" \
   "SELECT rows_added FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 3), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 'orders');" \
   "1" "$DB"
 
-
 run_test "diff_ff_added" \
   "SELECT rows_added FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 't');" \
   "1" "$DB2"
 
-
 run_test "diff_conflict_shows_change" \
   "SELECT rows_modified FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 0), 't');" \
   "1" "$DB3"
-
 
 DB6=/tmp/test_merge6_$$.db; rm -f "$DB6"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
@@ -105,7 +94,6 @@ run_test "row_merge_row1" "SELECT v FROM t WHERE id=1;" "MAIN" "$DB6"
 run_test "row_merge_row2" "SELECT v FROM t WHERE id=2;" "b" "$DB6"
 run_test "row_merge_row3" "SELECT v FROM t WHERE id=3;" "FEAT" "$DB6"
 
-
 DB7=/tmp/test_merge7_$$.db; rm -f "$DB7"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'orig'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB7" > /dev/null 2>&1
@@ -115,7 +103,6 @@ echo "UPDATE t SET v='feat-val' WHERE id=1; SELECT dolt_commit('-A','-m','feat')
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 run_test_match "row_conflict_detected" "SELECT dolt_merge('feature');" "conflict" "$DB7"
 run_test "row_conflict_ours_kept" "SELECT v FROM t WHERE id=1;" "main-val" "$DB7"
-
 
 DB8=/tmp/test_merge8_$$.db; rm -f "$DB8"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
@@ -159,20 +146,16 @@ else
   ERRORS="$ERRORS\nFAIL: mixed_merge_same_session_summary_cleared\n  expected: TX|0|main1|0\n  got:      $TX_OUT"
 fi
 
-
 DB9=/tmp/test_merge9_$$.db; rm -f "$DB9"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 echo "SELECT dolt_branch('other'); SELECT dolt_checkout('other'); UPDATE t SET v='OTHER'; SELECT dolt_commit('-A','-m','other');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main'); UPDATE t SET v='MAIN'; SELECT dolt_commit('-A','-m','main');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 
-
 echo "BEGIN; SELECT dolt_merge('other'); SELECT dolt_merge('--abort'); COMMIT;" | $DOLTLITE "$DB9" > /dev/null 2>&1
 run_test "abort_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB9"
 run_test "abort_data_restored" "SELECT v FROM t WHERE id=1;" "MAIN" "$DB9"
 
-
 run_test_match "abort_no_merge" "SELECT dolt_merge('--abort');" "no merge in progress" "$DB9"
-
 
 DB10=/tmp/test_merge10_$$.db; rm -f "$DB10"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB10" > /dev/null 2>&1
@@ -183,7 +166,6 @@ run_test_match "clean_ff_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]" "$DB10"
 run_test "clean_ff_log" "SELECT message FROM dolt_log LIMIT 1;" "feat" "$DB10"
 run_test "clean_ff_data" "SELECT count(*) FROM t;" "2" "$DB10"
 
-
 DB11=/tmp/test_merge11_$$.db; rm -f "$DB11"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT); INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB11" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); UPDATE t SET u=9, v='feat2' WHERE id=2; SELECT dolt_commit('-A','-m','feat_unique');" | $DOLTLITE "$DB11" > /dev/null 2>&1
@@ -192,7 +174,6 @@ run_test_match "constraint_violation_merge_errors" "SELECT dolt_merge('feat');" 
 run_test "constraint_violation_no_conflicts" "SELECT count(*) FROM dolt_conflicts;" "0" "$DB11"
 run_test "constraint_violation_no_violations" "SELECT count(*) FROM dolt_constraint_violations;" "0" "$DB11"
 run_test "constraint_violation_state_restored" "SELECT group_concat(id || ':' || u || ':' || v, ',') FROM (SELECT id, u, v FROM t ORDER BY id);" "1:9:main1,2:2:base2" "$DB11"
-
 
 DB12=/tmp/test_merge12_$$.db; rm -f "$DB12"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, u INT UNIQUE, v TEXT); INSERT INTO t VALUES(1,1,'base1'),(2,2,'base2'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB12" > /dev/null 2>&1
@@ -209,7 +190,6 @@ else
   ERRORS="$ERRORS\nFAIL: constraint_violation_merge_tx_persists\n  expected: TX|0|1|1:9:main1,2:9:feat2\n  got:      $TX_OUT"
 fi
 
-
 DB13=/tmp/test_merge13_$$.db; rm -f "$DB13"
 echo "CREATE TABLE anchor(id INTEGER PRIMARY KEY); INSERT INTO anchor VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB13" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE TABLE feat_tbl(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO feat_tbl VALUES(1,'f'); SELECT dolt_commit('-A','-m','feat_add_table');" | $DOLTLITE "$DB13" > /dev/null 2>&1
@@ -219,7 +199,6 @@ run_test "disjoint_new_tables_main_present" "SELECT v FROM main_tbl;" "m" "$DB13
 run_test "disjoint_new_tables_feat_present" "SELECT v FROM feat_tbl;" "f" "$DB13"
 run_test "disjoint_new_tables_reopen_main" "SELECT v FROM main_tbl;" "m" "$DB13"
 run_test "disjoint_new_tables_reopen_feat" "SELECT v FROM feat_tbl;" "f" "$DB13"
-
 
 DB14=/tmp/test_merge14_$$.db; rm -f "$DB14"
 echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v INT); CREATE TABLE b(id INTEGER PRIMARY KEY, v INT); INSERT INTO a VALUES(1,10); INSERT INTO b VALUES(1,20); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB14" > /dev/null 2>&1
@@ -231,7 +210,6 @@ run_test "disjoint_indexes_visible" "SELECT count(*) FROM sqlite_master WHERE ty
 run_test "disjoint_indexes_reopen_data_a" "SELECT count(*) FROM a;" "1" "$DB14"
 run_test "disjoint_indexes_reopen_data_b" "SELECT count(*) FROM b;" "1" "$DB14"
 
-
 DB15=/tmp/test_merge15_$$.db; rm -f "$DB15"
 echo "CREATE TABLE p1(id INTEGER PRIMARY KEY); CREATE TABLE c1(id INTEGER PRIMARY KEY, p1_id INT); CREATE TABLE p2(id INTEGER PRIMARY KEY); CREATE TABLE c2(id INTEGER PRIMARY KEY, p2_id INT); INSERT INTO p1 VALUES(1); INSERT INTO p2 VALUES(1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB15" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); ALTER TABLE c1 RENAME TO c1_old; CREATE TABLE c1(id INTEGER PRIMARY KEY, p1_id INT, CONSTRAINT fk_c1 FOREIGN KEY (p1_id) REFERENCES p1(id)); INSERT INTO c1 SELECT id,p1_id FROM c1_old; DROP TABLE c1_old; SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_fk');" | $DOLTLITE "$DB15" > /dev/null 2>&1
@@ -241,7 +219,6 @@ run_test_match "disjoint_fks_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]
 run_test "disjoint_fks_c1" "SELECT count(*) FROM pragma_foreign_key_list('c1');" "1" "$DB15"
 run_test "disjoint_fks_c2" "SELECT count(*) FROM pragma_foreign_key_list('c2');" "1" "$DB15"
 
-
 DB16=/tmp/test_merge16_$$.db; rm -f "$DB16"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB16" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE INDEX idx_t_v ON t(v); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_idx');" | $DOLTLITE "$DB16" > /dev/null 2>&1
@@ -250,7 +227,6 @@ run_test_match "table_plus_index_merge_hash" "SELECT dolt_merge('feat');" "^[0-9
 run_test "table_plus_index_table_visible" "SELECT count(*) FROM main_only;" "1" "$DB16"
 run_test "table_plus_index_index_visible" "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_t_v';" "1" "$DB16"
 
-
 DB17=/tmp/test_merge17_$$.db; rm -f "$DB17"
 echo "CREATE TABLE base(id INTEGER PRIMARY KEY, v INT); INSERT INTO base VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB17" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE TABLE feat_tbl(id INTEGER PRIMARY KEY, v INT); INSERT INTO feat_tbl VALUES(1,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_add_table');" | $DOLTLITE "$DB17" > /dev/null 2>&1
@@ -258,7 +234,6 @@ echo "SELECT dolt_checkout('main'); ALTER TABLE base RENAME TO base_old; CREATE 
 run_test_match "table_plus_check_merge_hash" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB17"
 run_test "table_plus_check_table_visible" "SELECT count(*) FROM feat_tbl;" "1" "$DB17"
 run_test "table_plus_check_constraint_visible" "SELECT instr(sql,'CHECK')>0 FROM sqlite_master WHERE type='table' AND name='base';" "1" "$DB17"
-
 
 DB18=/tmp/test_merge18_$$.db; rm -f "$DB18"
 echo "CREATE TABLE base(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO base VALUES(1,'x'); CREATE TABLE keep_main(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO keep_main VALUES(1,'m'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB18" > /dev/null 2>&1
@@ -269,7 +244,6 @@ run_test_match "table_plus_rename_merge_hash" "SELECT dolt_merge('feat');" "^[0-
 run_test "table_plus_rename_feat_visible" "SELECT count(*) FROM feat_tbl;" "1" "$DB18"
 run_test "table_plus_rename_new_name_visible" "SELECT count(*) FROM renamed_main;" "1" "$DB18"
 
-
 DB19=/tmp/test_merge19_$$.db; rm -f "$DB19"
 echo "CREATE TABLE base(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO base VALUES(1,'x'); CREATE TABLE churn(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO churn VALUES(1,'m'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB19" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); DROP TABLE churn; CREATE TABLE churn(k INTEGER PRIMARY KEY, n INT); INSERT INTO churn VALUES(7,70); SELECT dolt_add('-A'); SELECT dolt_commit('-m','main_recreate');" | $DOLTLITE "$DB19" > /dev/null 2>&1
@@ -279,8 +253,6 @@ run_test_match "table_plus_recreate_merge_hash" "SELECT dolt_merge('feat');" "^[
 run_test "table_plus_recreate_feat_visible" "SELECT count(*) FROM feat_tbl;" "1" "$DB19"
 run_test "table_plus_recreate_schema_visible" "SELECT instr(sql,'k INTEGER PRIMARY KEY')>0 FROM sqlite_master WHERE type='table' AND name='churn';" "1" "$DB19"
 
-
-
 DB20=/tmp/test_merge20_$$.db; rm -f "$DB20"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,10); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB20" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE); CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u)); INSERT INTO p VALUES(1,100); INSERT INTO c VALUES(1,100); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_add_fk_tables');" | $DOLTLITE "$DB20" > /dev/null 2>&1
@@ -289,8 +261,6 @@ run_test_match "fk_tables_plus_check_merge_hash" "SELECT dolt_merge('feat');" "^
 run_test "fk_tables_plus_check_parent_visible" "SELECT count(*) FROM p;" "1" "$DB20"
 run_test "fk_tables_plus_check_child_visible" "SELECT count(*) FROM c;" "1" "$DB20"
 run_test "fk_tables_plus_check_fk_visible" "SELECT count(*) FROM pragma_foreign_key_list('c');" "1" "$DB20"
-
-
 
 DB20B=/tmp/test_merge20b_$$.db; rm -f "$DB20B"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); INSERT INTO t VALUES(1,10); CREATE TABLE p(id INTEGER PRIMARY KEY, u INT UNIQUE); CREATE TABLE c(id INTEGER PRIMARY KEY, u INT, FOREIGN KEY(u) REFERENCES p(u)); INSERT INTO p VALUES(1,100); INSERT INTO c VALUES(1,100); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB20B" > /dev/null 2>&1
@@ -304,7 +274,6 @@ run_test "recreate_fk_family_parent_schema_visible" "SELECT instr(sql,'label TEX
 run_test "recreate_fk_family_parent_unique_index_live" "SELECT count(*) FROM p INDEXED BY sqlite_autoindex_p_1 WHERE u=200;" "1" "$DB20B"
 run_test "recreate_fk_family_fk_check_clean" "SELECT count(*) FROM pragma_foreign_key_check;" "0" "$DB20B"
 
-
 DB21=/tmp/test_merge21_$$.db; rm -f "$DB21"
 echo "PRAGMA foreign_keys=ON; CREATE TABLE t(id INTEGER PRIMARY KEY, parent_id INT, FOREIGN KEY(parent_id) REFERENCES t(id) ON DELETE CASCADE); INSERT INTO t VALUES(1,NULL),(2,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB21" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO t VALUES(3,2); SELECT dolt_add('-A'); SELECT dolt_commit('-m','feat_add_descendant');" | $DOLTLITE "$DB21" > /dev/null 2>&1
@@ -313,7 +282,6 @@ run_test_match "self_ref_fk_merge_hash" "PRAGMA foreign_keys=ON; SELECT dolt_mer
 run_test "self_ref_fk_delete_cascades_same_session" "PRAGMA foreign_keys=ON; DELETE FROM t WHERE id=1; SELECT group_concat(id || ':' || ifnull(parent_id,-1), ',') FROM (SELECT id,parent_id FROM t ORDER BY id);" "10:-1" "$DB21"
 run_test "self_ref_fk_reopen_state" "PRAGMA foreign_keys=ON; SELECT group_concat(id || ':' || ifnull(parent_id,-1), ',') FROM (SELECT id,parent_id FROM t ORDER BY id);" "10:-1" "$DB21"
 run_test "self_ref_fk_reopen_delete_last_root" "PRAGMA foreign_keys=ON; DELETE FROM t WHERE id=10; SELECT count(*) FROM t;" "0" "$DB21"
-
 
 DB22=/tmp/test_merge22_$$.db; rm -f "$DB22"
 echo "PRAGMA foreign_keys=ON; CREATE TABLE gp(id INTEGER PRIMARY KEY); CREATE TABLE p(id INTEGER PRIMARY KEY, gp_id INT, FOREIGN KEY(gp_id) REFERENCES gp(id) ON DELETE CASCADE); CREATE TABLE c(id INTEGER PRIMARY KEY, p_id INT, FOREIGN KEY(p_id) REFERENCES p(id) ON DELETE CASCADE); INSERT INTO gp VALUES(1); INSERT INTO p VALUES(1,1); INSERT INTO c VALUES(1,1); SELECT dolt_add('-A'); SELECT dolt_commit('-m','init');" | $DOLTLITE "$DB22" > /dev/null 2>&1

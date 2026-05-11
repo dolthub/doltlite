@@ -1,10 +1,4 @@
 #!/bin/bash
-
-
-
-
-
-
 DOLTLITE=./doltlite
 SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
 PASS=0; FAIL=0; SKIP=0; ERRORS=""
@@ -19,7 +13,6 @@ if ! command -v "$SQLITE3" >/dev/null 2>&1; then
   exit 1
 fi
 
-
 SQLITE_VERSION=$("$SQLITE3" :memory: "SELECT sqlite_version();" 2>/dev/null)
 SQLITE_MAJOR=$(echo "$SQLITE_VERSION" | cut -d. -f1)
 SQLITE_MINOR=$(echo "$SQLITE_VERSION" | cut -d. -f2)
@@ -28,7 +21,6 @@ echo "=== DoltLite SQLite Parity Tests ==="
 echo "DoltLite:       $DOLTLITE"
 echo "System sqlite3: $SQLITE3 (version $SQLITE_VERSION)"
 echo ""
-
 
 HAS_WINDOW=0
 HAS_JSON=0
@@ -39,7 +31,6 @@ if [ "$SQLITE_MAJOR" -gt 3 ] || { [ "$SQLITE_MAJOR" -eq 3 ] && [ "$SQLITE_MINOR"
   HAS_WINDOW=1
 fi
 if [ "$SQLITE_MAJOR" -gt 3 ] || { [ "$SQLITE_MAJOR" -eq 3 ] && [ "$SQLITE_MINOR" -ge 9 ]; }; then
-
   if echo "SELECT json_array(1,2,3);" | "$SQLITE3" :memory: >/dev/null 2>&1; then
     HAS_JSON=1
   fi
@@ -47,9 +38,6 @@ fi
 if [ "$SQLITE_MAJOR" -gt 3 ] || { [ "$SQLITE_MAJOR" -eq 3 ] && [ "$SQLITE_MINOR" -ge 9 ]; }; then
   HAS_CTE=1
 fi
-
-
-
 
 run_parity() {
   local name="$1"
@@ -73,9 +61,6 @@ skip_test() {
   SKIP=$((SKIP+1))
   echo "  SKIP: $name ($reason)"
 }
-
-
-
 
 echo "--- Basic CRUD ---"
 
@@ -118,9 +103,6 @@ INSERT INTO t VALUES(1,'first');
 INSERT OR IGNORE INTO t VALUES(1,'second');
 SELECT * FROM t;
 "
-
-
-
 
 echo "--- Aggregates ---"
 
@@ -193,9 +175,6 @@ INSERT INTO t VALUES(2,20);
 SELECT TOTAL(val) FROM t;
 "
 
-
-
-
 echo "--- JOINs ---"
 
 SETUP_JOIN="
@@ -246,9 +225,6 @@ INSERT INTO c VALUES(1,1,42);
 SELECT a.v, c.val FROM a JOIN b ON a.id=b.a_id JOIN c ON b.id=c.b_id;
 "
 
-
-
-
 echo "--- Subqueries ---"
 
 run_parity "scalar_subquery" "
@@ -296,9 +272,6 @@ INSERT INTO t VALUES(2,'a',20);
 INSERT INTO t VALUES(3,'b',30);
 SELECT id, val FROM t t1 WHERE val = (SELECT MAX(val) FROM t t2 WHERE t2.grp=t1.grp) ORDER BY id;
 "
-
-
-
 
 echo "--- Window functions ---"
 
@@ -350,9 +323,6 @@ else
   skip_test "window_functions" "sqlite3 $SQLITE_VERSION < 3.25"
 fi
 
-
-
-
 echo "--- NULL handling ---"
 
 run_parity "is_null" "
@@ -399,9 +369,6 @@ run_parity "ifnull" "
 SELECT IFNULL(NULL, 'default'), IFNULL('value', 'default');
 "
 
-
-
-
 echo "--- Type coercion / affinity ---"
 
 run_parity "typeof" "
@@ -431,9 +398,6 @@ SELECT 1 < 2, 1.0 = 1, '10' > '9', 10 > 9;
 run_parity "real_precision" "
 SELECT round(1.0/3.0, 12);
 "
-
-
-
 
 echo "--- ORDER BY / COLLATE ---"
 
@@ -474,9 +438,6 @@ INSERT INTO t VALUES(5,20);
 SELECT v FROM t ORDER BY v;
 "
 
-
-
-
 echo "--- LIMIT / OFFSET ---"
 
 run_parity "limit" "
@@ -505,9 +466,6 @@ INSERT INTO t VALUES(1);
 SELECT * FROM t LIMIT 0;
 "
 
-
-
-
 echo "--- CASE expressions ---"
 
 run_parity "case_simple" "
@@ -530,9 +488,6 @@ run_parity "case_null" "
 SELECT CASE NULL WHEN NULL THEN 'match' ELSE 'no match' END;
 SELECT CASE WHEN NULL THEN 'true' ELSE 'false' END;
 "
-
-
-
 
 echo "--- Date/time functions ---"
 
@@ -569,9 +524,6 @@ SELECT strftime('%H:%M', '2024-03-15 14:30:00');
 run_parity "date_arithmetic" "
 SELECT julianday('2024-03-15') - julianday('2024-03-01');
 "
-
-
-
 
 echo "--- JSON functions ---"
 
@@ -616,9 +568,6 @@ SELECT json_group_object(k,v) FROM t ORDER BY id;
 else
   skip_test "json_functions" "sqlite3 $SQLITE_VERSION lacks JSON support"
 fi
-
-
-
 
 echo "--- Set operations ---"
 
@@ -668,9 +617,6 @@ INSERT INTO b VALUES(4);
 SELECT v FROM a EXCEPT SELECT v FROM b ORDER BY v;
 "
 
-
-
-
 echo "--- CTEs ---"
 
 if [ "$HAS_CTE" -eq 1 ]; then
@@ -712,9 +658,6 @@ else
   skip_test "cte" "sqlite3 $SQLITE_VERSION < 3.9"
 fi
 
-
-
-
 echo "--- CAST ---"
 
 run_parity "cast_text_to_int" "
@@ -744,9 +687,6 @@ SELECT CAST(NULL AS INTEGER), CAST(NULL AS TEXT), CAST(NULL AS REAL);
 run_parity "cast_blob" "
 SELECT typeof(CAST('hello' AS BLOB));
 "
-
-
-
 
 echo "--- String functions ---"
 
@@ -794,9 +734,6 @@ run_parity "zeroblob" "
 SELECT typeof(zeroblob(4)), length(zeroblob(4));
 "
 
-
-
-
 echo "--- Math / numeric ---"
 
 run_parity "abs" "
@@ -814,9 +751,6 @@ SELECT typeof(random());
 run_parity "round" "
 SELECT round(3.14159, 2), round(3.5), round(-2.5);
 "
-
-
-
 
 echo "--- Miscellaneous ---"
 
@@ -919,8 +853,6 @@ run_parity "concatenation" "
 SELECT 'hello' || ' ' || 'world';
 "
 
-
-
 run_parity "delete_multi_row" "
 CREATE TABLE dt(id INT PRIMARY KEY, val INT);
 INSERT INTO dt VALUES(1,1),(2,2),(3,3),(4,4),(5,5);
@@ -944,9 +876,6 @@ INSERT INTO dm SELECT x,x FROM c;
 DELETE FROM dm WHERE id%10=0;
 SELECT count(*) FROM dm;
 "
-
-
-
 
 echo ""
 echo "======================================="

@@ -1,16 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
 set -u
 
 DOLTLITE="${1:-./doltlite}"
@@ -24,18 +13,15 @@ fail_name() {
   echo "  FAIL: $1"
 }
 
-
 dl() {
   local db="$1" sql="$2" tag="$3"
   "$DOLTLITE" "$db" "$sql" 2>"$TMPROOT/$tag.err"
 }
 
-
 dl_setup() {
   local db="$1" tag="$2"
   "$DOLTLITE" "$db" >"$TMPROOT/$tag.out" 2>"$TMPROOT/$tag.err"
 }
-
 
 dl_errors() {
   local db="$1" sql="$2" tag="$3"
@@ -53,7 +39,6 @@ expect_eq() {
   fi
 }
 
-
 expect_merge_ok() {
   local name="$1" db="$2"
   if dl_errors "$db" "SELECT dolt_merge('feat');" "$name"; then
@@ -64,7 +49,6 @@ expect_merge_ok() {
   fi
 }
 
-
 expect_merge_conflict() {
   local name="$1" db="$2"
   if dl_errors "$db" "SELECT dolt_merge('feat');" "$name"; then
@@ -74,7 +58,6 @@ expect_merge_conflict() {
     echo "    merge succeeded but expected conflict"
   fi
 }
-
 
 setup_base() {
   local db="$1" tag="$2" schema="$3"
@@ -89,11 +72,7 @@ SQL
 echo "=== Schema Merge Oracle (Dolt spec) ==="
 echo ""
 
-
-
-
 echo "--- Tables ---"
-
 
 DB="$TMPROOT/t1.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t1"
@@ -109,7 +88,6 @@ SELECT dolt_commit('-Am','main_add');
 SQL
 expect_merge_ok "table_both_add_identical" "$DB"
 
-
 DB="$TMPROOT/t2.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t2"
 CREATE TABLE anchor(id INTEGER PRIMARY KEY);
@@ -123,7 +101,6 @@ CREATE TABLE newtbl(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_commit('-Am','main_add');
 SQL
 expect_merge_conflict "table_both_add_different" "$DB"
-
 
 DB="$TMPROOT/t3.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t3"
@@ -140,7 +117,6 @@ SELECT dolt_commit('-Am','main_drop');
 SQL
 expect_merge_ok "table_both_delete" "$DB"
 
-
 DB="$TMPROOT/t4.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t4"
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -156,7 +132,6 @@ SELECT dolt_commit('-Am','main_drop');
 SQL
 expect_merge_conflict "table_modify_vs_delete" "$DB"
 
-
 DB="$TMPROOT/t5.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t5"
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -171,7 +146,6 @@ UPDATE t SET v='b' WHERE id=1;
 SELECT dolt_commit('-Am','main_update');
 SQL
 expect_merge_ok "table_both_modify_identical" "$DB"
-
 
 DB="$TMPROOT/t5b.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t5b"
@@ -189,11 +163,7 @@ expect_merge_ok "table_both_add_different_tables" "$DB"
 
 echo ""
 
-
-
-
 echo "--- Columns ---"
-
 
 DB="$TMPROOT/c1.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "c1"
@@ -210,7 +180,6 @@ SELECT dolt_commit('-Am','main_add_col');
 SQL
 expect_merge_ok "col_both_add_identical" "$DB"
 
-
 DB="$TMPROOT/c2.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "c2"
 CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -225,7 +194,6 @@ ALTER TABLE t ADD COLUMN v INTEGER;
 SELECT dolt_commit('-Am','main_add_int');
 SQL
 expect_merge_conflict "col_both_add_different_type" "$DB"
-
 
 DB="$TMPROOT/c3.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "c3"
@@ -242,7 +210,6 @@ SELECT dolt_commit('-Am','main_drop');
 SQL
 expect_merge_ok "col_both_delete" "$DB"
 
-
 DB="$TMPROOT/c4.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "c4"
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, w INT);
@@ -258,7 +225,6 @@ ALTER TABLE t ADD COLUMN v TEXT NOT NULL DEFAULT 'modified';
 SELECT dolt_commit('-Am','main_modify_v');
 SQL
 expect_merge_conflict "col_modify_vs_delete" "$DB"
-
 
 DB="$TMPROOT/c5.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "c5"
@@ -279,11 +245,7 @@ expect_eq "col_one_adds_default_filled" "0" "$W"
 
 echo ""
 
-
-
-
 echo "--- Foreign Keys ---"
-
 
 DB="$TMPROOT/fk1.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk1"
@@ -305,7 +267,6 @@ INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','main_add_fk');
 SQL
 expect_merge_ok "fk_both_add_identical" "$DB"
-
 
 DB="$TMPROOT/fk2.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk2"
@@ -332,11 +293,7 @@ expect_merge_conflict "fk_both_add_different" "$DB"
 
 echo ""
 
-
-
-
 echo "--- Indexes ---"
-
 
 DB="$TMPROOT/ix1.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix1"
@@ -353,7 +310,6 @@ SELECT dolt_commit('-Am','main_add_idx');
 SQL
 expect_merge_ok "idx_both_add_identical" "$DB"
 
-
 DB="$TMPROOT/ix2.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix2"
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, w INT);
@@ -368,7 +324,6 @@ CREATE INDEX idx_x ON t(w);
 SELECT dolt_commit('-Am','main_add_idx_w');
 SQL
 expect_merge_conflict "idx_both_add_different" "$DB"
-
 
 DB="$TMPROOT/ix3.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix3"
@@ -388,11 +343,7 @@ expect_merge_ok "idx_both_delete" "$DB"
 
 echo ""
 
-
-
-
 echo "--- Check Constraints ---"
-
 
 DB="$TMPROOT/ck1.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ck1"
@@ -413,7 +364,6 @@ SELECT dolt_commit('-Am','main_add_check');
 SQL
 expect_merge_ok "check_both_add_identical" "$DB"
 
-
 DB="$TMPROOT/ck2.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ck2"
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -433,11 +383,7 @@ SELECT dolt_commit('-Am','main_add_check_gt5');
 SQL
 expect_merge_conflict "check_both_add_different" "$DB"
 
-
-
-
 echo "--- Tables (additional) ---"
-
 
 DB="$TMPROOT/t6.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t6"
@@ -453,10 +399,8 @@ ALTER TABLE t ADD COLUMN x TEXT DEFAULT '';
 SELECT dolt_commit('-Am','main_add_x');
 SQL
 expect_merge_ok "table_both_add_different_columns" "$DB"
-
 COLS=$(dl "$DB" "PRAGMA table_info(t);" "t6_cols" | wc -l | tr -d ' ')
 expect_eq "table_both_add_different_columns_col_count" "4" "$COLS"
-
 
 DB="$TMPROOT/t7.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "t7"
@@ -479,11 +423,7 @@ expect_merge_conflict "table_both_modify_same_col_differently" "$DB"
 
 echo ""
 
-
-
-
 echo "--- Columns (additional) ---"
-
 
 DB="$TMPROOT/c6.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "c6"
@@ -500,7 +440,6 @@ SELECT dolt_commit('-Am','main_add_v_nullable');
 SQL
 expect_merge_conflict "col_both_add_same_type_diff_constraints" "$DB"
 
-
 DB="$TMPROOT/c7.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "c7"
 CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -515,9 +454,6 @@ ALTER TABLE t ADD COLUMN v TEXT DEFAULT 'beta';
 SELECT dolt_commit('-Am','main_add_v_beta');
 SQL
 expect_merge_conflict "col_both_add_same_type_diff_default" "$DB"
-
-
-
 
 DB="$TMPROOT/c8.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "c8"
@@ -537,7 +473,6 @@ INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-Am','main_add_notnull');
 SQL
 expect_merge_ok "col_both_modify_identical" "$DB"
-
 
 DB="$TMPROOT/c9.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "c9"
@@ -560,11 +495,7 @@ expect_merge_conflict "col_both_modify_differently" "$DB"
 
 echo ""
 
-
-
-
 echo "--- Foreign Keys (additional) ---"
-
 
 DB="$TMPROOT/fk3.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk3"
@@ -587,7 +518,6 @@ SELECT dolt_commit('-Am','main_drop_fk');
 SQL
 expect_merge_ok "fk_both_delete" "$DB"
 
-
 DB="$TMPROOT/fk4.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk4"
 CREATE TABLE parent(id INTEGER PRIMARY KEY);
@@ -609,7 +539,6 @@ SELECT dolt_commit('-Am','main_drop_fk');
 SQL
 expect_merge_conflict "fk_modify_vs_delete" "$DB"
 
-
 DB="$TMPROOT/fk5.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk5"
 CREATE TABLE parent(id INTEGER PRIMARY KEY);
@@ -630,7 +559,6 @@ INSERT INTO child VALUES(1,1);
 SELECT dolt_commit('-Am','main_add_cascade');
 SQL
 expect_merge_ok "fk_both_modify_identical" "$DB"
-
 
 DB="$TMPROOT/fk6.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "fk6"
@@ -655,11 +583,7 @@ expect_merge_conflict "fk_both_modify_differently" "$DB"
 
 echo ""
 
-
-
-
 echo "--- Indexes (additional) ---"
-
 
 DB="$TMPROOT/ix4.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix4"
@@ -678,7 +602,6 @@ SELECT dolt_commit('-Am','main_drop_idx');
 SQL
 expect_merge_conflict "idx_modify_vs_delete" "$DB"
 
-
 DB="$TMPROOT/ix5.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix5"
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, w INT);
@@ -696,7 +619,6 @@ CREATE INDEX idx_v ON t(v, w);
 SELECT dolt_commit('-Am','main_expand_idx');
 SQL
 expect_merge_ok "idx_both_modify_identical" "$DB"
-
 
 DB="$TMPROOT/ix6.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ix6"
@@ -718,11 +640,7 @@ expect_merge_conflict "idx_both_modify_differently" "$DB"
 
 echo ""
 
-
-
-
 echo "--- Check Constraints (additional) ---"
-
 
 DB="$TMPROOT/ck3.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ck3"
@@ -743,7 +661,6 @@ SELECT dolt_commit('-Am','main_drop_check');
 SQL
 expect_merge_ok "check_both_delete" "$DB"
 
-
 DB="$TMPROOT/ck4.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ck4"
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0));
@@ -763,7 +680,6 @@ SELECT dolt_commit('-Am','main_drop_check');
 SQL
 expect_merge_conflict "check_modify_vs_delete" "$DB"
 
-
 DB="$TMPROOT/ck5.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ck5"
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT CHECK(v > 0));
@@ -782,7 +698,6 @@ INSERT INTO t VALUES(1,10);
 SELECT dolt_commit('-Am','main_tighten');
 SQL
 expect_merge_ok "check_both_modify_identical" "$DB"
-
 
 DB="$TMPROOT/ck6.db"; rm -f "$DB"
 cat <<'SQL' | dl_setup "$DB" "ck6"

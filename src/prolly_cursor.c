@@ -1,11 +1,4 @@
 
-
-
-
-
-
-
-
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_cursor.h"
@@ -31,7 +24,6 @@ static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
   if( rc!=SQLITE_OK ){
     return rc;
   }
-
 
   pEntry = prollyCachePut(cur->pCache, hash, pData, nData, &rc);
   sqlite3_free(pData);
@@ -212,9 +204,6 @@ int prollyCursorNext(ProllyCursor *cur){
     return SQLITE_OK;
   }
 
-
-
-
   level = cur->iLevel;
   while( level>0 ){
     prollyCacheRelease(cur->pCache, cur->aLevel[level].pEntry);
@@ -231,7 +220,6 @@ int prollyCursorNext(ProllyCursor *cur){
       return SQLITE_OK;
     }
   }
-
 
   cur->eState = PROLLY_CURSOR_EOF;
   return SQLITE_OK;
@@ -264,16 +252,11 @@ int prollyCursorPrev(ProllyCursor *cur){
     }
   }
 
-
   cur->eState = PROLLY_CURSOR_EOF;
   return SQLITE_OK;
 }
 
 int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes){
-
-
-
-
   u8 keyBuf[8];
   prollyEncodeIntKey(intKey, keyBuf);
   return prollyCursorSeekBlob(cur, keyBuf, 8, pRes);
@@ -293,7 +276,6 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     *pRes = -1;
     return SQLITE_OK;
   }
-
 
   while( pEntry->node.level>0 ){
     int searchRes;

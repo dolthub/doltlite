@@ -4,21 +4,9 @@
 
 #include "sqliteInt.h"
 
-
-
-
-
 #define DOLTLITE_CV_FOREIGN_KEY      1
 #define DOLTLITE_CV_UNIQUE_INDEX     2
 #define DOLTLITE_CV_CHECK_CONSTRAINT 3
-
-
-
-
-
-
-
-
 
 typedef struct ConstraintViolationRow ConstraintViolationRow;
 struct ConstraintViolationRow {
@@ -36,11 +24,6 @@ struct ConstraintViolationTable {
   ConstraintViolationRow *aRows;
 };
 
-
-
-
-
-
 int doltliteAppendConstraintViolation(
   sqlite3 *db,
   const char *zTable,
@@ -51,10 +34,7 @@ int doltliteAppendConstraintViolation(
   const char *zInfoJson
 );
 
-
 int doltliteClearAllConstraintViolations(sqlite3 *db);
-
-
 
 int doltliteConstraintViolationsRegister(sqlite3 *db);
 

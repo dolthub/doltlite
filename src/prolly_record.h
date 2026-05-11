@@ -19,11 +19,6 @@ static inline int dlReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
   return i;
 }
 
-
-
-
-
-
 static inline int dlSerialTypeLen(u64 st){
   static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8};
   if( st <= 6 ) return aLen[st];

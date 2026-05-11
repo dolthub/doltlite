@@ -1,27 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -34,15 +12,6 @@ FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() {
-
-
-
-
-
-
-
-
-
   tr -d '\r' \
     | awk -F'\t' 'NF >= 2 { print }' \
     | sort -t$'\t' -k2 \
@@ -54,8 +23,6 @@ normalize() {
         }
       '
 }
-
-
 
 oracle() {
   local name="$1" setup="$2"
@@ -94,11 +61,6 @@ oracle() {
     echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
   fi
 }
-
-
-
-
-
 
 oracle_no_merge_commit() {
   local name="$1" setup="$2"
@@ -336,14 +298,6 @@ SELECT dolt_merge('feature');
 "
 
 echo "--- non-INTEGER primary key shapes ---"
-
-
-
-
-
-
-
-
 
 oracle "three_way_int_pk" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -595,8 +549,6 @@ SELECT dolt_merge('main');
 
 echo "--- other operation pairs ---"
 
-
-
 oracle "add_modify_disjoint_rows_clean" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -615,9 +567,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-
-
-
 oracle "add_add_same_key_same_value" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -631,9 +580,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-
-
-
 oracle_no_merge_commit "add_add_same_key_different_value_conflict" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -646,7 +592,6 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
-
 
 oracle "delete_delete_same_row" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -666,9 +611,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-
-
-
 oracle_no_merge_commit "delete_modify_conflict" "
 $SEED
 DELETE FROM t WHERE id = 1;
@@ -683,9 +625,6 @@ SELECT dolt_merge('feature');
 "
 
 echo "--- multi-commit branches ---"
-
-
-
 
 oracle "multi_commit_feature_branch" "
 $SEED
@@ -708,8 +647,6 @@ SELECT dolt_merge('feature');
 
 echo "--- multi-table merges ---"
 
-
-
 oracle "multi_table_independent_inserts" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
@@ -729,8 +666,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-
-
 oracle "multi_table_modify_one_insert_other" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
@@ -749,8 +684,6 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
-
-
 
 oracle "three_tables_disjoint_changes" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
@@ -777,9 +710,6 @@ SELECT dolt_merge('feature');
 
 echo "--- schema deltas ---"
 
-
-
-
 oracle "feature_creates_new_table" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -794,10 +724,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-
-
-
-
 oracle "feature_adds_column_main_inserts_old_shape" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -811,9 +737,6 @@ SELECT dolt_commit('-m', 'feat_add_col');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
-
-
-
 
 oracle "both_branches_add_disjoint_columns" "
 $SEED
@@ -1045,9 +968,6 @@ SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM gp), '|', (SELECT COUNT(*) FRO
 
 echo "--- non-branch merge sources ---"
 
-
-
-
 oracle "merge_from_tag" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -1058,9 +978,6 @@ SELECT dolt_tag('release-1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('release-1');
 "
-
-
-
 
 oracle "merge_from_commit_hash" "
 $SEED
@@ -1073,9 +990,6 @@ SELECT dolt_merge((SELECT commit_hash FROM dolt_log WHERE message = 'feat1'));
 "
 
 echo "--- merge sequences ---"
-
-
-
 
 oracle "merge_then_reverse_fast_forward" "
 $SEED
@@ -1091,9 +1005,6 @@ SELECT dolt_merge('feature');
 SELECT dolt_checkout('feature');
 SELECT dolt_merge('main');
 "
-
-
-
 
 oracle "merge_twice_with_intermediate_commits" "
 $SEED

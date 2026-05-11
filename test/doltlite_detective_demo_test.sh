@@ -1,17 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 
 DOLTLITE="${1:-./doltlite}"
@@ -53,7 +41,6 @@ dl_bulk() { "$DOLTLITE" "$DB" >/dev/null 2>&1; }
 
 echo "=== The DoltHub Break Room Incident — demo test ==="
 echo ""
-
 
 echo "--- Chapter 1: Opening the case file ---"
 rm -f "$DB"
@@ -103,7 +90,6 @@ expect_eq "chapter1_commit_count" "2" "$N_COMMITS"
 
 echo ""
 
-
 echo "--- Chapter 2: Two theories, two branches ---"
 
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
@@ -138,7 +124,6 @@ expect_eq "chapter2_ficus_evidence_count" "2" "$FICUS_EV"
 
 echo ""
 
-
 echo "--- Chapter 3: Where do we disagree ---"
 
 STAT=$(dl "SELECT rows_added FROM dolt_diff_stat('theory/butler', 'theory/ficus') WHERE table_name='evidence';")
@@ -149,10 +134,7 @@ expect_eq "chapter3_diff_evidence_rowcount" "3" "$DIFF_ROWS"
 
 echo ""
 
-
 echo "--- Chapter 4: Who added this clue ---"
-
-
 
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 SELECT dolt_checkout('main');
@@ -167,9 +149,7 @@ expect_match "chapter4_blame_attributes_ficus_commit" "Ficus" "$BLAME_MSG"
 
 echo ""
 
-
 echo "--- Chapter 5: Time travel ---"
-
 
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 INSERT INTO evidence VALUES
@@ -185,9 +165,7 @@ expect_eq "chapter5_historical_evidence_count" "2" "$THEN_COUNT"
 
 echo ""
 
-
 echo "--- Chapter 6: The witness lied ---"
-
 
 "$DOLTLITE" "$DB" >/dev/null 2>&1 "SELECT dolt_revert('HEAD');"
 
@@ -199,10 +177,7 @@ expect_eq "chapter6_revert_targeted_correct_row" "0" "$FINGERPRINT_GONE"
 
 echo ""
 
-
 echo "--- Chapter 7: Clean merge ---"
-
-
 
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 SELECT dolt_branch('theory/butler_v2');
@@ -219,9 +194,7 @@ expect_eq "chapter7_clean_merge_evidence_count" "3" "$MERGED_COUNT"
 
 echo ""
 
-
 echo "--- Chapter 8: Row-level merge conflict ---"
-
 
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 SELECT dolt_branch('theory/revised_1');
@@ -237,7 +210,6 @@ SQL
 CONFLICT_COUNT=$(dl "SELECT num_conflicts FROM dolt_conflicts WHERE \"table\"='evidence';")
 expect_eq "chapter8_conflict_detected" "1" "$CONFLICT_COUNT"
 
-
 "$DOLTLITE" "$DB" >/dev/null 2>&1 "SELECT dolt_conflicts_resolve('--ours','evidence');"
 
 RESOLVED=$(dl "SELECT count(*) FROM dolt_conflicts;")
@@ -248,7 +220,6 @@ expect_match "chapter8_resolution_kept_our_text" "suspicious coffee" "$KEPT_OUR_
 
 echo ""
 
-
 echo "--- Chapter 9: Fingerprinting ---"
 
 "$DOLTLITE" "$DB" >/dev/null 2>&1 "SELECT dolt_commit('-Am','Post-conflict reconciliation');"
@@ -258,8 +229,6 @@ expect_match "chapter9_db_hash_is_hex" "^[0-9a-f]{40}$" "$DB_HASH"
 
 EVIDENCE_HASH_A=$(dl "SELECT dolt_hashof_table('evidence');")
 
-
-
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 INSERT INTO evidence VALUES (99, 'ignore me', NULL, '2026-04-16T12:00:00Z');
 DELETE FROM evidence WHERE id=99;
@@ -268,7 +237,6 @@ EVIDENCE_HASH_B=$(dl "SELECT dolt_hashof_table('evidence');")
 expect_eq "chapter9_table_hash_history_independent" "$EVIDENCE_HASH_A" "$EVIDENCE_HASH_B"
 
 echo ""
-
 
 echo "--- Chapter 10: ATTACH a stock SQLite database ---"
 
@@ -281,7 +249,6 @@ INSERT INTO fingerprints VALUES
   (2, 4, 'none',     'victim sleeve'),
   (3, 1, 'swirl',    'croissant wrapper');
 SQL
-
 
 ATTACHED_COUNT=$("$DOLTLITE" "$DB" "ATTACH DATABASE '$FORENSICS' AS forensics; SELECT count(*) FROM forensics.fingerprints;" 2>&1 | tail -1)
 expect_eq "chapter10_attach_read_count" "3" "$ATTACHED_COUNT"

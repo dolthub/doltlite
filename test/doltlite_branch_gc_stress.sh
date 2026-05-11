@@ -1,7 +1,4 @@
 #!/bin/bash
-
-
-
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(30);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
@@ -22,18 +19,10 @@ db_rm() { rm -f "$1" "${1}-wal"; }
 echo "=== Doltlite Branch & GC Stress Tests ==="
 echo ""
 
-
-
-
-
 DB=/tmp/test_branch_gc_stress_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, branch_name TEXT, val INTEGER);
 INSERT INTO t VALUES(0,'main',0);
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-
-
-
 
 echo "  Creating 100 branches..."
 for i in $(seq 1 100); do
@@ -45,39 +34,21 @@ SELECT dolt_commit('-A','-m','commit on b$i');" | $DOLTLITE "$DB/b$i" > /dev/nul
 done
 echo "  Done creating branches."
 
-
-
-
-
 run_test "many_branches_count" "SELECT count(*) FROM dolt_branches;" "101" "$DB"
-
-
-
-
 
 echo "SELECT dolt_checkout('b50');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "checkout_b50_data" "SELECT val FROM t WHERE id=50;" "50" "$DB/b50"
 run_test "checkout_b50_name" "SELECT branch_name FROM t WHERE id=50;" "b50" "$DB/b50"
-
 run_test "checkout_b50_count" "SELECT count(*) FROM t;" "2" "$DB/b50"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-
-
-
 
 for i in $(seq 1 5); do
   echo "SELECT dolt_merge('b$i');" | $DOLTLITE "$DB" > /dev/null 2>&1
 done
 
-
 run_test "merge_5_count" "SELECT count(*) FROM t;" "6" "$DB"
 run_test "merge_5_has_b1" "SELECT val FROM t WHERE id=1;" "1" "$DB"
 run_test "merge_5_has_b5" "SELECT val FROM t WHERE id=5;" "5" "$DB"
-
-
-
-
 
 echo "  Deleting 90 branches..."
 for i in $(seq 6 95); do
@@ -85,12 +56,7 @@ for i in $(seq 6 95); do
 done
 echo "  Done deleting branches."
 
-
 run_test "after_delete_count" "SELECT count(*) FROM dolt_branches;" "11" "$DB"
-
-
-
-
 
 SIZE_BEFORE_GC=$(file_size "$DB")
 
@@ -107,31 +73,17 @@ else
   echo "  FAIL: gc_reclaims_space — before=$SIZE_BEFORE_GC after=$SIZE_AFTER_GC"
 fi
 
-
-
-
-
 run_test "post_gc_branch_count" "SELECT count(*) FROM dolt_branches;" "11" "$DB"
-
 
 run_test "post_gc_main_count" "SELECT count(*) FROM t;" "6" "$DB"
 run_test "post_gc_main_b3" "SELECT val FROM t WHERE id=3;" "3" "$DB"
-
 
 echo "SELECT dolt_checkout('b98');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "post_gc_b98_data" "SELECT val FROM t WHERE id=98;" "98" "$DB/b98"
 run_test "post_gc_b98_count" "SELECT count(*) FROM t;" "2" "$DB/b98"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
-
-
-
 run_test_match "post_gc_log" "SELECT count(*) FROM dolt_log;" "^[1-9]" "$DB"
-
-
-
-
 
 run_test "post_gc_at_b99" \
   "SELECT count(*) FROM dolt_at_t('b99');" "2" "$DB"
@@ -140,10 +92,6 @@ run_test "post_gc_at_b99_val" \
 
 db_rm "$DB"
 
-
-
-
-
 DB=/tmp/test_gc_1000rows_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, data TEXT);
 INSERT INTO t VALUES(0,'base');
@@ -151,7 +99,6 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_branch('bulk');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('bulk');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "  Inserting 1000 rows on bulk branch..."
 for batch in $(seq 0 9); do
@@ -181,18 +128,12 @@ else
   echo "  FAIL: gc_1000rows — before=$SIZE_WITH_BULK after=$SIZE_AFTER_BULK_GC"
 fi
 
-
 run_test "gc_1000rows_main" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "gc_1000rows_val" "SELECT data FROM t WHERE id=0;" "base" "$DB"
 
 db_rm "$DB"
 
-
-
-
-
 DB=/tmp/test_struct_share_$$.db; db_rm "$DB"
-
 
 SQL="CREATE TABLE t(id INTEGER PRIMARY KEY, data TEXT);"
 for i in $(seq 1 200); do
@@ -208,9 +149,7 @@ SELECT dolt_branch('share_b');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_WITH_BRANCHES=$(file_size "$DB")
 
-
 BRANCH_OVERHEAD=$((SIZE_WITH_BRANCHES - SIZE_BASE))
-
 LIMIT=$((SIZE_BASE / 10))
 if [ "$LIMIT" -lt 4096 ]; then LIMIT=4096; fi
 
@@ -223,10 +162,6 @@ else
   echo "  FAIL: struct_share_branches — overhead=$BRANCH_OVERHEAD limit=$LIMIT"
 fi
 
-
-
-
-
 echo "SELECT dolt_checkout('share_a');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET data='modified_a' WHERE id=1;
 SELECT dolt_commit('-A','-m','mod a');" | $DOLTLITE "$DB/share_a" > /dev/null 2>&1
@@ -237,7 +172,6 @@ echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_AFTER_MODS=$(file_size "$DB")
 MOD_INCREASE=$((SIZE_AFTER_MODS - SIZE_WITH_BRANCHES))
-
 
 if [ "$MOD_INCREASE" -lt "$SIZE_BASE" ]; then
   PASS=$((PASS+1))
@@ -250,18 +184,12 @@ fi
 
 db_rm "$DB"
 
-
-
-
-
 DB=/tmp/test_gc_noop_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 run_test_match "gc_noop" "SELECT dolt_gc();" "0 chunks removed" "$DB"
 
@@ -279,10 +207,6 @@ fi
 
 db_rm "$DB"
 
-
-
-
-
 DB=/tmp/test_gc_first_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'hello');
@@ -294,10 +218,6 @@ run_test "gc_first_val" "SELECT v FROM t WHERE id=1;" "hello" "$DB"
 run_test "gc_first_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 db_rm "$DB"
-
-
-
-
 
 DB=/tmp/test_gc_recycle_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -313,29 +233,20 @@ SELECT dolt_commit('-A','-m','cycle $cycle');" | $DOLTLITE "$DB/recycled" > /dev
   echo "SELECT dolt_branch('-D','recycled');" | $DOLTLITE "$DB" > /dev/null 2>&1
 done
 
-
 run_test "recycle_branch_count" "SELECT count(*) FROM dolt_branches;" "1" "$DB"
-
 
 run_test "recycle_main_data" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "recycle_main_val" "SELECT v FROM t WHERE id=1;" "init" "$DB"
 
-
 run_test_match "recycle_gc" "SELECT dolt_gc();" "chunks removed" "$DB"
-
 
 run_test "recycle_post_gc_data" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "recycle_post_gc_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
-
 
 echo "SELECT dolt_branch('recycled');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "recycle_reuse_after_gc" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
 
 db_rm "$DB"
-
-
-
-
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

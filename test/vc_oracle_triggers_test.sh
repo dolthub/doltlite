@@ -1,19 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -28,13 +14,6 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 normalize() {
   tr -d '\r' | grep -v '^$' | sort
 }
-
-
-
-
-
-
-
 
 oracle_triggers_dual() {
   local name="$1" dl_setup="$2" dt_setup="$3" query="$4"
@@ -80,9 +59,6 @@ oracle_triggers_dual() {
 echo "=== Triggers + VC Oracle Tests ==="
 echo ""
 
-
-
-
 echo "--- AFTER INSERT one side ---"
 
 oracle_triggers_dual "after_insert_trigger_fires_on_feat_inserts" "
@@ -114,9 +90,6 @@ SELECT dolt_commit('-m','feat with trigger and inserts');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM log ORDER BY id;"
-
-
-
 
 echo "--- trigger survives merge and fires post-merge ---"
 
@@ -152,9 +125,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main post-merge insert');
 " "SELECT id, v FROM log ORDER BY id;"
 
-
-
-
 echo "--- AFTER UPDATE trigger ---"
 
 oracle_triggers_dual "after_update_trigger_logs_old_and_new" "
@@ -185,9 +155,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, diff FROM log ORDER BY id;"
 
-
-
-
 echo "--- AFTER DELETE trigger ---"
 
 oracle_triggers_dual "after_delete_trigger_logs_removed_rows" "
@@ -217,9 +184,6 @@ SELECT dolt_commit('-m','feat deletes + trigger');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM log ORDER BY id;"
-
-
-
 
 echo "--- trigger + independent main DML ---"
 
@@ -263,9 +227,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main post');
 " "SELECT id FROM log ORDER BY id;"
 
-
-
-
 echo "--- trigger dropped on feat ---"
 
 oracle_triggers_dual "trigger_drop_on_feat_main_inserts_no_log_entries" "
@@ -302,9 +263,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main post');
 " "SELECT count(*) FROM log;"
 
-
-
-
 echo "--- trigger + cherry-pick ---"
 
 oracle_triggers_dual "cherry_pick_of_trigger_creation_commit" "
@@ -339,9 +297,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main post');
 " "SELECT id FROM log;"
 
-
-
-
 echo "--- DELETE trigger on multi-row delete + merge ---"
 
 oracle_triggers_dual "delete_trigger_counts_rows_removed" "
@@ -371,9 +326,6 @@ SELECT dolt_commit('-m','feat deletes grp=1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM log;"
-
-
-
 
 echo "--- two triggers on same table ---"
 
@@ -408,9 +360,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, kind FROM log ORDER BY id;"
-
-
-
 
 echo "--- trigger persists across commit/reopen-like sequence ---"
 
@@ -449,9 +398,6 @@ INSERT INTO t VALUES(4,'after_merge2');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','more inserts');
 " "SELECT id FROM log ORDER BY id;"
-
-
-
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

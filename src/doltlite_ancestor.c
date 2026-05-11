@@ -152,12 +152,6 @@ static int ancestorBfsCollect(
   return rc;
 }
 
-
-
-
-
-
-
 int doltliteFindAncestor(
   sqlite3 *db,
   const ProllyHash *commitHash1,
@@ -178,7 +172,6 @@ int doltliteFindAncestor(
     return SQLITE_OK;
   }
 
-
   rc = hashSetInit(&ancestors, 64);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -187,7 +180,6 @@ int doltliteFindAncestor(
     hashSetFree(&ancestors);
     return rc;
   }
-
 
   {
     ProllyHash *queue = 0;

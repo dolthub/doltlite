@@ -1,14 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
 set -u
 DOLTLITE="${1:?usage: $0 <doltlite> [dolt]}"
 DOLT="${2:-}"
@@ -34,7 +25,6 @@ dolt_query() {
 }
 
 echo "=== Transaction + dolt_commit Oracle Tests ==="
-
 
 echo ""
 echo "--- BEGIN + dolt_commit + ROLLBACK ---"
@@ -82,7 +72,6 @@ else
   echo "    expected 2, got $DL_A"
 fi
 
-
 echo ""
 echo "--- SAVEPOINT + dolt_commit + ROLLBACK TO ---"
 
@@ -129,7 +118,6 @@ else
   echo "    expected 2, got $DL_B"
 fi
 
-
 echo ""
 echo "--- No transaction + dolt_commit (baseline) ---"
 
@@ -150,7 +138,6 @@ else
   fail_name "no_txn_commit_works"
   echo "    expected 2, got $DL_C"
 fi
-
 
 echo ""
 echo "--- BEGIN + multiple inserts + dolt_commit + ROLLBACK ---"
@@ -175,7 +162,6 @@ else
   fail_name "begin_multi_insert_commit_rollback"
   echo "    expected 3, got $DL_D"
 fi
-
 
 echo ""
 echo "--- Nested savepoints + dolt_commit ---"
@@ -202,7 +188,6 @@ else
   echo "    expected 2, got $DL_E"
 fi
 
-
 echo ""
 echo "--- dolt_commit without open txn ---"
 
@@ -225,7 +210,6 @@ else
   echo "    expected 2, got $DL_F"
 fi
 
-
 echo ""
 echo "--- Reopen after BEGIN + dolt_commit (persistence) ---"
 
@@ -239,7 +223,6 @@ SELECT dolt_commit('-A','-m','c1');
 SQL
 )" >/dev/null
 
-
 DL_G=$(dl_query "$DB" "SELECT count(*) FROM t;")
 
 if [ "$DL_G" = "1" ]; then
@@ -248,7 +231,6 @@ else
   fail_name "reopen_after_begin_commit_persists"
   echo "    expected 1, got $DL_G"
 fi
-
 
 echo ""
 echo "--- BEGIN + bad dolt_commit option ---"
@@ -294,7 +276,6 @@ else
   fail_name "begin_bad_commit_option_rolls_back_on_reopen"
   echo "    expected 1, got $DL_H"
 fi
-
 
 echo ""
 echo "--- Nested savepoint + bad dolt_commit option ---"

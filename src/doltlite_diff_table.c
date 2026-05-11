@@ -54,12 +54,6 @@ static char *buildDiffSchema(DoltliteColInfo *ci){
   }
   sqlite3_str_appendall(pStr, ", from_commit TEXT, from_commit_date TEXT"
                               ", diff_type TEXT"
-
-
-
-
-
-
                               ", from_ref TEXT HIDDEN"
                               ", to_ref TEXT HIDDEN)");
   z = sqlite3_str_finish(pStr);
@@ -108,29 +102,17 @@ typedef struct DiffTblCursor DiffTblCursor;
 struct DiffTblCursor {
   sqlite3_vtab_cursor base;
 
-
   DiffPair *aPairs;
   int nPairs;
   int iPair;
   int pairsDone;
 
-
   ProllyDiffIter diffIter;
   int diffIterOpen;
-
-
-
-
-
-
-
-
-
 
   DoltliteColInfo fromColInfo;
   DoltliteColInfo toColInfo;
   int    needFilter;
-
 
   AuditRow row;
   int hasRow;
@@ -368,14 +350,6 @@ static int registerCommitParents(
   return SQLITE_OK;
 }
 
-
-
-
-
-
-
-
-
 static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
                           const char *zTableName){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -440,7 +414,6 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
     }
     doltliteCommitClear(&commit);
     if( rc!=SQLITE_OK ) break;
-
 
     if( nStack==0 ){
       currInited = 0;
@@ -523,12 +496,6 @@ static int buildWorkingDiffPair(
   return rc;
 }
 
-
-
-
-
-
-
 static int buildSliceDiffPair(
   DiffTblCursor *pCur,
   sqlite3 *db,
@@ -581,9 +548,6 @@ static int buildSliceDiffPair(
                                       &toSchemaHash);
     if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
     if( rc!=SQLITE_OK ) return rc;
-
-
-
     rc = doltliteFlushCatalogToHash(db, &toCatHash);
     if( rc!=SQLITE_OK ) return rc;
     memcpy(zToLabel, "WORKING", 7);
@@ -604,7 +568,6 @@ static int buildSliceDiffPair(
     doltliteHashToHex(&toHash, zToLabel);
   }
 
-
   if( !toIsWorking
    && prollyHashCompare(&fromHash, &toHash)==0 ){
     return SQLITE_OK;
@@ -613,9 +576,6 @@ static int buildSliceDiffPair(
    && prollyHashCompare(&fromSchemaHash, &toSchemaHash)==0 ){
     return SQLITE_OK;
   }
-
-
-
 
   if( !fromFlags ) fromFlags = toFlags;
   if( !toFlags ) toFlags = fromFlags;
@@ -631,12 +591,6 @@ static void freePairCols(DiffTblCursor *pCur){
   doltliteFreeColInfo(&pCur->toColInfo);
   pCur->needFilter = 0;
 }
-
-
-
-
-
-
 
 static int loadColInfoAtCatalog(
   sqlite3 *db,
@@ -697,10 +651,8 @@ static int fieldValuesEqual(
   i64 ai, bi;
   int aLen, bLen;
 
-
   if( aType==0 && bType==0 ) return 1;
   if( aType==0 || bType==0 ) return 0;
-
 
   {
     int aIsInt = (aType>=1 && aType<=6) || aType==8 || aType==9;
@@ -724,7 +676,6 @@ static int fieldValuesEqual(
     }
   }
 
-
   if( aType != bType ) return 0;
   aLen = dlSerialTypeLen(aType);
   if( aLen<0 ) return 0;
@@ -732,13 +683,6 @@ static int fieldValuesEqual(
   if( bOff<0 || bOff+aLen>nB ) return 0;
   return memcmp(pA+aOff, pB+bOff, aLen)==0;
 }
-
-
-
-
-
-
-
 
 static int changeIsSchemaOnly(
   const u8 *pFromRec, int nFromRec,
@@ -753,7 +697,6 @@ static int changeIsSchemaOnly(
   if( !pFromCi || !pToCi ) return 0;
   doltliteParseRecord(pFromRec, nFromRec, &fromRi);
   doltliteParseRecord(pToRec,   nToRec,   &toRi);
-
 
   for(i=0; i<pToCi->nCol; i++){
     int fromIdx;
@@ -801,7 +744,6 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   ProllyCache *pCache = doltliteGetCache(db);
   DiffTblVtab *pVtab = (DiffTblVtab*)pCur->base.pVtab;
   int rc;
-
 
   freePairCols(pCur);
 
@@ -865,7 +807,6 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
           continue;
         }
 
-
         pCur->row.pOldVal = 0;
         pCur->row.nOldVal = 0;
         pCur->row.pNewVal = 0;
@@ -890,7 +831,6 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
 
       closeDiffIter(pCur);
     }
-
 
     if( pCur->pairsDone ){
       return SQLITE_OK;
@@ -968,17 +908,6 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int iFromRefEq = -1;
   int iToRefEq = -1;
   int nUser = p->cols.nCol;
-
-
-
-
-
-
-
-
-
-
-
   int toCommitCol = nUser;
   int fromRefCol  = 2*nUser + 5;
   int toRefCol    = 2*nUser + 6;
@@ -996,8 +925,6 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   }
 
   if( iFromRefEq>=0 && iToRefEq>=0 ){
-
-
     pInfo->idxNum = DT_IDX_SLICE;
     pInfo->aConstraintUsage[iFromRefEq].argvIndex = 1;
     pInfo->aConstraintUsage[iFromRefEq].omit = 1;
@@ -1041,7 +968,6 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   sqlite3 *db = pVtab->db;
   int rc;
   (void)idxStr;
-
 
   closeDiffIter(c);
   clearAuditRow(&c->row);
@@ -1104,7 +1030,6 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   AuditRow *r = &c->row;
   int nCols = pVtab->cols.nCol;
 
-
   if( nCols > 0 && col < nCols ){
     doltliteResultUserCol(ctx, &pVtab->cols, r->pNewVal, r->nNewVal,
                           r->intKey, col);
@@ -1147,9 +1072,6 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       case PROLLY_DIFF_MODIFY: sqlite3_result_text(ctx,"modified",-1,SQLITE_STATIC); break;
     }
   }else{
-
-
-
     sqlite3_result_null(ctx);
   }
 

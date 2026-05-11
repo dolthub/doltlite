@@ -1,36 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -41,9 +10,6 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
-
-
-
 
 oracle() {
   local name="$1" setup="$2" query="$3"
@@ -82,7 +48,6 @@ oracle() {
     echo "$dt_out" | sed 's/^/      /'
   fi
 }
-
 
 oracle_error() {
   local name="$1" setup="$2"
@@ -577,8 +542,6 @@ SELECT dolt_rebase('--bogus');
 
 echo "--- interactive rebase ---"
 
-
-
 INTERACTIVE_SETUP="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
@@ -596,8 +559,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');
 SELECT dolt_checkout('feat');
 "
 
-
-
 oracle "interactive_default_plan" "
 $INTERACTIVE_SETUP
 SELECT dolt_rebase('-i', 'main');
@@ -609,7 +570,6 @@ $INTERACTIVE_SETUP
 SELECT dolt_rebase('-i', 'main');
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', id) FROM t ORDER BY id;"
-
 
 oracle "interactive_drop_one" "
 $INTERACTIVE_SETUP
@@ -625,14 +585,12 @@ UPDATE dolt_rebase SET action = 'drop' WHERE commit_message = 'f2';
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', id) FROM t ORDER BY id;"
 
-
 oracle "interactive_reorder" "
 $INTERACTIVE_SETUP
 SELECT dolt_rebase('-i', 'main');
 UPDATE dolt_rebase SET rebase_order = 0.5 WHERE commit_message = 'f3';
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', message) FROM dolt_log;"
-
 
 oracle "interactive_reword" "
 $INTERACTIVE_SETUP
@@ -641,9 +599,6 @@ UPDATE dolt_rebase SET action = 'reword', commit_message = 'f1 renamed' WHERE co
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', message) FROM dolt_log;"
 
-
-
-
 oracle "interactive_squash" "
 $INTERACTIVE_SETUP
 SELECT dolt_rebase('-i', 'main');
@@ -651,16 +606,12 @@ UPDATE dolt_rebase SET action = 'squash' WHERE commit_message = 'f2';
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', REPLACE(message, CHAR(10), ' | ')) FROM dolt_log;"
 
-
 oracle "interactive_fixup" "
 $INTERACTIVE_SETUP
 SELECT dolt_rebase('-i', 'main');
 UPDATE dolt_rebase SET action = 'fixup' WHERE commit_message = 'f3';
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', message) FROM dolt_log;"
-
-
-
 
 LONG_INTERACTIVE_SETUP="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -706,7 +657,6 @@ UPDATE dolt_rebase SET action = 'reword', commit_message = 'f5 renamed' WHERE co
 UPDATE dolt_rebase SET action = 'fixup' WHERE commit_message = 'f3';
 SELECT dolt_rebase('--continue');
 " "SELECT CONCAT('LOG|', id) FROM t ORDER BY id;"
-
 
 oracle "interactive_abort_log" "
 $INTERACTIVE_SETUP
@@ -764,7 +714,6 @@ SELECT CONCAT('LOG|C|', count(*)) FROM dolt_conflicts;
 SELECT CONCAT('LOG|V|', v) FROM t WHERE id = 1;
 SELECT CONCAT('LOG|L|', count(*)-1) FROM dolt_log;
 "
-
 
 oracle_error "continue_without_active" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);

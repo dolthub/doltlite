@@ -1,7 +1,4 @@
 #!/bin/bash
-
-
-
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
@@ -9,10 +6,6 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 
 echo "=== Doltlite dolt_diff_<table> Audit Log Tests ==="
 echo ""
-
-
-
-
 
 DB=/tmp/test_dt_basic_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -28,10 +21,6 @@ run_test_match "basic_to_date" "SELECT to_commit_date FROM dolt_diff_t LIMIT 1;"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_dt_multi_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -41,24 +30,14 @@ SELECT dolt_commit('-A','-m','c2');
 UPDATE t SET v='A' WHERE id=1;
 SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
-
-
-
 run_test "multi_count" "SELECT count(*) FROM dolt_diff_t;" "3" "$DB"
-
 
 run_test_match "multi_has_added" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='added';" "^2$" "$DB"
 run_test_match "multi_has_modified" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';" "^1$" "$DB"
 
-
 run_test "multi_commits" "SELECT count(DISTINCT to_commit) FROM dolt_diff_t;" "3" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_context_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -67,18 +46,12 @@ SELECT dolt_commit('-A','-m','c1');
 INSERT INTO t VALUES(2,'b');
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "ctx_to_hash" "SELECT to_commit FROM dolt_diff_t LIMIT 1;" "^[0-9a-f]{40}$" "$DB"
 run_test_match "ctx_from_hash" "SELECT from_commit FROM dolt_diff_t WHERE diff_type='added' ;" "^[0-9a-f]{40}$" "$DB"
-
 
 run_test_match "ctx_to_date" "SELECT to_commit_date FROM dolt_diff_t LIMIT 1;" "^[0-9]{4}-" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_persist_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -87,15 +60,10 @@ SELECT dolt_commit('-A','-m','c1');
 INSERT INTO t VALUES(2,'b');
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test "persist_count" "SELECT count(*) FROM dolt_diff_t;" "2" "$DB"
 run_test_match "persist_type" "SELECT diff_type FROM dolt_diff_t WHERE to_v IS NOT NULL;" "added" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_tables_$$.db; rm -f "$DB"
 echo "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);
@@ -108,7 +76,6 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "tables_users" "SELECT count(*) FROM dolt_diff_users;" "1" "$DB"
 run_test "tables_orders" "SELECT count(*) FROM dolt_diff_orders;" "2" "$DB"
 
-
 echo "INSERT INTO users VALUES(2,'Bob');
 SELECT dolt_commit('-A','-m','add bob');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -116,10 +83,6 @@ run_test "tables_users_after" "SELECT count(*) FROM dolt_diff_users;" "2" "$DB"
 run_test "tables_orders_after" "SELECT count(*) FROM dolt_diff_orders;" "2" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_merge_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -134,15 +97,10 @@ INSERT INTO t VALUES(3,'main');
 SELECT dolt_commit('-A','-m','main add');
 SELECT dolt_merge('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "merge_count" "SELECT count(*) FROM dolt_diff_t;" "^[3-9]" "$DB"
 run_test_match "merge_has_merge_commit" "SELECT count(DISTINCT to_commit) FROM dolt_diff_t;" "^[3-9]" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_cp_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -155,15 +113,10 @@ SELECT dolt_commit('-A','-m','feat add');
 SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "cp_count" "SELECT count(*) FROM dolt_diff_t;" "^[2-9]" "$DB"
 run_test_match "cp_has_row2" "SELECT count(*) FROM dolt_diff_t WHERE to_v IS NOT NULL;" "^[1-9]" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_revert_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -173,15 +126,10 @@ INSERT INTO t VALUES(2,'to_revert');
 SELECT dolt_commit('-A','-m','add row 2');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "revert_count" "SELECT count(*) FROM dolt_diff_t;" "^[3-9]" "$DB"
 run_test_match "revert_has_removed" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='removed';" "^[1-9]" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_empty_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -190,10 +138,6 @@ SELECT dolt_commit('-A','-m','empty table');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "empty_count" "SELECT count(*) FROM dolt_diff_t;" "0" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_history_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -205,17 +149,12 @@ for i in $(seq 1 9); do
 SELECT dolt_commit('-A','-m','update $i');" | $DOLTLITE "$DB" > /dev/null 2>&1
 done
 
-
 run_test "history_count" "SELECT count(*) FROM dolt_diff_t;" "10" "$DB"
 run_test "history_added" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='added';" "1" "$DB"
 run_test "history_modified" "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';" "9" "$DB"
 run_test "history_commits" "SELECT count(DISTINCT to_commit) FROM dolt_diff_t;" "10" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_unchanged_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -234,10 +173,6 @@ run_test "unchanged_table_diff_type" "SELECT diff_type FROM dolt_diff_t;" "added
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_dt_quoted_$$.db; rm -f "$DB"
 cat <<'EOF' | $DOLTLITE "$DB" > /dev/null 2>&1
 CREATE TABLE "odd""name"(id INTEGER PRIMARY KEY, v TEXT);
@@ -250,10 +185,6 @@ run_test_match "quoted_diff_type" 'SELECT diff_type FROM "dolt_diff_odd""name";'
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_dt_newt_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
@@ -262,15 +193,10 @@ CREATE TABLE t2(id INTEGER PRIMARY KEY, w TEXT);
 INSERT INTO t2 VALUES(1,'x');
 SELECT dolt_commit('-A','-m','add t2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test "newt_t2_count" "SELECT count(*) FROM dolt_diff_t2;" "1" "$DB"
 run_test "newt_t2_type" "SELECT diff_type FROM dolt_diff_t2;" "added" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_dt_vals_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -279,19 +205,13 @@ SELECT dolt_commit('-A','-m','c1');
 UPDATE t SET v='world' WHERE id=1;
 SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "vals_add_from" "SELECT typeof(from_v) FROM dolt_diff_t WHERE diff_type='added';" "null" "$DB"
 run_test_match "vals_add_to" "SELECT typeof(to_v) FROM dolt_diff_t WHERE diff_type='added';" "text" "$DB"
-
 
 run_test_match "vals_mod_from" "SELECT typeof(from_v) FROM dolt_diff_t WHERE diff_type='modified';" "text" "$DB"
 run_test_match "vals_mod_to" "SELECT typeof(to_v) FROM dolt_diff_t WHERE diff_type='modified';" "text" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

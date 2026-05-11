@@ -1,21 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 

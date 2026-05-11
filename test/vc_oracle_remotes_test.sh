@@ -1,20 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -51,9 +36,6 @@ oracle() {
     echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat(name, char(9), url, char(9), fetch_specs, char(9), params) FROM dolt_remotes ORDER BY name;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
-
-
-
 
   local dt_out
   dt_out=$(tail -n +2 "$dir/dt.raw" \
@@ -722,13 +704,6 @@ SELECT dolt_remote('add', 'upstream', 'file:///tmp/oracle_upstream');
 oracle "add_remote_with_non_standard_name" "
 SELECT dolt_remote('add', 'backup-1', 'file:///tmp/oracle_backup');
 "
-
-
-
-
-
-
-
 
 echo "--- remove ---"
 

@@ -1,74 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 
 DOLTLITE="${1:-./doltlite}"
@@ -76,10 +7,6 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
-
-
-
-
 
 run_hash() {
   local name="$1" setup="$2" query="$3"
@@ -90,13 +17,10 @@ run_hash() {
   "$DOLTLITE" "$db" "$query" 2>"$TMPROOT/$name.query.err"
 }
 
-
-
 run_hash_on() {
   local db="$1" query="$2"
   "$DOLTLITE" "$db" "$query" 2>>"$TMPROOT/shared.err"
 }
-
 
 same() {
   local name="$1" a="$2" b="$3"
@@ -120,8 +44,6 @@ same() {
   fi
 }
 
-
-
 different() {
   local name="$1" a="$2" b="$3"
   if [ -z "$a" ] || [ -z "$b" ]; then
@@ -141,7 +63,6 @@ different() {
   fi
 }
 
-
 shape() {
   local name="$1" h="$2"
   if echo "$h" | grep -qE '^[0-9a-f]{40}$'; then
@@ -157,7 +78,6 @@ shape() {
 
 echo "=== Version Control Oracle Tests: dolt_hashof suite ==="
 echo ""
-
 
 echo "--- 1. Determinism: same input → same hash ---"
 
@@ -177,7 +97,6 @@ H2=$(run_hash "det_db2" "$SEED_A" "SELECT dolt_hashof_db();")
 same "determinism_db_same_inputs" "$H1" "$H2"
 
 echo ""
-
 
 echo "--- 2. Insert order invariance ---"
 
@@ -214,7 +133,6 @@ same "order_abc_vs_batch"  "$H_ABC" "$H_BAT"
 
 echo ""
 
-
 echo "--- 3. Intermediate state invariance (delete+reinsert is a no-op) ---"
 
 NET="
@@ -248,7 +166,6 @@ same "net_vs_through_delete"  "$H_NET" "$H_TD"
 same "net_vs_delete_reinsert" "$H_NET" "$H_DR"
 
 echo ""
-
 
 echo "--- 4. Cross-branch state invariance ---"
 
@@ -284,7 +201,6 @@ different "cross_branch_commit_hash_differs" "$H_MAIN_COMMIT" "$H_FEAT_COMMIT"
 
 echo ""
 
-
 echo "--- 5. Per-table isolation in dolt_hashof_table ---"
 
 TWO_TABLES="
@@ -304,7 +220,6 @@ HT_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
 HU_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_table('u');")
 HDB_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_db();")
 
-
 "$DOLTLITE" "$DB" "INSERT INTO u VALUES (2, 'y'); SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'bump_u');" >/dev/null 2>>"$TMPROOT/two.err"
 
 HT_AFTER=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
@@ -316,7 +231,6 @@ different "u_hash_changes_on_u_mutation"  "$HU_BEFORE" "$HU_AFTER"
 different "db_hash_changes_on_u_mutation" "$HDB_BEFORE" "$HDB_AFTER"
 
 echo ""
-
 
 echo "--- 6. Reopen stability ---"
 
@@ -344,7 +258,6 @@ same "reopen_db_stable"    "$H_OPEN3_DB" "$H_OPEN6_DB"
 same "reopen_commit_stable" "$H_OPEN4_MAIN" "$H_OPEN7_MAIN"
 
 echo ""
-
 
 echo "--- 7. Mutations must invalidate ---"
 
@@ -388,7 +301,6 @@ different "alter_schema_changes_table_hash" "$H_BASE" "$H_ALT"
 
 echo ""
 
-
 echo "--- 7b. Equivalent DDL histories converge ---"
 
 DDL_DIRECT="
@@ -431,7 +343,6 @@ same "ddl_direct_vs_recreate_table_hash" "$H_DDL_DIRECT" "$H_DDL_RECREATE"
 
 echo ""
 
-
 echo "--- 8. Ref resolution ---"
 
 REF_SEED="
@@ -456,13 +367,10 @@ shape "main_hash_shape" "$H_MAIN"
 H_HEAD_PARENT=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD~1');")
 different "HEAD_differs_from_HEAD_parent" "$H_HEAD" "$H_HEAD_PARENT"
 
-
-
 H_ID_OUT=$(run_hash_on "$DB" "SELECT dolt_hashof('$H_HEAD');")
 same "commit_hash_is_identity_on_hashof" "$H_HEAD" "$H_ID_OUT"
 
 echo ""
-
 
 echo "--- 9. Dolt shape conformance ---"
 

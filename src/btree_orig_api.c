@@ -73,10 +73,6 @@ int origBtreeCursorIsLastOnSingle(void *pCur){
   BtShared *pBt;
   if( !c || !c->pBt ) return 0;
   pBt = c->pBt;
-
-
-
-
   if( (pBt->openFlags & BTREE_SINGLE)==0 ) return 0;
   return pBt->pCursor==c && c->pNext==0;
 }
@@ -148,10 +144,6 @@ int origBtreeCursorSize(void){ return orig_sqlite3BtreeCursorSize(); }
 void origBtreeEnter(void *p){ orig_sqlite3BtreeEnter(B(p)); }
 void origBtreeLeave(void *p){ orig_sqlite3BtreeLeave(B(p)); }
 void *origBtreePager(void *p){ return orig_sqlite3BtreePager(B(p)); }
-
-
-
-
 
 int origBtreeIsSqliteFile(const char *zFilename){
   FILE *f;

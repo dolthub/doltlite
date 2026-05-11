@@ -109,18 +109,14 @@ struct DoltliteDiffVtab {
 typedef struct DoltliteDiffCursor DoltliteDiffCursor;
 struct DoltliteDiffCursor {
   sqlite3_vtab_cursor base;
-
   ProllyHash *aQueue;
   int qHead, qTail, qAlloc;
   ProllyHashSet visited, queued;
   int visitedInit, queuedInit;
-
   DiffSummaryRow *aBatch;
   int nBatch;
   int iBatch;
-
   char *zFilterTable;
-
   int phase;
   int hasRow;
   i64 iRowid;
@@ -198,7 +194,6 @@ static int batchAppend(DoltliteDiffCursor *pCur,
   return SQLITE_OK;
 }
 
-
 static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
   ProllyHash headCat, workCat;
   struct TableEntry *aHead = 0, *aWork = 0;
@@ -273,7 +268,6 @@ done:
   doltliteFreeCatalog(aWork, nWork);
   return rc;
 }
-
 
 static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
                               const ProllyHash *pCommitHash,
@@ -351,20 +345,15 @@ done:
   return rc;
 }
 
-
-
 static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
   int rc;
-
 
   if( pCur->iBatch < pCur->nBatch ){
     pCur->hasRow = 1;
     return SQLITE_OK;
   }
 
-
   freeBatch(pCur);
-
 
   if( pCur->phase==0 ){
     pCur->phase = 1;
@@ -374,9 +363,7 @@ static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
       pCur->hasRow = 1;
       return SQLITE_OK;
     }
-
   }
-
 
   while( pCur->qHead < pCur->qTail ){
     ProllyHash cur = pCur->aQueue[pCur->qHead++];
@@ -398,7 +385,6 @@ static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
       doltliteCommitClear(&commit);
       return rc;
     }
-
 
     for(i=0; i<doltliteCommitParentCount(&commit); i++){
       const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
@@ -428,7 +414,6 @@ static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
       pCur->hasRow = 1;
       return SQLITE_OK;
     }
-
   }
 
   pCur->hasRow = 0;
@@ -530,7 +515,6 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 
   diffCursorReset(pCur);
 
-
   if( (idxNum & DIFF_IDX_TABLE_NAME) && argIdx<argc ){
     const char *z = (const char*)sqlite3_value_text(argv[argIdx++]);
     if( z ){
@@ -544,7 +528,6 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
 
   doltliteGetSessionHead(db, &head);
   if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
-
 
   rc = prollyHashSetInit(&pCur->visited, 64);
   if( rc!=SQLITE_OK ) return rc;
@@ -561,7 +544,6 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   pCur->qTail = 1;
   rc = prollyHashSetAdd(&pCur->queued, &head);
   if( rc!=SQLITE_OK ) return rc;
-
 
   pCur->phase = 0;
   return diffAdvance(pCur, db);

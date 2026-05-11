@@ -179,11 +179,6 @@ static int diffRecordsEqualFieldwise(
   return SQLITE_OK;
 }
 
-
-
-
-
-
 int prollyValuesEqual(
   const u8 *pA, int nA,
   const u8 *pB, int nB,
@@ -334,11 +329,6 @@ static int diffNodeKeyCmp(
   prollyNodeKey(pB, iB, &pKB, &nKB);
   return diffBlobKeyCmp(pKA, nKA, pKB, nKB);
 }
-
-
-
-
-
 
 static void diffEmitKey(ProllyDiffChange *ch, const ProllyNode *pN, int i, u8 flags){
   prollyNodeKey(pN, i, &ch->pKey, &ch->nKey);
@@ -499,7 +489,6 @@ static int diffNodesOneLevel(
             prollyCursorInit(pCO, pStore, pCache, pOldRoot, flags);
             prollyCursorInit(pCN, pStore, pCache, pNewRoot, flags);
 
-
             if( i > 0 && (flags & PROLLY_NODE_INTKEY) ){
               i64 seekKey = prollyNodeIntKey(&oldNode, i-1);
               int res;
@@ -538,7 +527,6 @@ static int diffNodesOneLevel(
       }
     }
 
-
     while( i < (int)oldNode.nItems && rc==SQLITE_OK ){
       ProllyHash ch;
       prollyNodeChildHash(&oldNode, i, &ch);
@@ -576,13 +564,11 @@ int prollyDiff(
   int nStack = 0, nStackAlloc = 0;
   int rc = SQLITE_OK;
 
-
   aStack = sqlite3_malloc(32 * (int)sizeof(ProllyHash));
   if( !aStack ) return SQLITE_NOMEM;
   nStackAlloc = 32;
   aStack[nStack++] = *pOldRoot;
   aStack[nStack++] = *pNewRoot;
-
 
   while( nStack >= 2 && rc==SQLITE_OK ){
     ProllyHash newH = aStack[--nStack];
@@ -647,7 +633,6 @@ int prollyDiffIterOpen(
     return rc;
   }
 
-
   if( !prollyCursorIsValid(pIter->pCurOld) &&
       !prollyCursorIsValid(pIter->pCurNew) ){
     pIter->eof = 1;
@@ -667,13 +652,11 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
   if( pIter->eof ) return SQLITE_DONE;
   if( pIter->rc!=SQLITE_OK ) return pIter->rc;
 
-
   diffIterFreeCopies(pIter);
 
   pOld = pIter->pCurOld;
   pNew = pIter->pCurNew;
   pCh = &pIter->current;
-
 
   for(;;){
     validOld = prollyCursorIsValid(pOld);

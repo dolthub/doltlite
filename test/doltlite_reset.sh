@@ -18,19 +18,14 @@ run_test_match() {
 echo "=== Doltlite Reset Tests ==="
 echo ""
 
-
 DB=/tmp/test_reset_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "INSERT INTO t VALUES(2,'b'); SELECT dolt_add('-A');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "staged_before_soft_reset" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB"
-
-
-
 
 echo "SELECT dolt_reset('--soft');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -46,7 +41,6 @@ run_test "data_preserved_soft_noop" \
   "SELECT count(*) FROM t;" \
   "2" "$DB"
 
-
 echo "SELECT dolt_reset();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "unstaged_after_no_args_reset" \
@@ -56,7 +50,6 @@ run_test "unstaged_after_no_args_reset" \
 run_test "no_staged_after_no_args_reset" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "0" "$DB"
-
 
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -72,8 +65,6 @@ run_test "correct_data_after_hard" \
   "SELECT v FROM t;" \
   "a" "$DB"
 
-
-
 DB2=/tmp/test_reset2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE a(x); CREATE TABLE b(y); INSERT INTO a VALUES(1); INSERT INTO b VALUES(2); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 echo "INSERT INTO a VALUES(10); INSERT INTO b VALUES(20); CREATE TABLE c(z);" | $DOLTLITE "$DB2" > /dev/null 2>&1
@@ -83,8 +74,6 @@ run_test "changes_before_hard" \
   "3" "$DB2"
 
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB2" > /dev/null 2>&1
-
-
 
 run_test "untracked_preserved_after_multi_hard" \
   "SELECT count(*) FROM dolt_status;" \
@@ -101,7 +90,6 @@ run_test "a_reverted" \
 run_test "b_reverted" \
   "SELECT * FROM b;" \
   "2" "$DB2"
-
 
 DB3=/tmp/test_reset3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB3" > /dev/null 2>&1
@@ -132,7 +120,6 @@ run_test "multipath_reset_all_missing_unstages_all" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "0" "$DB3C"
 
-
 DB4=/tmp/test_reset4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2);" | $DOLTLITE "$DB4" > /dev/null 2>&1
@@ -141,7 +128,6 @@ echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 run_test "hard_reset_persists" \
   "SELECT * FROM t;" \
   "1" "$DB4"
-
 
 DB5=/tmp/test_reset5_$$.db; rm -f "$DB5"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'v1'); SELECT dolt_commit('-A','-m','c1');" | $DOLTLITE "$DB5" > /dev/null 2>&1
@@ -160,10 +146,8 @@ run_test "reset_to_hash_log" "SELECT count(*) FROM dolt_log;" "2" "$DB5"
 run_test "reset_to_hash_head" "SELECT commit_hash FROM dolt_log LIMIT 1;" "$C1" "$DB5"
 run_test "reset_to_hash_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB5"
 
-
 run_test "reset_to_hash_reopen_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB5"
 run_test "reset_to_hash_reopen_rows" "SELECT v FROM t;" "v1" "$DB5"
-
 
 DB5B=/tmp/test_reset5b_$$.db; rm -f "$DB5B"
 echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); ALTER TABLE a ADD COLUMN extra INTEGER; UPDATE a SET extra=99 WHERE id=1; SELECT dolt_commit('-A','-m','c2'); SELECT dolt_reset('--hard','HEAD^1');" | $DOLTLITE "$DB5B" > /dev/null 2>&1
@@ -173,7 +157,6 @@ run_test "reset_head_parent_schema" \
 run_test "reset_head_parent_rows" \
   "SELECT s FROM a;" \
   "base" "$DB5B"
-
 
 DB5C=/tmp/test_reset5c_$$.db; rm -f "$DB5C"
 echo "CREATE TABLE a(id INTEGER PRIMARY KEY, s TEXT); INSERT INTO a VALUES(1,'base'); SELECT dolt_commit('-A','-m','base'); SELECT dolt_branch('feat'); SELECT dolt_checkout('feat'); INSERT INTO a VALUES(2,'feat'); SELECT dolt_commit('-A','-m','feat'); SELECT dolt_checkout('main'); INSERT INTO a VALUES(3,'main'); SELECT dolt_commit('-A','-m','main'); SELECT dolt_merge('feat');" | $DOLTLITE "$DB5C" > /dev/null 2>&1
@@ -188,7 +171,6 @@ run_test "reset_raw_second_parent_hash" \
   "SELECT dolt_reset('--hard','$H2'); SELECT group_concat(s, '|') FROM (SELECT s FROM a ORDER BY id);" \
   "0
 base|feat" "$DB5C.hash"
-
 
 DB6=/tmp/test_reset6_$$.db; rm -f "$DB6"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
@@ -205,7 +187,6 @@ run_test_match "reset_clears_conflicts" \
 run_test_match "reset_restores_init" \
   "BEGIN; SELECT dolt_merge('other'); SELECT dolt_reset('--hard','$C_INIT'); SELECT 'RV|' || v FROM t; ROLLBACK;" \
   "^RV\\|a$" "$DB6"
-
 
 run_test_match "reset_bad_ref" \
   "SELECT dolt_reset('--hard','not_a_real_ref');" \
@@ -268,7 +249,6 @@ run_test "path_reset_recreated_table_keeps_live_schema" \
 run_test "path_reset_recreated_table_keeps_live_row" \
   "SELECT k || '|' || n FROM a;" \
   "7|70" "$DB10"
-
 
 rm -f "$DB" "$DB2" "$DB3" "$DB3B" "$DB3C" "$DB4" "$DB5" "$DB5B" "$DB5C" "$DB5C.hash" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10"
 

@@ -1,36 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -41,7 +10,6 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
-
 
 oracle() {
   local name="$1" setup="$2" from_ref="$3" to_ref="$4" tbl="${5:-}"
@@ -54,9 +22,6 @@ oracle() {
   else
     args="'$from_ref','$to_ref'"
   fi
-
-
-
 
   local q="SELECT CONCAT('ROW|', from_table_name, '|', to_table_name, '|', \
             CASE WHEN from_create_statement IS NULL OR from_create_statement='' THEN 'N' ELSE 'Y' END, '|', \
@@ -190,10 +155,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_t');
 " "HEAD~1" "HEAD"
 
-
-
-
-
 oracle "drop_one_of_two_tables" "
 $SEED
 CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
@@ -203,7 +164,6 @@ DROP TABLE t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_t');
 " "HEAD~1" "HEAD"
-
 
 oracle "drop_multiple_in_one_commit" "
 $SEED
@@ -217,8 +177,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_t_u');
 " "HEAD~1" "HEAD"
 
-
-
 oracle "drop_table_with_data" "
 $SEED
 INSERT INTO t VALUES (2, 20), (3, 30), (4, 40);
@@ -228,9 +186,6 @@ DROP TABLE t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_with_data');
 " "HEAD~1" "HEAD"
-
-
-
 
 oracle_query "drop_via_range_syntax" "
 $SEED
@@ -242,10 +197,6 @@ SELECT dolt_commit('-m', 'drop_t');
        CASE WHEN to_create_statement   IS NULL OR to_create_statement=''   THEN 'N' ELSE 'Y' END
      ) FROM dolt_schema_diff('HEAD~1..HEAD');"
 
-
-
-
-
 oracle "drop_filter_by_table_name" "
 $SEED
 CREATE TABLE u(id INTEGER PRIMARY KEY, x TEXT);
@@ -255,8 +206,6 @@ DROP TABLE t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_t');
 " "HEAD~1" "HEAD" "t"
-
-
 
 oracle "drop_filter_excludes_other_changes" "
 $SEED
@@ -295,10 +244,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'rename_col');
 " "HEAD~1" "HEAD"
 
-
-
-
-
 oracle "modified_rename_table" "
 $SEED
 ALTER TABLE t RENAME TO t2;
@@ -334,9 +279,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_bare');
 " "HEAD~1" "HEAD"
 
-
-
-
 oracle "modified_net_addcol_dropcol_range" "
 $SEED
 ALTER TABLE t ADD COLUMN extra TEXT;
@@ -350,8 +292,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_col_again');
 " "HEAD~3" "HEAD"
 
-
-
 oracle "multiple_alters_single_commit" "
 $SEED
 ALTER TABLE t ADD COLUMN a TEXT;
@@ -360,9 +300,6 @@ ALTER TABLE t RENAME COLUMN v TO vv;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'many_alters');
 " "HEAD~1" "HEAD"
-
-
-
 
 oracle "create_then_alter_same_commit" "
 $SEED
@@ -382,10 +319,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'multi');
 " "HEAD~1" "HEAD"
 
-
-
-
-
 oracle "multi_change_add_drop_modify" "
 $SEED
 CREATE TABLE u(id INTEGER PRIMARY KEY, x INT);
@@ -399,8 +332,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_drop_modify');
 " "HEAD~1" "HEAD"
 
-
-
 oracle "modify_two_tables_one_commit" "
 $SEED
 CREATE TABLE u(id INTEGER PRIMARY KEY, x INT);
@@ -411,8 +342,6 @@ ALTER TABLE u ADD COLUMN y TEXT;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'modify_two');
 " "HEAD~1" "HEAD"
-
-
 
 oracle "rename_and_add_col_same_commit" "
 $SEED

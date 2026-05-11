@@ -1,31 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -43,14 +17,10 @@ normalize() {
     | sort
 }
 
-
-
-
 oracle() {
   local name="$1" setup="$2" ref="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
-
 
   local dl_q="SELECT 'A' || char(9) || coalesce(id,'') || char(9) || coalesce(v,'') FROM dolt_at_t WHERE commit_ref = '${ref}' ORDER BY id"
   local dl_out
@@ -59,7 +29,6 @@ oracle() {
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
-
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -138,10 +107,7 @@ SELECT dolt_commit('-m', 'c1');
 
 echo "--- HEAD ref ---"
 
-
-
 oracle "at_head_two_rows" "$SEED" "HEAD"
-
 
 oracle "at_head_after_second_commit" "
 $SEED
@@ -152,14 +118,12 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- HEAD~N ref ---"
 
-
 oracle "at_head_minus_1_after_modify" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_modify');
 " "HEAD~1"
-
 
 oracle "at_head_minus_2" "
 $SEED
@@ -171,7 +135,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c3');
 " "HEAD~2"
 
-
 oracle "at_head_tilde_no_number" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -181,10 +144,7 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- branch ref ---"
 
-
 oracle "at_branch_main" "$SEED" "main"
-
-
 
 oracle "at_sibling_branch_feature" "
 $SEED
@@ -197,7 +157,6 @@ SELECT dolt_checkout('main');
 " "feature"
 
 echo "--- tag ref ---"
-
 
 oracle "at_tag" "
 $SEED
@@ -218,12 +177,6 @@ SELECT dolt_branch('from_tag', 'v1');
 
 echo "--- bare commit hash ref ---"
 
-
-
-
-
-
-
 oracle "at_recent_commit_via_head" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -240,14 +193,10 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- working set is NOT visible at any ref ---"
 
-
-
-
 oracle "at_head_excludes_working_modifications" "
 $SEED
 UPDATE t SET v = 999 WHERE id = 1;
 " "HEAD"
-
 
 oracle "at_head_excludes_staged_modifications" "
 $SEED
@@ -256,8 +205,6 @@ SELECT dolt_add('-A');
 " "HEAD"
 
 echo "--- post-merge ---"
-
-
 
 oracle "at_head_after_merge" "
 $SEED
@@ -272,7 +219,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feature');
 " "HEAD"
-
 
 oracle "at_head_minus_1_after_merge_is_main2" "
 $SEED
@@ -317,9 +263,6 @@ SELECT dolt_merge('feature');
 " "HEAD^2"
 
 echo "--- error paths ---"
-
-
-
 
 oracle_error "at_nonexistent_ref" "$SEED" "nope"
 

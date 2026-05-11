@@ -1,29 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -34,9 +10,6 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
-
-
-
 
 normalize_history() {
   tr -d '\r' \
@@ -71,7 +44,6 @@ oracle() {
 
   IFS=',' read -ra tarr <<< "$tables"
 
-
   local dl_q=""
   for tn in "${tarr[@]}"; do
     local part="SELECT 'H' || char(9) || '${tn}' || char(9) || coalesce(h.id,'') || char(9) || coalesce(h.v,'') || char(9) || coalesce(log.message, h.commit_hash) || char(9) || coalesce(h.committer,'') FROM dolt_history_${tn} h LEFT JOIN dolt_log log ON log.commit_hash = h.commit_hash"
@@ -88,7 +60,6 @@ oracle() {
            | grep -v '^[0-9]*$' \
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize_history)
-
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -112,7 +83,6 @@ oracle() {
       printf '%s;\n' "$dt_q"
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_history
   )
-
 
   if [ -z "$dl_out" ] && [ -z "$dt_out" ]; then
     fail=$((fail+1))
@@ -145,13 +115,9 @@ SELECT dolt_commit('-m', 'c1');
 
 echo "--- basic ---"
 
-
 oracle "single_commit_two_rows" "
 $SEED
 "
-
-
-
 
 oracle "modify_one_row_then_query" "
 $SEED
@@ -160,8 +126,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_mod');
 "
 
-
-
 oracle "insert_new_row" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -169,16 +133,12 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_add');
 "
 
-
-
-
 oracle "delete_row_in_later_commit" "
 $SEED
 DELETE FROM t WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_del');
 "
-
 
 oracle "many_commits_many_changes" "
 $SEED
@@ -198,13 +158,10 @@ SELECT dolt_commit('-m', 'c5');
 
 echo "--- working set is excluded ---"
 
-
-
 oracle "working_set_changes_not_in_history" "
 $SEED
 UPDATE t SET v = 999 WHERE id = 1;
 "
-
 
 oracle "staged_changes_not_in_history" "
 $SEED
@@ -213,8 +170,6 @@ SELECT dolt_add('-A');
 "
 
 echo "--- multi-table ---"
-
-
 
 oracle "two_tables_independent_history" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -232,8 +187,6 @@ SELECT dolt_commit('-m', 'add_u');
 " "t,u"
 
 echo "--- branching ---"
-
-
 
 oracle "history_on_feature_branch" "
 $SEED
@@ -256,8 +209,6 @@ SELECT dolt_tag('v1', 'HEAD~1');
 SELECT dolt_branch('from_tag', 'v1');
 SELECT dolt_checkout('from_tag');
 "
-
-
 
 oracle "history_after_merge" "
 $SEED
@@ -304,8 +255,6 @@ SELECT dolt_merge('feature');
 SELECT dolt_branch('from_p2', 'HEAD^2');
 SELECT dolt_checkout('from_p2');
 "
-
-
 
 oracle "history_replay_merge_add_table_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -455,14 +404,12 @@ SELECT dolt_rebase('main');
 
 echo "--- edge cases ---"
 
-
 oracle "single_row_single_commit" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'just_one');
 "
-
 
 oracle "same_row_value_churned" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -480,8 +427,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c4');
 "
 
-
-
 oracle "add_delete_readd_same_id" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -495,10 +440,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c3_readd');
 "
 
-
-
-
-
 oracle "history_after_checkout_sibling_branch" "
 $SEED
 SELECT dolt_branch('feature');
@@ -508,9 +449,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat_only');
 SELECT dolt_checkout('main');
 "
-
-
-
 
 oracle "history_after_hard_reset" "
 $SEED
@@ -523,8 +461,6 @@ SELECT dolt_commit('-m', 'c3');
 SELECT dolt_reset('--hard', 'HEAD~1');
 "
 
-
-
 oracle "history_after_amend" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -534,7 +470,6 @@ SELECT dolt_commit('--amend', '-m', 'c2_amended');
 "
 
 echo "--- NULL values and other types ---"
-
 
 oracle "null_value_in_history" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);

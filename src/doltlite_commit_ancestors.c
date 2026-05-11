@@ -10,22 +10,6 @@
 #include "doltlite_internal.h"
 #include <string.h>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 typedef struct CommitAncestorsVtab CommitAncestorsVtab;
 struct CommitAncestorsVtab {
   sqlite3_vtab base;
@@ -35,12 +19,10 @@ struct CommitAncestorsVtab {
 typedef struct CommitAncestorsCursor CommitAncestorsCursor;
 struct CommitAncestorsCursor {
   sqlite3_vtab_cursor base;
-
   ProllyHash *aQueue;
   int qHead, qTail, qAlloc;
   ProllyHashSet visited;
   int visitedInit;
-
   ProllyHash curHash;
   char zCurHex[PROLLY_HASH_SIZE*2+1];
   DoltliteCommit curCommit;
@@ -116,8 +98,6 @@ static int caClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
-
-
 static int caLoadNextCommit(CommitAncestorsCursor *pCur, sqlite3 *db){
   int i, rc;
 
@@ -141,11 +121,8 @@ static int caLoadNextCommit(CommitAncestorsCursor *pCur, sqlite3 *db){
     doltliteHashToHex(&cur, pCur->zCurHex);
     pCur->hasRow = 1;
     pCur->curParents = doltliteCommitParentCount(&pCur->curCommit);
-
-
     if( pCur->curParents == 0 ) pCur->curParents = 1;
     pCur->curParentIdx = 0;
-
 
     for(i = 0; i < doltliteCommitParentCount(&pCur->curCommit); i++){
       const ProllyHash *pParent = doltliteCommitParentHash(&pCur->curCommit, i);
@@ -171,13 +148,10 @@ static int caNext(sqlite3_vtab_cursor *pCursor){
   pCur->iRowid++;
   pCur->curParentIdx++;
   if( pCur->curParentIdx >= pCur->curParents ){
-
     return caLoadNextCommit(pCur, pVtab->db);
   }
   return SQLITE_OK;
 }
-
-
 
 static int caEnqueue(CommitAncestorsCursor *pCur, const ProllyHash *p){
   if( prollyHashIsEmpty(p) ) return SQLITE_OK;
@@ -214,10 +188,6 @@ static int caFilter(
   rc = prollyHashSetInit(&pCur->visited, 64);
   if( rc!=SQLITE_OK ) return rc;
   pCur->visitedInit = 1;
-
-
-
-
 
   doltliteGetSessionHead(pVtab->db, &head);
   rc = caEnqueue(pCur, &head);
@@ -260,7 +230,6 @@ static int caColumn(
     case 1: {
       int realParents = doltliteCommitParentCount(c);
       if( realParents == 0 ){
-
         sqlite3_result_null(ctx);
       }else if( idx < realParents ){
         const ProllyHash *pParent = doltliteCommitParentHash(c, idx);

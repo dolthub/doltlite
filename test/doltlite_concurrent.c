@@ -1,14 +1,3 @@
-
-
-
-
-
-
-
-
-
-
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -71,9 +60,6 @@ static void setup_db(const char *path){
   sqlite3_close(db);
 }
 
-
-
-
 static void test_wal_default(const char *path){
   sqlite3 *db;
   char buf[64];
@@ -82,9 +68,6 @@ static void test_wal_default(const char *path){
   CHECK("wal_default: journal_mode is wal", strcmp(buf, "wal")==0);
   sqlite3_close(db);
 }
-
-
-
 
 static void test_wal_pragma(const char *path){
   sqlite3 *db;
@@ -95,9 +78,6 @@ static void test_wal_pragma(const char *path){
   sqlite3_close(db);
 }
 
-
-
-
 static void test_snapshot_isolation(const char *path){
   sqlite3 *dbA, *dbB;
   char buf[64];
@@ -105,19 +85,15 @@ static void test_snapshot_isolation(const char *path){
   sqlite3_open(path, &dbA);
   sqlite3_open(path, &dbB);
 
-
   exec_ok(dbA, "BEGIN");
   exec_text(dbA, "SELECT val FROM t WHERE id=1", buf, sizeof(buf));
   CHECK("snapshot: A reads 'alpha' before B commits", strcmp(buf, "alpha")==0);
 
-
   exec_ok(dbB, "UPDATE t SET val='ALPHA' WHERE id=1");
   exec_ok(dbB, "SELECT dolt_commit('-am', 'update alpha')");
 
-
   exec_text(dbA, "SELECT val FROM t WHERE id=1", buf, sizeof(buf));
   CHECK("snapshot: A still sees 'alpha' after B commits", strcmp(buf, "alpha")==0);
-
 
   exec_ok(dbA, "COMMIT");
   exec_ok(dbA, "BEGIN");
@@ -129,9 +105,6 @@ static void test_snapshot_isolation(const char *path){
   sqlite3_close(dbB);
 }
 
-
-
-
 static void test_concurrent_readers(const char *path){
   sqlite3 *db1, *db2, *db3;
   int v1, v2, v3;
@@ -139,7 +112,6 @@ static void test_concurrent_readers(const char *path){
   sqlite3_open(path, &db1);
   sqlite3_open(path, &db2);
   sqlite3_open(path, &db3);
-
 
   exec_ok(db1, "BEGIN");
   exec_ok(db2, "BEGIN");
@@ -160,9 +132,6 @@ static void test_concurrent_readers(const char *path){
   sqlite3_close(db3);
 }
 
-
-
-
 static void test_reader_no_block_writer(const char *path){
   sqlite3 *dbR, *dbW;
   int rc;
@@ -170,10 +139,8 @@ static void test_reader_no_block_writer(const char *path){
   sqlite3_open(path, &dbR);
   sqlite3_open(path, &dbW);
 
-
   exec_ok(dbR, "BEGIN");
   exec_int(dbR, "SELECT count(*) FROM t", -1);
-
 
   exec_ok(dbW, "INSERT INTO t VALUES(100, 'new')");
   rc = exec_ok(dbW, "SELECT dolt_commit('-am', 'add 100')");
@@ -182,7 +149,6 @@ static void test_reader_no_block_writer(const char *path){
 
   exec_ok(dbR, "COMMIT");
 
-
   exec_ok(dbW, "DELETE FROM t WHERE id=100");
   exec_ok(dbW, "SELECT dolt_commit('-am', 'remove 100')");
 
@@ -190,18 +156,13 @@ static void test_reader_no_block_writer(const char *path){
   sqlite3_close(dbW);
 }
 
-
-
-
 static void test_writer_no_block_reader(const char *path){
   sqlite3 *dbR, *dbW;
 
   sqlite3_open(path, &dbR);
   sqlite3_open(path, &dbW);
 
-
   exec_ok(dbW, "INSERT INTO t VALUES(200, 'wip')");
-
 
   exec_ok(dbR, "BEGIN");
   int cnt = exec_int(dbR, "SELECT count(*) FROM t", -1);
@@ -209,15 +170,11 @@ static void test_writer_no_block_reader(const char *path){
         cnt >= 3);
   exec_ok(dbR, "COMMIT");
 
-
   exec_ok(dbW, "DELETE FROM t WHERE id=200");
 
   sqlite3_close(dbR);
   sqlite3_close(dbW);
 }
-
-
-
 
 static void test_snapshot_consistency(const char *path){
   sqlite3 *dbA, *dbB;
@@ -229,22 +186,18 @@ static void test_snapshot_consistency(const char *path){
   exec_ok(dbA, "BEGIN");
   int cnt1 = exec_int(dbA, "SELECT count(*) FROM t", -1);
 
-
   exec_ok(dbB, "INSERT INTO t VALUES(300, 'added')");
   exec_ok(dbB, "SELECT dolt_commit('-am', 'add 300')");
-
 
   int cnt2 = exec_int(dbA, "SELECT count(*) FROM t", -1);
   CHECK("snapshot_consistency: count stable across concurrent commit",
         cnt1==cnt2);
-
 
   exec_text(dbA, "SELECT val FROM t WHERE id=2", buf, sizeof(buf));
   CHECK("snapshot_consistency: A reads 'beta' consistently",
         strcmp(buf, "beta")==0);
 
   exec_ok(dbA, "COMMIT");
-
 
   exec_ok(dbB, "DELETE FROM t WHERE id=300");
   exec_ok(dbB, "SELECT dolt_commit('-am', 'remove 300')");
@@ -253,38 +206,28 @@ static void test_snapshot_consistency(const char *path){
   sqlite3_close(dbB);
 }
 
-
-
-
 static void test_checkpoint(const char *path){
   sqlite3 *db;
   int rc;
 
   sqlite3_open(path, &db);
 
-
   exec_ok(db, "INSERT INTO t VALUES(400, 'ckpt1')");
   exec_ok(db, "SELECT dolt_commit('-am', 'ckpt1')");
   exec_ok(db, "INSERT INTO t VALUES(401, 'ckpt2')");
   exec_ok(db, "SELECT dolt_commit('-am', 'ckpt2')");
 
-
   rc = exec_ok(db, "PRAGMA wal_checkpoint(TRUNCATE)");
   CHECK("checkpoint: PRAGMA wal_checkpoint succeeds", rc==SQLITE_OK);
 
-
   int cnt = exec_int(db, "SELECT count(*) FROM t WHERE id>=400", -1);
   CHECK("checkpoint: data preserved after checkpoint", cnt==2);
-
 
   exec_ok(db, "DELETE FROM t WHERE id>=400");
   exec_ok(db, "SELECT dolt_commit('-am', 'clean up ckpt')");
 
   sqlite3_close(db);
 }
-
-
-
 
 static void test_post_checkpoint_read(const char *path){
   sqlite3 *db1, *db2;
@@ -295,11 +238,9 @@ static void test_post_checkpoint_read(const char *path){
   exec_ok(db1, "SELECT dolt_commit('-am', 'add 500')");
   exec_ok(db1, "PRAGMA wal_checkpoint(TRUNCATE)");
 
-
   sqlite3_open(path, &db2);
   int cnt = exec_int(db2, "SELECT count(*) FROM t WHERE id=500", -1);
   CHECK("post_checkpoint_read: new connection sees data after checkpoint", cnt==1);
-
 
   exec_ok(db1, "DELETE FROM t WHERE id=500");
   exec_ok(db1, "SELECT dolt_commit('-am', 'clean up 500')");
@@ -307,9 +248,6 @@ static void test_post_checkpoint_read(const char *path){
   sqlite3_close(db1);
   sqlite3_close(db2);
 }
-
-
-
 
 static void test_snapshot_large(const char *path){
   sqlite3 *dbA, *dbB;
@@ -319,10 +257,8 @@ static void test_snapshot_large(const char *path){
 
   int cnt_before = exec_int(dbA, "SELECT count(*) FROM t", -1);
 
-
   exec_ok(dbA, "BEGIN");
   int cnt_a1 = exec_int(dbA, "SELECT count(*) FROM t", -1);
-
 
   exec_ok(dbB, "BEGIN");
   {
@@ -337,18 +273,15 @@ static void test_snapshot_large(const char *path){
   exec_ok(dbB, "COMMIT");
   exec_ok(dbB, "SELECT dolt_commit('-am', 'bulk insert')");
 
-
   int cnt_a2 = exec_int(dbA, "SELECT count(*) FROM t", -1);
   CHECK("snapshot_large: 100-row insert invisible to snapshot reader",
         cnt_a1==cnt_a2);
 
   exec_ok(dbA, "COMMIT");
 
-
   int cnt_a3 = exec_int(dbA, "SELECT count(*) FROM t", -1);
   CHECK("snapshot_large: new transaction sees bulk insert",
         cnt_a3 == cnt_before + 100);
-
 
   exec_ok(dbB, "DELETE FROM t WHERE id>=1000");
   exec_ok(dbB, "SELECT dolt_commit('-am', 'clean up bulk')");

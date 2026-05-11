@@ -1,14 +1,4 @@
 #!/bin/bash
-
-
-
-
-
-
-
-
-
-
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 
@@ -51,10 +41,6 @@ assert_greater() {
   fi
 }
 
-
-
-
-
 echo "--- Structural sharing: 1-row change on 1K table ---"
 
 DB=/tmp/test_ss_1k_$$.db; db_rm "$DB"
@@ -66,8 +52,6 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 SIZE_AFTER_INIT=$(file_size "$DB")
 echo "  After 1K rows committed: ${SIZE_AFTER_INIT} bytes"
 
-
-
 echo "INSERT INTO t VALUES(9998,'new_inserted_row');
 SELECT dolt_commit('-A','-m','insert 1 row');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -75,19 +59,12 @@ SIZE_AFTER_INSERT=$(file_size "$DB")
 DELTA=$((SIZE_AFTER_INSERT - SIZE_AFTER_INIT))
 echo "  After inserting 1 row: ${SIZE_AFTER_INSERT} bytes (delta: ${DELTA})"
 
-
-
 HALF_INIT=$((SIZE_AFTER_INIT / 2))
 assert_less "ss_1row_delta_small" "$DELTA" "$HALF_INIT"
-
 
 assert_greater "ss_1row_delta_nonzero" "$DELTA" "0"
 
 db_rm "$DB"
-
-
-
-
 
 echo ""
 echo "--- Structural sharing: 1-row change on 10K table ---"
@@ -112,16 +89,11 @@ SIZE_INS_10K=$(file_size "$DB")
 DELTA_10K=$((SIZE_INS_10K - SIZE_INIT_10K))
 echo "  After 1-row insert: ${SIZE_INS_10K} bytes (delta: ${DELTA_10K})"
 
-
 TEN_PCT=$((SIZE_INIT_10K / 10))
 assert_less "ss_10k_1row_delta" "$DELTA_10K" "$TEN_PCT"
 assert_greater "ss_10k_1row_nonzero" "$DELTA_10K" "0"
 
 db_rm "$DB"
-
-
-
-
 
 echo ""
 echo "--- Structural sharing: branch with 1 new row ---"
@@ -144,16 +116,10 @@ SIZE_AFTER_BRANCH=$(file_size "$DB")
 BRANCH_DELTA=$((SIZE_AFTER_BRANCH - SIZE_BEFORE_BRANCH))
 echo "  After feat commit: ${SIZE_AFTER_BRANCH} bytes (delta: ${BRANCH_DELTA})"
 
-
-
 QUARTER=$((SIZE_BEFORE_BRANCH / 4))
 assert_less "ss_branch_small_delta" "$BRANCH_DELTA" "$QUARTER"
 
 db_rm "$DB"
-
-
-
-
 
 echo ""
 echo "--- GC: clean up deleted branch ---"
@@ -163,7 +129,6 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;$(for i in $(seq 0 999); do echo "INSERT INTO t VALUES($i,'row_$i');"; done)
 COMMIT;
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "SELECT dolt_branch('big');
 SELECT dolt_checkout('big');
@@ -175,24 +140,19 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 SIZE_WITH_BRANCH=$(file_size "$DB")
 echo "  With branch (2K rows): ${SIZE_WITH_BRANCH} bytes"
 
-
 echo "SELECT dolt_branch('-D','big');
 SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_AFTER_GC=$(file_size "$DB")
 echo "  After branch delete + GC: ${SIZE_AFTER_GC} bytes"
 
-
-
 assert_less "gc_shrinks_file" "$SIZE_AFTER_GC" "$SIZE_WITH_BRANCH"
 
 RECLAIMED=$((SIZE_WITH_BRANCH - SIZE_AFTER_GC))
 echo "  Reclaimed: ${RECLAIMED} bytes"
 
-
 TEN_PCT_BRANCH=$((SIZE_WITH_BRANCH / 10))
 assert_greater "gc_reclaims_significant" "$RECLAIMED" "$TEN_PCT_BRANCH"
-
 
 MAIN_COUNT=$(echo "SELECT count(*) FROM t;" | $DOLTLITE "$DB" 2>&1)
 if [ "$MAIN_COUNT" = "1000" ]; then
@@ -204,10 +164,6 @@ fi
 
 db_rm "$DB"
 
-
-
-
-
 echo ""
 echo "--- GC: preserve shared chunks ---"
 
@@ -218,12 +174,10 @@ COMMIT;
 SELECT dolt_commit('-A','-m','init');
 SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "SELECT dolt_checkout('feat');
 INSERT INTO t VALUES(9999,'feat_only');
 SELECT dolt_commit('-A','-m','feat');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "INSERT INTO t VALUES(8888,'main_only');
 SELECT dolt_commit('-A','-m','main change');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -236,13 +190,8 @@ echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 SIZE_AFTER_GC=$(file_size "$DB")
 echo "  After GC: ${SIZE_AFTER_GC} bytes"
 
-
-
-
-
 THRESHOLD=$((SIZE_BEFORE_GC * 85 / 100))
 assert_greater "gc_preserves_shared" "$SIZE_AFTER_GC" "$THRESHOLD"
-
 
 MAIN_COUNT=$(echo "SELECT count(*) FROM t WHERE id=8888;" | $DOLTLITE "$DB" 2>&1)
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -256,10 +205,6 @@ fi
 
 db_rm "$DB"
 
-
-
-
-
 echo ""
 echo "--- Sub-linear growth: 10 small commits ---"
 
@@ -271,7 +216,6 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_BASE=$(file_size "$DB")
 echo "  Base (1K rows): ${SIZE_BASE} bytes"
-
 
 python3 -c "
 for c in range(1, 11):
@@ -285,13 +229,8 @@ SIZE_AFTER_10=$(file_size "$DB")
 GROWTH=$((SIZE_AFTER_10 - SIZE_BASE))
 echo "  After 10 1-row commits: ${SIZE_AFTER_10} bytes (growth: ${GROWTH})"
 
-
-
-
-
 TEN_X=$((SIZE_BASE * 10))
 assert_less "commits_sublinear" "$GROWTH" "$TEN_X"
-
 
 COUNT=$(echo "SELECT count(*) FROM t;" | $DOLTLITE "$DB" 2>&1)
 LOG_COUNT=$(echo "SELECT count(*) FROM dolt_log;" | $DOLTLITE "$DB" 2>&1)
@@ -304,10 +243,6 @@ fi
 
 db_rm "$DB"
 
-
-
-
-
 echo ""
 echo "--- GC after many commits ---"
 
@@ -316,7 +251,6 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 BEGIN;$(for i in $(seq 0 999); do echo "INSERT INTO t VALUES($i,'row_$i');"; done)
 COMMIT;
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 for c in $(seq 1 20); do
   echo "UPDATE t SET v='v${c}' WHERE id=$((c * 50));
@@ -331,15 +265,12 @@ echo "SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
 SIZE_AFTER=$(file_size "$DB")
 echo "  After GC: ${SIZE_AFTER} bytes"
 
-
-
 if [ "$SIZE_AFTER" -le "$SIZE_BEFORE" ]; then
   PASS=$((PASS+1)); echo "  PASS: gc_after_commits_helps — $SIZE_AFTER <= $SIZE_BEFORE"
 else
   FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: gc_after_commits_helps\n  $SIZE_AFTER > $SIZE_BEFORE"
   echo "  FAIL: gc_after_commits_helps — $SIZE_AFTER > $SIZE_BEFORE"
 fi
-
 
 COUNT=$(echo "SELECT count(*) FROM t;" | $DOLTLITE "$DB" 2>&1)
 if [ "$COUNT" = "1000" ]; then
@@ -350,10 +281,6 @@ else
 fi
 
 db_rm "$DB"
-
-
-
-
 
 echo ""
 echo "--- GC idempotent ---"
@@ -378,7 +305,6 @@ SIZE_SECOND_GC=$(file_size "$DB")
 
 echo "  First GC: ${SIZE_FIRST_GC}, Second GC: ${SIZE_SECOND_GC}"
 
-
 DIFF_ABS=$(( SIZE_SECOND_GC > SIZE_FIRST_GC ? SIZE_SECOND_GC - SIZE_FIRST_GC : SIZE_FIRST_GC - SIZE_SECOND_GC ))
 THRESHOLD=$(( SIZE_FIRST_GC / 20 ))
 if [ "$DIFF_ABS" -le "$THRESHOLD" ]; then
@@ -389,10 +315,6 @@ else
 fi
 
 db_rm "$DB"
-
-
-
-
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

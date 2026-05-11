@@ -1,30 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -49,9 +24,6 @@ normalize_summary() {
     | awk -F'\t' 'NF >= 5 && $1 == "M" { print }' \
     | sort
 }
-
-
-
 
 oracle_stat() {
   local name="$1" setup="$2" from="$3" to="$4" tbl="${5:-}"
@@ -93,7 +65,6 @@ oracle_stat() {
   fi
 }
 
-
 oracle_summary() {
   local name="$1" setup="$2" from="$3" to="$4" tbl="${5:-}"
   local dir="$TMPROOT/${name}_summary"
@@ -133,8 +104,6 @@ oracle_summary() {
     echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
   fi
 }
-
-
 
 oracle_both() {
   oracle_stat    "$@"

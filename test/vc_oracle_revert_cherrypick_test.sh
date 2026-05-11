@@ -1,33 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -39,22 +11,12 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-
-
-
-
-
-
-
-
-
 normalize_log() {
   tr -d '\r' \
     | awk -F'\t' 'NF >= 3 && $1 == "L" { print }' \
     | awk -F'\t' '
         {
           msg = $3
-
           lower = tolower(msg)
           if (match(lower, /^cherry-pick[: ]/) > 0) {
             sub(/^[Cc]herry-?[Pp]ick[: ]+/, "", msg)
@@ -83,8 +45,6 @@ normalize_table() {
     | awk -F'\t' 'NF >= 2 && $1 == "T" { print }' \
     | sort
 }
-
-
 
 oracle() {
   local name="$1" setup="$2"
@@ -139,8 +99,6 @@ oracle() {
     echo "    dolt table:";     echo "$dt_table" | sed 's/^/      /'
   fi
 }
-
-
 
 oracle_error() {
   local name="$1" setup="$2"
@@ -251,7 +209,6 @@ oracle_poststate() {
 echo "=== Version Control Oracle Tests: dolt_revert / dolt_cherry_pick ==="
 echo ""
 
-
 SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -262,17 +219,6 @@ SELECT dolt_branch('feature');
 
 echo "--- cherry-pick: basic ---"
 
-
-
-
-
-
-
-
-
-
-
-
 oracle "cherry_pick_branch_tip" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -282,8 +228,6 @@ SELECT dolt_commit('-m', 'feat_add_2');
 SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feature');
 "
-
-
 
 oracle "cherry_pick_update_non_pk" "
 $SEED
@@ -296,8 +240,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('upd-source');
 "
 
-
-
 oracle "cherry_pick_by_tag" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -308,8 +250,6 @@ SELECT dolt_tag('cherry-source');
 SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('cherry-source');
 "
-
-
 
 oracle "cherry_pick_by_branch_relative" "
 $SEED
@@ -325,8 +265,6 @@ SELECT dolt_cherry_pick('feature~1');
 "
 
 echo "--- cherry-pick: chains ---"
-
-
 
 oracle "cherry_pick_two_in_sequence" "
 $SEED
@@ -506,8 +444,6 @@ DELETE FROM gp WHERE id = 1;
 
 echo "--- revert: basic ---"
 
-
-
 oracle "revert_undoes_last_insert" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -515,7 +451,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_add_2');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message = 'c2_add_2'));
 "
-
 
 oracle "revert_undoes_update" "
 $SEED
@@ -525,7 +460,6 @@ SELECT dolt_commit('-m', 'c2_update');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message = 'c2_update'));
 "
 
-
 oracle "revert_undoes_delete" "
 $SEED
 DELETE FROM t WHERE id = 1;
@@ -533,7 +467,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_delete');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message = 'c2_delete'));
 "
-
 
 oracle "revert_by_tag" "
 $SEED
@@ -544,7 +477,6 @@ SELECT dolt_tag('to-revert');
 SELECT dolt_revert('to-revert');
 "
 
-
 oracle "revert_head" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -552,8 +484,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_add_2');
 SELECT dolt_revert('HEAD');
 "
-
-
 
 oracle "revert_head_relative" "
 $SEED
@@ -567,8 +497,6 @@ SELECT dolt_revert('HEAD~1');
 "
 
 echo "--- revert: chains ---"
-
-
 
 oracle "revert_two_in_reverse_order" "
 $SEED
@@ -623,20 +551,7 @@ SELECT dolt_revert('HEAD~1');
           (SELECT count(*) FROM pragma_index_list('b') WHERE name = 'idx_b_v')" \
   "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'a' AND index_name = 'idx_a_v'), '|', (SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'b' AND index_name = 'idx_b_v'))"
 
-
-
-
-
-
-
-
-
-
-
-
-
 echo "--- conflicts ---"
-
 
 oracle_no_merge_commit() {
   local name="$1" setup="$2"
@@ -672,10 +587,6 @@ oracle_no_merge_commit() {
   fi
 }
 
-
-
-
-
 oracle_no_merge_commit "cherry_pick_modify_modify_conflict" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -690,10 +601,6 @@ SELECT dolt_commit('-m', 'main_11');
 SELECT dolt_cherry_pick('feat-conflict');
 "
 
-
-
-
-
 oracle_no_merge_commit "revert_with_later_overlap_conflict" "
 $SEED
 UPDATE t SET v = 50 WHERE id = 1;
@@ -704,8 +611,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c3_set_99');
 SELECT dolt_revert('HEAD~1');
 "
-
-
 
 oracle_error_poststate "cherry_pick_conflict_rolls_back" "
 $SEED
@@ -774,10 +679,6 @@ SELECT dolt_add('-A');
 SELECT dolt_cherry_pick('feature');
 "
 
-
-
-
-
 oracle "revert_no_args_is_noop" "
 $SEED
 SELECT dolt_revert();
@@ -811,8 +712,6 @@ UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_revert('HEAD');
 "
-
-
 
 oracle_error "cherry_pick_initial_commit" "
 $SEED

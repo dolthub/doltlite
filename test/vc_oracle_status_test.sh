@@ -1,15 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -21,18 +11,14 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-
 normalize() {
   tr -d '\r'
 }
-
-
 
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
-
 
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT table_name || char(9) || staged || char(9) || status FROM dolt_status ORDER BY table_name, staged, status;\n" "$setup" \

@@ -1,20 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -74,9 +59,6 @@ oracle() {
 
 echo "=== Error Recovery Oracle Tests ==="
 echo ""
-
-
-
 
 echo "--- failed merge: table state preserved ---"
 
@@ -147,9 +129,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t2 ORDER BY id;"
 
-
-
-
 echo "--- failed commit: no partial state ---"
 
 oracle "empty_commit_rejected_data_preserved" "
@@ -181,9 +160,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','real commit');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- failed checkout: branch unchanged ---"
 
 oracle "checkout_nonexistent_stays_on_current" "
@@ -212,9 +188,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main commit');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- reset after conflict ---"
 
 oracle "hard_reset_after_conflict" "
@@ -233,9 +206,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 SELECT dolt_reset('--hard', 'HEAD');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- operations after failures ---"
 
@@ -309,9 +279,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat2');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- delete-modify conflict state ---"
 
 oracle "delete_modify_safe_rows_intact" "
@@ -329,9 +296,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main modifies');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t WHERE id > 1 ORDER BY id;"
-
-
-
 
 echo "--- multiple errors in sequence ---"
 
@@ -369,9 +333,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- commit log integrity after errors ---"
 
 oracle "log_count_after_failed_commits" "
@@ -405,9 +366,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- working set after errors ---"
 
 oracle "uncommitted_data_survives_failed_commit" "
@@ -428,9 +386,6 @@ INSERT INTO t VALUES(2,'working');
 SELECT dolt_checkout('nonexistent');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- FK errors in merge ---"
 
 oracle "fk_parent_data_safe_after_failed_merge" "
@@ -450,10 +405,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, name FROM parent ORDER BY id;"
-
-
-
-
 
 echo "--- cherry-pick error recovery ---"
 
@@ -492,9 +443,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after failed cherry pick');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- revert error recovery ---"
 
 oracle "revert_bad_ref_data_intact" "
@@ -515,9 +463,6 @@ INSERT INTO t VALUES(2,'still works');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after failed revert');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- reset error recovery ---"
 
@@ -543,9 +488,6 @@ SELECT dolt_commit('-m','c2');
 SELECT dolt_reset('--hard','bad_ref');
 SELECT dolt_reset('HEAD~1');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- conflict resolution flow ---"
 
@@ -592,9 +534,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('clean_branch');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-table error isolation ---"
 
 oracle "conflict_in_one_table_other_tables_queryable" "
@@ -631,9 +570,6 @@ INSERT INTO t2 VALUES(2,'y');
 SELECT dolt_add('t1');
 SELECT dolt_commit('-m','only t1');
 " "SELECT id, val FROM t1 ORDER BY id;"
-
-
-
 
 echo "--- staged state after errors ---"
 
@@ -681,9 +617,6 @@ SELECT dolt_rebase('nope');
 ROLLBACK TO sp1;
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- branch operations after errors ---"
 
 oracle "create_branch_after_failed_create" "
@@ -715,9 +648,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_branch('-d','nonexistent');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- DML errors + VC state ---"
 
@@ -756,9 +686,6 @@ INSERT INTO child VALUES(3,1,'good');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after fk error');
 " "SELECT id, val FROM child ORDER BY id;"
-
-
-
 
 echo "--- merge state cleanup ---"
 
@@ -805,9 +732,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post reset commit');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- rapid error-success alternation ---"
 
 oracle "alternating_good_bad_commits" "
@@ -849,9 +773,6 @@ SELECT dolt_checkout('nonexistent2');
 SELECT dolt_merge('b1');
 SELECT dolt_merge('b2');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- data type preservation through errors ---"
 
@@ -896,9 +817,6 @@ SELECT dolt_commit('-m','empty fail');
 SELECT dolt_cherry_pick('bad_ref');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-
-
-
 echo "--- log counts after error sequences ---"
 
 oracle "log_count_3_after_5_attempts" "
@@ -932,9 +850,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- complex error recovery ---"
 
@@ -984,9 +899,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','commit both');
 " "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
 
-
-
-
 echo "--- drop table error recovery ---"
 
 oracle "drop_nonexistent_table_other_tables_intact" "
@@ -1031,9 +943,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','recreated');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- alter table error recovery ---"
 
 oracle "alter_add_duplicate_col_data_intact" "
@@ -1069,9 +978,6 @@ INSERT INTO t VALUES(2,'b',99);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','altered');
 " "SELECT id, val, extra FROM t ORDER BY id;"
-
-
-
 
 echo "--- tag error recovery ---"
 
@@ -1110,9 +1016,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad tag delete');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- invalid SQL recovery ---"
 
 oracle "insert_wrong_col_count_others_succeed" "
@@ -1148,9 +1051,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad update');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- create table error recovery ---"
 
 oracle "create_duplicate_table_original_intact" "
@@ -1174,9 +1074,6 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after idempotent create');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- error during multi-branch work ---"
 
@@ -1232,9 +1129,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- long error sequences ---"
 
 oracle "ten_failed_commits_then_real" "
@@ -1274,9 +1168,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','still on main');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- errors + data type integrity ---"
 
 oracle "text_values_preserved_through_errors" "
@@ -1315,9 +1206,6 @@ SELECT dolt_checkout('nonexistent');
 SELECT dolt_reset('--hard','bogus');
 " "SELECT id, big FROM t ORDER BY id;"
 
-
-
-
 echo "--- aggregate/join errors ---"
 
 oracle "count_on_nonexistent_then_commit" "
@@ -1341,9 +1229,6 @@ INSERT INTO t1 VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad join');
 " "SELECT id, v FROM t1 ORDER BY id;"
-
-
-
 
 echo "--- update/delete error flows ---"
 
@@ -1370,9 +1255,6 @@ DELETE FROM t WHERE id>=2;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','delete all');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- reset + error + reset ---"
 
@@ -1407,9 +1289,6 @@ SELECT dolt_reset('--soft','HEAD~1');
 SELECT dolt_reset('--hard','bogus');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- errors during conflict state ---"
 
@@ -1452,9 +1331,6 @@ SELECT dolt_checkout('nonexistent');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- errors + commit log stability ---"
 
 oracle "hash_of_last_commit_stable_through_errors" "
@@ -1484,9 +1360,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','m3');
 " "SELECT message FROM dolt_log WHERE message LIKE 'm%' ORDER BY message;"
 
-
-
-
 echo "--- recovery from staged-modified mix ---"
 
 oracle "modify_after_add_error_no_reset" "
@@ -1515,9 +1388,6 @@ SELECT dolt_add('does_not_exist');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','both');
 " "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
-
-
-
 
 echo "--- mixed DDL/DML errors ---"
 
@@ -1557,9 +1427,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after alternating errors');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- orphan SELECT errors ---"
 
 oracle "bad_select_before_any_commit" "
@@ -1586,9 +1453,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad select');
 " "SELECT id, v FROM t1 ORDER BY id;"
 
-
-
-
 echo "--- error right before commit ---"
 
 oracle "error_between_add_and_commit" "
@@ -1613,9 +1477,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','ok');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- error after successful merge ---"
 
 oracle "error_after_successful_merge" "
@@ -1636,9 +1497,6 @@ INSERT INTO t VALUES(3,'after_err');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- errors during reset flow ---"
 
@@ -1671,9 +1529,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after reset+errors');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- NULL-related error recovery ---"
 
 oracle "update_matching_null_no_rows_then_commit" "
@@ -1698,9 +1553,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- rapid branch switches with errors ---"
 
 oracle "rapid_checkouts_mixed_good_bad" "
@@ -1720,9 +1572,6 @@ SELECT dolt_checkout('bogus3');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- nested branch work errors ---"
 
@@ -1748,9 +1597,6 @@ SELECT dolt_merge('b1');
 SELECT dolt_merge('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- dolt_branches stable through errors ---"
 
 oracle "branches_listed_through_errors" "
@@ -1766,9 +1612,6 @@ SELECT dolt_checkout('bogus');
 SELECT dolt_reset('--hard','bogus');
 " "SELECT name FROM dolt_branches ORDER BY name;"
 
-
-
-
 echo "--- GROUP BY/HAVING errors ---"
 
 oracle "bad_group_by_no_effect" "
@@ -1781,9 +1624,6 @@ INSERT INTO t VALUES(3,'c');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad group');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- multiple bad resets ---"
 
@@ -1818,9 +1658,6 @@ SELECT dolt_reset('bogus');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- branch creation errors ---"
 
 oracle "create_branch_bad_start_point" "
@@ -1849,9 +1686,6 @@ INSERT INTO t VALUES(3,'main_after');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main after dup');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- many-error stress ---"
 
@@ -1902,9 +1736,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','good3');
 " "SELECT message FROM dolt_log WHERE message LIKE 'good%' ORDER BY message;"
 
-
-
-
 echo "--- drop + error + recreate ---"
 
 oracle "drop_error_recreate_different_schema" "
@@ -1919,9 +1750,6 @@ INSERT INTO t VALUES(1,'new',99);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','recreate schema');
 " "SELECT id, v, extra FROM t;"
-
-
-
 
 echo "--- errors during merge prep ---"
 
@@ -1960,9 +1788,6 @@ SELECT dolt_revert('bogus');
 SELECT dolt_merge('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- errors after tag success ---"
 
 oracle "errors_after_tag_tag_still_listed" "
@@ -1976,9 +1801,6 @@ SELECT dolt_cherry_pick('bogus');
 SELECT dolt_tag('v2','HEAD');
 SELECT dolt_revert('bogus');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
-
-
-
 
 echo "--- errors + constraint variants ---"
 
@@ -2004,9 +1826,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after check fail');
 " "SELECT id, n FROM t ORDER BY id;"
 
-
-
-
 echo "--- error before first commit ---"
 
 oracle "bad_select_before_first_commit" "
@@ -2028,9 +1847,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','first');
 " "SELECT id, v FROM t;"
 
-
-
-
 echo "--- error chain recovery via reset ---"
 
 oracle "error_chain_then_reset_hard_head" "
@@ -2047,9 +1863,6 @@ INSERT INTO t VALUES(3,'clean');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','clean after reset');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- divergent errored branches + merge ---"
 
@@ -2072,9 +1885,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- numeric edge error flows ---"
 
@@ -2100,9 +1910,6 @@ SELECT dolt_checkout('bogus');
 SELECT dolt_reset('--hard','bogus');
 " "SELECT id, n FROM t ORDER BY id;"
 
-
-
-
 echo "--- error right after branch create ---"
 
 oracle "error_immediately_after_new_branch" "
@@ -2119,9 +1926,6 @@ SELECT dolt_commit('-m','on new ok');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('new');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- reset/commit loop errors ---"
 
@@ -2144,9 +1948,6 @@ INSERT INTO t VALUES(2,200);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','newer c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- syntax error recovery ---"
 
@@ -2172,9 +1973,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after syntax err');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- DELETE flow errors ---"
 
 oracle "delete_from_nonexistent_then_ops" "
@@ -2198,9 +1996,6 @@ DELETE FROM t WHERE id=1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad delete where');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- error during branch+merge chain ---"
 
@@ -2226,9 +2021,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- tag error deeper ---"
 
 oracle "tag_errors_tags_dolt_tags_stable" "
@@ -2246,9 +2038,6 @@ SELECT dolt_tag('good2','HEAD');
 SELECT dolt_tag('-d','nonexistent');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
 
-
-
-
 echo "--- DELETE after DROP TABLE ---"
 
 oracle "delete_after_drop_other_survives" "
@@ -2265,9 +2054,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after drop and bad delete');
 " "SELECT id, v FROM keeper ORDER BY id;"
 
-
-
-
 echo "--- staged DDL + failed commit ---"
 
 oracle "staged_create_failed_commit_recovery" "
@@ -2283,9 +2069,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','now with data');
 " "SELECT x FROM new;"
 
-
-
-
 echo "--- explicit col INSERT errors ---"
 
 oracle "insert_wrong_col_name_then_correct" "
@@ -2298,9 +2081,6 @@ INSERT INTO t(id, v) VALUES(3, 'c');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad col');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- branch stale state probes ---"
 
@@ -2320,9 +2100,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- GROUP/ORDER error probes ---"
 
 oracle "order_by_nonexistent_col_then_commit" "
@@ -2335,9 +2112,6 @@ INSERT INTO t VALUES(3,'c');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad order');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- row-level error probes ---"
 
@@ -2365,9 +2139,6 @@ INSERT INTO t VALUES(5,30);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after check errs');
 " "SELECT id, n FROM t ORDER BY id;"
-
-
-
 
 echo "--- VC vtable query error probes ---"
 
@@ -2415,9 +2186,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- inter-merge error probes ---"
 
 oracle "errors_between_three_merges" "
@@ -2462,9 +2230,6 @@ SELECT dolt_cherry_pick('bogus');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- diff/status error probes ---"
 
 oracle "bad_diff_then_commit" "
@@ -2478,9 +2243,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- nested call error probes ---"
 
 oracle "nested_bad_select_doesnt_break_vc" "
@@ -2493,9 +2255,6 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- fan-in with errors probes ---"
 
@@ -2526,9 +2285,6 @@ SELECT dolt_merge('bogus2');
 SELECT dolt_merge('b3');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- row state after error chains ---"
 
 oracle "row_count_invariant_through_errors" "
@@ -2555,9 +2311,6 @@ SELECT dolt_cherry_pick('bogus');
 UPDATE t SET n=n WHERE bogus_col=1;
 DELETE FROM t WHERE nonexistent_col=1;
 " "SELECT sum(n) AS s FROM t;"
-
-
-
 
 echo "--- partial batch insert error probes ---"
 
@@ -2587,9 +2340,6 @@ INSERT INTO t VALUES(6,6);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after batch');
 " "SELECT id, n FROM t ORDER BY id;"
-
-
-
 
 echo "--- SAVEPOINT error flow probes ---"
 
@@ -2621,9 +2371,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad release');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- REPLACE error flow probes ---"
 
 oracle "replace_with_check_violation_others_survive" "
@@ -2637,9 +2384,6 @@ REPLACE INTO t VALUES(3,30);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after replace err');
 " "SELECT id, n FROM t ORDER BY id;"
-
-
-
 
 echo "--- txn + mixed error probes ---"
 
@@ -2671,9 +2415,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- JSON error probes ---"
 
 oracle "json_extract_bad_path_then_ok_commit" "
@@ -2686,9 +2427,6 @@ INSERT INTO t VALUES(2,'{\"a\":2}');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad json');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- repeat drop probes ---"
 
@@ -2705,9 +2443,6 @@ INSERT INTO other VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after double drop');
 " "SELECT id FROM other ORDER BY id;"
-
-
-
 
 echo "--- long mixed error sequence probes ---"
 
@@ -2736,9 +2471,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','success');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- bad checkout target probes ---"
 
 oracle "checkout_hash_prefix_then_ok" "
@@ -2766,9 +2498,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_checkout('not_a_branch');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- rename error probes ---"
 
@@ -2807,9 +2536,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad rename');
 " "SELECT id FROM t1 ORDER BY id;"
 
-
-
-
 echo "--- empty db error probes ---"
 
 oracle "merge_on_empty_repo" "
@@ -2828,9 +2554,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c1');
 SELECT dolt_tag('now','HEAD');
 " "SELECT count(*) FROM dolt_tags;"
-
-
-
 
 echo "--- sequential merge error probes ---"
 
@@ -2855,9 +2578,6 @@ SELECT dolt_merge('bogus2');
 SELECT dolt_merge('b2');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- drop index/col error probes ---"
 
 oracle "drop_column_nonexistent_then_ok" "
@@ -2881,9 +2601,6 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after drop idx');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- partial cherry-pick errors ---"
 
@@ -2914,9 +2631,6 @@ SELECT dolt_revert('bogus1');
 SELECT dolt_revert('HEAD');
 SELECT dolt_revert('bogus2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 echo "--- set op error probes ---"
 
 oracle "bad_union_then_ok_commit" "
@@ -2929,9 +2643,6 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- error between commits ---"
 
@@ -2950,9 +2661,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- UPDATE with bad subquery probes ---"
 
 oracle "update_subquery_bogus_col_then_ok" "
@@ -2966,9 +2674,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t;"
 
-
-
-
 echo "--- arithmetic error probes ---"
 
 oracle "divide_by_zero_update_skipped" "
@@ -2981,9 +2686,6 @@ INSERT INTO t VALUES(3,30);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- reset to nonexistent tag ---"
 
@@ -3003,9 +2705,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- bad merge_base args ---"
 
 oracle "merge_base_bogus_then_ok" "
@@ -3019,9 +2718,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- INSERT into view probes ---"
 
@@ -3037,9 +2733,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- drop view errors ---"
 
 oracle "drop_nonexistent_view_then_ok" "
@@ -3052,9 +2745,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- merge error storm ---"
 
@@ -3081,9 +2771,6 @@ SELECT dolt_merge('b10');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- wrong arity probes ---"
 
 oracle "hashof_no_args_then_ok" "
@@ -3097,9 +2784,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- savepoint add parity ---"
 
 oracle "savepoint_add_releases_savepoint" "
@@ -3112,9 +2796,6 @@ INSERT INTO t VALUES(2,'dirty');
 SELECT dolt_add('.');
 ROLLBACK TO sp1;
 " "SELECT 'ROWS', count(*) FROM t;"
-
-
-
 echo "--- cherry-pick no-op probes ---"
 
 oracle "cherry_pick_then_cherry_pick_noop" "
@@ -3133,9 +2814,6 @@ INSERT INTO t VALUES(3,'post');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- alter errors ---"
 
@@ -3161,9 +2839,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after dup col');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- drop index probes ---"
 
 oracle "drop_index_twice_then_ok" "
@@ -3179,9 +2854,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- bad window funcs ---"
 
 oracle "bad_window_partition_then_ok" "
@@ -3194,9 +2866,6 @@ INSERT INTO t VALUES(3,30);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- UNION arity error probes ---"
 
@@ -3211,9 +2880,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- CTE error probes ---"
 
 oracle "bad_cte_self_ref_then_ok" "
@@ -3226,9 +2892,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- JOIN errors ---"
 
@@ -3245,9 +2908,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM a ORDER BY id;"
 
-
-
-
 echo "--- dolt_add error probes ---"
 
 oracle "many_bad_adds_then_ok" "
@@ -3259,9 +2919,6 @@ SELECT dolt_add('nonexistent3');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','survived');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- log-aware workflow errors ---"
 
@@ -3278,9 +2935,6 @@ INSERT INTO t VALUES(3);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 echo "--- GROUP_CONCAT error probes ---"
 
 oracle "group_concat_on_nonexistent_col_then_ok" "
@@ -3294,9 +2948,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- self-join error probes ---"
 
 oracle "self_join_bogus_alias_then_ok" "
@@ -3309,9 +2960,6 @@ INSERT INTO t VALUES(3,1);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- view chain error probes ---"
 
@@ -3330,9 +2978,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','restored');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- scalar subquery multiple rows probes ---"
 
 oracle "scalar_subquery_returning_multiple_rows_then_ok" "
@@ -3345,9 +2990,6 @@ INSERT INTO t VALUES(3,30);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- merge errors with many branches ---"
 
@@ -3379,9 +3021,6 @@ SELECT dolt_merge('c');
 SELECT dolt_merge('bogus3');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- txn error probes ---"
 
 oracle "rollback_outside_txn_then_ok" "
@@ -3406,9 +3045,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- nested JOIN errors ---"
 
 oracle "nested_join_bogus_table_then_ok" "
@@ -3423,9 +3059,6 @@ INSERT INTO a VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM a;"
-
-
-
 
 echo "--- create index error probes ---"
 
@@ -3450,9 +3083,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 echo "--- DATE error probes ---"
 
 oracle "bad_date_value_then_ok" "
@@ -3465,9 +3095,6 @@ INSERT INTO t VALUES(3,'2024-06-01');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, d FROM t WHERE id IN (1,3) ORDER BY id;"
-
-
-
 
 echo "--- UPDATE subquery error chain ---"
 
@@ -3482,9 +3109,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- DELETE error probes ---"
 
 oracle "delete_with_bogus_subquery_table_then_ok" "
@@ -3497,9 +3121,6 @@ DELETE FROM t WHERE id=2;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- schema change error chain ---"
 
@@ -3517,9 +3138,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- tag error probes ---"
 
 oracle "tag_empty_name_then_ok" "
@@ -3530,9 +3148,6 @@ SELECT dolt_commit('-m','c1');
 SELECT dolt_tag('','HEAD');
 SELECT dolt_tag('good','HEAD');
 " "SELECT count(*) FROM dolt_tags WHERE tag_name='good';"
-
-
-
 
 echo "--- repeated merge errors ---"
 
@@ -3551,9 +3166,6 @@ SELECT dolt_merge('bogus');
 SELECT dolt_merge('feat');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- drop chain probes ---"
 
@@ -3576,9 +3188,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after chain');
 " "SELECT id FROM c ORDER BY id;"
 
-
-
-
 echo "--- hashof error probes ---"
 
 oracle "hashof_too_many_args_then_ok" "
@@ -3591,9 +3200,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- txn long error streak ---"
 
@@ -3615,9 +3221,6 @@ COMMIT;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- view create errors ---"
 
@@ -3644,8 +3247,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM v_good;"
-
-
 echo "--- UPDATE invalid SET probes ---"
 
 oracle "update_set_nonexistent_col_assigned_then_ok" "
@@ -3658,9 +3259,6 @@ UPDATE t SET v=99 WHERE id=1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t;"
-
-
-
 
 echo "--- INSERT arity probes ---"
 
@@ -3686,9 +3284,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- WHERE bogus func ---"
 
 oracle "where_bogus_func_then_ok_insert" "
@@ -3701,9 +3296,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- CREATE TABLE bad cols ---"
 
@@ -3718,9 +3310,6 @@ INSERT INTO good VALUES(1,'a');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM good;"
-
-
-
 
 echo "--- nested txn probes ---"
 
@@ -3737,9 +3326,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- CTE error probes ---"
 
 oracle "cte_with_bogus_inner_ref_then_ok" "
@@ -3752,9 +3338,6 @@ INSERT INTO t VALUES(2,20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- dolt_add specific errors ---"
 
@@ -3770,9 +3353,6 @@ INSERT INTO t2 VALUES(2);
 SELECT dolt_add('t1','nonexistent','t2');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- checkout existing probes ---"
 
@@ -3796,9 +3376,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- mixed DDL error probes ---"
 
 oracle "ddl_mix_with_errors_then_ok" "
@@ -3814,10 +3391,6 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
-
 echo "--- savepoint edge error probes ---"
 
 oracle "rollback_to_released_savepoint_then_ok" "
@@ -3852,9 +3425,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- BETWEEN error probes ---"
 
 oracle "between_with_nonexistent_col_then_ok" "
@@ -3867,9 +3437,6 @@ INSERT INTO t VALUES(4);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- mixed severity error probes ---"
 
@@ -3885,9 +3452,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- empty message probes ---"
 
 oracle "commit_empty_message_then_good" "
@@ -3897,9 +3461,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','');
 SELECT dolt_commit('-m','good');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('good','');"
-
-
-
 
 echo "--- multi drop mixed ---"
 
@@ -3919,9 +3480,6 @@ INSERT INTO c VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM c ORDER BY id;"
-
-
-
 
 echo "--- post-merge errors ---"
 
@@ -3945,9 +3503,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- merge_base errors ---"
 
 oracle "merge_base_both_bogus_then_ok" "
@@ -3960,9 +3515,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- INSERT wrong type ---"
 
@@ -3977,9 +3529,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, n FROM t ORDER BY id;"
 
-
-
-
 echo "--- tag error chain ---"
 
 oracle "tag_duplicate_delete_same_tag_chain" "
@@ -3993,9 +3542,6 @@ SELECT dolt_tag('-d','v1');
 SELECT dolt_tag('-d','v1');
 SELECT dolt_tag('v2','HEAD');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
-
-
-
 echo "--- revert error probes ---"
 
 oracle "revert_on_empty_repo_then_ok" "
@@ -4016,9 +3562,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- merge rollback error probes ---"
 
@@ -4044,9 +3587,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- view INSERT errors ---"
 
 oracle "insert_into_view_agg_then_ok" "
@@ -4060,9 +3600,6 @@ INSERT INTO t VALUES(2,20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT sum(v) FROM t;"
-
-
-
 
 echo "--- DELETE all error probes ---"
 
@@ -4078,14 +3615,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- FK violation recovery ---"
-
-
-
-
 
 echo "--- INSERT expr error probes ---"
 
@@ -4099,9 +3629,6 @@ INSERT INTO t VALUES(2, 20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- branch checkout error ---"
 
@@ -4119,9 +3646,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- hashof error chain ---"
 
 oracle "hashof_chain_of_bad_refs_then_ok" "
@@ -4138,9 +3662,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- checkout conflict recovery ---"
 
 oracle "bad_checkout_uncommitted_work_preserved" "
@@ -4153,8 +3674,6 @@ SELECT dolt_checkout('nonexistent');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','kept');
 " "SELECT id FROM t ORDER BY id;"
-
-
 echo "--- recursive CTE error probes ---"
 
 oracle "recursive_cte_self_ref_bogus_col_then_ok" "
@@ -4167,9 +3686,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- ORDER BY error probes ---"
 
@@ -4184,9 +3700,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- window bad OVER ---"
 
 oracle "window_bad_over_clause_then_ok" "
@@ -4199,9 +3712,6 @@ INSERT INTO t VALUES(2,20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- nested txn error probes ---"
 
@@ -4222,9 +3732,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- INSERT bogus cols ---"
 
 oracle "insert_targeting_bogus_col_then_ok" "
@@ -4237,9 +3744,6 @@ INSERT INTO t(id, v) VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- merge bogus hash probes ---"
 
@@ -4258,14 +3762,7 @@ SELECT dolt_merge('0000000000000000000000000000000000000000');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- gc edge probes ---"
-
-
-
-
 
 oracle "reset_hard_then_commit_no_gc" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -4281,9 +3778,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-stmt error boundary ---"
 
 oracle "unterminated_statement_then_ok" "
@@ -4296,9 +3790,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- tag deep error sequence ---"
 
@@ -4316,9 +3807,6 @@ SELECT dolt_tag('-d','v1');
 SELECT dolt_tag('v3','HEAD');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
 
-
-
-
 echo "--- UPDATE+DELETE bad chain ---"
 
 oracle "update_delete_bogus_interleaved_then_ok" "
@@ -4333,9 +3821,6 @@ DELETE FROM t WHERE id=3;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 echo "--- merge_base deeper errors ---"
 
 oracle "merge_base_same_branch_twice_after_ff_merge" "
@@ -4351,9 +3836,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- insert expr error source ---"
 
 oracle "insert_scalar_bogus_subquery_then_ok" "
@@ -4366,9 +3848,6 @@ INSERT INTO t VALUES(2, 20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- dolt_diff errors ---"
 
@@ -4383,9 +3862,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- HAVING errors ---"
 
 oracle "having_bogus_col_then_ok" "
@@ -4398,9 +3874,6 @@ INSERT INTO t VALUES(4,'a',30);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- view after dropped source ---"
 
@@ -4417,9 +3890,6 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- conflict state rollback error ---"
 
@@ -4445,9 +3915,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- tag on deleted branch ---"
 
 oracle "tag_after_branch_deleted_then_ok" "
@@ -4466,9 +3933,6 @@ SELECT dolt_tag('v1','feat');
 SELECT dolt_tag('v1','HEAD');
 " "SELECT count(*) FROM dolt_tags WHERE tag_name='v1';"
 
-
-
-
 echo "--- UPDATE cte bogus ---"
 
 oracle "update_via_bogus_cte_subquery_then_ok" "
@@ -4481,9 +3945,6 @@ UPDATE t SET v=99 WHERE id=1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t;"
-
-
-
 
 echo "--- DELETE from view ---"
 
@@ -4499,9 +3960,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- ALTER rename non-existing ---"
 
 oracle "alter_rename_bogus_col_then_real" "
@@ -4515,10 +3973,6 @@ INSERT INTO t(id,val) VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
-
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

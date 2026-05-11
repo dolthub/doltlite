@@ -1,28 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -50,9 +27,6 @@ normalize_status() {
     | sort -t$'\t' -k2,2 -k3,3 -k4,4
 }
 
-
-
-
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
@@ -77,10 +51,6 @@ oracle() {
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-
-
-
-
 
   local dt_branch dt_rows dt_status
   (

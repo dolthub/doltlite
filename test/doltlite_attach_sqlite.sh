@@ -1,7 +1,4 @@
 #!/bin/bash
-
-
-
 DOLTLITE="${1:-./doltlite}"
 SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
 PASS=0; FAIL=0; ERRORS=""
@@ -27,10 +24,6 @@ if [ ! -x "$SQLITE3" ]; then
   exit 0
 fi
 
-
-
-
-
 SQLDB1=/tmp/test_attach1_$$.db
 SQLDB2=/tmp/test_attach2_$$.db
 DLDB=/tmp/test_attach_dl_$$.db
@@ -52,10 +45,6 @@ INSERT INTO logs VALUES(1000,'start');
 INSERT INTO logs VALUES(2000,'running');
 INSERT INTO logs VALUES(3000,'done');
 "
-
-
-
-
 
 run_test "attach_select_all" \
   "ATTACH DATABASE '$SQLDB1' AS ops;
@@ -80,20 +69,12 @@ run_test "attach_max" \
 SELECT MAX(id) FROM ops.events;" \
   "3" ":memory:"
 
-
-
-
-
 run_test "attach_multiple_tables" \
   "ATTACH DATABASE '$SQLDB1' AS ops;
 SELECT count(*) FROM ops.events;
 SELECT count(*) FROM ops.users;" \
   "3
 2" ":memory:"
-
-
-
-
 
 run_test "cross_db_join" \
   "CREATE TABLE threads(id INTEGER PRIMARY KEY, title TEXT);
@@ -104,10 +85,6 @@ SELECT t.title, e.type FROM threads t JOIN ops.events e ON t.id=e.id ORDER BY t.
   "Thread A|click
 Thread B|view" ":memory:"
 
-
-
-
-
 run_test "attach_two_sqlite_dbs" \
   "ATTACH DATABASE '$SQLDB1' AS db1;
 ATTACH DATABASE '$SQLDB2' AS db2;
@@ -115,10 +92,6 @@ SELECT count(*) FROM db1.events;
 SELECT count(*) FROM db2.logs;" \
   "3
 3" ":memory:"
-
-
-
-
 
 run_test "main_db_after_attach" \
   "CREATE TABLE t(x INTEGER);
@@ -128,10 +101,6 @@ SELECT x FROM t;
 SELECT count(*) FROM ops.events;" \
   "42
 3" ":memory:"
-
-
-
-
 
 run_test "dolt_commit_with_attach" \
   "CREATE TABLE t(x INTEGER);
@@ -144,10 +113,6 @@ SELECT count(*) FROM ops.events;" \
 99
 3" "$DLDB"
 
-
-
-
-
 SQLDB_W=/tmp/test_attach_write_$$.db
 $SQLITE3 "$SQLDB_W" "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
 
@@ -159,7 +124,6 @@ SELECT * FROM w.t ORDER BY id;" \
   "1|hello
 2|world" ":memory:"
 
-
 WRITE_CHECK=$($SQLITE3 "$SQLDB_W" "SELECT count(*) FROM t;")
 if [ "$WRITE_CHECK" = "2" ]; then
   PASS=$((PASS+1))
@@ -167,10 +131,6 @@ else
   FAIL=$((FAIL+1))
   ERRORS="$ERRORS\nFAIL: attach_write_persisted\n  expected: 2\n  got:      $WRITE_CHECK"
 fi
-
-
-
-
 
 SQLDB_IC=/tmp/test_attach_ic_$$.db
 $SQLITE3 "$SQLDB_IC" "
@@ -194,10 +154,6 @@ ATTACH DATABASE '$SQLDB_IC' AS side;
 PRAGMA side.integrity_check;" \
   "1
 ok" "$DLDB_IC"
-
-
-
-
 
 rm -f "$SQLDB1" "$SQLDB2" "$DLDB" "$SQLDB_W" "$SQLDB_IC" "$DLDB_IC"
 

@@ -12,30 +12,6 @@
 
 #include <string.h>
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 static int fetchRowByRowid(
   ChunkStore *cs,
   ProllyCache *pCache,
@@ -187,9 +163,6 @@ static void fkRefreshFreeNames(char **azNames, int nNames){
   for(i=0; i<nNames; i++) sqlite3_free(azNames[i]);
   sqlite3_free(azNames);
 }
-
-
-
 
 static int fkRefreshCandidateTables(sqlite3 *db, int *pChanged){
   sqlite3_stmt *pStmt = 0;
@@ -546,10 +519,6 @@ static int fetchRowByPkRecord(
   return SQLITE_NOTFOUND;
 }
 
-
-
-
-
 static char *buildFkViolationInfo(
   sqlite3 *db,
   const char *zChildTable,
@@ -570,9 +539,6 @@ static char *buildFkViolationInfo(
   int nMatches = 0;
   int fatal = 0;
 
-
-
-
   pJson = sqlite3_str_new(0);
   pCols = sqlite3_str_new(0);
   pRefCols = sqlite3_str_new(0);
@@ -586,12 +552,6 @@ static char *buildFkViolationInfo(
     if( rc != SQLITE_OK ){
       fatal = 1;
     }else{
-
-
-
-
-
-
       while( sqlite3_step(pStmt) == SQLITE_ROW ){
         int id = sqlite3_column_int(pStmt, 0);
         const char *zParent, *zFrom, *zTo, *zOnUp, *zOnDel;
@@ -618,15 +578,10 @@ static char *buildFkViolationInfo(
   }
   sqlite3_finalize(pStmt);
 
-
-
-
   zColsBuf    = sqlite3_str_finish(pCols);
   zRefColsBuf = sqlite3_str_finish(pRefCols);
 
   if( fatal ){
-
-
     sqlite3_free(sqlite3_str_finish(pJson));
     sqlite3_free(zColsBuf);
     sqlite3_free(zRefColsBuf);
@@ -654,14 +609,6 @@ static char *buildFkViolationInfo(
   sqlite3_free(zOnDelBuf);
   return zResult;
 }
-
-
-
-
-
-
-
-
 
 static int fetchAncestorRowByName(
   sqlite3 *db,
@@ -727,22 +674,6 @@ static int fetchAncestorRowByKey(
   return rc;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 static int isRowPreExisting(
   const u8 *pMergedVal, int nMergedVal,
   const u8 *pAncVal, int nAncVal
@@ -752,15 +683,6 @@ static int isRowPreExisting(
   if( nMergedVal == 0 ) return 1;
   return memcmp(pMergedVal, pAncVal, nMergedVal)==0 ? 1 : 0;
 }
-
-
-
-
-
-
-
-
-
 
 static int tableHasRowid(sqlite3 *db, const char *zTable){
   sqlite3_stmt *pStmt = 0;
@@ -773,10 +695,6 @@ static int tableHasRowid(sqlite3 *db, const char *zTable){
   if( pStmt ) sqlite3_finalize(pStmt);
   return rc == SQLITE_OK ? 1 : 0;
 }
-
-
-
-
 
 static int fetchOrphanRow(
   sqlite3 *db,
@@ -942,12 +860,6 @@ static int appendUniqueViolationByPk(
   return rc;
 }
 
-
-
-
-
-
-
 static int uniqueIndexRowHasNull(sqlite3_stmt *pScan, int colFirst, int colLast){
   int i;
   for(i=colFirst; i<colLast; i++){
@@ -955,20 +867,6 @@ static int uniqueIndexRowHasNull(sqlite3_stmt *pScan, int colFirst, int colLast)
   }
   return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 static int detectUniqueViolationsForIndex(
   sqlite3 *db,
@@ -1015,7 +913,6 @@ static int detectUniqueViolationsForIndex(
 
     isDup = zWinnerKey && strcmp(zWinnerKey, zRowKey)==0;
     if( !isDup ){
-
       sqlite3_free(zWinnerKey);
       zWinnerKey = zRowKey;
       winnerRowid = rowid;
@@ -1146,11 +1043,6 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   return rc;
 }
 
-
-
-
-
-
 int doltliteDetectMergeUniqueViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -1227,11 +1119,6 @@ int doltliteDetectMergeUniqueViolations(
       zIdxRaw = (const char*)sqlite3_column_text(pIdxList, 1);
       if( !zIdxRaw ) continue;
 
-
-
-
-
-
       zOrigin = (const char*)sqlite3_column_text(pIdxList, 3);
       if( zOrigin && strcmp(zOrigin, "pk")==0 ) continue;
 
@@ -1281,18 +1168,6 @@ int doltliteDetectMergeUniqueViolations(
   return rc;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 static int nextCheckClause(
   const char *zSql, int *pOffset, char **pzExpr, char **pzName
 ){
@@ -1306,8 +1181,6 @@ static int nextCheckClause(
   *pzName = 0;
 
   while( *p ){
-
-
     if( (p[0]=='C' || p[0]=='c')
      && strncasecmp(p, "CONSTRAINT", 10)==0
      && (p[10]==' ' || p[10]=='\t' || p[10]=='\n') ){
@@ -1378,24 +1251,12 @@ static int nextCheckClause(
       if( *p=='"' ) p++;
       continue;
     }
-
-
-
     if( *p==',' ) lastConstraintName[0] = 0;
     p++;
   }
   *pOffset = (int)(p - zSql);
   return 0;
 }
-
-
-
-
-
-
-
-
-
 
 int doltliteDetectMergeCheckViolations(
   sqlite3 *db,
@@ -1673,21 +1534,6 @@ static int detectFkViolationsForSpec(
   sqlite3_finalize(pStmt);
   return rc;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 int doltliteDetectMergeFkViolations(
   sqlite3 *db,

@@ -12,15 +12,6 @@
 
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 
-
-
-
-
-
-
-
-
-
 static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   const char *zRef;
@@ -54,10 +45,6 @@ static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **a
   doltliteHashToHex(&commitHash, hex);
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
-
-
-
-
 
 static int hashofTableInCatalog(
   sqlite3 *db,
@@ -545,26 +532,6 @@ static int hashofDbInCatalog(
   return SQLITE_OK;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   const char *zTable;
@@ -637,18 +604,6 @@ static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_valu
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   ProllyHash catHash;
@@ -706,13 +661,6 @@ static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   }
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
-
-
-
-
-
-
-
 
 static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;

@@ -23,12 +23,7 @@ struct ProllyMutMapEntry {
   int bornAt;
 };
 
-
-
-
 i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e);
-
-
 
 typedef struct ProllyMutMapUndoRec ProllyMutMapUndoRec;
 struct ProllyMutMapUndoRec {
@@ -48,24 +43,18 @@ struct ProllyMutMap {
   int nAlloc;
   int levelBase;
   ProllyMutMapEntry *aEntries;
-
   /* aEntries is append ordered. aOrder is key sorted, aPos maps physical
   ** entry indexes back into aOrder, and aHash accelerates point lookup. */
   int *aOrder;
   int *aPos;
   int *aHash;
   int nHashAlloc;
-
-
-
   void *aSortScratch;
   int nSortScratchBytes;
-
   int currentSavepointLevel;
   ProllyMutMapUndoRec *aUndo;
   int nUndo;
   int nUndoAlloc;
-
   /* Cursors cache this value so they can detect pending-map replacement or
   ** rollback without pointer comparisons against recycled allocations. */
   u32 generation;
@@ -86,12 +75,6 @@ int prollyMutMapFindRc(
   const u8 *pKey, int nKey, i64 intKey,
   ProllyMutMapEntry **ppEntry
 );
-
-
-
-
-
-
 
 int prollyMutMapResolveSortedPos(
   ProllyMutMap *mm,
@@ -128,10 +111,6 @@ void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm);
 int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc);
 
 int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src);
-
-
-
-
 
 void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level);
 int  prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level);

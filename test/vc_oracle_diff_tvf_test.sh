@@ -1,32 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 
 DOLTLITE="${1:-./doltlite}"
@@ -35,8 +8,6 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
-
-
 
 translate_for_dolt() {
   sed -E '
@@ -109,7 +80,6 @@ oracle "slice_full_range" "$SETUP_LINEAR" \
 
 echo "--- ref types ---"
 
-
 oracle "slice_branch_refs" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
@@ -118,7 +88,6 @@ SELECT dolt_checkout('-b', 'feat');
 INSERT INTO t VALUES (2, 2);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_c1');
 " "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_v,''), '|', IFNULL(from_id,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('main', 'feat');"
-
 
 oracle "slice_tag_refs" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

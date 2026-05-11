@@ -1,14 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -20,27 +11,14 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-
 normalize() {
   tr -d '\r' | grep -v '^$' | sort
 }
-
-
-
 
 oracle() {
   local name="$1" setup="$2" query="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
-
-
-
-
-
-
-
-
-
 
   printf "%s\n" "$setup" | "$DOLTLITE" "$dir/dl/db" \
       >/dev/null 2>"$dir/dl.err"
@@ -51,7 +29,6 @@ oracle() {
            | grep -vi 'Fast-forward' \
            | tr -d '"' \
            | normalize)
-
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -81,9 +58,6 @@ oracle() {
 
 echo "=== Feature Interaction Oracle Tests ==="
 echo ""
-
-
-
 
 echo "--- merge + alter table add column ---"
 
@@ -156,9 +130,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main changes');
 SELECT dolt_merge('feat');
 " "SELECT id, name FROM t ORDER BY id;"
-
-
-
 
 echo "--- merge + DML combinations ---"
 
@@ -261,9 +232,6 @@ SELECT dolt_commit('-m','main mix');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- merge + composite PK ---"
 
 oracle "merge_composite_pk_insert" "
@@ -316,9 +284,6 @@ SELECT dolt_commit('-m','main update');
 SELECT dolt_merge('feat');
 " "SELECT a, b, val FROM t ORDER BY a, b;"
 
-
-
-
 echo "--- merge + NULL values ---"
 
 oracle "merge_null_to_value" "
@@ -368,9 +333,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main fills c');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
-
-
-
 
 echo "--- cherry-pick ---"
 
@@ -432,9 +394,6 @@ SELECT dolt_commit('-m','main diverge');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- revert ---"
 
 oracle "revert_insert" "
@@ -470,9 +429,6 @@ SELECT dolt_commit('-m','update');
 SELECT dolt_revert('HEAD');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- reset ---"
 
 oracle "reset_soft_keeps_working" "
@@ -496,9 +452,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','second');
 SELECT dolt_reset('--hard', 'HEAD~1');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- multi-table merges ---"
 
@@ -557,9 +510,6 @@ SELECT dolt_commit('-m','main modifies t1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t1 ORDER BY id;"
 
-
-
-
 echo "--- upsert + version control ---"
 
 oracle "upsert_replace_then_merge" "
@@ -593,9 +543,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main insert');
 SELECT dolt_merge('feat');
 " "SELECT id, val, count FROM t ORDER BY id;"
-
-
-
 
 echo "--- text/blob in merge ---"
 
@@ -631,9 +578,6 @@ SELECT dolt_commit('-m','main insert');
 SELECT dolt_merge('feat');
 " "SELECT id, hex(data) FROM t ORDER BY id;"
 
-
-
-
 echo "--- numeric types in merge ---"
 
 oracle "merge_integer_types" "
@@ -668,9 +612,6 @@ SELECT dolt_commit('-m','main insert');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- fast-forward vs three-way ---"
 
 oracle "ff_merge_no_divergence" "
@@ -698,9 +639,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat', '--no-ff', '-m', 'merge feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- branch + checkout ---"
 
@@ -730,9 +668,6 @@ INSERT INTO t VALUES(3,'main');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main commit');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- sequential merges ---"
 
@@ -772,9 +707,6 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- default values in merge ---"
 
 oracle "merge_with_default_col" "
@@ -792,9 +724,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main insert explicit');
 SELECT dolt_merge('feat');
 " "SELECT id, val, num FROM t ORDER BY id;"
-
-
-
 
 echo "--- large row counts ---"
 
@@ -831,9 +760,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main updates 6-10');
 SELECT dolt_merge('feat');
 " "SELECT sum(val) FROM t;"
-
-
-
 
 echo "--- empty/boundary conditions ---"
 
@@ -876,9 +802,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- tag interactions ---"
 
 oracle "tag_survives_branch_delete" "
@@ -895,9 +818,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_branch('-d', 'feat');
 SELECT dolt_checkout('v1');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- wide tables ---"
 
@@ -916,9 +836,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main updates c5,c7');
 SELECT dolt_merge('feat');
 " "SELECT id, c1, c2, c3, c4, c5, c6, c7, c8 FROM t ORDER BY id;"
-
-
-
 
 echo "--- savepoint + commit ---"
 
@@ -946,9 +863,6 @@ INSERT INTO t VALUES(3,'c');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','multiple dml');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- merge + foreign keys ---"
 
@@ -1026,9 +940,6 @@ SELECT dolt_commit('-m','main adds child');
 SELECT dolt_merge('feat');
 " "SELECT c.id, c.pid, c.val FROM child c ORDER BY c.id;"
 
-
-
-
 echo "--- merge + secondary indexes ---"
 
 oracle "merge_with_indexed_col_insert" "
@@ -1102,9 +1013,6 @@ SELECT dolt_commit('-m','main changes');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, val FROM t ORDER BY a, b, id;"
 
-
-
-
 echo "--- cherry-pick edge cases ---"
 
 oracle "cherry_pick_into_diverged_table" "
@@ -1154,9 +1062,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- revert edge cases ---"
 
 oracle "revert_middle_commit" "
@@ -1197,9 +1102,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','update');
 SELECT dolt_revert('HEAD');
 " "SELECT id, val, num FROM t ORDER BY id;"
-
-
-
 
 echo "--- diamond merges ---"
 
@@ -1266,9 +1168,6 @@ SELECT dolt_merge('b2');
 SELECT dolt_merge('b3');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-table FK merge ---"
 
 oracle "fk_cascade_not_triggered_by_merge" "
@@ -1308,9 +1207,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main updates c');
 SELECT dolt_merge('feat');
 " "SELECT a.val, b.val, c.val FROM a JOIN b ON b.aid=a.id JOIN c ON c.bid=b.id;"
-
-
-
 
 echo "--- deep branch history merge ---"
 
@@ -1364,9 +1260,6 @@ SELECT dolt_commit('-m','main c2');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- type coercion ---"
 
 oracle "merge_int_stored_as_text" "
@@ -1401,9 +1294,6 @@ SELECT dolt_commit('-m','main fills real');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-
-
-
 echo "--- schema-only changes ---"
 
 oracle "add_col_no_data_change" "
@@ -1427,9 +1317,6 @@ INSERT INTO t VALUES(2,'b',50);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','add and populate');
 " "SELECT id, val, score FROM t ORDER BY id;"
-
-
-
 
 echo "--- drop table interactions ---"
 
@@ -1467,9 +1354,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main modifies t1');
 SELECT dolt_merge('feat');
 " "SELECT 't1' AS tbl, id FROM t1 UNION ALL SELECT 't2', id FROM t2 ORDER BY 1, 2;"
-
-
-
 
 echo "--- convergent modifications ---"
 
@@ -1521,9 +1405,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- reset edge cases ---"
 
 oracle "soft_reset_then_recommit" "
@@ -1552,9 +1433,6 @@ INSERT INTO t VALUES(3,'after_reset');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- multi-column cell merge ---"
 
@@ -1606,9 +1484,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-
-
-
 echo "--- repeated merge ---"
 
 oracle "merge_same_branch_twice" "
@@ -1648,9 +1523,6 @@ SELECT dolt_checkout('feat');
 SELECT dolt_merge('main');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- cherry-pick + merge ---"
 
 oracle "cherry_pick_then_merge_same_branch" "
@@ -1669,9 +1541,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- negative numbers and zero ---"
 
@@ -1707,9 +1576,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-
-
-
 echo "--- empty string vs NULL ---"
 
 oracle "merge_empty_string_vs_null" "
@@ -1727,9 +1593,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main null');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- row count after merge ---"
 
@@ -1749,9 +1612,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- multi-column PK merge ---"
 
@@ -1787,9 +1647,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a, b, x, y FROM t ORDER BY a, b;"
 
-
-
-
 echo "--- add/commit workflow ---"
 
 oracle "add_specific_table" "
@@ -1815,9 +1672,6 @@ CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A', '-m','auto add');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- many data types in merge ---"
 
@@ -1885,9 +1739,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- merge chains ---"
 
 oracle "serial_branch_merge_chain" "
@@ -1934,9 +1785,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('b2');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- revert + merge ---"
 
 oracle "revert_then_merge_same_row" "
@@ -1972,9 +1820,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- multi-table complex ---"
 
@@ -2020,9 +1865,6 @@ SELECT dolt_commit('-m','main inserts t2');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t1 ORDER BY id;"
 
-
-
-
 echo "--- idempotent operations ---"
 
 oracle "update_to_same_value" "
@@ -2055,9 +1897,6 @@ DELETE FROM t WHERE id=2;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','insert then delete');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- column defaults in merge ---"
 
@@ -2092,9 +1931,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main explicit');
 SELECT dolt_merge('feat');
 " "SELECT id, val, status FROM t ORDER BY id;"
-
-
-
 
 echo "--- stress cell merge ---"
 
@@ -2131,9 +1967,6 @@ SELECT dolt_commit('-m','main b on evens');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-
-
-
 echo "--- cherry-pick + FK ---"
 
 oracle "cherry_pick_with_parent_child" "
@@ -2151,9 +1984,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT p.id, p.name FROM parent p ORDER BY p.id;"
 
-
-
-
 echo "--- revert + multi-table ---"
 
 oracle "revert_multi_table_commit" "
@@ -2169,9 +1999,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','add to both');
 SELECT dolt_revert('HEAD');
 " "SELECT 't1' AS tbl, id, val FROM t1 UNION ALL SELECT 't2', id, val FROM t2 ORDER BY 1, 2;"
-
-
-
 
 echo "--- reset + branch ---"
 
@@ -2209,9 +2036,6 @@ SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- NOT NULL in merge ---"
 
 oracle "merge_not_null_col_update" "
@@ -2245,9 +2069,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- interleaved branch ops ---"
 
@@ -2309,9 +2130,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('grandchild');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- large delete + merge ---"
 
 oracle "delete_half_merge_other_half" "
@@ -2346,9 +2164,6 @@ SELECT dolt_commit('-m','main inserts');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- cherry-pick from deep history ---"
 
 oracle "cherry_pick_2nd_of_3_commits" "
@@ -2369,9 +2184,6 @@ SELECT dolt_commit('-m','feat c3');
 SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat~1');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- rapid updates before merge ---"
 
@@ -2404,9 +2216,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','recreate row');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- CHECK constraints + merge ---"
 
 oracle "merge_with_check_constraint" "
@@ -2424,9 +2233,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, score FROM t ORDER BY id;"
-
-
-
 
 echo "--- row ordering after merge ---"
 
@@ -2446,9 +2252,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- rename-like operations ---"
 
 oracle "delete_and_reinsert_different_val" "
@@ -2467,9 +2270,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- cross-branch FK ---"
 
@@ -2510,9 +2310,6 @@ SELECT dolt_commit('-m','main adds child to p1');
 SELECT dolt_merge('feat');
 " "SELECT p.name, c.val FROM parent p JOIN child c ON c.pid=p.id ORDER BY c.id;"
 
-
-
-
 echo "--- UNIQUE constraint + merge ---"
 
 oracle "unique_col_merge_no_conflict" "
@@ -2546,9 +2343,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, code, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- complex row operations merge ---"
 
@@ -2620,9 +2414,6 @@ SELECT dolt_commit('-m','main y,z');
 SELECT dolt_merge('feat');
 " "SELECT id, x, y, z FROM t ORDER BY id;"
 
-
-
-
 echo "--- accumulating merges ---"
 
 oracle "merge_5_feature_branches" "
@@ -2684,9 +2475,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- various PK types ---"
 
 oracle "merge_negative_pk" "
@@ -2739,9 +2527,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- cherry-pick + multi-table ---"
 
 oracle "cherry_pick_multi_table_commit" "
@@ -2759,9 +2544,6 @@ SELECT dolt_commit('-m','feat adds to both');
 SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT 't1' AS tbl, id, val FROM t1 UNION ALL SELECT 't2', id, val FROM t2 ORDER BY 1, 2;"
-
-
-
 
 echo "--- empty string handling ---"
 
@@ -2797,9 +2579,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-
-
-
 echo "--- multiple indexes + merge ---"
 
 oracle "merge_table_with_unique_cols" "
@@ -2820,9 +2599,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, name, age FROM t ORDER BY id;"
 
-
-
-
 echo "--- revert + cherry-pick ---"
 
 oracle "revert_then_cherry_pick_back" "
@@ -2842,9 +2618,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- auto-increment patterns ---"
 
 oracle "merge_with_max_id_pattern" "
@@ -2862,9 +2635,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main auto ids');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- complex FK merge ---"
 
@@ -2905,9 +2675,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT c.id, c.pid, c.val FROM child c ORDER BY c.id;"
 
-
-
-
 echo "--- multi-commit branch stress ---"
 
 oracle "five_commits_per_branch_merge" "
@@ -2936,9 +2703,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','m2');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- merge row dedup ---"
 
@@ -2972,9 +2736,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- merge data integrity ---"
 
@@ -3010,9 +2771,6 @@ SELECT dolt_commit('-m','main raises max');
 SELECT dolt_merge('feat');
 " "SELECT min(val), max(val) FROM t;"
 
-
-
-
 echo "--- cherry-pick data preservation ---"
 
 oracle "cherry_pick_doesnt_affect_other_rows" "
@@ -3044,9 +2802,6 @@ SELECT dolt_commit('-m','main changed');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- revert data preservation ---"
 
 oracle "revert_one_row_keeps_others" "
@@ -3060,9 +2815,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','changes');
 SELECT dolt_revert('HEAD');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- column ordering ---"
 
@@ -3081,9 +2833,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT first_col, second_col, third_col FROM t WHERE id=1;"
-
-
-
 
 echo "--- value patterns in merge ---"
 
@@ -3166,9 +2915,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- more FK patterns ---"
 
@@ -3263,9 +3009,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main both');
 SELECT dolt_merge('feat');
 " "SELECT p.name, c.val FROM parent p JOIN child c ON c.pid=p.id ORDER BY p.id;"
-
-
-
 
 echo "--- merge topology stress ---"
 
@@ -3382,9 +3125,6 @@ SELECT dolt_commit('-m','m1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- batch operations + merge ---"
 
 oracle "batch_insert_then_merge" "
@@ -3435,9 +3175,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-
-
-
 echo "--- add/status edge cases ---"
 
 oracle "add_after_drop_and_recreate" "
@@ -3461,10 +3198,6 @@ INSERT INTO t2 VALUES(1,'x');
 SELECT dolt_add('t2');
 SELECT dolt_commit('-m','staged both');
 " "SELECT 't1' AS tbl, id, val FROM t1 UNION ALL SELECT 't2', id, val FROM t2 ORDER BY 1, 2;"
-
-
-
-
 
 echo "--- conflict boundaries ---"
 
@@ -3580,9 +3313,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t WHERE id>=2 ORDER BY id;"
 
-
-
-
 echo "--- commit graph counts ---"
 
 oracle "linear_3_commits_count" "
@@ -3651,9 +3381,6 @@ SELECT dolt_commit('-m','to revert');
 SELECT dolt_revert('HEAD');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- PK edge cases in merge ---"
 
 oracle "pk_zero_in_merge" "
@@ -3705,9 +3432,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- INT PK (WITHOUT ROWID) ---"
 
@@ -3771,9 +3495,6 @@ SELECT dolt_commit('-m','cherry');
 SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- undo patterns ---"
 
@@ -3898,9 +3619,6 @@ SELECT dolt_checkout('feat');
 SELECT dolt_merge('main');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- stress cell merge ---"
 
 oracle "cell_merge_8_cols_interleaved" "
@@ -3971,9 +3689,6 @@ SELECT dolt_commit('-m','main all y');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n, count(CASE WHEN x='F' THEN 1 END) AS xf, count(CASE WHEN y='M' THEN 1 END) AS ym FROM t;"
 
-
-
-
 echo "--- FK stress ---"
 
 oracle "fk_self_ref_merge" "
@@ -4033,9 +3748,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM child ORDER BY id;"
 
-
-
-
 echo "--- batch operations ---"
 
 oracle "batch_insert_merge" "
@@ -4085,9 +3797,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
-
-
-
 
 echo "--- aggregate verification ---"
 
@@ -4142,11 +3851,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT grp, count(*), sum(val) FROM t GROUP BY grp ORDER BY grp;"
 
-
-
-
-
-
 echo "--- net-no-op commit + merge ---"
 
 oracle "roundtrip_update_no_net_change" "
@@ -4200,9 +3904,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-
-
-
 echo "--- UPDATE CASE + merge ---"
 
 oracle "update_case_then_merge" "
@@ -4233,9 +3934,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, CASE WHEN n<10 THEN 's' WHEN n<20 THEN 'm' ELSE 'l' END AS sz FROM t ORDER BY id;"
-
-
-
 
 echo "--- subquery WHERE + merge ---"
 
@@ -4275,9 +3973,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t1 ORDER BY id;"
 
-
-
-
 echo "--- INSERT SELECT + merge ---"
 
 oracle "insert_select_from_other_table_merge" "
@@ -4312,9 +4007,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, grp FROM t WHERE id>=10 ORDER BY id;"
-
-
-
 
 echo "--- LIKE/IN/BETWEEN + merge ---"
 
@@ -4366,9 +4058,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- aggregates after merge ---"
 
 oracle "sum_after_merge" "
@@ -4413,9 +4102,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT sum(n)/count(*) AS a FROM t;"
 
-
-
-
 echo "--- HEAD~N refs ---"
 
 oracle "reset_to_head_tilde_2" "
@@ -4451,9 +4137,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('side');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- allow-empty commit + merge ---"
 
 oracle "allow_empty_then_merge" "
@@ -4481,9 +4164,6 @@ SELECT dolt_commit('-m','another empty','--allow-empty');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- diamond via branches ---"
 
@@ -4525,9 +4205,6 @@ SELECT dolt_merge('left');
 SELECT dolt_merge('right');
 " "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
 
-
-
-
 echo "--- multi-level FK + merge ---"
 
 oracle "four_level_fk_chain_merge" "
@@ -4554,9 +4231,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a.v, b.v, c.v, d.v FROM d JOIN c ON d.cid=c.id JOIN b ON c.bid=b.id JOIN a ON b.aid=a.id ORDER BY d.id;"
-
-
-
 
 echo "--- branch from historical commit ---"
 
@@ -4601,9 +4275,6 @@ SELECT dolt_merge('past_a');
 SELECT dolt_merge('past_b');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- conditional UPDATE + cell merge ---"
 
 oracle "update_coalesce_then_merge" "
@@ -4638,9 +4309,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t;"
 
-
-
-
 echo "--- LIMIT/OFFSET after merge ---"
 
 oracle "select_limit_after_merge" "
@@ -4668,9 +4336,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id LIMIT 2 OFFSET 2;"
-
-
-
 
 echo "--- DISTINCT/UNION after merge ---"
 
@@ -4702,9 +4367,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT v FROM t1 UNION ALL SELECT v FROM t2 ORDER BY v;"
-
-
-
 
 echo "--- multiple inserts then merge ---"
 
@@ -4747,9 +4409,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- cherry-pick chain ---"
 
 oracle "cherry_pick_two_commits_sequentially" "
@@ -4784,9 +4443,6 @@ SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- deep history + cherry-pick ---"
 
 oracle "cherry_pick_from_deep_branch" "
@@ -4810,9 +4466,6 @@ SELECT dolt_commit('-m','f4');
 SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat~2');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- UNIQUE + merge complex ---"
 
@@ -4849,9 +4502,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, code1, code2 FROM t ORDER BY id;"
 
-
-
-
 echo "--- NULL handling edge cases ---"
 
 oracle "null_to_value_both_sides_different_rows" "
@@ -4882,9 +4532,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS null_count FROM t WHERE v IS NULL;"
-
-
-
 
 echo "--- branch lifecycle + merge ---"
 
@@ -4925,9 +4572,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- chained updates same row + merge ---"
 
 oracle "many_updates_same_row_feat_merge" "
@@ -4950,9 +4594,6 @@ SELECT dolt_commit('-m','main new row');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- HAVING after merge ---"
 
 oracle "having_after_merge" "
@@ -4967,9 +4608,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT grp, sum(n) AS total FROM t GROUP BY grp HAVING sum(n) > 10 ORDER BY grp;"
-
-
-
 
 echo "--- explicit column lists + merge ---"
 
@@ -4988,9 +4626,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
-
-
-
 
 echo "--- revert chain ---"
 
@@ -5020,9 +4655,6 @@ SELECT dolt_commit('-m','c3');
 SELECT dolt_revert('HEAD');
 SELECT dolt_revert('HEAD');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- dolt_log after various ops ---"
 
@@ -5054,9 +4686,6 @@ SELECT dolt_commit('-m','f1');
 SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT message FROM dolt_log ORDER BY message;"
-
-
-
 
 echo "--- CHECK constraint interactions ---"
 
@@ -5091,9 +4720,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- wide PK patterns + merge ---"
 
@@ -5131,9 +4757,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a, b, v FROM t ORDER BY a, b;"
 
-
-
-
 echo "--- post-merge working state ---"
 
 oracle "post_merge_immediate_insert" "
@@ -5167,9 +4790,6 @@ UPDATE t SET v='post' WHERE id=1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t;"
-
-
-
 
 echo "--- parallel branches ---"
 
@@ -5246,9 +4866,6 @@ SELECT dolt_merge('b5');
 SELECT dolt_merge('b6');
 " "SELECT count(*) AS n, sum(id) AS s FROM t;"
 
-
-
-
 echo "--- merge then revert ---"
 
 oracle "revert_merge_commit" "
@@ -5267,9 +4884,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat','--no-ff','-m','merge feat');
 SELECT dolt_revert('HEAD','-m','1');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- FK delete restriction + merge ---"
 
@@ -5290,9 +4904,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main more children');
 SELECT dolt_merge('feat');
 " "SELECT id, v, pid FROM child ORDER BY id;"
-
-
-
 
 echo "--- EXISTS/NOT EXISTS after merge ---"
 
@@ -5344,9 +4955,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- CTE + merge ---"
 
 oracle "cte_select_after_merge" "
@@ -5374,9 +4982,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH gc AS (SELECT grp, count(*) AS c FROM t GROUP BY grp) SELECT grp, c FROM gc ORDER BY grp;"
-
-
-
 
 echo "--- REPLACE patterns + merge ---"
 
@@ -5413,9 +5018,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-row UPDATE + merge ---"
 
 oracle "update_per_id_then_merge" "
@@ -5437,9 +5039,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- FK cascade-ish behavior + merge ---"
 
 oracle "fk_orphan_possible_when_no_action_merge" "
@@ -5460,9 +5059,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
-
-
-
 
 echo "--- REAL/float merge ---"
 
@@ -5495,9 +5091,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, x FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-VALUES INSERT + merge ---"
 
 oracle "insert_10_rows_one_stmt_merge" "
@@ -5515,9 +5108,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
-
-
-
 
 echo "--- commit message special chars ---"
 
@@ -5546,9 +5136,6 @@ SELECT dolt_commit('-m','feature branch commit message');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- balanced growth merges ---"
 
@@ -5584,9 +5171,6 @@ SELECT dolt_commit('-m','main delete 8-10');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- post-merge aggregate invariants ---"
 
 oracle "min_max_span_unchanged_by_convergent_update" "
@@ -5621,9 +5205,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(DISTINCT cat) AS distinct_cats FROM t;"
 
-
-
-
 echo "--- re-merge branch after update ---"
 
 oracle "merge_branch_update_merge_again" "
@@ -5645,9 +5226,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- merge + reset + re-merge ---"
 
 oracle "merge_reset_remerge" "
@@ -5664,9 +5242,6 @@ SELECT dolt_merge('feat');
 SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- alter + populate + merge ---"
 
@@ -5706,9 +5281,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, x, y FROM t ORDER BY id;"
 
-
-
-
 echo "--- dolt_log structure after merges ---"
 
 oracle "log_distinct_commit_hashes_count" "
@@ -5740,9 +5312,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('first','second','third_on_feat');"
 
-
-
-
 echo "--- multi-column indexes + merge ---"
 
 oracle "merge_table_with_multi_col_index" "
@@ -5762,9 +5331,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY a, b;"
-
-
-
 
 echo "--- deep FK scenarios ---"
 
@@ -5806,9 +5372,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
 
-
-
-
 echo "--- drop + recreate + merge ---"
 
 oracle "drop_recreate_same_name_merge" "
@@ -5828,9 +5391,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- long linear history + merge ---"
 
@@ -5874,9 +5434,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('side');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-
-
-
 echo "--- string funcs in UPDATE + merge ---"
 
 oracle "update_lower_then_merge" "
@@ -5907,9 +5464,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t WHERE length(v)>=3 ORDER BY id;"
-
-
-
 
 echo "--- arithmetic UPDATE + merge ---"
 
@@ -5945,9 +5499,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n FROM t ORDER BY id;"
 
-
-
-
 echo "--- self-referential merge ---"
 
 oracle "self_ref_fk_new_hierarchy_merge" "
@@ -5965,9 +5516,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, parent_id, v FROM n ORDER BY id;"
-
-
-
 
 echo "--- UPDATE with correlated subquery + merge ---"
 
@@ -5988,9 +5536,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- commit chain reshape + merge ---"
 
@@ -6021,9 +5566,6 @@ SELECT dolt_commit('-m','c3');
 SELECT dolt_reset('--soft','HEAD~2');
 SELECT dolt_commit('-m','squashed');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- multi-table inner join + merge ---"
 
@@ -6061,9 +5603,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT t1.id, CASE WHEN t2.id IS NULL THEN 'none' ELSE t2.v END AS got FROM t1 LEFT JOIN t2 ON t1.id=t2.t1id ORDER BY t1.id;"
 
-
-
-
 echo "--- merge branch with only empty commits ---"
 
 oracle "merge_only_allow_empty_branch" "
@@ -6081,9 +5620,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- convergent conflict probes ---"
 
@@ -6183,9 +5719,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t WHERE id=2;"
 
-
-
-
 echo "--- self-merge probes ---"
 
 oracle "merge_self_is_noop" "
@@ -6213,9 +5746,6 @@ SELECT dolt_merge('feat');
 SELECT dolt_merge('feat');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- cherry-pick edge probes ---"
 
@@ -6261,9 +5791,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- reset target probes ---"
 
 oracle "reset_to_tag" "
@@ -6293,9 +5820,6 @@ SELECT dolt_commit('-m','c2');
 SELECT dolt_reset('--hard','snap');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- empty/no-op merge probes ---"
 
 oracle "merge_branch_with_no_new_commits" "
@@ -6309,9 +5833,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- type behavior through merge ---"
 
@@ -6340,9 +5861,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE s='updated';"
-
-
-
 
 echo "--- PK/UNIQUE conflict probes ---"
 
@@ -6378,9 +5896,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE id=1;"
 
-
-
-
 echo "--- pre-merge staging probes ---"
 
 oracle "merge_with_uncommitted_working_changes" "
@@ -6396,9 +5911,6 @@ SELECT dolt_checkout('main');
 INSERT INTO t VALUES(3,'uncommitted');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- REPLACE vs merge probes ---"
 
@@ -6417,9 +5929,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- cell merge fallback probes ---"
 
@@ -6455,9 +5964,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t;"
 
-
-
-
 echo "--- merge+revert probes ---"
 
 oracle "revert_noff_merge_commit_row_count" "
@@ -6477,9 +5983,6 @@ SELECT dolt_merge('feat','--no-ff','-m','merged');
 SELECT dolt_revert('HEAD','-m','1');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- large payload probes ---"
 
 oracle "blob_different_on_each_side_merge" "
@@ -6497,9 +6000,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, hex(b) FROM t ORDER BY id;"
-
-
-
 
 echo "--- cherry-pick and reset deeper probes ---"
 
@@ -6553,9 +6053,6 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- NULL aggregation probes ---"
 
 oracle "sum_ignores_null_after_merge" "
@@ -6583,9 +6080,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT min(n) AS lo, max(n) AS hi FROM t;"
-
-
-
 
 echo "--- update pattern probes ---"
 
@@ -6622,9 +6116,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- FK merge dependency probes ---"
 
@@ -6665,9 +6156,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
 
-
-
-
 echo "--- batch + partial conflict probes ---"
 
 oracle "batch_50_with_one_conflict_elsewhere" "
@@ -6688,9 +6176,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t WHERE id BETWEEN 100 AND 119;"
 
-
-
-
 echo "--- NULL ordering probes ---"
 
 oracle "nulls_in_order_by_asc_merge" "
@@ -6705,9 +6190,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE n IS NOT NULL ORDER BY n;"
-
-
-
 
 echo "--- repeated ALTER probes ---"
 
@@ -6727,9 +6209,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, keep FROM t ORDER BY id;"
-
-
-
 
 echo "--- reset then merge replay probes ---"
 
@@ -6753,9 +6232,6 @@ SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_merge('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- graph shape probes ---"
 
 oracle "log_count_after_diamond_no_ff" "
@@ -6776,9 +6252,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('left','--no-ff','-m','merge left');
 SELECT dolt_merge('right','--no-ff','-m','merge right');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- stale working set probes ---"
 
@@ -6806,9 +6279,6 @@ INSERT INTO t VALUES(3,'post');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- drop-on-branch probes ---"
 
@@ -6850,9 +6320,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','marker');
 " "SELECT id FROM marker;"
 
-
-
-
 echo "--- IDR on one branch probes ---"
 
 oracle "insert_delete_reinsert_within_branch_merge" "
@@ -6890,9 +6357,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- revert/cherry-pick inversion probes ---"
 
 oracle "cherry_pick_a_revert_commit" "
@@ -6922,9 +6386,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 SELECT dolt_revert('HEAD');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- dialect edge probes ---"
 
@@ -6960,9 +6421,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-col CHECK probes ---"
 
 oracle "check_on_two_cols_merge" "
@@ -6981,9 +6439,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-
-
-
 echo "--- dolt_diff stability probes ---"
 
 oracle "dolt_diff_summary_row_count_stable" "
@@ -6998,9 +6453,6 @@ INSERT INTO t VALUES(3,'c');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM dolt_diff WHERE table_name='t';"
-
-
-
 
 echo "--- branch rename / move probes ---"
 
@@ -7018,9 +6470,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('renamed');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- no-op commit stress probes ---"
 
 oracle "many_allow_empty_then_data" "
@@ -7037,9 +6486,6 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- one-sided delete probes ---"
 
@@ -7059,9 +6505,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- tag at non-HEAD probes ---"
 
 oracle "tag_at_past_commit" "
@@ -7078,9 +6521,6 @@ SELECT dolt_commit('-m','c3');
 SELECT dolt_tag('mid','HEAD~1');
 SELECT dolt_reset('--hard','mid');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- schema mutation across merge ---"
 
@@ -7116,16 +6556,7 @@ SELECT dolt_commit('-m','main y');
 SELECT dolt_merge('feat');
 " "SELECT id, v, x, y FROM t;"
 
-
-
-
 echo "--- convergent schema probes ---"
-
-
-
-
-
-
 
 oracle "both_sides_drop_same_column" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, toss TEXT);
@@ -7143,9 +6574,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main drop');
 SELECT dolt_merge('feat');
 " "SELECT id, a FROM t ORDER BY id;"
-
-
-
 
 echo "--- FK violation on merge probes ---"
 
@@ -7169,9 +6597,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS parents FROM parent;"
 
-
-
-
 echo "--- explicit transaction probes ---"
 
 oracle "begin_commit_across_dolt_commit" "
@@ -7188,9 +6613,6 @@ INSERT INTO t VALUES(3,'post');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- implicit column behavior probes ---"
 
@@ -7209,9 +6631,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t WHERE v LIKE '%0%' ORDER BY id;"
-
-
-
 
 echo "--- repeat branch merge probes ---"
 
@@ -7239,9 +6658,6 @@ SELECT dolt_commit('-m','f3');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
-
-
-
 
 echo "--- reset immediately after commit probes ---"
 
@@ -7277,9 +6693,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','newer c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- NULL + UNIQUE merge probes ---"
 
 oracle "unique_allows_multiple_nulls_merge" "
@@ -7298,9 +6711,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, code FROM t ORDER BY id;"
 
-
-
-
 oracle "unique_multi_col_with_one_null_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, a VARCHAR(8), b VARCHAR(8), UNIQUE(a,b));
 INSERT INTO t VALUES(1,'x','y');
@@ -7316,10 +6726,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
-
-
-
-
 
 echo "--- alter-only branch merge ---"
 
@@ -7355,9 +6761,6 @@ SELECT dolt_commit('-m','main adds col');
 SELECT dolt_merge('feat');
 " "SELECT id, v, tag FROM t ORDER BY id;"
 
-
-
-
 echo "--- whitespace/text probes ---"
 
 oracle "trailing_space_text_merge" "
@@ -7386,9 +6789,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, length(v) AS L FROM t ORDER BY id;"
 
-
-
-
 echo "--- FK delete-restrict probes ---"
 
 oracle "fk_child_referencing_deleted_parent_merge" "
@@ -7409,9 +6809,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS np, count(*) FROM parent;"
-
-
-
 
 echo "--- complex flow final state probes ---"
 
@@ -7436,9 +6833,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- recursive CTE probes ---"
 
@@ -7467,9 +6861,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH RECURSIVE descend(id, depth) AS (SELECT id, 0 FROM tree WHERE pid IS NULL UNION ALL SELECT t.id, d.depth+1 FROM tree t JOIN descend d ON t.pid=d.id) SELECT depth, count(*) AS n FROM descend GROUP BY depth ORDER BY depth;"
-
-
-
 
 echo "--- window function probes ---"
 
@@ -7525,9 +6916,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, COALESCE(LAG(v) OVER (ORDER BY id), 0) AS prev FROM t ORDER BY id;"
 
-
-
-
 echo "--- dolt_log structural probes ---"
 
 oracle "dolt_log_message_set_after_merge" "
@@ -7564,9 +6952,6 @@ INSERT INTO t VALUES(4,'d');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','cx003');
 " "SELECT count(*) FROM dolt_log WHERE message LIKE 'cx%';"
-
-
-
 
 echo "--- deep history probes ---"
 
@@ -7669,9 +7054,6 @@ SELECT dolt_commit('-m','c9');
 SELECT dolt_reset('--hard','HEAD~5');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- complex WHERE probes ---"
 
 oracle "and_or_not_combined_after_merge" "
@@ -7703,9 +7085,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE v IN (SELECT v FROM allow) ORDER BY id;"
 
-
-
-
 echo "--- multi-col UPDATE probes ---"
 
 oracle "update_set_multiple_cols_merge" "
@@ -7724,9 +7103,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-
-
-
 echo "--- wide table probes ---"
 
 oracle "twenty_col_table_merge" "
@@ -7744,9 +7120,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, c5, c10, c15, c20 FROM t;"
-
-
-
 
 echo "--- JOIN UPDATE probes ---"
 
@@ -7768,9 +7141,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- dolt_status probes ---"
 
 oracle "status_empty_after_commit" "
@@ -7787,9 +7157,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c1');
 INSERT INTO t VALUES(2,'b');
 " "SELECT count(*) FROM dolt_status WHERE staged=0;"
-
-
-
 
 echo "--- branch off tag + merge ---"
 
@@ -7809,9 +7176,6 @@ SELECT dolt_commit('-m','tag side');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('from_tag');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- two-col PK cell merge probes ---"
 
@@ -7847,9 +7211,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a, b, v1, v2 FROM t;"
 
-
-
-
 echo "--- CASE projection probes ---"
 
 oracle "nested_case_projection_after_merge" "
@@ -7864,9 +7225,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, CASE WHEN n<10 THEN 'xs' WHEN n<20 THEN 's' WHEN n<30 THEN 'm' WHEN n<40 THEN 'l' ELSE 'xl' END AS sz FROM t ORDER BY id;"
-
-
-
 
 echo "--- multi-branch dependency ---"
 
@@ -7891,9 +7249,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('b3');
 " "SELECT id, v FROM t;"
 
-
-
-
 echo "--- INSERT SELECT agg probes ---"
 
 oracle "insert_select_from_agg_after_merge" "
@@ -7911,9 +7266,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main new grp');
 SELECT dolt_merge('feat');
 " "SELECT grp, sum(n) AS s FROM src GROUP BY grp ORDER BY grp;"
-
-
-
 
 echo "--- repeated ff / noff probes ---"
 
@@ -7936,9 +7288,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
 
-
-
-
 echo "--- upsert-like probes ---"
 
 oracle "on_conflict_replace_equivalent_via_replace" "
@@ -7958,9 +7307,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, n FROM t ORDER BY id;"
 
-
-
-
 echo "--- aggregate on empty table probes ---"
 
 oracle "delete_all_sum_null_after_merge" "
@@ -7978,9 +7324,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS c FROM t;"
-
-
-
 
 echo "--- create+insert same commit probes ---"
 
@@ -8000,9 +7343,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT 't' AS tbl, count(*) AS n FROM t UNION ALL SELECT 'u', count(*) FROM u ORDER BY 1;"
-
-
-
 
 echo "--- merge commit accounting ---"
 
@@ -8038,9 +7378,6 @@ SELECT dolt_commit('-m','m1');
 SELECT dolt_merge('feat','--no-ff','-m','merge');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- string function probes ---"
 
 oracle "substr_in_select_after_merge" "
@@ -8069,9 +7406,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, REPLACE(v,'world','WORLD') AS r FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-key GROUP BY probes ---"
 
 oracle "multi_key_group_by_after_merge" "
@@ -8087,9 +7421,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT a, b, sum(n) AS s FROM t GROUP BY a, b ORDER BY a, b;"
 
-
-
-
 echo "--- PK ordering + reset probes ---"
 
 oracle "insert_reverse_order_pk_after_merge" "
@@ -8104,9 +7435,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- NULL-handling funcs after merge ---"
 
@@ -8136,9 +7464,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n_null FROM (SELECT NULLIF(v,'sentinel') AS masked FROM t) sub WHERE masked IS NULL;"
 
-
-
-
 echo "--- mid-sequence branch switches ---"
 
 oracle "back_and_forth_branches_merge" "
@@ -8164,9 +7489,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','m2');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- views + VC ---"
 
@@ -8313,9 +7635,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM active;"
 
-
-
-
 echo "--- generated columns + merge ---"
 
 oracle "stored_generated_col_merge" "
@@ -8394,9 +7713,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE squared > 10 ORDER BY id;"
-
-
-
 
 echo "--- FK cascade actions + merge ---"
 
@@ -8534,9 +7850,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
 
-
-
-
 echo "--- conflict resolution in txn probes ---"
 
 oracle "resolve_conflict_via_update_their_in_txn" "
@@ -8602,9 +7915,6 @@ INSERT INTO t VALUES(2,'post_rollback');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- dolt_hashof property probes ---"
 
@@ -8675,9 +7985,6 @@ SELECT 1;
 SELECT 2;
 SELECT 3;
 " "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD');"
-
-
-
 
 echo "--- many-branch fan-in probes ---"
 
@@ -8763,9 +8070,6 @@ SELECT dolt_branch('b7');
 SELECT dolt_branch('b8');
 " "SELECT count(*) FROM dolt_branches;"
 
-
-
-
 echo "--- schema merge corner probes ---"
 
 oracle "type_widen_int_to_bigint_merge" "
@@ -8816,9 +8120,6 @@ SELECT dolt_commit('-m','main adds row');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- math function probes ---"
 
 oracle "abs_after_merge" "
@@ -8859,9 +8160,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, -n AS neg FROM t ORDER BY id;"
-
-
-
 
 echo "--- tag semantics probes ---"
 
@@ -8904,9 +8202,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- complex merge base topology ---"
 
 oracle "merge_base_after_merged_branch" "
@@ -8948,9 +8243,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('grandchild');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- unicode sort probes ---"
 
 oracle "unicode_text_sort_after_merge" "
@@ -8979,9 +8271,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY v;"
 
-
-
-
 echo "--- log filter probes ---"
 
 oracle "log_commit_hash_prefix_match" "
@@ -9006,9 +8295,6 @@ INSERT INTO t VALUES(3);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM (SELECT commit_hash FROM dolt_log ORDER BY date DESC) sub;"
-
-
-
 
 echo "--- post-merge invariant probes ---"
 
@@ -9041,9 +8327,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- tag reuse probes ---"
 
 oracle "reset_to_past_tag" "
@@ -9075,9 +8358,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('hotfix');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- generated column deeper ---"
 
 oracle "two_stored_generated_cols_merge" "
@@ -9108,9 +8388,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE doubled >= 20 ORDER BY id;"
-
-
-
 
 echo "--- view + changes on both sides ---"
 
@@ -9149,9 +8426,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM posv ORDER BY id;"
-
-
-
 
 echo "--- multi-hop merge-base probes ---"
 
@@ -9197,9 +8471,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('b');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-
-
-
 echo "--- schema+data mix probes ---"
 
 oracle "add_col_on_feat_and_insert_then_merge" "
@@ -9238,9 +8509,6 @@ SELECT dolt_commit('-m','main adds main_col');
 SELECT dolt_merge('feat');
 " "SELECT id, v, feat_col, main_col FROM t;"
 
-
-
-
 echo "--- complex WHERE projection ---"
 
 oracle "where_multi_pred_after_merge" "
@@ -9271,9 +8539,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t1 WHERE ref IN (SELECT id FROM t2 WHERE flag=1) ORDER BY id;"
-
-
-
 
 echo "--- row manipulation edges ---"
 
@@ -9313,9 +8578,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
 
-
-
-
 echo "--- FK null-parent edge ---"
 
 oracle "fk_nullable_pid_on_both_sides_merge" "
@@ -9337,9 +8599,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
-
-
-
 
 echo "--- edge commit patterns ---"
 
@@ -9364,9 +8623,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','another-msg');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('looks-like-arg','another-msg');"
 
-
-
-
 echo "--- dolt_branches accounting ---"
 
 oracle "dolt_branches_count_after_creates_and_deletes" "
@@ -9390,9 +8646,6 @@ SELECT dolt_branch('one');
 SELECT dolt_branch('two');
 SELECT dolt_branch('-c','main','three');
 " "SELECT count(*) FROM dolt_branches WHERE name='main';"
-
-
-
 
 echo "--- cherry-pick edges ---"
 
@@ -9423,9 +8676,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- soft reset patterns ---"
 
 oracle "soft_reset_two_then_squash" "
@@ -9454,12 +8704,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 SELECT dolt_reset('--soft','HEAD~1');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
-
-
-
 
 oracle "soft_reset_recommit_no_explicit_add" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -9514,9 +8758,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','amended_with_extra');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- JSON function probes ---"
 
 oracle "json_extract_simple_after_merge" "
@@ -9560,9 +8801,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, json_extract(j,'\$.v') AS v FROM t ORDER BY id;"
-
-
-
 
 echo "--- SAVEPOINT probes ---"
 
@@ -9632,9 +8870,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after sp rollback');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- REPLACE vs UPDATE probes ---"
 
 oracle "replace_on_existing_pk_merges_like_update" "
@@ -9672,9 +8907,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- stress-lite merge probes ---"
 
@@ -9723,9 +8955,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT sum(v) AS s FROM t;"
 
-
-
-
 echo "--- default expression probes ---"
 
 oracle "default_literal_used_in_both_branches_merge" "
@@ -9761,9 +8990,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-
-
-
 echo "--- merge commit accounting probes ---"
 
 oracle "noff_merge_has_four_log_entries" "
@@ -9797,9 +9023,6 @@ SELECT dolt_commit('-m','feat2');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- delete-insert ordering probes ---"
 
@@ -9837,9 +9060,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- truncate-like probes ---"
 
 oracle "delete_all_one_side_insert_other_merge" "
@@ -9857,9 +9077,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main adds');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- cherry-pick semantics probes ---"
 
@@ -9897,9 +9114,6 @@ SELECT dolt_commit('-m','main t2');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t2 ORDER BY id;"
 
-
-
-
 echo "--- reset then merge probes ---"
 
 oracle "hard_reset_then_merge_brings_back" "
@@ -9918,9 +9132,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- empty-table merge probes ---"
 
@@ -9959,9 +9170,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post b');
 " "SELECT id, v FROM b;"
 
-
-
-
 echo "--- mixed type merge probes ---"
 
 oracle "mixed_int_text_real_merge" "
@@ -9980,14 +9188,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n, s, r FROM t;"
-
-
-
-
-
-
-
-
 
 echo "--- merge_base probes ---"
 
@@ -10041,9 +9241,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT CASE WHEN dolt_merge_base('main','feat') = dolt_hashof('HEAD') THEN 1 ELSE 0 END;"
 
-
-
-
 echo "--- rename column probes ---"
 
 oracle "rename_column_on_feat_query_works_after_merge" "
@@ -10079,9 +9276,6 @@ SELECT dolt_commit('-m','main rename');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- rename table probes ---"
 
 oracle "rename_table_on_feat_merge_to_main" "
@@ -10102,9 +9296,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM other ORDER BY id;"
-
-
-
 
 echo "--- view-join probes ---"
 
@@ -10142,9 +9333,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT grp, total FROM totals ORDER BY grp;"
-
-
-
 
 echo "--- multi-commit DML probes ---"
 
@@ -10191,9 +9379,6 @@ SELECT dolt_commit('-m','m2');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n, sum(id) AS s FROM t;"
 
-
-
-
 echo "--- correlated subquery UPDATE deeper ---"
 
 oracle "update_running_total_via_subquery" "
@@ -10230,9 +9415,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, cnt FROM t ORDER BY id;"
 
-
-
-
 echo "--- conflict resolve multi-row probes ---"
 
 oracle "resolve_multiple_conflicts_via_update" "
@@ -10260,9 +9442,6 @@ SELECT dolt_commit('-m','resolved');
 COMMIT;
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- post-merge FK query probes ---"
 
 oracle "three_table_join_filter_after_merge" "
@@ -10287,9 +9466,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a.cat FROM c JOIN b ON c.bid=b.id JOIN a ON b.aid=a.id WHERE c.score > 60 ORDER BY a.cat;"
-
-
-
 
 echo "--- ordering probes ---"
 
@@ -10318,9 +9494,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY a, b DESC;"
-
-
-
 
 echo "--- cherry-pick DML batch probes ---"
 
@@ -10357,9 +9530,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- deep branch probes ---"
 
 oracle "deep_branch_ff_merge_count" "
@@ -10390,9 +9560,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- replace stability probes ---"
 
 oracle "replace_every_row_both_sides_merge" "
@@ -10410,9 +9577,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 echo "--- set ops after merge ---"
 
 oracle "union_distinct_after_merge" "
@@ -10460,9 +9624,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT v FROM a EXCEPT SELECT v FROM b ORDER BY v;"
 
-
-
-
 echo "--- case-insensitive lookup ---"
 
 oracle "lower_lookup_after_merge" "
@@ -10490,9 +9651,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE UPPER(v) LIKE 'RED%' ORDER BY id;"
-
-
-
 
 echo "--- multi-index probes ---"
 
@@ -10525,9 +9683,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(DISTINCT code) FROM t;"
 
-
-
-
 echo "--- dolt_branches column shape ---"
 
 oracle "branches_dirty_flag_is_boolean" "
@@ -10546,9 +9701,6 @@ SELECT dolt_commit('-m','c1');
 SELECT dolt_branch('b1');
 " "SELECT count(*) FROM dolt_branches WHERE length(hash) > 0;"
 
-
-
-
 echo "--- dolt_log parent traversal ---"
 
 oracle "log_has_expected_number_of_merge_commits" "
@@ -10566,9 +9718,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat','--no-ff','-m','merge_c');
 " "SELECT count(*) FROM dolt_log WHERE message='merge_c';"
-
-
-
 
 echo "--- complex UPDATE probes ---"
 
@@ -10606,9 +9755,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, active FROM t ORDER BY id;"
 
-
-
-
 echo "--- large multi-table merge probes ---"
 
 oracle "four_tables_each_touched_merge" "
@@ -10639,9 +9785,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT 't1' AS tbl, sum(v) AS s FROM t1 UNION ALL SELECT 't2', sum(v) FROM t2 UNION ALL SELECT 't3', sum(v) FROM t3 UNION ALL SELECT 't4', sum(v) FROM t4 ORDER BY 1;"
 
-
-
-
 echo "--- boolean-like flags through merge ---"
 
 oracle "zero_one_flags_toggled_merge" "
@@ -10659,9 +9802,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, active FROM t ORDER BY id;"
-
-
-
 
 echo "--- commit message preservation ---"
 
@@ -10685,9 +9825,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','#123 fix');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('v1.2.3','#123 fix');"
 
-
-
-
 echo "--- INSERT col subset probes ---"
 
 oracle "insert_subset_cols_different_on_branches" "
@@ -10706,9 +9843,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
-
-
-
 
 echo "--- diamond convergent delete ---"
 
@@ -10733,9 +9867,6 @@ SELECT dolt_merge('left');
 SELECT dolt_merge('right');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- long messages ---"
 
 oracle "long_message_survives_commit_and_merge" "
@@ -10750,9 +9881,6 @@ SELECT dolt_commit('-m','this is a fairly long commit message that describes sev
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log WHERE length(message) > 50;"
-
-
-
 
 echo "--- hashof across merges ---"
 
@@ -10771,9 +9899,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat','--no-ff','-m','merge');
 " "SELECT count(DISTINCT commit_hash) FROM dolt_log;"
-
-
-
 
 echo "--- alternating work + checkout ---"
 
@@ -10806,9 +9931,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT owner, count(*) FROM t GROUP BY owner ORDER BY owner;"
 
-
-
-
 echo "--- tag list stability ---"
 
 oracle "multiple_tags_listed_in_order" "
@@ -10820,9 +9942,6 @@ SELECT dolt_tag('z_last','HEAD');
 SELECT dolt_tag('a_first','HEAD');
 SELECT dolt_tag('m_mid','HEAD');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
-
-
-
 
 echo "--- long string payload probes ---"
 
@@ -10841,9 +9960,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, length(v) AS L FROM t ORDER BY id;"
-
-
-
 echo "--- window deeper ---"
 
 oracle "partition_by_frame_after_merge" "
@@ -10898,9 +10014,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, COALESCE(LEAD(v) OVER (ORDER BY id), -1) AS nxt FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-CTE probes ---"
 
 oracle "chained_ctes_across_merge" "
@@ -10928,9 +10041,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH doubled AS (SELECT id, n*2 AS d FROM t), filtered AS (SELECT id, d FROM doubled WHERE d > 15) SELECT id, d FROM filtered ORDER BY id;"
-
-
-
 
 echo "--- RIGHT JOIN probes ---"
 
@@ -10964,9 +10074,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT owners.id, count(items.id) AS cnt FROM owners LEFT JOIN items ON owners.id=items.owner_id GROUP BY owners.id ORDER BY owners.id;"
 
-
-
-
 echo "--- boolean expressions in SELECT ---"
 
 oracle "comparison_result_as_column" "
@@ -10981,9 +10088,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, CASE WHEN n > 20 THEN 1 ELSE 0 END AS big FROM t ORDER BY id;"
-
-
-
 
 echo "--- computed-value INSERT probes ---"
 
@@ -11004,9 +10108,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT label, n FROM counts ORDER BY label;"
-
-
-
 
 echo "--- DELETE with subquery ---"
 
@@ -11029,9 +10130,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- schema-only modifications ---"
 
 oracle "add_then_drop_col_same_branch_merge" "
@@ -11052,9 +10150,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- max/min tie-breaking ---"
 
 oracle "min_tie_break_by_id_after_merge" "
@@ -11070,9 +10165,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE score = (SELECT min(score) FROM t) ORDER BY id;"
 
-
-
-
 echo "--- count variants ---"
 
 oracle "count_star_vs_count_col_with_nulls" "
@@ -11087,9 +10179,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS c_all, count(v) AS c_nn, count(DISTINCT v) AS c_dist FROM t;"
-
-
-
 
 echo "--- cherry/revert round-trip ---"
 
@@ -11108,9 +10197,6 @@ SELECT dolt_revert('HEAD');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-col computed UPDATE ---"
 
 oracle "update_ab_from_c_merge" "
@@ -11128,9 +10214,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
-
-
-
 
 echo "--- dirty branch detection ---"
 
@@ -11152,9 +10235,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_branches WHERE name='main' AND dirty IN (0,'false');"
 
-
-
-
 echo "--- commit order probes ---"
 
 oracle "log_ordered_by_commit_order" "
@@ -11169,9 +10249,6 @@ INSERT INTO t VALUES(3);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','third_commit_abc');
 " "SELECT count(*) FROM dolt_log WHERE message LIKE '%commit_abc';"
-
-
-
 
 echo "--- row-level integrity ---"
 
@@ -11191,9 +10268,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT sum(n) FROM t;"
 
-
-
-
 echo "--- alter after merge ---"
 
 oracle "alter_add_col_after_merge" "
@@ -11211,9 +10285,6 @@ ALTER TABLE t ADD COLUMN tag INTEGER DEFAULT 99;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post-merge alter');
 " "SELECT id, v, tag FROM t ORDER BY id;"
-
-
-
 
 echo "--- multi-conflict txn resolve ---"
 
@@ -11241,9 +10312,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','kept ours');
 COMMIT;
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 echo "--- self-join probes ---"
 
 oracle "self_join_parent_child_after_merge" "
@@ -11274,9 +10342,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT a.id, count(b.id) AS siblings FROM t a LEFT JOIN t b ON a.gid=b.gid AND a.id<>b.id GROUP BY a.id ORDER BY a.id;"
-
-
-
 
 echo "--- view chain probes ---"
 
@@ -11313,9 +10378,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM very_bigs ORDER BY id;"
 
-
-
-
 echo "--- GROUP_CONCAT probes ---"
 
 oracle "group_concat_default_separator_after_merge" "
@@ -11343,9 +10405,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT grp, count(*) AS c FROM t GROUP BY grp ORDER BY grp;"
-
-
-
 
 echo "--- complex subquery probes ---"
 
@@ -11376,9 +10435,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT r.id, (SELECT n FROM t WHERE t.id=r.target) AS tgt_n FROM refs r ORDER BY r.id;"
-
-
-
 
 echo "--- diamond fan-in probes ---"
 
@@ -11419,9 +10475,6 @@ SELECT dolt_merge('d');
 SELECT dolt_merge('e');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- ordered UPDATE probes ---"
 
 oracle "update_value_via_row_position_merge" "
@@ -11439,9 +10492,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, pos FROM t ORDER BY id;"
-
-
-
 
 echo "--- deep history log queries ---"
 
@@ -11498,9 +10548,6 @@ SELECT dolt_commit('-m','m3');
 SELECT dolt_merge('feat','--no-ff','-m','merged');
 " "SELECT count(*) FROM dolt_log;"
 
-
-
-
 echo "--- conflict resolve variations ---"
 
 oracle "resolve_with_mixed_take_ours_take_theirs" "
@@ -11531,9 +10578,6 @@ SELECT dolt_commit('-m','resolved mixed');
 COMMIT;
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- batch conflict + resolve probes ---"
 
 oracle "ten_rows_conflict_resolve_via_ours" "
@@ -11558,9 +10602,6 @@ SELECT dolt_commit('-m','keep ours');
 COMMIT;
 " "SELECT count(*) FROM t WHERE v='m';"
 
-
-
-
 echo "--- merge-commit history ---"
 
 oracle "merge_commit_message_in_log_noff" "
@@ -11579,9 +10620,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat','--no-ff','-m','merged_feat_to_main');
 " "SELECT count(*) FROM dolt_log WHERE message='merged_feat_to_main';"
 
-
-
-
 echo "--- CTAS probes ---"
 
 oracle "ctas_after_merge" "
@@ -11598,9 +10636,6 @@ SELECT dolt_merge('feat');
 CREATE TABLE dst AS SELECT id, n*2 AS n2 FROM src;
 " "SELECT id, n2 FROM dst ORDER BY id;"
 
-
-
-
 echo "--- hash stability probes ---"
 
 oracle "hashof_stable_after_empty_reads" "
@@ -11612,9 +10647,6 @@ SELECT count(*) FROM t;
 SELECT * FROM t LIMIT 0;
 SELECT id FROM t WHERE id<0;
 " "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD');"
-
-
-
 
 echo "--- cross-table DELETE probes ---"
 
@@ -11638,9 +10670,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-unique cols probes ---"
 
 oracle "two_unique_cols_inserts_disjoint_merge" "
@@ -11658,9 +10687,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(DISTINCT code) AS d_code, count(DISTINCT tag) AS d_tag FROM t;"
-
-
-
 echo "--- DATE column probes ---"
 
 oracle "date_col_filter_after_merge" "
@@ -11694,9 +10720,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, d FROM t ORDER BY id;"
-
-
-
 
 echo "--- INSERT SELECT probes ---"
 
@@ -11734,9 +10757,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM dst ORDER BY id;"
 
-
-
-
 echo "--- UPDATE-from subquery probes ---"
 
 oracle "update_from_lookup_table_merge" "
@@ -11757,9 +10777,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- correlated count probes ---"
 
 oracle "correlated_count_after_merge" "
@@ -11776,9 +10793,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT t.id, (SELECT count(*) FROM related WHERE related.ref=t.id) AS c FROM t ORDER BY t.id;"
-
-
-
 
 echo "--- self-ref FK probes ---"
 
@@ -11798,9 +10812,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, parent_id, v FROM n ORDER BY id;"
-
-
-
 
 echo "--- schema-only branch probes ---"
 
@@ -11837,9 +10848,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('schema');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- 100-row merge ---"
 
 oracle "hundred_rows_each_side_disjoint_merge" "
@@ -11866,9 +10874,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-
-
-
 echo "--- tag reset probes ---"
 
 oracle "tag_reset_retag_workflow" "
@@ -11894,9 +10899,6 @@ SELECT dolt_commit('-m','c4');
 SELECT dolt_tag('new_stable','HEAD');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- hash consistency probes ---"
 
 oracle "hashof_tag_and_head_equal_when_tag_at_head" "
@@ -11906,9 +10908,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c1');
 SELECT dolt_tag('here','HEAD');
 " "SELECT CASE WHEN dolt_hashof('here') = dolt_hashof('HEAD') THEN 1 ELSE 0 END;"
-
-
-
 
 echo "--- UPDATE CASE probes ---"
 
@@ -11933,9 +10932,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n, tier FROM t ORDER BY id;"
 
-
-
-
 echo "--- merge vs regular commit log ---"
 
 oracle "log_has_base_branches_and_merge" "
@@ -11953,9 +10949,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','regular_c3');
 SELECT dolt_merge('feat','--no-ff','-m','merge_c4');
 " "SELECT count(*) FROM dolt_log WHERE message LIKE 'regular_%' OR message LIKE 'merge_%';"
-
-
-
 
 echo "--- multi-col CHECK probes ---"
 
@@ -11975,9 +10968,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-
-
-
 echo "--- history inspection probes ---"
 
 oracle "history_shows_commits_touching_table" "
@@ -11992,9 +10982,6 @@ INSERT INTO t VALUES(3);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM dolt_history_t;"
-
-
-
 
 echo "--- NULL unique alt probes ---"
 
@@ -12014,9 +11001,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- hashof after update ---"
 
 oracle "hashof_differs_after_update_commit" "
@@ -12028,8 +11012,6 @@ UPDATE t SET v=99 WHERE id=1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(DISTINCT commit_hash) FROM dolt_log;"
-
-
 echo "--- string func deeper ---"
 
 oracle "upper_lower_projection_after_merge" "
@@ -12058,9 +11040,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, SUBSTR(v, 1, 3) AS p, length(v) AS L FROM t ORDER BY id;"
 
-
-
-
 echo "--- INSERT SELECT computed probes ---"
 
 oracle "insert_select_arithmetic_row_merge" "
@@ -12080,9 +11059,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM a ORDER BY id;"
-
-
-
 
 echo "--- reset variant revisit ---"
 
@@ -12113,9 +11089,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- conflict resolve patterns ---"
 
@@ -12163,9 +11136,6 @@ SELECT dolt_commit('-m','resolved by delete');
 COMMIT;
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- multi-table FK merge ---"
 
 oracle "three_table_fk_chain_add_leaves_both_sides" "
@@ -12188,9 +11158,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main leaf');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM c;"
-
-
-
 
 echo "--- long-running branch probes ---"
 
@@ -12219,9 +11186,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- CTE aggregation ---"
 
 oracle "cte_with_having_after_merge" "
@@ -12236,9 +11200,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH totals AS (SELECT grp, sum(n) AS s FROM t GROUP BY grp) SELECT grp, s FROM totals WHERE s > 10 ORDER BY grp;"
-
-
-
 
 echo "--- index usage probes ---"
 
@@ -12255,9 +11216,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE code IN ('B','D') ORDER BY id;"
-
-
-
 
 echo "--- repeated merge from feat ---"
 
@@ -12286,9 +11244,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
 
-
-
-
 echo "--- empty row edges ---"
 
 oracle "all_columns_null_except_pk_merge" "
@@ -12307,9 +11262,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-
-
-
 echo "--- dolt_history_<table> probes ---"
 
 oracle "history_table_after_updates" "
@@ -12324,9 +11276,6 @@ UPDATE t SET v=3 WHERE id=1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(DISTINCT v) FROM dolt_history_t WHERE id=1;"
-
-
-
 
 echo "--- multi-table agg ---"
 
@@ -12344,9 +11293,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT c.name, sum(o.amount) AS total FROM customers c JOIN orders o ON c.id=o.customer_id GROUP BY c.name ORDER BY c.name;"
-
-
-
 
 echo "--- reset to intermediate commit ---"
 
@@ -12370,9 +11316,6 @@ SELECT dolt_commit('-m','c5');
 SELECT dolt_reset('--hard','HEAD~3');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- computed WHERE probes ---"
 
 oracle "where_by_mod_expression_after_merge" "
@@ -12387,9 +11330,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE n % 5 = 0 ORDER BY id;"
-
-
-
 
 echo "--- per-branch log probes ---"
 
@@ -12409,9 +11349,6 @@ SELECT dolt_commit('-m','main_c');
 SELECT dolt_merge('feat','--no-ff','-m','m_merge');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('base','feat_c','main_c','m_merge');"
 
-
-
-
 echo "--- INSERT partial cols + subquery ---"
 
 oracle "insert_partial_then_subquery_merge" "
@@ -12429,10 +11366,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, s FROM t ORDER BY id;"
-
-
-
-
 echo "--- savepoint + dolt_add parity ---"
 
 oracle "savepoint_then_dolt_add_rollback_is_noop" "
@@ -12476,9 +11409,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- subquery in WHERE with NULL ---"
 
 oracle "in_subquery_with_null_after_merge" "
@@ -12495,9 +11425,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM a WHERE id IN (SELECT ref FROM b) ORDER BY id;"
-
-
-
 
 echo "--- cross-branch schema probes ---"
 
@@ -12519,9 +11446,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, x FROM t ORDER BY id;"
 
-
-
-
 echo "--- nested UPDATE probes ---"
 
 oracle "update_set_based_on_avg_after_merge" "
@@ -12539,9 +11463,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n FROM t ORDER BY id;"
-
-
-
 
 echo "--- WITH + DELETE probes ---"
 
@@ -12561,9 +11482,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, grp, n FROM t ORDER BY id;"
 
-
-
-
 echo "--- REPLACE + UNIQUE probes ---"
 
 oracle "replace_with_unique_col_merge" "
@@ -12581,9 +11499,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, code, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- multi-FK topology probes ---"
 
@@ -12607,9 +11522,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM p ORDER BY id;"
 
-
-
-
 echo "--- convergent ALTER probes ---"
 
 oracle "both_sides_rename_same_col_same_name" "
@@ -12629,9 +11541,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main rename');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
-
-
-
 
 echo "--- commit hash uniqueness ---"
 
@@ -12684,9 +11593,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c15');
 " "SELECT CASE WHEN count(DISTINCT commit_hash) = count(*) THEN 1 ELSE 0 END FROM dolt_log;"
 
-
-
-
 echo "--- sparse update probes ---"
 
 oracle "sparse_updates_across_ids_merge" "
@@ -12709,9 +11615,6 @@ SELECT dolt_commit('-m','main sparse');
 SELECT dolt_merge('feat');
 " "SELECT sum(v) FROM t;"
 
-
-
-
 echo "--- dolt_blame probes ---"
 
 oracle "blame_count_equals_rows" "
@@ -12723,9 +11626,6 @@ UPDATE t SET v='B' WHERE id=2;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_blame_t;"
-
-
-
 
 echo "--- repeated cherry-pick probes ---"
 
@@ -12754,9 +11654,6 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- LIMIT/OFFSET probes ---"
 
 oracle "limit_offset_after_merge" "
@@ -12771,9 +11668,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id LIMIT 3 OFFSET 2;"
-
-
-
 
 echo "--- mix merge/cherry-pick ---"
 
@@ -12796,9 +11690,6 @@ SELECT dolt_merge('b1');
 SELECT dolt_cherry_pick('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- txn + reset probes ---"
 
 oracle "txn_wraps_reset_then_commit" "
@@ -12816,9 +11707,6 @@ INSERT INTO t VALUES(3);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 echo "--- revert merge-commit probes ---"
 
 oracle "revert_noff_merge_reverses_feat_data" "
@@ -12838,9 +11726,6 @@ SELECT dolt_merge('feat','--no-ff','-m','merged');
 SELECT dolt_revert('HEAD','-m','1');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- cherry-pick across schema ---"
 
 oracle "cherry_pick_commit_with_both_alter_and_insert" "
@@ -12856,9 +11741,6 @@ SELECT dolt_commit('-m','feat alter+insert');
 SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v, extra FROM t ORDER BY id;"
-
-
-
 
 echo "--- txn + dolt_add probes ---"
 
@@ -12885,9 +11767,6 @@ SELECT dolt_add('-A');
 ROLLBACK;
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- post-merge head state ---"
 
 oracle "post_merge_head_matches_log_top" "
@@ -12906,9 +11785,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat','--no-ff','-m','merge_commit');
 " "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD') AND message='merge_commit';"
 
-
-
-
 echo "--- nested subquery deep ---"
 
 oracle "triple_nested_subquery_after_merge" "
@@ -12924,9 +11800,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE n > (SELECT avg(n) FROM t WHERE id IN (SELECT id FROM t WHERE n >= 20)) ORDER BY id;"
 
-
-
-
 echo "--- aggregate pruning probes ---"
 
 oracle "sum_filtered_by_where_after_merge" "
@@ -12941,9 +11814,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT grp, sum(n) AS s FROM t WHERE n >= 20 GROUP BY grp HAVING sum(n) > 40 ORDER BY grp;"
-
-
-
 
 echo "--- many-col UPDATE probes ---"
 
@@ -12963,9 +11833,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c, d, e FROM t ORDER BY id;"
 
-
-
-
 echo "--- cherry-pick schema-only ---"
 
 oracle "cherry_pick_alter_only_commit" "
@@ -12984,9 +11851,6 @@ SELECT dolt_commit('-m','main row');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v, flag FROM t ORDER BY id;"
 
-
-
-
 echo "--- commit/reset/re-commit ---"
 
 oracle "reset_and_recommit_same_data" "
@@ -13003,9 +11867,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2 redo');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- cross-branch tag probes ---"
 
 oracle "tag_on_feat_branch_visible_on_main_tags" "
@@ -13020,9 +11881,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_tag('feat_tag','HEAD');
 SELECT dolt_checkout('main');
 " "SELECT count(*) FROM dolt_tags WHERE tag_name='feat_tag';"
-
-
-
 
 echo "--- sub-branch reset after merge ---"
 
@@ -13042,9 +11900,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main after');
 SELECT dolt_reset('--hard','HEAD~1');
 " "SELECT id FROM t ORDER BY id;"
-
-
-
 
 echo "--- deep both-side history ---"
 
@@ -13088,9 +11943,6 @@ SELECT dolt_commit('-m','m5');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n FROM t;"
 
-
-
-
 echo "--- boolean operator edge ---"
 
 oracle "not_null_filter_after_merge" "
@@ -13106,9 +11958,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE v IS NOT NULL AND v > 20 ORDER BY id;"
 
-
-
-
 echo "--- bit flag patterns ---"
 
 oracle "flags_with_bitwise_and_after_merge" "
@@ -13123,9 +11972,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, flags & 1 AS bit0 FROM t ORDER BY id;"
-
-
-
 
 echo "--- drop + recreate + merge ---"
 
@@ -13147,9 +11993,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- row survival probes ---"
 
 oracle "row_survives_many_ops_on_branch" "
@@ -13168,8 +12011,6 @@ SELECT dolt_commit('-m','feat ops');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
-
-
 echo "--- hashof variants ---"
 
 oracle "hashof_db_differs_across_commits" "
@@ -13194,9 +12035,6 @@ SELECT 1;
 SELECT 2;
 " "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD');"
 
-
-
-
 echo "--- ROW_NUMBER probes ---"
 
 oracle "row_number_per_group_after_merge" "
@@ -13211,9 +12049,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, ROW_NUMBER() OVER (PARTITION BY grp ORDER BY score DESC) AS rn FROM t ORDER BY id;"
-
-
-
 
 echo "--- cell merge many rows ---"
 
@@ -13236,9 +12071,6 @@ SELECT dolt_commit('-m','main b');
 SELECT dolt_merge('feat');
 " "SELECT sum(a) AS sa, sum(b) AS sb FROM t;"
 
-
-
-
 echo "--- recursive CTE generator ---"
 
 oracle "recursive_cte_series_join_post_merge" "
@@ -13253,9 +12085,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH RECURSIVE nums(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM nums WHERE n<10) SELECT n, COALESCE((SELECT label FROM t WHERE t.id=nums.n),'none') AS lbl FROM nums ORDER BY n;"
-
-
-
 
 echo "--- update affecting nothing ---"
 
@@ -13276,9 +12105,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- order+limit probes ---"
 
 oracle "max_via_order_limit_after_merge" "
@@ -13296,9 +12122,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY v DESC LIMIT 1;"
-
-
-
 
 echo "--- wide FK graph ---"
 
@@ -13327,9 +12150,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT 'c1' AS tbl, count(*) AS n FROM c1 UNION ALL SELECT 'c2', count(*) FROM c2 UNION ALL SELECT 'c3', count(*) FROM c3 ORDER BY 1;"
-
-
-
 
 echo "--- deep diamond probes ---"
 
@@ -13361,9 +12181,6 @@ SELECT dolt_commit('-m','m3');
 SELECT dolt_merge('left','--no-ff','-m','merged');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-
-
-
 echo "--- agg in subquery ---"
 
 oracle "subquery_with_order_in_agg" "
@@ -13378,9 +12195,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT grp, max(v) AS mx FROM t GROUP BY grp ORDER BY grp;"
-
-
-
 
 echo "--- triple parallel merges ---"
 
@@ -13408,9 +12222,6 @@ SELECT dolt_merge('f1');
 SELECT dolt_merge('f2');
 SELECT dolt_merge('f3');
 " "SELECT count(*) FROM t;"
-
-
-
 
 echo "--- text encoding probes ---"
 
@@ -13443,9 +12254,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- BLOB through merge ---"
 
 oracle "blob_update_one_side_merge" "
@@ -13463,9 +12271,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main tag');
 SELECT dolt_merge('feat');
 " "SELECT id, hex(b), tag FROM t;"
-
-
-
 
 echo "--- long-chain cherry-pick ---"
 
@@ -13502,9 +12307,6 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_cherry_pick('feat');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-
-
-
 echo "--- mixed index types ---"
 
 oracle "unique_plus_non_unique_index_merge" "
@@ -13525,9 +12327,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT category, count(*) AS n FROM t GROUP BY category ORDER BY category;"
 
-
-
-
 echo "--- schema diff count after merge ---"
 
 oracle "schema_diff_commit_count_after_merge" "
@@ -13546,9 +12345,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n FROM dolt_log WHERE message IN ('c1 added','c2 added');"
 
-
-
-
 echo "--- UPDATE cte source ---"
 
 oracle "update_via_cte_subquery_merge" "
@@ -13566,9 +12362,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- dolt_status detail ---"
 
@@ -13589,9 +12382,6 @@ SELECT dolt_commit('-m','base');
 UPDATE t SET v='b' WHERE id=1;
 " "SELECT count(*) FROM dolt_status WHERE table_name='t';"
 
-
-
-
 echo "--- commit after noops ---"
 
 oracle "many_select_then_commit_stable" "
@@ -13607,9 +12397,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 echo "--- convergent update-same-col same-value ---"
 
 oracle "both_sides_set_same_col_same_value_merge" "
@@ -13629,9 +12416,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- dolt_log filter combos ---"
 
@@ -13658,9 +12442,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT CASE WHEN count(*) > 0 THEN 1 ELSE 0 END FROM dolt_log;"
 
-
-
-
 echo "--- dirty flag probes ---"
 
 oracle "dirty_1_after_add_no_commit" "
@@ -13681,9 +12462,6 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_branches WHERE name='main' AND dirty IN (0,'false');"
-
-
-
 
 echo "--- cross-branch FK preservation ---"
 
@@ -13706,9 +12484,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT p.id AS pid, p.v AS pv, c.v AS cv FROM p LEFT JOIN c ON p.id=c.pid ORDER BY p.id;"
-
-
-
 
 echo "--- tag chain reset ---"
 
@@ -13736,9 +12511,6 @@ SELECT dolt_commit('-m','c5');
 SELECT dolt_reset('--hard','v1');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- cherry-pick idempotency ---"
 
 oracle "cherry_pick_then_full_merge_same_branch" "
@@ -13757,9 +12529,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- UPDATE subquery 2 tables ---"
 
@@ -13780,9 +12549,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, category_id, price FROM items ORDER BY id;"
-
-
-
 
 echo "--- rebase-like flow ---"
 
@@ -13808,9 +12574,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-
-
-
 echo "--- NULL default probes ---"
 
 oracle "null_default_merge" "
@@ -13829,9 +12592,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- large delete + merge ---"
 
 oracle "delete_half_rows_update_other_half_merge" "
@@ -13849,9 +12609,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main multiplies other half');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- multi-commit conflict resolve ---"
 
@@ -13878,9 +12635,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','kept ours');
 COMMIT;
 " "SELECT id, v FROM t;"
-
-
-
 
 echo "--- rapid alternation ---"
 
@@ -13916,9 +12670,6 @@ SELECT dolt_commit('-m','m3');
 SELECT dolt_merge('feat');
 " "SELECT owner, count(*) AS n FROM t GROUP BY owner ORDER BY owner;"
 
-
-
-
 echo "--- log invariant ---"
 
 oracle "log_count_unchanged_by_selects" "
@@ -13933,9 +12684,6 @@ SELECT count(*) FROM t;
 SELECT count(*) FROM dolt_branches;
 SELECT count(*) FROM dolt_tags;
 " "SELECT count(*) FROM dolt_log;"
-
-
-
 
 echo "--- nested WHERE joins ---"
 
@@ -13953,9 +12701,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT c.region, sum(o.amount) AS total FROM customers c JOIN orders o ON c.id=o.cid GROUP BY c.region ORDER BY c.region;"
-
-
-
 
 echo "--- multi-merge from same feat ---"
 
@@ -13978,9 +12723,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
 
-
-
-
 echo "--- hashof_table after merge ---"
 
 oracle "hashof_table_valid_after_merge" "
@@ -13996,9 +12738,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT CASE WHEN length(dolt_hashof_table('t')) > 0 THEN 1 ELSE 0 END;"
 
-
-
-
 echo "--- repeated add ---"
 
 oracle "add_same_table_multiple_times" "
@@ -14013,10 +12752,6 @@ SELECT dolt_add('-A');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
-
-
-
-
 echo "--- rapid commit-reset cycles ---"
 
 oracle "three_commit_reset_cycles" "
@@ -14037,9 +12772,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2c');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- INSERT SELECT LIMIT ---"
 
 oracle "insert_select_limit_after_merge" "
@@ -14059,9 +12791,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM dst ORDER BY id;"
 
-
-
-
 echo "--- UPDATE expression ---"
 
 oracle "update_case_increment_merge" "
@@ -14079,9 +12808,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n, s FROM t ORDER BY id;"
-
-
-
 
 echo "--- cherry-pick preservation ---"
 
@@ -14102,9 +12828,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main t2');
 SELECT dolt_cherry_pick('feat');
 " "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
-
-
-
 
 echo "--- three-branch merge count ---"
 
@@ -14133,9 +12856,6 @@ SELECT dolt_commit('-m','m2');
 SELECT dolt_merge('b','--no-ff','-m','merge_b');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('merge_a','merge_b');"
 
-
-
-
 echo "--- LIKE anchored ---"
 
 oracle "like_anchored_prefix_after_merge" "
@@ -14150,9 +12870,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE name LIKE 'a%' ORDER BY id;"
-
-
-
 
 echo "--- very deep reset probes ---"
 
@@ -14188,9 +12905,6 @@ SELECT dolt_commit('-m','c9');
 SELECT dolt_reset('--hard','HEAD~8');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- FK update through merge ---"
 
 oracle "fk_update_parent_attribute_merge" "
@@ -14211,9 +12925,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main child');
 SELECT dolt_merge('feat');
 " "SELECT p.v AS pv, c.v AS cv FROM p JOIN c ON p.id=c.pid ORDER BY p.id;"
-
-
-
 
 echo "--- three-branch tag snapshots ---"
 
@@ -14237,9 +12948,6 @@ SELECT dolt_tag('b2_snap','HEAD');
 SELECT dolt_checkout('main');
 " "SELECT count(*) FROM dolt_tags;"
 
-
-
-
 echo "--- revert-a-revert ---"
 
 oracle "revert_then_revert_restores_data" "
@@ -14253,9 +12961,6 @@ SELECT dolt_commit('-m','added_b');
 SELECT dolt_revert('HEAD');
 SELECT dolt_revert('HEAD');
 " "SELECT id, v FROM t ORDER BY id;"
-
-
-
 
 echo "--- BETWEEN edges ---"
 
@@ -14271,9 +12976,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE v BETWEEN 20 AND 40 ORDER BY id;"
-
-
-
 
 echo "--- INSERT SELECT GROUP BY ---"
 
@@ -14294,9 +12996,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT grp, total FROM totals ORDER BY grp;"
-
-
-
 
 echo "--- 4 branch merges ---"
 
@@ -14331,9 +13030,6 @@ SELECT dolt_merge('b3');
 SELECT dolt_merge('b4');
 " "SELECT count(*) FROM t;"
 
-
-
-
 echo "--- 30-col table merge ---"
 
 oracle "thirty_col_table_merge" "
@@ -14358,9 +13054,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, c01, c15, c25, c30 FROM t;"
 
-
-
-
 echo "--- multi-row REPLACE ---"
 
 oracle "multi_row_replace_merge" "
@@ -14379,9 +13072,6 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-
-
-
 echo "--- tie-break ORDER BY ---"
 
 oracle "order_by_with_tiebreak_after_merge" "
@@ -14396,9 +13086,6 @@ SELECT dolt_commit('-m','feat');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY n, grp, id;"
-
-
-
 
 echo "--- stress log ---"
 
@@ -14450,9 +13137,6 @@ INSERT INTO t VALUES(15);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c15');
 " "SELECT CASE WHEN count(DISTINCT commit_hash) = count(*) THEN 1 ELSE 0 END FROM dolt_log;"
-
-
-
 echo "--- final probes ---"
 
 oracle "one_k_update_after_ff_merge" "
@@ -14613,9 +13297,6 @@ INSERT INTO t VALUES(1),(2),(3);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','milestone');
 " "SELECT count(*) AS n FROM t;"
-
-
-
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

@@ -1,14 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
 set -u
 DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
@@ -33,7 +24,6 @@ dlq() {
 
 echo "=== BLOB Composite PK + Version Control Tests ==="
 
-
 echo ""
 echo "--- A: BLOB composite PK commit + reopen ---"
 
@@ -55,7 +45,6 @@ R3=$(dl "$DB" "SELECT v FROM t WHERE a=X'DEADBEEF' AND b=3;")
 [ "$R1" = "r1" ] && pass_name "a_r1" || fail_name "a_r1; got $R1"
 [ "$R2" = "r2" ] && pass_name "a_r2" || fail_name "a_r2; got $R2"
 [ "$R3" = "r3" ] && pass_name "a_r3" || fail_name "a_r3; got $R3"
-
 
 echo ""
 echo "--- B: Non-overlapping merge ---"
@@ -92,7 +81,6 @@ CONF=$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")
 [ "$MDD1" = "main_dd1" ] && pass_name "b_main_new" || fail_name "b_main_new; got $MDD1"
 [ "$CONF" = "0" ] && pass_name "b_no_conflicts" || fail_name "b_no_conflicts; got $CONF"
 
-
 echo ""
 echo "--- C: Modify-modify conflict ---"
 
@@ -124,7 +112,6 @@ ROLLBACK;")
 [ "$CONF" = "1" ] && pass_name "c_conflict" || fail_name "c_conflict; got $CONF"
 [ "$VAL" = "main_val" ] && pass_name "c_ours_wins" || fail_name "c_ours_wins; got $VAL"
 
-
 echo ""
 echo "--- D: Delete vs modify conflict ---"
 
@@ -154,7 +141,6 @@ KEEP=$(dl "$DB" "SELECT v FROM t WHERE a=X'CCDD';")
 [ "$CONF" = "1" ] && pass_name "d_dm_conflict" || fail_name "d_dm_conflict; got $CONF"
 [ "$KEEP" = "bystander" ] && pass_name "d_bystander_ok" || fail_name "d_bystander_ok; got $KEEP"
 
-
 echo ""
 echo "--- E: Convergent merge ---"
 
@@ -179,7 +165,6 @@ VAL=$(dl "$DB" "SELECT v FROM t WHERE a=X'FF00';")
 [ "$CONF" = "0" ] && pass_name "e_convergent_clean" || fail_name "e_convergent_clean; got $CONF"
 [ "$VAL" = "same" ] && pass_name "e_convergent_val" || fail_name "e_convergent_val; got $VAL"
 
-
 echo ""
 echo "--- F: Cherry-pick ---"
 
@@ -202,7 +187,6 @@ VAL=$(dl "$DB" "SELECT v FROM t WHERE a=X'BB' AND b=2;")
 [ "$CNT" = "2" ] && pass_name "f_cp_count" || fail_name "f_cp_count; got $CNT"
 [ "$VAL" = "feat" ] && pass_name "f_cp_val" || fail_name "f_cp_val; got $VAL"
 
-
 echo ""
 echo "--- G: Revert ---"
 
@@ -222,7 +206,6 @@ CNT=$(dl "$DB" "SELECT count(*) FROM t;")
 VAL=$(dl "$DB" "SELECT v FROM t WHERE a=X'AA';")
 [ "$CNT" = "1" ] && pass_name "g_revert_count" || fail_name "g_revert_count; got $CNT"
 [ "$VAL" = "original" ] && pass_name "g_revert_val" || fail_name "g_revert_val; got $VAL"
-
 
 echo ""
 echo "--- H: Byte-order edge cases through merge ---"
@@ -262,7 +245,6 @@ CONF=$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")
 [ "$MFE" = "main_fffe" ] && pass_name "h_main_fffe" || fail_name "h_main_fffe; got $MFE"
 [ "$M80" = "main_80" ] && pass_name "h_main_80" || fail_name "h_main_80; got $M80"
 [ "$CONF" = "0" ] && pass_name "h_no_conflicts" || fail_name "h_no_conflicts; got $CONF"
-
 
 echo ""
 echo "--- I: INT-first composite PK with BLOB ---"

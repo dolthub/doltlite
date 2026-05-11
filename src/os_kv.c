@@ -1,26 +1,5 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #include <sqliteInt.h>
 #if SQLITE_OS_KV || (SQLITE_OS_UNIX && defined(SQLITE_OS_KV_OPTIONAL))
-
-
-
-
-
 
 #if 0
 #define SQLITE_KV_TRACE(X)  printf X
@@ -28,25 +7,13 @@
 #define SQLITE_KV_TRACE(X)
 #endif
 
-
 #if 0
 #define SQLITE_KV_LOG(X)  printf X
 #else
 #define SQLITE_KV_LOG(X)
 #endif
 
-
-
-
 typedef struct KVVfsFile KVVfsFile;
-
-
-
-
-
-
-
-
 
 struct KVVfsFile {
   sqlite3_file base;
@@ -59,9 +26,6 @@ struct KVVfsFile {
   char *aData;
 };
 #define SQLITE_KVOS_SZ 133073
-
-
-
 
 static int kvvfsClose(sqlite3_file*);
 static int kvvfsReadDb(sqlite3_file*, void*, int iAmt, sqlite3_int64 iOfst);
@@ -81,9 +45,6 @@ static int kvvfsFileControlDb(sqlite3_file*, int op, void *pArg);
 static int kvvfsFileControlJrnl(sqlite3_file*, int op, void *pArg);
 static int kvvfsSectorSize(sqlite3_file*);
 static int kvvfsDeviceCharacteristics(sqlite3_file*);
-
-
-
 
 static int kvvfsOpen(sqlite3_vfs*, const char *, sqlite3_file*, int , int *);
 static int kvvfsDelete(sqlite3_vfs*, const char *zName, int syncDir);
@@ -117,8 +78,6 @@ static sqlite3_vfs sqlite3OsKvvfsObject = {
   kvvfsCurrentTimeInt64
 };
 
-
-
 static sqlite3_io_methods kvvfs_db_io_methods = {
   1,
   kvvfsClose,
@@ -140,8 +99,6 @@ static sqlite3_io_methods kvvfs_db_io_methods = {
   0,
   0
 };
-
-
 
 static sqlite3_io_methods kvvfs_jrnl_io_methods = {
   1,
@@ -165,15 +122,11 @@ static sqlite3_io_methods kvvfs_jrnl_io_methods = {
   0
 };
 
-
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-
-
 #ifndef SQLITE_WASM
-
 static int kvrecordWrite(const char*, const char *zKey, const char *zData);
 static int kvrecordDelete(const char*, const char *zKey);
 static int kvrecordRead(const char*, const char *zKey, char *zBuf, int nBuf);
@@ -181,10 +134,6 @@ static int kvrecordRead(const char*, const char *zKey, char *zBuf, int nBuf);
 #ifndef KVRECORD_KEY_SZ
 #define KVRECORD_KEY_SZ 32
 #endif
-
-
-
-
 
 static void kvrecordMakeKey(
   const char *zClass,
@@ -199,17 +148,6 @@ static void kvrecordMakeKey(
 }
 
 #ifndef SQLITE_WASM
-
-
-
-
-
-
-
-
-
-
-
 static int kvrecordWrite(
   const char *zClass,
   const char *zKey,
@@ -231,10 +169,6 @@ static int kvrecordWrite(
   }
 }
 
-
-
-
-
 static int kvrecordDelete(const char *zClass, const char *zKey){
   char zXKey[KVRECORD_KEY_SZ];
   kvrecordMakeKey(zClass, zKey, zXKey);
@@ -242,21 +176,6 @@ static int kvrecordDelete(const char *zClass, const char *zKey){
   SQLITE_KV_TRACE(("KVVFS-DELETE %-15s\n", zXKey));
   return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 static int kvrecordRead(
   const char *zClass,
@@ -301,15 +220,6 @@ static int kvrecordRead(
 }
 #endif
 
-
-
-
-
-
-
-
-
-
 typedef struct sqlite3_kvvfs_methods sqlite3_kvvfs_methods;
 struct sqlite3_kvvfs_methods {
   int (*xRcrdRead)(const char*, const char *zKey, char *zBuf, int nBuf);
@@ -327,17 +237,6 @@ struct sqlite3_kvvfs_methods {
   MAYBE_CONST sqlite3_io_methods *pIoJrnl;
 #undef MAYBE_CONST
 };
-
-
-
-
-
-
-
-
-
-
-
 
 #ifndef SQLITE_WASM
 const
@@ -359,30 +258,6 @@ sqlite3_kvvfs_methods sqlite3KvvfsMethods = {
   .pIoJrnl         = &kvvfs_jrnl_io_methods
 };
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #ifndef SQLITE_WASM
 static
 #endif
@@ -395,11 +270,6 @@ int kvvfsEncode(const char *aData, int nData, char *aOut){
       aOut[j++] = "0123456789ABCDEF"[c>>4];
       aOut[j++] = "0123456789ABCDEF"[c&0xf];
     }else{
-
-
-
-
-
       int k;
       for(k=1; i+k<nData && a[i+k]==0; k++){}
       i += k-1;
@@ -432,13 +302,6 @@ static const signed char kvvfsHexValue[256] = {
   -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1,
   -1, -1, -1, -1, -1, -1, -1, -1,   -1, -1, -1, -1, -1, -1, -1, -1
 };
-
-
-
-
-
-
-
 
 #ifndef SQLITE_WASM
 static
@@ -476,17 +339,6 @@ int kvvfsDecode(const char *a, char *aOut, int nOut){
   return j;
 }
 
-
-
-
-
-
-
-
-
-
-
-
 static void kvvfsDecodeJournal(
   KVVfsFile *pFile,
   const char *zTxt,
@@ -515,9 +367,6 @@ static void kvvfsDecodeJournal(
   }
 }
 
-
-
-
 static sqlite3_int64 kvvfsReadFileSize(KVVfsFile *pFile){
   char zData[50];
   zData[0] = 0;
@@ -531,11 +380,6 @@ static int kvvfsWriteFileSize(KVVfsFile *pFile, sqlite3_int64 sz){
   return sqlite3KvvfsMethods.xRcrdWrite(pFile->zClass, "sz", zData);
 }
 
-
-
-
-
-
 static int kvvfsClose(sqlite3_file *pProtoFile){
   KVVfsFile *pFile = (KVVfsFile *)pProtoFile;
 
@@ -548,9 +392,6 @@ static int kvvfsClose(sqlite3_file *pProtoFile){
 #endif
   return SQLITE_OK;
 }
-
-
-
 
 static int kvvfsReadJrnl(
   sqlite3_file *pProtoFile,
@@ -586,9 +427,6 @@ static int kvvfsReadJrnl(
   memcpy(zBuf, pFile->aJrnl+iOfst, iAmt);
   return SQLITE_OK;
 }
-
-
-
 
 static int kvvfsReadDb(
   sqlite3_file *pProtoFile,
@@ -644,10 +482,6 @@ static int kvvfsReadDb(
   return SQLITE_OK;
 }
 
-
-
-
-
 static int kvvfsWriteJrnl(
   sqlite3_file *pProtoFile,
   const void *zBuf,
@@ -672,9 +506,6 @@ static int kvvfsWriteJrnl(
   memcpy(pFile->aJrnl+iOfst, zBuf, iAmt);
   return SQLITE_OK;
 }
-
-
-
 
 static int kvvfsWriteDb(
   sqlite3_file *pProtoFile,
@@ -703,9 +534,6 @@ static int kvvfsWriteDb(
   }
   return rc;
 }
-
-
-
 
 static int kvvfsTruncateJrnl(sqlite3_file *pProtoFile, sqlite_int64 size){
   KVVfsFile *pFile = (KVVfsFile *)pProtoFile;
@@ -739,9 +567,6 @@ static int kvvfsTruncateDb(sqlite3_file *pProtoFile, sqlite_int64 size){
   return SQLITE_IOERR;
 }
 
-
-
-
 static int kvvfsSyncJrnl(sqlite3_file *pProtoFile, int flags){
   int i, n;
   KVVfsFile *pFile = (KVVfsFile *)pProtoFile;
@@ -770,9 +595,6 @@ static int kvvfsSyncDb(sqlite3_file *pProtoFile, int flags){
   return SQLITE_OK;
 }
 
-
-
-
 static int kvvfsFileSizeJrnl(sqlite3_file *pProtoFile, sqlite_int64 *pSize){
   KVVfsFile *pFile = (KVVfsFile *)pProtoFile;
   SQLITE_KV_LOG(("xFileSize('%s-journal')\n", pFile->zClass));
@@ -790,9 +612,6 @@ static int kvvfsFileSizeDb(sqlite3_file *pProtoFile, sqlite_int64 *pSize){
   return SQLITE_OK;
 }
 
-
-
-
 static int kvvfsLock(sqlite3_file *pProtoFile, int eLock){
   KVVfsFile *pFile = (KVVfsFile *)pProtoFile;
   assert( !pFile->isJournal );
@@ -804,9 +623,6 @@ static int kvvfsLock(sqlite3_file *pProtoFile, int eLock){
   return SQLITE_OK;
 }
 
-
-
-
 static int kvvfsUnlock(sqlite3_file *pProtoFile, int eLock){
   KVVfsFile *pFile = (KVVfsFile *)pProtoFile;
   assert( !pFile->isJournal );
@@ -817,17 +633,11 @@ static int kvvfsUnlock(sqlite3_file *pProtoFile, int eLock){
   return SQLITE_OK;
 }
 
-
-
-
 static int kvvfsCheckReservedLock(sqlite3_file *pProtoFile, int *pResOut){
   SQLITE_KV_LOG(("xCheckReservedLock\n"));
   *pResOut = 0;
   return SQLITE_OK;
 }
-
-
-
 
 static int kvvfsFileControlJrnl(sqlite3_file *pProtoFile, int op, void *pArg){
   SQLITE_KV_LOG(("xFileControl(%d) on journal\n", op));
@@ -847,24 +657,13 @@ static int kvvfsFileControlDb(sqlite3_file *pProtoFile, int op, void *pArg){
   return SQLITE_NOTFOUND;
 }
 
-
-
-
 static int kvvfsSectorSize(sqlite3_file *pFile){
   return 512;
 }
 
-
-
-
 static int kvvfsDeviceCharacteristics(sqlite3_file *pProtoFile){
   return 0;
 }
-
-
-
-
-
 
 static int kvvfsOpen(
   sqlite3_vfs *pProtoVfs,
@@ -905,11 +704,6 @@ static int kvvfsOpen(
   return SQLITE_OK;
 }
 
-
-
-
-
-
 static int kvvfsDelete(sqlite3_vfs *pVfs, const char *zPath, int dirSync){
   int rc ;
   if( strcmp(zPath, "local-journal")==0 ){
@@ -924,10 +718,6 @@ static int kvvfsDelete(sqlite3_vfs *pVfs, const char *zPath, int dirSync){
   return rc;
 }
 
-
-
-
-
 static int kvvfsAccess(
   sqlite3_vfs *pProtoVfs,
   const char *zPath,
@@ -936,15 +726,6 @@ static int kvvfsAccess(
 ){
   SQLITE_KV_LOG(("xAccess(\"%s\")\n", zPath));
 #if 0 && defined(SQLITE_WASM)
-
-
-
-
-
-
-
-
-
   const char *zKey = (0==sqlite3_strglob("*-journal", zPath))
     ? "jrnl" : "sz";
   *pResOut =
@@ -969,16 +750,10 @@ static int kvvfsAccess(
   {
     *pResOut = 0;
   }
-
 #endif
   SQLITE_KV_LOG(("xAccess returns %d\n",*pResOut));
   return SQLITE_OK;
 }
-
-
-
-
-
 
 static int kvvfsFullPathname(
   sqlite3_vfs *pVfs,
@@ -998,32 +773,18 @@ static int kvvfsFullPathname(
   return SQLITE_OK;
 }
 
-
-
-
 static void *kvvfsDlOpen(sqlite3_vfs *pVfs, const char *zPath){
   return 0;
 }
-
-
-
-
 
 static int kvvfsRandomness(sqlite3_vfs *pVfs, int nByte, char *zBufOut){
   memset(zBufOut, 0, nByte);
   return nByte;
 }
 
-
-
-
-
 static int kvvfsSleep(sqlite3_vfs *pVfs, int nMicro){
   return SQLITE_OK;
 }
-
-
-
 
 static int kvvfsCurrentTime(sqlite3_vfs *pVfs, double *pTimeOut){
   sqlite3_int64 i = 0;
@@ -1043,9 +804,6 @@ static int kvvfsCurrentTimeInt64(sqlite3_vfs *pVfs, sqlite3_int64 *pTimeOut){
 #endif
 
 #if SQLITE_OS_KV
-
-
-
 int sqlite3_os_init(void){
   return sqlite3_vfs_register(&sqlite3OsKvvfsObject, 1);
 }

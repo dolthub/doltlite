@@ -94,10 +94,6 @@ static int schemasClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
-
-
-
-
 static int schemasFilter(sqlite3_vtab_cursor *pCursor,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   SchemasCursor *pCur = (SchemasCursor*)pCursor;
@@ -108,7 +104,6 @@ static int schemasFilter(sqlite3_vtab_cursor *pCursor,
 
   freeRows(pCur);
   pCur->iRow = 0;
-
 
   rc = sqlite3_prepare_v2(pVtab->db,
     "SELECT type, name, sql FROM sqlite_schema "

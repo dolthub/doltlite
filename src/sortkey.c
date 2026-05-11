@@ -44,12 +44,6 @@ static u8 serialTypeTag(u32 serialType){
   return SORTKEY_NULL;
 }
 
-
-
-
-
-
-
 #define SORTKEY_COLL_BINARY 0
 #define SORTKEY_COLL_NOCASE 1
 #define SORTKEY_COLL_RTRIM  2
@@ -123,10 +117,6 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
     }else if( serialType == 9 ){
       v = 1;
     }else{
-
-
-
-
       u64 uv = (pData[0] & 0x80) ? (u64)-1 : 0;
       for(u32 i = 0; i < nData; i++){
         uv = (uv << 8) | pData[i];
@@ -141,7 +131,6 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
     buf[4] = (u8)(x >> 24); buf[5] = (u8)(x >> 16);
     buf[6] = (u8)(x >> 8);  buf[7] = (u8)(x);
   }
-
 
   if( buf[0] & 0x80 ){
 
@@ -274,10 +263,6 @@ int sortKeyFromRecordPrefixCollBuffer(
   int nEstimate;
 
   *pnOut = 0;
-
-
-
-
 
   nEstimate = 9 * nRec + 16;
   if( nEstimate < 64 ) nEstimate = 64;
@@ -618,12 +603,6 @@ int recordFromSortKeyBuffer(
   u32 aLen[64];
 
   const u8 *aFieldPtr[64];
-
-
-
-
-
-
   int aEncLen[64];
   u8 aIntBuf[64][8];
   int nFields = 0;
@@ -663,7 +642,6 @@ int recordFromSortKeyBuffer(
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
 
-
   while( pos < nSortKey && nFields < 64 ){
     u8 tag = pSortKey[pos++];
 
@@ -687,16 +665,8 @@ int recordFromSortKeyBuffer(
 
     }else if( tag == SORTKEY_TEXT || tag == SORTKEY_BLOB ){
 
-
       int start = pos;
       int dataLen = 0;
-
-
-
-
-
-
-
       while( pos < nSortKey ){
         const u8 *p0 = pSortKey + pos;
         const u8 *pZero = (const u8*)memchr(p0, 0x00, (size_t)(nSortKey - pos));
@@ -724,12 +694,7 @@ int recordFromSortKeyBuffer(
       }
       aLen[nFields] = (u32)dataLen;
 
-
       aFieldPtr[nFields] = pSortKey + start;
-
-
-
-
       aEncLen[nFields] = (pos - 2) - start;
       nFields++;
 
@@ -737,7 +702,6 @@ int recordFromSortKeyBuffer(
       return SQLITE_CORRUPT;
     }
   }
-
 
   nHdr = 1;
   for(i = 0; i < nFields; i++){
@@ -757,16 +721,13 @@ int recordFromSortKeyBuffer(
   }
   pOut = *ppBuf;
 
-
   {
     int off;
-
 
     off = putVarint32(pOut, (u32)nHdr);
     for(i = 0; i < nFields; i++){
       off += putVarint32(pOut + off, aType[i]);
     }
-
 
     for(i = 0; i < nFields; i++){
       u32 serialType = aType[i];
@@ -782,9 +743,6 @@ int recordFromSortKeyBuffer(
         memcpy(pOut + off, aIntBuf[i], fieldLen);
         off += (int)fieldLen;
       }else if( (u32)aEncLen[i] == fieldLen ){
-
-
-
         memcpy(pOut + off, aFieldPtr[i], fieldLen);
         off += (int)fieldLen;
       }else{

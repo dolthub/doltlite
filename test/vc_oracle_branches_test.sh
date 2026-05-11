@@ -1,20 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -25,8 +10,6 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
-
-
 
 normalize() {
   tr -d '\r' | awk -F'\t' '
@@ -64,8 +47,6 @@ oracle() {
     echo "$dolt_setup" | "$DOLT" sql -c >/dev/null 2>"$dir/dt.err"
     "$DOLT" sql -r csv -q "SELECT concat(name, char(9), hash, char(9), latest_commit_message, char(9), remote, char(9), branch, char(9), dirty) FROM dolt_branches ORDER BY name;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
-
-
 
   local dt_out
   dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" \
@@ -176,9 +157,6 @@ SELECT dolt_commit('-m', 'first');
 
 echo "--- branch at older commit ---"
 
-
-
-
 oracle "branch_at_head_minus_one" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -196,8 +174,6 @@ SELECT dolt_branch('back_two', 'HEAD~2');
 
 echo "--- branch copy ---"
 
-
-
 oracle "branch_copy_main_to_clone" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
@@ -207,8 +183,6 @@ SELECT dolt_branch('-c', 'main', 'clone');
 "
 
 echo "--- branch rename ---"
-
-
 
 oracle "branch_rename_non_current" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -220,9 +194,6 @@ SELECT dolt_branch('-m', 'old_name', 'new_name');
 "
 
 echo "--- multi-branch states ---"
-
-
-
 
 oracle "three_branches_three_heads" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -239,9 +210,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat_only');
 "
 
-
-
-
 oracle "other_branch_dirty_bit_untracked" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
@@ -253,8 +221,6 @@ INSERT INTO t VALUES (2);
 "
 
 echo "--- branch after merge ---"
-
-
 
 oracle "main_head_after_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

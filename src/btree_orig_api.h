@@ -1,8 +1,4 @@
 
-
-
-
-
 #ifndef BTREE_ORIG_API_H
 #define BTREE_ORIG_API_H
 
@@ -79,10 +75,6 @@ int origBtreeMaxRecordSize(void *pCur);
 void origBtreeCursorHint(void *pCur, unsigned int mask, ...);
 
 int origBtreeCursorSize(void);
-
-
-
-
 int origBtreeCursorIsLastOnSingle(void *pCur);
 void origBtreeEnter(void *p);
 void origBtreeLeave(void *p);

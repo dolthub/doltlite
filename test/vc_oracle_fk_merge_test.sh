@@ -1,21 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 
 DOLTLITE="${1:-./doltlite}"

@@ -9,11 +9,6 @@
 
 #define DOLTLITE_MAX_PARENTS 8
 
-
-
-
-
-
 typedef struct DoltliteCommit DoltliteCommit;
 struct DoltliteCommit {
   /* parentHash is the single-parent compatibility field. New commits use

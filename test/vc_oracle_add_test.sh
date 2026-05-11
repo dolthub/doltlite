@@ -1,17 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -24,7 +12,6 @@ FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() { tr -d '\r'; }
-
 
 oracle() {
   local name="$1" setup="$2"
@@ -61,7 +48,6 @@ oracle() {
     echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
   fi
 }
-
 
 oracle_error() {
   local name="$1" setup="$2"

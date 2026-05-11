@@ -43,19 +43,15 @@ struct HistVtab {
 typedef struct HistCursor HistCursor;
 struct HistCursor {
   sqlite3_vtab_cursor base;
-
   ProllyHash *aQueue;
   int qHead, qTail, qAlloc;
   ProllyHashSet visited, queued;
   int visitedInit, queuedInit;
-
   char zCommitHex[PROLLY_HASH_SIZE*2+1];
   char *zCommitter;
   i64 commitDate;
-
   ProllyCursor tblCur;
   int tblCurOpen;
-
   i64 intKey;
   u8 *pVal; int nVal;
   int hasRow;
@@ -86,9 +82,6 @@ static void htCursorReset(HistCursor *c){
   c->iRowid = 0;
 }
 
-
-
-
 static int htCaptureRow(HistCursor *c){
   const u8 *pVal; int nVal;
   sqlite3_free(c->pVal);
@@ -105,9 +98,6 @@ static int htCaptureRow(HistCursor *c){
   return SQLITE_OK;
 }
 
-
-
-
 static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     const char *zTableName, const ProllyHash *pCommitHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -121,7 +111,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   rc = doltliteLoadCommit(db, pCommitHash, &commit);
   if( rc!=SQLITE_OK ) return rc;
 
-
   doltliteHashToHex(pCommitHash, c->zCommitHex);
   sqlite3_free(c->zCommitter);
   c->zCommitter = sqlite3_mprintf("%s", commit.zName ? commit.zName : "");
@@ -130,7 +119,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     doltliteCommitClear(&commit);
     return SQLITE_NOMEM;
   }
-
 
   {
     int i;
@@ -158,7 +146,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     }
   }
 
-
   rc = doltliteLoadCatalog(db, &commit.catalogHash, &aT, &nT, 0);
   doltliteCommitClear(&commit);
   if( rc!=SQLITE_OK ) return rc;
@@ -170,7 +157,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   }
   doltliteFreeCatalog(aT, nT);
 
-
   prollyCursorInit(&c->tblCur, cs, pCache, &tableRoot, flags);
   rc = prollyCursorFirst(&c->tblCur, &res);
   if( rc!=SQLITE_OK ){
@@ -178,7 +164,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     return rc;
   }
   if( res ){
-
     prollyCursorClose(&c->tblCur);
     return SQLITE_OK;
   }
@@ -186,11 +171,8 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   return SQLITE_OK;
 }
 
-
-
 static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
   int rc;
-
 
   if( c->tblCurOpen ){
     rc = prollyCursorNext(&c->tblCur);
@@ -202,11 +184,9 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
     if( prollyCursorIsValid(&c->tblCur) ){
       return htCaptureRow(c);
     }
-
     prollyCursorClose(&c->tblCur);
     c->tblCurOpen = 0;
   }
-
 
   while( c->qHead < c->qTail ){
     ProllyHash cur = c->aQueue[c->qHead++];
@@ -221,9 +201,7 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
     if( c->tblCurOpen ){
       return htCaptureRow(c);
     }
-
   }
-
 
   c->hasRow = 0;
   return SQLITE_OK;
@@ -295,7 +273,6 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   doltliteGetSessionHead(v->db, &head);
   if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
 
-
   rc = prollyHashSetInit(&c->visited, 64);
   if( rc!=SQLITE_OK ) return rc;
   c->visitedInit = 1;
@@ -311,7 +288,6 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   c->qTail = 1;
   rc = prollyHashSetAdd(&c->queued, &head);
   if( rc!=SQLITE_OK ) return rc;
-
 
   return htAdvance(c, v->db, v->zTableName);
 }

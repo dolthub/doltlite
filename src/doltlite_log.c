@@ -20,12 +20,10 @@ struct DoltliteLogVtab {
 typedef struct DoltliteLogCursor DoltliteLogCursor;
 struct DoltliteLogCursor {
   sqlite3_vtab_cursor base;
-
   ProllyHash *aQueue;
   int qHead, qTail, qAlloc;
   ProllyHashSet visited;
   int visitedInit;
-
   ProllyHash curHash;
   char zHex[PROLLY_HASH_SIZE*2+1];
   DoltliteCommit curCommit;
@@ -99,8 +97,6 @@ static int doltliteLogClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
-
-
 static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
   int i, rc;
 
@@ -121,7 +117,6 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
     pCur->curHash = cur;
     doltliteHashToHex(&cur, pCur->zHex);
     pCur->hasRow = 1;
-
 
     for(i = 0; i < doltliteCommitParentCount(&pCur->curCommit); i++){
       const ProllyHash *pParent = doltliteCommitParentHash(&pCur->curCommit, i);
@@ -168,7 +163,6 @@ static int doltliteLogFilter(
   doltliteGetSessionHead(pVtab->db, &head);
   if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
 
-
   rc = prollyHashSetInit(&pCur->visited, 64);
   if( rc!=SQLITE_OK ) return rc;
   pCur->visitedInit = 1;
@@ -178,7 +172,6 @@ static int doltliteLogFilter(
   if( !pCur->aQueue ) return SQLITE_NOMEM;
   pCur->aQueue[0] = head;
   pCur->qTail = 1;
-
 
   return logAdvance(pCur, pVtab->db);
 }

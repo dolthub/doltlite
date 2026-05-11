@@ -1,35 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -66,17 +36,10 @@ normalize_table() {
     | sort
 }
 
-
-
-
 oracle() {
   local name="$1" setup="$2" tables="${3:-t}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
-
-
-
-
 
   local table_query=""
   IFS=',' read -ra tarr <<< "$tables"
@@ -125,7 +88,6 @@ oracle() {
   ) > "$dir/dt.status.raw"
   dt_status=$(tail -n +2 "$dir/dt.status.raw" | tr -d '"' | normalize_status)
 
-
   local dolt_table_query=""
   for tn in "${tarr[@]}"; do
     local part="SELECT concat('T', char(9), '$tn', char(9), coalesce(id,''), char(9), coalesce(v,'')) FROM $tn"
@@ -142,10 +104,6 @@ oracle() {
     "$DOLT" sql -r csv -q "$dolt_table_query;" 2>>"$dir/dt.t.err"
   ) > "$dir/dt.table.raw"
   dt_table=$(tail -n +2 "$dir/dt.table.raw" | tr -d '"' | normalize_table)
-
-
-
-
 
   if [ -z "$dl_log" ] && [ -z "$dt_log" ] && [ -z "$dl_table" ] && [ -z "$dt_table" ]; then
     fail=$((fail+1))
@@ -186,10 +144,6 @@ SELECT dolt_commit('-m', 'c1');
 
 echo "--- reset moving things between stages ---"
 
-
-
-
-
 oracle "reset_unstages_while_working_has_separate_diff" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -197,9 +151,6 @@ SELECT dolt_add('-A');
 INSERT INTO t VALUES (4, 40);
 SELECT dolt_reset();
 "
-
-
-
 
 oracle "hard_reset_undoes_stage_then_working_delete" "
 $SEED
@@ -209,11 +160,6 @@ DELETE FROM t WHERE id = 3;
 SELECT dolt_reset('--hard');
 "
 
-
-
-
-
-
 oracle "mixed_reset_preserves_subsequent_working_change" "
 $SEED
 UPDATE t SET v = 100 WHERE id = 1;
@@ -222,9 +168,6 @@ UPDATE t SET v = 200 WHERE id = 1;
 SELECT dolt_reset();
 "
 
-
-
-
 oracle "hard_reset_wipes_both_staged_and_working" "
 $SEED
 UPDATE t SET v = 100 WHERE id = 1;
@@ -232,9 +175,6 @@ SELECT dolt_add('-A');
 UPDATE t SET v = 200 WHERE id = 1;
 SELECT dolt_reset('--hard');
 "
-
-
-
 
 oracle "table_reset_unstages_only_named_table" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
@@ -249,9 +189,6 @@ SELECT dolt_add('-A');
 SELECT dolt_reset('a');
 " "a,b"
 
-
-
-
 oracle "mixed_reset_to_prev_commit_moves_diff_to_working" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -259,8 +196,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 SELECT dolt_reset('HEAD~1');
 "
-
-
 
 oracle "hard_reset_to_prev_commit_drops_diff_entirely" "
 $SEED
@@ -272,9 +207,6 @@ SELECT dolt_reset('--hard', 'HEAD~1');
 
 echo "--- checkout moving things between stages ---"
 
-
-
-
 oracle "checkout_branch_clean_swaps_working" "
 $SEED
 SELECT dolt_branch('feature');
@@ -285,14 +217,6 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 "
 
-
-
-
-
-
-
-
-
 oracle "checkout_branch_per_branch_working_set" "
 $SEED
 SELECT dolt_branch('feature');
@@ -300,10 +224,6 @@ INSERT INTO t VALUES (3, 30);
 SELECT dolt_checkout('feature');
 SELECT dolt_checkout('main');
 "
-
-
-
-
 
 oracle "checkout_b_starts_from_head_not_working" "
 $SEED
@@ -313,9 +233,6 @@ SELECT dolt_checkout('feature');
 SELECT dolt_checkout('-b', 'feature2');
 SELECT dolt_checkout('main');
 "
-
-
-
 
 oracle "checkout_table_reverts_only_named_table" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
@@ -329,9 +246,6 @@ UPDATE b SET v = 999 WHERE id = 1;
 SELECT dolt_checkout('a');
 " "a,b"
 
-
-
-
 oracle "checkout_table_clears_both_staged_and_working" "
 $SEED
 UPDATE t SET v = 100 WHERE id = 1;
@@ -342,9 +256,6 @@ SELECT dolt_checkout('t');
 
 echo "--- full cycle ---"
 
-
-
-
 oracle "soft_reset_uncommit_then_recommit" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -353,8 +264,6 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_reset('--soft', 'HEAD~1');
 SELECT dolt_commit('-m', 'c2-recommitted');
 "
-
-
 
 oracle "mixed_reset_uncommit_then_readd_recommit" "
 $SEED
@@ -365,9 +274,6 @@ SELECT dolt_reset('HEAD~1');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2-take-two');
 "
-
-
-
 
 oracle "branch_round_trip_preserves_each_side" "
 $SEED
@@ -386,16 +292,12 @@ SELECT dolt_checkout('main');
 
 echo "--- edge cases ---"
 
-
-
 oracle "reset_undoes_staged_table_deletion" "
 $SEED
 DROP TABLE t;
 SELECT dolt_add('-A');
 SELECT dolt_reset('--hard');
 "
-
-
 
 oracle "mixed_reset_does_not_touch_untracked_new_table" "
 $SEED
@@ -404,19 +306,12 @@ INSERT INTO u VALUES (1, 99);
 SELECT dolt_reset();
 " "t,u"
 
-
-
-
-
 oracle "hard_reset_with_untracked_new_table" "
 $SEED
 CREATE TABLE u(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO u VALUES (1, 99);
 SELECT dolt_reset('--hard');
 " "t,u"
-
-
-
 
 oracle "hard_reset_drops_table_added_after_target" "
 $SEED

@@ -1,39 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 
 DOLTLITE="${1:-./doltlite}"
@@ -43,17 +9,12 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 
-
-
-
 dl_scalar() {
   local name="$1" sql="$2"
   local db="$TMPROOT/$name.db"
   rm -f "$db"
   "$DOLTLITE" "$db" "$sql" 2>"$TMPROOT/$name.err"
 }
-
-
 
 dolt_scalar() {
   local name="$1" sql="$2"
@@ -68,8 +29,6 @@ dolt_scalar() {
   )
 }
 
-
-
 dl_errored() {
   local name="$1" sql="$2"
   local db="$TMPROOT/${name}_err.db"
@@ -77,7 +36,6 @@ dl_errored() {
   "$DOLTLITE" "$db" "$sql" >"$TMPROOT/${name}.out" 2>"$TMPROOT/${name}.err"
   grep -qiE 'error|Error' "$TMPROOT/${name}.out" "$TMPROOT/${name}.err" 2>/dev/null
 }
-
 
 dolt_errored() {
   local name="$1" sql="$2"
@@ -144,7 +102,6 @@ expect_true() {
 echo "=== Version Control Oracle Tests: dolt_version ==="
 echo ""
 
-
 echo "--- 1. Returns a non-empty version string ---"
 
 V=$(dl_scalar "basic" "SELECT dolt_version();")
@@ -152,7 +109,6 @@ expect_nonempty "dolt_version_returns_nonempty" "$V"
 expect_shape    "dolt_version_plausible_shape" "$V"
 
 echo ""
-
 
 echo "--- 2. Deterministic across same-session calls ---"
 
@@ -167,7 +123,6 @@ V4=$("$DOLTLITE" "$DB" "SELECT dolt_version();" 2>>"$TMPROOT/session.err")
 expect_equal "dolt_version_stable_across_reopen" "$V3" "$V4"
 
 echo ""
-
 
 echo "--- 3. Rejects non-zero argcount ---"
 
@@ -187,7 +142,6 @@ fi
 
 echo ""
 
-
 echo "--- 4. Callable mid-transaction ---"
 
 DB="$TMPROOT/mid_txn.db"
@@ -198,7 +152,6 @@ expect_nonempty "dolt_version_mid_transaction" "$V_MID"
 expect_equal    "dolt_version_same_in_txn"     "$V_MID" "$V"
 
 echo ""
-
 
 echo "--- 5. Dolt conformance ---"
 

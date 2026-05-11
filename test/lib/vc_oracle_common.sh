@@ -16,10 +16,6 @@ vc_oracle_run_doltlite_script() {
   printf '%s\n' "$sql" | "$DOLTLITE" "$db" >"$out" 2>"$err"
 }
 
-
-
-
-
 vc_oracle_run_dolt_script() {
   local repo="$1"
   local out="$2"
@@ -32,10 +28,6 @@ vc_oracle_run_dolt_script() {
     printf '%s\n' "$sql" | "$DOLT" sql -c "$@" >"$out" 2>"$err"
   )
 }
-
-
-
-
 
 vc_oracle_run_dolt_script_for_error() {
   local repo="$1"

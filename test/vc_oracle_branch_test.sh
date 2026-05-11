@@ -1,16 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -22,7 +11,6 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-
 normalize() {
   tr -d '\r' | awk -F'\t' '
     {
@@ -33,9 +21,6 @@ normalize() {
     }
   '
 }
-
-
-
 
 oracle() {
   local name="$1" setup="$2"

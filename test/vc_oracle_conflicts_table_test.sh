@@ -1,27 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -37,14 +15,10 @@ normalize() {
   tr -d '\r' | sort
 }
 
-
-
-
 oracle() {
   local name="$1" setup="$2" query="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
-
 
   local dl_script
   local dl_out
@@ -53,9 +27,6 @@ oracle() {
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
            | grep '^R|' \
            | normalize)
-
-
-
 
   local dolt_all
   dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$setup" "$query")")
@@ -172,9 +143,6 @@ SELECT dolt_merge('feat');
 
 echo "--- INTEGER PRIMARY KEY (rowid-aliased) ---"
 
-
-
-
 oracle "integer_pk_single_row" \
 "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,10);
@@ -247,9 +215,6 @@ SELECT dolt_merge('feat');
 
 echo "--- insert/insert same PK ---"
 
-
-
-
 oracle "insert_insert_same_pk" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,10);
@@ -266,8 +231,6 @@ SELECT dolt_merge('feat');
 "SELECT CONCAT('R|', IFNULL(base_id,'NULL'), '|', IFNULL(base_v,'NULL'), '|', our_id, '|', our_v, '|', our_diff_type, '|', their_id, '|', their_v, '|', their_diff_type) FROM dolt_conflicts_t ORDER BY our_id;"
 
 echo "--- delete/modify: main deletes, feature modifies ---"
-
-
 
 oracle "main_delete_feat_modify" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);

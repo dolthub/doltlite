@@ -141,19 +141,6 @@ void doltliteFreeColInfo(DoltliteColInfo *ci){
   ci->nCol = 0;
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci){
   char *zSql;
   sqlite3_stmt *pStmt = 0;
@@ -221,10 +208,6 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     return rc;
   }
 
-
-
-
-
   if( nPkCols==1 && iCandidateAlias>=0 ){
     ci->iPkCol = iCandidateAlias;
   }
@@ -238,11 +221,8 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
       return SQLITE_NOMEM;
     }
     if( ci->iPkCol>=0 || nPkCols==0 ){
-
       for(i=0; i<ci->nCol; i++) ci->aColToRec[i] = i;
     }else{
-
-
       for(i=0; i<ci->nCol; i++){
         if( aPk[i]>0 ) ci->aColToRec[i] = aPk[i] - 1;
       }
@@ -364,28 +344,15 @@ void doltliteResultUserCol(
   int iRecField;
   DoltliteRecordInfo ri;
 
-
-
-
-
   if( !pRec || nRec<=0 || !ci || iDeclaredCol<0 || iDeclaredCol>=ci->nCol ){
     sqlite3_result_null(ctx);
     return;
   }
 
-
-
-
-
   if( iDeclaredCol==ci->iPkCol && ci->iPkCol>=0 ){
     sqlite3_result_int64(ctx, intKey);
     return;
   }
-
-
-
-
-
 
   iRecField = ci->aColToRec ? ci->aColToRec[iDeclaredCol] : iDeclaredCol;
   if( iRecField<0 ){

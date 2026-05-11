@@ -18,10 +18,6 @@ struct ProllyCursorLevel {
   int idx;
 };
 
-
-
-
-
 struct ProllyCursor {
   ChunkStore *pStore;
   ProllyCache *pCache;

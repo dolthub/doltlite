@@ -1,26 +1,4 @@
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #ifndef SQLITE_PROLLY_THREE_WAY_MERGE_H
 #define SQLITE_PROLLY_THREE_WAY_MERGE_H
 

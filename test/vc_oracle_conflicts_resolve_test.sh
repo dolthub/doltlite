@@ -1,18 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -24,16 +11,10 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-
-
-
-
-
 oracle() {
   local name="$1" setup="$2" resolve_and_query="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
-
 
   local dl_script
   local dl_out
@@ -45,10 +26,6 @@ oracle() {
            | grep -v '^Merge has' \
            | grep '^R|' \
            | tr -d '\r' | sort)
-
-
-
-
 
   local dolt_all
   dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$setup" "$resolve_and_query")")
@@ -106,7 +83,6 @@ $dolt_setup"
     echo "    dolt rc:     $dt_rc"
   fi
 }
-
 
 CONFLICT_SETUP="
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -242,10 +218,6 @@ SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
 echo "--- TEXT primary key ---"
 
-
-
-
-
 oracle "resolve_theirs_text_pk" \
 "CREATE TABLE t(id VARCHAR(32) PRIMARY KEY, v INT);
 INSERT INTO t VALUES('alice', 10);
@@ -340,9 +312,6 @@ SELECT CONCAT('R|table|', id, '|', v) FROM t ORDER BY id;
 SELECT CONCAT('R|count|', count(*)) FROM dolt_conflicts;"
 
 echo "--- composite primary key (two INT columns) ---"
-
-
-
 
 oracle "resolve_theirs_composite_int_pk" \
 "CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a, b));
@@ -466,8 +435,6 @@ SELECT CONCAT('R|', region, '|', id, '|', v) FROM t ORDER BY region, id;"
 
 echo "--- multi-row conflicts in a single table ---"
 
-
-
 oracle "resolve_theirs_many_rows" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
@@ -488,9 +455,6 @@ SELECT dolt_merge('feature');
 SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
 echo "--- delete/modify conflicts ---"
-
-
-
 
 oracle "resolve_ours_delete_vs_modify" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -530,7 +494,6 @@ SELECT dolt_merge('feature');
   "SELECT dolt_conflicts_resolve('--theirs', 't');
 SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
-
 oracle "resolve_theirs_modify_vs_delete" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 10), (2, 20);
@@ -551,9 +514,6 @@ SELECT dolt_merge('feature');
 SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
 echo "--- insert/insert same PK ---"
-
-
-
 
 oracle "resolve_theirs_insert_insert_same_pk" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -595,8 +555,6 @@ SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
 echo "--- wide schema (many non-PK columns) ---"
 
-
-
 oracle "resolve_theirs_wide_schema" \
 "CREATE TABLE t(id INT PRIMARY KEY, a VARCHAR(32), b INT, c DOUBLE, d VARCHAR(32), e INT);
 INSERT INTO t VALUES(1, 'a1', 11, 1.5, 'd1', 111);
@@ -618,7 +576,6 @@ SELECT dolt_merge('feature');
 SELECT CONCAT('R|', id, '|', a, '|', b, '|', c, '|', d, '|', e) FROM t ORDER BY id;"
 
 echo "--- NULL values in conflict rows ---"
-
 
 oracle "resolve_theirs_with_nulls" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT, note VARCHAR(32));

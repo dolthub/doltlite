@@ -1,23 +1,5 @@
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 #ifndef SQLITE_CHUNK_STORE_H
 #define SQLITE_CHUNK_STORE_H
 
@@ -28,34 +10,6 @@
 #define CHUNK_STORE_VERSION 11
 #define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #define WS_FORMAT_VERSION_V2 2
 #define WS_FORMAT_VERSION_V3 3
@@ -81,21 +35,6 @@
 #define WS_REBASE_RETURN_BRANCH_OFF WS_TOTAL_SIZE_V4
 #define WS_CONSTRAINT_VIOLATIONS_OFF (WS_REBASE_RETURN_BRANCH_OFF + WS_REBASE_BRANCH_LEN)
 #define WS_TOTAL_SIZE       (WS_CONSTRAINT_VIOLATIONS_OFF + PROLLY_HASH_SIZE)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #define CATALOG_FORMAT_V3       0x44
 #define CATALOG_FORMAT_V4       0x45
@@ -139,14 +78,6 @@ struct ConflictEntry {
   int nTheirVal;
 };
 
-
-
-
-
-
-
-
-
 #if defined(__GNUC__) || defined(__clang__)
 #  define DOLTLITE_PACKED __attribute__((__packed__))
 #elif defined(_MSC_VER)
@@ -158,10 +89,6 @@ struct ConflictEntry {
 
 struct DOLTLITE_PACKED ChunkIndexEntry {
   ProllyHash hash;
-
-
-
-
   i64 offset;
   int size;
 };
@@ -169,9 +96,6 @@ struct DOLTLITE_PACKED ChunkIndexEntry {
 #if defined(_MSC_VER)
 #  pragma pack(pop)
 #endif
-
-
-
 
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #  define CHUNK_STORE_LE_PACKING 1
@@ -231,7 +155,6 @@ struct ChunkStore {
   void *aIndexMmapBase;
   i64 aIndexMmapSize;
 
-
   ChunkIndexEntry *aPending;
   int nPending;
   int nPendingAlloc;
@@ -255,18 +178,9 @@ struct ChunkStore {
   u8 readOnly;
   u8 isMemory;
   u8 snapshotPinned;
-
-
-
-
   u8 hasMovedChecked;
   int graphLockFd;
   i64 nCommittedWriteBuf;
-
-
-
-
-
 
   i64 nWalData;
 };

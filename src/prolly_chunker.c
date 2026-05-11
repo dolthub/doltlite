@@ -27,7 +27,6 @@ static int initLevel(ProllyChunker *ch, int level){
   pLevel = &ch->aLevel[level];
   memset(pLevel, 0, sizeof(ProllyChunkerLevel));
 
-
   prollyNodeBuilderInit(&pLevel->builder, (u8)level, ch->flags);
 
   pLevel->nItems = 0;
@@ -58,26 +57,14 @@ static int flushLevel(ProllyChunker *ch, int level){
 
   assert( pLevel->builder.nItems > 0 );
 
-
   builderLastKey(&pLevel->builder, &pLastKey, &nLastKey);
-
 
   rc = prollyNodeBuilderFinish(&pLevel->builder, &pData, &nData);
   if( rc!=SQLITE_OK ) return rc;
 
-
   rc = chunkStorePut(ch->pStore, pData, nData, &hash);
   sqlite3_free(pData);
   if( rc!=SQLITE_OK ) return rc;
-
-
-
-
-
-
-
-
-
 
   if( level + 1 >= PROLLY_CURSOR_MAX_DEPTH ){
     return SQLITE_FULL;
@@ -87,7 +74,6 @@ static int flushLevel(ProllyChunker *ch, int level){
                   pLastKey, nLastKey,
                   hash.data, PROLLY_HASH_SIZE);
   if( rc!=SQLITE_OK ) return rc;
-
 
   prollyNodeBuilderReset(&pLevel->builder);
   pLevel->nItems = 0;
@@ -105,10 +91,8 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
 
   assert( pLevel->builder.nItems > 0 );
 
-
   rc = prollyNodeBuilderFinish(&pLevel->builder, &pData, &nData);
   if( rc!=SQLITE_OK ) return rc;
-
 
   rc = chunkStorePut(ch->pStore, pData, nData, pHash);
   sqlite3_free(pData);
@@ -157,7 +141,6 @@ static int addToLevel(ProllyChunker *ch, int level,
 
   assert( level >= 0 && level < PROLLY_CURSOR_MAX_DEPTH );
 
-
   if( level >= ch->nLevels ){
     while( ch->nLevels <= level ){
       rc = initLevel(ch, ch->nLevels);
@@ -168,7 +151,6 @@ static int addToLevel(ProllyChunker *ch, int level,
 
   pLevel = &ch->aLevel[level];
 
-
   rc = prollyNodeBuilderAdd(&pLevel->builder, pKey, nKey, pVal, nVal);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -176,11 +158,6 @@ static int addToLevel(ProllyChunker *ch, int level,
 
   thisSize = nKey + nVal;
   pLevel->nBytes += thisSize;
-
-
-
-
-
 
   if( pLevel->nBytes >= PROLLY_CHUNK_MIN ){
     int atBoundary;
@@ -230,7 +207,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
     return SQLITE_OK;
   }
 
-
   level = 0;
   while( level < ch->nLevels ){
     ProllyChunkerLevel *pLevel = &ch->aLevel[level];
@@ -240,7 +216,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
       level++;
       continue;
     }
-
 
     {
       if( hasPendingAncestorLevels(ch, level) ){
@@ -255,7 +230,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
 
         memcpy(&ch->root, &hash, sizeof(ProllyHash));
 
-
         prollyNodeBuilderReset(&pLevel->builder);
         pLevel->nItems = 0;
         pLevel->nBytes = 0;
@@ -265,7 +239,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
 
     level++;
   }
-
 
   memset(&ch->root, 0, sizeof(ProllyHash));
   return SQLITE_OK;

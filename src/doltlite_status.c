@@ -189,9 +189,6 @@ static int statusRootsShareAnyKey(
   return rc;
 }
 
-
-
-
 static int isRenamePair(
   sqlite3 *db,
   struct TableEntry *aFrom, int nFrom,
@@ -268,9 +265,6 @@ static int compareCatalogs(
     if( rc==SQLITE_NOTFOUND ) continue;
     if( rc!=SQLITE_OK ) return rc;
     if(!pFrom){
-
-
-
       if( staged==0 ){
         int ignored = 0;
         char *zIgnErr = 0;

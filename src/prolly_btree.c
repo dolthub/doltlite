@@ -121,12 +121,6 @@ struct TableEntry {
   ProllyMutMap *pPending;
 };
 
-
-
-
-
-
-
 typedef struct Catalog Catalog;
 struct Catalog {
   struct TableEntry *a;
@@ -271,7 +265,6 @@ struct Btree {
   u8 inTransaction;
   u8 bSchemaChangedTxn;
 
-
   int nSavepoint;
   int nSavepointAlloc;
 
@@ -306,7 +299,6 @@ struct Btree {
   ProllyHash committedConflictsCatalogHash;
   ProllyHash committedConstraintViolationsHash;
 
-
   char *zBranch;
   char *zAuthorName;
   char *zAuthorEmail;
@@ -316,22 +308,11 @@ struct Btree {
   ProllyHash mergeCommitHash;
   ProllyHash conflictsCatalogHash;
 
-
-
-
-
-
-
   u8 isRebasing;
   ProllyHash preRebaseWorkingCat;
   ProllyHash rebaseOntoCommit;
   char *zRebaseOrigBranch;
   char *zRebaseReturnBranch;
-
-
-
-
-
 
   ProllyHash constraintViolationsHash;
 
@@ -371,7 +352,6 @@ struct BtCursor {
   u8 isPinned;
   u8 flushSeekEdits;
 
-
   int mmIdx;
   int mmPhysIdx;
   u8 mmActive;
@@ -381,7 +361,6 @@ struct BtCursor {
 #define MERGE_SRC_MUT   1
 #define MERGE_SRC_BOTH  2
   u8 mergeSrc;
-
 
   i64 nKey;
   void *pKey;
@@ -397,9 +376,6 @@ static void catFree(Catalog *cat);
 static int btreeLoadBranchHeadCatalog(ChunkStore *cs, const char *zBranch,
                                       ProllyHash *pCatHash,
                                       ProllyHash *pHeadCommit);
-
-
-
 
 static inline struct TableEntry *findTable(Btree *p, Pgno iTable){
   return catFind(&p->cat, iTable);
@@ -460,12 +436,6 @@ static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
     }
   }
 }
-
-
-
-
-
-
 
 static void cacheCurrentTreePayloadNonIntKey(BtCursor *pCur){
   const u8 *pVal; int nVal;
@@ -555,11 +525,6 @@ static int btreeWriteWorkingState(
   const ProllyHash *pCommitHash
 );
 static int btreeDeleteImmediate(BtCursor *pCur);
-
-
-
-
-
 
 #define PROLLY_MUTMAP_PENDING_FLUSH_LIMIT 65536
 
@@ -975,13 +940,6 @@ static void catRemove(Catalog *cat, Pgno iTable){
   }
 }
 
-
-
-
-
-
-
-
 static void catFree(Catalog *cat){
   int k;
   for(k=0; k<cat->n; k++){
@@ -1000,13 +958,6 @@ static void catFree(Catalog *cat){
 }
 
 static void invalidateSchema(Btree *pBtree){
-
-
-
-
-
-
-
   if( pBtree->pSchema && pBtree->xFreeSchema ){
     pBtree->xFreeSchema(pBtree->pSchema);
   }
@@ -1214,7 +1165,6 @@ done:
   *pnMeta = nMeta;
   return SQLITE_OK;
 }
-
 
 static int catalogSerializeEntryCmp(const void *a, const void *b){
   const CatalogSerializeEntry *ea = (const CatalogSerializeEntry*)a;
@@ -2138,7 +2088,6 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   btreeFreeCatalogTables(pBtree);
   initDefaultMeta(pBtree);
 
-
   {
     u32 schemaHash = 0;
     int j;
@@ -2147,7 +2096,6 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     }
     pBtree->aMeta[BTREE_SCHEMA_VERSION] = schemaHash | 1;
   }
-
 
   for(i=0; i<nTables; i++){
     Pgno iTable;
@@ -2198,7 +2146,6 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       }
     }
   }
-
 
   {
     Pgno maxPage = 0;
@@ -2415,11 +2362,6 @@ static int flushMutMap(BtCursor *pCur){
     return SQLITE_OK;
   }
 
-
-
-
-
-
   pFlushMap = (ProllyMutMap*)pTE->pPending;
   captured = 0;
   rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
@@ -2504,10 +2446,6 @@ static void refreshCursorMutMapAliases(BtShared *pBt, Pgno iTable,
   for(p = pBt->pCursor; p; p = p->pNext){
     if( p->pgnoRoot==iTable ){
       p->pMutMap = pNewMap;
-
-
-
-
       p->mmActive = 0;
       p->mmPhysActive = 0;
       p->deferredTreeSeek = 0;
@@ -2525,11 +2463,6 @@ static int ensureMutMap(BtCursor *pCur){
 
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE ) return SQLITE_INTERNAL;
-
-
-
-
-
 
   if( pTE->pPending ){
     pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
@@ -2560,7 +2493,6 @@ static int saveCursorPosition(BtCursor *pCur){
     return SQLITE_OK;
   }
 
-
   if( !prollyCursorIsValid(&pCur->pCur) ){
     if( pCur->curIntKey && (pCur->curFlags & BTCF_ValidNKey) ){
 
@@ -2572,7 +2504,6 @@ static int saveCursorPosition(BtCursor *pCur){
     pCur->eState = CURSOR_INVALID;
     return SQLITE_OK;
   }
-
 
   if( pCur->curIntKey ){
     if( pCur->mmActive
@@ -3114,8 +3045,6 @@ static int restoreTablesFromSavepoint(
       prollyMutMapFree(pMap);
       sqlite3_free(pMap);
     }
-
-
     aCurrent[k].pPending = 0;
   }
 
@@ -3320,7 +3249,6 @@ int sqlite3BtreeOpen(
 
   *ppBtree = 0;
 
-
   if( !zFilename || zFilename[0]=='\0'
    || (strcmp(zFilename, ":memory:")==0 && db->aDb[0].pBt!=0)
    || (flags & BTREE_SINGLE)
@@ -3391,7 +3319,6 @@ int sqlite3BtreeOpen(
   if( chunkStoreIsEmpty(&pBt->store) ){
     pBt->btsFlags |= BTS_INITIALLY_EMPTY;
   }
-
 
   p->aMeta[BTREE_FREE_PAGE_COUNT] = 0;
   p->aMeta[BTREE_SCHEMA_VERSION] = 0;
@@ -3506,7 +3433,6 @@ int sqlite3BtreeOpen(
     p->constraintViolationsHash = constraintViolationsHash;
   }
 
-
   p->cat.iNextTable = 2;
   if( !addTable(p, 1, BTREE_INTKEY) ){
     pagerShimDestroy(pBt->pPagerShim);
@@ -3524,7 +3450,6 @@ int sqlite3BtreeOpen(
   p->iBDataVersion = 1;
   p->nSeek = 0;
 
-
   {
     const char *defBranch = chunkStoreGetDefaultBranch(&pBt->store);
     ProllyHash branchCommit;
@@ -3537,7 +3462,6 @@ int sqlite3BtreeOpen(
   }
 
   *ppBtree = p;
-
 
   registerDoltiteFunctions(db);
 
@@ -3553,11 +3477,6 @@ static int prollyBtreeClose(Btree *p){
   while( pBt->pCursor ){
     sqlite3BtreeCloseCursor(pBt->pCursor);
   }
-
-
-
-
-
 
   if( p->pSchema ){
     if( p->xFreeSchema ) p->xFreeSchema(p->pSchema);
@@ -4242,7 +4161,6 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     }
   }
 
-
   pBt->store.snapshotPinned = 1;
 
   return SQLITE_OK;
@@ -4506,7 +4424,6 @@ static int prollyBtreeBeginStmt(Btree *p, int iStatement){
     return SQLITE_ERROR;
   }
 
-
   while( p->nSavepoint < iStatement ){
     int rc = pushSavepoint(p, 1);
     if( rc!=SQLITE_OK ) return rc;
@@ -4554,10 +4471,6 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
   if( rc!=SQLITE_OK ) return rc;
   return chunkStoreCommit(&pBt->store);
 }
-
-
-
-
 
 static void btreeDiscardAllSavepoints(Btree *p){
   int j;
@@ -4697,7 +4610,6 @@ static int prollyBtreeDropTable(Btree *p, int iTable, int *piMoved){
   if( p->inTrans!=TRANS_WRITE ){
     return SQLITE_ERROR;
   }
-
 
   if( iTable==1 ){
     struct TableEntry *pTE = findTable(p, 1);
@@ -4879,12 +4791,6 @@ static int prollyBtreeCursor(
     pCur->curFlags = BTCF_WriteFlag;
   }
 
-
-
-
-
-
-
   if( pTE->pPending ){
     pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
     if( wrFlag & BTREE_WRCSR ){
@@ -4924,10 +4830,6 @@ static int prollyBtCursorCloseCursor(BtCursor *pCur){
   if( !pCur ) return SQLITE_OK;
   pBt = pCur->pBt;
   if( !pBt ) return SQLITE_OK;
-
-
-
-
 
   if( pCur->pMutMap && pCur->flushSeekEdits ){
     struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
@@ -5103,11 +5005,6 @@ static int mergeScan(BtCursor *pCur, int dir, int *pRes){
   }
 }
 
-
-
-
-
-
 static void cursorNormalizeMmPhys(BtCursor *pCur){
   if( pCur->mmPhysActive ){
     pCur->mmIdx = prollyMutMapOrderIndexFromEntry(
@@ -5212,11 +5109,6 @@ static int mergeLast(BtCursor *pCur, int *pRes){
 static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
-
-
-
-
-
   refreshCursorRoot(pCur);
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -5240,7 +5132,6 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
-
   refreshCursorRoot(pCur);
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -5273,7 +5164,6 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
   if( pCur->eState==CURSOR_INVALID ){
     return SQLITE_DONE;
   }
-
 
   if( pCur->eState==CURSOR_REQUIRESEEK ){
     rc = restoreCursorPosition(pCur, 0);
@@ -5532,9 +5422,6 @@ static int prollyBtCursorTableMoveto(
 
   }
 
-
-
-
   refreshCursorRoot(pCur);
 
   rc = prollyCursorSeekInt(&pCur->pCur, intKey, pRes);
@@ -5604,12 +5491,6 @@ static int findMatchingMutMapEntry(
   int rc = SQLITE_OK;
   int cmp = 0;
   ProllyMutMapEntry *pMatch = 0;
-
-
-
-
-
-
   u8 *pRecBuf = 0;
   int nRecBufAlloc = 0;
   int lo = 0, found = 0;
@@ -5692,7 +5573,6 @@ static int prollyBtCursorIndexMoveto(
 
   refreshCursorRoot(pCur);
 
-
   {
     int treeFound = 0, mutFound = 0;
     int treeCmp = 0, mutCmp = 0;
@@ -5700,7 +5580,6 @@ static int prollyBtCursorIndexMoveto(
     int mutNKey = 0;
     ProllyMutMapEntry *mutE = 0;
     int mutFromCursorMap = 0;
-
 
     u8 *pSerKey = 0;
     int nSerKey = 0;
@@ -5765,16 +5644,9 @@ static int prollyBtCursorIndexMoveto(
       int seekIdx = pCur->pCur.aLevel[iLevel].idx;
       int nItems = pLeaf->node.nItems;
 
-
       int bestIdx = -1;
       int bestCmp = 0;
       {
-
-
-
-
-
-
 
         int lo = seekIdx;
         u8 *pRecBuf = pCur->pMovetoRec;
@@ -5886,10 +5758,7 @@ static int prollyBtCursorIndexMoveto(
         treeFound = 1;
       }
 
-
     }
-
-
 
     {
       struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
@@ -5898,11 +5767,6 @@ static int prollyBtCursorIndexMoveto(
          || (pPending && pPending!=pCur->pMutMap
              && !prollyMutMapIsEmpty(pPending)))
        && !(treeFound && treeCmp==0) ){
-
-
-
-
-
       int savedEqSeen = pIdxKey->eqSeen;
       rc = findMatchingMutMapEntry((ProllyMutMap*)pCur->pMutMap,
                                    pCur->pKeyInfo,
@@ -5944,7 +5808,6 @@ static int prollyBtCursorIndexMoveto(
     }
     }
 
-
       if( mutFound && (!treeFound || treeCmp!=0) ){
       if( mutFromCursorMap ){
         setCursorToMutMapEntryPhys(
@@ -5957,10 +5820,6 @@ static int prollyBtCursorIndexMoveto(
         pCur->eState = CURSOR_VALID;
       }
       *pRes = mutCmp;
-
-
-
-
       pIdxKey->eqSeen = 1;
       return SQLITE_OK;
     }
@@ -6023,7 +5882,6 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
     *pnData = pCur->nCachedPayload;
     return;
   }
-
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
@@ -6149,7 +6007,6 @@ static int prollyBtCursorInsert(
   int rc;
   (void)seekResult;
 
-
   if( flags & BTREE_PREFORMAT ){
     return SQLITE_OK;
   }
@@ -6197,19 +6054,11 @@ static int prollyBtCursorInsert(
      && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
       nKeyField = (int)pCur->pKeyInfo->nKeyField;
       splitKey = 1;
-
-
-
-
-
       {
         struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
         isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
       }
     }
-
-
-
     rc = sortKeyFromRecordPrefixCollBuffer(
         (const u8*)pPayload->pKey, (int)pPayload->nKey,
         isIndex ? 0 : (splitKey ? nKeyField : 0),
@@ -6229,7 +6078,6 @@ static int prollyBtCursorInsert(
   }
 
   if( rc!=SQLITE_OK ) return rc;
-
 
   {
     int canDefer = (pCur->pgnoRoot > 1);
@@ -6311,19 +6159,9 @@ static int flushIfNeeded(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
 
-
-
-
-
-
-
-
   if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
     return SQLITE_OK;
   }
-
-
-
 
   {
     BtCursor *p;
@@ -6360,14 +6198,12 @@ static int flushAllPending(BtShared *pBt, Pgno iTable){
   BtCursor *p;
   int rc;
 
-
   for(p = pBt->pCursor; p; p = p->pNext){
     if( iTable==0 || p->pgnoRoot==iTable ){
       rc = flushIfNeeded(p);
       if( rc!=SQLITE_OK ) return rc;
     }
   }
-
 
   rc = flushDeferredEdits(pBt);
   if( rc!=SQLITE_OK ) return rc;
@@ -6445,7 +6281,6 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     return SQLITE_CORRUPT_BKPT;
   }
 
-
   if( pCur->eState==CURSOR_VALID || pCur->eState==CURSOR_INVALID ){
     if( pCur->curIntKey ){
       if( pCur->mmActive
@@ -6473,8 +6308,6 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         int nDelKeyField = 0;
         if( pCur->pKeyInfo
          && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
-
-
           struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
           if( pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE) ){
             nDelKeyField = 0;
@@ -6508,7 +6341,6 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   rc = ensureMutMap(pCur);
   if( rc!=SQLITE_OK ){ sqlite3_free(pSavedDelKey); return rc; }
 
-
   if( pCur->curIntKey ){
     if( hasSavedKey ){
       iKey = savedIntKey;
@@ -6525,7 +6357,6 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   }
 
   if( rc!=SQLITE_OK ) return rc;
-
 
   {
     int canDefer = (pCur->pgnoRoot > 1);
@@ -6546,7 +6377,6 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       return SQLITE_OK;
     }
   }
-
 
   rc = btreeDeleteImmediate(pCur);
   if( rc!=SQLITE_OK ) return rc;
@@ -6654,10 +6484,6 @@ int sqlite3SchemaMutexHeld(sqlite3 *db, int iDb, Schema *pSchema){
 
 static void prollyBtreeLeave(Btree *p){ (void)p; }
 #endif
-
-
-
-
 
 int sqlite3BtreeTripAllCursors(Btree *p, int errCode, int writeOnly){
   BtCursor *pCur;
@@ -6888,7 +6714,6 @@ int sqlite3BtreeIntegrityCheck(
     return SQLITE_OK;
   }
 
-
   if( p->pOrigBtree ){
     return origBtreeIntegrityCheck(db, p->pOrigBtree, aRoot, aCnt,
                                    nRoot, mxErr, pnErr, pzOut);
@@ -7023,7 +6848,6 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
 }
 
 int sqlite3BtreeIsInBackup(Btree *p){
-
   (void)p;
   return 0;
 }
@@ -7046,11 +6870,6 @@ static int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, voi
   if( pCur->eState!=CURSOR_VALID ){
     return SQLITE_ABORT;
   }
-
-
-
-
-
 
   getCursorPayload(pCur, &pVal, &nVal);
 
@@ -7281,7 +7100,6 @@ int doltliteApplyRawRowMutation(
   }
   if( !pTE ) return SQLITE_NOTFOUND;
 
-
   rc = flushPendingForTable(pBtree, pBt, pTE, 0);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -7399,10 +7217,6 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
   if( piNextTable ) *piNextTable = temp.cat.iNextTable;
   return SQLITE_OK;
 }
-
-
-
-
 
 void doltliteFreeCatalog(struct TableEntry *a, int n){
   int i;
@@ -7531,9 +7345,6 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
 
   invalidateCursors(pBt, 0, SQLITE_ABORT);
 
-
-
-
   rc = deserializeCatalog(pBtree, data, nData);
   sqlite3_free(data);
   if( rc!=SQLITE_OK ) return rc;
@@ -7588,11 +7399,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
   oldMergeCommitHash = pBtree->mergeCommitHash;
   oldConflictsCatalogHash = pBtree->conflictsCatalogHash;
 
-
   invalidateCursors(pBt, 0, SQLITE_ABORT);
-
-
-
 
   rc = deserializeCatalog(pBtree, data, nData);
   sqlite3_free(data);
@@ -7609,13 +7416,11 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     return rc;
   }
 
-
   pBtree->aMeta[BTREE_SCHEMA_VERSION]++;
   pBtree->iBDataVersion++;
   if( pBt->pPagerShim ){
     pBt->pPagerShim->iDataVersion++;
   }
-
 
   if( pBtree->db ){
     sqlite3ExpirePreparedStatements(pBtree->db, 0);
@@ -7624,10 +7429,7 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
     invalidateSchema(pBtree);
   }
 
-
   memcpy(&pBtree->stagedCatalog, catHash, sizeof(ProllyHash));
-
-
 
   {
     const char *zBr = pBtree->zBranch ? pBtree->zBranch : "main";
@@ -7915,11 +7717,6 @@ void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHas
     memcpy(pHash, &db->aDb[0].pBt->constraintViolationsHash, sizeof(ProllyHash));
   }
 }
-
-
-
-
-
 
 int doltliteGetSessionTableRoot(
   sqlite3 *db, Pgno iTable, ProllyHash *pRoot, u8 *pFlags
@@ -8228,12 +8025,6 @@ static int origCursorCloseCursorVt(BtCursor *pCur){
   int rc = origBtreeCloseCursor(pCur->pOrigCursor);
   sqlite3_free(pCur->pOrigCursor);
   pCur->pOrigCursor = 0;
-
-
-
-
-
-
   if( willAutoCloseInner && pWrapper ){
     pWrapper->pOrigBtree = 0;
     sqlite3_free(pWrapper);

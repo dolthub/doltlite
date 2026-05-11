@@ -10,12 +10,6 @@
 #include "chunk_store.h"
 #include "prolly_diff.h"
 
-
-
-
-
-
-
 #define THREE_WAY_LEFT_ADD       1
 #define THREE_WAY_LEFT_DELETE    2
 #define THREE_WAY_LEFT_MODIFY    3

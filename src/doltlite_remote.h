@@ -3,10 +3,6 @@
 
 #include "chunk_store.h"
 
-
-
-
-
 typedef struct DoltliteRemote DoltliteRemote;
 struct DoltliteRemote {
   int (*xGetChunk)(DoltliteRemote*, const ProllyHash*, u8**, int*);

@@ -1,27 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -33,15 +11,10 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-
-
-
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
-
-
 
   local q="SELECT CONCAT('ROW|TOTAL|', count(*)) FROM dolt_commit_ancestors;
 SELECT CONCAT('ROW|ROOTS|', count(*)) FROM dolt_commit_ancestors WHERE parent_hash IS NULL;
@@ -85,16 +58,13 @@ echo ""
 
 echo "--- linear chains ---"
 
-
 oracle "init_only" ""
-
 
 oracle "single_user_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c1');
 "
-
 
 oracle "three_linear_commits" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -111,9 +81,6 @@ SELECT dolt_commit('-m', 'c3');
 
 echo "--- merge commits ---"
 
-
-
-
 oracle "merge_commit_two_parents" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -129,8 +96,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_c');
 SELECT dolt_merge('feat');
 "
-
-
 
 oracle "two_merges" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -156,8 +121,6 @@ SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('b');
 "
 
-
-
 oracle "fast_forward_no_merge_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_add('-A');
@@ -175,8 +138,6 @@ SELECT dolt_merge('feat');
 
 echo "--- detached subgraph (only-on-feat doesn't appear from main HEAD) ---"
 
-
-
 oracle "branch_not_merged_invisible_from_main" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_add('-A');
@@ -186,8 +147,6 @@ INSERT INTO t VALUES (1, 1);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_only');
 "
-
-
 
 oracle "ancestors_from_feat_head" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -205,9 +164,6 @@ SELECT dolt_checkout('feat');
 "
 
 echo "--- consistency with dolt_log ---"
-
-
-
 
 oracle "ancestors_count_matches_log" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

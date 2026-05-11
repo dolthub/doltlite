@@ -4,14 +4,6 @@
 #include "prolly_three_way_diff.h"
 #include <string.h>
 
-
-
-
-
-
-
-
-
 static int valuesEqual(const u8 *pA, int nA, const u8 *pB, int nB){
   int equal = 0;
   return prollyValuesEqual(pA, nA, pB, nB, &equal)==SQLITE_OK && equal;
@@ -100,18 +92,6 @@ static int emitRightOnly(
   return xCallback(pCtx, &change);
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
 static int emitBothSides(
   const ProllyDiffChange *pLeft,
   const ProllyDiffChange *pRight,
@@ -121,7 +101,6 @@ static int emitBothSides(
   ThreeWayChange change;
   memset(&change, 0, sizeof(change));
   fillKeyFromChange(&change, pLeft);
-
 
   if( pLeft->type==PROLLY_DIFF_ADD && pRight->type==PROLLY_DIFF_ADD ){
     if( valuesEqual(pLeft->pNewVal, pLeft->nNewVal,
@@ -137,14 +116,12 @@ static int emitBothSides(
     return xCallback(pCtx, &change);
   }
 
-
   if( pLeft->type==PROLLY_DIFF_DELETE && pRight->type==PROLLY_DIFF_DELETE ){
     change.type = THREE_WAY_CONVERGENT;
     change.pBaseVal = pLeft->pOldVal;
     change.nBaseVal = pLeft->nOldVal;
     return xCallback(pCtx, &change);
   }
-
 
   if( pLeft->type==PROLLY_DIFF_MODIFY && pRight->type==PROLLY_DIFF_MODIFY ){
     change.pBaseVal = pLeft->pOldVal;
@@ -162,7 +139,6 @@ static int emitBothSides(
     return xCallback(pCtx, &change);
   }
 
-
   if( (pLeft->type==PROLLY_DIFF_DELETE && pRight->type==PROLLY_DIFF_MODIFY)
    || (pLeft->type==PROLLY_DIFF_MODIFY && pRight->type==PROLLY_DIFF_DELETE) ){
     change.type = THREE_WAY_CONFLICT_DM;
@@ -177,7 +153,6 @@ static int emitBothSides(
     }
     return xCallback(pCtx, &change);
   }
-
 
   change.type = THREE_WAY_CONFLICT_MM;
   change.pBaseVal = pLeft->pOldVal;
@@ -219,7 +194,6 @@ int prollyThreeWayDiff(
     goto cleanup;
   }
 
-
   rcL = prollyDiffIterStep(&iterL, &pL);
   rcR = prollyDiffIterStep(&iterR, &pR);
 
@@ -241,7 +215,6 @@ int prollyThreeWayDiff(
     }
   }
 
-
   while( rcL==SQLITE_ROW ){
     rc = emitLeftOnly(pL, xCallback, pCtx);
     if( rc!=SQLITE_OK ) goto cleanup;
@@ -252,7 +225,6 @@ int prollyThreeWayDiff(
     if( rc!=SQLITE_OK ) goto cleanup;
     rcR = prollyDiffIterStep(&iterR, &pR);
   }
-
 
   if( rcL!=SQLITE_DONE ) rc = rcL;
   if( rc==SQLITE_OK && rcR!=SQLITE_DONE ) rc = rcR;

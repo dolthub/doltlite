@@ -51,8 +51,6 @@ static int buildFromEdits(
   return rc;
 }
 
-
-
 static int subtreeHasEdits(
   ProllyMutMapIter *pIter,
   const u8 *pBoundKey, int nBoundKey
@@ -108,7 +106,6 @@ static int mergeLeaf(
       continue;
     }
 
-
     {
       const u8 *pLastKey; int nLastKey;
       int pastLeaf;
@@ -151,12 +148,6 @@ static int mergeLeaf(
     }
   }
 
-
-
-
-
-
-
   if( isLast ){
     while( prollyMutMapIterValid(pIter) ){
       ProllyMutMapEntry *pEd = prollyMutMapIterEntry(pIter);
@@ -192,12 +183,6 @@ static int streamingMergeNode(
     prollyNodeValue(pNode, i, &pChildVal, &nChildVal);
 
     childIsLast = isLast && (i == pNode->nItems - 1);
-
-
-
-
-
-
 
     forceDescend = childIsLast && prollyMutMapIterValid(pIter);
 
@@ -248,7 +233,6 @@ static int streamingMerge(
   ProllyNode rootNode;
   ProllyCache *pCache = pMut->pCache;
 
-
   rc = chunkStoreGet(pMut->pStore, &pMut->oldRoot, &pRootData, &nRootData);
   if( rc!=SQLITE_OK ) return rc;
   rc = prollyNodeParse(&rootNode, pRootData, nRootData);
@@ -257,21 +241,12 @@ static int streamingMerge(
     return rc;
   }
 
-
   prollyMutMapIterFirst(&iter, pMut->pEdits);
   rc = prollyChunkerInit(&chunker, pMut->pStore, pMut->flags);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pRootData);
     return rc;
   }
-
-
-
-
-
-
-
-
 
   if( rootNode.level == 0 ){
     rc = mergeLeaf(pMut, &rootNode, &chunker, &iter, 1);
@@ -290,17 +265,6 @@ streaming_cleanup:
   sqlite3_free(pRootData);
   return rc;
 }
-
-
-
-
-
-
-
-
-
-
-
 
 int prollyMutateFlush(ProllyMutator *pMut){
   if( prollyMutMapIsEmpty(pMut->pEdits) ){
@@ -329,7 +293,6 @@ int prollyMutateInsert(
   int rc;
   u8 isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
 
-
   rc = prollyMutMapInit(&mm, isIntKey);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -339,14 +302,12 @@ int prollyMutateInsert(
     return rc;
   }
 
-
   memset(&mut, 0, sizeof(mut));
   mut.pStore = pStore;
   mut.pCache = pCache;
   memcpy(&mut.oldRoot, pRoot, sizeof(ProllyHash));
   mut.pEdits = &mm;
   mut.flags = flags;
-
 
   rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){
@@ -370,7 +331,6 @@ int prollyMutateDelete(
   int rc;
   u8 isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
 
-
   rc = prollyMutMapInit(&mm, isIntKey);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -380,14 +340,12 @@ int prollyMutateDelete(
     return rc;
   }
 
-
   memset(&mut, 0, sizeof(mut));
   mut.pStore = pStore;
   mut.pCache = pCache;
   memcpy(&mut.oldRoot, pRoot, sizeof(ProllyHash));
   mut.pEdits = &mm;
   mut.flags = flags;
-
 
   rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){

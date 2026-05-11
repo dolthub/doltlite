@@ -1,31 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -37,23 +11,12 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-
-
-
-
-
-
 normalize_log() {
   tr -d '\r' \
     | awk -F'\t' 'NF >= 5 && $1 == "L" { print }' \
     | awk -F'\t' '
         {
           email = $4
-
-
-
-
-
           if (email == "" \
            || email == "root@localhost" \
            || email == "oracle@test" \
@@ -61,15 +24,6 @@ normalize_log() {
            || email == "doltlite@local") {
             email = "DEFAULT"
           }
-
-
-
-
-
-
-
-
-
           dt = substr($5, 1, 10)
           "date +%Y-%m-%d" | getline today
           close("date +%Y-%m-%d")
@@ -132,11 +86,6 @@ oracle() {
   ) > "$dir/dt.status.raw"
   dt_status=$(tail -n +2 "$dir/dt.status.raw" | tr -d '"' | normalize_status)
 
-
-
-
-
-
   if [ -z "$dl_log" ] && [ -z "$dt_log" ]; then
     fail=$((fail+1))
     FAILED_NAMES="$FAILED_NAMES $name"
@@ -194,14 +143,12 @@ echo ""
 
 echo "--- message argument forms ---"
 
-
 oracle "commit_short_m_flag" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first commit');
 "
-
 
 oracle "commit_long_message_flag" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -212,17 +159,11 @@ SELECT dolt_commit('--message', 'first commit');
 
 echo "--- combo / stage-all flags ---"
 
-
 oracle "commit_uppercase_A_new_table" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_commit('-A', '-m', 'first commit');
 "
-
-
-
-
-
 
 oracle_error "commit_all_long_new_table_errors" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -239,16 +180,11 @@ INSERT INTO t VALUES (2, 20);
 SELECT dolt_commit('--all', '-m', 'modify');
 "
 
-
-
-
-
 oracle_error "commit_lowercase_a_new_table_errors" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_commit('-a', '-m', 'first commit');
 "
-
 
 oracle "commit_lowercase_a_modified_tracked_table" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -259,7 +195,6 @@ INSERT INTO t VALUES (2, 20);
 SELECT dolt_commit('-a', '-m', 'modify');
 "
 
-
 oracle "commit_combo_am_modified_tracked_table" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -269,8 +204,6 @@ INSERT INTO t VALUES (2, 20);
 SELECT dolt_commit('-am', 'modify');
 "
 
-
-
 oracle_error "commit_combo_am_new_table_errors" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -279,15 +212,12 @@ SELECT dolt_commit('-am', 'first commit');
 
 echo "--- author override ---"
 
-
 oracle "commit_author_name_and_email" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first', '--author', 'Alice Author <alice@example.com>');
 "
-
-
 
 oracle "commit_author_name_only" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -298,9 +228,6 @@ SELECT dolt_commit('-m', 'first', '--author', 'Bob Bare-Name <bob@example.com>')
 
 echo "--- --amend ---"
 
-
-
-
 oracle "commit_amend_message_only" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -308,9 +235,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'original');
 SELECT dolt_commit('--amend', '-m', 'amended');
 "
-
-
-
 
 oracle "commit_amend_with_new_content" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -324,8 +248,6 @@ SELECT dolt_commit('--amend', '-m', 'amended with row 2');
 
 echo "--- skip / allow empty ---"
 
-
-
 oracle "commit_allow_empty_no_changes" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -334,8 +256,6 @@ SELECT dolt_commit('-m', 'first');
 SELECT dolt_commit('--allow-empty', '-m', 'empty followup');
 "
 
-
-
 oracle "commit_skip_empty_no_changes" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -343,8 +263,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first');
 SELECT dolt_commit('--skip-empty', '-m', 'second');
 "
-
-
 
 oracle "commit_skip_empty_with_changes" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -357,13 +275,6 @@ SELECT dolt_commit('--skip-empty', '-m', 'second');
 "
 
 echo "--- --date ---"
-
-
-
-
-
-
-
 
 oracle "commit_with_explicit_date" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -423,14 +334,12 @@ SELECT dolt_commit('-m', 'drop and edit');
 
 echo "--- error paths ---"
 
-
 oracle_error "commit_no_message" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit();
 "
-
 
 oracle_error "commit_empty_message" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -488,7 +397,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('--bogus', '-m', 'first');
 "
 
-
 oracle_error "commit_nothing_staged" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -496,7 +404,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first');
 SELECT dolt_commit('-m', 'nothing-to-do');
 "
-
 
 oracle_error "commit_with_unresolved_conflicts" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);

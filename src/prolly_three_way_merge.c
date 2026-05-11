@@ -8,16 +8,9 @@
 
 #include <string.h>
 
-
-
-
-
 /* Private sentinel: fast merge could not prove the result, so caller should
 ** fall back to the full row-wise merge path without treating it as an error. */
 #define FM_FALLBACK  SQLITE_DONE
-
-
-
 
 static int fmKeyCmp(const u8 *pA, int nA, const u8 *pB, int nB){
   int n = nA < nB ? nA : nB;
@@ -27,11 +20,6 @@ static int fmKeyCmp(const u8 *pA, int nA, const u8 *pB, int nB){
   if( nA > nB ) return 1;
   return 0;
 }
-
-
-
-
-
 
 static int fmChunkerLevelsBelowEmpty(const ProllyChunker *pCh, int level){
   int i;
@@ -47,7 +35,6 @@ typedef struct FmCtx {
   u8 flags;
 } FmCtx;
 
-
 static int fmEmitChild(
   FmCtx *fm, ProllyChunker *pCh,
   const u8 *pBoundKey, int nBoundKey,
@@ -56,16 +43,6 @@ static int fmEmitChild(
   const ProllyHash *pOurs,
   const ProllyHash *pTheirs
 );
-
-
-
-
-
-
-
-
-
-
 
 static int fmEmitSubtreeRows(
   FmCtx *fm, ProllyChunker *pCh,
@@ -102,15 +79,6 @@ static int fmEmitSubtreeRows(
   sqlite3_free(pData);
   return SQLITE_OK;
 }
-
-
-
-
-
-
-
-
-
 
 static int fmResolveAndEmit(
   ProllyChunker *pCh,
@@ -156,15 +124,6 @@ static int fmResolveAndEmit(
   return SQLITE_OK;
 }
 
-
-
-
-
-
-
-
-
-
 static int fmMergeLeaves(
   FmCtx *fm, ProllyChunker *pCh,
   const ProllyNode *pAncN,
@@ -187,7 +146,6 @@ static int fmMergeLeaves(
     int nK = 0;
     i64 iK = 0;
 
-
     if( ai < (int)pAncN->nItems ){
       prollyNodeKey(pAncN, ai, &pAK, &nAK);
       if( fm->flags & PROLLY_NODE_INTKEY ) iAKey = prollyNodeIntKey(pAncN, ai);
@@ -201,8 +159,6 @@ static int fmMergeLeaves(
       if( fm->flags & PROLLY_NODE_INTKEY ) iTKey = prollyNodeIntKey(pTheirsN, ti);
     }
 
-
-
     {
       int hasAny[3];
       int minSide = -1;
@@ -214,7 +170,6 @@ static int fmMergeLeaves(
       hasAny[0] = (ai < (int)pAncN->nItems);
       hasAny[1] = (oi < (int)pOursN->nItems);
       hasAny[2] = (ti < (int)pTheirsN->nItems);
-
 
       for( s = 0; s < 3; s++ ){
         if( !hasAny[s] ) continue;
@@ -233,7 +188,6 @@ static int fmMergeLeaves(
       if( minSide == 0 ){ pK = pAK; nK = nAK; iK = iAKey; }
       else if( minSide == 1 ){ pK = pOK; nK = nOK; iK = iOKey; }
       else { pK = pTK; nK = nTK; iK = iTKey; }
-
 
       if( hasAny[0] ){
         cmp = prollyCompareKeys(fm->flags,
@@ -255,7 +209,6 @@ static int fmMergeLeaves(
       }
     }
 
-
     if( has_a ) prollyNodeValue(pAncN, ai, &pAV, &nAV);
     if( has_o ) prollyNodeValue(pOursN, oi, &pOV, &nOV);
     if( has_t ) prollyNodeValue(pTheirsN, ti, &pTV, &nTV);
@@ -266,7 +219,6 @@ static int fmMergeLeaves(
                            has_t, pTV, nTV);
     if( rc != SQLITE_OK ) return rc;
 
-
     if( has_a ) ai++;
     if( has_o ) oi++;
     if( has_t ) ti++;
@@ -274,15 +226,6 @@ static int fmMergeLeaves(
 
   return SQLITE_OK;
 }
-
-
-
-
-
-
-
-
-
 
 static int fmCursorMerge(
   FmCtx *fm, ProllyChunker *pCh,
@@ -370,12 +313,6 @@ static int fmCursorMerge(
   return SQLITE_OK;
 }
 
-
-
-
-
-
-
 static int fmCursorRecover(
   FmCtx *fm, ProllyChunker *pCh,
   const ProllyHash *pAncH,
@@ -393,14 +330,10 @@ static int fmCursorRecover(
   prollyCursorInit(&curT, fm->pStore, fm->pCache, pTheirsH, fm->flags); initT = 1;
 
   if( pSeekKey == 0 ){
-
     rc = prollyCursorFirst(&curA, &res);
     if( rc == SQLITE_OK ) rc = prollyCursorFirst(&curO, &res);
     if( rc == SQLITE_OK ) rc = prollyCursorFirst(&curT, &res);
   }else{
-
-
-
     if( fm->flags & PROLLY_NODE_INTKEY ){
       rc = prollyCursorSeekInt(&curA, iSeekKey, &res);
       if( rc == SQLITE_OK && res == 0 ) rc = prollyCursorNext(&curA);
@@ -436,12 +369,6 @@ static int fmCursorRecover(
   return rc;
 }
 
-
-
-
-
-
-
 static int fmWalkInterior(
   FmCtx *fm, ProllyChunker *pCh,
   ProllyNode *pAncN, ProllyNode *pOursN, ProllyNode *pTheirsN,
@@ -449,10 +376,6 @@ static int fmWalkInterior(
 ){
   int i;
   int parentLevel = pAncN->level;
-
-
-
-
 
   if( pOursN->nItems != pAncN->nItems
    || pTheirsN->nItems != pAncN->nItems ){
@@ -472,10 +395,6 @@ static int fmWalkInterior(
 
     if( fmKeyCmp(pAK, nAK, pOK, nOK) != 0
      || fmKeyCmp(pAK, nAK, pTK, nTK) != 0 ){
-
-
-
-
       const u8 *pSeek = 0;
       int nSeek = 0;
       i64 iSeek = 0;
@@ -499,25 +418,6 @@ static int fmWalkInterior(
 
   return SQLITE_OK;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 static int fmEmitChild(
   FmCtx *fm, ProllyChunker *pCh,
@@ -545,12 +445,8 @@ static int fmEmitChild(
                                       pBoundKey, nBoundKey,
                                       pSplice->data, PROLLY_HASH_SIZE);
     }
-
-
-
     return fmEmitSubtreeRows(fm, pCh, pSplice);
   }
-
 
   rc = chunkStoreGet(fm->pStore, pAnc, &pAncData, &nAncData);
   if( rc != SQLITE_OK ) return rc;
@@ -568,13 +464,11 @@ static int fmEmitChild(
   if( rc != SQLITE_OK ) goto done;
 
   if( oursNode.level != ancNode.level || theirsNode.level != ancNode.level ){
-
     rc = FM_FALLBACK;
     goto done;
   }
 
   if( ancNode.level == 0 ){
-
     rc = fmMergeLeaves(fm, pCh, &ancNode, &oursNode, &theirsNode);
   }else{
     rc = fmWalkInterior(fm, pCh, &ancNode, &oursNode, &theirsNode,
@@ -607,8 +501,6 @@ int prollyThreeWayMergeFast(
 
   *pHandled = 0;
 
-
-
   if( prollyHashCompare(pOursRoot, pTheirsRoot) == 0 ){
     memcpy(pMergedRoot, pOursRoot, sizeof(ProllyHash));
     *pHandled = 1;
@@ -624,8 +516,6 @@ int prollyThreeWayMergeFast(
     *pHandled = 1;
     return SQLITE_OK;
   }
-
-
 
   if( prollyHashIsEmpty(pAncRoot)
    || prollyHashIsEmpty(pOursRoot)
@@ -654,8 +544,6 @@ int prollyThreeWayMergeFast(
     return rc;
   }
 
-
-
   if( oursNode.level != ancNode.level || theirsNode.level != ancNode.level ){
     sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);
     return SQLITE_OK;
@@ -670,9 +558,6 @@ int prollyThreeWayMergeFast(
     sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);
     return rc;
   }
-
-
-
 
   if( ancNode.level == 0 ){
     rc = fmMergeLeaves(&fm, &chunker, &ancNode, &oursNode, &theirsNode);

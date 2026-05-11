@@ -1,57 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -65,13 +13,7 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() { tr -d '\r' | grep -v '^S|dolt_ignore|' | sort; }
 
-
-
-
-
 DL_IGNORE_PREFIX="CREATE TABLE IF NOT EXISTS dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));"
-
-
 
 oracle() {
   local name="$1" setup="$2"
@@ -89,10 +31,6 @@ $setup"
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
-
-
-
-
 
   (
     cd "$dir/dt" || exit 1
@@ -115,12 +53,6 @@ $setup"
   fi
 }
 
-
-
-
-
-
-
 doltlite_schema_reject() {
   local name="$1" sql="$2"
   local dir="$TMPROOT/${name}_rej"
@@ -136,8 +68,6 @@ doltlite_schema_reject() {
     echo "    output:"; sed 's/^/      /' "$dir/out"
   fi
 }
-
-
 
 oracle_error() {
   local name="$1" setup="$2"
@@ -171,20 +101,12 @@ $setup"
 echo "=== Version Control Oracle Tests: dolt_ignore ==="
 echo ""
 
-
-
-
-
 echo "--- schema & bootstrap ---"
 
 oracle "empty_ignore" "
 CREATE TABLE t(x INT PRIMARY KEY);
 CREATE TABLE u(x INT PRIMARY KEY);
 "
-
-
-
-
 
 echo "--- basic pattern matching ---"
 
@@ -236,10 +158,6 @@ CREATE TABLE ea(x INT PRIMARY KEY);
 CREATE TABLE eabc(x INT PRIMARY KEY);
 "
 
-
-
-
-
 echo "--- specificity ---"
 
 oracle "exact_over_wild" "
@@ -267,10 +185,6 @@ CREATE TABLE foo_keep_a(x INT PRIMARY KEY);
 CREATE TABLE foo_keep_never(x INT PRIMARY KEY);
 "
 
-
-
-
-
 echo "--- conflicts ---"
 
 oracle_error "conflict_two_wild" "
@@ -293,10 +207,6 @@ INSERT INTO dolt_ignore VALUES ('%_bar', 0);
 CREATE TABLE foo_bar(x INT PRIMARY KEY);
 SELECT dolt_add('foo_bar');
 "
-
-
-
-
 
 echo "--- dolt_add ---"
 
@@ -328,10 +238,6 @@ CREATE TABLE keep(x INT PRIMARY KEY);
 SELECT dolt_add('keep');
 "
 
-
-
-
-
 echo "--- dolt_commit -A ---"
 
 oracle "commit_A_skips_ignored" "
@@ -343,10 +249,6 @@ SELECT dolt_commit('-A', '-m', 'first');
 CREATE TABLE tmp_bar(x INT PRIMARY KEY);
 INSERT INTO keep VALUES (1);
 "
-
-
-
-
 
 echo "--- scope: only gates new tables ---"
 
@@ -361,10 +263,6 @@ SELECT dolt_commit('-m', 'add pattern');
 INSERT INTO tmp_foo VALUES (2);
 "
 
-
-
-
-
 oracle "tracked_ignored_not_staged_by_A" "
 CREATE TABLE tmp_foo(x INT PRIMARY KEY);
 INSERT INTO tmp_foo VALUES (1);
@@ -378,10 +276,6 @@ CREATE TABLE keep(x INT PRIMARY KEY);
 SELECT dolt_add('-A');
 "
 
-
-
-
-
 echo "--- dynamic pattern changes ---"
 
 oracle "remove_pattern_exposes" "
@@ -389,10 +283,6 @@ INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
 CREATE TABLE tmp_foo(x INT PRIMARY KEY);
 DELETE FROM dolt_ignore WHERE pattern='tmp_*';
 "
-
-
-
-
 
 echo "--- persistence ---"
 
@@ -404,23 +294,12 @@ CREATE TABLE tmp_foo(x INT PRIMARY KEY);
 CREATE TABLE keep(x INT PRIMARY KEY);
 "
 
-
-
-
-
 echo "--- no special-case for dolt_ignore ---"
 
 oracle "star_hides_dolt_ignore" "
 INSERT INTO dolt_ignore VALUES ('*', 1);
 CREATE TABLE foo(x INT PRIMARY KEY);
 "
-
-
-
-
-
-
-
 
 echo "--- schema guard ---"
 
@@ -464,9 +343,6 @@ doltlite_schema_reject "schema_no_pk" "
 CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL);
 "
 
-
-
-
 doltlite_schema_accept() {
   local name="$1" sql="$2"
   local dir="$TMPROOT/${name}_acc"
@@ -493,10 +369,6 @@ CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored INTEGER NOT NULL, PRIMAR
 INSERT INTO dolt_ignore VALUES ('tmp_*', 1);
 SELECT * FROM dolt_ignore;
 "
-
-
-
-
 
 doltlite_runtime_expect() {
   local name="$1" sql="$2" expect="$3"
@@ -547,25 +419,6 @@ CREATE VIEW dolt_ignore AS SELECT 'tmp_*' AS pattern;
 CREATE TABLE tmp_bad(x INT PRIMARY KEY);
 SELECT * FROM dolt_status;
 "
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 echo "--- cross-branch + merge + reset ---"
 

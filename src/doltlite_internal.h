@@ -17,11 +17,6 @@ enum DoltliteVcTxnMode {
   DOLTLITE_VC_TXN_NESTED_SAVEPOINT = 2
 };
 
-
-
-
-
-
 struct TableEntry {
   Pgno iTable;
   ProllyHash root;

@@ -1,13 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
 set -u
 DOLTLITE="${1:?usage: $0 <doltlite>}"
 TMPROOT=$(mktemp -d)
@@ -32,7 +24,6 @@ dlq() {
 
 echo "=== Generated Columns + Version Control Tests ==="
 
-
 echo ""
 echo "--- A: STORED generated column commit + reopen ---"
 
@@ -51,7 +42,6 @@ R3=$(dl "$DB" "SELECT y FROM t WHERE id=3;")
 [ "$R2" = "40" ] && pass_name "a_stored_reopen_r2" || fail_name "a_stored_reopen_r2; got $R2"
 [ "$R3" = "60" ] && pass_name "a_stored_reopen_r3" || fail_name "a_stored_reopen_r3; got $R3"
 
-
 echo ""
 echo "--- B: VIRTUAL generated column commit + reopen ---"
 
@@ -67,7 +57,6 @@ R1=$(dl "$DB" "SELECT y FROM t WHERE id=1;")
 R2=$(dl "$DB" "SELECT y FROM t WHERE id=2;")
 [ "$R1" = "105" ] && pass_name "b_virtual_reopen_r1" || fail_name "b_virtual_reopen_r1; got $R1"
 [ "$R2" = "115" ] && pass_name "b_virtual_reopen_r2" || fail_name "b_virtual_reopen_r2; got $R2"
-
 
 echo ""
 echo "--- C: Non-overlapping merge with STORED generated column ---"
@@ -92,7 +81,6 @@ R1=$(dl "$DB" "SELECT y FROM t WHERE id=1;")
 R2=$(dl "$DB" "SELECT y FROM t WHERE id=2;")
 [ "$R1" = "30" ] && pass_name "c_merge_stored_r1" || fail_name "c_merge_stored_r1; got $R1"
 [ "$R2" = "50" ] && pass_name "c_merge_stored_r2" || fail_name "c_merge_stored_r2; got $R2"
-
 
 echo ""
 echo "--- D: Non-overlapping merge with VIRTUAL generated column ---"
@@ -119,7 +107,6 @@ CNT=$(dl "$DB" "SELECT count(*) FROM t;")
 [ "$R2" = "75" ] && pass_name "d_merge_virtual_r2" || fail_name "d_merge_virtual_r2; got $R2"
 [ "$R3" = "90" ] && pass_name "d_merge_virtual_r3" || fail_name "d_merge_virtual_r3; got $R3"
 [ "$CNT" = "3" ] && pass_name "d_merge_virtual_count" || fail_name "d_merge_virtual_count; got $CNT"
-
 
 echo ""
 echo "--- E: Conflict on base column of generated col ---"
@@ -154,9 +141,7 @@ SELECT dolt_merge('feat');
 SELECT y FROM t WHERE id=1;
 ROLLBACK;")
 [ "$CONFLICTS" = "1" ] && pass_name "e_conflict_detected" || fail_name "e_conflict_detected; got $CONFLICTS"
-
 [ "$YVAL" = "$((XVAL*2))" ] && pass_name "e_generated_consistent" || fail_name "e_generated_consistent; x=$XVAL y=$YVAL"
-
 
 echo ""
 echo "--- F: Cherry-pick with generated column ---"
@@ -181,7 +166,6 @@ R2=$(dl "$DB" "SELECT y FROM t WHERE id=2;")
 [ "$R1" = "30" ] && pass_name "f_cherry_pick_r1" || fail_name "f_cherry_pick_r1; got $R1"
 [ "$R2" = "40" ] && pass_name "f_cherry_pick_r2" || fail_name "f_cherry_pick_r2; got $R2"
 
-
 echo ""
 echo "--- G: Revert with generated column ---"
 
@@ -202,7 +186,6 @@ R1=$(dl "$DB" "SELECT y FROM t WHERE id=1;")
 [ "$CNT" = "1" ] && pass_name "g_revert_count" || fail_name "g_revert_count; got $CNT"
 [ "$R1" = "20" ] && pass_name "g_revert_r1_restored" || fail_name "g_revert_r1_restored; got $R1"
 
-
 echo ""
 echo "--- H: Expression preserved across checkout ---"
 
@@ -221,14 +204,11 @@ SELECT dolt_commit('-Am','main');
 SQL
 )" >/dev/null
 
-
 R3=$(dl "$DB" "SELECT y FROM t WHERE id=3;")
 [ "$R3" = "90" ] && pass_name "h_main_expression" || fail_name "h_main_expression; got $R3"
 
-
 R2=$(dl "$DB/other" "SELECT y FROM t WHERE id=2;")
 [ "$R2" = "60" ] && pass_name "h_other_expression" || fail_name "h_other_expression; got $R2"
-
 
 echo ""
 echo "--- I: Convergent merge with generated column ---"
@@ -253,7 +233,6 @@ CONFLICTS=$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")
 YVAL=$(dl "$DB" "SELECT y FROM t WHERE id=1;")
 [ "$CONFLICTS" = "0" ] && pass_name "i_convergent_no_conflict" || fail_name "i_convergent_no_conflict; got $CONFLICTS"
 [ "$YVAL" = "100" ] && pass_name "i_convergent_value" || fail_name "i_convergent_value; got $YVAL"
-
 
 echo ""
 echo "--- J: Multiple generated columns through merge ---"

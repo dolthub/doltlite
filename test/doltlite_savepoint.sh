@@ -1,8 +1,5 @@
 #!/bin/bash
 
-
-
-
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 
@@ -39,44 +36,23 @@ run_test_match() {
 echo "=== Doltlite Savepoint & Transaction Interaction Tests ==="
 echo ""
 
-
-
-
-
-
-
-
 DB1=/tmp/test_savepoint1_$$.db; rm -f "$DB1"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB1" > /dev/null 2>&1
 
-
 echo "BEGIN; INSERT INTO t VALUES(2,'txn'); SELECT dolt_commit('-A','-m','in-txn commit'); ROLLBACK;" | $DOLTLITE "$DB1" > /dev/null 2>&1
-
-
-
 
 run_test "txn_rollback_data_count" \
   "SELECT count(*) FROM t;" \
   "2" "$DB1"
 
-
-
 run_test "txn_rollback_dolt_commit_survives" \
   "SELECT count(*) FROM dolt_log;" \
   "3" "$DB1"
-
-
-
-
-
-
 
 DB2=/tmp/test_savepoint2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 
 echo "BEGIN; INSERT INTO t VALUES(2,'before-sp'); SAVEPOINT x; INSERT INTO t VALUES(3,'after-sp'); SELECT dolt_commit('-A','-m','mid-savepoint'); ROLLBACK TO x; COMMIT;" | $DOLTLITE "$DB2" > /dev/null 2>&1
-
-
 
 run_test "savepoint_rollback_keeps_pre_sp" \
   "SELECT count(*) FROM t;" \
@@ -86,19 +62,13 @@ run_test "savepoint_rollback_row2_exists" \
   "SELECT v FROM t WHERE id=2;" \
   "before-sp" "$DB2"
 
-
 run_test "savepoint_rollback_row3_gone" \
   "SELECT count(*) FROM t WHERE id=3;" \
   "1" "$DB2"
 
-
 run_test "savepoint_dolt_commit_in_log" \
   "SELECT count(*) FROM dolt_log;" \
   "3" "$DB2"
-
-
-
-
 
 DB3=/tmp/test_savepoint3_$$.db; rm -f "$DB3"
 
@@ -114,11 +84,6 @@ run_test "basic_no_txn_log" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "basic" "$DB3"
 
-
-
-
-
-
 DB4=/tmp/test_savepoint4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 
@@ -132,11 +97,9 @@ echo "BEGIN;
     RELEASE sp1;
 COMMIT;" | $DOLTLITE "$DB4" > /dev/null 2>&1
 
-
 run_test "nested_sp_all_released_count" \
   "SELECT count(*) FROM t;" \
   "4" "$DB4"
-
 
 DB4b=/tmp/test_savepoint4b_$$.db; rm -f "$DB4b"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4b" > /dev/null 2>&1
@@ -151,7 +114,6 @@ echo "BEGIN;
   ROLLBACK TO sp1;
 COMMIT;" | $DOLTLITE "$DB4b" > /dev/null 2>&1
 
-
 run_test "nested_sp_rollback_count" \
   "SELECT count(*) FROM t;" \
   "2" "$DB4b"
@@ -160,19 +122,11 @@ run_test "nested_sp_rollback_kept_row" \
   "SELECT v FROM t WHERE id=2;" \
   "keep" "$DB4b"
 
-
-
-
-
-
-
 DB5=/tmp/test_savepoint5_$$.db; rm -f "$DB5"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,'staged');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 
-
 echo "BEGIN; SELECT dolt_reset('--hard'); COMMIT;" | $DOLTLITE "$DB5" > /dev/null 2>&1
-
 
 run_test "hard_reset_in_txn_count" \
   "SELECT count(*) FROM t;" \
@@ -181,7 +135,6 @@ run_test "hard_reset_in_txn_count" \
 run_test "hard_reset_in_txn_status_clean" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB5"
-
 
 DB5b=/tmp/test_savepoint5b_$$.db; rm -f "$DB5b"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5b" > /dev/null 2>&1
@@ -203,8 +156,6 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'ba
 run_test_match "bad_reset_nested_savepoint_allows_rollback" \
   "BEGIN; SAVEPOINT sp1; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_reset('--hard','bogus'); ROLLBACK TO sp1; COMMIT; SELECT count(*) FROM t;" \
   "^1$" "$DB5d"
-
-
 
 DB5e=/tmp/test_savepoint5e_$$.db; rm -f "$DB5e"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -238,31 +189,19 @@ run_test "conflicts_delete_named_savepoint_rollback" \
 C|1
 V|main" "$DB5e"
 
-
-
-
-
-
-
-
 DB6=/tmp/test_savepoint6_$$.db; rm -f "$DB6"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 echo "SELECT dolt_branch('other');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 
-
 echo "BEGIN; SELECT dolt_checkout('other'); COMMIT;" | $DOLTLITE "$DB6" > /dev/null 2>&1
-
-
 
 run_test_match "checkout_in_txn_branch" \
   "SELECT active_branch();" \
   "^(main|other)$" "$DB6"
 
-
 DB6b=/tmp/test_savepoint6b_$$.db; rm -f "$DB6b"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6b" > /dev/null 2>&1
 echo "SELECT dolt_branch('other');" | $DOLTLITE "$DB6b" > /dev/null 2>&1
-
 
 run_test "checkout_dirty_in_txn" \
   "BEGIN; INSERT INTO t VALUES(2,'dirty'); SELECT dolt_checkout('other'); COMMIT;" \
@@ -616,11 +555,6 @@ run_test_match "revert_savepoint_log_persists" \
   "SELECT count(*) FROM dolt_log;" \
   "^4$" "$DB6k"
 
-
-
-
-
-
 DB7=/tmp/test_savepoint7_$$.db; rm -f "$DB7"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "SELECT dolt_branch('feature');" | $DOLTLITE "$DB7" > /dev/null 2>&1
@@ -628,9 +562,7 @@ echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,'feature-row'); SELECT dolt_commit('-A','-m','feature work');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 
-
 echo "BEGIN; SELECT dolt_merge('feature'); COMMIT;" | $DOLTLITE "$DB7" > /dev/null 2>&1
-
 
 run_test "merge_in_txn_data" \
   "SELECT count(*) FROM t;" \
@@ -735,12 +667,6 @@ run_test "rebase_continue_top_savepoint_log_rolled_back" \
   "SELECT count(*)-1 FROM dolt_log;" \
   "2" "$DB7f"
 
-
-
-
-
-
-
 DB8=/tmp/test_savepoint8_$$.db; rm -f "$DB8"
 run_test "bulk_threshold_savepoint_rollback" \
   "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -758,31 +684,18 @@ run_test "bulk_threshold_savepoint_rollback" \
    SELECT count(*) FROM t;" \
   "0" "$DB8"
 
-
-
-
-
-
-
 DB9=/tmp/test_savepoint9_$$.db; rm -f "$DB9"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 
-
 echo "BEGIN; SELECT dolt_branch('ephemeral'); ROLLBACK;" | $DOLTLITE "$DB9" > /dev/null 2>&1
-
-
 
 run_test_match "branch_survives_rollback" \
   "SELECT count(*) FROM dolt_branches;" \
   "^[12]$" "$DB9"
 
-
 run_test_match "branch_name_after_rollback" \
   "SELECT name FROM dolt_branches ORDER BY name;" \
   "main" "$DB9"
-
-
-
 
 rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB4b" "$DB5" "$DB6" "$DB6b" "$DB7" "$DB8" "$DB9" \
   "$DB6g1" "$DB6g2" "$DB6g3" "$DB6g4" "$DB6g5" "$DB6g6" "$DB6g7" "$DB6g8" "$DB6g9" "$DB6g10" \

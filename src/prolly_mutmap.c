@@ -9,10 +9,6 @@
 #define MUTMAP_INIT_CAP 16
 #define MUTMAP_MIN_HASH 32
 
-
-
-
-
 i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e){
   const u8 *p = e->pKey;
   u64 u;
@@ -34,20 +30,11 @@ static void encodeIntKeyBE(i64 v, u8 buf[8]){
   buf[7] = (u8)u;
 }
 
-
-
-
-
-
-
-
 static void prepKey(ProllyMutMap *mm,
                     const u8 **ppKey, int *pnKey,
                     i64 intKey, u8 buf[8]){
   if( !mm->isIntKey ) return;
   if( *ppKey != 0 && *pnKey > 0 ){
-
-
     assert( intKey == 0 );
     return;
   }
@@ -67,11 +54,6 @@ static int compareEntries(
   if( nKeyA > nKeyB ) return 1;
   return 0;
 }
-
-
-
-
-
 
 static u64 keyPrefix64(const u8 *pKey, int nKey){
   u64 r = 0;
@@ -116,9 +98,6 @@ static u32 hashKey(const u8 *pKey, int nKey){
   return h;
 }
 
-
-
-
 typedef struct OrderPair {
   u64 prefix;
   int phys;
@@ -145,24 +124,16 @@ static void mutmapInsertionSort(ProllyMutMap *mm, OrderPair *a, int lo, int hi){
   }
 }
 
-
-
-
-
 static void mutmapQuickSort(ProllyMutMap *mm, OrderPair *a, int lo, int hi){
   while( hi - lo > 16 ){
     int mid = lo + ((hi - lo) >> 1);
     int i, j;
     OrderPair pivot, t;
-
-
     if( orderPairCmp(mm, &a[lo], &a[mid]) > 0 ){ t=a[lo]; a[lo]=a[mid]; a[mid]=t; }
     if( orderPairCmp(mm, &a[lo], &a[hi]) > 0 ){ t=a[lo]; a[lo]=a[hi]; a[hi]=t; }
     if( orderPairCmp(mm, &a[mid], &a[hi]) > 0 ){ t=a[mid]; a[mid]=a[hi]; a[hi]=t; }
     t = a[mid]; a[mid] = a[hi-1]; a[hi-1] = t;
     pivot = a[hi-1];
-
-
     i = lo;
     j = hi - 1;
     for(;;){
@@ -171,9 +142,7 @@ static void mutmapQuickSort(ProllyMutMap *mm, OrderPair *a, int lo, int hi){
       if( i >= j ) break;
       t = a[i]; a[i] = a[j]; a[j] = t;
     }
-
     t = a[i]; a[i] = a[hi-1]; a[hi-1] = t;
-
     if( i - lo < hi - i ){
       mutmapQuickSort(mm, a, lo, i - 1);
       lo = i + 1;
@@ -184,11 +153,6 @@ static void mutmapQuickSort(ProllyMutMap *mm, OrderPair *a, int lo, int hi){
   }
   mutmapInsertionSort(mm, a, lo, hi);
 }
-
-
-
-
-
 
 static int mutmapSortOrder(ProllyMutMap *mm){
   int n = mm->nEntries;
@@ -582,9 +546,6 @@ int prollyMutMapInsert(
   if( !mm->keepSorted ){
     hashInsertPhys(mm, phys);
   }
-
-
-
   mm->generation++;
   return SQLITE_OK;
 }
@@ -671,10 +632,6 @@ void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level){
   mm->currentSavepointLevel = level;
 }
 
-
-
-
-
 int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
   int i;
   int rc;
@@ -695,7 +652,6 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
     rec->prevVal = 0;
     mm->nUndo--;
   }
-
 
   {
     int oldN = mm->nEntries;
@@ -746,9 +702,6 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
     int rc = rebuildHash(mm);
     if( rc!=SQLITE_OK ) return rc;
   }
-
-
-
 
   mm->generation++;
 
@@ -833,9 +786,6 @@ int prollyMutMapResolveSortedPos(
   *pFound = 0;
   if( mm->nEntries==0 ) return SQLITE_OK;
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
-
-
-
   rc = ensureOrder(mm);
   if( rc!=SQLITE_OK ) return rc;
   *pIdx = bsearch_key(mm, pKey, nKey, pFound);
@@ -898,10 +848,6 @@ void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
   it->pMap = mm;
   it->idx = mm->nEntries>0 ? mm->nEntries - 1 : mm->nEntries;
 }
-
-
-
-
 
 void prollyMutMapClear(ProllyMutMap *mm){
   int i;
@@ -1077,8 +1023,6 @@ int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
   int i, rc;
   for(i=0; i<pSrc->nEntries; i++){
     ProllyMutMapEntry *e = &pSrc->aEntries[i];
-
-
     if( e->op==PROLLY_EDIT_INSERT ){
       rc = prollyMutMapInsert(pDst, e->pKey, e->nKey, 0,
                                e->pVal, e->nVal);

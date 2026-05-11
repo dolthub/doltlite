@@ -10,12 +10,6 @@
 
 #include <string.h>
 
-
-
-
-
-
-
 static void freeViolationRow(ConstraintViolationRow *r){
   if( !r ) return;
   sqlite3_free(r->pKey);
@@ -319,9 +313,6 @@ static int storeUpdatedViolations(
   return doltliteSaveWorkingSet(db);
 }
 
-
-
-
 int doltliteAppendConstraintViolation(
   sqlite3 *db,
   const char *zTable,
@@ -384,8 +375,6 @@ int doltliteClearAllConstraintViolations(sqlite3 *db){
   return doltliteSaveWorkingSet(db);
 }
 
-
-
 typedef struct CvSumVtab CvSumVtab;
 struct CvSumVtab { sqlite3_vtab base; sqlite3 *db; };
 typedef struct CvSumCur CvSumCur;
@@ -430,9 +419,6 @@ static int cvsFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqli
   CvSumCur *c = (CvSumCur*)cur;
   CvSumVtab *vt = (CvSumVtab*)cur->pVtab;
   (void)n;(void)s;(void)a;(void)v;
-
-
-
   freeViolationTables(c->aTables, c->nTables);
   c->aTables = 0;
   c->nTables = 0;
@@ -473,8 +459,6 @@ static sqlite3_module cvSummaryModule = {
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
-
-
 typedef struct CvRowVtab CvRowVtab;
 struct CvRowVtab {
   sqlite3_vtab base;
@@ -492,16 +476,10 @@ struct CvRowCur {
   int iRow;
 };
 
-
-
-
-
 static char *cvrBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
   int i;
   char *z;
-
-
   sqlite3_str_appendall(pStr, "CREATE TABLE x(violation_type TEXT");
   for(i=0; i<ci->nCol; i++){
     sqlite3_str_appendf(pStr, ", \"%w\"", ci->azName[i]);
@@ -656,13 +634,6 @@ static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   return SQLITE_OK;
 }
 
-
-
-
-
-
-
-
 static sqlite3_int64 cvrViolationRowid(const ConstraintViolationRow *r){
   u64 h = 1469598103934665603ULL;
   int i;
@@ -708,10 +679,6 @@ static int cvrBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   p->estimatedCost = 10;
   return SQLITE_OK;
 }
-
-
-
-
 
 static int cvrUpdate(
   sqlite3_vtab *pVtab,
@@ -775,14 +742,6 @@ static sqlite3_module cvRowModule = {
   cvrUpdate,
   0,0,0,0,0,0,0,0,0,0,0
 };
-
-
-
-
-
-
-
-
 
 int doltliteRefreshConstraintViolationTables(sqlite3 *db){
   return doltliteForEachUserTable(db, "dolt_constraint_violations_", &cvRowModule);

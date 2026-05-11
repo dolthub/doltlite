@@ -1,30 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -37,12 +12,6 @@ FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize_diff_table() {
-
-
-
-
-
-
   tr -d '\r' \
     | awk -F'\t' 'NF >= 7 && $1 == "T" { print }' \
     | awk -F'\t' '
@@ -66,25 +35,6 @@ oracle() {
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
   local dl_table_q=""
   IFS=',' read -ra tarr <<< "$tables"
   for tn in "${tarr[@]}"; do
@@ -102,7 +52,6 @@ oracle() {
              | grep -v '^[0-9]*$' \
              | grep -v '^[0-9a-f]\{40\}$' \
              | normalize_diff_table)
-
 
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
@@ -127,7 +76,6 @@ oracle() {
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_diff_table
   )
 
-
   if [ -z "$dl_table" ] && [ -z "$dt_table" ]; then
     fail=$((fail+1))
     FAILED_NAMES="$FAILED_NAMES $name"
@@ -146,9 +94,6 @@ oracle() {
   fi
 }
 
-
-
-
 normalize_summary() {
   tr -d '\r' \
     | sed -e 's/	true$/	1/' -e 's/	true	/	1	/g' \
@@ -163,19 +108,10 @@ normalize_summary() {
     | sort
 }
 
-
-
-
-
-
 oracle_summary() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_summary"
   mkdir -p "$dir/dl" "$dir/dt"
-
-
-
-
 
   local q="SELECT 'S' || char(9) || dd.table_name || char(9) || coalesce(dl.message, dd.commit_hash) || char(9) || dd.data_change || char(9) || dd.schema_change FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
   local q_dolt="SELECT concat('S', char(9), dd.table_name, char(9), coalesce(dl.message, dd.commit_hash), char(9), dd.data_change, char(9), dd.schema_change) FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash"
@@ -215,14 +151,6 @@ oracle_summary() {
     echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
   fi
 }
-
-
-
-
-
-
-
-
 
 oracle_summary_filter_name() {
   local name="$1" setup="$2" target="$3"
@@ -326,19 +254,11 @@ SELECT dolt_commit('-m', 'c4_delete');
 
 echo "--- staged state interactions ---"
 
-
-
-
-
-
 oracle "table_diff_after_stage_only" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_add('-A');
 "
-
-
-
 
 oracle "table_diff_stage_then_more_working" "
 $SEED
@@ -347,13 +267,11 @@ SELECT dolt_add('-A');
 UPDATE t SET v = 99 WHERE id = 1;
 "
 
-
 oracle "table_diff_stage_insert" "
 $SEED
 INSERT INTO t VALUES (2, 20);
 SELECT dolt_add('-A');
 "
-
 
 oracle "table_diff_stage_delete" "
 $SEED
@@ -364,8 +282,6 @@ DELETE FROM t WHERE id = 2;
 SELECT dolt_add('-A');
 "
 
-
-
 oracle "table_diff_mixed_staged_and_unstaged" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -374,8 +290,6 @@ INSERT INTO t VALUES (3, 30);
 "
 
 echo "--- working set diff ---"
-
-
 
 oracle "table_diff_working_modify" "
 $SEED
@@ -392,15 +306,12 @@ $SEED
 DELETE FROM t WHERE id = 1;
 "
 
-
-
 oracle "table_diff_working_then_committed" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 "
-
 
 oracle "table_diff_history_plus_working" "
 $SEED
@@ -412,7 +323,6 @@ UPDATE t SET v = 99 WHERE id = 1;
 
 echo "--- branching ---"
 
-
 oracle "diff_on_feature_branch" "
 $SEED
 SELECT dolt_branch('feature');
@@ -423,12 +333,6 @@ SELECT dolt_commit('-m', 'feat1');
 "
 
 echo "--- merges ---"
-
-
-
-
-
-
 
 oracle "diff_after_simple_merge" "
 $SEED
@@ -443,12 +347,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feature');
 "
-
-
-
-
-
-
 
 oracle "diff_after_merge_with_intermediate_commits" "
 $SEED
@@ -466,10 +364,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main3');
 SELECT dolt_merge('feature');
 "
-
-
-
-
 
 oracle "diff_after_merge_no_main_changes_after_branch" "
 $SEED
@@ -490,18 +384,12 @@ SELECT dolt_merge('feature');
 
 echo "--- DDL across commits (ALTER TABLE in history) ---"
 
-
-
-
 oracle "diff_alter_add_col_no_data_change" "
 $SEED
 ALTER TABLE t ADD COLUMN extra INT;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_col_only');
 "
-
-
-
 
 oracle "diff_alter_add_col_then_update_old_col" "
 $SEED
@@ -513,9 +401,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'update_v');
 "
 
-
-
-
 oracle "diff_alter_add_col_then_update_new_col" "
 $SEED
 ALTER TABLE t ADD COLUMN extra INT;
@@ -526,8 +411,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'populate_extra');
 "
 
-
-
 oracle "diff_alter_add_col_plus_insert_same_commit" "
 $SEED
 ALTER TABLE t ADD COLUMN extra INT;
@@ -535,7 +418,6 @@ INSERT INTO t VALUES (2, 20, 200);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_col_and_insert');
 "
-
 
 oracle "diff_alter_add_col_then_insert_next_commit" "
 $SEED
@@ -546,8 +428,6 @@ INSERT INTO t VALUES (2, 20, 200);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'insert_after_alter');
 "
-
-
 
 oracle "diff_alter_add_col_then_delete_next_commit" "
 $SEED
@@ -562,12 +442,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_row');
 "
 
-
-
-
-
-
-
 oracle "diff_alter_drop_col_no_data_change" "
 $SEED
 ALTER TABLE t ADD COLUMN extra INT;
@@ -577,9 +451,6 @@ ALTER TABLE t DROP COLUMN extra;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_extra');
 "
-
-
-
 
 oracle "diff_alter_drop_col_with_data_also_shared_match" "
 $SEED
@@ -592,17 +463,12 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_extra');
 "
 
-
-
-
 oracle "diff_alter_rename_col_no_data_change" "
 $SEED
 ALTER TABLE t RENAME COLUMN v TO vv;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'rename_v');
 "
-
-
 
 oracle "diff_multiple_alters_single_commit_no_data" "
 $SEED
@@ -611,9 +477,6 @@ ALTER TABLE t ADD COLUMN b INT;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'multi_alter');
 "
-
-
-
 
 oracle "diff_alter_then_merge" "
 $SEED
@@ -631,9 +494,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_add_col');
 SELECT dolt_merge('feature');
 "
-
-
-
 
 oracle "diff_schema_replay_after_merge_add_table_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -656,8 +516,6 @@ SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_merge('feature');
 " "u"
 
-
-
 oracle "diff_schema_replay_after_cherrypick_add_table_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -678,9 +536,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_cherry_pick('feature');
 " "u"
-
-
-
 
 oracle "diff_schema_replay_after_rebase_disjoint_indexes" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
@@ -770,15 +625,10 @@ SELECT dolt_checkout('feature');
 SELECT dolt_rebase('main');
 " "c"
 
-
-
 oracle "diff_alter_add_col_working_set_only" "
 $SEED
 ALTER TABLE t ADD COLUMN extra INT;
 "
-
-
-
 
 oracle "diff_alter_add_col_and_update_working_set" "
 $SEED
@@ -789,16 +639,12 @@ UPDATE t SET extra = 42 WHERE id = 1;
 echo ""
 echo "--- summary form: dolt_diff (no args) ---"
 
-
-
-
 oracle_summary "summary_two_commits_one_table" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 "
-
 
 oracle_summary "summary_linear_three_commits" "
 $SEED
@@ -812,8 +658,6 @@ DELETE FROM t WHERE id = 2;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c4_delete');
 "
-
-
 
 oracle_summary "summary_two_tables_independent" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -830,14 +674,12 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'modify_u_only');
 "
 
-
 oracle_summary "summary_schema_change_add_column" "
 $SEED
 ALTER TABLE t ADD COLUMN extra TEXT;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_col');
 "
-
 
 oracle_summary "summary_data_and_schema_in_one_commit" "
 $SEED
@@ -847,7 +689,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'col_and_row');
 "
 
-
 oracle_summary "summary_table_added_later" "
 $SEED
 CREATE TABLE u(id INT PRIMARY KEY, x TEXT);
@@ -856,17 +697,10 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_u');
 "
 
-
-
-
 oracle_summary "summary_working_set_excluded" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
 "
-
-
-
-
 
 oracle_summary "summary_merge_replay_add_table_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -1016,10 +850,6 @@ SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='main_check' 
 
 echo "--- summary form: WHERE table_name=... filter ---"
 
-
-
-
-
 oracle_summary_filter_name "filter_dropped_table" "
 CREATE TABLE dropped(id INT PRIMARY KEY, v INT);
 INSERT INTO dropped VALUES(1, 10);
@@ -1033,17 +863,12 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c3_drop_dropped');
 " "dropped"
 
-
 oracle_summary_filter_name "filter_nonexistent_name" "
 $SEED
 INSERT INTO t VALUES (2, 20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 " "never_existed"
-
-
-
-
 
 oracle_summary_filter_name "filter_mixed_history" "
 CREATE TABLE x(id INT PRIMARY KEY, v INT);

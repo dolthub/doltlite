@@ -1,10 +1,4 @@
 #!/bin/bash
-
-
-
-
-
-
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
@@ -12,10 +6,6 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 
 echo "=== Doltlite Advanced Tests ==="
 echo ""
-
-
-
-
 
 DB=/tmp/test_adv_index_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, age INTEGER);
@@ -32,46 +22,33 @@ run_test "idx_query_name" "SELECT count(*) FROM t WHERE name='Alice';" "2" "$DB"
 run_test "idx_query_age" "SELECT count(*) FROM t WHERE age > 29;" "2" "$DB"
 run_test "idx_schema" "SELECT count(*) FROM sqlite_master WHERE type='index';" "2" "$DB"
 
-
 run_test "idx_persist" "SELECT count(*) FROM sqlite_master WHERE type='index';" "2" "$DB"
 run_test "idx_query_persist" "SELECT count(*) FROM t WHERE name='Bob';" "1" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_txn_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'committed');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "BEGIN;
 INSERT INTO t VALUES(2,'rollback_me');
 ROLLBACK;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "txn_rollback" "SELECT count(*) FROM t;" "1" "$DB"
-
 
 echo "BEGIN;
 INSERT INTO t VALUES(3,'txn_insert');
 COMMIT;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "txn_commit" "SELECT count(*) FROM t;" "2" "$DB"
 
-
 run_test_match "txn_status" "SELECT count(*) FROM dolt_status;" "^[1-9]" "$DB"
-
 
 run_test_match "txn_dolt_commit" "SELECT dolt_commit('-A','-m','txn work');" "^[0-9a-f]{40}$" "$DB"
 run_test "txn_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
 run_test "txn_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_wide_$$.db; rm -f "$DB"
 echo "CREATE TABLE wide(
@@ -89,14 +66,9 @@ run_test "wide_col1" "SELECT c1 FROM wide WHERE id=1;" "a" "$DB"
 run_test "wide_col10" "SELECT c10 FROM wide WHERE id=2;" "t" "$DB"
 run_test "wide_int" "SELECT c11 FROM wide WHERE id=1;" "1" "$DB"
 
-
 run_test "wide_persist" "SELECT c5 FROM wide WHERE id=1;" "e" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_empty_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -106,7 +78,6 @@ run_test "empty_count" "SELECT count(*) FROM t;" "0" "$DB"
 run_test "empty_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test "empty_diff" "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" "0" "$DB"
 
-
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(1,'feat_row');
@@ -114,16 +85,11 @@ SELECT dolt_commit('-A','-m','feat adds row');" | $DOLTLITE "$DB/feat" > /dev/nu
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "empty_ff_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
 run_test "empty_after_merge" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "empty_merge_val" "SELECT v FROM t WHERE id=1;" "feat_row" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_pkonly_$$.db; rm -f "$DB"
 echo "CREATE TABLE ids(id INTEGER PRIMARY KEY);
@@ -135,7 +101,6 @@ SELECT dolt_commit('-A','-m','pk only');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "pkonly_count" "SELECT count(*) FROM ids;" "3" "$DB"
 run_test "pkonly_sum" "SELECT sum(id) FROM ids;" "60" "$DB"
 
-
 echo "INSERT INTO ids VALUES(40);
 INSERT INTO ids VALUES(50);
 SELECT dolt_commit('-A','-m','more ids');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -145,16 +110,11 @@ run_test "pkonly_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_replace_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'original');
 INSERT INTO t VALUES(2,'keep');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "REPLACE INTO t VALUES(1,'replaced');
 SELECT dolt_commit('-A','-m','replace');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -162,7 +122,6 @@ SELECT dolt_commit('-A','-m','replace');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "replace_val" "SELECT v FROM t WHERE id=1;" "replaced" "$DB"
 run_test "replace_count" "SELECT count(*) FROM t;" "2" "$DB"
 run_test "replace_other" "SELECT v FROM t WHERE id=2;" "keep" "$DB"
-
 
 echo "INSERT OR REPLACE INTO t VALUES(2,'or_replaced');
 SELECT dolt_commit('-A','-m','or replace');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -172,15 +131,10 @@ run_test "or_replace_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_ignore_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'first');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "INSERT OR IGNORE INTO t VALUES(1,'duplicate');
 INSERT OR IGNORE INTO t VALUES(2,'new');
@@ -193,22 +147,16 @@ run_test "ignore_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_multicol_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, b TEXT, c TEXT);
 INSERT INTO t VALUES(1,'x','y','z');
 INSERT INTO t VALUES(2,'x','y','z');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET a='feat_a' WHERE id=1;
 SELECT dolt_commit('-A','-m','feat: update a');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
-
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "UPDATE t SET c='main_c' WHERE id=2;
@@ -222,10 +170,6 @@ run_test "multicol_row2_a" "SELECT a FROM t WHERE id=2;" "x" "$DB"
 run_test "multicol_count" "SELECT count(*) FROM t;" "2" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_agg_$$.db; rm -f "$DB"
 echo "CREATE TABLE sales(id INTEGER PRIMARY KEY, amount INTEGER, region TEXT);
@@ -251,10 +195,6 @@ run_test "agg_group" "SELECT sum(amount) FROM sales WHERE region='east';" "250" 
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_view_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT, score INTEGER);
 INSERT INTO t VALUES(1,'a',10);
@@ -266,9 +206,7 @@ SELECT dolt_commit('-A','-m','with view');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "view_count" "SELECT count(*) FROM high_scores;" "2" "$DB"
 run_test "view_schema" "SELECT count(*) FROM sqlite_master WHERE type='view';" "1" "$DB"
 
-
 run_test "view_persist" "SELECT count(*) FROM high_scores;" "2" "$DB"
-
 
 echo "INSERT INTO t VALUES(4,'d',25);
 SELECT dolt_commit('-A','-m','add d');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -276,15 +214,10 @@ run_test "view_updated" "SELECT count(*) FROM high_scores;" "3" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_multiupd_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'first');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "UPDATE t SET v='second' WHERE id=1;
 UPDATE t SET v='third' WHERE id=1;
@@ -294,7 +227,6 @@ SELECT dolt_commit('-A','-m','multi update');" | $DOLTLITE "$DB" > /dev/null 2>&
 run_test "multiupd_val" "SELECT v FROM t WHERE id=1;" "final" "$DB"
 run_test "multiupd_count" "SELECT count(*) FROM t;" "1" "$DB"
 
-
 run_test_match "multiupd_diff" \
   "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^1$" "$DB"
@@ -302,15 +234,10 @@ run_test "multiupd_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_lifecycle_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'keep');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "INSERT INTO t VALUES(2,'temp');
 UPDATE t SET v='temp_updated' WHERE id=2;
@@ -319,7 +246,6 @@ SELECT dolt_commit('-A','-m','noop cycle');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "lifecycle_count" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "lifecycle_orig" "SELECT v FROM t WHERE id=1;" "keep" "$DB"
-
 
 echo "INSERT INTO t VALUES(3,'new');
 UPDATE t SET v='updated_new' WHERE id=3;
@@ -330,12 +256,7 @@ run_test "lifecycle_final_count" "SELECT count(*) FROM t;" "2" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_largetext_$$.db; rm -f "$DB"
-
 
 BIGVAL=$(python3 -c "print('x' * 10000)" 2>/dev/null || printf '%0.sx' $(seq 1 10000))
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -347,33 +268,22 @@ run_test "large_length" "SELECT length(v) FROM t WHERE id=1;" "10000" "$DB"
 run_test "large_small" "SELECT v FROM t WHERE id=2;" "small" "$DB"
 run_test "large_count" "SELECT count(*) FROM t;" "2" "$DB"
 
-
 run_test "large_persist" "SELECT length(v) FROM t WHERE id=1;" "10000" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_logmeta_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
 SELECT dolt_commit('-A','-m','test message','--author','LogTest <log@test.com>');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "logmeta_hash" "SELECT commit_hash FROM dolt_log LIMIT 1;" "^[0-9a-f]{40}$" "$DB"
 run_test "logmeta_committer" "SELECT committer FROM dolt_log LIMIT 1;" "LogTest" "$DB"
 run_test "logmeta_email" "SELECT email FROM dolt_log LIMIT 1;" "log@test.com" "$DB"
 run_test "logmeta_message" "SELECT message FROM dolt_log LIMIT 1;" "test message" "$DB"
-
 run_test_match "logmeta_date" "SELECT date FROM dolt_log LIMIT 1;" "^[0-9]" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_branchmeta_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -385,10 +295,8 @@ echo "SELECT dolt_branch('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "branchmeta_count" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
 run_test_match "branchmeta_hash" "SELECT hash FROM dolt_branches WHERE name='main';" "^[0-9a-f]{40}$" "$DB"
 
-
 run_test "branchmeta_same_hash" \
   "SELECT count(DISTINCT hash) FROM dolt_branches;" "1" "$DB"
-
 
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','dev commit');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -400,10 +308,6 @@ run_test_match "branchmeta_names" \
   "SELECT group_concat(name) FROM (SELECT name FROM dolt_branches ORDER BY name);" "dev.*main" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_tagmeta_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -423,17 +327,12 @@ run_test_match "tagmeta_names" \
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_schemaonly_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 SELECT dolt_commit('-A','-m','empty schema');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "schemaonly_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test "schemaonly_count" "SELECT count(*) FROM t;" "0" "$DB"
-
 
 echo "CREATE TABLE t2(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-A','-m','add t2');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -442,10 +341,6 @@ run_test "schemaonly_log2" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 run_test "schemaonly_tables" "SELECT count(*) FROM sqlite_master WHERE type='table';" "2" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_checkout_preserve_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -456,7 +351,6 @@ echo "SELECT dolt_branch('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2,'dev_data');
 SELECT dolt_commit('-A','-m','dev work');" | $DOLTLITE "$DB/dev" > /dev/null 2>&1
-
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "preserve_main1" "SELECT count(*) FROM t;" "1" "$DB"
@@ -473,28 +367,18 @@ run_test "preserve_dev_val" "SELECT v FROM t WHERE id=2;" "dev_data" "$DB/dev"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_createstatus_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "CREATE TABLE t2(id INTEGER PRIMARY KEY, v TEXT);" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "createstatus_shows" "SELECT count(*) FROM dolt_status;" "^[1-9]" "$DB"
 run_test_match "createstatus_name" "SELECT table_name FROM dolt_status LIMIT 1;" "t2" "$DB"
 
-
 run_test_match "createstatus_commit" "SELECT dolt_commit('-A','-m','add t2');" "^[0-9a-f]{40}$" "$DB"
 run_test "createstatus_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_subquery_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -505,7 +389,6 @@ SELECT dolt_commit('-A','-m','c2');
 INSERT INTO t VALUES(3,'c');
 SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test "subq_latest" \
   "SELECT message FROM dolt_log WHERE commit_hash = (SELECT commit_hash FROM dolt_log LIMIT 1);" \
   "c3" "$DB"
@@ -513,10 +396,8 @@ run_test "subq_latest" \
 run_test "subq_count_after" \
   "SELECT count(*) FROM dolt_log WHERE message LIKE 'c%';" "3" "$DB"
 
-
 echo "SELECT dolt_tag('first', (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 2));" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "subq_tag" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
-
 
 run_test_match "subq_diff" \
   "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT tag_hash FROM dolt_tags WHERE tag_name='first'), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
@@ -524,29 +405,19 @@ run_test_match "subq_diff" \
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_logorder_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','first');
 INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','second');
 INSERT INTO t VALUES(3); SELECT dolt_commit('-A','-m','third');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test "logorder_first" "SELECT message FROM dolt_log LIMIT 1;" "third" "$DB"
 run_test "logorder_last" "SELECT message FROM dolt_log LIMIT 1 OFFSET 2;" "first" "$DB"
-
 
 run_test "logorder_offset1" "SELECT message FROM dolt_log LIMIT 1 OFFSET 1;" "second" "$DB"
 run_test "logorder_total" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_multiwork_$$.db; rm -f "$DB"
 echo "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);
@@ -557,27 +428,20 @@ INSERT INTO orders VALUES(1,1,'widget');
 INSERT INTO products VALUES(1,'Widget',10);
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "INSERT INTO users VALUES(2,'Bob');
 INSERT INTO orders VALUES(2,2,'gadget');
 INSERT INTO products VALUES(2,'Gadget',20);" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "multiwork_status" "SELECT count(*) FROM dolt_status;" "3" "$DB"
 
-
 echo "SELECT dolt_add('users');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "multiwork_staged" "SELECT count(*) FROM dolt_status WHERE staged=1;" "1" "$DB"
 run_test "multiwork_unstaged" "SELECT count(*) FROM dolt_status WHERE staged=0;" "2" "$DB"
-
 
 run_test_match "multiwork_commit" "SELECT dolt_commit('-A','-m','all 3');" "^[0-9a-f]{40}$" "$DB"
 run_test "multiwork_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_resetstage_$$.db; rm -f "$DB"
 echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
@@ -589,30 +453,22 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO a VALUES(2,'a2');
 INSERT INTO b VALUES(2,'b2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "SELECT dolt_add('a');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "SELECT dolt_reset();" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "resetstage_unstaged" "SELECT count(*) FROM dolt_status WHERE staged=1;" "0" "$DB"
 run_test "resetstage_data_a" "SELECT count(*) FROM a;" "2" "$DB"
 run_test "resetstage_data_b" "SELECT count(*) FROM b;" "2" "$DB"
 
-
 echo "SELECT dolt_reset('--hard');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "resetstage_hard" "SELECT count(*) FROM a;" "1" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 DB=/tmp/test_adv_doublemerge_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'init');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 echo "SELECT dolt_branch('featA');
 SELECT dolt_branch('featB');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -623,21 +479,15 @@ echo "INSERT INTO t VALUES(10,'A'); SELECT dolt_commit('-A','-m','featA');" | $D
 echo "SELECT dolt_checkout('featB');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(20,'B'); SELECT dolt_commit('-A','-m','featB');" | $DOLTLITE "$DB/featB" > /dev/null 2>&1
 
-
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "doublemerge_A" "SELECT dolt_merge('featA');" "^[0-9a-f]{40}$" "$DB"
 run_test "doublemerge_A_count" "SELECT count(*) FROM t;" "2" "$DB"
-
 
 run_test_match "doublemerge_B" "SELECT dolt_merge('featB');" "^[0-9a-f]{40}$" "$DB"
 run_test "doublemerge_B_count" "SELECT count(*) FROM t;" "3" "$DB"
 run_test "doublemerge_all" "SELECT group_concat(v) FROM (SELECT v FROM t ORDER BY id);" "init,A,B" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_adddot_$$.db; rm -f "$DB"
 echo "CREATE TABLE a(id INTEGER PRIMARY KEY, v TEXT);
@@ -649,20 +499,14 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO a VALUES(2,'a2');
 INSERT INTO b VALUES(2,'b2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "SELECT dolt_add('.');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "adddot_all_staged" "SELECT count(*) FROM dolt_status WHERE staged=1;" "2" "$DB"
 run_test "adddot_none_unstaged" "SELECT count(*) FROM dolt_status WHERE staged=0;" "0" "$DB"
-
 
 run_test_match "adddot_commit" "SELECT dolt_commit('-m','dot staged');" "^[0-9a-f]{40}$" "$DB"
 run_test "adddot_clean" "SELECT count(*) FROM dolt_status;" "0" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_onesidemerge_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -671,30 +515,21 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 echo "INSERT INTO t VALUES(2,'main_only');
 SELECT dolt_commit('-A','-m','main adds');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
-
 run_test_match "oneside_merge" "SELECT dolt_merge('feat');" "up to date|^[0-9a-f]{40}$" "$DB"
 run_test "oneside_count" "SELECT count(*) FROM t;" "2" "$DB"
-
 
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(3,'feat_only');
 SELECT dolt_commit('-A','-m','feat adds');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test_match "oneside_real_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
 run_test "oneside_all_rows" "SELECT count(*) FROM t;" "3" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_expr_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, b TEXT);
@@ -711,10 +546,6 @@ run_test "expr_case" \
   "no_a" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_mergeidx_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT, val INTEGER);
@@ -733,17 +564,12 @@ echo "INSERT INTO t VALUES(4,'d',5);
 SELECT dolt_commit('-A','-m','main add');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "mergeidx_merge" "SELECT dolt_merge('feat');" "^[0-9a-f]{40}$" "$DB"
-
 run_test "mergeidx_row1" "SELECT name FROM t WHERE id=1;" "a" "$DB"
 run_test "mergeidx_row3" "SELECT name FROM t WHERE id=3;" "c" "$DB"
 run_test "mergeidx_row4" "SELECT name FROM t WHERE id=4;" "d" "$DB"
 run_test "mergeidx_schema" "SELECT count(*) FROM sqlite_master WHERE type='index';" "1" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_unique_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, email TEXT UNIQUE, name TEXT);
@@ -753,10 +579,8 @@ SELECT dolt_commit('-A','-m','with unique');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "unique_count" "SELECT count(*) FROM t;" "2" "$DB"
 
-
 run_test_match "unique_violate" \
   "INSERT INTO t VALUES(3,'alice@test.com','Fake');" "UNIQUE constraint" "$DB"
-
 
 echo "UPDATE t SET name='Alice Updated' WHERE id=1;
 SELECT dolt_commit('-A','-m','update alice');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -764,10 +588,6 @@ run_test "unique_updated" "SELECT name FROM t WHERE id=1;" "Alice Updated" "$DB"
 run_test "unique_persist" "SELECT count(*) FROM t;" "2" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_notnull_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT NOT NULL, score INTEGER DEFAULT 0);
@@ -777,10 +597,8 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test "notnull_count" "SELECT count(*) FROM t;" "2" "$DB"
 
-
 run_test_match "notnull_violate" \
   "INSERT INTO t VALUES(3,NULL,50);" "NOT NULL" "$DB"
-
 
 echo "INSERT INTO t(id,name) VALUES(4,'Charlie');
 SELECT dolt_commit('-A','-m','with default');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -788,10 +606,6 @@ run_test "notnull_default" "SELECT score FROM t WHERE id=4;" "0" "$DB"
 run_test "notnull_persist" "SELECT count(*) FROM t;" "3" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 DB=/tmp/test_adv_join_$$.db; rm -f "$DB"
 echo "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT);
@@ -810,7 +624,6 @@ run_test "join_alice" \
 run_test "join_bob" \
   "SELECT count(*) FROM users u JOIN orders o ON u.id=o.uid WHERE u.name='Bob';" "1" "$DB"
 
-
 echo "INSERT INTO users VALUES(3,'Charlie');
 INSERT INTO orders VALUES(4,3,'Doohickey');
 SELECT dolt_commit('-A','-m','add charlie');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -819,10 +632,6 @@ run_test "join_after_commit" \
   "SELECT count(*) FROM users u JOIN orders o ON u.id=o.uid;" "4" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

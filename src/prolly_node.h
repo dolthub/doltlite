@@ -1,11 +1,4 @@
 
-
-
-
-
-
-
-
 #ifndef SQLITE_PROLLY_NODE_H
 #define SQLITE_PROLLY_NODE_H
 
@@ -48,10 +41,6 @@ int prollyNodeSearchBlob(const ProllyNode *pNode,
                          const u8 *pKey, int nKey, int *pRes);
 
 int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes);
-
-
-
-
 
 void prollyEncodeIntKey(i64 v, u8 buf[8]);
 

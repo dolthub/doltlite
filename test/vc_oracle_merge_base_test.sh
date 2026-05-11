@@ -1,25 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -31,18 +11,10 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-
-
-
-
 oracle() {
   local name="$1" setup="$2" ref1="$3" ref2="$4"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
-
-
-
-
 
   local q="SELECT CONCAT('ANS|', coalesce((SELECT message FROM dolt_log WHERE commit_hash = dolt_merge_base($ref1, $ref2)), 'NULL'));"
 
@@ -177,8 +149,6 @@ oracle "tag_vs_tag" "$WITH_TAG" "'v1'" "'v1'"
 oracle "branch_from_tag_vs_main" "$WITH_TAG" "'from_tag'" "'main'"
 
 echo "--- bare commit hash ref ---"
-
-
 
 oracle "hash_vs_branch" "$LINEAR" "(SELECT commit_hash FROM dolt_log WHERE message='c1')" "'main'"
 

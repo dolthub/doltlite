@@ -5,12 +5,6 @@
 #include <string.h>
 
 void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut){
-
-
-
-
-
-
   blake3_hasher h;
   u8 digest[BLAKE3_OUT_LEN];
   blake3_hasher_init(&h);
@@ -32,26 +26,6 @@ int prollyHashIsEmpty(const ProllyHash *h){
 }
 
 #include <math.h>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 #define PROLLY_WEIBULL_L  4096.0
 #define PROLLY_MAX_U32    4294967295.0

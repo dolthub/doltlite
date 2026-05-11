@@ -1,23 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 
 DOLTLITE="${1:-./doltlite}"
@@ -26,12 +8,6 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
-
-
-
-
-
-
 
 translate_for_dolt() {
   sed -E '
@@ -82,12 +58,6 @@ oracle() {
 echo "=== Version Control Oracle Tests: multi-col PK diff ==="
 echo ""
 
-
-
-
-
-
-
 SETUP_A="
 CREATE TABLE t(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(a, b));
 INSERT INTO t VALUES (1, 1, 'one'), (1, 2, 'two'), (2, 1, 'three');
@@ -109,13 +79,8 @@ oracle "a_slice_one" "$SETUP_A" \
 oracle "a_slice_full" "$SETUP_A" \
   "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(to_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('HEAD~2', 'HEAD');"
 
-
 oracle "a_summary" "$SETUP_A" \
   "SELECT CONCAT('R|', dd.table_name, '|', coalesce(dl.message, dd.commit_hash), '|', dd.data_change, '|', dd.schema_change) FROM dolt_diff dd LEFT JOIN dolt_log dl ON dl.commit_hash = dd.commit_hash WHERE dd.table_name = 't';"
-
-
-
-
 
 echo "--- Group B: PK-column UPDATE ---"
 
@@ -135,12 +100,6 @@ UPDATE t SET a = 99 WHERE a = 1 AND b = 1;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'move_pk');
 " "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(to_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t;"
 
-
-
-
-
-
-
 echo "--- Group C: PK cols not at the front of the declaration ---"
 
 oracle "c_pk_after_nonpk" "
@@ -152,7 +111,6 @@ UPDATE t SET v = 'TWO' WHERE a = 1 AND b = 2;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c2');
 " "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(to_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');"
 
-
 oracle "c_pk_reversed" "
 CREATE TABLE t(a INTEGER, b INTEGER, v TEXT, PRIMARY KEY(b, a));
 INSERT INTO t VALUES (1, 10, 'one'), (2, 20, 'two');
@@ -160,10 +118,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'seed');
 UPDATE t SET v = 'TWO' WHERE a = 2 AND b = 20;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c2');
 " "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(to_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');"
-
-
-
-
 
 echo "--- Group D: three-col PK ---"
 
@@ -185,11 +139,6 @@ UPDATE t SET v = 'ALPHA' WHERE a = 1 AND b = 1 AND c = 10;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c2');
 " "SELECT CONCAT('R|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(to_c,''), '|', IFNULL(to_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', IFNULL(from_c,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t;"
 
-
-
-
-
-
 echo "--- Group E: mixed-type PKs ---"
 
 oracle "e_text_int_pk" "
@@ -208,13 +157,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'seed');
 UPDATE t SET v = 'BAR' WHERE id = 1 AND tag = 'y';
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c2');
 " "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_tag,''), '|', IFNULL(to_v,''), '|', IFNULL(from_id,''), '|', IFNULL(from_tag,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');"
-
-
-
-
-
-
-
 
 echo "--- Group F: dolt_diff_stat on multi-col PK ---"
 
@@ -235,12 +177,6 @@ UPDATE t SET b = 99 WHERE a = 1 AND b = 2;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'pk_update');
 " "SELECT CONCAT('R|', table_name, '|', rows_added, '|', rows_deleted, '|', rows_modified) FROM dolt_diff_stat('HEAD~1', 'HEAD', 't');"
 
-
-
-
-
-
-
 echo "--- Group G: dolt_blame on multi-col PK ---"
 
 oracle "g_blame_multi_pk" "
@@ -253,18 +189,6 @@ INSERT INTO t VALUES (2, 1, 'three');
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'c3');
 " "SELECT CONCAT('R|', a, '|', b, '|', message) FROM dolt_blame_t ORDER BY a, b;"
 
-
-
-
-
-
-
-
-
-
-
-
-
 echo "--- Group H: ALTER on non-leading-PK table (schema-only filter) ---"
 
 oracle "h_drop_middle_nonpk_nonleading_pk" "
@@ -274,11 +198,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'seed');
 ALTER TABLE t DROP COLUMN c;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'drop_c');
 " "SELECT CONCAT('R|', IFNULL(to_v,''), '|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(from_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');"
-
-
-
-
-
 
 oracle "h_add_col_nonleading_pk_no_data" "
 CREATE TABLE t(v INT, a INTEGER, b INTEGER, PRIMARY KEY(a, b));
@@ -341,11 +260,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "SELECT CONCAT('R|', to_a, '|', to_b, '|', to_v, '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_u('main', 'feat') ORDER BY to_a, to_b;"
-
-
-
-
-
 
 echo "--- Group J: replay on multi-col PK stat/summary ---"
 
@@ -452,12 +366,6 @@ SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "SELECT CONCAT('R|', IFNULL(from_table_name,''), '|', IFNULL(to_table_name,''), '|', diff_type, '|', CASE WHEN data_change THEN 1 ELSE 0 END, '|', CASE WHEN schema_change THEN 1 ELSE 0 END) FROM dolt_diff_summary('main', 'feat', 'u');"
-
-
-
-
-
-
 
 echo "--- Group K: replay history on multi-col PK table additions ---"
 

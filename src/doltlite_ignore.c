@@ -9,10 +9,6 @@ static unsigned char ignoreLower(unsigned char c){
   return (c>='A' && c<='Z') ? c + 32 : c;
 }
 
-
-
-
-
 static int ignorePatternMatch(const char *zPat, const char *zStr){
   const char *pStar = 0;
   const char *sStar = 0;
@@ -42,10 +38,6 @@ static int ignorePatternMatch(const char *zPat, const char *zStr){
   return *zPat == 0;
 }
 
-
-
-
-
 static int ignoreSpecificity(const char *zPat){
   int n = 0;
   while( *zPat ){
@@ -60,11 +52,6 @@ enum DoltliteIgnoreSchemaState {
   DOLTLITE_IGNORE_SCHEMA_OK = 1,
   DOLTLITE_IGNORE_SCHEMA_BAD = 2
 };
-
-
-
-
-
 
 static int doltliteIgnoreSchemaState(sqlite3 *db, int *pState){
   sqlite3_stmt *pStmt = 0;

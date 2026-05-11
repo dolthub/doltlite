@@ -1,29 +1,5 @@
 #!/bin/bash
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 set -u
 set -o pipefail
 
@@ -34,11 +10,6 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
-
-
-
-
-
 
 normalize_log() {
   tr -d '\r' \
@@ -58,8 +29,6 @@ normalize_status() {
     | awk -F'\t' 'NF >= 4 && $1 == "S" { print }' \
     | sort -t$'\t' -k2,2 -k3,3 -k4,4
 }
-
-
 
 oracle() {
   local name="$1" setup="$2"
@@ -213,9 +182,6 @@ SELECT dolt_commit('-m', 'c1');
 
 echo "--- reset with no ref (unstage) ---"
 
-
-
-
 oracle "reset_no_args_unstages_all" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -223,16 +189,12 @@ SELECT dolt_add('-A');
 SELECT dolt_reset();
 "
 
-
 oracle "reset_soft_no_ref_unstages_all" "
 $SEED
 INSERT INTO t VALUES (2, 20);
 SELECT dolt_add('-A');
 SELECT dolt_reset('--soft');
 "
-
-
-
 
 oracle "reset_hard_no_ref_clears_everything" "
 $SEED
@@ -242,12 +204,10 @@ INSERT INTO t VALUES (3, 30);
 SELECT dolt_reset('--hard');
 "
 
-
 oracle "reset_no_changes_to_unstage" "
 $SEED
 SELECT dolt_reset();
 "
-
 
 oracle "reset_hard_no_changes" "
 $SEED
@@ -255,8 +215,6 @@ SELECT dolt_reset('--hard');
 "
 
 echo "--- reset with ref (move HEAD) ---"
-
-
 
 oracle "reset_soft_to_previous_commit" "
 $SEED
@@ -266,8 +224,6 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_reset('--soft', 'HEAD~1');
 "
 
-
-
 oracle "reset_hard_to_previous_commit" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -275,9 +231,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
 SELECT dolt_reset('--hard', 'HEAD~1');
 "
-
-
-
 
 oracle "reset_hard_to_branch_name" "
 $SEED
@@ -288,10 +241,6 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_reset('--hard', 'feature');
 "
 
-
-
-
-
 oracle "reset_hard_to_tag" "
 $SEED
 SELECT dolt_tag('release-1');
@@ -301,8 +250,6 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_reset('--hard', 'release-1');
 "
 
-
-
 oracle "reset_hard_to_commit_hash" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -311,12 +258,10 @@ SELECT dolt_commit('-m', 'c2');
 SELECT dolt_reset('--hard', (SELECT commit_hash FROM dolt_log WHERE message = 'c1'));
 "
 
-
 oracle "reset_hard_to_current_head_noop" "
 $SEED
 SELECT dolt_reset('--hard', 'HEAD');
 "
-
 
 oracle "reset_hard_with_uncommitted_modifications" "
 $SEED
@@ -518,8 +463,6 @@ CALL dolt_reset('--hard', HASHOF('HEAD^2'));
 SELECT concat('Q|vals|', group_concat(s ORDER BY id SEPARATOR '|')) FROM a;"
 
 echo "--- table-name positional unstage ---"
-
-
 
 oracle "reset_specific_table_unstages_only_that" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);

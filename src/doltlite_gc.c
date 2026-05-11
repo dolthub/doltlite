@@ -67,12 +67,6 @@ static int gcChildCb(void *ctx, const ProllyHash *pHash){
   return gcQueuePush(q, pHash);
 }
 
-
-
-
-
-
-
 static int gcMarkReachable(
   ChunkStore *cs,
   ProllyHashSet *marked
@@ -84,14 +78,12 @@ static int gcMarkReachable(
   rc = gcQueueInit(&queue);
   if( rc!=SQLITE_OK ) return rc;
 
-
   rc = gcQueuePush(&queue, &cs->refsHash);
 
   for(i=0; rc==SQLITE_OK && i<cs->nBranches; i++){
     rc = gcQueuePush(&queue, &cs->aBranches[i].commitHash);
     if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->aBranches[i].workingSetHash);
   }
-
 
   for(i=0; rc==SQLITE_OK && i<cs->nTags; i++){
     rc = gcQueuePush(&queue, &cs->aTags[i].commitHash);
@@ -100,7 +92,6 @@ static int gcMarkReachable(
     gcQueueFree(&queue);
     return rc;
   }
-
 
   while( gcQueuePop(&queue, &current) ){
     u8 *data = 0;
@@ -196,7 +187,6 @@ static int gcBuildCompactedData(
   i64 dataOffset = CHUNK_MANIFEST_SIZE;
   int rc = SQLITE_OK;
 
-
   for(i=0; i<cs->nIndex; i++){
     if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ) kept++;
   }
@@ -225,7 +215,6 @@ static int gcBuildCompactedData(
       return rc;
     }
   }
-
 
   for(i=1; i<nNewIndex; i++){
     ChunkIndexEntry tmp = aNewIndex[i];
@@ -259,9 +248,6 @@ static int gcRewriteFile(
   ChunkStore manifestCs;
   int rc = SQLITE_OK;
 
-
-
-
 #ifdef SQLITE_TEST
   {
     static int crashGcTarget = -2;
@@ -279,7 +265,6 @@ static int gcRewriteFile(
 #else
 #define GC_CRASH_CHECK() ((void)0)
 #endif
-
 
   indexBuf = sqlite3_malloc(indexSize);
   if( !indexBuf ) return SQLITE_NOMEM;
@@ -310,11 +295,6 @@ static int gcRewriteFile(
 
   csSerializeManifest(&manifestCs, manifest);
 
-
-
-
-
-
   if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
     char *zTmp = sqlite3_mprintf("%s-gc-tmp", cs->zFilename);
     if( !zTmp ){
@@ -328,7 +308,6 @@ static int gcRewriteFile(
                    | SQLITE_OPEN_MAIN_DB;
       i64 writeOff = 0;
 
-
       cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
 
       rc = sqlite3OsOpenMalloc(cs->pVfs, zTmp, &pTmpFile, tmpFlags, 0);
@@ -337,11 +316,9 @@ static int gcRewriteFile(
         return SQLITE_CANTOPEN;
       }
 
-
       GC_CRASH_CHECK();
       rc = sqlite3OsWrite(pTmpFile, manifest, CHUNK_MANIFEST_SIZE, writeOff);
       writeOff += CHUNK_MANIFEST_SIZE;
-
 
       if( rc==SQLITE_OK && nNewData>0 ){
         const u8 *p = pNewData;
@@ -356,7 +333,6 @@ static int gcRewriteFile(
         }
       }
 
-
       if( rc==SQLITE_OK && indexSize>0 ){
         const u8 *p = indexBuf;
         int remaining = indexSize;
@@ -370,7 +346,6 @@ static int gcRewriteFile(
         }
       }
 
-
       if( rc==SQLITE_OK ){
         GC_CRASH_CHECK();
         rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
@@ -379,7 +354,6 @@ static int gcRewriteFile(
 
       if( rc==SQLITE_OK ){
 
-
         if( cs->pFile ){
           sqlite3OsCloseFree(cs->pFile);
           cs->pFile = 0;
@@ -387,19 +361,11 @@ static int gcRewriteFile(
 
         GC_CRASH_CHECK();
         if( rename(zTmp, cs->zFilename)!=0 ){
-
-
-
           int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
           (void)sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename,
                                     &cs->pFile, reopenFlags, 0);
           rc = SQLITE_IOERR;
         }
-
-
-
-
-
 
 #if !defined(_WIN32) && !defined(WIN32)
         if( rc==SQLITE_OK ){
@@ -424,7 +390,6 @@ static int gcRewriteFile(
         if( rc==SQLITE_OK ){
           cs->nWalData = 0;
         }
-
 
         if( rc==SQLITE_OK ){
           int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
@@ -459,7 +424,6 @@ static int gcSweep(
   int nBuf = 0;
   int rc = SQLITE_OK;
 
-
   for(i=0; i<cs->nIndex; i++){
     if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ){
       kept++;
@@ -484,13 +448,10 @@ static int gcSweep(
     return SQLITE_OK;
   }
 
-
   rc = gcBuildCompactedData(cs, marked, &buf, &nBuf, &aNewIndex, &nNewIndex);
   if( rc!=SQLITE_OK ) return rc;
 
-
   rc = gcRewriteFile(cs, buf, nBuf, aNewIndex, nNewIndex);
-
 
   if( rc==SQLITE_OK ){
     int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
@@ -543,12 +504,10 @@ static void doltliteGcFunc(
     return;
   }
 
-
   if( !cs->zFilename || strcmp(cs->zFilename, ":memory:")==0 ){
     sqlite3_result_text(context, "0 chunks removed, 0 chunks kept (in-memory)", -1, SQLITE_TRANSIENT);
     return;
   }
-
 
   rc = chunkStoreLockAndRefresh(cs);
   if( rc==SQLITE_BUSY ){

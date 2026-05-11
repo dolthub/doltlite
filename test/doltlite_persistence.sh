@@ -1,11 +1,4 @@
 #!/bin/bash
-
-
-
-
-
-
-
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
@@ -13,10 +6,6 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 
 echo "=== Doltlite File Persistence Tests ==="
 echo ""
-
-
-
-
 
 echo "--- Basic persistence ---"
 
@@ -32,16 +21,11 @@ run_test "basic_val2" "SELECT v FROM t WHERE id=2;" "world" "$DB"
 run_test "basic_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test_match "basic_msg" "SELECT message FROM dolt_log;" "init" "$DB"
 
-
 nFiles=$(ls "$DB"* 2>/dev/null | wc -l | tr -d ' ')
 if [ "$nFiles" = "1" ]; then PASS=$((PASS+1))
 else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: single_file\n  expected: 1 file\n  got:      $nFiles files ($(ls "$DB"* 2>/dev/null | tr '\n' ' '))"; fi
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "--- Multiple commits ---"
@@ -60,10 +44,6 @@ run_test "multi_log" "SELECT count(*) FROM dolt_log;" "4" "$DB"
 run_test_match "multi_latest" "SELECT message FROM dolt_log LIMIT 1;" "c3" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "--- Bulk 100 rows ---"
@@ -86,10 +66,6 @@ run_test "bulk100_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 echo ""
 echo "--- Bulk 1000 rows ---"
 
@@ -110,10 +86,6 @@ run_test "bulk1k_mid" "SELECT v FROM t WHERE id=500;" "row_500" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 echo ""
 echo "--- UPDATE persistence ---"
 
@@ -128,10 +100,6 @@ run_test "update_val" "SELECT v FROM t WHERE id=1;" "changed" "$DB"
 run_test "update_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "--- DELETE persistence ---"
@@ -152,10 +120,6 @@ run_test "delete_has3" "SELECT v FROM t WHERE id=3;" "c" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 echo ""
 echo "--- Branch persistence ---"
 
@@ -172,16 +136,11 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "branch_count" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
 run_test "branch_main" "SELECT count(*) FROM t;" "1" "$DB"
 
-
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "branch_feat" "SELECT count(*) FROM t;" "2" "$DB/feat"
 run_test "branch_feat_val" "SELECT v FROM t WHERE id=2;" "feat_data" "$DB/feat"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "--- Tag persistence ---"
@@ -200,10 +159,6 @@ run_test_match "tag_v1" "SELECT tag_name FROM dolt_tags WHERE tag_name='v1.0';" 
 run_test_match "tag_v2" "SELECT tag_name FROM dolt_tags WHERE tag_name='v2.0';" "v2.0" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "--- Merge persistence ---"
@@ -229,10 +184,6 @@ run_test_match "merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 echo ""
 echo "--- Schema persistence ---"
 
@@ -249,10 +200,6 @@ run_test "schema_v" "SELECT v FROM t WHERE id=1;" "a" "$DB"
 run_test_match "schema_cols" "PRAGMA table_info(t);" "extra" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "--- Multi-table persistence ---"
@@ -273,10 +220,6 @@ run_test "mt_products" "SELECT price FROM products WHERE id=1;" "999" "$DB"
 run_test "mt_alice" "SELECT name FROM users WHERE id=1;" "Alice" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "--- GC persistence ---"
@@ -299,10 +242,6 @@ run_test "gc_branches" "SELECT count(*) FROM dolt_branches;" "1" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 echo ""
 echo "--- Uncommitted data lost on reopen ---"
 
@@ -312,16 +251,10 @@ INSERT INTO t VALUES(1,'committed');
 SELECT dolt_commit('-A','-m','init');
 INSERT INTO t VALUES(2,'uncommitted');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
-
 run_test "uncommit_count" "SELECT count(*) FROM t;" "2" "$DB"
 run_test_match "uncommit_status" "SELECT count(*) FROM dolt_status;" "^[1-9]" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "--- Bulk with modifications ---"
@@ -347,10 +280,6 @@ run_test "bulkmod_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 echo ""
 echo "--- Rapid open/close ---"
 
@@ -369,10 +298,6 @@ run_test "rapid_val5" "SELECT v FROM t WHERE id=5;" "val_5" "$DB"
 
 rm -f "$DB"
 
-
-
-
-
 echo ""
 echo "--- File size sanity ---"
 
@@ -380,7 +305,6 @@ DB=/tmp/test_persist_size_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'data');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
 
 SIZE=0
 for f in "$DB" "${DB}-wal"; do
@@ -398,14 +322,6 @@ fi
 
 rm -f "$DB" "${DB}-wal"
 
-
-
-
-
-
-
-
-
 echo ""
 echo "--- Branch commit reopen (diverged manifest head) ---"
 
@@ -422,7 +338,6 @@ SELECT dolt_checkout('main');
 INSERT INTO t VALUES(3,'main_again');
 SELECT dolt_commit('-A','-m','main second');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-
 run_test "diverged_dev_count" "SELECT count(*) FROM t;" "2" "$DB/dev"
 run_test "diverged_dev_val" "SELECT v FROM t WHERE id=2;" "from_dev" "$DB/dev"
 
@@ -431,10 +346,6 @@ run_test "diverged_main_count" "SELECT count(*) FROM t;" "2" "$DB"
 run_test "diverged_main_val" "SELECT v FROM t WHERE id=3;" "main_again" "$DB"
 
 rm -f "$DB"
-
-
-
-
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

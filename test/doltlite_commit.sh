@@ -23,7 +23,6 @@ run_test() {
   fi
 }
 
-
 run_test_match() {
   local name="$1"
   local sql="$2"
@@ -45,8 +44,6 @@ echo ""
 DB=/tmp/test_dolt_commit_$$.db
 rm -f "$DB"
 
-
-
 run_test_match "commit_returns_hash" \
   "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A', '-m', 'init');" \
   "^[0-9a-f]{40}$" "$DB"
@@ -54,8 +51,6 @@ run_test_match "commit_returns_hash" \
 run_test "commit_requires_message" \
   "SELECT dolt_commit();" \
   "Error near line 1: dolt_commit requires a message: SELECT dolt_commit('-m', 'msg')" "$DB"
-
-
 
 run_test_match "log_shows_commit" \
   "SELECT message FROM dolt_log;" \
@@ -69,8 +64,6 @@ run_test_match "log_has_hash" \
   "SELECT commit_hash FROM dolt_log;" \
   "^[0-9a-f]{40}$" "$DB"
 
-
-
 run_test_match "second_commit" \
   "INSERT INTO t VALUES(2); SELECT dolt_commit('-A', '-m', 'add row 2');" \
   "^[0-9a-f]{40}$" "$DB"
@@ -82,8 +75,6 @@ run_test "log_count_two" \
 run_test_match "log_order" \
   "SELECT message FROM dolt_log;" \
   "add row 2" "$DB"
-
-
 
 run_test_match "commit_with_author" \
   "INSERT INTO t VALUES(3); SELECT dolt_commit('-A', '-m', 'add 3', '--author', 'Alice <alice@test.com>');" \
@@ -101,8 +92,6 @@ run_test "log_count_three" \
   "SELECT count(*) FROM dolt_log;" \
   "4" "$DB"
 
-
-
 DB2=/tmp/test_dolt_persist_$$.db
 rm -f "$DB2"
 
@@ -117,8 +106,6 @@ run_test "persist_log" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "create items" "$DB2"
 
-
-
 run_test_match "commit_after_alter" \
   "ALTER TABLE items ADD COLUMN price REAL DEFAULT 0; SELECT dolt_commit('-A', '-m', 'add price column');" \
   "^[0-9a-f]{40}$" "$DB2"
@@ -126,8 +113,6 @@ run_test_match "commit_after_alter" \
 run_test "log_after_alter" \
   "SELECT count(*) FROM dolt_log;" \
   "3" "$DB2"
-
-
 
 DB7=/tmp/test_dolt_commit_rename_reopen_$$.db
 rm -f "$DB7"
@@ -153,8 +138,6 @@ run_test "reopen_rename_commit_rows" \
   "base
 x" "$DB7"
 
-
-
 DB8=/tmp/test_dolt_commit_recreate_reopen_$$.db
 rm -f "$DB8"
 
@@ -178,8 +161,6 @@ run_test "reopen_recreate_commit_schema" \
 run_test "reopen_recreate_commit_rows" \
   "SELECT k || '|' || n FROM a;" \
   "7|70" "$DB8"
-
-
 
 DB9=/tmp/test_dolt_commit_schema_only_$$.db
 rm -f "$DB9"
@@ -205,13 +186,9 @@ run_test "reopen_schema_only_commit_rows" \
   "1|base|NULL
 2|x|2" "$DB9"
 
-
-
 run_test "empty_log" \
   "SELECT count(*) FROM dolt_log;" \
   "1" ":memory:"
-
-
 
 DB3=/tmp/test_dolt_nochange_$$.db
 rm -f "$DB3"
@@ -225,8 +202,6 @@ run_test "commit_no_changes" \
 run_test "one_commit_after_no_change" \
   "SELECT count(*) FROM dolt_log;" \
   "2" "$DB3"
-
-
 
 DB4=/tmp/test_dolt_multi_$$.db
 rm -f "$DB4"
@@ -243,32 +218,19 @@ run_test "multi_table_data_b" \
   "SELECT * FROM b;" \
   "2" "$DB4"
 
-
-
 run_test "log_column_count" \
   "SELECT count(*) FROM pragma_table_info('dolt_log');" \
   "5" ":memory:"
-
 
 run_test_match "log_select_columns" \
   "SELECT commit_hash, committer, email, date, message FROM dolt_log LIMIT 1;" \
   "." "$DB"
 
-
-
-
-
-
-
-
 DB5=/tmp/test_dolt_compound_$$.db; rm -f "$DB5"
-
 
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'init');
 SELECT dolt_commit('-A','-m','seed');" | $DOLTLITE "$DB5" > /dev/null 2>&1
-
-
 
 run_test_match "compound_am" \
   "INSERT INTO t VALUES(2,'a');
@@ -283,8 +245,6 @@ run_test "compound_am_data" \
   "SELECT v FROM t WHERE id=2;" \
   "a" "$DB5"
 
-
-
 DB6=/tmp/test_dolt_compound2_$$.db; rm -f "$DB6"
 
 run_test_match "compound_Am" \
@@ -296,7 +256,6 @@ SELECT dolt_commit('-Am','uppercase A compound');" \
 run_test "compound_Am_message" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "uppercase A compound" "$DB6"
-
 
 DB7=/tmp/test_dolt_compound3_$$.db; rm -f "$DB7"
 
@@ -310,9 +269,6 @@ SELECT dolt_commit('-ma');" \
 run_test "compound_ma_message_is_a" \
   "SELECT message FROM dolt_log LIMIT 1;" \
   "a" "$DB7"
-
-
-
 
 DB8=/tmp/test_dolt_compound4_$$.db; rm -f "$DB8"
 
@@ -334,8 +290,6 @@ run_test "compound_am_multi_count" \
 run_test "compound_am_multi_data" \
   "SELECT count(*) FROM t;" \
   "2" "$DB8"
-
-
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8"
 
