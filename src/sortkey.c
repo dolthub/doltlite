@@ -524,15 +524,17 @@ static int recordFromNumericVarlenSortKeyBuffer(
   return SQLITE_OK;
 }
 
-static int recordFromNumericBlob16SortKeyBuffer(
+#define SORTKEY_SMALL_BLOB_FAST_MAX 64
+
+static int recordFromNumericSmallBlobSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
   u32 aType0;
   u32 aLen0;
-  u32 aType1 = 44; /* 16-byte BLOB */
+  u32 aType1;
   u8 aBuf0[8];
-  u8 aBlob[16];
+  u8 aBlob[SORTKEY_SMALL_BLOB_FAST_MAX];
   int pos;
   int nBlob = 0;
   int nHdr;
@@ -559,18 +561,19 @@ static int recordFromNumericBlob16SortKeyBuffer(
       pos++;
       b = 0x00;
     }
-    if( nBlob >= 16 ) return SQLITE_NOTFOUND;
+    if( nBlob >= SORTKEY_SMALL_BLOB_FAST_MAX ) return SQLITE_NOTFOUND;
     aBlob[nBlob++] = b;
   }
-  if( pos!=nSortKey || nBlob!=16 ){
+  if( pos!=nSortKey ){
     return SQLITE_NOTFOUND;
   }
 
   decodeNumericSortKeyToRecord(pSortKey + 1, &aType0, &aLen0, aBuf0);
+  aType1 = (u32)nBlob * 2 + 12;
 
   nHdr = 1 + sqlite3VarintLen(aType0) + sqlite3VarintLen(aType1);
   if( nHdr > 126 ) nHdr++;
-  nTotal = nHdr + (int)aLen0 + 16;
+  nTotal = nHdr + (int)aLen0 + nBlob;
   if( *pnAlloc < nTotal ){
     u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nTotal);
     if( !pNew ) return SQLITE_NOMEM;
@@ -586,7 +589,9 @@ static int recordFromNumericBlob16SortKeyBuffer(
     memcpy(pOut + off, aBuf0, aLen0);
     off += (int)aLen0;
   }
-  memcpy(pOut + off, aBlob, 16);
+  if( nBlob>0 ){
+    memcpy(pOut + off, aBlob, nBlob);
+  }
 
   *pnOut = nTotal;
   return SQLITE_OK;
@@ -635,8 +640,8 @@ int recordFromSortKeyBuffer(
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
   {
-    int rc = recordFromNumericBlob16SortKeyBuffer(pSortKey, nSortKey,
-                                                  ppBuf, pnAlloc, pnOut);
+    int rc = recordFromNumericSmallBlobSortKeyBuffer(pSortKey, nSortKey,
+                                                     ppBuf, pnAlloc, pnOut);
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
   {
