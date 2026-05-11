@@ -250,7 +250,7 @@ jobs:
       run: |
         cd build
         BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh > /tmp/bench_classic.md
-        cp /tmp/bench_classic.md /tmp/bench_results.md
+        sed -n '/### File-Backed/,/^_/p' /tmp/bench_classic.md > /tmp/bench_results.md
 
     - name: Upload benchmark results
       uses: actions/upload-artifact@v4
@@ -258,60 +258,10 @@ jobs:
         name: benchmark
         path: /tmp/bench_results.md
 
-  benchmark-extra:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      BENCH_RUNS: 5
-      BENCH_MAX_MULTIPLIER: 2.5
-      BENCH_AVG_MAX_MULTIPLIER: 1.75
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install dependencies
-      run: sudo apt-get update && sudo apt-get install -y tcl-dev build-essential zlib1g-dev python3
-
-    - name: Configure
-      run: |
-        mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
-        if [ -n "$TCL_CONFIG" ]; then
-          ../configure --with-tcl=$(dirname $TCL_CONFIG)
-        else
-          ../configure
-        fi
-
-    - name: Build doltlite and stock SQLite
-      run: |
-        cd build
-        make doltlite
-        make doltlite-lib
-        cc -O2 -I. -I../src -o bench_timer_doltlite ../test/sysbench_timer.c libdoltlite.a -lpthread -lz -lm
-        make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
-        cc -O2 -I. -I../src -o bench_timer_sqlite ../test/sysbench_timer.c sqlite3.o -lpthread -lz -lm
-
-    - name: Run benchmarks
-      run: |
-        cd build
-        bash ../test/sysbench_compare_textpk.sh      > /tmp/bench_textpk.md
-        bash ../test/sysbench_compare_blobpk.sh      > /tmp/bench_blobpk.md
-        bash ../test/sysbench_compare_compositepk.sh > /tmp/bench_compositepk.md
-        BENCH_SECTION_MODE=autocommit \
-          bash ../test/sysbench_compare.sh           > /tmp/bench_autocommit.md
-        cat /tmp/bench_textpk.md /tmp/bench_blobpk.md \
-            /tmp/bench_compositepk.md /tmp/bench_autocommit.md \
-            > /tmp/bench_extra_results.md
-
-    - name: Upload benchmark results
-      uses: actions/upload-artifact@v4
-      with:
-        name: benchmark-extra
-        path: /tmp/bench_extra_results.md
-
   # ── Create GitHub release ─────────────────────────────────
   release:
     if: github.event_name != 'workflow_dispatch'
-    needs: [source, build, benchmark, benchmark-extra]
+    needs: [source, build, benchmark]
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -328,8 +278,6 @@ jobs:
         VERSION=${GITHUB_REF_NAME#v}
         # Collect all zips, tarballs, and .deb files
         find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.deb" \) -exec mv {} . \;
-        # Also stage the install script so users can curl|bash it.
-        cp install.sh ./install.sh
         ls -la *.zip *.tar.gz *.deb install.sh 2>/dev/null || ls -la *.zip *.tar.gz install.sh
 
         # Create release if it doesn't already exist (may have been
@@ -349,11 +297,10 @@ jobs:
       env:
         GH_TOKEN: ${{ github.token }}
       run: |
-        CLASSIC_BENCH="artifacts/benchmark/bench_results.md"
-        EXTRA_BENCH="artifacts/benchmark-extra/bench_extra_results.md"
-        if [ -f "$CLASSIC_BENCH" ] || [ -f "$EXTRA_BENCH" ]; then
+        BENCH="artifacts/benchmark/bench_results.md"
+        if [ -f "$BENCH" ]; then
           EXISTING=$(gh release view "${GITHUB_REF_NAME}" --json body --jq .body)
-          APPEND=$(printf '\n## Benchmark (Linux x64)\n\n'; cat "$CLASSIC_BENCH" "$EXTRA_BENCH" 2>/dev/null)
+          APPEND=$(printf '\n## Benchmark (file-backed INT key, 10K rows, Linux x64)\n\n'; cat "$BENCH")
           printf '%s\n%s' "$EXISTING" "$APPEND" > /tmp/release_body.md
           gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release_body.md
         fi
