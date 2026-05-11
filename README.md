@@ -20,6 +20,8 @@ Prebuilt binaries: [github.com/dolthub/doltlite/releases](https://github.com/dol
 
 ### macOS (arm64) / Linux (x86_64)
 
+Installs `doltlite` and `doltlite-remotesrv` to `/usr/local/bin`.
+
 ```
 sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
 ```
