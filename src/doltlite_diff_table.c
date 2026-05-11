@@ -54,12 +54,6 @@ static char *buildDiffSchema(DoltliteColInfo *ci){
   }
   sqlite3_str_appendall(pStr, ", from_commit TEXT, from_commit_date TEXT"
                               ", diff_type TEXT"
-                              /* Hidden TVF arguments: used to expose the
-                              ** dolt_diff(from_ref, to_ref, table) shape as
-                              ** dolt_diff_<table>(from_ref, to_ref). Both
-                              ** must be supplied together; if either is
-                              ** absent the vtab falls back to its full-
-                              ** history no-arg behavior. */
                               ", from_ref TEXT HIDDEN"
                               ", to_ref TEXT HIDDEN)");
   z = sqlite3_str_finish(pStr);
@@ -108,29 +102,17 @@ typedef struct DiffTblCursor DiffTblCursor;
 struct DiffTblCursor {
   sqlite3_vtab_cursor base;
 
-
   DiffPair *aPairs;
   int nPairs;
   int iPair;
   int pairsDone;
 
-
   ProllyDiffIter diffIter;
   int diffIterOpen;
 
-
-  /* Per-pair schema snapshots at the from- and to-commit catalog
-  ** hashes. Populated only when the two commits have a different
-  ** schema hash (needFilter==1) so that changeIsSchemaOnly can
-  ** compare shared columns and filter out modifications that are
-  ** purely schema-level with no data change. Each side carries
-  ** aColToRec[] so record fields can be read by declared-column
-  ** index even when the WITHOUT-ROWID PK-first permutation moves
-  ** columns around relative to the declaration. */
   DoltliteColInfo fromColInfo;
   DoltliteColInfo toColInfo;
   int    needFilter;
-
 
   AuditRow row;
   int hasRow;
@@ -368,14 +350,6 @@ static int registerCommitParents(
   return SQLITE_OK;
 }
 
-/* Walk history toward the root, emitting one DiffPair per commit
-** whose table root (or schema) differs from the commit that follows
-** it. aMap is keyed by commit hash and stores "what child info do we
-** have for this commit?" — when we pop a commit off the stack, we
-** compare its table root with the child info already registered
-** under its own hash and, if different, emit a pair. Before walking
-** further we register the parent(s) in aMap with this commit's data,
-** so when a parent gets visited later it already has a child. */
 static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
                           const char *zTableName){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -440,7 +414,6 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
     }
     doltliteCommitClear(&commit);
     if( rc!=SQLITE_OK ) break;
-
 
     if( nStack==0 ){
       currInited = 0;
@@ -523,12 +496,6 @@ static int buildWorkingDiffPair(
   return rc;
 }
 
-/* TVF slice builder: produce exactly one DiffPair between the two
-** supplied refs. Matches Dolt's dolt_diff(from_ref, to_ref, table)
-** shape — one pair, net diff between endpoints, no history walk.
-** to_ref == 'WORKING' diffs against the current working catalog
-** (staged + pending); from_ref == 'WORKING' is not supported by
-** Dolt either and returns an empty slice. */
 static int buildSliceDiffPair(
   DiffTblCursor *pCur,
   sqlite3 *db,
@@ -581,9 +548,6 @@ static int buildSliceDiffPair(
                                       &toSchemaHash);
     if( rc==SQLITE_NOTFOUND ) rc = SQLITE_OK;
     if( rc!=SQLITE_OK ) return rc;
-    /* Flush working catalog only if we need its hash; otherwise
-    ** leave toCatHash empty so column resolution falls back to
-    ** the table root itself. */
     rc = doltliteFlushCatalogToHash(db, &toCatHash);
     if( rc!=SQLITE_OK ) return rc;
     memcpy(zToLabel, "WORKING", 7);
@@ -604,7 +568,6 @@ static int buildSliceDiffPair(
     doltliteHashToHex(&toHash, zToLabel);
   }
 
-  /* No-op slice: same endpoint or identical table roots. */
   if( !toIsWorking
    && prollyHashCompare(&fromHash, &toHash)==0 ){
     return SQLITE_OK;
@@ -614,9 +577,6 @@ static int buildSliceDiffPair(
     return SQLITE_OK;
   }
 
-  /* Use whichever side has a non-zero flags bitfield as the
-  ** diff-iteration flags (both sides should agree for a single
-  ** table, but be tolerant when one side is missing). */
   if( !fromFlags ) fromFlags = toFlags;
   if( !toFlags ) toFlags = fromFlags;
 
@@ -632,12 +592,6 @@ static void freePairCols(DiffTblCursor *pCur){
   pCur->needFilter = 0;
 }
 
-/* Load a DoltliteColInfo snapshot (including aColToRec[]) for
-** zTableName at the schema recorded in pCatHash. Opens a fresh
-** in-memory SQLite, replays the recorded CREATE TABLE, then
-** runs doltliteGetColumnNames() against that temp db so the
-** WITHOUT-ROWID PK-first permutation is computed from the same
-** PRAGMA table_info the rest of the engine uses. */
 static int loadColInfoAtCatalog(
   sqlite3 *db,
   const ProllyHash *pCatHash,
@@ -697,10 +651,8 @@ static int fieldValuesEqual(
   i64 ai, bi;
   int aLen, bLen;
 
-
   if( aType==0 && bType==0 ) return 1;
   if( aType==0 || bType==0 ) return 0;
-
 
   {
     int aIsInt = (aType>=1 && aType<=6) || aType==8 || aType==9;
@@ -724,7 +676,6 @@ static int fieldValuesEqual(
     }
   }
 
-
   if( aType != bType ) return 0;
   aLen = dlSerialTypeLen(aType);
   if( aLen<0 ) return 0;
@@ -733,13 +684,6 @@ static int fieldValuesEqual(
   return memcmp(pA+aOff, pB+bOff, aLen)==0;
 }
 
-/* Return true if the pOld→pNew MODIFY is purely a schema-level
-** reshape with no data change. Compares shared columns by name
-** and reads each field via the side's aColToRec[] permutation so
-** WITHOUT-ROWID tables (PK-first record layout) map declared
-** indices back to the correct record field. Columns that exist
-** on only one side must be NULL on that side to still qualify
-** as schema-only. */
 static int changeIsSchemaOnly(
   const u8 *pFromRec, int nFromRec,
   const u8 *pToRec,   int nToRec,
@@ -753,7 +697,6 @@ static int changeIsSchemaOnly(
   if( !pFromCi || !pToCi ) return 0;
   doltliteParseRecord(pFromRec, nFromRec, &fromRi);
   doltliteParseRecord(pToRec,   nToRec,   &toRi);
-
 
   for(i=0; i<pToCi->nCol; i++){
     int fromIdx;
@@ -801,7 +744,6 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   ProllyCache *pCache = doltliteGetCache(db);
   DiffTblVtab *pVtab = (DiffTblVtab*)pCur->base.pVtab;
   int rc;
-
 
   freePairCols(pCur);
 
@@ -865,7 +807,6 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
           continue;
         }
 
-
         pCur->row.pOldVal = 0;
         pCur->row.nOldVal = 0;
         pCur->row.pNewVal = 0;
@@ -890,7 +831,6 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
 
       closeDiffIter(pCur);
     }
-
 
     if( pCur->pairsDone ){
       return SQLITE_OK;
@@ -968,17 +908,6 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int iFromRefEq = -1;
   int iToRefEq = -1;
   int nUser = p->cols.nCol;
-  /* Schema layout after buildDiffSchema():
-  **   0..nUser-1       : user cols (to_<col>)
-  **   nUser            : to_commit
-  **   nUser+1          : to_commit_date
-  **   nUser+2..2n+1    : from_<col>
-  **   2n+2             : from_commit
-  **   2n+3             : from_commit_date
-  **   2n+4             : diff_type
-  **   2n+5             : from_ref  (HIDDEN — TVF arg 1)
-  **   2n+6             : to_ref    (HIDDEN — TVF arg 2)
-  */
   int toCommitCol = nUser;
   int fromRefCol  = 2*nUser + 5;
   int toRefCol    = 2*nUser + 6;
@@ -996,8 +925,6 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   }
 
   if( iFromRefEq>=0 && iToRefEq>=0 ){
-    /* TVF slice form: dolt_diff_<table>(from_ref, to_ref). Both
-    ** hidden args are bound; build exactly one diff pair. */
     pInfo->idxNum = DT_IDX_SLICE;
     pInfo->aConstraintUsage[iFromRefEq].argvIndex = 1;
     pInfo->aConstraintUsage[iFromRefEq].omit = 1;
@@ -1041,7 +968,6 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
   sqlite3 *db = pVtab->db;
   int rc;
   (void)idxStr;
-
 
   closeDiffIter(c);
   clearAuditRow(&c->row);
@@ -1104,7 +1030,6 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   AuditRow *r = &c->row;
   int nCols = pVtab->cols.nCol;
 
-
   if( nCols > 0 && col < nCols ){
     doltliteResultUserCol(ctx, &pVtab->cols, r->pNewVal, r->nNewVal,
                           r->intKey, col);
@@ -1147,9 +1072,6 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
       case PROLLY_DIFF_MODIFY: sqlite3_result_text(ctx,"modified",-1,SQLITE_STATIC); break;
     }
   }else{
-    /* Hidden TVF arg columns (from_ref, to_ref) — never materialized
-    ** in the result set, but SQLite may still ask for them during
-    ** query planning. Always return NULL. */
     sqlite3_result_null(ctx);
   }
 

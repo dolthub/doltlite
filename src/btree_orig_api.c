@@ -73,10 +73,6 @@ int origBtreeCursorIsLastOnSingle(void *pCur){
   BtShared *pBt;
   if( !c || !c->pBt ) return 0;
   pBt = c->pBt;
-  /* Stock sqlite3BtreeCloseCursor auto-closes the inner Btree iff
-  ** BTREE_SINGLE is set and pBt->pCursor becomes 0 after unlinking
-  ** this cursor. Peek both preconditions before the close so the
-  ** wrapper caller can free its own struct in the same pass. */
   if( (pBt->openFlags & BTREE_SINGLE)==0 ) return 0;
   return pBt->pCursor==c && c->pNext==0;
 }
@@ -149,10 +145,6 @@ void origBtreeEnter(void *p){ orig_sqlite3BtreeEnter(B(p)); }
 void origBtreeLeave(void *p){ orig_sqlite3BtreeLeave(B(p)); }
 void *origBtreePager(void *p){ return orig_sqlite3BtreePager(B(p)); }
 
-/* Magic-byte sniff used to decide whether an ATTACH target is a
-** plain-SQLite file (route through origBtree*) or a doltlite chunk
-** store (route through the shimmed btree). Checked before the file
-** is opened, so it has to read the raw header itself. */
 int origBtreeIsSqliteFile(const char *zFilename){
   FILE *f;
   char buf[16];

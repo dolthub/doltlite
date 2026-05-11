@@ -149,12 +149,6 @@ static i64 dsReadInt(const u8 *p, int nBytes){
   return v;
 }
 
-/* SQLite packs integers into the narrowest serial type that fits, so
-** 42 may be stored as type-1 (1 byte) on one side and type-2 (2 bytes)
-** on the other. Raw memcmp of fields would call those "modified".
-** Here we coerce any integer-family type (1..6, 8, 9) to a signed
-** int64 and compare numerically, so equal numeric values produce
-** equal cell counts regardless of encoding width. */
 static int dsFieldValuesEqual(
   int aType, const u8 *pA, int nA, int aOff,
   int bType, const u8 *pB, int nB, int bOff
@@ -203,7 +197,6 @@ static int dsCountChangedCells(
   if( !pFromRec || !pToRec ) return 0;
   doltliteParseRecord(pFromRec, nFromRec, &fromRi);
   doltliteParseRecord(pToRec,   nToRec,   &toRi);
-
 
   for(i=0; i<nToCols; i++){
     int fromIdx;
@@ -340,7 +333,6 @@ static int dsComputeTableStats(
 
   if( !hasFrom && !hasTo ) return SQLITE_OK;
 
-
   if( hasFrom ){
     rc = dsLoadCreateSql(db, pFromCatHash, zTableName, &zFromSql);
     if( rc!=SQLITE_OK ) return rc;
@@ -360,7 +352,6 @@ static int dsComputeTableStats(
     hasFrom && hasTo &&
     strcmp(zFromSql ? zFromSql : "", zToSql ? zToSql : "")!=0;
 
-
   if( hasFrom ){
     rc = dsCountRows(db, &fromRoot, fromFlags, &oldCount);
     if( rc!=SQLITE_OK ) goto done;
@@ -369,7 +360,6 @@ static int dsComputeTableStats(
     rc = dsCountRows(db, &toRoot, toFlags, &newCount);
     if( rc!=SQLITE_OK ) goto done;
   }
-
 
   if( hasFrom && hasTo
    && prollyHashCompare(&fromRoot, &toRoot)!=0 ){
@@ -412,11 +402,6 @@ static int dsComputeTableStats(
     rc = SQLITE_OK;
   }
 
-
-  /* Column-count delta: if the schema widened/narrowed, every
-  ** surviving row gains or loses cells even if the data is identical.
-  ** Count those as cellsAdded/cellsDeleted so dolt_diff_stat matches
-  ** Dolt's reported totals. */
   if( hasFrom && hasTo ){
     i64 rowsInBoth = oldCount - rowsDel;
     if( rowsInBoth < 0 ) rowsInBoth = 0;
@@ -426,7 +411,6 @@ static int dsComputeTableStats(
       cellsDel += (i64)rowsInBoth * (nFromCols - nToCols);
     }
   }
-
 
   if( !hasFrom && hasTo ){
     rowsAdd = newCount;

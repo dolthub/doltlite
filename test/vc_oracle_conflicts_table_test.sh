@@ -1,26 +1,4 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_conflicts_<table> (per-row schema)
-#
-# doltlite's dolt_conflicts_<table> vtable projects every user column
-# under three prefixes (base_, our_, their_) and emits our_diff_type /
-# their_diff_type classifications, matching Dolt's schema. This oracle
-# compares the resulting rows byte-for-byte against Dolt for a variety
-# of conflict scenarios and PK shapes.
-#
-# Columns NOT compared (because they diverge non-semantically):
-#   - from_root_ish  (doltlite emits NULL, Dolt emits a commit hash)
-#   - dolt_conflict_id (engines use different schemes)
-#
-# Compared: base_<col>, our_<col>, our_diff_type,
-#           their_<col>, their_diff_type
-#
-# Scenarios cover single-row modify, multi-row modify, different PK
-# shapes (INT, TEXT, composite), insert/insert conflicts, delete/modify
-# conflicts (both directions), and wide schemas.
-#
-# Usage: bash vc_oracle_conflicts_table_test.sh [path/to/doltlite] [path/to/dolt]
-#
 
 set -u
 set -o pipefail
@@ -37,15 +15,11 @@ normalize() {
   tr -d '\r' | sort
 }
 
-# $1=name, $2=setup SQL (runs on both engines), $3=comparison query
-# The comparison query must project rows prefixed with "R|" and use
-# CONCAT (works in both SQLite and MySQL for string concatenation).
 oracle() {
   local name="$1" setup="$2" query="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  # -- doltlite --
   local dl_script
   local dl_out
   dl_script=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$query" | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
@@ -54,9 +28,6 @@ oracle() {
            | grep '^R|' \
            | normalize)
 
-  # -- Dolt --
-  # Same scenario piped as a single `dolt sql` invocation so
-  # @@autocommit=0 and @@dolt_allow_commit_conflicts=1 persist.
   local dolt_all
   dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$setup" "$query")")
 
@@ -172,9 +143,6 @@ SELECT dolt_merge('feat');
 
 echo "--- INTEGER PRIMARY KEY (rowid-aliased) ---"
 
-# INTEGER PK is the rowid-aliased shape where the PK is NOT stored in
-# the record body (it's the intKey). The projected column must come
-# from intKey, not from the record.
 oracle "integer_pk_single_row" \
 "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,10);
@@ -247,9 +215,6 @@ SELECT dolt_merge('feat');
 
 echo "--- insert/insert same PK ---"
 
-# Both sides add a row with the same PK. base should be NULL (no
-# common ancestor for this row), diff types should be 'added' on
-# both sides.
 oracle "insert_insert_same_pk" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,10);
@@ -267,8 +232,6 @@ SELECT dolt_merge('feat');
 
 echo "--- delete/modify: main deletes, feature modifies ---"
 
-# main deletes row 1, feature modifies it. our side is "removed",
-# their side is "modified".
 oracle "main_delete_feat_modify" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1,10),(2,20);

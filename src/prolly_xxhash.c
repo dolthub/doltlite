@@ -65,7 +65,6 @@ u32 prollyXXH32(const u8 *p, int n, u32 seed){
     p++;
   }
 
-  /* final avalanche */
   h32 ^= h32 >> 15;
   h32 *= XXH_PRIME32_2;
   h32 ^= h32 >> 13;

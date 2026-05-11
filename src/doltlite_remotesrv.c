@@ -1,7 +1,3 @@
-/* Test-only HTTP server side of the remote protocol. Not hardened
-** for production: single-threaded per-connection handling, no TLS,
-** no auth, no limits beyond MAX_HEADER_SIZE. Used by the fetch/push
-** tests and for local integration work against doltlite_http_remote. */
 
 #ifdef DOLTLITE_PROLLY
 
@@ -139,7 +135,6 @@ static int parseRequest(
   *ppBody = 0;
   *pnBody = 0;
 
-
   while( nBuf < MAX_HEADER_SIZE-1 ){
     int n = (int)read(fd, &aBuf[nBuf], 1);
     if( n <= 0 ) return -1;
@@ -153,7 +148,6 @@ static int parseRequest(
   }
   if( !headerEnd ) return -1;
   aBuf[nBuf] = '\0';
-
 
   p = aBuf;
   {
@@ -177,7 +171,6 @@ static int parseRequest(
     p = pSpace + 1;
   }
 
-
   {
     const char *zCL = "Content-Length:";
     int nCL = (int)strlen(zCL);
@@ -193,7 +186,6 @@ static int parseRequest(
       contentLength = atoi(pLine);
     }
   }
-
 
   if( contentLength > 0 ){
     u8 *pBody = (u8*)sqlite3_malloc(contentLength);
@@ -223,7 +215,6 @@ static int parsePath(
   if( *p != '/' ) return -1;
   p++;
 
-
   dbStart = p;
   while( *p && *p != '/' ) p++;
   dbLen = (int)(p - dbStart);
@@ -233,7 +224,6 @@ static int parsePath(
 
   if( *p != '/' ) return -1;
   p++;
-
 
   epStart = p;
   epLen = (int)strlen(epStart);
@@ -345,9 +335,7 @@ static void handlePostChunks(ChunkStore *pStore, int fd,
     u32 len;
     ProllyHash hash;
 
-
     offset += PROLLY_HASH_SIZE;
-
 
     len = (u32)pBody[offset]
         | ((u32)pBody[offset+1] << 8)
@@ -368,7 +356,6 @@ static void handlePostChunks(ChunkStore *pStore, int fd,
     }
     offset += (int)len;
   }
-
 
   rc = remoteSrvCommitPending(pStore);
   if( rc!=SQLITE_OK ){
@@ -484,7 +471,6 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
     return;
   }
 
-
   if( parsePath(zPath, zDbName, sizeof(zDbName),
                 zEndpoint, sizeof(zEndpoint))!=0 ){
     sendNotFound(fd);
@@ -497,7 +483,6 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
     return;
   }
 
-
   sqlite3_snprintf(sizeof(zDbPath), zDbPath, "%s/%s", pSrv->zDir, zDbName);
   flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
   memset(&store, 0, sizeof(store));
@@ -507,7 +492,6 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
     sqlite3_free(pBody);
     return;
   }
-
 
   if( strcmp(zMethod, "GET")==0 ){
     if( strcmp(zEndpoint, "root")==0 ){
@@ -552,12 +536,10 @@ static int serverInit(DoltliteServer *pSrv, const char *zDir, int port){
   memset(pSrv, 0, sizeof(*pSrv));
   pSrv->listenFd = -1;
 
-
   nDir = (int)strlen(zDir);
   pSrv->zDir = sqlite3_malloc(nDir + 1);
   if( !pSrv->zDir ) return SQLITE_NOMEM;
   memcpy(pSrv->zDir, zDir, nDir + 1);
-
 
   pSrv->listenFd = socket(AF_INET, SOCK_STREAM, 0);
   if( pSrv->listenFd < 0 ){
@@ -584,7 +566,6 @@ static int serverInit(DoltliteServer *pSrv, const char *zDir, int port){
     return SQLITE_ERROR;
   }
 
-
   addrLen = sizeof(addr);
   if( getsockname(pSrv->listenFd, (struct sockaddr*)&addr, &addrLen)==0 ){
     pSrv->port = ntohs(addr.sin_port);
@@ -604,7 +585,6 @@ static void serverLoop(DoltliteServer *pSrv){
     pfd.fd = pSrv->listenFd;
     pfd.events = POLLIN;
     pfd.revents = 0;
-
 
     if( poll(&pfd, 1, 1000) <= 0 ) continue;
 

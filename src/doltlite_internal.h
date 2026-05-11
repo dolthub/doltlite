@@ -17,11 +17,6 @@ enum DoltliteVcTxnMode {
   DOLTLITE_VC_TXN_NESTED_SAVEPOINT = 2
 };
 
-/* iTable is the rowid-alias of the table in sqlite_master and
-** survives renames (used by dolt_status to detect renames as same
-** iTable + different name). pPending is the in-memory ProllyMutMap
-** of uncommitted edits for this table — NULL until the first
-** mutation flushes a table entry into the working catalog. */
 struct TableEntry {
   Pgno iTable;
   ProllyHash root;

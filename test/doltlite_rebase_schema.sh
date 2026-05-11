@@ -1,7 +1,4 @@
 #!/bin/bash
-#
-# Local regressions for schema-edge non-interactive rebase behavior.
-#
 set -u
 set -o pipefail
 

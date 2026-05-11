@@ -1,29 +1,4 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_diff_stat and dolt_diff_summary
-#
-# Compares doltlite's two new TVFs against Dolt 1.86.0+ across a
-# range of scenarios:
-#
-#   dolt_diff_stat(from, to [, table])
-#     table_name, rows_unmodified, rows_added, rows_deleted,
-#     rows_modified, cells_added, cells_deleted, cells_modified,
-#     old_row_count, new_row_count, old_cell_count, new_cell_count
-#
-#   dolt_diff_summary(from, to [, table])
-#     from_table_name, to_table_name, diff_type, data_change,
-#     schema_change
-#
-# Both TVFs take (from_ref, to_ref) with an optional third argument
-# to filter to a single table. Refs resolve via the same rules as
-# dolt_log (hash, branch name, HEAD~N, etc.).
-#
-# Normalization: Dolt emits data_change/schema_change as 'true'/'false';
-# doltlite emits 1/0. Both are mapped to 0/1 for comparison. Rows are
-# sorted for order-independence.
-#
-# Usage: bash vc_oracle_diff_stat_test.sh [path/to/doltlite] [path/to/dolt]
-#
 
 set -u
 set -o pipefail
@@ -50,9 +25,6 @@ normalize_summary() {
     | sort
 }
 
-# Oracle for dolt_diff_stat over a commit range. The setup creates
-# whatever history is needed; the query is run in a single engine
-# invocation with the setup so refs like HEAD~N resolve correctly.
 oracle_stat() {
   local name="$1" setup="$2" from="$3" to="$4" tbl="${5:-}"
   local dir="$TMPROOT/${name}_stat"
@@ -93,7 +65,6 @@ oracle_stat() {
   fi
 }
 
-# Oracle for dolt_diff_summary.
 oracle_summary() {
   local name="$1" setup="$2" from="$3" to="$4" tbl="${5:-}"
   local dir="$TMPROOT/${name}_summary"
@@ -134,8 +105,6 @@ oracle_summary() {
   fi
 }
 
-# Convenience: run BOTH stat and summary oracles against the same
-# setup and commit range.
 oracle_both() {
   oracle_stat    "$@"
   oracle_summary "$@"

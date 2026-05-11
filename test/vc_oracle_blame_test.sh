@@ -1,34 +1,4 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_blame_<table>
-#
-# Runs identical blame scenarios against doltlite and Dolt and
-# compares the resulting (pk, commit_message) pairs. Commit hashes
-# don't match across engines (prolly vs noms), so the oracle joins
-# dolt_blame back to dolt_log by commit hash to get a stable
-# comparison key.
-#
-# dolt_blame_<table> semantics (reverse-engineered from Dolt):
-#
-#   Schema: <pk_cols>, commit, commit_date, committer, email, message
-#
-#   Rows: one per LIVE row in the current table (deleted rows are
-#   not reported). For each live row, "commit" is the most recent
-#   commit that introduced the current value of that row, computed
-#   by walking history first-parent from HEAD:
-#     - At a linear commit, blame = that commit if the row's value
-#       differs from the value in the commit's parent.
-#     - At a merge commit (2+ parents), blame = merge commit if the
-#       row's value differs from the merge base (LCA of parents);
-#       otherwise continue walking first-parent.
-#
-#   Schema-only changes (ADD COLUMN with no row edits) do NOT update
-#   blame. Revert-to-original and delete-then-reinsert-same-value DO
-#   update blame (the latest commit that touched the row's storage
-#   wins).
-#
-# Usage: bash vc_oracle_blame_test.sh [path/to/doltlite] [path/to/dolt]
-#
 
 set -u
 set -o pipefail
@@ -41,10 +11,6 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# $1=name, $2=setup SQL, $3=select list tagging rows like CONCAT('BL|', pk, '|', message).
-# Each oracle compares doltlite and Dolt on the same scenario and
-# extracts only tagged "BL|..." rows so the noise from CALL dolt_*()
-# status/hash rows is filtered out.
 oracle() {
   local name="$1" setup="$2" select_sql="$3"
   local dir="$TMPROOT/$name"

@@ -1,18 +1,4 @@
 #!/bin/bash
-#
-# Oracle test: connection-time branch selection.
-#
-# DoltLite selects a branch from the database path using either:
-#   db.sqlite@branch
-#   db.sqlite/branch
-# and defaults to main when no branch is specified.
-#
-# Dolt exposes the same branch-selection semantics as a global CLI flag:
-#   dolt --branch <branch> sql ...
-#
-# This oracle compares the resulting active_branch() and visible table
-# contents across both engines.
-#
 
 set -u
 set -o pipefail

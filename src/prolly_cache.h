@@ -9,10 +9,6 @@
 typedef struct ProllyCache ProllyCache;
 typedef struct ProllyCacheEntry ProllyCacheEntry;
 
-/* Refcounted cache entry. node has pointers into pData, so as long
-** as any cursor holds a ref the entry must stay live — the LRU
-** evictor skips anything with nRef > 0. Callers get a ref from
-** prollyCacheGet / prollyCachePut and must pair it with Release. */
 struct ProllyCacheEntry {
   ProllyHash hash;
   u8 *pData;

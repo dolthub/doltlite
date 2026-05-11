@@ -67,7 +67,6 @@ char *extractColNameFromDef(const char *zDef){
   const char *s = zDef;
   int len;
 
-
   while( *s && isspace((unsigned char)*s) ) s++;
   if( !*s ) return 0;
 
@@ -88,7 +87,6 @@ int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
   pVal = pChange->pNewVal;
   nVal = pChange->nNewVal;
   if( !pVal || nVal<=0 ) return SQLITE_OK;
-
 
   {
     const u8 *hp = pVal;
@@ -137,14 +135,6 @@ int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
   return SQLITE_OK;
 }
 
-/* After schema merge decides to ADD COLUMN X from theirs, every
-** row that exists on theirs needs X backfilled onto ours. Parse
-** their CREATE TABLE to find each new column's ordinal, then diff
-** their table against anc and UPDATE each row on ours with the
-** value of the new column. Rows that only exist on theirs (diff
-** ADD) also need the update. Rows DELETEd on theirs are skipped
-** (trySchemaColumnMerge has already rejected drop-on-one-side
-** edit-on-other, so we shouldn't see that case here). */
 int migrateSchemaRowData(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -166,7 +156,6 @@ int migrateSchemaRowData(
 
   if( !cs || !pCache || nActions<=0 ) return SQLITE_OK;
 
-
   rc = doltliteLoadCatalog(db, pAncCatHash, &aAncTables, &nAncTables, 0);
   if( rc!=SQLITE_OK ) return rc;
   rc = doltliteLoadCatalog(db, pTheirCatHash, &aTheirTables, &nTheirTables, 0);
@@ -174,7 +163,6 @@ int migrateSchemaRowData(
     doltliteFreeCatalog(aAncTables, nAncTables);
     return rc;
   }
-
 
   rc = loadSchemaFromCatalog(db, cs, pCache, pTheirCatHash,
                               &aTheirSchema, &nTheirSchema);
@@ -195,22 +183,16 @@ int migrateSchemaRowData(
 
     if( pAct->nAddColumns<=0 ) continue;
 
-
     theirTE = doltliteFindTableByName(aTheirTables, nTheirTables,
                                        pAct->zTableName);
     if( !theirTE ) continue;
 
-
     theirSE = findSchemaEntry(aTheirSchema, nTheirSchema, pAct->zTableName);
     if( !theirSE || !theirSE->zSql ) continue;
-
 
     {
       DoltliteColInfo theirCols;
       memset(&theirCols, 0, sizeof(theirCols));
-
-
-
 
       azColNames = sqlite3_malloc(pAct->nAddColumns * (int)sizeof(char*));
       aiColIdx = sqlite3_malloc(pAct->nAddColumns * (int)sizeof(int));
@@ -233,14 +215,12 @@ int migrateSchemaRowData(
       }
       if( rc!=SQLITE_OK ) break;
 
-
       {
         const char *zSql = theirSE->zSql;
         const char *p = zSql;
         int colOrdinal = 0;
         int depth = 0;
         const char *segStart;
-
 
         while( *p && *p!='(' ) p++;
         if( !*p ){ rc = SQLITE_CORRUPT; goto next_action; }
@@ -327,7 +307,6 @@ int migrateSchemaRowData(
 
       nCols = pAct->nAddColumns;
 
-
       {
         int hasAny = 0;
         for(sj=0; sj<nCols; sj++){
@@ -335,7 +314,6 @@ int migrateSchemaRowData(
         }
         if( !hasAny ) goto next_action;
       }
-
 
       {
         char *zUpdate;
@@ -369,7 +347,6 @@ int migrateSchemaRowData(
         rc = sqlite3_prepare_v2(db, zUpdate, -1, &pUpd, 0);
         sqlite3_free(zUpdate);
         if( rc!=SQLITE_OK ) goto next_action;
-
 
         {
           struct TableEntry *ancTE;

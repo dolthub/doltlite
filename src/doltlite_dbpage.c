@@ -36,14 +36,6 @@ static void put4byteBE(unsigned char *p, unsigned int v){
   p[3] = (unsigned char)(v & 0xff);
 }
 
-/* sqlite_dbpage is normally a view into the real 4k-paged database
-** file, but doltlite's on-disk format is a chunk store — there ARE
-** no pages. Instead we fabricate a single synthetic page 1 that
-** looks enough like a SQLite header for tools that parse it
-** (shell .dbinfo, backup-utilities) to read meta without crashing.
-** Higher pgnos return EOF. Field values are derived from the
-** current HEAD: change_counter from the commit hash, schema_cookie
-** from the catalog hash, pageCount = user-table count. */
 static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
   ProllyHash headHash;
   ProllyHash catHash;
@@ -59,7 +51,6 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
 
   memset(aPage, 0, DOLTLITE_DBPAGE_PAGE_BYTES);
 
-
   memcpy(aHdr, "SQLite format 3", 16);
   put2byteBE(aHdr + 16, 4096);
   aHdr[18] = 1;
@@ -69,7 +60,6 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
   aHdr[22] = 32;
   aHdr[23] = 32;
 
-
   doltliteGetSessionHead(db, &headHash);
   if( !prollyHashIsEmpty(&headHash) ){
     for(i=0; i<4; i++){
@@ -77,7 +67,6 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
     }
   }
   put4byteBE(aHdr + 24, changeCounter);
-
 
   if( doltliteGetHeadCatalogHash(db, &catHash)==SQLITE_OK
    && !prollyHashIsEmpty(&catHash)
@@ -101,15 +90,11 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
 
   put4byteBE(aHdr + 28, pageCount);
 
-
   put4byteBE(aHdr + 40, schemaCookie);
   put4byteBE(aHdr + 44, 4);
 
   put4byteBE(aHdr + 52, largestRoot);
   put4byteBE(aHdr + 56, 1);
-
-
-
 
   put4byteBE(aHdr + 92, changeCounter);
   put4byteBE(aHdr + 96, SQLITE_VERSION_NUMBER);
@@ -195,7 +180,6 @@ static int dbpageFilter(sqlite3_vtab_cursor *pCursor,
 
   pCur->iRow = 0;
   pCur->hasRow = 0;
-
 
   if( idxNum & 1 ){
     sqlite3_int64 pgno = sqlite3_value_int64(argv[iArg++]);

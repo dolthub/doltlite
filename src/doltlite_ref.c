@@ -31,13 +31,11 @@ static int doltliteResolveBaseRef(
   static const char zTrackingPrefix[] = "refs/remotes/";
   int rc;
 
-
   if( strcmp(zRef, "HEAD")==0 ){
     doltliteGetSessionHead(db, pCommit);
     if( prollyHashIsEmpty(pCommit) ) return SQLITE_NOTFOUND;
     return SQLITE_OK;
   }
-
 
   if( strlen(zRef)==PROLLY_HASH_SIZE*2 ){
     rc = doltliteHexToHash(zRef, pCommit);
@@ -47,7 +45,6 @@ static int doltliteResolveBaseRef(
       if( rc!=SQLITE_NOTFOUND ) return rc;
     }
   }
-
 
   rc = chunkStoreFindBranch(cs, zRef, pCommit);
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
@@ -78,7 +75,6 @@ static int doltliteResolveBaseRef(
       }
     }
   }
-
 
   rc = chunkStoreFindTag(cs, zRef, pCommit);
   if( rc==SQLITE_OK && !prollyHashIsEmpty(pCommit) ){
@@ -136,16 +132,6 @@ static int doltliteSelectParent(
   return SQLITE_OK;
 }
 
-/* Git-style ref resolution. Accepts:
-**   HEAD            — session head
-**   <40-hex>        — direct commit hash
-**   <branch>        — branch name
-**   <tag>           — tag name
-** plus git revision suffixes:
-**   <base>~N        — walk first-parent N times (default 1)
-**   <base>^N        — select Nth parent of <base> (1-based; default 1)
-** The ~/^ suffix is parsed off the tail first, then the base is
-** resolved recursively via doltliteResolveBaseRef. */
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int len, j, n_back, parent_sel, rc;
@@ -155,7 +141,6 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   const char *base;
 
   if( !zRef || !cs ) return SQLITE_ERROR;
-
 
   len = (int)strlen(zRef);
   for(j=len-1; j>=0; j--){

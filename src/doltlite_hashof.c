@@ -12,15 +12,6 @@
 
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 
-/* dolt_hashof(ref) → commit hash hex for the named ref. Accepts
-** branch names, tag names, raw commit hashes, HEAD, and HEAD~N /
-** HEAD^N shorthand — whatever doltliteResolveRef understands.
-**
-** In the decentralized use case the hash is the primary verifier:
-** two peers at the same hash have the same history up through
-** that commit, and can exchange chunks by hash-reference alone.
-** Keep the output lowercase 40-char hex so a SQL-level string
-** compare is the whole verification. */
 static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   const char *zRef;
@@ -55,10 +46,6 @@ static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **a
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
 
-/* Shared lookup: hashof a table inside a catalog (either the
-** current working catalog or a catalog loaded from a ref).
-** Returns SQLITE_OK with the hex hash written to pHex on success,
-** SQLITE_NOTFOUND if zTable isn't in the catalog. */
 static int hashofTableInCatalog(
   sqlite3 *db,
   const ProllyHash *pCatHash,
@@ -545,26 +532,6 @@ static int hashofDbInCatalog(
   return SQLITE_OK;
 }
 
-/* dolt_hashof_table(name)
-** dolt_hashof_table(name, ref)
-**
-** 1-arg form returns a logical table identity hash for the current
-** working catalog. 2-arg form resolves the ref, loads its committed
-** catalog, and computes the same logical table identity there.
-**
-** The identity currently folds:
-**   - the table prolly root hash
-**   - the canonicalized table schema hash
-**
-** so DML-only equivalent histories and DDL-equivalent histories both
-** converge.
-**
-** History-independence invariant: for two rowsets that reduce to
-** the same set of rows and the same logical schema, this function
-** must return byte-identical hashes regardless of insert order,
-** transient deletions, commit chain, or equivalent DDL spellings.
-** The oracles in test/vc_oracle_hashof_test.sh and
-** test/history_independence_test.sh exercise those properties. */
 static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   const char *zTable;
@@ -637,18 +604,6 @@ static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_valu
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
 
-/* dolt_hashof_db()
-** dolt_hashof_db(ref)
-**
-** 0-arg returns the hash of the current working catalog — the
-** content-address of the entire database's current logical state,
-** which changes iff any table's root changes or a table is
-** added/dropped. 1-arg resolves the ref and returns that commit's
-** catalog hash.
-**
-** This is the single-string proof-of-equivalence between two
-** doltlite peers in a decentralized setup: same hash, same state,
-** no row-level diffing required. */
 static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   ProllyHash catHash;
@@ -707,13 +662,6 @@ static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value *
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
 
-/* dolt_hashof_catalog()
-** dolt_hashof_catalog(ref)
-**
-** Raw stored catalog hash. Unlike dolt_hashof_db(), this does not
-** canonicalize anything at query time. It exists so storage-level
-** history-independence tests can compare the actual persisted catalog
-** identity rather than commit metadata or logical normalized views. */
 static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   ProllyHash catHash;

@@ -1,53 +1,3 @@
-/*
-** Shared regression runner for focused DoltLite C repros.
-**
-** Build from build/:
-**   cc -g -I. -I../src -o doltlite_regression_test_c \
-**     ../test/doltlite_regression_test_c.c libdoltlite.a -lz -lpthread -lm
-**
-** Run from build/:
-**   ./doltlite_regression_test_c all
-**   ./doltlite_regression_test_c concurrent_refs
-**   ./doltlite_regression_test_c checkout_persist_failure
-**   ./doltlite_regression_test_c savepoint_catalog_restore
-**   ./doltlite_regression_test_c refs_blob_corruption
-**   ./doltlite_regression_test_c conflicts_blob_corruption
-**   ./doltlite_regression_test_c status_error_propagation
-**   ./doltlite_regression_test_c remote_refs_corruption
-**   ./doltlite_regression_test_c chunk_walk_corruption
-**   ./doltlite_regression_test_c ancestor_missing_start
-**   ./doltlite_regression_test_c pull_persist_failure
-**   ./doltlite_regression_test_c push_persist_failure
-**   ./doltlite_regression_test_c clone_persist_failure
-**   ./doltlite_regression_test_c resolve_ref_non_commit
-**   ./doltlite_regression_test_c commit_parent_limit
-**   ./doltlite_regression_test_c merge_persist_failure
-**   ./doltlite_regression_test_c cherry_pick_stale_branch
-**   ./doltlite_regression_test_c branches_metadata_corruption
-**   ./doltlite_regression_test_c gc_rewrite_failure
-**   ./doltlite_regression_test_c record_decode_corruption
-**   ./doltlite_regression_test_c reload_refs_transactional
-**   ./doltlite_regression_test_c refresh_refs_corruption_preserves_state
-**   ./doltlite_regression_test_c prolly_node_corruption
-**   ./doltlite_regression_test_c truncated_wal_rejected
-**   ./doltlite_regression_test_c refresh_open_path_transactional
-**   ./doltlite_regression_test_c wal_offset_corruption
-**   ./doltlite_regression_test_c integrity_check_walks_nodes
-**   ./doltlite_regression_test_c memory_chunk_lookup_corruption
-**   ./doltlite_regression_test_c prolly_diff_record_corruption
-**   ./doltlite_regression_test_c integrity_check_repo_state
-**   ./doltlite_regression_test_c integrity_check_session_merge_state
-**   ./doltlite_regression_test_c btree_commit_failure_transactional
-**   ./doltlite_regression_test_c mutmap_empty_reverse_iter
-**   ./doltlite_regression_test_c working_set_refreshes_staged_across_connections
-**   ./doltlite_regression_test_c reopen_preserves_staged_working_set
-**   ./doltlite_regression_test_c begin_write_refreshes_working_set_metadata
-**   ./doltlite_regression_test_c begin_write_from_stale_read_snapshot
-**   ./doltlite_regression_test_c open_rejects_corrupt_working_set
-**   ./doltlite_regression_test_c prolly_blob_cursor_seek_past_max
-**   ./doltlite_regression_test_c prolly_cursor_empty_leaf_root
-**   ./doltlite_regression_test_c mutmap_differential_randomized
-*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1947,11 +1897,11 @@ static void run_record_decode_corruption(void){
 
 static void run_sortkey_two_numeric_roundtrip(void){
   static const u8 record[] = {
-    0x03,       /* header size */
-    0x01,       /* 1-byte integer */
-    0x03,       /* 3-byte integer */
-    0x7b,       /* 123 */
-    0x06, 0xf8, 0x55  /* 456789 */
+    0x03,
+    0x01,
+    0x03,
+    0x7b,
+    0x06, 0xf8, 0x55
   };
   u8 *pSortKey = 0;
   u8 *pRoundTrip = 0;
@@ -1979,17 +1929,17 @@ static void run_sortkey_two_numeric_roundtrip(void){
 
 static void run_sortkey_numeric_text_roundtrip(void){
   static const u8 fastRecord[] = {
-    0x03,       /* header size */
-    0x01,       /* 1-byte integer */
-    0x13,       /* 3-byte text */
-    0x7b,       /* 123 */
+    0x03,
+    0x01,
+    0x13,
+    0x7b,
     'a', 'b', 'c'
   };
   static const u8 escapedRecord[] = {
-    0x03,       /* header size */
-    0x01,       /* 1-byte integer */
-    0x13,       /* 3-byte text */
-    0x7b,       /* 123 */
+    0x03,
+    0x01,
+    0x13,
+    0x7b,
     'x', 0x00, 'y'
   };
   const u8 *aRecord[] = { fastRecord, escapedRecord };
@@ -2028,17 +1978,17 @@ static void run_sortkey_numeric_text_roundtrip(void){
 
 static void run_sortkey_numeric_blob_roundtrip(void){
   static const u8 fastRecord[] = {
-    0x03,       /* header size */
-    0x01,       /* 1-byte integer */
-    0x12,       /* 3-byte blob */
-    0x7b,       /* 123 */
+    0x03,
+    0x01,
+    0x12,
+    0x7b,
     0x01, 0x02, 0x03
   };
   static const u8 escapedRecord[] = {
-    0x03,       /* header size */
-    0x01,       /* 1-byte integer */
-    0x12,       /* 3-byte blob */
-    0x7b,       /* 123 */
+    0x03,
+    0x01,
+    0x12,
+    0x7b,
     0x01, 0x00, 0x03
   };
   const u8 *aRecord[] = { fastRecord, escapedRecord };
@@ -5534,11 +5484,6 @@ static int mutmapAssertMatchesModel(
 }
 
 static void run_mutmap_resolve_sorted_pos(void){
-  /* Validates two new mutmap APIs that the per-table-mutmap migration
-  ** in subsequent commits depends on: (a) generation counter bumps
-  ** on every shift-inducing mutation but NOT on in-place op flips,
-  ** (b) prollyMutMapResolveSortedPos returns the right (idx, found)
-  ** for any key against either keepSorted=1 or keepSorted=0 maps. */
   ProllyMutMap sorted, lazy;
   i64 keys[] = { 10, 30, 20, 50, 40 };
   int n = sizeof(keys)/sizeof(keys[0]);
@@ -5566,9 +5511,6 @@ static void run_mutmap_resolve_sorted_pos(void){
     check("rsp_insert_bumps_gen_lazy",   lazy.generation   > gen0);
   }
 
-  /* In-place value update on existing key does NOT bump generation —
-  ** the entry stays at the same sorted position so cursors don't
-  ** become stale. */
   gen0 = sorted.generation;
   val = 999;
   check("rsp_inplace_update_sorted_rc",
@@ -5580,9 +5522,6 @@ static void run_mutmap_resolve_sorted_pos(void){
         prollyMutMapInsert(&lazy,   0, 0, 30, (const u8*)&val, sizeof(val))==SQLITE_OK);
   check("rsp_inplace_does_not_bump_lazy",   lazy.generation == gen0);
 
-  /* ResolveSortedPos: keys present and absent, both modes. The
-  ** sorted order across both maps is {10,20,30,40,50} so positions
-  ** 0..4 should map to those keys in that order. */
   check("rsp_resolve_present_10_sorted",
         prollyMutMapResolveSortedPos(&sorted, 0, 0, 10, &idx, &found)==SQLITE_OK
           && idx==0 && found);
@@ -5602,8 +5541,6 @@ static void run_mutmap_resolve_sorted_pos(void){
         prollyMutMapResolveSortedPos(&sorted, 0, 0, 999, &idx, &found)==SQLITE_OK
           && idx==5 && !found);
 
-  /* Same expectations on the lazy (keepSorted=0) map — Resolve must
-  ** ensureOrder internally before bisecting. */
   check("rsp_resolve_present_30_lazy",
         prollyMutMapResolveSortedPos(&lazy,   0, 0, 30, &idx, &found)==SQLITE_OK
           && idx==2 && found);
@@ -5614,7 +5551,6 @@ static void run_mutmap_resolve_sorted_pos(void){
         prollyMutMapResolveSortedPos(&lazy,   0, 0, 999, &idx, &found)==SQLITE_OK
           && idx==5 && !found);
 
-  /* Empty map: idx=0, found=0 regardless of key. */
   {
     ProllyMutMap empty;
     check("rsp_init_empty", prollyMutMapInitMode(&empty, 1, 1)==SQLITE_OK);
@@ -5624,15 +5560,11 @@ static void run_mutmap_resolve_sorted_pos(void){
     prollyMutMapFree(&empty);
   }
 
-  /* Delete-creates-DELETE-entry on an absent key bumps generation
-  ** because it adds an entry. */
   gen0 = sorted.generation;
   check("rsp_delete_absent_sorted_rc",
         prollyMutMapDelete(&sorted, 0, 0, 999)==SQLITE_OK);
   check("rsp_delete_absent_bumps_gen_sorted", sorted.generation > gen0);
 
-  /* Delete-flips-existing-entry-to-DELETE does NOT bump generation —
-  ** entry stays in place, only its op flips. */
   gen0 = sorted.generation;
   check("rsp_delete_existing_sorted_rc",
         prollyMutMapDelete(&sorted, 0, 0, 30)==SQLITE_OK);

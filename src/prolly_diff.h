@@ -38,11 +38,6 @@ int prollyValuesEqual(
   int *pEqual
 );
 
-/* Iterator form of prollyDiff. The copy buffers are load-bearing:
-** cursor movement can release the cache entry the key/value pointers
-** live in, so the iterator deep-copies each change into its own
-** owned buffers before returning it to the caller. The ppChange
-** pointer from prollyDiffIterStep stays valid until the next step. */
 typedef struct ProllyDiffIter ProllyDiffIter;
 struct ProllyDiffIter {
   ChunkStore *pStore;

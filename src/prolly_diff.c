@@ -179,11 +179,6 @@ static int diffRecordsEqualFieldwise(
   return SQLITE_OK;
 }
 
-/* Fast memcmp first, field-wise fallback second. Two records with
-** the same logical data can have different varint encodings for the
-** header, so memcmp-unequal doesn't imply logically-unequal — we
-** have to parse both and compare field-by-field. memcmp-equal DOES
-** imply logically-equal, which is the hot path. */
 int prollyValuesEqual(
   const u8 *pA, int nA,
   const u8 *pB, int nB,
@@ -335,11 +330,6 @@ static int diffNodeKeyCmp(
   return diffBlobKeyCmp(pKA, nKA, pKB, nKB);
 }
 
-/* Populates a ProllyDiffChange's key fields from a node entry.
-** Always sets pKey/nKey to the on-disk key bytes (which for INT mode
-** is the sortable 8-byte BE form, see prolly_node.c). For INT mode
-** also sets intKey to the decoded i64 — preserves the long-standing
-** consumer contract while letting internal compare go byte-only. */
 static void diffEmitKey(ProllyDiffChange *ch, const ProllyNode *pN, int i, u8 flags){
   prollyNodeKey(pN, i, &ch->pKey, &ch->nKey);
   if( flags & PROLLY_NODE_INTKEY ){
@@ -499,7 +489,6 @@ static int diffNodesOneLevel(
             prollyCursorInit(pCO, pStore, pCache, pOldRoot, flags);
             prollyCursorInit(pCN, pStore, pCache, pNewRoot, flags);
 
-
             if( i > 0 && (flags & PROLLY_NODE_INTKEY) ){
               i64 seekKey = prollyNodeIntKey(&oldNode, i-1);
               int res;
@@ -538,7 +527,6 @@ static int diffNodesOneLevel(
       }
     }
 
-
     while( i < (int)oldNode.nItems && rc==SQLITE_OK ){
       ProllyHash ch;
       prollyNodeChildHash(&oldNode, i, &ch);
@@ -576,13 +564,11 @@ int prollyDiff(
   int nStack = 0, nStackAlloc = 0;
   int rc = SQLITE_OK;
 
-
   aStack = sqlite3_malloc(32 * (int)sizeof(ProllyHash));
   if( !aStack ) return SQLITE_NOMEM;
   nStackAlloc = 32;
   aStack[nStack++] = *pOldRoot;
   aStack[nStack++] = *pNewRoot;
-
 
   while( nStack >= 2 && rc==SQLITE_OK ){
     ProllyHash newH = aStack[--nStack];
@@ -647,7 +633,6 @@ int prollyDiffIterOpen(
     return rc;
   }
 
-
   if( !prollyCursorIsValid(pIter->pCurOld) &&
       !prollyCursorIsValid(pIter->pCurNew) ){
     pIter->eof = 1;
@@ -667,13 +652,11 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
   if( pIter->eof ) return SQLITE_DONE;
   if( pIter->rc!=SQLITE_OK ) return pIter->rc;
 
-
   diffIterFreeCopies(pIter);
 
   pOld = pIter->pCurOld;
   pNew = pIter->pCurNew;
   pCh = &pIter->current;
-
 
   for(;;){
     validOld = prollyCursorIsValid(pOld);

@@ -8,12 +8,8 @@
 #include "prolly_cursor.h"
 #include "chunk_store.h"
 
-/* MIN/MAX bracket the chunk size so degenerate inputs (adversarial
-** keys, hash collisions) still produce bounded chunks. Inside that
-** range, the boundary decision is made by prollyWeibullCheck which
-** biases the distribution toward 4096 bytes (PROLLY_WEIBULL_L in
-** prolly_hash.c). All three values are part of the on-disk content
-** addressing — changing them re-hashes every tree on next write. */
+/* Min/max bounds for content-defined chunks. The chunker may split after the
+** minimum when the key hash passes prollyWeibullCheck, and must split at max. */
 #define PROLLY_CHUNK_MIN     512
 #define PROLLY_CHUNK_MAX     16384
 

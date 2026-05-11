@@ -189,9 +189,6 @@ static int statusRootsShareAnyKey(
   return rc;
 }
 
-/* Detect a rename by stable table identity plus name-insensitive CREATE
-** TABLE SQL. This preserves rename+edit classification while rejecting
-** drop+create churn that happens to reuse the same table number. */
 static int isRenamePair(
   sqlite3 *db,
   struct TableEntry *aFrom, int nFrom,
@@ -268,9 +265,6 @@ static int compareCatalogs(
     if( rc==SQLITE_NOTFOUND ) continue;
     if( rc!=SQLITE_OK ) return rc;
     if(!pFrom){
-      /* Unstaged new tables run through dolt_ignore; a CONFLICT
-      ** bubbles up as a query error. Already-staged new tables skip
-      ** the check — staging beat the ignore rule. */
       if( staged==0 ){
         int ignored = 0;
         char *zIgnErr = 0;

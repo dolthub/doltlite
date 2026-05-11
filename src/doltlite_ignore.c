@@ -9,13 +9,9 @@ static unsigned char ignoreLower(unsigned char c){
   return (c>='A' && c<='Z') ? c + 32 : c;
 }
 
-/* Match zStr against zPat (case-insensitive). '*' and '%' match zero
-** or more characters, '?' matches exactly one, everything else is a
-** case-folded literal. Uses iterative backtracking instead of
-** recursion to avoid stack overflow on pathological patterns. */
 static int ignorePatternMatch(const char *zPat, const char *zStr){
-  const char *pStar = 0;   /* Last '*' position in pattern */
-  const char *sStar = 0;   /* String position at last '*' */
+  const char *pStar = 0;
+  const char *sStar = 0;
 
   while( *zStr ){
     unsigned char c = (unsigned char)*zPat;
@@ -42,10 +38,6 @@ static int ignorePatternMatch(const char *zPat, const char *zStr){
   return *zPat == 0;
 }
 
-/* Specificity score = count of literal (non-wildcard) chars. Higher
-** wins. Exact-literal patterns beat any wildcard pattern that also
-** matches the same string because they necessarily have more literals
-** (the entire name vs some proper prefix/suffix). */
 static int ignoreSpecificity(const char *zPat){
   int n = 0;
   while( *zPat ){
@@ -61,11 +53,6 @@ enum DoltliteIgnoreSchemaState {
   DOLTLITE_IGNORE_SCHEMA_BAD = 2
 };
 
-/* Read-time schema guard. The parse-time check in build.c catches
-** new bad CREATE TABLE statements, but on-disk repos created before
-** the guard landed (or via an older binary) can still have a
-** wrong-shape dolt_ignore. Detect it here and raise an error so the
-** user gets a clear signal instead of a silent "no filtering". */
 static int doltliteIgnoreSchemaState(sqlite3 *db, int *pState){
   sqlite3_stmt *pStmt = 0;
   int rc;

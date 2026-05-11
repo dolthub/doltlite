@@ -1,7 +1,4 @@
 #!/bin/bash
-#
-# Tests for DoltLite branding: engine function, version, prompt.
-#
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
@@ -10,22 +7,15 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 echo "=== DoltLite Branding Tests ==="
 echo ""
 
-# doltlite_engine() returns "prolly"
 run_test "engine_func" "SELECT doltlite_engine();" "prolly" ":memory:"
 
-# Old misspelling does NOT work
 run_test_match "engine_old_gone" "SELECT doltite_engine();" "no such function" ":memory:"
 
-# -version flag says DoltLite
 VER=$($DOLTLITE -version 2>&1)
 if echo "$VER" | grep -q "DoltLite"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: version_flag\n  expected: DoltLite\n  got:      $VER"; fi
 
-# -version includes SQLite version
 if echo "$VER" | grep -q "SQLite"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: version_sqlite\n  expected: SQLite\n  got:      $VER"; fi
 
-# Interactive banner and prompt tests (require a TTY via `script`)
-# macOS: script -q /dev/null cmd
-# Linux: script -qc "cmd" /dev/null
 run_script() {
   if [ "$(uname)" = "Darwin" ]; then
     script -q /dev/null "$@" 2>&1
@@ -41,10 +31,8 @@ EOF
 
 if echo "$BANNER" | grep -q "DoltLite"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: banner\n  expected: DoltLite\n  got:      $BANNER"; fi
 
-# Banner does NOT say "SQLite version" (the old format)
 if echo "$BANNER" | grep -q "SQLite version"; then FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: no_sqlite_version\n  should not contain: SQLite version\n  got:      $BANNER"; else PASS=$((PASS+1)); fi
 
-# Prompt says doltlite>
 PROMPT=$(run_script $DOLTLITE :memory: <<'PEOF' | cat
 SELECT 1;
 .quit

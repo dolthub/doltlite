@@ -141,19 +141,6 @@ void doltliteFreeColInfo(DoltliteColInfo *ci){
   ci->nCol = 0;
 }
 
-/* iPkCol is set only for a rowid-aliased INTEGER PRIMARY KEY column.
-** Other PK columns live in the record payload like any user column,
-** so callers that serialize INT PK values separately (at, history,
-** diff vtables) use iPkCol to pull the rowid from the cursor
-** instead of the record.
-**
-** aColToRec maps declared column index → record field index. For
-** rowid-aliased and keyless tables that's the identity; for
-** WITHOUT ROWID tables (compound or single non-INT PK — all
-** auto-converted by build.c) the layout is PK columns first in
-** PRIMARY KEY declaration order, then non-PK columns in declared
-** order, matching the aiColumn[] that convertToWithoutRowidTable
-** builds for the covering PK index. */
 int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci){
   char *zSql;
   sqlite3_stmt *pStmt = 0;
@@ -221,10 +208,6 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
     return rc;
   }
 
-  /* A column is a rowid alias only when it's the SOLE PK column and
-  ** has declared type INTEGER. Compound PKs (even if their first
-  ** column is INTEGER) store all fields in the record payload and
-  ** must NOT be treated as rowid-alias projections. */
   if( nPkCols==1 && iCandidateAlias>=0 ){
     ci->iPkCol = iCandidateAlias;
   }
@@ -238,11 +221,8 @@ int doltliteGetColumnNames(sqlite3 *db, const char *zTable, DoltliteColInfo *ci)
       return SQLITE_NOMEM;
     }
     if( ci->iPkCol>=0 || nPkCols==0 ){
-      /* Rowid-aliased or keyless: record stays in declared order. */
       for(i=0; i<ci->nCol; i++) ci->aColToRec[i] = i;
     }else{
-      /* WITHOUT ROWID: PK cols first in PK-declaration order, then
-      ** non-PK cols in declared order. */
       for(i=0; i<ci->nCol; i++){
         if( aPk[i]>0 ) ci->aColToRec[i] = aPk[i] - 1;
       }
@@ -364,29 +344,16 @@ void doltliteResultUserCol(
   int iRecField;
   DoltliteRecordInfo ri;
 
-  /* Missing record ⇒ row not present ⇒ every column projects as
-  ** SQL NULL, including the rowid-alias column. This matches the
-  ** diff vtable contract: from_* columns on an ADD and to_*
-  ** columns on a DELETE are NULL across the board. */
   if( !pRec || nRec<=0 || !ci || iDeclaredCol<0 || iDeclaredCol>=ci->nCol ){
     sqlite3_result_null(ctx);
     return;
   }
 
-  /* Rowid-aliased INTEGER PRIMARY KEY column: value lives in the
-  ** cursor's intKey rather than the record payload — SQLite
-  ** stores the rowid as a NULL serial in the record itself, so
-  ** reading it via the normal field path would return NULL. */
   if( iDeclaredCol==ci->iPkCol && ci->iPkCol>=0 ){
     sqlite3_result_int64(ctx, intKey);
     return;
   }
 
-  /* Map declared column index → physical record field index. The
-  ** aColToRec permutation is identity for rowid-aliased and
-  ** keyless tables and PK-first for WITHOUT ROWID tables. Without
-  ** this mapping step, projecting by declared index on a schema
-  ** whose PK cols aren't leading returns the wrong field. */
   iRecField = ci->aColToRec ? ci->aColToRec[iDeclaredCol] : iDeclaredCol;
   if( iRecField<0 ){
     sqlite3_result_null(ctx);

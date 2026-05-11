@@ -51,8 +51,6 @@ static int buildFromEdits(
   return rc;
 }
 
-/* mergeWalk removed: streamingMerge now handles all flush shapes. */
-
 static int subtreeHasEdits(
   ProllyMutMapIter *pIter,
   const u8 *pBoundKey, int nBoundKey
@@ -108,7 +106,6 @@ static int mergeLeaf(
       continue;
     }
 
-
     {
       const u8 *pLastKey; int nLastKey;
       int pastLeaf;
@@ -151,12 +148,6 @@ static int mergeLeaf(
     }
   }
 
-  /* Drain trailing edits past the leaf's last key when this is the
-  ** rightmost leaf of an isLast subtree. Feeding them at level 0
-  ** here lets them chunk up alongside the leaf's items, instead of
-  ** the previous "trailing-append at level 0 + propagate up through
-  ** every intermediate level" path that grew tree depth by 1 per
-  ** flush in the worst case. */
   if( isLast ){
     while( prollyMutMapIterValid(pIter) ){
       ProllyMutMapEntry *pEd = prollyMutMapIterEntry(pIter);
@@ -193,12 +184,6 @@ static int streamingMergeNode(
 
     childIsLast = isLast && (i == pNode->nItems - 1);
 
-    /* The rightmost child of an isLast subtree must absorb any
-    ** trailing edits past pBoundKey. If we splice it instead, those
-    ** edits get appended at chunker level 0 and propagate up through
-    ** every intermediate level as a column of single-entry chunks —
-    ** which is what produced the depth pathology that hit MAX_DEPTH
-    ** at ~1900 single-row inserts. */
     forceDescend = childIsLast && prollyMutMapIterValid(pIter);
 
     if( !forceDescend
@@ -248,7 +233,6 @@ static int streamingMerge(
   ProllyNode rootNode;
   ProllyCache *pCache = pMut->pCache;
 
-
   rc = chunkStoreGet(pMut->pStore, &pMut->oldRoot, &pRootData, &nRootData);
   if( rc!=SQLITE_OK ) return rc;
   rc = prollyNodeParse(&rootNode, pRootData, nRootData);
@@ -257,7 +241,6 @@ static int streamingMerge(
     return rc;
   }
 
-
   prollyMutMapIterFirst(&iter, pMut->pEdits);
   rc = prollyChunkerInit(&chunker, pMut->pStore, pMut->flags);
   if( rc!=SQLITE_OK ){
@@ -265,18 +248,10 @@ static int streamingMerge(
     return rc;
   }
 
-  /* isLast=1 marks the root as the rightmost subtree at this level
-  ** of recursion, propagating down through the rightmost child of
-  ** each visited node. mergeLeaf at the bottom drains any trailing
-  ** edits past the rightmost leaf's last key.
-  **
-  ** A root that is itself a leaf (level == 0) is just the rightmost
-  ** leaf at the top of the tree — drain edits into it via mergeLeaf
-  ** directly, no need for streamingMergeNode's child-iteration. */
   if( rootNode.level == 0 ){
-    rc = mergeLeaf(pMut, &rootNode, &chunker, &iter, /*isLast=*/1);
+    rc = mergeLeaf(pMut, &rootNode, &chunker, &iter, 1);
   }else{
-    rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter, /*isLast=*/1);
+    rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter, 1);
   }
   if( rc!=SQLITE_OK ) goto streaming_cleanup;
 
@@ -291,17 +266,6 @@ streaming_cleanup:
   return rc;
 }
 
-
-/* streamingMerge is now the only flush strategy. It walks the tree once,
-** splicing unchanged subtrees by re-emitting their hash references at the
-** matched level (Dolt's chunker.advanceTo equivalent), and drains trailing
-** edits into the rightmost leaf to avoid the depth pathology that the
-** earlier mergeWalk fallback was guarding against. With those correctness
-** properties in place there is no shape on which a full-rebuild walk would
-** be required for correctness, so the per-flush strategy choice (which had
-** been pessimizing toward mergeWalk for any non-trivial edit ratio) is
-** dropped in favor of the unified path — matching Dolt's "one algorithm,
-** no INTKEY/non-INTKEY split" property. */
 int prollyMutateFlush(ProllyMutator *pMut){
   if( prollyMutMapIsEmpty(pMut->pEdits) ){
     memcpy(&pMut->newRoot, &pMut->oldRoot, sizeof(ProllyHash));
@@ -329,7 +293,6 @@ int prollyMutateInsert(
   int rc;
   u8 isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
 
-
   rc = prollyMutMapInit(&mm, isIntKey);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -339,14 +302,12 @@ int prollyMutateInsert(
     return rc;
   }
 
-
   memset(&mut, 0, sizeof(mut));
   mut.pStore = pStore;
   mut.pCache = pCache;
   memcpy(&mut.oldRoot, pRoot, sizeof(ProllyHash));
   mut.pEdits = &mm;
   mut.flags = flags;
-
 
   rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){
@@ -370,7 +331,6 @@ int prollyMutateDelete(
   int rc;
   u8 isIntKey = (flags & PROLLY_NODE_INTKEY) ? 1 : 0;
 
-
   rc = prollyMutMapInit(&mm, isIntKey);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -380,14 +340,12 @@ int prollyMutateDelete(
     return rc;
   }
 
-
   memset(&mut, 0, sizeof(mut));
   mut.pStore = pStore;
   mut.pCache = pCache;
   memcpy(&mut.oldRoot, pRoot, sizeof(ProllyHash));
   mut.pEdits = &mm;
   mut.flags = flags;
-
 
   rc = prollyMutateFlush(&mut);
   if( rc==SQLITE_OK ){

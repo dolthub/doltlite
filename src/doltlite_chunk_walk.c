@@ -27,18 +27,10 @@ static int parseCurrentCatalogHeader(
   return 1;
 }
 
-/* Classify a chunk by sniffing its first few bytes. Order of checks
-** matters: PROLLY_NODE_MAGIC is a 4-byte constant that can't collide
-** with any version tag, so it goes first. WORKING_SET is a fixed
-** length so the size check excludes collisions with small catalogs.
-** CATALOG uses a single-byte version tag, COMMIT uses DOLTLITE_COMMIT_V2.
-** Used by GC chunk reachability traversal — unknown chunks are
-** dropped, so a missing case here can silently corrupt the store. */
 DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   u32 m;
 
   if( !data || nData < 4 ) return CHUNK_UNKNOWN;
-
 
   m = (u32)data[0] | ((u32)data[1]<<8) |
       ((u32)data[2]<<16) | ((u32)data[3]<<24);
@@ -46,11 +38,9 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_PROLLY_NODE;
   }
 
-
   if( nData == WS_TOTAL_SIZE && data[0] == WS_FORMAT_VERSION ){
     return CHUNK_WORKING_SET;
   }
-
 
   {
     int nTables; const u8 *pEntries; int iFormat;
@@ -59,11 +49,9 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     }
   }
 
-
   if( nData >= 30 && data[0] == DOLTLITE_COMMIT_V2 ){
     return CHUNK_COMMIT;
   }
-
 
   if( nData >= 5 && data[0] == 6 ){
     return CHUNK_REFS;
@@ -179,26 +167,21 @@ static int enumerateWorkingSetChildren(
 
   (void)nData;
 
-
   memcpy(h.data, data + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
   rc = xChild(ctx, &h);
   if( rc!=SQLITE_OK ) return rc;
-
 
   memcpy(h.data, data + WS_WORKING_COMMIT_OFF, PROLLY_HASH_SIZE);
   rc = xChild(ctx, &h);
   if( rc!=SQLITE_OK ) return rc;
 
-
   memcpy(h.data, data + WS_STAGED_OFF, PROLLY_HASH_SIZE);
   rc = xChild(ctx, &h);
   if( rc!=SQLITE_OK ) return rc;
 
-
   memcpy(h.data, data + WS_CONFLICTS_OFF, PROLLY_HASH_SIZE);
   rc = xChild(ctx, &h);
   if( rc!=SQLITE_OK ) return rc;
-
 
   if( data[WS_MERGING_OFF] ){
     memcpy(h.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);

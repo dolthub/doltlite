@@ -1,30 +1,4 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_at_<table>
-#
-# Per-table point-in-time view of a table at a specified commit ref.
-# doltlite exposes this as a per-table vtable with a hidden
-# `commit_ref` constraint column:
-#
-#   SELECT * FROM dolt_at_t WHERE commit_ref = '<ref>'
-#
-# Dolt exposes the same semantics via the SQL `AS OF` clause:
-#
-#   SELECT * FROM t AS OF '<ref>'
-#
-# The two surfaces are SQL-level different but semantically
-# equivalent — both return the table state as of the named ref.
-# This oracle compares row CONTENT (not the SQL spelling) across
-# a range of ref forms: HEAD, HEAD~N, branch names, tag names,
-# bare commit hashes.
-#
-# Note: doltlite does NOT support the `AS OF` parser syntax. That's
-# a separate feature concern (parser change). This oracle compares
-# behavior between the two surface forms by issuing a different
-# query on each engine.
-#
-# Usage: bash vc_oracle_at_test.sh [path/to/doltlite] [path/to/dolt]
-#
 
 set -u
 set -o pipefail
@@ -43,15 +17,11 @@ normalize() {
     | sort
 }
 
-# Run a scenario. $1=name, $2=setup SQL in doltlite syntax,
-# $3=ref string to query at (e.g. 'HEAD', 'HEAD~1', 'main',
-# 'feature', or a tag name).
 oracle() {
   local name="$1" setup="$2" ref="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  # ── doltlite query: dolt_at_t WHERE commit_ref = '<ref>' ──
   local dl_q="SELECT 'A' || char(9) || coalesce(id,'') || char(9) || coalesce(v,'') FROM dolt_at_t WHERE commit_ref = '${ref}' ORDER BY id"
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$dl_q" \
@@ -60,7 +30,6 @@ oracle() {
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
 
-  # ── Dolt query: t AS OF '<ref>' ──
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   local dt_q="SELECT concat('A', char(9), coalesce(id,''), char(9), coalesce(v,'')) FROM t AS OF '${ref}' ORDER BY id"
@@ -138,11 +107,8 @@ SELECT dolt_commit('-m', 'c1');
 
 echo "--- HEAD ref ---"
 
-# View at HEAD = current branch tip. Should match the working
-# committed state.
 oracle "at_head_two_rows" "$SEED" "HEAD"
 
-# View after a second commit shows the second commit's state.
 oracle "at_head_after_second_commit" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -152,7 +118,6 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- HEAD~N ref ---"
 
-# View at HEAD~1 shows the previous commit's state.
 oracle "at_head_minus_1_after_modify" "
 $SEED
 UPDATE t SET v = 99 WHERE id = 1;
@@ -160,7 +125,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2_modify');
 " "HEAD~1"
 
-# HEAD~2 walks back two commits.
 oracle "at_head_minus_2" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -171,7 +135,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c3');
 " "HEAD~2"
 
-# HEAD~ (no number) is shorthand for HEAD~1.
 oracle "at_head_tilde_no_number" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -181,11 +144,8 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- branch ref ---"
 
-# View at the current branch by name.
 oracle "at_branch_main" "$SEED" "main"
 
-# View at a SIBLING branch — should show that branch's tip,
-# which differs from the current branch.
 oracle "at_sibling_branch_feature" "
 $SEED
 SELECT dolt_branch('feature');
@@ -198,7 +158,6 @@ SELECT dolt_checkout('main');
 
 echo "--- tag ref ---"
 
-# View at a tag pointing at a specific commit.
 oracle "at_tag" "
 $SEED
 SELECT dolt_tag('v1');
@@ -218,12 +177,6 @@ SELECT dolt_branch('from_tag', 'v1');
 
 echo "--- bare commit hash ref ---"
 
-# View at a literal commit hash. Both engines accept hex hashes
-# as refs. We can't put a literal hash in the test text (the
-# hashes differ between engines), so we run two scenarios that
-# query the most-recent commit hash via a subquery. The HEAD
-# alias gives the same result more readably; this scenario only
-# exists to ensure direct hash references also work.
 oracle "at_recent_commit_via_head" "
 $SEED
 INSERT INTO t VALUES (3, 30);
@@ -240,15 +193,11 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- working set is NOT visible at any ref ---"
 
-# After the latest commit, an uncommitted modification is in the
-# working set. Querying at HEAD should NOT see it (HEAD is the
-# committed state).
 oracle "at_head_excludes_working_modifications" "
 $SEED
 UPDATE t SET v = 999 WHERE id = 1;
 " "HEAD"
 
-# Same with a staged-but-not-committed modification.
 oracle "at_head_excludes_staged_modifications" "
 $SEED
 UPDATE t SET v = 999 WHERE id = 1;
@@ -257,8 +206,6 @@ SELECT dolt_add('-A');
 
 echo "--- post-merge ---"
 
-# After a merge, HEAD points at the merge commit and includes
-# the merged content.
 oracle "at_head_after_merge" "
 $SEED
 SELECT dolt_branch('feature');
@@ -273,7 +220,6 @@ SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feature');
 " "HEAD"
 
-# View at HEAD~1 after merge shows the pre-merge state (main2).
 oracle "at_head_minus_1_after_merge_is_main2" "
 $SEED
 SELECT dolt_branch('feature');
@@ -318,9 +264,6 @@ SELECT dolt_merge('feature');
 
 echo "--- error paths ---"
 
-# Reference to a non-existent ref. Both engines should surface
-# something the user can act on (error or, in doltlite's case,
-# a clearly empty result).
 oracle_error "at_nonexistent_ref" "$SEED" "nope"
 
 echo ""

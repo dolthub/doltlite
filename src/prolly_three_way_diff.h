@@ -10,12 +10,6 @@
 #include "chunk_store.h"
 #include "prolly_diff.h"
 
-/* LEFT_* / RIGHT_* fire when only one branch touched the key and can
-** merge cleanly. CONVERGENT fires when both sides made the same
-** change (same ADD value, same MODIFY value, or both DELETE) —
-** accepted silently. CONFLICT_MM (modify-modify) and CONFLICT_DM
-** (delete vs modify) need user resolution. See prolly_three_way_diff.c
-** emitBothSides() for the full classification table. */
 #define THREE_WAY_LEFT_ADD       1
 #define THREE_WAY_LEFT_DELETE    2
 #define THREE_WAY_LEFT_MODIFY    3

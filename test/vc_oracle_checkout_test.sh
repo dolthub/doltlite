@@ -1,27 +1,4 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_checkout
-#
-# Runs identical checkout scenarios against doltlite and Dolt and compares
-# the resulting (active_branch, table contents, dolt_status) post-state.
-#
-# Checkout has three overlapping behaviors that the oracle has to verify:
-#   1. Branch switch: HEAD/active_branch moves and the visible data swaps
-#      to the target branch's working set.
-#   2. Branch create-and-switch (`-b`): same as above plus a new branch
-#      ref is created at the current commit.
-#   3. Per-table checkout: when the first arg is not a branch, treat the
-#      args as table names and revert those tables in the working set
-#      back to the staged catalog (or HEAD if nothing is staged). This
-#      is the `git checkout -- file` analogue.
-#
-# Comparing only the active branch would miss revert-table bugs; comparing
-# only the table contents would miss bugs that switch HEAD without moving
-# the data; comparing only dolt_status would miss the branch ref. So the
-# oracle compares all three concatenated.
-#
-# Usage: bash vc_oracle_checkout_test.sh [path/to/doltlite] [path/to/dolt]
-#
 
 set -u
 set -o pipefail
@@ -50,9 +27,6 @@ normalize_status() {
     | sort -t$'\t' -k2,2 -k3,3 -k4,4
 }
 
-# $1=name, $2=setup SQL using SELECT dolt_*() form. The harness rewrites
-# to CALL dolt_*() for Dolt. The setup must leave the table named `t`
-# in some final state — we always SELECT from it for comparison.
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
@@ -78,10 +52,6 @@ oracle() {
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
 
-  # Run setup + comparison queries in a SINGLE dolt sql invocation —
-  # CALL dolt_checkout is session-scoped in the dolt CLI, so a second
-  # `dolt sql` invocation would lose the branch switch and start back
-  # on main. Same goes for the working set.
   local dt_branch dt_rows dt_status
   (
     cd "$dir/dt" || exit 1

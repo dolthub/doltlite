@@ -1,7 +1,4 @@
 #!/bin/bash
-# Tests for current diff surfaces across ALTER TABLE ADD COLUMN schema changes.
-# Verifies that rows not modified after ADD COLUMN are NOT reported
-# as changed, and rows actually modified ARE reported correctly.
 DOLTLITE=./doltlite
 PASS=0
 FAIL=0
@@ -24,9 +21,6 @@ run_test_match() {
 echo "=== Doltlite Diff Across ALTER TABLE Tests ==="
 echo ""
 
-# ---------------------------------------------------------------
-# Test 1: ALTER TABLE ADD COLUMN, no row updates => empty diff
-# ---------------------------------------------------------------
 DB1=/tmp/test_diff_alter1_$$.db; rm -f "$DB1"
 
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
@@ -35,15 +29,10 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB1" > /dev/null 2>&1
 
 echo "ALTER TABLE t ADD COLUMN age INTEGER;" | $DOLTLITE "$DB1" > /dev/null 2>&1
 
-# Working diff should be empty -- only schema changed, no data
 run_test "alter_add_col_no_data_change" \
   "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "0" "$DB1"
 
-# ---------------------------------------------------------------
-# Test 2: ALTER TABLE ADD COLUMN + update some rows => only
-#         updated rows show up in diff
-# ---------------------------------------------------------------
 echo "UPDATE t SET age=30 WHERE id=1;" | $DOLTLITE "$DB1" > /dev/null 2>&1
 
 run_test "alter_only_updated_row_in_diff" \
@@ -54,10 +43,6 @@ run_test "alter_updated_row_is_modify" \
   "SELECT diff_type || '|' || coalesce(to_id, from_id) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "modified|1" "$DB1"
 
-# ---------------------------------------------------------------
-# Test 3: Commit after ALTER + update, then cross-commit diff
-#         should show only the one modified row
-# ---------------------------------------------------------------
 echo "SELECT dolt_commit('-A','-m','add age column and update alice');" | $DOLTLITE "$DB1" > /dev/null 2>&1
 
 run_test "alter_cross_commit_count" \
@@ -68,9 +53,6 @@ run_test "alter_cross_commit_type" \
   "SELECT rows_modified FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "1" "$DB1"
 
-# ---------------------------------------------------------------
-# Test 4: Multiple ADD COLUMNs, untouched rows stay equal
-# ---------------------------------------------------------------
 DB2=/tmp/test_diff_alter2_$$.db; rm -f "$DB2"
 
 echo "CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT);
@@ -94,18 +76,12 @@ run_test "multi_add_col_correct_row" \
   "SELECT coalesce(to_id, from_id) FROM dolt_diff_items WHERE to_commit='WORKING';" \
   "2" "$DB2"
 
-# ---------------------------------------------------------------
-# Test 5: dolt_diff_<table> also works across ALTER TABLE
-# ---------------------------------------------------------------
 echo "SELECT dolt_commit('-A','-m','update coat price');" | $DOLTLITE "$DB2" > /dev/null 2>&1
 
 run_test "diff_table_across_alter_count" \
   "SELECT count(*) FROM dolt_diff_items WHERE diff_type='modified';" \
   "1" "$DB2"
 
-# ---------------------------------------------------------------
-# Test 6: INSERT after ALTER TABLE => shows as 'added', not spurious
-# ---------------------------------------------------------------
 DB3=/tmp/test_diff_alter3_$$.db; rm -f "$DB3"
 
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -123,9 +99,6 @@ run_test "insert_after_alter_type" \
   "SELECT diff_type || '|' || coalesce(to_id, from_id) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "added|2" "$DB3"
 
-# ---------------------------------------------------------------
-# Test 7: DELETE after ALTER TABLE => shows as 'removed'
-# ---------------------------------------------------------------
 DB4=/tmp/test_diff_alter4_$$.db; rm -f "$DB4"
 
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -143,9 +116,6 @@ run_test "delete_after_alter_type" \
   "SELECT diff_type || '|' || coalesce(to_id, from_id) FROM dolt_diff_t WHERE to_commit='WORKING';" \
   "removed|1" "$DB4"
 
-# ---------------------------------------------------------------
-# Test 8: Merge after ALTER TABLE (regression test for segfault)
-# ---------------------------------------------------------------
 DB5=/tmp/test_diff_alter5_$$.db; rm -f "$DB5"
 
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
@@ -153,28 +123,23 @@ INSERT INTO t VALUES(1,'alice'),(2,'bob');
 SELECT dolt_commit('-A','-m','init');
 SELECT dolt_branch('feature');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 
-# Main branch: add column and update
 echo "ALTER TABLE t ADD COLUMN age INTEGER;
 UPDATE t SET age=30 WHERE id=1;
 SELECT dolt_commit('-A','-m','add age on main');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 
-# Feature branch: modify a different row (no schema change)
 echo "SELECT dolt_checkout('feature');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 echo "UPDATE t SET name='BOB' WHERE id=2;
 SELECT dolt_commit('-A','-m','update bob on feature');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 
-# Merge should not segfault
 run_test_match "merge_after_alter_no_crash" \
   "SELECT dolt_merge('feature');" \
   "." "$DB5"
 
-# After merge, diff between merge commit and its parent should work
 run_test_match "diff_after_merge_works" \
   "SELECT coalesce(sum(rows_added + rows_deleted + rows_modified), 0) FROM dolt_diff_stat((SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1), (SELECT commit_hash FROM dolt_log LIMIT 1), 't');" \
   "^[0-9]+$" "$DB5"
 
-# Cleanup
 rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5"
 
 echo ""

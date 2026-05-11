@@ -27,7 +27,6 @@ static int initLevel(ProllyChunker *ch, int level){
   pLevel = &ch->aLevel[level];
   memset(pLevel, 0, sizeof(ProllyChunkerLevel));
 
-
   prollyNodeBuilderInit(&pLevel->builder, (u8)level, ch->flags);
 
   pLevel->nItems = 0;
@@ -58,27 +57,15 @@ static int flushLevel(ProllyChunker *ch, int level){
 
   assert( pLevel->builder.nItems > 0 );
 
-
   builderLastKey(&pLevel->builder, &pLastKey, &nLastKey);
-
 
   rc = prollyNodeBuilderFinish(&pLevel->builder, &pData, &nData);
   if( rc!=SQLITE_OK ) return rc;
-
 
   rc = chunkStorePut(ch->pStore, pData, nData, &hash);
   sqlite3_free(pData);
   if( rc!=SQLITE_OK ) return rc;
 
-
-
-  /* Parent level keyed on the LAST child key: prolly internal keys
-  ** are the max key of their subtree, matching the cursor's seek
-  ** contract. */
-  /* If we've hit MAX_DEPTH the parent level can't accept this chunk's
-  ** reference. Returning SQLITE_OK here would silently drop the chunk —
-  ** every key under it disappears from the tree. Bail with an error so
-  ** the caller can fall back to the rebuild path (mergeWalk). */
   if( level + 1 >= PROLLY_CURSOR_MAX_DEPTH ){
     return SQLITE_FULL;
   }
@@ -87,7 +74,6 @@ static int flushLevel(ProllyChunker *ch, int level){
                   pLastKey, nLastKey,
                   hash.data, PROLLY_HASH_SIZE);
   if( rc!=SQLITE_OK ) return rc;
-
 
   prollyNodeBuilderReset(&pLevel->builder);
   pLevel->nItems = 0;
@@ -105,10 +91,8 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
 
   assert( pLevel->builder.nItems > 0 );
 
-
   rc = prollyNodeBuilderFinish(&pLevel->builder, &pData, &nData);
   if( rc!=SQLITE_OK ) return rc;
-
 
   rc = chunkStorePut(ch->pStore, pData, nData, pHash);
   sqlite3_free(pData);
@@ -157,7 +141,6 @@ static int addToLevel(ProllyChunker *ch, int level,
 
   assert( level >= 0 && level < PROLLY_CURSOR_MAX_DEPTH );
 
-
   if( level >= ch->nLevels ){
     while( ch->nLevels <= level ){
       rc = initLevel(ch, ch->nLevels);
@@ -168,7 +151,6 @@ static int addToLevel(ProllyChunker *ch, int level,
 
   pLevel = &ch->aLevel[level];
 
-
   rc = prollyNodeBuilderAdd(&pLevel->builder, pKey, nKey, pVal, nVal);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -177,11 +159,6 @@ static int addToLevel(ProllyChunker *ch, int level,
   thisSize = nKey + nVal;
   pLevel->nBytes += thisSize;
 
-  /* Content-defined chunking via Weibull-distribution boundary check.
-  ** Hash is keyed on the row's key bytes (not value), salted by the
-  ** tree level so boundaries don't align across levels. Only chunks
-  ** whose contents changed get re-emitted on edit — this is what
-  ** gives prolly trees their structural sharing. */
   if( pLevel->nBytes >= PROLLY_CHUNK_MIN ){
     int atBoundary;
     if( pLevel->nBytes >= PROLLY_CHUNK_MAX ){
@@ -230,7 +207,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
     return SQLITE_OK;
   }
 
-
   level = 0;
   while( level < ch->nLevels ){
     ProllyChunkerLevel *pLevel = &ch->aLevel[level];
@@ -240,7 +216,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
       level++;
       continue;
     }
-
 
     {
       if( hasPendingAncestorLevels(ch, level) ){
@@ -255,7 +230,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
 
         memcpy(&ch->root, &hash, sizeof(ProllyHash));
 
-
         prollyNodeBuilderReset(&pLevel->builder);
         pLevel->nItems = 0;
         pLevel->nBytes = 0;
@@ -265,7 +239,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
 
     level++;
   }
-
 
   memset(&ch->root, 0, sizeof(ProllyHash));
   return SQLITE_OK;

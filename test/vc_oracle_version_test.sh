@@ -1,38 +1,4 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_version
-#
-# dolt_version() is a 0-arg scalar that returns the build's version
-# string. It's useful for:
-#
-#   - Peer negotiation in the decentralized use case — a client can
-#     check the server's version before attempting format-sensitive
-#     operations (clone, push, fetch).
-#   - Debugging / bug reports: paste the output of SELECT dolt_version()
-#     in an issue and we know exactly which build produced it.
-#   - Schema migrations that behave differently per engine version.
-#
-# The interesting surface is small:
-#
-#   1. Zero args only. One arg or more must error, matching Dolt
-#      which does the same ("function 'dolt_version' expected 0
-#      arguments").
-#
-#   2. Deterministic: two invocations in the same session and
-#      across re-opens return the same string.
-#
-#   3. Non-empty, no whitespace, plausible version shape. We
-#      don't assert an exact format because doltlite uses
-#      `git describe` output (e.g. v0.7.3-29-g61abf71) while
-#      Dolt uses semver (1.83.5), and both are valid. The shape
-#      check is that the string matches [A-Za-z0-9.+-]+ — any
-#      reasonable version identifier lands in that alphabet.
-#
-#   4. Dolt conformance: both engines respect the same argcount
-#      contract (0 args passes, 1+ errors).
-#
-# Usage: bash vc_oracle_version_test.sh [path/to/doltlite] [path/to/dolt]
-#
 
 set -u
 
@@ -43,9 +9,6 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 
-# Run a single SQL statement against a fresh doltlite db and return
-# the one-column scalar result, stripped of any shell/commit noise
-# by tail -1.
 dl_scalar() {
   local name="$1" sql="$2"
   local db="$TMPROOT/$name.db"
@@ -53,8 +16,6 @@ dl_scalar() {
   "$DOLTLITE" "$db" "$sql" 2>"$TMPROOT/$name.err"
 }
 
-# Run a single SQL statement against a fresh Dolt repo and return
-# the scalar result (column 1 of the first non-header row).
 dolt_scalar() {
   local name="$1" sql="$2"
   local dir="$TMPROOT/${name}_dt"
@@ -68,8 +29,6 @@ dolt_scalar() {
   )
 }
 
-# Run a statement that should error. Returns 0 if doltlite printed
-# any "error"/"Error"/"ERROR" token, 1 otherwise.
 dl_errored() {
   local name="$1" sql="$2"
   local db="$TMPROOT/${name}_err.db"
@@ -78,7 +37,6 @@ dl_errored() {
   grep -qiE 'error|Error' "$TMPROOT/${name}.out" "$TMPROOT/${name}.err" 2>/dev/null
 }
 
-# Like dl_errored but for Dolt.
 dolt_errored() {
   local name="$1" sql="$2"
   local dir="$TMPROOT/${name}_dt_err"
@@ -144,7 +102,6 @@ expect_true() {
 echo "=== Version Control Oracle Tests: dolt_version ==="
 echo ""
 
-# ── 1. Basic invocation ───────────────────────────────────
 echo "--- 1. Returns a non-empty version string ---"
 
 V=$(dl_scalar "basic" "SELECT dolt_version();")
@@ -153,7 +110,6 @@ expect_shape    "dolt_version_plausible_shape" "$V"
 
 echo ""
 
-# ── 2. Determinism across calls ───────────────────────────
 echo "--- 2. Deterministic across same-session calls ---"
 
 V1=$(dl_scalar "det_a" "SELECT dolt_version();")
@@ -168,7 +124,6 @@ expect_equal "dolt_version_stable_across_reopen" "$V3" "$V4"
 
 echo ""
 
-# ── 3. Argcount contract ──────────────────────────────────
 echo "--- 3. Rejects non-zero argcount ---"
 
 if dl_errored "one_arg"   "SELECT dolt_version('x');"; then
@@ -187,7 +142,6 @@ fi
 
 echo ""
 
-# ── 4. Works inside a transaction and alongside DML ───────
 echo "--- 4. Callable mid-transaction ---"
 
 DB="$TMPROOT/mid_txn.db"
@@ -199,7 +153,6 @@ expect_equal    "dolt_version_same_in_txn"     "$V_MID" "$V"
 
 echo ""
 
-# ── 5. Dolt conformance ───────────────────────────────────
 echo "--- 5. Dolt conformance ---"
 
 DT_V=$(dolt_scalar "dt_basic" "SELECT DOLT_VERSION();")

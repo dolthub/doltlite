@@ -1,16 +1,4 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_add
-#
-# Runs identical dolt_add scenarios against doltlite and Dolt and compares
-# the resulting dolt_status (since dolt_add's whole purpose is to mutate
-# the staged catalog, and dolt_status is what makes that mutation visible).
-#
-# Error scenarios are checked separately: both engines must fail, but the
-# specific error text is allowed to differ.
-#
-# Usage: bash vc_oracle_add_test.sh [path/to/doltlite] [path/to/dolt]
-#
 
 set -u
 set -o pipefail
@@ -25,7 +13,6 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() { tr -d '\r'; }
 
-# Compare post-state status. $1=name, $2=setup SQL using doltlite syntax.
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
@@ -62,7 +49,6 @@ oracle() {
   fi
 }
 
-# Both engines must fail on this setup. Error text is allowed to differ.
 oracle_error() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_err"

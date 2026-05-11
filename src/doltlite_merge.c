@@ -29,24 +29,17 @@ static struct TableEntry *findTableEntry(
   return doltliteFindTableByNumber(aEntries, nEntries, iTable);
 }
 
-/* Per-index state carried through the merge callback so that
-** index edits are applied incrementally from the main table diff
-** rather than via independent three-way merge. */
 typedef struct MergeIndexInfo MergeIndexInfo;
 struct MergeIndexInfo {
-  Pgno iTable;           /* catalog iTable for this index */
-  ProllyHash oursRoot;   /* ours-side index root */
-  ProllyHash mergedRoot; /* result (filled after flush) */
-  ProllyMutMap *pEdits;  /* accumulated index edits */
-  int nColumn;           /* number of index columns (excl PK tail) */
-  i16 *aiColumn;         /* column mapping: index position → table col */
-  KeyInfo *pKeyInfo;     /* collation info for sort key encoding */
+  Pgno iTable;
+  ProllyHash oursRoot;
+  ProllyHash mergedRoot;
+  ProllyMutMap *pEdits;
+  int nColumn;
+  i16 *aiColumn;
+  KeyInfo *pKeyInfo;
 };
 
-/* Build an index sort key from a table row record.
-** Extracts the columns specified by aiColumn, appends the remaining
-** columns (the PK tail), builds a new record, and encodes it as a
-** sort key with all fields (matching the insert encoding). */
 static int buildIndexSortKey(
   const u8 *pRec, int nRec,
   const i16 *aiColumn, int nIdxCol,
@@ -61,19 +54,11 @@ static int buildIndexSortKey(
   doltliteParseRecord(pRec, nRec, &info);
   if( info.nField==0 ) return SQLITE_CORRUPT;
 
-  /* Build a new record with fields in index order (index cols +
-  ** all remaining cols as the PK tail). The SQLite index record
-  ** format is: [header][field1][field2]... where the header
-  ** contains varint serial types. */
   {
     int i, hdrLen = 0, bodyLen = 0;
     int nTotal;
     u8 *p;
 
-    /* Compute total number of fields: index cols + all table cols
-    ** (the full record is the value in the prolly tree, and all
-    ** fields go into the sort key for uniqueness). We reorder:
-    ** first the aiColumn fields, then all remaining fields. */
     int nOutField = info.nField;
     int *aFieldOrder = sqlite3_malloc(nOutField * sizeof(int));
     u8 *aUsed = sqlite3_malloc(info.nField);
@@ -84,7 +69,6 @@ static int buildIndexSortKey(
     }
     memset(aUsed, 0, info.nField);
 
-    /* First: index columns in index order */
     {
       int out = 0;
       for(i=0; i<nIdxCol; i++){
@@ -94,20 +78,17 @@ static int buildIndexSortKey(
           aUsed[col] = 1;
         }
       }
-      /* Then: remaining columns (PK tail + any others) */
       for(i=0; i<info.nField; i++){
         if( !aUsed[i] ) aFieldOrder[out++] = i;
       }
       nOutField = out;
     }
 
-    /* Measure header and body sizes */
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
       int st = info.aType[col];
       int flen;
       hdrLen += sqlite3VarintLen(st);
-      /* Compute field length from serial type */
       if( st<=0 ){ flen = 0; }
       else if( st==1 ){ flen = 1; }
       else if( st==2 ){ flen = 2; }
@@ -122,7 +103,6 @@ static int buildIndexSortKey(
       bodyLen += flen;
     }
 
-    /* Header size includes the header-size varint itself */
     {
       int tentative = hdrLen + 1;
       if( tentative > 126 ) tentative++;
@@ -137,7 +117,6 @@ static int buildIndexSortKey(
       return SQLITE_NOMEM;
     }
 
-    /* Write header */
     p = pIdxRec;
     {
       int hs = hdrLen;
@@ -150,7 +129,6 @@ static int buildIndexSortKey(
       p += sqlite3PutVarint(p, st);
     }
 
-    /* Write body */
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
       int st = info.aType[col];
@@ -176,7 +154,6 @@ static int buildIndexSortKey(
     sqlite3_free(aUsed);
   }
 
-  /* Encode the projected record as a sort key (all fields). */
   rc = sortKeyFromRecordPrefixColl(pIdxRec, nIdxRec, 0, pKeyInfo,
                                     ppKey, pnKey);
   sqlite3_free(pIdxRec);
@@ -272,7 +249,6 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   int hdrSize = 0, bodySize = 0, pos, i;
   u8 *result;
 
-
   for(i=0; i<nFields; i++){
     u64 st = aWinners[i].pField->st;
     if(st <= 0x7f) hdrSize += 1;
@@ -289,7 +265,6 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
 
   result = sqlite3_malloc(hdrSize + bodySize);
   if(!result){ *pnOut = 0; return 0; }
-
 
   pos = 0;
   { u64 hs = (u64)hdrSize;
@@ -326,7 +301,6 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
 
   *pnOut = pos;
 
-
 #ifndef NDEBUG
   {
     int nfCheck = 0;
@@ -341,12 +315,6 @@ static u8 *buildMergedRecord(MergeWinner *aWinners, int nFields, int *pnOut){
   return result;
 }
 
-/* Field-level 3-way merge. A row with a modify-modify conflict at
-** the row level still merges cleanly IF ours and theirs touched
-** different columns. For each field, pick the side that changed
-** (vs base); if both changed, merge only if the values match.
-** Returns NULL on any unresolvable field, pushing the row into the
-** conflict table. */
 static u8 *tryCellMerge(
   const u8 *pBase, int nBase,
   const u8 *pOurs, int nOurs,
@@ -358,16 +326,13 @@ static u8 *tryCellMerge(
   int nfMax, i;
   u8 *result = 0;
 
-
   if(parseRecordFields(pBase, nBase, &aBase, &nfBase)<0) goto fail;
   if(parseRecordFields(pOurs, nOurs, &aOurs, &nfOurs)<0) goto fail;
   if(parseRecordFields(pTheirs, nTheirs, &aTheirs, &nfTheirs)<0) goto fail;
 
-
   nfMax = nfBase;
   if(nfOurs > nfMax) nfMax = nfOurs;
   if(nfTheirs > nfMax) nfMax = nfTheirs;
-
 
   {
     MergeWinner *winners;
@@ -421,10 +386,6 @@ static u8 *tryCellMerge(
 
         winners[i].pRec = pTheirs; winners[i].pField = &aTheirs[i];
       }else{
-        /* Both sides dropped this field (baseHas && !oursHas &&
-        ** !theirsHas), or the impossible (0,0,0) case. Field-level
-        ** merge can't represent a dropped field in the output —
-        ** fall back to row-level conflict handling. */
         sqlite3_free(winners); goto fail;
       }
     }
@@ -446,13 +407,6 @@ fail:
   return 0;
 }
 
-/* The mutator starts from oursRoot, so LEFT_* (our-side-only)
-** changes are already baked into the starting tree and must NOT be
-** re-applied. Only RIGHT_* changes (theirs-only) need to be
-** inserted/deleted on top. CONVERGENT is a no-op for the same
-** reason. CONFLICT_MM first tries field-level merge via
-** tryCellMerge — non-overlapping field edits auto-resolve — and
-** falls through to CONFLICT_DM (conflict record) if cells overlap. */
 static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   RowMergeCtx *ctx = (RowMergeCtx*)pCtx;
   int rc = SQLITE_OK;
@@ -469,7 +423,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pChange->pTheirVal, pChange->nTheirVal);
-      /* Apply add to each secondary index. */
       if( rc==SQLITE_OK && ctx->nIndexes>0
        && pChange->pTheirVal && pChange->nTheirVal>0 ){
         int ix;
@@ -493,7 +446,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       rc = prollyMutMapInsert(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey,
           pChange->pTheirVal, pChange->nTheirVal);
-      /* Update each index: delete old entry, insert new. */
       if( rc==SQLITE_OK && ctx->nIndexes>0 ){
         int ix;
         for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
@@ -528,7 +480,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
 
       rc = prollyMutMapDelete(ctx->pEdits,
           pChange->pKey, pChange->nKey, pChange->intKey);
-      /* Delete from each index. */
       if( rc==SQLITE_OK && ctx->nIndexes>0
        && pChange->pBaseVal && pChange->nBaseVal>0 ){
         int ix;
@@ -569,8 +520,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         rc = prollyMutMapInsert(ctx->pEdits,
             pChange->pKey, pChange->nKey, pChange->intKey,
             pMerged, nMerged);
-        /* Cell merge resolved: update indexes with the merged record.
-        ** Delete base entry, insert merged entry. */
         if( rc==SQLITE_OK && ctx->nIndexes>0 ){
           int ix;
           for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
@@ -660,26 +609,6 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
   return rc;
 }
 
-/* Return 1 if the table merge can take the tree-walking fast-merge
-** path; 0 if any of the disqualifying conditions hold.
-**
-** Disqualifying conditions, any one of which forces the row-by-row path:
-**   1. Either side's schema hash diverges from the ancestor — a wholesale
-**      subtree splice can't reconcile encoding differences.
-**   2. Any secondary index — fast-merge would have to drive parallel
-**      index edits per row, defeating the purpose.
-**   3. CHECK constraints — splicing in theirs's rows wholesale skips
-**      CHECK evaluation on the spliced range.
-**   4. FK with non-NO-ACTION referential actions, on either parent or
-**      child side — CASCADE/SET NULL/SET DEFAULT/RESTRICT need per-row
-**      trigger semantics. Plain NO-ACTION FKs are still safe because
-**      they're enforced by the merge_constraints post-pass against the
-**      finished tree regardless of how it was built.
-**
-** Conservative on errors: any unrecognized state returns ineligible.
-** False negatives (saying ineligible when actually OK) just cost perf;
-** false positives are wrong answers, so the gate stays strict.
-*/
 static int canFastMerge(
   sqlite3 *db,
   const char *zName,
@@ -751,7 +680,6 @@ static int mergeTableRows(
   rc = prollyMutMapInit(ctx.pEdits, ctx.isIntKey);
   if( rc!=SQLITE_OK ){ sqlite3_free(ctx.pEdits); return rc; }
 
-  /* Initialize a mutmap for each index. */
   for(i=0; i<nIndexes; i++){
     aIndexes[i].pEdits = sqlite3_malloc(sizeof(ProllyMutMap));
     if( !aIndexes[i].pEdits ){ rc = SQLITE_NOMEM; goto merge_err; }
@@ -759,11 +687,9 @@ static int mergeTableRows(
     if( rc!=SQLITE_OK ) goto merge_err;
   }
 
-
   rc = prollyThreeWayDiff(cs, cache, pAncRoot, pOursRoot, pTheirsRoot,
                           flags, rowMergeCallback, &ctx);
   if( rc!=SQLITE_OK ) goto merge_err;
-
 
   if( !prollyMutMapIsEmpty(ctx.pEdits) ){
     memset(&mut, 0, sizeof(mut));
@@ -780,7 +706,6 @@ static int mergeTableRows(
     memcpy(pMergedRoot, pOursRoot, sizeof(ProllyHash));
   }
 
-  /* Flush each index's accumulated edits. */
   for(i=0; i<nIndexes && rc==SQLITE_OK; i++){
     if( !prollyMutMapIsEmpty(aIndexes[i].pEdits) ){
       ProllyMutator idxMut;
@@ -789,7 +714,7 @@ static int mergeTableRows(
       idxMut.pCache = cache;
       memcpy(&idxMut.oldRoot, &aIndexes[i].oursRoot, sizeof(ProllyHash));
       idxMut.pEdits = aIndexes[i].pEdits;
-      idxMut.flags = 0;  /* blob keys */
+      idxMut.flags = 0;
       rc = prollyMutateFlush(&idxMut);
       if( rc==SQLITE_OK ){
         memcpy(&aIndexes[i].mergedRoot, &idxMut.newRoot, sizeof(ProllyHash));
@@ -896,12 +821,10 @@ static int parseColumns(
 
   if( !zSql ) return SQLITE_OK;
 
-
   p = zSql;
   while( *p && *p!='(' ) p++;
   if( *p!='(' ) return SQLITE_CORRUPT;
   p++;
-
 
   pEnd = p;
   depth = 1;
@@ -913,7 +836,6 @@ static int parseColumns(
   if( depth!=0 ) return SQLITE_CORRUPT;
   pEnd--;
 
-
   segStart = p;
   depth = 0;
   while( p <= pEnd ){
@@ -924,13 +846,11 @@ static int parseColumns(
       char *zTrimmed;
       int len;
 
-
       while( s<e && isspace((unsigned char)*s) ) s++;
       while( e>s && isspace((unsigned char)*(e-1)) ) e--;
 
       len = (int)(e - s);
       if( len > 0 ){
-
 
         int isConstraint = 0;
         {
@@ -968,7 +888,6 @@ static int parseColumns(
           }
           memcpy(zTrimmed, s, len);
           zTrimmed[len] = 0;
-
 
           {
             char *zName;
@@ -1101,9 +1020,6 @@ static int trySchemaColumnMerge(
   rc = parseColumns(zTheirsSql, &aTheirs, &nTheirs);
   if( rc!=SQLITE_OK ){ freeColumns(aAnc, nAnc); freeColumns(aOurs, nOurs); return rc; }
 
-
-
-
   for(i=0; i<nTheirs; i++){
     ParsedColumn *ancCol = findColumn(aAnc, nAnc, aTheirs[i].zName);
     if( !ancCol ){
@@ -1172,7 +1088,6 @@ static int trySchemaColumnMerge(
     }
   }
 
-
   for(i=0; i<nOurs; i++){
     ParsedColumn *ancCol = findColumn(aAnc, nAnc, aOurs[i].zName);
     if( ancCol ){
@@ -1196,7 +1111,6 @@ static int trySchemaColumnMerge(
     }
 
   }
-
 
   if( nAdd > 0 ){
     *pUseTheirSchema = 0;
@@ -1961,13 +1875,6 @@ static int tryResolveSchemaDivergence(
   return SQLITE_OK;
 }
 
-/* Pass 1: walk OUR side, resolving each table against anc/theirs.
-** For every "ours" table, determine whether row-merge is needed and
-** invoke mergeTableRows; any rows that can't auto-merge become
-** conflict entries. Table iTable==1 (the catalog itself) is deferred
-** to the end so schema actions collected earlier can influence its
-** merge decision. Pass 2 picks up any tables that exist in theirs
-** but not ours. */
 static int mergeCatalogPass1(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
@@ -1997,12 +1904,10 @@ static int mergeCatalogPass1(
     struct TableEntry *ancEntry;
     struct TableEntry *theirsEntry;
 
-
     if( aOurs[i].iTable==1 ){
       iTable1Idx = i;
       continue;
     }
-
 
     if( !zName ){
       SchemaEntry *pOurSe = findSchemaEntryByRootpage(
@@ -2019,16 +1924,10 @@ static int mergeCatalogPass1(
             pOurSe->zType, pOurSe->zName, pOurSe->zTblName);
         goto do_merge_entry;
       }
-      /* Nameless catalog entry — secondary index. Three-way merge
-      ** by iTable number. With PK-suffix sort keys, the three-way
-      ** merge handles non-conflict cases correctly. For conflicts,
-      ** the parent table's mergeTableRows overwrites the root with
-      ** the incrementally-computed result. */
       ancEntry = findTableEntry(aAnc, nAnc, aOurs[i].iTable);
       theirsEntry = findTableEntry(aTheirs, nTheirs, aOurs[i].iTable);
       goto do_merge_entry;
     }
-
 
     ancEntry = findTableByName(aAnc, nAnc, zName);
     theirsEntry = findTableByName(aTheirs, nTheirs, zName);
@@ -2087,7 +1986,6 @@ do_merge_entry:
               aAncSchema, nAncSchema, aTheirsSchema, nTheirsSchema, zSchemaMergeName);
         }
 
-
         if( ourSchemaChanged && theirSchemaChanged
          && (bNamedSchemaObject
              || prollyHashCompare(&aOurs[i].schemaHash,
@@ -2108,8 +2006,6 @@ do_merge_entry:
             int nConflicts = 0;
             struct ConflictRow *aConflictRows = 0;
 
-            /* Collect secondary indexes for this table so they can
-            ** be updated incrementally during the row merge. */
             MergeIndexInfo *aIdxInfo = 0;
             int nIdxInfo = 0;
             if( zName && db ){
@@ -2130,7 +2026,7 @@ do_merge_entry:
                         memcpy(&mi->oursRoot, &oursIdx->root, sizeof(ProllyHash));
                         mi->nColumn = pIdx->nKeyCol;
                         mi->aiColumn = pIdx->aiColumn;
-                        mi->pKeyInfo = 0; /* BINARY collation; NOCASE TBD */
+                        mi->pKeyInfo = 0;
                         nIdxInfo++;
                       }
                     }
@@ -2139,11 +2035,6 @@ do_merge_entry:
               }
             }
 
-            /* Try the tree-walking fast merge first when the
-            ** predicate says it's safe. On *pHandled=0, fall through
-            ** to the row-by-row path. The predicate guarantees no
-            ** secondary indexes, so the fast path doesn't need to
-            ** drive the aIdxInfo array. */
             if( canFastMerge(db, zName,
                              !ourSchemaChanged && !theirSchemaChanged) ){
               int handled = 0;
@@ -2160,7 +2051,6 @@ do_merge_entry:
                 aConflictRows = 0;
                 goto post_merge_table_rows;
               }
-              /* Not handled — fall through to row path. */
             }
 
             rc = mergeTableRows(db, &ancEntry->root, &aOurs[i].root,
@@ -2170,7 +2060,6 @@ do_merge_entry:
 
 post_merge_table_rows:;
 
-            /* Store merged index roots back into aMerged catalog. */
             if( rc==SQLITE_OK ){
               int ix;
               for(ix=0; ix<nIdxInfo; ix++){
@@ -2220,7 +2109,6 @@ post_merge_table_rows:;
       }
     }
   }
-
 
   if( iTable1Idx >= 0 ){
     struct TableEntry *ancEntry = findTableEntry(aAnc, nAnc, 1);
@@ -2373,8 +2261,6 @@ static int mergeCatalogPass2(
         continue;
       }
 
-      /* Nameless entry (secondary index). If ours doesn't have this
-      ** iTable, it's a new index from theirs — add it. */
       if( !findTableEntry(aOurs, nOurs, aTheirs[i].iTable) ){
         struct TableEntry newEntry = aTheirs[i];
         int j, conflict = 0;
@@ -2565,11 +2451,8 @@ int doltliteMergeCatalogs(
     if( rc!=SQLITE_OK ) goto merge_cleanup;
   }
 
-
   iNextMerged = iNextOurs > iNextTheirs ? iNextOurs : iNextTheirs;
   bDisjointSchemaChanges = catalogHasDisjointSchemaChanges(db, ancestor, ours, theirs);
-
-
 
   rc = mergeCatalogPass1(db, aAnc, nAnc, aOurs, nOurs, aTheirs, nTheirs,
                           aAncSchema, nAncSchema,
@@ -2583,24 +2466,11 @@ int doltliteMergeCatalogs(
                           bDisjointSchemaChanges,
                           bPreferOurMaster);
   if( rc!=SQLITE_OK ){
-    /* pass1 shallow-copies zName pointers from aOurs into aMerged.
-    ** The strdup loop below (which breaks the aliasing) hasn't run
-    ** yet, so NULL out the shallow copies before merge_cleanup frees
-    ** both arrays — otherwise it's a double-free. */
     int k;
     for(k=0; k<nMerged; k++) aMerged[k].zName = 0;
     goto merge_cleanup;
   }
 
-  /* pass1 shallow-copies TableEntry structs from aOurs into aMerged,
-  ** which means zName pointers are aliased — aMerged[k].zName ==
-  ** aOurs[i].zName for some i. serializeMergedCatalog below frees
-  ** those strings via doltliteResolveTableNumber's refresh step,
-  ** leaving aOurs with dangling pointers. Break the aliasing here
-  ** by strdup'ing every aMerged zName so aMerged owns its own
-  ** storage and all four catalogs can be cleaned up independently
-  ** via doltliteFreeCatalog. pass2 already strdup's on append, so
-  ** this loop only needs to fix pass1's output. */
   {
     int k;
     for(k=0; k<nMerged; k++){
@@ -2631,7 +2501,6 @@ int doltliteMergeCatalogs(
   rc = serializeMergedCatalog(db, ours, aMerged, nMerged, iNextMerged,
                               aTheirsSchema, nTheirsSchema, pMergedHash);
   if( pnConflicts ) *pnConflicts = totalConflicts;
-
 
   if( totalConflicts>0 && nConflictTables>0 && rc==SQLITE_OK ){
     recordMergeConflicts(db, aConflictTables, nConflictTables);

@@ -3,10 +3,6 @@
 
 #include "chunk_store.h"
 
-/* Backend-agnostic remote protocol. Every remote (fs, http, local)
-** has the same lifecycle: xPutChunk/xSetRefs buffer pending writes,
-** then xCommit flushes them as one atomic batch. The dispatcher
-** uses xHasChunks to skip chunks already present on the remote. */
 typedef struct DoltliteRemote DoltliteRemote;
 struct DoltliteRemote {
   int (*xGetChunk)(DoltliteRemote*, const ProllyHash*, u8**, int*);

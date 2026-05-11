@@ -20,12 +20,10 @@ struct DoltliteLogVtab {
 typedef struct DoltliteLogCursor DoltliteLogCursor;
 struct DoltliteLogCursor {
   sqlite3_vtab_cursor base;
-  /* BFS queue */
   ProllyHash *aQueue;
   int qHead, qTail, qAlloc;
   ProllyHashSet visited;
   int visitedInit;
-  /* Current row */
   ProllyHash curHash;
   char zHex[PROLLY_HASH_SIZE*2+1];
   DoltliteCommit curCommit;
@@ -99,8 +97,6 @@ static int doltliteLogClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
-/* Advance the BFS by one commit. Sets hasRow=1 on success, hasRow=0
-** when the graph is exhausted. */
 static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
   int i, rc;
 
@@ -122,7 +118,6 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
     doltliteHashToHex(&cur, pCur->zHex);
     pCur->hasRow = 1;
 
-    /* Enqueue parents for future visits. */
     for(i = 0; i < doltliteCommitParentCount(&pCur->curCommit); i++){
       const ProllyHash *pParent = doltliteCommitParentHash(&pCur->curCommit, i);
       if( !pParent || prollyHashIsEmpty(pParent) ) continue;
@@ -168,7 +163,6 @@ static int doltliteLogFilter(
   doltliteGetSessionHead(pVtab->db, &head);
   if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
 
-  /* Initialize BFS state. */
   rc = prollyHashSetInit(&pCur->visited, 64);
   if( rc!=SQLITE_OK ) return rc;
   pCur->visitedInit = 1;
@@ -179,7 +173,6 @@ static int doltliteLogFilter(
   pCur->aQueue[0] = head;
   pCur->qTail = 1;
 
-  /* Prime the first row. */
   return logAdvance(pCur, pVtab->db);
 }
 

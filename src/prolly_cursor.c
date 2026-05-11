@@ -1,11 +1,4 @@
 
-/* Cursor navigation maintains aLevel[0..iLevel] as the path from
-** root (0) to the current leaf (iLevel). Each level holds a
-** cache-acquired ProllyCacheEntry and an idx into its node. Every
-** load via loadNode takes a cache reference; every level popped
-** during ascent must call prollyCacheRelease on its entry, otherwise
-** the cache leaks and the entry's pointers dangle the next time
-** something else evicts it. */
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_cursor.h"
@@ -31,7 +24,6 @@ static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
   if( rc!=SQLITE_OK ){
     return rc;
   }
-
 
   pEntry = prollyCachePut(cur->pCache, hash, pData, nData, &rc);
   sqlite3_free(pData);
@@ -212,9 +204,6 @@ int prollyCursorNext(ProllyCursor *cur){
     return SQLITE_OK;
   }
 
-  /* Leaf exhausted: walk up the path releasing cache refs until an
-  ** ancestor still has an unconsumed child, then descend back to the
-  ** leftmost leaf of the next subtree. */
   level = cur->iLevel;
   while( level>0 ){
     prollyCacheRelease(cur->pCache, cur->aLevel[level].pEntry);
@@ -231,7 +220,6 @@ int prollyCursorNext(ProllyCursor *cur){
       return SQLITE_OK;
     }
   }
-
 
   cur->eState = PROLLY_CURSOR_EOF;
   return SQLITE_OK;
@@ -264,16 +252,11 @@ int prollyCursorPrev(ProllyCursor *cur){
     }
   }
 
-
   cur->eState = PROLLY_CURSOR_EOF;
   return SQLITE_OK;
 }
 
 int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes){
-  /* INT keys live on disk as sortable 8-byte big-endian bytes (see
-  ** prollyNodeIntKey/prollyEncodeIntKey), so an int seek is just a
-  ** blob seek over the encoded form — same algorithm, no separate
-  ** descent path. */
   u8 keyBuf[8];
   prollyEncodeIntKey(intKey, keyBuf);
   return prollyCursorSeekBlob(cur, keyBuf, 8, pRes);
@@ -293,7 +276,6 @@ int prollyCursorSeekBlob(ProllyCursor *cur,
     *pRes = -1;
     return SQLITE_OK;
   }
-
 
   while( pEntry->node.level>0 ){
     int searchRes;

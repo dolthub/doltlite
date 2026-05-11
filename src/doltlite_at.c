@@ -44,7 +44,6 @@ struct AtCursor {
   sqlite3_vtab_cursor base;
   ProllyCursor tblCur;
   int tblCurOpen;
-  /* Current row (copied from cursor) */
   i64 intKey;
   u8 *pVal; int nVal;
   int hasRow;
@@ -65,8 +64,6 @@ static void atCursorReset(AtCursor *c){
   c->iRowid = 0;
 }
 
-/* Capture current cursor row. The prolly cursor's value pointer
-** may be invalidated on next step, so we copy the bytes. */
 static int atCaptureRow(AtCursor *c){
   const u8 *pVal; int nVal;
   sqlite3_free(c->pVal);
@@ -214,12 +211,6 @@ static int atFilter(sqlite3_vtab_cursor *cur,
   rc=doltliteLoadCommit(db,&commitHash,&commit);
   if(rc!=SQLITE_OK) return rc;
 
-  /* When the ref is a branch name (not a commit hash or tag), prefer
-  ** its working catalog over the committed catalog IF the working set
-  ** is still based on HEAD — that lets dolt_at_<table>@branch show
-  ** staged-but-uncommitted rows on that branch. If the working set
-  ** points at a different commit (mid-merge, stale WIP) fall through
-  ** and use the committed catalog so the output still makes sense. */
   {
     ProllyHash branchCommit;
     int isBranch = (chunkStoreFindBranch(cs,zRef,&branchCommit)==SQLITE_OK
@@ -254,7 +245,6 @@ at_find_root:
 
   if( prollyHashIsEmpty(&tableRoot) ) return SQLITE_OK;
 
-  /* Open streaming cursor on the table at this commit. */
   prollyCursorInit(&c->tblCur, cs, pCache, &tableRoot, flags);
   rc = prollyCursorFirst(&c->tblCur, &res);
   if( rc!=SQLITE_OK ){

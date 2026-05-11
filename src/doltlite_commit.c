@@ -14,17 +14,6 @@
   (u64)(p)[0] | ((u64)(p)[1]<<8) | ((u64)(p)[2]<<16) | ((u64)(p)[3]<<24) | \
   ((u64)(p)[4]<<32) | ((u64)(p)[5]<<40) | ((u64)(p)[6]<<48) | ((u64)(p)[7]<<56)))
 
-/* Commit v2 wire format, little-endian:
-**   [version:1][nParents:1]
-**   [parent_hash:20]*nParents
-**   [catalog_hash:20]
-**   [timestamp:8]
-**   [name_len:2][name:N]
-**   [email_len:2][email:N]
-**   [msg_len:2][msg:N]
-** The hash is content-addressed, so any layout change re-hashes
-** every commit in the history. Chunk classifier keys on version
-** byte — do NOT reuse DOLTLITE_COMMIT_V2 for a new format. */
 int doltliteCommitSerialize(const DoltliteCommit *c, u8 **ppOut, int *pnOut){
   int nName = c->zName ? (int)strlen(c->zName) : 0;
   int nEmail = c->zEmail ? (int)strlen(c->zEmail) : 0;
@@ -48,9 +37,7 @@ int doltliteCommitSerialize(const DoltliteCommit *c, u8 **ppOut, int *pnOut){
   if( !buf ) return SQLITE_NOMEM;
   p = buf;
 
-
   *p++ = DOLTLITE_COMMIT_V2;
-
 
   *p++ = (u8)nPar;
   if( nPar > 0 && c->nParents > 0 ){
@@ -64,20 +51,15 @@ int doltliteCommitSerialize(const DoltliteCommit *c, u8 **ppOut, int *pnOut){
     p += PROLLY_HASH_SIZE;
   }
 
-
   memcpy(p, c->catalogHash.data, PROLLY_HASH_SIZE); p += PROLLY_HASH_SIZE;
 
-
   DLC_PUT_I64(p, c->timestamp); p += 8;
-
 
   DLC_PUT_U16(p, (u16)nName); p += 2;
   if( nName>0 ){ memcpy(p, c->zName, nName); p += nName; }
 
-
   DLC_PUT_U16(p, (u16)nEmail); p += 2;
   if( nEmail>0 ){ memcpy(p, c->zEmail, nEmail); p += nEmail; }
-
 
   DLC_PUT_U16(p, (u16)nMsg); p += 2;
   if( nMsg>0 ){ memcpy(p, c->zMessage, nMsg); p += nMsg; }
@@ -119,9 +101,7 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
     memcpy(c->catalogHash.data, p, PROLLY_HASH_SIZE); p += PROLLY_HASH_SIZE;
   }
 
-
   c->timestamp = DLC_GET_I64(p); p += 8;
-
 
   nName = DLC_GET_U16(p); p += 2;
   if( p + nName > data + nData ) return SQLITE_CORRUPT;
@@ -131,7 +111,6 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
   c->zName[nName] = 0;
   p += nName;
 
-
   nEmail = DLC_GET_U16(p); p += 2;
   if( p + nEmail > data + nData ){ doltliteCommitClear(c); return SQLITE_CORRUPT; }
   c->zEmail = sqlite3_malloc(nEmail + 1);
@@ -139,7 +118,6 @@ int doltliteCommitDeserialize(const u8 *data, int nData, DoltliteCommit *c){
   if( nEmail>0 ) memcpy(c->zEmail, p, nEmail);
   c->zEmail[nEmail] = 0;
   p += nEmail;
-
 
   nMsg = DLC_GET_U16(p); p += 2;
   if( p + nMsg > data + nData ){ doltliteCommitClear(c); return SQLITE_CORRUPT; }

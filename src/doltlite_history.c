@@ -43,19 +43,15 @@ struct HistVtab {
 typedef struct HistCursor HistCursor;
 struct HistCursor {
   sqlite3_vtab_cursor base;
-  /* BFS state for commit graph */
   ProllyHash *aQueue;
   int qHead, qTail, qAlloc;
   ProllyHashSet visited, queued;
   int visitedInit, queuedInit;
-  /* Current commit metadata */
   char zCommitHex[PROLLY_HASH_SIZE*2+1];
   char *zCommitter;
   i64 commitDate;
-  /* Table row cursor at current commit */
   ProllyCursor tblCur;
   int tblCurOpen;
-  /* Current row (copied from cursor) */
   i64 intKey;
   u8 *pVal; int nVal;
   int hasRow;
@@ -86,9 +82,6 @@ static void htCursorReset(HistCursor *c){
   c->iRowid = 0;
 }
 
-/* Capture current table-cursor row into the cursor struct.
-** The prolly cursor's value pointer may be invalidated on next
-** step, so we copy the bytes. */
 static int htCaptureRow(HistCursor *c){
   const u8 *pVal; int nVal;
   sqlite3_free(c->pVal);
@@ -105,9 +98,6 @@ static int htCaptureRow(HistCursor *c){
   return SQLITE_OK;
 }
 
-/* Open a table cursor at the given commit and position it on the
-** first row. Returns SQLITE_OK with tblCurOpen=1 if rows exist,
-** or tblCurOpen=0 if the table is empty at this commit. */
 static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     const char *zTableName, const ProllyHash *pCommitHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -121,7 +111,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   rc = doltliteLoadCommit(db, pCommitHash, &commit);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Save commit metadata for column output. */
   doltliteHashToHex(pCommitHash, c->zCommitHex);
   sqlite3_free(c->zCommitter);
   c->zCommitter = sqlite3_mprintf("%s", commit.zName ? commit.zName : "");
@@ -131,7 +120,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     return SQLITE_NOMEM;
   }
 
-  /* Enqueue parents for later BFS visits. */
   {
     int i;
     for(i=0; i<doltliteCommitParentCount(&commit); i++){
@@ -158,7 +146,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     }
   }
 
-  /* Find the table in this commit's catalog. */
   rc = doltliteLoadCatalog(db, &commit.catalogHash, &aT, &nT, 0);
   doltliteCommitClear(&commit);
   if( rc!=SQLITE_OK ) return rc;
@@ -166,11 +153,10 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   if( doltliteFindTableRootByName(aT, nT, zTableName, &tableRoot, &flags)
       !=SQLITE_OK || prollyHashIsEmpty(&tableRoot) ){
     doltliteFreeCatalog(aT, nT);
-    return SQLITE_OK; /* Table doesn't exist at this commit — skip. */
+    return SQLITE_OK;
   }
   doltliteFreeCatalog(aT, nT);
 
-  /* Open prolly cursor on the table. */
   prollyCursorInit(&c->tblCur, cs, pCache, &tableRoot, flags);
   rc = prollyCursorFirst(&c->tblCur, &res);
   if( rc!=SQLITE_OK ){
@@ -178,7 +164,6 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
     return rc;
   }
   if( res ){
-    /* Table exists but is empty. */
     prollyCursorClose(&c->tblCur);
     return SQLITE_OK;
   }
@@ -186,12 +171,9 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
   return SQLITE_OK;
 }
 
-/* Advance to the next row. Tries the table cursor first; if exhausted,
-** moves to the next commit in BFS order and opens a new table cursor. */
 static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
   int rc;
 
-  /* If we have an open table cursor, try to advance within it. */
   if( c->tblCurOpen ){
     rc = prollyCursorNext(&c->tblCur);
     if( rc!=SQLITE_OK ){
@@ -202,12 +184,10 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
     if( prollyCursorIsValid(&c->tblCur) ){
       return htCaptureRow(c);
     }
-    /* Exhausted this commit's rows. */
     prollyCursorClose(&c->tblCur);
     c->tblCurOpen = 0;
   }
 
-  /* Walk BFS to find the next commit that has rows. */
   while( c->qHead < c->qTail ){
     ProllyHash cur = c->aQueue[c->qHead++];
 
@@ -221,10 +201,8 @@ static int htAdvance(HistCursor *c, sqlite3 *db, const char *zTableName){
     if( c->tblCurOpen ){
       return htCaptureRow(c);
     }
-    /* Table didn't exist or was empty at this commit — continue BFS. */
   }
 
-  /* BFS exhausted. */
   c->hasRow = 0;
   return SQLITE_OK;
 }
@@ -295,7 +273,6 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   doltliteGetSessionHead(v->db, &head);
   if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
 
-  /* Initialize BFS state. */
   rc = prollyHashSetInit(&c->visited, 64);
   if( rc!=SQLITE_OK ) return rc;
   c->visitedInit = 1;
@@ -312,7 +289,6 @@ static int htFilter(sqlite3_vtab_cursor *cur,
   rc = prollyHashSetAdd(&c->queued, &head);
   if( rc!=SQLITE_OK ) return rc;
 
-  /* Prime the first row. */
   return htAdvance(c, v->db, v->zTableName);
 }
 

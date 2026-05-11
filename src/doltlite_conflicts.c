@@ -480,7 +480,6 @@ static int cfrFilter(sqlite3_vtab_cursor *cur, int n, const char *s, int a, sqli
   rc = loadAllConflicts(vt->db, doltliteGetChunkStore(vt->db), &c->aTables, &c->nTables);
   if( rc!=SQLITE_OK ) return rc;
 
-
   for(i=0; i<c->nTables; i++){
     if( c->aTables[i].zName && strcmp(c->aTables[i].zName, vt->zTableName)==0 ){
       c->iTableIdx = i;
@@ -501,10 +500,6 @@ static int cfrEof(sqlite3_vtab_cursor *cur){
   return c->iRow >= c->aTables[c->iTableIdx].nConflicts;
 }
 
-/* Thin wrapper around doltliteResultUserCol kept for call-site
-** readability — the cfr column projection has four call sites
-** (base, ours, theirs, and the diff-type bookkeeping) that all
-** want the same argument order. */
 static void cfrEmitRecordCol(
   sqlite3_context *ctx,
   const u8 *pRec, int nRec,
@@ -524,10 +519,6 @@ static const char *cfrDiffType(const u8 *pBase, int nBase,
   return "modified";
 }
 
-/* For row-wise DELETE on dolt_conflicts_<table>, the vtab rowid must uniquely
-** identify a conflict row even when the user PK is not SQLite's integer
-** rowid. Use the raw serialized prolly key when present; integer PK conflicts
-** continue to use intKey directly. */
 static sqlite3_int64 cfrConflictRowid(const struct ConflictRow *cr){
   if( cr->nKey>0 && cr->pKey ){
     u64 h = 1469598103934665603ULL;
@@ -553,7 +544,6 @@ static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
   if( c->iTableIdx < 0 ) return SQLITE_OK;
   if( c->iRow >= c->aTables[c->iTableIdx].nConflicts ) return SQLITE_OK;
   cr = &c->aTables[c->iTableIdx].aRows[c->iRow];
-
 
   nUserCols = v->cols.nCol;
   colBaseStart  = 1;
@@ -625,7 +615,6 @@ static int cfrUpdate(
 
   (void)pRowid;
 
-
   if( nArg != 1 ){
     pVtab->zErrMsg = sqlite3_mprintf("only DELETE is supported on conflict tables");
     return SQLITE_ERROR;
@@ -633,10 +622,8 @@ static int cfrUpdate(
 
   deleteRowid = sqlite3_value_int64(apArg[0]);
 
-
   rc = loadAllConflicts(v->db, cs, &aTables, &nTables);
   if( rc!=SQLITE_OK ) return rc;
-
 
   for(i=0; i<nTables; i++){
     if( !aTables[i].zName || strcmp(aTables[i].zName, v->zTableName)!=0 )
@@ -646,11 +633,9 @@ static int cfrUpdate(
       if( cfrConflictRowid(&aTables[i].aRows[j]) == deleteRowid ){
         removeConflictRow(&aTables[i], j);
 
-
         if( aTables[i].nConflicts == 0 ){
           removeConflictTable(aTables, &nTables, i);
         }
-
 
         rc = storeUpdatedConflicts(v->db, cs, aTables, nTables);
         freeConflictTables(aTables, nTables);
@@ -739,11 +724,6 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     return;
   }
 
-  /* --ours vs --theirs are asymmetric: "ours" is already in the
-  ** working set (the merge left our side intact and logged theirs in
-  ** the conflict entry), so we just drop the conflict table. "theirs"
-  ** below has to apply each entry's theirVal as a real row mutation
-  ** before dropping, otherwise the working set still has our value. */
   if( strcmp(zMode,"--ours")==0 ){
 
     for(i=0; i<nTables; i++){
@@ -785,7 +765,6 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     for(i=0; i<nTables; i++){
       if( !aTables[i].zName || strcmp(aTables[i].zName, zTable)!=0 ) continue;
       found = 1;
-
 
       for(j=0; j<aTables[i].nConflicts; j++){
         struct ConflictRow *cr = &aTables[i].aRows[j];

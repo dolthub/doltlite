@@ -34,10 +34,6 @@ static void remoteSqlStateClear(RemoteSqlState *p){
   memset(p, 0, sizeof(*p));
 }
 
-/* Snapshot enough session and ref state to undo a remote op mid-way.
-** dolt_clone/dolt_pull/dolt_fetch can fail partway through and leave
-** the working set pointing at chunks we're about to roll back —
-** this state is the snapshot we restore to if something errors. */
 static int remoteSqlStateSave(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
   int rc;
 
@@ -507,7 +503,6 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
 
-
     pRemote->xClose(pRemote);
     pRemote = 0;
 
@@ -596,14 +591,12 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-
   rc = chunkStoreFindTracking(cs, zRemoteName, zBranch, &trackingCommit);
   if( rc!=SQLITE_OK || prollyHashIsEmpty(&trackingCommit) ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
                               "tracking branch not found after fetch");
     return;
   }
-
 
   rc = chunkStoreFindBranch(cs, zBranch, &localCommit);
   if( rc!=SQLITE_OK ){
@@ -617,16 +610,11 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     localCommit = trackingCommit;
   }
 
-
   if( prollyHashCompare(&localCommit, &trackingCommit)==0 ){
     remoteSqlClearAndSucceed(ctx, &savedState);
     return;
   }
 
-
-  /* dolt_pull is fast-forward-only. A fast-forward is valid if the
-  ** local tip is any ancestor of the fetched tracking tip, not just
-  ** part of its first-parent chain. */
   {
     ProllyHash ancestor;
     rc = doltliteFindAncestor(db, &trackingCommit, &localCommit, &ancestor);
@@ -642,7 +630,6 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-
   if( strcmp(zBranch, doltliteGetSessionBranch(db))==0
    && doltliteHasUncommittedChanges(db) ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
@@ -657,7 +644,6 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-
   if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
     rc = remoteSqlResetSessionToCommit(db, 0, &trackingCommit);
     if( rc!=SQLITE_OK ){
@@ -666,7 +652,6 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       return;
     }
   }
-
 
   rc = remoteSqlPersistRefs(cs);
   if( rc!=SQLITE_OK ){
@@ -761,15 +746,12 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-
   rc = chunkStoreAddRemote(cs, "origin", zUrl);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
                               "failed to add origin remote");
     return;
   }
-
-
 
   {
     u8 *refsData = 0; int nRefsData = 0;
@@ -781,7 +763,6 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       sqlite3_free(refsData);
     }
   }
-
 
   {
     const char *zDefault = chunkStoreGetDefaultBranch(cs);

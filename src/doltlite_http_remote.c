@@ -1,10 +1,3 @@
-/* HTTP-backed DoltliteRemote backend for dolt_fetch/push/pull.
-** Intentionally simple — hand-rolled blocking sockets + HTTP/1.1
-** Connection: close, no keep-alive, no TLS. Upload chunks are
-** buffered until httpCommit() flushes them as one POST /chunks,
-** then /refs, then /commit; this matches the remotesrv transaction
-** protocol. Not production-ready (no retry, no HTTPS) — only used
-** by tests against a local doltlite_remotesrv. */
 
 #ifdef DOLTLITE_PROLLY
 
@@ -120,10 +113,8 @@ static int httpRequest(
   *ppResp = 0;
   *pnResp = 0;
 
-
   he = gethostbyname(zHost);
   if( !he ) return SQLITE_ERROR;
-
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if( fd < 0 ) return SQLITE_ERROR;
@@ -137,7 +128,6 @@ static int httpRequest(
     close(fd);
     return SQLITE_ERROR;
   }
-
 
   if( pBody && nBody > 0 ){
     nReqHdr = snprintf(aReqHdr, sizeof(aReqHdr),
@@ -157,7 +147,6 @@ static int httpRequest(
       zMethod, zPath, zHost);
   }
 
-
   rc = writeAll(fd, aReqHdr, nReqHdr);
   if( rc != SQLITE_OK ){ close(fd); return rc; }
   if( pBody && nBody > 0 ){
@@ -165,12 +154,10 @@ static int httpRequest(
     if( rc != SQLITE_OK ){ close(fd); return rc; }
   }
 
-
   rc = readUntilEof(fd, &pRaw, &nRaw);
   close(fd);
   fd = -1;
   if( rc != SQLITE_OK ) return rc;
-
 
   {
     int i;
@@ -191,7 +178,6 @@ static int httpRequest(
       }
     }
   }
-
 
   {
     int i;
@@ -219,7 +205,6 @@ static int httpRequest(
       sqlite3_free(pRaw);
       return SQLITE_OK;
     }
-
 
     {
       int nAvail = nRaw - bodyStart;
@@ -284,7 +269,6 @@ static int httpHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
 
   if( nHash <= 0 ) return SQLITE_OK;
 
-
   nReqBody = nHash * PROLLY_HASH_SIZE;
   pReqBody = sqlite3_malloc(nReqBody);
   if( !pReqBody ) return SQLITE_NOMEM;
@@ -306,7 +290,6 @@ static int httpHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
     sqlite3_free(pResp);
     return SQLITE_ERROR;
   }
-
 
   if( nResp >= nHash ){
     memcpy(aResult, pResp, nHash);
@@ -367,7 +350,6 @@ static int httpPutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
   u8 aLen[4];
   int rc;
 
-
   rc = uploadBufAppend(p, pHash->data, PROLLY_HASH_SIZE);
   if( rc != SQLITE_OK ) return rc;
 
@@ -421,7 +403,6 @@ static int httpGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
 static int httpSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
   HttpRemote *p = (HttpRemote*)pRemote;
 
-
   sqlite3_free(p->pPendingRefs);
   p->pPendingRefs = 0;
   p->nPendingRefs = 0;
@@ -443,7 +424,6 @@ static int httpCommit(DoltliteRemote *pRemote){
   int rc;
   char *zPath;
 
-
   if( p->pUploadBuf && p->nUploadBuf > 0 ){
     zPath = buildPath(p, "/chunks");
     if( !zPath ) return SQLITE_NOMEM;
@@ -456,7 +436,6 @@ static int httpCommit(DoltliteRemote *pRemote){
     if( rc != SQLITE_OK ) return rc;
     if( status != 200 && status != 204 ) return SQLITE_ERROR;
   }
-
 
   if( p->pPendingRefs && p->nPendingRefs > 0 ){
     pResp = 0; nResp = 0; status = 0;
@@ -472,7 +451,6 @@ static int httpCommit(DoltliteRemote *pRemote){
     if( status != 200 && status != 204 ) return SQLITE_ERROR;
   }
 
-
   {
     pResp = 0; nResp = 0; status = 0;
     zPath = buildPath(p, "/commit");
@@ -485,7 +463,6 @@ static int httpCommit(DoltliteRemote *pRemote){
     if( rc != SQLITE_OK ) return rc;
     if( status != 200 && status != 204 ) return SQLITE_ERROR;
   }
-
 
   sqlite3_free(p->pUploadBuf);
   p->pUploadBuf = 0;
@@ -521,11 +498,9 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
 
   if( !zUrl ) return 0;
 
-
   if( strncmp(zUrl, "http://", 7) != 0 ) return 0;
   zAfterScheme = zUrl + 7;
   zHostStart = zAfterScheme;
-
 
   zPortStart = 0;
   zPathStart = 0;
@@ -547,7 +522,6 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
 
   if( nHost <= 0 ) return 0;
 
-
   nUserPath = 0;
   if( zPathStart ){
     nUserPath = (int)strlen(zPathStart);
@@ -557,11 +531,9 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
     }
   }
 
-
   p = sqlite3_malloc(sizeof(HttpRemote));
   if( !p ) return 0;
   memset(p, 0, sizeof(HttpRemote));
-
 
   p->zHost = sqlite3_malloc(nHost + 1);
   if( !p->zHost ){
@@ -572,7 +544,6 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   p->zHost[nHost] = 0;
 
   p->port = port;
-
 
   nBasePath = nUserPath;
   if( nBasePath <= 0 ){
@@ -589,7 +560,6 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   }
   memcpy(p->zBasePath, zPathStart, nBasePath);
   p->zBasePath[nBasePath] = '\0';
-
 
   p->base.xGetChunk = httpGetChunk;
   p->base.xPutChunk = httpPutChunk;

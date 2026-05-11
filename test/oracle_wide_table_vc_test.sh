@@ -1,12 +1,4 @@
 #!/bin/bash
-#
-# Oracle tests: wide tables (50-200 columns) through VC operations.
-#
-# Exercises the MAX_RECORD_FIELDS=256 limit and field-level merge
-# on tables wider than the old 64-column limit.
-#
-# Usage: bash test/oracle_wide_table_vc_test.sh <doltlite>
-#
 
 set -u
 DOLTLITE="${1:?usage: $0 <doltlite>}"
@@ -22,13 +14,11 @@ fail_name() {
 
 dl() { "$DOLTLITE" "$1" "$2" 2>/dev/null; }
 
-# Helpers to generate column defs and values
 gen_cols() { local n=$1; for i in $(seq 1 $n); do echo -n "c$i INT"; [ $i -lt $n ] && echo -n ", "; done; }
 gen_vals() { local n=$1; for i in $(seq 1 $n); do echo -n "$i"; [ $i -lt $n ] && echo -n ","; done; }
 
 echo "=== Wide Table + Version Control Tests ==="
 
-# ── 1: 100-column commit + reopen ────────────────────────
 echo ""
 echo "--- 1: 100-column commit + reopen ---"
 DB="$TMPROOT/1.db"
@@ -41,7 +31,6 @@ R100=$(dl "$DB" "SELECT c100 FROM t WHERE id=1;")
 [ "$R65" = "65" ] && pass_name "1_c65" || fail_name "1_c65; got $R65"
 [ "$R100" = "100" ] && pass_name "1_c100" || fail_name "1_c100; got $R100"
 
-# ── 2: 100-column non-overlapping merge ──────────────────
 echo ""
 echo "--- 2: 100-column non-overlapping merge ---"
 DB="$TMPROOT/2.db"
@@ -51,7 +40,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1,
 [ "$(dl "$DB" "SELECT c50 FROM t WHERE id=1;")" = "50" ] && pass_name "2_unchanged" || fail_name "2_unchanged"
 [ "$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")" = "0" ] && pass_name "2_no_conflicts" || fail_name "2_no_conflicts"
 
-# ── 3: 100-column conflict merge ─────────────────────────
 echo ""
 echo "--- 3: 100-column conflict (same column both sides) ---"
 DB="$TMPROOT/3.db"
@@ -75,7 +63,6 @@ SQL
 [ "$CONF" = "1" ] && pass_name "3_conflict" || fail_name "3_conflict"
 [ "$(dl "$DB" "SELECT c50 FROM t WHERE id=1;")" = "2000" ] && pass_name "3_ours_wins" || fail_name "3_ours_wins"
 
-# ── 4: 200-column merge (near limit) ────────────────────
 echo ""
 echo "--- 4: 200-column non-overlapping merge ---"
 DB="$TMPROOT/4.db"
@@ -88,7 +75,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS200); INSERT INTO t VALUES
 [ "$(dl "$DB" "SELECT c200 FROM t WHERE id=1;")" = "333" ] && pass_name "4_c200" || fail_name "4_c200"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "4_integrity" || fail_name "4_integrity"
 
-# ── 5: Wide table cherry-pick ────────────────────────────
 echo ""
 echo "--- 5: 80-column cherry-pick ---"
 DB="$TMPROOT/5.db"
@@ -98,7 +84,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS80); INSERT INTO t VALUES(
 [ "$(dl "$DB" "SELECT c40 FROM t WHERE id=1;")" = "222" ] && pass_name "5_c40" || fail_name "5_c40"
 [ "$(dl "$DB" "SELECT c80 FROM t WHERE id=1;")" = "333" ] && pass_name "5_c80" || fail_name "5_c80"
 
-# ── 6: Wide table revert ────────────────────────────────
 echo ""
 echo "--- 6: 80-column revert ---"
 DB="$TMPROOT/6.db"
@@ -107,7 +92,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS80); INSERT INTO t VALUES(
 [ "$(dl "$DB" "SELECT c1 FROM t WHERE id=1;")" = "1" ] && pass_name "6_c1_reverted" || fail_name "6_c1_reverted"
 [ "$(dl "$DB" "SELECT c80 FROM t WHERE id=1;")" = "80" ] && pass_name "6_c80_reverted" || fail_name "6_c80_reverted"
 
-# ── 7: Wide table with index through merge ───────────────
 echo ""
 echo "--- 7: 80-column table with index ---"
 DB="$TMPROOT/7.db"
@@ -116,7 +100,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS80); CREATE INDEX idx ON t
 [ "$(dl "$DB" "SELECT c40 FROM t WHERE id=1;")" = "999" ] && pass_name "7_updated" || fail_name "7_updated"
 [ "$(dl "$DB" "PRAGMA integrity_check;")" = "ok" ] && pass_name "7_integrity" || fail_name "7_integrity"
 
-# ── 8: Wide table merge with multiple rows ───────────────
 echo ""
 echo "--- 8: 100-column, multiple rows, both sides add ---"
 DB="$TMPROOT/8.db"
@@ -126,7 +109,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1,
 [ "$(dl "$DB" "SELECT c50 FROM t WHERE id=4;")" = "80" ] && pass_name "8_main_row" || fail_name "8_main_row"
 [ "$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")" = "0" ] && pass_name "8_no_conflicts" || fail_name "8_no_conflicts"
 
-# ── 9: Convergent merge on wide table ────────────────────
 echo ""
 echo "--- 9: 100-column convergent merge ---"
 DB="$TMPROOT/9.db"
@@ -134,7 +116,6 @@ dl "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, $COLS); INSERT INTO t VALUES(1,
 [ "$(dl "$DB" "SELECT count(*) FROM dolt_conflicts;")" = "0" ] && pass_name "9_no_conflict" || fail_name "9_no_conflict"
 [ "$(dl "$DB" "SELECT c99 FROM t WHERE id=1;")" = "777" ] && pass_name "9_converged" || fail_name "9_converged"
 
-# ── 10: Reopen after wide merge ──────────────────────────
 echo ""
 echo "--- 10: Reopen after 100-column merge ---"
 DB="$TMPROOT/10.db"

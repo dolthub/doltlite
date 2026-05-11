@@ -8,15 +8,10 @@
 
 #include <string.h>
 
-/* Internal sentinel returned by helpers when this case isn't handled
-** by the fast path. Translated to *pHandled=0 at the public API. Never
-** propagates out of this file. SQLITE_DONE (101) is reused because no
-** other helper here returns it for any other reason. */
+/* Private sentinel: fast merge could not prove the result, so caller should
+** fall back to the full row-wise merge path without treating it as an error. */
 #define FM_FALLBACK  SQLITE_DONE
 
-/* Local helper: compare two byte sequences as keys (memcmp + length tiebreak).
-** Mirrors compareKeys() in prolly_mutate.c — duplicated rather than exposed
-** to keep the merge code self-contained. */
 static int fmKeyCmp(const u8 *pA, int nA, const u8 *pB, int nB){
   int n = nA < nB ? nA : nB;
   int c = memcmp(pA, pB, n);
@@ -26,11 +21,6 @@ static int fmKeyCmp(const u8 *pA, int nA, const u8 *pB, int nB){
   return 0;
 }
 
-/* Local copy of chunkerLevelsBelowEmpty from prolly_mutate.c. Splicing
-** at level L via prollyChunkerAddAtLevel is only logically correct when
-** the chunker has no pending entries at any level below L — otherwise
-** the spliced subtree's keys would land out of order with respect to
-** entries already buffered at lower levels. */
 static int fmChunkerLevelsBelowEmpty(const ProllyChunker *pCh, int level){
   int i;
   for( i = 0; i < level && i < pCh->nLevels; i++ ){
@@ -45,7 +35,6 @@ typedef struct FmCtx {
   u8 flags;
 } FmCtx;
 
-/* Forward declaration — fmEmitChild and fmWalkInterior are mutually recursive. */
 static int fmEmitChild(
   FmCtx *fm, ProllyChunker *pCh,
   const u8 *pBoundKey, int nBoundKey,
@@ -55,16 +44,6 @@ static int fmEmitChild(
   const ProllyHash *pTheirs
 );
 
-/* Walk a subtree top-down and emit all its leaf rows into pCh at
-** level 0. Used when a splice at the parent level is blocked because
-** the chunker has pending entries below — emitting the subtree's
-** rows directly costs O(rows) for that subtree but keeps the walker
-** going so subsequent splices on later siblings can still apply once
-** the chunker drains.
-**
-** Internally this is a cousin of streamingMergeNode in prolly_mutate.c
-** with the "no edits" path always taken — every leaf is emitted as-is.
-*/
 static int fmEmitSubtreeRows(
   FmCtx *fm, ProllyChunker *pCh,
   const ProllyHash *pSubtreeRoot
@@ -101,15 +80,6 @@ static int fmEmitSubtreeRows(
   return SQLITE_OK;
 }
 
-/* Apply 3-way merge resolution for a single key K and emit the
-** result row at level 0. Shared between fmMergeLeaves (node-driven)
-** and fmCursorMerge (cursor-driven) to avoid divergence in conflict
-** detection and emit rules.
-**
-** Returns FM_FALLBACK on any case the caller's row-by-row path needs
-** to handle: modify-modify with different values, modify-delete,
-** delete-modify, add-add with different values.
-*/
 static int fmResolveAndEmit(
   ProllyChunker *pCh,
   const u8 *pK, int nK,
@@ -129,40 +99,31 @@ static int fmResolveAndEmit(
     }else if( nOV == nTV && memcmp(pOV, pTV, nOV) == 0 ){
       return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
     }else{
-      return FM_FALLBACK;  /* modify-modify with different values */
+      return FM_FALLBACK;
     }
   }else if( has_a && has_o && !has_t ){
     int same_o = (nOV == nAV) && memcmp(pOV, pAV, nOV) == 0;
-    if( same_o ) return SQLITE_OK;  /* theirs deleted, ours unchanged */
-    return FM_FALLBACK;  /* modify-delete */
+    if( same_o ) return SQLITE_OK;
+    return FM_FALLBACK;
   }else if( has_a && !has_o && has_t ){
     int same_t = (nTV == nAV) && memcmp(pTV, pAV, nTV) == 0;
-    if( same_t ) return SQLITE_OK;  /* ours deleted, theirs unchanged */
-    return FM_FALLBACK;  /* delete-modify */
+    if( same_t ) return SQLITE_OK;
+    return FM_FALLBACK;
   }else if( has_a && !has_o && !has_t ){
-    return SQLITE_OK;  /* both sides deleted */
+    return SQLITE_OK;
   }else if( !has_a && has_o && has_t ){
     if( nOV == nTV && memcmp(pOV, pTV, nOV) == 0 ){
       return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
     }
-    return FM_FALLBACK;  /* add-add with different values */
+    return FM_FALLBACK;
   }else if( !has_a && has_o && !has_t ){
     return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
   }else if( !has_a && !has_o && has_t ){
     return prollyChunkerAdd(pCh, pK, nK, pTV, nTV);
   }
-  return SQLITE_OK;  /* unreachable: at least one side must hold K */
+  return SQLITE_OK;
 }
 
-/* Bounded three-way merge of three aligned leaf nodes. Walks the
-** three leaves in key order, applying merge resolution per row,
-** emitting the result at level 0 via prollyChunkerAdd.
-**
-** Returns FM_FALLBACK on any conflict-bearing case so the caller's
-** row-by-row path can report conflicts via its existing machinery.
-** Conflict-free cases (3-way clean, identical changes, disjoint adds
-** in the same chunk, disjoint deletes) emit and return SQLITE_OK.
-*/
 static int fmMergeLeaves(
   FmCtx *fm, ProllyChunker *pCh,
   const ProllyNode *pAncN,
@@ -185,7 +146,6 @@ static int fmMergeLeaves(
     int nK = 0;
     i64 iK = 0;
 
-    /* Materialize each side's current key. */
     if( ai < (int)pAncN->nItems ){
       prollyNodeKey(pAncN, ai, &pAK, &nAK);
       if( fm->flags & PROLLY_NODE_INTKEY ) iAKey = prollyNodeIntKey(pAncN, ai);
@@ -199,8 +159,6 @@ static int fmMergeLeaves(
       if( fm->flags & PROLLY_NODE_INTKEY ) iTKey = prollyNodeIntKey(pTheirsN, ti);
     }
 
-    /* Find the smallest current key across the three sides. Compute
-    ** has_a/has_o/has_t = (this side's current key equals the min). */
     {
       int hasAny[3];
       int minSide = -1;
@@ -213,7 +171,6 @@ static int fmMergeLeaves(
       hasAny[1] = (oi < (int)pOursN->nItems);
       hasAny[2] = (ti < (int)pTheirsN->nItems);
 
-      /* Pick the min by walking pairs through prollyCompareKeys. */
       for( s = 0; s < 3; s++ ){
         if( !hasAny[s] ) continue;
         if( minSide < 0 ){ minSide = s; continue; }
@@ -232,7 +189,6 @@ static int fmMergeLeaves(
       else if( minSide == 1 ){ pK = pOK; nK = nOK; iK = iOKey; }
       else { pK = pTK; nK = nTK; iK = iTKey; }
 
-      /* Now mark each side that holds the min key. */
       if( hasAny[0] ){
         cmp = prollyCompareKeys(fm->flags,
                                  pAK, nAK, iAKey,
@@ -253,7 +209,6 @@ static int fmMergeLeaves(
       }
     }
 
-    /* Pull values for sides that hold the min key. */
     if( has_a ) prollyNodeValue(pAncN, ai, &pAV, &nAV);
     if( has_o ) prollyNodeValue(pOursN, oi, &pOV, &nOV);
     if( has_t ) prollyNodeValue(pTheirsN, ti, &pTV, &nTV);
@@ -264,7 +219,6 @@ static int fmMergeLeaves(
                            has_t, pTV, nTV);
     if( rc != SQLITE_OK ) return rc;
 
-    /* Advance each side that held the min key. */
     if( has_a ) ai++;
     if( has_o ) oi++;
     if( has_t ) ti++;
@@ -273,15 +227,6 @@ static int fmMergeLeaves(
   return SQLITE_OK;
 }
 
-/* Cursor-based 3-way merge. Walks anc/ours/theirs cursors in row
-** order, applying the same merge resolution as fmMergeLeaves. Used
-** to recover when interior boundary alignment fails partway through
-** the structured walker — the spliced prefix stays in the chunker
-** and the cursor walk fills the rest at row cost.
-**
-** The cursors must be positioned (Seek or First) by the caller. The
-** walker advances them to EOF.
-*/
 static int fmCursorMerge(
   FmCtx *fm, ProllyChunker *pCh,
   ProllyCursor *pAncC, ProllyCursor *pOursC, ProllyCursor *pTheirsC
@@ -368,12 +313,6 @@ static int fmCursorMerge(
   return SQLITE_OK;
 }
 
-/* Open three cursors over (anc, ours, theirs) subtrees, position
-** each strictly past pSeekKey (or at first if pSeekKey is NULL),
-** then run fmCursorMerge. Used to recover from boundary-alignment
-** failure in fmWalkInterior: the spliced prefix has already been
-** emitted at parentLevel; this cursor walk emits the remainder at
-** level 0 and the chunker's natural batching merges them upward. */
 static int fmCursorRecover(
   FmCtx *fm, ProllyChunker *pCh,
   const ProllyHash *pAncH,
@@ -391,14 +330,10 @@ static int fmCursorRecover(
   prollyCursorInit(&curT, fm->pStore, fm->pCache, pTheirsH, fm->flags); initT = 1;
 
   if( pSeekKey == 0 ){
-    /* No prior splice — walk from the start. */
     rc = prollyCursorFirst(&curA, &res);
     if( rc == SQLITE_OK ) rc = prollyCursorFirst(&curO, &res);
     if( rc == SQLITE_OK ) rc = prollyCursorFirst(&curT, &res);
   }else{
-    /* Seek strictly past pSeekKey on each side. SeekBlob/SeekInt
-    ** position at the first key >= seek; if exact match (res==0),
-    ** advance past it. */
     if( fm->flags & PROLLY_NODE_INTKEY ){
       rc = prollyCursorSeekInt(&curA, iSeekKey, &res);
       if( rc == SQLITE_OK && res == 0 ) rc = prollyCursorNext(&curA);
@@ -434,12 +369,6 @@ static int fmCursorRecover(
   return rc;
 }
 
-/* Walk the children of three interior nodes that share the same
-** level. When boundary keys align across the three nodes, the
-** structured splice rules apply per-child. When they don't, recover
-** via fmCursorRecover — the spliced prefix stays in the chunker and
-** the cursor walk emits the remainder at level 0.
-*/
 static int fmWalkInterior(
   FmCtx *fm, ProllyChunker *pCh,
   ProllyNode *pAncN, ProllyNode *pOursN, ProllyNode *pTheirsN,
@@ -448,10 +377,6 @@ static int fmWalkInterior(
   int i;
   int parentLevel = pAncN->level;
 
-  /* Mismatched item counts are a structural divergence — the trees
-  ** rebalanced enough that even ours/theirs don't have the same
-  ** number of children at this level. Hand off to cursor recovery
-  ** from the start of these subtrees (no prior splice). */
   if( pOursN->nItems != pAncN->nItems
    || pTheirsN->nItems != pAncN->nItems ){
     return fmCursorRecover(fm, pCh, pAncH, pOursH, pTheirsH, 0, 0, 0);
@@ -470,10 +395,6 @@ static int fmWalkInterior(
 
     if( fmKeyCmp(pAK, nAK, pOK, nOK) != 0
      || fmKeyCmp(pAK, nAK, pTK, nTK) != 0 ){
-      /* Boundary mismatch at child i. Children 0..i-1 have already
-      ** been spliced (or descended) into pCh at parentLevel. Fall
-      ** through to a cursor walk strictly past the last aligned
-      ** boundary key (or from the start when i==0). */
       const u8 *pSeek = 0;
       int nSeek = 0;
       i64 iSeek = 0;
@@ -498,25 +419,6 @@ static int fmWalkInterior(
   return SQLITE_OK;
 }
 
-/* Emit one (anc, ours, theirs) child triple at parentLevel into pCh.
-**
-** Hash short-circuits cover the splice cases:
-**   - ours == theirs   : both sides agree, splice that subtree
-**   - ours == anc      : only theirs changed, splice theirs
-**   - theirs == anc    : only ours changed, splice ours
-**
-** When the splice CASE applies but the chunker has pending entries
-** below parentLevel, we can't add at parentLevel without re-ordering;
-** instead we descend the splice candidate's subtree and re-emit its
-** rows at level 0. Costs O(rows) for that subtree but lets the walker
-** keep going so later siblings with empty-below state can splice.
-**
-** When all three differ at an interior level, recurse into the three
-** child nodes via fmWalkInterior. When all three are leaves at the
-** same level, run a bounded 3-way merge of the leaf rows via
-** fmMergeLeaves. Conflict-bearing leaves return FM_FALLBACK so the
-** row-by-row path can report conflicts via its existing machinery.
-*/
 static int fmEmitChild(
   FmCtx *fm, ProllyChunker *pCh,
   const u8 *pBoundKey, int nBoundKey,
@@ -536,18 +438,16 @@ static int fmEmitChild(
   else if( prollyHashCompare(pTheirs, pAnc) == 0 )  pSplice = pOurs;
 
   if( pSplice ){
+    /* Preserve structural sharing only when the chunker is exactly aligned at
+    ** this parent level; otherwise emit rows so the rebuilt tree stays sorted. */
     if( fmChunkerLevelsBelowEmpty(pCh, parentLevel) ){
       return prollyChunkerAddAtLevel(pCh, parentLevel,
                                       pBoundKey, nBoundKey,
                                       pSplice->data, PROLLY_HASH_SIZE);
     }
-    /* Splice can't happen — descend the splice candidate and emit
-    ** its rows. Boundary key is consumed by the chunker's natural
-    ** chunking once enough leaf rows accumulate. */
     return fmEmitSubtreeRows(fm, pCh, pSplice);
   }
 
-  /* All three differ. Load nodes. */
   rc = chunkStoreGet(fm->pStore, pAnc, &pAncData, &nAncData);
   if( rc != SQLITE_OK ) return rc;
   rc = prollyNodeParse(&ancNode, pAncData, nAncData);
@@ -564,13 +464,11 @@ static int fmEmitChild(
   if( rc != SQLITE_OK ) goto done;
 
   if( oursNode.level != ancNode.level || theirsNode.level != ancNode.level ){
-    /* Height mismatch — fall back. */
     rc = FM_FALLBACK;
     goto done;
   }
 
   if( ancNode.level == 0 ){
-    /* All three are leaves at the same level. Bounded 3-way row merge. */
     rc = fmMergeLeaves(fm, pCh, &ancNode, &oursNode, &theirsNode);
   }else{
     rc = fmWalkInterior(fm, pCh, &ancNode, &oursNode, &theirsNode,
@@ -603,8 +501,6 @@ int prollyThreeWayMergeFast(
 
   *pHandled = 0;
 
-  /* Trivial top-level cases: no walker, no chunker, return the
-  ** appropriate root directly. */
   if( prollyHashCompare(pOursRoot, pTheirsRoot) == 0 ){
     memcpy(pMergedRoot, pOursRoot, sizeof(ProllyHash));
     *pHandled = 1;
@@ -621,12 +517,10 @@ int prollyThreeWayMergeFast(
     return SQLITE_OK;
   }
 
-  /* All three differ. The walker only handles non-empty trees that
-  ** share the same height and at least one level of interior structure. */
   if( prollyHashIsEmpty(pAncRoot)
    || prollyHashIsEmpty(pOursRoot)
    || prollyHashIsEmpty(pTheirsRoot) ){
-    return SQLITE_OK;  /* *pHandled stays 0 — caller falls back */
+    return SQLITE_OK;
   }
 
   rc = chunkStoreGet(pStore, pAncRoot, &pAncData, &nAncData);
@@ -650,11 +544,9 @@ int prollyThreeWayMergeFast(
     return rc;
   }
 
-  /* Heights must match for the walker to apply. Tree-growth merges
-  ** (one side increased the height) fall back. */
   if( oursNode.level != ancNode.level || theirsNode.level != ancNode.level ){
     sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);
-    return SQLITE_OK;  /* *pHandled stays 0 */
+    return SQLITE_OK;
   }
 
   fm.pStore = pStore;
@@ -667,9 +559,6 @@ int prollyThreeWayMergeFast(
     return rc;
   }
 
-  /* Root-level leaf merge: when all three roots ARE leaves (small
-  ** trees), the walker's interior path doesn't apply — go straight
-  ** to bounded leaf merge. */
   if( ancNode.level == 0 ){
     rc = fmMergeLeaves(&fm, &chunker, &ancNode, &oursNode, &theirsNode);
     sqlite3_free(pAncData); sqlite3_free(pOursData); sqlite3_free(pTheirsData);
@@ -700,7 +589,7 @@ int prollyThreeWayMergeFast(
       *pHandled = 1;
     }
   }else if( rc == FM_FALLBACK ){
-    rc = SQLITE_OK;  /* *pHandled stays 0 */
+    rc = SQLITE_OK;
   }
   prollyChunkerFree(&chunker);
   return rc;

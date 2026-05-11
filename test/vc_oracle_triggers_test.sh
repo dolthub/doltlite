@@ -1,18 +1,4 @@
 #!/bin/bash
-#
-# Triggers + version control oracle tests (doltlite vs Dolt).
-#
-# SQLite triggers use BEGIN…END; bodies. MySQL (Dolt) uses single-
-# statement "FOR EACH ROW <stmt>" bodies. The syntaxes are mutually
-# exclusive, so a single SQL string can't run on both engines.
-#
-# The oracle_triggers_dual helper below takes separate doltlite and
-# Dolt setup scripts and compares the final state of a shared query.
-# Each test pair is written so the *semantics* are identical; only
-# the trigger body syntax differs.
-#
-# Usage: bash vc_oracle_triggers_test.sh [path/to/doltlite] [path/to/dolt]
-#
 
 set -u
 set -o pipefail
@@ -29,13 +15,6 @@ normalize() {
   tr -d '\r' | grep -v '^$' | sort
 }
 
-# oracle_triggers_dual NAME DOLTLITE_SETUP DOLT_SETUP QUERY
-#   DOLTLITE_SETUP: SQLite-style setup (triggers use BEGIN…END;)
-#   DOLT_SETUP:     MySQL-style setup (triggers use FOR EACH ROW <stmt>)
-#                   vc_oracle_translate_for_dolt still rewrites the
-#                   SELECT dolt_XXX(…) calls to CALL dolt_XXX(…) on
-#                   the Dolt side.
-#   QUERY:          identical on both engines (no trigger DDL in here).
 oracle_triggers_dual() {
   local name="$1" dl_setup="$2" dt_setup="$3" query="$4"
   local dir="$TMPROOT/$name"
@@ -80,9 +59,6 @@ oracle_triggers_dual() {
 echo "=== Triggers + VC Oracle Tests ==="
 echo ""
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 1: AFTER INSERT trigger, one-sided, merged
-# ═══════════════════════════════════════════════════════════════════
 echo "--- AFTER INSERT one side ---"
 
 oracle_triggers_dual "after_insert_trigger_fires_on_feat_inserts" "
@@ -115,9 +91,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM log ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 2: Trigger created on feat, fires when main inserts after merge
-# ═══════════════════════════════════════════════════════════════════
 echo "--- trigger survives merge and fires post-merge ---"
 
 oracle_triggers_dual "trigger_on_feat_fires_on_main_after_merge" "
@@ -152,9 +125,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main post-merge insert');
 " "SELECT id, v FROM log ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 3: AFTER UPDATE trigger
-# ═══════════════════════════════════════════════════════════════════
 echo "--- AFTER UPDATE trigger ---"
 
 oracle_triggers_dual "after_update_trigger_logs_old_and_new" "
@@ -185,9 +155,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, diff FROM log ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 4: AFTER DELETE trigger
-# ═══════════════════════════════════════════════════════════════════
 echo "--- AFTER DELETE trigger ---"
 
 oracle_triggers_dual "after_delete_trigger_logs_removed_rows" "
@@ -218,9 +185,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM log ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 5: Trigger + independent main-side DML merged
-# ═══════════════════════════════════════════════════════════════════
 echo "--- trigger + independent main DML ---"
 
 oracle_triggers_dual "trigger_on_feat_main_inserts_independently" "
@@ -263,9 +227,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main post');
 " "SELECT id FROM log ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 6: Trigger dropped on feat, merged
-# ═══════════════════════════════════════════════════════════════════
 echo "--- trigger dropped on feat ---"
 
 oracle_triggers_dual "trigger_drop_on_feat_main_inserts_no_log_entries" "
@@ -302,9 +263,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main post');
 " "SELECT count(*) FROM log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 7: Trigger + cherry-pick
-# ═══════════════════════════════════════════════════════════════════
 echo "--- trigger + cherry-pick ---"
 
 oracle_triggers_dual "cherry_pick_of_trigger_creation_commit" "
@@ -339,9 +297,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main post');
 " "SELECT id FROM log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 8: Trigger fires during a DELETE cascade-like chain
-# ═══════════════════════════════════════════════════════════════════
 echo "--- DELETE trigger on multi-row delete + merge ---"
 
 oracle_triggers_dual "delete_trigger_counts_rows_removed" "
@@ -372,9 +327,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 9: Two triggers on same table
-# ═══════════════════════════════════════════════════════════════════
 echo "--- two triggers on same table ---"
 
 oracle_triggers_dual "insert_and_delete_triggers_both_log" "
@@ -409,9 +361,6 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, kind FROM log ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 10: Trigger fires across reopen (persists)
-# ═══════════════════════════════════════════════════════════════════
 echo "--- trigger persists across commit/reopen-like sequence ---"
 
 oracle_triggers_dual "trigger_still_active_after_merge_reset_flow" "
@@ -450,9 +399,6 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','more inserts');
 " "SELECT id FROM log ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Results
-# ═══════════════════════════════════════════════════════════════════
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

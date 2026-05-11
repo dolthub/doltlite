@@ -308,7 +308,6 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   if( !cs ){ branchError(ctx, hadSavepoint, "no database"); return; }
   if( argc<1 ){ branchError(ctx, hadSavepoint, "dolt_branch requires arguments"); return; }
 
-
   for(i=0; i<argc; i++){
     const char *arg = (const char*)sqlite3_value_text(argv[i]);
     if( !arg ) continue;
@@ -371,12 +370,6 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         branchError(ctx, hadSavepoint, "cannot delete the current branch");
         return;
       }
-      /* Short-term guard: doltlite does not yet have stable default-branch
-      ** resolution, so on reopen p->zBranch initializes from the last-active
-      ** branch (tracked via chunkStoreGetDefaultBranch, which dolt_checkout
-      ** updates). If "main" is deleted, opening the DB would leave the
-      ** session pointing at a nonexistent branch. Reject until we have real
-      ** default-branch logic. */
       if( strcmp(aPositional[0], "main")==0 ){
         branchError(ctx, hadSavepoint,
           "cannot delete branch 'main' (doltlite requires main to exist)");
@@ -451,9 +444,6 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       memset(&m, 0, sizeof(m));
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
-      /* Same guard as MODE_DELETE: renaming "main" away would leave the
-      ** repo with no main branch, and reopening would fail to resolve a
-      ** session branch. Reject until default-branch logic is reworked. */
       if( strcmp(m.zSrc, "main")==0 ){
         branchError(ctx, hadSavepoint,
           "cannot rename branch 'main' (doltlite requires main to exist)");
@@ -534,7 +524,6 @@ static int checkoutLoadAndApply(
   int rc;
   ProllyHash committedCatHash;
 
-
   {
     DoltliteCommit commit;
 
@@ -544,7 +533,6 @@ static int checkoutLoadAndApply(
     memcpy(&committedCatHash, &commit.catalogHash, sizeof(ProllyHash));
     doltliteCommitClear(&commit);
   }
-
 
   {
     ProllyHash wsCatHash, wsCommitHash;
@@ -582,11 +570,6 @@ static int refreshBranchScopedTables(sqlite3 *db){
   return doltliteRegisterBlameTables(db);
 }
 
-/* Checkout is a multi-step mutation: persist outgoing branch state,
-** update refs, load target branch, reload session. If any step fails
-** we must unwind every prior step — the saved* fields are the
-** snapshot of session state taken before the mutation begins so
-** checkoutRestoreSession can roll back cleanly. */
 typedef struct CheckoutMutationCtx CheckoutMutationCtx;
 struct CheckoutMutationCtx {
   const char *zTargetBranch;
@@ -606,6 +589,8 @@ struct CheckoutMutationCtx {
   const char *zSavedRebaseOrigBranch;
   const char *zSavedRebaseReturnBranch;
   int haveOldState;
+  /* Top-level branch connection checkout must persist even though SQLite has
+  ** a savepoint frame; ordinary nested savepoint checkout remains rollbackable. */
   int bPersistUnderSavepoint;
 };
 
@@ -872,11 +857,6 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   return rc;
 }
 
-/* `dolt_checkout <table>...` path. Reached as a fallthrough when the
-** first argument doesn't resolve to a branch — in Dolt, checkout
-** overloads "branch name" and "table name". Copies the named tables
-** from the staged catalog (or HEAD if nothing is staged) into the
-** working catalog, mirroring Dolt's reset-a-single-table semantics. */
 static int doltliteCheckoutTables(
   sqlite3 *db,
   const char *zSourceRef,
@@ -896,7 +876,6 @@ static int doltliteCheckoutTables(
 
   if( !cs ) return SQLITE_ERROR;
   if( nNames<=0 ) return SQLITE_NOTFOUND;
-
 
   if( zSourceRef ){
     ProllyHash sourceCommit;
@@ -921,7 +900,6 @@ static int doltliteCheckoutTables(
       return SQLITE_NOTFOUND;
     }
   }
-
 
   rc = doltliteLoadCatalog(db, &sourceCatHash, &aSource, &nSource, 0);
   if( rc!=SQLITE_OK ) return rc;
@@ -1020,7 +998,6 @@ static int doltliteCheckoutTables(
     return rc;
   }
 
-
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     int srcIdx = -1, workIdx = -1;
@@ -1098,7 +1075,6 @@ static int doltliteCheckoutTables(
     }
   }
 
-
   {
     u8 *buf = 0;
     int nBuf = 0;
@@ -1143,7 +1119,6 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   memset(&m, 0, sizeof(m));
   memset(&branchCreate, 0, sizeof(branchCreate));
 
-
   {
     u8 isMerging = 0;
     doltliteGetSessionMergeState(db, &isMerging, 0, 0);
@@ -1153,7 +1128,6 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
       return;
     }
   }
-
 
   if( strcmp(zBranch, "-b")==0 ){
     if( argc<2 ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "branch name required after -b", -1); return; }
@@ -1230,7 +1204,6 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     sqlite3_result_int(ctx, 0);
     return;
   }
-
 
   {
     u8 *oldCatData = 0; int nOldCat = 0;
@@ -1469,7 +1442,6 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
       return SQLITE_OK;
     }
   }
-
 
   {
     DoltliteCommit cm;

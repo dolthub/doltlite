@@ -9,13 +9,10 @@
 
 #define DOLTLITE_MAX_PARENTS 8
 
-/* parentHash is a legacy V1 single-parent field still populated by
-** deserialize so older call sites keep working. nParents/aParents is
-** the canonical multi-parent list (merge commits have two). Accessors
-** below prefer aParents and fall back to parentHash when aParents is
-** empty — never access either field directly. */
 typedef struct DoltliteCommit DoltliteCommit;
 struct DoltliteCommit {
+  /* parentHash is the single-parent compatibility field. New commits use
+  ** aParents/nParents so merge commits can address multiple parents. */
   ProllyHash parentHash;
   ProllyHash catalogHash;
   i64 timestamp;

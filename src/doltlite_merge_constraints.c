@@ -12,30 +12,6 @@
 
 #include <string.h>
 
-/* Post-merge constraint detection.
-**
-** Called from doltliteMergeFunc AFTER the merged catalog has been
-** installed into the session via doltliteSwitchCatalog, so
-** sqlite_schema reflects the merged DDL and each Table* has its
-** pFKey / pCheck / aIndex chains loaded.
-**
-** For now scoped to FK orphans only: for each table in the
-** merged catalog with at least one foreign key, run PRAGMA
-** foreign_key_check to get the orphan rowids, then walk the
-** child table's prolly tree to find each orphan row's raw key
-** and value bytes for persisting into
-** dolt_constraint_violations_<table>.
-**
-** Unique-index and check-constraint violations follow in
-** Phase 6 — they need diff-based detection because the merge
-** already collapses the table into a single prolly tree and
-** SQLite's PRAGMA integrity_check doesn't distinguish what was
-** present on each side of the merge. */
-
-/* Walk pRoot until we find the row whose intKey matches
-** targetRowid. Copies the row's key + value bytes into the
-** caller's out buffers (sqlite3_malloc). Returns SQLITE_NOTFOUND
-** if no row matches, SQLITE_OK otherwise. */
 static int fetchRowByRowid(
   ChunkStore *cs,
   ProllyCache *pCache,
@@ -188,9 +164,6 @@ static void fkRefreshFreeNames(char **azNames, int nNames){
   sqlite3_free(azNames);
 }
 
-/* Same-name drop/recreate replay can leave parent unique indexes stale until
-** reopen. If FK check reports rows, rebuild just the child/parent tables
-** mentioned there and re-check before treating them as real violations. */
 static int fkRefreshCandidateTables(sqlite3 *db, int *pChanged){
   sqlite3_stmt *pStmt = 0;
   char **azNames = 0;
@@ -546,10 +519,6 @@ static int fetchRowByPkRecord(
   return SQLITE_NOTFOUND;
 }
 
-/* Build the violation_info JSON string for one FK orphan. The
-** shape deliberately matches Dolt's output format (same top-level
-** keys so oracle tests and external consumers see one schema).
-** Caller owns the returned string. */
 static char *buildFkViolationInfo(
   sqlite3 *db,
   const char *zChildTable,
@@ -570,9 +539,6 @@ static char *buildFkViolationInfo(
   int nMatches = 0;
   int fatal = 0;
 
-  /* sqlite3_str_new() always returns a non-NULL handle; OOM is
-  ** surfaced later via sqlite3_str_errcode() / the final
-  ** sqlite3_str_finish() returning NULL. */
   pJson = sqlite3_str_new(0);
   pCols = sqlite3_str_new(0);
   pRefCols = sqlite3_str_new(0);
@@ -586,12 +552,6 @@ static char *buildFkViolationInfo(
     if( rc != SQLITE_OK ){
       fatal = 1;
     }else{
-      /* Walk every row belonging to this fkid, accumulating the
-      ** child column list and the referenced column list into
-      ** separate buffers. Scalar fields (ReferencedTable /
-      ** OnUpdate / OnDelete) only need the first matching row —
-      ** PRAGMA foreign_key_list repeats them identically for each
-      ** column of a composite FK. */
       while( sqlite3_step(pStmt) == SQLITE_ROW ){
         int id = sqlite3_column_int(pStmt, 0);
         const char *zParent, *zFrom, *zTo, *zOnUp, *zOnDel;
@@ -618,15 +578,10 @@ static char *buildFkViolationInfo(
   }
   sqlite3_finalize(pStmt);
 
-  /* Finalizing the two column-list builders releases them
-  ** regardless of whether the walk ran. If OOM occurred during
-  ** any append, finish returns NULL and the result propagates. */
   zColsBuf    = sqlite3_str_finish(pCols);
   zRefColsBuf = sqlite3_str_finish(pRefCols);
 
   if( fatal ){
-    /* Fail the whole object rather than emit a degraded JSON
-    ** with empty columns — the caller treats NULL as "no info". */
     sqlite3_free(sqlite3_str_finish(pJson));
     sqlite3_free(zColsBuf);
     sqlite3_free(zRefColsBuf);
@@ -655,14 +610,6 @@ static char *buildFkViolationInfo(
   return zResult;
 }
 
-/* Look up (zTable, rowid) in a previously-loaded ancestor catalog
-** and return SQLITE_OK with the row's raw pVal bytes if the row
-** existed in the ancestor at the same rowid, SQLITE_NOTFOUND
-** otherwise. `aAnc`/`nAnc` are the result of
-** doltliteLoadCatalog(&ancCatHash). The caller owns *ppAncVal on
-** success. Used by the post-merge walkers to decide whether a
-** candidate violation is merge-introduced (row changed or new)
-** or pre-existing (row unchanged since ancestor). */
 static int fetchAncestorRowByName(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
@@ -727,22 +674,6 @@ static int fetchAncestorRowByKey(
   return rc;
 }
 
-/* Decide whether a candidate violation is pre-existing: the row
-** exists in the ancestor catalog at the same rowid with byte-for-
-** byte identical value payload. Returns 1 if pre-existing (the
-** caller should skip flagging), 0 if merge-introduced or the
-** ancestor state can't be consulted. Empty ancCatHash short-
-** circuits to 0 (no ancestor — treat every violation as fresh).
-**
-** Known hole: this rule is the "child row unchanged" filter
-** only. It does not catch the case where a parent row is
-** deleted on one side while the child row is unchanged — in
-** that scenario the merge DID introduce the orphan, but this
-** filter will still flag it because the child is unchanged.
-** That is a strict improvement over the prior state where every
-** pre-existing orphan blocked every unrelated merge, and can be
-** tightened later (see GitHub issue for the semantics-drift
-** tracking item). */
 static int isRowPreExisting(
   const u8 *pMergedVal, int nMergedVal,
   const u8 *pAncVal, int nAncVal
@@ -753,31 +684,18 @@ static int isRowPreExisting(
   return memcmp(pMergedVal, pAncVal, nMergedVal)==0 ? 1 : 0;
 }
 
-/* Probe whether zTable exposes a `rowid` column. Returns 1 if
-** the table has a rowid (standard SQLite tables), 0 if it is
-** declared WITHOUT ROWID. The post-merge walkers lean heavily
-** on rowid to identify specific violating rows and to fetch
-** their prolly-layer payload; WITHOUT ROWID tables break every
-** piece of that pipeline, so detection refuses to proceed
-** rather than silently miss violations. Tracked in GitHub
-** issue #495 — proper WITHOUT ROWID support requires a prolly-
-** layer-level walker that keys on the composite PK instead. */
 static int tableHasRowid(sqlite3 *db, const char *zTable){
   sqlite3_stmt *pStmt = 0;
   char *zQuery;
   int rc;
   zQuery = sqlite3_mprintf("SELECT rowid FROM main.\"%w\" LIMIT 0", zTable);
-  if( !zQuery ) return 1; /* treat OOM as rowid — caller will fail elsewhere */
+  if( !zQuery ) return 1;
   rc = sqlite3_prepare_v2(db, zQuery, -1, &pStmt, 0);
   sqlite3_free(zQuery);
   if( pStmt ) sqlite3_finalize(pStmt);
   return rc == SQLITE_OK ? 1 : 0;
 }
 
-/* Resolve a (zTable, rowid) pair to the raw prolly row by looking
-** the table up in the current btree's catalog via the public
-** doltliteGetSessionTableRoot accessor and walking its prolly
-** root to find the matching key. */
 static int fetchOrphanRow(
   sqlite3 *db,
   const char *zTable,
@@ -942,12 +860,6 @@ static int appendUniqueViolationByPk(
   return rc;
 }
 
-/* Return 1 if any column in [colFirst, colLast) of the current
-** row is NULL. Per SQL standard, a row with NULL in any column
-** of a UNIQUE index is exempt from that uniqueness check
-** (NULL != NULL for UNIQUE). Such rows cannot participate in a
-** duplicate group and must be skipped by the merge-time dup
-** detection below. */
 static int uniqueIndexRowHasNull(sqlite3_stmt *pScan, int colFirst, int colLast){
   int i;
   for(i=colFirst; i<colLast; i++){
@@ -956,20 +868,6 @@ static int uniqueIndexRowHasNull(sqlite3_stmt *pScan, int colFirst, int colLast)
   return 0;
 }
 
-/* Walk every row in zTable and look for duplicate values on the
-** given UNIQUE index columns. When a duplicate group is found,
-** every merge-introduced row in that group is recorded in
-** dolt_constraint_violations_<table> with
-** violation_type = 'unique index'. The base table keeps all
-** merged rows intact; users resolve the violation by deleting
-** rows from the violation vtable and then committing.
-**
-** We can't just `GROUP BY` the index columns here — SQLite's
-** query planner sees the UNIQUE constraint and optimizes on the
-** assumption that each value appears at most once, collapsing
-** duplicate rows that our prolly-level merge introduced. Force
-** a full table scan with the `NOT INDEXED` clause and do the
-** grouping ourselves in the driver. */
 static int detectUniqueViolationsForIndex(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
@@ -1015,7 +913,6 @@ static int detectUniqueViolationsForIndex(
 
     isDup = zWinnerKey && strcmp(zWinnerKey, zRowKey)==0;
     if( !isDup ){
-      /* New group — this row wins, remember its value set. */
       sqlite3_free(zWinnerKey);
       zWinnerKey = zRowKey;
       winnerRowid = rowid;
@@ -1146,11 +1043,6 @@ static int detectUniqueViolationsForIndexWithoutRowid(
   return rc;
 }
 
-/* For every user table in the session's catalog, walk its
-** UNIQUE indexes via PRAGMA index_list / PRAGMA index_xinfo
-** and feed each into detectUniqueViolationsForIndex. The
-** ancestor catalog is loaded once and shared across all
-** per-index scans so repeated lookups are cheap. */
 int doltliteDetectMergeUniqueViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -1227,11 +1119,6 @@ int doltliteDetectMergeUniqueViolations(
       zIdxRaw = (const char*)sqlite3_column_text(pIdxList, 1);
       if( !zIdxRaw ) continue;
 
-      /* Skip the primary-key auto-index — walking it would
-      ** double-count every row as its own duplicate. Use the
-      ** origin column (pk / u / c) instead of pattern-matching
-      ** the name so WITHOUT ROWID autoindexes get handled
-      ** correctly regardless of numbering. */
       zOrigin = (const char*)sqlite3_column_text(pIdxList, 3);
       if( zOrigin && strcmp(zOrigin, "pk")==0 ) continue;
 
@@ -1281,18 +1168,6 @@ int doltliteDetectMergeUniqueViolations(
   return rc;
 }
 
-/* Extract the next CHECK (expr) clause starting at or after
-** *pOffset in zSql. On success returns 1 and fills *pzExpr with
-** a freshly-allocated inner expression and *pzName with the
-** constraint name (if preceded by `CONSTRAINT <name>`) or NULL.
-** Advances *pOffset past the closing paren. Returns 0 at end of
-** string. Returns -1 on malformed input.
-**
-** Simple state machine: skip forward to `CHECK` (case-insensitive),
-** note any CONSTRAINT clause preceding it, then walk balanced
-** parens to find the end of the expression. Handles quoted
-** identifiers and string literals so CHECK (name = 'silly)name')
-** doesn't get chopped at the first `)`. */
 static int nextCheckClause(
   const char *zSql, int *pOffset, char **pzExpr, char **pzName
 ){
@@ -1306,8 +1181,6 @@ static int nextCheckClause(
   *pzName = 0;
 
   while( *p ){
-    /* Track a `CONSTRAINT <name>` clause so we can attach it to
-    ** the next CHECK that shows up. */
     if( (p[0]=='C' || p[0]=='c')
      && strncasecmp(p, "CONSTRAINT", 10)==0
      && (p[10]==' ' || p[10]=='\t' || p[10]=='\n') ){
@@ -1378,9 +1251,6 @@ static int nextCheckClause(
       if( *p=='"' ) p++;
       continue;
     }
-    /* Reset a pending CONSTRAINT name if we hit a comma without
-    ** seeing CHECK — that clause was something else (UNIQUE,
-    ** FOREIGN KEY, etc). */
     if( *p==',' ) lastConstraintName[0] = 0;
     p++;
   }
@@ -1388,15 +1258,6 @@ static int nextCheckClause(
   return 0;
 }
 
-/* For each user table, parse its CREATE TABLE DDL for CHECK
-** constraints and run SELECT rowid WHERE NOT (expr) to find any
-** row in the merged result that doesn't satisfy one. Emit each
-** as a 'check constraint' violation. Unlike unique detection we
-** keep the row in the base table — Dolt's CHECK semantics leave
-** violating rows present and block commit until resolved.
-** Ancestor filter is the same shape as the FK walker: any
-** violating row that already existed unchanged in ancestor was
-** already broken before the merge started and is skipped. */
 int doltliteDetectMergeCheckViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,
@@ -1674,21 +1535,6 @@ static int detectFkViolationsForSpec(
   return rc;
 }
 
-/* Entry point. Runs PRAGMA foreign_key_check to find every
-** orphan row across all tables, fetches each row's raw payload
-** from the prolly store, and appends one violation per orphan
-** into the session-scoped dolt_constraint_violations blob.
-**
-** `pAncCatHash` points at the three-way-merge ancestor catalog
-** hash. For each candidate orphan the walker asks whether the
-** same row existed unchanged in ancestor — if so, the row was
-** already an orphan before either side started and the merge
-** is not introducing anything new, so it is skipped.
-**
-** Passing an empty/zero hash disables the filter entirely, which
-** is fine for call sites that don't have a three-way ancestor
-** (e.g. cherry-pick onto empty). Returns the number of violations
-** appended via *pnFound. Returns SQLITE_OK on success. */
 int doltliteDetectMergeFkViolations(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,

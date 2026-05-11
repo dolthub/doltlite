@@ -1,7 +1,5 @@
 
 
-/* Single-file content-addressed chunk store. See chunk_store.h for
-** the on-disk layout. All integers on disk are little-endian. */
 #ifdef DOLTLITE_PROLLY
 
 #include "chunk_store.h"
@@ -181,8 +179,6 @@ struct SavedRefsState {
 struct ChunkStoreReplayState {
   ChunkIndexEntry *aIndex;
   int nIndex;
-  /* aIndexMmapBase is the page-aligned base when aIndex is mmapped
-  ** (NULL/0 when malloc'd) — csReleaseIndexBuf branches on it. */
   void *aIndexMmapBase;
   i64 aIndexMmapSize;
   SavedRefsState refs;
@@ -196,32 +192,12 @@ struct ChunkStoreReloadState {
   SavedRefsState refs;
 };
 
-
-/* On hosts where the in-memory ChunkIndexEntry layout matches the
-** on-disk encoding, the persisted index is mapped and used directly.
-** Catch any future struct-layout change at compile time before it
-** silently corrupts the mapping. */
 #if CHUNK_STORE_LE_PACKING
 typedef char chunk_index_entry_size_check[
   (sizeof(ChunkIndexEntry) == CHUNK_INDEX_ENTRY_SIZE) ? 1 : -1
 ];
 #endif
 
-
-/* ── chunk-index mmap helpers ────────────────────────────────────
-**
-** csMapIndex maps `nBytes` of `zPath` starting at `offset` into the
-** process address space, read-only and private. On success it sets
-** *ppData to the first byte of the requested range (which may sit
-** at a non-zero offset within the page-aligned mapping base) and
-** writes the mapping base + size into *ppMapBase / *pnMapSize for a
-** later csUnmapIndex.
-**
-** Returns SQLITE_OK on success, or a non-OK SQLite error if mmap is
-** unavailable / the platform is big-endian (where in-memory and
-** on-disk ChunkIndexEntry encodings differ) / mmap fails. Callers
-** fall back to the malloc + read path on any failure.
-*/
 #if CHUNK_STORE_LE_PACKING
 #  if defined(_WIN32)
 #    include <windows.h>
@@ -289,7 +265,7 @@ static int csMapIndex(const char *zPath, i64 offset, i64 nBytes,
 
   pMap = mmap(NULL, (size_t)mapSize, PROT_READ, MAP_PRIVATE, fd,
               (off_t)alignOffset);
-  close(fd);   /* mapping survives close */
+  close(fd);
   if( pMap == MAP_FAILED ) return SQLITE_IOERR;
 
   *ppMapBase = pMap;
@@ -303,8 +279,6 @@ static void csUnmapIndex(void *pMapBase, i64 nMapSize){
 }
 #  endif
 #else
-/* Big-endian / non-LE-packing host: no mmap path. csMapIndex always
-** signals "fall back to malloc+read+deserialize". */
 static int csMapIndex(const char *zPath, i64 offset, i64 nBytes,
                       void **ppMapBase, i64 *pnMapSize,
                       const u8 **ppData){
@@ -317,11 +291,6 @@ static void csUnmapIndex(void *pMapBase, i64 nMapSize){
 }
 #endif
 
-/* Releases an aIndex pointer + its mmap state in the right way for
-** how it was acquired: if mmapBase is non-NULL the index lives in a
-** mmapped region (munmap it), else the index is a malloc'd array
-** from sqlite3_malloc (sqlite3_free it). aIndex itself is *not*
-** sqlite3_freed in the mmap case — it points inside the mapping. */
 static void csReleaseIndexBuf(ChunkIndexEntry *aIndex,
                               void *mmapBase, i64 mmapSize){
   if( mmapBase ){
@@ -810,7 +779,6 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   CS_WRITE_I64(aBuf + 32, cs->iIndexOffset);
   CS_WRITE_U32(aBuf + 40, (u32)cs->nIndexSize);
 
-
   CS_WRITE_I64(aBuf + 84, cs->iWalOffset);
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
 }
@@ -821,19 +789,6 @@ static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e){
   e->size = (int)CS_READ_U32(aBuf + PROLLY_HASH_SIZE + 8);
 }
 
-/* Manifest layout (168 bytes, little-endian):
-**
-**     0  magic(4) | 4  version(4) | 8  reserved(20, was root_hash)
-**    28  nChunks(4)
-**    32  indexOffset(8) | 40 indexSize(4)
-**    44  reserved(20, was catalog_hash, removed in v7)
-**    64  reserved(20, was headCommit_hash)
-**    84  walOffset(8)  | 92 reserved(12)
-**   104  refs_hash(20)
-**   124  reserved(44)
-**
-** The reserved slots are kept at their historical offsets so old-
-** reader code paths don't have to branch on version. */
 static int csReadManifest(ChunkStore *cs){
   u8 aBuf[CHUNK_MANIFEST_SIZE];
   u32 magic, version;
@@ -888,14 +843,6 @@ static int csReadIndex(ChunkStore *cs){
   }
   nEntries = (int)nEntries64;
 
-  /* Fast path: on hosts where in-memory ChunkIndexEntry encoding
-  ** matches the on-disk byte layout (little-endian + 32-byte
-  ** packing), mmap the index region and use it as the live index.
-  ** This skips the open-time malloc + read + per-entry deserialize
-  ** loop entirely; pages are paged in lazily by the OS as bsearch
-  ** touches them. Falls through to the malloc path on big-endian or
-  ** when mmap fails for any reason (read-only fs, no fd available,
-  ** etc.). */
   if( cs->zFilename
    && csMapIndex(cs->zFilename, cs->iIndexOffset, cs->nIndexSize,
                   &pMapBase, &nMapSize, &pMapData) == SQLITE_OK ){
@@ -989,15 +936,6 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
   return SQLITE_OK;
 }
 
-/* Replay the WAL region (iWalOffset..EOF) into the in-memory index.
-** Records are framed [tag:1][payload...]:
-**   CHUNK: 0x01 | hash(20) | len_le32(4) | data(len)
-**   ROOT:  0x02 | manifest_snapshot(168)
-** Replayed chunks get a positive file offset pointing at the 4-byte
-** length prefix inside the WAL record (record_start + 21), so the
-** common chunkStoreGet pread path serves them with no special-casing.
-** ROOT records do NOT update iWalOffset / iIndexOffset — those describe
-** the compacted region on disk and only move on GC. */
 static int csReplayWal(ChunkStore *cs){
   i64 walSize;
   ChunkStoreReplayState saved;
@@ -1023,14 +961,6 @@ static int csReplayWal(ChunkStore *cs){
     cs->iFileSize = fileSize;
   }
   if( walSize <= 0 ){
-    /* WAL region is empty. Two possibilities:
-    **   (a) Compacted database — all data in main body, manifest
-    **       and index are authoritative. cs->nIndex > 0.
-    **   (b) Brand-new file — manifest written but crash before
-    **       any WAL data. cs->nIndex == 0 and cs->nChunks == 0.
-    ** For (b), the manifest's refs hash may point to a chunk that
-    ** was prepared but never committed. Reset it. For (a), the
-    ** manifest is correct — leave it alone. */
     if( cs->nIndex==0 && cs->nChunks==0
      && !prollyHashIsEmpty(&cs->refsHash) ){
       memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
@@ -1038,11 +968,6 @@ static int csReplayWal(ChunkStore *cs){
     return SQLITE_OK;
   }
 
-  /* Do not materialize the entire WAL in memory. Large databases can
-  ** have multi-gigabyte WAL regions; reading them into one malloc
-  ** trips SQLite's allocator ceiling around 2 GiB and misreports
-  ** SQLITE_NOMEM during open. Replay only needs sequential headers:
-  ** chunk payloads are skipped, not inspected. */
   cs->nWalData = walSize;
 
   pos = 0;
@@ -1057,8 +982,6 @@ static int csReplayWal(ChunkStore *cs){
       ProllyHash hash;
       u32 len;
       if( pos + 20 + 4 > walSize ){
-        /* Truncated chunk header — crash during write. Stop
-        ** scanning and use the last valid root record. */
         break;
       }
       rc = sqlite3OsRead(cs->pFile, aHdr, sizeof(aHdr), cs->iWalOffset + pos);
@@ -1067,7 +990,6 @@ static int csReplayWal(ChunkStore *cs){
       len = CS_READ_U32(aHdr + 20);
       pos += 24;
       if( pos < 0 || (u64)pos + len > (u64)walSize ){
-        /* Truncated chunk data — partial write. Same treatment. */
         break;
       }
 
@@ -1079,10 +1001,6 @@ static int csReplayWal(ChunkStore *cs){
           if( rc != SQLITE_OK ) goto replay_error;
           e = &cs->aPending[cs->nPending];
           memcpy(&e->hash, &hash, sizeof(ProllyHash));
-          /* File position of the 4-byte length prefix. The chunk
-          ** data follows immediately at offset+4. Same convention
-          ** as committed-region entries — chunkStoreGet treats both
-          ** identically. */
           e->offset = cs->iWalOffset + (i64)(pos - 4);
           e->size = (int)len;
           cs->nPending++;
@@ -1093,8 +1011,6 @@ static int csReplayWal(ChunkStore *cs){
     } else if( tag == CS_WAL_TAG_ROOT ){
       u8 m[CHUNK_MANIFEST_SIZE];
       if( pos + CHUNK_MANIFEST_SIZE > walSize ){
-        /* Truncated root record — crash during the commit
-        ** point write. Stop and use the previous root. */
         break;
       }
       {
@@ -1103,10 +1019,6 @@ static int csReplayWal(ChunkStore *cs){
         if( rc != SQLITE_OK ) goto replay_error;
         magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
-          /* Corrupt root record — torn write garbled the
-          ** magic. Content-addressing protects us: any refs
-          ** hash read from this record would fail to resolve.
-          ** Stop scanning. */
           break;
         }
 
@@ -1119,9 +1031,6 @@ static int csReplayWal(ChunkStore *cs){
       nRootRecordsSeen++;
 
     } else {
-      /* Unknown tag. This is genuine WAL corruption (bit-rot or
-      ** tampering), not a crash truncation — truncated records
-      ** are caught above by the length checks. Report corrupt. */
       rc = SQLITE_CORRUPT;
       goto replay_error;
     }
@@ -1129,12 +1038,6 @@ static int csReplayWal(ChunkStore *cs){
 
   cs->nPending = nRootedPending;
 
-  /* If no root records were found in the WAL AND this is a new
-  ** database (no compacted chunks in the index), the manifest's
-  ** refs hash is unconfirmed. Reset it. For databases that went
-  ** through GC (nIndex > 0), the WAL may be empty because all
-  ** data was compacted into the main body — the manifest is
-  ** authoritative in that case. */
   if( nRootRecordsSeen == 0
    && nPendingBefore == 0 && cs->nIndex == 0 ){
     memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
@@ -1146,9 +1049,6 @@ static int csReplayWal(ChunkStore *cs){
     int nMerged = 0;
     rc = csMergeIndex(cs, &aMerged, &nMerged);
     if( rc != SQLITE_OK ) goto replay_error;
-    /* The old aIndex/mmap state is owned by `saved` for rollback
-    ** purposes — don't release here. Just clear the live mmap
-    ** tracking so cs reflects the new malloc'd merged array. */
     cs->aIndex = aMerged;
     cs->nIndex = nMerged;
     cs->aIndexMmapBase = 0;
@@ -1232,7 +1132,6 @@ static int csMergeIndex(
     nTotal * (int)sizeof(ChunkIndexEntry)
   );
   if( aMerged == 0 ) return SQLITE_NOMEM;
-
 
   if( cs->nPending > 1 ){
     qsort(cs->aPending, cs->nPending, sizeof(ChunkIndexEntry),
@@ -1331,7 +1230,6 @@ int chunkStoreOpen(
     cs->zFilename = 0;
     return rc;
   }
-
 
   if( exists ){
     struct stat mainStat;
@@ -1703,26 +1601,6 @@ int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aR
   return SQLITE_OK;
 }
 
-/* Refs blob format (version 6). All lengths u32 LE; timestamps i64 LE:
-**
-**   [version:1]
-**   [default_branch_len:4][default_branch:N]
-**   [nBranches:4] { [name_len:4][name:N]
-**                   [commit_hash:20][ws_hash:20] }*
-**   [nTags:4]     { [name_len:4][name:N]
-**                   [commit_hash:20]
-**                   [tagger_len:4][tagger:N]
-**                   [email_len:4][email:N]
-**                   [timestamp:8]
-**                   [message_len:4][message:N] }*
-**   [nRemotes:4]  { [name_len:4][name:N]
-**                   [url_len:4][url:N] }*
-**   [nTracking:4] { [remote_len:4][remote:N]
-**                   [branch_len:4][branch:N]
-**                   [commit_hash:20] }*
-**
-** Version 5 omits the per-tag metadata fields — the deserializer
-** accepts both versions and defaults missing metadata to empty / 0. */
 static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   const char *def = cs->zDefaultBranch ? cs->zDefaultBranch : "main";
   int defLen = (int)strlen(def);
@@ -2054,9 +1932,6 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
   return SQLITE_OK;
 }
 
-/* Lookup order matters: pending (uncommitted write buffer) first,
-** then the on-disk index. A hash can exist in both — pending wins
-** because it carries the most recent write. */
 int chunkStoreGet(
   ChunkStore *cs,
   const ProllyHash *hash,
@@ -2098,12 +1973,6 @@ int chunkStoreGet(
       e = &cs->aIndex[idx];
     }
 
-
-    /* All committed entries (whether they originated from a compacted
-    ** index, WAL replay, or this connection's recent commits) carry
-    ** positive file offsets pointing at the chunk's 4-byte length prefix. */
-
-
     if( cs->pFile == 0 ){
       if( cs->pWriteBuf && e->offset >= 0
        && (e->offset + 4 + e->size) <= cs->nWriteBuf ){
@@ -2116,7 +1985,6 @@ int chunkStoreGet(
       }
       return SQLITE_CORRUPT;
     }
-
 
     {
       i64 fileOff = e->offset;
@@ -2163,7 +2031,6 @@ int chunkStorePut(
   prollyHashCompute(pData, nData, &h);
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
-
   if( csSearchIndex(cs->aIndex, cs->nIndex, &h) >= 0 ) return SQLITE_OK;
   rc = csSearchRecent(cs, &h, &idx);
   if( rc!=SQLITE_OK ) return rc;
@@ -2186,7 +2053,6 @@ int chunkStorePut(
     e->size = nData;
     cs->nPending++;
   }
-
 
   CS_WRITE_U32(cs->pWriteBuf + cs->nWriteBuf, (u32)nData);
   cs->nWriteBuf += 4;
@@ -2239,7 +2105,6 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc != SQLITE_OK ) return SQLITE_CANTOPEN;
   }
 
-
   if( lockHeld ){
     lockFd = -1;
   }else{
@@ -2251,10 +2116,6 @@ static int csCommitToFile(ChunkStore *cs){
   rc = cs->pFile->pMethods->xFileSize(cs->pFile, &fileSize);
   if( rc != SQLITE_OK ) goto commit_done;
 
-  /* Detect file replacement by another process (e.g. GC compaction
-  ** renamed a new file over the original). Our fd still points at
-  ** the orphaned inode — writes would be lost. Reload from the
-  ** current file at this path. */
   if( hadFile && !cs->hasMovedChecked ){
     int bMoved = 0;
     int rc2 = sqlite3OsFileControl(cs->pFile, SQLITE_FCNTL_HAS_MOVED,
@@ -2276,17 +2137,6 @@ static int csCommitToFile(ChunkStore *cs){
 
   if( cs->nPending > 0 ){
     ChunkStore mergeView;
-    /* New WAL bytes go to the end of the file's WAL region.
-    ** filePos is the running file offset where the next chunk's
-    ** record header will land; +21 from there is the record's
-    ** length prefix (the convention shared with committed-region
-    ** entries). The actual byte writes happen later in the commit
-    ** path; here we only compute index offsets that will be valid
-    ** post-write. On a fresh database we haven't written the
-    ** manifest yet (cs->iWalOffset is still 0), but the manifest
-    ** will land at offset 0 and the WAL records will start at
-    ** CHUNK_MANIFEST_SIZE — same as fileSize after the upcoming
-    ** manifest write. */
     i64 filePos = fileSize > 0 ? fileSize : (i64)CHUNK_MANIFEST_SIZE;
     i64 appendBytes = 0;
 
@@ -2315,8 +2165,6 @@ static int csCommitToFile(ChunkStore *cs){
     for( i = 0; i < cs->nPending; i++ ){
       ChunkIndexEntry *pSrc = &cs->aPending[i];
       aCommittedPending[i] = *pSrc;
-      /* File position of the length prefix within the chunk record.
-      ** The 21 = tag(1) + hash(20) skipped before the length field. */
       aCommittedPending[i].offset = filePos + 21;
       filePos += (i64)25 + (i64)pSrc->size;
     }
@@ -2352,17 +2200,9 @@ static int csCommitToFile(ChunkStore *cs){
     }
   }
 
-  /* Crash injection for durability tests. When the environment
-  ** variable DOLTLITE_CRASH_WRITE is set to N, the Nth
-  ** sqlite3OsWrite call inside this commit will _exit(99)
-  ** WITHOUT flushing buffers — simulating a power-loss crash
-  ** at that exact point. The test harness then reopens the
-  ** database and verifies that either the old committed state
-  ** is intact or the new commit landed fully (never partial).
-  ** Only active under SQLITE_TEST builds. */
 #ifdef SQLITE_TEST
   {
-    static int crashWriteTarget = -2; /* -2 = not yet checked */
+    static int crashWriteTarget = -2;
     static int crashWriteCount = 0;
     if( crashWriteTarget == -2 ){
       const char *zEnv = getenv("DOLTLITE_CRASH_WRITE");
@@ -2390,7 +2230,8 @@ static int csCommitToFile(ChunkStore *cs){
 
   writeOff = fileSize;
 
-
+  /* Append chunks before the root record. Recovery ignores appended data until
+  ** it finds a later valid root record that points at the new manifest. */
   if( cs->nPending > 0 ){
     i64 walBytes = 0;
     u8 *pWalBatch = 0;
@@ -2457,7 +2298,7 @@ static int csCommitToFile(ChunkStore *cs){
     }
   }
 
-
+  /* The root record is the commit point for the append-only chunk store. */
   {
     u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
     rootRec[0] = CS_WAL_TAG_ROOT;
@@ -2467,7 +2308,6 @@ static int csCommitToFile(ChunkStore *cs){
     if( rc != SQLITE_OK ) goto commit_done;
     writeOff += sizeof(rootRec);
   }
-
 
   CRASH_CHECK_WRITE();
   rc = sqlite3OsSync(cs->pFile, SQLITE_SYNC_NORMAL);
@@ -2635,13 +2475,6 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
 
-  /* HAS_MOVED detects atomic file replacement (rename-over) by another
-  ** process — needs a stat() syscall on the path. For autocommit-heavy
-  ** read workloads this fires per-statement and dominates time. After
-  ** the first confirmation that the fd matches the path, cache the
-  ** "not moved" answer until csReloadFromDisk forces a re-open. The
-  ** fstat-based size check below still runs every call and catches all
-  ** append-only changes from cooperative writers. */
   if( !cs->hasMovedChecked ){
     rc = sqlite3OsFileControl(cs->pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
     if( rc!=SQLITE_OK ) return rc;
@@ -2697,9 +2530,6 @@ static int csReloadFromDisk(ChunkStore *cs){
   csAdoptOpenedStoreState(cs, &tmp);
   chunkStoreClose(&tmp);
 
-  /* New fd from re-open — invalidate the cached HAS_MOVED answer so
-  ** the next external-changes check runs the stat() once on the new
-  ** path/fd pair before resuming the cached fast-path. */
   cs->hasMovedChecked = 0;
 
   csFreeReloadState(&saved);
