@@ -223,14 +223,10 @@ struct ChunkStore {
   i64 iWalOffset;
   i64 iFileSize;
 
+  /* aIndex is the durable sorted manifest. Small commits append into aRecent
+  ** first so readers can find new chunks without rewriting the manifest. */
   ChunkIndexEntry *aIndex;
   int nIndex;
-
-
-
-
-
-
 
   void *aIndexMmapBase;
   i64 aIndexMmapSize;

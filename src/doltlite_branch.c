@@ -606,6 +606,8 @@ struct CheckoutMutationCtx {
   const char *zSavedRebaseOrigBranch;
   const char *zSavedRebaseReturnBranch;
   int haveOldState;
+  /* Top-level branch connection checkout must persist even though SQLite has
+  ** a savepoint frame; ordinary nested savepoint checkout remains rollbackable. */
   int bPersistUnderSavepoint;
 };
 

@@ -12,6 +12,8 @@
 
 
 
+/* Private sentinel: fast merge could not prove the result, so caller should
+** fall back to the full row-wise merge path without treating it as an error. */
 #define FM_FALLBACK  SQLITE_DONE
 
 
@@ -536,6 +538,8 @@ static int fmEmitChild(
   else if( prollyHashCompare(pTheirs, pAnc) == 0 )  pSplice = pOurs;
 
   if( pSplice ){
+    /* Preserve structural sharing only when the chunker is exactly aligned at
+    ** this parent level; otherwise emit rows so the rebuilt tree stays sorted. */
     if( fmChunkerLevelsBelowEmpty(pCh, parentLevel) ){
       return prollyChunkerAddAtLevel(pCh, parentLevel,
                                       pBoundKey, nBoundKey,

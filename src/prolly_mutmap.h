@@ -49,8 +49,8 @@ struct ProllyMutMap {
   int levelBase;
   ProllyMutMapEntry *aEntries;
 
-
-
+  /* aEntries is append ordered. aOrder is key sorted, aPos maps physical
+  ** entry indexes back into aOrder, and aHash accelerates point lookup. */
   int *aOrder;
   int *aPos;
   int *aHash;
@@ -66,12 +66,8 @@ struct ProllyMutMap {
   int nUndo;
   int nUndoAlloc;
 
-
-
-
-
-
-
+  /* Cursors cache this value so they can detect pending-map replacement or
+  ** rollback without pointer comparisons against recycled allocations. */
   u32 generation;
 };
 

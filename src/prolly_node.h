@@ -20,6 +20,8 @@
 #define PROLLY_NODE_MAX_ITEMS 4096
 
 typedef struct ProllyNode ProllyNode;
+/* Parsed view over immutable node bytes. Offsets in the node are little-endian
+** on disk; accessors decode them instead of relying on host alignment. */
 struct ProllyNode {
   const u8 *pData;
   int nData;

@@ -56,6 +56,8 @@ int prollyHashIsEmpty(const ProllyHash *h){
 #define PROLLY_WEIBULL_L  4096.0
 #define PROLLY_MAX_U32    4294967295.0
 
+/* Boundary predicate for content-defined chunking. `size` is the candidate
+** chunk size after adding the current item; `thisSize` is that item size. */
 int prollyWeibullCheck(u32 size, u32 thisSize, u32 hash){
   double pow;
   double start, end;
