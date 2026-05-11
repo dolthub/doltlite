@@ -62,6 +62,32 @@ PREFIX="$(dirname "${INSTALL_DIR}")"
 INCLUDE_DIR="${PREFIX}/include"
 LIB_DIR="${PREFIX}/lib"
 
+# Fail fast with a helpful message if the user forgot sudo. /usr/local is
+# root-owned on most systems.
+can_write() {
+  local d="$1"
+  # Walk up to the first existing ancestor and check whether we could
+  # create/modify under it.
+  while [ ! -d "$d" ]; do
+    d="$(dirname "$d")"
+  done
+  [ -w "$d" ]
+}
+if [ "$(id -u)" -ne 0 ]; then
+  for d in "$INSTALL_DIR" "$INCLUDE_DIR" "$LIB_DIR"; do
+    if ! can_write "$d"; then
+      cat >&2 <<EOF
+doltlite: ${d} is not writable as $(id -un). Re-run with sudo:
+
+  sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
+
+Or set DOLTLITE_INSTALL_DIR to a directory you own (e.g. \$HOME/.local/bin).
+EOF
+      exit 1
+    fi
+  done
+fi
+
 # Pick the shared-library extension per platform.
 case "$PLATFORM" in
   linux) SHARED_EXT=".so" ;;
