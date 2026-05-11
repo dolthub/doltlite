@@ -109,6 +109,8 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
 
   pOut[0] = SORTKEY_NUM;
 
+  /* Convert SQLite numeric serial types to sortable IEEE bytes: positive
+  ** values flip the sign bit, negative values invert all bits. */
   if( serialType == 7 ){
 
     memcpy(buf, pData, 8);

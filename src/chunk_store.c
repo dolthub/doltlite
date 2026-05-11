@@ -2390,7 +2390,8 @@ static int csCommitToFile(ChunkStore *cs){
 
   writeOff = fileSize;
 
-
+  /* Append chunks before the root record. Recovery ignores appended data until
+  ** it finds a later valid root record that points at the new manifest. */
   if( cs->nPending > 0 ){
     i64 walBytes = 0;
     u8 *pWalBatch = 0;
@@ -2457,7 +2458,7 @@ static int csCommitToFile(ChunkStore *cs){
     }
   }
 
-
+  /* The root record is the commit point for the append-only chunk store. */
   {
     u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
     rootRec[0] = CS_WAL_TAG_ROOT;

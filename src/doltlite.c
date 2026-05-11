@@ -727,6 +727,9 @@ static int doltliteSavepointIsTopLevelTxn(sqlite3 *db){
   return db->pSavepoint!=0 && db->nSavepoint==0;
 }
 
+/* SQLite represents a top-level SAVEPOINT as the transaction boundary.
+** Doltlite treats that like autocommit for VC operations: seal the boundary
+** instead of leaving a savepoint that later ROLLBACK TO can undo. */
 static int doltliteVcSealTopLevelSavepointTxn(sqlite3 *db){
   if( doltliteSavepointIsTopLevelTxn(db) ){
     return sqlite3_exec(db, "COMMIT", 0, 0, 0);
@@ -1404,10 +1407,8 @@ static void doltliteCommitFunc(
     return;
   }
 
-
-
-
-
+  /* Top-level SAVEPOINT is sealed before option validation because Dolt keeps
+  ** that SQL transaction boundary durable even when dolt_commit later errors. */
   if( sealTopLevel ){
     (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
   }
@@ -1552,8 +1553,8 @@ static void doltliteCommitFunc(
    && (!db->autoCommit
        || sqlite3_txn_state(db, "main")!=SQLITE_TXN_NONE
        || db->pSavepoint) ){
-
-
+    /* Plain BEGIN and nested SAVEPOINT cases stay rollbackable until argument
+    ** validation and basic commit guards have succeeded. */
     (void)sqlite3_exec(db, "COMMIT", 0, 0, 0);
   }
 

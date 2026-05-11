@@ -2496,13 +2496,8 @@ static int syncSavepoints(BtCursor *pCur){
   return SQLITE_OK;
 }
 
-
-
-
-
-
-
-
+/* Pending edit maps are shared by every cursor on the same table. When a flush
+** swaps the table map, every live cursor must drop iterator state into it. */
 static void refreshCursorMutMapAliases(BtShared *pBt, Pgno iTable,
                                         ProllyMutMap *pNewMap){
   BtCursor *p;
@@ -2976,13 +2971,9 @@ static void releaseMutMapsToSavepoint(Btree *pBtree, int level){
   }
 }
 
-
-
-
-
-
-
-
+/* If a dirty map is flushed while a savepoint is open, move that map into the
+** savepoint snapshot and continue with a fresh map. Rollback can then restore
+** the exact pre-flush edits even though the table root has already changed. */
 static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
                                    ProllyMutMap **ppPending,
                                    ProllyMutMap **ppFlushMap,
@@ -7336,10 +7327,8 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
   }
 
-
-
-
-
+  /* VC functions can write through this btree layer without first touching a
+  ** SQL table, so mirror SQLite's active savepoint stack before mutating it. */
   target = db->nSavepoint;
   while( pBtree->nSavepoint < target ){
     rc = pushSavepoint(pBtree, 0);
