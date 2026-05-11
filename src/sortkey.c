@@ -571,7 +571,11 @@ static int recordFromNumericSmallBlobSortKeyBuffer(
   decodeNumericSortKeyToRecord(pSortKey + 1, &aType0, &aLen0, aBuf0);
   aType1 = (u32)nBlob * 2 + 12;
 
-  nHdr = 1 + sqlite3VarintLen(aType0) + sqlite3VarintLen(aType1);
+  if( aType1<128 ){
+    nHdr = 3;
+  }else{
+    nHdr = 1 + sqlite3VarintLen(aType0) + sqlite3VarintLen(aType1);
+  }
   if( nHdr > 126 ) nHdr++;
   nTotal = nHdr + (int)aLen0 + nBlob;
   if( *pnAlloc < nTotal ){
@@ -582,9 +586,16 @@ static int recordFromNumericSmallBlobSortKeyBuffer(
   }
   pOut = *ppBuf;
 
-  off = putVarint32(pOut, (u32)nHdr);
-  off += putVarint32(pOut + off, aType0);
-  off += putVarint32(pOut + off, aType1);
+  if( aType1<128 ){
+    pOut[0] = 3;
+    pOut[1] = (u8)aType0;
+    pOut[2] = (u8)aType1;
+    off = 3;
+  }else{
+    off = putVarint32(pOut, (u32)nHdr);
+    off += putVarint32(pOut + off, aType0);
+    off += putVarint32(pOut + off, aType1);
+  }
   if( aLen0>0 ){
     memcpy(pOut + off, aBuf0, aLen0);
     off += (int)aLen0;
