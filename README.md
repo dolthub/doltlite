@@ -25,6 +25,12 @@ Each install method places the same set of files (paths shown for `/usr/local`):
 - `lib/libdoltlite.a` — static library
 - `lib/libdoltlite.{so,dylib}` — shared library
 
+### Homebrew (macOS / Linux)
+
+```
+brew install doltlite
+```
+
 ### macOS (arm64) / Linux (x86_64 or arm64)
 
 ```
