@@ -239,6 +239,14 @@ struct ChunkStore {
   ChunkIndexEntry *aPending;
   int nPending;
   int nPendingAlloc;
+  ChunkIndexEntry *aRecent;
+  int nRecent;
+  int nRecentAlloc;
+  int *aRecentHT;
+  int *aRecentHTNext;
+  int nRecentHTBuilt;
+  int nRecentHTNextAlloc;
+  int nRecentHTSize;
   int *aPendingHT;
   int *aPendingHTNext;
   int nPendingHTBuilt;

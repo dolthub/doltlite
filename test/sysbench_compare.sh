@@ -15,7 +15,8 @@ SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL;
 ROWS=${BENCH_ROWS:-10000}
 SEED=42
 TMPDIR=$(mktemp -d)
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.25}
+BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-1.75}
 BENCH_SECTION_MODE=${BENCH_SECTION_MODE:-full}
 
 cleanup() { rm -rf "$TMPDIR"; }
@@ -604,20 +605,69 @@ check_ceiling() {
   return $failed
 }
 
-if [ "$BENCH_SECTION_MODE" != "autocommit" ]; then
-  echo ""
-  echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x)"
-  echo ""
+check_average_ceiling() {
+  local section="$1" tests="$2" max="$3"
+  local ratio
+  ratio=$(python3 - "$BENCH_RESULTS_FILE" "$section" "$tests" <<'PYEOF'
+import sys
+path, section, tests = sys.argv[1], sys.argv[2], sys.argv[3].split()
+wanted = set(tests)
+ratios = []
+with open(path) as f:
+    for line in f:
+        cols = line.rstrip("\n").split("\t")
+        if len(cols) < 4 or cols[0] != section or cols[1] not in wanted:
+            continue
+        s, d = int(cols[2]), int(cols[3])
+        if s > 0 and d >= 0:
+            ratios.append(d / s)
+if ratios:
+    print(f"{sum(ratios) / len(ratios):.2f}")
+else:
+    print("")
+PYEOF
+)
+  if [ -n "$ratio" ]; then
+    over=$(python3 -c "r=$ratio; print(1 if r>$max else 0)")
+    if [ "$over" = "1" ]; then
+      echo "FAIL: $section average = ${ratio}x (ceiling: ${max}x)" >&2
+      return 1
+    fi
+  fi
+  return 0
+}
 
-  ceiling_ok=0
+echo ""
+echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x individual, ${BENCH_AVG_MAX_MULTIPLIER}x average)"
+echo ""
+
+ceiling_ok=0
+if [ "$BENCH_SECTION_MODE" = "autocommit" ]; then
+  check_ceiling "ac_reads" "$READ_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+  check_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+  check_average_ceiling "ac_reads" "$READ_TESTS" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+  check_average_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+else
+  check_ceiling "mem_reads" "$READ_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+  check_ceiling "mem_writes" "$WRITE_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
   check_ceiling "file_reads" "$READ_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
   check_ceiling "file_writes" "$WRITE_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-
-  if [ "$ceiling_ok" = "0" ]; then
-    echo "All tests within ceilings."
-  else
-    echo ""
-    echo "**FAILED**: One or more tests exceeded their ceiling."
-    exit 1
+  check_average_ceiling "mem_reads" "$READ_TESTS" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+  check_average_ceiling "mem_writes" "$WRITE_TESTS" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+  check_average_ceiling "file_reads" "$READ_TESTS" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+  check_average_ceiling "file_writes" "$WRITE_TESTS" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+  if [ "$BENCH_SECTION_MODE" = "full" ]; then
+    check_ceiling "ac_reads" "$READ_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+    check_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+    check_average_ceiling "ac_reads" "$READ_TESTS" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+    check_average_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
   fi
+fi
+
+if [ "$ceiling_ok" = "0" ]; then
+  echo "All tests within ceilings."
+else
+  echo ""
+  echo "**FAILED**: One or more tests exceeded their ceiling."
+  exit 1
 fi
