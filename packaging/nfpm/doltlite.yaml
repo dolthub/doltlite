@@ -1,0 +1,33 @@
+# nfpm config for the `doltlite` Debian package — the CLI shell and the
+# remote sync server, mirroring what the `sqlite3` apt package ships.
+# See https://nfpm.goreleaser.com/configuration/ for the schema.
+name: doltlite
+arch: "${PKG_ARCH}"
+platform: linux
+version: "${VERSION}"
+section: database
+priority: optional
+maintainer: DoltHub <team@dolthub.com>
+description: |
+  DoltLite — SQLite fork with Git-style version control.
+  Provides the doltlite SQL shell (drop-in replacement for sqlite3) and
+  the doltlite-remotesrv binary for serving a doltlite database to
+  remote clients.
+vendor: DoltHub
+homepage: https://github.com/dolthub/doltlite
+license: Apache-2.0
+
+depends:
+  - libdoltlite0 (= ${VERSION})
+
+contents:
+  - src: build/doltlite
+    dst: /usr/bin/doltlite
+    file_info:
+      mode: 0755
+  - src: build/doltlite-remotesrv
+    dst: /usr/bin/doltlite-remotesrv
+    file_info:
+      mode: 0755
+  - src: LICENSE.md
+    dst: /usr/share/doc/doltlite/copyright
