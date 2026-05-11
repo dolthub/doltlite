@@ -1,11 +1,11 @@
 
-/* Prolly tree node encoding:
-**   [magic:4][level:1][count:2][flags:1]
-**   [aKeyOff:4*count][aValOff:4*count]
-**   [key data][value data]
-** INTKEY keys are 8-byte big-endian with the sign bit flipped so
-** memcmp gives correct signed order. Values are SQLite record bytes
-** at leaf level, or child hashes at interior levels. */
+
+
+
+
+
+
+
 #ifndef SQLITE_PROLLY_NODE_H
 #define SQLITE_PROLLY_NODE_H
 
@@ -47,10 +47,10 @@ int prollyNodeSearchBlob(const ProllyNode *pNode,
 
 int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes);
 
-/* Encodes an i64 into the sortable 8-byte big-endian form used by
-** PROLLY_NODE_INTKEY on-disk layout (sign-flipped, so unsigned byte
-** lex order matches signed integer order). The inverse of
-** prollyNodeIntKey at the byte level. */
+
+
+
+
 void prollyEncodeIntKey(i64 v, u8 buf[8]);
 
 typedef struct ProllyNodeBuilder ProllyNodeBuilder;

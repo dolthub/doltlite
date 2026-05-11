@@ -137,14 +137,14 @@ int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
   return SQLITE_OK;
 }
 
-/* After schema merge decides to ADD COLUMN X from theirs, every
-** row that exists on theirs needs X backfilled onto ours. Parse
-** their CREATE TABLE to find each new column's ordinal, then diff
-** their table against anc and UPDATE each row on ours with the
-** value of the new column. Rows that only exist on theirs (diff
-** ADD) also need the update. Rows DELETEd on theirs are skipped
-** (trySchemaColumnMerge has already rejected drop-on-one-side
-** edit-on-other, so we shouldn't see that case here). */
+
+
+
+
+
+
+
+
 int migrateSchemaRowData(
   sqlite3 *db,
   const ProllyHash *pAncCatHash,

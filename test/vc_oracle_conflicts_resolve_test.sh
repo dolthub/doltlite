@@ -1,17 +1,17 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_conflicts_resolve
-#
-# Runs identical conflict-resolution scenarios against doltlite and Dolt
-# and compares the resulting table data and conflict state. Covers:
-#   - --ours resolution (keep our value)
-#   - --theirs resolution (accept their value)
-#   - multi-row conflicts resolved in one call
-#   - partial resolution (multiple tables, resolve one)
-#   - resolution followed by commit
-#
-# Usage: bash vc_oracle_conflicts_resolve_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -24,17 +24,17 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Build a standard merge-conflict setup and add a resolution + query.
-# Compare the final table data (SELECT id, v FROM t ORDER BY id) and
-# the remaining conflict count.
-#
-# $1=name, $2=setup (up to and including the merge), $3=resolve+query SQL
+
+
+
+
+
 oracle() {
   local name="$1" setup="$2" resolve_and_query="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  # -- doltlite --
+
   local dl_script
   local dl_out
   dl_script=$(printf "%s\n%s\n" "$setup" "$resolve_and_query" | perl -0pe "s/\nSELECT dolt_merge\\(/\nBEGIN;\\nSELECT dolt_merge\\(/")
@@ -46,10 +46,10 @@ oracle() {
            | grep '^R|' \
            | tr -d '\r' | sort)
 
-  # -- Dolt --
-  # Everything must run in ONE `dolt sql` invocation so
-  # @@autocommit=0 and @@dolt_allow_commit_conflicts=1 persist
-  # across the setup, merge, resolution, and query.
+
+
+
+
   local dolt_all
   dolt_all=$(vc_oracle_translate_for_dolt "$(printf '%s\n%s' "$setup" "$resolve_and_query")")
 
@@ -107,7 +107,7 @@ $dolt_setup"
   fi
 }
 
-# Standard conflict setup: both sides modify the same row differently.
+
 CONFLICT_SETUP="
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 10);
@@ -242,10 +242,10 @@ SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
 echo "--- TEXT primary key ---"
 
-# TEXT PK exercises the conflict-apply path for non-integer keys.
-# Row-based prolly-tree storage keys rows by the serialized PK; the
-# conflict-resolve path must decode the text PK from the record body
-# (since doltlite's tree key is an intKey, not the user PK bytes).
+
+
+
+
 oracle "resolve_theirs_text_pk" \
 "CREATE TABLE t(id VARCHAR(32) PRIMARY KEY, v INT);
 INSERT INTO t VALUES('alice', 10);
@@ -341,9 +341,9 @@ SELECT CONCAT('R|count|', count(*)) FROM dolt_conflicts;"
 
 echo "--- composite primary key (two INT columns) ---"
 
-# Composite PK exercises the path where the tree key alone can't
-# identify a row — the conflict apply must reconstruct the full key
-# from the record body.
+
+
+
 oracle "resolve_theirs_composite_int_pk" \
 "CREATE TABLE t(a INT, b INT, v INT, PRIMARY KEY(a, b));
 INSERT INTO t VALUES(1, 1, 11);
@@ -466,8 +466,8 @@ SELECT CONCAT('R|', region, '|', id, '|', v) FROM t ORDER BY region, id;"
 
 echo "--- multi-row conflicts in a single table ---"
 
-# Many conflicting rows in the same table, resolved in one call.
-# Exercises the loop over ConflictRow entries in applyTheirRecord.
+
+
 oracle "resolve_theirs_many_rows" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 1), (2, 2), (3, 3), (4, 4), (5, 5);
@@ -489,9 +489,9 @@ SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
 echo "--- delete/modify conflicts ---"
 
-# Main deletes a row; feature modifies it. The two resolution choices
-# have different meanings here — --ours keeps the delete, --theirs
-# keeps the modification (row present with feature's value).
+
+
+
 oracle "resolve_ours_delete_vs_modify" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 10), (2, 20), (3, 30);
@@ -530,7 +530,7 @@ SELECT dolt_merge('feature');
   "SELECT dolt_conflicts_resolve('--theirs', 't');
 SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
-# Symmetric: main modifies, feature deletes.
+
 oracle "resolve_theirs_modify_vs_delete" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 10), (2, 20);
@@ -552,9 +552,9 @@ SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
 echo "--- insert/insert same PK ---"
 
-# Both sides insert a new row with the same primary key but different
-# values. No base row exists. Exercises the applyTheirRecord path for
-# a row that has no 'base' side.
+
+
+
 oracle "resolve_theirs_insert_insert_same_pk" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT);
 INSERT INTO t VALUES(1, 10);
@@ -595,8 +595,8 @@ SELECT CONCAT('R|', id, '|', v) FROM t ORDER BY id;"
 
 echo "--- wide schema (many non-PK columns) ---"
 
-# Exercises the per-column decoding loop in buildInsertSql with a
-# larger column count, mixing types.
+
+
 oracle "resolve_theirs_wide_schema" \
 "CREATE TABLE t(id INT PRIMARY KEY, a VARCHAR(32), b INT, c DOUBLE, d VARCHAR(32), e INT);
 INSERT INTO t VALUES(1, 'a1', 11, 1.5, 'd1', 111);
@@ -619,7 +619,7 @@ SELECT CONCAT('R|', id, '|', a, '|', b, '|', c, '|', d, '|', e) FROM t ORDER BY 
 
 echo "--- NULL values in conflict rows ---"
 
-# Non-PK column containing NULL must survive the conflict roundtrip.
+
 oracle "resolve_theirs_with_nulls" \
 "CREATE TABLE t(id INT PRIMARY KEY, v INT, note VARCHAR(32));
 INSERT INTO t VALUES(1, 10, NULL);

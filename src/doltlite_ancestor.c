@@ -152,12 +152,12 @@ static int ancestorBfsCollect(
   return rc;
 }
 
-/* Merge-base by set-intersection BFS: walk commit1's ancestry in full,
-** then BFS commit2 and return the first hash that appears in the
-** ancestor set. Fine for shallow histories; for Git-style "lowest"
-** LCA on deep merges the right algorithm is both-sides BFS with
-** generation numbers, but Dolt's merge semantics accept any common
-** ancestor produced here. */
+
+
+
+
+
+
 int doltliteFindAncestor(
   sqlite3 *db,
   const ProllyHash *commitHash1,

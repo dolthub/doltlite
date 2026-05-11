@@ -1,32 +1,32 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_revert and dolt_cherry_pick
-#
-# Runs identical revert / cherry-pick scenarios against doltlite and
-# Dolt and compares the resulting (dolt_log, table contents) post-state.
-# Both procedures take a commit-ish argument, walk the parent chain to
-# build a three-way merge, and produce a new commit on the current
-# branch — so the test surface is largely about
-#
-#   1. argument parsing (ref / branch / tag / hash / HEAD~N)
-#   2. message formatting on the new commit
-#   3. table contents after the operation completes
-#   4. error paths (initial commit, nonexistent ref, no args)
-#
-# The harness compares dolt_log AND a SELECT * from the user table,
-# concatenated. dolt_log alone wouldn't catch a divergence where the
-# same commit message is generated but the resulting catalog is
-# wrong; the table SELECT alone wouldn't catch divergences in the
-# new commit's parent linkage.
-#
-# Commit messages from cherry-pick / revert are normalized to a
-# canonical form before comparison because the two engines format
-# them differently — that's a known divergence we test for separately
-# in the message_format scenarios, but we don't want it to dominate
-# every other test.
-#
-# Usage: bash vc_oracle_revert_cherrypick_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -39,22 +39,22 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Strip CRs, drop blank lines, sort the log section by message and
-# the table section by row contents. The H1/H2/... renaming makes
-# the commit hashes deterministic across the two engines.
-#
-# Cherry-pick / revert messages are canonicalized: anything matching
-# /^(cherry-pick|revert).*'?<orig>'?$/i becomes "OP:<orig>". This
-# isolates the commit content from the message wording so we don't
-# trip on every scenario just because Dolt writes "Revert \"x\"" and
-# doltlite writes "Revert 'x'".
+
+
+
+
+
+
+
+
+
 normalize_log() {
   tr -d '\r' \
     | awk -F'\t' 'NF >= 3 && $1 == "L" { print }' \
     | awk -F'\t' '
         {
           msg = $3
-          # Cherry-pick: canonicalize as CP:<orig> if recognizable
+
           lower = tolower(msg)
           if (match(lower, /^cherry-pick[: ]/) > 0) {
             sub(/^[Cc]herry-?[Pp]ick[: ]+/, "", msg)
@@ -84,8 +84,8 @@ normalize_table() {
     | sort
 }
 
-# Run a scenario. $1=name, $2=setup SQL in doltlite syntax. The
-# harness rewrites SELECT dolt_*(...) -> CALL dolt_*(...) for Dolt.
+
+
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
@@ -140,8 +140,8 @@ oracle() {
   fi
 }
 
-# Both engines should error in the same direction. Doesn't compare
-# the error text — just that both refuse the operation.
+
+
 oracle_error() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_err"
@@ -251,7 +251,7 @@ oracle_poststate() {
 echo "=== Version Control Oracle Tests: dolt_revert / dolt_cherry_pick ==="
 echo ""
 
-# Common seed: a single-row table on main, branched off to feature.
+
 SEED="
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -262,17 +262,17 @@ SELECT dolt_branch('feature');
 
 echo "--- cherry-pick: basic ---"
 
-# Cross-branch cherry-pick has a notable trap: dolt_log on main
-# only sees main's history, so a subquery like
-#   SELECT commit_hash FROM dolt_log WHERE message = 'feat_add_2'
-# returns NOTHING when run from main and the cherry-pick silently
-# fails on both engines, producing a "passing" but meaningless test
-# (same false-positive class as merge_from_commit_hash in PR #364).
-# Every cherry-pick scenario below uses TAGS or branch~N references
-# instead, both of which resolve cross-branch in both engines.
 
-# Pick the tip of feature by branch name. The picked commit adds a
-# new row, no overlap with main.
+
+
+
+
+
+
+
+
+
+
 oracle "cherry_pick_branch_tip" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -283,8 +283,8 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feature');
 "
 
-# Cherry-pick a commit that updates a non-PK column. Reference by
-# tag (cross-branch visible in both engines).
+
+
 oracle "cherry_pick_update_non_pk" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -296,8 +296,8 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('upd-source');
 "
 
-# Cherry-pick by tag — same surface gap that bit dolt_merge in
-# PR #364, so explicit oracle coverage matters.
+
+
 oracle "cherry_pick_by_tag" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -309,8 +309,8 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('cherry-source');
 "
 
-# Cherry-pick by branch~N — picks the second-most-recent commit
-# on feature. Verifies the HEAD~N resolver work from #365.
+
+
 oracle "cherry_pick_by_branch_relative" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -326,8 +326,8 @@ SELECT dolt_cherry_pick('feature~1');
 
 echo "--- cherry-pick: chains ---"
 
-# Pick two commits from feature in succession via branch~N. Both
-# should land on main as separate commits.
+
+
 oracle "cherry_pick_two_in_sequence" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -506,8 +506,8 @@ DELETE FROM gp WHERE id = 1;
 
 echo "--- revert: basic ---"
 
-# Revert the most recent commit. Should produce a new commit that
-# undoes the change but leaves earlier history intact.
+
+
 oracle "revert_undoes_last_insert" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -516,7 +516,7 @@ SELECT dolt_commit('-m', 'c2_add_2');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message = 'c2_add_2'));
 "
 
-# Revert an update — should restore the original value.
+
 oracle "revert_undoes_update" "
 $SEED
 UPDATE t SET v = 999 WHERE id = 1;
@@ -525,7 +525,7 @@ SELECT dolt_commit('-m', 'c2_update');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message = 'c2_update'));
 "
 
-# Revert a delete — row should come back.
+
 oracle "revert_undoes_delete" "
 $SEED
 DELETE FROM t WHERE id = 1;
@@ -534,7 +534,7 @@ SELECT dolt_commit('-m', 'c2_delete');
 SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message = 'c2_delete'));
 "
 
-# Revert by tag. Same resolver-coverage rationale as cherry-pick.
+
 oracle "revert_by_tag" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -544,7 +544,7 @@ SELECT dolt_tag('to-revert');
 SELECT dolt_revert('to-revert');
 "
 
-# Revert HEAD~0 (current HEAD) — same as reverting the last commit.
+
 oracle "revert_head" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -553,8 +553,8 @@ SELECT dolt_commit('-m', 'c2_add_2');
 SELECT dolt_revert('HEAD');
 "
 
-# Revert HEAD~1 — should undo the second-to-last commit, leaving
-# the most recent change intact (only its base changes).
+
+
 oracle "revert_head_relative" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -568,8 +568,8 @@ SELECT dolt_revert('HEAD~1');
 
 echo "--- revert: chains ---"
 
-# Make three commits, revert two of them in reverse order. The
-# table should reflect only the surviving change.
+
+
 oracle "revert_two_in_reverse_order" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -623,21 +623,21 @@ SELECT dolt_revert('HEAD~1');
           (SELECT count(*) FROM pragma_index_list('b') WHERE name = 'idx_b_v')" \
   "SELECT CONCAT((SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'a' AND index_name = 'idx_a_v'), '|', (SELECT COUNT(*) FROM information_schema.statistics WHERE table_name = 'b' AND index_name = 'idx_b_v'))"
 
-# Reverting a revert ("undo the undo") would be the natural test
-# here, but Dolt and doltlite format the nested commit message
-# differently in this specific case: Dolt strips inner quotes
-# (`Revert "Revert c2_add_2"`) while doltlite preserves them
-# (`Revert "Revert "c2_add_2""`). The functional outcome — table
-# state restored to the original — matches between engines, but
-# the message difference would dominate the comparison. The
-# `revert_two_in_reverse_order` scenario above already exercises
-# chained reverts on independent commits, so this case is left
-# uncovered intentionally rather than being weakened to a state-only
-# check that drifts from the rest of the harness.
+
+
+
+
+
+
+
+
+
+
+
 
 echo "--- conflicts ---"
 
-# A conflicted cherry-pick / revert should NOT advance the branch.
+
 oracle_no_merge_commit() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_nm"
@@ -672,10 +672,10 @@ oracle_no_merge_commit() {
   fi
 }
 
-# Cherry-pick a commit whose change overlaps with main's most
-# recent commit on the same row. Both sides modified id=1's v to
-# different values — three-way merge produces a real conflict and
-# neither engine should produce a clean cherry-pick commit.
+
+
+
+
 oracle_no_merge_commit "cherry_pick_modify_modify_conflict" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -690,10 +690,10 @@ SELECT dolt_commit('-m', 'main_11');
 SELECT dolt_cherry_pick('feat-conflict');
 "
 
-# Revert a commit when a later commit on the same branch has
-# already touched the same row. Reverting the older commit would
-# require undoing a change that was subsequently overwritten —
-# both engines should refuse to produce a clean revert commit.
+
+
+
+
 oracle_no_merge_commit "revert_with_later_overlap_conflict" "
 $SEED
 UPDATE t SET v = 50 WHERE id = 1;
@@ -705,8 +705,8 @@ SELECT dolt_commit('-m', 'c3_set_99');
 SELECT dolt_revert('HEAD~1');
 "
 
-# Under autocommit, a conflicted cherry-pick should roll back and
-# leave no persisted conflict rows behind.
+
+
 oracle_error_poststate "cherry_pick_conflict_rolls_back" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -774,10 +774,10 @@ SELECT dolt_add('-A');
 SELECT dolt_cherry_pick('feature');
 "
 
-# Dolt's dolt_revert() with no args is a silent no-op rather than
-# an error (likely an undocumented quirk — there's no defined
-# semantics for "revert nothing"). doltlite matches Dolt for
-# consistency. So this is a positive oracle scenario, not an error.
+
+
+
+
 oracle "revert_no_args_is_noop" "
 $SEED
 SELECT dolt_revert();
@@ -812,8 +812,8 @@ SELECT dolt_add('-A');
 SELECT dolt_revert('HEAD');
 "
 
-# Reverting the initial commit has no parent to diff against — should
-# error in both engines.
+
+
 oracle_error "cherry_pick_initial_commit" "
 $SEED
 SELECT dolt_cherry_pick((SELECT commit_hash FROM dolt_log WHERE message = 'Initialize data repository'));

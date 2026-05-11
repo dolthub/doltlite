@@ -1,7 +1,7 @@
 #!/bin/bash
-#
-# Tests for dolt_schema_diff('from_ref', 'to_ref')
-#
+
+
+
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
@@ -10,9 +10,9 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 echo "=== Doltlite Schema Diff Tests ==="
 echo ""
 
-# ============================================================
-# Table added between commits
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_add_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -34,9 +34,9 @@ run_test "add_from_sql_empty" \
 
 rm -f "$DB"
 
-# ============================================================
-# Multiple tables added
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_multi_$$.db; rm -f "$DB"
 echo "SELECT dolt_commit('-A','-m','empty');
@@ -51,9 +51,9 @@ run_test "multi_count" \
 
 rm -f "$DB"
 
-# ============================================================
-# No schema changes between commits
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_none_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -64,14 +64,14 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_commit('-A','-m','c2');
 SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Only data changes, no schema changes
+
 run_test "none_count" "SELECT count(*) FROM dolt_schema_diff('v1','v2');" "0" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Bad refs surface an error
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_badref_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -87,9 +87,9 @@ run_test_match "bad_single_arg_errors" \
 
 rm -f "$DB"
 
-# ============================================================
-# Resolve by branch name
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_branch_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -106,9 +106,9 @@ run_test "branch_from_name_empty" "SELECT length(from_table_name) FROM dolt_sche
 
 rm -f "$DB"
 
-# ============================================================
-# Reverse direction shows "dropped"
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_reverse_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -118,15 +118,15 @@ CREATE TABLE extra(id INTEGER PRIMARY KEY);
 SELECT dolt_commit('-A','-m','c2');
 SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# v1→v2: extra is added (from side empty, to side has the table)
+
 run_test "reverse_fwd_to_name" "SELECT to_table_name FROM dolt_schema_diff('v1','v2');" "extra" "$DB"
 run_test "reverse_fwd_from_empty" "SELECT length(from_table_name) FROM dolt_schema_diff('v1','v2');" "0" "$DB"
 
-# v2→v1: extra is dropped (from side has the table, to side empty)
+
 run_test "reverse_rev_from_name" "SELECT from_table_name FROM dolt_schema_diff('v2','v1');" "extra" "$DB"
 run_test "reverse_rev_to_empty" "SELECT length(to_table_name) FROM dolt_schema_diff('v2','v1');" "0" "$DB"
 
-# When dropped, from_create_statement is set, to_create_statement is empty
+
 run_test_match "reverse_from" \
   "SELECT from_create_statement FROM dolt_schema_diff('v2','v1');" "CREATE TABLE" "$DB"
 run_test "reverse_to_empty_sql" \
@@ -134,9 +134,9 @@ run_test "reverse_to_empty_sql" \
 
 rm -f "$DB"
 
-# ============================================================
-# Same commit returns empty
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_same_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -147,9 +147,9 @@ run_test "same_empty" "SELECT count(*) FROM dolt_schema_diff('v1','v1');" "0" "$
 
 rm -f "$DB"
 
-# ============================================================
-# Single-argument range syntax
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_range_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -162,9 +162,9 @@ run_test "range_to_name" "SELECT to_table_name FROM dolt_schema_diff('HEAD~1..HE
 
 rm -f "$DB"
 
-# ============================================================
-# Schema diff after merge (new table from feature branch)
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_merge_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -182,16 +182,16 @@ SELECT dolt_commit('-A','-m','main work');
 SELECT dolt_merge('feat');
 SELECT dolt_tag('after');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# before→after should show feat_tbl as added (to_table_name set, from empty)
+
 run_test_match "merge_added" \
   "SELECT to_table_name FROM dolt_schema_diff('before','after') WHERE from_table_name='';" \
   "feat_tbl" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Index creation shows up as schema change
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_index_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT);
@@ -202,16 +202,16 @@ CREATE INDEX idx_name ON t(name);
 SELECT dolt_commit('-A','-m','c2');
 SELECT dolt_tag('v2');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Index creation adds an entry to sqlite_master
+
 run_test_match "index_count" "SELECT count(*) FROM dolt_schema_diff('v1','v2');" "^[1-9]" "$DB"
 run_test_match "index_name" \
   "SELECT to_table_name FROM dolt_schema_diff('v1','v2') LIMIT 1;" "idx_name" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# View creation shows up
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_view_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -228,9 +228,9 @@ run_test_match "view_name" \
 
 rm -f "$DB"
 
-# ============================================================
-# Rename filter matches either old or new table name
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_rename_filter_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -245,9 +245,9 @@ run_test "rename_filter_old_name" \
 
 rm -f "$DB"
 
-# ============================================================
-# Persistence
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_persist_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -261,9 +261,9 @@ run_test "persist_count" "SELECT count(*) FROM dolt_schema_diff('v1','v2');" "1"
 
 rm -f "$DB"
 
-# ============================================================
-# CREATE TABLE statement content
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_stmt_$$.db; rm -f "$DB"
 echo "SELECT dolt_commit('-A','-m','empty');
@@ -281,9 +281,9 @@ run_test_match "stmt_cols" \
 
 rm -f "$DB"
 
-# ============================================================
-# Branch created from tag ref
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_branch_from_tag_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -302,9 +302,9 @@ run_test "branch_from_tag_name" \
 
 rm -f "$DB"
 
-# ============================================================
-# Merge parent refs
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_parents_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -344,9 +344,9 @@ run_test "second_parent_to_merge_name" \
 
 rm -f "$DB"
 
-# ============================================================
-# Same-name drop / recreate reports old and new schema
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_drop_recreate_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -368,9 +368,9 @@ run_test_match "drop_recreate_to_stmt" \
 
 rm -f "$DB"
 
-# ============================================================
-# Replay after schema changes
-# ============================================================
+
+
+
 
 DB=/tmp/test_sd_merge_replay_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -470,9 +470,9 @@ run_test_match "rebase_replay_u_to_stmt" \
 
 rm -f "$DB"
 
-# ============================================================
-# Done
-# ============================================================
+
+
+
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

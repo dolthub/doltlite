@@ -1,31 +1,31 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_diff_<table>(from_ref, to_ref) TVF form
-#
-# Dolt exposes row-level range diffs via a generic TVF
-# `dolt_diff(from_ref, to_ref, table_name)` whose output schema is
-# per-table. SQLite eponymous TVFs declare a static schema at
-# connect time, so we expose the same functionality by adding
-# (from_ref, to_ref) as positional args to the existing
-# `dolt_diff_<table>` virtual table — the table name rides in the
-# module name, where it's already per-instance, and the schema is
-# the same as the no-arg form.
-#
-# The oracle query uses the doltlite form:
-#
-#   SELECT * FROM dolt_diff_users('HEAD~1', 'HEAD')
-#
-# and a sed transformation rewrites it for Dolt to:
-#
-#   SELECT * FROM dolt_diff('HEAD~1', 'HEAD', 'users')
-#
-# Each row is serialized as "R|<pk>|<to_vals>|<from_vals>|<diff_type>"
-# so the commit hash columns (which differ between engines —
-# doltlite emits resolved hashes, Dolt emits the ref literal) are
-# intentionally excluded from the comparison.
-#
-# Usage: bash vc_oracle_diff_tvf_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 
@@ -36,8 +36,8 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 
-# Translate setup SQL (SELECT dolt_* → CALL dolt_*) and the query
-# (dolt_diff_<t>(...) → dolt_diff(..., '<t>')) for Dolt.
+
+
 translate_for_dolt() {
   sed -E '
     s/SELECT[[:space:]]+(dolt_[a-z_]+\()/CALL \1/g
@@ -109,7 +109,7 @@ oracle "slice_full_range" "$SETUP_LINEAR" \
 
 echo "--- ref types ---"
 
-# Named refs: branch names.
+
 oracle "slice_branch_refs" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);
@@ -119,7 +119,7 @@ INSERT INTO t VALUES (2, 2);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'feat_c1');
 " "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_v,''), '|', IFNULL(from_id,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('main', 'feat');"
 
-# Tags.
+
 oracle "slice_tag_refs" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 1);

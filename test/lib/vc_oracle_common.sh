@@ -16,10 +16,10 @@ vc_oracle_run_doltlite_script() {
   printf '%s\n' "$sql" | "$DOLTLITE" "$db" >"$out" 2>"$err"
 }
 
-# Run a piped SQL script against Dolt with -c (continue on error).
-# Use this for normal oracle tests where the script should run to
-# completion even if an intermediate statement errors (matching
-# doltlite's shell behavior, which always continues past errors).
+
+
+
+
 vc_oracle_run_dolt_script() {
   local repo="$1"
   local out="$2"
@@ -33,10 +33,10 @@ vc_oracle_run_dolt_script() {
   )
 }
 
-# Run a piped SQL script against Dolt WITHOUT -c. Use this for error-
-# path oracle tests that verify both engines reject an operation —
-# without -c, Dolt returns a non-zero exit code on the first error,
-# which the test harness checks to confirm the operation was refused.
+
+
+
+
 vc_oracle_run_dolt_script_for_error() {
   local repo="$1"
   local out="$2"

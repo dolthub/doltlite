@@ -1,7 +1,7 @@
-/* Test-only HTTP server side of the remote protocol. Not hardened
-** for production: single-threaded per-connection handling, no TLS,
-** no auth, no limits beyond MAX_HEADER_SIZE. Used by the fetch/push
-** tests and for local integration work against doltlite_http_remote. */
+
+
+
+
 
 #ifdef DOLTLITE_PROLLY
 

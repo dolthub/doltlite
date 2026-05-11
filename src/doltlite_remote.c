@@ -174,12 +174,12 @@ static int syncEnqueueChildren(
 
 #define SYNC_BATCH_SIZE 256
 
-/* BFS the src store starting from aRoots, streaming each unseen
-** chunk to dst. xHasChunks is called in 256-chunk batches so a
-** large push/fetch doesn't round-trip per chunk. xGetChunk may
-** return NOTFOUND for a hash that's not present in src (sparse
-** remote) — treated as OK and skipped rather than an error, since
-** we don't want a partially cloned remote to block a later sync. */
+
+
+
+
+
+
 int doltliteSyncChunks(
   DoltliteRemote *pSrc,
   DoltliteRemote *pDst,
@@ -527,13 +527,13 @@ static int syncIsAncestor(
   return found;
 }
 
-/* Git-style push: refuse non-fast-forward without --force. A FF push
-** means the remote tip is an ancestor of the local tip; otherwise
-** we'd overwrite remote work. The ancestor check walks the commit
-** graph on the LOCAL side (because we have all chunks locally) —
-** this is safe even though the remote may have divergent history
-** we haven't fetched, since any non-ancestor branch on the remote
-** will still fail isAncestor here. */
+
+
+
+
+
+
+
 int doltlitePush(
   ChunkStore *pLocal,
   DoltliteRemote *pRemote,

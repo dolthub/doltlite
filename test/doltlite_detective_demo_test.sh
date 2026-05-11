@@ -1,16 +1,16 @@
 #!/bin/bash
-#
-# Runnable companion to doc/doltlite/demo.md — "The DoltHub Break
-# Room Incident."
-#
-# Every SQL block in the demo appears here in the same order, with
-# an assertion on its output. If the demo drifts from reality — a
-# vtable column gets renamed, a function signature changes, a
-# result shape shifts — this test fails, and the demo gets updated
-# in the same PR that made the underlying change.
-#
-# Run: bash test/doltlite_detective_demo_test.sh [path/to/doltlite]
-#
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 
@@ -54,7 +54,7 @@ dl_bulk() { "$DOLTLITE" "$DB" >/dev/null 2>&1; }
 echo "=== The DoltHub Break Room Incident — demo test ==="
 echo ""
 
-# ── Chapter 1: Opening the case file ─────────────────────
+
 echo "--- Chapter 1: Opening the case file ---"
 rm -f "$DB"
 
@@ -103,7 +103,7 @@ expect_eq "chapter1_commit_count" "2" "$N_COMMITS"
 
 echo ""
 
-# ── Chapter 2: Two theories, two branches ────────────────
+
 echo "--- Chapter 2: Two theories, two branches ---"
 
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
@@ -138,7 +138,7 @@ expect_eq "chapter2_ficus_evidence_count" "2" "$FICUS_EV"
 
 echo ""
 
-# ── Chapter 3: Where do we disagree ──────────────────────
+
 echo "--- Chapter 3: Where do we disagree ---"
 
 STAT=$(dl "SELECT rows_added FROM dolt_diff_stat('theory/butler', 'theory/ficus') WHERE table_name='evidence';")
@@ -149,11 +149,11 @@ expect_eq "chapter3_diff_evidence_rowcount" "3" "$DIFF_ROWS"
 
 echo ""
 
-# ── Chapter 4: Who added this clue ───────────────────────
+
 echo "--- Chapter 4: Who added this clue ---"
 
-# Merge theory/ficus into main so we have a populated evidence table
-# with real commit metadata to blame against.
+
+
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 SELECT dolt_checkout('main');
 SELECT dolt_merge('theory/ficus');
@@ -167,10 +167,10 @@ expect_match "chapter4_blame_attributes_ficus_commit" "Ficus" "$BLAME_MSG"
 
 echo ""
 
-# ── Chapter 5: What did we believe at 3pm yesterday ──────
+
 echo "--- Chapter 5: Time travel ---"
 
-# Add new evidence on main, then query what we believed before it.
+
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 INSERT INTO evidence VALUES
   (4, 'Partial fingerprint on the coffee pot', NULL, '2026-04-16T09:00:00Z');
@@ -185,10 +185,10 @@ expect_eq "chapter5_historical_evidence_count" "2" "$THEN_COUNT"
 
 echo ""
 
-# ── Chapter 6: The witness lied ──────────────────────────
+
 echo "--- Chapter 6: The witness lied ---"
 
-# Revert the partial-print commit (HEAD).
+
 "$DOLTLITE" "$DB" >/dev/null 2>&1 "SELECT dolt_revert('HEAD');"
 
 AFTER_REVERT=$(dl "SELECT count(*) FROM evidence;")
@@ -199,11 +199,11 @@ expect_eq "chapter6_revert_targeted_correct_row" "0" "$FINGERPRINT_GONE"
 
 echo ""
 
-# ── Chapter 7: The detectives agree ──────────────────────
+
 echo "--- Chapter 7: Clean merge ---"
 
-# Start a fresh parallel theory that touches only sightings (so merge
-# is clean versus main's current state), then merge.
+
+
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 SELECT dolt_branch('theory/butler_v2');
 SELECT dolt_checkout('theory/butler_v2');
@@ -219,10 +219,10 @@ expect_eq "chapter7_clean_merge_evidence_count" "3" "$MERGED_COUNT"
 
 echo ""
 
-# ── Chapter 8: The detectives disagree ───────────────────
+
 echo "--- Chapter 8: Row-level merge conflict ---"
 
-# Two branches modify the same evidence row differently → conflict.
+
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 SELECT dolt_branch('theory/revised_1');
 SELECT dolt_checkout('theory/revised_1');
@@ -237,7 +237,7 @@ SQL
 CONFLICT_COUNT=$(dl "SELECT num_conflicts FROM dolt_conflicts WHERE \"table\"='evidence';")
 expect_eq "chapter8_conflict_detected" "1" "$CONFLICT_COUNT"
 
-# Resolve by taking our side.
+
 "$DOLTLITE" "$DB" >/dev/null 2>&1 "SELECT dolt_conflicts_resolve('--ours','evidence');"
 
 RESOLVED=$(dl "SELECT count(*) FROM dolt_conflicts;")
@@ -248,7 +248,7 @@ expect_match "chapter8_resolution_kept_our_text" "suspicious coffee" "$KEPT_OUR_
 
 echo ""
 
-# ── Chapter 9: Signing off the case file ─────────────────
+
 echo "--- Chapter 9: Fingerprinting ---"
 
 "$DOLTLITE" "$DB" >/dev/null 2>&1 "SELECT dolt_commit('-Am','Post-conflict reconciliation');"
@@ -258,8 +258,8 @@ expect_match "chapter9_db_hash_is_hex" "^[0-9a-f]{40}$" "$DB_HASH"
 
 EVIDENCE_HASH_A=$(dl "SELECT dolt_hashof_table('evidence');")
 
-# Insert then delete a throwaway row — the table hash must be
-# identical to before (history-independence).
+
+
 "$DOLTLITE" "$DB" >/dev/null 2>&1 <<'SQL'
 INSERT INTO evidence VALUES (99, 'ignore me', NULL, '2026-04-16T12:00:00Z');
 DELETE FROM evidence WHERE id=99;
@@ -269,7 +269,7 @@ expect_eq "chapter9_table_hash_history_independent" "$EVIDENCE_HASH_A" "$EVIDENC
 
 echo ""
 
-# ── Chapter 10: Forensics hands you their evidence ───────
+
 echo "--- Chapter 10: ATTACH a stock SQLite database ---"
 
 rm -f "$FORENSICS"
@@ -282,7 +282,7 @@ INSERT INTO fingerprints VALUES
   (3, 1, 'swirl',    'croissant wrapper');
 SQL
 
-# ATTACH stock sqlite → JOIN across → migrate in → commit.
+
 ATTACHED_COUNT=$("$DOLTLITE" "$DB" "ATTACH DATABASE '$FORENSICS' AS forensics; SELECT count(*) FROM forensics.fingerprints;" 2>&1 | tail -1)
 expect_eq "chapter10_attach_read_count" "3" "$ATTACHED_COUNT"
 

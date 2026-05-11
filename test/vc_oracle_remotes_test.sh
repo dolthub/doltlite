@@ -1,19 +1,19 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_remotes
-#
-# Runs identical remote-management scenarios against doltlite and Dolt and
-# compares the normalized dolt_remotes output. Every column's value is
-# fully determined by the user's input — name and url come directly from
-# the dolt_remote('add', ...) call, fetch_specs is derived from the name
-# using the standard refspec template, and params is always {} — so all
-# four columns are included in the comparison.
-#
-# Error scenarios are checked with oracle_error: both engines must fail
-# but the specific error text is allowed to differ.
-#
-# Usage: bash vc_oracle_remotes_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -52,9 +52,9 @@ oracle() {
     "$DOLT" sql -r csv -q "SELECT concat(name, char(9), url, char(9), fetch_specs, char(9), params) FROM dolt_remotes ORDER BY name;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
 
-  # Dolt wraps the whole concatenated value in quotes because it contains
-  # commas in the JSON. Strip the outer quotes and un-escape internal
-  # double quotes ("" → ") before comparing.
+
+
+
   local dt_out
   dt_out=$(tail -n +2 "$dir/dt.raw" \
            | sed -E 's/^"(.*)"$/\1/' \
@@ -723,12 +723,12 @@ oracle "add_remote_with_non_standard_name" "
 SELECT dolt_remote('add', 'backup-1', 'file:///tmp/oracle_backup');
 "
 
-# Dolt rewrites http:// URLs to git+http:// on add as a scheme qualifier
-# signaling "git over HTTP". doltlite uses http:// for its own HTTP remote
-# protocol, which is not git-over-HTTP, so matching that rewrite would
-# break doltlite's actual HTTP remote behavior. file:// URLs have the
-# same meaning on both engines, so that's what the add/remove scenarios
-# exercise.
+
+
+
+
+
+
 
 echo "--- remove ---"
 

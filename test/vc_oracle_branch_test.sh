@@ -1,15 +1,15 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_branch (the function, not the vtable)
-#
-# Runs identical dolt_branch scenarios against doltlite and Dolt and
-# compares the resulting dolt_branches post-state. Covers create, delete,
-# force-delete (-D), copy (-c), move/rename (-m), force-create (-f), and
-# creating at a start point. Also covers the error paths where both
-# engines should reject an invalid call.
-#
-# Usage: bash vc_oracle_branch_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -22,7 +22,7 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Replace each distinct hash with H1, H2, ... in first-appearance order.
+
 normalize() {
   tr -d '\r' | awk -F'\t' '
     {
@@ -34,9 +34,9 @@ normalize() {
   '
 }
 
-# Compare post-state (name, hash, dirty) across all branches.
-# Committer/email/date/message are excluded for the same reason as the
-# branches vtable oracle — process-derived values.
+
+
+
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"

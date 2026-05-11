@@ -72,13 +72,13 @@ static int flushLevel(ProllyChunker *ch, int level){
 
 
 
-  /* Parent level keyed on the LAST child key: prolly internal keys
-  ** are the max key of their subtree, matching the cursor's seek
-  ** contract. */
-  /* If we've hit MAX_DEPTH the parent level can't accept this chunk's
-  ** reference. Returning SQLITE_OK here would silently drop the chunk —
-  ** every key under it disappears from the tree. Bail with an error so
-  ** the caller can fall back to the rebuild path (mergeWalk). */
+
+
+
+
+
+
+
   if( level + 1 >= PROLLY_CURSOR_MAX_DEPTH ){
     return SQLITE_FULL;
   }
@@ -177,11 +177,11 @@ static int addToLevel(ProllyChunker *ch, int level,
   thisSize = nKey + nVal;
   pLevel->nBytes += thisSize;
 
-  /* Content-defined chunking via Weibull-distribution boundary check.
-  ** Hash is keyed on the row's key bytes (not value), salted by the
-  ** tree level so boundaries don't align across levels. Only chunks
-  ** whose contents changed get re-emitted on edit — this is what
-  ** gives prolly trees their structural sharing. */
+
+
+
+
+
   if( pLevel->nBytes >= PROLLY_CHUNK_MIN ){
     int atBoundary;
     if( pLevel->nBytes >= PROLLY_CHUNK_MAX ){

@@ -6,9 +6,9 @@
 
 typedef struct PagerShim PagerShim;
 typedef struct PagerOps PagerOps;
-/* PagerShim is cast to Pager* at the callsite, so the magic MUST be
-** at offset 0 — getPagerOps sniffs it blindly on every incoming
-** Pager* to decide shim vs. orig dispatch. */
+
+
+
 #define PAGER_SHIM_MAGIC 0x50534D31
 struct PagerShim {
   u32 magic;

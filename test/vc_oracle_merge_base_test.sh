@@ -1,24 +1,24 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_merge_base
-#
-# Runs identical merge_base scenarios against doltlite and Dolt and
-# compares the resulting commit identity. Hashes don't match across
-# engines (doltlite uses prolly hashes, Dolt uses noms hashes), so
-# the oracle resolves the returned hash back to its commit message
-# via dolt_log and compares that.
-#
-# Covers: linear history (older is ancestor of newer), self, two
-# branches off a common commit, three-way branch, post-merge, tag
-# and bare-hash refs, commutativity, NULL when there's no shared
-# ancestor (forced via two independent root commits — created with
-# `dolt branch -f` reusing a name with no shared history is not
-# supported, so the no-ancestor case is exercised by checking the
-# behavior in a fresh repo against itself instead), and error paths
-# (bad ref1, bad ref2, wrong arity).
-#
-# Usage: bash vc_oracle_merge_base_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -31,19 +31,19 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# $1=name, $2=setup SQL, $3=ref1 expression, $4=ref2 expression.
-# Compares the message of the commit that merge_base returns; if
-# merge_base returns NULL the join yields no rows and we compare
-# the literal "NULL" sentinel.
+
+
+
+
 oracle() {
   local name="$1" setup="$2" ref1="$3" ref2="$4"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  # Tag the answer with an "ANS|" prefix so we can grep it out of the
-  # noise that CALL dolt_*(...) emits in dolt's csv output (each call
-  # produces hash/status rows which would otherwise mix with the answer).
-  # Use CONCAT() not || — MySQL/Dolt parses || as logical OR.
+
+
+
+
   local q="SELECT CONCAT('ANS|', coalesce((SELECT message FROM dolt_log WHERE commit_hash = dolt_merge_base($ref1, $ref2)), 'NULL'));"
 
   local dl_out
@@ -178,8 +178,8 @@ oracle "branch_from_tag_vs_main" "$WITH_TAG" "'from_tag'" "'main'"
 
 echo "--- bare commit hash ref ---"
 
-# Use a subquery to look up a hash from log so we don't have to
-# embed an unknown hash literal.
+
+
 oracle "hash_vs_branch" "$LINEAR" "(SELECT commit_hash FROM dolt_log WHERE message='c1')" "'main'"
 
 echo "--- copied and renamed branches ---"

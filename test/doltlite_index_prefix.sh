@@ -1,10 +1,10 @@
 #!/bin/bash
-#
-# Index correctness tests at scale.
-# All tests use 10K+ rows with realistic payloads to force multi-level
-# prolly trees, exercising internal node descent, chunk boundaries,
-# and sort key prefix matching.
-#
+
+
+
+
+
+
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 
@@ -18,9 +18,9 @@ run_test() {
 echo "=== Index Tests at Scale ==="
 echo ""
 
-# ============================================================
-# 2-column UNIQUE — 10K rows, ~200 byte payloads
-# ============================================================
+
+
+
 
 DB1=/tmp/test_idx1_$$.db; rm -f "$DB1"
 echo "CREATE TABLE events(
@@ -62,9 +62,9 @@ run_test "2col_10k_orderby_desc" \
 198
 197" "$DB1"
 
-# ============================================================
-# 3-column UNIQUE — 10K rows, event sourcing pattern
-# ============================================================
+
+
+
 
 DB2=/tmp/test_idx2_$$.db; rm -f "$DB2"
 echo "CREATE TABLE events(
@@ -88,27 +88,27 @@ run_test "3col_10k_integrity" \
   "PRAGMA integrity_check;" \
   "ok" "$DB2"
 
-# Seek on 1 of 3 columns
+
 run_test "3col_10k_1prefix" \
   "SELECT count(*) FROM events WHERE aggregate_kind='thread';" \
   "10000" "$DB2"
 
-# Seek on 2 of 3 columns
+
 run_test "3col_10k_2prefix" \
   "SELECT count(*) FROM events WHERE aggregate_kind='thread' AND stream_id='stream-25';" \
   "200" "$DB2"
 
-# Seek on all 3 (exact)
+
 run_test "3col_10k_exact" \
   "SELECT count(*) FROM events WHERE aggregate_kind='thread' AND stream_id='stream-25' AND stream_version=100;" \
   "1" "$DB2"
 
-# MAX via 2-column prefix
+
 run_test "3col_10k_max" \
   "SELECT MAX(stream_version) FROM events WHERE aggregate_kind='thread' AND stream_id='stream-25';" \
   "199" "$DB2"
 
-# All-rows point lookup
+
 run_test "3col_10k_point_all" \
   "CREATE TEMP TABLE lookups AS SELECT aggregate_kind, stream_id, stream_version FROM events;
 SELECT count(*) FROM lookups l
@@ -118,9 +118,9 @@ SELECT count(*) FROM lookups l
       AND e.stream_version=l.stream_version);" \
   "10000" "$DB2"
 
-# ============================================================
-# 4-column UNIQUE — 10K rows
-# ============================================================
+
+
+
 
 DB3=/tmp/test_idx3_$$.db; rm -f "$DB3"
 echo "CREATE TABLE log(
@@ -154,9 +154,9 @@ run_test "4col_10k_3prefix" \
   "SELECT count(*) FROM log WHERE region='us-east-0' AND service='svc-0' AND ts=1023;" \
   "1" "$DB3"
 
-# ============================================================
-# Non-unique secondary index — 10K rows
-# ============================================================
+
+
+
 
 DB4=/tmp/test_idx4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE orders(
@@ -189,9 +189,9 @@ run_test "secondary_10k_exact" \
   "SELECT count(*) FROM orders WHERE customer='cust-25' AND status='shipped';" \
   "67" "$DB4"
 
-# ============================================================
-# WITHOUT ROWID composite PK — 10K rows
-# ============================================================
+
+
+
 
 DB5=/tmp/test_idx5_$$.db; rm -f "$DB5"
 echo "CREATE TABLE kv(
@@ -221,9 +221,9 @@ run_test "wor_10k_exact" \
   "SELECT val IS NOT NULL FROM kv WHERE ns='ns-10' AND key='key-00010';" \
   "1" "$DB5"
 
-# ============================================================
-# Batched commits — 10K rows across 10 commits
-# ============================================================
+
+
+
 
 DB6=/tmp/test_idx6_$$.db; rm -f "$DB6"
 echo "CREATE TABLE events(
@@ -255,9 +255,9 @@ SELECT count(*) FROM lookups l
   WHERE EXISTS(SELECT 1 FROM events e WHERE e.tid=l.tid AND e.seq=l.seq);" \
   "10000" "$DB6"
 
-# ============================================================
-# Mixed types (TEXT + INT + REAL) — 10K rows
-# ============================================================
+
+
+
 
 DB7=/tmp/test_idx7_$$.db; rm -f "$DB7"
 echo "CREATE TABLE mixed(
@@ -285,9 +285,9 @@ run_test "mixed_10k_2prefix" \
   "SELECT count(*) FROM mixed WHERE tag='tag-5' AND seq=500;" \
   "1" "$DB7"
 
-# ============================================================
-# Cleanup
-# ============================================================
+
+
+
 
 rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7"
 

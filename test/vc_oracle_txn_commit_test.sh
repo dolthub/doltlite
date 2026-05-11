@@ -1,13 +1,13 @@
 #!/bin/bash
-#
-# Oracle tests: SQL transaction interaction with dolt_commit.
-#
-# Verifies that dolt_commit() implicitly commits any open SQL
-# transaction, matching Dolt's behavior. After dolt_commit(),
-# ROLLBACK is a no-op and all pending DML is durable.
-#
-# Usage: bash test/vc_oracle_txn_commit_test.sh <doltlite> [dolt]
-#
+
+
+
+
+
+
+
+
+
 
 set -u
 DOLTLITE="${1:?usage: $0 <doltlite> [dolt]}"
@@ -35,7 +35,7 @@ dolt_query() {
 
 echo "=== Transaction + dolt_commit Oracle Tests ==="
 
-# ── Test A: BEGIN + dolt_commit + ROLLBACK ──────────────────
+
 echo ""
 echo "--- BEGIN + dolt_commit + ROLLBACK ---"
 
@@ -82,7 +82,7 @@ else
   echo "    expected 2, got $DL_A"
 fi
 
-# ── Test B: SAVEPOINT + dolt_commit + ROLLBACK TO ──────────
+
 echo ""
 echo "--- SAVEPOINT + dolt_commit + ROLLBACK TO ---"
 
@@ -129,7 +129,7 @@ else
   echo "    expected 2, got $DL_B"
 fi
 
-# ── Test C: No transaction + dolt_commit (baseline) ────────
+
 echo ""
 echo "--- No transaction + dolt_commit (baseline) ---"
 
@@ -151,7 +151,7 @@ else
   echo "    expected 2, got $DL_C"
 fi
 
-# ── Test D: BEGIN + multiple inserts + dolt_commit + ROLLBACK ──
+
 echo ""
 echo "--- BEGIN + multiple inserts + dolt_commit + ROLLBACK ---"
 
@@ -176,7 +176,7 @@ else
   echo "    expected 3, got $DL_D"
 fi
 
-# ── Test E: Nested savepoints + dolt_commit ────────────────
+
 echo ""
 echo "--- Nested savepoints + dolt_commit ---"
 
@@ -202,7 +202,7 @@ else
   echo "    expected 2, got $DL_E"
 fi
 
-# ── Test F: dolt_commit without open txn is fine ───────────
+
 echo ""
 echo "--- dolt_commit without open txn ---"
 
@@ -225,7 +225,7 @@ else
   echo "    expected 2, got $DL_F"
 fi
 
-# ── Test G: Reopen after BEGIN + dolt_commit + crash ───────
+
 echo ""
 echo "--- Reopen after BEGIN + dolt_commit (persistence) ---"
 
@@ -239,7 +239,7 @@ SELECT dolt_commit('-A','-m','c1');
 SQL
 )" >/dev/null
 
-# Reopen — the committed row must be there
+
 DL_G=$(dl_query "$DB" "SELECT count(*) FROM t;")
 
 if [ "$DL_G" = "1" ]; then
@@ -249,7 +249,7 @@ else
   echo "    expected 1, got $DL_G"
 fi
 
-# ── Test H: BEGIN + bad dolt_commit option should not persist txn ──
+
 echo ""
 echo "--- BEGIN + bad dolt_commit option ---"
 
@@ -295,7 +295,7 @@ else
   echo "    expected 1, got $DL_H"
 fi
 
-# ── Test I: Nested savepoint + bad dolt_commit option ───────
+
 echo ""
 echo "--- Nested savepoint + bad dolt_commit option ---"
 

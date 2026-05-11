@@ -1,20 +1,20 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_tags
-#
-# Runs identical tag-management scenarios against doltlite and Dolt and
-# compares the normalized dolt_tags output. Catches divergence in how each
-# engine reports tag listings, the per-tag tagger metadata and message,
-# and which commit a tag points at.
-#
-# Columns compared: tag_name, tag_hash (normalized), message. The
-# tagger/email/date columns are excluded because their values come from
-# process state and legitimately differ across the two engines unless
-# every scenario passes --author overrides; the message and pointed-at
-# commit are the load-bearing semantic axes.
-#
-# Usage: bash vc_oracle_tags_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail

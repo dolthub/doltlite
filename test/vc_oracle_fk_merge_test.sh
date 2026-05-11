@@ -1,20 +1,20 @@
 #!/bin/bash
-#
-# Version-control oracle-ish tests: merge-time FK / UNIQUE / CHECK
-# constraint violations in DoltLite default SQL mode.
-#
-# Current Dolt semantics under autocommit are:
-#   - if a merge would introduce constraint violations, the merge
-#     errors and the transaction rolls back
-#   - no dolt_constraint_violations rows are left behind
-#   - no dolt_conflicts rows are left behind
-#   - table contents remain at the pre-merge branch state
-#
-# DoltLite now intentionally matches that behavior. This suite locks
-# that down across rowid and WITHOUT ROWID table shapes.
-#
-# Usage: bash vc_oracle_fk_merge_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 

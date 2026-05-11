@@ -37,56 +37,56 @@ run_test_match() {
 echo "=== Doltlite Staging Workflow Tests ==="
 echo ""
 
-# --- Setup: create a database with initial commit ---
+
 DB=/tmp/test_staging_$$.db
 rm -f "$DB"
 echo "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users VALUES(1,'Alice'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# --- dolt_status: clean after commit ---
+
 run_test "status_clean_after_commit" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB"
 
-# --- dolt_status: detect unstaged insert ---
+
 echo "INSERT INTO users VALUES(2,'Bob');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "status_unstaged_modify" \
   "SELECT table_name, staged, status FROM dolt_status;" \
   "users|0|modified" "$DB"
 
-# --- dolt_add: stage the change ---
+
 echo "SELECT dolt_add('users');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "status_after_add" \
   "SELECT table_name, staged, status FROM dolt_status;" \
   "users|1|modified" "$DB"
 
-# --- dolt_commit: commit staged ---
+
 run_test_match "commit_staged" \
   "SELECT dolt_commit('-m','Add Bob');" \
   "^[0-9a-f]{40}$" "$DB"
 
-# --- Status clean after commit ---
+
 run_test "status_clean_after_staged_commit" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB"
 
-# --- Log has 2 commits ---
+
 run_test "log_two_commits" \
   "SELECT count(*) FROM dolt_log;" \
   "3" "$DB"
 
-# --- New table shows as 'new table' ---
+
 echo "CREATE TABLE orders(id INTEGER PRIMARY KEY, item TEXT); INSERT INTO orders VALUES(1,'hat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "status_new_table" \
   "SELECT table_name, staged, status FROM dolt_status WHERE table_name='orders';" \
   "orders|0|new table" "$DB"
 
-# --- Stage only orders, users untouched ---
+
 echo "SELECT dolt_add('orders');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "status_orders_staged" \
   "SELECT table_name, staged FROM dolt_status WHERE table_name='orders';" \
   "orders|1" "$DB"
 
-# --- Commit orders ---
+
 run_test_match "commit_orders" \
   "SELECT dolt_commit('-m','Add orders');" \
   "^[0-9a-f]{40}$" "$DB"
@@ -95,7 +95,7 @@ run_test "log_three_commits" \
   "SELECT count(*) FROM dolt_log;" \
   "4" "$DB"
 
-# --- dolt_add -A stages everything ---
+
 DB2=/tmp/test_staging2_$$.db
 rm -f "$DB2"
 echo "CREATE TABLE t1(x); INSERT INTO t1 VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB2" > /dev/null 2>&1
@@ -118,7 +118,7 @@ run_test "clean_after_add_all_commit" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB2"
 
-# --- dolt_commit -A shortcut (stage+commit in one call) ---
+
 DB3=/tmp/test_staging3_$$.db
 rm -f "$DB3"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB3" > /dev/null 2>&1
@@ -136,7 +136,7 @@ run_test "log_after_dash_a" \
   "SELECT count(*) FROM dolt_log;" \
   "3" "$DB3"
 
-# --- Commit without staging fails ---
+
 DB4=/tmp/test_staging4_$$.db
 rm -f "$DB4"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
@@ -146,12 +146,12 @@ run_test_match "commit_without_add_fails" \
   "SELECT dolt_commit('-m','should fail');" \
   "nothing to commit" "$DB4"
 
-# --- After failed commit, data is still there ---
+
 run_test "data_survives_failed_commit" \
   "SELECT count(*) FROM t;" \
   "2" "$DB4"
 
-# --- Partial staging: modify two tables, stage one ---
+
 DB5=/tmp/test_staging5_$$.db
 rm -f "$DB5"
 echo "CREATE TABLE a(x); CREATE TABLE b(y); INSERT INTO a VALUES(1); INSERT INTO b VALUES(2); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5" > /dev/null 2>&1
@@ -179,18 +179,18 @@ run_test "b_still_unstaged_after_commit" \
   "SELECT table_name, staged, status FROM dolt_status;" \
   "b|0|modified" "$DB5"
 
-# --- Persistence: staged state survives reopen ---
+
 DB6=/tmp/test_staging6_$$.db
 rm -f "$DB6"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2); SELECT dolt_add('t');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 
-# Reopen and check staged state
+
 run_test "staged_persists" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB6"
 
-# --- Named dolt_add can stage a dropped table ---
+
 DB6B=/tmp/test_staging6b_$$.db
 rm -f "$DB6B"
 echo "CREATE TABLE keep_t(x); CREATE TABLE drop_t(y); INSERT INTO keep_t VALUES(1); INSERT INTO drop_t VALUES(2); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6B" > /dev/null 2>&1
@@ -213,7 +213,7 @@ run_test "dropped_table_gone_after_commit" \
   "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='drop_t';" \
   "0" "$DB6B"
 
-# --- dolt_add dot (.) stages everything ---
+
 DB7=/tmp/test_staging7_$$.db
 rm -f "$DB7"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
@@ -224,7 +224,7 @@ run_test "add_dot_stages_all" \
   "SELECT count(*) FROM dolt_status WHERE staged=1;" \
   "1" "$DB7"
 
-# --- dolt_status ignores internal index roots in clean state ---
+
 DB9=/tmp/test_staging_9_$$.db
 rm -f "$DB9"
 echo "CREATE TABLE parent(id INTEGER PRIMARY KEY, name TEXT);
@@ -235,7 +235,7 @@ run_test "status_clean_composite_pk_schema" \
   "SELECT count(*) FROM dolt_status;" \
   "0" "$DB9"
 
-# --- Cleanup ---
+
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB6B" "$DB7" "$DB8" "$DB9"
 
 echo ""

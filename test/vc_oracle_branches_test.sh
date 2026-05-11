@@ -1,19 +1,19 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_branches
-#
-# Runs identical branch-management scenarios against doltlite and Dolt and
-# compares the normalized dolt_branches output. Catches divergence in how
-# each engine reports branch listings, the latest-commit metadata for each
-# branch, upstream tracking, and the per-branch dirty bit.
-#
-# Columns compared: name, hash (normalized), latest_commit_message,
-# remote, branch, dirty. The committer/email/date columns are excluded
-# because their values come from process/config and legitimately differ
-# across the two engines.
-#
-# Usage: bash vc_oracle_branches_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -26,8 +26,8 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Replace each distinct hash with H1, H2, ... in first-appearance order;
-# strip CRLF.
+
+
 normalize() {
   tr -d '\r' | awk -F'\t' '
     {
@@ -65,8 +65,8 @@ oracle() {
     "$DOLT" sql -r csv -q "SELECT concat(name, char(9), hash, char(9), latest_commit_message, char(9), remote, char(9), branch, char(9), dirty) FROM dolt_branches ORDER BY name;" 2>>"$dir/dt.err"
   ) > "$dir/dt.raw"
 
-  # Dolt prints "true"/"false" for the dirty tinyint(1); doltlite prints
-  # "0"/"1". Map both to 0/1 before comparison.
+
+
   local dt_out
   dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" \
            | tr -d '"' \
@@ -176,9 +176,9 @@ SELECT dolt_commit('-m', 'first');
 
 echo "--- branch at older commit ---"
 
-# dolt_branch('name', 'HEAD~N') should create a branch pointing at
-# an older commit. The branch's latest_commit_message should be
-# the OLDER commit, not HEAD.
+
+
+
 oracle "branch_at_head_minus_one" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -196,8 +196,8 @@ SELECT dolt_branch('back_two', 'HEAD~2');
 
 echo "--- branch copy ---"
 
-# dolt_branch('-c', src, dst) copies a branch. Both src and dst
-# should point at the same commit.
+
+
 oracle "branch_copy_main_to_clone" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
@@ -208,8 +208,8 @@ SELECT dolt_branch('-c', 'main', 'clone');
 
 echo "--- branch rename ---"
 
-# dolt_branch('-m', src, dst) renames a branch. The src name should
-# disappear, dst should exist at the same commit.
+
+
 oracle "branch_rename_non_current" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
@@ -221,9 +221,9 @@ SELECT dolt_branch('-m', 'old_name', 'new_name');
 
 echo "--- multi-branch states ---"
 
-# Three branches: one at main HEAD, one ahead of main, one at an
-# older commit. Tests that latest_commit_message per-branch is
-# computed independently.
+
+
+
 oracle "three_branches_three_heads" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -239,9 +239,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat_only');
 "
 
-# Multiple branches all dirty (working set diverges from their own
-# HEAD). Current branch marker matters here — only the current
-# branch's dirty bit actually reflects uncommitted state.
+
+
+
 oracle "other_branch_dirty_bit_untracked" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
@@ -254,8 +254,8 @@ INSERT INTO t VALUES (2);
 
 echo "--- branch after merge ---"
 
-# After merging feature into main, main's latest_commit_message
-# should be the merge commit.
+
+
 oracle "main_head_after_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);

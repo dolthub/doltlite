@@ -4,13 +4,13 @@
 #include "prolly_three_way_diff.h"
 #include <string.h>
 
-/* Streaming three-way diff.
-**
-** Instead of collecting all changes from both sides into memory
-** arrays (O(n) memory), this implementation runs two ProllyDiffIter
-** cursors in parallel and merge-joins them on the fly.  Memory usage
-** is O(1) — only the two "current change" structs from the iterators
-** are alive at any point. */
+
+
+
+
+
+
+
 
 static int valuesEqual(const u8 *pA, int nA, const u8 *pB, int nB){
   int equal = 0;
@@ -100,18 +100,18 @@ static int emitRightOnly(
   return xCallback(pCtx, &change);
 }
 
-/* Classification when both branches touched the same key:
-**
-**   ADD vs ADD        -> CONVERGENT if same value, else CONFLICT_MM
-**   DELETE vs DELETE  -> CONVERGENT
-**   MODIFY vs MODIFY  -> CONVERGENT if same new value, else CONFLICT_MM
-**   DELETE vs MODIFY  -> CONFLICT_DM
-**   MODIFY vs DELETE  -> CONFLICT_DM
-**   anything else     -> CONFLICT_MM (fallback)
-**
-** "Both sides made the same change" (convergent) is the one case
-** merge can silently accept -- everything else either needs user
-** resolution or is impossible given the diff semantics. */
+
+
+
+
+
+
+
+
+
+
+
+
 static int emitBothSides(
   const ProllyDiffChange *pLeft,
   const ProllyDiffChange *pRight,
@@ -219,7 +219,7 @@ int prollyThreeWayDiff(
     goto cleanup;
   }
 
-  /* Prime both iterators. */
+
   rcL = prollyDiffIterStep(&iterL, &pL);
   rcR = prollyDiffIterStep(&iterR, &pR);
 
@@ -241,7 +241,7 @@ int prollyThreeWayDiff(
     }
   }
 
-  /* Drain whichever side has remaining entries. */
+
   while( rcL==SQLITE_ROW ){
     rc = emitLeftOnly(pL, xCallback, pCtx);
     if( rc!=SQLITE_OK ) goto cleanup;
@@ -253,7 +253,7 @@ int prollyThreeWayDiff(
     rcR = prollyDiffIterStep(&iterR, &pR);
   }
 
-  /* Propagate any iterator error (not SQLITE_DONE). */
+
   if( rcL!=SQLITE_DONE ) rc = rcL;
   if( rc==SQLITE_OK && rcR!=SQLITE_DONE ) rc = rcR;
 

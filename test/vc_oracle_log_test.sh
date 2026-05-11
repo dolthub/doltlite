@@ -1,13 +1,13 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_log
-#
-# Runs identical commit scenarios against doltlite and Dolt, then compares
-# the normalized `dolt_log` output. Catches divergence in commit ordering,
-# message handling, and commit-graph shape.
-#
-# Usage: bash vc_oracle_log_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -20,9 +20,9 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Normalize a `hash\tmessage` stream (tab-separated, one row per line):
-#   - replace each distinct hash with H1, H2, ... in first-appearance order
-#   - strip CRLF
+
+
+
 normalize() {
   tr -d '\r' | awk -F'\t' '
     {
@@ -34,23 +34,23 @@ normalize() {
   '
 }
 
-# Run an oracle scenario. $1=name, $2=setup SQL using doltlite syntax
-# (SELECT dolt_xxx(...)). The harness rewrites it to CALL dolt_xxx(...)
-# for Dolt. Setup SQL must not depend on function return values.
+
+
+
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  # Both engines run setup + query in a SINGLE invocation so any
-  # session state (current branch, working set) from the setup is
-  # visible to the query. The query prefixes each output row with
-  # "LOG|" so we can filter out setup noise (CALL return values,
-  # hash echoes, etc.) from the combined output.
+
+
+
+
+
   local dl_q="SELECT 'LOG|' || commit_hash || char(9) || message FROM dolt_log"
   local dt_q="SELECT concat('LOG|', commit_hash, char(9), message) FROM dolt_log ORDER BY commit_order DESC"
 
-  # doltlite side
+
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\n%s;\n" "$setup" "$dl_q" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
@@ -58,7 +58,7 @@ oracle() {
            | sed 's/^LOG|//' \
            | normalize)
 
-  # Dolt side: rewrite SELECT dolt_*(...) -> CALL dolt_*(...)
+
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
 
@@ -88,7 +88,7 @@ oracle() {
 echo "=== Version Control Oracle Tests: dolt_log ==="
 echo ""
 
-# ─── Category 0: fresh repository state ──────────────────────────────
+
 echo "--- fresh repo ---"
 
 oracle "fresh_db_has_seed_commit" "
@@ -96,7 +96,7 @@ oracle "fresh_db_has_seed_commit" "
 SELECT 1;
 "
 
-# ─── Category 1: linear commit chains ────────────────────────────────
+
 echo "--- linear chains ---"
 
 oracle "single_commit" "
@@ -128,12 +128,12 @@ INSERT INTO t VALUES (2, 20);
 SELECT dolt_commit('-a', '-m', 'second');
 "
 
-# Empty commit messages: Dolt rejects with a hard error
-# ("Aborting commit due to empty commit message") and aborts the
-# whole sql invocation before the query can run. doltlite accepts
-# empty messages. The behaviors diverge by design — not oracle-
-# testable in a single invocation. See
-# https://github.com/dolthub/dolt/... for Dolt's reasoning.
+
+
+
+
+
+
 
 oracle "message_with_special_chars" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -155,7 +155,7 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'three');
 "
 
-# ─── Category 2: message edge cases ──────────────────────────────────
+
 echo "--- message edge cases ---"
 
 oracle "unicode_message" "
@@ -172,8 +172,8 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'this is a deliberately very long commit message that goes on and on and on to exercise any buffer-size assumptions in the log walker or in either engine|s output format and should still come back intact');
 "
 
-# Internal whitespace is preserved exactly as written on both
-# engines.
+
+
 oracle "internal_whitespace_preserved" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
@@ -181,9 +181,9 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'one    two     three');
 "
 
-# Leading/trailing whitespace gets trimmed on both engines, matching
-# git's behavior. A message of '  hello  ' becomes 'hello' in both
-# engines' dolt_log.
+
+
+
 oracle "leading_trailing_whitespace_trimmed" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
@@ -191,12 +191,12 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', '   hello world   ');
 "
 
-# ─── Category 3: merge-commit shapes ─────────────────────────────────
+
 echo "--- merge commits ---"
 
-# Simple merge: feature branch fast-forward-able, merged as a real
-# merge commit. dolt_log should contain both the feature commit and
-# the merge commit.
+
+
+
 oracle "merge_commit_in_log" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -214,8 +214,8 @@ SELECT dolt_commit('-m', 'main2');
 SELECT dolt_merge('feature');
 "
 
-# Merge followed by more commits on main. Walker should BFS-find
-# all ancestors.
+
+
 oracle "merge_then_more_commits" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -236,11 +236,11 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'post_merge');
 "
 
-# ─── Category 4: tags / branches interactions ────────────────────────
+
 echo "--- tags and branches ---"
 
-# Tags do not create commits, so log should be unchanged before vs
-# after tagging.
+
+
 oracle "tag_does_not_add_commit" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES (1);
@@ -249,8 +249,8 @@ SELECT dolt_commit('-m', 'c1');
 SELECT dolt_tag('v1');
 "
 
-# dolt_log after checkout to a feature branch should list the
-# feature branch's commits and share the common ancestor with main.
+
+
 oracle "log_on_feature_branch" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);

@@ -44,12 +44,12 @@ static u8 serialTypeTag(u32 serialType){
   return SORTKEY_NULL;
 }
 
-/* The sort key is byte-comparable with memcmp, so we can't invoke
-** the collation's xCmp at encode time. Instead we preprocess TEXT
-** bytes so two inputs that the collation considers equal produce
-** identical sort keys: NOCASE folds ASCII A-Z to a-z, RTRIM strips
-** trailing 0x20. Any other (user-defined) collation falls back to
-** BINARY — the prolly tree still sorts, just byte-wise. */
+
+
+
+
+
+
 #define SORTKEY_COLL_BINARY 0
 #define SORTKEY_COLL_NOCASE 1
 #define SORTKEY_COLL_RTRIM  2
@@ -121,10 +121,10 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
     }else if( serialType == 9 ){
       v = 1;
     }else{
-      /* Big-endian sign-extended multi-byte integer. Accumulate in
-      ** u64 because left-shift of a negative signed value is UB
-      ** per C11 6.5.7/4; two's-complement bit pattern is identical
-      ** so the cast back at the end is exact. */
+
+
+
+
       u64 uv = (pData[0] & 0x80) ? (u64)-1 : 0;
       for(u32 i = 0; i < nData; i++){
         uv = (uv << 8) | pData[i];
@@ -273,10 +273,10 @@ int sortKeyFromRecordPrefixCollBuffer(
 
   *pnOut = 0;
 
-  /* Upper bound: worst case is a record of serial-type-8 fields
-  ** (integer zero) — each is 1 header byte, 0 data bytes, but
-  ** encodes to 9 sort key bytes. So the expansion factor per
-  ** record byte is up to 9. Use 9*nRec as the safe bound. */
+
+
+
+
   nEstimate = 9 * nRec + 16;
   if( nEstimate < 64 ) nEstimate = 64;
 
@@ -616,12 +616,12 @@ int recordFromSortKeyBuffer(
   u32 aLen[64];
 
   const u8 *aFieldPtr[64];
-  /* Encoded byte-length of each TEXT/BLOB field in the sort-key, NOT
-  ** including the 0x00 0x00 terminator. Equal to aLen[i] when the
-  ** field has no 0x00 0x01 escapes — the common case for ASCII /
-  ** hex / utf-8 keys without embedded NULs — letting the data-write
-  ** loop below replace its byte-by-byte un-escape with a single
-  ** memcpy. Set to 0 for non-text fields (unused). */
+
+
+
+
+
+
   int aEncLen[64];
   u8 aIntBuf[64][8];
   int nFields = 0;
@@ -640,7 +640,7 @@ int recordFromSortKeyBuffer(
       *pnAlloc = 1;
     }
     pOut = *ppBuf;
-    pOut[0] = 1;  
+    pOut[0] = 1;
     *pnOut = 1;
     return SQLITE_OK;
   }
@@ -688,13 +688,13 @@ int recordFromSortKeyBuffer(
 
       int start = pos;
       int dataLen = 0;
-      /* Skip ahead to the next 0x00 sentinel via memchr — vectorized
-      ** on most platforms — instead of walking byte-by-byte. The 0x00
-      ** is either a terminator (followed by 0x00) or an escape
-      ** (followed by 0x01); only those positions need branch logic.
-      ** For ASCII / hex / utf-8 TEXT without embedded NULs the loop
-      ** runs exactly once: memchr finds the terminator, accumulate
-      ** dataLen, break. */
+
+
+
+
+
+
+
       while( pos < nSortKey ){
         const u8 *p0 = pSortKey + pos;
         const u8 *pZero = (const u8*)memchr(p0, 0x00, (size_t)(nSortKey - pos));
@@ -724,10 +724,10 @@ int recordFromSortKeyBuffer(
 
 
       aFieldPtr[nFields] = pSortKey + start;
-      /* Encoded length excludes the trailing 0x00 0x00 terminator
-      ** (subtract 2 from pos). Equal to dataLen iff no escape
-      ** sequences appeared — that case skips the byte-by-byte
-      ** un-escape loop below. */
+
+
+
+
       aEncLen[nFields] = (pos - 2) - start;
       nFields++;
 
@@ -780,9 +780,9 @@ int recordFromSortKeyBuffer(
         memcpy(pOut + off, aIntBuf[i], fieldLen);
         off += (int)fieldLen;
       }else if( (u32)aEncLen[i] == fieldLen ){
-        /* No escape sequences in the encoded text — most common
-        ** case for ASCII / hex / utf-8 keys without embedded NULs.
-        ** Skip the byte-by-byte un-escape loop and copy directly. */
+
+
+
         memcpy(pOut + off, aFieldPtr[i], fieldLen);
         off += (int)fieldLen;
       }else{

@@ -14,17 +14,17 @@
   (u64)(p)[0] | ((u64)(p)[1]<<8) | ((u64)(p)[2]<<16) | ((u64)(p)[3]<<24) | \
   ((u64)(p)[4]<<32) | ((u64)(p)[5]<<40) | ((u64)(p)[6]<<48) | ((u64)(p)[7]<<56)))
 
-/* Commit v2 wire format, little-endian:
-**   [version:1][nParents:1]
-**   [parent_hash:20]*nParents
-**   [catalog_hash:20]
-**   [timestamp:8]
-**   [name_len:2][name:N]
-**   [email_len:2][email:N]
-**   [msg_len:2][msg:N]
-** The hash is content-addressed, so any layout change re-hashes
-** every commit in the history. Chunk classifier keys on version
-** byte — do NOT reuse DOLTLITE_COMMIT_V2 for a new format. */
+
+
+
+
+
+
+
+
+
+
+
 int doltliteCommitSerialize(const DoltliteCommit *c, u8 **ppOut, int *pnOut){
   int nName = c->zName ? (int)strlen(c->zName) : 0;
   int nEmail = c->zEmail ? (int)strlen(c->zEmail) : 0;

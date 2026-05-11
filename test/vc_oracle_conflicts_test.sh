@@ -1,33 +1,33 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_conflicts (summary form)
-#
-# Runs identical merge-conflict scenarios against doltlite and Dolt and
-# compares the resulting dolt_conflicts post-state. Covers no conflicts,
-# single-table conflicts, multi-row conflicts, multi-table conflicts,
-# resolution with --ours / --theirs, partial resolution, and abort.
-#
-# Scenarios mostly use INTEGER PRIMARY KEY because conflict scenarios
-# modify the SAME row on both sides — the rowid-vs-PK distinction
-# doesn't matter for that case. The doltlite storage layer now keys
-# all user tables by their primary key columns, so non-INTEGER PK
-# shapes also produce correct conflict semantics; the merge oracle
-# exercises those.
-#
-# IMPORTANT: Dolt's autocommit mode rolls back the transaction when a
-# merge produces a conflict, so dolt_conflicts is empty by default. The
-# harness sets @@dolt_allow_commit_conflicts = 1 on the Dolt side before
-# running the scenario so the conflict survives long enough to query.
-# doltlite has no equivalent setting because it doesn't roll back.
-#
-# Compares only the summary `dolt_conflicts` vtable (rename of
-# table_name → table just landed in this PR). The per-table
-# `dolt_conflicts_<table>` vtable has a much larger schema gap with Dolt
-# (doltlite uses 6 generic blob columns while Dolt projects each user
-# column as base_/our_/their_), and is left as a separate follow-up.
-#
-# Usage: bash vc_oracle_conflicts_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -50,17 +50,17 @@ oracle() {
   mkdir -p "$dir/dl" "$dir/dt"
   local dl_setup="$setup"
 
-  # DoltLite now rolls back autocommit merge conflicts, so scenarios that
-  # inspect live conflict summary must run in an explicit transaction on the
-  # DoltLite side only. Inject BEGIN before the final merge sequence while
-  # leaving the Dolt side unchanged.
+
+
+
+
   if printf '%s' "$setup" | grep -q "SELECT dolt_merge('"; then
     dl_setup=$(printf '%s' "$setup" | perl -0pe \
       "s/(SELECT dolt_merge\\('[^']+'\\);)(?!.*SELECT dolt_merge\\('[^']+'\\);)/BEGIN;\\n\$1/s")
   fi
 
-  # doltlite side: scenario as written. The vtable column "table" needs
-  # double-quote escaping in the SELECT.
+
+
   local dl_out
   dl_out=$(printf "%s\n.headers off\n.mode list\n.separator '\t'\nSELECT \"table\" || char(9) || num_conflicts FROM dolt_conflicts ORDER BY \"table\";\n" "$dl_setup" \
            | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
@@ -68,8 +68,8 @@ oracle() {
            | grep -v '^[0-9a-f]\{40\}$' \
            | normalize)
 
-  # Dolt side: rewrite SELECT dolt_*(...) -> CALL dolt_*(...) and prepend
-  # the autocommit override so the conflict state survives the merge.
+
+
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
 

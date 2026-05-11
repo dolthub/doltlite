@@ -1,13 +1,13 @@
 #!/bin/bash
-#
-# Feature interaction oracle tests (doltlite vs Dolt)
-#
-# Exercises combinations of SQL and version-control operations that
-# interact in non-obvious ways. Each test runs the same SQL against
-# both engines and compares the final table state + commit log.
-#
-# Usage: bash vc_oracle_feature_interaction_test.sh ./doltlite dolt
-#
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -20,28 +20,28 @@ pass=0; fail=0
 FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
-# Normalize: strip hashes/timestamps, keep table data + log messages.
+
 normalize() {
   tr -d '\r' | grep -v '^$' | sort
 }
 
-# oracle NAME SETUP_SQL QUERY_SQL
-#   SETUP_SQL: DDL + DML + VC operations
-#   QUERY_SQL: SELECT that produces the comparable output
+
+
+
 oracle() {
   local name="$1" setup="$2" query="$3"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
-  # --- doltlite ---
-  # Mirror the dolt path below: run setup first with its output
-  # discarded, then run the query in a fresh invocation against the
-  # same db file with only its output captured. The earlier single-
-  # invocation form mixed dolt_add / dolt_commit return values with
-  # the query result and tried to filter the noise out post-hoc;
-  # that filter also stripped legitimate count(*) / scalar results,
-  # which made any test whose query returned a bare integer compare
-  # an empty doltlite output against dolt's actual value.
+
+
+
+
+
+
+
+
+
   printf "%s\n" "$setup" | "$DOLTLITE" "$dir/dl/db" \
       >/dev/null 2>"$dir/dl.err"
   local dl_out
@@ -52,7 +52,7 @@ oracle() {
            | tr -d '"' \
            | normalize)
 
-  # --- dolt ---
+
   local dolt_setup
   dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
   local dolt_query
@@ -82,9 +82,9 @@ oracle() {
 echo "=== Feature Interaction Oracle Tests ==="
 echo ""
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 1: Merge + ALTER TABLE ADD COLUMN
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge + alter table add column ---"
 
 oracle "merge_add_col_one_side" "
@@ -157,9 +157,9 @@ SELECT dolt_commit('-m','main changes');
 SELECT dolt_merge('feat');
 " "SELECT id, name FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 2: Merge + INSERT/UPDATE/DELETE combinations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge + DML combinations ---"
 
 oracle "merge_insert_both_different_keys" "
@@ -261,9 +261,9 @@ SELECT dolt_commit('-m','main mix');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 3: Merge + composite primary keys
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge + composite PK ---"
 
 oracle "merge_composite_pk_insert" "
@@ -316,9 +316,9 @@ SELECT dolt_commit('-m','main update');
 SELECT dolt_merge('feat');
 " "SELECT a, b, val FROM t ORDER BY a, b;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 4: Merge + NULL values
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge + NULL values ---"
 
 oracle "merge_null_to_value" "
@@ -369,9 +369,9 @@ SELECT dolt_commit('-m','main fills c');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 5: Cherry-pick
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick ---"
 
 oracle "cherry_pick_single_insert" "
@@ -432,9 +432,9 @@ SELECT dolt_commit('-m','main diverge');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 6: Revert
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert ---"
 
 oracle "revert_insert" "
@@ -470,9 +470,9 @@ SELECT dolt_commit('-m','update');
 SELECT dolt_revert('HEAD');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 7: Reset (soft and hard)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset ---"
 
 oracle "reset_soft_keeps_working" "
@@ -497,9 +497,9 @@ SELECT dolt_commit('-m','second');
 SELECT dolt_reset('--hard', 'HEAD~1');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 8: Multi-table merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-table merges ---"
 
 oracle "merge_two_tables_independent" "
@@ -557,9 +557,9 @@ SELECT dolt_commit('-m','main modifies t1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t1 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 9: UPSERT + version control
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- upsert + version control ---"
 
 oracle "upsert_replace_then_merge" "
@@ -594,9 +594,9 @@ SELECT dolt_commit('-m','main insert');
 SELECT dolt_merge('feat');
 " "SELECT id, val, count FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 10: Text/Blob data types in merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- text/blob in merge ---"
 
 oracle "merge_long_text_values" "
@@ -631,9 +631,9 @@ SELECT dolt_commit('-m','main insert');
 SELECT dolt_merge('feat');
 " "SELECT id, hex(data) FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 11: Numeric types in merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- numeric types in merge ---"
 
 oracle "merge_integer_types" "
@@ -668,9 +668,9 @@ SELECT dolt_commit('-m','main insert');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 12: Fast-forward vs three-way
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- fast-forward vs three-way ---"
 
 oracle "ff_merge_no_divergence" "
@@ -699,9 +699,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat', '--no-ff', '-m', 'merge feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 13: Branch + checkout state preservation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- branch + checkout ---"
 
 oracle "checkout_preserves_committed_state" "
@@ -731,9 +731,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main commit');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 14: Multiple sequential merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- sequential merges ---"
 
 oracle "two_merges_same_table" "
@@ -772,9 +772,9 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 15: DEFAULT values in merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- default values in merge ---"
 
 oracle "merge_with_default_col" "
@@ -793,9 +793,9 @@ SELECT dolt_commit('-m','main insert explicit');
 SELECT dolt_merge('feat');
 " "SELECT id, val, num FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 16: Large row counts
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- large row counts ---"
 
 oracle "merge_many_inserts_each_side" "
@@ -832,9 +832,9 @@ SELECT dolt_commit('-m','main updates 6-10');
 SELECT dolt_merge('feat');
 " "SELECT sum(val) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 17: Empty/boundary conditions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- empty/boundary conditions ---"
 
 oracle "merge_empty_table_both_add_rows" "
@@ -876,9 +876,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 18: Tag interactions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag interactions ---"
 
 oracle "tag_survives_branch_delete" "
@@ -896,9 +896,9 @@ SELECT dolt_branch('-d', 'feat');
 SELECT dolt_checkout('v1');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 19: Wide tables (many columns)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- wide tables ---"
 
 oracle "merge_wide_table_different_cols" "
@@ -917,9 +917,9 @@ SELECT dolt_commit('-m','main updates c5,c7');
 SELECT dolt_merge('feat');
 " "SELECT id, c1, c2, c3, c4, c5, c6, c7, c8 FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 20: Savepoint + commit interaction
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- savepoint + commit ---"
 
 oracle "commit_after_savepoint_release" "
@@ -947,9 +947,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','multiple dml');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 21: Merge + foreign keys
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge + foreign keys ---"
 
 oracle "fk_insert_child_on_branch" "
@@ -1026,9 +1026,9 @@ SELECT dolt_commit('-m','main adds child');
 SELECT dolt_merge('feat');
 " "SELECT c.id, c.pid, c.val FROM child c ORDER BY c.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 22: Merge + secondary indexes
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge + secondary indexes ---"
 
 oracle "merge_with_indexed_col_insert" "
@@ -1102,9 +1102,9 @@ SELECT dolt_commit('-m','main changes');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, val FROM t ORDER BY a, b, id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 23: Cherry-pick edge cases
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick edge cases ---"
 
 oracle "cherry_pick_into_diverged_table" "
@@ -1154,9 +1154,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 24: Revert edge cases
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert edge cases ---"
 
 oracle "revert_middle_commit" "
@@ -1198,9 +1198,9 @@ SELECT dolt_commit('-m','update');
 SELECT dolt_revert('HEAD');
 " "SELECT id, val, num FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 25: Diamond merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- diamond merges ---"
 
 oracle "diamond_merge_no_conflict" "
@@ -1266,9 +1266,9 @@ SELECT dolt_merge('b2');
 SELECT dolt_merge('b3');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 26: Multiple tables with FK during merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-table FK merge ---"
 
 oracle "fk_cascade_not_triggered_by_merge" "
@@ -1309,9 +1309,9 @@ SELECT dolt_commit('-m','main updates c');
 SELECT dolt_merge('feat');
 " "SELECT a.val, b.val, c.val FROM a JOIN b ON b.aid=a.id JOIN c ON c.bid=b.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 27: Merge after multiple commits on each branch
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- deep branch history merge ---"
 
 oracle "merge_after_3_commits_each" "
@@ -1364,9 +1364,9 @@ SELECT dolt_commit('-m','main c2');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 28: Type coercion in merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- type coercion ---"
 
 oracle "merge_int_stored_as_text" "
@@ -1401,9 +1401,9 @@ SELECT dolt_commit('-m','main fills real');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 29: Schema-only changes
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- schema-only changes ---"
 
 oracle "add_col_no_data_change" "
@@ -1428,9 +1428,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','add and populate');
 " "SELECT id, val, score FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 30: Merge + DROP TABLE on one side
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop table interactions ---"
 
 oracle "drop_table_other_side_untouched" "
@@ -1468,9 +1468,9 @@ SELECT dolt_commit('-m','main modifies t1');
 SELECT dolt_merge('feat');
 " "SELECT 't1' AS tbl, id FROM t1 UNION ALL SELECT 't2', id FROM t2 ORDER BY 1, 2;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 31: Merge with same row modified identically
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- convergent modifications ---"
 
 oracle "both_sides_same_update" "
@@ -1521,9 +1521,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 32: Reset interactions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset edge cases ---"
 
 oracle "soft_reset_then_recommit" "
@@ -1553,9 +1553,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 33: Multi-column cell merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-column cell merge ---"
 
 oracle "cell_merge_4_cols" "
@@ -1606,9 +1606,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 34: Repeated merge of same branch
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- repeated merge ---"
 
 oracle "merge_same_branch_twice" "
@@ -1648,9 +1648,9 @@ SELECT dolt_checkout('feat');
 SELECT dolt_merge('main');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 35: Cherry-pick + merge interaction
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick + merge ---"
 
 oracle "cherry_pick_then_merge_same_branch" "
@@ -1670,9 +1670,9 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 36: Negative numbers and zero
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- negative numbers and zero ---"
 
 oracle "merge_negative_ids" "
@@ -1707,9 +1707,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 37: Empty string vs NULL
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- empty string vs NULL ---"
 
 oracle "merge_empty_string_vs_null" "
@@ -1728,9 +1728,9 @@ SELECT dolt_commit('-m','main null');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 38: Merge with row-count-only verification
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- row count after merge ---"
 
 oracle "merge_preserves_total_rows" "
@@ -1750,9 +1750,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 39: Multi-column PK merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-column PK merge ---"
 
 oracle "three_col_pk_merge" "
@@ -1787,9 +1787,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a, b, x, y FROM t ORDER BY a, b;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 40: Merge + add/commit workflow variations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- add/commit workflow ---"
 
 oracle "add_specific_table" "
@@ -1816,9 +1816,9 @@ INSERT INTO t VALUES(1,'a');
 SELECT dolt_commit('-A', '-m','auto add');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 41: Merge + many data types
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- many data types in merge ---"
 
 oracle "merge_bool_col" "
@@ -1885,9 +1885,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 42: Merge chain (A→B→C merges)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge chains ---"
 
 oracle "serial_branch_merge_chain" "
@@ -1934,9 +1934,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('b2');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 43: Revert + merge interaction
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert + merge ---"
 
 oracle "revert_then_merge_same_row" "
@@ -1973,9 +1973,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 44: Multiple table interactions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-table complex ---"
 
 oracle "merge_3_tables_mixed_ops" "
@@ -2020,9 +2020,9 @@ SELECT dolt_commit('-m','main inserts t2');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t1 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 45: Idempotent operations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- idempotent operations ---"
 
 oracle "update_to_same_value" "
@@ -2056,9 +2056,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','insert then delete');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 46: Merge + column default interactions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- column defaults in merge ---"
 
 oracle "add_col_with_default_then_merge" "
@@ -2093,9 +2093,9 @@ SELECT dolt_commit('-m','main explicit');
 SELECT dolt_merge('feat');
 " "SELECT id, val, status FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 47: Stress cell merge with many columns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- stress cell merge ---"
 
 oracle "cell_merge_8_cols_interleaved" "
@@ -2131,9 +2131,9 @@ SELECT dolt_commit('-m','main b on evens');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 48: Cherry-pick + FK
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick + FK ---"
 
 oracle "cherry_pick_with_parent_child" "
@@ -2151,9 +2151,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT p.id, p.name FROM parent p ORDER BY p.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 49: Revert + multi-table
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert + multi-table ---"
 
 oracle "revert_multi_table_commit" "
@@ -2170,9 +2170,9 @@ SELECT dolt_commit('-m','add to both');
 SELECT dolt_revert('HEAD');
 " "SELECT 't1' AS tbl, id, val FROM t1 UNION ALL SELECT 't2', id, val FROM t2 ORDER BY 1, 2;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 50: Reset + branch interaction
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset + branch ---"
 
 oracle "reset_hard_then_new_work" "
@@ -2209,9 +2209,9 @@ SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 51: Merge + NOT NULL constraints
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- NOT NULL in merge ---"
 
 oracle "merge_not_null_col_update" "
@@ -2246,9 +2246,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 52: Interleaved branch operations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- interleaved branch ops ---"
 
 oracle "alternating_branch_commits" "
@@ -2309,9 +2309,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('grandchild');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 53: Large delete + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- large delete + merge ---"
 
 oracle "delete_half_merge_other_half" "
@@ -2346,9 +2346,9 @@ SELECT dolt_commit('-m','main inserts');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 54: Cherry-pick from deep history
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick from deep history ---"
 
 oracle "cherry_pick_2nd_of_3_commits" "
@@ -2370,9 +2370,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat~1');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 55: Merge + UPDATE same row multiple times
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- rapid updates before merge ---"
 
 oracle "multiple_updates_before_commit" "
@@ -2404,9 +2404,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','recreate row');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 56: Merge + CHECK constraints
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- CHECK constraints + merge ---"
 
 oracle "merge_with_check_constraint" "
@@ -2425,9 +2425,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, score FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 57: Merge preserves row ordering
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- row ordering after merge ---"
 
 oracle "merge_preserves_pk_order" "
@@ -2446,9 +2446,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 58: Merge after rename-like operations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- rename-like operations ---"
 
 oracle "delete_and_reinsert_different_val" "
@@ -2468,9 +2468,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 59: Cross-branch FK integrity
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cross-branch FK ---"
 
 oracle "fk_both_branches_add_children" "
@@ -2510,9 +2510,9 @@ SELECT dolt_commit('-m','main adds child to p1');
 SELECT dolt_merge('feat');
 " "SELECT p.name, c.val FROM parent p JOIN child c ON c.pid=p.id ORDER BY c.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 60: Merge + UNIQUE constraint
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UNIQUE constraint + merge ---"
 
 oracle "unique_col_merge_no_conflict" "
@@ -2547,9 +2547,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, code, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 61: Merge + many rows same table different operations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- complex row operations merge ---"
 
 oracle "feat_inserts_main_deletes_no_overlap" "
@@ -2620,9 +2620,9 @@ SELECT dolt_commit('-m','main y,z');
 SELECT dolt_merge('feat');
 " "SELECT id, x, y, z FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 62: Multiple merges building on each other
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- accumulating merges ---"
 
 oracle "merge_5_feature_branches" "
@@ -2684,9 +2684,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 63: Merge + various PK types
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- various PK types ---"
 
 oracle "merge_negative_pk" "
@@ -2739,9 +2739,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 64: Cherry-pick + multi-table
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick + multi-table ---"
 
 oracle "cherry_pick_multi_table_commit" "
@@ -2760,9 +2760,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT 't1' AS tbl, id, val FROM t1 UNION ALL SELECT 't2', id, val FROM t2 ORDER BY 1, 2;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 65: Merge + empty values
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- empty string handling ---"
 
 oracle "merge_empty_string_update" "
@@ -2797,9 +2797,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 66: Merge + multiple indexes
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multiple indexes + merge ---"
 
 oracle "merge_table_with_unique_cols" "
@@ -2820,9 +2820,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, name, age FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 67: Revert + cherry-pick combined
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert + cherry-pick ---"
 
 oracle "revert_then_cherry_pick_back" "
@@ -2842,9 +2842,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 68: Merge + auto-increment-like patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- auto-increment patterns ---"
 
 oracle "merge_with_max_id_pattern" "
@@ -2863,9 +2863,9 @@ SELECT dolt_commit('-m','main auto ids');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 69: Complex FK merge scenarios
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- complex FK merge ---"
 
 oracle "fk_insert_parent_one_side_child_other" "
@@ -2905,9 +2905,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT c.id, c.pid, c.val FROM child c ORDER BY c.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 70: Merge + multiple commits per branch (stress)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-commit branch stress ---"
 
 oracle "five_commits_per_branch_merge" "
@@ -2937,9 +2937,9 @@ SELECT dolt_commit('-m','m2');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 71: Verify merge doesn't duplicate rows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge row dedup ---"
 
 oracle "no_duplicates_after_merge" "
@@ -2973,9 +2973,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 72: Merge preserves data integrity
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge data integrity ---"
 
 oracle "merge_sum_preserved" "
@@ -3010,9 +3010,9 @@ SELECT dolt_commit('-m','main raises max');
 SELECT dolt_merge('feat');
 " "SELECT min(val), max(val) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 73: Cherry-pick preserves other data
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick data preservation ---"
 
 oracle "cherry_pick_doesnt_affect_other_rows" "
@@ -3044,9 +3044,9 @@ SELECT dolt_commit('-m','main changed');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 74: Revert preserves other data
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert data preservation ---"
 
 oracle "revert_one_row_keeps_others" "
@@ -3061,9 +3061,9 @@ SELECT dolt_commit('-m','changes');
 SELECT dolt_revert('HEAD');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 75: Merge + column ordering
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- column ordering ---"
 
 oracle "select_cols_after_merge" "
@@ -3082,9 +3082,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT first_col, second_col, third_col FROM t WHERE id=1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 76-80: Merge + various value patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- value patterns in merge ---"
 
 oracle "merge_special_chars_in_text" "
@@ -3167,9 +3167,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 81-85: More FK interaction patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- more FK patterns ---"
 
 oracle "fk_both_add_children_to_same_parent" "
@@ -3264,9 +3264,9 @@ SELECT dolt_commit('-m','main both');
 SELECT dolt_merge('feat');
 " "SELECT p.name, c.val FROM parent p JOIN child c ON c.pid=p.id ORDER BY p.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 86-90: Merge topology stress
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge topology stress ---"
 
 oracle "merge_into_already_merged_branch" "
@@ -3382,9 +3382,9 @@ SELECT dolt_commit('-m','m1');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 91-95: Merge + batch operations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- batch operations + merge ---"
 
 oracle "batch_insert_then_merge" "
@@ -3435,9 +3435,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 96-100: Edge cases for dolt_status/dolt_add
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- add/status edge cases ---"
 
 oracle "add_after_drop_and_recreate" "
@@ -3463,9 +3463,9 @@ SELECT dolt_commit('-m','staged both');
 " "SELECT 't1' AS tbl, id, val FROM t1 UNION ALL SELECT 't2', id, val FROM t2 ORDER BY 1, 2;"
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 101: Conflict boundaries
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- conflict boundaries ---"
 
 oracle "convergent_same_field_same_value" "
@@ -3580,9 +3580,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t WHERE id>=2 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 102: Commit graph verification
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- commit graph counts ---"
 
 oracle "linear_3_commits_count" "
@@ -3651,9 +3651,9 @@ SELECT dolt_commit('-m','to revert');
 SELECT dolt_revert('HEAD');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 103: PK edge cases
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- PK edge cases in merge ---"
 
 oracle "pk_zero_in_merge" "
@@ -3706,9 +3706,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 104: INT PRIMARY KEY (WITHOUT ROWID)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INT PK (WITHOUT ROWID) ---"
 
 oracle "int_pk_insert_merge" "
@@ -3772,9 +3772,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 105: Undo patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- undo patterns ---"
 
 echo "--- merge topology ---"
@@ -3898,9 +3898,9 @@ SELECT dolt_checkout('feat');
 SELECT dolt_merge('main');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 107: Stress cell merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- stress cell merge ---"
 
 oracle "cell_merge_8_cols_interleaved" "
@@ -3971,9 +3971,9 @@ SELECT dolt_commit('-m','main all y');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n, count(CASE WHEN x='F' THEN 1 END) AS xf, count(CASE WHEN y='M' THEN 1 END) AS ym FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 108: FK stress
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK stress ---"
 
 oracle "fk_self_ref_merge" "
@@ -4033,9 +4033,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM child ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 109: Batch operations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- batch operations ---"
 
 oracle "batch_insert_merge" "
@@ -4086,9 +4086,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 110: Aggregate verification
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- aggregate verification ---"
 
 oracle "merge_preserves_sum" "
@@ -4144,9 +4144,9 @@ SELECT dolt_merge('feat');
 
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 112: Net-no-op commits (empty commit rejected, merge no-op)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- net-no-op commit + merge ---"
 
 oracle "roundtrip_update_no_net_change" "
@@ -4200,9 +4200,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 92: UPDATE with CASE + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE CASE + merge ---"
 
 oracle "update_case_then_merge" "
@@ -4234,9 +4234,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, CASE WHEN n<10 THEN 's' WHEN n<20 THEN 'm' ELSE 'l' END AS sz FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 93: Subquery in WHERE + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- subquery WHERE + merge ---"
 
 oracle "update_where_subquery_then_merge" "
@@ -4275,9 +4275,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t1 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 94: INSERT SELECT + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT SELECT + merge ---"
 
 oracle "insert_select_from_other_table_merge" "
@@ -4313,9 +4313,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, grp FROM t WHERE id>=10 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 95: LIKE / IN / BETWEEN + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- LIKE/IN/BETWEEN + merge ---"
 
 oracle "update_where_like_then_merge" "
@@ -4366,9 +4366,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 96: Aggregates after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- aggregates after merge ---"
 
 oracle "sum_after_merge" "
@@ -4413,9 +4413,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT sum(n)/count(*) AS a FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 97: HEAD~N refs + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- HEAD~N refs ---"
 
 oracle "reset_to_head_tilde_2" "
@@ -4451,9 +4451,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('side');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 98: allow-empty + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- allow-empty commit + merge ---"
 
 oracle "allow_empty_then_merge" "
@@ -4482,9 +4482,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 99: Multi-branch diamond patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- diamond via branches ---"
 
 oracle "diamond_with_cell_merge" "
@@ -4525,9 +4525,9 @@ SELECT dolt_merge('left');
 SELECT dolt_merge('right');
 " "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 100: Multi-level FK chain + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-level FK + merge ---"
 
 oracle "four_level_fk_chain_merge" "
@@ -4555,9 +4555,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a.v, b.v, c.v, d.v FROM d JOIN c ON d.cid=c.id JOIN b ON c.bid=b.id JOIN a ON b.aid=a.id ORDER BY d.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 101: Checkout commit hash + data visibility
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- branch from historical commit ---"
 
 oracle "branch_from_past_commit_new_work" "
@@ -4601,9 +4601,9 @@ SELECT dolt_merge('past_a');
 SELECT dolt_merge('past_b');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 102: Conditional UPDATE + cell merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- conditional UPDATE + cell merge ---"
 
 oracle "update_coalesce_then_merge" "
@@ -4638,9 +4638,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 103: LIMIT/OFFSET after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- LIMIT/OFFSET after merge ---"
 
 oracle "select_limit_after_merge" "
@@ -4669,9 +4669,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id LIMIT 2 OFFSET 2;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 104: DISTINCT/UNION after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DISTINCT/UNION after merge ---"
 
 oracle "distinct_after_merge" "
@@ -4703,9 +4703,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT v FROM t1 UNION ALL SELECT v FROM t2 ORDER BY v;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 105: Multi-statement transactions + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multiple inserts then merge ---"
 
 oracle "many_inserts_same_batch_merge" "
@@ -4747,9 +4747,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 106: Cherry-pick followed by many ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick chain ---"
 
 oracle "cherry_pick_two_commits_sequentially" "
@@ -4784,9 +4784,9 @@ SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 107: Deep history + cherry-pick
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- deep history + cherry-pick ---"
 
 oracle "cherry_pick_from_deep_branch" "
@@ -4811,9 +4811,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat~2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 108: UNIQUE + merge complex
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UNIQUE + merge complex ---"
 
 oracle "unique_col_delete_then_reinsert_merge" "
@@ -4849,9 +4849,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, code1, code2 FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 109: NULL ordering in merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- NULL handling edge cases ---"
 
 oracle "null_to_value_both_sides_different_rows" "
@@ -4883,9 +4883,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS null_count FROM t WHERE v IS NULL;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 110: Branch lifecycle + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- branch lifecycle + merge ---"
 
 oracle "create_merge_delete_branch_data_intact" "
@@ -4925,9 +4925,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 111: Chained updates on same rows + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- chained updates same row + merge ---"
 
 oracle "many_updates_same_row_feat_merge" "
@@ -4950,9 +4950,9 @@ SELECT dolt_commit('-m','main new row');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 112: HAVING clause + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- HAVING after merge ---"
 
 oracle "having_after_merge" "
@@ -4968,9 +4968,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT grp, sum(n) AS total FROM t GROUP BY grp HAVING sum(n) > 10 ORDER BY grp;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 113: Mixed column ordering in INSERT + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- explicit column lists + merge ---"
 
 oracle "insert_named_cols_different_order_merge" "
@@ -4989,9 +4989,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 114: Revert chain
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert chain ---"
 
 oracle "revert_then_revert_the_revert" "
@@ -5021,9 +5021,9 @@ SELECT dolt_revert('HEAD');
 SELECT dolt_revert('HEAD');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 115: dolt_log filtering after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_log after various ops ---"
 
 oracle "log_message_presence_after_merge" "
@@ -5055,9 +5055,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT message FROM dolt_log ORDER BY message;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 116: CHECK constraint interactions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- CHECK constraint interactions ---"
 
 oracle "check_constraint_multi_row_merge" "
@@ -5092,9 +5092,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 117: Wide PK patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- wide PK patterns + merge ---"
 
 oracle "varchar_pk_merge" "
@@ -5131,9 +5131,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a, b, v FROM t ORDER BY a, b;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 118: Merge yields predictable working state
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- post-merge working state ---"
 
 oracle "post_merge_immediate_insert" "
@@ -5168,9 +5168,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 119: Many-branch parallel work
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- parallel branches ---"
 
 oracle "four_parallel_branches_merge" "
@@ -5246,9 +5246,9 @@ SELECT dolt_merge('b5');
 SELECT dolt_merge('b6');
 " "SELECT count(*) AS n, sum(id) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 120: Merge then immediate revert
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge then revert ---"
 
 oracle "revert_merge_commit" "
@@ -5268,9 +5268,9 @@ SELECT dolt_merge('feat','--no-ff','-m','merge feat');
 SELECT dolt_revert('HEAD','-m','1');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 121: FK + delete restriction + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK delete restriction + merge ---"
 
 oracle "fk_delete_parent_with_children_merge" "
@@ -5291,9 +5291,9 @@ SELECT dolt_commit('-m','main more children');
 SELECT dolt_merge('feat');
 " "SELECT id, v, pid FROM child ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 122: EXISTS / NOT EXISTS after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- EXISTS/NOT EXISTS after merge ---"
 
 oracle "exists_subquery_after_merge" "
@@ -5344,9 +5344,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 123: CTE (WITH clause) + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- CTE + merge ---"
 
 oracle "cte_select_after_merge" "
@@ -5375,9 +5375,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH gc AS (SELECT grp, count(*) AS c FROM t GROUP BY grp) SELECT grp, c FROM gc ORDER BY grp;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 124: REPLACE/upsert patterns + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- REPLACE patterns + merge ---"
 
 oracle "replace_on_both_branches_merge" "
@@ -5413,9 +5413,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 125: Multi-row UPDATE with different values
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-row UPDATE + merge ---"
 
 oracle "update_per_id_then_merge" "
@@ -5437,9 +5437,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 126: FK SET NULL on delete + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK cascade-ish behavior + merge ---"
 
 oracle "fk_orphan_possible_when_no_action_merge" "
@@ -5461,9 +5461,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 127: REAL/float merge patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- REAL/float merge ---"
 
 oracle "float_merge_different_rows" "
@@ -5495,9 +5495,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, x FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 128: INSERT multiple rows at once + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-VALUES INSERT + merge ---"
 
 oracle "insert_10_rows_one_stmt_merge" "
@@ -5516,9 +5516,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 129: Commit messages with special chars
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- commit message special chars ---"
 
 oracle "message_with_dashes_merge" "
@@ -5547,9 +5547,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 130: Merge with several row additions on each side
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- balanced growth merges ---"
 
 oracle "both_sides_add_5_rows_disjoint" "
@@ -5584,9 +5584,9 @@ SELECT dolt_commit('-m','main delete 8-10');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 131: Merge preserves computed aggregates
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- post-merge aggregate invariants ---"
 
 oracle "min_max_span_unchanged_by_convergent_update" "
@@ -5621,9 +5621,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(DISTINCT cat) AS distinct_cats FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 132: Re-merge same branch after update
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- re-merge branch after update ---"
 
 oracle "merge_branch_update_merge_again" "
@@ -5645,9 +5645,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 133: Merge + reset + re-merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge + reset + re-merge ---"
 
 oracle "merge_reset_remerge" "
@@ -5665,9 +5665,9 @@ SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 134: Adding a column then populating on a branch
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- alter + populate + merge ---"
 
 oracle "alter_add_col_populate_on_branch_merge" "
@@ -5706,9 +5706,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, x, y FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 135: Commit hash visibility via dolt_log
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_log structure after merges ---"
 
 oracle "log_distinct_commit_hashes_count" "
@@ -5740,9 +5740,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('first','second','third_on_feat');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 136: Multi-column indexes + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-column indexes + merge ---"
 
 oracle "merge_table_with_multi_col_index" "
@@ -5763,9 +5763,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY a, b;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 137: Deeply nested FK scenarios
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- deep FK scenarios ---"
 
 oracle "fk_update_root_propagates_views_ok" "
@@ -5806,9 +5806,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 138: Repeated DROP + CREATE + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop + recreate + merge ---"
 
 oracle "drop_recreate_same_name_merge" "
@@ -5829,9 +5829,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 139: Many-commit linear history + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- long linear history + merge ---"
 
 oracle "ten_commits_linear_then_branch_merge" "
@@ -5874,9 +5874,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('side');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 140: String functions in UPDATE + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- string funcs in UPDATE + merge ---"
 
 oracle "update_lower_then_merge" "
@@ -5908,9 +5908,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t WHERE length(v)>=3 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 141: Arithmetic in UPDATE + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- arithmetic UPDATE + merge ---"
 
 oracle "update_multiply_disjoint_merge" "
@@ -5945,9 +5945,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 142: Self-referential / recursive relations in merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- self-referential merge ---"
 
 oracle "self_ref_fk_new_hierarchy_merge" "
@@ -5966,9 +5966,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, parent_id, v FROM n ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 143: UPDATE with JOIN-like subqueries + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE with correlated subquery + merge ---"
 
 oracle "update_via_correlated_subquery_merge" "
@@ -5989,9 +5989,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 144: Commit chain reshape + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- commit chain reshape + merge ---"
 
 oracle "amend_like_flow_soft_reset_recommit" "
@@ -6022,9 +6022,9 @@ SELECT dolt_reset('--soft','HEAD~2');
 SELECT dolt_commit('-m','squashed');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 145: Deeply-nested table references
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-table inner join + merge ---"
 
 oracle "three_way_join_after_merge" "
@@ -6061,9 +6061,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT t1.id, CASE WHEN t2.id IS NULL THEN 'none' ELSE t2.v END AS got FROM t1 LEFT JOIN t2 ON t1.id=t2.t1id ORDER BY t1.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 146: Merging empty branch
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge branch with only empty commits ---"
 
 oracle "merge_only_allow_empty_branch" "
@@ -6082,9 +6082,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 147: Convergent conflict types
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- convergent conflict probes ---"
 
 oracle "convergent_update_same_value" "
@@ -6183,9 +6183,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t WHERE id=2;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 148: Self-merge / already-merged probes
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- self-merge probes ---"
 
 oracle "merge_self_is_noop" "
@@ -6214,9 +6214,9 @@ SELECT dolt_merge('feat');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 149: Cherry-pick edge cases
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick edge probes ---"
 
 oracle "cherry_pick_same_commit_twice" "
@@ -6261,9 +6261,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 150: Reset target probes
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset target probes ---"
 
 oracle "reset_to_tag" "
@@ -6293,9 +6293,9 @@ SELECT dolt_commit('-m','c2');
 SELECT dolt_reset('--hard','snap');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 151: Empty merge sources / no-op merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- empty/no-op merge probes ---"
 
 oracle "merge_branch_with_no_new_commits" "
@@ -6310,9 +6310,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 152: Cross-type comparison survives merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- type behavior through merge ---"
 
 oracle "int_column_preserved_numeric_equality" "
@@ -6341,9 +6341,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE s='updated';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 153: PK/UNIQUE interaction during merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- PK/UNIQUE conflict probes ---"
 
 oracle "both_sides_insert_same_pk_different_values" "
@@ -6378,9 +6378,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE id=1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 154: Merge after staging divergence
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- pre-merge staging probes ---"
 
 oracle "merge_with_uncommitted_working_changes" "
@@ -6397,9 +6397,9 @@ INSERT INTO t VALUES(3,'uncommitted');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 155: REPLACE colliding with committed row
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- REPLACE vs merge probes ---"
 
 oracle "replace_then_other_side_replaces_same_pk" "
@@ -6418,9 +6418,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 156: Cell merge fallback
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cell merge fallback probes ---"
 
 oracle "three_cols_updated_across_sides_no_overlap" "
@@ -6455,9 +6455,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 157: Deep merge + revert semantics
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge+revert probes ---"
 
 oracle "revert_noff_merge_commit_row_count" "
@@ -6477,9 +6477,9 @@ SELECT dolt_merge('feat','--no-ff','-m','merged');
 SELECT dolt_revert('HEAD','-m','1');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 158: Large string / blob merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- large payload probes ---"
 
 oracle "blob_different_on_each_side_merge" "
@@ -6498,9 +6498,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, hex(b) FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 159: Deeper cherry-pick / reset probes
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick and reset deeper probes ---"
 
 oracle "cherry_pick_then_hard_reset_clears_it" "
@@ -6553,9 +6553,9 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 160: Aggregations with NULL through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- NULL aggregation probes ---"
 
 oracle "sum_ignores_null_after_merge" "
@@ -6584,9 +6584,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT min(n) AS lo, max(n) AS hi FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 161: Row update patterns that provoke edge cases
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- update pattern probes ---"
 
 oracle "update_then_update_back_same_value_merge" "
@@ -6623,9 +6623,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 162: FK + merge where dependency must resolve
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK merge dependency probes ---"
 
 oracle "fk_parent_created_one_side_child_other_same_id" "
@@ -6665,9 +6665,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 163: Many-row batch + partial conflict
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- batch + partial conflict probes ---"
 
 oracle "batch_50_with_one_conflict_elsewhere" "
@@ -6688,9 +6688,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t WHERE id BETWEEN 100 AND 119;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 164: ORDER BY with NULL after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- NULL ordering probes ---"
 
 oracle "nulls_in_order_by_asc_merge" "
@@ -6706,9 +6706,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE n IS NOT NULL ORDER BY n;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 165: Nested / repeated ALTER through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- repeated ALTER probes ---"
 
 oracle "alter_drop_recreate_col_through_merge" "
@@ -6728,9 +6728,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, keep FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 166: Reset + merge replay
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset then merge replay probes ---"
 
 oracle "reset_then_merge_second_branch" "
@@ -6753,9 +6753,9 @@ SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_merge('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 167: Commit graph after diamond + revert
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- graph shape probes ---"
 
 oracle "log_count_after_diamond_no_ff" "
@@ -6777,9 +6777,9 @@ SELECT dolt_merge('left','--no-ff','-m','merge left');
 SELECT dolt_merge('right','--no-ff','-m','merge right');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 168: Stale working set scenarios
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- stale working set probes ---"
 
 oracle "insert_commit_reset_hard_uncommitted_insert" "
@@ -6807,9 +6807,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 169: Table dropped on one side of merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop-on-branch probes ---"
 
 oracle "table_dropped_on_feat_merge_to_main" "
@@ -6850,9 +6850,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','marker');
 " "SELECT id FROM marker;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 170: Insert-delete-reinsert on same branch
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- IDR on one branch probes ---"
 
 oracle "insert_delete_reinsert_within_branch_merge" "
@@ -6890,9 +6890,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 171: Revert / cherry-pick inversion
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert/cherry-pick inversion probes ---"
 
 oracle "cherry_pick_a_revert_commit" "
@@ -6923,9 +6923,9 @@ SELECT dolt_cherry_pick('feat');
 SELECT dolt_revert('HEAD');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 172: Type / dialect edge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dialect edge probes ---"
 
 oracle "integer_stored_text_update_merge" "
@@ -6960,9 +6960,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 173: CHECK that references multiple columns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-col CHECK probes ---"
 
 oracle "check_on_two_cols_merge" "
@@ -6981,9 +6981,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 174: dolt_diff (vtable) consistency after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_diff stability probes ---"
 
 oracle "dolt_diff_summary_row_count_stable" "
@@ -6999,9 +6999,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM dolt_diff WHERE table_name='t';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 175: Commit message identity through branch rename
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- branch rename / move probes ---"
 
 oracle "branch_move_then_merge" "
@@ -7018,9 +7018,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('renamed');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 176: No-op commits stress
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- no-op commit stress probes ---"
 
 oracle "many_allow_empty_then_data" "
@@ -7038,9 +7038,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 177: Row deleted on one side, untouched on other
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- one-sided delete probes ---"
 
 oracle "delete_on_feat_untouched_main_merge" "
@@ -7059,9 +7059,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 178: Tag at a specific commit history point
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag at non-HEAD probes ---"
 
 oracle "tag_at_past_commit" "
@@ -7079,9 +7079,9 @@ SELECT dolt_tag('mid','HEAD~1');
 SELECT dolt_reset('--hard','mid');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 179: Schema mutation across merge sides
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- schema mutation across merge ---"
 
 oracle "add_col_on_feat_insert_main_merge" "
@@ -7116,16 +7116,16 @@ SELECT dolt_commit('-m','main y');
 SELECT dolt_merge('feat');
 " "SELECT id, v, x, y FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 180: Convergent schema changes
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- convergent schema probes ---"
 
-# NOTE: both_sides_add_same_col_same_type is a known divergence probe —
-# Dolt flags convergent ADD COLUMN as a schema conflict and rolls back
-# (autocommit rollback fix #565), while doltlite merges cleanly and
-# preserves each side's DML. Omitted from suite pending a decision on
-# whose semantics to align with.
+
+
+
+
+
 
 oracle "both_sides_drop_same_column" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, toss TEXT);
@@ -7144,9 +7144,9 @@ SELECT dolt_commit('-m','main drop');
 SELECT dolt_merge('feat');
 " "SELECT id, a FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 181: FK violation post-merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK violation on merge probes ---"
 
 oracle "fk_merge_preserves_both_parent_insertions" "
@@ -7169,9 +7169,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS parents FROM parent;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 182: Explicit transaction + DML commit flow
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- explicit transaction probes ---"
 
 oracle "begin_commit_across_dolt_commit" "
@@ -7189,9 +7189,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 183: ALTER table type change implicit
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- implicit column behavior probes ---"
 
 oracle "insert_integer_into_text_col_then_merge" "
@@ -7210,9 +7210,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t WHERE v LIKE '%0%' ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 184: Same row touched many times via merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- repeat branch merge probes ---"
 
 oracle "branch_merge_update_merge_update_merge" "
@@ -7240,9 +7240,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 185: Reset immediately after commit
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset immediately after commit probes ---"
 
 oracle "commit_then_immediate_hard_reset" "
@@ -7277,9 +7277,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','newer c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 186: Null + UNIQUE interaction through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- NULL + UNIQUE merge probes ---"
 
 oracle "unique_allows_multiple_nulls_merge" "
@@ -7298,9 +7298,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, code FROM t ORDER BY id;"
 
-# A multi-column UNIQUE index with one column NULL per row also
-# must not flag a duplicate — SQL standard exempts any row with a
-# NULL in any of the index columns.
+
+
+
 oracle "unique_multi_col_with_one_null_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, a VARCHAR(8), b VARCHAR(8), UNIQUE(a,b));
 INSERT INTO t VALUES(1,'x','y');
@@ -7318,9 +7318,9 @@ SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 187: Merging a branch whose only change is an alter
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- alter-only branch merge ---"
 
 oracle "feat_only_adds_column_no_rows" "
@@ -7355,9 +7355,9 @@ SELECT dolt_commit('-m','main adds col');
 SELECT dolt_merge('feat');
 " "SELECT id, v, tag FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 188: String padding / whitespace probes
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- whitespace/text probes ---"
 
 oracle "trailing_space_text_merge" "
@@ -7386,9 +7386,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, length(v) AS L FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 189: FK delete restrict through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK delete-restrict probes ---"
 
 oracle "fk_child_referencing_deleted_parent_merge" "
@@ -7410,9 +7410,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS np, count(*) FROM parent;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 190: Detailed row/col state after complex flow
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- complex flow final state probes ---"
 
 oracle "complex_flow_final_state" "
@@ -7437,9 +7437,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 191: Recursive CTE after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- recursive CTE probes ---"
 
 oracle "recursive_cte_count_to_n_after_merge" "
@@ -7468,9 +7468,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH RECURSIVE descend(id, depth) AS (SELECT id, 0 FROM tree WHERE pid IS NULL UNION ALL SELECT t.id, d.depth+1 FROM tree t JOIN descend d ON t.pid=d.id) SELECT depth, count(*) AS n FROM descend GROUP BY depth ORDER BY depth;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 192: Window functions after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- window function probes ---"
 
 oracle "row_number_after_merge" "
@@ -7525,9 +7525,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, COALESCE(LAG(v) OVER (ORDER BY id), 0) AS prev FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 193: dolt_log introspection
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_log structural probes ---"
 
 oracle "dolt_log_message_set_after_merge" "
@@ -7565,9 +7565,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','cx003');
 " "SELECT count(*) FROM dolt_log WHERE message LIKE 'cx%';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 194: Deep history
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- deep history probes ---"
 
 oracle "twenty_commit_log_count" "
@@ -7669,9 +7669,9 @@ SELECT dolt_commit('-m','c9');
 SELECT dolt_reset('--hard','HEAD~5');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 195: Complex boolean WHERE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- complex WHERE probes ---"
 
 oracle "and_or_not_combined_after_merge" "
@@ -7703,9 +7703,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE v IN (SELECT v FROM allow) ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 196: Multi-column UPDATE assignment
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-col UPDATE probes ---"
 
 oracle "update_set_multiple_cols_merge" "
@@ -7724,9 +7724,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 197: Wide tables (20+ cols) + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- wide table probes ---"
 
 oracle "twenty_col_table_merge" "
@@ -7745,9 +7745,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, c5, c10, c15, c20 FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 198: Cross-table JOIN UPDATE semantics
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- JOIN UPDATE probes ---"
 
 oracle "update_with_inner_join_lookup_merge" "
@@ -7768,9 +7768,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 199: dolt_status empty after ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_status probes ---"
 
 oracle "status_empty_after_commit" "
@@ -7788,9 +7788,9 @@ SELECT dolt_commit('-m','c1');
 INSERT INTO t VALUES(2,'b');
 " "SELECT count(*) FROM dolt_status WHERE staged=0;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 200: Branch off tag + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- branch off tag + merge ---"
 
 oracle "branch_from_tag_then_merge" "
@@ -7810,9 +7810,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('from_tag');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 201: Two-column PK + cell merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- two-col PK cell merge probes ---"
 
 oracle "two_col_int_pk_disjoint_updates" "
@@ -7847,9 +7847,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a, b, v1, v2 FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 202: CASE in SELECT projection after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- CASE projection probes ---"
 
 oracle "nested_case_projection_after_merge" "
@@ -7865,9 +7865,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, CASE WHEN n<10 THEN 'xs' WHEN n<20 THEN 's' WHEN n<30 THEN 'm' WHEN n<40 THEN 'l' ELSE 'xl' END AS sz FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 203: Multi-branch dependency pattern
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-branch dependency ---"
 
 oracle "chain_of_dependent_branches" "
@@ -7891,9 +7891,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('b3');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 204: INSERT SELECT from aggregated subquery + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT SELECT agg probes ---"
 
 oracle "insert_select_from_agg_after_merge" "
@@ -7912,9 +7912,9 @@ SELECT dolt_commit('-m','main new grp');
 SELECT dolt_merge('feat');
 " "SELECT grp, sum(n) AS s FROM src GROUP BY grp ORDER BY grp;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 205: Repeated merge into ff-aware branches
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- repeated ff / noff probes ---"
 
 oracle "ff_same_branch_many_times" "
@@ -7936,9 +7936,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 206: Complex UPSERT-like patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- upsert-like probes ---"
 
 oracle "on_conflict_replace_equivalent_via_replace" "
@@ -7958,9 +7958,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 207: Aggregate on empty after delete-all
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- aggregate on empty table probes ---"
 
 oracle "delete_all_sum_null_after_merge" "
@@ -7979,9 +7979,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS c FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 208: Concatenated CREATE + INSERT in single commit
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- create+insert same commit probes ---"
 
 oracle "create_and_insert_one_commit_merge" "
@@ -8001,9 +8001,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT 't' AS tbl, count(*) AS n FROM t UNION ALL SELECT 'u', count(*) FROM u ORDER BY 1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 209: Merge commits don't duplicate history
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge commit accounting ---"
 
 oracle "ff_merge_commit_count_equals_branch_commits" "
@@ -8038,9 +8038,9 @@ SELECT dolt_commit('-m','m1');
 SELECT dolt_merge('feat','--no-ff','-m','merge');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 210: String functions + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- string function probes ---"
 
 oracle "substr_in_select_after_merge" "
@@ -8069,9 +8069,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, REPLACE(v,'world','WORLD') AS r FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 211: GROUP BY with multiple keys
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-key GROUP BY probes ---"
 
 oracle "multi_key_group_by_after_merge" "
@@ -8087,9 +8087,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT a, b, sum(n) AS s FROM t GROUP BY a, b ORDER BY a, b;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 212: Order-sensitive PK + reset
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- PK ordering + reset probes ---"
 
 oracle "insert_reverse_order_pk_after_merge" "
@@ -8105,9 +8105,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 213: NULLIF / IFNULL / COALESCE in merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- NULL-handling funcs after merge ---"
 
 oracle "ifnull_after_merge" "
@@ -8136,9 +8136,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n_null FROM (SELECT NULLIF(v,'sentinel') AS masked FROM t) sub WHERE masked IS NULL;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 214: Branch switch inside sequence of ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- mid-sequence branch switches ---"
 
 oracle "back_and_forth_branches_merge" "
@@ -8165,9 +8165,9 @@ SELECT dolt_commit('-m','m2');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 215: Views + VC
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- views + VC ---"
 
 oracle "view_created_on_feat_queried_after_merge" "
@@ -8313,9 +8313,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM active;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 216: Generated columns + VC
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- generated columns + merge ---"
 
 oracle "stored_generated_col_merge" "
@@ -8395,9 +8395,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE squared > 10 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 217: FK cascade actions + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK cascade actions + merge ---"
 
 oracle "on_delete_cascade_parent_delete_one_side" "
@@ -8534,9 +8534,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 218: Conflict resolution in explicit transaction
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- conflict resolution in txn probes ---"
 
 oracle "resolve_conflict_via_update_their_in_txn" "
@@ -8603,9 +8603,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 219: dolt_hashof / dolt_hashof_table properties
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_hashof property probes ---"
 
 oracle "hashof_head_matches_log_top" "
@@ -8676,9 +8676,9 @@ SELECT 2;
 SELECT 3;
 " "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 220: Many-branch fan-in
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- many-branch fan-in probes ---"
 
 oracle "ten_branch_fan_in" "
@@ -8763,9 +8763,9 @@ SELECT dolt_branch('b7');
 SELECT dolt_branch('b8');
 " "SELECT count(*) FROM dolt_branches;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 221: Schema merge corners
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- schema merge corner probes ---"
 
 oracle "type_widen_int_to_bigint_merge" "
@@ -8816,9 +8816,9 @@ SELECT dolt_commit('-m','main adds row');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 222: Math functions after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- math function probes ---"
 
 oracle "abs_after_merge" "
@@ -8860,9 +8860,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, -n AS neg FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 223: Tag semantics
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag semantics probes ---"
 
 oracle "tag_points_to_commit_hash" "
@@ -8904,9 +8904,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 224: Merge-base in complex topologies
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- complex merge base topology ---"
 
 oracle "merge_base_after_merged_branch" "
@@ -8948,9 +8948,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('grandchild');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 225: Unicode sort + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- unicode sort probes ---"
 
 oracle "unicode_text_sort_after_merge" "
@@ -8979,9 +8979,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY v;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 226: Deeper log filters
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- log filter probes ---"
 
 oracle "log_commit_hash_prefix_match" "
@@ -9007,9 +9007,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM (SELECT commit_hash FROM dolt_log ORDER BY date DESC) sub;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 227: Post-merge data invariants
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- post-merge invariant probes ---"
 
 oracle "row_count_after_ff_merge_unchanged" "
@@ -9041,9 +9041,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 241: Tag as reset target and branch start point
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag reuse probes ---"
 
 oracle "reset_to_past_tag" "
@@ -9075,9 +9075,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('hotfix');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 242: Generated columns deeper
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- generated column deeper ---"
 
 oracle "two_stored_generated_cols_merge" "
@@ -9109,9 +9109,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE doubled >= 20 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 243: VIEW + data changes on both sides
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- view + changes on both sides ---"
 
 oracle "view_on_feat_data_on_main_merge" "
@@ -9150,9 +9150,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM posv ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 244: Merge-base after multi-hop merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-hop merge-base probes ---"
 
 oracle "two_feature_branches_merged_sequentially" "
@@ -9197,9 +9197,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('b');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 245: Combined schema + data merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- schema+data mix probes ---"
 
 oracle "add_col_on_feat_and_insert_then_merge" "
@@ -9238,9 +9238,9 @@ SELECT dolt_commit('-m','main adds main_col');
 SELECT dolt_merge('feat');
 " "SELECT id, v, feat_col, main_col FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 246: Complex WHERE filtering after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- complex WHERE projection ---"
 
 oracle "where_multi_pred_after_merge" "
@@ -9272,9 +9272,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t1 WHERE ref IN (SELECT id FROM t2 WHERE flag=1) ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 247: Row manipulation edge patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- row manipulation edges ---"
 
 oracle "swap_pks_via_temp_sentinel" "
@@ -9313,9 +9313,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 248: FK merge + null parent edge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK null-parent edge ---"
 
 oracle "fk_nullable_pid_on_both_sides_merge" "
@@ -9338,9 +9338,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, pid, v FROM child ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 249: Edge commit patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- edge commit patterns ---"
 
 oracle "commit_dash_A_flag_then_merge" "
@@ -9364,9 +9364,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','another-msg');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('looks-like-arg','another-msg');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 250: Queries against dolt_branches after ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_branches accounting ---"
 
 oracle "dolt_branches_count_after_creates_and_deletes" "
@@ -9391,9 +9391,9 @@ SELECT dolt_branch('two');
 SELECT dolt_branch('-c','main','three');
 " "SELECT count(*) FROM dolt_branches WHERE name='main';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 251: More cherry-pick edges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick edges ---"
 
 oracle "cherry_pick_an_alter_add_col" "
@@ -9423,9 +9423,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 252: Soft reset patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- soft reset patterns ---"
 
 oracle "soft_reset_two_then_squash" "
@@ -9455,11 +9455,11 @@ SELECT dolt_commit('-m','c2');
 SELECT dolt_reset('--soft','HEAD~1');
 " "SELECT id FROM t ORDER BY id;"
 
-# Issue #790 regression coverage: --soft must preserve the staged set
-# so the canonical "amend by soft-reset + recommit" flow works without
-# an explicit re-stage. Previously dolt_reset --soft realigned staged
-# to the target catalog, which made the next dolt_commit fail with
-# "nothing to commit" because the diff against staged was empty.
+
+
+
+
+
 
 oracle "soft_reset_recommit_no_explicit_add" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
@@ -9514,9 +9514,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','amended_with_extra');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 228: JSON functions after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- JSON function probes ---"
 
 oracle "json_extract_simple_after_merge" "
@@ -9561,9 +9561,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, json_extract(j,'\$.v') AS v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 229: SAVEPOINT interactions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- SAVEPOINT probes ---"
 
 oracle "savepoint_rollback_keeps_outer_insert" "
@@ -9632,9 +9632,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after sp rollback');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 230: REPLACE vs UPDATE semantics
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- REPLACE vs UPDATE probes ---"
 
 oracle "replace_on_existing_pk_merges_like_update" "
@@ -9673,9 +9673,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 231: Large-ish merges (stress-lite)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- stress-lite merge probes ---"
 
 oracle "merge_50_rows_disjoint_both_sides" "
@@ -9723,9 +9723,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT sum(v) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 232: Column default expressions through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- default expression probes ---"
 
 oracle "default_literal_used_in_both_branches_merge" "
@@ -9761,9 +9761,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 233: Merge commit accounting
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge commit accounting probes ---"
 
 oracle "noff_merge_has_four_log_entries" "
@@ -9798,9 +9798,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 234: Delete-insert ordering
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- delete-insert ordering probes ---"
 
 oracle "delete_insert_same_id_same_branch_merge" "
@@ -9837,9 +9837,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 235: Truncate-like patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- truncate-like probes ---"
 
 oracle "delete_all_one_side_insert_other_merge" "
@@ -9858,9 +9858,9 @@ SELECT dolt_commit('-m','main adds');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 236: Cherry-pick semantics deeper
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick semantics probes ---"
 
 oracle "cherry_pick_preserves_row_count_on_main" "
@@ -9897,9 +9897,9 @@ SELECT dolt_commit('-m','main t2');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t2 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 237: Reset then merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset then merge probes ---"
 
 oracle "hard_reset_then_merge_brings_back" "
@@ -9919,9 +9919,9 @@ SELECT dolt_reset('--hard','HEAD~1');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 238: Empty tables through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- empty-table merge probes ---"
 
 oracle "empty_table_created_one_side_merge" "
@@ -9959,9 +9959,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post b');
 " "SELECT id, v FROM b;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 239: Mixed data type merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- mixed type merge probes ---"
 
 oracle "mixed_int_text_real_merge" "
@@ -9981,14 +9981,14 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n, s, r FROM t;"
 
-# Section 240 (INSERT OR IGNORE / INSERT IGNORE) omitted —
-# SQLite and MySQL use mutually exclusive syntaxes (`INSERT OR IGNORE` vs
-# `INSERT IGNORE`) with no common form accepted by both engines. REPLACE
-# already covers the upsert-on-conflict behavior and is exercised above.
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 253: dolt_merge_base property tests
-# ═══════════════════════════════════════════════════════════════════
+
+
+
+
+
+
+
 echo "--- merge_base probes ---"
 
 oracle "merge_base_matches_log_row" "
@@ -10041,9 +10041,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT CASE WHEN dolt_merge_base('main','feat') = dolt_hashof('HEAD') THEN 1 ELSE 0 END;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 254: ALTER TABLE RENAME COLUMN + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- rename column probes ---"
 
 oracle "rename_column_on_feat_query_works_after_merge" "
@@ -10079,9 +10079,9 @@ SELECT dolt_commit('-m','main rename');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 255: ALTER TABLE RENAME TO + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- rename table probes ---"
 
 oracle "rename_table_on_feat_merge_to_main" "
@@ -10103,9 +10103,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM other ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 256: VIEW on JOIN through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- view-join probes ---"
 
 oracle "view_on_left_join_after_merge" "
@@ -10143,9 +10143,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT grp, total FROM totals ORDER BY grp;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 257: Multi-commit DML in one branch + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-commit DML probes ---"
 
 oracle "three_commits_feat_merge" "
@@ -10191,9 +10191,9 @@ SELECT dolt_commit('-m','m2');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n, sum(id) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 258: UPDATE with correlated subquery (deeper)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- correlated subquery UPDATE deeper ---"
 
 oracle "update_running_total_via_subquery" "
@@ -10230,9 +10230,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, cnt FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 259: Conflict resolution in txn with multiple rows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- conflict resolve multi-row probes ---"
 
 oracle "resolve_multiple_conflicts_via_update" "
@@ -10260,9 +10260,9 @@ SELECT dolt_commit('-m','resolved');
 COMMIT;
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 260: Post-merge queries with table + FK joins
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- post-merge FK query probes ---"
 
 oracle "three_table_join_filter_after_merge" "
@@ -10288,9 +10288,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT a.cat FROM c JOIN b ON c.bid=b.id JOIN a ON b.aid=a.id WHERE c.score > 60 ORDER BY a.cat;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 261: Ordering semantics through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- ordering probes ---"
 
 oracle "order_by_desc_with_nulls_merge" "
@@ -10319,9 +10319,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY a, b DESC;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 262: DML batch cherry-pick
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick DML batch probes ---"
 
 oracle "cherry_pick_batch_insert" "
@@ -10357,9 +10357,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 263: VC state after many commits on one branch
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- deep branch probes ---"
 
 oracle "deep_branch_ff_merge_count" "
@@ -10390,9 +10390,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 264: Repeated REPLACE + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- replace stability probes ---"
 
 oracle "replace_every_row_both_sides_merge" "
@@ -10410,9 +10410,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 265: Set operations (UNION/INTERSECT/EXCEPT) after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- set ops after merge ---"
 
 oracle "union_distinct_after_merge" "
@@ -10460,9 +10460,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT v FROM a EXCEPT SELECT v FROM b ORDER BY v;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 266: Case-insensitive search (via LOWER/UPPER) after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- case-insensitive lookup ---"
 
 oracle "lower_lookup_after_merge" "
@@ -10491,9 +10491,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE UPPER(v) LIKE 'RED%' ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 267: Multi-index table + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-index probes ---"
 
 oracle "two_indexes_both_queried_after_merge" "
@@ -10525,9 +10525,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(DISTINCT code) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 268: dolt_branches column shape
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_branches column shape ---"
 
 oracle "branches_dirty_flag_is_boolean" "
@@ -10546,9 +10546,9 @@ SELECT dolt_commit('-m','c1');
 SELECT dolt_branch('b1');
 " "SELECT count(*) FROM dolt_branches WHERE length(hash) > 0;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 269: dolt_log parent traversal
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_log parent traversal ---"
 
 oracle "log_has_expected_number_of_merge_commits" "
@@ -10567,9 +10567,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat','--no-ff','-m','merge_c');
 " "SELECT count(*) FROM dolt_log WHERE message='merge_c';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 270: Complex UPDATE with multiple subqueries
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- complex UPDATE probes ---"
 
 oracle "update_with_min_subquery_merge" "
@@ -10606,9 +10606,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, active FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 271: Large-ish multi-table merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- large multi-table merge probes ---"
 
 oracle "four_tables_each_touched_merge" "
@@ -10639,9 +10639,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT 't1' AS tbl, sum(v) AS s FROM t1 UNION ALL SELECT 't2', sum(v) FROM t2 UNION ALL SELECT 't3', sum(v) FROM t3 UNION ALL SELECT 't4', sum(v) FROM t4 ORDER BY 1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 272: Boolean-like flags through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- boolean-like flags through merge ---"
 
 oracle "zero_one_flags_toggled_merge" "
@@ -10660,9 +10660,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, active FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 273: Commit message exact preservation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- commit message preservation ---"
 
 oracle "message_with_equals_and_slash" "
@@ -10685,9 +10685,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','#123 fix');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('v1.2.3','#123 fix');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 274: INSERT with column subset + DEFAULT
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT col subset probes ---"
 
 oracle "insert_subset_cols_different_on_branches" "
@@ -10707,9 +10707,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 275: Diamond with convergent delete
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- diamond convergent delete ---"
 
 oracle "diamond_convergent_delete_same_row" "
@@ -10733,9 +10733,9 @@ SELECT dolt_merge('left');
 SELECT dolt_merge('right');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 276: Very long commit messages
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- long messages ---"
 
 oracle "long_message_survives_commit_and_merge" "
@@ -10751,9 +10751,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log WHERE length(message) > 50;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 277: dolt_hashof across merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- hashof across merges ---"
 
 oracle "hashof_changes_after_noff_merge" "
@@ -10772,9 +10772,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat','--no-ff','-m','merge');
 " "SELECT count(DISTINCT commit_hash) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 278: Checkout back-and-forth with work on both
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- alternating work + checkout ---"
 
 oracle "alternate_commits_both_branches_merge" "
@@ -10806,9 +10806,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT owner, count(*) FROM t GROUP BY owner ORDER BY owner;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 279: Tag listing stability
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag list stability ---"
 
 oracle "multiple_tags_listed_in_order" "
@@ -10821,9 +10821,9 @@ SELECT dolt_tag('a_first','HEAD');
 SELECT dolt_tag('m_mid','HEAD');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 280: Large string values through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- long string payload probes ---"
 
 oracle "long_string_update_one_side_merge" "
@@ -10841,9 +10841,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, length(v) AS L FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 281: Window function deeper patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- window deeper ---"
 
 oracle "partition_by_frame_after_merge" "
@@ -10898,9 +10898,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, COALESCE(LEAD(v) OVER (ORDER BY id), -1) AS nxt FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 282: Multi-CTE patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-CTE probes ---"
 
 oracle "chained_ctes_across_merge" "
@@ -10929,9 +10929,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH doubled AS (SELECT id, n*2 AS d FROM t), filtered AS (SELECT id, d FROM doubled WHERE d > 15) SELECT id, d FROM filtered ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 283: RIGHT JOIN after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- RIGHT JOIN probes ---"
 
 oracle "right_join_after_merge" "
@@ -10964,9 +10964,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT owners.id, count(items.id) AS cnt FROM owners LEFT JOIN items ON owners.id=items.owner_id GROUP BY owners.id ORDER BY owners.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 284: Boolean expressions in SELECT
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- boolean expressions in SELECT ---"
 
 oracle "comparison_result_as_column" "
@@ -10982,9 +10982,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, CASE WHEN n > 20 THEN 1 ELSE 0 END AS big FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 285: INSERT with computed values
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- computed-value INSERT probes ---"
 
 oracle "insert_values_with_subquery_after_merge" "
@@ -11005,9 +11005,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT label, n FROM counts ORDER BY label;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 286: DELETE with JOIN-like WHERE subquery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DELETE with subquery ---"
 
 oracle "delete_where_in_select_merge" "
@@ -11029,9 +11029,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 287: Schema-only modifications across branches
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- schema-only modifications ---"
 
 oracle "add_then_drop_col_same_branch_merge" "
@@ -11052,9 +11052,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 288: Max/min with tie-breaking after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- max/min tie-breaking ---"
 
 oracle "min_tie_break_by_id_after_merge" "
@@ -11070,9 +11070,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE score = (SELECT min(score) FROM t) ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 289: Mixed COUNT variants after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- count variants ---"
 
 oracle "count_star_vs_count_col_with_nulls" "
@@ -11088,9 +11088,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS c_all, count(v) AS c_nn, count(DISTINCT v) AS c_dist FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 290: Cherry-pick then revert then re-cherry-pick
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry/revert round-trip ---"
 
 oracle "cherry_pick_revert_cherry_pick_same_commit" "
@@ -11108,9 +11108,9 @@ SELECT dolt_revert('HEAD');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 291: Multi-column UPDATE with computed values
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-col computed UPDATE ---"
 
 oracle "update_ab_from_c_merge" "
@@ -11129,9 +11129,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 292: Dirty branch detection through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dirty branch detection ---"
 
 oracle "branch_dirty_after_uncommitted_insert" "
@@ -11152,9 +11152,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_branches WHERE name='main' AND dirty IN (0,'false');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 293: Commit order stability
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- commit order probes ---"
 
 oracle "log_ordered_by_commit_order" "
@@ -11170,9 +11170,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','third_commit_abc');
 " "SELECT count(*) FROM dolt_log WHERE message LIKE '%commit_abc';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 294: Merge preserves row-level integrity
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- row-level integrity ---"
 
 oracle "sum_preserved_across_merge" "
@@ -11191,9 +11191,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT sum(n) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 295: ALTER after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- alter after merge ---"
 
 oracle "alter_add_col_after_merge" "
@@ -11212,9 +11212,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post-merge alter');
 " "SELECT id, v, tag FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 296: Multiple simultaneous conflicts in txn resolve
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-conflict txn resolve ---"
 
 oracle "resolve_three_conflicts_via_ours" "
@@ -11241,9 +11241,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','kept ours');
 COMMIT;
 " "SELECT id, v FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 297: Self-join on same table
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- self-join probes ---"
 
 oracle "self_join_parent_child_after_merge" "
@@ -11275,9 +11275,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT a.id, count(b.id) AS siblings FROM t a LEFT JOIN t b ON a.gid=b.gid AND a.id<>b.id GROUP BY a.id ORDER BY a.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 298: View chain (view on view)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- view chain probes ---"
 
 oracle "view_on_view_after_merge" "
@@ -11313,9 +11313,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM very_bigs ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 299: GROUP_CONCAT basic form
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- GROUP_CONCAT probes ---"
 
 oracle "group_concat_default_separator_after_merge" "
@@ -11344,9 +11344,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT grp, count(*) AS c FROM t GROUP BY grp ORDER BY grp;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 300: Complex subquery patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- complex subquery probes ---"
 
 oracle "scalar_subquery_in_projection_after_merge" "
@@ -11377,9 +11377,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT r.id, (SELECT n FROM t WHERE t.id=r.target) AS tgt_n FROM refs r ORDER BY r.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 301: Many-branch diamond fan-in
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- diamond fan-in probes ---"
 
 oracle "diamond_fan_5_branches" "
@@ -11419,9 +11419,9 @@ SELECT dolt_merge('d');
 SELECT dolt_merge('e');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 302: UPDATE with ORDER + subquery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- ordered UPDATE probes ---"
 
 oracle "update_value_via_row_position_merge" "
@@ -11440,9 +11440,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, pos FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 303: Deep history dolt_log queries
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- deep history log queries ---"
 
 oracle "log_distinct_messages_in_deep_history" "
@@ -11498,9 +11498,9 @@ SELECT dolt_commit('-m','m3');
 SELECT dolt_merge('feat','--no-ff','-m','merged');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 304: Conflict resolution variations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- conflict resolve variations ---"
 
 oracle "resolve_with_mixed_take_ours_take_theirs" "
@@ -11531,9 +11531,9 @@ SELECT dolt_commit('-m','resolved mixed');
 COMMIT;
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 305: Large batch conflict
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- batch conflict + resolve probes ---"
 
 oracle "ten_rows_conflict_resolve_via_ours" "
@@ -11558,9 +11558,9 @@ SELECT dolt_commit('-m','keep ours');
 COMMIT;
 " "SELECT count(*) FROM t WHERE v='m';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 306: Post-merge history with both parents
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge-commit history ---"
 
 oracle "merge_commit_message_in_log_noff" "
@@ -11579,9 +11579,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat','--no-ff','-m','merged_feat_to_main');
 " "SELECT count(*) FROM dolt_log WHERE message='merged_feat_to_main';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 307: CREATE TABLE AS SELECT
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- CTAS probes ---"
 
 oracle "ctas_after_merge" "
@@ -11598,9 +11598,9 @@ SELECT dolt_merge('feat');
 CREATE TABLE dst AS SELECT id, n*2 AS n2 FROM src;
 " "SELECT id, n2 FROM dst ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 308: Hash stability across idempotent ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- hash stability probes ---"
 
 oracle "hashof_stable_after_empty_reads" "
@@ -11613,9 +11613,9 @@ SELECT * FROM t LIMIT 0;
 SELECT id FROM t WHERE id<0;
 " "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 309: Delete via subquery touching multiple tables
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cross-table DELETE probes ---"
 
 oracle "delete_where_id_in_join_result_merge" "
@@ -11638,9 +11638,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 310: Multiple UNIQUE cols distinct after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-unique cols probes ---"
 
 oracle "two_unique_cols_inserts_disjoint_merge" "
@@ -11658,9 +11658,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(DISTINCT code) AS d_code, count(DISTINCT tag) AS d_tag FROM t;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 311: DATE columns + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DATE column probes ---"
 
 oracle "date_col_filter_after_merge" "
@@ -11695,9 +11695,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, d FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 312: INSERT SELECT with WHERE / aggregate
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT SELECT probes ---"
 
 oracle "insert_select_filtered_after_merge" "
@@ -11734,9 +11734,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM dst ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 313: UPDATE FROM-alike via subquery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE-from subquery probes ---"
 
 oracle "update_from_lookup_table_merge" "
@@ -11757,9 +11757,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 314: EXISTS correlated count
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- correlated count probes ---"
 
 oracle "correlated_count_after_merge" "
@@ -11777,9 +11777,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT t.id, (SELECT count(*) FROM related WHERE related.ref=t.id) AS c FROM t ORDER BY t.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 315: Self-ref FK
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- self-ref FK probes ---"
 
 oracle "self_ref_fk_with_pragma_merge" "
@@ -11799,9 +11799,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, parent_id, v FROM n ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 316: Merging a branch with schema-only changes
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- schema-only branch probes ---"
 
 oracle "schema_only_branch_adds_col_then_merge" "
@@ -11837,9 +11837,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('schema');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 317: Large merges (100 rows each side, disjoint)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- 100-row merge ---"
 
 oracle "hundred_rows_each_side_disjoint_merge" "
@@ -11866,9 +11866,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 318: Tag + reset + re-tag
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag reset probes ---"
 
 oracle "tag_reset_retag_workflow" "
@@ -11894,9 +11894,9 @@ SELECT dolt_commit('-m','c4');
 SELECT dolt_tag('new_stable','HEAD');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 319: Commit hash consistency
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- hash consistency probes ---"
 
 oracle "hashof_tag_and_head_equal_when_tag_at_head" "
@@ -11907,9 +11907,9 @@ SELECT dolt_commit('-m','c1');
 SELECT dolt_tag('here','HEAD');
 " "SELECT CASE WHEN dolt_hashof('here') = dolt_hashof('HEAD') THEN 1 ELSE 0 END;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 320: Multi-condition UPDATE with CASE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE CASE probes ---"
 
 oracle "update_case_multi_branches_merge" "
@@ -11933,9 +11933,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n, tier FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 321: Merge-commit vs regular commit
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge vs regular commit log ---"
 
 oracle "log_has_base_branches_and_merge" "
@@ -11954,9 +11954,9 @@ SELECT dolt_commit('-m','regular_c3');
 SELECT dolt_merge('feat','--no-ff','-m','merge_c4');
 " "SELECT count(*) FROM dolt_log WHERE message LIKE 'regular_%' OR message LIKE 'merge_%';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 322: Multi-col CHECK through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-col CHECK probes ---"
 
 oracle "check_on_multi_cols_merge" "
@@ -11975,9 +11975,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 323: History inspection
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- history inspection probes ---"
 
 oracle "history_shows_commits_touching_table" "
@@ -11993,9 +11993,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM dolt_history_t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 324: NULL in UNIQUE constraint, alt pattern
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- NULL unique alt probes ---"
 
 oracle "unique_col_with_null_then_nonnull_merge" "
@@ -12014,9 +12014,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 325: Hashof changes after UPDATE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- hashof after update ---"
 
 oracle "hashof_differs_after_update_commit" "
@@ -12028,8 +12028,8 @@ UPDATE t SET v=99 WHERE id=1;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(DISTINCT commit_hash) FROM dolt_log;"
-# Section 326: String functions deeper
-# ═══════════════════════════════════════════════════════════════════
+
+
 echo "--- string func deeper ---"
 
 oracle "upper_lower_projection_after_merge" "
@@ -12058,9 +12058,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, SUBSTR(v, 1, 3) AS p, length(v) AS L FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 327: INSERT SELECT from computed rows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT SELECT computed probes ---"
 
 oracle "insert_select_arithmetic_row_merge" "
@@ -12081,9 +12081,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM a ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 328: Reset variants revisited
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset variant revisit ---"
 
 oracle "reset_hard_tag_then_reset_hard_branch" "
@@ -12114,9 +12114,9 @@ SELECT dolt_commit('-m','c2');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 329: Conflict detection + resolve variations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- conflict resolve patterns ---"
 
 oracle "conflict_inspect_via_dolt_conflicts_count" "
@@ -12163,9 +12163,9 @@ SELECT dolt_commit('-m','resolved by delete');
 COMMIT;
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 330: Multi-table merges with FK
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-table FK merge ---"
 
 oracle "three_table_fk_chain_add_leaves_both_sides" "
@@ -12189,9 +12189,9 @@ SELECT dolt_commit('-m','main leaf');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM c;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 331: Long-running branch catch-up merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- long-running branch probes ---"
 
 oracle "feat_behind_main_pull_main_via_merge" "
@@ -12219,9 +12219,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 332: CTEs with aggregation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- CTE aggregation ---"
 
 oracle "cte_with_having_after_merge" "
@@ -12237,9 +12237,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH totals AS (SELECT grp, sum(n) AS s FROM t GROUP BY grp) SELECT grp, s FROM totals WHERE s > 10 ORDER BY grp;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 333: Index on expression-like column
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- index usage probes ---"
 
 oracle "unique_index_lookup_after_merge" "
@@ -12256,9 +12256,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE code IN ('B','D') ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 334: Repeated merge from feat
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- repeated merge from feat ---"
 
 oracle "three_updates_three_merges_from_feat" "
@@ -12286,9 +12286,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 335: Empty row edge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- empty row edges ---"
 
 oracle "all_columns_null_except_pk_merge" "
@@ -12307,9 +12307,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 336: Query against dolt_history_<table>
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_history_<table> probes ---"
 
 oracle "history_table_after_updates" "
@@ -12325,9 +12325,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(DISTINCT v) FROM dolt_history_t WHERE id=1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 337: Aggregates across multi-table
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-table agg ---"
 
 oracle "sum_across_join_after_merge" "
@@ -12345,9 +12345,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT c.name, sum(o.amount) AS total FROM customers c JOIN orders o ON c.id=o.customer_id GROUP BY c.name ORDER BY c.name;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 338: Deep history reset by SHA
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset to intermediate commit ---"
 
 oracle "reset_to_headTilde_3_deep" "
@@ -12370,9 +12370,9 @@ SELECT dolt_commit('-m','c5');
 SELECT dolt_reset('--hard','HEAD~3');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 339: Post-merge WHERE by computed expression
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- computed WHERE probes ---"
 
 oracle "where_by_mod_expression_after_merge" "
@@ -12388,9 +12388,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE n % 5 = 0 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 340: Log queries from a specific branch
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- per-branch log probes ---"
 
 oracle "log_from_after_merge_sees_both_sides" "
@@ -12409,9 +12409,9 @@ SELECT dolt_commit('-m','main_c');
 SELECT dolt_merge('feat','--no-ff','-m','m_merge');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('base','feat_c','main_c','m_merge');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 341: INSERT with default + explicit + subquery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT partial cols + subquery ---"
 
 oracle "insert_partial_then_subquery_merge" "
@@ -12429,10 +12429,10 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, s FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════
-# Section 342: Savepoint + dolt_add interaction (post-#598)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
+
 echo "--- savepoint + dolt_add parity ---"
 
 oracle "savepoint_then_dolt_add_rollback_is_noop" "
@@ -12476,9 +12476,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 343: Subquery in WHERE with NULL
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- subquery in WHERE with NULL ---"
 
 oracle "in_subquery_with_null_after_merge" "
@@ -12496,9 +12496,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM a WHERE id IN (SELECT ref FROM b) ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 344: Cross-branch schema validation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cross-branch schema probes ---"
 
 oracle "alter_add_col_populate_query_after_merge" "
@@ -12519,9 +12519,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v, x FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 345: Nested UPDATE + subquery with aggregation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- nested UPDATE probes ---"
 
 oracle "update_set_based_on_avg_after_merge" "
@@ -12540,9 +12540,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 346: WITH + DELETE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- WITH + DELETE probes ---"
 
 oracle "with_cte_as_delete_filter" "
@@ -12561,9 +12561,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, grp, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 347: REPLACE + UNIQUE together
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- REPLACE + UNIQUE probes ---"
 
 oracle "replace_with_unique_col_merge" "
@@ -12582,9 +12582,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, code, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 348: Multi-FK cascade-like topology
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-FK topology probes ---"
 
 oracle "multi_fk_no_cascade_parent_preserved" "
@@ -12607,9 +12607,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM p ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 349: Merge with convergent ALTER
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- convergent ALTER probes ---"
 
 oracle "both_sides_rename_same_col_same_name" "
@@ -12630,9 +12630,9 @@ SELECT dolt_commit('-m','main rename');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 350: Commit hash uniqueness through long chain
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- commit hash uniqueness ---"
 
 oracle "commit_hashes_unique_after_15_commits" "
@@ -12684,9 +12684,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c15');
 " "SELECT CASE WHEN count(DISTINCT commit_hash) = count(*) THEN 1 ELSE 0 END FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 351: Sparse / scattered updates
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- sparse update probes ---"
 
 oracle "sparse_updates_across_ids_merge" "
@@ -12709,9 +12709,9 @@ SELECT dolt_commit('-m','main sparse');
 SELECT dolt_merge('feat');
 " "SELECT sum(v) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 352: Test dolt_blame after ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_blame probes ---"
 
 oracle "blame_count_equals_rows" "
@@ -12724,9 +12724,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_blame_t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 353: Repeated cherry-pick in sequence
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- repeated cherry-pick probes ---"
 
 oracle "cherry_pick_4_sequential_from_feat" "
@@ -12754,9 +12754,9 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 354: LIMIT + OFFSET after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- LIMIT/OFFSET probes ---"
 
 oracle "limit_offset_after_merge" "
@@ -12772,9 +12772,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id LIMIT 3 OFFSET 2;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 355: Mix of merges and cherry-picks
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- mix merge/cherry-pick ---"
 
 oracle "merge_branch_then_cherry_pick_from_another" "
@@ -12796,9 +12796,9 @@ SELECT dolt_merge('b1');
 SELECT dolt_cherry_pick('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 356: Transaction + dolt_reset inside
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- txn + reset probes ---"
 
 oracle "txn_wraps_reset_then_commit" "
@@ -12816,9 +12816,9 @@ INSERT INTO t VALUES(3);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 357: Revert merge commit
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert merge-commit probes ---"
 
 oracle "revert_noff_merge_reverses_feat_data" "
@@ -12838,9 +12838,9 @@ SELECT dolt_merge('feat','--no-ff','-m','merged');
 SELECT dolt_revert('HEAD','-m','1');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 358: Cherry-pick across schema add
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick across schema ---"
 
 oracle "cherry_pick_commit_with_both_alter_and_insert" "
@@ -12857,9 +12857,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v, extra FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 359: Transaction + dolt_add interaction
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- txn + dolt_add probes ---"
 
 oracle "begin_insert_dolt_add_commit" "
@@ -12885,9 +12885,9 @@ SELECT dolt_add('-A');
 ROLLBACK;
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 360: Commit cursor on post-merge head
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- post-merge head state ---"
 
 oracle "post_merge_head_matches_log_top" "
@@ -12906,9 +12906,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat','--no-ff','-m','merge_commit');
 " "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD') AND message='merge_commit';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 361: Nested subquery deep
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- nested subquery deep ---"
 
 oracle "triple_nested_subquery_after_merge" "
@@ -12924,9 +12924,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE n > (SELECT avg(n) FROM t WHERE id IN (SELECT id FROM t WHERE n >= 20)) ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 362: Aggregate pruning via WHERE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- aggregate pruning probes ---"
 
 oracle "sum_filtered_by_where_after_merge" "
@@ -12942,9 +12942,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT grp, sum(n) AS s FROM t WHERE n >= 20 GROUP BY grp HAVING sum(n) > 40 ORDER BY grp;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 363: Many-col UPDATE merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- many-col UPDATE probes ---"
 
 oracle "update_5_cols_same_row_merge" "
@@ -12963,9 +12963,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, a, b, c, d, e FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 364: Cherry-pick of schema-only commit
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick schema-only ---"
 
 oracle "cherry_pick_alter_only_commit" "
@@ -12984,9 +12984,9 @@ SELECT dolt_commit('-m','main row');
 SELECT dolt_cherry_pick('feat');
 " "SELECT id, v, flag FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 365: Commit + reset + re-commit equivalence
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- commit/reset/re-commit ---"
 
 oracle "reset_and_recommit_same_data" "
@@ -13003,9 +13003,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2 redo');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 366: Cross-branch tags
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cross-branch tag probes ---"
 
 oracle "tag_on_feat_branch_visible_on_main_tags" "
@@ -13021,9 +13021,9 @@ SELECT dolt_tag('feat_tag','HEAD');
 SELECT dolt_checkout('main');
 " "SELECT count(*) FROM dolt_tags WHERE tag_name='feat_tag';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 367: Sub-branch merged then parent reset
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- sub-branch reset after merge ---"
 
 oracle "sub_branch_merge_then_main_reset_keeps_sub_data" "
@@ -13043,9 +13043,9 @@ SELECT dolt_commit('-m','main after');
 SELECT dolt_reset('--hard','HEAD~1');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 368: Merge with deeply-chained history on both
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- deep both-side history ---"
 
 oracle "5x5_commits_each_side_merge" "
@@ -13088,9 +13088,9 @@ SELECT dolt_commit('-m','m5');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 369: Boolean operator edge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- boolean operator edge ---"
 
 oracle "not_null_filter_after_merge" "
@@ -13106,9 +13106,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE v IS NOT NULL AND v > 20 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 370: Bit-like flag patterns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- bit flag patterns ---"
 
 oracle "flags_with_bitwise_and_after_merge" "
@@ -13124,9 +13124,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, flags & 1 AS bit0 FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 371: Re-create table after DROP + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop + recreate + merge ---"
 
 oracle "drop_recreate_different_cols_merge" "
@@ -13147,9 +13147,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 372: Row existence after many modifications
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- row survival probes ---"
 
 oracle "row_survives_many_ops_on_branch" "
@@ -13168,8 +13168,8 @@ SELECT dolt_commit('-m','feat ops');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
-# Section 373: Commit + dolt_hashof variants
-# ═══════════════════════════════════════════════════════════════════
+
+
 echo "--- hashof variants ---"
 
 oracle "hashof_db_differs_across_commits" "
@@ -13194,9 +13194,9 @@ SELECT 1;
 SELECT 2;
 " "SELECT count(*) FROM dolt_log WHERE commit_hash = dolt_hashof('HEAD');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 374: ROW_NUMBER after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- ROW_NUMBER probes ---"
 
 oracle "row_number_per_group_after_merge" "
@@ -13212,9 +13212,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, ROW_NUMBER() OVER (PARTITION BY grp ORDER BY score DESC) AS rn FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 375: Many-row cell merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cell merge many rows ---"
 
 oracle "cell_merge_20_rows_disjoint" "
@@ -13236,9 +13236,9 @@ SELECT dolt_commit('-m','main b');
 SELECT dolt_merge('feat');
 " "SELECT sum(a) AS sa, sum(b) AS sb FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 376: Recursive CTE — generator
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- recursive CTE generator ---"
 
 oracle "recursive_cte_series_join_post_merge" "
@@ -13254,9 +13254,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "WITH RECURSIVE nums(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM nums WHERE n<10) SELECT n, COALESCE((SELECT label FROM t WHERE t.id=nums.n),'none') AS lbl FROM nums ORDER BY n;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 377: UPDATE affecting nothing
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- update affecting nothing ---"
 
 oracle "update_where_false_merge" "
@@ -13276,9 +13276,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 378: ORDER + LIMIT 1 (max-like)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- order+limit probes ---"
 
 oracle "max_via_order_limit_after_merge" "
@@ -13297,9 +13297,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY v DESC LIMIT 1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 379: Wide FK graph
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- wide FK graph ---"
 
 oracle "one_parent_three_child_tables_merge" "
@@ -13328,9 +13328,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT 'c1' AS tbl, count(*) AS n FROM c1 UNION ALL SELECT 'c2', count(*) FROM c2 UNION ALL SELECT 'c3', count(*) FROM c3 ORDER BY 1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 380: Deep diamond merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- deep diamond probes ---"
 
 oracle "diamond_with_3_commits_per_side_noff" "
@@ -13361,9 +13361,9 @@ SELECT dolt_commit('-m','m3');
 SELECT dolt_merge('left','--no-ff','-m','merged');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 381: Aggregates with ORDER in subquery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- agg in subquery ---"
 
 oracle "subquery_with_order_in_agg" "
@@ -13379,9 +13379,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT grp, max(v) AS mx FROM t GROUP BY grp ORDER BY grp;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 382: Triple-branch parallel + merge all
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- triple parallel merges ---"
 
 oracle "three_branch_parallel_then_merge_all" "
@@ -13409,9 +13409,9 @@ SELECT dolt_merge('f2');
 SELECT dolt_merge('f3');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 383: Text encoding
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- text encoding probes ---"
 
 oracle "unicode_accented_text_through_merge" "
@@ -13443,9 +13443,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 384: BLOB operations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- BLOB through merge ---"
 
 oracle "blob_update_one_side_merge" "
@@ -13464,9 +13464,9 @@ SELECT dolt_commit('-m','main tag');
 SELECT dolt_merge('feat');
 " "SELECT id, hex(b), tag FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 385: Long-chain cherry-pick
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- long-chain cherry-pick ---"
 
 oracle "cherry_pick_6_sequential_from_feat" "
@@ -13502,9 +13502,9 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_cherry_pick('feat');
 " "SELECT count(*) AS n, sum(v) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 386: Mixed index types
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- mixed index types ---"
 
 oracle "unique_plus_non_unique_index_merge" "
@@ -13525,9 +13525,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT category, count(*) AS n FROM t GROUP BY category ORDER BY category;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 387: Schema diff after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- schema diff count after merge ---"
 
 oracle "schema_diff_commit_count_after_merge" "
@@ -13546,9 +13546,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) AS n FROM dolt_log WHERE message IN ('c1 added','c2 added');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 388: UPDATE with CTE source
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE cte source ---"
 
 oracle "update_via_cte_subquery_merge" "
@@ -13567,9 +13567,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 389: dolt_status detail
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_status detail ---"
 
 oracle "dolt_status_new_table_shows" "
@@ -13589,9 +13589,9 @@ SELECT dolt_commit('-m','base');
 UPDATE t SET v='b' WHERE id=1;
 " "SELECT count(*) FROM dolt_status WHERE table_name='t';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 390: Commit after many no-ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- commit after noops ---"
 
 oracle "many_select_then_commit_stable" "
@@ -13607,9 +13607,9 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 391: Merge with convergent row + column updates
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- convergent update-same-col same-value ---"
 
 oracle "both_sides_set_same_col_same_value_merge" "
@@ -13630,9 +13630,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 392: dolt_log filter combinations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_log filter combos ---"
 
 oracle "log_filter_message_and_ordered" "
@@ -13658,9 +13658,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT CASE WHEN count(*) > 0 THEN 1 ELSE 0 END FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 393: Working-set dirty through various ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dirty flag probes ---"
 
 oracle "dirty_1_after_add_no_commit" "
@@ -13682,9 +13682,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_branches WHERE name='main' AND dirty IN (0,'false');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 394: Cross-branch FK preservation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cross-branch FK preservation ---"
 
 oracle "fk_parent_child_on_feat_merge" "
@@ -13707,9 +13707,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT p.id AS pid, p.v AS pv, c.v AS cv FROM p LEFT JOIN c ON p.id=c.pid ORDER BY p.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 395: Tag chain reset to old tag
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag chain reset ---"
 
 oracle "tag_chain_reset_5_back" "
@@ -13736,9 +13736,9 @@ SELECT dolt_commit('-m','c5');
 SELECT dolt_reset('--hard','v1');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 396: Idempotency of cherry-pick into main
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick idempotency ---"
 
 oracle "cherry_pick_then_full_merge_same_branch" "
@@ -13758,9 +13758,9 @@ SELECT dolt_cherry_pick('feat~1');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 397: UPDATE with JOIN-like subquery from 2 tables
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE subquery 2 tables ---"
 
 oracle "update_select_from_join_merge" "
@@ -13781,9 +13781,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, category_id, price FROM items ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 398: Multi-branch rebase-like workflow
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- rebase-like flow ---"
 
 oracle "branch_reset_to_main_then_merge" "
@@ -13808,9 +13808,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 399: INSERT with NULL default expression
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- NULL default probes ---"
 
 oracle "null_default_merge" "
@@ -13829,9 +13829,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 400: Large multi-col delete + merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- large delete + merge ---"
 
 oracle "delete_half_rows_update_other_half_merge" "
@@ -13850,9 +13850,9 @@ SELECT dolt_commit('-m','main multiplies other half');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 401: Multi-commit conflict resolution via ours
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-commit conflict resolve ---"
 
 oracle "resolve_multi_commit_conflict_via_ours" "
@@ -13879,9 +13879,9 @@ SELECT dolt_commit('-m','kept ours');
 COMMIT;
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 402: Rapid alternating branch commits
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- rapid alternation ---"
 
 oracle "alternating_commits_6_times_merge" "
@@ -13916,9 +13916,9 @@ SELECT dolt_commit('-m','m3');
 SELECT dolt_merge('feat');
 " "SELECT owner, count(*) AS n FROM t GROUP BY owner ORDER BY owner;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 403: Commit count invariant across diff ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- log invariant ---"
 
 oracle "log_count_unchanged_by_selects" "
@@ -13934,9 +13934,9 @@ SELECT count(*) FROM dolt_branches;
 SELECT count(*) FROM dolt_tags;
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 404: Nested WHERE with multiple joins
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- nested WHERE joins ---"
 
 oracle "two_join_with_agg_filter_after_merge" "
@@ -13954,9 +13954,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT c.region, sum(o.amount) AS total FROM customers c JOIN orders o ON c.id=o.cid GROUP BY c.region ORDER BY c.region;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 405: Multi-merge from same feat branch
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-merge from same feat ---"
 
 oracle "merge_feat_twice_after_update" "
@@ -13978,9 +13978,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 406: dolt_hashof_table after merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- hashof_table after merge ---"
 
 oracle "hashof_table_valid_after_merge" "
@@ -13996,9 +13996,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT CASE WHEN length(dolt_hashof_table('t')) > 0 THEN 1 ELSE 0 END;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 407: Repeated dolt_add
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- repeated add ---"
 
 oracle "add_same_table_multiple_times" "
@@ -14013,10 +14013,10 @@ SELECT dolt_add('-A');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
-# ═══════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════
-# Section 408: Rapid commit then reset cycles
-# ═══════════════════════════════════════════════════════════════════
+
+
+
+
 echo "--- rapid commit-reset cycles ---"
 
 oracle "three_commit_reset_cycles" "
@@ -14037,9 +14037,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2c');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 409: INSERT SELECT from subquery with LIMIT
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT SELECT LIMIT ---"
 
 oracle "insert_select_limit_after_merge" "
@@ -14059,9 +14059,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM dst ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 410: UPDATE via expression with CASE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE expression ---"
 
 oracle "update_case_increment_merge" "
@@ -14080,9 +14080,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, n, s FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 411: Cherry-pick preserves row on non-target
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick preservation ---"
 
 oracle "cherry_pick_preserves_other_table" "
@@ -14103,9 +14103,9 @@ SELECT dolt_commit('-m','main t2');
 SELECT dolt_cherry_pick('feat');
 " "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 412: Three-side no-ff merge count
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- three-branch merge count ---"
 
 oracle "three_branch_noff_merges" "
@@ -14133,9 +14133,9 @@ SELECT dolt_commit('-m','m2');
 SELECT dolt_merge('b','--no-ff','-m','merge_b');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('merge_a','merge_b');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 413: Text search via LIKE anchored
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- LIKE anchored ---"
 
 oracle "like_anchored_prefix_after_merge" "
@@ -14151,9 +14151,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE name LIKE 'a%' ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 414: Very deep commit + reset
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- very deep reset probes ---"
 
 oracle "reset_head_tilde_8" "
@@ -14188,9 +14188,9 @@ SELECT dolt_commit('-m','c9');
 SELECT dolt_reset('--hard','HEAD~8');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 415: FK + UPDATE through merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK update through merge ---"
 
 oracle "fk_update_parent_attribute_merge" "
@@ -14212,9 +14212,9 @@ SELECT dolt_commit('-m','main child');
 SELECT dolt_merge('feat');
 " "SELECT p.v AS pv, c.v AS cv FROM p JOIN c ON p.id=c.pid ORDER BY p.id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 416: Three-branch tag snapshot
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- three-branch tag snapshots ---"
 
 oracle "tags_snapshot_three_branches" "
@@ -14237,9 +14237,9 @@ SELECT dolt_tag('b2_snap','HEAD');
 SELECT dolt_checkout('main');
 " "SELECT count(*) FROM dolt_tags;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 417: Revert a revert
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert-a-revert ---"
 
 oracle "revert_then_revert_restores_data" "
@@ -14254,9 +14254,9 @@ SELECT dolt_revert('HEAD');
 SELECT dolt_revert('HEAD');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 418: WHERE with BETWEEN edges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- BETWEEN edges ---"
 
 oracle "between_inclusive_edges_after_merge" "
@@ -14272,9 +14272,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t WHERE v BETWEEN 20 AND 40 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 419: INSERT SELECT with GROUP BY
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT SELECT GROUP BY ---"
 
 oracle "insert_select_group_by_merge" "
@@ -14295,9 +14295,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT grp, total FROM totals ORDER BY grp;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 420: Multiple merges from 4 branches
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- 4 branch merges ---"
 
 oracle "four_branch_serial_merge_row_count" "
@@ -14331,9 +14331,9 @@ SELECT dolt_merge('b3');
 SELECT dolt_merge('b4');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 421: Large schema — 30 cols
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- 30-col table merge ---"
 
 oracle "thirty_col_table_merge" "
@@ -14358,9 +14358,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, c01, c15, c25, c30 FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 422: REPLACE INTO with multiple rows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-row REPLACE ---"
 
 oracle "multi_row_replace_merge" "
@@ -14379,9 +14379,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 423: Post-merge ORDER BY with tie-break on secondary
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tie-break ORDER BY ---"
 
 oracle "order_by_with_tiebreak_after_merge" "
@@ -14397,9 +14397,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY n, grp, id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 424: Stress log query (30 commits)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- stress log ---"
 
 oracle "thirty_commit_log_hash_uniqueness" "
@@ -14450,9 +14450,9 @@ INSERT INTO t VALUES(15);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c15');
 " "SELECT CASE WHEN count(DISTINCT commit_hash) = count(*) THEN 1 ELSE 0 END FROM dolt_log;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 425: Final push — crossing 1000 tests
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- final probes ---"
 
 oracle "one_k_update_after_ff_merge" "
@@ -14613,9 +14613,9 @@ INSERT INTO t VALUES(1),(2),(3);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','milestone');
 " "SELECT count(*) AS n FROM t;"
-# ═══════════════════════════════════════════════════════════════════
-# Results
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

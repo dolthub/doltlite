@@ -1,26 +1,26 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_merge
-#
-# Runs identical merge scenarios against doltlite and Dolt and compares
-# the resulting dolt_log post-state. Covers fast-forward, three-way no
-# conflict, --no-ff (force a merge commit even when fast-forward would
-# work), -m / --message overrides, --abort, and a few error paths.
-#
-# Scenarios use a mix of primary key shapes to exercise the storage
-# layer: INTEGER PRIMARY KEY (the sqlite rowid alias), INT PRIMARY KEY
-# (auto-converted to WITHOUT ROWID by doltlite), TEXT PRIMARY KEY, and
-# composite PRIMARY KEY. All shapes should merge correctly because
-# doltlite encodes the storage key from the user PK columns rather
-# than from sqlite's auto-allocated rowid.
-#
-# Conflict scenarios are checked in two ways:
-# 1. oracle_no_merge_commit: neither engine should advance history.
-# 2. oracle_error_poststate: under autocommit, both should roll back
-#    and leave no persisted conflict state.
-#
-# Usage: bash vc_oracle_merge_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -34,15 +34,15 @@ FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 normalize() {
-  # 1. Strip CRs.
-  # 2. Drop non-tab lines (function-result text like "Already up to date"
-  #    leaks through stdout in list mode).
-  # 3. Sort by message (column 2) so the H1/H2/... assignment in step 4 is
-  #    deterministic across both engines regardless of native log walk
-  #    order. After a merge, the two engines disagree on which parent
-  #    appears first in dolt_log; sorting by message canonicalizes.
-  # 4. Replace each distinct hash with H1, H2, ... in first-appearance
-  #    order on the sorted output.
+
+
+
+
+
+
+
+
+
   tr -d '\r' \
     | awk -F'\t' 'NF >= 2 { print }' \
     | sort -t$'\t' -k2 \
@@ -55,8 +55,8 @@ normalize() {
       '
 }
 
-# Compare post-state via dolt_log: (commit_hash normalized, message),
-# in order from newest to oldest. Same shape as the log oracle.
+
+
 oracle() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/$name"
@@ -95,11 +95,11 @@ oracle() {
   fi
 }
 
-# A merge that should not produce a new merge commit (because both
-# engines diverge on how they surface conflict). Compares only the
-# property that BOTH engines refuse to advance the branch tip to a
-# clean merge commit — checked by counting commits on the current
-# branch and asserting both report the same pre-merge count.
+
+
+
+
+
 oracle_no_merge_commit() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_nm"
@@ -337,13 +337,13 @@ SELECT dolt_merge('feature');
 
 echo "--- non-INTEGER primary key shapes ---"
 
-# These three scenarios were the original motivation for this entire
-# work. Before the user-PK row keying fix, doltlite stored rows in INT
-# / TEXT / composite PK tables under sqlite's auto-allocated rowid,
-# which collided across branches and produced phantom modify-modify
-# conflicts on every cross-branch insert. With the storage layer now
-# encoding the prolly tree key from the user PK columns, these merge
-# cleanly the same way they do in Dolt.
+
+
+
+
+
+
+
 
 oracle "three_way_int_pk" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
@@ -595,8 +595,8 @@ SELECT dolt_merge('main');
 
 echo "--- other operation pairs ---"
 
-# main adds row, feature modifies a different row. Different rows, so
-# no conflict — three-way merge should land both changes cleanly.
+
+
 oracle "add_modify_disjoint_rows_clean" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -615,9 +615,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-# Both branches insert the same key with the same value. This is
-# convergent — both sides did the same thing, three-way merge should
-# treat it as no conflict.
+
+
+
 oracle "add_add_same_key_same_value" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -631,9 +631,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-# Both branches insert the same key with DIFFERENT values. The PK
-# collides and the values disagree — should be a conflict, both
-# engines refuse to produce a clean merge commit.
+
+
+
 oracle_no_merge_commit "add_add_same_key_different_value_conflict" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -647,7 +647,7 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-# Both branches delete the same row. Convergent delete, clean merge.
+
 oracle "delete_delete_same_row" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -666,9 +666,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-# One side deletes a row, the other modifies it. This is a real
-# delete/modify conflict — both Dolt and doltlite should refuse to
-# produce a clean merge commit.
+
+
+
 oracle_no_merge_commit "delete_modify_conflict" "
 $SEED
 DELETE FROM t WHERE id = 1;
@@ -684,9 +684,9 @@ SELECT dolt_merge('feature');
 
 echo "--- multi-commit branches ---"
 
-# Feature branch with four commits before the merge. Exercises the
-# iterative ancestor walk and confirms the resulting merge commit's
-# parent linkage isn't off-by-one.
+
+
+
 oracle "multi_commit_feature_branch" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -708,8 +708,8 @@ SELECT dolt_merge('feature');
 
 echo "--- multi-table merges ---"
 
-# Independent inserts spread across two tables. Tests that the
-# per-table merge descent doesn't drop or duplicate either side.
+
+
 oracle "multi_table_independent_inserts" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
@@ -729,8 +729,8 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-# One branch modifies table a, the other inserts into table b. Each
-# table sees only one side change.
+
+
 oracle "multi_table_modify_one_insert_other" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
@@ -750,8 +750,8 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-# Three tables, all touched on one side or the other. Stresses the
-# per-table descent across more breadth than two tables.
+
+
 oracle "three_tables_disjoint_changes" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
 CREATE TABLE b(id INTEGER PRIMARY KEY, v INT);
@@ -777,9 +777,9 @@ SELECT dolt_merge('feature');
 
 echo "--- schema deltas ---"
 
-# Feature branch creates a brand new table. Main concurrently inserts
-# into the pre-existing table. Merge should land the new table on
-# main alongside main's insert.
+
+
+
 oracle "feature_creates_new_table" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -794,10 +794,10 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-# Feature branch adds a new column to the existing table. Main
-# concurrently inserts a row using only the original columns. Merge
-# should produce a schema with the new column and have main's row
-# using the column default.
+
+
+
+
 oracle "feature_adds_column_main_inserts_old_shape" "
 $SEED
 INSERT INTO t VALUES (2, 20);
@@ -812,9 +812,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 "
 
-# Both branches add a column. Different column names — concurrent
-# add of disjoint columns should merge cleanly with both columns
-# present in the result.
+
+
+
 oracle "both_branches_add_disjoint_columns" "
 $SEED
 ALTER TABLE t ADD COLUMN main_col INT;
@@ -1045,9 +1045,9 @@ SELECT CONCAT('Q', CHAR(9), (SELECT COUNT(*) FROM gp), '|', (SELECT COUNT(*) FRO
 
 echo "--- non-branch merge sources ---"
 
-# Merge from a tag instead of a branch. Tags were promoted to first-
-# class objects with metadata in 0557f09b8 — this verifies dolt_merge
-# accepts a tag name as the source revision.
+
+
+
 oracle "merge_from_tag" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -1059,9 +1059,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('release-1');
 "
 
-# Merge from a commit hash. Both engines need to accept a hex hash
-# as the merge source. Captured via subquery against dolt_log so the
-# scenario is fully self-contained.
+
+
+
 oracle "merge_from_commit_hash" "
 $SEED
 SELECT dolt_checkout('feature');
@@ -1074,9 +1074,9 @@ SELECT dolt_merge((SELECT commit_hash FROM dolt_log WHERE message = 'feat1'));
 
 echo "--- merge sequences ---"
 
-# Merge feature into main (creates a merge commit), then merge main
-# into feature. The second merge should fast-forward feature to
-# wherever main is now, with no new commit.
+
+
+
 oracle "merge_then_reverse_fast_forward" "
 $SEED
 INSERT INTO t VALUES (10, 100);
@@ -1092,9 +1092,9 @@ SELECT dolt_checkout('feature');
 SELECT dolt_merge('main');
 "
 
-# Merge feature into main once, then add more commits to feature and
-# merge again. The second merge should produce another clean merge
-# commit (or fast-forward if main hasn't moved).
+
+
+
 oracle "merge_twice_with_intermediate_commits" "
 $SEED
 INSERT INTO t VALUES (10, 100);

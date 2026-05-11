@@ -27,13 +27,13 @@ static int parseCurrentCatalogHeader(
   return 1;
 }
 
-/* Classify a chunk by sniffing its first few bytes. Order of checks
-** matters: PROLLY_NODE_MAGIC is a 4-byte constant that can't collide
-** with any version tag, so it goes first. WORKING_SET is a fixed
-** length so the size check excludes collisions with small catalogs.
-** CATALOG uses a single-byte version tag, COMMIT uses DOLTLITE_COMMIT_V2.
-** Used by GC chunk reachability traversal — unknown chunks are
-** dropped, so a missing case here can silently corrupt the store. */
+
+
+
+
+
+
+
 DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   u32 m;
 

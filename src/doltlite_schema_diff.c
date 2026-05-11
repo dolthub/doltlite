@@ -172,10 +172,10 @@ static int appendSchemaDiffRow(
   return SQLITE_OK;
 }
 
-/* Schema records live in the sqlite_master (iTable==1) prolly tree,
-** same layout as stock SQLite: [type, name, tbl_name, rootpage, sql].
-** We pull fields 0 (type), 1 (name), 4 (sql). Callers use this to
-** reproduce a CREATE TABLE for introspection and for schema-merge. */
+
+
+
+
 int loadSchemaFromCatalog(
   sqlite3 *db,
   ChunkStore *cs,
@@ -505,11 +505,11 @@ static int sdResolveRefs(
 
   rc = doltliteResolveRef(db, zFromRef, &commitHash);
   if( rc!=SQLITE_OK ){
-    /* Translate SQLITE_NOTFOUND ("unknown operation") and any other
-    ** ref-resolution failure into a vtable error with a usable
-    ** message — the bare SQLITE_NOTFOUND gets mapped to the cryptic
-    ** "unknown operation" string by the SQLite shell, which is
-    ** what surfaced in dolthub/doltlite#738. */
+
+
+
+
+
     sqlite3_free(pVtab->zErrMsg);
     pVtab->zErrMsg = sqlite3_mprintf(
       "dolt_schema_diff: from_ref '%s' could not be resolved", zFromRef);

@@ -96,10 +96,10 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
   return 0;
 }
 
-/* Only entries with nRef == 0 are evictable — active cursors hold
-** references and their pointers would dangle. If every entry is
-** pinned we return 0 and let the caller overflow nCapacity rather
-** than break a cursor. */
+
+
+
+
 static int cacheEvictOne(ProllyCache *cache){
   ProllyCacheEntry *pEntry;
 

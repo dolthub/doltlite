@@ -1,10 +1,10 @@
-/* HTTP-backed DoltliteRemote backend for dolt_fetch/push/pull.
-** Intentionally simple — hand-rolled blocking sockets + HTTP/1.1
-** Connection: close, no keep-alive, no TLS. Upload chunks are
-** buffered until httpCommit() flushes them as one POST /chunks,
-** then /refs, then /commit; this matches the remotesrv transaction
-** protocol. Not production-ready (no retry, no HTTPS) — only used
-** by tests against a local doltlite_remotesrv. */
+
+
+
+
+
+
+
 
 #ifdef DOLTLITE_PROLLY
 

@@ -36,14 +36,14 @@ static void put4byteBE(unsigned char *p, unsigned int v){
   p[3] = (unsigned char)(v & 0xff);
 }
 
-/* sqlite_dbpage is normally a view into the real 4k-paged database
-** file, but doltlite's on-disk format is a chunk store — there ARE
-** no pages. Instead we fabricate a single synthetic page 1 that
-** looks enough like a SQLite header for tools that parse it
-** (shell .dbinfo, backup-utilities) to read meta without crashing.
-** Higher pgnos return EOF. Field values are derived from the
-** current HEAD: change_counter from the commit hash, schema_cookie
-** from the catalog hash, pageCount = user-table count. */
+
+
+
+
+
+
+
+
 static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
   ProllyHash headHash;
   ProllyHash catHash;

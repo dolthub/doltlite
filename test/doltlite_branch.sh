@@ -78,27 +78,27 @@ echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB3" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2);" | $DOLTLITE "$DB3" > /dev/null 2>&1
 run_test "dirty_checkout" "SELECT dolt_checkout('b2');" "0" "$DB3"
 
-# --- Checkout after hard reset (issue #107) ---
+
 DB4=/tmp/test_branch4_$$.db; rm -f "$DB4"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 
-# Make changes, stage, hard reset, then checkout should work
+
 echo "INSERT INTO t VALUES(2,'b'); SELECT dolt_add('-A'); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB4" > /dev/null 2>&1
 run_test "checkout_after_hard_reset" "SELECT dolt_checkout('feat');" "0" "$DB4"
 run_test "active_after_hard_reset" "SELECT active_branch();" "feat" "$DB4/feat"
 
-# Checkout back should also work (clean state)
+
 run_test "checkout_back_after_hard_reset" "SELECT dolt_checkout('main');" "0" "$DB4"
 
-# Hard reset with no prior staging
+
 DB5=/tmp/test_branch5_$$.db; rm -f "$DB5"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 echo "SELECT dolt_branch('b2');" | $DOLTLITE "$DB5" > /dev/null 2>&1
 run_test "checkout_after_hard_reset_no_stage" "SELECT dolt_checkout('b2');" "0" "$DB5"
 
-# Multiple hard resets then checkout
+
 DB6=/tmp/test_branch6_$$.db; rm -f "$DB6"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB6" > /dev/null 2>&1
@@ -107,7 +107,7 @@ echo "INSERT INTO t VALUES(4); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB6" 
 echo "SELECT dolt_branch('b3');" | $DOLTLITE "$DB6" > /dev/null 2>&1
 run_test "checkout_after_multi_hard_reset" "SELECT dolt_checkout('b3');" "0" "$DB6"
 
-# Verify dirty check still works after hard reset + new changes
+
 DB7=/tmp/test_branch7_$$.db; rm -f "$DB7"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(2); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB7" > /dev/null 2>&1
@@ -115,14 +115,14 @@ echo "INSERT INTO t VALUES(99);" | $DOLTLITE "$DB7" > /dev/null 2>&1
 echo "SELECT dolt_branch('b4');" | $DOLTLITE "$DB7" > /dev/null 2>&1
 run_test "dirty_after_hard_reset_new_changes" "SELECT dolt_checkout('b4');" "0" "$DB7"
 
-# Schema change (CREATE TABLE) then hard reset then checkout
+
 DB8=/tmp/test_branch8_$$.db; rm -f "$DB8"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 echo "CREATE TABLE extra(y); SELECT dolt_reset('--hard');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 echo "SELECT dolt_branch('b5');" | $DOLTLITE "$DB8" > /dev/null 2>&1
 run_test "checkout_after_schema_change_hard_reset" "SELECT dolt_checkout('b5');" "0" "$DB8"
 
-# --- dolt_checkout('-b', 'name') creates and switches ---
+
 DB9=/tmp/test_branch9_$$.db; rm -f "$DB9"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 
@@ -130,13 +130,13 @@ run_test "checkout_b_creates" "SELECT dolt_checkout('-b','newbr');" "0" "$DB9"
 run_test "checkout_b_active" "SELECT active_branch();" "newbr" "$DB9/newbr"
 run_test "checkout_b_listed" "SELECT count(*) FROM dolt_branches;" "2" "$DB9"
 
-# Work on the new branch, switch back, verify isolation
+
 echo "INSERT INTO t VALUES(2); SELECT dolt_commit('-A','-m','on newbr');" | $DOLTLITE "$DB9/newbr" > /dev/null 2>&1
 run_test "checkout_b_data" "SELECT count(*) FROM t;" "2" "$DB9/newbr"
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB9" > /dev/null 2>&1
 run_test "checkout_b_main_data" "SELECT count(*) FROM t;" "1" "$DB9"
 
-# checkout -b with existing name errors
+
 run_test_match "checkout_b_dup" "SELECT dolt_checkout('-b','main');" "already exists" "$DB9"
 run_test_match "create_empty_branch_name" "SELECT dolt_branch('');" "branch name required" "$DB9"
 run_test_match "copy_empty_source" "SELECT dolt_branch('-c','','copy');" "branch name required" "$DB9"
@@ -145,10 +145,10 @@ run_test_match "move_empty_source" "SELECT dolt_branch('-m','','renamed');" "bra
 run_test_match "move_empty_dest" "SELECT dolt_branch('-m','main','');" "branch name required" "$DB9"
 run_test_match "checkout_b_empty_name" "SELECT dolt_checkout('-b','');" "branch name required" "$DB9"
 
-# --- main protection: cannot delete or rename main ---
-# doltlite's session-branch resolver falls back to literal "main" on reopen,
-# so allowing main to go away would leave the repo unopenable. Reject until
-# proper default-branch logic lands.
+
+
+
+
 DB10=/tmp/test_branch10_$$.db; rm -f "$DB10"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB10" > /dev/null 2>&1
 echo "SELECT dolt_checkout('-b','other');" | $DOLTLITE "$DB10" > /dev/null 2>&1
@@ -158,10 +158,10 @@ run_test_match "force_delete_main_rejected" "SELECT dolt_branch('-D','main');" "
 run_test_match "rename_main_rejected" "SELECT dolt_branch('-m','main','trunk');" "cannot rename branch 'main'" "$DB10/other"
 run_test "main_still_exists" "SELECT count(*) FROM dolt_branches WHERE name='main';" "1" "$DB10/other"
 
-# Reopening still works — main resolves
+
 run_test "reopen_after_blocked_ops_active" "SELECT active_branch();" "other" "$DB10/other"
 
-# Non-main rename and delete still work
+
 DB11=/tmp/test_branch11_$$.db; rm -f "$DB11"
 echo "CREATE TABLE t(x INTEGER PRIMARY KEY); INSERT INTO t VALUES(1); SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB11" > /dev/null 2>&1
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB11" > /dev/null 2>&1
@@ -169,10 +169,10 @@ run_test "rename_non_main_works" "SELECT dolt_branch('-m','feat','renamed');" "0
 run_test "renamed_listed" "SELECT count(*) FROM dolt_branches WHERE name='renamed';" "1" "$DB11"
 run_test "delete_non_main_works" "SELECT dolt_branch('-d','renamed');" "0" "$DB11"
 
-# Copy from main is still allowed — it doesn't remove main
+
 run_test "copy_from_main_works" "SELECT dolt_branch('-c','main','snapshot');" "0" "$DB11"
 
-# --- branch creation from refs persists across reopen ---
+
 DB12=/tmp/test_branch12_$$.db; rm -f "$DB12"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'base'); SELECT dolt_commit('-A','-m','c1'); INSERT INTO t VALUES(2,'c2'); SELECT dolt_commit('-A','-m','c2'); SELECT dolt_tag('v1','HEAD~1'); SELECT dolt_branch('from_tag','v1');" | $DOLTLITE "$DB12" > /dev/null 2>&1
 run_test "branch_from_tag_persists_across_reopen" "SELECT count(*) FROM t;" "1" "$DB12/from_tag"

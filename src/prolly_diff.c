@@ -179,11 +179,11 @@ static int diffRecordsEqualFieldwise(
   return SQLITE_OK;
 }
 
-/* Fast memcmp first, field-wise fallback second. Two records with
-** the same logical data can have different varint encodings for the
-** header, so memcmp-unequal doesn't imply logically-unequal — we
-** have to parse both and compare field-by-field. memcmp-equal DOES
-** imply logically-equal, which is the hot path. */
+
+
+
+
+
 int prollyValuesEqual(
   const u8 *pA, int nA,
   const u8 *pB, int nB,
@@ -335,11 +335,11 @@ static int diffNodeKeyCmp(
   return diffBlobKeyCmp(pKA, nKA, pKB, nKB);
 }
 
-/* Populates a ProllyDiffChange's key fields from a node entry.
-** Always sets pKey/nKey to the on-disk key bytes (which for INT mode
-** is the sortable 8-byte BE form, see prolly_node.c). For INT mode
-** also sets intKey to the decoded i64 — preserves the long-standing
-** consumer contract while letting internal compare go byte-only. */
+
+
+
+
+
 static void diffEmitKey(ProllyDiffChange *ch, const ProllyNode *pN, int i, u8 flags){
   prollyNodeKey(pN, i, &ch->pKey, &ch->nKey);
   if( flags & PROLLY_NODE_INTKEY ){

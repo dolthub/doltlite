@@ -371,12 +371,12 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         branchError(ctx, hadSavepoint, "cannot delete the current branch");
         return;
       }
-      /* Short-term guard: doltlite does not yet have stable default-branch
-      ** resolution, so on reopen p->zBranch initializes from the last-active
-      ** branch (tracked via chunkStoreGetDefaultBranch, which dolt_checkout
-      ** updates). If "main" is deleted, opening the DB would leave the
-      ** session pointing at a nonexistent branch. Reject until we have real
-      ** default-branch logic. */
+
+
+
+
+
+
       if( strcmp(aPositional[0], "main")==0 ){
         branchError(ctx, hadSavepoint,
           "cannot delete branch 'main' (doltlite requires main to exist)");
@@ -451,9 +451,9 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       memset(&m, 0, sizeof(m));
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
-      /* Same guard as MODE_DELETE: renaming "main" away would leave the
-      ** repo with no main branch, and reopening would fail to resolve a
-      ** session branch. Reject until default-branch logic is reworked. */
+
+
+
       if( strcmp(m.zSrc, "main")==0 ){
         branchError(ctx, hadSavepoint,
           "cannot rename branch 'main' (doltlite requires main to exist)");
@@ -582,11 +582,11 @@ static int refreshBranchScopedTables(sqlite3 *db){
   return doltliteRegisterBlameTables(db);
 }
 
-/* Checkout is a multi-step mutation: persist outgoing branch state,
-** update refs, load target branch, reload session. If any step fails
-** we must unwind every prior step — the saved* fields are the
-** snapshot of session state taken before the mutation begins so
-** checkoutRestoreSession can roll back cleanly. */
+
+
+
+
+
 typedef struct CheckoutMutationCtx CheckoutMutationCtx;
 struct CheckoutMutationCtx {
   const char *zTargetBranch;
@@ -872,11 +872,11 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   return rc;
 }
 
-/* `dolt_checkout <table>...` path. Reached as a fallthrough when the
-** first argument doesn't resolve to a branch — in Dolt, checkout
-** overloads "branch name" and "table name". Copies the named tables
-** from the staged catalog (or HEAD if nothing is staged) into the
-** working catalog, mirroring Dolt's reset-a-single-table semantics. */
+
+
+
+
+
 static int doltliteCheckoutTables(
   sqlite3 *db,
   const char *zSourceRef,

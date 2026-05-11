@@ -34,10 +34,10 @@ static void remoteSqlStateClear(RemoteSqlState *p){
   memset(p, 0, sizeof(*p));
 }
 
-/* Snapshot enough session and ref state to undo a remote op mid-way.
-** dolt_clone/dolt_pull/dolt_fetch can fail partway through and leave
-** the working set pointing at chunks we're about to roll back —
-** this state is the snapshot we restore to if something errors. */
+
+
+
+
 static int remoteSqlStateSave(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
   int rc;
 
@@ -624,9 +624,9 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
 
-  /* dolt_pull is fast-forward-only. A fast-forward is valid if the
-  ** local tip is any ancestor of the fetched tracking tip, not just
-  ** part of its first-parent chain. */
+
+
+
   {
     ProllyHash ancestor;
     rc = doltliteFindAncestor(db, &trackingCommit, &localCommit, &ancestor);

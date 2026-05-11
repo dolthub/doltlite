@@ -1,11 +1,11 @@
 #!/bin/bash
-#
-# File persistence tests for Doltlite.
-#
-# Every test writes data, closes the DB, reopens it, and verifies
-# the data survived. Tests at multiple scales (3 rows, 100 rows,
-# 1000 rows) to catch size-dependent bugs.
-#
+
+
+
+
+
+
+
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
@@ -14,9 +14,9 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 echo "=== Doltlite File Persistence Tests ==="
 echo ""
 
-# ============================================================
-# Basic: INSERT + commit persists across reopen
-# ============================================================
+
+
+
 
 echo "--- Basic persistence ---"
 
@@ -32,16 +32,16 @@ run_test "basic_val2" "SELECT v FROM t WHERE id=2;" "world" "$DB"
 run_test "basic_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 run_test_match "basic_msg" "SELECT message FROM dolt_log;" "init" "$DB"
 
-# Single-file: doltlite creates exactly one file, no -wal or -journal
+
 nFiles=$(ls "$DB"* 2>/dev/null | wc -l | tr -d ' ')
 if [ "$nFiles" = "1" ]; then PASS=$((PASS+1))
 else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: single_file\n  expected: 1 file\n  got:      $nFiles files ($(ls "$DB"* 2>/dev/null | tr '\n' ' '))"; fi
 
 rm -f "$DB"
 
-# ============================================================
-# Multiple commits persist
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Multiple commits ---"
@@ -61,9 +61,9 @@ run_test_match "multi_latest" "SELECT message FROM dolt_log LIMIT 1;" "c3" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Bulk INSERT via BEGIN/COMMIT persists (100 rows)
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Bulk 100 rows ---"
@@ -86,9 +86,9 @@ run_test "bulk100_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Bulk INSERT 1000 rows persists
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Bulk 1000 rows ---"
@@ -110,9 +110,9 @@ run_test "bulk1k_mid" "SELECT v FROM t WHERE id=500;" "row_500" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# UPDATE persists
-# ============================================================
+
+
+
 
 echo ""
 echo "--- UPDATE persistence ---"
@@ -129,9 +129,9 @@ run_test "update_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# DELETE persists
-# ============================================================
+
+
+
 
 echo ""
 echo "--- DELETE persistence ---"
@@ -152,9 +152,9 @@ run_test "delete_has3" "SELECT v FROM t WHERE id=3;" "c" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Branch persists
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Branch persistence ---"
@@ -172,16 +172,16 @@ SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "branch_count" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
 run_test "branch_main" "SELECT count(*) FROM t;" "1" "$DB"
 
-# Switch to feat and verify
+
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "branch_feat" "SELECT count(*) FROM t;" "2" "$DB/feat"
 run_test "branch_feat_val" "SELECT v FROM t WHERE id=2;" "feat_data" "$DB/feat"
 
 rm -f "$DB"
 
-# ============================================================
-# Tag persists
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Tag persistence ---"
@@ -201,9 +201,9 @@ run_test_match "tag_v2" "SELECT tag_name FROM dolt_tags WHERE tag_name='v2.0';" 
 
 rm -f "$DB"
 
-# ============================================================
-# Merge result persists
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Merge persistence ---"
@@ -229,9 +229,9 @@ run_test_match "merge_log" "SELECT message FROM dolt_log LIMIT 1;" "Merge" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Schema changes persist (ALTER TABLE)
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Schema persistence ---"
@@ -250,9 +250,9 @@ run_test_match "schema_cols" "PRAGMA table_info(t);" "extra" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Multiple tables persist
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Multi-table persistence ---"
@@ -274,9 +274,9 @@ run_test "mt_alice" "SELECT name FROM users WHERE id=1;" "Alice" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# GC result persists
-# ============================================================
+
+
+
 
 echo ""
 echo "--- GC persistence ---"
@@ -299,9 +299,9 @@ run_test "gc_branches" "SELECT count(*) FROM dolt_branches;" "1" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Uncommitted data does NOT persist (no dolt_commit)
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Uncommitted data lost on reopen ---"
@@ -312,16 +312,16 @@ INSERT INTO t VALUES(1,'committed');
 SELECT dolt_commit('-A','-m','init');
 INSERT INTO t VALUES(2,'uncommitted');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# The uncommitted row should survive (SQL autocommit persists to chunk store)
-# but dolt_status should show it as uncommitted
+
+
 run_test "uncommit_count" "SELECT count(*) FROM t;" "2" "$DB"
 run_test_match "uncommit_status" "SELECT count(*) FROM dolt_status;" "^[1-9]" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Bulk 1000 rows with UPDATE and DELETE persists
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Bulk with modifications ---"
@@ -347,9 +347,9 @@ run_test "bulkmod_log" "SELECT count(*) FROM dolt_log;" "3" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Rapid open/close cycles
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Rapid open/close ---"
@@ -369,9 +369,9 @@ run_test "rapid_val5" "SELECT v FROM t WHERE id=5;" "val_5" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# File size is reasonable (not empty, not corrupt)
-# ============================================================
+
+
+
 
 echo ""
 echo "--- File size sanity ---"
@@ -381,7 +381,7 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'data');
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Check total size of DB + WAL files
+
 SIZE=0
 for f in "$DB" "${DB}-wal"; do
   if [ -f "$f" ]; then
@@ -398,13 +398,13 @@ fi
 
 rm -f "$DB" "${DB}-wal"
 
-# ============================================================
-# Branch commit reopen with manifest head divergence.
-# Triggers the code path where branch tip != manifest head:
-# commit on dev, then commit on main (making main the manifest
-# head), then reopen on dev. The bug: p->root was set from the
-# always-empty commit.rootHash, zeroing the working tree.
-# ============================================================
+
+
+
+
+
+
+
 
 echo ""
 echo "--- Branch commit reopen (diverged manifest head) ---"
@@ -422,7 +422,7 @@ SELECT dolt_checkout('main');
 INSERT INTO t VALUES(3,'main_again');
 SELECT dolt_commit('-A','-m','main second');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Reopen on dev — manifest head is main's latest, not dev's
+
 run_test "diverged_dev_count" "SELECT count(*) FROM t;" "2" "$DB/dev"
 run_test "diverged_dev_val" "SELECT v FROM t WHERE id=2;" "from_dev" "$DB/dev"
 
@@ -432,9 +432,9 @@ run_test "diverged_main_val" "SELECT v FROM t WHERE id=3;" "main_again" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# Done
-# ============================================================
+
+
+
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

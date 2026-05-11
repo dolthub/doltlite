@@ -1,73 +1,73 @@
 #!/bin/bash
-#
-# Version-control oracle test: dolt_hashof suite
-#
-# dolt_hashof(ref), dolt_hashof_table(tbl[, ref]), and dolt_hashof_db()
-# expose content-addressed hashes to SQL. These are the primary tool
-# for verifying two doltlite databases hold the same state in the
-# decentralized use case — compare a hash, don't diff a million rows.
-#
-# The interesting property isn't that hash values match some external
-# reference — it's that they obey HISTORY INDEPENDENCE: any two code
-# paths that arrive at the same logical state must produce the same
-# hash, regardless of intermediate commits, ordering, or transient
-# rows. Prolly trees give us this by construction (content-addressed
-# nodes keyed on sorted content), and if any of the properties below
-# break, the chunking/serialization layer has a bug.
-#
-# The tests in this oracle are grouped by property:
-#
-#   1. Determinism: the same input sequence run twice in separate
-#      databases produces byte-identical hashes. Exercises the
-#      chunker + serializer end-to-end.
-#
-#   2. Insert order invariance: inserting the same rowset in
-#      different orders converges to the same table hash. This is
-#      the core prolly-tree property; if it breaks, either the
-#      mutmap merge step has stale state or the chunker isn't
-#      hashing sorted content.
-#
-#   3. Intermediate state invariance: inserting rows then deleting
-#      a subset then re-inserting them (net-no-op) produces the
-#      same hash as just inserting the remaining set. Tests that
-#      tombstones flush cleanly and the final root is content-
-#      addressed.
-#
-#   4. Cross-branch state invariance: two branches that diverge and
-#      re-converge on the exact same rowset produce the same
-#      dolt_hashof_table even though their commit graphs differ.
-#      dolt_hashof(ref) DIFFERS because commit metadata differs —
-#      this is correct, and we check both.
-#
-#   5. Separation of concerns: adding a row to table A does NOT
-#      change dolt_hashof_table('B'). dolt_hashof_db() DOES
-#      change because the catalog moved.
-#
-#   6. Reopen stability: close the db, reopen, hashes are
-#      byte-identical. Catches any hashing that depends on live
-#      in-memory state instead of persisted chunks.
-#
-#   7. Negative cases: updating a single cell, adding a row,
-#      altering a schema all MUST change the table hash. If
-#      they don't, the hash is stale and worthless.
-#
-#   7b. Equivalent DDL histories: if two histories converge on the
-#      same logical schema and rowset, dolt_hashof_table must also
-#      converge even if one path used ALTER or recreate/copy/rename.
-#
-#   8. Ref resolution: dolt_hashof accepts branch names, tag
-#      names, commit hashes, and HEAD~N shorthand. Missing refs
-#      return NULL or an error (we accept either, as long as it
-#      isn't a silent hash).
-#
-#   9. Dolt shape conformance: dolt_hashof(...) result is stable,
-#      lowercase, and exactly 40 hex characters (20-byte
-#      ProllyHash). This is the only Dolt conformance check —
-#      we don't require hash-value equality with the Dolt CLI
-#      because Dolt renders the same bytes as 32-char base32.
-#
-# Usage: bash vc_oracle_hashof_test.sh [path/to/doltlite]
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 
@@ -77,10 +77,10 @@ trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
 
-# Run setup sql against a fresh doltlite db in one process, then run
-# the hash-producing query in a second process so stdout contains
-# ONLY the query result. Without this split, dolt_commit's return
-# value would bleed into the captured hash.
+
+
+
+
 run_hash() {
   local name="$1" setup="$2" query="$3"
   local db="$TMPROOT/$name.db"
@@ -90,14 +90,14 @@ run_hash() {
   "$DOLTLITE" "$db" "$query" 2>"$TMPROOT/$name.query.err"
 }
 
-# Like run_hash, but reuses an existing db path — so caller can
-# layer setup sequences and inspect the hash at different points.
+
+
 run_hash_on() {
   local db="$1" query="$2"
   "$DOLTLITE" "$db" "$query" 2>>"$TMPROOT/shared.err"
 }
 
-# Assert two invocations produce the same hash.
+
 same() {
   local name="$1" a="$2" b="$3"
   if [ -z "$a" ] || [ -z "$b" ]; then
@@ -120,8 +120,8 @@ same() {
   fi
 }
 
-# Assert two invocations produce DIFFERENT hashes (updates,
-# schema changes, etc. must invalidate).
+
+
 different() {
   local name="$1" a="$2" b="$3"
   if [ -z "$a" ] || [ -z "$b" ]; then
@@ -141,7 +141,7 @@ different() {
   fi
 }
 
-# Assert hash matches a specific shape (40 lowercase hex chars).
+
 shape() {
   local name="$1" h="$2"
   if echo "$h" | grep -qE '^[0-9a-f]{40}$'; then
@@ -158,7 +158,7 @@ shape() {
 echo "=== Version Control Oracle Tests: dolt_hashof suite ==="
 echo ""
 
-# ── 1. Determinism ────────────────────────────────────────
+
 echo "--- 1. Determinism: same input → same hash ---"
 
 SEED_A="
@@ -178,7 +178,7 @@ same "determinism_db_same_inputs" "$H1" "$H2"
 
 echo ""
 
-# ── 2. Insert order invariance ────────────────────────────
+
 echo "--- 2. Insert order invariance ---"
 
 ORDER_ABC="
@@ -214,7 +214,7 @@ same "order_abc_vs_batch"  "$H_ABC" "$H_BAT"
 
 echo ""
 
-# ── 3. Intermediate state invariance ──────────────────────
+
 echo "--- 3. Intermediate state invariance (delete+reinsert is a no-op) ---"
 
 NET="
@@ -249,7 +249,7 @@ same "net_vs_delete_reinsert" "$H_NET" "$H_DR"
 
 echo ""
 
-# ── 4. Cross-branch state invariance ──────────────────────
+
 echo "--- 4. Cross-branch state invariance ---"
 
 BRANCH_CONVERGE="
@@ -284,7 +284,7 @@ different "cross_branch_commit_hash_differs" "$H_MAIN_COMMIT" "$H_FEAT_COMMIT"
 
 echo ""
 
-# ── 5. Per-table vs whole-db separation ───────────────────
+
 echo "--- 5. Per-table isolation in dolt_hashof_table ---"
 
 TWO_TABLES="
@@ -304,7 +304,7 @@ HT_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
 HU_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_table('u');")
 HDB_BEFORE=$(run_hash_on "$DB" "SELECT dolt_hashof_db();")
 
-# Mutate u only; t's hash must not move.
+
 "$DOLTLITE" "$DB" "INSERT INTO u VALUES (2, 'y'); SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'bump_u');" >/dev/null 2>>"$TMPROOT/two.err"
 
 HT_AFTER=$(run_hash_on "$DB" "SELECT dolt_hashof_table('t');")
@@ -317,7 +317,7 @@ different "db_hash_changes_on_u_mutation" "$HDB_BEFORE" "$HDB_AFTER"
 
 echo ""
 
-# ── 6. Reopen stability ───────────────────────────────────
+
 echo "--- 6. Reopen stability ---"
 
 REOPEN_SEED="
@@ -345,7 +345,7 @@ same "reopen_commit_stable" "$H_OPEN4_MAIN" "$H_OPEN7_MAIN"
 
 echo ""
 
-# ── 7. Negative: mutations must invalidate ────────────────
+
 echo "--- 7. Mutations must invalidate ---"
 
 BASE="
@@ -388,7 +388,7 @@ different "alter_schema_changes_table_hash" "$H_BASE" "$H_ALT"
 
 echo ""
 
-# ── 7b. Equivalent DDL histories converge ─────────────────
+
 echo "--- 7b. Equivalent DDL histories converge ---"
 
 DDL_DIRECT="
@@ -431,7 +431,7 @@ same "ddl_direct_vs_recreate_table_hash" "$H_DDL_DIRECT" "$H_DDL_RECREATE"
 
 echo ""
 
-# ── 8. Ref resolution ─────────────────────────────────────
+
 echo "--- 8. Ref resolution ---"
 
 REF_SEED="
@@ -456,14 +456,14 @@ shape "main_hash_shape" "$H_MAIN"
 H_HEAD_PARENT=$(run_hash_on "$DB" "SELECT dolt_hashof('HEAD~1');")
 different "HEAD_differs_from_HEAD_parent" "$H_HEAD" "$H_HEAD_PARENT"
 
-# Passing the same commit hash string through dolt_hashof should
-# return the same hash back (identity). Grab HEAD, then feed it.
+
+
 H_ID_OUT=$(run_hash_on "$DB" "SELECT dolt_hashof('$H_HEAD');")
 same "commit_hash_is_identity_on_hashof" "$H_HEAD" "$H_ID_OUT"
 
 echo ""
 
-# ── 9. Dolt shape conformance ─────────────────────────────
+
 echo "--- 9. Dolt shape conformance ---"
 
 SHAPE_SEED="

@@ -1,7 +1,7 @@
 #!/bin/bash
-#
-# Tests for unicode, special characters, and large BLOBs with dolt operations.
-#
+
+
+
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(30);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
@@ -10,9 +10,9 @@ run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -
 echo "=== Doltlite Unicode, Special Characters & Large BLOB Tests ==="
 echo ""
 
-# ============================================================
-# 1. Emoji in table data
-# ============================================================
+
+
+
 
 DB=/tmp/test_unicode1_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
@@ -23,7 +23,7 @@ run_test "emoji_insert" \
   "SELECT val FROM t;" \
   "Hello 🌍🎉🚀" "$DB"
 
-# Modify emoji row and check diff shows it
+
 echo "UPDATE t SET val='Goodbye 👋';" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "emoji_diff_type" \
   "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
@@ -37,9 +37,9 @@ echo "SELECT dolt_commit('-A','-m','update emoji');" | $DOLTLITE "$DB" > /dev/nu
 
 rm -f "$DB"
 
-# ============================================================
-# 2. Multi-byte UTF-8 characters (Chinese, Arabic, etc.)
-# ============================================================
+
+
+
 
 DB=/tmp/test_unicode2_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
@@ -62,7 +62,7 @@ run_test "japanese_data" \
   "SELECT val FROM t WHERE id=3;" \
   "日本語テスト" "$DB"
 
-# Branch, modify on branch, merge back
+
 echo "SELECT dolt_branch('intl');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('intl');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "INSERT INTO t VALUES(6,'Кириллица');
@@ -85,9 +85,9 @@ run_test "cyrillic_after_merge" \
 
 rm -f "$DB"
 
-# ============================================================
-# 3. Unicode in commit messages
-# ============================================================
+
+
+
 
 DB=/tmp/test_unicode3_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(x);
@@ -107,45 +107,45 @@ run_test_match "japanese_commit_msg" \
 
 rm -f "$DB"
 
-# ============================================================
-# 4. Unicode in branch names
-# ============================================================
+
+
+
 
 DB=/tmp/test_unicode4_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1);
 SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Try creating a branch with unicode name - either works or errors gracefully
+
 result=$(echo "SELECT dolt_branch('feature/日本語');" | perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$DB" 2>&1)
 if [ "$result" = "0" ]; then
-  # It worked - verify we can checkout and use it
+
   run_test "unicode_branch_active" \
     "SELECT dolt_checkout('feature/日本語'); SELECT active_branch();" \
     "0
 feature/日本語" "$DB"
-  PASS=$((PASS+1))  # count the branch creation as pass
+  PASS=$((PASS+1))
   echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 else
-  # Graceful error is also acceptable
+
   if echo "$result" | grep -qiE "error|invalid|not allowed"; then
-    PASS=$((PASS+1))  # graceful error
-    PASS=$((PASS+1))  # skip the checkout test too
+    PASS=$((PASS+1))
+    PASS=$((PASS+1))
   else
     FAIL=$((FAIL+1))
     ERRORS="$ERRORS\nFAIL: unicode_branch_create\n  expected: 0 or graceful error\n  got:      $result"
-    PASS=$((PASS+1))  # skip checkout test
+    PASS=$((PASS+1))
   fi
 fi
 
 rm -f "$DB"
 
-# ============================================================
-# 5. NULL bytes and special chars (tab, newline) in text fields
-# ============================================================
+
+
+
 
 DB=/tmp/test_unicode5_$$.db; rm -f "$DB"
 
-# Tab and newline via char()
+
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1, 'line1' || char(10) || 'line2');
 INSERT INTO t VALUES(2, 'col1' || char(9) || 'col2');
@@ -160,7 +160,7 @@ run_test_match "tab_data" \
   "SELECT length(val) FROM t WHERE id=2;" \
   "^9$" "$DB"
 
-# Diff should work with these characters
+
 echo "UPDATE t SET val='plain' WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "special_char_diff" \
   "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
@@ -170,13 +170,13 @@ echo "SELECT dolt_commit('-A','-m','normalize');" | $DOLTLITE "$DB" > /dev/null 
 
 rm -f "$DB"
 
-# ============================================================
-# 6. 100KB TEXT column
-# ============================================================
+
+
+
 
 DB=/tmp/test_blob6_$$.db; rm -f "$DB"
 
-# Use replace + zeroblob to create a 100KB string of 'A' characters
+
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO t VALUES(1, replace(hex(zeroblob(50000)), '0', 'A'));
 SELECT dolt_commit('-A','-m','100KB text');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -185,7 +185,7 @@ run_test "100kb_length" \
   "SELECT length(val) FROM t WHERE id=1;" \
   "100000" "$DB"
 
-# Modify and check diff works
+
 echo "UPDATE t SET val='short';" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "100kb_diff" \
   "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
@@ -195,9 +195,9 @@ echo "SELECT dolt_commit('-A','-m','shorten');" | $DOLTLITE "$DB" > /dev/null 2>
 
 rm -f "$DB"
 
-# ============================================================
-# 7. 1MB BLOB via randomblob(), branch/merge survival
-# ============================================================
+
+
+
 
 DB=/tmp/test_blob7_$$.db; rm -f "$DB"
 
@@ -209,16 +209,16 @@ run_test "1mb_blob_size" \
   "SELECT length(data) FROM t WHERE id=1;" \
   "1048576" "$DB"
 
-# Save a checksum for later comparison
+
 echo "SELECT dolt_branch('blobcheck');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('blobcheck');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Data should survive branch checkout
+
 run_test "1mb_blob_on_branch" \
   "SELECT length(data) FROM t WHERE id=1;" \
   "1048576" "$DB/blobcheck"
 
-# Add more data on branch, merge back
+
 echo "INSERT INTO t VALUES(2, randomblob(512));
 SELECT dolt_commit('-A','-m','add small blob');" | $DOLTLITE "$DB/blobcheck" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -234,13 +234,13 @@ run_test "1mb_blob_after_merge" \
 
 rm -f "$DB"
 
-# ============================================================
-# 8. Table with 100 columns
-# ============================================================
+
+
+
 
 DB=/tmp/test_blob8_$$.db; rm -f "$DB"
 
-# Generate CREATE TABLE with 100 columns
+
 cols=""
 vals=""
 for i in $(seq 1 100); do
@@ -257,7 +257,7 @@ run_test "wide_table_data" \
   "SELECT c50 FROM wide WHERE id=1;" \
   "v50" "$DB"
 
-# Diff works on wide table
+
 echo "UPDATE wide SET c1='modified' WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "wide_table_diff" \
   "SELECT diff_type FROM dolt_diff_wide WHERE to_commit='WORKING';" \
@@ -265,19 +265,19 @@ run_test_match "wide_table_diff" \
 
 echo "SELECT dolt_commit('-A','-m','update wide');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# History works on wide table
+
 run_test_match "wide_table_history" \
   "SELECT count(*) FROM dolt_history_wide;" \
   "^[0-9]" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# 9. Very long table name (63 chars)
-# ============================================================
+
+
+
 
 DB=/tmp/test_blob9_$$.db; rm -f "$DB"
-LONG_NAME="t_$(printf '%0.sa' $(seq 1 59))"  # 61 chars total: t_ + 59 'a's
+LONG_NAME="t_$(printf '%0.sa' $(seq 1 59))"
 
 echo "CREATE TABLE ${LONG_NAME}(id INTEGER PRIMARY KEY, val TEXT);
 INSERT INTO ${LONG_NAME} VALUES(1,'hello');
@@ -287,20 +287,20 @@ run_test "long_name_data" \
   "SELECT val FROM ${LONG_NAME} WHERE id=1;" \
   "hello" "$DB"
 
-# dolt_at works with long table name
+
 run_test_match "long_name_at" \
   "SELECT count(*) FROM dolt_at_${LONG_NAME}((SELECT commit_hash FROM dolt_log LIMIT 1));" \
   "^1$" "$DB"
 
 rm -f "$DB"
 
-# ============================================================
-# 10. Very long commit message (10KB)
-# ============================================================
+
+
+
 
 DB=/tmp/test_blob10_$$.db; rm -f "$DB"
 
-# Generate a 10KB message using replace+hex+zeroblob
+
 echo "CREATE TABLE t(x); INSERT INTO t VALUES(1);
 SELECT dolt_commit('-A','-m', replace(hex(zeroblob(5000)), '0', 'M'));" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -314,9 +314,9 @@ run_test_match "long_msg_log" \
 
 rm -f "$DB"
 
-# ============================================================
-# 11. Empty string vs NULL
-# ============================================================
+
+
+
 
 DB=/tmp/test_boundary11_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
@@ -332,7 +332,7 @@ run_test "null_value" \
   "SELECT typeof(val), val IS NULL FROM t WHERE id=2;" \
   "null|1" "$DB"
 
-# Update and check diff distinguishes them
+
 echo "UPDATE t SET val=NULL WHERE id=1;
 UPDATE t SET val='' WHERE id=2;" | $DOLTLITE "$DB" > /dev/null 2>&1
 
@@ -342,7 +342,7 @@ run_test "swap_diff_count" \
 
 echo "SELECT dolt_commit('-A','-m','swap');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Verify the swap stuck
+
 run_test "swapped_null" \
   "SELECT val IS NULL FROM t WHERE id=1;" \
   "1" "$DB"
@@ -353,9 +353,9 @@ run_test "swapped_empty" \
 
 rm -f "$DB"
 
-# ============================================================
-# 12. Integer boundary values
-# ============================================================
+
+
+
 
 DB=/tmp/test_boundary12_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val INTEGER);
@@ -381,7 +381,7 @@ run_test "int_min" \
   "SELECT val FROM t WHERE id=4;" \
   "-9223372036854775808" "$DB"
 
-# Diff works with boundary values
+
 echo "UPDATE t SET val=1 WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "int_boundary_diff" \
   "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
@@ -391,9 +391,9 @@ echo "SELECT dolt_commit('-A','-m','update zero');" | $DOLTLITE "$DB" > /dev/nul
 
 rm -f "$DB"
 
-# ============================================================
-# 13. REAL edge values
-# ============================================================
+
+
+
 
 DB=/tmp/test_boundary13_$$.db; rm -f "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, val REAL);
@@ -425,13 +425,13 @@ run_test_match "real_denorm" \
   "SELECT typeof(val) FROM t WHERE id=6;" \
   "real" "$DB"
 
-# Inf and NaN handling (SQLite may coerce these)
+
 echo "INSERT OR REPLACE INTO t VALUES(7, 1e999);" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "real_inf_type" \
   "SELECT typeof(val) FROM t WHERE id=7;" \
   "real|null" "$DB"
 
-# Diff works with float values
+
 echo "UPDATE t SET val=42.5 WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test_match "real_diff" \
   "SELECT diff_type FROM dolt_diff_t WHERE to_commit='WORKING';" \
@@ -441,9 +441,9 @@ echo "SELECT dolt_commit('-A','-m','update reals');" | $DOLTLITE "$DB" > /dev/nu
 
 rm -f "$DB"
 
-# ============================================================
-# Summary
-# ============================================================
+
+
+
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

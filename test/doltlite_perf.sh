@@ -1,14 +1,14 @@
 #!/bin/bash
-#
-# Performance tests with assertions for Doltlite.
-#
-# Verifies:
-# - Bulk INSERT scales as O(n log n)
-# - Point SELECT, UPDATE, DELETE scale as O(log n)
-# - dolt_diff after a single-row update is ~constant time
-#
-# Sizes: 1K, 100K, 1M rows.
-#
+
+
+
+
+
+
+
+
+
+
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
 
@@ -38,9 +38,9 @@ assert_ratio() {
   fi
 }
 
-# ============================================================
-# Setup: create committed tables at 1K, 100K, 1M rows
-# ============================================================
+
+
+
 
 echo "Setting up databases..."
 
@@ -61,9 +61,9 @@ DB_1K="/tmp/perf_1000_$$.db"
 DB_100K="/tmp/perf_100000_$$.db"
 DB_1M="/tmp/perf_1000000_$$.db"
 
-# ============================================================
-# Bulk INSERT (O(n log n))
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Bulk INSERT ---"
@@ -86,12 +86,12 @@ print('COMMIT;')
 \" | $DOLTLITE '$DB_100K'")
 echo "  100K: ${T_INS_100K}ms"
 
-# 100x more rows, O(n log n) → ~150x. Allow 300x for CI variance.
+
 assert_ratio "insert_1k_to_100k" "$T_INS_1K" "$T_INS_100K" 300
 
-# ============================================================
-# Point SELECT by PK (O(log n)) — 100 iterations each
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Point SELECT (100 lookups) ---"
@@ -105,13 +105,13 @@ echo "  100K: ${T_SEL_100K}ms"
 T_SEL_1M=$(time_ms "for i in \$(seq 1 100); do echo 'SELECT v FROM t WHERE id=500000;' | $DOLTLITE '$DB_1M'; done")
 echo "  1M: ${T_SEL_1M}ms"
 
-# O(log n): 100x more rows → at most 10x slower
+
 assert_ratio "select_1k_to_100k" "$T_SEL_1K" "$T_SEL_100K" 10
 assert_ratio "select_100k_to_1m" "$T_SEL_100K" "$T_SEL_1M" 10
 
-# ============================================================
-# Single-row UPDATE (O(log n))
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Single-row UPDATE ---"
@@ -128,9 +128,9 @@ echo "  1M: ${T_UPD_1M}ms"
 assert_ratio "update_1k_to_100k" "$T_UPD_1K" "$T_UPD_100K" 10
 assert_ratio "update_100k_to_1m" "$T_UPD_100K" "$T_UPD_1M" 10
 
-# ============================================================
-# Single-row DELETE (O(log n))
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Single-row DELETE ---"
@@ -147,15 +147,15 @@ echo "  1M: ${T_DEL_1M}ms"
 assert_ratio "delete_1k_to_100k" "$T_DEL_1K" "$T_DEL_100K" 10
 assert_ratio "delete_100k_to_1m" "$T_DEL_100K" "$T_DEL_1M" 10
 
-# ============================================================
-# dolt_diff after single-row UPDATE (~constant time)
-# Commit baseline, update one row, measure diff — all in one session.
-# ============================================================
+
+
+
+
 
 echo ""
 echo "--- dolt_diff after single-row UPDATE ---"
 
-# Commit all pending changes first, then update one row, then diff
+
 echo "SELECT dolt_commit('-A','-m','baseline');
 UPDATE t SET v='diffme' WHERE id=0;" | $DOLTLITE "$DB_1K" > /dev/null 2>&1
 echo "SELECT dolt_commit('-A','-m','baseline');
@@ -175,15 +175,15 @@ echo "  1M: ${T_DIFF_1M}ms"
 assert_ratio "diff_1k_to_100k" "$T_DIFF_1K" "$T_DIFF_100K" 10
 assert_ratio "diff_100k_to_1m" "$T_DIFF_100K" "$T_DIFF_1M" 10
 
-# ============================================================
-# Diff correctness: exactly 1 change at each size
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Diff correctness ---"
 
-# Note: diff correctness at 100K/1M has a known issue where dolt_commit
-# inside the same session invalidates the schema cache. Using 1K only.
+
+
 for pair in "1K:$DB_1K"; do
   name="${pair%%:*}"; db="${pair#*:}"
   val=$(echo "SELECT count(*) FROM dolt_diff_t WHERE to_commit='WORKING';" | $DOLTLITE "$db" 2>&1)
@@ -195,9 +195,9 @@ for pair in "1K:$DB_1K"; do
   fi
 done
 
-# ============================================================
-# Diff between commits: O(changes) not O(table_size)
-# ============================================================
+
+
+
 
 echo ""
 echo "--- Diff between commits: O(changes) ---"
@@ -214,7 +214,7 @@ print(\"SELECT dolt_commit('-A','-m','init');\")
 " | $DOLTLITE "$DB_DIFF" > /dev/null 2>&1
 echo "  Setup: 1M rows committed"
 
-# Make 10 changes and commit
+
 python3 -c "
 for i in range(10):
     print(f'UPDATE t SET v=\"changed_{i}\" WHERE id={i};')
@@ -227,15 +227,15 @@ T_DIFF_10=$(time_ms "echo \"SELECT rows_added + rows_deleted + rows_modified FRO
   't');\" | $DOLTLITE '$DB_DIFF'")
 echo "  10 changes (1M table): ${T_DIFF_10}ms"
 
-# Correctness check (known schema cache issue on 1M after dolt_commit
-# in same session — skip for now, correctness verified at 1K above)
+
+
 DIFF_10_COUNT=$(echo "SELECT rows_added + rows_deleted + rows_modified FROM dolt_diff_stat(
   (SELECT commit_hash FROM dolt_log LIMIT 1 OFFSET 1),
   (SELECT commit_hash FROM dolt_log LIMIT 1),
   't');" | $DOLTLITE "$DB_DIFF" 2>&1)
 echo "  (correctness: $DIFF_10_COUNT changes — known issue if 0 on large tables)"
 
-# Make 1000 changes (non-overlapping range) and commit
+
 python3 -c "
 for i in range(100, 1100):
     print(f'UPDATE t SET v=\"changed2_{i}\" WHERE id={i};')
@@ -254,18 +254,18 @@ DIFF_1000_COUNT=$(echo "SELECT rows_added + rows_deleted + rows_modified FROM do
   't');" | $DOLTLITE "$DB_DIFF" 2>&1)
 echo "  (correctness: $DIFF_1000_COUNT changes)"
 
-# 100x more changes → at most 200x time
+
 assert_ratio "diff_10_to_1000_changes" "$T_DIFF_10" "$T_DIFF_1000" 200
 
-# The meaningful working-diff scaling guard is the 100K -> 1M check above.
-# A 1K table is too small for this shell-level harness: process startup and
-# query dispatch dominate the timing and make 1K -> 1M ratios noisy in CI.
+
+
+
 
 rm -f "$DB_DIFF"
 
-# ============================================================
-# Cleanup
-# ============================================================
+
+
+
 
 rm -f "$DB_1K" "$DB_100K" "$DB_1M"
 

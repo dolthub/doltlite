@@ -121,12 +121,12 @@ struct TableEntry {
   ProllyMutMap *pPending;
 };
 
-/* Typed container for a Btree's live TableEntry[] plus the monotonic
-** root-page counter they share. Every mutation goes through catAdd /
-** catRemove / catFree so zName and pPending ownership invariants
-** stay in one place — no bare sqlite3_free(a) calls should exist
-** anywhere. iNextTable travels with a/n because every add needs to
-** bump it and every catalog reload has to reset it. */
+
+
+
+
+
+
 typedef struct Catalog Catalog;
 struct Catalog {
   struct TableEntry *a;
@@ -316,23 +316,23 @@ struct Btree {
   ProllyHash mergeCommitHash;
   ProllyHash conflictsCatalogHash;
 
-  /* Active interactive-rebase state, parallel to merge state.
-  ** Persisted into the working set blob (v3). isRebasing is 1 when
-  ** a `dolt_rebase('-i', ...)` call has set things up and not yet
-  ** been --continue'd or --abort'd. preRebaseWorkingCat is the
-  ** working catalog of the original branch before the rebase
-  ** started, used by --abort to restore cleanly. */
+
+
+
+
+
+
   u8 isRebasing;
   ProllyHash preRebaseWorkingCat;
   ProllyHash rebaseOntoCommit;
   char *zRebaseOrigBranch;
   char *zRebaseReturnBranch;
 
-  /* FK / UNIQUE / CHECK violations detected at merge time. Persisted
-  ** in the v4 working set blob alongside (and independently of) the
-  ** merge-conflicts hash. Non-empty means dolt_commit refuses unless
-  ** --force is passed and the user has cleared the per-table
-  ** dolt_constraint_violations_<table> vtable. */
+
+
+
+
+
   ProllyHash constraintViolationsHash;
 
   const struct BtreeOps *pOps;
@@ -357,7 +357,7 @@ struct BtCursor {
 
   u8 *pCachedPayload;
   int nCachedPayload;
-  u8 cachedPayloadOwned;  /* 1 if pCachedPayload was malloc'd by us */
+  u8 cachedPayloadOwned;
   u8 *pReconPayload;
   int nReconPayloadAlloc;
   u8 *pSeekRecord;
@@ -398,9 +398,9 @@ static int btreeLoadBranchHeadCatalog(ChunkStore *cs, const char *zBranch,
                                       ProllyHash *pCatHash,
                                       ProllyHash *pHeadCommit);
 
-/* Thin Btree-flavoured wrappers so existing call sites that take a
-** Btree* don't have to spell &p->cat everywhere. Any new code
-** should prefer catFind/catAdd/catRemove/catFree directly. */
+
+
+
 static inline struct TableEntry *findTable(Btree *p, Pgno iTable){
   return catFind(&p->cat, iTable);
 }
@@ -461,12 +461,12 @@ static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   }
 }
 
-/* Non-INTKEY clean-cursor variant: index entries store data in the
-** sort-key with an empty value field. Reconstruct the record once into
-** pCur->pReconPayload so the per-row xPayloadSize + xPayloadFetch pair
-** from covering / range index scans both hit the early-return at the
-** top of getCursorPayload. Errors are best-effort — leave the cache
-** empty and let the lazy path retry / propagate. */
+
+
+
+
+
+
 static void cacheCurrentTreePayloadNonIntKey(BtCursor *pCur){
   const u8 *pVal; int nVal;
   cursorCurrentTreeValue(pCur, &pVal, &nVal);
@@ -556,11 +556,11 @@ static int btreeWriteWorkingState(
 );
 static int btreeDeleteImmediate(BtCursor *pCur);
 
-/*
-** Bound deferred per-table edit growth by forcing a mutmap drain once the
-** pending delta becomes large. flushMutMap() already snapshots mid-savepoint
-** state, so early drains remain rollback-safe.
-*/
+
+
+
+
+
 #define PROLLY_MUTMAP_PENDING_FLUSH_LIMIT 65536
 
 static int mutMapShouldDrain(BtCursor *pCur){
@@ -975,13 +975,13 @@ static void catRemove(Catalog *cat, Pgno iTable){
   }
 }
 
-/* Walk every TableEntry, free its zName and any still-live pending
-** mutmap, then release the array itself. Leaves cat in the zero
-** state. Safe on partially-built catalogs (mid-deserializeCatalog
-** error) because catAdd only bumps n after installing the entry.
-**
-** This is the ONLY place that frees cat->a — callers that want to
-** drop the catalog must go through here, or zName/pPending leak. */
+
+
+
+
+
+
+
 static void catFree(Catalog *cat){
   int k;
   for(k=0; k<cat->n; k++){
@@ -1000,13 +1000,13 @@ static void catFree(Catalog *cat){
 }
 
 static void invalidateSchema(Btree *pBtree){
-  /* sqlite3SchemaClear resets the hash tables inside the Schema
-  ** struct but leaves the struct itself alive — matches stock
-  ** SQLite behaviour. The struct pointer has to stay put because
-  ** db->aDb[i].pSchema captures it at open time and never
-  ** re-queries, so zeroing pBtree->pSchema here would orphan the
-  ** original and leak it on close. Subsequent schema loads reuse
-  ** the same struct via prollyBtreeSchema's !p->pSchema guard. */
+
+
+
+
+
+
+
   if( pBtree->pSchema && pBtree->xFreeSchema ){
     pBtree->xFreeSchema(pBtree->pSchema);
   }
@@ -2415,11 +2415,11 @@ static int flushMutMap(BtCursor *pCur){
     return SQLITE_OK;
   }
 
-  /* Per-table mutmap: every cursor on this table aliases pTE->pPending.
-  ** snapshotPendingForFlush may swap pTE->pPending for a fresh empty
-  ** map (when capturing the pre-flush state into an active savepoint);
-  ** if that happens we refresh every cursor's alias to point at the
-  ** new pTE->pPending. */
+
+
+
+
+
   pFlushMap = (ProllyMutMap*)pTE->pPending;
   captured = 0;
   rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
@@ -2496,23 +2496,23 @@ static int syncSavepoints(BtCursor *pCur){
   return SQLITE_OK;
 }
 
-/* Refresh every cursor on iTable so its pMutMap field aliases the
-** current pTE->pPending (which may itself be NULL after a flush).
-** Called after any mutation to the pTE->pPending pointer — flush,
-** savepoint snapshot/restore, catalog free. The invariant after this
-** call is: for every cursor c on iTable, c->pMutMap == pTE->pPending.
-**
-** Walking pBt->pCursor is O(cursors); usually a handful per Btree. */
+
+
+
+
+
+
+
 static void refreshCursorMutMapAliases(BtShared *pBt, Pgno iTable,
                                         ProllyMutMap *pNewMap){
   BtCursor *p;
   for(p = pBt->pCursor; p; p = p->pNext){
     if( p->pgnoRoot==iTable ){
       p->pMutMap = pNewMap;
-      /* mmActive / mmIdx may now point at a stale (or freed) entry.
-      ** Reset cursor's mutmap-side position; the merge cursor will
-      ** re-establish on the next access, picking up any new entries
-      ** another cursor may have added. */
+
+
+
+
       p->mmActive = 0;
       p->mmPhysActive = 0;
       p->deferredTreeSeek = 0;
@@ -2531,11 +2531,11 @@ static int ensureMutMap(BtCursor *pCur){
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE ) return SQLITE_INTERNAL;
 
-  /* Per-table mutmap: the table entry owns it for the lifetime of the
-  ** transaction (or until a flush clears it). Multiple cursors on the
-  ** same table all alias to pTE->pPending so writes by one cursor are
-  ** immediately visible to reads via another — no per-statement
-  ** visibility flush needed. */
+
+
+
+
+
   if( pTE->pPending ){
     pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
     return SQLITE_OK;
@@ -2976,13 +2976,13 @@ static void releaseMutMapsToSavepoint(Btree *pBtree, int level){
   }
 }
 
-/* A flush that happens mid-savepoint destroys the per-entry bornAt
-** state the mutmap uses for rollback, so move the about-to-be-flushed
-** mutmap into the innermost savepoint's aPendingSnapshot slot and
-** replace it with a fresh empty one. Only the innermost savepoint
-** that doesn't already have a snapshot for this table needs one —
-** the rollback path walks back through savepoints looking for the
-** smallest-level match. */
+
+
+
+
+
+
+
 static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable,
                                    ProllyMutMap **ppPending,
                                    ProllyMutMap **ppFlushMap,
@@ -3123,8 +3123,8 @@ static int restoreTablesFromSavepoint(
       prollyMutMapFree(pMap);
       sqlite3_free(pMap);
     }
-    /* pPending ownership transferred to apPending or released;
-    ** null the slot so btreeFreeCatalogTables can't double-free. */
+
+
     aCurrent[k].pPending = 0;
   }
 
@@ -3564,10 +3564,10 @@ static int prollyBtreeClose(Btree *p){
   }
 
 
-  /* Schema cleanup mirrors stock btree.c — xFreeSchema clears the
-  ** Schema object's internal hash tables but does NOT free the
-  ** Schema struct itself; we allocated it via sqlite3_malloc in
-  ** prollyBtreeSchema so we must release it here explicitly. */
+
+
+
+
   if( p->pSchema ){
     if( p->xFreeSchema ) p->xFreeSchema(p->pSchema);
     sqlite3_free(p->pSchema);
@@ -4564,10 +4564,10 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
   return chunkStoreCommit(&pBt->store);
 }
 
-/* Walk every live savepoint state, release its captured tables,
-** pending-snapshot mutmaps and inner arrays, then reset nSavepoint
-** to 0. The aSavepointTables backing store itself is kept (it's
-** freed in close). */
+
+
+
+
 static void btreeDiscardAllSavepoints(Btree *p){
   int j;
   for(j=0; j<p->nSavepoint; j++){
@@ -4888,12 +4888,12 @@ static int prollyBtreeCursor(
     pCur->curFlags = BTCF_WriteFlag;
   }
 
-  /* Per-table mutmap: pTE->pPending is the canonical edit buffer
-  ** owned by pTE for the lifetime of the transaction. The new cursor
-  ** simply aliases the existing buffer (no ownership transfer). The
-  ** old code transferred pTE->pPending into the cursor's private
-  ** pMutMap and zeroed pTE->pPending — that was the per-cursor
-  ** ownership model and is incompatible with per-table sharing. */
+
+
+
+
+
+
   if( pTE->pPending ){
     pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
     if( wrFlag & BTREE_WRCSR ){
@@ -4934,10 +4934,10 @@ static int prollyBtCursorCloseCursor(BtCursor *pCur){
   pBt = pCur->pBt;
   if( !pBt ) return SQLITE_OK;
 
-  /* pCur->pMutMap is an alias to pTE->pPending — pTE owns the map
-  ** across the transaction. flushSeekEdits is per-table state, so
-  ** propagate any pending request from this cursor onto pTE; the
-  ** alias itself is just dropped. */
+
+
+
+
   if( pCur->pMutMap && pCur->flushSeekEdits ){
     struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
     if( pTE ){
@@ -5112,11 +5112,11 @@ static int mergeScan(BtCursor *pCur, int dir, int *pRes){
   }
 }
 
-/* If the cursor was positioned via setCursorToMutMapEntryPhys (mmPhysActive
-** set, mmIdx unset), normalize to mmIdx-only before stepping. mergeScan
-** would otherwise overwrite our about-to-be-incremented mmIdx with the
-** physIdx-derived sorted position, parking the cursor back on the entry
-** we just consumed. */
+
+
+
+
+
 static void cursorNormalizeMmPhys(BtCursor *pCur){
   if( pCur->mmPhysActive ){
     pCur->mmIdx = prollyMutMapOrderIndexFromEntry(
@@ -5221,11 +5221,11 @@ static int mergeLast(BtCursor *pCur, int *pRes){
 static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
-  /* Per-table mutmap: pCur aliases pTE->pPending so other cursors'
-  ** edits are immediately visible via the shared buffer. The old
-  ** per-cursor visibility dance applied pending edits to the tree
-  ** before reading. With shared mutmap there's nothing to flush:
-  ** the merge cursor reads tree + pTE->pPending directly. */
+
+
+
+
+
   refreshCursorRoot(pCur);
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -5249,7 +5249,7 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
-  /* Visibility flushes deleted — see prollyBtCursorFirst. */
+
   refreshCursorRoot(pCur);
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -5542,8 +5542,8 @@ static int prollyBtCursorTableMoveto(
   }
 
 
-  /* Visibility flush deleted — shared pTE->pPending is read directly
-  ** by the merge cursor below. */
+
+
   refreshCursorRoot(pCur);
 
   rc = prollyCursorSeekInt(&pCur->pCur, intKey, pRes);
@@ -5613,12 +5613,12 @@ static int findMatchingMutMapEntry(
   int rc = SQLITE_OK;
   int cmp = 0;
   ProllyMutMapEntry *pMatch = 0;
-  /* Single scratch reused across both the binary-search and post-scan
-  ** linear loops. The original code freed and re-allocated per mid
-  ** iteration; for index seeks against an N-entry mutmap that's
-  ** ~log2(N) malloc/free pairs and ~log2(N) sort-key→record transcodes
-  ** per Seek. With reuse, the buffer grows to fit the largest record
-  ** seen and stays. Freed once at function exit. */
+
+
+
+
+
+
   u8 *pRecBuf = 0;
   int nRecBufAlloc = 0;
   int lo = 0, found = 0;
@@ -5779,12 +5779,12 @@ static int prollyBtCursorIndexMoveto(
       int bestCmp = 0;
       {
 
-        /* prollyCursorSeekBlob's leaf-level prollyNodeSearchBlob has
-        ** already binary-searched this leaf with the same key and
-        ** stored its lower-bound result in seekIdx. Reuse that
-        ** position instead of repeating a 7+-iteration memcmp loop
-        ** per Seek — for index_join_scan-style nested seeks that
-        ** loop showed up at ~14% of CPU. */
+
+
+
+
+
+
         int lo = seekIdx;
         u8 *pRecBuf = pCur->pMovetoRec;
         int nRecBufAlloc = pCur->nMovetoRecAlloc;
@@ -5907,11 +5907,11 @@ static int prollyBtCursorIndexMoveto(
          || (pPending && pPending!=pCur->pMutMap
              && !prollyMutMapIsEmpty(pPending)))
        && !(treeFound && treeCmp==0) ){
-      /* findMatchingMutMapEntry runs sqlite3VdbeRecordCompare against
-      ** mutmap entries, which clobbers pIdxKey->eqSeen. The tree-match
-      ** decision above already consumed eqSeen, so save its post-tree-
-      ** seek value and restore it on exit — OP_SeekGE (eqOnly path)
-      ** reads eqSeen to decide whether the seek hit an equality match. */
+
+
+
+
+
       int savedEqSeen = pIdxKey->eqSeen;
       rc = findMatchingMutMapEntry((ProllyMutMap*)pCur->pMutMap,
                                    pCur->pKeyInfo,
@@ -5966,10 +5966,10 @@ static int prollyBtCursorIndexMoveto(
         pCur->eState = CURSOR_VALID;
       }
       *pRes = mutCmp;
-      /* OP_SeekGE/SeekLE eqOnly path reads eqSeen to decide whether the
-      ** seek hit an equality match. A mutmap match means equality was
-      ** seen, but findMatchingMutMapEntry leaves eqSeen reflecting its
-      ** internal bsearch's last comparison. */
+
+
+
+
       pIdxKey->eqSeen = 1;
       return SQLITE_OK;
     }
@@ -6206,19 +6206,19 @@ static int prollyBtCursorInsert(
      && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
       nKeyField = (int)pCur->pKeyInfo->nKeyField;
       splitKey = 1;
-      /* Distinguish secondary indexes from non-INTEGER-PK tables.
-      ** Index entries have no name in the catalog; tables do.
-      ** For indexes, encode ALL fields (index cols + PK cols) into
-      ** the sort key so every entry is unique — matching Dolt's
-      ** encoding and making three-way merge work correctly. */
+
+
+
+
+
       {
         struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
         isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
       }
     }
-    /* Reuse the cursor's scratch sort-key buffer (also used by
-    ** IndexMoveto) so transaction-scale Insert loops avoid a
-    ** malloc/free pair per row. Owned by the cursor; freed at close. */
+
+
+
     rc = sortKeyFromRecordPrefixCollBuffer(
         (const u8*)pPayload->pKey, (int)pPayload->nKey,
         isIndex ? 0 : (splitKey ? nKeyField : 0),
@@ -6320,20 +6320,20 @@ static int flushIfNeeded(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
 
-  /* Per-table mutmap: pCur->pMutMap aliases pTE->pPending and every
-  ** other cursor on this pgnoRoot does too. A single flushMutMap on
-  ** any cursor flushes the whole table. Old code did a peer walk
-  ** (O(cursors per pgnoRoot)) and then flushAllPending called
-  ** flushIfNeeded on every cursor, making the total O(N^2). With
-  ** shared mutmap each invocation either flushes (first one) or
-  ** finds empty (rest), so the peer walk is redundant. */
+
+
+
+
+
+
+
   if( !pCur->pMutMap || prollyMutMapIsEmpty(pCur->pMutMap) ){
     return SQLITE_OK;
   }
 
-  /* Save peer cursors' positions before we change the tree out
-  ** from under them. Same logic as before — applies to every cursor
-  ** on this pgnoRoot regardless of whose mutmap is being flushed. */
+
+
+
   {
     BtCursor *p;
     for(p = pCur->pBt->pCursor; p; p = p->pNext){
@@ -6482,11 +6482,11 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         int nDelKeyField = 0;
         if( pCur->pKeyInfo
          && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
-          /* For indexes (no name in catalog), encode all fields to
-          ** match the insert encoding. For tables, use the PK prefix. */
+
+
           struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
           if( pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE) ){
-            nDelKeyField = 0;  /* index: all fields */
+            nDelKeyField = 0;
           }else{
             nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
           }
@@ -6664,10 +6664,10 @@ int sqlite3SchemaMutexHeld(sqlite3 *db, int iDb, Schema *pSchema){
 static void prollyBtreeLeave(Btree *p){ (void)p; }
 #endif
 
-/* VDBE's ROLLBACK TO SAVEPOINT path walks db->aDb[] and calls us for
-** every attached btree. Attached stock-SQLite files (temp, :memory:,
-** plain-sqlite ATTACHes) have p->pBt==NULL with state under
-** p->pOrigBtree — dispatch there instead of dereferencing NULL. */
+
+
+
+
 int sqlite3BtreeTripAllCursors(Btree *p, int errCode, int writeOnly){
   BtCursor *pCur;
   BtShared *pBt;
@@ -7032,7 +7032,7 @@ int sqlite3BtreeCopyFile(Btree *pTo, Btree *pFrom){
 }
 
 int sqlite3BtreeIsInBackup(Btree *p){
-  /* prolly_btree doesn't implement the SQLite backup API. */
+
   (void)p;
   return 0;
 }
@@ -7056,11 +7056,11 @@ static int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, voi
     return SQLITE_ABORT;
   }
 
-  /* Must use the merge-cursor-aware payload accessor: when the cursor
-  ** is positioned on a mutmap entry (FTS5's blob cursor hits this on
-  ** every auto-merge — its long-lived read cursor lands on a freshly
-  ** buffered segment row), prollyCursorValue would read the empty tree
-  ** slot and the blob read would silently return stale bytes. */
+
+
+
+
+
   getCursorPayload(pCur, &pVal, &nVal);
 
   if( (i64)offset + (i64)amt > (i64)nVal ){
@@ -7336,10 +7336,10 @@ int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
   }
 
-  /* Direct VC helpers need the named savepoint stack captured before
-  ** they mutate session working-set state. Do not mirror statement
-  ** savepoints here: releaseSavepointsFrom() only inherits pending-row
-  ** snapshots, not session hashes like conflictsCatalogHash. */
+
+
+
+
   target = db->nSavepoint;
   while( pBtree->nSavepoint < target ){
     rc = pushSavepoint(pBtree, 0);
@@ -7411,10 +7411,10 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
   return SQLITE_OK;
 }
 
-/* Free a TableEntry array returned by doltliteLoadCatalog. Each
-** TableEntry owns its zName allocation via deserializeCatalog(); the
-** callers that just did sqlite3_free(a) were leaking N strings per
-** call. Null-tolerant so cleanup paths don't need to guard. */
+
+
+
+
 void doltliteFreeCatalog(struct TableEntry *a, int n){
   int i;
   if( !a ) return;
@@ -7542,9 +7542,9 @@ int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash){
 
   invalidateCursors(pBt, 0, SQLITE_ABORT);
 
-  /* deserializeCatalog walks the current aTables (freeing each
-  ** zName and any live pPending) and replaces it — do not pre-free
-  ** here or the existing entries leak. */
+
+
+
   rc = deserializeCatalog(pBtree, data, nData);
   sqlite3_free(data);
   if( rc!=SQLITE_OK ) return rc;
@@ -7602,9 +7602,9 @@ int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash){
 
   invalidateCursors(pBt, 0, SQLITE_ABORT);
 
-  /* deserializeCatalog walks the current aTables (freeing each
-  ** zName and any live pPending) and replaces it — do not pre-zero
-  ** here or the existing entries leak. */
+
+
+
   rc = deserializeCatalog(pBtree, data, nData);
   sqlite3_free(data);
   if( rc!=SQLITE_OK ){
@@ -7927,11 +7927,11 @@ void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHas
   }
 }
 
-/* Look up a table's current working-catalog prolly root + flags
-** by table number (rowid-alias). Exposed so the post-merge
-** constraint walk can read raw row payloads without needing to
-** reach into private Btree fields. Returns SQLITE_NOTFOUND if
-** the table is absent, SQLITE_OK on success. */
+
+
+
+
+
 int doltliteGetSessionTableRoot(
   sqlite3 *db, Pgno iTable, ProllyHash *pRoot, u8 *pFlags
 ){
@@ -8239,12 +8239,12 @@ static int origCursorCloseCursorVt(BtCursor *pCur){
   int rc = origBtreeCloseCursor(pCur->pOrigCursor);
   sqlite3_free(pCur->pOrigCursor);
   pCur->pOrigCursor = 0;
-  /* Stock btree's cursor close auto-frees the inner Btree on
-  ** BTREE_SINGLE when the last cursor unlinks — which it just
-  ** did. The wrapper Btree we allocated in sqlite3BtreeOpen sits
-  ** on top of that inner and never sees its own xClose in this
-  ** path, so release it here or the 472-byte struct leaks every
-  ** time VDBE OP_OpenEphemeral runs. */
+
+
+
+
+
+
   if( willAutoCloseInner && pWrapper ){
     pWrapper->pOrigBtree = 0;
     sqlite3_free(pWrapper);

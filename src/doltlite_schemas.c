@@ -94,10 +94,10 @@ static int schemasClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
-/* Dolt stores views/triggers in a real dolt_schemas table. Doltlite
-** reuses sqlite_schema instead and synthesizes this vtable on top —
-** type/name/fragment come straight from sqlite_schema WHERE type IN
-** ('view','trigger'). extra/sql_mode always NULL (Dolt-only fields). */
+
+
+
+
 static int schemasFilter(sqlite3_vtab_cursor *pCursor,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   SchemasCursor *pCur = (SchemasCursor*)pCursor;

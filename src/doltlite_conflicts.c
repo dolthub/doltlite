@@ -501,10 +501,10 @@ static int cfrEof(sqlite3_vtab_cursor *cur){
   return c->iRow >= c->aTables[c->iTableIdx].nConflicts;
 }
 
-/* Thin wrapper around doltliteResultUserCol kept for call-site
-** readability — the cfr column projection has four call sites
-** (base, ours, theirs, and the diff-type bookkeeping) that all
-** want the same argument order. */
+
+
+
+
 static void cfrEmitRecordCol(
   sqlite3_context *ctx,
   const u8 *pRec, int nRec,
@@ -524,10 +524,10 @@ static const char *cfrDiffType(const u8 *pBase, int nBase,
   return "modified";
 }
 
-/* For row-wise DELETE on dolt_conflicts_<table>, the vtab rowid must uniquely
-** identify a conflict row even when the user PK is not SQLite's integer
-** rowid. Use the raw serialized prolly key when present; integer PK conflicts
-** continue to use intKey directly. */
+
+
+
+
 static sqlite3_int64 cfrConflictRowid(const struct ConflictRow *cr){
   if( cr->nKey>0 && cr->pKey ){
     u64 h = 1469598103934665603ULL;
@@ -739,11 +739,11 @@ static void conflictsResolveFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     return;
   }
 
-  /* --ours vs --theirs are asymmetric: "ours" is already in the
-  ** working set (the merge left our side intact and logged theirs in
-  ** the conflict entry), so we just drop the conflict table. "theirs"
-  ** below has to apply each entry's theirVal as a real row mutation
-  ** before dropping, otherwise the working set still has our value. */
+
+
+
+
+
   if( strcmp(zMode,"--ours")==0 ){
 
     for(i=0; i<nTables; i++){

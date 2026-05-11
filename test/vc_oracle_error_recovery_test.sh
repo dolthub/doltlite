@@ -1,19 +1,19 @@
 #!/bin/bash
-#
-# Error recovery oracle tests (doltlite vs Dolt)
-#
-# Tests that trigger errors mid-stream and verify both engines land
-# in the same state afterward. Uses -c (continue on error) so both
-# engines execute the full script including statements after errors.
-#
-# These validate that failed operations don't corrupt state:
-# - Failed merges (conflicts) leave table in pre-merge state
-# - Failed commits don't create partial commits
-# - Failed checkouts don't switch branches
-# - Recovery operations (reset, resolve) work after failures
-#
-# Usage: bash vc_oracle_error_recovery_test.sh ./doltlite dolt
-#
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
@@ -75,9 +75,9 @@ oracle() {
 echo "=== Error Recovery Oracle Tests ==="
 echo ""
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 1: Failed merge (conflict) — table state preserved
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- failed merge: table state preserved ---"
 
 oracle "conflict_preserves_unmodified_rows" "
@@ -147,9 +147,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t2 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 2: Failed commit — no partial state
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- failed commit: no partial state ---"
 
 oracle "empty_commit_rejected_data_preserved" "
@@ -181,9 +181,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','real commit');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 3: Failed checkout — branch unchanged
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- failed checkout: branch unchanged ---"
 
 oracle "checkout_nonexistent_stays_on_current" "
@@ -212,9 +212,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main commit');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 4: Reset after conflict
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset after conflict ---"
 
 oracle "hard_reset_after_conflict" "
@@ -234,9 +234,9 @@ SELECT dolt_merge('feat');
 SELECT dolt_reset('--hard', 'HEAD');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 5: Operations after failed operations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- operations after failures ---"
 
 oracle "insert_after_failed_merge" "
@@ -309,9 +309,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat2');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 6: Delete-modify conflict state
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- delete-modify conflict state ---"
 
 oracle "delete_modify_safe_rows_intact" "
@@ -330,9 +330,9 @@ SELECT dolt_commit('-m','main modifies');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t WHERE id > 1 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 7: Multiple errors in sequence
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multiple errors in sequence ---"
 
 oracle "multiple_failed_commits_then_success" "
@@ -369,9 +369,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 8: Commit log integrity after errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- commit log integrity after errors ---"
 
 oracle "log_count_after_failed_commits" "
@@ -405,9 +405,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 9: Working set after errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- working set after errors ---"
 
 oracle "uncommitted_data_survives_failed_commit" "
@@ -428,9 +428,9 @@ INSERT INTO t VALUES(2,'working');
 SELECT dolt_checkout('nonexistent');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 10: FK constraint errors during merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK errors in merge ---"
 
 oracle "fk_parent_data_safe_after_failed_merge" "
@@ -452,9 +452,9 @@ SELECT dolt_merge('feat');
 " "SELECT id, name FROM parent ORDER BY id;"
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 11: Cherry-pick error recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick error recovery ---"
 
 oracle "cherry_pick_bad_ref_data_intact" "
@@ -492,9 +492,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after failed cherry pick');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 12: Revert error recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert error recovery ---"
 
 oracle "revert_bad_ref_data_intact" "
@@ -516,9 +516,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after failed revert');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 13: Reset error recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset error recovery ---"
 
 oracle "reset_bad_ref_data_intact" "
@@ -544,9 +544,9 @@ SELECT dolt_reset('--hard','bad_ref');
 SELECT dolt_reset('HEAD~1');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 14: Conflict resolution flow
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- conflict resolution flow ---"
 
 oracle "reset_hard_head_clears_conflict" "
@@ -592,9 +592,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('clean_branch');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 15: Multi-table error isolation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-table error isolation ---"
 
 oracle "conflict_in_one_table_other_tables_queryable" "
@@ -632,9 +632,9 @@ SELECT dolt_add('t1');
 SELECT dolt_commit('-m','only t1');
 " "SELECT id, val FROM t1 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 16: Staged state after errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- staged state after errors ---"
 
 oracle "staged_survives_failed_commit_then_succeeds" "
@@ -681,9 +681,9 @@ SELECT dolt_rebase('nope');
 ROLLBACK TO sp1;
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 17: Branch operations after errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- branch operations after errors ---"
 
 oracle "create_branch_after_failed_create" "
@@ -716,9 +716,9 @@ SELECT dolt_branch('-d','nonexistent');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 18: DML errors don't corrupt VC state
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DML errors + VC state ---"
 
 oracle "constraint_error_doesnt_break_commit" "
@@ -757,9 +757,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after fk error');
 " "SELECT id, val FROM child ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 19: Merge state cleanup
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge state cleanup ---"
 
 oracle "new_branch_after_conflict_reset" "
@@ -805,9 +805,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post reset commit');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 20: Rapid error-success alternation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- rapid error-success alternation ---"
 
 oracle "alternating_good_bad_commits" "
@@ -850,9 +850,9 @@ SELECT dolt_merge('b1');
 SELECT dolt_merge('b2');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 21: Data type preservation through errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- data type preservation through errors ---"
 
 oracle "integer_values_survive_failed_merge" "
@@ -896,9 +896,9 @@ SELECT dolt_commit('-m','empty fail');
 SELECT dolt_cherry_pick('bad_ref');
 " "SELECT id, a, b FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 22: Log count verification after error sequences
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- log counts after error sequences ---"
 
 oracle "log_count_3_after_5_attempts" "
@@ -933,9 +933,9 @@ SELECT dolt_merge('feat');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 23: Complex error recovery sequences
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- complex error recovery ---"
 
 oracle "full_workflow_with_errors" "
@@ -984,9 +984,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','commit both');
 " "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 24: DROP TABLE error recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop table error recovery ---"
 
 oracle "drop_nonexistent_table_other_tables_intact" "
@@ -1031,9 +1031,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','recreated');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 25: ALTER TABLE error recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- alter table error recovery ---"
 
 oracle "alter_add_duplicate_col_data_intact" "
@@ -1070,9 +1070,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','altered');
 " "SELECT id, val, extra FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 26: Tag error recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag error recovery ---"
 
 oracle "tag_duplicate_data_intact" "
@@ -1110,9 +1110,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad tag delete');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 27: Invalid SQL syntax recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- invalid SQL recovery ---"
 
 oracle "insert_wrong_col_count_others_succeed" "
@@ -1148,9 +1148,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad update');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 28: CREATE TABLE error recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- create table error recovery ---"
 
 oracle "create_duplicate_table_original_intact" "
@@ -1175,9 +1175,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after idempotent create');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 29: Error during multi-branch work
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- error during multi-branch work ---"
 
 oracle "error_on_feat_branch_then_merge" "
@@ -1232,9 +1232,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 30: Long error sequences
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- long error sequences ---"
 
 oracle "ten_failed_commits_then_real" "
@@ -1274,9 +1274,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','still on main');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 31: Errors + data type integrity
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- errors + data type integrity ---"
 
 oracle "text_values_preserved_through_errors" "
@@ -1315,9 +1315,9 @@ SELECT dolt_checkout('nonexistent');
 SELECT dolt_reset('--hard','bogus');
 " "SELECT id, big FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 32: Error in aggregate/join queries - doesn't corrupt VC
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- aggregate/join errors ---"
 
 oracle "count_on_nonexistent_then_commit" "
@@ -1342,9 +1342,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad join');
 " "SELECT id, v FROM t1 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 33: Error flows with UPDATE/DELETE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- update/delete error flows ---"
 
 oracle "update_then_fail_commit_update_again" "
@@ -1371,9 +1371,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','delete all');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 34: Reset + error + reset
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset + error + reset ---"
 
 oracle "reset_after_error_after_reset" "
@@ -1408,9 +1408,9 @@ SELECT dolt_reset('--hard','bogus');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 35: Error during conflict state
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- errors during conflict state ---"
 
 oracle "failed_commit_during_conflict_unchanged" "
@@ -1452,9 +1452,9 @@ SELECT dolt_checkout('nonexistent');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 36: Errors preserve commit hash stability
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- errors + commit log stability ---"
 
 oracle "hash_of_last_commit_stable_through_errors" "
@@ -1484,9 +1484,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','m3');
 " "SELECT message FROM dolt_log WHERE message LIKE 'm%' ORDER BY message;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 37: Recovery from staged-modified mix
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- recovery from staged-modified mix ---"
 
 oracle "modify_after_add_error_no_reset" "
@@ -1516,9 +1516,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','both');
 " "SELECT 't1' AS tbl, count(*) AS n FROM t1 UNION ALL SELECT 't2', count(*) FROM t2 ORDER BY 1;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 38: Errors with mixed DDL/DML
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- mixed DDL/DML errors ---"
 
 oracle "ddl_error_then_dml_success" "
@@ -1557,9 +1557,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after alternating errors');
 " "SELECT id, val FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 39: Orphan SELECT errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- orphan SELECT errors ---"
 
 oracle "bad_select_before_any_commit" "
@@ -1586,9 +1586,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad select');
 " "SELECT id, v FROM t1 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 40: Error right before commit
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- error right before commit ---"
 
 oracle "error_between_add_and_commit" "
@@ -1613,9 +1613,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','ok');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 41: Error on main after successful branch merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- error after successful merge ---"
 
 oracle "error_after_successful_merge" "
@@ -1637,9 +1637,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 42: Errors during reset flow
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- errors during reset flow ---"
 
 oracle "error_after_soft_reset_before_commit" "
@@ -1671,9 +1671,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after reset+errors');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 43: Errors with NULL values in WHERE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- NULL-related error recovery ---"
 
 oracle "update_matching_null_no_rows_then_commit" "
@@ -1698,9 +1698,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 44: Rapid branch switches with errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- rapid branch switches with errors ---"
 
 oracle "rapid_checkouts_mixed_good_bad" "
@@ -1721,9 +1721,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 45: Error inside nested branch work
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- nested branch work errors ---"
 
 oracle "errors_on_each_branch_then_merge" "
@@ -1748,9 +1748,9 @@ SELECT dolt_merge('b1');
 SELECT dolt_merge('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 46: Error does not affect dolt_branches table
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_branches stable through errors ---"
 
 oracle "branches_listed_through_errors" "
@@ -1766,9 +1766,9 @@ SELECT dolt_checkout('bogus');
 SELECT dolt_reset('--hard','bogus');
 " "SELECT name FROM dolt_branches ORDER BY name;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 47: GROUP BY / HAVING errors + commit flow
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- GROUP BY/HAVING errors ---"
 
 oracle "bad_group_by_no_effect" "
@@ -1782,9 +1782,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad group');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 48: Sequential reset errors don't break checkout
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multiple bad resets ---"
 
 oracle "three_bad_resets_then_good" "
@@ -1818,9 +1818,9 @@ SELECT dolt_reset('bogus');
 SELECT dolt_reset('--hard','HEAD');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 49: Error during branch creation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- branch creation errors ---"
 
 oracle "create_branch_bad_start_point" "
@@ -1850,9 +1850,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','main after dup');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 50: Many-error stress
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- many-error stress ---"
 
 oracle "twenty_mixed_errors_then_success" "
@@ -1902,9 +1902,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','good3');
 " "SELECT message FROM dolt_log WHERE message LIKE 'good%' ORDER BY message;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 51: Error + fresh CREATE after DROP
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop + error + recreate ---"
 
 oracle "drop_error_recreate_different_schema" "
@@ -1920,9 +1920,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','recreate schema');
 " "SELECT id, v, extra FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 52: Errors during merge-prep
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- errors during merge prep ---"
 
 oracle "error_before_noff_merge" "
@@ -1960,9 +1960,9 @@ SELECT dolt_revert('bogus');
 SELECT dolt_merge('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 53: Errors after dolt_tag succeeds
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- errors after tag success ---"
 
 oracle "errors_after_tag_tag_still_listed" "
@@ -1977,9 +1977,9 @@ SELECT dolt_tag('v2','HEAD');
 SELECT dolt_revert('bogus');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 54: Errors + sqlite-style constraints
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- errors + constraint variants ---"
 
 oracle "default_value_after_error" "
@@ -2004,9 +2004,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after check fail');
 " "SELECT id, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 55: Error at script start (no base commit yet)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- error before first commit ---"
 
 oracle "bad_select_before_first_commit" "
@@ -2028,9 +2028,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','first');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 56: Error chain then reset to clean state
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- error chain recovery via reset ---"
 
 oracle "error_chain_then_reset_hard_head" "
@@ -2048,9 +2048,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','clean after reset');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 57: Divergent branches each errored, merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- divergent errored branches + merge ---"
 
 oracle "both_branches_had_errors_then_merge" "
@@ -2073,9 +2073,9 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 58: Errors with numeric edge values
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- numeric edge error flows ---"
 
 oracle "zero_division_error_doesnt_break_vc" "
@@ -2100,9 +2100,9 @@ SELECT dolt_checkout('bogus');
 SELECT dolt_reset('--hard','bogus');
 " "SELECT id, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 59: Error right after branch creation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- error right after branch create ---"
 
 oracle "error_immediately_after_new_branch" "
@@ -2120,9 +2120,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('new');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 60: Error during reset-and-recommit loop
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset/commit loop errors ---"
 
 oracle "reset_commit_loop_with_errors" "
@@ -2145,9 +2145,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','newer c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 61: Syntax errors don't poison subsequent work
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- syntax error recovery ---"
 
 oracle "syntax_error_then_ok_insert" "
@@ -2172,9 +2172,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after syntax err');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 62: DELETE on nonexistent / restrictive flow
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DELETE flow errors ---"
 
 oracle "delete_from_nonexistent_then_ops" "
@@ -2199,9 +2199,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad delete where');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 63: Error during branch + merge chain
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- error during branch+merge chain ---"
 
 oracle "errors_scattered_through_merge_chain" "
@@ -2226,9 +2226,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('b2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 64: Tag error recovery deeper
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag error deeper ---"
 
 oracle "tag_errors_tags_dolt_tags_stable" "
@@ -2246,9 +2246,9 @@ SELECT dolt_tag('good2','HEAD');
 SELECT dolt_tag('-d','nonexistent');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 65: DELETE after DROP TABLE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DELETE after DROP TABLE ---"
 
 oracle "delete_after_drop_other_survives" "
@@ -2265,9 +2265,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after drop and bad delete');
 " "SELECT id, v FROM keeper ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 66: Staged DDL + failed commit + recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- staged DDL + failed commit ---"
 
 oracle "staged_create_failed_commit_recovery" "
@@ -2283,9 +2283,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','now with data');
 " "SELECT x FROM new;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 67: Errors with explicit column names in INSERT
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- explicit col INSERT errors ---"
 
 oracle "insert_wrong_col_name_then_correct" "
@@ -2299,9 +2299,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad col');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 68: Branch errors don't leak stale state
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- branch stale state probes ---"
 
 oracle "create_branch_then_bad_then_merge_ok" "
@@ -2320,9 +2320,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 69: GROUP/ORDER errors don't break commits
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- GROUP/ORDER error probes ---"
 
 oracle "order_by_nonexistent_col_then_commit" "
@@ -2336,9 +2336,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad order');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 70: Insert failure doesn't poison transaction (autocommit)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- row-level error probes ---"
 
 oracle "duplicate_pk_insert_others_succeed" "
@@ -2366,9 +2366,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after check errs');
 " "SELECT id, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 71: Errors referencing VC vtables
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- VC vtable query error probes ---"
 
 oracle "bad_dolt_log_filter_then_commit" "
@@ -2415,9 +2415,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 72: Successive merges with errors between them
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- inter-merge error probes ---"
 
 oracle "errors_between_three_merges" "
@@ -2462,9 +2462,9 @@ SELECT dolt_cherry_pick('bogus');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 73: Error during diff/status inspection
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- diff/status error probes ---"
 
 oracle "bad_diff_then_commit" "
@@ -2478,9 +2478,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 74: Error propagation across nested calls
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- nested call error probes ---"
 
 oracle "nested_bad_select_doesnt_break_vc" "
@@ -2494,9 +2494,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 75: Error recovery with many-branch fan-in
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- fan-in with errors probes ---"
 
 oracle "errors_during_fan_in_merges" "
@@ -2526,9 +2526,9 @@ SELECT dolt_merge('bogus2');
 SELECT dolt_merge('b3');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 76: Row state after error chain
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- row state after error chains ---"
 
 oracle "row_count_invariant_through_errors" "
@@ -2556,9 +2556,9 @@ UPDATE t SET n=n WHERE bogus_col=1;
 DELETE FROM t WHERE nonexistent_col=1;
 " "SELECT sum(n) AS s FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 77: Partial batch inserts with errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- partial batch insert error probes ---"
 
 oracle "insert_batch_with_one_duplicate_pk" "
@@ -2588,9 +2588,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after batch');
 " "SELECT id, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 78: SAVEPOINT error flows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- SAVEPOINT error flow probes ---"
 
 oracle "rollback_to_nonexistent_savepoint" "
@@ -2621,9 +2621,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad release');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 79: Error inside REPLACE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- REPLACE error flow probes ---"
 
 oracle "replace_with_check_violation_others_survive" "
@@ -2638,9 +2638,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after replace err');
 " "SELECT id, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 80: Errors during txn with mixed dolt ops
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- txn + mixed error probes ---"
 
 oracle "txn_with_bogus_cherry_pick_then_commit" "
@@ -2671,9 +2671,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 81: Errors with JSON columns
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- JSON error probes ---"
 
 oracle "json_extract_bad_path_then_ok_commit" "
@@ -2687,9 +2687,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad json');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 82: Repeat DROP of already-dropped table
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- repeat drop probes ---"
 
 oracle "drop_same_table_twice" "
@@ -2706,9 +2706,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after double drop');
 " "SELECT id FROM other ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 83: Long sequence of mixed errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- long mixed error sequence probes ---"
 
 oracle "fifteen_errors_then_one_success" "
@@ -2736,9 +2736,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','success');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 84: Error during checkout of detached / invalid refs
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- bad checkout target probes ---"
 
 oracle "checkout_hash_prefix_then_ok" "
@@ -2767,9 +2767,9 @@ SELECT dolt_checkout('not_a_branch');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 85: RENAME errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- rename error probes ---"
 
 oracle "rename_col_that_does_not_exist_then_ok" "
@@ -2807,9 +2807,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after bad rename');
 " "SELECT id FROM t1 ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 86: Errors on empty / fresh database
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- empty db error probes ---"
 
 oracle "merge_on_empty_repo" "
@@ -2829,9 +2829,9 @@ SELECT dolt_commit('-m','c1');
 SELECT dolt_tag('now','HEAD');
 " "SELECT count(*) FROM dolt_tags;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 87: Errors during sequential merges
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- sequential merge error probes ---"
 
 oracle "bad_then_good_then_bad_then_good_merge" "
@@ -2855,9 +2855,9 @@ SELECT dolt_merge('bogus2');
 SELECT dolt_merge('b2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 88: Errors with DROP INDEX / DROP COLUMN
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop index/col error probes ---"
 
 oracle "drop_column_nonexistent_then_ok" "
@@ -2882,9 +2882,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after drop idx');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 89: Errors after partial cherry-pick attempts
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- partial cherry-pick errors ---"
 
 oracle "cherry_pick_bad_then_good_chain" "
@@ -2914,9 +2914,9 @@ SELECT dolt_revert('bogus1');
 SELECT dolt_revert('HEAD');
 SELECT dolt_revert('bogus2');
 " "SELECT id, v FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 90: Set operation errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- set op error probes ---"
 
 oracle "bad_union_then_ok_commit" "
@@ -2930,9 +2930,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 91: Error between successive commits
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- error between commits ---"
 
 oracle "error_right_after_commit_then_commit" "
@@ -2950,9 +2950,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 92: Error on UPDATE with bad subquery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE with bad subquery probes ---"
 
 oracle "update_subquery_bogus_col_then_ok" "
@@ -2966,9 +2966,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 93: Error on CAST / arithmetic
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- arithmetic error probes ---"
 
 oracle "divide_by_zero_update_skipped" "
@@ -2982,9 +2982,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 94: Error with nonexistent tag in reset
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- reset to nonexistent tag ---"
 
 oracle "reset_to_deleted_tag_then_ok" "
@@ -3003,9 +3003,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 95: Error on merge_base bogus branches
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- bad merge_base args ---"
 
 oracle "merge_base_bogus_then_ok" "
@@ -3020,9 +3020,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 96: Error on INSERT into view
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT into view probes ---"
 
 oracle "insert_into_view_then_ok" "
@@ -3037,9 +3037,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 97: Error on DROP VIEW nonexistent
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop view errors ---"
 
 oracle "drop_nonexistent_view_then_ok" "
@@ -3053,9 +3053,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 98: Error storm on merge operations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge error storm ---"
 
 oracle "ten_bogus_merges_then_real" "
@@ -3081,9 +3081,9 @@ SELECT dolt_merge('b10');
 SELECT dolt_merge('feat');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 99: Error on wrong arity dolt functions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- wrong arity probes ---"
 
 oracle "hashof_no_args_then_ok" "
@@ -3097,9 +3097,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 100: SAVEPOINT + dolt_add parity
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- savepoint add parity ---"
 
 oracle "savepoint_add_releases_savepoint" "
@@ -3112,9 +3112,9 @@ INSERT INTO t VALUES(2,'dirty');
 SELECT dolt_add('.');
 ROLLBACK TO sp1;
 " "SELECT 'ROWS', count(*) FROM t;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 100: Cherry-pick with no-op commit
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- cherry-pick no-op probes ---"
 
 oracle "cherry_pick_then_cherry_pick_noop" "
@@ -3134,9 +3134,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 101: ALTER errors during merge prep
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- alter errors ---"
 
 oracle "alter_bad_keyword_then_ok_commit" "
@@ -3161,9 +3161,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after dup col');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 102: DROP INDEX cases
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop index probes ---"
 
 oracle "drop_index_twice_then_ok" "
@@ -3179,9 +3179,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 103: Window function with syntax errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- bad window funcs ---"
 
 oracle "bad_window_partition_then_ok" "
@@ -3195,9 +3195,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 104: Errors with UNION of different-arity selects
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UNION arity error probes ---"
 
 oracle "union_arity_mismatch_then_ok" "
@@ -3211,9 +3211,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 105: Invalid CTE then ok
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- CTE error probes ---"
 
 oracle "bad_cte_self_ref_then_ok" "
@@ -3227,9 +3227,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 106: Error during JOIN on nonexistent col
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- JOIN errors ---"
 
 oracle "join_on_nonexistent_col_then_ok" "
@@ -3245,9 +3245,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM a ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 107: Error storms around dolt_add
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_add error probes ---"
 
 oracle "many_bad_adds_then_ok" "
@@ -3260,9 +3260,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','survived');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 108: Errors in dolt_log-aware workflows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- log-aware workflow errors ---"
 
 oracle "log_query_after_bad_ref_check" "
@@ -3278,9 +3278,9 @@ INSERT INTO t VALUES(3);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c3');
 " "SELECT count(*) FROM dolt_log;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 109: GROUP_CONCAT error flows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- GROUP_CONCAT error probes ---"
 
 oracle "group_concat_on_nonexistent_col_then_ok" "
@@ -3294,9 +3294,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 110: Self-join error flows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- self-join error probes ---"
 
 oracle "self_join_bogus_alias_then_ok" "
@@ -3310,9 +3310,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 111: VIEW chain error
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- view chain error probes ---"
 
 oracle "drop_base_view_then_query_dependent_then_ok" "
@@ -3330,9 +3330,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','restored');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 112: Scalar subquery returning multiple rows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- scalar subquery multiple rows probes ---"
 
 oracle "scalar_subquery_returning_multiple_rows_then_ok" "
@@ -3346,9 +3346,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 113: Errors during merge with many branches
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge errors with many branches ---"
 
 oracle "errors_across_5_branch_merge_chain" "
@@ -3379,9 +3379,9 @@ SELECT dolt_merge('c');
 SELECT dolt_merge('bogus3');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 114: Transaction errors (ROLLBACK in autocommit)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- txn error probes ---"
 
 oracle "rollback_outside_txn_then_ok" "
@@ -3406,9 +3406,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 115: Errors with nested JOINs
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- nested JOIN errors ---"
 
 oracle "nested_join_bogus_table_then_ok" "
@@ -3424,9 +3424,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM a;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 116: Errors in CREATE INDEX
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- create index error probes ---"
 
 oracle "create_index_on_nonexistent_col_then_ok" "
@@ -3450,9 +3450,9 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 117: DATE format error flows
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DATE error probes ---"
 
 oracle "bad_date_value_then_ok" "
@@ -3466,9 +3466,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, d FROM t WHERE id IN (1,3) ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 118: UPDATE with bad subquery then good
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE subquery error chain ---"
 
 oracle "update_bogus_subquery_table_then_ok" "
@@ -3482,9 +3482,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 119: DELETE errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DELETE error probes ---"
 
 oracle "delete_with_bogus_subquery_table_then_ok" "
@@ -3498,9 +3498,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 120: Errors during schema change chain
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- schema change error chain ---"
 
 oracle "alter_add_drop_alter_chain_with_errors" "
@@ -3517,9 +3517,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 121: Tag errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag error probes ---"
 
 oracle "tag_empty_name_then_ok" "
@@ -3531,9 +3531,9 @@ SELECT dolt_tag('','HEAD');
 SELECT dolt_tag('good','HEAD');
 " "SELECT count(*) FROM dolt_tags WHERE tag_name='good';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 122: Error inside repeated merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- repeated merge errors ---"
 
 oracle "merge_twice_bogus_twice_real" "
@@ -3552,9 +3552,9 @@ SELECT dolt_merge('feat');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 123: Errors with DROP TABLE chain
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- drop chain probes ---"
 
 oracle "drop_table_chain_with_errors" "
@@ -3576,9 +3576,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','after chain');
 " "SELECT id FROM c ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 124: Errors during hash-of queries
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- hashof error probes ---"
 
 oracle "hashof_too_many_args_then_ok" "
@@ -3592,9 +3592,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 125: Long error streak in explicit txn
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- txn long error streak ---"
 
 oracle "txn_many_errors_then_commit" "
@@ -3616,9 +3616,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 126: Errors around VIEW creation
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- view create errors ---"
 
 oracle "create_view_dup_name_then_ok" "
@@ -3644,8 +3644,8 @@ INSERT INTO t VALUES(2);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM v_good;"
-# Section 127: UPDATE with invalid SET expression
-# ═══════════════════════════════════════════════════════════════════
+
+
 echo "--- UPDATE invalid SET probes ---"
 
 oracle "update_set_nonexistent_col_assigned_then_ok" "
@@ -3659,9 +3659,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 128: INSERT with wrong arity
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT arity probes ---"
 
 oracle "insert_too_few_values_then_ok" "
@@ -3686,9 +3686,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 129: WHERE with bogus function
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- WHERE bogus func ---"
 
 oracle "where_bogus_func_then_ok_insert" "
@@ -3702,9 +3702,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 130: CREATE TABLE with bad column list
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- CREATE TABLE bad cols ---"
 
 oracle "create_table_bad_syntax_then_good" "
@@ -3719,9 +3719,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM good;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 131: Nested transaction confusion
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- nested txn probes ---"
 
 oracle "begin_begin_then_ok" "
@@ -3737,9 +3737,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 132: Error during CTE
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- CTE error probes ---"
 
 oracle "cte_with_bogus_inner_ref_then_ok" "
@@ -3753,9 +3753,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 133: Errors during add specific tables
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_add specific errors ---"
 
 oracle "add_mix_of_good_bad_tables_then_commit_a" "
@@ -3771,9 +3771,9 @@ SELECT dolt_add('t1','nonexistent','t2');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 134: Errors after dolt_checkout to existing
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- checkout existing probes ---"
 
 oracle "checkout_existing_twice_with_errors" "
@@ -3796,9 +3796,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 135: Errors with mixed DDL
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- mixed DDL error probes ---"
 
 oracle "ddl_mix_with_errors_then_ok" "
@@ -3814,10 +3814,10 @@ INSERT INTO t VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════
-# Section 136: Savepoint edge errors (post-#598)
-# ═══════════════════════════════════════════════════════════════════
+
+
+
+
 echo "--- savepoint edge error probes ---"
 
 oracle "rollback_to_released_savepoint_then_ok" "
@@ -3852,9 +3852,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 137: BETWEEN errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- BETWEEN error probes ---"
 
 oracle "between_with_nonexistent_col_then_ok" "
@@ -3868,9 +3868,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 138: Mixed error severity
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- mixed severity error probes ---"
 
 oracle "syntax_error_semantic_error_then_ok" "
@@ -3885,9 +3885,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 139: Empty commit message variations
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- empty message probes ---"
 
 oracle "commit_empty_message_then_good" "
@@ -3898,9 +3898,9 @@ SELECT dolt_commit('-m','');
 SELECT dolt_commit('-m','good');
 " "SELECT count(*) FROM dolt_log WHERE message IN ('good','');"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 140: Multiple table drops with mixed validity
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi drop mixed ---"
 
 oracle "drop_three_tables_mix_bogus" "
@@ -3920,9 +3920,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM c ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 141: Errors after successful merge
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- post-merge errors ---"
 
 oracle "errors_after_merge_then_ok_commit" "
@@ -3945,9 +3945,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 142: dolt_merge_base errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge_base errors ---"
 
 oracle "merge_base_both_bogus_then_ok" "
@@ -3961,9 +3961,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 143: INSERT with wrong types then ok
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT wrong type ---"
 
 oracle "insert_wrong_type_then_ok" "
@@ -3977,9 +3977,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, n FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 144: Tag-related errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag error chain ---"
 
 oracle "tag_duplicate_delete_same_tag_chain" "
@@ -3993,9 +3993,9 @@ SELECT dolt_tag('-d','v1');
 SELECT dolt_tag('-d','v1');
 SELECT dolt_tag('v2','HEAD');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 145: Revert errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- revert error probes ---"
 
 oracle "revert_on_empty_repo_then_ok" "
@@ -4017,9 +4017,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 146: Error during merge rollback
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge rollback error probes ---"
 
 oracle "merge_conflict_then_extra_bogus_then_reset" "
@@ -4044,9 +4044,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 147: Errors with INSERT into view
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- view INSERT errors ---"
 
 oracle "insert_into_view_agg_then_ok" "
@@ -4061,9 +4061,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT sum(v) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 148: DELETE without WHERE then error
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DELETE all error probes ---"
 
 oracle "delete_all_then_bogus_then_commit" "
@@ -4078,15 +4078,15 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 149: FK violation error recovery
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- FK violation recovery ---"
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 150: INSERT with expression errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT expr error probes ---"
 
 oracle "insert_with_bogus_func_expression_then_ok" "
@@ -4100,9 +4100,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 151: Branches conflict on checkout
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- branch checkout error ---"
 
 oracle "checkout_then_branch_delete_self_error" "
@@ -4119,9 +4119,9 @@ SELECT dolt_checkout('main');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 152: Repeated hashof errors
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- hashof error chain ---"
 
 oracle "hashof_chain_of_bad_refs_then_ok" "
@@ -4138,9 +4138,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 153: Concurrent-style conflict from bad checkout
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- checkout conflict recovery ---"
 
 oracle "bad_checkout_uncommitted_work_preserved" "
@@ -4153,8 +4153,8 @@ SELECT dolt_checkout('nonexistent');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','kept');
 " "SELECT id FROM t ORDER BY id;"
-# Section 154: Errors with recursive CTE
-# ═══════════════════════════════════════════════════════════════════
+
+
 echo "--- recursive CTE error probes ---"
 
 oracle "recursive_cte_self_ref_bogus_col_then_ok" "
@@ -4168,9 +4168,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 155: Errors during ORDER BY expressions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- ORDER BY error probes ---"
 
 oracle "order_by_bogus_expression_then_ok" "
@@ -4184,9 +4184,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 156: Error on window function with bad OVER clause
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- window bad OVER ---"
 
 oracle "window_bad_over_clause_then_ok" "
@@ -4200,9 +4200,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 157: Errors inside nested transactions
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- nested txn error probes ---"
 
 oracle "savepoint_error_storm_then_clean_commit" "
@@ -4222,9 +4222,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 158: INSERT INTO nonexistent cols
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- INSERT bogus cols ---"
 
 oracle "insert_targeting_bogus_col_then_ok" "
@@ -4238,9 +4238,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 159: Merge with bogus commit-hash ref
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge bogus hash probes ---"
 
 oracle "merge_bogus_hash_like_ref_then_ok" "
@@ -4258,15 +4258,15 @@ SELECT dolt_merge('0000000000000000000000000000000000000000');
 SELECT dolt_merge('feat');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 160: GC during uncommitted work
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- gc edge probes ---"
 
-# NOTE: gc_after_reset_then_commit omitted — doltlite's dolt_gc()
-# returns a human-readable status string ("N chunks removed, M kept"),
-# Dolt returns an empty row. Diverges on output format only; not a
-# real behavioral divergence.
+
+
+
+
 oracle "reset_hard_then_commit_no_gc" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
@@ -4281,9 +4281,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 161: Errors on multi-statement boundaries
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- multi-stmt error boundary ---"
 
 oracle "unterminated_statement_then_ok" "
@@ -4297,9 +4297,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 162: Tag error deep sequence
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag deep error sequence ---"
 
 oracle "tag_error_storm_then_good" "
@@ -4316,9 +4316,9 @@ SELECT dolt_tag('-d','v1');
 SELECT dolt_tag('v3','HEAD');
 " "SELECT tag_name FROM dolt_tags ORDER BY tag_name;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 163: UPDATE + DELETE bad chain
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE+DELETE bad chain ---"
 
 oracle "update_delete_bogus_interleaved_then_ok" "
@@ -4333,9 +4333,9 @@ DELETE FROM t WHERE id=3;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# Section 164: Merge base bad args deeper
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- merge_base deeper errors ---"
 
 oracle "merge_base_same_branch_twice_after_ff_merge" "
@@ -4351,9 +4351,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM dolt_log;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 165: Insert with expression error sources
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- insert expr error source ---"
 
 oracle "insert_scalar_bogus_subquery_then_ok" "
@@ -4367,9 +4367,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 166: Errors around dolt_diff
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- dolt_diff errors ---"
 
 oracle "dolt_diff_filter_bogus_col_then_ok" "
@@ -4383,9 +4383,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 167: HAVING with bogus col then ok
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- HAVING errors ---"
 
 oracle "having_bogus_col_then_ok" "
@@ -4399,9 +4399,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 168: Errors on VIEW referring to dropped table
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- view after dropped source ---"
 
 oracle "view_references_dropped_source_then_ok" "
@@ -4418,9 +4418,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 169: Error inside conflict state rollback flow
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- conflict state rollback error ---"
 
 oracle "conflict_rolled_back_then_error_storm_then_ok" "
@@ -4445,9 +4445,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','post');
 " "SELECT id, v FROM t ORDER BY id;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 170: Tag on deleted branch
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- tag on deleted branch ---"
 
 oracle "tag_after_branch_deleted_then_ok" "
@@ -4466,9 +4466,9 @@ SELECT dolt_tag('v1','feat');
 SELECT dolt_tag('v1','HEAD');
 " "SELECT count(*) FROM dolt_tags WHERE tag_name='v1';"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 171: UPDATE + CTE bogus
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- UPDATE cte bogus ---"
 
 oracle "update_via_bogus_cte_subquery_then_ok" "
@@ -4482,9 +4482,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, v FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 172: DELETE from VIEW
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- DELETE from view ---"
 
 oracle "delete_from_view_then_delete_from_table" "
@@ -4499,9 +4499,9 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT count(*) FROM t;"
 
-# ═══════════════════════════════════════════════════════════════════
-# Section 173: Rename non-existing col in nested ALTER
-# ═══════════════════════════════════════════════════════════════════
+
+
+
 echo "--- ALTER rename non-existing ---"
 
 oracle "alter_rename_bogus_col_then_real" "
@@ -4515,10 +4515,10 @@ INSERT INTO t(id,val) VALUES(2,'b');
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m','c2');
 " "SELECT id, val FROM t ORDER BY id;"
-# ═══════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════
-# Results
-# ═══════════════════════════════════════════════════════════════════
+
+
+
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then

@@ -330,10 +330,10 @@ int prollyNodeBuilderAdd(
   }
 
 
-  /* Guard against `NULL + 0` pointer arithmetic — the builder's
-  ** buffers are lazily allocated and stay NULL until the first
-  ** non-empty byte, and `p + 0` on a null pointer is UB per
-  ** C11 6.5.6/8 even though the value is never dereferenced. */
+
+
+
+
   if( nKey > 0 ){
     memcpy(b->pKeyBuf + b->nKeyBytes, pKey, nKey);
     b->nKeyBytes += nKey;

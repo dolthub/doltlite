@@ -1,11 +1,11 @@
-/* Pager API shim. Doltlite stores data in a content-addressed chunk
-** store, not 4k pages, so the stock SQLite pager layer has nothing to
-** do. This file provides a drop-in replacement for every sqlite3Pager*
-** entry point. The shim dispatches by sniffing a magic field on the
-** Pager struct: shimmed pagers have PAGER_SHIM_MAGIC and route to
-** no-op / bookkeeping ops, stock pagers (temp files, attached
-** :memory:, plain-sqlite ATTACHes) fall through to origPagerOps which
-** calls the real SQLite implementation. */
+
+
+
+
+
+
+
+
 
 #ifdef DOLTLITE_PROLLY
 
@@ -446,10 +446,10 @@ static const PagerOps origPagerOps = {
 #endif
 };
 
-/* Dispatch table selector. Stock SQLite Pagers never set the magic
-** field, so anything without it gets the real pager ops — this is
-** what lets attached stock-sqlite databases coexist with doltlite's
-** main db in the same sqlite3 handle. */
+
+
+
+
 static inline const PagerOps *getPagerOps(const Pager *p){
   if( p && ((const PagerShim*)p)->magic == PAGER_SHIM_MAGIC ){
     return ((const PagerShim*)p)->pOps;
@@ -824,10 +824,10 @@ struct DoltliteBackup {
   int done;
 };
 
-/* Doltlite's backup can't use SQLite's page-by-page copy — shimmed
-** pagers return no pages. Instead we copy the chunk store file
-** byte-for-byte. Only the main db (iDb == 0) is doltlite-backed;
-** attached stock databases fall through to the real backup API. */
+
+
+
+
 sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
                                      sqlite3 *pSrc, const char *zSrcDb){
   DoltliteBackup *p;

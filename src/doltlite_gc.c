@@ -67,12 +67,12 @@ static int gcChildCb(void *ctx, const ProllyHash *pHash){
   return gcQueuePush(q, pHash);
 }
 
-/* Mark phase: seed from every branch head, working-set, and tag
-** (any chunk that could be navigated to via a ref). refsHash is
-** also pinned because the refs blob itself lives in the chunk store.
-** Walk children via doltliteEnumerateChunkChildren — a missing case
-** in that classifier silently drops live chunks, corrupting the
-** store after sweep. */
+
+
+
+
+
+
 static int gcMarkReachable(
   ChunkStore *cs,
   ProllyHashSet *marked
@@ -259,9 +259,9 @@ static int gcRewriteFile(
   ChunkStore manifestCs;
   int rc = SQLITE_OK;
 
-  /* Deterministic crash injection for GC rewrite durability tests.
-  ** DOLTLITE_CRASH_GC_WRITE=N crashes at the Nth write/sync/rename
-  ** step in the compaction rewrite path. */
+
+
+
 #ifdef SQLITE_TEST
   {
     static int crashGcTarget = -2;
@@ -311,10 +311,10 @@ static int gcRewriteFile(
   csSerializeManifest(&manifestCs, manifest);
 
 
-  /* Write to a sibling tmp file then atomic rename. Has to close the
-  ** original fd before rename() on platforms where an open fd pins
-  ** the old inode, and the WAL buffer is dropped because its chunks
-  ** are now inlined into the compacted data region. */
+
+
+
+
   if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
     char *zTmp = sqlite3_mprintf("%s-gc-tmp", cs->zFilename);
     if( !zTmp ){
@@ -387,20 +387,20 @@ static int gcRewriteFile(
 
         GC_CRASH_CHECK();
         if( rename(zTmp, cs->zFilename)!=0 ){
-          /* Rename failed — original file still exists on disk
-          ** but cs->pFile was already closed. Reopen it so the
-          ** session doesn't crash on subsequent operations. */
+
+
+
           int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
           (void)sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename,
                                     &cs->pFile, reopenFlags, 0);
           rc = SQLITE_IOERR;
         }
 
-        /* Fsync the parent directory so the rename is durable.
-        ** Without this, a kernel crash after rename() returns
-        ** can lose the directory entry — the old file reappears
-        ** and the compacted file is gone, losing the database.
-        ** Windows NTFS journals metadata, so this is Unix-only. */
+
+
+
+
+
 #if !defined(_WIN32) && !defined(WIN32)
         if( rc==SQLITE_OK ){
           char *zDir = sqlite3_mprintf("%s", cs->zFilename);

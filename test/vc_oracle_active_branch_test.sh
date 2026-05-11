@@ -1,13 +1,13 @@
 #!/bin/bash
-#
-# Version-control oracle test: active_branch()
-#
-# Compares active_branch() output from doltlite and Dolt across
-# branch operations: default branch, checkout, branch creation,
-# and checkout back.
-#
-# Usage: bash vc_oracle_active_branch_test.sh [path/to/doltlite] [path/to/dolt]
-#
+
+
+
+
+
+
+
+
+
 
 set -u
 set -o pipefail
