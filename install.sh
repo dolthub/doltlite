@@ -56,31 +56,59 @@ if [ -z "$VERSION" ]; then
 fi
 VERSION_NUM="${VERSION#v}"
 
-ZIP_NAME="doltlite-tools-${TARGET}-${VERSION_NUM}.zip"
-ZIP_URL="https://github.com/dolthub/doltlite/releases/download/${VERSION}/${ZIP_NAME}"
+# INSTALL_DIR is the bin destination (default /usr/local/bin); PREFIX is
+# its parent — that's where include/ and lib/ land. Mirrors `make install`.
+PREFIX="$(dirname "${INSTALL_DIR}")"
+INCLUDE_DIR="${PREFIX}/include"
+LIB_DIR="${PREFIX}/lib"
+
+# Pick the shared-library extension per platform.
+case "$PLATFORM" in
+  linux) SHARED_EXT=".so" ;;
+  osx)   SHARED_EXT=".dylib" ;;
+esac
+
+TOOLS_ZIP="doltlite-tools-${TARGET}-${VERSION_NUM}.zip"
+LIB_ZIP="doltlite-lib-${TARGET}-${VERSION_NUM}.zip"
+BASE_URL="https://github.com/dolthub/doltlite/releases/download/${VERSION}"
 
 TMP_DIR="$(mktemp -d -t doltlite-install-XXXXXX)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-echo "Downloading ${ZIP_URL}..."
-curl -fsSL -o "${TMP_DIR}/${ZIP_NAME}" "${ZIP_URL}"
+fetch() {
+  local name="$1"
+  echo "Downloading ${BASE_URL}/${name}..."
+  curl -fsSL -o "${TMP_DIR}/${name}" "${BASE_URL}/${name}"
+  unzip -q -d "${TMP_DIR}" "${TMP_DIR}/${name}"
+}
 
-unzip -q -d "${TMP_DIR}" "${TMP_DIR}/${ZIP_NAME}"
-EXTRACTED_DIR="${TMP_DIR}/doltlite-tools-${TARGET}-${VERSION_NUM}"
+fetch "${TOOLS_ZIP}"
+fetch "${LIB_ZIP}"
 
-if [ ! -d "$EXTRACTED_DIR" ]; then
-  echo "doltlite: archive layout unexpected (missing ${EXTRACTED_DIR})" >&2
-  exit 1
-fi
+TOOLS_DIR="${TMP_DIR}/doltlite-tools-${TARGET}-${VERSION_NUM}"
+LIB_SRC_DIR="${TMP_DIR}/doltlite-lib-${TARGET}-${VERSION_NUM}"
 
-mkdir -p "${INSTALL_DIR}"
+mkdir -p "${INSTALL_DIR}" "${INCLUDE_DIR}" "${LIB_DIR}"
+
 for bin in doltlite doltlite-remotesrv; do
-  src="${EXTRACTED_DIR}/${bin}"
+  src="${TOOLS_DIR}/${bin}"
   [ -f "$src" ] || continue
-  dst="${INSTALL_DIR}/${bin}"
-  install -m 0755 "$src" "$dst"
-  echo "Installed ${dst}"
+  install -m 0755 "$src" "${INSTALL_DIR}/${bin}"
+  echo "Installed ${INSTALL_DIR}/${bin}"
 done
+
+if [ -f "${LIB_SRC_DIR}/doltlite.h" ]; then
+  install -m 0644 "${LIB_SRC_DIR}/doltlite.h" "${INCLUDE_DIR}/doltlite.h"
+  echo "Installed ${INCLUDE_DIR}/doltlite.h"
+fi
+if [ -f "${LIB_SRC_DIR}/libdoltlite.a" ]; then
+  install -m 0644 "${LIB_SRC_DIR}/libdoltlite.a" "${LIB_DIR}/libdoltlite.a"
+  echo "Installed ${LIB_DIR}/libdoltlite.a"
+fi
+if [ -f "${LIB_SRC_DIR}/libdoltlite${SHARED_EXT}" ]; then
+  install -m 0755 "${LIB_SRC_DIR}/libdoltlite${SHARED_EXT}" "${LIB_DIR}/libdoltlite${SHARED_EXT}"
+  echo "Installed ${LIB_DIR}/libdoltlite${SHARED_EXT}"
+fi
 
 cat <<EOF
 

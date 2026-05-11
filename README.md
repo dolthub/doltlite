@@ -18,9 +18,14 @@ can be embedded in any language enabling local-first use cases for Dolt.
 
 Prebuilt binaries: [github.com/dolthub/doltlite/releases](https://github.com/dolthub/doltlite/releases).
 
-### macOS (arm64) / Linux (x86_64)
+Each install method places the same set of files (paths shown for `/usr/local`):
 
-Installs `doltlite` and `doltlite-remotesrv` to `/usr/local/bin`.
+- `bin/doltlite`, `bin/doltlite-remotesrv` — the CLI shell and remote sync server
+- `include/doltlite.h` — header for embedding
+- `lib/libdoltlite.a` — static library
+- `lib/libdoltlite.{so,dylib}` — shared library
+
+### macOS (arm64) / Linux (x86_64)
 
 ```
 sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
@@ -35,7 +40,7 @@ wget ${BASE}/libdoltlite0_${VER}_amd64.deb ${BASE}/doltlite_${VER}_amd64.deb
 sudo dpkg -i libdoltlite0_*.deb doltlite_*.deb
 ```
 
-Add `libdoltlite-dev_${VER}_amd64.deb` to compile against `<doltlite.h>` or `libdoltlite.a`.
+Add `libdoltlite-dev_${VER}_amd64.deb` for the header and static library.
 
 ### Windows
 
