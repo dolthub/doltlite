@@ -14,7 +14,7 @@ class Doltlite < Formula
     strategy :github_latest
   end
 
-  depends_on "zlib"
+  uses_from_macos "zlib"
 
   def install
     mkdir "build" do
