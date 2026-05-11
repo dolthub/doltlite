@@ -36,10 +36,26 @@ jobs:
     - name: Package autoconf source
       run: |
         VERSION=${GITHUB_REF_NAME#v}
+        # All files the autosetup-driven configure + make pipeline needs to
+        # build doltlite, doltlite-remotesrv, and libdoltlite from a clean
+        # extracted tarball with no git history. Validated by running
+        # `./configure && make doltlite doltlite-remotesrv doltlite-lib`
+        # against a tarball with exactly this file list.
+        #
+        # Stamp DOLTLITE_VERSION into a sidecar file so main.mk's
+        # `$(shell git describe ...)` fallback doesn't end up as "dev"
+        # when the tarball is extracted outside git.
+        echo "v${VERSION}" > .dolt_release_version
         tar czf doltlite-autoconf-${VERSION}.tar.gz \
           --transform "s,^,doltlite-autoconf-${VERSION}/," \
-          configure Makefile.in main.mk src/ ext/ \
-          sqlite3.c sqlite3.h
+          configure Makefile.in Makefile.linux-generic Makefile.msc main.mk \
+          auto.def VERSION manifest manifest.tags manifest.uuid \
+          pragma.h magic.txt lempar.c \
+          sqlite3.pc.in sqlite.pc.in \
+          src/ ext/ tool/ autosetup/ autoconf/ \
+          sqlite3.c sqlite3.h sqlite3ext.h sqlite3session.h \
+          .dolt_release_version
+        rm .dolt_release_version
 
     - name: Package wasm distribution
       run: |
