@@ -64,6 +64,17 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x64
+            pkg_arch: amd64
+            deb_multiarch: x86_64-linux-gnu
+            nfpm_arch: x86_64
+            ext: ""
+            lib_ext: ".so"
+            static_ext: ".a"
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+            pkg_arch: arm64
+            deb_multiarch: aarch64-linux-gnu
+            nfpm_arch: arm64
             ext: ""
             lib_ext: ".so"
             static_ext: ".a"
@@ -163,6 +174,40 @@ jobs:
           7z a "${DIR}.zip" "${DIR}"
         fi
 
+    # Debian packages — built only on Linux. nfpm reads the per-package
+    # yaml configs in packaging/nfpm/, substitutes ${VERSION} and ${PKG_ARCH}
+    # and ${DEB_HOST_MULTIARCH}, and emits .deb files. We attach them to
+    # the GitHub release alongside the tarballs so users can install with
+    # `wget … && sudo dpkg -i doltlite_*.deb`.
+    - name: Install nfpm (Linux)
+      if: startsWith(matrix.target, 'linux-')
+      run: |
+        NFPM_VERSION=2.43.0
+        curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_${{ matrix.nfpm_arch }}.tar.gz" | sudo tar -xz -C /usr/local/bin nfpm
+        nfpm --version
+
+    - name: Build Debian packages (Linux)
+      if: startsWith(matrix.target, 'linux-')
+      shell: bash
+      env:
+        VERSION: ${{ github.ref_name }}
+        PKG_ARCH: ${{ matrix.pkg_arch }}
+        DEB_HOST_MULTIARCH: ${{ matrix.deb_multiarch }}
+      run: |
+        # nfpm reads VERSION from env; strip the leading "v" so we ship
+        # doltlite_0.10.3_amd64.deb, not doltlite_v0.10.3_amd64.deb.
+        export VERSION="${VERSION#v}"
+        mkdir -p dist
+        # nfpm only expands ${VAR} placeholders in a fixed set of metadata
+        # fields (name/version/arch/depends), not inside contents[].dst.
+        # Pre-render the YAML through envsubst so /usr/lib/${DEB_HOST_MULTIARCH}/
+        # picks up x86_64-linux-gnu vs aarch64-linux-gnu per matrix entry.
+        for cfg in packaging/nfpm/*.yaml; do
+          envsubst < "$cfg" > "/tmp/$(basename "$cfg")"
+          nfpm pkg --config "/tmp/$(basename "$cfg")" --packager deb --target dist/
+        done
+        ls -la dist/
+
     - name: Upload binary artifacts
       uses: actions/upload-artifact@v4
       with:
@@ -170,6 +215,7 @@ jobs:
         path: |
           doltlite-tools-*.zip
           doltlite-lib-*.zip
+          dist/*.deb
 
   # ── Run benchmarks ────────────────────────────────────────
   benchmark:
@@ -280,9 +326,11 @@ jobs:
         GH_TOKEN: ${{ github.token }}
       run: |
         VERSION=${GITHUB_REF_NAME#v}
-        # Collect all zips and tarballs
-        find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" \) -exec mv {} . \;
-        ls -la *.zip *.tar.gz
+        # Collect all zips, tarballs, and .deb files
+        find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.deb" \) -exec mv {} . \;
+        # Also stage the install script so users can curl|bash it.
+        cp install.sh ./install.sh
+        ls -la *.zip *.tar.gz *.deb install.sh 2>/dev/null || ls -la *.zip *.tar.gz install.sh
 
         # Create release if it doesn't already exist (may have been
         # created manually with release notes before the workflow ran)
@@ -293,7 +341,7 @@ jobs:
         fi
 
         # Upload artifacts to the release
-        ASSETS=$(find . -maxdepth 1 \( -name "*.zip" -o -name "*.tar.gz" \) -print)
+        ASSETS=$(find . -maxdepth 1 \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.deb" -o -name "install.sh" \) -print)
         echo "Uploading: ${ASSETS}"
         gh release upload "${GITHUB_REF_NAME}" ${ASSETS} --clobber
 

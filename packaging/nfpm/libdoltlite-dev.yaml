@@ -1,0 +1,32 @@
+# nfpm config for libdoltlite-dev — header + static library, mirroring
+# what `libsqlite3-dev` ships. Required to compile programs that
+# `#include <doltlite.h>` or want to statically link against
+# libdoltlite.a.
+name: libdoltlite-dev
+arch: "${PKG_ARCH}"
+platform: linux
+version: "${VERSION}"
+section: libdevel
+priority: optional
+maintainer: DoltHub <team@dolthub.com>
+description: |
+  DoltLite development files — header and static library for compiling
+  programs that link against doltlite. Companion to libdoltlite0.
+vendor: DoltHub
+homepage: https://github.com/dolthub/doltlite
+license: Apache-2.0
+
+depends:
+  - libdoltlite0 (= ${VERSION})
+
+contents:
+  - src: build/sqlite3.h
+    dst: /usr/include/doltlite.h
+    file_info:
+      mode: 0644
+  - src: build/libdoltlite.a
+    dst: /usr/lib/${DEB_HOST_MULTIARCH}/libdoltlite.a
+    file_info:
+      mode: 0644
+  - src: LICENSE.md
+    dst: /usr/share/doc/libdoltlite-dev/copyright

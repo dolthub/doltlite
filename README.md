@@ -14,6 +14,42 @@ prolly tree engine backed by a single-file content-addressed chunk store.
 [Why DoltLite?](https://www.dolthub.com/blog/2026-04-27-why-doltlite/) DoltLite
 can be embedded in any language enabling local-first use cases for Dolt.
 
+## Install
+
+Prebuilt binaries: [github.com/dolthub/doltlite/releases](https://github.com/dolthub/doltlite/releases).
+
+Each install method places the same set of files (paths shown for `/usr/local`):
+
+- `bin/doltlite`, `bin/doltlite-remotesrv` — the CLI shell and remote sync server
+- `include/doltlite.h` — header for embedding
+- `lib/libdoltlite.a` — static library
+- `lib/libdoltlite.{so,dylib}` — shared library
+
+### macOS (arm64) / Linux (x86_64 or arm64)
+
+```
+sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
+```
+
+### Debian / Ubuntu
+
+`.deb` packages ship for both `amd64` and `arm64`. Substitute `$ARCH` below:
+
+```
+VER=0.10.3
+ARCH=amd64   # or arm64
+BASE=https://github.com/dolthub/doltlite/releases/download/v${VER}
+wget ${BASE}/libdoltlite0_${VER}_${ARCH}.deb ${BASE}/doltlite_${VER}_${ARCH}.deb
+sudo dpkg -i libdoltlite0_*.deb doltlite_*.deb
+```
+
+Add `libdoltlite-dev_${VER}_${ARCH}.deb` for the header and static library.
+
+### Windows
+
+Download `doltlite-tools-win-x64-<ver>.zip` from
+[releases](https://github.com/dolthub/doltlite/releases), extract `doltlite.exe`, add to `PATH`.
+
 ## Building
 
 ### macOS / Linux
