@@ -588,7 +588,7 @@ PROLLY_OBJS = prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_di
               doltlite_http_remote.o doltlite_remotesrv.o
 
 DOLTLITE_PROLLY ?= 1
-DOLTLITE_VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo "dev")
+DOLTLITE_VERSION ?= $(shell cat $(TOP)/.dolt_release_version 2>/dev/null || git describe --tags --always 2>/dev/null || echo "dev")
 ifeq ($(DOLTLITE_PROLLY),1)
   # Replace btree.o/pager.o/wal.o/btmutex.o/backup.o with prolly engine
   LIBOBJS0 := $(filter-out btree.o pager.o wal.o btmutex.o backup.o,$(LIBOBJS0))
