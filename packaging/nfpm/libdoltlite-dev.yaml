@@ -25,7 +25,7 @@ contents:
     file_info:
       mode: 0644
   - src: build/libdoltlite.a
-    dst: /usr/lib/x86_64-linux-gnu/libdoltlite.a
+    dst: /usr/lib/${DEB_HOST_MULTIARCH}/libdoltlite.a
     file_info:
       mode: 0644
   - src: LICENSE.md

@@ -33,7 +33,7 @@ TARGET="${PLATFORM}-${PKG_ARCH}"
 # Other combinations don't have release artifacts; fall back to building
 # from source.
 case "$TARGET" in
-  linux-x64|osx-arm64) ;;
+  linux-x64|linux-arm64|osx-arm64) ;;
   *)
     echo "doltlite: no prebuilt binary for ${TARGET}." >&2
     echo "Build from source — see https://github.com/dolthub/doltlite#building" >&2

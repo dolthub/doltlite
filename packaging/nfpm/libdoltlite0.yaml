@@ -22,7 +22,7 @@ depends:
 
 contents:
   - src: build/libdoltlite.so
-    dst: /usr/lib/x86_64-linux-gnu/libdoltlite.so
+    dst: /usr/lib/${DEB_HOST_MULTIARCH}/libdoltlite.so
     file_info:
       mode: 0644
   - src: LICENSE.md

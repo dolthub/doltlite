@@ -25,7 +25,7 @@ Each install method places the same set of files (paths shown for `/usr/local`):
 - `lib/libdoltlite.a` — static library
 - `lib/libdoltlite.{so,dylib}` — shared library
 
-### macOS (arm64) / Linux (x86_64)
+### macOS (arm64) / Linux (x86_64 or arm64)
 
 ```
 sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
@@ -33,14 +33,17 @@ sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/dow
 
 ### Debian / Ubuntu
 
+`.deb` packages ship for both `amd64` and `arm64`. Substitute `$ARCH` below:
+
 ```
 VER=0.10.3
+ARCH=amd64   # or arm64
 BASE=https://github.com/dolthub/doltlite/releases/download/v${VER}
-wget ${BASE}/libdoltlite0_${VER}_amd64.deb ${BASE}/doltlite_${VER}_amd64.deb
+wget ${BASE}/libdoltlite0_${VER}_${ARCH}.deb ${BASE}/doltlite_${VER}_${ARCH}.deb
 sudo dpkg -i libdoltlite0_*.deb doltlite_*.deb
 ```
 
-Add `libdoltlite-dev_${VER}_amd64.deb` for the header and static library.
+Add `libdoltlite-dev_${VER}_${ARCH}.deb` for the header and static library.
 
 ### Windows
 
