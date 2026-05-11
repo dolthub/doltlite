@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Install the doltlite CLI and doltlite-remotesrv binaries from the latest
+# (or a pinned) GitHub release. Pipe me through bash:
+#
+#   sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
+#
+# Honored environment variables:
+#   DOLTLITE_INSTALL_DIR — target directory (default /usr/local/bin)
+#   DOLTLITE_VERSION     — pin to a specific version, e.g. v0.10.3
+#                          (default: the latest GitHub release)
+
+set -euo pipefail
+
+INSTALL_DIR="${DOLTLITE_INSTALL_DIR:-/usr/local/bin}"
+
+OS="$(uname -s)"
+case "$OS" in
+  Linux)  PLATFORM="linux" ;;
+  Darwin) PLATFORM="osx" ;;
+  *) echo "doltlite: unsupported OS '$OS' — try 'go install' from source" >&2; exit 1 ;;
+esac
+
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) PKG_ARCH="x64" ;;
+  arm64|aarch64) PKG_ARCH="arm64" ;;
+  *) echo "doltlite: unsupported architecture '$ARCH'" >&2; exit 1 ;;
+esac
+
+TARGET="${PLATFORM}-${PKG_ARCH}"
+
+# The release matrix currently builds linux-x64, osx-arm64, and win-x64.
+# Other combinations don't have release artifacts; fall back to building
+# from source.
+case "$TARGET" in
+  linux-x64|osx-arm64) ;;
+  *)
+    echo "doltlite: no prebuilt binary for ${TARGET}." >&2
+    echo "Build from source — see https://github.com/dolthub/doltlite#building" >&2
+    exit 1
+    ;;
+esac
+
+# Resolve the version: pinned via env, or latest from GitHub.
+if [ -n "${DOLTLITE_VERSION:-}" ]; then
+  VERSION="$DOLTLITE_VERSION"
+else
+  VERSION="$(curl -fsSL https://api.github.com/repos/dolthub/doltlite/releases/latest \
+    | grep '"tag_name"' \
+    | head -1 \
+    | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')"
+fi
+if [ -z "$VERSION" ]; then
+  echo "doltlite: failed to determine latest version" >&2
+  exit 1
+fi
+VERSION_NUM="${VERSION#v}"
+
+ZIP_NAME="doltlite-tools-${TARGET}-${VERSION_NUM}.zip"
+ZIP_URL="https://github.com/dolthub/doltlite/releases/download/${VERSION}/${ZIP_NAME}"
+
+TMP_DIR="$(mktemp -d -t doltlite-install-XXXXXX)"
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+echo "Downloading ${ZIP_URL}..."
+curl -fsSL -o "${TMP_DIR}/${ZIP_NAME}" "${ZIP_URL}"
+
+unzip -q -d "${TMP_DIR}" "${TMP_DIR}/${ZIP_NAME}"
+EXTRACTED_DIR="${TMP_DIR}/doltlite-tools-${TARGET}-${VERSION_NUM}"
+
+if [ ! -d "$EXTRACTED_DIR" ]; then
+  echo "doltlite: archive layout unexpected (missing ${EXTRACTED_DIR})" >&2
+  exit 1
+fi
+
+mkdir -p "${INSTALL_DIR}"
+for bin in doltlite doltlite-remotesrv; do
+  src="${EXTRACTED_DIR}/${bin}"
+  [ -f "$src" ] || continue
+  dst="${INSTALL_DIR}/${bin}"
+  install -m 0755 "$src" "$dst"
+  echo "Installed ${dst}"
+done
+
+cat <<EOF
+
+doltlite ${VERSION_NUM} installed.
+
+Verify with:
+  doltlite :memory: "SELECT dolt_version();"
+
+If ${INSTALL_DIR} is not on your \$PATH, add it or set
+DOLTLITE_INSTALL_DIR to a directory that is.
+EOF

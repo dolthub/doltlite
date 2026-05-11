@@ -249,7 +249,9 @@ jobs:
         VERSION=${GITHUB_REF_NAME#v}
         # Collect all zips, tarballs, and .deb files
         find artifacts -type f \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.deb" \) -exec mv {} . \;
-        ls -la *.zip *.tar.gz *.deb 2>/dev/null || ls -la *.zip *.tar.gz
+        # Also stage the install script so users can curl|bash it.
+        cp install.sh ./install.sh
+        ls -la *.zip *.tar.gz *.deb install.sh 2>/dev/null || ls -la *.zip *.tar.gz install.sh
 
         # Create release if it doesn't already exist (may have been
         # created manually with release notes before the workflow ran)
@@ -260,7 +262,7 @@ jobs:
         fi
 
         # Upload artifacts to the release
-        ASSETS=$(find . -maxdepth 1 \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.deb" \) -print)
+        ASSETS=$(find . -maxdepth 1 \( -name "*.zip" -o -name "*.tar.gz" -o -name "*.deb" -o -name "install.sh" \) -print)
         echo "Uploading: ${ASSETS}"
         gh release upload "${GITHUB_REF_NAME}" ${ASSETS} --clobber
 

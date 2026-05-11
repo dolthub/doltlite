@@ -14,6 +14,67 @@ prolly tree engine backed by a single-file content-addressed chunk store.
 [Why DoltLite?](https://www.dolthub.com/blog/2026-04-27-why-doltlite/) DoltLite
 can be embedded in any language enabling local-first use cases for Dolt.
 
+## Install
+
+Prebuilt binaries for each release are at
+[github.com/dolthub/doltlite/releases](https://github.com/dolthub/doltlite/releases).
+
+### macOS
+
+DoltLite ships a prebuilt binary for Apple Silicon. The install script
+fetches the latest release and drops the `doltlite` and `doltlite-remotesrv`
+binaries in `/usr/local/bin`:
+
+```
+sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
+```
+
+Honored env vars: `DOLTLITE_INSTALL_DIR` (default `/usr/local/bin`),
+`DOLTLITE_VERSION` (default: latest, e.g. `v0.10.3`).
+
+Intel Macs aren't part of the release matrix yet — build from source
+([Building](#building)) or run the arm64 binary under Rosetta.
+
+### Linux (curl install script — any distro)
+
+The same script as macOS works on x86\_64 Linux:
+
+```
+sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
+```
+
+### Linux (Debian / Ubuntu via `.deb`)
+
+Each release also ships three Debian packages mirroring the
+`sqlite3` / `libsqlite3-0` / `libsqlite3-dev` shape:
+
+| Package | What it contains |
+|---|---|
+| `doltlite_<ver>_amd64.deb` | `doltlite` and `doltlite-remotesrv` CLIs (`/usr/bin/`) |
+| `libdoltlite0_<ver>_amd64.deb` | runtime shared library (`/usr/lib/x86_64-linux-gnu/libdoltlite.so`) |
+| `libdoltlite-dev_<ver>_amd64.deb` | header (`/usr/include/doltlite.h`) and static library (`libdoltlite.a`) |
+
+Install everything for a CLI-only setup:
+
+```
+VER=0.10.3
+BASE=https://github.com/dolthub/doltlite/releases/download/v${VER}
+wget ${BASE}/libdoltlite0_${VER}_amd64.deb \
+     ${BASE}/doltlite_${VER}_amd64.deb
+sudo dpkg -i libdoltlite0_*.deb doltlite_*.deb
+```
+
+Add `libdoltlite-dev_${VER}_amd64.deb` if you want to compile programs that
+`#include <doltlite.h>` or statically link against `libdoltlite.a`.
+
+A hosted apt repo (so you can just `apt install doltlite`) is on the roadmap.
+
+### Windows
+
+Download `doltlite-tools-win-x64-<version>.zip` from the
+[releases page](https://github.com/dolthub/doltlite/releases), extract
+`doltlite.exe`, and add it to your `PATH`.
+
 ## Building
 
 ### macOS / Linux
