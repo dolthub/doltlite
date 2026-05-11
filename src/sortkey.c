@@ -358,27 +358,40 @@ static SQLITE_INLINE void decodeNumericSortKeyToRecord(
   }
 }
 
-static int recordFromTwoNumericSortKeyBuffer(
+static int recordFromAllNumericSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
-  u32 aType[2];
-  u32 aLen[2];
-  u8 aBuf[2][8];
+  u32 aType[8];
+  u32 aLen[8];
+  u8 aBuf[8][8];
+  int nField;
+  int nHdr;
+  int nData;
   int nTotal;
   int off;
+  int i;
   u8 *pOut;
 
-  if( nSortKey!=18
-   || pSortKey[0]!=SORTKEY_NUM
-   || pSortKey[9]!=SORTKEY_NUM ){
+  if( nSortKey<=0 || (nSortKey % 9)!=0 ){
     return SQLITE_NOTFOUND;
   }
+  nField = nSortKey / 9;
+  if( nField > 8 ) return SQLITE_NOTFOUND;
 
-  decodeNumericSortKeyToRecord(pSortKey + 1, &aType[0], &aLen[0], aBuf[0]);
-  decodeNumericSortKeyToRecord(pSortKey + 10, &aType[1], &aLen[1], aBuf[1]);
+  nHdr = 1 + nField;
+  nData = 0;
+  for(i = 0; i < nField; i++){
+    int pos = i * 9;
+    if( pSortKey[pos]!=SORTKEY_NUM ){
+      return SQLITE_NOTFOUND;
+    }
+    decodeNumericSortKeyToRecord(pSortKey + pos + 1,
+                                 &aType[i], &aLen[i], aBuf[i]);
+    nData += (int)aLen[i];
+  }
 
-  nTotal = 3 + (int)aLen[0] + (int)aLen[1];
+  nTotal = nHdr + nData;
   if( *pnAlloc < nTotal ){
     u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nTotal);
     if( !pNew ) return SQLITE_NOMEM;
@@ -387,16 +400,16 @@ static int recordFromTwoNumericSortKeyBuffer(
   }
   pOut = *ppBuf;
 
-  pOut[0] = 3;
-  pOut[1] = (u8)aType[0];
-  pOut[2] = (u8)aType[1];
-  off = 3;
-  if( aLen[0]>0 ){
-    memcpy(pOut + off, aBuf[0], aLen[0]);
-    off += (int)aLen[0];
+  pOut[0] = (u8)nHdr;
+  for(i = 0; i < nField; i++){
+    pOut[1 + i] = (u8)aType[i];
   }
-  if( aLen[1]>0 ){
-    memcpy(pOut + off, aBuf[1], aLen[1]);
+  off = nHdr;
+  for(i = 0; i < nField; i++){
+    if( aLen[i]>0 ){
+      memcpy(pOut + off, aBuf[i], aLen[i]);
+      off += (int)aLen[i];
+    }
   }
 
   *pnOut = nTotal;
@@ -511,6 +524,74 @@ static int recordFromNumericVarlenSortKeyBuffer(
   return SQLITE_OK;
 }
 
+static int recordFromNumericBlob16SortKeyBuffer(
+  const u8 *pSortKey, int nSortKey,
+  u8 **ppBuf, int *pnAlloc, int *pnOut
+){
+  u32 aType0;
+  u32 aLen0;
+  u32 aType1 = 44; /* 16-byte BLOB */
+  u8 aBuf0[8];
+  u8 aBlob[16];
+  int pos;
+  int nBlob = 0;
+  int nHdr;
+  int nTotal;
+  int off;
+  u8 *pOut;
+
+  if( nSortKey<12
+   || pSortKey[0]!=SORTKEY_NUM
+   || pSortKey[9]!=SORTKEY_BLOB ){
+    return SQLITE_NOTFOUND;
+  }
+
+  pos = 10;
+  while( pos < nSortKey ){
+    u8 b = pSortKey[pos++];
+    if( b==0x00 ){
+      if( pos >= nSortKey ) return SQLITE_NOTFOUND;
+      if( pSortKey[pos]==0x00 ){
+        pos++;
+        break;
+      }
+      if( pSortKey[pos]!=0x01 ) return SQLITE_NOTFOUND;
+      pos++;
+      b = 0x00;
+    }
+    if( nBlob >= 16 ) return SQLITE_NOTFOUND;
+    aBlob[nBlob++] = b;
+  }
+  if( pos!=nSortKey || nBlob!=16 ){
+    return SQLITE_NOTFOUND;
+  }
+
+  decodeNumericSortKeyToRecord(pSortKey + 1, &aType0, &aLen0, aBuf0);
+
+  nHdr = 1 + sqlite3VarintLen(aType0) + sqlite3VarintLen(aType1);
+  if( nHdr > 126 ) nHdr++;
+  nTotal = nHdr + (int)aLen0 + 16;
+  if( *pnAlloc < nTotal ){
+    u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nTotal);
+    if( !pNew ) return SQLITE_NOMEM;
+    *ppBuf = pNew;
+    *pnAlloc = nTotal;
+  }
+  pOut = *ppBuf;
+
+  off = putVarint32(pOut, (u32)nHdr);
+  off += putVarint32(pOut + off, aType0);
+  off += putVarint32(pOut + off, aType1);
+  if( aLen0>0 ){
+    memcpy(pOut + off, aBuf0, aLen0);
+    off += (int)aLen0;
+  }
+  memcpy(pOut + off, aBlob, 16);
+
+  *pnOut = nTotal;
+  return SQLITE_OK;
+}
+
 int recordFromSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
@@ -549,8 +630,13 @@ int recordFromSortKeyBuffer(
   }
 
   {
-    int rc = recordFromTwoNumericSortKeyBuffer(pSortKey, nSortKey,
+    int rc = recordFromAllNumericSortKeyBuffer(pSortKey, nSortKey,
                                                ppBuf, pnAlloc, pnOut);
+    if( rc!=SQLITE_NOTFOUND ) return rc;
+  }
+  {
+    int rc = recordFromNumericBlob16SortKeyBuffer(pSortKey, nSortKey,
+                                                  ppBuf, pnAlloc, pnOut);
     if( rc!=SQLITE_NOTFOUND ) return rc;
   }
   {
