@@ -235,7 +235,7 @@ int main(int argc, char **argv) {
    * 2. Start HTTP server
    * ============================================================ */
   printf("=== 2. Start HTTP server ===\n");
-  DoltliteServer *srv = doltliteServeAsync(srvdir, 0);
+  DoltliteServer *srv = doltliteServeAsync(srvdir, 0, NULL);
   if (!srv) {
     printf("  FAIL: could not start server\n");
     return 1;

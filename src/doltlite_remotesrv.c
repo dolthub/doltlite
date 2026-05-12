@@ -577,8 +577,8 @@ static int serverInit(DoltliteServer *pSrv, const char *zDir, int port,
 
   /* Default to loopback. The remote protocol has no auth/TLS (issue #228),
   ** so binding to all interfaces by default would expose unauthenticated
-  ** writeable databases. Callers can opt into broader binding via the
-  ** doltliteServeBind / --bind paths.
+  ** writeable databases. Callers can opt into broader binding by passing
+  ** an explicit zBindAddr (e.g. via --bind on the CLI).
   */
   if( zBindAddr==0 || zBindAddr[0]=='\0' ){
     zBindAddr = "127.0.0.1";
@@ -665,7 +665,7 @@ static void serverCleanup(DoltliteServer *pSrv){
   pSrv->zDir = 0;
 }
 
-int doltliteServeBind(const char *zDir, int port, const char *zBindAddr){
+int doltliteServe(const char *zDir, int port, const char *zBindAddr){
   DoltliteServer server;
   int rc;
 
@@ -677,10 +677,6 @@ int doltliteServeBind(const char *zDir, int port, const char *zBindAddr){
   return SQLITE_OK;
 }
 
-int doltliteServe(const char *zDir, int port){
-  return doltliteServeBind(zDir, port, 0);
-}
-
 static void *serverThreadEntry(void *pArg){
   DoltliteServer *pSrv = (DoltliteServer*)pArg;
   serverLoop(pSrv);
@@ -688,8 +684,8 @@ static void *serverThreadEntry(void *pArg){
   return 0;
 }
 
-DoltliteServer *doltliteServeAsyncBind(const char *zDir, int port,
-                                       const char *zBindAddr){
+DoltliteServer *doltliteServeAsync(const char *zDir, int port,
+                                   const char *zBindAddr){
   DoltliteServer *pSrv;
   int rc;
 
@@ -709,10 +705,6 @@ DoltliteServer *doltliteServeAsyncBind(const char *zDir, int port,
   }
 
   return pSrv;
-}
-
-DoltliteServer *doltliteServeAsync(const char *zDir, int port){
-  return doltliteServeAsyncBind(zDir, port, 0);
 }
 
 void doltliteServerStop(DoltliteServer *pServer){

@@ -71,6 +71,6 @@ int main(int argc, char **argv){
          zDir, zBind ? zBind : "127.0.0.1", port);
   printf("Press Ctrl+C to stop.\n\n");
 
-  rc = doltliteServeBind(zDir, port, zBind);
+  rc = doltliteServe(zDir, port, zBind);
   return rc==0 ? 0 : 1;
 }
