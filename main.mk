@@ -2562,6 +2562,74 @@ crash_recovery_test_sqlite_test$(T.exe): $(T.tcl.env.sh) has_tclsh85 $(TOP)/test
 		-lz -lpthread -lm
 
 #
+# Doltlite orphan C tests
+#
+# These adversarial C tests live under test/ but were historically not built
+# or run by any CI job. They link directly against libdoltlite.a and call into
+# the SQLite C API. Several of them surface real bugs on master; see
+# test/run_c_tests.sh for the gating-vs-non-blocking split.
+#
+# All of these share a simple compile recipe: link against the static
+# libdoltlite.a, with -lz/-lpthread/-lm.
+#
+DOLTLITE_C_TESTS = \
+	ancestor_test$(T.exe) \
+	sql_transaction_test$(T.exe) \
+	cross_branch_test$(T.exe) \
+	multi_process_test$(T.exe) \
+	invariant_test$(T.exe) \
+	corruption_test$(T.exe) \
+	concurrent_stress_test$(T.exe) \
+	three_way_diff_test$(T.exe)
+
+ancestor_test$(T.exe): $(TOP)/test/ancestor_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/ancestor_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+sql_transaction_test$(T.exe): $(TOP)/test/sql_transaction_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/sql_transaction_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+cross_branch_test$(T.exe): $(TOP)/test/cross_branch_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/cross_branch_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+multi_process_test$(T.exe): $(TOP)/test/multi_process_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/multi_process_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+invariant_test$(T.exe): $(TOP)/test/invariant_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/invariant_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+corruption_test$(T.exe): $(TOP)/test/corruption_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/corruption_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+concurrent_stress_test$(T.exe): $(TOP)/test/concurrent_stress_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/concurrent_stress_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+# three_way_diff_test pokes prolly internals directly; needs sqliteInt.h
+# (-I. brings in sqlite_cfg.h, -I$(TOP)/src brings in sqliteInt.h and the
+# prolly_*.h headers) and the LIBOBJS0 objects (not the static archive, since
+# the test references prolly_* symbols that the linker may otherwise drop).
+three_way_diff_test$(T.exe): $(TOP)/test/three_way_diff_test.c $(LIBOBJS0)
+	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
+		-o $@ $(TOP)/test/three_way_diff_test.c $(LIBOBJS0) \
+		-lz -lpthread -lm
+
+doltlite-c-tests-build: $(DOLTLITE_C_TESTS)
+
+# Run all orphan C tests via the gating-aware runner script. The script
+# decides which failures gate CI and which are reported but tolerated
+# (because the failure was preexisting at the time the test was wired in).
+# To make a tolerated test gating, move it out of the EXPECTED_FAIL set in
+# test/run_c_tests.sh after fixing the underlying bug.
+c-tests: doltlite-c-tests-build
+	bash $(TOP)/test/run_c_tests.sh .
+
+#
 # libdoltlite: static and shared libraries with prolly tree engine.
 # These use the non-amalgamation objects (LIBOBJS0) which include the
 # Dolt version control functions, unlike libsqlite3 which uses the
