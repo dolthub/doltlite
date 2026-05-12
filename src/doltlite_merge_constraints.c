@@ -1691,15 +1691,19 @@ int doltliteDetectMergeFkViolations(
 
       if( nCol >= nAlloc ){
         int nNew = nAlloc ? nAlloc*2 : 4;
-        char **azFromNew = sqlite3_realloc64(azFrom, (sqlite3_int64)nNew * sizeof(char*));
-        char **azToNew = sqlite3_realloc64(azTo, (sqlite3_int64)nNew * sizeof(char*));
-        if( !azFromNew || !azToNew ){
-          sqlite3_free(azFromNew);
-          sqlite3_free(azToNew);
+        char **azFromNew;
+        char **azToNew;
+        azFromNew = sqlite3_realloc64(azFrom, (sqlite3_int64)nNew * sizeof(char*));
+        if( !azFromNew ){
           rc = SQLITE_NOMEM;
           break;
         }
         azFrom = azFromNew;
+        azToNew = sqlite3_realloc64(azTo, (sqlite3_int64)nNew * sizeof(char*));
+        if( !azToNew ){
+          rc = SQLITE_NOMEM;
+          break;
+        }
         azTo = azToNew;
         nAlloc = nNew;
       }
