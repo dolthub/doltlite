@@ -2,6 +2,7 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "sortkey.h"
+#include <limits.h>
 #include <string.h>
 
 static int skGetVarint32(const u8 *p, u32 *pVal){
@@ -66,7 +67,12 @@ static u32 collTextLen(int coll, const u8 *pData, u32 nData){
   return nData;
 }
 
-static int encodedFieldSize(u32 serialType, const u8 *pData, u32 nData, int coll){
+static sqlite3_int64 encodedFieldSize(
+  u32 serialType,
+  const u8 *pData,
+  u32 nData,
+  int coll
+){
   u8 tag = serialTypeTag(serialType);
   switch( tag ){
     case SORTKEY_NULL:
@@ -93,22 +99,22 @@ static int encodedFieldSize(u32 serialType, const u8 *pData, u32 nData, int coll
       return 9;
     case SORTKEY_TEXT: {
       u32 n = collTextLen(coll, pData, nData);
-      int extra = 0;
+      sqlite3_int64 extra = 0;
       u32 i;
       for(i = 0; i < n; i++){
         u8 b = pData[i];
         if( coll==SORTKEY_COLL_NOCASE && b >= 'A' && b <= 'Z' ) b += 32;
         if( b == 0x00 ) extra++;
       }
-      return 1 + (int)n + extra + 2;
+      return 1 + (sqlite3_int64)n + extra + 2;
     }
     case SORTKEY_BLOB: {
-      int extra = 0;
+      sqlite3_int64 extra = 0;
       u32 i;
       for(i = 0; i < nData; i++){
         if( pData[i] == 0x00 ) extra++;
       }
-      return 1 + (int)nData + extra + 2;
+      return 1 + (sqlite3_int64)nData + extra + 2;
     }
     default:
       return 1;
@@ -250,6 +256,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
   u32 hdrOff;
   u32 dataOff;
   int outPos = 0;
+  sqlite3_int64 outSize = 0;
   int nField = 0;
 
   if( nRec <= 0 ) return -1;
@@ -269,7 +276,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
     hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
     fieldLen = serialTypeLen(serialType);
 
-    if( dataOff + fieldLen > (u32)nRec ) return -1;
+    if( fieldLen > (u32)nRec - dataOff ) return -1;
     pField = pRec + dataOff;
     coll = collFromKeyInfo(pKeyInfo, nField);
 
@@ -293,14 +300,19 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
           break;
       }
     }else{
-      outPos += encodedFieldSize(serialType, pField, fieldLen, coll);
+      sqlite3_int64 nFieldSize =
+          encodedFieldSize(serialType, pField, fieldLen, coll);
+      if( nFieldSize > INT_MAX || outSize > INT_MAX - nFieldSize ){
+        return -2;
+      }
+      outSize += nFieldSize;
     }
 
     dataOff += fieldLen;
     nField++;
   }
 
-  return outPos;
+  return pOut ? outPos : (int)outSize;
 }
 
 int sortKeySize(const u8 *pRec, int nRec){
@@ -322,22 +334,25 @@ int sortKeyFromRecordPrefixCollBuffer(
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
   int nSize;
-  int nEstimate;
+  int nAlloc;
 
   *pnOut = 0;
 
-  nEstimate = 9 * nRec + 16;
-  if( nEstimate < 64 ) nEstimate = 64;
+  nSize = sortKeyEncode(pRec, nRec, 0, nKeyField, pKeyInfo);
+  if( nSize == -2 ) return SQLITE_TOOBIG;
+  if( nSize < 0 ) return SQLITE_CORRUPT;
 
-  if( *pnAlloc < nEstimate ){
-    u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, nEstimate);
+  nAlloc = nSize < 64 ? 64 : nSize;
+  if( *pnAlloc < nAlloc ){
+    u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, (sqlite3_uint64)nAlloc);
     if( !pNew ) return SQLITE_NOMEM;
     *ppBuf = pNew;
-    *pnAlloc = nEstimate;
+    *pnAlloc = nAlloc;
   }
 
-  nSize = sortKeyEncode(pRec, nRec, *ppBuf, nKeyField, pKeyInfo);
-  if( nSize < 0 ) return SQLITE_CORRUPT;
+  if( nSize != sortKeyEncode(pRec, nRec, *ppBuf, nKeyField, pKeyInfo) ){
+    return SQLITE_CORRUPT;
+  }
   *pnOut = nSize;
   return SQLITE_OK;
 }

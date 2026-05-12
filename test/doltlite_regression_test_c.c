@@ -2025,6 +2025,49 @@ static void run_sortkey_numeric_blob_roundtrip(void){
   }
 }
 
+static void run_sortkey_buffer_exact_size(void){
+  u8 record[73];
+  u8 *pSortKey = 0;
+  u8 *pRoundTrip = 0;
+  int nAlloc = 1;
+  int nSortKey = 0;
+  int nRoundTrip = 0;
+  int rc;
+  int i;
+
+  printf("=== Sortkey Buffer Exact Size Test ===\n\n");
+
+  record[0] = 0x03;
+  record[1] = 0x81;
+  record[2] = 0x18;
+  for(i=0; i<70; i++){
+    record[3+i] = (u8)('a' + (i % 26));
+  }
+  record[3+17] = 0x00;
+  record[3+53] = 0x00;
+
+  pSortKey = sqlite3_malloc64((sqlite3_uint64)nAlloc);
+  check("sortkey_buffer_initial_alloc_ok", pSortKey!=0);
+  if( !pSortKey ) return;
+
+  rc = sortKeyFromRecordPrefixCollBuffer(
+      record, (int)sizeof(record), 0, 0, &pSortKey, &nAlloc, &nSortKey);
+  check("sortkey_buffer_exact_size_encode_ok", rc==SQLITE_OK);
+  check("sortkey_buffer_exact_size_output", nSortKey==75);
+  check("sortkey_buffer_exact_size_allocation", nAlloc==75);
+
+  if( rc==SQLITE_OK ){
+    rc = recordFromSortKey(pSortKey, nSortKey, &pRoundTrip, &nRoundTrip);
+    check("sortkey_buffer_exact_size_decode_ok", rc==SQLITE_OK);
+    check("sortkey_buffer_exact_size_roundtrips",
+      nRoundTrip==(int)sizeof(record)
+      && memcmp(pRoundTrip, record, sizeof(record))==0);
+  }
+
+  sqlite3_free(pSortKey);
+  sqlite3_free(pRoundTrip);
+}
+
 static void run_reload_refs_transactional(void){
   ChunkStore cs;
   ProllyHash emptyHash;
@@ -6415,6 +6458,7 @@ static const RegressionCase aCases[] = {
   { "sortkey_two_numeric_roundtrip", "Sortkey Two Numeric Roundtrip Test", run_sortkey_two_numeric_roundtrip },
   { "sortkey_numeric_text_roundtrip", "Sortkey Numeric Text Roundtrip Test", run_sortkey_numeric_text_roundtrip },
   { "sortkey_numeric_blob_roundtrip", "Sortkey Numeric Blob Roundtrip Test", run_sortkey_numeric_blob_roundtrip },
+  { "sortkey_buffer_exact_size", "Sortkey Buffer Exact Size Test", run_sortkey_buffer_exact_size },
   { "reload_refs_transactional", "Reload Refs Transactional Test", run_reload_refs_transactional },
   { "refresh_refs_corruption_preserves_state", "Refresh Corrupt Refs State Preservation Test", run_refresh_refs_corruption_preserves_state },
   { "prolly_node_corruption", "Prolly Node Corruption Test", run_prolly_node_corruption },
