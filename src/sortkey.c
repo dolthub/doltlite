@@ -72,6 +72,24 @@ static int encodedFieldSize(u32 serialType, const u8 *pData, u32 nData, int coll
     case SORTKEY_NULL:
       return 1;
     case SORTKEY_NUM:
+      if( serialType <= 6 ){
+        u64 uv = (pData[0] & 0x80) ? (u64)-1 : 0;
+        i64 v;
+        double d;
+        i64 back;
+        int exact;
+        u32 i;
+        if( serialType == 8 || serialType == 9 ) return 9;
+        for(i = 0; i < nData; i++){
+          uv = (uv << 8) | pData[i];
+        }
+        v = (i64)uv;
+        d = (double)v;
+        exact = d>=-9223372036854775808.0
+             && d<9223372036854775808.0
+             && (back = (i64)d)==v;
+        return exact ? 9 : 18;
+      }
       return 9;
     case SORTKEY_TEXT: {
       u32 n = collTextLen(coll, pData, nData);
@@ -97,9 +115,13 @@ static int encodedFieldSize(u32 serialType, const u8 *pData, u32 nData, int coll
   }
 }
 
-static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
+static int encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
   u8 buf[8];
   double d;
+  i64 intVal = 0;
+  int isInt = 0;
+  int exactInt = 1;
+  int doubleAboveInt = 0;
 
   pOut[0] = SORTKEY_NUM;
 
@@ -123,9 +145,28 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
       }
       v = (i64)uv;
     }
+    isInt = 1;
+    intVal = v;
     d = (double)v;
+    exactInt = d>=-9223372036854775808.0
+            && d<9223372036854775808.0
+            && ((i64)d)==v;
+    if( !exactInt ){
+      if( d>=9223372036854775808.0 ){
+        doubleAboveInt = 1;
+      }else if( d>=-9223372036854775808.0 ){
+        doubleAboveInt = ((i64)d)>v;
+      }
+    }
 
     memcpy(&x, &d, 8);
+    if( doubleAboveInt ){
+      if( x & ((u64)1 << 63) ){
+        x++;
+      }else{
+        x--;
+      }
+    }
     buf[0] = (u8)(x >> 56); buf[1] = (u8)(x >> 48);
     buf[2] = (u8)(x >> 40); buf[3] = (u8)(x >> 32);
     buf[4] = (u8)(x >> 24); buf[5] = (u8)(x >> 16);
@@ -141,6 +182,28 @@ static void encodeNumeric(u8 *pOut, u32 serialType, const u8 *pData, u32 nData){
   }
 
   memcpy(pOut + 1, buf, 8);
+  if( isInt && !exactInt ){
+    u64 u = ((u64)intVal) ^ ((u64)1 << 63);
+    pOut[9] = 0x80;
+    pOut[10] = (u8)(u >> 56);
+    pOut[11] = (u8)(u >> 48);
+    pOut[12] = (u8)(u >> 40);
+    pOut[13] = (u8)(u >> 32);
+    pOut[14] = (u8)(u >> 24);
+    pOut[15] = (u8)(u >> 16);
+    pOut[16] = (u8)(u >> 8);
+    pOut[17] = (u8)u;
+    return 18;
+  }
+  return 9;
+}
+
+static int numericSortKeyLen(const u8 *pSortKey, int nAvail){
+  if( nAvail<9 || pSortKey[0]!=SORTKEY_NUM ) return 0;
+  if( nAvail>=18 && (pSortKey[9]==0x01 || pSortKey[9]==0x80) ){
+    return 18;
+  }
+  return 9;
 }
 
 static int encodeVarLen(u8 *pOut, u8 tag, const u8 *pData, u32 nData){
@@ -217,8 +280,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
           pOut[outPos++] = SORTKEY_NULL;
           break;
         case SORTKEY_NUM:
-          encodeNumeric(pOut + outPos, serialType, pField, fieldLen);
-          outPos += 9;
+          outPos += encodeNumeric(pOut + outPos, serialType, pField, fieldLen);
           break;
         case SORTKEY_TEXT:
           outPos += encodeText(pOut + outPos, pField, fieldLen, coll);
@@ -310,6 +372,7 @@ static void writeIntBE(u8 *p, i64 v, int nByte){
 
 static SQLITE_INLINE void decodeNumericSortKeyToRecord(
   const u8 *pIn,
+  int nIn,
   u32 *pType,
   u32 *pLen,
   u8 *pOut
@@ -318,6 +381,17 @@ static SQLITE_INLINE void decodeNumericSortKeyToRecord(
   double d;
   u64 x;
   int i;
+
+  if( nIn>=17 && (pIn[8]==0x01 || pIn[8]==0x80) ){
+    u64 u = ((u64)pIn[9] << 56) | ((u64)pIn[10] << 48)
+          | ((u64)pIn[11] << 40) | ((u64)pIn[12] << 32)
+          | ((u64)pIn[13] << 24) | ((u64)pIn[14] << 16)
+          | ((u64)pIn[15] << 8)  | (u64)pIn[16];
+    i64 iv = (i64)(u ^ ((u64)1 << 63));
+    intSerialType(iv, pType, pLen);
+    writeIntBE(pOut, iv, (int)*pLen);
+    return;
+  }
 
   memcpy(buf, pIn, 8);
   if( buf[0] & 0x80 ){
@@ -373,7 +447,7 @@ static int recordFromAllNumericSortKeyBuffer(
     if( pSortKey[pos]!=SORTKEY_NUM ){
       return SQLITE_NOTFOUND;
     }
-    decodeNumericSortKeyToRecord(pSortKey + pos + 1,
+    decodeNumericSortKeyToRecord(pSortKey + pos + 1, 8,
                                  &aType[i], &aLen[i], aBuf[i]);
     nData += (int)aLen[i];
   }
@@ -424,6 +498,7 @@ static int recordFromNumericVarlenSortKeyBuffer(
 
   if( nSortKey<12
    || pSortKey[0]!=SORTKEY_NUM
+   || numericSortKeyLen(pSortKey, nSortKey)!=9
    || pSortKey[nSortKey-2]!=0x00
    || pSortKey[nSortKey-1]!=0x00 ){
     return SQLITE_NOTFOUND;
@@ -468,7 +543,7 @@ static int recordFromNumericVarlenSortKeyBuffer(
     return SQLITE_NOTFOUND;
   }
 
-  decodeNumericSortKeyToRecord(pSortKey + 1, &aType0, &aLen0, aBuf0);
+  decodeNumericSortKeyToRecord(pSortKey + 1, 8, &aType0, &aLen0, aBuf0);
   aType1 = aLen1 * 2 + (tag1==SORTKEY_TEXT ? 13 : 12);
 
   nHdr = 1 + sqlite3VarintLen(aType0) + sqlite3VarintLen(aType1);
@@ -531,6 +606,7 @@ static int recordFromNumericSmallBlobSortKeyBuffer(
 
   if( nSortKey<12
    || pSortKey[0]!=SORTKEY_NUM
+   || numericSortKeyLen(pSortKey, nSortKey)!=9
    || pSortKey[9]!=SORTKEY_BLOB ){
     return SQLITE_NOTFOUND;
   }
@@ -555,7 +631,7 @@ static int recordFromNumericSmallBlobSortKeyBuffer(
     return SQLITE_NOTFOUND;
   }
 
-  decodeNumericSortKeyToRecord(pSortKey + 1, &aType0, &aLen0, aBuf0);
+  decodeNumericSortKeyToRecord(pSortKey + 1, 8, &aType0, &aLen0, aBuf0);
   aType1 = (u32)nBlob * 2 + 12;
 
   if( aType1<128 ){
@@ -653,12 +729,14 @@ int recordFromSortKeyBuffer(
       nFields++;
 
     }else if( tag == SORTKEY_NUM ){
-
-      if( pos + 8 > nSortKey ) return SQLITE_CORRUPT;
-      decodeNumericSortKeyToRecord(pSortKey + pos,
+      int nNum;
+      pos--;
+      nNum = numericSortKeyLen(pSortKey + pos, nSortKey - pos);
+      if( nNum==0 ) return SQLITE_CORRUPT;
+      decodeNumericSortKeyToRecord(pSortKey + pos + 1, nNum - 1,
                                    &aType[nFields], &aLen[nFields],
                                    aIntBuf[nFields]);
-      pos += 8;
+      pos += nNum;
       aFieldPtr[nFields] = aIntBuf[nFields];
       aEncLen[nFields] = 0;
       nFields++;
