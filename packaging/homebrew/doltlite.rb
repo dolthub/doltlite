@@ -1,6 +1,6 @@
-# Homebrew formula for doltlite, submitted to Homebrew/homebrew-core.
-# Version bumps after the initial acceptance are opened automatically by
-# Homebrew's BrewTestBot because of the livecheck block below.
+# Homebrew formula for doltlite. Held in this repo as the source-of-truth
+# copy until the project clears homebrew-core's notability threshold for
+# new third-party submissions (≥30 forks, ≥30 watchers, ≥75 stars).
 class Doltlite < Formula
   desc "SQLite fork with Git-style version control via prolly trees"
   homepage "https://github.com/dolthub/doltlite"
@@ -8,11 +8,6 @@ class Doltlite < Formula
   sha256 "816ecedc369dd61fd06a0759985d5fbfbdf9fadcd1096cc1c35cc7f09447e7c3"
   license "Apache-2.0"
   head "https://github.com/dolthub/doltlite.git", branch: "master"
-
-  livecheck do
-    url :stable
-    strategy :github_latest
-  end
 
   uses_from_macos "zlib"
 
@@ -28,7 +23,7 @@ class Doltlite < Formula
   end
 
   test do
-    output = shell_output("#{bin}/doltlite :memory: 'SELECT dolt_version();'")
-    assert_match(/v?\d+\.\d+\.\d+/, output)
+    assert_match version.to_s,
+                 shell_output("#{bin}/doltlite :memory: 'SELECT dolt_version();'")
   end
 end
