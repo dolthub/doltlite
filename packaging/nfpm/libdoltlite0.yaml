@@ -21,8 +21,13 @@ depends:
   - zlib1g
 
 contents:
+  # The runtime file ships under its SONAME-matching name so that
+  # dlopen("libdoltlite.so.0") (Python ctypes, Node's process.dlopen,
+  # anything respecting SONAME) finds it. The unversioned symlink
+  # libdoltlite.so lives in libdoltlite-dev, mirroring how libsqlite3-0
+  # and libsqlite3-dev partition the files in Debian.
   - src: build/libdoltlite.so
-    dst: /usr/lib/${DEB_HOST_MULTIARCH}/libdoltlite.so
+    dst: /usr/lib/${DEB_HOST_MULTIARCH}/libdoltlite.so.0
     file_info:
       mode: 0644
   - src: LICENSE.md
