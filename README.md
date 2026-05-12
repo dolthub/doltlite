@@ -50,6 +50,14 @@ Add `libdoltlite-dev_${VER}_${ARCH}.deb` for the header and static library.
 Download `doltlite-tools-win-x64-<ver>.zip` from
 [releases](https://github.com/dolthub/doltlite/releases), extract `doltlite.exe`, add to `PATH`.
 
+## Bindings
+
+Language-specific wrappers around `libdoltlite`. Each one exposes the full `sqlite3_*` C API plus the dolt version-control functions.
+
+| Language | Package | Source |
+|---|---|---|
+| Node.js / Bun | `@dolthub/doltlite` | [dolthub/doltlite-node](https://github.com/dolthub/doltlite-node) |
+
 ## Building
 
 ### macOS / Linux
