@@ -6474,6 +6474,17 @@ SELECT min(score), max(score), sum(score) FROM t WHERE active = 1;
 PRAGMA integrity_check;
 "
 
+oracle "cat120_count_not_null_column" "
+CREATE TABLE t(k INTEGER NOT NULL, v INTEGER);
+INSERT INTO t VALUES (1,NULL),(2,7),(3,NULL);
+SELECT count(k), count(*), count(v) FROM t;
+CREATE TABLE a(k INTEGER NOT NULL);
+CREATE TABLE b(k INTEGER NOT NULL);
+INSERT INTO a VALUES(1),(2),(3);
+INSERT INTO b VALUES(1),(3);
+SELECT count(b.k), count(*) FROM a LEFT JOIN b USING(k);
+"
+
 # ════════════════════════════════════════════════════════════════════
 echo ""
 echo "================================"
