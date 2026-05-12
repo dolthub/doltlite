@@ -37,7 +37,7 @@ static void check(const char *name, int condition){
   }
 }
 
-static int execsql(sqlite3 *db, const char *sql){
+static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( err ) sqlite3_free(err);
@@ -45,7 +45,7 @@ static int execsql(sqlite3 *db, const char *sql){
 }
 
 static char result_buf[4096];
-static const char *exec1(sqlite3 *db, const char *sql){
+static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *s = 0;
   int rc;
   result_buf[0] = 0;
@@ -69,9 +69,9 @@ static void setup_db(const char *path){
   sqlite3 *db = 0;
   remove(path);
   sqlite3_open(path, &db);
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
-  execsql(db, "INSERT INTO t VALUES(1, 'original')");
-  exec1(db, "SELECT dolt_commit('-A','-m','init')");
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  execSql(db, "INSERT INTO t VALUES(1, 'original')");
+  queryScalarText(db, "SELECT dolt_commit('-A','-m','init')");
   sqlite3_close(db);
 }
 
@@ -92,10 +92,10 @@ static void test_two_writers(void){
     /* Child: open, begin write, hold it for 2 seconds */
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
-    execsql(db, "BEGIN");
-    execsql(db, "INSERT INTO t VALUES(2, 'from_child')");
+    execSql(db, "BEGIN");
+    execSql(db, "INSERT INTO t VALUES(2, 'from_child')");
     sleep(2);
-    execsql(db, "COMMIT");
+    execSql(db, "COMMIT");
     sqlite3_close(db);
     _exit(0);
   }
@@ -108,7 +108,7 @@ static void test_two_writers(void){
     int rc;
     sqlite3_open(path, &db);
     sqlite3_busy_timeout(db, 100); /* Short timeout — should fail fast */
-    rc = execsql(db, "INSERT INTO t VALUES(3, 'from_parent')");
+    rc = execSql(db, "INSERT INTO t VALUES(3, 'from_parent')");
     check("mp_parent_busy", rc==SQLITE_BUSY);
     sqlite3_close(db);
   }
@@ -121,7 +121,7 @@ static void test_two_writers(void){
     sqlite3 *db = 0;
     int rc;
     sqlite3_open(path, &db);
-    rc = execsql(db, "INSERT INTO t VALUES(3, 'from_parent')");
+    rc = execSql(db, "INSERT INTO t VALUES(3, 'from_parent')");
     check("mp_parent_after_child", rc==SQLITE_OK);
     sqlite3_close(db);
   }
@@ -146,10 +146,10 @@ static void test_reader_during_write(void){
     /* Child: begin write, hold for 2 seconds, then commit */
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
-    execsql(db, "BEGIN");
-    execsql(db, "INSERT INTO t VALUES(2, 'uncommitted')");
+    execSql(db, "BEGIN");
+    execSql(db, "INSERT INTO t VALUES(2, 'uncommitted')");
     sleep(2);
-    execsql(db, "COMMIT");
+    execSql(db, "COMMIT");
     sqlite3_close(db);
     _exit(0);
   }
@@ -161,9 +161,9 @@ static void test_reader_during_write(void){
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
     check("mp_reader_sees_committed",
-      strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
     check("mp_reader_sees_original",
-      strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "original")==0);
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "original")==0);
     sqlite3_close(db);
   }
 
@@ -174,7 +174,7 @@ static void test_reader_during_write(void){
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
     check("mp_after_child_commit",
-      strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
     sqlite3_close(db);
   }
 
@@ -197,8 +197,8 @@ static void test_sequential_processes(void){
   if( pid==0 ){
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
-    execsql(db, "INSERT INTO t VALUES(2, 'from_child')");
-    exec1(db, "SELECT dolt_commit('-A','-m','child commit')");
+    execSql(db, "INSERT INTO t VALUES(2, 'from_child')");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','child commit')");
     sqlite3_close(db);
     _exit(0);
   }
@@ -210,13 +210,13 @@ static void test_sequential_processes(void){
   {
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
-    execsql(db, "INSERT INTO t VALUES(3, 'from_parent')");
-    exec1(db, "SELECT dolt_commit('-A','-m','parent commit')");
+    execSql(db, "INSERT INTO t VALUES(3, 'from_parent')");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','parent commit')");
 
     check("mp_seq_count",
-      strcmp(exec1(db, "SELECT count(*) FROM t"), "3")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "3")==0);
     check("mp_seq_log",
-      strcmp(exec1(db, "SELECT count(*) FROM dolt_log"), "3")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "3")==0);
     sqlite3_close(db);
   }
 
@@ -245,9 +245,9 @@ static void test_gc_during_read(void){
     for(i=2; i<=10; i++){
       char sql[128];
       snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'row_%d')", i, i);
-      execsql(db, sql);
+      execSql(db, sql);
     }
-    exec1(db, "SELECT dolt_commit('-A','-m','add rows')");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','add rows')");
     sqlite3_close(db);
   }
 
@@ -262,7 +262,7 @@ static void test_gc_during_read(void){
     sqlite3_open(path, &db);
 
     /* Verify we can read */
-    exec1(db, "SELECT count(*) FROM t");
+    queryScalarText(db, "SELECT count(*) FROM t");
 
     /* Signal parent: "I have the file open" */
     write(pipefd[1], "R", 1);
@@ -273,7 +273,7 @@ static void test_gc_during_read(void){
 
     /* After GC, can we still read? (POSIX: old fd still valid) */
     {
-      const char *r = exec1(db, "SELECT count(*) FROM t");
+      const char *r = queryScalarText(db, "SELECT count(*) FROM t");
       int ok = (strcmp(r, "10")==0);
       sqlite3_close(db);
       _exit(ok ? 0 : 1);
@@ -289,7 +289,7 @@ static void test_gc_during_read(void){
     close(pipefd[0]);
 
     sqlite3_open(path, &db);
-    exec1(db, "SELECT dolt_gc()");
+    queryScalarText(db, "SELECT dolt_gc()");
     sqlite3_close(db);
   }
 
@@ -301,7 +301,7 @@ static void test_gc_during_read(void){
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
     check("mp_gc_data_intact",
-      strcmp(exec1(db, "SELECT count(*) FROM t"), "10")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "10")==0);
     sqlite3_close(db);
   }
 
@@ -330,15 +330,15 @@ static void test_gc_blocked_by_writer(void){
     sqlite3 *db = 0;
     close(pipefd[0]);
     sqlite3_open(path, &db);
-    execsql(db, "BEGIN");
-    execsql(db, "INSERT INTO t VALUES(2, 'blocking')");
+    execSql(db, "BEGIN");
+    execSql(db, "INSERT INTO t VALUES(2, 'blocking')");
 
     /* Signal parent: "I hold the write lock" */
     write(pipefd[1], "W", 1);
     close(pipefd[1]);
 
     sleep(2);
-    execsql(db, "COMMIT");
+    execSql(db, "COMMIT");
     sqlite3_close(db);
     _exit(0);
   }
@@ -354,7 +354,7 @@ static void test_gc_blocked_by_writer(void){
 
     sqlite3_open(path, &db);
     sqlite3_busy_timeout(db, 100); /* Short timeout */
-    r = exec1(db, "SELECT dolt_gc()");
+    r = queryScalarText(db, "SELECT dolt_gc()");
     /* GC should fail because child holds the write lock.
     ** It either returns an error or BUSY. */
     check("mp_gc_blocked",
@@ -370,9 +370,9 @@ static void test_gc_blocked_by_writer(void){
   {
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
-    exec1(db, "SELECT dolt_gc()");
+    queryScalarText(db, "SELECT dolt_gc()");
     check("mp_gc_after_writer_ok",
-      strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
     sqlite3_close(db);
   }
 
@@ -402,8 +402,8 @@ static void test_cross_process_commit_conflict(void){
     char buf;
     close(pipefd[0]);
     sqlite3_open(path, &db);
-    execsql(db, "INSERT INTO t VALUES(2, 'child')");
-    exec1(db, "SELECT dolt_commit('-A','-m','child commit')");
+    execSql(db, "INSERT INTO t VALUES(2, 'child')");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','child commit')");
 
     /* Signal parent */
     write(pipefd[1], "C", 1);
@@ -427,8 +427,8 @@ static void test_cross_process_commit_conflict(void){
     waitpid(pid, &status, 0);
 
     /* Parent tries to commit — should detect conflict */
-    execsql(db, "INSERT INTO t VALUES(3, 'parent')");
-    r = exec1(db, "SELECT dolt_commit('-A','-m','parent commit')");
+    execSql(db, "INSERT INTO t VALUES(3, 'parent')");
+    r = queryScalarText(db, "SELECT dolt_commit('-A','-m','parent commit')");
     check("mp_conflict_detected",
       strstr(r, "conflict")!=0 || strstr(r, "ERR")!=0);
 
@@ -440,7 +440,7 @@ static void test_cross_process_commit_conflict(void){
     sqlite3 *db = 0;
     sqlite3_open(path, &db);
     check("mp_child_commit_survived",
-      strcmp(exec1(db, "SELECT count(*) FROM dolt_log"), "2")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "2")==0);
     sqlite3_close(db);
   }
 

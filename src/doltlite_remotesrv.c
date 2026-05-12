@@ -5,6 +5,7 @@
 #include "chunk_store.h"
 #include "prolly_hash.h"
 #include "doltlite_remotesrv.h"
+#include "doltlite_remote.h"
 #include "doltlite_commit.h"
 
 #include <string.h>
@@ -51,21 +52,6 @@ static int hexToHash(const char *zHex, ProllyHash *pHash){
   return SQLITE_OK;
 }
 
-static int writeAll(int fd, const void *pBuf, int nBuf){
-  int nWritten = 0;
-  const u8 *p = (const u8*)pBuf;
-  while( nWritten < nBuf ){
-    ssize_t n = write(fd, p + nWritten, nBuf - nWritten);
-    if( n<0 ){
-      if( errno==EINTR ) continue;
-      return SQLITE_IOERR_WRITE;
-    }
-    if( n==0 ) return SQLITE_IOERR_WRITE;
-    nWritten += (int)n;
-  }
-  return SQLITE_OK;
-}
-
 static void sendResponse(int fd, int status, const char *zStatus,
                          const u8 *pBody, int nBody){
   char zHeader[256];
@@ -77,9 +63,9 @@ static void sendResponse(int fd, int status, const char *zStatus,
     "\r\n",
     status, zStatus, nBody);
   nHeader = (int)strlen(zHeader);
-  if( writeAll(fd, zHeader, nHeader)!=SQLITE_OK ) return;
+  if( doltliteWriteAll(fd, zHeader, nHeader)!=SQLITE_OK ) return;
   if( pBody && nBody>0 ){
-    writeAll(fd, pBody, nBody);
+    doltliteWriteAll(fd, pBody, nBody);
   }
 }
 

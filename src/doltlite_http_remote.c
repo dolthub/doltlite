@@ -35,21 +35,6 @@ struct HttpRemote {
   int nPendingRefs;
 };
 
-static int writeAll(int fd, const void *pBuf, int nBuf){
-  int nWritten = 0;
-  const u8 *p = (const u8*)pBuf;
-  while( nWritten < nBuf ){
-    ssize_t n = write(fd, p + nWritten, nBuf - nWritten);
-    if( n < 0 ){
-      if( errno==EINTR ) continue;
-      return SQLITE_IOERR_WRITE;
-    }
-    if( n == 0 ) return SQLITE_IOERR_WRITE;
-    nWritten += (int)n;
-  }
-  return SQLITE_OK;
-}
-
 static void hashToHex(const ProllyHash *pHash, char *zOut){
   static const char hex[] = "0123456789abcdef";
   int i;
@@ -147,10 +132,10 @@ static int httpRequest(
       zMethod, zPath, zHost);
   }
 
-  rc = writeAll(fd, aReqHdr, nReqHdr);
+  rc = doltliteWriteAll(fd, aReqHdr, nReqHdr);
   if( rc != SQLITE_OK ){ close(fd); return rc; }
   if( pBody && nBody > 0 ){
-    rc = writeAll(fd, pBody, nBody);
+    rc = doltliteWriteAll(fd, pBody, nBody);
     if( rc != SQLITE_OK ){ close(fd); return rc; }
   }
 
