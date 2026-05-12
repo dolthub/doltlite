@@ -156,6 +156,22 @@ void prollyNodeChildHash(const ProllyNode *pNode, int i, ProllyHash *pHash){
   memcpy(pHash->data, pNode->pValData + off, PROLLY_HASH_SIZE);
 }
 
+static SQLITE_INLINE int prollyKeyComparePrefix(
+  const u8 *pLeft,
+  const u8 *pRight,
+  int n
+){
+  int i;
+  if( n<=32 ){
+    for(i=0; i<n; i++){
+      int c = (int)pLeft[i] - (int)pRight[i];
+      if( c ) return c;
+    }
+    return 0;
+  }
+  return memcmp(pLeft, pRight, n);
+}
+
 int prollyNodeSearchBlob(
   const ProllyNode *pNode,
   const u8 *pKey,
@@ -180,7 +196,7 @@ int prollyNodeSearchBlob(
     prollyNodeKey(pNode, mid, &pMidKey, &nMidKey);
 
     nCmp = nMidKey < nKey ? nMidKey : nKey;
-    c = memcmp(pKey, pMidKey, nCmp);
+    c = prollyKeyComparePrefix(pKey, pMidKey, nCmp);
     if( c==0 ) c = nKey - nMidKey;
 
     if( c==0 ){
