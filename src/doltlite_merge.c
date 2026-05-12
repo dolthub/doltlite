@@ -1169,6 +1169,7 @@ static void freeConflictRows(struct ConflictRow *aRows, int nRows){
   for(i=0; i<nRows; i++){
     sqlite3_free(aRows[i].pKey);
     sqlite3_free(aRows[i].pBaseVal);
+    sqlite3_free(aRows[i].pOurVal);
     sqlite3_free(aRows[i].pTheirVal);
   }
   sqlite3_free(aRows);
