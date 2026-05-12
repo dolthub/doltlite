@@ -1,11 +1,28 @@
 #!/bin/bash
 # run_doltlite_tests.sh — Run all doltlite feature test scripts
 #
-# Usage: bash run_doltlite_tests.sh
+# Usage: bash test/run_doltlite_tests.sh
 #
-# Runs from the build directory. Exits non-zero on first failure.
+# Runs all suites from the build directory, regardless of caller cwd.
+# Override the build directory with DOLTLITE_BUILD_DIR.
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BUILD_DIR="${DOLTLITE_BUILD_DIR:-$REPO_ROOT/build}"
+
+if [ ! -d "$BUILD_DIR" ]; then
+  echo "ERROR: build directory not found: $BUILD_DIR"
+  echo "Run configure/make first, or set DOLTLITE_BUILD_DIR."
+  exit 1
+fi
+
+if [ ! -x "$BUILD_DIR/doltlite" ]; then
+  echo "ERROR: $BUILD_DIR/doltlite not found or not executable"
+  echo "Run make in the build directory first."
+  exit 1
+fi
 
 TESTS=(
   # Core SQL parity
@@ -65,10 +82,12 @@ total_pass=0
 total_fail=0
 failed=""
 
+cd "$BUILD_DIR"
+
 for t in "${TESTS[@]}"; do
   echo ""
   echo "━━━ $t ━━━"
-  if bash "../test/$t"; then
+  if bash "$SCRIPT_DIR/$t"; then
     total_pass=$((total_pass + 1))
   else
     total_fail=$((total_fail + 1))
