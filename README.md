@@ -25,7 +25,7 @@ Each install method places the same set of files (paths shown for `/usr/local`):
 - `lib/libdoltlite.a` — static library
 - `lib/libdoltlite.{so,dylib}` — shared library
 
-### macOS (arm64) / Linux (x86_64 or arm64)
+### macOS (Apple Silicon) / Linux (x86_64 or arm64)
 
 ```
 sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/download/install.sh | bash'
@@ -36,7 +36,7 @@ sudo bash -c 'curl -fsSL https://github.com/dolthub/doltlite/releases/latest/dow
 `.deb` packages ship for both `amd64` and `arm64`. Substitute `$ARCH` below:
 
 ```
-VER=0.10.3
+VER=$(curl -fsSL https://api.github.com/repos/dolthub/doltlite/releases/latest | jq -r .tag_name | sed 's/^v//')
 ARCH=amd64   # or arm64
 BASE=https://github.com/dolthub/doltlite/releases/download/v${VER}
 wget ${BASE}/libdoltlite0_${VER}_${ARCH}.deb ${BASE}/doltlite_${VER}_${ARCH}.deb
@@ -173,7 +173,12 @@ standard `sqlite3` module, zero code changes:
 
 ```bash
 cd build
+# Linux:
 LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
+# macOS: Python's _sqlite3 is statically linked against the system SQLite,
+# so LD_PRELOAD / DYLD_INSERT_LIBRARIES won't redirect it. Load doltlite
+# explicitly via ctypes instead:
+#   python3 -c 'import ctypes; ctypes.CDLL("./libdoltlite.dylib"); import runpy; runpy.run_path("../examples/quickstart.py")'
 ```
 
 **Go** ([`examples/go/main.go`](examples/go/main.go)) — uses
@@ -682,7 +687,7 @@ have are sent.
 
 ```sql
 SELECT dolt_version();
--- "v0.7.4"
+-- e.g. "v0.10.6"
 ```
 
 Zero-arg scalar returning the build's version string (from
