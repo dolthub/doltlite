@@ -6780,6 +6780,22 @@ static void finalizeAggFunctions(Parse *pParse, AggInfo *pAggInfo){
   }
 }
 
+#ifdef DOLTLITE_PROLLY
+static int aggregateArgCanBeNull(const Expr *pExpr){
+  if( pExpr->op==TK_AGG_COLUMN && pExpr->y.pTab!=0 ){
+    return ExprHasProperty(pExpr, EP_CanBeNull)
+#ifdef SQLITE_ALLOW_ROWID_IN_VIEW
+        || (pExpr->iColumn==XN_ROWID && IsView(pExpr->y.pTab))
+#endif
+        || (pExpr->iColumn>=0
+            && pExpr->y.pTab->aCol!=0
+            && ALWAYS(pExpr->iColumn<pExpr->y.pTab->nCol)
+            && pExpr->y.pTab->aCol[pExpr->iColumn].notNull==0);
+  }
+  return sqlite3ExprCanBeNull(pExpr);
+}
+#endif
+
 /*
 ** Generate code that will update the accumulator memory cells for an
 ** aggregate based on the current cursor position.
@@ -6894,7 +6910,19 @@ static void updateAccumulator(
       nArg = pList->nExpr;
       regAgg = sqlite3GetTempRange(pParse, nArg);
       regDistinct = regAgg;
+#ifdef DOLTLITE_PROLLY
+      if( nArg==1
+       && sqlite3StrICmp(pF->pFunc->zName, "count")==0
+       && pF->iDistinct<0
+       && 0==aggregateArgCanBeNull(pList->a[0].pExpr)
+      ){
+        sqlite3VdbeAddOp2(v, OP_Integer, 1, regAgg);
+      }else{
+        sqlite3ExprCodeExprList(pParse, pList, regAgg, 0, SQLITE_ECEL_DUP);
+      }
+#else
       sqlite3ExprCodeExprList(pParse, pList, regAgg, 0, SQLITE_ECEL_DUP);
+#endif
     }else{
       nArg = 0;
       regAgg = 0;
