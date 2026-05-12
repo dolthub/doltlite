@@ -1197,6 +1197,45 @@ run_test "bulk_read_max_pk" \
 rm -rf "$TMPROOT"
 
 # ============================================================
+# GUARD 23: Large integer secondary-index keys remain exact
+# Bug: sort keys encoded all numeric values as double bytes, collapsing
+#      distinct INTEGER values above 2^53 in secondary indexes.
+# Fix: append exact integer bytes when an INTEGER cannot round-trip through
+#      double without precision loss.
+# ============================================================
+
+echo "--- Guard 23: Large integer index keys ---"
+
+DB=/tmp/test_rg_large_int_idx_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(x INTEGER UNIQUE, y TEXT);
+INSERT INTO t VALUES(9007199254740992,'a');
+INSERT INTO t VALUES(9007199254740993,'b');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "large_int_index_order" \
+  "SELECT group_concat(x || ':' || y, '|') FROM (SELECT x,y FROM t ORDER BY x);" \
+  "9007199254740992:a|9007199254740993:b" "$DB"
+run_test "large_int_index_lookup" \
+  "SELECT y FROM t WHERE x=9007199254740993;" "b" "$DB"
+run_test "large_int_forced_index_lookup" \
+  "SELECT y FROM t INDEXED BY sqlite_autoindex_t_1 WHERE x=9007199254740993;" \
+  "b" "$DB"
+
+rm -f "$DB"
+
+DB=/tmp/test_rg_negative_large_int_idx_$$.db; rm -f "$DB"
+echo "CREATE TABLE t(x INTEGER UNIQUE, y TEXT);
+INSERT INTO t VALUES(-9007199254740992,'a');
+INSERT INTO t VALUES(-9007199254740993,'b');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "negative_large_int_index_order" \
+  "SELECT group_concat(x || ':' || y, '|') FROM (SELECT x,y FROM t ORDER BY x);" \
+  "-9007199254740993:b|-9007199254740992:a" "$DB"
+run_test "negative_large_int_index_lookup" \
+  "SELECT y FROM t WHERE x=-9007199254740993;" "b" "$DB"
+
+rm -f "$DB"
+
+# ============================================================
 # Done
 # ============================================================
 
