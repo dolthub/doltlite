@@ -655,6 +655,14 @@ SELECT dolt_pull('origin', 'main');
 
 ##### Remote Server (`doltlite-remotesrv`)
 
+> [!WARNING]
+> The remote protocol currently provides no authentication, authorization,
+> or transport security. The server binds to `127.0.0.1` by default and a
+> 64 MiB chunk / 128 MiB request cap is enforced as defense-in-depth, but
+> these are stopgaps. Run only on trusted networks (or behind a reverse
+> proxy that adds TLS + auth) until [issue #228](https://github.com/dolthub/doltlite/issues/228)
+> ships a secure remote protocol.
+
 Doltlite includes a standalone HTTP server for serving databases over the
 network. Build it alongside doltlite:
 
@@ -667,6 +675,8 @@ Start serving a directory of databases:
 
 ```
 ./doltlite-remotesrv -p 8080 /path/to/databases/
+# To bind to all interfaces (e.g. behind a TLS-terminating reverse proxy):
+./doltlite-remotesrv -p 8080 --bind 0.0.0.0 /path/to/databases/
 ```
 
 Every `.db` file in that directory becomes accessible at
