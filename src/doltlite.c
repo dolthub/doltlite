@@ -932,6 +932,88 @@ static struct TableEntry *addFindEntryByName(
   return 0;
 }
 
+typedef struct AddNameSlot AddNameSlot;
+struct AddNameSlot {
+  const char *zName;
+  int iEntry;
+};
+
+typedef struct AddNameIndex AddNameIndex;
+struct AddNameIndex {
+  struct TableEntry *aEntry;
+  AddNameSlot *aSlot;
+  int nSlot;
+};
+
+static u32 addNameHash(const char *z){
+  u32 h = 2166136261u;
+  while( z && *z ){
+    h ^= (unsigned char)*z;
+    h *= 16777619u;
+    z++;
+  }
+  return h;
+}
+
+static int addNameIndexInit(
+  AddNameIndex *pIdx,
+  struct TableEntry *aEntry,
+  int nEntry
+){
+  int nSlot = 16;
+  int i;
+
+  memset(pIdx, 0, sizeof(*pIdx));
+  pIdx->aEntry = aEntry;
+  if( nEntry<=0 ) return SQLITE_OK;
+  while( nSlot < nEntry*2 ) nSlot *= 2;
+  pIdx->aSlot = sqlite3_malloc(nSlot * (int)sizeof(AddNameSlot));
+  if( !pIdx->aSlot ) return SQLITE_NOMEM;
+  memset(pIdx->aSlot, 0, nSlot * (int)sizeof(AddNameSlot));
+  pIdx->nSlot = nSlot;
+
+  for(i=0; i<nEntry; i++){
+    u32 slot;
+    if( !aEntry[i].zName ) continue;
+    slot = addNameHash(aEntry[i].zName) & (u32)(nSlot - 1);
+    while( pIdx->aSlot[slot].zName ){
+      if( strcmp(pIdx->aSlot[slot].zName, aEntry[i].zName)==0 ){
+        break;
+      }
+      slot = (slot + 1) & (u32)(nSlot - 1);
+    }
+    if( !pIdx->aSlot[slot].zName ){
+      pIdx->aSlot[slot].zName = aEntry[i].zName;
+      pIdx->aSlot[slot].iEntry = i + 1;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static void addNameIndexFree(AddNameIndex *pIdx){
+  sqlite3_free(pIdx->aSlot);
+  memset(pIdx, 0, sizeof(*pIdx));
+}
+
+static struct TableEntry *addNameIndexFind(
+  const AddNameIndex *pIdx,
+  const char *zName
+){
+  u32 slot;
+  int i;
+  if( !zName || pIdx->nSlot==0 ) return 0;
+  slot = addNameHash(zName) & (u32)(pIdx->nSlot - 1);
+  for(i=0; i<pIdx->nSlot; i++){
+    AddNameSlot *pSlot = &pIdx->aSlot[slot];
+    if( !pSlot->zName ) return 0;
+    if( strcmp(pSlot->zName, zName)==0 ){
+      return &pIdx->aEntry[pSlot->iEntry - 1];
+    }
+    slot = (slot + 1) & (u32)(pIdx->nSlot - 1);
+  }
+  return 0;
+}
+
 static void addAlignStagedEntriesToWorking(
   struct TableEntry *aWorking,
   int nWorking,
@@ -939,14 +1021,27 @@ static void addAlignStagedEntriesToWorking(
   int nStaged
 ){
   int i;
+  AddNameIndex workingIdx;
+  if( addNameIndexInit(&workingIdx, aWorking, nWorking)!=SQLITE_OK ){
+    for(i=0; i<nStaged; i++){
+      struct TableEntry *pWorking;
+      if( !aStaged[i].zName ) continue;
+      pWorking = addFindEntryByName(aWorking, nWorking, aStaged[i].zName);
+      if( pWorking ){
+        aStaged[i].iTable = pWorking->iTable;
+      }
+    }
+    return;
+  }
   for(i=0; i<nStaged; i++){
     struct TableEntry *pWorking;
     if( !aStaged[i].zName ) continue;
-    pWorking = addFindEntryByName(aWorking, nWorking, aStaged[i].zName);
+    pWorking = addNameIndexFind(&workingIdx, aStaged[i].zName);
     if( pWorking ){
       aStaged[i].iTable = pWorking->iTable;
     }
   }
+  addNameIndexFree(&workingIdx);
 }
 
 static int addLoadWorkingAndStagedCatalogs(
@@ -1021,6 +1116,10 @@ static int addStageAllTables(
   int k;
   int useWorkingHash = 1;
   int rc;
+  AddNameIndex stagedIdx;
+  AddNameIndex workingIdx;
+  int stagedIdxInit = 0;
+  int workingIdxInit = 0;
 
   rc = addLoadWorkingAndStagedCatalogs(db, pWorkingHash,
                                        &aWorking, &nWorking,
@@ -1029,6 +1128,21 @@ static int addStageAllTables(
     sqlite3_result_error(context, "failed to load staged catalog", -1);
     return rc;
   }
+  rc = addNameIndexInit(&stagedIdx, aStaged, nStaged);
+  if( rc!=SQLITE_OK ){
+    addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
+    sqlite3_result_error_nomem(context);
+    return rc;
+  }
+  stagedIdxInit = 1;
+  rc = addNameIndexInit(&workingIdx, aWorking, nWorking);
+  if( rc!=SQLITE_OK ){
+    addNameIndexFree(&stagedIdx);
+    addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
+    sqlite3_result_error_nomem(context);
+    return rc;
+  }
+  workingIdxInit = 1;
 
   for(k=0; k<nWorking; k++){
     const char *zName = aWorking[k].zName;
@@ -1037,17 +1151,21 @@ static int addStageAllTables(
       int ignored = 0;
       rc = addCheckIgnore(db, context, zName, &ignored);
       if( rc!=SQLITE_OK ){
+        if( workingIdxInit ) addNameIndexFree(&workingIdx);
+        if( stagedIdxInit ) addNameIndexFree(&stagedIdx);
         addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
         return rc;
       }
       if( ignored ){
         useWorkingHash = 0;
-        pUse = addFindEntryByName(aStaged, nStaged, zName);
+        pUse = addNameIndexFind(&stagedIdx, zName);
         if( !pUse ) continue;
       }
     }
     rc = addAppendTableEntry(context, &aNew, &nNew, pUse);
     if( rc!=SQLITE_OK ){
+      if( workingIdxInit ) addNameIndexFree(&workingIdx);
+      if( stagedIdxInit ) addNameIndexFree(&stagedIdx);
       addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
       return rc;
     }
@@ -1056,11 +1174,13 @@ static int addStageAllTables(
   for(k=0; k<nStaged; k++){
     const char *zName = aStaged[k].zName;
     if( aStaged[k].iTable<=1 || !zName ) continue;
-    if( addFindEntryByName(aWorking, nWorking, zName) ) continue;
+    if( addNameIndexFind(&workingIdx, zName) ) continue;
     {
       int ignored = 0;
       rc = addCheckIgnore(db, context, zName, &ignored);
       if( rc!=SQLITE_OK ){
+        if( workingIdxInit ) addNameIndexFree(&workingIdx);
+        if( stagedIdxInit ) addNameIndexFree(&stagedIdx);
         addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
         return rc;
       }
@@ -1069,6 +1189,8 @@ static int addStageAllTables(
     useWorkingHash = 0;
     rc = addAppendTableEntry(context, &aNew, &nNew, &aStaged[k]);
     if( rc!=SQLITE_OK ){
+      if( workingIdxInit ) addNameIndexFree(&workingIdx);
+      if( stagedIdxInit ) addNameIndexFree(&stagedIdx);
       addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
       return rc;
     }
@@ -1081,6 +1203,8 @@ static int addStageAllTables(
     addAlignStagedEntriesToWorking(aWorking, nWorking, aNew, nNew);
     rc = addWriteStagedCatalog(db, cs, aNew, nNew);
   }
+  if( workingIdxInit ) addNameIndexFree(&workingIdx);
+  if( stagedIdxInit ) addNameIndexFree(&stagedIdx);
   addFreeEntries(aWorking, nWorking, aStaged, nStaged, aNew, nNew);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
@@ -1552,7 +1676,26 @@ static void doltliteCommitFunc(
     ProllyHash workingHash, headCatHash, stagedHash;
     struct TableEntry *aWorking = 0, *aHead = 0, *aStaged = 0;
     int nWorking = 0, nHead = 0, nStaged = 0;
+    int nStagedAlloc = 0;
     int j, k;
+    AddNameIndex workingIdx;
+    AddNameIndex headIdx;
+    AddNameIndex stagedIdx;
+    u8 *aRemoveStaged = 0;
+
+    memset(&workingIdx, 0, sizeof(workingIdx));
+    memset(&headIdx, 0, sizeof(headIdx));
+    memset(&stagedIdx, 0, sizeof(stagedIdx));
+
+    #define FREE_ADD_MODIFIED_CATALOGS() do { \
+      sqlite3_free(aRemoveStaged); \
+      addNameIndexFree(&workingIdx); \
+      addNameIndexFree(&headIdx); \
+      addNameIndexFree(&stagedIdx); \
+      doltliteFreeCatalog(aWorking, nWorking); \
+      doltliteFreeCatalog(aHead, nHead); \
+      doltliteFreeCatalog(aStaged, nStaged); \
+    } while(0)
 
     rc = doltliteFlushCatalogToHash(db, &workingHash);
     if( rc!=SQLITE_OK ){
@@ -1562,14 +1705,15 @@ static void doltliteCommitFunc(
     rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
     if( rc!=SQLITE_OK ){
       sqlite3_result_error(context, "failed to load working catalog", -1);
+      FREE_ADD_MODIFIED_CATALOGS();
       return;
     }
     rc = doltliteGetHeadCatalogHash(db, &headCatHash);
     if( rc==SQLITE_OK && !prollyHashIsEmpty(&headCatHash) ){
       rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
       if( rc!=SQLITE_OK ){
-        doltliteFreeCatalog(aWorking, nWorking);
         sqlite3_result_error(context, "failed to load HEAD catalog", -1);
+        FREE_ADD_MODIFIED_CATALOGS();
         return;
       }
     }
@@ -1581,58 +1725,65 @@ static void doltliteCommitFunc(
       rc = doltliteLoadCatalog(db, &headCatHash, &aStaged, &nStaged, 0);
     }
     if( rc!=SQLITE_OK ){
-      doltliteFreeCatalog(aWorking, nWorking);
-      doltliteFreeCatalog(aHead, nHead);
       sqlite3_result_error(context, "failed to load staged catalog", -1);
+      FREE_ADD_MODIFIED_CATALOGS();
+      return;
+    }
+
+    nStagedAlloc = nStaged + nWorking + 1;
+    if( nStagedAlloc>0 ){
+      struct TableEntry *aNewStaged = sqlite3_realloc(
+          aStaged, nStagedAlloc*(int)sizeof(struct TableEntry));
+      if( !aNewStaged ){
+        sqlite3_result_error_nomem(context);
+        FREE_ADD_MODIFIED_CATALOGS();
+        return;
+      }
+      aStaged = aNewStaged;
+    }
+    aRemoveStaged = sqlite3_malloc(nStagedAlloc>0 ? nStagedAlloc : 1);
+    if( !aRemoveStaged ){
+      sqlite3_result_error_nomem(context);
+      FREE_ADD_MODIFIED_CATALOGS();
+      return;
+    }
+    memset(aRemoveStaged, 0, nStagedAlloc>0 ? nStagedAlloc : 1);
+
+    rc = addNameIndexInit(&workingIdx, aWorking, nWorking);
+    if( rc==SQLITE_OK ) rc = addNameIndexInit(&headIdx, aHead, nHead);
+    if( rc==SQLITE_OK ) rc = addNameIndexInit(&stagedIdx, aStaged, nStaged);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_nomem(context);
+      FREE_ADD_MODIFIED_CATALOGS();
       return;
     }
 
     for(j=0; j<nWorking; j++){
       const char *zName = aWorking[j].zName;
-      int inHead = 0;
       int updated = 0;
       char *zDup;
-      for(k=0; k<nHead; k++){
-        if( aHead[k].zName && zName && strcmp(aHead[k].zName, zName)==0 ){
-          inHead = 1; break;
-        }
-      }
-      if( !inHead ) continue;
+      struct TableEntry *pStaged;
+      if( !addNameIndexFind(&headIdx, zName) ) continue;
 
-      for(k=0; k<nStaged; k++){
-        if( aStaged[k].zName && zName && strcmp(aStaged[k].zName, zName)==0 ){
+      pStaged = addNameIndexFind(&stagedIdx, zName);
+      if( pStaged ){
+          k = (int)(pStaged - aStaged);
           zDup = zName ? sqlite3_mprintf("%s", zName) : 0;
           if( zName && !zDup ){
-            doltliteFreeCatalog(aWorking, nWorking);
-            doltliteFreeCatalog(aHead, nHead);
-            doltliteFreeCatalog(aStaged, nStaged);
             sqlite3_result_error_nomem(context);
+            FREE_ADD_MODIFIED_CATALOGS();
             return;
           }
           sqlite3_free(aStaged[k].zName);
           aStaged[k] = aWorking[j];
           aStaged[k].zName = zDup;
           updated = 1;
-          break;
-        }
       }
       if( !updated ){
-        struct TableEntry *aNew = sqlite3_realloc(aStaged,
-            (nStaged+1)*(int)sizeof(struct TableEntry));
-        if( !aNew ){
-          doltliteFreeCatalog(aWorking, nWorking);
-          doltliteFreeCatalog(aHead, nHead);
-          doltliteFreeCatalog(aStaged, nStaged);
-          sqlite3_result_error_nomem(context);
-          return;
-        }
-        aStaged = aNew;
         zDup = zName ? sqlite3_mprintf("%s", zName) : 0;
         if( zName && !zDup ){
-          doltliteFreeCatalog(aWorking, nWorking);
-          doltliteFreeCatalog(aHead, nHead);
-          doltliteFreeCatalog(aStaged, nStaged);
           sqlite3_result_error_nomem(context);
+          FREE_ADD_MODIFIED_CATALOGS();
           return;
         }
         aStaged[nStaged] = aWorking[j];
@@ -1643,34 +1794,33 @@ static void doltliteCommitFunc(
 
     for(k=0; k<nHead; k++){
       const char *zName = aHead[k].zName;
-      int inWorking = 0;
-      int j2;
-      for(j2=0; j2<nWorking; j2++){
-        if( aWorking[j2].zName && zName && strcmp(aWorking[j2].zName, zName)==0 ){
-          inWorking = 1; break;
-        }
+      struct TableEntry *pStaged;
+      if( addNameIndexFind(&workingIdx, zName) ) continue;
+      pStaged = addNameIndexFind(&stagedIdx, zName);
+      if( pStaged ){
+        int j2 = (int)(pStaged - aStaged);
+        if( j2>=0 && j2<nStaged ) aRemoveStaged[j2] = 1;
       }
-      if( inWorking ) continue;
-
-      for(j2=0; j2<nStaged; j2++){
-        if( aStaged[j2].zName && zName && strcmp(aStaged[j2].zName, zName)==0 ){
-          sqlite3_free(aStaged[j2].zName);
-          if( j2+1<nStaged ){
-            memmove(&aStaged[j2], &aStaged[j2+1],
-                    (nStaged-j2-1)*(int)sizeof(struct TableEntry));
-          }
-          nStaged--;
-          break;
+    }
+    for(k=0; k<nStaged; ){
+      if( aRemoveStaged[k] ){
+        sqlite3_free(aStaged[k].zName);
+        if( k+1<nStaged ){
+          memmove(&aStaged[k], &aStaged[k+1],
+                  (nStaged-k-1)*(int)sizeof(struct TableEntry));
+          memmove(&aRemoveStaged[k], &aRemoveStaged[k+1],
+                  (nStaged-k-1)*(int)sizeof(u8));
         }
+        nStaged--;
+        continue;
       }
+      k++;
     }
 
     if( nStaged==0 ){
-      doltliteFreeCatalog(aWorking, nWorking);
-      doltliteFreeCatalog(aHead, nHead);
-      doltliteFreeCatalog(aStaged, nStaged);
       sqlite3_result_error(context,
         "nothing to commit, working tree clean (use dolt_add to stage changes)", -1);
+      FREE_ADD_MODIFIED_CATALOGS();
       return;
     }
 
@@ -1688,9 +1838,8 @@ static void doltliteCommitFunc(
       }
     }
 
-    doltliteFreeCatalog(aWorking, nWorking);
-    doltliteFreeCatalog(aHead, nHead);
-    doltliteFreeCatalog(aStaged, nStaged);
+    FREE_ADD_MODIFIED_CATALOGS();
+    #undef FREE_ADD_MODIFIED_CATALOGS
     if( rc!=SQLITE_OK ){
       sqlite3_result_error_code(context, rc);
       return;
