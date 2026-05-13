@@ -128,14 +128,19 @@ static int htOpenTableAtCommit(HistCursor *c, sqlite3 *db,
       if( prollyHashSetContains(&c->visited, pParent) ) continue;
       if( prollyHashSetContains(&c->queued, pParent) ) continue;
       if( c->qTail >= c->qAlloc ){
-        int nNew = c->qAlloc ? c->qAlloc*2 : 16;
-        ProllyHash *tmp = sqlite3_realloc(c->aQueue,
-                                           nNew*(int)sizeof(ProllyHash));
+        i64 nNew = c->qAlloc ? (i64)c->qAlloc * 2 : (i64)16;
+        ProllyHash *tmp;
+        if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ){
+          doltliteCommitClear(&commit);
+          return SQLITE_NOMEM;
+        }
+        tmp = sqlite3_realloc(c->aQueue,
+                              (int)(nNew * (i64)sizeof(ProllyHash)));
         if( !tmp ){
           doltliteCommitClear(&commit);
           return SQLITE_NOMEM;
         }
-        c->aQueue = tmp; c->qAlloc = nNew;
+        c->aQueue = tmp; c->qAlloc = (int)nNew;
       }
       c->aQueue[c->qTail++] = *pParent;
       rc = prollyHashSetAdd(&c->queued, pParent);

@@ -26,14 +26,25 @@ struct RecBuf {
 
 static int recBufAppend(RecBuf *b, const char *z, int n){
   char *zNew;
+  i64 nNeed;
   if( n<0 ) n = (int)strlen(z);
-  if( b->n + n + 1 > b->nAlloc ){
-    int nNew = b->nAlloc ? b->nAlloc*2 : 128;
-    while( nNew < b->n + n + 1 ) nNew *= 2;
-    zNew = sqlite3_realloc(b->z, nNew);
+  if( n<0 ) return SQLITE_NOMEM;
+  nNeed = (i64)b->n + (i64)n + 1;
+  if( nNeed > (i64)0x7fffffff ) return SQLITE_NOMEM;
+  if( nNeed > (i64)b->nAlloc ){
+    i64 nNew = b->nAlloc ? (i64)b->nAlloc * 2 : (i64)128;
+    while( nNew < nNeed ){
+      if( nNew > (i64)0x7fffffff/2 ){
+        nNew = (i64)0x7fffffff;
+        break;
+      }
+      nNew *= 2;
+    }
+    if( nNew < nNeed ) return SQLITE_NOMEM;
+    zNew = sqlite3_realloc(b->z, (int)nNew);
     if( !zNew ) return SQLITE_NOMEM;
     b->z = zNew;
-    b->nAlloc = nNew;
+    b->nAlloc = (int)nNew;
   }
   memcpy(b->z + b->n, z, n);
   b->n += n;
