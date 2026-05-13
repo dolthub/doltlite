@@ -16,12 +16,12 @@ class Doltlite < Formula
       system "../configure"
       system "make", "doltlite", "doltlite-remotesrv", "doltlite-lib"
       bin.install "doltlite", "doltlite-remotesrv"
-      # Ship sqlite3.h verbatim so existing C programs that
-      # `#include "sqlite3.h"` (including examples/quickstart.c) just
-      # work after install. doltlite.h is the same content under the
-      # project's preferred name. doltlite_remotesrv.h declares the
+      # Install the embedding header as doltlite.h only. We do NOT
+      # ship sqlite3.h: spoofing the canonical SQLite header path
+      # collides with the system's sqlite3 packages on the same
+      # machine. doltlite.h is the same generated SQLite amalgamation
+      # header under our name. doltlite_remotesrv.h declares the
       # in-process remote-server API (doltliteServeAsync et al.).
-      include.install "sqlite3.h"
       include.install "sqlite3.h" => "doltlite.h"
       include.install "#{buildpath}/src/doltlite_remotesrv.h"
       lib.install "libdoltlite.a"
@@ -34,7 +34,7 @@ class Doltlite < Formula
                  shell_output("#{bin}/doltlite :memory: 'SELECT dolt_version();'")
     (testpath/"hello.c").write <<~EOS
       #include <stdio.h>
-      #include "sqlite3.h"
+      #include "doltlite.h"
       int main(void) {
         sqlite3 *db;
         if (sqlite3_open(":memory:", &db) != SQLITE_OK) return 1;

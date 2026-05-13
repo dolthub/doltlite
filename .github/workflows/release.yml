@@ -181,7 +181,6 @@ jobs:
         VERSION=${GITHUB_REF_NAME#v}
         DIR="doltlite-lib-${{ matrix.target }}-${VERSION}"
         mkdir -p "${DIR}"
-        cp build/sqlite3.h "${DIR}/sqlite3.h" 2>/dev/null || true
         cp build/sqlite3.h "${DIR}/doltlite.h" 2>/dev/null || true
         cp src/doltlite_remotesrv.h "${DIR}/doltlite_remotesrv.h" 2>/dev/null || true
         cp build/libdoltlite${{ matrix.static_ext }} "${DIR}/" 2>/dev/null || true
@@ -286,7 +285,17 @@ jobs:
         test -x /usr/bin/doltlite
         test -x /usr/bin/doltlite-remotesrv
         test -f /usr/include/doltlite.h
-        test -f /usr/include/sqlite3.h
+        # We intentionally do NOT install /usr/include/sqlite3.h —
+        # that path is owned by libsqlite3-dev (pre-installed on
+        # ubuntu-latest) and shipping our copy there made `dpkg -i`
+        # fail. Guard against regression: if sqlite3.h exists, it
+        # must NOT be owned by libdoltlite-dev.
+        if [ -e /usr/include/sqlite3.h ] \
+           && dpkg -S /usr/include/sqlite3.h 2>/dev/null \
+              | grep -q '^libdoltlite-dev:'; then
+          echo "regression: libdoltlite-dev installs /usr/include/sqlite3.h"
+          exit 1
+        fi
         ldconfig -p | grep -q libdoltlite || (echo "libdoltlite.so.0 not registered with ldconfig" && exit 1)
 
     - name: Smoke test — doltlite CLI runs and reports version

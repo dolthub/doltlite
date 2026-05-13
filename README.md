@@ -21,7 +21,7 @@ Prebuilt binaries: [github.com/dolthub/doltlite/releases](https://github.com/dol
 Each install method places the same set of files (paths shown for `/usr/local`):
 
 - `bin/doltlite`, `bin/doltlite-remotesrv` — the CLI shell and remote sync server
-- `include/sqlite3.h`, `include/doltlite.h` — embedding header (same content; either name works)
+- `include/doltlite.h` — embedding header (the SQLite C API, under our name; `#include <doltlite.h>`)
 - `include/doltlite_remotesrv.h` — in-process remote server API
 - `lib/libdoltlite.a` — static library
 - `lib/libdoltlite.{so,dylib}` — shared library
@@ -126,10 +126,11 @@ make -C ext/wasm dist
 
 ## Using as a C Library
 
-Doltlite is designed as a drop-in replacement for SQLite. It uses the same
-`sqlite3.h` header and `sqlite3_*` API, so existing C programs work without
-code changes — just link against `libdoltlite` instead of `libsqlite3` to get
-version control. The build produces `libdoltlite.a` (static) and
+Doltlite exposes the full SQLite C API (`sqlite3_open`, `sqlite3_exec`,
+`sqlite3_prepare_v2`, ...) through `doltlite.h`. Existing C programs port
+by changing `#include "sqlite3.h"` to `#include <doltlite.h>` and linking
+against `libdoltlite` instead of `libsqlite3` — no other source changes —
+to get version control. The build produces `libdoltlite.a` (static) and
 `libdoltlite.dylib`/`.so` (shared) with the full prolly tree engine and all
 Dolt functions included.
 
