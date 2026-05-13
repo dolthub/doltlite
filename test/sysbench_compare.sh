@@ -556,8 +556,6 @@ case "$BENCH_SECTION_MODE" in
   autocommit)
     echo "## Sysbench-Style Benchmark (autocommit): Doltlite vs SQLite"
     echo ""
-    echo "_Moved out of the classic benchmark job so per-commit costs report separately._"
-    echo ""
     echo "### File-Backed (autocommit)"
     echo ""
     echo "_Each statement runs as its own transaction — exposes per-commit_"

@@ -52,7 +52,7 @@ jobs:
         # the rc and propagate it after the PR-comment step has run, so
         # results are still visible on a failing run.
         set +e
-        BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh > /tmp/bench_results.md
+        BENCH_SECTION_MODE=full bash ../test/sysbench_compare.sh > /tmp/bench_results.md
         bench_rc=$?
         set -e
         cat /tmp/bench_results.md
