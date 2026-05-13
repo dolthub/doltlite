@@ -21,7 +21,8 @@ Prebuilt binaries: [github.com/dolthub/doltlite/releases](https://github.com/dol
 Each install method places the same set of files (paths shown for `/usr/local`):
 
 - `bin/doltlite`, `bin/doltlite-remotesrv` — the CLI shell and remote sync server
-- `include/doltlite.h` — header for embedding
+- `include/sqlite3.h`, `include/doltlite.h` — embedding header (same content; either name works)
+- `include/doltlite_remotesrv.h` — in-process remote server API
 - `lib/libdoltlite.a` — static library
 - `lib/libdoltlite.{so,dylib}` — shared library
 
