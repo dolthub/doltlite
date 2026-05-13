@@ -20,14 +20,11 @@ depends:
   - libdoltlite0 (= ${VERSION})
 
 contents:
-  # Ship sqlite3.h verbatim so existing C programs that
-  # `#include "sqlite3.h"` (including examples/quickstart.c) keep
-  # working after `apt install libdoltlite-dev`. doltlite.h is the
-  # same content under the project's preferred name.
-  - src: build/sqlite3.h
-    dst: /usr/include/sqlite3.h
-    file_info:
-      mode: 0644
+  # Install the header as doltlite.h only. We deliberately do NOT ship
+  # /usr/include/sqlite3.h: it collides with libsqlite3-dev (extremely
+  # common as a transitive dep — Python dev headers, php, perl, etc.)
+  # and `dpkg -i` fails. Users `#include <doltlite.h>`; the file
+  # content is the same generated SQLite amalgamation header.
   - src: build/sqlite3.h
     dst: /usr/include/doltlite.h
     file_info:
