@@ -630,7 +630,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0
+  if( sqlite3_stricmp(zBranch, doltliteGetSessionBranch(db))==0
    && doltliteHasUncommittedChanges(db) ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
                               "cannot pull with uncommitted changes");
@@ -644,7 +644,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 ){
+  if( sqlite3_stricmp(zBranch, doltliteGetSessionBranch(db))==0 ){
     rc = remoteSqlResetSessionToCommit(db, 0, &trackingCommit);
     if( rc!=SQLITE_OK ){
       remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,

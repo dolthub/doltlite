@@ -1416,7 +1416,7 @@ int chunkStoreSetDefaultBranch(ChunkStore *cs, const char *zName){
 int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
   int i;
   for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zName)==0 ){
+    if( sqlite3_stricmp(cs->aBranches[i].zName, zName)==0 ){
       if( pCommit ) memcpy(pCommit, &cs->aBranches[i].commitHash, sizeof(ProllyHash));
       return SQLITE_OK;
     }
@@ -1441,7 +1441,7 @@ int chunkStoreAddBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCo
 int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
   int i;
   for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zName)==0 ){
+    if( sqlite3_stricmp(cs->aBranches[i].zName, zName)==0 ){
       memcpy(&cs->aBranches[i].commitHash, pCommit, sizeof(ProllyHash));
       return SQLITE_OK;
     }
@@ -1452,7 +1452,7 @@ int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *
 int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName){
   int i;
   for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zName)==0 ){
+    if( sqlite3_stricmp(cs->aBranches[i].zName, zName)==0 ){
       sqlite3_free(cs->aBranches[i].zName);
       cs->aBranches[i] = cs->aBranches[cs->nBranches-1];
       cs->nBranches--;
@@ -1465,7 +1465,7 @@ int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName){
 int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash){
   int i;
   for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zBranch)==0 ){
+    if( sqlite3_stricmp(cs->aBranches[i].zName, zBranch)==0 ){
       memcpy(pHash, &cs->aBranches[i].workingSetHash, sizeof(ProllyHash));
       return SQLITE_OK;
     }
@@ -1477,7 +1477,7 @@ int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHas
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash){
   int i;
   for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zBranch)==0 ){
+    if( sqlite3_stricmp(cs->aBranches[i].zName, zBranch)==0 ){
       memcpy(&cs->aBranches[i].workingSetHash, pHash, sizeof(ProllyHash));
       return SQLITE_OK;
     }

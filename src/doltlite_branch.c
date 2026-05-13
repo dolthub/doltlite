@@ -366,11 +366,11 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       if( branchNameEmpty(aPositional[0]) ){
         branchError(ctx, hadSavepoint, "branch name required"); return;
       }
-      if( strcmp(aPositional[0], doltliteGetSessionBranch(db))==0 ){
+      if( sqlite3_stricmp(aPositional[0], doltliteGetSessionBranch(db))==0 ){
         branchError(ctx, hadSavepoint, "cannot delete the current branch");
         return;
       }
-      if( strcmp(aPositional[0], "main")==0 ){
+      if( sqlite3_stricmp(aPositional[0], "main")==0 ){
         branchError(ctx, hadSavepoint,
           "cannot delete branch 'main' (doltlite requires main to exist)");
         return;
@@ -444,12 +444,12 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       memset(&m, 0, sizeof(m));
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
-      if( strcmp(m.zSrc, "main")==0 ){
+      if( sqlite3_stricmp(m.zSrc, "main")==0 ){
         branchError(ctx, hadSavepoint,
           "cannot rename branch 'main' (doltlite requires main to exist)");
         return;
       }
-      renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
+      renamingCurrent = sqlite3_stricmp(m.zSrc, doltliteGetSessionBranch(db))==0;
       rc = doltliteMutateRefs(db, mutateBranchMove, &m);
       if( rc!=SQLITE_OK ){
         branchNamedResultError(ctx, hadSavepoint, rc,
@@ -1166,7 +1166,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     isCreateAndSwitch = 1;
   }
 
-  if( strcmp(zBranch, doltliteGetSessionBranch(db))==0 && argc==1 ){
+  if( sqlite3_stricmp(zBranch, doltliteGetSessionBranch(db))==0 && argc==1 ){
     sqlite3_result_int(ctx, 0);
     return;
   }
@@ -1377,7 +1377,7 @@ static int brIsDirty(
 
   *pDirty = 0;
 
-  if( strcmp(br->zName, doltliteGetSessionBranch(db))==0 ){
+  if( sqlite3_stricmp(br->zName, doltliteGetSessionBranch(db))==0 ){
     *pDirty = doltliteHasUncommittedChanges(db) ? 1 : 0;
     return SQLITE_OK;
   }
