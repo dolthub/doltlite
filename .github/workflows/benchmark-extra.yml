@@ -2,8 +2,8 @@ name: Benchmark Extra
 
 # Companion to Benchmark. Runs three non-INTKEY sysbench variants
 # (TEXT PK, BLOB PK, composite PK). Each is gated on both individual
-# ratios and section average ratios. The current ceilings leave room
-# for runner noise while still catching broad regressions.
+# ratios and section average ratios. The individual ceiling matches
+# the classic benchmark job.
 # BENCH_RUNS=5 across the job — each non-INTKEY write is a per-
 # statement flush, so the default 11 runs blows the 15-minute budget.
 
@@ -19,7 +19,7 @@ permissions:
 
 env:
   BENCH_RUNS: 5
-  BENCH_MAX_MULTIPLIER: 2.5
+  BENCH_MAX_MULTIPLIER: 2.25
   BENCH_AVG_MAX_MULTIPLIER: 1.75
 
 jobs:
