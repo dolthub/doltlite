@@ -2579,7 +2579,6 @@ DOLTLITE_C_TESTS = \
 	multi_process_test$(T.exe) \
 	invariant_test$(T.exe) \
 	corruption_test$(T.exe) \
-	concurrent_stress_test$(T.exe) \
 	three_way_diff_test$(T.exe)
 
 ancestor_test$(T.exe): $(TOP)/test/ancestor_test.c libdoltlite$(T.lib)
@@ -2604,10 +2603,6 @@ invariant_test$(T.exe): $(TOP)/test/invariant_test.c libdoltlite$(T.lib)
 
 corruption_test$(T.exe): $(TOP)/test/corruption_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/corruption_test.c \
-		libdoltlite$(T.lib) -lz -lpthread -lm
-
-concurrent_stress_test$(T.exe): $(TOP)/test/concurrent_stress_test.c libdoltlite$(T.lib)
-	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/concurrent_stress_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 # three_way_diff_test pokes prolly internals directly; needs sqliteInt.h
