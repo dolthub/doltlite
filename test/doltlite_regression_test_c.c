@@ -2467,9 +2467,9 @@ static void run_memory_chunk_lookup_corruption(void){
         chunkStorePut(&cs, payload, (int)sizeof(payload), &h)==SQLITE_OK);
   check("commit_mem_store_lookup",
         chunkStoreCommit(&cs)==SQLITE_OK);
-  check("have_committed_index_entry", cs.nIndex > 0);
-  if( cs.nIndex > 0 ){
-    cs.aIndex[0].offset = cs.nWriteBuf + 100;
+  check("have_committed_index_entry", cs.index.nIndex > 0);
+  if( cs.index.nIndex > 0 ){
+    cs.index.aIndex[0].offset = cs.nWriteBuf + 100;
   }
   rc = chunkStoreGet(&cs, &h, &pOut, &nOut);
   check("memory_lookup_corruption_returns_corrupt", rc==SQLITE_CORRUPT);
@@ -3187,8 +3187,8 @@ static void run_wal_offset_corruption_is_rejected(void){
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
   {
     int i;
-    for(i=0; i<cs.nIndex; i++){
-      if( cs.aIndex[i].offset >= walStateGetOffset(&cs.wal) ){
+    for(i=0; i<cs.index.nIndex; i++){
+      if( cs.index.aIndex[i].offset >= walStateGetOffset(&cs.wal) ){
         iWal = i;
         break;
       }
@@ -3196,8 +3196,8 @@ static void run_wal_offset_corruption_is_rejected(void){
   }
   check("have_wal_backed_index_entry", iWal >= 0);
   if( iWal >= 0 ){
-    cs.aIndex[iWal].offset = cs.iFileSize + 1024;
-    rc = chunkStoreGet(&cs, &cs.aIndex[iWal].hash, &pData, &nData);
+    cs.index.aIndex[iWal].offset = cs.iFileSize + 1024;
+    rc = chunkStoreGet(&cs, &cs.index.aIndex[iWal].hash, &pData, &nData);
     check("corrupt_wal_offset_returns_error", rc!=SQLITE_OK);
   }
   sqlite3_free(pData);
@@ -3237,12 +3237,12 @@ static void run_integrity_check_walks_prolly_nodes(void){
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
   if( pTable ){
     int i;
-    for(i=0; i<cs.nIndex; i++){
-      if( prollyHashCompare(&cs.aIndex[i].hash, &pTable->root)==0 ){
-        if( cs.aIndex[i].offset < 0 ){
-          dataOff = walStateGetOffset(&cs.wal) + (-(cs.aIndex[i].offset + 1));
+    for(i=0; i<cs.index.nIndex; i++){
+      if( prollyHashCompare(&cs.index.aIndex[i].hash, &pTable->root)==0 ){
+        if( cs.index.aIndex[i].offset < 0 ){
+          dataOff = walStateGetOffset(&cs.wal) + (-(cs.index.aIndex[i].offset + 1));
         }else{
-          dataOff = cs.aIndex[i].offset + 4;
+          dataOff = cs.index.aIndex[i].offset + 4;
         }
         break;
       }
