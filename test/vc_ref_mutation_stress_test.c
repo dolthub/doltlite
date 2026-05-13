@@ -1,0 +1,354 @@
+/*
+** Concurrent version-control ref mutation stress test.
+**
+** Each worker repeatedly creates a unique branch, commits a disjoint row on
+** that branch, races to merge it back into main, then deletes the branch.
+** This complements vc_concurrency_test.c, which mostly exercises concurrent
+** commits to pre-created worker branches.
+*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include "sqlite3.h"
+
+#define N_WORKERS 3
+#define N_ROUNDS 4
+#define N_ATTEMPTS 600
+
+static int nPass = 0;
+static int nFail = 0;
+
+static void check(const char *name, int condition){
+  if( condition ){
+    nPass++;
+  }else{
+    nFail++;
+    fprintf(stderr, "FAIL: %s\n", name);
+  }
+}
+
+static void cleanupDb(const char *path){
+  char wal[256];
+  char shm[256];
+  remove(path);
+  snprintf(wal, sizeof(wal), "%s-wal", path);
+  remove(wal);
+  snprintf(shm, sizeof(shm), "%s-shm", path);
+  remove(shm);
+}
+
+static int isRetryableRc(int rc){
+  return rc==SQLITE_BUSY || rc==SQLITE_LOCKED || rc==SQLITE_SCHEMA;
+}
+
+static int msgContains(const char *msg, const char *needle){
+  return msg && strstr(msg, needle)!=0;
+}
+
+static int isRetryableMsg(const char *msg){
+  return msgContains(msg, "busy")
+      || msgContains(msg, "locked")
+      || msgContains(msg, "schema has changed")
+      || msgContains(msg, "commit conflict: another connection committed")
+      || msgContains(msg, "failed to snapshot current branch state")
+      || msgContains(msg, "unknown operation");
+}
+
+static int execSql(sqlite3 *db, const char *sql){
+  char *err = 0;
+  int rc = sqlite3_exec(db, sql, 0, 0, &err);
+  if( rc!=SQLITE_OK ){
+    fprintf(stderr, "SQL error rc=%d: %s\n  SQL: %s\n",
+            rc, err ? err : sqlite3_errmsg(db), sql);
+  }
+  sqlite3_free(err);
+  return rc;
+}
+
+static int execSqlWithRetry(sqlite3 *db, const char *sql){
+  int attempt;
+  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+    char *err = 0;
+    int rc = sqlite3_exec(db, sql, 0, 0, &err);
+    const char *msg = err ? err : sqlite3_errmsg(db);
+    if( rc==SQLITE_OK ){
+      sqlite3_free(err);
+      return SQLITE_OK;
+    }
+    if( !isRetryableRc(rc) && !isRetryableMsg(msg) ){
+      fprintf(stderr, "SQL error rc=%d: %s\n  SQL: %s\n", rc, msg, sql);
+      sqlite3_free(err);
+      return rc;
+    }
+    sqlite3_free(err);
+    sqlite3_sleep(5);
+  }
+  return SQLITE_BUSY;
+}
+
+static int queryTextWithRetry(sqlite3 *db, const char *sql, char *out, int nOut){
+  int attempt;
+  out[0] = 0;
+  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+    sqlite3_stmt *stmt = 0;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if( rc!=SQLITE_OK ){
+      if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db)) ){
+        sqlite3_sleep(5);
+        continue;
+      }
+      snprintf(out, nOut, "ERROR: %s", sqlite3_errmsg(db));
+      return rc;
+    }
+    rc = sqlite3_step(stmt);
+    if( rc==SQLITE_ROW ){
+      const char *v = (const char*)sqlite3_column_text(stmt, 0);
+      if( v ) snprintf(out, nOut, "%s", v);
+      sqlite3_finalize(stmt);
+      return SQLITE_OK;
+    }
+    sqlite3_finalize(stmt);
+    if( rc==SQLITE_DONE ) return SQLITE_OK;
+    if( !isRetryableRc(rc) && !isRetryableMsg(sqlite3_errmsg(db)) ){
+      snprintf(out, nOut, "%s", sqlite3_errmsg(db));
+      return rc;
+    }
+    sqlite3_sleep(5);
+  }
+  snprintf(out, nOut, "BUSY");
+  return SQLITE_BUSY;
+}
+
+static int queryIntWithRetry(sqlite3 *db, const char *sql, int *pOut){
+  char buf[128];
+  int rc = queryTextWithRetry(db, sql, buf, sizeof(buf));
+  if( rc==SQLITE_OK ) *pOut = atoi(buf);
+  return rc;
+}
+
+static int reopenDb(const char *path, sqlite3 **pDb){
+  int rc;
+  if( *pDb ){
+    sqlite3_close(*pDb);
+    *pDb = 0;
+  }
+  rc = sqlite3_open(path, pDb);
+  if( rc==SQLITE_OK ) sqlite3_busy_timeout(*pDb, 5000);
+  return rc;
+}
+
+static int setupDb(const char *path){
+  sqlite3 *db = 0;
+  int rc;
+  cleanupDb(path);
+  rc = sqlite3_open(path, &db);
+  if( rc!=SQLITE_OK ) return rc;
+  sqlite3_busy_timeout(db, 5000);
+  rc = execSql(db, "CREATE TABLE ref_rows(id INTEGER PRIMARY KEY, worker INT, round INT)");
+  if( rc==SQLITE_OK ){
+    rc = execSql(db, "INSERT INTO ref_rows VALUES(0, -1, -1)");
+  }
+  if( rc==SQLITE_OK ){
+    rc = execSql(db, "SELECT dolt_commit('-A','-m','ref mutation init')");
+  }
+  sqlite3_close(db);
+  return rc;
+}
+
+static int createBranch(sqlite3 *db, const char *zBranch){
+  char sql[256];
+  char out[256];
+  int rc;
+  snprintf(sql, sizeof(sql), "SELECT dolt_branch('%s')", zBranch);
+  rc = queryTextWithRetry(db, sql, out, sizeof(out));
+  if( rc==SQLITE_OK ) return SQLITE_OK;
+  if( msgContains(out, "branch already exists") ) return SQLITE_OK;
+  return rc;
+}
+
+static int commitBranchRow(sqlite3 **pDb, const char *path, int worker, int round){
+  sqlite3 *db = *pDb;
+  char branch[64];
+  char sql[256];
+  char out[256];
+  int rowid = worker*1000 + round;
+  int attempt;
+  snprintf(branch, sizeof(branch), "stress_w%d_r%d", worker, round);
+
+  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+    int rc;
+    rc = createBranch(db, branch);
+    if( rc!=SQLITE_OK ) goto retry;
+    snprintf(sql, sizeof(sql), "SELECT dolt_checkout('%s')", branch);
+    rc = execSqlWithRetry(db, sql);
+    if( rc!=SQLITE_OK ) goto retry;
+    snprintf(sql, sizeof(sql),
+             "INSERT OR IGNORE INTO ref_rows VALUES(%d, %d, %d)",
+             rowid, worker, round);
+    rc = execSqlWithRetry(db, sql);
+    if( rc!=SQLITE_OK ) goto retry;
+    snprintf(sql, sizeof(sql),
+             "SELECT dolt_commit('-A','-m','%s commit')", branch);
+    rc = queryTextWithRetry(db, sql, out, sizeof(out));
+    if( rc==SQLITE_OK && strlen(out)==40 ) return SQLITE_OK;
+    if( msgContains(out, "nothing to commit, working tree clean") ){
+      return SQLITE_OK;
+    }
+retry:
+    sqlite3_sleep(5);
+    rc = reopenDb(path, pDb);
+    if( rc!=SQLITE_OK ) return rc;
+    db = *pDb;
+  }
+  return SQLITE_BUSY;
+}
+
+static int mergeBranchToMain(sqlite3 **pDb, const char *path, int worker, int round){
+  sqlite3 *db = *pDb;
+  char branch[64];
+  char sql[256];
+  char out[256];
+  int rowid = worker*1000 + round;
+  int count = 0;
+  int attempt;
+  snprintf(branch, sizeof(branch), "stress_w%d_r%d", worker, round);
+
+  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+    int rc = execSqlWithRetry(db, "SELECT dolt_checkout('main')");
+    if( rc==SQLITE_OK ){
+      snprintf(sql, sizeof(sql),
+               "SELECT count(*) FROM ref_rows WHERE id=%d", rowid);
+      rc = queryIntWithRetry(db, sql, &count);
+      if( rc==SQLITE_OK && count==1 ) return SQLITE_OK;
+      snprintf(sql, sizeof(sql), "SELECT dolt_merge('%s')", branch);
+      rc = queryTextWithRetry(db, sql, out, sizeof(out));
+      if( rc==SQLITE_OK && strlen(out)==40 ) return SQLITE_OK;
+      if( rc==SQLITE_OK && msgContains(out, "Already up to date") ){
+        return SQLITE_OK;
+      }
+    }
+    sqlite3_sleep(5);
+    rc = reopenDb(path, pDb);
+    if( rc!=SQLITE_OK ) return rc;
+    db = *pDb;
+  }
+  return SQLITE_BUSY;
+}
+
+static int deleteBranch(sqlite3 *db, const char *zBranch){
+  char sql[256];
+  int attempt;
+  snprintf(sql, sizeof(sql), "SELECT dolt_branch('-d','%s')", zBranch);
+  for( attempt=0; attempt<N_ATTEMPTS; attempt++ ){
+    char *err = 0;
+    int rc = sqlite3_exec(db, sql, 0, 0, &err);
+    const char *msg = err ? err : sqlite3_errmsg(db);
+    if( rc==SQLITE_OK || msgContains(msg, "branch not found") ){
+      sqlite3_free(err);
+      return SQLITE_OK;
+    }
+    if( !isRetryableRc(rc) && !isRetryableMsg(msg) ){
+      fprintf(stderr, "delete branch failed rc=%d: %s\n", rc, msg);
+      sqlite3_free(err);
+      return rc;
+    }
+    sqlite3_free(err);
+    sqlite3_sleep(5);
+  }
+  return SQLITE_BUSY;
+}
+
+static int runWorker(const char *path, int worker){
+  sqlite3 *db = 0;
+  int rc = reopenDb(path, &db);
+  int round;
+  if( rc!=SQLITE_OK ) return 10;
+
+  for( round=1; round<=N_ROUNDS; round++ ){
+    char branch[64];
+    snprintf(branch, sizeof(branch), "stress_w%d_r%d", worker, round);
+    rc = commitBranchRow(&db, path, worker, round);
+    if( rc!=SQLITE_OK ) goto worker_error;
+    rc = mergeBranchToMain(&db, path, worker, round);
+    if( rc!=SQLITE_OK ) goto worker_error;
+    rc = execSqlWithRetry(db, "SELECT dolt_checkout('main')");
+    if( rc!=SQLITE_OK ) goto worker_error;
+    rc = deleteBranch(db, branch);
+    if( rc!=SQLITE_OK ) goto worker_error;
+  }
+
+  sqlite3_close(db);
+  return 0;
+
+worker_error:
+  fprintf(stderr, "worker %d failed rc=%d msg=%s\n",
+          worker, rc, sqlite3_errmsg(db));
+  sqlite3_close(db);
+  return 1;
+}
+
+static void verifyFinalState(const char *path){
+  sqlite3 *db = 0;
+  int rc;
+  int count = 0;
+  char msg[256];
+
+  rc = sqlite3_open(path, &db);
+  check("verify_open", rc==SQLITE_OK);
+  sqlite3_busy_timeout(db, 5000);
+
+  rc = execSqlWithRetry(db, "SELECT dolt_checkout('main')");
+  check("verify_checkout_main", rc==SQLITE_OK);
+  rc = queryIntWithRetry(db, "SELECT count(*) FROM ref_rows", &count);
+  check("verify_all_rows_merged",
+        rc==SQLITE_OK && count==1 + N_WORKERS*N_ROUNDS);
+  rc = queryIntWithRetry(db,
+    "SELECT count(*) FROM ref_rows WHERE worker>=0", &count);
+  check("verify_worker_rows_merged", rc==SQLITE_OK && count==N_WORKERS*N_ROUNDS);
+  rc = queryIntWithRetry(db,
+    "SELECT count(*) FROM dolt_branches WHERE name='main'", &count);
+  check("verify_main_branch_exists", rc==SQLITE_OK && count==1);
+  rc = queryIntWithRetry(db,
+    "SELECT count(*) FROM dolt_branches WHERE name LIKE 'stress_w%'", &count);
+  check("verify_temp_branches_deleted", rc==SQLITE_OK && count==0);
+  rc = queryTextWithRetry(db, "SELECT message FROM dolt_log LIMIT 1",
+                          msg, sizeof(msg));
+  check("verify_log_readable", rc==SQLITE_OK && msg[0]!=0);
+
+  sqlite3_close(db);
+}
+
+int main(void){
+  const char *path = "/tmp/test_vc_ref_mutation_stress.db";
+  pid_t pids[N_WORKERS];
+  int status;
+  int i;
+
+  setvbuf(stdout, 0, _IOLBF, 0);
+  printf("=== VC Ref Mutation Stress Test ===\n\n");
+  check("setup_db", setupDb(path)==SQLITE_OK);
+
+  for( i=0; i<N_WORKERS; i++ ){
+    pids[i] = fork();
+    if( pids[i]==0 ) _exit(runWorker(path, i));
+    check("fork_worker", pids[i]>=0);
+  }
+
+  for( i=0; i<N_WORKERS; i++ ){
+    if( pids[i]<0 ) continue;
+    status = 0;
+    waitpid(pids[i], &status, 0);
+    check("worker_exited_cleanly",
+          WIFEXITED(status) && WEXITSTATUS(status)==0);
+  }
+
+  verifyFinalState(path);
+  cleanupDb(path);
+
+  printf("\nResults: %d passed, %d failed out of %d tests\n",
+         nPass, nFail, nPass+nFail);
+  return nFail>0 ? 1 : 0;
+}
