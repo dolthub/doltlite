@@ -103,6 +103,11 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   (pCur)->cachedPayloadOwned = 0; \
 }while(0)
 
+#define CLEAR_CACHED_SEEK_KEY(pCur) do{ \
+  (pCur)->nSeekSortKey = 0; \
+  (pCur)->nSeekKeyField = 0; \
+}while(0)
+
 #define PROLLY_DEFAULT_CACHE_SIZE 1024
 
 #define PROLLY_DEFAULT_PAGE_SIZE 4096
@@ -347,6 +352,8 @@ struct BtCursor {
   int nSeekRecordAlloc;
   u8 *pSeekSortKey;
   int nSeekSortKeyAlloc;
+  int nSeekSortKey;
+  int nSeekKeyField;
   u8 *pMovetoRec;
   int nMovetoRecAlloc;
   i64 cachedIntKey;
@@ -421,6 +428,18 @@ static SQLITE_INLINE void cursorCurrentTreeValue(
   u32 off1 = PROLLY_GET_U32((const u8*)&pNode->aValOff[i+1]);
   *ppData = pNode->pValData + off0;
   *pnData = (int)(off1 - off0);
+}
+
+static SQLITE_INLINE u64 cursorCurrentTreeKeyPrefixInt(BtCursor *pCur){
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  ProllyCacheEntry *pLeaf = pProllyCur->aLevel[pProllyCur->iLevel].pEntry;
+  ProllyNode *pNode = &pLeaf->node;
+  int i = pProllyCur->aLevel[pProllyCur->iLevel].idx;
+  u32 off = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
+  const u8 *p = pNode->pKeyData + off;
+  return ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40)
+       | ((u64)p[3]<<32) | ((u64)p[4]<<24) | ((u64)p[5]<<16)
+       | ((u64)p[6]<<8) | (u64)p[7];
 }
 
 static int cacheCursorPayloadReconstructed(
@@ -2343,6 +2362,16 @@ static ProllyMutMapEntry *currentMutMapEntry(BtCursor *pCur){
     return &pCur->pMutMap->aEntries[pCur->mmPhysIdx];
   }
   return prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
+}
+
+static SQLITE_INLINE ProllyMutMapEntry *orderedMutMapEntryAt(
+  ProllyMutMap *pMap,
+  int idx
+){
+  if( pMap->keepSorted ){
+    return &pMap->aEntries[pMap->aOrder[idx]];
+  }
+  return prollyMutMapEntryAt(pMap, idx);
 }
 
 static void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
@@ -5100,8 +5129,8 @@ int sqlite3BtreeClosesWithCursor(Btree *p, BtCursor *pCur){
 
 static int mergeCompare(BtCursor *pCur, ProllyMutMapEntry *e){
   if( pCur->curIntKey ){
-    i64 tk = prollyCursorIntKey(&pCur->pCur);
-    i64 ek = prollyMutMapEntryIntKey(e);
+    u64 tk = cursorCurrentTreeKeyPrefixInt(pCur);
+    u64 ek = e->keyPrefix;
     if( tk < ek ) return -1;
     if( tk > ek ) return 1;
     return 0;
@@ -5138,7 +5167,7 @@ static int mergeScan(BtCursor *pCur, int dir, int *pRes){
       if( pRes ) *pRes = 0;
       return SQLITE_OK;
     }
-    e = prollyMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
+    e = orderedMutMapEntryAt(pCur->pMutMap, pCur->mmIdx);
     if( !treeOk ){
       if( e->op==PROLLY_EDIT_DELETE ){ pCur->mmIdx += dir; continue; }
       pCur->mergeSrc = MERGE_SRC_MUT;
@@ -5273,6 +5302,7 @@ static int mergeLast(BtCursor *pCur, int *pRes){
 static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
+  CLEAR_CACHED_SEEK_KEY(pCur);
   refreshCursorRoot(pCur);
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -5296,6 +5326,7 @@ int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
 static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
+  CLEAR_CACHED_SEEK_KEY(pCur);
   refreshCursorRoot(pCur);
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -5565,6 +5596,7 @@ static int prollyBtCursorTableMoveto(
   if( pCur->pBtree ) pCur->pBtree->nSeek++;
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
+  CLEAR_CACHED_SEEK_KEY(pCur);
 
   if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
     ProllyMutMapEntry *pEntry = 0;
@@ -5595,10 +5627,11 @@ static int prollyBtCursorTableMoveto(
       pCur->curFlags |= BTCF_ValidNKey;
       pCur->cachedIntKey = intKey;
       CLEAR_CACHED_PAYLOAD(pCur);
-      pCur->cachedPayloadOwned = 0;
+      cacheCurrentTreePayloadIfIntKey(pCur);
     } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       pCur->eState = CURSOR_VALID;
       pCur->curFlags &= ~BTCF_ValidNKey;
+      cacheCurrentTreePayloadIfIntKey(pCur);
     } else {
       pCur->eState = CURSOR_INVALID;
     }
@@ -5734,6 +5767,7 @@ static int prollyBtCursorIndexMoveto(
 
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
+  CLEAR_CACHED_SEEK_KEY(pCur);
 
   refreshCursorRoot(pCur);
 
@@ -5762,6 +5796,8 @@ static int prollyBtCursorIndexMoveto(
         &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
     if( rc!=SQLITE_OK ) return rc;
     pSortKey = pCur->pSeekSortKey;
+    pCur->nSeekSortKey = nSortKey;
+    pCur->nSeekKeyField = nSeekKeyField;
 
     if( pCur->pKeyInfo
      && pIdxKey->nField >= pCur->pKeyInfo->nAllField ){
@@ -6025,6 +6061,56 @@ int sqlite3BtreeIndexMoveto(
 ){
   if( !pCur ) return SQLITE_OK;
   return pCur->pCurOps->xIndexMoveto(pCur, pIdxKey, pRes);
+}
+
+int sqlite3BtreeProllyCachedIndexKeyCompare(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  int *pRes
+){
+  const u8 *pKey = 0;
+  int nKey = 0;
+  int nCmp;
+  int cmp;
+
+  if( !pCur || pCur->pCurOps!=&prollyCursorOps || pCur->curIntKey ){
+    return SQLITE_NOTFOUND;
+  }
+  if( pCur->eState!=CURSOR_VALID || !pIdxKey || !pCur->pKeyInfo ){
+    return SQLITE_NOTFOUND;
+  }
+  if( !prollyBtCursorCursorHasHint(pCur, BTREE_SEEK_EQ) ){
+    return SQLITE_NOTFOUND;
+  }
+  if( pCur->nSeekSortKey<=0 || pCur->nSeekKeyField!=(int)pIdxKey->nField ){
+    return SQLITE_NOTFOUND;
+  }
+
+  if( pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    if( !e ) return SQLITE_NOTFOUND;
+    pKey = e->pKey;
+    nKey = e->nKey;
+  }else if( prollyCursorIsValid(&pCur->pCur) ){
+    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+  }else{
+    return SQLITE_NOTFOUND;
+  }
+
+  nCmp = nKey < pCur->nSeekSortKey ? nKey : pCur->nSeekSortKey;
+  cmp = memcmp(pKey, pCur->pSeekSortKey, nCmp);
+  if( cmp<0 ){
+    *pRes = -1;
+  }else if( cmp>0 ){
+    *pRes = 1;
+  }else if( nKey < pCur->nSeekSortKey ){
+    *pRes = -1;
+  }else{
+    pIdxKey->eqSeen = 1;
+    *pRes = pIdxKey->default_rc;
+  }
+  return SQLITE_OK;
 }
 
 static i64 prollyBtCursorIntegerKey(BtCursor *pCur){

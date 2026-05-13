@@ -6963,6 +6963,16 @@ case OP_IdxGE:  {       /* jump, ncycle */
     assert( pC->eCurType==CURTYPE_BTREE );
     pCur = pC->uc.pCursor;
     assert( sqlite3BtreeCursorIsValid(pCur) );
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+    rc = sqlite3BtreeProllyCachedIndexKeyCompare(pCur, &r, &res);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = SQLITE_OK;
+    }else if( rc ){
+      goto abort_due_to_error;
+    }else{
+      goto idx_compare_done;
+    }
+#endif
     nCellKey = sqlite3BtreePayloadSize(pCur);
     /* nCellKey will always be between 0 and 0xffffffff because of the way
     ** that btreeParseCellPtr() and sqlite3GetVarint32() are implemented */
@@ -6976,6 +6986,9 @@ case OP_IdxGE:  {       /* jump, ncycle */
     res = sqlite3VdbeRecordCompareWithSkip(m.n, m.z, &r, 0);
     sqlite3VdbeMemReleaseMalloc(&m);
   }
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+idx_compare_done:
+#endif
   /* End of inlined sqlite3VdbeIdxKeyCompare() */
 
   assert( (OP_IdxLE&1)==(OP_IdxLT&1) && (OP_IdxGE&1)==(OP_IdxGT&1) );

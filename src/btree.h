@@ -261,6 +261,13 @@ int sqlite3BtreeIndexMoveto(
   UnpackedRecord *pUnKey,
   int *pRes
 );
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+int sqlite3BtreeProllyCachedIndexKeyCompare(
+  BtCursor*,
+  UnpackedRecord *pUnKey,
+  int *pRes
+);
+#endif
 int sqlite3BtreeCursorHasMoved(BtCursor*);
 int sqlite3BtreeCursorRestore(BtCursor*, int*);
 int sqlite3BtreeDelete(BtCursor*, u8 flags);
