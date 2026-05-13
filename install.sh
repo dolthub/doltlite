@@ -123,10 +123,12 @@ for bin in doltlite doltlite-remotesrv; do
   echo "Installed ${INSTALL_DIR}/${bin}"
 done
 
-if [ -f "${LIB_SRC_DIR}/doltlite.h" ]; then
-  install -m 0644 "${LIB_SRC_DIR}/doltlite.h" "${INCLUDE_DIR}/doltlite.h"
-  echo "Installed ${INCLUDE_DIR}/doltlite.h"
-fi
+for hdr in sqlite3.h doltlite.h doltlite_remotesrv.h; do
+  if [ -f "${LIB_SRC_DIR}/${hdr}" ]; then
+    install -m 0644 "${LIB_SRC_DIR}/${hdr}" "${INCLUDE_DIR}/${hdr}"
+    echo "Installed ${INCLUDE_DIR}/${hdr}"
+  fi
+done
 if [ -f "${LIB_SRC_DIR}/libdoltlite.a" ]; then
   install -m 0644 "${LIB_SRC_DIR}/libdoltlite.a" "${LIB_DIR}/libdoltlite.a"
   echo "Installed ${LIB_DIR}/libdoltlite.a"

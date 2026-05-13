@@ -181,7 +181,9 @@ jobs:
         VERSION=${GITHUB_REF_NAME#v}
         DIR="doltlite-lib-${{ matrix.target }}-${VERSION}"
         mkdir -p "${DIR}"
+        cp build/sqlite3.h "${DIR}/sqlite3.h" 2>/dev/null || true
         cp build/sqlite3.h "${DIR}/doltlite.h" 2>/dev/null || true
+        cp src/doltlite_remotesrv.h "${DIR}/doltlite_remotesrv.h" 2>/dev/null || true
         cp build/libdoltlite${{ matrix.static_ext }} "${DIR}/" 2>/dev/null || true
         cp build/libdoltlite${{ matrix.lib_ext }} "${DIR}/" 2>/dev/null || true
         if command -v zip >/dev/null 2>&1; then
