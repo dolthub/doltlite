@@ -32,11 +32,11 @@ for f in "$SRCDIR"/prolly_*.c; do
   done < <(grep -n 'sqlite3_prepare_v2\|sqlite3_step\|sqlite3_exec' "$f" | grep -v ':[[:space:]]*/\*\|:[[:space:]]*\*\*\|:[[:space:]]*\*[[:space:]]')
 done
 
-# --- Rule 3: chunk_store.* must not include prolly_btree or doltlite headers ---
-for f in "$SRCDIR"/chunk_store.c "$SRCDIR"/chunk_store.h; do
+# --- Rule 3: chunk_*.* must not include prolly_btree or doltlite headers ---
+for f in "$SRCDIR"/chunk_*.c "$SRCDIR"/chunk_*.h; do
   [ -f "$f" ] || continue
   while IFS= read -r line; do
-    lint "$f:$line — chunk_store must not depend on prolly_btree or doltlite"
+    lint "$f:$line — chunk_* layer must not depend on prolly_btree or doltlite"
   done < <(grep -n '#include.*"prolly_btree\|#include.*"doltlite_' "$f")
 done
 
