@@ -2576,6 +2576,7 @@ DOLTLITE_C_TESTS = \
 	ancestor_test$(T.exe) \
 	sql_transaction_test$(T.exe) \
 	cross_branch_test$(T.exe) \
+	concurrent_stress_test$(T.exe) \
 	multi_process_test$(T.exe) \
 	invariant_test$(T.exe) \
 	corruption_test$(T.exe) \
@@ -2592,6 +2593,10 @@ sql_transaction_test$(T.exe): $(TOP)/test/sql_transaction_test.c libdoltlite$(T.
 
 cross_branch_test$(T.exe): $(TOP)/test/cross_branch_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/cross_branch_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+concurrent_stress_test$(T.exe): $(TOP)/test/concurrent_stress_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/concurrent_stress_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 multi_process_test$(T.exe): $(TOP)/test/multi_process_test.c libdoltlite$(T.lib)
