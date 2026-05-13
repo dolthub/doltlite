@@ -249,6 +249,47 @@ jobs:
         DOLTLITE_STRESS_SECONDS=480 ./concurrent_stress_test
       timeout-minutes: 9
 
+  vc-concurrency-stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    - name: Build version-control concurrency stress
+      run: |
+        cd build
+        make vc_concurrency_test
+      timeout-minutes: 5
+
+    - name: Run version-control concurrency stress
+      run: |
+        cd build
+        deadline=$((SECONDS + 480))
+        runs=0
+        while [ "$SECONDS" -lt "$deadline" ]; do
+          runs=$((runs + 1))
+          if [ $((runs % 100)) -eq 0 ]; then
+            echo "vc_concurrency_test run ${runs}"
+          fi
+          ./vc_concurrency_test > /tmp/vc_concurrency_test.out || {
+            cat /tmp/vc_concurrency_test.out
+            exit 1
+          }
+        done
+        echo "completed ${runs} vc_concurrency_test runs"
+      timeout-minutes: 9
+
   crash-sqlite-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30

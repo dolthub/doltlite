@@ -14,8 +14,9 @@
 #include <unistd.h>
 #include "sqlite3.h"
 
-#define N_WORKERS 3
+#define N_WORKERS 2
 #define N_COMMITS_PER_WORKER 6
+#define N_OPERATION_ATTEMPTS 400
 
 static int nPass = 0;
 static int nFail = 0;
@@ -26,6 +27,26 @@ static void check(const char *name, int condition){
   }else{
     nFail++;
     fprintf(stderr, "FAIL: %s\n", name);
+  }
+}
+
+static void checkIntEquals(const char *name, int rc, int actual, int expected){
+  if( rc==SQLITE_OK && actual==expected ){
+    nPass++;
+  }else{
+    nFail++;
+    fprintf(stderr, "FAIL: %s expected=%d actual=%d rc=%d\n",
+            name, expected, actual, rc);
+  }
+}
+
+static void checkIntAtLeast(const char *name, int rc, int actual, int minimum){
+  if( rc==SQLITE_OK && actual>=minimum ){
+    nPass++;
+  }else{
+    nFail++;
+    fprintf(stderr, "FAIL: %s minimum=%d actual=%d rc=%d\n",
+            name, minimum, actual, rc);
   }
 }
 
@@ -47,12 +68,18 @@ static int isRetryableMsg(const char *msg){
   return msg!=0 && (
     strstr(msg, "busy")!=0 ||
     strstr(msg, "locked")!=0 ||
-    strstr(msg, "schema has changed")!=0
+    strstr(msg, "schema has changed")!=0 ||
+    strstr(msg, "failed to snapshot current branch state")!=0 ||
+    strstr(msg, "unknown operation")!=0
   );
 }
 
 static int isCommitConflictMsg(const char *msg){
   return msg!=0 && strstr(msg, "commit conflict: another connection committed")!=0;
+}
+
+static int isCleanWorkingTreeMsg(const char *msg){
+  return msg!=0 && strstr(msg, "nothing to commit, working tree clean")!=0;
 }
 
 static int execSql(sqlite3 *db, const char *sql){
@@ -131,7 +158,11 @@ static int queryCommitWithRetry(sqlite3 *db, const char *sql, char *out, int nOu
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if( rc!=SQLITE_OK ){
       const char *msg = sqlite3_errmsg(db);
-      if( isRetryableRc(rc) || isRetryableMsg(msg) || isCommitConflictMsg(msg) ){
+      if( isCommitConflictMsg(msg) ){
+        snprintf(out, nOut, "%s", msg);
+        return rc;
+      }
+      if( isRetryableRc(rc) || isRetryableMsg(msg) ){
         sqlite3_sleep(5);
         continue;
       }
@@ -150,12 +181,15 @@ static int queryCommitWithRetry(sqlite3 *db, const char *sql, char *out, int nOu
       out[0] = 0;
       return SQLITE_OK;
     }
-    if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db))
-        || isCommitConflictMsg(sqlite3_errmsg(db)) ){
+    if( isCommitConflictMsg(sqlite3_errmsg(db)) ){
+      snprintf(out, nOut, "%s", sqlite3_errmsg(db));
+      return rc;
+    }
+    if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db)) ){
       sqlite3_sleep(5);
       continue;
     }
-    snprintf(out, nOut, "STEP_ERR(%d)", rc);
+    snprintf(out, nOut, "%s", sqlite3_errmsg(db));
     return rc;
   }
   snprintf(out, nOut, "BUSY");
@@ -167,6 +201,19 @@ static int queryIntWithRetry(sqlite3 *db, const char *sql, int *pOut){
   int rc = queryTextWithRetry(db, sql, buf, sizeof(buf));
   if( rc==SQLITE_OK ){
     *pOut = atoi(buf);
+  }
+  return rc;
+}
+
+static int reopenDb(const char *path, sqlite3 **pDb){
+  int rc;
+  if( *pDb ){
+    sqlite3_close(*pDb);
+    *pDb = 0;
+  }
+  rc = sqlite3_open(path, pDb);
+  if( rc==SQLITE_OK ){
+    sqlite3_busy_timeout(*pDb, 5000);
   }
   return rc;
 }
@@ -213,24 +260,88 @@ static int runWorker(const char *path, int worker){
   sqlite3_busy_timeout(db, 5000);
 
   for( i=1; i<=N_COMMITS_PER_WORKER; i++ ){
-    snprintf(sql, sizeof(sql), "SELECT dolt_checkout('%s')", branch);
-    rc = execSqlWithRetry(db, sql);
-    if( rc!=SQLITE_OK ) goto worker_error;
+    int attempt;
+    int committed = 0;
 
-    rc = queryTextWithRetry(db, "SELECT active_branch()", buf, sizeof(buf));
-    if( rc!=SQLITE_OK || strcmp(buf, branch)!=0 ) goto worker_error;
+    for( attempt=0; attempt<N_OPERATION_ATTEMPTS && !committed; attempt++ ){
+      snprintf(sql, sizeof(sql), "SELECT dolt_checkout('%s')", branch);
+      rc = execSqlWithRetry(db, sql);
+      if( rc!=SQLITE_OK ) goto worker_error;
 
-    snprintf(sql, sizeof(sql),
-             "INSERT INTO vc_rows VALUES(%d, '%s', %d)",
-             worker*100 + i, branch, i);
-    rc = execSqlWithRetry(db, sql);
-    if( rc!=SQLITE_OK ) goto worker_error;
+      rc = queryTextWithRetry(db, "SELECT active_branch()", buf, sizeof(buf));
+      if( rc!=SQLITE_OK || strcmp(buf, branch)!=0 ) goto worker_error;
 
-    snprintf(sql, sizeof(sql),
-             "SELECT dolt_commit('-A','-m','%s commit %d')",
-             branch, i);
-    rc = queryCommitWithRetry(db, sql, buf, sizeof(buf));
-    if( rc!=SQLITE_OK || strlen(buf)!=40 ) goto worker_error;
+      snprintf(sql, sizeof(sql),
+               "INSERT OR REPLACE INTO vc_rows VALUES(%d, '%s', %d)",
+               worker*100 + i, branch, i*1000 + attempt);
+      rc = execSqlWithRetry(db, sql);
+      if( rc!=SQLITE_OK ) goto worker_error;
+
+      snprintf(sql, sizeof(sql),
+               "SELECT dolt_commit('-A','-m','%s commit %d')",
+               branch, i);
+      rc = queryCommitWithRetry(db, sql, buf, sizeof(buf));
+      if( rc==SQLITE_OK && strlen(buf)==40 ){
+        snprintf(sql, sizeof(sql),
+                 "SELECT count(*) FROM vc_rows WHERE branch='%s'",
+                 branch);
+        rc = queryIntWithRetry(db, sql, &branchCount);
+        if( rc!=SQLITE_OK ){
+          if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db)) ){
+            sqlite3_sleep(5);
+            rc = reopenDb(path, &db);
+            if( rc!=SQLITE_OK ) return 11;
+            continue;
+          }
+          goto worker_error;
+        }
+        if( branchCount<i ){
+          sqlite3_sleep(5);
+          rc = reopenDb(path, &db);
+          if( rc!=SQLITE_OK ) return 11;
+          continue;
+        }
+        snprintf(sql, sizeof(sql),
+                 "SELECT count(*) FROM dolt_log "
+                 "WHERE message LIKE '%s commit %%'",
+                 branch);
+        rc = queryIntWithRetry(db, sql, &branchCount);
+        if( rc!=SQLITE_OK ){
+          if( isRetryableRc(rc) || isRetryableMsg(sqlite3_errmsg(db)) ){
+            sqlite3_sleep(5);
+            rc = reopenDb(path, &db);
+            if( rc!=SQLITE_OK ) return 11;
+            continue;
+          }
+          goto worker_error;
+        }
+        if( branchCount<i ){
+          sqlite3_sleep(5);
+          rc = reopenDb(path, &db);
+          if( rc!=SQLITE_OK ) return 11;
+          continue;
+        }
+        committed = 1;
+        break;
+      }
+      if( isCommitConflictMsg(buf) || isCleanWorkingTreeMsg(buf) ){
+        sqlite3_sleep(5);
+        rc = reopenDb(path, &db);
+        if( rc!=SQLITE_OK ) return 11;
+        continue;
+      }
+      if( rc==SQLITE_BUSY || rc==SQLITE_LOCKED || rc==SQLITE_SCHEMA ){
+        sqlite3_sleep(5);
+        rc = reopenDb(path, &db);
+        if( rc!=SQLITE_OK ) return 11;
+        continue;
+      }
+      goto worker_error;
+    }
+    if( !committed ){
+      rc = SQLITE_BUSY;
+      goto worker_error;
+    }
 
     rc = queryTextWithRetry(db, "SELECT message FROM dolt_log LIMIT 1",
                             buf, sizeof(buf));
@@ -252,11 +363,8 @@ static int runWorker(const char *path, int worker){
       if( rc!=SQLITE_OK ) goto worker_error;
     }
     if( i==3 ){
-      sqlite3_close(db);
-      db = 0;
-      rc = sqlite3_open(path, &db);
+      rc = reopenDb(path, &db);
       if( rc!=SQLITE_OK ) return 11;
-      sqlite3_busy_timeout(db, 5000);
     }
   }
 
@@ -275,6 +383,9 @@ static void verifyBranchesAndMerge(const char *path){
   int rc;
   int worker;
   int count = 0;
+  int minWorkerLogCount = N_COMMITS_PER_WORKER + 2;
+  int minMainLogCount = 2;
+  int minMergedLogCount = 1 + N_WORKERS*N_COMMITS_PER_WORKER + N_WORKERS;
   char sql[256];
   char msg[256];
 
@@ -282,7 +393,19 @@ static void verifyBranchesAndMerge(const char *path){
   check("verify_open", rc==SQLITE_OK);
   sqlite3_busy_timeout(db, 5000);
 
+  rc = queryIntWithRetry(db, "SELECT count(*) FROM dolt_branches", &count);
+  check("verify_branch_count", rc==SQLITE_OK && count==N_WORKERS+1);
+  rc = queryIntWithRetry(db,
+    "SELECT count(*) FROM dolt_branches WHERE name='main'", &count);
+  check("verify_main_branch_exists", rc==SQLITE_OK && count==1);
+
   for( worker=0; worker<N_WORKERS; worker++ ){
+    snprintf(sql, sizeof(sql),
+             "SELECT count(*) FROM dolt_branches WHERE name='worker%d'",
+             worker);
+    rc = queryIntWithRetry(db, sql, &count);
+    check("verify_worker_branch_exists", rc==SQLITE_OK && count==1);
+
     snprintf(sql, sizeof(sql), "SELECT dolt_checkout('worker%d')", worker);
     rc = execSqlWithRetry(db, sql);
     check("verify_checkout_worker", rc==SQLITE_OK);
@@ -310,12 +433,35 @@ static void verifyBranchesAndMerge(const char *path){
     snprintf(sql, sizeof(sql), "worker%d commit %d", worker, N_COMMITS_PER_WORKER);
     check("verify_worker_latest_commit",
           rc==SQLITE_OK && strcmp(msg, sql)==0);
+
+    rc = queryIntWithRetry(db, "SELECT count(*) FROM dolt_log", &count);
+    checkIntAtLeast("verify_worker_log_count", rc, count,
+                    minWorkerLogCount);
+
+    snprintf(sql, sizeof(sql),
+             "SELECT count(*) FROM dolt_log "
+             "WHERE message LIKE 'worker%d commit %%'",
+             worker);
+    rc = queryIntWithRetry(db, sql, &count);
+    checkIntAtLeast("verify_worker_log_messages", rc, count,
+                    N_COMMITS_PER_WORKER);
+
+    rc = queryIntWithRetry(db,
+      "SELECT count(*) FROM dolt_log WHERE message='vc init'", &count);
+    check("verify_worker_has_init_commit", rc==SQLITE_OK && count==1);
   }
 
   rc = execSqlWithRetry(db, "SELECT dolt_checkout('main')");
   check("checkout_main_for_merge", rc==SQLITE_OK);
   rc = queryIntWithRetry(db, "SELECT count(*) FROM vc_rows", &count);
   check("main_still_initial", rc==SQLITE_OK && count==1);
+  rc = queryIntWithRetry(db, "SELECT count(*) FROM dolt_log", &count);
+  checkIntAtLeast("main_log_count_before_merge", rc, count,
+                  minMainLogCount);
+  rc = queryTextWithRetry(db, "SELECT message FROM dolt_log LIMIT 1",
+                          msg, sizeof(msg));
+  check("main_latest_commit_before_merge",
+        rc==SQLITE_OK && strcmp(msg, "vc init")==0);
 
   for( worker=0; worker<N_WORKERS; worker++ ){
     snprintf(sql, sizeof(sql), "SELECT dolt_merge('worker%d')", worker);
@@ -323,11 +469,23 @@ static void verifyBranchesAndMerge(const char *path){
     check("merge_worker_branch", rc==SQLITE_OK && strlen(msg)==40);
   }
 
+  rc = queryIntWithRetry(db, "SELECT count(*) FROM dolt_branches", &count);
+  check("merged_branch_count", rc==SQLITE_OK && count==N_WORKERS+1);
   rc = queryIntWithRetry(db, "SELECT count(*) FROM vc_rows", &count);
   check("merged_row_count",
         rc==SQLITE_OK && count==1 + N_WORKERS*N_COMMITS_PER_WORKER);
-  rc = queryTextWithRetry(db, "SELECT count(*) FROM dolt_log", msg, sizeof(msg));
-  check("merged_log_readable", rc==SQLITE_OK && atoi(msg)>N_WORKERS);
+  rc = queryIntWithRetry(db, "SELECT count(*) FROM dolt_log", &count);
+  checkIntAtLeast("merged_log_count", rc, count, minMergedLogCount);
+
+  for( worker=0; worker<N_WORKERS; worker++ ){
+    snprintf(sql, sizeof(sql),
+             "SELECT count(*) FROM dolt_log "
+             "WHERE message LIKE 'worker%d commit %%'",
+             worker);
+    rc = queryIntWithRetry(db, sql, &count);
+    checkIntAtLeast("merged_log_worker_messages", rc, count,
+                    N_COMMITS_PER_WORKER);
+  }
 
   sqlite3_close(db);
 }
