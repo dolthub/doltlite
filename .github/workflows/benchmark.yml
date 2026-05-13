@@ -10,10 +10,13 @@ permissions:
   issues: write
   pull-requests: write
 
+env:
+  BENCH_RUNS: 15
+
 jobs:
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
     - uses: actions/checkout@v4

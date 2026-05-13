@@ -366,7 +366,7 @@ jobs:
   # ── Run benchmarks ────────────────────────────────────────
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
     - uses: actions/checkout@v4
 
@@ -395,7 +395,7 @@ jobs:
     - name: Run benchmarks
       run: |
         cd build
-        BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh > /tmp/bench_classic.md
+        BENCH_RUNS=15 BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh > /tmp/bench_classic.md
         sed -n '/### File-Backed/,/^_/p' /tmp/bench_classic.md > /tmp/bench_results.md
 
     - name: Upload benchmark results

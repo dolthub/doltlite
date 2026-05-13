@@ -4,8 +4,9 @@ name: Benchmark Extra
 # (TEXT PK, BLOB PK, composite PK). Each is gated on both individual
 # ratios and section average ratios. The individual ceiling matches
 # the classic benchmark job.
-# BENCH_RUNS=5 across the job — each non-INTKEY write is a per-
-# statement flush, so the default 11 runs blows the 15-minute budget.
+# BENCH_RUNS=9 across the job — each non-INTKEY write is a per-
+# statement flush, so we keep it below the 15-run value used by
+# the classic Benchmark job to stay within the 25-minute budget.
 
 on:
   push:
@@ -18,7 +19,7 @@ permissions:
   pull-requests: write
 
 env:
-  BENCH_RUNS: 5
+  BENCH_RUNS: 9
   BENCH_MAX_MULTIPLIER: 2.0
   BENCH_AVG_MAX_MULTIPLIER: 1.6
 
