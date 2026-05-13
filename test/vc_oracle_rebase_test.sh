@@ -36,17 +36,7 @@ oracle() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^LOG|')
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"
-    echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"
-    echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_error() {
@@ -99,17 +89,7 @@ oracle_savepoint_abort_poststate() {
   )
   dt_out=$(awk 'NR==1{print $0 "|AB"} NR==2{print $0 "|RB"} NR==3{print $0 "|T"}' "$dir/dt.post")
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"
-    echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"
-    echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_error_reopen() {

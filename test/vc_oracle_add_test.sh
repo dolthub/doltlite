@@ -14,7 +14,7 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 normalize() { tr -d '\r'; }
 
 oracle() {
-  local name="$1" setup="$2"
+  local name="$1" setup="$2" allow_empty="${3:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -38,14 +38,10 @@ oracle() {
   local dt_out
   dt_out=$(tail -n +2 "$dir/dt.raw" | tr -d '"' | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -143,15 +139,7 @@ oracle_same_session() {
       | awk '/^Q\|/ {print; next} /[Nn]o such savepoint:|SAVEPOINT .*does not exist/ {print "E|savepoint"}'
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_reopen() {
@@ -498,7 +486,7 @@ echo "--- noop and clean states ---"
 
 oracle "all_on_empty_repo" "
 SELECT dolt_add('-A');
-"
+" "EXPECT_EMPTY"
 
 oracle "all_after_commit_no_changes" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);
@@ -506,7 +494,7 @@ INSERT INTO t VALUES (1);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'seed');
 SELECT dolt_add('-A');
-"
+" "EXPECT_EMPTY"
 
 echo "--- error paths ---"
 

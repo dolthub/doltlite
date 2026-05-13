@@ -71,19 +71,7 @@ oracle() {
   dl_combined="$dl_branch"$'\n'"$dl_rows"$'\n'"$dl_status"
   dt_combined="$dt_branch"$'\n'"$dt_rows"$'\n'"$dt_status"
 
-  if [ "$dl_combined" = "$dt_combined" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite branch:"; echo "$dl_branch" | sed 's/^/      /'
-    echo "    dolt branch:";     echo "$dt_branch" | sed 's/^/      /'
-    echo "    doltlite rows:";   echo "$dl_rows"   | sed 's/^/      /'
-    echo "    dolt rows:";       echo "$dt_rows"   | sed 's/^/      /'
-    echo "    doltlite status:"; echo "$dl_status" | sed 's/^/      /'
-    echo "    dolt status:";     echo "$dt_status" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
 oracle_error() {

@@ -14,7 +14,7 @@ source "$(dirname "$0")/lib/vc_oracle_common.sh"
 normalize() { tr -d '\r'; }
 
 oracle() {
-  local name="$1" setup="$2"
+  local name="$1" setup="$2" allow_empty="${3:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -43,14 +43,10 @@ oracle() {
            | sed 's/""/"/g' \
            | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -317,15 +313,7 @@ SQL
   )
   dt_post=$(cat "$dir/dt.post")
 
-  if [ "$dl_post" = "$dt_post" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite post:"; echo "$dl_post" | sed 's/^/      /'
-    echo "    dolt post:"; echo "$dt_post" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_post" "$dt_post"
 }
 
 oracle_fetch_ref_consumer_poststate() {
@@ -402,15 +390,7 @@ SQL
   )
   dt_post=$(cat "$dir/dt.post")
 
-  if [ "$dl_post" = "$dt_post" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite post:"; echo "$dl_post" | sed 's/^/      /'
-    echo "    dolt post:"; echo "$dt_post" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_post" "$dt_post"
 }
 
 oracle_fetch_ref_consumer_reopen_poststate() {
@@ -483,15 +463,7 @@ SQL
   )
   dt_post=$(cat "$dir/dt.post")
 
-  if [ "$dl_post" = "$dt_post" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite post:"; echo "$dl_post" | sed 's/^/      /'
-    echo "    dolt post:"; echo "$dt_post" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_post" "$dt_post"
 }
 
 oracle_fetch_ref_multitable_reopen_poststate() {
@@ -570,15 +542,7 @@ SQL
   )
   dt_post=$(cat "$dir/dt.post")
 
-  if [ "$dl_post" = "$dt_post" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite post:"; echo "$dl_post" | sed 's/^/      /'
-    echo "    dolt post:"; echo "$dt_post" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_post" "$dt_post"
 }
 
 oracle_fetch_refresh_ref_consumer_poststate() {
@@ -670,15 +634,7 @@ SQL
   )
   dt_post=$(cat "$dir/dt.post")
 
-  if [ "$dl_post" = "$dt_post" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite post:"; echo "$dl_post" | sed 's/^/      /'
-    echo "    dolt post:"; echo "$dt_post" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_post" "$dt_post"
 }
 
 echo "=== Version Control Oracle Tests: dolt_remotes ==="
@@ -688,7 +644,7 @@ echo "--- baseline ---"
 
 oracle "no_remotes_on_fresh_repo" "
 SELECT 1;
-"
+" "EXPECT_EMPTY"
 
 echo "--- add ---"
 
@@ -710,7 +666,7 @@ echo "--- remove ---"
 oracle "remove_only_remote" "
 SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');
 SELECT dolt_remote('remove', 'origin');
-"
+" "EXPECT_EMPTY"
 
 oracle "remove_one_keep_others" "
 SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');

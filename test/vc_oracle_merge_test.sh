@@ -51,15 +51,7 @@ oracle() {
   local dt_out
   dt_out=$(tail -n +2 "$dir/dt.raw" | tr -d '"' | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_no_merge_commit() {
@@ -153,15 +145,7 @@ oracle_error_poststate() {
       | tr -d '"\r'
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite: |$dl_out|"
-    echo "    dolt:     |$dt_out|"
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_same_session() {
@@ -193,15 +177,7 @@ oracle_same_session() {
       | awk -F'\t' '$1=="Q"{print}'
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite: |$dl_out|"
-    echo "    dolt:     |$dt_out|"
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_reopen_state() {
@@ -231,15 +207,7 @@ oracle_reopen_state() {
       | awk -F'\t' '$1=="Q"{print}'
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 echo "=== Version Control Oracle Tests: dolt_merge ==="

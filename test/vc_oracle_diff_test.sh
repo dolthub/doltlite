@@ -76,22 +76,7 @@ oracle() {
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_diff_table
   )
 
-  if [ -z "$dl_table" ] && [ -z "$dt_table" ]; then
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (both table queries empty — harness bug)"
-    return
-  fi
-
-  if [ "$dl_table" = "$dt_table" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_table" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_table" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_table" "$dt_table"
 }
 
 normalize_summary() {
@@ -134,26 +119,11 @@ oracle_summary() {
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
   )
 
-  if [ -z "$dl_out" ] && [ -z "$dt_out" ]; then
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (both summary queries empty — harness bug)"
-    return
-  fi
-
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_summary_filter_name() {
-  local name="$1" setup="$2" target="$3"
+  local name="$1" setup="$2" target="$3" allow_empty="${4:-}"
   local dir="$TMPROOT/${name}_filter"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -178,14 +148,10 @@ oracle_summary_filter_name() {
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -868,7 +834,7 @@ $SEED
 INSERT INTO t VALUES (2, 20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c2');
-" "never_existed"
+" "never_existed" "EXPECT_EMPTY"
 
 oracle_summary_filter_name "filter_mixed_history" "
 CREATE TABLE x(id INT PRIMARY KEY, v INT);

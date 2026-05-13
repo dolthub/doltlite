@@ -105,6 +105,8 @@ oracle() {
   ) > "$dir/dt.table.raw"
   dt_table=$(tail -n +2 "$dir/dt.table.raw" | tr -d '"' | normalize_table)
 
+  # Surface the stricter "log+table both empty" case so the original guard's
+  # message is preserved; the helper still catches the all-empty combined.
   if [ -z "$dl_log" ] && [ -z "$dt_log" ] && [ -z "$dl_table" ] && [ -z "$dt_table" ]; then
     fail=$((fail+1))
     FAILED_NAMES="$FAILED_NAMES $name"
@@ -116,19 +118,7 @@ oracle() {
   dl_combined="$dl_log"$'\n'"$dl_status"$'\n'"$dl_table"
   dt_combined="$dt_log"$'\n'"$dt_status"$'\n'"$dt_table"
 
-  if [ "$dl_combined" = "$dt_combined" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite log:";    echo "$dl_log"    | sed 's/^/      /'
-    echo "    dolt log:";        echo "$dt_log"    | sed 's/^/      /'
-    echo "    doltlite status:"; echo "$dl_status" | sed 's/^/      /'
-    echo "    dolt status:";     echo "$dt_status" | sed 's/^/      /'
-    echo "    doltlite table:";  echo "$dl_table"  | sed 's/^/      /'
-    echo "    dolt table:";      echo "$dt_table"  | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
 echo "=== Version Control Oracle Tests: HEAD / staged / working state transitions ==="

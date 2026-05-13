@@ -16,7 +16,7 @@ normalize() { tr -d '\r' | grep -v '^S|dolt_ignore|' | sort; }
 DL_IGNORE_PREFIX="CREATE TABLE IF NOT EXISTS dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));"
 
 oracle() {
-  local name="$1" setup="$2"
+  local name="$1" setup="$2" allow_empty="${3:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -42,14 +42,10 @@ $setup"
   local dt_out
   dt_out=$(grep '^S|' "$dir/dt.raw" | tr -d '"' | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -299,7 +295,7 @@ echo "--- no special-case for dolt_ignore ---"
 oracle "star_hides_dolt_ignore" "
 INSERT INTO dolt_ignore VALUES ('*', 1);
 CREATE TABLE foo(x INT PRIMARY KEY);
-"
+" "EXPECT_EMPTY"
 
 echo "--- schema guard ---"
 

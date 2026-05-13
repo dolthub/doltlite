@@ -12,7 +12,7 @@ FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 oracle() {
-  local name="$1" setup="$2" select_sql="$3"
+  local name="$1" setup="$2" select_sql="$3" allow_empty="${4:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -36,16 +36,10 @@ oracle() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^BL|' | sort)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"
-    echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"
-    echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -392,7 +386,7 @@ echo "--- empty table returns no rows ---"
 oracle "empty_table" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'CREATE');
-" "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t;"
+" "SELECT CONCAT('BL|', id, '|', message) FROM dolt_blame_t;" "EXPECT_EMPTY"
 
 echo "--- temp shadow table does not spoof blame PK schema ---"
 

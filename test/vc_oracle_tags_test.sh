@@ -25,7 +25,7 @@ normalize() {
 }
 
 oracle() {
-  local name="$1" setup="$2"
+  local name="$1" setup="$2" allow_empty="${3:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -51,14 +51,10 @@ oracle() {
   local dt_out
   dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -101,7 +97,7 @@ echo "--- baseline ---"
 
 oracle "no_tags_on_fresh_repo" "
 SELECT 1;
-"
+" "EXPECT_EMPTY"
 
 echo "--- single tag ---"
 
@@ -210,7 +206,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'first');
 SELECT dolt_tag('temp');
 SELECT dolt_tag('-d', 'temp');
-"
+" "EXPECT_EMPTY"
 
 oracle "delete_one_keep_others" "
 CREATE TABLE t(id INTEGER PRIMARY KEY);

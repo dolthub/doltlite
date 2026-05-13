@@ -45,15 +45,7 @@ oracle_triggers_dual() {
   ) 2>/dev/null
   dt_out=$(echo "$dt_out" | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | head -20 | sed 's/^/      /'
-    echo "    dolt:"    ; echo "$dt_out" | head -20 | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 echo "=== Triggers + VC Oracle Tests ==="

@@ -52,15 +52,7 @@ oracle() {
            | sed -E 's/\ttrue$/\t1/; s/\tfalse$/\t0/' \
            | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_error() {
@@ -132,17 +124,7 @@ oracle_with_rows() {
   dl_combined="$dl_br"$'\n'"$dl_rows"
   dt_combined="$dt_br"$'\n'"$dt_rows"
 
-  if [ "$dl_combined" = "$dt_combined" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite branches:"; echo "$dl_br" | sed 's/^/      /'
-    echo "    dolt branches:"; echo "$dt_br" | sed 's/^/      /'
-    echo "    doltlite rows:"; echo "$dl_rows" | sed 's/^/      /'
-    echo "    dolt rows:"; echo "$dt_rows" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
 oracle_same_session() {
@@ -180,15 +162,7 @@ oracle_same_session() {
       | awk -F'\t' '$1=="Q"{print}'
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite: |$dl_out|"
-    echo "    dolt:     |$dt_out|"
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 echo "=== Version Control Oracle Tests: dolt_branch ==="

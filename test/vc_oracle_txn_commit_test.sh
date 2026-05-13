@@ -6,6 +6,7 @@ DOLT="${2:-}"
 TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0; FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 pass_name() { pass=$((pass+1)); echo "  PASS: $1"; }
 fail_name() {
@@ -57,12 +58,7 @@ SELECT count(*) AS c FROM t;
 SQL
 )
 
-  if [ "$DL_A" = "$DOLT_A" ]; then
-    pass_name "begin_commit_rollback_matches_dolt"
-  else
-    fail_name "begin_commit_rollback_matches_dolt"
-    echo "    doltlite=$DL_A dolt=$DOLT_A"
-  fi
+  vc_oracle_assert_match "begin_commit_rollback_matches_dolt" "$DL_A" "$DOLT_A"
 fi
 
 if [ "$DL_A" = "2" ]; then
@@ -103,12 +99,7 @@ SELECT count(*) AS c FROM t;
 SQL
 )
 
-  if [ "$DL_B" = "$DOLT_B" ]; then
-    pass_name "savepoint_commit_rollback_to_matches_dolt"
-  else
-    fail_name "savepoint_commit_rollback_to_matches_dolt"
-    echo "    doltlite=$DL_B dolt=$DOLT_B"
-  fi
+  vc_oracle_assert_match "savepoint_commit_rollback_to_matches_dolt" "$DL_B" "$DOLT_B"
 fi
 
 if [ "$DL_B" = "2" ]; then
@@ -262,12 +253,7 @@ SQL
   DOLT_H=$(dolt_query "$DOLT_H_DIR" "SELECT count(*) FROM t")
   cd - >/dev/null
 
-  if [ "$DL_H" = "$DOLT_H" ]; then
-    pass_name "begin_bad_commit_option_matches_dolt"
-  else
-    fail_name "begin_bad_commit_option_matches_dolt"
-    echo "    doltlite=$DL_H dolt=$DOLT_H"
-  fi
+  vc_oracle_assert_match "begin_bad_commit_option_matches_dolt" "$DL_H" "$DOLT_H"
 fi
 
 if [ "$DL_H" = "1" ]; then
@@ -309,12 +295,7 @@ SQL
   DOLT_I=$(dolt_query "$DOLT_I_DIR" "SELECT count(*) FROM t")
   cd - >/dev/null
 
-  if [ "$DL_I" = "$DOLT_I" ]; then
-    pass_name "nested_savepoint_bad_commit_option_matches_dolt"
-  else
-    fail_name "nested_savepoint_bad_commit_option_matches_dolt"
-    echo "    doltlite=$DL_I dolt=$DOLT_I"
-  fi
+  vc_oracle_assert_match "nested_savepoint_bad_commit_option_matches_dolt" "$DL_I" "$DOLT_I"
 fi
 
 if [ "$DL_I" = "1" ]; then

@@ -16,7 +16,7 @@ normalize() {
 }
 
 oracle_schemas() {
-  local name="$1" setup="$2"
+  local name="$1" setup="$2" allow_empty="${3:-}"
   local dir="$TMPROOT/${name}_schemas"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -43,19 +43,15 @@ oracle_schemas() {
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^S' | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
 oracle_diff_touches_schemas() {
-  local name="$1" setup="$2"
+  local name="$1" setup="$2" allow_empty="${3:-}"
   local dir="$TMPROOT/${name}_diff"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -85,19 +81,15 @@ oracle_diff_touches_schemas() {
            | sed -e 's/	true$/	1/' -e 's/	false$/	0/' \
            | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
 oracle_schemas_dual() {
-  local name="$1" dl_setup="$2" dt_setup="$3"
+  local name="$1" dl_setup="$2" dt_setup="$3" allow_empty="${4:-}"
   local dir="$TMPROOT/${name}_schemas_dual"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -124,14 +116,10 @@ oracle_schemas_dual() {
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^S' | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -166,15 +154,7 @@ oracle_diff_touches_schemas_dual() {
            | sed -e 's/	true$/	1/' -e 's/	false$/	0/' \
            | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 SEED="
@@ -190,7 +170,7 @@ echo ""
 
 echo "--- dolt_schemas table contents ---"
 
-oracle_schemas "no_views" "$SEED"
+oracle_schemas "no_views" "$SEED" "EXPECT_EMPTY"
 
 oracle_schemas "one_view" "
 $SEED
@@ -215,7 +195,7 @@ SELECT dolt_commit('-m', 'add_view');
 DROP VIEW high;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_view');
-"
+" "EXPECT_EMPTY"
 
 oracle_schemas "uncommitted_view_visible" "
 $SEED
@@ -235,7 +215,7 @@ oracle_diff_touches_schemas "table_only_no_schemas_touch" "
 CREATE TABLE t(id INT PRIMARY KEY);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'just_table');
-"
+" "EXPECT_EMPTY"
 
 oracle_diff_touches_schemas "mixed_commits" "
 $SEED
@@ -310,7 +290,7 @@ SELECT dolt_commit('-m', 'add_trigger');
 DROP TRIGGER t_ai;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_trigger');
-"
+" "EXPECT_EMPTY"
 
 oracle_schemas_dual "uncommitted_trigger_visible" "
 $SEED_TRIG
@@ -350,7 +330,7 @@ CREATE TRIGGER t_ai AFTER INSERT ON t FOR EACH ROW INSERT INTO log VALUES(new.id
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_trigger_on_feat');
 SELECT dolt_checkout('main');
-"
+" "EXPECT_EMPTY"
 
 oracle_schemas_dual "modify_trigger_single_commit" "
 $SEED_TRIG

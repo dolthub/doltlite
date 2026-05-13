@@ -26,7 +26,7 @@ normalize_summary() {
 }
 
 oracle_stat() {
-  local name="$1" setup="$2" from="$3" to="$4" tbl="${5:-}"
+  local name="$1" setup="$2" from="$3" to="$4" tbl="${5:-}" allow_empty="${6:-}"
   local dir="$TMPROOT/${name}_stat"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -54,19 +54,15 @@ oracle_stat() {
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_stat
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "${name}_stat" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES ${name}_stat"
-    echo "  FAIL: ${name}_stat"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "${name}_stat" "$dl_out" "$dt_out"
   fi
 }
 
 oracle_summary() {
-  local name="$1" setup="$2" from="$3" to="$4" tbl="${5:-}"
+  local name="$1" setup="$2" from="$3" to="$4" tbl="${5:-}" allow_empty="${6:-}"
   local dir="$TMPROOT/${name}_summary"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -94,14 +90,10 @@ oracle_summary() {
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_summary
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "${name}_summary" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES ${name}_summary"
-    echo "  FAIL: ${name}_summary"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "${name}_summary" "$dl_out" "$dt_out"
   fi
 }
 
@@ -122,7 +114,7 @@ echo ""
 
 echo "--- no changes ---"
 
-oracle_both "no_changes" "$SEED" "HEAD" "HEAD"
+oracle_both "no_changes" "$SEED" "HEAD" "HEAD" "" "EXPECT_EMPTY"
 
 echo "--- single row modify ---"
 
@@ -167,7 +159,14 @@ SELECT dolt_commit('-m', 'c2');
 
 echo "--- table creation / drop ---"
 
-oracle_both "create_table_empty" "
+# stat for create-table-of-empty-rows yields no rows on both sides; summary still
+# reports one row for the table creation.
+oracle_stat    "create_table_empty" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+" "HEAD~1" "HEAD" "" "EXPECT_EMPTY"
+oracle_summary "create_table_empty" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c1');
@@ -177,7 +176,17 @@ oracle_both "create_table_with_rows" "
 $SEED
 " "HEAD~1" "HEAD"
 
-oracle_both "drop_table_empty" "
+# stat for drop-table-of-empty-rows yields no rows on both sides; summary still
+# reports one row for the drop.
+oracle_stat    "drop_table_empty" "
+CREATE TABLE t(id INT PRIMARY KEY, v INT);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c1');
+DROP TABLE t;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2');
+" "HEAD~1" "HEAD" "" "EXPECT_EMPTY"
+oracle_summary "drop_table_empty" "
 CREATE TABLE t(id INT PRIMARY KEY, v INT);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c1');

@@ -12,7 +12,7 @@ FAILED_NAMES=""
 source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 oracle() {
-  local name="$1" setup="$2" from_ref="$3" to_ref="$4" tbl="${5:-}"
+  local name="$1" setup="$2" from_ref="$3" to_ref="$4" tbl="${5:-}" allow_empty="${6:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -49,14 +49,10 @@ oracle() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^ROW|' | sort)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -116,15 +112,7 @@ oracle_query() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^ROW|' | sort)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 echo "=== Version Control Oracle Tests: dolt_schema_diff ==="
@@ -290,7 +278,7 @@ SELECT dolt_commit('-m', 'populate');
 ALTER TABLE t DROP COLUMN extra;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'drop_col_again');
-" "HEAD~3" "HEAD"
+" "HEAD~3" "HEAD" "" "EXPECT_EMPTY"
 
 oracle "multiple_alters_single_commit" "
 $SEED
@@ -358,11 +346,11 @@ $SEED
 INSERT INTO t VALUES (2, 20);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'data_only');
-" "HEAD~1" "HEAD"
+" "HEAD~1" "HEAD" "" "EXPECT_EMPTY"
 
 oracle "self_diff" "
 $SEED
-" "HEAD" "HEAD"
+" "HEAD" "HEAD" "" "EXPECT_EMPTY"
 
 echo "--- branch refs ---"
 
@@ -417,7 +405,7 @@ $SEED
 CREATE TABLE u(id INTEGER PRIMARY KEY);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'add_u');
-" "HEAD~1" "HEAD" "no_such_table"
+" "HEAD~1" "HEAD" "no_such_table" "EXPECT_EMPTY"
 
 oracle_query "single_arg_range" "
 $SEED
@@ -610,6 +598,12 @@ SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
 " "main" "feat" "u"
 
+# The three replay_fk_tables_plus_check cases below currently produce no rows
+# on both doltlite AND dolt for dolt_schema_diff of replayed FK tables (p,c).
+# The parity holds, but whether dolt_schema_diff should skip tables introduced
+# by replay is an open question (related to #839). Marked EXPECT_EMPTY so the
+# empty-both guard doesn't block CI on a parity-preserving gap; swap back to
+# the standard assertion once that question is resolved.
 oracle "merge_replay_fk_tables_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
@@ -630,7 +624,7 @@ ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_merge('feat');
-" "HEAD^1" "HEAD" "p,c"
+" "HEAD^1" "HEAD" "p,c" "EXPECT_EMPTY"
 
 oracle "cherrypick_replay_fk_tables_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -652,7 +646,7 @@ ALTER TABLE t_new RENAME TO t;
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_cherry_pick('feat');
-" "HEAD~1" "HEAD" "p,c"
+" "HEAD~1" "HEAD" "p,c" "EXPECT_EMPTY"
 
 oracle "rebase_replay_fk_tables_plus_check" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -675,7 +669,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'main_check');
 SELECT dolt_checkout('feat');
 SELECT dolt_rebase('main');
-" "main" "feat" "p,c"
+" "main" "feat" "p,c" "EXPECT_EMPTY"
 
 echo "--- error paths ---"
 

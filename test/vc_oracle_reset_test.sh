@@ -71,17 +71,7 @@ oracle() {
   dl_combined="$dl_log"$'\n'"$dl_status"
   dt_combined="$dt_log"$'\n'"$dt_status"
 
-  if [ "$dl_combined" = "$dt_combined" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite log:";    echo "$dl_log"    | sed 's/^/      /'
-    echo "    dolt log:";        echo "$dt_log"    | sed 's/^/      /'
-    echo "    doltlite status:"; echo "$dl_status" | sed 's/^/      /'
-    echo "    dolt status:";     echo "$dt_status" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
 oracle_error() {
@@ -159,15 +149,7 @@ oracle_same_session() {
       | awk '/^Q\|/ {print; next} /[Nn]o such savepoint:|SAVEPOINT .*does not exist/ {print "E|savepoint"}'
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 echo "=== Version Control Oracle Tests: dolt_reset ==="
