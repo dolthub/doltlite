@@ -250,14 +250,17 @@ static int tagNext(sqlite3_vtab_cursor *pCursor){
 static int tagEof(sqlite3_vtab_cursor *pCursor){
   TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
   ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
-  return !cs || ((TagCur*)pCursor)->iRow >= cs->nTags;
+  return !cs || ((TagCur*)pCursor)->iRow >= refsTableTagCount(&cs->refs);
 }
 static int tagColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int col){
   TagVtab *pVtab = (TagVtab*)pCursor->pVtab;
   ChunkStore *cs = doltliteGetChunkStore(pVtab->db);
-  struct TagRef *t;
+  const TagRef *t;
+  int nTg;
+  const TagRef *aTg;
   if( !cs ) return SQLITE_OK;
-  t = &cs->aTags[((TagCur*)pCursor)->iRow];
+  refsTableGetTags(&cs->refs, &nTg, &aTg);
+  t = &aTg[((TagCur*)pCursor)->iRow];
   switch(col){
     case 0:
       sqlite3_result_text(ctx, t->zName, -1, SQLITE_TRANSIENT);

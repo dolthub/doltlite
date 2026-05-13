@@ -191,13 +191,21 @@ static int caFilter(
   rc = caEnqueue(pCur, &head);
   if( rc!=SQLITE_OK ) return rc;
 
-  for( i = 0; i < cs->nBranches; i++ ){
-    rc = caEnqueue(pCur, &cs->aBranches[i].commitHash);
-    if( rc!=SQLITE_OK ) return rc;
+  {
+    int nBr; const BranchRef *aBr;
+    refsTableGetBranches(&cs->refs, &nBr, &aBr);
+    for( i = 0; i < nBr; i++ ){
+      rc = caEnqueue(pCur, &aBr[i].commitHash);
+      if( rc!=SQLITE_OK ) return rc;
+    }
   }
-  for( i = 0; i < cs->nTags; i++ ){
-    rc = caEnqueue(pCur, &cs->aTags[i].commitHash);
-    if( rc!=SQLITE_OK ) return rc;
+  {
+    int nTg; const TagRef *aTg;
+    refsTableGetTags(&cs->refs, &nTg, &aTg);
+    for( i = 0; i < nTg; i++ ){
+      rc = caEnqueue(pCur, &aTg[i].commitHash);
+      if( rc!=SQLITE_OK ) return rc;
+    }
   }
 
   if( pCur->qTail == 0 ) return SQLITE_OK;

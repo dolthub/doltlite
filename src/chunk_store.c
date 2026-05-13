@@ -302,102 +302,102 @@ static void csReleaseIndexBuf(ChunkIndexEntry *aIndex,
 
 static void csFreeBranches(ChunkStore *cs){
   int k;
-  for(k=0; k<cs->nBranches; k++) sqlite3_free(cs->aBranches[k].zName);
-  sqlite3_free(cs->aBranches);
-  cs->aBranches = 0;
-  cs->nBranches = 0;
+  for(k=0; k<cs->refs.nBranches; k++) sqlite3_free(cs->refs.aBranches[k].zName);
+  sqlite3_free(cs->refs.aBranches);
+  cs->refs.aBranches = 0;
+  cs->refs.nBranches = 0;
 }
 static void csFreeTags(ChunkStore *cs){
   int k;
-  for(k=0; k<cs->nTags; k++){
-    sqlite3_free(cs->aTags[k].zName);
-    sqlite3_free(cs->aTags[k].zTagger);
-    sqlite3_free(cs->aTags[k].zEmail);
-    sqlite3_free(cs->aTags[k].zMessage);
+  for(k=0; k<cs->refs.nTags; k++){
+    sqlite3_free(cs->refs.aTags[k].zName);
+    sqlite3_free(cs->refs.aTags[k].zTagger);
+    sqlite3_free(cs->refs.aTags[k].zEmail);
+    sqlite3_free(cs->refs.aTags[k].zMessage);
   }
-  sqlite3_free(cs->aTags);
-  cs->aTags = 0;
-  cs->nTags = 0;
+  sqlite3_free(cs->refs.aTags);
+  cs->refs.aTags = 0;
+  cs->refs.nTags = 0;
 }
 static void csFreeRemotes(ChunkStore *cs){
   int k;
-  for(k=0; k<cs->nRemotes; k++){
-    sqlite3_free(cs->aRemotes[k].zName);
-    sqlite3_free(cs->aRemotes[k].zUrl);
+  for(k=0; k<cs->refs.nRemotes; k++){
+    sqlite3_free(cs->refs.aRemotes[k].zName);
+    sqlite3_free(cs->refs.aRemotes[k].zUrl);
   }
-  sqlite3_free(cs->aRemotes);
-  cs->aRemotes = 0;
-  cs->nRemotes = 0;
+  sqlite3_free(cs->refs.aRemotes);
+  cs->refs.aRemotes = 0;
+  cs->refs.nRemotes = 0;
 }
 static void csFreeTracking(ChunkStore *cs){
   int k;
-  for(k=0; k<cs->nTracking; k++){
-    sqlite3_free(cs->aTracking[k].zRemote);
-    sqlite3_free(cs->aTracking[k].zBranch);
+  for(k=0; k<cs->refs.nTracking; k++){
+    sqlite3_free(cs->refs.aTracking[k].zRemote);
+    sqlite3_free(cs->refs.aTracking[k].zBranch);
   }
-  sqlite3_free(cs->aTracking);
-  cs->aTracking = 0;
-  cs->nTracking = 0;
+  sqlite3_free(cs->refs.aTracking);
+  cs->refs.aTracking = 0;
+  cs->refs.nTracking = 0;
 }
 
 static void csMarkRefsCommitted(ChunkStore *cs){
-  cs->committedRefsHash = cs->refsHash;
+  cs->refs.committedRefsHash = cs->refs.refsHash;
 }
 
 static void csRestoreCommittedRefsHash(ChunkStore *cs){
-  cs->refsHash = cs->committedRefsHash;
+  cs->refs.refsHash = cs->refs.committedRefsHash;
 }
 
 static void csCaptureSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
-  pSaved->zDefaultBranch = cs->zDefaultBranch;
-  pSaved->aBranches = cs->aBranches;
-  pSaved->nBranches = cs->nBranches;
-  pSaved->aTags = cs->aTags;
-  pSaved->nTags = cs->nTags;
-  pSaved->aRemotes = cs->aRemotes;
-  pSaved->nRemotes = cs->nRemotes;
-  pSaved->aTracking = cs->aTracking;
-  pSaved->nTracking = cs->nTracking;
+  pSaved->zDefaultBranch = cs->refs.zDefaultBranch;
+  pSaved->aBranches = cs->refs.aBranches;
+  pSaved->nBranches = cs->refs.nBranches;
+  pSaved->aTags = cs->refs.aTags;
+  pSaved->nTags = cs->refs.nTags;
+  pSaved->aRemotes = cs->refs.aRemotes;
+  pSaved->nRemotes = cs->refs.nRemotes;
+  pSaved->aTracking = cs->refs.aTracking;
+  pSaved->nTracking = cs->refs.nTracking;
 }
 
 static void csDetachSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   csCaptureSavedRefsState(cs, pSaved);
-  cs->zDefaultBranch = 0;
-  cs->aBranches = 0;
-  cs->nBranches = 0;
-  cs->aTags = 0;
-  cs->nTags = 0;
-  cs->aRemotes = 0;
-  cs->nRemotes = 0;
-  cs->aTracking = 0;
-  cs->nTracking = 0;
+  cs->refs.zDefaultBranch = 0;
+  cs->refs.aBranches = 0;
+  cs->refs.nBranches = 0;
+  cs->refs.aTags = 0;
+  cs->refs.nTags = 0;
+  cs->refs.aRemotes = 0;
+  cs->refs.nRemotes = 0;
+  cs->refs.aTracking = 0;
+  cs->refs.nTracking = 0;
 }
 
 static void csRestoreSavedRefsState(ChunkStore *cs, const SavedRefsState *pSaved){
-  cs->zDefaultBranch = pSaved->zDefaultBranch;
-  cs->aBranches = pSaved->aBranches;
-  cs->nBranches = pSaved->nBranches;
-  cs->aTags = pSaved->aTags;
-  cs->nTags = pSaved->nTags;
-  cs->aRemotes = pSaved->aRemotes;
-  cs->nRemotes = pSaved->nRemotes;
-  cs->aTracking = pSaved->aTracking;
-  cs->nTracking = pSaved->nTracking;
+  cs->refs.zDefaultBranch = pSaved->zDefaultBranch;
+  cs->refs.aBranches = pSaved->aBranches;
+  cs->refs.nBranches = pSaved->nBranches;
+  cs->refs.aTags = pSaved->aTags;
+  cs->refs.nTags = pSaved->nTags;
+  cs->refs.aRemotes = pSaved->aRemotes;
+  cs->refs.nRemotes = pSaved->nRemotes;
+  cs->refs.aTracking = pSaved->aTracking;
+  cs->refs.nTracking = pSaved->nTracking;
 }
 
 static void csFreeSavedRefsState(SavedRefsState *pSaved){
   ChunkStore refsStore;
   memset(&refsStore, 0, sizeof(refsStore));
-  refsStore.zDefaultBranch = pSaved->zDefaultBranch;
-  refsStore.aBranches = pSaved->aBranches;
-  refsStore.nBranches = pSaved->nBranches;
-  refsStore.aTags = pSaved->aTags;
-  refsStore.nTags = pSaved->nTags;
-  refsStore.aRemotes = pSaved->aRemotes;
-  refsStore.nRemotes = pSaved->nRemotes;
-  refsStore.aTracking = pSaved->aTracking;
-  refsStore.nTracking = pSaved->nTracking;
+  refsStore.refs.zDefaultBranch = pSaved->zDefaultBranch;
+  refsStore.refs.aBranches = pSaved->aBranches;
+  refsStore.refs.nBranches = pSaved->nBranches;
+  refsStore.refs.aTags = pSaved->aTags;
+  refsStore.refs.nTags = pSaved->nTags;
+  refsStore.refs.aRemotes = pSaved->aRemotes;
+  refsStore.refs.nRemotes = pSaved->nRemotes;
+  refsStore.refs.aTracking = pSaved->aTracking;
+  refsStore.refs.nTracking = pSaved->nTracking;
   csFreeRefsState(&refsStore);
   memset(pSaved, 0, sizeof(*pSaved));
 }
@@ -462,8 +462,8 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
 
   pDst->pFile = pSrc->pFile;
   pDst->readOnly = pSrc->readOnly;
-  pDst->refsHash = pSrc->refsHash;
-  pDst->committedRefsHash = pSrc->committedRefsHash;
+  pDst->refs.refsHash = pSrc->refs.refsHash;
+  pDst->refs.committedRefsHash = pSrc->refs.committedRefsHash;
   pDst->nChunks = pSrc->nChunks;
   pDst->iIndexOffset = pSrc->iIndexOffset;
   pDst->nIndexSize = pSrc->nIndexSize;
@@ -474,15 +474,15 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->aIndexMmapBase = pSrc->aIndexMmapBase;
   pDst->aIndexMmapSize = pSrc->aIndexMmapSize;
   pDst->wal.nWalData = pSrc->wal.nWalData;
-  pDst->aBranches = pSrc->aBranches;
-  pDst->nBranches = pSrc->nBranches;
-  pDst->zDefaultBranch = pSrc->zDefaultBranch;
-  pDst->aTags = pSrc->aTags;
-  pDst->nTags = pSrc->nTags;
-  pDst->aRemotes = pSrc->aRemotes;
-  pDst->nRemotes = pSrc->nRemotes;
-  pDst->aTracking = pSrc->aTracking;
-  pDst->nTracking = pSrc->nTracking;
+  pDst->refs.aBranches = pSrc->refs.aBranches;
+  pDst->refs.nBranches = pSrc->refs.nBranches;
+  pDst->refs.zDefaultBranch = pSrc->refs.zDefaultBranch;
+  pDst->refs.aTags = pSrc->refs.aTags;
+  pDst->refs.nTags = pSrc->refs.nTags;
+  pDst->refs.aRemotes = pSrc->refs.aRemotes;
+  pDst->refs.nRemotes = pSrc->refs.nRemotes;
+  pDst->refs.aTracking = pSrc->refs.aTracking;
+  pDst->refs.nTracking = pSrc->refs.nTracking;
 
   pSrc->pFile = 0;
   pSrc->aIndex = 0;
@@ -490,15 +490,15 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->aIndexMmapBase = 0;
   pSrc->aIndexMmapSize = 0;
   pSrc->wal.nWalData = 0;
-  pSrc->aBranches = 0;
-  pSrc->nBranches = 0;
-  pSrc->zDefaultBranch = 0;
-  pSrc->aTags = 0;
-  pSrc->nTags = 0;
-  pSrc->aRemotes = 0;
-  pSrc->nRemotes = 0;
-  pSrc->aTracking = 0;
-  pSrc->nTracking = 0;
+  pSrc->refs.aBranches = 0;
+  pSrc->refs.nBranches = 0;
+  pSrc->refs.zDefaultBranch = 0;
+  pSrc->refs.aTags = 0;
+  pSrc->refs.nTags = 0;
+  pSrc->refs.aRemotes = 0;
+  pSrc->refs.nRemotes = 0;
+  pSrc->refs.aTracking = 0;
+  pSrc->refs.nTracking = 0;
 }
 
 static void csFreeReloadState(ChunkStoreReloadState *pSaved){
@@ -513,14 +513,14 @@ static void csFreeRefsState(ChunkStore *cs){
   csFreeTags(cs);
   csFreeRemotes(cs);
   csFreeTracking(cs);
-  sqlite3_free(cs->zDefaultBranch);
-  cs->zDefaultBranch = 0;
+  sqlite3_free(cs->refs.zDefaultBranch);
+  cs->refs.zDefaultBranch = 0;
 }
 
 static int csEnsureDefaultBranch(ChunkStore *cs){
-  if( !cs->zDefaultBranch ){
-    cs->zDefaultBranch = sqlite3_mprintf("main");
-    if( !cs->zDefaultBranch ) return SQLITE_NOMEM;
+  if( !cs->refs.zDefaultBranch ){
+    cs->refs.zDefaultBranch = sqlite3_mprintf("main");
+    if( !cs->refs.zDefaultBranch ) return SQLITE_NOMEM;
   }
   return SQLITE_OK;
 }
@@ -580,7 +580,7 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
 
 static int csRestoreCommittedRefsState(ChunkStore *cs){
   csRestoreCommittedRefsHash(cs);
-  if( prollyHashIsEmpty(&cs->committedRefsHash) ){
+  if( prollyHashIsEmpty(&cs->refs.committedRefsHash) ){
     csFreeBranches(cs);
     csFreeTags(cs);
     csFreeRemotes(cs);
@@ -593,14 +593,14 @@ static int csRestoreCommittedRefsState(ChunkStore *cs){
 static int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
   int rc;
   int preserveRefs = cs->nPending > 0
-                  && prollyHashCompare(&cs->refsHash,
-                                       &cs->committedRefsHash)!=0;
+                  && prollyHashCompare(&cs->refs.refsHash,
+                                       &cs->refs.committedRefsHash)!=0;
   ProllyHash savedRefsHash;
   SavedRefsState savedRefs;
 
   memset(&savedRefs, 0, sizeof(savedRefs));
   if( preserveRefs ){
-    savedRefsHash = cs->refsHash;
+    savedRefsHash = cs->refs.refsHash;
     csDetachSavedRefsState(cs, &savedRefs);
   }
 
@@ -611,7 +611,7 @@ static int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
       csFreeRefsState(cs);
     }
     csRestoreSavedRefsState(cs, &savedRefs);
-    cs->refsHash = savedRefsHash;
+    cs->refs.refsHash = savedRefsHash;
   }
   return rc;
 }
@@ -819,7 +819,7 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   CS_WRITE_U32(aBuf + 40, (u32)cs->nIndexSize);
 
   CS_WRITE_I64(aBuf + 84, cs->wal.iWalOffset);
-  memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
+  memcpy(aBuf + 104, cs->refs.refsHash.data, PROLLY_HASH_SIZE);
 }
 
 static int csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e){
@@ -856,7 +856,7 @@ static int csReadManifest(ChunkStore *cs){
   cs->nIndexSize = (i64)CS_READ_U32(aBuf + 40);
 
   cs->wal.iWalOffset = CS_READ_I64(aBuf + 84);
-  memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
+  memcpy(cs->refs.refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
 
   return SQLITE_OK;
 }
@@ -1032,8 +1032,8 @@ static int csReplayWal(ChunkStore *cs){
   }
   if( walSize <= 0 ){
     if( cs->nIndex==0 && cs->nChunks==0
-     && !prollyHashIsEmpty(&cs->refsHash) ){
-      memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
+     && !prollyHashIsEmpty(&cs->refs.refsHash) ){
+      memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
     }
     return SQLITE_OK;
   }
@@ -1097,7 +1097,7 @@ static int csReplayWal(ChunkStore *cs){
 
         cs->nChunks = (int)CS_READ_U32(m + 28);
 
-        memcpy(cs->refsHash.data, m + 104, PROLLY_HASH_SIZE);
+        memcpy(cs->refs.refsHash.data, m + 104, PROLLY_HASH_SIZE);
       }
       pos += CHUNK_MANIFEST_SIZE;
       nRootedPending = cs->nPending;
@@ -1113,7 +1113,7 @@ static int csReplayWal(ChunkStore *cs){
 
   if( nRootRecordsSeen == 0
    && nPendingBefore == 0 && cs->nIndex == 0 ){
-    memset(cs->refsHash.data, 0, PROLLY_HASH_SIZE);
+    memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
     cs->nChunks = 0;
   }
 
@@ -1130,10 +1130,10 @@ static int csReplayWal(ChunkStore *cs){
     csPendHTClear(cs);
   }
 
-  if( !prollyHashIsEmpty(&cs->refsHash) ){
+  if( !prollyHashIsEmpty(&cs->refs.refsHash) ){
     u8 *refsData = 0;
     int nRefsData = 0;
-    int rc2 = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
+    int rc2 = chunkStoreGet(cs, &cs->refs.refsHash, &refsData, &nRefsData);
     if( rc2==SQLITE_OK && refsData ){
       rc2 = csReplaceRefsStateFromBlob(&tmpRefs, refsData, nRefsData, 0);
       sqlite3_free(refsData);
@@ -1352,14 +1352,14 @@ int chunkStoreOpen(
       return rc;
     }
 
-    if( prollyHashIsEmpty(&cs->refsHash) && cs->nIndexSize>0 ){
+    if( prollyHashIsEmpty(&cs->refs.refsHash) && cs->nIndexSize>0 ){
       chunkStoreClose(cs);
       return SQLITE_CORRUPT;
     }
 
-    if( !prollyHashIsEmpty(&cs->refsHash) ){
+    if( !prollyHashIsEmpty(&cs->refs.refsHash) ){
       u8 *refsData = 0; int nRefsData = 0;
-      rc = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
+      rc = chunkStoreGet(cs, &cs->refs.refsHash, &refsData, &nRefsData);
       if( rc==SQLITE_OK ){
         rc = csDeserializeRefs(cs, refsData, nRefsData);
         sqlite3_free(refsData);
@@ -1409,7 +1409,7 @@ int chunkStoreClose(ChunkStore *cs){
   csPendHTClear(cs);
   csRecentHTClear(cs);
   sqlite3_free(cs->pWriteBuf);
-  sqlite3_free(cs->zDefaultBranch);
+  sqlite3_free(cs->refs.zDefaultBranch);
   csFreeBranches(cs);
   csFreeTags(cs);
   csFreeRemotes(cs);
@@ -1419,22 +1419,22 @@ int chunkStoreClose(ChunkStore *cs){
 }
 
 const char *chunkStoreGetDefaultBranch(ChunkStore *cs){
-  return cs->zDefaultBranch ? cs->zDefaultBranch : "main";
+  return cs->refs.zDefaultBranch ? cs->refs.zDefaultBranch : "main";
 }
 
 int chunkStoreSetDefaultBranch(ChunkStore *cs, const char *zName){
   char *zCopy = sqlite3_mprintf("%s", zName);
   if( !zCopy ) return SQLITE_NOMEM;
-  sqlite3_free(cs->zDefaultBranch);
-  cs->zDefaultBranch = zCopy;
+  sqlite3_free(cs->refs.zDefaultBranch);
+  cs->refs.zDefaultBranch = zCopy;
   return SQLITE_OK;
 }
 
 int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
   int i;
-  for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zName)==0 ){
-      if( pCommit ) memcpy(pCommit, &cs->aBranches[i].commitHash, sizeof(ProllyHash));
+  for(i=0; i<cs->refs.nBranches; i++){
+    if( strcmp(cs->refs.aBranches[i].zName, zName)==0 ){
+      if( pCommit ) memcpy(pCommit, &cs->refs.aBranches[i].commitHash, sizeof(ProllyHash));
       return SQLITE_OK;
     }
   }
@@ -1444,22 +1444,22 @@ int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit)
 int chunkStoreAddBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
   struct BranchRef *aNew;
   if( chunkStoreFindBranch(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
-  aNew = sqlite3_realloc(cs->aBranches, (cs->nBranches+1)*(int)sizeof(struct BranchRef));
+  aNew = sqlite3_realloc(cs->refs.aBranches, (cs->refs.nBranches+1)*(int)sizeof(struct BranchRef));
   if( !aNew ) return SQLITE_NOMEM;
-  cs->aBranches = aNew;
-  memset(&aNew[cs->nBranches], 0, sizeof(struct BranchRef));
-  aNew[cs->nBranches].zName = sqlite3_mprintf("%s", zName);
-  if( !aNew[cs->nBranches].zName ) return SQLITE_NOMEM;
-  memcpy(&aNew[cs->nBranches].commitHash, pCommit, sizeof(ProllyHash));
-  cs->nBranches++;
+  cs->refs.aBranches = aNew;
+  memset(&aNew[cs->refs.nBranches], 0, sizeof(struct BranchRef));
+  aNew[cs->refs.nBranches].zName = sqlite3_mprintf("%s", zName);
+  if( !aNew[cs->refs.nBranches].zName ) return SQLITE_NOMEM;
+  memcpy(&aNew[cs->refs.nBranches].commitHash, pCommit, sizeof(ProllyHash));
+  cs->refs.nBranches++;
   return SQLITE_OK;
 }
 
 int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
   int i;
-  for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zName)==0 ){
-      memcpy(&cs->aBranches[i].commitHash, pCommit, sizeof(ProllyHash));
+  for(i=0; i<cs->refs.nBranches; i++){
+    if( strcmp(cs->refs.aBranches[i].zName, zName)==0 ){
+      memcpy(&cs->refs.aBranches[i].commitHash, pCommit, sizeof(ProllyHash));
       return SQLITE_OK;
     }
   }
@@ -1468,11 +1468,11 @@ int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *
 
 int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName){
   int i;
-  for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zName)==0 ){
-      sqlite3_free(cs->aBranches[i].zName);
-      cs->aBranches[i] = cs->aBranches[cs->nBranches-1];
-      cs->nBranches--;
+  for(i=0; i<cs->refs.nBranches; i++){
+    if( strcmp(cs->refs.aBranches[i].zName, zName)==0 ){
+      sqlite3_free(cs->refs.aBranches[i].zName);
+      cs->refs.aBranches[i] = cs->refs.aBranches[cs->refs.nBranches-1];
+      cs->refs.nBranches--;
       return SQLITE_OK;
     }
   }
@@ -1481,9 +1481,9 @@ int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName){
 
 int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash){
   int i;
-  for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zBranch)==0 ){
-      memcpy(pHash, &cs->aBranches[i].workingSetHash, sizeof(ProllyHash));
+  for(i=0; i<cs->refs.nBranches; i++){
+    if( strcmp(cs->refs.aBranches[i].zName, zBranch)==0 ){
+      memcpy(pHash, &cs->refs.aBranches[i].workingSetHash, sizeof(ProllyHash));
       return SQLITE_OK;
     }
   }
@@ -1493,9 +1493,9 @@ int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHas
 
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash){
   int i;
-  for(i=0; i<cs->nBranches; i++){
-    if( strcmp(cs->aBranches[i].zName, zBranch)==0 ){
-      memcpy(&cs->aBranches[i].workingSetHash, pHash, sizeof(ProllyHash));
+  for(i=0; i<cs->refs.nBranches; i++){
+    if( strcmp(cs->refs.aBranches[i].zName, zBranch)==0 ){
+      memcpy(&cs->refs.aBranches[i].workingSetHash, pHash, sizeof(ProllyHash));
       return SQLITE_OK;
     }
   }
@@ -1504,9 +1504,9 @@ int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const Pro
 
 int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
   int i;
-  for(i=0; i<cs->nTags; i++){
-    if( strcmp(cs->aTags[i].zName, zName)==0 ){
-      if( pCommit ) memcpy(pCommit, &cs->aTags[i].commitHash, sizeof(ProllyHash));
+  for(i=0; i<cs->refs.nTags; i++){
+    if( strcmp(cs->refs.aTags[i].zName, zName)==0 ){
+      if( pCommit ) memcpy(pCommit, &cs->refs.aTags[i].commitHash, sizeof(ProllyHash));
       return SQLITE_OK;
     }
   }
@@ -1528,36 +1528,36 @@ int chunkStoreAddTagFull(
 ){
   struct TagRef *aNew;
   if( chunkStoreFindTag(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
-  aNew = sqlite3_realloc(cs->aTags, (cs->nTags+1)*(int)sizeof(struct TagRef));
+  aNew = sqlite3_realloc(cs->refs.aTags, (cs->refs.nTags+1)*(int)sizeof(struct TagRef));
   if( !aNew ) return SQLITE_NOMEM;
-  cs->aTags = aNew;
-  memset(&aNew[cs->nTags], 0, sizeof(struct TagRef));
-  aNew[cs->nTags].zName = sqlite3_mprintf("%s", zName);
-  if( !aNew[cs->nTags].zName ) return SQLITE_NOMEM;
-  memcpy(&aNew[cs->nTags].commitHash, pCommit, sizeof(ProllyHash));
-  aNew[cs->nTags].zTagger  = sqlite3_mprintf("%s", zTagger  ? zTagger  : "");
-  aNew[cs->nTags].zEmail   = sqlite3_mprintf("%s", zEmail   ? zEmail   : "");
-  aNew[cs->nTags].zMessage = sqlite3_mprintf("%s", zMessage ? zMessage : "");
-  if( !aNew[cs->nTags].zTagger || !aNew[cs->nTags].zEmail || !aNew[cs->nTags].zMessage ){
-    sqlite3_free(aNew[cs->nTags].zName);
-    sqlite3_free(aNew[cs->nTags].zTagger);
-    sqlite3_free(aNew[cs->nTags].zEmail);
-    sqlite3_free(aNew[cs->nTags].zMessage);
-    memset(&aNew[cs->nTags], 0, sizeof(struct TagRef));
+  cs->refs.aTags = aNew;
+  memset(&aNew[cs->refs.nTags], 0, sizeof(struct TagRef));
+  aNew[cs->refs.nTags].zName = sqlite3_mprintf("%s", zName);
+  if( !aNew[cs->refs.nTags].zName ) return SQLITE_NOMEM;
+  memcpy(&aNew[cs->refs.nTags].commitHash, pCommit, sizeof(ProllyHash));
+  aNew[cs->refs.nTags].zTagger  = sqlite3_mprintf("%s", zTagger  ? zTagger  : "");
+  aNew[cs->refs.nTags].zEmail   = sqlite3_mprintf("%s", zEmail   ? zEmail   : "");
+  aNew[cs->refs.nTags].zMessage = sqlite3_mprintf("%s", zMessage ? zMessage : "");
+  if( !aNew[cs->refs.nTags].zTagger || !aNew[cs->refs.nTags].zEmail || !aNew[cs->refs.nTags].zMessage ){
+    sqlite3_free(aNew[cs->refs.nTags].zName);
+    sqlite3_free(aNew[cs->refs.nTags].zTagger);
+    sqlite3_free(aNew[cs->refs.nTags].zEmail);
+    sqlite3_free(aNew[cs->refs.nTags].zMessage);
+    memset(&aNew[cs->refs.nTags], 0, sizeof(struct TagRef));
     return SQLITE_NOMEM;
   }
-  aNew[cs->nTags].timestamp = timestamp;
-  cs->nTags++;
+  aNew[cs->refs.nTags].timestamp = timestamp;
+  cs->refs.nTags++;
   return SQLITE_OK;
 }
 
 int chunkStoreDeleteTag(ChunkStore *cs, const char *zName){
   int i;
-  for(i=0; i<cs->nTags; i++){
-    if( strcmp(cs->aTags[i].zName, zName)==0 ){
-      sqlite3_free(cs->aTags[i].zName);
-      cs->aTags[i] = cs->aTags[cs->nTags-1];
-      cs->nTags--;
+  for(i=0; i<cs->refs.nTags; i++){
+    if( strcmp(cs->refs.aTags[i].zName, zName)==0 ){
+      sqlite3_free(cs->refs.aTags[i].zName);
+      cs->refs.aTags[i] = cs->refs.aTags[cs->refs.nTags-1];
+      cs->refs.nTags--;
       return SQLITE_OK;
     }
   }
@@ -1566,9 +1566,9 @@ int chunkStoreDeleteTag(ChunkStore *cs, const char *zName){
 
 int chunkStoreFindRemote(ChunkStore *cs, const char *zName, const char **pzUrl){
   int i;
-  for(i=0; i<cs->nRemotes; i++){
-    if( strcmp(cs->aRemotes[i].zName, zName)==0 ){
-      if( pzUrl ) *pzUrl = cs->aRemotes[i].zUrl;
+  for(i=0; i<cs->refs.nRemotes; i++){
+    if( strcmp(cs->refs.aRemotes[i].zName, zName)==0 ){
+      if( pzUrl ) *pzUrl = cs->refs.aRemotes[i].zUrl;
       return SQLITE_OK;
     }
   }
@@ -1578,35 +1578,35 @@ int chunkStoreFindRemote(ChunkStore *cs, const char *zName, const char **pzUrl){
 int chunkStoreAddRemote(ChunkStore *cs, const char *zName, const char *zUrl){
   struct RemoteRef *aNew;
   if( chunkStoreFindRemote(cs, zName, 0)==SQLITE_OK ) return SQLITE_ERROR;
-  aNew = sqlite3_realloc(cs->aRemotes, (cs->nRemotes+1)*(int)sizeof(struct RemoteRef));
+  aNew = sqlite3_realloc(cs->refs.aRemotes, (cs->refs.nRemotes+1)*(int)sizeof(struct RemoteRef));
   if( !aNew ) return SQLITE_NOMEM;
-  cs->aRemotes = aNew;
-  aNew[cs->nRemotes].zName = sqlite3_mprintf("%s", zName);
-  if( !aNew[cs->nRemotes].zName ) return SQLITE_NOMEM;
-  aNew[cs->nRemotes].zUrl = sqlite3_mprintf("%s", zUrl);
-  if( !aNew[cs->nRemotes].zUrl ){
-    sqlite3_free(aNew[cs->nRemotes].zName);
+  cs->refs.aRemotes = aNew;
+  aNew[cs->refs.nRemotes].zName = sqlite3_mprintf("%s", zName);
+  if( !aNew[cs->refs.nRemotes].zName ) return SQLITE_NOMEM;
+  aNew[cs->refs.nRemotes].zUrl = sqlite3_mprintf("%s", zUrl);
+  if( !aNew[cs->refs.nRemotes].zUrl ){
+    sqlite3_free(aNew[cs->refs.nRemotes].zName);
     return SQLITE_NOMEM;
   }
-  cs->nRemotes++;
+  cs->refs.nRemotes++;
   return SQLITE_OK;
 }
 
 int chunkStoreDeleteRemote(ChunkStore *cs, const char *zName){
   int i, j;
-  for(i=0; i<cs->nRemotes; i++){
-    if( strcmp(cs->aRemotes[i].zName, zName)==0 ){
-      sqlite3_free(cs->aRemotes[i].zName);
-      sqlite3_free(cs->aRemotes[i].zUrl);
-      cs->aRemotes[i] = cs->aRemotes[cs->nRemotes-1];
-      cs->nRemotes--;
+  for(i=0; i<cs->refs.nRemotes; i++){
+    if( strcmp(cs->refs.aRemotes[i].zName, zName)==0 ){
+      sqlite3_free(cs->refs.aRemotes[i].zName);
+      sqlite3_free(cs->refs.aRemotes[i].zUrl);
+      cs->refs.aRemotes[i] = cs->refs.aRemotes[cs->refs.nRemotes-1];
+      cs->refs.nRemotes--;
 
-      for(j=cs->nTracking-1; j>=0; j--){
-        if( strcmp(cs->aTracking[j].zRemote, zName)==0 ){
-          sqlite3_free(cs->aTracking[j].zRemote);
-          sqlite3_free(cs->aTracking[j].zBranch);
-          cs->aTracking[j] = cs->aTracking[cs->nTracking-1];
-          cs->nTracking--;
+      for(j=cs->refs.nTracking-1; j>=0; j--){
+        if( strcmp(cs->refs.aTracking[j].zRemote, zName)==0 ){
+          sqlite3_free(cs->refs.aTracking[j].zRemote);
+          sqlite3_free(cs->refs.aTracking[j].zBranch);
+          cs->refs.aTracking[j] = cs->refs.aTracking[cs->refs.nTracking-1];
+          cs->refs.nTracking--;
         }
       }
       return SQLITE_OK;
@@ -1618,10 +1618,10 @@ int chunkStoreDeleteRemote(ChunkStore *cs, const char *zName){
 int chunkStoreFindTracking(ChunkStore *cs, const char *zRemote,
                            const char *zBranch, ProllyHash *pCommit){
   int i;
-  for(i=0; i<cs->nTracking; i++){
-    if( strcmp(cs->aTracking[i].zRemote, zRemote)==0
-     && strcmp(cs->aTracking[i].zBranch, zBranch)==0 ){
-      if( pCommit ) memcpy(pCommit, &cs->aTracking[i].commitHash, sizeof(ProllyHash));
+  for(i=0; i<cs->refs.nTracking; i++){
+    if( strcmp(cs->refs.aTracking[i].zRemote, zRemote)==0
+     && strcmp(cs->refs.aTracking[i].zBranch, zBranch)==0 ){
+      if( pCommit ) memcpy(pCommit, &cs->refs.aTracking[i].commitHash, sizeof(ProllyHash));
       return SQLITE_OK;
     }
   }
@@ -1631,28 +1631,28 @@ int chunkStoreFindTracking(ChunkStore *cs, const char *zRemote,
 int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
                              const char *zBranch, const ProllyHash *pCommit){
   int i;
-  for(i=0; i<cs->nTracking; i++){
-    if( strcmp(cs->aTracking[i].zRemote, zRemote)==0
-     && strcmp(cs->aTracking[i].zBranch, zBranch)==0 ){
-      memcpy(&cs->aTracking[i].commitHash, pCommit, sizeof(ProllyHash));
+  for(i=0; i<cs->refs.nTracking; i++){
+    if( strcmp(cs->refs.aTracking[i].zRemote, zRemote)==0
+     && strcmp(cs->refs.aTracking[i].zBranch, zBranch)==0 ){
+      memcpy(&cs->refs.aTracking[i].commitHash, pCommit, sizeof(ProllyHash));
       return SQLITE_OK;
     }
   }
 
   {
     struct TrackingBranch *aNew;
-    aNew = sqlite3_realloc(cs->aTracking, (cs->nTracking+1)*(int)sizeof(struct TrackingBranch));
+    aNew = sqlite3_realloc(cs->refs.aTracking, (cs->refs.nTracking+1)*(int)sizeof(struct TrackingBranch));
     if( !aNew ) return SQLITE_NOMEM;
-    cs->aTracking = aNew;
-    aNew[cs->nTracking].zRemote = sqlite3_mprintf("%s", zRemote);
-    if( !aNew[cs->nTracking].zRemote ) return SQLITE_NOMEM;
-    aNew[cs->nTracking].zBranch = sqlite3_mprintf("%s", zBranch);
-    if( !aNew[cs->nTracking].zBranch ){
-      sqlite3_free(aNew[cs->nTracking].zRemote);
+    cs->refs.aTracking = aNew;
+    aNew[cs->refs.nTracking].zRemote = sqlite3_mprintf("%s", zRemote);
+    if( !aNew[cs->refs.nTracking].zRemote ) return SQLITE_NOMEM;
+    aNew[cs->refs.nTracking].zBranch = sqlite3_mprintf("%s", zBranch);
+    if( !aNew[cs->refs.nTracking].zBranch ){
+      sqlite3_free(aNew[cs->refs.nTracking].zRemote);
       return SQLITE_NOMEM;
     }
-    memcpy(&aNew[cs->nTracking].commitHash, pCommit, sizeof(ProllyHash));
-    cs->nTracking++;
+    memcpy(&aNew[cs->refs.nTracking].commitHash, pCommit, sizeof(ProllyHash));
+    cs->refs.nTracking++;
   }
   return SQLITE_OK;
 }
@@ -1660,13 +1660,13 @@ int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
 int chunkStoreDeleteTracking(ChunkStore *cs, const char *zRemote,
                              const char *zBranch){
   int i;
-  for(i=0; i<cs->nTracking; i++){
-    if( strcmp(cs->aTracking[i].zRemote, zRemote)==0
-     && strcmp(cs->aTracking[i].zBranch, zBranch)==0 ){
-      sqlite3_free(cs->aTracking[i].zRemote);
-      sqlite3_free(cs->aTracking[i].zBranch);
-      cs->aTracking[i] = cs->aTracking[cs->nTracking-1];
-      cs->nTracking--;
+  for(i=0; i<cs->refs.nTracking; i++){
+    if( strcmp(cs->refs.aTracking[i].zRemote, zRemote)==0
+     && strcmp(cs->refs.aTracking[i].zBranch, zBranch)==0 ){
+      sqlite3_free(cs->refs.aTracking[i].zRemote);
+      sqlite3_free(cs->refs.aTracking[i].zBranch);
+      cs->refs.aTracking[i] = cs->refs.aTracking[cs->refs.nTracking-1];
+      cs->refs.nTracking--;
       return SQLITE_OK;
     }
   }
@@ -1685,7 +1685,7 @@ int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aR
 }
 
 static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
-  const char *def = cs->zDefaultBranch ? cs->zDefaultBranch : "main";
+  const char *def = cs->refs.zDefaultBranch ? cs->refs.zDefaultBranch : "main";
   int defLen = (int)strlen(def);
   int sz = 1 + 4 + defLen + 4 + 4 + 4 + 4;
   int i;
@@ -1694,18 +1694,18 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   *ppOut = 0;
   *pnOut = 0;
 
-  for(i=0; i<cs->nBranches; i++){
-    int inc = 4 + (int)strlen(cs->aBranches[i].zName) + PROLLY_HASH_SIZE*2;
+  for(i=0; i<cs->refs.nBranches; i++){
+    int inc = 4 + (int)strlen(cs->refs.aBranches[i].zName) + PROLLY_HASH_SIZE*2;
     if( sz > INT_MAX - inc ){
       return SQLITE_TOOBIG;
     }
     sz += inc;
   }
-  for(i=0; i<cs->nTags; i++){
-    int taggerLen  = cs->aTags[i].zTagger  ? (int)strlen(cs->aTags[i].zTagger)  : 0;
-    int emailLen   = cs->aTags[i].zEmail   ? (int)strlen(cs->aTags[i].zEmail)   : 0;
-    int messageLen = cs->aTags[i].zMessage ? (int)strlen(cs->aTags[i].zMessage) : 0;
-    int inc = 4 + (int)strlen(cs->aTags[i].zName) + PROLLY_HASH_SIZE
+  for(i=0; i<cs->refs.nTags; i++){
+    int taggerLen  = cs->refs.aTags[i].zTagger  ? (int)strlen(cs->refs.aTags[i].zTagger)  : 0;
+    int emailLen   = cs->refs.aTags[i].zEmail   ? (int)strlen(cs->refs.aTags[i].zEmail)   : 0;
+    int messageLen = cs->refs.aTags[i].zMessage ? (int)strlen(cs->refs.aTags[i].zMessage) : 0;
+    int inc = 4 + (int)strlen(cs->refs.aTags[i].zName) + PROLLY_HASH_SIZE
             + 4 + taggerLen
             + 4 + emailLen
             + 8
@@ -1715,15 +1715,15 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
     }
     sz += inc;
   }
-  for(i=0; i<cs->nRemotes; i++){
-    int inc = 4 + (int)strlen(cs->aRemotes[i].zName) + 4 + (int)strlen(cs->aRemotes[i].zUrl);
+  for(i=0; i<cs->refs.nRemotes; i++){
+    int inc = 4 + (int)strlen(cs->refs.aRemotes[i].zName) + 4 + (int)strlen(cs->refs.aRemotes[i].zUrl);
     if( sz > INT_MAX - inc ){
       return SQLITE_TOOBIG;
     }
     sz += inc;
   }
-  for(i=0; i<cs->nTracking; i++){
-    int inc = 4 + (int)strlen(cs->aTracking[i].zRemote) + 4 + (int)strlen(cs->aTracking[i].zBranch) + PROLLY_HASH_SIZE;
+  for(i=0; i<cs->refs.nTracking; i++){
+    int inc = 4 + (int)strlen(cs->refs.aTracking[i].zRemote) + 4 + (int)strlen(cs->refs.aTracking[i].zBranch) + PROLLY_HASH_SIZE;
     if( sz > INT_MAX - inc ){
       return SQLITE_TOOBIG;
     }
@@ -1735,52 +1735,52 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
   *bufCur++ = 6;
   CS_WRITE_U32(bufCur,defLen); bufCur+=4;
   memcpy(bufCur, def, defLen); bufCur+=defLen;
-  CS_WRITE_U32(bufCur,cs->nBranches); bufCur+=4;
-  for(i=0; i<cs->nBranches; i++){
-    int nameLen = (int)strlen(cs->aBranches[i].zName);
+  CS_WRITE_U32(bufCur,cs->refs.nBranches); bufCur+=4;
+  for(i=0; i<cs->refs.nBranches; i++){
+    int nameLen = (int)strlen(cs->refs.aBranches[i].zName);
     CS_WRITE_U32(bufCur,nameLen); bufCur+=4;
-    memcpy(bufCur, cs->aBranches[i].zName, nameLen); bufCur+=nameLen;
-    memcpy(bufCur, cs->aBranches[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
-    memcpy(bufCur, cs->aBranches[i].workingSetHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+    memcpy(bufCur, cs->refs.aBranches[i].zName, nameLen); bufCur+=nameLen;
+    memcpy(bufCur, cs->refs.aBranches[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+    memcpy(bufCur, cs->refs.aBranches[i].workingSetHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
   }
-  CS_WRITE_U32(bufCur,cs->nTags); bufCur+=4;
-  for(i=0; i<cs->nTags; i++){
-    int nameLen    = (int)strlen(cs->aTags[i].zName);
-    int taggerLen  = cs->aTags[i].zTagger  ? (int)strlen(cs->aTags[i].zTagger)  : 0;
-    int emailLen   = cs->aTags[i].zEmail   ? (int)strlen(cs->aTags[i].zEmail)   : 0;
-    int messageLen = cs->aTags[i].zMessage ? (int)strlen(cs->aTags[i].zMessage) : 0;
+  CS_WRITE_U32(bufCur,cs->refs.nTags); bufCur+=4;
+  for(i=0; i<cs->refs.nTags; i++){
+    int nameLen    = (int)strlen(cs->refs.aTags[i].zName);
+    int taggerLen  = cs->refs.aTags[i].zTagger  ? (int)strlen(cs->refs.aTags[i].zTagger)  : 0;
+    int emailLen   = cs->refs.aTags[i].zEmail   ? (int)strlen(cs->refs.aTags[i].zEmail)   : 0;
+    int messageLen = cs->refs.aTags[i].zMessage ? (int)strlen(cs->refs.aTags[i].zMessage) : 0;
     CS_WRITE_U32(bufCur,nameLen); bufCur+=4;
-    memcpy(bufCur, cs->aTags[i].zName, nameLen); bufCur+=nameLen;
-    memcpy(bufCur, cs->aTags[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+    memcpy(bufCur, cs->refs.aTags[i].zName, nameLen); bufCur+=nameLen;
+    memcpy(bufCur, cs->refs.aTags[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
     CS_WRITE_U32(bufCur,taggerLen); bufCur+=4;
-    if( taggerLen ) memcpy(bufCur, cs->aTags[i].zTagger, taggerLen);
+    if( taggerLen ) memcpy(bufCur, cs->refs.aTags[i].zTagger, taggerLen);
     bufCur+=taggerLen;
     CS_WRITE_U32(bufCur,emailLen); bufCur+=4;
-    if( emailLen ) memcpy(bufCur, cs->aTags[i].zEmail, emailLen);
+    if( emailLen ) memcpy(bufCur, cs->refs.aTags[i].zEmail, emailLen);
     bufCur+=emailLen;
-    CS_WRITE_I64(bufCur,cs->aTags[i].timestamp); bufCur+=8;
+    CS_WRITE_I64(bufCur,cs->refs.aTags[i].timestamp); bufCur+=8;
     CS_WRITE_U32(bufCur,messageLen); bufCur+=4;
-    if( messageLen ) memcpy(bufCur, cs->aTags[i].zMessage, messageLen);
+    if( messageLen ) memcpy(bufCur, cs->refs.aTags[i].zMessage, messageLen);
     bufCur+=messageLen;
   }
-  CS_WRITE_U32(bufCur,cs->nRemotes); bufCur+=4;
-  for(i=0; i<cs->nRemotes; i++){
-    int nameLen = (int)strlen(cs->aRemotes[i].zName);
-    int urlLen = (int)strlen(cs->aRemotes[i].zUrl);
+  CS_WRITE_U32(bufCur,cs->refs.nRemotes); bufCur+=4;
+  for(i=0; i<cs->refs.nRemotes; i++){
+    int nameLen = (int)strlen(cs->refs.aRemotes[i].zName);
+    int urlLen = (int)strlen(cs->refs.aRemotes[i].zUrl);
     CS_WRITE_U32(bufCur,nameLen); bufCur+=4;
-    memcpy(bufCur, cs->aRemotes[i].zName, nameLen); bufCur+=nameLen;
+    memcpy(bufCur, cs->refs.aRemotes[i].zName, nameLen); bufCur+=nameLen;
     CS_WRITE_U32(bufCur,urlLen); bufCur+=4;
-    memcpy(bufCur, cs->aRemotes[i].zUrl, urlLen); bufCur+=urlLen;
+    memcpy(bufCur, cs->refs.aRemotes[i].zUrl, urlLen); bufCur+=urlLen;
   }
-  CS_WRITE_U32(bufCur,cs->nTracking); bufCur+=4;
-  for(i=0; i<cs->nTracking; i++){
-    int remoteLen = (int)strlen(cs->aTracking[i].zRemote);
-    int branchLen = (int)strlen(cs->aTracking[i].zBranch);
+  CS_WRITE_U32(bufCur,cs->refs.nTracking); bufCur+=4;
+  for(i=0; i<cs->refs.nTracking; i++){
+    int remoteLen = (int)strlen(cs->refs.aTracking[i].zRemote);
+    int branchLen = (int)strlen(cs->refs.aTracking[i].zBranch);
     CS_WRITE_U32(bufCur,remoteLen); bufCur+=4;
-    memcpy(bufCur, cs->aTracking[i].zRemote, remoteLen); bufCur+=remoteLen;
+    memcpy(bufCur, cs->refs.aTracking[i].zRemote, remoteLen); bufCur+=remoteLen;
     CS_WRITE_U32(bufCur,branchLen); bufCur+=4;
-    memcpy(bufCur, cs->aTracking[i].zBranch, branchLen); bufCur+=branchLen;
-    memcpy(bufCur, cs->aTracking[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+    memcpy(bufCur, cs->refs.aTracking[i].zBranch, branchLen); bufCur+=branchLen;
+    memcpy(bufCur, cs->refs.aTracking[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
   }
   *ppOut = buf;
   *pnOut = sz;
@@ -1797,7 +1797,7 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
   if( rc!=SQLITE_OK ) return rc;
   rc = chunkStorePut(cs, buf, sz, &refsHash);
   sqlite3_free(buf);
-  if( rc==SQLITE_OK ) memcpy(&cs->refsHash, &refsHash, sizeof(ProllyHash));
+  if( rc==SQLITE_OK ) memcpy(&cs->refs.refsHash, &refsHash, sizeof(ProllyHash));
   return rc;
 }
 
@@ -1811,29 +1811,29 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
   defLen = (int)CS_READ_U32(bufCur); bufCur+=4;
   if( bufCur+defLen>data+nData ) return SQLITE_CORRUPT;
-  sqlite3_free(cs->zDefaultBranch);
-  cs->zDefaultBranch = sqlite3_malloc(defLen+1);
-  if(!cs->zDefaultBranch) return SQLITE_NOMEM;
-  memcpy(cs->zDefaultBranch, bufCur, defLen); cs->zDefaultBranch[defLen]=0; bufCur+=defLen;
+  sqlite3_free(cs->refs.zDefaultBranch);
+  cs->refs.zDefaultBranch = sqlite3_malloc(defLen+1);
+  if(!cs->refs.zDefaultBranch) return SQLITE_NOMEM;
+  memcpy(cs->refs.zDefaultBranch, bufCur, defLen); cs->refs.zDefaultBranch[defLen]=0; bufCur+=defLen;
   if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
   nBranches = (int)CS_READ_U32(bufCur); bufCur+=4;
   csFreeBranches(cs);
   if( nBranches>0 ){
-    cs->aBranches = sqlite3_malloc(nBranches*(int)sizeof(struct BranchRef));
-    if(!cs->aBranches) return SQLITE_NOMEM;
+    cs->refs.aBranches = sqlite3_malloc(nBranches*(int)sizeof(struct BranchRef));
+    if(!cs->refs.aBranches) return SQLITE_NOMEM;
     for(i=0;i<nBranches;i++){
       int nameLen; if(bufCur+4>data+nData) return SQLITE_CORRUPT;
       nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
       if(bufCur+nameLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
-      memset(&cs->aBranches[i], 0, sizeof(struct BranchRef));
-      cs->aBranches[i].zName=sqlite3_malloc(nameLen+1);
-      if(!cs->aBranches[i].zName) return SQLITE_NOMEM;
-      memcpy(cs->aBranches[i].zName,bufCur,nameLen); cs->aBranches[i].zName[nameLen]=0; bufCur+=nameLen;
-      memcpy(cs->aBranches[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+      memset(&cs->refs.aBranches[i], 0, sizeof(struct BranchRef));
+      cs->refs.aBranches[i].zName=sqlite3_malloc(nameLen+1);
+      if(!cs->refs.aBranches[i].zName) return SQLITE_NOMEM;
+      memcpy(cs->refs.aBranches[i].zName,bufCur,nameLen); cs->refs.aBranches[i].zName[nameLen]=0; bufCur+=nameLen;
+      memcpy(cs->refs.aBranches[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
       if( bufCur+PROLLY_HASH_SIZE<=data+nData ){
-        memcpy(cs->aBranches[i].workingSetHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+        memcpy(cs->refs.aBranches[i].workingSetHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
       }
-      cs->nBranches++;
+      cs->refs.nBranches++;
     }
   }
 
@@ -1841,48 +1841,48 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   if( bufCur+4<=data+nData ){
     nTags = (int)CS_READ_U32(bufCur); bufCur+=4;
     if( nTags>0 ){
-      cs->aTags = sqlite3_malloc(nTags*(int)sizeof(struct TagRef));
-      if(!cs->aTags) return SQLITE_NOMEM;
-      memset(cs->aTags, 0, nTags*(int)sizeof(struct TagRef));
+      cs->refs.aTags = sqlite3_malloc(nTags*(int)sizeof(struct TagRef));
+      if(!cs->refs.aTags) return SQLITE_NOMEM;
+      memset(cs->refs.aTags, 0, nTags*(int)sizeof(struct TagRef));
       for(i=0;i<nTags;i++){
         int nameLen; if(bufCur+4>data+nData) return SQLITE_CORRUPT;
         nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
         if(bufCur+nameLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
-        cs->aTags[i].zName=sqlite3_malloc(nameLen+1);
-        if(!cs->aTags[i].zName) return SQLITE_NOMEM;
-        memcpy(cs->aTags[i].zName,bufCur,nameLen); cs->aTags[i].zName[nameLen]=0; bufCur+=nameLen;
-        memcpy(cs->aTags[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+        cs->refs.aTags[i].zName=sqlite3_malloc(nameLen+1);
+        if(!cs->refs.aTags[i].zName) return SQLITE_NOMEM;
+        memcpy(cs->refs.aTags[i].zName,bufCur,nameLen); cs->refs.aTags[i].zName[nameLen]=0; bufCur+=nameLen;
+        memcpy(cs->refs.aTags[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
         if( version>=6 ){
           int taggerLen, emailLen, messageLen;
           if(bufCur+4>data+nData) return SQLITE_CORRUPT;
           taggerLen=(int)CS_READ_U32(bufCur); bufCur+=4;
           if(bufCur+taggerLen>data+nData) return SQLITE_CORRUPT;
-          cs->aTags[i].zTagger=sqlite3_malloc(taggerLen+1);
-          if(!cs->aTags[i].zTagger) return SQLITE_NOMEM;
-          memcpy(cs->aTags[i].zTagger,bufCur,taggerLen); cs->aTags[i].zTagger[taggerLen]=0; bufCur+=taggerLen;
+          cs->refs.aTags[i].zTagger=sqlite3_malloc(taggerLen+1);
+          if(!cs->refs.aTags[i].zTagger) return SQLITE_NOMEM;
+          memcpy(cs->refs.aTags[i].zTagger,bufCur,taggerLen); cs->refs.aTags[i].zTagger[taggerLen]=0; bufCur+=taggerLen;
           if(bufCur+4>data+nData) return SQLITE_CORRUPT;
           emailLen=(int)CS_READ_U32(bufCur); bufCur+=4;
           if(bufCur+emailLen>data+nData) return SQLITE_CORRUPT;
-          cs->aTags[i].zEmail=sqlite3_malloc(emailLen+1);
-          if(!cs->aTags[i].zEmail) return SQLITE_NOMEM;
-          memcpy(cs->aTags[i].zEmail,bufCur,emailLen); cs->aTags[i].zEmail[emailLen]=0; bufCur+=emailLen;
+          cs->refs.aTags[i].zEmail=sqlite3_malloc(emailLen+1);
+          if(!cs->refs.aTags[i].zEmail) return SQLITE_NOMEM;
+          memcpy(cs->refs.aTags[i].zEmail,bufCur,emailLen); cs->refs.aTags[i].zEmail[emailLen]=0; bufCur+=emailLen;
           if(bufCur+8>data+nData) return SQLITE_CORRUPT;
-          cs->aTags[i].timestamp=CS_READ_I64(bufCur); bufCur+=8;
+          cs->refs.aTags[i].timestamp=CS_READ_I64(bufCur); bufCur+=8;
           if(bufCur+4>data+nData) return SQLITE_CORRUPT;
           messageLen=(int)CS_READ_U32(bufCur); bufCur+=4;
           if(bufCur+messageLen>data+nData) return SQLITE_CORRUPT;
-          cs->aTags[i].zMessage=sqlite3_malloc(messageLen+1);
-          if(!cs->aTags[i].zMessage) return SQLITE_NOMEM;
-          memcpy(cs->aTags[i].zMessage,bufCur,messageLen); cs->aTags[i].zMessage[messageLen]=0; bufCur+=messageLen;
+          cs->refs.aTags[i].zMessage=sqlite3_malloc(messageLen+1);
+          if(!cs->refs.aTags[i].zMessage) return SQLITE_NOMEM;
+          memcpy(cs->refs.aTags[i].zMessage,bufCur,messageLen); cs->refs.aTags[i].zMessage[messageLen]=0; bufCur+=messageLen;
         }else{
-          cs->aTags[i].zTagger  = sqlite3_mprintf("");
-          cs->aTags[i].zEmail   = sqlite3_mprintf("");
-          cs->aTags[i].zMessage = sqlite3_mprintf("");
-          if( !cs->aTags[i].zTagger || !cs->aTags[i].zEmail || !cs->aTags[i].zMessage ){
+          cs->refs.aTags[i].zTagger  = sqlite3_mprintf("");
+          cs->refs.aTags[i].zEmail   = sqlite3_mprintf("");
+          cs->refs.aTags[i].zMessage = sqlite3_mprintf("");
+          if( !cs->refs.aTags[i].zTagger || !cs->refs.aTags[i].zEmail || !cs->refs.aTags[i].zMessage ){
             return SQLITE_NOMEM;
           }
         }
-        cs->nTags++;
+        cs->refs.nTags++;
       }
     }
   }
@@ -1892,46 +1892,46 @@ static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   if( bufCur+4<=data+nData ){
     int nRemotes = (int)CS_READ_U32(bufCur); bufCur+=4;
     if( nRemotes>0 ){
-      cs->aRemotes = sqlite3_malloc(nRemotes*(int)sizeof(struct RemoteRef));
-      if(!cs->aRemotes) return SQLITE_NOMEM;
-      memset(cs->aRemotes, 0, nRemotes*(int)sizeof(struct RemoteRef));
+      cs->refs.aRemotes = sqlite3_malloc(nRemotes*(int)sizeof(struct RemoteRef));
+      if(!cs->refs.aRemotes) return SQLITE_NOMEM;
+      memset(cs->refs.aRemotes, 0, nRemotes*(int)sizeof(struct RemoteRef));
       for(i=0;i<nRemotes;i++){
         int nameLen, urlLen;
         if(bufCur+4>data+nData) return SQLITE_CORRUPT;
         nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
         if(bufCur+nameLen+4>data+nData) return SQLITE_CORRUPT;
-        cs->aRemotes[i].zName=sqlite3_malloc(nameLen+1);
-        if(!cs->aRemotes[i].zName) return SQLITE_NOMEM;
-        memcpy(cs->aRemotes[i].zName,bufCur,nameLen); cs->aRemotes[i].zName[nameLen]=0; bufCur+=nameLen;
+        cs->refs.aRemotes[i].zName=sqlite3_malloc(nameLen+1);
+        if(!cs->refs.aRemotes[i].zName) return SQLITE_NOMEM;
+        memcpy(cs->refs.aRemotes[i].zName,bufCur,nameLen); cs->refs.aRemotes[i].zName[nameLen]=0; bufCur+=nameLen;
         urlLen=(int)CS_READ_U32(bufCur); bufCur+=4;
         if(bufCur+urlLen>data+nData) return SQLITE_CORRUPT;
-        cs->aRemotes[i].zUrl=sqlite3_malloc(urlLen+1);
-        if(!cs->aRemotes[i].zUrl) return SQLITE_NOMEM;
-        memcpy(cs->aRemotes[i].zUrl,bufCur,urlLen); cs->aRemotes[i].zUrl[urlLen]=0; bufCur+=urlLen;
-        cs->nRemotes++;
+        cs->refs.aRemotes[i].zUrl=sqlite3_malloc(urlLen+1);
+        if(!cs->refs.aRemotes[i].zUrl) return SQLITE_NOMEM;
+        memcpy(cs->refs.aRemotes[i].zUrl,bufCur,urlLen); cs->refs.aRemotes[i].zUrl[urlLen]=0; bufCur+=urlLen;
+        cs->refs.nRemotes++;
       }
     }
     if( bufCur+4<=data+nData ){
       int nTracking = (int)CS_READ_U32(bufCur); bufCur+=4;
       if( nTracking>0 ){
-        cs->aTracking = sqlite3_malloc(nTracking*(int)sizeof(struct TrackingBranch));
-        if(!cs->aTracking) return SQLITE_NOMEM;
-        memset(cs->aTracking, 0, nTracking*(int)sizeof(struct TrackingBranch));
+        cs->refs.aTracking = sqlite3_malloc(nTracking*(int)sizeof(struct TrackingBranch));
+        if(!cs->refs.aTracking) return SQLITE_NOMEM;
+        memset(cs->refs.aTracking, 0, nTracking*(int)sizeof(struct TrackingBranch));
         for(i=0;i<nTracking;i++){
           int remoteLen, branchLen;
           if(bufCur+4>data+nData) return SQLITE_CORRUPT;
           remoteLen=(int)CS_READ_U32(bufCur); bufCur+=4;
           if(bufCur+remoteLen+4>data+nData) return SQLITE_CORRUPT;
-          cs->aTracking[i].zRemote=sqlite3_malloc(remoteLen+1);
-          if(!cs->aTracking[i].zRemote) return SQLITE_NOMEM;
-          memcpy(cs->aTracking[i].zRemote,bufCur,remoteLen); cs->aTracking[i].zRemote[remoteLen]=0; bufCur+=remoteLen;
+          cs->refs.aTracking[i].zRemote=sqlite3_malloc(remoteLen+1);
+          if(!cs->refs.aTracking[i].zRemote) return SQLITE_NOMEM;
+          memcpy(cs->refs.aTracking[i].zRemote,bufCur,remoteLen); cs->refs.aTracking[i].zRemote[remoteLen]=0; bufCur+=remoteLen;
           branchLen=(int)CS_READ_U32(bufCur); bufCur+=4;
           if(bufCur+branchLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
-          cs->aTracking[i].zBranch=sqlite3_malloc(branchLen+1);
-          if(!cs->aTracking[i].zBranch) return SQLITE_NOMEM;
-          memcpy(cs->aTracking[i].zBranch,bufCur,branchLen); cs->aTracking[i].zBranch[branchLen]=0; bufCur+=branchLen;
-          memcpy(cs->aTracking[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
-          cs->nTracking++;
+          cs->refs.aTracking[i].zBranch=sqlite3_malloc(branchLen+1);
+          if(!cs->refs.aTracking[i].zBranch) return SQLITE_NOMEM;
+          memcpy(cs->refs.aTracking[i].zBranch,bufCur,branchLen); cs->refs.aTracking[i].zBranch[branchLen]=0; bufCur+=branchLen;
+          memcpy(cs->refs.aTracking[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
+          cs->refs.nTracking++;
         }
       }
     }
@@ -1946,25 +1946,25 @@ static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData
 }
 
 static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
-  pDst->aBranches = pSrc->aBranches;
-  pDst->nBranches = pSrc->nBranches;
-  pDst->zDefaultBranch = pSrc->zDefaultBranch;
-  pDst->aTags = pSrc->aTags;
-  pDst->nTags = pSrc->nTags;
-  pDst->aRemotes = pSrc->aRemotes;
-  pDst->nRemotes = pSrc->nRemotes;
-  pDst->aTracking = pSrc->aTracking;
-  pDst->nTracking = pSrc->nTracking;
+  pDst->refs.aBranches = pSrc->refs.aBranches;
+  pDst->refs.nBranches = pSrc->refs.nBranches;
+  pDst->refs.zDefaultBranch = pSrc->refs.zDefaultBranch;
+  pDst->refs.aTags = pSrc->refs.aTags;
+  pDst->refs.nTags = pSrc->refs.nTags;
+  pDst->refs.aRemotes = pSrc->refs.aRemotes;
+  pDst->refs.nRemotes = pSrc->refs.nRemotes;
+  pDst->refs.aTracking = pSrc->refs.aTracking;
+  pDst->refs.nTracking = pSrc->refs.nTracking;
 
-  pSrc->aBranches = 0;
-  pSrc->nBranches = 0;
-  pSrc->zDefaultBranch = 0;
-  pSrc->aTags = 0;
-  pSrc->nTags = 0;
-  pSrc->aRemotes = 0;
-  pSrc->nRemotes = 0;
-  pSrc->aTracking = 0;
-  pSrc->nTracking = 0;
+  pSrc->refs.aBranches = 0;
+  pSrc->refs.nBranches = 0;
+  pSrc->refs.zDefaultBranch = 0;
+  pSrc->refs.aTags = 0;
+  pSrc->refs.nTags = 0;
+  pSrc->refs.aRemotes = 0;
+  pSrc->refs.nRemotes = 0;
+  pSrc->refs.aTracking = 0;
+  pSrc->refs.nTracking = 0;
 }
 
 static int csReplaceRefsStateFromBlob(
@@ -2473,24 +2473,24 @@ int chunkStoreCommit(ChunkStore *cs){
   if( cs->isMemory ) return csCommitToMemory(cs);
   if( cs->graphLockFd < 0 && cs->zFilename ){
     preserveRefs = cs->nPending > 0
-                && prollyHashCompare(&cs->refsHash,
-                                     &cs->committedRefsHash)!=0;
+                && prollyHashCompare(&cs->refs.refsHash,
+                                     &cs->refs.committedRefsHash)!=0;
     if( preserveRefs ){
-      savedRefsHash = cs->refsHash;
+      savedRefsHash = cs->refs.refsHash;
       csDetachSavedRefsState(cs, &savedRefs);
     }
     rc = chunkStoreLockAndRefresh(cs);
     if( rc!=SQLITE_OK ){
       if( preserveRefs ){
         csRestoreSavedRefsState(cs, &savedRefs);
-        cs->refsHash = savedRefsHash;
+        cs->refs.refsHash = savedRefsHash;
       }
       return rc;
     }
     if( preserveRefs ){
       csFreeRefsState(cs);
       csRestoreSavedRefsState(cs, &savedRefs);
-      cs->refsHash = savedRefsHash;
+      cs->refs.refsHash = savedRefsHash;
     }
     acquiredLock = 1;
   }
@@ -2512,7 +2512,7 @@ void chunkStoreRollback(ChunkStore *cs){
 }
 
 int chunkStoreIsEmpty(ChunkStore *cs){
-  return cs->nBranches == 0 && prollyHashIsEmpty(&cs->refsHash);
+  return cs->refs.nBranches == 0 && prollyHashIsEmpty(&cs->refs.refsHash);
 }
 
 void chunkStoreClearRefs(ChunkStore *cs){
@@ -2520,7 +2520,7 @@ void chunkStoreClearRefs(ChunkStore *cs){
   csFreeTags(cs);
   csFreeRemotes(cs);
   csFreeTracking(cs);
-  memset(&cs->refsHash, 0, sizeof(cs->refsHash));
+  memset(&cs->refs.refsHash, 0, sizeof(cs->refs.refsHash));
 }
 
 int chunkStoreReloadRefs(ChunkStore *cs){
@@ -2528,9 +2528,9 @@ int chunkStoreReloadRefs(ChunkStore *cs){
   int nRefsData = 0;
   int rc;
 
-  if( prollyHashIsEmpty(&cs->refsHash) ) return SQLITE_OK;
+  if( prollyHashIsEmpty(&cs->refs.refsHash) ) return SQLITE_OK;
 
-  rc = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
+  rc = chunkStoreGet(cs, &cs->refs.refsHash, &refsData, &nRefsData);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = csReplaceRefsStateFromBlob(cs, refsData, nRefsData, 0);

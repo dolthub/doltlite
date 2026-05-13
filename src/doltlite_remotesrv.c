@@ -389,12 +389,12 @@ static void handleGetRefs(ChunkStore *pStore, int fd){
   int nData = 0;
   int rc;
 
-  if( prollyHashIsEmpty(&pStore->refsHash) ){
+  if( prollyHashIsEmpty(refsTableGetHash(&pStore->refs)) ){
     sendNotFound(fd);
     return;
   }
 
-  rc = chunkStoreGet(pStore, &pStore->refsHash, &pData, &nData);
+  rc = chunkStoreGet(pStore, refsTableGetHash(&pStore->refs), &pData, &nData);
   if( rc==SQLITE_NOTFOUND ){
     sendNotFound(fd);
     return;
@@ -422,7 +422,7 @@ static int remoteSrvApplyRefs(ChunkStore *pStore, const u8 *pBody, int nBody){
   if( nBody<=0 ) return SQLITE_ERROR;
   rc = chunkStorePut(pStore, pBody, nBody, &hash);
   if( rc==SQLITE_OK ){
-    pStore->refsHash = hash;
+    refsTableSetHash(&pStore->refs, &hash);
     rc = chunkStoreReloadRefs(pStore);
   }
   if( rc!=SQLITE_OK ){
