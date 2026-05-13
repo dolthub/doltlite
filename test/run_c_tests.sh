@@ -31,6 +31,7 @@ GATING=(
   invariant_test
   three_way_diff_test
   multi_process_test
+  oom_dolt_fault_test
 )
 
 # Tests that have known preexisting failures or crashes on master. These are
