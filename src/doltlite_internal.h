@@ -210,6 +210,16 @@ struct MigrateDiffCtx {
   int *aiColIdx;
   char **azColNames;
   int nCols;
+  /* For PROLLY_DIFF_ADD: their-side row doesn't exist in the merged
+  ** working set yet (row-merge was skipped due to schema actions), so
+  ** UPDATE...WHERE rowid=? matches zero rows. pIns is an INSERT statement
+  ** that materializes the full row from their-side record bytes. azAllCols
+  ** / aiAllColIdx describe every column in their schema (record-field
+  ** index), in declared order, so we can bind values from the their-side
+  ** record into the INSERT. */
+  sqlite3_stmt *pIns;
+  int *aiAllColIdx;
+  int nAllCols;
 };
 
 char *extractColNameFromDef(const char *zDef);
