@@ -1447,6 +1447,51 @@ static void run_blame_all_parents_merge_base(void){
   removeDbFiles(dbpath);
 }
 
+static void run_blame_deep_history_scan(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  int i;
+
+  printf("=== Blame Deep History Scan Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_blame_deep_history_scan");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_blame_deep_history_scan", open_db(dbpath, &db)==SQLITE_OK);
+  check("create_table_for_blame_deep_history_scan", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "BEGIN;")==SQLITE_OK);
+  for(i=1; i<=100; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "INSERT INTO t VALUES(%d,0);", i);
+    check("insert_row_for_blame_deep_history_scan",
+          execSql(db, sql)==SQLITE_OK);
+  }
+  check("commit_initial_rows_for_blame_deep_history_scan", execSql(db,
+    "COMMIT;"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "UPDATE t SET v=%d WHERE id=%d;"
+      "SELECT dolt_commit('-A', '-m', 'c%d');", i, i, i);
+    check("commit_update_for_blame_deep_history_scan",
+          execSql(db, sql)==SQLITE_OK);
+  }
+
+  check("blame_deep_history_row_count",
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_blame_t;"), "100")==0);
+  check("blame_deep_history_updated_row",
+        strcmp(queryScalarText(db, "SELECT message FROM dolt_blame_t WHERE id=80;"),
+               "c80")==0);
+  check("blame_deep_history_unchanged_row",
+        strcmp(queryScalarText(db, "SELECT message FROM dolt_blame_t WHERE id=100;"),
+               "init")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_merge_persist_failure(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -2730,6 +2775,45 @@ static void run_diff_stat_wide_modified_rows(void){
         strcmp(queryScalarText(db,
           "SELECT cells_modified FROM dolt_diff_stat('HEAD~1','HEAD','t');"),
           "160")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_diff_table_deep_history_map(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  int i;
+
+  printf("=== Diff Table Deep History Map Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_diff_table_deep_history_map");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_diff_table_deep_history_map",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_diff_table_deep_history_map", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES(1,0);"
+    "SELECT dolt_commit('-A', '-m', 'c0');")==SQLITE_OK);
+
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "UPDATE t SET v=%d WHERE id=1;"
+      "SELECT dolt_commit('-A', '-m', 'c%d');", i, i);
+    check("diff_table_deep_history_commit", execSql(db, sql)==SQLITE_OK);
+  }
+
+  check("diff_table_deep_history_count",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';"),
+          "80")==0);
+  check("diff_table_deep_history_latest_value",
+        strcmp(queryScalarText(db,
+          "SELECT to_v FROM dolt_diff_t "
+          "WHERE to_commit=(SELECT commit_hash FROM dolt_log "
+          "                 WHERE message='c80');"),
+          "80")==0);
 
   sqlite3_close(db);
   removeDbFiles(dbpath);
@@ -6494,6 +6578,7 @@ static const RegressionCase aCases[] = {
   { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
+  { "blame_deep_history_scan", "Blame Deep History Scan Test", run_blame_deep_history_scan },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
   { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_rollback_clears_durable_state },
   { "failed_merge_reopen_preserves_working_set_state", "Failed Merge Reopen Preserves Working Set State Test", run_failed_merge_reopen_clears_ephemeral_conflict_state },
@@ -6526,6 +6611,7 @@ static const RegressionCase aCases[] = {
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
   { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
   { "diff_stat_wide_modified_rows", "Diff Stat Wide Modified Rows Test", run_diff_stat_wide_modified_rows },
+  { "diff_table_deep_history_map", "Diff Table Deep History Map Test", run_diff_table_deep_history_map },
   { "diff_stat_surfaces_corrupt_root", "Diff Stat Surfaces Corrupt Root Test", run_diff_stat_surfaces_corrupt_root },
   { "table_moveto_mutmap_delete_preserves_neighbors", "Table Moveto MutMap Delete Preserves Neighbors Test", run_table_moveto_mutmap_delete_preserves_neighbors },
   { "table_moveto_mutmap_exact_keeps_iteration_aligned", "Table Moveto MutMap Exact Keeps Iteration Aligned Test", run_table_moveto_mutmap_exact_keeps_iteration_aligned },

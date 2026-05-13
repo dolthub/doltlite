@@ -2635,14 +2635,30 @@ c-tests: doltlite-c-tests-build
 # Dolt version control functions, unlike libsqlite3 which uses the
 # amalgamation.
 #
+# The shared library is named libdoltlite0 in the Debian package to
+# signal ABI version 0. To make that meaningful (and to let future
+# libdoltlite1 co-install with libdoltlite0), we set a SONAME of
+# libdoltlite.so.0 at link time on Linux. On Darwin we set the
+# install_name to libdoltlite.dylib via the inherited (substituted)
+# os-specific LDFLAGS from libsqlite3; we keep that as-is rather than
+# baking in a versioned dylib name because Homebrew (the only macOS
+# distribution channel) re-links anyway and an unversioned dylib is
+# what the formula expects.
+#
 libdoltlite$(T.lib):	$(LIBOBJS0)
 	$(AR) $(AR.flags) $@ $(LIBOBJS0)
 
 LDFLAGS.libdoltlite.os-specific = $(subst $(libsqlite3.DLL),libdoltlite$(T.dll),$(LDFLAGS.libsqlite3.os-specific))
+# On Linux (T.dll==.so), force a SONAME of libdoltlite.so.0 regardless
+# of how --soname=... was passed to libsqlite3, so that dlopen of
+# "libdoltlite.so.0" and ld of "-ldoltlite" both find the same file.
+# Empty on Darwin (T.dll==.dylib) and on Windows-side builds.
+libdoltlite.comma := ,
+LDFLAGS.libdoltlite.soname = $(if $(filter .so,$(T.dll)),-Wl$(libdoltlite.comma)-soname$(libdoltlite.comma)libdoltlite.so.0,)
 
 libdoltlite$(T.dll):	$(LIBOBJS0)
 	$(T.link.shared) -o $@ $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
-		$(LDFLAGS.libdoltlite.os-specific)
+		$(LDFLAGS.libdoltlite.os-specific) $(LDFLAGS.libdoltlite.soname)
 
 doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll)
 all: doltlite-lib

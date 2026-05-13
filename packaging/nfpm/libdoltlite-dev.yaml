@@ -28,5 +28,12 @@ contents:
     dst: /usr/lib/${DEB_HOST_MULTIARCH}/libdoltlite.a
     file_info:
       mode: 0644
+  # Unversioned symlink lives in the -dev package, pointing at the
+  # SONAME-matched file shipped by libdoltlite0. This is the standard
+  # Debian split: the linker name (libfoo.so) is dev-only; the SONAME
+  # name (libfoo.so.N) is in the runtime package.
+  - src: libdoltlite.so.0
+    dst: /usr/lib/${DEB_HOST_MULTIARCH}/libdoltlite.so
+    type: symlink
   - src: LICENSE.md
     dst: /usr/share/doc/libdoltlite-dev/copyright
