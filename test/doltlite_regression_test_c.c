@@ -2836,6 +2836,54 @@ static void run_diff_stat_requires_refs(void){
   removeDbFiles(dbpath);
 }
 
+static void run_diff_stat_wide_modified_rows(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[4096];
+  int i;
+
+  printf("=== Diff Stat Wide Modified Rows Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_diff_stat_wide_modified_rows");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_diff_stat_wide_modified_rows",
+        open_db(dbpath, &db)==SQLITE_OK);
+
+  sqlite3_snprintf(sizeof(sql), sql,
+      "CREATE TABLE t(id INTEGER PRIMARY KEY");
+  for(i=1; i<=32; i++){
+    sqlite3_snprintf(sizeof(sql) - strlen(sql), sql + strlen(sql),
+        ", c%03d INT", i);
+  }
+  sqlite3_snprintf(sizeof(sql) - strlen(sql), sql + strlen(sql), ");");
+  check("create_wide_table_for_diff_stat", execSql(db, sql)==SQLITE_OK);
+
+  check("begin_wide_rows_for_diff_stat", execSql(db, "BEGIN;")==SQLITE_OK);
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql, "INSERT INTO t(id) VALUES(%d);", i);
+    check("insert_wide_row_for_diff_stat", execSql(db, sql)==SQLITE_OK);
+  }
+  check("commit_wide_base_for_diff_stat", execSql(db,
+    "COMMIT;"
+    "SELECT dolt_commit('-A', '-m', 'base');")==SQLITE_OK);
+
+  check("update_wide_rows_for_diff_stat", execSql(db,
+    "UPDATE t SET c016=id, c032=id*2;"
+    "SELECT dolt_commit('-A', '-m', 'wide update');")==SQLITE_OK);
+
+  check("diff_stat_wide_rows_modified",
+        strcmp(queryScalarText(db,
+          "SELECT rows_modified FROM dolt_diff_stat('HEAD~1','HEAD','t');"),
+          "80")==0);
+  check("diff_stat_wide_cells_modified",
+        strcmp(queryScalarText(db,
+          "SELECT cells_modified FROM dolt_diff_stat('HEAD~1','HEAD','t');"),
+          "160")==0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static void run_diff_table_deep_history_map(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -6668,6 +6716,7 @@ static const RegressionCase aCases[] = {
   { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
   { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
+  { "diff_stat_wide_modified_rows", "Diff Stat Wide Modified Rows Test", run_diff_stat_wide_modified_rows },
   { "diff_table_deep_history_map", "Diff Table Deep History Map Test", run_diff_table_deep_history_map },
   { "diff_stat_surfaces_corrupt_root", "Diff Stat Surfaces Corrupt Root Test", run_diff_stat_surfaces_corrupt_root },
   { "table_moveto_mutmap_delete_preserves_neighbors", "Table Moveto MutMap Delete Preserves Neighbors Test", run_table_moveto_mutmap_delete_preserves_neighbors },

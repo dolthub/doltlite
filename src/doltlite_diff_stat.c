@@ -186,11 +186,58 @@ static int dsFieldValuesEqual(
   return memcmp(pA+aOff, pB+bOff, aLen)==0;
 }
 
+typedef struct DsColMap DsColMap;
+struct DsColMap {
+  int *aToFrom;
+  u8 *aFromMatched;
+  int nTo;
+  int nFrom;
+};
+
+static void dsFreeColMap(DsColMap *pMap){
+  sqlite3_free(pMap->aToFrom);
+  sqlite3_free(pMap->aFromMatched);
+  memset(pMap, 0, sizeof(*pMap));
+}
+
+static int dsBuildColMap(
+  char **azFromCols, int nFromCols,
+  char **azToCols, int nToCols,
+  DsColMap *pMap
+){
+  int i, j;
+  memset(pMap, 0, sizeof(*pMap));
+  pMap->nTo = nToCols;
+  pMap->nFrom = nFromCols;
+  if( nToCols>0 ){
+    pMap->aToFrom = sqlite3_malloc(nToCols * (int)sizeof(int));
+    if( !pMap->aToFrom ) return SQLITE_NOMEM;
+  }
+  if( nFromCols>0 ){
+    pMap->aFromMatched = sqlite3_malloc(nFromCols * (int)sizeof(u8));
+    if( !pMap->aFromMatched ){
+      dsFreeColMap(pMap);
+      return SQLITE_NOMEM;
+    }
+    memset(pMap->aFromMatched, 0, nFromCols * (int)sizeof(u8));
+  }
+  for(i=0; i<nToCols; i++){
+    pMap->aToFrom[i] = -1;
+    for(j=0; j<nFromCols; j++){
+      if( strcmp(azFromCols[j], azToCols[i])==0 ){
+        pMap->aToFrom[i] = j;
+        pMap->aFromMatched[j] = 1;
+        break;
+      }
+    }
+  }
+  return SQLITE_OK;
+}
+
 static int dsCountChangedCells(
   const u8 *pFromRec, int nFromRec,
   const u8 *pToRec,   int nToRec,
-  char **azFromCols,  int nFromCols,
-  char **azToCols,    int nToCols
+  const DsColMap *pColMap
 ){
   DoltliteRecordInfo fromRi, toRi;
   int i, changed = 0;
@@ -198,12 +245,9 @@ static int dsCountChangedCells(
   doltliteParseRecord(pFromRec, nFromRec, &fromRi);
   doltliteParseRecord(pToRec,   nToRec,   &toRi);
 
-  for(i=0; i<nToCols; i++){
-    int fromIdx;
-    for(fromIdx=0; fromIdx<nFromCols; fromIdx++){
-      if( strcmp(azFromCols[fromIdx], azToCols[i])==0 ) break;
-    }
-    if( fromIdx>=nFromCols ){
+  for(i=0; i<pColMap->nTo; i++){
+    int fromIdx = pColMap->aToFrom ? pColMap->aToFrom[i] : -1;
+    if( fromIdx<0 ){
 
       if( i<toRi.nField && toRi.aType[i]!=0 ) changed++;
       continue;
@@ -216,12 +260,8 @@ static int dsCountChangedCells(
     }
   }
 
-  for(i=0; i<nFromCols; i++){
-    int toIdx;
-    for(toIdx=0; toIdx<nToCols; toIdx++){
-      if( strcmp(azToCols[toIdx], azFromCols[i])==0 ) break;
-    }
-    if( toIdx<nToCols ) continue;
+  for(i=0; i<pColMap->nFrom; i++){
+    if( pColMap->aFromMatched && pColMap->aFromMatched[i] ) continue;
     if( i>=fromRi.nField ) continue;
     if( fromRi.aType[i]!=0 ) changed++;
   }
@@ -298,12 +338,14 @@ static int dsComputeTableStats(
   char *zFromSql = 0, *zToSql = 0;
   char **azFromCols = 0, **azToCols = 0;
   int nFromCols = 0, nToCols = 0;
+  DsColMap colMap;
   i64 oldCount = 0, newCount = 0;
   i64 rowsMod = 0, rowsAdd = 0, rowsDel = 0;
   i64 cellsMod = 0, cellsAdd = 0, cellsDel = 0;
   int rc;
 
   memset(pOut, 0, sizeof(*pOut));
+  memset(&colMap, 0, sizeof(colMap));
 
   rc = doltliteLoadCatalog(db, pFromCatHash, &aFrom, &nFromCat, 0);
   if( rc!=SQLITE_OK ) return rc;
@@ -352,6 +394,11 @@ static int dsComputeTableStats(
     hasFrom && hasTo &&
     strcmp(zFromSql ? zFromSql : "", zToSql ? zToSql : "")!=0;
 
+  if( hasFrom && hasTo ){
+    rc = dsBuildColMap(azFromCols, nFromCols, azToCols, nToCols, &colMap);
+    if( rc!=SQLITE_OK ) goto done;
+  }
+
   if( hasFrom ){
     rc = dsCountRows(db, &fromRoot, fromFlags, &oldCount);
     if( rc!=SQLITE_OK ) goto done;
@@ -388,7 +435,7 @@ static int dsComputeTableStats(
           int changed = dsCountChangedCells(
               pChange->pOldVal, pChange->nOldVal,
               pChange->pNewVal, pChange->nNewVal,
-              azFromCols, nFromCols, azToCols, nToCols);
+              &colMap);
           if( changed>0 ){
             rowsMod++;
             cellsMod += changed;
@@ -451,6 +498,7 @@ done:
   sqlite3_free(zToSql);
   dsFreeColNames(azFromCols, nFromCols);
   dsFreeColNames(azToCols, nToCols);
+  dsFreeColMap(&colMap);
   return rc;
 }
 
