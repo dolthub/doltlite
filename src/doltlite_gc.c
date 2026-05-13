@@ -131,7 +131,7 @@ static int gcAppendMarkedChunk(
 ){
   u8 *chunkData = 0;
   int nChunkData = 0;
-  int need;
+  i64 need;
   int rc;
 
   if( !prollyHashSetContains(marked, pHash) ) return SQLITE_OK;
@@ -139,18 +139,36 @@ static int gcAppendMarkedChunk(
   rc = chunkStoreGet(cs, pHash, &chunkData, &nChunkData);
   if( rc!=SQLITE_OK ) return rc;
 
-  need = *pnBuf + 4 + nChunkData;
-  if( need > *pnBufAlloc ){
-    int newAlloc = *pnBufAlloc ? *pnBufAlloc * 2 : 65536;
+  if( nChunkData < 0 ){
+    sqlite3_free(chunkData);
+    return SQLITE_CORRUPT;
+  }
+  need = (i64)*pnBuf + 4 + (i64)nChunkData;
+  if( need > (i64)0x7fffffff ){
+    sqlite3_free(chunkData);
+    return SQLITE_NOMEM;
+  }
+  if( need > (i64)*pnBufAlloc ){
+    i64 newAlloc = *pnBufAlloc ? (i64)*pnBufAlloc * 2 : (i64)65536;
     u8 *pNew;
-    while( newAlloc < need ) newAlloc *= 2;
-    pNew = sqlite3_realloc(*ppBuf, newAlloc);
+    while( newAlloc < need ){
+      if( newAlloc > (i64)0x7fffffff/2 ){
+        newAlloc = (i64)0x7fffffff;
+        break;
+      }
+      newAlloc *= 2;
+    }
+    if( newAlloc < need || newAlloc > (i64)0x7fffffff ){
+      sqlite3_free(chunkData);
+      return SQLITE_NOMEM;
+    }
+    pNew = sqlite3_realloc(*ppBuf, (int)newAlloc);
     if( !pNew ){
       sqlite3_free(chunkData);
       return SQLITE_NOMEM;
     }
     *ppBuf = pNew;
-    *pnBufAlloc = newAlloc;
+    *pnBufAlloc = (int)newAlloc;
   }
 
   (*ppBuf)[*pnBuf]   = (u8)(nChunkData);
@@ -353,17 +371,11 @@ static int gcRewriteFile(
       sqlite3OsCloseFree(pTmpFile);
 
       if( rc==SQLITE_OK ){
-
-        if( cs->pFile ){
-          sqlite3OsCloseFree(cs->pFile);
-          cs->pFile = 0;
-        }
+        sqlite3_file *pOldFile = cs->pFile;
+        sqlite3_file *pNewFile = 0;
 
         GC_CRASH_CHECK();
         if( rename(zTmp, cs->zFilename)!=0 ){
-          int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-          (void)sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename,
-                                    &cs->pFile, reopenFlags, 0);
           rc = SQLITE_IOERR;
         }
 
@@ -388,13 +400,26 @@ static int gcRewriteFile(
 #endif
 
         if( rc==SQLITE_OK ){
-          cs->nWalData = 0;
+          int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
+          int reopenAttempt;
+          for(reopenAttempt=0; reopenAttempt<3; reopenAttempt++){
+            pNewFile = 0;
+            rc = sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename, &pNewFile,
+                                     reopenFlags, 0);
+            if( rc==SQLITE_OK ) break;
+            if( pNewFile ){
+              sqlite3OsCloseFree(pNewFile);
+              pNewFile = 0;
+            }
+          }
         }
 
         if( rc==SQLITE_OK ){
-          int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-          rc = sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename, &cs->pFile,
-                                   reopenFlags, 0);
+          cs->pFile = pNewFile;
+          cs->nWalData = 0;
+          if( pOldFile ){
+            sqlite3OsCloseFree(pOldFile);
+          }
         }
       }else{
         cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
