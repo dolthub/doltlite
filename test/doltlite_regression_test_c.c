@@ -949,6 +949,63 @@ static void run_chunk_walk_corruption(void){
   }
 }
 
+static void init_v3_catalog_blob(u8 *aCat, int nCat, u16 nName){
+  memset(aCat, 0, nCat);
+  aCat[0] = CATALOG_FORMAT_V3;
+  aCat[1] = 1;
+  aCat[5] = 2;
+  aCat[9] = BTREE_INTKEY;
+  aCat[50] = (u8)nName;
+  aCat[51] = (u8)(nName >> 8);
+  if( nName>0 && nCat>52 ){
+    aCat[52] = 't';
+  }
+}
+
+static void run_catalog_deserialize_corruption(void){
+  sqlite3 *db = 0;
+  ChunkStore *cs;
+  ProllyHash h;
+  struct TableEntry *aTables = 0;
+  int nTables = 0;
+  int rc;
+  u8 truncatedNameCat[52];
+  u8 trailingCat[54];
+  u8 missingNameLenCat[50];
+
+  printf("=== Catalog Deserialize Corruption Test ===\n\n");
+
+  check("open_memory_db_for_catalog_corruption", open_db(":memory:", &db)==SQLITE_OK);
+  cs = doltliteGetChunkStore(db);
+  check("get_chunk_store_for_catalog_corruption", cs!=0);
+
+  init_v3_catalog_blob(truncatedNameCat, (int)sizeof(truncatedNameCat), 1);
+  check("put_truncated_name_catalog",
+        chunkStorePut(cs, truncatedNameCat, (int)sizeof(truncatedNameCat), &h)==SQLITE_OK);
+  rc = doltliteLoadCatalog(db, &h, &aTables, &nTables, 0);
+  check("truncated_name_catalog_rejected", rc==SQLITE_CORRUPT);
+  doltliteFreeCatalog(aTables, nTables);
+  aTables = 0; nTables = 0;
+
+  init_v3_catalog_blob(trailingCat, (int)sizeof(trailingCat), 1);
+  trailingCat[53] = 0xAA;
+  check("put_trailing_catalog",
+        chunkStorePut(cs, trailingCat, (int)sizeof(trailingCat), &h)==SQLITE_OK);
+  rc = doltliteLoadCatalog(db, &h, &aTables, &nTables, 0);
+  check("trailing_catalog_rejected", rc==SQLITE_CORRUPT);
+  doltliteFreeCatalog(aTables, nTables);
+  aTables = 0; nTables = 0;
+
+  init_v3_catalog_blob(missingNameLenCat, (int)sizeof(missingNameLenCat), 0);
+  check("put_missing_name_len_catalog",
+        chunkStorePut(cs, missingNameLenCat, (int)sizeof(missingNameLenCat), &h)==SQLITE_OK);
+  rc = doltliteLoadCatalog(db, &h, &aTables, &nTables, 0);
+  check("missing_name_len_catalog_rejected", rc==SQLITE_CORRUPT);
+  doltliteFreeCatalog(aTables, nTables);
+
+  sqlite3_close(db);
+}
+
 static void run_ancestor_missing_start(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -6673,6 +6730,7 @@ static const RegressionCase aCases[] = {
   { "status_many_table_renames", "Status Many Table Renames Test", run_status_many_table_renames },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
+  { "catalog_deserialize_corruption", "Catalog Deserialize Corruption Test", run_catalog_deserialize_corruption },
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
   { "pull_persist_failure", "Pull Persist Failure Test", run_pull_persist_failure },
   { "push_persist_failure", "Push Persist Failure Test", run_push_persist_failure },
