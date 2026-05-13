@@ -24,9 +24,13 @@ set -u
 BUILD_DIR="${1:-.}"
 cd "$BUILD_DIR" || { echo "Build dir $BUILD_DIR not found"; exit 2; }
 
-# Tests that pass cleanly on master at the time of wiring.
+# Tests that pass cleanly on master and should break CI on regression.
 GATING=(
   ancestor_test
+  sql_transaction_test
+  invariant_test
+  three_way_diff_test
+  multi_process_test
 )
 
 # Tests that have known preexisting failures or crashes on master. These are
@@ -34,23 +38,15 @@ GATING=(
 # bug to track.
 #
 # Counts at time of wiring (master @ HEAD when this file was first added):
-#   sql_transaction_test    22 passed,  2 failed (no crash)
-#   invariant_test         838 passed,  3 failed (no crash)
-#   three_way_diff_test     74 passed, 39 failed (no crash)
 #   cross_branch_test        crashes after 4 reported fails (SIGSEGV)
 #   corruption_test          crashes after 4 reported fails (SIGABRT/139)
-#   multi_process_test       1 failure then exits nonzero
 #
 # These represent real, latent bugs that the CI suite was previously
 # hiding. They should be triaged and fixed one at a time, after which
 # each test should be promoted into GATING.
 EXPECTED_FAIL=(
-  sql_transaction_test
-  invariant_test
-  three_way_diff_test
   cross_branch_test
   corruption_test
-  multi_process_test
 )
 
 run_one() {
