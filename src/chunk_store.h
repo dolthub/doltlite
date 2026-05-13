@@ -5,6 +5,7 @@
 
 #include "sqliteInt.h"
 #include "prolly_hash.h"
+#include "chunk_wal.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443
 #define CHUNK_STORE_VERSION 11
@@ -144,7 +145,7 @@ struct ChunkStore {
   int nChunks;
   i64 iIndexOffset;
   i64 nIndexSize;
-  i64 iWalOffset;
+  WalState wal;
   i64 iFileSize;
 
   /* aIndex is the durable sorted manifest. Small commits append into aRecent
@@ -181,8 +182,6 @@ struct ChunkStore {
   u8 hasMovedChecked;
   int graphLockFd;
   i64 nCommittedWriteBuf;
-
-  i64 nWalData;
 };
 
 int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
