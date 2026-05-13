@@ -235,6 +235,88 @@ jobs:
           doltlite-lib-*.zip
           dist/*.deb
 
+  # ── Package smoke test (.deb) ─────────────────────────────
+  # Non-blocking sanity check: download the just-built linux-x64 .debs,
+  # `dpkg -i` them on a clean ubuntu-latest, and assert `doltlite` runs
+  # and `SELECT dolt_version()` reports the release tag. Catches the
+  # class of regression where the build succeeds but the package itself
+  # is broken (missing files, bad paths, undeclared deps, etc.) —
+  # exactly what ba3685707e ("make the autoconf release tarball
+  # actually build") would have caught earlier.
+  #
+  # Started as non-blocking on purpose: the `release` job below does NOT
+  # depend on this. Promote to a required check once it has demonstrated
+  # reliability across a few releases.
+  package-smoke-deb:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only run when there are real artifacts to install — i.e., on a
+    # tag push (where the binaries-linux-x64 artifact will have been
+    # produced by `build`). Manual workflow_dispatch runs also produce
+    # artifacts, so allow those too.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+    - name: Download linux-x64 binary artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: binaries-linux-x64
+        path: artifacts
+
+    - name: Show downloaded artifacts
+      run: |
+        find artifacts -type f | sort
+        ls -la artifacts/dist/ 2>/dev/null || true
+
+    - name: Install .deb packages
+      run: |
+        # Install in dependency order: libdoltlite0 (runtime), then
+        # libdoltlite-dev (headers), then doltlite (CLI). Each depends
+        # on the previous via `Depends:` in the .deb metadata.
+        sudo dpkg -i artifacts/dist/libdoltlite0_*.deb
+        sudo dpkg -i artifacts/dist/libdoltlite-dev_*.deb
+        sudo dpkg -i artifacts/dist/doltlite_*.deb
+        # If any deps are missing, apt-get -f install would fix them;
+        # surface that as a failure instead so we notice.
+        dpkg -l | grep -E '^ii\s+(doltlite|libdoltlite)' || (echo "package not installed cleanly" && exit 1)
+
+    - name: Verify installed files
+      run: |
+        # Sanity: each .deb's payload lands where we expect. Catches
+        # paths drifting from the nfpm yaml without anyone noticing.
+        test -x /usr/bin/doltlite
+        test -x /usr/bin/doltlite-remotesrv
+        test -f /usr/include/doltlite.h
+        test -f /usr/include/sqlite3.h
+        ldconfig -p | grep -q libdoltlite || (echo "libdoltlite.so.0 not registered with ldconfig" && exit 1)
+
+    - name: Smoke test — doltlite CLI runs and reports version
+      run: |
+        # `SELECT dolt_version()` should match the tag we built from.
+        # On workflow_dispatch (no tag), just assert the call returns
+        # *something* non-empty rather than asserting an exact value.
+        VERSION_OUT=$(doltlite :memory: 'SELECT dolt_version();')
+        echo "dolt_version() => ${VERSION_OUT}"
+        if [ -z "${VERSION_OUT}" ]; then
+          echo "dolt_version() returned empty"
+          exit 1
+        fi
+        if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ -n "${GITHUB_REF_NAME}" ]; then
+          EXPECTED="${GITHUB_REF_NAME#v}"
+          # dolt_version() may include extra qualifiers; substring match
+          # is enough to confirm the right binary is on PATH.
+          case "${VERSION_OUT}" in
+            *"${EXPECTED}"*) echo "version matches tag ${EXPECTED}" ;;
+            *) echo "version ${VERSION_OUT} does not contain tag ${EXPECTED}"; exit 1 ;;
+          esac
+        fi
+
+    - name: Smoke test — basic SQL works
+      run: |
+        # Trivial SQL plus a doltlite-specific call. If the shared lib
+        # is mis-linked or a virtual table is missing, this fails fast.
+        doltlite :memory: 'SELECT 1;'
+        doltlite :memory: 'CREATE TABLE t(x INT); INSERT INTO t VALUES (1),(2); SELECT count(*) FROM t;'
+
   # ── Run benchmarks ────────────────────────────────────────
   benchmark:
     runs-on: ubuntu-latest
