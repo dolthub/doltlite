@@ -17,6 +17,27 @@ struct StatusRow {
   const char *zStatus;
 };
 
+typedef struct StatusNameSlot StatusNameSlot;
+struct StatusNameSlot {
+  const char *zName;
+  int iEntry;
+};
+
+typedef struct StatusNumberSlot StatusNumberSlot;
+struct StatusNumberSlot {
+  Pgno iTable;
+  int iEntry;
+};
+
+typedef struct StatusCatalogIndex StatusCatalogIndex;
+struct StatusCatalogIndex {
+  struct TableEntry *aEntry;
+  int nEntry;
+  StatusNameSlot *aNameSlot;
+  StatusNumberSlot *aNumberSlot;
+  int nSlot;
+};
+
 typedef struct DoltliteStatusVtab DoltliteStatusVtab;
 struct DoltliteStatusVtab { sqlite3_vtab base; sqlite3 *db; };
 
@@ -39,6 +60,131 @@ static void statusFreeRows(DoltliteStatusCursor *pCur){
 static const char *statusSchema =
   "CREATE TABLE x(table_name TEXT, staged INTEGER, status TEXT)";
 
+static u32 statusStringHash(const char *z){
+  u32 h = 2166136261u;
+  while( z && *z ){
+    h ^= (unsigned char)*z;
+    h *= 16777619u;
+    z++;
+  }
+  return h;
+}
+
+static u32 statusNumberHash(Pgno iTable){
+  return ((u32)iTable * 2654435761u);
+}
+
+static int statusCatalogIndexInit(
+  StatusCatalogIndex *pIdx,
+  struct TableEntry *aEntry,
+  int nEntry
+){
+  int i;
+  int nSlot = 16;
+
+  memset(pIdx, 0, sizeof(*pIdx));
+  pIdx->aEntry = aEntry;
+  pIdx->nEntry = nEntry;
+  if( nEntry<=0 ) return SQLITE_OK;
+
+  while( nSlot < nEntry*2 ) nSlot *= 2;
+  pIdx->aNameSlot = sqlite3_malloc(nSlot * (int)sizeof(StatusNameSlot));
+  pIdx->aNumberSlot = sqlite3_malloc(nSlot * (int)sizeof(StatusNumberSlot));
+  if( !pIdx->aNameSlot || !pIdx->aNumberSlot ){
+    sqlite3_free(pIdx->aNameSlot);
+    sqlite3_free(pIdx->aNumberSlot);
+    memset(pIdx, 0, sizeof(*pIdx));
+    return SQLITE_NOMEM;
+  }
+  memset(pIdx->aNameSlot, 0, nSlot * (int)sizeof(StatusNameSlot));
+  memset(pIdx->aNumberSlot, 0, nSlot * (int)sizeof(StatusNumberSlot));
+  pIdx->nSlot = nSlot;
+
+  for(i=0; i<nEntry; i++){
+    u32 slot;
+    if( aEntry[i].zName ){
+      slot = statusStringHash(aEntry[i].zName) & (u32)(nSlot - 1);
+      while( pIdx->aNameSlot[slot].zName ){
+        if( strcmp(pIdx->aNameSlot[slot].zName, aEntry[i].zName)==0 ){
+          break;
+        }
+        slot = (slot + 1) & (u32)(nSlot - 1);
+      }
+      if( !pIdx->aNameSlot[slot].zName ){
+        pIdx->aNameSlot[slot].zName = aEntry[i].zName;
+        pIdx->aNameSlot[slot].iEntry = i + 1;
+      }
+    }
+
+    slot = statusNumberHash(aEntry[i].iTable) & (u32)(nSlot - 1);
+    while( pIdx->aNumberSlot[slot].iEntry ){
+      if( pIdx->aNumberSlot[slot].iTable==aEntry[i].iTable ){
+        break;
+      }
+      slot = (slot + 1) & (u32)(nSlot - 1);
+    }
+    if( !pIdx->aNumberSlot[slot].iEntry ){
+      pIdx->aNumberSlot[slot].iTable = aEntry[i].iTable;
+      pIdx->aNumberSlot[slot].iEntry = i + 1;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static void statusCatalogIndexFree(StatusCatalogIndex *pIdx){
+  sqlite3_free(pIdx->aNameSlot);
+  sqlite3_free(pIdx->aNumberSlot);
+  memset(pIdx, 0, sizeof(*pIdx));
+}
+
+static struct TableEntry *statusCatalogFindName(
+  const StatusCatalogIndex *pIdx,
+  const char *zName
+){
+  u32 slot;
+  int i;
+  if( !zName || pIdx->nSlot==0 ) return 0;
+  slot = statusStringHash(zName) & (u32)(pIdx->nSlot - 1);
+  for(i=0; i<pIdx->nSlot; i++){
+    StatusNameSlot *pSlot = &pIdx->aNameSlot[slot];
+    if( !pSlot->zName ) return 0;
+    if( strcmp(pSlot->zName, zName)==0 ){
+      return &pIdx->aEntry[pSlot->iEntry - 1];
+    }
+    slot = (slot + 1) & (u32)(pIdx->nSlot - 1);
+  }
+  return 0;
+}
+
+static struct TableEntry *statusCatalogFindNumber(
+  const StatusCatalogIndex *pIdx,
+  Pgno iTable
+){
+  u32 slot;
+  int i;
+  if( pIdx->nSlot==0 ) return 0;
+  slot = statusNumberHash(iTable) & (u32)(pIdx->nSlot - 1);
+  for(i=0; i<pIdx->nSlot; i++){
+    StatusNumberSlot *pSlot = &pIdx->aNumberSlot[slot];
+    if( !pSlot->iEntry ) return 0;
+    if( pSlot->iTable==iTable ){
+      return &pIdx->aEntry[pSlot->iEntry - 1];
+    }
+    slot = (slot + 1) & (u32)(pIdx->nSlot - 1);
+  }
+  return 0;
+}
+
+static struct TableEntry *statusCatalogFindEntry(
+  const StatusCatalogIndex *pIdx,
+  const struct TableEntry *pNeedle
+){
+  if( pNeedle->zName ){
+    return statusCatalogFindName(pIdx, pNeedle->zName);
+  }
+  return statusCatalogFindNumber(pIdx, pNeedle->iTable);
+}
+
 static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **pzName){
   *pzName = 0;
   if( pEntry->zName ){
@@ -51,15 +197,6 @@ static int statusTableName(sqlite3 *db, const struct TableEntry *pEntry, char **
   }
   *pzName = doltliteResolveTableNumber(db, pEntry->iTable);
   return *pzName ? SQLITE_OK : SQLITE_NOTFOUND;
-}
-
-static struct TableEntry *findCatalogEntry(
-  struct TableEntry *a, int n, const struct TableEntry *pNeedle
-){
-  if( pNeedle->zName ){
-    return doltliteFindTableByName(a, n, pNeedle->zName);
-  }
-  return doltliteFindTableByNumber(a, n, pNeedle->iTable);
 }
 
 static int addRow(DoltliteStatusCursor *pCur, const char *zName,
@@ -191,8 +328,8 @@ static int statusRootsShareAnyKey(
 
 static int isRenamePair(
   sqlite3 *db,
-  struct TableEntry *aFrom, int nFrom,
-  struct TableEntry *aTo, int nTo,
+  const StatusCatalogIndex *pFromIdx,
+  const StatusCatalogIndex *pToIdx,
   const struct TableEntry *pA,
   const struct TableEntry *pB
 ){
@@ -204,8 +341,8 @@ static int isRenamePair(
   if( pA->iTable != pB->iTable ) return 0;
   if( !pA->zName || !pB->zName ) return 0;
   if( strcmp(pA->zName, pB->zName)==0 ) return 0;
-  if( doltliteFindTableByName(aFrom, nFrom, pB->zName)!=0 ) return 0;
-  if( doltliteFindTableByName(aTo, nTo, pA->zName)!=0 ) return 0;
+  if( statusCatalogFindName(pFromIdx, pB->zName)!=0 ) return 0;
+  if( statusCatalogFindName(pToIdx, pA->zName)!=0 ) return 0;
   if( prollyHashCompare(&pA->root, &pB->root)==0 ){
     bMatch = 1;
     goto rename_done;
@@ -230,27 +367,38 @@ static int compareCatalogs(
   int staged
 ){
   int i, j, rc;
+  StatusCatalogIndex fromIdx;
+  StatusCatalogIndex toIdx;
 
   #define DOLT_STATUS_RENAME_CAP 4096
   unsigned char fromHandled[DOLT_STATUS_RENAME_CAP] = {0};
   unsigned char toHandled[DOLT_STATUS_RENAME_CAP] = {0};
   int useRename = (nFrom <= DOLT_STATUS_RENAME_CAP && nTo <= DOLT_STATUS_RENAME_CAP);
 
+  rc = statusCatalogIndexInit(&fromIdx, aFrom, nFrom);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = statusCatalogIndexInit(&toIdx, aTo, nTo);
+  if( rc!=SQLITE_OK ){
+    statusCatalogIndexFree(&fromIdx);
+    return rc;
+  }
+
   if( useRename ){
     for(i=0; i<nFrom; i++){
+      struct TableEntry *pTo;
       if( aFrom[i].iTable<=1 || fromHandled[i] ) continue;
-      for(j=0; j<nTo; j++){
-        if( aTo[j].iTable<=1 || toHandled[j] ) continue;
-        if( isRenamePair(db, aFrom, nFrom, aTo, nTo, &aFrom[i], &aTo[j]) ){
-          char *zCompound = sqlite3_mprintf("%s -> %s", aFrom[i].zName, aTo[j].zName);
-          if( !zCompound ) return SQLITE_NOMEM;
-          rc = addRow(pCur, zCompound, staged, "renamed");
-          sqlite3_free(zCompound);
-          if( rc!=SQLITE_OK ) return rc;
-          fromHandled[i] = 1;
-          toHandled[j] = 1;
-          break;
-        }
+      pTo = statusCatalogFindNumber(&toIdx, aFrom[i].iTable);
+      if( !pTo ) continue;
+      j = (int)(pTo - aTo);
+      if( j<0 || j>=nTo || toHandled[j] || pTo->iTable<=1 ) continue;
+      if( isRenamePair(db, &fromIdx, &toIdx, &aFrom[i], pTo) ){
+        char *zCompound = sqlite3_mprintf("%s -> %s", aFrom[i].zName, pTo->zName);
+        if( !zCompound ){ rc = SQLITE_NOMEM; goto compare_done; }
+        rc = addRow(pCur, zCompound, staged, "renamed");
+        sqlite3_free(zCompound);
+        if( rc!=SQLITE_OK ) goto compare_done;
+        fromHandled[i] = 1;
+        toHandled[j] = 1;
       }
     }
   }
@@ -260,10 +408,10 @@ static int compareCatalogs(
     char *zName;
     if(aTo[i].iTable<=1) continue;
     if( useRename && toHandled[i] ) continue;
-    pFrom = findCatalogEntry(aFrom, nFrom, &aTo[i]);
+    pFrom = statusCatalogFindEntry(&fromIdx, &aTo[i]);
     rc = statusTableName(db, &aTo[i], &zName);
     if( rc==SQLITE_NOTFOUND ) continue;
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ) goto compare_done;
     if(!pFrom){
       if( staged==0 ){
         int ignored = 0;
@@ -275,12 +423,14 @@ static int compareCatalogs(
           }
           pCur->base.pVtab->zErrMsg = zIgnErr;
           sqlite3_free(zName);
-          return SQLITE_ERROR;
+          rc = SQLITE_ERROR;
+          goto compare_done;
         }
         if( irc!=SQLITE_OK ){
           sqlite3_free(zIgnErr);
           sqlite3_free(zName);
-          return irc;
+          rc = irc;
+          goto compare_done;
         }
         if( ignored ){
           sqlite3_free(zName);
@@ -301,22 +451,27 @@ static int compareCatalogs(
       }
     }
     sqlite3_free(zName);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ) goto compare_done;
   }
   for(i=0; i<nFrom; i++){
     char *zName;
     if(aFrom[i].iTable<=1) continue;
     if( useRename && fromHandled[i] ) continue;
-    if(!findCatalogEntry(aTo, nTo, &aFrom[i])){
+    if(!statusCatalogFindEntry(&toIdx, &aFrom[i])){
       rc = statusTableName(db, &aFrom[i], &zName);
       if( rc==SQLITE_NOTFOUND ) continue;
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ) goto compare_done;
       rc = addRow(pCur, zName, staged, "deleted");
       sqlite3_free(zName);
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ) goto compare_done;
     }
   }
-  return SQLITE_OK;
+  rc = SQLITE_OK;
+
+compare_done:
+  statusCatalogIndexFree(&fromIdx);
+  statusCatalogIndexFree(&toIdx);
+  return rc;
   #undef DOLT_STATUS_RENAME_CAP
 }
 

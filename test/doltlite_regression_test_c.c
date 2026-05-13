@@ -783,6 +783,50 @@ static void run_status_error_propagation(void){
   removeDbFiles(dbpath);
 }
 
+static void run_status_many_table_renames(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  int i;
+
+  printf("=== Status Many Table Renames Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_status_many_table_renames");
+  remove_db(dbpath);
+
+  check("open_db_for_status_many_table_renames", open_db(dbpath, &db)==SQLITE_OK);
+  check("begin_status_many_table_renames_setup", execsql(db, "BEGIN;")==SQLITE_OK);
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "CREATE TABLE t%03d(id INTEGER PRIMARY KEY);"
+      "INSERT INTO t%03d VALUES(1);", i, i);
+    check("create_table_for_status_many_table_renames",
+          execsql(db, sql)==SQLITE_OK);
+  }
+  check("commit_status_many_table_renames_seed", execsql(db,
+    "COMMIT;"
+    "SELECT dolt_commit('-A', '-m', 'seed');")==SQLITE_OK);
+
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "ALTER TABLE t%03d RENAME TO r%03d;", i, i);
+    check("rename_table_for_status_many_table_renames",
+          execsql(db, sql)==SQLITE_OK);
+  }
+
+  check("status_many_table_rename_count",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_status WHERE status='renamed';"),
+          "80")==0);
+  check("status_many_table_rename_sample",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_status "
+          "WHERE table_name='t080 -> r080' AND status='renamed';"),
+          "1")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_remote_refs_corruption(void){
   sqlite3 *srcDb = 0;
   sqlite3 *localDb = 0;
@@ -6518,6 +6562,7 @@ static const RegressionCase aCases[] = {
   { "refresh_error_propagation", "Refresh Error Propagation Test", run_refresh_error_propagation },
   { "conflicts_blob_corruption", "Conflicts Blob Corruption Test", run_conflicts_blob_corruption },
   { "status_error_propagation", "Status Error Propagation Test", run_status_error_propagation },
+  { "status_many_table_renames", "Status Many Table Renames Test", run_status_many_table_renames },
   { "remote_refs_corruption", "Remote Refs Corruption Test", run_remote_refs_corruption },
   { "chunk_walk_corruption", "Chunk Walk Corruption Test", run_chunk_walk_corruption },
   { "ancestor_missing_start", "Ancestor Missing Start Test", run_ancestor_missing_start },
