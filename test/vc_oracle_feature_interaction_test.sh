@@ -3613,7 +3613,7 @@ SELECT dolt_merge('main');
 
 echo "--- stress cell merge ---"
 
-oracle "cell_merge_8_cols_interleaved" "
+oracle "cell_merge_8_cols_interleaved_single_row" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, c1 TEXT, c2 TEXT, c3 TEXT, c4 TEXT, c5 TEXT, c6 TEXT, c7 TEXT, c8 TEXT);
 INSERT INTO t VALUES(1,'a','b','c','d','e','f','g','h');
 SELECT dolt_add('-A');
