@@ -1016,6 +1016,19 @@ static int csReplayWal(ChunkStore *cs){
       }
 
       {
+        u8 *pBody = (u8 *)sqlite3_malloc((int)len);
+        ProllyHash bodyHash;
+        if( pBody == 0 ){ rc = SQLITE_NOMEM; goto replay_error; }
+        rc = sqlite3OsRead(cs->pFile, pBody, (int)len, cs->iWalOffset + pos);
+        if( rc != SQLITE_OK ){ sqlite3_free(pBody); goto replay_error; }
+        prollyHashCompute(pBody, (int)len, &bodyHash);
+        sqlite3_free(pBody);
+        if( memcmp(&bodyHash, &hash, sizeof(ProllyHash)) != 0 ){
+          break;
+        }
+      }
+
+      {
         int existing = csSearchIndex(cs->aIndex, cs->nIndex, &hash);
         ChunkIndexEntry *e = 0;
         if( existing < 0 ){
