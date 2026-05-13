@@ -11,6 +11,7 @@
 ** 3. Sequential writes from different processes: both succeed
 ** 4. GC while another process has the file open
 ** 5. GC blocks if another process holds a write lock
+** 6. Cross-process dolt_commit detects stale branch heads
 **
 ** Build from build/ directory:
 **   cc -g -I. -o multi_process_test \
@@ -384,29 +385,20 @@ static void test_gc_blocked_by_writer(void){
 
 /*
 ** Test 6: dolt_commit from two processes to the same branch.
-** Second should get conflict error (same as in-process test but
-** verifying it works cross-process).
-**
-** SKIPPED — surfaces a real production bug, tracked in
-** https://github.com/dolthub/doltlite/issues/830:
-**   1. Parent SEGVs inside doltliteMaterializeDefaultColumns when
-**      committing through a sqlite3 connection that was opened before
-**      another process clobbered the chunk store. Stale mmap/pager
-**      pointers; chunk store refresh is missing on this path.
-**   2. Even with a fresh post-child open, the parent's dolt_commit
-**      succeeds silently — no cross-process conflict is reported.
-**
-** Re-enable this test (call it from main() below) once #830 is fixed.
+** A connection opened before a peer process advances the branch must reject
+** its stale commit. A fresh connection opened after the peer commit should
+** commit on top of the peer, preserving both commits.
 */
-__attribute__((unused))
 static void test_cross_process_commit_conflict(void){
-  const char *path = "/tmp/test_mp_conflict.db";
+  const char *stalePath = "/tmp/test_mp_conflict_stale.db";
+  const char *freshPath = "/tmp/test_mp_conflict_fresh.db";
   pid_t pid;
   int status;
   int pipefd[2];
 
   printf("--- Test 6: Cross-process commit conflict ---\n");
-  setup_db(path);
+
+  setup_db(stalePath);
 
   pipe(pipefd);
 
@@ -416,7 +408,7 @@ static void test_cross_process_commit_conflict(void){
     sqlite3 *db = 0;
     char buf;
     close(pipefd[0]);
-    sqlite3_open(path, &db);
+    sqlite3_open(stalePath, &db);
     execSql(db, "INSERT INTO t VALUES(2, 'child')");
     queryScalarText(db, "SELECT dolt_commit('-A','-m','child commit')");
 
@@ -433,7 +425,7 @@ static void test_cross_process_commit_conflict(void){
     const char *r;
     char buf;
 
-    sqlite3_open(path, &db);
+    sqlite3_open(stalePath, &db);
 
     /* Wait for child to commit */
     close(pipefd[1]);
@@ -450,16 +442,55 @@ static void test_cross_process_commit_conflict(void){
     sqlite3_close(db);
   }
 
-  /* Verify child's commit survived */
+  /* Verify the stale parent did not move the branch. */
   {
     sqlite3 *db = 0;
-    sqlite3_open(path, &db);
+    sqlite3_open(stalePath, &db);
     check("mp_child_commit_survived",
-      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "2")==0);
+      strcmp(queryScalarText(db, "SELECT message FROM dolt_log LIMIT 1"),
+             "child commit")==0);
+    check("mp_stale_parent_not_committed",
+      strcmp(queryScalarText(db,
+        "SELECT count(*) FROM dolt_log WHERE message='parent commit'"),
+        "0")==0);
     sqlite3_close(db);
   }
 
-  remove(path);
+  remove(stalePath);
+
+  setup_db(freshPath);
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    sqlite3_open(freshPath, &db);
+    execSql(db, "INSERT INTO t VALUES(2, 'child')");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','child commit')");
+    sqlite3_close(db);
+    _exit(0);
+  }
+  waitpid(pid, &status, 0);
+  check("mp_fresh_child_ok", WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    const char *r;
+    sqlite3_open(freshPath, &db);
+    execSql(db, "INSERT INTO t VALUES(3, 'parent')");
+    r = queryScalarText(db, "SELECT dolt_commit('-A','-m','parent commit')");
+    check("mp_fresh_parent_commits", strlen(r)==40);
+    check("mp_fresh_parent_latest",
+      strcmp(queryScalarText(db, "SELECT message FROM dolt_log LIMIT 1"),
+             "parent commit")==0);
+    check("mp_fresh_child_preserved",
+      strcmp(queryScalarText(db,
+        "SELECT count(*) FROM dolt_log WHERE message='child commit'"),
+        "1")==0);
+    check("mp_fresh_log_count",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "4")==0);
+    sqlite3_close(db);
+  }
+
+  remove(freshPath);
 }
 
 int main(){
@@ -470,7 +501,7 @@ int main(){
   test_sequential_processes();
   test_gc_during_read();
   test_gc_blocked_by_writer();
-  /* test_cross_process_commit_conflict() — skipped, see #830. */
+  test_cross_process_commit_conflict();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
