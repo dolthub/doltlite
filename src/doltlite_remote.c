@@ -3,6 +3,7 @@
 
 #include "doltlite_remote.h"
 #include "doltlite_commit.h"
+#include "doltlite_internal.h"
 #include "prolly_hashset.h"
 #include "prolly_node.h"
 #include "doltlite_chunk_walk.h"
@@ -52,14 +53,10 @@ static void syncQueueFree(SyncQueue *q){
 }
 
 static int syncQueuePush(SyncQueue *q, const ProllyHash *h){
+  int rc;
   if( prollyHashIsEmpty(h) ) return SQLITE_OK;
-  if( q->nItems >= q->nAlloc ){
-    int newAlloc = q->nAlloc * 2;
-    ProllyHash *aNew = sqlite3_realloc(q->aItems, newAlloc * sizeof(ProllyHash));
-    if( !aNew ) return SQLITE_NOMEM;
-    q->aItems = aNew;
-    q->nAlloc = newAlloc;
-  }
+  rc = DOLTLITE_GROW_ARRAY(&q->aItems, &q->nAlloc, q->nItems + 1, 16);
+  if( rc!=SQLITE_OK ) return rc;
   memcpy(&q->aItems[q->nItems], h, sizeof(ProllyHash));
   q->nItems++;
   return SQLITE_OK;

@@ -211,13 +211,8 @@ static int blameCollectLiveRows(
     int nKey = 0, nVal = 0;
     BlameRow *r;
 
-    if( pCur->nRows >= pCur->nAlloc ){
-      int nNew = pCur->nAlloc ? pCur->nAlloc*2 : 64;
-      BlameRow *aNew = sqlite3_realloc(pCur->aRows, nNew*(int)sizeof(BlameRow));
-      if( !aNew ){ prollyCursorClose(&cur); return SQLITE_NOMEM; }
-      pCur->aRows = aNew;
-      pCur->nAlloc = nNew;
-    }
+    rc = DOLTLITE_GROW_ARRAY(&pCur->aRows, &pCur->nAlloc, pCur->nRows + 1, 64);
+    if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
     r = &pCur->aRows[pCur->nRows];
     memset(r, 0, sizeof(*r));
 

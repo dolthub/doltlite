@@ -467,12 +467,17 @@ static int diffNodesOneLevel(
       if( cmp==0 ){
 
         if( *pnStack + 2 > *pnStackAlloc ){
-          int nNew = *pnStackAlloc ? *pnStackAlloc * 2 : 32;
-          ProllyHash *pNew = sqlite3_realloc(*ppStack,
-                                             nNew * (int)sizeof(ProllyHash));
+          i64 nNew = *pnStackAlloc ? (i64)*pnStackAlloc * 2 : (i64)32;
+          ProllyHash *pNew;
+          if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ){
+            rc = SQLITE_NOMEM;
+            break;
+          }
+          pNew = sqlite3_realloc(*ppStack,
+                                 (int)(nNew * (i64)sizeof(ProllyHash)));
           if( !pNew ){ rc = SQLITE_NOMEM; break; }
           *ppStack = pNew;
-          *pnStackAlloc = nNew;
+          *pnStackAlloc = (int)nNew;
         }
         (*ppStack)[(*pnStack)++] = oldChild;
         (*ppStack)[(*pnStack)++] = newChild;

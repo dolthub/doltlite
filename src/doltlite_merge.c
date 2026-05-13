@@ -216,15 +216,10 @@ static int parseRecordFields(const u8 *pRec, int nRec,
       return -1;
     }
 
-    if(nFields >= nAlloc){
-      RecField *aNew;
-      nAlloc = nAlloc ? nAlloc*2 : 16;
-      aNew = sqlite3_realloc(aFields, nAlloc*(int)sizeof(RecField));
-      if(!aNew){
-        sqlite3_free(aFields);
-        return -1;
-      }
-      aFields = aNew;
+    if( DOLTLITE_GROW_ARRAY(&aFields, &nAlloc, nFields+1, 16)!=SQLITE_OK ){
+      sqlite3_free(aFields);
+      *ppFields=0; *pnFields=0;
+      return -1;
     }
     aFields[nFields].st = st;
     aFields[nFields].off = (int)bodyOff;
@@ -569,14 +564,9 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
     }
     case THREE_WAY_CONFLICT_DM: {
 
-      struct ConflictRow *aNew;
-      if( ctx->nConflicts >= ctx->nConflictsAlloc ){
-        int nNew = ctx->nConflictsAlloc ? ctx->nConflictsAlloc*2 : 16;
-        aNew = sqlite3_realloc(ctx->aConflicts, nNew*(int)sizeof(struct ConflictRow));
-        if( !aNew ) return SQLITE_NOMEM;
-        ctx->aConflicts = aNew;
-        ctx->nConflictsAlloc = nNew;
-      }
+      rc = DOLTLITE_GROW_ARRAY(&ctx->aConflicts, &ctx->nConflictsAlloc,
+                                ctx->nConflicts + 1, 16);
+      if( rc!=SQLITE_OK ) return rc;
       {
         struct ConflictRow *cr = &ctx->aConflicts[ctx->nConflicts];
         memset(cr, 0, sizeof(*cr));
@@ -953,21 +943,15 @@ static int parseColumns(
               return SQLITE_CORRUPT;
             }
 
-            if( nCols >= nAlloc ){
-              int nNew = nAlloc ? nAlloc*2 : 8;
-              ParsedColumn *aNew = sqlite3_realloc(aCols, nNew*(int)sizeof(ParsedColumn));
-              if( !aNew ){
-                sqlite3_free(zName);
-                sqlite3_free(zTrimmed);
-                { int ci; for(ci=0;ci<nCols;ci++){
-                  sqlite3_free(aCols[ci].zName);
-                  sqlite3_free(aCols[ci].zDef);
-                }}
-                sqlite3_free(aCols);
-                return SQLITE_NOMEM;
-              }
-              aCols = aNew;
-              nAlloc = nNew;
+            if( DOLTLITE_GROW_ARRAY(&aCols, &nAlloc, nCols+1, 8)!=SQLITE_OK ){
+              sqlite3_free(zName);
+              sqlite3_free(zTrimmed);
+              { int ci; for(ci=0;ci<nCols;ci++){
+                sqlite3_free(aCols[ci].zName);
+                sqlite3_free(aCols[ci].zDef);
+              }}
+              sqlite3_free(aCols);
+              return SQLITE_NOMEM;
             }
             aCols[nCols].zName = zName;
             aCols[nCols].zDef = zTrimmed;
@@ -1055,13 +1039,8 @@ static int trySchemaColumnMerge(
 
       }else{
 
-        if( nAdd >= nAddAlloc ){
-          int nNew = nAddAlloc ? nAddAlloc*2 : 4;
-          char **azNew = sqlite3_realloc(azAdd, nNew*(int)sizeof(char*));
-          if( !azNew ){ rc = SQLITE_NOMEM; goto schema_merge_cleanup; }
-          azAdd = azNew;
-          nAddAlloc = nNew;
-        }
+        rc = DOLTLITE_GROW_ARRAY(&azAdd, &nAddAlloc, nAdd+1, 4);
+        if( rc!=SQLITE_OK ) goto schema_merge_cleanup;
         azAdd[nAdd] = sqlite3_mprintf("%s", aTheirs[i].zDef);
         nAdd++;
       }
