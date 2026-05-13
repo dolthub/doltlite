@@ -20,8 +20,20 @@ depends:
   - libdoltlite0 (= ${VERSION})
 
 contents:
+  # Ship sqlite3.h verbatim so existing C programs that
+  # `#include "sqlite3.h"` (including examples/quickstart.c) keep
+  # working after `apt install libdoltlite-dev`. doltlite.h is the
+  # same content under the project's preferred name.
+  - src: build/sqlite3.h
+    dst: /usr/include/sqlite3.h
+    file_info:
+      mode: 0644
   - src: build/sqlite3.h
     dst: /usr/include/doltlite.h
+    file_info:
+      mode: 0644
+  - src: src/doltlite_remotesrv.h
+    dst: /usr/include/doltlite_remotesrv.h
     file_info:
       mode: 0644
   - src: build/libdoltlite.a

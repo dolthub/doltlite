@@ -16,7 +16,14 @@ class Doltlite < Formula
       system "../configure"
       system "make", "doltlite", "doltlite-remotesrv", "doltlite-lib"
       bin.install "doltlite", "doltlite-remotesrv"
+      # Ship sqlite3.h verbatim so existing C programs that
+      # `#include "sqlite3.h"` (including examples/quickstart.c) just
+      # work after install. doltlite.h is the same content under the
+      # project's preferred name. doltlite_remotesrv.h declares the
+      # in-process remote-server API (doltliteServeAsync et al.).
+      include.install "sqlite3.h"
       include.install "sqlite3.h" => "doltlite.h"
+      include.install "#{buildpath}/src/doltlite_remotesrv.h"
       lib.install "libdoltlite.a"
       lib.install OS.mac? ? "libdoltlite.dylib" : "libdoltlite.so"
     end
@@ -25,5 +32,19 @@ class Doltlite < Formula
   test do
     assert_match version.to_s,
                  shell_output("#{bin}/doltlite :memory: 'SELECT dolt_version();'")
+    (testpath/"hello.c").write <<~EOS
+      #include <stdio.h>
+      #include "sqlite3.h"
+      int main(void) {
+        sqlite3 *db;
+        if (sqlite3_open(":memory:", &db) != SQLITE_OK) return 1;
+        sqlite3_close(db);
+        printf("ok\\n");
+        return 0;
+      }
+    EOS
+    system ENV.cc, "hello.c", "-I#{include}", "-L#{lib}", "-ldoltlite",
+                   "-o", "hello"
+    assert_equal "ok", shell_output("./hello").chomp
   end
 end
