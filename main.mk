@@ -1249,6 +1249,12 @@ sqlite3.h: $(MAKE_SANITY_CHECK) $(TOP)/src/sqlite.h.in \
 		$(TOP)/VERSION $(B.tclsh)
 	$(B.tclsh) $(TOP)/tool/mksqlite3h.tcl $(TOP) -o sqlite3.h
 
+# doltlite.h is the same content as sqlite3.h under our preferred name.
+# Generated alongside the SQLite header so source builds and installed
+# packages expose the same include path (#include "doltlite.h").
+doltlite.h: sqlite3.h
+	cp sqlite3.h doltlite.h
+
 sqlite3.c:	.target_source sqlite3.h $(TOP)/tool/mksqlite3c.tcl src-verify$(B.exe) \
 		$(B.tclsh) $(EXTRA_SRC)
 	$(B.tclsh) $(TOP)/tool/mksqlite3c.tcl $(AMALGAMATION_GEN_FLAGS) $(EXTRA_SRC)
@@ -2664,7 +2670,7 @@ libdoltlite$(T.dll):	$(LIBOBJS0)
 	$(T.link.shared) -o $@ $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
 		$(LDFLAGS.libdoltlite.os-specific) $(LDFLAGS.libdoltlite.soname)
 
-doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll)
+doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll) doltlite.h
 all: doltlite-lib
 
 #
