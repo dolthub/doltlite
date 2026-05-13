@@ -40,7 +40,6 @@ GATING=(
 #   cross_branch_test        crashes after 4 reported fails (SIGSEGV)
 #   corruption_test          crashes after 4 reported fails (SIGABRT/139)
 #   multi_process_test       1 failure then exits nonzero
-#   concurrent_stress_test   SIGSEGV very early
 #
 # These represent real, latent bugs that the CI suite was previously
 # hiding. They should be triaged and fixed one at a time, after which
@@ -52,7 +51,6 @@ EXPECTED_FAIL=(
   cross_branch_test
   corruption_test
   multi_process_test
-  concurrent_stress_test
 )
 
 run_one() {
