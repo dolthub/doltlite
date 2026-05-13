@@ -8,6 +8,7 @@
 #include "chunk_wal.h"
 #include "chunk_refs.h"
 #include "chunk_index.h"
+#include "chunk_staging.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443
 #define CHUNK_STORE_VERSION 11
@@ -96,32 +97,13 @@ struct ChunkStore {
   WalState wal;
   i64 iFileSize;
 
-  ChunkIndexEntry *aPending;
-  int nPending;
-  int nPendingAlloc;
-  ChunkIndexEntry *aRecent;
-  int nRecent;
-  int nRecentAlloc;
-  int *aRecentHT;
-  int *aRecentHTNext;
-  int nRecentHTBuilt;
-  int nRecentHTNextAlloc;
-  int nRecentHTSize;
-  int *aPendingHT;
-  int *aPendingHTNext;
-  int nPendingHTBuilt;
-  int nPendingHTNextAlloc;
-  int nPendingHTSize;
-  u8 *pWriteBuf;
-  i64 nWriteBuf;
-  i64 nWriteBufAlloc;
+  ChunkStaging staging;
 
   u8 readOnly;
   u8 isMemory;
   u8 snapshotPinned;
   u8 hasMovedChecked;
   int graphLockFd;
-  i64 nCommittedWriteBuf;
 };
 
 int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
