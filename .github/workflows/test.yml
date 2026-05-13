@@ -220,6 +220,35 @@ jobs:
           tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
           tkt-f3e5abed55
 
+  concurrency-stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    - name: Build concurrency stress
+      run: |
+        cd build
+        make concurrent_stress_test
+      timeout-minutes: 5
+
+    - name: Run concurrency stress
+      run: |
+        cd build
+        DOLTLITE_STRESS_SECONDS=480 ./concurrent_stress_test
+      timeout-minutes: 9
+
   crash-sqlite-test:
     runs-on: ubuntu-latest
     timeout-minutes: 30
