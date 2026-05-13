@@ -877,6 +877,112 @@ DELETE FROM dm WHERE id%10=0;
 SELECT count(*) FROM dm;
 "
 
+echo "--- FK actions ---"
+
+run_parity "fk_action_cascade_clean" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, pv INT, FOREIGN KEY(pv) REFERENCES parent(pk) ON DELETE CASCADE);
+INSERT INTO parent VALUES (1),(2),(3);
+INSERT INTO child VALUES (100,1),(101,1),(200,2);
+DELETE FROM parent WHERE pk=1;
+SELECT pk,pv FROM child ORDER BY pk;
+SELECT count(*) FROM parent;
+SELECT count(*) FROM child;
+"
+
+run_parity "fk_action_cascade_orphan" "
+PRAGMA foreign_keys=OFF;
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, pv INT, FOREIGN KEY(pv) REFERENCES parent(pk));
+INSERT INTO parent VALUES (1),(2);
+INSERT INTO child VALUES (300,1);
+DELETE FROM parent WHERE pk=1;
+PRAGMA foreign_key_check;
+SELECT pk FROM parent ORDER BY pk;
+SELECT pk,pv FROM child ORDER BY pk;
+"
+
+run_parity "fk_action_set_null_clean" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, pv INT, FOREIGN KEY(pv) REFERENCES parent(pk) ON DELETE SET NULL);
+INSERT INTO parent VALUES (1),(2);
+INSERT INTO child VALUES (100,1),(200,2),(300,2);
+DELETE FROM parent WHERE pk=1;
+SELECT pk, ifnull(pv,'NULL') FROM child ORDER BY pk;
+"
+
+run_parity "fk_action_update_cascade_clean" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, pv INT, FOREIGN KEY(pv) REFERENCES parent(pk) ON UPDATE CASCADE);
+INSERT INTO parent VALUES (1),(2);
+INSERT INTO child VALUES (100,1),(200,2),(300,2);
+UPDATE parent SET pk=10 WHERE pk=1;
+SELECT pk,pv FROM child ORDER BY pk;
+SELECT pk FROM parent ORDER BY pk;
+"
+
+run_parity "fk_action_no_action_explicit" "
+PRAGMA foreign_keys=OFF;
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, pv INT, FOREIGN KEY(pv) REFERENCES parent(pk) ON DELETE NO ACTION);
+INSERT INTO parent VALUES (1),(2);
+INSERT INTO child VALUES (300,1),(200,2);
+DELETE FROM parent WHERE pk=1;
+PRAGMA foreign_key_check;
+SELECT pk FROM parent ORDER BY pk;
+SELECT pk,pv FROM child ORDER BY pk;
+"
+
+run_parity "fk_action_multicolumn_cascade" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE parent(a INT, b INT, PRIMARY KEY(a,b));
+CREATE TABLE child(pk INTEGER PRIMARY KEY, ca INT, cb INT, FOREIGN KEY(ca,cb) REFERENCES parent(a,b) ON DELETE CASCADE);
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child VALUES (100,1,1),(200,2,2),(300,2,2);
+DELETE FROM parent WHERE a=1 AND b=1;
+SELECT pk,ca,cb FROM child ORDER BY pk;
+SELECT count(*) FROM parent;
+"
+
+run_parity "fk_action_multicolumn_set_null" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE parent(a INT, b INT, PRIMARY KEY(a,b));
+CREATE TABLE child(pk INTEGER PRIMARY KEY, ca INT, cb INT, FOREIGN KEY(ca,cb) REFERENCES parent(a,b) ON DELETE SET NULL);
+INSERT INTO parent VALUES (1,1),(2,2);
+INSERT INTO child VALUES (100,1,1),(200,2,2),(300,2,2);
+DELETE FROM parent WHERE a=1 AND b=1;
+SELECT pk, ifnull(ca,'NULL'), ifnull(cb,'NULL') FROM child ORDER BY pk;
+"
+
+run_parity "fk_action_update_divergent" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, pv INT, FOREIGN KEY(pv) REFERENCES parent(pk) ON UPDATE CASCADE ON DELETE CASCADE);
+INSERT INTO parent VALUES (1),(2);
+INSERT INTO child VALUES (100,1),(200,2);
+UPDATE parent SET pk=10 WHERE pk=1;
+SELECT pk,pv FROM child ORDER BY pk;
+UPDATE parent SET pk=20 WHERE pk=2;
+SELECT pk,pv FROM child ORDER BY pk;
+DELETE FROM parent WHERE pk=10;
+SELECT pk,pv FROM child ORDER BY pk;
+SELECT pk FROM parent ORDER BY pk;
+"
+
+run_parity "fk_action_set_default" "
+PRAGMA foreign_keys=ON;
+CREATE TABLE parent(pk INTEGER PRIMARY KEY);
+CREATE TABLE child(pk INTEGER PRIMARY KEY, pv INT DEFAULT 99, FOREIGN KEY(pv) REFERENCES parent(pk) ON DELETE SET DEFAULT);
+INSERT INTO parent VALUES (1),(2),(99);
+INSERT INTO child VALUES (100,1),(200,2),(300,2);
+DELETE FROM parent WHERE pk=1;
+SELECT pk,pv FROM child ORDER BY pk;
+SELECT pk FROM parent ORDER BY pk;
+"
+
 echo ""
 echo "======================================="
 echo "Results: $PASS passed, $FAIL failed, $SKIP skipped out of $((PASS+FAIL+SKIP)) tests"
