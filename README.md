@@ -825,7 +825,7 @@ invocation).
 
 ### Doltlite Shell Tests
 
-39 test suites covering all features:
+40 test suites covering all features:
 
 ```bash
 # Run all suites
