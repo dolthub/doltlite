@@ -74,12 +74,18 @@ def write_prepare_types(f):
 # Each test file: prepare + ".print BENCH_START" + workload + ".print BENCH_END"
 # The runner times between START and END markers
 
+def stable_seed(name):
+    h = 0
+    for ch in name:
+        h = ((h * 131) + ord(ch)) % 10000
+    return $SEED + h
+
 def make_test(name, prepare_fn, workload_fn):
     random.seed($SEED)  # Reset for deterministic prepare
     with open(f'{d}/{name}.sql', 'w') as f:
         prepare_fn(f)
         f.write(".print BENCH_START\n")
-        random.seed($SEED + hash(name) % 10000)  # Unique workload seed
+        random.seed(stable_seed(name))  # Unique deterministic workload seed
         workload_fn(f)
         f.write(".print BENCH_END\n")
 
