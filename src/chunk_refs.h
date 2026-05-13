@@ -93,4 +93,14 @@ void csFreeRefsState(struct ChunkStore *cs);
 void csAdoptRefsState(struct ChunkStore *pDst, struct ChunkStore *pSrc);
 int csEnsureDefaultBranch(struct ChunkStore *cs);
 
+void csFreeBranches(struct ChunkStore *cs);
+void csFreeTags(struct ChunkStore *cs);
+void csFreeRemotes(struct ChunkStore *cs);
+void csFreeTracking(struct ChunkStore *cs);
+void csMarkRefsCommitted(struct ChunkStore *cs);
+void csRestoreCommittedRefsHash(struct ChunkStore *cs);
+void csDetachSavedRefsState(struct ChunkStore *cs, SavedRefsState *pSaved);
+int csDeserializeRefs(struct ChunkStore *cs, const u8 *data, int nData);
+int csDeserializeRefsIntoTemp(struct ChunkStore *pTmp, const u8 *data, int nData);
+
 #endif
