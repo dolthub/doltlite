@@ -745,8 +745,10 @@ static void test_commit_then_corrupt(void){
     check("verify_good_12", sqlite3_open(dbpath, &db)==SQLITE_OK);
     check("good_count_12",
       strcmp(queryScalarText(db, "SELECT count(*) FROM t1"), "5")==0);
+    /* doltlite's dolt_log includes the auto-generated "Initialize data
+    ** repository" commit, so: genesis + first commit + second commit = 3. */
     check("good_log_12",
-      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "2")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "3")==0);
     sqlite3_close(db);
   }
 
