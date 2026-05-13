@@ -2469,7 +2469,7 @@ static void run_memory_chunk_lookup_corruption(void){
         chunkStoreCommit(&cs)==SQLITE_OK);
   check("have_committed_index_entry", cs.index.nIndex > 0);
   if( cs.index.nIndex > 0 ){
-    cs.index.aIndex[0].offset = cs.nWriteBuf + 100;
+    cs.index.aIndex[0].offset = cs.staging.nWriteBuf + 100;
   }
   rc = chunkStoreGet(&cs, &h, &pOut, &nOut);
   check("memory_lookup_corruption_returns_corrupt", rc==SQLITE_CORRUPT);
@@ -6311,7 +6311,7 @@ static void run_remotesrv_chunk_commit_failure_clears_pending(void){
     check("remotesrv_chunk_commit_rolls_back_pending_visibility",
           !hasChunk);
   }
-  check("remotesrv_chunk_commit_clears_pending_count", cs.nPending==0);
+  check("remotesrv_chunk_commit_clears_pending_count", cs.staging.nPending==0);
 
   gFailSyncOnce = 0;
   check("serialize_followup_refs_for_remotesrv_chunk_commit",

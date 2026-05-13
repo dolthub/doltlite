@@ -449,15 +449,15 @@ static void csRollbackReplayState(
     csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
   }
   csRestoreReplayState(cs, pSaved);
-  cs->nPending = nPendingBefore;
+  cs->staging.nPending = nPendingBefore;
   csPendHTClear(cs);
 }
 
 static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
-  sqlite3_free(pDst->aRecent);
-  pDst->aRecent = 0;
-  pDst->nRecent = 0;
-  pDst->nRecentAlloc = 0;
+  sqlite3_free(pDst->staging.aRecent);
+  pDst->staging.aRecent = 0;
+  pDst->staging.nRecent = 0;
+  pDst->staging.nRecentAlloc = 0;
   csRecentHTClear(pDst);
 
   pDst->pFile = pSrc->pFile;
@@ -592,7 +592,7 @@ static int csRestoreCommittedRefsState(ChunkStore *cs){
 
 static int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
   int rc;
-  int preserveRefs = cs->nPending > 0
+  int preserveRefs = cs->staging.nPending > 0
                   && prollyHashCompare(&cs->refs.refsHash,
                                        &cs->refs.committedRefsHash)!=0;
   ProllyHash savedRefsHash;
@@ -645,166 +645,166 @@ static u32 csPendBucket(const ProllyHash *h, int nHTMask){
 }
 
 static void csPendHTClear(ChunkStore *cs){
-  sqlite3_free(cs->aPendingHT);
-  sqlite3_free(cs->aPendingHTNext);
-  cs->aPendingHT = 0;
-  cs->aPendingHTNext = 0;
-  cs->nPendingHTBuilt = 0;
-  cs->nPendingHTSize = 0;
+  sqlite3_free(cs->staging.aPendingHT);
+  sqlite3_free(cs->staging.aPendingHTNext);
+  cs->staging.aPendingHT = 0;
+  cs->staging.aPendingHTNext = 0;
+  cs->staging.nPendingHTBuilt = 0;
+  cs->staging.nPendingHTSize = 0;
 }
 
 static void csRecentHTClear(ChunkStore *cs){
-  sqlite3_free(cs->aRecentHT);
-  sqlite3_free(cs->aRecentHTNext);
-  cs->aRecentHT = 0;
-  cs->aRecentHTNext = 0;
-  cs->nRecentHTBuilt = 0;
-  cs->nRecentHTSize = 0;
-  cs->nRecentHTNextAlloc = 0;
+  sqlite3_free(cs->staging.aRecentHT);
+  sqlite3_free(cs->staging.aRecentHTNext);
+  cs->staging.aRecentHT = 0;
+  cs->staging.aRecentHTNext = 0;
+  cs->staging.nRecentHTBuilt = 0;
+  cs->staging.nRecentHTSize = 0;
+  cs->staging.nRecentHTNextAlloc = 0;
 }
 
 static int csPendHTRebuild(ChunkStore *cs){
   int i;
-  memset(cs->aPendingHT, 0xff, cs->nPendingHTSize * sizeof(int));
-  for(i=0; i<cs->nPending; i++){
-    u32 b = csPendBucket(&cs->aPending[i].hash, cs->nPendingHTSize - 1);
-    cs->aPendingHTNext[i] = cs->aPendingHT[b];
-    cs->aPendingHT[b] = i;
+  memset(cs->staging.aPendingHT, 0xff, cs->staging.nPendingHTSize * sizeof(int));
+  for(i=0; i<cs->staging.nPending; i++){
+    u32 b = csPendBucket(&cs->staging.aPending[i].hash, cs->staging.nPendingHTSize - 1);
+    cs->staging.aPendingHTNext[i] = cs->staging.aPendingHT[b];
+    cs->staging.aPendingHT[b] = i;
   }
-  cs->nPendingHTBuilt = cs->nPending;
+  cs->staging.nPendingHTBuilt = cs->staging.nPending;
   return SQLITE_OK;
 }
 
 static int csPendHTEnsure(ChunkStore *cs){
   int i;
-  if( cs->nPending==0 ) return SQLITE_OK;
-  if( !cs->aPendingHT ){
+  if( cs->staging.nPending==0 ) return SQLITE_OK;
+  if( !cs->staging.aPendingHT ){
     int initSize = 1 << CS_PEND_HT_INIT_BITS;
-    cs->aPendingHT = sqlite3_malloc(initSize * (int)sizeof(int));
-    if( !cs->aPendingHT ) return SQLITE_NOMEM;
-    memset(cs->aPendingHT, 0xff, initSize * sizeof(int));
-    cs->nPendingHTSize = initSize;
-    cs->nPendingHTBuilt = 0;
+    cs->staging.aPendingHT = sqlite3_malloc(initSize * (int)sizeof(int));
+    if( !cs->staging.aPendingHT ) return SQLITE_NOMEM;
+    memset(cs->staging.aPendingHT, 0xff, initSize * sizeof(int));
+    cs->staging.nPendingHTSize = initSize;
+    cs->staging.nPendingHTBuilt = 0;
   }
-  if( cs->nPending > cs->nPendingHTSize * CS_PEND_HT_MAX_LOAD ){
-    int newSize = cs->nPendingHTSize * 4;
-    int *aNew = sqlite3_realloc(cs->aPendingHT, newSize * (int)sizeof(int));
+  if( cs->staging.nPending > cs->staging.nPendingHTSize * CS_PEND_HT_MAX_LOAD ){
+    int newSize = cs->staging.nPendingHTSize * 4;
+    int *aNew = sqlite3_realloc(cs->staging.aPendingHT, newSize * (int)sizeof(int));
     if( aNew ){
-      cs->aPendingHT = aNew;
-      cs->nPendingHTSize = newSize;
-      if( !cs->aPendingHTNext || cs->nPendingAlloc > cs->nPendingHTNextAlloc ){
-        int nAlloc = cs->nPendingAlloc > 0 ? cs->nPendingAlloc : 64;
-        int *aNew2 = sqlite3_realloc(cs->aPendingHTNext, nAlloc*(int)sizeof(int));
+      cs->staging.aPendingHT = aNew;
+      cs->staging.nPendingHTSize = newSize;
+      if( !cs->staging.aPendingHTNext || cs->staging.nPendingAlloc > cs->staging.nPendingHTNextAlloc ){
+        int nAlloc = cs->staging.nPendingAlloc > 0 ? cs->staging.nPendingAlloc : 64;
+        int *aNew2 = sqlite3_realloc(cs->staging.aPendingHTNext, nAlloc*(int)sizeof(int));
         if( !aNew2 ) return SQLITE_NOMEM;
-        cs->aPendingHTNext = aNew2;
-        cs->nPendingHTNextAlloc = nAlloc;
+        cs->staging.aPendingHTNext = aNew2;
+        cs->staging.nPendingHTNextAlloc = nAlloc;
       }
       return csPendHTRebuild(cs);
     }
 
   }
-  if( !cs->aPendingHTNext || cs->nPendingAlloc > cs->nPendingHTNextAlloc ){
-    int nAlloc = cs->nPendingAlloc > 0 ? cs->nPendingAlloc : 64;
-    int *aNew = sqlite3_realloc(cs->aPendingHTNext, nAlloc*(int)sizeof(int));
+  if( !cs->staging.aPendingHTNext || cs->staging.nPendingAlloc > cs->staging.nPendingHTNextAlloc ){
+    int nAlloc = cs->staging.nPendingAlloc > 0 ? cs->staging.nPendingAlloc : 64;
+    int *aNew = sqlite3_realloc(cs->staging.aPendingHTNext, nAlloc*(int)sizeof(int));
     if( !aNew ) return SQLITE_NOMEM;
-    cs->aPendingHTNext = aNew;
-    cs->nPendingHTNextAlloc = nAlloc;
+    cs->staging.aPendingHTNext = aNew;
+    cs->staging.nPendingHTNextAlloc = nAlloc;
   }
 
-  for(i=cs->nPendingHTBuilt; i<cs->nPending; i++){
-    u32 b = csPendBucket(&cs->aPending[i].hash, cs->nPendingHTSize - 1);
-    cs->aPendingHTNext[i] = cs->aPendingHT[b];
-    cs->aPendingHT[b] = i;
+  for(i=cs->staging.nPendingHTBuilt; i<cs->staging.nPending; i++){
+    u32 b = csPendBucket(&cs->staging.aPending[i].hash, cs->staging.nPendingHTSize - 1);
+    cs->staging.aPendingHTNext[i] = cs->staging.aPendingHT[b];
+    cs->staging.aPendingHT[b] = i;
   }
-  cs->nPendingHTBuilt = cs->nPending;
+  cs->staging.nPendingHTBuilt = cs->staging.nPending;
   return SQLITE_OK;
 }
 
 static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
   int i; u32 b; int rc;
   *pIdx = -1;
-  if( cs->nPending==0 ) return SQLITE_OK;
+  if( cs->staging.nPending==0 ) return SQLITE_OK;
   rc = csPendHTEnsure(cs);
   if( rc!=SQLITE_OK ){
 
-    for(i=0; i<cs->nPending; i++){
-      if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ){
+    for(i=0; i<cs->staging.nPending; i++){
+      if( prollyHashCompare(&cs->staging.aPending[i].hash, pHash)==0 ){
         *pIdx = i;
         return SQLITE_OK;
       }
     }
     return rc;
   }
-  b = csPendBucket(pHash, cs->nPendingHTSize - 1);
-  i = cs->aPendingHT[b];
+  b = csPendBucket(pHash, cs->staging.nPendingHTSize - 1);
+  i = cs->staging.aPendingHT[b];
   while( i>=0 ){
-    if( prollyHashCompare(&cs->aPending[i].hash, pHash)==0 ){
+    if( prollyHashCompare(&cs->staging.aPending[i].hash, pHash)==0 ){
       *pIdx = i;
       return SQLITE_OK;
     }
-    i = cs->aPendingHTNext[i];
+    i = cs->staging.aPendingHTNext[i];
   }
   return SQLITE_OK;
 }
 
 static int csRecentHTEnsure(ChunkStore *cs){
   int i;
-  if( cs->nRecent==0 ) return SQLITE_OK;
-  if( !cs->aRecentHT ){
+  if( cs->staging.nRecent==0 ) return SQLITE_OK;
+  if( !cs->staging.aRecentHT ){
     int initSize = 1 << CS_PEND_HT_INIT_BITS;
-    cs->aRecentHT = sqlite3_malloc(initSize * (int)sizeof(int));
-    if( !cs->aRecentHT ) return SQLITE_NOMEM;
-    memset(cs->aRecentHT, 0xff, initSize * sizeof(int));
-    cs->nRecentHTSize = initSize;
-    cs->nRecentHTBuilt = 0;
+    cs->staging.aRecentHT = sqlite3_malloc(initSize * (int)sizeof(int));
+    if( !cs->staging.aRecentHT ) return SQLITE_NOMEM;
+    memset(cs->staging.aRecentHT, 0xff, initSize * sizeof(int));
+    cs->staging.nRecentHTSize = initSize;
+    cs->staging.nRecentHTBuilt = 0;
   }
-  if( cs->nRecent > cs->nRecentHTSize * CS_PEND_HT_MAX_LOAD ){
-    int newSize = cs->nRecentHTSize * 4;
-    int *aNew = sqlite3_realloc(cs->aRecentHT, newSize * (int)sizeof(int));
+  if( cs->staging.nRecent > cs->staging.nRecentHTSize * CS_PEND_HT_MAX_LOAD ){
+    int newSize = cs->staging.nRecentHTSize * 4;
+    int *aNew = sqlite3_realloc(cs->staging.aRecentHT, newSize * (int)sizeof(int));
     if( !aNew ) return SQLITE_NOMEM;
-    cs->aRecentHT = aNew;
-    cs->nRecentHTSize = newSize;
-    memset(cs->aRecentHT, 0xff, cs->nRecentHTSize * sizeof(int));
-    cs->nRecentHTBuilt = 0;
+    cs->staging.aRecentHT = aNew;
+    cs->staging.nRecentHTSize = newSize;
+    memset(cs->staging.aRecentHT, 0xff, cs->staging.nRecentHTSize * sizeof(int));
+    cs->staging.nRecentHTBuilt = 0;
   }
-  if( !cs->aRecentHTNext || cs->nRecentAlloc > cs->nRecentHTNextAlloc ){
-    int nAlloc = cs->nRecentAlloc > 0 ? cs->nRecentAlloc : 64;
-    int *aNew = sqlite3_realloc(cs->aRecentHTNext, nAlloc*(int)sizeof(int));
+  if( !cs->staging.aRecentHTNext || cs->staging.nRecentAlloc > cs->staging.nRecentHTNextAlloc ){
+    int nAlloc = cs->staging.nRecentAlloc > 0 ? cs->staging.nRecentAlloc : 64;
+    int *aNew = sqlite3_realloc(cs->staging.aRecentHTNext, nAlloc*(int)sizeof(int));
     if( !aNew ) return SQLITE_NOMEM;
-    cs->aRecentHTNext = aNew;
-    cs->nRecentHTNextAlloc = nAlloc;
+    cs->staging.aRecentHTNext = aNew;
+    cs->staging.nRecentHTNextAlloc = nAlloc;
   }
-  for(i=cs->nRecentHTBuilt; i<cs->nRecent; i++){
-    u32 b = csPendBucket(&cs->aRecent[i].hash, cs->nRecentHTSize - 1);
-    cs->aRecentHTNext[i] = cs->aRecentHT[b];
-    cs->aRecentHT[b] = i;
+  for(i=cs->staging.nRecentHTBuilt; i<cs->staging.nRecent; i++){
+    u32 b = csPendBucket(&cs->staging.aRecent[i].hash, cs->staging.nRecentHTSize - 1);
+    cs->staging.aRecentHTNext[i] = cs->staging.aRecentHT[b];
+    cs->staging.aRecentHT[b] = i;
   }
-  cs->nRecentHTBuilt = cs->nRecent;
+  cs->staging.nRecentHTBuilt = cs->staging.nRecent;
   return SQLITE_OK;
 }
 
 static int csSearchRecent(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
   int i; u32 b; int rc;
   *pIdx = -1;
-  if( cs->nRecent==0 ) return SQLITE_OK;
+  if( cs->staging.nRecent==0 ) return SQLITE_OK;
   rc = csRecentHTEnsure(cs);
   if( rc!=SQLITE_OK ){
-    for(i=cs->nRecent-1; i>=0; i--){
-      if( prollyHashCompare(&cs->aRecent[i].hash, pHash)==0 ){
+    for(i=cs->staging.nRecent-1; i>=0; i--){
+      if( prollyHashCompare(&cs->staging.aRecent[i].hash, pHash)==0 ){
         *pIdx = i;
         return SQLITE_OK;
       }
     }
     return rc;
   }
-  b = csPendBucket(pHash, cs->nRecentHTSize - 1);
-  i = cs->aRecentHT[b];
+  b = csPendBucket(pHash, cs->staging.nRecentHTSize - 1);
+  i = cs->staging.aRecentHT[b];
   while( i>=0 ){
-    if( prollyHashCompare(&cs->aRecent[i].hash, pHash)==0 ){
+    if( prollyHashCompare(&cs->staging.aRecent[i].hash, pHash)==0 ){
       *pIdx = i;
       return SQLITE_OK;
     }
-    i = cs->aRecentHTNext[i];
+    i = cs->staging.aRecentHTNext[i];
   }
   return SQLITE_OK;
 }
@@ -959,38 +959,38 @@ static int csReadIndex(ChunkStore *cs){
 }
 
 static int csGrowPending(ChunkStore *cs){
-  if( cs->nPending >= cs->nPendingAlloc ){
-    int nNew = cs->nPendingAlloc ? cs->nPendingAlloc * 2 : CS_INIT_PENDING_ALLOC;
+  if( cs->staging.nPending >= cs->staging.nPendingAlloc ){
+    int nNew = cs->staging.nPendingAlloc ? cs->staging.nPendingAlloc * 2 : CS_INIT_PENDING_ALLOC;
     ChunkIndexEntry *aNew = (ChunkIndexEntry *)sqlite3_realloc(
-      cs->aPending, nNew * (int)sizeof(ChunkIndexEntry)
+      cs->staging.aPending, nNew * (int)sizeof(ChunkIndexEntry)
     );
     if( aNew == 0 ) return SQLITE_NOMEM;
-    cs->aPending = aNew;
-    cs->nPendingAlloc = nNew;
+    cs->staging.aPending = aNew;
+    cs->staging.nPendingAlloc = nNew;
   }
   return SQLITE_OK;
 }
 
 static int csGrowRecent(ChunkStore *cs, int nAdd){
-  int nNeed = cs->nRecent + nAdd;
-  if( nNeed > cs->nRecentAlloc ){
-    int nNew = cs->nRecentAlloc ? cs->nRecentAlloc * 2 : CS_INIT_PENDING_ALLOC;
+  int nNeed = cs->staging.nRecent + nAdd;
+  if( nNeed > cs->staging.nRecentAlloc ){
+    int nNew = cs->staging.nRecentAlloc ? cs->staging.nRecentAlloc * 2 : CS_INIT_PENDING_ALLOC;
     ChunkIndexEntry *aNew;
     while( nNew < nNeed ) nNew *= 2;
     aNew = (ChunkIndexEntry *)sqlite3_realloc(
-      cs->aRecent, nNew * (int)sizeof(ChunkIndexEntry)
+      cs->staging.aRecent, nNew * (int)sizeof(ChunkIndexEntry)
     );
     if( aNew == 0 ) return SQLITE_NOMEM;
-    cs->aRecent = aNew;
-    cs->nRecentAlloc = nNew;
+    cs->staging.aRecent = aNew;
+    cs->staging.nRecentAlloc = nNew;
   }
   return SQLITE_OK;
 }
 
 static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
-  i64 nRequired = cs->nWriteBuf + (i64)nNeeded;
-  if( nRequired > cs->nWriteBufAlloc ){
-    i64 nNew = cs->nWriteBufAlloc ? cs->nWriteBufAlloc : CS_INIT_WRITEBUF_SIZE;
+  i64 nRequired = cs->staging.nWriteBuf + (i64)nNeeded;
+  if( nRequired > cs->staging.nWriteBufAlloc ){
+    i64 nNew = cs->staging.nWriteBufAlloc ? cs->staging.nWriteBufAlloc : CS_INIT_WRITEBUF_SIZE;
     u8 *pNew;
 
     while( nNew < nRequired ){
@@ -1000,10 +1000,10 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
         nNew += nNew / 2;
       }
     }
-    pNew = (u8 *)sqlite3_realloc64(cs->pWriteBuf, (sqlite3_uint64)nNew);
+    pNew = (u8 *)sqlite3_realloc64(cs->staging.pWriteBuf, (sqlite3_uint64)nNew);
     if( pNew == 0 ) return SQLITE_NOMEM;
-    cs->pWriteBuf = pNew;
-    cs->nWriteBufAlloc = nNew;
+    cs->staging.pWriteBuf = pNew;
+    cs->staging.nWriteBufAlloc = nNew;
   }
   return SQLITE_OK;
 }
@@ -1012,8 +1012,8 @@ static int csReplayWal(ChunkStore *cs){
   i64 walSize;
   ChunkStoreReplayState saved;
   i64 pos;
-  int nPendingBefore = cs->nPending;
-  int nRootedPending = cs->nPending;
+  int nPendingBefore = cs->staging.nPending;
+  int nRootedPending = cs->staging.nPending;
   int nRootRecordsSeen = 0;
   ChunkStore tmpRefs;
   int haveTmpRefs = 0;
@@ -1072,11 +1072,11 @@ static int csReplayWal(ChunkStore *cs){
         if( existing < 0 ){
           rc = csGrowPending(cs);
           if( rc != SQLITE_OK ) goto replay_error;
-          e = &cs->aPending[cs->nPending];
+          e = &cs->staging.aPending[cs->staging.nPending];
           memcpy(&e->hash, &hash, sizeof(ProllyHash));
           e->offset = cs->wal.iWalOffset + (i64)(pos - 4);
           e->size = (int)len;
-          cs->nPending++;
+          cs->staging.nPending++;
         }
       }
       pos += len;
@@ -1100,7 +1100,7 @@ static int csReplayWal(ChunkStore *cs){
         memcpy(cs->refs.refsHash.data, m + 104, PROLLY_HASH_SIZE);
       }
       pos += CHUNK_MANIFEST_SIZE;
-      nRootedPending = cs->nPending;
+      nRootedPending = cs->staging.nPending;
       nRootRecordsSeen++;
 
     } else {
@@ -1109,7 +1109,7 @@ static int csReplayWal(ChunkStore *cs){
     }
   }
 
-  cs->nPending = nRootedPending;
+  cs->staging.nPending = nRootedPending;
 
   if( nRootRecordsSeen == 0
    && nPendingBefore == 0 && cs->index.nIndex == 0 ){
@@ -1117,7 +1117,7 @@ static int csReplayWal(ChunkStore *cs){
     cs->index.nChunks = 0;
   }
 
-  if( cs->nPending > 0 ){
+  if( cs->staging.nPending > 0 ){
     ChunkIndexEntry *aMerged = 0;
     int nMerged = 0;
     rc = csMergeIndex(cs, &aMerged, &nMerged);
@@ -1126,7 +1126,7 @@ static int csReplayWal(ChunkStore *cs){
     cs->index.nIndex = nMerged;
     cs->index.aIndexMmapBase = 0;
     cs->index.aIndexMmapSize = 0;
-    cs->nPending = 0;
+    cs->staging.nPending = 0;
     csPendHTClear(cs);
   }
 
@@ -1193,7 +1193,7 @@ static int csMergeIndex(
   ChunkIndexEntry **ppMerged,
   int *pnMerged
 ){
-  int nTotal = cs->index.nIndex + cs->nPending;
+  int nTotal = cs->index.nIndex + cs->staging.nPending;
   ChunkIndexEntry *aMerged;
   int idxPos, pendPos, outPos;
 
@@ -1206,16 +1206,16 @@ static int csMergeIndex(
   );
   if( aMerged == 0 ) return SQLITE_NOMEM;
 
-  if( cs->nPending > 1 ){
-    qsort(cs->aPending, cs->nPending, sizeof(ChunkIndexEntry),
+  if( cs->staging.nPending > 1 ){
+    qsort(cs->staging.aPending, cs->staging.nPending, sizeof(ChunkIndexEntry),
           csIndexEntryCmp);
   }
 
-  if( cs->nPending > 0 && cs->nPending <= 32 ){
+  if( cs->staging.nPending > 0 && cs->staging.nPending <= 32 ){
     idxPos = 0;
     outPos = 0;
-    for( pendPos = 0; pendPos < cs->nPending; pendPos++ ){
-      ChunkIndexEntry *pPending = &cs->aPending[pendPos];
+    for( pendPos = 0; pendPos < cs->staging.nPending; pendPos++ ){
+      ChunkIndexEntry *pPending = &cs->staging.aPending[pendPos];
       int found;
       int nCopy;
       int pos = csIndexLowerBound(cs->index.aIndex, cs->index.nIndex, idxPos,
@@ -1245,20 +1245,20 @@ static int csMergeIndex(
   idxPos = 0;
   pendPos = 0;
   outPos = 0;
-  while( idxPos < cs->index.nIndex && pendPos < cs->nPending ){
-    int cmp = prollyHashCompare(&cs->index.aIndex[idxPos].hash, &cs->aPending[pendPos].hash);
+  while( idxPos < cs->index.nIndex && pendPos < cs->staging.nPending ){
+    int cmp = prollyHashCompare(&cs->index.aIndex[idxPos].hash, &cs->staging.aPending[pendPos].hash);
     if( cmp < 0 ){
       aMerged[outPos++] = cs->index.aIndex[idxPos++];
     }else if( cmp > 0 ){
-      aMerged[outPos++] = cs->aPending[pendPos++];
+      aMerged[outPos++] = cs->staging.aPending[pendPos++];
     }else{
 
-      aMerged[outPos++] = cs->aPending[pendPos++];
+      aMerged[outPos++] = cs->staging.aPending[pendPos++];
       idxPos++;
     }
   }
   while( idxPos < cs->index.nIndex ) aMerged[outPos++] = cs->index.aIndex[idxPos++];
-  while( pendPos < cs->nPending ) aMerged[outPos++] = cs->aPending[pendPos++];
+  while( pendPos < cs->staging.nPending ) aMerged[outPos++] = cs->staging.aPending[pendPos++];
 
   *ppMerged = aMerged;
   *pnMerged = outPos;
@@ -1404,11 +1404,11 @@ int chunkStoreClose(ChunkStore *cs){
   cs->index.aIndex = 0;
   cs->index.aIndexMmapBase = 0;
   cs->index.aIndexMmapSize = 0;
-  sqlite3_free(cs->aPending);
-  sqlite3_free(cs->aRecent);
+  sqlite3_free(cs->staging.aPending);
+  sqlite3_free(cs->staging.aRecent);
   csPendHTClear(cs);
   csRecentHTClear(cs);
-  sqlite3_free(cs->pWriteBuf);
+  sqlite3_free(cs->staging.pWriteBuf);
   sqlite3_free(cs->refs.zDefaultBranch);
   csFreeBranches(cs);
   csFreeTags(cs);
@@ -2030,13 +2030,13 @@ int chunkStoreGet(
   rc = csSearchPending(cs, hash, &idx);
   if( rc!=SQLITE_OK ) return rc;
   if( idx >= 0 ){
-    ChunkIndexEntry *e = &cs->aPending[idx];
+    ChunkIndexEntry *e = &cs->staging.aPending[idx];
     i64 off = e->offset;
     int sz = e->size;
     u8 *pCopy = (u8 *)sqlite3_malloc(sz);
     if( pCopy == 0 ) return SQLITE_NOMEM;
 
-    memcpy(pCopy, cs->pWriteBuf + off + 4, sz);
+    memcpy(pCopy, cs->staging.pWriteBuf + off + 4, sz);
     *ppData = pCopy;
     *pnData = sz;
     return SQLITE_OK;
@@ -2047,7 +2047,7 @@ int chunkStoreGet(
     rc = csSearchRecent(cs, hash, &idx);
     if( rc!=SQLITE_OK ) return rc;
     if( idx >= 0 ){
-      e = &cs->aRecent[idx];
+      e = &cs->staging.aRecent[idx];
     }else{
       idx = csSearchIndex(cs->index.aIndex, cs->index.nIndex, hash);
       if( idx < 0 ){
@@ -2057,11 +2057,11 @@ int chunkStoreGet(
     }
 
     if( cs->pFile == 0 ){
-      if( cs->pWriteBuf && e->offset >= 0
-       && (e->offset + 4 + e->size) <= cs->nWriteBuf ){
+      if( cs->staging.pWriteBuf && e->offset >= 0
+       && (e->offset + 4 + e->size) <= cs->staging.nWriteBuf ){
         u8 *pCopy = (u8 *)sqlite3_malloc(e->size);
         if( pCopy == 0 ) return SQLITE_NOMEM;
-        memcpy(pCopy, cs->pWriteBuf + e->offset + 4, e->size);
+        memcpy(pCopy, cs->staging.pWriteBuf + e->offset + 4, e->size);
         *ppData = pCopy;
         *pnData = e->size;
         return SQLITE_OK;
@@ -2141,23 +2141,23 @@ int chunkStorePut(
   if( rc != SQLITE_OK ) return rc;
 
   {
-    ChunkIndexEntry *e = &cs->aPending[cs->nPending];
+    ChunkIndexEntry *e = &cs->staging.aPending[cs->staging.nPending];
     e->hash = h;
-    e->offset = (i64)cs->nWriteBuf;
+    e->offset = (i64)cs->staging.nWriteBuf;
     e->size = nData;
-    cs->nPending++;
+    cs->staging.nPending++;
   }
 
-  CS_WRITE_U32(cs->pWriteBuf + cs->nWriteBuf, (u32)nData);
-  cs->nWriteBuf += 4;
-  memcpy(cs->pWriteBuf + cs->nWriteBuf, pData, nData);
-  cs->nWriteBuf += nData;
+  CS_WRITE_U32(cs->staging.pWriteBuf + cs->staging.nWriteBuf, (u32)nData);
+  cs->staging.nWriteBuf += 4;
+  memcpy(cs->staging.pWriteBuf + cs->staging.nWriteBuf, pData, nData);
+  cs->staging.nWriteBuf += nData;
 
   return SQLITE_OK;
 }
 
 static int csCommitToMemory(ChunkStore *cs){
-  if( cs->nPending > 0 ){
+  if( cs->staging.nPending > 0 ){
     ChunkIndexEntry *aMem = 0;
     int nMem = 0;
     int rc = csMergeIndex(cs, &aMem, &nMem);
@@ -2167,9 +2167,9 @@ static int csCommitToMemory(ChunkStore *cs){
     cs->index.nIndex = nMem;
     cs->index.aIndexMmapBase = 0;
     cs->index.aIndexMmapSize = 0;
-    cs->nPending = 0;
+    cs->staging.nPending = 0;
     csPendHTClear(cs);
-    cs->nCommittedWriteBuf = cs->nWriteBuf;
+    cs->staging.nCommittedWriteBuf = cs->staging.nWriteBuf;
   }
   csMarkRefsCommitted(cs);
   return SQLITE_OK;
@@ -2229,13 +2229,13 @@ static int csCommitToFile(ChunkStore *cs){
   }
   origFileSize = fileSize;
 
-  if( cs->nPending > 0 ){
+  if( cs->staging.nPending > 0 ){
     ChunkStore mergeView;
     i64 filePos = fileSize > 0 ? fileSize : (i64)CHUNK_MANIFEST_SIZE;
     i64 appendBytes = 0;
 
-    for( i = 0; i < cs->nPending; i++ ){
-      i64 recBytes = (i64)25 + (i64)cs->aPending[i].size;
+    for( i = 0; i < cs->staging.nPending; i++ ){
+      i64 recBytes = (i64)25 + (i64)cs->staging.aPending[i].size;
       if( appendBytes > LARGEST_INT64 - recBytes ){
         rc = SQLITE_TOOBIG;
         goto commit_done;
@@ -2249,45 +2249,45 @@ static int csCommitToFile(ChunkStore *cs){
     newWalSize = cs->wal.nWalData + appendBytes;
 
     aCommittedPending = (ChunkIndexEntry*)sqlite3_malloc(
-      cs->nPending * (int)sizeof(ChunkIndexEntry)
+      cs->staging.nPending * (int)sizeof(ChunkIndexEntry)
     );
     if( !aCommittedPending ){
       rc = SQLITE_NOMEM;
       goto commit_done;
     }
 
-    for( i = 0; i < cs->nPending; i++ ){
-      ChunkIndexEntry *pSrc = &cs->aPending[i];
+    for( i = 0; i < cs->staging.nPending; i++ ){
+      ChunkIndexEntry *pSrc = &cs->staging.aPending[i];
       aCommittedPending[i] = *pSrc;
       aCommittedPending[i].offset = filePos + 21;
       filePos += (i64)25 + (i64)pSrc->size;
     }
 
     useRecent = !crashWriteActive
-             && cs->nPending <= 32 && cs->nRecent + cs->nPending <= 8192;
+             && cs->staging.nPending <= 32 && cs->staging.nRecent + cs->staging.nPending <= 8192;
     if( useRecent ){
-      rc = csGrowRecent(cs, cs->nPending);
+      rc = csGrowRecent(cs, cs->staging.nPending);
       if( rc!=SQLITE_OK ) goto commit_done;
     }else{
-      if( cs->nRecent > 0 ){
+      if( cs->staging.nRecent > 0 ){
         aMergePending = (ChunkIndexEntry*)sqlite3_malloc(
-          (cs->nRecent + cs->nPending) * (int)sizeof(ChunkIndexEntry)
+          (cs->staging.nRecent + cs->staging.nPending) * (int)sizeof(ChunkIndexEntry)
         );
         if( !aMergePending ){
           rc = SQLITE_NOMEM;
           goto commit_done;
         }
-        memcpy(aMergePending, cs->aRecent,
-               cs->nRecent * sizeof(ChunkIndexEntry));
-        memcpy(aMergePending + cs->nRecent, aCommittedPending,
-               cs->nPending * sizeof(ChunkIndexEntry));
+        memcpy(aMergePending, cs->staging.aRecent,
+               cs->staging.nRecent * sizeof(ChunkIndexEntry));
+        memcpy(aMergePending + cs->staging.nRecent, aCommittedPending,
+               cs->staging.nPending * sizeof(ChunkIndexEntry));
         mergeView = *cs;
-        mergeView.aPending = aMergePending;
-        mergeView.nPending = cs->nRecent + cs->nPending;
+        mergeView.staging.aPending = aMergePending;
+        mergeView.staging.nPending = cs->staging.nRecent + cs->staging.nPending;
       }else{
         mergeView = *cs;
-        mergeView.aPending = aCommittedPending;
-        mergeView.nPending = cs->nPending;
+        mergeView.staging.aPending = aCommittedPending;
+        mergeView.staging.nPending = cs->staging.nPending;
       }
       rc = csMergeIndex(&mergeView, &aMerged, &nMerged);
       if( rc!=SQLITE_OK ) goto commit_done;
@@ -2326,13 +2326,13 @@ static int csCommitToFile(ChunkStore *cs){
 
   /* Append chunks before the root record. Recovery ignores appended data until
   ** it finds a later valid root record that points at the new manifest. */
-  if( cs->nPending > 0 ){
+  if( cs->staging.nPending > 0 ){
     i64 walBytes = 0;
     u8 *pWalBatch = 0;
     u8 aSmallWalBatch[4096];
     u8 *pOut = 0;
-    for( i = 0; i < cs->nPending; i++ ){
-      walBytes += (i64)25 + (i64)cs->aPending[i].size;
+    for( i = 0; i < cs->staging.nPending; i++ ){
+      walBytes += (i64)25 + (i64)cs->staging.aPending[i].size;
     }
     if( !crashWriteActive && walBytes <= 64*1024 ){
       if( walBytes <= (i64)sizeof(aSmallWalBatch) ){
@@ -2345,14 +2345,14 @@ static int csCommitToFile(ChunkStore *cs){
         }
       }
       pOut = pWalBatch;
-      for( i = 0; i < cs->nPending; i++ ){
-        ChunkIndexEntry *pe = &cs->aPending[i];
+      for( i = 0; i < cs->staging.nPending; i++ ){
+        ChunkIndexEntry *pe = &cs->staging.aPending[i];
         i64 bufOff = pe->offset + 4;
         pOut[0] = CS_WAL_TAG_CHUNK;
         memcpy(pOut + 1, &pe->hash, 20);
         CS_WRITE_U32(pOut + 21, (u32)pe->size);
         pOut += 25;
-        memcpy(pOut, cs->pWriteBuf + bufOff, pe->size);
+        memcpy(pOut, cs->staging.pWriteBuf + bufOff, pe->size);
         pOut += pe->size;
       }
       CRASH_CHECK_WRITE();
@@ -2361,8 +2361,8 @@ static int csCommitToFile(ChunkStore *cs){
       if( rc != SQLITE_OK ) goto commit_done;
       writeOff += walBytes;
     }else{
-      for( i = 0; i < cs->nPending; i++ ){
-        ChunkIndexEntry *pe = &cs->aPending[i];
+      for( i = 0; i < cs->staging.nPending; i++ ){
+        ChunkIndexEntry *pe = &cs->staging.aPending[i];
         u8 recHdr[25];
         i64 bufOff;
         recHdr[0] = CS_WAL_TAG_CHUNK;
@@ -2376,7 +2376,7 @@ static int csCommitToFile(ChunkStore *cs){
         writeOff += 25;
 
         {
-          const u8 *pSrc = cs->pWriteBuf + bufOff;
+          const u8 *pSrc = cs->staging.pWriteBuf + bufOff;
           int remaining = pe->size;
           while( remaining > 0 && rc==SQLITE_OK ){
             int toWrite = remaining > 65536 ? 65536 : remaining;
@@ -2428,11 +2428,11 @@ commit_done:
     return rc;
   }
 
-  if( cs->nPending > 0 ){
+  if( cs->staging.nPending > 0 ){
     if( useRecent ){
-      memcpy(cs->aRecent + cs->nRecent, aCommittedPending,
-             cs->nPending * sizeof(ChunkIndexEntry));
-      cs->nRecent += cs->nPending;
+      memcpy(cs->staging.aRecent + cs->staging.nRecent, aCommittedPending,
+             cs->staging.nPending * sizeof(ChunkIndexEntry));
+      cs->staging.nRecent += cs->staging.nPending;
       sqlite3_free(aMerged);
     }else{
       csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
@@ -2440,7 +2440,7 @@ commit_done:
       cs->index.nIndex = nMerged;
       cs->index.aIndexMmapBase = 0;
       cs->index.aIndexMmapSize = 0;
-      cs->nRecent = 0;
+      cs->staging.nRecent = 0;
       csRecentHTClear(cs);
     }
     cs->wal.nWalData = newWalSize;
@@ -2450,11 +2450,11 @@ commit_done:
   sqlite3_free(aCommittedPending);
   sqlite3_free(aMergePending);
 
-  sqlite3_free(cs->pWriteBuf);
-  cs->pWriteBuf = 0;
-  cs->nWriteBuf = 0;
-  cs->nWriteBufAlloc = 0;
-  cs->nPending = 0;
+  sqlite3_free(cs->staging.pWriteBuf);
+  cs->staging.pWriteBuf = 0;
+  cs->staging.nWriteBuf = 0;
+  cs->staging.nWriteBufAlloc = 0;
+  cs->staging.nPending = 0;
   csPendHTClear(cs);
   csMarkRefsCommitted(cs);
 
@@ -2472,7 +2472,7 @@ int chunkStoreCommit(ChunkStore *cs){
   if( cs->readOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
   if( cs->graphLockFd < 0 && cs->zFilename ){
-    preserveRefs = cs->nPending > 0
+    preserveRefs = cs->staging.nPending > 0
                 && prollyHashCompare(&cs->refs.refsHash,
                                      &cs->refs.committedRefsHash)!=0;
     if( preserveRefs ){
@@ -2500,13 +2500,13 @@ int chunkStoreCommit(ChunkStore *cs){
 }
 
 void chunkStoreRollback(ChunkStore *cs){
-  cs->nPending = 0;
+  cs->staging.nPending = 0;
   csPendHTClear(cs);
   if( cs->isMemory ){
 
-    cs->nWriteBuf = cs->nCommittedWriteBuf;
+    cs->staging.nWriteBuf = cs->staging.nCommittedWriteBuf;
   }else{
-    cs->nWriteBuf = 0;
+    cs->staging.nWriteBuf = 0;
   }
   (void)csRestoreCommittedRefsState(cs);
 }

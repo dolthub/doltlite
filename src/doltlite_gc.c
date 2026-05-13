@@ -220,8 +220,12 @@ static int gcBuildCompactedData(
       if( prollyHashSetContains(marked, &aIdx[i].hash) ) kept++;
     }
   }
-  for(i=0; i<cs->nRecent; i++){
-    if( prollyHashSetContains(marked, &cs->aRecent[i].hash) ) kept++;
+  {
+    int nRec; const ChunkIndexEntry *aRec;
+    chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
+    for(i=0; i<nRec; i++){
+      if( prollyHashSetContains(marked, &aRec[i].hash) ) kept++;
+    }
   }
 
   aNewIndex = sqlite3_malloc((kept ? kept : 1) * (int)sizeof(ChunkIndexEntry));
@@ -240,13 +244,17 @@ static int gcBuildCompactedData(
       }
     }
   }
-  for(i=0; i<cs->nRecent; i++){
-    rc = gcAppendMarkedChunk(cs, &cs->aRecent[i].hash, marked, &buf, &nBuf,
-                             &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(aNewIndex);
-      sqlite3_free(buf);
-      return rc;
+  {
+    int nRec; const ChunkIndexEntry *aRec;
+    chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
+    for(i=0; i<nRec; i++){
+      rc = gcAppendMarkedChunk(cs, &aRec[i].hash, marked, &buf, &nBuf,
+                               &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(aNewIndex);
+        sqlite3_free(buf);
+        return rc;
+      }
     }
   }
 
@@ -474,18 +482,26 @@ static int gcSweep(
       }
     }
   }
-  for(i=0; i<cs->nPending; i++){
-    if( prollyHashSetContains(marked, &cs->aPending[i].hash) ){
-      kept++;
+  {
+    int nPend; const ChunkIndexEntry *aPend;
+    chunkStagingGetPending(&cs->staging, &nPend, &aPend);
+    for(i=0; i<nPend; i++){
+      if( prollyHashSetContains(marked, &aPend[i].hash) ){
+        kept++;
+      }
     }
   }
-  for(i=0; i<cs->nRecent; i++){
-    if( prollyHashSetContains(marked, &cs->aRecent[i].hash) ){
-      kept++;
+  {
+    int nRec; const ChunkIndexEntry *aRec;
+    chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
+    for(i=0; i<nRec; i++){
+      if( prollyHashSetContains(marked, &aRec[i].hash) ){
+        kept++;
+      }
     }
   }
 
-  if( removed==0 && cs->nRecent==0 ){
+  if( removed==0 && chunkStagingRecentCount(&cs->staging)==0 ){
     *pKept = kept;
     *pRemoved = 0;
     return SQLITE_OK;
@@ -504,16 +520,7 @@ static int gcSweep(
     walStateSetOffset(&cs->wal, CHUNK_MANIFEST_SIZE + nBuf + indexSize);
     aNewIndex = 0;
 
-    cs->nPending = 0;
-    cs->nRecent = 0;
-    sqlite3_free(cs->aRecentHT);
-    sqlite3_free(cs->aRecentHTNext);
-    cs->aRecentHT = 0;
-    cs->aRecentHTNext = 0;
-    cs->nRecentHTBuilt = 0;
-    cs->nRecentHTNextAlloc = 0;
-    cs->nRecentHTSize = 0;
-    cs->nWriteBuf = 0;
+    chunkStagingResetAfterSweep(&cs->staging);
   }
 
   sqlite3_free(aNewIndex);
