@@ -26,7 +26,7 @@ static void check(const char *name, int condition){
   }
 }
 
-static int execsql(sqlite3 *db, const char *sql){
+static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( err ) sqlite3_free(err);
@@ -34,7 +34,7 @@ static int execsql(sqlite3 *db, const char *sql){
 }
 
 /* Execute with busy retry */
-static int execsql_retry(sqlite3 *db, const char *sql, int maxRetries){
+static int execSqlWithRetry(sqlite3 *db, const char *sql, int maxRetries){
   char *err = 0;
   int rc;
   int attempts = 0;
@@ -54,7 +54,7 @@ static int execsql_retry(sqlite3 *db, const char *sql, int maxRetries){
 }
 
 static char result_buf[4096];
-static const char *exec1(sqlite3 *db, const char *sql){
+static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *s = 0;
   int rc;
   result_buf[0] = 0;
@@ -89,32 +89,32 @@ static void test_insert_conflict(void){
   remove(path);
 
   a = open_db(path);
-  execsql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
-  exec1(a, "SELECT dolt_commit('-A','-m','init')");
+  execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  queryScalarText(a, "SELECT dolt_commit('-A','-m','init')");
 
   b = open_db(path);
 
-  execsql(a, "BEGIN");
-  execsql(b, "BEGIN");
+  execSql(a, "BEGIN");
+  execSql(b, "BEGIN");
 
-  rc_a_ins = execsql(a, "INSERT INTO t VALUES(1, 'from_a')");
+  rc_a_ins = execSql(a, "INSERT INTO t VALUES(1, 'from_a')");
   check("insert_a_ok", rc_a_ins==SQLITE_OK);
 
   /* B's INSERT should get BUSY because A holds the write lock */
-  rc_b_ins = execsql(b, "INSERT INTO t VALUES(1, 'from_b')");
+  rc_b_ins = execSql(b, "INSERT INTO t VALUES(1, 'from_b')");
   check("insert_b_busy", rc_b_ins==SQLITE_BUSY);
 
-  execsql(a, "COMMIT");
+  execSql(a, "COMMIT");
 
   /* After A commits and releases the lock, B can retry */
-  rc_b_ins = execsql(b, "INSERT INTO t VALUES(1, 'from_b')");
+  rc_b_ins = execSql(b, "INSERT INTO t VALUES(1, 'from_b')");
   /* B's INSERT should fail with SQLITE_CONSTRAINT (PK already exists) */
   check("insert_b_constraint", rc_b_ins!=SQLITE_OK);
 
-  execsql(b, "ROLLBACK");
+  execSql(b, "ROLLBACK");
 
   check("insert_a_wins",
-    strcmp(exec1(a, "SELECT v FROM t WHERE id=1"), "from_a")==0);
+    strcmp(queryScalarText(a, "SELECT v FROM t WHERE id=1"), "from_a")==0);
 
   sqlite3_close(a);
   sqlite3_close(b);
@@ -134,28 +134,28 @@ static void test_update_conflict(void){
   remove(path);
 
   a = open_db(path);
-  execsql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
-  execsql(a, "INSERT INTO t VALUES(1, 'original')");
-  exec1(a, "SELECT dolt_commit('-A','-m','init')");
+  execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  execSql(a, "INSERT INTO t VALUES(1, 'original')");
+  queryScalarText(a, "SELECT dolt_commit('-A','-m','init')");
   sqlite3_close(a);
 
   a = open_db(path);
   b = open_db(path);
 
-  execsql(a, "BEGIN");
-  execsql(b, "BEGIN");
+  execSql(a, "BEGIN");
+  execSql(b, "BEGIN");
 
-  rc = execsql(a, "UPDATE t SET v='updated_a' WHERE id=1");
+  rc = execSql(a, "UPDATE t SET v='updated_a' WHERE id=1");
   check("update_a_ok", rc==SQLITE_OK);
 
-  rc = execsql(b, "UPDATE t SET v='updated_b' WHERE id=1");
+  rc = execSql(b, "UPDATE t SET v='updated_b' WHERE id=1");
   check("update_b_busy", rc==SQLITE_BUSY);
 
-  execsql(a, "COMMIT");
-  execsql(b, "ROLLBACK");
+  execSql(a, "COMMIT");
+  execSql(b, "ROLLBACK");
 
   check("update_a_wins",
-    strcmp(exec1(a, "SELECT v FROM t WHERE id=1"), "updated_a")==0);
+    strcmp(queryScalarText(a, "SELECT v FROM t WHERE id=1"), "updated_a")==0);
 
   sqlite3_close(a);
   sqlite3_close(b);
@@ -175,28 +175,28 @@ static void test_delete_update_conflict(void){
   remove(path);
 
   a = open_db(path);
-  execsql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
-  execsql(a, "INSERT INTO t VALUES(1, 'original')");
-  exec1(a, "SELECT dolt_commit('-A','-m','init')");
+  execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  execSql(a, "INSERT INTO t VALUES(1, 'original')");
+  queryScalarText(a, "SELECT dolt_commit('-A','-m','init')");
   sqlite3_close(a);
 
   a = open_db(path);
   b = open_db(path);
 
-  execsql(a, "BEGIN");
-  execsql(b, "BEGIN");
+  execSql(a, "BEGIN");
+  execSql(b, "BEGIN");
 
-  rc = execsql(a, "DELETE FROM t WHERE id=1");
+  rc = execSql(a, "DELETE FROM t WHERE id=1");
   check("delupd_a_ok", rc==SQLITE_OK);
 
-  rc = execsql(b, "UPDATE t SET v='updated_b' WHERE id=1");
+  rc = execSql(b, "UPDATE t SET v='updated_b' WHERE id=1");
   check("delupd_b_busy", rc==SQLITE_BUSY);
 
-  execsql(a, "COMMIT");
-  execsql(b, "ROLLBACK");
+  execSql(a, "COMMIT");
+  execSql(b, "ROLLBACK");
 
   check("delupd_row_gone",
-    strcmp(exec1(a, "SELECT count(*) FROM t WHERE id=1"), "0")==0);
+    strcmp(queryScalarText(a, "SELECT count(*) FROM t WHERE id=1"), "0")==0);
 
   sqlite3_close(a);
   sqlite3_close(b);
@@ -218,26 +218,26 @@ static void test_non_conflicting_inserts(void){
   a = open_db(path);
   b = open_db(path);
 
-  execsql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
-  exec1(a, "SELECT dolt_commit('-A','-m','init')");
+  execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  queryScalarText(a, "SELECT dolt_commit('-A','-m','init')");
 
   /* A inserts and commits first */
-  execsql(a, "BEGIN");
-  execsql(a, "INSERT INTO t VALUES(1, 'from_a')");
-  rc = execsql(a, "COMMIT");
+  execSql(a, "BEGIN");
+  execSql(a, "INSERT INTO t VALUES(1, 'from_a')");
+  rc = execSql(a, "COMMIT");
   check("noconflict_a_ok", rc==SQLITE_OK);
 
   /* B inserts different PK — should succeed now that A released */
-  execsql(b, "BEGIN");
-  rc = execsql(b, "INSERT INTO t VALUES(2, 'from_b')");
+  execSql(b, "BEGIN");
+  rc = execSql(b, "INSERT INTO t VALUES(2, 'from_b')");
   check("noconflict_b_insert_ok", rc==SQLITE_OK);
-  rc = execsql(b, "COMMIT");
+  rc = execSql(b, "COMMIT");
   check("noconflict_b_commit_ok", rc==SQLITE_OK);
 
   {
     sqlite3 *c = open_db(path);
     check("noconflict_both_exist",
-      strcmp(exec1(c, "SELECT count(*) FROM t"), "2")==0);
+      strcmp(queryScalarText(c, "SELECT count(*) FROM t"), "2")==0);
     sqlite3_close(c);
   }
 
@@ -260,25 +260,25 @@ static void test_sequential_transactions(void){
   a = open_db(path);
   b = open_db(path);
 
-  execsql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
-  exec1(a, "SELECT dolt_commit('-A','-m','init')");
+  execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  queryScalarText(a, "SELECT dolt_commit('-A','-m','init')");
 
-  execsql(a, "BEGIN");
-  execsql(a, "INSERT INTO t VALUES(1, 'from_a')");
-  rc = execsql(a, "COMMIT");
+  execSql(a, "BEGIN");
+  execSql(a, "INSERT INTO t VALUES(1, 'from_a')");
+  rc = execSql(a, "COMMIT");
   check("seq_a_ok", rc==SQLITE_OK);
 
-  execsql(b, "BEGIN");
-  rc = execsql(b, "INSERT INTO t VALUES(2, 'from_b')");
+  execSql(b, "BEGIN");
+  rc = execSql(b, "INSERT INTO t VALUES(2, 'from_b')");
   check("seq_b_insert_ok", rc==SQLITE_OK);
-  rc = execsql(b, "COMMIT");
+  rc = execSql(b, "COMMIT");
   check("seq_b_commit_ok", rc==SQLITE_OK);
 
   /* Reopen to see both commits */
   {
     sqlite3 *c = open_db(path);
     check("seq_count",
-      strcmp(exec1(c, "SELECT count(*) FROM t"), "2")==0);
+      strcmp(queryScalarText(c, "SELECT count(*) FROM t"), "2")==0);
     sqlite3_close(c);
   }
 
@@ -300,18 +300,18 @@ static void test_read_during_write(void){
   a = open_db(path);
   b = open_db(path);
 
-  execsql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
-  execsql(a, "INSERT INTO t VALUES(1, 'original')");
-  exec1(a, "SELECT dolt_commit('-A','-m','init')");
+  execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  execSql(a, "INSERT INTO t VALUES(1, 'original')");
+  queryScalarText(a, "SELECT dolt_commit('-A','-m','init')");
 
-  execsql(a, "BEGIN");
-  execsql(a, "INSERT INTO t VALUES(2, 'new_row')");
+  execSql(a, "BEGIN");
+  execSql(a, "INSERT INTO t VALUES(2, 'new_row')");
 
   /* B should still be able to read (read doesn't need write lock) */
   check("read_during_write",
-    strcmp(exec1(b, "SELECT count(*) FROM t"), "0")!=0);
+    strcmp(queryScalarText(b, "SELECT count(*) FROM t"), "0")!=0);
 
-  execsql(a, "COMMIT");
+  execSql(a, "COMMIT");
 
   sqlite3_close(a);
   sqlite3_close(b);
@@ -332,22 +332,22 @@ static void test_rollback_releases(void){
   a = open_db(path);
   b = open_db(path);
 
-  execsql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
-  exec1(a, "SELECT dolt_commit('-A','-m','init')");
+  execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  queryScalarText(a, "SELECT dolt_commit('-A','-m','init')");
 
-  execsql(a, "BEGIN");
-  execsql(a, "INSERT INTO t VALUES(1, 'will_rollback')");
-  execsql(a, "ROLLBACK");
+  execSql(a, "BEGIN");
+  execSql(a, "INSERT INTO t VALUES(1, 'will_rollback')");
+  execSql(a, "ROLLBACK");
 
   /* B should be able to acquire write lock now */
-  execsql(b, "BEGIN");
-  rc = execsql(b, "INSERT INTO t VALUES(1, 'from_b')");
+  execSql(b, "BEGIN");
+  rc = execSql(b, "INSERT INTO t VALUES(1, 'from_b')");
   check("rollback_b_insert_ok", rc==SQLITE_OK);
-  rc = execsql(b, "COMMIT");
+  rc = execSql(b, "COMMIT");
   check("rollback_b_commit_ok", rc==SQLITE_OK);
 
   check("rollback_b_value",
-    strcmp(exec1(b, "SELECT v FROM t WHERE id=1"), "from_b")==0);
+    strcmp(queryScalarText(b, "SELECT v FROM t WHERE id=1"), "from_b")==0);
 
   sqlite3_close(a);
   sqlite3_close(b);
@@ -368,23 +368,23 @@ static void test_busy_retry(void){
   a = open_db(path);
   b = open_db(path);
 
-  execsql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
-  exec1(a, "SELECT dolt_commit('-A','-m','init')");
+  execSql(a, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  queryScalarText(a, "SELECT dolt_commit('-A','-m','init')");
 
-  execsql(a, "BEGIN");
-  execsql(a, "INSERT INTO t VALUES(1, 'from_a')");
+  execSql(a, "BEGIN");
+  execSql(a, "INSERT INTO t VALUES(1, 'from_a')");
 
   /* B's INSERT will get BUSY, but busy_timeout should wait */
   /* Since A hasn't committed yet, B will timeout. Use short timeout. */
   sqlite3_busy_timeout(b, 100);
-  rc = execsql(b, "INSERT INTO t VALUES(2, 'from_b')");
+  rc = execSql(b, "INSERT INTO t VALUES(2, 'from_b')");
   check("retry_b_busy_timeout", rc==SQLITE_BUSY);
 
   /* Now A commits */
-  execsql(a, "COMMIT");
+  execSql(a, "COMMIT");
 
   /* B can now retry and succeed */
-  rc = execsql_retry(b, "INSERT INTO t VALUES(2, 'from_b')", 50);
+  rc = execSqlWithRetry(b, "INSERT INTO t VALUES(2, 'from_b')", 50);
   check("retry_b_succeeds_after", rc==SQLITE_OK);
 
   sqlite3_close(a);

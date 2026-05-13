@@ -35,4 +35,8 @@ DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal);
 
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl);
 
+#ifndef _WIN32
+int doltliteWriteAll(int fd, const void *pBuf, int nBuf);
+#endif
+
 #endif

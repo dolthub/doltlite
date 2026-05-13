@@ -11,7 +11,7 @@ static int failed = 0;
   else { printf("FAIL: %s\n", label); failed++; } \
 } while(0)
 
-static int exec_int(sqlite3 *db, const char *sql, int dflt){
+static int queryScalarInt(sqlite3 *db, const char *sql, int dflt){
   sqlite3_stmt *stmt;
   int val = dflt;
   if( sqlite3_prepare_v2(db, sql, -1, &stmt, 0)==SQLITE_OK ){
@@ -117,9 +117,9 @@ static void test_concurrent_readers(const char *path){
   exec_ok(db2, "BEGIN");
   exec_ok(db3, "BEGIN");
 
-  v1 = exec_int(db1, "SELECT count(*) FROM t", -1);
-  v2 = exec_int(db2, "SELECT count(*) FROM t", -1);
-  v3 = exec_int(db3, "SELECT count(*) FROM t", -1);
+  v1 = queryScalarInt(db1, "SELECT count(*) FROM t", -1);
+  v2 = queryScalarInt(db2, "SELECT count(*) FROM t", -1);
+  v3 = queryScalarInt(db3, "SELECT count(*) FROM t", -1);
 
   CHECK("concurrent_readers: all three see same count", v1==v2 && v2==v3 && v1>=3);
 
@@ -140,7 +140,7 @@ static void test_reader_no_block_writer(const char *path){
   sqlite3_open(path, &dbW);
 
   exec_ok(dbR, "BEGIN");
-  exec_int(dbR, "SELECT count(*) FROM t", -1);
+  queryScalarInt(dbR, "SELECT count(*) FROM t", -1);
 
   exec_ok(dbW, "INSERT INTO t VALUES(100, 'new')");
   rc = exec_ok(dbW, "SELECT dolt_commit('-am', 'add 100')");
@@ -165,7 +165,7 @@ static void test_writer_no_block_reader(const char *path){
   exec_ok(dbW, "INSERT INTO t VALUES(200, 'wip')");
 
   exec_ok(dbR, "BEGIN");
-  int cnt = exec_int(dbR, "SELECT count(*) FROM t", -1);
+  int cnt = queryScalarInt(dbR, "SELECT count(*) FROM t", -1);
   CHECK("writer_no_block_reader: reader succeeds while writer has pending changes",
         cnt >= 3);
   exec_ok(dbR, "COMMIT");
@@ -184,12 +184,12 @@ static void test_snapshot_consistency(const char *path){
   sqlite3_open(path, &dbB);
 
   exec_ok(dbA, "BEGIN");
-  int cnt1 = exec_int(dbA, "SELECT count(*) FROM t", -1);
+  int cnt1 = queryScalarInt(dbA, "SELECT count(*) FROM t", -1);
 
   exec_ok(dbB, "INSERT INTO t VALUES(300, 'added')");
   exec_ok(dbB, "SELECT dolt_commit('-am', 'add 300')");
 
-  int cnt2 = exec_int(dbA, "SELECT count(*) FROM t", -1);
+  int cnt2 = queryScalarInt(dbA, "SELECT count(*) FROM t", -1);
   CHECK("snapshot_consistency: count stable across concurrent commit",
         cnt1==cnt2);
 
@@ -220,7 +220,7 @@ static void test_checkpoint(const char *path){
   rc = exec_ok(db, "PRAGMA wal_checkpoint(TRUNCATE)");
   CHECK("checkpoint: PRAGMA wal_checkpoint succeeds", rc==SQLITE_OK);
 
-  int cnt = exec_int(db, "SELECT count(*) FROM t WHERE id>=400", -1);
+  int cnt = queryScalarInt(db, "SELECT count(*) FROM t WHERE id>=400", -1);
   CHECK("checkpoint: data preserved after checkpoint", cnt==2);
 
   exec_ok(db, "DELETE FROM t WHERE id>=400");
@@ -239,7 +239,7 @@ static void test_post_checkpoint_read(const char *path){
   exec_ok(db1, "PRAGMA wal_checkpoint(TRUNCATE)");
 
   sqlite3_open(path, &db2);
-  int cnt = exec_int(db2, "SELECT count(*) FROM t WHERE id=500", -1);
+  int cnt = queryScalarInt(db2, "SELECT count(*) FROM t WHERE id=500", -1);
   CHECK("post_checkpoint_read: new connection sees data after checkpoint", cnt==1);
 
   exec_ok(db1, "DELETE FROM t WHERE id=500");
@@ -255,10 +255,10 @@ static void test_snapshot_large(const char *path){
   sqlite3_open(path, &dbA);
   sqlite3_open(path, &dbB);
 
-  int cnt_before = exec_int(dbA, "SELECT count(*) FROM t", -1);
+  int cnt_before = queryScalarInt(dbA, "SELECT count(*) FROM t", -1);
 
   exec_ok(dbA, "BEGIN");
-  int cnt_a1 = exec_int(dbA, "SELECT count(*) FROM t", -1);
+  int cnt_a1 = queryScalarInt(dbA, "SELECT count(*) FROM t", -1);
 
   exec_ok(dbB, "BEGIN");
   {
@@ -273,13 +273,13 @@ static void test_snapshot_large(const char *path){
   exec_ok(dbB, "COMMIT");
   exec_ok(dbB, "SELECT dolt_commit('-am', 'bulk insert')");
 
-  int cnt_a2 = exec_int(dbA, "SELECT count(*) FROM t", -1);
+  int cnt_a2 = queryScalarInt(dbA, "SELECT count(*) FROM t", -1);
   CHECK("snapshot_large: 100-row insert invisible to snapshot reader",
         cnt_a1==cnt_a2);
 
   exec_ok(dbA, "COMMIT");
 
-  int cnt_a3 = exec_int(dbA, "SELECT count(*) FROM t", -1);
+  int cnt_a3 = queryScalarInt(dbA, "SELECT count(*) FROM t", -1);
   CHECK("snapshot_large: new transaction sees bulk insert",
         cnt_a3 == cnt_before + 100);
 

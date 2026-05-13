@@ -45,6 +45,54 @@ static u8 *copyBlob(const u8 *p, int n){
   return c;
 }
 
+/*
+** Encode a C string as a single-column SQLite record holding a TEXT
+** value. The prolly engine expects record-encoded values (header +
+** serial-type stream + payload) -- raw bytes shorter than 2 bytes
+** trip a strict-record sanity check in prollyValuesEqual and surface
+** as SQLITE_CORRUPT, so all inserted values must be encoded this way.
+**
+** Records produced here use a 2-byte header (matches doltlite/SQLite
+** serial-type encoding for a single TEXT column with length < 64).
+** Returns a malloc'd buffer; caller frees with sqlite3_free.
+*/
+static u8 *encodeTextRecord(const char *zText, int *pnRec){
+  int nText = (int)strlen(zText);
+  int serialType = nText*2 + 13;     /* TEXT serial type for length nText */
+  int nRec;
+  u8 *pRec;
+
+  /* For nText up to ~25, serialType fits in 1 varint byte (<0x80) and the
+  ** header is 2 bytes: [headerSize=2][serialType]. We assert that here. */
+  if( serialType >= 0x80 ){
+    fprintf(stderr, "encodeTextRecord: text too long (%d)\n", nText);
+    *pnRec = 0;
+    return 0;
+  }
+
+  nRec = 2 + nText;
+  pRec = (u8*)sqlite3_malloc(nRec);
+  if( !pRec ){ *pnRec = 0; return 0; }
+  pRec[0] = 2;                       /* header size varint = 2 */
+  pRec[1] = (u8)serialType;
+  if( nText>0 ) memcpy(pRec + 2, zText, nText);
+  *pnRec = nRec;
+  return pRec;
+}
+
+/*
+** Predicate: does a record-encoded value (as produced by
+** encodeTextRecord) carry the given text payload?
+*/
+static int recordHasText(const u8 *pRec, int nRec, const char *zText){
+  int nText = (int)strlen(zText);
+  if( pRec==0 ) return 0;
+  if( nRec != nText + 2 ) return 0;
+  if( pRec[0] != 2 ) return 0;
+  if( pRec[1] != (u8)(nText*2 + 13) ) return 0;
+  return nText==0 || memcmp(pRec+2, zText, nText)==0;
+}
+
 static int collectCallback(void *pCtx, const ThreeWayChange *pChange){
   ThreeWayChange *dst;
   (void)pCtx;
@@ -76,16 +124,26 @@ static void resetChanges(void){
 
 /*
 ** Helper: insert an integer-keyed row into a tree, return new root.
+** The string value is encoded as a SQLite single-column TEXT record so
+** that the engine's record-validating value comparator (prollyValuesEqual)
+** accepts it -- a raw 1-byte value like "a" trips a strict-record check
+** and surfaces as SQLITE_CORRUPT inside prollyThreeWayDiff.
 */
 static int treeInsertInt(
   ChunkStore *cs, ProllyCache *cache,
   const ProllyHash *pRoot, i64 key,
   const char *val, ProllyHash *pNewRoot
 ){
-  return prollyMutateInsert(cs, cache, pRoot, PROLLY_NODE_INTKEY,
-                            0, 0, key,
-                            (const u8*)val, (int)strlen(val),
-                            pNewRoot);
+  int nRec = 0;
+  u8 *pRec = encodeTextRecord(val, &nRec);
+  int rc;
+  if( !pRec ) return SQLITE_NOMEM;
+  rc = prollyMutateInsert(cs, cache, pRoot, PROLLY_NODE_INTKEY,
+                          0, 0, key,
+                          pRec, nRec,
+                          pNewRoot);
+  sqlite3_free(pRec);
+  return rc;
 }
 
 /*
@@ -217,7 +275,7 @@ static void test_left_add(void){
     check("left_add: type LEFT_ADD", aChanges[0].type==THREE_WAY_LEFT_ADD);
     check("left_add: key 2", aChanges[0].intKey==2);
     check("left_add: val 'added'",
-          aChanges[0].nOurVal==5 && memcmp(aChanges[0].pOurVal,"added",5)==0);
+          recordHasText(aChanges[0].pOurVal, aChanges[0].nOurVal, "added"));
   }
 
   closeTestStore(&cs, &cache, path);
@@ -375,9 +433,9 @@ static void test_left_modify(void){
           aChanges[0].type==THREE_WAY_LEFT_MODIFY);
     check("left_modify: key 1", aChanges[0].intKey==1);
     check("left_modify: base val 'original'",
-          aChanges[0].nBaseVal==8 && memcmp(aChanges[0].pBaseVal,"original",8)==0);
+          recordHasText(aChanges[0].pBaseVal, aChanges[0].nBaseVal, "original"));
     check("left_modify: our val 'modified'",
-          aChanges[0].nOurVal==8 && memcmp(aChanges[0].pOurVal,"modified",8)==0);
+          recordHasText(aChanges[0].pOurVal, aChanges[0].nOurVal, "modified"));
   }
 
   closeTestStore(&cs, &cache, path);
@@ -590,9 +648,9 @@ static void test_conflict_mm(void){
           aChanges[0].type==THREE_WAY_CONFLICT_MM);
     check("conflict_mm: key 1", aChanges[0].intKey==1);
     check("conflict_mm: our val 'ours-val'",
-          aChanges[0].nOurVal==8 && memcmp(aChanges[0].pOurVal,"ours-val",8)==0);
+          recordHasText(aChanges[0].pOurVal, aChanges[0].nOurVal, "ours-val"));
     check("conflict_mm: their val 'theirs-val'",
-          aChanges[0].nTheirVal==10 && memcmp(aChanges[0].pTheirVal,"theirs-val",10)==0);
+          recordHasText(aChanges[0].pTheirVal, aChanges[0].nTheirVal, "theirs-val"));
   }
 
   closeTestStore(&cs, &cache, path);

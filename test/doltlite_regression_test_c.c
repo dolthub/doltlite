@@ -49,7 +49,7 @@ static void check(const char *name, int condition){
   }
 }
 
-static const char *exec1(sqlite3 *db, const char *sql){
+static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
   int rc;
   gBuf[0] = 0;
@@ -69,7 +69,7 @@ static const char *exec1(sqlite3 *db, const char *sql){
   return gBuf;
 }
 
-static int execsql(sqlite3 *db, const char *sql){
+static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( rc!=SQLITE_OK ){
@@ -80,7 +80,7 @@ static int execsql(sqlite3 *db, const char *sql){
   return rc;
 }
 
-static int execsql_silent(sqlite3 *db, const char *sql){
+static int execSqlSilent(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   sqlite3_free(err);
@@ -133,17 +133,17 @@ static void capture_repo_state_snapshot(sqlite3 *db, RepoStateSnapshot *p){
   const char *zOrigBranch = 0;
   memset(p, 0, sizeof(*p));
   sqlite3_snprintf(sizeof(p->zBranch), p->zBranch, "%s",
-                   exec1(db, "SELECT active_branch()"));
+                   queryScalarText(db, "SELECT active_branch()"));
   sqlite3_snprintf(sizeof(p->zHead), p->zHead, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
   sqlite3_snprintf(sizeof(p->zStatusCount), p->zStatusCount, "%s",
-                   exec1(db, "SELECT count(*) FROM dolt_status"));
+                   queryScalarText(db, "SELECT count(*) FROM dolt_status"));
   sqlite3_snprintf(sizeof(p->zConflictsCount), p->zConflictsCount, "%s",
-                   exec1(db, "SELECT count(*) FROM dolt_conflicts"));
+                   queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"));
   sqlite3_snprintf(sizeof(p->zRemotesCount), p->zRemotesCount, "%s",
-                   exec1(db, "SELECT count(*) FROM dolt_remotes"));
+                   queryScalarText(db, "SELECT count(*) FROM dolt_remotes"));
   sqlite3_snprintf(sizeof(p->zRebasePlanCount), p->zRebasePlanCount, "%s",
-                   exec1(db, "SELECT count(*) FROM sqlite_master "
+                   queryScalarText(db, "SELECT count(*) FROM sqlite_master "
                              "WHERE type='table' AND name='dolt_rebase'"));
   doltliteGetSessionMergeState(db, &p->isMerging, &p->mergeHash, &p->conflictsHash);
   doltliteGetSessionRebaseState(db, &p->isRebasing, 0, &p->rebaseOntoHash, &zOrigBranch, 0);
@@ -171,7 +171,7 @@ static void make_dbpath(char *zBuf, size_t nBuf, const char *zBase){
   snprintf(zBuf, nBuf, "/tmp/%s_%ld.db", zBase, (long)getpid());
 }
 
-static void remove_db(const char *path){
+static void removeDbFiles(const char *path){
   char tmp[512];
   remove(path);
   snprintf(tmp, sizeof(tmp), "%s-wal", path);
@@ -180,6 +180,35 @@ static void remove_db(const char *path){
   remove(tmp);
   snprintf(tmp, sizeof(tmp), "%s-journal", path);
   remove(tmp);
+}
+
+static void checkBranchState(
+  sqlite3 *db,
+  const char *zPrefix,
+  const char *zActiveBranch,
+  const char *zBranchCount,
+  const char *zNamedBranch,
+  const char *zNamedBranchCount
+){
+  char zCheck[128];
+  char zSql[160];
+
+  sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_active_branch", zPrefix);
+  check(zCheck,
+        strcmp(queryScalarText(db, "SELECT active_branch()"), zActiveBranch)==0);
+
+  sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_branch_count", zPrefix);
+  check(zCheck,
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"),
+               zBranchCount)==0);
+
+  if( zNamedBranch ){
+    sqlite3_snprintf(sizeof(zSql), zSql,
+                     "SELECT count(*) FROM dolt_branches WHERE name='%q'",
+                     zNamedBranch);
+    sqlite3_snprintf(sizeof(zCheck), zCheck, "%s_named_branch", zPrefix);
+    check(zCheck, strcmp(queryScalarText(db, zSql), zNamedBranchCount)==0);
+  }
 }
 
 static void make_prolly_blob_key(int iKey, u8 *aBuf, int nBuf){
@@ -420,26 +449,26 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
 
   printf("--- Test 1: stale dolt_reset is rejected ---\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_concurrent_refs_reset");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db1", open_db(dbpath, &db1)==SQLITE_OK);
-  check("setup_schema", execsql(db1,
+  check("setup_schema", execSql(db1,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
 
   snprintf(firstCommit, sizeof(firstCommit), "%s",
-           exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')"));
+           queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')"));
   check("first_commit_hash", strlen(firstCommit)==40);
   check("open_db2", open_db(dbpath, &db2)==SQLITE_OK);
 
   check("insert_second_row",
-    execsql(db1, "INSERT INTO t VALUES(2,'b')")==SQLITE_OK);
+    execSql(db1, "INSERT INTO t VALUES(2,'b')")==SQLITE_OK);
   snprintf(secondCommit, sizeof(secondCommit), "%s",
-           exec1(db1, "SELECT dolt_commit('-A', '-m', 'second')"));
+           queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'second')"));
   check("second_commit_hash", strlen(secondCommit)==40);
 
   snprintf(sql, sizeof(sql), "SELECT dolt_reset('%s')", firstCommit);
-  exec1(db2, sql);
+  queryScalarText(db2, sql);
   check("stale_reset_is_rejected",
     strstr(gBuf, "ERROR")!=0 || strstr(gBuf, "conflict")!=0);
 
@@ -448,16 +477,16 @@ static void test_concurrent_refs_stale_reset_is_rejected(void){
 
   check("open_db3", open_db(dbpath, &db3)==SQLITE_OK);
   check("newer_commit_still_head",
-    strcmp(exec1(db3, "SELECT message FROM dolt_log LIMIT 1"), "second")==0);
+    strcmp(queryScalarText(db3, "SELECT message FROM dolt_log LIMIT 1"), "second")==0);
   snprintf(sql, sizeof(sql),
            "SELECT count(*) FROM dolt_log WHERE commit_hash='%s'", secondCommit);
   check("newer_commit_still_visible_in_log",
-    strcmp(exec1(db3, sql), "1")==0);
+    strcmp(queryScalarText(db3, sql), "1")==0);
   check("branch_history_has_both_commits",
-    strcmp(exec1(db3, "SELECT count(*) FROM dolt_log"), "3")==0);
+    strcmp(queryScalarText(db3, "SELECT count(*) FROM dolt_log"), "3")==0);
 
   sqlite3_close(db3);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void test_concurrent_refs_checkout_refreshes_branch(void){
@@ -466,34 +495,34 @@ static void test_concurrent_refs_checkout_refreshes_branch(void){
 
   printf("--- Test 2: stale dolt_checkout refreshes target branch ---\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_concurrent_refs_checkout");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("checkout_open_db1", open_db(dbpath, &db1)==SQLITE_OK);
-  check("checkout_setup_schema", execsql(db1,
+  check("checkout_setup_schema", execSql(db1,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
   check("checkout_init_commit",
-    strlen(exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')"))==40);
+    strlen(queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')"))==40);
   check("checkout_create_branch",
-    strcmp(exec1(db1, "SELECT dolt_branch('feature')"), "0")==0);
+    strcmp(queryScalarText(db1, "SELECT dolt_branch('feature')"), "0")==0);
   check("checkout_open_db2", open_db(dbpath, &db2)==SQLITE_OK);
   check("checkout_switch_db1_feature",
-    strcmp(exec1(db1, "SELECT dolt_checkout('feature')"), "0")==0);
+    strcmp(queryScalarText(db1, "SELECT dolt_checkout('feature')"), "0")==0);
   check("checkout_feature_insert",
-    execsql(db1, "INSERT INTO t VALUES(2,'feature')")==SQLITE_OK);
+    execSql(db1, "INSERT INTO t VALUES(2,'feature')")==SQLITE_OK);
   check("checkout_feature_commit",
-    strlen(exec1(db1, "SELECT dolt_commit('-A', '-m', 'feature update')"))==40);
+    strlen(queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'feature update')"))==40);
 
   check("checkout_stale_connection_switches",
-    strcmp(exec1(db2, "SELECT dolt_checkout('feature')"), "0")==0);
+    strcmp(queryScalarText(db2, "SELECT dolt_checkout('feature')"), "0")==0);
   check("checkout_latest_branch_tip_visible",
-    strcmp(exec1(db2, "SELECT message FROM dolt_log LIMIT 1"), "feature update")==0);
+    strcmp(queryScalarText(db2, "SELECT message FROM dolt_log LIMIT 1"), "feature update")==0);
   check("checkout_latest_branch_data_visible",
-    strcmp(exec1(db2, "SELECT count(*) FROM t"), "2")==0);
+    strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "2")==0);
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_concurrent_refs(void){
@@ -511,49 +540,49 @@ static void run_checkout_persist_failure(void){
   printf("=== Checkout Persist Failure Test ===\n\n");
   printf("--- Test 1: dolt_checkout surfaces final persist failure ---\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_checkout_persist_failure");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
   gFailSyncOnce = 0;
   gFailHits = 0;
 
   check("register_fail_vfs", registerFailVfs()==SQLITE_OK);
   check("open_db1", open_fail_db(dbpath, &db1)==SQLITE_OK);
 
-  check("setup_schema", execsql(db1,
+  check("setup_schema", execSql(db1,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
   check("init_commit",
-    strlen(exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')"))==40);
+    strlen(queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')"))==40);
   check("create_feature_branch",
-    strcmp(exec1(db1, "SELECT dolt_branch('feature')"), "0")==0);
+    strcmp(queryScalarText(db1, "SELECT dolt_branch('feature')"), "0")==0);
 
   gFailSyncOnce = 1;
-  res = exec1(db1, "SELECT dolt_checkout('feature')");
+  res = queryScalarText(db1, "SELECT dolt_checkout('feature')");
   check("persist_failure_was_injected", gFailHits>0);
   check("checkout_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
   check("session_branch_restored_after_error",
-    strcmp(exec1(db1, "SELECT active_branch()"), "main")==0);
+    strcmp(queryScalarText(db1, "SELECT active_branch()"), "main")==0);
   check("working_rows_preserved_after_checkout_error",
-    strcmp(exec1(db1, "SELECT count(*) FROM t"), "1")==0);
+    strcmp(queryScalarText(db1, "SELECT count(*) FROM t"), "1")==0);
 
   sqlite3_close(db1);
   db1 = 0;
 
   check("reopen_db_after_checkout_persist_failure", open_db(dbpath, &db2)==SQLITE_OK);
   check("active_branch_persists_after_checkout_error",
-    strcmp(exec1(db2, "SELECT active_branch()"), "main")==0);
+    strcmp(queryScalarText(db2, "SELECT active_branch()"), "main")==0);
   check("main_rows_persist_after_checkout_error",
-    strcmp(exec1(db2, "SELECT count(*) FROM t"), "1")==0);
+    strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "1")==0);
   check("feature_tip_still_visible_after_checkout_error",
-    strcmp(exec1(db2,
+    strcmp(queryScalarText(db2,
       "SELECT latest_commit_message FROM dolt_branches WHERE name='feature'"),
       "init")==0);
   check("feature_checkout_still_works_after_checkout_error",
-    strcmp(exec1(db2, "SELECT dolt_checkout('feature')"), "0")==0);
+    strcmp(queryScalarText(db2, "SELECT dolt_checkout('feature')"), "0")==0);
   check("feature_rows_visible_after_reopen_checkout",
-    strcmp(exec1(db2, "SELECT count(*) FROM t"), "1")==0);
+    strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "1")==0);
 
   sqlite3_close(db2);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_catalog_restore(void){
@@ -569,12 +598,12 @@ static void run_savepoint_catalog_restore(void){
   printf("=== Savepoint Catalog Restore Test ===\n\n");
   printf("--- Test 1: savepoint rollback restores schema metadata ---\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_catalog_restore");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db", sqlite3_open(dbpath, &db)==SQLITE_OK);
   if( !db ) return;
 
-  check("create_table", execsql(db,
+  check("create_table", execSql(db,
       "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
   check("serialize_before",
       doltliteFlushAndSerializeCatalog(db, &aBefore, &nBefore)==SQLITE_OK);
@@ -583,10 +612,10 @@ static void run_savepoint_catalog_restore(void){
   check("lookup_rootpage", iTable>0);
 
   memset(&fakeHash, 0x5a, sizeof(fakeHash));
-  check("savepoint_begin", execsql(db, "SAVEPOINT sp;")==SQLITE_OK);
+  check("savepoint_begin", execSql(db, "SAVEPOINT sp;")==SQLITE_OK);
   doltliteSetTableSchemaHash(db, iTable, &fakeHash);
-  check("rollback_to", execsql(db, "ROLLBACK TO sp;")==SQLITE_OK);
-  check("release_sp", execsql(db, "RELEASE sp;")==SQLITE_OK);
+  check("rollback_to", execSql(db, "ROLLBACK TO sp;")==SQLITE_OK);
+  check("release_sp", execSql(db, "RELEASE sp;")==SQLITE_OK);
 
   check("serialize_after",
       doltliteFlushAndSerializeCatalog(db, &aAfter, &nAfter)==SQLITE_OK);
@@ -657,7 +686,7 @@ static void run_refresh_error_propagation(void){
 
   printf("--- Test 1: xAccess failure is surfaced ---\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_refresh_access_failure");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
   check("open_empty_chunk_store",
         chunkStoreOpen(&cs, &gFailVfs, dbpath,
           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
@@ -669,13 +698,13 @@ static void run_refresh_error_propagation(void){
   check("access_failure_injected", gFailHits>0);
   check("changed_left_false_on_access_error", changed==0);
   chunkStoreClose(&cs);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   printf("--- Test 2: xFileControl failure is surfaced ---\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_refresh_filecontrol_failure");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
   check("open_sql_db", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_doltlite_repo", execsql(db,
+  check("setup_doltlite_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -692,7 +721,7 @@ static void run_refresh_error_propagation(void){
   check("filecontrol_failure_injected", gFailHits>0);
   check("changed_left_false_on_filecontrol_error", changed==0);
   chunkStoreClose(&cs);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_conflicts_blob_corruption(void){
@@ -708,10 +737,10 @@ static void run_conflicts_blob_corruption(void){
 
   printf("=== Conflicts Blob Corruption Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_conflicts_blob_corruption");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo", execsql(db,
+  check("setup_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -725,7 +754,7 @@ static void run_conflicts_blob_corruption(void){
   }
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_status_error_propagation(void){
@@ -736,10 +765,10 @@ static void run_status_error_propagation(void){
 
   printf("=== Status Error Propagation Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_status_error_propagation");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_status_repo", execsql(db,
+  check("setup_status_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -747,11 +776,11 @@ static void run_status_error_propagation(void){
 
   memset(&badHash, 0x7b, sizeof(badHash));
   doltliteSetSessionStaged(db, &badHash);
-  rc = execsql_silent(db, "SELECT count(*) FROM dolt_status;");
+  rc = execSqlSilent(db, "SELECT count(*) FROM dolt_status;");
   check("status_surfaces_persist_error", rc!=SQLITE_OK);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_remote_refs_corruption(void){
@@ -770,12 +799,12 @@ static void run_remote_refs_corruption(void){
   make_dbpath(remotePath, sizeof(remotePath), "test_remote_refs_corruption_remote");
   make_dbpath(localPath, sizeof(localPath), "test_remote_refs_corruption_local");
   make_dbpath(clonePath, sizeof(clonePath), "test_remote_refs_corruption_clone");
-  remove_db(remotePath);
-  remove_db(localPath);
-  remove_db(clonePath);
+  removeDbFiles(remotePath);
+  removeDbFiles(localPath);
+  removeDbFiles(clonePath);
 
   check("open_remote_db", open_db(remotePath, &srcDb)==SQLITE_OK);
-  check("setup_remote_repo", execsql(srcDb,
+  check("setup_remote_repo", execSql(srcDb,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -790,7 +819,7 @@ static void run_remote_refs_corruption(void){
       "SELECT dolt_commit('-A', '-m', 'seed');"
       "SELECT dolt_remote('add','origin','file://%s');",
       remotePath);
-    check("setup_local_remote", execsql(localDb, sql)==SQLITE_OK);
+    check("setup_local_remote", execSql(localDb, sql)==SQLITE_OK);
   }
 
   check("open_chunk_store", chunkStoreOpen(&cs, sqlite3_vfs_find(0), remotePath,
@@ -803,25 +832,25 @@ static void run_remote_refs_corruption(void){
   chunkStoreUnlock(&cs);
   chunkStoreClose(&cs);
 
-  rc = execsql_silent(localDb, "SELECT dolt_fetch('origin');");
+  rc = execSqlSilent(localDb, "SELECT dolt_fetch('origin');");
   check("fetch_surfaces_corrupt_refs", rc!=SQLITE_OK);
 
-  rc = execsql_silent(localDb, "SELECT dolt_push('origin','main');");
+  rc = execSqlSilent(localDb, "SELECT dolt_push('origin','main');");
   check("push_surfaces_corrupt_refs", rc!=SQLITE_OK);
 
   check("open_clone_db", open_db(clonePath, &cloneDb)==SQLITE_OK);
   if( cloneDb ){
     char sql[1024];
     snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
-    rc = execsql_silent(cloneDb, sql);
+    rc = execSqlSilent(cloneDb, sql);
     check("clone_surfaces_corrupt_refs", rc!=SQLITE_OK);
   }
 
   sqlite3_close(cloneDb);
   sqlite3_close(localDb);
-  remove_db(remotePath);
-  remove_db(localPath);
-  remove_db(clonePath);
+  removeDbFiles(remotePath);
+  removeDbFiles(localPath);
+  removeDbFiles(clonePath);
 }
 
 static void run_chunk_walk_corruption(void){
@@ -886,10 +915,10 @@ static void run_ancestor_missing_start(void){
 
   printf("=== Ancestor Missing Start Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_ancestor_missing_start");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo", execsql(db,
+  check("setup_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -900,7 +929,7 @@ static void run_ancestor_missing_start(void){
   check("missing_start_commit_returns_notfound", rc==SQLITE_NOTFOUND);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_pull_persist_failure(void){
@@ -918,9 +947,9 @@ static void run_pull_persist_failure(void){
   make_dbpath(localPath, sizeof(localPath), "test_pull_persist_failure_local");
   make_dbpath(remotePath, sizeof(remotePath), "test_pull_persist_failure_remote");
   make_dbpath(remoteClientPath, sizeof(remoteClientPath), "test_pull_persist_failure_remote_client");
-  remove_db(localPath);
-  remove_db(remotePath);
-  remove_db(remoteClientPath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
 
   gFailSyncOnce = 0;
   gFailHits = 0;
@@ -935,32 +964,32 @@ static void run_pull_persist_failure(void){
     "SELECT dolt_remote('add','origin','file://%s');"
     "SELECT dolt_push('origin','main');",
     remotePath);
-  check("setup_local_and_push", execsql(localDb, sql)==SQLITE_OK);
+  check("setup_local_and_push", execSql(localDb, sql)==SQLITE_OK);
 
   check("open_remote_client_db", open_db(remoteClientPath, &remoteClientDb)==SQLITE_OK);
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
-  check("clone_remote_into_remote_client", execsql(remoteClientDb, sql)==SQLITE_OK);
-  check("advance_remote", execsql(remoteClientDb,
+  check("clone_remote_into_remote_client", execSql(remoteClientDb, sql)==SQLITE_OK);
+  check("advance_remote", execSql(remoteClientDb,
     "INSERT INTO t VALUES(2,'b');"
     "SELECT dolt_add('-A');"
     "SELECT dolt_commit('-m', 'remote update');"
     "SELECT dolt_push('origin','main');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
   gFailHits = 0;
   gFailSyncOnce = 2;
-  res = exec1(localDb, "SELECT dolt_pull('origin','main')");
+  res = queryScalarText(localDb, "SELECT dolt_pull('origin','main')");
   check("pull_failure_was_injected", gFailHits>0);
   check("pull_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
   check("pull_branch_stays_main",
-    strcmp(exec1(localDb, "SELECT active_branch()"), "main")==0);
+    strcmp(queryScalarText(localDb, "SELECT active_branch()"), "main")==0);
   check("pull_head_data_restored",
-    strcmp(exec1(localDb, "SELECT count(*) FROM t"), "1")==0);
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM t"), "1")==0);
   check("pull_head_hash_restored",
-    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+    strcmp(queryScalarText(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("pull_remote_kept",
-    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
 
   sqlite3_close(remoteClientDb);
   remoteClientDb = 0;
@@ -971,18 +1000,18 @@ static void run_pull_persist_failure(void){
 
   check("reopen_local_after_pull_failure", open_db(localPath, &localDb)==SQLITE_OK);
   check("pull_failure_persists_branch_after_reopen",
-    strcmp(exec1(localDb, "SELECT active_branch()"), "main")==0);
+    strcmp(queryScalarText(localDb, "SELECT active_branch()"), "main")==0);
   check("pull_failure_persists_rows_after_reopen",
-    strcmp(exec1(localDb, "SELECT count(*) FROM t"), "1")==0);
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM t"), "1")==0);
   check("pull_failure_persists_head_after_reopen",
-    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+    strcmp(queryScalarText(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("pull_failure_persists_remote_after_reopen",
-    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
 
   sqlite3_close(localDb);
-  remove_db(localPath);
-  remove_db(remotePath);
-  remove_db(remoteClientPath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
 }
 
 static void run_pull_dirty_working_set_fails(void){
@@ -1000,9 +1029,9 @@ static void run_pull_dirty_working_set_fails(void){
   make_dbpath(localPath, sizeof(localPath), "test_pull_dirty_working_set_local");
   make_dbpath(remotePath, sizeof(remotePath), "test_pull_dirty_working_set_remote");
   make_dbpath(remoteClientPath, sizeof(remoteClientPath), "test_pull_dirty_working_set_remote_client");
-  remove_db(localPath);
-  remove_db(remotePath);
-  remove_db(remoteClientPath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
 
   check("open_local_db_for_pull_dirty", open_db(localPath, &localDb)==SQLITE_OK);
   check("open_remote_db_for_pull_dirty", open_db(remotePath, &remoteDb)==SQLITE_OK);
@@ -1014,31 +1043,31 @@ static void run_pull_dirty_working_set_fails(void){
     "SELECT dolt_remote('add','origin','file://%s');"
     "SELECT dolt_push('origin','main');",
     remotePath);
-  check("setup_local_and_push_for_pull_dirty", execsql(localDb, sql)==SQLITE_OK);
+  check("setup_local_and_push_for_pull_dirty", execSql(localDb, sql)==SQLITE_OK);
 
   check("open_remote_client_db_for_pull_dirty", open_db(remoteClientPath, &remoteClientDb)==SQLITE_OK);
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
-  check("clone_remote_into_remote_client_for_pull_dirty", execsql(remoteClientDb, sql)==SQLITE_OK);
-  check("advance_remote_for_pull_dirty", execsql(remoteClientDb,
+  check("clone_remote_into_remote_client_for_pull_dirty", execSql(remoteClientDb, sql)==SQLITE_OK);
+  check("advance_remote_for_pull_dirty", execSql(remoteClientDb,
     "INSERT INTO t VALUES(2,'b');"
     "SELECT dolt_add('-A');"
     "SELECT dolt_commit('-m', 'remote update');"
     "SELECT dolt_push('origin','main');")==SQLITE_OK);
 
-  check("make_local_working_dirty", execsql(localDb,
+  check("make_local_working_dirty", execSql(localDb,
     "UPDATE t SET v='local dirty' WHERE id=1;")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
-  res = exec1(localDb, "SELECT dolt_pull('origin','main')");
+  res = queryScalarText(localDb, "SELECT dolt_pull('origin','main')");
   check("pull_dirty_working_returns_error", strstr(res, "ERROR:")!=0);
   check("pull_dirty_working_reports_uncommitted", strstr(res, "uncommitted changes")!=0);
   check("pull_dirty_working_branch_stays_main",
-    strcmp(exec1(localDb, "SELECT active_branch()"), "main")==0);
+    strcmp(queryScalarText(localDb, "SELECT active_branch()"), "main")==0);
   check("pull_dirty_working_keeps_local_rows",
-    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local dirty")==0);
+    strcmp(queryScalarText(localDb, "SELECT v FROM t WHERE id=1"), "local dirty")==0);
   check("pull_dirty_working_keeps_head",
-    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+    strcmp(queryScalarText(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(remoteClientDb);
   remoteClientDb = 0;
@@ -1049,14 +1078,14 @@ static void run_pull_dirty_working_set_fails(void){
 
   check("reopen_local_after_pull_dirty_working", open_db(localPath, &localDb)==SQLITE_OK);
   check("pull_dirty_working_persists_local_rows_after_reopen",
-    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local dirty")==0);
+    strcmp(queryScalarText(localDb, "SELECT v FROM t WHERE id=1"), "local dirty")==0);
   check("pull_dirty_working_persists_head_after_reopen",
-    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+    strcmp(queryScalarText(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(localDb);
-  remove_db(localPath);
-  remove_db(remotePath);
-  remove_db(remoteClientPath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
 }
 
 static void run_pull_staged_changes_fails(void){
@@ -1074,9 +1103,9 @@ static void run_pull_staged_changes_fails(void){
   make_dbpath(localPath, sizeof(localPath), "test_pull_staged_changes_local");
   make_dbpath(remotePath, sizeof(remotePath), "test_pull_staged_changes_remote");
   make_dbpath(remoteClientPath, sizeof(remoteClientPath), "test_pull_staged_changes_remote_client");
-  remove_db(localPath);
-  remove_db(remotePath);
-  remove_db(remoteClientPath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
 
   check("open_local_db_for_pull_staged", open_db(localPath, &localDb)==SQLITE_OK);
   check("open_remote_db_for_pull_staged", open_db(remotePath, &remoteDb)==SQLITE_OK);
@@ -1088,32 +1117,32 @@ static void run_pull_staged_changes_fails(void){
     "SELECT dolt_remote('add','origin','file://%s');"
     "SELECT dolt_push('origin','main');",
     remotePath);
-  check("setup_local_and_push_for_pull_staged", execsql(localDb, sql)==SQLITE_OK);
+  check("setup_local_and_push_for_pull_staged", execSql(localDb, sql)==SQLITE_OK);
 
   check("open_remote_client_db_for_pull_staged", open_db(remoteClientPath, &remoteClientDb)==SQLITE_OK);
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
-  check("clone_remote_into_remote_client_for_pull_staged", execsql(remoteClientDb, sql)==SQLITE_OK);
-  check("advance_remote_for_pull_staged", execsql(remoteClientDb,
+  check("clone_remote_into_remote_client_for_pull_staged", execSql(remoteClientDb, sql)==SQLITE_OK);
+  check("advance_remote_for_pull_staged", execSql(remoteClientDb,
     "INSERT INTO t VALUES(2,'b');"
     "SELECT dolt_add('-A');"
     "SELECT dolt_commit('-m', 'remote update');"
     "SELECT dolt_push('origin','main');")==SQLITE_OK);
 
-  check("make_local_staged_dirty", execsql(localDb,
+  check("make_local_staged_dirty", execSql(localDb,
     "UPDATE t SET v='local staged' WHERE id=1;"
     "SELECT dolt_add('-A');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
-  res = exec1(localDb, "SELECT dolt_pull('origin','main')");
+  res = queryScalarText(localDb, "SELECT dolt_pull('origin','main')");
   check("pull_staged_returns_error", strstr(res, "ERROR:")!=0);
   check("pull_staged_reports_uncommitted", strstr(res, "uncommitted changes")!=0);
   check("pull_staged_branch_stays_main",
-    strcmp(exec1(localDb, "SELECT active_branch()"), "main")==0);
+    strcmp(queryScalarText(localDb, "SELECT active_branch()"), "main")==0);
   check("pull_staged_keeps_local_rows",
-    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local staged")==0);
+    strcmp(queryScalarText(localDb, "SELECT v FROM t WHERE id=1"), "local staged")==0);
   check("pull_staged_keeps_head",
-    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+    strcmp(queryScalarText(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(remoteClientDb);
   remoteClientDb = 0;
@@ -1124,14 +1153,14 @@ static void run_pull_staged_changes_fails(void){
 
   check("reopen_local_after_pull_staged", open_db(localPath, &localDb)==SQLITE_OK);
   check("pull_staged_persists_local_rows_after_reopen",
-    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local staged")==0);
+    strcmp(queryScalarText(localDb, "SELECT v FROM t WHERE id=1"), "local staged")==0);
   check("pull_staged_persists_head_after_reopen",
-    strcmp(exec1(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+    strcmp(queryScalarText(localDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(localDb);
-  remove_db(localPath);
-  remove_db(remotePath);
-  remove_db(remoteClientPath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
+  removeDbFiles(remoteClientPath);
 }
 
 static void run_push_persist_failure(void){
@@ -1146,20 +1175,20 @@ static void run_push_persist_failure(void){
   printf("=== Push Persist Failure Test ===\n\n");
   make_dbpath(localPath, sizeof(localPath), "test_push_persist_failure_local");
   make_dbpath(remotePath, sizeof(remotePath), "test_push_persist_failure_remote");
-  remove_db(localPath);
-  remove_db(remotePath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
 
   gFailWriteOnce = 0;
   gFailSyncOnce = 0;
   gFailHits = 0;
   check("register_fail_vfs_for_push", registerFailVfs()==SQLITE_OK);
   check("open_remote_db_for_push", open_db(remotePath, &remoteDb)==SQLITE_OK);
-  check("setup_remote_repo_for_push", execsql(remoteDb,
+  check("setup_remote_repo_for_push", execSql(remoteDb,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'remote');"
     "SELECT dolt_commit('-A', '-m', 'remote init');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zRemoteHeadBefore), zRemoteHeadBefore, "%s",
-                   exec1(remoteDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(remoteDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
   sqlite3_close(remoteDb);
   remoteDb = 0;
 
@@ -1172,32 +1201,32 @@ static void run_push_persist_failure(void){
     "UPDATE t SET v='local pushed' WHERE id=1;"
     "SELECT dolt_commit('-A', '-m', 'local update');",
     remotePath);
-  check("setup_local_repo_for_push", execsql(localDb, sql)==SQLITE_OK);
+  check("setup_local_repo_for_push", execSql(localDb, sql)==SQLITE_OK);
 
   gFailHits = 0;
   gFailSyncOnce = 1;
-  res = exec1(localDb, "SELECT dolt_push('origin','main','--force')");
+  res = queryScalarText(localDb, "SELECT dolt_push('origin','main','--force')");
   check("push_failure_was_injected", gFailHits>0);
   check("push_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
   check("push_keeps_local_rows",
-    strcmp(exec1(localDb, "SELECT v FROM t WHERE id=1"), "local pushed")==0);
+    strcmp(queryScalarText(localDb, "SELECT v FROM t WHERE id=1"), "local pushed")==0);
   check("push_keeps_local_remote",
-    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM dolt_remotes"), "1")==0);
 
   sqlite3_close(localDb);
   localDb = 0;
 
   check("reopen_remote_after_push_failure", open_db(remotePath, &remoteDb)==SQLITE_OK);
   check("push_failure_preserves_remote_rows_after_reopen",
-    strcmp(exec1(remoteDb, "SELECT v FROM t WHERE id=1"), "remote")==0);
+    strcmp(queryScalarText(remoteDb, "SELECT v FROM t WHERE id=1"), "remote")==0);
   check("push_failure_preserves_remote_head_after_reopen",
-    strcmp(exec1(remoteDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zRemoteHeadBefore)==0);
+    strcmp(queryScalarText(remoteDb, "SELECT commit_hash FROM dolt_log LIMIT 1"), zRemoteHeadBefore)==0);
   check("push_failure_preserves_remote_log_count_after_reopen",
-    strcmp(exec1(remoteDb, "SELECT count(*) FROM dolt_log"), "2")==0);
+    strcmp(queryScalarText(remoteDb, "SELECT count(*) FROM dolt_log"), "2")==0);
 
   sqlite3_close(remoteDb);
-  remove_db(localPath);
-  remove_db(remotePath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
 }
 
 static void run_clone_persist_failure(void){
@@ -1211,14 +1240,14 @@ static void run_clone_persist_failure(void){
   printf("=== Clone Persist Failure Test ===\n\n");
   make_dbpath(localPath, sizeof(localPath), "test_clone_persist_failure_local");
   make_dbpath(remotePath, sizeof(remotePath), "test_clone_persist_failure_remote");
-  remove_db(localPath);
-  remove_db(remotePath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
 
   gFailSyncOnce = 0;
   gFailHits = 0;
   check("register_fail_vfs_for_clone", registerFailVfs()==SQLITE_OK);
   check("open_remote_db", open_db(remotePath, &remoteDb)==SQLITE_OK);
-  check("setup_remote_repo", execsql(remoteDb,
+  check("setup_remote_repo", execSql(remoteDb,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -1229,13 +1258,13 @@ static void run_clone_persist_failure(void){
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('file://%s')", remotePath);
   gFailHits = 0;
   gFailSyncOnce = 2;
-  res = exec1(localDb, sql);
+  res = queryScalarText(localDb, sql);
   check("clone_failure_was_injected", gFailHits>0);
   check("clone_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
   check("clone_does_not_leave_origin_remote",
-    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "0")==0);
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM dolt_remotes"), "0")==0);
   check("clone_restores_empty_catalog",
-    strcmp(exec1(localDb,
+    strcmp(queryScalarText(localDb,
       "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t'"), "0")==0);
 
   sqlite3_close(localDb);
@@ -1243,14 +1272,14 @@ static void run_clone_persist_failure(void){
 
   check("reopen_local_after_clone_failure", open_db(localPath, &localDb)==SQLITE_OK);
   check("clone_failure_persists_no_origin_after_reopen",
-    strcmp(exec1(localDb, "SELECT count(*) FROM dolt_remotes"), "0")==0);
+    strcmp(queryScalarText(localDb, "SELECT count(*) FROM dolt_remotes"), "0")==0);
   check("clone_failure_persists_empty_catalog_after_reopen",
-    strcmp(exec1(localDb,
+    strcmp(queryScalarText(localDb,
       "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t'"), "0")==0);
 
   sqlite3_close(localDb);
-  remove_db(localPath);
-  remove_db(remotePath);
+  removeDbFiles(localPath);
+  removeDbFiles(remotePath);
 }
 
 static void run_resolve_ref_non_commit(void){
@@ -1265,10 +1294,10 @@ static void run_resolve_ref_non_commit(void){
 
   printf("=== Resolve Ref Non-Commit Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_resolve_ref_non_commit");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo", execsql(db,
+  check("setup_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -1292,7 +1321,7 @@ static void run_resolve_ref_non_commit(void){
 
   doltliteCommitClear(&commit);
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_commit_parent_limit(void){
@@ -1384,7 +1413,7 @@ static void run_blame_all_parents_merge_base(void){
 
   printf("=== Blame All-Parents Merge Base Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_blame_all_parents_merge_base");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   memset(&b1Hash, 0, sizeof(b1Hash));
   memset(&b2Hash, 0, sizeof(b2Hash));
@@ -1397,7 +1426,7 @@ static void run_blame_all_parents_merge_base(void){
   memset(&mergeCommit, 0, sizeof(mergeCommit));
 
   check("open_db_for_blame_all_parents", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_base_for_blame_all_parents", execsql(db,
+  check("setup_base_for_blame_all_parents", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'base');"
     "SELECT dolt_commit('-A', '-m', 'BASE');"
@@ -1408,7 +1437,7 @@ static void run_blame_all_parents_merge_base(void){
   doltliteGetSessionHead(db, &b1Hash);
   check("have_b1_head_for_blame_all_parents", !prollyHashIsEmpty(&b1Hash));
 
-  check("setup_b2_for_blame_all_parents", execsql(db,
+  check("setup_b2_for_blame_all_parents", execSql(db,
     "SELECT dolt_branch('b2');"
     "SELECT dolt_checkout('b2');"
     "INSERT INTO t VALUES(2,'side');"
@@ -1416,7 +1445,7 @@ static void run_blame_all_parents_merge_base(void){
   doltliteGetSessionHead(db, &b2Hash);
   check("have_b2_head_for_blame_all_parents", !prollyHashIsEmpty(&b2Hash));
 
-  check("setup_b3_for_blame_all_parents", execsql(db,
+  check("setup_b3_for_blame_all_parents", execSql(db,
     "SELECT dolt_checkout('main');"
     "SELECT dolt_branch('b3');"
     "SELECT dolt_checkout('b3');"
@@ -1434,7 +1463,7 @@ static void run_blame_all_parents_merge_base(void){
         && !prollyHashIsEmpty(&base123Hash)
         && prollyHashCompare(&base123Hash, &b1Hash)!=0);
 
-  check("checkout_b2_before_synthetic_merge", execsql(db,
+  check("checkout_b2_before_synthetic_merge", execSql(db,
     "SELECT dolt_checkout('b2');")==SQLITE_OK);
   doltliteGetSessionHead(db, &curHeadHash);
   check("head_is_b2_before_synthetic_merge",
@@ -1467,13 +1496,58 @@ static void run_blame_all_parents_merge_base(void){
           doltliteSwitchCatalog(db, &mergeCommit.catalogHash)==SQLITE_OK);
   }
 
-  res = exec1(db, "SELECT message FROM dolt_blame_t WHERE id = 1;");
+  res = queryScalarText(db, "SELECT message FROM dolt_blame_t WHERE id = 1;");
   check("blame_query_returns_row_for_all_parents", res[0]!=0);
   check("blame_uses_all_parents_merge_base", strcmp(res, "OCTO")==0);
 
   sqlite3_free(pCommitData);
   doltliteCommitClear(&b2Commit);
   doltliteCommitClear(&mergeCommit);
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_blame_deep_history_scan(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  int i;
+
+  printf("=== Blame Deep History Scan Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_blame_deep_history_scan");
+  remove_db(dbpath);
+
+  check("open_db_for_blame_deep_history_scan", open_db(dbpath, &db)==SQLITE_OK);
+  check("create_table_for_blame_deep_history_scan", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "BEGIN;")==SQLITE_OK);
+  for(i=1; i<=100; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "INSERT INTO t VALUES(%d,0);", i);
+    check("insert_row_for_blame_deep_history_scan",
+          execsql(db, sql)==SQLITE_OK);
+  }
+  check("commit_initial_rows_for_blame_deep_history_scan", execsql(db,
+    "COMMIT;"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "UPDATE t SET v=%d WHERE id=%d;"
+      "SELECT dolt_commit('-A', '-m', 'c%d');", i, i, i);
+    check("commit_update_for_blame_deep_history_scan",
+          execsql(db, sql)==SQLITE_OK);
+  }
+
+  check("blame_deep_history_row_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_blame_t;"), "100")==0);
+  check("blame_deep_history_updated_row",
+        strcmp(exec1(db, "SELECT message FROM dolt_blame_t WHERE id=80;"),
+               "c80")==0);
+  check("blame_deep_history_unchanged_row",
+        strcmp(exec1(db, "SELECT message FROM dolt_blame_t WHERE id=100;"),
+               "init")==0);
+
   sqlite3_close(db);
   remove_db(dbpath);
 }
@@ -1485,13 +1559,13 @@ static void run_merge_persist_failure(void){
 
   printf("=== Merge Persist Failure Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_merge_persist_failure");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   gFailSyncOnce = 0;
   gFailHits = 0;
   check("register_fail_vfs_for_merge", registerFailVfs()==SQLITE_OK);
   check("open_fail_db", open_fail_db(dbpath, &db)==SQLITE_OK);
-  check("setup_ff_merge_repo", execsql(db,
+  check("setup_ff_merge_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -1503,14 +1577,14 @@ static void run_merge_persist_failure(void){
 
   gFailHits = 0;
   gFailSyncOnce = 1;
-  res = exec1(db, "SELECT dolt_merge('feature')");
+  res = queryScalarText(db, "SELECT dolt_merge('feature')");
   check("merge_failure_was_injected", gFailHits>0);
   check("merge_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
   check("merge_restores_branch_name",
-    strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+    strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_merge_conflict_surfaces_error_and_rollback_clears_durable_state(void){
@@ -1520,10 +1594,10 @@ static void run_merge_conflict_surfaces_error_and_rollback_clears_durable_state(
 
   printf("=== Merge Conflict Surfaces Error Rolls Back Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_merge_conflict_surfaces_error");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_merge_conflict_error", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_merge_conflict_repo", execsql(db,
+  check("setup_merge_conflict_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'base');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -1535,27 +1609,27 @@ static void run_merge_conflict_surfaces_error_and_rollback_clears_durable_state(
     "SELECT dolt_commit('-A', '-m', 'feature edit');"
     "SELECT dolt_checkout('main');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_merge('feature')");
+  res = queryScalarText(db, "SELECT dolt_merge('feature')");
   check("merge_conflict_returns_error",
         strstr(res, "ERROR:")!=0);
   check("merge_conflict_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("merge_conflict_keeps_working_value_before_close",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_merge_conflict_error", open_db(dbpath, &db)==SQLITE_OK);
   check("merge_conflict_reopen_has_no_summary_table_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("merge_conflict_reopen_has_no_per_table_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts_t"), "0")==0);
   check("merge_conflict_reopen_keeps_working_value",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_failed_merge_reopen_clears_ephemeral_conflict_state(void){
@@ -1573,10 +1647,10 @@ static void run_failed_merge_reopen_clears_ephemeral_conflict_state(void){
 
   printf("=== Failed Merge Reopen Clears Ephemeral Conflict State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_failed_merge_reopen_preserves_working_set_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_failed_merge_reopen", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_failed_merge_reopen_repo", execsql(db,
+  check("setup_failed_merge_reopen_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'base');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -1588,11 +1662,11 @@ static void run_failed_merge_reopen_clears_ephemeral_conflict_state(void){
     "SELECT dolt_commit('-A', '-m', 'feature edit');"
     "SELECT dolt_checkout('main');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_merge('feature')");
+  res = queryScalarText(db, "SELECT dolt_merge('feature')");
   check("failed_merge_reopen_returns_error",
         strstr(res, "ERROR:")!=0);
   check("failed_merge_reopen_working_value_before_close",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   doltliteGetSessionStaged(db, &stagedBeforeClose);
   doltliteGetSessionMergeState(db, &isMergingBeforeClose,
                                &mergeBeforeClose, &conflictsBeforeClose);
@@ -1608,13 +1682,13 @@ static void run_failed_merge_reopen_clears_ephemeral_conflict_state(void){
 
   check("reopen_db_for_failed_merge_reopen", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_merge_reopen_conflicts_summary_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("failed_merge_reopen_conflicts_table_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts_t"), "0")==0);
   check("failed_merge_reopen_working_value_after_reopen",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   check("failed_merge_reopen_branch_after_reopen",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
 
   doltliteGetSessionStaged(db, &stagedAfterReopen);
   doltliteGetSessionMergeState(db, &isMergingAfterReopen,
@@ -1625,7 +1699,7 @@ static void run_failed_merge_reopen_clears_ephemeral_conflict_state(void){
         prollyHashIsEmpty(&conflictsAfterReopen));
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_merge_abort_after_reopen_restores_durable_state(void){
@@ -1641,10 +1715,10 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
 
   printf("=== Merge Abort After Reopen Restores Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_merge_abort_after_reopen_restores_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_merge_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_merge_abort_after_reopen", execsql(db,
+  check("setup_repo_for_merge_abort_after_reopen", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'base');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -1656,9 +1730,9 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
     "SELECT dolt_commit('-A', '-m', 'feature edit');"
     "SELECT dolt_checkout('main');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
-  res = exec1(db, "SELECT dolt_merge('feature')");
+  res = queryScalarText(db, "SELECT dolt_merge('feature')");
   check("merge_abort_after_reopen_setup_conflict",
         strstr(res, "ERROR:")!=0);
 
@@ -1667,24 +1741,24 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
 
   check("reopen_db_for_merge_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
   check("merge_abort_after_reopen_conflicts_persist_before_abort",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("merge_abort_after_reopen_branch_before_abort",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   doltliteGetSessionMergeState(db, &isMerging, &mergeHash, &conflictsHash);
   check("merge_abort_after_reopen_merging_flag_before_abort", isMerging==0);
   check("merge_abort_after_reopen_conflicts_hash_before_abort",
         prollyHashIsEmpty(&conflictsHash));
 
   check("merge_abort_after_reopen_returns_error",
-        strstr(exec1(db, "SELECT dolt_merge('--abort')"), "ERROR: no merge in progress")!=0);
+        strstr(queryScalarText(db, "SELECT dolt_merge('--abort')"), "ERROR: no merge in progress")!=0);
   check("merge_abort_after_reopen_clears_conflicts",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("merge_abort_after_reopen_restores_rows",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   check("merge_abort_after_reopen_restores_status_clean",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("merge_abort_after_reopen_restores_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   doltliteGetSessionMergeState(db, &isMerging, &mergeHash, &conflictsHash);
   check("merge_abort_after_reopen_clears_merge_flag", isMerging==0);
   check("merge_abort_after_reopen_clears_conflicts_hash",
@@ -1696,13 +1770,13 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
 
   check("reopen_db_after_merge_abort", open_db(dbpath, &db)==SQLITE_OK);
   check("merge_abort_persists_no_conflicts",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("merge_abort_persists_rows",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   check("merge_abort_persists_status_clean",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("merge_abort_persists_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   doltliteGetSessionMergeState(db, &isMerging, &mergeHash, &conflictsHash);
   check("merge_abort_persists_merge_flag_cleared", isMerging==0);
   check("merge_abort_persists_conflicts_hash_cleared",
@@ -1712,7 +1786,7 @@ static void run_merge_abort_after_reopen_restores_durable_state(void){
         repo_state_snapshot_eq(&beforeReopenAbort, &afterReopenAbort));
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_cherry_pick_stale_branch(void){
@@ -1726,10 +1800,10 @@ static void run_cherry_pick_stale_branch(void){
 
   printf("=== Cherry-pick Stale Branch Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_cherry_pick_stale_branch");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db1", open_db(dbpath, &db1)==SQLITE_OK);
-  check("setup_init", execsql(db1,
+  check("setup_init", execSql(db1,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -1740,28 +1814,28 @@ static void run_cherry_pick_stale_branch(void){
     "SELECT dolt_checkout('main');")==SQLITE_OK);
 
   snprintf(featHash, sizeof(featHash), "%s",
-           exec1(db1, "SELECT hash FROM dolt_branches WHERE name='feature'"));
+           queryScalarText(db1, "SELECT hash FROM dolt_branches WHERE name='feature'"));
 
   check("open_db2", open_db(dbpath, &db2)==SQLITE_OK);
   check("db2_sees_old_main",
-    strcmp(exec1(db2, "SELECT count(*) FROM t"), "1")==0);
+    strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "1")==0);
 
-  check("advance_main_in_db1", execsql(db1,
+  check("advance_main_in_db1", execSql(db1,
     "INSERT INTO t VALUES(3,'main');"
     "SELECT dolt_commit('-A', '-m', 'main work');")==SQLITE_OK);
 
   snprintf(sql, sizeof(sql), "SELECT dolt_cherry_pick('%s')", featHash);
-  res = exec1(db2, sql);
+  res = queryScalarText(db2, sql);
   check("stale_cherry_pick_returns_error", strstr(res, "ERROR:")!=0);
 
   check("open_db3", open_db(dbpath, &db3)==SQLITE_OK);
   check("stale_cherry_pick_does_not_persist_feature_row",
-    strcmp(exec1(db3, "SELECT count(*) FROM t"), "2")==0);
+    strcmp(queryScalarText(db3, "SELECT count(*) FROM t"), "2")==0);
 
   sqlite3_close(db3);
   sqlite3_close(db2);
   sqlite3_close(db1);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
@@ -1779,10 +1853,10 @@ static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
 
   printf("=== Failed Cherry-pick Reopen Preserves Conflict State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_failed_cherry_pick_reopen_preserves_conflict_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_failed_cherry_pick_reopen", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_failed_cherry_pick_reopen_repo", execsql(db,
+  check("setup_failed_cherry_pick_reopen_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'base');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -1795,13 +1869,13 @@ static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
     "UPDATE t SET v='main' WHERE id=1;"
     "SELECT dolt_commit('-A', '-m', 'main edit');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_cherry_pick('feat-conflict')");
+  res = queryScalarText(db, "SELECT dolt_cherry_pick('feat-conflict')");
   check("failed_cherry_pick_reopen_returns_error",
         strstr(res, "ERROR:")!=0);
   check("failed_cherry_pick_reopen_working_value_before_close",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   check("failed_cherry_pick_reopen_branch_before_close",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
 
   doltliteGetSessionStaged(db, &stagedBeforeClose);
   doltliteGetSessionMergeState(db, &isMergingBeforeClose,
@@ -1816,13 +1890,13 @@ static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
 
   check("reopen_db_for_failed_cherry_pick_reopen", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_cherry_pick_reopen_conflicts_summary_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("failed_cherry_pick_reopen_conflicts_table_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts_t"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts_t"), "0")==0);
   check("failed_cherry_pick_reopen_working_value_after_reopen",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "main")==0);
   check("failed_cherry_pick_reopen_branch_after_reopen",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
 
   doltliteGetSessionStaged(db, &stagedAfterReopen);
   doltliteGetSessionMergeState(db, &isMergingAfterReopen,
@@ -1837,7 +1911,7 @@ static void run_failed_cherry_pick_reopen_preserves_conflict_state(void){
         prollyHashIsEmpty(&conflictsAfterReopen));
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_branches_metadata_corruption(void){
@@ -1850,10 +1924,10 @@ static void run_branches_metadata_corruption(void){
 
   printf("=== Branches Metadata Corruption Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_branches_metadata_corruption");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo", execsql(db,
+  check("setup_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -1890,15 +1964,15 @@ static void run_branches_metadata_corruption(void){
   chunkStoreClose(&cs);
 
   check("reopen_db", open_db(dbpath, &db)==SQLITE_OK);
-  rc = execsql_silent(db,
+  rc = execSqlSilent(db,
     "SELECT latest_commit_message FROM dolt_branches WHERE name='feature';");
   check("branches_latest_commit_surfaces_corruption", rc!=SQLITE_OK);
-  rc = execsql_silent(db,
+  rc = execSqlSilent(db,
     "SELECT dirty FROM dolt_branches WHERE name='feature';");
   check("branches_dirty_surfaces_corruption", rc!=SQLITE_OK);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_gc_rewrite_failure(void){
@@ -1909,13 +1983,13 @@ static void run_gc_rewrite_failure(void){
 
   printf("=== GC Rewrite Failure Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_gc_rewrite_failure");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   gFailSyncOnce = 0;
   gFailHits = 0;
   check("register_fail_vfs_for_gc", registerFailVfs()==SQLITE_OK);
   check("open_fail_db", open_fail_db(dbpath, &db)==SQLITE_OK);
-  check("setup_gc_repo", execsql(db,
+  check("setup_gc_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -1924,23 +1998,23 @@ static void run_gc_rewrite_failure(void){
 
   gFailHits = 0;
   gFailSyncOnce = 1;
-  res = exec1(db, "SELECT dolt_gc()");
+  res = queryScalarText(db, "SELECT dolt_gc()");
   check("gc_failure_was_injected", gFailHits>0);
   check("gc_returns_error_on_rewrite_failure", strstr(res, "ERROR:")!=0);
   check("gc_connection_still_reads_data",
-    strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+    strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("gc_connection_still_reads_log",
-    strcmp(exec1(db, "SELECT count(*) FROM dolt_log"), "3")==0);
+    strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "3")==0);
 
   sqlite3_close(db);
   check("reopen_db_after_gc_failure", open_db(dbpath, &db2)==SQLITE_OK);
   check("gc_reopen_reads_data",
-    strcmp(exec1(db2, "SELECT count(*) FROM t"), "2")==0);
+    strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "2")==0);
   check("gc_reopen_reads_log",
-    strcmp(exec1(db2, "SELECT count(*) FROM dolt_log"), "3")==0);
+    strcmp(queryScalarText(db2, "SELECT count(*) FROM dolt_log"), "3")==0);
 
   sqlite3_close(db2);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_record_decode_corruption(void){
@@ -2199,10 +2273,10 @@ static void run_refresh_refs_corruption_preserves_state(void){
 
   printf("=== Refresh Corrupt Refs State Preservation Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_refresh_refs_preserves_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo", execsql(db,
+  check("setup_repo", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -2243,7 +2317,7 @@ static void run_refresh_refs_corruption_preserves_state(void){
   sqlite3_free(zDefaultBefore);
   sqlite3_free(zBranchBefore);
   chunkStoreClose(&cs1);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_prolly_node_corruption(void){
@@ -2324,10 +2398,10 @@ static void run_integrity_check_repo_state(void){
 
   printf("=== Integrity Check Repository State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_integrity_check_repo_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_repo_state", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_state", execsql(db,
+  check("setup_repo_state", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -2350,7 +2424,7 @@ static void run_integrity_check_repo_state(void){
   check("repo_graph_integrity_call_succeeds", rc==SQLITE_OK);
   check("integrity_check_reports_repo_state_corruption", nErr>0);
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_integrity_check_session_merge_state(void){
@@ -2362,10 +2436,10 @@ static void run_integrity_check_session_merge_state(void){
 
   printf("=== Integrity Check Session Merge State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_integrity_check_session_merge_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_session_merge_state", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_session_merge_state", execsql(db,
+  check("setup_repo_session_merge_state", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -2378,7 +2452,7 @@ static void run_integrity_check_session_merge_state(void){
   check("integrity_check_reports_session_merge_state_corruption", nErr>0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_prepared_stmt_reuse_after_commit(void){
@@ -2389,10 +2463,10 @@ static void run_prepared_stmt_reuse_after_commit(void){
 
   printf("=== Prepared Statement Reuse After Commit Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_prepared_stmt_reuse_after_commit");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_stmt_commit", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_stmt_commit", execsql(db,
+  check("setup_repo_stmt_commit", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -2406,7 +2480,7 @@ static void run_prepared_stmt_reuse_after_commit(void){
     check("stmt_commit_done", sqlite3_step(stmt)==SQLITE_DONE);
     check("stmt_commit_reset_initial", sqlite3_reset(stmt)==SQLITE_OK);
 
-    check("commit_new_row_same_conn", execsql(db,
+    check("commit_new_row_same_conn", execSql(db,
       "INSERT INTO t VALUES(2,'b');"
       "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
 
@@ -2422,7 +2496,7 @@ static void run_prepared_stmt_reuse_after_commit(void){
 
   sqlite3_finalize(stmt);
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_prepared_stmt_reuse_after_schema_checkout(void){
@@ -2433,10 +2507,10 @@ static void run_prepared_stmt_reuse_after_schema_checkout(void){
 
   printf("=== Prepared Statement Reuse After Schema Checkout Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_prepared_stmt_reuse_after_schema_checkout");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_stmt_checkout", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_stmt_checkout", execsql(db,
+  check("setup_repo_stmt_checkout", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -2456,7 +2530,7 @@ static void run_prepared_stmt_reuse_after_schema_checkout(void){
     check("stmt_checkout_main_done", sqlite3_step(stmt)==SQLITE_DONE);
     check("stmt_checkout_reset_initial", sqlite3_reset(stmt)==SQLITE_OK);
 
-    check("checkout_schema_branch", execsql(db,
+    check("checkout_schema_branch", execSql(db,
       "SELECT dolt_checkout('schema_branch');")==SQLITE_OK);
 
     check("stmt_checkout_branch_row", sqlite3_step(stmt)==SQLITE_ROW);
@@ -2470,7 +2544,7 @@ static void run_prepared_stmt_reuse_after_schema_checkout(void){
 
   sqlite3_finalize(stmt);
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_working_set_refreshes_staged_across_connections(void){
@@ -2483,19 +2557,19 @@ static void run_working_set_refreshes_staged_across_connections(void){
 
   printf("=== Working Set Refreshes Staged Across Connections Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_working_set_refreshes_staged_across_connections");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db1_for_cross_conn_staged", open_db(dbpath, &db1)==SQLITE_OK);
   check("create_table_for_cross_conn_staged",
-        execsql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+        execSql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
   check("insert_row_for_cross_conn_staged",
-        execsql(db1, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+        execSql(db1, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
   check("initial_commit_for_cross_conn_staged",
-        execsql(db1, "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+        execSql(db1, "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
   check("open_db2_for_cross_conn_staged", open_db(dbpath, &db2)==SQLITE_OK);
 
   doltliteGetSessionStaged(db2, &stagedBefore);
-  check("db1_stage_new_row", execsql(db1,
+  check("db1_stage_new_row", execSql(db1,
     "INSERT INTO t VALUES(2,'b');"
     "SELECT dolt_add('-A');")==SQLITE_OK);
   doltliteGetSessionStaged(db1, &stagedExpected);
@@ -2503,14 +2577,14 @@ static void run_working_set_refreshes_staged_across_connections(void){
         memcmp(&stagedExpected, &stagedBefore, sizeof(ProllyHash))!=0);
 
   check("db2_refreshes_working_catalog_on_read",
-        strcmp(exec1(db2, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "2")==0);
   doltliteGetSessionStaged(db2, &stagedAfter);
   check("db2_refreshes_staged_hash",
         memcmp(&stagedAfter, &stagedExpected, sizeof(ProllyHash))==0);
 
   sqlite3_close(db2);
   sqlite3_close(db1);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_reopen_preserves_staged_working_set(void){
@@ -2521,21 +2595,21 @@ static void run_reopen_preserves_staged_working_set(void){
 
   printf("=== Reopen Preserves Staged Working Set Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_reopen_preserves_staged_working_set");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_reopen_staged", open_db(dbpath, &db)==SQLITE_OK);
   check("create_table_for_reopen_staged",
-        execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+        execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
   check("insert_base_row_for_reopen_staged",
-        execsql(db, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+        execSql(db, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
   check("commit_base_row_for_reopen_staged",
-        execsql(db, "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+        execSql(db, "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
   check("stage_new_row_for_reopen_staged",
-        execsql(db,
+        execSql(db,
           "INSERT INTO t VALUES(2,'b');"
           "SELECT dolt_add('-A');")==SQLITE_OK);
   check("staged_status_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status WHERE staged=1"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status WHERE staged=1"), "1")==0);
   doltliteGetSessionStaged(db, &stagedBeforeClose);
   check("staged_hash_before_close_nonempty",
         !prollyHashIsEmpty(&stagedBeforeClose));
@@ -2544,13 +2618,13 @@ static void run_reopen_preserves_staged_working_set(void){
 
   check("reopen_db_for_reopen_staged", open_db(dbpath, &db)==SQLITE_OK);
   check("staged_status_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status WHERE staged=1"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status WHERE staged=1"), "1")==0);
   doltliteGetSessionStaged(db, &stagedAfterReopen);
   check("staged_hash_after_reopen_matches",
         memcmp(&stagedAfterReopen, &stagedBeforeClose, sizeof(ProllyHash))==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_begin_write_refreshes_working_set_metadata(void){
@@ -2568,19 +2642,19 @@ static void run_begin_write_refreshes_working_set_metadata(void){
 
   printf("=== Begin Write Refreshes Working Set Metadata Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_begin_write_refreshes_working_set_metadata");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db1_for_begin_write_refresh", open_db(dbpath, &db1)==SQLITE_OK);
   check("create_table_for_begin_write_refresh",
-        execsql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+        execSql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
   check("insert_row_for_begin_write_refresh",
-        execsql(db1, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+        execSql(db1, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
   check("initial_commit_for_begin_write_refresh",
-        execsql(db1, "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+        execSql(db1, "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
   check("open_db2_for_begin_write_refresh", open_db(dbpath, &db2)==SQLITE_OK);
 
   doltliteGetSessionStaged(db2, &stagedBefore);
-  check("db1_prepare_new_working_state", execsql(db1,
+  check("db1_prepare_new_working_state", execSql(db1,
     "INSERT INTO t VALUES(2,'b');"
     "SELECT dolt_add('-A');")==SQLITE_OK);
   doltliteGetSessionStaged(db1, &stagedExpected);
@@ -2593,9 +2667,9 @@ static void run_begin_write_refreshes_working_set_metadata(void){
   check("db2_staged_state_is_initially_stale",
         memcmp(&stagedBefore, &stagedExpected, sizeof(ProllyHash))!=0);
   check("db2_begin_immediate_refreshes_branch_state",
-        execsql(db2, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db2, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("db2_sees_latest_working_rows_in_write_txn",
-        strcmp(exec1(db2, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "2")==0);
   doltliteGetSessionStaged(db2, &stagedAfter);
   doltliteGetSessionMergeState(db2, &isMergingAfter, &mergeAfter, &conflictsAfter);
   check("begin_write_refreshes_staged_hash",
@@ -2605,11 +2679,11 @@ static void run_begin_write_refreshes_working_set_metadata(void){
         memcmp(&mergeAfter, &mergeExpected, sizeof(ProllyHash))==0);
   check("begin_write_refreshes_conflicts_catalog",
         memcmp(&conflictsAfter, &conflictsExpected, sizeof(ProllyHash))==0);
-  check("rollback_begin_write_refresh_txn", execsql(db2, "ROLLBACK;")==SQLITE_OK);
+  check("rollback_begin_write_refresh_txn", execSql(db2, "ROLLBACK;")==SQLITE_OK);
 
   sqlite3_close(db2);
   sqlite3_close(db1);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_begin_write_from_stale_read_snapshot(void){
@@ -2621,35 +2695,35 @@ static void run_begin_write_from_stale_read_snapshot(void){
 
   printf("=== Begin Write From Stale Read Snapshot Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_begin_write_from_stale_read_snapshot");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db1_for_stale_snapshot", open_db(dbpath, &db1)==SQLITE_OK);
   check("create_table_for_stale_snapshot",
-        execsql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
+        execSql(db1, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);")==SQLITE_OK);
   check("insert_row_for_stale_snapshot",
-        execsql(db1, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
+        execSql(db1, "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
   check("open_db2_for_stale_snapshot", open_db(dbpath, &db2)==SQLITE_OK);
 
-  check("begin_read_txn_for_stale_snapshot", execsql(db2, "BEGIN;")==SQLITE_OK);
+  check("begin_read_txn_for_stale_snapshot", execSql(db2, "BEGIN;")==SQLITE_OK);
   check("prepare_read_in_stale_snapshot",
         sqlite3_prepare_v2(db2, "SELECT count(*) FROM t", -1, &pRead, 0)==SQLITE_OK);
   check("step_read_in_stale_snapshot", sqlite3_step(pRead)==SQLITE_ROW);
   check("read_in_stale_snapshot", sqlite3_column_int(pRead, 0)==1);
   check("db1_autocommit_change_after_read_snapshot",
-        execsql(db1, "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+        execSql(db1, "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
 
-  rc = execsql_silent(db2, "INSERT INTO t VALUES(3,'c');");
+  rc = execSqlSilent(db2, "INSERT INTO t VALUES(3,'c');");
   check("write_upgrade_fails", rc!=SQLITE_OK);
   check("write_upgrade_returns_busy_snapshot",
         sqlite3_extended_errcode(db2)==SQLITE_BUSY_SNAPSHOT);
   sqlite3_finalize(pRead);
-  check("rollback_stale_snapshot_txn", execsql(db2, "ROLLBACK;")==SQLITE_OK);
+  check("rollback_stale_snapshot_txn", execSql(db2, "ROLLBACK;")==SQLITE_OK);
   check("stale_snapshot_did_not_overwrite_rows",
-        strcmp(exec1(db1, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db1, "SELECT count(*) FROM t"), "2")==0);
 
   sqlite3_close(db2);
   sqlite3_close(db1);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_open_rejects_corrupt_working_set(void){
@@ -2664,10 +2738,10 @@ static void run_open_rejects_corrupt_working_set(void){
 
   printf("=== Open Rejects Corrupt Working Set Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_open_rejects_corrupt_working_set");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_corrupt_working_set", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_corrupt_working_set", execsql(db,
+  check("setup_repo_for_corrupt_working_set", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -2687,11 +2761,11 @@ static void run_open_rejects_corrupt_working_set(void){
   chunkStoreClose(&cs);
 
   rc = sqlite3_open(dbpath, &db2);
-  stmtRc = db2 ? execsql_silent(db2, "SELECT count(*) FROM sqlite_master;") : rc;
+  stmtRc = db2 ? execSqlSilent(db2, "SELECT count(*) FROM sqlite_master;") : rc;
   check("open_or_first_statement_returns_corrupt_for_bad_working_set",
         rc==SQLITE_CORRUPT || stmtRc==SQLITE_CORRUPT);
   if( db2 ) sqlite3_close(db2);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_diff_stat_requires_refs(void){
@@ -2701,18 +2775,57 @@ static void run_diff_stat_requires_refs(void){
 
   printf("=== Diff Stat Requires Refs Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_diff_stat_requires_refs");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_diff_stat_requires_refs", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_diff_stat_requires_refs", execsql(db,
+  check("setup_repo_for_diff_stat_requires_refs", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT count(*) FROM dolt_diff_stat('HEAD');");
+  res = queryScalarText(db, "SELECT count(*) FROM dolt_diff_stat('HEAD');");
   check("diff_stat_missing_to_ref_returns_error", strstr(res, "ERROR:")!=0);
-  res = exec1(db, "SELECT count(*) FROM dolt_diff_summary('HEAD');");
+  res = queryScalarText(db, "SELECT count(*) FROM dolt_diff_summary('HEAD');");
   check("diff_summary_missing_to_ref_returns_error", strstr(res, "ERROR:")!=0);
+
+  sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
+static void run_diff_table_deep_history_map(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  int i;
+
+  printf("=== Diff Table Deep History Map Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_diff_table_deep_history_map");
+  remove_db(dbpath);
+
+  check("open_db_for_diff_table_deep_history_map",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_diff_table_deep_history_map", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES(1,0);"
+    "SELECT dolt_commit('-A', '-m', 'c0');")==SQLITE_OK);
+
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "UPDATE t SET v=%d WHERE id=1;"
+      "SELECT dolt_commit('-A', '-m', 'c%d');", i, i);
+    check("diff_table_deep_history_commit", execsql(db, sql)==SQLITE_OK);
+  }
+
+  check("diff_table_deep_history_count",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';"),
+          "80")==0);
+  check("diff_table_deep_history_latest_value",
+        strcmp(exec1(db,
+          "SELECT to_v FROM dolt_diff_t "
+          "WHERE to_commit=(SELECT commit_hash FROM dolt_log "
+          "                 WHERE message='c80');"),
+          "80")==0);
 
   sqlite3_close(db);
   remove_db(dbpath);
@@ -2740,14 +2853,14 @@ static void run_diff_stat_surfaces_corrupt_root(void){
 
   printf("=== Diff Stat Surfaces Corrupt Root Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_diff_stat_surfaces_corrupt_root");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   memset(&headCommit, 0, sizeof(headCommit));
   memset(&fromCommit, 0, sizeof(fromCommit));
   memset(&badCommit, 0, sizeof(badCommit));
 
   check("open_db_for_diff_stat_corrupt_root", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_diff_stat_corrupt_root", execsql(db,
+  check("setup_repo_for_diff_stat_corrupt_root", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'c1');"
@@ -2809,13 +2922,13 @@ static void run_diff_stat_surfaces_corrupt_root(void){
   snprintf(sql, sizeof(sql),
            "SELECT count(*) FROM dolt_diff_stat('%s','%s','t');",
            zFrom, zTo);
-  res = exec1(db, sql);
+  res = queryScalarText(db, sql);
   check("diff_stat_corrupt_root_returns_error", strstr(res, "ERROR:")!=0);
 
   snprintf(sql, sizeof(sql),
            "SELECT count(*) FROM dolt_diff_summary('%s','%s','t');",
            zFrom, zTo);
-  res = exec1(db, sql);
+  res = queryScalarText(db, sql);
   check("diff_summary_corrupt_root_returns_error", strstr(res, "ERROR:")!=0);
 
   sqlite3_free(pCommitData);
@@ -2825,7 +2938,7 @@ static void run_diff_stat_surfaces_corrupt_root(void){
   doltliteCommitClear(&fromCommit);
   doltliteCommitClear(&headCommit);
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_truncated_wal_is_rejected(void){
@@ -2836,10 +2949,10 @@ static void run_truncated_wal_is_rejected(void){
 
   printf("=== Truncated WAL Rejected Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_truncated_wal_rejected");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_truncated_wal", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_truncated_wal", execsql(db,
+  check("setup_repo_for_truncated_wal", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -2861,7 +2974,7 @@ static void run_truncated_wal_is_rejected(void){
           SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
   check("chunk_store_open_rejects_corrupt_wal", rc==SQLITE_CORRUPT);
 
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_refresh_open_path_transactional(void){
@@ -2873,7 +2986,7 @@ static void run_refresh_open_path_transactional(void){
 
   printf("=== Refresh Open Path Transactional Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_refresh_open_path_transactional");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_empty_store_with_no_file",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
@@ -2896,7 +3009,7 @@ static void run_refresh_open_path_transactional(void){
   check("refresh_open_path_preserves_branch_count", cs.nBranches==0);
 
   chunkStoreClose(&cs);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_wal_offset_corruption_is_rejected(void){
@@ -2910,10 +3023,10 @@ static void run_wal_offset_corruption_is_rejected(void){
 
   printf("=== WAL Offset Corruption Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_wal_offset_corruption");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_wal_offset", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_wal_offset", execsql(db,
+  check("setup_repo_for_wal_offset", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
@@ -2940,7 +3053,7 @@ static void run_wal_offset_corruption_is_rejected(void){
   }
   sqlite3_free(pData);
   chunkStoreClose(&cs);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_integrity_check_walks_prolly_nodes(void){
@@ -2957,10 +3070,10 @@ static void run_integrity_check_walks_prolly_nodes(void){
 
   printf("=== Integrity Check Walks Prolly Nodes Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_integrity_check_walks_nodes");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_integrity_walk", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_integrity_walk", execsql(db,
+  check("setup_repo_for_integrity_walk", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "INSERT INTO t VALUES(2,'b');"
@@ -2996,10 +3109,10 @@ static void run_integrity_check_walks_prolly_nodes(void){
 
   check("reopen_db_for_integrity_walk", open_db(dbpath, &db2)==SQLITE_OK);
   check("integrity_check_surfaces_root_corruption",
-        strcmp(exec1(db2, "PRAGMA integrity_check"), "ok")!=0);
+        strcmp(queryScalarText(db2, "PRAGMA integrity_check"), "ok")!=0);
 
   sqlite3_close(db2);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_table_moveto_mutmap_delete_preserves_neighbors(void){
@@ -3008,26 +3121,26 @@ static void run_table_moveto_mutmap_delete_preserves_neighbors(void){
 
   printf("=== Table Moveto MutMap Delete Preserves Neighbors Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_table_moveto_mutmap_delete_preserves_neighbors");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_table_moveto_delete", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_table_for_table_moveto_delete", execsql(db,
+  check("setup_table_for_table_moveto_delete", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "INSERT INTO t VALUES(3,'c');")==SQLITE_OK);
-  check("begin_txn_for_table_moveto_delete", execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("begin_txn_for_table_moveto_delete", execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("insert_mutmap_only_row_for_table_moveto_delete",
-        execsql(db, "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+        execSql(db, "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
   check("delete_mutmap_only_row_by_rowid",
-        execsql(db, "DELETE FROM t WHERE rowid=2;")==SQLITE_OK);
+        execSql(db, "DELETE FROM t WHERE rowid=2;")==SQLITE_OK);
   check("neighbors_preserved_after_delete",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT group_concat(id, ',') FROM (SELECT id FROM t ORDER BY id)"),
           "1,3")==0);
-  check("rollback_table_moveto_delete_txn", execsql(db, "ROLLBACK;")==SQLITE_OK);
+  check("rollback_table_moveto_delete_txn", execSql(db, "ROLLBACK;")==SQLITE_OK);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_table_moveto_mutmap_exact_keeps_iteration_aligned(void){
@@ -3036,31 +3149,31 @@ static void run_table_moveto_mutmap_exact_keeps_iteration_aligned(void){
 
   printf("=== Table Moveto MutMap Exact Keeps Iteration Aligned Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_table_moveto_mutmap_exact_keeps_iteration_aligned");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_table_moveto_exact", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_table_for_table_moveto_exact", execsql(db,
+  check("setup_table_for_table_moveto_exact", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "INSERT INTO t VALUES(2,'b');"
     "INSERT INTO t VALUES(3,'c');")==SQLITE_OK);
-  check("begin_txn_for_table_moveto_exact", execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("begin_txn_for_table_moveto_exact", execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("update_existing_row_for_table_moveto_exact",
-        execsql(db, "UPDATE t SET v='bb' WHERE id=2;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET v='bb' WHERE id=2;")==SQLITE_OK);
   check("table_moveto_exact_forward_iteration",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT group_concat(id || ':' || v, ',') "
           "FROM (SELECT id, v FROM t WHERE id>=2 ORDER BY id)"),
           "2:bb,3:c")==0);
   check("table_moveto_exact_reverse_iteration",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT group_concat(id || ':' || v, ',') "
           "FROM (SELECT id, v FROM t WHERE id<=2 ORDER BY id DESC)"),
           "2:bb,1:a")==0);
-  check("rollback_table_moveto_exact_txn", execsql(db, "ROLLBACK;")==SQLITE_OK);
+  check("rollback_table_moveto_exact_txn", execSql(db, "ROLLBACK;")==SQLITE_OK);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_index_moveto_mutmap_exact_keeps_iteration_aligned(void){
@@ -3071,17 +3184,17 @@ static void run_index_moveto_mutmap_exact_keeps_iteration_aligned(void){
 
   printf("=== Index Moveto MutMap Exact Keeps Iteration Aligned Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_index_moveto_mutmap_exact_keeps_iteration_aligned");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_index_moveto_exact", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_table_for_index_moveto_exact", execsql(db,
+  check("setup_table_for_index_moveto_exact", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, b TEXT, c TEXT);"
     "CREATE INDEX idx_b ON t(b);"
     "INSERT INTO t VALUES(1,'a','aa');"
     "INSERT INTO t VALUES(3,'c','cc');")==SQLITE_OK);
-  check("begin_txn_for_index_moveto_exact", execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+  check("begin_txn_for_index_moveto_exact", execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("insert_mutmap_only_index_row",
-        execsql(db, "INSERT INTO t VALUES(2,'b','bb');")==SQLITE_OK);
+        execSql(db, "INSERT INTO t VALUES(2,'b','bb');")==SQLITE_OK);
 
   rc = sqlite3_prepare_v2(db,
     "SELECT b FROM t INDEXED BY idx_b WHERE b >= 'b' ORDER BY b",
@@ -3095,10 +3208,10 @@ static void run_index_moveto_mutmap_exact_keeps_iteration_aligned(void){
     check("index_moveto_exact_done", sqlite3_step(stmt)==SQLITE_DONE);
   }
   sqlite3_finalize(stmt);
-  check("rollback_index_moveto_exact_txn", execsql(db, "ROLLBACK;")==SQLITE_OK);
+  check("rollback_index_moveto_exact_txn", execSql(db, "ROLLBACK;")==SQLITE_OK);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_btree_commit_failure_transactional(void){
@@ -3116,21 +3229,21 @@ static void run_btree_commit_failure_transactional(void){
 
   printf("=== Btree Commit Failure Transaction Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_btree_commit_failure_transactional");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
   gFailWriteOnce = 0;
   gFailSyncOnce = 0;
   gFailHits = 0;
 
   check("register_fail_vfs_for_btree_commit", registerFailVfs()==SQLITE_OK);
   check("open_fail_db_for_btree_commit", open_fail_db(dbpath, &db)==SQLITE_OK);
-  check("setup_table", execsql(db,
+  check("setup_table", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');")==SQLITE_OK);
   check("get_head_catalog_for_commit_failure",
         doltliteGetHeadCatalogHash(db, &headCatHash)==SQLITE_OK);
   doltliteSetSessionStaged(db, &headCatHash);
   doltliteClearSessionMergeState(db);
-  check("begin_write_txn", execsql(db, "BEGIN; INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
+  check("begin_write_txn", execSql(db, "BEGIN; INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
   memset(&dummyStaged, 0x71, sizeof(dummyStaged));
   memset(&dummyMerge, 0x72, sizeof(dummyMerge));
   memset(&dummyConflicts, 0x73, sizeof(dummyConflicts));
@@ -3138,12 +3251,12 @@ static void run_btree_commit_failure_transactional(void){
   doltliteSetSessionMergeState(db, 1, &dummyMerge, &dummyConflicts);
 
   gFailWriteOnce = 1;
-  rc = execsql_silent(db, "COMMIT;");
+  rc = execSqlSilent(db, "COMMIT;");
   check("commit_failure_injected", gFailHits>0);
   check("commit_returns_error", rc!=SQLITE_OK);
   check("autocommit_restored_after_failed_commit", sqlite3_get_autocommit(db)==1);
   check("failed_commit_rolled_back_visible_state",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
   doltliteGetSessionStaged(db, &stagedAfter);
   doltliteGetSessionMergeState(db, &isMergingAfter, &mergeAfter, &conflictsAfter);
   check("failed_commit_restores_session_staged",
@@ -3157,9 +3270,9 @@ static void run_btree_commit_failure_transactional(void){
   sqlite3_close(db);
   check("reopen_after_failed_commit", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_commit_did_not_persist_row",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_restores_session_metadata(void){
@@ -3176,10 +3289,10 @@ static void run_savepoint_restores_session_metadata(void){
 
   printf("=== Savepoint Restores Session Metadata Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_restores_session_metadata");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_savepoint_metadata", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_savepoint_metadata", execsql(db,
+  check("setup_repo_for_savepoint_metadata", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
@@ -3190,9 +3303,9 @@ static void run_savepoint_restores_session_metadata(void){
   doltliteClearSessionMergeState(db);
 
   check("begin_immediate_for_savepoint_metadata",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("create_savepoint_for_metadata",
-        execsql(db, "SAVEPOINT s1;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT s1;")==SQLITE_OK);
 
   memset(&dummyStaged, 0x41, sizeof(dummyStaged));
   memset(&dummyMerge, 0x42, sizeof(dummyMerge));
@@ -3204,7 +3317,7 @@ static void run_savepoint_restores_session_metadata(void){
         memcmp(&stagedAfter, &dummyStaged, sizeof(dummyStaged))==0);
 
   check("rollback_to_savepoint_metadata",
-        execsql(db, "ROLLBACK TO s1;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO s1;")==SQLITE_OK);
   doltliteGetSessionStaged(db, &stagedAfter);
   doltliteGetSessionMergeState(db, &isMergingAfter, &mergeAfter, &conflictsAfter);
   check("rollback_to_savepoint_restores_staged",
@@ -3215,10 +3328,10 @@ static void run_savepoint_restores_session_metadata(void){
   check("rollback_to_savepoint_clears_conflicts_catalog",
         memcmp(&conflictsAfter, &(ProllyHash){{0}}, sizeof(ProllyHash))==0);
 
-  check("release_savepoint_metadata", execsql(db, "RELEASE s1;")==SQLITE_OK);
-  check("rollback_outer_txn_metadata", execsql(db, "ROLLBACK;")==SQLITE_OK);
+  check("release_savepoint_metadata", execSql(db, "RELEASE s1;")==SQLITE_OK);
+  check("rollback_outer_txn_metadata", execSql(db, "ROLLBACK;")==SQLITE_OK);
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_flush_snapshot_rollback_reopen(void){
@@ -3227,10 +3340,10 @@ static void run_savepoint_flush_snapshot_rollback_reopen(void){
 
   printf("=== Savepoint Flush Snapshot Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_flush_snapshot_rollback_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_flush_snapshot_rollback", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_flush_snapshot_rollback", execsql(db,
+  check("setup_repo_for_flush_snapshot_rollback", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
     "INSERT INTO t VALUES(1, 1, 'a');"
@@ -3238,56 +3351,56 @@ static void run_savepoint_flush_snapshot_rollback_reopen(void){
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
   check("begin_txn_for_flush_snapshot_rollback",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_flush_snapshot_rollback",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_index_update_for_flush_snapshot_rollback",
-        execsql(db, "UPDATE t SET k=11, v='outer' WHERE id=1;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET k=11, v='outer' WHERE id=1;")==SQLITE_OK);
   check("savepoint_inner_for_flush_snapshot_rollback",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_index_edits_for_flush_snapshot_rollback",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
   check("rollback_inner_after_flush_snapshot",
-        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
   check("release_inner_after_flush_snapshot",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("commit_outer_after_flush_snapshot",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("rollback_path_outer_row_visible_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("rollback_path_inner_row_reverted_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "2")==0);
   check("rollback_path_insert_reverted_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
   check("rollback_path_index_lookup_outer_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("rollback_path_index_lookup_inner_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
   check("rollback_path_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_for_flush_snapshot_rollback", open_db(dbpath, &db)==SQLITE_OK);
   check("rollback_path_outer_row_visible_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("rollback_path_inner_row_reverted_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "2")==0);
   check("rollback_path_insert_reverted_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
   check("rollback_path_index_lookup_outer_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("rollback_path_index_lookup_inner_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
   check("rollback_path_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_flush_snapshot_release_reopen(void){
@@ -3296,10 +3409,10 @@ static void run_savepoint_flush_snapshot_release_reopen(void){
 
   printf("=== Savepoint Flush Snapshot Release Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_flush_snapshot_release_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_flush_snapshot_release", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_flush_snapshot_release", execsql(db,
+  check("setup_repo_for_flush_snapshot_release", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
     "INSERT INTO t VALUES(1, 1, 'a');"
@@ -3307,66 +3420,66 @@ static void run_savepoint_flush_snapshot_release_reopen(void){
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
   check("begin_txn_for_flush_snapshot_release",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_flush_snapshot_release",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_index_update_for_flush_snapshot_release",
-        execsql(db, "UPDATE t SET k=11, v='outer' WHERE id=1;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET k=11, v='outer' WHERE id=1;")==SQLITE_OK);
   check("savepoint_inner_for_flush_snapshot_release",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_index_edits_for_flush_snapshot_release",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
   check("release_inner_after_flush_snapshot",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("release_outer_after_flush_snapshot",
-        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_after_flush_snapshot_release",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
   check("dolt_commit_after_flush_snapshot_release",
-        execsql(db, "SELECT dolt_commit('-A', '-m', 'after savepoints');")==SQLITE_OK);
+        execSql(db, "SELECT dolt_commit('-A', '-m', 'after savepoints');")==SQLITE_OK);
 
   check("release_path_outer_row_visible_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("release_path_inner_row_visible_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "22")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "22")==0);
   check("release_path_insert_visible_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
   check("release_path_index_lookup_outer_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("release_path_index_lookup_inner_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
   check("release_path_index_lookup_insert_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
   check("release_path_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
   check("release_path_clean_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_for_flush_snapshot_release", open_db(dbpath, &db)==SQLITE_OK);
   check("release_path_outer_row_visible_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("release_path_inner_row_visible_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "22")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "22")==0);
   check("release_path_insert_visible_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
   check("release_path_index_lookup_outer_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("release_path_index_lookup_inner_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
   check("release_path_index_lookup_insert_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
   check("release_path_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
   check("release_path_clean_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_failed_commit_rollback_reopen(void){
@@ -3376,87 +3489,87 @@ static void run_savepoint_failed_commit_rollback_reopen(void){
 
   printf("=== Savepoint Failed Commit Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_failed_commit_rollback_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_savepoint_failed_commit_rollback",
         open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_savepoint_failed_commit_rollback", execsql(db,
+  check("setup_repo_for_savepoint_failed_commit_rollback", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
     "INSERT INTO t VALUES(1, 1, 'a');"
     "INSERT INTO t VALUES(2, 2, 'b');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
   check("begin_txn_for_savepoint_failed_commit_rollback",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_savepoint_failed_commit_rollback",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_edits_for_savepoint_failed_commit_rollback",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=11, v='outer' WHERE id=1;"
           "INSERT INTO t VALUES(4, 44, 'outer4');")==SQLITE_OK);
   check("savepoint_inner_for_savepoint_failed_commit_rollback",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_edits_for_savepoint_failed_commit_rollback",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
 
   check("rollback_inner_after_failed_commit",
-        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
   check("release_inner_after_failed_commit_rollback",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("release_outer_after_failed_commit_rollback",
-        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_after_failed_commit_rollback",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("failed_commit_rollback_outer_update_visible_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("failed_commit_rollback_inner_update_reverted_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "2")==0);
   check("failed_commit_rollback_inner_insert_reverted_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
   check("failed_commit_rollback_outer_insert_visible_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
   check("failed_commit_rollback_outer_index_visible_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("failed_commit_rollback_inner_index_reverted_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
   check("failed_commit_rollback_head_unchanged_before_close",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("failed_commit_rollback_status_dirty_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("failed_commit_rollback_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_for_savepoint_failed_commit_rollback", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_commit_rollback_outer_update_visible_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("failed_commit_rollback_inner_update_reverted_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "2")==0);
   check("failed_commit_rollback_inner_insert_reverted_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
   check("failed_commit_rollback_outer_insert_visible_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
   check("failed_commit_rollback_outer_index_visible_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("failed_commit_rollback_inner_index_reverted_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
   check("failed_commit_rollback_head_unchanged_after_reopen",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("failed_commit_rollback_status_dirty_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("failed_commit_rollback_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_failed_commit_release_reopen(void){
@@ -3466,89 +3579,89 @@ static void run_savepoint_failed_commit_release_reopen(void){
 
   printf("=== Savepoint Failed Commit Release Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_failed_commit_release_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_savepoint_failed_commit_release",
         open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_savepoint_failed_commit_release", execsql(db,
+  check("setup_repo_for_savepoint_failed_commit_release", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
     "INSERT INTO t VALUES(1, 1, 'a');"
     "INSERT INTO t VALUES(2, 2, 'b');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
   check("begin_txn_for_savepoint_failed_commit_release",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_savepoint_failed_commit_release",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_edits_for_savepoint_failed_commit_release",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=11, v='outer' WHERE id=1;"
           "INSERT INTO t VALUES(4, 44, 'outer4');")==SQLITE_OK);
   check("savepoint_inner_for_savepoint_failed_commit_release",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_edits_for_savepoint_failed_commit_release",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
 
   check("release_inner_after_failed_commit_release",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("release_outer_after_failed_commit_release",
-        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_after_failed_commit_release",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("failed_commit_release_outer_update_visible_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("failed_commit_release_inner_update_visible_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "22")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "22")==0);
   check("failed_commit_release_inner_insert_visible_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
   check("failed_commit_release_outer_insert_visible_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
   check("failed_commit_release_outer_index_visible_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("failed_commit_release_inner_index_visible_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
   check("failed_commit_release_insert_index_visible_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
   check("failed_commit_release_head_unchanged_before_close",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("failed_commit_release_status_dirty_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("failed_commit_release_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_for_savepoint_failed_commit_release", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_commit_release_outer_update_visible_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("failed_commit_release_inner_update_visible_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "22")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "22")==0);
   check("failed_commit_release_inner_insert_visible_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
   check("failed_commit_release_outer_insert_visible_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=4"), "1")==0);
   check("failed_commit_release_outer_index_visible_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("failed_commit_release_inner_index_visible_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "1")==0);
   check("failed_commit_release_insert_index_visible_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=33"), "1")==0);
   check("failed_commit_release_head_unchanged_after_reopen",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("failed_commit_release_status_dirty_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("failed_commit_release_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_failed_commit_outer_rollback_reopen(void){
@@ -3559,59 +3672,59 @@ static void run_savepoint_failed_commit_outer_rollback_reopen(void){
   printf("=== Savepoint Failed Commit Outer Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_savepoint_failed_commit_outer_rollback_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_savepoint_failed_commit_outer_rollback",
         open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_savepoint_failed_commit_outer_rollback", execsql(db,
+  check("setup_repo_for_savepoint_failed_commit_outer_rollback", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
     "INSERT INTO t VALUES(1, 1, 'a');"
     "INSERT INTO t VALUES(2, 2, 'b');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
   check("begin_txn_for_savepoint_failed_commit_outer_rollback",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_savepoint_failed_commit_outer_rollback",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_edits_for_savepoint_failed_commit_outer_rollback",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=11, v='outer' WHERE id=1;"
           "INSERT INTO t VALUES(4, 44, 'outer4');")==SQLITE_OK);
   check("savepoint_inner_for_savepoint_failed_commit_outer_rollback",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_edits_for_savepoint_failed_commit_outer_rollback",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(3, 33, 'inner3');")==SQLITE_OK);
 
   check("rollback_outer_after_failed_commit",
-        execsql(db, "ROLLBACK TO outer_sp;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO outer_sp;")==SQLITE_OK);
   check("release_outer_after_failed_commit_outer_rollback",
-        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_after_failed_commit_outer_rollback",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("failed_commit_outer_rollback_row1_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "1")==0);
   check("failed_commit_outer_rollback_row2_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "2")==0);
   check("failed_commit_outer_rollback_row3_absent_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
   check("failed_commit_outer_rollback_row4_absent_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
   check("failed_commit_outer_rollback_k11_absent_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
   check("failed_commit_outer_rollback_k22_absent_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
   check("failed_commit_outer_rollback_head_unchanged_before_close",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("failed_commit_outer_rollback_status_clean_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("failed_commit_outer_rollback_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
@@ -3619,26 +3732,26 @@ static void run_savepoint_failed_commit_outer_rollback_reopen(void){
   check("reopen_db_for_savepoint_failed_commit_outer_rollback",
         open_db(dbpath, &db)==SQLITE_OK);
   check("failed_commit_outer_rollback_row1_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "1")==0);
   check("failed_commit_outer_rollback_row2_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "2")==0);
   check("failed_commit_outer_rollback_row3_absent_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "0")==0);
   check("failed_commit_outer_rollback_row4_absent_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
   check("failed_commit_outer_rollback_k11_absent_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
   check("failed_commit_outer_rollback_k22_absent_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
   check("failed_commit_outer_rollback_head_unchanged_after_reopen",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("failed_commit_outer_rollback_status_clean_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("failed_commit_outer_rollback_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_flush_snapshot_multi_table_rollback_reopen(void){
@@ -3648,11 +3761,11 @@ static void run_savepoint_flush_snapshot_multi_table_rollback_reopen(void){
   printf("=== Savepoint Flush Snapshot Multi Table Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_savepoint_flush_snapshot_multi_table_rollback_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_flush_snapshot_multi_table_rollback",
         open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_flush_snapshot_multi_table_rollback", execsql(db,
+  check("setup_repo_for_flush_snapshot_multi_table_rollback", execSql(db,
     "CREATE TABLE a(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX a_k_idx ON a(k);"
     "CREATE TABLE b(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
@@ -3664,49 +3777,49 @@ static void run_savepoint_flush_snapshot_multi_table_rollback_reopen(void){
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
   check("begin_txn_for_flush_snapshot_multi_table_rollback",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_flush_snapshot_multi_table_rollback",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_edits_for_flush_snapshot_multi_table_rollback",
-        execsql(db,
+        execSql(db,
           "UPDATE a SET k=11, v='outer-a' WHERE id=1;"
           "INSERT INTO b VALUES(3, 30, 'outer-b3');")==SQLITE_OK);
   check("savepoint_inner_for_flush_snapshot_multi_table_rollback",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_edits_for_flush_snapshot_multi_table_rollback",
-        execsql(db,
+        execSql(db,
           "UPDATE a SET k=22, v='inner-a' WHERE id=2;"
           "INSERT INTO a VALUES(3, 33, 'inner-a3');"
           "UPDATE b SET k=33, v='inner-b' WHERE id=2;")==SQLITE_OK);
   check("rollback_inner_after_flush_snapshot_multi_table",
-        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
   check("release_inner_after_flush_snapshot_multi_table",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("release_outer_after_flush_snapshot_multi_table",
-        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_after_flush_snapshot_multi_table_rollback",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("flush_snapshot_multi_table_a1_before_close",
-        strcmp(exec1(db, "SELECT k FROM a WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM a WHERE id=1"), "11")==0);
   check("flush_snapshot_multi_table_a2_before_close",
-        strcmp(exec1(db, "SELECT k FROM a WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM a WHERE id=2"), "2")==0);
   check("flush_snapshot_multi_table_a3_absent_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM a WHERE id=3"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM a WHERE id=3"), "0")==0);
   check("flush_snapshot_multi_table_b2_before_close",
-        strcmp(exec1(db, "SELECT k FROM b WHERE id=2"), "20")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM b WHERE id=2"), "20")==0);
   check("flush_snapshot_multi_table_b3_present_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM b WHERE id=3"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM b WHERE id=3"), "1")==0);
   check("flush_snapshot_multi_table_a11_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM a WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM a WHERE k=11"), "1")==0);
   check("flush_snapshot_multi_table_a22_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM a WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM a WHERE k=22"), "0")==0);
   check("flush_snapshot_multi_table_b30_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM b WHERE k=30"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM b WHERE k=30"), "1")==0);
   check("flush_snapshot_multi_table_b33_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM b WHERE k=33"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM b WHERE k=33"), "0")==0);
   check("flush_snapshot_multi_table_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
@@ -3714,28 +3827,28 @@ static void run_savepoint_flush_snapshot_multi_table_rollback_reopen(void){
   check("reopen_db_for_flush_snapshot_multi_table_rollback",
         open_db(dbpath, &db)==SQLITE_OK);
   check("flush_snapshot_multi_table_a1_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM a WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM a WHERE id=1"), "11")==0);
   check("flush_snapshot_multi_table_a2_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM a WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM a WHERE id=2"), "2")==0);
   check("flush_snapshot_multi_table_a3_absent_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM a WHERE id=3"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM a WHERE id=3"), "0")==0);
   check("flush_snapshot_multi_table_b2_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM b WHERE id=2"), "20")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM b WHERE id=2"), "20")==0);
   check("flush_snapshot_multi_table_b3_present_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM b WHERE id=3"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM b WHERE id=3"), "1")==0);
   check("flush_snapshot_multi_table_a11_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM a WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM a WHERE k=11"), "1")==0);
   check("flush_snapshot_multi_table_a22_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM a WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM a WHERE k=22"), "0")==0);
   check("flush_snapshot_multi_table_b30_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM b WHERE k=30"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM b WHERE k=30"), "1")==0);
   check("flush_snapshot_multi_table_b33_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM b WHERE k=33"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM b WHERE k=33"), "0")==0);
   check("flush_snapshot_multi_table_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_same_name_shadowing_index_reopen(void){
@@ -3745,11 +3858,11 @@ static void run_savepoint_same_name_shadowing_index_reopen(void){
   printf("=== Savepoint Same Name Shadowing Index Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_savepoint_same_name_shadowing_index_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_savepoint_same_name_shadowing",
         open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_savepoint_same_name_shadowing", execsql(db,
+  check("setup_repo_for_savepoint_same_name_shadowing", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
     "INSERT INTO t VALUES(1, 1, 'a');"
@@ -3757,42 +3870,42 @@ static void run_savepoint_same_name_shadowing_index_reopen(void){
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
   check("begin_txn_for_savepoint_same_name_shadowing",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_shadow_outer",
-        execsql(db, "SAVEPOINT same_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT same_sp;")==SQLITE_OK);
   check("shadow_outer_edits",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=11, v='outer' WHERE id=1;"
           "INSERT INTO t VALUES(3, 33, 'outer3');")==SQLITE_OK);
   check("savepoint_shadow_inner",
-        execsql(db, "SAVEPOINT same_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT same_sp;")==SQLITE_OK);
   check("shadow_inner_edits",
-        execsql(db,
+        execSql(db,
           "UPDATE t SET k=22, v='inner' WHERE id=2;"
           "INSERT INTO t VALUES(4, 44, 'inner4');")==SQLITE_OK);
   check("rollback_shadow_inner",
-        execsql(db, "ROLLBACK TO same_sp;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO same_sp;")==SQLITE_OK);
   check("release_shadow_inner",
-        execsql(db, "RELEASE same_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE same_sp;")==SQLITE_OK);
   check("release_shadow_outer",
-        execsql(db, "RELEASE same_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE same_sp;")==SQLITE_OK);
   check("commit_shadow_same_name",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("shadow_same_name_id1_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("shadow_same_name_id2_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "2")==0);
   check("shadow_same_name_id3_present_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
   check("shadow_same_name_id4_absent_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
   check("shadow_same_name_k11_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("shadow_same_name_k22_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
   check("shadow_same_name_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
@@ -3800,22 +3913,22 @@ static void run_savepoint_same_name_shadowing_index_reopen(void){
   check("reopen_db_for_savepoint_same_name_shadowing",
         open_db(dbpath, &db)==SQLITE_OK);
   check("shadow_same_name_id1_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "11")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "11")==0);
   check("shadow_same_name_id2_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=2"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=2"), "2")==0);
   check("shadow_same_name_id3_present_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=3"), "1")==0);
   check("shadow_same_name_id4_absent_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=4"), "0")==0);
   check("shadow_same_name_k11_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "1")==0);
   check("shadow_same_name_k22_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=22"), "0")==0);
   check("shadow_same_name_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_schema_rollback_reopen(void){
@@ -3824,64 +3937,64 @@ static void run_savepoint_schema_rollback_reopen(void){
 
   printf("=== Savepoint Schema Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_schema_rollback_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_savepoint_schema_rollback", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_savepoint_schema_rollback", execsql(db,
+  check("setup_repo_for_savepoint_schema_rollback", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1, 'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
   check("begin_txn_for_savepoint_schema_rollback",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_schema_rollback",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_schema_rollback_edit",
-        execsql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
   check("savepoint_inner_for_schema_rollback",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_schema_changes",
-        execsql(db,
+        execSql(db,
           "ALTER TABLE t ADD COLUMN extra TEXT;"
           "CREATE TABLE aux(id INTEGER PRIMARY KEY, note TEXT);"
           "INSERT INTO aux VALUES(1, 'tmp');")==SQLITE_OK);
   check("rollback_inner_schema_changes",
-        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
   check("release_inner_schema_changes",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("release_outer_schema_changes",
-        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_schema_rollback",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("schema_rollback_row_before_close",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
   check("schema_rollback_extra_absent_before_close",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra'"), "0")==0);
   check("schema_rollback_aux_absent_before_close",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='aux'"), "0")==0);
   check("schema_rollback_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_for_savepoint_schema_rollback", open_db(dbpath, &db)==SQLITE_OK);
   check("schema_rollback_row_after_reopen",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
   check("schema_rollback_extra_absent_after_reopen",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra'"), "0")==0);
   check("schema_rollback_aux_absent_after_reopen",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='aux'"), "0")==0);
   check("schema_rollback_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_trigger_rollback_reopen(void){
@@ -3890,10 +4003,10 @@ static void run_savepoint_trigger_rollback_reopen(void){
 
   printf("=== Savepoint Trigger Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_savepoint_trigger_rollback_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_savepoint_trigger_rollback", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_savepoint_trigger_rollback", execsql(db,
+  check("setup_repo_for_savepoint_trigger_rollback", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "CREATE TABLE audit(msg TEXT);"
     "CREATE TRIGGER t_au AFTER UPDATE ON t BEGIN "
@@ -3903,48 +4016,48 @@ static void run_savepoint_trigger_rollback_reopen(void){
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
   check("begin_txn_for_savepoint_trigger_rollback",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_trigger_rollback",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_trigger_edit",
-        execsql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
   check("savepoint_inner_for_trigger_rollback",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_trigger_edit",
-        execsql(db, "UPDATE t SET v='inner' WHERE id=1;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET v='inner' WHERE id=1;")==SQLITE_OK);
   check("rollback_inner_trigger_edit",
-        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
   check("release_inner_trigger_edit",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("release_outer_trigger_edit",
-        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_trigger_rollback",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("trigger_rollback_row_before_close",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
   check("trigger_rollback_audit_count_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM audit"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM audit"), "1")==0);
   check("trigger_rollback_audit_msg_before_close",
-        strcmp(exec1(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
+        strcmp(queryScalarText(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
   check("trigger_rollback_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_for_savepoint_trigger_rollback", open_db(dbpath, &db)==SQLITE_OK);
   check("trigger_rollback_row_after_reopen",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
   check("trigger_rollback_audit_count_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM audit"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM audit"), "1")==0);
   check("trigger_rollback_audit_msg_after_reopen",
-        strcmp(exec1(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
+        strcmp(queryScalarText(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
   check("trigger_rollback_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_begin_release_then_outer_rollback_reopen(void){
@@ -3954,58 +4067,58 @@ static void run_begin_release_then_outer_rollback_reopen(void){
   printf("=== Begin Release Then Outer Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_begin_release_then_outer_rollback_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_begin_release_then_outer_rollback", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_begin_release_then_outer_rollback", execsql(db,
+  check("setup_repo_for_begin_release_then_outer_rollback", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);"
     "CREATE INDEX k_idx ON t(k);"
     "INSERT INTO t VALUES(1, 1, 'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
   check("begin_txn_for_begin_release_then_outer_rollback",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_begin_release_then_outer_rollback",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_edit_for_begin_release_then_outer_rollback",
-        execsql(db, "UPDATE t SET k=11, v='outer' WHERE id=1;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET k=11, v='outer' WHERE id=1;")==SQLITE_OK);
   check("savepoint_inner_for_begin_release_then_outer_rollback",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_edit_for_begin_release_then_outer_rollback",
-        execsql(db, "INSERT INTO t VALUES(2, 22, 'inner2');")==SQLITE_OK);
+        execSql(db, "INSERT INTO t VALUES(2, 22, 'inner2');")==SQLITE_OK);
   check("release_inner_for_begin_release_then_outer_rollback",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("rollback_outer_for_begin_release_then_outer_rollback",
-        execsql(db, "ROLLBACK;")==SQLITE_OK);
+        execSql(db, "ROLLBACK;")==SQLITE_OK);
 
   check("begin_release_outer_rollback_row1_before_close",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "1")==0);
   check("begin_release_outer_rollback_row2_absent_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
   check("begin_release_outer_rollback_k11_absent_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
   check("begin_release_outer_rollback_status_clean_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("begin_release_outer_rollback_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_for_begin_release_then_outer_rollback", open_db(dbpath, &db)==SQLITE_OK);
   check("begin_release_outer_rollback_row1_after_reopen",
-        strcmp(exec1(db, "SELECT k FROM t WHERE id=1"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT k FROM t WHERE id=1"), "1")==0);
   check("begin_release_outer_rollback_row2_absent_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE id=2"), "0")==0);
   check("begin_release_outer_rollback_k11_absent_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t WHERE k=11"), "0")==0);
   check("begin_release_outer_rollback_status_clean_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("begin_release_outer_rollback_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_failed_commit_schema_rollback_reopen(void){
@@ -4016,54 +4129,54 @@ static void run_savepoint_failed_commit_schema_rollback_reopen(void){
   printf("=== Savepoint Failed Commit Schema Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_savepoint_failed_commit_schema_rollback_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_savepoint_failed_commit_schema_rollback",
         open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_savepoint_failed_commit_schema_rollback", execsql(db,
+  check("setup_repo_for_savepoint_failed_commit_schema_rollback", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1, 'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
   check("begin_txn_for_savepoint_failed_commit_schema_rollback",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_savepoint_failed_commit_schema_rollback",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_edit_for_savepoint_failed_commit_schema_rollback",
-        execsql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
   check("savepoint_inner_for_savepoint_failed_commit_schema_rollback",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_schema_for_savepoint_failed_commit_schema_rollback",
-        execsql(db,
+        execSql(db,
           "ALTER TABLE t ADD COLUMN extra TEXT;"
           "CREATE TABLE aux(id INTEGER PRIMARY KEY, note TEXT);"
           "INSERT INTO aux VALUES(1, 'tmp');")==SQLITE_OK);
 
   check("rollback_inner_schema_after_failed_commit",
-        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
   check("release_inner_schema_after_failed_commit",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("release_outer_schema_after_failed_commit",
-        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_after_failed_commit_schema_rollback",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("failed_commit_schema_row_before_close",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
   check("failed_commit_schema_extra_absent_before_close",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra'"), "0")==0);
   check("failed_commit_schema_aux_absent_before_close",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='aux'"), "0")==0);
   check("failed_commit_schema_head_unchanged_before_close",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("failed_commit_schema_status_dirty_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("failed_commit_schema_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
@@ -4071,22 +4184,22 @@ static void run_savepoint_failed_commit_schema_rollback_reopen(void){
   check("reopen_db_for_savepoint_failed_commit_schema_rollback",
         open_db(dbpath, &db)==SQLITE_OK);
   check("failed_commit_schema_row_after_reopen",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
   check("failed_commit_schema_extra_absent_after_reopen",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM pragma_table_info('t') WHERE name='extra'"), "0")==0);
   check("failed_commit_schema_aux_absent_after_reopen",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='aux'"), "0")==0);
   check("failed_commit_schema_head_unchanged_after_reopen",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("failed_commit_schema_status_dirty_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("failed_commit_schema_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_savepoint_nested_trigger_inner_rollback_reopen(void){
@@ -4096,11 +4209,11 @@ static void run_savepoint_nested_trigger_inner_rollback_reopen(void){
   printf("=== Savepoint Nested Trigger Inner Rollback Reopen Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_savepoint_nested_trigger_inner_rollback_reopen");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_savepoint_nested_trigger_inner_rollback",
         open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_savepoint_nested_trigger_inner_rollback", execsql(db,
+  check("setup_repo_for_savepoint_nested_trigger_inner_rollback", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "CREATE TABLE audit(msg TEXT);"
     "CREATE TRIGGER t_au AFTER UPDATE ON t BEGIN "
@@ -4110,32 +4223,32 @@ static void run_savepoint_nested_trigger_inner_rollback_reopen(void){
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
   check("begin_txn_for_savepoint_nested_trigger_inner_rollback",
-        execsql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
+        execSql(db, "BEGIN IMMEDIATE;")==SQLITE_OK);
   check("savepoint_outer_for_nested_trigger_inner_rollback",
-        execsql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT outer_sp;")==SQLITE_OK);
   check("outer_trigger_edit_for_nested_trigger_inner_rollback",
-        execsql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET v='outer' WHERE id=1;")==SQLITE_OK);
   check("savepoint_inner_for_nested_trigger_inner_rollback",
-        execsql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
+        execSql(db, "SAVEPOINT inner_sp;")==SQLITE_OK);
   check("inner_trigger_edit_for_nested_trigger_inner_rollback",
-        execsql(db, "UPDATE t SET v='inner' WHERE id=1;")==SQLITE_OK);
+        execSql(db, "UPDATE t SET v='inner' WHERE id=1;")==SQLITE_OK);
   check("rollback_inner_for_nested_trigger_inner_rollback",
-        execsql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
+        execSql(db, "ROLLBACK TO inner_sp;")==SQLITE_OK);
   check("release_inner_for_nested_trigger_inner_rollback",
-        execsql(db, "RELEASE inner_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE inner_sp;")==SQLITE_OK);
   check("release_outer_for_nested_trigger_inner_rollback",
-        execsql(db, "RELEASE outer_sp;")==SQLITE_OK);
+        execSql(db, "RELEASE outer_sp;")==SQLITE_OK);
   check("commit_nested_trigger_inner_rollback",
-        execsql(db, "COMMIT;")==SQLITE_OK);
+        execSql(db, "COMMIT;")==SQLITE_OK);
 
   check("nested_trigger_row_before_close",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
   check("nested_trigger_audit_count_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM audit"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM audit"), "1")==0);
   check("nested_trigger_audit_msg_before_close",
-        strcmp(exec1(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
+        strcmp(queryScalarText(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
   check("nested_trigger_integrity_before_close",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
   db = 0;
@@ -4143,16 +4256,16 @@ static void run_savepoint_nested_trigger_inner_rollback_reopen(void){
   check("reopen_db_for_savepoint_nested_trigger_inner_rollback",
         open_db(dbpath, &db)==SQLITE_OK);
   check("nested_trigger_row_after_reopen",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "outer")==0);
   check("nested_trigger_audit_count_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM audit"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM audit"), "1")==0);
   check("nested_trigger_audit_msg_after_reopen",
-        strcmp(exec1(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
+        strcmp(queryScalarText(db, "SELECT msg FROM audit LIMIT 1"), "u:1:outer")==0);
   check("nested_trigger_integrity_after_reopen",
-        strcmp(exec1(db, "PRAGMA integrity_check"), "ok")==0);
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_hard_reset_failure_restores_memory_state(void){
@@ -4163,20 +4276,20 @@ static void run_hard_reset_failure_restores_memory_state(void){
 
   printf("=== Hard Reset Failure Restores Memory State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_hard_reset_failure_restores_memory_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
   gFailWriteOnce = 0;
   gFailSyncOnce = 0;
   gFailHits = 0;
 
   check("register_fail_vfs_for_hard_reset", registerFailVfs()==SQLITE_OK);
   check("open_fail_db_for_hard_reset", open_fail_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_hard_reset_failure", execsql(db,
+  check("setup_repo_for_hard_reset_failure", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
   check("working_row_visible_before_hard_reset",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("get_head_catalog_for_hard_reset",
         doltliteGetHeadCatalogHash(db, &headCatHash)==SQLITE_OK);
 
@@ -4186,14 +4299,14 @@ static void run_hard_reset_failure_restores_memory_state(void){
   check("hard_reset_failure_injected", gFailHits>0);
   check("hard_reset_returns_error_on_commit_failure", rc!=SQLITE_OK);
   check("failed_hard_reset_preserves_memory_state",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
 
   sqlite3_close(db);
   check("reopen_after_failed_hard_reset", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_hard_reset_preserves_durable_state",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_hard_reset_command_failure_preserves_durable_state(void){
@@ -4204,54 +4317,54 @@ static void run_hard_reset_command_failure_preserves_durable_state(void){
 
   printf("=== Hard Reset Command Failure Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_hard_reset_command_failure_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
   gFailWriteOnce = 0;
   gFailSyncOnce = 0;
   gFailHits = 0;
 
   check("register_fail_vfs_for_hard_reset_command", registerFailVfs()==SQLITE_OK);
   check("open_fail_db_for_hard_reset_command", open_fail_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_hard_reset_command_failure", execsql(db,
+  check("setup_repo_for_hard_reset_command_failure", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
   check("hard_reset_command_working_rows_before_failure",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("hard_reset_command_status_before_failure",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
 
   gFailHits = 0;
   gFailWriteOnce = 1;
-  res = exec1(db, "SELECT dolt_reset('--hard')");
+  res = queryScalarText(db, "SELECT dolt_reset('--hard')");
   check("hard_reset_command_failure_injected", gFailHits>0);
   check("hard_reset_command_returns_error", strstr(res, "ERROR:")!=0);
   check("hard_reset_command_preserves_memory_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("hard_reset_command_preserves_memory_status",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("hard_reset_command_preserves_memory_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("hard_reset_command_preserves_memory_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_after_failed_hard_reset_command", open_db(dbpath, &db)==SQLITE_OK);
   check("failed_hard_reset_command_preserves_durable_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("failed_hard_reset_command_preserves_durable_status",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("failed_hard_reset_command_preserves_durable_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("failed_hard_reset_command_preserves_durable_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_amend_persist_failure_preserves_durable_state(void){
@@ -4262,51 +4375,51 @@ static void run_amend_persist_failure_preserves_durable_state(void){
 
   printf("=== Amend Persist Failure Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_amend_persist_failure_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
   gFailWriteOnce = 0;
   gFailSyncOnce = 0;
   gFailHits = 0;
 
   check("register_fail_vfs_for_amend", registerFailVfs()==SQLITE_OK);
   check("open_fail_db_for_amend", open_fail_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_amend_failure", execsql(db,
+  check("setup_repo_for_amend_failure", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "INSERT INTO t VALUES(2,'b');"
     "SELECT dolt_commit('-A', '-m', 'second');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
   gFailHits = 0;
   gFailWriteOnce = 1;
-  res = exec1(db, "SELECT dolt_commit('--amend', '-m', 'amended')");
+  res = queryScalarText(db, "SELECT dolt_commit('--amend', '-m', 'amended')");
   check("amend_failure_was_injected", gFailHits>0);
   check("amend_returns_error_on_persist_failure", strstr(res, "ERROR:")!=0);
   check("amend_failure_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("amend_failure_keeps_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("amend_failure_keeps_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("amend_failure_keeps_message",
-        strcmp(exec1(db, "SELECT message FROM dolt_log LIMIT 1"), "second")==0);
+        strcmp(queryScalarText(db, "SELECT message FROM dolt_log LIMIT 1"), "second")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_amend_failure", open_db(dbpath, &db)==SQLITE_OK);
   check("amend_failure_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("amend_failure_persists_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("amend_failure_persists_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("amend_failure_persists_message",
-        strcmp(exec1(db, "SELECT message FROM dolt_log LIMIT 1"), "second")==0);
+        strcmp(queryScalarText(db, "SELECT message FROM dolt_log LIMIT 1"), "second")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_delete_current_branch_failure_preserves_durable_state(void){
@@ -4316,40 +4429,30 @@ static void run_delete_current_branch_failure_preserves_durable_state(void){
 
   printf("=== Delete Current Branch Failure Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_delete_current_branch_failure_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_delete_current_branch_failure", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_delete_current_branch_failure", execsql(db,
+  check("setup_repo_for_delete_current_branch_failure", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_branch('feature');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_branch('-d', 'main')");
+  res = queryScalarText(db, "SELECT dolt_branch('-d', 'main')");
   check("delete_current_branch_returns_error",
         strstr(res, "ERROR: cannot delete the current branch")!=0);
-  check("delete_current_branch_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
-  check("delete_current_branch_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
-  check("delete_current_branch_keeps_feature_branch",
-        strcmp(exec1(db,
-          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  checkBranchState(db, "delete_current_branch_keeps", "main", "2",
+                   "feature", "1");
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_delete_current_branch_failure", open_db(dbpath, &db)==SQLITE_OK);
-  check("delete_current_branch_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
-  check("delete_current_branch_persists_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
-  check("delete_current_branch_persists_feature_branch",
-        strcmp(exec1(db,
-          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
+  checkBranchState(db, "delete_current_branch_persists", "main", "2",
+                   "feature", "1");
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_delete_missing_branch_preserves_durable_state(void){
@@ -4359,40 +4462,30 @@ static void run_delete_missing_branch_preserves_durable_state(void){
 
   printf("=== Delete Missing Branch Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_delete_missing_branch_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_delete_missing_branch", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_delete_missing_branch", execsql(db,
+  check("setup_repo_for_delete_missing_branch", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_branch('feature');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_branch('-d', 'nope')");
+  res = queryScalarText(db, "SELECT dolt_branch('-d', 'nope')");
   check("delete_missing_branch_returns_error",
         strstr(res, "ERROR: branch not found")!=0);
-  check("delete_missing_branch_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
-  check("delete_missing_branch_keeps_feature_branch",
-        strcmp(exec1(db,
-          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
-  check("delete_missing_branch_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+  checkBranchState(db, "delete_missing_branch_keeps", "main", "2",
+                   "feature", "1");
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_delete_missing_branch", open_db(dbpath, &db)==SQLITE_OK);
-  check("delete_missing_branch_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
-  check("delete_missing_branch_persists_feature_branch",
-        strcmp(exec1(db,
-          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
-  check("delete_missing_branch_persists_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+  checkBranchState(db, "delete_missing_branch_persists", "main", "2",
+                   "feature", "1");
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_force_delete_missing_branch_preserves_durable_state(void){
@@ -4402,40 +4495,30 @@ static void run_force_delete_missing_branch_preserves_durable_state(void){
 
   printf("=== Force Delete Missing Branch Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_force_delete_missing_branch_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_force_delete_missing_branch", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_force_delete_missing_branch", execsql(db,
+  check("setup_repo_for_force_delete_missing_branch", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_branch('feature');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_branch('-D', 'nope')");
+  res = queryScalarText(db, "SELECT dolt_branch('-D', 'nope')");
   check("force_delete_missing_branch_returns_error",
         strstr(res, "ERROR: branch not found")!=0);
-  check("force_delete_missing_branch_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
-  check("force_delete_missing_branch_keeps_feature_branch",
-        strcmp(exec1(db,
-          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
-  check("force_delete_missing_branch_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+  checkBranchState(db, "force_delete_missing_branch_keeps", "main", "2",
+                   "feature", "1");
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_force_delete_missing_branch", open_db(dbpath, &db)==SQLITE_OK);
-  check("force_delete_missing_branch_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
-  check("force_delete_missing_branch_persists_feature_branch",
-        strcmp(exec1(db,
-          "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
-  check("force_delete_missing_branch_persists_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+  checkBranchState(db, "force_delete_missing_branch_persists", "main", "2",
+                   "feature", "1");
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
@@ -4448,10 +4531,10 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
   printf("=== Rebase Continue Invalid Plan Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_rebase_continue_invalid_plan_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_rebase_invalid_plan", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_rebase_invalid_plan", execsql(db,
+  check("setup_repo_for_rebase_invalid_plan", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
     "INSERT INTO t VALUES (1, 1);"
     "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
@@ -4468,13 +4551,13 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
     "SELECT dolt_checkout('feat');"
     "SELECT dolt_rebase('-i', 'main');")==SQLITE_OK);
 
-  res = exec1(db, "UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1'");
+  res = queryScalarText(db, "UPDATE dolt_rebase SET action = 'oops' WHERE commit_message = 'f1'");
   check("rebase_invalid_plan_returns_error",
         strcmp(res, "")==0);
   check("rebase_invalid_plan_keeps_working_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
   check("rebase_invalid_plan_keeps_plan_table",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_invalid_plan_keeps_rebase_flag", isRebasing==1);
   check("rebase_invalid_plan_keeps_orig_branch",
@@ -4485,20 +4568,20 @@ static void run_rebase_continue_invalid_plan_preserves_durable_state(void){
 
   check("reopen_db_after_rebase_invalid_plan", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_invalid_plan_persists_working_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("rebase_invalid_plan_persists_plan_table",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_rebase"), "3")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_invalid_plan_persists_rebase_flag", isRebasing==1);
   check("rebase_invalid_plan_persists_orig_branch",
         zOrigBranch && strcmp(zOrigBranch, "feat")==0);
   check("rebase_invalid_plan_abort_after_reopen",
-        strcmp(exec1(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
+        strcmp(queryScalarText(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
   check("rebase_invalid_plan_abort_restores_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_rebase_abort_after_reopen_restores_durable_state(void){
@@ -4512,10 +4595,10 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
 
   printf("=== Rebase Abort After Reopen Restores Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_rebase_abort_after_reopen_restores_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_rebase_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_rebase_abort_after_reopen", execsql(db,
+  check("setup_repo_for_rebase_abort_after_reopen", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
     "INSERT INTO t VALUES (1, 1);"
     "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
@@ -4529,15 +4612,15 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
     "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'm');"
     "SELECT dolt_checkout('feat');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
   check("start_interactive_rebase_for_abort_after_reopen",
-        strstr(exec1(db, "SELECT dolt_rebase('-i', 'main')"),
+        strstr(queryScalarText(db, "SELECT dolt_rebase('-i', 'main')"),
                "interactive rebase started on branch dolt_rebase_feat")!=0);
   check("rebase_abort_after_reopen_branch_before_close",
-        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
   check("rebase_abort_after_reopen_plan_table_before_close",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_abort_after_reopen_flag_before_close", isRebasing==1);
   check("rebase_abort_after_reopen_orig_branch_before_close",
@@ -4548,20 +4631,20 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
 
   check("reopen_db_for_rebase_abort_after_reopen", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_abort_after_reopen_branch_before_abort",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("rebase_abort_after_reopen_plan_before_abort",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_rebase"), "2")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_abort_after_reopen_flag_before_abort", isRebasing==1);
 
   check("rebase_abort_after_reopen_returns_success",
-        strcmp(exec1(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
+        strcmp(queryScalarText(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
   check("rebase_abort_after_reopen_restores_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
   check("rebase_abort_after_reopen_restores_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("rebase_abort_after_reopen_drops_plan",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_abort_after_reopen_clears_flag", isRebasing==0);
@@ -4572,23 +4655,23 @@ static void run_rebase_abort_after_reopen_restores_durable_state(void){
 
   check("reopen_db_after_rebase_abort", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_abort_persists_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("rebase_abort_persists_head",
-        strcmp(exec1(db, "SELECT message FROM dolt_log LIMIT 1"), "m")==0);
+        strcmp(queryScalarText(db, "SELECT message FROM dolt_log LIMIT 1"), "m")==0);
   check("rebase_abort_persists_no_plan",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_abort_persists_flag_cleared", isRebasing==0);
   capture_repo_state_snapshot(db, &afterReopenAbort);
   check("rebase_abort_reopen_table_rows_match",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("rebase_abort_reopen_feat_head_preserved",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT hash FROM dolt_branches WHERE name='feat'"), zHeadBefore)==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_rebase_main_table_schema_guard(void){
@@ -4600,10 +4683,10 @@ static void run_rebase_main_table_schema_guard(void){
 
   printf("=== Rebase Main Table Schema Guard Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_rebase_main_table_schema_guard");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_rebase_schema_guard", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_rebase_schema_guard", execsql(db,
+  check("setup_repo_for_rebase_schema_guard", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
     "INSERT INTO t VALUES (1, 1);"
     "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
@@ -4618,11 +4701,11 @@ static void run_rebase_main_table_schema_guard(void){
     "DROP TABLE main.dolt_rebase;"
     "CREATE TABLE main.dolt_rebase(id INTEGER PRIMARY KEY);")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
   check("rebase_schema_guard_returns_error",
         strstr(res, "ERROR: dolt_rebase has an unexpected schema")!=0);
   check("rebase_schema_guard_keeps_working_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "dolt_rebase_feat")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_schema_guard_keeps_rebase_flag", isRebasing==1);
   check("rebase_schema_guard_keeps_orig_branch",
@@ -4633,14 +4716,14 @@ static void run_rebase_main_table_schema_guard(void){
 
   check("reopen_db_for_rebase_schema_guard", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_schema_guard_persists_working_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("rebase_schema_guard_abort_works",
-        strcmp(exec1(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
+        strcmp(queryScalarText(db, "SELECT dolt_rebase('--abort')"), "Interactive rebase aborted")==0);
   check("rebase_schema_guard_abort_restores_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_rebase_temp_shadow_ignored(void){
@@ -4650,10 +4733,10 @@ static void run_rebase_temp_shadow_ignored(void){
 
   printf("=== Rebase Temp Shadow Ignored Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_rebase_temp_shadow_ignored");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_rebase_temp_shadow", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_rebase_temp_shadow", execsql(db,
+  check("setup_repo_for_rebase_temp_shadow", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
     "INSERT INTO t VALUES (1, 1);"
     "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
@@ -4670,15 +4753,15 @@ static void run_rebase_temp_shadow_ignored(void){
     "CREATE TEMP TABLE dolt_rebase(rebase_order REAL PRIMARY KEY, action TEXT, commit_hash TEXT, commit_message TEXT);"
     "INSERT INTO temp.dolt_rebase VALUES(1, 'oops', 'badbadbadbadbadbadbadbadbadbadbadbadbadb', 'shadow');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
   check("rebase_temp_shadow_ignored_continue_succeeds",
         strstr(res, "Successfully rebased and updated refs/heads/feat")!=0);
   check("rebase_temp_shadow_ignored_restores_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
   check("rebase_temp_shadow_ignored_rows_rebased",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "4")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "4")==0);
   check("rebase_temp_shadow_ignored_main_plan_gone",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM main.sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
 
   sqlite3_close(db);
@@ -4686,12 +4769,12 @@ static void run_rebase_temp_shadow_ignored(void){
 
   check("reopen_db_for_rebase_temp_shadow", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_temp_shadow_ignored_branch_after_reopen",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("rebase_temp_shadow_ignored_rows_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_rebase_continue_conflict_abort_restores_durable_state(void){
@@ -4704,10 +4787,10 @@ static void run_rebase_continue_conflict_abort_restores_durable_state(void){
   printf("=== Rebase Continue Conflict Abort Restores Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath),
               "test_rebase_continue_conflict_abort_restores_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_rebase_continue_conflict_abort", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_rebase_continue_conflict_abort", execsql(db,
+  check("setup_repo_for_rebase_continue_conflict_abort", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
     "INSERT INTO t VALUES (1, 1);"
     "SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'init');"
@@ -4720,21 +4803,21 @@ static void run_rebase_continue_conflict_abort_restores_durable_state(void){
     "SELECT dolt_checkout('feat');")==SQLITE_OK);
 
   check("start_interactive_rebase_for_conflict_abort",
-        strstr(exec1(db, "SELECT dolt_rebase('-i', 'main')"),
+        strstr(queryScalarText(db, "SELECT dolt_rebase('-i', 'main')"),
                "interactive rebase started on branch dolt_rebase_feat")!=0);
 
-  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
   check("rebase_continue_conflict_abort_returns_error",
         strstr(res, "data conflicts from rebase")!=0);
   check("rebase_continue_conflict_abort_restores_branch_same_session",
-        strcmp(exec1(db, "SELECT active_branch()"), "feat")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "feat")==0);
   check("rebase_continue_conflict_abort_drops_plan_same_session",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
   check("rebase_continue_conflict_abort_clears_conflicts_same_session",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("rebase_continue_conflict_abort_restores_row_same_session",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "2")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_continue_conflict_abort_clears_flag_same_session", isRebasing==0);
 
@@ -4743,19 +4826,19 @@ static void run_rebase_continue_conflict_abort_restores_durable_state(void){
 
   check("reopen_db_for_rebase_continue_conflict_abort", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_continue_conflict_abort_restores_branch_after_reopen",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("rebase_continue_conflict_abort_drops_plan_after_reopen",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
   check("rebase_continue_conflict_abort_clears_conflicts_after_reopen",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_conflicts"), "0")==0);
   check("rebase_continue_conflict_abort_restores_row_after_reopen",
-        strcmp(exec1(db, "SELECT v FROM t WHERE id=1"), "3")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "3")==0);
   doltliteGetSessionRebaseState(db, &isRebasing, 0, 0, &zOrigBranch, 0);
   check("rebase_continue_conflict_abort_clears_flag_after_reopen", isRebasing==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_branch_copy_existing_dest_preserves_durable_state(void){
@@ -4765,47 +4848,47 @@ static void run_branch_copy_existing_dest_preserves_durable_state(void){
 
   printf("=== Branch Copy Existing Dest Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_branch_copy_existing_dest_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_branch_copy_existing_dest", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_branch_copy_existing_dest", execsql(db,
+  check("setup_repo_for_branch_copy_existing_dest", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_branch('feature');"
     "SELECT dolt_branch('clone');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_branch('-c', 'feature', 'clone')");
+  res = queryScalarText(db, "SELECT dolt_branch('-c', 'feature', 'clone')");
   check("branch_copy_existing_dest_returns_error",
         strstr(res, "ERROR: branch already exists")!=0);
   check("branch_copy_existing_dest_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("branch_copy_existing_dest_keeps_feature_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
   check("branch_copy_existing_dest_keeps_clone_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='clone'"), "1")==0);
   check("branch_copy_existing_dest_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "3")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "3")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_branch_copy_existing_dest", open_db(dbpath, &db)==SQLITE_OK);
   check("branch_copy_existing_dest_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("branch_copy_existing_dest_persists_feature_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
   check("branch_copy_existing_dest_persists_clone_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='clone'"), "1")==0);
   check("branch_copy_existing_dest_persists_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "3")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "3")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_branch_copy_missing_source_preserves_durable_state(void){
@@ -4815,46 +4898,46 @@ static void run_branch_copy_missing_source_preserves_durable_state(void){
 
   printf("=== Branch Copy Missing Source Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_branch_copy_missing_source_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_branch_copy_missing_source", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_branch_copy_missing_source", execsql(db,
+  check("setup_repo_for_branch_copy_missing_source", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_branch('clone');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_branch('-c', 'missing', 'clone2')");
+  res = queryScalarText(db, "SELECT dolt_branch('-c', 'missing', 'clone2')");
   check("branch_copy_missing_source_returns_error",
         strstr(res, "ERROR: source branch not found")!=0);
   check("branch_copy_missing_source_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("branch_copy_missing_source_keeps_clone_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='clone'"), "1")==0);
   check("branch_copy_missing_source_keeps_missing_absent",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='clone2'"), "0")==0);
   check("branch_copy_missing_source_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_branch_copy_missing_source", open_db(dbpath, &db)==SQLITE_OK);
   check("branch_copy_missing_source_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("branch_copy_missing_source_persists_clone_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='clone'"), "1")==0);
   check("branch_copy_missing_source_persists_missing_absent",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='clone2'"), "0")==0);
   check("branch_copy_missing_source_persists_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_branch_rename_missing_source_preserves_durable_state(void){
@@ -4864,46 +4947,46 @@ static void run_branch_rename_missing_source_preserves_durable_state(void){
 
   printf("=== Branch Rename Missing Source Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_branch_rename_missing_source_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_branch_rename_missing_source", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_branch_rename_missing_source", execsql(db,
+  check("setup_repo_for_branch_rename_missing_source", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_branch('other');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_branch('-m', 'missing', 'renamed')");
+  res = queryScalarText(db, "SELECT dolt_branch('-m', 'missing', 'renamed')");
   check("branch_rename_missing_source_returns_error",
         strstr(res, "ERROR: source branch not found")!=0);
   check("branch_rename_missing_source_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("branch_rename_missing_source_keeps_other_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='other'"), "1")==0);
   check("branch_rename_missing_source_keeps_renamed_absent",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='renamed'"), "0")==0);
   check("branch_rename_missing_source_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_branch_rename_missing_source", open_db(dbpath, &db)==SQLITE_OK);
   check("branch_rename_missing_source_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("branch_rename_missing_source_persists_other_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='other'"), "1")==0);
   check("branch_rename_missing_source_persists_renamed_absent",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='renamed'"), "0")==0);
   check("branch_rename_missing_source_persists_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 static void run_branch_create_existing_name_preserves_durable_state(void){
   sqlite3 *db = 0;
@@ -4912,24 +4995,24 @@ static void run_branch_create_existing_name_preserves_durable_state(void){
 
   printf("=== Branch Create Existing Name Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_branch_create_existing_name_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_branch_create_existing_name", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_branch_create_existing_name", execsql(db,
+  check("setup_repo_for_branch_create_existing_name", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_branch('feature');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_branch('feature')");
+  res = queryScalarText(db, "SELECT dolt_branch('feature')");
   check("branch_create_existing_name_returns_error",
         strstr(res, "ERROR: branch already exists")!=0);
   check("branch_create_existing_name_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("branch_create_existing_name_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
   check("branch_create_existing_name_keeps_feature_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
 
   sqlite3_close(db);
@@ -4937,15 +5020,15 @@ static void run_branch_create_existing_name_preserves_durable_state(void){
 
   check("reopen_db_after_branch_create_existing_name", open_db(dbpath, &db)==SQLITE_OK);
   check("branch_create_existing_name_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("branch_create_existing_name_persists_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
   check("branch_create_existing_name_persists_feature_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_branch_create_bad_start_preserves_durable_state(void){
@@ -4955,27 +5038,27 @@ static void run_branch_create_bad_start_preserves_durable_state(void){
 
   printf("=== Branch Create Bad Start Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_branch_create_bad_start_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_branch_create_bad_start", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_branch_create_bad_start", execsql(db,
+  check("setup_repo_for_branch_create_bad_start", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_branch('bad_start', 'does-not-exist')");
+  res = queryScalarText(db, "SELECT dolt_branch('bad_start', 'does-not-exist')");
   check("branch_create_bad_start_returns_error",
         strstr(res, "ERROR: start point not found")!=0);
   check("branch_create_bad_start_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("branch_create_bad_start_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "1")==0);
   check("branch_create_bad_start_keeps_new_branch_absent",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='bad_start'"), "0")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_revert_bad_ref_failure_preserves_durable_state(void){
@@ -4986,10 +5069,10 @@ static void run_revert_bad_ref_failure_preserves_durable_state(void){
 
   printf("=== Revert Bad Ref Failure Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_revert_bad_ref_failure_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_revert_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_revert_bad_ref_failure", execsql(db,
+  check("setup_repo_for_revert_bad_ref_failure", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_add('-A');"
@@ -4998,35 +5081,35 @@ static void run_revert_bad_ref_failure_preserves_durable_state(void){
     "SELECT dolt_add('-A');"
     "SELECT dolt_commit('-m', 'second');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
-  res = exec1(db, "SELECT dolt_revert('does-not-exist')");
+  res = queryScalarText(db, "SELECT dolt_revert('does-not-exist')");
   check("revert_bad_ref_returns_error",
         strstr(res, "ERROR:")!=0);
   check("revert_bad_ref_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("revert_bad_ref_keeps_working_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("revert_bad_ref_keeps_status_clean",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("revert_bad_ref_keeps_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_revert_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
   check("revert_bad_ref_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("revert_bad_ref_persists_working_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("revert_bad_ref_persists_status_clean",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("revert_bad_ref_persists_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_checkout_nonexistent_preserves_durable_state(void){
@@ -5036,36 +5119,36 @@ static void run_checkout_nonexistent_preserves_durable_state(void){
 
   printf("=== Checkout Nonexistent Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_checkout_nonexistent_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_checkout_nonexistent", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_checkout_nonexistent", execsql(db,
+  check("setup_repo_for_checkout_nonexistent", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_checkout('nope')");
+  res = queryScalarText(db, "SELECT dolt_checkout('nope')");
   check("checkout_nonexistent_returns_error", strstr(res, "ERROR:")!=0);
   check("checkout_nonexistent_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("checkout_nonexistent_keeps_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
   check("checkout_nonexistent_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "1")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_checkout_nonexistent", open_db(dbpath, &db)==SQLITE_OK);
   check("checkout_nonexistent_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("checkout_nonexistent_persists_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
   check("checkout_nonexistent_persists_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "1")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_checkout_dash_b_existing_branch_preserves_durable_state(void){
@@ -5075,39 +5158,39 @@ static void run_checkout_dash_b_existing_branch_preserves_durable_state(void){
 
   printf("=== Checkout -b Existing Branch Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_checkout_dash_b_existing_branch_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_checkout_dash_b_existing_branch", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_checkout_dash_b_existing_branch", execsql(db,
+  check("setup_repo_for_checkout_dash_b_existing_branch", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "SELECT dolt_branch('feature');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_checkout('-b', 'feature')");
+  res = queryScalarText(db, "SELECT dolt_checkout('-b', 'feature')");
   check("checkout_dash_b_existing_branch_returns_error", strstr(res, "ERROR:")!=0);
   check("checkout_dash_b_existing_branch_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("checkout_dash_b_existing_branch_keeps_feature_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
   check("checkout_dash_b_existing_branch_keeps_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_checkout_dash_b_existing_branch", open_db(dbpath, &db)==SQLITE_OK);
   check("checkout_dash_b_existing_branch_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("checkout_dash_b_existing_branch_persists_feature_branch",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_branches WHERE name='feature'"), "1")==0);
   check("checkout_dash_b_existing_branch_persists_branch_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "2")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_cherry_pick_bad_ref_failure_preserves_durable_state(void){
@@ -5118,10 +5201,10 @@ static void run_cherry_pick_bad_ref_failure_preserves_durable_state(void){
 
   printf("=== Cherry-pick Bad Ref Failure Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_cherry_pick_bad_ref_failure_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_cherry_pick_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_cherry_pick_bad_ref_failure", execsql(db,
+  check("setup_repo_for_cherry_pick_bad_ref_failure", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_add('-A');"
@@ -5130,35 +5213,35 @@ static void run_cherry_pick_bad_ref_failure_preserves_durable_state(void){
     "SELECT dolt_add('-A');"
     "SELECT dolt_commit('-m', 'second');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
-  res = exec1(db, "SELECT dolt_cherry_pick('does-not-exist')");
+  res = queryScalarText(db, "SELECT dolt_cherry_pick('does-not-exist')");
   check("cherry_pick_bad_ref_returns_error",
         strstr(res, "ERROR:")!=0);
   check("cherry_pick_bad_ref_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("cherry_pick_bad_ref_keeps_working_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("cherry_pick_bad_ref_keeps_status_clean",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("cherry_pick_bad_ref_keeps_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_cherry_pick_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
   check("cherry_pick_bad_ref_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("cherry_pick_bad_ref_persists_working_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("cherry_pick_bad_ref_persists_status_clean",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "0")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "0")==0);
   check("cherry_pick_bad_ref_persists_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_merge_nonexistent_branch_preserves_durable_state(void){
@@ -5169,39 +5252,39 @@ static void run_merge_nonexistent_branch_preserves_durable_state(void){
 
   printf("=== Merge Nonexistent Branch Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_merge_nonexistent_branch_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_merge_nonexistent_branch", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_merge_nonexistent_branch", execsql(db,
+  check("setup_repo_for_merge_nonexistent_branch", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
-  res = exec1(db, "SELECT dolt_merge('nope')");
+  res = queryScalarText(db, "SELECT dolt_merge('nope')");
   check("merge_nonexistent_branch_returns_error",
         strstr(res, "ERROR:")!=0);
   check("merge_nonexistent_branch_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("merge_nonexistent_branch_keeps_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
   check("merge_nonexistent_branch_keeps_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_merge_nonexistent_branch", open_db(dbpath, &db)==SQLITE_OK);
   check("merge_nonexistent_branch_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("merge_nonexistent_branch_persists_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1")==0);
   check("merge_nonexistent_branch_persists_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_rebase_continue_without_active_preserves_durable_state(void){
@@ -5212,25 +5295,25 @@ static void run_rebase_continue_without_active_preserves_durable_state(void){
 
   printf("=== Rebase Continue Without Active Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_rebase_continue_without_active_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_rebase_continue_without_active", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_rebase_continue_without_active", execsql(db,
+  check("setup_repo_for_rebase_continue_without_active", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY);"
     "SELECT dolt_add('-A');"
     "SELECT dolt_commit('-m', 'init');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
-  res = exec1(db, "SELECT dolt_rebase('--continue')");
+  res = queryScalarText(db, "SELECT dolt_rebase('--continue')");
   check("rebase_continue_without_active_returns_error",
         strstr(res, "ERROR:")!=0);
   check("rebase_continue_without_active_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("rebase_continue_without_active_keeps_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("rebase_continue_without_active_keeps_no_plan",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
 
   sqlite3_close(db);
@@ -5238,15 +5321,15 @@ static void run_rebase_continue_without_active_preserves_durable_state(void){
 
   check("reopen_db_after_rebase_continue_without_active", open_db(dbpath, &db)==SQLITE_OK);
   check("rebase_continue_without_active_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("rebase_continue_without_active_persists_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
   check("rebase_continue_without_active_persists_no_plan",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='dolt_rebase'"), "0")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_remote_add_duplicate_preserves_durable_state(void){
@@ -5256,18 +5339,18 @@ static void run_remote_add_duplicate_preserves_durable_state(void){
 
   printf("=== Remote Add Duplicate Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_remote_add_duplicate_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_remote_add_duplicate", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_remote_add_duplicate", execsql(db,
+  check("setup_repo_for_remote_add_duplicate", execSql(db,
     "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_other')");
+  res = queryScalarText(db, "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_other')");
   check("remote_add_duplicate_returns_error", strstr(res, "ERROR:")!=0);
   check("remote_add_duplicate_keeps_remote_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
   check("remote_add_duplicate_keeps_origin_url",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT url FROM dolt_remotes WHERE name='origin'"), "file:///tmp/oracle_origin")==0);
 
   sqlite3_close(db);
@@ -5275,13 +5358,13 @@ static void run_remote_add_duplicate_preserves_durable_state(void){
 
   check("reopen_db_after_remote_add_duplicate", open_db(dbpath, &db)==SQLITE_OK);
   check("remote_add_duplicate_persists_remote_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
   check("remote_add_duplicate_persists_origin_url",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT url FROM dolt_remotes WHERE name='origin'"), "file:///tmp/oracle_origin")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_remote_remove_missing_preserves_durable_state(void){
@@ -5291,18 +5374,18 @@ static void run_remote_remove_missing_preserves_durable_state(void){
 
   printf("=== Remote Remove Missing Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_remote_remove_missing_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_remote_remove_missing", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_remote_remove_missing", execsql(db,
+  check("setup_repo_for_remote_remove_missing", execSql(db,
     "SELECT dolt_remote('add', 'origin', 'file:///tmp/oracle_origin');")==SQLITE_OK);
 
-  res = exec1(db, "SELECT dolt_remote('remove', 'nonexistent')");
+  res = queryScalarText(db, "SELECT dolt_remote('remove', 'nonexistent')");
   check("remote_remove_missing_returns_error", strstr(res, "ERROR:")!=0);
   check("remote_remove_missing_keeps_remote_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
   check("remote_remove_missing_keeps_origin",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_remotes WHERE name='origin'"), "1")==0);
 
   sqlite3_close(db);
@@ -5310,13 +5393,13 @@ static void run_remote_remove_missing_preserves_durable_state(void){
 
   check("reopen_db_after_remote_remove_missing", open_db(dbpath, &db)==SQLITE_OK);
   check("remote_remove_missing_persists_remote_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_remotes"), "1")==0);
   check("remote_remove_missing_persists_origin",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_remotes WHERE name='origin'"), "1")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 static void run_reset_bad_ref_failure_preserves_durable_state(void){
   sqlite3 *db = 0;
@@ -5326,44 +5409,44 @@ static void run_reset_bad_ref_failure_preserves_durable_state(void){
 
   printf("=== Reset Bad Ref Failure Preserves Durable State Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_reset_bad_ref_failure_preserves_durable_state");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_reset_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_repo_for_reset_bad_ref_failure", execsql(db,
+  check("setup_repo_for_reset_bad_ref_failure", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "SELECT dolt_commit('-A', '-m', 'init');"
     "INSERT INTO t VALUES(2,'b');")==SQLITE_OK);
   sqlite3_snprintf(sizeof(zHeadBefore), zHeadBefore, "%s",
-                   exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
+                   queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"));
 
-  res = exec1(db, "SELECT dolt_reset('--hard', 'not_a_real_ref')");
+  res = queryScalarText(db, "SELECT dolt_reset('--hard', 'not_a_real_ref')");
   check("reset_bad_ref_returns_error",
         strstr(res, "ERROR: commit not found")!=0);
   check("reset_bad_ref_keeps_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("reset_bad_ref_keeps_working_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("reset_bad_ref_keeps_status",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("reset_bad_ref_keeps_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
   db = 0;
 
   check("reopen_db_after_reset_bad_ref_failure", open_db(dbpath, &db)==SQLITE_OK);
   check("reset_bad_ref_persists_active_branch",
-        strcmp(exec1(db, "SELECT active_branch()"), "main")==0);
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "main")==0);
   check("reset_bad_ref_persists_working_rows",
-        strcmp(exec1(db, "SELECT count(*) FROM t"), "2")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "2")==0);
   check("reset_bad_ref_persists_status",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_status"), "1")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_status"), "1")==0);
   check("reset_bad_ref_persists_head",
-        strcmp(exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
+        strcmp(queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1"), zHeadBefore)==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_mutmap_empty_reverse_iter(void){
@@ -5921,7 +6004,7 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
 
   memset(&emptyHash, 0, sizeof(emptyHash));
   make_dbpath(dbpath, sizeof(dbpath), "test_refs_commit_failure_restore");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   gFailSyncOnce = 0;
   gFailHits = 0;
@@ -5971,7 +6054,7 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
   check("reopened_store_keeps_default_branch",
         reopened.zDefaultBranch!=0 && strcmp(reopened.zDefaultBranch, "main")==0);
   chunkStoreClose(&reopened);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_remotesrv_put_refs_failure_restores_state(void){
@@ -5988,7 +6071,7 @@ static void run_remotesrv_put_refs_failure_restores_state(void){
 
   memset(&emptyHash, 0, sizeof(emptyHash));
   make_dbpath(dbpath, sizeof(dbpath), "test_remotesrv_put_refs_failure_restore");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("register_fail_vfs_for_remotesrv_put_refs", registerFailVfs()==SQLITE_OK);
   check("open_fail_store_for_remotesrv_put_refs",
@@ -6024,7 +6107,7 @@ static void run_remotesrv_put_refs_failure_restores_state(void){
   check("reopened_store_after_remotesrv_put_refs_has_no_failed_tag",
         chunkStoreFindTag(&reopened, "v1", &foundHash)!=SQLITE_OK);
   chunkStoreClose(&reopened);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_remotesrv_chunk_commit_failure_clears_pending(void){
@@ -6042,7 +6125,7 @@ static void run_remotesrv_chunk_commit_failure_clears_pending(void){
   memset(&emptyHash, 0, sizeof(emptyHash));
   memset(&chunkHash, 0, sizeof(chunkHash));
   make_dbpath(dbpath, sizeof(dbpath), "test_remotesrv_chunk_commit_failure");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   gFailHits = 0;
   gFailSyncOnce = 0;
@@ -6110,7 +6193,7 @@ static void run_remotesrv_chunk_commit_failure_clears_pending(void){
           !hasChunk);
   }
   chunkStoreClose(&reopened);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_prolly_blob_cursor_seek_across_internal_boundary(void){
@@ -6508,6 +6591,7 @@ static const RegressionCase aCases[] = {
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
   { "commit_am_many_tables", "Commit -am Many Tables Test", run_commit_am_many_tables },
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
+  { "blame_deep_history_scan", "Blame Deep History Scan Test", run_blame_deep_history_scan },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
   { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_rollback_clears_durable_state },
   { "failed_merge_reopen_preserves_working_set_state", "Failed Merge Reopen Preserves Working Set State Test", run_failed_merge_reopen_clears_ephemeral_conflict_state },
@@ -6539,6 +6623,7 @@ static const RegressionCase aCases[] = {
   { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
   { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
+  { "diff_table_deep_history_map", "Diff Table Deep History Map Test", run_diff_table_deep_history_map },
   { "diff_stat_surfaces_corrupt_root", "Diff Stat Surfaces Corrupt Root Test", run_diff_stat_surfaces_corrupt_root },
   { "table_moveto_mutmap_delete_preserves_neighbors", "Table Moveto MutMap Delete Preserves Neighbors Test", run_table_moveto_mutmap_delete_preserves_neighbors },
   { "table_moveto_mutmap_exact_keeps_iteration_aligned", "Table Moveto MutMap Exact Keeps Iteration Aligned Test", run_table_moveto_mutmap_exact_keeps_iteration_aligned },

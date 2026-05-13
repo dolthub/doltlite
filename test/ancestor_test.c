@@ -24,7 +24,7 @@ static void check(const char *name, int condition){
 }
 
 static char result_buf[4096];
-static const char *exec1(sqlite3 *db, const char *sql){
+static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
   int rc;
   result_buf[0] = 0;
@@ -44,7 +44,7 @@ static const char *exec1(sqlite3 *db, const char *sql){
   return result_buf;
 }
 
-static int execsql(sqlite3 *db, const char *sql){
+static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( rc!=SQLITE_OK ){
@@ -68,45 +68,45 @@ int main(){
   check("open db", rc==SQLITE_OK);
 
   /* Create table and initial commit (C1) */
-  execsql(db, "CREATE TABLE t1(a INTEGER PRIMARY KEY, b TEXT)");
-  execsql(db, "INSERT INTO t1 VALUES(1, 'hello')");
-  execsql(db, "SELECT dolt_add('-A')");
-  execsql(db, "SELECT dolt_commit('-m', 'C1: initial')");
+  execSql(db, "CREATE TABLE t1(a INTEGER PRIMARY KEY, b TEXT)");
+  execSql(db, "INSERT INTO t1 VALUES(1, 'hello')");
+  execSql(db, "SELECT dolt_add('-A')");
+  execSql(db, "SELECT dolt_commit('-m', 'C1: initial')");
 
   /* Second commit on main (C2) - this will be the common ancestor */
-  execsql(db, "INSERT INTO t1 VALUES(2, 'world')");
-  execsql(db, "SELECT dolt_add('-A')");
-  execsql(db, "SELECT dolt_commit('-m', 'C2: add row 2')");
+  execSql(db, "INSERT INTO t1 VALUES(2, 'world')");
+  execSql(db, "SELECT dolt_add('-A')");
+  execSql(db, "SELECT dolt_commit('-m', 'C2: add row 2')");
 
   /* Record C2's hash (this is HEAD on main right now) */
-  const char *c2_hash = exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
+  const char *c2_hash = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   char c2_hash_buf[128];
   snprintf(c2_hash_buf, sizeof(c2_hash_buf), "%s", c2_hash);
 
   /* Create feature branch at C2 */
-  execsql(db, "SELECT dolt_branch('feature')");
+  execSql(db, "SELECT dolt_branch('feature')");
 
   /* Continue on main: C3 */
-  execsql(db, "INSERT INTO t1 VALUES(3, 'main-only')");
-  execsql(db, "SELECT dolt_add('-A')");
-  execsql(db, "SELECT dolt_commit('-m', 'C3: main diverge')");
+  execSql(db, "INSERT INTO t1 VALUES(3, 'main-only')");
+  execSql(db, "SELECT dolt_add('-A')");
+  execSql(db, "SELECT dolt_commit('-m', 'C3: main diverge')");
 
   /* Record main HEAD (C3) */
-  main_head = exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
+  main_head = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   snprintf(main_head_buf, sizeof(main_head_buf), "%s", main_head);
 
   /* Switch to feature branch and make commits C4, C5 */
-  execsql(db, "SELECT dolt_checkout('feature')");
-  execsql(db, "INSERT INTO t1 VALUES(4, 'feature-row')");
-  execsql(db, "SELECT dolt_add('-A')");
-  execsql(db, "SELECT dolt_commit('-m', 'C4: feature work')");
+  execSql(db, "SELECT dolt_checkout('feature')");
+  execSql(db, "INSERT INTO t1 VALUES(4, 'feature-row')");
+  execSql(db, "SELECT dolt_add('-A')");
+  execSql(db, "SELECT dolt_commit('-m', 'C4: feature work')");
 
-  execsql(db, "INSERT INTO t1 VALUES(5, 'more-feature')");
-  execsql(db, "SELECT dolt_add('-A')");
-  execsql(db, "SELECT dolt_commit('-m', 'C5: more feature work')");
+  execSql(db, "INSERT INTO t1 VALUES(5, 'more-feature')");
+  execSql(db, "SELECT dolt_add('-A')");
+  execSql(db, "SELECT dolt_commit('-m', 'C5: more feature work')");
 
   /* Record feature HEAD (C5) */
-  feature_head = exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
+  feature_head = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   snprintf(feature_head_buf, sizeof(feature_head_buf), "%s", feature_head);
 
   printf("C2 (expected ancestor): %s\n", c2_hash_buf);
@@ -118,7 +118,7 @@ int main(){
     char sql[512];
     snprintf(sql, sizeof(sql),
       "SELECT dolt_merge_base('%s', '%s')", main_head_buf, feature_head_buf);
-    ancestor = exec1(db, sql);
+    ancestor = queryScalarText(db, sql);
     printf("Ancestor (main,feature): %s\n", ancestor);
     check("ancestor of diverged branches is C2",
           strcmp(ancestor, c2_hash_buf)==0);
@@ -129,7 +129,7 @@ int main(){
     char sql[512];
     snprintf(sql, sizeof(sql),
       "SELECT dolt_merge_base('%s', '%s')", main_head_buf, main_head_buf);
-    ancestor = exec1(db, sql);
+    ancestor = queryScalarText(db, sql);
     printf("Ancestor (self,self):    %s\n", ancestor);
     check("ancestor of commit with itself is the commit",
           strcmp(ancestor, main_head_buf)==0);
@@ -140,16 +140,16 @@ int main(){
     char sql[512];
     snprintf(sql, sizeof(sql),
       "SELECT dolt_merge_base('%s', '%s')", c2_hash_buf, feature_head_buf);
-    ancestor = exec1(db, sql);
+    ancestor = queryScalarText(db, sql);
     printf("Ancestor (C2,feature):   %s\n", ancestor);
     check("ancestor where one is ancestor of other",
           strcmp(ancestor, c2_hash_buf)==0);
   }
 
   /* Merge feature back into main to exercise ^N parent selection. */
-  execsql(db, "SELECT dolt_checkout('main')");
-  execsql(db, "SELECT dolt_merge('feature')");
-  main_head = exec1(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
+  execSql(db, "SELECT dolt_checkout('main')");
+  execSql(db, "SELECT dolt_merge('feature')");
+  main_head = queryScalarText(db, "SELECT commit_hash FROM dolt_log LIMIT 1");
   snprintf(merge_head_buf, sizeof(merge_head_buf), "%s", main_head);
 
   /* Test 4: HEAD^2 resolves to the second parent of the merge commit. */
@@ -157,7 +157,7 @@ int main(){
     char sql[512];
     snprintf(sql, sizeof(sql),
       "SELECT dolt_merge_base('%s^2', '%s^2')", merge_head_buf, merge_head_buf);
-    ancestor = exec1(db, sql);
+    ancestor = queryScalarText(db, sql);
     printf("Ancestor (HEAD^2,HEAD^2): %s\n", ancestor);
     check("merge second-parent ref resolves to feature head",
           strcmp(ancestor, feature_head_buf)==0);
@@ -168,7 +168,7 @@ int main(){
     char sql[512];
     snprintf(sql, sizeof(sql),
       "SELECT dolt_merge_base('%s^2', '%s~1')", merge_head_buf, merge_head_buf);
-    ancestor = exec1(db, sql);
+    ancestor = queryScalarText(db, sql);
     printf("Ancestor (HEAD^2,HEAD~1): %s\n", ancestor);
     check("merge first/second parent base is C2",
           strcmp(ancestor, c2_hash_buf)==0);

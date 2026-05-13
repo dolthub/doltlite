@@ -5,6 +5,7 @@
 #include "chunk_store.h"
 #include "prolly_hash.h"
 #include "doltlite_remotesrv.h"
+#include "doltlite_remote.h"
 #include "doltlite_commit.h"
 
 #include <string.h>
@@ -20,6 +21,7 @@ int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <pthread.h>
 #include <poll.h>
@@ -51,21 +53,6 @@ static int hexToHash(const char *zHex, ProllyHash *pHash){
   return SQLITE_OK;
 }
 
-static int writeAll(int fd, const void *pBuf, int nBuf){
-  int nWritten = 0;
-  const u8 *p = (const u8*)pBuf;
-  while( nWritten < nBuf ){
-    ssize_t n = write(fd, p + nWritten, nBuf - nWritten);
-    if( n<0 ){
-      if( errno==EINTR ) continue;
-      return SQLITE_IOERR_WRITE;
-    }
-    if( n==0 ) return SQLITE_IOERR_WRITE;
-    nWritten += (int)n;
-  }
-  return SQLITE_OK;
-}
-
 static void sendResponse(int fd, int status, const char *zStatus,
                          const u8 *pBody, int nBody){
   char zHeader[256];
@@ -77,9 +64,9 @@ static void sendResponse(int fd, int status, const char *zStatus,
     "\r\n",
     status, zStatus, nBody);
   nHeader = (int)strlen(zHeader);
-  if( writeAll(fd, zHeader, nHeader)!=SQLITE_OK ) return;
+  if( doltliteWriteAll(fd, zHeader, nHeader)!=SQLITE_OK ) return;
   if( pBody && nBody>0 ){
-    writeAll(fd, pBody, nBody);
+    doltliteWriteAll(fd, pBody, nBody);
   }
 }
 
@@ -100,6 +87,11 @@ static void sendError(int fd){
                (const u8*)"Internal Server Error", 21);
 }
 
+static void sendPayloadTooLarge(int fd){
+  sendResponse(fd, 413, "Payload Too Large",
+               (const u8*)"Payload Too Large", 17);
+}
+
 static int remoteSrvCommitPending(ChunkStore *pStore){
   int rc = chunkStoreCommit(pStore);
   if( rc!=SQLITE_OK ){
@@ -109,6 +101,14 @@ static int remoteSrvCommitPending(ChunkStore *pStore){
 }
 
 #define MAX_HEADER_SIZE 4096
+
+/* Defense-in-depth limits for incoming requests. The remote protocol has no
+** authentication or transport security yet (see issue #228); these caps keep
+** a misbehaving or hostile peer from exhausting memory or driving the chunk
+** parser past the end of the body.
+*/
+#define MAX_CHUNK_BYTES   (64 * 1024 * 1024)   /* 64 MiB single chunk */
+#define MAX_REQUEST_BYTES (128 * 1024 * 1024)  /* 128 MiB total body */
 
 static int readExact(int fd, u8 *pBuf, int nBytes){
   int nRead = 0;
@@ -187,6 +187,14 @@ static int parseRequest(
     }
   }
 
+  /* Reject negative (e.g. integer overflow from atoi) or oversized bodies.
+  ** A hostile peer could send Content-Length: 2147483647 and OOM the host;
+  ** -2 signals the caller to return HTTP 413.
+  */
+  if( contentLength < 0 || contentLength > MAX_REQUEST_BYTES ){
+    return -2;
+  }
+
   if( contentLength > 0 ){
     u8 *pBody = (u8*)sqlite3_malloc(contentLength);
     if( !pBody ) return -1;
@@ -236,8 +244,11 @@ static int parsePath(
 
 static int isSafeDbName(const char *zDbName){
   int i;
-  if( zDbName[0]=='.' && zDbName[1]=='\0' ) return 0;
-  if( zDbName[0]=='.' && zDbName[1]=='.' && zDbName[2]=='\0' ) return 0;
+  /* Reject any leading-dot name. This covers "." and ".." plus dotfiles
+  ** like ".env", ".bashrc", ".gitignore" that an attacker could otherwise
+  ** plant in the served directory.
+  */
+  if( zDbName[0]=='.' ) return 0;
   for(i=0; zDbName[i]; i++){
     char c = zDbName[i];
     if( (c>='a' && c<='z')
@@ -343,7 +354,14 @@ static void handlePostChunks(ChunkStore *pStore, int fd,
         | ((u32)pBody[offset+3] << 24);
     offset += 4;
 
-    if( offset + (int)len > nBody ){
+    /* Compare as unsigned: previously len was cast to int, so a value
+    ** >= 0x80000000 would underflow past the bounds check and reach
+    ** chunkStorePut with a negative size (OOB read in memcpy/BLAKE3).
+    ** Also enforce a sanity cap so a single chunk can't exhaust memory
+    ** or stall the parser.
+    */
+    if( len > (u32)MAX_CHUNK_BYTES
+     || len > (u32)(nBody - offset) ){
       sendBadRequest(fd);
       return;
     }
@@ -465,9 +483,14 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
   int rc;
   int flags;
 
-  if( parseRequest(fd, zMethod, sizeof(zMethod),
-                   zPath, sizeof(zPath), &pBody, &nBody)!=0 ){
-    sendBadRequest(fd);
+  rc = parseRequest(fd, zMethod, sizeof(zMethod),
+                    zPath, sizeof(zPath), &pBody, &nBody);
+  if( rc!=0 ){
+    if( rc==-2 ){
+      sendPayloadTooLarge(fd);
+    }else{
+      sendBadRequest(fd);
+    }
     return;
   }
 
@@ -527,14 +550,37 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
   sqlite3_free(pBody);
 }
 
-static int serverInit(DoltliteServer *pSrv, const char *zDir, int port){
+static int serverInit(DoltliteServer *pSrv, const char *zDir, int port,
+                      const char *zBindAddr){
   struct sockaddr_in addr;
   socklen_t addrLen;
+  struct in_addr bindIn;
   int opt = 1;
   int nDir;
 
   memset(pSrv, 0, sizeof(*pSrv));
   pSrv->listenFd = -1;
+
+  /* Default to loopback. The remote protocol has no auth/TLS (issue #228),
+  ** so binding to all interfaces by default would expose unauthenticated
+  ** writeable databases. Callers can opt into broader binding by passing
+  ** an explicit zBindAddr (e.g. via --bind on the CLI).
+  */
+  if( zBindAddr==0 || zBindAddr[0]=='\0' ){
+    zBindAddr = "127.0.0.1";
+  }
+  if( inet_pton(AF_INET, zBindAddr, &bindIn)!=1 ){
+    return SQLITE_ERROR;
+  }
+
+  /* Warn loudly when bound non-loopback. */
+  if( bindIn.s_addr != htonl(INADDR_LOOPBACK) ){
+    fprintf(stderr,
+      "WARNING: doltlite-remotesrv bound to %s — the remote protocol "
+      "has no authentication or TLS yet (see issue #228). Only do this "
+      "on trusted networks or behind a reverse proxy.\n",
+      zBindAddr);
+  }
 
   nDir = (int)strlen(zDir);
   pSrv->zDir = sqlite3_malloc(nDir + 1);
@@ -551,7 +597,7 @@ static int serverInit(DoltliteServer *pSrv, const char *zDir, int port){
 
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_addr = bindIn;
   addr.sin_port = htons((u16)port);
 
   if( bind(pSrv->listenFd, (struct sockaddr*)&addr, sizeof(addr)) < 0 ){
@@ -605,11 +651,11 @@ static void serverCleanup(DoltliteServer *pSrv){
   pSrv->zDir = 0;
 }
 
-int doltliteServe(const char *zDir, int port){
+int doltliteServe(const char *zDir, int port, const char *zBindAddr){
   DoltliteServer server;
   int rc;
 
-  rc = serverInit(&server, zDir, port);
+  rc = serverInit(&server, zDir, port, zBindAddr);
   if( rc!=SQLITE_OK ) return rc;
 
   serverLoop(&server);
@@ -624,14 +670,15 @@ static void *serverThreadEntry(void *pArg){
   return 0;
 }
 
-DoltliteServer *doltliteServeAsync(const char *zDir, int port){
+DoltliteServer *doltliteServeAsync(const char *zDir, int port,
+                                   const char *zBindAddr){
   DoltliteServer *pSrv;
   int rc;
 
   pSrv = (DoltliteServer*)sqlite3_malloc(sizeof(DoltliteServer));
   if( !pSrv ) return 0;
 
-  rc = serverInit(pSrv, zDir, port);
+  rc = serverInit(pSrv, zDir, port, zBindAddr);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pSrv);
     return 0;
