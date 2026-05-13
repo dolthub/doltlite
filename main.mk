@@ -2579,7 +2579,8 @@ DOLTLITE_C_TESTS = \
 	multi_process_test$(T.exe) \
 	invariant_test$(T.exe) \
 	corruption_test$(T.exe) \
-	three_way_diff_test$(T.exe)
+	three_way_diff_test$(T.exe) \
+	oom_dolt_fault_test$(T.exe)
 
 ancestor_test$(T.exe): $(TOP)/test/ancestor_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/ancestor_test.c \
@@ -2613,6 +2614,14 @@ three_way_diff_test$(T.exe): $(TOP)/test/three_way_diff_test.c $(LIBOBJS0)
 	$(T.link) -I. -I$(TOP)/src -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
 		-o $@ $(TOP)/test/three_way_diff_test.c $(LIBOBJS0) \
 		-lz -lpthread -lm
+
+# oom_dolt_fault_test installs a wrapper allocator that fails the Nth
+# malloc, then sweeps N across a series of dolt_* operations. Forks
+# per-iteration so crashes in dolt_* OOM paths show up as child signals
+# rather than killing the whole run.
+oom_dolt_fault_test$(T.exe): $(TOP)/test/oom_dolt_fault_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/oom_dolt_fault_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
 
 doltlite-c-tests-build: $(DOLTLITE_C_TESTS)
 
