@@ -213,8 +213,12 @@ static int gcBuildCompactedData(
   i64 dataOffset = CHUNK_MANIFEST_SIZE;
   int rc = SQLITE_OK;
 
-  for(i=0; i<cs->nIndex; i++){
-    if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ) kept++;
+  {
+    int nIdx; const ChunkIndexEntry *aIdx;
+    chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
+    for(i=0; i<nIdx; i++){
+      if( prollyHashSetContains(marked, &aIdx[i].hash) ) kept++;
+    }
   }
   for(i=0; i<cs->nRecent; i++){
     if( prollyHashSetContains(marked, &cs->aRecent[i].hash) ) kept++;
@@ -223,13 +227,17 @@ static int gcBuildCompactedData(
   aNewIndex = sqlite3_malloc((kept ? kept : 1) * (int)sizeof(ChunkIndexEntry));
   if( !aNewIndex ) return SQLITE_NOMEM;
 
-  for(i=0; i<cs->nIndex; i++){
-    rc = gcAppendMarkedChunk(cs, &cs->aIndex[i].hash, marked, &buf, &nBuf,
-                             &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(aNewIndex);
-      sqlite3_free(buf);
-      return rc;
+  {
+    int nIdx; const ChunkIndexEntry *aIdx;
+    chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
+    for(i=0; i<nIdx; i++){
+      rc = gcAppendMarkedChunk(cs, &aIdx[i].hash, marked, &buf, &nBuf,
+                               &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(aNewIndex);
+        sqlite3_free(buf);
+        return rc;
+      }
     }
   }
   for(i=0; i<cs->nRecent; i++){
@@ -314,9 +322,7 @@ static int gcRewriteFile(
   }
 
   manifestCs = *cs;
-  manifestCs.nChunks = nNewIndex;
-  manifestCs.iIndexOffset = indexOffset;
-  manifestCs.nIndexSize = indexSize;
+  chunkIndexSetMetadata(&manifestCs.index, nNewIndex, indexOffset, indexSize);
   walStateSetOffset(&manifestCs.wal, indexOffset + indexSize);
 
   csSerializeManifest(&manifestCs, manifest);
@@ -457,11 +463,15 @@ static int gcSweep(
   int nBuf = 0;
   int rc = SQLITE_OK;
 
-  for(i=0; i<cs->nIndex; i++){
-    if( prollyHashSetContains(marked, &cs->aIndex[i].hash) ){
-      kept++;
-    }else{
-      removed++;
+  {
+    int nIdx; const ChunkIndexEntry *aIdx;
+    chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
+    for(i=0; i<nIdx; i++){
+      if( prollyHashSetContains(marked, &aIdx[i].hash) ){
+        kept++;
+      }else{
+        removed++;
+      }
     }
   }
   for(i=0; i<cs->nPending; i++){
@@ -488,12 +498,9 @@ static int gcSweep(
 
   if( rc==SQLITE_OK ){
     int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
-    sqlite3_free(cs->aIndex);
-    cs->aIndex = aNewIndex;
-    cs->nIndex = nNewIndex;
-    cs->nChunks = nNewIndex;
-    cs->iIndexOffset = CHUNK_MANIFEST_SIZE + nBuf;
-    cs->nIndexSize = indexSize;
+    chunkIndexReplaceEntries(&cs->index, aNewIndex, nNewIndex);
+    chunkIndexSetMetadata(&cs->index, nNewIndex,
+                          CHUNK_MANIFEST_SIZE + nBuf, indexSize);
     walStateSetOffset(&cs->wal, CHUNK_MANIFEST_SIZE + nBuf + indexSize);
     aNewIndex = 0;
 
@@ -553,7 +560,7 @@ static void doltliteGcFunc(
     return;
   }
 
-  rc = prollyHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
+  rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
     sqlite3_result_error(context, "out of memory", -1);
@@ -596,7 +603,7 @@ int doltliteGcCompact(sqlite3 *db){
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = prollyHashSetInit(&marked, cs->nIndex > 64 ? cs->nIndex : 64);
+  rc = prollyHashSetInit(&marked, chunkIndexCount(&cs->index) > 64 ? chunkIndexCount(&cs->index) : 64);
   if( rc!=SQLITE_OK ){
     chunkStoreUnlock(cs);
     return rc;

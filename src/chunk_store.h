@@ -7,6 +7,7 @@
 #include "prolly_hash.h"
 #include "chunk_wal.h"
 #include "chunk_refs.h"
+#include "chunk_index.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443
 #define CHUNK_STORE_VERSION 11
@@ -68,7 +69,6 @@ static SQLITE_INLINE int catalogParseHeader(
 }
 
 typedef struct ChunkStore ChunkStore;
-typedef struct ChunkIndexEntry ChunkIndexEntry;
 typedef struct ConflictEntry ConflictEntry;
 
 struct ConflictEntry {
@@ -79,25 +79,6 @@ struct ConflictEntry {
   u8 *pTheirVal;
   int nTheirVal;
 };
-
-#if defined(__GNUC__) || defined(__clang__)
-#  define DOLTLITE_PACKED __attribute__((__packed__))
-#elif defined(_MSC_VER)
-#  define DOLTLITE_PACKED
-#  pragma pack(push, 1)
-#else
-#  define DOLTLITE_PACKED
-#endif
-
-struct DOLTLITE_PACKED ChunkIndexEntry {
-  ProllyHash hash;
-  i64 offset;
-  int size;
-};
-
-#if defined(_MSC_VER)
-#  pragma pack(pop)
-#endif
 
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #  define CHUNK_STORE_LE_PACKING 1
@@ -111,19 +92,9 @@ struct ChunkStore {
   sqlite3_vfs *pVfs;
   RefsTable refs;
 
-  int nChunks;
-  i64 iIndexOffset;
-  i64 nIndexSize;
+  ChunkIndex index;
   WalState wal;
   i64 iFileSize;
-
-  /* aIndex is the durable sorted manifest. Small commits append into aRecent
-  ** first so readers can find new chunks without rewriting the manifest. */
-  ChunkIndexEntry *aIndex;
-  int nIndex;
-
-  void *aIndexMmapBase;
-  i64 aIndexMmapSize;
 
   ChunkIndexEntry *aPending;
   int nPending;

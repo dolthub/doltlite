@@ -404,27 +404,27 @@ static void csFreeSavedRefsState(SavedRefsState *pSaved){
 
 static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
-  pSaved->aIndex = cs->aIndex;
-  pSaved->nIndex = cs->nIndex;
-  pSaved->aIndexMmapBase = cs->aIndexMmapBase;
-  pSaved->aIndexMmapSize = cs->aIndexMmapSize;
+  pSaved->aIndex = cs->index.aIndex;
+  pSaved->nIndex = cs->index.nIndex;
+  pSaved->aIndexMmapBase = cs->index.aIndexMmapBase;
+  pSaved->aIndexMmapSize = cs->index.aIndexMmapSize;
   csCaptureSavedRefsState(cs, &pSaved->refs);
 }
 
 static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pSaved){
-  cs->aIndex = pSaved->aIndex;
-  cs->nIndex = pSaved->nIndex;
-  cs->aIndexMmapBase = pSaved->aIndexMmapBase;
-  cs->aIndexMmapSize = pSaved->aIndexMmapSize;
+  cs->index.aIndex = pSaved->aIndex;
+  cs->index.nIndex = pSaved->nIndex;
+  cs->index.aIndexMmapBase = pSaved->aIndexMmapBase;
+  cs->index.aIndexMmapSize = pSaved->aIndexMmapSize;
   csRestoreSavedRefsState(cs, &pSaved->refs);
 }
 
 static void csCaptureReloadState(ChunkStore *cs, ChunkStoreReloadState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
   pSaved->pFile = cs->pFile;
-  pSaved->aIndex = cs->aIndex;
-  pSaved->aIndexMmapBase = cs->aIndexMmapBase;
-  pSaved->aIndexMmapSize = cs->aIndexMmapSize;
+  pSaved->aIndex = cs->index.aIndex;
+  pSaved->aIndexMmapBase = cs->index.aIndexMmapBase;
+  pSaved->aIndexMmapSize = cs->index.aIndexMmapSize;
   csCaptureSavedRefsState(cs, &pSaved->refs);
 }
 
@@ -432,7 +432,7 @@ static void csReleaseReplayState(
   ChunkStore *cs,
   ChunkStoreReplayState *pSaved
 ){
-  if( cs->aIndex!=pSaved->aIndex ){
+  if( cs->index.aIndex!=pSaved->aIndex ){
     csReleaseIndexBuf(pSaved->aIndex, pSaved->aIndexMmapBase,
                        pSaved->aIndexMmapSize);
   }
@@ -445,8 +445,8 @@ static void csRollbackReplayState(
   ChunkStoreReplayState *pSaved,
   int nPendingBefore
 ){
-  if( cs->aIndex!=pSaved->aIndex ){
-    csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
+  if( cs->index.aIndex!=pSaved->aIndex ){
+    csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
   }
   csRestoreReplayState(cs, pSaved);
   cs->nPending = nPendingBefore;
@@ -464,15 +464,15 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->readOnly = pSrc->readOnly;
   pDst->refs.refsHash = pSrc->refs.refsHash;
   pDst->refs.committedRefsHash = pSrc->refs.committedRefsHash;
-  pDst->nChunks = pSrc->nChunks;
-  pDst->iIndexOffset = pSrc->iIndexOffset;
-  pDst->nIndexSize = pSrc->nIndexSize;
+  pDst->index.nChunks = pSrc->index.nChunks;
+  pDst->index.iIndexOffset = pSrc->index.iIndexOffset;
+  pDst->index.nIndexSize = pSrc->index.nIndexSize;
   pDst->wal.iWalOffset = pSrc->wal.iWalOffset;
   pDst->iFileSize = pSrc->iFileSize;
-  pDst->aIndex = pSrc->aIndex;
-  pDst->nIndex = pSrc->nIndex;
-  pDst->aIndexMmapBase = pSrc->aIndexMmapBase;
-  pDst->aIndexMmapSize = pSrc->aIndexMmapSize;
+  pDst->index.aIndex = pSrc->index.aIndex;
+  pDst->index.nIndex = pSrc->index.nIndex;
+  pDst->index.aIndexMmapBase = pSrc->index.aIndexMmapBase;
+  pDst->index.aIndexMmapSize = pSrc->index.aIndexMmapSize;
   pDst->wal.nWalData = pSrc->wal.nWalData;
   pDst->refs.aBranches = pSrc->refs.aBranches;
   pDst->refs.nBranches = pSrc->refs.nBranches;
@@ -485,10 +485,10 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->refs.nTracking = pSrc->refs.nTracking;
 
   pSrc->pFile = 0;
-  pSrc->aIndex = 0;
-  pSrc->nIndex = 0;
-  pSrc->aIndexMmapBase = 0;
-  pSrc->aIndexMmapSize = 0;
+  pSrc->index.aIndex = 0;
+  pSrc->index.nIndex = 0;
+  pSrc->index.aIndexMmapBase = 0;
+  pSrc->index.aIndexMmapSize = 0;
   pSrc->wal.nWalData = 0;
   pSrc->refs.aBranches = 0;
   pSrc->refs.nBranches = 0;
@@ -814,9 +814,9 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   CS_WRITE_U32(aBuf + 0, CHUNK_STORE_MAGIC);
   CS_WRITE_U32(aBuf + 4, CHUNK_STORE_VERSION);
 
-  CS_WRITE_U32(aBuf + 28, (u32)cs->nChunks);
-  CS_WRITE_I64(aBuf + 32, cs->iIndexOffset);
-  CS_WRITE_U32(aBuf + 40, (u32)cs->nIndexSize);
+  CS_WRITE_U32(aBuf + 28, (u32)cs->index.nChunks);
+  CS_WRITE_I64(aBuf + 32, cs->index.iIndexOffset);
+  CS_WRITE_U32(aBuf + 40, (u32)cs->index.nIndexSize);
 
   CS_WRITE_I64(aBuf + 84, cs->wal.iWalOffset);
   memcpy(aBuf + 104, cs->refs.refsHash.data, PROLLY_HASH_SIZE);
@@ -851,9 +851,9 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
-  cs->nChunks = (int)CS_READ_U32(aBuf + 28);
-  cs->iIndexOffset = CS_READ_I64(aBuf + 32);
-  cs->nIndexSize = (i64)CS_READ_U32(aBuf + 40);
+  cs->index.nChunks = (int)CS_READ_U32(aBuf + 28);
+  cs->index.iIndexOffset = CS_READ_I64(aBuf + 32);
+  cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + 40);
 
   cs->wal.iWalOffset = CS_READ_I64(aBuf + 84);
   memcpy(cs->refs.refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
@@ -872,13 +872,13 @@ static int csReadIndex(ChunkStore *cs){
   const u8 *pMapData = 0;
   i64 fileSize = 0;
 
-  if( cs->nIndexSize == 0 || cs->nChunks == 0 ){
-    cs->nIndex = 0;
+  if( cs->index.nIndexSize == 0 || cs->index.nChunks == 0 ){
+    cs->index.nIndex = 0;
     return SQLITE_OK;
   }
 
-  nEntries64 = cs->nIndexSize / CHUNK_INDEX_ENTRY_SIZE;
-  if( nEntries64 * CHUNK_INDEX_ENTRY_SIZE != cs->nIndexSize ){
+  nEntries64 = cs->index.nIndexSize / CHUNK_INDEX_ENTRY_SIZE;
+  if( nEntries64 * CHUNK_INDEX_ENTRY_SIZE != cs->index.nIndexSize ){
     return SQLITE_CORRUPT;
   }
   if( nEntries64 > INT_MAX ){
@@ -890,7 +890,7 @@ static int csReadIndex(ChunkStore *cs){
   ** past EOF can return zero-filled or sparse pages on some platforms,
   ** which causes csSearchIndex to read garbage and SIGBUS instead of
   ** returning SQLITE_CORRUPT. See issue #827. */
-  if( cs->iIndexOffset < 0 || cs->nIndexSize < 0 ){
+  if( cs->index.iIndexOffset < 0 || cs->index.nIndexSize < 0 ){
     return SQLITE_CORRUPT;
   }
   if( cs->pFile ){
@@ -902,54 +902,54 @@ static int csReadIndex(ChunkStore *cs){
     fileSize = (i64)st.st_size;
   }
   if( fileSize > 0
-   && (cs->iIndexOffset > fileSize
-       || cs->nIndexSize > fileSize - cs->iIndexOffset) ){
+   && (cs->index.iIndexOffset > fileSize
+       || cs->index.nIndexSize > fileSize - cs->index.iIndexOffset) ){
     return SQLITE_CORRUPT;
   }
 
   if( cs->zFilename
-   && csMapIndex(cs->zFilename, cs->iIndexOffset, cs->nIndexSize,
+   && csMapIndex(cs->zFilename, cs->index.iIndexOffset, cs->index.nIndexSize,
                   &pMapBase, &nMapSize, &pMapData) == SQLITE_OK ){
-    cs->aIndex = (ChunkIndexEntry *)pMapData;
-    cs->nIndex = nEntries;
-    cs->aIndexMmapBase = pMapBase;
-    cs->aIndexMmapSize = nMapSize;
+    cs->index.aIndex = (ChunkIndexEntry *)pMapData;
+    cs->index.nIndex = nEntries;
+    cs->index.aIndexMmapBase = pMapBase;
+    cs->index.aIndexMmapSize = nMapSize;
     return SQLITE_OK;
   }
 
-  cs->aIndex = (ChunkIndexEntry *)sqlite3_malloc(
+  cs->index.aIndex = (ChunkIndexEntry *)sqlite3_malloc(
     nEntries * (int)sizeof(ChunkIndexEntry)
   );
-  if( cs->aIndex == 0 ) return SQLITE_NOMEM;
-  cs->nIndex = nEntries;
-  cs->aIndexMmapBase = 0;
-  cs->aIndexMmapSize = 0;
+  if( cs->index.aIndex == 0 ) return SQLITE_NOMEM;
+  cs->index.nIndex = nEntries;
+  cs->index.aIndexMmapBase = 0;
+  cs->index.aIndexMmapSize = 0;
 
-  aBuf = (u8 *)sqlite3_malloc64(cs->nIndexSize);
+  aBuf = (u8 *)sqlite3_malloc64(cs->index.nIndexSize);
   if( aBuf == 0 ){
-    sqlite3_free(cs->aIndex);
-    cs->aIndex = 0;
-    cs->nIndex = 0;
+    sqlite3_free(cs->index.aIndex);
+    cs->index.aIndex = 0;
+    cs->index.nIndex = 0;
     return SQLITE_NOMEM;
   }
 
-  rc = sqlite3OsRead(cs->pFile, aBuf, cs->nIndexSize, cs->iIndexOffset);
+  rc = sqlite3OsRead(cs->pFile, aBuf, cs->index.nIndexSize, cs->index.iIndexOffset);
   if( rc != SQLITE_OK ){
     sqlite3_free(aBuf);
-    sqlite3_free(cs->aIndex);
-    cs->aIndex = 0;
-    cs->nIndex = 0;
+    sqlite3_free(cs->index.aIndex);
+    cs->index.aIndex = 0;
+    cs->index.nIndex = 0;
     return rc;
   }
 
   for( i = 0; i < nEntries; i++ ){
     rc = csDeserializeIndexEntry(aBuf + i * CHUNK_INDEX_ENTRY_SIZE,
-                                 &cs->aIndex[i]);
+                                 &cs->index.aIndex[i]);
     if( rc != SQLITE_OK ){
       sqlite3_free(aBuf);
-      sqlite3_free(cs->aIndex);
-      cs->aIndex = 0;
-      cs->nIndex = 0;
+      sqlite3_free(cs->index.aIndex);
+      cs->index.aIndex = 0;
+      cs->index.nIndex = 0;
       return rc;
     }
   }
@@ -1031,7 +1031,7 @@ static int csReplayWal(ChunkStore *cs){
     cs->iFileSize = fileSize;
   }
   if( walSize <= 0 ){
-    if( cs->nIndex==0 && cs->nChunks==0
+    if( cs->index.nIndex==0 && cs->index.nChunks==0
      && !prollyHashIsEmpty(&cs->refs.refsHash) ){
       memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
     }
@@ -1067,7 +1067,7 @@ static int csReplayWal(ChunkStore *cs){
       }
 
       {
-        int existing = csSearchIndex(cs->aIndex, cs->nIndex, &hash);
+        int existing = csSearchIndex(cs->index.aIndex, cs->index.nIndex, &hash);
         ChunkIndexEntry *e = 0;
         if( existing < 0 ){
           rc = csGrowPending(cs);
@@ -1095,7 +1095,7 @@ static int csReplayWal(ChunkStore *cs){
           break;
         }
 
-        cs->nChunks = (int)CS_READ_U32(m + 28);
+        cs->index.nChunks = (int)CS_READ_U32(m + 28);
 
         memcpy(cs->refs.refsHash.data, m + 104, PROLLY_HASH_SIZE);
       }
@@ -1112,9 +1112,9 @@ static int csReplayWal(ChunkStore *cs){
   cs->nPending = nRootedPending;
 
   if( nRootRecordsSeen == 0
-   && nPendingBefore == 0 && cs->nIndex == 0 ){
+   && nPendingBefore == 0 && cs->index.nIndex == 0 ){
     memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
-    cs->nChunks = 0;
+    cs->index.nChunks = 0;
   }
 
   if( cs->nPending > 0 ){
@@ -1122,10 +1122,10 @@ static int csReplayWal(ChunkStore *cs){
     int nMerged = 0;
     rc = csMergeIndex(cs, &aMerged, &nMerged);
     if( rc != SQLITE_OK ) goto replay_error;
-    cs->aIndex = aMerged;
-    cs->nIndex = nMerged;
-    cs->aIndexMmapBase = 0;
-    cs->aIndexMmapSize = 0;
+    cs->index.aIndex = aMerged;
+    cs->index.nIndex = nMerged;
+    cs->index.aIndexMmapBase = 0;
+    cs->index.aIndexMmapSize = 0;
     cs->nPending = 0;
     csPendHTClear(cs);
   }
@@ -1193,7 +1193,7 @@ static int csMergeIndex(
   ChunkIndexEntry **ppMerged,
   int *pnMerged
 ){
-  int nTotal = cs->nIndex + cs->nPending;
+  int nTotal = cs->index.nIndex + cs->nPending;
   ChunkIndexEntry *aMerged;
   int idxPos, pendPos, outPos;
 
@@ -1218,22 +1218,22 @@ static int csMergeIndex(
       ChunkIndexEntry *pPending = &cs->aPending[pendPos];
       int found;
       int nCopy;
-      int pos = csIndexLowerBound(cs->aIndex, cs->nIndex, idxPos,
+      int pos = csIndexLowerBound(cs->index.aIndex, cs->index.nIndex, idxPos,
                                   &pPending->hash);
       nCopy = pos - idxPos;
       if( nCopy > 0 ){
-        memcpy(&aMerged[outPos], &cs->aIndex[idxPos],
+        memcpy(&aMerged[outPos], &cs->index.aIndex[idxPos],
                nCopy * sizeof(ChunkIndexEntry));
         outPos += nCopy;
       }
-      found = pos < cs->nIndex
-           && prollyHashCompare(&cs->aIndex[pos].hash, &pPending->hash)==0;
+      found = pos < cs->index.nIndex
+           && prollyHashCompare(&cs->index.aIndex[pos].hash, &pPending->hash)==0;
       aMerged[outPos++] = *pPending;
       idxPos = found ? pos + 1 : pos;
     }
-    if( idxPos < cs->nIndex ){
-      int nCopy = cs->nIndex - idxPos;
-      memcpy(&aMerged[outPos], &cs->aIndex[idxPos],
+    if( idxPos < cs->index.nIndex ){
+      int nCopy = cs->index.nIndex - idxPos;
+      memcpy(&aMerged[outPos], &cs->index.aIndex[idxPos],
              nCopy * sizeof(ChunkIndexEntry));
       outPos += nCopy;
     }
@@ -1245,10 +1245,10 @@ static int csMergeIndex(
   idxPos = 0;
   pendPos = 0;
   outPos = 0;
-  while( idxPos < cs->nIndex && pendPos < cs->nPending ){
-    int cmp = prollyHashCompare(&cs->aIndex[idxPos].hash, &cs->aPending[pendPos].hash);
+  while( idxPos < cs->index.nIndex && pendPos < cs->nPending ){
+    int cmp = prollyHashCompare(&cs->index.aIndex[idxPos].hash, &cs->aPending[pendPos].hash);
     if( cmp < 0 ){
-      aMerged[outPos++] = cs->aIndex[idxPos++];
+      aMerged[outPos++] = cs->index.aIndex[idxPos++];
     }else if( cmp > 0 ){
       aMerged[outPos++] = cs->aPending[pendPos++];
     }else{
@@ -1257,7 +1257,7 @@ static int csMergeIndex(
       idxPos++;
     }
   }
-  while( idxPos < cs->nIndex ) aMerged[outPos++] = cs->aIndex[idxPos++];
+  while( idxPos < cs->index.nIndex ) aMerged[outPos++] = cs->index.aIndex[idxPos++];
   while( pendPos < cs->nPending ) aMerged[outPos++] = cs->aPending[pendPos++];
 
   *ppMerged = aMerged;
@@ -1284,9 +1284,9 @@ int chunkStoreOpen(
     cs->isMemory = 1;
     cs->zFilename = sqlite3_mprintf(":memory:");
     if( cs->zFilename==0 ) return SQLITE_NOMEM;
-    cs->nChunks = 0;
-    cs->iIndexOffset = 0;
-    cs->nIndexSize = 0;
+    cs->index.nChunks = 0;
+    cs->index.iIndexOffset = 0;
+    cs->index.nIndexSize = 0;
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     cs->pFile = 0;
     return SQLITE_OK;
@@ -1352,7 +1352,7 @@ int chunkStoreOpen(
       return rc;
     }
 
-    if( prollyHashIsEmpty(&cs->refs.refsHash) && cs->nIndexSize>0 ){
+    if( prollyHashIsEmpty(&cs->refs.refsHash) && cs->index.nIndexSize>0 ){
       chunkStoreClose(cs);
       return SQLITE_CORRUPT;
     }
@@ -1380,9 +1380,9 @@ int chunkStoreOpen(
       cs->zFilename = 0;
       return SQLITE_CANTOPEN;
     }
-    cs->nChunks = 0;
-    cs->iIndexOffset = 0;
-    cs->nIndexSize = 0;
+    cs->index.nChunks = 0;
+    cs->index.iIndexOffset = 0;
+    cs->index.nIndexSize = 0;
 
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     cs->iFileSize = 0;
@@ -1400,10 +1400,10 @@ int chunkStoreClose(ChunkStore *cs){
     cs->pFile = 0;
   }
   sqlite3_free(cs->zFilename);
-  csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
-  cs->aIndex = 0;
-  cs->aIndexMmapBase = 0;
-  cs->aIndexMmapSize = 0;
+  csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
+  cs->index.aIndex = 0;
+  cs->index.aIndexMmapBase = 0;
+  cs->index.aIndexMmapSize = 0;
   sqlite3_free(cs->aPending);
   sqlite3_free(cs->aRecent);
   csPendHTClear(cs);
@@ -1999,7 +1999,7 @@ int chunkStoreHas(ChunkStore *cs, const ProllyHash *hash, int *pHas){
   int idx = -1;
   int rc;
   *pHas = 0;
-  if( csSearchIndex(cs->aIndex, cs->nIndex, hash) >= 0 ){
+  if( csSearchIndex(cs->index.aIndex, cs->index.nIndex, hash) >= 0 ){
     *pHas = 1;
     return SQLITE_OK;
   }
@@ -2049,11 +2049,11 @@ int chunkStoreGet(
     if( idx >= 0 ){
       e = &cs->aRecent[idx];
     }else{
-      idx = csSearchIndex(cs->aIndex, cs->nIndex, hash);
+      idx = csSearchIndex(cs->index.aIndex, cs->index.nIndex, hash);
       if( idx < 0 ){
         return SQLITE_NOTFOUND;
       }
-      e = &cs->aIndex[idx];
+      e = &cs->index.aIndex[idx];
     }
 
     if( cs->pFile == 0 ){
@@ -2125,7 +2125,7 @@ int chunkStorePut(
   prollyHashCompute(pData, nData, &h);
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
-  if( csSearchIndex(cs->aIndex, cs->nIndex, &h) >= 0 ) return SQLITE_OK;
+  if( csSearchIndex(cs->index.aIndex, cs->index.nIndex, &h) >= 0 ) return SQLITE_OK;
   rc = csSearchRecent(cs, &h, &idx);
   if( rc!=SQLITE_OK ) return rc;
   if( idx >= 0 ) return SQLITE_OK;
@@ -2162,11 +2162,11 @@ static int csCommitToMemory(ChunkStore *cs){
     int nMem = 0;
     int rc = csMergeIndex(cs, &aMem, &nMem);
     if( rc!=SQLITE_OK ) return rc;
-    csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
-    cs->aIndex = aMem;
-    cs->nIndex = nMem;
-    cs->aIndexMmapBase = 0;
-    cs->aIndexMmapSize = 0;
+    csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
+    cs->index.aIndex = aMem;
+    cs->index.nIndex = nMem;
+    cs->index.aIndexMmapBase = 0;
+    cs->index.aIndexMmapSize = 0;
     cs->nPending = 0;
     csPendHTClear(cs);
     cs->nCommittedWriteBuf = cs->nWriteBuf;
@@ -2435,11 +2435,11 @@ commit_done:
       cs->nRecent += cs->nPending;
       sqlite3_free(aMerged);
     }else{
-      csReleaseIndexBuf(cs->aIndex, cs->aIndexMmapBase, cs->aIndexMmapSize);
-      cs->aIndex = aMerged;
-      cs->nIndex = nMerged;
-      cs->aIndexMmapBase = 0;
-      cs->aIndexMmapSize = 0;
+      csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
+      cs->index.aIndex = aMerged;
+      cs->index.nIndex = nMerged;
+      cs->index.aIndexMmapBase = 0;
+      cs->index.aIndexMmapSize = 0;
       cs->nRecent = 0;
       csRecentHTClear(cs);
     }
