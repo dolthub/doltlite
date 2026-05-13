@@ -5785,6 +5785,9 @@ static int prollyBtCursorIndexMoveto(
               bestCmp = pIdxKey->default_rc;
               treeFound = 1;
               treeCmp = bestCmp;
+              if( pIdxKey->default_rc < 0 ){
+                continue;
+              }
               break;
             }
           }
