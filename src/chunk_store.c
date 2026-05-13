@@ -1010,8 +1010,6 @@ static int csReplayWal(ChunkStore *cs){
 
   memset(&tmpRefs, 0, sizeof(tmpRefs));
 
-  csCaptureReplayState(cs, &saved);
-
   if( cs->iWalOffset <= 0 || !cs->pFile ) return SQLITE_OK;
 
   {
@@ -1028,6 +1026,8 @@ static int csReplayWal(ChunkStore *cs){
     }
     return SQLITE_OK;
   }
+
+  csCaptureReplayState(cs, &saved);
 
   cs->nWalData = walSize;
 
@@ -1522,6 +1522,11 @@ int chunkStoreAddTagFull(
   aNew[cs->nTags].zEmail   = sqlite3_mprintf("%s", zEmail   ? zEmail   : "");
   aNew[cs->nTags].zMessage = sqlite3_mprintf("%s", zMessage ? zMessage : "");
   if( !aNew[cs->nTags].zTagger || !aNew[cs->nTags].zEmail || !aNew[cs->nTags].zMessage ){
+    sqlite3_free(aNew[cs->nTags].zName);
+    sqlite3_free(aNew[cs->nTags].zTagger);
+    sqlite3_free(aNew[cs->nTags].zEmail);
+    sqlite3_free(aNew[cs->nTags].zMessage);
+    memset(&aNew[cs->nTags], 0, sizeof(struct TagRef));
     return SQLITE_NOMEM;
   }
   aNew[cs->nTags].timestamp = timestamp;
