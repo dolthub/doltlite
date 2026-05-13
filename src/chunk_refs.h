@@ -70,4 +70,27 @@ const ProllyHash *refsTableGetCommittedHash(const RefsTable *rt);
 
 void refsTableSetHash(RefsTable *rt, const ProllyHash *h);
 
+typedef struct SavedRefsState SavedRefsState;
+struct SavedRefsState {
+  char *zDefaultBranch;
+  BranchRef *aBranches;
+  int nBranches;
+  TagRef *aTags;
+  int nTags;
+  RemoteRef *aRemotes;
+  int nRemotes;
+  TrackingBranch *aTracking;
+  int nTracking;
+};
+
+struct ChunkStore;
+void csCaptureSavedRefsState(struct ChunkStore *cs, SavedRefsState *pSaved);
+void csRestoreSavedRefsState(struct ChunkStore *cs, const SavedRefsState *pSaved);
+void csFreeSavedRefsState(SavedRefsState *pSaved);
+int csReplaceRefsStateFromBlob(struct ChunkStore *cs, const u8 *data, int nData,
+                               int adopt);
+void csFreeRefsState(struct ChunkStore *cs);
+void csAdoptRefsState(struct ChunkStore *pDst, struct ChunkStore *pSrc);
+int csEnsureDefaultBranch(struct ChunkStore *cs);
+
 #endif
