@@ -95,12 +95,15 @@ int migrateDiffCb(void *pArg, const ProllyDiffChange *pChange){
     int hdrBytes, off;
 
     hdrBytes = dlReadVarint(hp, hpEnd, &hdrSize);
+    if( hdrBytes<=0 ) return SQLITE_CORRUPT;
+    if( (u64)hdrBytes > hdrSize || hdrSize > (u64)nVal ) return SQLITE_CORRUPT;
     hp += hdrBytes;
     off = (int)hdrSize;
 
     while( hp < pVal+hdrSize && hp < hpEnd && nFields<64 ){
       u64 st;
       int stBytes = dlReadVarint(hp, pVal+hdrSize, &st);
+      if( stBytes<=0 ) return SQLITE_CORRUPT;
       hp += stBytes;
       aType[nFields] = (int)st;
       aOffset[nFields] = off;

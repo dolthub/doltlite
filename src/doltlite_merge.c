@@ -191,13 +191,22 @@ static int parseRecordFields(const u8 *pRec, int nRec,
   if(!pRec || nRec<1) { *ppFields=0; *pnFields=0; return 0; }
   pPos = pRec; pEnd = pRec + nRec;
   hdrBytes = dlReadVarint(pPos, pEnd, &hdrSize);
+  if(hdrBytes<=0){ *ppFields=0; *pnFields=0; return -1; }
   pPos += hdrBytes;
+  if((u64)hdrBytes > hdrSize || hdrSize > (u64)nRec){
+    *ppFields=0; *pnFields=0; return -1;
+  }
   pHdrEnd = pRec + (int)hdrSize;
   bodyOff = (int)hdrSize;
 
   while(pPos < pHdrEnd && pPos < pEnd){
     u64 st; int stBytes, sz;
     stBytes = dlReadVarint(pPos, pHdrEnd, &st);
+    if(stBytes<=0){
+      sqlite3_free(aFields);
+      *ppFields=0; *pnFields=0;
+      return -1;
+    }
     pPos += stBytes;
     sz = dlSerialTypeLen(st);
 
