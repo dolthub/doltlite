@@ -49,6 +49,9 @@ static u8 serialTypeTag(u32 serialType){
 #define SORTKEY_COLL_NOCASE 1
 #define SORTKEY_COLL_RTRIM  2
 
+static void intSerialType(i64 v, u32 *pType, u32 *pLen);
+static void writeIntBE(u8 *p, i64 v, int nByte);
+
 static int collFromKeyInfo(const KeyInfo *pKeyInfo, int iCol){
   const CollSeq *pColl;
   if( !pKeyInfo ) return SORTKEY_COLL_BINARY;
@@ -364,6 +367,25 @@ int sortKeyFromRecordPrefixColl(
   *ppOut = 0;
   return sortKeyFromRecordPrefixCollBuffer(
       pRec, nRec, nKeyField, pKeyInfo, ppOut, &(int){0}, pnOut);
+}
+
+int sortKeyFromInt64Buffer(i64 v, u8 **ppBuf, int *pnAlloc, int *pnOut){
+  u8 aData[8];
+  u8 *pOut;
+  u32 serialType;
+  u32 nData;
+
+  intSerialType(v, &serialType, &nData);
+  writeIntBE(aData, v, (int)nData);
+  if( *pnAlloc < 64 ){
+    u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, 64);
+    if( !pNew ) return SQLITE_NOMEM;
+    *ppBuf = pNew;
+    *pnAlloc = 64;
+  }
+  pOut = *ppBuf;
+  *pnOut = encodeNumeric(pOut, serialType, aData, nData);
+  return SQLITE_OK;
 }
 
 static void intSerialType(i64 v, u32 *pType, u32 *pLen){

@@ -2348,6 +2348,24 @@ static int serializeUnpackedRecordBuffer(
   *pnOut = nTotal;
   return SQLITE_OK;
 }
+
+static int unpackedRecordCanUseSingleIntSortKey(
+  BtCursor *pCur,
+  UnpackedRecord *pRec
+){
+  KeyInfo *pKeyInfo = pCur->pKeyInfo;
+  CollSeq *pColl;
+  if( !pKeyInfo || !pRec || pRec->nField!=1 ) return 0;
+  if( !(pRec->aMem[0].flags & MEM_Int) ) return 0;
+  if( pKeyInfo->aSortFlags && (pKeyInfo->aSortFlags[0] & KEYINFO_ORDER_DESC) ){
+    return 0;
+  }
+  pColl = pKeyInfo->aColl[0];
+  if( pColl && pColl->zName && sqlite3StrICmp(pColl->zName, "BINARY")!=0 ){
+    return 0;
+  }
+  return 1;
+}
 static void clearMergeCursorState(BtCursor *pCur){
   pCur->mmIdx = -1;
   pCur->mmPhysIdx = -1;
@@ -5787,13 +5805,20 @@ static int prollyBtCursorIndexMoveto(
     if( pCur->pKeyInfo && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
       nSeekKeyField = (int)pIdxKey->nField;
     }
-    rc = serializeUnpackedRecordBuffer(
-        pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
-    if( rc!=SQLITE_OK ) return rc;
-    pSerKey = pCur->pSeekRecord;
-    rc = sortKeyFromRecordPrefixCollBuffer(
-        pSerKey, nSerKey, nSeekKeyField, pCur->pKeyInfo,
-        &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+    if( nSeekKeyField==1
+     && unpackedRecordCanUseSingleIntSortKey(pCur, pIdxKey) ){
+      rc = sortKeyFromInt64Buffer(
+          pIdxKey->aMem[0].u.i,
+          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+    }else{
+      rc = serializeUnpackedRecordBuffer(
+          pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
+      if( rc!=SQLITE_OK ) return rc;
+      pSerKey = pCur->pSeekRecord;
+      rc = sortKeyFromRecordPrefixCollBuffer(
+          pSerKey, nSerKey, nSeekKeyField, pCur->pKeyInfo,
+          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+    }
     if( rc!=SQLITE_OK ) return rc;
     pSortKey = pCur->pSeekSortKey;
     pCur->nSeekSortKey = nSortKey;
