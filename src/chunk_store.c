@@ -118,7 +118,6 @@
 
 static int csOpenFile(sqlite3_vfs *pVfs, const char *zPath,
                       sqlite3_file **ppFile, int flags);
-static void csCloseFile(sqlite3_file *pFile);
 static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize);
 static int csRestoreCommittedRefsState(ChunkStore *cs);
 static int csReadManifest(ChunkStore *cs);
@@ -429,12 +428,6 @@ static int csOpenFile(
   int outFlags = 0;
   rc = sqlite3OsOpenMalloc(pVfs, zPath, ppFile, flags, &outFlags);
   return rc;
-}
-
-static void csCloseFile(sqlite3_file *pFile){
-  if( pFile ){
-    sqlite3OsCloseFree(pFile);
-  }
 }
 
 static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
