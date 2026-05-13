@@ -45,35 +45,43 @@ static void hashToHex(const ProllyHash *pHash, char *zOut){
   zOut[PROLLY_HASH_SIZE*2] = 0;
 }
 
+#define HTTP_RESP_MAX_BYTES ((i64)128 * 1024 * 1024)
+
 static int readUntilEof(int fd, u8 **ppOut, int *pnOut){
-  int nAlloc = 4096;
-  int nUsed = 0;
-  u8 *pBuf = sqlite3_malloc(nAlloc);
+  i64 nAlloc = 4096;
+  i64 nUsed = 0;
+  u8 *pBuf = sqlite3_malloc64(nAlloc);
   if( !pBuf ) return SQLITE_NOMEM;
 
   for(;;){
     ssize_t n;
     if( nUsed + 1024 > nAlloc ){
       u8 *pNew;
-      nAlloc *= 2;
-      pNew = sqlite3_realloc(pBuf, nAlloc);
+      i64 nNew = nAlloc * 2;
+      if( nNew > HTTP_RESP_MAX_BYTES ) nNew = HTTP_RESP_MAX_BYTES;
+      if( nNew <= nAlloc ){
+        sqlite3_free(pBuf);
+        return SQLITE_TOOBIG;
+      }
+      pNew = sqlite3_realloc64(pBuf, nNew);
       if( !pNew ){
         sqlite3_free(pBuf);
         return SQLITE_NOMEM;
       }
       pBuf = pNew;
+      nAlloc = nNew;
     }
-    n = read(fd, pBuf + nUsed, nAlloc - nUsed);
+    n = read(fd, pBuf + nUsed, (size_t)(nAlloc - nUsed));
     if( n < 0 ){
       sqlite3_free(pBuf);
       return SQLITE_IOERR;
     }
     if( n == 0 ) break;
-    nUsed += (int)n;
+    nUsed += (i64)n;
   }
 
   *ppOut = pBuf;
-  *pnOut = nUsed;
+  *pnOut = (int)nUsed;
   return SQLITE_OK;
 }
 
@@ -99,7 +107,9 @@ static int httpRequest(
   *pnResp = 0;
 
   he = gethostbyname(zHost);
-  if( !he ) return SQLITE_ERROR;
+  if( !he || he->h_addrtype != AF_INET || !he->h_addr_list[0] ){
+    return SQLITE_ERROR;
+  }
 
   fd = socket(AF_INET, SOCK_STREAM, 0);
   if( fd < 0 ) return SQLITE_ERROR;
@@ -107,7 +117,11 @@ static int httpRequest(
   memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_port = htons((u16)port);
-  memcpy(&addr.sin_addr, he->h_addr_list[0], (size_t)he->h_length);
+  {
+    size_t nCopy = (size_t)he->h_length;
+    if( nCopy > sizeof(addr.sin_addr) ) nCopy = sizeof(addr.sin_addr);
+    memcpy(&addr.sin_addr, he->h_addr_list[0], nCopy);
+  }
 
   if( connect(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0 ){
     close(fd);
