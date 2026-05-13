@@ -164,12 +164,6 @@ static int csOpenFile(
   return rc;
 }
 
-void csCloseFile(sqlite3_file *pFile){
-  if( pFile ){
-    sqlite3OsCloseFree(pFile);
-  }
-}
-
 static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   sqlite3_int64 sizeNow = -1;
   int rc = SQLITE_OK;
