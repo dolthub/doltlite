@@ -39,15 +39,7 @@ oracle() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^ANS|' | sed 's/^ANS|//')
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite: $dl_out"
-    echo "    dolt:     $dt_out"
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_error() {

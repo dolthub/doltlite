@@ -37,15 +37,7 @@ oracle() {
   )
   dt_out=$(echo "$dt_out" | tail -1 | tr -d '"\r')
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite: '$dl_out'"
-    echo "    dolt:     '$dt_out'"
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 SEED="

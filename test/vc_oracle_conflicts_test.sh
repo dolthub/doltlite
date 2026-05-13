@@ -16,7 +16,7 @@ normalize() {
 }
 
 oracle() {
-  local name="$1" setup="$2"
+  local name="$1" setup="$2" allow_empty="${3:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
   local dl_setup="$setup"
@@ -49,14 +49,10 @@ oracle() {
   local dt_out
   dt_out=$(vc_oracle_tail_csv_body "$dir/dt.raw" | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:"    ; echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -70,7 +66,7 @@ CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
 INSERT INTO t VALUES (1, 10);
 SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'c1');
-"
+" "EXPECT_EMPTY"
 
 oracle "empty_after_clean_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -84,7 +80,7 @@ SELECT dolt_add('-A');
 SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
-"
+" "EXPECT_EMPTY"
 
 echo "--- single-table conflict ---"
 
@@ -165,7 +161,7 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 SELECT dolt_conflicts_resolve('--ours', 't');
-"
+" "EXPECT_EMPTY"
 
 oracle "resolve_theirs_clears" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -183,7 +179,7 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 SELECT dolt_conflicts_resolve('--theirs', 't');
-"
+" "EXPECT_EMPTY"
 
 oracle "resolve_one_of_two_tables" "
 CREATE TABLE a(id INTEGER PRIMARY KEY, v INT);
@@ -225,7 +221,7 @@ SELECT dolt_commit('-m', 'feat1');
 SELECT dolt_checkout('main');
 SELECT dolt_merge('feature');
 SELECT dolt_merge('--abort');
-"
+" "EXPECT_EMPTY"
 
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="

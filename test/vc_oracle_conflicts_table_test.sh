@@ -43,22 +43,7 @@ oracle() {
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^R|' | normalize)
 
-  if [ -z "$dl_out" ] && [ -z "$dt_out" ]; then
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (both queries empty — harness bug)"
-    return
-  fi
-
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_mutate() {
@@ -89,15 +74,7 @@ oracle_mutate() {
   )
   dt_out=$(echo "$dt_out" | tr -d '"' | grep '^R|' | normalize)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 echo "=== Version Control Oracle Tests: dolt_conflicts_<table> ==="

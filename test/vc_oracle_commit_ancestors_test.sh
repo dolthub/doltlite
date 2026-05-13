@@ -42,15 +42,7 @@ SELECT CONCAT('ROW|IDX|', parent_index, '|', count(*)) FROM dolt_commit_ancestor
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^ROW|' | sort)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 echo "=== Version Control Oracle Tests: dolt_commit_ancestors ==="

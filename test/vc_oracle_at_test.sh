@@ -44,24 +44,7 @@ oracle() {
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize
   )
 
-  if [ -z "$dl_out" ] && [ -z "$dt_out" ]; then
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (both queries empty — harness or ref not resolvable)"
-    return
-  fi
-
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite (dolt_at_t WHERE commit_ref='${ref}'):"
-    echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt (t AS OF '${ref}'):"
-    echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_error() {

@@ -8,6 +8,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 translate_for_dolt() {
   sed -E '
@@ -19,7 +20,7 @@ translate_for_dolt() {
 }
 
 oracle() {
-  local name="$1" setup="$2" query="$3"
+  local name="$1" setup="$2" query="$3" allow_empty="${4:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -44,14 +45,10 @@ oracle() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|' | sort)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -197,7 +194,8 @@ INSERT INTO t(v, a, b) VALUES (10, 1, 2), (20, 1, 3);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'seed');
 ALTER TABLE t DROP COLUMN c;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'drop_c');
-" "SELECT CONCAT('R|', IFNULL(to_v,''), '|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(from_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');"
+" "SELECT CONCAT('R|', IFNULL(to_v,''), '|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(from_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');" \
+  "EXPECT_EMPTY"
 
 oracle "h_add_col_nonleading_pk_no_data" "
 CREATE TABLE t(v INT, a INTEGER, b INTEGER, PRIMARY KEY(a, b));
@@ -205,7 +203,8 @@ INSERT INTO t(v, a, b) VALUES (10, 1, 2);
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'seed');
 ALTER TABLE t ADD COLUMN extra INT;
 SELECT dolt_add('-A'); SELECT dolt_commit('-m', 'add_extra');
-" "SELECT CONCAT('R|', IFNULL(to_v,''), '|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(to_extra,''), '|', IFNULL(from_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');"
+" "SELECT CONCAT('R|', IFNULL(to_v,''), '|', IFNULL(to_a,''), '|', IFNULL(to_b,''), '|', IFNULL(to_extra,''), '|', IFNULL(from_v,''), '|', IFNULL(from_a,''), '|', IFNULL(from_b,''), '|', diff_type) FROM dolt_diff_t('HEAD~1', 'HEAD');" \
+  "EXPECT_EMPTY"
 
 echo "--- Group I: replay on multi-col PK table additions ---"
 
@@ -368,6 +367,12 @@ SELECT dolt_rebase('main');
 " "SELECT CONCAT('R|', IFNULL(from_table_name,''), '|', IFNULL(to_table_name,''), '|', diff_type, '|', CASE WHEN data_change THEN 1 ELSE 0 END, '|', CASE WHEN schema_change THEN 1 ELSE 0 END) FROM dolt_diff_summary('main', 'feat', 'u');"
 
 echo "--- Group K: replay history on multi-col PK table additions ---"
+# TODO: the three k_*_replay_multi_pk_history cases below surface vacuous passes
+# now that empty-on-both is caught. The dolt_history_<table> vtable returns no
+# rows on both doltlite AND dolt after merge/cherry-pick/rebase of a feature
+# branch that adds a new multi-PK table on top of a main-side structural
+# change. Investigate whether this is a known dolt limitation or a real bug.
+# Until then these tests legitimately fail.
 
 oracle "k_merge_replay_multi_pk_history" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);

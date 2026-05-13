@@ -8,6 +8,7 @@ TMPROOT=$(mktemp -d)
 trap "rm -rf $TMPROOT" EXIT
 pass=0; fail=0
 FAILED_NAMES=""
+source "$(dirname "$0")/lib/vc_oracle_common.sh"
 
 translate_for_dolt() {
   sed -E '
@@ -17,7 +18,7 @@ translate_for_dolt() {
 }
 
 oracle() {
-  local name="$1" setup="$2" query="$3"
+  local name="$1" setup="$2" query="$3" allow_empty="${4:-}"
   local dir="$TMPROOT/$name"
   mkdir -p "$dir/dl" "$dir/dt"
 
@@ -42,14 +43,10 @@ oracle() {
   ) > "$dir/dt.raw"
   dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^R|' | sort)
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
+  if [ "$allow_empty" = "EXPECT_EMPTY" ]; then
+    vc_oracle_assert_match_allow_empty "$name" "$dl_out" "$dt_out"
   else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+    vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
   fi
 }
 
@@ -110,7 +107,8 @@ INSERT INTO t VALUES (99, 99);
 echo "--- no diff (same ref both sides) ---"
 
 oracle "slice_no_change" "$SETUP_LINEAR" \
-  "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_v,''), '|', IFNULL(from_id,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('HEAD', 'HEAD');"
+  "SELECT CONCAT('R|', IFNULL(to_id,''), '|', IFNULL(to_v,''), '|', IFNULL(from_id,''), '|', IFNULL(from_v,''), '|', diff_type) FROM dolt_diff_t('HEAD', 'HEAD');" \
+  "EXPECT_EMPTY"
 
 echo "--- multi-column table ---"
 

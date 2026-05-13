@@ -87,17 +87,7 @@ oracle() {
   dl_combined="$dl_log"$'\n'"$dl_table"
   dt_combined="$dt_log"$'\n'"$dt_table"
 
-  if [ "$dl_combined" = "$dt_combined" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite log:";   echo "$dl_log"   | sed 's/^/      /'
-    echo "    dolt log:";       echo "$dt_log"   | sed 's/^/      /'
-    echo "    doltlite table:"; echo "$dl_table" | sed 's/^/      /'
-    echo "    dolt table:";     echo "$dt_table" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_combined" "$dt_combined"
 }
 
 oracle_error() {
@@ -150,15 +140,7 @@ oracle_error_poststate() {
       | tr -d '"\r'
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite: |$dl_out|"
-    echo "    dolt:     |$dt_out|"
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 oracle_poststate() {
@@ -195,15 +177,7 @@ oracle_poststate() {
       | tr -d '"\r'
   )
 
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite: |$dl_out|"
-    echo "    dolt:     |$dt_out|"
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 echo "=== Version Control Oracle Tests: dolt_revert / dolt_cherry_pick ==="

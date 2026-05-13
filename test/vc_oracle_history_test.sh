@@ -84,22 +84,7 @@ oracle() {
     } | "$DOLT" sql -c -r csv 2>"$dir/dt.err" | tr -d '"' | normalize_history
   )
 
-  if [ -z "$dl_out" ] && [ -z "$dt_out" ]; then
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name (both queries empty — harness bug)"
-    return
-  fi
-
-  if [ "$dl_out" = "$dt_out" ]; then
-    pass=$((pass+1))
-  else
-    fail=$((fail+1))
-    FAILED_NAMES="$FAILED_NAMES $name"
-    echo "  FAIL: $name"
-    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
-    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
-  fi
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
 echo "=== Version Control Oracle Tests: dolt_history_<table> ==="
