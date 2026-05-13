@@ -42,6 +42,51 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
+oracle_in_set() {
+  local name="$1" setup="$2" ref1="$3" ref2="$4" expect_set="$5"
+  local dir="$TMPROOT/${name}_set"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local q="SELECT CONCAT('ANS|', coalesce((SELECT message FROM dolt_log WHERE commit_hash = dolt_merge_base($ref1, $ref2)), 'NULL'));"
+
+  local dl_out
+  dl_out=$(printf "%s\n.headers off\n.mode list\n%s\n" "$setup" "$q" \
+           | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+           | tr -d '\r' \
+           | grep '^ANS|' \
+           | sed 's/^ANS|//')
+
+  local dolt_setup
+  dolt_setup=$(vc_oracle_translate_for_dolt "$setup")
+
+  local dt_out
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    {
+      echo "$dolt_setup"
+      echo "$q"
+    } | "$DOLT" sql -c -r csv 2>"$dir/dt.err"
+  ) > "$dir/dt.raw"
+  dt_out=$(tr -d '"\r' < "$dir/dt.raw" | grep '^ANS|' | sed 's/^ANS|//')
+
+  local dl_ok=0 dt_ok=0
+  for cand in $expect_set; do
+    [ "$dl_out" = "$cand" ] && dl_ok=1
+    [ "$dt_out" = "$cand" ] && dt_ok=1
+  done
+
+  if [ "$dl_ok" = 1 ] && [ "$dt_ok" = 1 ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name (expected both in set: $expect_set)"
+    echo "    doltlite: $dl_out"
+    echo "    dolt:     $dt_out"
+  fi
+}
+
 oracle_error() {
   local name="$1" setup="$2"
   local dir="$TMPROOT/${name}_err"
@@ -161,6 +206,126 @@ SELECT dolt_branch('-m', 'old', 'renamed');
 "
 
 oracle "renamed_branch_vs_main" "$WITH_RENAME" "'main'" "'renamed'"
+
+echo "--- criss-cross ---"
+
+CRISS_CROSS="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base', '--date', '2020-01-01T00:00:00');
+SELECT dolt_branch('A');
+SELECT dolt_branch('B');
+SELECT dolt_checkout('A');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'a1', '--date', '2030-01-01T00:00:00');
+SELECT dolt_checkout('B');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'b1', '--date', '2020-06-01T00:00:00');
+SELECT dolt_branch('C', 'A');
+SELECT dolt_branch('D', 'B');
+SELECT dolt_checkout('C');
+SELECT dolt_merge('B');
+SELECT dolt_checkout('D');
+SELECT dolt_merge('A');
+SELECT dolt_checkout('C');
+"
+
+oracle_in_set "criss_cross_c_d" "$CRISS_CROSS" "'C'" "'D'" "a1 b1"
+oracle_in_set "criss_cross_d_c" "$CRISS_CROSS" "'D'" "'C'" "a1 b1"
+oracle "criss_cross_c_c" "$CRISS_CROSS" "'C'" "'C'"
+
+CRISS_CROSS_REV="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base', '--date', '2020-01-01T00:00:00');
+SELECT dolt_branch('A');
+SELECT dolt_branch('B');
+SELECT dolt_checkout('A');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'a1', '--date', '2020-06-01T00:00:00');
+SELECT dolt_checkout('B');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'b1', '--date', '2030-01-01T00:00:00');
+SELECT dolt_branch('C', 'A');
+SELECT dolt_branch('D', 'B');
+SELECT dolt_checkout('C');
+SELECT dolt_merge('B');
+SELECT dolt_checkout('D');
+SELECT dolt_merge('A');
+SELECT dolt_checkout('C');
+"
+
+oracle_in_set "criss_cross_rev_c_d" "$CRISS_CROSS_REV" "'C'" "'D'" "a1 b1"
+
+DEEP_CRISS_CROSS="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'base', '--date', '2020-01-01T00:00:00');
+SELECT dolt_branch('A');
+SELECT dolt_branch('B');
+SELECT dolt_checkout('A');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'a1', '--date', '2030-01-01T00:00:00');
+SELECT dolt_checkout('B');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'b1', '--date', '2020-06-01T00:00:00');
+SELECT dolt_branch('C', 'A');
+SELECT dolt_branch('D', 'B');
+SELECT dolt_checkout('C');
+SELECT dolt_merge('B');
+INSERT INTO t VALUES (4, 40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'c2', '--date', '2030-02-01T00:00:00');
+SELECT dolt_checkout('D');
+SELECT dolt_merge('A');
+INSERT INTO t VALUES (5, 50);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'd2', '--date', '2030-03-01T00:00:00');
+SELECT dolt_checkout('C');
+"
+
+oracle_in_set "deep_criss_cross_c_d" "$DEEP_CRISS_CROSS" "'C'" "'D'" "a1 b1"
+
+echo "--- multi-merge fan-in ---"
+
+FANIN="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+INSERT INTO t VALUES (1, 10);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'm1', '--date', '2020-01-01T00:00:00');
+SELECT dolt_checkout('-b', 'feat');
+INSERT INTO t VALUES (2, 20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'f1', '--date', '2020-02-01T00:00:00');
+SELECT dolt_checkout('main');
+INSERT INTO t VALUES (3, 30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'm2', '--date', '2020-03-01T00:00:00');
+SELECT dolt_merge('feat');
+INSERT INTO t VALUES (4, 40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'm3', '--date', '2020-04-01T00:00:00');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES (5, 50);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m', 'f2', '--date', '2020-05-01T00:00:00');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+"
+
+oracle "fanin_main_feat" "$FANIN" "'main'" "'feat'"
+oracle "fanin_feat_main" "$FANIN" "'feat'" "'main'"
+oracle "fanin_head_feat" "$FANIN" "'HEAD'" "'feat'"
+oracle "fanin_head_parent_feat" "$FANIN" "'HEAD~1'" "'feat'"
 
 echo "--- error paths ---"
 
