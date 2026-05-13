@@ -48,7 +48,7 @@ static void check(const char *name, int condition){
 
 /* Execute SQL, return first column of first row as string (static buffer). */
 static char result_buf[8192];
-static const char *exec1(sqlite3 *db, const char *sql){
+static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
   int rc;
   result_buf[0] = 0;
@@ -69,7 +69,7 @@ static const char *exec1(sqlite3 *db, const char *sql){
 }
 
 /* Execute SQL, ignore result. */
-static int execsql(sqlite3 *db, const char *sql){
+static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( rc!=SQLITE_OK ){
@@ -166,19 +166,19 @@ static int create_good_db(const char *path){
   rc = sqlite3_open(path, &db);
   if( rc!=SQLITE_OK ) return -1;
 
-  execsql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
-  execsql(db, "INSERT INTO t1 VALUES(1, 'alpha')");
-  execsql(db, "INSERT INTO t1 VALUES(2, 'beta')");
-  execsql(db, "INSERT INTO t1 VALUES(3, 'gamma')");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'first commit')");
+  execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
+  execSql(db, "INSERT INTO t1 VALUES(1, 'alpha')");
+  execSql(db, "INSERT INTO t1 VALUES(2, 'beta')");
+  execSql(db, "INSERT INTO t1 VALUES(3, 'gamma')");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'first commit')");
   if( strncmp(res, "ERROR", 5)==0 ){
     sqlite3_close(db);
     return -1;
   }
 
-  execsql(db, "INSERT INTO t1 VALUES(4, 'delta')");
-  execsql(db, "INSERT INTO t1 VALUES(5, 'epsilon')");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'second commit')");
+  execSql(db, "INSERT INTO t1 VALUES(4, 'delta')");
+  execSql(db, "INSERT INTO t1 VALUES(5, 'epsilon')");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'second commit')");
   if( strncmp(res, "ERROR", 5)==0 ){
     sqlite3_close(db);
     return -1;
@@ -203,26 +203,26 @@ static int create_compacted_db(const char *path){
   rc = sqlite3_open(path, &db);
   if( rc!=SQLITE_OK ) return -1;
 
-  execsql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
-  execsql(db, "INSERT INTO t1 VALUES(1, 'alpha')");
-  execsql(db, "INSERT INTO t1 VALUES(2, 'beta')");
-  execsql(db, "INSERT INTO t1 VALUES(3, 'gamma')");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'first commit')");
+  execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
+  execSql(db, "INSERT INTO t1 VALUES(1, 'alpha')");
+  execSql(db, "INSERT INTO t1 VALUES(2, 'beta')");
+  execSql(db, "INSERT INTO t1 VALUES(3, 'gamma')");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'first commit')");
   if( strncmp(res, "ERROR", 5)==0 ){
     sqlite3_close(db);
     return -1;
   }
 
-  execsql(db, "INSERT INTO t1 VALUES(4, 'delta')");
-  execsql(db, "INSERT INTO t1 VALUES(5, 'epsilon')");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'second commit')");
+  execSql(db, "INSERT INTO t1 VALUES(4, 'delta')");
+  execSql(db, "INSERT INTO t1 VALUES(5, 'epsilon')");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'second commit')");
   if( strncmp(res, "ERROR", 5)==0 ){
     sqlite3_close(db);
     return -1;
   }
 
   /* GC compacts all chunks and empties the WAL region */
-  res = exec1(db, "SELECT dolt_gc()");
+  res = queryScalarText(db, "SELECT dolt_gc()");
   if( strncmp(res, "ERROR", 5)==0 ){
     sqlite3_close(db);
     return -1;
@@ -251,24 +251,24 @@ static int open_and_probe(const char *path){
   }
 
   /* Try to query branches */
-  rc = execsql(db, "SELECT * FROM dolt_branches");
+  rc = execSql(db, "SELECT * FROM dolt_branches");
   if( rc!=SQLITE_OK ) errSeen = 1;
 
   /* Try to query log */
-  rc = execsql(db, "SELECT * FROM dolt_log");
+  rc = execSql(db, "SELECT * FROM dolt_log");
   if( rc!=SQLITE_OK ) errSeen = 1;
 
   /* Try to query user table */
-  rc = execsql(db, "SELECT * FROM t1");
+  rc = execSql(db, "SELECT * FROM t1");
   if( rc!=SQLITE_OK ) errSeen = 1;
 
   /* Try to query status */
-  rc = execsql(db, "SELECT * FROM dolt_status");
+  rc = execSql(db, "SELECT * FROM dolt_status");
   if( rc!=SQLITE_OK ) errSeen = 1;
 
   /* Try active_branch */
   {
-    const char *r = exec1(db, "SELECT active_branch()");
+    const char *r = queryScalarText(db, "SELECT active_branch()");
     if( strncmp(r, "ERROR", 5)==0 || strlen(r)==0 ) errSeen = 1;
   }
 
@@ -292,7 +292,7 @@ static int open_fails_or_errors(const char *path){
   }
 
   /* Check if even a basic query works */
-  rc = execsql(db, "SELECT active_branch()");
+  rc = execSql(db, "SELECT active_branch()");
   if( rc!=SQLITE_OK ){
     sqlite3_close(db);
     return 1;
@@ -408,14 +408,14 @@ static void test_corrupt_chunk_data(void){
     int i;
     removeDb(dbpath);
     check("open_4", sqlite3_open(dbpath, &db)==SQLITE_OK);
-    execsql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
+    execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
     for( i=0; i<100; i++ ){
       char sql[128];
       snprintf(sql, sizeof(sql), "INSERT INTO t1 VALUES(%d, 'row_%d')", i, i);
-      execsql(db, sql);
+      execSql(db, sql);
     }
-    exec1(db, "SELECT dolt_commit('-A', '-m', 'lots of data')");
-    exec1(db, "SELECT dolt_gc()");
+    queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'lots of data')");
+    queryScalarText(db, "SELECT dolt_gc()");
     sqlite3_close(db);
   }
 
@@ -442,10 +442,10 @@ static void test_corrupt_chunk_data(void){
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     if( rc==SQLITE_OK ){
-      int data_rc = execsql(db, "SELECT * FROM t1");
-      int log_rc = execsql(db, "SELECT * FROM dolt_log");
-      int branch_rc = execsql(db, "SELECT * FROM dolt_branches");
-      int status_rc = execsql(db, "SELECT * FROM dolt_status");
+      int data_rc = execSql(db, "SELECT * FROM t1");
+      int log_rc = execSql(db, "SELECT * FROM dolt_log");
+      int branch_rc = execSql(db, "SELECT * FROM dolt_branches");
+      int status_rc = execSql(db, "SELECT * FROM dolt_status");
       check("chunk_corruption_detected",
         data_rc!=SQLITE_OK || log_rc!=SQLITE_OK ||
         branch_rc!=SQLITE_OK || status_rc!=SQLITE_OK);
@@ -503,7 +503,7 @@ static void test_zero_refs_hash(void){
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     if( rc==SQLITE_OK ){
-      const char *r = exec1(db, "SELECT count(*) FROM dolt_branches");
+      const char *r = queryScalarText(db, "SELECT count(*) FROM dolt_branches");
       int is_error = (strncmp(r, "ERROR", 5)==0);
       check("zeroed_refs_returns_error", is_error);
     }else{
@@ -550,7 +550,7 @@ static void test_append_garbage(void){
     int rc = sqlite3_open(dbpath, &db);
     if( rc==SQLITE_OK ){
       /* If it opens, the original data should still be intact */
-      const char *r = exec1(db, "SELECT count(*) FROM t1");
+      const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
       /* Either we get the correct count (garbage ignored) or an error */
       int count_ok = (strcmp(r, "5")==0);
       int count_err = (strncmp(r, "ERROR", 5)==0);
@@ -591,10 +591,10 @@ static void test_empty_file(void){
     check("empty_open_ok", rc==SQLITE_OK);
     if( rc==SQLITE_OK ){
       /* Should be able to create tables and use it normally */
-      rc = execsql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY)");
+      rc = execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY)");
       check("empty_create_table", rc==SQLITE_OK);
 
-      const char *branch = exec1(db, "SELECT active_branch()");
+      const char *branch = queryScalarText(db, "SELECT active_branch()");
       check("empty_has_branch",
         branch && strlen(branch)>0 && strncmp(branch, "ERROR", 5)!=0);
     }
@@ -627,7 +627,7 @@ static void test_manifest_only(void){
     ** return errors. The key is no crash and no silent data loss. */
     if( rc==SQLITE_OK ){
       /* It opened, but queries should reveal the problem */
-      const char *r = exec1(db, "SELECT count(*) FROM t1");
+      const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
       /* Either error (data gone) or 0 (empty) -- both are acceptable.
       ** What's NOT acceptable is returning stale data count of 5. */
       check("manifest_only_no_stale_data",
@@ -675,7 +675,7 @@ static void test_corrupt_wal_tag(void){
       if( rc==SQLITE_OK ){
         /* It might open successfully but lose some data.
         ** The key is that it doesn't crash or return garbage. */
-        const char *r = exec1(db, "SELECT count(*) FROM t1");
+        const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
         if( strncmp(r, "ERROR", 5)!=0 ){
           int cnt = atoi(r);
           /* Should have some rows but possibly not all
@@ -744,9 +744,9 @@ static void test_commit_then_corrupt(void){
     sqlite3 *db = 0;
     check("verify_good_12", sqlite3_open(dbpath, &db)==SQLITE_OK);
     check("good_count_12",
-      strcmp(exec1(db, "SELECT count(*) FROM t1"), "5")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t1"), "5")==0);
     check("good_log_12",
-      strcmp(exec1(db, "SELECT count(*) FROM dolt_log"), "2")==0);
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "2")==0);
     sqlite3_close(db);
   }
 
@@ -765,8 +765,8 @@ static void test_commit_then_corrupt(void){
     sqlite3 *db = 0;
     int rc = sqlite3_open(dbpath, &db);
     if( rc==SQLITE_OK ){
-      rc = execsql(db, "SELECT * FROM t1");
-      int log_rc = execsql(db, "SELECT * FROM dolt_log");
+      rc = execSql(db, "SELECT * FROM t1");
+      int log_rc = execSql(db, "SELECT * FROM dolt_log");
       check("corrupt_catalog_detected",
         rc!=SQLITE_OK || log_rc!=SQLITE_OK);
     }else{
@@ -849,7 +849,7 @@ static void test_corrupt_head_commit(void){
     if( rc==SQLITE_OK ){
       /* The system may recover head_commit from branch refs.
       ** Verify it doesn't crash and returns some coherent result. */
-      const char *r = exec1(db, "SELECT count(*) FROM dolt_log");
+      const char *r = queryScalarText(db, "SELECT count(*) FROM dolt_log");
       int log_err = (strncmp(r, "ERROR", 5)==0);
       int log_valid = (!log_err && atoi(r) >= 0);
       check("corrupt_head_commit_no_crash", log_err || log_valid);
@@ -857,7 +857,7 @@ static void test_corrupt_head_commit(void){
       /* If the system silently recovered, the branch ref was the
       ** fallback. Verify branches are still accessible. */
       if( log_valid && atoi(r) > 0 ){
-        const char *b = exec1(db, "SELECT count(*) FROM dolt_branches");
+        const char *b = queryScalarText(db, "SELECT count(*) FROM dolt_branches");
         check("corrupt_head_branches_accessible",
           strncmp(b, "ERROR", 5)!=0 && atoi(b) >= 1);
       }
@@ -902,7 +902,7 @@ static void test_corrupt_chunk_count(void){
     if( rc==SQLITE_OK ){
       /* If it opens, verify data is still accessible (silently ignored)
       ** or returns an error (properly detected). */
-      const char *r = exec1(db, "SELECT count(*) FROM t1");
+      const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
       int data_ok = (strncmp(r, "ERROR", 5)!=0 && atoi(r)==5);
       int data_err = (strncmp(r, "ERROR", 5)==0);
       check("chunk_count_no_crash", data_ok || data_err);
@@ -929,10 +929,10 @@ static void test_corrupt_index_offset(void){
     sqlite3 *db = 0;
     removeDb(dbpath);
     check("open_17", sqlite3_open(dbpath, &db)==SQLITE_OK);
-    execsql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
-    execsql(db, "INSERT INTO t1 VALUES(1, 'a')");
-    exec1(db, "SELECT dolt_commit('-A', '-m', 'c1')");
-    exec1(db, "SELECT dolt_gc()");
+    execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
+    execSql(db, "INSERT INTO t1 VALUES(1, 'a')");
+    queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'c1')");
+    queryScalarText(db, "SELECT dolt_gc()");
     sqlite3_close(db);
   }
 

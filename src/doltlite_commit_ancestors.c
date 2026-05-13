@@ -98,6 +98,8 @@ static int caClose(sqlite3_vtab_cursor *pCursor){
   return SQLITE_OK;
 }
 
+static int caEnqueue(CommitAncestorsCursor *pCur, const ProllyHash *p);
+
 static int caLoadNextCommit(CommitAncestorsCursor *pCur, sqlite3 *db){
   int i, rc;
 
@@ -126,16 +128,10 @@ static int caLoadNextCommit(CommitAncestorsCursor *pCur, sqlite3 *db){
 
     for(i = 0; i < doltliteCommitParentCount(&pCur->curCommit); i++){
       const ProllyHash *pParent = doltliteCommitParentHash(&pCur->curCommit, i);
-      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
-      if( pCur->qTail >= pCur->qAlloc ){
-        int nNew = pCur->qAlloc ? pCur->qAlloc*2 : 16;
-        ProllyHash *tmp = sqlite3_realloc(pCur->aQueue,
-                                           nNew*(int)sizeof(ProllyHash));
-        if( !tmp ) return SQLITE_NOMEM;
-        pCur->aQueue = tmp;
-        pCur->qAlloc = nNew;
+      if( pParent ){
+        rc = caEnqueue(pCur, pParent);
+        if( rc!=SQLITE_OK ) return rc;
       }
-      pCur->aQueue[pCur->qTail++] = *pParent;
     }
     return SQLITE_OK;
   }

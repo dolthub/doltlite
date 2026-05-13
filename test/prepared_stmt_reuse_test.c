@@ -55,7 +55,7 @@ static void check_str(const char *name, const char *got, const char *expected){
   }
 }
 
-static int execsql(sqlite3 *db, const char *sql){
+static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( rc!=SQLITE_OK ){
@@ -111,7 +111,7 @@ static void test_insert_reuse(void){
   rc = sqlite3_open(":memory:", &db);
   check("insert_reuse: open", rc==SQLITE_OK);
 
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
 
   rc = sqlite3_prepare_v2(db, "INSERT INTO t VALUES(?,?)", -1, &pIns, 0);
   check("insert_reuse: prepare insert", rc==SQLITE_OK);
@@ -162,11 +162,11 @@ static void test_update_delete_reuse(void){
   rc = sqlite3_open(":memory:", &db);
   check("upd_del_reuse: open", rc==SQLITE_OK);
 
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
   for(i=1; i<=10; i++){
     char sql[64];
     snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, %d)", i, i*10);
-    execsql(db, sql);
+    execSql(db, sql);
   }
 
   rc = sqlite3_prepare_v2(db, "UPDATE t SET v=? WHERE id=?", -1, &pUpd, 0);
@@ -223,9 +223,9 @@ static void test_vtable_reuse(void){
   rc = sqlite3_open("test_vtable_reuse.db", &db);
   check("vtable_reuse: open", rc==SQLITE_OK);
 
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
-  execsql(db, "INSERT INTO t VALUES(1, 10)");
-  execsql(db, "SELECT dolt_commit('-A','-m','c1')");
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "INSERT INTO t VALUES(1, 10)");
+  execSql(db, "SELECT dolt_commit('-A','-m','c1')");
 
   /* Prepare vtable queries once */
   rc = sqlite3_prepare_v2(db, "SELECT count(*) FROM dolt_log", -1, &pLog, 0);
@@ -241,24 +241,24 @@ static void test_vtable_reuse(void){
   check_int("vtable_reuse: branch count pass 1", step_int(pBranch), 1);
 
   /* Mutate state: add a row (uncommitted) */
-  execsql(db, "INSERT INTO t VALUES(2, 20)");
+  execSql(db, "INSERT INTO t VALUES(2, 20)");
 
   /* Re-step the SAME prepared stmts — they should reflect new state */
   check_int("vtable_reuse: log count pass 2 (same)", step_int(pLog), 2);
   check_int("vtable_reuse: status count pass 2 (dirty)", step_int(pStatus), 1);
 
   /* Commit, re-step */
-  execsql(db, "SELECT dolt_commit('-A','-m','c2')");
+  execSql(db, "SELECT dolt_commit('-A','-m','c2')");
   check_int("vtable_reuse: log count pass 3", step_int(pLog), 3);
   check_int("vtable_reuse: status count pass 3 (clean)", step_int(pStatus), 0);
 
   /* Create a branch, re-step branches */
-  execsql(db, "SELECT dolt_branch('feature')");
+  execSql(db, "SELECT dolt_branch('feature')");
   check_int("vtable_reuse: branch count pass 2", step_int(pBranch), 2);
 
   /* Another commit, re-step everything */
-  execsql(db, "INSERT INTO t VALUES(3, 30)");
-  execsql(db, "SELECT dolt_commit('-A','-m','c3')");
+  execSql(db, "INSERT INTO t VALUES(3, 30)");
+  execSql(db, "SELECT dolt_commit('-A','-m','c3')");
   check_int("vtable_reuse: log count pass 4", step_int(pLog), 4);
   check_int("vtable_reuse: status count pass 4", step_int(pStatus), 0);
 
@@ -280,9 +280,9 @@ static void test_diff_table_reuse(void){
   rc = sqlite3_open("test_diff_reuse.db", &db);
   check("diff_reuse: open", rc==SQLITE_OK);
 
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
-  execsql(db, "INSERT INTO t VALUES(1, 10)");
-  execsql(db, "SELECT dolt_commit('-A','-m','c1')");
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "INSERT INTO t VALUES(1, 10)");
+  execSql(db, "SELECT dolt_commit('-A','-m','c1')");
 
   /* Prepare a dolt_diff_t query once */
   rc = sqlite3_prepare_v2(db,
@@ -296,11 +296,11 @@ static void test_diff_table_reuse(void){
   }
 
   /* Add a row (working change) → diff includes WORKING */
-  execsql(db, "INSERT INTO t VALUES(2, 20)");
+  execSql(db, "INSERT INTO t VALUES(2, 20)");
   {
     int n1 = step_int(pDiff);
     /* Commit it */
-    execsql(db, "SELECT dolt_commit('-A','-m','c2')");
+    execSql(db, "SELECT dolt_commit('-A','-m','c2')");
     int n2 = step_int(pDiff);
     /* After commit, WORKING row disappears but committed row appears */
     check("diff_reuse: pass 2 more rows after working", n1 > 0);
@@ -308,8 +308,8 @@ static void test_diff_table_reuse(void){
   }
 
   /* Another round */
-  execsql(db, "UPDATE t SET v=99 WHERE id=1");
-  execsql(db, "SELECT dolt_commit('-A','-m','c3')");
+  execSql(db, "UPDATE t SET v=99 WHERE id=1");
+  execSql(db, "SELECT dolt_commit('-A','-m','c3')");
   {
     int n = step_int(pDiff);
     check("diff_reuse: pass 4 after update+commit", n > 0);
@@ -331,9 +331,9 @@ static void test_diff_summary_reuse(void){
   rc = sqlite3_open("test_diff_summary_reuse.db", &db);
   check("diff_summary_reuse: open", rc==SQLITE_OK);
 
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
-  execsql(db, "INSERT INTO t VALUES(1, 10)");
-  execsql(db, "SELECT dolt_commit('-A','-m','c1')");
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "INSERT INTO t VALUES(1, 10)");
+  execSql(db, "SELECT dolt_commit('-A','-m','c1')");
 
   /* Prepare dolt_diff summary query once. The no-arg summary form was
   ** added in PR #387; on earlier builds it returns 0 rows. Detect
@@ -358,16 +358,16 @@ static void test_diff_summary_reuse(void){
   }
 
   /* Commit more → 2 summary rows */
-  execsql(db, "INSERT INTO t VALUES(2, 20)");
-  execsql(db, "SELECT dolt_commit('-A','-m','c2')");
+  execSql(db, "INSERT INTO t VALUES(2, 20)");
+  execSql(db, "SELECT dolt_commit('-A','-m','c2')");
   check_int("diff_summary_reuse: pass 2", step_int(pDiff), 2);
 
   /* With working changes → includes WORKING row */
-  execsql(db, "UPDATE t SET v=99 WHERE id=1");
+  execSql(db, "UPDATE t SET v=99 WHERE id=1");
   check_int("diff_summary_reuse: pass 3 working", step_int(pDiff), 3);
 
   /* Commit → WORKING disappears, c3 appears: still 3 */
-  execsql(db, "SELECT dolt_commit('-A','-m','c3')");
+  execSql(db, "SELECT dolt_commit('-A','-m','c3')");
   check_int("diff_summary_reuse: pass 4", step_int(pDiff), 3);
 
   sqlite3_finalize(pDiff);
@@ -387,7 +387,7 @@ static void test_commit_reuse(void){
   rc = sqlite3_open("test_commit_reuse.db", &db);
   check("commit_reuse: open", rc==SQLITE_OK);
 
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
 
   /* Prepare dolt_commit('-A','-m',?) with bound message */
   rc = sqlite3_prepare_v2(db,
@@ -399,7 +399,7 @@ static void test_commit_reuse(void){
   check("commit_reuse: prepare log", rc==SQLITE_OK);
 
   /* Commit 1 */
-  execsql(db, "INSERT INTO t VALUES(1, 10)");
+  execSql(db, "INSERT INTO t VALUES(1, 10)");
   sqlite3_bind_text(pCommit, 1, "c1", -1, SQLITE_STATIC);
   rc = sqlite3_step(pCommit);
   check("commit_reuse: step c1", rc==SQLITE_ROW);
@@ -407,7 +407,7 @@ static void test_commit_reuse(void){
   check_int("commit_reuse: log after c1", step_int(pLog), 2);
 
   /* Commit 2 — reuse the same prepared stmt */
-  execsql(db, "INSERT INTO t VALUES(2, 20)");
+  execSql(db, "INSERT INTO t VALUES(2, 20)");
   sqlite3_bind_text(pCommit, 1, "c2", -1, SQLITE_STATIC);
   rc = sqlite3_step(pCommit);
   check("commit_reuse: step c2", rc==SQLITE_ROW);
@@ -415,7 +415,7 @@ static void test_commit_reuse(void){
   check_int("commit_reuse: log after c2", step_int(pLog), 3);
 
   /* Commit 3 */
-  execsql(db, "INSERT INTO t VALUES(3, 30)");
+  execSql(db, "INSERT INTO t VALUES(3, 30)");
   sqlite3_bind_text(pCommit, 1, "c3", -1, SQLITE_STATIC);
   rc = sqlite3_step(pCommit);
   check("commit_reuse: step c3", rc==SQLITE_ROW);
@@ -452,8 +452,8 @@ static void test_rapid_interleave(void){
   rc = sqlite3_open("test_interleave.db", &db);
   check("interleave: open", rc==SQLITE_OK);
 
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
-  execsql(db, "SELECT dolt_commit('-A','-m','init_t')");
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "SELECT dolt_commit('-A','-m','init_t')");
 
   rc = sqlite3_prepare_v2(db, "SELECT count(*) FROM t", -1, &pCnt, 0);
   check("interleave: prepare count", rc==SQLITE_OK);
@@ -477,7 +477,7 @@ static void test_rapid_interleave(void){
       char sql[128];
       snprintf(sql, sizeof(sql),
                "SELECT dolt_commit('-A','-m','%s')", msg);
-      execsql(db, sql);
+      execSql(db, sql);
     }
   }
 
@@ -500,9 +500,9 @@ static void test_partial_step(void){
   rc = sqlite3_open("test_partial.db", &db);
   check("partial: open", rc==SQLITE_OK);
 
-  execsql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
-  execsql(db, "INSERT INTO t VALUES(1,10),(2,20),(3,30),(4,40),(5,50)");
-  execsql(db, "SELECT dolt_commit('-A','-m','c1')");
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT)");
+  execSql(db, "INSERT INTO t VALUES(1,10),(2,20),(3,30),(4,40),(5,50)");
+  execSql(db, "SELECT dolt_commit('-A','-m','c1')");
 
   rc = sqlite3_prepare_v2(db,
     "SELECT id FROM t ORDER BY id", -1, &pSel, 0);

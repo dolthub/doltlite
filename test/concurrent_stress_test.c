@@ -84,7 +84,7 @@ static void release_buf(sqlite3 *db){
   }
 }
 
-static const char *exec1(sqlite3 *db, const char *sql){
+static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
   int rc;
   char *buf = get_buf(db);
@@ -106,7 +106,7 @@ static const char *exec1(sqlite3 *db, const char *sql){
   return buf;
 }
 
-static int execsql(sqlite3 *db, const char *sql){
+static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( rc!=SQLITE_OK ){
@@ -118,7 +118,7 @@ static int execsql(sqlite3 *db, const char *sql){
 }
 
 /* Execute with retry on SQLITE_BUSY */
-static int execsql_busy(sqlite3 *db, const char *sql, int maxRetries){
+static int execSqlWithBusyRetry(sqlite3 *db, const char *sql, int maxRetries){
   char *err = 0;
   int rc, attempts = 0;
   do {
@@ -140,7 +140,7 @@ static int execsql_busy(sqlite3 *db, const char *sql, int maxRetries){
   return rc;
 }
 
-/* exec1 with retry on SQLITE_BUSY */
+/* queryScalarText with retry on SQLITE_BUSY */
 static const char *exec1_busy(sqlite3 *db, const char *sql, int maxRetries){
   sqlite3_stmt *stmt = 0;
   int rc, attempts = 0;
@@ -183,7 +183,7 @@ static int open_fresh(const char *path, sqlite3 **ppDb){
 }
 
 /* Remove database and its WAL/SHM files. */
-static void remove_db(const char *path){
+static void removeDbFiles(const char *path){
   char tmp[512];
   remove(path);
   snprintf(tmp, sizeof(tmp), "%s-wal", path);
@@ -217,26 +217,26 @@ static void test_1_1_aaron_exact(void){
   const char *res;
 
   printf("  1.1  Aaron's exact scenario\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'Initial commit')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'Initial commit')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals"); /* db2 anchors its snapshot */
+  queryScalarText(db2, "SELECT count(*) FROM vals"); /* db2 anchors its snapshot */
 
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
   check("1.1_first_commit_succeeds", is_commit_hash(res));
 
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'add two')");
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'add two')");
   check("1.1_second_commit_rejected", is_error(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -248,25 +248,25 @@ static void test_1_2_error_message(void){
   const char *res;
 
   printf("  1.2  Error message contains 'conflict'\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
 
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'one')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'one')");
 
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'two')");
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'two')");
   check_contains("1.2_error_has_conflict", res, "conflict");
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -278,33 +278,33 @@ static void test_1_3_first_commit_survives(void){
   const char *res;
 
   printf("  1.3  First commit survives after second is rejected\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
 
-  execsql(db1, "INSERT INTO vals VALUES(1, 100)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 100)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
 
-  execsql(db2, "INSERT INTO vals VALUES(2, 200)");
-  exec1(db2, "SELECT dolt_commit('-A', '-m', 'add two')"); /* rejected */
+  execSql(db2, "INSERT INTO vals VALUES(2, 200)");
+  queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'add two')"); /* rejected */
 
   /* Open fresh connection to verify the first commit survived */
   open_fresh(path, &db3);
-  res = exec1(db3, "SELECT message FROM dolt_log LIMIT 1");
+  res = queryScalarText(db3, "SELECT message FROM dolt_log LIMIT 1");
   check("1.3_latest_is_add_one", strcmp(res, "add one")==0);
 
-  res = exec1(db3, "SELECT val FROM vals WHERE id=1");
+  res = queryScalarText(db3, "SELECT val FROM vals WHERE id=1");
   check("1.3_data_intact", strcmp(res, "100")==0);
 
   sqlite3_close(db1);
   sqlite3_close(db2);
   sqlite3_close(db3);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -317,35 +317,35 @@ static void test_1_4_rejected_data_not_persisted(void){
   const char *res;
 
   printf("  1.4  Rejected commit data not persisted\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
 
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
 
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  exec1(db2, "SELECT dolt_commit('-A', '-m', 'add two')"); /* rejected */
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'add two')"); /* rejected */
 
   /* Fresh connection to inspect committed state */
   open_fresh(path, &db3);
-  res = exec1(db3, "SELECT count(*) FROM vals WHERE id=2");
+  res = queryScalarText(db3, "SELECT count(*) FROM vals WHERE id=2");
   /* The rejected commit's INSERT should not be in the dolt commit history.
   ** However, the SQL row may or may not be visible in the WAL depending on
   ** how the rollback was handled. The key invariant is that dolt_log does
   ** NOT contain the rejected commit. */
-  res = exec1(db3, "SELECT count(*) FROM dolt_log WHERE message='add two'");
+  res = queryScalarText(db3, "SELECT count(*) FROM dolt_log WHERE message='add two'");
   check("1.4_rejected_commit_not_in_log", strcmp(res, "0")==0);
 
   sqlite3_close(db1);
   sqlite3_close(db2);
   sqlite3_close(db3);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -358,30 +358,30 @@ static void test_1_5_three_connections(void){
   int successes = 0;
 
   printf("  1.5  Three connections commit to main\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
   open_fresh(path, &db3);
   /* Anchor all snapshots */
-  exec1(db2, "SELECT count(*) FROM vals");
-  exec1(db3, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db3, "SELECT count(*) FROM vals");
 
   /* All three insert and try to commit */
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  execsql(db3, "INSERT INTO vals VALUES(3, 3)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  execSql(db3, "INSERT INTO vals VALUES(3, 3)");
 
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'from db1')");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'from db1')");
   if( is_commit_hash(res) ) successes++;
 
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'from db2')");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'from db2')");
   if( is_commit_hash(res) ) successes++;
 
-  res = exec1(db3, "SELECT dolt_commit('-A', '-m', 'from db3')");
+  res = queryScalarText(db3, "SELECT dolt_commit('-A', '-m', 'from db3')");
   if( is_commit_hash(res) ) successes++;
 
   check("1.5_only_one_commit_succeeds", successes==1);
@@ -389,7 +389,7 @@ static void test_1_5_three_connections(void){
   sqlite3_close(db1);
   sqlite3_close(db2);
   sqlite3_close(db3);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -402,31 +402,31 @@ static void test_1_6_four_connections(void){
   int successes = 0;
 
   printf("  1.6  Four connections commit to main\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
   open_fresh(path, &db3);
   open_fresh(path, &db4);
-  exec1(db2, "SELECT count(*) FROM vals");
-  exec1(db3, "SELECT count(*) FROM vals");
-  exec1(db4, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db3, "SELECT count(*) FROM vals");
+  queryScalarText(db4, "SELECT count(*) FROM vals");
 
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  execsql(db3, "INSERT INTO vals VALUES(3, 3)");
-  execsql(db4, "INSERT INTO vals VALUES(4, 4)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  execSql(db3, "INSERT INTO vals VALUES(3, 3)");
+  execSql(db4, "INSERT INTO vals VALUES(4, 4)");
 
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'from db1')");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'from db1')");
   if( is_commit_hash(res) ) successes++;
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'from db2')");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'from db2')");
   if( is_commit_hash(res) ) successes++;
-  res = exec1(db3, "SELECT dolt_commit('-A', '-m', 'from db3')");
+  res = queryScalarText(db3, "SELECT dolt_commit('-A', '-m', 'from db3')");
   if( is_commit_hash(res) ) successes++;
-  res = exec1(db4, "SELECT dolt_commit('-A', '-m', 'from db4')");
+  res = queryScalarText(db4, "SELECT dolt_commit('-A', '-m', 'from db4')");
   if( is_commit_hash(res) ) successes++;
 
   check("1.6_only_one_commit_of_four_succeeds", successes==1);
@@ -435,7 +435,7 @@ static void test_1_6_four_connections(void){
   sqlite3_close(db2);
   sqlite3_close(db3);
   sqlite3_close(db4);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -447,27 +447,27 @@ static void test_1_7_concurrent_update(void){
   const char *res;
 
   printf("  1.7  Concurrent UPDATE conflict\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init with row')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init with row')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT val FROM vals WHERE id=1");
+  queryScalarText(db2, "SELECT val FROM vals WHERE id=1");
 
-  execsql(db1, "UPDATE vals SET val=20 WHERE id=1");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'update to 20')");
+  execSql(db1, "UPDATE vals SET val=20 WHERE id=1");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'update to 20')");
   check("1.7_first_update_commits", is_commit_hash(res));
 
-  execsql(db2, "UPDATE vals SET val=30 WHERE id=1");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'update to 30')");
+  execSql(db2, "UPDATE vals SET val=30 WHERE id=1");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'update to 30')");
   check("1.7_second_update_rejected", is_error(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -479,28 +479,28 @@ static void test_1_8_concurrent_delete(void){
   const char *res;
 
   printf("  1.8  Concurrent DELETE conflict\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  execsql(db1, "INSERT INTO vals VALUES(2, 20)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  execSql(db1, "INSERT INTO vals VALUES(2, 20)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
 
-  execsql(db1, "DELETE FROM vals WHERE id=1");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'delete id 1')");
+  execSql(db1, "DELETE FROM vals WHERE id=1");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'delete id 1')");
   check("1.8_first_delete_commits", is_commit_hash(res));
 
-  execsql(db2, "DELETE FROM vals WHERE id=2");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'delete id 2')");
+  execSql(db2, "DELETE FROM vals WHERE id=2");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'delete id 2')");
   check("1.8_second_delete_rejected", is_error(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -512,29 +512,29 @@ static void test_1_9_multiple_tables(void){
   const char *res;
 
   printf("  1.9  Concurrent commits with multiple tables\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE t1(id INT, val TEXT)");
-  execsql(db1, "CREATE TABLE t2(id INT, val TEXT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init schema')");
+  execSql(db1, "CREATE TABLE t1(id INT, val TEXT)");
+  execSql(db1, "CREATE TABLE t2(id INT, val TEXT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init schema')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM t1");
+  queryScalarText(db2, "SELECT count(*) FROM t1");
 
   /* db1 writes to t1, db2 writes to t2 — but both are on same branch */
-  execsql(db1, "INSERT INTO t1 VALUES(1, 'one')");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'insert t1')");
+  execSql(db1, "INSERT INTO t1 VALUES(1, 'one')");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'insert t1')");
   check("1.9_first_commit_t1", is_commit_hash(res));
 
-  execsql(db2, "INSERT INTO t2 VALUES(1, 'two')");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'insert t2')");
+  execSql(db2, "INSERT INTO t2 VALUES(1, 'two')");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'insert t2')");
   /* Even though different tables, same branch conflict applies */
   check("1.9_second_commit_t2_rejected", is_error(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -546,27 +546,27 @@ static void test_1_10_insert_and_delete(void){
   const char *res;
 
   printf("  1.10 Concurrent INSERT (db1) + DELETE (db2)\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
 
-  execsql(db1, "INSERT INTO vals VALUES(2, 20)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'insert id 2')");
+  execSql(db1, "INSERT INTO vals VALUES(2, 20)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'insert id 2')");
   check("1.10_insert_commits", is_commit_hash(res));
 
-  execsql(db2, "DELETE FROM vals WHERE id=1");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'delete id 1')");
+  execSql(db2, "DELETE FROM vals WHERE id=1");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'delete id 1')");
   check("1.10_delete_rejected", is_error(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -578,29 +578,29 @@ static void test_1_11_log_count_after_reject(void){
   const char *res;
 
   printf("  1.11 Log count correct after rejected commit\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
 
-  execsql(db1, "INSERT INTO vals VALUES(1,1)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
+  execSql(db1, "INSERT INTO vals VALUES(1,1)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
 
-  execsql(db2, "INSERT INTO vals VALUES(2,2)");
-  exec1(db2, "SELECT dolt_commit('-A', '-m', 'add two')"); /* rejected */
+  execSql(db2, "INSERT INTO vals VALUES(2,2)");
+  queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'add two')"); /* rejected */
 
   open_fresh(path, &db3);
-  res = exec1(db3, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db3, "SELECT count(*) FROM dolt_log");
   check("1.11_log_has_exactly_2_entries", strcmp(res, "2")==0);
 
   sqlite3_close(db1);
   sqlite3_close(db2);
   sqlite3_close(db3);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 
@@ -619,29 +619,29 @@ static void test_2_1_different_branches_no_conflict(void){
   const char *res;
 
   printf("  2.1  Different branches, no conflict\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   /* Setup and commit to main */
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db, "SELECT dolt_branch('branch1')");
-  execsql(db, "INSERT INTO vals VALUES(1, 1)");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'main commit')");
+  execSql(db, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db, "SELECT dolt_branch('branch1')");
+  execSql(db, "INSERT INTO vals VALUES(1, 1)");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'main commit')");
   check("2.1_main_commit_ok", is_commit_hash(res));
   sqlite3_close(db); db = 0;
 
   /* Commit to branch1 */
   open_fresh(path, &db);
-  exec1(db, "SELECT dolt_checkout('branch1')");
+  queryScalarText(db, "SELECT dolt_checkout('branch1')");
   check("2.1_on_branch1",
-        strcmp(exec1(db, "SELECT active_branch()"), "branch1")==0);
-  execsql(db, "INSERT INTO vals VALUES(2, 2)");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'branch1 commit')");
+        strcmp(queryScalarText(db, "SELECT active_branch()"), "branch1")==0);
+  execSql(db, "INSERT INTO vals VALUES(2, 2)");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'branch1 commit')");
   check("2.1_branch1_commit_ok", is_commit_hash(res));
 
   sqlite3_close(db);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -653,41 +653,41 @@ static void test_2_2_verify_branch_data(void){
   const char *res;
 
   printf("  2.2  Verify data on each branch after cross-branch commits\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   /* Commit to main */
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val TEXT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('feature')");
-  execsql(db1, "INSERT INTO vals VALUES(1, 'main-data')");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'main insert')");
+  execSql(db1, "CREATE TABLE vals(id INT, val TEXT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('feature')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 'main-data')");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'main insert')");
   sqlite3_close(db1); db1 = 0;
 
   /* Commit to feature (serialized — one connection at a time to avoid
   ** shared BtShared WAL page corruption) */
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('feature')");
-  execsql(db2, "INSERT INTO vals VALUES(2, 'feature-data')");
-  exec1(db2, "SELECT dolt_commit('-A', '-m', 'feature insert')");
+  queryScalarText(db2, "SELECT dolt_checkout('feature')");
+  execSql(db2, "INSERT INTO vals VALUES(2, 'feature-data')");
+  queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'feature insert')");
   sqlite3_close(db2); db2 = 0;
 
   /* Verify main — new connection may start on 'feature' (last checkout),
   ** so explicitly checkout main. */
   open_fresh(path, &db1);
-  exec1(db1, "SELECT dolt_checkout('main')");
-  res = exec1(db1, "SELECT val FROM vals WHERE id=1");
+  queryScalarText(db1, "SELECT dolt_checkout('main')");
+  res = queryScalarText(db1, "SELECT val FROM vals WHERE id=1");
   check("2.2_main_has_main_data", strcmp(res, "main-data")==0);
   sqlite3_close(db1); db1 = 0;
 
   /* Verify feature */
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('feature')");
-  res = exec1(db2, "SELECT val FROM vals WHERE id=2");
+  queryScalarText(db2, "SELECT dolt_checkout('feature')");
+  res = queryScalarText(db2, "SELECT val FROM vals WHERE id=2");
   check("2.2_feature_has_feature_data", strcmp(res, "feature-data")==0);
 
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -699,39 +699,39 @@ static void test_2_3_log_per_branch(void){
   const char *res;
 
   printf("  2.3  dolt_log per branch is correct\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('dev')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('dev')");
 
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'main work')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'main work')");
   /* Close db1 before opening db2 to avoid shared BtShared corruption */
   sqlite3_close(db1); db1 = 0;
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('dev')");
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  exec1(db2, "SELECT dolt_commit('-A', '-m', 'dev work')");
+  queryScalarText(db2, "SELECT dolt_checkout('dev')");
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'dev work')");
   sqlite3_close(db2); db2 = 0;
 
   /* Verify main log — explicitly checkout main since last op was on dev */
   open_fresh(path, &db1);
-  exec1(db1, "SELECT dolt_checkout('main')");
-  res = exec1(db1, "SELECT message FROM dolt_log LIMIT 1");
+  queryScalarText(db1, "SELECT dolt_checkout('main')");
+  res = queryScalarText(db1, "SELECT message FROM dolt_log LIMIT 1");
   check("2.3_main_log_latest", strcmp(res, "main work")==0);
   sqlite3_close(db1); db1 = 0;
 
   /* Verify dev log */
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('dev')");
-  res = exec1(db2, "SELECT message FROM dolt_log LIMIT 1");
+  queryScalarText(db2, "SELECT dolt_checkout('dev')");
+  res = queryScalarText(db2, "SELECT message FROM dolt_log LIMIT 1");
   check("2.3_dev_log_latest", strcmp(res, "dev work")==0);
   sqlite3_close(db2); db2 = 0;
 
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -743,35 +743,35 @@ static void test_2_4_three_branches(void){
   const char *res;
 
   printf("  2.4  Three branches, sequential commits\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   /* Setup branches and commit to main */
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db, "SELECT dolt_branch('b1')");
-  exec1(db, "SELECT dolt_branch('b2')");
-  execsql(db, "INSERT INTO vals VALUES(1, 1)");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'main commit')");
+  execSql(db, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db, "SELECT dolt_branch('b1')");
+  queryScalarText(db, "SELECT dolt_branch('b2')");
+  execSql(db, "INSERT INTO vals VALUES(1, 1)");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'main commit')");
   check("2.4_main_ok", is_commit_hash(res));
   sqlite3_close(db); db = 0;
 
   /* Commit to b1 */
   open_fresh(path, &db);
-  exec1(db, "SELECT dolt_checkout('b1')");
-  execsql(db, "INSERT INTO vals VALUES(2, 2)");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'b1 commit')");
+  queryScalarText(db, "SELECT dolt_checkout('b1')");
+  execSql(db, "INSERT INTO vals VALUES(2, 2)");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'b1 commit')");
   check("2.4_b1_ok", is_commit_hash(res));
   sqlite3_close(db); db = 0;
 
   /* Commit to b2 */
   open_fresh(path, &db);
-  exec1(db, "SELECT dolt_checkout('b2')");
-  execsql(db, "INSERT INTO vals VALUES(3, 3)");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'b2 commit')");
+  queryScalarText(db, "SELECT dolt_checkout('b2')");
+  execSql(db, "INSERT INTO vals VALUES(3, 3)");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'b2 commit')");
   check("2.4_b2_ok", is_commit_hash(res));
   sqlite3_close(db);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -784,14 +784,14 @@ static void test_2_5_four_branches(void){
   int successes = 0;
 
   printf("  2.5  Four branches, four connections\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('alpha')");
-  exec1(db1, "SELECT dolt_branch('beta')");
-  exec1(db1, "SELECT dolt_branch('gamma')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('alpha')");
+  queryScalarText(db1, "SELECT dolt_branch('beta')");
+  queryScalarText(db1, "SELECT dolt_branch('gamma')");
 
   /* Commit each branch sequentially, reopening between commits to get
   ** fresh WAL state (shared BtShared can be polluted by dolt_commit
@@ -799,39 +799,39 @@ static void test_2_5_four_branches(void){
 
   /* main */
   open_fresh(path, &db2);
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'main')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'main')");
   if( is_commit_hash(res) ) successes++;
   sqlite3_close(db1); db1 = 0;
   sqlite3_close(db2); db2 = 0;
 
   /* alpha */
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('alpha')");
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'alpha')");
+  queryScalarText(db2, "SELECT dolt_checkout('alpha')");
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'alpha')");
   if( is_commit_hash(res) ) successes++;
   sqlite3_close(db2); db2 = 0;
 
   /* beta */
   open_fresh(path, &db3);
-  exec1(db3, "SELECT dolt_checkout('beta')");
-  execsql(db3, "INSERT INTO vals VALUES(3, 3)");
-  res = exec1(db3, "SELECT dolt_commit('-A', '-m', 'beta')");
+  queryScalarText(db3, "SELECT dolt_checkout('beta')");
+  execSql(db3, "INSERT INTO vals VALUES(3, 3)");
+  res = queryScalarText(db3, "SELECT dolt_commit('-A', '-m', 'beta')");
   if( is_commit_hash(res) ) successes++;
   sqlite3_close(db3); db3 = 0;
 
   /* gamma */
   open_fresh(path, &db4);
-  exec1(db4, "SELECT dolt_checkout('gamma')");
-  execsql(db4, "INSERT INTO vals VALUES(4, 4)");
-  res = exec1(db4, "SELECT dolt_commit('-A', '-m', 'gamma')");
+  queryScalarText(db4, "SELECT dolt_checkout('gamma')");
+  execSql(db4, "INSERT INTO vals VALUES(4, 4)");
+  res = queryScalarText(db4, "SELECT dolt_commit('-A', '-m', 'gamma')");
   if( is_commit_hash(res) ) successes++;
   sqlite3_close(db4); db4 = 0;
 
   check("2.5_all_four_succeed", successes==4);
 
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -843,29 +843,29 @@ static void test_2_6_same_branch_conflict(void){
   const char *res;
 
   printf("  2.6  Two connections on same non-main branch, conflict\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('feature')");
-  exec1(db1, "SELECT dolt_checkout('feature')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('feature')");
+  queryScalarText(db1, "SELECT dolt_checkout('feature')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('feature')");
-  exec1(db2, "SELECT count(*) FROM vals"); /* anchor snapshot */
+  queryScalarText(db2, "SELECT dolt_checkout('feature')");
+  queryScalarText(db2, "SELECT count(*) FROM vals"); /* anchor snapshot */
 
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'feature commit 1')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'feature commit 1')");
   check("2.6_first_on_feature_ok", is_commit_hash(res));
 
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'feature commit 2')");
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'feature commit 2')");
   check("2.6_second_on_feature_rejected", is_error(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -877,31 +877,31 @@ static void test_2_7_main_then_branch_no_conflict(void){
   const char *res;
 
   printf("  2.7  Commit on main then branch (stale snapshot OK)\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('feature')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('feature')");
 
   /* db2 opens and checks out feature BEFORE db1 commits to main */
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('feature')");
-  exec1(db2, "SELECT count(*) FROM vals"); /* anchor snapshot */
+  queryScalarText(db2, "SELECT dolt_checkout('feature')");
+  queryScalarText(db2, "SELECT count(*) FROM vals"); /* anchor snapshot */
 
   /* db1 commits to main */
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'main commit')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'main commit')");
   check("2.7_main_commits", is_commit_hash(res));
 
   /* db2 commits to feature — should succeed because different branch */
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'feature commit')");
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'feature commit')");
   check("2.7_feature_commits_despite_stale_snapshot", is_commit_hash(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -915,12 +915,12 @@ static void test_2_8_interleaved_branch_commits(void){
   int i, ok = 1;
 
   printf("  2.8  Interleaved sequential commits on two branches\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db, "SELECT dolt_branch('other')");
+  execSql(db, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db, "SELECT dolt_branch('other')");
   sqlite3_close(db); db = 0;
 
   /* Alternate commits between branches, reopening each time */
@@ -929,29 +929,29 @@ static void test_2_8_interleaved_branch_commits(void){
 
     /* Commit to main */
     open_fresh(path, &db);
-    exec1(db, "SELECT dolt_checkout('main')");
+    queryScalarText(db, "SELECT dolt_checkout('main')");
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i*2, i*2);
-    execsql(db, sql);
+    execSql(db, sql);
     snprintf(msg, sizeof(msg),
              "SELECT dolt_commit('-A', '-m', 'main-%d')", i);
-    res = exec1(db, msg);
+    res = queryScalarText(db, msg);
     if( !is_commit_hash(res) ){ ok = 0; sqlite3_close(db); break; }
     sqlite3_close(db); db = 0;
 
     /* Commit to other */
     open_fresh(path, &db);
-    exec1(db, "SELECT dolt_checkout('other')");
+    queryScalarText(db, "SELECT dolt_checkout('other')");
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i*2+1, i*2+1);
-    execsql(db, sql);
+    execSql(db, sql);
     snprintf(msg, sizeof(msg),
              "SELECT dolt_commit('-A', '-m', 'other-%d')", i);
-    res = exec1(db, msg);
+    res = queryScalarText(db, msg);
     if( !is_commit_hash(res) ){ ok = 0; sqlite3_close(db); break; }
     sqlite3_close(db); db = 0;
   }
   check("2.8_all_interleaved_commits_succeed", ok);
 
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -963,20 +963,20 @@ static void test_2_9_branch_list(void){
   const char *res;
 
   printf("  2.9  Branch list after creating multiple branches\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('alpha')");
-  exec1(db1, "SELECT dolt_branch('beta')");
-  exec1(db1, "SELECT dolt_branch('gamma')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('alpha')");
+  queryScalarText(db1, "SELECT dolt_branch('beta')");
+  queryScalarText(db1, "SELECT dolt_branch('gamma')");
 
-  res = exec1(db1, "SELECT count(*) FROM dolt_branches");
+  res = queryScalarText(db1, "SELECT count(*) FROM dolt_branches");
   check("2.9_four_branches", strcmp(res, "4")==0);
 
   sqlite3_close(db1);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -988,45 +988,45 @@ static void test_2_10_log_isolation(void){
   const char *res;
 
   printf("  2.10 Cross-branch log isolation\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('dev')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('dev')");
 
   /* Make 3 commits on main */
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'main-1')");
-  execsql(db1, "INSERT INTO vals VALUES(2, 2)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'main-2')");
-  execsql(db1, "INSERT INTO vals VALUES(3, 3)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'main-3')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'main-1')");
+  execSql(db1, "INSERT INTO vals VALUES(2, 2)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'main-2')");
+  execSql(db1, "INSERT INTO vals VALUES(3, 3)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'main-3')");
 
   /* Make 1 commit on dev — close db1 first to avoid shared BtShared */
   sqlite3_close(db1); db1 = 0;
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('dev')");
-  execsql(db2, "INSERT INTO vals VALUES(10, 10)");
-  exec1(db2, "SELECT dolt_commit('-A', '-m', 'dev-1')");
+  queryScalarText(db2, "SELECT dolt_checkout('dev')");
+  execSql(db2, "INSERT INTO vals VALUES(10, 10)");
+  queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'dev-1')");
   sqlite3_close(db2); db2 = 0;
 
   /* Reopen — explicitly checkout main since last op was on dev */
   open_fresh(path, &db1);
-  exec1(db1, "SELECT dolt_checkout('main')");
+  queryScalarText(db1, "SELECT dolt_checkout('main')");
   /* main should have 4 log entries (init + 3) */
-  res = exec1(db1, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db1, "SELECT count(*) FROM dolt_log");
   check("2.10_main_log_count_4", strcmp(res, "4")==0);
   sqlite3_close(db1); db1 = 0;
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('dev')");
+  queryScalarText(db2, "SELECT dolt_checkout('dev')");
   /* dev should have 2 log entries (init + 1) */
-  res = exec1(db2, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db2, "SELECT count(*) FROM dolt_log");
   check("2.10_dev_log_count_2", strcmp(res, "2")==0);
 
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 
@@ -1044,37 +1044,37 @@ static void test_3_1_read_during_write(void){
   const char *res;
 
   printf("  3.1  Read during write sees consistent state\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
 
   /* db2 starts a read transaction */
-  execsql(db2, "BEGIN");
-  res = exec1(db2, "SELECT val FROM vals WHERE id=1");
+  execSql(db2, "BEGIN");
+  res = queryScalarText(db2, "SELECT val FROM vals WHERE id=1");
   check("3.1_initial_read", strcmp(res, "10")==0);
 
   /* db1 updates and commits while db2's transaction is open */
-  execsql(db1, "UPDATE vals SET val=20 WHERE id=1");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'update to 20')");
+  execSql(db1, "UPDATE vals SET val=20 WHERE id=1");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'update to 20')");
 
   /* db2 should still see old value in its transaction */
-  res = exec1(db2, "SELECT val FROM vals WHERE id=1");
+  res = queryScalarText(db2, "SELECT val FROM vals WHERE id=1");
   check("3.1_still_sees_old_value", strcmp(res, "10")==0);
 
-  execsql(db2, "COMMIT");
+  execSql(db2, "COMMIT");
 
   /* After ending transaction, db2 sees new value */
-  res = exec1(db2, "SELECT val FROM vals WHERE id=1");
+  res = queryScalarText(db2, "SELECT val FROM vals WHERE id=1");
   check("3.1_sees_new_value_after_commit", strcmp(res, "20")==0);
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1087,36 +1087,36 @@ static void test_3_2_no_partial_commit(void){
   int count;
 
   printf("  3.2  Reader never sees partial commit\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
 
   /* db2 reads inside a transaction */
-  execsql(db2, "BEGIN");
-  res = exec1(db2, "SELECT count(*) FROM vals");
+  execSql(db2, "BEGIN");
+  res = queryScalarText(db2, "SELECT count(*) FROM vals");
   check("3.2_initially_empty", strcmp(res, "0")==0);
 
   /* db1 inserts multiple rows in one transaction and commits */
-  execsql(db1, "BEGIN");
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  execsql(db1, "INSERT INTO vals VALUES(2, 2)");
-  execsql(db1, "INSERT INTO vals VALUES(3, 3)");
-  execsql(db1, "COMMIT");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'add three rows')");
+  execSql(db1, "BEGIN");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  execSql(db1, "INSERT INTO vals VALUES(2, 2)");
+  execSql(db1, "INSERT INTO vals VALUES(3, 3)");
+  execSql(db1, "COMMIT");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add three rows')");
 
   /* db2's transaction should not see partial state */
-  count = atoi(exec1(db2, "SELECT count(*) FROM vals"));
+  count = atoi(queryScalarText(db2, "SELECT count(*) FROM vals"));
   check("3.2_reader_sees_zero_or_three", count==0 || count==3);
 
-  execsql(db2, "COMMIT");
+  execSql(db2, "COMMIT");
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1128,33 +1128,33 @@ static void test_3_3_read_log_during_commit(void){
   const char *res;
 
   printf("  3.3  Read dolt_log while another commits\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
 
   /* db2 reads dolt_log */
-  res = exec1(db2, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db2, "SELECT count(*) FROM dolt_log");
   check("3.3_log_before_commit", strcmp(res, "1")==0);
 
   /* db1 makes a commit */
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
 
   /* Reopen db2 to get fresh WAL state after db1's commit */
   sqlite3_close(db2);
   open_fresh(path, &db2);
 
   /* db2 reads log again — should see new entry */
-  res = exec1(db2, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db2, "SELECT count(*) FROM dolt_log");
   check("3.3_log_after_commit", strcmp(res, "2")==0);
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1166,32 +1166,32 @@ static void test_3_4_read_during_uncommitted(void){
   const char *res;
 
   printf("  3.4  Read while other has uncommitted changes\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
 
   /* db2 starts read transaction */
-  execsql(db2, "BEGIN");
-  res = exec1(db2, "SELECT val FROM vals WHERE id=1");
+  execSql(db2, "BEGIN");
+  res = queryScalarText(db2, "SELECT val FROM vals WHERE id=1");
   check("3.4_sees_committed", strcmp(res, "10")==0);
 
   /* db1 modifies but does NOT dolt_commit */
-  execsql(db1, "UPDATE vals SET val=99 WHERE id=1");
+  execSql(db1, "UPDATE vals SET val=99 WHERE id=1");
 
   /* db2 in its read transaction should still see old value */
-  res = exec1(db2, "SELECT val FROM vals WHERE id=1");
+  res = queryScalarText(db2, "SELECT val FROM vals WHERE id=1");
   check("3.4_still_sees_old", strcmp(res, "10")==0);
 
-  execsql(db2, "COMMIT");
+  execSql(db2, "COMMIT");
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1203,49 +1203,49 @@ static void test_3_5_multiple_readers(void){
   int c2, c3, c4;
 
   printf("  3.5  Multiple readers during write+commit\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
   open_fresh(path, &db3);
   open_fresh(path, &db4);
 
   /* All readers start transactions */
-  execsql(db2, "BEGIN");
-  execsql(db3, "BEGIN");
-  execsql(db4, "BEGIN");
+  execSql(db2, "BEGIN");
+  execSql(db3, "BEGIN");
+  execSql(db4, "BEGIN");
 
   /* Each reads current state */
-  exec1(db2, "SELECT count(*) FROM vals");
-  exec1(db3, "SELECT count(*) FROM vals");
-  exec1(db4, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db3, "SELECT count(*) FROM vals");
+  queryScalarText(db4, "SELECT count(*) FROM vals");
 
   /* Writer adds rows and commits */
-  execsql(db1, "INSERT INTO vals VALUES(2, 20)");
-  execsql(db1, "INSERT INTO vals VALUES(3, 30)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'add two rows')");
+  execSql(db1, "INSERT INTO vals VALUES(2, 20)");
+  execSql(db1, "INSERT INTO vals VALUES(3, 30)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add two rows')");
 
   /* All readers should still see count=1 (snapshot isolation) */
-  c2 = atoi(exec1(db2, "SELECT count(*) FROM vals"));
-  c3 = atoi(exec1(db3, "SELECT count(*) FROM vals"));
-  c4 = atoi(exec1(db4, "SELECT count(*) FROM vals"));
+  c2 = atoi(queryScalarText(db2, "SELECT count(*) FROM vals"));
+  c3 = atoi(queryScalarText(db3, "SELECT count(*) FROM vals"));
+  c4 = atoi(queryScalarText(db4, "SELECT count(*) FROM vals"));
   check("3.5_reader2_snapshot", c2==1);
   check("3.5_reader3_snapshot", c3==1);
   check("3.5_reader4_snapshot", c4==1);
 
-  execsql(db2, "COMMIT");
-  execsql(db3, "COMMIT");
-  execsql(db4, "COMMIT");
+  execSql(db2, "COMMIT");
+  execSql(db3, "COMMIT");
+  execSql(db4, "COMMIT");
 
   sqlite3_close(db1);
   sqlite3_close(db2);
   sqlite3_close(db3);
   sqlite3_close(db4);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1257,24 +1257,24 @@ static void test_3_6_read_status_concurrent(void){
   const char *res;
 
   printf("  3.6  Read dolt_status while other has staged changes\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   /* db1 inserts but does not commit */
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
 
   /* db2 reads status */
   open_fresh(path, &db2);
-  res = exec1(db2, "SELECT count(*) FROM dolt_status");
+  res = queryScalarText(db2, "SELECT count(*) FROM dolt_status");
   /* Should see some status entries (the uncommitted change) */
   check("3.6_status_visible", atoi(res) >= 0); /* non-crash is the key */
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1285,25 +1285,25 @@ static void test_3_7_concurrent_active_branch(void){
   const char *path = "/tmp/stress_3_7.db";
 
   printf("  3.7  Read active_branch from multiple connections\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('feature')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('feature')");
 
   open_fresh(path, &db2);
   open_fresh(path, &db3);
-  exec1(db2, "SELECT dolt_checkout('feature')");
+  queryScalarText(db2, "SELECT dolt_checkout('feature')");
 
-  check("3.7_db1_main", strcmp(exec1(db1, "SELECT active_branch()"), "main")==0);
-  check("3.7_db2_feature", strcmp(exec1(db2, "SELECT active_branch()"), "feature")==0);
-  check("3.7_db3_main", strcmp(exec1(db3, "SELECT active_branch()"), "main")==0);
+  check("3.7_db1_main", strcmp(queryScalarText(db1, "SELECT active_branch()"), "main")==0);
+  check("3.7_db2_feature", strcmp(queryScalarText(db2, "SELECT active_branch()"), "feature")==0);
+  check("3.7_db3_main", strcmp(queryScalarText(db3, "SELECT active_branch()"), "main")==0);
 
   sqlite3_close(db1);
   sqlite3_close(db2);
   sqlite3_close(db3);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1315,35 +1315,35 @@ static void test_3_8_cross_branch_read_write(void){
   const char *res;
 
   printf("  3.8  Reader on branch while writer commits on different branch\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('feature')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('feature')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT dolt_checkout('feature')");
+  queryScalarText(db2, "SELECT dolt_checkout('feature')");
 
   /* db2 reads on feature */
-  execsql(db2, "BEGIN");
-  res = exec1(db2, "SELECT val FROM vals WHERE id=1");
+  execSql(db2, "BEGIN");
+  res = queryScalarText(db2, "SELECT val FROM vals WHERE id=1");
   check("3.8_feature_reads_init", strcmp(res, "10")==0);
 
   /* db1 commits on main */
-  execsql(db1, "UPDATE vals SET val=99 WHERE id=1");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'main update')");
+  execSql(db1, "UPDATE vals SET val=99 WHERE id=1");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'main update')");
 
   /* db2 should still see 10 on feature */
-  res = exec1(db2, "SELECT val FROM vals WHERE id=1");
+  res = queryScalarText(db2, "SELECT val FROM vals WHERE id=1");
   check("3.8_feature_still_sees_10", strcmp(res, "10")==0);
 
-  execsql(db2, "COMMIT");
+  execSql(db2, "COMMIT");
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1355,25 +1355,25 @@ static void test_3_9_read_branches_during_create(void){
   int count;
 
   printf("  3.9  Read dolt_branches while branches are created\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  count = atoi(exec1(db2, "SELECT count(*) FROM dolt_branches"));
+  count = atoi(queryScalarText(db2, "SELECT count(*) FROM dolt_branches"));
   check("3.9_initially_1_branch", count==1);
 
-  exec1(db1, "SELECT dolt_branch('b1')");
-  exec1(db1, "SELECT dolt_branch('b2')");
+  queryScalarText(db1, "SELECT dolt_branch('b1')");
+  queryScalarText(db1, "SELECT dolt_branch('b2')");
 
-  count = atoi(exec1(db2, "SELECT count(*) FROM dolt_branches"));
+  count = atoi(queryScalarText(db2, "SELECT count(*) FROM dolt_branches"));
   check("3.9_sees_new_branches", count==3);
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1386,11 +1386,11 @@ static void test_3_10_read_commit_read_cycle(void){
   int i, ok = 1;
 
   printf("  3.10 Repeated read-commit-read cycle\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
 
@@ -1399,17 +1399,17 @@ static void test_3_10_read_commit_read_cycle(void){
     int count_before, count_after;
 
     /* db2 reads count */
-    count_before = atoi(exec1(db2, "SELECT count(*) FROM vals"));
+    count_before = atoi(queryScalarText(db2, "SELECT count(*) FROM vals"));
 
     /* db1 inserts and commits */
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i, i*10);
-    execsql_busy(db1, sql, 50);
+    execSqlWithBusyRetry(db1, sql, 50);
     snprintf(msg, sizeof(msg),
              "SELECT dolt_commit('-A', '-m', 'add %d')", i);
     exec1_busy(db1, msg, 50);
 
     /* db2 reads count again */
-    count_after = atoi(exec1(db2, "SELECT count(*) FROM vals"));
+    count_after = atoi(queryScalarText(db2, "SELECT count(*) FROM vals"));
     if( count_after != count_before + 1 ){ ok = 0; }
   }
 
@@ -1417,7 +1417,7 @@ static void test_3_10_read_commit_read_cycle(void){
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 
@@ -1437,20 +1437,20 @@ static void test_4_1_multi_branch_sequential(void){
   int i, j, ok = 1;
 
   printf("  4.1  4 connections x 10 commits on different branches\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &dbs[0]);
-  execsql(dbs[0], "CREATE TABLE vals(id INT, val INT)");
-  exec1(dbs[0], "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(dbs[0], "SELECT dolt_branch('b1')");
-  exec1(dbs[0], "SELECT dolt_branch('b2')");
-  exec1(dbs[0], "SELECT dolt_branch('b3')");
+  execSql(dbs[0], "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(dbs[0], "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(dbs[0], "SELECT dolt_branch('b1')");
+  queryScalarText(dbs[0], "SELECT dolt_branch('b2')");
+  queryScalarText(dbs[0], "SELECT dolt_branch('b3')");
 
   for(i=1; i<4; i++){
     char sql[256];
     open_fresh(path, &dbs[i]);
     snprintf(sql, sizeof(sql), "SELECT dolt_checkout('%s')", branches[i]);
-    exec1(dbs[i], sql);
+    queryScalarText(dbs[i], sql);
   }
 
   for(j=0; j<10; j++){
@@ -1458,7 +1458,7 @@ static void test_4_1_multi_branch_sequential(void){
       char sql[256], msg[256];
       int id = i*100 + j;
       snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", id, id);
-      execsql_busy(dbs[i], sql, 50);
+      execSqlWithBusyRetry(dbs[i], sql, 50);
       snprintf(msg, sizeof(msg),
                "SELECT dolt_commit('-A', '-m', '%s-commit-%d')", branches[i], j);
       res = exec1_busy(dbs[i], msg, 50);
@@ -1468,7 +1468,7 @@ static void test_4_1_multi_branch_sequential(void){
   check("4.1_all_40_commits_succeed", ok);
 
   for(i=0; i<4; i++) sqlite3_close(dbs[i]);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1482,21 +1482,21 @@ static void test_4_2_rapid_alternating_writes(void){
   int i, ok = 1;
 
   printf("  4.2  Rapid alternating writes (serial)\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
   sqlite3_close(db);
 
   for(i=0; i<20; i++){
     char sql[256], msg[256];
     open_fresh(path, &db);
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i, i);
-    execsql(db, sql);
+    execSql(db, sql);
     snprintf(msg, sizeof(msg),
              "SELECT dolt_commit('-A', '-m', 'commit-%d')", i);
-    res = exec1(db, msg);
+    res = queryScalarText(db, msg);
     if( !is_commit_hash(res) ){ ok = 0; }
     sqlite3_close(db);
   }
@@ -1504,10 +1504,10 @@ static void test_4_2_rapid_alternating_writes(void){
 
   /* Verify final state */
   open_fresh(path, &db);
-  res = exec1(db, "SELECT count(*) FROM vals");
+  res = queryScalarText(db, "SELECT count(*) FROM vals");
   check("4.2_all_20_rows_present", strcmp(res, "20")==0);
   sqlite3_close(db);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1520,37 +1520,37 @@ static void test_4_3_uncommitted_then_other_commits(void){
   const char *res;
 
   printf("  4.3  Uncommitted DML, other commits, then first commits\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
 
   /* db1 inserts but does NOT commit yet */
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
 
   /* db2 inserts and commits */
-  execsql_busy(db2, "INSERT INTO vals VALUES(2, 2)", 50);
+  execSqlWithBusyRetry(db2, "INSERT INTO vals VALUES(2, 2)", 50);
   res = exec1_busy(db2, "SELECT dolt_commit('-A', '-m', 'db2 first')", 50);
   check("4.3_db2_commits_ok", is_commit_hash(res));
 
   /* db1 now tries to commit — should conflict because its snapshot
   ** predates db2's commit */
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'db1 after')");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'db1 after')");
   check("4.3_db1_conflicts", is_error(res));
 
   /* db1 reopens and can commit fresh */
   sqlite3_close(db1);
   open_fresh(path, &db1);
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'db1 retry')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'db1 retry')");
   check("4.3_db1_retry_succeeds", is_commit_hash(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1563,28 +1563,28 @@ static void test_4_4_checkout_during_write(void){
   const char *res;
 
   printf("  4.4  Checkout while another is writing\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db1, "SELECT dolt_branch('feature')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db1, "SELECT dolt_branch('feature')");
 
   /* db2 checks out feature BEFORE db1 starts writing — avoids
   ** shared BtShared pollution from db1's uncommitted WAL writes. */
   open_fresh(path, &db2);
-  res = exec1(db2, "SELECT dolt_checkout('feature')");
+  res = queryScalarText(db2, "SELECT dolt_checkout('feature')");
   check("4.4_checkout_succeeds", !is_error(res));
-  check("4.4_on_feature", strcmp(exec1(db2, "SELECT active_branch()"), "feature")==0);
+  check("4.4_on_feature", strcmp(queryScalarText(db2, "SELECT active_branch()"), "feature")==0);
 
   /* Now db1 starts writing and commits on main */
-  execsql_busy(db1, "INSERT INTO vals VALUES(1, 1)", 50);
+  execSqlWithBusyRetry(db1, "INSERT INTO vals VALUES(1, 1)", 50);
   res = exec1_busy(db1, "SELECT dolt_commit('-A', '-m', 'main commit')", 50);
   check("4.4_main_commit_ok", is_commit_hash(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1597,21 +1597,21 @@ static void test_4_5_alternating_connections(void){
   int i, ok = 1;
 
   printf("  4.5  Alternating connections, sequential commits\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
   sqlite3_close(db);
 
   for(i=0; i<10; i++){
     char sql[256], msg[256];
     open_fresh(path, &db);
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i, i);
-    execsql(db, sql);
+    execSql(db, sql);
     snprintf(msg, sizeof(msg),
              "SELECT dolt_commit('-A', '-m', 'step-%d')", i);
-    res = exec1(db, msg);
+    res = queryScalarText(db, msg);
     if( !is_commit_hash(res) ) ok = 0;
     sqlite3_close(db);
   }
@@ -1619,10 +1619,10 @@ static void test_4_5_alternating_connections(void){
   check("4.5_10_alternating_commits_ok", ok);
 
   open_fresh(path, &db);
-  res = exec1(db, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db, "SELECT count(*) FROM dolt_log");
   check("4.5_log_has_11_entries", strcmp(res, "11")==0);
   sqlite3_close(db);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1635,42 +1635,42 @@ static void test_4_6_conflict_recovery(void){
   const char *res;
 
   printf("  4.6  Conflict then recovery\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
 
   /* Create conflict */
-  execsql(db1, "INSERT INTO vals VALUES(1, 1)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'first')");
+  execSql(db1, "INSERT INTO vals VALUES(1, 1)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'first')");
 
-  execsql(db2, "INSERT INTO vals VALUES(2, 2)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'second')");
+  execSql(db2, "INSERT INTO vals VALUES(2, 2)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'second')");
   check("4.6_conflict_detected", is_error(res));
 
   /* db2 can recover by closing all connections and reopening */
   sqlite3_close(db1); db1 = 0;
   sqlite3_close(db2); db2 = 0;
   open_fresh(path, &db2);
-  execsql(db2, "INSERT INTO vals VALUES(20, 20)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'recovered')");
+  execSql(db2, "INSERT INTO vals VALUES(20, 20)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'recovered')");
   check("4.6_recovery_commit_ok", is_commit_hash(res));
 
   /* Verify recovery commit is in the log */
-  res = exec1(db2, "SELECT message FROM dolt_log LIMIT 1");
+  res = queryScalarText(db2, "SELECT message FROM dolt_log LIMIT 1");
   check("4.6_recovery_in_log", strcmp(res, "recovered")==0);
 
   /* Verify at least the committed rows exist (WAL artifacts from rejected
   ** commit may or may not persist — the key is dolt_log correctness) */
-  res = exec1(db2, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db2, "SELECT count(*) FROM dolt_log");
   check("4.6_log_has_3_entries", strcmp(res, "3")==0);
 
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1683,11 +1683,11 @@ static void test_4_7_repeated_conflict_recovery(void){
   int i, conflicts = 0;
 
   printf("  4.7  Multiple conflict-recovery cycles\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   for(i=0; i<5; i++){
     char sql1[256], sql2[256], msg1[256], msg2[256];
@@ -1697,20 +1697,20 @@ static void test_4_7_repeated_conflict_recovery(void){
     if(db2){ sqlite3_close(db2); db2=0; }
     open_fresh(path, &db1);
     open_fresh(path, &db2);
-    exec1(db2, "SELECT count(*) FROM vals"); /* anchor snapshot */
+    queryScalarText(db2, "SELECT count(*) FROM vals"); /* anchor snapshot */
 
     snprintf(sql1, sizeof(sql1), "INSERT INTO vals VALUES(%d, %d)", i*2, i*2);
     snprintf(sql2, sizeof(sql2), "INSERT INTO vals VALUES(%d, %d)", i*2+1, i*2+1);
 
-    execsql(db1, sql1);
+    execSql(db1, sql1);
     snprintf(msg1, sizeof(msg1),
              "SELECT dolt_commit('-A', '-m', 'cycle-%d-a')", i);
-    exec1(db1, msg1);
+    queryScalarText(db1, msg1);
 
-    execsql(db2, sql2);
+    execSql(db2, sql2);
     snprintf(msg2, sizeof(msg2),
              "SELECT dolt_commit('-A', '-m', 'cycle-%d-b')", i);
-    res = exec1(db2, msg2);
+    res = queryScalarText(db2, msg2);
     if( is_error(res) ) conflicts++;
   }
   check("4.7_all_5_cycles_produce_conflict", conflicts==5);
@@ -1722,10 +1722,10 @@ static void test_4_7_repeated_conflict_recovery(void){
   if(db2) sqlite3_close(db2);
   open_fresh(path, &db3);
   /* init + 5 successful commits = 6 log entries */
-  res = exec1(db3, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db3, "SELECT count(*) FROM dolt_log");
   check("4.7_6_log_entries_from_successful_commits", strcmp(res, "6")==0);
   sqlite3_close(db3);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1738,40 +1738,40 @@ static void test_4_8_large_batch_with_reader(void){
   int i;
 
   printf("  4.8  Large batch insert with concurrent reader\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  execsql(db2, "BEGIN");
-  exec1(db2, "SELECT count(*) FROM vals"); /* anchor at 0 rows */
+  execSql(db2, "BEGIN");
+  queryScalarText(db2, "SELECT count(*) FROM vals"); /* anchor at 0 rows */
 
   /* db1 inserts 100 rows */
-  execsql(db1, "BEGIN");
+  execSql(db1, "BEGIN");
   for(i=0; i<100; i++){
     char sql[256];
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i, i*10);
-    execsql(db1, sql);
+    execSql(db1, sql);
   }
-  execsql(db1, "COMMIT");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'batch insert')");
+  execSql(db1, "COMMIT");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'batch insert')");
   check("4.8_batch_commit_ok", is_commit_hash(res));
 
   /* db2 should still see 0 rows in its snapshot */
-  res = exec1(db2, "SELECT count(*) FROM vals");
+  res = queryScalarText(db2, "SELECT count(*) FROM vals");
   check("4.8_reader_sees_0_in_snapshot", strcmp(res, "0")==0);
 
-  execsql(db2, "COMMIT");
+  execSql(db2, "COMMIT");
 
   /* After ending transaction, db2 sees 100 rows */
-  res = exec1(db2, "SELECT count(*) FROM vals");
+  res = queryScalarText(db2, "SELECT count(*) FROM vals");
   check("4.8_reader_sees_100_after_tx", strcmp(res, "100")==0);
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1785,11 +1785,11 @@ static void test_4_9_write_contention(void){
   int i;
 
   printf("  4.9  Write contention with busy retry\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
   open_fresh(path, &db3);
@@ -1799,7 +1799,7 @@ static void test_4_9_write_contention(void){
     char sql[256];
     sqlite3 *dbs[] = {db1, db2, db3};
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i, i);
-    execsql_busy(dbs[i%3], sql, 50);
+    execSqlWithBusyRetry(dbs[i%3], sql, 50);
   }
 
   /* db1 commits — captures all writes from shared WAL */
@@ -1809,7 +1809,7 @@ static void test_4_9_write_contention(void){
   sqlite3_close(db1);
   sqlite3_close(db2);
   sqlite3_close(db3);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1822,21 +1822,21 @@ static void test_4_10_commit_reopen_cycle(void){
   int i, ok = 1;
 
   printf("  4.10 Commit-reopen cycle 20 times\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT PRIMARY KEY, val INT)");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db, "CREATE TABLE vals(id INT PRIMARY KEY, val INT)");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
   sqlite3_close(db);
 
   for(i=0; i<20; i++){
     char sql[256], msg[256];
     open_fresh(path, &db);
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i, i*10);
-    execsql(db, sql);
+    execSql(db, sql);
     snprintf(msg, sizeof(msg),
              "SELECT dolt_commit('-A', '-m', 'cycle %d')", i);
-    res = exec1(db, msg);
+    res = queryScalarText(db, msg);
     if( !is_commit_hash(res) ) ok = 0;
     sqlite3_close(db);
     db = 0;
@@ -1844,12 +1844,12 @@ static void test_4_10_commit_reopen_cycle(void){
   check("4.10_all_20_cycles_ok", ok);
 
   open_fresh(path, &db);
-  res = exec1(db, "SELECT count(*) FROM vals");
+  res = queryScalarText(db, "SELECT count(*) FROM vals");
   check("4.10_20_rows_present", strcmp(res, "20")==0);
-  res = exec1(db, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db, "SELECT count(*) FROM dolt_log");
   check("4.10_21_log_entries", strcmp(res, "21")==0);
   sqlite3_close(db);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1862,42 +1862,42 @@ static void test_4_11_branch_log_divergence(void){
   int i;
 
   printf("  4.11 Branch log divergence\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'init')");
-  exec1(db, "SELECT dolt_branch('dev')");
+  execSql(db, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
+  queryScalarText(db, "SELECT dolt_branch('dev')");
 
   /* 5 commits on main */
   for(i=0; i<5; i++){
     char sql[256], msg[256];
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i, i);
-    execsql(db, sql);
+    execSql(db, sql);
     snprintf(msg, sizeof(msg), "SELECT dolt_commit('-A', '-m', 'main-%d')", i);
-    exec1(db, msg);
+    queryScalarText(db, msg);
   }
 
   /* Switch to dev — 3 commits */
-  exec1(db, "SELECT dolt_checkout('dev')");
+  queryScalarText(db, "SELECT dolt_checkout('dev')");
   for(i=100; i<103; i++){
     char sql[256], msg[256];
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i, i);
-    execsql(db, sql);
+    execSql(db, sql);
     snprintf(msg, sizeof(msg), "SELECT dolt_commit('-A', '-m', 'dev-%d')", i-100);
-    exec1(db, msg);
+    queryScalarText(db, msg);
   }
 
-  res = exec1(db, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db, "SELECT count(*) FROM dolt_log");
   check("4.11_dev_log_has_4", strcmp(res, "4")==0); /* init + 3 */
 
   /* Switch back to main */
-  exec1(db, "SELECT dolt_checkout('main')");
-  res = exec1(db, "SELECT count(*) FROM dolt_log");
+  queryScalarText(db, "SELECT dolt_checkout('main')");
+  res = queryScalarText(db, "SELECT count(*) FROM dolt_log");
   check("4.11_main_log_has_6", strcmp(res, "6")==0); /* init + 5 */
 
   sqlite3_close(db);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 
@@ -1915,22 +1915,22 @@ static void test_5_1_first_commit_race(void){
   int successes = 0;
 
   printf("  5.1  First commit ever from two connections\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
   open_fresh(path, &db2);
 
-  execsql(db1, "CREATE TABLE t1(id INT, val INT)");
+  execSql(db1, "CREATE TABLE t1(id INT, val INT)");
   /* db2 may or may not see the table via WAL depending on timing */
 
-  res1 = exec1(db1, "SELECT dolt_commit('-A', '-m', 'first from db1')");
+  res1 = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'first from db1')");
   if( is_commit_hash(res1) ) successes++;
 
   /* db2 tries to make a commit too — it may succeed if it sees a
   ** consistent state, or fail with conflict. Either is acceptable,
   ** the key invariant is no crash and no silent data loss. */
-  execsql_busy(db2, "CREATE TABLE IF NOT EXISTS t2(id INT, val INT)", 50);
-  res2 = exec1(db2, "SELECT dolt_commit('-A', '-m', 'first from db2')");
+  execSqlWithBusyRetry(db2, "CREATE TABLE IF NOT EXISTS t2(id INT, val INT)", 50);
+  res2 = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'first from db2')");
   if( is_commit_hash(res2) ) successes++;
 
   check("5.1_at_least_one_succeeds", successes >= 1);
@@ -1938,7 +1938,7 @@ static void test_5_1_first_commit_race(void){
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1950,29 +1950,29 @@ static void test_5_2_empty_commit_during_insert(void){
   const char *res;
 
   printf("  5.2  Empty table commit while other inserts\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
 
   /* db1 makes a commit that changes nothing in the table but adds a new one */
-  execsql(db1, "CREATE TABLE empty_t(x INT)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'add empty table')");
+  execSql(db1, "CREATE TABLE empty_t(x INT)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add empty table')");
   check("5.2_empty_table_commit_ok", is_commit_hash(res));
 
   /* db2 inserts into vals and tries to commit — stale snapshot */
-  execsql(db2, "INSERT INTO vals VALUES(2, 20)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'insert after')");
+  execSql(db2, "INSERT INTO vals VALUES(2, 20)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'insert after')");
   check("5.2_stale_snapshot_rejected", is_error(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -1984,32 +1984,32 @@ static void test_5_3_schema_change_during_read(void){
   const char *res;
 
   printf("  5.3  Schema change while another reads\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE t1(id INT, val INT)");
-  execsql(db1, "INSERT INTO t1 VALUES(1, 10)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE t1(id INT, val INT)");
+  execSql(db1, "INSERT INTO t1 VALUES(1, 10)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  execsql(db2, "BEGIN");
-  res = exec1(db2, "SELECT val FROM t1 WHERE id=1");
+  execSql(db2, "BEGIN");
+  res = queryScalarText(db2, "SELECT val FROM t1 WHERE id=1");
   check("5.3_reader_sees_data", strcmp(res, "10")==0);
 
   /* db1 creates a new table and commits */
-  execsql_busy(db1, "CREATE TABLE t2(a INT, b TEXT)", 50);
+  execSqlWithBusyRetry(db1, "CREATE TABLE t2(a INT, b TEXT)", 50);
   res = exec1_busy(db1, "SELECT dolt_commit('-A', '-m', 'add t2')", 50);
   check("5.3_schema_commit_ok", is_commit_hash(res));
 
   /* db2 should still be able to read t1 in its snapshot */
-  res = exec1(db2, "SELECT val FROM t1 WHERE id=1");
+  res = queryScalarText(db2, "SELECT val FROM t1 WHERE id=1");
   check("5.3_reader_still_ok", strcmp(res, "10")==0);
 
-  execsql(db2, "COMMIT");
+  execSql(db2, "COMMIT");
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -2021,32 +2021,32 @@ static void test_5_4_reset_during_read(void){
   const char *res;
 
   printf("  5.4  dolt_reset --hard while another reads\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   /* db1 has uncommitted changes */
-  execsql(db1, "INSERT INTO vals VALUES(2, 20)");
+  execSql(db1, "INSERT INTO vals VALUES(2, 20)");
 
   /* db2 reads */
   open_fresh(path, &db2);
-  execsql(db2, "BEGIN");
-  res = exec1(db2, "SELECT count(*) FROM vals");
+  execSql(db2, "BEGIN");
+  res = queryScalarText(db2, "SELECT count(*) FROM vals");
   /* db2 sees either 1 or 2 depending on WAL timing — both are acceptable */
   check("5.4_reader_sees_data", atoi(res) >= 1);
 
   /* db1 resets hard */
-  res = exec1(db1, "SELECT dolt_reset('--hard')");
+  res = queryScalarText(db1, "SELECT dolt_reset('--hard')");
   check("5.4_reset_doesnt_crash", !is_error(res) || 1); /* either OK or error, no crash */
 
-  execsql(db2, "COMMIT");
+  execSql(db2, "COMMIT");
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -2058,19 +2058,19 @@ static void test_5_5_empty_diff_commit(void){
   const char *res;
 
   printf("  5.5  Commit with empty diff\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
 
   /* Try to commit with no changes — may succeed with empty commit
   ** or fail with "nothing to commit". Either is acceptable. */
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'empty commit')");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'empty commit')");
   check("5.5_empty_commit_no_crash", 1); /* no crash is the invariant */
 
   sqlite3_close(db);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -2084,19 +2084,19 @@ static void test_5_6_long_commit_message(void){
   const char *res;
 
   printf("  5.6  Very long commit message\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db, "CREATE TABLE vals(id INT, val INT)");
   /* Create a message with 2000 'x' characters */
   memset(msg, 'x', 2000);
   msg[2000] = 0;
   snprintf(sql, sizeof(sql), "SELECT dolt_commit('-A', '-m', '%s')", msg);
-  res = exec1(db, sql);
+  res = queryScalarText(db, sql);
   check("5.6_long_message_commit_ok", is_commit_hash(res));
 
   sqlite3_close(db);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -2108,26 +2108,26 @@ static void test_5_7_late_connection(void){
   const char *res;
 
   printf("  5.7  Late connection sees committed state\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 10)");
-  execsql(db1, "INSERT INTO vals VALUES(2, 20)");
-  execsql(db1, "INSERT INTO vals VALUES(3, 30)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'three rows')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 10)");
+  execSql(db1, "INSERT INTO vals VALUES(2, 20)");
+  execSql(db1, "INSERT INTO vals VALUES(3, 30)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'three rows')");
   sqlite3_close(db1);
 
   /* New connection opened after all commits */
   open_fresh(path, &db2);
-  res = exec1(db2, "SELECT count(*) FROM vals");
+  res = queryScalarText(db2, "SELECT count(*) FROM vals");
   check("5.7_late_sees_all_rows", strcmp(res, "3")==0);
 
-  res = exec1(db2, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db2, "SELECT count(*) FROM dolt_log");
   check("5.7_late_sees_log", strcmp(res, "1")==0);
 
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -2140,34 +2140,34 @@ static void test_5_8_close_after_commit(void){
   int i;
 
   printf("  5.8  Close immediately after commit, reopen and verify\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT, val INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
   sqlite3_close(db1);
 
   for(i=0; i<5; i++){
     char sql[256], msg[256];
     open_fresh(path, &db1);
     snprintf(sql, sizeof(sql), "INSERT INTO vals VALUES(%d, %d)", i, i);
-    execsql(db1, sql);
+    execSql(db1, sql);
     snprintf(msg, sizeof(msg),
              "SELECT dolt_commit('-A', '-m', 'row %d')", i);
-    exec1(db1, msg);
+    queryScalarText(db1, msg);
     sqlite3_close(db1);
     db1 = 0;
   }
 
   open_fresh(path, &db2);
-  res = exec1(db2, "SELECT count(*) FROM vals");
+  res = queryScalarText(db2, "SELECT count(*) FROM vals");
   check("5.8_all_rows_persisted", strcmp(res, "5")==0);
 
-  res = exec1(db2, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db2, "SELECT count(*) FROM dolt_log");
   check("5.8_all_commits_in_log", strcmp(res, "6")==0);
 
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -2179,32 +2179,32 @@ static void test_5_9_multi_table_conflict(void){
   const char *res;
 
   printf("  5.9  Multi-table single commit, conflict detected\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE t1(a INT)");
-  execsql(db1, "CREATE TABLE t2(b INT)");
-  execsql(db1, "CREATE TABLE t3(c INT)");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE t1(a INT)");
+  execSql(db1, "CREATE TABLE t2(b INT)");
+  execSql(db1, "CREATE TABLE t3(c INT)");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM t1");
+  queryScalarText(db2, "SELECT count(*) FROM t1");
 
   /* db1 writes to all 3 tables and commits */
-  execsql(db1, "INSERT INTO t1 VALUES(1)");
-  execsql(db1, "INSERT INTO t2 VALUES(2)");
-  execsql(db1, "INSERT INTO t3 VALUES(3)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'multi table')");
+  execSql(db1, "INSERT INTO t1 VALUES(1)");
+  execSql(db1, "INSERT INTO t2 VALUES(2)");
+  execSql(db1, "INSERT INTO t3 VALUES(3)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'multi table')");
   check("5.9_multi_table_commit_ok", is_commit_hash(res));
 
   /* db2 writes to t1 only — should still conflict (branch HEAD changed) */
-  execsql(db2, "INSERT INTO t1 VALUES(10)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'conflict')");
+  execSql(db2, "INSERT INTO t1 VALUES(10)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'conflict')");
   check("5.9_conflict_despite_single_table_write", is_error(res));
 
   sqlite3_close(db1);
   sqlite3_close(db2);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -2216,53 +2216,53 @@ static void test_5_10_integrity_after_conflict(void){
   const char *res;
 
   printf("  5.10 Integrity check after conflict\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db1);
-  execsql(db1, "CREATE TABLE vals(id INT PRIMARY KEY, val TEXT)");
-  execsql(db1, "INSERT INTO vals VALUES(1, 'alpha')");
-  execsql(db1, "INSERT INTO vals VALUES(2, 'beta')");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db1, "CREATE TABLE vals(id INT PRIMARY KEY, val TEXT)");
+  execSql(db1, "INSERT INTO vals VALUES(1, 'alpha')");
+  execSql(db1, "INSERT INTO vals VALUES(2, 'beta')");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'init')");
 
   open_fresh(path, &db2);
-  exec1(db2, "SELECT count(*) FROM vals");
+  queryScalarText(db2, "SELECT count(*) FROM vals");
 
   /* Cause a conflict */
-  execsql(db1, "INSERT INTO vals VALUES(3, 'gamma')");
-  exec1(db1, "SELECT dolt_commit('-A', '-m', 'add gamma')");
+  execSql(db1, "INSERT INTO vals VALUES(3, 'gamma')");
+  queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add gamma')");
 
-  execsql(db2, "INSERT INTO vals VALUES(4, 'delta')");
-  exec1(db2, "SELECT dolt_commit('-A', '-m', 'add delta')"); /* rejected */
+  execSql(db2, "INSERT INTO vals VALUES(4, 'delta')");
+  queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'add delta')"); /* rejected */
 
   sqlite3_close(db1);
   sqlite3_close(db2);
 
   /* Reopen and run integrity check */
   open_fresh(path, &db3);
-  res = exec1(db3, "PRAGMA integrity_check");
+  res = queryScalarText(db3, "PRAGMA integrity_check");
   check("5.10_integrity_check_ok", strcmp(res, "ok")==0);
 
   /* Verify committed data: the SQL table may contain WAL artifacts from
   ** the rejected commit (a known limitation of shared BtShared), but the
   ** dolt version history must be correct. */
-  res = exec1(db3, "SELECT count(*) FROM vals");
+  res = queryScalarText(db3, "SELECT count(*) FROM vals");
   /* Should have at least 3 rows (alpha, beta, gamma). May have 4 if the
   ** rejected commit's INSERT lingered in the WAL. */
   check("5.10_correct_row_count_at_least_3", atoi(res) >= 3);
 
-  res = exec1(db3, "SELECT val FROM vals WHERE id=3");
+  res = queryScalarText(db3, "SELECT val FROM vals WHERE id=3");
   check("5.10_gamma_exists", strcmp(res, "gamma")==0);
 
   /* The critical invariant: delta must NOT be in the dolt log */
-  res = exec1(db3, "SELECT count(*) FROM dolt_log WHERE message='add delta'");
+  res = queryScalarText(db3, "SELECT count(*) FROM dolt_log WHERE message='add delta'");
   check("5.10_delta_not_committed", strcmp(res, "0")==0);
 
   /* Only 2 dolt commits: init + add gamma */
-  res = exec1(db3, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db3, "SELECT count(*) FROM dolt_log");
   check("5.10_exactly_2_log_entries", strcmp(res, "2")==0);
 
   sqlite3_close(db3);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -2275,11 +2275,11 @@ static void test_5_11_back_to_back_conflicts(void){
   int round, conflicts = 0;
 
   printf("  5.11 Back-to-back conflicts (3 rounds)\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &setup);
-  execsql(setup, "CREATE TABLE vals(id INT, val INT)");
-  exec1(setup, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(setup, "CREATE TABLE vals(id INT, val INT)");
+  queryScalarText(setup, "SELECT dolt_commit('-A', '-m', 'init')");
   sqlite3_close(setup);
 
   for(round=0; round<3; round++){
@@ -2287,21 +2287,21 @@ static void test_5_11_back_to_back_conflicts(void){
 
     open_fresh(path, &db1);
     open_fresh(path, &db2);
-    exec1(db2, "SELECT count(*) FROM vals"); /* anchor */
+    queryScalarText(db2, "SELECT count(*) FROM vals"); /* anchor */
 
     snprintf(sql1, sizeof(sql1), "INSERT INTO vals VALUES(%d, %d)", round*10, round*10);
     snprintf(sql2, sizeof(sql2), "INSERT INTO vals VALUES(%d, %d)", round*10+1, round*10+1);
 
-    execsql(db1, sql1);
+    execSql(db1, sql1);
     snprintf(msg1, sizeof(msg1),
              "SELECT dolt_commit('-A', '-m', 'r%d-first')", round);
-    res = exec1(db1, msg1);
+    res = queryScalarText(db1, msg1);
     check("5.11_first_commits", is_commit_hash(res));
 
-    execsql(db2, sql2);
+    execSql(db2, sql2);
     snprintf(msg2, sizeof(msg2),
              "SELECT dolt_commit('-A', '-m', 'r%d-second')", round);
-    res = exec1(db2, msg2);
+    res = queryScalarText(db2, msg2);
     if( is_error(res) ) conflicts++;
 
     sqlite3_close(db1); db1 = 0;
@@ -2309,7 +2309,7 @@ static void test_5_11_back_to_back_conflicts(void){
   }
   check("5.11_all_3_rounds_conflicted", conflicts==3);
 
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 /*
@@ -2322,57 +2322,57 @@ static void test_5_12_comprehensive_integrity(void){
   const char *res;
 
   printf("  5.12 Comprehensive integrity after mixed operations\n");
-  remove_db(path);
+  removeDbFiles(path);
 
   open_fresh(path, &db);
-  execsql(db, "CREATE TABLE vals(id INT PRIMARY KEY, val TEXT)");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'init')");
+  execSql(db, "CREATE TABLE vals(id INT PRIMARY KEY, val TEXT)");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'init')");
 
   /* Insert 5 rows */
-  execsql(db, "INSERT INTO vals VALUES(1, 'one')");
-  execsql(db, "INSERT INTO vals VALUES(2, 'two')");
-  execsql(db, "INSERT INTO vals VALUES(3, 'three')");
-  execsql(db, "INSERT INTO vals VALUES(4, 'four')");
-  execsql(db, "INSERT INTO vals VALUES(5, 'five')");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'add 5 rows')");
+  execSql(db, "INSERT INTO vals VALUES(1, 'one')");
+  execSql(db, "INSERT INTO vals VALUES(2, 'two')");
+  execSql(db, "INSERT INTO vals VALUES(3, 'three')");
+  execSql(db, "INSERT INTO vals VALUES(4, 'four')");
+  execSql(db, "INSERT INTO vals VALUES(5, 'five')");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'add 5 rows')");
 
   /* Update some */
-  execsql(db, "UPDATE vals SET val='ONE' WHERE id=1");
-  execsql(db, "UPDATE vals SET val='THREE' WHERE id=3");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'update 2 rows')");
+  execSql(db, "UPDATE vals SET val='ONE' WHERE id=1");
+  execSql(db, "UPDATE vals SET val='THREE' WHERE id=3");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'update 2 rows')");
 
   /* Delete one */
-  execsql(db, "DELETE FROM vals WHERE id=4");
-  exec1(db, "SELECT dolt_commit('-A', '-m', 'delete id 4')");
+  execSql(db, "DELETE FROM vals WHERE id=4");
+  queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'delete id 4')");
 
   /* Verify state */
-  res = exec1(db, "SELECT count(*) FROM vals");
+  res = queryScalarText(db, "SELECT count(*) FROM vals");
   check("5.12_4_rows_remaining", strcmp(res, "4")==0);
 
-  res = exec1(db, "SELECT val FROM vals WHERE id=1");
+  res = queryScalarText(db, "SELECT val FROM vals WHERE id=1");
   check("5.12_id1_updated", strcmp(res, "ONE")==0);
 
-  res = exec1(db, "SELECT val FROM vals WHERE id=2");
+  res = queryScalarText(db, "SELECT val FROM vals WHERE id=2");
   check("5.12_id2_unchanged", strcmp(res, "two")==0);
 
-  res = exec1(db, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db, "SELECT count(*) FROM dolt_log");
   check("5.12_4_log_entries", strcmp(res, "4")==0);
 
   /* Close, reopen, re-verify (persistence check) */
   sqlite3_close(db);
   open_fresh(path, &db);
 
-  res = exec1(db, "SELECT count(*) FROM vals");
+  res = queryScalarText(db, "SELECT count(*) FROM vals");
   check("5.12_persisted_4_rows", strcmp(res, "4")==0);
 
-  res = exec1(db, "SELECT val FROM vals WHERE id=3");
+  res = queryScalarText(db, "SELECT val FROM vals WHERE id=3");
   check("5.12_persisted_update", strcmp(res, "THREE")==0);
 
-  res = exec1(db, "PRAGMA integrity_check");
+  res = queryScalarText(db, "PRAGMA integrity_check");
   check("5.12_final_integrity_ok", strcmp(res, "ok")==0);
 
   sqlite3_close(db);
-  remove_db(path);
+  removeDbFiles(path);
 }
 
 

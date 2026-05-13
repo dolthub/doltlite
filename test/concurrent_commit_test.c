@@ -38,7 +38,7 @@ static void check(const char *name, int condition){
 }
 
 static char result_buf[4096];
-static const char *exec1(sqlite3 *db, const char *sql){
+static const char *queryScalarText(sqlite3 *db, const char *sql){
   sqlite3_stmt *stmt = 0;
   int rc;
   result_buf[0] = 0;
@@ -58,7 +58,7 @@ static const char *exec1(sqlite3 *db, const char *sql){
   return result_buf;
 }
 
-static int execsql(sqlite3 *db, const char *sql){
+static int execSql(sqlite3 *db, const char *sql){
   char *err = 0;
   int rc = sqlite3_exec(db, sql, 0, 0, &err);
   if( rc!=SQLITE_OK ){
@@ -93,24 +93,24 @@ static void test_aaron_scenario(void){
   check("open_db1", rc==SQLITE_OK);
 
   /* Connection 1: create table and commit */
-  execsql(db1, "CREATE TABLE vals (id INT, val INT)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'Initial commit')");
+  execSql(db1, "CREATE TABLE vals (id INT, val INT)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'Initial commit')");
   check("initial_commit_ok", strlen(res)==40);
 
   /* Connection 2: open, sees the table */
   rc = sqlite3_open(dbpath, &db2);
   check("open_db2", rc==SQLITE_OK);
-  res = exec1(db2, "SELECT count(*) FROM vals");
+  res = queryScalarText(db2, "SELECT count(*) FROM vals");
   check("db2_sees_table", strcmp(res, "0")==0);
 
   /* Connection 1: insert and commit */
-  execsql(db1, "INSERT INTO vals VALUES (1, 1)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
+  execSql(db1, "INSERT INTO vals VALUES (1, 1)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'add one')");
   check("commit_add_one", strlen(res)==40);
 
   /* Connection 2: insert and try to commit — should fail */
-  execsql(db2, "INSERT INTO vals VALUES (2, 2)");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'add two')");
+  execSql(db2, "INSERT INTO vals VALUES (2, 2)");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'add two')");
   check("commit_add_two_rejected",
     strstr(res, "ERROR") != 0 || strstr(res, "conflict") != 0);
 
@@ -122,14 +122,14 @@ static void test_aaron_scenario(void){
   rc = sqlite3_open(dbpath, &db1);
   check("reopen_db1", rc==SQLITE_OK);
 
-  res = exec1(db1, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db1, "SELECT count(*) FROM dolt_log");
   check("log_has_2_entries", strcmp(res, "2")==0);
 
-  res = exec1(db1, "SELECT message FROM dolt_log LIMIT 1");
+  res = queryScalarText(db1, "SELECT message FROM dolt_log LIMIT 1");
   check("latest_commit_is_add_one", strcmp(res, "add one")==0);
 
   /* Verify the data from "add one" is intact */
-  res = exec1(db1, "SELECT val FROM vals WHERE id=1");
+  res = queryScalarText(db1, "SELECT val FROM vals WHERE id=1");
   check("add_one_data_intact", strcmp(res, "1")==0);
 
   sqlite3_close(db1);
@@ -152,22 +152,22 @@ static void test_single_connection(void){
   rc = sqlite3_open(dbpath, &db);
   check("single_open", rc==SQLITE_OK);
 
-  execsql(db, "CREATE TABLE t1 (a INT, b TEXT)");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'first')");
+  execSql(db, "CREATE TABLE t1 (a INT, b TEXT)");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'first')");
   check("single_commit_1", strlen(res)==40);
 
-  execsql(db, "INSERT INTO t1 VALUES (1, 'hello')");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'second')");
+  execSql(db, "INSERT INTO t1 VALUES (1, 'hello')");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'second')");
   check("single_commit_2", strlen(res)==40);
 
-  execsql(db, "INSERT INTO t1 VALUES (2, 'world')");
-  res = exec1(db, "SELECT dolt_commit('-A', '-m', 'third')");
+  execSql(db, "INSERT INTO t1 VALUES (2, 'world')");
+  res = queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'third')");
   check("single_commit_3", strlen(res)==40);
 
-  res = exec1(db, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db, "SELECT count(*) FROM dolt_log");
   check("single_log_count", strcmp(res, "3")==0);
 
-  res = exec1(db, "SELECT count(*) FROM t1");
+  res = queryScalarText(db, "SELECT count(*) FROM t1");
   check("single_data_count", strcmp(res, "2")==0);
 
   sqlite3_close(db);
@@ -194,8 +194,8 @@ static void test_sequential_multi_connection(void){
   check("seq_open_db2", rc==SQLITE_OK);
 
   /* db1 creates and commits */
-  execsql(db1, "CREATE TABLE seq (id INT, name TEXT)");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'create seq')");
+  execSql(db1, "CREATE TABLE seq (id INT, name TEXT)");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'create seq')");
   check("seq_first_commit", strlen(res)==40);
 
   /* db2 opens AFTER db1's commit, inserts, and commits.
@@ -205,8 +205,8 @@ static void test_sequential_multi_connection(void){
   rc = sqlite3_open(dbpath, &db2);
   check("seq_reopen_db2", rc==SQLITE_OK);
 
-  execsql(db2, "INSERT INTO seq VALUES (1, 'from_db2')");
-  res = exec1(db2, "SELECT dolt_commit('-A', '-m', 'db2 insert')");
+  execSql(db2, "INSERT INTO seq VALUES (1, 'from_db2')");
+  res = queryScalarText(db2, "SELECT dolt_commit('-A', '-m', 'db2 insert')");
   check("seq_db2_commit", strlen(res)==40);
 
   /* Reopen db1 to get fresh state, then commit */
@@ -214,15 +214,15 @@ static void test_sequential_multi_connection(void){
   rc = sqlite3_open(dbpath, &db1);
   check("seq_reopen_db1", rc==SQLITE_OK);
 
-  execsql(db1, "INSERT INTO seq VALUES (2, 'from_db1')");
-  res = exec1(db1, "SELECT dolt_commit('-A', '-m', 'db1 insert')");
+  execSql(db1, "INSERT INTO seq VALUES (2, 'from_db1')");
+  res = queryScalarText(db1, "SELECT dolt_commit('-A', '-m', 'db1 insert')");
   check("seq_db1_commit", strlen(res)==40);
 
   /* Both rows should exist */
-  res = exec1(db1, "SELECT count(*) FROM seq");
+  res = queryScalarText(db1, "SELECT count(*) FROM seq");
   check("seq_both_rows", strcmp(res, "2")==0);
 
-  res = exec1(db1, "SELECT count(*) FROM dolt_log");
+  res = queryScalarText(db1, "SELECT count(*) FROM dolt_log");
   check("seq_log_count", strcmp(res, "3")==0);
 
   sqlite3_close(db1);
