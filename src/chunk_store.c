@@ -124,19 +124,11 @@ static int csReadManifest(ChunkStore *cs);
 static int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData);
 static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
-static int csGrowPending(ChunkStore *cs);
+static int csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e);
 static int csGrowRecent(ChunkStore *cs, int nAdd);
 static int csGrowWriteBuf(ChunkStore *cs, int nNeeded);
-static void csPendHTClear(ChunkStore *cs);
-static void csRecentHTClear(ChunkStore *cs);
 
-static int csReplayWal(ChunkStore *cs);
-static void csFreeRefsState(ChunkStore *cs);
 static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData);
-static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc);
-static int csReplaceRefsStateFromBlob(ChunkStore *cs, const u8 *data, int nData,
-                                      int markCommitted);
-static int csEnsureDefaultBranch(ChunkStore *cs);
 static int csReloadFromDisk(ChunkStore *cs);
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged);
 
@@ -151,38 +143,6 @@ static int csCrashWriteInjectionActive(void){
 
 #define CS_WAL_TAG_CHUNK  0x01
 #define CS_WAL_TAG_ROOT   0x02
-
-typedef struct SavedRefsState SavedRefsState;
-typedef struct ChunkStoreReplayState ChunkStoreReplayState;
-typedef struct ChunkStoreReloadState ChunkStoreReloadState;
-
-struct SavedRefsState {
-  char *zDefaultBranch;
-  struct BranchRef *aBranches;
-  int nBranches;
-  struct TagRef *aTags;
-  int nTags;
-  struct RemoteRef *aRemotes;
-  int nRemotes;
-  struct TrackingBranch *aTracking;
-  int nTracking;
-};
-
-struct ChunkStoreReplayState {
-  ChunkIndexEntry *aIndex;
-  int nIndex;
-  void *aIndexMmapBase;
-  i64 aIndexMmapSize;
-  SavedRefsState refs;
-};
-
-struct ChunkStoreReloadState {
-  sqlite3_file *pFile;
-  ChunkIndexEntry *aIndex;
-  void *aIndexMmapBase;
-  i64 aIndexMmapSize;
-  SavedRefsState refs;
-};
 
 #if CHUNK_STORE_LE_PACKING
 typedef char chunk_index_entry_size_check[
@@ -238,7 +198,7 @@ static void csRestoreCommittedRefsHash(ChunkStore *cs){
   cs->refs.refsHash = cs->refs.committedRefsHash;
 }
 
-static void csCaptureSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
+void csCaptureSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
   pSaved->zDefaultBranch = cs->refs.zDefaultBranch;
   pSaved->aBranches = cs->refs.aBranches;
@@ -264,7 +224,7 @@ static void csDetachSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   cs->refs.nTracking = 0;
 }
 
-static void csRestoreSavedRefsState(ChunkStore *cs, const SavedRefsState *pSaved){
+void csRestoreSavedRefsState(ChunkStore *cs, const SavedRefsState *pSaved){
   cs->refs.zDefaultBranch = pSaved->zDefaultBranch;
   cs->refs.aBranches = pSaved->aBranches;
   cs->refs.nBranches = pSaved->nBranches;
@@ -276,7 +236,7 @@ static void csRestoreSavedRefsState(ChunkStore *cs, const SavedRefsState *pSaved
   cs->refs.nTracking = pSaved->nTracking;
 }
 
-static void csFreeSavedRefsState(SavedRefsState *pSaved){
+void csFreeSavedRefsState(SavedRefsState *pSaved){
   ChunkStore refsStore;
   memset(&refsStore, 0, sizeof(refsStore));
   refsStore.refs.zDefaultBranch = pSaved->zDefaultBranch;
@@ -292,113 +252,7 @@ static void csFreeSavedRefsState(SavedRefsState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
 }
 
-static void csCaptureReplayState(ChunkStore *cs, ChunkStoreReplayState *pSaved){
-  memset(pSaved, 0, sizeof(*pSaved));
-  pSaved->aIndex = cs->index.aIndex;
-  pSaved->nIndex = cs->index.nIndex;
-  pSaved->aIndexMmapBase = cs->index.aIndexMmapBase;
-  pSaved->aIndexMmapSize = cs->index.aIndexMmapSize;
-  csCaptureSavedRefsState(cs, &pSaved->refs);
-}
-
-static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pSaved){
-  cs->index.aIndex = pSaved->aIndex;
-  cs->index.nIndex = pSaved->nIndex;
-  cs->index.aIndexMmapBase = pSaved->aIndexMmapBase;
-  cs->index.aIndexMmapSize = pSaved->aIndexMmapSize;
-  csRestoreSavedRefsState(cs, &pSaved->refs);
-}
-
-static void csCaptureReloadState(ChunkStore *cs, ChunkStoreReloadState *pSaved){
-  memset(pSaved, 0, sizeof(*pSaved));
-  pSaved->pFile = cs->file.pFile;
-  pSaved->aIndex = cs->index.aIndex;
-  pSaved->aIndexMmapBase = cs->index.aIndexMmapBase;
-  pSaved->aIndexMmapSize = cs->index.aIndexMmapSize;
-  csCaptureSavedRefsState(cs, &pSaved->refs);
-}
-
-static void csReleaseReplayState(
-  ChunkStore *cs,
-  ChunkStoreReplayState *pSaved
-){
-  if( cs->index.aIndex!=pSaved->aIndex ){
-    csReleaseIndexBuf(pSaved->aIndex, pSaved->aIndexMmapBase,
-                       pSaved->aIndexMmapSize);
-  }
-  csFreeSavedRefsState(&pSaved->refs);
-  memset(pSaved, 0, sizeof(*pSaved));
-}
-
-static void csRollbackReplayState(
-  ChunkStore *cs,
-  ChunkStoreReplayState *pSaved,
-  int nPendingBefore
-){
-  if( cs->index.aIndex!=pSaved->aIndex ){
-    csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
-  }
-  csRestoreReplayState(cs, pSaved);
-  cs->staging.nPending = nPendingBefore;
-  csPendHTClear(cs);
-}
-
-static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
-  sqlite3_free(pDst->staging.aRecent);
-  pDst->staging.aRecent = 0;
-  pDst->staging.nRecent = 0;
-  pDst->staging.nRecentAlloc = 0;
-  csRecentHTClear(pDst);
-
-  pDst->file.pFile = pSrc->file.pFile;
-  pDst->readOnly = pSrc->readOnly;
-  pDst->refs.refsHash = pSrc->refs.refsHash;
-  pDst->refs.committedRefsHash = pSrc->refs.committedRefsHash;
-  pDst->index.nChunks = pSrc->index.nChunks;
-  pDst->index.iIndexOffset = pSrc->index.iIndexOffset;
-  pDst->index.nIndexSize = pSrc->index.nIndexSize;
-  pDst->wal.iWalOffset = pSrc->wal.iWalOffset;
-  pDst->file.iFileSize = pSrc->file.iFileSize;
-  pDst->index.aIndex = pSrc->index.aIndex;
-  pDst->index.nIndex = pSrc->index.nIndex;
-  pDst->index.aIndexMmapBase = pSrc->index.aIndexMmapBase;
-  pDst->index.aIndexMmapSize = pSrc->index.aIndexMmapSize;
-  pDst->wal.nWalData = pSrc->wal.nWalData;
-  pDst->refs.aBranches = pSrc->refs.aBranches;
-  pDst->refs.nBranches = pSrc->refs.nBranches;
-  pDst->refs.zDefaultBranch = pSrc->refs.zDefaultBranch;
-  pDst->refs.aTags = pSrc->refs.aTags;
-  pDst->refs.nTags = pSrc->refs.nTags;
-  pDst->refs.aRemotes = pSrc->refs.aRemotes;
-  pDst->refs.nRemotes = pSrc->refs.nRemotes;
-  pDst->refs.aTracking = pSrc->refs.aTracking;
-  pDst->refs.nTracking = pSrc->refs.nTracking;
-
-  pSrc->file.pFile = 0;
-  pSrc->index.aIndex = 0;
-  pSrc->index.nIndex = 0;
-  pSrc->index.aIndexMmapBase = 0;
-  pSrc->index.aIndexMmapSize = 0;
-  pSrc->wal.nWalData = 0;
-  pSrc->refs.aBranches = 0;
-  pSrc->refs.nBranches = 0;
-  pSrc->refs.zDefaultBranch = 0;
-  pSrc->refs.aTags = 0;
-  pSrc->refs.nTags = 0;
-  pSrc->refs.aRemotes = 0;
-  pSrc->refs.nRemotes = 0;
-  pSrc->refs.aTracking = 0;
-  pSrc->refs.nTracking = 0;
-}
-
-static void csFreeReloadState(ChunkStoreReloadState *pSaved){
-  csCloseFile(pSaved->pFile);
-  csReleaseIndexBuf(pSaved->aIndex, pSaved->aIndexMmapBase,
-                     pSaved->aIndexMmapSize);
-  csFreeSavedRefsState(&pSaved->refs);
-  memset(pSaved, 0, sizeof(*pSaved));
-}
-static void csFreeRefsState(ChunkStore *cs){
+void csFreeRefsState(ChunkStore *cs){
   csFreeBranches(cs);
   csFreeTags(cs);
   csFreeRemotes(cs);
@@ -407,7 +261,7 @@ static void csFreeRefsState(ChunkStore *cs){
   cs->refs.zDefaultBranch = 0;
 }
 
-static int csEnsureDefaultBranch(ChunkStore *cs){
+int csEnsureDefaultBranch(ChunkStore *cs){
   if( !cs->refs.zDefaultBranch ){
     cs->refs.zDefaultBranch = sqlite3_mprintf("main");
     if( !cs->refs.zDefaultBranch ) return SQLITE_NOMEM;
@@ -508,7 +362,7 @@ static u32 csPendBucket(const ProllyHash *h, int nHTMask){
         | ((u32)h->data[2]<<16) | ((u32)h->data[3]<<24)) & (u32)nHTMask;
 }
 
-static void csPendHTClear(ChunkStore *cs){
+void csPendHTClear(ChunkStore *cs){
   sqlite3_free(cs->staging.aPendingHT);
   sqlite3_free(cs->staging.aPendingHTNext);
   cs->staging.aPendingHT = 0;
@@ -517,7 +371,7 @@ static void csPendHTClear(ChunkStore *cs){
   cs->staging.nPendingHTSize = 0;
 }
 
-static void csRecentHTClear(ChunkStore *cs){
+void csRecentHTClear(ChunkStore *cs){
   sqlite3_free(cs->staging.aRecentHT);
   sqlite3_free(cs->staging.aRecentHTNext);
   cs->staging.aRecentHT = 0;
@@ -716,7 +570,7 @@ static int csReadManifest(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-static int csGrowPending(ChunkStore *cs){
+int csGrowPending(ChunkStore *cs){
   if( cs->staging.nPending >= cs->staging.nPendingAlloc ){
     int nNew = cs->staging.nPendingAlloc ? cs->staging.nPendingAlloc * 2 : CS_INIT_PENDING_ALLOC;
     ChunkIndexEntry *aNew = (ChunkIndexEntry *)sqlite3_realloc(
@@ -764,162 +618,6 @@ static int csGrowWriteBuf(ChunkStore *cs, int nNeeded){
     cs->staging.nWriteBufAlloc = nNew;
   }
   return SQLITE_OK;
-}
-
-static int csReplayWal(ChunkStore *cs){
-  i64 walSize;
-  ChunkStoreReplayState saved;
-  i64 pos;
-  int nPendingBefore = cs->staging.nPending;
-  int nRootedPending = cs->staging.nPending;
-  int nRootRecordsSeen = 0;
-  ChunkStore tmpRefs;
-  int haveTmpRefs = 0;
-  int rc = SQLITE_OK;
-
-  memset(&tmpRefs, 0, sizeof(tmpRefs));
-
-  if( cs->wal.iWalOffset <= 0 || !cs->file.pFile ) return SQLITE_OK;
-
-  {
-    i64 fileSize = 0;
-    int rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
-    if( rc != SQLITE_OK ) return rc;
-    walSize = fileSize - cs->wal.iWalOffset;
-    cs->file.iFileSize = fileSize;
-  }
-  if( walSize <= 0 ){
-    if( cs->index.nIndex==0 && cs->index.nChunks==0
-     && !prollyHashIsEmpty(&cs->refs.refsHash) ){
-      memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
-    }
-    return SQLITE_OK;
-  }
-
-  csCaptureReplayState(cs, &saved);
-
-  cs->wal.nWalData = walSize;
-
-  pos = 0;
-  while( pos < walSize ){
-    u8 tag = 0;
-    rc = sqlite3OsRead(cs->file.pFile, &tag, 1, cs->wal.iWalOffset + pos);
-    if( rc != SQLITE_OK ) goto replay_error;
-    pos++;
-
-    if( tag == CS_WAL_TAG_CHUNK ){
-      u8 aHdr[24];
-      ProllyHash hash;
-      u32 len;
-      if( pos + 20 + 4 > walSize ){
-        break;
-      }
-      rc = sqlite3OsRead(cs->file.pFile, aHdr, sizeof(aHdr), cs->wal.iWalOffset + pos);
-      if( rc != SQLITE_OK ) goto replay_error;
-      memcpy(&hash, aHdr, 20);
-      len = CS_READ_U32(aHdr + 20);
-      pos += 24;
-      if( pos < 0 || len > (u32)0x7fffffff
-       || (u64)pos + len > (u64)walSize ){
-        break;
-      }
-
-      {
-        int existing = csSearchIndex(cs->index.aIndex, cs->index.nIndex, &hash);
-        ChunkIndexEntry *e = 0;
-        if( existing < 0 ){
-          rc = csGrowPending(cs);
-          if( rc != SQLITE_OK ) goto replay_error;
-          e = &cs->staging.aPending[cs->staging.nPending];
-          memcpy(&e->hash, &hash, sizeof(ProllyHash));
-          e->offset = cs->wal.iWalOffset + (i64)(pos - 4);
-          e->size = (int)len;
-          cs->staging.nPending++;
-        }
-      }
-      pos += len;
-
-    } else if( tag == CS_WAL_TAG_ROOT ){
-      u8 m[CHUNK_MANIFEST_SIZE];
-      if( pos + CHUNK_MANIFEST_SIZE > walSize ){
-        break;
-      }
-      {
-        u32 magic;
-        rc = sqlite3OsRead(cs->file.pFile, m, sizeof(m), cs->wal.iWalOffset + pos);
-        if( rc != SQLITE_OK ) goto replay_error;
-        magic = CS_READ_U32(m);
-        if( magic != CHUNK_STORE_MAGIC ){
-          break;
-        }
-
-        cs->index.nChunks = (int)CS_READ_U32(m + 28);
-
-        memcpy(cs->refs.refsHash.data, m + 104, PROLLY_HASH_SIZE);
-      }
-      pos += CHUNK_MANIFEST_SIZE;
-      nRootedPending = cs->staging.nPending;
-      nRootRecordsSeen++;
-
-    } else {
-      rc = SQLITE_CORRUPT;
-      goto replay_error;
-    }
-  }
-
-  cs->staging.nPending = nRootedPending;
-
-  if( nRootRecordsSeen == 0
-   && nPendingBefore == 0 && cs->index.nIndex == 0 ){
-    memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);
-    cs->index.nChunks = 0;
-  }
-
-  if( cs->staging.nPending > 0 ){
-    ChunkIndexEntry *aMerged = 0;
-    int nMerged = 0;
-    rc = csMergeIndex(cs, &aMerged, &nMerged);
-    if( rc != SQLITE_OK ) goto replay_error;
-    cs->index.aIndex = aMerged;
-    cs->index.nIndex = nMerged;
-    cs->index.aIndexMmapBase = 0;
-    cs->index.aIndexMmapSize = 0;
-    cs->staging.nPending = 0;
-    csPendHTClear(cs);
-  }
-
-  if( !prollyHashIsEmpty(&cs->refs.refsHash) ){
-    u8 *refsData = 0;
-    int nRefsData = 0;
-    int rc2 = chunkStoreGet(cs, &cs->refs.refsHash, &refsData, &nRefsData);
-    if( rc2==SQLITE_OK && refsData ){
-      rc2 = csReplaceRefsStateFromBlob(&tmpRefs, refsData, nRefsData, 0);
-      sqlite3_free(refsData);
-      if( rc2!=SQLITE_OK ){
-        rc = rc2;
-        goto replay_error;
-      }
-      haveTmpRefs = 1;
-    }else if( rc2!=SQLITE_OK ){
-      rc = rc2;
-      goto replay_error;
-    }
-  }
-  if( haveTmpRefs ){
-    csFreeRefsState(cs);
-    csAdoptRefsState(cs, &tmpRefs);
-    haveTmpRefs = 0;
-  }
-  rc = csEnsureDefaultBranch(cs);
-  if( rc!=SQLITE_OK ) goto replay_error;
-
-  csReleaseReplayState(cs, &saved);
-  return SQLITE_OK;
-
-replay_error:
-  if( haveTmpRefs ) csFreeRefsState(&tmpRefs);
-  csRollbackReplayState(cs, &saved, nPendingBefore);
-  return rc;
 }
 
 int chunkStoreOpen(
@@ -1602,7 +1300,7 @@ static int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData
   return csDeserializeRefs(pTmp, data, nData);
 }
 
-static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
+void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->refs.aBranches = pSrc->refs.aBranches;
   pDst->refs.nBranches = pSrc->refs.nBranches;
   pDst->refs.zDefaultBranch = pSrc->refs.zDefaultBranch;
@@ -1624,7 +1322,7 @@ static void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->refs.nTracking = 0;
 }
 
-static int csReplaceRefsStateFromBlob(
+int csReplaceRefsStateFromBlob(
   ChunkStore *cs,
   const u8 *data,
   int nData,

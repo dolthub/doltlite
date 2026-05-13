@@ -40,4 +40,9 @@ int chunkStagingRecentCount(const ChunkStaging *st);
 
 void chunkStagingResetAfterSweep(ChunkStaging *st);
 
+struct ChunkStore;
+int csGrowPending(struct ChunkStore *cs);
+void csPendHTClear(struct ChunkStore *cs);
+void csRecentHTClear(struct ChunkStore *cs);
+
 #endif
