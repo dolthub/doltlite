@@ -2368,7 +2368,7 @@ static SQLITE_INLINE ProllyMutMapEntry *orderedMutMapEntryAt(
   ProllyMutMap *pMap,
   int idx
 ){
-  if( pMap->keepSorted ){
+  if( pMap->keepSorted || !pMap->orderDirty ){
     return &pMap->aEntries[pMap->aOrder[idx]];
   }
   return prollyMutMapEntryAt(pMap, idx);
@@ -2511,7 +2511,6 @@ static void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
 static int ensureMutMap(BtCursor *pCur){
   int rc;
   struct TableEntry *pTE;
-  int keepSorted;
   ProllyMutMap *pMap;
 
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
@@ -2524,8 +2523,7 @@ static int ensureMutMap(BtCursor *pCur){
 
   pMap = sqlite3_malloc(sizeof(ProllyMutMap));
   if( !pMap ) return SQLITE_NOMEM;
-  keepSorted = tableEntryIsTableRoot(pCur->pBtree, pTE);
-  rc = prollyMutMapInitMode(pMap, pCur->curIntKey, (u8)keepSorted);
+  rc = prollyMutMapInitMode(pMap, pCur->curIntKey, 0);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pMap);
     return rc;
