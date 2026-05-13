@@ -18,6 +18,7 @@ GATING=(
   sql_transaction_test
   invariant_test
   three_way_diff_test
+  concurrent_stress_test
   multi_process_test
   oom_dolt_fault_test
   cross_branch_test
