@@ -6571,6 +6571,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
 
   u8 *pSavedDelKey = 0;
   int nSavedDelKey = 0;
+  int savedDelKeyOwned = 0;
   i64 savedIntKey = 0;
   int hasSavedKey = 0;
 
@@ -6604,13 +6605,18 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         hasSavedKey = 1;
       }
     } else {
-      if( pCur->mmActive
+      if( (flags & BTREE_AUXDELETE) && pCur->nSeekSortKey>0 ){
+        pSavedDelKey = pCur->pSeekSortKey;
+        nSavedDelKey = pCur->nSeekSortKey;
+        hasSavedKey = 1;
+      }else if( pCur->mmActive
        && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
         ProllyMutMapEntry *e = currentMutMapEntry(pCur);
         pSavedDelKey = sqlite3_malloc(e->nKey);
         if( !pSavedDelKey ) return SQLITE_NOMEM;
         memcpy(pSavedDelKey, e->pKey, e->nKey);
         nSavedDelKey = e->nKey;
+        savedDelKeyOwned = 1;
         hasSavedKey = 1;
       }else if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
         int nDelKeyField = 0;
@@ -6623,10 +6629,13 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
             nDelKeyField = (int)pCur->pKeyInfo->nKeyField;
           }
         }
-        rc = sortKeyFromRecordPrefixColl(pCur->pCachedPayload, pCur->nCachedPayload,
-                                          nDelKeyField, pCur->pKeyInfo,
-                                          &pSavedDelKey, &nSavedDelKey);
+        rc = sortKeyFromRecordPrefixCollBuffer(
+            pCur->pCachedPayload, pCur->nCachedPayload,
+            nDelKeyField, pCur->pKeyInfo,
+            &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc,
+            &nSavedDelKey);
         if( rc!=SQLITE_OK ) return rc;
+        pSavedDelKey = pCur->pSeekSortKey;
         hasSavedKey = 1;
       }else if( prollyCursorIsValid(&pCur->pCur) ){
         const u8 *pTmp; int nTmp;
@@ -6635,19 +6644,29 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         if( !pSavedDelKey ) return SQLITE_NOMEM;
         memcpy(pSavedDelKey, pTmp, nTmp);
         nSavedDelKey = nTmp;
+        savedDelKeyOwned = 1;
         hasSavedKey = 1;
       }
     }
   }
 
   rc = syncSavepoints(pCur);
-  if( rc!=SQLITE_OK ){ sqlite3_free(pSavedDelKey); return rc; }
+  if( rc!=SQLITE_OK ){
+    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
+    return rc;
+  }
 
   rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
-  if( rc!=SQLITE_OK ){ sqlite3_free(pSavedDelKey); return rc; }
+  if( rc!=SQLITE_OK ){
+    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
+    return rc;
+  }
 
   rc = ensureMutMap(pCur);
-  if( rc!=SQLITE_OK ){ sqlite3_free(pSavedDelKey); return rc; }
+  if( rc!=SQLITE_OK ){
+    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
+    return rc;
+  }
 
   if( pCur->curIntKey ){
     if( hasSavedKey ){
@@ -6660,7 +6679,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       nKey = nSavedDelKey;
     }
     rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
-    sqlite3_free(pSavedDelKey);
+    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
     pSavedDelKey = 0;
   }
 
