@@ -439,19 +439,13 @@ static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   }
 }
 
-static void cacheCurrentTreePayloadNonIntKey(BtCursor *pCur){
+static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
   const u8 *pVal; int nVal;
   cursorCurrentTreeValue(pCur, &pVal, &nVal);
   if( nVal > 0 ){
     pCur->pCachedPayload = (u8*)pVal;
     pCur->nCachedPayload = nVal;
     pCur->cachedPayloadOwned = 0;
-    return;
-  }
-  {
-    const u8 *pKey; int nKey;
-    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-    (void)cacheCursorPayloadReconstructed(pCur, pKey, nKey);
   }
 }
 
@@ -5360,7 +5354,7 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
         if( pCur->curIntKey ){
           cacheCurrentTreePayloadIfIntKey(pCur);
         }else{
-          cacheCurrentTreePayloadNonIntKey(pCur);
+          cacheCurrentTreeStoredPayloadNonIntKey(pCur);
         }
       } else {
         pCur->eState = CURSOR_INVALID;
@@ -5425,7 +5419,7 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
           if( pCur->curIntKey ){
             cacheCurrentTreePayloadIfIntKey(pCur);
           }else{
-            cacheCurrentTreePayloadNonIntKey(pCur);
+            cacheCurrentTreeStoredPayloadNonIntKey(pCur);
           }
         } else {
           pCur->eState = CURSOR_INVALID;
@@ -5999,7 +5993,7 @@ static int prollyBtCursorIndexMoveto(
     if( treeFound ){
       *pRes = treeCmp;
       pCur->eState = CURSOR_VALID;
-      cacheCurrentTreePayloadNonIntKey(pCur);
+      cacheCurrentTreeStoredPayloadNonIntKey(pCur);
       return SQLITE_OK;
     }
   }
@@ -6013,7 +6007,7 @@ no_match:
     if( lastRes==0 ){
       pCur->eState = CURSOR_VALID;
       *pRes = -1;
-      cacheCurrentTreePayloadNonIntKey(pCur);
+      cacheCurrentTreeStoredPayloadNonIntKey(pCur);
     } else {
       pCur->eState = CURSOR_INVALID;
       *pRes = -1;
