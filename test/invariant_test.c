@@ -457,8 +457,9 @@ static void test_sequential_commits(void){
     checkCleanStatus(db, ctx);
   }
 
-  /* Verify log has 11 commits (create + 10 sequential) */
-  check("seq_log_count", queryScalarInt(db, "SELECT count(*) FROM dolt_log")==11);
+  /* Verify log has 12 commits: 1 init (auto, "Initialize data repository")
+  ** + 1 create-table commit + 10 sequential loop commits. */
+  check("seq_log_count", queryScalarInt(db, "SELECT count(*) FROM dolt_log")==12);
 
   sqlite3_close(db);
   removeDb(dbpath);
@@ -526,7 +527,8 @@ static void test_gc(void){
   checkCleanStatus(db, "after_gc");
 
   check("gc_data_intact", queryScalarInt(db, "SELECT count(*) FROM t1")==3);
-  check("gc_log_intact", queryScalarInt(db, "SELECT count(*) FROM dolt_log")==3);
+  /* 4 = 1 auto-init commit + 3 user commits (c1, c2, c3). */
+  check("gc_log_intact", queryScalarInt(db, "SELECT count(*) FROM dolt_log")==4);
 
   sqlite3_close(db);
   removeDb(dbpath);
@@ -896,8 +898,9 @@ static void test_reset_to_hash(void){
   execSql(db, "INSERT INTO t1 VALUES(3, 'v3')");
   queryScalarText(db, "SELECT dolt_commit('-A', '-m', 'c3')");
 
+  /* 4 = 1 auto-init commit + 3 user commits (c1, c2, c3). */
   check("before_reset_3_commits",
-    queryScalarInt(db, "SELECT count(*) FROM dolt_log")==3);
+    queryScalarInt(db, "SELECT count(*) FROM dolt_log")==4);
 
   /* Reset to first commit */
   {
