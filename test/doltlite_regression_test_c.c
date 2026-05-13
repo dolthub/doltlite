@@ -1348,55 +1348,55 @@ static void run_commit_am_many_tables(void){
 
   printf("=== Commit -am Many Tables Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_commit_am_many_tables");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_commit_am_many_tables", open_db(dbpath, &db)==SQLITE_OK);
-  check("begin_commit_am_many_tables_setup", execsql(db, "BEGIN;")==SQLITE_OK);
+  check("begin_commit_am_many_tables_setup", execSql(db, "BEGIN;")==SQLITE_OK);
   for(i=1; i<=100; i++){
     sqlite3_snprintf(sizeof(sql), sql,
       "CREATE TABLE t%03d(id INTEGER PRIMARY KEY, v INT);"
       "INSERT INTO t%03d VALUES(1,0);", i, i);
-    check("create_table_for_commit_am_many_tables", execsql(db, sql)==SQLITE_OK);
+    check("create_table_for_commit_am_many_tables", execSql(db, sql)==SQLITE_OK);
   }
-  check("seed_commit_am_many_tables", execsql(db,
+  check("seed_commit_am_many_tables", execSql(db,
     "COMMIT;"
     "SELECT dolt_commit('-A', '-m', 'seed');")==SQLITE_OK);
 
   for(i=1; i<=80; i++){
     sqlite3_snprintf(sizeof(sql), sql,
       "UPDATE t%03d SET v=%d WHERE id=1;", i, i);
-    check("update_table_for_commit_am_many_tables", execsql(db, sql)==SQLITE_OK);
+    check("update_table_for_commit_am_many_tables", execSql(db, sql)==SQLITE_OK);
   }
   for(i=81; i<=90; i++){
     sqlite3_snprintf(sizeof(sql), sql, "DROP TABLE t%03d;", i);
-    check("drop_table_for_commit_am_many_tables", execsql(db, sql)==SQLITE_OK);
+    check("drop_table_for_commit_am_many_tables", execSql(db, sql)==SQLITE_OK);
   }
   for(i=1; i<=10; i++){
     sqlite3_snprintf(sizeof(sql), sql,
       "CREATE TABLE n%03d(id INTEGER PRIMARY KEY);"
       "INSERT INTO n%03d VALUES(1);", i, i);
     check("create_untracked_table_for_commit_am_many_tables",
-          execsql(db, sql)==SQLITE_OK);
+          execSql(db, sql)==SQLITE_OK);
   }
 
-  res = exec1(db, "SELECT dolt_commit('-am', 'tracked changes');");
+  res = queryScalarText(db, "SELECT dolt_commit('-am', 'tracked changes');");
   check("commit_am_many_tables_returns_hash", strlen(res)==40);
   check("commit_am_many_tables_log_message",
-        strcmp(exec1(db, "SELECT message FROM dolt_log LIMIT 1;"),
+        strcmp(queryScalarText(db, "SELECT message FROM dolt_log LIMIT 1;"),
                "tracked changes")==0);
   check("commit_am_many_tables_updated_tracked_value",
-        strcmp(exec1(db, "SELECT v FROM t080;"), "80")==0);
+        strcmp(queryScalarText(db, "SELECT v FROM t080;"), "80")==0);
   check("commit_am_many_tables_dropped_tracked_absent",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM sqlite_master WHERE type='table' "
           "AND name='t090';"), "0")==0);
   check("commit_am_many_tables_new_tables_left_unstaged",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_status "
           "WHERE staged=0 AND status='new table';"), "10")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_blame_all_parents_merge_base(void){
@@ -1515,19 +1515,19 @@ static void run_blame_deep_history_scan(void){
 
   printf("=== Blame Deep History Scan Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_blame_deep_history_scan");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_blame_deep_history_scan", open_db(dbpath, &db)==SQLITE_OK);
-  check("create_table_for_blame_deep_history_scan", execsql(db,
+  check("create_table_for_blame_deep_history_scan", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
     "BEGIN;")==SQLITE_OK);
   for(i=1; i<=100; i++){
     sqlite3_snprintf(sizeof(sql), sql,
       "INSERT INTO t VALUES(%d,0);", i);
     check("insert_row_for_blame_deep_history_scan",
-          execsql(db, sql)==SQLITE_OK);
+          execSql(db, sql)==SQLITE_OK);
   }
-  check("commit_initial_rows_for_blame_deep_history_scan", execsql(db,
+  check("commit_initial_rows_for_blame_deep_history_scan", execSql(db,
     "COMMIT;"
     "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
 
@@ -1536,20 +1536,20 @@ static void run_blame_deep_history_scan(void){
       "UPDATE t SET v=%d WHERE id=%d;"
       "SELECT dolt_commit('-A', '-m', 'c%d');", i, i, i);
     check("commit_update_for_blame_deep_history_scan",
-          execsql(db, sql)==SQLITE_OK);
+          execSql(db, sql)==SQLITE_OK);
   }
 
   check("blame_deep_history_row_count",
-        strcmp(exec1(db, "SELECT count(*) FROM dolt_blame_t;"), "100")==0);
+        strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_blame_t;"), "100")==0);
   check("blame_deep_history_updated_row",
-        strcmp(exec1(db, "SELECT message FROM dolt_blame_t WHERE id=80;"),
+        strcmp(queryScalarText(db, "SELECT message FROM dolt_blame_t WHERE id=80;"),
                "c80")==0);
   check("blame_deep_history_unchanged_row",
-        strcmp(exec1(db, "SELECT message FROM dolt_blame_t WHERE id=100;"),
+        strcmp(queryScalarText(db, "SELECT message FROM dolt_blame_t WHERE id=100;"),
                "init")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_merge_persist_failure(void){
@@ -2800,11 +2800,11 @@ static void run_diff_table_deep_history_map(void){
 
   printf("=== Diff Table Deep History Map Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_diff_table_deep_history_map");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_diff_table_deep_history_map",
         open_db(dbpath, &db)==SQLITE_OK);
-  check("setup_diff_table_deep_history_map", execsql(db,
+  check("setup_diff_table_deep_history_map", execSql(db,
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
     "INSERT INTO t VALUES(1,0);"
     "SELECT dolt_commit('-A', '-m', 'c0');")==SQLITE_OK);
@@ -2813,22 +2813,22 @@ static void run_diff_table_deep_history_map(void){
     sqlite3_snprintf(sizeof(sql), sql,
       "UPDATE t SET v=%d WHERE id=1;"
       "SELECT dolt_commit('-A', '-m', 'c%d');", i, i);
-    check("diff_table_deep_history_commit", execsql(db, sql)==SQLITE_OK);
+    check("diff_table_deep_history_commit", execSql(db, sql)==SQLITE_OK);
   }
 
   check("diff_table_deep_history_count",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';"),
           "80")==0);
   check("diff_table_deep_history_latest_value",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT to_v FROM dolt_diff_t "
           "WHERE to_commit=(SELECT commit_hash FROM dolt_log "
           "                 WHERE message='c80');"),
           "80")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_diff_stat_surfaces_corrupt_root(void){
