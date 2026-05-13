@@ -2017,7 +2017,7 @@ int chunkStoreGet(
     memcpy(pCopy, cs->pWriteBuf + off + 4, sz);
     *ppData = pCopy;
     *pnData = sz;
-    goto verify;
+    return SQLITE_OK;
   }
 
   {
@@ -2042,7 +2042,7 @@ int chunkStoreGet(
         memcpy(pCopy, cs->pWriteBuf + e->offset + 4, e->size);
         *ppData = pCopy;
         *pnData = e->size;
-        goto verify;
+        return SQLITE_OK;
       }
       return SQLITE_CORRUPT;
     }
