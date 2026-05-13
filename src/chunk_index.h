@@ -49,4 +49,10 @@ i64 chunkIndexSize(const ChunkIndex *idx);
 void chunkIndexSetMetadata(ChunkIndex *idx, int nChunks, i64 iOffset, i64 nSize);
 void chunkIndexReplaceEntries(ChunkIndex *idx, ChunkIndexEntry *aNew, int nNew);
 
+struct ChunkStore;
+int csReadIndex(struct ChunkStore *cs);
+int csSearchIndex(const ChunkIndexEntry *aIdx, int nIdx, const ProllyHash *pHash);
+int csMergeIndex(struct ChunkStore *cs, ChunkIndexEntry **ppMerged, int *pnMerged);
+void csReleaseIndexBuf(ChunkIndexEntry *aIndex, void *mmapBase, i64 mmapSize);
+
 #endif
