@@ -127,6 +127,16 @@ jobs:
           libdoltlite.a -lz -lpthread -lm
         ./prepared_stmt_reuse_test
 
+    # Wires the 8 previously-orphan C tests (concurrent_stress_test,
+    # invariant_test, corruption_test, cross_branch_test,
+    # multi_process_test, ancestor_test, three_way_diff_test,
+    # sql_transaction_test) into CI. The runner script splits them into
+    # GATING (must pass) and EXPECTED_FAIL (preexisting failures still
+    # surfaced but not blocking until the underlying bugs are fixed).
+    - name: Orphan C tests
+      run: cd build && make c-tests
+      timeout-minutes: 15
+
     - name: Python integration test
       run: cd build && LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
 
