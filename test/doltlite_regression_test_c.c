@@ -3205,6 +3205,75 @@ static void run_wal_offset_corruption_is_rejected(void){
   removeDbFiles(dbpath);
 }
 
+static void run_wal_mid_corruption_rejected(void){
+  sqlite3 *db = 0;
+  ChunkStore cs;
+  char dbpath[256];
+  i64 walOff = -1;
+  i64 walSize = -1;
+  i64 magicPos = -1;
+  u8 *walBuf = 0;
+  int rc;
+
+  printf("=== WAL Mid-Corruption Rejected Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_wal_mid_corruption_rejected");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_wal_mid", open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_repo_for_wal_mid", execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a');"
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "INSERT INTO t VALUES(2,'b');"
+    "SELECT dolt_commit('-A', '-m', 'second');"
+    "INSERT INTO t VALUES(3,'c');"
+    "SELECT dolt_commit('-A', '-m', 'third');")==SQLITE_OK);
+  sqlite3_close(db);
+
+  check("open_store_for_wal_mid", chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
+  walOff = walStateGetOffset(&cs.wal);
+  walSize = walStateGetDataSize(&cs.wal);
+  check("have_wal_for_mid_corruption", walSize > 256);
+
+  if( walSize > 0 ){
+    walBuf = (u8 *)sqlite3_malloc((int)walSize);
+    check("alloc_wal_buf", walBuf != 0);
+    if( walBuf ){
+      check("read_wal_buf",
+            sqlite3OsRead(cs.file.pFile, walBuf, (int)walSize, walOff)==SQLITE_OK);
+      {
+        i64 p;
+        for(p=0; p+4 <= walSize; p++){
+          u32 v = (u32)walBuf[p]
+                | ((u32)walBuf[p+1]<<8)
+                | ((u32)walBuf[p+2]<<16)
+                | ((u32)walBuf[p+3]<<24);
+          if( v == CHUNK_STORE_MAGIC ){
+            magicPos = p;
+            break;
+          }
+        }
+      }
+      sqlite3_free(walBuf);
+    }
+  }
+  check("found_root_magic_in_wal", magicPos >= 0 && magicPos < walSize - 8);
+
+  if( magicPos >= 0 ){
+    u8 badMagic[4] = {0xde, 0xad, 0xbe, 0xef};
+    check("corrupt_root_magic",
+          sqlite3OsWrite(cs.file.pFile, badMagic, 4, walOff + magicPos)==SQLITE_OK);
+  }
+  chunkStoreClose(&cs);
+
+  rc = chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
+          SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB);
+  check("chunk_store_open_rejects_mid_wal_corruption", rc==SQLITE_CORRUPT);
+
+  removeDbFiles(dbpath);
+}
+
 static void run_integrity_check_walks_prolly_nodes(void){
   sqlite3 *db = 0;
   sqlite3 *db2 = 0;
@@ -6761,6 +6830,7 @@ static const RegressionCase aCases[] = {
   { "truncated_wal_rejected", "Truncated WAL Rejected Test", run_truncated_wal_is_rejected },
   { "refresh_open_path_transactional", "Refresh Open Path Transactional Test", run_refresh_open_path_transactional },
   { "wal_offset_corruption", "WAL Offset Corruption Test", run_wal_offset_corruption_is_rejected },
+  { "wal_mid_corruption_rejected", "WAL Mid-Corruption Rejected Test", run_wal_mid_corruption_rejected },
   { "integrity_check_walks_nodes", "Integrity Check Walks Prolly Nodes Test", run_integrity_check_walks_prolly_nodes },
   { "memory_chunk_lookup_corruption", "Memory Chunk Lookup Corruption Test", run_memory_chunk_lookup_corruption },
   { "prolly_diff_record_corruption", "Prolly Diff Record Corruption Test", run_prolly_diff_record_corruption },

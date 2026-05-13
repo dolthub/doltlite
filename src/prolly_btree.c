@@ -4364,14 +4364,25 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
 
   if( p->inTrans==TRANS_WRITE ){
     rc = flushAllPending(p, pBt, 0);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      chunkStoreRollback(&pBt->store);
+      chunkStoreUnlock(&pBt->store);
+      pBt->store.snapshotPinned = 0;
+      return rc;
+    }
 
     {
       rc = serializeCatalog(p, &catData, &nCatData);
       if( rc==SQLITE_OK ){
         rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
       }
-      if( rc!=SQLITE_OK ) return rc;
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(catData);
+        chunkStoreRollback(&pBt->store);
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc;
+      }
 
       {
         const char *zBr = p->zBranch ? p->zBranch : "main";
@@ -4386,9 +4397,21 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
                                       p->zRebaseOrigBranch,
                                       p->zRebaseReturnBranch,
                                       &p->constraintViolationsHash);
-        if( rc!=SQLITE_OK ) return rc;
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(catData);
+          chunkStoreRollback(&pBt->store);
+          chunkStoreUnlock(&pBt->store);
+          pBt->store.snapshotPinned = 0;
+          return rc;
+        }
         rc = chunkStoreSerializeRefs(&pBt->store);
-        if( rc!=SQLITE_OK ) return rc;
+        if( rc!=SQLITE_OK ){
+          sqlite3_free(catData);
+          chunkStoreRollback(&pBt->store);
+          chunkStoreUnlock(&pBt->store);
+          pBt->store.snapshotPinned = 0;
+          return rc;
+        }
       }
     }
 

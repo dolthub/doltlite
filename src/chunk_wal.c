@@ -195,6 +195,10 @@ int csReplayWal(ChunkStore *cs){
       ProllyHash hash;
       u32 len;
       if( pos + 20 + 4 > walSize ){
+        sqlite3_log(SQLITE_NOTICE,
+          "doltlite: WAL chunk header truncated at offset %lld; "
+          "stopping replay at last commit boundary",
+          (long long)(cs->wal.iWalOffset + pos - 1));
         break;
       }
       rc = sqlite3OsRead(cs->file.pFile, aHdr, sizeof(aHdr), cs->wal.iWalOffset + pos);
@@ -204,6 +208,10 @@ int csReplayWal(ChunkStore *cs){
       pos += 24;
       if( pos < 0 || len > (u32)0x7fffffff
        || (u64)pos + len > (u64)walSize ){
+        sqlite3_log(SQLITE_NOTICE,
+          "doltlite: WAL chunk body truncated at offset %lld (declared len=%u); "
+          "stopping replay at last commit boundary",
+          (long long)(cs->wal.iWalOffset + pos - 24 - 1), (unsigned)len);
         break;
       }
 
@@ -225,6 +233,10 @@ int csReplayWal(ChunkStore *cs){
     } else if( tag == CS_WAL_TAG_ROOT ){
       u8 m[CHUNK_MANIFEST_SIZE];
       if( pos + CHUNK_MANIFEST_SIZE > walSize ){
+        sqlite3_log(SQLITE_NOTICE,
+          "doltlite: WAL root manifest truncated at offset %lld; "
+          "stopping replay at last commit boundary",
+          (long long)(cs->wal.iWalOffset + pos - 1));
         break;
       }
       {
@@ -233,6 +245,14 @@ int csReplayWal(ChunkStore *cs){
         if( rc != SQLITE_OK ) goto replay_error;
         magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
+          if( pos + CHUNK_MANIFEST_SIZE < walSize ){
+            rc = SQLITE_CORRUPT;
+            goto replay_error;
+          }
+          sqlite3_log(SQLITE_NOTICE,
+            "doltlite: WAL root manifest at tail offset %lld has bad magic; "
+            "stopping replay at last commit boundary",
+            (long long)(cs->wal.iWalOffset + pos - 1));
           break;
         }
 
