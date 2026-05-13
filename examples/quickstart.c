@@ -16,7 +16,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "sqlite3.h"
+#include "doltlite.h"
 
 /* Print a result set with column headers */
 static int callback(void *label, int argc, char **argv, char **azColName){

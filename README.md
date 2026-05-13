@@ -125,9 +125,10 @@ make -C ext/wasm dist
 
 ## Using as a C Library
 
-Doltlite is designed as a drop-in replacement for SQLite. It uses the same
-`sqlite3.h` header and `sqlite3_*` API, so existing C programs work without
-code changes — just link against `libdoltlite` instead of `libsqlite3` to get
+Doltlite is designed as a drop-in replacement for SQLite. New code should
+include `doltlite.h` and call the `sqlite3_*` API; the build also installs
+`sqlite3.h` as a back-compat alias so existing C programs work without code
+changes — just link against `libdoltlite` instead of `libsqlite3` to get
 version control. The build produces `libdoltlite.a` (static) and
 `libdoltlite.dylib`/`.so` (shared) with the full prolly tree engine and all
 Dolt functions included.
