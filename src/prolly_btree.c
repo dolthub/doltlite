@@ -3341,7 +3341,7 @@ int sqlite3BtreeOpen(
     return rc;
   }
 
-  pBt->pPagerShim = pagerShimCreate(pVfs, zFilename, pBt->store.pFile);
+  pBt->pPagerShim = pagerShimCreate(pVfs, zFilename, chunkFileGetHandle(&pBt->store.file));
   if( !pBt->pPagerShim ){
     prollyCacheFree(&pBt->cache);
     chunkStoreClose(&pBt->store);

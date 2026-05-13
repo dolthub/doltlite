@@ -335,8 +335,8 @@ static int gcRewriteFile(
 
   csSerializeManifest(&manifestCs, manifest);
 
-  if( cs->zFilename && strcmp(cs->zFilename, ":memory:")!=0 ){
-    char *zTmp = sqlite3_mprintf("%s-gc-tmp", cs->zFilename);
+  if( chunkFileGetFilename(&cs->file) && strcmp(chunkFileGetFilename(&cs->file), ":memory:")!=0 ){
+    char *zTmp = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
     if( !zTmp ){
       sqlite3_free(indexBuf);
       return SQLITE_NOMEM;
@@ -348,9 +348,9 @@ static int gcRewriteFile(
                    | SQLITE_OPEN_MAIN_DB;
       i64 writeOff = 0;
 
-      cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
+      chunkFileGetVfs(&cs->file)->xDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
 
-      rc = sqlite3OsOpenMalloc(cs->pVfs, zTmp, &pTmpFile, tmpFlags, 0);
+      rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zTmp, &pTmpFile, tmpFlags, 0);
       if( rc != SQLITE_OK ){
         sqlite3_free(zTmp); sqlite3_free(indexBuf);
         return SQLITE_CANTOPEN;
@@ -393,17 +393,17 @@ static int gcRewriteFile(
       sqlite3OsCloseFree(pTmpFile);
 
       if( rc==SQLITE_OK ){
-        sqlite3_file *pOldFile = cs->pFile;
+        sqlite3_file *pOldFile = chunkFileGetHandle(&cs->file);
         sqlite3_file *pNewFile = 0;
 
         GC_CRASH_CHECK();
-        if( rename(zTmp, cs->zFilename)!=0 ){
+        if( rename(zTmp, chunkFileGetFilename(&cs->file))!=0 ){
           rc = SQLITE_IOERR;
         }
 
 #if !defined(_WIN32) && !defined(WIN32)
         if( rc==SQLITE_OK ){
-          char *zDir = sqlite3_mprintf("%s", cs->zFilename);
+          char *zDir = sqlite3_mprintf("%s", chunkFileGetFilename(&cs->file));
           if( zDir ){
             int k = (int)strlen(zDir);
             while( k>0 && zDir[k-1]!='/' ) k--;
@@ -426,7 +426,7 @@ static int gcRewriteFile(
           int reopenAttempt;
           for(reopenAttempt=0; reopenAttempt<3; reopenAttempt++){
             pNewFile = 0;
-            rc = sqlite3OsOpenMalloc(cs->pVfs, cs->zFilename, &pNewFile,
+            rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), chunkFileGetFilename(&cs->file), &pNewFile,
                                      reopenFlags, 0);
             if( rc==SQLITE_OK ) break;
             if( pNewFile ){
@@ -437,14 +437,14 @@ static int gcRewriteFile(
         }
 
         if( rc==SQLITE_OK ){
-          cs->pFile = pNewFile;
+          chunkFileSetHandle(&cs->file, pNewFile);
           walStateSetDataSize(&cs->wal, 0);
           if( pOldFile ){
             sqlite3OsCloseFree(pOldFile);
           }
         }
       }else{
-        cs->pVfs->xDelete(cs->pVfs, zTmp, 0);
+        chunkFileGetVfs(&cs->file)->xDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
       }
     }
     sqlite3_free(zTmp);
@@ -551,7 +551,7 @@ static void doltliteGcFunc(
     return;
   }
 
-  if( !cs->zFilename || strcmp(cs->zFilename, ":memory:")==0 ){
+  if( !chunkFileGetFilename(&cs->file) || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
     sqlite3_result_text(context, "0 chunks removed, 0 chunks kept (in-memory)", -1, SQLITE_TRANSIENT);
     return;
   }
@@ -603,7 +603,7 @@ int doltliteGcCompact(sqlite3 *db){
   int rc;
 
   if( !cs ) return SQLITE_OK;
-  if( !cs->zFilename || strcmp(cs->zFilename, ":memory:")==0 ){
+  if( !chunkFileGetFilename(&cs->file) || strcmp(chunkFileGetFilename(&cs->file), ":memory:")==0 ){
     return SQLITE_OK;
   }
 

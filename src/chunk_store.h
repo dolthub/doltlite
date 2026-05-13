@@ -9,6 +9,7 @@
 #include "chunk_refs.h"
 #include "chunk_index.h"
 #include "chunk_staging.h"
+#include "chunk_file.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443
 #define CHUNK_STORE_VERSION 11
@@ -88,15 +89,10 @@ struct ConflictEntry {
 #endif
 
 struct ChunkStore {
-  char *zFilename;
-  sqlite3_file *pFile;
-  sqlite3_vfs *pVfs;
+  ChunkFile file;
   RefsTable refs;
-
   ChunkIndex index;
   WalState wal;
-  i64 iFileSize;
-
   ChunkStaging staging;
 
   u8 readOnly;

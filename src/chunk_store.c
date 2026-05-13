@@ -421,7 +421,7 @@ static void csRestoreReplayState(ChunkStore *cs, const ChunkStoreReplayState *pS
 
 static void csCaptureReloadState(ChunkStore *cs, ChunkStoreReloadState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
-  pSaved->pFile = cs->pFile;
+  pSaved->pFile = cs->file.pFile;
   pSaved->aIndex = cs->index.aIndex;
   pSaved->aIndexMmapBase = cs->index.aIndexMmapBase;
   pSaved->aIndexMmapSize = cs->index.aIndexMmapSize;
@@ -460,7 +460,7 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->staging.nRecentAlloc = 0;
   csRecentHTClear(pDst);
 
-  pDst->pFile = pSrc->pFile;
+  pDst->file.pFile = pSrc->file.pFile;
   pDst->readOnly = pSrc->readOnly;
   pDst->refs.refsHash = pSrc->refs.refsHash;
   pDst->refs.committedRefsHash = pSrc->refs.committedRefsHash;
@@ -468,7 +468,7 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->index.iIndexOffset = pSrc->index.iIndexOffset;
   pDst->index.nIndexSize = pSrc->index.nIndexSize;
   pDst->wal.iWalOffset = pSrc->wal.iWalOffset;
-  pDst->iFileSize = pSrc->iFileSize;
+  pDst->file.iFileSize = pSrc->file.iFileSize;
   pDst->index.aIndex = pSrc->index.aIndex;
   pDst->index.nIndex = pSrc->index.nIndex;
   pDst->index.aIndexMmapBase = pSrc->index.aIndexMmapBase;
@@ -484,7 +484,7 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->refs.aTracking = pSrc->refs.aTracking;
   pDst->refs.nTracking = pSrc->refs.nTracking;
 
-  pSrc->pFile = 0;
+  pSrc->file.pFile = 0;
   pSrc->index.aIndex = 0;
   pSrc->index.nIndex = 0;
   pSrc->index.aIndexMmapBase = 0;
@@ -550,29 +550,29 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   sqlite3_int64 sizeNow = -1;
   int rc = SQLITE_OK;
 
-  if( !cs->pFile ) return SQLITE_IOERR;
+  if( !cs->file.pFile ) return SQLITE_IOERR;
 
-  rc = sqlite3OsTruncate(cs->pFile, origFileSize);
+  rc = sqlite3OsTruncate(cs->file.pFile, origFileSize);
   if( rc==SQLITE_OK ){
-    rc = sqlite3OsFileSize(cs->pFile, &sizeNow);
+    rc = sqlite3OsFileSize(cs->file.pFile, &sizeNow);
   }
   if( rc==SQLITE_OK && sizeNow==origFileSize ){
-    (void)sqlite3OsSync(cs->pFile, SQLITE_SYNC_NORMAL);
+    (void)sqlite3OsSync(cs->file.pFile, SQLITE_SYNC_NORMAL);
     return SQLITE_OK;
   }
 
-  csCloseFile(cs->pFile);
-  cs->pFile = 0;
-  rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile,
+  csCloseFile(cs->file.pFile);
+  cs->file.pFile = 0;
+  rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile,
                   SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = sqlite3OsTruncate(cs->pFile, origFileSize);
+  rc = sqlite3OsTruncate(cs->file.pFile, origFileSize);
   if( rc==SQLITE_OK ){
-    rc = sqlite3OsFileSize(cs->pFile, &sizeNow);
+    rc = sqlite3OsFileSize(cs->file.pFile, &sizeNow);
   }
   if( rc==SQLITE_OK && sizeNow==origFileSize ){
-    (void)sqlite3OsSync(cs->pFile, SQLITE_SYNC_NORMAL);
+    (void)sqlite3OsSync(cs->file.pFile, SQLITE_SYNC_NORMAL);
     return SQLITE_OK;
   }
   return rc==SQLITE_OK ? SQLITE_IOERR_TRUNCATE : rc;
@@ -836,7 +836,7 @@ static int csReadManifest(ChunkStore *cs){
   u32 magic, version;
   int rc;
 
-  rc = sqlite3OsRead(cs->pFile, aBuf, CHUNK_MANIFEST_SIZE, 0);
+  rc = sqlite3OsRead(cs->file.pFile, aBuf, CHUNK_MANIFEST_SIZE, 0);
   if( rc != SQLITE_OK ) return rc;
 
   magic = CS_READ_U32(aBuf + 0);
@@ -893,12 +893,12 @@ static int csReadIndex(ChunkStore *cs){
   if( cs->index.iIndexOffset < 0 || cs->index.nIndexSize < 0 ){
     return SQLITE_CORRUPT;
   }
-  if( cs->pFile ){
-    rc = sqlite3OsFileSize(cs->pFile, &fileSize);
+  if( cs->file.pFile ){
+    rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
     if( rc != SQLITE_OK ) return rc;
-  }else if( cs->zFilename ){
+  }else if( cs->file.zFilename ){
     struct stat st;
-    if( stat(cs->zFilename, &st) != 0 ) return SQLITE_IOERR;
+    if( stat(cs->file.zFilename, &st) != 0 ) return SQLITE_IOERR;
     fileSize = (i64)st.st_size;
   }
   if( fileSize > 0
@@ -907,8 +907,8 @@ static int csReadIndex(ChunkStore *cs){
     return SQLITE_CORRUPT;
   }
 
-  if( cs->zFilename
-   && csMapIndex(cs->zFilename, cs->index.iIndexOffset, cs->index.nIndexSize,
+  if( cs->file.zFilename
+   && csMapIndex(cs->file.zFilename, cs->index.iIndexOffset, cs->index.nIndexSize,
                   &pMapBase, &nMapSize, &pMapData) == SQLITE_OK ){
     cs->index.aIndex = (ChunkIndexEntry *)pMapData;
     cs->index.nIndex = nEntries;
@@ -933,7 +933,7 @@ static int csReadIndex(ChunkStore *cs){
     return SQLITE_NOMEM;
   }
 
-  rc = sqlite3OsRead(cs->pFile, aBuf, cs->index.nIndexSize, cs->index.iIndexOffset);
+  rc = sqlite3OsRead(cs->file.pFile, aBuf, cs->index.nIndexSize, cs->index.iIndexOffset);
   if( rc != SQLITE_OK ){
     sqlite3_free(aBuf);
     sqlite3_free(cs->index.aIndex);
@@ -1021,14 +1021,14 @@ static int csReplayWal(ChunkStore *cs){
 
   memset(&tmpRefs, 0, sizeof(tmpRefs));
 
-  if( cs->wal.iWalOffset <= 0 || !cs->pFile ) return SQLITE_OK;
+  if( cs->wal.iWalOffset <= 0 || !cs->file.pFile ) return SQLITE_OK;
 
   {
     i64 fileSize = 0;
-    int rc = sqlite3OsFileSize(cs->pFile, &fileSize);
+    int rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
     if( rc != SQLITE_OK ) return rc;
     walSize = fileSize - cs->wal.iWalOffset;
-    cs->iFileSize = fileSize;
+    cs->file.iFileSize = fileSize;
   }
   if( walSize <= 0 ){
     if( cs->index.nIndex==0 && cs->index.nChunks==0
@@ -1045,7 +1045,7 @@ static int csReplayWal(ChunkStore *cs){
   pos = 0;
   while( pos < walSize ){
     u8 tag = 0;
-    rc = sqlite3OsRead(cs->pFile, &tag, 1, cs->wal.iWalOffset + pos);
+    rc = sqlite3OsRead(cs->file.pFile, &tag, 1, cs->wal.iWalOffset + pos);
     if( rc != SQLITE_OK ) goto replay_error;
     pos++;
 
@@ -1056,7 +1056,7 @@ static int csReplayWal(ChunkStore *cs){
       if( pos + 20 + 4 > walSize ){
         break;
       }
-      rc = sqlite3OsRead(cs->pFile, aHdr, sizeof(aHdr), cs->wal.iWalOffset + pos);
+      rc = sqlite3OsRead(cs->file.pFile, aHdr, sizeof(aHdr), cs->wal.iWalOffset + pos);
       if( rc != SQLITE_OK ) goto replay_error;
       memcpy(&hash, aHdr, 20);
       len = CS_READ_U32(aHdr + 20);
@@ -1088,7 +1088,7 @@ static int csReplayWal(ChunkStore *cs){
       }
       {
         u32 magic;
-        rc = sqlite3OsRead(cs->pFile, m, sizeof(m), cs->wal.iWalOffset + pos);
+        rc = sqlite3OsRead(cs->file.pFile, m, sizeof(m), cs->wal.iWalOffset + pos);
         if( rc != SQLITE_OK ) goto replay_error;
         magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
@@ -1276,50 +1276,50 @@ int chunkStoreOpen(
   int n;
 
   memset(cs, 0, sizeof(*cs));
-  cs->pVfs = pVfs;
+  cs->file.pVfs = pVfs;
   cs->graphLockFd = -1;
 
   if( zFilename==0 || zFilename[0]=='\0'
    || strcmp(zFilename, ":memory:")==0 ){
     cs->isMemory = 1;
-    cs->zFilename = sqlite3_mprintf(":memory:");
-    if( cs->zFilename==0 ) return SQLITE_NOMEM;
+    cs->file.zFilename = sqlite3_mprintf(":memory:");
+    if( cs->file.zFilename==0 ) return SQLITE_NOMEM;
     cs->index.nChunks = 0;
     cs->index.iIndexOffset = 0;
     cs->index.nIndexSize = 0;
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
-    cs->pFile = 0;
+    cs->file.pFile = 0;
     return SQLITE_OK;
   }
 
   n = (int)strlen(zFilename);
-  cs->zFilename = (char *)sqlite3_malloc(n + 1);
-  if( cs->zFilename == 0 ) return SQLITE_NOMEM;
-  memcpy(cs->zFilename, zFilename, n + 1);
+  cs->file.zFilename = (char *)sqlite3_malloc(n + 1);
+  if( cs->file.zFilename == 0 ) return SQLITE_NOMEM;
+  memcpy(cs->file.zFilename, zFilename, n + 1);
 
-  rc = sqlite3OsAccess(pVfs, cs->zFilename, SQLITE_ACCESS_EXISTS, &exists);
+  rc = sqlite3OsAccess(pVfs, cs->file.zFilename, SQLITE_ACCESS_EXISTS, &exists);
   if( rc != SQLITE_OK ){
-    sqlite3_free(cs->zFilename);
-    cs->zFilename = 0;
+    sqlite3_free(cs->file.zFilename);
+    cs->file.zFilename = 0;
     return rc;
   }
 
   if( exists ){
     struct stat mainStat;
-    if( stat(cs->zFilename, &mainStat)==0 && mainStat.st_size==0 ){
+    if( stat(cs->file.zFilename, &mainStat)==0 && mainStat.st_size==0 ){
       exists = 0;
     }
   }
 
   if( exists ){
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-    rc = csOpenFile(pVfs, cs->zFilename, &cs->pFile, openFlags);
+    rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags);
     if( rc != SQLITE_OK ){
       openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
-      rc = csOpenFile(pVfs, cs->zFilename, &cs->pFile, openFlags);
+      rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags);
       if( rc != SQLITE_OK ){
-        sqlite3_free(cs->zFilename);
-        cs->zFilename = 0;
+        sqlite3_free(cs->file.zFilename);
+        cs->file.zFilename = 0;
         return rc;
       }
       cs->readOnly = 1;
@@ -1327,28 +1327,28 @@ int chunkStoreOpen(
 
     rc = csReadManifest(cs);
     if( rc != SQLITE_OK ){
-      csCloseFile(cs->pFile);
-      cs->pFile = 0;
-      sqlite3_free(cs->zFilename);
-      cs->zFilename = 0;
+      csCloseFile(cs->file.pFile);
+      cs->file.pFile = 0;
+      sqlite3_free(cs->file.zFilename);
+      cs->file.zFilename = 0;
       return rc;
     }
 
     rc = csReadIndex(cs);
     if( rc != SQLITE_OK ){
-      csCloseFile(cs->pFile);
-      cs->pFile = 0;
-      sqlite3_free(cs->zFilename);
-      cs->zFilename = 0;
+      csCloseFile(cs->file.pFile);
+      cs->file.pFile = 0;
+      sqlite3_free(cs->file.zFilename);
+      cs->file.zFilename = 0;
       return rc;
     }
 
     rc = csReplayWal(cs);
     if( rc != SQLITE_OK ){
-      csCloseFile(cs->pFile);
-      cs->pFile = 0;
-      sqlite3_free(cs->zFilename);
-      cs->zFilename = 0;
+      csCloseFile(cs->file.pFile);
+      cs->file.pFile = 0;
+      sqlite3_free(cs->file.zFilename);
+      cs->file.zFilename = 0;
       return rc;
     }
 
@@ -1376,8 +1376,8 @@ int chunkStoreOpen(
     }
   }else{
     if( !(flags & SQLITE_OPEN_CREATE) ){
-      sqlite3_free(cs->zFilename);
-      cs->zFilename = 0;
+      sqlite3_free(cs->file.zFilename);
+      cs->file.zFilename = 0;
       return SQLITE_CANTOPEN;
     }
     cs->index.nChunks = 0;
@@ -1385,8 +1385,8 @@ int chunkStoreOpen(
     cs->index.nIndexSize = 0;
 
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
-    cs->iFileSize = 0;
-    cs->pFile = 0;
+    cs->file.iFileSize = 0;
+    cs->file.pFile = 0;
   }
 
   csMarkRefsCommitted(cs);
@@ -1395,11 +1395,11 @@ int chunkStoreOpen(
 
 int chunkStoreClose(ChunkStore *cs){
   chunkStoreUnlock(cs);
-  if( cs->pFile ){
-    csCloseFile(cs->pFile);
-    cs->pFile = 0;
+  if( cs->file.pFile ){
+    csCloseFile(cs->file.pFile);
+    cs->file.pFile = 0;
   }
-  sqlite3_free(cs->zFilename);
+  sqlite3_free(cs->file.zFilename);
   csReleaseIndexBuf(cs->index.aIndex, cs->index.aIndexMmapBase, cs->index.aIndexMmapSize);
   cs->index.aIndex = 0;
   cs->index.aIndexMmapBase = 0;
@@ -2056,7 +2056,7 @@ int chunkStoreGet(
       e = &cs->index.aIndex[idx];
     }
 
-    if( cs->pFile == 0 ){
+    if( cs->file.pFile == 0 ){
       if( cs->staging.pWriteBuf && e->offset >= 0
        && (e->offset + 4 + e->size) <= cs->staging.nWriteBuf ){
         u8 *pCopy = (u8 *)sqlite3_malloc(e->size);
@@ -2076,7 +2076,7 @@ int chunkStoreGet(
       u8 *pBuf;
       u32 storedLen;
 
-      rc = sqlite3OsRead(cs->pFile, lenBuf, 4, fileOff);
+      rc = sqlite3OsRead(cs->file.pFile, lenBuf, 4, fileOff);
       if( rc != SQLITE_OK ) return rc;
 
       storedLen = CS_READ_U32(lenBuf);
@@ -2087,7 +2087,7 @@ int chunkStoreGet(
       pBuf = (u8 *)sqlite3_malloc(sz);
       if( pBuf == 0 ) return SQLITE_NOMEM;
 
-      rc = sqlite3OsRead(cs->pFile, pBuf, sz, fileOff + 4);
+      rc = sqlite3OsRead(cs->file.pFile, pBuf, sz, fileOff + 4);
       if( rc != SQLITE_OK ){
         sqlite3_free(pBuf);
         return rc;
@@ -2182,7 +2182,7 @@ static int csCommitToFile(ChunkStore *cs){
   i64 origFileSize = 0;
   i64 writeOff = 0;
   int lockFd = -1;
-  int hadFile = (cs->pFile != 0);
+  int hadFile = (cs->file.pFile != 0);
   int lockHeld = (cs->graphLockFd >= 0);
   i64 newWalSize = cs->wal.nWalData;
   ChunkIndexEntry *aCommittedPending = 0;
@@ -2192,40 +2192,40 @@ static int csCommitToFile(ChunkStore *cs){
   int useRecent = 0;
   int crashWriteActive = csCrashWriteInjectionActive();
 
-  if( cs->pFile == 0 ){
+  if( cs->file.pFile == 0 ){
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
                   | SQLITE_OPEN_MAIN_DB;
-    rc = csOpenFile(cs->pVfs, cs->zFilename, &cs->pFile, openFlags);
+    rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile, openFlags);
     if( rc != SQLITE_OK ) return SQLITE_CANTOPEN;
   }
 
   if( lockHeld ){
     lockFd = -1;
   }else{
-    if( csFileLock(cs->zFilename, &lockFd) != 0 ){
+    if( csFileLock(cs->file.zFilename, &lockFd) != 0 ){
       return SQLITE_BUSY;
     }
   }
 
-  rc = cs->pFile->pMethods->xFileSize(cs->pFile, &fileSize);
+  rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
   if( rc != SQLITE_OK ) goto commit_done;
 
   if( hadFile && !cs->hasMovedChecked ){
     int bMoved = 0;
-    int rc2 = sqlite3OsFileControl(cs->pFile, SQLITE_FCNTL_HAS_MOVED,
+    int rc2 = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
                                    &bMoved);
     if( rc2==SQLITE_OK && bMoved ){
       rc = csReloadFromDiskPreservingLocalRefs(cs);
       if( rc != SQLITE_OK ) goto commit_done;
-      fileSize = cs->iFileSize;
+      fileSize = cs->file.iFileSize;
     }
     cs->hasMovedChecked = 1;
   }
 
-  if( fileSize > cs->iFileSize && hadFile ){
+  if( fileSize > cs->file.iFileSize && hadFile ){
     rc = csReloadFromDiskPreservingLocalRefs(cs);
     if( rc != SQLITE_OK ) goto commit_done;
-    fileSize = cs->iFileSize;
+    fileSize = cs->file.iFileSize;
   }
   origFileSize = fileSize;
 
@@ -2317,7 +2317,7 @@ static int csCommitToFile(ChunkStore *cs){
     cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     csSerializeManifest(cs, manifest);
     CRASH_CHECK_WRITE();
-    rc = sqlite3OsWrite(cs->pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
+    rc = sqlite3OsWrite(cs->file.pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
     if( rc != SQLITE_OK ) goto commit_done;
     fileSize = CHUNK_MANIFEST_SIZE;
   }
@@ -2356,7 +2356,7 @@ static int csCommitToFile(ChunkStore *cs){
         pOut += pe->size;
       }
       CRASH_CHECK_WRITE();
-      rc = sqlite3OsWrite(cs->pFile, pWalBatch, (int)walBytes, writeOff);
+      rc = sqlite3OsWrite(cs->file.pFile, pWalBatch, (int)walBytes, writeOff);
       if( pWalBatch != aSmallWalBatch ) sqlite3_free(pWalBatch);
       if( rc != SQLITE_OK ) goto commit_done;
       writeOff += walBytes;
@@ -2371,7 +2371,7 @@ static int csCommitToFile(ChunkStore *cs){
 
         bufOff = pe->offset + 4;
         CRASH_CHECK_WRITE();
-        rc = sqlite3OsWrite(cs->pFile, recHdr, 25, writeOff);
+        rc = sqlite3OsWrite(cs->file.pFile, recHdr, 25, writeOff);
         if( rc != SQLITE_OK ) goto commit_done;
         writeOff += 25;
 
@@ -2381,7 +2381,7 @@ static int csCommitToFile(ChunkStore *cs){
           while( remaining > 0 && rc==SQLITE_OK ){
             int toWrite = remaining > 65536 ? 65536 : remaining;
             CRASH_CHECK_WRITE();
-            rc = sqlite3OsWrite(cs->pFile, pSrc, toWrite, writeOff);
+            rc = sqlite3OsWrite(cs->file.pFile, pSrc, toWrite, writeOff);
             pSrc += toWrite;
             writeOff += toWrite;
             remaining -= toWrite;
@@ -2398,13 +2398,13 @@ static int csCommitToFile(ChunkStore *cs){
     rootRec[0] = CS_WAL_TAG_ROOT;
     csSerializeManifest(cs, rootRec + 1);
     CRASH_CHECK_WRITE();
-    rc = sqlite3OsWrite(cs->pFile, rootRec, sizeof(rootRec), writeOff);
+    rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), writeOff);
     if( rc != SQLITE_OK ) goto commit_done;
     writeOff += sizeof(rootRec);
   }
 
   CRASH_CHECK_WRITE();
-  rc = sqlite3OsSync(cs->pFile, SQLITE_SYNC_NORMAL);
+  rc = sqlite3OsSync(cs->file.pFile, SQLITE_SYNC_NORMAL);
 
 #ifdef SQLITE_TEST
   }
@@ -2412,13 +2412,13 @@ static int csCommitToFile(ChunkStore *cs){
 #endif
   if( rc != SQLITE_OK ) goto commit_done;
 
-  cs->iFileSize = writeOff;
+  cs->file.iFileSize = writeOff;
 
 commit_done:
   csFileUnlock(lockFd);
 
   if( rc != SQLITE_OK ){
-    if( cs->pFile && writeOff > origFileSize ){
+    if( cs->file.pFile && writeOff > origFileSize ){
       (void)csRollbackFailedAppend(cs, origFileSize);
     }
     (void)csRestoreCommittedRefsState(cs);
@@ -2471,7 +2471,7 @@ int chunkStoreCommit(ChunkStore *cs){
   memset(&savedRefs, 0, sizeof(savedRefs));
   if( cs->readOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
-  if( cs->graphLockFd < 0 && cs->zFilename ){
+  if( cs->graphLockFd < 0 && cs->file.zFilename ){
     preserveRefs = cs->staging.nPending > 0
                 && prollyHashCompare(&cs->refs.refsHash,
                                      &cs->refs.committedRefsHash)!=0;
@@ -2539,7 +2539,7 @@ int chunkStoreReloadRefs(ChunkStore *cs){
 }
 
 const char *chunkStoreFilename(ChunkStore *cs){
-  return cs->zFilename;
+  return cs->file.zFilename;
 }
 
 int chunkStoreLockAndRefresh(ChunkStore *cs){
@@ -2547,8 +2547,8 @@ int chunkStoreLockAndRefresh(ChunkStore *cs){
   int rc;
   if( cs->isMemory ) return SQLITE_OK;
   if( cs->graphLockFd >= 0 ) return SQLITE_OK;
-  if( !cs->zFilename ) return SQLITE_ERROR;
-  if( csFileLockNB(cs->zFilename, &cs->graphLockFd) != 0 ){
+  if( !cs->file.zFilename ) return SQLITE_ERROR;
+  if( csFileLockNB(cs->file.zFilename, &cs->graphLockFd) != 0 ){
     return SQLITE_BUSY;
   }
   rc = chunkStoreRefreshIfChanged(cs, &changed);
@@ -2573,14 +2573,14 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
   *pChanged = 0;
   if( cs->isMemory ) return SQLITE_OK;
 
-  if( cs->pFile==0 ){
+  if( cs->file.pFile==0 ){
     int exists = 0;
-    rc = sqlite3OsAccess(cs->pVfs, cs->zFilename,
+    rc = sqlite3OsAccess(cs->file.pVfs, cs->file.zFilename,
                          SQLITE_ACCESS_EXISTS, &exists);
     if( rc!=SQLITE_OK ) return rc;
     if( exists ){
       struct stat mainStat;
-      if( stat(cs->zFilename, &mainStat)==0 ){
+      if( stat(cs->file.zFilename, &mainStat)==0 ){
         if( mainStat.st_size > 0 ){
           *pChanged = 1;
         }
@@ -2592,7 +2592,7 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
   }
 
   if( !cs->hasMovedChecked ){
-    rc = sqlite3OsFileControl(cs->pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
+    rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
     if( rc!=SQLITE_OK ) return rc;
     if( bMoved ){
       *pChanged = 1;
@@ -2603,9 +2603,9 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
 
   {
     i64 fileSize = 0;
-    rc = sqlite3OsFileSize(cs->pFile, &fileSize);
+    rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
     if( rc!=SQLITE_OK ) return rc;
-    if( fileSize > cs->iFileSize ){
+    if( fileSize > cs->file.iFileSize ){
       *pChanged = 1;
     }
   }
@@ -2638,7 +2638,7 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
 static int csReloadFromDisk(ChunkStore *cs){
   ChunkStore tmp;
   ChunkStoreReloadState saved;
-  int rc = chunkStoreOpen(&tmp, cs->pVfs, cs->zFilename,
+  int rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
 

@@ -3115,7 +3115,7 @@ static void run_truncated_wal_is_rejected(void){
   if( walStateGetDataSize(&cs.wal) > 0 ){
     unsigned char badTag = 0xff;
     check("corrupt_first_wal_tag",
-          sqlite3OsWrite(cs.pFile, &badTag, 1, walStateGetOffset(&cs.wal))==SQLITE_OK);
+          sqlite3OsWrite(cs.file.pFile, &badTag, 1, walStateGetOffset(&cs.wal))==SQLITE_OK);
   }
   chunkStoreClose(&cs);
 
@@ -3140,7 +3140,7 @@ static void run_refresh_open_path_transactional(void){
   check("open_empty_store_with_no_file",
         chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
-  check("store_starts_without_file", cs.pFile==0);
+  check("store_starts_without_file", cs.file.pFile==0);
 
   f = fopen(dbpath, "wb");
   check("create_corrupt_file", f!=0);
@@ -3196,7 +3196,7 @@ static void run_wal_offset_corruption_is_rejected(void){
   }
   check("have_wal_backed_index_entry", iWal >= 0);
   if( iWal >= 0 ){
-    cs.index.aIndex[iWal].offset = cs.iFileSize + 1024;
+    cs.index.aIndex[iWal].offset = cs.file.iFileSize + 1024;
     rc = chunkStoreGet(&cs, &cs.index.aIndex[iWal].hash, &pData, &nData);
     check("corrupt_wal_offset_returns_error", rc!=SQLITE_OK);
   }
@@ -3252,7 +3252,7 @@ static void run_integrity_check_walks_prolly_nodes(void){
   if( dataOff >= 0 ){
     unsigned char badByte = 0;
     check("corrupt_root_chunk_magic",
-          sqlite3OsWrite(cs.pFile, &badByte, 1, dataOff)==SQLITE_OK);
+          sqlite3OsWrite(cs.file.pFile, &badByte, 1, dataOff)==SQLITE_OK);
   }
   chunkStoreClose(&cs);
 

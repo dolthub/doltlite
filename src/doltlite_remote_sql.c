@@ -154,7 +154,7 @@ static int remoteSqlOpenNamedRemote(
     return SQLITE_NOTFOUND;
   }
 
-  *ppRemote = openRemoteByUrl(cs->pVfs, *pzUrl);
+  *ppRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), *pzUrl);
   if( !*ppRemote ){
     return SQLITE_CANTOPEN;
   }
@@ -348,7 +348,7 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  pRemote = openRemoteByUrl(cs->pVfs, zUrl);
+  pRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
   if( !pRemote ){
     (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
@@ -470,7 +470,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     return;
   }
 
-  pRemote = openRemoteByUrl(cs->pVfs, zUrl);
+  pRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
   if( !pRemote ){
     (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
@@ -512,7 +512,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     pRemote = 0;
 
     for(i=0; i<nNames; i++){
-      DoltliteRemote *pBrRemote = openRemoteByUrl(cs->pVfs, zUrl);
+      DoltliteRemote *pBrRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
       if( !pBrRemote ){
         freeNameList(azNames, nNames);
         (void)doltliteVcSealSavepointError(db);
@@ -739,7 +739,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     chunkStoreClearRefs(cs);
   }
 
-  pRemote = openRemoteByUrl(cs->pVfs, zUrl);
+  pRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
   if( !pRemote ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
                               "failed to open remote (URL must start with file://)");
