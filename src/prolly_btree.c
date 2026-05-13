@@ -3845,9 +3845,8 @@ static int btreeLoadBranchHeadCatalog(
   return SQLITE_OK;
 }
 
-static int btreeStoreWorkingSetBlob(
-  ChunkStore *cs,
-  const char *zBranch,
+static void btreeFillWorkingSetBlob(
+  u8 *buf,
   const ProllyHash *pWorkingCat,
   const ProllyHash *pWorkingCommit,
   const ProllyHash *pStaged,
@@ -3861,12 +3860,9 @@ static int btreeStoreWorkingSetBlob(
   const char *zRebaseReturnBranch,
   const ProllyHash *pConstraintViolations
 ){
-  u8 buf[WS_TOTAL_SIZE];
-  ProllyHash wsHash;
   static const ProllyHash emptyHash = {{0}};
-  int rc;
 
-  memset(buf, 0, sizeof(buf));
+  memset(buf, 0, WS_TOTAL_SIZE);
   buf[0] = WS_FORMAT_VERSION;
   memcpy(buf + WS_WORKING_CAT_OFF,
          (pWorkingCat ? pWorkingCat : &emptyHash)->data, PROLLY_HASH_SIZE);
@@ -3897,6 +3893,33 @@ static int btreeStoreWorkingSetBlob(
   memcpy(buf + WS_CONSTRAINT_VIOLATIONS_OFF,
          (pConstraintViolations ? pConstraintViolations : &emptyHash)->data,
          PROLLY_HASH_SIZE);
+}
+
+static int btreeStoreWorkingSetBlob(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pWorkingCat,
+  const ProllyHash *pWorkingCommit,
+  const ProllyHash *pStaged,
+  u8 isMerging,
+  const ProllyHash *pMergeCommit,
+  const ProllyHash *pConflicts,
+  u8 isRebasing,
+  const ProllyHash *pPreRebaseCat,
+  const ProllyHash *pRebaseOnto,
+  const char *zRebaseOrigBranch,
+  const char *zRebaseReturnBranch,
+  const ProllyHash *pConstraintViolations
+){
+  u8 buf[WS_TOTAL_SIZE];
+  ProllyHash wsHash;
+  int rc;
+
+  btreeFillWorkingSetBlob(buf, pWorkingCat, pWorkingCommit, pStaged,
+                          isMerging, pMergeCommit, pConflicts,
+                          isRebasing, pPreRebaseCat, pRebaseOnto,
+                          zRebaseOrigBranch, zRebaseReturnBranch,
+                          pConstraintViolations);
 
   rc = chunkStorePut(cs, buf, WS_TOTAL_SIZE, &wsHash);
   if( rc != SQLITE_OK ) return rc;
@@ -4444,31 +4467,57 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       u8 *catData = 0;
       int nCatData = 0;
       ProllyHash catHash;
+      ProllyHash wsHashWouldBe;
+      ProllyHash wsHashOnDisk;
+      u8 wsBuf[WS_TOTAL_SIZE];
+      int bMatchesDisk = 0;
       const char *zBr = p->zBranch ? p->zBranch : "main";
 
       rc = serializeCatalog(p, &catData, &nCatData);
-      if( rc==SQLITE_OK ){
+      if( rc!=SQLITE_OK ){
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc;
+      }
+      prollyHashCompute(catData, nCatData, &catHash);
+
+      btreeFillWorkingSetBlob(wsBuf, &catHash, &p->headCommit,
+                              &p->stagedCatalog, p->isMerging,
+                              &p->mergeCommitHash, &p->conflictsCatalogHash,
+                              p->isRebasing, &p->preRebaseWorkingCat,
+                              &p->rebaseOntoCommit,
+                              p->zRebaseOrigBranch, p->zRebaseReturnBranch,
+                              &p->constraintViolationsHash);
+      prollyHashCompute(wsBuf, WS_TOTAL_SIZE, &wsHashWouldBe);
+
+      if( chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &wsHashOnDisk)
+          ==SQLITE_OK
+       && prollyHashCompare(&wsHashWouldBe, &wsHashOnDisk)==0 ){
+        bMatchesDisk = 1;
+      }
+
+      if( !bMatchesDisk ){
         rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
+        if( rc==SQLITE_OK ){
+          rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
+                                        &p->headCommit, &p->stagedCatalog,
+                                        p->isMerging, &p->mergeCommitHash,
+                                        &p->conflictsCatalogHash,
+                                        p->isRebasing,
+                                        &p->preRebaseWorkingCat,
+                                        &p->rebaseOntoCommit,
+                                        p->zRebaseOrigBranch,
+                                        p->zRebaseReturnBranch,
+                                        &p->constraintViolationsHash);
+        }
+        if( rc==SQLITE_OK ){
+          rc = chunkStoreSerializeRefs(&pBt->store);
+        }
+        if( rc==SQLITE_OK ){
+          rc = chunkStoreCommit(&pBt->store);
+        }
       }
       sqlite3_free(catData);
-      if( rc==SQLITE_OK ){
-        rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
-                                      &p->headCommit, &p->stagedCatalog,
-                                      p->isMerging, &p->mergeCommitHash,
-                                      &p->conflictsCatalogHash,
-                                      p->isRebasing,
-                                      &p->preRebaseWorkingCat,
-                                      &p->rebaseOntoCommit,
-                                      p->zRebaseOrigBranch,
-                                      p->zRebaseReturnBranch,
-                                      &p->constraintViolationsHash);
-      }
-      if( rc==SQLITE_OK ){
-        rc = chunkStoreSerializeRefs(&pBt->store);
-      }
-      if( rc==SQLITE_OK ){
-        rc = chunkStoreCommit(&pBt->store);
-      }
       if( rc!=SQLITE_OK ){
         chunkStoreUnlock(&pBt->store);
         pBt->store.snapshotPinned = 0;
