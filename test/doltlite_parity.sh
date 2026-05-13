@@ -1,43 +1,24 @@
 #!/bin/bash
 DOLTLITE=./doltlite
-SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
-PASS=0; FAIL=0; SKIP=0; ERRORS=""
+SQLITE3=./sqlite3
+PASS=0; FAIL=0; ERRORS=""
 
 if [ ! -x "$DOLTLITE" ]; then
   echo "ERROR: $DOLTLITE not found or not executable"
   exit 1
 fi
 
-if ! command -v "$SQLITE3" >/dev/null 2>&1; then
-  echo "ERROR: system sqlite3 not found in PATH"
+if [ ! -x "$SQLITE3" ]; then
+  echo "ERROR: $SQLITE3 not found or not executable"
   exit 1
 fi
 
 SQLITE_VERSION=$("$SQLITE3" :memory: "SELECT sqlite_version();" 2>/dev/null)
-SQLITE_MAJOR=$(echo "$SQLITE_VERSION" | cut -d. -f1)
-SQLITE_MINOR=$(echo "$SQLITE_VERSION" | cut -d. -f2)
 
 echo "=== DoltLite SQLite Parity Tests ==="
 echo "DoltLite:       $DOLTLITE"
-echo "System sqlite3: $SQLITE3 (version $SQLITE_VERSION)"
+echo "Package sqlite3: $SQLITE3 (version $SQLITE_VERSION)"
 echo ""
-
-HAS_WINDOW=0
-HAS_JSON=0
-HAS_UPSERT=0
-HAS_CTE=0
-
-if [ "$SQLITE_MAJOR" -gt 3 ] || { [ "$SQLITE_MAJOR" -eq 3 ] && [ "$SQLITE_MINOR" -ge 25 ]; }; then
-  HAS_WINDOW=1
-fi
-if [ "$SQLITE_MAJOR" -gt 3 ] || { [ "$SQLITE_MAJOR" -eq 3 ] && [ "$SQLITE_MINOR" -ge 9 ]; }; then
-  if echo "SELECT json_array(1,2,3);" | "$SQLITE3" :memory: >/dev/null 2>&1; then
-    HAS_JSON=1
-  fi
-fi
-if [ "$SQLITE_MAJOR" -gt 3 ] || { [ "$SQLITE_MAJOR" -eq 3 ] && [ "$SQLITE_MINOR" -ge 9 ]; }; then
-  HAS_CTE=1
-fi
 
 run_parity() {
   local name="$1"
@@ -53,13 +34,6 @@ run_parity() {
     FAIL=$((FAIL+1))
     ERRORS="$ERRORS\nFAIL: $name\n  --- doltlite ---\n$out_dl\n  --- sqlite3 ---\n$out_sq\n"
   fi
-}
-
-skip_test() {
-  local name="$1"
-  local reason="$2"
-  SKIP=$((SKIP+1))
-  echo "  SKIP: $name ($reason)"
 }
 
 echo "--- Basic CRUD ---"
@@ -275,8 +249,7 @@ SELECT id, val FROM t t1 WHERE val = (SELECT MAX(val) FROM t t2 WHERE t2.grp=t1.
 
 echo "--- Window functions ---"
 
-if [ "$HAS_WINDOW" -eq 1 ]; then
-  run_parity "row_number" "
+run_parity "row_number" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, grp TEXT, val INTEGER);
 INSERT INTO t VALUES(1,'a',10);
 INSERT INTO t VALUES(2,'a',20);
@@ -285,7 +258,7 @@ INSERT INTO t VALUES(4,'b',40);
 SELECT id, grp, ROW_NUMBER() OVER (PARTITION BY grp ORDER BY val) AS rn FROM t ORDER BY id;
 "
 
-  run_parity "rank_dense_rank" "
+run_parity "rank_dense_rank" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INTEGER);
 INSERT INTO t VALUES(1,10);
 INSERT INTO t VALUES(2,20);
@@ -294,7 +267,7 @@ INSERT INTO t VALUES(4,30);
 SELECT id, val, RANK() OVER (ORDER BY val) AS rnk, DENSE_RANK() OVER (ORDER BY val) AS drnk FROM t ORDER BY id;
 "
 
-  run_parity "lead_lag" "
+run_parity "lead_lag" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INTEGER);
 INSERT INTO t VALUES(1,10);
 INSERT INTO t VALUES(2,20);
@@ -303,7 +276,7 @@ INSERT INTO t VALUES(4,40);
 SELECT id, val, LAG(val,1) OVER (ORDER BY id) AS prev, LEAD(val,1) OVER (ORDER BY id) AS next FROM t ORDER BY id;
 "
 
-  run_parity "sum_over" "
+run_parity "sum_over" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INTEGER);
 INSERT INTO t VALUES(1,10);
 INSERT INTO t VALUES(2,20);
@@ -311,7 +284,7 @@ INSERT INTO t VALUES(3,30);
 SELECT id, val, SUM(val) OVER (ORDER BY id) AS running FROM t ORDER BY id;
 "
 
-  run_parity "ntile" "
+run_parity "ntile" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, val INTEGER);
 INSERT INTO t VALUES(1,10);
 INSERT INTO t VALUES(2,20);
@@ -319,9 +292,6 @@ INSERT INTO t VALUES(3,30);
 INSERT INTO t VALUES(4,40);
 SELECT id, NTILE(2) OVER (ORDER BY id) AS tile FROM t ORDER BY id;
 "
-else
-  skip_test "window_functions" "sqlite3 $SQLITE_VERSION < 3.25"
-fi
 
 echo "--- NULL handling ---"
 
@@ -527,31 +497,30 @@ SELECT julianday('2024-03-15') - julianday('2024-03-01');
 
 echo "--- JSON functions ---"
 
-if [ "$HAS_JSON" -eq 1 ]; then
-  run_parity "json_array" "
+run_parity "json_array" "
 SELECT json_array(1,2,'three',NULL);
 "
 
-  run_parity "json_object" "
+run_parity "json_object" "
 SELECT json_object('a',1,'b','two');
 "
 
-  run_parity "json_extract" "
+run_parity "json_extract" "
 SELECT json_extract('{\"a\":1,\"b\":[2,3]}', '\$.a');
 SELECT json_extract('{\"a\":1,\"b\":[2,3]}', '\$.b[0]');
 "
 
-  run_parity "json_type" "
+run_parity "json_type" "
 SELECT json_type('{\"a\":1}', '\$.a');
 SELECT json_type('{\"a\":\"hello\"}', '\$.a');
 "
 
-  run_parity "json_valid" "
+run_parity "json_valid" "
 SELECT json_valid('{\"a\":1}');
 SELECT json_valid('not json');
 "
 
-  run_parity "json_group_array" "
+run_parity "json_group_array" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
 INSERT INTO t VALUES(2,'b');
@@ -559,15 +528,12 @@ INSERT INTO t VALUES(3,'c');
 SELECT json_group_array(v) FROM t ORDER BY id;
 "
 
-  run_parity "json_group_object" "
+run_parity "json_group_object" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, k TEXT, v INTEGER);
 INSERT INTO t VALUES(1,'x',10);
 INSERT INTO t VALUES(2,'y',20);
 SELECT json_group_object(k,v) FROM t ORDER BY id;
 "
-else
-  skip_test "json_functions" "sqlite3 $SQLITE_VERSION lacks JSON support"
-fi
 
 echo "--- Set operations ---"
 
@@ -619,13 +585,12 @@ SELECT v FROM a EXCEPT SELECT v FROM b ORDER BY v;
 
 echo "--- CTEs ---"
 
-if [ "$HAS_CTE" -eq 1 ]; then
-  run_parity "simple_cte" "
+run_parity "simple_cte" "
 WITH nums AS (SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3)
 SELECT * FROM nums ORDER BY n;
 "
 
-  run_parity "recursive_cte" "
+run_parity "recursive_cte" "
 WITH RECURSIVE cnt(x) AS (
   SELECT 1
   UNION ALL
@@ -634,7 +599,7 @@ WITH RECURSIVE cnt(x) AS (
 SELECT x FROM cnt;
 "
 
-  run_parity "cte_with_table" "
+run_parity "cte_with_table" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, parent_id INTEGER, name TEXT);
 INSERT INTO t VALUES(1,NULL,'root');
 INSERT INTO t VALUES(2,1,'a');
@@ -648,15 +613,12 @@ WITH RECURSIVE tree(id, name, depth) AS (
 SELECT id, name, depth FROM tree ORDER BY id;
 "
 
-  run_parity "multiple_ctes" "
+run_parity "multiple_ctes" "
 WITH
   a AS (SELECT 1 AS x UNION ALL SELECT 2),
   b AS (SELECT x*10 AS y FROM a)
 SELECT * FROM b ORDER BY y;
 "
-else
-  skip_test "cte" "sqlite3 $SQLITE_VERSION < 3.9"
-fi
 
 echo "--- CAST ---"
 
@@ -985,7 +947,7 @@ SELECT pk FROM parent ORDER BY pk;
 
 echo ""
 echo "======================================="
-echo "Results: $PASS passed, $FAIL failed, $SKIP skipped out of $((PASS+FAIL+SKIP)) tests"
+echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
 echo "======================================="
 if [ $FAIL -gt 0 ]; then
   echo ""

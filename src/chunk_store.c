@@ -1340,6 +1340,11 @@ int chunkStoreOpen(
       return rc;
     }
 
+    if( prollyHashIsEmpty(&cs->refsHash) && cs->nIndexSize>0 ){
+      chunkStoreClose(cs);
+      return SQLITE_CORRUPT;
+    }
+
     if( !prollyHashIsEmpty(&cs->refsHash) ){
       u8 *refsData = 0; int nRefsData = 0;
       rc = chunkStoreGet(cs, &cs->refsHash, &refsData, &nRefsData);
