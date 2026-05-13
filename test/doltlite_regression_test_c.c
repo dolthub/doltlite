@@ -791,18 +791,18 @@ static void run_status_many_table_renames(void){
 
   printf("=== Status Many Table Renames Test ===\n\n");
   make_dbpath(dbpath, sizeof(dbpath), "test_status_many_table_renames");
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 
   check("open_db_for_status_many_table_renames", open_db(dbpath, &db)==SQLITE_OK);
-  check("begin_status_many_table_renames_setup", execsql(db, "BEGIN;")==SQLITE_OK);
+  check("begin_status_many_table_renames_setup", execSql(db, "BEGIN;")==SQLITE_OK);
   for(i=1; i<=80; i++){
     sqlite3_snprintf(sizeof(sql), sql,
       "CREATE TABLE t%03d(id INTEGER PRIMARY KEY);"
       "INSERT INTO t%03d VALUES(1);", i, i);
     check("create_table_for_status_many_table_renames",
-          execsql(db, sql)==SQLITE_OK);
+          execSql(db, sql)==SQLITE_OK);
   }
-  check("commit_status_many_table_renames_seed", execsql(db,
+  check("commit_status_many_table_renames_seed", execSql(db,
     "COMMIT;"
     "SELECT dolt_commit('-A', '-m', 'seed');")==SQLITE_OK);
 
@@ -810,21 +810,21 @@ static void run_status_many_table_renames(void){
     sqlite3_snprintf(sizeof(sql), sql,
       "ALTER TABLE t%03d RENAME TO r%03d;", i, i);
     check("rename_table_for_status_many_table_renames",
-          execsql(db, sql)==SQLITE_OK);
+          execSql(db, sql)==SQLITE_OK);
   }
 
   check("status_many_table_rename_count",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_status WHERE status='renamed';"),
           "80")==0);
   check("status_many_table_rename_sample",
-        strcmp(exec1(db,
+        strcmp(queryScalarText(db,
           "SELECT count(*) FROM dolt_status "
           "WHERE table_name='t080 -> r080' AND status='renamed';"),
           "1")==0);
 
   sqlite3_close(db);
-  remove_db(dbpath);
+  removeDbFiles(dbpath);
 }
 
 static void run_remote_refs_corruption(void){

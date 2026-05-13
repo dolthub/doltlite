@@ -3306,6 +3306,12 @@ int sqlite3BtreeOpen(
     sqlite3_free(p);
     return SQLITE_NOMEM;
   }
+  /* Bind the shim to the chunk store so sqlite3PagerFile() always resolves
+  ** to the current cs->pFile. Without this, csReloadFromDisk (triggered by
+  ** concurrent connections or peer processes mutating the chunk store) can
+  ** free the old pFile and leave the shim with a dangling pointer, crashing
+  ** the next sqlite3OsFileControl on a deref'd id->pMethods. */
+  pagerShimSetStore(pBt->pPagerShim, &pBt->store);
 
   pBt->db = db;
   pBt->pageSize = PROLLY_DEFAULT_PAGE_SIZE;
