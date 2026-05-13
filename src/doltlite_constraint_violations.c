@@ -221,7 +221,7 @@ static int loadAllViolations(
     int nl, nr;
     if( p+2 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
     nl = p[0] | (p[1]<<8); p += 2;
-    if( nl<0 || p+nl > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
+    if( nl<0 || (size_t)nl > (size_t)(data+nData - p) ){ rc = SQLITE_CORRUPT; goto fail; }
     aTables[i].zName = sqlite3_malloc(nl+1);
     if( !aTables[i].zName ){ rc = SQLITE_NOMEM; goto fail; }
     memcpy(aTables[i].zName, p, nl); aTables[i].zName[nl] = 0;
@@ -229,10 +229,16 @@ static int loadAllViolations(
     if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
     nr = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
     if( nr<0 ){ rc = SQLITE_CORRUPT; goto fail; }
+    /* Validate that nr rows can possibly fit in remaining bytes (each row
+    ** carries at least 1+4+8+4+4 = 21 header bytes), and use
+    ** sqlite3_malloc64 to avoid 32-bit multiplication overflow. */
+    if( (sqlite3_uint64)nr > (sqlite3_uint64)(data+nData - p) ){
+      rc = SQLITE_CORRUPT; goto fail;
+    }
     aTables[i].nRows = nr;
-    aTables[i].aRows = sqlite3_malloc(nr ? nr * (int)sizeof(ConstraintViolationRow) : 1);
+    aTables[i].aRows = sqlite3_malloc64(nr ? (sqlite3_uint64)nr * sizeof(ConstraintViolationRow) : 1);
     if( !aTables[i].aRows ){ rc = SQLITE_NOMEM; goto fail; }
-    memset(aTables[i].aRows, 0, nr ? nr * (int)sizeof(ConstraintViolationRow) : 1);
+    memset(aTables[i].aRows, 0, nr ? (sqlite3_uint64)nr * sizeof(ConstraintViolationRow) : 1);
 
     for(j=0; j<nr; j++){
       ConstraintViolationRow *r = &aTables[i].aRows[j];
@@ -241,7 +247,7 @@ static int loadAllViolations(
       r->violationType = *p++;
       if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
       kvl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
-      if( kvl<0 || p+kvl > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
+      if( kvl<0 || (size_t)kvl > (size_t)(data+nData - p) ){ rc = SQLITE_CORRUPT; goto fail; }
       if( kvl>0 ){
         rc = dupBytes(p, kvl, &r->pKey);
         if( rc!=SQLITE_OK ) goto fail;
@@ -255,7 +261,7 @@ static int loadAllViolations(
       p += 8;
       if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
       vvl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
-      if( vvl<0 || p+vvl > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
+      if( vvl<0 || (size_t)vvl > (size_t)(data+nData - p) ){ rc = SQLITE_CORRUPT; goto fail; }
       if( vvl>0 ){
         rc = dupBytes(p, vvl, &r->pVal);
         if( rc!=SQLITE_OK ) goto fail;
@@ -264,7 +270,7 @@ static int loadAllViolations(
       p += vvl;
       if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
       nil_ = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
-      if( nil_<0 || p+nil_ > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
+      if( nil_<0 || (size_t)nil_ > (size_t)(data+nData - p) ){ rc = SQLITE_CORRUPT; goto fail; }
       if( nil_>0 ){
         r->zInfo = sqlite3_malloc(nil_+1);
         if( !r->zInfo ){ rc = SQLITE_NOMEM; goto fail; }
