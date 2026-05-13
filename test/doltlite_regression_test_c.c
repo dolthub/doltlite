@@ -1310,6 +1310,66 @@ static void run_commit_parent_limit(void){
   sqlite3_free(pBlob);
 }
 
+static void run_commit_am_many_tables(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  int i;
+  const char *res;
+
+  printf("=== Commit -am Many Tables Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_commit_am_many_tables");
+  remove_db(dbpath);
+
+  check("open_db_for_commit_am_many_tables", open_db(dbpath, &db)==SQLITE_OK);
+  check("begin_commit_am_many_tables_setup", execsql(db, "BEGIN;")==SQLITE_OK);
+  for(i=1; i<=100; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "CREATE TABLE t%03d(id INTEGER PRIMARY KEY, v INT);"
+      "INSERT INTO t%03d VALUES(1,0);", i, i);
+    check("create_table_for_commit_am_many_tables", execsql(db, sql)==SQLITE_OK);
+  }
+  check("seed_commit_am_many_tables", execsql(db,
+    "COMMIT;"
+    "SELECT dolt_commit('-A', '-m', 'seed');")==SQLITE_OK);
+
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "UPDATE t%03d SET v=%d WHERE id=1;", i, i);
+    check("update_table_for_commit_am_many_tables", execsql(db, sql)==SQLITE_OK);
+  }
+  for(i=81; i<=90; i++){
+    sqlite3_snprintf(sizeof(sql), sql, "DROP TABLE t%03d;", i);
+    check("drop_table_for_commit_am_many_tables", execsql(db, sql)==SQLITE_OK);
+  }
+  for(i=1; i<=10; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "CREATE TABLE n%03d(id INTEGER PRIMARY KEY);"
+      "INSERT INTO n%03d VALUES(1);", i, i);
+    check("create_untracked_table_for_commit_am_many_tables",
+          execsql(db, sql)==SQLITE_OK);
+  }
+
+  res = exec1(db, "SELECT dolt_commit('-am', 'tracked changes');");
+  check("commit_am_many_tables_returns_hash", strlen(res)==40);
+  check("commit_am_many_tables_log_message",
+        strcmp(exec1(db, "SELECT message FROM dolt_log LIMIT 1;"),
+               "tracked changes")==0);
+  check("commit_am_many_tables_updated_tracked_value",
+        strcmp(exec1(db, "SELECT v FROM t080;"), "80")==0);
+  check("commit_am_many_tables_dropped_tracked_absent",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM sqlite_master WHERE type='table' "
+          "AND name='t090';"), "0")==0);
+  check("commit_am_many_tables_new_tables_left_unstaged",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_status "
+          "WHERE staged=0 AND status='new table';"), "10")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_blame_all_parents_merge_base(void){
   sqlite3 *db = 0;
   ChunkStore *cs = 0;
@@ -6446,6 +6506,7 @@ static const RegressionCase aCases[] = {
   { "clone_persist_failure", "Clone Persist Failure Test", run_clone_persist_failure },
   { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
+  { "commit_am_many_tables", "Commit -am Many Tables Test", run_commit_am_many_tables },
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
   { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_rollback_clears_durable_state },
