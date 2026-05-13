@@ -10,6 +10,21 @@ typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
 typedef struct SchemaEntry SchemaEntry;
 
+/* Classifies the SQLite transaction shape surrounding a VC operation
+** (merge, cherry-pick, revert, ...). doltliteVcTxnMode() returns one
+** of these based on db->autoCommit and db->pSavepoint, and the VC seal
+** / rollback paths branch on the result:
+**
+**   PLAIN            Inside an explicit BEGIN/COMMIT with no SAVEPOINT.
+**                    Conflicts and violations are surfaced in the
+**                    working set for the user to resolve, then commit.
+**   AUTOCOMMIT_LIKE  autoCommit is on, or a top-level SAVEPOINT is
+**                    acting as the outer txn boundary. VC ops persist
+**                    directly and failures hard-reset session state.
+**   NESTED_SAVEPOINT Inside BEGIN plus one or more nested SAVEPOINTs.
+**                    Failures roll back to the enclosing savepoint, so
+**                    error messages warn that violations are discarded.
+*/
 typedef enum DoltliteVcTxnMode DoltliteVcTxnMode;
 enum DoltliteVcTxnMode {
   DOLTLITE_VC_TXN_PLAIN = 0,
