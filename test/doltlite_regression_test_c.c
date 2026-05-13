@@ -1447,6 +1447,51 @@ static void run_blame_all_parents_merge_base(void){
   removeDbFiles(dbpath);
 }
 
+static void run_blame_deep_history_scan(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  int i;
+
+  printf("=== Blame Deep History Scan Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_blame_deep_history_scan");
+  remove_db(dbpath);
+
+  check("open_db_for_blame_deep_history_scan", open_db(dbpath, &db)==SQLITE_OK);
+  check("create_table_for_blame_deep_history_scan", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "BEGIN;")==SQLITE_OK);
+  for(i=1; i<=100; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "INSERT INTO t VALUES(%d,0);", i);
+    check("insert_row_for_blame_deep_history_scan",
+          execsql(db, sql)==SQLITE_OK);
+  }
+  check("commit_initial_rows_for_blame_deep_history_scan", execsql(db,
+    "COMMIT;"
+    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "UPDATE t SET v=%d WHERE id=%d;"
+      "SELECT dolt_commit('-A', '-m', 'c%d');", i, i, i);
+    check("commit_update_for_blame_deep_history_scan",
+          execsql(db, sql)==SQLITE_OK);
+  }
+
+  check("blame_deep_history_row_count",
+        strcmp(exec1(db, "SELECT count(*) FROM dolt_blame_t;"), "100")==0);
+  check("blame_deep_history_updated_row",
+        strcmp(exec1(db, "SELECT message FROM dolt_blame_t WHERE id=80;"),
+               "c80")==0);
+  check("blame_deep_history_unchanged_row",
+        strcmp(exec1(db, "SELECT message FROM dolt_blame_t WHERE id=100;"),
+               "init")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_merge_persist_failure(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -6485,6 +6530,7 @@ static const RegressionCase aCases[] = {
   { "resolve_ref_non_commit", "Resolve Ref Non-Commit Test", run_resolve_ref_non_commit },
   { "commit_parent_limit", "Commit Parent Limit Test", run_commit_parent_limit },
   { "blame_all_parents_merge_base", "Blame All-Parents Merge Base Test", run_blame_all_parents_merge_base },
+  { "blame_deep_history_scan", "Blame Deep History Scan Test", run_blame_deep_history_scan },
   { "merge_persist_failure", "Merge Persist Failure Test", run_merge_persist_failure },
   { "merge_conflict_surfaces_error", "Merge Conflict Surfaces Error Test", run_merge_conflict_surfaces_error_and_rollback_clears_durable_state },
   { "failed_merge_reopen_preserves_working_set_state", "Failed Merge Reopen Preserves Working Set State Test", run_failed_merge_reopen_clears_ephemeral_conflict_state },
