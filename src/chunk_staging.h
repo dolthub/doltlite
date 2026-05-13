@@ -40,9 +40,15 @@ int chunkStagingRecentCount(const ChunkStaging *st);
 
 void chunkStagingResetAfterSweep(ChunkStaging *st);
 
+#include "prolly_hash.h"
+
 struct ChunkStore;
-int csGrowPending(struct ChunkStore *cs);
 void csPendHTClear(struct ChunkStore *cs);
 void csRecentHTClear(struct ChunkStore *cs);
+int csGrowPending(struct ChunkStore *cs);
+int csGrowRecent(struct ChunkStore *cs, int nAdd);
+int csGrowWriteBuf(struct ChunkStore *cs, int nNeeded);
+int csSearchPending(struct ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
+int csSearchRecent(struct ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
 
 #endif
