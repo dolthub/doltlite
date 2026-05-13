@@ -361,6 +361,19 @@ static void csCaptureSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   pSaved->nTracking = cs->nTracking;
 }
 
+static void csDetachSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
+  csCaptureSavedRefsState(cs, pSaved);
+  cs->zDefaultBranch = 0;
+  cs->aBranches = 0;
+  cs->nBranches = 0;
+  cs->aTags = 0;
+  cs->nTags = 0;
+  cs->aRemotes = 0;
+  cs->nRemotes = 0;
+  cs->aTracking = 0;
+  cs->nTracking = 0;
+}
+
 static void csRestoreSavedRefsState(ChunkStore *cs, const SavedRefsState *pSaved){
   cs->zDefaultBranch = pSaved->zDefaultBranch;
   cs->aBranches = pSaved->aBranches;
@@ -575,6 +588,32 @@ static int csRestoreCommittedRefsState(ChunkStore *cs){
     return csEnsureDefaultBranch(cs);
   }
   return chunkStoreReloadRefs(cs);
+}
+
+static int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
+  int rc;
+  int preserveRefs = cs->nPending > 0
+                  && prollyHashCompare(&cs->refsHash,
+                                       &cs->committedRefsHash)!=0;
+  ProllyHash savedRefsHash;
+  SavedRefsState savedRefs;
+
+  memset(&savedRefs, 0, sizeof(savedRefs));
+  if( preserveRefs ){
+    savedRefsHash = cs->refsHash;
+    csDetachSavedRefsState(cs, &savedRefs);
+  }
+
+  rc = csReloadFromDisk(cs);
+
+  if( preserveRefs ){
+    if( rc==SQLITE_OK ){
+      csFreeRefsState(cs);
+    }
+    csRestoreSavedRefsState(cs, &savedRefs);
+    cs->refsHash = savedRefsHash;
+  }
+  return rc;
 }
 
 static int csSearchIndex(
@@ -2154,7 +2193,7 @@ static int csCommitToFile(ChunkStore *cs){
     int rc2 = sqlite3OsFileControl(cs->pFile, SQLITE_FCNTL_HAS_MOVED,
                                    &bMoved);
     if( rc2==SQLITE_OK && bMoved ){
-      rc = csReloadFromDisk(cs);
+      rc = csReloadFromDiskPreservingLocalRefs(cs);
       if( rc != SQLITE_OK ) goto commit_done;
       fileSize = cs->iFileSize;
     }
@@ -2162,7 +2201,7 @@ static int csCommitToFile(ChunkStore *cs){
   }
 
   if( fileSize > cs->iFileSize && hadFile ){
-    rc = csReloadFromDisk(cs);
+    rc = csReloadFromDiskPreservingLocalRefs(cs);
     if( rc != SQLITE_OK ) goto commit_done;
     fileSize = cs->iFileSize;
   }
@@ -2403,12 +2442,34 @@ commit_done:
 int chunkStoreCommit(ChunkStore *cs){
   int rc;
   int acquiredLock = 0;
+  int preserveRefs = 0;
+  ProllyHash savedRefsHash;
+  SavedRefsState savedRefs;
+
+  memset(&savedRefs, 0, sizeof(savedRefs));
   if( cs->readOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
-
   if( cs->graphLockFd < 0 && cs->zFilename ){
+    preserveRefs = cs->nPending > 0
+                && prollyHashCompare(&cs->refsHash,
+                                     &cs->committedRefsHash)!=0;
+    if( preserveRefs ){
+      savedRefsHash = cs->refsHash;
+      csDetachSavedRefsState(cs, &savedRefs);
+    }
     rc = chunkStoreLockAndRefresh(cs);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      if( preserveRefs ){
+        csRestoreSavedRefsState(cs, &savedRefs);
+        cs->refsHash = savedRefsHash;
+      }
+      return rc;
+    }
+    if( preserveRefs ){
+      csFreeRefsState(cs);
+      csRestoreSavedRefsState(cs, &savedRefs);
+      cs->refsHash = savedRefsHash;
+    }
     acquiredLock = 1;
   }
   rc = csCommitToFile(cs);
