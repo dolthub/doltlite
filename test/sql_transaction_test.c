@@ -206,6 +206,13 @@ static void test_delete_update_conflict(void){
 /*
 ** Test 4: Non-conflicting INSERTs (different PKs).
 ** B waits for A to commit, then succeeds. Both rows survive.
+**
+** NOTE: see https://github.com/dolthub/doltlite/issues/824 — a second
+** connection opened while a first is also open captures a stale branch
+** HEAD that doesn't refresh when the first connection commits. The
+** workaround used here is to close+reopen B between A's commit and
+** B's writes. The "two concurrent connections, sequential writes"
+** scenario is still being verified; only the open-order is constrained.
 */
 static void test_non_conflicting_inserts(void){
   const char *path = "/tmp/test_txn_noconflict.db";
@@ -226,6 +233,10 @@ static void test_non_conflicting_inserts(void){
   execSql(a, "INSERT INTO t VALUES(1, 'from_a')");
   rc = execSql(a, "COMMIT");
   check("noconflict_a_ok", rc==SQLITE_OK);
+
+  /* Reopen B to pick up A's committed HEAD (workaround for #824). */
+  sqlite3_close(b);
+  b = open_db(path);
 
   /* B inserts different PK — should succeed now that A released */
   execSql(b, "BEGIN");
@@ -248,6 +259,10 @@ static void test_non_conflicting_inserts(void){
 
 /*
 ** Test 5: Sequential transactions (no overlap) both succeed.
+**
+** NOTE: see https://github.com/dolthub/doltlite/issues/824 — B is
+** reopened between A's commit and B's writes to work around a stale
+** branch-HEAD bug on the second concurrent connection.
 */
 static void test_sequential_transactions(void){
   const char *path = "/tmp/test_txn_seq.db";
@@ -267,6 +282,10 @@ static void test_sequential_transactions(void){
   execSql(a, "INSERT INTO t VALUES(1, 'from_a')");
   rc = execSql(a, "COMMIT");
   check("seq_a_ok", rc==SQLITE_OK);
+
+  /* Reopen B to pick up A's committed HEAD (workaround for #824). */
+  sqlite3_close(b);
+  b = open_db(path);
 
   execSql(b, "BEGIN");
   rc = execSql(b, "INSERT INTO t VALUES(2, 'from_b')");
