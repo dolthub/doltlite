@@ -185,7 +185,8 @@ static int parseRecordFields(const u8 *pRec, int nRec,
                              RecField **ppFields, int *pnFields){
   const u8 *pPos, *pEnd, *pHdrEnd;
   u64 hdrSize;
-  int hdrBytes, nFields = 0, nAlloc = 0, bodyOff;
+  int hdrBytes, nFields = 0, nAlloc = 0;
+  i64 bodyOff;
   RecField *aFields = 0;
 
   if(!pRec || nRec<1) { *ppFields=0; *pnFields=0; return 0; }
@@ -197,7 +198,7 @@ static int parseRecordFields(const u8 *pRec, int nRec,
     *ppFields=0; *pnFields=0; return -1;
   }
   pHdrEnd = pRec + (int)hdrSize;
-  bodyOff = (int)hdrSize;
+  bodyOff = (i64)hdrSize;
 
   while(pPos < pHdrEnd && pPos < pEnd){
     u64 st; int stBytes, sz;
@@ -209,6 +210,11 @@ static int parseRecordFields(const u8 *pRec, int nRec,
     }
     pPos += stBytes;
     sz = dlSerialTypeLen(st);
+    if(sz < 0 || bodyOff + (i64)sz > (i64)nRec){
+      sqlite3_free(aFields);
+      *ppFields=0; *pnFields=0;
+      return -1;
+    }
 
     if(nFields >= nAlloc){
       RecField *aNew;
@@ -221,7 +227,7 @@ static int parseRecordFields(const u8 *pRec, int nRec,
       aFields = aNew;
     }
     aFields[nFields].st = st;
-    aFields[nFields].off = bodyOff;
+    aFields[nFields].off = (int)bodyOff;
     aFields[nFields].len = sz;
     nFields++;
     bodyOff += sz;
@@ -2285,14 +2291,16 @@ static int mergeCatalogPass2(
         if( conflict || forceRemap ){
           SchemaRootpageRemap *aNew;
           int nOld = *pnRemap;
-          newEntry.iTable = (*piNextMerged)++;
+          Pgno newPg = *piNextMerged;
           aNew = sqlite3_realloc(*ppaRemap,
                                  (nOld+1)*(int)sizeof(SchemaRootpageRemap));
           if( !aNew ) return SQLITE_NOMEM;
           *ppaRemap = aNew;
           aNew[nOld].oldPg = oldPg;
-          aNew[nOld].newPg = newEntry.iTable;
+          aNew[nOld].newPg = newPg;
           *pnRemap = nOld + 1;
+          newEntry.iTable = newPg;
+          (*piNextMerged)++;
         }
         if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
         aMerged[(*pnMerged)++] = newEntry;
@@ -2305,15 +2313,17 @@ static int mergeCatalogPass2(
           struct TableEntry newEntry = aTheirs[i];
           SchemaRootpageRemap *aNew;
           int nOld = *pnRemap;
-          newEntry.iTable = (*piNextMerged)++;
-          aMerged[(*pnMerged)++] = newEntry;
+          Pgno newPg = *piNextMerged;
           aNew = sqlite3_realloc(*ppaRemap,
                                  (nOld+1)*(int)sizeof(SchemaRootpageRemap));
           if( !aNew ) return SQLITE_NOMEM;
           *ppaRemap = aNew;
           aNew[nOld].oldPg = aTheirs[i].iTable;
-          aNew[nOld].newPg = newEntry.iTable;
+          aNew[nOld].newPg = newPg;
           *pnRemap = nOld + 1;
+          newEntry.iTable = newPg;
+          (*piNextMerged)++;
+          aMerged[(*pnMerged)++] = newEntry;
         }
       }
       continue;
