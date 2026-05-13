@@ -15,8 +15,8 @@
 # path, and full-scale R blows the CI 15-minute budget in the prepare phase
 # alone.
 #
-# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 2.25×) on individual
-# read/write ratios and BENCH_AVG_MAX_MULTIPLIER (default 1.75×) on
+# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 2.0×) on individual
+# read/write ratios and BENCH_AVG_MAX_MULTIPLIER (default 1.6×) on
 # section averages.
 #
 set -e
@@ -27,8 +27,8 @@ BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
 ROWS=${BENCH_ROWS:-1000}
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.25}
-BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-1.75}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.0}
+BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-1.6}
 SEED=42
 TMPDIR=$(mktemp -d)
 

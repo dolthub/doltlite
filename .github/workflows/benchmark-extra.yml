@@ -19,8 +19,8 @@ permissions:
 
 env:
   BENCH_RUNS: 5
-  BENCH_MAX_MULTIPLIER: 2.25
-  BENCH_AVG_MAX_MULTIPLIER: 1.75
+  BENCH_MAX_MULTIPLIER: 2.0
+  BENCH_AVG_MAX_MULTIPLIER: 1.6
 
 jobs:
   benchmark-extra:

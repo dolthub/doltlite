@@ -6963,7 +6963,7 @@ case OP_IdxGE:  {       /* jump, ncycle */
     assert( pC->eCurType==CURTYPE_BTREE );
     pCur = pC->uc.pCursor;
     assert( sqlite3BtreeCursorIsValid(pCur) );
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
     rc = sqlite3BtreeProllyCachedIndexKeyCompare(pCur, &r, &res);
     if( rc==SQLITE_NOTFOUND ){
       rc = SQLITE_OK;
@@ -6986,7 +6986,7 @@ case OP_IdxGE:  {       /* jump, ncycle */
     res = sqlite3VdbeRecordCompareWithSkip(m.n, m.z, &r, 0);
     sqlite3VdbeMemReleaseMalloc(&m);
   }
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 idx_compare_done:
 #endif
   /* End of inlined sqlite3VdbeIdxKeyCompare() */

@@ -261,7 +261,7 @@ int sqlite3BtreeIndexMoveto(
   UnpackedRecord *pUnKey,
   int *pRes
 );
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 int sqlite3BtreeProllyCachedIndexKeyCompare(
   BtCursor*,
   UnpackedRecord *pUnKey,
