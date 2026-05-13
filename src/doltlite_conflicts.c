@@ -526,17 +526,42 @@ static const char *cfrDiffType(const u8 *pBase, int nBase,
 }
 
 static sqlite3_int64 cfrConflictRowid(const struct ConflictRow *cr){
+  u64 h = 1469598103934665603ULL;
+  int i;
   if( cr->nKey>0 && cr->pKey ){
-    u64 h = 1469598103934665603ULL;
-    int i;
     for(i=0; i<cr->nKey; i++){
       h ^= (u64)cr->pKey[i];
       h *= 1099511628211ULL;
     }
-    if( h==0 ) h = 1;
-    return (sqlite3_int64)(h & 0x7fffffffffffffffULL);
   }
-  return (sqlite3_int64)cr->intKey;
+  {
+    u64 k = (u64)cr->intKey;
+    for(i=0; i<8; i++){
+      h ^= (k >> (i*8)) & 0xff;
+      h *= 1099511628211ULL;
+    }
+  }
+  if( cr->nBaseVal>0 && cr->pBaseVal ){
+    for(i=0; i<cr->nBaseVal; i++){
+      h ^= (u64)cr->pBaseVal[i];
+      h *= 1099511628211ULL;
+    }
+  }
+  h *= 1099511628211ULL;
+  if( cr->nOurVal>0 && cr->pOurVal ){
+    for(i=0; i<cr->nOurVal; i++){
+      h ^= (u64)cr->pOurVal[i];
+      h *= 1099511628211ULL;
+    }
+  }
+  h *= 1099511628211ULL;
+  if( cr->nTheirVal>0 && cr->pTheirVal ){
+    for(i=0; i<cr->nTheirVal; i++){
+      h ^= (u64)cr->pTheirVal[i];
+      h *= 1099511628211ULL;
+    }
+  }
+  return (sqlite3_int64)(h & 0x7fffffffffffffffULL);
 }
 
 static int cfrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
