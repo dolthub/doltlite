@@ -10,17 +10,52 @@ jobs:
   wasm-build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      EMSDK_VERSION: 3.1.74
+      WABT_VERSION: 1.0.36
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Install dependencies
+    - name: Cache Emscripten SDK
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/emsdk
+        key: emsdk-${{ runner.os }}-${{ env.EMSDK_VERSION }}
+
+    - name: Install Emscripten SDK
       run: |
-        sudo apt-get update
-        sudo apt-get install -y build-essential zlib1g-dev tcl-dev emscripten wabt
+        EMSDK_DIR="${RUNNER_TOOL_CACHE}/emsdk"
+        if [ ! -d "$EMSDK_DIR/.git" ]; then
+          rm -rf "$EMSDK_DIR"
+          git clone https://github.com/emscripten-core/emsdk.git "$EMSDK_DIR"
+        fi
+        cd "$EMSDK_DIR"
+        git fetch --tags --quiet
+        ./emsdk install "$EMSDK_VERSION"
+        ./emsdk activate "$EMSDK_VERSION"
+        echo "EMSDK=$EMSDK_DIR" >> "$GITHUB_ENV"
+
+    - name: Cache WABT
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/wabt-${{ env.WABT_VERSION }}
+        key: wabt-${{ runner.os }}-${{ env.WABT_VERSION }}
+
+    - name: Install WABT
+      run: |
+        WABT_DIR="${RUNNER_TOOL_CACHE}/wabt-${WABT_VERSION}"
+        if [ ! -x "$WABT_DIR/bin/wasm-strip" ]; then
+          rm -rf "$WABT_DIR"
+          mkdir -p "$WABT_DIR"
+          curl -fsSL "https://github.com/WebAssembly/wabt/releases/download/${WABT_VERSION}/wabt-${WABT_VERSION}-ubuntu-20.04.tar.gz" \
+            | tar -xz --strip-components=1 -C "$WABT_DIR"
+        fi
+        echo "$WABT_DIR/bin" >> "$GITHUB_PATH"
 
     - name: Configure
       run: |
+        source "$EMSDK/emsdk_env.sh"
         ./configure
 
     - name: Build generated SQLite files
@@ -36,6 +71,7 @@ jobs:
 
     - name: Build DoltLite wasm targets
       run: |
+        source "$EMSDK/emsdk_env.sh"
         make -C ext/wasm fiddle npm
 
     - name: Smoke test DoltLite wasm runtime
@@ -52,6 +88,7 @@ jobs:
 
     - name: Build wasm distribution zip
       run: |
+        source "$EMSDK/emsdk_env.sh"
         make -C ext/wasm dist
 
     - name: Upload wasm artifacts
