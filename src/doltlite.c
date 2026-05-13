@@ -2812,8 +2812,12 @@ static void doltliteMergeFunc(
           sqlite3_result_error_code(context, rc);
         }else{
           sqlite3_result_error(context,
-            "Merge resulted in constraint violations. Resolve the rows in "
-            "dolt_constraint_violations and then commit with dolt_commit.",
+            "Merge aborted: would have introduced constraint violations. "
+            "The merge and the would-be violations have been rolled back "
+            "with the enclosing savepoint, so dolt_constraint_violations "
+            "is empty. To inspect the violations, re-run the merge inside "
+            "a plain BEGIN/COMMIT transaction (no SAVEPOINT) so the "
+            "violations are preserved instead of rolled back.",
             -1);
         }
         break;
@@ -3094,8 +3098,12 @@ static int applyMergedCatalogAndCommit(
         rc = doltliteRestoreTxnStateOnFailure(db, &savedState, SQLITE_OK);
         if( rc!=SQLITE_OK ) return rc;
         sqlite3_result_error(context,
-          "Merge resulted in constraint violations. Resolve the rows in "
-          "dolt_constraint_violations and then commit with dolt_commit.",
+          "Merge aborted: would have introduced constraint violations. "
+          "The merge and the would-be violations have been rolled back "
+          "with the enclosing savepoint, so dolt_constraint_violations "
+          "is empty. Re-run the merge in autocommit mode (outside a "
+          "transaction) to inspect the violations in "
+          "dolt_constraint_violations.",
           -1);
         break;
       }
