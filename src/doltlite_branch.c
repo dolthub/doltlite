@@ -1360,13 +1360,13 @@ static int brNext(sqlite3_vtab_cursor *c){ ((BrCur*)c)->iRow++; return SQLITE_OK
 static int brEof(sqlite3_vtab_cursor *c){
   BrVtab *v = (BrVtab*)c->pVtab;
   ChunkStore *cs = doltliteGetChunkStore(v->db);
-  return !cs || ((BrCur*)c)->iRow >= cs->nBranches;
+  return !cs || ((BrCur*)c)->iRow >= refsTableBranchCount(&cs->refs);
 }
 
 static int brIsDirty(
   sqlite3 *db,
   ChunkStore *cs,
-  struct BranchRef *br,
+  const BranchRef *br,
   int *pDirty
 ){
   ProllyHash stagedCat;
@@ -1413,9 +1413,12 @@ static int brIsDirty(
 static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
   BrVtab *v = (BrVtab*)c->pVtab;
   ChunkStore *cs = doltliteGetChunkStore(v->db);
-  struct BranchRef *br;
+  const BranchRef *br;
+  int nBr;
+  const BranchRef *aBr;
   if(!cs) return SQLITE_OK;
-  br = &cs->aBranches[((BrCur*)c)->iRow];
+  refsTableGetBranches(&cs->refs, &nBr, &aBr);
+  br = &aBr[((BrCur*)c)->iRow];
 
   switch(col){
     case 0:

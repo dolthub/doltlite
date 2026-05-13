@@ -6823,18 +6823,30 @@ int doltliteCheckRepoGraphIntegrity(Btree *p, int mxErr, int *pnErr){
   rc = prollyHashSetInit(&ctx.seen, 256);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = integrityCheckChunkGraph(&ctx, &pBt->store.refsHash);
-  for(i=0; rc==SQLITE_OK && i<pBt->store.nBranches; i++){
-    rc = integrityCheckChunkGraph(&ctx, &pBt->store.aBranches[i].commitHash);
-    if( rc==SQLITE_OK ){
-      rc = integrityCheckChunkGraph(&ctx, &pBt->store.aBranches[i].workingSetHash);
+  rc = integrityCheckChunkGraph(&ctx, refsTableGetHash(&pBt->store.refs));
+  {
+    int nBr; const BranchRef *aBr;
+    refsTableGetBranches(&pBt->store.refs, &nBr, &aBr);
+    for(i=0; rc==SQLITE_OK && i<nBr; i++){
+      rc = integrityCheckChunkGraph(&ctx, &aBr[i].commitHash);
+      if( rc==SQLITE_OK ){
+        rc = integrityCheckChunkGraph(&ctx, &aBr[i].workingSetHash);
+      }
     }
   }
-  for(i=0; rc==SQLITE_OK && i<pBt->store.nTags; i++){
-    rc = integrityCheckChunkGraph(&ctx, &pBt->store.aTags[i].commitHash);
+  {
+    int nTg; const TagRef *aTg;
+    refsTableGetTags(&pBt->store.refs, &nTg, &aTg);
+    for(i=0; rc==SQLITE_OK && i<nTg; i++){
+      rc = integrityCheckChunkGraph(&ctx, &aTg[i].commitHash);
+    }
   }
-  for(i=0; rc==SQLITE_OK && i<pBt->store.nTracking; i++){
-    rc = integrityCheckChunkGraph(&ctx, &pBt->store.aTracking[i].commitHash);
+  {
+    int nTk; const TrackingBranch *aTk;
+    refsTableGetTracking(&pBt->store.refs, &nTk, &aTk);
+    for(i=0; rc==SQLITE_OK && i<nTk; i++){
+      rc = integrityCheckChunkGraph(&ctx, &aTk[i].commitHash);
+    }
   }
   if( rc==SQLITE_OK && p->isMerging ){
     rc = integrityCheckChunkGraph(&ctx, &p->mergeCommitHash);

@@ -6,6 +6,7 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_wal.h"
+#include "chunk_refs.h"
 
 #define CHUNK_STORE_MAGIC 0x444C5443
 #define CHUNK_STORE_VERSION 11
@@ -108,39 +109,7 @@ struct ChunkStore {
   char *zFilename;
   sqlite3_file *pFile;
   sqlite3_vfs *pVfs;
-  ProllyHash refsHash;
-  ProllyHash committedRefsHash;
-
-  struct BranchRef {
-    char *zName;
-    ProllyHash commitHash;
-    ProllyHash workingSetHash;
-  } *aBranches;
-  int nBranches;
-  char *zDefaultBranch;
-
-  struct TagRef {
-    char *zName;
-    ProllyHash commitHash;
-    char *zTagger;
-    char *zEmail;
-    i64 timestamp;
-    char *zMessage;
-  } *aTags;
-  int nTags;
-
-  struct RemoteRef {
-    char *zName;
-    char *zUrl;
-  } *aRemotes;
-  int nRemotes;
-
-  struct TrackingBranch {
-    char *zRemote;
-    char *zBranch;
-    ProllyHash commitHash;
-  } *aTracking;
-  int nTracking;
+  RefsTable refs;
 
   int nChunks;
   i64 iIndexOffset;

@@ -114,7 +114,7 @@ static int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
   memset(p, 0, sizeof(*p));
   if( !cs ) return SQLITE_ERROR;
 
-  memcpy(&p->refsHash, &cs->refsHash, sizeof(ProllyHash));
+  memcpy(&p->refsHash, refsTableGetHash(&cs->refs), sizeof(ProllyHash));
 
   p->zSessionBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !p->zSessionBranch ){
@@ -142,7 +142,7 @@ static int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
 
   if( !cs ) return SQLITE_ERROR;
 
-  memcpy(&cs->refsHash, &p->refsHash, sizeof(ProllyHash));
+  refsTableSetHash(&cs->refs, &p->refsHash);
   if( prollyHashIsEmpty(&p->refsHash) ){
     chunkStoreClearRefs(cs);
   }else{
@@ -576,7 +576,7 @@ static int doltliteAdvanceBranch(
   rc = doltliteSaveTxnState(db, &saved);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( cs->nBranches==0 ){
+  if( refsTableBranchCount(&cs->refs)==0 ){
     rc = chunkStoreAddBranch(cs, branch, pNewHead);
     if( rc==SQLITE_OK ){
       rc = chunkStoreSetDefaultBranch(cs, branch);
@@ -4812,7 +4812,7 @@ static void doltliteMaybeSeedRepo(sqlite3 *db){
   int rc;
 
   if( !cs ) return;
-  if( cs->nBranches > 0 ) return;
+  if( refsTableBranchCount(&cs->refs) > 0 ) return;
   if( sqlite3_db_readonly(db, "main")==1 ) return;
 
   memset(&emptyParent, 0, sizeof(emptyParent));

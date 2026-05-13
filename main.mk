@@ -575,7 +575,7 @@ else
 endif
 
 PROLLY_OBJS = prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
-              chunk_store.o chunk_wal.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
+              chunk_store.o chunk_wal.o chunk_refs.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_schema_merge.o doltlite_conflicts.o \
@@ -1385,6 +1385,9 @@ chunk_store.o:	$(TOP)/src/chunk_store.c $(DEPS_OBJ_COMMON)
 chunk_wal.o:	$(TOP)/src/chunk_wal.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/chunk_wal.c
 
+
+chunk_refs.o:	$(TOP)/src/chunk_refs.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/chunk_refs.c
 prolly_cursor.o:	$(TOP)/src/prolly_cursor.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_cursor.c
 

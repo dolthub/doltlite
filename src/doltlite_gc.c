@@ -78,15 +78,23 @@ static int gcMarkReachable(
   rc = gcQueueInit(&queue);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = gcQueuePush(&queue, &cs->refsHash);
+  rc = gcQueuePush(&queue, refsTableGetHash(&cs->refs));
 
-  for(i=0; rc==SQLITE_OK && i<cs->nBranches; i++){
-    rc = gcQueuePush(&queue, &cs->aBranches[i].commitHash);
-    if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &cs->aBranches[i].workingSetHash);
+  {
+    int nBr; const BranchRef *aBr;
+    refsTableGetBranches(&cs->refs, &nBr, &aBr);
+    for(i=0; rc==SQLITE_OK && i<nBr; i++){
+      rc = gcQueuePush(&queue, &aBr[i].commitHash);
+      if( rc==SQLITE_OK ) rc = gcQueuePush(&queue, &aBr[i].workingSetHash);
+    }
   }
 
-  for(i=0; rc==SQLITE_OK && i<cs->nTags; i++){
-    rc = gcQueuePush(&queue, &cs->aTags[i].commitHash);
+  {
+    int nTg; const TagRef *aTg;
+    refsTableGetTags(&cs->refs, &nTg, &aTg);
+    for(i=0; rc==SQLITE_OK && i<nTg; i++){
+      rc = gcQueuePush(&queue, &aTg[i].commitHash);
+    }
   }
   if( rc!=SQLITE_OK ){
     gcQueueFree(&queue);
