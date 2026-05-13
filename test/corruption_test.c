@@ -9,9 +9,8 @@
 ** DoltLite file format (from chunk_store.h):
 **   [Manifest header: 168 bytes at offset 0]
 **     magic(4) + version(4) + root_hash(20) + chunk_count(4) +
-**     index_offset(8) + index_size(4) + catalog_hash(20) +
-**     head_commit(20) + wal_offset(8) + reserved(12) + refs_hash(20) +
-**     reserved(64)
+**     index_offset(8) + index_size(4) + reserved(40) +
+**     wal_offset(8) + reserved(12) + refs_hash(20) + reserved(44)
 **   [Compacted chunk data: offset 168 to iWalOffset]
 **     length(4) + data(length), with sorted index
 **   [WAL region: iWalOffset to EOF]
@@ -710,8 +709,8 @@ static void test_wrong_file_size_in_manifest(void){
 
   /* The wal_offset field is at offset:
   **   magic(4) + version(4) + root_hash(20) + chunk_count(4) +
-  **   index_offset(8) + index_size(4) + catalog_hash(20) +
-  **   head_commit(20) + wal_offset(8) = offset 84
+  **   index_offset(8) + index_size(4) + reserved(40) +
+  **   wal_offset(8) = offset 84
   ** wal_offset is an i64 at offset 84
   **
   ** Set it to a wildly wrong value */
@@ -727,67 +726,13 @@ static void test_wrong_file_size_in_manifest(void){
 }
 
 /*
-** Test 12: Create compacted database, verify it works, corrupt the
-** catalog hash, then reopen. Verify error reporting.
-**
-** After GC, the manifest catalog_hash is authoritative.
-*/
-static void test_commit_then_corrupt(void){
-  const char *dbpath = "/tmp/test_corr_reopen.db";
-
-  printf("--- Test 12: Commit, GC, corrupt catalog, reopen ---\n");
-
-  check("create_compacted_12", create_compacted_db(dbpath)==0);
-
-  /* Verify it works before corruption */
-  {
-    sqlite3 *db = 0;
-    check("verify_good_12", sqlite3_open(dbpath, &db)==SQLITE_OK);
-    check("good_count_12",
-      strcmp(queryScalarText(db, "SELECT count(*) FROM t1"), "5")==0);
-    /* doltlite's dolt_log includes the auto-generated "Initialize data
-    ** repository" commit, so: genesis + first commit + second commit = 3. */
-    check("good_log_12",
-      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "3")==0);
-    sqlite3_close(db);
-  }
-
-  /* Corrupt the catalog hash at offset 44 (20 bytes).
-  ** After GC, no WAL root records exist to override this. */
-  {
-    unsigned char bad_hash[20];
-    memset(bad_hash, 0xAB, sizeof(bad_hash));
-    check("corrupt_12",
-      corrupt_bytes(dbpath, 44, bad_hash, sizeof(bad_hash))==0);
-  }
-
-  /* Reopen -- the corrupted catalog hash should cause errors when
-  ** trying to look up tables */
-  {
-    sqlite3 *db = 0;
-    int rc = sqlite3_open(dbpath, &db);
-    if( rc==SQLITE_OK ){
-      rc = execSql(db, "SELECT * FROM t1");
-      int log_rc = execSql(db, "SELECT * FROM dolt_log");
-      check("corrupt_catalog_detected",
-        rc!=SQLITE_OK || log_rc!=SQLITE_OK);
-    }else{
-      check("corrupt_catalog_detected", 1);
-    }
-    if( db ) sqlite3_close(db);
-  }
-
-  removeDb(dbpath);
-}
-
-/*
-** Test 13: Corrupt magic number.
+** Test 12: Corrupt magic number.
 ** Should fail to open as DoltLite.
 */
 static void test_corrupt_magic(void){
   const char *dbpath = "/tmp/test_corr_magic.db";
 
-  printf("--- Test 13: Corrupt magic number ---\n");
+  printf("--- Test 12: Corrupt magic number ---\n");
 
   check("create_good_13", create_good_db(dbpath)==0);
 
@@ -803,12 +748,12 @@ static void test_corrupt_magic(void){
 }
 
 /*
-** Test 14: Corrupt version number to unsupported version.
+** Test 13: Corrupt version number to unsupported version.
 */
 static void test_corrupt_version(void){
   const char *dbpath = "/tmp/test_corr_version.db";
 
-  printf("--- Test 14: Corrupt version number ---\n");
+  printf("--- Test 13: Corrupt version number ---\n");
 
   check("create_good_14", create_good_db(dbpath)==0);
 
@@ -824,8 +769,7 @@ static void test_corrupt_version(void){
 }
 
 /*
-** Test 15: Corrupt the head_commit hash in a compacted DB.
-** After GC, the manifest is authoritative.
+** Test 14: Corrupt the reserved former head_commit bytes in a compacted DB.
 **
 ** NOTE: The system recovers head_commit from the active branch's commit
 ** hash in refs, so manifest head_commit corruption is tolerated. This test
@@ -835,7 +779,7 @@ static void test_corrupt_version(void){
 static void test_corrupt_head_commit(void){
   const char *dbpath = "/tmp/test_corr_head.db";
 
-  printf("--- Test 15: Corrupt head_commit hash (compacted) ---\n");
+  printf("--- Test 14: Corrupt former head_commit bytes (compacted) ---\n");
 
   check("create_compacted_15", create_compacted_db(dbpath)==0);
 
@@ -873,7 +817,7 @@ static void test_corrupt_head_commit(void){
 }
 
 /*
-** Test 16: Corrupt the chunk_count field in a compacted DB.
+** Test 15: Corrupt the chunk_count field in a compacted DB.
 ** After GC, chunk_count should govern how many index entries to read.
 **
 ** NOTE: The system currently derives the actual index entry count from
@@ -885,7 +829,7 @@ static void test_corrupt_head_commit(void){
 static void test_corrupt_chunk_count(void){
   const char *dbpath = "/tmp/test_corr_chunkcount.db";
 
-  printf("--- Test 16: Corrupt chunk_count field (compacted) ---\n");
+  printf("--- Test 15: Corrupt chunk_count field (compacted) ---\n");
 
   check("create_compacted_16", create_compacted_db(dbpath)==0);
 
@@ -919,12 +863,12 @@ static void test_corrupt_chunk_count(void){
 }
 
 /*
-** Test 17: Corrupt index_offset to point past end of file.
+** Test 16: Corrupt index_offset to point past end of file.
 */
 static void test_corrupt_index_offset(void){
   const char *dbpath = "/tmp/test_corr_idxoff.db";
 
-  printf("--- Test 17: Corrupt index_offset ---\n");
+  printf("--- Test 16: Corrupt index_offset ---\n");
 
   /* Create and GC */
   {
@@ -967,7 +911,6 @@ int main(void){
   test_manifest_only();
   test_corrupt_wal_tag();
   test_wrong_file_size_in_manifest();
-  test_commit_then_corrupt();
   test_corrupt_magic();
   test_corrupt_version();
   test_corrupt_head_commit();

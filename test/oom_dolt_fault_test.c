@@ -12,9 +12,7 @@
 ** checks on allocation results). The harness intentionally does NOT
 ** fix them; it only detects them. Followups go in the PR body.
 **
-** This is wired into c-tests via test/run_c_tests.sh. Placement (GATING
-** vs EXPECTED_FAIL) depends on observed behavior on master at wire-in
-** time. See test/run_c_tests.sh for the convention.
+** This is wired into c-tests via test/run_c_tests.sh.
 */
 #include <stdio.h>
 #include <string.h>
