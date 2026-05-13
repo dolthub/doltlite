@@ -644,22 +644,22 @@ static void run_refs_blob_corruption(void){
 
   check("set_default_branch",
         chunkStoreSetDefaultBranch(&cs, "main")==SQLITE_OK);
-  cs.aBranches = sqlite3_malloc(sizeof(*cs.aBranches));
-  check("alloc_branch_ref", cs.aBranches!=0);
-  if( cs.aBranches ){
-    memset(cs.aBranches, 0, sizeof(*cs.aBranches));
-    cs.nBranches = 1;
-    cs.aBranches[0].zName = sqlite3_mprintf("main");
-    check("alloc_branch_name", cs.aBranches[0].zName!=0);
+  cs.refs.aBranches = sqlite3_malloc(sizeof(*cs.refs.aBranches));
+  check("alloc_branch_ref", cs.refs.aBranches!=0);
+  if( cs.refs.aBranches ){
+    memset(cs.refs.aBranches, 0, sizeof(*cs.refs.aBranches));
+    cs.refs.nBranches = 1;
+    cs.refs.aBranches[0].zName = sqlite3_mprintf("main");
+    check("alloc_branch_name", cs.refs.aBranches[0].zName!=0);
   }
 
-  cs.aTags = sqlite3_malloc(sizeof(*cs.aTags));
-  check("alloc_tag_ref", cs.aTags!=0);
-  if( cs.aTags ){
-    memset(cs.aTags, 0, sizeof(*cs.aTags));
-    cs.nTags = 1;
-    cs.aTags[0].zName = sqlite3_mprintf("v1");
-    check("alloc_tag_name", cs.aTags[0].zName!=0);
+  cs.refs.aTags = sqlite3_malloc(sizeof(*cs.refs.aTags));
+  check("alloc_tag_ref", cs.refs.aTags!=0);
+  if( cs.refs.aTags ){
+    memset(cs.refs.aTags, 0, sizeof(*cs.refs.aTags));
+    cs.refs.nTags = 1;
+    cs.refs.aTags[0].zName = sqlite3_mprintf("v1");
+    check("alloc_tag_name", cs.refs.aTags[0].zName!=0);
   }
 
   check("serialize_refs_blob",
@@ -871,7 +871,7 @@ static void run_remote_refs_corruption(void){
   check("lock_remote_store", chunkStoreLockAndRefresh(&cs)==SQLITE_OK);
   check("put_bad_remote_refs",
         chunkStorePut(&cs, badBlob, (int)sizeof(badBlob), &badRefsHash)==SQLITE_OK);
-  memcpy(&cs.refsHash, &badRefsHash, sizeof(ProllyHash));
+  memcpy(&cs.refs.refsHash, &badRefsHash, sizeof(ProllyHash));
   check("commit_bad_remote_refs", chunkStoreCommit(&cs)==SQLITE_OK);
   chunkStoreUnlock(&cs);
   chunkStoreClose(&cs);
@@ -1990,8 +1990,8 @@ static void run_branches_metadata_corruption(void){
   check("lock_store", chunkStoreLockAndRefresh(&cs)==SQLITE_OK);
   {
     int i;
-    for(i=0; i<cs.nBranches; i++){
-      if( cs.aBranches[i].zName && strcmp(cs.aBranches[i].zName, "feature")==0 ){
+    for(i=0; i<cs.refs.nBranches; i++){
+      if( cs.refs.aBranches[i].zName && strcmp(cs.refs.aBranches[i].zName, "feature")==0 ){
         iFeature = i;
         break;
       }
@@ -1999,8 +1999,8 @@ static void run_branches_metadata_corruption(void){
   }
   check("have_feature_branch", iFeature >= 0);
   if( iFeature >= 0 ){
-    memcpy(&cs.aBranches[iFeature].commitHash, &badHash, sizeof(ProllyHash));
-    memcpy(&cs.aBranches[iFeature].workingSetHash, &badHash, sizeof(ProllyHash));
+    memcpy(&cs.refs.aBranches[iFeature].commitHash, &badHash, sizeof(ProllyHash));
+    memcpy(&cs.refs.aBranches[iFeature].workingSetHash, &badHash, sizeof(ProllyHash));
   }
   check("serialize_corrupt_branch_refs", chunkStoreSerializeRefs(&cs)==SQLITE_OK);
   check("commit_corrupt_branch_refs", chunkStoreCommit(&cs)==SQLITE_OK);
@@ -2266,10 +2266,10 @@ static void run_reload_refs_transactional(void){
         chunkStoreAddBranch(&cs, "main", &emptyHash)==SQLITE_OK);
   check("serialize_good_refs",
         chunkStoreSerializeRefs(&cs)==SQLITE_OK);
-  nBranchesBefore = cs.nBranches;
-  zDefaultBefore = sqlite3_mprintf("%s", cs.zDefaultBranch ? cs.zDefaultBranch : "");
-  zBranchBefore = (cs.aBranches && cs.nBranches>0 && cs.aBranches[0].zName)
-                ? sqlite3_mprintf("%s", cs.aBranches[0].zName)
+  nBranchesBefore = cs.refs.nBranches;
+  zDefaultBefore = sqlite3_mprintf("%s", cs.refs.zDefaultBranch ? cs.refs.zDefaultBranch : "");
+  zBranchBefore = (cs.refs.aBranches && cs.refs.nBranches>0 && cs.refs.aBranches[0].zName)
+                ? sqlite3_mprintf("%s", cs.refs.aBranches[0].zName)
                 : sqlite3_mprintf("");
 
   check("load_bad_refs_blob_as_chunk",
@@ -2278,23 +2278,23 @@ static void run_reload_refs_transactional(void){
   rc = chunkStoreLoadRefsFromBlob(&cs, badBlob, (int)sizeof(badBlob));
   check("load_refs_blob_returns_corrupt", rc==SQLITE_CORRUPT);
   check("load_refs_blob_preserves_default_branch",
-        cs.zDefaultBranch && strcmp(cs.zDefaultBranch, zDefaultBefore)==0);
-  check("load_refs_blob_preserves_branch_count", cs.nBranches==nBranchesBefore);
+        cs.refs.zDefaultBranch && strcmp(cs.refs.zDefaultBranch, zDefaultBefore)==0);
+  check("load_refs_blob_preserves_branch_count", cs.refs.nBranches==nBranchesBefore);
   check("load_refs_blob_preserves_branch_name",
         nBranchesBefore==0 ||
-        (cs.aBranches && cs.aBranches[0].zName
-         && strcmp(cs.aBranches[0].zName, zBranchBefore)==0));
+        (cs.refs.aBranches && cs.refs.aBranches[0].zName
+         && strcmp(cs.refs.aBranches[0].zName, zBranchBefore)==0));
 
-  memcpy(&cs.refsHash, &badHash, sizeof(badHash));
+  memcpy(&cs.refs.refsHash, &badHash, sizeof(badHash));
   rc = chunkStoreReloadRefs(&cs);
   check("reload_refs_returns_corrupt", rc==SQLITE_CORRUPT);
   check("reload_refs_preserves_default_branch",
-        cs.zDefaultBranch && strcmp(cs.zDefaultBranch, zDefaultBefore)==0);
-  check("reload_refs_preserves_branch_count", cs.nBranches==nBranchesBefore);
+        cs.refs.zDefaultBranch && strcmp(cs.refs.zDefaultBranch, zDefaultBefore)==0);
+  check("reload_refs_preserves_branch_count", cs.refs.nBranches==nBranchesBefore);
   check("reload_refs_preserves_branch_name",
         nBranchesBefore==0 ||
-        (cs.aBranches && cs.aBranches[0].zName
-         && strcmp(cs.aBranches[0].zName, zBranchBefore)==0));
+        (cs.refs.aBranches && cs.refs.aBranches[0].zName
+         && strcmp(cs.refs.aBranches[0].zName, zBranchBefore)==0));
 
   sqlite3_free(zDefaultBefore);
   sqlite3_free(zBranchBefore);
@@ -2329,11 +2329,11 @@ static void run_refresh_refs_corruption_preserves_state(void){
 
   check("open_store_1", chunkStoreOpen(&cs1, sqlite3_vfs_find(0), dbpath,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
-  refsHashBefore = cs1.refsHash;
-  nBranchesBefore = cs1.nBranches;
-  zDefaultBefore = sqlite3_mprintf("%s", cs1.zDefaultBranch ? cs1.zDefaultBranch : "");
-  zBranchBefore = (cs1.aBranches && cs1.nBranches>0 && cs1.aBranches[0].zName)
-                ? sqlite3_mprintf("%s", cs1.aBranches[0].zName)
+  refsHashBefore = cs1.refs.refsHash;
+  nBranchesBefore = cs1.refs.nBranches;
+  zDefaultBefore = sqlite3_mprintf("%s", cs1.refs.zDefaultBranch ? cs1.refs.zDefaultBranch : "");
+  zBranchBefore = (cs1.refs.aBranches && cs1.refs.nBranches>0 && cs1.refs.aBranches[0].zName)
+                ? sqlite3_mprintf("%s", cs1.refs.aBranches[0].zName)
                 : sqlite3_mprintf("");
 
   check("open_store_2", chunkStoreOpen(&cs2, sqlite3_vfs_find(0), dbpath,
@@ -2341,7 +2341,7 @@ static void run_refresh_refs_corruption_preserves_state(void){
   check("lock_store_2", chunkStoreLockAndRefresh(&cs2)==SQLITE_OK);
   check("put_bad_refs_chunk",
         chunkStorePut(&cs2, badBlob, (int)sizeof(badBlob), &badHash)==SQLITE_OK);
-  memcpy(&cs2.refsHash, &badHash, sizeof(badHash));
+  memcpy(&cs2.refs.refsHash, &badHash, sizeof(badHash));
   check("commit_bad_refs_hash", chunkStoreCommit(&cs2)==SQLITE_OK);
   chunkStoreUnlock(&cs2);
   chunkStoreClose(&cs2);
@@ -2350,14 +2350,14 @@ static void run_refresh_refs_corruption_preserves_state(void){
   check("refresh_returns_error_for_corrupt_refs", rc==SQLITE_CORRUPT);
   check("refresh_does_not_mark_changed", changed==0);
   check("refresh_preserves_default_branch",
-        cs1.zDefaultBranch && strcmp(cs1.zDefaultBranch, zDefaultBefore)==0);
-  check("refresh_preserves_branch_count", cs1.nBranches==nBranchesBefore);
+        cs1.refs.zDefaultBranch && strcmp(cs1.refs.zDefaultBranch, zDefaultBefore)==0);
+  check("refresh_preserves_branch_count", cs1.refs.nBranches==nBranchesBefore);
   check("refresh_preserves_branch_name",
         nBranchesBefore==0 ||
-        (cs1.aBranches && cs1.aBranches[0].zName
-         && strcmp(cs1.aBranches[0].zName, zBranchBefore)==0));
+        (cs1.refs.aBranches && cs1.refs.aBranches[0].zName
+         && strcmp(cs1.refs.aBranches[0].zName, zBranchBefore)==0));
   check("refresh_preserves_refs_hash",
-        memcmp(&cs1.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
+        memcmp(&cs1.refs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
   sqlite3_free(zDefaultBefore);
   sqlite3_free(zBranchBefore);
   chunkStoreClose(&cs1);
@@ -3097,8 +3097,8 @@ static void run_refresh_open_path_transactional(void){
   rc = chunkStoreRefreshIfChanged(&cs, &changed);
   check("refresh_open_path_returns_error", rc!=SQLITE_OK);
   check("refresh_open_path_does_not_mark_changed", changed==0);
-  check("refresh_open_path_preserves_empty_refs", prollyHashIsEmpty(&cs.refsHash));
-  check("refresh_open_path_preserves_branch_count", cs.nBranches==0);
+  check("refresh_open_path_preserves_empty_refs", prollyHashIsEmpty(&cs.refs.refsHash));
+  check("refresh_open_path_preserves_branch_count", cs.refs.nBranches==0);
 
   chunkStoreClose(&cs);
   removeDbFiles(dbpath);
@@ -6064,18 +6064,18 @@ static void run_chunk_store_rollback_restores_refs_hash(void){
         chunkStoreSerializeRefs(&cs)==SQLITE_OK);
   check("commit_initial_refs_for_refs_rollback",
         chunkStoreCommit(&cs)==SQLITE_OK);
-  refsHashBefore = cs.refsHash;
+  refsHashBefore = cs.refs.refsHash;
 
   check("add_tag_before_rollback",
         chunkStoreAddTag(&cs, "v1", &emptyHash)==SQLITE_OK);
   check("serialize_updated_refs_before_rollback",
         chunkStoreSerializeRefs(&cs)==SQLITE_OK);
   check("refs_hash_changed_before_rollback",
-        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))!=0);
+        memcmp(&cs.refs.refsHash, &refsHashBefore, sizeof(ProllyHash))!=0);
 
   chunkStoreRollback(&cs);
   check("refs_hash_restored_on_rollback",
-        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
+        memcmp(&cs.refs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
   check("reload_refs_after_rollback", chunkStoreReloadRefs(&cs)==SQLITE_OK);
   check("tag_absent_after_reload_rollback",
         chunkStoreFindTag(&cs, "v1", &foundHash)!=SQLITE_OK);
@@ -6112,14 +6112,14 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
         chunkStoreSerializeRefs(&cs)==SQLITE_OK);
   check("commit_initial_refs_for_refs_commit_failure",
         chunkStoreCommit(&cs)==SQLITE_OK);
-  refsHashBefore = cs.refsHash;
+  refsHashBefore = cs.refs.refsHash;
 
   check("add_tag_for_refs_commit_failure",
         chunkStoreAddTag(&cs, "v1", &emptyHash)==SQLITE_OK);
   check("serialize_updated_refs_for_refs_commit_failure",
         chunkStoreSerializeRefs(&cs)==SQLITE_OK);
   check("refs_hash_changed_for_refs_commit_failure",
-        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))!=0);
+        memcmp(&cs.refs.refsHash, &refsHashBefore, sizeof(ProllyHash))!=0);
 
   gFailHits = 0;
   gFailSyncOnce = 1;
@@ -6127,7 +6127,7 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
   check("commit_failure_injected_for_refs_commit_failure", gFailHits>0);
   check("commit_failure_surfaces_for_refs_commit_failure", rc!=SQLITE_OK);
   check("refs_hash_restored_on_commit_failure",
-        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
+        memcmp(&cs.refs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
   check("in_memory_tag_absent_after_commit_failure",
         chunkStoreFindTag(&cs, "v1", &foundHash)!=SQLITE_OK);
 
@@ -6144,7 +6144,7 @@ static void run_chunk_store_commit_failure_restores_refs_hash(void){
   check("reopened_store_has_no_failed_tag",
         chunkStoreFindTag(&reopened, "v1", &foundHash)!=SQLITE_OK);
   check("reopened_store_keeps_default_branch",
-        reopened.zDefaultBranch!=0 && strcmp(reopened.zDefaultBranch, "main")==0);
+        reopened.refs.zDefaultBranch!=0 && strcmp(reopened.refs.zDefaultBranch, "main")==0);
   chunkStoreClose(&reopened);
   removeDbFiles(dbpath);
 }
@@ -6177,14 +6177,14 @@ static void run_remotesrv_put_refs_failure_restores_state(void){
         chunkStoreSerializeRefs(&cs)==SQLITE_OK);
   check("commit_initial_refs_for_remotesrv_put_refs",
         chunkStoreCommit(&cs)==SQLITE_OK);
-  refsHashBefore = cs.refsHash;
+  refsHashBefore = cs.refs.refsHash;
 
   rc = doltliteRemoteSrvApplyRefsForTest(&cs, aBadRefs, (int)sizeof(aBadRefs));
   check("remotesrv_put_refs_reload_failure_surfaces", rc!=SQLITE_OK);
   check("remotesrv_put_refs_restores_refs_hash",
-        memcmp(&cs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
+        memcmp(&cs.refs.refsHash, &refsHashBefore, sizeof(ProllyHash))==0);
   check("remotesrv_put_refs_keeps_default_branch",
-        cs.zDefaultBranch!=0 && strcmp(cs.zDefaultBranch, "main")==0);
+        cs.refs.zDefaultBranch!=0 && strcmp(cs.refs.zDefaultBranch, "main")==0);
   check("remotesrv_put_refs_keeps_main_branch",
         chunkStoreFindBranch(&cs, "main", &foundHash)==SQLITE_OK);
   check("remotesrv_put_refs_does_not_leave_failed_tag",
