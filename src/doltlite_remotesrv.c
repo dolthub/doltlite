@@ -92,6 +92,10 @@ static void sendPayloadTooLarge(int fd){
                (const u8*)"Payload Too Large", 17);
 }
 
+static void sendConflict(int fd){
+  sendResponse(fd, 409, "Conflict", (const u8*)"Conflict", 8);
+}
+
 static int remoteSrvCommitPending(ChunkStore *pStore){
   int rc = chunkStoreCommit(pStore);
   if( rc!=SQLITE_OK ){
@@ -295,6 +299,11 @@ static void handleHasChunks(ChunkStore *pStore, int fd,
     return;
   }
   memset(aResult, 0, nHashes);
+  if( !pStore ){
+    sendOk(fd, aResult, nHashes);
+    sqlite3_free(aResult);
+    return;
+  }
 
   rc = chunkStoreHasMany(pStore, (const ProllyHash*)pBody,
                          nHashes, aResult);
@@ -431,6 +440,26 @@ static int remoteSrvApplyRefs(ChunkStore *pStore, const u8 *pBody, int nBody){
   }
   return remoteSrvCommitPending(pStore);
 }
+
+static int remoteSrvApplyRefsIf(
+  ChunkStore *pStore,
+  const ProllyHash *pExpectedRefsHash,
+  const u8 *pBody,
+  int nBody
+){
+  int rc;
+  if( nBody<=0 ) return SQLITE_ERROR;
+  rc = chunkStoreLockAndRefresh(pStore);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashCompare(refsTableGetHash(&pStore->refs), pExpectedRefsHash)!=0 ){
+    chunkStoreUnlock(pStore);
+    return SQLITE_BUSY;
+  }
+  rc = remoteSrvApplyRefs(pStore, pBody, nBody);
+  chunkStoreUnlock(pStore);
+  return rc;
+}
+
 static void handlePutRefs(ChunkStore *pStore, int fd,
                           const u8 *pBody, int nBody){
   int rc;
@@ -441,6 +470,32 @@ static void handlePutRefs(ChunkStore *pStore, int fd,
   }
 
   rc = remoteSrvApplyRefs(pStore, pBody, nBody);
+  if( rc!=SQLITE_OK ){
+    sendError(fd);
+    return;
+  }
+
+  sendOk(fd, 0, 0);
+}
+
+static void handlePutRefsIf(ChunkStore *pStore, int fd,
+                            const u8 *pBody, int nBody){
+  ProllyHash expectedRefsHash;
+  int rc;
+
+  if( nBody<=PROLLY_HASH_SIZE ){
+    sendBadRequest(fd);
+    return;
+  }
+  memcpy(expectedRefsHash.data, pBody, PROLLY_HASH_SIZE);
+
+  rc = remoteSrvApplyRefsIf(pStore, &expectedRefsHash,
+                            pBody + PROLLY_HASH_SIZE,
+                            nBody - PROLLY_HASH_SIZE);
+  if( rc==SQLITE_BUSY ){
+    sendConflict(fd);
+    return;
+  }
   if( rc!=SQLITE_OK ){
     sendError(fd);
     return;
@@ -482,6 +537,10 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
   char zDbPath[1024];
   int rc;
   int flags;
+  int isReadOnlyEndpoint = 0;
+  int isHasChunksEndpoint = 0;
+  int exists = 0;
+  sqlite3_vfs *pVfs;
 
   rc = parseRequest(fd, zMethod, sizeof(zMethod),
                     zPath, sizeof(zPath), &pBody, &nBody);
@@ -507,9 +566,32 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
   }
 
   sqlite3_snprintf(sizeof(zDbPath), zDbPath, "%s/%s", pSrv->zDir, zDbName);
-  flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB;
+  isHasChunksEndpoint = strcmp(zMethod, "POST")==0
+                     && strcmp(zEndpoint, "has-chunks")==0;
+  isReadOnlyEndpoint = strcmp(zMethod, "GET")==0 || isHasChunksEndpoint;
+  pVfs = sqlite3_vfs_find(0);
+  rc = pVfs->xAccess(pVfs, zDbPath, SQLITE_ACCESS_EXISTS, &exists);
+  if( rc!=SQLITE_OK ){
+    sendError(fd);
+    sqlite3_free(pBody);
+    return;
+  }
+  if( !exists && isHasChunksEndpoint ){
+    handleHasChunks(0, fd, pBody, nBody);
+    sqlite3_free(pBody);
+    return;
+  }
+  if( !exists && isReadOnlyEndpoint ){
+    sendNotFound(fd);
+    sqlite3_free(pBody);
+    return;
+  }
+
+  flags = isReadOnlyEndpoint
+        ? (SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB)
+        : (SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   memset(&store, 0, sizeof(store));
-  rc = chunkStoreOpen(&store, sqlite3_vfs_find(0), zDbPath, flags);
+  rc = chunkStoreOpen(&store, pVfs, zDbPath, flags);
   if( rc!=SQLITE_OK ){
     sendError(fd);
     sqlite3_free(pBody);
@@ -539,6 +621,8 @@ static void handleRequest(DoltliteServer *pSrv, int fd){
   }else if( strcmp(zMethod, "PUT")==0 ){
     if( strcmp(zEndpoint, "refs")==0 ){
       handlePutRefs(&store, fd, pBody, nBody);
+    }else if( strcmp(zEndpoint, "refs-if")==0 ){
+      handlePutRefsIf(&store, fd, pBody, nBody);
     }else{
       sendNotFound(fd);
     }
