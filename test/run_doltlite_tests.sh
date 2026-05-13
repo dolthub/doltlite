@@ -34,6 +34,7 @@ TESTS=(
   doltlite_diff.sh
   doltlite_reset.sh
   doltlite_branch.sh
+  doltlite_connect_branch.sh
   doltlite_tag.sh
   doltlite_merge.sh
   doltlite_conflicts.sh
