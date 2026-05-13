@@ -11,6 +11,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 #include "sqlite3.h"
 
@@ -39,14 +40,21 @@ static void check(const char *name, int condition){
 
 static void cleanup_db(const char *path){
   char wal[256];
+  char shm[256];
   remove(path);
   snprintf(wal, sizeof(wal), "%s-wal", path);
   remove(wal);
+  snprintf(shm, sizeof(shm), "%s-shm", path);
+  remove(shm);
 }
 
 static unsigned nextRand(unsigned *pSeed){
   *pSeed = (*pSeed * 1103515245u) + 12345u;
   return *pSeed;
+}
+
+static int isRetryableRc(int rc){
+  return rc==SQLITE_BUSY || rc==SQLITE_LOCKED || rc==SQLITE_SCHEMA;
 }
 
 static int execSql(sqlite3 *db, const char *sql){
@@ -70,7 +78,7 @@ static int execSqlWithRetry(sqlite3 *db, const char *sql){
       return SQLITE_OK;
     }
     sqlite3_free(err);
-    if( rc!=SQLITE_BUSY && rc!=SQLITE_LOCKED ) return rc;
+    if( !isRetryableRc(rc) ) return rc;
     sqlite3_sleep(5);
   }
   return SQLITE_BUSY;
@@ -82,7 +90,7 @@ static int queryInt64WithRetry(sqlite3 *db, const char *sql, sqlite3_int64 *pOut
     sqlite3_stmt *stmt = 0;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if( rc!=SQLITE_OK ){
-      if( rc==SQLITE_BUSY || rc==SQLITE_LOCKED ){
+      if( isRetryableRc(rc) ){
         sqlite3_sleep(5);
         continue;
       }
@@ -95,10 +103,23 @@ static int queryInt64WithRetry(sqlite3 *db, const char *sql, sqlite3_int64 *pOut
       return SQLITE_OK;
     }
     sqlite3_finalize(stmt);
-    if( rc!=SQLITE_BUSY && rc!=SQLITE_LOCKED ) return rc;
+    if( !isRetryableRc(rc) ) return rc;
     sqlite3_sleep(5);
   }
   return SQLITE_BUSY;
+}
+
+static int envInt(const char *zName, int defaultValue){
+  const char *zValue = getenv(zName);
+  char *zEnd = 0;
+  long v;
+  if( zValue==0 || zValue[0]==0 ) return defaultValue;
+  v = strtol(zValue, &zEnd, 10);
+  if( zEnd==zValue || zEnd[0]!=0 || v<0 || v>0x7fffffff ){
+    fprintf(stderr, "Ignoring invalid %s=%s\n", zName, zValue);
+    return defaultValue;
+  }
+  return (int)v;
 }
 
 static void applyModelOp(KeyState state[N_WORKERS][N_KEYS_PER_WORKER],
@@ -158,9 +179,9 @@ static int setupDb(const char *path){
   return rc;
 }
 
-static int runWriter(const char *path, int worker){
+static int runWriter(const char *path, int worker, unsigned baseSeed){
   sqlite3 *db = 0;
-  unsigned seed = BASE_SEED + (unsigned)worker * 7919u;
+  unsigned seed = baseSeed + (unsigned)worker * 7919u;
   int rc;
   int op;
 
@@ -239,13 +260,14 @@ reader_error:
   return 1;
 }
 
-static void expectedFinal(sqlite3_int64 *pCount, sqlite3_int64 *pSum){
+static void expectedFinal(sqlite3_int64 *pCount, sqlite3_int64 *pSum,
+                          unsigned baseSeed){
   KeyState state[N_WORKERS][N_KEYS_PER_WORKER];
   int worker, key, op;
 
   memset(state, 0, sizeof(state));
   for( worker=0; worker<N_WORKERS; worker++ ){
-    unsigned seed = BASE_SEED + (unsigned)worker * 7919u;
+    unsigned seed = baseSeed + (unsigned)worker * 7919u;
     for( op=0; op<N_OPS_PER_WORKER; op++ ){
       unsigned rnd = nextRand(&seed);
       applyModelOp(state, worker, op, rnd);
@@ -264,8 +286,8 @@ static void expectedFinal(sqlite3_int64 *pCount, sqlite3_int64 *pSum){
   }
 }
 
-int main(void){
-  const char *path = "/tmp/test_concurrent_stress.db";
+static int runStressIteration(int iter, unsigned baseSeed){
+  char path[256];
   pid_t pids[N_WORKERS + 1];
   int nPids = 0;
   int i;
@@ -275,9 +297,9 @@ int main(void){
   sqlite3 *db = 0;
   int rc;
 
-  printf("=== Concurrent Stress Test ===\n");
-  printf("seed=0x%x workers=%d ops_per_worker=%d keys_per_worker=%d\n",
-         BASE_SEED, N_WORKERS, N_OPS_PER_WORKER, N_KEYS_PER_WORKER);
+  snprintf(path, sizeof(path), "/tmp/test_concurrent_stress_%d.db", iter);
+  printf("--- iteration=%d seed=0x%x workers=%d ops_per_worker=%d keys_per_worker=%d ---\n",
+         iter, baseSeed, N_WORKERS, N_OPS_PER_WORKER, N_KEYS_PER_WORKER);
 
   rc = setupDb(path);
   check("setup_db", rc==SQLITE_OK);
@@ -292,7 +314,7 @@ int main(void){
 
   for( i=0; i<N_WORKERS; i++ ){
     pids[nPids] = fork();
-    if( pids[nPids]==0 ) _exit(runWriter(path, i));
+    if( pids[nPids]==0 ) _exit(runWriter(path, i, baseSeed));
     check("fork_writer", pids[nPids]>=0);
     nPids++;
   }
@@ -305,7 +327,7 @@ int main(void){
           WIFEXITED(status) && WEXITSTATUS(status)==0);
   }
 
-  expectedFinal(&expectedCount, &expectedSum);
+  expectedFinal(&expectedCount, &expectedSum, baseSeed);
 
   rc = sqlite3_open(path, &db);
   check("open_final", rc==SQLITE_OK);
@@ -324,8 +346,29 @@ int main(void){
         && actualCount>=2);
   sqlite3_close(db);
   cleanup_db(path);
+  return nFail>0 ? 1 : 0;
+}
+
+int main(void){
+  int seconds = envInt("DOLTLITE_STRESS_SECONDS", 0);
+  int maxRuns = envInt("DOLTLITE_STRESS_RUNS", 1);
+  int iter = 0;
+  time_t deadline = seconds>0 ? time(0) + seconds : 0;
+
+  setvbuf(stdout, 0, _IOLBF, 0);
+  printf("=== Concurrent Stress Test ===\n");
+  if( seconds>0 ){
+    maxRuns = 0x7fffffff;
+  }
+
+  do {
+    unsigned seed = BASE_SEED + (unsigned)iter * 104729u;
+    if( runStressIteration(iter, seed)!=0 ) break;
+    iter++;
+  } while( iter<maxRuns && (seconds==0 || time(0)<deadline) );
 
   printf("\nResults: %d passed, %d failed out of %d tests\n",
          nPass, nFail, nPass+nFail);
+  printf("Completed stress iterations: %d\n", iter);
   return nFail>0 ? 1 : 0;
 }
