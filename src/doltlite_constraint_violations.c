@@ -649,6 +649,7 @@ static sqlite3_int64 cvrViolationRowid(const ConstraintViolationRow *r){
       h *= 1099511628211ULL;
     }
   }
+  h *= 1099511628211ULL;
   {
     u64 k = (u64)r->intKey;
     for(i=0; i<8; i++){
@@ -656,13 +657,16 @@ static sqlite3_int64 cvrViolationRowid(const ConstraintViolationRow *r){
       h *= 1099511628211ULL;
     }
   }
+  h *= 1099511628211ULL;
   if( r->nVal>0 && r->pVal ){
     for(i=0; i<r->nVal; i++){
       h ^= (u64)r->pVal[i];
       h *= 1099511628211ULL;
     }
   }
+  h *= 1099511628211ULL;
   h ^= (u64)r->violationType;
+  h *= 1099511628211ULL;
   h *= 1099511628211ULL;
   if( r->zInfo ){
     for(i=0; r->zInfo[i]; i++){

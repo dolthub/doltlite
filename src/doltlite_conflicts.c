@@ -534,6 +534,7 @@ static sqlite3_int64 cfrConflictRowid(const struct ConflictRow *cr){
       h *= 1099511628211ULL;
     }
   }
+  h *= 1099511628211ULL;
   {
     u64 k = (u64)cr->intKey;
     for(i=0; i<8; i++){
@@ -541,6 +542,7 @@ static sqlite3_int64 cfrConflictRowid(const struct ConflictRow *cr){
       h *= 1099511628211ULL;
     }
   }
+  h *= 1099511628211ULL;
   if( cr->nBaseVal>0 && cr->pBaseVal ){
     for(i=0; i<cr->nBaseVal; i++){
       h ^= (u64)cr->pBaseVal[i];
