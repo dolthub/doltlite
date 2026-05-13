@@ -361,7 +361,8 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   if( rc!=SQLITE_OK ){
     (void)doltliteVcSealSavepointError(db);
     remoteSqlResultError(ctx, rc,
-      rc==SQLITE_ERROR ? "push failed (not a fast-forward?)" : 0);
+      rc==SQLITE_BUSY ? "push failed (remote refs changed)"
+      : rc==SQLITE_ERROR ? "push failed (not a fast-forward?)" : 0);
     return;
   }
   sqlite3_result_int(ctx, 0);

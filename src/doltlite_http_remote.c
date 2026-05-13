@@ -33,6 +33,8 @@ struct HttpRemote {
 
   u8 *pPendingRefs;
   int nPendingRefs;
+  ProllyHash expectedRefsHash;
+  u8 hasExpectedRefsHash;
 };
 
 static void hashToHex(const ProllyHash *pHash, char *zOut){
@@ -144,6 +146,11 @@ static int httpRequest(
       "Connection: close\r\n"
       "\r\n",
       zMethod, zPath, zHost);
+  }
+
+  if( nReqHdr < 0 || nReqHdr >= (int)sizeof(aReqHdr) ){
+    close(fd);
+    return SQLITE_TOOBIG;
   }
 
   rc = doltliteWriteAll(fd, aReqHdr, nReqHdr);
@@ -405,6 +412,7 @@ static int httpSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
   sqlite3_free(p->pPendingRefs);
   p->pPendingRefs = 0;
   p->nPendingRefs = 0;
+  p->hasExpectedRefsHash = 0;
 
   if( pData && nData > 0 ){
     p->pPendingRefs = sqlite3_malloc(nData);
@@ -412,6 +420,24 @@ static int httpSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
     memcpy(p->pPendingRefs, pData, nData);
     p->nPendingRefs = nData;
   }
+  return SQLITE_OK;
+}
+
+static int httpSetRefsIf(
+  DoltliteRemote *pRemote,
+  const ProllyHash *pExpectedRefsHash,
+  const u8 *pData,
+  int nData
+){
+  HttpRemote *p = (HttpRemote*)pRemote;
+  int rc = httpSetRefs(pRemote, pData, nData);
+  if( rc!=SQLITE_OK ) return rc;
+  if( pExpectedRefsHash ){
+    memcpy(&p->expectedRefsHash, pExpectedRefsHash, sizeof(ProllyHash));
+  }else{
+    memset(&p->expectedRefsHash, 0, sizeof(ProllyHash));
+  }
+  p->hasExpectedRefsHash = 1;
   return SQLITE_OK;
 }
 
@@ -438,15 +464,30 @@ static int httpCommit(DoltliteRemote *pRemote){
 
   if( p->pPendingRefs && p->nPendingRefs > 0 ){
     pResp = 0; nResp = 0; status = 0;
-    zPath = buildPath(p, "/refs");
+    zPath = buildPath(p, p->hasExpectedRefsHash ? "/refs-if" : "/refs");
     if( !zPath ) return SQLITE_NOMEM;
 
-    rc = httpRequest(p->zHost, p->port, "PUT", zPath,
-                     p->pPendingRefs, p->nPendingRefs,
-                     &status, &pResp, &nResp);
+    if( p->hasExpectedRefsHash ){
+      u8 *pReq = sqlite3_malloc(PROLLY_HASH_SIZE + p->nPendingRefs);
+      if( !pReq ){
+        sqlite3_free(zPath);
+        return SQLITE_NOMEM;
+      }
+      memcpy(pReq, p->expectedRefsHash.data, PROLLY_HASH_SIZE);
+      memcpy(pReq + PROLLY_HASH_SIZE, p->pPendingRefs, p->nPendingRefs);
+      rc = httpRequest(p->zHost, p->port, "PUT", zPath,
+                       pReq, PROLLY_HASH_SIZE + p->nPendingRefs,
+                       &status, &pResp, &nResp);
+      sqlite3_free(pReq);
+    }else{
+      rc = httpRequest(p->zHost, p->port, "PUT", zPath,
+                       p->pPendingRefs, p->nPendingRefs,
+                       &status, &pResp, &nResp);
+    }
     sqlite3_free(zPath);
     sqlite3_free(pResp);
     if( rc != SQLITE_OK ) return rc;
+    if( status == 409 ) return SQLITE_BUSY;
     if( status != 200 && status != 204 ) return SQLITE_ERROR;
   }
 
@@ -467,6 +508,7 @@ static int httpCommit(DoltliteRemote *pRemote){
   p->pUploadBuf = 0;
   p->nUploadBuf = 0;
   p->nUploadBufAlloc = 0;
+  p->hasExpectedRefsHash = 0;
 
   sqlite3_free(p->pPendingRefs);
   p->pPendingRefs = 0;
@@ -565,6 +607,7 @@ DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){
   p->base.xHasChunks = httpHasChunks;
   p->base.xGetRefs = httpGetRefs;
   p->base.xSetRefs = httpSetRefs;
+  p->base.xSetRefsIf = httpSetRefsIf;
   p->base.xCommit = httpCommit;
   p->base.xClose = httpClose;
 

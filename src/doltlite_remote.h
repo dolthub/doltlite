@@ -10,6 +10,7 @@ struct DoltliteRemote {
   int (*xHasChunks)(DoltliteRemote*, const ProllyHash*, int nHash, u8 *aResult);
   int (*xGetRefs)(DoltliteRemote*, u8**, int*);
   int (*xSetRefs)(DoltliteRemote*, const u8*, int);
+  int (*xSetRefsIf)(DoltliteRemote*, const ProllyHash*, const u8*, int);
   int (*xCommit)(DoltliteRemote*);
   void (*xClose)(DoltliteRemote*);
 };

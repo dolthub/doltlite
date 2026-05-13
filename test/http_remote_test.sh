@@ -59,6 +59,8 @@ cat > "$TMPDIR/http_test.c" << 'CEOF'
 #include <dlfcn.h>
 #include "sqlite3.h"
 #include "doltlite_remotesrv.h"
+#include "doltlite_remote.h"
+#include "prolly_hash.h"
 
 static int gShortWriteOnce = 0;
 
@@ -144,6 +146,11 @@ static int query_int(sqlite3 *db, const char *sql) {
   return val;
 }
 
+static int file_exists(const char *path) {
+  struct stat st;
+  return stat(path, &st) == 0;
+}
+
 static int raw_http_status(int port, const char *path) {
   int fd, n;
   struct sockaddr_in addr;
@@ -201,7 +208,7 @@ static int raw_http_status(int port, const char *path) {
   else { printf("  FAIL: %s\n    expected: |%s|\n    actual:   |%s|\n", desc, _e, _a); fail++; } \
 } while(0)
 
-#define HTTP_TEST_EXPECTED_ASSERTIONS 51
+#define HTTP_TEST_EXPECTED_ASSERTIONS 59
 
 int main(int argc, char **argv) {
   int pass = 0, fail = 0;
@@ -253,9 +260,17 @@ int main(int argc, char **argv) {
   CHECK("dot path returns 404", 404, raw_http_status(port, "/./root"));
 
   /* ============================================================
-   * 2c. Short-write transport handling
+   * 2c. Read-only requests do not create missing databases
    * ============================================================ */
-  printf("=== 2c. Short-write transport handling ===\n");
+  printf("=== 2c. Missing read does not create DB ===\n");
+  snprintf(path, sizeof(path), "%s/missing_read.db", srvdir);
+  CHECK("missing refs returns 404", 404, raw_http_status(port, "/missing_read.db/refs"));
+  CHECK("missing refs did not create file", 0, file_exists(path));
+
+  /* ============================================================
+   * 2d. Short-write transport handling
+   * ============================================================ */
+  printf("=== 2d. Short-write transport handling ===\n");
   enable_short_write_once();
   CHECK("server response survives short write", 200, raw_http_status(port, "/src.db/root"));
   sqlite3 *shortCloneDb;
@@ -266,6 +281,20 @@ int main(int argc, char **argv) {
   CHECK("client request survives short write", SQLITE_OK, run_sql(shortCloneDb, sql));
   CHECK("short-write clone has 3 users", 3, query_int(shortCloneDb, "SELECT count(*) FROM users"));
   sqlite3_close(shortCloneDb);
+
+  /* ============================================================
+   * 2e. Oversized HTTP request headers are rejected before write
+   * ============================================================ */
+  printf("=== 2e. Long HTTP URL rejected ===\n");
+  sqlite3 *longUrlDb;
+  char longName[1800];
+  memset(longName, 'a', sizeof(longName)-1);
+  longName[sizeof(longName)-1] = 0;
+  snprintf(path, sizeof(path), "%s/long_url.db", tmpdir);
+  sqlite3_open(path, &longUrlDb);
+  snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d/%s')", port, longName);
+  CHECK("long URL clone errors", 1, run_sql_quiet(longUrlDb, sql) != SQLITE_OK);
+  sqlite3_close(longUrlDb);
 
   /* ============================================================
    * 3. Clone via HTTP - verify all data, branch, remote, history
@@ -303,6 +332,48 @@ int main(int argc, char **argv) {
     query_str(cloneDb, "SELECT commit_hash FROM dolt_log LIMIT 1"),
     query_str(verifyDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
   sqlite3_close(verifyDb);
+
+  /* ============================================================
+   * 4b. Stale conditional refs update is rejected
+   * ============================================================ */
+  printf("=== 4b. Stale refs update rejected ===\n");
+  {
+    char url[256];
+    u8 *oldRefs = 0;
+    int nOldRefs = 0;
+    ProllyHash oldRefsHash;
+    DoltliteRemote *staleRemote;
+    snprintf(path, sizeof(path), "%s/cas.db", srvdir);
+    sqlite3_open(path, &verifyDb);
+    run_sql(verifyDb, "CREATE TABLE cas_t(id INTEGER PRIMARY KEY, v TEXT)");
+    run_sql(verifyDb, "INSERT INTO cas_t VALUES(1,'base')");
+    run_sql(verifyDb, "SELECT dolt_add('-A')");
+    run_sql(verifyDb, "SELECT dolt_commit('-m','cas base')");
+    sqlite3_close(verifyDb);
+
+    snprintf(url, sizeof(url), "http://127.0.0.1:%d/cas.db", port);
+    staleRemote = doltliteHttpRemoteOpen(url);
+    CHECK("open stale remote", 1, staleRemote != 0);
+    CHECK("read stale refs", SQLITE_OK, staleRemote->xGetRefs(staleRemote, &oldRefs, &nOldRefs));
+    prollyHashCompute(oldRefs, nOldRefs, &oldRefsHash);
+
+    sqlite3_open(path, &verifyDb);
+    run_sql(verifyDb, "INSERT INTO cas_t VALUES(2,'server_only')");
+    run_sql(verifyDb, "SELECT dolt_add('-A')");
+    run_sql(verifyDb, "SELECT dolt_commit('-m','server-only advance')");
+    sqlite3_close(verifyDb);
+
+    CHECK("buffer stale refs-if", SQLITE_OK,
+      staleRemote->xSetRefsIf(staleRemote, &oldRefsHash, oldRefs, nOldRefs));
+    CHECK("stale refs-if commit rejected", SQLITE_BUSY, staleRemote->xCommit(staleRemote));
+    staleRemote->xClose(staleRemote);
+    sqlite3_free(oldRefs);
+
+    sqlite3_open(path, &verifyDb);
+    CHECK_STR("server head kept newer commit", "server-only advance",
+      query_str(verifyDb, "SELECT message FROM dolt_log LIMIT 1"));
+    sqlite3_close(verifyDb);
+  }
 
   /* ============================================================
    * 5. Fetch in original - tracking branch updated, local unchanged
@@ -665,7 +736,12 @@ CEOF
 # Build the test
 cd "$TMPDIR"
 BUILD_DIR="$(dirname "$DOLTLITE")"
-cc -g -O0 -I"$BUILD_DIR" -I"$BUILD_DIR/../src" \
+if [ -d "$BUILD_DIR/src" ]; then
+  SRC_DIR="$BUILD_DIR/src"
+else
+  SRC_DIR="$BUILD_DIR/../src"
+fi
+cc -g -O0 -I"$BUILD_DIR" -I"$SRC_DIR" \
   -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H -DBUILD_sqlite \
   -o http_test http_test.c \
   "$BUILD_DIR/libdoltlite.a" -lz -lpthread -lm 2>&1
