@@ -3,6 +3,7 @@
 
 #include "prolly_diff.h"
 #include "prolly_record.h"
+#include "doltlite_internal.h"
 
 #include <string.h>
 
@@ -466,14 +467,8 @@ static int diffNodesOneLevel(
 
       if( cmp==0 ){
 
-        if( *pnStack + 2 > *pnStackAlloc ){
-          int nNew = *pnStackAlloc ? *pnStackAlloc * 2 : 32;
-          ProllyHash *pNew = sqlite3_realloc(*ppStack,
-                                             nNew * (int)sizeof(ProllyHash));
-          if( !pNew ){ rc = SQLITE_NOMEM; break; }
-          *ppStack = pNew;
-          *pnStackAlloc = nNew;
-        }
+        rc = DOLTLITE_GROW_ARRAY(ppStack, pnStackAlloc, *pnStack + 2, 32);
+        if( rc!=SQLITE_OK ) break;
         (*ppStack)[(*pnStack)++] = oldChild;
         (*ppStack)[(*pnStack)++] = newChild;
         i++; j++;

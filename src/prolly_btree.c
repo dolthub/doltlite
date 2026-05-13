@@ -895,12 +895,13 @@ static struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags){
   }
 
   if( cat->n>=cat->nAlloc ){
-    int nNew = cat->nAlloc ? cat->nAlloc*2 : 16;
+    i64 nNew = cat->nAlloc ? (i64)cat->nAlloc * 2 : (i64)16;
     struct TableEntry *aNew;
-    aNew = sqlite3_realloc(cat->a, nNew*(int)sizeof(struct TableEntry));
+    if( nNew > (i64)0x7fffffff/(i64)sizeof(struct TableEntry) ) return 0;
+    aNew = sqlite3_realloc(cat->a, (int)(nNew * (i64)sizeof(struct TableEntry)));
     if( !aNew ) return 0;
     cat->a = aNew;
-    cat->nAlloc = nNew;
+    cat->nAlloc = (int)nNew;
   }
 
   {
@@ -1082,12 +1083,15 @@ static int addCatalogEntryMeta(
   CatalogEntryMeta *pNew;
   if( findCatalogEntryMetaByPgno(aMeta, *pnMeta, iTable) ) return SQLITE_OK;
   if( *pnMeta>=*pnAlloc ){
-    int nNew = *pnAlloc ? *pnAlloc*2 : 16;
-    pNew = sqlite3_realloc(aMeta, nNew*(int)sizeof(CatalogEntryMeta));
+    i64 nNew = *pnAlloc ? (i64)*pnAlloc * 2 : (i64)16;
+    if( nNew > (i64)0x7fffffff/(i64)sizeof(CatalogEntryMeta) ){
+      return SQLITE_NOMEM;
+    }
+    pNew = sqlite3_realloc(aMeta, (int)(nNew * (i64)sizeof(CatalogEntryMeta)));
     if( !pNew ) return SQLITE_NOMEM;
     aMeta = pNew;
     *paMeta = aMeta;
-    *pnAlloc = nNew;
+    *pnAlloc = (int)nNew;
   }
   memset(&aMeta[*pnMeta], 0, sizeof(CatalogEntryMeta));
   aMeta[*pnMeta].iTable = iTable;
@@ -1452,15 +1456,22 @@ static int loadSchemaCatalogRows(
         sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTblName); break;
       }
       if( nRows>=nAlloc ){
-        int nNew = nAlloc ? nAlloc*2 : 16;
-        SchemaCatalogRow *aNew = sqlite3_realloc(aRows, nNew*(int)sizeof(SchemaCatalogRow));
+        i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
+        SchemaCatalogRow *aNew;
+        if( nNew > (i64)0x7fffffff/(i64)sizeof(SchemaCatalogRow) ){
+          sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTblName); sqlite3_free(zSql);
+          rc = SQLITE_NOMEM;
+          break;
+        }
+        aNew = sqlite3_realloc(aRows,
+                               (int)(nNew * (i64)sizeof(SchemaCatalogRow)));
         if( !aNew ){
           sqlite3_free(zType); sqlite3_free(zName); sqlite3_free(zTblName); sqlite3_free(zSql);
           rc = SQLITE_NOMEM;
           break;
         }
         aRows = aNew;
-        nAlloc = nNew;
+        nAlloc = (int)nNew;
       }
       memset(&aRows[nRows], 0, sizeof(SchemaCatalogRow));
       aRows[nRows].iRowid = prollyCursorIntKey(&cur);
@@ -1583,14 +1594,20 @@ static int appendMissingSchemaCatalogRows(
     }
     if( !wanted ) continue;
     if( nRows>=nAlloc ){
-      int nNew = nAlloc ? nAlloc*2 : 16;
-      SchemaCatalogRow *aNew = sqlite3_realloc(aRows, nNew*(int)sizeof(SchemaCatalogRow));
+      i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
+      SchemaCatalogRow *aNew;
+      if( nNew > (i64)0x7fffffff/(i64)sizeof(SchemaCatalogRow) ){
+        freeSchemaCatalogRows(aRows, nRows);
+        return SQLITE_NOMEM;
+      }
+      aNew = sqlite3_realloc(aRows,
+                             (int)(nNew * (i64)sizeof(SchemaCatalogRow)));
       if( !aNew ){
         freeSchemaCatalogRows(aRows, nRows);
         return SQLITE_NOMEM;
       }
       aRows = aNew;
-      nAlloc = nNew;
+      nAlloc = (int)nNew;
     }
     pRow = &aRows[nRows];
     memset(pRow, 0, sizeof(*pRow));
@@ -1659,14 +1676,20 @@ static int appendFallbackSchemaCatalogRows(
     }
     if( !pSe ) continue;
     if( nRows>=nAlloc ){
-      int nNew = nAlloc ? nAlloc*2 : 16;
-      SchemaCatalogRow *aNew = sqlite3_realloc(aRows, nNew*(int)sizeof(SchemaCatalogRow));
+      i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
+      SchemaCatalogRow *aNew;
+      if( nNew > (i64)0x7fffffff/(i64)sizeof(SchemaCatalogRow) ){
+        freeSchemaCatalogRows(aRows, nRows);
+        return SQLITE_NOMEM;
+      }
+      aNew = sqlite3_realloc(aRows,
+                             (int)(nNew * (i64)sizeof(SchemaCatalogRow)));
       if( !aNew ){
         freeSchemaCatalogRows(aRows, nRows);
         return SQLITE_NOMEM;
       }
       aRows = aNew;
-      nAlloc = nNew;
+      nAlloc = (int)nNew;
     }
     pRow = &aRows[nRows];
     memset(pRow, 0, sizeof(*pRow));
@@ -2826,12 +2849,17 @@ static int appendPendingSnapshot(
   ProllyMutMap *pPending
 ){
   if( pState->nPendingSnapshot >= pState->nPendingSnapshotAlloc ){
-    int nNew = pState->nPendingSnapshotAlloc ? pState->nPendingSnapshotAlloc * 2 : 4;
-    SavepointPendingSnapshot *aNew = sqlite3_realloc(
-        pState->aPendingSnapshot, nNew * (int)sizeof(SavepointPendingSnapshot));
+    i64 nNew = pState->nPendingSnapshotAlloc
+                 ? (i64)pState->nPendingSnapshotAlloc * 2 : (i64)4;
+    SavepointPendingSnapshot *aNew;
+    if( nNew > (i64)0x7fffffff/(i64)sizeof(SavepointPendingSnapshot) ){
+      return SQLITE_NOMEM;
+    }
+    aNew = sqlite3_realloc(pState->aPendingSnapshot,
+        (int)(nNew * (i64)sizeof(SavepointPendingSnapshot)));
     if( !aNew ) return SQLITE_NOMEM;
     pState->aPendingSnapshot = aNew;
-    pState->nPendingSnapshotAlloc = nNew;
+    pState->nPendingSnapshotAlloc = (int)nNew;
   }
   pState->aPendingSnapshot[pState->nPendingSnapshot].iTable = iTable;
   pState->aPendingSnapshot[pState->nPendingSnapshot].pPending = pPending;
@@ -3132,12 +3160,17 @@ static int pushSavepoint(Btree *pBtree, int bStatement){
   struct SavepointTableState *pState;
 
   if( pBtree->nSavepoint>=pBtree->nSavepointAlloc ){
-    int nNew = pBtree->nSavepointAlloc ? pBtree->nSavepointAlloc*2 : 8;
+    i64 nNew = pBtree->nSavepointAlloc
+                 ? (i64)pBtree->nSavepointAlloc * 2 : (i64)8;
     struct SavepointTableState *aNewT;
-    aNewT = sqlite3_realloc(pBtree->aSavepointTables, nNew*(int)sizeof(struct SavepointTableState));
+    if( nNew > (i64)0x7fffffff/(i64)sizeof(struct SavepointTableState) ){
+      return SQLITE_NOMEM;
+    }
+    aNewT = sqlite3_realloc(pBtree->aSavepointTables,
+        (int)(nNew * (i64)sizeof(struct SavepointTableState)));
     if( !aNewT ) return SQLITE_NOMEM;
     pBtree->aSavepointTables = aNewT;
-    pBtree->nSavepointAlloc = nNew;
+    pBtree->nSavepointAlloc = (int)nNew;
   }
 
   pState = &pBtree->aSavepointTables[pBtree->nSavepoint];

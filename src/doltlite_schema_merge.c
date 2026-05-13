@@ -331,11 +331,26 @@ int migrateSchemaRowData(
                   ** so we can build a full INSERT for PROLLY_DIFF_ADD
                   ** rows that don't exist in the merged working set yet. */
                   if( nAllCols >= nAllColsAlloc ){
-                    int nNew = nAllColsAlloc ? nAllColsAlloc*2 : 8;
-                    char **azNew = sqlite3_realloc(azAllColNames,
-                                                    nNew*(int)sizeof(char*));
-                    int *aiNew = sqlite3_realloc(aiAllColIdx,
-                                                  nNew*(int)sizeof(int));
+                    i64 nNew = nAllColsAlloc ? (i64)nAllColsAlloc * 2 : 8;
+                    char **azNew;
+                    int *aiNew;
+                    while( nNew < (i64)(nAllCols + 1) ){
+                      if( nNew > (i64)0x7fffffff/2 ){
+                        nNew = (i64)0x7fffffff; break;
+                      }
+                      nNew *= 2;
+                    }
+                    if( nNew < (i64)(nAllCols + 1)
+                     || nNew > (i64)0x7fffffff/(i64)sizeof(char*)
+                     || nNew > (i64)0x7fffffff/(i64)sizeof(int) ){
+                      sqlite3_free(zColName);
+                      rc = SQLITE_NOMEM;
+                      goto next_action;
+                    }
+                    azNew = sqlite3_realloc(azAllColNames,
+                                            (int)(nNew * (i64)sizeof(char*)));
+                    aiNew = sqlite3_realloc(aiAllColIdx,
+                                             (int)(nNew * (i64)sizeof(int)));
                     if( !azNew || !aiNew ){
                       if( azNew ) azAllColNames = azNew;
                       if( aiNew ) aiAllColIdx = aiNew;
@@ -345,7 +360,7 @@ int migrateSchemaRowData(
                     }
                     azAllColNames = azNew;
                     aiAllColIdx = aiNew;
-                    nAllColsAlloc = nNew;
+                    nAllColsAlloc = (int)nNew;
                   }
                   /* Ownership of zColName transfers to azAllColNames. */
                   azAllColNames[nAllCols] = zColName;

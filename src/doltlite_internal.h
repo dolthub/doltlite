@@ -234,4 +234,29 @@ static SQLITE_INLINE int doltliteAppendQuotedIdent(sqlite3_str *pStr,
   return sqlite3_str_errcode(pStr);
 }
 
+static SQLITE_INLINE int doltliteGrowArrayImpl(
+  void **ppArr, int *pnAlloc, int nNeeded, int elemSize, int seed
+){
+  i64 nNew;
+  void *pNew;
+  if( nNeeded <= *pnAlloc ) return SQLITE_OK;
+  if( elemSize <= 0 || nNeeded < 0 || seed <= 0 ) return SQLITE_NOMEM;
+  nNew = *pnAlloc>0 ? (i64)*pnAlloc * 2 : (i64)seed;
+  while( nNew < (i64)nNeeded ){
+    if( nNew > (i64)0x7fffffff/2 ){ nNew = (i64)0x7fffffff; break; }
+    nNew *= 2;
+  }
+  if( nNew < (i64)nNeeded ) return SQLITE_NOMEM;
+  if( nNew > (i64)0x7fffffff/(i64)elemSize ) return SQLITE_NOMEM;
+  pNew = sqlite3_realloc(*ppArr, (int)(nNew * (i64)elemSize));
+  if( !pNew ) return SQLITE_NOMEM;
+  *ppArr = pNew;
+  *pnAlloc = (int)nNew;
+  return SQLITE_OK;
+}
+
+#define DOLTLITE_GROW_ARRAY(ppArr, pnAlloc, nNeeded, seed) \
+  doltliteGrowArrayImpl((void**)(ppArr), (pnAlloc), (nNeeded), \
+                        (int)sizeof(**(ppArr)), (seed))
+
 #endif
