@@ -437,6 +437,18 @@ static int ensureCapacity(ProllyMutMap *mm){
   return SQLITE_OK;
 }
 
+static void insertOrderEntry(ProllyMutMap *mm, int idx, int phys){
+  int i;
+  if( idx < mm->nEntries ){
+    memmove(&mm->aOrder[idx+1], &mm->aOrder[idx],
+            (mm->nEntries - idx) * sizeof(int));
+  }
+  mm->aOrder[idx] = phys;
+  for(i=idx; i<=mm->nEntries; i++){
+    mm->aPos[mm->aOrder[i]] = i;
+  }
+}
+
 int prollyMutMapInit(ProllyMutMap *mm, u8 isIntKey){
   return prollyMutMapInitMode(mm, isIntKey, 1);
 }
@@ -445,6 +457,7 @@ int prollyMutMapInitMode(ProllyMutMap *mm, u8 isIntKey, u8 keepSorted){
   memset(mm, 0, sizeof(*mm));
   mm->isIntKey = isIntKey;
   mm->keepSorted = keepSorted;
+  mm->orderDirty = keepSorted ? 0 : 1;
   return SQLITE_OK;
 }
 
@@ -486,7 +499,7 @@ int prollyMutMapInsert(
   u8 keyBuf[8];
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
 
-  if( mm->keepSorted ){
+  if( mm->keepSorted || !mm->orderDirty ){
     idx = bsearch_key(mm, pKey, nKey, &found);
     if( found ){
       phys = mm->aOrder[idx];
@@ -528,13 +541,8 @@ int prollyMutMapInsert(
     if( rc!=SQLITE_OK ){
       return rc;
     }
-    if( mm->keepSorted ){
-      if( idx < mm->nEntries ){
-        memmove(&mm->aOrder[idx+1], &mm->aOrder[idx],
-                (mm->nEntries - idx) * sizeof(int));
-      }
-      mm->aOrder[idx] = phys;
-      mm->aPos[phys] = idx;
+    if( mm->keepSorted || !mm->orderDirty ){
+      insertOrderEntry(mm, idx, phys);
     }else{
       mm->aOrder[phys] = phys;
       mm->aPos[phys] = phys;
@@ -558,7 +566,7 @@ int prollyMutMapDelete(
   u8 keyBuf[8];
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
 
-  if( mm->keepSorted ){
+  if( mm->keepSorted || !mm->orderDirty ){
     idx = bsearch_key(mm, pKey, nKey, &found);
     if( found ){
       phys = mm->aOrder[idx];
@@ -605,13 +613,8 @@ int prollyMutMapDelete(
     if( rc!=SQLITE_OK ){
       return rc;
     }
-    if( mm->keepSorted ){
-      if( idx < mm->nEntries ){
-        memmove(&mm->aOrder[idx+1], &mm->aOrder[idx],
-                (mm->nEntries - idx) * sizeof(int));
-      }
-      mm->aOrder[idx] = phys;
-      mm->aPos[phys] = idx;
+    if( mm->keepSorted || !mm->orderDirty ){
+      insertOrderEntry(mm, idx, phys);
     }else{
       mm->aOrder[phys] = phys;
       mm->aPos[phys] = phys;
