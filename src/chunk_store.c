@@ -1956,7 +1956,7 @@ int chunkStoreGet(
     memcpy(pCopy, cs->pWriteBuf + off + 4, sz);
     *ppData = pCopy;
     *pnData = sz;
-    return SQLITE_OK;
+    goto verify;
   }
 
   {
@@ -1981,7 +1981,7 @@ int chunkStoreGet(
         memcpy(pCopy, cs->pWriteBuf + e->offset + 4, e->size);
         *ppData = pCopy;
         *pnData = e->size;
-        return SQLITE_OK;
+        goto verify;
       }
       return SQLITE_CORRUPT;
     }
@@ -2015,6 +2015,17 @@ int chunkStoreGet(
     }
   }
 
+verify:
+  {
+    ProllyHash h;
+    prollyHashCompute(*ppData, *pnData, &h);
+    if( memcmp(&h, hash, sizeof(ProllyHash)) != 0 ){
+      sqlite3_free(*ppData);
+      *ppData = 0;
+      *pnData = 0;
+      return SQLITE_CORRUPT;
+    }
+  }
   return SQLITE_OK;
 }
 
