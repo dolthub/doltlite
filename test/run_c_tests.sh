@@ -20,6 +20,7 @@ GATING=(
   three_way_diff_test
   concurrent_stress_test
   vc_concurrency_test
+  vc_ref_mutation_stress_test
   multi_process_test
   oom_dolt_fault_test
   cross_branch_test

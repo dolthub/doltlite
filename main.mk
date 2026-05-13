@@ -2594,6 +2594,7 @@ DOLTLITE_C_TESTS = \
 	cross_branch_test$(T.exe) \
 	concurrent_stress_test$(T.exe) \
 	vc_concurrency_test$(T.exe) \
+	vc_ref_mutation_stress_test$(T.exe) \
 	multi_process_test$(T.exe) \
 	invariant_test$(T.exe) \
 	corruption_test$(T.exe) \
@@ -2618,6 +2619,10 @@ concurrent_stress_test$(T.exe): $(TOP)/test/concurrent_stress_test.c libdoltlite
 
 vc_concurrency_test$(T.exe): $(TOP)/test/vc_concurrency_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/vc_concurrency_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+vc_ref_mutation_stress_test$(T.exe): $(TOP)/test/vc_ref_mutation_stress_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/vc_ref_mutation_stress_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 multi_process_test$(T.exe): $(TOP)/test/multi_process_test.c libdoltlite$(T.lib)

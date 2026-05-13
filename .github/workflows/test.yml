@@ -270,6 +270,7 @@ jobs:
       run: |
         cd build
         make vc_concurrency_test
+        make vc_ref_mutation_stress_test
       timeout-minutes: 5
 
     - name: Run version-control concurrency stress
@@ -288,6 +289,7 @@ jobs:
           }
         done
         echo "completed ${runs} vc_concurrency_test runs"
+        ./vc_ref_mutation_stress_test
       timeout-minutes: 9
 
   crash-sqlite-test:
