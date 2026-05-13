@@ -1,4 +1,5 @@
 build/
+build-fuzz/
 
 # Gas Town (added by gt)
 .beads/
