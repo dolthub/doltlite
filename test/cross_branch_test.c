@@ -255,7 +255,10 @@ int main(){
   queryScalarText(db1, "SELECT dolt_checkout('main')");
   check("t9_main_has_1", strcmp(queryScalarText(db1, "SELECT count(*) FROM t"), "1")==0);
 
-  queryScalarText(db1, "SELECT dolt_branch('-d', 'doomed')");
+  /* 'doomed' has commits not in main, so a non-force '-d' delete refuses
+  ** with "branch is not fully merged" (Dolt-compatible safe default).
+  ** Use '-D' to force-delete an unmerged branch. */
+  queryScalarText(db1, "SELECT dolt_branch('-D', 'doomed')");
 
   /* Verify deleted branch is gone from dolt_branches */
   r = queryScalarText(db1, "SELECT count(*) FROM dolt_branches WHERE name='doomed'");
@@ -297,7 +300,8 @@ int main(){
     check("t10_reopen", rc==SQLITE_OK);
     sqlite3_busy_timeout(db1, 5000);
 
-    queryScalarText(db1, "SELECT dolt_branch('-d', 'bigbranch')");
+    /* bigbranch has unmerged commits — must force-delete with '-D'. */
+    queryScalarText(db1, "SELECT dolt_branch('-D', 'bigbranch')");
     queryScalarText(db1, "SELECT dolt_gc()");
 
     /* Measure file size after GC */
