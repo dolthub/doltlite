@@ -262,49 +262,77 @@ void prollyNodeBuilderInit(ProllyNodeBuilder *b, u8 level, u8 flags){
 }
 
 static int builderGrowOffsets(ProllyNodeBuilder *b){
-  int nNeeded = b->nItems + 2;
-  if( nNeeded>b->nAlloc ){
-    int nNew = b->nAlloc ? b->nAlloc * 2 : PROLLY_BUILDER_INIT_CAP;
+  i64 nNeeded = (i64)b->nItems + 2;
+  if( nNeeded > (i64)0x7fffffff/(i64)sizeof(u32) ) return SQLITE_NOMEM;
+  if( nNeeded > (i64)b->nAlloc ){
+    i64 nNew = b->nAlloc ? (i64)b->nAlloc * 2 : (i64)PROLLY_BUILDER_INIT_CAP;
     u32 *aNew;
-    while( nNew<nNeeded ) nNew *= 2;
+    while( nNew < nNeeded ){
+      if( nNew > (i64)0x7fffffff/(i64)sizeof(u32)/2 ){
+        nNew = (i64)0x7fffffff/(i64)sizeof(u32);
+        break;
+      }
+      nNew *= 2;
+    }
+    if( nNew < nNeeded ) return SQLITE_NOMEM;
 
-    aNew = (u32*)sqlite3_realloc(b->aKeyOff, nNew * sizeof(u32));
+    aNew = (u32*)sqlite3_realloc(b->aKeyOff, (int)(nNew * (i64)sizeof(u32)));
     if( !aNew ) return SQLITE_NOMEM;
     b->aKeyOff = aNew;
 
-    aNew = (u32*)sqlite3_realloc(b->aValOff, nNew * sizeof(u32));
+    aNew = (u32*)sqlite3_realloc(b->aValOff, (int)(nNew * (i64)sizeof(u32)));
     if( !aNew ) return SQLITE_NOMEM;
     b->aValOff = aNew;
 
-    b->nAlloc = nNew;
+    b->nAlloc = (int)nNew;
   }
   return SQLITE_OK;
 }
 
 static int builderGrowKeyBuf(ProllyNodeBuilder *b, int nAdd){
-  int nNeeded = b->nKeyBytes + nAdd;
-  if( nNeeded>b->nKeyBufAlloc ){
-    int nNew = b->nKeyBufAlloc ? b->nKeyBufAlloc * 2 : PROLLY_BUILDER_INIT_BUF;
+  i64 nNeeded;
+  if( nAdd<0 ) return SQLITE_NOMEM;
+  nNeeded = (i64)b->nKeyBytes + (i64)nAdd;
+  if( nNeeded > (i64)0x7fffffff ) return SQLITE_NOMEM;
+  if( nNeeded > (i64)b->nKeyBufAlloc ){
+    i64 nNew = b->nKeyBufAlloc ? (i64)b->nKeyBufAlloc * 2 : (i64)PROLLY_BUILDER_INIT_BUF;
     u8 *pNew;
-    while( nNew<nNeeded ) nNew *= 2;
-    pNew = (u8*)sqlite3_realloc(b->pKeyBuf, nNew);
+    while( nNew < nNeeded ){
+      if( nNew > (i64)0x7fffffff/2 ){
+        nNew = (i64)0x7fffffff;
+        break;
+      }
+      nNew *= 2;
+    }
+    if( nNew < nNeeded ) return SQLITE_NOMEM;
+    pNew = (u8*)sqlite3_realloc(b->pKeyBuf, (int)nNew);
     if( !pNew ) return SQLITE_NOMEM;
     b->pKeyBuf = pNew;
-    b->nKeyBufAlloc = nNew;
+    b->nKeyBufAlloc = (int)nNew;
   }
   return SQLITE_OK;
 }
 
 static int builderGrowValBuf(ProllyNodeBuilder *b, int nAdd){
-  int nNeeded = b->nValBytes + nAdd;
-  if( nNeeded>b->nValBufAlloc ){
-    int nNew = b->nValBufAlloc ? b->nValBufAlloc * 2 : PROLLY_BUILDER_INIT_BUF;
+  i64 nNeeded;
+  if( nAdd<0 ) return SQLITE_NOMEM;
+  nNeeded = (i64)b->nValBytes + (i64)nAdd;
+  if( nNeeded > (i64)0x7fffffff ) return SQLITE_NOMEM;
+  if( nNeeded > (i64)b->nValBufAlloc ){
+    i64 nNew = b->nValBufAlloc ? (i64)b->nValBufAlloc * 2 : (i64)PROLLY_BUILDER_INIT_BUF;
     u8 *pNew;
-    while( nNew<nNeeded ) nNew *= 2;
-    pNew = (u8*)sqlite3_realloc(b->pValBuf, nNew);
+    while( nNew < nNeeded ){
+      if( nNew > (i64)0x7fffffff/2 ){
+        nNew = (i64)0x7fffffff;
+        break;
+      }
+      nNew *= 2;
+    }
+    if( nNew < nNeeded ) return SQLITE_NOMEM;
+    pNew = (u8*)sqlite3_realloc(b->pValBuf, (int)nNew);
     if( !pNew ) return SQLITE_NOMEM;
     b->pValBuf = pNew;
-    b->nValBufAlloc = nNew;
+    b->nValBufAlloc = (int)nNew;
   }
   return SQLITE_OK;
 }

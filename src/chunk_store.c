@@ -129,7 +129,7 @@ static int csSearchIndex(const ChunkIndexEntry *aIdx, int nIdx,
 static int csSearchPending(ChunkStore *cs, const ProllyHash *pHash, int *pIdx);
 static int csIndexEntryCmp(const void *a, const void *b);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
-static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e);
+static int csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e);
 static int csMergeIndex(ChunkStore *cs, ChunkIndexEntry **ppMerged,
                         int *pnMerged);
 static int csGrowPending(ChunkStore *cs);
@@ -822,10 +822,13 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
 }
 
-static void csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e){
+static int csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e){
+  u32 sz = CS_READ_U32(aBuf + PROLLY_HASH_SIZE + 8);
+  if( sz > (u32)0x7fffffff ) return SQLITE_CORRUPT;
   memcpy(e->hash.data, aBuf, PROLLY_HASH_SIZE);
   e->offset = CS_READ_I64(aBuf + PROLLY_HASH_SIZE);
-  e->size = (int)CS_READ_U32(aBuf + PROLLY_HASH_SIZE + 8);
+  e->size = (int)sz;
+  return SQLITE_OK;
 }
 
 static int csReadManifest(ChunkStore *cs){
@@ -940,7 +943,15 @@ static int csReadIndex(ChunkStore *cs){
   }
 
   for( i = 0; i < nEntries; i++ ){
-    csDeserializeIndexEntry(aBuf + i * CHUNK_INDEX_ENTRY_SIZE, &cs->aIndex[i]);
+    rc = csDeserializeIndexEntry(aBuf + i * CHUNK_INDEX_ENTRY_SIZE,
+                                 &cs->aIndex[i]);
+    if( rc != SQLITE_OK ){
+      sqlite3_free(aBuf);
+      sqlite3_free(cs->aIndex);
+      cs->aIndex = 0;
+      cs->nIndex = 0;
+      return rc;
+    }
   }
 
   sqlite3_free(aBuf);
@@ -1050,7 +1061,8 @@ static int csReplayWal(ChunkStore *cs){
       memcpy(&hash, aHdr, 20);
       len = CS_READ_U32(aHdr + 20);
       pos += 24;
-      if( pos < 0 || (u64)pos + len > (u64)walSize ){
+      if( pos < 0 || len > (u32)0x7fffffff
+       || (u64)pos + len > (u64)walSize ){
         break;
       }
 

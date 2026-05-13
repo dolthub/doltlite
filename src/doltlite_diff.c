@@ -392,14 +392,20 @@ static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
       if( prollyHashSetContains(&pCur->visited, pParent) ) continue;
       if( prollyHashSetContains(&pCur->queued,  pParent) ) continue;
       if( pCur->qTail >= pCur->qAlloc ){
-        int nNew = pCur->qAlloc*2;
-        ProllyHash *tmp = sqlite3_realloc(pCur->aQueue,
-                                          nNew*(int)sizeof(ProllyHash));
+        i64 nNew = (i64)pCur->qAlloc * 2;
+        i64 nBytes;
+        ProllyHash *tmp;
+        if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ){
+          doltliteCommitClear(&commit);
+          return SQLITE_NOMEM;
+        }
+        nBytes = nNew * (i64)sizeof(ProllyHash);
+        tmp = sqlite3_realloc(pCur->aQueue, (int)nBytes);
         if( !tmp ){
           doltliteCommitClear(&commit);
           return SQLITE_NOMEM;
         }
-        pCur->aQueue = tmp; pCur->qAlloc = nNew;
+        pCur->aQueue = tmp; pCur->qAlloc = (int)nNew;
       }
       pCur->aQueue[pCur->qTail++] = *pParent;
       rc = prollyHashSetAdd(&pCur->queued, pParent);
