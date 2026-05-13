@@ -467,13 +467,13 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->nChunks = pSrc->nChunks;
   pDst->iIndexOffset = pSrc->iIndexOffset;
   pDst->nIndexSize = pSrc->nIndexSize;
-  pDst->iWalOffset = pSrc->iWalOffset;
+  pDst->wal.iWalOffset = pSrc->wal.iWalOffset;
   pDst->iFileSize = pSrc->iFileSize;
   pDst->aIndex = pSrc->aIndex;
   pDst->nIndex = pSrc->nIndex;
   pDst->aIndexMmapBase = pSrc->aIndexMmapBase;
   pDst->aIndexMmapSize = pSrc->aIndexMmapSize;
-  pDst->nWalData = pSrc->nWalData;
+  pDst->wal.nWalData = pSrc->wal.nWalData;
   pDst->aBranches = pSrc->aBranches;
   pDst->nBranches = pSrc->nBranches;
   pDst->zDefaultBranch = pSrc->zDefaultBranch;
@@ -489,7 +489,7 @@ static void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->nIndex = 0;
   pSrc->aIndexMmapBase = 0;
   pSrc->aIndexMmapSize = 0;
-  pSrc->nWalData = 0;
+  pSrc->wal.nWalData = 0;
   pSrc->aBranches = 0;
   pSrc->nBranches = 0;
   pSrc->zDefaultBranch = 0;
@@ -818,7 +818,7 @@ void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   CS_WRITE_I64(aBuf + 32, cs->iIndexOffset);
   CS_WRITE_U32(aBuf + 40, (u32)cs->nIndexSize);
 
-  CS_WRITE_I64(aBuf + 84, cs->iWalOffset);
+  CS_WRITE_I64(aBuf + 84, cs->wal.iWalOffset);
   memcpy(aBuf + 104, cs->refsHash.data, PROLLY_HASH_SIZE);
 }
 
@@ -855,7 +855,7 @@ static int csReadManifest(ChunkStore *cs){
   cs->iIndexOffset = CS_READ_I64(aBuf + 32);
   cs->nIndexSize = (i64)CS_READ_U32(aBuf + 40);
 
-  cs->iWalOffset = CS_READ_I64(aBuf + 84);
+  cs->wal.iWalOffset = CS_READ_I64(aBuf + 84);
   memcpy(cs->refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
 
   return SQLITE_OK;
@@ -1021,13 +1021,13 @@ static int csReplayWal(ChunkStore *cs){
 
   memset(&tmpRefs, 0, sizeof(tmpRefs));
 
-  if( cs->iWalOffset <= 0 || !cs->pFile ) return SQLITE_OK;
+  if( cs->wal.iWalOffset <= 0 || !cs->pFile ) return SQLITE_OK;
 
   {
     i64 fileSize = 0;
     int rc = sqlite3OsFileSize(cs->pFile, &fileSize);
     if( rc != SQLITE_OK ) return rc;
-    walSize = fileSize - cs->iWalOffset;
+    walSize = fileSize - cs->wal.iWalOffset;
     cs->iFileSize = fileSize;
   }
   if( walSize <= 0 ){
@@ -1040,12 +1040,12 @@ static int csReplayWal(ChunkStore *cs){
 
   csCaptureReplayState(cs, &saved);
 
-  cs->nWalData = walSize;
+  cs->wal.nWalData = walSize;
 
   pos = 0;
   while( pos < walSize ){
     u8 tag = 0;
-    rc = sqlite3OsRead(cs->pFile, &tag, 1, cs->iWalOffset + pos);
+    rc = sqlite3OsRead(cs->pFile, &tag, 1, cs->wal.iWalOffset + pos);
     if( rc != SQLITE_OK ) goto replay_error;
     pos++;
 
@@ -1056,7 +1056,7 @@ static int csReplayWal(ChunkStore *cs){
       if( pos + 20 + 4 > walSize ){
         break;
       }
-      rc = sqlite3OsRead(cs->pFile, aHdr, sizeof(aHdr), cs->iWalOffset + pos);
+      rc = sqlite3OsRead(cs->pFile, aHdr, sizeof(aHdr), cs->wal.iWalOffset + pos);
       if( rc != SQLITE_OK ) goto replay_error;
       memcpy(&hash, aHdr, 20);
       len = CS_READ_U32(aHdr + 20);
@@ -1074,7 +1074,7 @@ static int csReplayWal(ChunkStore *cs){
           if( rc != SQLITE_OK ) goto replay_error;
           e = &cs->aPending[cs->nPending];
           memcpy(&e->hash, &hash, sizeof(ProllyHash));
-          e->offset = cs->iWalOffset + (i64)(pos - 4);
+          e->offset = cs->wal.iWalOffset + (i64)(pos - 4);
           e->size = (int)len;
           cs->nPending++;
         }
@@ -1088,7 +1088,7 @@ static int csReplayWal(ChunkStore *cs){
       }
       {
         u32 magic;
-        rc = sqlite3OsRead(cs->pFile, m, sizeof(m), cs->iWalOffset + pos);
+        rc = sqlite3OsRead(cs->pFile, m, sizeof(m), cs->wal.iWalOffset + pos);
         if( rc != SQLITE_OK ) goto replay_error;
         magic = CS_READ_U32(m);
         if( magic != CHUNK_STORE_MAGIC ){
@@ -1287,7 +1287,7 @@ int chunkStoreOpen(
     cs->nChunks = 0;
     cs->iIndexOffset = 0;
     cs->nIndexSize = 0;
-    cs->iWalOffset = CHUNK_MANIFEST_SIZE;
+    cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     cs->pFile = 0;
     return SQLITE_OK;
   }
@@ -1384,7 +1384,7 @@ int chunkStoreOpen(
     cs->iIndexOffset = 0;
     cs->nIndexSize = 0;
 
-    cs->iWalOffset = CHUNK_MANIFEST_SIZE;
+    cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     cs->iFileSize = 0;
     cs->pFile = 0;
   }
@@ -2184,7 +2184,7 @@ static int csCommitToFile(ChunkStore *cs){
   int lockFd = -1;
   int hadFile = (cs->pFile != 0);
   int lockHeld = (cs->graphLockFd >= 0);
-  i64 newWalSize = cs->nWalData;
+  i64 newWalSize = cs->wal.nWalData;
   ChunkIndexEntry *aCommittedPending = 0;
   ChunkIndexEntry *aMergePending = 0;
   ChunkIndexEntry *aMerged = 0;
@@ -2242,11 +2242,11 @@ static int csCommitToFile(ChunkStore *cs){
       }
       appendBytes += recBytes;
     }
-    if( cs->nWalData > LARGEST_INT64 - appendBytes ){
+    if( cs->wal.nWalData > LARGEST_INT64 - appendBytes ){
       rc = SQLITE_TOOBIG;
       goto commit_done;
     }
-    newWalSize = cs->nWalData + appendBytes;
+    newWalSize = cs->wal.nWalData + appendBytes;
 
     aCommittedPending = (ChunkIndexEntry*)sqlite3_malloc(
       cs->nPending * (int)sizeof(ChunkIndexEntry)
@@ -2314,7 +2314,7 @@ static int csCommitToFile(ChunkStore *cs){
 
   if( fileSize == 0 ){
     u8 manifest[CHUNK_MANIFEST_SIZE];
-    cs->iWalOffset = CHUNK_MANIFEST_SIZE;
+    cs->wal.iWalOffset = CHUNK_MANIFEST_SIZE;
     csSerializeManifest(cs, manifest);
     CRASH_CHECK_WRITE();
     rc = sqlite3OsWrite(cs->pFile, manifest, CHUNK_MANIFEST_SIZE, 0);
@@ -2443,7 +2443,7 @@ commit_done:
       cs->nRecent = 0;
       csRecentHTClear(cs);
     }
-    cs->nWalData = newWalSize;
+    cs->wal.nWalData = newWalSize;
   }else{
     sqlite3_free(aMerged);
   }

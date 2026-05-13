@@ -309,7 +309,7 @@ static int gcRewriteFile(
   manifestCs.nChunks = nNewIndex;
   manifestCs.iIndexOffset = indexOffset;
   manifestCs.nIndexSize = indexSize;
-  manifestCs.iWalOffset = indexOffset + indexSize;
+  walStateSetOffset(&manifestCs.wal, indexOffset + indexSize);
 
   csSerializeManifest(&manifestCs, manifest);
 
@@ -416,7 +416,7 @@ static int gcRewriteFile(
 
         if( rc==SQLITE_OK ){
           cs->pFile = pNewFile;
-          cs->nWalData = 0;
+          walStateSetDataSize(&cs->wal, 0);
           if( pOldFile ){
             sqlite3OsCloseFree(pOldFile);
           }
@@ -486,7 +486,7 @@ static int gcSweep(
     cs->nChunks = nNewIndex;
     cs->iIndexOffset = CHUNK_MANIFEST_SIZE + nBuf;
     cs->nIndexSize = indexSize;
-    cs->iWalOffset = CHUNK_MANIFEST_SIZE + nBuf + indexSize;
+    walStateSetOffset(&cs->wal, CHUNK_MANIFEST_SIZE + nBuf + indexSize);
     aNewIndex = 0;
 
     cs->nPending = 0;

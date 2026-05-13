@@ -3054,11 +3054,11 @@ static void run_truncated_wal_is_rejected(void){
 
   check("open_store_for_wal_tag_corruption", chunkStoreOpen(&cs, sqlite3_vfs_find(0), dbpath,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB)==SQLITE_OK);
-  check("have_wal_region", cs.nWalData > 0);
-  if( cs.nWalData > 0 ){
+  check("have_wal_region", walStateGetDataSize(&cs.wal) > 0);
+  if( walStateGetDataSize(&cs.wal) > 0 ){
     unsigned char badTag = 0xff;
     check("corrupt_first_wal_tag",
-          sqlite3OsWrite(cs.pFile, &badTag, 1, cs.iWalOffset)==SQLITE_OK);
+          sqlite3OsWrite(cs.pFile, &badTag, 1, walStateGetOffset(&cs.wal))==SQLITE_OK);
   }
   chunkStoreClose(&cs);
 
@@ -3131,7 +3131,7 @@ static void run_wal_offset_corruption_is_rejected(void){
   {
     int i;
     for(i=0; i<cs.nIndex; i++){
-      if( cs.aIndex[i].offset >= cs.iWalOffset ){
+      if( cs.aIndex[i].offset >= walStateGetOffset(&cs.wal) ){
         iWal = i;
         break;
       }
@@ -3183,7 +3183,7 @@ static void run_integrity_check_walks_prolly_nodes(void){
     for(i=0; i<cs.nIndex; i++){
       if( prollyHashCompare(&cs.aIndex[i].hash, &pTable->root)==0 ){
         if( cs.aIndex[i].offset < 0 ){
-          dataOff = cs.iWalOffset + (-(cs.aIndex[i].offset + 1));
+          dataOff = walStateGetOffset(&cs.wal) + (-(cs.aIndex[i].offset + 1));
         }else{
           dataOff = cs.aIndex[i].offset + 4;
         }
