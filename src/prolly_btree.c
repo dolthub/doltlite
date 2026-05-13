@@ -5750,10 +5750,8 @@ static int prollyBtCursorIndexMoveto(
     u8 *pSortKey = 0;
     int nSortKey = 0;
     int nSeekKeyField = 0;
-    if( pCur->pKeyInfo
-     && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField
-     && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
-      nSeekKeyField = (int)pCur->pKeyInfo->nKeyField;
+    if( pCur->pKeyInfo && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
+      nSeekKeyField = (int)pIdxKey->nField;
     }
     rc = serializeUnpackedRecordBuffer(
         pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
@@ -5836,17 +5834,22 @@ static int prollyBtCursorIndexMoveto(
                   if( mmE && mmE->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
                 }
                 if( !isDeleted ){
-                  const u8 *pVal2; int nVal2;
-                  prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
-                  if( nVal2==0 ){
-                    rc = recordFromSortKeyBuffer(
-                        pSK, nSK, &pRecBuf, &nRecBufAlloc, &nVal2);
-                    if( rc!=SQLITE_OK ) break;
-                    pVal2 = pRecBuf;
-                  }
-                  pIdxKey->eqSeen = 0;
                   bestIdx = i;
-                  bestCmp = sqlite3VdbeRecordCompare(nVal2, pVal2, pIdxKey);
+                  if( nSeekKeyField>0 ){
+                    pIdxKey->eqSeen = 0;
+                    bestCmp = 1;
+                  }else{
+                    const u8 *pVal2; int nVal2;
+                    prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
+                    if( nVal2==0 ){
+                      rc = recordFromSortKeyBuffer(
+                          pSK, nSK, &pRecBuf, &nRecBufAlloc, &nVal2);
+                      if( rc!=SQLITE_OK ) break;
+                      pVal2 = pRecBuf;
+                    }
+                    pIdxKey->eqSeen = 0;
+                    bestCmp = sqlite3VdbeRecordCompare(nVal2, pVal2, pIdxKey);
+                  }
                 }
               }
               break;
