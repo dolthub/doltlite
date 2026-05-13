@@ -2128,7 +2128,9 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     u8 flags;
     struct TableEntry *pTE;
     int nLen;
-    if( q+4+1+PROLLY_HASH_SIZE > data+nData ) return SQLITE_CORRUPT;
+    if( q+4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE > data+nData ){
+      return SQLITE_CORRUPT;
+    }
     iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
     q += 4;
     flags = *q++;
@@ -2136,10 +2138,8 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     if( !pTE ) return SQLITE_NOMEM;
     memcpy(pTE->root.data, q, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
-    if( q + PROLLY_HASH_SIZE <= data+nData ){
-      memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
-      q += PROLLY_HASH_SIZE;
-    }
+    memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
+    q += PROLLY_HASH_SIZE;
     if( iFormat==CATALOG_FORMAT_V4 ){
       int nType, nName, nTbl;
       const u8 *pType, *pName, *pTbl;
@@ -2158,9 +2158,11 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
         memcpy(pTE->zName, pName, nName);
         pTE->zName[nName] = 0;
       }
-    }else if( q+2 <= data+nData ){
+    }else{
+      if( q+2 > data+nData ) return SQLITE_CORRUPT;
       nLen = q[0] | (q[1]<<8); q += 2;
-      if( nLen>0 && q+nLen<=data+nData ){
+      if( q+nLen > data+nData ) return SQLITE_CORRUPT;
+      if( nLen>0 ){
         pTE->zName = sqlite3_malloc(nLen+1);
         if( pTE->zName ){
           memcpy(pTE->zName, q, nLen);
@@ -2168,10 +2170,12 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
         }else{
           return SQLITE_NOMEM;
         }
-        q += nLen;
       }
+      q += nLen;
     }
   }
+
+  if( q!=data+nData ) return SQLITE_CORRUPT;
 
   {
     Pgno maxPage = 0;
@@ -6195,10 +6199,15 @@ static int prollyBtCursorInsert(
   if( pCur->curIntKey ){
     const u8 *pData = (const u8*)pPayload->pData;
     int nData = pPayload->nData;
-    int nTotal = nData + pPayload->nZero;
+    i64 nTotal64 = (i64)nData + (i64)pPayload->nZero;
+    int nTotal;
     u8 *pBuf = 0;
 
-    if( pPayload->nZero > 0 && nTotal > nData ){
+    if( nData<0 || pPayload->nZero<0 || nTotal64 > 0x7fffffff ){
+      return SQLITE_TOOBIG;
+    }
+    nTotal = (int)nTotal64;
+    if( pPayload->nZero > 0 ){
       pBuf = sqlite3_malloc(nTotal);
       if( !pBuf ) return SQLITE_NOMEM;
       if( nData > 0 ){
