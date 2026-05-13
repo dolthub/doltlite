@@ -828,6 +828,7 @@ static int csReadIndex(ChunkStore *cs){
   void *pMapBase = 0;
   i64 nMapSize = 0;
   const u8 *pMapData = 0;
+  i64 fileSize = 0;
 
   if( cs->nIndexSize == 0 || cs->nChunks == 0 ){
     cs->nIndex = 0;
@@ -842,6 +843,27 @@ static int csReadIndex(ChunkStore *cs){
     return SQLITE_TOOBIG;
   }
   nEntries = (int)nEntries64;
+
+  /* Validate that iIndexOffset + nIndexSize lies within the file. mmap'ing
+  ** past EOF can return zero-filled or sparse pages on some platforms,
+  ** which causes csSearchIndex to read garbage and SIGBUS instead of
+  ** returning SQLITE_CORRUPT. See issue #827. */
+  if( cs->iIndexOffset < 0 || cs->nIndexSize < 0 ){
+    return SQLITE_CORRUPT;
+  }
+  if( cs->pFile ){
+    rc = sqlite3OsFileSize(cs->pFile, &fileSize);
+    if( rc != SQLITE_OK ) return rc;
+  }else if( cs->zFilename ){
+    struct stat st;
+    if( stat(cs->zFilename, &st) != 0 ) return SQLITE_IOERR;
+    fileSize = (i64)st.st_size;
+  }
+  if( fileSize > 0
+   && (cs->iIndexOffset > fileSize
+       || cs->nIndexSize > fileSize - cs->iIndexOffset) ){
+    return SQLITE_CORRUPT;
+  }
 
   if( cs->zFilename
    && csMapIndex(cs->zFilename, cs->iIndexOffset, cs->nIndexSize,

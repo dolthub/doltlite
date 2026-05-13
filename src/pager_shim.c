@@ -167,7 +167,17 @@ static sqlite3_file *pagerShimDummyFile(void){
 }
 
 static sqlite3_file *shimPagerFile(Pager *p){
-  return SHIM(p)->pFd;
+  PagerShim *s = SHIM(p);
+  /* When the shim is bound to a chunk store, resolve through the store so
+  ** the file handle returned reflects the current cs->pFile rather than a
+  ** stale snapshot from shim creation. This is critical when another
+  ** actor (concurrent connection, peer process, or gc) replaces the
+  ** chunk store's file handle via csReloadFromDisk or gcRewriteFile. */
+  if( s->pStore ){
+    sqlite3_file *pCurrent = ((ChunkStore*)s->pStore)->pFile;
+    if( pCurrent ) return pCurrent;
+  }
+  return s->pFd;
 }
 static const char *shimPagerFilename(const Pager *p, int fmt){
   (void)fmt;
@@ -500,6 +510,11 @@ void pagerShimDestroy(PagerShim *pShim){
   sqlite3_free(pShim->zFilename);
   sqlite3_free(pShim->zJournal);
   sqlite3_free(pShim);
+}
+
+void pagerShimSetStore(PagerShim *pShim, struct ChunkStore *pStore){
+  if( pShim==0 ) return;
+  pShim->pStore = pStore;
 }
 
 sqlite3_file *sqlite3PagerFile(Pager *pPager){
