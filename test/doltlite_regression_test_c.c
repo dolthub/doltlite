@@ -2687,6 +2687,45 @@ static void run_diff_stat_requires_refs(void){
   removeDbFiles(dbpath);
 }
 
+static void run_diff_table_deep_history_map(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char sql[256];
+  int i;
+
+  printf("=== Diff Table Deep History Map Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_diff_table_deep_history_map");
+  remove_db(dbpath);
+
+  check("open_db_for_diff_table_deep_history_map",
+        open_db(dbpath, &db)==SQLITE_OK);
+  check("setup_diff_table_deep_history_map", execsql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);"
+    "INSERT INTO t VALUES(1,0);"
+    "SELECT dolt_commit('-A', '-m', 'c0');")==SQLITE_OK);
+
+  for(i=1; i<=80; i++){
+    sqlite3_snprintf(sizeof(sql), sql,
+      "UPDATE t SET v=%d WHERE id=1;"
+      "SELECT dolt_commit('-A', '-m', 'c%d');", i, i);
+    check("diff_table_deep_history_commit", execsql(db, sql)==SQLITE_OK);
+  }
+
+  check("diff_table_deep_history_count",
+        strcmp(exec1(db,
+          "SELECT count(*) FROM dolt_diff_t WHERE diff_type='modified';"),
+          "80")==0);
+  check("diff_table_deep_history_latest_value",
+        strcmp(exec1(db,
+          "SELECT to_v FROM dolt_diff_t "
+          "WHERE to_commit=(SELECT commit_hash FROM dolt_log "
+          "                 WHERE message='c80');"),
+          "80")==0);
+
+  sqlite3_close(db);
+  remove_db(dbpath);
+}
+
 static void run_diff_stat_surfaces_corrupt_root(void){
   sqlite3 *db = 0;
   ChunkStore *cs = 0;
@@ -6477,6 +6516,7 @@ static const RegressionCase aCases[] = {
   { "begin_write_from_stale_read_snapshot", "Begin Write From Stale Read Snapshot Test", run_begin_write_from_stale_read_snapshot },
   { "open_rejects_corrupt_working_set", "Open Rejects Corrupt Working Set Test", run_open_rejects_corrupt_working_set },
   { "diff_stat_requires_refs", "Diff Stat Requires Refs Test", run_diff_stat_requires_refs },
+  { "diff_table_deep_history_map", "Diff Table Deep History Map Test", run_diff_table_deep_history_map },
   { "diff_stat_surfaces_corrupt_root", "Diff Stat Surfaces Corrupt Root Test", run_diff_stat_surfaces_corrupt_root },
   { "table_moveto_mutmap_delete_preserves_neighbors", "Table Moveto MutMap Delete Preserves Neighbors Test", run_table_moveto_mutmap_delete_preserves_neighbors },
   { "table_moveto_mutmap_exact_keeps_iteration_aligned", "Table Moveto MutMap Exact Keeps Iteration Aligned Test", run_table_moveto_mutmap_exact_keeps_iteration_aligned },
