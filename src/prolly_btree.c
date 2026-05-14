@@ -6109,6 +6109,27 @@ int sqlite3BtreeIndexMoveto(
   return pCur->pCurOps->xIndexMoveto(pCur, pIdxKey, pRes);
 }
 
+static int cachedSeekKeyMatchesCurrent(BtCursor *pCur){
+  const u8 *pKey = 0;
+  int nKey = 0;
+
+  if( !pCur || pCur->curIntKey
+   || pCur->nSeekSortKey<=0 || pCur->nSeekKeyField!=0 ){
+    return 0;
+  }
+  if( pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    if( !e ) return 0;
+    pKey = e->pKey;
+    nKey = e->nKey;
+  }else if( prollyCursorIsValid(&pCur->pCur) ){
+    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+  }
+  return pKey && nKey==pCur->nSeekSortKey
+      && memcmp(pKey, pCur->pSeekSortKey, nKey)==0;
+}
+
 int sqlite3BtreeProllyCachedIndexKeyCompare(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -6628,7 +6649,8 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
         hasSavedKey = 1;
       }
     } else {
-      if( (flags & BTREE_AUXDELETE) && pCur->nSeekSortKey>0 ){
+      if( pCur->nSeekSortKey>0
+       && ((flags & BTREE_AUXDELETE) || cachedSeekKeyMatchesCurrent(pCur)) ){
         pSavedDelKey = pCur->pSeekSortKey;
         nSavedDelKey = pCur->nSeekSortKey;
         hasSavedKey = 1;
