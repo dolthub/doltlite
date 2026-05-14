@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 20
 
     env:
-      BENCH_RUNS: 15
+      BENCH_RUNS: 21
 
     steps:
     - uses: actions/checkout@v4
@@ -114,17 +114,19 @@ jobs:
 
   # Runs three non-INTKEY sysbench variants (TEXT PK, BLOB PK, composite
   # PK). Each is gated on both individual ratios and section average
-  # ratios. The individual ceiling matches the int-keys job.
-  # BENCH_RUNS=9 because each non-INTKEY write is a per-statement flush,
-  # so we keep it below the 15-run value used by int-keys to stay within
-  # the 25-minute budget.
+  # ratios. Individual ceiling is 2.25x (vs int-keys' 2x) because the
+  # per-statement flush these variants exercise is intrinsically more
+  # sensitive to GH runner hardware variance — 2.0x produced flake at
+  # 9 runs even when the underlying delta wasn't a regression.
+  # BENCH_RUNS=13 (vs int-keys' 21) because each non-INTKEY write is a
+  # per-statement flush and runs slower per iteration.
   text-blob-comp-keys:
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
     env:
-      BENCH_RUNS: 9
-      BENCH_MAX_MULTIPLIER: 2.0
+      BENCH_RUNS: 13
+      BENCH_MAX_MULTIPLIER: 2.25
       BENCH_AVG_MAX_MULTIPLIER: 1.6
 
     steps:

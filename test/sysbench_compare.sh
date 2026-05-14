@@ -504,11 +504,11 @@ case "$BENCH_SECTION_MODE" in
     echo ""
     echo "#### Reads"
     echo ""
-    run_section "file_reads" "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    run_section "file_reads" "$READ_TESTS" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
     echo ""
     echo "#### Writes"
     echo ""
-    run_section "file_writes" "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    run_section "file_writes" "$WRITE_TESTS" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
     echo ""
     echo "### File-Backed (autocommit)"
     echo ""
@@ -523,11 +523,11 @@ case "$BENCH_SECTION_MODE" in
     echo "_File-Backed Reads section, included here for symmetry and to_"
     echo "_catch any per-statement overhead doltlite pays on the read path._"
     echo ""
-    SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_reads" "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_reads" "$READ_TESTS" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
     echo ""
     echo "#### Writes"
     echo ""
-    SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_writes" "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
+    SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_writes" "$WRITE_TESTS_AC" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
     ;;
   wrapped)
     echo "<!-- benchmark:classic -->"
@@ -547,11 +547,11 @@ case "$BENCH_SECTION_MODE" in
     echo ""
     echo "#### Reads"
     echo ""
-    run_section "file_reads" "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    run_section "file_reads" "$READ_TESTS" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
     echo ""
     echo "#### Writes"
     echo ""
-    run_section "file_writes" "$WRITE_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    run_section "file_writes" "$WRITE_TESTS" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
     ;;
   autocommit)
     echo "## Sysbench-Style Benchmark (autocommit): Doltlite vs SQLite"
@@ -569,11 +569,11 @@ case "$BENCH_SECTION_MODE" in
     echo "_File-Backed Reads section, included here for symmetry and to_"
     echo "_catch any per-statement overhead doltlite pays on the read path._"
     echo ""
-    SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_reads" "$READ_TESTS" "/tmp/bench_file" "/tmp/bench_file"
+    SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_reads" "$READ_TESTS" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
     echo ""
     echo "#### Writes"
     echo ""
-    SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_writes" "$WRITE_TESTS_AC" "/tmp/bench_file" "/tmp/bench_file"
+    SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_writes" "$WRITE_TESTS_AC" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
     ;;
   *)
     echo "unknown BENCH_SECTION_MODE: $BENCH_SECTION_MODE" >&2
