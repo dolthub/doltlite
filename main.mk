@@ -576,7 +576,7 @@ endif
 
 PROLLY_OBJS = prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_dispatch.o $(BLAKE3_SIMD_OBJS) prolly_hashset.o prolly_node.o prolly_cache.o \
               chunk_store.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
-              prolly_mutate.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o prolly_btree.o pager_shim.o sortkey.o \
+              prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
               doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_schema_merge.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
@@ -596,6 +596,9 @@ ifeq ($(DOLTLITE_PROLLY),1)
   # Also compile original btree/pager/wal with renamed symbols for ATTACH
   LIBOBJS0 += btree_orig.o pager_orig.o wal_orig.o btmutex_orig.o backup_orig.o btree_orig_api.o
   OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1 -DDOLTLITE_VERSION='"$(DOLTLITE_VERSION)"'
+  ifeq ($(DOLTLITE_PROLLY_CHECK),1)
+    OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY_CHECK=1
+  endif
   # The non-amalgamation build compiles individual .c files into .o's, so
   # the SHELL_OPT flags the stock sqlite3 target passes at link time never
   # reach the preprocessor. That leaves dbpage.o, stmt.o, dbstat.o, rtree.o,
@@ -1409,6 +1412,9 @@ prolly_chunker.o:	$(TOP)/src/prolly_chunker.c $(DEPS_OBJ_COMMON)
 
 prolly_mutate.o:	$(TOP)/src/prolly_mutate.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_mutate.c
+
+prolly_check.o:	$(TOP)/src/prolly_check.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/prolly_check.c
 
 prolly_diff.o:	$(TOP)/src/prolly_diff.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/prolly_diff.c

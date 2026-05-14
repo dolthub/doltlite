@@ -37,9 +37,9 @@ jobs:
     - name: Build
       run: |
         cd build
-        make doltlite
-        make doltlite-lib
-        make testfixture
+        make DOLTLITE_PROLLY_CHECK=1 doltlite
+        make DOLTLITE_PROLLY_CHECK=1 doltlite-lib
+        make DOLTLITE_PROLLY_CHECK=1 testfixture
         # doltlite_parity.sh compares against the package-built stock
         # SQLite CLI instead of whatever sqlite3 the runner image provides.
         make DOLTLITE_PROLLY=0 sqlite3
@@ -240,7 +240,7 @@ jobs:
     - name: Build concurrency stress
       run: |
         cd build
-        make concurrent_stress_test
+        make DOLTLITE_PROLLY_CHECK=1 concurrent_stress_test
       timeout-minutes: 5
 
     - name: Run concurrency stress
@@ -269,8 +269,8 @@ jobs:
     - name: Build version-control concurrency stress
       run: |
         cd build
-        make vc_concurrency_test
-        make vc_ref_mutation_stress_test
+        make DOLTLITE_PROLLY_CHECK=1 vc_concurrency_test
+        make DOLTLITE_PROLLY_CHECK=1 vc_ref_mutation_stress_test
       timeout-minutes: 5
 
     - name: Run version-control concurrency stress
@@ -314,7 +314,7 @@ jobs:
       run: |
         mkdir -p build && cd build
         ../configure
-        make doltlite
+        make DOLTLITE_PROLLY_CHECK=1 doltlite
         # The SQL oracle compares doltlite to STOCK SQLite. Build the
         # sqlite3 CLI with DOLTLITE_PROLLY=0 so it has the upstream
         # btree/pager/wal — without this flag, main.mk swaps in the
