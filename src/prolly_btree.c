@@ -5423,6 +5423,8 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
         pCur->eState = CURSOR_VALID;
         if( pCur->curIntKey ){
           cacheCurrentTreePayloadIfIntKey(pCur);
+        }else{
+          cacheCurrentTreeStoredPayloadNonIntKey(pCur);
         }
       } else {
         pCur->eState = CURSOR_INVALID;
@@ -5486,6 +5488,8 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
           pCur->eState = CURSOR_VALID;
           if( pCur->curIntKey ){
             cacheCurrentTreePayloadIfIntKey(pCur);
+          }else{
+            cacheCurrentTreeStoredPayloadNonIntKey(pCur);
           }
         } else {
           pCur->eState = CURSOR_INVALID;
