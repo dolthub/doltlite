@@ -6419,22 +6419,11 @@ static int prollyBtCursorInsert(
         isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
       }
     }
-    if( pPayload->aMem && pPayload->nMem > 0 ){
-      rc = sortKeyFromMemPrefixCollBuffer(
-          pPayload->aMem, (int)pPayload->nMem,
-          isIndex ? 0 : (splitKey ? nKeyField : 0),
-          pCur->pKeyInfo,
-          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
-    }else{
-      rc = SQLITE_NOTFOUND;
-    }
-    if( rc==SQLITE_NOTFOUND ){
-      rc = sortKeyFromRecordPrefixCollBuffer(
-          (const u8*)pPayload->pKey, (int)pPayload->nKey,
-          isIndex ? 0 : (splitKey ? nKeyField : 0),
-          pCur->pKeyInfo,
-          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
-    }
+    rc = sortKeyFromRecordPrefixCollBuffer(
+        (const u8*)pPayload->pKey, (int)pPayload->nKey,
+        isIndex ? 0 : (splitKey ? nKeyField : 0),
+        pCur->pKeyInfo,
+        &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
     if( rc==SQLITE_OK ){
       if( splitKey ){
         rc = prollyMutMapInsert(pCur->pMutMap,
