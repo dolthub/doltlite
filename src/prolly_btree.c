@@ -7547,6 +7547,11 @@ int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut){
   return serializeCatalog(db->aDb[0].pBt, ppOut, pnOut);
 }
 
+int doltliteDeserializeCatalogForTest(sqlite3 *db, const u8 *data, int nData){
+  if( !db || db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  return deserializeCatalog(db->aDb[0].pBt, data, nData);
+}
+
 int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                         struct TableEntry **ppTables, int *pnTables,
                         Pgno *piNextTable){
