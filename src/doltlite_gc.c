@@ -104,13 +104,6 @@ static int gcMarkReachable(
       rc = gcQueuePush(&queue, &aPend[i].hash);
     }
   }
-  {
-    int nRec; const ChunkIndexEntry *aRec;
-    chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
-    for(i=0; rc==SQLITE_OK && i<nRec; i++){
-      rc = gcQueuePush(&queue, &aRec[i].hash);
-    }
-  }
 
   if( rc!=SQLITE_OK ){
     gcQueueFree(&queue);
