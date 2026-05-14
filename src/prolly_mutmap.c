@@ -8,6 +8,7 @@
 
 #define MUTMAP_INIT_CAP 16
 #define MUTMAP_MIN_HASH 32
+#define MUTMAP_POS_UPDATE_LIMIT 64
 
 i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e){
   const u8 *p = e->pKey;
@@ -379,13 +380,23 @@ static int ensureOrder(ProllyMutMap *mm){
   int i;
   int rc;
   mm->preferSorted = 1;
-  if( mm->keepSorted || !mm->orderDirty ) return SQLITE_OK;
+  if( mm->keepSorted ) return SQLITE_OK;
+  if( !mm->orderDirty ){
+    if( mm->posDirty ){
+      for(i=0; i<mm->nEntries; i++){
+        mm->aPos[mm->aOrder[i]] = i;
+      }
+      mm->posDirty = 0;
+    }
+    return SQLITE_OK;
+  }
   rc = mutmapSortOrder(mm);
   if( rc!=SQLITE_OK ) return rc;
   for(i=0; i<mm->nEntries; i++){
     mm->aPos[mm->aOrder[i]] = i;
   }
   mm->orderDirty = 0;
+  mm->posDirty = 0;
   return SQLITE_OK;
 }
 
@@ -439,14 +450,19 @@ static int ensureCapacity(ProllyMutMap *mm){
 }
 
 static void insertOrderEntry(ProllyMutMap *mm, int idx, int phys){
-  int i;
+  int shifted = mm->nEntries - idx;
   if( idx < mm->nEntries ){
     memmove(&mm->aOrder[idx+1], &mm->aOrder[idx],
             (mm->nEntries - idx) * sizeof(int));
   }
   mm->aOrder[idx] = phys;
-  for(i=idx; i<=mm->nEntries; i++){
-    mm->aPos[mm->aOrder[i]] = i;
+  if( !mm->isIntKey || shifted <= MUTMAP_POS_UPDATE_LIMIT ){
+    int i;
+    for(i=idx; i<=mm->nEntries; i++){
+      mm->aPos[mm->aOrder[i]] = i;
+    }
+  }else{
+    mm->posDirty = 1;
   }
 }
 
@@ -691,9 +707,11 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
         for(j=0; j<mm->nEntries; j++){
           mm->aPos[mm->aOrder[j]] = j;
         }
+        mm->posDirty = 0;
       }else{
         mm->nEntries = newN;
         mm->orderDirty = 1;
+        mm->posDirty = 1;
       }
       for(j=0; j<mm->nUndo; j++){
         mm->aUndo[j].entryIdx = aMap[mm->aUndo[j].entryIdx];
@@ -861,6 +879,7 @@ void prollyMutMapClear(ProllyMutMap *mm){
   mm->nEntries = 0;
   mm->orderDirty = 0;
   mm->preferSorted = 0;
+  mm->posDirty = 0;
   mm->generation++;
   if( mm->aHash && mm->nHashAlloc>0 ){
     memset(mm->aHash, 0, mm->nHashAlloc * sizeof(int));
@@ -904,6 +923,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
   dst->keepSorted = src->keepSorted;
   dst->orderDirty = src->orderDirty;
   dst->preferSorted = src->preferSorted;
+  dst->posDirty = src->posDirty;
   dst->levelBase = src->levelBase;
   dst->currentSavepointLevel = src->currentSavepointLevel;
   dst->generation = src->generation;
