@@ -541,7 +541,7 @@ int prollyMutMapInsert(
     if( rc!=SQLITE_OK ){
       return rc;
     }
-    if( mm->keepSorted || !mm->orderDirty ){
+    if( mm->keepSorted ){
       insertOrderEntry(mm, idx, phys);
     }else{
       mm->aOrder[phys] = phys;
@@ -613,7 +613,7 @@ int prollyMutMapDelete(
     if( rc!=SQLITE_OK ){
       return rc;
     }
-    if( mm->keepSorted || !mm->orderDirty ){
+    if( mm->keepSorted ){
       insertOrderEntry(mm, idx, phys);
     }else{
       mm->aOrder[phys] = phys;
