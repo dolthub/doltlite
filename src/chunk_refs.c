@@ -214,6 +214,7 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   if( version!=6 ) return SQLITE_CORRUPT;
   if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
   defLen = (int)CS_READ_U32(bufCur); bufCur+=4;
+  if( defLen<0 ) return SQLITE_CORRUPT;
   if( bufCur+defLen>data+nData ) return SQLITE_CORRUPT;
   sqlite3_free(cs->refs.zDefaultBranch);
   cs->refs.zDefaultBranch = sqlite3_malloc(defLen+1);
@@ -221,6 +222,7 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   memcpy(cs->refs.zDefaultBranch, bufCur, defLen); cs->refs.zDefaultBranch[defLen]=0; bufCur+=defLen;
   if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
   nBranches = (int)CS_READ_U32(bufCur); bufCur+=4;
+  if( nBranches<0 || nBranches>(int)(data+nData-bufCur)/4 ) return SQLITE_CORRUPT;
   csFreeBranches(cs);
   if( nBranches>0 ){
     cs->refs.aBranches = sqlite3_malloc(nBranches*(int)sizeof(struct BranchRef));
@@ -228,6 +230,7 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
     for(i=0;i<nBranches;i++){
       int nameLen; if(bufCur+4>data+nData) return SQLITE_CORRUPT;
       nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+      if( nameLen<0 ) return SQLITE_CORRUPT;
       if(bufCur+nameLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
       memset(&cs->refs.aBranches[i], 0, sizeof(struct BranchRef));
       cs->refs.aBranches[i].zName=sqlite3_malloc(nameLen+1);
@@ -244,6 +247,7 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   csFreeTags(cs);
   if( bufCur+4<=data+nData ){
     nTags = (int)CS_READ_U32(bufCur); bufCur+=4;
+    if( nTags<0 || nTags>(int)(data+nData-bufCur)/4 ) return SQLITE_CORRUPT;
     if( nTags>0 ){
       cs->refs.aTags = sqlite3_malloc(nTags*(int)sizeof(struct TagRef));
       if(!cs->refs.aTags) return SQLITE_NOMEM;
@@ -251,6 +255,7 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
       for(i=0;i<nTags;i++){
         int nameLen; if(bufCur+4>data+nData) return SQLITE_CORRUPT;
         nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+        if( nameLen<0 ) return SQLITE_CORRUPT;
         if(bufCur+nameLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
         cs->refs.aTags[i].zName=sqlite3_malloc(nameLen+1);
         if(!cs->refs.aTags[i].zName) return SQLITE_NOMEM;
@@ -260,12 +265,14 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
           int taggerLen, emailLen, messageLen;
           if(bufCur+4>data+nData) return SQLITE_CORRUPT;
           taggerLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+          if( taggerLen<0 ) return SQLITE_CORRUPT;
           if(bufCur+taggerLen>data+nData) return SQLITE_CORRUPT;
           cs->refs.aTags[i].zTagger=sqlite3_malloc(taggerLen+1);
           if(!cs->refs.aTags[i].zTagger) return SQLITE_NOMEM;
           memcpy(cs->refs.aTags[i].zTagger,bufCur,taggerLen); cs->refs.aTags[i].zTagger[taggerLen]=0; bufCur+=taggerLen;
           if(bufCur+4>data+nData) return SQLITE_CORRUPT;
           emailLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+          if( emailLen<0 ) return SQLITE_CORRUPT;
           if(bufCur+emailLen>data+nData) return SQLITE_CORRUPT;
           cs->refs.aTags[i].zEmail=sqlite3_malloc(emailLen+1);
           if(!cs->refs.aTags[i].zEmail) return SQLITE_NOMEM;
@@ -274,6 +281,7 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
           cs->refs.aTags[i].timestamp=CS_READ_I64(bufCur); bufCur+=8;
           if(bufCur+4>data+nData) return SQLITE_CORRUPT;
           messageLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+          if( messageLen<0 ) return SQLITE_CORRUPT;
           if(bufCur+messageLen>data+nData) return SQLITE_CORRUPT;
           cs->refs.aTags[i].zMessage=sqlite3_malloc(messageLen+1);
           if(!cs->refs.aTags[i].zMessage) return SQLITE_NOMEM;
@@ -295,6 +303,7 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   csFreeTracking(cs);
   if( bufCur+4<=data+nData ){
     int nRemotes = (int)CS_READ_U32(bufCur); bufCur+=4;
+    if( nRemotes<0 || nRemotes>(int)(data+nData-bufCur)/4 ) return SQLITE_CORRUPT;
     if( nRemotes>0 ){
       cs->refs.aRemotes = sqlite3_malloc(nRemotes*(int)sizeof(struct RemoteRef));
       if(!cs->refs.aRemotes) return SQLITE_NOMEM;
@@ -303,11 +312,13 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
         int nameLen, urlLen;
         if(bufCur+4>data+nData) return SQLITE_CORRUPT;
         nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+        if( nameLen<0 ) return SQLITE_CORRUPT;
         if(bufCur+nameLen+4>data+nData) return SQLITE_CORRUPT;
         cs->refs.aRemotes[i].zName=sqlite3_malloc(nameLen+1);
         if(!cs->refs.aRemotes[i].zName) return SQLITE_NOMEM;
         memcpy(cs->refs.aRemotes[i].zName,bufCur,nameLen); cs->refs.aRemotes[i].zName[nameLen]=0; bufCur+=nameLen;
         urlLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+        if( urlLen<0 ) return SQLITE_CORRUPT;
         if(bufCur+urlLen>data+nData) return SQLITE_CORRUPT;
         cs->refs.aRemotes[i].zUrl=sqlite3_malloc(urlLen+1);
         if(!cs->refs.aRemotes[i].zUrl) return SQLITE_NOMEM;
@@ -317,6 +328,7 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
     }
     if( bufCur+4<=data+nData ){
       int nTracking = (int)CS_READ_U32(bufCur); bufCur+=4;
+      if( nTracking<0 || nTracking>(int)(data+nData-bufCur)/4 ) return SQLITE_CORRUPT;
       if( nTracking>0 ){
         cs->refs.aTracking = sqlite3_malloc(nTracking*(int)sizeof(struct TrackingBranch));
         if(!cs->refs.aTracking) return SQLITE_NOMEM;
@@ -325,11 +337,13 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
           int remoteLen, branchLen;
           if(bufCur+4>data+nData) return SQLITE_CORRUPT;
           remoteLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+          if( remoteLen<0 ) return SQLITE_CORRUPT;
           if(bufCur+remoteLen+4>data+nData) return SQLITE_CORRUPT;
           cs->refs.aTracking[i].zRemote=sqlite3_malloc(remoteLen+1);
           if(!cs->refs.aTracking[i].zRemote) return SQLITE_NOMEM;
           memcpy(cs->refs.aTracking[i].zRemote,bufCur,remoteLen); cs->refs.aTracking[i].zRemote[remoteLen]=0; bufCur+=remoteLen;
           branchLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+          if( branchLen<0 ) return SQLITE_CORRUPT;
           if(bufCur+branchLen+PROLLY_HASH_SIZE>data+nData) return SQLITE_CORRUPT;
           cs->refs.aTracking[i].zBranch=sqlite3_malloc(branchLen+1);
           if(!cs->refs.aTracking[i].zBranch) return SQLITE_NOMEM;

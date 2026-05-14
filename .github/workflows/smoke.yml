@@ -93,7 +93,7 @@ jobs:
 
     - name: Compile fuzz harnesses
       run: |
-        for target in fuzz_replaywal fuzz_prolly_node; do
+        for target in fuzz_replaywal fuzz_prolly_node fuzz_deserialize_refs fuzz_read_index fuzz_deserialize_catalog; do
           clang -O1 -g \
             -fsanitize=fuzzer,address -fno-omit-frame-pointer -fno-sanitize-recover=address \
             -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
@@ -121,6 +121,39 @@ jobs:
       run: |
         "$GITHUB_WORKSPACE/build-fuzz/fuzz_prolly_node" \
           "$GITHUB_WORKSPACE/test/fuzz-corpus/prolly_node" \
+          -max_total_time=30 \
+          -timeout=10 \
+          -rss_limit_mb=2048 \
+          -print_final_stats=1
+
+    - name: Run csDeserializeRefs fuzzer (30s)
+      env:
+        ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
+      run: |
+        "$GITHUB_WORKSPACE/build-fuzz/fuzz_deserialize_refs" \
+          "$GITHUB_WORKSPACE/test/fuzz-corpus/deserialize_refs" \
+          -max_total_time=30 \
+          -timeout=10 \
+          -rss_limit_mb=2048 \
+          -print_final_stats=1
+
+    - name: Run csReadIndex fuzzer (30s)
+      env:
+        ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
+      run: |
+        "$GITHUB_WORKSPACE/build-fuzz/fuzz_read_index" \
+          "$GITHUB_WORKSPACE/test/fuzz-corpus/read_index" \
+          -max_total_time=30 \
+          -timeout=10 \
+          -rss_limit_mb=2048 \
+          -print_final_stats=1
+
+    - name: Run deserializeCatalog fuzzer (30s)
+      env:
+        ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:print_stacktrace=1:detect_leaks=0
+      run: |
+        "$GITHUB_WORKSPACE/build-fuzz/fuzz_deserialize_catalog" \
+          "$GITHUB_WORKSPACE/test/fuzz-corpus/deserialize_catalog" \
           -max_total_time=30 \
           -timeout=10 \
           -rss_limit_mb=2048 \

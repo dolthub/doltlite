@@ -87,6 +87,7 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
     u8 **ppOut, int *pnOut);
 int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
+int doltliteDeserializeCatalogForTest(sqlite3 *db, const u8 *data, int nData);
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
 int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
                                  ProllyHash *pRoot, u8 *pFlags,
