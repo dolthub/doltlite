@@ -38,7 +38,10 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_PROLLY_NODE;
   }
 
-  if( nData == WS_TOTAL_SIZE && data[0] == WS_FORMAT_VERSION ){
+  if( (data[0] == WS_FORMAT_VERSION_V5 && nData == WS_TOTAL_SIZE)
+   || (data[0] == WS_FORMAT_VERSION_V4 && nData == WS_TOTAL_SIZE_V4)
+   || (data[0] == WS_FORMAT_VERSION_V3 && nData == WS_TOTAL_SIZE_V3)
+   || (data[0] == WS_FORMAT_VERSION_V2 && nData == WS_TOTAL_SIZE_V2) ){
     return CHUNK_WORKING_SET;
   }
 
@@ -164,8 +167,10 @@ static int enumerateWorkingSetChildren(
 ){
   ProllyHash h;
   int rc;
+  u8 version;
 
-  (void)nData;
+  if( nData < 1 ) return SQLITE_CORRUPT;
+  version = data[0];
 
   memcpy(h.data, data + WS_WORKING_CAT_OFF, PROLLY_HASH_SIZE);
   rc = xChild(ctx, &h);
@@ -185,6 +190,25 @@ static int enumerateWorkingSetChildren(
 
   if( data[WS_MERGING_OFF] ){
     memcpy(h.data, data + WS_MERGE_COMMIT_OFF, PROLLY_HASH_SIZE);
+    rc = xChild(ctx, &h);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  if( version >= WS_FORMAT_VERSION_V3 && nData >= WS_REBASE_ONTO_OFF + PROLLY_HASH_SIZE
+   && data[WS_REBASING_OFF] ){
+    memcpy(h.data, data + WS_PRE_REBASE_CAT_OFF, PROLLY_HASH_SIZE);
+    rc = xChild(ctx, &h);
+    if( rc!=SQLITE_OK ) return rc;
+    memcpy(h.data, data + WS_REBASE_ONTO_OFF, PROLLY_HASH_SIZE);
+    rc = xChild(ctx, &h);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  if( version == WS_FORMAT_VERSION_V4 && nData >= WS_TOTAL_SIZE_V4 ){
+    memcpy(h.data, data + WS_CONSTRAINT_VIOLATIONS_OFF_V4, PROLLY_HASH_SIZE);
+    rc = xChild(ctx, &h);
+  }else if( version >= WS_FORMAT_VERSION_V5 && nData >= WS_TOTAL_SIZE ){
+    memcpy(h.data, data + WS_CONSTRAINT_VIOLATIONS_OFF, PROLLY_HASH_SIZE);
     rc = xChild(ctx, &h);
   }
 

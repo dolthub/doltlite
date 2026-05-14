@@ -96,6 +96,22 @@ static int gcMarkReachable(
       rc = gcQueuePush(&queue, &aTg[i].commitHash);
     }
   }
+
+  {
+    int nPend; const ChunkIndexEntry *aPend;
+    chunkStagingGetPending(&cs->staging, &nPend, &aPend);
+    for(i=0; rc==SQLITE_OK && i<nPend; i++){
+      rc = gcQueuePush(&queue, &aPend[i].hash);
+    }
+  }
+  {
+    int nRec; const ChunkIndexEntry *aRec;
+    chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
+    for(i=0; rc==SQLITE_OK && i<nRec; i++){
+      rc = gcQueuePush(&queue, &aRec[i].hash);
+    }
+  }
+
   if( rc!=SQLITE_OK ){
     gcQueueFree(&queue);
     return rc;
@@ -221,6 +237,13 @@ static int gcBuildCompactedData(
     }
   }
   {
+    int nPend; const ChunkIndexEntry *aPend;
+    chunkStagingGetPending(&cs->staging, &nPend, &aPend);
+    for(i=0; i<nPend; i++){
+      if( prollyHashSetContains(marked, &aPend[i].hash) ) kept++;
+    }
+  }
+  {
     int nRec; const ChunkIndexEntry *aRec;
     chunkStagingGetRecent(&cs->staging, &nRec, &aRec);
     for(i=0; i<nRec; i++){
@@ -236,6 +259,19 @@ static int gcBuildCompactedData(
     chunkIndexGetEntries(&cs->index, &nIdx, &aIdx);
     for(i=0; i<nIdx; i++){
       rc = gcAppendMarkedChunk(cs, &aIdx[i].hash, marked, &buf, &nBuf,
+                               &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
+      if( rc!=SQLITE_OK ){
+        sqlite3_free(aNewIndex);
+        sqlite3_free(buf);
+        return rc;
+      }
+    }
+  }
+  {
+    int nPend; const ChunkIndexEntry *aPend;
+    chunkStagingGetPending(&cs->staging, &nPend, &aPend);
+    for(i=0; i<nPend; i++){
+      rc = gcAppendMarkedChunk(cs, &aPend[i].hash, marked, &buf, &nBuf,
                                &nBufAlloc, dataOffset, aNewIndex, &nNewIndex);
       if( rc!=SQLITE_OK ){
         sqlite3_free(aNewIndex);
