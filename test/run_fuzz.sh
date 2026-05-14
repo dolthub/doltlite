@@ -1,13 +1,35 @@
 #!/bin/bash
 set -euo pipefail
 
+if [ $# -lt 1 ]; then
+  echo "usage: $0 <target> [libFuzzer args...]" >&2
+  echo "  target: replaywal | prolly_node" >&2
+  exit 2
+fi
+
+target="$1"
+shift
+
+case "$target" in
+  replaywal)
+    src="fuzz_replaywal.c"
+    corpus="replaywal"
+    ;;
+  prolly_node)
+    src="fuzz_prolly_node.c"
+    corpus="prolly_node"
+    ;;
+  *)
+    echo "ERROR: unknown target '$target' (expected: replaywal | prolly_node)" >&2
+    exit 2
+    ;;
+esac
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 build_dir="${DOLTLITE_FUZZ_BUILD_DIR:-$repo_root/build-fuzz}"
-corpus_dir="$repo_root/test/fuzz-corpus/replaywal"
+corpus_dir="$repo_root/test/fuzz-corpus/$corpus"
 
-# Resolve the compiler so the lib build and the harness link use the same
-# clang. libFuzzer is a clang feature; refuse to run without it.
 CC="${CC:-clang}"
 if ! "$CC" --version 2>&1 | grep -qi clang; then
   echo "ERROR: fuzzer requires clang (got: $($CC --version 2>&1 | head -1))" >&2
@@ -31,15 +53,15 @@ if [ ! -f "$build_dir/libdoltlite.a" ] || [ -n "${DOLTLITE_FUZZ_REBUILD:-}" ]; t
   )
 fi
 
-echo "=== Compiling fuzz harness ==="
+echo "=== Compiling fuzz_$target harness ==="
 "$CC" -O1 -g \
   -fsanitize=fuzzer,address -fno-omit-frame-pointer -fno-sanitize-recover=address \
   -DDOLTLITE_PROLLY=1 -D_HAVE_SQLITE_CONFIG_H \
   -I"$build_dir" -I"$repo_root/src" \
-  -o "$build_dir/fuzz_replaywal" \
-  "$repo_root/test/fuzz_replaywal.c" \
+  -o "$build_dir/fuzz_$target" \
+  "$repo_root/test/$src" \
   "$build_dir/libdoltlite.a" \
   -lz -lpthread
 
-echo "=== Running fuzzer ==="
-exec "$build_dir/fuzz_replaywal" "$corpus_dir" "$@"
+echo "=== Running fuzz_$target ==="
+exec "$build_dir/fuzz_$target" "$corpus_dir" "$@"
