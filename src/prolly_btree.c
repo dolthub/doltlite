@@ -6330,6 +6330,9 @@ static int prollyBtCursorInsert(
   int seekResult
 ){
   int rc;
+  const u8 *pInsertedPayload = 0;
+  int nInsertedPayload = 0;
+  u8 *pIntKeyBuf = 0;
   (void)seekResult;
 
   if( flags & BTREE_PREFORMAT ){
@@ -6353,27 +6356,27 @@ static int prollyBtCursorInsert(
     int nData = pPayload->nData;
     i64 nTotal64 = (i64)nData + (i64)pPayload->nZero;
     int nTotal;
-    u8 *pBuf = 0;
 
     if( nData<0 || pPayload->nZero<0 || nTotal64 > 0x7fffffff ){
       return SQLITE_TOOBIG;
     }
     nTotal = (int)nTotal64;
     if( pPayload->nZero > 0 ){
-      pBuf = sqlite3_malloc(nTotal);
-      if( !pBuf ) return SQLITE_NOMEM;
+      pIntKeyBuf = sqlite3_malloc(nTotal);
+      if( !pIntKeyBuf ) return SQLITE_NOMEM;
       if( nData > 0 ){
-        memcpy(pBuf, pData, nData);
+        memcpy(pIntKeyBuf, pData, nData);
       }
-      memset(pBuf + nData, 0, pPayload->nZero);
-      pData = pBuf;
+      memset(pIntKeyBuf + nData, 0, pPayload->nZero);
+      pData = pIntKeyBuf;
       nData = nTotal;
     }
+    pInsertedPayload = pData;
+    nInsertedPayload = nData;
 
     rc = prollyMutMapInsert(pCur->pMutMap,
                              NULL, 0, pPayload->nKey,
                              pData, nData);
-    sqlite3_free(pBuf);
   } else {
 
     int nSortKey = 0;
@@ -6407,7 +6410,10 @@ static int prollyBtCursorInsert(
     }
   }
 
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pIntKeyBuf);
+    return rc;
+  }
 
   {
     int canDefer = (pCur->pgnoRoot > 1);
@@ -6416,21 +6422,17 @@ static int prollyBtCursorInsert(
     }
     if( canDefer ){
       if( (flags & BTREE_SAVEPOSITION) && pCur->curIntKey ){
-        ProllyMutMapEntry *pEntry = 0;
-        rc = prollyMutMapFindRc(pCur->pMutMap, NULL, 0, pPayload->nKey, &pEntry);
-        if( rc!=SQLITE_OK ) return rc;
         pCur->eState = CURSOR_VALID;
         pCur->curFlags |= BTCF_ValidNKey;
         pCur->cachedIntKey = pPayload->nKey;
-        rc = cacheCursorPayloadCopy(
-            pCur,
-            (pEntry && pEntry->nVal > 0 && pEntry->pVal) ? pEntry->pVal : 0,
-            (pEntry && pEntry->nVal > 0 && pEntry->pVal) ? pEntry->nVal : 0);
+        rc = cacheCursorPayloadCopy(pCur, pInsertedPayload, nInsertedPayload);
+        sqlite3_free(pIntKeyBuf);
         if( rc!=SQLITE_OK ) return rc;
 
         pCur->mmActive = 0;
         pCur->flushSeekEdits = 0;
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
+        sqlite3_free(pIntKeyBuf);
         CLEAR_CACHED_PAYLOAD(pCur);
         if( prollyCursorIsValid(&pCur->pCur) ){
           int trc = prollyCursorNext(&pCur->pCur);
@@ -6447,6 +6449,7 @@ static int prollyBtCursorInsert(
         pCur->mmActive = 0;
         pCur->flushSeekEdits = 0;
       } else {
+        sqlite3_free(pIntKeyBuf);
         pCur->eState = CURSOR_INVALID;
         pCur->flushSeekEdits = 0;
       }
@@ -6454,6 +6457,7 @@ static int prollyBtCursorInsert(
     }
   }
 
+  sqlite3_free(pIntKeyBuf);
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
   {
