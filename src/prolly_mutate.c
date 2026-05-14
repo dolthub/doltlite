@@ -2,6 +2,9 @@
 #ifdef DOLTLITE_PROLLY
 
 #include "prolly_mutate.h"
+#include "prolly_check.h"
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define PROLLY_EST_ENTRIES_PER_LEAF 50
@@ -267,16 +270,64 @@ streaming_cleanup:
 }
 
 int prollyMutateFlush(ProllyMutator *pMut){
+  int rc;
+
   if( prollyMutMapIsEmpty(pMut->pEdits) ){
     memcpy(&pMut->newRoot, &pMut->oldRoot, sizeof(ProllyHash));
     return SQLITE_OK;
   }
 
   if( prollyHashIsEmpty(&pMut->oldRoot) ){
-    return buildFromEdits(pMut);
+    rc = buildFromEdits(pMut);
+  }else{
+    rc = streamingMerge(pMut);
   }
 
-  return streamingMerge(pMut);
+#ifdef DOLTLITE_PROLLY_CHECK
+  if( rc==SQLITE_OK ){
+    if( !prollyHashIsEmpty(&pMut->oldRoot)
+     && prollyHashIsEmpty(&pMut->newRoot) ){
+      ProllyMutMapIter it;
+      int hasInsert = 0;
+      prollyMutMapIterFirst(&it, pMut->pEdits);
+      while( prollyMutMapIterValid(&it) ){
+        ProllyMutMapEntry *pEntry = prollyMutMapIterEntry(&it);
+        if( pEntry->op==PROLLY_EDIT_INSERT ){
+          hasInsert = 1;
+          break;
+        }
+        prollyMutMapIterNext(&it);
+      }
+      if( hasInsert ){
+        fprintf(stderr,
+                "doltlite: prolly mutate produced empty root from non-empty"
+                " input with INSERT in edit set (S5)\n");
+        sqlite3_log(SQLITE_CORRUPT,
+                    "prolly mutate empty-root regression: oldRoot non-empty,"
+                    " edits include INSERT, newRoot is empty");
+        abort();
+      }
+    }
+
+    {
+      char *zErr = 0;
+      int crc = prollyCheckTree(pMut->pStore, &pMut->newRoot,
+                                pMut->flags, &zErr);
+      if( crc==SQLITE_CORRUPT ){
+        fprintf(stderr, "doltlite: prolly tree invariant violated: %s\n",
+                zErr ? zErr : "(no detail)");
+        sqlite3_log(SQLITE_CORRUPT,
+                    "prolly tree invariant violated after mutate: %s",
+                    zErr ? zErr : "(no detail)");
+        sqlite3_free(zErr);
+        abort();
+      }
+      sqlite3_free(zErr);
+    }
+  }
+#endif
+
+  return rc;
 }
 
 int prollyMutateInsert(

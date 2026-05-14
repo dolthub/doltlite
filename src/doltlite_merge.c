@@ -719,7 +719,7 @@ static int mergeTableRows(
       idxMut.pCache = cache;
       memcpy(&idxMut.oldRoot, &aIndexes[i].oursRoot, sizeof(ProllyHash));
       idxMut.pEdits = aIndexes[i].pEdits;
-      idxMut.flags = 0;
+      idxMut.flags = PROLLY_NODE_BLOBKEY;
       rc = prollyMutateFlush(&idxMut);
       if( rc==SQLITE_OK ){
         memcpy(&aIndexes[i].mergedRoot, &idxMut.newRoot, sizeof(ProllyHash));
