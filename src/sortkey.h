@@ -20,6 +20,10 @@ int sortKeyFromRecordPrefixColl(const u8 *pRec, int nRec, int nKeyField,
 int sortKeyFromRecordPrefixCollBuffer(const u8 *pRec, int nRec, int nKeyField,
                                  const KeyInfo *pKeyInfo,
                                  u8 **ppBuf, int *pnAlloc, int *pnOut);
+int sortKeyFromMemPrefixCollBuffer(
+  Mem *aMem, int nMem, int nKeyField, const KeyInfo *pKeyInfo,
+  u8 **ppBuf, int *pnAlloc, int *pnOut
+);
 
 int sortKeyFromInt64(i64 v, u8 *pOut, int *pnOut);
 int sortKeyFromInt64Buffer(i64 v, u8 **ppBuf, int *pnAlloc, int *pnOut);

@@ -5864,13 +5864,19 @@ static int prollyBtCursorIndexMoveto(
           pIdxKey, nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField,
           &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
     }else{
-      rc = serializeUnpackedRecordBuffer(
-          pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
-      if( rc!=SQLITE_OK ) return rc;
-      pSerKey = pCur->pSeekRecord;
-      rc = sortKeyFromRecordPrefixCollBuffer(
-          pSerKey, nSerKey, nSeekKeyField, pCur->pKeyInfo,
+      rc = sortKeyFromMemPrefixCollBuffer(
+          pIdxKey->aMem, (int)pIdxKey->nField, nSeekKeyField,
+          pCur->pKeyInfo,
           &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+      if( rc==SQLITE_NOTFOUND ){
+        rc = serializeUnpackedRecordBuffer(
+            pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
+        if( rc!=SQLITE_OK ) return rc;
+        pSerKey = pCur->pSeekRecord;
+        rc = sortKeyFromRecordPrefixCollBuffer(
+            pSerKey, nSerKey, nSeekKeyField, pCur->pKeyInfo,
+            &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+      }
     }
     if( rc!=SQLITE_OK ) return rc;
     pSortKey = pCur->pSeekSortKey;
