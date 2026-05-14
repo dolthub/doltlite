@@ -33,11 +33,16 @@ contents:
   - src: LICENSE.md
     dst: /usr/share/doc/libdoltlite0/copyright
 
-# Standard Debian shared-library hook: dpkg runs ldconfig in postinst so
-# /etc/ld.so.cache picks up libdoltlite.so.0 right after install. Without
-# this, the package-smoke check sees libdoltlite not registered with
-# ldconfig — and so would every user who only does `dpkg -i`.
+# Standard Debian shared-library hook: dpkg runs ldconfig so
+# /etc/ld.so.cache picks up libdoltlite.so.0 right after install. The
+# interest-noawait trigger is the Debian-convention way of signalling
+# this, but it only fires when something activates the `ldconfig`
+# trigger — which doesn't happen on a standalone `dpkg -i` of a single
+# library. The postinst script makes the ldconfig run unconditional.
 deb:
   triggers:
     interest_noawait:
       - ldconfig
+
+scripts:
+  postinstall: packaging/nfpm/libdoltlite0-postinst.sh
