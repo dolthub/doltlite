@@ -5832,13 +5832,19 @@ static int prollyBtCursorIndexMoveto(
           pIdxKey->aMem[0].u.i,
           &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
     }else{
-      rc = serializeUnpackedRecordBuffer(
-          pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
-      if( rc!=SQLITE_OK ) return rc;
-      pSerKey = pCur->pSeekRecord;
-      rc = sortKeyFromRecordPrefixCollBuffer(
-          pSerKey, nSerKey, nSeekKeyField, pCur->pKeyInfo,
+      rc = sortKeyFromMemPrefixCollBuffer(
+          pIdxKey->aMem, (int)pIdxKey->nField, nSeekKeyField,
+          pCur->pKeyInfo,
           &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+      if( rc==SQLITE_NOTFOUND ){
+        rc = serializeUnpackedRecordBuffer(
+            pIdxKey, &pCur->pSeekRecord, &pCur->nSeekRecordAlloc, &nSerKey);
+        if( rc!=SQLITE_OK ) return rc;
+        pSerKey = pCur->pSeekRecord;
+        rc = sortKeyFromRecordPrefixCollBuffer(
+            pSerKey, nSerKey, nSeekKeyField, pCur->pKeyInfo,
+            &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+      }
     }
     if( rc!=SQLITE_OK ) return rc;
     pSortKey = pCur->pSeekSortKey;
@@ -6413,11 +6419,22 @@ static int prollyBtCursorInsert(
         isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
       }
     }
-    rc = sortKeyFromRecordPrefixCollBuffer(
-        (const u8*)pPayload->pKey, (int)pPayload->nKey,
-        isIndex ? 0 : (splitKey ? nKeyField : 0),
-        pCur->pKeyInfo,
-        &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+    if( pPayload->aMem && pPayload->nMem > 0 ){
+      rc = sortKeyFromMemPrefixCollBuffer(
+          pPayload->aMem, (int)pPayload->nMem,
+          isIndex ? 0 : (splitKey ? nKeyField : 0),
+          pCur->pKeyInfo,
+          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+    }else{
+      rc = SQLITE_NOTFOUND;
+    }
+    if( rc==SQLITE_NOTFOUND ){
+      rc = sortKeyFromRecordPrefixCollBuffer(
+          (const u8*)pPayload->pKey, (int)pPayload->nKey,
+          isIndex ? 0 : (splitKey ? nKeyField : 0),
+          pCur->pKeyInfo,
+          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+    }
     if( rc==SQLITE_OK ){
       if( splitKey ){
         rc = prollyMutMapInsert(pCur->pMutMap,

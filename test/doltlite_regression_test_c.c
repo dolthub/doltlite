@@ -17,6 +17,7 @@
 #include "prolly_mutate.h"
 #include "prolly_node.h"
 #include "prolly_mutmap.h"
+#include "vdbeInt.h"
 #include "sortkey.h"
 
 typedef unsigned char u8;
@@ -2301,6 +2302,67 @@ static void run_sortkey_buffer_exact_size(void){
 
   sqlite3_free(pSortKey);
   sqlite3_free(pRoundTrip);
+}
+
+static void run_sortkey_mem_matches_record(void){
+  static const u8 record[] = {
+    0x04,
+    0x01,
+    0x13,
+    0x12,
+    0x7b,
+    'a', 0x00, 'b',
+    0x01, 0x00, 0x03
+  };
+  Mem aMem[3];
+  u8 *pRecordKey = 0;
+  u8 *pMemKey = 0;
+  u8 *pRecordPrefix = 0;
+  u8 *pMemPrefix = 0;
+  int nRecordKey = 0;
+  int nMemKey = 0;
+  int nRecordPrefix = 0;
+  int nMemPrefix = 0;
+  int nMemAlloc = 0;
+  int nMemPrefixAlloc = 0;
+  int rc;
+
+  printf("=== Sortkey Mem Matches Record Test ===\n\n");
+
+  memset(aMem, 0, sizeof(aMem));
+  aMem[0].flags = MEM_Int;
+  aMem[0].u.i = 123;
+  aMem[1].flags = MEM_Str;
+  aMem[1].z = "a\000b";
+  aMem[1].n = 3;
+  aMem[2].flags = MEM_Blob;
+  aMem[2].z = "\001\000\003";
+  aMem[2].n = 3;
+
+  rc = sortKeyFromRecordPrefixColl(record, (int)sizeof(record), 0, 0,
+                                   &pRecordKey, &nRecordKey);
+  check("sortkey_mem_record_encode_ok", rc==SQLITE_OK);
+  rc = sortKeyFromMemPrefixCollBuffer(aMem, 3, 0, 0,
+                                      &pMemKey, &nMemAlloc, &nMemKey);
+  check("sortkey_mem_encode_ok", rc==SQLITE_OK);
+  check("sortkey_mem_matches_record",
+        nMemKey==nRecordKey && memcmp(pMemKey, pRecordKey, nRecordKey)==0);
+
+  rc = sortKeyFromRecordPrefixColl(record, (int)sizeof(record), 1, 0,
+                                   &pRecordPrefix, &nRecordPrefix);
+  check("sortkey_mem_record_prefix_encode_ok", rc==SQLITE_OK);
+  rc = sortKeyFromMemPrefixCollBuffer(aMem, 3, 1, 0,
+                                      &pMemPrefix, &nMemPrefixAlloc,
+                                      &nMemPrefix);
+  check("sortkey_mem_prefix_encode_ok", rc==SQLITE_OK);
+  check("sortkey_mem_prefix_matches_record",
+        nMemPrefix==nRecordPrefix
+        && memcmp(pMemPrefix, pRecordPrefix, nRecordPrefix)==0);
+
+  sqlite3_free(pRecordKey);
+  sqlite3_free(pMemKey);
+  sqlite3_free(pRecordPrefix);
+  sqlite3_free(pMemPrefix);
 }
 
 static void run_reload_refs_transactional(void){
@@ -6824,6 +6886,7 @@ static const RegressionCase aCases[] = {
   { "sortkey_numeric_text_roundtrip", "Sortkey Numeric Text Roundtrip Test", run_sortkey_numeric_text_roundtrip },
   { "sortkey_numeric_blob_roundtrip", "Sortkey Numeric Blob Roundtrip Test", run_sortkey_numeric_blob_roundtrip },
   { "sortkey_buffer_exact_size", "Sortkey Buffer Exact Size Test", run_sortkey_buffer_exact_size },
+  { "sortkey_mem_matches_record", "Sortkey Mem Matches Record Test", run_sortkey_mem_matches_record },
   { "reload_refs_transactional", "Reload Refs Transactional Test", run_reload_refs_transactional },
   { "refresh_refs_corruption_preserves_state", "Refresh Corrupt Refs State Preservation Test", run_refresh_refs_corruption_preserves_state },
   { "prolly_node_corruption", "Prolly Node Corruption Test", run_prolly_node_corruption },
