@@ -5017,17 +5017,6 @@ static int prollyBtreeCursor(
 
   assert( p->inTrans>=TRANS_READ );
 
-  if( p->db && p->db->autoCommit && !p->db->pSavepoint
-   && p->inTrans!=TRANS_WRITE ){
-    u8 oldSnapshotPinned = pBt->store.snapshotPinned;
-    pBt->store.snapshotPinned = 0;
-    rc = btreeRefreshFromDisk(p);
-    pBt->store.snapshotPinned = oldSnapshotPinned;
-    if( rc!=SQLITE_OK ) return rc;
-    rc = btreeRefreshSharedWorkingState(p);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-
   memset(pCur, 0, sizeof(BtCursor));
   pCur->pBtree = p;
   pCur->pBt = pBt;
