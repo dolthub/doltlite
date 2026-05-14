@@ -541,7 +541,7 @@ int prollyMutMapInsert(
     if( rc!=SQLITE_OK ){
       return rc;
     }
-    if( mm->keepSorted || !mm->orderDirty ){
+    if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
       insertOrderEntry(mm, idx, phys);
     }else{
       mm->aOrder[phys] = phys;
@@ -613,7 +613,7 @@ int prollyMutMapDelete(
     if( rc!=SQLITE_OK ){
       return rc;
     }
-    if( mm->keepSorted || !mm->orderDirty ){
+    if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
       insertOrderEntry(mm, idx, phys);
     }else{
       mm->aOrder[phys] = phys;
@@ -818,6 +818,7 @@ int prollyMutMapIsEmpty(ProllyMutMap *mm){
 }
 
 void prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm){
+  mm->preferSorted = 1;
   ensureOrder(mm);
   it->pMap = mm;
   it->idx = 0;
@@ -832,6 +833,7 @@ int prollyMutMapIterValid(ProllyMutMapIter *it){
 }
 
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
+  it->pMap->preferSorted = 1;
   ensureOrder(it->pMap);
   return entryAtOrder(it->pMap, it->idx);
 }
@@ -840,6 +842,7 @@ void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
                           const u8 *pKey, int nKey, i64 intKey){
   int found = 0;
   u8 keyBuf[8];
+  mm->preferSorted = 1;
   ensureOrder(mm);
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
   it->pMap = mm;
@@ -847,6 +850,7 @@ void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
 }
 
 void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
+  mm->preferSorted = 1;
   ensureOrder(mm);
   it->pMap = mm;
   it->idx = mm->nEntries>0 ? mm->nEntries - 1 : mm->nEntries;
@@ -859,6 +863,7 @@ void prollyMutMapClear(ProllyMutMap *mm){
   }
   mm->nEntries = 0;
   mm->orderDirty = 0;
+  mm->preferSorted = 0;
   mm->generation++;
   if( mm->aHash && mm->nHashAlloc>0 ){
     memset(mm->aHash, 0, mm->nHashAlloc * sizeof(int));
@@ -901,6 +906,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
   dst->isIntKey = src->isIntKey;
   dst->keepSorted = src->keepSorted;
   dst->orderDirty = src->orderDirty;
+  dst->preferSorted = src->preferSorted;
   dst->levelBase = src->levelBase;
   dst->currentSavepointLevel = src->currentSavepointLevel;
   dst->generation = src->generation;
