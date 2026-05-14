@@ -369,23 +369,25 @@ int sortKeyFromRecordPrefixColl(
       pRec, nRec, nKeyField, pKeyInfo, ppOut, &(int){0}, pnOut);
 }
 
-int sortKeyFromInt64Buffer(i64 v, u8 **ppBuf, int *pnAlloc, int *pnOut){
+int sortKeyFromInt64(i64 v, u8 *pOut, int *pnOut){
   u8 aData[8];
-  u8 *pOut;
   u32 serialType;
   u32 nData;
 
   intSerialType(v, &serialType, &nData);
   writeIntBE(aData, v, (int)nData);
+  *pnOut = encodeNumeric(pOut, serialType, aData, nData);
+  return SQLITE_OK;
+}
+
+int sortKeyFromInt64Buffer(i64 v, u8 **ppBuf, int *pnAlloc, int *pnOut){
   if( *pnAlloc < 64 ){
     u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, 64);
     if( !pNew ) return SQLITE_NOMEM;
     *ppBuf = pNew;
     *pnAlloc = 64;
   }
-  pOut = *ppBuf;
-  *pnOut = encodeNumeric(pOut, serialType, aData, nData);
-  return SQLITE_OK;
+  return sortKeyFromInt64(v, *ppBuf, pnOut);
 }
 
 static void intSerialType(i64 v, u32 *pType, u32 *pLen){

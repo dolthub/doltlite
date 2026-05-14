@@ -21,6 +21,7 @@ int sortKeyFromRecordPrefixCollBuffer(const u8 *pRec, int nRec, int nKeyField,
                                  const KeyInfo *pKeyInfo,
                                  u8 **ppBuf, int *pnAlloc, int *pnOut);
 
+int sortKeyFromInt64(i64 v, u8 *pOut, int *pnOut);
 int sortKeyFromInt64Buffer(i64 v, u8 **ppBuf, int *pnAlloc, int *pnOut);
 
 int sortKeySize(const u8 *pRec, int nRec);

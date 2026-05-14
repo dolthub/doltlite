@@ -6121,12 +6121,6 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
   if( pCur->eState!=CURSOR_VALID || !pIdxKey || !pCur->pKeyInfo ){
     return SQLITE_NOTFOUND;
   }
-  if( !prollyBtCursorCursorHasHint(pCur, BTREE_SEEK_EQ) ){
-    return SQLITE_NOTFOUND;
-  }
-  if( pCur->nSeekSortKey<=0 || pCur->nSeekKeyField!=(int)pIdxKey->nField ){
-    return SQLITE_NOTFOUND;
-  }
 
   if( pCur->mmActive
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
@@ -6140,19 +6134,45 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
     return SQLITE_NOTFOUND;
   }
 
-  nCmp = nKey < pCur->nSeekSortKey ? nKey : pCur->nSeekSortKey;
-  cmp = memcmp(pKey, pCur->pSeekSortKey, nCmp);
-  if( cmp<0 ){
-    *pRes = -1;
-  }else if( cmp>0 ){
-    *pRes = 1;
-  }else if( nKey < pCur->nSeekSortKey ){
-    *pRes = -1;
-  }else{
-    pIdxKey->eqSeen = 1;
-    *pRes = pIdxKey->default_rc;
+  if( prollyBtCursorCursorHasHint(pCur, BTREE_SEEK_EQ)
+   && pCur->nSeekSortKey>0
+   && pCur->nSeekKeyField==(int)pIdxKey->nField ){
+    nCmp = nKey < pCur->nSeekSortKey ? nKey : pCur->nSeekSortKey;
+    cmp = memcmp(pKey, pCur->pSeekSortKey, nCmp);
+    if( cmp<0 ){
+      *pRes = -1;
+    }else if( cmp>0 ){
+      *pRes = 1;
+    }else if( nKey < pCur->nSeekSortKey ){
+      *pRes = -1;
+    }else{
+      pIdxKey->eqSeen = 1;
+      *pRes = pIdxKey->default_rc;
+    }
+    return SQLITE_OK;
   }
-  return SQLITE_OK;
+
+  if( unpackedRecordCanUseSingleIntSortKey(pCur, pIdxKey) ){
+    u8 aSortKey[18];
+    int nSortKey = 0;
+    int rc = sortKeyFromInt64(pIdxKey->aMem[0].u.i, aSortKey, &nSortKey);
+    if( rc!=SQLITE_OK ) return rc;
+    nCmp = nKey < nSortKey ? nKey : nSortKey;
+    cmp = memcmp(pKey, aSortKey, nCmp);
+    if( cmp<0 ){
+      *pRes = -1;
+    }else if( cmp>0 ){
+      *pRes = 1;
+    }else if( nKey < nSortKey ){
+      *pRes = -1;
+    }else{
+      pIdxKey->eqSeen = 1;
+      *pRes = pIdxKey->default_rc;
+    }
+    return SQLITE_OK;
+  }
+
+  return SQLITE_NOTFOUND;
 }
 
 static i64 prollyBtCursorIntegerKey(BtCursor *pCur){
