@@ -378,6 +378,7 @@ static int findPhysLazy(ProllyMutMap *mm,
 static int ensureOrder(ProllyMutMap *mm){
   int i;
   int rc;
+  mm->preferSorted = 1;
   if( mm->keepSorted || !mm->orderDirty ) return SQLITE_OK;
   rc = mutmapSortOrder(mm);
   if( rc!=SQLITE_OK ) return rc;
@@ -541,7 +542,7 @@ int prollyMutMapInsert(
     if( rc!=SQLITE_OK ){
       return rc;
     }
-    if( mm->keepSorted || !mm->orderDirty ){
+    if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
       insertOrderEntry(mm, idx, phys);
     }else{
       mm->aOrder[phys] = phys;
@@ -613,7 +614,7 @@ int prollyMutMapDelete(
     if( rc!=SQLITE_OK ){
       return rc;
     }
-    if( mm->keepSorted || !mm->orderDirty ){
+    if( mm->keepSorted || (!mm->orderDirty && mm->preferSorted) ){
       insertOrderEntry(mm, idx, phys);
     }else{
       mm->aOrder[phys] = phys;
@@ -859,6 +860,7 @@ void prollyMutMapClear(ProllyMutMap *mm){
   }
   mm->nEntries = 0;
   mm->orderDirty = 0;
+  mm->preferSorted = 0;
   mm->generation++;
   if( mm->aHash && mm->nHashAlloc>0 ){
     memset(mm->aHash, 0, mm->nHashAlloc * sizeof(int));
@@ -901,6 +903,7 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
   dst->isIntKey = src->isIntKey;
   dst->keepSorted = src->keepSorted;
   dst->orderDirty = src->orderDirty;
+  dst->preferSorted = src->preferSorted;
   dst->levelBase = src->levelBase;
   dst->currentSavepointLevel = src->currentSavepointLevel;
   dst->generation = src->generation;
