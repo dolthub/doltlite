@@ -4097,7 +4097,11 @@ static int btreeWriteWorkingState(
   return rc;
 }
 
-static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
+static int btreeReloadBranchWorkingStateInto(
+  Btree *p,
+  int bLoadCatalog,
+  ProllyHash *pLoadedCatHash
+){
   BtShared *pBt = p->pBt;
   ProllyHash catHash;
   ProllyHash workingCommitHash;
@@ -4178,6 +4182,9 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
   if( prollyHashIsEmpty(&p->headCommit) || !hadUserCatalog ){
     p->headCommit = workingCommitHash;
   }
+  if( pLoadedCatHash ){
+    *pLoadedCatHash = catHash;
+  }
 
   p->stagedCatalog = stagedCatalog;
   p->isMerging = isMerging;
@@ -4192,6 +4199,10 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
   p->zRebaseReturnBranch = zRebaseReturnBranch;
   p->constraintViolationsHash = constraintViolationsHash;
   return SQLITE_OK;
+}
+
+static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
+  return btreeReloadBranchWorkingStateInto(p, bLoadCatalog, 0);
 }
 
 static void btreeBumpDataVersion(Btree *p){
@@ -4310,31 +4321,15 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       }
     }
 
-    rc = btreeReloadBranchWorkingState(p, 1);
-    if( rc!=SQLITE_OK ){
-      chunkStoreUnlock(&pBt->store);
-      return rc;
-    }
-
-    memset(&p->committedCatalogHash, 0, sizeof(ProllyHash));
     {
-      const char *zBr = p->zBranch ? p->zBranch : "main";
-      int rc2 = btreeReadWorkingCatalog(&pBt->store, zBr,
-                                        &p->committedCatalogHash, 0);
-      if( rc2!=SQLITE_OK && rc2!=SQLITE_NOTFOUND ){
+      ProllyHash loadedCatHash;
+      memset(&loadedCatHash, 0, sizeof(loadedCatHash));
+      rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
+      if( rc!=SQLITE_OK ){
         chunkStoreUnlock(&pBt->store);
-        return rc2;
+        return rc;
       }
-      if( rc2==SQLITE_NOTFOUND || prollyHashIsEmpty(&p->committedCatalogHash) ){
-        rc2 = btreeLoadBranchHeadCatalog(&pBt->store, zBr,
-                                         &p->committedCatalogHash, 0);
-      }
-      if( rc2==SQLITE_NOTFOUND ){
-        memset(&p->committedCatalogHash, 0, sizeof(ProllyHash));
-      }else if( rc2!=SQLITE_OK ){
-        chunkStoreUnlock(&pBt->store);
-        return rc2;
-      }
+      p->committedCatalogHash = loadedCatHash;
     }
     p->committedStagedCatalog = p->stagedCatalog;
     p->committedIsMerging = p->isMerging;
