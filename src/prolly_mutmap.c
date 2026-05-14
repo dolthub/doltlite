@@ -378,6 +378,7 @@ static int findPhysLazy(ProllyMutMap *mm,
 static int ensureOrder(ProllyMutMap *mm){
   int i;
   int rc;
+  mm->preferSorted = 1;
   if( mm->keepSorted || !mm->orderDirty ) return SQLITE_OK;
   rc = mutmapSortOrder(mm);
   if( rc!=SQLITE_OK ) return rc;
@@ -818,7 +819,6 @@ int prollyMutMapIsEmpty(ProllyMutMap *mm){
 }
 
 void prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm){
-  mm->preferSorted = 1;
   ensureOrder(mm);
   it->pMap = mm;
   it->idx = 0;
@@ -833,7 +833,6 @@ int prollyMutMapIterValid(ProllyMutMapIter *it){
 }
 
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
-  it->pMap->preferSorted = 1;
   ensureOrder(it->pMap);
   return entryAtOrder(it->pMap, it->idx);
 }
@@ -842,7 +841,6 @@ void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
                           const u8 *pKey, int nKey, i64 intKey){
   int found = 0;
   u8 keyBuf[8];
-  mm->preferSorted = 1;
   ensureOrder(mm);
   prepKey(mm, &pKey, &nKey, intKey, keyBuf);
   it->pMap = mm;
@@ -850,7 +848,6 @@ void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
 }
 
 void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm){
-  mm->preferSorted = 1;
   ensureOrder(mm);
   it->pMap = mm;
   it->idx = mm->nEntries>0 ? mm->nEntries - 1 : mm->nEntries;
