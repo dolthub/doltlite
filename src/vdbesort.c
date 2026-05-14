@@ -816,11 +816,43 @@ static int vdbeSorterCompareText(
   const u8 * const p2 = (const u8 * const)pKey2;
   const u8 * const v1 = &p1[ p1[0] ];   /* Pointer to value 1 */
   const u8 * const v2 = &p2[ p2[0] ];   /* Pointer to value 2 */
+  KeyInfo *pKeyInfo = pTask->pSorter->pKeyInfo;
 
   int n1;
   int n2;
   int res;
 
+  if( pKeyInfo->nKeyField==1
+   && p1[0]>=2 && p1[0]<=3
+   && p2[0]>=2 && p2[0]<=3 ){
+    int t1;
+    int t2;
+    if( p1[0]==2 ){
+      t1 = p1[1];
+    }else{
+      t1 = ((p1[1] & 0x7f) << 7) | p1[2];
+    }
+    if( p2[0]==2 ){
+      t2 = p2[1];
+    }else{
+      t2 = ((p2[1] & 0x7f) << 7) | p2[2];
+    }
+    n1 = (t1 - 13)/2;
+    n2 = (t2 - 13)/2;
+    if( n1!=nKey1 - p1[0] || n2!=nKey2 - p2[0] ){
+      goto text_compare_slow;
+    }
+    res = memcmp(v1, v2, MIN(n1, n2));
+    if( res==0 ){
+      res = n1 - n2;
+    }
+    if( res && pKeyInfo->aSortFlags && pKeyInfo->aSortFlags[0] ){
+      res = res * -1;
+    }
+    return res;
+  }
+
+text_compare_slow:
   getVarint32NR(&p1[1], n1);
   getVarint32NR(&p2[1], n2);
   res = memcmp(v1, v2, (MIN(n1, n2) - 13)/2);
@@ -829,7 +861,7 @@ static int vdbeSorterCompareText(
   }
 
   if( res==0 ){
-    if( pTask->pSorter->pKeyInfo->nKeyField>1 ){
+    if( pKeyInfo->nKeyField>1 ){
       res = vdbeSorterCompareTail(
           pTask, pbKey2Cached, pKey1, nKey1, pKey2, nKey2
       );
@@ -837,7 +869,7 @@ static int vdbeSorterCompareText(
   }else{
     assert( pTask->pSorter->pKeyInfo->aSortFlags!=0 );
     assert( !(pTask->pSorter->pKeyInfo->aSortFlags[0]&KEYINFO_ORDER_BIGNULL) );
-    if( pTask->pSorter->pKeyInfo->aSortFlags[0] ){
+    if( pKeyInfo->aSortFlags[0] ){
       res = res * -1;
     }
   }
