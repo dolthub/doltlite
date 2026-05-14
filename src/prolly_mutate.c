@@ -313,7 +313,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
       char *zErr = 0;
       int crc = prollyCheckTree(pMut->pStore, &pMut->newRoot,
                                 pMut->flags, &zErr);
-      if( crc!=SQLITE_OK ){
+      if( crc==SQLITE_CORRUPT ){
         fprintf(stderr, "doltlite: prolly tree invariant violated: %s\n",
                 zErr ? zErr : "(no detail)");
         sqlite3_log(SQLITE_CORRUPT,
@@ -322,6 +322,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
         sqlite3_free(zErr);
         abort();
       }
+      sqlite3_free(zErr);
     }
   }
 #endif
