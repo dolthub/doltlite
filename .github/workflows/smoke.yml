@@ -11,7 +11,7 @@ jobs:
   # with its own out-of-tree build dir so they don't trip over each other.
   crash-fuzz:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
 
     steps:
     - uses: actions/checkout@v4
@@ -42,13 +42,11 @@ jobs:
           libdoltlite.a doltlite-crashtest crash_recovery_test_sqlite_test
 
     - name: Native crash recovery test (SQLITE_TEST)
-      timeout-minutes: 10
       run: |
         cd build-crash
         ./crash_recovery_test_sqlite_test
 
     - name: Crash injection durability test (SQLITE_TEST)
-      timeout-minutes: 15
       run: |
         cd build-crash
         bash ../test/crash_injection_test.sh ./doltlite-crashtest
