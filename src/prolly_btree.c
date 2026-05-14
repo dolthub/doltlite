@@ -358,6 +358,7 @@ struct BtCursor {
   int nMovetoRecAlloc;
   i64 cachedIntKey;
 
+  u8 isTableRoot;
   u8 isPinned;
   u8 flushSeekEdits;
 
@@ -5033,6 +5034,9 @@ static int prollyBtreeCursor(
   }
 
   pCur->curIntKey = (pTE->flags & BTREE_INTKEY) ? 1 : 0;
+  if( !pCur->curIntKey ){
+    pCur->isTableRoot = tableEntryIsTableRoot(p, pTE) ? 1 : 0;
+  }
 
   if( wrFlag & BTREE_WRCSR ){
     pCur->curFlags = BTCF_WriteFlag;
@@ -5043,7 +5047,7 @@ static int prollyBtreeCursor(
     if( wrFlag & BTREE_WRCSR ){
       pCur->flushSeekEdits = pTE->pendingFlushSeekEdits;
       if( !pCur->curIntKey
-       && tableEntryIsTableRoot(p, pTE)
+       && pCur->isTableRoot
        && !prollyMutMapIsEmpty(pCur->pMutMap) ){
         pCur->flushSeekEdits = 1;
       }
@@ -5736,6 +5740,7 @@ static int findMatchingMutMapEntry(
   UnpackedRecord *pIdxKey,
   const u8 *pSortKey,
   int nSortKey,
+  int bExactKey,
   ProllyMutMapEntry **ppMatch,
   int *pCmp
 ){
@@ -5752,8 +5757,8 @@ static int findMatchingMutMapEntry(
     return SQLITE_OK;
   }
 
-  if( pKeyInfo
-   && pIdxKey->nField >= pKeyInfo->nAllField ){
+  if( bExactKey
+   || (pKeyInfo && pIdxKey->nField >= pKeyInfo->nAllField) ){
     ProllyMutMapEntry *pEntry = 0;
     rc = prollyMutMapFindRc(pMap, pSortKey, nSortKey, 0, &pEntry);
     if( rc!=SQLITE_OK ) return rc;
@@ -5832,6 +5837,7 @@ static int prollyBtCursorIndexMoveto(
     int mutNKey = 0;
     ProllyMutMapEntry *mutE = 0;
     int mutFromCursorMap = 0;
+    int exactMutMapKey = 0;
 
     u8 *pSerKey = 0;
     int nSerKey = 0;
@@ -5868,7 +5874,14 @@ static int prollyBtCursorIndexMoveto(
     pCur->nSeekKeyField = nSeekKeyField;
 
     if( pCur->pKeyInfo
-     && pIdxKey->nField >= pCur->pKeyInfo->nAllField ){
+     && nSeekKeyField == pCur->pKeyInfo->nKeyField ){
+      if( pCur->isTableRoot ){
+        exactMutMapKey = 1;
+      }
+    }
+
+    if( pCur->pKeyInfo
+     && (exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
       struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
       ProllyMutMap *pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
       ProllyMutMapEntry *pEntry = 0;
@@ -6045,6 +6058,7 @@ static int prollyBtCursorIndexMoveto(
       rc = findMatchingMutMapEntry((ProllyMutMap*)pCur->pMutMap,
                                    pCur->pKeyInfo,
                                    pIdxKey, pSortKey, nSortKey,
+                                   exactMutMapKey,
                                    &mutE, &mutCmp);
       if( rc!=SQLITE_OK ){
         return rc;
@@ -6054,6 +6068,7 @@ static int prollyBtCursorIndexMoveto(
         rc = findMatchingMutMapEntry(pPending,
                                      pCur->pKeyInfo,
                                      pIdxKey, pSortKey, nSortKey,
+                                     exactMutMapKey,
                                      &mutE, &mutCmp);
         if( rc!=SQLITE_OK ){
           return rc;
