@@ -55,7 +55,7 @@ jobs:
     - name: Configure history-independence build (build)
       run: |
         mkdir -p build && cd build
-        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
         if [ -n "$TCL_CONFIG" ]; then
           ../configure --with-tcl=$(dirname "$TCL_CONFIG")
         else
@@ -76,7 +76,7 @@ jobs:
     - name: Configure libFuzzer build (build-fuzz)
       run: |
         mkdir -p build-fuzz && cd build-fuzz
-        TCL_CONFIG=$(find /usr -name tclConfig.sh 2>/dev/null | head -1)
+        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
         if [ -n "$TCL_CONFIG" ]; then
           ../configure --with-tcl=$(dirname "$TCL_CONFIG")
         else
