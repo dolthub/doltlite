@@ -2349,22 +2349,53 @@ static int serializeUnpackedRecordBuffer(
   return SQLITE_OK;
 }
 
-static int unpackedRecordCanUseSingleIntSortKey(
+static int unpackedRecordCanUseIntSortKey(
   BtCursor *pCur,
-  UnpackedRecord *pRec
+  UnpackedRecord *pRec,
+  int nField
 ){
   KeyInfo *pKeyInfo = pCur->pKeyInfo;
-  CollSeq *pColl;
-  if( !pKeyInfo || !pRec || pRec->nField!=1 ) return 0;
-  if( !(pRec->aMem[0].flags & MEM_Int) ) return 0;
-  if( pKeyInfo->aSortFlags && (pKeyInfo->aSortFlags[0] & KEYINFO_ORDER_DESC) ){
-    return 0;
-  }
-  pColl = pKeyInfo->aColl[0];
-  if( pColl && pColl->zName && sqlite3StrICmp(pColl->zName, "BINARY")!=0 ){
-    return 0;
+  int i;
+  if( !pKeyInfo || !pRec || nField<=0 || pRec->nField<nField ) return 0;
+  if( nField > pKeyInfo->nAllField ) return 0;
+  for(i=0; i<nField; i++){
+    CollSeq *pColl;
+    if( !(pRec->aMem[i].flags & MEM_Int) ) return 0;
+    if( pKeyInfo->aSortFlags && (pKeyInfo->aSortFlags[i] & KEYINFO_ORDER_DESC) ){
+      return 0;
+    }
+    pColl = pKeyInfo->aColl[i];
+    if( pColl && pColl->zName && sqlite3StrICmp(pColl->zName, "BINARY")!=0 ){
+      return 0;
+    }
   }
   return 1;
+}
+
+static int sortKeyFromUnpackedIntRecordBuffer(
+  UnpackedRecord *pRec,
+  int nField,
+  u8 **ppBuf,
+  int *pnAlloc,
+  int *pnOut
+){
+  int i;
+  int nOut = 0;
+  int nAlloc = nField * 18;
+  if( *pnAlloc < nAlloc ){
+    u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, (sqlite3_uint64)nAlloc);
+    if( !pNew ) return SQLITE_NOMEM;
+    *ppBuf = pNew;
+    *pnAlloc = nAlloc;
+  }
+  for(i=0; i<nField; i++){
+    int n = 0;
+    int rc = sortKeyFromInt64(pRec->aMem[i].u.i, *ppBuf + nOut, &n);
+    if( rc!=SQLITE_OK ) return rc;
+    nOut += n;
+  }
+  *pnOut = nOut;
+  return SQLITE_OK;
 }
 static void clearMergeCursorState(BtCursor *pCur){
   pCur->mmIdx = -1;
@@ -5826,10 +5857,11 @@ static int prollyBtCursorIndexMoveto(
     if( pCur->pKeyInfo && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
       nSeekKeyField = (int)pIdxKey->nField;
     }
-    if( nSeekKeyField==1
-     && unpackedRecordCanUseSingleIntSortKey(pCur, pIdxKey) ){
-      rc = sortKeyFromInt64Buffer(
-          pIdxKey->aMem[0].u.i,
+    if( unpackedRecordCanUseIntSortKey(
+            pCur, pIdxKey,
+            nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField) ){
+      rc = sortKeyFromUnpackedIntRecordBuffer(
+          pIdxKey, nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField,
           &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
     }else{
       rc = serializeUnpackedRecordBuffer(
@@ -6177,13 +6209,29 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
     return SQLITE_OK;
   }
 
-  if( unpackedRecordCanUseSingleIntSortKey(pCur, pIdxKey) ){
-    u8 aSortKey[18];
+  if( unpackedRecordCanUseIntSortKey(pCur, pIdxKey, (int)pIdxKey->nField) ){
+    u8 aSortKey[64];
+    u8 *pSortKey = aSortKey;
     int nSortKey = 0;
-    int rc = sortKeyFromInt64(pIdxKey->aMem[0].u.i, aSortKey, &nSortKey);
-    if( rc!=SQLITE_OK ) return rc;
+    int nSortKeyAlloc = (int)sizeof(aSortKey);
+    int rc;
+    if( pIdxKey->nField * 18 > (int)sizeof(aSortKey) ){
+      nSortKeyAlloc = (int)pIdxKey->nField * 18;
+      pSortKey = (u8*)sqlite3_malloc64((sqlite3_uint64)nSortKeyAlloc);
+      if( !pSortKey ) return SQLITE_NOMEM;
+    }
+    {
+      u8 *pBuf = pSortKey;
+      rc = sortKeyFromUnpackedIntRecordBuffer(
+          pIdxKey, (int)pIdxKey->nField, &pBuf, &nSortKeyAlloc, &nSortKey);
+      assert( pBuf==pSortKey );
+    }
+    if( rc!=SQLITE_OK ){
+      if( pSortKey!=aSortKey ) sqlite3_free(pSortKey);
+      return rc;
+    }
     nCmp = nKey < nSortKey ? nKey : nSortKey;
-    cmp = memcmp(pKey, aSortKey, nCmp);
+    cmp = memcmp(pKey, pSortKey, nCmp);
     if( cmp<0 ){
       *pRes = -1;
     }else if( cmp>0 ){
@@ -6194,6 +6242,7 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
       pIdxKey->eqSeen = 1;
       *pRes = pIdxKey->default_rc;
     }
+    if( pSortKey!=aSortKey ) sqlite3_free(pSortKey);
     return SQLITE_OK;
   }
 
