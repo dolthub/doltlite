@@ -4300,6 +4300,17 @@ static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
   return btreeReloadBranchWorkingStateInto(p, bLoadCatalog, 0);
 }
 
+static void btreeStoreCommittedFromCurrent(Btree *p, const ProllyHash *pCatHash){
+  if( pCatHash ){
+    p->committedCatalogHash = *pCatHash;
+  }
+  p->committedStagedCatalog = p->stagedCatalog;
+  p->committedIsMerging = p->isMerging;
+  p->committedMergeCommitHash = p->mergeCommitHash;
+  p->committedConflictsCatalogHash = p->conflictsCatalogHash;
+  p->committedConstraintViolationsHash = p->constraintViolationsHash;
+}
+
 static void btreeBumpDataVersion(Btree *p){
   p->iBDataVersion++;
   if( p->pBt->pPagerShim ){
@@ -4319,12 +4330,15 @@ static void btreeMarkWorkingStateChanged(Btree *p){
 
 static int btreeRefreshSharedWorkingState(Btree *p){
   BtShared *pBt = p->pBt;
+  ProllyHash loadedCatHash;
   int rc;
   if( p->iLoadedWorkingStateVersion==pBt->iWorkingStateVersion ){
     return SQLITE_OK;
   }
-  rc = btreeReloadBranchWorkingState(p, 1);
+  memset(&loadedCatHash, 0, sizeof(loadedCatHash));
+  rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
   if( rc!=SQLITE_OK ) return rc;
+  btreeStoreCommittedFromCurrent(p, &loadedCatHash);
   p->iLoadedWorkingStateVersion = pBt->iWorkingStateVersion;
   btreeBumpDataVersion(p);
   return SQLITE_OK;
@@ -4336,6 +4350,7 @@ static int btreeRefreshFromDisk(Btree *p){
   u8 snapshotPinned = pBt->store.snapshotPinned;
   int bAutocommitBoundary = p->inTrans==TRANS_NONE
     && p->db && p->db->autoCommit && !p->db->pSavepoint;
+  ProllyHash loadedCatHash;
   int rc;
 
   if( bAutocommitBoundary ){
@@ -4348,9 +4363,11 @@ static int btreeRefreshFromDisk(Btree *p){
   if( rc!=SQLITE_OK ) return rc;
   if( !bChanged ) return SQLITE_OK;
 
-  rc = btreeReloadBranchWorkingState(p, 1);
+  memset(&loadedCatHash, 0, sizeof(loadedCatHash));
+  rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
   if( rc!=SQLITE_OK ) return rc;
 
+  btreeStoreCommittedFromCurrent(p, &loadedCatHash);
   btreeMarkWorkingStateChanged(p);
 
   return SQLITE_OK;
@@ -4395,12 +4412,13 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
   }
 
   if( wrFlag ){
+    int bStoreChanged = 0;
     int nSavepointStart = p->nSavepoint;
     if( pBt->btsFlags & BTS_READ_ONLY ){
       return SQLITE_READONLY;
     }
 
-    rc = chunkStoreLockAndRefresh(&pBt->store);
+    rc = chunkStoreLockAndRefreshChanged(&pBt->store, &bStoreChanged);
     if( rc!=SQLITE_OK ) return rc;
 
     if( p->inTrans==TRANS_READ ){
@@ -4416,7 +4434,10 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       }
     }
 
-    {
+    if( p->inTrans==TRANS_READ
+     || bStoreChanged
+     || p->iLoadedWorkingStateVersion!=pBt->iWorkingStateVersion
+     || (prollyHashIsEmpty(&p->committedCatalogHash) && p->cat.n>1) ){
       ProllyHash loadedCatHash;
       memset(&loadedCatHash, 0, sizeof(loadedCatHash));
       rc = btreeReloadBranchWorkingStateInto(p, 1, &loadedCatHash);
@@ -4424,13 +4445,9 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
         chunkStoreUnlock(&pBt->store);
         return rc;
       }
-      p->committedCatalogHash = loadedCatHash;
+      btreeStoreCommittedFromCurrent(p, &loadedCatHash);
     }
-    p->committedStagedCatalog = p->stagedCatalog;
-    p->committedIsMerging = p->isMerging;
-    p->committedMergeCommitHash = p->mergeCommitHash;
-    p->committedConflictsCatalogHash = p->conflictsCatalogHash;
-    p->committedConstraintViolationsHash = p->constraintViolationsHash;
+    btreeStoreCommittedFromCurrent(p, 0);
 
     if( p->db ){
       while( p->nSavepoint < p->db->nSavepoint ){

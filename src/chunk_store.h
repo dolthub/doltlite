@@ -108,6 +108,7 @@ int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
 int chunkStoreClose(ChunkStore *cs);
 
 int chunkStoreLockAndRefresh(ChunkStore *cs);
+int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged);
 void chunkStoreUnlock(ChunkStore *cs);
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged);
 
