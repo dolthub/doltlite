@@ -6010,7 +6010,30 @@ static int prollyBtCursorIndexMoveto(
       }
     }
 
-    rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &(int){0});
+    {
+      int seekRes = 0;
+      rc = prollyCursorSeekBlob(&pCur->pCur, pSortKey, nSortKey, &seekRes);
+      if( rc==SQLITE_OK
+       && seekRes==0
+       && pCur->pCur.eState==PROLLY_CURSOR_VALID
+       && pCur->pKeyInfo
+       && pIdxKey->nField >= pCur->pKeyInfo->nAllField ){
+        int isDeleted = 0;
+        if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+          ProllyMutMapEntry *mmE = 0;
+          rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &mmE);
+          if( rc!=SQLITE_OK ) return rc;
+          if( mmE && mmE->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
+        }
+        if( !isDeleted ){
+          *pRes = 0;
+          pIdxKey->eqSeen = 1;
+          pCur->eState = CURSOR_VALID;
+          cacheCurrentTreeStoredPayloadNonIntKey(pCur);
+          return SQLITE_OK;
+        }
+      }
+    }
     if( rc==SQLITE_OK && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
       int iLevel = pCur->pCur.iLevel;
       ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[iLevel].pEntry;
