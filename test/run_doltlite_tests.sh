@@ -54,6 +54,7 @@ TESTS=(
   doltlite_structural.sh
   chunk_physical_dups_test.sh
   doltlite_savepoint.sh
+  doltlite_rollback_durability.sh
   doltlite_schema_merge.sh
   doltlite_branch_gc_stress.sh
 
