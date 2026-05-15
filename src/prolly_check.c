@@ -53,7 +53,8 @@ static int checkSubtree(
     return rc;
   }
 
-  if( node.flags!=flags ){
+  if( (node.flags & (PROLLY_NODE_INTKEY|PROLLY_NODE_BLOBKEY))
+        != (flags & (PROLLY_NODE_INTKEY|PROLLY_NODE_BLOBKEY)) ){
     *pzErr = sqlite3_mprintf("flags=0x%x expected=0x%x",
                              (unsigned)node.flags, (unsigned)flags);
     sqlite3_free(pData);

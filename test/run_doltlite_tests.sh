@@ -69,6 +69,7 @@ TESTS=(
   doltlite_feature_deep.sh
   doltlite_deep_history.sh
   doltlite_perf.sh
+  doltlite_count_perf.sh
   doltlite_demo.sh
   doltlite_e2e.sh
 

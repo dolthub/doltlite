@@ -44,6 +44,52 @@ static int fmEmitChild(
   const ProllyHash *pTheirs
 );
 
+static int fmSubtreeCount(
+  FmCtx *fm,
+  const ProllyHash *pHash,
+  u64 *pCount
+){
+  ProllyCacheEntry *pEntry = 0;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc = SQLITE_OK;
+  int i;
+  u64 sum = 0;
+
+  pEntry = prollyCacheGet(fm->pCache, pHash);
+  if( !pEntry ){
+    rc = chunkStoreGet(fm->pStore, pHash, &pData, &nData);
+    if( rc!=SQLITE_OK ) return rc;
+    pEntry = prollyCachePut(fm->pCache, pHash, pData, nData, &rc);
+    sqlite3_free(pData);
+    if( !pEntry ) return rc;
+  }
+
+  if( pEntry->node.level==0 ){
+    sum = (u64)pEntry->node.nItems;
+  }else if( prollyNodeHasSubtreeCounts(&pEntry->node) ){
+    for( i=0; i<(int)pEntry->node.nItems; i++ ){
+      sum += prollyNodeChildSubtreeCount(&pEntry->node, i);
+    }
+  }else{
+    for( i=0; i<(int)pEntry->node.nItems; i++ ){
+      ProllyHash childHash;
+      u64 childCount = 0;
+      prollyNodeChildHash(&pEntry->node, i, &childHash);
+      rc = fmSubtreeCount(fm, &childHash, &childCount);
+      if( rc!=SQLITE_OK ){
+        prollyCacheRelease(fm->pCache, pEntry);
+        return rc;
+      }
+      sum += childCount;
+    }
+  }
+
+  prollyCacheRelease(fm->pCache, pEntry);
+  *pCount = sum;
+  return SQLITE_OK;
+}
+
 static int fmEmitSubtreeRows(
   FmCtx *fm, ProllyChunker *pCh,
   const ProllyHash *pSubtreeRoot
@@ -441,9 +487,13 @@ static int fmEmitChild(
     /* Preserve structural sharing only when the chunker is exactly aligned at
     ** this parent level; otherwise emit rows so the rebuilt tree stays sorted. */
     if( fmChunkerLevelsBelowEmpty(pCh, parentLevel) ){
-      return prollyChunkerAddAtLevel(pCh, parentLevel,
-                                      pBoundKey, nBoundKey,
-                                      pSplice->data, PROLLY_HASH_SIZE);
+      u64 spliceCount = 0;
+      rc = fmSubtreeCount(fm, pSplice, &spliceCount);
+      if( rc != SQLITE_OK ) return rc;
+      return prollyChunkerAddAtLevelWithCount(pCh, parentLevel,
+                                              pBoundKey, nBoundKey,
+                                              pSplice->data, PROLLY_HASH_SIZE,
+                                              spliceCount);
     }
     return fmEmitSubtreeRows(fm, pCh, pSplice);
   }

@@ -20,6 +20,7 @@ struct ProllyChunkerLevel {
   ProllyNodeBuilder builder;
   int nItems;
   int nBytes;
+  u64 subtreeCount;
 };
 
 struct ProllyChunker {
@@ -45,5 +46,10 @@ void prollyChunkerFree(ProllyChunker *ch);
 int prollyChunkerAddAtLevel(ProllyChunker *ch, int level,
                             const u8 *pKey, int nKey,
                             const u8 *pVal, int nVal);
+
+int prollyChunkerAddAtLevelWithCount(ProllyChunker *ch, int level,
+                                     const u8 *pKey, int nKey,
+                                     const u8 *pVal, int nVal,
+                                     u64 subtreeCount);
 
 #endif
