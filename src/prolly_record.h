@@ -17,16 +17,17 @@ static inline int dlReadVarint(const u8 *p, const u8 *pEnd, u64 *pVal){
   v = p[0];
   if( !(v & 0x80) ){ *pVal = v; return 1; }
   v &= 0x7f;
-  for(i = 1; i < 9 && p+i < pEnd; i++){
+  for(i = 1; i < 8 && p+i < pEnd; i++){
     v = (v << 7) | (p[i] & 0x7f);
     if( !(p[i] & 0x80) ){ *pVal = v; return i + 1; }
   }
-  /* Either we exhausted 9 bytes without termination (valid) or we ran
-  ** off pEnd before finding a terminating byte. The latter is short
-  ** input; signal it with the 0 sentinel. */
-  if( i < 9 ){ *pVal = 0; return 0; }
-  *pVal = v;
-  return i;
+  if( i == 8 && p+i < pEnd ){
+    v = (v << 8) | p[i];
+    *pVal = v;
+    return 9;
+  }
+  *pVal = 0;
+  return 0;
 }
 
 static inline int dlSerialTypeLen(u64 st){
@@ -37,7 +38,7 @@ static inline int dlSerialTypeLen(u64 st){
   return 0;
 }
 
-#define DOLTLITE_MAX_RECORD_FIELDS 256
+#define DOLTLITE_MAX_RECORD_FIELDS SQLITE_MAX_COLUMN
 
 typedef struct DoltliteRecordInfo DoltliteRecordInfo;
 struct DoltliteRecordInfo {
