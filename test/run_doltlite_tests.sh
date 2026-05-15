@@ -50,6 +50,7 @@ TESTS=(
   # Storage and persistence
   doltlite_persistence.sh
   doltlite_branding.sh
+  doltlite_memory_db.sh
   doltlite_gc.sh
   doltlite_structural.sh
   chunk_physical_dups_test.sh
