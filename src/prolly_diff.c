@@ -191,19 +191,11 @@ int prollyValuesEqual(
       return SQLITE_OK;
     }
     if( memcmp(pA, pB, nA)==0 ){
-      if( nA < 2 ){
-        *pEqual = 0;
-        return SQLITE_CORRUPT;
-      }
       rc = diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
       if( rc!=SQLITE_OK ) return rc;
       if( *pEqual ) return SQLITE_OK;
       return SQLITE_CORRUPT;
     }
-  }
-  if( nA < 2 || nB < 2 ){
-    *pEqual = 0;
-    return SQLITE_CORRUPT;
   }
   return diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
 }
