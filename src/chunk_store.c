@@ -941,20 +941,21 @@ int chunkStorePut(
   ProllyHash *pHash
 ){
   int rc;
-  int idx = -1;
   ProllyHash h;
 
   prollyHashCompute(pData, nData, &h);
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
-  if( csSearchIndex(cs->index.aIndex, cs->index.nIndex, &h) >= 0 ) return SQLITE_OK;
-  rc = csSearchRecent(cs, &h, &idx);
-  if( rc!=SQLITE_OK ) return rc;
-  if( idx >= 0 ) return SQLITE_OK;
-  idx = -1;
-  rc = csSearchPending(cs, &h, &idx);
-  if( rc!=SQLITE_OK ) return rc;
-  if( idx >= 0 ) return SQLITE_OK;
+  {
+    u8 *pExisting = 0;
+    int nExisting = 0;
+    int getRc = chunkStoreGet(cs, &h, &pExisting, &nExisting);
+    if( getRc == SQLITE_OK ){
+      sqlite3_free(pExisting);
+      return SQLITE_OK;
+    }
+    sqlite3_free(pExisting);
+  }
 
   rc = csGrowPending(cs);
   if( rc != SQLITE_OK ) return rc;
