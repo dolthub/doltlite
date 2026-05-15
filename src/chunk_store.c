@@ -1214,7 +1214,15 @@ static int csCommitToFile(ChunkStore *cs){
     }
   }
 
-  /* The root record is the commit point for the append-only chunk store. */
+  if( cs->staging.nPending > 0 ){
+    CRASH_CHECK_WRITE();
+    rc = sqlite3OsSync(cs->file.pFile, SQLITE_SYNC_NORMAL);
+    if( rc != SQLITE_OK ) goto commit_done;
+  }
+
+  /* The root record is the commit point for the append-only chunk store.
+  ** It is written after the preceding fsync so the kernel cannot reorder
+  ** the root ahead of the chunk bodies it references. */
   {
     u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
     rootRec[0] = CS_WAL_TAG_ROOT;

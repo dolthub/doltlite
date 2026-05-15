@@ -219,6 +219,27 @@ int csReplayWal(ChunkStore *cs){
         int existing = csSearchIndex(cs->index.aIndex, cs->index.nIndex, &hash);
         ChunkIndexEntry *e = 0;
         if( existing < 0 ){
+          u8 *pBody = sqlite3_malloc((int)len);
+          ProllyHash computed;
+          if( !pBody ){
+            rc = SQLITE_NOMEM;
+            goto replay_error;
+          }
+          rc = sqlite3OsRead(cs->file.pFile, pBody, (int)len,
+                             cs->wal.iWalOffset + pos);
+          if( rc != SQLITE_OK ){
+            sqlite3_free(pBody);
+            goto replay_error;
+          }
+          prollyHashCompute(pBody, (int)len, &computed);
+          sqlite3_free(pBody);
+          if( memcmp(&computed, &hash, sizeof(ProllyHash))!=0 ){
+            sqlite3_log(SQLITE_NOTICE,
+              "doltlite: WAL chunk hash mismatch at offset %lld; "
+              "stopping replay at last commit boundary",
+              (long long)(cs->wal.iWalOffset + pos - 24 - 1));
+            break;
+          }
           rc = csGrowPending(cs);
           if( rc != SQLITE_OK ) goto replay_error;
           e = &cs->staging.aPending[cs->staging.nPending];
