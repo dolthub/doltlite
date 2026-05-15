@@ -2326,6 +2326,13 @@ static void run_sortkey_mem_matches_record(void){
   int nMemAlloc = 0;
   int nMemPrefixAlloc = 0;
   int rc;
+  Mem fastMem;
+  u8 *pFastKey = 0;
+  int nFastKey = 0;
+  int nFastAlloc = 0;
+  static const u8 aFastExpected[] = {
+    SORTKEY_TEXT, 'a', 'b', 'c', 0x00, 0x00
+  };
 
   printf("=== Sortkey Mem Matches Record Test ===\n\n");
 
@@ -2359,10 +2366,23 @@ static void run_sortkey_mem_matches_record(void){
         nMemPrefix==nRecordPrefix
         && memcmp(pMemPrefix, pRecordPrefix, nRecordPrefix)==0);
 
+  memset(&fastMem, 0, sizeof(fastMem));
+  fastMem.flags = MEM_Str;
+  fastMem.z = "abc";
+  fastMem.n = 3;
+  rc = sortKeyFromMemPrefixCollBuffer(&fastMem, 1, 0, 0,
+                                      &pFastKey, &nFastAlloc, &nFastKey);
+  check("sortkey_mem_single_binary_text_fast_ok", rc==SQLITE_OK);
+  check("sortkey_mem_single_binary_text_fast_output",
+        nFastKey==(int)sizeof(aFastExpected)
+        && memcmp(pFastKey, aFastExpected, sizeof(aFastExpected))==0);
+  check("sortkey_mem_single_binary_text_fast_alloc", nFastAlloc==64);
+
   sqlite3_free(pRecordKey);
   sqlite3_free(pMemKey);
   sqlite3_free(pRecordPrefix);
   sqlite3_free(pMemPrefix);
+  sqlite3_free(pFastKey);
 }
 
 static void run_reload_refs_transactional(void){

@@ -525,15 +525,77 @@ static int sortKeyEncodeMemArray(
   return pOut ? outPos : (int)outSize;
 }
 
+static int sortKeyFromSingleBinaryMemFast(
+  Mem *aMem,
+  int nMem,
+  int nKeyField,
+  const KeyInfo *pKeyInfo,
+  u8 **ppBuf,
+  int *pnAlloc,
+  int *pnOut
+){
+  Mem *pMem;
+  int flags;
+  u8 tag;
+  int nSize;
+  int nAlloc;
+  u8 *pOut;
+
+  if( !aMem || nMem!=1 || nKeyField!=0 ) return SQLITE_NOTFOUND;
+
+  pMem = &aMem[0];
+  flags = pMem->flags;
+  if( flags & MEM_Zero ) return SQLITE_NOTFOUND;
+  if( pMem->n < 0 || (pMem->n > 0 && pMem->z==0) ) return SQLITE_CORRUPT;
+
+  if( flags & MEM_Str ){
+    if( collFromKeyInfo(pKeyInfo, 0)!=SORTKEY_COLL_BINARY ){
+      return SQLITE_NOTFOUND;
+    }
+    tag = SORTKEY_TEXT;
+  }else if( flags & MEM_Blob ){
+    tag = SORTKEY_BLOB;
+  }else{
+    return SQLITE_NOTFOUND;
+  }
+
+  if( pMem->n>0 && memchr(pMem->z, 0, (size_t)pMem->n)!=0 ){
+    return SQLITE_NOTFOUND;
+  }
+  if( pMem->n > INT_MAX - 3 ) return SQLITE_TOOBIG;
+
+  nSize = pMem->n + 3;
+  nAlloc = nSize < 64 ? 64 : nSize;
+  if( *pnAlloc < nAlloc ){
+    u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, (sqlite3_uint64)nAlloc);
+    if( !pNew ) return SQLITE_NOMEM;
+    *ppBuf = pNew;
+    *pnAlloc = nAlloc;
+  }
+
+  pOut = *ppBuf;
+  pOut[0] = tag;
+  if( pMem->n>0 ) memcpy(pOut + 1, pMem->z, (size_t)pMem->n);
+  pOut[1 + pMem->n] = 0x00;
+  pOut[2 + pMem->n] = 0x00;
+  *pnOut = nSize;
+  return SQLITE_OK;
+}
+
 int sortKeyFromMemPrefixCollBuffer(
   Mem *aMem, int nMem, int nKeyField, const KeyInfo *pKeyInfo,
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
   int nSize;
   int nAlloc;
+  int rc;
 
   *pnOut = 0;
   if( !aMem || nMem<=0 ) return SQLITE_NOTFOUND;
+
+  rc = sortKeyFromSingleBinaryMemFast(
+      aMem, nMem, nKeyField, pKeyInfo, ppBuf, pnAlloc, pnOut);
+  if( rc!=SQLITE_NOTFOUND ) return rc;
 
   nSize = sortKeyEncodeMemArray(aMem, nMem, nKeyField, pKeyInfo, 0);
   if( nSize == -3 ) return SQLITE_NOTFOUND;
