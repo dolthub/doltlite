@@ -5,6 +5,8 @@
 #include "prolly_cursor.h"
 #include "prolly_xxhash.h"
 
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 
@@ -240,6 +242,15 @@ int prollyChunkerFinish(ProllyChunker *ch){
     level++;
   }
 
+#ifdef DOLTLITE_PROLLY_CHECK
+  if( ch->nLevels > 0 ){
+    fprintf(stderr,
+            "doltlite: S5 invariant: prollyChunkerFinish has nLevels=%d "
+            "but every level is empty; would have returned empty root\n",
+            ch->nLevels);
+    abort();
+  }
+#endif
   memset(&ch->root, 0, sizeof(ProllyHash));
   return SQLITE_OK;
 }
