@@ -6,11 +6,9 @@
 
 void prollyHashCompute(const void *pData, int nData, ProllyHash *pOut){
   blake3_hasher h;
-  u8 digest[BLAKE3_OUT_LEN];
   blake3_hasher_init(&h);
   blake3_hasher_update(&h, pData, (size_t)nData);
-  blake3_hasher_finalize(&h, digest, BLAKE3_OUT_LEN);
-  memcpy(pOut->data, digest, PROLLY_HASH_SIZE);
+  blake3_hasher_finalize(&h, pOut->data, PROLLY_HASH_SIZE);
 }
 
 int prollyHashCompare(const ProllyHash *a, const ProllyHash *b){
