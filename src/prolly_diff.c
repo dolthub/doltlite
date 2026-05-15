@@ -185,22 +185,19 @@ int prollyValuesEqual(
   int *pEqual
 ){
   int rc;
-  *pEqual = 0;
   if( nA==nB ){
-    if( nA==0 || memcmp(pA, pB, nA)==0 ){
+    if( nA==0 ){
       *pEqual = 1;
       return SQLITE_OK;
     }
+    if( memcmp(pA, pB, nA)==0 ){
+      rc = diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
+      if( rc!=SQLITE_OK ) return rc;
+      if( *pEqual ) return SQLITE_OK;
+      return SQLITE_CORRUPT;
+    }
   }
-  if( nA < 1 || nB < 1 ){
-    return SQLITE_OK;
-  }
-  rc = diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
-  if( rc==SQLITE_CORRUPT ){
-    *pEqual = 0;
-    return SQLITE_OK;
-  }
-  return rc;
+  return diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
 }
 
 static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew){
