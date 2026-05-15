@@ -124,6 +124,8 @@ struct TableEntry {
   u8 pendingFlushSeekEdits;
   char *zName;
   ProllyMutMap *pPending;
+  char *zType;
+  char *zTblName;
 };
 
 typedef struct Catalog Catalog;
@@ -147,7 +149,9 @@ struct SavepointCatalogEntry {
   ProllyHash schemaHash;
   u8 flags;
   u8 pendingFlushSeekEdits;
+  char *zType;
   char *zName;
+  char *zTblName;
 };
 
 typedef struct SavepointPendingSnapshot SavepointPendingSnapshot;
@@ -907,6 +911,51 @@ static struct TableEntry *catFind(Catalog *cat, Pgno iTable){
   return 0;
 }
 
+static void tableEntryClearCatalogMeta(struct TableEntry *pEntry){
+  sqlite3_free(pEntry->zType);
+  sqlite3_free(pEntry->zName);
+  sqlite3_free(pEntry->zTblName);
+  pEntry->zType = 0;
+  pEntry->zName = 0;
+  pEntry->zTblName = 0;
+}
+
+static int tableEntrySetCatalogMeta(
+  struct TableEntry *pEntry,
+  const char *zType,
+  const char *zName,
+  const char *zTblName
+){
+  char *zTypeCopy = 0;
+  char *zNameCopy = 0;
+  char *zTblNameCopy = 0;
+
+  if( zType ){
+    zTypeCopy = sqlite3_mprintf("%s", zType);
+    if( !zTypeCopy ) goto nomem;
+  }
+  if( zName ){
+    zNameCopy = sqlite3_mprintf("%s", zName);
+    if( !zNameCopy ) goto nomem;
+  }
+  if( zTblName ){
+    zTblNameCopy = sqlite3_mprintf("%s", zTblName);
+    if( !zTblNameCopy ) goto nomem;
+  }
+
+  tableEntryClearCatalogMeta(pEntry);
+  pEntry->zType = zTypeCopy;
+  pEntry->zName = zNameCopy;
+  pEntry->zTblName = zTblNameCopy;
+  return SQLITE_OK;
+
+nomem:
+  sqlite3_free(zTypeCopy);
+  sqlite3_free(zNameCopy);
+  sqlite3_free(zTblNameCopy);
+  return SQLITE_NOMEM;
+}
+
 static struct TableEntry *catAdd(Catalog *cat, Pgno iTable, u8 flags){
   struct TableEntry *pEntry;
 
@@ -955,7 +1004,7 @@ static void catRemove(Catalog *cat, Pgno iTable){
   int i;
   for(i=0; i<cat->n; i++){
     if( cat->a[i].iTable==iTable ){
-      sqlite3_free(cat->a[i].zName);
+      tableEntryClearCatalogMeta(&cat->a[i]);
       if( i<cat->n-1 ){
         memmove(&cat->a[i], &cat->a[i+1],
                 (cat->n-i-1)*(int)sizeof(struct TableEntry));
@@ -969,7 +1018,7 @@ static void catRemove(Catalog *cat, Pgno iTable){
 static void catFree(Catalog *cat){
   int k;
   for(k=0; k<cat->n; k++){
-    sqlite3_free(cat->a[k].zName);
+    tableEntryClearCatalogMeta(&cat->a[k]);
     if( cat->a[k].pPending ){
       ProllyMutMap *pMap = (ProllyMutMap*)cat->a[k].pPending;
       prollyMutMapFree(pMap);
@@ -2017,7 +2066,85 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
       aFallbackSchema, nFallbackSchema, ppOut, pnOut);
 }
 
+static int serializeCatalogFast(Btree *pBtree, u8 **ppOut, int *pnOut){
+  int sz = CAT_HEADER_SIZE_V3;
+  u8 *buf, *q;
+  int i;
+
+  if( !pBtree || pBtree->bSchemaChangedTxn ) return SQLITE_NOTFOUND;
+  if( pBtree->cat.n<=0 ) return SQLITE_NOTFOUND;
+
+  for(i=0; i<pBtree->cat.n; i++){
+    struct TableEntry *e = &pBtree->cat.a[i];
+    const char *zType = e->zType;
+    const char *zName = e->zName;
+    const char *zTblName = e->zTblName ? e->zTblName : "";
+    int nType, nName, nTbl;
+    if( e->iTable==1 ){
+      zType = "catalog";
+      zName = "sqlite_master";
+      zTblName = "";
+    }
+    if( !zType || !zName ) return SQLITE_NOTFOUND;
+    nType = (int)strlen(zType);
+    nName = (int)strlen(zName);
+    nTbl = (int)strlen(zTblName);
+    if( sz > 0x7FFFFFFF - (4 + 1 + PROLLY_HASH_SIZE*2 + 6 + nType + nName + nTbl) ){
+      return SQLITE_TOOBIG;
+    }
+    sz += 4 + 1 + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE + 6 + nType + nName + nTbl;
+  }
+
+  buf = sqlite3_malloc(sz);
+  if( !buf ) return SQLITE_NOMEM;
+  q = buf;
+
+  *q++ = CATALOG_FORMAT_V4;
+  q[0]=(u8)pBtree->cat.n; q[1]=(u8)(pBtree->cat.n>>8);
+  q[2]=(u8)(pBtree->cat.n>>16); q[3]=(u8)(pBtree->cat.n>>24);
+  q += 4;
+
+  for(i=0; i<pBtree->cat.n; i++){
+    struct TableEntry *e = &pBtree->cat.a[i];
+    const char *zType = e->zType;
+    const char *zName = e->zName;
+    const char *zTblName = e->zTblName ? e->zTblName : "";
+    int nType, nName, nTbl;
+    Pgno pg = e->iTable;
+    if( e->iTable==1 ){
+      zType = "catalog";
+      zName = "sqlite_master";
+      zTblName = "";
+    }
+    nType = (int)strlen(zType);
+    nName = (int)strlen(zName);
+    nTbl = (int)strlen(zTblName);
+    q[0]=(u8)pg; q[1]=(u8)(pg>>8); q[2]=(u8)(pg>>16); q[3]=(u8)(pg>>24);
+    q += 4;
+    *q++ = e->flags;
+    memcpy(q, e->root.data, PROLLY_HASH_SIZE);
+    q += PROLLY_HASH_SIZE;
+    memcpy(q, e->schemaHash.data, PROLLY_HASH_SIZE);
+    q += PROLLY_HASH_SIZE;
+    q[0]=(u8)nType; q[1]=(u8)(nType>>8); q+=2;
+    q[0]=(u8)nName; q[1]=(u8)(nName>>8); q+=2;
+    q[0]=(u8)nTbl; q[1]=(u8)(nTbl>>8); q+=2;
+    if( nType>0 ) memcpy(q, zType, nType);
+    q += nType;
+    if( nName>0 ) memcpy(q, zName, nName);
+    q += nName;
+    if( nTbl>0 ) memcpy(q, zTblName, nTbl);
+    q += nTbl;
+  }
+
+  *ppOut = buf;
+  *pnOut = (int)(q - buf);
+  return SQLITE_OK;
+}
+
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
+  int rc = serializeCatalogFast(pBtree, ppOut, pnOut);
+  if( rc!=SQLITE_NOTFOUND ) return rc;
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut);
 }
@@ -2190,18 +2317,31 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       pType = q; q += nType;
       pName = q; q += nName;
       pTbl = q; q += nTbl;
-      (void)pTbl;
-      if( nType==5 && memcmp(pType, "table", 5)==0 && nName>0 ){
+      tableEntryClearCatalogMeta(pTE);
+      if( nType>0 ){
+        pTE->zType = sqlite3_malloc(nType+1);
+        if( !pTE->zType ) return SQLITE_NOMEM;
+        memcpy(pTE->zType, pType, nType);
+        pTE->zType[nType] = 0;
+      }
+      if( nName>0 ){
         pTE->zName = sqlite3_malloc(nName+1);
         if( !pTE->zName ) return SQLITE_NOMEM;
         memcpy(pTE->zName, pName, nName);
         pTE->zName[nName] = 0;
+      }
+      if( nTbl>0 ){
+        pTE->zTblName = sqlite3_malloc(nTbl+1);
+        if( !pTE->zTblName ) return SQLITE_NOMEM;
+        memcpy(pTE->zTblName, pTbl, nTbl);
+        pTE->zTblName[nTbl] = 0;
       }
     }else{
       if( q+2 > data+nData ) return SQLITE_CORRUPT;
       nLen = q[0] | (q[1]<<8); q += 2;
       if( q+nLen > data+nData ) return SQLITE_CORRUPT;
       if( nLen>0 ){
+        tableEntryClearCatalogMeta(pTE);
         pTE->zName = sqlite3_malloc(nLen+1);
         if( pTE->zName ){
           memcpy(pTE->zName, q, nLen);
@@ -2767,6 +2907,9 @@ static int saveCursorPosition(BtCursor *pCur){
 
 static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE){
   if( !pTE || pTE->iTable<=1 ) return 0;
+  if( pTE->zType ){
+    return strcmp(pTE->zType, "table")==0;
+  }
   if( !pTE->zName && pBtree && pBtree->db ){
     pTE->zName = doltliteResolveTableNumber(pBtree->db, pTE->iTable);
   }
@@ -2831,7 +2974,9 @@ static void freeSavepointTables(struct SavepointTableState *pState){
   if( pState->aCatalogSnapshot ){
     int i;
     for(i=0; i<pState->nTables; i++){
+      sqlite3_free(pState->aCatalogSnapshot[i].zType);
       sqlite3_free(pState->aCatalogSnapshot[i].zName);
+      sqlite3_free(pState->aCatalogSnapshot[i].zTblName);
     }
     sqlite3_free(pState->aCatalogSnapshot);
     pState->aCatalogSnapshot = 0;
@@ -2886,22 +3031,32 @@ static int captureSavepointCatalogSnapshot(
     pDst->schemaHash = pSrc->schemaHash;
     pDst->flags = pSrc->flags;
     pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
+    if( pSrc->zType ){
+      pDst->zType = sqlite3_mprintf("%s", pSrc->zType);
+      if( !pDst->zType ) goto snapshot_nomem;
+    }
     if( pSrc->zName ){
       pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
-      if( !pDst->zName ){
-        int j;
-        for(j=0; j<=i; j++){
-          sqlite3_free(aSnapshot[j].zName);
-        }
-        sqlite3_free(aSnapshot);
-        return SQLITE_NOMEM;
-      }
+      if( !pDst->zName ) goto snapshot_nomem;
+    }
+    if( pSrc->zTblName ){
+      pDst->zTblName = sqlite3_mprintf("%s", pSrc->zTblName);
+      if( !pDst->zTblName ) goto snapshot_nomem;
     }
   }
 
   pState->aCatalogSnapshot = aSnapshot;
   pState->bCatalogSnapshot = 1;
   return SQLITE_OK;
+
+snapshot_nomem:
+  for(i=0; i<n; i++){
+    sqlite3_free(aSnapshot[i].zType);
+    sqlite3_free(aSnapshot[i].zName);
+    sqlite3_free(aSnapshot[i].zTblName);
+  }
+  sqlite3_free(aSnapshot);
+  return SQLITE_NOMEM;
 }
 
 static void captureSavepointSessionState(
@@ -3323,13 +3478,14 @@ static int restoreTablesFromSavepoint(
           pDst->schemaHash = pSrc->schemaHash;
           pDst->flags = pSrc->flags;
           pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
-          if( pSrc->zName ){
-            pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
-            if( !pDst->zName ){
+          if( pSrc->zType || pSrc->zName || pSrc->zTblName ){
+            int rcMeta = tableEntrySetCatalogMeta(
+                pDst, pSrc->zType, pSrc->zName, pSrc->zTblName);
+            if( rcMeta!=SQLITE_OK ){
               sqlite3_free(apPending);
               btreeFreeCatalogTables(pBtree);
               initDefaultMeta(pBtree);
-              return SQLITE_NOMEM;
+              return rcMeta;
             }
           }
         }
@@ -7988,13 +8144,32 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
   *ppTables = temp.cat.a;
   *pnTables = temp.cat.n;
   if( piNextTable ) *piNextTable = temp.cat.iNextTable;
+  {
+    int i;
+    for(i=0; i<temp.cat.n; i++){
+      int hasType = temp.cat.a[i].zType!=0;
+      int keepName = !hasType || strcmp(temp.cat.a[i].zType, "table")==0;
+      sqlite3_free(temp.cat.a[i].zType);
+      sqlite3_free(temp.cat.a[i].zTblName);
+      temp.cat.a[i].zType = 0;
+      temp.cat.a[i].zTblName = 0;
+      if( !keepName ){
+        sqlite3_free(temp.cat.a[i].zName);
+        temp.cat.a[i].zName = 0;
+      }
+    }
+  }
   return SQLITE_OK;
 }
 
 void doltliteFreeCatalog(struct TableEntry *a, int n){
   int i;
   if( !a ) return;
-  for(i=0; i<n; i++) sqlite3_free(a[i].zName);
+  for(i=0; i<n; i++){
+    sqlite3_free(a[i].zName);
+    sqlite3_free(a[i].zType);
+    sqlite3_free(a[i].zTblName);
+  }
   sqlite3_free(a);
 }
 
