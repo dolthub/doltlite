@@ -2373,6 +2373,100 @@ static int unpackedRecordCanUseIntSortKey(
   return 1;
 }
 
+static int prollyGetVarint32(const u8 *p, u32 *pVal){
+  u32 a = *p;
+  if( !(a & 0x80) ){
+    *pVal = a;
+    return 1;
+  }
+  {
+    u32 v = a & 0x7f;
+    int i = 1;
+    do {
+      a = p[i];
+      v = (v << 7) | (a & 0x7f);
+      i++;
+    } while( (a & 0x80) && i < 9 );
+    *pVal = v;
+    return i;
+  }
+}
+
+static u32 prollySerialTypeLen(u32 serialType){
+  static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8};
+  if( serialType <= 6 ) return aLen[serialType];
+  if( serialType == 7 ) return 8;
+  if( serialType >= 12 ) return (serialType - 12) / 2;
+  return 0;
+}
+
+static int sortKeyFromIntRecordLocal(
+  BtCursor *pCur,
+  const u8 *pRec,
+  int nRec,
+  int nKeyField,
+  u8 *pOut,
+  int nOutCap,
+  int *pnOut
+){
+  u32 hdrSize;
+  u32 hdrOff;
+  u32 dataOff;
+  int nField = 0;
+  int outPos = 0;
+
+  *pnOut = 0;
+  if( nRec<=0 ) return SQLITE_NOTFOUND;
+  hdrOff = prollyGetVarint32(pRec, &hdrSize);
+  if( hdrSize > (u32)nRec ) return SQLITE_CORRUPT;
+  dataOff = hdrSize;
+
+  while( hdrOff < hdrSize ){
+    u32 serialType;
+    u32 fieldLen;
+    i64 v;
+    int n = 0;
+    int rc;
+    if( nKeyField>0 && nField>=nKeyField ) break;
+    if( pCur->pKeyInfo && nField>=pCur->pKeyInfo->nAllField ){
+      return SQLITE_NOTFOUND;
+    }
+    if( pCur->pKeyInfo
+     && pCur->pKeyInfo->aSortFlags
+     && (pCur->pKeyInfo->aSortFlags[nField] & KEYINFO_ORDER_DESC) ){
+      return SQLITE_NOTFOUND;
+    }
+    hdrOff += prollyGetVarint32(pRec + hdrOff, &serialType);
+    fieldLen = prollySerialTypeLen(serialType);
+    if( fieldLen > (u32)nRec - dataOff ) return SQLITE_CORRUPT;
+    if( serialType==8 ){
+      v = 0;
+    }else if( serialType==9 ){
+      v = 1;
+    }else if( serialType>=1 && serialType<=6 ){
+      u64 uv = (pRec[dataOff] & 0x80) ? (u64)-1 : 0;
+      u32 i;
+      for(i=0; i<fieldLen; i++){
+        uv = (uv << 8) | pRec[dataOff + i];
+      }
+      v = (i64)uv;
+    }else{
+      return SQLITE_NOTFOUND;
+    }
+    if( outPos + 18 > nOutCap ) return SQLITE_NOTFOUND;
+    rc = sortKeyFromInt64(v, pOut + outPos, &n);
+    if( rc!=SQLITE_OK ) return rc;
+    outPos += n;
+    dataOff += fieldLen;
+    nField++;
+  }
+  if( nField<=0 || (nKeyField>0 && nField<nKeyField) ){
+    return SQLITE_NOTFOUND;
+  }
+  *pnOut = outPos;
+  return SQLITE_OK;
+}
+
 static int sortKeyFromUnpackedIntRecordBuffer(
   UnpackedRecord *pRec,
   int nField,
@@ -6458,6 +6552,8 @@ static int prollyBtCursorInsert(
     int nKeyField = 0;
     int splitKey = 0;
     int isIndex = 0;
+    u8 aLocalSortKey[128];
+    const u8 *pSortKey = 0;
     if( pCur->pKeyInfo
      && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
       nKeyField = (int)pCur->pKeyInfo->nKeyField;
@@ -6467,19 +6563,28 @@ static int prollyBtCursorInsert(
         isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
       }
     }
-    rc = sortKeyFromRecordPrefixCollBuffer(
-        (const u8*)pPayload->pKey, (int)pPayload->nKey,
+    rc = sortKeyFromIntRecordLocal(
+        pCur, (const u8*)pPayload->pKey, (int)pPayload->nKey,
         isIndex ? 0 : (splitKey ? nKeyField : 0),
-        pCur->pKeyInfo,
-        &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+        aLocalSortKey, (int)sizeof(aLocalSortKey), &nSortKey);
+    if( rc==SQLITE_OK ){
+      pSortKey = aLocalSortKey;
+    }else if( rc==SQLITE_NOTFOUND ){
+      rc = sortKeyFromRecordPrefixCollBuffer(
+          (const u8*)pPayload->pKey, (int)pPayload->nKey,
+          isIndex ? 0 : (splitKey ? nKeyField : 0),
+          pCur->pKeyInfo,
+          &pCur->pSeekSortKey, &pCur->nSeekSortKeyAlloc, &nSortKey);
+      pSortKey = pCur->pSeekSortKey;
+    }
     if( rc==SQLITE_OK ){
       if( splitKey ){
         rc = prollyMutMapInsert(pCur->pMutMap,
-                                 pCur->pSeekSortKey, nSortKey, 0,
+                                 pSortKey, nSortKey, 0,
                                  (const u8*)pPayload->pKey, (int)pPayload->nKey);
       }else{
         rc = prollyMutMapInsert(pCur->pMutMap,
-                                 pCur->pSeekSortKey, nSortKey, 0,
+                                 pSortKey, nSortKey, 0,
                                  NULL, 0);
       }
     }
