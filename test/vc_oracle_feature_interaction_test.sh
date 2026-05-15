@@ -8552,6 +8552,82 @@ SELECT dolt_commit('-m','main');
 SELECT dolt_merge('feat');
 " "SELECT id, v FROM t ORDER BY id;"
 
+oracle "pk_change_one_side_value_change_other_side" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET id=10 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat changes pk');
+SELECT dolt_checkout('main');
+UPDATE t SET v='MAIN' WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main changes value');
+SELECT dolt_merge('feat');
+" "SELECT id, v FROM t ORDER BY id;"
+
+oracle "one_sided_table_update_indexed_col_stays_queryable" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, x INTEGER);
+CREATE INDEX idx_x ON t(x);
+INSERT INTO t VALUES(1,10),(2,20),(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET x=99 WHERE id=1;
+INSERT INTO t VALUES(4,40);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat updates indexed col and inserts');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id, x FROM t WHERE x IN (99,40,20,30) ORDER BY id;"
+
+oracle "one_sided_table_modify_unique_enforced_post_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, x INTEGER UNIQUE);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(3,30);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat adds row with x=30');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+INSERT OR IGNORE INTO t VALUES(4,30);
+" "SELECT id, x FROM t ORDER BY id;"
+
+oracle "one_sided_table_modify_multi_col_index_lookup" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER);
+CREATE INDEX idx_ab ON t(a,b);
+INSERT INTO t VALUES(1,10,100),(2,20,200);
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET a=99,b=999 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat updates a and b');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('feat');
+" "SELECT id FROM t WHERE a=99 AND b=999;"
+
+oracle "update_pk_equiv_delete_then_insert_merge" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','base');
+SELECT dolt_checkout('-b','feat');
+DELETE FROM t WHERE id=1;
+INSERT INTO t VALUES(2,'a');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','feat explicit delete plus insert');
+SELECT dolt_checkout('main');
+UPDATE t SET id=2 WHERE id=1;
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','main update pk');
+SELECT dolt_merge('feat');
+" "SELECT id, v FROM t ORDER BY id;"
+
 oracle "update_back_to_original_then_merge" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'original');
