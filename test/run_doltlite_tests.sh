@@ -72,6 +72,7 @@ TESTS=(
 
   # Additional tests
   doltlite_attach_sqlite.sh
+  doltlite_open_sqlite_file.sh
   doltlite_behavior.sh
   doltlite_branch_edge.sh
   doltlite_diff_alter.sh
