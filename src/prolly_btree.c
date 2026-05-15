@@ -1742,8 +1742,8 @@ int doltliteSerializeCatalogEntries(
       db, aTables, nTables, 0, 0, ppOut, pnOut);
 }
 
-int doltliteSerializeCatalogEntriesWithFallbackSchema(
-  sqlite3 *db,
+static int doltliteSerializeCatalogEntriesForBtreeImpl(
+  Btree *pBtree,
   struct TableEntry *aTables,
   int nTables,
   SchemaEntry *aFallbackSchema,
@@ -1753,7 +1753,7 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
 ){
   int sz = CAT_HEADER_SIZE_V3;
   u8 *buf, *q;
-  Btree *pBtree;
+  sqlite3 *db;
   SchemaCatalogRow *aRows = 0;
   CatalogEntryMeta *aMeta = 0;
   ProllyHash masterRoot;
@@ -1763,9 +1763,8 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   int i, j;
   int rc;
 
-  if( !db ) return SQLITE_MISUSE;
-  if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
-  pBtree = db->aDb[0].pBt;
+  if( !pBtree ) return SQLITE_MISUSE;
+  db = pBtree->db;
   rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
   if( rc!=SQLITE_OK ) return rc;
   rc = loadSchemaCatalogRows(pBtree, aTables, nTables, &aRows, &nRows, &masterRoot, &masterFlags);
@@ -2000,9 +1999,25 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   return SQLITE_OK;
 }
 
+int doltliteSerializeCatalogEntriesWithFallbackSchema(
+  sqlite3 *db,
+  struct TableEntry *aTables,
+  int nTables,
+  SchemaEntry *aFallbackSchema,
+  int nFallbackSchema,
+  u8 **ppOut,
+  int *pnOut
+){
+  if( !db ) return SQLITE_MISUSE;
+  if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
+  return doltliteSerializeCatalogEntriesForBtreeImpl(
+      db->aDb[0].pBt, aTables, nTables,
+      aFallbackSchema, nFallbackSchema, ppOut, pnOut);
+}
+
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
-  return doltliteSerializeCatalogEntries(
-      pBtree->db, pBtree->cat.a, pBtree->cat.n, ppOut, pnOut);
+  return doltliteSerializeCatalogEntriesForBtreeImpl(
+      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut);
 }
 
 static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
