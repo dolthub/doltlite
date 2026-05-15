@@ -594,6 +594,12 @@ static int prollyBtreeClosesWithCursor(Btree*, BtCursor*);
 #endif
 int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db);
 
+static int prollyInvokeBusyHandler(BtShared *pBt){
+  if( !pBt || !pBt->db ) return 0;
+  assert( sqlite3_mutex_held(pBt->db->mutex) );
+  return sqlite3InvokeBusyHandler(&pBt->db->busyHandler);
+}
+
 static int origBtreeCloseVt(Btree*);
 static int origBtreeNewDbVt(Btree*);
 static int origBtreeSetCacheSizeVt(Btree*, int);
@@ -4418,7 +4424,9 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
       return SQLITE_READONLY;
     }
 
-    rc = chunkStoreLockAndRefreshChanged(&pBt->store, &bStoreChanged);
+    do {
+      rc = chunkStoreLockAndRefreshChanged(&pBt->store, &bStoreChanged);
+    }while( rc==SQLITE_BUSY && prollyInvokeBusyHandler(pBt) );
     if( rc!=SQLITE_OK ) return rc;
 
     if( p->inTrans==TRANS_READ ){
