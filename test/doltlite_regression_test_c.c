@@ -5749,14 +5749,30 @@ static void run_mutmap_delete_reinsert_reuses_entry(void){
   for( mode = 0; mode < 2; mode++ ){
     ProllyMutMap mm;
     ProllyMutMapEntry *e = 0;
+    void *pFirstVal = 0;
+    int nFirstValAlloc = 0;
     int rc;
 
     check("mutmap_delete_reinsert_init",
           prollyMutMapInitMode(&mm, 1, (u8)mode)==SQLITE_OK);
     check("mutmap_delete_reinsert_insert",
           prollyMutMapInsert(&mm, 0, 0, 42, aFirst, sizeof(aFirst))==SQLITE_OK);
+    rc = prollyMutMapFindRc(&mm, 0, 0, 42, &e);
+    check("mutmap_delete_reinsert_find_first", rc==SQLITE_OK && e!=0);
+    if( e ){
+      pFirstVal = e->pVal;
+      nFirstValAlloc = e->nValAlloc;
+    }
     check("mutmap_delete_reinsert_delete",
           prollyMutMapDelete(&mm, 0, 0, 42)==SQLITE_OK);
+    rc = prollyMutMapFindRc(&mm, 0, 0, 42, &e);
+    check("mutmap_delete_reinsert_find_deleted", rc==SQLITE_OK && e!=0);
+    check("mutmap_delete_reinsert_keeps_value_buffer",
+          e!=0
+       && e->op==PROLLY_EDIT_DELETE
+       && e->nVal==0
+       && e->pVal==pFirstVal
+       && e->nValAlloc==nFirstValAlloc);
     check("mutmap_delete_reinsert_insert_again",
           prollyMutMapInsert(&mm, 0, 0, 42, aSecond, sizeof(aSecond))==SQLITE_OK);
 
@@ -5766,6 +5782,7 @@ static void run_mutmap_delete_reinsert_reuses_entry(void){
           e!=0
        && e->op==PROLLY_EDIT_INSERT
        && e->nVal==(int)sizeof(aSecond)
+       && e->pVal==pFirstVal
        && memcmp(e->pVal, aSecond, sizeof(aSecond))==0);
 
     prollyMutMapFree(&mm);
