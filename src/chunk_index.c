@@ -55,7 +55,7 @@ void chunkIndexSetMetadata(ChunkIndex *idx, int nChunks, i64 iOffset, i64 nSize)
 }
 
 void chunkIndexReplaceEntries(ChunkIndex *idx, ChunkIndexEntry *aNew, int nNew){
-  sqlite3_free(idx->aIndex);
+  csReleaseIndexBuf(idx->aIndex, idx->aIndexMmapBase, idx->aIndexMmapSize);
   idx->aIndex = aNew;
   idx->nIndex = nNew;
   idx->aIndexMmapBase = 0;
