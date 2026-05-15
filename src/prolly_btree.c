@@ -8371,6 +8371,28 @@ int doltliteSessionHasConstraintViolations(sqlite3 *db){
   return !prollyHashIsEmpty(&db->aDb[0].pBt->constraintViolationsHash);
 }
 
+int doltliteSeedSessionHashes(
+  sqlite3 *db,
+  ChunkStore *cs,
+  int (*xPush)(void*, const ProllyHash*),
+  void *pCtx
+){
+  int i, rc = SQLITE_OK;
+  if( !db || !cs || !xPush ) return SQLITE_OK;
+  for(i=0; rc==SQLITE_OK && i<db->nDb; i++){
+    Btree *pBt = db->aDb[i].pBt;
+    if( !pBt || pBt->pOps!=&prollyBtreeOps || !pBt->pBt ) continue;
+    if( &pBt->pBt->store!=cs ) continue;
+    rc = xPush(pCtx, &pBt->stagedCatalog);
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->mergeCommitHash);
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->conflictsCatalogHash);
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->preRebaseWorkingCat);
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->rebaseOntoCommit);
+    if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->constraintViolationsHash);
+  }
+  return rc;
+}
+
 int doltliteSaveWorkingSetWithHash(sqlite3 *db, const ProllyHash *pWorkingCatHash){
   ChunkStore *cs = doltliteGetChunkStore(db);
   Btree *pBtree;

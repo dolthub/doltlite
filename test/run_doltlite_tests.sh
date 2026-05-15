@@ -52,6 +52,7 @@ TESTS=(
   doltlite_branding.sh
   doltlite_memory_db.sh
   doltlite_gc.sh
+  doltlite_gc_session_state.sh
   doltlite_structural.sh
   chunk_physical_dups_test.sh
   doltlite_savepoint.sh

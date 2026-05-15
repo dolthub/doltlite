@@ -148,6 +148,9 @@ void doltliteSetSessionConflictsCatalog(sqlite3 *db, const ProllyHash *pHash);
 void doltliteGetSessionConstraintViolationsCatalog(sqlite3 *db, ProllyHash *pHash);
 void doltliteSetSessionConstraintViolationsCatalog(sqlite3 *db, const ProllyHash *pHash);
 int doltliteSessionHasConstraintViolations(sqlite3 *db);
+int doltliteSeedSessionHashes(sqlite3 *db, ChunkStore *cs,
+                              int (*xPush)(void*, const ProllyHash*),
+                              void *pCtx);
 int doltliteGetSessionTableRoot(sqlite3 *db, Pgno iTable,
                                  ProllyHash *pRoot, u8 *pFlags);
 int doltliteSaveWorkingSet(sqlite3 *db);
