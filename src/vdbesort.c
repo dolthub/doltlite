@@ -844,7 +844,10 @@ static int vdbeSorterCompareText(
       goto text_compare_slow;
     }
     if( n1>0 && n2>0 && (res = (int)v1[0] - (int)v2[0])==0 ){
-      res = memcmp(v1+1, v2+1, MIN(n1, n2)-1);
+      int nCmp = MIN(n1, n2);
+      if( nCmp>1 && (res = (int)v1[1] - (int)v2[1])==0 ){
+        res = nCmp>2 ? memcmp(v1+2, v2+2, nCmp-2) : 0;
+      }
     }else if( n1==0 || n2==0 ){
       res = 0;
     }
