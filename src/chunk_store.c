@@ -1365,9 +1365,10 @@ const char *chunkStoreFilename(ChunkStore *cs){
   return cs->file.zFilename;
 }
 
-int chunkStoreLockAndRefresh(ChunkStore *cs){
+int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
   int changed = 0;
   int rc;
+  if( pChanged ) *pChanged = 0;
   if( cs->isMemory ) return SQLITE_OK;
   if( cs->graphLockFd >= 0 ) return SQLITE_OK;
   if( !cs->file.zFilename ) return SQLITE_ERROR;
@@ -1378,8 +1379,14 @@ int chunkStoreLockAndRefresh(ChunkStore *cs){
   if( rc!=SQLITE_OK ){
     csFileUnlock(cs->graphLockFd);
     cs->graphLockFd = -1;
+  }else if( pChanged ){
+    *pChanged = changed;
   }
   return rc;
+}
+
+int chunkStoreLockAndRefresh(ChunkStore *cs){
+  return chunkStoreLockAndRefreshChanged(cs, 0);
 }
 
 void chunkStoreUnlock(ChunkStore *cs){
