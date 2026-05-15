@@ -46,6 +46,7 @@ TESTS=(
   doltlite_history.sh
   doltlite_at.sh
   doltlite_schema_diff.sh
+  doltlite_dolt_table_pushdown.sh
 
   # Storage and persistence
   doltlite_persistence.sh

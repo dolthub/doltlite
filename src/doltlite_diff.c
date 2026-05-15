@@ -105,6 +105,7 @@ struct DoltliteDiffVtab {
 };
 
 #define DIFF_IDX_TABLE_NAME  0x01
+#define DIFF_IDX_COMMIT_HASH 0x02
 
 typedef struct DoltliteDiffCursor DoltliteDiffCursor;
 struct DoltliteDiffCursor {
@@ -120,6 +121,7 @@ struct DoltliteDiffCursor {
   int phase;
   int hasRow;
   i64 iRowid;
+  int singleCommit;
 };
 
 static const char *diffSchema =
@@ -386,32 +388,34 @@ static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
       return rc;
     }
 
-    for(i=0; i<doltliteCommitParentCount(&commit); i++){
-      const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
-      if( !pParent || prollyHashIsEmpty(pParent) ) continue;
-      if( prollyHashSetContains(&pCur->visited, pParent) ) continue;
-      if( prollyHashSetContains(&pCur->queued,  pParent) ) continue;
-      if( pCur->qTail >= pCur->qAlloc ){
-        i64 nNew = (i64)pCur->qAlloc * 2;
-        i64 nBytes;
-        ProllyHash *tmp;
-        if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ){
-          doltliteCommitClear(&commit);
-          return SQLITE_NOMEM;
+    if( !pCur->singleCommit ){
+      for(i=0; i<doltliteCommitParentCount(&commit); i++){
+        const ProllyHash *pParent = doltliteCommitParentHash(&commit, i);
+        if( !pParent || prollyHashIsEmpty(pParent) ) continue;
+        if( prollyHashSetContains(&pCur->visited, pParent) ) continue;
+        if( prollyHashSetContains(&pCur->queued,  pParent) ) continue;
+        if( pCur->qTail >= pCur->qAlloc ){
+          i64 nNew = (i64)pCur->qAlloc * 2;
+          i64 nBytes;
+          ProllyHash *tmp;
+          if( nNew > (i64)0x7fffffff/(i64)sizeof(ProllyHash) ){
+            doltliteCommitClear(&commit);
+            return SQLITE_NOMEM;
+          }
+          nBytes = nNew * (i64)sizeof(ProllyHash);
+          tmp = sqlite3_realloc(pCur->aQueue, (int)nBytes);
+          if( !tmp ){
+            doltliteCommitClear(&commit);
+            return SQLITE_NOMEM;
+          }
+          pCur->aQueue = tmp; pCur->qAlloc = (int)nNew;
         }
-        nBytes = nNew * (i64)sizeof(ProllyHash);
-        tmp = sqlite3_realloc(pCur->aQueue, (int)nBytes);
-        if( !tmp ){
+        pCur->aQueue[pCur->qTail++] = *pParent;
+        rc = prollyHashSetAdd(&pCur->queued, pParent);
+        if( rc!=SQLITE_OK ){
           doltliteCommitClear(&commit);
-          return SQLITE_NOMEM;
+          return rc;
         }
-        pCur->aQueue = tmp; pCur->qAlloc = (int)nNew;
-      }
-      pCur->aQueue[pCur->qTail++] = *pParent;
-      rc = prollyHashSetAdd(&pCur->queued, pParent);
-      if( rc!=SQLITE_OK ){
-        doltliteCommitClear(&commit);
-        return rc;
       }
     }
     doltliteCommitClear(&commit);
@@ -468,26 +472,47 @@ static int diffDisconnect(sqlite3_vtab *pVtab){
 
 static int diffBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int iTableName = -1;
+  int iCommitHash = -1;
   int i;
   int argvIdx = 1;
+  int idxNum = 0;
   (void)pVtab;
 
   for(i=0; i<pInfo->nConstraint; i++){
     if( !pInfo->aConstraint[i].usable ) continue;
     if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
     switch( pInfo->aConstraint[i].iColumn ){
-      case DIFF_COL_TABLE_NAME:  iTableName  = i; break;
+      case DIFF_COL_TABLE_NAME:
+        if( iTableName<0 ) iTableName = i;
+        break;
+      case DIFF_COL_COMMIT_HASH:
+        if( iCommitHash<0 ) iCommitHash = i;
+        break;
     }
   }
 
+  if( iCommitHash>=0 ){
+    pInfo->aConstraintUsage[iCommitHash].argvIndex = argvIdx++;
+    pInfo->aConstraintUsage[iCommitHash].omit = 1;
+    idxNum |= DIFF_IDX_COMMIT_HASH;
+  }
   if( iTableName>=0 ){
     pInfo->aConstraintUsage[iTableName].argvIndex = argvIdx++;
     pInfo->aConstraintUsage[iTableName].omit = 1;
+    idxNum |= DIFF_IDX_TABLE_NAME;
   }
 
-  pInfo->idxNum = (iTableName>=0  ? DIFF_IDX_TABLE_NAME  : 0);
-  pInfo->estimatedCost = (iTableName>=0) ? 1000.0 : 100000.0;
-  pInfo->estimatedRows = 100;
+  pInfo->idxNum = idxNum;
+  if( idxNum & DIFF_IDX_COMMIT_HASH ){
+    pInfo->estimatedCost = 10.0;
+    pInfo->estimatedRows = 1;
+  }else if( idxNum & DIFF_IDX_TABLE_NAME ){
+    pInfo->estimatedCost = 1000.0;
+    pInfo->estimatedRows = 100;
+  }else{
+    pInfo->estimatedCost = 100000.0;
+    pInfo->estimatedRows = 100;
+  }
   return SQLITE_OK;
 }
 
@@ -515,11 +540,32 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   sqlite3 *db = pVtab->db;
   ChunkStore *cs;
   ProllyHash head;
+  ProllyHash startHash;
   int argIdx = 0;
   int rc;
+  int useStart = 0;
+  int workingOnly = 0;
+  const char *zHashArg = 0;
   (void)idxStr;
 
   diffCursorReset(pCur);
+  memset(&startHash, 0, sizeof(startHash));
+
+  if( (idxNum & DIFF_IDX_COMMIT_HASH) && argIdx<argc ){
+    zHashArg = (const char*)sqlite3_value_text(argv[argIdx++]);
+    if( zHashArg ){
+      if( strcmp(zHashArg, "WORKING")==0 ){
+        workingOnly = 1;
+      }else if( doltliteHexToHash(zHashArg, &startHash)==SQLITE_OK
+                && !prollyHashIsEmpty(&startHash) ){
+        useStart = 1;
+      }else{
+        return SQLITE_OK;
+      }
+    }else{
+      return SQLITE_OK;
+    }
+  }
 
   if( (idxNum & DIFF_IDX_TABLE_NAME) && argIdx<argc ){
     const char *z = (const char*)sqlite3_value_text(argv[argIdx++]);
@@ -532,8 +578,23 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   cs = doltliteGetChunkStore(db);
   if( !cs ) return SQLITE_OK;
 
-  doltliteGetSessionHead(db, &head);
-  if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+  if( useStart ){
+    head = startHash;
+    pCur->singleCommit = 1;
+  }else if( workingOnly ){
+    pCur->phase = 0;
+    rc = computeWorkingBatch(pCur, db);
+    if( rc!=SQLITE_OK ) return rc;
+    pCur->phase = 2;
+    if( pCur->nBatch>0 ){
+      pCur->hasRow = 1;
+    }
+    return SQLITE_OK;
+  }else{
+    doltliteGetSessionHead(db, &head);
+    if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+    pCur->singleCommit = 0;
+  }
 
   rc = prollyHashSetInit(&pCur->visited, 64);
   if( rc!=SQLITE_OK ) return rc;
@@ -551,7 +612,11 @@ static int diffFilter(sqlite3_vtab_cursor *pCursor,
   rc = prollyHashSetAdd(&pCur->queued, &head);
   if( rc!=SQLITE_OK ) return rc;
 
-  pCur->phase = 0;
+  if( useStart ){
+    pCur->phase = 1;
+  }else{
+    pCur->phase = 0;
+  }
   return diffAdvance(pCur, db);
 }
 
