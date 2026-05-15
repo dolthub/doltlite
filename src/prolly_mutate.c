@@ -176,6 +176,15 @@ static int streamingMergeNode(
   int rc = SQLITE_OK;
   int i;
 
+#ifdef DOLTLITE_PROLLY_CHECK
+  if( pNode->level == 0 ){
+    fprintf(stderr,
+            "doltlite: E8 invariant: streamingMergeNode called on a "
+            "level-0 (leaf) node; expected internal\n");
+    abort();
+  }
+#endif
+
   for( i = 0; i < pNode->nItems; i++ ){
     const u8 *pBoundKey; int nBoundKey;
     const u8 *pChildVal; int nChildVal;
@@ -213,6 +222,16 @@ static int streamingMergeNode(
         if( !pChildEntry ) return rc;
       }
 
+#ifdef DOLTLITE_PROLLY_CHECK
+      if( pChildEntry->node.level != pNode->level - 1 ){
+        fprintf(stderr,
+                "doltlite: E8 invariant: parent level=%d but child level=%d "
+                "(expected %d)\n",
+                (int)pNode->level, (int)pChildEntry->node.level,
+                (int)pNode->level - 1);
+        abort();
+      }
+#endif
       if( pChildEntry->node.level == 0 ){
         rc = mergeLeaf(pMut, &pChildEntry->node, pChunker, pIter, childIsLast);
       }else{
