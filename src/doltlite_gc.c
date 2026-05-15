@@ -67,7 +67,33 @@ static int gcChildCb(void *ctx, const ProllyHash *pHash){
   return gcQueuePush(q, pHash);
 }
 
+#ifdef DOLTLITE_PROLLY_CHECK
+typedef struct GcVerifyCtx GcVerifyCtx;
+struct GcVerifyCtx { ChunkStore *cs; int rc; };
+
+static int gcVerifyHashCb(void *ctx, const ProllyHash *pHash){
+  GcVerifyCtx *v = (GcVerifyCtx*)ctx;
+  u8 *data = 0; int nData = 0;
+  if( prollyHashIsEmpty(pHash) ) return SQLITE_OK;
+  v->rc = chunkStoreGet(v->cs, pHash, &data, &nData);
+  sqlite3_free(data);
+  if( v->rc!=SQLITE_OK ){
+    fprintf(stderr,
+            "doltlite: GC invariant: session hash unreachable after sweep\n");
+    abort();
+  }
+  return SQLITE_OK;
+}
+
+static void gcVerifySessionResolvable(sqlite3 *db, ChunkStore *cs){
+  GcVerifyCtx v;
+  v.cs = cs; v.rc = SQLITE_OK;
+  (void)doltliteSeedSessionHashes(db, cs, gcVerifyHashCb, &v);
+}
+#endif
+
 static int gcMarkReachable(
+  sqlite3 *db,
   ChunkStore *cs,
   ProllyHashSet *marked
 ){
@@ -103,6 +129,10 @@ static int gcMarkReachable(
     for(i=0; rc==SQLITE_OK && i<nPend; i++){
       rc = gcQueuePush(&queue, &aPend[i].hash);
     }
+  }
+
+  if( rc==SQLITE_OK ){
+    rc = doltliteSeedSessionHashes(db, cs, gcChildCb, &queue);
   }
 
   if( rc!=SQLITE_OK ){
@@ -603,7 +633,7 @@ static void doltliteGcFunc(
     return;
   }
 
-  rc = gcMarkReachable(cs, &marked);
+  rc = gcMarkReachable(db, cs, &marked);
   if( rc!=SQLITE_OK ){
     prollyHashSetFree(&marked);
     chunkStoreUnlock(cs);
@@ -613,6 +643,9 @@ static void doltliteGcFunc(
 
   rc = gcSweep(cs, &marked, &nKept, &nRemoved);
   prollyHashSetFree(&marked);
+#ifdef DOLTLITE_PROLLY_CHECK
+  if( rc==SQLITE_OK ) gcVerifySessionResolvable(db, cs);
+#endif
   chunkStoreUnlock(cs);
 
   if( rc!=SQLITE_OK ){
@@ -645,11 +678,14 @@ int doltliteGcCompact(sqlite3 *db){
     return rc;
   }
 
-  rc = gcMarkReachable(cs, &marked);
+  rc = gcMarkReachable(db, cs, &marked);
   if( rc==SQLITE_OK ){
     rc = gcSweep(cs, &marked, &nKept, &nRemoved);
   }
   prollyHashSetFree(&marked);
+#ifdef DOLTLITE_PROLLY_CHECK
+  if( rc==SQLITE_OK ) gcVerifySessionResolvable(db, cs);
+#endif
   chunkStoreUnlock(cs);
   return rc;
 }
