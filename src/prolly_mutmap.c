@@ -651,10 +651,7 @@ int prollyMutMapDelete(
         if( rc!=SQLITE_OK ) return rc;
       }
       e->op = PROLLY_EDIT_DELETE;
-      sqlite3_free(e->pVal);
-      e->pVal = 0;
       e->nVal = 0;
-      e->nValAlloc = 0;
       e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
       return SQLITE_OK;
     }
