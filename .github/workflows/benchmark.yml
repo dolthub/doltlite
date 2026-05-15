@@ -114,10 +114,8 @@ jobs:
 
   # Runs three non-INTKEY sysbench variants (TEXT PK, BLOB PK, composite
   # PK). Each is gated on both individual ratios and section average
-  # ratios. Individual ceiling is 2.25x (vs int-keys' 2x) because the
-  # per-statement flush these variants exercise is intrinsically more
-  # sensitive to GH runner hardware variance — 2.0x produced flake at
-  # 9 runs even when the underlying delta wasn't a regression.
+  # ratios. Individual ceiling is 1.8x after recent write-path perf work
+  # brought the slowest variants comfortably below the previous gates.
   # BENCH_RUNS=13 (vs int-keys' 21) because each non-INTKEY write is a
   # per-statement flush and runs slower per iteration.
   text-blob-comp-keys:
@@ -126,8 +124,8 @@ jobs:
 
     env:
       BENCH_RUNS: 13
-      BENCH_MAX_MULTIPLIER: 2.25
-      BENCH_AVG_MAX_MULTIPLIER: 1.6
+      BENCH_MAX_MULTIPLIER: 1.8
+      BENCH_AVG_MAX_MULTIPLIER: 1.5
 
     steps:
     - uses: actions/checkout@v4
