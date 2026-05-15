@@ -276,6 +276,7 @@ int doltliteParseRecordStrict(
     int nField;
     int nSerial;
     if( stBytes<=0 ) return SQLITE_CORRUPT;
+    if( st==10 || st==11 ) return SQLITE_CORRUPT;
     nField = pInfo->nField;
     if( nField >= DOLTLITE_MAX_RECORD_FIELDS ) return SQLITE_CORRUPT;
     p += stBytes;

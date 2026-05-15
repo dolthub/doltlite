@@ -75,6 +75,7 @@ TESTS=(
   doltlite_attach_sqlite.sh
   doltlite_dbpage.sh
   doltlite_open_sqlite_file.sh
+  doltlite_record_format.sh
   doltlite_schema_cookie.sh
   doltlite_behavior.sh
   doltlite_branch_edge.sh
