@@ -121,6 +121,9 @@ void origBtreeTripAllCursors(void *p, int e, int w){
 }
 void origBtreeCursorPin(void *pCur){ orig_sqlite3BtreeCursorPin(C(pCur)); }
 void origBtreeCursorUnpin(void *pCur){ orig_sqlite3BtreeCursorUnpin(C(pCur)); }
+int origBtreeCursorIsValidNN(void *pCur){
+  return orig_sqlite3BtreeCursorIsValidNN(C(pCur));
+}
 int origBtreeTransferRow(void *pDest, void *pSrc, i64 iKey){
   return orig_sqlite3BtreeTransferRow(C(pDest), C(pSrc), iKey);
 }

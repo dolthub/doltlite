@@ -3492,6 +3492,7 @@ int sqlite3BtreeOpen(
     rc = origBtreeOpen(pVfs, zFilename, db, &p->pOrigBtree, flags, vfsFlags);
     if( rc!=SQLITE_OK ){ sqlite3_free(p); return rc; }
     *ppBtree = p;
+    registerDoltiteFunctions(db);
     return SQLITE_OK;
   }
 
@@ -7637,8 +7638,14 @@ static void doltiteEngineFunc(
   int argc,
   sqlite3_value **argv
 ){
+  sqlite3 *db = sqlite3_context_db_handle(context);
+  const char *zEngine = "prolly";
   (void)argc; (void)argv;
-  sqlite3_result_text(context, "prolly", -1, SQLITE_STATIC);
+  if( db && db->nDb>0 && db->aDb[0].pBt
+   && db->aDb[0].pBt->pOps==&origBtreeVtOps ){
+    zEngine = "orig";
+  }
+  sqlite3_result_text(context, zEngine, -1, SQLITE_STATIC);
 }
 
 ChunkStore *doltliteGetChunkStore(sqlite3 *db){
@@ -8751,8 +8758,7 @@ static int origCursorCursorIsValidVt(BtCursor *pCur){
 }
 #endif
 static int origCursorCursorIsValidNNVt(BtCursor *pCur){
-  (void)pCur;
-  return 1;
+  return origBtreeCursorIsValidNN(pCur->pOrigCursor);
 }
 
 extern void doltliteRegister(sqlite3 *db);
