@@ -9,6 +9,7 @@
 #define MUTMAP_INIT_CAP 16
 #define MUTMAP_MIN_HASH 32
 #define MUTMAP_POS_UPDATE_LIMIT 64
+#define MUTMAP_RADIX_SORT_MIN 128
 
 i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e){
   const u8 *p = e->pKey;
@@ -77,6 +78,7 @@ static ProllyMutMapEntry *entryAtOrder(ProllyMutMap *mm, int idx){
 }
 
 static int compareEntryToKey(
+  ProllyMutMap *mm,
   const ProllyMutMapEntry *e,
   const u8 *pKey, int nKey,
   u64 keyPrefix
@@ -84,6 +86,7 @@ static int compareEntryToKey(
   if( e->keyPrefix != keyPrefix ){
     return e->keyPrefix < keyPrefix ? -1 : 1;
   }
+  if( mm->isIntKey ) return 0;
   return compareEntries(e->pKey, e->nKey, pKey, nKey);
 }
 
@@ -108,6 +111,7 @@ typedef struct OrderPair {
 static int orderPairCmp(ProllyMutMap *mm, const OrderPair *a, const OrderPair *b){
   ProllyMutMapEntry *ea, *eb;
   if( a->prefix != b->prefix ) return a->prefix < b->prefix ? -1 : 1;
+  if( mm->isIntKey ) return 0;
   ea = &mm->aEntries[a->phys];
   eb = &mm->aEntries[b->phys];
   return compareEntries(ea->pKey, ea->nKey, eb->pKey, eb->nKey);
@@ -158,10 +162,17 @@ static void mutmapQuickSort(ProllyMutMap *mm, OrderPair *a, int lo, int hi){
 static int mutmapSortOrder(ProllyMutMap *mm){
   int n = mm->nEntries;
   OrderPair *scratch;
+  OrderPair *aux = 0;
   int needBytes;
   int i;
   if( n <= 1 ) return SQLITE_OK;
   needBytes = (int)(mm->nAlloc * sizeof(OrderPair));
+  if( n >= MUTMAP_RADIX_SORT_MIN ){
+    if( mm->nAlloc > 0x7fffffff / (int)(2 * sizeof(OrderPair)) ){
+      return SQLITE_TOOBIG;
+    }
+    needBytes = (int)(mm->nAlloc * 2 * sizeof(OrderPair));
+  }
   if( mm->nSortScratchBytes < needBytes ){
     void *p = sqlite3_realloc(mm->aSortScratch, needBytes);
     if( !p ) return SQLITE_NOMEM;
@@ -175,7 +186,42 @@ static int mutmapSortOrder(ProllyMutMap *mm){
     scratch[i].phys = i;
     scratch[i].pad = 0;
   }
-  mutmapQuickSort(mm, scratch, 0, n - 1);
+  if( n >= MUTMAP_RADIX_SORT_MIN ){
+    int pass;
+    aux = scratch + mm->nAlloc;
+    for(pass=0; pass<8; pass++){
+      int count[256];
+      int pos[256];
+      int shift = pass * 8;
+      memset(count, 0, sizeof(count));
+      for(i=0; i<n; i++){
+        count[(scratch[i].prefix >> shift) & 0xff]++;
+      }
+      pos[0] = 0;
+      for(i=1; i<256; i++){
+        pos[i] = pos[i-1] + count[i-1];
+      }
+      for(i=0; i<n; i++){
+        int b = (scratch[i].prefix >> shift) & 0xff;
+        aux[pos[b]++] = scratch[i];
+      }
+      {
+        OrderPair *tmp = scratch;
+        scratch = aux;
+        aux = tmp;
+      }
+    }
+    for(i=0; i<n; ){
+      int j = i + 1;
+      while( j<n && scratch[j].prefix==scratch[i].prefix ) j++;
+      if( j-i > 1 ){
+        mutmapQuickSort(mm, scratch, i, j - 1);
+      }
+      i = j;
+    }
+  }else{
+    mutmapQuickSort(mm, scratch, 0, n - 1);
+  }
   for(i=0; i<n; i++){
     mm->aOrder[i] = scratch[i].phys;
   }
@@ -282,7 +328,7 @@ static int bsearch_key(ProllyMutMap *mm,
   while( lo < hi ){
     int mid = lo + (hi - lo) / 2;
     ProllyMutMapEntry *e = entryAtOrder(mm, mid);
-    int c = compareEntryToKey(e, pKey, nKey, prefix);
+    int c = compareEntryToKey(mm, e, pKey, nKey, prefix);
     if( c < 0 ){
       lo = mid + 1;
     }else if( c > 0 ){
@@ -301,9 +347,11 @@ static int hashEntryMatches(
   u32 h
 ){
   ProllyMutMapEntry *e = &mm->aEntries[phys];
-  return e->keyHash==h
-      && e->nKey==nKey
-      && memcmp(e->pKey, pKey, nKey)==0;
+  if( e->keyHash!=h ) return 0;
+  if( mm->isIntKey ){
+    return e->keyPrefix==keyPrefix64(pKey, nKey);
+  }
+  return e->nKey==nKey && memcmp(e->pKey, pKey, nKey)==0;
 }
 
 static int rebuildHash(ProllyMutMap *mm){
