@@ -66,6 +66,7 @@ int origBtreeClosesWithCursor(void *p, void *pCur);
 void origBtreeTripAllCursors(void *p, int errCode, int writeOnly);
 void origBtreeCursorPin(void *pCur);
 void origBtreeCursorUnpin(void *pCur);
+int origBtreeCursorIsValidNN(void *pCur);
 int origBtreeTransferRow(void *pDest, void *pSrc, i64 iKey);
 void origBtreeEnterAll(sqlite3 *db);
 void origBtreeLeaveAll(sqlite3 *db);

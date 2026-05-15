@@ -11,13 +11,6 @@
 # anything the stock binary can do on that file, doltlite should also
 # be able to do. dolt_* VC features are out of scope (the file isn't
 # in doltlite format).
-#
-# KNOWN BUGS — these tests are skipped today and will be removed once
-# the underlying bugs are fixed in a follow-up PR:
-#   - CREATE INDEX on a populated table SIGSEGVs in orig_sqlite3BtreeInsert
-#     when run via the doltlite binary on a SQLite-format file. The same
-#     SQL works in the stock sqlite3 binary. Repro: any pre-populated
-#     SQLite file + CREATE INDEX over a column.
 
 DOLTLITE="${1:-./doltlite}"
 SQLITE3=$(command -v sqlite3 2>/dev/null || echo /usr/bin/sqlite3)
@@ -130,9 +123,10 @@ want_eq "D2_drop_table" \
 want_eq "D3_alter_table_add_column" \
   "$(dl_last "ALTER TABLE existing ADD COLUMN v TEXT; INSERT INTO existing(id,v) VALUES(7,'seven'); SELECT v FROM existing WHERE id=7;" "$DB")" "seven"
 
-# Known bug: CREATE INDEX on populated table crashes
-skip "D4_create_index_on_populated_table" \
-  "CREATE INDEX SIGSEGVs in orig_sqlite3BtreeInsert when source has rows; works in stock sqlite3 binary"
+DB=$TMP/d4.db
+seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');"
+want_eq "D4_create_index_on_populated_table" \
+  "$(dl_last "CREATE INDEX idx_v ON t(v); SELECT id FROM t WHERE v='b';" "$DB")" "2"
 
 # Variant — empty table.
 DB=$TMP/d5.db
@@ -145,8 +139,10 @@ seed_stock "$DB" "CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); CREATE INDEX i
 want_eq "D6_drop_pre_existing_index" \
   "$(dl_last "DROP INDEX idx_v; SELECT count(*) FROM sqlite_master WHERE type='index';" "$DB")" "0"
 
-skip "D7_reindex_populated_table" \
-  "REINDEX hits the same orig_sqlite3BtreeInsert crash path as CREATE INDEX"
+DB=$TMP/d7.db
+seed_stock "$DB" "CREATE TABLE u(id INTEGER PRIMARY KEY, v TEXT); CREATE INDEX idx_v ON u(v); INSERT INTO u VALUES(1,'a'),(2,'b');"
+want_eq "D7_reindex_populated_table" \
+  "$(dl_last "REINDEX; SELECT id FROM u WHERE v='b';" "$DB")" "2"
 
 # ============================================================
 # Constraints (declared at table-create time)
@@ -203,15 +199,15 @@ echo "--- VC features on non-doltlite file ---"
 
 DB=$TMP/v1.db
 seed_stock "$DB" "CREATE TABLE t(id INTEGER PRIMARY KEY);"
-# Connection-level functions should still be registered when the
-# opened file is in stock-SQLite format. Currently they aren't.
-skip "V1_doltlite_engine_reports_orig" \
-  "doltlite_engine() not registered when opened file is stock SQLite; should return 'orig'"
+# Connection-level functions are registered for both routes; on a
+# stock-format file doltlite_engine() reports 'orig'.
+want_eq "V1_doltlite_engine_reports_orig" \
+  "$(dl_last "SELECT doltlite_engine();" "$DB")" "orig"
 
-# dolt_log on a stock-format file: should error, not crash.
-# Skipped today because the error path output isn't stable.
-skip "V2_dolt_log_errors_gracefully" \
-  "dolt_log behavior on stock-format file is undefined; needs explicit rejection or pass-through"
+# dolt_log on a stock-format file: should pass through with no rows
+# rather than erroring or crashing.
+want_eq "V2_dolt_log_empty_on_stock_format" \
+  "$(dl_last "SELECT count(*) FROM dolt_log;" "$DB")" "0"
 
 # ============================================================
 # Durability across reopen
