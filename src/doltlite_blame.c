@@ -13,6 +13,13 @@
 #include <string.h>
 #include <time.h>
 
+#define BLAME_IDX_PK_EQ 0x01
+#define BLAME_IDX_PK_GE 0x02
+#define BLAME_IDX_PK_LE 0x04
+#define BLAME_IDX_PK_GT 0x08
+#define BLAME_IDX_PK_LT 0x10
+#define BLAME_IDX_PK_ANY (BLAME_IDX_PK_EQ|BLAME_IDX_PK_GE|BLAME_IDX_PK_LE|BLAME_IDX_PK_GT|BLAME_IDX_PK_LT)
+
 typedef struct BlameRow BlameRow;
 struct BlameRow {
   i64 intKey;
@@ -47,6 +54,12 @@ struct BlameCursor {
   int nUnresolved;
   int iRow;
 };
+
+static int blameIntPkEnabled(const BlameVtab *v){
+  if( v->nPkCols != 1 ) return 0;
+  if( v->intPkCid < 0 ) return 0;
+  return 1;
+}
 
 typedef struct BlamePkTmp BlamePkTmp;
 struct BlamePkTmp {
@@ -196,20 +209,53 @@ static int blameCollectLiveRows(
   ChunkStore *cs,
   ProllyCache *pCache,
   const ProllyHash *pRoot,
-  u8 flags
+  u8 flags,
+  int idxNum,
+  i64 pkLo, int hasPkLo, int pkLoStrict,
+  i64 pkHi, int hasPkHi, int pkHiStrict
 ){
   ProllyCursor cur;
   int res, rc;
+  int pushIntKey = (flags & PROLLY_NODE_INTKEY) != 0
+                  && (idxNum & BLAME_IDX_PK_ANY) != 0;
 
   if( prollyHashIsEmpty(pRoot) ) return SQLITE_OK;
   prollyCursorInit(&cur, cs, pCache, pRoot, flags);
-  rc = prollyCursorFirst(&cur, &res);
-  if( rc!=SQLITE_OK || res ){ prollyCursorClose(&cur); return rc; }
+
+  if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) ){
+    rc = prollyCursorSeekInt(&cur, pkLo, &res);
+    if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
+    if( res!=0 || !prollyCursorIsValid(&cur) ){
+      prollyCursorClose(&cur);
+      return SQLITE_OK;
+    }
+  }else if( pushIntKey && hasPkLo ){
+    i64 startKey = pkLo;
+    if( pkLoStrict ) startKey++;
+    rc = prollyCursorSeekInt(&cur, startKey, &res);
+    if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
+    if( res<0 ){
+      rc = prollyCursorNext(&cur);
+      if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
+    }
+  }else{
+    rc = prollyCursorFirst(&cur, &res);
+    if( rc!=SQLITE_OK || res ){ prollyCursorClose(&cur); return rc; }
+  }
 
   while( prollyCursorIsValid(&cur) ){
     const u8 *pKey = 0, *pVal = 0;
     int nKey = 0, nVal = 0;
     BlameRow *r;
+
+    if( pushIntKey && (idxNum & BLAME_IDX_PK_EQ) ){
+      i64 k = prollyCursorIntKey(&cur);
+      if( k != pkLo ) break;
+    }else if( pushIntKey && hasPkHi ){
+      i64 k = prollyCursorIntKey(&cur);
+      if( pkHiStrict ){ if( k >= pkHi ) break; }
+      else { if( k > pkHi ) break; }
+    }
 
     rc = DOLTLITE_GROW_ARRAY(&pCur->aRows, &pCur->nAlloc, pCur->nRows + 1, 64);
     if( rc!=SQLITE_OK ){ prollyCursorClose(&cur); return rc; }
@@ -663,9 +709,66 @@ static int bmDisconnect(sqlite3_vtab *pVtab){
 }
 
 static int bmBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
-  (void)pVtab;
+  BlameVtab *v = (BlameVtab*)pVtab;
+  int iEq = -1, iGe = -1, iLe = -1, iGt = -1, iLt = -1;
+  int i, nArg = 0, idxNum = 0;
+
   pInfo->estimatedCost = 100000.0;
-  pInfo->estimatedRows = 100;
+  pInfo->estimatedRows = 1000;
+
+  if( !blameIntPkEnabled(v) ){
+    pInfo->idxNum = 0;
+    return SQLITE_OK;
+  }
+
+  for(i=0; i<pInfo->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( !pC->usable ) continue;
+    if( pC->iColumn != 0 ) continue;
+    switch( pC->op ){
+      case SQLITE_INDEX_CONSTRAINT_EQ: if( iEq<0 ) iEq = i; break;
+      case SQLITE_INDEX_CONSTRAINT_GE: if( iGe<0 ) iGe = i; break;
+      case SQLITE_INDEX_CONSTRAINT_LE: if( iLe<0 ) iLe = i; break;
+      case SQLITE_INDEX_CONSTRAINT_GT: if( iGt<0 ) iGt = i; break;
+      case SQLITE_INDEX_CONSTRAINT_LT: if( iLt<0 ) iLt = i; break;
+      default: break;
+    }
+  }
+
+  if( iEq >= 0 ){
+    pInfo->aConstraintUsage[iEq].argvIndex = ++nArg;
+    pInfo->aConstraintUsage[iEq].omit = 1;
+    idxNum |= BLAME_IDX_PK_EQ;
+    pInfo->estimatedCost = 100.0;
+    pInfo->estimatedRows = 1;
+  }else{
+    if( iGe >= 0 ){
+      pInfo->aConstraintUsage[iGe].argvIndex = ++nArg;
+      pInfo->aConstraintUsage[iGe].omit = 1;
+      idxNum |= BLAME_IDX_PK_GE;
+    }
+    if( iGt >= 0 ){
+      pInfo->aConstraintUsage[iGt].argvIndex = ++nArg;
+      pInfo->aConstraintUsage[iGt].omit = 1;
+      idxNum |= BLAME_IDX_PK_GT;
+    }
+    if( iLe >= 0 ){
+      pInfo->aConstraintUsage[iLe].argvIndex = ++nArg;
+      pInfo->aConstraintUsage[iLe].omit = 1;
+      idxNum |= BLAME_IDX_PK_LE;
+    }
+    if( iLt >= 0 ){
+      pInfo->aConstraintUsage[iLt].argvIndex = ++nArg;
+      pInfo->aConstraintUsage[iLt].omit = 1;
+      idxNum |= BLAME_IDX_PK_LT;
+    }
+    if( idxNum != 0 ){
+      pInfo->estimatedCost = 1000.0;
+      pInfo->estimatedRows = 100;
+    }
+  }
+
+  pInfo->idxNum = idxNum;
   return SQLITE_OK;
 }
 
@@ -698,10 +801,56 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   ProllyHash tableRoot;
   u8 tableFlags = 0;
   int rc;
-  (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  int iArg = 0;
+  i64 pkLo = 0, pkHi = 0;
+  int hasPkLo = 0, hasPkHi = 0;
+  int pkLoStrict = 0, pkHiStrict = 0;
+  (void)idxStr;
 
   blameFreeRows(c);
   c->iRow = 0;
+
+  if( idxNum & BLAME_IDX_PK_EQ ){
+    if( iArg < argc ){
+      pkLo = sqlite3_value_int64(argv[iArg++]);
+      hasPkLo = 1;
+    }
+  }else{
+    if( idxNum & BLAME_IDX_PK_GE ){
+      if( iArg < argc ){
+        pkLo = sqlite3_value_int64(argv[iArg++]);
+        hasPkLo = 1;
+        pkLoStrict = 0;
+      }
+    }
+    if( idxNum & BLAME_IDX_PK_GT ){
+      if( iArg < argc ){
+        i64 v2 = sqlite3_value_int64(argv[iArg++]);
+        if( !hasPkLo || v2 >= pkLo ){
+          pkLo = v2;
+          hasPkLo = 1;
+          pkLoStrict = 1;
+        }
+      }
+    }
+    if( idxNum & BLAME_IDX_PK_LE ){
+      if( iArg < argc ){
+        pkHi = sqlite3_value_int64(argv[iArg++]);
+        hasPkHi = 1;
+        pkHiStrict = 0;
+      }
+    }
+    if( idxNum & BLAME_IDX_PK_LT ){
+      if( iArg < argc ){
+        i64 v2 = sqlite3_value_int64(argv[iArg++]);
+        if( !hasPkHi || v2 <= pkHi ){
+          pkHi = v2;
+          hasPkHi = 1;
+          pkHiStrict = 1;
+        }
+      }
+    }
+  }
 
   if( !cs || !pCache ) return SQLITE_OK;
 
@@ -718,7 +867,10 @@ static int bmFilter(sqlite3_vtab_cursor *pCursor,
   if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = blameCollectLiveRows(c, cs, pCache, &tableRoot, tableFlags);
+  rc = blameCollectLiveRows(c, cs, pCache, &tableRoot, tableFlags,
+                            idxNum,
+                            pkLo, hasPkLo, pkLoStrict,
+                            pkHi, hasPkHi, pkHiStrict);
   if( rc!=SQLITE_OK ){ blameFreeRows(c); return rc; }
   c->nUnresolved = c->nRows;
 

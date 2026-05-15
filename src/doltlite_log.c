@@ -11,6 +11,8 @@
 #include <string.h>
 #include <time.h>
 
+#define LOG_IDX_HASH_EQ 0x01
+
 typedef struct DoltliteLogVtab DoltliteLogVtab;
 struct DoltliteLogVtab {
   sqlite3_vtab base;
@@ -29,6 +31,7 @@ struct DoltliteLogCursor {
   DoltliteCommit curCommit;
   int hasRow;
   i64 iRowid;
+  int singleCommit;
 };
 
 static const char *doltliteLogSchema =
@@ -112,11 +115,20 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
 
     rc = doltliteLoadCommit(db, &cur, &pCur->curCommit);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      if( pCur->singleCommit ){
+        doltliteCommitClear(&pCur->curCommit);
+        memset(&pCur->curCommit, 0, sizeof(pCur->curCommit));
+        return SQLITE_OK;
+      }
+      return rc;
+    }
 
     pCur->curHash = cur;
     doltliteHashToHex(&cur, pCur->zHex);
     pCur->hasRow = 1;
+
+    if( pCur->singleCommit ) return SQLITE_OK;
 
     for(i = 0; i < doltliteCommitParentCount(&pCur->curCommit); i++){
       const ProllyHash *pParent = doltliteCommitParentHash(&pCur->curCommit, i);
@@ -153,17 +165,36 @@ static int doltliteLogFilter(
   DoltliteLogCursor *pCur = (DoltliteLogCursor*)pCursor;
   DoltliteLogVtab *pVtab = (DoltliteLogVtab*)pCursor->pVtab;
   ProllyHash head;
+  ProllyHash startHash;
   ChunkStore *cs;
   int rc;
-  (void)idxNum; (void)idxStr; (void)argc; (void)argv;
+  int useStart = 0;
+  (void)idxStr;
 
   logCursorReset(pCur);
+  memset(&startHash, 0, sizeof(startHash));
+
+  if( (idxNum & LOG_IDX_HASH_EQ) && argc>0 ){
+    const char *z = (const char*)sqlite3_value_text(argv[0]);
+    if( z && doltliteHexToHash(z, &startHash)==SQLITE_OK
+        && !prollyHashIsEmpty(&startHash) ){
+      useStart = 1;
+    }else{
+      return SQLITE_OK;
+    }
+  }
 
   cs = doltliteGetChunkStore(pVtab->db);
   if( !cs ) return SQLITE_OK;
 
-  doltliteGetSessionHead(pVtab->db, &head);
-  if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+  if( useStart ){
+    head = startHash;
+    pCur->singleCommit = 1;
+  }else{
+    doltliteGetSessionHead(pVtab->db, &head);
+    if( prollyHashIsEmpty(&head) ) return SQLITE_OK;
+    pCur->singleCommit = 0;
+  }
 
   rc = prollyHashSetInit(&pCur->visited, 64);
   if( rc!=SQLITE_OK ) return rc;
@@ -232,9 +263,31 @@ static int doltliteLogRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid)
 }
 
 static int doltliteLogBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+  int i, iHashEq = -1;
+  int idxNum = 0;
   (void)pVtab;
-  pInfo->estimatedCost = 1000.0;
-  pInfo->estimatedRows = 100;
+
+  for(i=0; i<pInfo->nConstraint; i++){
+    const struct sqlite3_index_constraint *pC = &pInfo->aConstraint[i];
+    if( !pC->usable ) continue;
+    if( pC->op != SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( pC->iColumn == 0 && iHashEq < 0 ){
+      iHashEq = i;
+    }
+  }
+
+  if( iHashEq >= 0 ){
+    pInfo->aConstraintUsage[iHashEq].argvIndex = 1;
+    pInfo->aConstraintUsage[iHashEq].omit = 1;
+    idxNum |= LOG_IDX_HASH_EQ;
+    pInfo->estimatedCost = 10.0;
+    pInfo->estimatedRows = 1;
+  }else{
+    pInfo->estimatedCost = 1000.0;
+    pInfo->estimatedRows = 100;
+  }
+
+  pInfo->idxNum = idxNum;
   return SQLITE_OK;
 }
 
