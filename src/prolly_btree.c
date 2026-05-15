@@ -2150,11 +2150,13 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   initDefaultMeta(pBtree);
 
   {
-    u32 schemaHash = 0;
-    int j;
-    for(j = 0; j < nData; j++){
-      schemaHash = schemaHash * 31 + data[j];
-    }
+    ProllyHash h;
+    u32 schemaHash;
+    prollyHashCompute(data, nData, &h);
+    schemaHash = ((u32)h.data[0])
+               | ((u32)h.data[1] << 8)
+               | ((u32)h.data[2] << 16)
+               | ((u32)h.data[3] << 24);
     pBtree->aMeta[BTREE_SCHEMA_VERSION] = schemaHash | 1;
   }
 
