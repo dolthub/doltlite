@@ -4873,7 +4873,9 @@ void doltliteRegister(sqlite3 *db){
   }
 
   {
+    extern int doltliteDbpageRegister(sqlite3*);
     extern int doltliteDbpageInstallAutoExt(void);
+    doltliteDbpageRegister(db);
     doltliteDbpageInstallAutoExt();
   }
   doltliteMaybeSeedRepo(db);
