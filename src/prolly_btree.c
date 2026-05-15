@@ -3421,12 +3421,56 @@ static int pushSavepoint(Btree *pBtree, int bStatement){
   return SQLITE_OK;
 }
 
+static int countSubtreeRows(
+  ChunkStore *pStore,
+  ProllyCache *pCache,
+  const ProllyHash *pHash,
+  i64 *pCount
+){
+  ProllyCacheEntry *pEntry = 0;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc = SQLITE_OK;
+  int i;
+  i64 sum = 0;
+
+  pEntry = prollyCacheGet(pCache, pHash);
+  if( !pEntry ){
+    rc = chunkStoreGet(pStore, pHash, &pData, &nData);
+    if( rc!=SQLITE_OK ) return rc;
+    pEntry = prollyCachePut(pCache, pHash, pData, nData, &rc);
+    sqlite3_free(pData);
+    if( !pEntry ) return rc;
+  }
+
+  if( pEntry->node.level==0 ){
+    sum = (i64)pEntry->node.nItems;
+  }else if( prollyNodeHasSubtreeCounts(&pEntry->node) ){
+    for(i=0; i<(int)pEntry->node.nItems; i++){
+      sum += (i64)prollyNodeChildSubtreeCount(&pEntry->node, i);
+    }
+  }else{
+    for(i=0; i<(int)pEntry->node.nItems; i++){
+      ProllyHash childHash;
+      i64 childCount = 0;
+      prollyNodeChildHash(&pEntry->node, i, &childHash);
+      rc = countSubtreeRows(pStore, pCache, &childHash, &childCount);
+      if( rc!=SQLITE_OK ){
+        prollyCacheRelease(pCache, pEntry);
+        return rc;
+      }
+      sum += childCount;
+    }
+  }
+
+  prollyCacheRelease(pCache, pEntry);
+  *pCount = sum;
+  return SQLITE_OK;
+}
+
 static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount){
   int rc;
-  int res;
-  i64 count = 0;
   struct TableEntry *pTE;
-  ProllyCursor tempCur;
   BtShared *pBt = pBtree->pBt;
 
   pTE = findTable(pBtree, iTable);
@@ -3449,35 +3493,13 @@ static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount){
             (unsigned)iTable, (unsigned)pTE->flags, zRoot);
   }
 
-  prollyCursorInit(&tempCur, &pBt->store, &pBt->cache,
-                    &pTE->root, pTE->flags);
-
-  rc = prollyCursorFirst(&tempCur, &res);
+  *pCount = 0;
+  rc = countSubtreeRows(&pBt->store, &pBt->cache, &pTE->root, pCount);
   if( getenv("DOLTLITE_DEBUG_COUNT") && iTable==3 ){
-    fprintf(stderr, "countTreeEntries: rc=%d res=%d state=%d\n", rc, res, tempCur.eState);
+    fprintf(stderr, "countTreeEntries: rc=%d count=%lld\n",
+            rc, (long long)*pCount);
   }
-  if( rc!=SQLITE_OK ){
-    prollyCursorClose(&tempCur);
-    *pCount = 0;
-    return rc;
-  }
-
-  if( res!=0 ){
-    prollyCursorClose(&tempCur);
-    *pCount = 0;
-    return SQLITE_OK;
-  }
-
-  while( tempCur.eState==PROLLY_CURSOR_VALID ){
-    count++;
-    rc = prollyCursorNext(&tempCur);
-    if( rc!=SQLITE_OK ) break;
-    if( tempCur.eState!=PROLLY_CURSOR_VALID ) break;
-  }
-
-  prollyCursorClose(&tempCur);
-  *pCount = count;
-  return SQLITE_OK;
+  return rc;
 }
 
 static int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,

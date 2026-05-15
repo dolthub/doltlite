@@ -16,10 +16,13 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   u16 count;
   int nOffsets;
   int minSize;
+  int expectedSize;
   u32 totalKeyBytes;
   u32 totalValBytes;
   const u8 *pCur;
   int i;
+  u8 keyFlag;
+  int hasCounts;
 
   memset(pNode, 0, sizeof(*pNode));
 
@@ -41,7 +44,12 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   }
   pNode->nItems = count;
   pNode->flags = pData[PROLLY_FLAGS_OFF];
-  if( pNode->flags!=PROLLY_NODE_INTKEY && pNode->flags!=PROLLY_NODE_BLOBKEY ){
+  keyFlag = pNode->flags & (PROLLY_NODE_INTKEY | PROLLY_NODE_BLOBKEY);
+  if( keyFlag!=PROLLY_NODE_INTKEY && keyFlag!=PROLLY_NODE_BLOBKEY ){
+    return SQLITE_CORRUPT;
+  }
+  hasCounts = (pNode->flags & PROLLY_NODE_SUBTREE_COUNTS) ? 1 : 0;
+  if( hasCounts && pNode->level==0 ){
     return SQLITE_CORRUPT;
   }
 
@@ -75,9 +83,17 @@ int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData){
   pNode->pValData = pCur + totalKeyBytes;
 
   totalValBytes = PROLLY_GET_U32((const u8*)&pNode->aValOff[count]);
+  expectedSize = minSize + (int)totalKeyBytes + (int)totalValBytes;
+  if( hasCounts ){
+    expectedSize += (int)count * 8;
+  }
   if( totalKeyBytes > (u32)nData || totalValBytes > (u32)nData
-   || minSize + (int)totalKeyBytes + (int)totalValBytes != nData ){
+   || expectedSize != nData ){
     return SQLITE_CORRUPT;
+  }
+
+  if( hasCounts ){
+    pNode->pSubtreeCounts = pCur + totalKeyBytes + totalValBytes;
   }
 
   for(i=0; i<=count; i++){
@@ -154,6 +170,27 @@ void prollyNodeChildHash(const ProllyNode *pNode, int i, ProllyHash *pHash){
   assert( i >= 0 && i < (int)pNode->nItems );
   off = PROLLY_GET_U32((const u8*)&pNode->aValOff[i]);
   memcpy(pHash->data, pNode->pValData + off, PROLLY_HASH_SIZE);
+}
+
+int prollyNodeHasSubtreeCounts(const ProllyNode *pNode){
+  return (pNode->flags & PROLLY_NODE_SUBTREE_COUNTS) ? 1 : 0;
+}
+
+u64 prollyNodeChildSubtreeCount(const ProllyNode *pNode, int i){
+  const u8 *p;
+  u64 v;
+  assert( i >= 0 && i < (int)pNode->nItems );
+  assert( pNode->pSubtreeCounts != 0 );
+  p = pNode->pSubtreeCounts + (i * 8);
+  v = ((u64)p[0])
+    | ((u64)p[1] << 8)
+    | ((u64)p[2] << 16)
+    | ((u64)p[3] << 24)
+    | ((u64)p[4] << 32)
+    | ((u64)p[5] << 40)
+    | ((u64)p[6] << 48)
+    | ((u64)p[7] << 56);
+  return v;
 }
 
 static SQLITE_INLINE int prollyKeyComparePrefix(
@@ -289,6 +326,30 @@ static int builderGrowOffsets(ProllyNodeBuilder *b){
   return SQLITE_OK;
 }
 
+static int builderGrowSubtreeCounts(ProllyNodeBuilder *b){
+  i64 nNeeded = (i64)b->nItems + 1;
+  if( nNeeded > (i64)0x7fffffff/(i64)sizeof(u64) ) return SQLITE_NOMEM;
+  if( nNeeded > (i64)b->nSubtreeCountAlloc ){
+    i64 nNew = b->nSubtreeCountAlloc
+                 ? (i64)b->nSubtreeCountAlloc * 2 : (i64)PROLLY_BUILDER_INIT_CAP;
+    u64 *aNew;
+    while( nNew < nNeeded ){
+      if( nNew > (i64)0x7fffffff/(i64)sizeof(u64)/2 ){
+        nNew = (i64)0x7fffffff/(i64)sizeof(u64);
+        break;
+      }
+      nNew *= 2;
+    }
+    if( nNew < nNeeded ) return SQLITE_NOMEM;
+    aNew = (u64*)sqlite3_realloc(b->aSubtreeCount,
+                                 (int)(nNew * (i64)sizeof(u64)));
+    if( !aNew ) return SQLITE_NOMEM;
+    b->aSubtreeCount = aNew;
+    b->nSubtreeCountAlloc = (int)nNew;
+  }
+  return SQLITE_OK;
+}
+
 static int builderGrowKeyBuf(ProllyNodeBuilder *b, int nAdd){
   i64 nNeeded;
   if( nAdd<0 ) return SQLITE_NOMEM;
@@ -337,10 +398,11 @@ static int builderGrowValBuf(ProllyNodeBuilder *b, int nAdd){
   return SQLITE_OK;
 }
 
-int prollyNodeBuilderAdd(
+static int builderAddCore(
   ProllyNodeBuilder *b,
   const u8 *pKey, int nKey,
-  const u8 *pVal, int nVal
+  const u8 *pVal, int nVal,
+  u64 subtreeCount, int haveCount
 ){
   int rc;
 
@@ -355,6 +417,11 @@ int prollyNodeBuilderAdd(
   if( rc ) return rc;
   rc = builderGrowValBuf(b, nVal);
   if( rc ) return rc;
+
+  if( haveCount ){
+    rc = builderGrowSubtreeCounts(b);
+    if( rc ) return rc;
+  }
 
   if( b->nItems==0 ){
     b->aKeyOff[0] = 0;
@@ -373,8 +440,29 @@ int prollyNodeBuilderAdd(
   }
   b->aValOff[b->nItems + 1] = (u32)b->nValBytes;
 
+  if( haveCount ){
+    b->aSubtreeCount[b->nItems] = subtreeCount;
+  }
+
   b->nItems++;
   return SQLITE_OK;
+}
+
+int prollyNodeBuilderAdd(
+  ProllyNodeBuilder *b,
+  const u8 *pKey, int nKey,
+  const u8 *pVal, int nVal
+){
+  return builderAddCore(b, pKey, nKey, pVal, nVal, 0, 0);
+}
+
+int prollyNodeBuilderAddWithCount(
+  ProllyNodeBuilder *b,
+  const u8 *pKey, int nKey,
+  const u8 *pVal, int nVal,
+  u64 subtreeCount
+){
+  return builderAddCore(b, pKey, nKey, pVal, nVal, subtreeCount, 1);
 }
 
 int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
@@ -383,12 +471,25 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
   u8 *pBuf;
   u8 *pCur;
   int i;
+  int writeCounts;
+  u8 flagsOut;
 
   *ppOut = 0;
   *pnOut = 0;
 
+  writeCounts = (b->level > 0 && b->aSubtreeCount != 0 && b->nItems > 0) ? 1 : 0;
+  flagsOut = b->flags;
+  if( writeCounts ){
+    flagsOut |= PROLLY_NODE_SUBTREE_COUNTS;
+  }else{
+    flagsOut &= ~PROLLY_NODE_SUBTREE_COUNTS;
+  }
+
   nOff = (b->nItems + 1) * 4;
   nTotal = PROLLY_HDR_SIZE + nOff * 2 + b->nKeyBytes + b->nValBytes;
+  if( writeCounts ){
+    nTotal += b->nItems * 8;
+  }
 
   pBuf = (u8*)sqlite3_malloc(nTotal);
   if( !pBuf ) return SQLITE_NOMEM;
@@ -396,7 +497,7 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
   PROLLY_PUT_U32(pBuf + PROLLY_MAGIC_OFF, PROLLY_NODE_MAGIC);
   pBuf[PROLLY_LEVEL_OFF] = b->level;
   PROLLY_PUT_U16(pBuf + PROLLY_COUNT_OFF, (u16)b->nItems);
-  pBuf[PROLLY_FLAGS_OFF] = b->flags;
+  pBuf[PROLLY_FLAGS_OFF] = flagsOut;
 
   pCur = pBuf + PROLLY_HDR_SIZE;
 
@@ -420,6 +521,21 @@ int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut){
     pCur += b->nValBytes;
   }
 
+  if( writeCounts ){
+    for(i=0; i<b->nItems; i++){
+      u64 v = b->aSubtreeCount[i];
+      pCur[0] = (u8)v;
+      pCur[1] = (u8)(v >> 8);
+      pCur[2] = (u8)(v >> 16);
+      pCur[3] = (u8)(v >> 24);
+      pCur[4] = (u8)(v >> 32);
+      pCur[5] = (u8)(v >> 40);
+      pCur[6] = (u8)(v >> 48);
+      pCur[7] = (u8)(v >> 56);
+      pCur += 8;
+    }
+  }
+
   assert( pCur==pBuf+nTotal );
 
   *ppOut = pBuf;
@@ -431,7 +547,6 @@ void prollyNodeBuilderReset(ProllyNodeBuilder *b){
   b->nItems = 0;
   b->nKeyBytes = 0;
   b->nValBytes = 0;
-
 }
 
 void prollyNodeBuilderFree(ProllyNodeBuilder *b){
@@ -439,6 +554,7 @@ void prollyNodeBuilderFree(ProllyNodeBuilder *b){
   sqlite3_free(b->aValOff);
   sqlite3_free(b->pKeyBuf);
   sqlite3_free(b->pValBuf);
+  sqlite3_free(b->aSubtreeCount);
   memset(b, 0, sizeof(*b));
 }
 

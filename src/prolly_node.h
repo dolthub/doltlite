@@ -7,14 +7,17 @@
 
 #define PROLLY_NODE_MAGIC 0x504E4F44
 
-#define PROLLY_NODE_INTKEY  0x01
-#define PROLLY_NODE_BLOBKEY 0x02
+#define PROLLY_NODE_INTKEY        0x01
+#define PROLLY_NODE_BLOBKEY       0x02
+#define PROLLY_NODE_SUBTREE_COUNTS 0x04
 
 #define PROLLY_NODE_MAX_ITEMS 4096
 
 typedef struct ProllyNode ProllyNode;
 /* Parsed view over immutable node bytes. Offsets in the node are little-endian
-** on disk; accessors decode them instead of relying on host alignment. */
+** on disk; accessors decode them instead of relying on host alignment.
+** aSubtreeCount is populated only when flags has PROLLY_NODE_SUBTREE_COUNTS
+** set; it stores the descendant row-count of each child slot. */
 struct ProllyNode {
   const u8 *pData;
   int nData;
@@ -25,6 +28,7 @@ struct ProllyNode {
   const u32 *aValOff;
   const u8 *pKeyData;
   const u8 *pValData;
+  const u8 *pSubtreeCounts;
 };
 
 int prollyNodeParse(ProllyNode *pNode, const u8 *pData, int nData);
@@ -36,6 +40,10 @@ void prollyNodeValue(const ProllyNode *pNode, int i, const u8 **ppVal, int *pnVa
 i64 prollyNodeIntKey(const ProllyNode *pNode, int i);
 
 void prollyNodeChildHash(const ProllyNode *pNode, int i, ProllyHash *pHash);
+
+int prollyNodeHasSubtreeCounts(const ProllyNode *pNode);
+
+u64 prollyNodeChildSubtreeCount(const ProllyNode *pNode, int i);
 
 int prollyNodeSearchBlob(const ProllyNode *pNode,
                          const u8 *pKey, int nKey, int *pRes);
@@ -58,6 +66,8 @@ struct ProllyNodeBuilder {
   int nKeyBufAlloc;
   u8 *pValBuf;
   int nValBufAlloc;
+  u64 *aSubtreeCount;
+  int nSubtreeCountAlloc;
 };
 
 void prollyNodeBuilderInit(ProllyNodeBuilder *b, u8 level, u8 flags);
@@ -65,6 +75,11 @@ void prollyNodeBuilderInit(ProllyNodeBuilder *b, u8 level, u8 flags);
 int prollyNodeBuilderAdd(ProllyNodeBuilder *b,
                          const u8 *pKey, int nKey,
                          const u8 *pVal, int nVal);
+
+int prollyNodeBuilderAddWithCount(ProllyNodeBuilder *b,
+                                  const u8 *pKey, int nKey,
+                                  const u8 *pVal, int nVal,
+                                  u64 subtreeCount);
 
 int prollyNodeBuilderFinish(ProllyNodeBuilder *b, u8 **ppOut, int *pnOut);
 

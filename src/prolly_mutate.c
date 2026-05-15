@@ -9,6 +9,70 @@
 
 #define PROLLY_EST_ENTRIES_PER_LEAF 50
 
+static int subtreeCountByHash(
+  ChunkStore *pStore,
+  ProllyCache *pCache,
+  const ProllyHash *pHash,
+  u64 *pCount
+){
+  ProllyCacheEntry *pEntry = 0;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc = SQLITE_OK;
+  int i;
+  u64 sum = 0;
+
+  pEntry = prollyCacheGet(pCache, pHash);
+  if( !pEntry ){
+    rc = chunkStoreGet(pStore, pHash, &pData, &nData);
+    if( rc!=SQLITE_OK ) return rc;
+    pEntry = prollyCachePut(pCache, pHash, pData, nData, &rc);
+    sqlite3_free(pData);
+    if( !pEntry ) return rc;
+  }
+
+  if( pEntry->node.level==0 ){
+    sum = (u64)pEntry->node.nItems;
+  }else if( prollyNodeHasSubtreeCounts(&pEntry->node) ){
+    for( i=0; i<(int)pEntry->node.nItems; i++ ){
+      sum += prollyNodeChildSubtreeCount(&pEntry->node, i);
+    }
+  }else{
+    for( i=0; i<(int)pEntry->node.nItems; i++ ){
+      ProllyHash childHash;
+      u64 childCount = 0;
+      prollyNodeChildHash(&pEntry->node, i, &childHash);
+      rc = subtreeCountByHash(pStore, pCache, &childHash, &childCount);
+      if( rc!=SQLITE_OK ){
+        prollyCacheRelease(pCache, pEntry);
+        return rc;
+      }
+      sum += childCount;
+    }
+  }
+
+  prollyCacheRelease(pCache, pEntry);
+  *pCount = sum;
+  return SQLITE_OK;
+}
+
+static int parentChildSubtreeCount(
+  ChunkStore *pStore,
+  ProllyCache *pCache,
+  const ProllyNode *pParent,
+  int i,
+  u64 *pCount
+){
+  if( prollyNodeHasSubtreeCounts(pParent) ){
+    *pCount = prollyNodeChildSubtreeCount(pParent, i);
+    return SQLITE_OK;
+  }else{
+    ProllyHash childHash;
+    prollyNodeChildHash(pParent, i, &childHash);
+    return subtreeCountByHash(pStore, pCache, &childHash, pCount);
+  }
+}
+
 static int compareKeys(
   const u8 *pKey1, int nKey1,
   const u8 *pKey2, int nKey2
@@ -201,9 +265,14 @@ static int streamingMergeNode(
     if( !forceDescend
      && !subtreeHasEdits(pIter, pBoundKey, nBoundKey)
      && chunkerLevelsBelowEmpty(pChunker, pNode->level) ){
-      rc = prollyChunkerAddAtLevel(pChunker, pNode->level,
-                                    pBoundKey, nBoundKey,
-                                    pChildVal, nChildVal);
+      u64 childCount = 0;
+      rc = parentChildSubtreeCount(pMut->pStore, pMut->pCache,
+                                   pNode, i, &childCount);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = prollyChunkerAddAtLevelWithCount(pChunker, pNode->level,
+                                            pBoundKey, nBoundKey,
+                                            pChildVal, nChildVal,
+                                            childCount);
       if( rc!=SQLITE_OK ) return rc;
     }else{
       ProllyHash childHash;
