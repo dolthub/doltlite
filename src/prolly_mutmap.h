@@ -16,7 +16,7 @@ struct ProllyMutMapEntry {
   int nKey;
   u64 keyPrefix;
   u32 keyHash;
-  u8 aKeyInline[8];
+  u8 aKeyInline[40];
   u8 *pVal;
   int nVal;
   int nValAlloc;

@@ -333,14 +333,75 @@ int sortKeyFromRecordPrefix(
   return sortKeyFromRecordPrefixColl(pRec, nRec, nKeyField, NULL, ppOut, pnOut);
 }
 
+static int sortKeyFromSingleBinaryFieldFast(
+  const u8 *pRec, int nRec, int nKeyField, const KeyInfo *pKeyInfo,
+  u8 **ppBuf, int *pnAlloc, int *pnOut
+){
+  u32 hdrSize;
+  u32 hdrOff;
+  u32 serialType;
+  u32 fieldLen;
+  u32 dataOff;
+  u8 tag;
+  int nSize;
+  int nAlloc;
+  u8 *pOut;
+
+  if( nKeyField>1 || nRec<=0 ) return SQLITE_NOTFOUND;
+  hdrOff = skGetVarint32(pRec, &hdrSize);
+  if( hdrSize > (u32)nRec ) return SQLITE_CORRUPT;
+  if( hdrOff>=hdrSize ) return SQLITE_NOTFOUND;
+  hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
+  if( nKeyField<=0 && hdrOff<hdrSize ) return SQLITE_NOTFOUND;
+
+  fieldLen = serialTypeLen(serialType);
+  dataOff = hdrSize;
+  if( fieldLen > (u32)nRec - dataOff ) return SQLITE_CORRUPT;
+
+  tag = serialTypeTag(serialType);
+  if( tag==SORTKEY_TEXT ){
+    if( collFromKeyInfo(pKeyInfo, 0)!=SORTKEY_COLL_BINARY ){
+      return SQLITE_NOTFOUND;
+    }
+  }else if( tag!=SORTKEY_BLOB ){
+    return SQLITE_NOTFOUND;
+  }
+  if( fieldLen>0 && memchr(pRec + dataOff, 0, fieldLen)!=0 ){
+    return SQLITE_NOTFOUND;
+  }
+  if( fieldLen > (u32)INT_MAX - 3 ) return SQLITE_TOOBIG;
+
+  nSize = (int)fieldLen + 3;
+  nAlloc = nSize < 64 ? 64 : nSize;
+  if( *pnAlloc < nAlloc ){
+    u8 *pNew = (u8*)sqlite3_realloc64(*ppBuf, (sqlite3_uint64)nAlloc);
+    if( !pNew ) return SQLITE_NOMEM;
+    *ppBuf = pNew;
+    *pnAlloc = nAlloc;
+  }
+
+  pOut = *ppBuf;
+  pOut[0] = tag;
+  if( fieldLen>0 ) memcpy(pOut + 1, pRec + dataOff, fieldLen);
+  pOut[1 + fieldLen] = 0x00;
+  pOut[2 + fieldLen] = 0x00;
+  *pnOut = nSize;
+  return SQLITE_OK;
+}
+
 int sortKeyFromRecordPrefixCollBuffer(
   const u8 *pRec, int nRec, int nKeyField, const KeyInfo *pKeyInfo,
   u8 **ppBuf, int *pnAlloc, int *pnOut
 ){
   int nSize;
   int nAlloc;
+  int rc;
 
   *pnOut = 0;
+
+  rc = sortKeyFromSingleBinaryFieldFast(
+      pRec, nRec, nKeyField, pKeyInfo, ppBuf, pnAlloc, pnOut);
+  if( rc!=SQLITE_NOTFOUND ) return rc;
 
   nSize = sortKeyEncode(pRec, nRec, 0, nKeyField, pKeyInfo);
   if( nSize == -2 ) return SQLITE_TOOBIG;
