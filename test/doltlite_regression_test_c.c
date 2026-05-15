@@ -5789,6 +5789,47 @@ static void run_mutmap_delete_reinsert_reuses_entry(void){
   }
 }
 
+static void run_mutmap_append_sorted_order(void){
+  ProllyMutMap mm;
+  ProllyMutMapIter it;
+  static const u8 aVal[] = { 1 };
+  static const u8 aKey1[] = { 'a', 'a' };
+  static const u8 aKey2[] = { 'b', 'b' };
+  static const u8 aKey3[] = { 'c', 'c' };
+  static const u8 aKey0[] = { '0', '0' };
+
+  printf("=== MutMap Append Sorted Order Test ===\n\n");
+  check("mutmap_append_sorted_init",
+        prollyMutMapInitMode(&mm, 0, 0)==SQLITE_OK);
+  check("mutmap_append_sorted_insert_1",
+        prollyMutMapInsert(&mm, aKey1, sizeof(aKey1), 0,
+                           aVal, sizeof(aVal))==SQLITE_OK);
+  check("mutmap_append_sorted_insert_2",
+        prollyMutMapInsert(&mm, aKey2, sizeof(aKey2), 0,
+                           aVal, sizeof(aVal))==SQLITE_OK);
+  check("mutmap_append_sorted_insert_3",
+        prollyMutMapInsert(&mm, aKey3, sizeof(aKey3), 0,
+                           aVal, sizeof(aVal))==SQLITE_OK);
+  check("mutmap_append_sorted_flag_stays_set", mm.appendSorted);
+  prollyMutMapIterFirst(&it, &mm);
+  check("mutmap_append_sorted_iter_first",
+        prollyMutMapIterValid(&it)
+     && memcmp(prollyMutMapIterEntry(&it)->pKey, aKey1, sizeof(aKey1))==0);
+  check("mutmap_append_sorted_order_clean", !mm.orderDirty);
+  prollyMutMapFree(&mm);
+
+  check("mutmap_append_unsorted_init",
+        prollyMutMapInitMode(&mm, 0, 0)==SQLITE_OK);
+  check("mutmap_append_unsorted_insert_1",
+        prollyMutMapInsert(&mm, aKey2, sizeof(aKey2), 0,
+                           aVal, sizeof(aVal))==SQLITE_OK);
+  check("mutmap_append_unsorted_insert_2",
+        prollyMutMapInsert(&mm, aKey0, sizeof(aKey0), 0,
+                           aVal, sizeof(aVal))==SQLITE_OK);
+  check("mutmap_append_unsorted_flag_clears", !mm.appendSorted);
+  prollyMutMapFree(&mm);
+}
+
 typedef struct MutMapModelEntry MutMapModelEntry;
 struct MutMapModelEntry {
   i64 key;
@@ -6972,6 +7013,7 @@ static const RegressionCase aCases[] = {
   { "reset_bad_ref_failure_preserves_durable_state", "Reset Bad Ref Failure Preserves Durable State Test", run_reset_bad_ref_failure_preserves_durable_state },
   { "mutmap_empty_reverse_iter", "MutMap Empty Reverse Iterator Test", run_mutmap_empty_reverse_iter },
   { "mutmap_delete_reinsert_reuses_entry", "MutMap Delete Reinsert Reuses Entry Test", run_mutmap_delete_reinsert_reuses_entry },
+  { "mutmap_append_sorted_order", "MutMap Append Sorted Order Test", run_mutmap_append_sorted_order },
   { "mutmap_resolve_sorted_pos", "MutMap ResolveSortedPos Test", run_mutmap_resolve_sorted_pos },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },

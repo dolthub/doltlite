@@ -42,6 +42,7 @@ struct ProllyMutMap {
   /* Set after ordered access so mixed read/write maps keep their order. */
   u8 preferSorted;
   u8 posDirty;
+  u8 appendSorted;
   int nEntries;
   int nAlloc;
   int levelBase;
