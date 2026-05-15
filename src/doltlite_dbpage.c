@@ -174,7 +174,6 @@ static int dbpageFilter(sqlite3_vtab_cursor *pCursor,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
   DbpageCursor *pCur = (DbpageCursor*)pCursor;
   DbpageVtab *pVtab = (DbpageVtab*)pCursor->pVtab;
-  int wantPage1 = 1;
   int iArg = 0;
   (void)idxStr; (void)argc;
 
@@ -183,17 +182,21 @@ static int dbpageFilter(sqlite3_vtab_cursor *pCursor,
 
   if( idxNum & 1 ){
     sqlite3_int64 pgno = sqlite3_value_int64(argv[iArg++]);
-    wantPage1 = (pgno==1);
+    if( pgno!=1 ){
+      sqlite3_free(pVtab->base.zErrMsg);
+      pVtab->base.zErrMsg = sqlite3_mprintf(
+        "doltlite: sqlite_dbpage only supports pgno=1 "
+        "(content-addressed chunk store has no page layout)");
+      return SQLITE_ERROR;
+    }
   }
 
   if( idxNum & 2 ){
     iArg++;
   }
 
-  if( wantPage1 ){
-    synthesizeHeader(pVtab->db, pCur->aPage);
-    pCur->hasRow = 1;
-  }
+  synthesizeHeader(pVtab->db, pCur->aPage);
+  pCur->hasRow = 1;
   return SQLITE_OK;
 }
 
