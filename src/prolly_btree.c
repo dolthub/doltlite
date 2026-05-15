@@ -7251,11 +7251,65 @@ int sqlite3BtreeCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
 
 static i64 prollyBtCursorRowCountEst(BtCursor *pCur){
   struct TableEntry *pTE;
+  ProllyCursor *pProllyCur = &pCur->pCur;
+  i64 nEst = 0;
+  i64 nPending = 0;
+  int i;
+
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( !pTE || prollyHashIsEmpty(&pTE->root) ){
-    return 0;
+    if( pTE && pTE->pPending ){
+      nPending = (i64)prollyMutMapCount((ProllyMutMap*)pTE->pPending);
+    }
+    return nPending;
   }
-  return 1000000;
+
+  if( pProllyCur->eState==PROLLY_CURSOR_VALID
+   && pProllyCur->aLevel[pProllyCur->iLevel].pEntry
+  ){
+    nEst = pProllyCur->aLevel[pProllyCur->iLevel].pEntry->node.nItems;
+    for(i=0; i<pProllyCur->iLevel; i++){
+      ProllyCacheEntry *pLevel = pProllyCur->aLevel[i].pEntry;
+      int n;
+      if( !pLevel ) break;
+      n = pLevel->node.nItems;
+      if( n<=0 ) n = 1;
+      if( nEst > 0x7fffffffffffLL / n ){
+        nEst = 0x7fffffffffffLL;
+        break;
+      }
+      nEst *= n;
+    }
+  } else {
+    ProllyCacheEntry *pRoot = prollyCacheGet(&pCur->pBt->cache, &pTE->root);
+    if( pRoot ){
+      int level = pRoot->node.level;
+      int rootItems = pRoot->node.nItems;
+      prollyCacheRelease(&pCur->pBt->cache, pRoot);
+      if( level<=0 ){
+        nEst = rootItems;
+      } else {
+        nEst = rootItems;
+        for(i=0; i<level; i++){
+          if( nEst > 0x7fffffffffffLL / 100 ){
+            nEst = 0x7fffffffffffLL;
+            break;
+          }
+          nEst *= 100;
+        }
+      }
+    } else {
+      nEst = 10000;
+    }
+  }
+
+  if( pTE->pPending ){
+    nPending = (i64)prollyMutMapCount((ProllyMutMap*)pTE->pPending);
+    nEst += nPending;
+  }
+
+  if( nEst<1 ) nEst = 1;
+  return nEst;
 }
 i64 sqlite3BtreeRowCountEst(BtCursor *pCur){
   return pCur->pCurOps->xRowCountEst(pCur);
