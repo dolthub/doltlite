@@ -820,6 +820,7 @@ static int vdbeSorterCompareText(
 
   int n1;
   int n2;
+  int len;
   int res;
 
   if( pKeyInfo->nKeyField==1
@@ -842,7 +843,11 @@ static int vdbeSorterCompareText(
     if( n1!=nKey1 - p1[0] || n2!=nKey2 - p2[0] ){
       goto text_compare_slow;
     }
-    res = memcmp(v1, v2, MIN(n1, n2));
+    if( n1>0 && n2>0 && (res = (int)v1[0] - (int)v2[0])==0 ){
+      res = memcmp(v1+1, v2+1, MIN(n1, n2)-1);
+    }else if( n1==0 || n2==0 ){
+      res = 0;
+    }
     if( res==0 ){
       res = n1 - n2;
     }
@@ -855,7 +860,12 @@ static int vdbeSorterCompareText(
 text_compare_slow:
   getVarint32NR(&p1[1], n1);
   getVarint32NR(&p2[1], n2);
-  res = memcmp(v1, v2, (MIN(n1, n2) - 13)/2);
+  len = (MIN(n1, n2) - 13)/2;
+  if( len>0 && (res = (int)v1[0] - (int)v2[0])==0 ){
+    res = memcmp(v1+1, v2+1, len-1);
+  }else if( len==0 ){
+    res = 0;
+  }
   if( res==0 ){
     res = n1 - n2;
   }
