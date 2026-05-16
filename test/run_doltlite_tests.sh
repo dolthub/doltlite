@@ -78,6 +78,7 @@ TESTS=(
   doltlite_dbpage.sh
   doltlite_arm_correctness.sh
   doltlite_open_sqlite_file.sh
+  doltlite_comparison.sh
   doltlite_record_format.sh
   doltlite_schema_cookie.sh
   doltlite_storage_locking.sh
