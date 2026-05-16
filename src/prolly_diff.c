@@ -126,6 +126,27 @@ static int diffEmitModify(
   return xCallback(pCtx, &change);
 }
 
+static int diffSerialIsInt(int st){
+  return st>=1 && st<=9 && st!=7;
+}
+
+static i64 diffDecodeInt(int st, const u8 *p, int n){
+  static const int sizes[] = {0,1,2,3,4,6,8};
+  i64 v;
+  int i;
+  if( st==0 ) return 0;
+  if( st==8 ) return 0;
+  if( st==9 ) return 1;
+  if( st>=1 && st<=6 ){
+    int nB = sizes[st];
+    if( nB > n ) return 0;
+    v = (p[0] & 0x80) ? -1 : 0;
+    for(i=0; i<nB; i++) v = (v<<8) | p[i];
+    return v;
+  }
+  return 0;
+}
+
 static int diffSerialTypeSize(u64 st){
   if( st==0 ) return 0;
   if( st==1 ) return 1;
@@ -167,7 +188,17 @@ static int diffRecordsEqualFieldwise(
     int szA;
     int szB;
 
-    if( stA != stB ) return SQLITE_OK;
+    if( stA != stB ){
+      if( diffSerialIsInt(stA) && diffSerialIsInt(stB) ){
+        i64 vA = diffDecodeInt(stA, pA + aInfo.aOffset[i],
+                                nA - aInfo.aOffset[i]);
+        i64 vB = diffDecodeInt(stB, pB + bInfo.aOffset[i],
+                                nB - bInfo.aOffset[i]);
+        if( vA != vB ) return SQLITE_OK;
+        continue;
+      }
+      return SQLITE_OK;
+    }
     szA = diffSerialTypeSize((u64)stA);
     szB = diffSerialTypeSize((u64)stB);
     if( szA != szB ) return SQLITE_OK;
@@ -200,16 +231,13 @@ int prollyValuesEqual(
   return diffRecordsEqualFieldwise(pA, nA, pB, nB, pEqual);
 }
 
-static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew){
+static int diffValuesEqual(ProllyCursor *pOld, ProllyCursor *pNew,
+                           int *pEqual){
   const u8 *pOldVal; int nOldVal;
   const u8 *pNewVal; int nNewVal;
-  int equal = 0;
-  int rc;
   prollyCursorValue(pOld, &pOldVal, &nOldVal);
   prollyCursorValue(pNew, &pNewVal, &nNewVal);
-  rc = prollyValuesEqual(pOldVal, nOldVal, pNewVal, nNewVal, &equal);
-  if( rc!=SQLITE_OK ) return rc;
-  return equal ? SQLITE_OK : SQLITE_DONE;
+  return prollyValuesEqual(pOldVal, nOldVal, pNewVal, nNewVal, pEqual);
 }
 
 static int diffMergeWalk(
@@ -227,13 +255,14 @@ static int diffMergeWalk(
       rc = diffEmitAdd(pCurNew, flags, xCb, pCtx);
       if( rc==SQLITE_OK ) rc = prollyCursorNext(pCurNew);
     }else{
-      rc = diffValuesEqual(pCurOld, pCurNew);
-      if( rc==SQLITE_DONE ){
+      int equal = 0;
+      rc = diffValuesEqual(pCurOld, pCurNew, &equal);
+      if( rc!=SQLITE_OK ) break;
+      if( !equal ){
         rc = diffEmitModify(pCurOld, pCurNew, flags, xCb, pCtx);
-      }else if( rc!=SQLITE_OK ){
-        break;
+        if( rc!=SQLITE_OK ) break;
       }
-      if( rc==SQLITE_OK ) rc = prollyCursorNext(pCurOld);
+      rc = prollyCursorNext(pCurOld);
       if( rc==SQLITE_OK ) rc = prollyCursorNext(pCurNew);
     }
     if( rc!=SQLITE_OK ) break;
@@ -540,7 +569,7 @@ static int diffNodesOneLevel(
 
   }else{
 
-    rc = diffCursorWalk(pStore, pCache, pOldRoot, pNewRoot, flags, xCb, pCtx);
+    rc = diffCursorWalk(pStore, pCache, pOldHash, pNewHash, flags, xCb, pCtx);
   }
 
   sqlite3_free(oldData);
@@ -705,18 +734,17 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
         pIter->rc = prollyCursorNext(pNew);
         break;
       }else{
-
-        pIter->rc = diffValuesEqual(pOld, pNew);
-        if( pIter->rc==SQLITE_OK ){
-
+        int equal = 0;
+        pIter->rc = diffValuesEqual(pOld, pNew, &equal);
+        if( pIter->rc!=SQLITE_OK ) return pIter->rc;
+        if( equal ){
           pIter->rc = prollyCursorNext(pOld);
           if( pIter->rc==SQLITE_OK ) pIter->rc = prollyCursorNext(pNew);
           if( pIter->rc!=SQLITE_OK ) return pIter->rc;
           continue;
-        }else if( pIter->rc==SQLITE_DONE ){
+        }else{
           const u8 *pOV; int nOV;
           const u8 *pNV; int nNV;
-          pIter->rc = SQLITE_OK;
           pCh->type = PROLLY_DIFF_MODIFY;
           pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
           if( pIter->rc!=SQLITE_OK ) return pIter->rc;
@@ -741,8 +769,6 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
           pIter->rc = prollyCursorNext(pOld);
           if( pIter->rc==SQLITE_OK ) pIter->rc = prollyCursorNext(pNew);
           break;
-        }else{
-          return pIter->rc;
         }
       }
     }else if( validOld ){

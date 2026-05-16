@@ -229,7 +229,11 @@ int prollyCursorPrev(ProllyCursor *cur){
   int rc;
   int level;
 
-  assert( cur->eState==PROLLY_CURSOR_VALID );
+  if( cur->eState==PROLLY_CURSOR_EOF ){
+    int res = 0;
+    return prollyCursorLast(cur, &res);
+  }
+  if( cur->eState!=PROLLY_CURSOR_VALID ) return SQLITE_OK;
 
   if( cur->aLevel[cur->iLevel].idx > 0 ){
     cur->aLevel[cur->iLevel].idx--;

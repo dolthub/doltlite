@@ -5,6 +5,7 @@
 #include "prolly_node.h"
 #include "prolly_chunker.h"
 #include "prolly_cursor.h"
+#include "prolly_diff.h"
 
 #include <string.h>
 
@@ -126,6 +127,12 @@ static int fmEmitSubtreeRows(
   return SQLITE_OK;
 }
 
+static int fmEq(const u8 *pX, int nX, const u8 *pY, int nY){
+  int equal = 0;
+  if( prollyValuesEqual(pX, nX, pY, nY, &equal)!=SQLITE_OK ) return 0;
+  return equal;
+}
+
 static int fmResolveAndEmit(
   ProllyChunker *pCh,
   const u8 *pK, int nK,
@@ -134,31 +141,29 @@ static int fmResolveAndEmit(
   int has_t, const u8 *pTV, int nTV
 ){
   if( has_a && has_o && has_t ){
-    int same_o = (nOV == nAV) && memcmp(pOV, pAV, nOV) == 0;
-    int same_t = (nTV == nAV) && memcmp(pTV, pAV, nTV) == 0;
+    int same_o = fmEq(pOV, nOV, pAV, nAV);
+    int same_t = fmEq(pTV, nTV, pAV, nAV);
     if( same_o && same_t ){
       return prollyChunkerAdd(pCh, pK, nK, pAV, nAV);
     }else if( same_o ){
       return prollyChunkerAdd(pCh, pK, nK, pTV, nTV);
     }else if( same_t ){
       return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
-    }else if( nOV == nTV && memcmp(pOV, pTV, nOV) == 0 ){
+    }else if( fmEq(pOV, nOV, pTV, nTV) ){
       return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
     }else{
       return FM_FALLBACK;
     }
   }else if( has_a && has_o && !has_t ){
-    int same_o = (nOV == nAV) && memcmp(pOV, pAV, nOV) == 0;
-    if( same_o ) return SQLITE_OK;
+    if( fmEq(pOV, nOV, pAV, nAV) ) return SQLITE_OK;
     return FM_FALLBACK;
   }else if( has_a && !has_o && has_t ){
-    int same_t = (nTV == nAV) && memcmp(pTV, pAV, nTV) == 0;
-    if( same_t ) return SQLITE_OK;
+    if( fmEq(pTV, nTV, pAV, nAV) ) return SQLITE_OK;
     return FM_FALLBACK;
   }else if( has_a && !has_o && !has_t ){
     return SQLITE_OK;
   }else if( !has_a && has_o && has_t ){
-    if( nOV == nTV && memcmp(pOV, pTV, nOV) == 0 ){
+    if( fmEq(pOV, nOV, pTV, nTV) ){
       return prollyChunkerAdd(pCh, pK, nK, pOV, nOV);
     }
     return FM_FALLBACK;
