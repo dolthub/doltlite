@@ -5,6 +5,7 @@
 #include "chunk_store.h"
 #include "chunk_staging.h"
 #include "chunk_file.h"
+#include "../ext/blake3/blake3.h"
 #include <string.h>
 
 #define CS_READ_U32(p) (             \
@@ -215,6 +216,34 @@ int csReplayWal(ChunkStore *cs){
         break;
       }
 
+      {
+        blake3_hasher hasher;
+        ProllyHash bodyHash;
+        u8 chunkBuf[65536];
+        u32 nRemaining = len;
+        i64 readOff = cs->wal.iWalOffset + pos;
+        int hashMismatch = 0;
+        blake3_hasher_init(&hasher);
+        while( nRemaining > 0 ){
+          u32 toRead = nRemaining > sizeof(chunkBuf)
+                     ? (u32)sizeof(chunkBuf) : nRemaining;
+          rc = sqlite3OsRead(cs->file.pFile, chunkBuf, (int)toRead, readOff);
+          if( rc != SQLITE_OK ) goto replay_error;
+          blake3_hasher_update(&hasher, chunkBuf, (size_t)toRead);
+          readOff += toRead;
+          nRemaining -= toRead;
+        }
+        blake3_hasher_finalize(&hasher, bodyHash.data, PROLLY_HASH_SIZE);
+        if( prollyHashCompare(&bodyHash, &hash) != 0 ) hashMismatch = 1;
+        if( hashMismatch ){
+          sqlite3_log(SQLITE_NOTICE,
+            "doltlite: WAL chunk body hash mismatch at offset %lld (declared len=%u); "
+            "skipping (will surface as missing chunk on read)",
+            (long long)(cs->wal.iWalOffset + pos - 24 - 1), (unsigned)len);
+          pos += len;
+          continue;
+        }
+      }
       {
         int existing = csSearchIndex(cs->index.aIndex, cs->index.nIndex, &hash);
         ChunkIndexEntry *e = 0;
