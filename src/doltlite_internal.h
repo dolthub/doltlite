@@ -29,6 +29,12 @@ struct TableEntry {
   char *zTblName;
 };
 
+static SQLITE_INLINE int doltliteTableEntryIsTable(const struct TableEntry *pEntry){
+  if( !pEntry || pEntry->iTable<=1 || !pEntry->zName ) return 0;
+  if( pEntry->zType ) return strcmp(pEntry->zType, "table")==0;
+  return 1;
+}
+
 static SQLITE_INLINE struct TableEntry *doltliteFindTableByNumber(
   struct TableEntry *a, int n, Pgno iTable
 ){
