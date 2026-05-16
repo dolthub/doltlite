@@ -1681,7 +1681,6 @@ static int rebuildDisjointSchemaRows(
     SchemaEntry *pSe = &aOursSchema[i];
     if( !pSe->zName || !pSe->zType ) continue;
     if( strcmp(pSe->zType, "index")!=0 ) continue;
-    if( findTableByName(aMerged, nMerged, pSe->zName) ) continue;
     if( !schemaEntryChangedByName(aAncSchema, nAncSchema,
                                   aOursSchema, nOursSchema,
                                   pSe->zName) ){
@@ -1697,7 +1696,6 @@ static int rebuildDisjointSchemaRows(
     Pgno iRootpage;
     if( !pSe->zName || !pSe->zType ) continue;
     if( strcmp(pSe->zType, "index")!=0 ) continue;
-    if( findTableByName(aMerged, nMerged, pSe->zName) ) continue;
     if( !schemaEntryChangedByName(aAncSchema, nAncSchema,
                                   aTheirsSchema, nTheirsSchema,
                                   pSe->zName) ){
@@ -1715,7 +1713,6 @@ static int rebuildDisjointSchemaRows(
   }
 
   for(i=0; i<nAncSchema; i++){
-    if( findTableByName(aMerged, nMerged, aAncSchema[i].zName) ) continue;
     rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags, &iNextRowid,
                                     aAncSchema, nAncSchema,
                                     aOursSchema, nOursSchema,
@@ -1726,7 +1723,6 @@ static int rebuildDisjointSchemaRows(
   }
   for(i=0; i<nOursSchema; i++){
     if( findSchemaEntry(aAncSchema, nAncSchema, aOursSchema[i].zName) ) continue;
-    if( findTableByName(aMerged, nMerged, aOursSchema[i].zName) ) continue;
     rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags, &iNextRowid,
                                     aAncSchema, nAncSchema,
                                     aOursSchema, nOursSchema,
@@ -1738,7 +1734,6 @@ static int rebuildDisjointSchemaRows(
   for(i=0; i<nTheirsSchema; i++){
     if( findSchemaEntry(aAncSchema, nAncSchema, aTheirsSchema[i].zName) ) continue;
     if( findSchemaEntry(aOursSchema, nOursSchema, aTheirsSchema[i].zName) ) continue;
-    if( findTableByName(aMerged, nMerged, aTheirsSchema[i].zName) ) continue;
     rc = appendMergedHiddenIndexRow(db, &root, pMaster->flags, &iNextRowid,
                                     aAncSchema, nAncSchema,
                                     aOursSchema, nOursSchema,
@@ -2327,21 +2322,7 @@ static int mergeCatalogPass2(
           for(j=0; j<*pnMerged; j++){
             if( aMerged[j].iTable==newEntry.iTable ){ conflict = 1; break; }
           }
-          if( conflict || forceRemap ){
-            SchemaRootpageRemap *aNew;
-            int nOld = *pnRemap;
-            Pgno oldPg = newEntry.iTable;
-            Pgno newPg = *piNextMerged;
-            aNew = sqlite3_realloc(*ppaRemap,
-                                   (nOld+1)*(int)sizeof(SchemaRootpageRemap));
-            if( !aNew ) return SQLITE_NOMEM;
-            *ppaRemap = aNew;
-            aNew[nOld].oldPg = oldPg;
-            aNew[nOld].newPg = newPg;
-            *pnRemap = nOld + 1;
-            newEntry.iTable = newPg;
-            (*piNextMerged)++;
-          }
+          if( conflict || forceRemap ) newEntry.iTable = (*piNextMerged)++;
         }
         if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
 
@@ -2370,15 +2351,6 @@ static void freeConflictTables(
     sqlite3_free(aConflictTables[ci].zName);
   }
   sqlite3_free(aConflictTables);
-}
-
-static void freeMergedCatalogEntries(struct TableEntry *aMerged, int nMerged){
-  int i;
-  if( !aMerged ) return;
-  for(i=0; i<nMerged; i++){
-    sqlite3_free(aMerged[i].zName);
-  }
-  sqlite3_free(aMerged);
 }
 
 static int loadMergeCatalogs(
@@ -2542,7 +2514,7 @@ merge_cleanup:
   doltliteFreeCatalog(aAnc, nAnc);
   doltliteFreeCatalog(aOurs, nOurs);
   doltliteFreeCatalog(aTheirs, nTheirs);
-  freeMergedCatalogEntries(aMerged, nMerged);
+  doltliteFreeCatalog(aMerged, nMerged);
   return rc;
 }
 

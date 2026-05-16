@@ -271,7 +271,6 @@ struct Btree {
   u64 nSeek;
 
   Catalog cat;
-  ProllyHash canonicalMasterRoot;
 
   u32 aMeta[16];
 
@@ -280,7 +279,6 @@ struct Btree {
 
   u8 inTransaction;
   u8 bSchemaChangedTxn;
-  u8 bCatalogNeedsCanonical;
 
   int nSavepoint;
   int nSavepointAlloc;
@@ -1927,7 +1925,6 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       return rc;
     }
     masterRoot = masterEntry.root;
-    pBtree->canonicalMasterRoot = masterRoot;
   }
 
   if( nMeta>0 ){
@@ -2083,9 +2080,7 @@ static int serializeCatalogFast(Btree *pBtree, u8 **ppOut, int *pnOut){
   u8 *buf, *q;
   int i;
 
-  if( !pBtree || pBtree->bSchemaChangedTxn || pBtree->bCatalogNeedsCanonical ){
-    return SQLITE_NOTFOUND;
-  }
+  if( !pBtree || pBtree->bSchemaChangedTxn ) return SQLITE_NOTFOUND;
   if( pBtree->cat.n<=0 ) return SQLITE_NOTFOUND;
 
   for(i=0; i<pBtree->cat.n; i++){
@@ -2136,11 +2131,7 @@ static int serializeCatalogFast(Btree *pBtree, u8 **ppOut, int *pnOut){
     q[0]=(u8)pg; q[1]=(u8)(pg>>8); q[2]=(u8)(pg>>16); q[3]=(u8)(pg>>24);
     q += 4;
     *q++ = e->flags;
-    if( e->iTable==1 && !prollyHashIsEmpty(&pBtree->canonicalMasterRoot) ){
-      memcpy(q, pBtree->canonicalMasterRoot.data, PROLLY_HASH_SIZE);
-    }else{
-      memcpy(q, e->root.data, PROLLY_HASH_SIZE);
-    }
+    memcpy(q, e->root.data, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
     memcpy(q, e->schemaHash.data, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
@@ -2163,10 +2154,8 @@ static int serializeCatalogFast(Btree *pBtree, u8 **ppOut, int *pnOut){
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   int rc = serializeCatalogFast(pBtree, ppOut, pnOut);
   if( rc!=SQLITE_NOTFOUND ) return rc;
-  rc = doltliteSerializeCatalogEntriesForBtreeImpl(
+  return doltliteSerializeCatalogEntriesForBtreeImpl(
       pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut);
-  if( rc==SQLITE_OK ) pBtree->bCatalogNeedsCanonical = 0;
-  return rc;
 }
 
 static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
@@ -2269,7 +2258,6 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
   prollyMutMapFree(&mm);
   if( rc==SQLITE_OK ){
     *pMasterRoot = masterEntry.root;
-    pBtree->canonicalMasterRoot = masterEntry.root;
   }
   freeSchemaCatalogRows(aRows, nRows);
   freeCatalogEntryMeta(aMeta, nMeta);
@@ -2388,17 +2376,6 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
 
     pBtree->cat.iNextTable = maxPage + 1;
   }
-
-  {
-    struct TableEntry *pMaster = findTable(pBtree, 1);
-    if( pMaster ){
-      pBtree->canonicalMasterRoot = pMaster->root;
-    }else{
-      memset(&pBtree->canonicalMasterRoot, 0, sizeof(pBtree->canonicalMasterRoot));
-    }
-  }
-
-  pBtree->bCatalogNeedsCanonical = 1;
 
   if( getenv("DOLTLITE_DEBUG_CAT") ){
     fprintf(stderr, "deserializeCatalog: n=%d\n", pBtree->cat.n);
@@ -4851,7 +4828,6 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           struct TableEntry *pMaster = findTable(p, 1);
           if( pMaster ) pMaster->root = runtimeMasterRoot;
         }
-        p->bCatalogNeedsCanonical = 1;
         invalidateSchema(p);
         if( p->db ){
           sqlite3ExpirePreparedStatements(p->db, 0);
@@ -5354,7 +5330,6 @@ static int prollyBtreeUpdateMeta(Btree *p, int idx, u32 value){
 
   if( idx==BTREE_SCHEMA_VERSION ){
     p->bSchemaChangedTxn = 1;
-    p->bCatalogNeedsCanonical = 1;
     p->iBDataVersion++;
     if( pBt->pPagerShim ){
       pBt->pPagerShim->iDataVersion++;
@@ -8180,6 +8155,21 @@ int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
   *ppTables = temp.cat.a;
   *pnTables = temp.cat.n;
   if( piNextTable ) *piNextTable = temp.cat.iNextTable;
+  {
+    int i;
+    for(i=0; i<temp.cat.n; i++){
+      int hasType = temp.cat.a[i].zType!=0;
+      int keepName = !hasType || strcmp(temp.cat.a[i].zType, "table")==0;
+      sqlite3_free(temp.cat.a[i].zType);
+      sqlite3_free(temp.cat.a[i].zTblName);
+      temp.cat.a[i].zType = 0;
+      temp.cat.a[i].zTblName = 0;
+      if( !keepName ){
+        sqlite3_free(temp.cat.a[i].zName);
+        temp.cat.a[i].zName = 0;
+      }
+    }
+  }
   return SQLITE_OK;
 }
 

@@ -235,7 +235,7 @@ int doltliteForEachUserTable(
   if( rc!=SQLITE_OK ) return rc;
 
   for(i=0; i<nTables; i++){
-    if( doltliteTableEntryIsTable(&aTables[i]) ){
+    if( aTables[i].zName && aTables[i].iTable > 1 ){
       char *zMod = sqlite3_mprintf("%s%s", zPrefix, aTables[i].zName);
       if( !zMod ){
         doltliteFreeCatalog(aTables, nTables);

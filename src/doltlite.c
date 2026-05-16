@@ -896,28 +896,9 @@ static int addAppendTableEntry(
 ){
   struct TableEntry *aNew;
   char *zDup = 0;
-  char *zTypeDup = 0;
-  char *zTblNameDup = 0;
   if( pEntry->zName ){
     zDup = sqlite3_mprintf("%s", pEntry->zName);
     if( !zDup ){
-      sqlite3_result_error_nomem(context);
-      return SQLITE_NOMEM;
-    }
-  }
-  if( pEntry->zType ){
-    zTypeDup = sqlite3_mprintf("%s", pEntry->zType);
-    if( !zTypeDup ){
-      sqlite3_free(zDup);
-      sqlite3_result_error_nomem(context);
-      return SQLITE_NOMEM;
-    }
-  }
-  if( pEntry->zTblName ){
-    zTblNameDup = sqlite3_mprintf("%s", pEntry->zTblName);
-    if( !zTblNameDup ){
-      sqlite3_free(zDup);
-      sqlite3_free(zTypeDup);
       sqlite3_result_error_nomem(context);
       return SQLITE_NOMEM;
     }
@@ -926,16 +907,12 @@ static int addAppendTableEntry(
       *paEntries, (*pnEntries + 1) * (int)sizeof(struct TableEntry));
   if( !aNew ){
     sqlite3_free(zDup);
-    sqlite3_free(zTypeDup);
-    sqlite3_free(zTblNameDup);
     sqlite3_result_error_nomem(context);
     return SQLITE_NOMEM;
   }
   *paEntries = aNew;
   (*paEntries)[*pnEntries] = *pEntry;
   (*paEntries)[*pnEntries].zName = zDup;
-  (*paEntries)[*pnEntries].zType = zTypeDup;
-  (*paEntries)[*pnEntries].zTblName = zTblNameDup;
   (*pnEntries)++;
   return SQLITE_OK;
 }
@@ -1170,7 +1147,7 @@ static int addStageAllTables(
   for(k=0; k<nWorking; k++){
     const char *zName = aWorking[k].zName;
     struct TableEntry *pUse = &aWorking[k];
-    if( doltliteTableEntryIsTable(&aWorking[k]) ){
+    if( aWorking[k].iTable>1 && zName ){
       int ignored = 0;
       rc = addCheckIgnore(db, context, zName, &ignored);
       if( rc!=SQLITE_OK ){
@@ -1198,7 +1175,6 @@ static int addStageAllTables(
     const char *zName = aStaged[k].zName;
     if( aStaged[k].iTable<=1 || !zName ) continue;
     if( addNameIndexFind(&workingIdx, zName) ) continue;
-    if( !doltliteTableEntryIsTable(&aStaged[k]) ) continue;
     {
       int ignored = 0;
       rc = addCheckIgnore(db, context, zName, &ignored);
