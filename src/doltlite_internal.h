@@ -25,8 +25,6 @@ struct TableEntry {
   u8 pendingFlushSeekEdits;
   char *zName;
   void *pPending;
-  char *zType;
-  char *zTblName;
 };
 
 static SQLITE_INLINE struct TableEntry *doltliteFindTableByNumber(
