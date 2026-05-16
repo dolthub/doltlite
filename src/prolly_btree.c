@@ -1288,20 +1288,6 @@ static int schemaCatalogHasPgno(SchemaCatalogRow *aRows, int nRows, Pgno iTable)
   return 0;
 }
 
-static int schemaCatalogRowMatchesEntry(
-  const SchemaCatalogRow *pRow,
-  const struct TableEntry *pEntry
-){
-  if( !pRow || !pEntry ) return 0;
-  if( pRow->oldPg==pEntry->iTable ) return 1;
-  if( !pRow->zName || !pEntry->zName ) return 0;
-  if( !pRow->zType ) return 0;
-  if( strcmp(pRow->zType, "table")!=0 && strcmp(pRow->zType, "index")!=0 ){
-    return 0;
-  }
-  return strcmp(pRow->zName, pEntry->zName)==0;
-}
-
 static int schemaCatalogTextField(
   const u8 *pVal, int nVal, DoltliteRecordInfo *pRi, int iField, char **pzOut
 ){
@@ -1825,8 +1811,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   SchemaEntry *aFallbackSchema,
   int nFallbackSchema,
   u8 **ppOut,
-  int *pnOut,
-  int *pRemapped
+  int *pnOut
 ){
   int sz = CAT_HEADER_SIZE_V3;
   u8 *buf, *q;
@@ -1841,7 +1826,6 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
   int rc;
 
   if( !pBtree ) return SQLITE_MISUSE;
-  if( pRemapped ) *pRemapped = 0;
   db = pBtree->db;
   rc = buildLiveCatalogEntryMeta(pBtree, &aMeta, &nMeta);
   if( rc!=SQLITE_OK ) return rc;
@@ -1908,7 +1892,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
                                         zRecordSql, &nRec);
       }
       for(j=0; j<nTables; j++){
-        if( schemaCatalogRowMatchesEntry(&aRows[i], &aTables[j]) ){
+        if( aTables[j].iTable==aRows[i].oldPg ){
           aTables[j].schemaHash = h;
           break;
         }
@@ -1995,10 +1979,11 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
         }
       }
       if( pRow ){
-        if( pRemapped && pRow->newPg!=aTables[i].iTable ){
-          *pRemapped = 1;
+        if( pRow->oldPg==aTables[i].iTable ){
+          aSorted[i].iTable = pRow->newPg;
+        }else{
+          aSorted[i].iTable = aTables[i].iTable;
         }
-        aSorted[i].iTable = pRow->newPg;
         aSorted[i].zType = pRow->zType;
         aSorted[i].zName = pRow->zName;
         aSorted[i].zTblName = pRow->zTblName;
@@ -2090,18 +2075,13 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   if( db->nDb<=0 || !db->aDb[0].pBt ) return SQLITE_ERROR;
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       db->aDb[0].pBt, aTables, nTables,
-      aFallbackSchema, nFallbackSchema, ppOut, pnOut, 0);
+      aFallbackSchema, nFallbackSchema, ppOut, pnOut);
 }
 
 static int serializeCatalogFast(Btree *pBtree, u8 **ppOut, int *pnOut){
   int sz = CAT_HEADER_SIZE_V3;
   u8 *buf, *q;
   int i;
-  const char *zPrevType = 0;
-  const char *zPrevName = 0;
-  const char *zPrevTblName = 0;
-
-  return SQLITE_NOTFOUND;
 
   if( !pBtree || pBtree->bSchemaChangedTxn || pBtree->bCatalogNeedsCanonical ){
     return SQLITE_NOTFOUND;
@@ -2120,15 +2100,6 @@ static int serializeCatalogFast(Btree *pBtree, u8 **ppOut, int *pnOut){
       zTblName = "";
     }
     if( !zType || !zName ) return SQLITE_NOTFOUND;
-    if( zPrevType ){
-      int c = strcmp(zPrevType, zType);
-      if( c==0 ) c = strcmp(zPrevTblName ? zPrevTblName : "", zTblName);
-      if( c==0 ) c = strcmp(zPrevName, zName);
-      if( c>0 ) return SQLITE_NOTFOUND;
-    }
-    zPrevType = zType;
-    zPrevName = zName;
-    zPrevTblName = zTblName;
     nType = (int)strlen(zType);
     nName = (int)strlen(zName);
     nTbl = (int)strlen(zTblName);
@@ -2190,12 +2161,11 @@ static int serializeCatalogFast(Btree *pBtree, u8 **ppOut, int *pnOut){
 }
 
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
-  int remapped = 0;
   int rc = serializeCatalogFast(pBtree, ppOut, pnOut);
   if( rc!=SQLITE_NOTFOUND ) return rc;
   rc = doltliteSerializeCatalogEntriesForBtreeImpl(
-      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut, &remapped);
-  if( rc==SQLITE_OK ) pBtree->bCatalogNeedsCanonical = remapped ? 1 : 0;
+      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut);
+  if( rc==SQLITE_OK ) pBtree->bCatalogNeedsCanonical = 0;
   return rc;
 }
 

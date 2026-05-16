@@ -30,49 +30,6 @@ static int branchNameEmpty(const char *zName){
   return zName==0 || zName[0]==0;
 }
 
-static void checkoutFreeEntryStrings(struct TableEntry *pEntry){
-  sqlite3_free(pEntry->zName);
-  sqlite3_free(pEntry->zType);
-  sqlite3_free(pEntry->zTblName);
-  pEntry->zName = 0;
-  pEntry->zType = 0;
-  pEntry->zTblName = 0;
-}
-
-static int checkoutCopyTableEntry(
-  struct TableEntry *pDst,
-  const struct TableEntry *pSrc
-){
-  char *zName = 0;
-  char *zType = 0;
-  char *zTblName = 0;
-
-  if( pSrc->zName ){
-    zName = sqlite3_mprintf("%s", pSrc->zName);
-    if( !zName ) goto nomem;
-  }
-  if( pSrc->zType ){
-    zType = sqlite3_mprintf("%s", pSrc->zType);
-    if( !zType ) goto nomem;
-  }
-  if( pSrc->zTblName ){
-    zTblName = sqlite3_mprintf("%s", pSrc->zTblName);
-    if( !zTblName ) goto nomem;
-  }
-
-  *pDst = *pSrc;
-  pDst->zName = zName;
-  pDst->zType = zType;
-  pDst->zTblName = zTblName;
-  return SQLITE_OK;
-
-nomem:
-  sqlite3_free(zName);
-  sqlite3_free(zType);
-  sqlite3_free(zTblName);
-  return SQLITE_NOMEM;
-}
-
 static void branchResultError(
   sqlite3_context *ctx,
   int rc,
@@ -1044,6 +1001,7 @@ static int doltliteCheckoutTables(
   for(i=0; i<nNames; i++){
     const char *zName = (const char*)sqlite3_value_text(argv[iFirstName + i]);
     int srcIdx = -1, workIdx = -1;
+    char *zDup;
     if( !zName ) continue;
 
     for(j=0; j<nSource; j++){
@@ -1068,7 +1026,7 @@ static int doltliteCheckoutTables(
     }
 
     if( srcIdx<0 ){
-      checkoutFreeEntryStrings(&aWorking[workIdx]);
+      sqlite3_free(aWorking[workIdx].zName);
       if( workIdx+1<nWorking ){
         memmove(&aWorking[workIdx], &aWorking[workIdx+1],
                 (nWorking-workIdx-1)*(int)sizeof(struct TableEntry));
@@ -1085,30 +1043,34 @@ static int doltliteCheckoutTables(
         return SQLITE_NOMEM;
       }
       aWorking = aNew;
-      rc = checkoutCopyTableEntry(&aWorking[nWorking], &aSource[srcIdx]);
-      if( rc!=SQLITE_OK ){
+      zDup = aSource[srcIdx].zName
+               ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
+      if( aSource[srcIdx].zName && !zDup ){
         checkoutSchemaInfoClear(aSchema, nNames);
         doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
-        return rc;
+        return SQLITE_NOMEM;
       }
+      aWorking[nWorking] = aSource[srcIdx];
+      aWorking[nWorking].zName = zDup;
       nWorking++;
     }else{
-      struct TableEntry copied;
-      rc = checkoutCopyTableEntry(&copied, &aSource[srcIdx]);
-      if( rc!=SQLITE_OK ){
+      zDup = aSource[srcIdx].zName
+               ? sqlite3_mprintf("%s", aSource[srcIdx].zName) : 0;
+      if( aSource[srcIdx].zName && !zDup ){
         checkoutSchemaInfoClear(aSchema, nNames);
         doltliteFreeCatalog(aWorking, nWorking);
         doltliteFreeCatalog(aSource, nSource);
-        return rc;
+        return SQLITE_NOMEM;
       }
       {
         Pgno iCurrentTable = aWorking[workIdx].iTable;
-        checkoutFreeEntryStrings(&aWorking[workIdx]);
-        aWorking[workIdx] = copied;
+        sqlite3_free(aWorking[workIdx].zName);
+        aWorking[workIdx] = aSource[srcIdx];
         if( aSchema[i].rebuilt ){
           aWorking[workIdx].iTable = iCurrentTable;
         }
+        aWorking[workIdx].zName = zDup;
       }
     }
   }

@@ -229,7 +229,7 @@ static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
     struct TableEntry *e = &aWork[i];
     struct TableEntry *p;
     u8 dataChange, schemaChange;
-    if( e->iTable==1 ){
+    if( !e->zName ){
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
@@ -245,7 +245,6 @@ static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
       }
       continue;
     }
-    if( !doltliteTableEntryIsTable(e) ) continue;
     p = doltliteFindTableByName(aHead, nHead, e->zName);
     if( !p ){
       dataChange = 1;
@@ -260,7 +259,7 @@ static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
   }
   for(i=0; i<nHead; i++){
     struct TableEntry *p = &aHead[i];
-    if( !doltliteTableEntryIsTable(p) ) continue;
+    if( !p->zName ) continue;
     if( doltliteFindTableByName(aWork, nWork, p->zName) ) continue;
     rc = batchAppend(pCur, zHexBuf, p->zName, 0, 1, 1);
     if( rc!=SQLITE_OK ) goto done;
@@ -304,7 +303,7 @@ static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
     struct TableEntry *e = &aChild[i];
     struct TableEntry *p;
     u8 dataChange, schemaChange;
-    if( e->iTable==1 ){
+    if( !e->zName ){
       ProllyHash emptyRoot;
       const ProllyHash *pOldRoot;
       struct TableEntry *pOldMaster;
@@ -320,7 +319,6 @@ static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
       }
       continue;
     }
-    if( !doltliteTableEntryIsTable(e) ) continue;
     p = doltliteFindTableByName(aParent, nParent, e->zName);
     if( !p ){
       dataChange = 1;
@@ -337,7 +335,7 @@ static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
 
   for(i=0; i<nParent; i++){
     struct TableEntry *p = &aParent[i];
-    if( !doltliteTableEntryIsTable(p) ) continue;
+    if( !p->zName ) continue;
     if( doltliteFindTableByName(aChild, nChild, p->zName) ) continue;
     rc = batchAppend(pCur, zCommitHex, p->zName, pCommit, 1, 1);
     if( rc!=SQLITE_OK ) goto done;

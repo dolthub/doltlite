@@ -244,11 +244,6 @@ int doltliteHasUncommittedChanges(sqlite3 *db){
         chunkStorePut(cs, wCatData, nWCat, &workingCatHash);
         sqlite3_free(wCatData);
         if( prollyHashCompare(&headCatHash, &workingCatHash)!=0 ){
-          rc = doltliteFlushCatalogToHash(db, &workingCatHash);
-          if( rc==SQLITE_OK
-           && prollyHashCompare(&headCatHash, &workingCatHash)==0 ){
-            return 0;
-          }
           return 1;
         }
       }
@@ -893,51 +888,6 @@ static int addCheckIgnore(
   return rc;
 }
 
-static void addFreeEntryStrings(struct TableEntry *pEntry){
-  sqlite3_free(pEntry->zName);
-  sqlite3_free(pEntry->zType);
-  sqlite3_free(pEntry->zTblName);
-  pEntry->zName = 0;
-  pEntry->zType = 0;
-  pEntry->zTblName = 0;
-}
-
-static int addCopyTableEntry(
-  sqlite3_context *context,
-  struct TableEntry *pDst,
-  const struct TableEntry *pSrc
-){
-  char *zName = 0;
-  char *zType = 0;
-  char *zTblName = 0;
-
-  if( pSrc->zName ){
-    zName = sqlite3_mprintf("%s", pSrc->zName);
-    if( !zName ) goto nomem;
-  }
-  if( pSrc->zType ){
-    zType = sqlite3_mprintf("%s", pSrc->zType);
-    if( !zType ) goto nomem;
-  }
-  if( pSrc->zTblName ){
-    zTblName = sqlite3_mprintf("%s", pSrc->zTblName);
-    if( !zTblName ) goto nomem;
-  }
-
-  *pDst = *pSrc;
-  pDst->zName = zName;
-  pDst->zType = zType;
-  pDst->zTblName = zTblName;
-  return SQLITE_OK;
-
-nomem:
-  sqlite3_free(zName);
-  sqlite3_free(zType);
-  sqlite3_free(zTblName);
-  if( context ) sqlite3_result_error_nomem(context);
-  return SQLITE_NOMEM;
-}
-
 static int addAppendTableEntry(
   sqlite3_context *context,
   struct TableEntry **paEntries,
@@ -1174,58 +1124,6 @@ static int addWriteStagedCatalog(
   return rc;
 }
 
-static int catalogHashesHaveSameRootMultiset(
-  sqlite3 *db,
-  const ProllyHash *pA,
-  const ProllyHash *pB,
-  int *pSame
-){
-  struct TableEntry *aA = 0, *aB = 0;
-  int nA = 0, nB = 0;
-  u8 *aMatched = 0;
-  int i, j, rc;
-
-  *pSame = 0;
-  rc = doltliteLoadCatalog(db, pA, &aA, &nA, 0);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = doltliteLoadCatalog(db, pB, &aB, &nB, 0);
-  if( rc!=SQLITE_OK ){
-    doltliteFreeCatalog(aA, nA);
-    return rc;
-  }
-  if( nA!=nB ) goto done;
-
-  aMatched = sqlite3_malloc(nB>0 ? nB : 1);
-  if( !aMatched ){
-    rc = SQLITE_NOMEM;
-    goto done;
-  }
-  memset(aMatched, 0, nB>0 ? nB : 1);
-
-  for(i=0; i<nA; i++){
-    int found = 0;
-    for(j=0; j<nB; j++){
-      if( aMatched[j] ) continue;
-      if( aA[i].iTable==1 || aB[j].iTable==1 ){
-        if( aA[i].iTable!=aB[j].iTable ) continue;
-      }
-      if( aA[i].flags!=aB[j].flags ) continue;
-      if( prollyHashCompare(&aA[i].root, &aB[j].root)!=0 ) continue;
-      aMatched[j] = 1;
-      found = 1;
-      break;
-    }
-    if( !found ) goto done;
-  }
-  *pSame = 1;
-
-done:
-  sqlite3_free(aMatched);
-  doltliteFreeCatalog(aA, nA);
-  doltliteFreeCatalog(aB, nB);
-  return rc;
-}
-
 static int addStageAllTables(
   sqlite3 *db,
   sqlite3_context *context,
@@ -1399,7 +1297,7 @@ static int addStageNamedTables(
             removeEntry = 1;
           }
           if( removeEntry ){
-            addFreeEntryStrings(&aStaged[j]);
+            sqlite3_free(aStaged[j].zName);
             if( j+1 < nStaged ){
               memmove(&aStaged[j], &aStaged[j+1],
                       (nStaged-j-1) * (int)sizeof(struct TableEntry));
@@ -1434,21 +1332,23 @@ static int addStageNamedTables(
           if( aStaged[k].iTable==iTable
            || (aStaged[k].zName && aWorking[j].zName
                && strcmp(aStaged[k].zName, aWorking[j].zName)==0) ){
-            struct TableEntry copied;
             int schemaChanged =
               prollyHashCompare(&aStaged[k].schemaHash, &aWorking[j].schemaHash)!=0;
             int nameChanged =
               (!aStaged[k].zName) != (!aWorking[j].zName)
               || (aStaged[k].zName && aWorking[j].zName
                   && strcmp(aStaged[k].zName, aWorking[j].zName)!=0);
-            rc = addCopyTableEntry(context, &copied, &aWorking[j]);
-            if( rc!=SQLITE_OK ){
+            char *zDup = aWorking[j].zName
+                           ? sqlite3_mprintf("%s", aWorking[j].zName) : 0;
+            if( aWorking[j].zName && !zDup ){
               doltliteFreeCatalog(aWorking, nWorking);
               doltliteFreeCatalog(aStaged, nStaged);
-              return rc;
+              sqlite3_result_error_nomem(context);
+              return SQLITE_NOMEM;
             }
-            addFreeEntryStrings(&aStaged[k]);
-            aStaged[k] = copied;
+            sqlite3_free(aStaged[k].zName);
+            aStaged[k] = aWorking[j];
+            aStaged[k].zName = zDup;
             if( schemaChanged || nameChanged ){
               updateMaster = 1;
             }
@@ -1885,30 +1785,33 @@ static void doltliteCommitFunc(
     for(j=0; j<nWorking; j++){
       const char *zName = aWorking[j].zName;
       int updated = 0;
+      char *zDup;
       struct TableEntry *pStaged;
       if( !addNameIndexFind(&headIdx, zName) ) continue;
 
       pStaged = addNameIndexFind(&stagedIdx, zName);
       if( pStaged ){
           k = (int)(pStaged - aStaged);
-          {
-            struct TableEntry copied;
-            rc = addCopyTableEntry(context, &copied, &aWorking[j]);
-            if( rc!=SQLITE_OK ){
-              FREE_ADD_MODIFIED_CATALOGS();
-              return;
-            }
-            addFreeEntryStrings(&aStaged[k]);
-            aStaged[k] = copied;
+          zDup = zName ? sqlite3_mprintf("%s", zName) : 0;
+          if( zName && !zDup ){
+            sqlite3_result_error_nomem(context);
+            FREE_ADD_MODIFIED_CATALOGS();
+            return;
           }
+          sqlite3_free(aStaged[k].zName);
+          aStaged[k] = aWorking[j];
+          aStaged[k].zName = zDup;
           updated = 1;
       }
       if( !updated ){
-        rc = addCopyTableEntry(context, &aStaged[nStaged], &aWorking[j]);
-        if( rc!=SQLITE_OK ){
+        zDup = zName ? sqlite3_mprintf("%s", zName) : 0;
+        if( zName && !zDup ){
+          sqlite3_result_error_nomem(context);
           FREE_ADD_MODIFIED_CATALOGS();
           return;
         }
+        aStaged[nStaged] = aWorking[j];
+        aStaged[nStaged].zName = zDup;
         nStaged++;
       }
     }
@@ -1925,7 +1828,7 @@ static void doltliteCommitFunc(
     }
     for(k=0; k<nStaged; ){
       if( aRemoveStaged[k] ){
-        addFreeEntryStrings(&aStaged[k]);
+        sqlite3_free(aStaged[k].zName);
         if( k+1<nStaged ){
           memmove(&aStaged[k], &aStaged[k+1],
                   (nStaged-k-1)*(int)sizeof(struct TableEntry));
@@ -1945,7 +1848,19 @@ static void doltliteCommitFunc(
       return;
     }
 
-    rc = addWriteStagedCatalog(db, cs, aStaged, nStaged);
+    {
+      u8 *buf = 0;
+      int nBuf = 0;
+      ProllyHash newStagedHash;
+      rc = doltliteSerializeCatalogEntries(db, aStaged, nStaged, &buf, &nBuf);
+      if( rc==SQLITE_OK ){
+        rc = chunkStorePut(cs, buf, nBuf, &newStagedHash);
+      }
+      sqlite3_free(buf);
+      if( rc==SQLITE_OK ){
+        doltliteSetSessionStaged(db, &newStagedHash);
+      }
+    }
 
     FREE_ADD_MODIFIED_CATALOGS();
     #undef FREE_ADD_MODIFIED_CATALOGS
@@ -1966,22 +1881,6 @@ static void doltliteCommitFunc(
   }
 
   doltliteGetSessionStaged(db, &catalogHash);
-  if( !prollyHashIsEmpty(&catalogHash) ){
-    struct TableEntry *aStagedCatalog = 0;
-    int nStagedCatalog = 0;
-    rc = doltliteLoadCatalog(db, &catalogHash, &aStagedCatalog, &nStagedCatalog, 0);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(context, "failed to load staged catalog", -1);
-      return;
-    }
-    rc = addWriteStagedCatalog(db, cs, aStagedCatalog, nStagedCatalog);
-    doltliteFreeCatalog(aStagedCatalog, nStagedCatalog);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error_code(context, rc);
-      return;
-    }
-    doltliteGetSessionStaged(db, &catalogHash);
-  }
   if( prollyHashIsEmpty(&catalogHash) ){
     if( allowEmpty ){
       ProllyHash headCatHash;
@@ -2138,12 +2037,6 @@ static void doltliteCommitFunc(
     ProllyHash workingCatHash;
     rc = doltliteFlushCatalogToHash(db, &workingCatHash);
     if( rc==SQLITE_OK ){
-      int sameRoots = 0;
-      int cmpRc = catalogHashesHaveSameRootMultiset(
-          db, &workingCatHash, &catalogHash, &sameRoots);
-      if( cmpRc==SQLITE_OK && sameRoots ){
-        memcpy(&workingCatHash, &catalogHash, sizeof(workingCatHash));
-      }
       rc = doltliteAdvanceBranch(db, &commitHash, &catalogHash, &workingCatHash);
     }
   }
@@ -2229,12 +2122,13 @@ static int resetStageNamedPaths(
     const char *zTable = azPaths[p];
     int iH = resetFindTableIndex(aHead, nHead, zTable);
     int iS = resetFindTableIndex(aStaged, nStaged, zTable);
+    char *zDup;
     if( iH<0 && iS<0 ){
       rc = SQLITE_NOTFOUND;
       goto done;
     }
     if( iH<0 ){
-      addFreeEntryStrings(&aStaged[iS]);
+      sqlite3_free(aStaged[iS].zName);
       if( iS+1<nStaged ){
         memmove(&aStaged[iS], &aStaged[iS+1],
                 (nStaged-iS-1)*(int)sizeof(struct TableEntry));
@@ -2248,15 +2142,23 @@ static int resetStageNamedPaths(
         goto done;
       }
       aStaged = aNew;
-      rc = addCopyTableEntry(0, &aStaged[nStaged], &aHead[iH]);
-      if( rc!=SQLITE_OK ) goto done;
+      zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
+      if( aHead[iH].zName && !zDup ){
+        rc = SQLITE_NOMEM;
+        goto done;
+      }
+      aStaged[nStaged] = aHead[iH];
+      aStaged[nStaged].zName = zDup;
       nStaged++;
     }else{
-      struct TableEntry copied;
-      rc = addCopyTableEntry(0, &copied, &aHead[iH]);
-      if( rc!=SQLITE_OK ) goto done;
-      addFreeEntryStrings(&aStaged[iS]);
-      aStaged[iS] = copied;
+      zDup = aHead[iH].zName ? sqlite3_mprintf("%s", aHead[iH].zName) : 0;
+      if( aHead[iH].zName && !zDup ){
+        rc = SQLITE_NOMEM;
+        goto done;
+      }
+      sqlite3_free(aStaged[iS].zName);
+      aStaged[iS] = aHead[iH];
+      aStaged[iS].zName = zDup;
     }
   }
 
@@ -2438,11 +2340,15 @@ static int doltlitePreserveUntrackedTablesOnHardReset(
           }
         }
         if( tgtIdx>=0 ){
-          struct TableEntry copied;
-          rc = addCopyTableEntry(0, &copied, &aTarget[tgtIdx]);
-          if( rc!=SQLITE_OK ) break;
-          addFreeEntryStrings(&aWorking[j]);
-          aWorking[j] = copied;
+          char *zDup = aTarget[tgtIdx].zName
+                         ? sqlite3_mprintf("%s", aTarget[tgtIdx].zName) : 0;
+          if( aTarget[tgtIdx].zName && !zDup ){
+            rc = SQLITE_NOMEM;
+            break;
+          }
+          sqlite3_free(aWorking[j].zName);
+          aWorking[j] = aTarget[tgtIdx];
+          aWorking[j].zName = zDup;
         }
       }
     }
