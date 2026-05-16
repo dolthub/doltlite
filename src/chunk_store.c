@@ -285,6 +285,8 @@ int chunkStoreOpen(
   memset(cs, 0, sizeof(*cs));
   cs->file.pVfs = pVfs;
   cs->graphLockFd = -1;
+  cs->pLockMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
+  cs->lockDepth = 0;
 
   if( zFilename==0 || zFilename[0]=='\0'
    || strcmp(zFilename, ":memory:")==0 ){
@@ -421,6 +423,7 @@ int chunkStoreClose(ChunkStore *cs){
   csFreeTags(cs);
   csFreeRemotes(cs);
   csFreeTracking(cs);
+  sqlite3_mutex_free(cs->pLockMutex);
   memset(cs, 0, sizeof(*cs));
   return SQLITE_OK;
 }
@@ -1370,19 +1373,31 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
   int rc;
   if( pChanged ) *pChanged = 0;
   if( cs->isMemory ) return SQLITE_OK;
-  if( cs->graphLockFd >= 0 ) return SQLITE_OK;
-  if( !cs->file.zFilename ) return SQLITE_ERROR;
+  if( cs->pLockMutex && sqlite3_mutex_try(cs->pLockMutex)!=SQLITE_OK ){
+    return SQLITE_BUSY;
+  }
+  if( cs->lockDepth > 0 ){
+    cs->lockDepth++;
+    return SQLITE_OK;
+  }
+  if( !cs->file.zFilename ){
+    if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
+    return SQLITE_ERROR;
+  }
   if( csFileLockNB(cs->file.zFilename, &cs->graphLockFd) != 0 ){
+    if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return SQLITE_BUSY;
   }
   rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
     csFileUnlock(cs->graphLockFd);
     cs->graphLockFd = -1;
-  }else if( pChanged ){
-    *pChanged = changed;
+    if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
+    return rc;
   }
-  return rc;
+  cs->lockDepth = 1;
+  if( pChanged ) *pChanged = changed;
+  return SQLITE_OK;
 }
 
 int chunkStoreLockAndRefresh(ChunkStore *cs){
@@ -1390,7 +1405,14 @@ int chunkStoreLockAndRefresh(ChunkStore *cs){
 }
 
 void chunkStoreUnlock(ChunkStore *cs){
-  if( cs->graphLockFd >= 0 ){
+  if( cs->lockDepth > 0 ){
+    cs->lockDepth--;
+    if( cs->lockDepth == 0 && cs->graphLockFd >= 0 ){
+      csFileUnlock(cs->graphLockFd);
+      cs->graphLockFd = -1;
+    }
+    if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
+  }else if( cs->graphLockFd >= 0 ){
     csFileUnlock(cs->graphLockFd);
     cs->graphLockFd = -1;
   }

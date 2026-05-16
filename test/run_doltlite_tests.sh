@@ -80,6 +80,7 @@ TESTS=(
   doltlite_open_sqlite_file.sh
   doltlite_record_format.sh
   doltlite_schema_cookie.sh
+  doltlite_storage_locking.sh
   doltlite_behavior.sh
   doltlite_branch_edge.sh
   doltlite_diff_alter.sh

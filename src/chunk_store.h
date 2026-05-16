@@ -100,6 +100,8 @@ struct ChunkStore {
   u8 snapshotPinned;
   u8 hasMovedChecked;
   int graphLockFd;
+  sqlite3_mutex *pLockMutex;
+  int lockDepth;
 };
 
 int chunkStoreOpen(ChunkStore *cs, sqlite3_vfs *pVfs,
