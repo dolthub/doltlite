@@ -98,6 +98,10 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   if( (pCur)->cachedPayloadOwned && (pCur)->pCachedPayload ){ \
     sqlite3_free((pCur)->pCachedPayload); \
   } \
+  if( (pCur)->pCachedFrom ){ \
+    prollyCacheRelease((pCur)->pCur.pCache, (pCur)->pCachedFrom); \
+    (pCur)->pCachedFrom = 0; \
+  } \
   (pCur)->pCachedPayload = 0; \
   (pCur)->nCachedPayload = 0; \
   (pCur)->cachedPayloadOwned = 0; \
@@ -352,6 +356,7 @@ struct BtCursor {
   u8 *pCachedPayload;
   int nCachedPayload;
   u8 cachedPayloadOwned;
+  ProllyCacheEntry *pCachedFrom;
   u8 *pReconPayload;
   int nReconPayloadAlloc;
   u8 *pSeekRecord;
@@ -456,22 +461,26 @@ static int cacheCursorPayloadReconstructed(
 static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   if( pCur->curIntKey ){
     const u8 *pVal; int nVal;
+    ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
     cursorCurrentTreeValue(pCur, &pVal, &nVal);
     if( nVal > 0 ){
       pCur->pCachedPayload = (u8*)pVal;
       pCur->nCachedPayload = nVal;
       pCur->cachedPayloadOwned = 0;
+      pCur->pCachedFrom = prollyCacheGet(pCur->pCur.pCache, &pLeaf->hash);
     }
   }
 }
 
 static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
   const u8 *pVal; int nVal;
+  ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
   cursorCurrentTreeValue(pCur, &pVal, &nVal);
   if( nVal > 0 ){
     pCur->pCachedPayload = (u8*)pVal;
     pCur->nCachedPayload = nVal;
     pCur->cachedPayloadOwned = 0;
+    pCur->pCachedFrom = prollyCacheGet(pCur->pCur.pCache, &pLeaf->hash);
   }
 }
 
@@ -6705,11 +6714,13 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   }else{
 
     const u8 *pVal; int nVal;
+    ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
     cursorCurrentTreeValue(pCur, &pVal, &nVal);
     if( nVal > 0 ){
       pCur->pCachedPayload = (u8*)pVal;
       pCur->nCachedPayload = nVal;
       pCur->cachedPayloadOwned = 0;
+      pCur->pCachedFrom = prollyCacheGet(pCur->pCur.pCache, &pLeaf->hash);
       *ppData = pVal;
       *pnData = nVal;
     }else{

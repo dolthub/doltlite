@@ -76,6 +76,7 @@ TESTS=(
   # Additional tests
   doltlite_attach_sqlite.sh
   doltlite_dbpage.sh
+  doltlite_arm_correctness.sh
   doltlite_open_sqlite_file.sh
   doltlite_record_format.sh
   doltlite_schema_cookie.sh
