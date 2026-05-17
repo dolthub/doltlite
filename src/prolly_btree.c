@@ -5255,6 +5255,14 @@ static int prollyBtreeCursor(
   pTE = findTable(p, iTable);
   if( !pTE ){
     u8 flags = pKeyInfo ? BTREE_BLOBKEY : BTREE_INTKEY;
+    if( iTable < p->cat.iNextTable ){
+      sqlite3_log(SQLITE_NOTICE,
+        "doltlite: cursor open on iTable=%u not in catalog "
+        "(iNextTable=%u); synthesizing %s entry from pKeyInfo. "
+        "May indicate stale schema cache.",
+        (unsigned)iTable, (unsigned)p->cat.iNextTable,
+        pKeyInfo ? "BLOBKEY" : "INTKEY");
+    }
     pTE = addTable(p, iTable, flags);
     if( !pTE ) return SQLITE_NOMEM;
   }

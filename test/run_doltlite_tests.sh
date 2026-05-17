@@ -82,6 +82,7 @@ TESTS=(
   doltlite_record_format.sh
   doltlite_schema_cookie.sh
   doltlite_storage_locking.sh
+  doltlite_unknown_table_cursor.sh
   doltlite_behavior.sh
   doltlite_branch_edge.sh
   doltlite_diff_alter.sh
