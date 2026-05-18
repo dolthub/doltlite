@@ -62,6 +62,7 @@
 #define sqlite3BtreeIncrVacuum orig_sqlite3BtreeIncrVacuum
 #define sqlite3BtreeIndexMoveto orig_sqlite3BtreeIndexMoveto
 #define sqlite3BtreeInsert orig_sqlite3BtreeInsert
+#define sqlite3BtreeIsDoltliteFormat orig_sqlite3BtreeIsDoltliteFormat
 #define sqlite3BtreeIntegerKey orig_sqlite3BtreeIntegerKey
 #define sqlite3BtreeIntegrityCheck orig_sqlite3BtreeIntegrityCheck
 #define sqlite3BtreeIsEmpty orig_sqlite3BtreeIsEmpty
