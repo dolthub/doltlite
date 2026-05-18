@@ -80,6 +80,7 @@ TESTS=(
   doltlite_open_sqlite_file.sh
   doltlite_comparison.sh
   doltlite_pragma_auto_vacuum.sh
+  doltlite_pragma_page_count.sh
   doltlite_record_format.sh
   doltlite_schema_cookie.sh
   doltlite_snapshot_isolation.sh
