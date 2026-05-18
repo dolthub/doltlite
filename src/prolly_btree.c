@@ -3903,7 +3903,16 @@ Pgno sqlite3BtreeMaxPageCount(Btree *p, Pgno mxPage){
 }
 
 static Pgno prollyBtreeLastPage(Btree *p){
-  return p->cat.iNextTable + 1000;
+  ChunkStore *cs;
+  i64 n;
+  if( !p || !p->pBt ) return 0;
+  cs = &p->pBt->store;
+  n = (i64)chunkIndexCount(&cs->index)
+    + (i64)chunkStagingPendingCount(&cs->staging)
+    + (i64)chunkStagingRecentCount(&cs->staging);
+  if( n < 0 ) n = 0;
+  if( n > (i64)0xfffffffe ) n = (i64)0xfffffffe;
+  return (Pgno)n;
 }
 Pgno sqlite3BtreeLastPage(Btree *p){
   return p->pOps->xLastPage(p);
