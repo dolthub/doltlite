@@ -3937,8 +3937,9 @@ int sqlite3BtreeGetReserveNoMutex(Btree *p){
 }
 
 static int prollyBtreeSetAutoVacuum(Btree *p, int autoVacuum){
-  (void)p; (void)autoVacuum;
-  return SQLITE_OK;
+  (void)p;
+  if( autoVacuum==BTREE_AUTOVACUUM_NONE ) return SQLITE_OK;
+  return SQLITE_ERROR;
 }
 int sqlite3BtreeSetAutoVacuum(Btree *p, int autoVacuum){
   if( !p ) return SQLITE_OK;
@@ -3956,7 +3957,7 @@ int sqlite3BtreeGetAutoVacuum(Btree *p){
 
 static int prollyBtreeIncrVacuum(Btree *p){
   (void)p;
-  return SQLITE_DONE;
+  return SQLITE_ERROR;
 }
 int sqlite3BtreeIncrVacuum(Btree *p){
   if( !p ) return SQLITE_DONE;
