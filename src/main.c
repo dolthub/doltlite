@@ -3743,6 +3743,17 @@ int sqlite3_open16(
 /*
 ** Register a new collation sequence with the database handle db.
 */
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+static int doltliteCreateCollationUnsupported(sqlite3 *db){
+  int rc = SQLITE_ERROR;
+  sqlite3_mutex_enter(db->mutex);
+  sqlite3ErrorWithMsg(db, rc, "not supported");
+  rc = sqlite3ApiExit(db, rc);
+  sqlite3_mutex_leave(db->mutex);
+  return rc;
+}
+#endif
+
 int sqlite3_create_collation(
   sqlite3* db,
   const char *zName,
@@ -3750,7 +3761,18 @@ int sqlite3_create_collation(
   void* pCtx,
   int(*xCompare)(void*,int,const void*,int,const void*)
 ){
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#ifdef SQLITE_ENABLE_API_ARMOR
+  if( !sqlite3SafetyCheckOk(db) || zName==0 ) return SQLITE_MISUSE_BKPT;
+#endif
+  (void)zName;
+  (void)enc;
+  (void)pCtx;
+  (void)xCompare;
+  return doltliteCreateCollationUnsupported(db);
+#else
   return sqlite3_create_collation_v2(db, zName, enc, pCtx, xCompare, 0);
+#endif
 }
 
 /*
@@ -3768,6 +3790,14 @@ int sqlite3_create_collation_v2(
 
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) || zName==0 ) return SQLITE_MISUSE_BKPT;
+#endif
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+  (void)zName;
+  (void)enc;
+  (void)pCtx;
+  (void)xCompare;
+  (void)xDel;
+  return doltliteCreateCollationUnsupported(db);
 #endif
   sqlite3_mutex_enter(db->mutex);
   assert( !db->mallocFailed );
@@ -3793,6 +3823,13 @@ int sqlite3_create_collation16(
 
 #ifdef SQLITE_ENABLE_API_ARMOR
   if( !sqlite3SafetyCheckOk(db) || zName==0 ) return SQLITE_MISUSE_BKPT;
+#endif
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+  (void)zName;
+  (void)enc;
+  (void)pCtx;
+  (void)xCompare;
+  return doltliteCreateCollationUnsupported(db);
 #endif
   sqlite3_mutex_enter(db->mutex);
   assert( !db->mallocFailed );
