@@ -814,6 +814,11 @@ void sqlite3Pragma(
       ** as an auto-vacuum capable db.
       */
       rc = sqlite3BtreeSetAutoVacuum(pBt, eAuto);
+      if( rc==SQLITE_ERROR ){
+        sqlite3ErrorMsg(pParse,
+          "auto_vacuum is not supported on doltlite-format databases");
+        goto pragma_out;
+      }
       if( rc==SQLITE_OK && (eAuto==1 || eAuto==2) ){
         /* When setting the auto_vacuum mode to either "full" or
         ** "incremental", write the value of meta[6] in the database
