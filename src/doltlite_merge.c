@@ -621,6 +621,7 @@ static int canFastMerge(
 ){
   Table *pTab;
   FKey *pFK;
+  int i;
 
   if( !schemaUnchangedBothSides ) return 0;
   if( !zName || !db ) return 0;
@@ -630,6 +631,12 @@ static int canFastMerge(
 
   if( pTab->pIndex ) return 0;
   if( pTab->pCheck && pTab->pCheck->nExpr>0 ) return 0;
+
+  for(i=0; i<pTab->nCol; i++){
+    Column *pCol = &pTab->aCol[i];
+    if( (pCol->colFlags & COLFLAG_PRIMKEY)!=0 ) continue;
+    if( pCol->notNull!=OE_None ) return 0;
+  }
 
   for(pFK=pTab->u.tab.pFKey; pFK; pFK=pFK->pNextFrom){
     if( pFK->aAction[0]!=OE_None || pFK->aAction[1]!=OE_None ) return 0;

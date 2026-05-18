@@ -247,11 +247,6 @@ int doltliteSyncChunks(
       }
 
       rc = pSrc->xGetChunk(pSrc, &aBatch[i], &data, &nData);
-      if( rc==SQLITE_NOTFOUND ){
-
-        rc = SQLITE_OK;
-        continue;
-      }
       if( rc!=SQLITE_OK ) break;
 
       rc = pDst->xPutChunk(pDst, &aBatch[i], data, nData);
