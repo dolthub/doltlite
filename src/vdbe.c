@@ -8187,12 +8187,14 @@ case OP_JournalMode: {    /* out2 */
   assert( sqlite3BtreeHoldsMutex(pBt) );
   if( !sqlite3PagerOkToChangeJournalMode(pPager) ) eNew = eOld;
 
+#ifdef DOLTLITE_PROLLY
   if( eNew!=eOld && sqlite3BtreeIsDoltliteFormat(pBt) ){
     rc = SQLITE_ERROR;
     sqlite3VdbeError(p,
       "journal_mode is not configurable on doltlite-format databases");
     goto abort_due_to_error;
   }
+#endif
 
 #ifndef SQLITE_OMIT_WAL
   zFilename = sqlite3PagerFilename(pPager, 1);
