@@ -337,8 +337,10 @@ static int shimPagerWalSupported(Pager *p){
   (void)p; return 1;
 }
 static int shimPagerOpenWal(Pager *p, int *pisOpen){
-  SHIM(p)->journalMode = PAGER_JOURNALMODE_WAL;
-  if( pisOpen ) *pisOpen = 1;
+  if( !shimPagerIsMemdb(p) ){
+    SHIM(p)->journalMode = PAGER_JOURNALMODE_WAL;
+  }
+  if( pisOpen ) *pisOpen = (SHIM(p)->journalMode==PAGER_JOURNALMODE_WAL);
   return SQLITE_OK;
 }
 static int shimPagerCloseWal(Pager *p, sqlite3 *db){
@@ -498,7 +500,12 @@ PagerShim *pagerShimCreate(
   }
   pShim->pFd          = pFd;
   pShim->pVfs         = pVfs;
-  pShim->journalMode  = PAGER_JOURNALMODE_WAL;
+  if( pShim->zFilename[0]=='\0'
+   || strcmp(pShim->zFilename, ":memory:")==0 ){
+    pShim->journalMode = PAGER_JOURNALMODE_MEMORY;
+  }else{
+    pShim->journalMode = PAGER_JOURNALMODE_WAL;
+  }
   pShim->eLock        = 0;
   pShim->iDataVersion = 1;
 

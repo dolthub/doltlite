@@ -81,6 +81,7 @@ TESTS=(
   doltlite_comparison.sh
   doltlite_pragma_auto_vacuum.sh
   doltlite_pragma_journal_mode.sh
+  doltlite_pragma_memory_journal_mode.sh
   doltlite_pragma_page_count.sh
   doltlite_pragma_wal_checkpoint.sh
   doltlite_record_format.sh
