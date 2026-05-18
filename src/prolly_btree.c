@@ -3936,6 +3936,10 @@ int sqlite3BtreeGetReserveNoMutex(Btree *p){
   return p->pOps->xGetReserveNoMutex(p);
 }
 
+int sqlite3BtreeIsDoltliteFormat(Btree *p){
+  return p && p->pOps==&prollyBtreeOps;
+}
+
 static int prollyBtreeSetAutoVacuum(Btree *p, int autoVacuum){
   (void)p;
   if( autoVacuum==BTREE_AUTOVACUUM_NONE ) return SQLITE_OK;

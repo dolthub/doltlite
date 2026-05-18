@@ -78,6 +78,7 @@ int sqlite3BtreeGetRequestedReserve(Btree*);
 int sqlite3BtreeGetReserveNoMutex(Btree *p);
 int sqlite3BtreeSetAutoVacuum(Btree *, int);
 int sqlite3BtreeGetAutoVacuum(Btree *);
+int sqlite3BtreeIsDoltliteFormat(Btree *);
 int sqlite3BtreeBeginTrans(Btree*,int,int*);
 int sqlite3BtreeCommitPhaseOne(Btree*, const char*);
 int sqlite3BtreeCommitPhaseTwo(Btree*, int);
