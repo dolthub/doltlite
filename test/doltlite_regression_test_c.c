@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "sqlite3.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
@@ -96,6 +97,26 @@ static int open_db(const char *path, sqlite3 **ppDb){
   return rc;
 }
 
+static sqlite3_int64 file_size_or_negative(const char *path){
+  struct stat st;
+  if( stat(path, &st)!=0 ) return -1;
+  return (sqlite3_int64)st.st_size;
+}
+
+static int backup_db(sqlite3 *src, sqlite3 *dest){
+  sqlite3_backup *pBackup;
+  int rc;
+  int rcFinish;
+
+  pBackup = sqlite3_backup_init(dest, "main", src, "main");
+  if( pBackup==0 ) return sqlite3_errcode(dest);
+
+  rc = sqlite3_backup_step(pBackup, -1);
+  rcFinish = sqlite3_backup_finish(pBackup);
+  if( rc==SQLITE_DONE ) rc = rcFinish;
+  return rc;
+}
+
 static int custom_collation_cmp(
   void *pCtx,
   int nA,
@@ -154,6 +175,94 @@ static void run_create_collation_unsupported(void){
   check("builtin_collation_still_works",
         strcmp(queryScalarText(db, "SELECT 'a'='A' COLLATE NOCASE"), "1")==0);
   sqlite3_close(db);
+}
+
+static void make_dbpath(char *zBuf, size_t nBuf, const char *zBase);
+static void removeDbFiles(const char *path);
+
+static void run_backup_safety(void){
+  sqlite3 *srcBig = 0;
+  sqlite3 *srcSmall = 0;
+  sqlite3 *dest = 0;
+  sqlite3 *sameA = 0;
+  sqlite3 *sameB = 0;
+  sqlite3_backup *pBackup;
+  char zBig[512];
+  char zSmall[512];
+  char zDest[512];
+  char zSame[512];
+  sqlite3_int64 nSmall;
+  sqlite3_int64 nDest;
+  int rc;
+
+  make_dbpath(zBig, sizeof(zBig), "backup_safety_big");
+  make_dbpath(zSmall, sizeof(zSmall), "backup_safety_small");
+  make_dbpath(zDest, sizeof(zDest), "backup_safety_dest");
+  make_dbpath(zSame, sizeof(zSame), "backup_safety_same");
+  removeDbFiles(zBig);
+  removeDbFiles(zSmall);
+  removeDbFiles(zDest);
+  removeDbFiles(zSame);
+
+  check("backup_safety_open_big", open_db(zBig, &srcBig)==SQLITE_OK);
+  check("backup_safety_open_dest", open_db(zDest, &dest)==SQLITE_OK);
+  if( srcBig==0 || dest==0 ) goto backup_safety_done;
+
+  rc = execSql(srcBig,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<1200) "
+    "INSERT INTO t SELECT x, printf('big-%04d', x) FROM c;");
+  check("backup_safety_seed_big", rc==SQLITE_OK);
+  check("backup_safety_copy_big", backup_db(srcBig, dest)==SQLITE_OK);
+  check("backup_safety_dest_big_visible",
+        strcmp(queryScalarText(dest, "SELECT count(*) FROM t"), "1200")==0);
+
+  sqlite3_close(srcBig);
+  sqlite3_close(dest);
+  srcBig = 0;
+  dest = 0;
+
+  check("backup_safety_open_small", open_db(zSmall, &srcSmall)==SQLITE_OK);
+  check("backup_safety_reopen_dest", open_db(zDest, &dest)==SQLITE_OK);
+  if( srcSmall==0 || dest==0 ) goto backup_safety_done;
+
+  rc = execSql(srcSmall,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1, 'small');");
+  check("backup_safety_seed_small", rc==SQLITE_OK);
+  nSmall = file_size_or_negative(zSmall);
+  check("backup_safety_small_has_size", nSmall > 0);
+
+  check("backup_safety_copy_small", backup_db(srcSmall, dest)==SQLITE_OK);
+  nDest = file_size_or_negative(zDest);
+  check("backup_safety_dest_truncated", nDest==nSmall);
+  check("backup_safety_dest_handle_refreshed",
+        strcmp(queryScalarText(dest, "SELECT count(*) FROM t"), "1")==0);
+  check("backup_safety_dest_value_refreshed",
+        strcmp(queryScalarText(dest, "SELECT v FROM t WHERE id=1"), "small")==0);
+
+  check("backup_safety_open_same_a", open_db(zSame, &sameA)==SQLITE_OK);
+  check("backup_safety_open_same_b", open_db(zSame, &sameB)==SQLITE_OK);
+  if( sameA && sameB ){
+    check("backup_safety_same_seed",
+          execSql(sameA, "CREATE TABLE s(x); INSERT INTO s VALUES(1);")==SQLITE_OK);
+    pBackup = sqlite3_backup_init(sameB, "main", sameA, "main");
+    check("backup_safety_same_file_rejected", pBackup==0);
+    check("backup_safety_same_file_message",
+          strstr(sqlite3_errmsg(sameB), "same database")!=0);
+    if( pBackup ) sqlite3_backup_finish(pBackup);
+  }
+
+backup_safety_done:
+  if( sameA ) sqlite3_close(sameA);
+  if( sameB ) sqlite3_close(sameB);
+  if( srcBig ) sqlite3_close(srcBig);
+  if( srcSmall ) sqlite3_close(srcSmall);
+  if( dest ) sqlite3_close(dest);
+  removeDbFiles(zBig);
+  removeDbFiles(zSmall);
+  removeDbFiles(zDest);
+  removeDbFiles(zSame);
 }
 
 static int stmt_column_text_equals(sqlite3_stmt *stmt, int iCol, const char *zExpect){
@@ -6989,6 +7098,7 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
 }
 
 static const RegressionCase aCases[] = {
+  { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "create_collation_unsupported", "Create Collation Unsupported Test", run_create_collation_unsupported },
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
