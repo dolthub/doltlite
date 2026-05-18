@@ -134,11 +134,10 @@ static int doltliteSelectParent(
 
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
   ChunkStore *cs = doltliteGetChunkStore(db);
-  int len, j, n_back, parent_sel, rc;
+  int len, j, n, rc;
   int suffix_pos = -1;
   char suffix_op = 0;
   char *base_buf = 0;
-  const char *base;
 
   if( !zRef || !cs ) return SQLITE_ERROR;
 
@@ -157,45 +156,37 @@ int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit){
     }
   }
 
-  n_back = 0;
-  parent_sel = 0;
-  base = zRef;
-  if( suffix_pos>=0 ){
-    if( suffix_pos==len-1 ){
-      if( suffix_op=='~' ){
-        n_back = 1;
-      }else{
-        parent_sel = 1;
-      }
-    }else{
-      int n = atoi(zRef + suffix_pos + 1);
-      if( n<=0 ) n = 0;
-      if( suffix_op=='~' ){
-        n_back = n;
-      }else{
-        parent_sel = n;
-      }
-    }
-    if( n_back>0 || parent_sel>0 ){
-      if( suffix_pos==0 ){
-        base = "HEAD";
-      }else{
-        base_buf = sqlite3_malloc(suffix_pos + 1);
-        if( !base_buf ) return SQLITE_NOMEM;
-        memcpy(base_buf, zRef, suffix_pos);
-        base_buf[suffix_pos] = '\0';
-        base = base_buf;
-      }
-    }
+  if( suffix_pos<0 ){
+    return doltliteResolveBaseRef(db, zRef, pCommit);
   }
 
-  rc = doltliteResolveBaseRef(db, base, pCommit);
-  if( rc==SQLITE_OK && n_back>0 ){
-    rc = doltliteWalkFirstParent(db, pCommit, n_back);
-  }else if( rc==SQLITE_OK && parent_sel>0 ){
-    rc = doltliteSelectParent(db, pCommit, parent_sel-1);
+  if( suffix_pos==len-1 ){
+    n = 1;
+  }else{
+    n = atoi(zRef + suffix_pos + 1);
+    if( n<0 ) return SQLITE_ERROR;
+    if( n==0 && suffix_op=='^' ) return SQLITE_ERROR;
   }
-  if( base_buf ) sqlite3_free(base_buf);
+
+  if( suffix_pos==0 ){
+    rc = doltliteResolveBaseRef(db, "HEAD", pCommit);
+  }else{
+    base_buf = sqlite3_malloc(suffix_pos + 1);
+    if( !base_buf ) return SQLITE_NOMEM;
+    memcpy(base_buf, zRef, suffix_pos);
+    base_buf[suffix_pos] = '\0';
+    rc = doltliteResolveRef(db, base_buf, pCommit);
+    sqlite3_free(base_buf);
+  }
+
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( suffix_op=='~' ){
+    rc = doltliteWalkFirstParent(db, pCommit, n);
+  }else{
+    rc = doltliteSelectParent(db, pCommit, n-1);
+  }
+  if( rc==SQLITE_NOTFOUND ) rc = SQLITE_ERROR;
   return rc;
 }
 

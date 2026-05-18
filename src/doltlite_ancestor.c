@@ -299,21 +299,12 @@ int doltliteFindAncestor(
 
   {
     int iBest = -1;
-    i64 bestTs = 0;
-    DoltliteCommit commit;
     for(i=0; i<nCommon; i++){
       if( aRedundant[i] ) continue;
-      memset(&commit, 0, sizeof(commit));
-      rc = loadCommitByHash(db, &aCommon[i], &commit);
-      if( rc!=SQLITE_OK ) goto done;
       if( iBest<0
-       || commit.timestamp > bestTs
-       || (commit.timestamp == bestTs
-           && prollyHashCompare(&aCommon[i], &aCommon[iBest])<0) ){
+       || prollyHashCompare(&aCommon[i], &aCommon[iBest])<0 ){
         iBest = i;
-        bestTs = commit.timestamp;
       }
-      doltliteCommitClear(&commit);
     }
     if( iBest<0 ){
       rc = SQLITE_NOTFOUND;
