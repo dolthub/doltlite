@@ -35,11 +35,11 @@ static void doltliteHashofFunc(sqlite3_context *ctx, int argc, sqlite3_value **a
   db = sqlite3_context_db_handle(ctx);
   rc = doltliteResolveRef(db, zRef, &commitHash);
   if( rc==SQLITE_NOTFOUND ){
-    sqlite3_result_null(ctx);
+    sqlite3_result_error(ctx, "dolt_hashof: invalid ref spec", -1);
     return;
   }
   if( rc!=SQLITE_OK ){
-    sqlite3_result_error(ctx, "dolt_hashof: ref resolve failed", -1);
+    sqlite3_result_error(ctx, "dolt_hashof: invalid ancestor spec", -1);
     return;
   }
   doltliteHashToHex(&commitHash, hex);
@@ -571,11 +571,11 @@ static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_valu
     }
     rc = doltliteResolveRef(db, zRef, &commitHash);
     if( rc==SQLITE_NOTFOUND ){
-      sqlite3_result_null(ctx);
+      sqlite3_result_error(ctx, "dolt_hashof_table: invalid ref spec", -1);
       return;
     }
     if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_table: ref resolve failed", -1);
+      sqlite3_result_error(ctx, "dolt_hashof_table: invalid ancestor spec", -1);
       return;
     }
     memset(&commit, 0, sizeof(commit));
@@ -637,11 +637,11 @@ static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value *
     }
     rc = doltliteResolveRef(db, zRef, &commitHash);
     if( rc==SQLITE_NOTFOUND ){
-      sqlite3_result_null(ctx);
+      sqlite3_result_error(ctx, "dolt_hashof_db: invalid ref spec", -1);
       return;
     }
     if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_db: ref resolve failed", -1);
+      sqlite3_result_error(ctx, "dolt_hashof_db: invalid ancestor spec", -1);
       return;
     }
     memset(&commit, 0, sizeof(commit));
@@ -703,11 +703,11 @@ static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_va
     }
     rc = doltliteResolveRef(db, zRef, &commitHash);
     if( rc==SQLITE_NOTFOUND ){
-      sqlite3_result_null(ctx);
+      sqlite3_result_error(ctx, "dolt_hashof_catalog: invalid ref spec", -1);
       return;
     }
     if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_catalog: ref resolve failed", -1);
+      sqlite3_result_error(ctx, "dolt_hashof_catalog: invalid ancestor spec", -1);
       return;
     }
     memset(&commit, 0, sizeof(commit));
