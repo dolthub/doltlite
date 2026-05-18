@@ -582,7 +582,7 @@ case "$BENCH_SECTION_MODE" in
 esac
 
 echo ""
-echo "_${ROWS} rows, single invocation per test, workload-only timing via host monotonic clock when available._"
+echo "_${ROWS} rows, median of $(bench_runs_for_test summary) invocations per test, workload-only timing via host monotonic clock when available._"
 
 # ============================================================
 # Enforce performance ceiling (exit 1 if any test exceeds limit)

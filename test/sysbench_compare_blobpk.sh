@@ -557,7 +557,7 @@ echo ""
 SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_writes" "$WRITE_TESTS_AC" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
 
 echo ""
-echo "_${ROWS} rows, single invocation per test, workload-only timing via host monotonic clock when available._"
+echo "_${ROWS} rows, median of $(bench_runs_for_test summary) invocations per test, workload-only timing via host monotonic clock when available._"
 
 # ============================================================
 # Enforce performance ceiling — gates the same shape sysbench_compare.sh
