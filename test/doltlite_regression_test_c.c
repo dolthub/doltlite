@@ -96,6 +96,66 @@ static int open_db(const char *path, sqlite3 **ppDb){
   return rc;
 }
 
+static int custom_collation_cmp(
+  void *pCtx,
+  int nA,
+  const void *pA,
+  int nB,
+  const void *pB
+){
+  (void)pCtx;
+  (void)nA;
+  (void)pA;
+  (void)nB;
+  (void)pB;
+  return 0;
+}
+
+static void custom_collation_destroy(void *pCtx){
+  int *pnDestroy = (int*)pCtx;
+  (*pnDestroy)++;
+}
+
+static void run_create_collation_unsupported(void){
+  sqlite3 *db = 0;
+  int rc;
+  int nDestroy = 0;
+
+  check("create_collation_open", open_db(":memory:", &db)==SQLITE_OK);
+  if( db==0 ) return;
+
+  rc = sqlite3_create_collation(
+      db, "custom", SQLITE_UTF8, 0, custom_collation_cmp);
+  check("create_collation_rejected", rc==SQLITE_ERROR);
+  check("create_collation_errmsg",
+        strcmp(sqlite3_errmsg(db), "not supported")==0);
+
+  rc = sqlite3_create_collation_v2(
+      db, "custom_v2", SQLITE_UTF8, &nDestroy,
+      custom_collation_cmp, custom_collation_destroy);
+  check("create_collation_v2_rejected", rc==SQLITE_ERROR);
+  check("create_collation_v2_errmsg",
+        strcmp(sqlite3_errmsg(db), "not supported")==0);
+  check("create_collation_v2_does_not_call_destroy", nDestroy==0);
+
+#ifndef SQLITE_OMIT_UTF16
+  {
+    const unsigned short zName16[] = {
+      'c', 'u', 's', 't', 'o', 'm', '1', '6', 0
+    };
+    rc = sqlite3_create_collation16(
+        db, zName16, SQLITE_UTF8, 0, custom_collation_cmp);
+    check("create_collation16_rejected", rc==SQLITE_ERROR);
+    check("create_collation16_errmsg",
+          strcmp(sqlite3_errmsg(db), "not supported")==0);
+  }
+#endif
+
+  check("builtin_collation_still_works",
+        strcmp(queryScalarText(db, "SELECT 'a'='A' COLLATE NOCASE"), "1")==0);
+  sqlite3_close(db);
+}
+
 static int stmt_column_text_equals(sqlite3_stmt *stmt, int iCol, const char *zExpect){
   const unsigned char *z = sqlite3_column_text(stmt, iCol);
   if( !zExpect ) return z==0;
@@ -6929,6 +6989,7 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
 }
 
 static const RegressionCase aCases[] = {
+  { "create_collation_unsupported", "Create Collation Unsupported Test", run_create_collation_unsupported },
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
   { "savepoint_catalog_restore", "Savepoint Catalog Restore Test", run_savepoint_catalog_restore },
