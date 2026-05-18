@@ -447,30 +447,6 @@ static int compareCatalogs(
         && prollyHashCompare(&pFrom->schemaHash, &aTo[i].schemaHash)!=0;
       rc = SQLITE_OK;
       if( bRootChanged || bSchemaChanged ){
-        if( staged==0 ){
-          int ignored = 0;
-          char *zIgnErr = 0;
-          int irc = doltliteCheckIgnore(db, zName, &ignored, &zIgnErr);
-          if( irc==SQLITE_CONSTRAINT ){
-            if( pCur->base.pVtab->zErrMsg ){
-              sqlite3_free(pCur->base.pVtab->zErrMsg);
-            }
-            pCur->base.pVtab->zErrMsg = zIgnErr;
-            sqlite3_free(zName);
-            rc = SQLITE_ERROR;
-            goto compare_done;
-          }
-          if( irc!=SQLITE_OK ){
-            sqlite3_free(zIgnErr);
-            sqlite3_free(zName);
-            rc = irc;
-            goto compare_done;
-          }
-          if( ignored ){
-            sqlite3_free(zName);
-            continue;
-          }
-        }
         rc = addRow(pCur, zName, staged, "modified");
       }
     }

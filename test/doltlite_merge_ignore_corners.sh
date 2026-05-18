@@ -1,5 +1,5 @@
 #!/bin/bash
-# Merge / ignore corner cases from the deep review (Tier 4):
+# Merge / push corner cases from the deep review (Tier 4):
 #
 # F3 - canFastMerge skipped NOT NULL guard. Fast path could land
 #      NULL values into NOT NULL columns silently. Now bails on
@@ -8,9 +8,11 @@
 #      pSrc->xGetChunk during push, masking missing local chunks.
 #      Now propagates the error. (Push code path; exercised
 #      indirectly via remote tests; pinned by smoke here only.)
-# F8 - Ignore semantics applied only to new tables; modifications
-#      to ignored tables were unconditionally reported in
-#      dolt_status. Now also consulted in the modified branch.
+#
+# F8 (also in the deep review's Tier 4) was investigated and
+# REJECTED — Dolt's behavior is "ignore only gates new tables;
+# tracked-table modifications still show in dolt_status". The
+# vc_oracle_ignore_test.sh oracle pins the parity. F8 stays as-is.
 
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
@@ -37,7 +39,7 @@ run_test_match() {
 
 db_rm() { rm -f "$1" "${1}-wal"; }
 
-echo "=== Merge / ignore corner cases (F3 / F7 / F8) ==="
+echo "=== Merge / push corner cases (F3 / F7) ==="
 echo ""
 
 # ----------------------------------------------------------------
@@ -63,7 +65,7 @@ UPDATE t SET v=22 WHERE id=2;
 SELECT dolt_commit('-A','-m','feat_change');
 SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-# Merge: should succeed (no conflict — different rows changed).
+# Merge: should succeed (no conflict - different rows changed).
 # The merge MUST go through the slow path now (since t has a
 # NOT NULL column). End state: both updates visible.
 run_test_match "f3_merge_with_notnull_succeeds" \
@@ -72,41 +74,6 @@ run_test_eq "f3_main_change_visible" \
   "$($DOLTLITE "$DB" "SELECT v FROM t WHERE id=1;" 2>&1)" "11"
 run_test_eq "f3_feat_change_visible" \
   "$($DOLTLITE "$DB" "SELECT v FROM t WHERE id=2;" 2>&1)" "22"
-db_rm "$DB"
-
-# ----------------------------------------------------------------
-# F8 - Ignore on modified tables. Mark a table as ignored, modify
-# a row, run dolt_status; the row change should NOT appear.
-# Pinning by user-facing dolt_status output.
-# ----------------------------------------------------------------
-DB=/tmp/test_t4_ign_$$.db; db_rm "$DB"
-echo "CREATE TABLE keep_me(id INTEGER PRIMARY KEY, v TEXT);
-CREATE TABLE temp_log(id INTEGER PRIMARY KEY, msg TEXT);
-CREATE TABLE dolt_ignore(pattern TEXT NOT NULL, ignored TINYINT NOT NULL, PRIMARY KEY(pattern));
-INSERT INTO keep_me VALUES(1,'first');
-INSERT INTO temp_log VALUES(1,'noise');
-INSERT INTO dolt_ignore VALUES('temp_log', 1);
-SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-# Modify the ignored table.
-echo "INSERT INTO temp_log VALUES(2,'more noise');
-UPDATE temp_log SET msg='changed' WHERE id=1;" | $DOLTLITE "$DB" > /dev/null 2>&1
-
-# dolt_status should NOT list temp_log among modified tables.
-out=$($DOLTLITE "$DB" "SELECT table_name FROM dolt_status;" 2>&1)
-if echo "$out" | grep -q "temp_log"; then
-  FAIL=$((FAIL+1))
-  ERRORS="$ERRORS\nFAIL: f8_modified_ignored_not_reported\n  got rows: $out"
-else
-  PASS=$((PASS+1))
-fi
-
-# Sanity: modifying a non-ignored table should still appear.
-echo "INSERT INTO keep_me VALUES(2,'second');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test_match "f8_modified_tracked_table_reported" \
-  "$($DOLTLITE "$DB" "SELECT table_name FROM dolt_status;" 2>&1)" \
-  "keep_me"
-
 db_rm "$DB"
 
 echo ""
