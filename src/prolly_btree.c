@@ -3545,7 +3545,7 @@ int sqlite3BtreeOpen(
    || (strcmp(zFilename, ":memory:")==0 && db->aDb[0].pBt!=0)
    || (flags & BTREE_SINGLE)
    || (vfsFlags & SQLITE_OPEN_TEMP_DB)
-   || origBtreeIsSqliteFile(zFilename)
+   || origBtreeIsSqliteFile(pVfs, zFilename)
   ){
     p = sqlite3_malloc(sizeof(Btree));
     if( !p ) return SQLITE_NOMEM;

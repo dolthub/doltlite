@@ -85,6 +85,6 @@ int origBtreeIntegrityCheck(sqlite3 *db, void *p, Pgno *aRoot,
                             sqlite3_value *aCnt, int nRoot, int mxErr,
                             int *pnErr, char **pzOut);
 
-int origBtreeIsSqliteFile(const char *zFilename);
+int origBtreeIsSqliteFile(sqlite3_vfs *pVfs, const char *zFilename);
 
 #endif
