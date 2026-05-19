@@ -294,15 +294,13 @@ static void verifyFinalState(const char *path){
   sqlite3 *db = 0;
   int rc;
   int count = 0;
-  char mainPath[320];
   char msg[256];
 
-  sqlite3_snprintf(sizeof(mainPath), mainPath, "%s@main", path);
-  rc = sqlite3_open(mainPath, &db);
+  rc = sqlite3_open(path, &db);
   check("verify_open", rc==SQLITE_OK);
   sqlite3_busy_timeout(db, 5000);
 
-  rc = execSqlWithRetry(db, "SELECT dolt_checkout('main')");
+  rc = execSqlWithRetry(db, "SELECT dolt_connect_branch('main')");
   check("verify_checkout_main", rc==SQLITE_OK);
   rc = queryIntWithRetry(db, "SELECT count(*) FROM ref_rows", &count);
   check("verify_all_rows_merged",
