@@ -300,7 +300,7 @@ static void verifyFinalState(const char *path){
   check("verify_open", rc==SQLITE_OK);
   sqlite3_busy_timeout(db, 5000);
 
-  rc = execSqlWithRetry(db, "SELECT dolt_checkout('main')");
+  rc = execSqlWithRetry(db, "SELECT dolt_connect_branch('main')");
   check("verify_checkout_main", rc==SQLITE_OK);
   rc = queryIntWithRetry(db, "SELECT count(*) FROM ref_rows", &count);
   check("verify_all_rows_merged",
