@@ -3429,6 +3429,275 @@ static void doltliteCherryPickFunc(
   }
 }
 
+static int doltliteTableEntryDiffers(
+  const struct TableEntry *a, const struct TableEntry *b
+){
+  if( !a && !b ) return 0;
+  if( !a || !b ) return 1;
+  if( prollyHashCompare(&a->root, &b->root)!=0 ) return 1;
+  if( prollyHashCompare(&a->schemaHash, &b->schemaHash)!=0 ) return 1;
+  return 0;
+}
+
+static int doltliteAppendTableName(
+  char ***pazNames, int *pn, int *pnAlloc, const char *zName
+){
+  int i;
+  if( !zName ) return SQLITE_OK;
+  for(i=0; i<*pn; i++){
+    if( strcmp((*pazNames)[i], zName)==0 ) return SQLITE_OK;
+  }
+  if( *pn == *pnAlloc ){
+    int n = *pnAlloc ? *pnAlloc*2 : 8;
+    char **a = sqlite3_realloc(*pazNames, n*sizeof(char*));
+    if( !a ) return SQLITE_NOMEM;
+    *pazNames = a;
+    *pnAlloc = n;
+  }
+  (*pazNames)[*pn] = sqlite3_mprintf("%s", zName);
+  if( !(*pazNames)[*pn] ) return SQLITE_NOMEM;
+  (*pn)++;
+  return SQLITE_OK;
+}
+
+static void doltliteFreeNameList(char **az, int n){
+  int i;
+  if( !az ) return;
+  for(i=0; i<n; i++) sqlite3_free(az[i]);
+  sqlite3_free(az);
+}
+
+static int doltliteCollectChangedNames(
+  struct TableEntry *aFrom, int nFrom,
+  struct TableEntry *aTo, int nTo,
+  char ***pazNames, int *pn, int *pnAlloc
+){
+  int i, rc;
+  for(i=0; i<nFrom; i++){
+    struct TableEntry *p = doltliteFindTableByName(aTo, nTo, aFrom[i].zName);
+    if( doltliteTableEntryDiffers(&aFrom[i], p) ){
+      rc = doltliteAppendTableName(pazNames, pn, pnAlloc, aFrom[i].zName);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  for(i=0; i<nTo; i++){
+    struct TableEntry *p = doltliteFindTableByName(aFrom, nFrom, aTo[i].zName);
+    if( !p ){
+      rc = doltliteAppendTableName(pazNames, pn, pnAlloc, aTo[i].zName);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+  return SQLITE_OK;
+}
+
+static int doltliteNameInList(char **az, int n, const char *zName){
+  int i;
+  if( !zName ) return 0;
+  for(i=0; i<n; i++){
+    if( strcmp(az[i], zName)==0 ) return 1;
+  }
+  return 0;
+}
+
+// Compares the catalog of |pCommit| against |pParent|, appending names of
+// tables that differ to *pazTouched. These are the tables the revert of pCommit
+// would modify.
+static int doltliteCollectRevertTouchedTables(
+  sqlite3 *db,
+  const ProllyHash *pCommitCat,
+  const ProllyHash *pParentCat,
+  char ***pazTouched, int *pnTouched, int *pnAlloc
+){
+  struct TableEntry *aCommit = 0, *aParent = 0;
+  int nCommit = 0, nParent = 0;
+  int rc;
+  rc = doltliteLoadCatalog(db, pCommitCat, &aCommit, &nCommit, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = doltliteLoadCatalog(db, pParentCat, &aParent, &nParent, 0);
+  if( rc==SQLITE_OK ){
+    rc = doltliteCollectChangedNames(aCommit, nCommit, aParent, nParent,
+                                     pazTouched, pnTouched, pnAlloc);
+  }
+  doltliteFreeCatalog(aCommit, nCommit);
+  doltliteFreeCatalog(aParent, nParent);
+  return rc;
+}
+
+// Captures TableEntry data for each unstaged-dirty table whose name is NOT in
+// the touched list. Sets *pConflict=1 when (a) a staged change exists (matching
+// git: any staged change blocks revert) or (b) an unstaged-dirty table is in
+// the touched list. Returns SQLITE_OK with *paOut = NULL when nothing to save.
+// Caller frees with doltliteFreeCatalog.
+static int doltliteSnapshotDirtyUnrelated(
+  sqlite3 *db,
+  char **azTouched, int nTouched,
+  int *pConflict,
+  struct TableEntry **paOut, int *pnOut
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash headCatHash, stagedHash, workingCatHash;
+  u8 *wBuf = 0; int nWBuf = 0;
+  struct TableEntry *aHead = 0, *aStaged = 0, *aWorking = 0;
+  int nHead = 0, nStaged = 0, nWorking = 0;
+  struct TableEntry *aOut = 0;
+  int nOut = 0;
+  int i, rc;
+
+  *pConflict = 0;
+  *paOut = 0;
+  *pnOut = 0;
+
+  if( !cs ) return SQLITE_OK;
+  if( !doltliteHasUncommittedChanges(db) ) return SQLITE_OK;
+
+  rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  if( rc!=SQLITE_OK ) return rc;
+
+  doltliteGetSessionStaged(db, &stagedHash);
+  if( !prollyHashIsEmpty(&stagedHash)
+   && !prollyHashIsEmpty(&headCatHash)
+   && prollyHashCompare(&stagedHash, &headCatHash)!=0 ){
+    *pConflict = 1;
+    return SQLITE_OK;
+  }
+
+  rc = doltliteFlushAndSerializeCatalog(db, &wBuf, &nWBuf);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStorePut(cs, wBuf, nWBuf, &workingCatHash);
+  sqlite3_free(wBuf);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = doltliteLoadCatalog(db, &workingCatHash, &aWorking, &nWorking, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( !prollyHashIsEmpty(&headCatHash) ){
+    rc = doltliteLoadCatalog(db, &headCatHash, &aHead, &nHead, 0);
+    if( rc!=SQLITE_OK ) goto cleanup;
+  }
+
+  for(i=0; i<nWorking; i++){
+    struct TableEntry *pH = doltliteFindTableByName(aHead, nHead,
+                                                    aWorking[i].zName);
+    if( !doltliteTableEntryDiffers(pH, &aWorking[i]) ) continue;
+
+    if( doltliteNameInList(azTouched, nTouched, aWorking[i].zName) ){
+      *pConflict = 1;
+      goto cleanup;
+    }
+
+    if( !aOut ){
+      aOut = sqlite3_malloc(nWorking * sizeof(struct TableEntry));
+      if( !aOut ){ rc = SQLITE_NOMEM; goto cleanup; }
+      memset(aOut, 0, nWorking * sizeof(struct TableEntry));
+    }
+    aOut[nOut] = aWorking[i];
+    aOut[nOut].zName = sqlite3_mprintf("%s", aWorking[i].zName);
+    if( !aOut[nOut].zName ){ rc = SQLITE_NOMEM; goto cleanup; }
+    aOut[nOut].pPending = 0;
+    nOut++;
+  }
+
+  for(i=0; i<nHead; i++){
+    if( doltliteFindTableByName(aWorking, nWorking, aHead[i].zName) ) continue;
+    if( doltliteNameInList(azTouched, nTouched, aHead[i].zName) ){
+      *pConflict = 1;
+      goto cleanup;
+    }
+  }
+
+cleanup:
+  doltliteFreeCatalog(aHead, nHead);
+  doltliteFreeCatalog(aStaged, nStaged);
+  doltliteFreeCatalog(aWorking, nWorking);
+  if( rc!=SQLITE_OK || *pConflict ){
+    doltliteFreeCatalog(aOut, nOut);
+    return rc;
+  }
+  *paOut = aOut;
+  *pnOut = nOut;
+  return SQLITE_OK;
+}
+
+// Builds a hybrid catalog: load the current HEAD catalog, override entries
+// matching aOverrides[i].zName with the override data, append any overrides
+// not present, serialize, store, switch live state to it, and persist as the
+// working catalog hash. Used to preserve dirty unrelated tables across a
+// revert merge that operates against the clean HEAD.
+static int doltliteApplyDirtyOverridesPostCommit(
+  sqlite3 *db,
+  struct TableEntry *aOverrides, int nOverrides
+){
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  ProllyHash headCatHash, hybridHash;
+  struct TableEntry *aBase = 0;
+  int nBase = 0;
+  struct TableEntry *aHybrid = 0;
+  int nHybrid = 0;
+  u8 *buf = 0;
+  int nBuf = 0;
+  int i, rc;
+
+  if( nOverrides==0 ) return SQLITE_OK;
+  if( !cs ) return SQLITE_ERROR;
+
+  rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+  if( rc!=SQLITE_OK ) return rc;
+  if( prollyHashIsEmpty(&headCatHash) ) return SQLITE_OK;
+
+  rc = doltliteLoadCatalog(db, &headCatHash, &aBase, &nBase, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  aHybrid = sqlite3_malloc((nBase + nOverrides) * sizeof(struct TableEntry));
+  if( !aHybrid ){ rc = SQLITE_NOMEM; goto cleanup; }
+  memset(aHybrid, 0, (nBase + nOverrides) * sizeof(struct TableEntry));
+
+  for(i=0; i<nBase; i++){
+    struct TableEntry *o = doltliteFindTableByName(aOverrides, nOverrides,
+                                                   aBase[i].zName);
+    aHybrid[nHybrid].iTable = aBase[i].iTable;
+    aHybrid[nHybrid].flags = o ? o->flags : aBase[i].flags;
+    memcpy(&aHybrid[nHybrid].root, o ? &o->root : &aBase[i].root,
+           sizeof(ProllyHash));
+    memcpy(&aHybrid[nHybrid].schemaHash,
+           o ? &o->schemaHash : &aBase[i].schemaHash, sizeof(ProllyHash));
+    aHybrid[nHybrid].zName = sqlite3_mprintf("%s", aBase[i].zName);
+    if( !aHybrid[nHybrid].zName ){ rc = SQLITE_NOMEM; goto cleanup; }
+    nHybrid++;
+  }
+  for(i=0; i<nOverrides; i++){
+    if( doltliteFindTableByName(aBase, nBase, aOverrides[i].zName) ) continue;
+    aHybrid[nHybrid].iTable = aOverrides[i].iTable;
+    aHybrid[nHybrid].flags = aOverrides[i].flags;
+    memcpy(&aHybrid[nHybrid].root, &aOverrides[i].root, sizeof(ProllyHash));
+    memcpy(&aHybrid[nHybrid].schemaHash, &aOverrides[i].schemaHash,
+           sizeof(ProllyHash));
+    aHybrid[nHybrid].zName = sqlite3_mprintf("%s", aOverrides[i].zName);
+    if( !aHybrid[nHybrid].zName ){ rc = SQLITE_NOMEM; goto cleanup; }
+    nHybrid++;
+  }
+
+  rc = doltliteSerializeCatalogEntries(db, aHybrid, nHybrid, &buf, &nBuf);
+  if( rc==SQLITE_OK ){
+    rc = chunkStorePut(cs, buf, nBuf, &hybridHash);
+  }
+  sqlite3_free(buf);
+  if( rc!=SQLITE_OK ) goto cleanup;
+
+  rc = doltliteSwitchCatalog(db, &hybridHash);
+  if( rc!=SQLITE_OK ) goto cleanup;
+
+  rc = doltliteUpdateBranchWorkingState(db,
+      doltliteGetSessionBranch(db), &headCatHash, &hybridHash);
+  if( rc!=SQLITE_OK ) goto cleanup;
+
+  rc = doltlitePersistWorkingSetWithHash(db, &hybridHash);
+
+cleanup:
+  doltliteFreeCatalog(aHybrid, nHybrid);
+  doltliteFreeCatalog(aBase, nBase);
+  return rc;
+}
+
 static void doltliteRevertFunc(
   sqlite3_context *context,
   int argc,
@@ -3442,6 +3711,12 @@ static void doltliteRevertFunc(
   int nConflicts = 0;
   int rc;
   char hexBuf[PROLLY_HASH_SIZE*2+1];
+  char **azTouched = 0;
+  int nTouched = 0;
+  int nTouchedAlloc = 0;
+  struct TableEntry *aDirtyUnrelated = 0;
+  int nDirtyUnrelated = 0;
+  int conflictWithDirty = 0;
 
   memset(&revertCommit, 0, sizeof(revertCommit));
   memset(&parentCommit, 0, sizeof(parentCommit));
@@ -3468,12 +3743,6 @@ static void doltliteRevertFunc(
   zRef = (const char*)sqlite3_value_text(argv[0]);
   if( !zRef ){
     sqlite3_result_int(context, 0);
-    return;
-  }
-
-  if( doltliteHasUncommittedChanges(db) ){
-    sqlite3_result_error(context,
-      "cannot revert with uncommitted changes", -1);
     return;
   }
 
@@ -3510,6 +3779,24 @@ static void doltliteRevertFunc(
     return;
   }
 
+  rc = doltliteCollectRevertTouchedTables(db, &revertCommit.catalogHash,
+      &parentCommit.catalogHash, &azTouched, &nTouched, &nTouchedAlloc);
+  if( rc!=SQLITE_OK ) goto revert_error;
+
+  rc = doltliteSnapshotDirtyUnrelated(db, azTouched, nTouched,
+      &conflictWithDirty, &aDirtyUnrelated, &nDirtyUnrelated);
+  if( rc!=SQLITE_OK ) goto revert_error;
+  if( conflictWithDirty ){
+    doltliteCommitClear(&revertCommit);
+    doltliteCommitClear(&parentCommit);
+    doltliteCommitClear(&ourCommit);
+    doltliteFreeNameList(azTouched, nTouched);
+    doltliteFreeCatalog(aDirtyUnrelated, nDirtyUnrelated);
+    sqlite3_result_error(context,
+      "cannot revert with uncommitted changes", -1);
+    return;
+  }
+
   {
     char msg[512];
     sqlite3_snprintf(sizeof(msg), msg, "Revert \"%s\"",
@@ -3523,23 +3810,49 @@ static void doltliteRevertFunc(
   doltliteCommitClear(&revertCommit);
   doltliteCommitClear(&parentCommit);
   doltliteCommitClear(&ourCommit);
+  doltliteFreeNameList(azTouched, nTouched);
+  azTouched = 0;
+  nTouched = 0;
 
   if( rc==SQLITE_BUSY ){
+    doltliteFreeCatalog(aDirtyUnrelated, nDirtyUnrelated);
     sqlite3_result_error(context,
       "revert conflict: another connection committed to this branch. Please retry your transaction.",
       -1);
     return;
   }
   if( rc!=SQLITE_OK ){
+    doltliteFreeCatalog(aDirtyUnrelated, nDirtyUnrelated);
     sqlite3_result_error(context, "revert failed", -1);
     return;
   }
+
+  if( nConflicts==0 && hexBuf[0] && nDirtyUnrelated>0 ){
+    rc = doltliteApplyDirtyOverridesPostCommit(db, aDirtyUnrelated,
+                                               nDirtyUnrelated);
+    if( rc!=SQLITE_OK ){
+      doltliteFreeCatalog(aDirtyUnrelated, nDirtyUnrelated);
+      sqlite3_result_error(context,
+        "revert succeeded but failed to restore uncommitted changes", -1);
+      return;
+    }
+  }
+  doltliteFreeCatalog(aDirtyUnrelated, nDirtyUnrelated);
 
   if( nConflicts > 0 ){
     return;
   }else if( hexBuf[0] ){
     sqlite3_result_text(context, hexBuf, -1, SQLITE_TRANSIENT);
   }
+  return;
+
+revert_error:
+  doltliteCommitClear(&revertCommit);
+  doltliteCommitClear(&parentCommit);
+  doltliteCommitClear(&ourCommit);
+  doltliteFreeNameList(azTouched, nTouched);
+  doltliteFreeCatalog(aDirtyUnrelated, nDirtyUnrelated);
+  sqlite3_result_error(context, "revert failed", -1);
 }
 
 static int doltliteRebaseCollectReplaySet(
