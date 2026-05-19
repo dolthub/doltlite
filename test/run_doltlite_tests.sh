@@ -40,6 +40,7 @@ TESTS=(
   doltlite_conflicts.sh
   doltlite_conflict_rows.sh
   doltlite_cherry_pick.sh
+  doltlite_revert_dirty.sh
 
   # Virtual tables
   doltlite_diff_table.sh
