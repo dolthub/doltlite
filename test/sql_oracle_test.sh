@@ -6584,6 +6584,112 @@ SELECT count(b.k), count(*) FROM a LEFT JOIN b USING(k);
 "
 
 # ════════════════════════════════════════════════════════════════════
+# Category 121: Defensively-walled internal paths
+# ════════════════════════════════════════════════════════════════════
+#
+# These tripwires guard two internal paths in prolly_btree.c that
+# have the same "modify table state, forget pending mutmap" bug shape
+# fixed in PRs #974 and #975, but that are not currently reachable
+# from SQL:
+#
+#   * prollyBtreeDropTable's iTable==1 branch — fires on
+#     sqlite3BtreeDropTable(pBt, 1, ...). The SQL parser refuses
+#     DROP TABLE sqlite_master and VDBE OP_Destroy asserts p1>1,
+#     so today nothing reaches it. The branch also doesn't clear
+#     pTE->pPending.
+#
+#   * prollyBtreeNewDb — called from backup.c:425 when the source
+#     of sqlite3_backup_step has zero pages. Doltlite's backup
+#     dispatch (pager_shim.c) does a file-level copy for
+#     doltlite→doltlite and falls through to the orig pager for
+#     attached-DB backups, so the prolly NewDb is unreachable
+#     today. The branch also doesn't clear pTE->pPending.
+#
+# If anyone removes a parser guard, changes the VDBE assertion,
+# refactors the backup dispatch, or otherwise opens these paths
+# without auditing the underlying engine, these tests should fail.
+# When they do, the fix is to apply the same snapshot-or-free
+# treatment to pTE->pPending that ClearTable now does.
+echo ""
+echo "--- Category 121: Defensively-walled internal paths ---"
+
+# 121a. Parser must refuse DROP TABLE sqlite_master. This is the only
+# SQL phrasing that could route through prollyBtreeDropTable iTable==1.
+# Output is the diagnostic from both engines — they must agree on
+# rejecting it.
+oracle "cat121_drop_sqlite_master_rejected" "
+CREATE TABLE t(x INT);
+DROP TABLE sqlite_master;
+"
+
+# 121b. Even with PRAGMA writable_schema=1 (the escape hatch for
+# direct sqlite_master mutation), the parser still refuses DROP.
+# If anyone ever loosens this, the iTable==1 branch becomes a real
+# corruption path.
+oracle "cat121_drop_sqlite_master_writable_schema_rejected" "
+PRAGMA writable_schema = 1;
+CREATE TABLE t(x INT);
+DROP TABLE sqlite_master;
+"
+
+# 121c. DELETE FROM sqlite_master via writable_schema goes through
+# the cursor.delete path, not xClearTable, so it exercises a
+# different (working) path. Verify behavior matches stock SQLite.
+# This is a sanity check, not a tripwire — but it confirms the
+# only currently-reachable iTable=1 mutation path is correct.
+oracle "cat121_writable_schema_delete_master" "
+CREATE TABLE keep(x INT);
+INSERT INTO keep VALUES(1);
+PRAGMA writable_schema = 1;
+DELETE FROM sqlite_master WHERE type='table' AND name='keep';
+PRAGMA writable_schema = 0;
+SELECT name FROM sqlite_master WHERE type='table';
+"
+
+# 121d. Backup an empty doltlite-format source. SQLite's backup
+# routine calls sqlite3BtreeNewDb on the destination when the
+# source has zero pages (backup.c:425). Today doltlite's
+# sqlite3_backup_init dispatches to a file-level copy that bypasses
+# NewDb entirely, so this should still produce an empty
+# destination. If anyone ever wires the backup path into the
+# prolly btree engine, this test exercises that route.
+oracle "cat121_backup_empty_source" "
+ATTACH DATABASE ':memory:' AS aux;
+CREATE TABLE aux.unused(x INT);
+DELETE FROM aux.unused;
+SELECT count(*) FROM aux.unused;
+SELECT name FROM aux.sqlite_master WHERE type='table';
+"
+
+# 121e. PRAGMA integrity_check after writable_schema operations.
+# If iTable==1 ever leaks pending state, integrity_check is one of
+# the first signals.
+oracle "cat121_integrity_after_writable_schema" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'a'),(2,'b');
+PRAGMA writable_schema = 1;
+UPDATE sqlite_master SET name = name WHERE type='table';
+PRAGMA writable_schema = 0;
+PRAGMA integrity_check;
+SELECT count(*) FROM t;
+"
+
+# 121f. CREATE TABLE inside a transaction touches sqlite_master
+# (iTable=1) via the cursor.insert path. The pending sqlite_master
+# row is in pTE->pPending for iTable=1. If anything in DropTable
+# iTable==1 or NewDb were inadvertently triggered here, the row
+# would either resurrect or vanish. Verify the table's schema
+# survives commit cleanly.
+oracle "cat121_create_table_pending_master_survives" "
+BEGIN;
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'a');
+COMMIT;
+SELECT type, name FROM sqlite_master WHERE name='t';
+SELECT * FROM t;
+"
+
+# ════════════════════════════════════════════════════════════════════
 echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
