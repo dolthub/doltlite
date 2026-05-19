@@ -183,6 +183,20 @@ LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
 #   python3 -c 'import ctypes; ctypes.CDLL("./libdoltlite.dylib"); import runpy; runpy.run_path("../examples/quickstart.py")'
 ```
 
+These recipes only work when Python loads `_sqlite3` as a shared extension that
+can resolve SQLite symbols from `libdoltlite`. They do not work with
+python-build-standalone interpreters, where `_sqlite3` is built into the Python
+executable. This includes the default Pythons installed by tools such as `uv
+python install` and `mise`; `LD_PRELOAD` and `ctypes.CDLL(...)` will silently
+fall back to Python's bundled SQLite in those environments. Use a Python build
+with a dynamically loaded `_sqlite3` module instead, such as distro Python,
+Linuxbrew Python, pyenv-built Python, or conda Python. For `uv`, point the
+environment at one of those interpreters explicitly:
+
+```bash
+uv venv --python /usr/bin/python3
+```
+
 **Go** ([`examples/go/main.go`](examples/go/main.go)) — uses
 [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3) with the `libsqlite3`
 build tag:
