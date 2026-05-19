@@ -4792,6 +4792,8 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   (void)writeOnly;
 
   if( p->inTrans==TRANS_WRITE ){
+    assert( pBt->store.isMemory || pBt->store.graphLockFd >= 0 );
+    assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
     rc = restoreFromCommitted(p);
     if( rc!=SQLITE_OK ){
       chunkStoreUnlock(&pBt->store);
@@ -4914,6 +4916,9 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
   ProllyHash catHash;
   const char *zBr = p->zBranch ? p->zBranch : "main";
   int rc;
+
+  assert( pBt->store.isMemory || pBt->store.graphLockFd >= 0 );
+  assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
 
   rc = serializeCatalog(p, &catData, &nCatData);
   if( rc==SQLITE_OK ){
