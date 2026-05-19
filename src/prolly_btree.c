@@ -965,6 +965,12 @@ static void catRemove(Catalog *cat, Pgno iTable){
   for(i=0; i<cat->n; i++){
     if( cat->a[i].iTable==iTable ){
       sqlite3_free(cat->a[i].zName);
+      if( cat->a[i].pPending ){
+        ProllyMutMap *pMap = (ProllyMutMap*)cat->a[i].pPending;
+        prollyMutMapFree(pMap);
+        sqlite3_free(pMap);
+        cat->a[i].pPending = 0;
+      }
       if( i<cat->n-1 ){
         memmove(&cat->a[i], &cat->a[i+1],
                 (cat->n-i-1)*(int)sizeof(struct TableEntry));
@@ -5098,6 +5104,10 @@ static int prollyBtreeDropTable(Btree *p, int iTable, int *piMoved){
   }
 
   invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
+  /* Clear any cursor aliases of the dropped table's pending mutmap before
+  ** catRemove frees it; otherwise rollback (prollyBtreeRollback) would
+  ** later iterate live cursors and dereference a freed map. */
+  refreshCursorMutMapAliases(p, pBt, (Pgno)iTable, 0);
   removeTable(p, (Pgno)iTable);
 
   if( piMoved ) *piMoved = 0;
