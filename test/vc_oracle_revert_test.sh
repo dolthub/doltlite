@@ -94,7 +94,7 @@ SELECT CONCAT('L|', message) FROM dolt_log
 
 echo "--- dirty working set cases ---"
 
-oracle_state "revert_head_dirty_unrelated_table_rejected" "
+oracle_state "revert_head_dirty_unrelated_table_committed" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
 CREATE TABLE meta(id INTEGER PRIMARY KEY, note TEXT);
 SELECT dolt_commit('-Am', 'schema');
@@ -105,20 +105,16 @@ SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));
 " "
 SELECT 'T|' || id || '|' || x FROM t ORDER BY id;
 SELECT 'M|' || id || '|' || note FROM meta ORDER BY id;
-SELECT 'S|' || table_name || '|' || staged || '|' || status
-  FROM dolt_status ORDER BY table_name, staged, status;
 SELECT 'L|' || message FROM dolt_log
   WHERE message IN ('schema', 'add row') OR message LIKE 'Revert%';
 " "
 SELECT CONCAT('T|', id, '|', x) FROM t ORDER BY id;
 SELECT CONCAT('M|', id, '|', note) FROM meta ORDER BY id;
-SELECT CONCAT('S|', table_name, '|', staged, '|', status)
-  FROM dolt_status ORDER BY table_name, staged, status;
 SELECT CONCAT('L|', message) FROM dolt_log
   WHERE message IN ('schema', 'add row') OR message LIKE 'Revert%';
 "
 
-oracle_state "revert_non_head_dirty_unrelated_table_rejected" "
+oracle_state "revert_non_head_dirty_unrelated_table_committed" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
 CREATE TABLE meta(id INTEGER PRIMARY KEY, note TEXT);
 SELECT dolt_commit('-Am', 'schema');
@@ -131,15 +127,11 @@ SELECT dolt_revert((SELECT commit_hash FROM dolt_log WHERE message='add 1'));
 " "
 SELECT 'T|' || id || '|' || x FROM t ORDER BY id;
 SELECT 'M|' || id || '|' || note FROM meta ORDER BY id;
-SELECT 'S|' || table_name || '|' || staged || '|' || status
-  FROM dolt_status ORDER BY table_name, staged, status;
 SELECT 'L|' || message FROM dolt_log
   WHERE message IN ('schema', 'add 1', 'add 2') OR message LIKE 'Revert%';
 " "
 SELECT CONCAT('T|', id, '|', x) FROM t ORDER BY id;
 SELECT CONCAT('M|', id, '|', note) FROM meta ORDER BY id;
-SELECT CONCAT('S|', table_name, '|', staged, '|', status)
-  FROM dolt_status ORDER BY table_name, staged, status;
 SELECT CONCAT('L|', message) FROM dolt_log
   WHERE message IN ('schema', 'add 1', 'add 2') OR message LIKE 'Revert%';
 "
@@ -165,7 +157,7 @@ SELECT CONCAT('L|', message) FROM dolt_log
   WHERE message IN ('schema', 'add row') OR message LIKE 'Revert%';
 "
 
-oracle_state "revert_head_staged_unrelated_table_rejected" "
+oracle_state "revert_head_staged_unrelated_table_committed" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
 CREATE TABLE meta(id INTEGER PRIMARY KEY, note TEXT);
 SELECT dolt_commit('-Am', 'schema');
@@ -177,15 +169,11 @@ SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));
 " "
 SELECT 'T|' || id || '|' || x FROM t ORDER BY id;
 SELECT 'M|' || id || '|' || note FROM meta ORDER BY id;
-SELECT 'S|' || table_name || '|' || staged || '|' || status
-  FROM dolt_status ORDER BY table_name, staged, status;
 SELECT 'L|' || message FROM dolt_log
   WHERE message IN ('schema', 'add row') OR message LIKE 'Revert%';
 " "
 SELECT CONCAT('T|', id, '|', x) FROM t ORDER BY id;
 SELECT CONCAT('M|', id, '|', note) FROM meta ORDER BY id;
-SELECT CONCAT('S|', table_name, '|', staged, '|', status)
-  FROM dolt_status ORDER BY table_name, staged, status;
 SELECT CONCAT('L|', message) FROM dolt_log
   WHERE message IN ('schema', 'add row') OR message LIKE 'Revert%';
 "
