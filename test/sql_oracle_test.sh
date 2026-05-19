@@ -1892,6 +1892,41 @@ UPDATE t SET v='updated' WHERE id=0;
 SELECT id, v FROM t ORDER BY id;
 "
 
+# 16s. BTREE_SAVEPOSITION reseek-after-delete shape against a
+# blob/WITHOUT-ROWID table with >65k pending mutations. The mutmap
+# drain threshold (PROLLY_MUTMAP_PENDING_FLUSH_LIMIT) forces canDefer
+# to 0 inside prollyBtCursorDelete, falling through to the
+# btreeDeleteImmediate + reseek path. The reseek aliased the freed
+# pSavedDelKey via local pKey when savedDelKeyOwned was set — a UAF
+# the goto-cleanup refactor in this PR closes. Even though the
+# free-then-read may return plausible bytes from a freshly-freed
+# allocator slot, ASAN would catch the read; this oracle pins the
+# correct behavior end-to-end.
+oracle "cat16_savepos_blob_pk_bulk_update" "
+CREATE TABLE t(k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID;
+CREATE INDEX t_v ON t(v);
+BEGIN;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<70000)
+  INSERT INTO t SELECT randomblob(32), printf('v%05d', i) FROM c;
+UPDATE t SET v = v || 'X' WHERE v < 'v00500';
+SELECT count(*) FROM t;
+SELECT count(*) FROM t WHERE v LIKE '%X';
+COMMIT;
+SELECT count(*) FROM t WHERE v LIKE '%X';
+"
+
+# 16t. Same shape but DELETE rather than UPDATE.
+oracle "cat16_savepos_blob_pk_bulk_delete" "
+CREATE TABLE t(k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID;
+BEGIN;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<70000)
+  INSERT INTO t SELECT randomblob(32), printf('v%05d', i) FROM c;
+DELETE FROM t WHERE v < 'v00500';
+SELECT count(*) FROM t;
+COMMIT;
+SELECT count(*) FROM t;
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 17: Partial indexes
 # ════════════════════════════════════════════════════════════════════

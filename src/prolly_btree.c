@@ -7064,30 +7064,18 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   }
 
   rc = syncSavepoints(pCur);
-  if( rc!=SQLITE_OK ){
-    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) goto delete_cleanup;
 
   if( pCur->pgnoRoot==1 ){
     rc = ensureStatementSavepointsCaptured(pCur->pBtree);
-    if( rc!=SQLITE_OK ){
-      if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
-      return rc;
-    }
+    if( rc!=SQLITE_OK ) goto delete_cleanup;
   }
 
   rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
-  if( rc!=SQLITE_OK ){
-    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) goto delete_cleanup;
 
   rc = ensureMutMap(pCur);
-  if( rc!=SQLITE_OK ){
-    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
-    return rc;
-  }
+  if( rc!=SQLITE_OK ) goto delete_cleanup;
 
   /* If no key could be resolved from cursor state, treat the delete as
   ** a no-op. Falling through would call prollyMutMapDelete with iKey=0
@@ -7097,8 +7085,8 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   ** Delete on an invalid cursor in normal bytecode, but a future
   ** refactor or fuzz path could. */
   if( !hasSavedKey ){
-    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
-    return SQLITE_OK;
+    rc = SQLITE_OK;
+    goto delete_cleanup;
   }
   if( pCur->curIntKey ){
     iKey = savedIntKey;
@@ -7107,11 +7095,13 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     pKey = pSavedDelKey;
     nKey = nSavedDelKey;
     rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
-    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
-    pSavedDelKey = 0;
+    /* Don't free pSavedDelKey here. The SAVEPOSITION reseek below reads
+    ** from pKey, which aliases pSavedDelKey when savedDelKeyOwned is
+    ** set; freeing now would memcpy from a dangling pointer. Cleanup
+    ** runs at delete_cleanup once the reseek (if any) has finished. */
   }
 
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ) goto delete_cleanup;
 
   {
     int canDefer = (pCur->pgnoRoot > 1);
@@ -7129,12 +7119,13 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
       } else {
         pCur->eState = CURSOR_INVALID;
       }
-      return SQLITE_OK;
+      rc = SQLITE_OK;
+      goto delete_cleanup;
     }
   }
 
   rc = btreeDeleteImmediate(pCur);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ) goto delete_cleanup;
 
   if( flags & BTREE_SAVEPOSITION ){
     int res = 0;
@@ -7164,7 +7155,11 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     pCur->eState = CURSOR_INVALID;
   }
 
-  return SQLITE_OK;
+  rc = SQLITE_OK;
+
+delete_cleanup:
+  if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
+  return rc;
 }
 int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   if( !pCur ) return SQLITE_OK;
