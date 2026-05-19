@@ -5289,17 +5289,37 @@ static int prollyBtreeCursor(
 
   pTE = findTable(p, iTable);
   if( !pTE ){
-    u8 flags = pKeyInfo ? BTREE_BLOBKEY : BTREE_INTKEY;
+    /* Two shapes land here:
+    **
+    **  (a) iTable < iNextTable — the iTable was previously allocated
+    **      and is gone from the catalog. Almost always indicates a
+    **      stale SQLite schema cache referring to a table that doltlite
+    **      has dropped (DROP TABLE, branch switch, dolt_reset). Stock
+    **      SQLite would return SQLITE_CORRUPT_PGNO from xCursor under
+    **      similar conditions; matching that behavior is much safer
+    **      than synthesizing a phantom entry that subsequent inserts
+    **      then write into and persist on commit.
+    **
+    **  (b) iTable >= iNextTable — the iTable has never been allocated
+    **      in this catalog. The merge / catalog-rebuild paths use this
+    **      shape to materialize tables they're importing from another
+    **      branch, opening read cursors before doltlite's catalog has
+    **      formally registered them. Synthesize for these. */
     if( iTable < p->cat.iNextTable ){
-      sqlite3_log(SQLITE_NOTICE,
+      sqlite3_log(SQLITE_CORRUPT,
         "doltlite: cursor open on iTable=%u not in catalog "
-        "(iNextTable=%u); synthesizing %s entry from pKeyInfo. "
-        "May indicate stale schema cache.",
+        "(iNextTable=%u, %s requested); rejecting as CORRUPT. "
+        "Likely cause: stale schema cache after a branch switch, "
+        "DROP, or concurrent catalog rewrite.",
         (unsigned)iTable, (unsigned)p->cat.iNextTable,
         pKeyInfo ? "BLOBKEY" : "INTKEY");
+      return SQLITE_CORRUPT_PGNO(iTable);
     }
-    pTE = addTable(p, iTable, flags);
-    if( !pTE ) return SQLITE_NOMEM;
+    {
+      u8 flags = pKeyInfo ? BTREE_BLOBKEY : BTREE_INTKEY;
+      pTE = addTable(p, iTable, flags);
+      if( !pTE ) return SQLITE_NOMEM;
+    }
   }
 
   pCur->curIntKey = (pTE->flags & BTREE_INTKEY) ? 1 : 0;
