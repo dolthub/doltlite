@@ -5133,6 +5133,17 @@ static int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
   }
 
   invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
+  /* TRUNCATE: discard any pending mutations for this table. Without this,
+  ** merging the now-empty tree with stale pending inserts would resurrect
+  ** rows the caller asked to remove. Cursor aliases must be cleared in the
+  ** same step because invalidateCursors leaves pCur->pMutMap untouched. */
+  if( pTE->pPending ){
+    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+    prollyMutMapFree(pMap);
+    sqlite3_free(pMap);
+    pTE->pPending = 0;
+    refreshCursorMutMapAliases(p, pBt, (Pgno)iTable, 0);
+  }
   memset(&pTE->root, 0, sizeof(ProllyHash));
 
   return SQLITE_OK;
