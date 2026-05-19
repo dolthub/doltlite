@@ -1732,6 +1732,104 @@ SELECT count(*) FROM t;
 PRAGMA integrity_check;
 "
 
+# 16f. DELETE FROM tbl (truncate path) discards pending mutations in
+# the same transaction. Regression for PR #975: prollyBtreeClearTable
+# previously zeroed the table root but left pTE->pPending intact, so
+# pending inserts (4,5) survived the DELETE and persisted past COMMIT.
+oracle "cat16_truncate_with_pending_in_txn" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c');
+BEGIN;
+INSERT INTO t VALUES (4,'d'),(5,'e');
+DELETE FROM t;
+SELECT count(*) FROM t;
+COMMIT;
+SELECT count(*) FROM t;
+"
+
+# 16g. Truncate with everything pending (no autocommit-flushed rows).
+oracle "cat16_truncate_all_pending" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+BEGIN;
+INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c'),(4,'d'),(5,'e');
+DELETE FROM t;
+SELECT count(*) FROM t;
+COMMIT;
+SELECT count(*) FROM t;
+"
+
+# 16h. Truncate then re-insert in the same transaction; pre-fix the
+# pending pre-truncate row leaked through alongside the post-truncate
+# insert.
+oracle "cat16_truncate_then_insert_same_txn" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'a'),(2,'b');
+BEGIN;
+INSERT INTO t VALUES (4,'d');
+DELETE FROM t;
+INSERT INTO t VALUES (100,'late');
+SELECT id, v FROM t ORDER BY id;
+COMMIT;
+SELECT id, v FROM t ORDER BY id;
+"
+
+# 16i. Reuse a PK value that was pending pre-truncate. Pre-fix the
+# stale pending entry collided with the new insert.
+oracle "cat16_truncate_then_insert_same_pk" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+BEGIN;
+INSERT INTO t VALUES (1,'old');
+DELETE FROM t;
+INSERT INTO t VALUES (1,'new');
+SELECT id, v FROM t;
+COMMIT;
+SELECT id, v FROM t;
+"
+
+# 16j. Truncate inside a savepoint, then ROLLBACK TO. Pre-truncate
+# rows come from autocommit (already in the tree, not the mutmap), so
+# rollback should restore them after the post-fix empty mutmap.
+oracle "cat16_savepoint_rollback_after_truncate" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c');
+SAVEPOINT s1;
+DELETE FROM t;
+SELECT count(*) FROM t;
+ROLLBACK TO s1;
+RELEASE s1;
+SELECT id, v FROM t ORDER BY id;
+"
+
+# 16k. Two tables, one truncated mid-transaction. The other table's
+# pending mutmap must be untouched.
+oracle "cat16_truncate_one_of_two_tables" "
+CREATE TABLE t1(id INTEGER PRIMARY KEY, v TEXT);
+CREATE TABLE t2(id INTEGER PRIMARY KEY, v TEXT);
+BEGIN;
+INSERT INTO t1 VALUES (1,'a'),(2,'b');
+INSERT INTO t2 VALUES (10,'x'),(20,'y');
+DELETE FROM t1;
+SELECT 't1', count(*) FROM t1;
+SELECT 't2', count(*) FROM t2;
+COMMIT;
+SELECT 't1', count(*) FROM t1;
+SELECT 't2', count(*) FROM t2;
+"
+
+# 16l. Truncate with a secondary index pending. The index has its own
+# per-table mutmap; if either is not cleared, the index can leak rows.
+oracle "cat16_truncate_with_index" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX t_v ON t(v);
+BEGIN;
+INSERT INTO t VALUES (1,'aaa'),(2,'bbb'),(3,'ccc');
+DELETE FROM t;
+SELECT count(*) FROM t;
+SELECT count(*) FROM t WHERE v='aaa';
+COMMIT;
+SELECT count(*) FROM t;
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 17: Partial indexes
 # ════════════════════════════════════════════════════════════════════
