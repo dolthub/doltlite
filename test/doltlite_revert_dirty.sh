@@ -30,7 +30,7 @@ echo "=== dolt_revert dirty-set behavior ==="
 echo ""
 
 # Case 1: dirty unstaged change to an UNRELATED table -> revert SUCCEEDS,
-# dirty change is preserved as a working-set modification.
+# dirty change is included in the revert commit, leaving a clean worktree.
 
 DB=/tmp/test_rv_dirty_unrelated_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
@@ -45,9 +45,9 @@ run_test_match "rv_dirty_unrelated_hash" \
   "^[0-9a-f]{40}$" "$DB"
 run_test "rv_dirty_unrelated_t_reverted" "SELECT count(*) FROM t;" "0" "$DB"
 run_test "rv_dirty_unrelated_meta_kept" "SELECT note FROM meta WHERE id=1;" "side" "$DB"
-run_test "rv_dirty_unrelated_status_meta_modified" \
-  "SELECT status FROM dolt_status WHERE table_name='meta';" \
-  "modified" "$DB"
+run_test "rv_dirty_unrelated_status_clean" \
+  "SELECT count(*) FROM dolt_status WHERE table_name='meta';" \
+  "0" "$DB"
 run_test "rv_dirty_unrelated_log_has_revert" \
   "SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%';" \
   "1" "$DB"
@@ -75,9 +75,8 @@ run_test "rv_dirty_same_row_kept" \
 
 db_rm "$DB"
 
-# Case 3: STAGED change to an unrelated table -> revert REFUSES
-# (matches git's index-clean requirement; revert produces a commit
-# and won't blend staged work into it).
+# Case 3: STAGED change to an unrelated table -> revert SUCCEEDS and includes
+# the staged change in the revert commit, matching Dolt.
 
 DB=/tmp/test_rv_staged_unrelated_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
@@ -88,15 +87,15 @@ SELECT dolt_commit('-Am','add row');
 INSERT INTO meta VALUES(1,'side');
 SELECT dolt_add('meta');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "rv_staged_unrelated_refuses" \
+run_test_match "rv_staged_unrelated_hash" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
-  "cannot revert with uncommitted changes" "$DB"
-run_test "rv_staged_unrelated_no_new_commit" \
+  "^[0-9a-f]{40}$" "$DB"
+run_test "rv_staged_unrelated_log_has_revert" \
   "SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%';" \
-  "0" "$DB"
-run_test "rv_staged_unrelated_staged_kept" \
-  "SELECT staged FROM dolt_status WHERE table_name='meta';" \
   "1" "$DB"
+run_test "rv_staged_unrelated_status_clean" \
+  "SELECT count(*) FROM dolt_status WHERE table_name='meta';" \
+  "0" "$DB"
 
 db_rm "$DB"
 
