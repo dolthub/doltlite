@@ -173,6 +173,10 @@ int csReplayWal(ChunkStore *cs){
     cs->file.iFileSize = fileSize;
   }
   if( walSize <= 0 ){
+    /* Without a WAL tail, chunk_count must describe the compacted index. */
+    if( cs->index.nIndex > 0 && cs->index.nChunks != cs->index.nIndex ){
+      return SQLITE_CORRUPT;
+    }
     if( cs->index.nIndex==0 && cs->index.nChunks==0
      && !prollyHashIsEmpty(&cs->refs.refsHash) ){
       memset(cs->refs.refsHash.data, 0, PROLLY_HASH_SIZE);

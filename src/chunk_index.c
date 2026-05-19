@@ -225,11 +225,11 @@ int csReadIndex(ChunkStore *cs){
   const u8 *pMapData = 0;
   i64 fileSize = 0;
 
-  if( cs->index.nIndexSize == 0 && cs->index.nChunks == 0 ){
+  if( cs->index.nIndexSize == 0 ){
     cs->index.nIndex = 0;
     return SQLITE_OK;
   }
-  if( cs->index.nIndexSize == 0 || cs->index.nChunks == 0 ){
+  if( cs->index.nChunks == 0 ){
     return SQLITE_CORRUPT;
   }
 
@@ -241,7 +241,8 @@ int csReadIndex(ChunkStore *cs){
     return SQLITE_TOOBIG;
   }
   nEntries = (int)nEntries64;
-  if( nEntries != cs->index.nChunks ){
+  /* nChunks includes WAL chunks; only compacted entries are in this index. */
+  if( nEntries > cs->index.nChunks ){
     return SQLITE_CORRUPT;
   }
 
