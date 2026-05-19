@@ -1830,6 +1830,68 @@ COMMIT;
 SELECT count(*) FROM t;
 "
 
+# 16m. Rowid 0 must not be deleted by accident. prollyBtCursorDelete
+# previously fell through with iKey=0 when hasSavedKey was false,
+# silently deleting rowid 0 if present. Today VDBE gates this with
+# successful seek so the path is walled off, but the SQL surface
+# needs to pin rowid-0 behavior in case a future change ever lets a
+# CURSOR_INVALID state reach Delete.
+oracle "cat16_rowid_zero_survives_seek_miss" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(0,'zero'),(1,'one'),(2,'two');
+DELETE FROM t WHERE rowid=999;
+SELECT id, v FROM t ORDER BY id;
+"
+
+# 16n. Rowid 0 + DELETE with always-false predicate. VDBE walks the
+# table and conditionally deletes; cursor goes invalid at end of scan.
+oracle "cat16_rowid_zero_survives_no_match_delete" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(0,'zero'),(1,'one'),(2,'two');
+DELETE FROM t WHERE v='nonexistent';
+SELECT id, v FROM t ORDER BY id;
+"
+
+# 16o. Rowid 0 + DELETE that empties the table. The cursor sweeps
+# through all rows. Verify rowid 0 is treated like every other rowid
+# and not double-deleted by a stray no-key Delete.
+oracle "cat16_rowid_zero_full_delete" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(0,'zero'),(1,'one'),(2,'two');
+DELETE FROM t WHERE id<10;
+SELECT count(*) FROM t;
+INSERT INTO t VALUES(0,'fresh-zero');
+SELECT * FROM t;
+"
+
+# 16p. Empty-key (zero-length blob) row on an index. Same shape as
+# rowid 0 for the blob path of prollyBtCursorDelete.
+oracle "cat16_empty_blob_key_survives" "
+CREATE TABLE t(k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID;
+INSERT INTO t VALUES (x'', 'empty-key'),(x'01','one'),(x'02','two');
+DELETE FROM t WHERE k=x'ff';
+SELECT hex(k), v FROM t ORDER BY k;
+"
+
+# 16q. INSERT OR REPLACE colliding with rowid 0. REPLACE goes
+# through cursor.delete with a known key — make sure the row at
+# rowid 0 is the one replaced and nothing else gets removed.
+oracle "cat16_rowid_zero_replace_no_collateral" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(0,'zero'),(1,'one'),(2,'two');
+INSERT OR REPLACE INTO t VALUES(0,'replaced');
+SELECT id, v FROM t ORDER BY id;
+"
+
+# 16r. UPDATE on rowid 0 — internally a delete+insert. Confirms the
+# UPDATE path doesn't accidentally trigger the no-key delete bug.
+oracle "cat16_rowid_zero_update_no_collateral" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(0,'zero'),(1,'one'),(2,'two');
+UPDATE t SET v='updated' WHERE id=0;
+SELECT id, v FROM t ORDER BY id;
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 17: Partial indexes
 # ════════════════════════════════════════════════════════════════════

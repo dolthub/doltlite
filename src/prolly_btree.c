@@ -7089,16 +7089,23 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
     return rc;
   }
 
+  /* If no key could be resolved from cursor state, treat the delete as
+  ** a no-op. Falling through would call prollyMutMapDelete with iKey=0
+  ** (intkey) or an empty blob key, silently deleting rowid 0 or the
+  ** empty-blob row if either exists. Reachable today only via
+  ** CURSOR_INVALID without cached key — SQLite's VDBE doesn't issue
+  ** Delete on an invalid cursor in normal bytecode, but a future
+  ** refactor or fuzz path could. */
+  if( !hasSavedKey ){
+    if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
+    return SQLITE_OK;
+  }
   if( pCur->curIntKey ){
-    if( hasSavedKey ){
-      iKey = savedIntKey;
-    }
+    iKey = savedIntKey;
     rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, iKey);
   } else {
-    if( hasSavedKey ){
-      pKey = pSavedDelKey;
-      nKey = nSavedDelKey;
-    }
+    pKey = pSavedDelKey;
+    nKey = nSavedDelKey;
     rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
     if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
     pSavedDelKey = 0;
