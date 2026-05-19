@@ -116,6 +116,33 @@ static off_t file_size(const char *path){
   return st.st_size;
 }
 
+static int read_bytes(const char *path, off_t offset, void *data, size_t len){
+  int fd = open(path, O_RDONLY);
+  ssize_t r;
+  if( fd < 0 ) return -1;
+  if( lseek(fd, offset, SEEK_SET) != offset ){
+    close(fd);
+    return -1;
+  }
+  r = read(fd, data, len);
+  close(fd);
+  return (r == (ssize_t)len) ? 0 : -1;
+}
+
+static long long read_i64_le_at(const char *path, off_t offset){
+  unsigned char b[8];
+  if( read_bytes(path, offset, b, sizeof(b))!=0 ) return -1;
+  return (long long)(
+      ((unsigned long long)b[0])
+    | ((unsigned long long)b[1] << 8)
+    | ((unsigned long long)b[2] << 16)
+    | ((unsigned long long)b[3] << 24)
+    | ((unsigned long long)b[4] << 32)
+    | ((unsigned long long)b[5] << 40)
+    | ((unsigned long long)b[6] << 48)
+    | ((unsigned long long)b[7] << 56));
+}
+
 /*
 ** Remove database and associated files.
 */
@@ -819,12 +846,6 @@ static void test_corrupt_head_commit(void){
 /*
 ** Test 15: Corrupt the chunk_count field in a compacted DB.
 ** After GC, chunk_count should govern how many index entries to read.
-**
-** NOTE: The system currently derives the actual index entry count from
-** index_size / CHUNK_INDEX_ENTRY_SIZE rather than trusting chunk_count,
-** so a wrong chunk_count is silently ignored. This test verifies the
-** system doesn't crash with a wildly wrong value, and documents this
-** as a gap in validation (chunk_count is not cross-checked).
 */
 static void test_corrupt_chunk_count(void){
   const char *dbpath = "/tmp/test_corr_chunkcount.db";
@@ -839,25 +860,7 @@ static void test_corrupt_chunk_count(void){
   check("corrupt_16",
     corrupt_bytes(dbpath, 28, huge_count, sizeof(huge_count))==0);
 
-  /* The system should either detect the mismatch or (current behavior)
-  ** silently ignore chunk_count in favor of computed index size.
-  ** Either way it must not crash. */
-  {
-    sqlite3 *db = 0;
-    int rc = sqlite3_open(dbpath, &db);
-    if( rc==SQLITE_OK ){
-      /* If it opens, verify data is still accessible (silently ignored)
-      ** or returns an error (properly detected). */
-      const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
-      int data_ok = (strncmp(r, "ERROR", 5)!=0 && atoi(r)==5);
-      int data_err = (strncmp(r, "ERROR", 5)==0);
-      check("chunk_count_no_crash", data_ok || data_err);
-    }else{
-      /* Open failure is acceptable detection */
-      check("chunk_count_no_crash", 1);
-    }
-    if( db ) sqlite3_close(db);
-  }
+  check("chunk_count_mismatch_detected", open_and_probe(dbpath)==1);
 
   removeDb(dbpath);
 }
@@ -893,6 +896,52 @@ static void test_corrupt_index_offset(void){
   removeDb(dbpath);
 }
 
+/*
+** Test 17: Corrupt a compacted index entry to point before chunk data.
+*/
+static void test_corrupt_index_entry_offset(void){
+  const char *dbpath = "/tmp/test_corr_idxentryoff.db";
+  long long indexOffset;
+  unsigned char bad_off[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+  printf("--- Test 17: Corrupt index entry offset ---\n");
+
+  check("create_compacted_18", create_compacted_db(dbpath)==0);
+  indexOffset = read_i64_le_at(dbpath, 32);
+  check("read_index_offset_18", indexOffset > MANIFEST_SIZE);
+  check("corrupt_18",
+    corrupt_bytes(dbpath, (off_t)indexOffset + 20,
+                  bad_off, sizeof(bad_off))==0);
+
+  check("bad_index_entry_offset_detected", open_and_probe(dbpath)==1);
+
+  removeDb(dbpath);
+}
+
+/*
+** Test 18: Corrupt compacted index ordering. The on-disk index must be
+** strictly sorted by chunk hash for binary search to be correct.
+*/
+static void test_corrupt_index_order(void){
+  const char *dbpath = "/tmp/test_corr_idxorder.db";
+  long long indexOffset;
+  unsigned char zero_hash[20];
+
+  printf("--- Test 18: Corrupt index order ---\n");
+
+  memset(zero_hash, 0, sizeof(zero_hash));
+  check("create_compacted_19", create_compacted_db(dbpath)==0);
+  indexOffset = read_i64_le_at(dbpath, 32);
+  check("read_index_offset_19", indexOffset > MANIFEST_SIZE);
+  check("corrupt_19",
+    corrupt_bytes(dbpath, (off_t)indexOffset + 32,
+                  zero_hash, sizeof(zero_hash))==0);
+
+  check("bad_index_order_detected", open_and_probe(dbpath)==1);
+
+  removeDb(dbpath);
+}
+
 /* ========================================================================
 ** Main
 ** ======================================================================== */
@@ -916,6 +965,8 @@ int main(void){
   test_corrupt_head_commit();
   test_corrupt_chunk_count();
   test_corrupt_index_offset();
+  test_corrupt_index_entry_offset();
+  test_corrupt_index_order();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);

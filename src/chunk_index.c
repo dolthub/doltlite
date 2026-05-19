@@ -193,6 +193,27 @@ static int csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e){
   return SQLITE_OK;
 }
 
+static int csValidateIndexEntries(
+  const ChunkIndexEntry *aIndex,
+  int nIndex,
+  i64 iIndexOffset
+){
+  int i;
+  for( i=0; i<nIndex; i++ ){
+    const ChunkIndexEntry *e = &aIndex[i];
+    if( e->offset < CHUNK_MANIFEST_SIZE ) return SQLITE_CORRUPT;
+    if( e->size < 0 ) return SQLITE_CORRUPT;
+    if( e->offset > iIndexOffset - 4 ) return SQLITE_CORRUPT;
+    if( (i64)e->size > iIndexOffset - e->offset - 4 ){
+      return SQLITE_CORRUPT;
+    }
+    if( i>0 && prollyHashCompare(&aIndex[i-1].hash, &e->hash) >= 0 ){
+      return SQLITE_CORRUPT;
+    }
+  }
+  return SQLITE_OK;
+}
+
 int csReadIndex(ChunkStore *cs){
   int rc;
   i64 nEntries64;
@@ -204,9 +225,12 @@ int csReadIndex(ChunkStore *cs){
   const u8 *pMapData = 0;
   i64 fileSize = 0;
 
-  if( cs->index.nIndexSize == 0 || cs->index.nChunks == 0 ){
+  if( cs->index.nIndexSize == 0 ){
     cs->index.nIndex = 0;
     return SQLITE_OK;
+  }
+  if( cs->index.nChunks == 0 ){
+    return SQLITE_CORRUPT;
   }
 
   nEntries64 = cs->index.nIndexSize / CHUNK_INDEX_ENTRY_SIZE;
@@ -217,6 +241,10 @@ int csReadIndex(ChunkStore *cs){
     return SQLITE_TOOBIG;
   }
   nEntries = (int)nEntries64;
+  /* nChunks includes WAL chunks; only compacted entries are in this index. */
+  if( nEntries > cs->index.nChunks ){
+    return SQLITE_CORRUPT;
+  }
 
   if( cs->index.iIndexOffset < 0 || cs->index.nIndexSize < 0 ){
     return SQLITE_CORRUPT;
@@ -238,6 +266,12 @@ int csReadIndex(ChunkStore *cs){
   if( cs->file.zFilename
    && csMapIndex(cs->file.zFilename, cs->index.iIndexOffset, cs->index.nIndexSize,
                   &pMapBase, &nMapSize, &pMapData) == SQLITE_OK ){
+    rc = csValidateIndexEntries((const ChunkIndexEntry*)pMapData, nEntries,
+                                cs->index.iIndexOffset);
+    if( rc!=SQLITE_OK ){
+      csUnmapIndex(pMapBase, nMapSize);
+      return rc;
+    }
     cs->index.aIndex = (ChunkIndexEntry *)pMapData;
     cs->index.nIndex = nEntries;
     cs->index.aIndexMmapBase = pMapBase;
@@ -280,6 +314,16 @@ int csReadIndex(ChunkStore *cs){
       cs->index.nIndex = 0;
       return rc;
     }
+  }
+
+  rc = csValidateIndexEntries(cs->index.aIndex, nEntries,
+                              cs->index.iIndexOffset);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(aBuf);
+    sqlite3_free(cs->index.aIndex);
+    cs->index.aIndex = 0;
+    cs->index.nIndex = 0;
+    return rc;
   }
 
   sqlite3_free(aBuf);
