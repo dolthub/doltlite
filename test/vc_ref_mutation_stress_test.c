@@ -294,9 +294,11 @@ static void verifyFinalState(const char *path){
   sqlite3 *db = 0;
   int rc;
   int count = 0;
+  char mainPath[320];
   char msg[256];
 
-  rc = sqlite3_open(path, &db);
+  sqlite3_snprintf(sizeof(mainPath), mainPath, "%s@main", path);
+  rc = sqlite3_open(mainPath, &db);
   check("verify_open", rc==SQLITE_OK);
   sqlite3_busy_timeout(db, 5000);
 
