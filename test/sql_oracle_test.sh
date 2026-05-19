@@ -1927,6 +1927,109 @@ COMMIT;
 SELECT count(*) FROM t;
 "
 
+# 16u. Truncate then DROP TABLE in the same transaction. Exercises
+# both the ClearTable and DropTable mutmap paths back-to-back. Pre-fix
+# the pending insert leaked into the empty tree before the drop.
+oracle "cat16_truncate_then_drop" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+BEGIN;
+INSERT INTO t VALUES (1,'a');
+DELETE FROM t;
+DROP TABLE t;
+SELECT name FROM sqlite_master WHERE type='table';
+COMMIT;
+SELECT name FROM sqlite_master WHERE type='table';
+"
+
+# 16v. Mixed pending insert/delete then truncate. With both operations
+# in the mutmap, the cleared state must drop both regardless of order.
+oracle "cat16_truncate_with_mixed_pending" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'a'),(2,'b'),(3,'c');
+BEGIN;
+DELETE FROM t WHERE id=2;
+INSERT INTO t VALUES (4,'d'),(5,'e');
+DELETE FROM t;
+SELECT count(*) FROM t;
+COMMIT;
+SELECT count(*) FROM t;
+"
+
+# 16w. Multiple truncates in the same transaction. Each one must
+# leave the mutmap in a clean state for the next round.
+oracle "cat16_truncate_multiple_times" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+BEGIN;
+INSERT INTO t VALUES (1,'a');
+DELETE FROM t;
+INSERT INTO t VALUES (2,'b');
+DELETE FROM t;
+INSERT INTO t VALUES (3,'c');
+DELETE FROM t;
+INSERT INTO t VALUES (99,'final');
+SELECT id, v FROM t;
+COMMIT;
+SELECT id, v FROM t;
+"
+
+# 16x. Truncate at the inner level of nested savepoints, then
+# release the outer. Stock SQLite preserves the inner-cleared state.
+oracle "cat16_truncate_nested_savepoint_release" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'a'),(2,'b');
+SAVEPOINT s1;
+INSERT INTO t VALUES (3,'c');
+SAVEPOINT s2;
+DELETE FROM t;
+INSERT INTO t VALUES (10,'x');
+RELEASE s2;
+RELEASE s1;
+SELECT id, v FROM t ORDER BY id;
+"
+
+# 16y. Truncate at inner savepoint, rollback the inner, keep the
+# outer. The inner clear is undone; outer's mutations are kept.
+oracle "cat16_truncate_nested_savepoint_inner_rollback" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1,'a'),(2,'b');
+SAVEPOINT s1;
+INSERT INTO t VALUES (3,'c');
+SAVEPOINT s2;
+DELETE FROM t;
+ROLLBACK TO s2;
+RELEASE s2;
+RELEASE s1;
+SELECT id, v FROM t ORDER BY id;
+"
+
+# 16z. Truncate then PRAGMA integrity_check inside the same
+# transaction. Catches any in-memory state that disagrees with the
+# materialized tree (the bug class that motivated this category).
+oracle "cat16_truncate_then_integrity_check" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+CREATE INDEX t_v ON t(v);
+BEGIN;
+INSERT INTO t VALUES (1,'a'),(2,'b');
+DELETE FROM t;
+PRAGMA integrity_check;
+COMMIT;
+PRAGMA integrity_check;
+"
+
+# 16aa. Truncate then re-INSERT via INSERT OR REPLACE with the same
+# PK as one that was pending pre-truncate. Pre-fix the UPSERT could
+# have hit a phantom row from the stale mutmap.
+oracle "cat16_truncate_then_insert_or_replace" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+BEGIN;
+INSERT INTO t VALUES (1,'pending');
+DELETE FROM t;
+INSERT OR REPLACE INTO t VALUES (1,'after');
+SELECT id, v FROM t;
+COMMIT;
+SELECT id, v FROM t;
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 17: Partial indexes
 # ════════════════════════════════════════════════════════════════════
