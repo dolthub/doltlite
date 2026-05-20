@@ -494,6 +494,13 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       }
       m.zName = zName;
       m.force = force;
+      if( force
+       && strcmp(zName, doltliteGetSessionBranch(db))==0
+       && chunkStoreFindBranch(cs, zName, 0)==SQLITE_OK ){
+        branchError(ctx, hadSavepoint,
+          "cannot force-update the current branch");
+        return;
+      }
       rc = doltliteMutateRefs(db, mutateBranchRef, &m);
       if( rc!=SQLITE_OK ){
         branchNamedResultError(ctx, hadSavepoint, rc,
