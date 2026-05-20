@@ -6799,6 +6799,137 @@ static void run_prolly_blob_cursor_seek_across_internal_boundary(void){
   chunkStoreClose(&cs);
 }
 
+static int addIntKeyItem(ProllyNodeBuilder *b, i64 iKey, const u8 *pVal, int nVal){
+  u8 aKey[8];
+  prollyEncodeIntKey(iKey, aKey);
+  return prollyNodeBuilderAdd(b, aKey, sizeof(aKey), pVal, nVal);
+}
+
+static void run_prolly_int_cursor_seek_across_internal_boundary(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyCursor cur;
+  ProllyNodeBuilder b;
+  ProllyHash leftHash, rightHash, rootHash;
+  u8 *pNode = 0;
+  int nNode = 0;
+  int rc;
+  int res = 99;
+
+  static const u8 v1[] = { '1' };
+  static const u8 v2[] = { '2' };
+
+  printf("=== Prolly Int Cursor Internal Boundary Test ===\n\n");
+
+  check("open_memory_store_for_int_cursor",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("init_cache_for_int_cursor", prollyCacheInit(&cache, 8)==SQLITE_OK);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_INTKEY);
+  check("build_left_leaf_10", addIntKeyItem(&b, 10, v1, sizeof(v1))==SQLITE_OK);
+  check("build_left_leaf_20", addIntKeyItem(&b, 20, v1, sizeof(v1))==SQLITE_OK);
+  check("finish_int_left_leaf", prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_int_left_leaf", chunkStorePut(&cs, pNode, nNode, &leftHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_INTKEY);
+  check("build_right_leaf_30", addIntKeyItem(&b, 30, v2, sizeof(v2))==SQLITE_OK);
+  check("build_right_leaf_40", addIntKeyItem(&b, 40, v2, sizeof(v2))==SQLITE_OK);
+  check("finish_int_right_leaf", prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_int_right_leaf", chunkStorePut(&cs, pNode, nNode, &rightHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 1, PROLLY_NODE_INTKEY);
+  check("build_int_root_left_sep",
+        addIntKeyItem(&b, 20, leftHash.data, PROLLY_HASH_SIZE)==SQLITE_OK);
+  check("build_int_root_right_sep",
+        addIntKeyItem(&b, 40, rightHash.data, PROLLY_HASH_SIZE)==SQLITE_OK);
+  check("finish_int_root", prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_int_root", chunkStorePut(&cs, pNode, nNode, &rootHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  prollyNodeBuilderFree(&b);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_INTKEY);
+  rc = prollyCursorSeekInt(&cur, 30, &res);
+  check("seek_int_key_across_internal_boundary", rc==SQLITE_OK);
+  check("seek_int_key_finds_exact_match", res==0);
+  check("int_cursor_valid_after_seek", prollyCursorIsValid(&cur));
+  if( prollyCursorIsValid(&cur) ){
+    check("int_cursor_lands_on_right_child_key", prollyCursorIntKey(&cur)==30);
+  }
+
+  prollyCursorClose(&cur);
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
+static void run_prolly_int_cursor_seek_past_max(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyCursor cur;
+  ProllyNodeBuilder b;
+  ProllyHash leftHash, rightHash, rootHash;
+  u8 *pNode = 0;
+  int nNode = 0;
+  int rc;
+  int res = 99;
+
+  static const u8 v1[] = { '1' };
+  static const u8 v2[] = { '2' };
+
+  printf("=== Prolly Int Cursor Seek Past Max Test ===\n\n");
+
+  check("open_memory_store_for_int_cursor_past_max",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("init_cache_for_int_cursor_past_max", prollyCacheInit(&cache, 8)==SQLITE_OK);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_INTKEY);
+  check("build_past_max_left_leaf_10", addIntKeyItem(&b, 10, v1, sizeof(v1))==SQLITE_OK);
+  check("build_past_max_left_leaf_20", addIntKeyItem(&b, 20, v1, sizeof(v1))==SQLITE_OK);
+  check("finish_past_max_int_left_leaf", prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_past_max_int_left_leaf", chunkStorePut(&cs, pNode, nNode, &leftHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 0, PROLLY_NODE_INTKEY);
+  check("build_past_max_right_leaf_30", addIntKeyItem(&b, 30, v2, sizeof(v2))==SQLITE_OK);
+  check("build_past_max_right_leaf_40", addIntKeyItem(&b, 40, v2, sizeof(v2))==SQLITE_OK);
+  check("finish_past_max_int_right_leaf", prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_past_max_int_right_leaf", chunkStorePut(&cs, pNode, nNode, &rightHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  pNode = 0;
+  prollyNodeBuilderFree(&b);
+
+  prollyNodeBuilderInit(&b, 1, PROLLY_NODE_INTKEY);
+  check("build_past_max_int_root_left_sep",
+        addIntKeyItem(&b, 20, leftHash.data, PROLLY_HASH_SIZE)==SQLITE_OK);
+  check("build_past_max_int_root_right_sep",
+        addIntKeyItem(&b, 40, rightHash.data, PROLLY_HASH_SIZE)==SQLITE_OK);
+  check("finish_past_max_int_root", prollyNodeBuilderFinish(&b, &pNode, &nNode)==SQLITE_OK);
+  check("store_past_max_int_root", chunkStorePut(&cs, pNode, nNode, &rootHash)==SQLITE_OK);
+  sqlite3_free(pNode);
+  prollyNodeBuilderFree(&b);
+
+  prollyCursorInit(&cur, &cs, &cache, &rootHash, PROLLY_NODE_INTKEY);
+  rc = prollyCursorSeekInt(&cur, 99, &res);
+  check("seek_int_key_past_max", rc==SQLITE_OK);
+  check("seek_int_key_past_max_result", res==-1);
+  check("int_cursor_valid_after_past_max_seek", prollyCursorIsValid(&cur));
+  if( prollyCursorIsValid(&cur) ){
+    check("int_cursor_lands_on_max_key_after_past_max_seek",
+          prollyCursorIntKey(&cur)==40);
+  }
+
+  prollyCursorClose(&cur);
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
 static void run_prolly_blob_cursor_seek_past_max(void){
   ChunkStore cs;
   ProllyCache cache;
@@ -7212,6 +7343,8 @@ static const RegressionCase aCases[] = {
   { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
   { "remotesrv_put_refs_failure_restore", "RemoteSrv Put Refs Failure Restores State Test", run_remotesrv_put_refs_failure_restores_state },
   { "remotesrv_chunk_commit_failure_clears_pending", "RemoteSrv Chunk Commit Failure Clears Pending Test", run_remotesrv_chunk_commit_failure_clears_pending },
+  { "prolly_int_cursor_boundary", "Prolly Int Cursor Internal Boundary Test", run_prolly_int_cursor_seek_across_internal_boundary },
+  { "prolly_int_cursor_seek_past_max", "Prolly Int Cursor Seek Past Max Test", run_prolly_int_cursor_seek_past_max },
   { "prolly_blob_cursor_boundary", "Prolly Blob Cursor Internal Boundary Test", run_prolly_blob_cursor_seek_across_internal_boundary },
   { "prolly_blob_cursor_seek_past_max", "Prolly Blob Cursor Seek Past Max Test", run_prolly_blob_cursor_seek_past_max },
   { "prolly_cursor_empty_leaf_root", "Prolly Cursor Empty Leaf Root Test", run_prolly_cursor_empty_leaf_root },
