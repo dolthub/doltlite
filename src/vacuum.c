@@ -178,9 +178,20 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
     return SQLITE_ERROR;
   }
   {
-    char *zErr = 0;
-    (void)sqlite3_exec(db, "SELECT dolt_gc()", 0, 0, &zErr);
-    sqlite3_free(zErr);
+    sqlite3_stmt *pStmt = 0;
+    int rcGc = sqlite3_prepare_v2(db, "SELECT dolt_gc()", -1, &pStmt, 0);
+    if( rcGc!=SQLITE_OK ){
+      sqlite3_finalize(pStmt);
+      return SQLITE_OK;
+    }
+    rcGc = sqlite3_step(pStmt);
+    if( rcGc!=SQLITE_ROW && rcGc!=SQLITE_DONE ){
+      const char *zErr = sqlite3_errmsg(db);
+      if( zErr ) sqlite3SetString(pzErrMsg, db, zErr);
+      sqlite3_finalize(pStmt);
+      return rcGc;
+    }
+    sqlite3_finalize(pStmt);
     return SQLITE_OK;
   }
 #endif
