@@ -66,7 +66,7 @@ INSERT INTO t VALUES(99,'side');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 run_test_match "rv_dirty_same_refuses" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
-  "cannot revert with uncommitted changes" "$DB"
+  "Your local changes would be overwritten by revert" "$DB"
 run_test "rv_dirty_same_no_new_commit" \
   "SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%';" \
   "0" "$DB"
@@ -75,8 +75,9 @@ run_test "rv_dirty_same_row_kept" \
 
 db_rm "$DB"
 
-# Case 3: STAGED change to an unrelated table -> revert SUCCEEDS and includes
-# the staged change in the revert commit, matching Dolt.
+# Case 3: STAGED change to ANY table -> revert REFUSES (git's index-clean
+# requirement), even when the staged table is unrelated to the revert target.
+# Matches Dolt 2.0.5 (dolthub/dolt#11073 follow-up commit 014f1d8).
 
 DB=/tmp/test_rv_staged_unrelated_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, x TEXT);
@@ -87,15 +88,17 @@ SELECT dolt_commit('-Am','add row');
 INSERT INTO meta VALUES(1,'side');
 SELECT dolt_add('meta');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
-run_test_match "rv_staged_unrelated_hash" \
+run_test_match "rv_staged_unrelated_refuses" \
   "SELECT dolt_revert((SELECT commit_hash FROM dolt_log LIMIT 1));" \
-  "^[0-9a-f]{40}$" "$DB"
-run_test "rv_staged_unrelated_log_has_revert" \
+  "Your local changes would be overwritten by revert" "$DB"
+run_test "rv_staged_unrelated_no_new_commit" \
   "SELECT count(*) FROM dolt_log WHERE message LIKE 'Revert%';" \
-  "1" "$DB"
-run_test "rv_staged_unrelated_status_clean" \
-  "SELECT count(*) FROM dolt_status WHERE table_name='meta';" \
   "0" "$DB"
+run_test "rv_staged_unrelated_t_unchanged" \
+  "SELECT x FROM t WHERE id=1;" "a" "$DB"
+run_test "rv_staged_unrelated_meta_staged" \
+  "SELECT count(*) FROM dolt_status WHERE table_name='meta';" \
+  "1" "$DB"
 
 db_rm "$DB"
 
