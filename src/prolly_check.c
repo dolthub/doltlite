@@ -38,6 +38,31 @@ static int checkSubtree(
     return rc;
   }
 
+  /* Re-derive the content hash and compare. chunkStoreGet's own verify
+  ** only covers the disk-read path; chunks served from the in-memory
+  ** pending or recent buffers return their cached bytes unverified.
+  ** The integrity walker is the last line of defense against an
+  ** in-process corruption (buffer overrun, stale alias, etc.) that
+  ** mutated the staging bytes between write and check, so re-hash
+  ** unconditionally here. */
+  {
+    ProllyHash computed;
+    prollyHashCompute(pData, nData, &computed);
+    if( prollyHashCompare(&computed, pHash) != 0 ){
+      *pzErr = sqlite3_mprintf(
+        "chunk content does not hash to its store key: "
+        "expected=%02x%02x%02x%02x%02x%02x%02x%02x "
+        "computed=%02x%02x%02x%02x%02x%02x%02x%02x nData=%d",
+        pHash->data[0], pHash->data[1], pHash->data[2], pHash->data[3],
+        pHash->data[4], pHash->data[5], pHash->data[6], pHash->data[7],
+        computed.data[0], computed.data[1], computed.data[2], computed.data[3],
+        computed.data[4], computed.data[5], computed.data[6], computed.data[7],
+        nData);
+      sqlite3_free(pData);
+      return SQLITE_CORRUPT;
+    }
+  }
+
   rc = prollyNodeParse(&node, pData, nData);
   if( rc!=SQLITE_OK ){
     *pzErr = sqlite3_mprintf(
