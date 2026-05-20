@@ -261,9 +261,35 @@ int prollyCursorPrev(ProllyCursor *cur){
 }
 
 int prollyCursorSeekInt(ProllyCursor *cur, i64 intKey, int *pRes){
-  u8 keyBuf[8];
-  prollyEncodeIntKey(intKey, keyBuf);
-  return prollyCursorSeekBlob(cur, keyBuf, 8, pRes);
+  int rc;
+  ProllyCacheEntry *pEntry = 0;
+  int leafRes;
+  int leafIdx;
+
+  rc = initCursorAtRoot(cur, &pEntry);
+  if( rc!=SQLITE_OK ) return rc;
+  if( cur->eState==PROLLY_CURSOR_EOF ){
+    cur->eState = PROLLY_CURSOR_INVALID;
+    *pRes = -1;
+    return SQLITE_OK;
+  }
+
+  while( pEntry->node.level>0 ){
+    int searchRes;
+    int idx = prollyNodeSearchInt(&pEntry->node, intKey, &searchRes);
+    idx = childIndexForSearchResult(idx, searchRes, pEntry->node.nItems);
+    cur->aLevel[cur->iLevel].idx = idx;
+    rc = descendToChild(cur, idx, 0, &pEntry);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  if( pEntry->node.nItems==0 ){
+    cur->eState = PROLLY_CURSOR_EOF;
+    *pRes = -1;
+    return SQLITE_OK;
+  }
+  leafIdx = prollyNodeSearchInt(&pEntry->node, intKey, &leafRes);
+  return finalizeSeekOnLeaf(cur, pEntry, leafIdx, leafRes, pRes);
 }
 
 int prollyCursorSeekBlob(ProllyCursor *cur,
