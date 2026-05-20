@@ -211,7 +211,48 @@ run_test "diff_summary_revert_schema_only_row" \
   "SELECT table_name || '|' || data_change || '|' || schema_change FROM dolt_diff WHERE message='main_check';" \
   "t|0|1" "$DB13"
 
-rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
+DB14=/tmp/test_diff14_$$.db; rm -f "$DB14"
+echo "CREATE TABLE r(id INTEGER PRIMARY KEY, v REAL);
+INSERT INTO r VALUES(1, 3.14);
+SELECT dolt_commit('-A','-m','c1');
+UPDATE r SET v = 3.14 WHERE id=1;" | $DOLTLITE "$DB14" > /dev/null 2>&1
+
+run_test "diff_real_same_value_no_diff" \
+  "SELECT count(*) FROM dolt_diff_r WHERE to_commit='WORKING';" \
+  "0" "$DB14"
+
+DB15=/tmp/test_diff15_$$.db; rm -f "$DB15"
+echo "CREATE TABLE r(id INTEGER PRIMARY KEY, v REAL);
+INSERT INTO r VALUES(1, 0.0);
+SELECT dolt_commit('-A','-m','c1');
+UPDATE r SET v = -0.0 WHERE id=1;" | $DOLTLITE "$DB15" > /dev/null 2>&1
+
+run_test "diff_real_pos_neg_zero_no_diff" \
+  "SELECT count(*) FROM dolt_diff_r WHERE to_commit='WORKING';" \
+  "0" "$DB15"
+
+DB16=/tmp/test_diff16_$$.db; rm -f "$DB16"
+echo "CREATE TABLE r(id INTEGER PRIMARY KEY, v REAL);
+INSERT INTO r VALUES(1, 1.5);
+SELECT dolt_commit('-A','-m','c1');
+UPDATE r SET v = 2.5 WHERE id=1;" | $DOLTLITE "$DB16" > /dev/null 2>&1
+
+run_test "diff_real_distinct_values_modified" \
+  "SELECT count(*) FROM dolt_diff_r WHERE to_commit='WORKING' AND diff_type='modified';" \
+  "1" "$DB16"
+
+DB17=/tmp/test_diff17_$$.db; rm -f "$DB17"
+echo "CREATE TABLE r(id INTEGER PRIMARY KEY, v REAL);
+INSERT INTO r VALUES(1, 0.0);
+SELECT dolt_commit('-A','-m','c1');
+UPDATE r SET v = -0.0 WHERE id=1;
+SELECT dolt_commit('-A','-m','c2');" | $DOLTLITE "$DB17" > /dev/null 2>&1
+
+run_test "diff_stat_real_pos_neg_zero_no_diff" \
+  "SELECT rows_modified FROM dolt_diff_stat('HEAD~1', 'HEAD', 'r');" \
+  "0" "$DB17"
+
+rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13" "$DB14" "$DB15" "$DB16" "$DB17"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"

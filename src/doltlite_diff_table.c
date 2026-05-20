@@ -743,6 +743,19 @@ static int fieldValuesEqual(
     }
   }
 
+  if( aType==7 && bType==7 ){
+    u64 ar = 0, br = 0;
+    double da, db;
+    int i;
+    if( aOff<0 || aOff+8>nA ) return 0;
+    if( bOff<0 || bOff+8>nB ) return 0;
+    for(i=0; i<8; i++) ar = (ar<<8) | pA[aOff+i];
+    for(i=0; i<8; i++) br = (br<<8) | pB[bOff+i];
+    memcpy(&da, &ar, 8);
+    memcpy(&db, &br, 8);
+    return da == db;
+  }
+
   if( aType != bType ) return 0;
   aLen = dlSerialTypeLen(aType);
   if( aLen<0 ) return 0;

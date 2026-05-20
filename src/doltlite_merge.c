@@ -562,6 +562,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
       }
 
     }
+    deliberate_fall_through
     case THREE_WAY_CONFLICT_DM: {
 
       rc = DOLTLITE_GROW_ARRAY(&ctx->aConflicts, &ctx->nConflictsAlloc,

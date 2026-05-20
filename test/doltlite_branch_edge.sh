@@ -445,6 +445,52 @@ run_test "gc_empty_db_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 db_rm "$DB"
 
 echo ""
+echo "--- Category 7: Force-update of currently-checked-out branch ---"
+
+DB=/tmp/test_bedge_force_curr_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'c1');
+SELECT dolt_commit('-A','-m','c1');
+INSERT INTO t VALUES(2,'c2');
+SELECT dolt_commit('-A','-m','c2');
+INSERT INTO t VALUES(3,'c3');
+SELECT dolt_commit('-A','-m','c3');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "force_current_branch_rejected" \
+  "SELECT dolt_branch('-f','main','HEAD~2');" \
+  "cannot force-update the current branch" "$DB"
+
+run_test "force_current_branch_no_state_change" \
+  "SELECT count(*) FROM t;" \
+  "3" "$DB"
+
+run_test "force_current_branch_log_intact" \
+  "SELECT count(*) FROM dolt_log;" \
+  "4" "$DB"
+
+echo "SELECT dolt_branch('other');
+SELECT dolt_checkout('other');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "force_other_branch_allowed" \
+  "SELECT dolt_checkout('other'); SELECT dolt_branch('-f','main','HEAD~2'); SELECT dolt_checkout('main'); SELECT count(*) FROM dolt_log;" \
+  "0
+0
+0
+2" "$DB"
+
+db_rm "$DB"
+
+DB=/tmp/test_bedge_force_nonexist_$$.db; db_rm "$DB"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY);
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test_match "force_create_new_branch_allowed" \
+  "SELECT dolt_branch('-f','brand_new');" \
+  "^$|0" "$DB"
+
+db_rm "$DB"
+
+echo ""
 
 echo "=== Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests ==="
 if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
