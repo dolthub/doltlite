@@ -1117,8 +1117,20 @@ int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src){
   return SQLITE_OK;
 }
 
+/* Merge every entry in pSrc into pDst and clear pSrc. Both maps MUST
+** be in the same key mode (isIntKey). For int-keyed maps, each entry's
+** pKey contains its key already encoded big-endian via encodeIntKeyBE
+** (see prepKey above and prollyMutMapEntryIntKey), so passing pKey/nKey
+** with intKey=0 takes the "pre-encoded blob" branch of prepKey and the
+** byte sequence is used as-is — the right thing for matched modes. If
+** the modes don't match, however, an int-keyed pSrc's 8-byte encoded
+** bytes get treated as a blob key (or vice versa: a blob key gets
+** misread as an encoded int), silently corrupting pDst's sort order
+** and hash table. */
 int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc){
   int i, rc;
+  assert( pDst->isIntKey == pSrc->isIntKey );
+  if( pDst->isIntKey != pSrc->isIntKey ) return SQLITE_MISUSE;
   for(i=0; i<pSrc->nEntries; i++){
     ProllyMutMapEntry *e = &pSrc->aEntries[i];
     if( e->op==PROLLY_EDIT_INSERT ){
