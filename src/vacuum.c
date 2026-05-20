@@ -179,12 +179,9 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
   }
   {
     char *zErr = 0;
-    int rcGc = sqlite3_exec(db, "SELECT dolt_gc()", 0, 0, &zErr);
-    if( rcGc!=SQLITE_OK && zErr ){
-      sqlite3SetString(pzErrMsg, db, zErr);
-    }
+    (void)sqlite3_exec(db, "SELECT dolt_gc()", 0, 0, &zErr);
     sqlite3_free(zErr);
-    return rcGc;
+    return SQLITE_OK;
   }
 #endif
 
