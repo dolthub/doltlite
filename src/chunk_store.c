@@ -1036,7 +1036,7 @@ static int csCommitToFile(ChunkStore *cs){
   rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
   if( rc != SQLITE_OK ) goto commit_done;
 
-  if( hadFile && !cs->hasMovedChecked ){
+  if( hadFile ){
     int bMoved = 0;
     int rc2 = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
                                    &bMoved);
@@ -1045,7 +1045,6 @@ static int csCommitToFile(ChunkStore *cs){
       if( rc != SQLITE_OK ) goto commit_done;
       fileSize = cs->file.iFileSize;
     }
-    cs->hasMovedChecked = 1;
   }
 
   if( fileSize > cs->file.iFileSize && hadFile ){
@@ -1443,14 +1442,17 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
     return SQLITE_OK;
   }
 
-  if( !cs->hasMovedChecked ){
-    rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
-    if( rc!=SQLITE_OK ) return rc;
-    if( bMoved ){
-      *pChanged = 1;
-      return SQLITE_OK;
-    }
-    cs->hasMovedChecked = 1;
+  /* Always probe SQLITE_FCNTL_HAS_MOVED so cross-process renames (e.g.
+  ** GC's atomic-replace of the chunk store file) are detected on the
+  ** next lock acquisition. A cached "checked once" result lets the open
+  ** fd keep writing into the unlinked inode after another process swaps
+  ** the file underneath us, which loses every subsequent commit from
+  ** this connection. */
+  rc = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED, &bMoved);
+  if( rc!=SQLITE_OK ) return rc;
+  if( bMoved ){
+    *pChanged = 1;
+    return SQLITE_OK;
   }
 
   {
@@ -1496,11 +1498,14 @@ static int csReloadFromDisk(ChunkStore *cs){
 
   csCaptureReloadState(cs, &saved);
   csAdoptOpenedStoreState(cs, &tmp);
+
+  /* Close the saved (previous) pFile before chunkStoreClose(&tmp) frees
+  ** the previous zFilename buffer that the saved pFile still references
+  ** internally for its zPath. */
+  csFreeReloadState(&saved);
   chunkStoreClose(&tmp);
 
   cs->hasMovedChecked = 0;
-
-  csFreeReloadState(&saved);
   return SQLITE_OK;
 }
 

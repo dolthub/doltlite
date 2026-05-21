@@ -95,11 +95,21 @@ static void csRollbackReplayState(
 }
 
 void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
+  char *zPrevDstFilename;
   sqlite3_free(pDst->staging.aRecent);
   pDst->staging.aRecent = 0;
   pDst->staging.nRecent = 0;
   pDst->staging.nRecentAlloc = 0;
   csRecentHTClear(pDst);
+
+  /* The freshly-opened pSrc->file.pFile holds an internal zPath that
+  ** aliases pSrc->file.zFilename. Swap the filename buffers along with
+  ** pFile so pDst owns the buffer the new handle aliases, and pSrc
+  ** carries the previous buffer (which the previous pFile, now saved in
+  ** the reload state, still references until it is closed). */
+  zPrevDstFilename = pDst->file.zFilename;
+  pDst->file.zFilename = pSrc->file.zFilename;
+  pSrc->file.zFilename = zPrevDstFilename;
 
   pDst->file.pFile = pSrc->file.pFile;
   pDst->readOnly = pSrc->readOnly;

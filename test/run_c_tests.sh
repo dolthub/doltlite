@@ -22,6 +22,7 @@ GATING=(
   vc_concurrency_test
   vc_ref_mutation_stress_test
   multi_process_test
+  multi_process_gc_test
   oom_dolt_fault_test
   cross_branch_test
   corruption_test
