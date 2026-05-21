@@ -2540,10 +2540,16 @@ static int sortKeyFromUnpackedIntRecordBuffer(
     *pnAlloc = nAlloc;
   }
   for(i=0; i<nField; i++){
+    i64 v = pRec->aMem[i].u.i;
     int n = 0;
-    int rc = sortKeyFromInt64(pRec->aMem[i].u.i, *ppBuf + nOut, &n);
-    if( rc!=SQLITE_OK ) return rc;
-    nOut += n;
+    if( sortKeyInt64FitsExact(v) ){
+      sortKeyWriteExactInt64(v, *ppBuf + nOut);
+      nOut += 9;
+    }else{
+      int rc = sortKeyFromInt64(v, *ppBuf + nOut, &n);
+      if( rc!=SQLITE_OK ) return rc;
+      nOut += n;
+    }
   }
   *pnOut = nOut;
   return SQLITE_OK;

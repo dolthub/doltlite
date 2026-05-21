@@ -631,20 +631,8 @@ int sortKeyFromInt64(i64 v, u8 *pOut, int *pnOut){
   u32 serialType;
   u32 nData;
 
-  if( v>=-9007199254740992LL && v<=9007199254740992LL ){
-    double d = (double)v;
-    u64 x;
-    int i;
-    pOut[0] = SORTKEY_NUM;
-    memcpy(&x, &d, 8);
-    if( x & ((u64)1 << 63) ){
-      x = ~x;
-    }else{
-      x ^= ((u64)1 << 63);
-    }
-    for(i=0; i<8; i++){
-      pOut[1+i] = (u8)(x >> (56 - i*8));
-    }
+  if( sortKeyInt64FitsExact(v) ){
+    sortKeyWriteExactInt64(v, pOut);
     *pnOut = 9;
     return SQLITE_OK;
   }
