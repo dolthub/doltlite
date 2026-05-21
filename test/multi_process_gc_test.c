@@ -576,7 +576,6 @@ static void test_gc_vs_merge(void){
     write(pipefd[1], "M", 1);
     close(pipefd[1]);
     r = callWithRetry(db, "SELECT dolt_merge('feat')", 200);
-    fprintf(stderr, "[diag] gc_vs_merge child merge result: %s\n", r);
     sqlite3_close(db);
     _exit(looks_like_lock_busy(r) ? 1 : 0);
   }
@@ -601,88 +600,15 @@ static void test_gc_vs_merge(void){
 
   {
     sqlite3 *db = 0;
-    int total_text_i, feat_text_i, main_text_i, setup_text_i;
-    int total_int_i, feat_int_i, main_int_i, setup_int_i;
-    char schemaBuf[256];
     sqlite3_open(path, &db);
-    total_text_i = atoi(queryScalarText(db, "SELECT count(*) FROM t"));
-    setup_text_i = atoi(queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 50"));
-    feat_text_i = atoi(queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 51 AND 70"));
-    main_text_i = atoi(queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 71 AND 90"));
-    total_int_i = countRowsDiag(db, "SELECT count(*) FROM t");
-    setup_int_i = countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 50");
-    feat_int_i = countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 51 AND 70");
-    main_int_i = countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 71 AND 90");
-    snprintf(schemaBuf, sizeof(schemaBuf), "%s",
-      queryScalarText(db, "SELECT sql FROM sqlite_schema WHERE name='t'"));
-    if( feat_text_i!=20 || main_text_i!=20 ){
-      fprintf(stderr,
-        "[diag] gc_vs_merge TEXT path: total=%d setup=%d feat=%d main=%d\n"
-        "[diag] gc_vs_merge INT  path: total=%d setup=%d feat=%d main=%d\n"
-        "[diag]   schema=%s\n",
-        total_text_i, setup_text_i, feat_text_i, main_text_i,
-        total_int_i, setup_int_i, feat_int_i, main_int_i,
-        schemaBuf);
-      {
-        sqlite3_stmt *s = 0;
-        if( sqlite3_prepare_v2(db,
-              "SELECT id, v FROM t WHERE id BETWEEN 49 AND 72 ORDER BY id LIMIT 30",
-              -1, &s, 0)==SQLITE_OK ){
-          fprintf(stderr, "[diag]   border rows:");
-          while( sqlite3_step(s)==SQLITE_ROW ){
-            fprintf(stderr, " (%d,%s)",
-              sqlite3_column_int(s, 0),
-              (const char*)sqlite3_column_text(s, 1));
-          }
-          fprintf(stderr, "\n");
-          sqlite3_finalize(s);
-        }
-      }
-      fprintf(stderr,
-        "[diag]   le10=%d lt1=%d be1to10=%d be2to10=%d be7to50=%d be8to50=%d be11to20=%d be21to50=%d ge8=%d\n",
-        countRowsDiag(db, "SELECT count(*) FROM t WHERE id <= 10"),
-        countRowsDiag(db, "SELECT count(*) FROM t WHERE id < 1"),
-        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 10"),
-        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 2 AND 10"),
-        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 7 AND 50"),
-        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 8 AND 50"),
-        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 11 AND 20"),
-        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 21 AND 50"),
-        countRowsDiag(db, "SELECT count(*) FROM t WHERE id >= 8"));
-      {
-        sqlite3_stmt *s = 0;
-        if( sqlite3_prepare_v2(db,
-              "SELECT id, v FROM t WHERE id <= 10 ORDER BY id",
-              -1, &s, 0)==SQLITE_OK ){
-          fprintf(stderr, "[diag]   first10 (id<=10):");
-          while( sqlite3_step(s)==SQLITE_ROW ){
-            fprintf(stderr, " (%d,%s)",
-              sqlite3_column_int(s, 0),
-              (const char*)sqlite3_column_text(s, 1));
-          }
-          fprintf(stderr, "\n");
-          sqlite3_finalize(s);
-        }
-      }
-      {
-        sqlite3_stmt *s = 0;
-        if( sqlite3_prepare_v2(db,
-              "SELECT id, v FROM t WHERE id BETWEEN 1 AND 10 ORDER BY id",
-              -1, &s, 0)==SQLITE_OK ){
-          fprintf(stderr, "[diag]   between1and10:");
-          while( sqlite3_step(s)==SQLITE_ROW ){
-            fprintf(stderr, " (%d,%s)",
-              sqlite3_column_int(s, 0),
-              (const char*)sqlite3_column_text(s, 1));
-          }
-          fprintf(stderr, "\n");
-          sqlite3_finalize(s);
-        }
-      }
-    }
-    check("gc_vs_merge_total_count", total_text_i==90);
-    check("gc_vs_merge_feat_rows_present", feat_text_i==20);
-    check("gc_vs_merge_main_rows_present", main_text_i==20);
+    check("gc_vs_merge_total_count",
+      countRowsDiag(db, "SELECT count(*) FROM t")==90);
+    check("gc_vs_merge_feat_rows_present",
+      countRowsDiag(db,
+        "SELECT count(*) FROM t WHERE id BETWEEN 51 AND 70")==20);
+    check("gc_vs_merge_main_rows_present",
+      countRowsDiag(db,
+        "SELECT count(*) FROM t WHERE id BETWEEN 71 AND 90")==20);
     sqlite3_close(db);
   }
 
