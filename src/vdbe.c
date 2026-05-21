@@ -3889,8 +3889,16 @@ case OP_CountRange: {    /* out2 */
   assert( pCrsr );
   pLower = &aMem[pOp->p3];
   pUpper = &aMem[pOp->p3+1];
-  applyNumericAffinity(pLower, 0);
-  applyNumericAffinity(pUpper, 0);
+  /* applyNumericAffinity() requires the input to be MEM_Str (it asserts
+  ** so in debug builds and clobbers the union in release builds). Only
+  ** invoke it when the register is text-only, matching SQLite's own
+  ** guard used everywhere else. */
+  if( (pLower->flags & (MEM_Int|MEM_IntReal|MEM_Real|MEM_Str))==MEM_Str ){
+    applyNumericAffinity(pLower, 0);
+  }
+  if( (pUpper->flags & (MEM_Int|MEM_IntReal|MEM_Real|MEM_Str))==MEM_Str ){
+    applyNumericAffinity(pUpper, 0);
+  }
   if( (pLower->flags & MEM_Int)==0 || (pUpper->flags & MEM_Int)==0 ){
     sqlite3VdbeMemSetInt64(&aMem[pOp->p2], 0);
     goto check_for_interrupt;
