@@ -497,6 +497,7 @@ static int gcRewriteFile(
 
         if( rc==SQLITE_OK ){
           chunkFileSetHandle(&cs->file, pNewFile);
+          chunkFileSetSize(&cs->file, CHUNK_MANIFEST_SIZE + nNewData + indexSize);
           walStateSetDataSize(&cs->wal, 0);
           if( pOldFile ){
             sqlite3OsCloseFree(pOldFile);

@@ -1059,10 +1059,14 @@ static int csCommitToFile(ChunkStore *cs){
     }
   }
 
-  rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
-  if( rc != SQLITE_OK ) goto commit_done;
+  if( lockHeld && hadFile ){
+    fileSize = cs->file.iFileSize;
+  }else{
+    rc = cs->file.pFile->pMethods->xFileSize(cs->file.pFile, &fileSize);
+    if( rc != SQLITE_OK ) goto commit_done;
+  }
 
-  if( hadFile ){
+  if( hadFile && !lockHeld ){
     int bMoved = 0;
     int rc2 = sqlite3OsFileControl(cs->file.pFile, SQLITE_FCNTL_HAS_MOVED,
                                    &bMoved);
