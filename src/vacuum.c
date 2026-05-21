@@ -167,12 +167,33 @@ SQLITE_NOINLINE int sqlite3RunVacuum(
 
 
 #ifdef DOLTLITE_PROLLY
-  /* VACUUM is a no-op for doltlite databases. Prolly trees use content-
-  ** addressed chunk storage — there are no fragmented pages to compact.
-  ** The BtreeCopyFile implementation doesn't transfer chunk data between
-  ** stores, so VACUUM would silently lose data. See issue #322. */
-  (void)pOut;
-  return SQLITE_OK;
+  if( pOut ){
+    sqlite3SetString(pzErrMsg, db,
+      "VACUUM INTO is not supported for doltlite databases");
+    return SQLITE_ERROR;
+  }
+  if( !db->autoCommit ){
+    sqlite3SetString(pzErrMsg, db,
+      "cannot VACUUM from within a transaction");
+    return SQLITE_ERROR;
+  }
+  {
+    sqlite3_stmt *pStmt = 0;
+    int rcGc = sqlite3_prepare_v2(db, "SELECT dolt_gc()", -1, &pStmt, 0);
+    if( rcGc!=SQLITE_OK ){
+      sqlite3_finalize(pStmt);
+      return SQLITE_OK;
+    }
+    rcGc = sqlite3_step(pStmt);
+    if( rcGc!=SQLITE_ROW && rcGc!=SQLITE_DONE ){
+      const char *zErr = sqlite3_errmsg(db);
+      if( zErr ) sqlite3SetString(pzErrMsg, db, zErr);
+      sqlite3_finalize(pStmt);
+      return rcGc;
+    }
+    sqlite3_finalize(pStmt);
+    return SQLITE_OK;
+  }
 #endif
 
   if( !db->autoCommit ){
