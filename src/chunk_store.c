@@ -1186,89 +1186,81 @@ static int csCommitToFile(ChunkStore *cs){
 
   /* Append chunks before the root record. Recovery ignores appended data until
   ** it finds a later valid root record that points at the new manifest. */
+  if( cs->staging.nPending > 0 ){
+    i64 walBytes = 0;
+    u8 *pWalBatch = 0;
+    u8 aSmallWalBatch[4096];
+    u8 *pOut = 0;
+    for( i = 0; i < cs->staging.nPending; i++ ){
+      walBytes += (i64)25 + (i64)cs->staging.aPending[i].size;
+    }
+    if( !crashWriteActive && walBytes <= 64*1024 ){
+      if( walBytes <= (i64)sizeof(aSmallWalBatch) ){
+        pWalBatch = aSmallWalBatch;
+      }else{
+        pWalBatch = (u8*)sqlite3_malloc64((sqlite3_uint64)walBytes);
+        if( !pWalBatch ){
+          rc = SQLITE_NOMEM;
+          goto commit_done;
+        }
+      }
+      pOut = pWalBatch;
+      for( i = 0; i < cs->staging.nPending; i++ ){
+        ChunkIndexEntry *pe = &cs->staging.aPending[i];
+        i64 bufOff = pe->offset + 4;
+        pOut[0] = CS_WAL_TAG_CHUNK;
+        memcpy(pOut + 1, &pe->hash, 20);
+        CS_WRITE_U32(pOut + 21, (u32)pe->size);
+        pOut += 25;
+        memcpy(pOut, cs->staging.pWriteBuf + bufOff, pe->size);
+        pOut += pe->size;
+      }
+      CRASH_CHECK_WRITE();
+      rc = sqlite3OsWrite(cs->file.pFile, pWalBatch, (int)walBytes, writeOff);
+      if( pWalBatch != aSmallWalBatch ) sqlite3_free(pWalBatch);
+      if( rc != SQLITE_OK ) goto commit_done;
+      writeOff += walBytes;
+    }else{
+      for( i = 0; i < cs->staging.nPending; i++ ){
+        ChunkIndexEntry *pe = &cs->staging.aPending[i];
+        u8 recHdr[25];
+        i64 bufOff;
+        recHdr[0] = CS_WAL_TAG_CHUNK;
+        memcpy(recHdr + 1, &pe->hash, 20);
+        CS_WRITE_U32(recHdr + 21, (u32)pe->size);
+
+        bufOff = pe->offset + 4;
+        CRASH_CHECK_WRITE();
+        rc = sqlite3OsWrite(cs->file.pFile, recHdr, 25, writeOff);
+        if( rc != SQLITE_OK ) goto commit_done;
+        writeOff += 25;
+
+        {
+          const u8 *pSrc = cs->staging.pWriteBuf + bufOff;
+          int remaining = pe->size;
+          while( remaining > 0 && rc==SQLITE_OK ){
+            int toWrite = remaining > 65536 ? 65536 : remaining;
+            CRASH_CHECK_WRITE();
+            rc = sqlite3OsWrite(cs->file.pFile, pSrc, toWrite, writeOff);
+            pSrc += toWrite;
+            writeOff += toWrite;
+            remaining -= toWrite;
+          }
+        }
+        if( rc != SQLITE_OK ) goto commit_done;
+      }
+    }
+  }
+
+  /* The root record is the commit point for the append-only chunk store. */
   {
-    int rootWritten = 0;
     u8 rootRec[1 + CHUNK_MANIFEST_SIZE];
     rootRec[0] = CS_WAL_TAG_ROOT;
     csSerializeManifest(cs, rootRec + 1);
-
-    if( cs->staging.nPending > 0 ){
-      i64 walBytes = 0;
-      u8 *pWalBatch = 0;
-      u8 aSmallWalBatch[4096];
-      u8 *pOut = 0;
-      for( i = 0; i < cs->staging.nPending; i++ ){
-        walBytes += (i64)25 + (i64)cs->staging.aPending[i].size;
-      }
-      if( !crashWriteActive && walBytes <= 64*1024 ){
-        i64 batchBytes = walBytes + (i64)sizeof(rootRec);
-        if( batchBytes <= (i64)sizeof(aSmallWalBatch) ){
-          pWalBatch = aSmallWalBatch;
-        }else{
-          pWalBatch = (u8*)sqlite3_malloc64((sqlite3_uint64)batchBytes);
-          if( !pWalBatch ){
-            rc = SQLITE_NOMEM;
-            goto commit_done;
-          }
-        }
-        pOut = pWalBatch;
-        for( i = 0; i < cs->staging.nPending; i++ ){
-          ChunkIndexEntry *pe = &cs->staging.aPending[i];
-          i64 bufOff = pe->offset + 4;
-          pOut[0] = CS_WAL_TAG_CHUNK;
-          memcpy(pOut + 1, &pe->hash, 20);
-          CS_WRITE_U32(pOut + 21, (u32)pe->size);
-          pOut += 25;
-          memcpy(pOut, cs->staging.pWriteBuf + bufOff, pe->size);
-          pOut += pe->size;
-        }
-        assert( pOut==pWalBatch+walBytes );
-        memcpy(pOut, rootRec, sizeof(rootRec));
-        CRASH_CHECK_WRITE();
-        rc = sqlite3OsWrite(cs->file.pFile, pWalBatch, (int)batchBytes, writeOff);
-        if( pWalBatch != aSmallWalBatch ) sqlite3_free(pWalBatch);
-        if( rc != SQLITE_OK ) goto commit_done;
-        writeOff += batchBytes;
-        rootWritten = 1;
-      }else{
-        for( i = 0; i < cs->staging.nPending; i++ ){
-          ChunkIndexEntry *pe = &cs->staging.aPending[i];
-          u8 recHdr[25];
-          i64 bufOff;
-          recHdr[0] = CS_WAL_TAG_CHUNK;
-          memcpy(recHdr + 1, &pe->hash, 20);
-          CS_WRITE_U32(recHdr + 21, (u32)pe->size);
-
-          bufOff = pe->offset + 4;
-          CRASH_CHECK_WRITE();
-          rc = sqlite3OsWrite(cs->file.pFile, recHdr, 25, writeOff);
-          if( rc != SQLITE_OK ) goto commit_done;
-          writeOff += 25;
-
-          {
-            const u8 *pSrc = cs->staging.pWriteBuf + bufOff;
-            int remaining = pe->size;
-            while( remaining > 0 && rc==SQLITE_OK ){
-              int toWrite = remaining > 65536 ? 65536 : remaining;
-              CRASH_CHECK_WRITE();
-              rc = sqlite3OsWrite(cs->file.pFile, pSrc, toWrite, writeOff);
-              pSrc += toWrite;
-              writeOff += toWrite;
-              remaining -= toWrite;
-            }
-          }
-          if( rc != SQLITE_OK ) goto commit_done;
-        }
-      }
-    }
-
-    /* The root record is the commit point for the append-only chunk store. */
-    if( !rootWritten ){
-      CRASH_CHECK_WRITE();
-      rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), writeOff);
-      if( rc != SQLITE_OK ) goto commit_done;
-      writeOff += sizeof(rootRec);
-    }
+    CRASH_CHECK_WRITE();
+    rc = sqlite3OsWrite(cs->file.pFile, rootRec, sizeof(rootRec), writeOff);
+    if( rc != SQLITE_OK ) goto commit_done;
+    writeOff += sizeof(rootRec);
   }
 
   CRASH_CHECK_WRITE();
