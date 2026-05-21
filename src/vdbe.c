@@ -4908,6 +4908,7 @@ case OP_SeekGT: {       /* jump0, in3, group, ncycle */
 
   pC->deferredMoveto = 0;
   pC->cacheStatus = CACHE_STALE;
+  pC->idxRowidCacheValid = 0;
   if( pC->isTable ){
     u16 flags3, newType;
     /* The OPFLAG_SEEKEQ/BTREE_SEEK_EQ flag is only set on index cursors */
@@ -5289,6 +5290,7 @@ case OP_SeekScan: {          /* ncycle */
     }
     nStep--;
     pC->cacheStatus = CACHE_STALE;
+    pC->idxRowidCacheValid = 0;
     rc = sqlite3BtreeNext(pC->uc.pCursor, 0);
     if( rc ){
       if( rc==SQLITE_DONE ){
@@ -5523,6 +5525,7 @@ case OP_Found: {        /* jump, in3, ncycle */
   pC->nullRow = 1-alreadyExists;
   pC->deferredMoveto = 0;
   pC->cacheStatus = CACHE_STALE;
+  pC->idxRowidCacheValid = 0;
   if( pOp->opcode==OP_Found ){
     VdbeBranchTaken(alreadyExists!=0,2);
     if( alreadyExists ) goto jump_to_p2;
@@ -6323,6 +6326,7 @@ case OP_NullRow: {
   }
   pC->nullRow = 1;
   pC->cacheStatus = CACHE_STALE;
+  pC->idxRowidCacheValid = 0;
   if( pC->eCurType==CURTYPE_BTREE ){
     assert( pC->uc.pCursor!=0 );
     sqlite3BtreeClearCursor(pC->uc.pCursor);
@@ -6382,6 +6386,7 @@ case OP_Last: {              /* jump0, ncycle */
   pC->nullRow = (u8)res;
   pC->deferredMoveto = 0;
   pC->cacheStatus = CACHE_STALE;
+  pC->idxRowidCacheValid = 0;
   if( rc ) goto abort_due_to_error;
   if( pOp->p2>0 ){
     VdbeBranchTaken(res!=0,2);
@@ -6499,6 +6504,7 @@ case OP_Rewind: {        /* jump0, ncycle */
     rc = sqlite3BtreeFirst(pCrsr, &res);
     pC->deferredMoveto = 0;
     pC->cacheStatus = CACHE_STALE;
+    pC->idxRowidCacheValid = 0;
   }
   if( rc ) goto abort_due_to_error;
   pC->nullRow = (u8)res;
@@ -6629,6 +6635,7 @@ case OP_Next:          /* jump, ncycle */
 
 next_tail:
   pC->cacheStatus = CACHE_STALE;
+  pC->idxRowidCacheValid = 0;
   VdbeBranchTaken(rc==SQLITE_OK,2);
   if( rc==SQLITE_OK ){
     pC->nullRow = 0;
@@ -6775,6 +6782,7 @@ case OP_IdxDelete: {
         goto abort_due_to_error;
       }
       pC->cacheStatus = CACHE_STALE;
+      pC->idxRowidCacheValid = 0;
       pC->seekResult = 0;
       break;
     }
@@ -6790,6 +6798,7 @@ case OP_IdxDelete: {
   if( rc ) goto abort_due_to_error;
   assert( pC->deferredMoveto==0 );
   pC->cacheStatus = CACHE_STALE;
+  pC->idxRowidCacheValid = 0;
   pC->seekResult = 0;
   break;
 }
@@ -6848,9 +6857,15 @@ case OP_IdxRowid: {           /* out2, ncycle */
 
   if( !pC->nullRow ){
     rowid = 0;  /* Not needed.  Only used to silence a warning. */
-    rc = sqlite3VdbeIdxRowid(db, pC->uc.pCursor, &rowid);
-    if( rc!=SQLITE_OK ){
-      goto abort_due_to_error;
+    if( pC->idxRowidCacheValid ){
+      rowid = pC->idxRowidCache;
+    }else{
+      rc = sqlite3VdbeIdxRowid(db, pC->uc.pCursor, &rowid);
+      if( rc!=SQLITE_OK ){
+        goto abort_due_to_error;
+      }
+      pC->idxRowidCache = rowid;
+      pC->idxRowidCacheValid = 1;
     }
     if( pOp->opcode==OP_DeferredSeek ){
       assert( pOp->p3>=0 && pOp->p3<p->nCursor );
