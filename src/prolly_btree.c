@@ -126,6 +126,9 @@ struct TableEntry {
   ProllyHash schemaHash;
   u8 flags;
   u8 pendingFlushSeekEdits;
+  u8 appendSeekFloorValid;
+  i64 appendSeekFloor;
+  ProllyHash appendSeekRoot;
   char *zName;
   ProllyMutMap *pPending;
 };
@@ -6390,6 +6393,7 @@ static int prollyBtCursorTableMoveto(
   int *pRes
 ){
   int rc;
+  struct TableEntry *pTE;
   (void)bias;
 
   assert( pCur->curIntKey );
@@ -6400,8 +6404,22 @@ static int prollyBtCursorTableMoveto(
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
 
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
     ProllyMutMapEntry *pEntry = 0;
+    if( pTE
+     && pTE->appendSeekFloorValid
+     && prollyHashCompare(&pTE->root, &pTE->appendSeekRoot)==0
+     && pCur->pMutMap->isIntKey
+     && pCur->pMutMap->appendSorted
+     && intKey >= pTE->appendSeekFloor
+     && intKey > prollyMutMapEntryIntKey(
+                  &pCur->pMutMap->aEntries[pCur->pMutMap->nEntries-1])
+    ){
+      *pRes = 1;
+      pCur->eState = CURSOR_INVALID;
+      return SQLITE_OK;
+    }
     rc = prollyMutMapFindRc(pCur->pMutMap, 0, 0, intKey, &pEntry);
     if( rc!=SQLITE_OK ) return rc;
     if( pEntry ){
@@ -6431,6 +6449,18 @@ static int prollyBtCursorTableMoveto(
       CLEAR_CACHED_PAYLOAD(pCur);
       cacheCurrentTreePayloadIfIntKey(pCur);
     } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
+      if( *pRes<0 ){
+        if( pTE ){
+          if( !pTE->appendSeekFloorValid
+           || prollyHashCompare(&pTE->root, &pTE->appendSeekRoot)!=0
+           || intKey < pTE->appendSeekFloor
+          ){
+            pTE->appendSeekFloor = intKey;
+          }
+          pTE->appendSeekRoot = pTE->root;
+          pTE->appendSeekFloorValid = 1;
+        }
+      }
       pCur->eState = CURSOR_VALID;
       pCur->curFlags &= ~BTCF_ValidNKey;
       cacheCurrentTreePayloadIfIntKey(pCur);

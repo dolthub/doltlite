@@ -5550,6 +5550,21 @@ SELECT * FROM t ORDER BY id;
 SELECT count(*) FROM t;
 "
 
+# 88e. Append explicit rowids past existing max with pending duplicates
+oracle "cat88_insert_append_existing_rowid" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+BEGIN;
+INSERT INTO t VALUES(4,'d');
+INSERT INTO t VALUES(5,'e');
+INSERT OR IGNORE INTO t VALUES(4,'dup');
+INSERT INTO t VALUES(7,'g');
+INSERT INTO t VALUES(6,'f');
+COMMIT;
+SELECT id, val FROM t ORDER BY id;
+SELECT count(*) FROM t;
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 89: UPDATE with complex SET expressions
 # ════════════════════════════════════════════════════════════════════
