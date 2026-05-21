@@ -1,6 +1,6 @@
 # Sysbench Optimization Progress
 
-Branch base: `origin/master` at `d2f8904ad`.
+Branch base: `origin/master` at `18b188e12`.
 
 Goal: work through each sysbench benchmark, starting with int-key file-backed, compare local results, make one general optimization per PR, then move to the next benchmark without stacking PRs.
 
@@ -9,7 +9,7 @@ Goal: work through each sysbench benchmark, starting with int-key file-backed, c
 ### Integer Primary Key, File-Backed
 
 - [x] `oltp_point_select`
-- [ ] `oltp_range_select`
+- [x] `oltp_range_select`
 - [ ] `oltp_sum_range`
 - [ ] `oltp_order_range`
 - [ ] `oltp_distinct_range`
@@ -52,7 +52,7 @@ Goal: work through each sysbench benchmark, starting with int-key file-backed, c
 - [ ] Composite primary key, file-backed
 - [ ] Composite primary key, file-backed autocommit
 
-## Current PR
+## Completed: `oltp_point_select`
 
 - Branch: `perf/sysbench-int-file`
 - Current focus: integer primary key, file-backed `oltp_point_select`.
@@ -77,3 +77,29 @@ Goal: work through each sysbench benchmark, starting with int-key file-backed, c
   - `DOLTLITE_BUILD_DIR=. bash test/run_doltlite_regression_case.sh prolly_blob_cursor_seek_past_max`
   - `BENCH_RUNS=7 BENCH_SECTION_MODE=wrapped bash test/sysbench_compare.sh`
 - Next benchmark after this PR merges: integer primary key, file-backed `oltp_range_select`.
+
+## Current PR
+
+- Branch: `perf/sysbench-int-range`
+- Current focus: integer primary key, file-backed `oltp_range_select`.
+- Baseline: `BENCH_RUNS=5 BENCH_SECTION_MODE=wrapped bash test/sysbench_compare.sh`
+  - File-backed `oltp_range_select`: SQLite 10,021 us, DoltLite 10,560 us, 1.05x.
+  - File-backed read average: 1.01x.
+  - File-backed write average: 1.34x.
+- Focused profile workload: 400,000 `id BETWEEN ? AND ?` selects over an integer primary key table.
+  - Before: 3,772,393 us.
+  - After: 3,465,365 us.
+- Optimization: stop taking an extra prolly cache reference when caching the current tree payload for integer-key cursors. The cursor level already pins the current leaf until the cursor moves or closes, so the extra `prollyCacheGet()`/`prollyCacheRelease()` pair only adds per-row refcount and LRU churn during range scans.
+- Result: same benchmark command after the change.
+  - File-backed `oltp_range_select`: SQLite 9,929 us, DoltLite 10,156 us, 1.02x.
+  - DoltLite `oltp_range_select` delta: -3.8%.
+  - File-backed read average: 1.01x.
+  - File-backed write average: 1.32x.
+- Verification:
+  - `make -j$(sysctl -n hw.ncpu) doltlite doltlite-lib`
+  - `DOLTLITE_BUILD_DIR=. bash test/run_doltlite_regression_case.sh prolly_int_cursor_boundary`
+  - `DOLTLITE_BUILD_DIR=. bash test/run_doltlite_regression_case.sh prolly_int_cursor_seek_past_max`
+  - `DOLTLITE_BUILD_DIR=. bash test/run_doltlite_regression_case.sh prolly_blob_cursor_boundary`
+  - `DOLTLITE_BUILD_DIR=. bash test/run_doltlite_regression_case.sh prolly_blob_cursor_seek_past_max`
+  - `BENCH_RUNS=5 BENCH_SECTION_MODE=wrapped bash test/sysbench_compare.sh`
+- Next benchmark after this PR merges: integer primary key, file-backed `oltp_sum_range`.
