@@ -314,6 +314,9 @@ struct Btree {
   ProllyHash committedMergeCommitHash;
   ProllyHash committedConflictsCatalogHash;
   ProllyHash committedConstraintViolationsHash;
+  ProllyHash catalogCacheHash;
+  u8 *pCatalogCache;
+  int nCatalogCache;
 
   char *zBranch;
   char *zAuthorName;
@@ -408,6 +411,24 @@ static inline void removeTable(Btree *p, Pgno iTable){
 }
 static inline void btreeFreeCatalogTables(Btree *p){
   catFree(&p->cat);
+}
+static void btreeClearCatalogCache(Btree *p){
+  sqlite3_free(p->pCatalogCache);
+  p->pCatalogCache = 0;
+  p->nCatalogCache = 0;
+  memset(&p->catalogCacheHash, 0, sizeof(p->catalogCacheHash));
+}
+static void btreeTakeCatalogCache(Btree *p, u8 **ppData, int nData,
+                                  const ProllyHash *pHash){
+  sqlite3_free(p->pCatalogCache);
+  p->pCatalogCache = *ppData;
+  *ppData = 0;
+  p->nCatalogCache = nData;
+  if( pHash ){
+    p->catalogCacheHash = *pHash;
+  }else{
+    memset(&p->catalogCacheHash, 0, sizeof(p->catalogCacheHash));
+  }
 }
 static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode);
 static void invalidateSchema(Btree *pBtree);
@@ -2048,9 +2069,117 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
       aFallbackSchema, nFallbackSchema, ppOut, pnOut);
 }
 
+static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
+  u8 *buf = 0;
+  const u8 *pEntries;
+  u8 *q;
+  int nData = 0;
+  int nTables = 0;
+  int iFormat = 0;
+  int i, nPatched = 0;
+  int rc;
+
+  if( pBtree->bSchemaChangedTxn
+   || prollyHashIsEmpty(&pBtree->committedCatalogHash) ){
+    return SQLITE_NOTFOUND;
+  }
+
+  if( pBtree->pCatalogCache
+   && pBtree->nCatalogCache>0
+   && prollyHashCompare(&pBtree->catalogCacheHash,
+                        &pBtree->committedCatalogHash)==0 ){
+    buf = sqlite3_malloc(pBtree->nCatalogCache);
+    if( !buf ) return SQLITE_NOMEM;
+    memcpy(buf, pBtree->pCatalogCache, pBtree->nCatalogCache);
+    nData = pBtree->nCatalogCache;
+  }else{
+    rc = chunkStoreGet(&pBtree->pBt->store, &pBtree->committedCatalogHash,
+                       &buf, &nData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(buf);
+      return rc;
+    }
+  }
+  if( !buf || !catalogParseHeaderEx(buf, nData, &iFormat, &nTables, &pEntries)
+   || nTables!=pBtree->cat.n ){
+    sqlite3_free(buf);
+    return SQLITE_NOTFOUND;
+  }
+
+  q = buf + (pEntries - (const u8*)buf);
+  for(i=0; i<nTables; i++){
+    Pgno iTable;
+    struct TableEntry *pTE;
+    int nSkip;
+
+    if( q + CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
+        + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE > buf + nData ){
+      sqlite3_free(buf);
+      return SQLITE_NOTFOUND;
+    }
+
+    iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+    pTE = findTable(pBtree, iTable);
+    if( !pTE ){
+      sqlite3_free(buf);
+      return SQLITE_NOTFOUND;
+    }
+
+    q += CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE;
+    /* The persisted sqlite_master root is canonicalized. DML does not change
+    ** it, and the in-memory root may be a runtime view after DDL. */
+    if( iTable!=1 ){
+      memcpy(q, pTE->root.data, PROLLY_HASH_SIZE);
+    }
+    q += PROLLY_HASH_SIZE + PROLLY_HASH_SIZE;
+    nPatched++;
+
+    if( iFormat==CATALOG_FORMAT_V4 ){
+      int nType, nName, nTbl;
+      if( q + 6 > buf + nData ){
+        sqlite3_free(buf);
+        return SQLITE_NOTFOUND;
+      }
+      nType = q[0] | (q[1]<<8);
+      nName = q[2] | (q[3]<<8);
+      nTbl = q[4] | (q[5]<<8);
+      q += 6;
+      nSkip = nType + nName + nTbl;
+    }else{
+      if( q + 2 > buf + nData ){
+        sqlite3_free(buf);
+        return SQLITE_NOTFOUND;
+      }
+      nSkip = q[0] | (q[1]<<8);
+      q += 2;
+    }
+    if( nSkip<0 || q + nSkip > buf + nData ){
+      sqlite3_free(buf);
+      return SQLITE_NOTFOUND;
+    }
+    q += nSkip;
+  }
+
+  if( q!=buf+nData || nPatched!=pBtree->cat.n ){
+    sqlite3_free(buf);
+    return SQLITE_NOTFOUND;
+  }
+
+  *ppOut = buf;
+  *pnOut = nData;
+  return SQLITE_OK;
+}
+
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
   return doltliteSerializeCatalogEntriesForBtreeImpl(
       pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut);
+}
+
+static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
+  int rc = serializeCatalogPatchRoots(pBtree, ppOut, pnOut);
+  if( rc==SQLITE_OK ) return SQLITE_OK;
+  if( rc!=SQLITE_NOTFOUND ) return rc;
+  return serializeCatalog(pBtree, ppOut, pnOut);
 }
 
 static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
@@ -4085,6 +4214,7 @@ static int prollyBtreeClose(Btree *p){
     p->pSchema = 0;
   }
   btreeFreeCatalogTables(p);
+  btreeClearCatalogCache(p);
   if( p->aSavepointTables ){
     int i;
     for(i=0; i<p->nSavepoint; i++){
@@ -4911,7 +5041,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
     }
 
     {
-      rc = serializeCatalog(p, &catData, &nCatData);
+      rc = serializeCatalogForCommit(p, &catData, &nCatData);
       if( rc==SQLITE_OK ){
         rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
       }
@@ -4997,6 +5127,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       p->nSavepoint = 0;
       p->bSchemaChangedTxn = 0;
 
+      btreeTakeCatalogCache(p, &catData, nCatData, &catHash);
       sqlite3_free(catData);
       chunkStoreUnlock(&pBt->store);
       pBt->store.snapshotPinned = 0;
