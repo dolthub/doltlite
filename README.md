@@ -343,7 +343,7 @@ Two per-table virtual tables for time travel:
 
 ```sql
 -- Every version of every row across all commits
-SELECT * FROM dolt_history_users WHERE rowid_val = 42;
+SELECT * FROM dolt_history_users WHERE id = 42;
 
 -- The table as it existed at a specific commit / branch / tag
 SELECT * FROM dolt_at_users('abc123...');
@@ -494,15 +494,18 @@ View and resolve merge conflicts:
 ```sql
 -- View which tables have conflicts (summary)
 SELECT * FROM dolt_conflicts;
--- table_name | num_conflicts
--- users      | 2
+-- table | num_conflicts
+-- users | 2
 
--- View individual conflict rows for a table
+-- View individual conflict rows for a table. Columns are
+-- (from_root_ish, base_<col>..., our_<col>..., our_diff_type,
+--  their_<col>..., their_diff_type, dolt_conflict_id) — one base/our/their
+-- triple per user column, plus per-side diff_type and a stable
+-- dolt_conflict_id for resolution.
 SELECT * FROM dolt_conflicts_users;
--- base_rowid | base_value | our_rowid | our_value | their_rowid | their_value
 
 -- Resolve individual conflicts by deleting them (keeps current working value)
-DELETE FROM dolt_conflicts_users WHERE base_rowid = 5;
+DELETE FROM dolt_conflicts_users WHERE dolt_conflict_id = 5;
 
 -- Or resolve all conflicts for a table at once
 SELECT dolt_conflicts_resolve('--ours', 'users');   -- keep our values
@@ -819,7 +822,7 @@ Doltlite is a drop-in replacement for SQLite, so the natural question is: what
 does version control cost?
 
 Every PR runs a [sysbench-style benchmark](test/sysbench_compare.sh) comparing
-doltlite against stock SQLite on 23 OLTP workloads, with a 2× ceiling enforced
+doltlite against stock SQLite on 31 OLTP workloads, with a 2× ceiling enforced
 by CI. The per-release numbers (reads + writes table) are published with each
 release on the [GitHub releases page](https://github.com/dolthub/doltlite/releases).
 Run `test/sysbench_compare.sh` to reproduce locally.
@@ -845,7 +848,7 @@ invocation).
 
 ### Doltlite Shell Tests
 
-40 test suites covering all features:
+60+ test suites covering all features:
 
 ```bash
 # Run all suites
@@ -853,7 +856,7 @@ cd build
 bash ../test/run_doltlite_tests.sh
 
 # Run individual suites
-bash ../test/doltlite_parity.sh          # SQLite compatibility (110 tests)
+bash ../test/doltlite_parity.sh          # SQLite compatibility (119 tests)
 bash ../test/doltlite_commit.sh          # Commits and log
 bash ../test/doltlite_staging.sh         # Add, status, staging
 bash ../test/doltlite_branch.sh          # Branching and checkout
