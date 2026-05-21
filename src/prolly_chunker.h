@@ -6,6 +6,7 @@
 #include "prolly_hash.h"
 #include "prolly_node.h"
 #include "prolly_cursor.h"
+#include "prolly_cache.h"
 #include "chunk_store.h"
 
 /* Min/max bounds for content-defined chunks. The chunker may split after the
@@ -25,6 +26,7 @@ struct ProllyChunkerLevel {
 
 struct ProllyChunker {
   ChunkStore *pStore;
+  ProllyCache *pCache;
   u8 flags;
   int nLevels;
   ProllyChunkerLevel aLevel[PROLLY_CURSOR_MAX_DEPTH];
@@ -32,6 +34,8 @@ struct ProllyChunker {
 };
 
 int prollyChunkerInit(ProllyChunker *ch, ChunkStore *pStore, u8 flags);
+int prollyChunkerInitWithCache(ProllyChunker *ch, ChunkStore *pStore,
+                               ProllyCache *pCache, u8 flags);
 
 int prollyChunkerAdd(ProllyChunker *ch,
                      const u8 *pKey, int nKey,

@@ -92,7 +92,8 @@ static int buildFromEdits(
   ProllyMutMapIter iter;
   int rc;
 
-  rc = prollyChunkerInit(&chunker, pMut->pStore, pMut->flags);
+  rc = prollyChunkerInitWithCache(&chunker, pMut->pStore, pMut->pCache,
+                                  pMut->flags);
   if( rc!=SQLITE_OK ) return rc;
 
   prollyMutMapIterFirst(&iter, pMut->pEdits);
@@ -322,27 +323,36 @@ static int streamingMerge(
   u8 *pRootData = 0;
   int nRootData = 0;
   ProllyNode rootNode;
+  ProllyNode *pRootNode = &rootNode;
+  ProllyCacheEntry *pRootEntry = 0;
   ProllyCache *pCache = pMut->pCache;
 
-  rc = chunkStoreGet(pMut->pStore, &pMut->oldRoot, &pRootData, &nRootData);
-  if( rc!=SQLITE_OK ) return rc;
-  rc = prollyNodeParse(&rootNode, pRootData, nRootData);
-  if( rc!=SQLITE_OK ){
-    sqlite3_free(pRootData);
-    return rc;
+  pRootEntry = pCache ? prollyCacheGet(pCache, &pMut->oldRoot) : 0;
+  if( pRootEntry ){
+    pRootNode = &pRootEntry->node;
+  }else{
+    rc = chunkStoreGet(pMut->pStore, &pMut->oldRoot, &pRootData, &nRootData);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = prollyNodeParse(&rootNode, pRootData, nRootData);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pRootData);
+      return rc;
+    }
   }
 
   prollyMutMapIterFirst(&iter, pMut->pEdits);
-  rc = prollyChunkerInit(&chunker, pMut->pStore, pMut->flags);
+  rc = prollyChunkerInitWithCache(&chunker, pMut->pStore, pMut->pCache,
+                                  pMut->flags);
   if( rc!=SQLITE_OK ){
+    if( pRootEntry ) prollyCacheRelease(pCache, pRootEntry);
     sqlite3_free(pRootData);
     return rc;
   }
 
-  if( rootNode.level == 0 ){
-    rc = mergeLeaf(pMut, &rootNode, &chunker, &iter, 1);
+  if( pRootNode->level == 0 ){
+    rc = mergeLeaf(pMut, pRootNode, &chunker, &iter, 1);
   }else{
-    rc = streamingMergeNode(pMut, &rootNode, &chunker, &iter, 1);
+    rc = streamingMergeNode(pMut, pRootNode, &chunker, &iter, 1);
   }
   if( rc!=SQLITE_OK ) goto streaming_cleanup;
 
@@ -352,6 +362,7 @@ static int streamingMerge(
   }
 
 streaming_cleanup:
+  if( pRootEntry ) prollyCacheRelease(pCache, pRootEntry);
   prollyChunkerFree(&chunker);
   sqlite3_free(pRootData);
   return rc;
