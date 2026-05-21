@@ -3,6 +3,7 @@
 #define SQLITE_SORTKEY_H
 
 #include "sqliteInt.h"
+#include <string.h>
 
 #define SORTKEY_NULL    0x05
 #define SORTKEY_NUM     0x15
@@ -27,6 +28,26 @@ int sortKeyFromMemPrefixCollBuffer(
 
 int sortKeyFromInt64(i64 v, u8 *pOut, int *pnOut);
 int sortKeyFromInt64Buffer(i64 v, u8 **ppBuf, int *pnAlloc, int *pnOut);
+
+static inline int sortKeyInt64FitsExact(i64 v){
+  return v>=-9007199254740992LL && v<=9007199254740992LL;
+}
+
+static inline void sortKeyWriteExactInt64(i64 v, u8 *pOut){
+  double d = (double)v;
+  u64 x;
+  int i;
+  pOut[0] = SORTKEY_NUM;
+  memcpy(&x, &d, 8);
+  if( x & ((u64)1 << 63) ){
+    x = ~x;
+  }else{
+    x ^= ((u64)1 << 63);
+  }
+  for(i=0; i<8; i++){
+    pOut[1+i] = (u8)(x >> (56 - i*8));
+  }
+}
 
 int sortKeySize(const u8 *pRec, int nRec);
 

@@ -198,14 +198,6 @@ static SQLITE_INLINE int prollyKeyComparePrefix(
   const u8 *pRight,
   int n
 ){
-  int i;
-  if( n<=32 ){
-    for(i=0; i<n; i++){
-      int c = (int)pLeft[i] - (int)pRight[i];
-      if( c ) return c;
-    }
-    return 0;
-  }
   return memcmp(pLeft, pRight, n);
 }
 
