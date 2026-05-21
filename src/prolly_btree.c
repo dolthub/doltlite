@@ -5439,6 +5439,9 @@ static int prollyBtCursorCursorHasMoved(BtCursor *pCur){
 }
 int sqlite3BtreeCursorHasMoved(BtCursor *pCur){
   if( !pCur ) return 0;
+  if( pCur->pCurOps==&prollyCursorOps ){
+    return pCur->eState!=CURSOR_VALID;
+  }
   if( !pCur->pCurOps ) return (pCur->eState!=CURSOR_VALID);
   return pCur->pCurOps->xCursorHasMoved(pCur);
 }
@@ -5819,6 +5822,9 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
 }
 int sqlite3BtreeNext(BtCursor *pCur, int flags){
   if( !pCur ) return SQLITE_DONE;
+  if( pCur->pCurOps==&prollyCursorOps ){
+    return prollyBtCursorNext(pCur, flags);
+  }
   return pCur->pCurOps->xNext(pCur, flags);
 }
 
@@ -6590,6 +6596,9 @@ static i64 prollyBtCursorIntegerKey(BtCursor *pCur){
   return cursorCurrentTreeIntKey(pCur);
 }
 i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
+  if( pCur->pCurOps==&prollyCursorOps ){
+    return prollyBtCursorIntegerKey(pCur);
+  }
   return pCur->pCurOps->xIntegerKey(pCur);
 }
 
@@ -6664,6 +6673,9 @@ static u32 prollyBtCursorPayloadSize(BtCursor *pCur){
   return (u32)nData;
 }
 u32 sqlite3BtreePayloadSize(BtCursor *pCur){
+  if( pCur->pCurOps==&prollyCursorOps ){
+    return prollyBtCursorPayloadSize(pCur);
+  }
   return pCur->pCurOps->xPayloadSize(pCur);
 }
 
@@ -6702,6 +6714,9 @@ static const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
 }
 const void *sqlite3BtreePayloadFetch(BtCursor *pCur, u32 *pAmt){
   if( !pCur ) return 0;
+  if( pCur->pCurOps==&prollyCursorOps ){
+    return prollyBtCursorPayloadFetch(pCur, pAmt);
+  }
   return pCur->pCurOps->xPayloadFetch(pCur, pAmt);
 }
 
