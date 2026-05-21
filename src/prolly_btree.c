@@ -2171,11 +2171,15 @@ static int serializeCatalogPatchRoots(Btree *pBtree, u8 **ppOut, int *pnOut){
 }
 
 static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut){
+  return doltliteSerializeCatalogEntriesForBtreeImpl(
+      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut);
+}
+
+static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
   int rc = serializeCatalogPatchRoots(pBtree, ppOut, pnOut);
   if( rc==SQLITE_OK ) return SQLITE_OK;
   if( rc!=SQLITE_NOTFOUND ) return rc;
-  return doltliteSerializeCatalogEntriesForBtreeImpl(
-      pBtree, pBtree->cat.a, pBtree->cat.n, 0, 0, ppOut, pnOut);
+  return serializeCatalog(pBtree, ppOut, pnOut);
 }
 
 static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
@@ -5037,7 +5041,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
     }
 
     {
-      rc = serializeCatalog(p, &catData, &nCatData);
+      rc = serializeCatalogForCommit(p, &catData, &nCatData);
       if( rc==SQLITE_OK ){
         rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
       }
