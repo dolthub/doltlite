@@ -1039,6 +1039,7 @@ static int csCommitToFile(ChunkStore *cs){
   int lockHeld = (cs->graphLockFd >= 0);
   i64 newWalSize = cs->wal.nWalData;
   ChunkIndexEntry *aCommittedPending = 0;
+  ChunkIndexEntry aSmallCommittedPending[32];
   ChunkIndexEntry *aMergePending = 0;
   ChunkIndexEntry *aMerged = 0;
   int nMerged = 0;
@@ -1101,12 +1102,17 @@ static int csCommitToFile(ChunkStore *cs){
     }
     newWalSize = cs->wal.nWalData + appendBytes;
 
-    aCommittedPending = (ChunkIndexEntry*)sqlite3_malloc(
-      cs->staging.nPending * (int)sizeof(ChunkIndexEntry)
-    );
-    if( !aCommittedPending ){
-      rc = SQLITE_NOMEM;
-      goto commit_done;
+    if( cs->staging.nPending <= (int)(sizeof(aSmallCommittedPending)
+                                    / sizeof(aSmallCommittedPending[0])) ){
+      aCommittedPending = aSmallCommittedPending;
+    }else{
+      aCommittedPending = (ChunkIndexEntry*)sqlite3_malloc(
+        cs->staging.nPending * (int)sizeof(ChunkIndexEntry)
+      );
+      if( !aCommittedPending ){
+        rc = SQLITE_NOMEM;
+        goto commit_done;
+      }
     }
 
     for( i = 0; i < cs->staging.nPending; i++ ){
@@ -1275,7 +1281,9 @@ commit_done:
       (void)csRollbackFailedAppend(cs, origFileSize);
     }
     (void)csRestoreCommittedRefsState(cs);
-    sqlite3_free(aCommittedPending);
+    if( aCommittedPending!=aSmallCommittedPending ){
+      sqlite3_free(aCommittedPending);
+    }
     sqlite3_free(aMergePending);
     sqlite3_free(aMerged);
     return rc;
@@ -1300,7 +1308,9 @@ commit_done:
   }else{
     sqlite3_free(aMerged);
   }
-  sqlite3_free(aCommittedPending);
+  if( aCommittedPending!=aSmallCommittedPending ){
+    sqlite3_free(aCommittedPending);
+  }
   sqlite3_free(aMergePending);
 
   sqlite3_free(cs->staging.pWriteBuf);

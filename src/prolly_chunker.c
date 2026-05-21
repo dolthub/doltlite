@@ -68,6 +68,11 @@ static int flushLevel(ProllyChunker *ch, int level){
   if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStorePut(ch->pStore, pData, nData, &hash);
+  if( rc==SQLITE_OK && ch->pCache ){
+    ProllyCacheEntry *pEntry;
+    pEntry = prollyCachePut(ch->pCache, &hash, pData, nData, &rc);
+    if( pEntry ) prollyCacheRelease(ch->pCache, pEntry);
+  }
   sqlite3_free(pData);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -102,6 +107,11 @@ static int finishFlushLevel(ProllyChunker *ch, int level,
   if( rc!=SQLITE_OK ) return rc;
 
   rc = chunkStorePut(ch->pStore, pData, nData, pHash);
+  if( rc==SQLITE_OK && ch->pCache ){
+    ProllyCacheEntry *pEntry;
+    pEntry = prollyCachePut(ch->pCache, pHash, pData, nData, &rc);
+    if( pEntry ) prollyCacheRelease(ch->pCache, pEntry);
+  }
   sqlite3_free(pData);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -198,8 +208,14 @@ static int addToLevel(ProllyChunker *ch, int level,
 }
 
 int prollyChunkerInit(ProllyChunker *ch, ChunkStore *pStore, u8 flags){
+  return prollyChunkerInitWithCache(ch, pStore, 0, flags);
+}
+
+int prollyChunkerInitWithCache(ProllyChunker *ch, ChunkStore *pStore,
+                               ProllyCache *pCache, u8 flags){
   memset(ch, 0, sizeof(ProllyChunker));
   ch->pStore = pStore;
+  ch->pCache = pCache;
   ch->flags = flags;
   ch->nLevels = 0;
   memset(&ch->root, 0, sizeof(ProllyHash));
