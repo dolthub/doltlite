@@ -588,22 +588,49 @@ static void test_gc_vs_merge(void){
 
   {
     sqlite3 *db = 0;
-    char totalBuf[64], featBuf[64], mainBuf[64], branchBuf[64], logBuf[64];
+    char totalBuf[64], featBuf[64], mainBuf[64];
+    char setupBuf[64], extrasBuf[64], minBuf[64], maxBuf[64];
+    char distinctBuf[64], schemaBuf[256];
     sqlite3_open(path, &db);
     snprintf(totalBuf, sizeof(totalBuf), "%s",
       queryScalarText(db, "SELECT count(*) FROM t"));
+    snprintf(setupBuf, sizeof(setupBuf), "%s",
+      queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 50"));
     snprintf(featBuf, sizeof(featBuf), "%s",
       queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 51 AND 70"));
     snprintf(mainBuf, sizeof(mainBuf), "%s",
       queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 71 AND 90"));
-    snprintf(branchBuf, sizeof(branchBuf), "%s",
-      queryScalarText(db, "SELECT name FROM dolt_branches"));
-    snprintf(logBuf, sizeof(logBuf), "%s",
-      queryScalarText(db, "SELECT count(*) FROM dolt_log"));
+    snprintf(extrasBuf, sizeof(extrasBuf), "%s",
+      queryScalarText(db, "SELECT count(*) FROM t WHERE id<1 OR id>90"));
+    snprintf(minBuf, sizeof(minBuf), "%s",
+      queryScalarText(db, "SELECT min(id) FROM t"));
+    snprintf(maxBuf, sizeof(maxBuf), "%s",
+      queryScalarText(db, "SELECT max(id) FROM t"));
+    snprintf(distinctBuf, sizeof(distinctBuf), "%s",
+      queryScalarText(db, "SELECT count(DISTINCT id) FROM t"));
+    snprintf(schemaBuf, sizeof(schemaBuf), "%s",
+      queryScalarText(db, "SELECT sql FROM sqlite_schema WHERE name='t'"));
     if( strcmp(totalBuf, "90")!=0 || strcmp(featBuf, "20")!=0 || strcmp(mainBuf, "20")!=0 ){
       fprintf(stderr,
-        "[diag] gc_vs_merge: total=%s feat=%s main=%s branches=%s dolt_log=%s\n",
-        totalBuf, featBuf, mainBuf, branchBuf, logBuf);
+        "[diag] gc_vs_merge: total=%s setup=%s feat=%s main=%s extras=%s "
+        "min=%s max=%s distinct=%s\n[diag]   schema=%s\n",
+        totalBuf, setupBuf, featBuf, mainBuf, extrasBuf,
+        minBuf, maxBuf, distinctBuf, schemaBuf);
+      {
+        sqlite3_stmt *s = 0;
+        if( sqlite3_prepare_v2(db,
+              "SELECT id, v FROM t WHERE id BETWEEN 49 AND 72 ORDER BY id LIMIT 30",
+              -1, &s, 0)==SQLITE_OK ){
+          fprintf(stderr, "[diag]   border rows:");
+          while( sqlite3_step(s)==SQLITE_ROW ){
+            fprintf(stderr, " (%d,%s)",
+              sqlite3_column_int(s, 0),
+              (const char*)sqlite3_column_text(s, 1));
+          }
+          fprintf(stderr, "\n");
+          sqlite3_finalize(s);
+        }
+      }
     }
     check("gc_vs_merge_total_count", strcmp(totalBuf, "90")==0);
     check("gc_vs_merge_feat_rows_present", strcmp(featBuf, "20")==0);
