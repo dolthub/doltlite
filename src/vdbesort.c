@@ -906,16 +906,29 @@ static int vdbeSorterCompareInt(
   const int s2 = p2[1];                 /* Right hand serial type */
   const u8 * const v1 = &p1[ p1[0] ];   /* Pointer to value 1 */
   const u8 * const v2 = &p2[ p2[0] ];   /* Pointer to value 2 */
+  static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8, 0, 0, 0 };
   int res;                              /* Return value */
+  u8 n;
+  int i;
 
   assert( (s1>0 && s1<7) || s1==8 || s1==9 );
   assert( (s2>0 && s2<7) || s2==8 || s2==9 );
 
   if( s1==s2 ){
+    if( s1==1 ){
+      const int i1 = (signed char)v1[0];
+      const int i2 = (signed char)v2[0];
+      res = i1 - i2;
+      goto compare_int_done;
+    }else if( s1==2 ){
+      const int i1 = (i16)(((u16)v1[0]<<8) | v1[1]);
+      const int i2 = (i16)(((u16)v2[0]<<8) | v2[1]);
+      res = i1 - i2;
+      goto compare_int_done;
+    }
+
     /* The two values have the same sign. Compare using memcmp(). */
-    static const u8 aLen[] = {0, 1, 2, 3, 4, 6, 8, 0, 0, 0 };
-    const u8 n = aLen[s1];
-    int i;
+    n = aLen[s1];
     res = 0;
     for(i=0; i<n; i++){
       if( (res = v1[i] - v2[i])!=0 ){
@@ -944,6 +957,7 @@ static int vdbeSorterCompareInt(
     }
   }
 
+compare_int_done:
   assert( pTask->pSorter->pKeyInfo->aSortFlags!=0 );
   if( res==0 ){
     if( pTask->pSorter->pKeyInfo->nKeyField>1 ){
