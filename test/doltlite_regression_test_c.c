@@ -3652,7 +3652,8 @@ static void run_integrity_check_walks_prolly_nodes(void){
     "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
     "INSERT INTO t VALUES(1,'a');"
     "INSERT INTO t VALUES(2,'b');"
-    "SELECT dolt_commit('-A', '-m', 'init');")==SQLITE_OK);
+    "SELECT dolt_commit('-A', '-m', 'init');"
+    "SELECT dolt_gc();")==SQLITE_OK);
   check("get_head_catalog_hash", doltliteGetHeadCatalogHash(db, &catHash)==SQLITE_OK);
   check("load_head_catalog", doltliteLoadCatalog(db, &catHash, &aTables, &nTables, &iNextTable)==SQLITE_OK);
   pTable = doltliteFindTableByName(aTables, nTables, "t");
@@ -3665,6 +3666,7 @@ static void run_integrity_check_walks_prolly_nodes(void){
     int i;
     for(i=0; i<cs.index.nIndex; i++){
       if( prollyHashCompare(&cs.index.aIndex[i].hash, &pTable->root)==0 ){
+        check("root_chunk_is_compacted", cs.index.aIndex[i].offset >= 0);
         if( cs.index.aIndex[i].offset < 0 ){
           dataOff = walStateGetOffset(&cs.wal) + (-(cs.index.aIndex[i].offset + 1));
         }else{
