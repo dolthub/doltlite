@@ -3905,6 +3905,81 @@ case OP_CountRange: {    /* out2 */
   goto check_for_interrupt;
 }
 
+/* Opcode: CountIndexRange P1 P2 P3 P4 *
+** Synopsis: r[P2]=count_index_range(r[P3]..r[P3+P4])
+**
+** Store in register P2 the number of entries in index cursor P1 whose first
+** P4 fields are between the values in registers P3 and P3+P4, inclusive.
+*/
+case OP_CountIndexRange: {    /* out2 */
+  i64 nEntry = 0;
+  BtCursor *pCrsr;
+  VdbeCursor *pC;
+  UnpackedRecord rLower;
+  UnpackedRecord rUpper;
+  int nField = pOp->p4.i;
+  int res = 0;
+  int i;
+
+  assert( pOp->p4type==P4_INT32 );
+  assert( nField>0 );
+  assert( p->apCsr[pOp->p1]->eCurType==CURTYPE_BTREE );
+  pC = p->apCsr[pOp->p1];
+  pCrsr = pC->uc.pCursor;
+  assert( pCrsr );
+  assert( !pC->isTable );
+
+  rLower.pKeyInfo = pC->pKeyInfo;
+  rLower.nField = (u16)nField;
+  rLower.default_rc = +1;
+  rLower.aMem = &aMem[pOp->p3];
+  rLower.eqSeen = 0;
+  rUpper.pKeyInfo = pC->pKeyInfo;
+  rUpper.nField = (u16)nField;
+  rUpper.default_rc = -1;
+  rUpper.aMem = &aMem[pOp->p3+nField];
+  rUpper.eqSeen = 0;
+
+  for(i=0; i<nField*2; i++){
+    if( aMem[pOp->p3+i].flags & MEM_Null ){
+      pOut = out2Prerelease(p, pOp);
+      pOut->u.i = 0;
+      goto check_for_interrupt;
+    }
+  }
+
+  rc = sqlite3BtreeCountIndexRange(db, pCrsr, &rLower, &rUpper, &nEntry);
+  if( rc==SQLITE_NOTFOUND ){
+    rc = sqlite3BtreeIndexMoveto(pCrsr, &rLower, &res);
+    if( rc ) goto abort_due_to_error;
+    if( res<0 ){
+      rc = sqlite3BtreeNext(pCrsr, 0);
+      if( rc==SQLITE_DONE ){
+        rc = SQLITE_OK;
+      }
+      if( rc ) goto abort_due_to_error;
+    }
+    while( !sqlite3BtreeEof(pCrsr) ){
+      rc = sqlite3VdbeIdxKeyCompare(db, pC, &rUpper, &res);
+      if( rc ) goto abort_due_to_error;
+      res++;
+      if( res>0 ) break;
+      nEntry++;
+      rc = sqlite3BtreeNext(pCrsr, 0);
+      if( rc==SQLITE_DONE ){
+        rc = SQLITE_OK;
+        break;
+      }
+      if( rc ) goto abort_due_to_error;
+    }
+  }else if( rc ){
+    goto abort_due_to_error;
+  }
+  pOut = out2Prerelease(p, pOp);
+  pOut->u.i = nEntry;
+  goto check_for_interrupt;
+}
+
 /* Opcode: Savepoint P1 * * P4 *
 **
 ** Open, release or rollback the savepoint named by parameter P4, depending
