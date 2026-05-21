@@ -5550,6 +5550,21 @@ SELECT * FROM t ORDER BY id;
 SELECT count(*) FROM t;
 "
 
+# 88e. Sorted explicit rowid inserts with pending duplicates
+oracle "cat88_insert_sorted_explicit_rowid" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+BEGIN;
+INSERT INTO t VALUES(1,'a');
+INSERT INTO t VALUES(2,'b');
+INSERT INTO t VALUES(3,'c');
+INSERT OR IGNORE INTO t VALUES(2,'dup');
+INSERT INTO t VALUES(5,'e');
+INSERT INTO t VALUES(4,'d');
+COMMIT;
+SELECT id, val FROM t ORDER BY id;
+SELECT count(*) FROM t;
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 89: UPDATE with complex SET expressions
 # ════════════════════════════════════════════════════════════════════
