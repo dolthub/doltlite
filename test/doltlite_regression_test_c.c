@@ -304,6 +304,73 @@ backup_safety_done:
   removeDbFiles(zSame);
 }
 
+static void run_integer_pk_autocommit_append_correctness(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *stmt = 0;
+  char dbpath[256];
+  int rc;
+  int i;
+  const int nRow = 1500;
+
+  make_dbpath(dbpath, sizeof(dbpath), "test_integer_pk_autocommit_append");
+  removeDbFiles(dbpath);
+
+  check("integer_pk_append_open", open_db(dbpath, &db)==SQLITE_OK);
+  if( db==0 ) goto integer_pk_append_done;
+
+  check("integer_pk_append_create",
+        execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, k INTEGER, v TEXT);")
+        ==SQLITE_OK);
+  rc = sqlite3_prepare_v2(db,
+      "INSERT INTO t VALUES(?1, ?2, ?3)", -1, &stmt, 0);
+  check("integer_pk_append_prepare", rc==SQLITE_OK);
+  for(i=1; rc==SQLITE_OK && i<=nRow; i++){
+    char zVal[32];
+    sqlite3_snprintf(sizeof(zVal), zVal, "v-%04d", i);
+    sqlite3_bind_int(stmt, 1, i);
+    sqlite3_bind_int(stmt, 2, i*2);
+    sqlite3_bind_text(stmt, 3, zVal, -1, SQLITE_TRANSIENT);
+    rc = sqlite3_step(stmt);
+    if( rc!=SQLITE_DONE ){
+      fprintf(stderr, "  insert failed at row %d: %s (rc=%d)\n",
+              i, sqlite3_errmsg(db), rc);
+      break;
+    }
+    rc = sqlite3_reset(stmt);
+    sqlite3_clear_bindings(stmt);
+  }
+  sqlite3_finalize(stmt);
+  stmt = 0;
+  check("integer_pk_append_inserts", rc==SQLITE_OK);
+
+  check("integer_pk_append_count_min_max_sum",
+        strcmp(queryScalarText(db,
+          "SELECT count(*) || ',' || min(id) || ',' || max(id) || ',' || sum(k) "
+          "FROM t"), "1500,1,1500,2251500")==0);
+  check("integer_pk_append_point_read",
+        strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1499"), "v-1499")==0);
+  check("integer_pk_append_integrity",
+        strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  db = 0;
+
+  check("integer_pk_append_reopen", open_db(dbpath, &db)==SQLITE_OK);
+  if( db ){
+    check("integer_pk_append_reopen_count",
+          strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "1500")==0);
+    check("integer_pk_append_reopen_point_read",
+          strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1500"), "v-1500")==0);
+    check("integer_pk_append_reopen_integrity",
+          strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+  }
+
+integer_pk_append_done:
+  if( stmt ) sqlite3_finalize(stmt);
+  if( db ) sqlite3_close(db);
+  removeDbFiles(dbpath);
+}
+
 static int stmt_column_text_equals(sqlite3_stmt *stmt, int iCol, const char *zExpect){
   const unsigned char *z = sqlite3_column_text(stmt, iCol);
   if( !zExpect ) return z==0;
@@ -7269,6 +7336,7 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
 
 static const RegressionCase aCases[] = {
   { "backup_safety", "Backup Safety Test", run_backup_safety },
+  { "integer_pk_autocommit_append_correctness", "Integer PK Autocommit Append Correctness Test", run_integer_pk_autocommit_append_correctness },
   { "create_collation_unsupported", "Create Collation Unsupported Test", run_create_collation_unsupported },
   { "rowid_in_integer_literals_uses_rowset", "Rowid IN Integer Literals RowSet Test", run_rowid_in_integer_literals_uses_rowset },
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
