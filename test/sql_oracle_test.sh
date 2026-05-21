@@ -2780,6 +2780,24 @@ INSERT INTO t VALUES(1,'a%b'),(2,'a_b'),(3,'axb'),(4,'a%bc');
 SELECT path FROM t WHERE path LIKE 'a!%b%' ESCAPE '!' ORDER BY path;
 "
 
+# 27f. LIKE contains literal and fallback cases
+oracle "cat27_like_contains_literal" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES
+  (1,'abc'),(2,'xabcx'),(3,'ABC'),(4,'xabcy'),(5,'ab'),
+  (6,'a_c'),(7,'a%c'),(8,'za!bc'),(9,'éabc'),(10,'éABC'),
+  (11,''),(12,char(97,0,98,99));
+SELECT id FROM t WHERE v LIKE '%abc%' ORDER BY id;
+SELECT count(*) FROM t WHERE v LIKE '%ABC%';
+PRAGMA case_sensitive_like=ON;
+SELECT id FROM t WHERE v LIKE '%ABC%' ORDER BY id;
+SELECT id FROM t WHERE v LIKE '%a_c%' ORDER BY id;
+SELECT id FROM t WHERE v LIKE '%a!_c%' ESCAPE '!' ORDER BY id;
+SELECT id FROM t WHERE v LIKE '%a!%c%' ESCAPE '!' ORDER BY id;
+SELECT count(*) FROM t WHERE v LIKE '%%';
+SELECT count(*) FROM t WHERE v LIKE '%' || char(0) || '%';
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 28: ALTER TABLE with indexes
 # ════════════════════════════════════════════════════════════════════
