@@ -55,6 +55,20 @@ assert_count() {
   fi
 }
 
+assert_sql() {
+  local name="$1" db="$2" sql="$3" expected="$4"
+  local got
+  got=$(echo "$sql" | $DOLTLITE "$db" 2>&1)
+  if [ "$got" = "$expected" ]; then
+    PASS=$((PASS+1))
+    echo "  PASS: $name — result=$got"
+  else
+    FAIL=$((FAIL+1))
+    ERRORS="$ERRORS\nFAIL: $name expected=$expected got=$got"
+    echo "  FAIL: $name — expected=$expected got=$got"
+  fi
+}
+
 assert_bounded() {
   local name="$1" actual_us="$2" max_us="$3"
   if [ "$actual_us" -le "$max_us" ]; then
@@ -100,6 +114,12 @@ assert_count "count_1k"    "$DB_1K"   1000
 assert_count "count_10k"   "$DB_10K"  10000
 assert_count "count_100k"  "$DB_100K" 100000
 assert_count "count_1m"    "$DB_1M"   1000000
+assert_sql "count_not_null_rowid_range" "$DB_1K" \
+  "CREATE TABLE u(id INTEGER PRIMARY KEY, k INTEGER NOT NULL);
+   INSERT INTO u VALUES(1,1),(3,3),(7,7),(10,10);
+   SELECT count(k) FROM u WHERE id BETWEEN 2 AND 8;" 2
+assert_sql "count_rowid_range_empty" "$DB_1K" \
+  "SELECT count(*) FROM t WHERE id BETWEEN 2000 AND 2010;" 0
 
 echo ""
 echo "--- Performance ---"

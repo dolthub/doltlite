@@ -241,6 +241,7 @@ struct BtCursorOps {
   int (*xTransferRow)(BtCursor*, BtCursor*, i64);
   void (*xClearCursor)(BtCursor*);
   int (*xCount)(sqlite3*, BtCursor*, i64*);
+  int (*xCountRange)(sqlite3*, BtCursor*, i64, i64, i64*);
   i64 (*xRowCountEst)(BtCursor*);
   void (*xCursorPin)(BtCursor*);
   void (*xCursorUnpin)(BtCursor*);
@@ -770,6 +771,7 @@ static int prollyBtCursorDelete(BtCursor*, u8);
 static int prollyBtCursorTransferRow(BtCursor*, BtCursor*, i64);
 static void prollyBtCursorClearCursor(BtCursor*);
 static int prollyBtCursorCount(sqlite3*, BtCursor*, i64*);
+static int prollyBtCursorCountRange(sqlite3*, BtCursor*, i64, i64, i64*);
 static i64 prollyBtCursorRowCountEst(BtCursor*);
 static void prollyBtCursorCursorPin(BtCursor*);
 static void prollyBtCursorCursorUnpin(BtCursor*);
@@ -808,6 +810,7 @@ static int origCursorDeleteVt(BtCursor*, u8);
 static int origCursorTransferRowVt(BtCursor*, BtCursor*, i64);
 static void origCursorClearCursorVt(BtCursor*);
 static int origCursorCountVt(sqlite3*, BtCursor*, i64*);
+static int origCursorCountRangeVt(sqlite3*, BtCursor*, i64, i64, i64*);
 static i64 origCursorRowCountEstVt(BtCursor*);
 static void origCursorCursorPinVt(BtCursor*);
 static void origCursorCursorUnpinVt(BtCursor*);
@@ -847,6 +850,7 @@ static const struct BtCursorOps prollyCursorOps = {
   prollyBtCursorTransferRow,
   prollyBtCursorClearCursor,
   prollyBtCursorCount,
+  prollyBtCursorCountRange,
   prollyBtCursorRowCountEst,
   prollyBtCursorCursorPin,
   prollyBtCursorCursorUnpin,
@@ -887,6 +891,7 @@ static const struct BtCursorOps origCursorVtOps = {
   origCursorTransferRowVt,
   origCursorClearCursorVt,
   origCursorCountVt,
+  origCursorCountRangeVt,
   origCursorRowCountEstVt,
   origCursorCursorPinVt,
   origCursorCursorUnpinVt,
@@ -3518,6 +3523,137 @@ static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount){
             rc, (long long)*pCount);
   }
   return rc;
+}
+
+static int countCursorLeftSiblings(
+  ChunkStore *pStore,
+  ProllyCache *pCache,
+  ProllyCursor *pCur,
+  int iLevel,
+  i64 *pCount
+){
+  ProllyCacheEntry *pEntry = pCur->aLevel[iLevel].pEntry;
+  int iChild = pCur->aLevel[iLevel].idx;
+  int i;
+  i64 n = 0;
+  int rc = SQLITE_OK;
+
+  if( !pEntry || pEntry->node.level==0 ){
+    *pCount = 0;
+    return SQLITE_OK;
+  }
+
+  for(i=0; i<iChild; i++){
+    if( prollyNodeHasSubtreeCounts(&pEntry->node) ){
+      n += (i64)prollyNodeChildSubtreeCount(&pEntry->node, i);
+    }else{
+      ProllyHash childHash;
+      i64 nChild = 0;
+      prollyNodeChildHash(&pEntry->node, i, &childHash);
+      rc = countSubtreeRows(pStore, pCache, &childHash, &nChild);
+      if( rc!=SQLITE_OK ) return rc;
+      n += nChild;
+    }
+  }
+
+  *pCount = n;
+  return SQLITE_OK;
+}
+
+static int prollyCursorCurrentRank(
+  ChunkStore *pStore,
+  ProllyCache *pCache,
+  ProllyCursor *pCur,
+  i64 *pRank
+){
+  ProllyCacheEntry *pLeaf;
+  i64 n = 0;
+  int i;
+  int rc;
+
+  if( pCur->eState!=PROLLY_CURSOR_VALID ){
+    *pRank = 0;
+    return SQLITE_OK;
+  }
+
+  for(i=0; i<pCur->iLevel; i++){
+    i64 nLeft = 0;
+    rc = countCursorLeftSiblings(pStore, pCache, pCur, i, &nLeft);
+    if( rc!=SQLITE_OK ) return rc;
+    n += nLeft;
+  }
+
+  pLeaf = pCur->aLevel[pCur->iLevel].pEntry;
+  if( !pLeaf || pLeaf->node.level!=0 ) return SQLITE_CORRUPT;
+  n += pCur->aLevel[pCur->iLevel].idx;
+  *pRank = n;
+  return SQLITE_OK;
+}
+
+static int countIntKeysUpTo(
+  Btree *pBtree,
+  const ProllyHash *pRoot,
+  u8 flags,
+  i64 intKey,
+  i64 *pCount
+){
+  BtShared *pBt = pBtree->pBt;
+  ProllyCursor cur;
+  i64 nRank = 0;
+  int res = 0;
+  int rc;
+
+  if( prollyHashIsEmpty(pRoot) ){
+    *pCount = 0;
+    return SQLITE_OK;
+  }
+
+  prollyCursorInit(&cur, &pBt->store, &pBt->cache, pRoot, flags);
+  rc = prollyCursorSeekInt(&cur, intKey, &res);
+  if( rc!=SQLITE_OK ) return rc;
+  if( cur.eState!=PROLLY_CURSOR_VALID ){
+    prollyCursorClose(&cur);
+    *pCount = 0;
+    return SQLITE_OK;
+  }
+  rc = prollyCursorCurrentRank(&pBt->store, &pBt->cache, &cur, &nRank);
+  if( rc==SQLITE_OK ){
+    *pCount = nRank + (res<=0 ? 1 : 0);
+  }
+  prollyCursorClose(&cur);
+  return rc;
+}
+
+static int countTreeIntRange(
+  Btree *pBtree,
+  Pgno iTable,
+  i64 iLower,
+  i64 iUpper,
+  i64 *pCount
+){
+  struct TableEntry *pTE;
+  i64 nBeforeLower = 0;
+  i64 nThroughUpper = 0;
+  int rc;
+
+  *pCount = 0;
+  if( iLower>iUpper ) return SQLITE_OK;
+  pTE = findTable(pBtree, iTable);
+  if( !pTE || prollyHashIsEmpty(&pTE->root) ) return SQLITE_OK;
+
+  if( iLower==SMALLEST_INT64 ){
+    nBeforeLower = 0;
+  }else{
+    rc = countIntKeysUpTo(pBtree, &pTE->root, pTE->flags,
+                          iLower-1, &nBeforeLower);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  rc = countIntKeysUpTo(pBtree, &pTE->root, pTE->flags,
+                        iUpper, &nThroughUpper);
+  if( rc!=SQLITE_OK ) return rc;
+  *pCount = nThroughUpper - nBeforeLower;
+  if( *pCount<0 ) *pCount = 0;
+  return SQLITE_OK;
 }
 
 static int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
@@ -7366,9 +7502,57 @@ static int prollyBtCursorCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
   flushIfNeeded(pCur);
   return countTreeEntries(pCur->pBtree, pCur->pgnoRoot, pnEntry);
 }
+
+static int prollyBtCursorCountRange(
+  sqlite3 *db,
+  BtCursor *pCur,
+  i64 iLower,
+  i64 iUpper,
+  i64 *pnEntry
+){
+  struct TableEntry *pTE;
+  (void)db;
+
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( pTE && pTE->pPending ){
+    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+    if( !prollyMutMapIsEmpty(pMap) ){
+      ProllyMutMap *pFlushMap = pMap;
+      int captured = 0;
+      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+                                       (ProllyMutMap**)&pTE->pPending,
+                                       &pFlushMap, &captured);
+      if( rc!=SQLITE_OK ) return rc;
+      if( captured ){
+        refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
+                                   (ProllyMutMap*)pTE->pPending);
+      }
+      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
+      if( rc!=SQLITE_OK ) return rc;
+      if( pTE->pPending==pMap ){
+        prollyMutMapClear(pMap);
+      }
+    }
+  }
+  flushIfNeeded(pCur);
+  return countTreeIntRange(pCur->pBtree, pCur->pgnoRoot,
+                           iLower, iUpper, pnEntry);
+}
+
 int sqlite3BtreeCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
   if( !pCur ) return SQLITE_OK;
   return pCur->pCurOps->xCount(db, pCur, pnEntry);
+}
+
+int sqlite3BtreeCountRange(
+  sqlite3 *db,
+  BtCursor *pCur,
+  i64 iLower,
+  i64 iUpper,
+  i64 *pnEntry
+){
+  if( !pCur ) return SQLITE_OK;
+  return pCur->pCurOps->xCountRange(db, pCur, iLower, iUpper, pnEntry);
 }
 
 static i64 prollyBtCursorRowCountEst(BtCursor *pCur){
@@ -8990,6 +9174,34 @@ static void origCursorClearCursorVt(BtCursor *pCur){
 }
 static int origCursorCountVt(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
   return origBtreeCount(db, pCur->pOrigCursor, pnEntry);
+}
+static int origCursorCountRangeVt(
+  sqlite3 *db,
+  BtCursor *pCur,
+  i64 iLower,
+  i64 iUpper,
+  i64 *pnEntry
+){
+  int rc;
+  int res = 0;
+  i64 n = 0;
+  (void)db;
+
+  *pnEntry = 0;
+  if( iLower>iUpper ) return SQLITE_OK;
+  rc = origBtreeTableMoveto(pCur->pOrigCursor, iLower, 0, &res);
+  if( rc!=SQLITE_OK ) return rc;
+  if( res!=0 && origBtreeEof(pCur->pOrigCursor) ){
+    return SQLITE_OK;
+  }
+  while( !origBtreeEof(pCur->pOrigCursor) ){
+    if( origBtreeIntegerKey(pCur->pOrigCursor)>iUpper ) break;
+    n++;
+    rc = origBtreeNext(pCur->pOrigCursor, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  *pnEntry = n;
+  return SQLITE_OK;
 }
 static i64 origCursorRowCountEstVt(BtCursor *pCur){
   (void)pCur;

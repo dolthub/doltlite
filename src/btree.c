@@ -10556,6 +10556,52 @@ int sqlite3BtreeCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
   return rc;
 }
 
+int sqlite3BtreeCountRange(
+  sqlite3 *db,
+  BtCursor *pCur,
+  i64 iLower,
+  i64 iUpper,
+  i64 *pnEntry
+){
+  i64 nEntry = 0;
+  int rc;
+  int res = 0;
+
+  *pnEntry = 0;
+  if( iLower>iUpper ) return SQLITE_OK;
+
+  assert( pCur->curIntKey );
+  rc = sqlite3BtreeTableMoveto(pCur, iLower, 0, &res);
+  if( rc!=SQLITE_OK ) return rc;
+  while( !sqlite3BtreeEof(pCur)
+      && sqlite3BtreeIntegerKey(pCur)<iLower
+      && !AtomicLoad(&db->u1.isInterrupted)
+  ){
+    rc = sqlite3BtreeNext(pCur, 0);
+    if( rc!=SQLITE_OK ){
+      if( rc==SQLITE_DONE ){
+        rc = SQLITE_OK;
+      }
+      break;
+    }
+  }
+
+  while( !sqlite3BtreeEof(pCur) && !AtomicLoad(&db->u1.isInterrupted) ){
+    if( sqlite3BtreeIntegerKey(pCur)>iUpper ) break;
+    nEntry++;
+    rc = sqlite3BtreeNext(pCur, 0);
+    if( rc!=SQLITE_OK ){
+      if( rc==SQLITE_DONE ){
+        rc = SQLITE_OK;
+      }
+      break;
+    }
+  }
+
+  *pnEntry = nEntry;
+  return rc;
+}
+
 /*
 ** Return the pager associated with a BTree.  This routine is used for
 ** testing and debugging only.
