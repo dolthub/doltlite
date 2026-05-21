@@ -3869,6 +3869,42 @@ case OP_Count: {         /* out2 */
   goto check_for_interrupt;
 }
 
+/* Opcode: CountRange P1 P2 P3 * *
+** Synopsis: r[P2]=count_range(r[P3]..r[P3+1])
+**
+** Store in register P2 the number of entries in intkey table cursor P1 with
+** rowids between registers P3 and P3+1, inclusive. Both bound registers must
+** contain integer values.
+*/
+case OP_CountRange: {    /* out2 */
+  i64 nEntry;
+  i64 iLower;
+  i64 iUpper;
+  BtCursor *pCrsr;
+  Mem *pLower;
+  Mem *pUpper;
+
+  assert( p->apCsr[pOp->p1]->eCurType==CURTYPE_BTREE );
+  pCrsr = p->apCsr[pOp->p1]->uc.pCursor;
+  assert( pCrsr );
+  pLower = &aMem[pOp->p3];
+  pUpper = &aMem[pOp->p3+1];
+  applyNumericAffinity(pLower, 0);
+  applyNumericAffinity(pUpper, 0);
+  if( (pLower->flags & MEM_Int)==0 || (pUpper->flags & MEM_Int)==0 ){
+    sqlite3VdbeMemSetInt64(&aMem[pOp->p2], 0);
+    goto check_for_interrupt;
+  }
+  iLower = pLower->u.i;
+  iUpper = pUpper->u.i;
+  nEntry = 0;
+  rc = sqlite3BtreeCountRange(db, pCrsr, iLower, iUpper, &nEntry);
+  if( rc ) goto abort_due_to_error;
+  pOut = out2Prerelease(p, pOp);
+  pOut->u.i = nEntry;
+  goto check_for_interrupt;
+}
+
 /* Opcode: Savepoint P1 * * P4 *
 **
 ** Open, release or rollback the savepoint named by parameter P4, depending

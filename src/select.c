@@ -5461,6 +5461,110 @@ static Table *isSimpleCount(Select *p, AggInfo *pAggInfo){
   return pTab;
 }
 
+static int exprIsRowidOfTable(Expr *pExpr, Table *pTab){
+  while( pExpr && (pExpr->op==TK_UPLUS || pExpr->op==TK_COLLATE) ){
+    pExpr = pExpr->pLeft;
+  }
+  return pExpr
+      && pExpr->op==TK_COLUMN
+      && ExprUseYTab(pExpr)
+      && pExpr->y.pTab==pTab
+      && (pExpr->iColumn<0 || pExpr->iColumn==pTab->iPKey);
+}
+
+static int exprIsKnownNotNullForTable(Expr *pExpr, Table *pTab){
+  while( pExpr && (pExpr->op==TK_UPLUS || pExpr->op==TK_COLLATE) ){
+    pExpr = pExpr->pLeft;
+  }
+  if( !pExpr ) return 0;
+  if( !sqlite3ExprCanBeNull(pExpr) ) return 1;
+  if( (pExpr->op==TK_COLUMN || pExpr->op==TK_AGG_COLUMN)
+   && ExprUseYTab(pExpr)
+   && pExpr->y.pTab==pTab
+  ){
+    if( pExpr->iColumn<0 || pExpr->iColumn==pTab->iPKey ) return 1;
+    if( pExpr->iColumn>=0
+     && pExpr->iColumn<pTab->nCol
+     && pTab->aCol[pExpr->iColumn].notNull!=0
+    ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/*
+** Return the table for a SELECT that can be answered by counting an
+** inclusive integer rowid range, and populate ppLow/ppHigh with the bounds.
+** This is deliberately narrower than SQLite's general WHERE handling:
+** non-integer bounds keep the normal row scan so rowid comparison affinity
+** remains exactly SQLite-compatible.
+*/
+static Table *isSimpleRowidRangeCount(
+  Select *p,
+  AggInfo *pAggInfo,
+  Expr **ppLow,
+  Expr **ppHigh,
+  Parse *pParse
+){
+  Table *pTab;
+  Expr *pExpr;
+  ExprList *pArgs;
+  SrcItem *pSrc;
+  int dummy;
+  int lowOk;
+  int highOk;
+
+  (void)pParse;
+  assert( !p->pGroupBy );
+  if( p->pWhere==0
+   || p->pWhere->op!=TK_BETWEEN
+   || !ExprUseXList(p->pWhere)
+   || p->pWhere->x.pList==0
+   || p->pWhere->x.pList->nExpr!=2
+   || p->pEList->nExpr!=1
+   || p->pSrc->nSrc!=1
+   || p->pSrc->a[0].fg.isSubquery
+   || pAggInfo->nFunc!=1
+   || p->pHaving
+  ){
+    return 0;
+  }
+  pSrc = &p->pSrc->a[0];
+  pTab = pSrc->pSTab;
+  assert( pTab!=0 );
+  assert( !IsView(pTab) );
+  if( !IsOrdinaryTable(pTab) || !HasRowid(pTab) ) return 0;
+  if( !exprIsRowidOfTable(p->pWhere->pLeft, pTab) ) return 0;
+  *ppLow = p->pWhere->x.pList->a[0].pExpr;
+  *ppHigh = p->pWhere->x.pList->a[1].pExpr;
+  lowOk = sqlite3ExprIsInteger(*ppLow, &dummy, 0);
+  highOk = sqlite3ExprIsInteger(*ppHigh, &dummy, 0);
+  if( !lowOk || !highOk ){
+    return 0;
+  }
+
+  pExpr = p->pEList->a[0].pExpr;
+  assert( pExpr!=0 );
+  if( pExpr->op!=TK_AGG_FUNCTION ) return 0;
+  if( pExpr->pAggInfo!=pAggInfo ) return 0;
+  if( (pAggInfo->aFunc[0].pFunc->funcFlags&SQLITE_FUNC_COUNT)==0
+   && sqlite3_stricmp(pExpr->u.zToken,"count")!=0
+  ){
+    return 0;
+  }
+  assert( pAggInfo->aFunc[0].pFExpr==pExpr );
+  if( ExprHasProperty(pExpr, EP_Distinct|EP_WinFunc) ) return 0;
+  pArgs = ExprUseXList(pExpr) ? pExpr->x.pList : 0;
+  if( pArgs
+   && pArgs->nExpr>0
+   && !exprIsKnownNotNullForTable(pArgs->a[0].pExpr, pTab)
+  ){
+    return 0;
+  }
+  return pTab;
+}
+
 /*
 ** If the source-list item passed as an argument was augmented with an
 ** INDEXED BY clause, then try to locate the specified index. If there
@@ -8783,7 +8887,33 @@ int sqlite3Select(
     else {
       /* Aggregate functions without GROUP BY. tag-select-0820 */
       Table *pTab;
-      if( (pTab = isSimpleCount(p, pAggInfo))!=0 ){
+      Expr *pRangeLow = 0;
+      Expr *pRangeHigh = 0;
+      if( (pTab = isSimpleRowidRangeCount(p, pAggInfo,
+                                          &pRangeLow, &pRangeHigh,
+                                          pParse))!=0 ){
+        const int iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
+        const int iCsr = pParse->nTab++;
+        int regRange;
+
+        sqlite3CodeVerifySchema(pParse, iDb);
+        sqlite3TableLock(pParse, iDb, pTab->tnum, 0, pTab->zName);
+        sqlite3VdbeAddOp4Int(v, OP_OpenRead, iCsr, (int)pTab->tnum, iDb, 1);
+        assignAggregateRegisters(pParse, pAggInfo);
+        regRange = sqlite3GetTempRange(pParse, 2);
+        sqlite3ExprCode(pParse, pRangeLow, regRange);
+        sqlite3ExprCode(pParse, pRangeHigh, regRange+1);
+        sqlite3VdbeAddOp3(v, OP_CountRange, iCsr,
+                          AggInfoFuncReg(pAggInfo,0), regRange);
+        sqlite3ReleaseTempRange(pParse, regRange, 2);
+        sqlite3VdbeAddOp1(v, OP_Close, iCsr);
+        if( pParse->explain==2 ){
+          sqlite3VdbeExplain(pParse, 0,
+              "SEARCH %s USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)",
+              pTab->zName
+          );
+        }
+      }else if( (pTab = isSimpleCount(p, pAggInfo))!=0 ){
         /* tag-select-0821
         **
         ** If isSimpleCount() returns a pointer to a Table structure, then
