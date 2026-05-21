@@ -2670,8 +2670,7 @@ static int flushPendingForTable(
   pTE->pendingFlushSeekEdits = 0;
   return SQLITE_OK;
 }
-static int syncSavepoints(BtCursor *pCur){
-  Btree *pBtree = pCur->pBtree;
+static int syncBtreeSavepoints(Btree *pBtree){
   sqlite3 *db = pBtree ? pBtree->db : 0;
   if( db ){
     int target = db->nSavepoint + db->nStatement;
@@ -2681,6 +2680,9 @@ static int syncSavepoints(BtCursor *pCur){
     }
   }
   return SQLITE_OK;
+}
+static int syncSavepoints(BtCursor *pCur){
+  return syncBtreeSavepoints(pCur->pBtree);
 }
 
 /* Pending edit maps are shared by every cursor on the same table. When a flush
@@ -5289,14 +5291,33 @@ static int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
   invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
   /* TRUNCATE: discard any pending mutations for this table. Without this,
   ** merging the now-empty tree with stale pending inserts would resurrect
-  ** rows the caller asked to remove. Cursor aliases must be cleared in the
-  ** same step because invalidateCursors leaves pCur->pMutMap untouched. */
+  ** rows the caller asked to remove. Inside a savepoint that captured
+  ** this table, hand the dirty map to the savepoint (via the same path
+  ** flushPendingForTable uses) so ROLLBACK TO can restore pre-savepoint
+  ** pending edits. Outside any savepoint, free the map outright. Either
+  ** way the cursor aliases must be updated since invalidateCursors
+  ** leaves pCur->pMutMap untouched. */
+  {
+    int rc = syncBtreeSavepoints(p);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   if( pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-    prollyMutMapFree(pMap);
-    sqlite3_free(pMap);
-    pTE->pPending = 0;
-    refreshCursorMutMapAliases(p, pBt, (Pgno)iTable, 0);
+    ProllyMutMap *pFlushMap = pMap;
+    int captured = 0;
+    int rc = snapshotPendingForFlush(p, (Pgno)iTable,
+                                     (ProllyMutMap**)&pTE->pPending,
+                                     &pFlushMap, &captured);
+    if( rc!=SQLITE_OK ) return rc;
+    if( captured ){
+      refreshCursorMutMapAliases(p, pBt, (Pgno)iTable,
+                                 (ProllyMutMap*)pTE->pPending);
+    }else{
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      pTE->pPending = 0;
+      refreshCursorMutMapAliases(p, pBt, (Pgno)iTable, 0);
+    }
   }
   memset(&pTE->root, 0, sizeof(ProllyHash));
 
