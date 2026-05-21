@@ -519,23 +519,35 @@ static void test_gc_vs_merge(void){
 
   {
     sqlite3 *db = 0;
+    const char *r;
     int i;
     sqlite3_open(path, &db);
-    queryScalarText(db, "SELECT dolt_branch('feat')");
-    queryScalarText(db, "SELECT dolt_checkout('feat')");
+    r = queryScalarText(db, "SELECT dolt_branch('feat')");
+    check("gc_vs_merge_setup_branch_feat", !looks_like_error(r));
+    r = queryScalarText(db, "SELECT dolt_checkout('feat')");
+    check("gc_vs_merge_setup_checkout_feat", !looks_like_error(r));
     for(i=51; i<=70; i++){
       char sql[128];
       snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'feat_%d')", i, i);
-      execSql(db, sql);
+      if( execSql(db, sql)!=SQLITE_OK ){
+        fprintf(stderr, "[diag] gc_vs_merge feat INSERT %d failed: %s\n",
+                i, sqlite3_errmsg(db));
+      }
     }
-    queryScalarText(db, "SELECT dolt_commit('-A','-m','feat work')");
-    queryScalarText(db, "SELECT dolt_checkout('main')");
+    r = queryScalarText(db, "SELECT dolt_commit('-A','-m','feat work')");
+    check("gc_vs_merge_setup_commit_feat", strlen(r)==40);
+    r = queryScalarText(db, "SELECT dolt_checkout('main')");
+    check("gc_vs_merge_setup_checkout_main", !looks_like_error(r));
     for(i=71; i<=90; i++){
       char sql[128];
       snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'main_%d')", i, i);
-      execSql(db, sql);
+      if( execSql(db, sql)!=SQLITE_OK ){
+        fprintf(stderr, "[diag] gc_vs_merge main INSERT %d failed: %s\n",
+                i, sqlite3_errmsg(db));
+      }
     }
-    queryScalarText(db, "SELECT dolt_commit('-A','-m','main work')");
+    r = queryScalarText(db, "SELECT dolt_commit('-A','-m','main work')");
+    check("gc_vs_merge_setup_commit_main", strlen(r)==40);
     sqlite3_close(db);
   }
 
@@ -551,6 +563,7 @@ static void test_gc_vs_merge(void){
     write(pipefd[1], "M", 1);
     close(pipefd[1]);
     r = callWithRetry(db, "SELECT dolt_merge('feat')", 200);
+    fprintf(stderr, "[diag] gc_vs_merge child merge result: %s\n", r);
     sqlite3_close(db);
     _exit(looks_like_lock_busy(r) ? 1 : 0);
   }
@@ -575,15 +588,26 @@ static void test_gc_vs_merge(void){
 
   {
     sqlite3 *db = 0;
+    char totalBuf[64], featBuf[64], mainBuf[64], branchBuf[64], logBuf[64];
     sqlite3_open(path, &db);
-    check("gc_vs_merge_total_count",
-      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "90")==0);
-    check("gc_vs_merge_feat_rows_present",
-      strcmp(queryScalarText(db,
-        "SELECT count(*) FROM t WHERE id BETWEEN 51 AND 70"), "20")==0);
-    check("gc_vs_merge_main_rows_present",
-      strcmp(queryScalarText(db,
-        "SELECT count(*) FROM t WHERE id BETWEEN 71 AND 90"), "20")==0);
+    snprintf(totalBuf, sizeof(totalBuf), "%s",
+      queryScalarText(db, "SELECT count(*) FROM t"));
+    snprintf(featBuf, sizeof(featBuf), "%s",
+      queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 51 AND 70"));
+    snprintf(mainBuf, sizeof(mainBuf), "%s",
+      queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 71 AND 90"));
+    snprintf(branchBuf, sizeof(branchBuf), "%s",
+      queryScalarText(db, "SELECT name FROM dolt_branches"));
+    snprintf(logBuf, sizeof(logBuf), "%s",
+      queryScalarText(db, "SELECT count(*) FROM dolt_log"));
+    if( strcmp(totalBuf, "90")!=0 || strcmp(featBuf, "20")!=0 || strcmp(mainBuf, "20")!=0 ){
+      fprintf(stderr,
+        "[diag] gc_vs_merge: total=%s feat=%s main=%s branches=%s dolt_log=%s\n",
+        totalBuf, featBuf, mainBuf, branchBuf, logBuf);
+    }
+    check("gc_vs_merge_total_count", strcmp(totalBuf, "90")==0);
+    check("gc_vs_merge_feat_rows_present", strcmp(featBuf, "20")==0);
+    check("gc_vs_merge_main_rows_present", strcmp(mainBuf, "20")==0);
     sqlite3_close(db);
   }
 
