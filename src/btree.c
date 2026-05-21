@@ -10602,6 +10602,21 @@ int sqlite3BtreeCountRange(
   return rc;
 }
 
+int sqlite3BtreeCountIndexRange(
+  sqlite3 *db,
+  BtCursor *pCur,
+  UnpackedRecord *pLower,
+  UnpackedRecord *pUpper,
+  i64 *pnEntry
+){
+  (void)db;
+  (void)pCur;
+  (void)pLower;
+  (void)pUpper;
+  (void)pnEntry;
+  return SQLITE_NOTFOUND;
+}
+
 /*
 ** Return the pager associated with a BTree.  This routine is used for
 ** testing and debugging only.

@@ -62,6 +62,8 @@ const void *origBtreePayloadFetch(void *pCur, u32 *pAmt);
 i64 origBtreeIntegerKey(void *pCur);
 u32 origBtreePayloadChecked(void *pCur, u32 offset, u32 amt, void *pBuf);
 int origBtreeCount(sqlite3 *db, void *pCur, i64 *pnEntry);
+int origBtreeCountIndexRange(sqlite3 *db, void *pCur, UnpackedRecord *pLower,
+                             UnpackedRecord *pUpper, i64 *pnEntry);
 int origBtreeClosesWithCursor(void *p, void *pCur);
 void origBtreeTripAllCursors(void *p, int errCode, int writeOnly);
 void origBtreeCursorPin(void *pCur);

@@ -5493,6 +5493,35 @@ static int exprIsKnownNotNullForTable(Expr *pExpr, Table *pTab){
   return 0;
 }
 
+static int exprColumnOfTable(Expr *pExpr, Table *pTab){
+  while( pExpr && (pExpr->op==TK_UPLUS || pExpr->op==TK_COLLATE) ){
+    pExpr = pExpr->pLeft;
+  }
+  if( pExpr
+   && (pExpr->op==TK_COLUMN || pExpr->op==TK_AGG_COLUMN)
+   && ExprUseYTab(pExpr)
+   && pExpr->y.pTab==pTab
+  ){
+    return pExpr->iColumn;
+  }
+  return -2;
+}
+
+static Index *findSingleColumnIndex(Table *pTab, int iColumn){
+  Index *pIdx;
+  for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
+    if( pIdx->pPartIdxWhere==0
+     && pIdx->bUnordered==0
+     && pIdx->nKeyCol>=1
+     && pIdx->aiColumn[0]==iColumn
+     && (pIdx->aSortOrder==0 || pIdx->aSortOrder[0]==0)
+    ){
+      return pIdx;
+    }
+  }
+  return 0;
+}
+
 /*
 ** Return the table for a SELECT that can be answered by counting an
 ** inclusive integer rowid range, and populate ppLow/ppHigh with the bounds.
@@ -5563,6 +5592,83 @@ static Table *isSimpleRowidRangeCount(
     return 0;
   }
   return pTab;
+}
+
+static Index *isSimpleIndexRangeCount(
+  Select *p,
+  AggInfo *pAggInfo,
+  Expr **ppLow,
+  Expr **ppHigh,
+  Table **ppTab,
+  Parse *pParse
+){
+  Table *pTab;
+  Expr *pExpr;
+  ExprList *pArgs;
+  SrcItem *pSrc;
+  Index *pIdx;
+  int iColumn;
+  int iArgColumn;
+
+  assert( !p->pGroupBy );
+  if( p->pWhere==0
+   || p->pWhere->op!=TK_BETWEEN
+   || !ExprUseXList(p->pWhere)
+   || p->pWhere->x.pList==0
+   || p->pWhere->x.pList->nExpr!=2
+   || p->pEList->nExpr!=1
+   || p->pSrc->nSrc!=1
+   || p->pSrc->a[0].fg.isSubquery
+   || pAggInfo->nFunc!=1
+   || p->pHaving
+  ){
+    return 0;
+  }
+  pSrc = &p->pSrc->a[0];
+  pTab = pSrc->pSTab;
+  assert( pTab!=0 );
+  assert( !IsView(pTab) );
+  if( !IsOrdinaryTable(pTab) ) return 0;
+  if( p->pWhere->pLeft==0
+   || (p->pWhere->pLeft->op!=TK_COLUMN && p->pWhere->pLeft->op!=TK_AGG_COLUMN)
+  ){
+    return 0;
+  }
+  iColumn = exprColumnOfTable(p->pWhere->pLeft, pTab);
+  if( iColumn<0 ) return 0;
+  *ppLow = p->pWhere->x.pList->a[0].pExpr;
+  *ppHigh = p->pWhere->x.pList->a[1].pExpr;
+  if( !sqlite3ExprIsConstant(pParse, *ppLow)
+   || !sqlite3ExprIsConstant(pParse, *ppHigh)
+  ){
+    return 0;
+  }
+  pIdx = findSingleColumnIndex(pTab, iColumn);
+  if( !pIdx ) return 0;
+
+  pExpr = p->pEList->a[0].pExpr;
+  assert( pExpr!=0 );
+  if( pExpr->op!=TK_AGG_FUNCTION ) return 0;
+  if( pExpr->pAggInfo!=pAggInfo ) return 0;
+  if( (pAggInfo->aFunc[0].pFunc->funcFlags&SQLITE_FUNC_COUNT)==0
+   && sqlite3_stricmp(pExpr->u.zToken,"count")!=0
+  ){
+    return 0;
+  }
+  assert( pAggInfo->aFunc[0].pFExpr==pExpr );
+  if( ExprHasProperty(pExpr, EP_Distinct|EP_WinFunc) ) return 0;
+  pArgs = ExprUseXList(pExpr) ? pExpr->x.pList : 0;
+  if( pArgs && pArgs->nExpr>0 ){
+    iArgColumn = exprColumnOfTable(pArgs->a[0].pExpr, pTab);
+    if( iArgColumn!=iColumn
+     && !exprIsKnownNotNullForTable(pArgs->a[0].pExpr, pTab)
+    ){
+      return 0;
+    }
+  }
+
+  *ppTab = pTab;
+  return pIdx;
 }
 
 /*
@@ -8889,9 +8995,46 @@ int sqlite3Select(
       Table *pTab;
       Expr *pRangeLow = 0;
       Expr *pRangeHigh = 0;
-      if( (pTab = isSimpleRowidRangeCount(p, pAggInfo,
-                                          &pRangeLow, &pRangeHigh,
-                                          pParse))!=0 ){
+      Index *pRangeIdx = 0;
+      if( (pRangeIdx = isSimpleIndexRangeCount(p, pAggInfo,
+                                               &pRangeLow, &pRangeHigh,
+                                               &pTab, pParse))!=0 ){
+        const int iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
+        const int iCsr = pParse->nTab++;
+        KeyInfo *pKeyInfo = sqlite3KeyInfoOfIndex(pParse, pRangeIdx);
+        int regRange;
+
+        sqlite3CodeVerifySchema(pParse, iDb);
+        sqlite3TableLock(pParse, iDb, pTab->tnum, 0, pTab->zName);
+        sqlite3VdbeAddOp4Int(v, OP_OpenRead, iCsr,
+                             (int)pRangeIdx->tnum, iDb, 1);
+        sqlite3VdbeChangeP4(v, -1, (char *)pKeyInfo, P4_KEYINFO);
+        assignAggregateRegisters(pParse, pAggInfo);
+        regRange = sqlite3GetTempRange(pParse, 2);
+        sqlite3ExprCode(pParse, pRangeLow, regRange);
+        sqlite3ExprCode(pParse, pRangeHigh, regRange+1);
+        {
+          const char *zIdxAff = sqlite3IndexAffinityStr(pParse->db, pRangeIdx);
+          char zAff[2];
+          if( zIdxAff ){
+            zAff[0] = zIdxAff[0];
+            zAff[1] = zIdxAff[0];
+            sqlite3VdbeAddOp4(v, OP_Affinity, regRange, 2, 0, zAff, 2);
+          }
+        }
+        sqlite3VdbeAddOp4Int(v, OP_CountIndexRange, iCsr,
+                             AggInfoFuncReg(pAggInfo,0), regRange, 1);
+        sqlite3ReleaseTempRange(pParse, regRange, 2);
+        sqlite3VdbeAddOp1(v, OP_Close, iCsr);
+        if( pParse->explain==2 ){
+          sqlite3VdbeExplain(pParse, 0,
+              "SEARCH %s USING COVERING INDEX %s",
+              pTab->zName, pRangeIdx->zName
+          );
+        }
+      }else if( (pTab = isSimpleRowidRangeCount(p, pAggInfo,
+                                                &pRangeLow, &pRangeHigh,
+                                                pParse))!=0 ){
         const int iDb = sqlite3SchemaToIndex(pParse->db, pTab->pSchema);
         const int iCsr = pParse->nTab++;
         int regRange;

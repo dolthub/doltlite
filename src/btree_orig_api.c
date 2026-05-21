@@ -111,6 +111,15 @@ u32 origBtreePayloadChecked(void *pCur, u32 off, u32 amt, void *pBuf){
 int origBtreeCount(sqlite3 *db, void *pCur, i64 *pn){
   return orig_sqlite3BtreeCount(db, C(pCur), pn);
 }
+int origBtreeCountIndexRange(
+  sqlite3 *db,
+  void *pCur,
+  UnpackedRecord *pLower,
+  UnpackedRecord *pUpper,
+  i64 *pn
+){
+  return orig_sqlite3BtreeCountIndexRange(db, C(pCur), pLower, pUpper, pn);
+}
 int origBtreeClosesWithCursor(void *p, void *pCur){
 
   (void)p; (void)pCur;

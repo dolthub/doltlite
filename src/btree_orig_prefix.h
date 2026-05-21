@@ -24,6 +24,7 @@
 #define sqlite3BtreeConnectionCount orig_sqlite3BtreeConnectionCount
 #define sqlite3BtreeCopyFile orig_sqlite3BtreeCopyFile
 #define sqlite3BtreeCount orig_sqlite3BtreeCount
+#define sqlite3BtreeCountIndexRange orig_sqlite3BtreeCountIndexRange
 #define sqlite3BtreeCountRange orig_sqlite3BtreeCountRange
 #define sqlite3BtreeCreateIndex orig_sqlite3BtreeCreateIndex
 #define sqlite3BtreeCreateTable orig_sqlite3BtreeCreateTable

@@ -120,6 +120,20 @@ assert_sql "count_not_null_rowid_range" "$DB_1K" \
    SELECT count(k) FROM u WHERE id BETWEEN 2 AND 8;" 2
 assert_sql "count_rowid_range_empty" "$DB_1K" \
   "SELECT count(*) FROM t WHERE id BETWEEN 2000 AND 2010;" 0
+assert_sql "count_index_range_duplicates_and_affinity" "$DB_1K" \
+  "CREATE TABLE v(id INTEGER PRIMARY KEY, k INTEGER NOT NULL);
+   CREATE INDEX v_k_idx ON v(k);
+   INSERT INTO v VALUES(1,10),(2,10),(3,15),(4,20),(5,30);
+   SELECT count(k) FROM v WHERE k BETWEEN '10' AND '20';" 4
+assert_sql "count_index_range_null_bound" "$DB_1K" \
+  "SELECT count(k) FROM v WHERE k BETWEEN NULL AND 20;" 0
+assert_sql "count_index_range_row_dependent_bounds" "$DB_1K" \
+  "SELECT count(k) FROM v WHERE k BETWEEN id AND id+100;" 5
+assert_sql "count_index_range_nullable_count_arg" "$DB_1K" \
+  "CREATE TABLE w(id INTEGER PRIMARY KEY, k INTEGER NOT NULL, v INTEGER);
+   CREATE INDEX w_k_idx ON w(k);
+   INSERT INTO w VALUES(1,10,NULL),(2,10,1),(3,15,NULL),(4,20,2);
+   SELECT count(v) FROM w WHERE k BETWEEN 10 AND 20;" 2
 
 echo ""
 echo "--- Performance ---"

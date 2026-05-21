@@ -242,6 +242,8 @@ struct BtCursorOps {
   void (*xClearCursor)(BtCursor*);
   int (*xCount)(sqlite3*, BtCursor*, i64*);
   int (*xCountRange)(sqlite3*, BtCursor*, i64, i64, i64*);
+  int (*xCountIndexRange)(sqlite3*, BtCursor*, UnpackedRecord*,
+                          UnpackedRecord*, i64*);
   i64 (*xRowCountEst)(BtCursor*);
   void (*xCursorPin)(BtCursor*);
   void (*xCursorUnpin)(BtCursor*);
@@ -772,6 +774,8 @@ static int prollyBtCursorTransferRow(BtCursor*, BtCursor*, i64);
 static void prollyBtCursorClearCursor(BtCursor*);
 static int prollyBtCursorCount(sqlite3*, BtCursor*, i64*);
 static int prollyBtCursorCountRange(sqlite3*, BtCursor*, i64, i64, i64*);
+static int prollyBtCursorCountIndexRange(sqlite3*, BtCursor*, UnpackedRecord*,
+                                         UnpackedRecord*, i64*);
 static i64 prollyBtCursorRowCountEst(BtCursor*);
 static void prollyBtCursorCursorPin(BtCursor*);
 static void prollyBtCursorCursorUnpin(BtCursor*);
@@ -811,6 +815,8 @@ static int origCursorTransferRowVt(BtCursor*, BtCursor*, i64);
 static void origCursorClearCursorVt(BtCursor*);
 static int origCursorCountVt(sqlite3*, BtCursor*, i64*);
 static int origCursorCountRangeVt(sqlite3*, BtCursor*, i64, i64, i64*);
+static int origCursorCountIndexRangeVt(sqlite3*, BtCursor*, UnpackedRecord*,
+                                       UnpackedRecord*, i64*);
 static i64 origCursorRowCountEstVt(BtCursor*);
 static void origCursorCursorPinVt(BtCursor*);
 static void origCursorCursorUnpinVt(BtCursor*);
@@ -851,6 +857,7 @@ static const struct BtCursorOps prollyCursorOps = {
   prollyBtCursorClearCursor,
   prollyBtCursorCount,
   prollyBtCursorCountRange,
+  prollyBtCursorCountIndexRange,
   prollyBtCursorRowCountEst,
   prollyBtCursorCursorPin,
   prollyBtCursorCursorUnpin,
@@ -892,6 +899,7 @@ static const struct BtCursorOps origCursorVtOps = {
   origCursorClearCursorVt,
   origCursorCountVt,
   origCursorCountRangeVt,
+  origCursorCountIndexRangeVt,
   origCursorRowCountEstVt,
   origCursorCursorPinVt,
   origCursorCursorUnpinVt,
@@ -3656,6 +3664,145 @@ static int countTreeIntRange(
   *pCount = nThroughUpper - nBeforeLower;
   if( *pCount<0 ) *pCount = 0;
   return SQLITE_OK;
+}
+
+static int sortKeyFromUnpackedForCount(
+  BtCursor *pCur,
+  UnpackedRecord *pRec,
+  u8 **ppBuf,
+  int *pnAlloc,
+  int *pnOut
+){
+  int rc;
+  int nKeyField = 0;
+  if( pCur->pKeyInfo && pRec->nField < pCur->pKeyInfo->nAllField ){
+    nKeyField = (int)pRec->nField;
+  }
+  if( unpackedRecordCanUseIntSortKey(
+        pCur, pRec, nKeyField>0 ? nKeyField : (int)pRec->nField) ){
+    return sortKeyFromUnpackedIntRecordBuffer(
+        pRec, nKeyField>0 ? nKeyField : (int)pRec->nField,
+        ppBuf, pnAlloc, pnOut);
+  }
+  rc = sortKeyFromMemPrefixCollBuffer(
+      pRec->aMem, (int)pRec->nField, nKeyField, pCur->pKeyInfo,
+      ppBuf, pnAlloc, pnOut);
+  if( rc==SQLITE_NOTFOUND ){
+    u8 *pSerKey = 0;
+    int nSerAlloc = 0;
+    int nSerKey = 0;
+    rc = serializeUnpackedRecordBuffer(pRec, &pSerKey, &nSerAlloc, &nSerKey);
+    if( rc==SQLITE_OK ){
+      rc = sortKeyFromRecordPrefixCollBuffer(
+          pSerKey, nSerKey, nKeyField, pCur->pKeyInfo, ppBuf, pnAlloc, pnOut);
+    }
+    sqlite3_free(pSerKey);
+  }
+  return rc;
+}
+
+static int blobPrefixSuccessor(const u8 *pKey, int nKey, u8 **ppOut){
+  int i;
+  u8 *pOut = sqlite3_malloc(nKey);
+  if( !pOut ) return SQLITE_NOMEM;
+  memcpy(pOut, pKey, nKey);
+  for(i=nKey-1; i>=0; i--){
+    if( pOut[i]!=0xff ){
+      pOut[i]++;
+      *ppOut = pOut;
+      return SQLITE_OK;
+    }
+  }
+  sqlite3_free(pOut);
+  *ppOut = 0;
+  return SQLITE_OK;
+}
+
+static int countBlobKeysBefore(
+  Btree *pBtree,
+  const ProllyHash *pRoot,
+  u8 flags,
+  const u8 *pKey,
+  int nKey,
+  i64 *pCount
+){
+  BtShared *pBt = pBtree->pBt;
+  ProllyCursor cur;
+  i64 nRank = 0;
+  int res = 0;
+  int rc;
+
+  if( prollyHashIsEmpty(pRoot) ){
+    *pCount = 0;
+    return SQLITE_OK;
+  }
+
+  prollyCursorInit(&cur, &pBt->store, &pBt->cache, pRoot, flags);
+  rc = prollyCursorSeekBlob(&cur, pKey, nKey, &res);
+  if( rc!=SQLITE_OK ) return rc;
+  if( cur.eState!=PROLLY_CURSOR_VALID ){
+    prollyCursorClose(&cur);
+    *pCount = 0;
+    return SQLITE_OK;
+  }
+  rc = prollyCursorCurrentRank(&pBt->store, &pBt->cache, &cur, &nRank);
+  if( rc==SQLITE_OK ){
+    *pCount = nRank + (res<0 ? 1 : 0);
+  }
+  prollyCursorClose(&cur);
+  return rc;
+}
+
+static int countTreeBlobPrefixRange(
+  BtCursor *pCur,
+  UnpackedRecord *pLower,
+  UnpackedRecord *pUpper,
+  i64 *pCount
+){
+  struct TableEntry *pTE;
+  u8 *pLowerKey = 0;
+  u8 *pUpperKey = 0;
+  u8 *pUpperNext = 0;
+  int nLowerKey = 0;
+  int nUpperKey = 0;
+  int nLowerAlloc = 0;
+  int nUpperAlloc = 0;
+  i64 nLower = 0;
+  i64 nUpper = 0;
+  int rc;
+
+  *pCount = 0;
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( !pTE || prollyHashIsEmpty(&pTE->root) ) return SQLITE_OK;
+
+  rc = sortKeyFromUnpackedForCount(
+      pCur, pLower, &pLowerKey, &nLowerAlloc, &nLowerKey);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = sortKeyFromUnpackedForCount(
+      pCur, pUpper, &pUpperKey, &nUpperAlloc, &nUpperKey);
+  if( rc!=SQLITE_OK ) goto done;
+  rc = blobPrefixSuccessor(pUpperKey, nUpperKey, &pUpperNext);
+  if( rc!=SQLITE_OK ) goto done;
+
+  rc = countBlobKeysBefore(pCur->pBtree, &pTE->root, pTE->flags,
+                           pLowerKey, nLowerKey, &nLower);
+  if( rc!=SQLITE_OK ) goto done;
+  if( pUpperNext ){
+    rc = countBlobKeysBefore(pCur->pBtree, &pTE->root, pTE->flags,
+                             pUpperNext, nUpperKey, &nUpper);
+  }else{
+    rc = countTreeEntries(pCur->pBtree, pCur->pgnoRoot, &nUpper);
+  }
+  if( rc==SQLITE_OK ){
+    *pCount = nUpper - nLower;
+    if( *pCount<0 ) *pCount = 0;
+  }
+
+done:
+  sqlite3_free(pLowerKey);
+  sqlite3_free(pUpperKey);
+  sqlite3_free(pUpperNext);
+  return rc;
 }
 
 static int saveAllCursors(Btree *pBtree, BtShared *pBt, Pgno iRoot,
@@ -7560,6 +7707,42 @@ static int prollyBtCursorCountRange(
                            iLower, iUpper, pnEntry);
 }
 
+static int prollyBtCursorCountIndexRange(
+  sqlite3 *db,
+  BtCursor *pCur,
+  UnpackedRecord *pLower,
+  UnpackedRecord *pUpper,
+  i64 *pnEntry
+){
+  struct TableEntry *pTE;
+  (void)db;
+
+  if( pCur->curIntKey ) return SQLITE_NOTFOUND;
+  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  if( pTE && pTE->pPending ){
+    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+    if( !prollyMutMapIsEmpty(pMap) ){
+      ProllyMutMap *pFlushMap = pMap;
+      int captured = 0;
+      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
+                                       (ProllyMutMap**)&pTE->pPending,
+                                       &pFlushMap, &captured);
+      if( rc!=SQLITE_OK ) return rc;
+      if( captured ){
+        refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
+                                   (ProllyMutMap*)pTE->pPending);
+      }
+      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
+      if( rc!=SQLITE_OK ) return rc;
+      if( pTE->pPending==pMap ){
+        prollyMutMapClear(pMap);
+      }
+    }
+  }
+  flushIfNeeded(pCur);
+  return countTreeBlobPrefixRange(pCur, pLower, pUpper, pnEntry);
+}
+
 int sqlite3BtreeCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
   if( !pCur ) return SQLITE_OK;
   return pCur->pCurOps->xCount(db, pCur, pnEntry);
@@ -7574,6 +7757,17 @@ int sqlite3BtreeCountRange(
 ){
   if( !pCur ) return SQLITE_OK;
   return pCur->pCurOps->xCountRange(db, pCur, iLower, iUpper, pnEntry);
+}
+
+int sqlite3BtreeCountIndexRange(
+  sqlite3 *db,
+  BtCursor *pCur,
+  UnpackedRecord *pLower,
+  UnpackedRecord *pUpper,
+  i64 *pnEntry
+){
+  if( !pCur ) return SQLITE_OK;
+  return pCur->pCurOps->xCountIndexRange(db, pCur, pLower, pUpper, pnEntry);
 }
 
 static i64 prollyBtCursorRowCountEst(BtCursor *pCur){
@@ -9223,6 +9417,16 @@ static int origCursorCountRangeVt(
   }
   *pnEntry = n;
   return SQLITE_OK;
+}
+static int origCursorCountIndexRangeVt(
+  sqlite3 *db,
+  BtCursor *pCur,
+  UnpackedRecord *pLower,
+  UnpackedRecord *pUpper,
+  i64 *pnEntry
+){
+  return origBtreeCountIndexRange(db, pCur->pOrigCursor,
+                                  pLower, pUpper, pnEntry);
 }
 static i64 origCursorRowCountEstVt(BtCursor *pCur){
   (void)pCur;
