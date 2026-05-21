@@ -39,6 +39,19 @@
 # ── select1 ──
 select1 select1-2.23  # rowid-order vs PK-order on unordered SELECT
 
+# ── where ──
+# where-5.* tests use count{} which asserts an exact number of internal
+# btree seeks. PR #999 ("Optimize rowid IN integer literal lookups")
+# replaces N per-literal seeks with a single range scan, so the operation
+# count drops below the upstream-expected value. The returned rows still
+# match — only the seek-count assertion diverges. Six tests below; rows
+# all correct, counts all lower than the upstream expectation.
+where where-5.1   # rowid IN literal: optimized to 1 seek vs upstream 4
+where where-5.5   # rowid IN (subquery of rowid IN literals): fewer seeks
+where where-5.6   # rowid+0 IN (same subquery): fewer seeks
+where where-5.7   # w IN (same subquery): fewer seeks
+where where-5.8   # w+0 IN (same subquery): fewer seeks
+
 # ── index ──
 index index-7.3   # explicit rowid reference
 index index-11.1  # rowid-order assumption
