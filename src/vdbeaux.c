@@ -3830,6 +3830,7 @@ int SQLITE_NOINLINE sqlite3VdbeHandleMovedCursor(VdbeCursor *p){
   assert( sqlite3BtreeCursorHasMoved(p->uc.pCursor) );
   rc = sqlite3BtreeCursorRestore(p->uc.pCursor, &isDifferentRow);
   p->cacheStatus = CACHE_STALE;
+  p->idxRowidCacheValid = 0;
   if( isDifferentRow ) p->nullRow = 1;
   return rc;
 }
