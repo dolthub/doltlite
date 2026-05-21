@@ -450,6 +450,11 @@ static SQLITE_INLINE u64 cursorCurrentTreeKeyPrefixInt(BtCursor *pCur){
        | ((u64)p[6]<<8) | (u64)p[7];
 }
 
+static SQLITE_INLINE i64 cursorCurrentTreeIntKey(BtCursor *pCur){
+  u64 u = cursorCurrentTreeKeyPrefixInt(pCur);
+  return (i64)(u ^ ((u64)1 << 63));
+}
+
 static int cacheCursorPayloadReconstructed(
   BtCursor *pCur, const u8 *pSortKey, int nSortKey
 );
@@ -6577,11 +6582,12 @@ static i64 prollyBtCursorIntegerKey(BtCursor *pCur){
    && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
     return prollyMutMapEntryIntKey(currentMutMapEntry(pCur));
   }
-  if( !prollyCursorIsValid(&pCur->pCur)
+  if( pCur->pCur.eState!=PROLLY_CURSOR_VALID
    && (pCur->curFlags & BTCF_ValidNKey) ){
     return pCur->cachedIntKey;
   }
-  return prollyCursorIntKey(&pCur->pCur);
+  assert( pCur->pCur.eState==PROLLY_CURSOR_VALID );
+  return cursorCurrentTreeIntKey(pCur);
 }
 i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
   return pCur->pCurOps->xIntegerKey(pCur);
