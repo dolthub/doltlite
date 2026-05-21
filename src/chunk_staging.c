@@ -9,6 +9,8 @@
 #define CS_INIT_WRITEBUF_SIZE 4096
 #define CS_PEND_HT_INIT_BITS 12
 #define CS_PEND_HT_MAX_LOAD  4
+#define CS_PEND_HT_MIN_COUNT 16
+#define CS_RECENT_HT_MIN_COUNT 64
 
 void chunkStagingInit(ChunkStaging *st){
   memset(st, 0, sizeof(*st));
@@ -134,6 +136,15 @@ int csSearchPending(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
   int i; u32 b; int rc;
   *pIdx = -1;
   if( cs->staging.nPending==0 ) return SQLITE_OK;
+  if( cs->staging.nPending < CS_PEND_HT_MIN_COUNT ){
+    for(i=0; i<cs->staging.nPending; i++){
+      if( prollyHashCompare(&cs->staging.aPending[i].hash, pHash)==0 ){
+        *pIdx = i;
+        return SQLITE_OK;
+      }
+    }
+    return SQLITE_OK;
+  }
   rc = csPendHTEnsure(cs);
   if( rc!=SQLITE_OK ){
 
@@ -197,6 +208,15 @@ int csSearchRecent(ChunkStore *cs, const ProllyHash *pHash, int *pIdx){
   int i; u32 b; int rc;
   *pIdx = -1;
   if( cs->staging.nRecent==0 ) return SQLITE_OK;
+  if( cs->staging.nRecent < CS_RECENT_HT_MIN_COUNT ){
+    for(i=cs->staging.nRecent-1; i>=0; i--){
+      if( prollyHashCompare(&cs->staging.aRecent[i].hash, pHash)==0 ){
+        *pIdx = i;
+        return SQLITE_OK;
+      }
+    }
+    return SQLITE_OK;
+  }
   rc = csRecentHTEnsure(cs);
   if( rc!=SQLITE_OK ){
     for(i=cs->staging.nRecent-1; i>=0; i--){

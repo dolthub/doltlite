@@ -977,14 +977,12 @@ int chunkStorePut(
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
   {
-    u8 *pExisting = 0;
-    int nExisting = 0;
-    int getRc = chunkStoreGet(cs, &h, &pExisting, &nExisting);
-    if( getRc == SQLITE_OK ){
-      sqlite3_free(pExisting);
+    int bHas = 0;
+    int hasRc = chunkStoreHas(cs, &h, &bHas);
+    if( hasRc==SQLITE_OK && bHas ){
       return SQLITE_OK;
     }
-    sqlite3_free(pExisting);
+    if( hasRc!=SQLITE_OK ) return hasRc;
   }
 
   rc = csGrowPending(cs);
