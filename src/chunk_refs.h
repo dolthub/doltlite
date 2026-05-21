@@ -9,6 +9,7 @@ typedef struct BranchRef BranchRef;
 typedef struct TagRef TagRef;
 typedef struct RemoteRef RemoteRef;
 typedef struct TrackingBranch TrackingBranch;
+typedef struct SequenceRef SequenceRef;
 typedef struct RefsTable RefsTable;
 
 struct BranchRef {
@@ -37,6 +38,17 @@ struct TrackingBranch {
   ProllyHash commitHash;
 };
 
+/* Shared (non-versioned) per-database AUTOINCREMENT counter for one table.
+** Allocated at database scope, not at branch scope: every branch sees the
+** same authoritative max-rowid for a given AUTOINCREMENT table so that
+** branches never re-issue the same id. SQLite's own sqlite_sequence table
+** is still kept in lock-step (so DROP TABLE et al. work as upstream), but
+** the value in this struct is authoritative for new-id allocation. */
+struct SequenceRef {
+  char *zTableName;
+  i64 iSeq;
+};
+
 struct RefsTable {
   ProllyHash refsHash;
   ProllyHash committedRefsHash;
@@ -49,6 +61,8 @@ struct RefsTable {
   int nRemotes;
   TrackingBranch *aTracking;
   int nTracking;
+  SequenceRef *aSequences;
+  int nSequences;
 };
 
 void refsTableInit(RefsTable *rt);
@@ -58,11 +72,16 @@ void refsTableGetBranches(const RefsTable *rt, int *pn, const BranchRef **par);
 void refsTableGetTags(const RefsTable *rt, int *pn, const TagRef **par);
 void refsTableGetRemotes(const RefsTable *rt, int *pn, const RemoteRef **par);
 void refsTableGetTracking(const RefsTable *rt, int *pn, const TrackingBranch **par);
+void refsTableGetSequences(const RefsTable *rt, int *pn, const SequenceRef **par);
 
 int refsTableBranchCount(const RefsTable *rt);
 int refsTableTagCount(const RefsTable *rt);
 int refsTableRemoteCount(const RefsTable *rt);
 int refsTableTrackingCount(const RefsTable *rt);
+int refsTableSequenceCount(const RefsTable *rt);
+
+/* Return the stored sequence for zTableName, or 0 if absent. */
+i64 refsTableGetSequence(const RefsTable *rt, const char *zTableName);
 
 const char *refsTableGetDefaultBranchName(const RefsTable *rt);
 const ProllyHash *refsTableGetHash(const RefsTable *rt);
@@ -81,6 +100,8 @@ struct SavedRefsState {
   int nRemotes;
   TrackingBranch *aTracking;
   int nTracking;
+  SequenceRef *aSequences;
+  int nSequences;
 };
 
 struct ChunkStore;
@@ -97,6 +118,20 @@ void csFreeBranches(struct ChunkStore *cs);
 void csFreeTags(struct ChunkStore *cs);
 void csFreeRemotes(struct ChunkStore *cs);
 void csFreeTracking(struct ChunkStore *cs);
+void csFreeSequences(struct ChunkStore *cs);
+
+/* Look up the stored sequence for zTableName, or 0 if absent. */
+i64 chunkStoreGetSequenceValue(struct ChunkStore *cs, const char *zTableName);
+/* Set the stored sequence to max(existing, newSeq); creates row if absent.
+** Caller must hold the chunk-store lock. */
+int chunkStoreBumpSequence(struct ChunkStore *cs, const char *zTableName,
+                           i64 newSeq);
+/* Delete the row for zTableName if present (mirrors SQLite's
+** "DELETE FROM sqlite_sequence WHERE name=…" on DROP TABLE). */
+void chunkStoreDropSequence(struct ChunkStore *cs, const char *zTableName);
+/* Rename zOld → zNew (mirrors ALTER TABLE RENAME). */
+int chunkStoreRenameSequence(struct ChunkStore *cs, const char *zOld,
+                             const char *zNew);
 void csMarkRefsCommitted(struct ChunkStore *cs);
 void csRestoreCommittedRefsHash(struct ChunkStore *cs);
 void csDetachSavedRefsState(struct ChunkStore *cs, SavedRefsState *pSaved);

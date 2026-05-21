@@ -739,10 +739,21 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
     }
     sz += inc;
   }
+  /* SequenceRef section: u32 count, then for each: u32 nameLen, name, i64 seq. */
+  sz += 4;
+  for(i=0; i<cs->refs.nSequences; i++){
+    int nameLen = cs->refs.aSequences[i].zTableName
+                ? (int)strlen(cs->refs.aSequences[i].zTableName) : 0;
+    int inc = 4 + nameLen + 8;
+    if( sz > INT_MAX - inc ){
+      return SQLITE_TOOBIG;
+    }
+    sz += inc;
+  }
   buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
   bufCur = buf;
-  *bufCur++ = 6;
+  *bufCur++ = 7;
   CS_WRITE_U32(bufCur,defLen); bufCur+=4;
   memcpy(bufCur, def, defLen); bufCur+=defLen;
   CS_WRITE_U32(bufCur,cs->refs.nBranches); bufCur+=4;
@@ -792,6 +803,17 @@ static int csSerializeRefsBlob(ChunkStore *cs, u8 **ppOut, int *pnOut){
     memcpy(bufCur, cs->refs.aTracking[i].zBranch, branchLen); bufCur+=branchLen;
     memcpy(bufCur, cs->refs.aTracking[i].commitHash.data, PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
   }
+  CS_WRITE_U32(bufCur,cs->refs.nSequences); bufCur+=4;
+  for(i=0; i<cs->refs.nSequences; i++){
+    int nameLen = cs->refs.aSequences[i].zTableName
+                ? (int)strlen(cs->refs.aSequences[i].zTableName) : 0;
+    CS_WRITE_U32(bufCur,nameLen); bufCur+=4;
+    if( nameLen ){
+      memcpy(bufCur, cs->refs.aSequences[i].zTableName, nameLen);
+      bufCur+=nameLen;
+    }
+    CS_WRITE_I64(bufCur, cs->refs.aSequences[i].iSeq); bufCur+=8;
+  }
   *ppOut = buf;
   *pnOut = sz;
   return SQLITE_OK;
@@ -807,11 +829,12 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
    && cs->refs.nTags==0
    && cs->refs.nRemotes==0
    && cs->refs.nTracking==0
+   && cs->refs.nSequences==0
    && (!cs->refs.zDefaultBranch || strcmp(cs->refs.zDefaultBranch, "main")==0)
    && strcmp(cs->refs.aBranches[0].zName, "main")==0 ){
-    u8 aBuf[73];
+    u8 aBuf[77];
     u8 *p = aBuf;
-    *p++ = 6;
+    *p++ = 7;
     CS_WRITE_U32(p,4); p+=4;
     memcpy(p, "main", 4); p+=4;
     CS_WRITE_U32(p,1); p+=4;
@@ -821,9 +844,10 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
     p += PROLLY_HASH_SIZE;
     memcpy(p, cs->refs.aBranches[0].workingSetHash.data, PROLLY_HASH_SIZE);
     p += PROLLY_HASH_SIZE;
-    CS_WRITE_U32(p,0); p+=4;
-    CS_WRITE_U32(p,0); p+=4;
-    CS_WRITE_U32(p,0); p+=4;
+    CS_WRITE_U32(p,0); p+=4;     /* nTags */
+    CS_WRITE_U32(p,0); p+=4;     /* nRemotes */
+    CS_WRITE_U32(p,0); p+=4;     /* nTracking */
+    CS_WRITE_U32(p,0); p+=4;     /* nSequences */
     assert( p==aBuf+sizeof(aBuf) );
     rc = chunkStorePut(cs, aBuf, (int)sizeof(aBuf), &refsHash);
     if( rc==SQLITE_OK ) memcpy(&cs->refs.refsHash, &refsHash, sizeof(ProllyHash));

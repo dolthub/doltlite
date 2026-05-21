@@ -51,6 +51,23 @@ void refsTableGetTracking(const RefsTable *rt, int *pn, const TrackingBranch **p
   *par = rt->aTracking;
 }
 
+void refsTableGetSequences(const RefsTable *rt, int *pn, const SequenceRef **par){
+  *pn = rt->nSequences;
+  *par = rt->aSequences;
+}
+
+i64 refsTableGetSequence(const RefsTable *rt, const char *zTableName){
+  int i;
+  if( !zTableName ) return 0;
+  for(i=0; i<rt->nSequences; i++){
+    if( rt->aSequences[i].zTableName
+     && strcmp(rt->aSequences[i].zTableName, zTableName)==0 ){
+      return rt->aSequences[i].iSeq;
+    }
+  }
+  return 0;
+}
+
 const char *refsTableGetDefaultBranchName(const RefsTable *rt){
   return rt->zDefaultBranch;
 }
@@ -77,6 +94,10 @@ int refsTableRemoteCount(const RefsTable *rt){
 
 int refsTableTrackingCount(const RefsTable *rt){
   return rt->nTracking;
+}
+
+int refsTableSequenceCount(const RefsTable *rt){
+  return rt->nSequences;
 }
 
 void refsTableSetHash(RefsTable *rt, const ProllyHash *h){
@@ -126,6 +147,83 @@ void csFreeTracking(ChunkStore *cs){
   cs->refs.nTracking = 0;
 }
 
+void csFreeSequences(ChunkStore *cs){
+  int k;
+  for(k=0; k<cs->refs.nSequences; k++){
+    sqlite3_free(cs->refs.aSequences[k].zTableName);
+  }
+  sqlite3_free(cs->refs.aSequences);
+  cs->refs.aSequences = 0;
+  cs->refs.nSequences = 0;
+}
+
+i64 chunkStoreGetSequenceValue(ChunkStore *cs, const char *zTableName){
+  if( !cs || !zTableName ) return 0;
+  return refsTableGetSequence(&cs->refs, zTableName);
+}
+
+int chunkStoreBumpSequence(ChunkStore *cs, const char *zTableName,
+                           i64 newSeq){
+  int i;
+  SequenceRef *aNew;
+  char *zCopy;
+  if( !cs || !zTableName ) return SQLITE_MISUSE;
+  for(i=0; i<cs->refs.nSequences; i++){
+    if( cs->refs.aSequences[i].zTableName
+     && strcmp(cs->refs.aSequences[i].zTableName, zTableName)==0 ){
+      if( newSeq > cs->refs.aSequences[i].iSeq ){
+        cs->refs.aSequences[i].iSeq = newSeq;
+      }
+      return SQLITE_OK;
+    }
+  }
+  aNew = sqlite3_realloc(cs->refs.aSequences,
+                         (cs->refs.nSequences+1)*(int)sizeof(SequenceRef));
+  if( !aNew ) return SQLITE_NOMEM;
+  cs->refs.aSequences = aNew;
+  memset(&aNew[cs->refs.nSequences], 0, sizeof(SequenceRef));
+  zCopy = sqlite3_mprintf("%s", zTableName);
+  if( !zCopy ) return SQLITE_NOMEM;
+  aNew[cs->refs.nSequences].zTableName = zCopy;
+  aNew[cs->refs.nSequences].iSeq = newSeq;
+  cs->refs.nSequences++;
+  return SQLITE_OK;
+}
+
+void chunkStoreDropSequence(ChunkStore *cs, const char *zTableName){
+  int i;
+  if( !cs || !zTableName ) return;
+  for(i=0; i<cs->refs.nSequences; i++){
+    if( cs->refs.aSequences[i].zTableName
+     && strcmp(cs->refs.aSequences[i].zTableName, zTableName)==0 ){
+      sqlite3_free(cs->refs.aSequences[i].zTableName);
+      if( i < cs->refs.nSequences-1 ){
+        memmove(&cs->refs.aSequences[i], &cs->refs.aSequences[i+1],
+                (cs->refs.nSequences-i-1)*sizeof(SequenceRef));
+      }
+      cs->refs.nSequences--;
+      return;
+    }
+  }
+}
+
+int chunkStoreRenameSequence(ChunkStore *cs, const char *zOld,
+                             const char *zNew){
+  int i;
+  if( !cs || !zOld || !zNew ) return SQLITE_MISUSE;
+  for(i=0; i<cs->refs.nSequences; i++){
+    if( cs->refs.aSequences[i].zTableName
+     && strcmp(cs->refs.aSequences[i].zTableName, zOld)==0 ){
+      char *zCopy = sqlite3_mprintf("%s", zNew);
+      if( !zCopy ) return SQLITE_NOMEM;
+      sqlite3_free(cs->refs.aSequences[i].zTableName);
+      cs->refs.aSequences[i].zTableName = zCopy;
+      return SQLITE_OK;
+    }
+  }
+  return SQLITE_OK;
+}
+
 void csMarkRefsCommitted(ChunkStore *cs){
   cs->refs.committedRefsHash = cs->refs.refsHash;
 }
@@ -145,6 +243,8 @@ void csCaptureSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   pSaved->nRemotes = cs->refs.nRemotes;
   pSaved->aTracking = cs->refs.aTracking;
   pSaved->nTracking = cs->refs.nTracking;
+  pSaved->aSequences = cs->refs.aSequences;
+  pSaved->nSequences = cs->refs.nSequences;
 }
 
 void csDetachSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
@@ -158,6 +258,8 @@ void csDetachSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   cs->refs.nRemotes = 0;
   cs->refs.aTracking = 0;
   cs->refs.nTracking = 0;
+  cs->refs.aSequences = 0;
+  cs->refs.nSequences = 0;
 }
 
 void csRestoreSavedRefsState(ChunkStore *cs, const SavedRefsState *pSaved){
@@ -170,6 +272,8 @@ void csRestoreSavedRefsState(ChunkStore *cs, const SavedRefsState *pSaved){
   cs->refs.nRemotes = pSaved->nRemotes;
   cs->refs.aTracking = pSaved->aTracking;
   cs->refs.nTracking = pSaved->nTracking;
+  cs->refs.aSequences = pSaved->aSequences;
+  cs->refs.nSequences = pSaved->nSequences;
 }
 
 void csFreeSavedRefsState(SavedRefsState *pSaved){
@@ -184,6 +288,8 @@ void csFreeSavedRefsState(SavedRefsState *pSaved){
   refsStore.refs.nRemotes = pSaved->nRemotes;
   refsStore.refs.aTracking = pSaved->aTracking;
   refsStore.refs.nTracking = pSaved->nTracking;
+  refsStore.refs.aSequences = pSaved->aSequences;
+  refsStore.refs.nSequences = pSaved->nSequences;
   csFreeRefsState(&refsStore);
   memset(pSaved, 0, sizeof(*pSaved));
 }
@@ -193,6 +299,7 @@ void csFreeRefsState(ChunkStore *cs){
   csFreeTags(cs);
   csFreeRemotes(cs);
   csFreeTracking(cs);
+  csFreeSequences(cs);
   sqlite3_free(cs->refs.zDefaultBranch);
   cs->refs.zDefaultBranch = 0;
 }
@@ -211,7 +318,10 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
   u8 version;
   if( nData<5 ) return SQLITE_CORRUPT;
   version = *bufCur++;
-  if( version!=6 ) return SQLITE_CORRUPT;
+  /* v7 added the SequenceRef section (shared AUTOINCREMENT counters).
+  ** 0.11.0 dropped support for older formats; rebuild from scratch on
+  ** older databases. */
+  if( version!=7 ) return SQLITE_CORRUPT;
   if( bufCur+4>data+nData ) return SQLITE_CORRUPT;
   defLen = (int)CS_READ_U32(bufCur); bufCur+=4;
   if( defLen<0 ) return SQLITE_CORRUPT;
@@ -261,7 +371,7 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
         if(!cs->refs.aTags[i].zName) return SQLITE_NOMEM;
         memcpy(cs->refs.aTags[i].zName,bufCur,nameLen); cs->refs.aTags[i].zName[nameLen]=0; bufCur+=nameLen;
         memcpy(cs->refs.aTags[i].commitHash.data,bufCur,PROLLY_HASH_SIZE); bufCur+=PROLLY_HASH_SIZE;
-        if( version>=6 ){
+        {
           int taggerLen, emailLen, messageLen;
           if(bufCur+4>data+nData) return SQLITE_CORRUPT;
           taggerLen=(int)CS_READ_U32(bufCur); bufCur+=4;
@@ -286,13 +396,6 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
           cs->refs.aTags[i].zMessage=sqlite3_malloc(messageLen+1);
           if(!cs->refs.aTags[i].zMessage) return SQLITE_NOMEM;
           memcpy(cs->refs.aTags[i].zMessage,bufCur,messageLen); cs->refs.aTags[i].zMessage[messageLen]=0; bufCur+=messageLen;
-        }else{
-          cs->refs.aTags[i].zTagger  = sqlite3_mprintf("");
-          cs->refs.aTags[i].zEmail   = sqlite3_mprintf("");
-          cs->refs.aTags[i].zMessage = sqlite3_mprintf("");
-          if( !cs->refs.aTags[i].zTagger || !cs->refs.aTags[i].zEmail || !cs->refs.aTags[i].zMessage ){
-            return SQLITE_NOMEM;
-          }
         }
         cs->refs.nTags++;
       }
@@ -353,6 +456,34 @@ int csDeserializeRefs(ChunkStore *cs, const u8 *data, int nData){
         }
       }
     }
+    csFreeSequences(cs);
+    if( bufCur+4<=data+nData ){
+      int nSequences = (int)CS_READ_U32(bufCur); bufCur+=4;
+      if( nSequences<0
+       || nSequences>(int)(data+nData-bufCur)/(4+8) ){
+        return SQLITE_CORRUPT;
+      }
+      if( nSequences>0 ){
+        cs->refs.aSequences = sqlite3_malloc(nSequences*(int)sizeof(SequenceRef));
+        if(!cs->refs.aSequences) return SQLITE_NOMEM;
+        memset(cs->refs.aSequences, 0, nSequences*(int)sizeof(SequenceRef));
+        for(i=0;i<nSequences;i++){
+          int nameLen;
+          if(bufCur+4>data+nData) return SQLITE_CORRUPT;
+          nameLen=(int)CS_READ_U32(bufCur); bufCur+=4;
+          if( nameLen<0 ) return SQLITE_CORRUPT;
+          if(bufCur+nameLen+8>data+nData) return SQLITE_CORRUPT;
+          cs->refs.aSequences[i].zTableName=sqlite3_malloc(nameLen+1);
+          if(!cs->refs.aSequences[i].zTableName) return SQLITE_NOMEM;
+          memcpy(cs->refs.aSequences[i].zTableName,bufCur,nameLen);
+          cs->refs.aSequences[i].zTableName[nameLen]=0;
+          bufCur+=nameLen;
+          cs->refs.aSequences[i].iSeq=CS_READ_I64(bufCur);
+          bufCur+=8;
+          cs->refs.nSequences++;
+        }
+      }
+    }
   }
 
   return SQLITE_OK;
@@ -373,6 +504,8 @@ void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->refs.nRemotes = pSrc->refs.nRemotes;
   pDst->refs.aTracking = pSrc->refs.aTracking;
   pDst->refs.nTracking = pSrc->refs.nTracking;
+  pDst->refs.aSequences = pSrc->refs.aSequences;
+  pDst->refs.nSequences = pSrc->refs.nSequences;
 
   pSrc->refs.aBranches = 0;
   pSrc->refs.nBranches = 0;
@@ -383,6 +516,8 @@ void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->refs.nRemotes = 0;
   pSrc->refs.aTracking = 0;
   pSrc->refs.nTracking = 0;
+  pSrc->refs.aSequences = 0;
+  pSrc->refs.nSequences = 0;
 }
 
 int csReplaceRefsStateFromBlob(
