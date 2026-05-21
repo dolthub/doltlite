@@ -80,6 +80,19 @@ static int file_exists(const char *path){
   return stat(path, &st)==0;
 }
 
+static int countRowsDiag(sqlite3 *db, const char *sql){
+  sqlite3_stmt *s = 0;
+  int rc = sqlite3_prepare_v2(db, sql, -1, &s, 0);
+  int n = -1;
+  if( rc==SQLITE_OK ){
+    if( sqlite3_step(s)==SQLITE_ROW ){
+      n = sqlite3_column_int(s, 0);
+    }
+    sqlite3_finalize(s);
+  }
+  return n;
+}
+
 static int looks_like_error(const char *s){
   if( !s ) return 1;
   if( strstr(s, "ERR")!=0 ) return 1;
@@ -632,12 +645,16 @@ static void test_gc_vs_merge(void){
         }
       }
       fprintf(stderr,
-        "[diag]   le10=%s lt1=%s be1to10=%s be2to10=%s be8to50=%s\n",
-        queryScalarText(db, "SELECT count(*) FROM t WHERE id <= 10"),
-        queryScalarText(db, "SELECT count(*) FROM t WHERE id < 1"),
-        queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 10"),
-        queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 2 AND 10"),
-        queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 8 AND 50"));
+        "[diag]   le10=%d lt1=%d be1to10=%d be2to10=%d be7to50=%d be8to50=%d be11to20=%d be21to50=%d ge8=%d\n",
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id <= 10"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id < 1"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 10"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 2 AND 10"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 7 AND 50"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 8 AND 50"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 11 AND 20"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 21 AND 50"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id >= 8"));
       {
         sqlite3_stmt *s = 0;
         if( sqlite3_prepare_v2(db,
