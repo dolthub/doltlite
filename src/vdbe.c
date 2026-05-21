@@ -1649,7 +1649,31 @@ case OP_Move: {
     assert( pIn1<=&aMem[(p->nMem+1 - p->nCursor)] );
     assert( memIsValid(pIn1) );
     memAboutToChange(p, pOut);
-    sqlite3VdbeMemMove(pOut, pIn1);
+    if( (pIn1->flags & MEM_Ephem)!=0
+     && (pIn1->flags & (MEM_Str|MEM_Blob))!=0
+     && (pIn1->flags & MEM_Zero)==0
+     && pIn1->szMalloc==0
+     && !VdbeMemDynamic(pIn1)
+    ){
+      u16 flags = pIn1->flags;
+      int nByte = pIn1->n;
+      sqlite3VdbeMemSetNull(pOut);
+      if( sqlite3VdbeMemClearAndResize(pOut, nByte+3) ) goto no_mem;
+      memcpy(pOut->z, pIn1->z, nByte);
+      pOut->z[nByte] = 0;
+      pOut->z[nByte+1] = 0;
+      pOut->z[nByte+2] = 0;
+      pOut->u = pIn1->u;
+      pOut->n = nByte;
+      pOut->enc = pIn1->enc;
+      pOut->eSubtype = pIn1->eSubtype;
+      pOut->flags = (flags & ~(MEM_Dyn|MEM_Ephem|MEM_Static)) | MEM_Term;
+      pIn1->flags = MEM_Null;
+      pIn1->szMalloc = 0;
+    }else{
+      sqlite3VdbeMemMove(pOut, pIn1);
+      Deephemeralize(pOut);
+    }
 #ifdef SQLITE_DEBUG
     pIn1->pScopyFrom = 0;
     { int i;
@@ -1661,7 +1685,6 @@ case OP_Move: {
       }
     }
 #endif
-    Deephemeralize(pOut);
     REGISTER_TRACE(p2++, pOut);
     pIn1++;
     pOut++;
