@@ -631,6 +631,43 @@ static void test_gc_vs_merge(void){
           sqlite3_finalize(s);
         }
       }
+      fprintf(stderr,
+        "[diag]   le10=%s lt1=%s be1to10=%s be2to10=%s be8to50=%s\n",
+        queryScalarText(db, "SELECT count(*) FROM t WHERE id <= 10"),
+        queryScalarText(db, "SELECT count(*) FROM t WHERE id < 1"),
+        queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 10"),
+        queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 2 AND 10"),
+        queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 8 AND 50"));
+      {
+        sqlite3_stmt *s = 0;
+        if( sqlite3_prepare_v2(db,
+              "SELECT id, v FROM t WHERE id <= 10 ORDER BY id",
+              -1, &s, 0)==SQLITE_OK ){
+          fprintf(stderr, "[diag]   first10 (id<=10):");
+          while( sqlite3_step(s)==SQLITE_ROW ){
+            fprintf(stderr, " (%d,%s)",
+              sqlite3_column_int(s, 0),
+              (const char*)sqlite3_column_text(s, 1));
+          }
+          fprintf(stderr, "\n");
+          sqlite3_finalize(s);
+        }
+      }
+      {
+        sqlite3_stmt *s = 0;
+        if( sqlite3_prepare_v2(db,
+              "SELECT id, v FROM t WHERE id BETWEEN 1 AND 10 ORDER BY id",
+              -1, &s, 0)==SQLITE_OK ){
+          fprintf(stderr, "[diag]   between1and10:");
+          while( sqlite3_step(s)==SQLITE_ROW ){
+            fprintf(stderr, " (%d,%s)",
+              sqlite3_column_int(s, 0),
+              (const char*)sqlite3_column_text(s, 1));
+          }
+          fprintf(stderr, "\n");
+          sqlite3_finalize(s);
+        }
+      }
     }
     check("gc_vs_merge_total_count", strcmp(totalBuf, "90")==0);
     check("gc_vs_merge_feat_rows_present", strcmp(featBuf, "20")==0);
