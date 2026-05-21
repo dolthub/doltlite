@@ -457,13 +457,11 @@ static int cacheCursorPayloadReconstructed(
 static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   if( pCur->curIntKey ){
     const u8 *pVal; int nVal;
-    ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
     cursorCurrentTreeValue(pCur, &pVal, &nVal);
     if( nVal > 0 ){
       pCur->pCachedPayload = (u8*)pVal;
       pCur->nCachedPayload = nVal;
       pCur->cachedPayloadOwned = 0;
-      pCur->pCachedFrom = prollyCacheGet(pCur->pCur.pCache, &pLeaf->hash);
     }
   }
 }
