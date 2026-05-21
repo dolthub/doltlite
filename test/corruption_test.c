@@ -143,6 +143,42 @@ static long long read_i64_le_at(const char *path, off_t offset){
     | ((unsigned long long)b[7] << 56));
 }
 
+static unsigned int read_u32_le_at(const char *path, off_t offset){
+  unsigned char b[4];
+  if( read_bytes(path, offset, b, sizeof(b))!=0 ) return 0xffffffffu;
+  return (unsigned int)(
+      ((unsigned int)b[0])
+    | ((unsigned int)b[1] << 8)
+    | ((unsigned int)b[2] << 16)
+    | ((unsigned int)b[3] << 24));
+}
+
+static off_t first_wal_chunk_body_offset(const char *path){
+  long long walOffset = read_i64_le_at(path, 84);
+  off_t sz = file_size(path);
+  off_t pos;
+  if( walOffset < MANIFEST_SIZE || sz <= (off_t)walOffset ) return -1;
+  pos = (off_t)walOffset;
+  while( pos < sz ){
+    unsigned char tag = 0;
+    if( read_bytes(path, pos, &tag, 1)!=0 ) return -1;
+    pos++;
+    if( tag==0x01 ){
+      unsigned int len;
+      if( pos + 24 > sz ) return -1;
+      len = read_u32_le_at(path, pos + 20);
+      if( len==0xffffffffu || pos + 24 + (off_t)len > sz ) return -1;
+      return pos + 24;
+    }else if( tag==0x02 ){
+      if( pos + MANIFEST_SIZE > sz ) return -1;
+      pos += MANIFEST_SIZE;
+    }else{
+      return -1;
+    }
+  }
+  return -1;
+}
+
 /*
 ** Remove database and associated files.
 */
@@ -724,13 +760,59 @@ static void test_corrupt_wal_tag(void){
 }
 
 /*
-** Test 11: Set file size field in manifest to wrong value.
+** Test 11: Corrupt a WAL chunk body before a later root record.
+** Replay should stop at the previous root boundary and open the
+** previously durable state instead of accepting a root that may reference
+** the corrupted chunk.
+*/
+static void test_corrupt_wal_chunk_body_stops_replay(void){
+  const char *dbpath = "/tmp/test_corr_wal_chunk_body.db";
+  sqlite3 *db = 0;
+  int rc;
+  off_t bodyOff;
+  unsigned char bad = 0xA5;
+
+  printf("--- Test 11: Corrupt WAL chunk body stops replay ---\n");
+
+  check("create_compacted_11", create_compacted_db(dbpath)==0);
+
+  rc = sqlite3_open(dbpath, &db);
+  check("open_append_11", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    check("append_row_11",
+      execSql(db, "INSERT INTO t1 VALUES(6, 'zeta')")==SQLITE_OK);
+  }
+  if( db ) sqlite3_close(db);
+
+  bodyOff = first_wal_chunk_body_offset(dbpath);
+  check("find_wal_chunk_body_11", bodyOff > 0);
+  if( bodyOff > 0 ){
+    check("corrupt_wal_chunk_body_11",
+      corrupt_bytes(dbpath, bodyOff, &bad, 1)==0);
+  }
+
+  db = 0;
+  rc = sqlite3_open(dbpath, &db);
+  check("reopen_after_wal_body_corrupt_11", rc==SQLITE_OK);
+  if( rc==SQLITE_OK ){
+    const char *r = queryScalarText(db, "SELECT count(*) FROM t1");
+    check("wal_body_corrupt_uses_prior_root_11", strcmp(r, "5")==0);
+    r = queryScalarText(db, "PRAGMA integrity_check");
+    check("wal_body_corrupt_integrity_11", strcmp(r, "ok")==0);
+  }
+  if( db ) sqlite3_close(db);
+
+  removeDb(dbpath);
+}
+
+/*
+** Test 12: Set file size field in manifest to wrong value.
 ** Should handle gracefully.
 */
 static void test_wrong_file_size_in_manifest(void){
   const char *dbpath = "/tmp/test_corr_filesize.db";
 
-  printf("--- Test 11: Wrong file size in manifest ---\n");
+  printf("--- Test 12: Wrong file size in manifest ---\n");
 
   check("create_good_11", create_good_db(dbpath)==0);
 
@@ -753,13 +835,13 @@ static void test_wrong_file_size_in_manifest(void){
 }
 
 /*
-** Test 12: Corrupt magic number.
+** Test 13: Corrupt magic number.
 ** Should fail to open as DoltLite.
 */
 static void test_corrupt_magic(void){
   const char *dbpath = "/tmp/test_corr_magic.db";
 
-  printf("--- Test 12: Corrupt magic number ---\n");
+  printf("--- Test 13: Corrupt magic number ---\n");
 
   check("create_good_13", create_good_db(dbpath)==0);
 
@@ -775,12 +857,12 @@ static void test_corrupt_magic(void){
 }
 
 /*
-** Test 13: Corrupt version number to unsupported version.
+** Test 14: Corrupt version number to unsupported version.
 */
 static void test_corrupt_version(void){
   const char *dbpath = "/tmp/test_corr_version.db";
 
-  printf("--- Test 13: Corrupt version number ---\n");
+  printf("--- Test 14: Corrupt version number ---\n");
 
   check("create_good_14", create_good_db(dbpath)==0);
 
@@ -796,7 +878,7 @@ static void test_corrupt_version(void){
 }
 
 /*
-** Test 14: Corrupt the reserved former head_commit bytes in a compacted DB.
+** Test 15: Corrupt the reserved former head_commit bytes in a compacted DB.
 **
 ** NOTE: The system recovers head_commit from the active branch's commit
 ** hash in refs, so manifest head_commit corruption is tolerated. This test
@@ -806,7 +888,7 @@ static void test_corrupt_version(void){
 static void test_corrupt_head_commit(void){
   const char *dbpath = "/tmp/test_corr_head.db";
 
-  printf("--- Test 14: Corrupt former head_commit bytes (compacted) ---\n");
+  printf("--- Test 15: Corrupt former head_commit bytes (compacted) ---\n");
 
   check("create_compacted_15", create_compacted_db(dbpath)==0);
 
@@ -844,13 +926,13 @@ static void test_corrupt_head_commit(void){
 }
 
 /*
-** Test 15: Corrupt the chunk_count field in a compacted DB.
+** Test 16: Corrupt the chunk_count field in a compacted DB.
 ** After GC, chunk_count should govern how many index entries to read.
 */
 static void test_corrupt_chunk_count(void){
   const char *dbpath = "/tmp/test_corr_chunkcount.db";
 
-  printf("--- Test 15: Corrupt chunk_count field (compacted) ---\n");
+  printf("--- Test 16: Corrupt chunk_count field (compacted) ---\n");
 
   check("create_compacted_16", create_compacted_db(dbpath)==0);
 
@@ -866,12 +948,12 @@ static void test_corrupt_chunk_count(void){
 }
 
 /*
-** Test 16: Corrupt index_offset to point past end of file.
+** Test 17: Corrupt index_offset to point past end of file.
 */
 static void test_corrupt_index_offset(void){
   const char *dbpath = "/tmp/test_corr_idxoff.db";
 
-  printf("--- Test 16: Corrupt index_offset ---\n");
+  printf("--- Test 17: Corrupt index_offset ---\n");
 
   /* Create and GC */
   {
@@ -897,14 +979,14 @@ static void test_corrupt_index_offset(void){
 }
 
 /*
-** Test 17: Corrupt a compacted index entry to point before chunk data.
+** Test 18: Corrupt a compacted index entry to point before chunk data.
 */
 static void test_corrupt_index_entry_offset(void){
   const char *dbpath = "/tmp/test_corr_idxentryoff.db";
   long long indexOffset;
   unsigned char bad_off[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
-  printf("--- Test 17: Corrupt index entry offset ---\n");
+  printf("--- Test 18: Corrupt index entry offset ---\n");
 
   check("create_compacted_18", create_compacted_db(dbpath)==0);
   indexOffset = read_i64_le_at(dbpath, 32);
@@ -919,7 +1001,7 @@ static void test_corrupt_index_entry_offset(void){
 }
 
 /*
-** Test 18: Corrupt compacted index ordering. The on-disk index must be
+** Test 19: Corrupt compacted index ordering. The on-disk index must be
 ** strictly sorted by chunk hash for binary search to be correct.
 */
 static void test_corrupt_index_order(void){
@@ -927,7 +1009,7 @@ static void test_corrupt_index_order(void){
   long long indexOffset;
   unsigned char zero_hash[20];
 
-  printf("--- Test 18: Corrupt index order ---\n");
+  printf("--- Test 19: Corrupt index order ---\n");
 
   memset(zero_hash, 0, sizeof(zero_hash));
   check("create_compacted_19", create_compacted_db(dbpath)==0);
@@ -959,6 +1041,7 @@ int main(void){
   test_empty_file();
   test_manifest_only();
   test_corrupt_wal_tag();
+  test_corrupt_wal_chunk_body_stops_replay();
   test_wrong_file_size_in_manifest();
   test_corrupt_magic();
   test_corrupt_version();

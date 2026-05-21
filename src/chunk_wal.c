@@ -242,10 +242,9 @@ int csReplayWal(ChunkStore *cs){
         if( hashMismatch ){
           sqlite3_log(SQLITE_NOTICE,
             "doltlite: WAL chunk body hash mismatch at offset %lld (declared len=%u); "
-            "skipping (will surface as missing chunk on read)",
+            "stopping replay at last commit boundary",
             (long long)(cs->wal.iWalOffset + pos - 24 - 1), (unsigned)len);
-          pos += len;
-          continue;
+          break;
         }
       }
       {
