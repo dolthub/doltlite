@@ -821,6 +821,7 @@ void enable_simulated_io_errors(void){
 }
 
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+void doltliteInvalidateWorkingState(sqlite3 *db);
 
 static int doltliteBackupSameFile(
   sqlite3_vfs *pSrcVfs,
@@ -1036,7 +1037,13 @@ backup_step_done:
     destCs->file.iFileSize = -1;
     destCs->hasMovedChecked = 0;
     rc = chunkStoreLockAndRefresh(destCs);
-    if( rc==SQLITE_OK ) chunkStoreUnlock(destCs);
+    if( rc==SQLITE_OK ){
+      /* The chunk store now reflects the renamed file. Force the
+      ** destination's Btree handles to reload their catalog (and
+      ** schema cookie) on the next transaction. */
+      doltliteInvalidateWorkingState(p->pDestDb);
+      chunkStoreUnlock(destCs);
+    }
   }
 
   if( srcLocked ) chunkStoreUnlock(srcCs);

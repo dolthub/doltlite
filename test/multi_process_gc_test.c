@@ -1,0 +1,1088 @@
+/*
+** Aggressive multi-process concurrency tests for dolt_gc().
+**
+** dolt_gc() must never lose data, never corrupt the chunk store, and
+** must serialize cleanly against every other operation that can race
+** with the mark+sweep window. This suite forks pairs/trios of OS
+** processes that exercise these races and verifies post-conditions on
+** the database from a fresh connection afterward.
+**
+** Tests:
+**  1. test_gc_vs_gc_parallel:        two concurrent dolt_gc() calls
+**  2. test_gc_blocked_then_retries:  dolt_gc() vs BEGIN-held write lock
+**  3. test_gc_vs_dolt_commit:        dolt_gc() racing dolt_commit() in a tight loop
+**  4. test_reader_iterator_during_gc: an open SELECT iterator during dolt_gc()
+**  5. test_gc_vs_branch_create:      dolt_gc() racing dolt_branch()
+**  6. test_gc_vs_merge:              dolt_gc() racing dolt_merge()
+**  7. test_gc_vs_checkout:           dolt_gc() racing dolt_checkout()
+**  8. test_continuous_writes_with_gc: writer hammers commits while GC loops
+**  9. test_kill_gc_mid_sweep:        SIGKILL during dolt_gc(); recover on reopen
+** 10. test_gc_tmp_file_cleanup:      no orphan *-gc-tmp survives a killed GC
+** 11. test_concurrent_staging_then_gc: cross-process staged session vs GC
+**
+** Build from build/ directory:
+**   cc -g -I. -I../src -o multi_process_gc_test \
+**     ../test/multi_process_gc_test.c libdoltlite.a -lz -lpthread -lm
+*/
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <sys/stat.h>
+#include <signal.h>
+#include <errno.h>
+#include "sqlite3.h"
+
+static int nPass = 0;
+static int nFail = 0;
+
+static void check(const char *name, int condition){
+  if( condition ){
+    nPass++;
+  }else{
+    nFail++;
+    fprintf(stderr, "FAIL: %s\n", name);
+  }
+}
+
+static int execSql(sqlite3 *db, const char *sql){
+  char *err = 0;
+  int rc = sqlite3_exec(db, sql, 0, 0, &err);
+  if( err ) sqlite3_free(err);
+  return rc;
+}
+
+static char result_buf[4096];
+static const char *queryScalarText(sqlite3 *db, const char *sql){
+  sqlite3_stmt *s = 0;
+  int rc;
+  result_buf[0] = 0;
+  rc = sqlite3_prepare_v2(db, sql, -1, &s, 0);
+  if( rc!=SQLITE_OK ){
+    snprintf(result_buf, sizeof(result_buf), "PREP_ERR(%d)", rc);
+    return result_buf;
+  }
+  rc = sqlite3_step(s);
+  if( rc==SQLITE_ROW ){
+    const char *v = (const char*)sqlite3_column_text(s, 0);
+    if( v ) snprintf(result_buf, sizeof(result_buf), "%s", v);
+  }else if( rc!=SQLITE_DONE ){
+    snprintf(result_buf, sizeof(result_buf), "STEP_ERR(%d)", rc);
+  }
+  sqlite3_finalize(s);
+  return result_buf;
+}
+
+static int file_exists(const char *path){
+  struct stat st;
+  return stat(path, &st)==0;
+}
+
+static int countRowsDiag(sqlite3 *db, const char *sql){
+  sqlite3_stmt *s = 0;
+  int rc = sqlite3_prepare_v2(db, sql, -1, &s, 0);
+  int n = -1;
+  if( rc==SQLITE_OK ){
+    if( sqlite3_step(s)==SQLITE_ROW ){
+      n = sqlite3_column_int(s, 0);
+    }
+    sqlite3_finalize(s);
+  }
+  return n;
+}
+
+static int looks_like_error(const char *s){
+  if( !s ) return 1;
+  if( strstr(s, "ERR")!=0 ) return 1;
+  if( strstr(s, "err")!=0 ) return 1;
+  return 0;
+}
+
+static int looks_like_lock_busy(const char *s){
+  if( !s ) return 0;
+  if( strlen(s)==0 ) return 1;
+  if( strstr(s, "locked")!=0 ) return 1;
+  if( strstr(s, "busy")!=0 ) return 1;
+  if( strstr(s, "BUSY")!=0 ) return 1;
+  if( strstr(s, "ERR")!=0 ) return 1;
+  return 0;
+}
+
+/*
+** Call a SQL function (dolt_commit, dolt_gc, dolt_branch, ...) that
+** acquires the chunk-store lock. That lock is non-blocking and ignores
+** sqlite3_busy_timeout — dolt_commit's own error text instructs callers
+** to "Please retry your transaction." This helper retries with backoff
+** so the tests exercise the same contract a well-behaved client would.
+*/
+static const char *callWithRetry(sqlite3 *db, const char *sql, int max_attempts){
+  int attempt;
+  static char last[4096];
+  for(attempt=0; attempt<max_attempts; attempt++){
+    const char *r = queryScalarText(db, sql);
+    if( !looks_like_lock_busy(r) ){
+      snprintf(last, sizeof(last), "%s", r);
+      return last;
+    }
+    snprintf(last, sizeof(last), "%s", r);
+    usleep(3000 + (attempt%16)*3000);
+  }
+  return last;
+}
+
+static void setup_db_with_rows(const char *path, int n){
+  sqlite3 *db = 0;
+  int i;
+  remove(path);
+  sqlite3_open(path, &db);
+  execSql(db, "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)");
+  for(i=1; i<=n; i++){
+    char sql[128];
+    snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'v%d')", i, i);
+    execSql(db, sql);
+  }
+  queryScalarText(db, "SELECT dolt_commit('-A','-m','setup')");
+  sqlite3_close(db);
+}
+
+/* Insert+commit then delete+commit to leave reachable rows but unreachable
+** chunk versions for GC to actually have work to do. */
+static void make_garbage(const char *path, int n){
+  sqlite3 *db = 0;
+  int i;
+  sqlite3_open(path, &db);
+  for(i=0; i<n; i++){
+    char sql[128];
+    snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'garbage_%d')", 100000+i, i);
+    execSql(db, sql);
+  }
+  queryScalarText(db, "SELECT dolt_commit('-A','-m','garbage')");
+  execSql(db, "DELETE FROM t WHERE id >= 100000");
+  queryScalarText(db, "SELECT dolt_commit('-A','-m','cleanup')");
+  sqlite3_close(db);
+}
+
+
+/*
+** Test 1: Two concurrent dolt_gc() calls.
+** Both children use a generous busy timeout; one will block on the
+** chunkStoreLockAndRefresh from the other, then proceed. Both must
+** complete with no error and the data must be intact afterward.
+*/
+static void test_gc_vs_gc_parallel(void){
+  const char *path = "/tmp/test_gc_vs_gc.db";
+  pid_t pid1, pid2;
+  int status1, status2;
+
+  printf("--- Test 1: Two concurrent dolt_gc() calls ---\n");
+  setup_db_with_rows(path, 100);
+  make_garbage(path, 30);
+
+  pid1 = fork();
+  if( pid1==0 ){
+    sqlite3 *db = 0;
+    const char *r;
+    sqlite3_open(path, &db);
+    r = callWithRetry(db, "SELECT dolt_gc()", 200);
+    sqlite3_close(db);
+    _exit(looks_like_lock_busy(r) ? 1 : 0);
+  }
+  pid2 = fork();
+  if( pid2==0 ){
+    sqlite3 *db = 0;
+    const char *r;
+    sqlite3_open(path, &db);
+    r = callWithRetry(db, "SELECT dolt_gc()", 200);
+    sqlite3_close(db);
+    _exit(looks_like_lock_busy(r) ? 1 : 0);
+  }
+
+  waitpid(pid1, &status1, 0);
+  waitpid(pid2, &status2, 0);
+  check("gc_vs_gc_first_ok",
+        WIFEXITED(status1) && WEXITSTATUS(status1)==0);
+  check("gc_vs_gc_second_ok",
+        WIFEXITED(status2) && WEXITSTATUS(status2)==0);
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("gc_vs_gc_count_intact",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "100")==0);
+    check("gc_vs_gc_first_row_intact",
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=1"), "v1")==0);
+    check("gc_vs_gc_last_row_intact",
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=100"), "v100")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+/*
+** Test 2: GC blocked by an in-flight write transaction.
+** Child holds BEGIN/INSERT (uncommitted). Parent's GC with a short
+** busy_timeout must fail. After the child commits, parent retries and
+** GC succeeds with all data intact.
+*/
+static void test_gc_blocked_then_retries(void){
+  const char *path = "/tmp/test_gc_blocked_retry.db";
+  pid_t pid;
+  int status;
+  int pipefd[2];
+
+  printf("--- Test 2: GC blocked by writer, retries after commit ---\n");
+  setup_db_with_rows(path, 50);
+  pipe(pipefd);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    close(pipefd[0]);
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 5000);
+    execSql(db, "BEGIN");
+    execSql(db, "INSERT INTO t VALUES(9999, 'pending')");
+    write(pipefd[1], "B", 1);
+    close(pipefd[1]);
+    sleep(1);
+    execSql(db, "COMMIT");
+    queryScalarText(db, "SELECT dolt_commit('-A','-m','from child')");
+    sqlite3_close(db);
+    _exit(0);
+  }
+
+  {
+    sqlite3 *db = 0;
+    char buf;
+    const char *r;
+    close(pipefd[1]);
+    read(pipefd[0], &buf, 1);
+    close(pipefd[0]);
+
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 100);
+    r = queryScalarText(db, "SELECT dolt_gc()");
+    check("gc_blocked_first_attempt", looks_like_lock_busy(r));
+    sqlite3_close(db);
+  }
+
+  waitpid(pid, &status, 0);
+  check("gc_blocked_child_committed",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    const char *r;
+    sqlite3_open(path, &db);
+    r = queryScalarText(db, "SELECT dolt_gc()");
+    check("gc_succeeds_after_writer", !looks_like_error(r));
+    check("gc_blocked_data_intact",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "51")==0);
+    check("gc_blocked_pending_row_present",
+      strcmp(queryScalarText(db, "SELECT v FROM t WHERE id=9999"), "pending")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+/*
+** Test 3: dolt_gc() racing dolt_commit() in a tight loop.
+** Child commits new rows. Parent fires repeated dolt_gc(). Lock
+** serialization should keep both safe. Final state must reflect every
+** committed row.
+*/
+static void test_gc_vs_dolt_commit(void){
+  const char *path = "/tmp/test_gc_vs_commit.db";
+  pid_t pid;
+  int status;
+
+  printf("--- Test 3: dolt_gc() racing dolt_commit() ---\n");
+  setup_db_with_rows(path, 100);
+  make_garbage(path, 30);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    int i, commit_failures = 0;
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    for(i=0; i<25; i++){
+      char sql[128];
+      const char *r;
+      snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'racer_%d')", 2000+i, i);
+      if( execSql(db, sql)!=SQLITE_OK ){ sqlite3_close(db); _exit(2); }
+      snprintf(sql, sizeof(sql), "SELECT dolt_commit('-A','-m','race_%d')", i);
+      r = callWithRetry(db, sql, 200);
+      if( strlen(r)!=40 ) commit_failures++;
+    }
+    sqlite3_close(db);
+    _exit(commit_failures==0 ? 0 : (10 + (commit_failures>240 ? 240 : commit_failures)));
+  }
+
+  {
+    sqlite3 *db = 0;
+    int i;
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    for(i=0; i<6; i++){
+      const char *r = callWithRetry(db, "SELECT dolt_gc()", 200);
+      char nm[64];
+      snprintf(nm, sizeof(nm), "gc_vs_commit_gc_iter_%d", i);
+      check(nm, !looks_like_lock_busy(r));
+      usleep(40000);
+    }
+    sqlite3_close(db);
+  }
+
+  waitpid(pid, &status, 0);
+  check("gc_vs_commit_writer_ok",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("gc_vs_commit_total_count",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "125")==0);
+    check("gc_vs_commit_all_racer_rows_present",
+      strcmp(queryScalarText(db,
+        "SELECT count(*) FROM t WHERE id >= 2000 AND id < 2025"), "25")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+/*
+** Test 4: A SELECT iterator open during dolt_gc() in another process.
+**
+** Parent prepares a SELECT and steps a few rows (holding a SHARED page
+** lock). Parent then signals child to start dolt_gc(). The child's
+** chunkStoreLockAndRefresh must wait for the parent's read. Parent
+** finishes stepping and must see all 100 rows with no corruption.
+*/
+static void test_reader_iterator_during_gc(void){
+  const char *path = "/tmp/test_reader_iter_gc.db";
+  pid_t pid;
+  int status;
+  int pipefd_go[2];
+
+  printf("--- Test 4: SELECT iterator open during dolt_gc() ---\n");
+  setup_db_with_rows(path, 100);
+  make_garbage(path, 40);
+  pipe(pipefd_go);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    char buf;
+    const char *r;
+    close(pipefd_go[1]);
+
+    read(pipefd_go[0], &buf, 1);
+    close(pipefd_go[0]);
+
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    r = queryScalarText(db, "SELECT dolt_gc()");
+    sqlite3_close(db);
+    _exit(looks_like_error(r) ? 1 : 0);
+  }
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_stmt *s = 0;
+    int rc, rowCount = 0;
+    int i;
+
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    close(pipefd_go[0]);
+
+    rc = sqlite3_prepare_v2(db, "SELECT id FROM t ORDER BY id", -1, &s, 0);
+    check("reader_iter_prepare", rc==SQLITE_OK);
+
+    for(i=0; i<5; i++){
+      rc = sqlite3_step(s);
+      if( rc==SQLITE_ROW ) rowCount++;
+    }
+
+    write(pipefd_go[1], "G", 1);
+    close(pipefd_go[1]);
+
+    /* Give child a window to attempt GC. The child's GC will block on
+    ** our held read lock until we finalize. */
+    usleep(150000);
+
+    while( (rc = sqlite3_step(s))==SQLITE_ROW ){
+      rowCount++;
+    }
+    check("reader_iter_step_completed", rc==SQLITE_DONE);
+    check("reader_iter_saw_all_rows", rowCount==100);
+    sqlite3_finalize(s);
+    sqlite3_close(db);
+  }
+
+  waitpid(pid, &status, 0);
+  check("reader_iter_child_gc_ok",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("reader_iter_post_gc_count",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "100")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+/*
+** Test 5: dolt_gc() racing dolt_branch() create.
+** Child creates ten new branches in a loop. Parent fires two GCs.
+** Each new branch's head commit must survive (checkout returns 50 rows).
+*/
+static void test_gc_vs_branch_create(void){
+  const char *path = "/tmp/test_gc_vs_branch.db";
+  pid_t pid;
+  int status;
+
+  printf("--- Test 5: dolt_gc() racing dolt_branch() ---\n");
+  setup_db_with_rows(path, 50);
+  make_garbage(path, 20);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    int i, failures = 0;
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    for(i=0; i<10; i++){
+      char sql[128];
+      const char *r;
+      snprintf(sql, sizeof(sql), "SELECT dolt_branch('br_%d')", i);
+      r = callWithRetry(db, sql, 200);
+      if( looks_like_lock_busy(r) ) failures++;
+    }
+    sqlite3_close(db);
+    _exit(failures==0 ? 0 : (20 + (failures>200 ? 200 : failures)));
+  }
+
+  {
+    sqlite3 *db = 0;
+    int i;
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    for(i=0; i<3; i++){
+      const char *r = callWithRetry(db, "SELECT dolt_gc()", 200);
+      char nm[64];
+      snprintf(nm, sizeof(nm), "gc_vs_branch_gc_iter_%d", i);
+      check(nm, !looks_like_lock_busy(r));
+      usleep(20000);
+    }
+    sqlite3_close(db);
+  }
+
+  waitpid(pid, &status, 0);
+  check("gc_vs_branch_child_ok",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    int i;
+    sqlite3_open(path, &db);
+    check("gc_vs_branch_branches_count",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_branches"), "11")==0);
+    for(i=0; i<10; i++){
+      char sql[128], nm[64];
+      snprintf(sql, sizeof(sql), "SELECT dolt_checkout('br_%d')", i);
+      queryScalarText(db, sql);
+      snprintf(nm, sizeof(nm), "gc_vs_branch_br_%d_data", i);
+      check(nm, strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "50")==0);
+    }
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+/*
+** Test 6: dolt_gc() racing dolt_merge().
+** Set up divergent main/feat branches with non-overlapping primary keys.
+** Child runs dolt_merge('feat'). Parent fires GC concurrently. The
+** merge result must contain every row from both branches.
+*/
+static void test_gc_vs_merge(void){
+  const char *path = "/tmp/test_gc_vs_merge.db";
+  pid_t pid;
+  int status;
+  int pipefd[2];
+
+  printf("--- Test 6: dolt_gc() racing dolt_merge() ---\n");
+  setup_db_with_rows(path, 50);
+
+  {
+    sqlite3 *db = 0;
+    const char *r;
+    int i;
+    sqlite3_open(path, &db);
+    r = queryScalarText(db, "SELECT dolt_branch('feat')");
+    check("gc_vs_merge_setup_branch_feat", !looks_like_error(r));
+    r = queryScalarText(db, "SELECT dolt_checkout('feat')");
+    check("gc_vs_merge_setup_checkout_feat", !looks_like_error(r));
+    for(i=51; i<=70; i++){
+      char sql[128];
+      snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'feat_%d')", i, i);
+      if( execSql(db, sql)!=SQLITE_OK ){
+        fprintf(stderr, "[diag] gc_vs_merge feat INSERT %d failed: %s\n",
+                i, sqlite3_errmsg(db));
+      }
+    }
+    r = queryScalarText(db, "SELECT dolt_commit('-A','-m','feat work')");
+    check("gc_vs_merge_setup_commit_feat", strlen(r)==40);
+    r = queryScalarText(db, "SELECT dolt_checkout('main')");
+    check("gc_vs_merge_setup_checkout_main", !looks_like_error(r));
+    for(i=71; i<=90; i++){
+      char sql[128];
+      snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'main_%d')", i, i);
+      if( execSql(db, sql)!=SQLITE_OK ){
+        fprintf(stderr, "[diag] gc_vs_merge main INSERT %d failed: %s\n",
+                i, sqlite3_errmsg(db));
+      }
+    }
+    r = queryScalarText(db, "SELECT dolt_commit('-A','-m','main work')");
+    check("gc_vs_merge_setup_commit_main", strlen(r)==40);
+    sqlite3_close(db);
+  }
+
+  pipe(pipefd);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    const char *r;
+    close(pipefd[0]);
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    write(pipefd[1], "M", 1);
+    close(pipefd[1]);
+    r = callWithRetry(db, "SELECT dolt_merge('feat')", 200);
+    fprintf(stderr, "[diag] gc_vs_merge child merge result: %s\n", r);
+    sqlite3_close(db);
+    _exit(looks_like_lock_busy(r) ? 1 : 0);
+  }
+
+  {
+    sqlite3 *db = 0;
+    char buf;
+    const char *r;
+    close(pipefd[1]);
+    read(pipefd[0], &buf, 1);
+    close(pipefd[0]);
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    r = callWithRetry(db, "SELECT dolt_gc()", 200);
+    check("gc_vs_merge_gc_ok", !looks_like_lock_busy(r));
+    sqlite3_close(db);
+  }
+
+  waitpid(pid, &status, 0);
+  check("gc_vs_merge_child_ok",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    int total_text_i, feat_text_i, main_text_i, setup_text_i;
+    int total_int_i, feat_int_i, main_int_i, setup_int_i;
+    char schemaBuf[256];
+    sqlite3_open(path, &db);
+    total_text_i = atoi(queryScalarText(db, "SELECT count(*) FROM t"));
+    setup_text_i = atoi(queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 50"));
+    feat_text_i = atoi(queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 51 AND 70"));
+    main_text_i = atoi(queryScalarText(db, "SELECT count(*) FROM t WHERE id BETWEEN 71 AND 90"));
+    total_int_i = countRowsDiag(db, "SELECT count(*) FROM t");
+    setup_int_i = countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 50");
+    feat_int_i = countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 51 AND 70");
+    main_int_i = countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 71 AND 90");
+    snprintf(schemaBuf, sizeof(schemaBuf), "%s",
+      queryScalarText(db, "SELECT sql FROM sqlite_schema WHERE name='t'"));
+    if( feat_text_i!=20 || main_text_i!=20 ){
+      fprintf(stderr,
+        "[diag] gc_vs_merge TEXT path: total=%d setup=%d feat=%d main=%d\n"
+        "[diag] gc_vs_merge INT  path: total=%d setup=%d feat=%d main=%d\n"
+        "[diag]   schema=%s\n",
+        total_text_i, setup_text_i, feat_text_i, main_text_i,
+        total_int_i, setup_int_i, feat_int_i, main_int_i,
+        schemaBuf);
+      {
+        sqlite3_stmt *s = 0;
+        if( sqlite3_prepare_v2(db,
+              "SELECT id, v FROM t WHERE id BETWEEN 49 AND 72 ORDER BY id LIMIT 30",
+              -1, &s, 0)==SQLITE_OK ){
+          fprintf(stderr, "[diag]   border rows:");
+          while( sqlite3_step(s)==SQLITE_ROW ){
+            fprintf(stderr, " (%d,%s)",
+              sqlite3_column_int(s, 0),
+              (const char*)sqlite3_column_text(s, 1));
+          }
+          fprintf(stderr, "\n");
+          sqlite3_finalize(s);
+        }
+      }
+      fprintf(stderr,
+        "[diag]   le10=%d lt1=%d be1to10=%d be2to10=%d be7to50=%d be8to50=%d be11to20=%d be21to50=%d ge8=%d\n",
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id <= 10"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id < 1"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 1 AND 10"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 2 AND 10"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 7 AND 50"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 8 AND 50"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 11 AND 20"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id BETWEEN 21 AND 50"),
+        countRowsDiag(db, "SELECT count(*) FROM t WHERE id >= 8"));
+      {
+        sqlite3_stmt *s = 0;
+        if( sqlite3_prepare_v2(db,
+              "SELECT id, v FROM t WHERE id <= 10 ORDER BY id",
+              -1, &s, 0)==SQLITE_OK ){
+          fprintf(stderr, "[diag]   first10 (id<=10):");
+          while( sqlite3_step(s)==SQLITE_ROW ){
+            fprintf(stderr, " (%d,%s)",
+              sqlite3_column_int(s, 0),
+              (const char*)sqlite3_column_text(s, 1));
+          }
+          fprintf(stderr, "\n");
+          sqlite3_finalize(s);
+        }
+      }
+      {
+        sqlite3_stmt *s = 0;
+        if( sqlite3_prepare_v2(db,
+              "SELECT id, v FROM t WHERE id BETWEEN 1 AND 10 ORDER BY id",
+              -1, &s, 0)==SQLITE_OK ){
+          fprintf(stderr, "[diag]   between1and10:");
+          while( sqlite3_step(s)==SQLITE_ROW ){
+            fprintf(stderr, " (%d,%s)",
+              sqlite3_column_int(s, 0),
+              (const char*)sqlite3_column_text(s, 1));
+          }
+          fprintf(stderr, "\n");
+          sqlite3_finalize(s);
+        }
+      }
+    }
+    check("gc_vs_merge_total_count", total_text_i==90);
+    check("gc_vs_merge_feat_rows_present", feat_text_i==20);
+    check("gc_vs_merge_main_rows_present", main_text_i==20);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+/*
+** Test 7: dolt_gc() racing dolt_checkout().
+** Multiple branches exist with distinct identifying rows. Child flips
+** between branches in a tight loop while parent runs GC. After both
+** processes return, every branch must still hold its identifying row.
+*/
+static void test_gc_vs_checkout(void){
+  const char *path = "/tmp/test_gc_vs_checkout.db";
+  pid_t pid;
+  int status;
+
+  printf("--- Test 7: dolt_gc() racing dolt_checkout() ---\n");
+  setup_db_with_rows(path, 50);
+
+  {
+    sqlite3 *db = 0;
+    int b;
+    sqlite3_open(path, &db);
+    for(b=0; b<5; b++){
+      char sql[128];
+      snprintf(sql, sizeof(sql), "SELECT dolt_branch('b%d')", b);
+      queryScalarText(db, sql);
+      snprintf(sql, sizeof(sql), "SELECT dolt_checkout('b%d')", b);
+      queryScalarText(db, sql);
+      snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'b%d_mark')", 300+b, b);
+      execSql(db, sql);
+      snprintf(sql, sizeof(sql), "SELECT dolt_commit('-A','-m','b%d work')", b);
+      queryScalarText(db, sql);
+      queryScalarText(db, "SELECT dolt_checkout('main')");
+    }
+    sqlite3_close(db);
+  }
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    int i, failures = 0;
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    for(i=0; i<30; i++){
+      char sql[128];
+      const char *r;
+      snprintf(sql, sizeof(sql), "SELECT dolt_checkout('b%d')", i%5);
+      r = callWithRetry(db, sql, 200);
+      if( looks_like_lock_busy(r) ) failures++;
+      r = callWithRetry(db, "SELECT dolt_checkout('main')", 200);
+      if( looks_like_lock_busy(r) ) failures++;
+    }
+    sqlite3_close(db);
+    _exit(failures==0 ? 0 : (30 + (failures>200 ? 200 : failures)));
+  }
+
+  {
+    sqlite3 *db = 0;
+    int i;
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    for(i=0; i<4; i++){
+      const char *r = callWithRetry(db, "SELECT dolt_gc()", 200);
+      char nm[64];
+      snprintf(nm, sizeof(nm), "gc_vs_checkout_gc_iter_%d", i);
+      check(nm, !looks_like_lock_busy(r));
+      usleep(20000);
+    }
+    sqlite3_close(db);
+  }
+
+  waitpid(pid, &status, 0);
+  check("gc_vs_checkout_child_ok",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    int b;
+    sqlite3_open(path, &db);
+    for(b=0; b<5; b++){
+      char sql[128], nm[64];
+      snprintf(sql, sizeof(sql), "SELECT dolt_checkout('b%d')", b);
+      queryScalarText(db, sql);
+      snprintf(sql, sizeof(sql), "SELECT v FROM t WHERE id=%d", 300+b);
+      snprintf(nm, sizeof(nm), "gc_vs_checkout_b%d_mark_intact", b);
+      {
+        char want[32];
+        snprintf(want, sizeof(want), "b%d_mark", b);
+        check(nm, strcmp(queryScalarText(db, sql), want)==0);
+      }
+    }
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+/*
+** Test 8: Continuous writes hammered by repeated GC.
+** Two child processes: one inserts+commits N rows in a tight loop, the
+** other runs dolt_gc() in a loop. Both must complete cleanly. Every
+** written row must be present at the end.
+*/
+static void test_continuous_writes_with_gc(void){
+  const char *path = "/tmp/test_continuous_gc.db";
+  pid_t writer_pid, gc_pid;
+  int status1, status2;
+  const int N_WRITES = 40;
+  const int N_GCS = 8;
+
+  printf("--- Test 8: Continuous writes hammered by GC loop ---\n");
+  setup_db_with_rows(path, 10);
+
+  writer_pid = fork();
+  if( writer_pid==0 ){
+    sqlite3 *db = 0;
+    int i, commit_failures = 0;
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 60000);
+    for(i=0; i<N_WRITES; i++){
+      char sql[128];
+      const char *r;
+      snprintf(sql, sizeof(sql), "INSERT INTO t VALUES(%d, 'w_%d')", 5000+i, i);
+      if( execSql(db, sql)!=SQLITE_OK ){ sqlite3_close(db); _exit(1); }
+      snprintf(sql, sizeof(sql), "SELECT dolt_commit('-A','-m','w_%d')", i);
+      r = callWithRetry(db, sql, 200);
+      if( strlen(r)!=40 ) commit_failures++;
+    }
+    sqlite3_close(db);
+    _exit(commit_failures==0 ? 0 : (40 + (commit_failures>200 ? 200 : commit_failures)));
+  }
+
+  gc_pid = fork();
+  if( gc_pid==0 ){
+    sqlite3 *db = 0;
+    int i, gc_failures = 0;
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 60000);
+    for(i=0; i<N_GCS; i++){
+      const char *r = callWithRetry(db, "SELECT dolt_gc()", 200);
+      if( looks_like_lock_busy(r) ) gc_failures++;
+      usleep(60000);
+    }
+    sqlite3_close(db);
+    _exit(gc_failures==0 ? 0 : (50 + (gc_failures>200 ? 200 : gc_failures)));
+  }
+
+  waitpid(writer_pid, &status1, 0);
+  waitpid(gc_pid, &status2, 0);
+  check("continuous_writer_exit_ok",
+        WIFEXITED(status1) && WEXITSTATUS(status1)==0);
+  check("continuous_gc_exit_ok",
+        WIFEXITED(status2) && WEXITSTATUS(status2)==0);
+
+  {
+    sqlite3 *db = 0;
+    char want[32];
+    sqlite3_open(path, &db);
+    snprintf(want, sizeof(want), "%d", 10 + N_WRITES);
+    check("continuous_final_count",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), want)==0);
+    snprintf(want, sizeof(want), "%d", N_WRITES);
+    check("continuous_all_writer_rows_present",
+      strcmp(queryScalarText(db,
+        "SELECT count(*) FROM t WHERE id >= 5000 AND id < 5000+40"), want)==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+/*
+** Test 9: SIGKILL during dolt_gc(); reopen must recover with no data loss.
+** Best-effort timing — repeats with varied delays to hit different
+** sweep stages over the run.
+*/
+static void test_kill_gc_mid_sweep(void){
+  const char *path = "/tmp/test_kill_gc.db";
+  pid_t pid;
+  int status;
+  int iter;
+  int killed_in_progress = 0;
+
+  printf("--- Test 9: SIGKILL during dolt_gc(); recover on reopen ---\n");
+  setup_db_with_rows(path, 150);
+  make_garbage(path, 60);
+
+  for(iter=0; iter<6; iter++){
+    pid = fork();
+    if( pid==0 ){
+      sqlite3 *db = 0;
+      sqlite3_open(path, &db);
+      sqlite3_busy_timeout(db, 30000);
+      queryScalarText(db, "SELECT dolt_gc()");
+      sqlite3_close(db);
+      _exit(0);
+    }
+    usleep(2000 + iter*8000);
+    if( kill(pid, SIGKILL)==0 ) killed_in_progress++;
+    waitpid(pid, &status, 0);
+
+    {
+      sqlite3 *db = 0;
+      int rc = sqlite3_open(path, &db);
+      char nm[64];
+      snprintf(nm, sizeof(nm), "kill_gc_reopen_iter_%d", iter);
+      check(nm, rc==SQLITE_OK);
+      snprintf(nm, sizeof(nm), "kill_gc_count_iter_%d", iter);
+      check(nm,
+        strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "150")==0);
+      sqlite3_close(db);
+    }
+  }
+
+  check("kill_gc_at_least_one_killed", killed_in_progress > 0);
+
+  {
+    sqlite3 *db = 0;
+    const char *r;
+    sqlite3_open(path, &db);
+    r = queryScalarText(db, "SELECT dolt_gc()");
+    check("kill_gc_post_recovery_gc_ok", !looks_like_error(r));
+    check("kill_gc_final_count",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "150")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+/*
+** Test 10: No orphan *-gc-tmp file survives across a killed GC.
+** Kill several mid-GCs with varied timings. A subsequent successful GC
+** must leave no -gc-tmp behind, and the data must be intact.
+*/
+static void test_gc_tmp_file_cleanup(void){
+  const char *path = "/tmp/test_gc_tmp_cleanup.db";
+  char tmpPath[256];
+  pid_t pid;
+  int status;
+  int iter;
+
+  printf("--- Test 10: Orphan -gc-tmp cleaned up after killed GC ---\n");
+  setup_db_with_rows(path, 80);
+  make_garbage(path, 40);
+
+  for(iter=0; iter<6; iter++){
+    pid = fork();
+    if( pid==0 ){
+      sqlite3 *db = 0;
+      sqlite3_open(path, &db);
+      sqlite3_busy_timeout(db, 30000);
+      queryScalarText(db, "SELECT dolt_gc()");
+      sqlite3_close(db);
+      _exit(0);
+    }
+    usleep(2000 + iter*6000);
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+  }
+
+  {
+    sqlite3 *db = 0;
+    const char *r;
+    sqlite3_open(path, &db);
+    r = queryScalarText(db, "SELECT dolt_gc()");
+    check("gc_tmp_followup_gc_ok", !looks_like_error(r));
+    sqlite3_close(db);
+  }
+
+  snprintf(tmpPath, sizeof(tmpPath), "%s-gc-tmp", path);
+  check("gc_tmp_file_removed_after_clean_gc", !file_exists(tmpPath));
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("gc_tmp_data_intact_after_cleanup",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "80")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+  remove(tmpPath);
+}
+
+
+/*
+** Test 11: Cross-process staged data must survive a GC in another process.
+**
+** Child A: inserts, dolt_add('-A'), then waits with the connection still
+**          open for parent to finish GC. After GC, dolt_commit must
+**          succeed and reference no swept-away chunks.
+** Parent: waits for A's signal, runs dolt_gc, signals A to commit.
+**
+** If GC in the parent doesn't see chunks reachable through A's session
+** state, A's commit will fail or the resulting commit will reference
+** missing chunks — either way, data loss. The check here is that A's
+** commit succeeds and the post-conditions are intact.
+*/
+static void test_concurrent_staging_then_gc(void){
+  const char *path = "/tmp/test_concurrent_stage.db";
+  pid_t pid;
+  int status;
+  int pipefd_stage[2], pipefd_gc[2];
+
+  printf("--- Test 11: Cross-process staged data vs dolt_gc() ---\n");
+  setup_db_with_rows(path, 50);
+  pipe(pipefd_stage);
+  pipe(pipefd_gc);
+
+  pid = fork();
+  if( pid==0 ){
+    sqlite3 *db = 0;
+    char buf;
+    const char *r;
+    close(pipefd_stage[0]);
+    close(pipefd_gc[1]);
+
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    execSql(db, "INSERT INTO t VALUES(500, 'staged_a')");
+    execSql(db, "INSERT INTO t VALUES(501, 'staged_b')");
+    r = callWithRetry(db, "SELECT dolt_add('-A')", 200);
+    if( looks_like_lock_busy(r) ){ sqlite3_close(db); _exit(2); }
+
+    write(pipefd_stage[1], "S", 1);
+    close(pipefd_stage[1]);
+
+    read(pipefd_gc[0], &buf, 1);
+    close(pipefd_gc[0]);
+
+    r = callWithRetry(db, "SELECT dolt_commit('-m','staged commit')", 200);
+    sqlite3_close(db);
+    _exit(strlen(r)==40 ? 0 : 3);
+  }
+
+  {
+    sqlite3 *db = 0;
+    char buf;
+    const char *r;
+    close(pipefd_stage[1]);
+    close(pipefd_gc[0]);
+
+    read(pipefd_stage[0], &buf, 1);
+    close(pipefd_stage[0]);
+
+    sqlite3_open(path, &db);
+    sqlite3_busy_timeout(db, 30000);
+    r = callWithRetry(db, "SELECT dolt_gc()", 200);
+    check("staging_gc_parent_gc_ok", !looks_like_lock_busy(r));
+    sqlite3_close(db);
+
+    write(pipefd_gc[1], "G", 1);
+    close(pipefd_gc[1]);
+  }
+
+  waitpid(pid, &status, 0);
+  check("staging_gc_child_commit_ok",
+        WIFEXITED(status) && WEXITSTATUS(status)==0);
+
+  {
+    sqlite3 *db = 0;
+    sqlite3_open(path, &db);
+    check("staging_gc_final_count",
+      strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "52")==0);
+    check("staging_gc_staged_a_present",
+      strcmp(queryScalarText(db,
+        "SELECT v FROM t WHERE id=500"), "staged_a")==0);
+    check("staging_gc_staged_b_present",
+      strcmp(queryScalarText(db,
+        "SELECT v FROM t WHERE id=501"), "staged_b")==0);
+    sqlite3_close(db);
+  }
+
+  remove(path);
+}
+
+
+int main(){
+  printf("=== Multi-Process GC Concurrency Tests ===\n\n");
+
+  test_gc_vs_gc_parallel();
+  test_gc_blocked_then_retries();
+  test_gc_vs_dolt_commit();
+  test_reader_iterator_during_gc();
+  test_gc_vs_branch_create();
+  test_gc_vs_merge();
+  test_gc_vs_checkout();
+  test_continuous_writes_with_gc();
+  test_kill_gc_mid_sweep();
+  test_gc_tmp_file_cleanup();
+  test_concurrent_staging_then_gc();
+
+  printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
+    nPass, nFail, nPass+nFail);
+  return nFail > 0 ? 1 : 0;
+}
