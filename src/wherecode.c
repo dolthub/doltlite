@@ -1689,26 +1689,78 @@ Bitmask sqlite3WhereCodeOneLoopStart(
     **          we reference multiple rows using a "rowid IN (...)"
     **          construct.
     */
+    Expr *pExpr;
+    ExprList *pList;
+    int useRowSet = 0;
     assert( pLoop->u.btree.nEq==1 );
     pTerm = pLoop->aLTerm[0];
     assert( pTerm!=0 );
-    assert( pTerm->pExpr!=0 );
+    pExpr = pTerm->pExpr;
+    assert( pExpr!=0 );
     testcase( pTerm->wtFlags & TERM_VIRTUAL );
-    iReleaseReg = ++pParse->nMem;
-    iRowidReg = codeEqualityTerm(pParse, pTerm, pLevel, 0, bRev, iReleaseReg);
-    if( iRowidReg!=iReleaseReg ) sqlite3ReleaseTempReg(pParse, iReleaseReg);
-    addrNxt = pLevel->addrNxt;
-    if( pLevel->regFilter ){
-      sqlite3VdbeAddOp2(v, OP_MustBeInt, iRowidReg, addrNxt);
-      VdbeCoverage(v);
-      sqlite3VdbeAddOp4Int(v, OP_Filter, pLevel->regFilter, addrNxt,
-                           iRowidReg, 1);
-      VdbeCoverage(v);
-      filterPullDown(pParse, pWInfo, iLevel, addrNxt, notReady);
+
+    if( !bRev
+     && (pTerm->eOperator & WO_IN)!=0
+     && pExpr->op==TK_IN
+     && ExprUseXList(pExpr)
+    ){
+      pList = pExpr->x.pList;
+      useRowSet = 1;
+      for(j=0; j<pList->nExpr; j++){
+        int iVal;
+        if( !sqlite3ExprIsInteger(pList->a[j].pExpr, &iVal, pParse) ){
+          useRowSet = 0;
+          break;
+        }
+      }
+    }else{
+      pList = 0;
     }
-    sqlite3VdbeAddOp3(v, OP_SeekRowid, iCur, addrNxt, iRowidReg);
-    VdbeCoverage(v);
-    pLevel->op = OP_Noop;
+
+    if( useRowSet ){
+      int regRowSet = ++pParse->nMem;
+      int iVal;
+      iRowidReg = ++pParse->nMem;
+      sqlite3VdbeAddOp2(v, OP_Null, 0, regRowSet);
+      for(j=0; j<pList->nExpr; j++){
+        sqlite3ExprIsInteger(pList->a[j].pExpr, &iVal, pParse);
+        sqlite3VdbeAddOp2(v, OP_Integer, iVal, iRowidReg);
+        sqlite3VdbeAddOp2(v, OP_RowSetAdd, regRowSet, iRowidReg);
+      }
+      addrNxt = sqlite3VdbeCurrentAddr(v);
+      sqlite3VdbeAddOp3(v, OP_RowSetRead, regRowSet, pLevel->addrBrk,
+                        iRowidReg);
+      VdbeCoverage(v);
+      if( pLevel->regFilter ){
+        sqlite3VdbeAddOp4Int(v, OP_Filter, pLevel->regFilter, addrNxt,
+                             iRowidReg, 1);
+        VdbeCoverage(v);
+        filterPullDown(pParse, pWInfo, iLevel, addrNxt, notReady);
+      }
+      sqlite3VdbeAddOp3(v, OP_SeekRowid, iCur, addrNxt, iRowidReg);
+      VdbeCoverage(v);
+      pLevel->op = OP_Goto;
+      pLevel->p1 = 0;
+      pLevel->p2 = addrNxt;
+      pLevel->p3 = 0;
+      disableTerm(pLevel, pTerm);
+    }else{
+      iReleaseReg = ++pParse->nMem;
+      iRowidReg = codeEqualityTerm(pParse, pTerm, pLevel, 0, bRev, iReleaseReg);
+      if( iRowidReg!=iReleaseReg ) sqlite3ReleaseTempReg(pParse, iReleaseReg);
+      addrNxt = pLevel->addrNxt;
+      if( pLevel->regFilter ){
+        sqlite3VdbeAddOp2(v, OP_MustBeInt, iRowidReg, addrNxt);
+        VdbeCoverage(v);
+        sqlite3VdbeAddOp4Int(v, OP_Filter, pLevel->regFilter, addrNxt,
+                             iRowidReg, 1);
+        VdbeCoverage(v);
+        filterPullDown(pParse, pWInfo, iLevel, addrNxt, notReady);
+      }
+      sqlite3VdbeAddOp3(v, OP_SeekRowid, iCur, addrNxt, iRowidReg);
+      VdbeCoverage(v);
+      pLevel->op = OP_Noop;
+    }
   }else if( (pLoop->wsFlags & WHERE_IPK)!=0
          && (pLoop->wsFlags & WHERE_COLUMN_RANGE)!=0
   ){

@@ -177,6 +177,45 @@ static void run_create_collation_unsupported(void){
   sqlite3_close(db);
 }
 
+static void run_rowid_in_integer_literals_uses_rowset(void){
+  sqlite3 *db = 0;
+  sqlite3_stmt *stmt = 0;
+  int rc;
+  int sawRowSetRead = 0;
+  int sawOpenEphemeral = 0;
+
+  check("rowid_in_rowset_open", open_db(":memory:", &db)==SQLITE_OK);
+  if( db==0 ) return;
+
+  rc = execSql(db,
+    "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);"
+    "INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');"
+  );
+  check("rowid_in_rowset_setup", rc==SQLITE_OK);
+
+  rc = sqlite3_prepare_v2(db,
+    "EXPLAIN SELECT id, v FROM t WHERE id IN (3,1,2,2)",
+    -1, &stmt, 0
+  );
+  check("rowid_in_rowset_explain_prepare", rc==SQLITE_OK);
+  while( rc==SQLITE_OK && sqlite3_step(stmt)==SQLITE_ROW ){
+    const char *zOpcode = (const char*)sqlite3_column_text(stmt, 1);
+    if( zOpcode && strcmp(zOpcode, "RowSetRead")==0 ) sawRowSetRead = 1;
+    if( zOpcode && strcmp(zOpcode, "OpenEphemeral")==0 ) sawOpenEphemeral = 1;
+  }
+  sqlite3_finalize(stmt);
+
+  check("rowid_in_rowset_opcode", sawRowSetRead==1);
+  check("rowid_in_no_ephemeral_opcode", sawOpenEphemeral==0);
+  check("rowid_in_sorted_unique_results",
+        strcmp(queryScalarText(db,
+          "SELECT group_concat(id || ':' || v) "
+          "FROM (SELECT id, v FROM t WHERE id IN (3,1,2,2));"),
+          "1:a,2:b,3:c")==0);
+
+  sqlite3_close(db);
+}
+
 static void make_dbpath(char *zBuf, size_t nBuf, const char *zBase);
 static void removeDbFiles(const char *path);
 
@@ -7231,6 +7270,7 @@ static void run_prolly_diff_leaf_surfaces_record_corruption(void){
 static const RegressionCase aCases[] = {
   { "backup_safety", "Backup Safety Test", run_backup_safety },
   { "create_collation_unsupported", "Create Collation Unsupported Test", run_create_collation_unsupported },
+  { "rowid_in_integer_literals_uses_rowset", "Rowid IN Integer Literals RowSet Test", run_rowid_in_integer_literals_uses_rowset },
   { "concurrent_refs", "Concurrent Refs Test", run_concurrent_refs },
   { "checkout_persist_failure", "Checkout Persist Failure Test", run_checkout_persist_failure },
   { "savepoint_catalog_restore", "Savepoint Catalog Restore Test", run_savepoint_catalog_restore },
