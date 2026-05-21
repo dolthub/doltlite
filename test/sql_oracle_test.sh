@@ -23,12 +23,17 @@ normalize_oracle_output() {
 
 oracle() {
   local name="$1" sql="$2"
+  oracle_with_flags "$name" "$sql" ""
+}
+
+oracle_with_flags() {
+  local name="$1" sql="$2" flags="$3"
   local dl="$TMPDIR/dl_${name}.db" sq="$TMPDIR/sq_${name}.db"
   local out_dl out_sq norm_dl norm_sq rc_dl rc_sq
   rm -f "$dl" "$sq"
-  out_dl=$(echo "$sql" | "$DOLTLITE" "$dl" 2>&1)
+  out_dl=$(echo "$sql" | "$DOLTLITE" $flags "$dl" 2>&1)
   rc_dl=$?
-  out_sq=$(echo "$sql" | "$SQLITE3" "$sq" 2>&1)
+  out_sq=$(echo "$sql" | "$SQLITE3" $flags "$sq" 2>&1)
   rc_sq=$?
   norm_dl=$(printf '%s\n' "$out_dl" | normalize_oracle_output)
   norm_sq=$(printf '%s\n' "$out_sq" | normalize_oracle_output)
@@ -42,6 +47,10 @@ oracle() {
     echo "    sqlite3 rc:  $rc_sq"
     echo "    sqlite3:  $(echo "$out_sq" | head -3)"
   fi
+}
+
+oracle_unsafe() {
+  oracle_with_flags "$1" "$2" "--unsafe-testing"
 }
 
 # ════════════════════════════════════════════════════════════════════
@@ -6837,7 +6846,7 @@ DROP TABLE sqlite_master;
 # different (working) path. Verify behavior matches stock SQLite.
 # This is a sanity check, not a tripwire — but it confirms the
 # only currently-reachable iTable=1 mutation path is correct.
-oracle "cat121_writable_schema_delete_master" "
+oracle_unsafe "cat121_writable_schema_delete_master" "
 CREATE TABLE keep(x INT);
 INSERT INTO keep VALUES(1);
 PRAGMA writable_schema = 1;
@@ -6864,7 +6873,7 @@ SELECT name FROM aux.sqlite_master WHERE type='table';
 # 121e. PRAGMA integrity_check after writable_schema operations.
 # If iTable==1 ever leaks pending state, integrity_check is one of
 # the first signals.
-oracle "cat121_integrity_after_writable_schema" "
+oracle_unsafe "cat121_integrity_after_writable_schema" "
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES (1,'a'),(2,'b');
 PRAGMA writable_schema = 1;
