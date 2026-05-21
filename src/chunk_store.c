@@ -803,6 +803,33 @@ int chunkStoreSerializeRefs(ChunkStore *cs){
   int sz = 0;
   ProllyHash refsHash;
 
+  if( cs->refs.nBranches==1
+   && cs->refs.nTags==0
+   && cs->refs.nRemotes==0
+   && cs->refs.nTracking==0
+   && (!cs->refs.zDefaultBranch || strcmp(cs->refs.zDefaultBranch, "main")==0)
+   && strcmp(cs->refs.aBranches[0].zName, "main")==0 ){
+    u8 aBuf[73];
+    u8 *p = aBuf;
+    *p++ = 6;
+    CS_WRITE_U32(p,4); p+=4;
+    memcpy(p, "main", 4); p+=4;
+    CS_WRITE_U32(p,1); p+=4;
+    CS_WRITE_U32(p,4); p+=4;
+    memcpy(p, "main", 4); p+=4;
+    memcpy(p, cs->refs.aBranches[0].commitHash.data, PROLLY_HASH_SIZE);
+    p += PROLLY_HASH_SIZE;
+    memcpy(p, cs->refs.aBranches[0].workingSetHash.data, PROLLY_HASH_SIZE);
+    p += PROLLY_HASH_SIZE;
+    CS_WRITE_U32(p,0); p+=4;
+    CS_WRITE_U32(p,0); p+=4;
+    CS_WRITE_U32(p,0); p+=4;
+    assert( p==aBuf+sizeof(aBuf) );
+    rc = chunkStorePut(cs, aBuf, (int)sizeof(aBuf), &refsHash);
+    if( rc==SQLITE_OK ) memcpy(&cs->refs.refsHash, &refsHash, sizeof(ProllyHash));
+    return rc;
+  }
+
   rc = csSerializeRefsBlob(cs, &buf, &sz);
   if( rc!=SQLITE_OK ) return rc;
   rc = chunkStorePut(cs, buf, sz, &refsHash);

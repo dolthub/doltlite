@@ -3,6 +3,7 @@
 
 #include "prolly_mutate.h"
 #include "prolly_check.h"
+#include "prolly_xxhash.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -357,6 +358,338 @@ streaming_cleanup:
   return rc;
 }
 
+static void nodeAppendState(const ProllyNode *pNode,
+                            const u8 *pKey, int nKey,
+                            int nVal,
+                            int *pEndsAtBoundary,
+                            int *pWouldSplit){
+  int i;
+  int nBytes = 0;
+  int thisSize = nKey + nVal;
+  int endsAtBoundary = 0;
+  int wouldSplit = 0;
+
+  for(i=0; i<(int)pNode->nItems; i++){
+    const u8 *pK, *pV;
+    int nK, nV;
+    prollyNodeKey(pNode, i, &pK, &nK);
+    prollyNodeValue(pNode, i, &pV, &nV);
+    (void)pK; (void)pV;
+    nBytes += nK + nV;
+  }
+  if( pNode->nItems>0 && nBytes >= PROLLY_CHUNK_MAX ){
+    endsAtBoundary = 1;
+  }else if( pNode->nItems>0 && nBytes >= PROLLY_CHUNK_MIN ){
+    const u8 *pLastKey, *pLastVal;
+    int nLastKey, nLastVal;
+    u32 h;
+    prollyNodeKey(pNode, (int)pNode->nItems - 1, &pLastKey, &nLastKey);
+    prollyNodeValue(pNode, (int)pNode->nItems - 1, &pLastVal, &nLastVal);
+    (void)pLastVal;
+    h = prollyXXH32(pLastKey, nLastKey, (u32)pNode->level);
+    endsAtBoundary = prollyWeibullCheck((u32)nBytes,
+                                        (u32)(nLastKey + nLastVal), h);
+  }
+
+  nBytes += thisSize;
+  if( nBytes >= PROLLY_CHUNK_MAX ){
+    wouldSplit = 1;
+  }else if( nBytes >= PROLLY_CHUNK_MIN ){
+    u32 h = prollyXXH32(pKey, nKey, 0);
+    wouldSplit = prollyWeibullCheck((u32)nBytes, (u32)thisSize, h);
+  }
+
+  *pEndsAtBoundary = endsAtBoundary;
+  *pWouldSplit = wouldSplit;
+}
+
+static int appendWouldSplitNode(const ProllyNode *pNode,
+                                const u8 *pKey, int nKey,
+                                int nVal){
+  int i;
+  int nBytes = 0;
+  int thisSize = nKey + nVal;
+  for(i=0; i<(int)pNode->nItems; i++){
+    const u8 *pK, *pV;
+    int nK, nV;
+    prollyNodeKey(pNode, i, &pK, &nK);
+    prollyNodeValue(pNode, i, &pV, &nV);
+    (void)pK; (void)pV;
+    nBytes += nK + nV;
+  }
+  nBytes += thisSize;
+  if( nBytes >= PROLLY_CHUNK_MAX ) return 1;
+  if( nBytes >= PROLLY_CHUNK_MIN ){
+    u32 h = prollyXXH32(pKey, nKey, (u32)pNode->level);
+    return prollyWeibullCheck((u32)nBytes, (u32)thisSize, h);
+  }
+  return 0;
+}
+
+static int nodeEndsAtChunkBoundary(const ProllyNode *pNode){
+  const u8 *pKey, *pVal;
+  int nKey, nVal;
+  int nBytes = 0;
+  int i;
+
+  if( pNode->nItems==0 ) return 0;
+  for(i=0; i<(int)pNode->nItems; i++){
+    prollyNodeKey(pNode, i, &pKey, &nKey);
+    prollyNodeValue(pNode, i, &pVal, &nVal);
+    (void)pVal;
+    nBytes += nKey + nVal;
+  }
+  if( nBytes >= PROLLY_CHUNK_MAX ) return 1;
+  if( nBytes >= PROLLY_CHUNK_MIN ){
+    u32 h;
+    prollyNodeKey(pNode, (int)pNode->nItems - 1, &pKey, &nKey);
+    prollyNodeValue(pNode, (int)pNode->nItems - 1, &pVal, &nVal);
+    h = prollyXXH32(pKey, nKey, (u32)pNode->level);
+    return prollyWeibullCheck((u32)nBytes, (u32)(nKey + nVal), h);
+  }
+  return 0;
+}
+
+static int appendNodeEntryToBuilder(
+  ProllyNodeBuilder *pBuilder,
+  const ProllyNode *pNode,
+  int i,
+  u64 subtreeCount
+){
+  const u8 *pKey, *pVal;
+  int nKey, nVal;
+  prollyNodeKey(pNode, i, &pKey, &nKey);
+  prollyNodeValue(pNode, i, &pVal, &nVal);
+  if( pNode->level==0 ){
+    return prollyNodeBuilderAdd(pBuilder, pKey, nKey, pVal, nVal);
+  }
+  return prollyNodeBuilderAddWithCount(pBuilder, pKey, nKey, pVal, nVal,
+                                       subtreeCount);
+}
+
+static int writeBuilderNode(ChunkStore *pStore, ProllyNodeBuilder *pBuilder,
+                            ProllyHash *pHash){
+  u8 *pData = 0;
+  int nData = 0;
+  int rc = prollyNodeBuilderFinish(pBuilder, &pData, &nData);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = chunkStorePut(pStore, pData, nData, pHash);
+  sqlite3_free(pData);
+  return rc;
+}
+
+static int tryAppendSingleIntNoSplit(ProllyMutator *pMut){
+  ProllyMutMapEntry *pEdit;
+  ProllyCursor cur;
+  ProllyHash childHash;
+  const u8 *pNewKey;
+  int nNewKey;
+  i64 iNewKey;
+  int rc;
+  int res = 0;
+  int level;
+
+  if( !(pMut->flags & PROLLY_NODE_INTKEY) ) return SQLITE_NOTFOUND;
+  if( prollyHashIsEmpty(&pMut->oldRoot) ) return SQLITE_NOTFOUND;
+  if( prollyMutMapCount(pMut->pEdits)!=1 ) return SQLITE_NOTFOUND;
+
+  pEdit = &pMut->pEdits->aEntries[0];
+  if( pEdit->op!=PROLLY_EDIT_INSERT || pEdit->nKey!=8 ){
+    return SQLITE_NOTFOUND;
+  }
+
+  pNewKey = pEdit->pKey;
+  nNewKey = pEdit->nKey;
+  iNewKey = prollyMutMapEntryIntKey(pEdit);
+
+  prollyCursorInit(&cur, pMut->pStore, pMut->pCache, &pMut->oldRoot,
+                   pMut->flags);
+  rc = prollyCursorLast(&cur, &res);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+  if( res!=0 || cur.eState!=PROLLY_CURSOR_VALID ){
+    prollyCursorClose(&cur);
+    return SQLITE_NOTFOUND;
+  }
+  if( iNewKey <= prollyCursorIntKey(&cur) ){
+    prollyCursorClose(&cur);
+    return SQLITE_NOTFOUND;
+  }
+
+  level = cur.iLevel;
+  {
+    int leafEndsAtBoundary = 0;
+    int leafWouldSplit = 0;
+    nodeAppendState(&cur.aLevel[level].pEntry->node,
+                    pNewKey, nNewKey, pEdit->nVal,
+                    &leafEndsAtBoundary, &leafWouldSplit);
+    if( leafEndsAtBoundary ){
+      int j;
+      for(j=1; j<level; j++){
+        if( nodeEndsAtChunkBoundary(&cur.aLevel[j].pEntry->node) ){
+          prollyCursorClose(&cur);
+          return SQLITE_NOTFOUND;
+        }
+      }
+      {
+        ProllyNodeBuilder b;
+        prollyNodeBuilderInit(&b, 0, pMut->flags);
+        rc = prollyNodeBuilderAdd(&b, pNewKey, nNewKey,
+                                  pEdit->pVal, pEdit->nVal);
+        if( rc==SQLITE_OK ){
+          rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+        }
+        prollyNodeBuilderFree(&b);
+        if( rc!=SQLITE_OK ){
+          prollyCursorClose(&cur);
+          return rc;
+        }
+      }
+      if( level==0 ){
+        ProllyNode *pLeaf = &cur.aLevel[level].pEntry->node;
+        ProllyNodeBuilder b;
+        const u8 *pOldKey;
+        int nOldKey;
+        prollyNodeKey(pLeaf, (int)pLeaf->nItems - 1, &pOldKey, &nOldKey);
+        prollyNodeBuilderInit(&b, 1, pMut->flags);
+        rc = prollyNodeBuilderAddWithCount(&b, pOldKey, nOldKey,
+            pMut->oldRoot.data, PROLLY_HASH_SIZE, (u64)pLeaf->nItems);
+        if( rc==SQLITE_OK ){
+          rc = prollyNodeBuilderAddWithCount(&b, pNewKey, nNewKey,
+              childHash.data, PROLLY_HASH_SIZE, 1);
+        }
+        if( rc!=SQLITE_OK ){
+          prollyNodeBuilderFree(&b);
+          prollyCursorClose(&cur);
+          return rc;
+        }
+        rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+        prollyNodeBuilderFree(&b);
+        if( rc!=SQLITE_OK ){
+          prollyCursorClose(&cur);
+          return rc;
+        }
+        pMut->newRoot = childHash;
+        prollyCursorClose(&cur);
+        return SQLITE_OK;
+      }else{
+        ProllyNode *pParent = &cur.aLevel[level - 1].pEntry->node;
+        ProllyNodeBuilder b;
+        ProllyHash parentHash;
+        int i;
+        if( appendWouldSplitNode(pParent, pNewKey, nNewKey, PROLLY_HASH_SIZE) ){
+          prollyCursorClose(&cur);
+          return SQLITE_NOTFOUND;
+        }
+        prollyNodeBuilderInit(&b, (u8)pParent->level, pMut->flags);
+        for(i=0; i<(int)pParent->nItems; i++){
+          u64 cnt = 0;
+          rc = parentChildSubtreeCount(pMut->pStore, pMut->pCache,
+                                       pParent, i, &cnt);
+          if( rc==SQLITE_OK ){
+            rc = appendNodeEntryToBuilder(&b, pParent, i, cnt);
+          }
+          if( rc!=SQLITE_OK ){
+            prollyNodeBuilderFree(&b);
+            prollyCursorClose(&cur);
+            return rc;
+          }
+        }
+        rc = prollyNodeBuilderAddWithCount(&b, pNewKey, nNewKey,
+                                           childHash.data, PROLLY_HASH_SIZE, 1);
+        if( rc==SQLITE_OK ){
+          rc = writeBuilderNode(pMut->pStore, &b, &parentHash);
+        }
+        prollyNodeBuilderFree(&b);
+        if( rc!=SQLITE_OK ){
+          prollyCursorClose(&cur);
+          return rc;
+        }
+        childHash = parentHash;
+        level--;
+      }
+    }else{
+      if( leafWouldSplit ){
+        prollyCursorClose(&cur);
+        return SQLITE_NOTFOUND;
+      }
+      {
+        ProllyNode *pLeaf = &cur.aLevel[level].pEntry->node;
+        ProllyNodeBuilder b;
+        int i;
+        prollyNodeBuilderInit(&b, 0, pMut->flags);
+        for(i=0; i<(int)pLeaf->nItems; i++){
+          rc = appendNodeEntryToBuilder(&b, pLeaf, i, 0);
+          if( rc!=SQLITE_OK ){
+            prollyNodeBuilderFree(&b);
+            prollyCursorClose(&cur);
+            return rc;
+          }
+        }
+        rc = prollyNodeBuilderAdd(&b, pNewKey, nNewKey,
+                                  pEdit->pVal, pEdit->nVal);
+        if( rc==SQLITE_OK ){
+          rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+        }
+        prollyNodeBuilderFree(&b);
+        if( rc!=SQLITE_OK ){
+          prollyCursorClose(&cur);
+          return rc;
+        }
+      }
+    }
+  }
+
+  while( level>0 ){
+    ProllyNode *pNode;
+    ProllyNodeBuilder b;
+    ProllyHash parentHash;
+    int idx;
+    int i;
+
+    level--;
+    pNode = &cur.aLevel[level].pEntry->node;
+    idx = cur.aLevel[level].idx;
+    prollyNodeBuilderInit(&b, (u8)pNode->level, pMut->flags);
+    for(i=0; i<(int)pNode->nItems; i++){
+      u64 cnt = 0;
+      if( i==idx ){
+        rc = parentChildSubtreeCount(pMut->pStore, pMut->pCache,
+                                     pNode, i, &cnt);
+        if( rc==SQLITE_OK ){
+          rc = prollyNodeBuilderAddWithCount(
+              &b, pNewKey, nNewKey, childHash.data, PROLLY_HASH_SIZE,
+              cnt + 1);
+        }
+      }else{
+        rc = parentChildSubtreeCount(pMut->pStore, pMut->pCache,
+                                     pNode, i, &cnt);
+        if( rc==SQLITE_OK ){
+          rc = appendNodeEntryToBuilder(&b, pNode, i, cnt);
+        }
+      }
+      if( rc!=SQLITE_OK ){
+        prollyNodeBuilderFree(&b);
+        prollyCursorClose(&cur);
+        return rc;
+      }
+    }
+    rc = writeBuilderNode(pMut->pStore, &b, &parentHash);
+    prollyNodeBuilderFree(&b);
+    if( rc!=SQLITE_OK ){
+      prollyCursorClose(&cur);
+      return rc;
+    }
+    childHash = parentHash;
+  }
+
+  pMut->newRoot = childHash;
+  prollyCursorClose(&cur);
+  return SQLITE_OK;
+}
+
 int prollyMutateFlush(ProllyMutator *pMut){
   int rc;
 
@@ -368,7 +701,10 @@ int prollyMutateFlush(ProllyMutator *pMut){
   if( prollyHashIsEmpty(&pMut->oldRoot) ){
     rc = buildFromEdits(pMut);
   }else{
-    rc = streamingMerge(pMut);
+    rc = tryAppendSingleIntNoSplit(pMut);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = streamingMerge(pMut);
+    }
   }
 
 #ifdef DOLTLITE_PROLLY_CHECK
