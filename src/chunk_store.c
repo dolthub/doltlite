@@ -1492,6 +1492,7 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
 static int csReloadFromDisk(ChunkStore *cs){
   ChunkStore tmp;
   ChunkStoreReloadState saved;
+  char *zOldFilename;
   int rc = chunkStoreOpen(&tmp, cs->file.pVfs, cs->file.zFilename,
                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
@@ -1499,10 +1500,16 @@ static int csReloadFromDisk(ChunkStore *cs){
   csCaptureReloadState(cs, &saved);
   csAdoptOpenedStoreState(cs, &tmp);
 
-  /* Close the saved (previous) pFile before chunkStoreClose(&tmp) frees
-  ** the previous zFilename buffer that the saved pFile still references
-  ** internally for its zPath. */
+  /* The freshly-opened pFile's internal zPath aliases tmp.zFilename, so
+  ** take ownership of that buffer (and detach it from tmp). Keep the
+  ** previous zFilename alive until saved.pFile is closed, since the
+  ** previous pFile's zPath still aliases it. */
+  zOldFilename = cs->file.zFilename;
+  cs->file.zFilename = tmp.file.zFilename;
+  tmp.file.zFilename = 0;
+
   csFreeReloadState(&saved);
+  sqlite3_free(zOldFilename);
   chunkStoreClose(&tmp);
 
   cs->hasMovedChecked = 0;

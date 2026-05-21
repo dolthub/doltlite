@@ -7912,6 +7912,13 @@ BtShared *doltliteGetBtShared(sqlite3 *db){
   return 0;
 }
 
+void doltliteInvalidateWorkingState(sqlite3 *db){
+  BtShared *pBt = doltliteGetBtShared(db);
+  if( !pBt ) return;
+  pBt->iWorkingStateVersion++;
+  if( pBt->iWorkingStateVersion==0 ) pBt->iWorkingStateVersion = 1;
+}
+
 ProllyCache *doltliteGetCache(sqlite3 *db){
   BtShared *pBt = doltliteGetBtShared(db);
   if( pBt ) return &pBt->cache;

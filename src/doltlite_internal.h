@@ -74,6 +74,7 @@ static SQLITE_INLINE int doltliteFindTableRootByName(
 
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 BtShared *doltliteGetBtShared(sqlite3 *db);
+void doltliteInvalidateWorkingState(sqlite3 *db);
 ProllyCache *doltliteGetCache(sqlite3 *db);
 int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
                         struct TableEntry **ppTables, int *pnTables,
