@@ -959,6 +959,35 @@ static void test_single_row_mutation_fast_path(void){
   check("single_mutation_integrity",
     strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
+  execSql(db, "CREATE TABLE tblob(id BLOB PRIMARY KEY, val TEXT, pad TEXT)");
+  execSql(db, "BEGIN");
+  for( i=1; i<=5000; i++ ){
+    char sql[256];
+    snprintf(sql, sizeof(sql),
+      "INSERT INTO tblob VALUES(x'%032x', 'row_%d', 'pad')", i, i);
+    execSql(db, sql);
+  }
+  execSql(db, "COMMIT");
+
+  execSql(db,
+    "UPDATE tblob SET val='short' WHERE id=x'000000000000000000000000000009c4'");
+  execSql(db,
+    "UPDATE tblob SET val='this replacement is intentionally longer' "
+    "WHERE id=x'00000000000000000000000000000d05'");
+
+  check("single_mutation_blob_count",
+    queryScalarInt(db, "SELECT count(*) FROM tblob")==5000);
+  check("single_mutation_blob_short",
+    strcmp(queryScalarText(db,
+      "SELECT val FROM tblob WHERE id=x'000000000000000000000000000009c4'"),
+      "short")==0);
+  check("single_mutation_blob_long",
+    strcmp(queryScalarText(db,
+      "SELECT val FROM tblob WHERE id=x'00000000000000000000000000000d05'"),
+      "this replacement is intentionally longer")==0);
+  check("single_mutation_blob_integrity",
+    strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+
   sqlite3_close(db);
   removeDb(dbpath);
 }
