@@ -2780,6 +2780,24 @@ INSERT INTO t VALUES(1,'a%b'),(2,'a_b'),(3,'axb'),(4,'a%bc');
 SELECT path FROM t WHERE path LIKE 'a!%b%' ESCAPE '!' ORDER BY path;
 "
 
+# 27f. LIKE contains literal and fallback cases
+oracle "cat27_like_contains_literal" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES
+  (1,'abc'),(2,'xabcx'),(3,'ABC'),(4,'xabcy'),(5,'ab'),
+  (6,'a_c'),(7,'a%c'),(8,'za!bc'),(9,'éabc'),(10,'éABC'),
+  (11,''),(12,char(97,0,98,99));
+SELECT id FROM t WHERE v LIKE '%abc%' ORDER BY id;
+SELECT count(*) FROM t WHERE v LIKE '%ABC%';
+PRAGMA case_sensitive_like=ON;
+SELECT id FROM t WHERE v LIKE '%ABC%' ORDER BY id;
+SELECT id FROM t WHERE v LIKE '%a_c%' ORDER BY id;
+SELECT id FROM t WHERE v LIKE '%a!_c%' ESCAPE '!' ORDER BY id;
+SELECT id FROM t WHERE v LIKE '%a!%c%' ESCAPE '!' ORDER BY id;
+SELECT count(*) FROM t WHERE v LIKE '%%';
+SELECT count(*) FROM t WHERE v LIKE '%' || char(0) || '%';
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 28: ALTER TABLE with indexes
 # ════════════════════════════════════════════════════════════════════
@@ -5550,6 +5568,36 @@ SELECT * FROM t ORDER BY id;
 SELECT count(*) FROM t;
 "
 
+# 88e. Sorted explicit rowid inserts with pending duplicates
+oracle "cat88_insert_sorted_explicit_rowid" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+BEGIN;
+INSERT INTO t VALUES(1,'a');
+INSERT INTO t VALUES(2,'b');
+INSERT INTO t VALUES(3,'c');
+INSERT OR IGNORE INTO t VALUES(2,'dup');
+INSERT INTO t VALUES(5,'e');
+INSERT INTO t VALUES(4,'d');
+COMMIT;
+SELECT id, val FROM t ORDER BY id;
+SELECT count(*) FROM t;
+"
+
+# 88f. Append explicit rowids past existing max with pending duplicates
+oracle "cat88_insert_append_existing_rowid" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, val TEXT);
+INSERT INTO t VALUES(1,'a'),(2,'b'),(3,'c');
+BEGIN;
+INSERT INTO t VALUES(4,'d');
+INSERT INTO t VALUES(5,'e');
+INSERT OR IGNORE INTO t VALUES(4,'dup');
+INSERT INTO t VALUES(7,'g');
+INSERT INTO t VALUES(6,'f');
+COMMIT;
+SELECT id, val FROM t ORDER BY id;
+SELECT count(*) FROM t;
+"
+
 # ════════════════════════════════════════════════════════════════════
 # Category 89: UPDATE with complex SET expressions
 # ════════════════════════════════════════════════════════════════════
@@ -6896,6 +6944,27 @@ INSERT INTO t VALUES (1,'a');
 COMMIT;
 SELECT type, name FROM sqlite_master WHERE name='t';
 SELECT * FROM t;
+"
+
+# ════════════════════════════════════════════════════════════════════
+# Category 122: BLOBKEY table root classification cache
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 122: BLOBKEY table root classification cache ---"
+
+# Doltlite stores ordinary non-INTEGER primary-key tables as BLOBKEY
+# table roots. Secondary indexes are BLOBKEY roots too, so the cursor
+# layer has to distinguish table roots from index roots when splitting
+# table keys from payload records. This exercises a newly-created table
+# and secondary index in the same connection, before any catalog reload
+# can pre-classify the roots.
+oracle "cat122_blobkey_table_update_with_secondary_index" "
+CREATE TABLE t(a TEXT PRIMARY KEY, b INT, c TEXT);
+CREATE INDEX tb ON t(b);
+INSERT INTO t VALUES('x',1,'one'),('y',2,'two');
+UPDATE t SET b=3 WHERE a='x';
+SELECT a,b,c FROM t ORDER BY a;
+SELECT a FROM t WHERE b=3;
 "
 
 # ════════════════════════════════════════════════════════════════════

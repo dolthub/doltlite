@@ -477,29 +477,26 @@ static int ensureCapacity(ProllyMutMap *mm){
     ProllyMutMapEntry *aNew;
     int *aOrderNew;
     int *aPosNew;
-    aNew = sqlite3_malloc(nNew * sizeof(ProllyMutMapEntry));
-    aOrderNew = sqlite3_malloc(nNew * sizeof(int));
-    aPosNew = sqlite3_malloc(nNew * sizeof(int));
-    if( !aNew || !aOrderNew || !aPosNew ){
-      sqlite3_free(aNew);
-      sqlite3_free(aOrderNew);
-      sqlite3_free(aPosNew);
+    aNew = sqlite3_realloc(mm->aEntries, nNew * sizeof(ProllyMutMapEntry));
+    if( !aNew ){
       return SQLITE_NOMEM;
     }
-    if( mm->nEntries > 0 ){
+    if( aNew != mm->aEntries && mm->nEntries > 0 ){
       int i;
-      memcpy(aNew, mm->aEntries, mm->nEntries * sizeof(ProllyMutMapEntry));
-      memcpy(aOrderNew, mm->aOrder, mm->nEntries * sizeof(int));
-      memcpy(aPosNew, mm->aPos, mm->nEntries * sizeof(int));
       for(i=0; i<mm->nEntries; i++){
         fixInlineKeyPtr(&aNew[i]);
       }
     }
-    sqlite3_free(mm->aEntries);
-    sqlite3_free(mm->aOrder);
-    sqlite3_free(mm->aPos);
     mm->aEntries = aNew;
+    aOrderNew = sqlite3_realloc(mm->aOrder, nNew * sizeof(int));
+    if( !aOrderNew ){
+      return SQLITE_NOMEM;
+    }
     mm->aOrder = aOrderNew;
+    aPosNew = sqlite3_realloc(mm->aPos, nNew * sizeof(int));
+    if( !aPosNew ){
+      return SQLITE_NOMEM;
+    }
     mm->aPos = aPosNew;
     mm->nAlloc = nNew;
   }
@@ -646,6 +643,29 @@ int prollyMutMapInsert(
   return SQLITE_OK;
 }
 
+int prollyMutMapReplaceEntry(
+  ProllyMutMap *mm,
+  ProllyMutMapEntry *e,
+  const u8 *pVal,
+  int nVal
+){
+  int rc;
+  int phys;
+  if( !mm || !e ) return SQLITE_MISUSE;
+  phys = (int)(e - mm->aEntries);
+  if( phys<0 || phys>=mm->nEntries ) return SQLITE_CORRUPT_BKPT;
+  if( mm->currentSavepointLevel > 0
+   && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
+    rc = appendUndoRec(mm, phys);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  e->op = PROLLY_EDIT_INSERT;
+  rc = replaceEntryValue(e, pVal, nVal);
+  if( rc!=SQLITE_OK ) return rc;
+  e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+  return SQLITE_OK;
+}
+
 int prollyMutMapDelete(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey
@@ -713,6 +733,29 @@ int prollyMutMapDelete(
     hashInsertPhys(mm, phys);
   }
   mm->generation++;
+  return SQLITE_OK;
+}
+
+int prollyMutMapDeleteEntry(
+  ProllyMutMap *mm,
+  ProllyMutMapEntry *e
+){
+  int rc;
+  int phys;
+  if( !mm || !e ) return SQLITE_MISUSE;
+  phys = (int)(e - mm->aEntries);
+  if( phys<0 || phys>=mm->nEntries ) return SQLITE_CORRUPT_BKPT;
+  if( e->op!=PROLLY_EDIT_INSERT ){
+    return SQLITE_OK;
+  }
+  if( mm->currentSavepointLevel > 0
+   && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
+    rc = appendUndoRec(mm, phys);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  e->op = PROLLY_EDIT_DELETE;
+  e->nVal = 0;
+  e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
   return SQLITE_OK;
 }
 
@@ -921,7 +964,6 @@ int prollyMutMapIterValid(ProllyMutMapIter *it){
 }
 
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
-  ensureOrder(it->pMap);
   return entryAtOrder(it->pMap, it->idx);
 }
 
