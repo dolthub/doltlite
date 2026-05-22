@@ -366,7 +366,7 @@ jobs:
   # ── Run benchmarks ────────────────────────────────────────
   benchmark:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
 
@@ -395,7 +395,7 @@ jobs:
     - name: Run benchmarks
       run: |
         cd build
-        BENCH_RUNS=5 BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh > /tmp/bench_classic.md
+        BENCH_ROWS=100000 BENCH_RUNS=5 BENCH_SECTION_MODE=wrapped bash ../test/sysbench_compare.sh > /tmp/bench_classic.md
         sed -n '/### File-Backed/,/^_/p' /tmp/bench_classic.md > /tmp/bench_results.md
 
     - name: Upload benchmark results
@@ -446,7 +446,7 @@ jobs:
         BENCH="artifacts/benchmark/bench_results.md"
         if [ -f "$BENCH" ]; then
           EXISTING=$(gh release view "${GITHUB_REF_NAME}" --json body --jq .body)
-          APPEND=$(printf '\n## Benchmark (file-backed INT key, 10K rows, Linux x64)\n\n'; cat "$BENCH")
+          APPEND=$(printf '\n## Benchmark / int-keys (100K rows, Linux x64)\n\n'; cat "$BENCH")
           printf '%s\n%s' "$EXISTING" "$APPEND" > /tmp/release_body.md
           gh release edit "${GITHUB_REF_NAME}" --notes-file /tmp/release_body.md
         fi
