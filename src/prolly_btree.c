@@ -8630,6 +8630,7 @@ extern int doltliteBuildIndexSortKey(
   const i16 *aiColumn, int nIdxCol,
   KeyInfo *pKeyInfo,
   int iPKey, i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
   u8 **ppKey, int *pnKey
 );
 
@@ -8681,6 +8682,7 @@ static int mutateSecondaryIndex(
   Index *pIdx,
   int iPKey,
   i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
   const u8 *pOldVal, int nOldVal,
   const u8 *pNewVal, int nNewVal
 ){
@@ -8697,6 +8699,7 @@ static int mutateSecondaryIndex(
     rc = doltliteBuildIndexSortKey(pOldVal, nOldVal,
                                    pIdx->aiColumn, pIdx->nKeyCol, 0,
                                    iPKey, intKey,
+                                   pTreeKey, nTreeKey,
                                    &pOldKey, &nOldKey);
     if( rc==SQLITE_OK ){
       rc = prollyMutMapDelete(&mm, pOldKey, nOldKey, 0);
@@ -8711,6 +8714,7 @@ static int mutateSecondaryIndex(
     rc = doltliteBuildIndexSortKey(pNewVal, nNewVal,
                                    pIdx->aiColumn, pIdx->nKeyCol, 0,
                                    iPKey, intKey,
+                                   pTreeKey, nTreeKey,
                                    &pNewKey, &nNewKey);
     if( rc==SQLITE_OK ){
       rc = prollyMutMapInsert(&mm, pNewKey, nNewKey, 0, 0, 0);
@@ -8842,6 +8846,7 @@ int doltliteApplyRawRowMutation(
       }
       if( !pIdxTE ) continue;
       rc = mutateSecondaryIndex(pBt, pIdxTE, pIdx, iPKey, intKey,
+                                pKey, nKey,
                                 pOldVal, nOldVal, pVal, nVal);
     }
   }

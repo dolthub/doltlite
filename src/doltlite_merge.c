@@ -71,6 +71,7 @@ int doltliteBuildIndexSortKey(
   const i16 *aiColumn, int nIdxCol,
   KeyInfo *pKeyInfo,
   int iPKey, i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
   u8 **ppKey, int *pnKey
 ){
   DoltliteRecordInfo info;
@@ -210,6 +211,23 @@ int doltliteBuildIndexSortKey(
   rc = sortKeyFromRecordPrefixColl(pIdxRec, nIdxRec, 0, pKeyInfo,
                                     ppKey, pnKey);
   sqlite3_free(pIdxRec);
+  /* WITHOUT ROWID tables don't store the PK columns in the row value
+  ** (they're in the b-tree key). Append the table tree key bytes to
+  ** the sort key so the secondary index has a unique suffix per row,
+  ** matching the native INSERT path (e.g. iv key = sortkey(v1) +
+  ** sortkey(pk) for t(pk TEXT PRIMARY KEY, v1 INT UNIQUE)). */
+  if( rc==SQLITE_OK && iPKey<0 && pTreeKey && nTreeKey>0 ){
+    u8 *pCombined = sqlite3_realloc(*ppKey, *pnKey + nTreeKey);
+    if( !pCombined ){
+      sqlite3_free(*ppKey);
+      *ppKey = 0;
+      *pnKey = 0;
+      return SQLITE_NOMEM;
+    }
+    memcpy(pCombined + *pnKey, pTreeKey, nTreeKey);
+    *ppKey = pCombined;
+    *pnKey += nTreeKey;
+  }
   return rc;
 }
 
@@ -494,7 +512,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
           rc = doltliteBuildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
                                  mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                 mi->iPKey, pChange->intKey,
+                                 mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
                                  &pIK, &nIK);
           if( rc==SQLITE_OK ){
             rc = prollyMutMapInsert(mi->pEdits, pIK, nIK, 0, 0, 0);
@@ -517,7 +535,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
             u8 *pOK = 0; int nOK = 0;
             rc = doltliteBuildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
                                    mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                   mi->iPKey, pChange->intKey,
+                                   mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
                                    &pOK, &nOK);
             if( rc==SQLITE_OK ){
               rc = prollyMutMapDelete(mi->pEdits, pOK, nOK, 0);
@@ -529,7 +547,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
             u8 *pNK = 0; int nNK = 0;
             rc = doltliteBuildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
                                    mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                   mi->iPKey, pChange->intKey,
+                                   mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
                                    &pNK, &nNK);
             if( rc==SQLITE_OK ){
               rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0, 0, 0);
@@ -552,7 +570,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
           rc = doltliteBuildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
                                  mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                 mi->iPKey, pChange->intKey,
+                                 mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
                                  &pIK, &nIK);
           if( rc==SQLITE_OK ){
             rc = prollyMutMapDelete(mi->pEdits, pIK, nIK, 0);
@@ -593,7 +611,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
               u8 *pOK = 0; int nOK = 0;
               rc = doltliteBuildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
                                      mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                     mi->iPKey, pChange->intKey,
+                                     mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
                                      &pOK, &nOK);
               if( rc==SQLITE_OK ){
                 rc = prollyMutMapDelete(mi->pEdits, pOK, nOK, 0);
@@ -604,7 +622,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
               u8 *pNK = 0; int nNK = 0;
               rc = doltliteBuildIndexSortKey(pMerged, nMerged,
                                      mi->aiColumn, mi->nColumn, mi->pKeyInfo,
-                                     mi->iPKey, pChange->intKey,
+                                     mi->iPKey, pChange->intKey, pChange->pKey, pChange->nKey,
                                      &pNK, &nNK);
               if( rc==SQLITE_OK ){
                 rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0, 0, 0);

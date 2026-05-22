@@ -122,6 +122,7 @@ int doltliteBuildIndexSortKey(const u8 *pRec, int nRec,
                               const i16 *aiColumn, int nIdxCol,
                               KeyInfo *pKeyInfo,
                               int iPKey, i64 intKey,
+                              const u8 *pTreeKey, int nTreeKey,
                               u8 **ppKey, int *pnKey);
 int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db);
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
