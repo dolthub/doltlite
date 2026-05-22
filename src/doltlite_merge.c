@@ -1948,6 +1948,15 @@ do_merge_entry:
 
         if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0
          || prollyHashCompare(&aOurs[i].schemaHash, &theirsEntry->schemaHash)!=0 ){
+          /* Stat tables created on both sides from a no-stats ancestor
+          ** have a fixed SQLite-defined schema; only the data differs.
+          ** Take ours and let the post-merge ANALYZE regenerate. */
+          if( zName
+           && (strcmp(zName, "sqlite_stat1")==0
+            || strcmp(zName, "sqlite_stat4")==0) ){
+            aMerged[(*pnMerged)++] = aOurs[i];
+            continue;
+          }
           if( pzErrMsg ){
             *pzErrMsg = sqlite3_mprintf(
               "schema conflict: table '%s' added on both branches with "

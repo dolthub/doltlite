@@ -2867,8 +2867,10 @@ static void doltliteMergeFunc(
     ** sqlite_stat tables instead of three-way merging derived rows that
     ** would either dedupe spuriously or surface phantom PK conflicts.
     ** ANALYZE the merged tree so the stats reflect post-merge data,
-    ** not whichever branch's snapshot we happened to keep. */
-    {
+    ** not whichever branch's snapshot we happened to keep.
+    ** Skip on row-level conflicts: those will trigger a rollback whose
+    ** working-set update doesn't unwind sqlite_stat1 writes cleanly. */
+    if( nMergeConflicts==0 ){
       sqlite3_stmt *pProbe = 0;
       int hasStat1 = 0;
       if( sqlite3_prepare_v2(db,
