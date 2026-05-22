@@ -2734,6 +2734,25 @@ static void setCursorToMutMapEntryPhys(BtCursor *pCur, int physIdx){
   }
 }
 
+static void setCursorToMutMapMissingEntryPhys(BtCursor *pCur, int physIdx){
+  ProllyMutMapEntry *pEntry = &pCur->pMutMap->aEntries[physIdx];
+  CLEAR_CACHED_PAYLOAD(pCur);
+  pCur->mmIdx = -1;
+  pCur->mmPhysIdx = physIdx;
+  pCur->mmActive = 1;
+  pCur->mmPhysActive = 1;
+  pCur->deferredTreeSeek = 0;
+  pCur->mergeSrc = MERGE_SRC_MUT;
+  pCur->eState = CURSOR_INVALID;
+  pCur->curFlags &= ~BTCF_AtLast;
+  if( pCur->curIntKey ){
+    pCur->cachedIntKey = prollyMutMapEntryIntKey(pEntry);
+    pCur->curFlags |= BTCF_ValidNKey;
+  }else{
+    pCur->curFlags &= ~BTCF_ValidNKey;
+  }
+}
+
 static int advanceTreeCursor(BtCursor *pCur, int dir){
   if( dir>0 ){
     return prollyCursorNext(&pCur->pCur);
@@ -6438,7 +6457,8 @@ static int prollyBtCursorTableMoveto(
       } else {
 
         *pRes = 1;
-        pCur->eState = CURSOR_INVALID;
+        setCursorToMutMapMissingEntryPhys(
+            pCur, (int)(pEntry - pCur->pMutMap->aEntries));
         return SQLITE_OK;
       }
     }
@@ -7268,9 +7288,19 @@ static int prollyBtCursorInsert(
     pInsertedPayload = pData;
     nInsertedPayload = nData;
 
-    rc = prollyMutMapInsert(pCur->pMutMap,
-                             NULL, 0, pPayload->nKey,
-                             pData, nData);
+    if( pCur->mmActive
+     && pCur->mmPhysActive
+     && pCur->pMutMap
+     && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH)
+     && (pCur->curFlags & BTCF_ValidNKey)
+     && pCur->cachedIntKey==pPayload->nKey ){
+      ProllyMutMapEntry *pEntry = currentMutMapEntry(pCur);
+      rc = prollyMutMapReplaceEntry(pCur->pMutMap, pEntry, pData, nData);
+    }else{
+      rc = prollyMutMapInsert(pCur->pMutMap,
+                               NULL, 0, pPayload->nKey,
+                               pData, nData);
+    }
   } else {
 
     int nSortKey = 0;
@@ -7610,11 +7640,39 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   }
   if( pCur->curIntKey ){
     iKey = savedIntKey;
-    rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, iKey);
+    if( pCur->mmActive
+     && pCur->mmPhysActive
+     && pCur->pMutMap
+     && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+      ProllyMutMapEntry *pEntry = currentMutMapEntry(pCur);
+      if( pEntry->op==PROLLY_EDIT_INSERT
+       && prollyMutMapEntryIntKey(pEntry)==iKey ){
+        rc = prollyMutMapDeleteEntry(pCur->pMutMap, pEntry);
+      }else{
+        rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, iKey);
+      }
+    }else{
+      rc = prollyMutMapDelete(pCur->pMutMap, NULL, 0, iKey);
+    }
   } else {
     pKey = pSavedDelKey;
     nKey = nSavedDelKey;
-    rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
+    if( pCur->mmActive
+     && pCur->mmPhysActive
+     && pCur->pMutMap
+     && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+      ProllyMutMapEntry *pEntry = currentMutMapEntry(pCur);
+      if( pEntry->op==PROLLY_EDIT_INSERT
+       && pEntry->nKey==nKey
+       && nKey>0
+       && memcmp(pEntry->pKey, pKey, nKey)==0 ){
+        rc = prollyMutMapDeleteEntry(pCur->pMutMap, pEntry);
+      }else{
+        rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
+      }
+    }else{
+      rc = prollyMutMapDelete(pCur->pMutMap, pKey, nKey, 0);
+    }
     /* Don't free pSavedDelKey here. The SAVEPOSITION reseek below reads
     ** from pKey, which aliases pSavedDelKey when savedDelKeyOwned is
     ** set; freeing now would memcpy from a dangling pointer. Cleanup
