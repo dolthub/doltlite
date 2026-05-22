@@ -964,7 +964,6 @@ int prollyMutMapIterValid(ProllyMutMapIter *it){
 }
 
 ProllyMutMapEntry *prollyMutMapIterEntry(ProllyMutMapIter *it){
-  ensureOrder(it->pMap);
   return entryAtOrder(it->pMap, it->idx);
 }
 
