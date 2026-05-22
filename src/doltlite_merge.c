@@ -2002,6 +2002,21 @@ do_merge_entry:
           }
         }
 
+        /* sqlite_sequence rows are derived: the authoritative
+        ** AUTOINCREMENT counter lives in ChunkRefs.aSequences (a
+        ** non-versioned per-database map). When both branches modify
+        ** sqlite_sequence we'd hit row-level conflicts even though
+        ** the data underneath is just a per-table seq counter that
+        ** the shared map already tracks. Take ours; aSequences is
+        ** merged separately (max per table name) outside the
+        ** per-table row merge. */
+        if( !skipRowMerge && zName
+         && strcmp(zName, "sqlite_sequence")==0
+         && oursChanged && theirsChanged ){
+          aMerged[(*pnMerged)++] = aOurs[i];
+          skipRowMerge = 1;
+        }
+
         if( !skipRowMerge ){
           if( oursChanged && theirsChanged ){
 
