@@ -1208,8 +1208,17 @@ static void run_chunk_walk_corruption(void){
       0, 0, 0, 0,
       0, 0, 0, 0
     };
-    static const u8 currentRefsV6[] = {
+    static const u8 legacyRefsV6[] = {
       6,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0,
+      0, 0, 0, 0
+    };
+    static const u8 currentRefsV7[] = {
+      7,
+      0, 0, 0, 0,
       0, 0, 0, 0,
       0, 0, 0, 0,
       0, 0, 0, 0,
@@ -1219,9 +1228,12 @@ static void run_chunk_walk_corruption(void){
     rc = doltliteEnumerateChunkChildren(legacyRefsV5,
                                         (int)sizeof(legacyRefsV5), 0, 0);
     check("legacy_refs_v5_is_corrupt_to_chunk_walk", rc==SQLITE_CORRUPT);
-    rc = doltliteEnumerateChunkChildren(currentRefsV6,
-                                        (int)sizeof(currentRefsV6), 0, 0);
-    check("current_refs_v6_is_accepted_by_chunk_walk", rc==SQLITE_OK);
+    rc = doltliteEnumerateChunkChildren(legacyRefsV6,
+                                        (int)sizeof(legacyRefsV6), 0, 0);
+    check("legacy_refs_v6_is_corrupt_to_chunk_walk", rc==SQLITE_CORRUPT);
+    rc = doltliteEnumerateChunkChildren(currentRefsV7,
+                                        (int)sizeof(currentRefsV7), 0, 0);
+    check("current_refs_v7_is_accepted_by_chunk_walk", rc==SQLITE_OK);
   }
 }
 
