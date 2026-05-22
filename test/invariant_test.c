@@ -917,6 +917,52 @@ static void test_reset_to_hash(void){
   removeDb(dbpath);
 }
 
+/*
+** Test 18: Single-row delete/reinsert on a multi-level integer-key table.
+*/
+static void test_single_row_mutation_fast_path(void){
+  sqlite3 *db = 0;
+  const char *dbpath = "/tmp/test_inv_single_mutation.db";
+  int i;
+
+  printf("--- Test 18: Single-row mutation fast path shape ---\n");
+  removeDb(dbpath);
+
+  check("open_single_mutation", sqlite3_open(dbpath, &db)==SQLITE_OK);
+
+  execSql(db, "CREATE TABLE t1(id INTEGER PRIMARY KEY, val TEXT)");
+  execSql(db, "BEGIN");
+  for( i=1; i<=5000; i++ ){
+    char sql[128];
+    snprintf(sql, sizeof(sql), "INSERT INTO t1 VALUES(%d, 'row_%d')", i, i);
+    execSql(db, sql);
+  }
+  execSql(db, "COMMIT");
+
+  execSql(db, "DELETE FROM t1 WHERE id=2500");
+  execSql(db, "INSERT INTO t1 VALUES(2500, 'restored')");
+  execSql(db, "DELETE FROM t1 WHERE id=3333");
+  execSql(db, "INSERT INTO t1 VALUES(3333, 'again')");
+
+  check("single_mutation_count",
+    queryScalarInt(db, "SELECT count(*) FROM t1")==5000);
+  check("single_mutation_min",
+    queryScalarInt(db, "SELECT min(id) FROM t1")==1);
+  check("single_mutation_max",
+    queryScalarInt(db, "SELECT max(id) FROM t1")==5000);
+  check("single_mutation_value_2500",
+    strcmp(queryScalarText(db, "SELECT val FROM t1 WHERE id=2500"),
+           "restored")==0);
+  check("single_mutation_value_3333",
+    strcmp(queryScalarText(db, "SELECT val FROM t1 WHERE id=3333"),
+           "again")==0);
+  check("single_mutation_integrity",
+    strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+
+  sqlite3_close(db);
+  removeDb(dbpath);
+}
+
 /* ========================================================================
 ** Main
 ** ======================================================================== */
@@ -941,6 +987,7 @@ int main(void){
   test_drop_table();
   test_staging();
   test_reset_to_hash();
+  test_single_row_mutation_fast_path();
 
   printf("\n=== Results: %d passed, %d failed out of %d tests ===\n",
     nPass, nFail, nPass+nFail);
