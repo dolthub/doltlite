@@ -712,6 +712,19 @@ int doltlitePush(
         return rc;
       }
 
+      {
+        int iSeq;
+        const SequenceRef *aLocalSeq = 0;
+        int nLocalSeq = 0;
+        refsTableGetSequences(&pLocal->refs, &nLocalSeq, &aLocalSeq);
+        for(iSeq=0; iSeq<nLocalSeq; iSeq++){
+          if( aLocalSeq[iSeq].zTableName ){
+            chunkStoreBumpSequence(&tmpCs, aLocalSeq[iSeq].zTableName,
+                                   aLocalSeq[iSeq].iSeq);
+          }
+        }
+      }
+
       rc = chunkStoreSerializeRefsToBlob(&tmpCs, &newRefs, &nNewRefs);
       chunkStoreClose(&tmpCs);
       if( rc!=SQLITE_OK ) return rc;
@@ -750,15 +763,36 @@ int doltliteFetch(
   if( rc!=SQLITE_OK ) return rc;
 
   rc = remoteFindBranchFromRefsBlob(refsData, nRefsData, zBranch, &remoteCommit);
-  sqlite3_free(refsData);
   if( rc!=SQLITE_OK ){
+    sqlite3_free(refsData);
     return rc==SQLITE_NOTFOUND ? SQLITE_NOTFOUND : rc;
   }
   found = !prollyHashIsEmpty(&remoteCommit);
 
   if( !found || prollyHashIsEmpty(&remoteCommit) ){
+    sqlite3_free(refsData);
     return SQLITE_NOTFOUND;
   }
+
+  {
+    ChunkStore tmpCs;
+    int iSeq, rc2;
+    const SequenceRef *aRemSeq = 0;
+    int nRemSeq = 0;
+    memset(&tmpCs, 0, sizeof(tmpCs));
+    rc2 = chunkStoreLoadRefsFromBlob(&tmpCs, refsData, nRefsData);
+    if( rc2==SQLITE_OK ){
+      refsTableGetSequences(&tmpCs.refs, &nRemSeq, &aRemSeq);
+      for(iSeq=0; iSeq<nRemSeq; iSeq++){
+        if( aRemSeq[iSeq].zTableName ){
+          chunkStoreBumpSequence(pLocal, aRemSeq[iSeq].zTableName,
+                                 aRemSeq[iSeq].iSeq);
+        }
+      }
+    }
+    chunkStoreClose(&tmpCs);
+  }
+  sqlite3_free(refsData);
 
   pLocalDst = doltliteLocalAsRemote(pLocal);
   if( !pLocalDst ) return SQLITE_NOMEM;
