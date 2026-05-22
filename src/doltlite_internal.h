@@ -23,6 +23,9 @@ struct TableEntry {
   ProllyHash schemaHash;
   u8 flags;
   u8 pendingFlushSeekEdits;
+  u8 appendSeekFloorValid;
+  i64 appendSeekFloor;
+  ProllyHash appendSeekRoot;
   char *zName;
   void *pPending;
 };
