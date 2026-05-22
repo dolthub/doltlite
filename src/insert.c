@@ -572,6 +572,12 @@ static SQLITE_NOINLINE void autoIncrementEnd(Parse *pParse){
     aOp[3].p2 = iRec;
     aOp[3].p3 = memId+1;
     aOp[3].p5 = OPFLAG_APPEND;
+#ifdef DOLTLITE_PROLLY
+    /* Mirror the new max into the shared per-database counter. Emitted
+    ** at the Le jump target so it runs on both the write path and the
+    ** no-change path — the bump is a max-merge and is safe either way. */
+    sqlite3VdbeAddOp2(v, OP_DoltliteSeqBump, memId, memId-1);
+#endif
     sqlite3ReleaseTempReg(pParse, iRec);
   }
 }

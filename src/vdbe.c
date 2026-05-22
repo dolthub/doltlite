@@ -3948,6 +3948,31 @@ case OP_DoltliteSeqMax: {
   }
   break;
 }
+
+/* Opcode: DoltliteSeqBump P1 P2 * * *
+** Synopsis: chunkStoreBumpSequence(r[P2], r[P1])
+**
+** Doltlite-only. Raise the per-database shared AUTOINCREMENT counter
+** for the table name in register P2 to at least r[P1]. Emitted at
+** autoIncrementEnd to mirror the local sqlite_sequence update into
+** the shared counter so other branches see the new max.
+*/
+case OP_DoltliteSeqBump: {
+  Mem *pCtr;
+  Mem *pName;
+  ChunkStore *pCs;
+  const char *zName;
+  pCtr  = &aMem[pOp->p1];
+  pName = &aMem[pOp->p2];
+  if( (pCtr->flags & MEM_Int)==0 ) break;
+  if( (pName->flags & MEM_Str)==0 ) break;
+  pCs = doltliteGetChunkStore(db);
+  if( !pCs ) break;
+  zName = (const char*)pName->z;
+  if( !zName ) break;
+  chunkStoreBumpSequence(pCs, zName, pCtr->u.i);
+  break;
+}
 #endif
 
 /* Opcode: CountIndexRange P1 P2 P3 P4 *
