@@ -1856,6 +1856,34 @@ static void doltliteCommitFunc(
     }
   }
 
+  /* If this commit is finalizing a merge (whether autocommit-style
+  ** straight through dolt_merge, or explicit-txn with dolt_conflicts_
+  ** resolve in between), regenerate sqlite_stat1 against the merged
+  ** tree before sealing the commit. mergeCatalogPass1 took ours for
+  ** the stat rows; this ANALYZE makes them match post-merge data. */
+  {
+    u8 isMergingCommit = 0;
+    doltliteGetSessionMergeState(db, &isMergingCommit, 0, 0);
+    if( isMergingCommit ){
+      sqlite3_stmt *pProbe = 0;
+      int hasStat1 = 0;
+      if( sqlite3_prepare_v2(db,
+          "SELECT 1 FROM main.sqlite_master "
+          "WHERE type='table' AND name='sqlite_stat1' LIMIT 1",
+          -1, &pProbe, 0)==SQLITE_OK ){
+        if( sqlite3_step(pProbe)==SQLITE_ROW ) hasStat1 = 1;
+        sqlite3_finalize(pProbe);
+      }
+      if( hasStat1 ){
+        ProllyHash refreshedCat;
+        (void)sqlite3_exec(db, "ANALYZE", 0, 0, 0);
+        if( doltliteFlushCatalogToHash(db, &refreshedCat)==SQLITE_OK ){
+          doltliteSetSessionStaged(db, &refreshedCat);
+        }
+      }
+    }
+  }
+
   doltliteGetSessionStaged(db, &catalogHash);
   if( prollyHashIsEmpty(&catalogHash) ){
     if( allowEmpty ){

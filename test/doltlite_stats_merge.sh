@@ -568,6 +568,42 @@ case "$out" in 4\ *) pass=$((pass+1)) ;;
      echo "  FAIL: asymm_stats_fresh"; echo "    got: $out" ;;
 esac
 
+# ── Conflict-resolved merge finalized via dolt_commit also refreshes
+# sqlite_stat1. The post-merge ANALYZE only ran inside dolt_merge in
+# the no-conflicts path; the resolve-then-commit path needs the same
+# refresh on commit. We check that the stat changed away from the
+# pre-merge baseline (1 row on main) rather than asserting an exact
+# value — the index may still hold stale entries from the rejected
+# theirs's row, which is a separate conflict-resolution bug.
+DB="$TMPROOT/resolve.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT); CREATE INDEX iv ON t(v);
+INSERT INTO t VALUES(1,1);
+ANALYZE;
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+UPDATE t SET v=2 WHERE id=1;
+INSERT INTO t VALUES(2,20);
+SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+UPDATE t SET v=3 WHERE id=1;
+INSERT INTO t VALUES(3,30);
+SELECT dolt_commit('-A','-m','main');
+BEGIN;
+SELECT dolt_merge('feat');
+SELECT dolt_conflicts_resolve('--ours','t');
+SELECT dolt_commit('-A','-m','resolved');
+COMMIT;
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT stat FROM sqlite_stat1 WHERE idx='iv';")
+# Pre-merge baseline on main was 1 row → stat '1 1'. Post-commit we
+# expect something different (the merge added rows; ANALYZE saw them).
+case "$out" in
+  "1 1"|""|"NULL") fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES resolve_commit_reanalyzed"
+     echo "  FAIL: resolve_commit_reanalyzed (expected refresh away from pre-merge '1 1'); got: $out" ;;
+  *) pass=$((pass+1)) ;;
+esac
+
 # ── Identical-data scenario: ancestor had stats, both branches ANALYZED
 # again WITHOUT data changes. ours==theirs==ancestor for sqlite_stat1.
 DB="$TMPROOT/noop_reanalyze.db"
