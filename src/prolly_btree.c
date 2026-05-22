@@ -6390,6 +6390,7 @@ static int prollyBtCursorTableMoveto(
   int *pRes
 ){
   int rc;
+  int rootIsEmpty;
   (void)bias;
 
   assert( pCur->curIntKey );
@@ -6400,8 +6401,19 @@ static int prollyBtCursorTableMoveto(
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
 
+  rootIsEmpty = prollyHashIsEmpty(&pCur->pCur.root);
   if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
     ProllyMutMapEntry *pEntry = 0;
+    if( rootIsEmpty
+     && pCur->pMutMap->isIntKey
+     && pCur->pMutMap->appendSorted
+     && intKey > prollyMutMapEntryIntKey(
+                  &pCur->pMutMap->aEntries[pCur->pMutMap->nEntries-1])
+    ){
+      *pRes = 1;
+      pCur->eState = CURSOR_INVALID;
+      return SQLITE_OK;
+    }
     rc = prollyMutMapFindRc(pCur->pMutMap, 0, 0, intKey, &pEntry);
     if( rc!=SQLITE_OK ) return rc;
     if( pEntry ){
@@ -6418,6 +6430,16 @@ static int prollyBtCursorTableMoveto(
       }
     }
 
+  }
+
+  if( rootIsEmpty ){
+    refreshCursorRoot(pCur);
+    rootIsEmpty = prollyHashIsEmpty(&pCur->pCur.root);
+  }
+  if( rootIsEmpty ){
+    *pRes = 1;
+    pCur->eState = CURSOR_INVALID;
+    return SQLITE_OK;
   }
 
   refreshCursorRoot(pCur);
