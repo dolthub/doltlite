@@ -2111,7 +2111,17 @@ do_merge_entry:
                   if( aIdxInfo ){
                     memset(aIdxInfo, 0, nIdx*(int)sizeof(MergeIndexInfo));
                     for(pIdx=pTab->pIndex; pIdx; pIdx=pIdx->pNext){
-                      struct TableEntry *oursIdx = findTableEntry(aOurs, nOurs, pIdx->tnum);
+                      struct TableEntry *oursIdx;
+                      /* For WITHOUT ROWID tables SQLite exposes the
+                      ** PK as a pseudo-INDEX in pTab->pIndex. Its
+                      ** tnum equals the table's own root, so treating
+                      ** it like a secondary index would build an
+                      ** empty-valued entry and the end-of-pass patch
+                      ** would overwrite the table tree with it. Skip. */
+                      if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ){
+                        continue;
+                      }
+                      oursIdx = findTableEntry(aOurs, nOurs, pIdx->tnum);
                       if( oursIdx ){
                         MergeIndexInfo *mi = &aIdxInfo[nIdxInfo];
                         mi->iTable = pIdx->tnum;
