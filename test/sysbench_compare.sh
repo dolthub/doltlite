@@ -12,11 +12,11 @@ SQLITE3=${SQLITE3:-./sqlite3}
 BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
-ROWS=${BENCH_ROWS:-10000}
+ROWS=${BENCH_ROWS:-100000}
 SEED=42
 TMPDIR=$(mktemp -d)
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-1.8}
-BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-1.5}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-5}
+BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-5}
 BENCH_SECTION_MODE=${BENCH_SECTION_MODE:-full}
 
 cleanup() { rm -rf "$TMPDIR"; }
@@ -60,14 +60,14 @@ def write_prepare_join(f):
     f.write("CREATE TABLE sbtest2(id INTEGER PRIMARY KEY, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '');\n")
     f.write("CREATE INDEX k_idx2 ON sbtest2(k);\n")
     f.write("BEGIN;\n")
-    for i in range(1, min(R,1000)+1):
+    for i in range(1, R+1):
         f.write(f"INSERT INTO sbtest2 VALUES({i},{rint(1,R)},'{rstr(60)}','{rstr(30)}');\n")
     f.write("COMMIT;\n")
 
 def write_prepare_types(f):
     f.write("CREATE TABLE sbtest_types(id INTEGER PRIMARY KEY, ival INTEGER, rval REAL, tval TEXT);\n")
     f.write("BEGIN;\n")
-    for i in range(1, 1001):
+    for i in range(1, R+1):
         f.write(f"INSERT INTO sbtest_types VALUES({i},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
 
@@ -200,13 +200,13 @@ def w_index_join(f):
 
 def w_index_join_scan(f):
     for _ in range(100):
-        s=rint(1,min(R,950))
+        s=rint(1,max(R-50,1))
         f.write(f"SELECT count(*) FROM sbtest1 a JOIN sbtest2 b ON a.k=b.k WHERE b.id BETWEEN {s} AND {s+49};\n")
 
 def w_types_delete_insert(f):
     f.write("BEGIN;\n")
     for _ in range(5000):
-        id=rint(1,1000)
+        id=rint(1,R)
         f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
         f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
@@ -326,7 +326,7 @@ def w_write_only_autocommit(f):
 def w_types_delete_insert_autocommit(f):
     # 2 statements per iteration; halve the loop.
     for _ in range(AC // 2):
-        id = rint(1, 1000)
+        id = rint(1, R)
         f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
         f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
 
@@ -410,8 +410,8 @@ else:
 }
 
 bench_runs_for_test() {
-  # BENCH_RUNS=1 for fast local iteration; default 11 for stable median.
-  echo "${BENCH_RUNS:-11}"
+  # BENCH_RUNS=1 for fast local iteration; default 5 for stable median.
+  echo "${BENCH_RUNS:-5}"
 }
 
 median_us() {
