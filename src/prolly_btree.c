@@ -4967,14 +4967,19 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     return SQLITE_BUSY_SNAPSHOT;
   }
 
-  rc = btreeRefreshFromDisk(p);
-  if( rc!=SQLITE_OK ) return rc;
-  if( p->inTrans==TRANS_NONE ){
+  if( !wrFlag ){
+    rc = btreeRefreshFromDisk(p);
+    if( rc!=SQLITE_OK ) return rc;
+    if( p->inTrans==TRANS_NONE ){
+      rc = btreeRefreshSharedWorkingState(p);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+    if( pSchemaVersion ){
+      *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
+    }
+  }else if( p->inTrans==TRANS_NONE ){
     rc = btreeRefreshSharedWorkingState(p);
     if( rc!=SQLITE_OK ) return rc;
-  }
-  if( pSchemaVersion ){
-    *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
   }
 
   if( wrFlag ){
@@ -5041,6 +5046,9 @@ static int prollyBtreeBeginTrans(Btree *p, int wrFlag, int *pSchemaVersion){
     }
   }
 
+  if( pSchemaVersion ){
+    *pSchemaVersion = (int)p->aMeta[BTREE_SCHEMA_VERSION];
+  }
   pBt->store.snapshotPinned = 1;
 
   return SQLITE_OK;
