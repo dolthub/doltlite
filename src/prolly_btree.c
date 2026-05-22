@@ -2890,6 +2890,8 @@ static int saveCursorPosition(BtCursor *pCur){
     return SQLITE_OK;
   }
 
+  CLEAR_CACHED_PAYLOAD(pCur);
+
   if( !prollyCursorIsValid(&pCur->pCur) ){
     if( pCur->curIntKey && (pCur->curFlags & BTCF_ValidNKey) ){
 
@@ -7127,10 +7129,16 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
     ProllyMutMapEntry *e = currentMutMapEntry(pCur);
     if( pCur->curIntKey ){
 
+      pCur->pCachedPayload = e->pVal;
+      pCur->nCachedPayload = e->nVal;
+      pCur->cachedPayloadOwned = 0;
       *ppData = e->pVal;
       *pnData = e->nVal;
     }else{
       if( e->nVal > 0 && e->pVal ){
+        pCur->pCachedPayload = e->pVal;
+        pCur->nCachedPayload = e->nVal;
+        pCur->cachedPayloadOwned = 0;
         *ppData = e->pVal;
         *pnData = e->nVal;
       }else{
@@ -7148,6 +7156,11 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
 
   if( pCur->curIntKey ){
     cursorCurrentTreeValue(pCur, ppData, pnData);
+    if( *pnData > 0 ){
+      pCur->pCachedPayload = (u8*)*ppData;
+      pCur->nCachedPayload = *pnData;
+      pCur->cachedPayloadOwned = 0;
+    }
   }else{
 
     const u8 *pVal; int nVal;
