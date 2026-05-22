@@ -13,6 +13,9 @@
 
 #define PROLLY_NODE_MAX_ITEMS 4096
 
+#define PROLLY_NODE_ENTRY_BYTES(level,nKey,nVal) \
+  ((nKey) + (nVal) + 8 + ((level)>0 ? 8 : 0))
+
 typedef struct ProllyNode ProllyNode;
 /* Parsed view over immutable node bytes. Offsets in the node are little-endian
 ** on disk; accessors decode them instead of relying on host alignment.

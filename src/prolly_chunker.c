@@ -186,7 +186,7 @@ static int addToLevel(ProllyChunker *ch, int level,
   pLevel->nItems++;
   pLevel->subtreeCount += incCount;
 
-  thisSize = nKey + nVal;
+  thisSize = PROLLY_NODE_ENTRY_BYTES(level, nKey, nVal);
   pLevel->nBytes += thisSize;
 
   if( pLevel->nBytes >= PROLLY_CHUNK_MIN ){
