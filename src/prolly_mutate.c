@@ -489,8 +489,8 @@ static int writeBuilderNode(ChunkStore *pStore, ProllyNodeBuilder *pBuilder,
   return rc;
 }
 
-/* Replace one existing int-key row when node boundaries cannot change. */
-static int tryReplaceSingleIntSameSize(ProllyMutator *pMut){
+/* Replace one existing row when node boundaries cannot change. */
+static int tryReplaceSingleSameSize(ProllyMutator *pMut){
   ProllyMutMapEntry *pEdit;
   ProllyCursor cur;
   ProllyHash childHash;
@@ -499,19 +499,25 @@ static int tryReplaceSingleIntSameSize(ProllyMutator *pMut){
   int res = 0;
   int level;
 
-  if( !(pMut->flags & PROLLY_NODE_INTKEY) ) return SQLITE_NOTFOUND;
   if( prollyHashIsEmpty(&pMut->oldRoot) ) return SQLITE_NOTFOUND;
   if( prollyMutMapCount(pMut->pEdits)!=1 ) return SQLITE_NOTFOUND;
 
   pEdit = &pMut->pEdits->aEntries[0];
-  if( pEdit->op!=PROLLY_EDIT_INSERT || pEdit->nKey!=8 ){
+  if( pEdit->op!=PROLLY_EDIT_INSERT ){
+    return SQLITE_NOTFOUND;
+  }
+  if( (pMut->flags & PROLLY_NODE_INTKEY) && pEdit->nKey!=8 ){
     return SQLITE_NOTFOUND;
   }
 
-  iKey = prollyMutMapEntryIntKey(pEdit);
   prollyCursorInit(&cur, pMut->pStore, pMut->pCache, &pMut->oldRoot,
                    pMut->flags);
-  rc = prollyCursorSeekInt(&cur, iKey, &res);
+  if( pMut->flags & PROLLY_NODE_INTKEY ){
+    iKey = prollyMutMapEntryIntKey(pEdit);
+    rc = prollyCursorSeekInt(&cur, iKey, &res);
+  }else{
+    rc = prollyCursorSeekBlob(&cur, pEdit->pKey, pEdit->nKey, &res);
+  }
   if( rc!=SQLITE_OK ){
     prollyCursorClose(&cur);
     return rc;
@@ -827,7 +833,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
   if( prollyHashIsEmpty(&pMut->oldRoot) ){
     rc = buildFromEdits(pMut);
   }else{
-    rc = tryReplaceSingleIntSameSize(pMut);
+    rc = tryReplaceSingleSameSize(pMut);
     if( rc==SQLITE_NOTFOUND ){
       rc = tryAppendSingleIntNoSplit(pMut);
     }
