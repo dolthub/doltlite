@@ -195,10 +195,10 @@ static int remoteSqlResetSessionToCommit(
   rc = remoteSqlLoadCommit(cs, pCommitHash, &commit);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = doltliteHardReset(db, &commit.catalogHash);
-  if( rc==SQLITE_OK && zBranch ){
+  if( zBranch ){
     doltliteSetSessionBranch(db, zBranch);
   }
+  rc = doltliteHardReset(db, &commit.catalogHash);
   if( rc==SQLITE_OK ){
     doltliteSetSessionHead(db, pCommitHash);
     doltliteSetSessionStaged(db, &commit.catalogHash);

@@ -671,8 +671,9 @@ int doltlitePush(
       if( refsData2 && nRefsData2 > 0 ){
         rc = chunkStoreLoadRefsFromBlob(&tmpCs, refsData2, nRefsData2);
       }else{
-
-        chunkStoreSetDefaultBranch(&tmpCs, "main");
+        const char *zLocalDefault = chunkStoreGetDefaultBranch(pLocal);
+        chunkStoreSetDefaultBranch(&tmpCs,
+          zLocalDefault ? zLocalDefault : zBranch);
       }
       sqlite3_free(refsData2);
       if( rc!=SQLITE_OK ){
