@@ -3973,6 +3973,47 @@ case OP_DoltliteSeqBump: {
   chunkStoreBumpSequence(pCs, zName, pCtr->u.i);
   break;
 }
+
+/* Opcode: DoltliteSeqDrop P1 * * * *
+** Synopsis: chunkStoreDropSequence(r[P1])
+**
+** Doltlite-only. Remove the shared AUTOINCREMENT counter for the table
+** name in register P1. Emitted at DROP TABLE so a later CREATE+INSERT
+** of the same name starts fresh from 1, matching Dolt's behavior.
+*/
+case OP_DoltliteSeqDrop: {
+  Mem *pName;
+  ChunkStore *pCs;
+  pName = &aMem[pOp->p1];
+  if( (pName->flags & MEM_Str)==0 ) break;
+  pCs = doltliteGetChunkStore(db);
+  if( !pCs ) break;
+  if( !pName->z ) break;
+  chunkStoreDropSequence(pCs, (const char*)pName->z);
+  break;
+}
+
+/* Opcode: DoltliteSeqRename P1 P2 * * *
+** Synopsis: chunkStoreRenameSequence(r[P1], r[P2])
+**
+** Doltlite-only. Rename the shared AUTOINCREMENT counter from r[P1] to
+** r[P2]. Emitted at ALTER TABLE RENAME so inserts under the new name
+** continue from the existing max.
+*/
+case OP_DoltliteSeqRename: {
+  Mem *pOld;
+  Mem *pNew;
+  ChunkStore *pCs;
+  pOld = &aMem[pOp->p1];
+  pNew = &aMem[pOp->p2];
+  if( (pOld->flags & MEM_Str)==0 ) break;
+  if( (pNew->flags & MEM_Str)==0 ) break;
+  pCs = doltliteGetChunkStore(db);
+  if( !pCs ) break;
+  if( !pOld->z || !pNew->z ) break;
+  chunkStoreRenameSequence(pCs, (const char*)pOld->z, (const char*)pNew->z);
+  break;
+}
 #endif
 
 /* Opcode: CountIndexRange P1 P2 P3 P4 *

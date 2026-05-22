@@ -99,6 +99,25 @@ SELECT dolt_merge('feat');
 INSERT INTO t(v) VALUES('post');" \
 "SELECT id, v FROM t ORDER BY id"
 
+# DROP+CREATE resets the shared counter so the new table starts from 1.
+oracle drop_create_resets \
+"CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO t(v) VALUES('a'),('b'),('c');
+SELECT dolt_commit('-A','-m','init');
+DROP TABLE t;
+CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO t(v) VALUES('x'),('y');" \
+"SELECT id, v FROM t ORDER BY id"
+
+# RENAME carries the counter to the new name; subsequent inserts continue.
+oracle rename_carries_counter \
+"CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO t(v) VALUES('a'),('b'),('c');
+SELECT dolt_commit('-A','-m','init');
+ALTER TABLE t RENAME TO t2;
+INSERT INTO t2(v) VALUES('d');" \
+"SELECT id, v FROM t2 ORDER BY id"
+
 # Two tables share neither counter nor name; each advances independently.
 oracle two_tables_independent \
 "CREATE TABLE a(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
