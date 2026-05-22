@@ -370,10 +370,14 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         branchError(ctx, hadSavepoint, "cannot delete the current branch");
         return;
       }
-      if( strcmp(aPositional[0], "main")==0 ){
-        branchError(ctx, hadSavepoint,
-          "cannot delete branch 'main' (doltlite requires main to exist)");
-        return;
+      {
+        const char *zDefault = chunkStoreGetDefaultBranch(cs);
+        if( zDefault && strcmp(aPositional[0], zDefault)==0 ){
+          branchError(ctx, hadSavepoint,
+            "cannot delete the default branch; "
+            "call dolt_default_branch(<other>) first");
+          return;
+        }
       }
       if( !force ){
         rc = chunkStoreFindBranch(cs, aPositional[0], &branchHead);
@@ -444,21 +448,23 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       memset(&m, 0, sizeof(m));
       m.zSrc = aPositional[0];
       m.zDest = aPositional[1];
-      if( strcmp(m.zSrc, "main")==0 ){
-        branchError(ctx, hadSavepoint,
-          "cannot rename branch 'main' (doltlite requires main to exist)");
-        return;
-      }
-      renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
-      rc = doltliteMutateRefs(db, mutateBranchMove, &m);
-      if( rc!=SQLITE_OK ){
-        branchNamedResultError(ctx, hadSavepoint, rc,
-          "source branch not found", "destination already exists");
-        return;
-      }
-      if( renamingCurrent ){
-        doltliteSetSessionBranch(db, m.zDest);
-        chunkStoreSetDefaultBranch(cs, m.zDest);
+      {
+        const char *zDefault = chunkStoreGetDefaultBranch(cs);
+        renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
+        rc = doltliteMutateRefs(db, mutateBranchMove, &m);
+        if( rc!=SQLITE_OK ){
+          branchNamedResultError(ctx, hadSavepoint, rc,
+            "source branch not found", "destination already exists");
+          return;
+        }
+        if( renamingCurrent ){
+          doltliteSetSessionBranch(db, m.zDest);
+        }
+        if( zDefault && strcmp(m.zSrc, zDefault)==0 ){
+          chunkStoreSetDefaultBranch(cs, m.zDest);
+          (void)chunkStoreSerializeRefs(cs);
+          (void)chunkStoreCommit(cs);
+        }
       }
       break;
     }
