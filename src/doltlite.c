@@ -2863,6 +2863,26 @@ static void doltliteMergeFunc(
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
     }
 
+    /* Stats merge step (#990). The per-table merge takes ours for the
+    ** sqlite_stat tables instead of three-way merging derived rows that
+    ** would either dedupe spuriously or surface phantom PK conflicts.
+    ** ANALYZE the merged tree so the stats reflect post-merge data,
+    ** not whichever branch's snapshot we happened to keep. */
+    {
+      sqlite3_stmt *pProbe = 0;
+      int hasStat1 = 0;
+      if( sqlite3_prepare_v2(db,
+          "SELECT 1 FROM main.sqlite_master "
+          "WHERE type='table' AND name='sqlite_stat1' LIMIT 1",
+          -1, &pProbe, 0)==SQLITE_OK ){
+        if( sqlite3_step(pProbe)==SQLITE_ROW ) hasStat1 = 1;
+        sqlite3_finalize(pProbe);
+      }
+      if( hasStat1 ){
+        (void)sqlite3_exec(db, "ANALYZE", 0, 0, 0);
+      }
+    }
+
     rc = doltliteFlushCatalogToHash(db, &mergedCatHash);
     if( rc==SQLITE_OK ){
       rc = doltliteSwitchCatalog(db, &mergedCatHash);

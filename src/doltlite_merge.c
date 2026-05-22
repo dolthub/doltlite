@@ -2002,6 +2002,20 @@ do_merge_entry:
           }
         }
 
+        /* sqlite_stat1/stat4 are derived data: re-ANALYZE on the merged
+        ** tree will regenerate them, so the contents of either side are
+        ** safely discarded. Take ours to keep some stats around, skip
+        ** the row-merge (which would either dedupe or raise spurious
+        ** PK conflicts on the same (tbl,idx) keys). dolt_merge runs
+        ** ANALYZE as a final merge step to refresh against merged data. */
+        if( !skipRowMerge && zName
+         && oursChanged && theirsChanged
+         && (strcmp(zName, "sqlite_stat1")==0
+          || strcmp(zName, "sqlite_stat4")==0) ){
+          aMerged[(*pnMerged)++] = aOurs[i];
+          skipRowMerge = 1;
+        }
+
         if( !skipRowMerge ){
           if( oursChanged && theirsChanged ){
 
