@@ -6768,7 +6768,7 @@ static int prollyBtCursorIndexMoveto(
        && seekRes==0
        && pCur->pCur.eState==PROLLY_CURSOR_VALID
        && pCur->pKeyInfo
-       && pIdxKey->nField >= pCur->pKeyInfo->nAllField ){
+       && (exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField) ){
         int isDeleted = 0;
         if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
           ProllyMutMapEntry *mmE = 0;
