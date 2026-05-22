@@ -7304,9 +7304,25 @@ static int prollyBtCursorInsert(
     pInsertedPayload = pData;
     nInsertedPayload = nData;
 
-    rc = prollyMutMapInsert(pCur->pMutMap,
-                             NULL, 0, pPayload->nKey,
-                             pData, nData);
+    if( pCur->mmActive
+     && pCur->mmPhysActive
+     && pCur->pMutMap
+     && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH)
+     && (pCur->curFlags & BTCF_ValidNKey)
+     && pCur->cachedIntKey==pPayload->nKey ){
+      ProllyMutMapEntry *pEntry = currentMutMapEntry(pCur);
+      if( pEntry->op==PROLLY_EDIT_INSERT ){
+        rc = prollyMutMapReplaceEntry(pCur->pMutMap, pEntry, pData, nData);
+      }else{
+        rc = prollyMutMapInsert(pCur->pMutMap,
+                                 NULL, 0, pPayload->nKey,
+                                 pData, nData);
+      }
+    }else{
+      rc = prollyMutMapInsert(pCur->pMutMap,
+                               NULL, 0, pPayload->nKey,
+                               pData, nData);
+    }
   } else {
 
     int nSortKey = 0;
