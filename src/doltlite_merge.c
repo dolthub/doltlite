@@ -43,7 +43,7 @@ struct MergeIndexInfo {
 
 /* Serial type + body length for an i64 value, matching the encoding used
 ** by SQLite's row records and prolly trees. */
-static void ipkSerialType(i64 v, u32 *pType, u32 *pLen){
+void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen){
   if( v==0 ){ *pType = 8; *pLen = 0; return; }
   if( v==1 ){ *pType = 9; *pLen = 0; return; }
   if( v>=-128 && v<=127 ){ *pType = 1; *pLen = 1; return; }
@@ -54,7 +54,7 @@ static void ipkSerialType(i64 v, u32 *pType, u32 *pLen){
   *pType = 6; *pLen = 8;
 }
 
-static void ipkWriteBE(u8 *p, i64 v, int n){
+void doltliteIpkWriteBE(u8 *p, i64 v, int n){
   int i;
   for(i=n-1; i>=0; i--){ p[i] = (u8)(v & 0xff); v >>= 8; }
 }
@@ -66,7 +66,7 @@ static void ipkWriteBE(u8 *p, i64 v, int n){
 ** ghost so the resulting sort key matches the native index format
 ** written by the SQL INSERT path (see sortKeyFromIntRecordLocal in
 ** prolly_btree.c). */
-static int buildIndexSortKey(
+int doltliteBuildIndexSortKey(
   const u8 *pRec, int nRec,
   const i16 *aiColumn, int nIdxCol,
   KeyInfo *pKeyInfo,
@@ -88,7 +88,7 @@ static int buildIndexSortKey(
     int st = info.aType[iPKey];
     if( st==0 || st==8 || st==9 ){
       useIpk = 1;
-      ipkSerialType(intKey, &ipkType, &ipkLen);
+      doltliteIpkSerialType(intKey, &ipkType, &ipkLen);
     }
   }
 
@@ -180,7 +180,7 @@ static int buildIndexSortKey(
         st = (int)ipkType;
         flen = (int)ipkLen;
         if( flen>0 ){
-          ipkWriteBE(p, intKey, flen);
+          doltliteIpkWriteBE(p, intKey, flen);
           p += flen;
         }
         continue;
@@ -492,7 +492,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
           u8 *pIK = 0; int nIK = 0;
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
-          rc = buildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
+          rc = doltliteBuildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
                                  mi->aiColumn, mi->nColumn, mi->pKeyInfo,
                                  mi->iPKey, pChange->intKey,
                                  &pIK, &nIK);
@@ -515,7 +515,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
           if( pChange->pBaseVal && pChange->nBaseVal>0 ){
             u8 *pOK = 0; int nOK = 0;
-            rc = buildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
+            rc = doltliteBuildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
                                    mi->aiColumn, mi->nColumn, mi->pKeyInfo,
                                    mi->iPKey, pChange->intKey,
                                    &pOK, &nOK);
@@ -527,7 +527,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           if( rc==SQLITE_OK
            && pChange->pTheirVal && pChange->nTheirVal>0 ){
             u8 *pNK = 0; int nNK = 0;
-            rc = buildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
+            rc = doltliteBuildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
                                    mi->aiColumn, mi->nColumn, mi->pKeyInfo,
                                    mi->iPKey, pChange->intKey,
                                    &pNK, &nNK);
@@ -550,7 +550,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
         for(ix=0; ix<ctx->nIndexes && rc==SQLITE_OK; ix++){
           u8 *pIK = 0; int nIK = 0;
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
-          rc = buildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
+          rc = doltliteBuildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
                                  mi->aiColumn, mi->nColumn, mi->pKeyInfo,
                                  mi->iPKey, pChange->intKey,
                                  &pIK, &nIK);
@@ -591,7 +591,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
             MergeIndexInfo *mi = &ctx->aIndexes[ix];
             if( pChange->pBaseVal && pChange->nBaseVal>0 ){
               u8 *pOK = 0; int nOK = 0;
-              rc = buildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
+              rc = doltliteBuildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
                                      mi->aiColumn, mi->nColumn, mi->pKeyInfo,
                                      mi->iPKey, pChange->intKey,
                                      &pOK, &nOK);
@@ -602,7 +602,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
             }
             if( rc==SQLITE_OK ){
               u8 *pNK = 0; int nNK = 0;
-              rc = buildIndexSortKey(pMerged, nMerged,
+              rc = doltliteBuildIndexSortKey(pMerged, nMerged,
                                      mi->aiColumn, mi->nColumn, mi->pKeyInfo,
                                      mi->iPKey, pChange->intKey,
                                      &pNK, &nNK);

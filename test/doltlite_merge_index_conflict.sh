@@ -66,11 +66,9 @@ check "ours_iv_three_rows" "1|3
 out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t INDEXED BY iv WHERE v > 0;")
 check "ours_iv_count_matches" "3" "$out"
 
-# ── --theirs path: the table state ends up correct, but
-# doltliteApplyRawRowMutation in conflict-resolve bypasses secondary-
-# index maintenance, so the index entry for the resolved conflict
-# row goes stale. Captured here as a known limitation; the fix lives
-# at the conflict-resolve layer, not the merge layer.
+# ── --theirs path: dolt_conflicts_resolve --theirs writes theirs's
+# row via doltliteApplyRawRowMutation, which now maintains secondary
+# indexes too (was a known limitation before this PR).
 DB="$TMPROOT/theirs.db"
 "$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
 CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
@@ -93,6 +91,10 @@ COMMIT;
 EOF
 out=$("$DOLTLITE" "$DB" "SELECT id || '|' || v FROM t ORDER BY id;")
 check "theirs_table_state" "1|2
+2|20
+3|30" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT id || '|' || v FROM t INDEXED BY iv WHERE v > 0 ORDER BY v;")
+check "theirs_iv_three_rows" "1|2
 2|20
 3|30" "$out"
 
