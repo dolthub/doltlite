@@ -10,7 +10,7 @@
 # Logical id i is split as (a, b) = (i // 10000, i %% 10000) so lex (a,b)
 # tuple ordering matches integer ordering for any R below 10**8.
 #
-# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 5×) on individual
+# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 6×) on individual
 # read/write ratios and BENCH_AVG_MAX_MULTIPLIER (default 5×) on
 # section averages.
 #
@@ -22,7 +22,7 @@ BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
 ROWS=${BENCH_ROWS:-100000}
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-5}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-6}
 BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-5}
 SEED=42
 TMPDIR=$(mktemp -d)

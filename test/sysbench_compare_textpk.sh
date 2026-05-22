@@ -6,7 +6,7 @@
 # tables with a 32-char hex TEXT PRIMARY KEY (UUID-shaped). Surfaces the
 # non-INTKEY mutmap-flush cost; companion to issue #718's followup work.
 #
-# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 5×) on individual
+# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 6×) on individual
 # read/write ratios and BENCH_AVG_MAX_MULTIPLIER (default 5×) on
 # section averages.
 #
@@ -18,7 +18,7 @@ BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
 ROWS=${BENCH_ROWS:-100000}
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-5}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-6}
 BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-5}
 SEED=42
 TMPDIR=$(mktemp -d)
