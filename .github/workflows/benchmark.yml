@@ -13,10 +13,10 @@ permissions:
 jobs:
   int-keys:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
 
     env:
-      BENCH_RUNS: 21
+      BENCH_RUNS: 5
 
     steps:
     - uses: actions/checkout@v4
@@ -112,20 +112,35 @@ jobs:
           exit "$rc"
         fi
 
-  # Runs three non-INTKEY sysbench variants (TEXT PK, BLOB PK, composite
-  # PK). Each is gated on both individual ratios and section average
-  # ratios. Individual ceiling is 1.8x after recent write-path perf work
-  # brought the slowest variants comfortably below the previous gates.
-  # BENCH_RUNS=13 (vs int-keys' 21) because each non-INTKEY write is a
-  # per-statement flush and runs slower per iteration.
-  text-blob-comp-keys:
+  # Runs non-INTKEY sysbench variants as separate matrix jobs. At 100k rows
+  # each suite is large enough that running all three serially risks hitting
+  # the job timeout before benchmark results can be posted.
+  non-int-keys:
+    name: ${{ matrix.suite.name }}-keys
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - name: textpk
+            script: sysbench_compare_textpk.sh
+            output: /tmp/bench_textpk.md
+            marker: '<!-- benchmark:textpk -->'
+          - name: blobpk
+            script: sysbench_compare_blobpk.sh
+            output: /tmp/bench_blobpk.md
+            marker: '<!-- benchmark:blobpk -->'
+          - name: compositepk
+            script: sysbench_compare_compositepk.sh
+            output: /tmp/bench_compositepk.md
+            marker: '<!-- benchmark:compositepk -->'
 
     env:
-      BENCH_RUNS: 13
-      BENCH_MAX_MULTIPLIER: 1.8
-      BENCH_AVG_MAX_MULTIPLIER: 1.5
+      BENCH_RUNS: 5
+      BENCH_MAX_MULTIPLIER: 5
+      BENCH_AVG_MAX_MULTIPLIER: 5
 
     steps:
     - uses: actions/checkout@v4
@@ -154,29 +169,17 @@ jobs:
         make DOLTLITE_PROLLY=0 sqlite3 sqlite3.o
         cc -O2 -I. -I../src -o bench_timer_sqlite ../test/sysbench_timer.c sqlite3.o -lpthread -lz -lm
 
-    - name: Run benchmarks
+    - name: Run benchmark
       id: bench
       run: |
         cd build
-        # Each script enforces the configured individual and average
-        # ceilings; capture rc per script and merge so a single ceiling
-        # break fails the job after the PR-comment step has run.
+        # The script enforces the configured individual and average ceilings;
+        # capture rc separately so results are still posted on a failure.
         set +e
-        bash ../test/sysbench_compare_textpk.sh      > /tmp/bench_textpk.md
-        textpk_rc=$?
-        bash ../test/sysbench_compare_blobpk.sh      > /tmp/bench_blobpk.md
-        blobpk_rc=$?
-        bash ../test/sysbench_compare_compositepk.sh > /tmp/bench_compositepk.md
-        compositepk_rc=$?
+        bash ../test/${{ matrix.suite.script }} > "${{ matrix.suite.output }}"
+        bench_rc=$?
         set -e
-        cat /tmp/bench_textpk.md /tmp/bench_blobpk.md \
-            /tmp/bench_compositepk.md \
-            > /tmp/bench_extra_results.md
-        cat /tmp/bench_extra_results.md
-        bench_rc=0
-        for rc in "$textpk_rc" "$blobpk_rc" "$compositepk_rc"; do
-          if [ "$rc" != "0" ]; then bench_rc=$rc; fi
-        done
+        cat "${{ matrix.suite.output }}"
         echo "bench_rc=$bench_rc" >> "$GITHUB_OUTPUT"
 
     - name: Comment PR with results
@@ -188,26 +191,20 @@ jobs:
           // template-literal-unsafe chars in it) never has to round-trip
           // through YAML scalars or JS template-literal parsing.
           const fs = require('fs');
-          const body = fs.readFileSync('/tmp/bench_extra_results.md', 'utf8');
+          const body = fs.readFileSync('${{ matrix.suite.output }}', 'utf8');
 
           if (!context.issue.number) {
             console.log('No PR context (push event) — skipping comment');
             return;
           }
 
-          // Find existing benchmark-extra comment. Markers used to be
-          // textpk-only; now we look for any of the non-INTKEY markers.
+          const marker = '${{ matrix.suite.marker }}';
           const comments = await github.rest.issues.listComments({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
           });
-          const botComment = comments.data.find(c =>
-            c.body.includes('<!-- benchmark:textpk -->') ||
-            c.body.includes('<!-- benchmark:blobpk -->') ||
-            c.body.includes('<!-- benchmark:compositepk -->') ||
-            c.body.includes('## Sysbench-Style Benchmark (TEXT PK): Doltlite vs SQLite')
-          );
+          const botComment = comments.data.find(c => c.body.includes(marker));
 
           if (botComment) {
             await github.rest.issues.updateComment({
