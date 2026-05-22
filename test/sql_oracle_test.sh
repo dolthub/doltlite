@@ -6947,6 +6947,27 @@ SELECT * FROM t;
 "
 
 # ════════════════════════════════════════════════════════════════════
+# Category 122: BLOBKEY table root classification cache
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 122: BLOBKEY table root classification cache ---"
+
+# Doltlite stores ordinary non-INTEGER primary-key tables as BLOBKEY
+# table roots. Secondary indexes are BLOBKEY roots too, so the cursor
+# layer has to distinguish table roots from index roots when splitting
+# table keys from payload records. This exercises a newly-created table
+# and secondary index in the same connection, before any catalog reload
+# can pre-classify the roots.
+oracle "cat122_blobkey_table_update_with_secondary_index" "
+CREATE TABLE t(a TEXT PRIMARY KEY, b INT, c TEXT);
+CREATE INDEX tb ON t(b);
+INSERT INTO t VALUES('x',1,'one'),('y',2,'two');
+UPDATE t SET b=3 WHERE a='x';
+SELECT a,b,c FROM t ORDER BY a;
+SELECT a FROM t WHERE b=3;
+"
+
+# ════════════════════════════════════════════════════════════════════
 echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"

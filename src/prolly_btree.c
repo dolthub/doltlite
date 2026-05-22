@@ -129,6 +129,8 @@ struct TableEntry {
   u8 appendSeekFloorValid;
   i64 appendSeekFloor;
   ProllyHash appendSeekRoot;
+  u8 tableRootKnown;
+  u8 isTableRoot;
   char *zName;
   ProllyMutMap *pPending;
 };
@@ -154,6 +156,8 @@ struct SavepointCatalogEntry {
   ProllyHash schemaHash;
   u8 flags;
   u8 pendingFlushSeekEdits;
+  u8 tableRootKnown;
+  u8 isTableRoot;
   char *zName;
 };
 
@@ -2354,7 +2358,9 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       pName = q; q += nName;
       pTbl = q; q += nTbl;
       (void)pTbl;
+      pTE->tableRootKnown = 1;
       if( nType==5 && memcmp(pType, "table", 5)==0 && nName>0 ){
+        pTE->isTableRoot = 1;
         pTE->zName = sqlite3_malloc(nName+1);
         if( !pTE->zName ) return SQLITE_NOMEM;
         memcpy(pTE->zName, pName, nName);
@@ -2938,10 +2944,13 @@ static int saveCursorPosition(BtCursor *pCur){
 
 static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE){
   if( !pTE || pTE->iTable<=1 ) return 0;
+  if( pTE->tableRootKnown ) return pTE->isTableRoot ? 1 : 0;
   if( !pTE->zName && pBtree && pBtree->db ){
     pTE->zName = doltliteResolveTableNumber(pBtree->db, pTE->iTable);
   }
-  return pTE->zName!=0;
+  pTE->isTableRoot = pTE->zName!=0;
+  pTE->tableRootKnown = 1;
+  return pTE->isTableRoot ? 1 : 0;
 }
 
 static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
@@ -3057,6 +3066,8 @@ static int captureSavepointCatalogSnapshot(
     pDst->schemaHash = pSrc->schemaHash;
     pDst->flags = pSrc->flags;
     pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
+    pDst->tableRootKnown = pSrc->tableRootKnown;
+    pDst->isTableRoot = pSrc->isTableRoot;
     if( pSrc->zName ){
       pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
       if( !pDst->zName ){
@@ -3494,6 +3505,8 @@ static int restoreTablesFromSavepoint(
           pDst->schemaHash = pSrc->schemaHash;
           pDst->flags = pSrc->flags;
           pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
+          pDst->tableRootKnown = pSrc->tableRootKnown;
+          pDst->isTableRoot = pSrc->isTableRoot;
           if( pSrc->zName ){
             pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
             if( !pDst->zName ){
