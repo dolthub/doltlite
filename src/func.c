@@ -704,6 +704,83 @@ static const struct compareInfo likeInfoAlt = { '%', '_',   0, 0 };
 #define SQLITE_NOMATCH           1
 #define SQLITE_NOWILDCARDMATCH   2
 
+#ifdef DOLTLITE_PROLLY
+/*
+** Fast path for LIKE patterns of the form '%literal%'.  This is a common
+** table-scan predicate and is equivalent to searching for the literal byte
+** sequence when there are no inner wildcards or ESCAPE characters.  The
+** built-in LIKE implementation only folds ASCII case, so this path does the
+** same and leaves all other patterns to patternCompare().
+**
+** Return 0 or 1 if the fast path applies, or -1 if the caller should use the
+** generic matcher.
+*/
+static int likeContainsLiteralFast(
+  const u8 *zPat, int nPat,
+  const u8 *zStr, int nStr,
+  const struct compareInfo *pInfo,
+  u32 escape
+){
+  int i, j;
+  int nLit;
+  const u8 *zLit;
+  assert( zPat!=0 && zStr!=0 );
+  if( escape!=0
+   || pInfo->matchAll!='%'
+   || pInfo->matchOne!='_'
+   || pInfo->matchSet!=0
+   || nPat<2
+   || zPat[0]!='%'
+   || zPat[nPat-1]!='%'
+  ){
+    return -1;
+  }
+  zLit = zPat + 1;
+  nLit = nPat - 2;
+  for(i=0; i<nLit; i++){
+    if( zLit[i]==0 || zLit[i]=='%' || zLit[i]=='_' ){
+      return -1;
+    }
+  }
+  if( memchr(zStr, 0, nStr)!=0 ){
+    return -1;
+  }
+  if( nLit==0 ) return 1;
+  if( nLit>nStr ) return 0;
+
+  if( pInfo->noCase ){
+    char zStop[3];
+    if( zLit[0]>=0x80 ) return -1;
+    zStop[0] = sqlite3Toupper(zLit[0]);
+    zStop[1] = sqlite3Tolower(zLit[0]);
+    zStop[2] = 0;
+    i = 0;
+    while( i<=nStr-nLit ){
+      i += (int)strcspn((const char*)zStr+i, zStop);
+      if( i>nStr-nLit ) break;
+      for(j=0; j<nLit; j++){
+        u8 a = zStr[i+j];
+        u8 b = zLit[j];
+        if( a<0x80 ) a = sqlite3Tolower(a);
+        if( b<0x80 ) b = sqlite3Tolower(b);
+        if( a!=b ) break;
+      }
+      if( j==nLit ) return 1;
+      i++;
+    }
+  }else{
+    u8 first = zLit[0];
+    for(i=0; i<=nStr-nLit; i++){
+      const void *p = memchr(zStr+i, first, (size_t)(nStr-nLit-i+1));
+      if( p==0 ) break;
+      i = (int)((const u8*)p - zStr);
+      if( memcmp(zStr+i, zLit, (size_t)nLit)==0 ) return 1;
+    }
+  }
+  return 0;
+}
+#endif
+
 /*
 ** Compare two UTF-8 strings for equality where the first string is
 ** a GLOB or LIKE expression.  Return values:
@@ -981,6 +1058,16 @@ static void likeFunc(
   if( zA && zB ){
 #ifdef SQLITE_TEST
     sqlite3_like_count++;
+#endif
+#ifdef DOLTLITE_PROLLY
+    {
+      int bFast = likeContainsLiteralFast(zB, nPat, zA,
+          sqlite3_value_bytes(argv[1]), pInfo, escape);
+      if( bFast>=0 ){
+        sqlite3_result_int(context, bFast);
+        return;
+      }
+    }
 #endif
     sqlite3_result_int(context,
                       patternCompare(zB, zA, pInfo, escape)==SQLITE_MATCH);

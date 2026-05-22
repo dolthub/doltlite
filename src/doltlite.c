@@ -1856,6 +1856,34 @@ static void doltliteCommitFunc(
     }
   }
 
+  /* If this commit is finalizing a merge (whether autocommit-style
+  ** straight through dolt_merge, or explicit-txn with dolt_conflicts_
+  ** resolve in between), regenerate sqlite_stat1 against the merged
+  ** tree before sealing the commit. mergeCatalogPass1 took ours for
+  ** the stat rows; this ANALYZE makes them match post-merge data. */
+  {
+    u8 isMergingCommit = 0;
+    doltliteGetSessionMergeState(db, &isMergingCommit, 0, 0);
+    if( isMergingCommit ){
+      sqlite3_stmt *pProbe = 0;
+      int hasStat1 = 0;
+      if( sqlite3_prepare_v2(db,
+          "SELECT 1 FROM main.sqlite_master "
+          "WHERE type='table' AND name='sqlite_stat1' LIMIT 1",
+          -1, &pProbe, 0)==SQLITE_OK ){
+        if( sqlite3_step(pProbe)==SQLITE_ROW ) hasStat1 = 1;
+        sqlite3_finalize(pProbe);
+      }
+      if( hasStat1 ){
+        ProllyHash refreshedCat;
+        (void)sqlite3_exec(db, "ANALYZE", 0, 0, 0);
+        if( doltliteFlushCatalogToHash(db, &refreshedCat)==SQLITE_OK ){
+          doltliteSetSessionStaged(db, &refreshedCat);
+        }
+      }
+    }
+  }
+
   doltliteGetSessionStaged(db, &catalogHash);
   if( prollyHashIsEmpty(&catalogHash) ){
     if( allowEmpty ){
@@ -2861,6 +2889,30 @@ static void doltliteMergeFunc(
       }
     }else{
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
+    }
+
+    /* Stats merge step (#990). mergeCatalogPass1 takes ours for the
+    ** sqlite_stat tables instead of three-way merging derived rows
+    ** that would either dedupe spuriously or surface phantom PK
+    ** conflicts. ANALYZE here regenerates stats against the merged
+    ** tree so they reflect post-merge data, not whichever branch's
+    ** snapshot we happened to keep.
+    ** Skip on row-level conflicts: the conflict path rolls back
+    ** through an autocommit unwind that doesn't cleanly undo
+    ** sqlite_stat1 writes. */
+    if( nMergeConflicts==0 ){
+      sqlite3_stmt *pProbe = 0;
+      int hasStat1 = 0;
+      if( sqlite3_prepare_v2(db,
+          "SELECT 1 FROM main.sqlite_master "
+          "WHERE type='table' AND name='sqlite_stat1' LIMIT 1",
+          -1, &pProbe, 0)==SQLITE_OK ){
+        if( sqlite3_step(pProbe)==SQLITE_ROW ) hasStat1 = 1;
+        sqlite3_finalize(pProbe);
+      }
+      if( hasStat1 ){
+        (void)sqlite3_exec(db, "ANALYZE", 0, 0, 0);
+      }
     }
 
     rc = doltliteFlushCatalogToHash(db, &mergedCatHash);
