@@ -197,6 +197,7 @@ static int csRestoreCommittedRefsState(ChunkStore *cs){
     csFreeTags(cs);
     csFreeRemotes(cs);
     csFreeTracking(cs);
+    csFreeSequences(cs);
     return csEnsureDefaultBranch(cs);
   }
   return chunkStoreReloadRefs(cs);
@@ -423,6 +424,7 @@ int chunkStoreClose(ChunkStore *cs){
   csFreeTags(cs);
   csFreeRemotes(cs);
   csFreeTracking(cs);
+  csFreeSequences(cs);
   sqlite3_mutex_free(cs->pLockMutex);
   memset(cs, 0, sizeof(*cs));
   return SQLITE_OK;
@@ -1408,6 +1410,7 @@ void chunkStoreClearRefs(ChunkStore *cs){
   csFreeTags(cs);
   csFreeRemotes(cs);
   csFreeTracking(cs);
+  csFreeSequences(cs);
   memset(&cs->refs.refsHash, 0, sizeof(cs->refs.refsHash));
 }
 
