@@ -376,7 +376,7 @@ static void nodeAppendState(const ProllyNode *pNode,
                             int *pWouldSplit){
   int i;
   int nBytes = 0;
-  int thisSize = nKey + nVal;
+  int thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
   int endsAtBoundary = 0;
   int wouldSplit = 0;
 
@@ -386,7 +386,7 @@ static void nodeAppendState(const ProllyNode *pNode,
     prollyNodeKey(pNode, i, &pK, &nK);
     prollyNodeValue(pNode, i, &pV, &nV);
     (void)pK; (void)pV;
-    nBytes += nK + nV;
+    nBytes += PROLLY_NODE_ENTRY_BYTES(pNode->level, nK, nV);
   }
   if( pNode->nItems>0 && nBytes >= PROLLY_CHUNK_MAX ){
     endsAtBoundary = 1;
@@ -399,7 +399,9 @@ static void nodeAppendState(const ProllyNode *pNode,
     (void)pLastVal;
     h = prollyXXH32(pLastKey, nLastKey, (u32)pNode->level);
     endsAtBoundary = prollyWeibullCheck((u32)nBytes,
-                                        (u32)(nLastKey + nLastVal), h);
+                                        (u32)PROLLY_NODE_ENTRY_BYTES(
+                                          pNode->level, nLastKey, nLastVal),
+                                        h);
   }
 
   nBytes += thisSize;
@@ -419,14 +421,14 @@ static int appendWouldSplitNode(const ProllyNode *pNode,
                                 int nVal){
   int i;
   int nBytes = 0;
-  int thisSize = nKey + nVal;
+  int thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
   for(i=0; i<(int)pNode->nItems; i++){
     const u8 *pK, *pV;
     int nK, nV;
     prollyNodeKey(pNode, i, &pK, &nK);
     prollyNodeValue(pNode, i, &pV, &nV);
     (void)pK; (void)pV;
-    nBytes += nK + nV;
+    nBytes += PROLLY_NODE_ENTRY_BYTES(pNode->level, nK, nV);
   }
   nBytes += thisSize;
   if( nBytes >= PROLLY_CHUNK_MAX ) return 1;
@@ -448,7 +450,7 @@ static int nodeEndsAtChunkBoundary(const ProllyNode *pNode){
     prollyNodeKey(pNode, i, &pKey, &nKey);
     prollyNodeValue(pNode, i, &pVal, &nVal);
     (void)pVal;
-    nBytes += nKey + nVal;
+    nBytes += PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
   }
   if( nBytes >= PROLLY_CHUNK_MAX ) return 1;
   if( nBytes >= PROLLY_CHUNK_MIN ){
@@ -456,7 +458,9 @@ static int nodeEndsAtChunkBoundary(const ProllyNode *pNode){
     prollyNodeKey(pNode, (int)pNode->nItems - 1, &pKey, &nKey);
     prollyNodeValue(pNode, (int)pNode->nItems - 1, &pVal, &nVal);
     h = prollyXXH32(pKey, nKey, (u32)pNode->level);
-    return prollyWeibullCheck((u32)nBytes, (u32)(nKey + nVal), h);
+    return prollyWeibullCheck((u32)nBytes,
+                              (u32)PROLLY_NODE_ENTRY_BYTES(pNode->level,
+                                                           nKey, nVal), h);
   }
   return 0;
 }
