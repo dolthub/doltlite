@@ -8830,6 +8830,10 @@ int doltliteApplyRawRowMutation(
     for(pIdx=pTab->pIndex; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
       struct TableEntry *pIdxTE = 0;
       int j;
+      /* WITHOUT ROWID tables expose the PK as a pseudo-INDEX whose
+      ** tnum equals the table's own root. Mutating it like a
+      ** secondary index would overwrite the table tree. Skip. */
+      if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ) continue;
       for(j=0; j<pBtree->cat.n; j++){
         if( pBtree->cat.a[j].iTable==(Pgno)pIdx->tnum ){
           pIdxTE = &pBtree->cat.a[j];
