@@ -71,6 +71,13 @@ int prollyMutMapInsert(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey,
                        const u8 *pVal, int nVal);
 
+int prollyMutMapReplaceEntry(
+  ProllyMutMap *mm,
+  ProllyMutMapEntry *e,
+  const u8 *pVal,
+  int nVal
+);
+
 int prollyMutMapDelete(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey);
 
