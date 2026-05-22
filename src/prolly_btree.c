@@ -8630,6 +8630,125 @@ void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH){
   }
 }
 
+/* Declared in doltlite_internal.h. Forward-declared here because that
+** header redefines TableEntry/SchemaEntry in a shape incompatible with
+** this file's local definitions, so we can't just include it. */
+extern int doltliteBuildIndexSortKey(
+  const u8 *pRec, int nRec,
+  const i16 *aiColumn, int nIdxCol,
+  KeyInfo *pKeyInfo,
+  int iPKey, i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
+  u8 **ppKey, int *pnKey
+);
+
+/* Read the current value bytes at (pKey/intKey) in the table's prolly
+** tree. *ppOld is set to a freshly-allocated copy (caller frees) or
+** to NULL if the key is not present. */
+static int readRowValue(
+  BtShared *pBt,
+  struct TableEntry *pTE,
+  const u8 *pKey, int nKey, i64 intKey,
+  u8 **ppOld, int *pnOld
+){
+  ProllyCursor cur;
+  int rc;
+  int res = 0;
+  *ppOld = 0;
+  *pnOld = 0;
+  prollyCursorInit(&cur, &pBt->store, &pBt->cache, &pTE->root, pTE->flags);
+  if( pTE->flags & PROLLY_NODE_INTKEY ){
+    rc = prollyCursorSeekInt(&cur, intKey, &res);
+  }else{
+    rc = prollyCursorSeekBlob(&cur, pKey, nKey, &res);
+  }
+  if( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&cur) ){
+    const u8 *pVal = 0;
+    int nVal = 0;
+    prollyCursorValue(&cur, &pVal, &nVal);
+    if( nVal>0 ){
+      *ppOld = sqlite3_malloc(nVal);
+      if( !*ppOld ){
+        prollyCursorClose(&cur);
+        return SQLITE_NOMEM;
+      }
+      memcpy(*ppOld, pVal, nVal);
+      *pnOld = nVal;
+    }
+  }
+  prollyCursorClose(&cur);
+  return rc;
+}
+
+/* Mutate one secondary index: delete the old key (if pOldVal is set)
+** and insert the new key (if pNewVal is set). Used by the raw-row
+** mutation path so dolt_conflicts_resolve --theirs (and any future
+** caller) keeps secondary indexes consistent with the table. */
+static int mutateSecondaryIndex(
+  BtShared *pBt,
+  struct TableEntry *pIdxTE,
+  Index *pIdx,
+  int iPKey,
+  i64 intKey,
+  const u8 *pTreeKey, int nTreeKey,
+  const u8 *pOldVal, int nOldVal,
+  const u8 *pNewVal, int nNewVal
+){
+  ProllyMutMap mm;
+  ProllyMutator mut;
+  u8 *pOldKey = 0, *pNewKey = 0;
+  int nOldKey = 0, nNewKey = 0;
+  int rc;
+
+  rc = prollyMutMapInit(&mm, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  if( pOldVal && nOldVal>0 ){
+    rc = doltliteBuildIndexSortKey(pOldVal, nOldVal,
+                                   pIdx->aiColumn, pIdx->nKeyCol, 0,
+                                   iPKey, intKey,
+                                   pTreeKey, nTreeKey,
+                                   &pOldKey, &nOldKey);
+    if( rc==SQLITE_OK ){
+      rc = prollyMutMapDelete(&mm, pOldKey, nOldKey, 0);
+    }
+    sqlite3_free(pOldKey);
+    if( rc!=SQLITE_OK ){
+      prollyMutMapFree(&mm);
+      return rc;
+    }
+  }
+  if( pNewVal && nNewVal>0 ){
+    rc = doltliteBuildIndexSortKey(pNewVal, nNewVal,
+                                   pIdx->aiColumn, pIdx->nKeyCol, 0,
+                                   iPKey, intKey,
+                                   pTreeKey, nTreeKey,
+                                   &pNewKey, &nNewKey);
+    if( rc==SQLITE_OK ){
+      rc = prollyMutMapInsert(&mm, pNewKey, nNewKey, 0, 0, 0);
+    }
+    sqlite3_free(pNewKey);
+    if( rc!=SQLITE_OK ){
+      prollyMutMapFree(&mm);
+      return rc;
+    }
+  }
+
+  memset(&mut, 0, sizeof(mut));
+  mut.pStore = &pBt->store;
+  mut.pCache = &pBt->cache;
+  memcpy(&mut.oldRoot, &pIdxTE->root, sizeof(ProllyHash));
+  mut.pEdits = &mm;
+  mut.flags = pIdxTE->flags;
+
+  rc = prollyMutateFlush(&mut);
+  if( rc==SQLITE_OK ){
+    memcpy(&pIdxTE->root, &mut.newRoot, sizeof(ProllyHash));
+  }
+  prollyMutMapFree(&mm);
+  return rc;
+}
+
 int doltliteApplyRawRowMutation(
   sqlite3 *db,
   const char *zTable,
@@ -8641,6 +8760,9 @@ int doltliteApplyRawRowMutation(
   struct TableEntry *pTE;
   ProllyMutMap mm;
   ProllyMutator mut;
+  u8 *pOldVal = 0;
+  int nOldVal = 0;
+  Table *pTab = 0;
   int rc;
   u8 isIntKey;
 
@@ -8668,9 +8790,23 @@ int doltliteApplyRawRowMutation(
   rc = flushPendingForTable(pBtree, pBt, pTE, 0);
   if( rc!=SQLITE_OK ) return rc;
 
+  /* Read the existing row value so we can compute index keys to delete.
+  ** Only matters when the table has secondary indexes. */
+  pTab = sqlite3FindTable(db, zTable, "main");
+  if( pTab && pTab->pIndex ){
+    rc = readRowValue(pBt, pTE, pKey, nKey, intKey, &pOldVal, &nOldVal);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(pOldVal);
+      return rc;
+    }
+  }
+
   isIntKey = (pTE->flags & PROLLY_NODE_INTKEY) ? 1 : 0;
   rc = prollyMutMapInit(&mm, isIntKey);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pOldVal);
+    return rc;
+  }
 
   if( pVal ){
     rc = prollyMutMapInsert(&mm, pKey, nKey, intKey, pVal, nVal);
@@ -8679,6 +8815,7 @@ int doltliteApplyRawRowMutation(
   }
   if( rc!=SQLITE_OK ){
     prollyMutMapFree(&mm);
+    sqlite3_free(pOldVal);
     return rc;
   }
 
@@ -8693,8 +8830,36 @@ int doltliteApplyRawRowMutation(
   if( rc==SQLITE_OK ){
     memcpy(&pTE->root, &mut.newRoot, sizeof(ProllyHash));
   }
-
   prollyMutMapFree(&mm);
+
+  /* Update secondary indexes (delete old key, insert new). pOldVal can
+  ** be NULL when this is an insert of a fresh PK; pVal is NULL when
+  ** this is a delete. */
+  if( rc==SQLITE_OK && pTab && pTab->pIndex
+   && (pOldVal || (pVal && nVal>0)) ){
+    Index *pIdx;
+    int iPKey = pTab->iPKey;
+    for(pIdx=pTab->pIndex; pIdx && rc==SQLITE_OK; pIdx=pIdx->pNext){
+      struct TableEntry *pIdxTE = 0;
+      int j;
+      /* WITHOUT ROWID tables expose the PK as a pseudo-INDEX whose
+      ** tnum equals the table's own root. Mutating it like a
+      ** secondary index would overwrite the table tree. Skip. */
+      if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ) continue;
+      for(j=0; j<pBtree->cat.n; j++){
+        if( pBtree->cat.a[j].iTable==(Pgno)pIdx->tnum ){
+          pIdxTE = &pBtree->cat.a[j];
+          break;
+        }
+      }
+      if( !pIdxTE ) continue;
+      rc = mutateSecondaryIndex(pBt, pIdxTE, pIdx, iPKey, intKey,
+                                pKey, nKey,
+                                pOldVal, nOldVal, pVal, nVal);
+    }
+  }
+
+  sqlite3_free(pOldVal);
   return rc;
 }
 

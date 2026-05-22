@@ -112,6 +112,18 @@ char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 int doltliteApplyRawRowMutation(sqlite3 *db, const char *zTable,
                                 const u8 *pKey, int nKey, i64 intKey,
                                 const u8 *pVal, int nVal);
+
+/* Index key construction helpers (see doltlite_merge.c). Exposed for
+** dolt_conflicts_resolve --theirs to maintain secondary indexes when
+** writing theirs's row directly via the raw-row mutation path. */
+void doltliteIpkSerialType(i64 v, u32 *pType, u32 *pLen);
+void doltliteIpkWriteBE(u8 *p, i64 v, int n);
+int doltliteBuildIndexSortKey(const u8 *pRec, int nRec,
+                              const i16 *aiColumn, int nIdxCol,
+                              KeyInfo *pKeyInfo,
+                              int iPKey, i64 intKey,
+                              const u8 *pTreeKey, int nTreeKey,
+                              u8 **ppKey, int *pnKey);
 int doltliteEnsureWriteTxnAndSavepoints(sqlite3 *db);
 int doltliteSwitchCatalog(sqlite3 *db, const ProllyHash *catHash);
 int doltliteHardReset(sqlite3 *db, const ProllyHash *catHash);
