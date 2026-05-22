@@ -218,10 +218,47 @@ case "$out" in 4\ *) pass=$((pass+1)) ;;
      echo "  FAIL: remerge_stats_fresh"; echo "    got: $out" ;;
 esac
 
-# NOTE: schema-merging an index drop or add across diverged branches is
-# tracked separately as a pre-existing merge limitation. The tests
-# below set up the index landscape in the ancestor commit so the
-# divergence is purely data + stats.
+# ── DROP INDEX on one side, ANALYZE on the other. The drop wins
+# (mergeCatalogPass2 now honors it instead of erroring on theirs's
+# automatically-maintained index changes), and the post-merge ANALYZE
+# regenerates sqlite_stat1 without a row for the dropped index.
+DB="$TMPROOT/dropidx.db"
+"$DOLTLITE" "$DB" <<'EOF' >/dev/null 2>&1
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, w INT);
+CREATE INDEX iv ON t(v); CREATE INDEX iw ON t(w);
+INSERT INTO t VALUES(1,1,10),(2,2,20),(3,3,30);
+ANALYZE;
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_checkout('-b','feat');
+INSERT INTO t VALUES(4,4,40),(5,5,50);
+ANALYZE;
+SELECT dolt_commit('-A','-m','feat add+analyze');
+SELECT dolt_checkout('main');
+DROP INDEX iw;
+ANALYZE;
+SELECT dolt_commit('-A','-m','main drop iw+analyze');
+SELECT dolt_merge('feat');
+EOF
+out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM dolt_conflicts;")
+check "drop_index_no_conflicts" "0" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM t;")
+check "drop_index_rows_merged" "5" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='iw';")
+check "drop_index_iw_gone" "0" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT count(*) FROM sqlite_stat1 WHERE idx='iw';")
+check "drop_index_no_iw_stat" "0" "$out"
+out=$("$DOLTLITE" "$DB" "SELECT stat FROM sqlite_stat1 WHERE idx='iv';")
+case "$out" in 5\ *) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES drop_index_iv_fresh"
+     echo "  FAIL: drop_index_iv_fresh"; echo "    got: $out" ;;
+esac
+
+# NOTE: creating a new index on only one side does NOT cleanly merge —
+# theirs's new index lacks ours's rows because the merge brings the
+# index in as-is. ANALYZE picks up the (incomplete) state. This is a
+# pre-existing merge limitation; we don't run REINDEX on the user's
+# behalf. The tests below keep the index landscape stable in the
+# ancestor commit so the divergence is purely data + stats.
 
 # ── Two indexes, both present in ancestor. Data diverges on both
 # branches; both ANALYZE. Merge must not conflict, and post-merge

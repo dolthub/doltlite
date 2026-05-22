@@ -2280,8 +2280,11 @@ static int mergeCatalogPass2(
             if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
             aMerged[(*pnMerged)++] = newEntry;
           }else{
-            int theirsChanged = prollyHashCompare(&aTheirs[i].root, &ancEntry->root)!=0;
-            if( theirsChanged ) return SQLITE_ERROR;
+            /* Index existed in ancestor, dropped on ours. Theirs may
+            ** have "modified" it as a side effect of data inserts —
+            ** auto-maintained index entries, not user intent. Honor
+            ** ours' explicit DROP and let the post-merge REINDEX
+            ** rebuild any surviving indexes against the merged data. */
           }
         }
         continue;

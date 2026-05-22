@@ -2863,13 +2863,15 @@ static void doltliteMergeFunc(
       freeSchemaMergeActions(aSchemaActions, nSchemaActions);
     }
 
-    /* Stats merge step (#990). The per-table merge takes ours for the
-    ** sqlite_stat tables instead of three-way merging derived rows that
-    ** would either dedupe spuriously or surface phantom PK conflicts.
-    ** ANALYZE the merged tree so the stats reflect post-merge data,
-    ** not whichever branch's snapshot we happened to keep.
-    ** Skip on row-level conflicts: those will trigger a rollback whose
-    ** working-set update doesn't unwind sqlite_stat1 writes cleanly. */
+    /* Stats merge step (#990). mergeCatalogPass1 takes ours for the
+    ** sqlite_stat tables instead of three-way merging derived rows
+    ** that would either dedupe spuriously or surface phantom PK
+    ** conflicts. ANALYZE here regenerates stats against the merged
+    ** tree so they reflect post-merge data, not whichever branch's
+    ** snapshot we happened to keep.
+    ** Skip on row-level conflicts: the conflict path rolls back
+    ** through an autocommit unwind that doesn't cleanly undo
+    ** sqlite_stat1 writes. */
     if( nMergeConflicts==0 ){
       sqlite3_stmt *pProbe = 0;
       int hasStat1 = 0;
