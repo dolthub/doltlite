@@ -4916,6 +4916,58 @@ static void doltliteVersionFunc(sqlite3_context *ctx, int argc, sqlite3_value **
   sqlite3_result_text(ctx, DOLTLITE_VERSION, -1, SQLITE_STATIC);
 }
 
+static void doltliteDefaultBranchFunc(
+  sqlite3_context *ctx, int argc, sqlite3_value **argv
+){
+  sqlite3 *db = sqlite3_context_db_handle(ctx);
+  ChunkStore *cs = doltliteGetChunkStore(db);
+  if( !cs ){
+    sqlite3_result_error(ctx, "no chunk store", -1);
+    return;
+  }
+  if( argc==0 ){
+    const char *zDef = chunkStoreGetDefaultBranch(cs);
+    sqlite3_result_text(ctx, zDef ? zDef : "main", -1, SQLITE_TRANSIENT);
+    return;
+  }
+  if( argc==1 ){
+    const char *zNew;
+    ProllyHash unused;
+    int rc;
+    if( sqlite3_value_type(argv[0])!=SQLITE_TEXT ){
+      sqlite3_result_error(ctx,
+        "dolt_default_branch(name): name must be text", -1);
+      return;
+    }
+    zNew = (const char*)sqlite3_value_text(argv[0]);
+    if( !zNew || !zNew[0] ){
+      sqlite3_result_error(ctx, "branch name required", -1);
+      return;
+    }
+    if( chunkStoreFindBranch(cs, zNew, &unused)!=SQLITE_OK ){
+      char *zErr = sqlite3_mprintf("branch '%s' not found", zNew);
+      sqlite3_result_error(ctx, zErr ? zErr : "branch not found", -1);
+      sqlite3_free(zErr);
+      return;
+    }
+    rc = chunkStoreSetDefaultBranch(cs, zNew);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    rc = chunkStoreSerializeRefs(cs);
+    if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error_code(ctx, rc);
+      return;
+    }
+    sqlite3_result_int(ctx, 0);
+    return;
+  }
+  sqlite3_result_error(ctx,
+    "dolt_default_branch() takes 0 or 1 arguments", -1);
+}
+
 static void doltliteMaybeSeedRepo(sqlite3 *db){
   ChunkStore *cs = doltliteGetChunkStore(db);
   ProllyHash emptyParent;
@@ -4957,6 +5009,8 @@ void doltliteRegister(sqlite3 *db){
                                                    doltliteConfigFunc, 0, 0);
   if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_version", 0, SQLITE_UTF8, 0,
                                                    doltliteVersionFunc, 0, 0);
+  if( rc==SQLITE_OK ) rc = sqlite3_create_function(db, "dolt_default_branch", -1, SQLITE_UTF8, 0,
+                                                   doltliteDefaultBranchFunc, 0, 0);
   if( rc!=SQLITE_OK ) return;
   if( doltliteLogRegister(db)!=SQLITE_OK ) return;
   if( doltliteCommitAncestorsRegister(db)!=SQLITE_OK ) return;
