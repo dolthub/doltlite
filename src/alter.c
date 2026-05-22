@@ -247,7 +247,7 @@ void sqlite3AlterRenameTable(
     sqlite3NestedParse(pParse,
         "UPDATE \"%w\".sqlite_sequence set name = %Q WHERE name = %Q",
         zDb, zName, pTab->zName);
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
     {
       int regOld = ++pParse->nMem;
       int regNew = ++pParse->nMem;

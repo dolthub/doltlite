@@ -3506,7 +3506,7 @@ void sqlite3CodeDropTable(Parse *pParse, Table *pTab, int iDb, int isView){
       "DELETE FROM %Q.sqlite_sequence WHERE name=%Q",
       pDb->zDbSName, pTab->zName
     );
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
     {
       Vdbe *vSeq = sqlite3GetVdbe(pParse);
       if( vSeq ){

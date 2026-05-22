@@ -20,7 +20,7 @@
 */
 #include "sqliteInt.h"
 #include "vdbeInt.h"
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 #include "chunk_store.h"
 struct ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 #endif
@@ -3917,7 +3917,7 @@ case OP_CountRange: {    /* out2 */
   goto check_for_interrupt;
 }
 
-#ifdef DOLTLITE_PROLLY
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 /* Opcode: DoltliteSeqMax P1 P2 * * *
 ** Synopsis: r[P1]=max(r[P1], chunkStoreGetSequenceValue(r[P2]))
 **
