@@ -739,6 +739,29 @@ int prollyMutMapDelete(
   return SQLITE_OK;
 }
 
+int prollyMutMapDeleteEntry(
+  ProllyMutMap *mm,
+  ProllyMutMapEntry *e
+){
+  int rc;
+  int phys;
+  if( !mm || !e ) return SQLITE_MISUSE;
+  phys = (int)(e - mm->aEntries);
+  if( phys<0 || phys>=mm->nEntries ) return SQLITE_CORRUPT_BKPT;
+  if( e->op!=PROLLY_EDIT_INSERT ){
+    return SQLITE_OK;
+  }
+  if( mm->currentSavepointLevel > 0
+   && decodeLevel(mm, e->bornAt) < mm->currentSavepointLevel ){
+    rc = appendUndoRec(mm, phys);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  e->op = PROLLY_EDIT_DELETE;
+  e->nVal = 0;
+  e->bornAt = encodeLevel(mm, mm->currentSavepointLevel);
+  return SQLITE_OK;
+}
+
 void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level){
   if( !mm ) return;
   mm->currentSavepointLevel = level;

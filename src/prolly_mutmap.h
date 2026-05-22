@@ -81,6 +81,11 @@ int prollyMutMapReplaceEntry(
 int prollyMutMapDelete(ProllyMutMap *mm,
                        const u8 *pKey, int nKey, i64 intKey);
 
+int prollyMutMapDeleteEntry(
+  ProllyMutMap *mm,
+  ProllyMutMapEntry *e
+);
+
 int prollyMutMapFindRc(
   ProllyMutMap *mm,
   const u8 *pKey, int nKey, i64 intKey,
