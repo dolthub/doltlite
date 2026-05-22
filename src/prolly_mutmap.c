@@ -477,29 +477,26 @@ static int ensureCapacity(ProllyMutMap *mm){
     ProllyMutMapEntry *aNew;
     int *aOrderNew;
     int *aPosNew;
-    aNew = sqlite3_malloc(nNew * sizeof(ProllyMutMapEntry));
-    aOrderNew = sqlite3_malloc(nNew * sizeof(int));
-    aPosNew = sqlite3_malloc(nNew * sizeof(int));
-    if( !aNew || !aOrderNew || !aPosNew ){
-      sqlite3_free(aNew);
-      sqlite3_free(aOrderNew);
-      sqlite3_free(aPosNew);
+    aNew = sqlite3_realloc(mm->aEntries, nNew * sizeof(ProllyMutMapEntry));
+    if( !aNew ){
       return SQLITE_NOMEM;
     }
-    if( mm->nEntries > 0 ){
+    if( aNew != mm->aEntries && mm->nEntries > 0 ){
       int i;
-      memcpy(aNew, mm->aEntries, mm->nEntries * sizeof(ProllyMutMapEntry));
-      memcpy(aOrderNew, mm->aOrder, mm->nEntries * sizeof(int));
-      memcpy(aPosNew, mm->aPos, mm->nEntries * sizeof(int));
       for(i=0; i<mm->nEntries; i++){
         fixInlineKeyPtr(&aNew[i]);
       }
     }
-    sqlite3_free(mm->aEntries);
-    sqlite3_free(mm->aOrder);
-    sqlite3_free(mm->aPos);
     mm->aEntries = aNew;
+    aOrderNew = sqlite3_realloc(mm->aOrder, nNew * sizeof(int));
+    if( !aOrderNew ){
+      return SQLITE_NOMEM;
+    }
     mm->aOrder = aOrderNew;
+    aPosNew = sqlite3_realloc(mm->aPos, nNew * sizeof(int));
+    if( !aPosNew ){
+      return SQLITE_NOMEM;
+    }
     mm->aPos = aPosNew;
     mm->nAlloc = nNew;
   }
