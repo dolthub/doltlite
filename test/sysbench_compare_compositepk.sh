@@ -74,9 +74,7 @@ def kbetween(s, e):
     ea, eb = parts(e)
     return f"(a,b) BETWEEN ({sa},{sb}) AND ({ea},{eb})"
 
-# Common schema + data — sbtest1 / sbtest2 use a 2-column composite PK.
-# sbtest_types keeps INTEGER PK because that table tests value-type
-# coverage, not PK shape.
+# Common schema + data uses a 2-column composite PK.
 def write_prepare(f):
     f.write("CREATE TABLE sbtest1(a INTEGER NOT NULL, b INTEGER NOT NULL, k INTEGER NOT NULL DEFAULT 0, c TEXT NOT NULL DEFAULT '', pad TEXT NOT NULL DEFAULT '', PRIMARY KEY(a,b)) WITHOUT ROWID;\n")
     f.write("CREATE INDEX k_idx ON sbtest1(k);\n")
@@ -94,10 +92,10 @@ def write_prepare_join(f):
     f.write("COMMIT;\n")
 
 def write_prepare_types(f):
-    f.write("CREATE TABLE sbtest_types(id INTEGER PRIMARY KEY, ival INTEGER, rval REAL, tval TEXT);\n")
+    f.write("CREATE TABLE sbtest_types(a INTEGER NOT NULL, b INTEGER NOT NULL, ival INTEGER, rval REAL, tval TEXT, PRIMARY KEY(a,b)) WITHOUT ROWID;\n")
     f.write("BEGIN;\n")
     for i in range(1, R+1):
-        f.write(f"INSERT INTO sbtest_types VALUES({i},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
+        f.write(f"INSERT INTO sbtest_types VALUES({kvals(i)},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
 
 # Each test file: prepare + ".print BENCH_START" + workload + ".print BENCH_END"
@@ -243,8 +241,8 @@ def w_types_delete_insert(f):
     f.write("BEGIN;\n")
     for _ in range(5000):
         id=rint(1,R)
-        f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
+        f.write(f"DELETE FROM sbtest_types WHERE {kw(id)};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({kvals(id)},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
     f.write("COMMIT;\n")
 
 def w_types_table_scan(f):
@@ -363,8 +361,8 @@ def w_types_delete_insert_autocommit(f):
     # 2 statements per iteration; halve the loop.
     for _ in range(AC // 2):
         id = rint(1, R)
-        f.write(f"DELETE FROM sbtest_types WHERE id={id};\n")
-        f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({id},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
+        f.write(f"DELETE FROM sbtest_types WHERE {kw(id)};\n")
+        f.write(f"INSERT OR REPLACE INTO sbtest_types VALUES({kvals(id)},{random.randint(-1000000,1000000)},{random.uniform(-1e6,1e6)},'{rstr(50)}');\n")
 
 def w_read_write_autocommit(f):
     # The mix is ~16 statements per iteration (10 point selects, 3 ranges,
