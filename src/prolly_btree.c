@@ -6394,6 +6394,8 @@ static int prollyBtCursorTableMoveto(
 ){
   int rc;
   struct TableEntry *pTE;
+  int rootIsEmpty;
+  int canUseAppendSeekFloor;
   (void)bias;
 
   assert( pCur->curIntKey );
@@ -6405,9 +6407,25 @@ static int prollyBtCursorTableMoveto(
   CLEAR_CACHED_SEEK_KEY(pCur);
 
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+  canUseAppendSeekFloor = pCur->pBtree
+    && pCur->pBtree->db
+    && !pCur->pBtree->db->autoCommit
+    && pCur->pBtree->db->pSavepoint==0;
+  rootIsEmpty = prollyHashIsEmpty(&pCur->pCur.root);
   if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
     ProllyMutMapEntry *pEntry = 0;
-    if( pTE
+    if( rootIsEmpty
+     && pCur->pMutMap->isIntKey
+     && pCur->pMutMap->appendSorted
+     && intKey > prollyMutMapEntryIntKey(
+                  &pCur->pMutMap->aEntries[pCur->pMutMap->nEntries-1])
+    ){
+      *pRes = 1;
+      pCur->eState = CURSOR_INVALID;
+      return SQLITE_OK;
+    }
+    if( canUseAppendSeekFloor
+     && pTE
      && pTE->appendSeekFloorValid
      && prollyHashCompare(&pTE->root, &pTE->appendSeekRoot)==0
      && pCur->pMutMap->isIntKey
@@ -6438,6 +6456,16 @@ static int prollyBtCursorTableMoveto(
 
   }
 
+  if( rootIsEmpty ){
+    refreshCursorRoot(pCur);
+    rootIsEmpty = prollyHashIsEmpty(&pCur->pCur.root);
+  }
+  if( rootIsEmpty ){
+    *pRes = 1;
+    pCur->eState = CURSOR_INVALID;
+    return SQLITE_OK;
+  }
+
   refreshCursorRoot(pCur);
 
   rc = prollyCursorSeekInt(&pCur->pCur, intKey, pRes);
@@ -6449,7 +6477,7 @@ static int prollyBtCursorTableMoveto(
       CLEAR_CACHED_PAYLOAD(pCur);
       cacheCurrentTreePayloadIfIntKey(pCur);
     } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-      if( *pRes<0 ){
+      if( *pRes<0 && canUseAppendSeekFloor ){
         if( pTE ){
           if( !pTE->appendSeekFloorValid
            || prollyHashCompare(&pTE->root, &pTE->appendSeekRoot)!=0
