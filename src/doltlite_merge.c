@@ -2014,6 +2014,15 @@ do_merge_entry:
 
         if( prollyHashCompare(&aOurs[i].root, &theirsEntry->root)!=0
          || prollyHashCompare(&aOurs[i].schemaHash, &theirsEntry->schemaHash)!=0 ){
+          /* Stat tables created on both sides from a no-stats ancestor
+          ** have a fixed SQLite-defined schema; only the data differs.
+          ** Take ours and let the post-merge ANALYZE regenerate. */
+          if( zName
+           && (strcmp(zName, "sqlite_stat1")==0
+            || strcmp(zName, "sqlite_stat4")==0) ){
+            aMerged[(*pnMerged)++] = aOurs[i];
+            continue;
+          }
           if( pzErrMsg ){
             *pzErrMsg = sqlite3_mprintf(
               "schema conflict: table '%s' added on both branches with "
@@ -2066,6 +2075,20 @@ do_merge_entry:
           if( skipRowMerge ){
             aMerged[(*pnMerged)++] = aOurs[i];
           }
+        }
+
+        /* sqlite_stat1/stat4 are derived data: re-ANALYZE on the merged
+        ** tree will regenerate them, so the contents of either side are
+        ** safely discarded. Take ours to keep some stats around, skip
+        ** the row-merge (which would either dedupe or raise spurious
+        ** PK conflicts on the same (tbl,idx) keys). dolt_merge runs
+        ** ANALYZE as a final merge step to refresh against merged data. */
+        if( !skipRowMerge && zName
+         && oursChanged && theirsChanged
+         && (strcmp(zName, "sqlite_stat1")==0
+          || strcmp(zName, "sqlite_stat4")==0) ){
+          aMerged[(*pnMerged)++] = aOurs[i];
+          skipRowMerge = 1;
         }
 
         if( !skipRowMerge ){
@@ -2355,8 +2378,11 @@ static int mergeCatalogPass2(
             if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
             aMerged[(*pnMerged)++] = newEntry;
           }else{
-            int theirsChanged = prollyHashCompare(&aTheirs[i].root, &ancEntry->root)!=0;
-            if( theirsChanged ) return SQLITE_ERROR;
+            /* Index existed in ancestor, dropped on ours. Theirs may
+            ** have "modified" it as a side effect of data inserts —
+            ** auto-maintained index entries, not user intent. Honor
+            ** ours' explicit DROP and let the post-merge REINDEX
+            ** rebuild any surviving indexes against the merged data. */
           }
         }
         continue;
