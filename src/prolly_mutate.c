@@ -489,6 +489,121 @@ static int writeBuilderNode(ChunkStore *pStore, ProllyNodeBuilder *pBuilder,
   return rc;
 }
 
+/* Replace one existing int-key row when node boundaries cannot change. */
+static int tryReplaceSingleIntSameSize(ProllyMutator *pMut){
+  ProllyMutMapEntry *pEdit;
+  ProllyCursor cur;
+  ProllyHash childHash;
+  i64 iKey;
+  int rc;
+  int res = 0;
+  int level;
+
+  if( !(pMut->flags & PROLLY_NODE_INTKEY) ) return SQLITE_NOTFOUND;
+  if( prollyHashIsEmpty(&pMut->oldRoot) ) return SQLITE_NOTFOUND;
+  if( prollyMutMapCount(pMut->pEdits)!=1 ) return SQLITE_NOTFOUND;
+
+  pEdit = &pMut->pEdits->aEntries[0];
+  if( pEdit->op!=PROLLY_EDIT_INSERT || pEdit->nKey!=8 ){
+    return SQLITE_NOTFOUND;
+  }
+
+  iKey = prollyMutMapEntryIntKey(pEdit);
+  prollyCursorInit(&cur, pMut->pStore, pMut->pCache, &pMut->oldRoot,
+                   pMut->flags);
+  rc = prollyCursorSeekInt(&cur, iKey, &res);
+  if( rc!=SQLITE_OK ){
+    prollyCursorClose(&cur);
+    return rc;
+  }
+  if( res!=0 || cur.eState!=PROLLY_CURSOR_VALID ){
+    prollyCursorClose(&cur);
+    return SQLITE_NOTFOUND;
+  }
+
+  level = cur.iLevel;
+  {
+    ProllyNode *pLeaf = &cur.aLevel[level].pEntry->node;
+    int idx = cur.aLevel[level].idx;
+    const u8 *pOldVal;
+    int nOldVal;
+    ProllyNodeBuilder b;
+    int i;
+
+    prollyNodeValue(pLeaf, idx, &pOldVal, &nOldVal);
+    if( nOldVal!=pEdit->nVal ){
+      prollyCursorClose(&cur);
+      return SQLITE_NOTFOUND;
+    }
+
+    prollyNodeBuilderInit(&b, 0, pMut->flags);
+    for(i=0; i<(int)pLeaf->nItems; i++){
+      if( i==idx ){
+        rc = prollyNodeBuilderAdd(&b, pEdit->pKey, pEdit->nKey,
+                                  pEdit->pVal, pEdit->nVal);
+      }else{
+        rc = appendNodeEntryToBuilder(&b, pLeaf, i, 0);
+      }
+      if( rc!=SQLITE_OK ){
+        prollyNodeBuilderFree(&b);
+        prollyCursorClose(&cur);
+        return rc;
+      }
+    }
+    rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+    prollyNodeBuilderFree(&b);
+    if( rc!=SQLITE_OK ){
+      prollyCursorClose(&cur);
+      return rc;
+    }
+  }
+
+  while( level>0 ){
+    ProllyNode *pNode;
+    ProllyNodeBuilder b;
+    ProllyHash parentHash;
+    int idx;
+    int i;
+
+    level--;
+    pNode = &cur.aLevel[level].pEntry->node;
+    idx = cur.aLevel[level].idx;
+    prollyNodeBuilderInit(&b, (u8)pNode->level, pMut->flags);
+    for(i=0; i<(int)pNode->nItems; i++){
+      u64 cnt = 0;
+      rc = parentChildSubtreeCount(pMut->pStore, pMut->pCache,
+                                   pNode, i, &cnt);
+      if( rc==SQLITE_OK ){
+        if( i==idx ){
+          const u8 *pKey;
+          int nKey;
+          prollyNodeKey(pNode, i, &pKey, &nKey);
+          rc = prollyNodeBuilderAddWithCount(
+              &b, pKey, nKey, childHash.data, PROLLY_HASH_SIZE, cnt);
+        }else{
+          rc = appendNodeEntryToBuilder(&b, pNode, i, cnt);
+        }
+      }
+      if( rc!=SQLITE_OK ){
+        prollyNodeBuilderFree(&b);
+        prollyCursorClose(&cur);
+        return rc;
+      }
+    }
+    rc = writeBuilderNode(pMut->pStore, &b, &parentHash);
+    prollyNodeBuilderFree(&b);
+    if( rc!=SQLITE_OK ){
+      prollyCursorClose(&cur);
+      return rc;
+    }
+    childHash = parentHash;
+  }
+
+  pMut->newRoot = childHash;
+  prollyCursorClose(&cur);
+  return SQLITE_OK;
+}
+
 static int tryAppendSingleIntNoSplit(ProllyMutator *pMut){
   ProllyMutMapEntry *pEdit;
   ProllyCursor cur;
@@ -712,7 +827,10 @@ int prollyMutateFlush(ProllyMutator *pMut){
   if( prollyHashIsEmpty(&pMut->oldRoot) ){
     rc = buildFromEdits(pMut);
   }else{
-    rc = tryAppendSingleIntNoSplit(pMut);
+    rc = tryReplaceSingleIntSameSize(pMut);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = tryAppendSingleIntNoSplit(pMut);
+    }
     if( rc==SQLITE_NOTFOUND ){
       rc = streamingMerge(pMut);
     }
