@@ -20,6 +20,10 @@
 */
 #include "sqliteInt.h"
 #include "vdbeInt.h"
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#include "chunk_store.h"
+struct ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+#endif
 
 /*
 ** High-resolution hardware timer used for debugging and testing only.
@@ -3912,6 +3916,105 @@ case OP_CountRange: {    /* out2 */
   pOut->u.i = nEntry;
   goto check_for_interrupt;
 }
+
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+/* Opcode: DoltliteSeqMax P1 P2 * * *
+** Synopsis: r[P1]=max(r[P1], chunkStoreGetSequenceValue(r[P2]))
+**
+** Doltlite-only. Consult the per-database shared AUTOINCREMENT counter
+** for the table name in register P2 and raise the value in register P1
+** (the autoinc max-rowid register) to at least that value. This is how
+** branches see each other's allocations without sharing sqlite_sequence
+** itself — the counter lives in ChunkRefs.aSequences, not in any
+** branch's working set.
+*/
+case OP_DoltliteSeqMax: {
+  Mem *pCtr;
+  Mem *pName;
+  ChunkStore *pCs;
+  const char *zName;
+  i64 globalSeq;
+  pCtr  = &aMem[pOp->p1];
+  pName = &aMem[pOp->p2];
+  if( (pName->flags & MEM_Str)==0 ) break;
+  pCs = doltliteGetChunkStore(db);
+  if( !pCs ) break;
+  zName = (const char*)pName->z;
+  if( !zName ) break;
+  globalSeq = chunkStoreGetSequenceValue(pCs, zName);
+  if( (pCtr->flags & MEM_Int)==0 || globalSeq > pCtr->u.i ){
+    pCtr->flags = MEM_Int;
+    pCtr->u.i = globalSeq;
+  }
+  break;
+}
+
+/* Opcode: DoltliteSeqBump P1 P2 * * *
+** Synopsis: chunkStoreBumpSequence(r[P2], r[P1])
+**
+** Doltlite-only. Raise the per-database shared AUTOINCREMENT counter
+** for the table name in register P2 to at least r[P1]. Emitted at
+** autoIncrementEnd to mirror the local sqlite_sequence update into
+** the shared counter so other branches see the new max.
+*/
+case OP_DoltliteSeqBump: {
+  Mem *pCtr;
+  Mem *pName;
+  ChunkStore *pCs;
+  const char *zName;
+  pCtr  = &aMem[pOp->p1];
+  pName = &aMem[pOp->p2];
+  if( (pCtr->flags & MEM_Int)==0 ) break;
+  if( (pName->flags & MEM_Str)==0 ) break;
+  pCs = doltliteGetChunkStore(db);
+  if( !pCs ) break;
+  zName = (const char*)pName->z;
+  if( !zName ) break;
+  chunkStoreBumpSequence(pCs, zName, pCtr->u.i);
+  break;
+}
+
+/* Opcode: DoltliteSeqDrop P1 * * * *
+** Synopsis: chunkStoreDropSequence(r[P1])
+**
+** Doltlite-only. Remove the shared AUTOINCREMENT counter for the table
+** name in register P1. Emitted at DROP TABLE so a later CREATE+INSERT
+** of the same name starts fresh from 1, matching Dolt's behavior.
+*/
+case OP_DoltliteSeqDrop: {
+  Mem *pName;
+  ChunkStore *pCs;
+  pName = &aMem[pOp->p1];
+  if( (pName->flags & MEM_Str)==0 ) break;
+  pCs = doltliteGetChunkStore(db);
+  if( !pCs ) break;
+  if( !pName->z ) break;
+  chunkStoreDropSequence(pCs, (const char*)pName->z);
+  break;
+}
+
+/* Opcode: DoltliteSeqRename P1 P2 * * *
+** Synopsis: chunkStoreRenameSequence(r[P1], r[P2])
+**
+** Doltlite-only. Rename the shared AUTOINCREMENT counter from r[P1] to
+** r[P2]. Emitted at ALTER TABLE RENAME so inserts under the new name
+** continue from the existing max.
+*/
+case OP_DoltliteSeqRename: {
+  Mem *pOld;
+  Mem *pNew;
+  ChunkStore *pCs;
+  pOld = &aMem[pOp->p1];
+  pNew = &aMem[pOp->p2];
+  if( (pOld->flags & MEM_Str)==0 ) break;
+  if( (pNew->flags & MEM_Str)==0 ) break;
+  pCs = doltliteGetChunkStore(db);
+  if( !pCs ) break;
+  if( !pOld->z || !pNew->z ) break;
+  chunkStoreRenameSequence(pCs, (const char*)pOld->z, (const char*)pNew->z);
+  break;
+}
+#endif
 
 /* Opcode: CountIndexRange P1 P2 P3 P4 *
 ** Synopsis: r[P2]=count_index_range(r[P3]..r[P3+P4])

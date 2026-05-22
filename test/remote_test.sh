@@ -632,6 +632,54 @@ hop_b
 hop_a_again" "$result"
 
 # ============================================================
+echo "=== 26. Shared AUTOINCREMENT across clones ==="
+# ============================================================
+"$DB" "$TMPDIR/ai_a.db" <<ENDSQL
+CREATE TABLE seq(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO seq(v) VALUES('a'),('b');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','init');
+SELECT dolt_remote('add','origin','$R/ai_remote.db');
+SELECT dolt_push('origin','main');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/ai_b.db" "SELECT dolt_clone('$R/ai_remote.db');")
+check "ai B clone ok" "0" "$result"
+
+# B sees that 1,2 are taken — its next insert should be 3.
+"$DB" "$TMPDIR/ai_b.db" <<'ENDSQL'
+INSERT INTO seq(v) VALUES('c');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','from B');
+SELECT dolt_push('origin','main');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/ai_b.db" "SELECT id || '|' || v FROM seq ORDER BY id;")
+check "B continues from shared counter (1,2,3)" "1|a
+2|b
+3|c" "$result"
+
+# A pulls B's commit AND B's counter advance.
+result=$("$DB" "$TMPDIR/ai_a.db" "SELECT dolt_pull('origin','main');")
+check "A pulled B" "0" "$result"
+
+# A's next insert should be 4 — counter merged forward via pull.
+"$DB" "$TMPDIR/ai_a.db" <<'ENDSQL'
+INSERT INTO seq(v) VALUES('d');
+SELECT dolt_add('-A');
+SELECT dolt_commit('-m','from A');
+.quit
+ENDSQL
+
+result=$("$DB" "$TMPDIR/ai_a.db" "SELECT id || '|' || v FROM seq ORDER BY id;")
+check "A continues from pulled counter (1,2,3,4)" "1|a
+2|b
+3|c
+4|d" "$result"
+
+# ============================================================
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"

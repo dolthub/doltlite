@@ -56,7 +56,7 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
     return CHUNK_COMMIT;
   }
 
-  if( nData >= 5 && data[0] == 6 ){
+  if( nData >= 5 && data[0] == 7 ){
     return CHUNK_REFS;
   }
 
@@ -235,7 +235,7 @@ static int enumerateRefsChildren(
 
   if( nData < 5 ) return SQLITE_CORRUPT;
   version = *p++;
-  if( version!=6 ) return SQLITE_CORRUPT;
+  if( version!=7 ) return SQLITE_CORRUPT;
   if( p + 4 > pEnd ) return SQLITE_CORRUPT;
   defLen = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
   p += 4;
@@ -279,7 +279,7 @@ static int enumerateRefsChildren(
     p += PROLLY_HASH_SIZE;
     rc = xChild(ctx, &h);
     if( rc!=SQLITE_OK ) break;
-    if( version>=6 ){
+    {
       int n;
       if( p + 4 > pEnd ) return SQLITE_CORRUPT;
       n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
@@ -341,6 +341,21 @@ static int enumerateRefsChildren(
     rc = xChild(ctx, &h);
   }
   if( rc!=SQLITE_OK ) return rc;
+
+  /* SequenceRef section (v7+): name + i64 seq, no chunk references. */
+  if( p + 4 <= pEnd ){
+    int nSequences = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+    p += 4;
+    if( nSequences < 0 || nSequences > 100000 ) return SQLITE_CORRUPT;
+    for(i=0; i<nSequences; i++){
+      int n;
+      if( p + 4 > pEnd ) return SQLITE_CORRUPT;
+      n = (int)(p[0] | (p[1]<<8) | (p[2]<<16) | (p[3]<<24));
+      p += 4;
+      if( n < 0 || p + n + 8 > pEnd ) return SQLITE_CORRUPT;
+      p += n + 8;
+    }
+  }
   if( p != pEnd ) return SQLITE_CORRUPT;
   return SQLITE_OK;
 }
