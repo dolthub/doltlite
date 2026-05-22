@@ -135,6 +135,86 @@ INSERT INTO a(v) VALUES('a-post');
 INSERT INTO b(v) VALUES('b-post');" \
 "SELECT 'a' AS tbl, id, v FROM a UNION ALL SELECT 'b' AS tbl, id, v FROM b ORDER BY tbl, id"
 
+# Explicit id above the counter bumps it; the next auto-id continues past.
+oracle explicit_id_jumps_counter \
+"CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO t(v) VALUES('a');
+INSERT INTO t VALUES(100, 'big');
+INSERT INTO t(v) VALUES('next');" \
+"SELECT id, v FROM t ORDER BY id"
+
+# A bump on feat is visible to main's next insert via the shared counter.
+oracle explicit_id_across_branches \
+"CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO t(v) VALUES('a');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('feat');
+SELECT dolt_checkout('feat');
+INSERT INTO t VALUES(50, 'feat-big');
+SELECT dolt_commit('-A','-m','feat');
+SELECT dolt_checkout('main');
+INSERT INTO t(v) VALUES('main-next');" \
+"SELECT id, v FROM t ORDER BY id"
+
+# DELETE clears rows but not the counter; next insert continues past the deleted max.
+oracle delete_doesnt_reset_counter \
+"CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO t(v) VALUES('a'),('b'),('c');
+SELECT dolt_commit('-A','-m','init');
+DELETE FROM t;
+INSERT INTO t(v) VALUES('d');" \
+"SELECT id, v FROM t ORDER BY id"
+
+# Branch-off-branch chain; counter is shared three deep.
+oracle branch_off_branch \
+"CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO t(v) VALUES('a'),('b');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('f1');
+SELECT dolt_checkout('f1');
+INSERT INTO t(v) VALUES('f1a'),('f1b');
+SELECT dolt_commit('-A','-m','f1');
+SELECT dolt_branch('f2');
+SELECT dolt_checkout('f2');
+INSERT INTO t(v) VALUES('f2a');
+SELECT dolt_commit('-A','-m','f2');
+SELECT dolt_checkout('main');
+INSERT INTO t(v) VALUES('m');" \
+"SELECT id, v FROM t ORDER BY id"
+
+# Two feats sequentially branched and sequentially merged: no PK collision because
+# the second feat's insert saw the first feat's advance via the shared counter.
+oracle sequential_merges \
+"CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO t(v) VALUES('a'),('b');
+SELECT dolt_commit('-A','-m','init');
+SELECT dolt_branch('f1');
+SELECT dolt_checkout('f1');
+INSERT INTO t(v) VALUES('f1a');
+SELECT dolt_commit('-A','-m','f1');
+SELECT dolt_checkout('main');
+SELECT dolt_branch('f2');
+SELECT dolt_checkout('f2');
+INSERT INTO t(v) VALUES('f2a');
+SELECT dolt_commit('-A','-m','f2');
+SELECT dolt_checkout('main');
+SELECT dolt_merge('f1');
+SELECT dolt_merge('f2');
+INSERT INTO t(v) VALUES('post');" \
+"SELECT id, v FROM t ORDER BY id"
+
+# A hard reset drops the second commit but the shared counter persists, so the
+# next insert does not collide with ids the discarded commit allocated.
+oracle reset_hard_keeps_counter \
+"CREATE TABLE t(id INTEGER PRIMARY KEY AUTOINCREMENT, v TEXT);
+INSERT INTO t(v) VALUES('a'),('b');
+SELECT dolt_commit('-A','-m','first');
+INSERT INTO t(v) VALUES('c'),('d');
+SELECT dolt_commit('-A','-m','second');
+SELECT dolt_reset('--hard','HEAD~1');
+INSERT INTO t(v) VALUES('new');" \
+"SELECT id, v FROM t ORDER BY id"
+
 echo
 echo "vc_oracle_autoinc: $pass passed, $fail failed"
 if [ "$fail" -gt 0 ]; then
