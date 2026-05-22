@@ -37,6 +37,7 @@ TESTS=(
   doltlite_connect_branch.sh
   doltlite_tag.sh
   doltlite_merge.sh
+  doltlite_merge_index_conflict.sh
   doltlite_conflicts.sh
   doltlite_conflict_rows.sh
   doltlite_cherry_pick.sh

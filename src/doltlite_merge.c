@@ -38,21 +38,59 @@ struct MergeIndexInfo {
   int nColumn;
   i16 *aiColumn;
   KeyInfo *pKeyInfo;
+  int iPKey;          /* IPK column in the parent table schema, -1 if none */
 };
 
+/* Serial type + body length for an i64 value, matching the encoding used
+** by SQLite's row records and prolly trees. */
+static void ipkSerialType(i64 v, u32 *pType, u32 *pLen){
+  if( v==0 ){ *pType = 8; *pLen = 0; return; }
+  if( v==1 ){ *pType = 9; *pLen = 0; return; }
+  if( v>=-128 && v<=127 ){ *pType = 1; *pLen = 1; return; }
+  if( v>=-32768 && v<=32767 ){ *pType = 2; *pLen = 2; return; }
+  if( v>=-8388608 && v<=8388607 ){ *pType = 3; *pLen = 3; return; }
+  if( v>=-2147483648LL && v<=2147483647LL ){ *pType = 4; *pLen = 4; return; }
+  if( v>=-140737488355328LL && v<=140737488355327LL ){ *pType = 5; *pLen = 6; return; }
+  *pType = 6; *pLen = 8;
+}
+
+static void ipkWriteBE(u8 *p, i64 v, int n){
+  int i;
+  for(i=n-1; i>=0; i--){ p[i] = (u8)(v & 0xff); v >>= 8; }
+}
+
+/* Builds the sort key for an index entry from a table-row record. For
+** IPK tables, the row record stores the IPK column as NULL (a ghost
+** placeholder) — the real value lives in the b-tree intkey. If iPKey
+** points at the IPK column position, we substitute intKey for the
+** ghost so the resulting sort key matches the native index format
+** written by the SQL INSERT path (see sortKeyFromIntRecordLocal in
+** prolly_btree.c). */
 static int buildIndexSortKey(
   const u8 *pRec, int nRec,
   const i16 *aiColumn, int nIdxCol,
   KeyInfo *pKeyInfo,
+  int iPKey, i64 intKey,
   u8 **ppKey, int *pnKey
 ){
   DoltliteRecordInfo info;
   u8 *pIdxRec = 0;
   int nIdxRec = 0;
+  u32 ipkType = 0;
+  u32 ipkLen = 0;
+  int useIpk = 0;
   int rc;
 
   doltliteParseRecord(pRec, nRec, &info);
   if( info.nField==0 ) return SQLITE_CORRUPT;
+
+  if( iPKey>=0 && iPKey<info.nField ){
+    int st = info.aType[iPKey];
+    if( st==0 || st==8 || st==9 ){
+      useIpk = 1;
+      ipkSerialType(intKey, &ipkType, &ipkLen);
+    }
+  }
 
   {
     int i, hdrLen = 0, bodyLen = 0;
@@ -78,15 +116,20 @@ static int buildIndexSortKey(
           aUsed[col] = 1;
         }
       }
-      for(i=0; i<info.nField; i++){
-        if( !aUsed[i] ) aFieldOrder[out++] = i;
+      /* For IPK tables, append the IPK column so the sort key resolves
+      ** ties between rows with equal indexed-column values. Non-indexed,
+      ** non-IPK columns are intentionally omitted — they are not part
+      ** of the native secondary-index key format. */
+      if( iPKey>=0 && iPKey<info.nField && !aUsed[iPKey] ){
+        aFieldOrder[out++] = iPKey;
+        aUsed[iPKey] = 1;
       }
       nOutField = out;
     }
 
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
-      int st = info.aType[col];
+      int st = (useIpk && col==iPKey) ? (int)ipkType : info.aType[col];
       int flen;
       hdrLen += sqlite3VarintLen(st);
       if( st<=0 ){ flen = 0; }
@@ -125,14 +168,24 @@ static int buildIndexSortKey(
     }
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
-      int st = info.aType[col];
+      int st = (useIpk && col==iPKey) ? (int)ipkType : info.aType[col];
       p += sqlite3PutVarint(p, st);
     }
 
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
-      int st = info.aType[col];
+      int st;
       int flen;
+      if( useIpk && col==iPKey ){
+        st = (int)ipkType;
+        flen = (int)ipkLen;
+        if( flen>0 ){
+          ipkWriteBE(p, intKey, flen);
+          p += flen;
+        }
+        continue;
+      }
+      st = info.aType[col];
       if( st<=0 ){ flen = 0; }
       else if( st==1 ){ flen = 1; }
       else if( st==2 ){ flen = 2; }
@@ -441,10 +494,10 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
           rc = buildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
                                  mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                 mi->iPKey, pChange->intKey,
                                  &pIK, &nIK);
           if( rc==SQLITE_OK ){
-            rc = prollyMutMapInsert(mi->pEdits, pIK, nIK, 0,
-                                    pChange->pTheirVal, pChange->nTheirVal);
+            rc = prollyMutMapInsert(mi->pEdits, pIK, nIK, 0, 0, 0);
             sqlite3_free(pIK);
           }
         }
@@ -464,6 +517,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
             u8 *pOK = 0; int nOK = 0;
             rc = buildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
                                    mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                   mi->iPKey, pChange->intKey,
                                    &pOK, &nOK);
             if( rc==SQLITE_OK ){
               rc = prollyMutMapDelete(mi->pEdits, pOK, nOK, 0);
@@ -475,10 +529,10 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
             u8 *pNK = 0; int nNK = 0;
             rc = buildIndexSortKey(pChange->pTheirVal, pChange->nTheirVal,
                                    mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                   mi->iPKey, pChange->intKey,
                                    &pNK, &nNK);
             if( rc==SQLITE_OK ){
-              rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0,
-                                      pChange->pTheirVal, pChange->nTheirVal);
+              rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0, 0, 0);
               sqlite3_free(pNK);
             }
           }
@@ -498,6 +552,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
           MergeIndexInfo *mi = &ctx->aIndexes[ix];
           rc = buildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
                                  mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                 mi->iPKey, pChange->intKey,
                                  &pIK, &nIK);
           if( rc==SQLITE_OK ){
             rc = prollyMutMapDelete(mi->pEdits, pIK, nIK, 0);
@@ -538,6 +593,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
               u8 *pOK = 0; int nOK = 0;
               rc = buildIndexSortKey(pChange->pBaseVal, pChange->nBaseVal,
                                      mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                     mi->iPKey, pChange->intKey,
                                      &pOK, &nOK);
               if( rc==SQLITE_OK ){
                 rc = prollyMutMapDelete(mi->pEdits, pOK, nOK, 0);
@@ -548,10 +604,10 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
               u8 *pNK = 0; int nNK = 0;
               rc = buildIndexSortKey(pMerged, nMerged,
                                      mi->aiColumn, mi->nColumn, mi->pKeyInfo,
+                                     mi->iPKey, pChange->intKey,
                                      &pNK, &nNK);
               if( rc==SQLITE_OK ){
-                rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0,
-                                        pMerged, nMerged);
+                rc = prollyMutMapInsert(mi->pEdits, pNK, nNK, 0, 0, 0);
                 sqlite3_free(pNK);
               }
             }
@@ -1899,6 +1955,16 @@ static int mergeCatalogPass1(
 ){
   int i, rc = SQLITE_OK;
   int iTable1Idx = -1;
+  /* Pending inline-merged index roots, applied at end of pass1. The
+  ** standalone three-way merge of an index entry doesn't see table-
+  ** row conflicts and would leak rejected-side index entries; the
+  ** inline merge driven from the table's row-changes correctly skips
+  ** conflict rows. We use the inline result. */
+  struct IndexMergePatch {
+    Pgno iTable;
+    ProllyHash mergedRoot;
+  } *aPatches = 0;
+  int nPatches = 0, nPatchesAlloc = 0;
 
   for(i=0; i<nOurs; i++){
     const char *zName = aOurs[i].zName;
@@ -2030,6 +2096,7 @@ do_merge_entry:
                         mi->nColumn = pIdx->nKeyCol;
                         mi->aiColumn = pIdx->aiColumn;
                         mi->pKeyInfo = 0;
+                        mi->iPKey = pTab->iPKey;
                         nIdxInfo++;
                       }
                     }
@@ -2066,18 +2133,29 @@ post_merge_table_rows:;
             if( rc==SQLITE_OK ){
               int ix;
               for(ix=0; ix<nIdxInfo; ix++){
-                int k;
-                for(k=0; k<*pnMerged; k++){
-                  if( aMerged[k].iTable==aIdxInfo[ix].iTable ){
-                    memcpy(&aMerged[k].root, &aIdxInfo[ix].mergedRoot,
-                           sizeof(ProllyHash));
-                    break;
+                if( nPatches >= nPatchesAlloc ){
+                  int newAlloc = nPatchesAlloc ? nPatchesAlloc*2 : 4;
+                  void *pNew = sqlite3_realloc(aPatches,
+                      newAlloc * (int)sizeof(*aPatches));
+                  if( !pNew ){
+                    sqlite3_free(aIdxInfo);
+                    sqlite3_free(aPatches);
+                    return SQLITE_NOMEM;
                   }
+                  aPatches = pNew;
+                  nPatchesAlloc = newAlloc;
                 }
+                aPatches[nPatches].iTable = aIdxInfo[ix].iTable;
+                memcpy(&aPatches[nPatches].mergedRoot,
+                       &aIdxInfo[ix].mergedRoot, sizeof(ProllyHash));
+                nPatches++;
               }
             }
             sqlite3_free(aIdxInfo);
-            if( rc!=SQLITE_OK ) return rc;
+            if( rc!=SQLITE_OK ){
+              sqlite3_free(aPatches);
+              return rc;
+            }
 
             {
               struct TableEntry merged = aOurs[i];
@@ -2192,6 +2270,26 @@ post_merge_table_rows:;
       }
     }
   }
+
+  /* Apply pending inline-merged index roots. Overrides whatever the
+  ** standalone three-way merge of each index entry produced — that
+  ** path doesn't see table-level conflicts and would leak rejected-
+  ** side index entries (e.g. theirs's iv entry for a row whose data
+  ** resolved to ours's value). */
+  {
+    int ip;
+    for(ip=0; ip<nPatches; ip++){
+      int k;
+      for(k=0; k<*pnMerged; k++){
+        if( aMerged[k].iTable==aPatches[ip].iTable ){
+          memcpy(&aMerged[k].root, &aPatches[ip].mergedRoot,
+                 sizeof(ProllyHash));
+          break;
+        }
+      }
+    }
+  }
+  sqlite3_free(aPatches);
 
   return rc;
 }
