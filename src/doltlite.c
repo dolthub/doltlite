@@ -4374,7 +4374,6 @@ static void rebaseAbortConflictedContinue(
     doltliteClearSessionRebaseState(db);
   }
   if( cs && zReturnBranch && zReturnBranch[0] ){
-    doltliteSetSessionBranch(db, zReturnBranch);
     (void)rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
   }
   if( cs && zWorkingBranch && zWorkingBranch[0] ){
@@ -4562,7 +4561,6 @@ static void doltliteRebaseInteractiveAbort(
 
   rebaseDiscardWorkingBranch(db, zOrigBranch, zWorking);
   if( cs && zReturnBranch && zReturnBranch[0] ){
-    doltliteSetSessionBranch(db, zReturnBranch);
     rc = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
     if( rc!=SQLITE_OK ){
       sqlite3_free(zReturnBranch);
@@ -4711,8 +4709,6 @@ static void doltliteRebaseInteractiveContinue(
   zStep = "delete working branch";
   rc = doltliteMutateRefs(db, rebaseDeleteWorkingBranchRefs, zWorking);
   if( rc!=SQLITE_OK ) goto abort_err;
-  zStep = "restore return branch (session)";
-  doltliteSetSessionBranch(db, zReturnBranch);
   zStep = "restore return branch working set";
   rc = rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
   if( rc!=SQLITE_OK ) goto abort_err;
@@ -4753,7 +4749,6 @@ abort_err:
   if( bPlanDropped ){
     rebaseDiscardWorkingBranch(db, zOrigBranch ? zOrigBranch : "main", zWorking);
     if( cs && zReturnBranch && zReturnBranch[0] ){
-      doltliteSetSessionBranch(db, zReturnBranch);
       (void)rebaseRestoreReturnBranchWorkingState(db, zReturnBranch);
     }
   }
