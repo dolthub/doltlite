@@ -506,6 +506,13 @@ void sqlite3AutoincrementBegin(Parse *pParse){
     aOp[7].p2 = memId+2;
     aOp[7].p1 = memId;
     aOp[10].p2 = memId;
+#ifdef DOLTLITE_PROLLY
+    /* Consult the shared per-database AUTOINCREMENT counter so branches
+    ** see each other's allocations even though sqlite_sequence is
+    ** branch-local. memId holds the max read from the local table; the
+    ** shared counter (keyed by table name in memId-1) wins if higher. */
+    sqlite3VdbeAddOp2(v, OP_DoltliteSeqMax, memId, memId-1);
+#endif
     if( pParse->nTab==0 ) pParse->nTab = 1;
   }
 }

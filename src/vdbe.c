@@ -20,6 +20,10 @@
 */
 #include "sqliteInt.h"
 #include "vdbeInt.h"
+#ifdef DOLTLITE_PROLLY
+#include "chunk_store.h"
+struct ChunkStore *doltliteGetChunkStore(sqlite3 *db);
+#endif
 
 /*
 ** High-resolution hardware timer used for debugging and testing only.
@@ -3912,6 +3916,39 @@ case OP_CountRange: {    /* out2 */
   pOut->u.i = nEntry;
   goto check_for_interrupt;
 }
+
+#ifdef DOLTLITE_PROLLY
+/* Opcode: DoltliteSeqMax P1 P2 * * *
+** Synopsis: r[P1]=max(r[P1], chunkStoreGetSequenceValue(r[P2]))
+**
+** Doltlite-only. Consult the per-database shared AUTOINCREMENT counter
+** for the table name in register P2 and raise the value in register P1
+** (the autoinc max-rowid register) to at least that value. This is how
+** branches see each other's allocations without sharing sqlite_sequence
+** itself — the counter lives in ChunkRefs.aSequences, not in any
+** branch's working set.
+*/
+case OP_DoltliteSeqMax: {
+  Mem *pCtr;
+  Mem *pName;
+  ChunkStore *pCs;
+  const char *zName;
+  i64 globalSeq;
+  pCtr  = &aMem[pOp->p1];
+  pName = &aMem[pOp->p2];
+  if( (pName->flags & MEM_Str)==0 ) break;
+  pCs = doltliteGetChunkStore(db);
+  if( !pCs ) break;
+  zName = (const char*)pName->z;
+  if( !zName ) break;
+  globalSeq = chunkStoreGetSequenceValue(pCs, zName);
+  if( (pCtr->flags & MEM_Int)==0 || globalSeq > pCtr->u.i ){
+    pCtr->flags = MEM_Int;
+    pCtr->u.i = globalSeq;
+  }
+  break;
+}
+#endif
 
 /* Opcode: CountIndexRange P1 P2 P3 P4 *
 ** Synopsis: r[P2]=count_index_range(r[P3]..r[P3+P4])
