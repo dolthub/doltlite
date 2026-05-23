@@ -663,13 +663,11 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
     const u8 *pOldVal;
     int nOldVal;
     ProllyNodeBuilder b;
+    int sameSize;
     int i;
 
     prollyNodeValue(pLeaf, idx, &pOldVal, &nOldVal);
-    if( nOldVal!=pEdit->nVal ){
-      prollyCursorClose(&cur);
-      return SQLITE_NOTFOUND;
-    }
+    sameSize = (nOldVal==pEdit->nVal);
 
     prollyNodeBuilderInit(&b, 0, pMut->flags);
     for(i=0; i<(int)pLeaf->nItems; i++){
@@ -685,7 +683,13 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
         return rc;
       }
     }
-    rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+    if( sameSize ){
+      rc = writeBuilderNode(pMut->pStore, &b, &childHash);
+    }else{
+      rc = finishAndWriteBuilderNode(pMut->pStore, &b,
+                                     !cursorLeafIsRightmost(&cur),
+                                     &childHash);
+    }
     prollyNodeBuilderFree(&b);
     if( rc!=SQLITE_OK ){
       prollyCursorClose(&cur);
