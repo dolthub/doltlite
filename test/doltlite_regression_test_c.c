@@ -6600,6 +6600,72 @@ static void run_prolly_mutate_preserves_order_across_skipped_subtrees(void){
   chunkStoreClose(&cs);
 }
 
+static void run_prolly_mutate_appends_blob_key_to_right_edge(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyChunker chunker;
+  ProllyCursor cur;
+  ProllyHash rootHash, newRootHash;
+  ProllyNode rootNode;
+  u8 *pRootData = 0;
+  int nRootData = 0;
+  u8 aKey[33];
+  const u8 *pKey = 0;
+  int nKey = 0;
+  int rc;
+  int res = 99;
+  int i;
+  const int nItem = 100000;
+  u8 aVal[256];
+
+  printf("=== Prolly Mutate Blob Right Edge Append Test ===\n\n");
+  memset(aVal, 'v', sizeof(aVal));
+
+  check("open_memory_store_for_prolly_blob_append",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("init_cache_for_prolly_blob_append",
+        prollyCacheInit(&cache, 64)==SQLITE_OK);
+  check("init_chunker_for_prolly_blob_append",
+        prollyChunkerInit(&chunker, &cs, PROLLY_NODE_BLOBKEY)==SQLITE_OK);
+
+  for( i = 0; i < nItem; i++ ){
+    make_prolly_blob_key(i, aKey, sizeof(aKey));
+    check("add_key_to_chunker_for_prolly_blob_append",
+          prollyChunkerAdd(&chunker, aKey, 32, aVal, sizeof(aVal))==SQLITE_OK);
+  }
+  check("finish_chunker_for_prolly_blob_append",
+        prollyChunkerFinish(&chunker)==SQLITE_OK);
+  prollyChunkerGetRoot(&chunker, &rootHash);
+  prollyChunkerFree(&chunker);
+
+  check("load_root_for_prolly_blob_append",
+        chunkStoreGet(&cs, &rootHash, &pRootData, &nRootData)==SQLITE_OK);
+  check("parse_root_for_prolly_blob_append",
+        prollyNodeParse(&rootNode, pRootData, nRootData)==SQLITE_OK);
+  check("root_is_multi_level_for_prolly_blob_append", rootNode.level >= 2);
+  sqlite3_free(pRootData);
+
+  make_prolly_blob_key(nItem, aKey, sizeof(aKey));
+  rc = prollyMutateInsert(&cs, &cache, &rootHash, PROLLY_NODE_BLOBKEY,
+                          aKey, 32, 0, aVal, sizeof(aVal), &newRootHash);
+  check("append_blob_key_to_multi_level_tree", rc==SQLITE_OK);
+
+  prollyCursorInit(&cur, &cs, &cache, &newRootHash, PROLLY_NODE_BLOBKEY);
+  rc = prollyCursorLast(&cur, &res);
+  check("cursor_last_after_blob_append", rc==SQLITE_OK);
+  check("cursor_last_after_blob_append_valid",
+        res==0 && prollyCursorIsValid(&cur));
+  if( prollyCursorIsValid(&cur) ){
+    prollyCursorKey(&cur, &pKey, &nKey);
+    check("last_key_after_blob_append_is_new_key",
+          nKey==32 && memcmp(pKey, aKey, 32)==0);
+  }
+
+  prollyCursorClose(&cur);
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
 static void run_chunk_store_rollback_restores_refs_hash(void){
   ChunkStore cs;
   ProllyHash emptyHash;
@@ -7461,6 +7527,7 @@ static const RegressionCase aCases[] = {
   { "mutmap_resolve_sorted_pos", "MutMap ResolveSortedPos Test", run_mutmap_resolve_sorted_pos },
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },
+  { "prolly_mutate_blob_right_edge_append", "Prolly Mutate Blob Right Edge Append Test", run_prolly_mutate_appends_blob_key_to_right_edge },
   { "refs_hash_rollback_restore", "Chunk Store Rollback Restores Refs Hash Test", run_chunk_store_rollback_restores_refs_hash },
   { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
   { "remotesrv_put_refs_failure_restore", "RemoteSrv Put Refs Failure Restores State Test", run_remotesrv_put_refs_failure_restores_state },

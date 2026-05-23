@@ -845,7 +845,7 @@ static int tryDeleteSingleNoRechunk(ProllyMutator *pMut){
   return rc;
 }
 
-static int tryAppendSingleIntNoSplit(ProllyMutator *pMut){
+static int tryAppendSingleNoSplit(ProllyMutator *pMut){
   ProllyMutMapEntry *pEdit;
   ProllyCursor cur;
   ProllyHash childHash;
@@ -856,18 +856,22 @@ static int tryAppendSingleIntNoSplit(ProllyMutator *pMut){
   int res = 0;
   int level;
 
-  if( !(pMut->flags & PROLLY_NODE_INTKEY) ) return SQLITE_NOTFOUND;
   if( prollyHashIsEmpty(&pMut->oldRoot) ) return SQLITE_NOTFOUND;
   if( prollyMutMapCount(pMut->pEdits)!=1 ) return SQLITE_NOTFOUND;
 
   pEdit = &pMut->pEdits->aEntries[0];
-  if( pEdit->op!=PROLLY_EDIT_INSERT || pEdit->nKey!=8 ){
+  if( pEdit->op!=PROLLY_EDIT_INSERT ){
+    return SQLITE_NOTFOUND;
+  }
+  if( (pMut->flags & PROLLY_NODE_INTKEY) && pEdit->nKey!=8 ){
     return SQLITE_NOTFOUND;
   }
 
   pNewKey = pEdit->pKey;
   nNewKey = pEdit->nKey;
-  iNewKey = prollyMutMapEntryIntKey(pEdit);
+  if( pMut->flags & PROLLY_NODE_INTKEY ){
+    iNewKey = prollyMutMapEntryIntKey(pEdit);
+  }
 
   prollyCursorInit(&cur, pMut->pStore, pMut->pCache, &pMut->oldRoot,
                    pMut->flags);
@@ -880,9 +884,19 @@ static int tryAppendSingleIntNoSplit(ProllyMutator *pMut){
     prollyCursorClose(&cur);
     return SQLITE_NOTFOUND;
   }
-  if( iNewKey <= prollyCursorIntKey(&cur) ){
-    prollyCursorClose(&cur);
-    return SQLITE_NOTFOUND;
+  if( pMut->flags & PROLLY_NODE_INTKEY ){
+    if( iNewKey <= prollyCursorIntKey(&cur) ){
+      prollyCursorClose(&cur);
+      return SQLITE_NOTFOUND;
+    }
+  }else{
+    const u8 *pLastKey;
+    int nLastKey;
+    prollyCursorKey(&cur, &pLastKey, &nLastKey);
+    if( compareKeys(pNewKey, nNewKey, pLastKey, nLastKey)<=0 ){
+      prollyCursorClose(&cur);
+      return SQLITE_NOTFOUND;
+    }
   }
 
   level = cur.iLevel;
@@ -1126,7 +1140,7 @@ int prollyMutateFlush(ProllyMutator *pMut){
   }else{
     rc = tryInsertOrReplaceSingleNoRechunk(pMut);
     if( rc==SQLITE_NOTFOUND ){
-      rc = tryAppendSingleIntNoSplit(pMut);
+      rc = tryAppendSingleNoSplit(pMut);
     }
     if( rc==SQLITE_NOTFOUND ){
       rc = tryDeleteSingleNoRechunk(pMut);
