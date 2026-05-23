@@ -112,7 +112,7 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   (pCur)->nSeekKeyField = 0; \
 }while(0)
 
-#define PROLLY_DEFAULT_CACHE_SIZE 1024
+#define PROLLY_DEFAULT_CACHE_SIZE 16384
 
 #define PROLLY_DEFAULT_PAGE_SIZE 4096
 
