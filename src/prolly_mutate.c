@@ -1057,6 +1057,62 @@ static int tryAppendSingleIntNoSplit(ProllyMutator *pMut){
   return SQLITE_OK;
 }
 
+static int tryDeleteInsertPairNoRechunk(ProllyMutator *pMut){
+  ProllyMutator one;
+  ProllyMutMap oneMap;
+  ProllyMutMapEntry *pDel = 0;
+  ProllyMutMapEntry *pIns = 0;
+  ProllyHash midRoot;
+  int i;
+  int rc;
+
+  if( prollyHashIsEmpty(&pMut->oldRoot) ) return SQLITE_NOTFOUND;
+  if( prollyMutMapCount(pMut->pEdits)!=2 ) return SQLITE_NOTFOUND;
+
+  for(i=0; i<2; i++){
+    ProllyMutMapEntry *pEntry = &pMut->pEdits->aEntries[i];
+    if( pEntry->op==PROLLY_EDIT_DELETE ){
+      if( pDel ) return SQLITE_NOTFOUND;
+      pDel = pEntry;
+    }else if( pEntry->op==PROLLY_EDIT_INSERT ){
+      if( pIns ) return SQLITE_NOTFOUND;
+      pIns = pEntry;
+    }else{
+      return SQLITE_NOTFOUND;
+    }
+  }
+  if( !pDel || !pIns ) return SQLITE_NOTFOUND;
+
+  memset(&oneMap, 0, sizeof(oneMap));
+  oneMap.isIntKey = pMut->pEdits->isIntKey;
+  oneMap.keepSorted = pMut->pEdits->keepSorted;
+  oneMap.aEntries = pDel;
+  oneMap.nEntries = 1;
+  oneMap.nAlloc = 1;
+
+  one = *pMut;
+  one.pEdits = &oneMap;
+  rc = tryDeleteSingleNoRechunk(&one);
+  if( rc!=SQLITE_OK ) return rc;
+  midRoot = one.newRoot;
+
+  memset(&oneMap, 0, sizeof(oneMap));
+  oneMap.isIntKey = pMut->pEdits->isIntKey;
+  oneMap.keepSorted = pMut->pEdits->keepSorted;
+  oneMap.aEntries = pIns;
+  oneMap.nEntries = 1;
+  oneMap.nAlloc = 1;
+
+  one = *pMut;
+  one.oldRoot = midRoot;
+  one.pEdits = &oneMap;
+  rc = tryInsertOrReplaceSingleNoRechunk(&one);
+  if( rc!=SQLITE_OK ) return rc;
+
+  pMut->newRoot = one.newRoot;
+  return SQLITE_OK;
+}
+
 int prollyMutateFlush(ProllyMutator *pMut){
   int rc;
 
@@ -1074,6 +1130,9 @@ int prollyMutateFlush(ProllyMutator *pMut){
     }
     if( rc==SQLITE_NOTFOUND ){
       rc = tryDeleteSingleNoRechunk(pMut);
+    }
+    if( rc==SQLITE_NOTFOUND ){
+      rc = tryDeleteInsertPairNoRechunk(pMut);
     }
     if( rc==SQLITE_NOTFOUND ){
       rc = streamingMerge(pMut);

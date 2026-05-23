@@ -988,6 +988,33 @@ static void test_single_row_mutation_fast_path(void){
   check("single_mutation_blob_integrity",
     strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
 
+  execSql(db, "CREATE TABLE ttext(id TEXT PRIMARY KEY, k INTEGER, val TEXT)");
+  execSql(db, "CREATE INDEX ttext_k ON ttext(k)");
+  execSql(db, "BEGIN");
+  for( i=1; i<=5000; i++ ){
+    char sql[256];
+    snprintf(sql, sizeof(sql),
+      "INSERT INTO ttext VALUES('%032x', %d, 'row_%d')", i, i, i);
+    execSql(db, sql);
+  }
+  execSql(db, "COMMIT");
+
+  execSql(db,
+    "UPDATE ttext SET k=8001 "
+    "WHERE id='000000000000000000000000000009c4'");
+  execSql(db,
+    "UPDATE ttext SET k=8002 "
+    "WHERE id='00000000000000000000000000000d05'");
+
+  check("single_mutation_text_index_count",
+    queryScalarInt(db, "SELECT count(*) FROM ttext")==5000);
+  check("single_mutation_text_index_old_gone",
+    queryScalarInt(db, "SELECT count(*) FROM ttext WHERE k IN (2500,3333)")==0);
+  check("single_mutation_text_index_new",
+    queryScalarInt(db, "SELECT count(*) FROM ttext WHERE k IN (8001,8002)")==2);
+  check("single_mutation_text_index_integrity",
+    strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+
   sqlite3_close(db);
   removeDb(dbpath);
 }
