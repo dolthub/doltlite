@@ -15,8 +15,10 @@ SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL;
 ROWS=${BENCH_ROWS:-100000}
 SEED=42
 TMPDIR=$(mktemp -d)
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-6}
-BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-5}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.5}
+BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-2}
+BENCH_AC_WRITE_MAX_MULTIPLIER=${BENCH_AC_WRITE_MAX_MULTIPLIER:-5}
+BENCH_AC_WRITE_AVG_MAX_MULTIPLIER=${BENCH_AC_WRITE_AVG_MAX_MULTIPLIER:-5}
 BENCH_SECTION_MODE=${BENCH_SECTION_MODE:-full}
 
 cleanup() { rm -rf "$TMPDIR"; }
@@ -642,15 +644,15 @@ PYEOF
 }
 
 echo ""
-echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x individual, ${BENCH_AVG_MAX_MULTIPLIER}x average)"
+echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x individual, ${BENCH_AVG_MAX_MULTIPLIER}x average; autocommit writes: ${BENCH_AC_WRITE_MAX_MULTIPLIER}x / ${BENCH_AC_WRITE_AVG_MAX_MULTIPLIER}x)"
 echo ""
 
 ceiling_ok=0
 if [ "$BENCH_SECTION_MODE" = "autocommit" ]; then
   check_ceiling "ac_reads" "$READ_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-  check_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+  check_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_AC_WRITE_MAX_MULTIPLIER" || ceiling_ok=1
   check_average_ceiling "ac_reads" "$READ_TESTS" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
-  check_average_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+  check_average_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_AC_WRITE_AVG_MAX_MULTIPLIER" || ceiling_ok=1
 else
   check_ceiling "mem_reads" "$READ_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
   check_ceiling "mem_writes" "$WRITE_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
@@ -662,9 +664,9 @@ else
   check_average_ceiling "file_writes" "$WRITE_TESTS" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
   if [ "$BENCH_SECTION_MODE" = "full" ]; then
     check_ceiling "ac_reads" "$READ_TESTS" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-    check_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+    check_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_AC_WRITE_MAX_MULTIPLIER" || ceiling_ok=1
     check_average_ceiling "ac_reads" "$READ_TESTS" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
-    check_average_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+    check_average_ceiling "ac_writes" "$WRITE_TESTS_AC" "$BENCH_AC_WRITE_AVG_MAX_MULTIPLIER" || ceiling_ok=1
   fi
 fi
 
