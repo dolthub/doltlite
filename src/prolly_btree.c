@@ -2387,14 +2387,16 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
 
   {
     Pgno maxPage = 0;
+    Pgno maxCatalogTable = 0;
     for(i=0; i<pBtree->cat.n; i++){
-      if( pBtree->cat.a[i].iTable > maxPage ){
-        maxPage = pBtree->cat.a[i].iTable;
+      if( pBtree->cat.a[i].iTable > maxCatalogTable ){
+        maxCatalogTable = pBtree->cat.a[i].iTable;
       }
     }
+    maxPage = maxCatalogTable;
     pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = maxPage;
 
-    pBtree->cat.iNextTable = maxPage + 1;
+    pBtree->cat.iNextTable = maxCatalogTable + 1;
   }
 
   if( getenv("DOLTLITE_DEBUG_CAT") ){
@@ -4379,6 +4381,12 @@ static Pgno prollyBtreeLastPage(Btree *p){
     + (i64)chunkStagingRecentCount(&cs->staging);
   if( n < 0 ) n = 0;
   if( n > (i64)0xfffffffe ) n = (i64)0xfffffffe;
+  /* SQLite uses LastPage as an upper bound when validating schema rootpages.
+  ** Doltlite's physical page count is a chunk count, which GC can reduce
+  ** below stable sqlite_master rootpage numbers. */
+  if( p->aMeta[BTREE_LARGEST_ROOT_PAGE]>(Pgno)n ){
+    n = p->aMeta[BTREE_LARGEST_ROOT_PAGE];
+  }
   return (Pgno)n;
 }
 Pgno sqlite3BtreeLastPage(Btree *p){

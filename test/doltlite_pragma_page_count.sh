@@ -5,9 +5,10 @@
 # is a function of how many user tables have been created (not the
 # database's actual storage footprint), plus a fixed offset.
 #
-# After this PR, `PRAGMA page_count` returns the total chunk count
-# (index + pending + recent) — the honest measure of "how many
-# chunks are in the store right now".
+# `PRAGMA page_count` returns the total chunk count (index + pending
+# + recent), clamped high enough to cover SQLite-visible schema rootpages.
+# This keeps it an honest storage-footprint proxy while preserving the
+# invariant SQLite's schema loader expects: rootpage <= last page.
 #
 # Numbers are NOT directly comparable to stock SQLite's page_count
 # (chunks are variable size, content-addressed). They are a coarse
@@ -92,6 +93,36 @@ run_test_grows "pc_grows_with_bulk_insert" "$small" "$big"
 # With one user table, the legacy value would have been ~1002; the
 # real chunk count is much smaller (low tens).
 run_test_int_in "pc_not_fabricated_value" "$big" 1 200
+db_rm "$DB"
+
+# GC can compact the physical chunk count below stable sqlite_master rootpage
+# numbers. Fresh opens still need page_count/LastPage to cover those rootpages,
+# otherwise SQLite rejects the schema as malformed during initialization.
+DB=/tmp/test_pc_gc_rootpages_$$.db; db_rm "$DB"
+$DOLTLITE "$DB" "PRAGMA foreign_keys=ON;
+CREATE TABLE a(
+  id TEXT PRIMARY KEY,
+  x TEXT NOT NULL
+);
+CREATE TABLE b(
+  id TEXT PRIMARY KEY,
+  a_id TEXT NOT NULL REFERENCES a(id),
+  y TEXT NOT NULL
+);
+CREATE TABLE c(
+  a_id TEXT NOT NULL REFERENCES a(id),
+  b_id TEXT NOT NULL REFERENCES b(id),
+  y TEXT NOT NULL,
+  z INTEGER NOT NULL CHECK(z >= 0),
+  PRIMARY KEY(a_id,b_id)
+) WITHOUT ROWID;
+CREATE INDEX idx_b_a ON b(a_id);
+CREATE INDEX idx_c_y ON c(y);
+SELECT dolt_gc();" > /dev/null 2>&1
+
+pc=$($DOLTLITE "$DB" "PRAGMA page_count;" 2>&1 | tr -d '\n')
+max_root=$($DOLTLITE "$DB" "SELECT max(rootpage) FROM sqlite_master;" 2>&1 | tr -d '\n')
+run_test_int_ge "pc_gc_covers_schema_rootpages" "$pc" "$max_root"
 db_rm "$DB"
 
 echo ""

@@ -229,6 +229,35 @@ run_test "gc_tables_reopen_b" "SELECT count(*) FROM b;" "2" "$DB"
 
 db_rm "$DB"
 
+DB=/tmp/test_gc_schema_rootpages_$$.db; db_rm "$DB"
+echo "PRAGMA foreign_keys=ON;
+CREATE TABLE a(
+  id TEXT PRIMARY KEY,
+  x TEXT NOT NULL
+);
+CREATE TABLE b(
+  id TEXT PRIMARY KEY,
+  a_id TEXT NOT NULL REFERENCES a(id),
+  y TEXT NOT NULL
+);
+CREATE TABLE c(
+  a_id TEXT NOT NULL REFERENCES a(id),
+  b_id TEXT NOT NULL REFERENCES b(id),
+  y TEXT NOT NULL,
+  z INTEGER NOT NULL CHECK(z >= 0),
+  PRIMARY KEY(a_id,b_id)
+) WITHOUT ROWID;
+CREATE INDEX idx_b_a ON b(a_id);
+CREATE INDEX idx_c_y ON c(y);
+SELECT dolt_gc();" | $DOLTLITE "$DB" > /dev/null 2>&1
+
+run_test "gc_schema_rootpage_reopen" \
+  "SELECT count(*) FROM sqlite_master WHERE name='idx_c_y';" "1" "$DB"
+run_test_match "gc_schema_rootpage_second_gc" \
+  "SELECT dolt_gc();" "chunks" "$DB"
+
+db_rm "$DB"
+
 DB=/tmp/test_gc_idem_$$.db; db_rm "$DB"
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'a');
