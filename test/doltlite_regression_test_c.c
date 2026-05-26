@@ -6666,6 +6666,103 @@ static void run_prolly_mutate_appends_blob_key_to_right_edge(void){
   chunkStoreClose(&cs);
 }
 
+static void run_prolly_mutate_batches_existing_int_replacements(void){
+  ChunkStore cs;
+  ProllyCache cache;
+  ProllyChunker chunker;
+  ProllyMutMap mm;
+  ProllyMutator mut;
+  ProllyCursor cur;
+  ProllyHash rootHash, newRootHash;
+  ProllyNode rootNode;
+  u8 *pRootData = 0;
+  int nRootData = 0;
+  u8 aKey[8];
+  u8 aVal[32];
+  const u8 *pVal = 0;
+  int nVal = 0;
+  int rc;
+  int res = 99;
+  int i;
+  int nSeen = 0;
+  const int nItem = 100000;
+
+  printf("=== Prolly Mutate Batch Int Replacement Test ===\n\n");
+
+  check("open_memory_store_for_prolly_batch_replace",
+        chunkStoreOpen(&cs, sqlite3_vfs_find(0), ":memory:", 0)==SQLITE_OK);
+  check("init_cache_for_prolly_batch_replace",
+        prollyCacheInit(&cache, 64)==SQLITE_OK);
+  check("init_chunker_for_prolly_batch_replace",
+        prollyChunkerInit(&chunker, &cs, PROLLY_NODE_INTKEY)==SQLITE_OK);
+
+  for( i = 1; i <= nItem; i++ ){
+    prollyEncodeIntKey(i, aKey);
+    sqlite3_snprintf(sizeof(aVal), (char*)aVal, "row-%d", i);
+    check("add_key_to_chunker_for_prolly_batch_replace",
+          prollyChunkerAdd(&chunker, aKey, sizeof(aKey),
+                           aVal, (int)strlen((char*)aVal))==SQLITE_OK);
+  }
+  check("finish_chunker_for_prolly_batch_replace",
+        prollyChunkerFinish(&chunker)==SQLITE_OK);
+  prollyChunkerGetRoot(&chunker, &rootHash);
+  prollyChunkerFree(&chunker);
+
+  check("load_root_for_prolly_batch_replace",
+        chunkStoreGet(&cs, &rootHash, &pRootData, &nRootData)==SQLITE_OK);
+  check("parse_root_for_prolly_batch_replace",
+        prollyNodeParse(&rootNode, pRootData, nRootData)==SQLITE_OK);
+  check("root_is_multi_level_for_prolly_batch_replace", rootNode.level >= 2);
+  sqlite3_free(pRootData);
+
+  check("init_mutmap_for_prolly_batch_replace",
+        prollyMutMapInitMode(&mm, 1, 0)==SQLITE_OK);
+  for( i = 1000; i < 2000; i++ ){
+    sqlite3_snprintf(sizeof(aVal), (char*)aVal, "new-%d", i);
+    check("insert_replacement_for_prolly_batch_replace",
+          prollyMutMapInsert(&mm, 0, 0, i,
+                             aVal, (int)strlen((char*)aVal))==SQLITE_OK);
+  }
+
+  memset(&mut, 0, sizeof(mut));
+  mut.pStore = &cs;
+  mut.pCache = &cache;
+  mut.oldRoot = rootHash;
+  mut.pEdits = &mm;
+  mut.flags = PROLLY_NODE_INTKEY;
+  rc = prollyMutateFlush(&mut);
+  check("flush_batch_int_replacements", rc==SQLITE_OK);
+  newRootHash = mut.newRoot;
+  prollyMutMapFree(&mm);
+
+  prollyCursorInit(&cur, &cs, &cache, &newRootHash, PROLLY_NODE_INTKEY);
+  rc = prollyCursorSeekInt(&cur, 1500, &res);
+  check("seek_replaced_batch_int_key", rc==SQLITE_OK);
+  check("seek_replaced_batch_int_key_found",
+        res==0 && prollyCursorIsValid(&cur));
+  if( prollyCursorIsValid(&cur) ){
+    prollyCursorValue(&cur, &pVal, &nVal);
+    check("replaced_batch_int_value",
+          nVal==8 && memcmp(pVal, "new-1500", 8)==0);
+  }
+  prollyCursorClose(&cur);
+
+  prollyCursorInit(&cur, &cs, &cache, &newRootHash, PROLLY_NODE_INTKEY);
+  rc = prollyCursorFirst(&cur, &res);
+  check("cursor_first_after_batch_int_replace", rc==SQLITE_OK);
+  while( prollyCursorIsValid(&cur) ){
+    nSeen++;
+    rc = prollyCursorNext(&cur);
+    if( rc!=SQLITE_OK ) break;
+  }
+  check("batch_int_replace_count_unchanged", nSeen==nItem);
+  check("iterate_after_batch_int_replace_ok", rc==SQLITE_OK);
+
+  prollyCursorClose(&cur);
+  prollyCacheFree(&cache);
+  chunkStoreClose(&cs);
+}
+
 static void run_chunk_store_rollback_restores_refs_hash(void){
   ChunkStore cs;
   ProllyHash emptyHash;
@@ -7528,6 +7625,7 @@ static const RegressionCase aCases[] = {
   { "mutmap_differential_randomized", "MutMap Differential Randomized Test", run_mutmap_differential_randomized },
   { "prolly_mutate_skip_subtree_order", "Prolly Mutate Skipped Subtree Order Test", run_prolly_mutate_preserves_order_across_skipped_subtrees },
   { "prolly_mutate_blob_right_edge_append", "Prolly Mutate Blob Right Edge Append Test", run_prolly_mutate_appends_blob_key_to_right_edge },
+  { "prolly_mutate_batch_int_replace", "Prolly Mutate Batch Int Replacement Test", run_prolly_mutate_batches_existing_int_replacements },
   { "refs_hash_rollback_restore", "Chunk Store Rollback Restores Refs Hash Test", run_chunk_store_rollback_restores_refs_hash },
   { "refs_hash_commit_failure_restore", "Chunk Store Commit Failure Restores Refs Hash Test", run_chunk_store_commit_failure_restores_refs_hash },
   { "remotesrv_put_refs_failure_restore", "RemoteSrv Put Refs Failure Restores State Test", run_remotesrv_put_refs_failure_restores_state },
