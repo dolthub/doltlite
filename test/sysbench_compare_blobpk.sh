@@ -7,9 +7,11 @@
 # byte order matches integer order). Companion to the TEXT PK suite —
 # verifies the non-INTKEY perf work generalizes to binary keys.
 #
-# Ceiling enforced at BENCH_MAX_MULTIPLIER (default 6×) on individual
-# read/write ratios and BENCH_AVG_MAX_MULTIPLIER (default 5×) on
-# section averages.
+# Ceilings: BENCH_MAX_MULTIPLIER (default 2.5×) on individual
+# read/write ratios and BENCH_AVG_MAX_MULTIPLIER (default 2×) on
+# section averages. Autocommit writes are gated separately by
+# BENCH_AC_WRITE_MAX_MULTIPLIER / BENCH_AC_WRITE_AVG_MAX_MULTIPLIER
+# (default 5× each) since per-statement durability has wider variance.
 #
 set -e
 
@@ -19,8 +21,10 @@ BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
 ROWS=${BENCH_ROWS:-100000}
-BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-6}
-BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-5}
+BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.5}
+BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-2}
+BENCH_AC_WRITE_MAX_MULTIPLIER=${BENCH_AC_WRITE_MAX_MULTIPLIER:-5}
+BENCH_AC_WRITE_AVG_MAX_MULTIPLIER=${BENCH_AC_WRITE_AVG_MAX_MULTIPLIER:-5}
 SEED=42
 TMPDIR=$(mktemp -d)
 
@@ -509,7 +513,7 @@ echo "## Sysbench-Style Benchmark (BLOB PK): Doltlite vs SQLite"
 echo ""
 echo "_Companion to the classic Sysbench-Style Benchmark. Every workload here"
 echo "runs against tables with a 16-byte big-endian \`BLOB PRIMARY KEY\`._"
-echo "_Individual ratios gated at ${BENCH_MAX_MULTIPLIER}×; section averages gated at ${BENCH_AVG_MAX_MULTIPLIER}×._"
+echo "_Individual ratios gated at ${BENCH_MAX_MULTIPLIER}×; section averages gated at ${BENCH_AVG_MAX_MULTIPLIER}×. Autocommit writes use ${BENCH_AC_WRITE_MAX_MULTIPLIER}× / ${BENCH_AC_WRITE_AVG_MAX_MULTIPLIER}×._"
 echo ""
 echo "### In-Memory"
 echo ""
@@ -614,7 +618,7 @@ PYEOF
 }
 
 echo ""
-echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x individual, ${BENCH_AVG_MAX_MULTIPLIER}x average)"
+echo "### Performance Ceiling Check (${BENCH_MAX_MULTIPLIER}x individual, ${BENCH_AVG_MAX_MULTIPLIER}x average; autocommit writes: ${BENCH_AC_WRITE_MAX_MULTIPLIER}x / ${BENCH_AC_WRITE_AVG_MAX_MULTIPLIER}x)"
 echo ""
 
 ceiling_ok=0
@@ -623,13 +627,13 @@ check_ceiling "mem_writes"  "$WRITE_TESTS"    "$BENCH_MAX_MULTIPLIER" || ceiling
 check_ceiling "file_reads"  "$READ_TESTS"     "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 check_ceiling "file_writes" "$WRITE_TESTS"    "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
 check_ceiling "ac_reads"    "$READ_TESTS"     "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
-check_ceiling "ac_writes"   "$WRITE_TESTS_AC" "$BENCH_MAX_MULTIPLIER" || ceiling_ok=1
+check_ceiling "ac_writes"   "$WRITE_TESTS_AC" "$BENCH_AC_WRITE_MAX_MULTIPLIER" || ceiling_ok=1
 check_average_ceiling "mem_reads"   "$READ_TESTS"     "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
 check_average_ceiling "mem_writes"  "$WRITE_TESTS"    "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
 check_average_ceiling "file_reads"  "$READ_TESTS"     "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
 check_average_ceiling "file_writes" "$WRITE_TESTS"    "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
 check_average_ceiling "ac_reads"    "$READ_TESTS"     "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
-check_average_ceiling "ac_writes"   "$WRITE_TESTS_AC" "$BENCH_AVG_MAX_MULTIPLIER" || ceiling_ok=1
+check_average_ceiling "ac_writes"   "$WRITE_TESTS_AC" "$BENCH_AC_WRITE_AVG_MAX_MULTIPLIER" || ceiling_ok=1
 
 if [ "$ceiling_ok" = "0" ]; then
   echo "All tests within ceilings."
