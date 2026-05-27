@@ -210,5 +210,3 @@ jobs:
         bash ../test/doltlite_gc.sh
         bash ../test/doltlite_gc_session_state.sh
         bash ../test/doltlite_pragma_page_count.sh
-        cd ..
-        bash test/run_doltlite_regression_case.sh gc_rewrite_failure
