@@ -12,6 +12,7 @@ fail=0
 
 check() {
   local desc="$1" expected="$2" actual="$3"
+  actual=${actual//$'\r'/}
   if [ "$expected" = "$actual" ]; then
     echo "  PASS: $desc"; pass=$((pass+1))
   else

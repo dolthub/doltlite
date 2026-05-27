@@ -44,6 +44,18 @@ check_time() {
 
 ts() { date +%s; }
 
+file_uri() {
+  local path="$1"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      printf "file://%s" "$(cygpath -m "$path")"
+      ;;
+    *)
+      printf "file://%s" "$path"
+      ;;
+  esac
+}
+
 # Insert N rows in batches of 100K to avoid CTE ephemeral table overhead.
 batch_insert() {
   local dbpath="$1" table="$2" total="$3" cols="$4"
@@ -166,8 +178,9 @@ check "feature row present" "feature_row" "$result"
 echo ""
 echo "--- 7. Clone ---"
 t0=$(ts)
-"$DB" "$TMPDIR/db" "SELECT dolt_remote('add','origin','file://$TMPDIR/remote'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
-"$DB" "$TMPDIR/clone" "SELECT dolt_clone('file://$TMPDIR/remote');" > /dev/null 2>&1
+remote_uri=$(file_uri "$TMPDIR/remote")
+"$DB" "$TMPDIR/db" "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
+"$DB" "$TMPDIR/clone" "SELECT dolt_clone('$remote_uri');" > /dev/null 2>&1
 elapsed=$(( $(ts) - t0 ))
 echo "  ${elapsed}s"
 check_time "push + clone" "$elapsed" "$N1_CLONE_MAX"
@@ -179,6 +192,7 @@ echo ""
 echo "--- 8. Round-trip ---"
 "$DB" "$TMPDIR/clone" "INSERT INTO t VALUES(99999999,'clone_row',42,'pushed'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','from clone'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
 result=$("$DB" "$TMPDIR/db" "SELECT dolt_pull('origin','main'); SELECT name FROM t WHERE id=99999999;")
+result=${result//$'\r'/}
 check "pull from clone" "0
 clone_row" "$result"
 

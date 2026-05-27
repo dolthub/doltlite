@@ -33,7 +33,7 @@ jobs:
       uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
-        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make perl tcl
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl tcl
 
     - name: Install Dolt
       if: matrix.platform == 'ubuntu'
@@ -79,6 +79,7 @@ jobs:
       run: |
         cd build
         make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-lib
+        cp -f "$(command -v sqlite3)" sqlite3
 
     - name: Lint
       if: matrix.platform == 'ubuntu'
@@ -133,6 +134,68 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/blake3_kat_test.sh ./doltlite
       timeout-minutes: 2
+
+    - name: Windows Doltlite feature tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        tests=(
+          ../test/doltlite_parity.sh
+          ../test/doltlite_staging.sh
+          ../test/doltlite_diff_table.sh
+          ../test/doltlite_schema_diff.sh
+          ../test/doltlite_schema_merge.sh
+          ../test/doltlite_revert_dirty.sh
+          ../test/doltlite_conflict_rows.sh
+          ../test/doltlite_gc.sh
+          ../test/doltlite_gc_session_state.sh
+          ../test/doltlite_gc_scale.sh
+          ../test/doltlite_vacuum.sh
+          ../test/doltlite_memory_db.sh
+          ../test/doltlite_dbpage.sh
+          ../test/doltlite_record_format.sh
+          ../test/doltlite_rollback_durability.sh
+          ../test/doltlite_storage_locking.sh
+          ../test/chunk_physical_dups_test.sh
+          ../test/doltlite_open_sqlite_file.sh
+          ../test/doltlite_comparison.sh
+          ../test/doltlite_merge_ignore_corners.sh
+          ../test/doltlite_pragma_auto_vacuum.sh
+          ../test/doltlite_pragma_journal_mode.sh
+          ../test/doltlite_pragma_memory_journal_mode.sh
+          ../test/doltlite_pragma_page_count.sh
+          ../test/doltlite_pragma_wal_checkpoint.sh
+          ../test/doltlite_row_count_estimate.sh
+          ../test/doltlite_schema_cookie.sh
+        )
+        for test in "${tests[@]}"; do
+          echo "━━━ ${test} ━━━"
+          bash "$test"
+        done
+      timeout-minutes: 20
+
+    - name: Windows correctness regression tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/correctness_test.sh ./doltlite
+        bash ../test/index_test.sh ./doltlite
+      timeout-minutes: 15
+
+    - name: Windows scale and feature tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/large_scale_test.sh ./doltlite --quick
+        bash ../test/chunk_distribution_test.sh ./doltlite
+        bash ../test/multi_table_test.sh ./doltlite --quick
+        bash ../test/diff_test.sh ./doltlite
+        bash ../test/config_test.sh ./doltlite
+        bash ../test/blake3_kat_test.sh ./doltlite
+      timeout-minutes: 30
 
     - name: Remote integration tests
       if: matrix.platform == 'ubuntu'

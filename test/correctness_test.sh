@@ -28,11 +28,24 @@ query_value() {
   local out rc
   out=$("$DB" "$db" "$sql" 2>&1)
   rc=$?
+  out=${out//$'\r'/}
   if [ "$rc" -ne 0 ]; then
     echo "__ERROR__: $out"
     return 1
   fi
   printf "%s" "$out"
+}
+
+file_uri() {
+  local path="$1"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      printf "file://%s" "$(cygpath -m "$path")"
+      ;;
+    *)
+      printf "file://%s" "$path"
+      ;;
+  esac
 }
 
 check() {
@@ -197,20 +210,20 @@ check "CTE recursion" "4" "$result"
 echo ""
 echo "--- 10. EXISTS subquery ---"
 rm -f "$TMPDIR/t.db"
-result=$("$DB" :memory: "CREATE TABLE users(name TEXT); CREATE TABLE orders(user_name TEXT);
+result=$(query_value :memory: "CREATE TABLE users(name TEXT); CREATE TABLE orders(user_name TEXT);
   INSERT INTO users VALUES('alice'),('bob');
   INSERT INTO orders VALUES('alice');
-  SELECT name FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_name=users.name);" 2>/dev/null)
+  SELECT name FROM users WHERE EXISTS (SELECT 1 FROM orders WHERE orders.user_name=users.name);")
 check "EXISTS subquery" "alice" "$result"
 
 # ── 11. LEFT JOIN ─────────────────────────────────────────
 echo ""
 echo "--- 11. LEFT JOIN ---"
 rm -f "$TMPDIR/t.db"
-result=$("$DB" :memory: "CREATE TABLE a(x TEXT); CREATE TABLE b(x TEXT, y TEXT);
+result=$(query_value :memory: "CREATE TABLE a(x TEXT); CREATE TABLE b(x TEXT, y TEXT);
   INSERT INTO a VALUES('x'),('y'),('z');
   INSERT INTO b VALUES('x','p'),('x','q'),('y','r');
-  SELECT a.x, b.y FROM a LEFT JOIN b ON a.x=b.x ORDER BY a.x, b.y;" 2>/dev/null)
+  SELECT a.x, b.y FROM a LEFT JOIN b ON a.x=b.x ORDER BY a.x, b.y;")
 expected="x|p
 x|q
 y|r
@@ -247,15 +260,16 @@ echo ""
 echo "--- 13. Clone correctness ---"
 for N in 100 2000; do
   rm -f "$TMPDIR/src.db" "$TMPDIR/remote.db" "$TMPDIR/clone.db"
+  remote_uri=$(file_uri "$TMPDIR/remote.db")
   "$DB" "$TMPDIR/src.db" "CREATE TABLE t(id INTEGER PRIMARY KEY, val INT);
     WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c WHERE x<$N)
     INSERT INTO t SELECT x,x FROM c;
     SELECT dolt_add('-A'); SELECT dolt_commit('-m','data');
-    SELECT dolt_remote('add','origin','file://$TMPDIR/remote.db');
+    SELECT dolt_remote('add','origin','$remote_uri');
     SELECT dolt_push('origin','main');" > /dev/null 2>&1
-  "$DB" "$TMPDIR/clone.db" "SELECT dolt_clone('file://$TMPDIR/remote.db');" > /dev/null 2>&1
-  count=$("$DB" "$TMPDIR/clone.db" "SELECT count(*) FROM t;" 2>/dev/null)
-  sum=$("$DB" "$TMPDIR/clone.db" "SELECT sum(val) FROM t;" 2>/dev/null)
+  "$DB" "$TMPDIR/clone.db" "SELECT dolt_clone('$remote_uri');" > /dev/null 2>&1
+  count=$(query_value "$TMPDIR/clone.db" "SELECT count(*) FROM t;")
+  sum=$(query_value "$TMPDIR/clone.db" "SELECT sum(val) FROM t;")
   check "clone count N=$N" "$N" "$count"
   check "clone sum N=$N" "$((N*(N+1)/2))" "$sum"
 done
