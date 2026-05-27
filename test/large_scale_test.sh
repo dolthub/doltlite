@@ -192,6 +192,7 @@ echo ""
 echo "--- 8. Round-trip ---"
 "$DB" "$TMPDIR/clone" "INSERT INTO t VALUES(99999999,'clone_row',42,'pushed'); SELECT dolt_add('-A'); SELECT dolt_commit('-m','from clone'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
 result=$("$DB" "$TMPDIR/db" "SELECT dolt_pull('origin','main'); SELECT name FROM t WHERE id=99999999;")
+result=${result//$'\r'/}
 check "pull from clone" "0
 clone_row" "$result"
 
