@@ -339,7 +339,8 @@ static int gcRewriteFile(
   const u8 *pNewData,
   int nNewData,
   const ChunkIndexEntry *pNewIndex,
-  int nNewIndex
+  int nNewIndex,
+  int *pReplaced
 ){
   int i;
   int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
@@ -348,6 +349,8 @@ static int gcRewriteFile(
   u8 manifest[CHUNK_MANIFEST_SIZE];
   ChunkStore manifestCs;
   int rc = SQLITE_OK;
+
+  *pReplaced = 0;
 
 #ifdef SQLITE_TEST
   {
@@ -407,7 +410,7 @@ static int gcRewriteFile(
                    | SQLITE_OPEN_MAIN_DB;
       i64 writeOff = 0;
 
-      chunkFileGetVfs(&cs->file)->xDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+      sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
 
       rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), zTmp, &pTmpFile, tmpFlags, 0);
       if( rc != SQLITE_OK ){
@@ -449,15 +452,18 @@ static int gcRewriteFile(
         GC_CRASH_CHECK();
         rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
       }
-      sqlite3OsCloseFree(pTmpFile);
-
       if( rc==SQLITE_OK ){
         sqlite3_file *pOldFile = chunkFileGetHandle(&cs->file);
         sqlite3_file *pNewFile = 0;
+        int dirSyncRc = SQLITE_OK;
 
         GC_CRASH_CHECK();
         if( rename(zTmp, chunkFileGetFilename(&cs->file))!=0 ){
           rc = SQLITE_IOERR;
+        }else{
+          *pReplaced = 1;
+          sqlite3OsCloseFree(pTmpFile);
+          pTmpFile = 0;
         }
 
 #if !defined(_WIN32) && !defined(WIN32)
@@ -471,14 +477,30 @@ static int gcRewriteFile(
               int dfd = open(zDir, O_RDONLY);
               if( dfd>=0 ){
                 GC_CRASH_CHECK();
-                fsync(dfd);
-                close(dfd);
+                if( fsync(dfd)!=0 ){
+                  dirSyncRc = SQLITE_IOERR_DIR_FSYNC;
+                }
+                if( close(dfd)!=0 && dirSyncRc==SQLITE_OK ){
+                  dirSyncRc = SQLITE_IOERR_DIR_FSYNC;
+                }
+              }else{
+                dirSyncRc = SQLITE_IOERR_DIR_FSYNC;
               }
             }
             sqlite3_free(zDir);
+          }else{
+            dirSyncRc = SQLITE_NOMEM;
           }
         }
 #endif
+
+        if( *pReplaced ){
+          if( pOldFile ){
+            sqlite3OsCloseFree(pOldFile);
+          }
+          chunkFileSetHandle(&cs->file, 0);
+          chunkFileSetSize(&cs->file, 0);
+        }
 
         if( rc==SQLITE_OK ){
           int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
@@ -499,12 +521,15 @@ static int gcRewriteFile(
           chunkFileSetHandle(&cs->file, pNewFile);
           chunkFileSetSize(&cs->file, CHUNK_MANIFEST_SIZE + nNewData + indexSize);
           walStateSetDataSize(&cs->wal, 0);
-          if( pOldFile ){
-            sqlite3OsCloseFree(pOldFile);
-          }
+          if( dirSyncRc!=SQLITE_OK ) rc = dirSyncRc;
+        }else if( pNewFile ){
+          sqlite3OsCloseFree(pNewFile);
         }
       }else{
-        chunkFileGetVfs(&cs->file)->xDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+        sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
+      }
+      if( !*pReplaced && pTmpFile ){
+        sqlite3OsCloseFree(pTmpFile);
       }
     }
     sqlite3_free(zTmp);
@@ -530,6 +555,7 @@ static int gcSweep(
   u8 *buf = 0;
   int nBuf = 0;
   int rc = SQLITE_OK;
+  int replaced = 0;
 
   {
     int nIdx; const ChunkIndexEntry *aIdx;
@@ -570,9 +596,9 @@ static int gcSweep(
   rc = gcBuildCompactedData(cs, marked, &buf, &nBuf, &aNewIndex, &nNewIndex);
   if( rc!=SQLITE_OK ) return rc;
 
-  rc = gcRewriteFile(cs, buf, nBuf, aNewIndex, nNewIndex);
+  rc = gcRewriteFile(cs, buf, nBuf, aNewIndex, nNewIndex, &replaced);
 
-  if( rc==SQLITE_OK ){
+  if( rc==SQLITE_OK || replaced ){
     int indexSize = nNewIndex * CHUNK_INDEX_ENTRY_SIZE;
     chunkIndexReplaceEntries(&cs->index, aNewIndex, nNewIndex);
     chunkIndexSetMetadata(&cs->index, nNewIndex,
