@@ -220,7 +220,7 @@ jobs:
           tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
           tkt-f3e5abed55
 
-  windows-gc-smoke:
+  windows-smoke:
     runs-on: windows-latest
     timeout-minutes: 25
 
@@ -244,7 +244,6 @@ jobs:
       shell: msys2 {0}
       run: |
         cd build
-        cp doltlite.exe doltlite
         bash ../test/doltlite_gc.sh
         bash ../test/doltlite_gc_session_state.sh
         bash ../test/doltlite_pragma_page_count.sh
