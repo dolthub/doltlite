@@ -33,7 +33,7 @@ jobs:
       uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
-        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make perl tcl
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-tcl mingw-w64-x86_64-zlib make perl tcl
 
     - name: Install Dolt
       if: matrix.platform == 'ubuntu'
@@ -79,6 +79,7 @@ jobs:
       run: |
         cd build
         make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-lib
+        cp -f "$(command -v sqlite3)" sqlite3
 
     - name: Lint
       if: matrix.platform == 'ubuntu'
@@ -133,6 +134,34 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/blake3_kat_test.sh ./doltlite
       timeout-minutes: 2
+
+    - name: Windows Doltlite feature tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: cd build && bash ../test/run_doltlite_tests.sh
+      timeout-minutes: 20
+
+    - name: Windows correctness regression tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/correctness_test.sh ./doltlite
+        bash ../test/index_test.sh ./doltlite
+      timeout-minutes: 15
+
+    - name: Windows scale and feature tests
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        bash ../test/large_scale_test.sh ./doltlite --quick
+        bash ../test/chunk_distribution_test.sh ./doltlite
+        bash ../test/multi_table_test.sh ./doltlite --quick
+        bash ../test/diff_test.sh ./doltlite
+        bash ../test/config_test.sh ./doltlite
+        bash ../test/blake3_kat_test.sh ./doltlite
+      timeout-minutes: 30
 
     - name: Remote integration tests
       if: matrix.platform == 'ubuntu'
