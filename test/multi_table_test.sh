@@ -31,6 +31,18 @@ check() {
 
 ts() { date +%s; }
 
+file_uri() {
+  local path="$1"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      printf "file://%s" "$(cygpath -m "$path")"
+      ;;
+    *)
+      printf "file://%s" "$path"
+      ;;
+  esac
+}
+
 if [ "$QUICK" = "1" ]; then
   NU=1000; NO=5000; NE=10000
   echo "=== QUICK: ${NU} users, ${NO} orders, ${NE} events ==="
@@ -164,8 +176,10 @@ check "merged: feature order present" "NewProduct" "$result"
 echo ""
 echo "--- 8. Clone ---"
 t0=$(ts)
-"$DB" "$TMPDIR/db" "SELECT dolt_remote('add','origin','file://$TMPDIR/remote'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
-result=$("$DB" "$TMPDIR/clone" "SELECT dolt_clone('file://$TMPDIR/remote');")
+remote_uri=$(file_uri "$TMPDIR/remote")
+"$DB" "$TMPDIR/db" "SELECT dolt_remote('add','origin','$remote_uri'); SELECT dolt_push('origin','main');" > /dev/null 2>&1
+result=$("$DB" "$TMPDIR/clone" "SELECT dolt_clone('$remote_uri');")
+result=${result//$'\r'/}
 check "clone ok" "0" "$result"
 echo "  ($(( $(ts) - t0 ))s)"
 
