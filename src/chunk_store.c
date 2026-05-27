@@ -1483,6 +1483,23 @@ void chunkStoreUnlock(ChunkStore *cs){
   }
 }
 
+int chunkStoreReleaseFileLock(ChunkStore *cs){
+  if( cs->graphLockFd >= 0 ){
+    csFileUnlock(cs->graphLockFd);
+    cs->graphLockFd = -1;
+  }
+  return SQLITE_OK;
+}
+
+int chunkStoreReacquireFileLock(ChunkStore *cs){
+  if( cs->isMemory || cs->graphLockFd >= 0 ) return SQLITE_OK;
+  if( !cs->file.zFilename ) return SQLITE_ERROR;
+  if( csFileLockNB(cs->file.zFilename, &cs->graphLockFd) != 0 ){
+    return SQLITE_BUSY;
+  }
+  return SQLITE_OK;
+}
+
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
   int bMoved = 0;
   int rc;

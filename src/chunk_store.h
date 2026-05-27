@@ -112,6 +112,8 @@ int chunkStoreClose(ChunkStore *cs);
 int chunkStoreLockAndRefresh(ChunkStore *cs);
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged);
 void chunkStoreUnlock(ChunkStore *cs);
+int chunkStoreReleaseFileLock(ChunkStore *cs);
+int chunkStoreReacquireFileLock(ChunkStore *cs);
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged);
 
 int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
