@@ -336,37 +336,69 @@ static int gcBuildCompactedData(
   return SQLITE_OK;
 }
 
-static int gcReplaceFile(const char *zTmp, const char *zDest){
+static int gcReplaceFile(sqlite3_vfs *pVfs, const char *zTmp, const char *zDest){
 #if SQLITE_OS_WIN
+  char *zTmpFull = 0;
+  char *zDestFull = 0;
   WCHAR *zTmpW = 0;
   WCHAR *zDestW = 0;
   int rc = SQLITE_OK;
   int nTmp, nDest;
+  int nPath;
 
-  nTmp = MultiByteToWideChar(CP_UTF8, 0, zTmp, -1, 0, 0);
-  nDest = MultiByteToWideChar(CP_UTF8, 0, zDest, -1, 0, 0);
-  if( nTmp==0 || nDest==0 ) return SQLITE_IOERR;
+  nPath = pVfs ? pVfs->mxPathname : 0;
+  if( nPath<=0 ) return SQLITE_IOERR;
+
+  zTmpFull = sqlite3_malloc64((sqlite3_uint64)nPath);
+  zDestFull = sqlite3_malloc64((sqlite3_uint64)nPath);
+  if( zTmpFull==0 || zDestFull==0 ){
+    sqlite3_free(zTmpFull);
+    sqlite3_free(zDestFull);
+    return SQLITE_NOMEM;
+  }
+  rc = sqlite3OsFullPathname(pVfs, zTmp, nPath, zTmpFull);
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsFullPathname(pVfs, zDest, nPath, zDestFull);
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zTmpFull);
+    sqlite3_free(zDestFull);
+    return rc;
+  }
+
+  nTmp = MultiByteToWideChar(CP_UTF8, 0, zTmpFull, -1, 0, 0);
+  nDest = MultiByteToWideChar(CP_UTF8, 0, zDestFull, -1, 0, 0);
+  if( nTmp==0 || nDest==0 ){
+    sqlite3_free(zTmpFull);
+    sqlite3_free(zDestFull);
+    return SQLITE_IOERR;
+  }
 
   zTmpW = sqlite3_malloc64((sqlite3_uint64)nTmp * sizeof(WCHAR));
   zDestW = sqlite3_malloc64((sqlite3_uint64)nDest * sizeof(WCHAR));
   if( zTmpW==0 || zDestW==0 ){
+    sqlite3_free(zTmpFull);
+    sqlite3_free(zDestFull);
     sqlite3_free(zTmpW);
     sqlite3_free(zDestW);
     return SQLITE_NOMEM;
   }
 
-  if( MultiByteToWideChar(CP_UTF8, 0, zTmp, -1, zTmpW, nTmp)==0
-   || MultiByteToWideChar(CP_UTF8, 0, zDest, -1, zDestW, nDest)==0
+  if( MultiByteToWideChar(CP_UTF8, 0, zTmpFull, -1, zTmpW, nTmp)==0
+   || MultiByteToWideChar(CP_UTF8, 0, zDestFull, -1, zDestW, nDest)==0
   ){
     rc = SQLITE_IOERR;
   }else if( !MoveFileExW(zTmpW, zDestW,
                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ){
     rc = SQLITE_IOERR;
   }
+  sqlite3_free(zTmpFull);
+  sqlite3_free(zDestFull);
   sqlite3_free(zTmpW);
   sqlite3_free(zDestW);
   return rc;
 #else
+  (void)pVfs;
   return rename(zTmp, zDest)==0 ? SQLITE_OK : SQLITE_IOERR;
 #endif
 }
@@ -535,7 +567,8 @@ static int gcRewriteFile(
 #endif
 
         GC_CRASH_CHECK();
-        rc = gcReplaceFile(zTmp, chunkFileGetFilename(&cs->file));
+        rc = gcReplaceFile(chunkFileGetVfs(&cs->file), zTmp,
+                           chunkFileGetFilename(&cs->file));
         if( rc!=SQLITE_OK ){
 #if SQLITE_OS_WIN
           if( chunkFileGetHandle(&cs->file)==0 ){
