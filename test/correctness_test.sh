@@ -40,7 +40,7 @@ file_uri() {
   local path="$1"
   case "$(uname -s)" in
     MINGW*|MSYS*|CYGWIN*)
-      printf "file:///%s" "$(cygpath -m "$path")"
+      printf "file://%s" "$(cygpath -m "$path")"
       ;;
     *)
       printf "file://%s" "$path"
