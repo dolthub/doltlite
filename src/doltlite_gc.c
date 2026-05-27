@@ -11,7 +11,9 @@
 
 #include <string.h>
 #include <stdio.h>
-#if !defined(_WIN32) && !defined(WIN32)
+#if SQLITE_OS_WIN
+#include "os_win.h"
+#else
 #include <fcntl.h>
 #include <unistd.h>
 #endif
@@ -334,6 +336,67 @@ static int gcBuildCompactedData(
   return SQLITE_OK;
 }
 
+static int gcReplaceFile(const char *zTmp, const char *zDest){
+#if SQLITE_OS_WIN
+  WCHAR *zTmpW = 0;
+  WCHAR *zDestW = 0;
+  int rc = SQLITE_OK;
+  int nTmp, nDest;
+
+  nTmp = MultiByteToWideChar(CP_UTF8, 0, zTmp, -1, 0, 0);
+  nDest = MultiByteToWideChar(CP_UTF8, 0, zDest, -1, 0, 0);
+  if( nTmp==0 || nDest==0 ) return SQLITE_IOERR;
+
+  zTmpW = sqlite3_malloc64((sqlite3_uint64)nTmp * sizeof(WCHAR));
+  zDestW = sqlite3_malloc64((sqlite3_uint64)nDest * sizeof(WCHAR));
+  if( zTmpW==0 || zDestW==0 ){
+    sqlite3_free(zTmpW);
+    sqlite3_free(zDestW);
+    return SQLITE_NOMEM;
+  }
+
+  if( MultiByteToWideChar(CP_UTF8, 0, zTmp, -1, zTmpW, nTmp)==0
+   || MultiByteToWideChar(CP_UTF8, 0, zDest, -1, zDestW, nDest)==0
+  ){
+    rc = SQLITE_IOERR;
+  }else if( !MoveFileExW(zTmpW, zDestW,
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ){
+    rc = SQLITE_IOERR;
+  }
+  sqlite3_free(zTmpW);
+  sqlite3_free(zDestW);
+  return rc;
+#else
+  return rename(zTmp, zDest)==0 ? SQLITE_OK : SQLITE_IOERR;
+#endif
+}
+
+static int gcReopenChunkFile(ChunkStore *cs, sqlite3_file **ppFile){
+  int rc;
+  int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
+  sqlite3_file *pFile = 0;
+  i64 fileSize = 0;
+
+  rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file),
+                           chunkFileGetFilename(&cs->file), &pFile, flags, 0);
+  if( rc!=SQLITE_OK ){
+    if( pFile ) sqlite3OsCloseFree(pFile);
+    return rc;
+  }
+  rc = sqlite3OsFileSize(pFile, &fileSize);
+  if( rc!=SQLITE_OK ){
+    sqlite3OsCloseFree(pFile);
+    return rc;
+  }
+  if( ppFile ){
+    *ppFile = pFile;
+  }else{
+    chunkFileSetHandle(&cs->file, pFile);
+    chunkFileSetSize(&cs->file, fileSize);
+  }
+  return SQLITE_OK;
+}
+
 static int gcRewriteFile(
   ChunkStore *cs,
   const u8 *pNewData,
@@ -457,13 +520,36 @@ static int gcRewriteFile(
         sqlite3_file *pNewFile = 0;
         int dirSyncRc = SQLITE_OK;
 
+#if SQLITE_OS_WIN
+        /* Windows will not reliably replace either an open source file or an
+        ** open destination file. Close both before the atomic replace call,
+        ** and restore the destination handle if replacement fails. */
+        sqlite3OsCloseFree(pTmpFile);
+        pTmpFile = 0;
+        if( pOldFile ){
+          sqlite3OsCloseFree(pOldFile);
+          pOldFile = 0;
+          chunkFileSetHandle(&cs->file, 0);
+          chunkFileSetSize(&cs->file, 0);
+        }
+#endif
+
         GC_CRASH_CHECK();
-        if( rename(zTmp, chunkFileGetFilename(&cs->file))!=0 ){
-          rc = SQLITE_IOERR;
+        rc = gcReplaceFile(zTmp, chunkFileGetFilename(&cs->file));
+        if( rc!=SQLITE_OK ){
+#if SQLITE_OS_WIN
+          if( chunkFileGetHandle(&cs->file)==0 ){
+            int restoreRc = gcReopenChunkFile(cs, 0);
+            if( restoreRc!=SQLITE_OK ) rc = restoreRc;
+          }
+#endif
+          sqlite3OsDelete(chunkFileGetVfs(&cs->file), zTmp, 0);
         }else{
           *pReplaced = 1;
+#if !SQLITE_OS_WIN
           sqlite3OsCloseFree(pTmpFile);
           pTmpFile = 0;
+#endif
         }
 
 #if !defined(_WIN32) && !defined(WIN32)
@@ -503,12 +589,10 @@ static int gcRewriteFile(
         }
 
         if( rc==SQLITE_OK ){
-          int reopenFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
           int reopenAttempt;
           for(reopenAttempt=0; reopenAttempt<3; reopenAttempt++){
             pNewFile = 0;
-            rc = sqlite3OsOpenMalloc(chunkFileGetVfs(&cs->file), chunkFileGetFilename(&cs->file), &pNewFile,
-                                     reopenFlags, 0);
+            rc = gcReopenChunkFile(cs, &pNewFile);
             if( rc==SQLITE_OK ) break;
             if( pNewFile ){
               sqlite3OsCloseFree(pNewFile);
