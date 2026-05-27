@@ -6,8 +6,16 @@ Demonstrates Dolt version control features using Python's standard sqlite3
 module. Doltlite is a drop-in replacement for SQLite, so no code changes
 are needed — just swap the library at runtime.
 
-Run (from the build/ directory):
+Run with the published Python loader:
+    pip install doltlite
+    python3 examples/quickstart.py
+
+Or wire up the preload by hand against a locally-built libdoltlite
+(from the build/ directory):
+    # Linux:
     LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
+    # macOS: see https://github.com/dolthub/doltlite-python for the
+    # install_name-shim + DYLD_INSERT_LIBRARIES recipe.
 """
 import sqlite3
 import os

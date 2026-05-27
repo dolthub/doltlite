@@ -62,6 +62,7 @@ Language-specific wrappers around `libdoltlite`. Each one exposes the full `sqli
 | Language | Package | Source |
 |---|---|---|
 | Node.js / Bun | `@dolthub/doltlite` | [dolthub/doltlite-node](https://github.com/dolthub/doltlite-node) |
+| Python | `doltlite` (`pip install doltlite`) | [dolthub/doltlite-python](https://github.com/dolthub/doltlite-python) |
 
 ## Building
 
@@ -175,30 +176,45 @@ gcc -o quickstart ../examples/quickstart.c -I. libdoltlite.a -lpthread -lz
 ```
 
 **Python** ([`examples/quickstart.py`](examples/quickstart.py)) — uses the
-standard `sqlite3` module, zero code changes:
+standard `sqlite3` module, zero code changes. The
+[`doltlite`](https://github.com/dolthub/doltlite-python) package bundles a
+precompiled libdoltlite and handles loading it ahead of the stdlib SQLite:
+
+```bash
+pip install doltlite
+python3 examples/quickstart.py
+```
+
+If you'd rather wire up the preload yourself (e.g. against a libdoltlite
+you just built locally):
 
 ```bash
 cd build
 # Linux:
 LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
-# macOS: Python's _sqlite3 is statically linked against the system SQLite,
-# so LD_PRELOAD / DYLD_INSERT_LIBRARIES won't redirect it. Load doltlite
-# explicitly via ctypes instead:
-#   python3 -c 'import ctypes; ctypes.CDLL("./libdoltlite.dylib"); import runpy; runpy.run_path("../examples/quickstart.py")'
+# macOS: see https://github.com/dolthub/doltlite-python for the
+# install_name-shim + DYLD_INSERT_LIBRARIES recipe — macOS's two-level
+# namespace means a plain LD_PRELOAD / ctypes preload won't redirect
+# _sqlite3's symbol lookups.
 ```
 
-These recipes only work when Python loads `_sqlite3` as a shared extension that
-can resolve SQLite symbols from `libdoltlite`. They do not work with
-python-build-standalone interpreters, where `_sqlite3` is built into the Python
-executable. This includes the default Pythons installed by tools such as `uv
-python install` and `mise`; `LD_PRELOAD` and `ctypes.CDLL(...)` will silently
-fall back to Python's bundled SQLite in those environments. Use a Python build
-with a dynamically loaded `_sqlite3` module instead, such as distro Python,
-Linuxbrew Python, pyenv-built Python, or conda Python. For `uv`, point the
-environment at one of those interpreters explicitly:
+All of the above paths require a Python whose `_sqlite3` module is loaded
+as a shared extension that links to a separate `libsqlite3`. The
+following Pythons do **not** qualify, regardless of which loading recipe
+you use:
+
+- **python-build-standalone** interpreters — the default for `uv python
+  install`, `mise`, and Rye; `_sqlite3` is built into the interpreter.
+- **python.org installer (macOS framework build)** — `_sqlite3` is built
+  with SQLite statically linked in; only `/usr/lib/libSystem.B.dylib`
+  shows as a dependency.
+- **Apple's system Python** — same framework-style static link.
+
+Use distro Python, Homebrew Python, pyenv-built Python, or conda Python
+instead. For `uv`:
 
 ```bash
-uv venv --python /usr/bin/python3
+uv venv --python /opt/homebrew/bin/python3   # or /usr/bin/python3, etc.
 ```
 
 **Go** ([`examples/go/main.go`](examples/go/main.go)) — uses
