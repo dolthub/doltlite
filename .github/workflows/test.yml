@@ -7,24 +7,43 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    name: build-and-test / ${{ matrix.platform }}
+    runs-on: ${{ matrix.runs-on }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu
+            runs-on: ubuntu-latest
+          - platform: windows
+            runs-on: windows-latest
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Install dependencies
+      if: matrix.platform == 'ubuntu'
       run: |
         sudo apt-get update
         sudo apt-get install -y tcl-dev build-essential zlib1g-dev
 
+    - name: Install Windows dependencies
+      if: matrix.platform == 'windows'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make perl tcl
+
     - name: Install Dolt
+      if: matrix.platform == 'ubuntu'
       run: |
         curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/dolt-linux-amd64.tar.gz \
           | sudo tar -xz -C /usr/local --strip-components=1
         dolt version
 
     - name: Configure
+      if: matrix.platform == 'ubuntu'
       run: |
         mkdir -p build && cd build
         TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
@@ -34,7 +53,15 @@ jobs:
           ../configure
         fi
 
+    - name: Configure Windows
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        mkdir -p build && cd build
+        ../configure
+
     - name: Build
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         make DOLTLITE_PROLLY_CHECK=1 doltlite
@@ -46,57 +73,76 @@ jobs:
         # Stock SQLite lib for concurrent_branch_test
         make libsqlite3.a USE_AMALGAMATION=0
 
+    - name: Build Windows
+      if: matrix.platform == 'windows'
+      shell: msys2 {0}
+      run: |
+        cd build
+        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-lib
+
     - name: Lint
+      if: matrix.platform == 'ubuntu'
       run: cd build && make lint
       timeout-minutes: 1
 
     # ── Doltlite feature tests ──────────────────────────────
 
     - name: Doltlite feature tests
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/run_doltlite_tests.sh
       timeout-minutes: 20
 
     - name: Correctness regression tests
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/correctness_test.sh ./doltlite
       timeout-minutes: 10
 
     - name: Index operation tests
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/index_test.sh ./doltlite
       timeout-minutes: 5
 
     # All oracle tests (vc + sql) run in the parallel oracle-tests job
 
     - name: Large-scale test (10K rows)
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/large_scale_test.sh ./doltlite --quick
       timeout-minutes: 5
 
     - name: Chunk size distribution
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/chunk_distribution_test.sh ./doltlite
       timeout-minutes: 5
 
     - name: Multi-table test
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/multi_table_test.sh ./doltlite --quick
       timeout-minutes: 5
 
     - name: Diff tests
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/diff_test.sh ./doltlite
       timeout-minutes: 10
 
     - name: Config tests
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/config_test.sh ./doltlite
       timeout-minutes: 2
 
     - name: BLAKE3 known-answer test
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/blake3_kat_test.sh ./doltlite
       timeout-minutes: 2
 
     - name: Remote integration tests
+      if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/remote_test.sh ./doltlite
       timeout-minutes: 5
 
     # ── C/Python/Go integration tests ───────────────────────
 
     - name: C integration tests
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         # Quickstart
@@ -109,6 +155,7 @@ jobs:
         ./concurrent_branch_test
 
     - name: Concurrent write test
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         gcc -g -O0 -I. -o concurrent_write_test ../test/concurrent_write_test.c \
@@ -116,6 +163,7 @@ jobs:
         ./concurrent_write_test
 
     - name: Native crash recovery test
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         cc -I. -o crash_recovery_test ../test/crash_recovery_test.c \
@@ -124,6 +172,7 @@ jobs:
       timeout-minutes: 10
 
     - name: Prepared statement reuse test
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         gcc -g -O0 -I. -o prepared_stmt_reuse_test ../test/prepared_stmt_reuse_test.c \
@@ -133,17 +182,21 @@ jobs:
     # Wires the previously-orphan C tests into CI. All tests in
     # test/run_c_tests.sh are gating and must pass.
     - name: Orphan C tests
+      if: matrix.platform == 'ubuntu'
       run: cd build && make c-tests
       timeout-minutes: 15
 
     - name: Python integration test
+      if: matrix.platform == 'ubuntu'
       run: cd build && LD_PRELOAD=./libdoltlite.so python3 ../examples/quickstart.py
 
     - name: Go integration test
+      if: matrix.platform == 'ubuntu'
       uses: actions/setup-go@v5
       with:
         go-version: '1.23'
-    - run: |
+    - if: matrix.platform == 'ubuntu'
+      run: |
         cd examples/go
         CGO_CFLAGS="-I../../build" CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread -lm" \
           go build -tags libsqlite3 -o quickstart .
@@ -163,6 +216,7 @@ jobs:
     # that USED to be skipped at the file level.
 
     - name: SQLite core tests
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         bash ../test/run_testfixture.sh "Core tests" 120 \
@@ -180,6 +234,7 @@ jobs:
           trigger1 trigger2 triggerA triggerB triggerC
 
     - name: SQLite large tests
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         bash ../test/run_testfixture.sh "Large tests" 180 \
@@ -187,18 +242,21 @@ jobs:
           boundary1 boundary2 boundary3 select9
 
     - name: SQLite crash recovery tests
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         bash ../test/run_testfixture.sh "Crash recovery" 180 \
           crash crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM
 
     - name: SQLite fuzz tests
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         bash ../test/run_testfixture.sh "Fuzz tests" 120 \
           fuzz fuzz2 fuzz3 fuzz4
 
     - name: SQLite additional tests
+      if: matrix.platform == 'ubuntu'
       run: |
         cd build
         bash ../test/run_testfixture.sh "Additional tests" 120 \
