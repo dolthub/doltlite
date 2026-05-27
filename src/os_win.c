@@ -2662,6 +2662,18 @@ static int winFileControl(sqlite3_file *id, int op, void *pArg){
       OSTRACE(("FCNTL file=%p, rc=SQLITE_OK\n", pFile->h));
       return SQLITE_OK;
     }
+    case SQLITE_FCNTL_HAS_MOVED: {
+      /*
+      ** Unlike unix, this VFS does not track inode/file-id state for an open
+      ** handle. Windows opens database files without FILE_SHARE_DELETE, so a
+      ** concurrent GC cannot atomically replace a chunk-store file while this
+      ** handle remains open. Report "not moved" instead of SQLITE_NOTFOUND so
+      ** callers may use this file-control as a portable change probe.
+      */
+      *(int*)pArg = 0;
+      OSTRACE(("FCNTL file=%p, rc=SQLITE_OK\n", pFile->h));
+      return SQLITE_OK;
+    }
     case SQLITE_FCNTL_WIN32_AV_RETRY: {
       int *a = (int*)pArg;
       if( a[0]>0 ){
