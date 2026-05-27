@@ -220,6 +220,37 @@ jobs:
           tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
           tkt-f3e5abed55
 
+  windows-gc-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Windows dependencies
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make perl tcl
+
+    - name: Configure and build
+      shell: msys2 {0}
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-lib
+
+    - name: GC smoke tests
+      shell: msys2 {0}
+      run: |
+        cd build
+        cp doltlite.exe doltlite
+        bash ../test/doltlite_gc.sh
+        bash ../test/doltlite_gc_session_state.sh
+        bash ../test/doltlite_pragma_page_count.sh
+        cd ..
+        bash test/run_doltlite_regression_case.sh gc_rewrite_failure
+
   concurrency-stress:
     runs-on: ubuntu-latest
     timeout-minutes: 25
