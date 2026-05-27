@@ -1,10 +1,10 @@
 #!/bin/bash
 DOLTLITE=./doltlite
 PASS=0; FAIL=0; ERRORS=""
-run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
-run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if echo "$r"|grep -qE "$p"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r"; fi; }
+run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1 | tr -d '\r'); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
+run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1 | tr -d '\r'); if echo "$r"|grep -qE "$p"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r"; fi; }
 db_size() { local s=0; for f in "$1" "${1}-wal"; do [ -f "$f" ] && s=$((s + $(stat -f%z "$f" 2>/dev/null || stat -c%s "$f" 2>/dev/null))); done; echo $s; }
-db_rm() { rm -f "$1" "${1}-wal"; }
+db_rm() { rm -f "$1" "${1}-wal" "${1}-lock"; }
 
 echo "=== Doltlite Garbage Collection Tests ==="
 echo ""
@@ -20,7 +20,7 @@ run_test_match "gc_clean" "SELECT dolt_gc();" "0 chunks removed" "$DB"
 run_test "gc_clean_data" "SELECT count(*) FROM t;" "1" "$DB"
 run_test "gc_clean_log" "SELECT count(*) FROM dolt_log;" "2" "$DB"
 
-nFiles=$(ls "$DB"* 2>/dev/null | wc -l | tr -d ' ')
+nFiles=$(ls "$DB"* 2>/dev/null | grep -v -- '-lock$' | wc -l | tr -d ' ')
 if [ "$nFiles" = "1" ]; then PASS=$((PASS+1))
 else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: gc_single_file\n  expected: 1 file\n  got:      $nFiles files"; fi
 
@@ -59,8 +59,9 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_branch('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('feat');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(100,'feat_only');
-SELECT dolt_commit('-A','-m','feat commit');" | $DOLTLITE "$DB/feat" > /dev/null 2>&1
+echo "SELECT dolt_connect_branch('feat');
+INSERT INTO t VALUES(100,'feat_only');
+SELECT dolt_commit('-A','-m','feat commit');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 SIZE_WITH_BRANCH=$(db_size "$DB")
@@ -88,8 +89,9 @@ SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_branch('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
-echo "INSERT INTO t VALUES(2,'dev_data');
-SELECT dolt_commit('-A','-m','dev commit');" | $DOLTLITE "$DB/dev" > /dev/null 2>&1
+echo "SELECT dolt_connect_branch('dev');
+INSERT INTO t VALUES(2,'dev_data');
+SELECT dolt_commit('-A','-m','dev commit');" | $DOLTLITE "$DB" > /dev/null 2>&1
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 
 echo "SELECT dolt_tag('v1.0');" | $DOLTLITE "$DB" > /dev/null 2>&1
@@ -101,7 +103,8 @@ run_test "gc_preserve_branches" "SELECT count(*) FROM dolt_branches;" "2" "$DB"
 run_test "gc_preserve_tags" "SELECT count(*) FROM dolt_tags;" "1" "$DB"
 
 echo "SELECT dolt_checkout('dev');" | $DOLTLITE "$DB" > /dev/null 2>&1
-run_test "gc_preserve_dev" "SELECT count(*) FROM t;" "2" "$DB/dev"
+run_test "gc_preserve_dev" "SELECT dolt_connect_branch('dev'); SELECT count(*) FROM t;" "0
+2" "$DB"
 
 echo "SELECT dolt_checkout('main');" | $DOLTLITE "$DB" > /dev/null 2>&1
 run_test "gc_preserve_reopen_main" "SELECT count(*) FROM t;" "1" "$DB"

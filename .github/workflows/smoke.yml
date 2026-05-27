@@ -194,7 +194,7 @@ jobs:
       shell: msys2 {0}
       run: |
         cd build
-        rm -f /tmp/windows_smoke_basic.db /tmp/windows_smoke_basic.db-wal
+        rm -f /tmp/windows_smoke_basic.db /tmp/windows_smoke_basic.db-wal /tmp/windows_smoke_basic.db-lock
         test "$(./doltlite.exe :memory: "SELECT 1;")" = "1"
         ./doltlite.exe /tmp/windows_smoke_basic.db "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT count(*) FROM t;"
         test "$(./doltlite.exe /tmp/windows_smoke_basic.db "SELECT v FROM t WHERE id=1;")" = "a"
@@ -205,7 +205,7 @@ jobs:
       shell: msys2 {0}
       run: |
         cd build
-        rm -f /tmp/windows_smoke_gc.db /tmp/windows_smoke_gc.db-wal
+        rm -f /tmp/windows_smoke_gc.db /tmp/windows_smoke_gc.db-wal /tmp/windows_smoke_gc.db-lock
         ./doltlite.exe /tmp/windows_smoke_gc.db "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_gc(); SELECT count(*) FROM t;"
         bash ../test/doltlite_gc.sh
         bash ../test/doltlite_gc_session_state.sh
