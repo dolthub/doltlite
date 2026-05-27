@@ -545,6 +545,10 @@ static int gcRewriteFile(
 
       if( rc==SQLITE_OK ){
         GC_CRASH_CHECK();
+        rc = sqlite3OsTruncate(pTmpFile, writeOff);
+      }
+      if( rc==SQLITE_OK ){
+        GC_CRASH_CHECK();
         rc = sqlite3OsSync(pTmpFile, SQLITE_SYNC_NORMAL);
       }
       if( rc==SQLITE_OK ){
