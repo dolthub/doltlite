@@ -99,7 +99,11 @@ struct ChunkStore {
   u8 isMemory;
   u8 snapshotPinned;
   u8 hasMovedChecked;
+#ifdef _WIN32
+  sqlite3_file *pGraphLockFile;
+#else
   int graphLockFd;
+#endif
   sqlite3_mutex *pLockMutex;
   int lockDepth;
 };

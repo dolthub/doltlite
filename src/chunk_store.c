@@ -13,50 +13,52 @@
 #include <sys/stat.h>
 
 #ifdef _WIN32
-# include <io.h>
-# include <windows.h>
-  static int csFileLock(const char *path, int *pFd){
-    int fd = _open(path, _O_BINARY | _O_RDWR | _O_CREAT, 0644);
-    if( fd < 0 ) return -1;
-    {
-      HANDLE h = (HANDLE)_get_osfhandle(fd);
-      OVERLAPPED ov = {0};
-      if( !LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK, 0, MAXDWORD, MAXDWORD, &ov) ){
-        _close(fd);
-        return -1;
-      }
+  static int csFileLockHeld(sqlite3_file *pFile){
+    return pFile!=0;
+  }
+  static char *csLockPath(const char *path){
+    return sqlite3_mprintf("%s-lock", path);
+  }
+  static int csFileLock(sqlite3_vfs *pVfs, const char *path,
+                        sqlite3_file **ppFile){
+    char *zLock = csLockPath(path);
+    sqlite3_file *pFile = 0;
+    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+              | SQLITE_OPEN_MAIN_DB;
+    int rc;
+
+    *ppFile = 0;
+    if( !zLock ) return -1;
+    rc = sqlite3OsOpenMalloc(pVfs, zLock, &pFile, flags, 0);
+    sqlite3_free(zLock);
+    if( rc!=SQLITE_OK ) return -1;
+    rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
+    if( rc!=SQLITE_OK ){
+      sqlite3OsCloseFree(pFile);
+      return -1;
     }
-    *pFd = fd;
+    *ppFile = pFile;
     return 0;
   }
-  static void csFileUnlock(int fd){
-    if( fd >= 0 ){
-      HANDLE h = (HANDLE)_get_osfhandle(fd);
-      OVERLAPPED ov = {0};
-      UnlockFileEx(h, 0, MAXDWORD, MAXDWORD, &ov);
-      _close(fd);
+  static void csFileUnlock(sqlite3_file *pFile){
+    if( pFile ){
+      sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
+      sqlite3OsCloseFree(pFile);
     }
   }
-  static int csFileLockNB(const char *path, int *pFd){
-    int fd = _open(path, _O_BINARY | _O_RDWR | _O_CREAT, 0644);
-    if( fd < 0 ) return -1;
-    {
-      HANDLE h = (HANDLE)_get_osfhandle(fd);
-      OVERLAPPED ov = {0};
-      if( !LockFileEx(h, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
-                       0, MAXDWORD, MAXDWORD, &ov) ){
-        _close(fd);
-        return -1;
-      }
-    }
-    *pFd = fd;
-    return 0;
+  static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
+                          sqlite3_file **ppFile){
+    return csFileLock(pVfs, path, ppFile);
   }
 #else
 # include <unistd.h>
 # include <sys/file.h>
-  static int csFileLock(const char *path, int *pFd){
+  static int csFileLockHeld(int fd){
+    return fd>=0;
+  }
+  static int csFileLock(sqlite3_vfs *pVfs, const char *path, int *pFd){
     int fd = open(path, O_RDWR | O_CREAT, 0644);
+    (void)pVfs;
     if( fd < 0 ) return -1;
     if( flock(fd, LOCK_EX) != 0 ){
       close(fd);
@@ -68,8 +70,9 @@
   static void csFileUnlock(int fd){
     if( fd >= 0 ) close(fd);
   }
-  static int csFileLockNB(const char *path, int *pFd){
+  static int csFileLockNB(sqlite3_vfs *pVfs, const char *path, int *pFd){
     int fd = open(path, O_RDWR | O_CREAT, 0644);
+    (void)pVfs;
     if( fd < 0 ) return -1;
     if( flock(fd, LOCK_EX | LOCK_NB) != 0 ){
       close(fd);
@@ -78,6 +81,16 @@
     *pFd = fd;
     return 0;
   }
+#endif
+
+#ifdef _WIN32
+  typedef sqlite3_file *CsFileLock;
+# define CS_FILE_LOCK_INIT 0
+# define CS_GRAPH_LOCK(cs) ((cs)->pGraphLockFile)
+#else
+  typedef int CsFileLock;
+# define CS_FILE_LOCK_INIT -1
+# define CS_GRAPH_LOCK(cs) ((cs)->graphLockFd)
 #endif
 
 #define CS_READ_U32(p) (             \
@@ -285,7 +298,7 @@ int chunkStoreOpen(
 
   memset(cs, 0, sizeof(*cs));
   cs->file.pVfs = pVfs;
-  cs->graphLockFd = -1;
+  CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   cs->pLockMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
   cs->lockDepth = 0;
 
@@ -1058,9 +1071,9 @@ static int csCommitToFile(ChunkStore *cs){
   i64 fileSize = 0;
   i64 origFileSize = 0;
   i64 writeOff = 0;
-  int lockFd = -1;
+  CsFileLock lockFd = CS_FILE_LOCK_INIT;
   int hadFile = (cs->file.pFile != 0);
-  int lockHeld = (cs->graphLockFd >= 0);
+  int lockHeld = csFileLockHeld(CS_GRAPH_LOCK(cs));
   i64 newWalSize = cs->wal.nWalData;
   ChunkIndexEntry *aCommittedPending = 0;
   ChunkIndexEntry aSmallCommittedPending[32];
@@ -1078,9 +1091,9 @@ static int csCommitToFile(ChunkStore *cs){
   }
 
   if( lockHeld ){
-    lockFd = -1;
+    lockFd = CS_FILE_LOCK_INIT;
   }else{
-    if( csFileLock(cs->file.zFilename, &lockFd) != 0 ){
+    if( csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd) != 0 ){
       return SQLITE_BUSY;
     }
   }
@@ -1361,7 +1374,7 @@ int chunkStoreCommit(ChunkStore *cs){
   memset(&savedRefs, 0, sizeof(savedRefs));
   if( cs->readOnly ) return SQLITE_READONLY;
   if( cs->isMemory ) return csCommitToMemory(cs);
-  if( cs->graphLockFd < 0 && cs->file.zFilename ){
+  if( !csFileLockHeld(CS_GRAPH_LOCK(cs)) && cs->file.zFilename ){
     preserveRefs = cs->staging.nPending > 0
                 && prollyHashCompare(&cs->refs.refsHash,
                                      &cs->refs.committedRefsHash)!=0;
@@ -1449,14 +1462,14 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return SQLITE_ERROR;
   }
-  if( csFileLockNB(cs->file.zFilename, &cs->graphLockFd) != 0 ){
+  if( csFileLockNB(cs->file.pVfs, cs->file.zFilename, &CS_GRAPH_LOCK(cs)) != 0 ){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return SQLITE_BUSY;
   }
   rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
-    csFileUnlock(cs->graphLockFd);
-    cs->graphLockFd = -1;
+    csFileUnlock(CS_GRAPH_LOCK(cs));
+    CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return rc;
   }
@@ -1472,14 +1485,14 @@ int chunkStoreLockAndRefresh(ChunkStore *cs){
 void chunkStoreUnlock(ChunkStore *cs){
   if( cs->lockDepth > 0 ){
     cs->lockDepth--;
-    if( cs->lockDepth == 0 && cs->graphLockFd >= 0 ){
-      csFileUnlock(cs->graphLockFd);
-      cs->graphLockFd = -1;
+    if( cs->lockDepth == 0 && csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+      csFileUnlock(CS_GRAPH_LOCK(cs));
+      CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
     }
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
-  }else if( cs->graphLockFd >= 0 ){
-    csFileUnlock(cs->graphLockFd);
-    cs->graphLockFd = -1;
+  }else if( csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
+    csFileUnlock(CS_GRAPH_LOCK(cs));
+    CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   }
 }
 

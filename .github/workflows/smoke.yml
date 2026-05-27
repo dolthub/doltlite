@@ -169,3 +169,44 @@ jobs:
           leak-*
           timeout-*
         if-no-files-found: ignore
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Windows dependencies
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib make perl tcl
+
+    - name: Configure and build
+      shell: msys2 {0}
+      run: |
+        mkdir -p build && cd build
+        ../configure
+        make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-lib
+
+    - name: Basic SQL smoke tests
+      shell: msys2 {0}
+      run: |
+        cd build
+        rm -f /tmp/windows_smoke_basic.db /tmp/windows_smoke_basic.db-wal /tmp/windows_smoke_basic.db-lock
+        test "$(./doltlite.exe :memory: "SELECT 1;")" = "1"
+        ./doltlite.exe /tmp/windows_smoke_basic.db "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT count(*) FROM t;"
+        test "$(./doltlite.exe /tmp/windows_smoke_basic.db "SELECT v FROM t WHERE id=1;")" = "a"
+        ./doltlite.exe /tmp/windows_smoke_basic.db "SELECT dolt_commit('-A','-m','c1');"
+        test "$(./doltlite.exe /tmp/windows_smoke_basic.db "SELECT count(*) FROM dolt_log;")" = "2"
+
+    - name: GC smoke tests
+      shell: msys2 {0}
+      run: |
+        cd build
+        rm -f /tmp/windows_smoke_gc.db /tmp/windows_smoke_gc.db-wal /tmp/windows_smoke_gc.db-lock
+        ./doltlite.exe /tmp/windows_smoke_gc.db "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'); SELECT dolt_commit('-A','-m','c1'); SELECT dolt_gc(); SELECT count(*) FROM t;"
+        bash ../test/doltlite_gc.sh
+        bash ../test/doltlite_gc_session_state.sh
+        bash ../test/doltlite_pragma_page_count.sh

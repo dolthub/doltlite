@@ -521,6 +521,7 @@ static int gFailSyncOnce = 0;
 static int gFailAccessOnce = 0;
 static int gFailHasMovedOnce = 0;
 static int gFailFileSizeOnce = 0;
+static int gFailOpenMainOnce = 0;
 static int gFailHits = 0;
 
 static int failAccess(sqlite3_vfs *pVfs, const char *zName, int flags, int *pResOut);
@@ -670,8 +671,15 @@ static int failOpen(sqlite3_vfs *pVfs, const char *zName, sqlite3_file *pFile,
   FailFile *p = (FailFile*)pFile;
   sqlite3_file *pReal = (sqlite3_file*)&p[1];
   int rc;
+  int nName = zName ? (int)strlen(zName) : 0;
+  int isGcTmp = nName>=7 && strcmp(zName+nName-7, "-gc-tmp")==0;
 
   memset(p, 0, sizeof(*p));
+  if( gFailOpenMainOnce>0 && !isGcTmp && (flags & SQLITE_OPEN_MAIN_DB)!=0 ){
+    gFailOpenMainOnce--;
+    gFailHits++;
+    return SQLITE_CANTOPEN;
+  }
   rc = gBaseVfs->xOpen(gBaseVfs, zName, pReal, flags, pOutFlags);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -818,6 +826,7 @@ static void run_checkout_persist_failure(void){
   make_dbpath(dbpath, sizeof(dbpath), "test_checkout_persist_failure");
   removeDbFiles(dbpath);
   gFailSyncOnce = 0;
+  gFailOpenMainOnce = 0;
   gFailHits = 0;
 
   check("register_fail_vfs", registerFailVfs()==SQLITE_OK);
@@ -1951,6 +1960,7 @@ static void run_merge_persist_failure(void){
   removeDbFiles(dbpath);
 
   gFailSyncOnce = 0;
+  gFailOpenMainOnce = 0;
   gFailHits = 0;
   check("register_fail_vfs_for_merge", registerFailVfs()==SQLITE_OK);
   check("open_fail_db", open_fail_db(dbpath, &db)==SQLITE_OK);
@@ -2395,12 +2405,26 @@ static void run_gc_rewrite_failure(void){
   check("gc_connection_still_reads_log",
     strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "3")==0);
 
+  gFailHits = 0;
+  gFailOpenMainOnce = 3;
+  res = queryScalarText(db, "SELECT dolt_gc()");
+  check("gc_post_replace_open_failure_was_injected", gFailHits>0);
+  check("gc_post_replace_open_failure_returns_error", strstr(res, "ERROR:")!=0);
+  check("gc_post_replace_connection_can_continue",
+    execSql(db,
+      "INSERT INTO t VALUES(3,'c');"
+      "SELECT dolt_commit('-A', '-m', 'third');")==SQLITE_OK);
+  check("gc_post_replace_connection_reads_data",
+    strcmp(queryScalarText(db, "SELECT count(*) FROM t"), "3")==0);
+  check("gc_post_replace_connection_reads_log",
+    strcmp(queryScalarText(db, "SELECT count(*) FROM dolt_log"), "4")==0);
+
   sqlite3_close(db);
   check("reopen_db_after_gc_failure", open_db(dbpath, &db2)==SQLITE_OK);
   check("gc_reopen_reads_data",
-    strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "2")==0);
+    strcmp(queryScalarText(db2, "SELECT count(*) FROM t"), "3")==0);
   check("gc_reopen_reads_log",
-    strcmp(queryScalarText(db2, "SELECT count(*) FROM dolt_log"), "3")==0);
+    strcmp(queryScalarText(db2, "SELECT count(*) FROM dolt_log"), "4")==0);
 
   sqlite3_close(db2);
   removeDbFiles(dbpath);
