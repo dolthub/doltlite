@@ -555,7 +555,6 @@ static int gcRewriteFile(
         sqlite3_file *pOldFile = chunkFileGetHandle(&cs->file);
         sqlite3_file *pNewFile = 0;
         int dirSyncRc = SQLITE_OK;
-        int releasedFileLock = 0;
 
 #if SQLITE_OS_WIN
         /* Windows will not reliably replace either an open source file or an
@@ -569,10 +568,6 @@ static int gcRewriteFile(
           chunkFileSetHandle(&cs->file, 0);
           chunkFileSetSize(&cs->file, 0);
         }
-        rc = chunkStoreReleaseFileLock(cs);
-        if( rc==SQLITE_OK ){
-          releasedFileLock = 1;
-        }
 #endif
 
         GC_CRASH_CHECK();
@@ -580,12 +575,6 @@ static int gcRewriteFile(
           rc = gcReplaceFile(chunkFileGetVfs(&cs->file), zTmp,
                              chunkFileGetFilename(&cs->file));
         }
-#if SQLITE_OS_WIN
-        if( releasedFileLock ){
-          int lockRc = chunkStoreReacquireFileLock(cs);
-          if( rc==SQLITE_OK && lockRc!=SQLITE_OK ) rc = lockRc;
-        }
-#endif
         if( rc!=SQLITE_OK ){
 #if SQLITE_OS_WIN
           if( chunkFileGetHandle(&cs->file)==0 ){

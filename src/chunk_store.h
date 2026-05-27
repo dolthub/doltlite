@@ -99,7 +99,11 @@ struct ChunkStore {
   u8 isMemory;
   u8 snapshotPinned;
   u8 hasMovedChecked;
+#ifdef _WIN32
+  sqlite3_file *pGraphLockFile;
+#else
   int graphLockFd;
+#endif
   sqlite3_mutex *pLockMutex;
   int lockDepth;
 };
@@ -112,8 +116,6 @@ int chunkStoreClose(ChunkStore *cs);
 int chunkStoreLockAndRefresh(ChunkStore *cs);
 int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged);
 void chunkStoreUnlock(ChunkStore *cs);
-int chunkStoreReleaseFileLock(ChunkStore *cs);
-int chunkStoreReacquireFileLock(ChunkStore *cs);
 int chunkStoreHasExternalChanges(ChunkStore *cs, int *pChanged);
 
 int chunkStoreWriteBranchWorkingCatalog(ChunkStore *cs, const char *zBranch,
