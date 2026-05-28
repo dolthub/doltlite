@@ -151,6 +151,7 @@ static int csCrashWriteInjectionActive(void){
 #define CS_WAL_TAG_CHUNK  0x01
 #define CS_WAL_TAG_ROOT   0x02
 #define CS_RECENT_FAST_PATH_MAX 16384
+#define CS_WRITEBUF_RETAIN_MAX (64*1024)
 
 #if CHUNK_STORE_LE_PACKING
 typedef char chunk_index_entry_size_check[
@@ -1339,10 +1340,12 @@ commit_done:
   }
   sqlite3_free(aMergePending);
 
-  sqlite3_free(cs->staging.pWriteBuf);
-  cs->staging.pWriteBuf = 0;
   cs->staging.nWriteBuf = 0;
-  cs->staging.nWriteBufAlloc = 0;
+  if( cs->staging.nWriteBufAlloc > CS_WRITEBUF_RETAIN_MAX ){
+    sqlite3_free(cs->staging.pWriteBuf);
+    cs->staging.pWriteBuf = 0;
+    cs->staging.nWriteBufAlloc = 0;
+  }
   cs->staging.nPending = 0;
   csPendHTClear(cs);
   csMarkRefsCommitted(cs);
