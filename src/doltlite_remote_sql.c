@@ -25,6 +25,7 @@ struct RemoteSqlState {
   ProllyHash sessionStaged;
   ProllyHash sessionMergeCommit;
   ProllyHash sessionConflictsCatalog;
+  ProllyHash sessionConstraintViolationsCatalog;
   ProllyHash sessionCatalogHash;
   u8 sessionIsMerging;
 };
@@ -51,6 +52,8 @@ static int remoteSqlStateSave(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
   doltliteGetSessionMergeState(db, &p->sessionIsMerging,
                                &p->sessionMergeCommit,
                                &p->sessionConflictsCatalog);
+  doltliteGetSessionConstraintViolationsCatalog(
+      db, &p->sessionConstraintViolationsCatalog);
 
   rc = doltliteFlushCatalogToHash(db, &p->sessionCatalogHash);
   if( rc!=SQLITE_OK ){
@@ -79,6 +82,8 @@ static int remoteSqlStateRestore(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p)
   doltliteSetSessionMergeState(db, p->sessionIsMerging,
                                &p->sessionMergeCommit,
                                &p->sessionConflictsCatalog);
+  doltliteSetSessionConstraintViolationsCatalog(
+      db, &p->sessionConstraintViolationsCatalog);
   return SQLITE_OK;
 }
 
