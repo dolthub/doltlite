@@ -236,7 +236,6 @@ int prollyChunkerAdd(ProllyChunker *ch,
 int prollyChunkerFinish(ProllyChunker *ch){
   int rc;
   int level;
-  int maxLevel;
 
   if( ch->nLevels == 0 ){
     memset(&ch->root, 0, sizeof(ProllyHash));
@@ -291,12 +290,6 @@ int prollyChunkerFinish(ProllyChunker *ch){
 
 void prollyChunkerGetRoot(ProllyChunker *ch, ProllyHash *pRoot){
   memcpy(pRoot, &ch->root, sizeof(ProllyHash));
-}
-
-int prollyChunkerAddAtLevel(ProllyChunker *ch, int level,
-                            const u8 *pKey, int nKey,
-                            const u8 *pVal, int nVal){
-  return addToLevel(ch, level, pKey, nKey, pVal, nVal, 0);
 }
 
 int prollyChunkerAddAtLevelWithCount(ProllyChunker *ch, int level,

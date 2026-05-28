@@ -135,7 +135,6 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize);
 static int csRestoreCommittedRefsState(ChunkStore *cs);
 static int csReadManifest(ChunkStore *cs);
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf);
-static int csDeserializeIndexEntry(const u8 *aBuf, ChunkIndexEntry *e);
 
 static int csReloadFromDisk(ChunkStore *cs);
 static int csDetectExternalChanges(ChunkStore *cs, int *pChanged);
@@ -680,22 +679,6 @@ int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
     cs->refs.nTracking++;
   }
   return SQLITE_OK;
-}
-
-int chunkStoreDeleteTracking(ChunkStore *cs, const char *zRemote,
-                             const char *zBranch){
-  int i;
-  for(i=0; i<cs->refs.nTracking; i++){
-    if( strcmp(cs->refs.aTracking[i].zRemote, zRemote)==0
-     && strcmp(cs->refs.aTracking[i].zBranch, zBranch)==0 ){
-      sqlite3_free(cs->refs.aTracking[i].zRemote);
-      sqlite3_free(cs->refs.aTracking[i].zBranch);
-      cs->refs.aTracking[i] = cs->refs.aTracking[cs->refs.nTracking-1];
-      cs->refs.nTracking--;
-      return SQLITE_OK;
-    }
-  }
-  return SQLITE_NOTFOUND;
 }
 
 int chunkStoreHasMany(ChunkStore *cs, const ProllyHash *aHash, int nHash, u8 *aResult){

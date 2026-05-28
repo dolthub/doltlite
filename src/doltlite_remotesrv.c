@@ -220,7 +220,6 @@ static int parsePath(
 ){
   const char *p = zPath;
   const char *dbStart;
-  const char *dbEnd;
   const char *epStart;
   int dbLen, epLen;
 

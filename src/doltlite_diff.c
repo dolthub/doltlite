@@ -660,15 +660,7 @@ static int diffColumn(sqlite3_vtab_cursor *pCursor,
       if( r->timestamp==0 && r->zCommitter==0 ){
         sqlite3_result_null(ctx);
       }else{
-        time_t t = (time_t)r->timestamp;
-        struct tm *tm = gmtime(&t);
-        if( tm ){
-          char buf[32];
-          strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
-          sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
-        }else{
-          sqlite3_result_null(ctx);
-        }
+        doltliteResultTimestamp(ctx, r->timestamp);
       }
       break;
     }

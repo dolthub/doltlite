@@ -65,9 +65,6 @@ struct RefsTable {
   int nSequences;
 };
 
-void refsTableInit(RefsTable *rt);
-void refsTableReset(RefsTable *rt);
-
 void refsTableGetBranches(const RefsTable *rt, int *pn, const BranchRef **par);
 void refsTableGetTags(const RefsTable *rt, int *pn, const TagRef **par);
 void refsTableGetRemotes(const RefsTable *rt, int *pn, const RemoteRef **par);
@@ -77,8 +74,6 @@ void refsTableGetSequences(const RefsTable *rt, int *pn, const SequenceRef **par
 int refsTableBranchCount(const RefsTable *rt);
 int refsTableTagCount(const RefsTable *rt);
 int refsTableRemoteCount(const RefsTable *rt);
-int refsTableTrackingCount(const RefsTable *rt);
-int refsTableSequenceCount(const RefsTable *rt);
 
 /* Return the stored sequence for zTableName, or 0 if absent. */
 i64 refsTableGetSequence(const RefsTable *rt, const char *zTableName);

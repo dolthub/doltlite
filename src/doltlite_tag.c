@@ -280,15 +280,7 @@ static int tagColumn(sqlite3_vtab_cursor *pCursor, sqlite3_context *ctx, int col
                           -1, SQLITE_TRANSIENT);
       break;
     case 4: {
-      time_t secs = (time_t)t->timestamp;
-      struct tm *tm = gmtime(&secs);
-      if( tm ){
-        char buf[32];
-        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
-        sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
-      }else{
-        sqlite3_result_null(ctx);
-      }
+      doltliteResultTimestamp(ctx, t->timestamp);
       break;
     }
     case 5:

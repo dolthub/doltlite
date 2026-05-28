@@ -1534,26 +1534,18 @@ static u32 mergeCatalogSerialType(const MergeFieldValue *pMem, u32 *pLen){
   return 0;
 }
 
-static void mergeCatalogWriteIntBe(u8 *pOut, i64 v, int nByte){
-  int i;
-  for(i=nByte-1; i>=0; i--){
-    pOut[i] = (u8)(v & 0xFF);
-    v >>= 8;
-  }
-}
-
 static void mergeCatalogSerialPut(u8 *pOut, const MergeFieldValue *pMem, u32 serialType){
   switch( serialType ){
     case 0:
     case 8:
     case 9:
       return;
-    case 1: mergeCatalogWriteIntBe(pOut, pMem->i, 1); return;
-    case 2: mergeCatalogWriteIntBe(pOut, pMem->i, 2); return;
-    case 3: mergeCatalogWriteIntBe(pOut, pMem->i, 3); return;
-    case 4: mergeCatalogWriteIntBe(pOut, pMem->i, 4); return;
-    case 5: mergeCatalogWriteIntBe(pOut, pMem->i, 6); return;
-    case 6: mergeCatalogWriteIntBe(pOut, pMem->i, 8); return;
+    case 1: doltliteIpkWriteBE(pOut, pMem->i, 1); return;
+    case 2: doltliteIpkWriteBE(pOut, pMem->i, 2); return;
+    case 3: doltliteIpkWriteBE(pOut, pMem->i, 3); return;
+    case 4: doltliteIpkWriteBE(pOut, pMem->i, 4); return;
+    case 5: doltliteIpkWriteBE(pOut, pMem->i, 6); return;
+    case 6: doltliteIpkWriteBE(pOut, pMem->i, 8); return;
     default:
       if( serialType>=12 ){
         memcpy(pOut, pMem->p, (size_t)pMem->n);

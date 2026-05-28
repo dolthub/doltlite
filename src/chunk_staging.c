@@ -12,14 +12,6 @@
 #define CS_PEND_HT_MIN_COUNT 16
 #define CS_RECENT_HT_MIN_COUNT 64
 
-void chunkStagingInit(ChunkStaging *st){
-  memset(st, 0, sizeof(*st));
-}
-
-void chunkStagingReset(ChunkStaging *st){
-  memset(st, 0, sizeof(*st));
-}
-
 void chunkStagingGetPending(const ChunkStaging *st, int *pn, const ChunkIndexEntry **par){
   *pn = st->nPending;
   *par = st->aPending;

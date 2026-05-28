@@ -30,9 +30,6 @@ struct ChunkStaging {
   i64 nCommittedWriteBuf;
 };
 
-void chunkStagingInit(ChunkStaging *st);
-void chunkStagingReset(ChunkStaging *st);
-
 void chunkStagingGetPending(const ChunkStaging *st, int *pn, const ChunkIndexEntry **par);
 void chunkStagingGetRecent(const ChunkStaging *st, int *pn, const ChunkIndexEntry **par);
 int chunkStagingPendingCount(const ChunkStaging *st);
