@@ -701,68 +701,6 @@ cleanup:
   return rc;
 }
 
-static i64 sdReadInt(const u8 *p, int nBytes){
-  i64 v;
-  int i;
-  if( nBytes<=0 ) return 0;
-  v = (p[0] & 0x80) ? -1 : 0;
-  for(i=0; i<nBytes; i++) v = (v<<8) | p[i];
-  return v;
-}
-
-static int fieldValuesEqual(
-  int aType, const u8 *pA, int nA, int aOff,
-  int bType, const u8 *pB, int nB, int bOff
-){
-  i64 ai, bi;
-  int aLen, bLen;
-
-  if( aType==0 && bType==0 ) return 1;
-  if( aType==0 || bType==0 ) return 0;
-
-  {
-    int aIsInt = (aType>=1 && aType<=6) || aType==8 || aType==9;
-    int bIsInt = (bType>=1 && bType<=6) || bType==8 || bType==9;
-    if( aIsInt && bIsInt ){
-      if( aType==8 )      ai = 0;
-      else if( aType==9 ) ai = 1;
-      else{
-        aLen = dlSerialTypeLen(aType);
-        if( aOff<0 || aOff+aLen>nA ) return 0;
-        ai = sdReadInt(pA+aOff, aLen);
-      }
-      if( bType==8 )      bi = 0;
-      else if( bType==9 ) bi = 1;
-      else{
-        bLen = dlSerialTypeLen(bType);
-        if( bOff<0 || bOff+bLen>nB ) return 0;
-        bi = sdReadInt(pB+bOff, bLen);
-      }
-      return ai==bi;
-    }
-  }
-
-  if( aType==7 && bType==7 ){
-    u64 ar = 0, br = 0;
-    double da, db;
-    int i;
-    if( aOff<0 || aOff+8>nA ) return 0;
-    if( bOff<0 || bOff+8>nB ) return 0;
-    for(i=0; i<8; i++) ar = (ar<<8) | pA[aOff+i];
-    for(i=0; i<8; i++) br = (br<<8) | pB[bOff+i];
-    memcpy(&da, &ar, 8);
-    memcpy(&db, &br, 8);
-    return da == db;
-  }
-
-  if( aType != bType ) return 0;
-  aLen = dlSerialTypeLen(aType);
-  if( aLen<0 ) return 0;
-  if( aOff<0 || aOff+aLen>nA ) return 0;
-  if( bOff<0 || bOff+aLen>nB ) return 0;
-  return memcmp(pA+aOff, pB+bOff, aLen)==0;
-}
-
 static int changeIsSchemaOnly(
   const u8 *pFromRec, int nFromRec,
   const u8 *pToRec,   int nToRec,
@@ -797,7 +735,7 @@ static int changeIsSchemaOnly(
       if( toRi.aType[toRec]!=0 ) return 0;
       continue;
     }
-    if( !fieldValuesEqual(
+    if( !doltliteFieldValuesEqual(
             fromRi.aType[fromRec], pFromRec, nFromRec, fromRi.aOffset[fromRec],
             toRi.aType[toRec],     pToRec,   nToRec,   toRi.aOffset[toRec]) ){
       return 0;
