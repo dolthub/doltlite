@@ -74,18 +74,6 @@ static int parentChildSubtreeCount(
   }
 }
 
-static int compareKeys(
-  const u8 *pKey1, int nKey1,
-  const u8 *pKey2, int nKey2
-){
-  int n = nKey1 < nKey2 ? nKey1 : nKey2;
-  int c = memcmp(pKey1, pKey2, n);
-  if( c != 0 ) return c;
-  if( nKey1 < nKey2 ) return -1;
-  if( nKey1 > nKey2 ) return 1;
-  return 0;
-}
-
 static int buildFromEdits(
   ProllyMutator *pMut
 ){
@@ -128,7 +116,7 @@ static int subtreeHasEdits(
   int cmp;
   if( !prollyMutMapIterValid(pIter) ) return 0;
   pEd = prollyMutMapIterEntry(pIter);
-  cmp = compareKeys(pEd->pKey, pEd->nKey, pBoundKey, nBoundKey);
+  cmp = prollyKeyCmp(pEd->pKey, pEd->nKey, pBoundKey, nBoundKey);
   return (cmp <= 0);
 }
 
@@ -181,7 +169,7 @@ static int mergeLeaf(
     }
 
     {
-      int pastLeaf = compareKeys(pEd->pKey, pEd->nKey, pLastKey, nLastKey);
+      int pastLeaf = prollyKeyCmp(pEd->pKey, pEd->nKey, pLastKey, nLastKey);
       if( pastLeaf > 0 ){
 
         const u8 *pVal; int nVal;
@@ -193,7 +181,7 @@ static int mergeLeaf(
       }
     }
 
-    cmp = compareKeys(pCurKey, nCurKey, pEd->pKey, pEd->nKey);
+    cmp = prollyKeyCmp(pCurKey, nCurKey, pEd->pKey, pEd->nKey);
     if( cmp < 0 ){
 
       const u8 *pVal; int nVal;
@@ -720,7 +708,7 @@ static int tryInsertOrReplaceSingleNoRechunk(ProllyMutator *pMut){
       const u8 *pCurKey;
       int nCurKey;
       prollyCursorKey(&cur, &pCurKey, &nCurKey);
-      if( compareKeys(pEdit->pKey, pEdit->nKey, pCurKey, nCurKey)>=0 ){
+      if( prollyKeyCmp(pEdit->pKey, pEdit->nKey, pCurKey, nCurKey)>=0 ){
         prollyCursorClose(&cur);
         return SQLITE_NOTFOUND;
       }
@@ -895,7 +883,7 @@ static int tryAppendSingleNoSplit(ProllyMutator *pMut){
     const u8 *pLastKey;
     int nLastKey;
     prollyCursorKey(&cur, &pLastKey, &nLastKey);
-    if( compareKeys(pNewKey, nNewKey, pLastKey, nLastKey)<=0 ){
+    if( prollyKeyCmp(pNewKey, nNewKey, pLastKey, nLastKey)<=0 ){
       prollyCursorClose(&cur);
       return SQLITE_NOTFOUND;
     }
@@ -1166,7 +1154,7 @@ static int replaceBatchLeafNoRechunk(
     prollyNodeValue(pLeaf, i, &pVal, &nVal);
     if( prollyMutMapIterValid(pIter) ){
       pEd = prollyMutMapIterEntry(pIter);
-      cmp = compareKeys(pEd->pKey, pEd->nKey, pCurKey, nCurKey);
+      cmp = prollyKeyCmp(pEd->pKey, pEd->nKey, pCurKey, nCurKey);
     }
     if( cmp<0 ){
       prollyNodeBuilderFree(&b);
@@ -1214,7 +1202,7 @@ static int validateReplaceBatchLeaf(
     prollyNodeKey(pLeaf, i, &pCurKey, &nCurKey);
     if( prollyMutMapIterValid(pIter) ){
       pEd = prollyMutMapIterEntry(pIter);
-      cmp = compareKeys(pEd->pKey, pEd->nKey, pCurKey, nCurKey);
+      cmp = prollyKeyCmp(pEd->pKey, pEd->nKey, pCurKey, nCurKey);
     }
     if( cmp<0 ){
       return SQLITE_NOTFOUND;
@@ -1414,7 +1402,7 @@ static int tryReplaceBatchNoRechunk(ProllyMutator *pMut){
     int nMaxKey;
     prollyNodeKey(pRootNode, (int)pRootNode->nItems - 1,
                   &pMaxKey, &nMaxKey);
-    if( compareKeys(pFirst->pKey, pFirst->nKey, pMaxKey, nMaxKey)>0 ){
+    if( prollyKeyCmp(pFirst->pKey, pFirst->nKey, pMaxKey, nMaxKey)>0 ){
       rc = SQLITE_NOTFOUND;
       goto replace_batch_cleanup;
     }

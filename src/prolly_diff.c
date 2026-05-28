@@ -6,16 +6,6 @@
 
 #include <string.h>
 
-static int diffBlobKeyCmp(
-  const u8 *pA, int nA,
-  const u8 *pB, int nB
-){
-  int n = (nA < nB) ? nA : nB;
-  int c = memcmp(pA, pB, n);
-  if( c ) return c;
-  return nA - nB;
-}
-
 static void diffCompareKeys(
   ProllyCursor *pOld,
   ProllyCursor *pNew,
@@ -27,7 +17,7 @@ static void diffCompareKeys(
   (void)flags;
   prollyCursorKey(pOld, &pKeyOld, &nKeyOld);
   prollyCursorKey(pNew, &pKeyNew, &nKeyNew);
-  *pCmp = diffBlobKeyCmp(pKeyOld, nKeyOld, pKeyNew, nKeyNew);
+  *pCmp = prollyKeyCmp(pKeyOld, nKeyOld, pKeyNew, nKeyNew);
 }
 
 static void diffFillKey(
@@ -347,7 +337,7 @@ static int diffNodeKeyCmp(
   (void)flags;
   prollyNodeKey(pA, iA, &pKA, &nKA);
   prollyNodeKey(pB, iB, &pKB, &nKB);
-  return diffBlobKeyCmp(pKA, nKA, pKB, nKB);
+  return prollyKeyCmp(pKA, nKA, pKB, nKB);
 }
 
 static void diffEmitKey(ProllyDiffChange *ch, const ProllyNode *pN, int i, u8 flags){
@@ -371,7 +361,7 @@ static int diffLeaves(
       const u8 *pKA; int nKA; const u8 *pKB; int nKB;
       prollyNodeKey(pOld, i, &pKA, &nKA);
       prollyNodeKey(pNew, j, &pKB, &nKB);
-      cmp = diffBlobKeyCmp(pKA, nKA, pKB, nKB);
+      cmp = prollyKeyCmp(pKA, nKA, pKB, nKB);
     }
 
     if( cmp < 0 ){
