@@ -19,6 +19,7 @@ BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.5}
 BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-2}
 BENCH_AC_WRITE_MAX_MULTIPLIER=${BENCH_AC_WRITE_MAX_MULTIPLIER:-6}
 BENCH_AC_WRITE_AVG_MAX_MULTIPLIER=${BENCH_AC_WRITE_AVG_MAX_MULTIPLIER:-5}
+BENCH_AC_WRITE_RUNS=${BENCH_AC_WRITE_RUNS:-9}
 BENCH_SECTION_MODE=${BENCH_SECTION_MODE:-full}
 
 cleanup() { rm -rf "$TMPDIR"; }
@@ -413,7 +414,19 @@ else:
 
 bench_runs_for_test() {
   # BENCH_RUNS=1 for fast local iteration; default 5 for stable median.
-  echo "${BENCH_RUNS:-5}"
+  case "$1" in
+    *_ac) echo "$BENCH_AC_WRITE_RUNS" ;;
+    *) echo "${BENCH_RUNS:-5}" ;;
+  esac
+}
+
+bench_runs_summary() {
+  local base_runs="${BENCH_RUNS:-5}"
+  if [ "$BENCH_AC_WRITE_RUNS" = "$base_runs" ]; then
+    echo "median of ${base_runs} invocations per test"
+  else
+    echo "median of ${base_runs} invocations per test; autocommit writes use ${BENCH_AC_WRITE_RUNS}"
+  fi
 }
 
 median_us() {
@@ -584,7 +597,7 @@ case "$BENCH_SECTION_MODE" in
 esac
 
 echo ""
-echo "_${ROWS} rows, median of $(bench_runs_for_test summary) invocations per test, workload-only timing via host monotonic clock when available._"
+echo "_${ROWS} rows, $(bench_runs_summary), workload-only timing via host monotonic clock when available._"
 
 # ============================================================
 # Enforce performance ceiling (exit 1 if any test exceeds limit)

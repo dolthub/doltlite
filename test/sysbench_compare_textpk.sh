@@ -25,6 +25,7 @@ BENCH_MAX_MULTIPLIER=${BENCH_MAX_MULTIPLIER:-2.5}
 BENCH_AVG_MAX_MULTIPLIER=${BENCH_AVG_MAX_MULTIPLIER:-2}
 BENCH_AC_WRITE_MAX_MULTIPLIER=${BENCH_AC_WRITE_MAX_MULTIPLIER:-6}
 BENCH_AC_WRITE_AVG_MAX_MULTIPLIER=${BENCH_AC_WRITE_AVG_MAX_MULTIPLIER:-5}
+BENCH_AC_WRITE_RUNS=${BENCH_AC_WRITE_RUNS:-9}
 SEED=42
 TMPDIR=$(mktemp -d)
 
@@ -431,9 +432,21 @@ else:
 bench_runs_for_test() {
   # BENCH_RUNS=1 for fast local iteration; default 5 for the TEXT PK
   # suite — each non-INTKEY write on doltlite goes through a per-statement
-  # mutmap flush, so 11 runs blow the CI budget. Median of 5 is still
-  # stable enough for tracking ratios across PRs.
-  echo "${BENCH_RUNS:-5}"
+  # mutmap flush, so most tests keep the normal median-of-5 budget. The
+  # autocommit writes are noisier in CI, so they get a wider median window.
+  case "$1" in
+    *_ac) echo "$BENCH_AC_WRITE_RUNS" ;;
+    *) echo "${BENCH_RUNS:-5}" ;;
+  esac
+}
+
+bench_runs_summary() {
+  local base_runs="${BENCH_RUNS:-5}"
+  if [ "$BENCH_AC_WRITE_RUNS" = "$base_runs" ]; then
+    echo "median of ${base_runs} invocations per test"
+  else
+    echo "median of ${base_runs} invocations per test; autocommit writes use ${BENCH_AC_WRITE_RUNS}"
+  fi
 }
 
 median_us() {
@@ -555,7 +568,7 @@ echo ""
 SQLITE_BENCH_PRAGMAS="$SQLITE_AUTOCOMMIT_PRAGMAS" run_section "ac_writes" "$WRITE_TESTS_AC" "$TMPDIR/bench_file" "$TMPDIR/bench_file"
 
 echo ""
-echo "_${ROWS} rows, median of $(bench_runs_for_test summary) invocations per test, workload-only timing via host monotonic clock when available._"
+echo "_${ROWS} rows, $(bench_runs_summary), workload-only timing via host monotonic clock when available._"
 
 # ============================================================
 # Enforce performance ceiling — gates the same shape sysbench_compare.sh
