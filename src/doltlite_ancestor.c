@@ -5,101 +5,8 @@
 #include "doltlite_commit.h"
 #include "chunk_store.h"
 #include "doltlite_internal.h"
+#include "prolly_hashset.h"
 #include <string.h>
-
-typedef struct HashSet HashSet;
-struct HashSet {
-  ProllyHash *aSlot;
-  u8 *aUsed;
-  int nSlot;
-  int nUsed;
-};
-
-static int hashSetInit(HashSet *hs, int nInitial){
-  int n = 16;
-  while( n < nInitial*2 ) n *= 2;
-  hs->aSlot = sqlite3_malloc(n * sizeof(ProllyHash));
-  if( !hs->aSlot ) return SQLITE_NOMEM;
-  hs->aUsed = sqlite3_malloc(n);
-  if( !hs->aUsed ){
-    sqlite3_free(hs->aSlot);
-    hs->aSlot = 0;
-    return SQLITE_NOMEM;
-  }
-  memset(hs->aUsed, 0, n);
-  hs->nSlot = n;
-  hs->nUsed = 0;
-  return SQLITE_OK;
-}
-
-static void hashSetFree(HashSet *hs){
-  sqlite3_free(hs->aSlot);
-  sqlite3_free(hs->aUsed);
-  memset(hs, 0, sizeof(*hs));
-}
-
-static int hashSetIndex(const HashSet *hs, const ProllyHash *h){
-  u32 v = (u32)h->data[0] | ((u32)h->data[1]<<8)
-        | ((u32)h->data[2]<<16) | ((u32)h->data[3]<<24);
-  return (int)(v & (u32)(hs->nSlot - 1));
-}
-
-static int hashSetGrow(HashSet *hs){
-  HashSet newHs;
-  int i;
-  int newN = hs->nSlot * 2;
-  newHs.aSlot = sqlite3_malloc(newN * sizeof(ProllyHash));
-  if( !newHs.aSlot ) return SQLITE_NOMEM;
-  newHs.aUsed = sqlite3_malloc(newN);
-  if( !newHs.aUsed ){
-    sqlite3_free(newHs.aSlot);
-    return SQLITE_NOMEM;
-  }
-  memset(newHs.aUsed, 0, newN);
-  newHs.nSlot = newN;
-  newHs.nUsed = 0;
-  for(i=0; i<hs->nSlot; i++){
-    if( hs->aUsed[i] ){
-      int idx = hashSetIndex(&newHs, &hs->aSlot[i]);
-      while( newHs.aUsed[idx] ){
-        idx = (idx + 1) & (newN - 1);
-      }
-      newHs.aSlot[idx] = hs->aSlot[i];
-      newHs.aUsed[idx] = 1;
-      newHs.nUsed++;
-    }
-  }
-  sqlite3_free(hs->aSlot);
-  sqlite3_free(hs->aUsed);
-  *hs = newHs;
-  return SQLITE_OK;
-}
-
-static int hashSetInsert(HashSet *hs, const ProllyHash *h){
-  int idx;
-  if( hs->nUsed * 2 >= hs->nSlot ){
-    int rc = hashSetGrow(hs);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-  idx = hashSetIndex(hs, h);
-  while( hs->aUsed[idx] ){
-    if( prollyHashCompare(&hs->aSlot[idx], h)==0 ) return SQLITE_OK;
-    idx = (idx + 1) & (hs->nSlot - 1);
-  }
-  hs->aSlot[idx] = *h;
-  hs->aUsed[idx] = 1;
-  hs->nUsed++;
-  return SQLITE_OK;
-}
-
-static int hashSetContains(const HashSet *hs, const ProllyHash *h){
-  int idx = hashSetIndex(hs, h);
-  while( hs->aUsed[idx] ){
-    if( prollyHashCompare(&hs->aSlot[idx], h)==0 ) return 1;
-    idx = (idx + 1) & (hs->nSlot - 1);
-  }
-  return 0;
-}
 
 static int loadCommitByHash(sqlite3 *db, const ProllyHash *hash,
                             DoltliteCommit *pCommit){
@@ -110,7 +17,7 @@ static int loadCommitByHash(sqlite3 *db, const ProllyHash *hash,
 static int ancestorBfsCollect(
   sqlite3 *db,
   const ProllyHash *pStart,
-  HashSet *pVisited
+  ProllyHashSet *pVisited
 ){
   ProllyHash *queue = 0;
   int qHead = 0, qTail = 0, qAlloc = 64;
@@ -126,8 +33,8 @@ static int ancestorBfsCollect(
   while( qHead < qTail ){
     current = queue[qHead++];
     if( prollyHashIsEmpty(&current) ) continue;
-    if( hashSetContains(pVisited, &current) ) continue;
-    rc = hashSetInsert(pVisited, &current);
+    if( prollyHashSetContains(pVisited, &current) ) continue;
+    rc = prollyHashSetAdd(pVisited, &current);
     if( rc!=SQLITE_OK ) break;
     memset(&commit, 0, sizeof(commit));
     rc = loadCommitByHash(db, &current, &commit);
@@ -155,7 +62,7 @@ static int ancestorBfsCollect(
 static int ancestorMarkRedundant(
   sqlite3 *db,
   const ProllyHash *pStart,
-  const HashSet *pCommon,
+  ProllyHashSet *pCommon,
   u8 *aRedundant,
   int nCommon,
   const ProllyHash *aCommon
@@ -164,21 +71,21 @@ static int ancestorMarkRedundant(
   int qHead = 0, qTail = 0, qAlloc = 64;
   ProllyHash current;
   DoltliteCommit commit;
-  HashSet visited;
+  ProllyHashSet visited;
   int rc;
   int i;
 
-  rc = hashSetInit(&visited, 64);
+  rc = prollyHashSetInit(&visited, 64);
   if( rc!=SQLITE_OK ) return rc;
 
   queue = sqlite3_malloc(qAlloc * (int)sizeof(ProllyHash));
-  if( !queue ){ hashSetFree(&visited); return SQLITE_NOMEM; }
+  if( !queue ){ prollyHashSetFree(&visited); return SQLITE_NOMEM; }
 
   memset(&commit, 0, sizeof(commit));
   rc = loadCommitByHash(db, pStart, &commit);
   if( rc!=SQLITE_OK ){
     sqlite3_free(queue);
-    hashSetFree(&visited);
+    prollyHashSetFree(&visited);
     return rc;
   }
   for(i=0; i<doltliteCommitParentCount(&commit); i++){
@@ -191,10 +98,10 @@ static int ancestorMarkRedundant(
   while( qHead < qTail ){
     current = queue[qHead++];
     if( prollyHashIsEmpty(&current) ) continue;
-    if( hashSetContains(&visited, &current) ) continue;
-    rc = hashSetInsert(&visited, &current);
+    if( prollyHashSetContains(&visited, &current) ) continue;
+    rc = prollyHashSetAdd(&visited, &current);
     if( rc!=SQLITE_OK ) break;
-    if( hashSetContains(pCommon, &current) ){
+    if( prollyHashSetContains(pCommon, &current) ){
       int j;
       for(j=0; j<nCommon; j++){
         if( prollyHashCompare(&aCommon[j], &current)==0 ){
@@ -223,7 +130,7 @@ static int ancestorMarkRedundant(
   }
 
   sqlite3_free(queue);
-  hashSetFree(&visited);
+  prollyHashSetFree(&visited);
   return rc;
 }
 
@@ -242,7 +149,7 @@ static int ancestorBfsPosition(
   AncestorQueueItem *queue = 0;
   int qHead = 0, qTail = 0, qAlloc = 64;
   DoltliteCommit commit;
-  HashSet visited;
+  ProllyHashSet visited;
   int rc;
   int order = 0;
   int i;
@@ -250,11 +157,11 @@ static int ancestorBfsPosition(
   *pDistance = 0x7fffffff;
   *pOrder = 0x7fffffff;
 
-  rc = hashSetInit(&visited, 64);
+  rc = prollyHashSetInit(&visited, 64);
   if( rc!=SQLITE_OK ) return rc;
   queue = sqlite3_malloc(qAlloc * (int)sizeof(AncestorQueueItem));
   if( !queue ){
-    hashSetFree(&visited);
+    prollyHashSetFree(&visited);
     return SQLITE_NOMEM;
   }
 
@@ -265,8 +172,8 @@ static int ancestorBfsPosition(
   while( qHead < qTail ){
     AncestorQueueItem item = queue[qHead++];
     if( prollyHashIsEmpty(&item.hash) ) continue;
-    if( hashSetContains(&visited, &item.hash) ) continue;
-    rc = hashSetInsert(&visited, &item.hash);
+    if( prollyHashSetContains(&visited, &item.hash) ) continue;
+    rc = prollyHashSetAdd(&visited, &item.hash);
     if( rc!=SQLITE_OK ) break;
 
     if( prollyHashCompare(&item.hash, pTarget)==0 ){
@@ -298,7 +205,7 @@ static int ancestorBfsPosition(
   }
 
   sqlite3_free(queue);
-  hashSetFree(&visited);
+  prollyHashSetFree(&visited);
   return rc;
 }
 
@@ -348,7 +255,7 @@ int doltliteFindAncestor(
   const ProllyHash *commitHash2,
   ProllyHash *pAncestor
 ){
-  HashSet anc1, anc2, common;
+  ProllyHashSet anc1, anc2, common;
   ProllyHash *aCommon = 0;
   u8 *aRedundant = 0;
   int nCommon = 0;
@@ -366,21 +273,21 @@ int doltliteFindAncestor(
     return SQLITE_OK;
   }
 
-  rc = hashSetInit(&anc1, 64);
+  rc = prollyHashSetInit(&anc1, 64);
   if( rc!=SQLITE_OK ) return rc;
-  rc = hashSetInit(&anc2, 64);
-  if( rc!=SQLITE_OK ){ hashSetFree(&anc1); return rc; }
-  rc = hashSetInit(&common, 64);
-  if( rc!=SQLITE_OK ){ hashSetFree(&anc2); hashSetFree(&anc1); return rc; }
+  rc = prollyHashSetInit(&anc2, 64);
+  if( rc!=SQLITE_OK ){ prollyHashSetFree(&anc1); return rc; }
+  rc = prollyHashSetInit(&common, 64);
+  if( rc!=SQLITE_OK ){ prollyHashSetFree(&anc2); prollyHashSetFree(&anc1); return rc; }
 
   rc = ancestorBfsCollect(db, commitHash1, &anc1);
   if( rc!=SQLITE_OK ) goto done;
   rc = ancestorBfsCollect(db, commitHash2, &anc2);
   if( rc!=SQLITE_OK ) goto done;
 
-  for(i=0; i<anc1.nSlot; i++){
-    if( anc1.aUsed[i] && hashSetContains(&anc2, &anc1.aSlot[i]) ){
-      rc = hashSetInsert(&common, &anc1.aSlot[i]);
+  for(i=0; i<anc1.nSlots; i++){
+    if( anc1.aUsed[i] && prollyHashSetContains(&anc2, &anc1.aSlots[i]) ){
+      rc = prollyHashSetAdd(&common, &anc1.aSlots[i]);
       if( rc!=SQLITE_OK ) goto done;
       nCommon++;
     }
@@ -398,9 +305,9 @@ int doltliteFindAncestor(
   memset(aRedundant, 0, nCommon);
   {
     int k = 0;
-    for(i=0; i<common.nSlot; i++){
+    for(i=0; i<common.nSlots; i++){
       if( common.aUsed[i] ){
-        aCommon[k++] = common.aSlot[i];
+        aCommon[k++] = common.aSlots[i];
       }
     }
   }
@@ -437,9 +344,9 @@ int doltliteFindAncestor(
 done:
   sqlite3_free(aRedundant);
   sqlite3_free(aCommon);
-  hashSetFree(&common);
-  hashSetFree(&anc2);
-  hashSetFree(&anc1);
+  prollyHashSetFree(&common);
+  prollyHashSetFree(&anc2);
+  prollyHashSetFree(&anc1);
   return rc;
 }
 
