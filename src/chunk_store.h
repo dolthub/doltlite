@@ -64,23 +64,7 @@ static SQLITE_INLINE int catalogParseHeaderEx(
   return 1;
 }
 
-static SQLITE_INLINE int catalogParseHeader(
-  const u8 *data, int nData, int *pnTables, const u8 **ppEntries
-){
-  return catalogParseHeaderEx(data, nData, 0, pnTables, ppEntries);
-}
-
 typedef struct ChunkStore ChunkStore;
-typedef struct ConflictEntry ConflictEntry;
-
-struct ConflictEntry {
-  u8 *pKey;
-  int nKey;
-  u8 *pBaseVal;
-  int nBaseVal;
-  u8 *pTheirVal;
-  int nTheirVal;
-};
 
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 #  define CHUNK_STORE_LE_PACKING 1
@@ -98,7 +82,6 @@ struct ChunkStore {
   u8 readOnly;
   u8 isMemory;
   u8 snapshotPinned;
-  u8 hasMovedChecked;
 #ifdef _WIN32
   sqlite3_file *pGraphLockFile;
 #else

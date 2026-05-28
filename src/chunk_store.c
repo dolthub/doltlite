@@ -1574,7 +1574,6 @@ static int csReloadFromDisk(ChunkStore *cs){
   sqlite3_free(zOldFilename);
   chunkStoreClose(&tmp);
 
-  cs->hasMovedChecked = 0;
   return SQLITE_OK;
 }
 
