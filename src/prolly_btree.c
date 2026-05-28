@@ -6925,8 +6925,6 @@ static int prollyBtCursorIndexMoveto(
     }
   }
 
-no_match:
-
   {
     int lastRes = 0;
     rc = prollyCursorLast(&pCur->pCur, &lastRes);
