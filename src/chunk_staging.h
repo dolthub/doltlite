@@ -41,6 +41,7 @@ void chunkStagingResetAfterSweep(ChunkStaging *st);
 
 struct ChunkStore;
 void csPendHTClear(struct ChunkStore *cs);
+void csPendHTReset(struct ChunkStore *cs);
 void csRecentHTClear(struct ChunkStore *cs);
 int csGrowPending(struct ChunkStore *cs);
 int csGrowRecent(struct ChunkStore *cs, int nAdd);

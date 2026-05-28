@@ -57,6 +57,19 @@ void csPendHTClear(ChunkStore *cs){
   cs->staging.nPendingHTSize = 0;
 }
 
+void csPendHTReset(ChunkStore *cs){
+  int initSize = 1 << CS_PEND_HT_INIT_BITS;
+  if( cs->staging.nPendingHTSize > initSize ){
+    csPendHTClear(cs);
+    return;
+  }
+  if( cs->staging.aPendingHT ){
+    memset(cs->staging.aPendingHT, 0xff,
+           cs->staging.nPendingHTSize * sizeof(int));
+  }
+  cs->staging.nPendingHTBuilt = 0;
+}
+
 void csRecentHTClear(ChunkStore *cs){
   sqlite3_free(cs->staging.aRecentHT);
   sqlite3_free(cs->staging.aRecentHTNext);
