@@ -18,15 +18,6 @@
 #define CS_WAL_TAG_CHUNK  0x01
 #define CS_WAL_TAG_ROOT   0x02
 
-void walStateInit(WalState *w){
-  memset(w, 0, sizeof(*w));
-}
-
-void walStateReset(WalState *w){
-  w->iWalOffset = 0;
-  w->nWalData = 0;
-}
-
 i64 walStateGetOffset(const WalState *w){
   return w->iWalOffset;
 }

@@ -430,7 +430,6 @@ static int buildDiffPairs(DiffTblCursor *pCur, sqlite3 *db,
   int currInited = 0;
   ProllyHash curr;
   int rc = SQLITE_OK;
-  int i;
 
   if( !cs ) return SQLITE_OK;
   memset(&map, 0, sizeof(map));
@@ -837,7 +836,6 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   {
     DiffPair *p;
     u8 flags;
-    int rc2;
     p = &pCur->aPairs[pCur->iPair++];
     flags = p->fromFlags ? p->fromFlags : p->toFlags;
     doltliteHashToHex(&p->fromHash, pCur->row.zFromCommit);

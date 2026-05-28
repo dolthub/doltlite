@@ -23,14 +23,6 @@
   ((i64)(((const u8*)(p))[7]) << 56)      \
 )
 
-void refsTableInit(RefsTable *rt){
-  memset(rt, 0, sizeof(*rt));
-}
-
-void refsTableReset(RefsTable *rt){
-  memset(rt, 0, sizeof(*rt));
-}
-
 void refsTableGetBranches(const RefsTable *rt, int *pn, const BranchRef **par){
   *pn = rt->nBranches;
   *par = rt->aBranches;
@@ -90,14 +82,6 @@ int refsTableTagCount(const RefsTable *rt){
 
 int refsTableRemoteCount(const RefsTable *rt){
   return rt->nRemotes;
-}
-
-int refsTableTrackingCount(const RefsTable *rt){
-  return rt->nTracking;
-}
-
-int refsTableSequenceCount(const RefsTable *rt){
-  return rt->nSequences;
 }
 
 void refsTableSetHash(RefsTable *rt, const ProllyHash *h){

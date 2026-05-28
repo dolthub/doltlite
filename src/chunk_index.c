@@ -19,14 +19,6 @@
   | ((i64)((u64)(p)[4])<<32) | ((i64)((u64)(p)[5])<<40) \
   | ((i64)((u64)(p)[6])<<48) | ((i64)((u64)(p)[7])<<56))
 
-void chunkIndexInit(ChunkIndex *idx){
-  memset(idx, 0, sizeof(*idx));
-}
-
-void chunkIndexReset(ChunkIndex *idx){
-  memset(idx, 0, sizeof(*idx));
-}
-
 void chunkIndexGetEntries(const ChunkIndex *idx, int *pn, const ChunkIndexEntry **par){
   *pn = idx->nIndex;
   *par = idx->aIndex;
@@ -34,18 +26,6 @@ void chunkIndexGetEntries(const ChunkIndex *idx, int *pn, const ChunkIndexEntry 
 
 int chunkIndexCount(const ChunkIndex *idx){
   return idx->nIndex;
-}
-
-int chunkIndexNChunks(const ChunkIndex *idx){
-  return idx->nChunks;
-}
-
-i64 chunkIndexOffset(const ChunkIndex *idx){
-  return idx->iIndexOffset;
-}
-
-i64 chunkIndexSize(const ChunkIndex *idx){
-  return idx->nIndexSize;
 }
 
 void chunkIndexSetMetadata(ChunkIndex *idx, int nChunks, i64 iOffset, i64 nSize){

@@ -340,30 +340,22 @@ static u32 mergeSerialType(const MergeFieldValue *pMem, u32 *pLen){
   return 0;
 }
 
-static void mergeWriteIntBe(u8 *pOut, i64 v, int nByte){
-  int i;
-  for(i=nByte-1; i>=0; i--){
-    pOut[i] = (u8)(v & 0xFF);
-    v >>= 8;
-  }
-}
-
 static void mergeSerialPut(u8 *pOut, const MergeFieldValue *pMem, u32 serialType){
   switch( serialType ){
     case 0:
     case 8:
     case 9:
       return;
-    case 1: mergeWriteIntBe(pOut, pMem->i, 1); return;
-    case 2: mergeWriteIntBe(pOut, pMem->i, 2); return;
-    case 3: mergeWriteIntBe(pOut, pMem->i, 3); return;
-    case 4: mergeWriteIntBe(pOut, pMem->i, 4); return;
-    case 5: mergeWriteIntBe(pOut, pMem->i, 6); return;
-    case 6: mergeWriteIntBe(pOut, pMem->i, 8); return;
+    case 1: doltliteIpkWriteBE(pOut, pMem->i, 1); return;
+    case 2: doltliteIpkWriteBE(pOut, pMem->i, 2); return;
+    case 3: doltliteIpkWriteBE(pOut, pMem->i, 3); return;
+    case 4: doltliteIpkWriteBE(pOut, pMem->i, 4); return;
+    case 5: doltliteIpkWriteBE(pOut, pMem->i, 6); return;
+    case 6: doltliteIpkWriteBE(pOut, pMem->i, 8); return;
     case 7: {
       sqlite3_uint64 u;
       memcpy(&u, &pMem->r, 8);
-      mergeWriteIntBe(pOut, (i64)u, 8);
+      doltliteIpkWriteBE(pOut, (i64)u, 8);
       return;
     }
     default:

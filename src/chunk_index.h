@@ -37,14 +37,8 @@ struct ChunkIndex {
   i64 nIndexSize;
 };
 
-void chunkIndexInit(ChunkIndex *idx);
-void chunkIndexReset(ChunkIndex *idx);
-
 void chunkIndexGetEntries(const ChunkIndex *idx, int *pn, const ChunkIndexEntry **par);
 int chunkIndexCount(const ChunkIndex *idx);
-int chunkIndexNChunks(const ChunkIndex *idx);
-i64 chunkIndexOffset(const ChunkIndex *idx);
-i64 chunkIndexSize(const ChunkIndex *idx);
 
 void chunkIndexSetMetadata(ChunkIndex *idx, int nChunks, i64 iOffset, i64 nSize);
 void chunkIndexReplaceEntries(ChunkIndex *idx, ChunkIndexEntry *aNew, int nNew);

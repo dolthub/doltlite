@@ -576,33 +576,9 @@ static int dstConnect(sqlite3 *db, void *pAux, int argc,
 static int dstDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
 
 static int dstBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
-  int iFrom = -1, iTo = -1, iTbl = -1;
-  int i, argvIdx = 1;
   (void)pVtab;
-  for(i=0; i<pInfo->nConstraint; i++){
-    if( !pInfo->aConstraint[i].usable ) continue;
-    if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
-    switch( pInfo->aConstraint[i].iColumn ){
-      case DST_COL_FROM_REF: iFrom = i; break;
-      case DST_COL_TO_REF:   iTo   = i; break;
-      case DST_COL_TBL:      iTbl  = i; break;
-    }
-  }
-  if( iFrom>=0 ){
-    pInfo->aConstraintUsage[iFrom].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iFrom].omit = 1;
-  }
-  if( iTo>=0 ){
-    pInfo->aConstraintUsage[iTo].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iTo].omit = 1;
-  }
-  if( iTbl>=0 ){
-    pInfo->aConstraintUsage[iTbl].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iTbl].omit = 1;
-  }
-  pInfo->idxNum = (iFrom>=0 ? 1 : 0) | (iTo>=0 ? 2 : 0) | (iTbl>=0 ? 4 : 0);
-  pInfo->estimatedCost = 1000.0;
-  return SQLITE_OK;
+  return doltliteBestIndexRefs(pInfo, DST_COL_FROM_REF, DST_COL_TO_REF,
+                               DST_COL_TBL);
 }
 
 static int dstOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
@@ -907,33 +883,9 @@ static int dssConnect(sqlite3 *db, void *pAux, int argc,
 static int dssDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
 
 static int dssBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
-  int iFrom = -1, iTo = -1, iTbl = -1;
-  int i, argvIdx = 1;
   (void)pVtab;
-  for(i=0; i<pInfo->nConstraint; i++){
-    if( !pInfo->aConstraint[i].usable ) continue;
-    if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
-    switch( pInfo->aConstraint[i].iColumn ){
-      case DSS_COL_FROM_REF: iFrom = i; break;
-      case DSS_COL_TO_REF:   iTo   = i; break;
-      case DSS_COL_TBL:      iTbl  = i; break;
-    }
-  }
-  if( iFrom>=0 ){
-    pInfo->aConstraintUsage[iFrom].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iFrom].omit = 1;
-  }
-  if( iTo>=0 ){
-    pInfo->aConstraintUsage[iTo].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iTo].omit = 1;
-  }
-  if( iTbl>=0 ){
-    pInfo->aConstraintUsage[iTbl].argvIndex = argvIdx++;
-    pInfo->aConstraintUsage[iTbl].omit = 1;
-  }
-  pInfo->idxNum = (iFrom>=0 ? 1 : 0) | (iTo>=0 ? 2 : 0) | (iTbl>=0 ? 4 : 0);
-  pInfo->estimatedCost = 1000.0;
-  return SQLITE_OK;
+  return doltliteBestIndexRefs(pInfo, DSS_COL_FROM_REF, DSS_COL_TO_REF,
+                               DSS_COL_TBL);
 }
 
 static int dssOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){

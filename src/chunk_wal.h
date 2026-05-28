@@ -31,9 +31,6 @@ struct ChunkStoreReloadState {
   SavedRefsState refs;
 };
 
-void walStateInit(WalState *w);
-void walStateReset(WalState *w);
-
 i64 walStateGetOffset(const WalState *w);
 i64 walStateGetDataSize(const WalState *w);
 

@@ -775,12 +775,6 @@ static int doltliteVcSealBranchStyleTxnMaybeKeepTopLevelSavepoint(sqlite3 *db){
   return doltliteVcSealBranchStyleTxn(db);
 }
 
-static int doltliteSetDefaultBranchRefs(sqlite3 *db, ChunkStore *cs, void *pArg){
-  const char *zBranch = (const char*)pArg;
-  UNUSED_PARAMETER(db);
-  return chunkStoreSetDefaultBranch(cs, zBranch);
-}
-
 static int rebaseRestoreReturnBranchWorkingState(
   sqlite3 *db,
   const char *zBranch
@@ -4135,14 +4129,6 @@ fail:
   sqlite3_finalize(pStmt);
   rebaseFreePlan(aPlan, nPlan);
   return rc;
-}
-
-static char *rebaseDeriveOrigBranchFromWorking(const char *zWorking){
-  static const char zPrefix[] = "dolt_rebase_";
-  int nPrefix = (int)strlen(zPrefix);
-  if( !zWorking ) return 0;
-  if( strncmp(zWorking, zPrefix, nPrefix)!=0 ) return 0;
-  return sqlite3_mprintf("%s", zWorking + nPrefix);
 }
 
 static char *rebaseBuildWorkingBranchName(const char *zOrigBranch){

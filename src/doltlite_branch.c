@@ -75,7 +75,6 @@ static void branchNamedResultError(
 
 static int mutateBranchRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   BranchMutationCtx *p = (BranchMutationCtx*)pArg;
-  int rc;
 
   if( p->isDelete ){
     (void)db;
@@ -1479,15 +1478,7 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
                             -1, SQLITE_TRANSIENT);
         break;
       case 4: {
-        time_t t = (time_t)cm.timestamp;
-        struct tm *tm = gmtime(&t);
-        if( tm ){
-          char buf[32];
-          strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
-          sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
-        }else{
-          sqlite3_result_null(ctx);
-        }
+        doltliteResultTimestamp(ctx, cm.timestamp);
         break;
       }
       case 5:

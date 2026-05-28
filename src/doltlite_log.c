@@ -238,15 +238,7 @@ static int doltliteLogColumn(
       break;
     case 3:
       {
-        time_t t = (time_t)c->timestamp;
-        struct tm *tm = gmtime(&t);
-        if( tm ){
-          char buf[32];
-          strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
-          sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
-        }else{
-          sqlite3_result_null(ctx);
-        }
+        doltliteResultTimestamp(ctx, c->timestamp);
       }
       break;
     case 4:

@@ -925,18 +925,8 @@ static int bmColumn(sqlite3_vtab_cursor *pCursor,
       else sqlite3_result_null(ctx);
       break;
     case 1: {
-      time_t t;
-      struct tm *tm;
       if( !r->blamed ){ sqlite3_result_null(ctx); break; }
-      t = (time_t)r->commitDate;
-      tm = gmtime(&t);
-      if( tm ){
-        char buf[32];
-        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
-        sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
-      }else{
-        sqlite3_result_null(ctx);
-      }
+      doltliteResultTimestamp(ctx, r->commitDate);
       break;
     }
     case 2:

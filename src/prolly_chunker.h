@@ -47,10 +47,6 @@ void prollyChunkerGetRoot(ProllyChunker *ch, ProllyHash *pRoot);
 
 void prollyChunkerFree(ProllyChunker *ch);
 
-int prollyChunkerAddAtLevel(ProllyChunker *ch, int level,
-                            const u8 *pKey, int nKey,
-                            const u8 *pVal, int nVal);
-
 int prollyChunkerAddAtLevelWithCount(ProllyChunker *ch, int level,
                                      const u8 *pKey, int nKey,
                                      const u8 *pVal, int nVal,

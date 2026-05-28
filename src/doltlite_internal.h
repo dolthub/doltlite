@@ -5,6 +5,7 @@
 #include "sqliteInt.h"
 #include "prolly_hash.h"
 #include "chunk_store.h"
+#include <time.h>
 
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
@@ -51,13 +52,58 @@ static SQLITE_INLINE struct TableEntry *doltliteFindTableByName(
   return 0;
 }
 
-static SQLITE_INLINE int tableEntryNameCmp(const void *a, const void *b){
-  const struct TableEntry *ea = (const struct TableEntry *)a;
-  const struct TableEntry *eb = (const struct TableEntry *)b;
-  if( !ea->zName && !eb->zName ) return 0;
-  if( !ea->zName ) return -1;
-  if( !eb->zName ) return 1;
-  return strcmp(ea->zName, eb->zName);
+static SQLITE_INLINE int doltliteBestIndexRefs(
+  sqlite3_index_info *pInfo,
+  int iFromCol,
+  int iToCol,
+  int iTableCol
+){
+  int i;
+  int iFrom = -1;
+  int iTo = -1;
+  int iTbl = -1;
+  int argvIdx = 1;
+
+  for(i=0; i<pInfo->nConstraint; i++){
+    if( !pInfo->aConstraint[i].usable ) continue;
+    if( pInfo->aConstraint[i].op!=SQLITE_INDEX_CONSTRAINT_EQ ) continue;
+    if( pInfo->aConstraint[i].iColumn==iFromCol ){
+      iFrom = i;
+    }else if( pInfo->aConstraint[i].iColumn==iToCol ){
+      iTo = i;
+    }else if( pInfo->aConstraint[i].iColumn==iTableCol ){
+      iTbl = i;
+    }
+  }
+
+  if( iFrom>=0 ){
+    pInfo->aConstraintUsage[iFrom].argvIndex = argvIdx++;
+    pInfo->aConstraintUsage[iFrom].omit = 1;
+  }
+  if( iTo>=0 ){
+    pInfo->aConstraintUsage[iTo].argvIndex = argvIdx++;
+    pInfo->aConstraintUsage[iTo].omit = 1;
+  }
+  if( iTbl>=0 ){
+    pInfo->aConstraintUsage[iTbl].argvIndex = argvIdx++;
+    pInfo->aConstraintUsage[iTbl].omit = 1;
+  }
+
+  pInfo->idxNum = (iFrom>=0 ? 1 : 0) | (iTo>=0 ? 2 : 0) | (iTbl>=0 ? 4 : 0);
+  pInfo->estimatedCost = 1000.0;
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE void doltliteResultTimestamp(sqlite3_context *ctx, i64 timestamp){
+  time_t t = (time_t)timestamp;
+  struct tm *tm = gmtime(&t);
+  if( tm ){
+    char buf[32];
+    strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", tm);
+    sqlite3_result_text(ctx, buf, -1, SQLITE_TRANSIENT);
+  }else{
+    sqlite3_result_null(ctx);
+  }
 }
 
 static SQLITE_INLINE int doltliteFindTableRootByName(

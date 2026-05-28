@@ -154,7 +154,6 @@ static int mergeLeaf(
 ){
   int rc = SQLITE_OK;
   int j;
-  u8 flags = pMut->flags;
   const u8 *pLastKey = 0;
   int nLastKey = 0;
 

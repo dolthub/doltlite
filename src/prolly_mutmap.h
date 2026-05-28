@@ -124,8 +124,6 @@ void prollyMutMapIterSeek(ProllyMutMapIter *it, ProllyMutMap *mm,
 
 void prollyMutMapIterLast(ProllyMutMapIter *it, ProllyMutMap *mm);
 
-int prollyMutMapMerge(ProllyMutMap *pDst, ProllyMutMap *pSrc);
-
 int prollyMutMapClone(ProllyMutMap **out, const ProllyMutMap *src);
 
 void prollyMutMapPushSavepoint(ProllyMutMap *mm, int level);

@@ -153,8 +153,6 @@ int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
                              const char *zBranch, const ProllyHash *pCommit);
 int chunkStoreFindTracking(ChunkStore *cs, const char *zRemote,
                            const char *zBranch, ProllyHash *pCommit);
-int chunkStoreDeleteTracking(ChunkStore *cs, const char *zRemote,
-                             const char *zBranch);
 
 int chunkStoreLoadRefsFromBlob(ChunkStore *cs, const u8 *data, int nData);
 

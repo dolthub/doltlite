@@ -13,12 +13,9 @@ struct ChunkFile {
   i64 iFileSize;
 };
 
-void chunkFileInit(ChunkFile *cf);
-
 const char *chunkFileGetFilename(const ChunkFile *cf);
 sqlite3_vfs *chunkFileGetVfs(const ChunkFile *cf);
 sqlite3_file *chunkFileGetHandle(const ChunkFile *cf);
-i64 chunkFileGetSize(const ChunkFile *cf);
 
 void chunkFileSetHandle(ChunkFile *cf, sqlite3_file *pFile);
 void chunkFileSetSize(ChunkFile *cf, i64 nSize);

@@ -118,8 +118,6 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
 
 #define PROLLY_MAX_RECORD_SIZE ((sqlite3_int64)(1024*1024*1024))
 
-static const ProllyHash emptyHash = {{0}};
-
 struct TableEntry {
   Pgno iTable;
   ProllyHash root;
@@ -543,7 +541,6 @@ static int serializeCatalog(Btree *pBtree, u8 **ppOut, int *pnOut);
 static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData);
 static int tableEntryIsTableRoot(Btree *pBtree, struct TableEntry *pTE);
 static int btreeRefreshFromDisk(Btree *p);
-static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog);
 static int btreeReadWorkingCatalog(ChunkStore *cs, const char *zBranch,
                                    ProllyHash *pCatHash,
                                    ProllyHash *pCommitHash);
@@ -1089,15 +1086,6 @@ struct CatalogSerializeEntry {
   const char *zTblName;
 };
 
-static int tableEntryNameCmp(const void *a, const void *b){
-  const struct TableEntry *ea = (const struct TableEntry *)a;
-  const struct TableEntry *eb = (const struct TableEntry *)b;
-  if( !ea->zName && !eb->zName ) return 0;
-  if( !ea->zName ) return -1;
-  if( !eb->zName ) return 1;
-  return strcmp(ea->zName, eb->zName);
-}
-
 static void freeCatalogEntryMeta(CatalogEntryMeta *aMeta, int nMeta){
   int i;
   for(i=0; i<nMeta; i++){
@@ -1130,23 +1118,6 @@ static const CatalogEntryMeta *findCatalogEntryMetaByPgno(
   int i;
   for(i=0; i<nMeta; i++){
     if( aMeta[i].iTable==iTable ) return &aMeta[i];
-  }
-  return 0;
-}
-
-static const CatalogEntryMeta *findCatalogEntryMetaByObject(
-  CatalogEntryMeta *aMeta,
-  int nMeta,
-  const char *zType,
-  const char *zName,
-  const char *zTblName
-){
-  int i;
-  for(i=0; i<nMeta; i++){
-    if( strcmp(aMeta[i].zType ? aMeta[i].zType : "", zType ? zType : "")!=0 ) continue;
-    if( strcmp(aMeta[i].zName ? aMeta[i].zName : "", zName ? zName : "")!=0 ) continue;
-    if( strcmp(aMeta[i].zTblName ? aMeta[i].zTblName : "", zTblName ? zTblName : "")!=0 ) continue;
-    return &aMeta[i];
   }
   return 0;
 }
@@ -2397,24 +2368,6 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = maxPage;
 
     pBtree->cat.iNextTable = maxCatalogTable + 1;
-  }
-
-  if( getenv("DOLTLITE_DEBUG_CAT") ){
-    fprintf(stderr, "deserializeCatalog: n=%d\n", pBtree->cat.n);
-    for(i=0; i<pBtree->cat.n; i++){
-      char zRoot[PROLLY_HASH_SIZE*2 + 1];
-      int k;
-      for(k=0; k<PROLLY_HASH_SIZE; k++){
-        static const char zHex[] = "0123456789abcdef";
-        zRoot[k*2] = zHex[(pBtree->cat.a[i].root.data[k] >> 4) & 0xF];
-        zRoot[k*2 + 1] = zHex[pBtree->cat.a[i].root.data[k] & 0xF];
-      }
-      zRoot[PROLLY_HASH_SIZE*2] = 0;
-      fprintf(stderr, "  cat[%d]: iTable=%u name=%s flags=%u root=%s\n",
-              i, (unsigned)pBtree->cat.a[i].iTable,
-              pBtree->cat.a[i].zName ? pBtree->cat.a[i].zName : "(null)",
-              (unsigned)pBtree->cat.a[i].flags, zRoot);
-    }
   }
 
   return SQLITE_OK;
@@ -3686,26 +3639,8 @@ static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount){
     return SQLITE_OK;
   }
 
-  if( getenv("DOLTLITE_DEBUG_COUNT") && iTable==3 ){
-    char zRoot[PROLLY_HASH_SIZE*2 + 1];
-    int k;
-    static const char zHex[] = "0123456789abcdef";
-    for(k=0; k<PROLLY_HASH_SIZE; k++){
-      zRoot[k*2] = zHex[(pTE->root.data[k] >> 4) & 0xF];
-      zRoot[k*2 + 1] = zHex[pTE->root.data[k] & 0xF];
-    }
-    zRoot[PROLLY_HASH_SIZE*2] = 0;
-    fprintf(stderr, "countTreeEntries: branch=%s iTable=%u flags=%u root=%s\n",
-            pBtree->zBranch ? pBtree->zBranch : "(null)",
-            (unsigned)iTable, (unsigned)pTE->flags, zRoot);
-  }
-
   *pCount = 0;
   rc = countSubtreeRows(&pBt->store, &pBt->cache, &pTE->root, pCount);
-  if( getenv("DOLTLITE_DEBUG_COUNT") && iTable==3 ){
-    fprintf(stderr, "countTreeEntries: rc=%d count=%lld\n",
-            rc, (long long)*pCount);
-  }
   return rc;
 }
 
@@ -4870,10 +4805,6 @@ static int btreeReloadBranchWorkingStateInto(
   return SQLITE_OK;
 }
 
-static int btreeReloadBranchWorkingState(Btree *p, int bLoadCatalog){
-  return btreeReloadBranchWorkingStateInto(p, bLoadCatalog, 0);
-}
-
 static void btreeStoreCommittedFromCurrent(Btree *p, const ProllyHash *pCatHash){
   if( pCatHash ){
     p->committedCatalogHash = *pCatHash;
@@ -5078,7 +5009,6 @@ int sqlite3BtreeCommitPhaseOne(Btree *p, const char *zSuperJrnl){
 static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
-  int rcRollback = SQLITE_OK;
   u8 *catData = 0;
   int nCatData = 0;
   ProllyHash catHash;
@@ -5777,7 +5707,6 @@ static int prollyBtreeCursor(
 ){
   BtShared *pBt = p->pBt;
   struct TableEntry *pTE;
-  int rc;
 
   assert( p->inTrans>=TRANS_READ );
 
