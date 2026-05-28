@@ -116,42 +116,6 @@ static int diffEmitModify(
   return xCallback(pCtx, &change);
 }
 
-static int diffSerialIsInt(int st){
-  return st>=1 && st<=9 && st!=7;
-}
-
-static i64 diffDecodeInt(int st, const u8 *p, int n){
-  static const int sizes[] = {0,1,2,3,4,6,8};
-  i64 v;
-  int i;
-  if( st==0 ) return 0;
-  if( st==8 ) return 0;
-  if( st==9 ) return 1;
-  if( st>=1 && st<=6 ){
-    int nB = sizes[st];
-    if( nB > n ) return 0;
-    v = (p[0] & 0x80) ? -1 : 0;
-    for(i=0; i<nB; i++) v = (v<<8) | p[i];
-    return v;
-  }
-  return 0;
-}
-
-static int diffSerialTypeSize(u64 st){
-  if( st==0 ) return 0;
-  if( st==1 ) return 1;
-  if( st==2 ) return 2;
-  if( st==3 ) return 3;
-  if( st==4 ) return 4;
-  if( st==5 ) return 6;
-  if( st==6 ) return 8;
-  if( st==7 ) return 8;
-  if( st==8 || st==9 ) return 0;
-  if( st>=12 && (st&1)==0 ) return (int)(st-12)/2;
-  if( st>=13 && (st&1)==1 ) return (int)(st-13)/2;
-  return 0;
-}
-
 static int diffRecordsEqualFieldwise(
   const u8 *pA, int nA,
   const u8 *pB, int nB,
@@ -179,18 +143,18 @@ static int diffRecordsEqualFieldwise(
     int szB;
 
     if( stA != stB ){
-      if( diffSerialIsInt(stA) && diffSerialIsInt(stB) ){
-        i64 vA = diffDecodeInt(stA, pA + aInfo.aOffset[i],
+      if( dlSerialIsInt(stA) && dlSerialIsInt(stB) ){
+        i64 vA = dlDecodeSerialInt(stA, pA + aInfo.aOffset[i],
                                 nA - aInfo.aOffset[i]);
-        i64 vB = diffDecodeInt(stB, pB + bInfo.aOffset[i],
+        i64 vB = dlDecodeSerialInt(stB, pB + bInfo.aOffset[i],
                                 nB - bInfo.aOffset[i]);
         if( vA != vB ) return SQLITE_OK;
         continue;
       }
       return SQLITE_OK;
     }
-    szA = diffSerialTypeSize((u64)stA);
-    szB = diffSerialTypeSize((u64)stB);
+    szA = dlSerialTypeLen((u64)stA);
+    szB = dlSerialTypeLen((u64)stB);
     if( szA != szB ) return SQLITE_OK;
     if( szA>0 && memcmp(pA + aInfo.aOffset[i], pB + bInfo.aOffset[i], szA)!=0 ){
       return SQLITE_OK;

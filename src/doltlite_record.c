@@ -6,17 +6,6 @@
 #include <string.h>
 #include <stdio.h>
 
-static i64 recReadInt(const u8 *p, int nBytes){
-  i64 v;
-  int i;
-
-  v = (p[0] & 0x80) ? -1 : 0;
-  for(i=0; i<nBytes; i++){
-    v = (v << 8) | p[i];
-  }
-  return v;
-}
-
 typedef struct RecBuf RecBuf;
 struct RecBuf {
   char *z;
@@ -93,11 +82,10 @@ char *doltliteDecodeRecord(const u8 *pData, int nData){
     }else if( st==9 ){
       rc = recBufAppend(&buf, "1", 1);
     }else if( st>=1 && st<=6 ){
-      static const int sizes[] = {0,1,2,3,4,6,8};
-      int nBytes = sizes[st];
+      int nBytes = dlSerialTypeLen((u64)st);
       char tmp[32];
       if( pBody + nBytes > pEnd ){ rc = SQLITE_CORRUPT; break; }
-      sqlite3_snprintf(sizeof(tmp), tmp, "%lld", recReadInt(pBody, nBytes));
+      sqlite3_snprintf(sizeof(tmp), tmp, "%lld", dlReadIntBytes(pBody, nBytes));
       rc = recBufAppend(&buf, tmp, -1);
       pBody += nBytes;
     }else if( st==7 ){
@@ -304,14 +292,9 @@ void doltliteResultField(
   if( st==8 ){ sqlite3_result_int(ctx, 0); return; }
   if( st==9 ){ sqlite3_result_int(ctx, 1); return; }
   if( st>=1 && st<=6 ){
-    static const int sizes[] = {0,1,2,3,4,6,8};
-    int nB = sizes[st];
+    int nB = dlSerialTypeLen((u64)st);
     if( off+nB <= nData ){
-      const u8 *q = pData + off;
-      i64 v = (q[0] & 0x80) ? -1 : 0;
-      int i;
-      for(i=0; i<nB; i++) v = (v<<8) | q[i];
-      sqlite3_result_int64(ctx, v);
+      sqlite3_result_int64(ctx, dlReadIntBytes(pData + off, nB));
     }else{
       sqlite3_result_null(ctx);
     }
@@ -390,14 +373,9 @@ int doltliteBindField(
   if( st==8 ) return sqlite3_bind_int(pStmt, iParam, 0);
   if( st==9 ) return sqlite3_bind_int(pStmt, iParam, 1);
   if( st>=1 && st<=6 ){
-    static const int sizes[] = {0,1,2,3,4,6,8};
-    int nB = sizes[st];
+    int nB = dlSerialTypeLen((u64)st);
     if( off+nB <= nData ){
-      const u8 *q = pData + off;
-      i64 v = (q[0] & 0x80) ? -1 : 0;
-      int i;
-      for(i=0; i<nB; i++) v = (v<<8) | q[i];
-      return sqlite3_bind_int64(pStmt, iParam, v);
+      return sqlite3_bind_int64(pStmt, iParam, dlReadIntBytes(pData + off, nB));
     }
     return sqlite3_bind_null(pStmt, iParam);
   }

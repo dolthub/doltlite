@@ -38,6 +38,27 @@ static inline int dlSerialTypeLen(u64 st){
   return 0;
 }
 
+static inline int dlSerialIsInt(int st){
+  return st>=1 && st<=9 && st!=7;
+}
+
+static inline i64 dlReadIntBytes(const u8 *p, int nBytes){
+  i64 v = (nBytes>0 && (p[0] & 0x80)) ? -1 : 0;
+  int i;
+  for(i=0; i<nBytes; i++) v = (v<<8) | p[i];
+  return v;
+}
+
+static inline i64 dlDecodeSerialInt(int st, const u8 *p, int n){
+  if( st==9 ) return 1;
+  if( st>=1 && st<=6 ){
+    int nB = dlSerialTypeLen((u64)st);
+    if( nB > n ) return 0;
+    return dlReadIntBytes(p, nB);
+  }
+  return 0;
+}
+
 #define DOLTLITE_MAX_RECORD_FIELDS SQLITE_MAX_COLUMN
 
 typedef struct DoltliteRecordInfo DoltliteRecordInfo;
