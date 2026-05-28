@@ -124,6 +124,8 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->refs.nRemotes = pSrc->refs.nRemotes;
   pDst->refs.aTracking = pSrc->refs.aTracking;
   pDst->refs.nTracking = pSrc->refs.nTracking;
+  pDst->refs.aSequences = pSrc->refs.aSequences;
+  pDst->refs.nSequences = pSrc->refs.nSequences;
 
   pSrc->file.pFile = 0;
   pSrc->index.aIndex = 0;
@@ -140,6 +142,8 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->refs.nRemotes = 0;
   pSrc->refs.aTracking = 0;
   pSrc->refs.nTracking = 0;
+  pSrc->refs.aSequences = 0;
+  pSrc->refs.nSequences = 0;
 }
 
 void csFreeReloadState(ChunkStoreReloadState *pSaved){
