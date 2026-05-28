@@ -865,8 +865,7 @@ static int openNextPairIter(DiffTblCursor *pCur, sqlite3 *db){
   }
 }
 
-static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
-                            const char *zTableName){
+static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db){
   int rc;
 
   pCur->hasRow = 0;
@@ -916,7 +915,6 @@ static int advanceToNextRow(DiffTblCursor *pCur, sqlite3 *db,
 
     rc = openNextPairIter(pCur, db);
     if( rc!=SQLITE_OK ) return rc;
-    (void)zTableName;
   }
 }
 
@@ -1088,13 +1086,13 @@ static int dtFilter(sqlite3_vtab_cursor *cur,
     return SQLITE_OK;
   }
 
-  return advanceToNextRow(c, db, pVtab->zTableName);
+  return advanceToNextRow(c, db);
 }
 
 static int dtNext(sqlite3_vtab_cursor *cur){
   DiffTblCursor *c = (DiffTblCursor*)cur;
   DiffTblVtab *pVtab = (DiffTblVtab*)cur->pVtab;
-  return advanceToNextRow(c, pVtab->db, pVtab->zTableName);
+  return advanceToNextRow(c, pVtab->db);
 }
 
 static int dtEof(sqlite3_vtab_cursor *cur){
