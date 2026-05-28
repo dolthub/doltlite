@@ -38,6 +38,11 @@ ProllyCacheEntry *prollyCachePut(ProllyCache *cache,
                                   const u8 *pData, int nData,
                                   int *pRc);
 
+ProllyCacheEntry *prollyCachePutOwned(ProllyCache *cache,
+                                      const ProllyHash *hash,
+                                      u8 *pData, int nData,
+                                      int *pRc);
+
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry);
 
 void prollyCacheFree(ProllyCache *cache);

@@ -18,8 +18,7 @@ int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
   if( !pEntry ){
     rc = chunkStoreGet(pStore, pHash, &pData, &nData);
     if( rc!=SQLITE_OK ) return rc;
-    pEntry = prollyCachePut(pCache, pHash, pData, nData, &rc);
-    sqlite3_free(pData);
+    pEntry = prollyCachePutOwned(pCache, pHash, pData, nData, &rc);
     if( !pEntry ) return rc;
   }
 
@@ -68,8 +67,7 @@ static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
     return rc;
   }
 
-  pEntry = prollyCachePut(cur->pCache, hash, pData, nData, &rc);
-  sqlite3_free(pData);
+  pEntry = prollyCachePutOwned(cur->pCache, hash, pData, nData, &rc);
   if( pEntry==0 ){
     return rc;
   }
