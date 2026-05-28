@@ -302,7 +302,6 @@ static int diffCursorWalk(
   if( rc==SQLITE_OK ) rc = prollyCursorFirst(pCurNew, &emptyNew);
   if( rc==SQLITE_OK ) rc = diffMergeWalk(pCurOld, pCurNew, flags, xCb, pCtx);
 
-walk_done:
   prollyCursorClose(pCurOld);
   prollyCursorClose(pCurNew);
   sqlite3_free(pCurOld);
