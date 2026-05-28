@@ -99,6 +99,34 @@ struct SavedRefsState {
   int nSequences;
 };
 
+#define REFS_OWNED_COPY(D, S) do {           \
+  (D).zDefaultBranch = (S).zDefaultBranch;   \
+  (D).aBranches      = (S).aBranches;        \
+  (D).nBranches      = (S).nBranches;        \
+  (D).aTags          = (S).aTags;            \
+  (D).nTags          = (S).nTags;            \
+  (D).aRemotes       = (S).aRemotes;         \
+  (D).nRemotes       = (S).nRemotes;         \
+  (D).aTracking      = (S).aTracking;        \
+  (D).nTracking      = (S).nTracking;        \
+  (D).aSequences     = (S).aSequences;       \
+  (D).nSequences     = (S).nSequences;       \
+} while(0)
+
+#define REFS_OWNED_CLEAR(D) do {             \
+  (D).zDefaultBranch = 0;                    \
+  (D).aBranches      = 0;                    \
+  (D).nBranches      = 0;                    \
+  (D).aTags          = 0;                    \
+  (D).nTags          = 0;                    \
+  (D).aRemotes       = 0;                    \
+  (D).nRemotes       = 0;                    \
+  (D).aTracking      = 0;                    \
+  (D).nTracking      = 0;                    \
+  (D).aSequences     = 0;                    \
+  (D).nSequences     = 0;                    \
+} while(0)
+
 struct ChunkStore;
 void csCaptureSavedRefsState(struct ChunkStore *cs, SavedRefsState *pSaved);
 void csRestoreSavedRefsState(struct ChunkStore *cs, const SavedRefsState *pSaved);

@@ -99,17 +99,7 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pDst->index.aIndexMmapBase = pSrc->index.aIndexMmapBase;
   pDst->index.aIndexMmapSize = pSrc->index.aIndexMmapSize;
   pDst->wal.nWalData = pSrc->wal.nWalData;
-  pDst->refs.aBranches = pSrc->refs.aBranches;
-  pDst->refs.nBranches = pSrc->refs.nBranches;
-  pDst->refs.zDefaultBranch = pSrc->refs.zDefaultBranch;
-  pDst->refs.aTags = pSrc->refs.aTags;
-  pDst->refs.nTags = pSrc->refs.nTags;
-  pDst->refs.aRemotes = pSrc->refs.aRemotes;
-  pDst->refs.nRemotes = pSrc->refs.nRemotes;
-  pDst->refs.aTracking = pSrc->refs.aTracking;
-  pDst->refs.nTracking = pSrc->refs.nTracking;
-  pDst->refs.aSequences = pSrc->refs.aSequences;
-  pDst->refs.nSequences = pSrc->refs.nSequences;
+  REFS_OWNED_COPY(pDst->refs, pSrc->refs);
 
   pSrc->file.pFile = 0;
   pSrc->index.aIndex = 0;
@@ -117,17 +107,7 @@ void csAdoptOpenedStoreState(ChunkStore *pDst, ChunkStore *pSrc){
   pSrc->index.aIndexMmapBase = 0;
   pSrc->index.aIndexMmapSize = 0;
   pSrc->wal.nWalData = 0;
-  pSrc->refs.aBranches = 0;
-  pSrc->refs.nBranches = 0;
-  pSrc->refs.zDefaultBranch = 0;
-  pSrc->refs.aTags = 0;
-  pSrc->refs.nTags = 0;
-  pSrc->refs.aRemotes = 0;
-  pSrc->refs.nRemotes = 0;
-  pSrc->refs.aTracking = 0;
-  pSrc->refs.nTracking = 0;
-  pSrc->refs.aSequences = 0;
-  pSrc->refs.nSequences = 0;
+  REFS_OWNED_CLEAR(pSrc->refs);
 }
 
 void csFreeReloadState(ChunkStoreReloadState *pSaved){

@@ -200,62 +200,22 @@ void csRestoreCommittedRefsHash(ChunkStore *cs){
 
 void csCaptureSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   memset(pSaved, 0, sizeof(*pSaved));
-  pSaved->zDefaultBranch = cs->refs.zDefaultBranch;
-  pSaved->aBranches = cs->refs.aBranches;
-  pSaved->nBranches = cs->refs.nBranches;
-  pSaved->aTags = cs->refs.aTags;
-  pSaved->nTags = cs->refs.nTags;
-  pSaved->aRemotes = cs->refs.aRemotes;
-  pSaved->nRemotes = cs->refs.nRemotes;
-  pSaved->aTracking = cs->refs.aTracking;
-  pSaved->nTracking = cs->refs.nTracking;
-  pSaved->aSequences = cs->refs.aSequences;
-  pSaved->nSequences = cs->refs.nSequences;
+  REFS_OWNED_COPY(*pSaved, cs->refs);
 }
 
 void csDetachSavedRefsState(ChunkStore *cs, SavedRefsState *pSaved){
   csCaptureSavedRefsState(cs, pSaved);
-  cs->refs.zDefaultBranch = 0;
-  cs->refs.aBranches = 0;
-  cs->refs.nBranches = 0;
-  cs->refs.aTags = 0;
-  cs->refs.nTags = 0;
-  cs->refs.aRemotes = 0;
-  cs->refs.nRemotes = 0;
-  cs->refs.aTracking = 0;
-  cs->refs.nTracking = 0;
-  cs->refs.aSequences = 0;
-  cs->refs.nSequences = 0;
+  REFS_OWNED_CLEAR(cs->refs);
 }
 
 void csRestoreSavedRefsState(ChunkStore *cs, const SavedRefsState *pSaved){
-  cs->refs.zDefaultBranch = pSaved->zDefaultBranch;
-  cs->refs.aBranches = pSaved->aBranches;
-  cs->refs.nBranches = pSaved->nBranches;
-  cs->refs.aTags = pSaved->aTags;
-  cs->refs.nTags = pSaved->nTags;
-  cs->refs.aRemotes = pSaved->aRemotes;
-  cs->refs.nRemotes = pSaved->nRemotes;
-  cs->refs.aTracking = pSaved->aTracking;
-  cs->refs.nTracking = pSaved->nTracking;
-  cs->refs.aSequences = pSaved->aSequences;
-  cs->refs.nSequences = pSaved->nSequences;
+  REFS_OWNED_COPY(cs->refs, *pSaved);
 }
 
 void csFreeSavedRefsState(SavedRefsState *pSaved){
   ChunkStore refsStore;
   memset(&refsStore, 0, sizeof(refsStore));
-  refsStore.refs.zDefaultBranch = pSaved->zDefaultBranch;
-  refsStore.refs.aBranches = pSaved->aBranches;
-  refsStore.refs.nBranches = pSaved->nBranches;
-  refsStore.refs.aTags = pSaved->aTags;
-  refsStore.refs.nTags = pSaved->nTags;
-  refsStore.refs.aRemotes = pSaved->aRemotes;
-  refsStore.refs.nRemotes = pSaved->nRemotes;
-  refsStore.refs.aTracking = pSaved->aTracking;
-  refsStore.refs.nTracking = pSaved->nTracking;
-  refsStore.refs.aSequences = pSaved->aSequences;
-  refsStore.refs.nSequences = pSaved->nSequences;
+  REFS_OWNED_COPY(refsStore.refs, *pSaved);
   csFreeRefsState(&refsStore);
   memset(pSaved, 0, sizeof(*pSaved));
 }
@@ -461,29 +421,8 @@ int csDeserializeRefsIntoTemp(ChunkStore *pTmp, const u8 *data, int nData){
 }
 
 void csAdoptRefsState(ChunkStore *pDst, ChunkStore *pSrc){
-  pDst->refs.aBranches = pSrc->refs.aBranches;
-  pDst->refs.nBranches = pSrc->refs.nBranches;
-  pDst->refs.zDefaultBranch = pSrc->refs.zDefaultBranch;
-  pDst->refs.aTags = pSrc->refs.aTags;
-  pDst->refs.nTags = pSrc->refs.nTags;
-  pDst->refs.aRemotes = pSrc->refs.aRemotes;
-  pDst->refs.nRemotes = pSrc->refs.nRemotes;
-  pDst->refs.aTracking = pSrc->refs.aTracking;
-  pDst->refs.nTracking = pSrc->refs.nTracking;
-  pDst->refs.aSequences = pSrc->refs.aSequences;
-  pDst->refs.nSequences = pSrc->refs.nSequences;
-
-  pSrc->refs.aBranches = 0;
-  pSrc->refs.nBranches = 0;
-  pSrc->refs.zDefaultBranch = 0;
-  pSrc->refs.aTags = 0;
-  pSrc->refs.nTags = 0;
-  pSrc->refs.aRemotes = 0;
-  pSrc->refs.nRemotes = 0;
-  pSrc->refs.aTracking = 0;
-  pSrc->refs.nTracking = 0;
-  pSrc->refs.aSequences = 0;
-  pSrc->refs.nSequences = 0;
+  REFS_OWNED_COPY(pDst->refs, pSrc->refs);
+  REFS_OWNED_CLEAR(pSrc->refs);
 }
 
 int csReplaceRefsStateFromBlob(
