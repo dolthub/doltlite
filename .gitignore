@@ -5,6 +5,7 @@ build-fuzz/
 .beads/
 .runtime/
 .claude/
+.codex/
 .logs/
 __pycache__/
 state.json
