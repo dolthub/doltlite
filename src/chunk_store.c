@@ -1043,7 +1043,7 @@ static int csCommitToMemory(ChunkStore *cs){
     cs->index.aIndexMmapBase = 0;
     cs->index.aIndexMmapSize = 0;
     cs->staging.nPending = 0;
-    csPendHTClear(cs);
+    csPendHTReset(cs);
     cs->staging.nCommittedWriteBuf = cs->staging.nWriteBuf;
   }
   csMarkRefsCommitted(cs);
@@ -1347,7 +1347,7 @@ commit_done:
     cs->staging.nWriteBufAlloc = 0;
   }
   cs->staging.nPending = 0;
-  csPendHTClear(cs);
+  csPendHTReset(cs);
   csMarkRefsCommitted(cs);
 
   return SQLITE_OK;
@@ -1393,7 +1393,7 @@ int chunkStoreCommit(ChunkStore *cs){
 
 void chunkStoreRollback(ChunkStore *cs){
   cs->staging.nPending = 0;
-  csPendHTClear(cs);
+  csPendHTReset(cs);
   if( cs->isMemory ){
 
     cs->staging.nWriteBuf = cs->staging.nCommittedWriteBuf;
