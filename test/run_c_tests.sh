@@ -26,6 +26,7 @@ GATING=(
   oom_dolt_fault_test
   cross_branch_test
   corruption_test
+  sequence_reload_test
 )
 
 run_one() {
