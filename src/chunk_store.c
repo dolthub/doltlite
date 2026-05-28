@@ -912,27 +912,26 @@ int chunkStoreGet(
     {
       i64 fileOff = e->offset;
       int sz = e->size;
-      u8 lenBuf[4];
       u8 *pBuf;
       u32 storedLen;
 
-      rc = sqlite3OsRead(cs->file.pFile, lenBuf, 4, fileOff);
-      if( rc != SQLITE_OK ) return rc;
-
-      storedLen = CS_READ_U32(lenBuf);
-      if( (int)storedLen != sz ){
-        return SQLITE_CORRUPT;
-      }
-
-      pBuf = (u8 *)sqlite3_malloc(sz);
+      if( sz > INT_MAX - 4 ) return SQLITE_TOOBIG;
+      pBuf = (u8 *)sqlite3_malloc(sz + 4);
       if( pBuf == 0 ) return SQLITE_NOMEM;
 
-      rc = sqlite3OsRead(cs->file.pFile, pBuf, sz, fileOff + 4);
+      rc = sqlite3OsRead(cs->file.pFile, pBuf, sz + 4, fileOff);
       if( rc != SQLITE_OK ){
         sqlite3_free(pBuf);
         return rc;
       }
 
+      storedLen = CS_READ_U32(pBuf);
+      if( (int)storedLen != sz ){
+        sqlite3_free(pBuf);
+        return SQLITE_CORRUPT;
+      }
+
+      memmove(pBuf, pBuf + 4, sz);
       *ppData = pBuf;
       *pnData = sz;
     }
