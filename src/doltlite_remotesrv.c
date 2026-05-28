@@ -13,10 +13,6 @@
 
 #ifdef _WIN32
 
-DoltliteServer *doltliteServerCreate(const char *z, int p, char **e){
-  (void)z;(void)p; if(e) *e=sqlite3_mprintf("remotesrv not available on Windows"); return 0;
-}
-void doltliteServerDestroy(DoltliteServer *s){ (void)s; }
 int doltliteServerPort(DoltliteServer *s){ (void)s; return 0; }
 #else
 #include <sys/socket.h>

@@ -12,7 +12,6 @@
 
 #ifdef _WIN32
 
-void doltliteRegisterHttpRemote(sqlite3 *db){ (void)db; }
 DoltliteRemote *doltliteHttpRemoteOpen(const char *zUrl){ (void)zUrl; return 0; }
 #else
 #include <sys/socket.h>
