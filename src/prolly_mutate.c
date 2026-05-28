@@ -231,8 +231,8 @@ static int streamingMergeNode(
       if( !pChildEntry ){
         rc = chunkStoreGet(pMut->pStore, &childHash, &pChildData, &nChildData);
         if( rc!=SQLITE_OK ) return rc;
-        pChildEntry = prollyCachePut(pCache, &childHash, pChildData, nChildData, &rc);
-        sqlite3_free(pChildData);
+        pChildEntry = prollyCachePutOwned(pCache, &childHash,
+                                          pChildData, nChildData, &rc);
         if( !pChildEntry ) return rc;
       }
 
@@ -1205,9 +1205,8 @@ static int validateReplaceBatchNode(
         rc = chunkStoreGet(pMut->pStore, &childHash,
                            &pChildData, &nChildData);
         if( rc!=SQLITE_OK ) return rc;
-        pChildEntry = prollyCachePut(pMut->pCache, &childHash,
-                                     pChildData, nChildData, &rc);
-        sqlite3_free(pChildData);
+        pChildEntry = prollyCachePutOwned(pMut->pCache, &childHash,
+                                          pChildData, nChildData, &rc);
         if( !pChildEntry ) return rc;
       }
       rc = validateReplaceBatchNode(pMut, &pChildEntry->node, pIter,
@@ -1278,9 +1277,8 @@ static int replaceBatchNodeNoRechunk(
           prollyNodeBuilderFree(&b);
           return rc;
         }
-        pChildEntry = prollyCachePut(pMut->pCache, &childHash,
-                                     pChildData, nChildData, &rc);
-        sqlite3_free(pChildData);
+        pChildEntry = prollyCachePutOwned(pMut->pCache, &childHash,
+                                          pChildData, nChildData, &rc);
         if( !pChildEntry ){
           prollyNodeBuilderFree(&b);
           return rc;

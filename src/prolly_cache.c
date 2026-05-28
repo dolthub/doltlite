@@ -176,6 +176,63 @@ ProllyCacheEntry *prollyCachePut(
   return pEntry;
 }
 
+ProllyCacheEntry *prollyCachePutOwned(
+  ProllyCache *cache,
+  const ProllyHash *hash,
+  u8 *pData,
+  int nData,
+  int *pRc
+){
+  int iBucket;
+  ProllyCacheEntry *pEntry;
+  int rc;
+
+  if( pRc ) *pRc = SQLITE_OK;
+
+  pEntry = prollyCacheGet(cache, hash);
+  if( pEntry ){
+    sqlite3_free(pData);
+    return pEntry;
+  }
+
+  while( cache->nUsed>=cache->nCapacity ){
+    if( !cacheEvictOne(cache) ){
+
+      break;
+    }
+  }
+
+  pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
+  if( pEntry==0 ){
+    sqlite3_free(pData);
+    if( pRc ) *pRc = SQLITE_NOMEM;
+    return 0;
+  }
+  memset(pEntry, 0, sizeof(*pEntry));
+
+  memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
+  pEntry->pData = pData;
+  pEntry->nData = nData;
+  pEntry->nRef = 1;
+
+  rc = prollyNodeParse(&pEntry->node, pData, nData);
+  if( rc!=SQLITE_OK ){
+    if( pRc ) *pRc = rc;
+    sqlite3_free(pData);
+    sqlite3_free(pEntry);
+    return 0;
+  }
+
+  iBucket = cacheHashBucket(cache, hash);
+  pEntry->pHashNext = cache->aBucket[iBucket];
+  cache->aBucket[iBucket] = pEntry;
+
+  lruInsertHead(cache, pEntry);
+
+  cache->nUsed++;
+  return pEntry;
+}
+
 void prollyCacheRelease(ProllyCache *cache, ProllyCacheEntry *entry){
   (void)cache;
   assert( entry->nRef>0 );
