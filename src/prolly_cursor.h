@@ -62,4 +62,7 @@ void prollyCursorReleaseAll(ProllyCursor *cur);
 
 void prollyCursorClose(ProllyCursor *cur);
 
+int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
+                       const ProllyHash *pHash, u64 *pCount);
+
 #endif

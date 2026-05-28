@@ -5,6 +5,49 @@
 #include <string.h>
 #include <assert.h>
 
+int prollySubtreeCount(ChunkStore *pStore, ProllyCache *pCache,
+                       const ProllyHash *pHash, u64 *pCount){
+  ProllyCacheEntry *pEntry = 0;
+  u8 *pData = 0;
+  int nData = 0;
+  int rc = SQLITE_OK;
+  int i;
+  u64 sum = 0;
+
+  pEntry = prollyCacheGet(pCache, pHash);
+  if( !pEntry ){
+    rc = chunkStoreGet(pStore, pHash, &pData, &nData);
+    if( rc!=SQLITE_OK ) return rc;
+    pEntry = prollyCachePut(pCache, pHash, pData, nData, &rc);
+    sqlite3_free(pData);
+    if( !pEntry ) return rc;
+  }
+
+  if( pEntry->node.level==0 ){
+    sum = (u64)pEntry->node.nItems;
+  }else if( prollyNodeHasSubtreeCounts(&pEntry->node) ){
+    for( i=0; i<(int)pEntry->node.nItems; i++ ){
+      sum += prollyNodeChildSubtreeCount(&pEntry->node, i);
+    }
+  }else{
+    for( i=0; i<(int)pEntry->node.nItems; i++ ){
+      ProllyHash childHash;
+      u64 childCount = 0;
+      prollyNodeChildHash(&pEntry->node, i, &childHash);
+      rc = prollySubtreeCount(pStore, pCache, &childHash, &childCount);
+      if( rc!=SQLITE_OK ){
+        prollyCacheRelease(pCache, pEntry);
+        return rc;
+      }
+      sum += childCount;
+    }
+  }
+
+  prollyCacheRelease(pCache, pEntry);
+  *pCount = sum;
+  return SQLITE_OK;
+}
+
 static int loadNode(ProllyCursor *cur, const ProllyHash *hash,
                     ProllyCacheEntry **ppEntry){
   ProllyCacheEntry *pEntry;

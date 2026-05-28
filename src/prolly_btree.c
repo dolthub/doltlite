@@ -3581,53 +3581,6 @@ static int pushSavepoint(Btree *pBtree, int bStatement){
   return SQLITE_OK;
 }
 
-static int countSubtreeRows(
-  ChunkStore *pStore,
-  ProllyCache *pCache,
-  const ProllyHash *pHash,
-  i64 *pCount
-){
-  ProllyCacheEntry *pEntry = 0;
-  u8 *pData = 0;
-  int nData = 0;
-  int rc = SQLITE_OK;
-  int i;
-  i64 sum = 0;
-
-  pEntry = prollyCacheGet(pCache, pHash);
-  if( !pEntry ){
-    rc = chunkStoreGet(pStore, pHash, &pData, &nData);
-    if( rc!=SQLITE_OK ) return rc;
-    pEntry = prollyCachePut(pCache, pHash, pData, nData, &rc);
-    sqlite3_free(pData);
-    if( !pEntry ) return rc;
-  }
-
-  if( pEntry->node.level==0 ){
-    sum = (i64)pEntry->node.nItems;
-  }else if( prollyNodeHasSubtreeCounts(&pEntry->node) ){
-    for(i=0; i<(int)pEntry->node.nItems; i++){
-      sum += (i64)prollyNodeChildSubtreeCount(&pEntry->node, i);
-    }
-  }else{
-    for(i=0; i<(int)pEntry->node.nItems; i++){
-      ProllyHash childHash;
-      i64 childCount = 0;
-      prollyNodeChildHash(&pEntry->node, i, &childHash);
-      rc = countSubtreeRows(pStore, pCache, &childHash, &childCount);
-      if( rc!=SQLITE_OK ){
-        prollyCacheRelease(pCache, pEntry);
-        return rc;
-      }
-      sum += childCount;
-    }
-  }
-
-  prollyCacheRelease(pCache, pEntry);
-  *pCount = sum;
-  return SQLITE_OK;
-}
-
 static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount){
   int rc;
   struct TableEntry *pTE;
@@ -3639,8 +3592,11 @@ static int countTreeEntries(Btree *pBtree, Pgno iTable, i64 *pCount){
     return SQLITE_OK;
   }
 
-  *pCount = 0;
-  rc = countSubtreeRows(&pBt->store, &pBt->cache, &pTE->root, pCount);
+  {
+    u64 cnt = 0;
+    rc = prollySubtreeCount(&pBt->store, &pBt->cache, &pTE->root, &cnt);
+    *pCount = (i64)cnt;
+  }
   return rc;
 }
 
@@ -3667,11 +3623,11 @@ static int countCursorLeftSiblings(
       n += (i64)prollyNodeChildSubtreeCount(&pEntry->node, i);
     }else{
       ProllyHash childHash;
-      i64 nChild = 0;
+      u64 nChild = 0;
       prollyNodeChildHash(&pEntry->node, i, &childHash);
-      rc = countSubtreeRows(pStore, pCache, &childHash, &nChild);
+      rc = prollySubtreeCount(pStore, pCache, &childHash, &nChild);
       if( rc!=SQLITE_OK ) return rc;
-      n += nChild;
+      n += (i64)nChild;
     }
   }
 
