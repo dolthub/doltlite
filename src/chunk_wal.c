@@ -8,13 +8,6 @@
 #include "../ext/blake3/blake3.h"
 #include <string.h>
 
-#define CS_READ_U32(p) (             \
-  (u32)(((const u8*)(p))[0])       | \
-  (u32)(((const u8*)(p))[1]) << 8  | \
-  (u32)(((const u8*)(p))[2]) << 16 | \
-  (u32)(((const u8*)(p))[3]) << 24   \
-)
-
 #define CS_WAL_TAG_CHUNK  0x01
 #define CS_WAL_TAG_ROOT   0x02
 

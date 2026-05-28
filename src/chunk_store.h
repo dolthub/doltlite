@@ -16,6 +16,42 @@
 #define CHUNK_MANIFEST_SIZE 168
 #define CHUNK_INDEX_ENTRY_SIZE 32
 
+#define CS_READ_U32(p) (             \
+  (u32)(((const u8*)(p))[0])       | \
+  (u32)(((const u8*)(p))[1]) << 8  | \
+  (u32)(((const u8*)(p))[2]) << 16 | \
+  (u32)(((const u8*)(p))[3]) << 24   \
+)
+
+#define CS_WRITE_U32(p, v) do {      \
+  ((u8*)(p))[0] = (u8)((v));        \
+  ((u8*)(p))[1] = (u8)((v) >> 8);   \
+  ((u8*)(p))[2] = (u8)((v) >> 16);  \
+  ((u8*)(p))[3] = (u8)((v) >> 24);  \
+} while(0)
+
+#define CS_READ_I64(p) (                  \
+  (i64)((u64)(((const u8*)(p))[0])      ) | \
+  (i64)((u64)(((const u8*)(p))[1]) << 8 ) | \
+  (i64)((u64)(((const u8*)(p))[2]) << 16) | \
+  (i64)((u64)(((const u8*)(p))[3]) << 24) | \
+  (i64)((u64)(((const u8*)(p))[4]) << 32) | \
+  (i64)((u64)(((const u8*)(p))[5]) << 40) | \
+  (i64)((u64)(((const u8*)(p))[6]) << 48) | \
+  (i64)((u64)(((const u8*)(p))[7]) << 56)   \
+)
+
+#define CS_WRITE_I64(p, v) do {            \
+  ((u8*)(p))[0] = (u8)((u64)(v));         \
+  ((u8*)(p))[1] = (u8)((u64)(v) >> 8);    \
+  ((u8*)(p))[2] = (u8)((u64)(v) >> 16);   \
+  ((u8*)(p))[3] = (u8)((u64)(v) >> 24);   \
+  ((u8*)(p))[4] = (u8)((u64)(v) >> 32);   \
+  ((u8*)(p))[5] = (u8)((u64)(v) >> 40);   \
+  ((u8*)(p))[6] = (u8)((u64)(v) >> 48);   \
+  ((u8*)(p))[7] = (u8)((u64)(v) >> 56);   \
+} while(0)
+
 #define WS_FORMAT_VERSION_V2 2
 #define WS_FORMAT_VERSION_V3 3
 #define WS_FORMAT_VERSION_V4 4
