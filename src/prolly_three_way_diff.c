@@ -14,13 +14,8 @@ static int diffChangeKeyCmp(
   const ProllyDiffChange *pB,
   u8 flags
 ){
-  int n;
-  int c;
   (void)flags;
-  n = (pA->nKey < pB->nKey) ? pA->nKey : pB->nKey;
-  c = memcmp(pA->pKey, pB->pKey, n);
-  if( c ) return c;
-  return pA->nKey - pB->nKey;
+  return prollyKeyCmp(pA->pKey, pA->nKey, pB->pKey, pB->nKey);
 }
 
 static void fillKeyFromChange(ThreeWayChange *pOut,

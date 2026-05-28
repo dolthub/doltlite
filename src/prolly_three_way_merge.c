@@ -13,15 +13,6 @@
 ** fall back to the full row-wise merge path without treating it as an error. */
 #define FM_FALLBACK  SQLITE_DONE
 
-static int fmKeyCmp(const u8 *pA, int nA, const u8 *pB, int nB){
-  int n = nA < nB ? nA : nB;
-  int c = memcmp(pA, pB, n);
-  if( c ) return c;
-  if( nA < nB ) return -1;
-  if( nA > nB ) return 1;
-  return 0;
-}
-
 static int fmChunkerLevelsBelowEmpty(const ProllyChunker *pCh, int level){
   int i;
   for( i = 0; i < level && i < pCh->nLevels; i++ ){
@@ -444,8 +435,8 @@ static int fmWalkInterior(
     prollyNodeKey(pOursN, i, &pOK, &nOK);
     prollyNodeKey(pTheirsN, i, &pTK, &nTK);
 
-    if( fmKeyCmp(pAK, nAK, pOK, nOK) != 0
-     || fmKeyCmp(pAK, nAK, pTK, nTK) != 0 ){
+    if( prollyKeyCmp(pAK, nAK, pOK, nOK) != 0
+     || prollyKeyCmp(pAK, nAK, pTK, nTK) != 0 ){
       const u8 *pSeek = 0;
       int nSeek = 0;
       i64 iSeek = 0;

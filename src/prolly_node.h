@@ -16,6 +16,13 @@
 #define PROLLY_NODE_ENTRY_BYTES(level,nKey,nVal) \
   ((nKey) + (nVal) + 8 + ((level)>0 ? 8 : 0))
 
+static inline int prollyKeyCmp(const u8 *pA, int nA, const u8 *pB, int nB){
+  int n = nA < nB ? nA : nB;
+  int c = memcmp(pA, pB, n);
+  if( c ) return c;
+  return nA - nB;
+}
+
 typedef struct ProllyNode ProllyNode;
 /* Parsed view over immutable node bytes. Offsets in the node are little-endian
 ** on disk; accessors decode them instead of relying on host alignment.

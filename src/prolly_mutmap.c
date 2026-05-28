@@ -45,17 +45,6 @@ static void prepKey(ProllyMutMap *mm,
   *pnKey = 8;
 }
 
-static int compareEntries(
-  const u8 *pKeyA, int nKeyA,
-  const u8 *pKeyB, int nKeyB
-){
-  int n = nKeyA < nKeyB ? nKeyA : nKeyB;
-  int c = memcmp(pKeyA, pKeyB, n);
-  if( c != 0 ) return c;
-  if( nKeyA < nKeyB ) return -1;
-  if( nKeyA > nKeyB ) return 1;
-  return 0;
-}
 
 static u64 keyPrefix64(const u8 *pKey, int nKey){
   u64 r = 0;
@@ -87,7 +76,7 @@ static int compareEntryToKey(
     return e->keyPrefix < keyPrefix ? -1 : 1;
   }
   if( mm->isIntKey ) return 0;
-  return compareEntries(e->pKey, e->nKey, pKey, nKey);
+  return prollyKeyCmp(e->pKey, e->nKey, pKey, nKey);
 }
 
 static u32 hashKey(const u8 *pKey, int nKey){
@@ -114,7 +103,7 @@ static int orderPairCmp(ProllyMutMap *mm, const OrderPair *a, const OrderPair *b
   if( mm->isIntKey ) return 0;
   ea = &mm->aEntries[a->phys];
   eb = &mm->aEntries[b->phys];
-  return compareEntries(ea->pKey, ea->nKey, eb->pKey, eb->nKey);
+  return prollyKeyCmp(ea->pKey, ea->nKey, eb->pKey, eb->nKey);
 }
 
 static void mutmapInsertionSort(ProllyMutMap *mm, OrderPair *a, int lo, int hi){
@@ -463,7 +452,7 @@ static int rankEntryWithoutOrder(ProllyMutMap *mm, int phys){
   int i;
   for(i=0; i<mm->nEntries; i++){
     if( i==phys ) continue;
-    if( compareEntries(mm->aEntries[i].pKey, mm->aEntries[i].nKey,
+    if( prollyKeyCmp(mm->aEntries[i].pKey, mm->aEntries[i].nKey,
                        target->pKey, target->nKey) < 0 ){
       rank++;
     }
@@ -539,7 +528,7 @@ static void updateAppendSorted(ProllyMutMap *mm, int phys){
   if( mm->keepSorted || !mm->appendSorted || phys<=0 ) return;
   pPrev = &mm->aEntries[phys - 1];
   pNew = &mm->aEntries[phys];
-  if( compareEntries(pPrev->pKey, pPrev->nKey,
+  if( prollyKeyCmp(pPrev->pKey, pPrev->nKey,
                      pNew->pKey, pNew->nKey) > 0 ){
     mm->appendSorted = 0;
   }
