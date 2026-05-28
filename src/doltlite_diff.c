@@ -272,7 +272,6 @@ done:
 }
 
 static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
-                              const ProllyHash *pCommitHash,
                               const DoltliteCommit *pCommit,
                               const char *zCommitHex){
   struct TableEntry *aChild = 0, *aParent = 0;
@@ -280,7 +279,6 @@ static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
   int rc, i;
   const ProllyHash *pParentHash = doltliteCommitParentHash(pCommit, 0);
   int hasParent = (pParentHash && !prollyHashIsEmpty(pParentHash));
-  (void)pCommitHash;
 
   rc = doltliteLoadCatalog(db, &pCommit->catalogHash, &aChild, &nChild, 0);
   if( rc!=SQLITE_OK ) return rc;
@@ -382,7 +380,7 @@ static int diffAdvance(DoltliteDiffCursor *pCur, sqlite3 *db){
     if( rc!=SQLITE_OK ) return rc;
 
     doltliteHashToHex(&cur, zHex);
-    rc = computeCommitBatch(pCur, db, &cur, &commit, zHex);
+    rc = computeCommitBatch(pCur, db, &commit, zHex);
     if( rc!=SQLITE_OK ){
       doltliteCommitClear(&commit);
       return rc;

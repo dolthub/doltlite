@@ -414,7 +414,6 @@ static int blameCompareAgainstRef(
   sqlite3 *db,
   BlameCursor *pCur,
   const char *zTableName,
-  const ProllyHash *pCurRoot,
   u8 curFlags,
   const ProllyHash *pRefCatHash,
   const ProllyHash *pCommitHash,
@@ -431,8 +430,6 @@ static int blameCompareAgainstRef(
   int canScanRef = 0;
   int rc = SQLITE_OK;
   int i;
-
-  (void)pCurRoot;
 
   if( pRefCatHash && !prollyHashIsEmpty(pRefCatHash) ){
     rc = blameLoadTableRoot(db, pRefCatHash, zTableName, &refRoot, &refFlags);
@@ -575,7 +572,7 @@ static int blameWalk(
         rc = doltliteLoadCommit(db, &baseHash, &baseCommit);
         if( rc==SQLITE_OK ){
           rc = blameCompareAgainstRef(db, pCur, zTableName,
-                                      &curTableRoot, curFlags,
+                                      curFlags,
                                       &baseCommit.catalogHash,
                                       &walk, &commit);
           doltliteCommitClear(&baseCommit);
@@ -586,7 +583,7 @@ static int blameWalk(
         }
       }else if( haveCurTable ){
         rc = blameCompareAgainstRef(db, pCur, zTableName,
-                                    &curTableRoot, curFlags,
+                                    curFlags,
                                     0, &walk, &commit);
         if( rc!=SQLITE_OK ){
           doltliteCommitClear(&commit);
@@ -601,7 +598,7 @@ static int blameWalk(
         rc = doltliteLoadCommit(db, pParent, &parentCommit);
         if( rc==SQLITE_OK ){
           rc = blameCompareAgainstRef(db, pCur, zTableName,
-                                      &curTableRoot, curFlags,
+                                      curFlags,
                                       &parentCommit.catalogHash,
                                       &walk, &commit);
           doltliteCommitClear(&parentCommit);
@@ -612,7 +609,7 @@ static int blameWalk(
         }
       }else if( haveCurTable ){
         rc = blameCompareAgainstRef(db, pCur, zTableName,
-                                    &curTableRoot, curFlags,
+                                    curFlags,
                                     0, &walk, &commit);
         if( rc!=SQLITE_OK ){
           doltliteCommitClear(&commit);
