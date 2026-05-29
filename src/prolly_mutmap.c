@@ -12,24 +12,8 @@
 #define MUTMAP_RADIX_SORT_MIN 128
 
 i64 prollyMutMapEntryIntKey(const ProllyMutMapEntry *e){
-  const u8 *p = e->pKey;
-  u64 u;
-  if( e->nKey != 8 || p == 0 ) return 0;
-  u = ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40) | ((u64)p[3]<<32)
-    | ((u64)p[4]<<24) | ((u64)p[5]<<16) | ((u64)p[6]<<8) | (u64)p[7];
-  return (i64)(u ^ ((u64)1 << 63));
-}
-
-static void encodeIntKeyBE(i64 v, u8 buf[8]){
-  u64 u = ((u64)v) ^ ((u64)1 << 63);
-  buf[0] = (u8)(u >> 56);
-  buf[1] = (u8)(u >> 48);
-  buf[2] = (u8)(u >> 40);
-  buf[3] = (u8)(u >> 32);
-  buf[4] = (u8)(u >> 24);
-  buf[5] = (u8)(u >> 16);
-  buf[6] = (u8)(u >> 8);
-  buf[7] = (u8)u;
+  if( e->nKey != 8 || e->pKey == 0 ) return 0;
+  return prollyDecodeIntKey(e->pKey);
 }
 
 static void prepKey(ProllyMutMap *mm,
@@ -40,7 +24,7 @@ static void prepKey(ProllyMutMap *mm,
     assert( intKey == 0 );
     return;
   }
-  encodeIntKeyBE(intKey, buf);
+  prollyEncodeIntKey(intKey, buf);
   *ppKey = buf;
   *pnKey = 8;
 }

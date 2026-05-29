@@ -62,6 +62,8 @@ int prollyNodeSearchInt(const ProllyNode *pNode, i64 intKey, int *pRes);
 
 void prollyEncodeIntKey(i64 v, u8 buf[8]);
 
+i64 prollyDecodeIntKey(const u8 *p);
+
 typedef struct ProllyNodeBuilder ProllyNodeBuilder;
 struct ProllyNodeBuilder {
   u8 level;

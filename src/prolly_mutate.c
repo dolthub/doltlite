@@ -312,100 +312,78 @@ streaming_cleanup:
   return rc;
 }
 
-static void nodeAppendState(const ProllyNode *pNode,
-                            const u8 *pKey, int nKey,
-                            int nVal,
-                            int *pEndsAtBoundary,
-                            int *pWouldSplit){
-  int i;
-  int nBytes = 0;
-  int thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
-  int endsAtBoundary = 0;
-  int wouldSplit = 0;
-
-  for(i=0; i<(int)pNode->nItems; i++){
-    const u8 *pK, *pV;
-    int nK, nV;
-    prollyNodeKey(pNode, i, &pK, &nK);
-    prollyNodeValue(pNode, i, &pV, &nV);
-    (void)pK; (void)pV;
-    nBytes += PROLLY_NODE_ENTRY_BYTES(pNode->level, nK, nV);
-  }
-  if( pNode->nItems>0 && nBytes >= PROLLY_CHUNK_MAX ){
-    endsAtBoundary = 1;
-  }else if( pNode->nItems>0 && nBytes >= PROLLY_CHUNK_MIN ){
-    const u8 *pLastKey, *pLastVal;
-    int nLastKey, nLastVal;
-    u32 h;
-    prollyNodeKey(pNode, (int)pNode->nItems - 1, &pLastKey, &nLastKey);
-    prollyNodeValue(pNode, (int)pNode->nItems - 1, &pLastVal, &nLastVal);
-    (void)pLastVal;
-    h = prollyXXH32(pLastKey, nLastKey, (u32)pNode->level);
-    endsAtBoundary = prollyWeibullCheck((u32)nBytes,
-                                        (u32)PROLLY_NODE_ENTRY_BYTES(
-                                          pNode->level, nLastKey, nLastVal),
-                                        h);
-  }
-
-  nBytes += thisSize;
-  if( nBytes >= PROLLY_CHUNK_MAX ){
-    wouldSplit = 1;
-  }else if( nBytes >= PROLLY_CHUNK_MIN ){
-    u32 h = prollyXXH32(pKey, nKey, 0);
-    wouldSplit = prollyWeibullCheck((u32)nBytes, (u32)thisSize, h);
-  }
-
-  *pEndsAtBoundary = endsAtBoundary;
-  *pWouldSplit = wouldSplit;
-}
-
-static int appendWouldSplitNode(const ProllyNode *pNode,
-                                const u8 *pKey, int nKey,
-                                int nVal){
-  int i;
-  int nBytes = 0;
-  int thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
-  for(i=0; i<(int)pNode->nItems; i++){
-    const u8 *pK, *pV;
-    int nK, nV;
-    prollyNodeKey(pNode, i, &pK, &nK);
-    prollyNodeValue(pNode, i, &pV, &nV);
-    (void)pK; (void)pV;
-    nBytes += PROLLY_NODE_ENTRY_BYTES(pNode->level, nK, nV);
-  }
-  nBytes += thisSize;
+/* Boundary predicate shared with the chunker (prolly_chunker.c addToLevel): an
+** entry of thisSize bytes whose key is pKey closes a chunk when the running
+** byte count reaches PROLLY_CHUNK_MAX, or PROLLY_CHUNK_MIN and the Weibull
+** roll fires. Seeded with the node level so leaves and internal nodes match
+** the shapes the chunker produces. */
+static int chunkBoundary(int nBytes, int thisSize,
+                         const u8 *pKey, int nKey, u8 level){
   if( nBytes >= PROLLY_CHUNK_MAX ) return 1;
   if( nBytes >= PROLLY_CHUNK_MIN ){
-    u32 h = prollyXXH32(pKey, nKey, (u32)pNode->level);
+    u32 h = prollyXXH32(pKey, nKey, (u32)level);
     return prollyWeibullCheck((u32)nBytes, (u32)thisSize, h);
   }
   return 0;
 }
 
+static int nodeTotalBytes(const ProllyNode *pNode){
+  int i;
+  int nBytes = 0;
+  for(i=0; i<(int)pNode->nItems; i++){
+    const u8 *pK, *pV;
+    int nK, nV;
+    prollyNodeKey(pNode, i, &pK, &nK);
+    prollyNodeValue(pNode, i, &pV, &nV);
+    (void)pK; (void)pV;
+    nBytes += PROLLY_NODE_ENTRY_BYTES(pNode->level, nK, nV);
+  }
+  return nBytes;
+}
+
+static void nodeAppendState(const ProllyNode *pNode,
+                            const u8 *pKey, int nKey,
+                            int nVal,
+                            int *pEndsAtBoundary,
+                            int *pWouldSplit){
+  int nBytes = nodeTotalBytes(pNode);
+  int thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
+
+  *pEndsAtBoundary = 0;
+  if( pNode->nItems>0 ){
+    const u8 *pLastKey, *pLastVal;
+    int nLastKey, nLastVal;
+    prollyNodeKey(pNode, (int)pNode->nItems - 1, &pLastKey, &nLastKey);
+    prollyNodeValue(pNode, (int)pNode->nItems - 1, &pLastVal, &nLastVal);
+    *pEndsAtBoundary = chunkBoundary(nBytes,
+        PROLLY_NODE_ENTRY_BYTES(pNode->level, nLastKey, nLastVal),
+        pLastKey, nLastKey, pNode->level);
+  }
+
+  *pWouldSplit = chunkBoundary(nBytes + thisSize, thisSize,
+                               pKey, nKey, pNode->level);
+}
+
+static int appendWouldSplitNode(const ProllyNode *pNode,
+                                const u8 *pKey, int nKey,
+                                int nVal){
+  int thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
+  int nBytes = nodeTotalBytes(pNode) + thisSize;
+  return chunkBoundary(nBytes, thisSize, pKey, nKey, pNode->level);
+}
+
 static int nodeEndsAtChunkBoundary(const ProllyNode *pNode){
   const u8 *pKey, *pVal;
   int nKey, nVal;
-  int nBytes = 0;
-  int i;
+  int nBytes;
 
   if( pNode->nItems==0 ) return 0;
-  for(i=0; i<(int)pNode->nItems; i++){
-    prollyNodeKey(pNode, i, &pKey, &nKey);
-    prollyNodeValue(pNode, i, &pVal, &nVal);
-    (void)pVal;
-    nBytes += PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
-  }
-  if( nBytes >= PROLLY_CHUNK_MAX ) return 1;
-  if( nBytes >= PROLLY_CHUNK_MIN ){
-    u32 h;
-    prollyNodeKey(pNode, (int)pNode->nItems - 1, &pKey, &nKey);
-    prollyNodeValue(pNode, (int)pNode->nItems - 1, &pVal, &nVal);
-    h = prollyXXH32(pKey, nKey, (u32)pNode->level);
-    return prollyWeibullCheck((u32)nBytes,
-                              (u32)PROLLY_NODE_ENTRY_BYTES(pNode->level,
-                                                           nKey, nVal), h);
-  }
-  return 0;
+  nBytes = nodeTotalBytes(pNode);
+  prollyNodeKey(pNode, (int)pNode->nItems - 1, &pKey, &nKey);
+  prollyNodeValue(pNode, (int)pNode->nItems - 1, &pVal, &nVal);
+  return chunkBoundary(nBytes,
+                       PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal),
+                       pKey, nKey, pNode->level);
 }
 
 static int nodeHasSameChunkShape(const ProllyNode *pNode,
@@ -417,7 +395,7 @@ static int nodeHasSameChunkShape(const ProllyNode *pNode,
 
   if( pNode->nItems==0 ) return 0;
   for(i=0; i<(int)pNode->nItems; i++){
-    int isBoundary = 0;
+    int isBoundary;
     int thisSize;
 
     prollyNodeKey(pNode, i, &pKey, &nKey);
@@ -425,12 +403,7 @@ static int nodeHasSameChunkShape(const ProllyNode *pNode,
     (void)pVal;
     thisSize = PROLLY_NODE_ENTRY_BYTES(pNode->level, nKey, nVal);
     nBytes += thisSize;
-    if( nBytes >= PROLLY_CHUNK_MAX ){
-      isBoundary = 1;
-    }else if( nBytes >= PROLLY_CHUNK_MIN ){
-      u32 h = prollyXXH32(pKey, nKey, (u32)pNode->level);
-      isBoundary = prollyWeibullCheck((u32)nBytes, (u32)thisSize, h);
-    }
+    isBoundary = chunkBoundary(nBytes, thisSize, pKey, nKey, pNode->level);
 
     if( i<(int)pNode->nItems - 1 && isBoundary ){
       return 0;

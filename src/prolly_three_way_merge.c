@@ -120,6 +120,57 @@ static int fmResolveAndEmit(
   return SQLITE_OK;
 }
 
+typedef struct FmKey FmKey;
+struct FmKey {
+  const u8 *p;
+  int n;
+  i64 i;
+  int has;
+};
+
+static void fmKeyFromNode(u8 flags, const ProllyNode *pN, int idx, FmKey *pK){
+  pK->p = 0; pK->n = 0; pK->i = 0;
+  pK->has = idx < (int)pN->nItems;
+  if( pK->has ){
+    prollyNodeKey(pN, idx, &pK->p, &pK->n);
+    if( flags & PROLLY_NODE_INTKEY ) pK->i = prollyNodeIntKey(pN, idx);
+  }
+}
+
+static void fmKeyFromCursor(u8 flags, ProllyCursor *pC, FmKey *pK){
+  pK->p = 0; pK->n = 0; pK->i = 0;
+  pK->has = prollyCursorIsValid(pC);
+  if( pK->has ){
+    prollyCursorKey(pC, &pK->p, &pK->n);
+    if( flags & PROLLY_NODE_INTKEY ) pK->i = prollyCursorIntKey(pC);
+  }
+}
+
+/* Pick the smallest of the three present keys into *pMin, then reset each
+** input's .has to whether that side actually holds the min key (the rest of
+** the merge advances exactly the sides flagged here). */
+static void fmSelectMinKey(u8 flags, FmKey *pA, FmKey *pO, FmKey *pT, FmKey *pMin){
+  FmKey *aSide[3];
+  int minSide = -1;
+  int s;
+  aSide[0] = pA; aSide[1] = pO; aSide[2] = pT;
+  for( s = 0; s < 3; s++ ){
+    if( !aSide[s]->has ) continue;
+    if( minSide < 0
+     || prollyCompareKeys(flags, aSide[s]->p, aSide[s]->n, aSide[s]->i,
+                          aSide[minSide]->p, aSide[minSide]->n, aSide[minSide]->i) < 0 ){
+      minSide = s;
+    }
+  }
+  *pMin = *aSide[minSide];
+  for( s = 0; s < 3; s++ ){
+    if( aSide[s]->has ){
+      aSide[s]->has = prollyCompareKeys(flags, aSide[s]->p, aSide[s]->n, aSide[s]->i,
+                                        pMin->p, pMin->n, pMin->i) == 0;
+    }
+  }
+}
+
 static int fmMergeLeaves(
   FmCtx *fm, ProllyChunker *pCh,
   const ProllyNode *pAncN,
@@ -132,92 +183,28 @@ static int fmMergeLeaves(
   while( ai < (int)pAncN->nItems
       || oi < (int)pOursN->nItems
       || ti < (int)pTheirsN->nItems ){
-    const u8 *pAK = 0, *pOK = 0, *pTK = 0;
-    int nAK = 0, nOK = 0, nTK = 0;
+    FmKey ka, ko, kt, kmin;
     const u8 *pAV = 0, *pOV = 0, *pTV = 0;
     int nAV = 0, nOV = 0, nTV = 0;
-    i64 iAKey = 0, iOKey = 0, iTKey = 0;
-    int has_a = 0, has_o = 0, has_t = 0;
-    const u8 *pK = 0;
-    int nK = 0;
-    i64 iK = 0;
 
-    if( ai < (int)pAncN->nItems ){
-      prollyNodeKey(pAncN, ai, &pAK, &nAK);
-      if( fm->flags & PROLLY_NODE_INTKEY ) iAKey = prollyNodeIntKey(pAncN, ai);
-    }
-    if( oi < (int)pOursN->nItems ){
-      prollyNodeKey(pOursN, oi, &pOK, &nOK);
-      if( fm->flags & PROLLY_NODE_INTKEY ) iOKey = prollyNodeIntKey(pOursN, oi);
-    }
-    if( ti < (int)pTheirsN->nItems ){
-      prollyNodeKey(pTheirsN, ti, &pTK, &nTK);
-      if( fm->flags & PROLLY_NODE_INTKEY ) iTKey = prollyNodeIntKey(pTheirsN, ti);
-    }
+    fmKeyFromNode(fm->flags, pAncN, ai, &ka);
+    fmKeyFromNode(fm->flags, pOursN, oi, &ko);
+    fmKeyFromNode(fm->flags, pTheirsN, ti, &kt);
+    fmSelectMinKey(fm->flags, &ka, &ko, &kt, &kmin);
 
-    {
-      int hasAny[3];
-      int minSide = -1;
-      int s;
-      const u8 *pCK; int nCK; i64 iCK;
-      const u8 *pMK; int nMK; i64 iMK;
-      int cmp;
+    if( ka.has ) prollyNodeValue(pAncN, ai, &pAV, &nAV);
+    if( ko.has ) prollyNodeValue(pOursN, oi, &pOV, &nOV);
+    if( kt.has ) prollyNodeValue(pTheirsN, ti, &pTV, &nTV);
 
-      hasAny[0] = (ai < (int)pAncN->nItems);
-      hasAny[1] = (oi < (int)pOursN->nItems);
-      hasAny[2] = (ti < (int)pTheirsN->nItems);
-
-      for( s = 0; s < 3; s++ ){
-        if( !hasAny[s] ) continue;
-        if( minSide < 0 ){ minSide = s; continue; }
-        if( s == 0 ){ pCK = pAK; nCK = nAK; iCK = iAKey; }
-        else if( s == 1 ){ pCK = pOK; nCK = nOK; iCK = iOKey; }
-        else { pCK = pTK; nCK = nTK; iCK = iTKey; }
-        if( minSide == 0 ){ pMK = pAK; nMK = nAK; iMK = iAKey; }
-        else if( minSide == 1 ){ pMK = pOK; nMK = nOK; iMK = iOKey; }
-        else { pMK = pTK; nMK = nTK; iMK = iTKey; }
-        cmp = prollyCompareKeys(fm->flags,
-                                 pCK, nCK, iCK,
-                                 pMK, nMK, iMK);
-        if( cmp < 0 ) minSide = s;
-      }
-      if( minSide == 0 ){ pK = pAK; nK = nAK; iK = iAKey; }
-      else if( minSide == 1 ){ pK = pOK; nK = nOK; iK = iOKey; }
-      else { pK = pTK; nK = nTK; iK = iTKey; }
-
-      if( hasAny[0] ){
-        cmp = prollyCompareKeys(fm->flags,
-                                 pAK, nAK, iAKey,
-                                 pK, nK, iK);
-        has_a = (cmp == 0);
-      }
-      if( hasAny[1] ){
-        cmp = prollyCompareKeys(fm->flags,
-                                     pOK, nOK, iOKey,
-                                     pK, nK, iK);
-        has_o = (cmp == 0);
-      }
-      if( hasAny[2] ){
-        cmp = prollyCompareKeys(fm->flags,
-                                 pTK, nTK, iTKey,
-                                 pK, nK, iK);
-        has_t = (cmp == 0);
-      }
-    }
-
-    if( has_a ) prollyNodeValue(pAncN, ai, &pAV, &nAV);
-    if( has_o ) prollyNodeValue(pOursN, oi, &pOV, &nOV);
-    if( has_t ) prollyNodeValue(pTheirsN, ti, &pTV, &nTV);
-
-    rc = fmResolveAndEmit(pCh, pK, nK,
-                           has_a, pAV, nAV,
-                           has_o, pOV, nOV,
-                           has_t, pTV, nTV);
+    rc = fmResolveAndEmit(pCh, kmin.p, kmin.n,
+                           ka.has, pAV, nAV,
+                           ko.has, pOV, nOV,
+                           kt.has, pTV, nTV);
     if( rc != SQLITE_OK ) return rc;
 
-    if( has_a ) ai++;
-    if( has_o ) oi++;
-    if( has_t ) ti++;
+    if( ka.has ) ai++;
+    if( ko.has ) oi++;
+    if( kt.has ) ti++;
   }
 
   return SQLITE_OK;
@@ -232,78 +219,28 @@ static int fmCursorMerge(
   while( prollyCursorIsValid(pAncC)
       || prollyCursorIsValid(pOursC)
       || prollyCursorIsValid(pTheirsC) ){
-    int hasAny[3];
-    const u8 *pAK = 0, *pOK = 0, *pTK = 0;
-    int nAK = 0, nOK = 0, nTK = 0;
-    i64 iAKey = 0, iOKey = 0, iTKey = 0;
+    FmKey ka, ko, kt, kmin;
     const u8 *pAV = 0, *pOV = 0, *pTV = 0;
     int nAV = 0, nOV = 0, nTV = 0;
-    int has_a = 0, has_o = 0, has_t = 0;
-    const u8 *pK; int nK; i64 iK;
-    int minSide = -1;
-    int s, cmp;
-    const u8 *pCK; int nCK; i64 iCK;
-    const u8 *pMK; int nMK; i64 iMK;
 
-    hasAny[0] = prollyCursorIsValid(pAncC);
-    hasAny[1] = prollyCursorIsValid(pOursC);
-    hasAny[2] = prollyCursorIsValid(pTheirsC);
+    fmKeyFromCursor(fm->flags, pAncC, &ka);
+    fmKeyFromCursor(fm->flags, pOursC, &ko);
+    fmKeyFromCursor(fm->flags, pTheirsC, &kt);
+    fmSelectMinKey(fm->flags, &ka, &ko, &kt, &kmin);
 
-    if( hasAny[0] ){
-      prollyCursorKey(pAncC, &pAK, &nAK);
-      if( fm->flags & PROLLY_NODE_INTKEY ) iAKey = prollyCursorIntKey(pAncC);
-    }
-    if( hasAny[1] ){
-      prollyCursorKey(pOursC, &pOK, &nOK);
-      if( fm->flags & PROLLY_NODE_INTKEY ) iOKey = prollyCursorIntKey(pOursC);
-    }
-    if( hasAny[2] ){
-      prollyCursorKey(pTheirsC, &pTK, &nTK);
-      if( fm->flags & PROLLY_NODE_INTKEY ) iTKey = prollyCursorIntKey(pTheirsC);
-    }
+    if( ka.has ) prollyCursorValue(pAncC, &pAV, &nAV);
+    if( ko.has ) prollyCursorValue(pOursC, &pOV, &nOV);
+    if( kt.has ) prollyCursorValue(pTheirsC, &pTV, &nTV);
 
-    for( s = 0; s < 3; s++ ){
-      if( !hasAny[s] ) continue;
-      if( minSide < 0 ){ minSide = s; continue; }
-      if( s == 0 ){ pCK = pAK; nCK = nAK; iCK = iAKey; }
-      else if( s == 1 ){ pCK = pOK; nCK = nOK; iCK = iOKey; }
-      else { pCK = pTK; nCK = nTK; iCK = iTKey; }
-      if( minSide == 0 ){ pMK = pAK; nMK = nAK; iMK = iAKey; }
-      else if( minSide == 1 ){ pMK = pOK; nMK = nOK; iMK = iOKey; }
-      else { pMK = pTK; nMK = nTK; iMK = iTKey; }
-      cmp = prollyCompareKeys(fm->flags, pCK, nCK, iCK, pMK, nMK, iMK);
-      if( cmp < 0 ) minSide = s;
-    }
-    if( minSide == 0 ){ pK = pAK; nK = nAK; iK = iAKey; }
-    else if( minSide == 1 ){ pK = pOK; nK = nOK; iK = iOKey; }
-    else { pK = pTK; nK = nTK; iK = iTKey; }
-
-    if( hasAny[0] ){
-      cmp = prollyCompareKeys(fm->flags, pAK, nAK, iAKey, pK, nK, iK);
-      has_a = (cmp == 0);
-    }
-    if( hasAny[1] ){
-      cmp = prollyCompareKeys(fm->flags, pOK, nOK, iOKey, pK, nK, iK);
-      has_o = (cmp == 0);
-    }
-    if( hasAny[2] ){
-      cmp = prollyCompareKeys(fm->flags, pTK, nTK, iTKey, pK, nK, iK);
-      has_t = (cmp == 0);
-    }
-
-    if( has_a ) prollyCursorValue(pAncC, &pAV, &nAV);
-    if( has_o ) prollyCursorValue(pOursC, &pOV, &nOV);
-    if( has_t ) prollyCursorValue(pTheirsC, &pTV, &nTV);
-
-    rc = fmResolveAndEmit(pCh, pK, nK,
-                           has_a, pAV, nAV,
-                           has_o, pOV, nOV,
-                           has_t, pTV, nTV);
+    rc = fmResolveAndEmit(pCh, kmin.p, kmin.n,
+                           ka.has, pAV, nAV,
+                           ko.has, pOV, nOV,
+                           kt.has, pTV, nTV);
     if( rc != SQLITE_OK ) return rc;
 
-    if( has_a ){ rc = prollyCursorNext(pAncC); if( rc != SQLITE_OK ) return rc; }
-    if( has_o ){ rc = prollyCursorNext(pOursC); if( rc != SQLITE_OK ) return rc; }
-    if( has_t ){ rc = prollyCursorNext(pTheirsC); if( rc != SQLITE_OK ) return rc; }
+    if( ka.has ){ rc = prollyCursorNext(pAncC); if( rc != SQLITE_OK ) return rc; }
+    if( ko.has ){ rc = prollyCursorNext(pOursC); if( rc != SQLITE_OK ) return rc; }
+    if( kt.has ){ rc = prollyCursorNext(pTheirsC); if( rc != SQLITE_OK ) return rc; }
   }
 
   return SQLITE_OK;

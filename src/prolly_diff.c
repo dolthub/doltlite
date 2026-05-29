@@ -579,6 +579,26 @@ static void diffIterFreeCopies(ProllyDiffIter *pIter){
   pIter->nNewValCopy = 0;
 }
 
+/* Copy a cursor value into the iterator-owned buffer and point the change at
+** it. On OOM sets pIter->rc and returns SQLITE_NOMEM; nSrc==0 leaves an empty
+** (null) value. */
+static int diffSetChangeVal(
+  ProllyDiffIter *pIter,
+  u8 **ppCopy, int *pnCopy,
+  const u8 **ppOut, int *pnOut,
+  const u8 *pSrc, int nSrc
+){
+  if( nSrc > 0 ){
+    *ppCopy = sqlite3_malloc(nSrc);
+    if( !*ppCopy ){ pIter->rc = SQLITE_NOMEM; return SQLITE_NOMEM; }
+    memcpy(*ppCopy, pSrc, nSrc);
+    *pnCopy = nSrc;
+  }
+  *ppOut = *ppCopy;
+  *pnOut = *pnCopy;
+  return SQLITE_OK;
+}
+
 int prollyDiffIterOpen(
   ProllyDiffIter *pIter,
   ChunkStore *pStore,
@@ -666,14 +686,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
         pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->flags);
         if( pIter->rc!=SQLITE_OK ) return pIter->rc;
         prollyCursorValue(pOld, &pVal, &nVal);
-        if( nVal > 0 ){
-          pIter->pOldValCopy = sqlite3_malloc(nVal);
-          if( !pIter->pOldValCopy ){ pIter->rc = SQLITE_NOMEM; return SQLITE_NOMEM; }
-          memcpy(pIter->pOldValCopy, pVal, nVal);
-          pIter->nOldValCopy = nVal;
-        }
-        pCh->pOldVal = pIter->pOldValCopy;
-        pCh->nOldVal = pIter->nOldValCopy;
+        if( diffSetChangeVal(pIter, &pIter->pOldValCopy, &pIter->nOldValCopy,
+                             &pCh->pOldVal, &pCh->nOldVal, pVal, nVal) ) return SQLITE_NOMEM;
         pIter->rc = prollyCursorNext(pOld);
         break;
       }else if( cmp > 0 ){
@@ -683,14 +697,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
         pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
         if( pIter->rc!=SQLITE_OK ) return pIter->rc;
         prollyCursorValue(pNew, &pVal, &nVal);
-        if( nVal > 0 ){
-          pIter->pNewValCopy = sqlite3_malloc(nVal);
-          if( !pIter->pNewValCopy ){ pIter->rc = SQLITE_NOMEM; return SQLITE_NOMEM; }
-          memcpy(pIter->pNewValCopy, pVal, nVal);
-          pIter->nNewValCopy = nVal;
-        }
-        pCh->pNewVal = pIter->pNewValCopy;
-        pCh->nNewVal = pIter->nNewValCopy;
+        if( diffSetChangeVal(pIter, &pIter->pNewValCopy, &pIter->nNewValCopy,
+                             &pCh->pNewVal, &pCh->nNewVal, pVal, nVal) ) return SQLITE_NOMEM;
         pIter->rc = prollyCursorNext(pNew);
         break;
       }else{
@@ -710,22 +718,10 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
           if( pIter->rc!=SQLITE_OK ) return pIter->rc;
           prollyCursorValue(pOld, &pOV, &nOV);
           prollyCursorValue(pNew, &pNV, &nNV);
-          if( nOV > 0 ){
-            pIter->pOldValCopy = sqlite3_malloc(nOV);
-            if( !pIter->pOldValCopy ){ pIter->rc = SQLITE_NOMEM; return SQLITE_NOMEM; }
-            memcpy(pIter->pOldValCopy, pOV, nOV);
-            pIter->nOldValCopy = nOV;
-          }
-          if( nNV > 0 ){
-            pIter->pNewValCopy = sqlite3_malloc(nNV);
-            if( !pIter->pNewValCopy ){ pIter->rc = SQLITE_NOMEM; return SQLITE_NOMEM; }
-            memcpy(pIter->pNewValCopy, pNV, nNV);
-            pIter->nNewValCopy = nNV;
-          }
-          pCh->pOldVal = pIter->pOldValCopy;
-          pCh->nOldVal = pIter->nOldValCopy;
-          pCh->pNewVal = pIter->pNewValCopy;
-          pCh->nNewVal = pIter->nNewValCopy;
+          if( diffSetChangeVal(pIter, &pIter->pOldValCopy, &pIter->nOldValCopy,
+                               &pCh->pOldVal, &pCh->nOldVal, pOV, nOV) ) return SQLITE_NOMEM;
+          if( diffSetChangeVal(pIter, &pIter->pNewValCopy, &pIter->nNewValCopy,
+                               &pCh->pNewVal, &pCh->nNewVal, pNV, nNV) ) return SQLITE_NOMEM;
           pIter->rc = prollyCursorNext(pOld);
           if( pIter->rc==SQLITE_OK ) pIter->rc = prollyCursorNext(pNew);
           break;
@@ -738,14 +734,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
       pIter->rc = diffIterCopyKey(pIter, pCh, pOld, pIter->flags);
       if( pIter->rc!=SQLITE_OK ) return pIter->rc;
       prollyCursorValue(pOld, &pVal, &nVal);
-      if( nVal > 0 ){
-        pIter->pOldValCopy = sqlite3_malloc(nVal);
-        if( !pIter->pOldValCopy ){ pIter->rc = SQLITE_NOMEM; return SQLITE_NOMEM; }
-        memcpy(pIter->pOldValCopy, pVal, nVal);
-        pIter->nOldValCopy = nVal;
-      }
-      pCh->pOldVal = pIter->pOldValCopy;
-      pCh->nOldVal = pIter->nOldValCopy;
+      if( diffSetChangeVal(pIter, &pIter->pOldValCopy, &pIter->nOldValCopy,
+                           &pCh->pOldVal, &pCh->nOldVal, pVal, nVal) ) return SQLITE_NOMEM;
       pIter->rc = prollyCursorNext(pOld);
       break;
     }else{
@@ -755,14 +745,8 @@ int prollyDiffIterStep(ProllyDiffIter *pIter, ProllyDiffChange **ppChange){
       pIter->rc = diffIterCopyKey(pIter, pCh, pNew, pIter->flags);
       if( pIter->rc!=SQLITE_OK ) return pIter->rc;
       prollyCursorValue(pNew, &pVal, &nVal);
-      if( nVal > 0 ){
-        pIter->pNewValCopy = sqlite3_malloc(nVal);
-        if( !pIter->pNewValCopy ){ pIter->rc = SQLITE_NOMEM; return SQLITE_NOMEM; }
-        memcpy(pIter->pNewValCopy, pVal, nVal);
-        pIter->nNewValCopy = nVal;
-      }
-      pCh->pNewVal = pIter->pNewValCopy;
-      pCh->nNewVal = pIter->nNewValCopy;
+      if( diffSetChangeVal(pIter, &pIter->pNewValCopy, &pIter->nNewValCopy,
+                           &pCh->pNewVal, &pCh->nNewVal, pVal, nVal) ) return SQLITE_NOMEM;
       pIter->rc = prollyCursorNext(pNew);
       break;
     }

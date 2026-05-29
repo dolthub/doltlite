@@ -7826,11 +7826,11 @@ struct Pager *sqlite3BtreePager(Btree *p){
   return p->pOps->xPager(p);
 }
 
-static int prollyBtCursorCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
-  struct TableEntry *pTE;
-  (void)db;
-
-  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+/* Drain any pending mutations for this cursor's table into the tree root so a
+** count walks committed data. Mirrors the snapshot/apply/clear sequence used
+** on the write path. */
+static int flushPendingForCount(BtCursor *pCur){
+  struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   if( pTE && pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     if( !prollyMutMapIsEmpty(pMap) ){
@@ -7852,6 +7852,14 @@ static int prollyBtCursorCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
     }
   }
   flushIfNeeded(pCur);
+  return SQLITE_OK;
+}
+
+static int prollyBtCursorCount(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
+  int rc;
+  (void)db;
+  rc = flushPendingForCount(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   return countTreeEntries(pCur->pBtree, pCur->pgnoRoot, pnEntry);
 }
 
@@ -7862,31 +7870,10 @@ static int prollyBtCursorCountRange(
   i64 iUpper,
   i64 *pnEntry
 ){
-  struct TableEntry *pTE;
+  int rc;
   (void)db;
-
-  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-  if( pTE && pTE->pPending ){
-    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-    if( !prollyMutMapIsEmpty(pMap) ){
-      ProllyMutMap *pFlushMap = pMap;
-      int captured = 0;
-      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
-                                       (ProllyMutMap**)&pTE->pPending,
-                                       &pFlushMap, &captured);
-      if( rc!=SQLITE_OK ) return rc;
-      if( captured ){
-        refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
-                                   (ProllyMutMap*)pTE->pPending);
-      }
-      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
-      if( rc!=SQLITE_OK ) return rc;
-      if( pTE->pPending==pMap ){
-        prollyMutMapClear(pMap);
-      }
-    }
-  }
-  flushIfNeeded(pCur);
+  rc = flushPendingForCount(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   return countTreeIntRange(pCur->pBtree, pCur->pgnoRoot,
                            iLower, iUpper, pnEntry);
 }
@@ -7898,32 +7885,11 @@ static int prollyBtCursorCountIndexRange(
   UnpackedRecord *pUpper,
   i64 *pnEntry
 ){
-  struct TableEntry *pTE;
+  int rc;
   (void)db;
-
   if( pCur->curIntKey ) return SQLITE_NOTFOUND;
-  pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-  if( pTE && pTE->pPending ){
-    ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-    if( !prollyMutMapIsEmpty(pMap) ){
-      ProllyMutMap *pFlushMap = pMap;
-      int captured = 0;
-      int rc = snapshotPendingForFlush(pCur->pBtree, pCur->pgnoRoot,
-                                       (ProllyMutMap**)&pTE->pPending,
-                                       &pFlushMap, &captured);
-      if( rc!=SQLITE_OK ) return rc;
-      if( captured ){
-        refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
-                                   (ProllyMutMap*)pTE->pPending);
-      }
-      rc = applyMutMapToTableRoot(pCur->pBt, pTE, pFlushMap);
-      if( rc!=SQLITE_OK ) return rc;
-      if( pTE->pPending==pMap ){
-        prollyMutMapClear(pMap);
-      }
-    }
-  }
-  flushIfNeeded(pCur);
+  rc = flushPendingForCount(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   return countTreeBlobPrefixRange(pCur, pLower, pUpper, pnEntry);
 }
 
