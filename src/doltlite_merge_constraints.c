@@ -158,12 +158,6 @@ static int fkRefreshAppendName(char ***pazNames, int *pnNames, const char *zName
   return SQLITE_OK;
 }
 
-static void fkRefreshFreeNames(char **azNames, int nNames){
-  int i;
-  for(i=0; i<nNames; i++) sqlite3_free(azNames[i]);
-  sqlite3_free(azNames);
-}
-
 static int fkRefreshCandidateTables(sqlite3 *db, int *pChanged){
   sqlite3_stmt *pStmt = 0;
   char **azNames = 0;
@@ -181,13 +175,13 @@ static int fkRefreshCandidateTables(sqlite3 *db, int *pChanged){
     if( rc==SQLITE_OK ) rc = fkRefreshAppendName(&azNames, &nNames, zParent);
     if( rc!=SQLITE_OK ){
       sqlite3_finalize(pStmt);
-      fkRefreshFreeNames(azNames, nNames);
+      doltliteFreeStringArray(azNames, nNames);
       return rc;
     }
   }
   sqlite3_finalize(pStmt);
   if( stepRc!=SQLITE_DONE ){
-    fkRefreshFreeNames(azNames, nNames);
+    doltliteFreeStringArray(azNames, nNames);
     return stepRc;
   }
 
@@ -198,17 +192,17 @@ static int fkRefreshCandidateTables(sqlite3 *db, int *pChanged){
     }
     zSql = sqlite3_mprintf("REINDEX \"%w\"", azNames[i]);
     if( !zSql ){
-      fkRefreshFreeNames(azNames, nNames);
+      doltliteFreeStringArray(azNames, nNames);
       return SQLITE_NOMEM;
     }
     rc = sqlite3_exec(db, zSql, 0, 0, 0);
     sqlite3_free(zSql);
     if( rc!=SQLITE_OK ){
-      fkRefreshFreeNames(azNames, nNames);
+      doltliteFreeStringArray(azNames, nNames);
       return rc;
     }
   }
-  fkRefreshFreeNames(azNames, nNames);
+  doltliteFreeStringArray(azNames, nNames);
   if( pChanged ) *pChanged = (nNames>0);
   return SQLITE_OK;
 }
@@ -221,10 +215,8 @@ struct MergePkInfo {
 };
 
 static void freeMergePkInfo(MergePkInfo *pPk){
-  int i;
   if( !pPk ) return;
-  for(i=0; i<pPk->nPk; i++) sqlite3_free(pPk->azPk[i]);
-  sqlite3_free(pPk->azPk);
+  doltliteFreeStringArray(pPk->azPk, pPk->nPk);
   sqlite3_free(pPk->zPkCols);
   memset(pPk, 0, sizeof(*pPk));
 }
@@ -278,8 +270,7 @@ static int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk){
   }
   sqlite3_finalize(pStmt);
   if( rc!=SQLITE_DONE && rc!=SQLITE_OK ){
-    for(i=0; i<nPk; i++) sqlite3_free(azPk[i]);
-    sqlite3_free(azPk);
+    doltliteFreeStringArray(azPk, nPk);
     return rc;
   }
 
@@ -287,8 +278,7 @@ static int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk){
   for(i=0; i<nPk; i++){
     if( !azPk[i] ){
       sqlite3_free(sqlite3_str_finish(pCols));
-      for(i=0; i<nPk; i++) sqlite3_free(azPk[i]);
-      sqlite3_free(azPk);
+      doltliteFreeStringArray(azPk, nPk);
       return SQLITE_CORRUPT;
     }
     if( i>0 ) sqlite3_str_appendall(pCols, ", ");
@@ -1382,13 +1372,6 @@ int doltliteDetectMergeCheckViolations(
   return rc;
 }
 
-static void freeStringArray(char **az, int n){
-  int i;
-  if( !az ) return;
-  for(i=0; i<n; i++) sqlite3_free(az[i]);
-  sqlite3_free(az);
-}
-
 static int detectFkViolationsForSpec(
   sqlite3 *db,
   struct TableEntry *aAnc, int nAnc,
@@ -1616,8 +1599,8 @@ int doltliteDetectMergeFkViolations(
             haveAnc ? aAnc : 0, haveAnc ? nAnc : 0,
             zTable, hasRowid, &childPk, zParent, curId,
             azFrom, azTo, nCol, &nFound);
-        freeStringArray(azFrom, nCol);
-        freeStringArray(azTo, nCol);
+        doltliteFreeStringArray(azFrom, nCol);
+        doltliteFreeStringArray(azTo, nCol);
         azFrom = 0; azTo = 0; nCol = 0; nAlloc = 0;
         sqlite3_free(zParent); zParent = 0;
         if( rc != SQLITE_OK ) break;
@@ -1669,8 +1652,8 @@ int doltliteDetectMergeFkViolations(
       }
     }
 
-    freeStringArray(azFrom, nCol);
-    freeStringArray(azTo, nCol);
+    doltliteFreeStringArray(azFrom, nCol);
+    doltliteFreeStringArray(azTo, nCol);
     sqlite3_free(zParent);
     sqlite3_finalize(pFk);
     freeMergePkInfo(&childPk);

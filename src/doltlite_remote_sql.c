@@ -144,8 +144,6 @@ static int remoteSqlResetSessionToCommit(
   return rc;
 }
 
-static void freeNameList(char **azNames, int nNames);
-
 static void doltRemoteFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db = sqlite3_context_db_handle(ctx);
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -351,7 +349,7 @@ static int parseRemoteBranchNames(
       for(i=0; i<nBr; i++){
         azNames[nNames] = sqlite3_mprintf("%s", aBr[i].zName);
         if( !azNames[nNames] ){
-          freeNameList(azNames, nNames);
+          doltliteFreeStringArray(azNames, nNames);
           chunkStoreClose(&refsView);
           return SQLITE_NOMEM;
         }
@@ -363,12 +361,6 @@ static int parseRemoteBranchNames(
   *pazNames = azNames;
   *pnNames = nNames;
   return SQLITE_OK;
-}
-
-static void freeNameList(char **azNames, int nNames){
-  int i;
-  for(i=0; i<nNames; i++) sqlite3_free(azNames[i]);
-  sqlite3_free(azNames);
 }
 
 static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
@@ -447,7 +439,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     for(i=0; i<nNames; i++){
       DoltliteRemote *pBrRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
       if( !pBrRemote ){
-        freeNameList(azNames, nNames);
+        doltliteFreeStringArray(azNames, nNames);
         (void)doltliteVcSealSavepointError(db);
         sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
         return;
@@ -455,13 +447,13 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       rc = doltliteFetch(cs, pBrRemote, zRemoteName, azNames[i]);
       pBrRemote->xClose(pBrRemote);
       if( rc!=SQLITE_OK ){
-        freeNameList(azNames, nNames);
+        doltliteFreeStringArray(azNames, nNames);
         (void)doltliteVcSealSavepointError(db);
         remoteSqlResultError(ctx, rc, "fetch failed");
         return;
       }
     }
-    freeNameList(azNames, nNames);
+    doltliteFreeStringArray(azNames, nNames);
   }
 
   if( pRemote ) pRemote->xClose(pRemote);
