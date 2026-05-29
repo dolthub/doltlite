@@ -78,9 +78,7 @@ int refsTableRemoteCount(const RefsTable *rt);
 /* Return the stored sequence for zTableName, or 0 if absent. */
 i64 refsTableGetSequence(const RefsTable *rt, const char *zTableName);
 
-const char *refsTableGetDefaultBranchName(const RefsTable *rt);
 const ProllyHash *refsTableGetHash(const RefsTable *rt);
-const ProllyHash *refsTableGetCommittedHash(const RefsTable *rt);
 
 void refsTableSetHash(RefsTable *rt, const ProllyHash *h);
 

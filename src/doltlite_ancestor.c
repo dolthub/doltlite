@@ -350,9 +350,6 @@ done:
   return rc;
 }
 
-extern int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
-extern int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit);
-
 static void doltMergeBaseFunc(
   sqlite3_context *ctx,
   int argc,

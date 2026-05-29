@@ -85,8 +85,6 @@ extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
 extern const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable);
 extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
 
-int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
-
 int doltliteMaterializeDefaultColumns(sqlite3 *db);
 
 typedef struct DoltliteTxnState DoltliteTxnState;

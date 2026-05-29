@@ -929,7 +929,6 @@ int chunkStoreGet(
     }
   }
 
-verify:
   {
     ProllyHash h;
     prollyHashCompute(*ppData, *pnData, &h);
