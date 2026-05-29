@@ -131,19 +131,8 @@ int doltliteBuildIndexSortKey(
     for(i=0; i<nOutField; i++){
       int col = aFieldOrder[i];
       int st = (useIpk && col==iPKey) ? (int)ipkType : info.aType[col];
-      int flen;
+      int flen = st>0 ? dlSerialTypeLen((u64)st) : 0;
       hdrLen += sqlite3VarintLen(st);
-      if( st<=0 ){ flen = 0; }
-      else if( st==1 ){ flen = 1; }
-      else if( st==2 ){ flen = 2; }
-      else if( st==3 ){ flen = 3; }
-      else if( st==4 ){ flen = 4; }
-      else if( st==5 ){ flen = 6; }
-      else if( st==6 || st==7 ){ flen = 8; }
-      else if( st==8 || st==9 ){ flen = 0; }
-      else if( st>=12 && (st&1)==0 ){ flen = (st-12)/2; }
-      else if( st>=13 && (st&1)==1 ){ flen = (st-13)/2; }
-      else{ flen = 0; }
       bodyLen += flen;
     }
 
@@ -187,17 +176,7 @@ int doltliteBuildIndexSortKey(
         continue;
       }
       st = info.aType[col];
-      if( st<=0 ){ flen = 0; }
-      else if( st==1 ){ flen = 1; }
-      else if( st==2 ){ flen = 2; }
-      else if( st==3 ){ flen = 3; }
-      else if( st==4 ){ flen = 4; }
-      else if( st==5 ){ flen = 6; }
-      else if( st==6 || st==7 ){ flen = 8; }
-      else if( st==8 || st==9 ){ flen = 0; }
-      else if( st>=12 && (st&1)==0 ){ flen = (st-12)/2; }
-      else if( st>=13 && (st&1)==1 ){ flen = (st-13)/2; }
-      else{ flen = 0; }
+      flen = st>0 ? dlSerialTypeLen((u64)st) : 0;
       if( flen>0 ){
         memcpy(p, pRec + info.aOffset[col], flen);
         p += flen;
