@@ -26,9 +26,6 @@ check() {
 
 DB="$DOLTLITE"
 
-# ============================================================
-# Basic URL scheme recognition tests
-# ============================================================
 echo "=== HTTP remote URL recognition tests ==="
 
 result=$("$DB" "$TMPDIR/test.db" "SELECT dolt_remote('add','origin','http://localhost:19999/mydb');" 2>/dev/null)
@@ -40,12 +37,9 @@ check "http remote in list" "origin|http://localhost:19999/mydb" "$result"
 result=$("$DB" "$TMPDIR/test.db" "SELECT dolt_push('origin','main');" 2>&1)
 check "push to dead server errors" "1" "$(echo "$result" | grep -c 'failed\|error\|connection')"
 
-# ============================================================
 echo ""
 echo "=== Building embedded HTTP test binary ==="
-# ============================================================
 
-# Write a C test that starts server async, runs operations, verifies
 cat > "$TMPDIR/http_test.c" << 'CEOF'
 #include <stdio.h>
 #include <stdlib.h>
@@ -220,10 +214,6 @@ int main(int argc, char **argv) {
 
   mkdir(tmpdir, 0755);
   mkdir(srvdir, 0755);
-
-  /* ============================================================
-   * 1. Setup source repo with multi-table data
-   * ============================================================ */
   printf("=== 1. Setup source repo ===\n");
   sqlite3 *srcDb;
   snprintf(path, sizeof(path), "%s/src.db", srvdir);
@@ -237,10 +227,6 @@ int main(int argc, char **argv) {
   CHECK("source has 3 users", 3, query_int(srcDb, "SELECT count(*) FROM users"));
   CHECK("source has 3 scores", 3, query_int(srcDb, "SELECT count(*) FROM scores"));
   sqlite3_close(srcDb);
-
-  /* ============================================================
-   * 2. Start HTTP server
-   * ============================================================ */
   printf("=== 2. Start HTTP server ===\n");
   DoltliteServer *srv = doltliteServeAsync(srvdir, 0, NULL);
   if (!srv) {
@@ -251,25 +237,13 @@ int main(int argc, char **argv) {
   printf("  Server started on port %d\n", port);
   CHECK("server started", 1, port > 0);
   usleep(100000);
-
-  /* ============================================================
-   * 2b. Invalid traversal-like paths are rejected
-   * ============================================================ */
   printf("=== 2b. Reject traversal-like paths ===\n");
   CHECK("parent path returns 404", 404, raw_http_status(port, "/../root"));
   CHECK("dot path returns 404", 404, raw_http_status(port, "/./root"));
-
-  /* ============================================================
-   * 2c. Read-only requests do not create missing databases
-   * ============================================================ */
   printf("=== 2c. Missing read does not create DB ===\n");
   snprintf(path, sizeof(path), "%s/missing_read.db", srvdir);
   CHECK("missing refs returns 404", 404, raw_http_status(port, "/missing_read.db/refs"));
   CHECK("missing refs did not create file", 0, file_exists(path));
-
-  /* ============================================================
-   * 2d. Short-write transport handling
-   * ============================================================ */
   printf("=== 2d. Short-write transport handling ===\n");
   enable_short_write_once();
   CHECK("server response survives short write", 200, raw_http_status(port, "/src.db/root"));
@@ -281,10 +255,6 @@ int main(int argc, char **argv) {
   CHECK("client request survives short write", SQLITE_OK, run_sql(shortCloneDb, sql));
   CHECK("short-write clone has 3 users", 3, query_int(shortCloneDb, "SELECT count(*) FROM users"));
   sqlite3_close(shortCloneDb);
-
-  /* ============================================================
-   * 2e. Oversized HTTP request headers are rejected before write
-   * ============================================================ */
   printf("=== 2e. Long HTTP URL rejected ===\n");
   sqlite3 *longUrlDb;
   char longName[1800];
@@ -295,10 +265,6 @@ int main(int argc, char **argv) {
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d/%s')", port, longName);
   CHECK("long URL clone errors", 1, run_sql_quiet(longUrlDb, sql) != SQLITE_OK);
   sqlite3_close(longUrlDb);
-
-  /* ============================================================
-   * 3. Clone via HTTP - verify all data, branch, remote, history
-   * ============================================================ */
   printf("=== 3. Clone via HTTP ===\n");
   sqlite3 *cloneDb;
   snprintf(path, sizeof(path), "%s/clone.db", tmpdir);
@@ -313,10 +279,6 @@ int main(int argc, char **argv) {
     query_str(cloneDb, "SELECT message FROM dolt_log LIMIT 1"));
   CHECK_STR("clone data correct", "bob",
     query_str(cloneDb, "SELECT name FROM users WHERE id=2"));
-
-  /* ============================================================
-   * 4. Push from clone - verify server updated
-   * ============================================================ */
   printf("=== 4. Push from clone ===\n");
   run_sql(cloneDb, "INSERT INTO users VALUES(4,'diana',28)");
   run_sql(cloneDb, "INSERT INTO scores VALUES(4,99.1)");
@@ -324,7 +286,6 @@ int main(int argc, char **argv) {
   run_sql(cloneDb, "SELECT dolt_commit('-m','add diana')");
   run_sql(cloneDb, "SELECT dolt_push('origin','main')");
 
-  /* Verify server side */
   sqlite3 *verifyDb;
   snprintf(path, sizeof(path), "%s/src.db", srvdir);
   sqlite3_open(path, &verifyDb);
@@ -332,10 +293,6 @@ int main(int argc, char **argv) {
     query_str(cloneDb, "SELECT commit_hash FROM dolt_log LIMIT 1"),
     query_str(verifyDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
   sqlite3_close(verifyDb);
-
-  /* ============================================================
-   * 4b. Stale conditional refs update is rejected
-   * ============================================================ */
   printf("=== 4b. Stale refs update rejected ===\n");
   {
     char url[256];
@@ -374,51 +331,32 @@ int main(int argc, char **argv) {
       query_str(verifyDb, "SELECT message FROM dolt_log LIMIT 1"));
     sqlite3_close(verifyDb);
   }
-
-  /* ============================================================
-   * 5. Fetch in original - tracking branch updated, local unchanged
-   * ============================================================ */
   printf("=== 5. Fetch in original ===\n");
   sqlite3 *origDb;
   snprintf(path, sizeof(path), "%s/orig.db", tmpdir);
   sqlite3_open(path, &origDb);
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d/src.db')", port);
   run_sql(origDb, sql);
-  /* origDb now has 4 users (cloned after push). Add data on clone side. */
   CHECK("orig has 4 users", 4, query_int(origDb, "SELECT count(*) FROM users"));
 
-  /* Push more from cloneDb so origDb can fetch */
   run_sql(cloneDb, "INSERT INTO users VALUES(5,'eve',22)");
   run_sql(cloneDb, "SELECT dolt_add('-A')");
   run_sql(cloneDb, "SELECT dolt_commit('-m','add eve')");
   run_sql(cloneDb, "SELECT dolt_push('origin','main')");
 
-  /* Fetch */
   run_sql(origDb, "SELECT dolt_fetch('origin','main')");
   CHECK("orig data unchanged after fetch", 4, query_int(origDb, "SELECT count(*) FROM users"));
-
-  /* ============================================================
-   * 6. Pull (fast-forward) - verify data updated
-   * ============================================================ */
   printf("=== 6. Pull (fast-forward) ===\n");
   run_sql(origDb, "SELECT dolt_pull('origin','main')");
   CHECK("orig has 5 users after pull", 5, query_int(origDb, "SELECT count(*) FROM users"));
   CHECK_STR("orig has eve after pull", "eve",
     query_str(origDb, "SELECT name FROM users WHERE id=5"));
   sqlite3_close(origDb);
-
-  /* ============================================================
-   * 7. Already up-to-date push/pull
-   * ============================================================ */
   printf("=== 7. Already up-to-date ===\n");
   CHECK("push when up-to-date succeeds", SQLITE_OK,
     run_sql(cloneDb, "SELECT dolt_push('origin','main')"));
   CHECK("pull when up-to-date succeeds", SQLITE_OK,
     run_sql(cloneDb, "SELECT dolt_pull('origin','main')"));
-
-  /* ============================================================
-   * 8. Create and push new branch to HTTP remote
-   * ============================================================ */
   printf("=== 8. Push new branch ===\n");
   run_sql(cloneDb, "SELECT dolt_branch('feature')");
   run_sql(cloneDb, "SELECT dolt_checkout('feature')");
@@ -427,7 +365,6 @@ int main(int argc, char **argv) {
   run_sql(cloneDb, "SELECT dolt_commit('-m','add frank on feature')");
   run_sql(cloneDb, "SELECT dolt_push('origin','feature')");
 
-  /* Verify on server */
   sqlite3_open(path, &verifyDb); /* path still srvdir/src.db */
   snprintf(path, sizeof(path), "%s/src.db", srvdir);
   sqlite3_open(path, &verifyDb);
@@ -435,10 +372,6 @@ int main(int argc, char **argv) {
   CHECK("server feature has 6 users", 6, query_int(verifyDb, "SELECT count(*) FROM users"));
   sqlite3_close(verifyDb);
   run_sql(cloneDb, "SELECT dolt_checkout('main')");
-
-  /* ============================================================
-   * 9. Clone gets multiple branches
-   * ============================================================ */
   printf("=== 9. Clone gets multiple branches ===\n");
   sqlite3 *multiDb;
   snprintf(path, sizeof(path), "%s/multi_clone.db", tmpdir);
@@ -453,17 +386,12 @@ int main(int argc, char **argv) {
   run_sql(multiDb, "SELECT dolt_checkout('feature')");
   CHECK("multi-clone feature has 6 users", 6, query_int(multiDb, "SELECT count(*) FROM users"));
   sqlite3_close(multiDb);
-
-  /* ============================================================
-   * 10. Fetch specific branch
-   * ============================================================ */
   printf("=== 10. Fetch specific branch ===\n");
   sqlite3 *fetchDb;
   snprintf(path, sizeof(path), "%s/fetch_branch.db", tmpdir);
   sqlite3_open(path, &fetchDb);
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d/src.db')", port);
   run_sql(fetchDb, sql);
-  /* Push more on feature from cloneDb */
   run_sql(cloneDb, "SELECT dolt_checkout('feature')");
   run_sql(cloneDb, "INSERT INTO users VALUES(7,'grace',33)");
   run_sql(cloneDb, "SELECT dolt_add('-A')");
@@ -476,10 +404,6 @@ int main(int argc, char **argv) {
   run_sql(fetchDb, "SELECT dolt_pull('origin','feature')");
   CHECK("fetched feature has 7 users", 7, query_int(fetchDb, "SELECT count(*) FROM users"));
   sqlite3_close(fetchDb);
-
-  /* ============================================================
-   * 11. Deep history: 15 commits on a branch, push, verify
-   * ============================================================ */
   printf("=== 11. Deep history ===\n");
   sqlite3 *deepDb;
   snprintf(path, sizeof(path), "%s/deep.db", srvdir);
@@ -499,10 +423,6 @@ int main(int argc, char **argv) {
   /* 17 commits = 1 initial + 1 create + 15 inserts */
   CHECK("deep source has 17 commits", 17, query_int(deepDb, "SELECT count(*) FROM dolt_log"));
   sqlite3_close(deepDb);
-
-  /* ============================================================
-   * 12. Clone deep history - verify commit count
-   * ============================================================ */
   printf("=== 12. Clone deep history ===\n");
   sqlite3 *deepClone;
   snprintf(path, sizeof(path), "%s/deep_clone.db", tmpdir);
@@ -514,10 +434,6 @@ int main(int argc, char **argv) {
   CHECK_STR("deep clone latest msg", "step 15",
     query_str(deepClone, "SELECT message FROM dolt_log LIMIT 1"));
   sqlite3_close(deepClone);
-
-  /* ============================================================
-   * 13. Multiple commits, push once - verify all transferred
-   * ============================================================ */
   printf("=== 13. Multiple commits, push once ===\n");
   sqlite3 *batchDb;
   snprintf(path, sizeof(path), "%s/batch.db", srvdir);
@@ -533,7 +449,6 @@ int main(int argc, char **argv) {
   sqlite3_open(path, &batchClone);
   snprintf(sql, sizeof(sql), "SELECT dolt_clone('http://127.0.0.1:%d/batch.db')", port);
   run_sql(batchClone, sql);
-  /* Make 3 commits locally then push once */
   run_sql(batchClone, "INSERT INTO items VALUES(2,'second')");
   run_sql(batchClone, "SELECT dolt_add('-A')");
   run_sql(batchClone, "SELECT dolt_commit('-m','commit 2')");
@@ -545,7 +460,6 @@ int main(int argc, char **argv) {
   run_sql(batchClone, "SELECT dolt_commit('-m','commit 4')");
   run_sql(batchClone, "SELECT dolt_push('origin','main')");
 
-  /* Verify server got everything */
   snprintf(path, sizeof(path), "%s/batch.db", srvdir);
   sqlite3_open(path, &verifyDb);
   CHECK_STR("batch server head matches batch push",
@@ -553,10 +467,6 @@ int main(int argc, char **argv) {
     query_str(verifyDb, "SELECT commit_hash FROM dolt_log LIMIT 1"));
   sqlite3_close(verifyDb);
   sqlite3_close(batchClone);
-
-  /* ============================================================
-   * 14. Schema changes: ALTER TABLE ADD COLUMN, push
-   * ============================================================ */
   printf("=== 14. Schema changes ===\n");
   run_sql(cloneDb, "ALTER TABLE users ADD COLUMN email TEXT");
   run_sql(cloneDb, "UPDATE users SET email='alice@test.com' WHERE id=1");
@@ -571,10 +481,6 @@ int main(int argc, char **argv) {
   CHECK_STR("server has email column", "alice@test.com",
     query_str(verifyDb, "SELECT email FROM users WHERE id=1"));
   sqlite3_close(verifyDb);
-
-  /* ============================================================
-   * 15. Pull schema change into another client
-   * ============================================================ */
   printf("=== 15. Pull schema change ===\n");
   sqlite3 *schemaDb;
   snprintf(path, sizeof(path), "%s/schema_pull.db", tmpdir);
@@ -583,14 +489,9 @@ int main(int argc, char **argv) {
   run_sql(schemaDb, sql);
   CHECK_STR("schema pull has email", "alice@test.com",
     query_str(schemaDb, "SELECT email FROM users WHERE id=1"));
-  /* Verify column exists (null for non-alice rows) */
   CHECK("schema pull email col exists for bob", 1,
     query_int(schemaDb, "SELECT email IS NULL FROM users WHERE id=2"));
   sqlite3_close(schemaDb);
-
-  /* ============================================================
-   * 16. Large data: insert 200 rows, push
-   * ============================================================ */
   printf("=== 16. Large data push ===\n");
   sqlite3 *largeDb;
   snprintf(path, sizeof(path), "%s/large.db", srvdir);
@@ -603,10 +504,6 @@ int main(int argc, char **argv) {
   run_sql(largeDb, "SELECT dolt_commit('-m','200 rows')");
   CHECK("large source has 200 rows", 200, query_int(largeDb, "SELECT count(*) FROM big"));
   sqlite3_close(largeDb);
-
-  /* ============================================================
-   * 17. Clone 200 rows - verify count
-   * ============================================================ */
   printf("=== 17. Clone large data ===\n");
   sqlite3 *largeClone;
   snprintf(path, sizeof(path), "%s/large_clone.db", tmpdir);
@@ -619,10 +516,6 @@ int main(int argc, char **argv) {
   CHECK("large clone last row exists", 1,
     query_int(largeClone, "SELECT count(*) FROM big WHERE id=200"));
   sqlite3_close(largeClone);
-
-  /* ============================================================
-   * 18-22. Round-trip: A→server→B→server→A (3 hops)
-   * ============================================================ */
   printf("=== 18. Round-trip: A creates and pushes ===\n");
   sqlite3 *hopA;
   snprintf(path, sizeof(path), "%s/hop_src.db", srvdir);
@@ -673,10 +566,6 @@ int main(int argc, char **argv) {
     query_str(hopB, "SELECT who FROM chain WHERE id=3"));
   sqlite3_close(hopA);
   sqlite3_close(hopB);
-
-  /* ============================================================
-   * 23. Multi-database server: create second DB
-   * ============================================================ */
   printf("=== 23. Multi-database server ===\n");
   sqlite3 *db2;
   snprintf(path, sizeof(path), "%s/second.db", srvdir);
@@ -686,10 +575,6 @@ int main(int argc, char **argv) {
   run_sql(db2, "SELECT dolt_add('-A')");
   run_sql(db2, "SELECT dolt_commit('-m','products initial')");
   sqlite3_close(db2);
-
-  /* ============================================================
-   * 24. Clone the second database - verify independent data
-   * ============================================================ */
   printf("=== 24. Clone second database ===\n");
   sqlite3 *db2Clone;
   snprintf(path, sizeof(path), "%s/second_clone.db", tmpdir);
@@ -700,14 +585,9 @@ int main(int argc, char **argv) {
     query_int(db2Clone, "SELECT count(*) FROM products"));
   CHECK_STR("second db has widget", "widget",
     query_str(db2Clone, "SELECT name FROM products WHERE id=1"));
-  /* Verify it does NOT have users table from src.db */
   CHECK("second db has no users table", -1,
     query_int(db2Clone, "SELECT count(*) FROM users"));
   sqlite3_close(db2Clone);
-
-  /* ============================================================
-   * 25. Error: clone nonexistent database name
-   * ============================================================ */
   printf("=== 25. Error: clone nonexistent DB ===\n");
   sqlite3 *errDb;
   snprintf(path, sizeof(path), "%s/err.db", tmpdir);
@@ -716,10 +596,6 @@ int main(int argc, char **argv) {
   int errRc = run_sql_quiet(errDb, sql);
   CHECK("clone nonexistent DB errors", 1, errRc != SQLITE_OK);
   sqlite3_close(errDb);
-
-  /* ============================================================
-   * Cleanup
-   * ============================================================ */
   sqlite3_close(cloneDb);
   printf("=== Shutdown ===\n");
   doltliteServerStop(srv);
