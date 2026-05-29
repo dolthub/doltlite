@@ -8,10 +8,6 @@
 #include "../ext/blake3/blake3.h"
 #include <string.h>
 
-#define CS_WAL_TAG_CHUNK  0x01
-#define CS_WAL_TAG_ROOT   0x02
-#define CS_WAL_CHUNK_HDR_SIZE 25
-
 i64 walStateGetOffset(const WalState *w){
   return w->iWalOffset;
 }
@@ -186,8 +182,8 @@ int csReplayWal(ChunkStore *cs){
           (long long)(cs->wal.iWalOffset + recPos));
         break;
       }
-      memcpy(&hash, aPrefix + 1, 20);
-      len = CS_READ_U32(aPrefix + 21);
+      memcpy(&hash, aPrefix + CS_WAL_CHUNK_HASH_OFF, PROLLY_HASH_SIZE);
+      len = CS_READ_U32(aPrefix + CS_WAL_CHUNK_LEN_OFF);
       if( pos < 0 || len > (u32)0x7fffffff
        || (u64)pos + len > (u64)walSize ){
         sqlite3_log(SQLITE_NOTICE,
