@@ -27,7 +27,6 @@ int sortKeyFromMemPrefixCollBuffer(
 );
 
 int sortKeyFromInt64(i64 v, u8 *pOut, int *pnOut);
-int sortKeyFromInt64Buffer(i64 v, u8 **ppBuf, int *pnAlloc, int *pnOut);
 
 static inline int sortKeyInt64FitsExact(i64 v){
   return v>=-9007199254740992LL && v<=9007199254740992LL;
@@ -48,8 +47,6 @@ static inline void sortKeyWriteExactInt64(i64 v, u8 *pOut){
     pOut[1+i] = (u8)(x >> (56 - i*8));
   }
 }
-
-int sortKeySize(const u8 *pRec, int nRec);
 
 int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut);
 int recordFromSortKeyBuffer(
