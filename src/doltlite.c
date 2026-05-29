@@ -642,12 +642,6 @@ static int doltliteDetectPostMergeConstraintViolations(
   const ProllyHash *pAncCatHash,
   int *pnViolations
 ){
-  extern int doltliteDetectMergeFkViolations(
-      sqlite3*, const ProllyHash*, char**, int*);
-  extern int doltliteDetectMergeUniqueViolations(
-      sqlite3*, const ProllyHash*, char**, int*);
-  extern int doltliteDetectMergeCheckViolations(
-      sqlite3*, const ProllyHash*, char**, int*);
   int nViolations = 0;
   int nUnique = 0;
   int nCheck = 0;
@@ -2922,12 +2916,6 @@ static void doltliteMergeFunc(
     graphLocked = 0;
   }
   {
-    extern int doltliteDetectMergeFkViolations(
-        sqlite3*, const ProllyHash*, char**, int*);
-    extern int doltliteDetectMergeUniqueViolations(
-        sqlite3*, const ProllyHash*, char**, int*);
-    extern int doltliteDetectMergeCheckViolations(
-        sqlite3*, const ProllyHash*, char**, int*);
     int nViolations = 0;
     int nUnique = 0;
     int nCheck = 0;
@@ -3210,12 +3198,6 @@ static int applyMergedCatalogAndCommit(
   }
 
   {
-    extern int doltliteDetectMergeFkViolations(
-        sqlite3*, const ProllyHash*, char**, int*);
-    extern int doltliteDetectMergeUniqueViolations(
-        sqlite3*, const ProllyHash*, char**, int*);
-    extern int doltliteDetectMergeCheckViolations(
-        sqlite3*, const ProllyHash*, char**, int*);
     int nViolations = 0;
     int nUnique = 0;
     int nCheck = 0;
