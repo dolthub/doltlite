@@ -305,6 +305,28 @@ static int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk){
   return SQLITE_OK;
 }
 
+/* FK specs whose parent-side column is unnamed (azTo[i]==0) reference the
+** parent's primary key positionally; fill those slots from zParent's PK. */
+static int backfillParentPk(sqlite3 *db, const char *zParent,
+                            char **azTo, int nCol){
+  int i, needParentPk = 0;
+  MergePkInfo parentPk;
+  int rc;
+  for(i=0; i<nCol; i++) if( !azTo[i] ) needParentPk = 1;
+  if( !needParentPk ) return SQLITE_OK;
+  memset(&parentPk, 0, sizeof(parentPk));
+  rc = loadMergePkInfo(db, zParent, &parentPk);
+  if( rc == SQLITE_OK ){
+    for(i=0; i<nCol; i++){
+      if( !azTo[i] && i < parentPk.nPk ){
+        azTo[i] = sqlite3_mprintf("%s", parentPk.azPk[i]);
+      }
+    }
+  }
+  freeMergePkInfo(&parentPk);
+  return rc;
+}
+
 
 static u8 *buildRecordFromStmtCols(
   sqlite3_stmt *pStmt,
@@ -1588,22 +1610,8 @@ int doltliteDetectMergeFkViolations(
       const char *zToRaw = (const char*)sqlite3_column_text(pFk, 4);
 
       if( curId>=0 && id!=curId ){
-        int needParentPk = 0;
-        for(int i=0; i<nCol; i++) if( !azTo[i] ) needParentPk = 1;
-        if( needParentPk ){
-          MergePkInfo parentPk;
-          memset(&parentPk, 0, sizeof(parentPk));
-          rc = loadMergePkInfo(db, zParent, &parentPk);
-          if( rc == SQLITE_OK ){
-            for(int i=0; i<nCol; i++){
-              if( !azTo[i] && i < parentPk.nPk ){
-                azTo[i] = sqlite3_mprintf("%s", parentPk.azPk[i]);
-              }
-            }
-          }
-          freeMergePkInfo(&parentPk);
-          if( rc != SQLITE_OK ) break;
-        }
+        rc = backfillParentPk(db, zParent, azTo, nCol);
+        if( rc != SQLITE_OK ) break;
         rc = detectFkViolationsForSpec(db,
             haveAnc ? aAnc : 0, haveAnc ? nAnc : 0,
             zTable, hasRowid, &childPk, zParent, curId,
@@ -1652,21 +1660,7 @@ int doltliteDetectMergeFkViolations(
       rc = SQLITE_OK;
     }
     if( rc==SQLITE_OK && curId>=0 ){
-      int needParentPk = 0;
-      for(int i=0; i<nCol; i++) if( !azTo[i] ) needParentPk = 1;
-      if( needParentPk ){
-        MergePkInfo parentPk;
-        memset(&parentPk, 0, sizeof(parentPk));
-        rc = loadMergePkInfo(db, zParent, &parentPk);
-        if( rc == SQLITE_OK ){
-          for(int i=0; i<nCol; i++){
-            if( !azTo[i] && i < parentPk.nPk ){
-              azTo[i] = sqlite3_mprintf("%s", parentPk.azPk[i]);
-            }
-          }
-        }
-        freeMergePkInfo(&parentPk);
-      }
+      rc = backfillParentPk(db, zParent, azTo, nCol);
       if( rc==SQLITE_OK ){
         rc = detectFkViolationsForSpec(db,
             haveAnc ? aAnc : 0, haveAnc ? nAnc : 0,
