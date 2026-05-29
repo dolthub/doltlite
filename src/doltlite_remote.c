@@ -265,48 +265,57 @@ int doltliteSyncChunks(
   return rc;
 }
 
+/* Shared prefix: both FsRemote and LocalAsRemote start with the vtable
+** base followed by a ChunkStore*, so the chunk/refs read ops below can
+** reach the backing store through one cast regardless of family. */
+typedef struct RemoteStoreHdr RemoteStoreHdr;
+struct RemoteStoreHdr {
+  DoltliteRemote base;
+  ChunkStore *pStore;
+};
+
 typedef struct FsRemote FsRemote;
 struct FsRemote {
   DoltliteRemote base;
+  ChunkStore *pStore;
   ChunkStore store;
   int lockedForCas;
 };
 
-static int fsGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
-                      u8 **ppData, int *pnData){
-  FsRemote *p = (FsRemote*)pRemote;
-  return chunkStoreGet(&p->store, pHash, ppData, pnData);
+static int remoteGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
+                          u8 **ppData, int *pnData){
+  return chunkStoreGet(((RemoteStoreHdr*)pRemote)->pStore, pHash, ppData, pnData);
 }
 
-static int fsPutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
-                      const u8 *pData, int nData){
-  FsRemote *p = (FsRemote*)pRemote;
+static int remotePutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
+                          const u8 *pData, int nData){
+  ChunkStore *pStore = ((RemoteStoreHdr*)pRemote)->pStore;
   ProllyHash computed;
   (void)pHash;
-  return chunkStorePut(&p->store, pData, nData, &computed);
+  return chunkStorePut(pStore, pData, nData, &computed);
 }
 
-static int fsHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
-                       int nHash, u8 *aResult){
-  FsRemote *p = (FsRemote*)pRemote;
+static int remoteHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
+                           int nHash, u8 *aResult){
+  ChunkStore *pStore = ((RemoteStoreHdr*)pRemote)->pStore;
   int i;
   for(i=0; i<nHash; i++){
     int has = 0;
-    int rc = chunkStoreHas(&p->store, &aHash[i], &has);
+    int rc = chunkStoreHas(pStore, &aHash[i], &has);
     if( rc!=SQLITE_OK ) return rc;
     aResult[i] = has ? 1 : 0;
   }
   return SQLITE_OK;
 }
 
-static int fsGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
-  FsRemote *p = (FsRemote*)pRemote;
+static int remoteGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
+  ChunkStore *pStore = ((RemoteStoreHdr*)pRemote)->pStore;
   *ppData = 0;
   *pnData = 0;
-  if( prollyHashIsEmpty(refsTableGetHash(&p->store.refs)) ){
+  if( prollyHashIsEmpty(refsTableGetHash(&pStore->refs)) ){
     return SQLITE_NOTFOUND;
   }
-  return chunkStoreGet(&p->store, refsTableGetHash(&p->store.refs), ppData, pnData);
+  return chunkStoreGet(pStore, refsTableGetHash(&pStore->refs), ppData, pnData);
 }
 
 static int fsSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
@@ -392,14 +401,15 @@ DoltliteRemote *doltliteFsRemoteOpen(sqlite3_vfs *pVfs, const char *zPath){
   if( !p ) return 0;
   memset(p, 0, sizeof(FsRemote));
 
-  p->base.xGetChunk = fsGetChunk;
-  p->base.xPutChunk = fsPutChunk;
-  p->base.xHasChunks = fsHasChunks;
-  p->base.xGetRefs = fsGetRefs;
+  p->base.xGetChunk = remoteGetChunk;
+  p->base.xPutChunk = remotePutChunk;
+  p->base.xHasChunks = remoteHasChunks;
+  p->base.xGetRefs = remoteGetRefs;
   p->base.xSetRefs = fsSetRefs;
   p->base.xSetRefsIf = fsSetRefsIf;
   p->base.xCommit = fsCommit;
   p->base.xClose = fsClose;
+  p->pStore = &p->store;
 
   rc = chunkStoreOpen(&p->store, pVfs, zPath, flags);
   if( rc!=SQLITE_OK ){
@@ -415,43 +425,6 @@ struct LocalAsRemote {
   DoltliteRemote base;
   ChunkStore *pStore;
 };
-
-static int localGetChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
-                         u8 **ppData, int *pnData){
-  LocalAsRemote *p = (LocalAsRemote*)pRemote;
-  return chunkStoreGet(p->pStore, pHash, ppData, pnData);
-}
-
-static int localPutChunk(DoltliteRemote *pRemote, const ProllyHash *pHash,
-                         const u8 *pData, int nData){
-  LocalAsRemote *p = (LocalAsRemote*)pRemote;
-  ProllyHash computed;
-  (void)pHash;
-  return chunkStorePut(p->pStore, pData, nData, &computed);
-}
-
-static int localHasChunks(DoltliteRemote *pRemote, const ProllyHash *aHash,
-                          int nHash, u8 *aResult){
-  LocalAsRemote *p = (LocalAsRemote*)pRemote;
-  int i;
-  for(i=0; i<nHash; i++){
-    int has = 0;
-    int rc = chunkStoreHas(p->pStore, &aHash[i], &has);
-    if( rc!=SQLITE_OK ) return rc;
-    aResult[i] = has ? 1 : 0;
-  }
-  return SQLITE_OK;
-}
-
-static int localGetRefs(DoltliteRemote *pRemote, u8 **ppData, int *pnData){
-  LocalAsRemote *p = (LocalAsRemote*)pRemote;
-  *ppData = 0;
-  *pnData = 0;
-  if( prollyHashIsEmpty(refsTableGetHash(&p->pStore->refs)) ){
-    return SQLITE_NOTFOUND;
-  }
-  return chunkStoreGet(p->pStore, refsTableGetHash(&p->pStore->refs), ppData, pnData);
-}
 
 static int localSetRefs(DoltliteRemote *pRemote, const u8 *pData, int nData){
   LocalAsRemote *p = (LocalAsRemote*)pRemote;
@@ -497,10 +470,10 @@ DoltliteRemote *doltliteLocalAsRemote(ChunkStore *pLocal){
   if( !p ) return 0;
   memset(p, 0, sizeof(LocalAsRemote));
 
-  p->base.xGetChunk = localGetChunk;
-  p->base.xPutChunk = localPutChunk;
-  p->base.xHasChunks = localHasChunks;
-  p->base.xGetRefs = localGetRefs;
+  p->base.xGetChunk = remoteGetChunk;
+  p->base.xPutChunk = remotePutChunk;
+  p->base.xHasChunks = remoteHasChunks;
+  p->base.xGetRefs = remoteGetRefs;
   p->base.xSetRefs = localSetRefs;
   p->base.xSetRefsIf = localSetRefsIf;
   p->base.xCommit = localCommit;
