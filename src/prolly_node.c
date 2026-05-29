@@ -152,17 +152,17 @@ void prollyEncodeIntKey(i64 v, u8 buf[8]){
   buf[7] = (u8)u;
 }
 
+i64 prollyDecodeIntKey(const u8 *p){
+  u64 u = ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40) | ((u64)p[3]<<32)
+        | ((u64)p[4]<<24) | ((u64)p[5]<<16) | ((u64)p[6]<<8) | (u64)p[7];
+  return (i64)(u ^ ((u64)1 << 63));
+}
+
 i64 prollyNodeIntKey(const ProllyNode *pNode, int i){
   u32 off;
-  const u8 *p;
-  u64 u;
   assert( i >= 0 && i < (int)pNode->nItems );
   off = PROLLY_GET_U32((const u8*)&pNode->aKeyOff[i]);
-  p = pNode->pKeyData + off;
-
-  u = ((u64)p[0]<<56) | ((u64)p[1]<<48) | ((u64)p[2]<<40) | ((u64)p[3]<<32)
-    | ((u64)p[4]<<24) | ((u64)p[5]<<16) | ((u64)p[6]<<8) | (u64)p[7];
-  return (i64)(u ^ ((u64)1 << 63));
+  return prollyDecodeIntKey(pNode->pKeyData + off);
 }
 
 void prollyNodeChildHash(const ProllyNode *pNode, int i, ProllyHash *pHash){

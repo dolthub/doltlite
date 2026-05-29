@@ -49,31 +49,25 @@ static void builderLastKey(ProllyNodeBuilder *b,
   *pnKey = (int)(off1 - off0);
 }
 
+static void resetLevel(ProllyChunkerLevel *pLevel){
+  prollyNodeBuilderReset(&pLevel->builder);
+  pLevel->nItems = 0;
+  pLevel->nBytes = 0;
+  pLevel->subtreeCount = 0;
+}
+
 static int flushLevel(ProllyChunker *ch, int level){
   ProllyChunkerLevel *pLevel = &ch->aLevel[level];
-  u8 *pData = 0;
-  int nData = 0;
   ProllyHash hash;
   const u8 *pLastKey;
   int nLastKey;
   u64 flushedCount;
   int rc;
 
-  assert( pLevel->builder.nItems > 0 );
-
   builderLastKey(&pLevel->builder, &pLastKey, &nLastKey);
   flushedCount = pLevel->subtreeCount;
 
-  rc = prollyNodeBuilderFinish(&pLevel->builder, &pData, &nData);
-  if( rc!=SQLITE_OK ) return rc;
-
-  rc = chunkStorePut(ch->pStore, pData, nData, &hash);
-  if( rc==SQLITE_OK && ch->pCache ){
-    ProllyCacheEntry *pEntry;
-    pEntry = prollyCachePut(ch->pCache, &hash, pData, nData, &rc);
-    if( pEntry ) prollyCacheRelease(ch->pCache, pEntry);
-  }
-  sqlite3_free(pData);
+  rc = finishFlushLevel(ch, level, &hash);
   if( rc!=SQLITE_OK ) return rc;
 
   if( level + 1 >= PROLLY_CURSOR_MAX_DEPTH ){
@@ -86,11 +80,7 @@ static int flushLevel(ProllyChunker *ch, int level){
                   flushedCount);
   if( rc!=SQLITE_OK ) return rc;
 
-  prollyNodeBuilderReset(&pLevel->builder);
-  pLevel->nItems = 0;
-  pLevel->nBytes = 0;
-  pLevel->subtreeCount = 0;
-
+  resetLevel(pLevel);
   return SQLITE_OK;
 }
 
@@ -145,10 +135,7 @@ static int finishPropagateLevel(ProllyChunker *ch, int level){
                   hash.data, PROLLY_HASH_SIZE, flushedCount);
   if( rc!=SQLITE_OK ) return rc;
 
-  prollyNodeBuilderReset(&pLevel->builder);
-  pLevel->nItems = 0;
-  pLevel->nBytes = 0;
-  pLevel->subtreeCount = 0;
+  resetLevel(pLevel);
   return SQLITE_OK;
 }
 
