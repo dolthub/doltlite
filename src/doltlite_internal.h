@@ -158,6 +158,13 @@ static SQLITE_INLINE int doltliteAppendQuotedColumnList(
   return sqlite3_str_errcode(pStr);
 }
 
+static SQLITE_INLINE void doltliteFreeStringArray(char **az, int n){
+  int i;
+  if( !az ) return;
+  for(i=0; i<n; i++) sqlite3_free(az[i]);
+  sqlite3_free(az);
+}
+
 static SQLITE_INLINE int doltliteFindTableRootByName(
   struct TableEntry *a, int n, const char *zName,
   ProllyHash *pRoot, u8 *pFlags

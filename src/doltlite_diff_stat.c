@@ -111,12 +111,6 @@ static int dsLoadCreateSql(
   return SQLITE_OK;
 }
 
-static void dsFreeColNames(char **az, int n){
-  int i;
-  for(i=0; i<n; i++) sqlite3_free(az[i]);
-  sqlite3_free(az);
-}
-
 static int dsCountRows(sqlite3 *db, const ProllyHash *pRoot, u8 flags,
                        i64 *pnRow){
   ChunkStore *cs = doltliteGetChunkStore(db);
@@ -450,8 +444,8 @@ static int dsComputeTableStats(
 done:
   sqlite3_free(zFromSql);
   sqlite3_free(zToSql);
-  dsFreeColNames(azFromCols, nFromCols);
-  dsFreeColNames(azToCols, nToCols);
+  doltliteFreeStringArray(azFromCols, nFromCols);
+  doltliteFreeStringArray(azToCols, nToCols);
   dsFreeColMap(&colMap);
   return rc;
 }
@@ -621,9 +615,7 @@ struct DsFilterCtx {
 };
 
 static void dsFilterCtxClear(DsFilterCtx *pCtx){
-  int i;
-  for(i=0; i<pCtx->nNames; i++) sqlite3_free(pCtx->azNames[i]);
-  sqlite3_free(pCtx->azNames);
+  doltliteFreeStringArray(pCtx->azNames, pCtx->nNames);
   memset(pCtx, 0, sizeof(*pCtx));
 }
 

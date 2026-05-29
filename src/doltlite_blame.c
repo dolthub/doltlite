@@ -158,11 +158,7 @@ static int blameLoadPkColumns(
 }
 
 static void blameFreePkColumns(char **azNames, int *aColIdx, int nCols){
-  int i;
-  if( azNames ){
-    for(i=0; i<nCols; i++) sqlite3_free(azNames[i]);
-    sqlite3_free(azNames);
-  }
+  doltliteFreeStringArray(azNames, nCols);
   sqlite3_free(aColIdx);
 }
 
