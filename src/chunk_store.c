@@ -420,15 +420,44 @@ int chunkStoreSetDefaultBranch(ChunkStore *cs, const char *zName){
   return SQLITE_OK;
 }
 
-int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
+static int findBranchIdx(ChunkStore *cs, const char *zName){
   int i;
   for(i=0; i<cs->refs.nBranches; i++){
-    if( strcmp(cs->refs.aBranches[i].zName, zName)==0 ){
-      if( pCommit ) memcpy(pCommit, &cs->refs.aBranches[i].commitHash, sizeof(ProllyHash));
-      return SQLITE_OK;
-    }
+    if( strcmp(cs->refs.aBranches[i].zName, zName)==0 ) return i;
   }
-  return SQLITE_NOTFOUND;
+  return -1;
+}
+
+static int findTagIdx(ChunkStore *cs, const char *zName){
+  int i;
+  for(i=0; i<cs->refs.nTags; i++){
+    if( strcmp(cs->refs.aTags[i].zName, zName)==0 ) return i;
+  }
+  return -1;
+}
+
+static int findRemoteIdx(ChunkStore *cs, const char *zName){
+  int i;
+  for(i=0; i<cs->refs.nRemotes; i++){
+    if( strcmp(cs->refs.aRemotes[i].zName, zName)==0 ) return i;
+  }
+  return -1;
+}
+
+static int findTrackingIdx(ChunkStore *cs, const char *zRemote, const char *zBranch){
+  int i;
+  for(i=0; i<cs->refs.nTracking; i++){
+    if( strcmp(cs->refs.aTracking[i].zRemote, zRemote)==0
+     && strcmp(cs->refs.aTracking[i].zBranch, zBranch)==0 ) return i;
+  }
+  return -1;
+}
+
+int chunkStoreFindBranch(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
+  int i = findBranchIdx(cs, zName);
+  if( i<0 ) return SQLITE_NOTFOUND;
+  if( pCommit ) memcpy(pCommit, &cs->refs.aBranches[i].commitHash, sizeof(ProllyHash));
+  return SQLITE_OK;
 }
 
 int chunkStoreAddBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
@@ -446,61 +475,43 @@ int chunkStoreAddBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCo
 }
 
 int chunkStoreUpdateBranch(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
-  int i;
-  for(i=0; i<cs->refs.nBranches; i++){
-    if( strcmp(cs->refs.aBranches[i].zName, zName)==0 ){
-      memcpy(&cs->refs.aBranches[i].commitHash, pCommit, sizeof(ProllyHash));
-      return SQLITE_OK;
-    }
-  }
-  return SQLITE_NOTFOUND;
+  int i = findBranchIdx(cs, zName);
+  if( i<0 ) return SQLITE_NOTFOUND;
+  memcpy(&cs->refs.aBranches[i].commitHash, pCommit, sizeof(ProllyHash));
+  return SQLITE_OK;
 }
 
 int chunkStoreDeleteBranch(ChunkStore *cs, const char *zName){
-  int i;
-  for(i=0; i<cs->refs.nBranches; i++){
-    if( strcmp(cs->refs.aBranches[i].zName, zName)==0 ){
-      sqlite3_free(cs->refs.aBranches[i].zName);
-      cs->refs.aBranches[i] = cs->refs.aBranches[cs->refs.nBranches-1];
-      cs->refs.nBranches--;
-      return SQLITE_OK;
-    }
-  }
-  return SQLITE_NOTFOUND;
+  int i = findBranchIdx(cs, zName);
+  if( i<0 ) return SQLITE_NOTFOUND;
+  sqlite3_free(cs->refs.aBranches[i].zName);
+  cs->refs.aBranches[i] = cs->refs.aBranches[cs->refs.nBranches-1];
+  cs->refs.nBranches--;
+  return SQLITE_OK;
 }
 
 int chunkStoreGetBranchWorkingSet(ChunkStore *cs, const char *zBranch, ProllyHash *pHash){
-  int i;
-  for(i=0; i<cs->refs.nBranches; i++){
-    if( strcmp(cs->refs.aBranches[i].zName, zBranch)==0 ){
-      memcpy(pHash, &cs->refs.aBranches[i].workingSetHash, sizeof(ProllyHash));
-      return SQLITE_OK;
-    }
+  int i = findBranchIdx(cs, zBranch);
+  if( i<0 ){
+    memset(pHash, 0, sizeof(ProllyHash));
+    return SQLITE_NOTFOUND;
   }
-  memset(pHash, 0, sizeof(ProllyHash));
-  return SQLITE_NOTFOUND;
+  memcpy(pHash, &cs->refs.aBranches[i].workingSetHash, sizeof(ProllyHash));
+  return SQLITE_OK;
 }
 
 int chunkStoreSetBranchWorkingSet(ChunkStore *cs, const char *zBranch, const ProllyHash *pHash){
-  int i;
-  for(i=0; i<cs->refs.nBranches; i++){
-    if( strcmp(cs->refs.aBranches[i].zName, zBranch)==0 ){
-      memcpy(&cs->refs.aBranches[i].workingSetHash, pHash, sizeof(ProllyHash));
-      return SQLITE_OK;
-    }
-  }
-  return SQLITE_NOTFOUND;
+  int i = findBranchIdx(cs, zBranch);
+  if( i<0 ) return SQLITE_NOTFOUND;
+  memcpy(&cs->refs.aBranches[i].workingSetHash, pHash, sizeof(ProllyHash));
+  return SQLITE_OK;
 }
 
 int chunkStoreFindTag(ChunkStore *cs, const char *zName, ProllyHash *pCommit){
-  int i;
-  for(i=0; i<cs->refs.nTags; i++){
-    if( strcmp(cs->refs.aTags[i].zName, zName)==0 ){
-      if( pCommit ) memcpy(pCommit, &cs->refs.aTags[i].commitHash, sizeof(ProllyHash));
-      return SQLITE_OK;
-    }
-  }
-  return SQLITE_NOTFOUND;
+  int i = findTagIdx(cs, zName);
+  if( i<0 ) return SQLITE_NOTFOUND;
+  if( pCommit ) memcpy(pCommit, &cs->refs.aTags[i].commitHash, sizeof(ProllyHash));
+  return SQLITE_OK;
 }
 
 int chunkStoreAddTag(ChunkStore *cs, const char *zName, const ProllyHash *pCommit){
@@ -542,27 +553,19 @@ int chunkStoreAddTagFull(
 }
 
 int chunkStoreDeleteTag(ChunkStore *cs, const char *zName){
-  int i;
-  for(i=0; i<cs->refs.nTags; i++){
-    if( strcmp(cs->refs.aTags[i].zName, zName)==0 ){
-      sqlite3_free(cs->refs.aTags[i].zName);
-      cs->refs.aTags[i] = cs->refs.aTags[cs->refs.nTags-1];
-      cs->refs.nTags--;
-      return SQLITE_OK;
-    }
-  }
-  return SQLITE_NOTFOUND;
+  int i = findTagIdx(cs, zName);
+  if( i<0 ) return SQLITE_NOTFOUND;
+  sqlite3_free(cs->refs.aTags[i].zName);
+  cs->refs.aTags[i] = cs->refs.aTags[cs->refs.nTags-1];
+  cs->refs.nTags--;
+  return SQLITE_OK;
 }
 
 int chunkStoreFindRemote(ChunkStore *cs, const char *zName, const char **pzUrl){
-  int i;
-  for(i=0; i<cs->refs.nRemotes; i++){
-    if( strcmp(cs->refs.aRemotes[i].zName, zName)==0 ){
-      if( pzUrl ) *pzUrl = cs->refs.aRemotes[i].zUrl;
-      return SQLITE_OK;
-    }
-  }
-  return SQLITE_NOTFOUND;
+  int i = findRemoteIdx(cs, zName);
+  if( i<0 ) return SQLITE_NOTFOUND;
+  if( pzUrl ) *pzUrl = cs->refs.aRemotes[i].zUrl;
+  return SQLITE_OK;
 }
 
 int chunkStoreAddRemote(ChunkStore *cs, const char *zName, const char *zUrl){
@@ -583,50 +586,41 @@ int chunkStoreAddRemote(ChunkStore *cs, const char *zName, const char *zUrl){
 }
 
 int chunkStoreDeleteRemote(ChunkStore *cs, const char *zName){
-  int i, j;
-  for(i=0; i<cs->refs.nRemotes; i++){
-    if( strcmp(cs->refs.aRemotes[i].zName, zName)==0 ){
-      sqlite3_free(cs->refs.aRemotes[i].zName);
-      sqlite3_free(cs->refs.aRemotes[i].zUrl);
-      cs->refs.aRemotes[i] = cs->refs.aRemotes[cs->refs.nRemotes-1];
-      cs->refs.nRemotes--;
+  int i = findRemoteIdx(cs, zName);
+  int j;
+  if( i<0 ) return SQLITE_NOTFOUND;
+  sqlite3_free(cs->refs.aRemotes[i].zName);
+  sqlite3_free(cs->refs.aRemotes[i].zUrl);
+  cs->refs.aRemotes[i] = cs->refs.aRemotes[cs->refs.nRemotes-1];
+  cs->refs.nRemotes--;
 
-      for(j=cs->refs.nTracking-1; j>=0; j--){
-        if( strcmp(cs->refs.aTracking[j].zRemote, zName)==0 ){
-          sqlite3_free(cs->refs.aTracking[j].zRemote);
-          sqlite3_free(cs->refs.aTracking[j].zBranch);
-          cs->refs.aTracking[j] = cs->refs.aTracking[cs->refs.nTracking-1];
-          cs->refs.nTracking--;
-        }
-      }
-      return SQLITE_OK;
+  for(j=cs->refs.nTracking-1; j>=0; j--){
+    if( strcmp(cs->refs.aTracking[j].zRemote, zName)==0 ){
+      sqlite3_free(cs->refs.aTracking[j].zRemote);
+      sqlite3_free(cs->refs.aTracking[j].zBranch);
+      cs->refs.aTracking[j] = cs->refs.aTracking[cs->refs.nTracking-1];
+      cs->refs.nTracking--;
     }
   }
-  return SQLITE_NOTFOUND;
+  return SQLITE_OK;
 }
 
 int chunkStoreFindTracking(ChunkStore *cs, const char *zRemote,
                            const char *zBranch, ProllyHash *pCommit){
-  int i;
-  for(i=0; i<cs->refs.nTracking; i++){
-    if( strcmp(cs->refs.aTracking[i].zRemote, zRemote)==0
-     && strcmp(cs->refs.aTracking[i].zBranch, zBranch)==0 ){
-      if( pCommit ) memcpy(pCommit, &cs->refs.aTracking[i].commitHash, sizeof(ProllyHash));
-      return SQLITE_OK;
-    }
+  int i = findTrackingIdx(cs, zRemote, zBranch);
+  if( i>=0 ){
+    if( pCommit ) memcpy(pCommit, &cs->refs.aTracking[i].commitHash, sizeof(ProllyHash));
+    return SQLITE_OK;
   }
   return SQLITE_NOTFOUND;
 }
 
 int chunkStoreUpdateTracking(ChunkStore *cs, const char *zRemote,
                              const char *zBranch, const ProllyHash *pCommit){
-  int i;
-  for(i=0; i<cs->refs.nTracking; i++){
-    if( strcmp(cs->refs.aTracking[i].zRemote, zRemote)==0
-     && strcmp(cs->refs.aTracking[i].zBranch, zBranch)==0 ){
-      memcpy(&cs->refs.aTracking[i].commitHash, pCommit, sizeof(ProllyHash));
-      return SQLITE_OK;
-    }
+  int i = findTrackingIdx(cs, zRemote, zBranch);
+  if( i>=0 ){
+    memcpy(&cs->refs.aTracking[i].commitHash, pCommit, sizeof(ProllyHash));
+    return SQLITE_OK;
   }
 
   {
