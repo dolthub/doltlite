@@ -1051,16 +1051,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 
     sqlite3_result_text(ctx, r->zToCommit, -1, SQLITE_TRANSIENT);
   }else if( nCols > 0 && col == nCols+1 ){
-
-    time_t t = (time_t)r->toDate;
-    struct tm *tm = gmtime(&t);
-    if(tm){
-      char b[32];
-      strftime(b, sizeof(b), "%Y-%m-%d %H:%M:%S", tm);
-      sqlite3_result_text(ctx, b, -1, SQLITE_TRANSIENT);
-    }else{
-      sqlite3_result_null(ctx);
-    }
+    doltliteResultTimestamp(ctx, r->toDate);
   }else if( nCols > 0 && col < 2*nCols+2 ){
     int colIdx = col - nCols - 2;
     doltliteResultUserCol(ctx, &pVtab->cols, r->pOldVal, r->nOldVal,
@@ -1069,16 +1060,7 @@ static int dtColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 
     sqlite3_result_text(ctx, r->zFromCommit, -1, SQLITE_TRANSIENT);
   }else if( nCols > 0 && col == 2*nCols+3 ){
-
-    time_t t = (time_t)r->fromDate;
-    struct tm *tm = gmtime(&t);
-    if(tm){
-      char b[32];
-      strftime(b, sizeof(b), "%Y-%m-%d %H:%M:%S", tm);
-      sqlite3_result_text(ctx, b, -1, SQLITE_TRANSIENT);
-    }else{
-      sqlite3_result_null(ctx);
-    }
+    doltliteResultTimestamp(ctx, r->fromDate);
   }else if( nCols > 0 && col == 2*nCols+4 ){
     switch( r->diffType ){
       case PROLLY_DIFF_ADD:    sqlite3_result_text(ctx,"added",-1,SQLITE_STATIC); break;

@@ -511,10 +511,7 @@ static int htColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
         sqlite3_result_text(ctx,c->zCommitter,-1,SQLITE_TRANSIENT);
         break;
       case 2:
-        {time_t t=(time_t)c->commitDate;struct tm *tm=gmtime(&t);
-          if(tm){char b[32];strftime(b,sizeof(b),"%Y-%m-%d %H:%M:%S",tm);
-            sqlite3_result_text(ctx,b,-1,SQLITE_TRANSIENT);
-          }else sqlite3_result_null(ctx);}
+        doltliteResultTimestamp(ctx, c->commitDate);
         break;
     }
   }
