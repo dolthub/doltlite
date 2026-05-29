@@ -60,4 +60,19 @@ int doltliteBindField(sqlite3_stmt *pStmt, int iParam,
 int doltliteFieldValuesEqual(int aType, const u8 *pA, int nA, int aOff,
                              int bType, const u8 *pB, int nB, int bOff);
 
+/* A SQLite value to be encoded into a record. eType is one of the
+** SQLITE_* type codes; i/r/p+n carry the integer, real and text/blob
+** payloads respectively. */
+typedef struct DoltliteSerialValue DoltliteSerialValue;
+struct DoltliteSerialValue {
+  int eType;
+  i64 i;
+  double r;
+  const void *p;
+  int n;
+};
+
+u32 doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pLen);
+void doltliteSerialPut(u8 *pOut, const DoltliteSerialValue *pVal, u32 serialType);
+
 #endif

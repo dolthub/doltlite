@@ -305,66 +305,6 @@ static int loadMergePkInfo(sqlite3 *db, const char *zTable, MergePkInfo *pPk){
   return SQLITE_OK;
 }
 
-typedef struct MergeFieldValue MergeFieldValue;
-struct MergeFieldValue {
-  int eType;
-  i64 i;
-  double r;
-  const void *p;
-  int n;
-};
-
-static u32 mergeSerialType(const MergeFieldValue *pMem, u32 *pLen){
-  if( pMem->eType == SQLITE_NULL ){ *pLen = 0; return 0; }
-  if( pMem->eType == SQLITE_INTEGER ){
-    i64 v = pMem->i;
-    if( v==0 ){ *pLen = 0; return 8; }
-    if( v==1 ){ *pLen = 0; return 9; }
-    if( v>=-128 && v<=127 ){ *pLen = 1; return 1; }
-    if( v>=-32768 && v<=32767 ){ *pLen = 2; return 2; }
-    if( v>=-8388608 && v<=8388607 ){ *pLen = 3; return 3; }
-    if( v>=-2147483648LL && v<=2147483647LL ){ *pLen = 4; return 4; }
-    if( v>=-140737488355328LL && v<=140737488355327LL ){ *pLen = 6; return 5; }
-    *pLen = 8; return 6;
-  }
-  if( pMem->eType == SQLITE_FLOAT ){ *pLen = 8; return 7; }
-  if( pMem->eType == SQLITE_TEXT ){
-    *pLen = (u32)pMem->n;
-    return (u32)(pMem->n * 2 + 13);
-  }
-  if( pMem->eType == SQLITE_BLOB ){
-    *pLen = (u32)pMem->n;
-    return (u32)(pMem->n * 2 + 12);
-  }
-  *pLen = 0;
-  return 0;
-}
-
-static void mergeSerialPut(u8 *pOut, const MergeFieldValue *pMem, u32 serialType){
-  switch( serialType ){
-    case 0:
-    case 8:
-    case 9:
-      return;
-    case 1: doltliteIpkWriteBE(pOut, pMem->i, 1); return;
-    case 2: doltliteIpkWriteBE(pOut, pMem->i, 2); return;
-    case 3: doltliteIpkWriteBE(pOut, pMem->i, 3); return;
-    case 4: doltliteIpkWriteBE(pOut, pMem->i, 4); return;
-    case 5: doltliteIpkWriteBE(pOut, pMem->i, 6); return;
-    case 6: doltliteIpkWriteBE(pOut, pMem->i, 8); return;
-    case 7: {
-      sqlite3_uint64 u;
-      memcpy(&u, &pMem->r, 8);
-      doltliteIpkWriteBE(pOut, (i64)u, 8);
-      return;
-    }
-    default:
-      if( serialType>=12 ){
-        memcpy(pOut, pMem->p, (size_t)pMem->n);
-      }
-      return;
-  }
-}
 
 static u8 *buildRecordFromStmtCols(
   sqlite3_stmt *pStmt,
@@ -372,7 +312,7 @@ static u8 *buildRecordFromStmtCols(
   int nField,
   int *pnOut
 ){
-  MergeFieldValue *aMem = 0;
+  DoltliteSerialValue *aMem = 0;
   u32 *aType = 0;
   u32 *aLen = 0;
   u8 *pOut = 0;
@@ -382,14 +322,14 @@ static u8 *buildRecordFromStmtCols(
   *pnOut = 0;
   if( nField<=0 ) return 0;
 
-  aMem = sqlite3_malloc64((sqlite3_int64)nField * sizeof(MergeFieldValue));
+  aMem = sqlite3_malloc64((sqlite3_int64)nField * sizeof(DoltliteSerialValue));
   aType = sqlite3_malloc64((sqlite3_int64)nField * sizeof(u32));
   aLen = sqlite3_malloc64((sqlite3_int64)nField * sizeof(u32));
   if( !aMem || !aType || !aLen ){
     sqlite3_free(aMem); sqlite3_free(aType); sqlite3_free(aLen);
     return 0;
   }
-  memset(aMem, 0, (size_t)nField * sizeof(MergeFieldValue));
+  memset(aMem, 0, (size_t)nField * sizeof(DoltliteSerialValue));
 
   for(i=0; i<nField; i++){
     int iCol = iStart + i;
@@ -414,7 +354,7 @@ static u8 *buildRecordFromStmtCols(
       default:
         break;
     }
-    aType[i] = mergeSerialType(&aMem[i], &aLen[i]);
+    aType[i] = doltliteSerialTypeOf(&aMem[i], &aLen[i]);
     hdrSize += sqlite3VarintLen(aType[i]);
     bodySize += (int)aLen[i];
   }
@@ -432,7 +372,7 @@ static u8 *buildRecordFromStmtCols(
   for(i=0; i<nField; i++){
     pHdr += sqlite3PutVarint(pHdr, aType[i]);
     if( aLen[i]>0 ){
-      mergeSerialPut(pBody, &aMem[i], aType[i]);
+      doltliteSerialPut(pBody, &aMem[i], aType[i]);
       pBody += aLen[i];
     }
   }

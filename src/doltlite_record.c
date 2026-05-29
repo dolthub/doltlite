@@ -6,6 +6,54 @@
 #include <string.h>
 #include <stdio.h>
 
+u32 doltliteSerialTypeOf(const DoltliteSerialValue *pVal, u32 *pLen){
+  if( pVal->eType == SQLITE_NULL ){ *pLen = 0; return 0; }
+  if( pVal->eType == SQLITE_INTEGER ){
+    i64 v = pVal->i;
+    if( v==0 ){ *pLen = 0; return 8; }
+    if( v==1 ){ *pLen = 0; return 9; }
+    if( v>=-128 && v<=127 ){ *pLen = 1; return 1; }
+    if( v>=-32768 && v<=32767 ){ *pLen = 2; return 2; }
+    if( v>=-8388608 && v<=8388607 ){ *pLen = 3; return 3; }
+    if( v>=-2147483648LL && v<=2147483647LL ){ *pLen = 4; return 4; }
+    if( v>=-140737488355328LL && v<=140737488355327LL ){ *pLen = 6; return 5; }
+    *pLen = 8; return 6;
+  }
+  if( pVal->eType == SQLITE_FLOAT ){ *pLen = 8; return 7; }
+  if( pVal->eType == SQLITE_TEXT ){
+    *pLen = (u32)pVal->n;
+    return (u32)(pVal->n * 2 + 13);
+  }
+  if( pVal->eType == SQLITE_BLOB ){
+    *pLen = (u32)pVal->n;
+    return (u32)(pVal->n * 2 + 12);
+  }
+  *pLen = 0;
+  return 0;
+}
+
+void doltliteSerialPut(u8 *pOut, const DoltliteSerialValue *pVal, u32 serialType){
+  i64 v;
+  int nByte, i;
+  if( serialType==0 || serialType==8 || serialType==9 ) return;
+  if( serialType==7 ){
+    sqlite3_uint64 u;
+    memcpy(&u, &pVal->r, 8);
+    v = (i64)u;
+    nByte = 8;
+  }else if( serialType>=1 && serialType<=6 ){
+    v = pVal->i;
+    nByte = dlSerialTypeLen(serialType);
+  }else{
+    if( serialType>=12 ) memcpy(pOut, pVal->p, (size_t)pVal->n);
+    return;
+  }
+  for(i=nByte-1; i>=0; i--){
+    pOut[i] = (u8)(v & 0xFF);
+    v >>= 8;
+  }
+}
+
 int doltliteFieldValuesEqual(
   int aType, const u8 *pA, int nA, int aOff,
   int bType, const u8 *pB, int nB, int bOff
