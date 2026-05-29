@@ -162,9 +162,8 @@ static int atBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static int atOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
-  AtCursor *c;(void)pVtab;
-  c=sqlite3_malloc(sizeof(*c)); if(!c) return SQLITE_NOMEM;
-  memset(c,0,sizeof(*c)); *pp=&c->base; return SQLITE_OK;
+  (void)pVtab;
+  return doltliteVtabOpenCursor(pp, sizeof(AtCursor));
 }
 
 static int atClose(sqlite3_vtab_cursor *cur){

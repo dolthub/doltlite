@@ -1358,12 +1358,10 @@ static int brConnect(sqlite3 *db, void *pAux, int argc,
   *ppVtab = &p->base;
   return SQLITE_OK;
 }
-static int brDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
 static int brOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
-  BrCur *c = sqlite3_malloc(sizeof(*c)); (void)v;
-  if(!c) return SQLITE_NOMEM; memset(c,0,sizeof(*c)); *pp=&c->base; return SQLITE_OK;
+  (void)v;
+  return doltliteVtabOpenCursor(pp, sizeof(BrCur));
 }
-static int brClose(sqlite3_vtab_cursor *c){ sqlite3_free(c); return SQLITE_OK; }
 static int brFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3_value **v){
   (void)n;(void)s;(void)a;(void)v;
   ((BrCur*)c)->iRow = 0; return SQLITE_OK;
@@ -1497,8 +1495,8 @@ static int brBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
   (void)v; p->estimatedCost=10; p->estimatedRows=5; return SQLITE_OK;
 }
 static sqlite3_module brMod = {
-  0,0,brConnect,brBestIndex,brDisconnect,0,
-  brOpen,brClose,brFilter,brNext,brEof,brColumn,brRowid,
+  0,0,brConnect,brBestIndex,doltliteVtabDisconnect,0,
+  brOpen,doltliteVtabClose,brFilter,brNext,brEof,brColumn,brRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 

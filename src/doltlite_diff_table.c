@@ -957,12 +957,8 @@ static int dtBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static int dtOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
-  DiffTblCursor *c; (void)pVtab;
-  c = sqlite3_malloc(sizeof(*c));
-  if( !c ) return SQLITE_NOMEM;
-  memset(c, 0, sizeof(*c));
-  *pp = &c->base;
-  return SQLITE_OK;
+  (void)pVtab;
+  return doltliteVtabOpenCursor(pp, sizeof(DiffTblCursor));
 }
 
 static int dtClose(sqlite3_vtab_cursor *cur){

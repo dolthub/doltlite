@@ -406,14 +406,9 @@ static int cvsConnect(sqlite3 *db, void *pAux, int argc,
   *ppVtab = &v->base;
   return SQLITE_OK;
 }
-static int cvsDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
 static int cvsOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
-  CvSumCur *c = sqlite3_malloc(sizeof(*c));
   (void)v;
-  if( !c ) return SQLITE_NOMEM;
-  memset(c, 0, sizeof(*c));
-  *pp = &c->base;
-  return SQLITE_OK;
+  return doltliteVtabOpenCursor(pp, sizeof(CvSumCur));
 }
 static int cvsClose(sqlite3_vtab_cursor *cur){
   CvSumCur *c = (CvSumCur*)cur;
@@ -460,7 +455,7 @@ static int cvsBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
 }
 
 static sqlite3_module cvSummaryModule = {
-  0, 0, cvsConnect, cvsBestIndex, cvsDisconnect, 0, cvsOpen, cvsClose,
+  0, 0, cvsConnect, cvsBestIndex, doltliteVtabDisconnect, 0, cvsOpen, cvsClose,
   cvsFilter, cvsNext, cvsEof, cvsColumn, cvsRowid,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
@@ -555,12 +550,13 @@ static int cvrDisconnect(sqlite3_vtab *pVtab){
 }
 
 static int cvrOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
-  CvRowCur *c = sqlite3_malloc(sizeof(*c));
+  CvRowCur *c;
   (void)pVtab;
-  if( !c ) return SQLITE_NOMEM;
-  memset(c, 0, sizeof(*c));
+  if( doltliteVtabOpenCursor(pp, sizeof(CvRowCur))!=SQLITE_OK ){
+    return SQLITE_NOMEM;
+  }
+  c = (CvRowCur*)*pp;
   c->iTableIdx = -1;
-  *pp = &c->base;
   return SQLITE_OK;
 }
 

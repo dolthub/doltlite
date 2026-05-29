@@ -387,9 +387,8 @@ static int htBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
 }
 
 static int htOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
-  HistCursor *c;(void)pVtab;
-  c=sqlite3_malloc(sizeof(*c)); if(!c) return SQLITE_NOMEM;
-  memset(c,0,sizeof(*c)); *pp=&c->base; return SQLITE_OK;
+  (void)pVtab;
+  return doltliteVtabOpenCursor(pp, sizeof(HistCursor));
 }
 
 static int htClose(sqlite3_vtab_cursor *cur){

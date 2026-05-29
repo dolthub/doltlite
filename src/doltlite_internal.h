@@ -106,6 +106,28 @@ static SQLITE_INLINE void doltliteResultTimestamp(sqlite3_context *ctx, i64 time
   }
 }
 
+static SQLITE_INLINE int doltliteVtabDisconnect(sqlite3_vtab *pVtab){
+  sqlite3_free(pVtab);
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteVtabClose(sqlite3_vtab_cursor *pCur){
+  sqlite3_free(pCur);
+  return SQLITE_OK;
+}
+
+static SQLITE_INLINE int doltliteVtabOpenCursor(
+  sqlite3_vtab_cursor **ppCursor,
+  int nByte
+){
+  sqlite3_vtab_cursor *pCur;
+  pCur = sqlite3_malloc(nByte);
+  if( !pCur ) return SQLITE_NOMEM;
+  memset(pCur, 0, nByte);
+  *ppCursor = pCur;
+  return SQLITE_OK;
+}
+
 static SQLITE_INLINE int doltliteFindTableRootByName(
   struct TableEntry *a, int n, const char *zName,
   ProllyHash *pRoot, u8 *pFlags

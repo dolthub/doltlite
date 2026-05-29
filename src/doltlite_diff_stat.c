@@ -515,8 +515,6 @@ static int dstConnect(sqlite3 *db, void *pAux, int argc,
   return SQLITE_OK;
 }
 
-static int dstDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
-
 static int dstBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   (void)pVtab;
   return doltliteBestIndexRefs(pInfo, DST_COL_FROM_REF, DST_COL_TO_REF,
@@ -524,12 +522,8 @@ static int dstBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static int dstOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
-  DstCursor *c; (void)v;
-  c = sqlite3_malloc(sizeof(*c));
-  if( !c ) return SQLITE_NOMEM;
-  memset(c, 0, sizeof(*c));
-  *pp = &c->base;
-  return SQLITE_OK;
+  (void)v;
+  return doltliteVtabOpenCursor(pp, sizeof(DstCursor));
 }
 
 static int dstClose(sqlite3_vtab_cursor *cur){
@@ -760,7 +754,7 @@ static int dstRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
 }
 
 static sqlite3_module diffStatModule = {
-  0, 0, dstConnect, dstBestIndex, dstDisconnect, 0,
+  0, 0, dstConnect, dstBestIndex, doltliteVtabDisconnect, 0,
   dstOpen, dstClose, dstFilter, dstNext, dstEof,
   dstColumn, dstRowid,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
@@ -822,8 +816,6 @@ static int dssConnect(sqlite3 *db, void *pAux, int argc,
   return SQLITE_OK;
 }
 
-static int dssDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
-
 static int dssBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   (void)pVtab;
   return doltliteBestIndexRefs(pInfo, DSS_COL_FROM_REF, DSS_COL_TO_REF,
@@ -831,12 +823,8 @@ static int dssBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static int dssOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
-  DssCursor *c; (void)v;
-  c = sqlite3_malloc(sizeof(*c));
-  if( !c ) return SQLITE_NOMEM;
-  memset(c, 0, sizeof(*c));
-  *pp = &c->base;
-  return SQLITE_OK;
+  (void)v;
+  return doltliteVtabOpenCursor(pp, sizeof(DssCursor));
 }
 
 static int dssClose(sqlite3_vtab_cursor *cur){
@@ -978,7 +966,7 @@ static int dssRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
 }
 
 static sqlite3_module diffSummaryModule = {
-  0, 0, dssConnect, dssBestIndex, dssDisconnect, 0,
+  0, 0, dssConnect, dssBestIndex, doltliteVtabDisconnect, 0,
   dssOpen, dssClose, dssFilter, dssNext, dssEof,
   dssColumn, dssRowid,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
