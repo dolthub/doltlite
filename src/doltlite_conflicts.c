@@ -318,10 +318,9 @@ static int cfConnect(sqlite3 *db, void *pAux, int argc,
   v = sqlite3_malloc(sizeof(*v)); if(!v) return SQLITE_NOMEM;
   memset(v,0,sizeof(*v)); v->db=db; *ppVtab=&v->base; return SQLITE_OK;
 }
-static int cfDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
 static int cfOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
-  ConflictsCur *c=sqlite3_malloc(sizeof(*c)); (void)v;
-  if(!c) return SQLITE_NOMEM; memset(c,0,sizeof(*c)); *pp=&c->base; return SQLITE_OK;
+  (void)v;
+  return doltliteVtabOpenCursor(pp, sizeof(ConflictsCur));
 }
 static int cfClose(sqlite3_vtab_cursor *cur){
   ConflictsCur *c=(ConflictsCur*)cur;
@@ -349,7 +348,7 @@ static int cfRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){ *r=((ConflictsCu
 static int cfBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){ (void)v; p->estimatedCost=10; return SQLITE_OK; }
 
 static sqlite3_module conflictsModule = {
-  0,0,cfConnect,cfBestIndex,cfDisconnect,0,cfOpen,cfClose,cfFilter,cfNext,cfEof,
+  0,0,cfConnect,cfBestIndex,doltliteVtabDisconnect,0,cfOpen,cfClose,cfFilter,cfNext,cfEof,
   cfColumn,cfRowid,0,0,0,0,0,0,0,0,0,0,0,0
 };
 
@@ -459,12 +458,13 @@ static int cfrDisconnect(sqlite3_vtab *pVtab){
 }
 
 static int cfrOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **pp){
-  CfRowCur *c = sqlite3_malloc(sizeof(*c));
+  CfRowCur *c;
   (void)pVtab;
-  if(!c) return SQLITE_NOMEM;
-  memset(c,0,sizeof(*c));
+  if( doltliteVtabOpenCursor(pp, sizeof(CfRowCur))!=SQLITE_OK ){
+    return SQLITE_NOMEM;
+  }
+  c = (CfRowCur*)*pp;
   c->iTableIdx = -1;
-  *pp = &c->base;
   return SQLITE_OK;
 }
 

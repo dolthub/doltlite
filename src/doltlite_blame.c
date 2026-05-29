@@ -770,13 +770,8 @@ static int bmBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
 }
 
 static int bmOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
-  BlameCursor *c;
   (void)pVtab;
-  c = sqlite3_malloc(sizeof(*c));
-  if( !c ) return SQLITE_NOMEM;
-  memset(c, 0, sizeof(*c));
-  *ppCursor = &c->base;
-  return SQLITE_OK;
+  return doltliteVtabOpenCursor(ppCursor, sizeof(BlameCursor));
 }
 
 static int bmClose(sqlite3_vtab_cursor *pCursor){

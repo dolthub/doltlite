@@ -423,20 +423,14 @@ static int sdConnect(sqlite3 *db, void *pAux, int argc,
   return SQLITE_OK;
 }
 
-static int sdDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
-
 static int sdBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   (void)pVtab;
   return doltliteBestIndexRefs(pInfo, 4, 5, 6);
 }
 
 static int sdOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
-  SdCursor *c; (void)v;
-  c = sqlite3_malloc(sizeof(*c));
-  if( !c ) return SQLITE_NOMEM;
-  memset(c, 0, sizeof(*c));
-  *pp = &c->base;
-  return SQLITE_OK;
+  (void)v;
+  return doltliteVtabOpenCursor(pp, sizeof(SdCursor));
 }
 
 static int sdClose(sqlite3_vtab_cursor *cur){
@@ -688,7 +682,7 @@ static int sdRowid(sqlite3_vtab_cursor *cur, sqlite3_int64 *r){
 }
 
 static sqlite3_module schemaDiffModule = {
-  0, 0, sdConnect, sdBestIndex, sdDisconnect, 0,
+  0, 0, sdConnect, sdBestIndex, doltliteVtabDisconnect, 0,
   sdOpen, sdClose, sdFilter, sdNext, sdEof,
   sdColumn, sdRowid,
   0,0,0,0,0,0,0,0,0,0,0,0

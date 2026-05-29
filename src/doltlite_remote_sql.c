@@ -775,12 +775,10 @@ static int remConnect(sqlite3 *db, void *pAux, int argc,
   *ppVtab = &p->base;
   return SQLITE_OK;
 }
-static int remDisconnect(sqlite3_vtab *v){ sqlite3_free(v); return SQLITE_OK; }
 static int remOpen(sqlite3_vtab *v, sqlite3_vtab_cursor **pp){
-  RemCur *c = sqlite3_malloc(sizeof(*c)); (void)v;
-  if(!c) return SQLITE_NOMEM; memset(c,0,sizeof(*c)); *pp=&c->base; return SQLITE_OK;
+  (void)v;
+  return doltliteVtabOpenCursor(pp, sizeof(RemCur));
 }
-static int remClose(sqlite3_vtab_cursor *c){ sqlite3_free(c); return SQLITE_OK; }
 static int remFilter(sqlite3_vtab_cursor *c, int n, const char *s, int a, sqlite3_value **v){
   (void)n;(void)s;(void)a;(void)v;
   ((RemCur*)c)->iRow = 0; return SQLITE_OK;
@@ -834,8 +832,8 @@ static int remBestIndex(sqlite3_vtab *v, sqlite3_index_info *p){
 }
 
 static sqlite3_module remotesModule = {
-  0,0,remConnect,remBestIndex,remDisconnect,0,
-  remOpen,remClose,remFilter,remNext,remEof,remColumn,remRowid,
+  0,0,remConnect,remBestIndex,doltliteVtabDisconnect,0,
+  remOpen,doltliteVtabClose,remFilter,remNext,remEof,remColumn,remRowid,
   0,0,0,0,0,0,0,0,0,0,0,0
 };
 
