@@ -371,22 +371,31 @@ struct CfRowCur {
 
 static char *cfrBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
-  int i;
   char *z;
   if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(from_root_ish TEXT");
 
-  for(i=0; i<ci->nCol; i++){
-    sqlite3_str_appendf(pStr, ", \"base_%w\"", ci->azName[i]);
-  }
+  if( ci->nCol>0 ){
+    sqlite3_str_appendall(pStr, ", ");
+    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol, "base_", ", ")!=SQLITE_OK ){
+      sqlite3_str_reset(pStr);
+      return 0;
+    }
 
-  for(i=0; i<ci->nCol; i++){
-    sqlite3_str_appendf(pStr, ", \"our_%w\"", ci->azName[i]);
+    sqlite3_str_appendall(pStr, ", ");
+    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol, "our_", ", ")!=SQLITE_OK ){
+      sqlite3_str_reset(pStr);
+      return 0;
+    }
   }
   sqlite3_str_appendall(pStr, ", our_diff_type TEXT");
 
-  for(i=0; i<ci->nCol; i++){
-    sqlite3_str_appendf(pStr, ", \"their_%w\"", ci->azName[i]);
+  if( ci->nCol>0 ){
+    sqlite3_str_appendall(pStr, ", ");
+    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol, "their_", ", ")!=SQLITE_OK ){
+      sqlite3_str_reset(pStr);
+      return 0;
+    }
   }
   sqlite3_str_appendall(pStr, ", their_diff_type TEXT");
   sqlite3_str_appendall(pStr, ", dolt_conflict_id TEXT");

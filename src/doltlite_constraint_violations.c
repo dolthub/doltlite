@@ -479,11 +479,15 @@ struct CvRowCur {
 
 static char *cvrBuildSchema(const DoltliteColInfo *ci){
   sqlite3_str *pStr = sqlite3_str_new(0);
-  int i;
   char *z;
+  if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(violation_type TEXT");
-  for(i=0; i<ci->nCol; i++){
-    sqlite3_str_appendf(pStr, ", \"%w\"", ci->azName[i]);
+  if( ci->nCol>0 ){
+    sqlite3_str_appendall(pStr, ", ");
+    if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol, 0, 0)!=SQLITE_OK ){
+      sqlite3_str_reset(pStr);
+      return 0;
+    }
   }
   sqlite3_str_appendall(pStr, ", violation_info TEXT)");
   z = sqlite3_str_finish(pStr);
