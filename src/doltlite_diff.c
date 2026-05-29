@@ -196,11 +196,64 @@ static int batchAppend(DoltliteDiffCursor *pCur,
   return SQLITE_OK;
 }
 
+/* Diff child against parent catalogs, emitting one batch row per changed table
+** (plus the dolt_schemas view/trigger special case and reverse scan for
+** drops). zHex/pCommit label the rows: "WORKING"+null for the working set, the
+** commit hex+commit for a committed diff. */
+static int diffCatalogPair(
+  DoltliteDiffCursor *pCur, sqlite3 *db,
+  struct TableEntry *aChild, int nChild,
+  struct TableEntry *aParent, int nParent,
+  const char *zHex, const DoltliteCommit *pCommit
+){
+  int rc = SQLITE_OK, i;
+  for(i=0; i<nChild; i++){
+    struct TableEntry *e = &aChild[i];
+    struct TableEntry *p;
+    u8 dataChange, schemaChange;
+    if( !e->zName ){
+      ProllyHash emptyRoot;
+      const ProllyHash *pOldRoot;
+      struct TableEntry *pOldMaster;
+      memset(&emptyRoot, 0, sizeof(emptyRoot));
+      pOldMaster = doltliteFindTableByNumber(aParent, nParent, 1);
+      pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
+      if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
+        u8 schemaChangeFlag =
+          schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags) ? 0 : 1;
+        rc = batchAppend(pCur, zHex, "dolt_schemas", pCommit,
+                         1, schemaChangeFlag);
+        if( rc!=SQLITE_OK ) return rc;
+      }
+      continue;
+    }
+    p = doltliteFindTableByName(aParent, nParent, e->zName);
+    if( !p ){
+      dataChange = 1;
+      schemaChange = 1;
+    }else{
+      dataChange   = (prollyHashCompare(&e->root, &p->root) != 0) ? 1 : 0;
+      schemaChange = (prollyHashCompare(&e->schemaHash, &p->schemaHash) != 0) ? 1 : 0;
+      if( !dataChange && !schemaChange ) continue;
+    }
+    rc = batchAppend(pCur, zHex, e->zName, pCommit, dataChange, schemaChange);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  for(i=0; i<nParent; i++){
+    struct TableEntry *p = &aParent[i];
+    if( !p->zName ) continue;
+    if( doltliteFindTableByName(aChild, nChild, p->zName) ) continue;
+    rc = batchAppend(pCur, zHex, p->zName, pCommit, 1, 1);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  return rc;
+}
+
 static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
   ProllyHash headCat, workCat;
   struct TableEntry *aHead = 0, *aWork = 0;
   int nHead = 0, nWork = 0;
-  int rc, i;
+  int rc;
   static const char zWorkingHex[] = "WORKING";
   char zHexBuf[PROLLY_HASH_SIZE*2+1];
 
@@ -225,47 +278,8 @@ static int computeWorkingBatch(DoltliteDiffCursor *pCur, sqlite3 *db){
   memset(zHexBuf, 0, sizeof(zHexBuf));
   memcpy(zHexBuf, zWorkingHex, sizeof(zWorkingHex));
 
-  for(i=0; i<nWork; i++){
-    struct TableEntry *e = &aWork[i];
-    struct TableEntry *p;
-    u8 dataChange, schemaChange;
-    if( !e->zName ){
-      ProllyHash emptyRoot;
-      const ProllyHash *pOldRoot;
-      struct TableEntry *pOldMaster;
-      memset(&emptyRoot, 0, sizeof(emptyRoot));
-      pOldMaster = doltliteFindTableByNumber(aHead, nHead, 1);
-      pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
-      if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
-        u8 schemaChangeFlag =
-          schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags) ? 0 : 1;
-        rc = batchAppend(pCur, zHexBuf, "dolt_schemas", 0,
-                         1, schemaChangeFlag);
-        if( rc!=SQLITE_OK ) goto done;
-      }
-      continue;
-    }
-    p = doltliteFindTableByName(aHead, nHead, e->zName);
-    if( !p ){
-      dataChange = 1;
-      schemaChange = 1;
-    }else{
-      dataChange   = (prollyHashCompare(&e->root, &p->root) != 0) ? 1 : 0;
-      schemaChange = (prollyHashCompare(&e->schemaHash, &p->schemaHash) != 0) ? 1 : 0;
-      if( !dataChange && !schemaChange ) continue;
-    }
-    rc = batchAppend(pCur, zHexBuf, e->zName, 0, dataChange, schemaChange);
-    if( rc!=SQLITE_OK ) goto done;
-  }
-  for(i=0; i<nHead; i++){
-    struct TableEntry *p = &aHead[i];
-    if( !p->zName ) continue;
-    if( doltliteFindTableByName(aWork, nWork, p->zName) ) continue;
-    rc = batchAppend(pCur, zHexBuf, p->zName, 0, 1, 1);
-    if( rc!=SQLITE_OK ) goto done;
-  }
+  rc = diffCatalogPair(pCur, db, aWork, nWork, aHead, nHead, zHexBuf, 0);
 
-done:
   doltliteFreeCatalog(aHead, nHead);
   doltliteFreeCatalog(aWork, nWork);
   return rc;
@@ -276,7 +290,7 @@ static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
                               const char *zCommitHex){
   struct TableEntry *aChild = 0, *aParent = 0;
   int nChild = 0, nParent = 0;
-  int rc, i;
+  int rc;
   const ProllyHash *pParentHash = doltliteCommitParentHash(pCommit, 0);
   int hasParent = (pParentHash && !prollyHashIsEmpty(pParentHash));
 
@@ -297,49 +311,9 @@ static int computeCommitBatch(DoltliteDiffCursor *pCur, sqlite3 *db,
     }
   }
 
-  for(i=0; i<nChild; i++){
-    struct TableEntry *e = &aChild[i];
-    struct TableEntry *p;
-    u8 dataChange, schemaChange;
-    if( !e->zName ){
-      ProllyHash emptyRoot;
-      const ProllyHash *pOldRoot;
-      struct TableEntry *pOldMaster;
-      memset(&emptyRoot, 0, sizeof(emptyRoot));
-      pOldMaster = doltliteFindTableByNumber(aParent, nParent, 1);
-      pOldRoot = pOldMaster ? &pOldMaster->root : &emptyRoot;
-      if( schemaHasViewOrTriggerDiff(db, pOldRoot, &e->root, e->flags) ){
-        u8 schemaChangeFlag =
-          schemaHasAnyViewOrTrigger(db, pOldRoot, e->flags) ? 0 : 1;
-        rc = batchAppend(pCur, zCommitHex, "dolt_schemas", pCommit,
-                         1, schemaChangeFlag);
-        if( rc!=SQLITE_OK ) goto done;
-      }
-      continue;
-    }
-    p = doltliteFindTableByName(aParent, nParent, e->zName);
-    if( !p ){
-      dataChange = 1;
-      schemaChange = 1;
-    }else{
-      dataChange   = (prollyHashCompare(&e->root, &p->root) != 0) ? 1 : 0;
-      schemaChange = (prollyHashCompare(&e->schemaHash, &p->schemaHash) != 0) ? 1 : 0;
-      if( !dataChange && !schemaChange ) continue;
-    }
-    rc = batchAppend(pCur, zCommitHex, e->zName, pCommit,
-                     dataChange, schemaChange);
-    if( rc!=SQLITE_OK ) goto done;
-  }
+  rc = diffCatalogPair(pCur, db, aChild, nChild, aParent, nParent,
+                       zCommitHex, pCommit);
 
-  for(i=0; i<nParent; i++){
-    struct TableEntry *p = &aParent[i];
-    if( !p->zName ) continue;
-    if( doltliteFindTableByName(aChild, nChild, p->zName) ) continue;
-    rc = batchAppend(pCur, zCommitHex, p->zName, pCommit, 1, 1);
-    if( rc!=SQLITE_OK ) goto done;
-  }
-
-done:
   doltliteFreeCatalog(aChild, nChild);
   doltliteFreeCatalog(aParent, nParent);
   return rc;

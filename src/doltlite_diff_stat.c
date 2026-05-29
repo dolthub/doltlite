@@ -543,6 +543,31 @@ static int dstAppend(DstCursor *c, const DsStatRow *r){
   return SQLITE_OK;
 }
 
+static int dsAppendTableNames(
+  struct TableEntry *aCat, int nCat,
+  char ***paz, int *pn, int *pAlloc
+){
+  int i, j;
+  for(i=0; i<nCat; i++){
+    const char *zName = aCat[i].zName;
+    int dup = 0;
+    if( !zName || aCat[i].iTable==1 ) continue;
+    for(j=0; j<*pn; j++){ if( strcmp((*paz)[j], zName)==0 ){ dup=1; break; } }
+    if( dup ) continue;
+    if( *pn>=*pAlloc ){
+      int newAlloc = *pAlloc ? *pAlloc*2 : 8;
+      char **aNew = sqlite3_realloc(*paz, newAlloc*(int)sizeof(char*));
+      if( !aNew ) return SQLITE_NOMEM;
+      *paz = aNew;
+      *pAlloc = newAlloc;
+    }
+    (*paz)[*pn] = sqlite3_mprintf("%s", zName);
+    if( !(*paz)[*pn] ) return SQLITE_NOMEM;
+    (*pn)++;
+  }
+  return SQLITE_OK;
+}
+
 static int dsCollectTableNames(
   sqlite3 *db,
   const ProllyHash *pFromCat,
@@ -553,7 +578,7 @@ static int dsCollectTableNames(
   int nFrom = 0, nTo = 0;
   char **az = 0;
   int n = 0, alloc = 0;
-  int rc, i, j;
+  int rc, j;
 
   *pazOut = 0;
   *pnOut = 0;
@@ -566,40 +591,9 @@ static int dsCollectTableNames(
     return rc;
   }
 
-  for(i=0; i<nFrom; i++){
-    const char *zName = aFrom[i].zName;
-    int dup = 0;
-    if( !zName || aFrom[i].iTable==1 ) continue;
-    for(j=0; j<n; j++){ if( strcmp(az[j], zName)==0 ){ dup=1; break; } }
-    if( dup ) continue;
-    if( n>=alloc ){
-      int newAlloc = alloc ? alloc*2 : 8;
-      char **aNew = sqlite3_realloc(az, newAlloc*(int)sizeof(char*));
-      if( !aNew ){ rc = SQLITE_NOMEM; goto fail; }
-      az = aNew;
-      alloc = newAlloc;
-    }
-    az[n] = sqlite3_mprintf("%s", zName);
-    if( !az[n] ){ rc = SQLITE_NOMEM; goto fail; }
-    n++;
-  }
-  for(i=0; i<nTo; i++){
-    const char *zName = aTo[i].zName;
-    int dup = 0;
-    if( !zName || aTo[i].iTable==1 ) continue;
-    for(j=0; j<n; j++){ if( strcmp(az[j], zName)==0 ){ dup=1; break; } }
-    if( dup ) continue;
-    if( n>=alloc ){
-      int newAlloc = alloc ? alloc*2 : 8;
-      char **aNew = sqlite3_realloc(az, newAlloc*(int)sizeof(char*));
-      if( !aNew ){ rc = SQLITE_NOMEM; goto fail; }
-      az = aNew;
-      alloc = newAlloc;
-    }
-    az[n] = sqlite3_mprintf("%s", zName);
-    if( !az[n] ){ rc = SQLITE_NOMEM; goto fail; }
-    n++;
-  }
+  rc = dsAppendTableNames(aFrom, nFrom, &az, &n, &alloc);
+  if( rc==SQLITE_OK ) rc = dsAppendTableNames(aTo, nTo, &az, &n, &alloc);
+  if( rc!=SQLITE_OK ) goto fail;
 
   doltliteFreeCatalog(aFrom, nFrom);
   doltliteFreeCatalog(aTo, nTo);
