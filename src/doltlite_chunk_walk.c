@@ -10,23 +10,6 @@
 
 #include <string.h>
 
-static int parseCurrentCatalogHeader(
-  const u8 *data,
-  int nData,
-  int *pVersion,
-  int *pnTables,
-  const u8 **ppEntries
-){
-  const u8 *q;
-  if( nData < CAT_HEADER_SIZE_V3 ) return 0;
-  if( data[0] != CATALOG_FORMAT_V3 && data[0] != CATALOG_FORMAT_V4 ) return 0;
-  if( pVersion ) *pVersion = data[0];
-  q = data + CAT_HEADER_SIZE_V3 - 4;
-  *pnTables = (int)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
-  *ppEntries = data + CAT_HEADER_SIZE_V3;
-  return 1;
-}
-
 DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
   u32 m;
 
@@ -47,7 +30,7 @@ DoltliteChunkType doltliteClassifyChunk(const u8 *data, int nData){
 
   {
     int nTables; const u8 *pEntries; int iFormat;
-    if( parseCurrentCatalogHeader(data, nData, &iFormat, &nTables, &pEntries) ){
+    if( catalogParseHeaderEx(data, nData, &iFormat, &nTables, &pEntries) ){
       return CHUNK_CATALOG;
     }
   }
@@ -122,7 +105,7 @@ static int enumerateCatalogChildren(
   int i;
   int rc = SQLITE_OK;
 
-  if( !parseCurrentCatalogHeader(data, nData, &iFormat, &nTables, &p) ) return SQLITE_CORRUPT;
+  if( !catalogParseHeaderEx(data, nData, &iFormat, &nTables, &p) ) return SQLITE_CORRUPT;
   if( nTables < 0 || nTables >= 10000 ) return SQLITE_CORRUPT;
   for(i=0; i<nTables && rc==SQLITE_OK; i++){
     ProllyHash tableRoot;
