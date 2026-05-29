@@ -112,8 +112,6 @@ static int csCrashWriteInjectionActive(void){
 #endif
 }
 
-#define CS_WAL_TAG_CHUNK  0x01
-#define CS_WAL_TAG_ROOT   0x02
 #define CS_RECENT_FAST_PATH_MAX 16384
 #define CS_WRITEBUF_RETAIN_MAX (64*1024)
 
@@ -209,15 +207,15 @@ static int csReloadFromDiskPreservingLocalRefs(ChunkStore *cs){
 
 void csSerializeManifest(const ChunkStore *cs, u8 *aBuf){
   memset(aBuf, 0, CHUNK_MANIFEST_SIZE);
-  CS_WRITE_U32(aBuf + 0, CHUNK_STORE_MAGIC);
-  CS_WRITE_U32(aBuf + 4, CHUNK_STORE_VERSION);
+  CS_WRITE_U32(aBuf + CS_MANIFEST_MAGIC_OFF, CHUNK_STORE_MAGIC);
+  CS_WRITE_U32(aBuf + CS_MANIFEST_VERSION_OFF, CHUNK_STORE_VERSION);
 
-  CS_WRITE_U32(aBuf + 28, (u32)cs->index.nChunks);
-  CS_WRITE_I64(aBuf + 32, cs->index.iIndexOffset);
-  CS_WRITE_U32(aBuf + 40, (u32)cs->index.nIndexSize);
+  CS_WRITE_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF, (u32)cs->index.nChunks);
+  CS_WRITE_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF, cs->index.iIndexOffset);
+  CS_WRITE_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF, (u32)cs->index.nIndexSize);
 
-  CS_WRITE_I64(aBuf + 84, cs->wal.iWalOffset);
-  memcpy(aBuf + 104, cs->refs.refsHash.data, PROLLY_HASH_SIZE);
+  CS_WRITE_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF, cs->wal.iWalOffset);
+  memcpy(aBuf + CS_MANIFEST_REFS_HASH_OFF, cs->refs.refsHash.data, PROLLY_HASH_SIZE);
 }
 
 static int csReadManifest(ChunkStore *cs){
@@ -228,8 +226,8 @@ static int csReadManifest(ChunkStore *cs){
   rc = sqlite3OsRead(cs->file.pFile, aBuf, CHUNK_MANIFEST_SIZE, 0);
   if( rc != SQLITE_OK ) return rc;
 
-  magic = CS_READ_U32(aBuf + 0);
-  version = CS_READ_U32(aBuf + 4);
+  magic = CS_READ_U32(aBuf + CS_MANIFEST_MAGIC_OFF);
+  version = CS_READ_U32(aBuf + CS_MANIFEST_VERSION_OFF);
   if( magic != CHUNK_STORE_MAGIC ) return SQLITE_NOTADB;
   if( version != CHUNK_STORE_VERSION ){
     sqlite3_log(SQLITE_NOTADB,
@@ -240,12 +238,12 @@ static int csReadManifest(ChunkStore *cs){
     return SQLITE_NOTADB;
   }
 
-  cs->index.nChunks = (int)CS_READ_U32(aBuf + 28);
-  cs->index.iIndexOffset = CS_READ_I64(aBuf + 32);
-  cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + 40);
+  cs->index.nChunks = (int)CS_READ_U32(aBuf + CS_MANIFEST_CHUNK_COUNT_OFF);
+  cs->index.iIndexOffset = CS_READ_I64(aBuf + CS_MANIFEST_INDEX_OFFSET_OFF);
+  cs->index.nIndexSize = (i64)CS_READ_U32(aBuf + CS_MANIFEST_INDEX_SIZE_OFF);
 
-  cs->wal.iWalOffset = CS_READ_I64(aBuf + 84);
-  memcpy(cs->refs.refsHash.data, aBuf + 104, PROLLY_HASH_SIZE);
+  cs->wal.iWalOffset = CS_READ_I64(aBuf + CS_MANIFEST_WAL_OFFSET_OFF);
+  memcpy(cs->refs.refsHash.data, aBuf + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
 
   return SQLITE_OK;
 }
@@ -1192,9 +1190,9 @@ static int csCommitToFile(ChunkStore *cs){
         ChunkIndexEntry *pe = &cs->staging.aPending[i];
         i64 bufOff = pe->offset + 4;
         pOut[0] = CS_WAL_TAG_CHUNK;
-        memcpy(pOut + 1, &pe->hash, 20);
-        CS_WRITE_U32(pOut + 21, (u32)pe->size);
-        pOut += 25;
+        memcpy(pOut + CS_WAL_CHUNK_HASH_OFF, &pe->hash, PROLLY_HASH_SIZE);
+        CS_WRITE_U32(pOut + CS_WAL_CHUNK_LEN_OFF, (u32)pe->size);
+        pOut += CS_WAL_CHUNK_HDR_SIZE;
         memcpy(pOut, cs->staging.pWriteBuf + bufOff, pe->size);
         pOut += pe->size;
       }
@@ -1206,17 +1204,17 @@ static int csCommitToFile(ChunkStore *cs){
     }else{
       for( i = 0; i < cs->staging.nPending; i++ ){
         ChunkIndexEntry *pe = &cs->staging.aPending[i];
-        u8 recHdr[25];
+        u8 recHdr[CS_WAL_CHUNK_HDR_SIZE];
         i64 bufOff;
         recHdr[0] = CS_WAL_TAG_CHUNK;
-        memcpy(recHdr + 1, &pe->hash, 20);
-        CS_WRITE_U32(recHdr + 21, (u32)pe->size);
+        memcpy(recHdr + CS_WAL_CHUNK_HASH_OFF, &pe->hash, PROLLY_HASH_SIZE);
+        CS_WRITE_U32(recHdr + CS_WAL_CHUNK_LEN_OFF, (u32)pe->size);
 
         bufOff = pe->offset + 4;
         CRASH_CHECK_WRITE();
-        rc = sqlite3OsWrite(cs->file.pFile, recHdr, 25, writeOff);
+        rc = sqlite3OsWrite(cs->file.pFile, recHdr, CS_WAL_CHUNK_HDR_SIZE, writeOff);
         if( rc != SQLITE_OK ) goto commit_done;
-        writeOff += 25;
+        writeOff += CS_WAL_CHUNK_HDR_SIZE;
 
         {
           const u8 *pSrc = cs->staging.pWriteBuf + bufOff;
