@@ -57,16 +57,4 @@ int recordFromSortKeyBuffer(
   u8 **ppBuf, int *pnAlloc, int *pnOut
 );
 
-static inline int compareSortKeys(
-  const u8 *pKey1, int nKey1,
-  const u8 *pKey2, int nKey2
-){
-  int n = nKey1 < nKey2 ? nKey1 : nKey2;
-  int c = memcmp(pKey1, pKey2, n);
-  if( c!=0 ) return c;
-  if( nKey1 < nKey2 ) return -1;
-  if( nKey1 > nKey2 ) return 1;
-  return 0;
-}
-
 #endif

@@ -17,76 +17,6 @@ struct RemoteMutationCtx {
   int isDelete;
 };
 
-typedef struct RemoteSqlState RemoteSqlState;
-struct RemoteSqlState {
-  ProllyHash refsHash;
-  char *zSessionBranch;
-  ProllyHash sessionHead;
-  ProllyHash sessionStaged;
-  ProllyHash sessionMergeCommit;
-  ProllyHash sessionConflictsCatalog;
-  ProllyHash sessionConstraintViolationsCatalog;
-  ProllyHash sessionCatalogHash;
-  u8 sessionIsMerging;
-};
-
-static void remoteSqlStateClear(RemoteSqlState *p){
-  sqlite3_free(p->zSessionBranch);
-  memset(p, 0, sizeof(*p));
-}
-
-static int remoteSqlStateSave(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
-  int rc;
-
-  memset(p, 0, sizeof(*p));
-
-  memcpy(&p->refsHash, refsTableGetHash(&cs->refs), sizeof(ProllyHash));
-
-  p->zSessionBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
-  if( !p->zSessionBranch ){
-    remoteSqlStateClear(p);
-    return SQLITE_NOMEM;
-  }
-  doltliteGetSessionHead(db, &p->sessionHead);
-  doltliteGetSessionStaged(db, &p->sessionStaged);
-  doltliteGetSessionMergeState(db, &p->sessionIsMerging,
-                               &p->sessionMergeCommit,
-                               &p->sessionConflictsCatalog);
-  doltliteGetSessionConstraintViolationsCatalog(
-      db, &p->sessionConstraintViolationsCatalog);
-
-  rc = doltliteFlushCatalogToHash(db, &p->sessionCatalogHash);
-  if( rc!=SQLITE_OK ){
-    remoteSqlStateClear(p);
-  }
-  return rc;
-}
-
-static int remoteSqlStateRestore(sqlite3 *db, ChunkStore *cs, RemoteSqlState *p){
-  int rc;
-
-  refsTableSetHash(&cs->refs, &p->refsHash);
-  if( prollyHashIsEmpty(&p->refsHash) ){
-    chunkStoreClearRefs(cs);
-  }else{
-    rc = chunkStoreReloadRefs(cs);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-
-  rc = doltliteSwitchCatalog(db, &p->sessionCatalogHash);
-  if( rc!=SQLITE_OK ) return rc;
-
-  doltliteSetSessionBranch(db, p->zSessionBranch);
-  doltliteSetSessionHead(db, &p->sessionHead);
-  doltliteSetSessionStaged(db, &p->sessionStaged);
-  doltliteSetSessionMergeState(db, p->sessionIsMerging,
-                               &p->sessionMergeCommit,
-                               &p->sessionConflictsCatalog);
-  doltliteSetSessionConstraintViolationsCatalog(
-      db, &p->sessionConstraintViolationsCatalog);
-  return SQLITE_OK;
-}
-
 static int mutateRemoteRef(sqlite3 *db, ChunkStore *cs, void *pArg){
   RemoteMutationCtx *p = (RemoteMutationCtx*)pArg;
   (void)db;
@@ -122,12 +52,14 @@ static void remoteSqlRestoreAndReport(
   sqlite3_context *ctx,
   sqlite3 *db,
   ChunkStore *cs,
-  RemoteSqlState *pSavedState,
+  DoltliteTxnState *pSavedState,
   int opRc,
   const char *zMsg
 ){
-  int restoreRc = remoteSqlStateRestore(db, cs, pSavedState);
-  remoteSqlStateClear(pSavedState);
+  int restoreRc;
+  (void)cs;
+  restoreRc = doltliteRestoreTxnState(db, pSavedState);
+  doltliteTxnStateClear(pSavedState);
   if( restoreRc!=SQLITE_OK ){
     sqlite3_result_error_code(ctx, restoreRc);
     return;
@@ -138,9 +70,9 @@ static void remoteSqlRestoreAndReport(
 
 static void remoteSqlClearAndSucceed(
   sqlite3_context *ctx,
-  RemoteSqlState *pSavedState
+  DoltliteTxnState *pSavedState
 ){
-  remoteSqlStateClear(pSavedState);
+  doltliteTxnStateClear(pSavedState);
   sqlite3_result_int(ctx, 0);
 }
 
@@ -548,7 +480,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   const char *zRemoteName;
   const char *zBranch;
   ProllyHash trackingCommit, localCommit;
-  RemoteSqlState savedState;
+  DoltliteTxnState savedState;
   int rc;
 
   if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
@@ -572,7 +504,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
   memset(&savedState, 0, sizeof(savedState));
 
-  rc = remoteSqlStateSave(db, cs, &savedState);
+  rc = doltliteSaveTxnState(db, &savedState);
   if( rc!=SQLITE_OK ){
     (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error_code(ctx, rc);
@@ -582,13 +514,13 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
   if( rc==SQLITE_NOTFOUND ){
     (void)doltliteVcSealSavepointError(db);
-    remoteSqlStateClear(&savedState);
+    doltliteTxnStateClear(&savedState);
     sqlite3_result_error(ctx, "remote not found", -1);
     return;
   }
   if( rc==SQLITE_CANTOPEN ){
     (void)doltliteVcSealSavepointError(db);
-    remoteSqlStateClear(&savedState);
+    doltliteTxnStateClear(&savedState);
     sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
     return;
   }
@@ -668,7 +600,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
     return;
   }
-  remoteSqlStateClear(&savedState);
+  doltliteTxnStateClear(&savedState);
   rc = doltliteVcSealBranchStyleTxn(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(ctx, rc);
@@ -682,7 +614,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   ChunkStore *cs = doltliteGetChunkStore(db);
   DoltliteRemote *pRemote = 0;
   const char *zUrl;
-  RemoteSqlState savedState;
+  DoltliteTxnState savedState;
   int rc;
 
   if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
@@ -733,7 +665,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  rc = remoteSqlStateSave(db, cs, &savedState);
+  rc = doltliteSaveTxnState(db, &savedState);
   if( rc!=SQLITE_OK ){
     (void)doltliteVcSealSavepointError(db);
     sqlite3_result_error_code(ctx, rc);
