@@ -606,6 +606,41 @@ struct CheckoutMutationCtx {
   int bPersistUnderSavepoint;
 };
 
+/* Snapshot the current branch's working catalog into *pOldCatHash: serialize
+** uncommitted changes into the store, else use the persisted working hash
+** (falling back to HEAD). Returns an error code; callers handle reporting. */
+static int checkoutCaptureOldCatalog(sqlite3 *db, ChunkStore *cs,
+                                     ProllyHash *pOldCatHash){
+  if( doltliteHasUncommittedChanges(db) ){
+    u8 *oldCatData = 0;
+    int nOldCat = 0;
+    int rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = chunkStorePut(cs, oldCatData, nOldCat, pOldCatHash);
+    sqlite3_free(oldCatData);
+    return rc;
+  }else{
+    int rc = doltliteGetPersistedWorkingCatalogHash(db, pOldCatHash);
+    if( rc==SQLITE_NOTFOUND ) rc = doltliteGetHeadCatalogHash(db, pOldCatHash);
+    return rc;
+  }
+}
+
+/* Mirror of checkoutRestoreSession: capture the session head/staged/merge/
+** rebase state so a failed checkout can roll back to it. */
+static void checkoutSaveSession(sqlite3 *db, CheckoutMutationCtx *p){
+  doltliteGetSessionHead(db, &p->savedSessionHead);
+  doltliteGetSessionStaged(db, &p->savedSessionStaged);
+  doltliteGetSessionMergeState(db, &p->savedIsMerging,
+                               &p->savedMergeCommit,
+                               &p->savedConflictsCatalog);
+  doltliteGetSessionRebaseState(db, &p->savedIsRebasing,
+                                &p->savedPreRebaseCat,
+                                &p->savedRebaseOnto,
+                                &p->zSavedRebaseOrigBranch,
+                                &p->zSavedRebaseReturnBranch);
+}
+
 static void checkoutRestoreSession(sqlite3 *db, CheckoutMutationCtx *p){
   doltliteSetSessionBranch(db, p->zCurrentBranch);
   doltliteSetSessionHead(db, &p->savedSessionHead);
@@ -705,8 +740,6 @@ static void doltConnectBranchFunc(
   char *zCurrentBranch = 0;
   ProllyHash targetCommit;
   ProllyHash targetCatHash;
-  u8 *oldCatData = 0;
-  int nOldCat = 0;
   int rc;
 
   (void)argc;
@@ -734,40 +767,12 @@ static void doltConnectBranchFunc(
   }
   m.zCurrentBranch = zCurrentBranch;
   m.haveOldState = 1;
-  doltliteGetSessionHead(db, &m.savedSessionHead);
-  doltliteGetSessionStaged(db, &m.savedSessionStaged);
-  doltliteGetSessionMergeState(db, &m.savedIsMerging,
-                               &m.savedMergeCommit,
-                               &m.savedConflictsCatalog);
-  doltliteGetSessionRebaseState(db, &m.savedIsRebasing,
-                                &m.savedPreRebaseCat,
-                                &m.savedRebaseOnto,
-                                &m.zSavedRebaseOrigBranch,
-                                &m.zSavedRebaseReturnBranch);
-  if( doltliteHasUncommittedChanges(db) ){
-    rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zCurrentBranch);
-      sqlite3_result_error_code(ctx, rc);
-      return;
-    }
-    rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
-    sqlite3_free(oldCatData);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zCurrentBranch);
-      sqlite3_result_error_code(ctx, rc);
-      return;
-    }
-  }else{
-    rc = doltliteGetPersistedWorkingCatalogHash(db, &m.oldCatHash);
-    if( rc==SQLITE_NOTFOUND ){
-      rc = doltliteGetHeadCatalogHash(db, &m.oldCatHash);
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zCurrentBranch);
-      sqlite3_result_error_code(ctx, rc);
-      return;
-    }
+  checkoutSaveSession(db, &m);
+  rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zCurrentBranch);
+    sqlite3_result_error_code(ctx, rc);
+    return;
   }
 
   rc = checkoutLoadAndApply(db, cs, zBranch, &targetCommit, &targetCatHash);
@@ -808,8 +813,6 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   ChunkStore *cs = doltliteGetChunkStore(db);
   CheckoutMutationCtx m;
   char *zCurrentBranch = 0;
-  u8 *oldCatData = 0;
-  int nOldCat = 0;
   int rc;
 
   if( !cs || !zBranch || branchNameEmpty(zBranch) ) return SQLITE_ERROR;
@@ -819,43 +822,17 @@ int doltliteCheckoutBranchForRebase(sqlite3 *db, const char *zBranch){
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zCurrentBranch ) return SQLITE_NOMEM;
 
-  if( doltliteHasUncommittedChanges(db) ){
-    rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zCurrentBranch);
-      return rc;
-    }
-    rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
-    sqlite3_free(oldCatData);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zCurrentBranch);
-      return rc;
-    }
-  }else{
-    rc = doltliteGetPersistedWorkingCatalogHash(db, &m.oldCatHash);
-    if( rc==SQLITE_NOTFOUND ){
-      rc = doltliteGetHeadCatalogHash(db, &m.oldCatHash);
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(zCurrentBranch);
-      return rc;
-    }
+  rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zCurrentBranch);
+    return rc;
   }
 
   m.haveOldState = 1;
   m.zTargetBranch = zBranch;
   m.zCurrentBranch = zCurrentBranch;
   m.bPersistUnderSavepoint = 1;
-  doltliteGetSessionHead(db, &m.savedSessionHead);
-  doltliteGetSessionStaged(db, &m.savedSessionStaged);
-  doltliteGetSessionMergeState(db, &m.savedIsMerging,
-                               &m.savedMergeCommit,
-                               &m.savedConflictsCatalog);
-  doltliteGetSessionRebaseState(db, &m.savedIsRebasing,
-                                &m.savedPreRebaseCat,
-                                &m.savedRebaseOnto,
-                                &m.zSavedRebaseOrigBranch,
-                                &m.zSavedRebaseReturnBranch);
+  checkoutSaveSession(db, &m);
 
   rc = doltliteMutateRefs(db, checkoutMutateRefs, &m);
   if( rc!=SQLITE_OK ){
@@ -1214,55 +1191,22 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
     return;
   }
 
-  {
-    u8 *oldCatData = 0; int nOldCat = 0;
   doltliteGetSessionHead(db, &m.oldCommitHash);
   zCurrentBranch = sqlite3_mprintf("%s", doltliteGetSessionBranch(db));
   if( !zCurrentBranch ){
-      (void)doltliteVcSealSavepointError(db);
-      sqlite3_result_error_nomem(ctx);
-      return;
-    }
-    if( doltliteHasUncommittedChanges(db) ){
-      rc = doltliteFlushAndSerializeCatalog(db, &oldCatData, &nOldCat);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(zCurrentBranch);
-        (void)doltliteVcSealSavepointError(db);
-        sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
-        return;
-      }
-      rc = chunkStorePut(cs, oldCatData, nOldCat, &m.oldCatHash);
-      sqlite3_free(oldCatData);
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(zCurrentBranch);
-        (void)doltliteVcSealSavepointError(db);
-        sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
-        return;
-      }
-    }else{
-      rc = doltliteGetPersistedWorkingCatalogHash(db, &m.oldCatHash);
-      if( rc==SQLITE_NOTFOUND ){
-        rc = doltliteGetHeadCatalogHash(db, &m.oldCatHash);
-      }
-      if( rc!=SQLITE_OK ){
-        sqlite3_free(zCurrentBranch);
-        (void)doltliteVcSealSavepointError(db);
-        sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
-        return;
-      }
-    }
-    m.haveOldState = 1;
+    (void)doltliteVcSealSavepointError(db);
+    sqlite3_result_error_nomem(ctx);
+    return;
   }
-  doltliteGetSessionHead(db, &m.savedSessionHead);
-  doltliteGetSessionStaged(db, &m.savedSessionStaged);
-  doltliteGetSessionMergeState(db, &m.savedIsMerging,
-                               &m.savedMergeCommit,
-                               &m.savedConflictsCatalog);
-  doltliteGetSessionRebaseState(db, &m.savedIsRebasing,
-                                &m.savedPreRebaseCat,
-                                &m.savedRebaseOnto,
-                                &m.zSavedRebaseOrigBranch,
-                                &m.zSavedRebaseReturnBranch);
+  rc = checkoutCaptureOldCatalog(db, cs, &m.oldCatHash);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zCurrentBranch);
+    (void)doltliteVcSealSavepointError(db);
+    sqlite3_result_error(ctx, "failed to snapshot current branch state", -1);
+    return;
+  }
+  m.haveOldState = 1;
+  checkoutSaveSession(db, &m);
 
   m.zTargetBranch = zBranch;
   m.zCurrentBranch = zCurrentBranch;
