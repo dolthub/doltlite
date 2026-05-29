@@ -85,8 +85,10 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
     if( memcmp(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE)==0 ){
 
       pEntry->nRef++;
-      lruRemove(pEntry);
-      lruInsertHead(cache, pEntry);
+      if( pEntry->pLruPrev!=&cache->lruHead ){
+        lruRemove(pEntry);
+        lruInsertHead(cache, pEntry);
+      }
       return pEntry;
     }
     pEntry = pEntry->pHashNext;
@@ -95,7 +97,7 @@ ProllyCacheEntry *prollyCacheGet(ProllyCache *cache, const ProllyHash *hash){
   return 0;
 }
 
-static int cacheEvictOne(ProllyCache *cache){
+static ProllyCacheEntry *cacheEvictOne(ProllyCache *cache){
   ProllyCacheEntry *pEntry;
 
   pEntry = cache->lruTail.pLruPrev;
@@ -103,9 +105,10 @@ static int cacheEvictOne(ProllyCache *cache){
     if( pEntry->nRef==0 ){
       lruRemove(pEntry);
       hashRemove(cache, pEntry);
-      cacheEntryFree(pEntry);
+      sqlite3_free(pEntry->pData);
+      memset(pEntry, 0, sizeof(*pEntry));
       cache->nUsed--;
-      return 1;
+      return pEntry;
     }
     pEntry = pEntry->pLruPrev;
   }
@@ -131,19 +134,19 @@ ProllyCacheEntry *prollyCachePut(
     return pEntry;
   }
 
-  while( cache->nUsed>=cache->nCapacity ){
-    if( !cacheEvictOne(cache) ){
-
-      break;
-    }
+  pEntry = 0;
+  if( cache->nUsed>=cache->nCapacity ){
+    pEntry = cacheEvictOne(cache);
   }
 
-  pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
   if( pEntry==0 ){
-    if( pRc ) *pRc = SQLITE_NOMEM;
-    return 0;
+    pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
+    if( pEntry==0 ){
+      if( pRc ) *pRc = SQLITE_NOMEM;
+      return 0;
+    }
+    memset(pEntry, 0, sizeof(*pEntry));
   }
-  memset(pEntry, 0, sizeof(*pEntry));
 
   pCopy = (u8 *)sqlite3_malloc(nData);
   if( pCopy==0 ){
@@ -195,20 +198,20 @@ ProllyCacheEntry *prollyCachePutOwned(
     return pEntry;
   }
 
-  while( cache->nUsed>=cache->nCapacity ){
-    if( !cacheEvictOne(cache) ){
-
-      break;
-    }
+  pEntry = 0;
+  if( cache->nUsed>=cache->nCapacity ){
+    pEntry = cacheEvictOne(cache);
   }
 
-  pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
   if( pEntry==0 ){
-    sqlite3_free(pData);
-    if( pRc ) *pRc = SQLITE_NOMEM;
-    return 0;
+    pEntry = (ProllyCacheEntry *)sqlite3_malloc(sizeof(ProllyCacheEntry));
+    if( pEntry==0 ){
+      sqlite3_free(pData);
+      if( pRc ) *pRc = SQLITE_NOMEM;
+      return 0;
+    }
+    memset(pEntry, 0, sizeof(*pEntry));
   }
-  memset(pEntry, 0, sizeof(*pEntry));
 
   memcpy(pEntry->hash.data, hash->data, PROLLY_HASH_SIZE);
   pEntry->pData = pData;
