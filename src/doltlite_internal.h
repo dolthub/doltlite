@@ -141,6 +141,23 @@ static SQLITE_INLINE int doltliteVtabOpenCursor(
   return SQLITE_OK;
 }
 
+static SQLITE_INLINE int doltliteAppendQuotedColumnList(
+  sqlite3_str *pStr,
+  char *const *azName,
+  int nName,
+  const char *zPrefix,
+  const char *zSep
+){
+  int i;
+  if( !zPrefix ) zPrefix = "";
+  if( !zSep ) zSep = ", ";
+  for(i=0; i<nName; i++){
+    if( i>0 ) sqlite3_str_appendall(pStr, zSep);
+    sqlite3_str_appendf(pStr, "\"%s%w\"", zPrefix, azName[i]);
+  }
+  return sqlite3_str_errcode(pStr);
+}
+
 static SQLITE_INLINE int doltliteFindTableRootByName(
   struct TableEntry *a, int n, const char *zName,
   ProllyHash *pRoot, u8 *pFlags

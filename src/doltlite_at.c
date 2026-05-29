@@ -14,17 +14,13 @@
 #include <time.h>
 
 static char *atBuildSchema(DoltliteColInfo *ci){
-  int i;
   sqlite3_str *pStr = sqlite3_str_new(0);
   char *z;
   if( !pStr ) return 0;
   sqlite3_str_appendall(pStr, "CREATE TABLE x(");
-  for(i=0; i<ci->nCol; i++){
-    if( i>0 ) sqlite3_str_appendall(pStr, ", ");
-    if( doltliteAppendQuotedIdent(pStr, ci->azName[i])!=SQLITE_OK ){
-      sqlite3_str_reset(pStr);
-      return 0;
-    }
+  if( doltliteAppendQuotedColumnList(pStr, ci->azName, ci->nCol, 0, 0)!=SQLITE_OK ){
+    sqlite3_str_reset(pStr);
+    return 0;
   }
   sqlite3_str_appendall(pStr, ", commit_ref TEXT HIDDEN)");
   z = sqlite3_str_finish(pStr);
