@@ -198,6 +198,15 @@ int doltliteGetHeadCatalogHash(sqlite3 *db, ProllyHash *pCatHash);
 int doltliteFlushAndSerializeCatalog(sqlite3 *db, u8 **ppOut, int *pnOut);
 int doltliteDeserializeCatalogForTest(sqlite3 *db, const u8 *data, int nData);
 int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
+
+/* Post-merge constraint detectors (defined in doltlite_merge_constraints.c). */
+int doltliteDetectMergeFkViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
+                                    char **pzErrMsg, int *pnFound);
+int doltliteDetectMergeUniqueViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
+                                        char **pzErrMsg, int *pnFound);
+int doltliteDetectMergeCheckViolations(sqlite3 *db, const ProllyHash *pAncCatHash,
+                                       char **pzErrMsg, int *pnFound);
+
 int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
                                  ProllyHash *pRoot, u8 *pFlags,
                                  ProllyHash *pSchemaHash);
