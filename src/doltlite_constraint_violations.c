@@ -229,9 +229,9 @@ static int loadAllViolations(
     if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
     nr = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
     if( nr<0 ){ rc = SQLITE_CORRUPT; goto fail; }
-    /* Validate that nr rows can possibly fit in remaining bytes (each row
-    ** carries at least 1+4+8+4+4 = 21 header bytes), and use
-    ** sqlite3_malloc64 to avoid 32-bit multiplication overflow. */
+    /* Reject impossible counts up front: every row needs at least one byte, so
+    ** nr can't exceed the bytes remaining. sqlite3_malloc64 below avoids 32-bit
+    ** overflow on the row-array allocation. */
     if( (sqlite3_uint64)nr > (sqlite3_uint64)(data+nData - p) ){
       rc = SQLITE_CORRUPT; goto fail;
     }
