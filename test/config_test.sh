@@ -25,9 +25,7 @@ check() {
 
 DB="$DOLTLITE"
 
-# ============================================================
 echo "=== 1. Default author ==="
-# ============================================================
 "$DB" "$TMPDIR/t1.db" <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
@@ -41,18 +39,14 @@ check "default name is doltlite" "doltlite" "$result"
 result=$("$DB" "$TMPDIR/t1.db" "SELECT email FROM dolt_log LIMIT 1;")
 check "default email is empty" "" "$result"
 
-# ============================================================
 echo "=== 2. Config get defaults ==="
-# ============================================================
 result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.name');")
 check "default user.name" "doltlite" "$result"
 
 result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.email');")
 check "default user.email" "" "$result"
 
-# ============================================================
 echo "=== 3. Config set + commit ==="
-# ============================================================
 "$DB" "$TMPDIR/t1.db" <<'SQL'
 SELECT dolt_config('user.name', 'Alice Smith');
 SELECT dolt_config('user.email', 'alice@example.com');
@@ -67,9 +61,7 @@ check "commit uses configured name" "Alice Smith" "$result"
 result=$("$DB" "$TMPDIR/t1.db" "SELECT email FROM dolt_log LIMIT 1;")
 check "commit uses configured email" "alice@example.com" "$result"
 
-# ============================================================
 echo "=== 4. --author overrides config ==="
-# ============================================================
 "$DB" "$TMPDIR/t1.db" <<'SQL'
 SELECT dolt_config('user.name', 'Should Not Appear');
 SELECT dolt_config('user.email', 'no@no.com');
@@ -84,18 +76,12 @@ check "--author overrides name" "Bot" "$result"
 result=$("$DB" "$TMPDIR/t1.db" "SELECT email FROM dolt_log LIMIT 1;")
 check "--author overrides email" "bot@ci.com" "$result"
 
-# ============================================================
 echo "=== 5. Config is per-session (not persisted) ==="
-# ============================================================
-# Set config in one session
 "$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.name', 'Ephemeral');" > /dev/null
-# New session should have default
 result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.name');")
 check "config not persisted across sessions" "doltlite" "$result"
 
-# ============================================================
 echo "=== 6. Config get after set (same session) ==="
-# ============================================================
 result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.name','NewName'); SELECT dolt_config('user.name');")
 check "get returns set value" "0
 NewName" "$result"
@@ -104,9 +90,7 @@ result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.email','new@mail'); SEL
 check "email get returns set value" "0
 new@mail" "$result"
 
-# ============================================================
 echo "=== 7. Merge commit uses config ==="
-# ============================================================
 "$DB" "$TMPDIR/t7.db" <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
 INSERT INTO t VALUES(1,'base');
@@ -132,10 +116,7 @@ check "merge commit uses config name" "Merge Author" "$result"
 result=$("$DB" "$TMPDIR/t7.db" "SELECT email FROM dolt_log LIMIT 1;")
 check "merge commit uses config email" "merge@test.com" "$result"
 
-# ============================================================
 echo "=== 8. Cherry-pick uses config ==="
-# ============================================================
-# Get the commit hash from the src branch before switching
 cp_hash=$("$DB" "$TMPDIR/t8.db" <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
@@ -157,9 +138,7 @@ check "cherry-pick uses config name" "Cherry Picker" "$result"
 result=$("$DB" "$TMPDIR/t8.db" "SELECT email FROM dolt_log LIMIT 1;")
 check "cherry-pick uses config email" "cp@test.com" "$result"
 
-# ============================================================
 echo "=== 9. Revert uses config ==="
-# ============================================================
 "$DB" "$TMPDIR/t9.db" <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
@@ -179,18 +158,14 @@ check "revert uses config name" "Reverter" "$result"
 result=$("$DB" "$TMPDIR/t9.db" "SELECT email FROM dolt_log LIMIT 1;")
 check "revert uses config email" "revert@test.com" "$result"
 
-# ============================================================
 echo "=== 10. Error: unknown config key ==="
-# ============================================================
 result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('bad.key');" 2>&1)
 check "unknown key errors" "1" "$(echo "$result" | grep -c 'unknown config key')"
 
 result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('bad.key','val');" 2>&1)
 check "unknown key set errors" "1" "$(echo "$result" | grep -c 'unknown config key')"
 
-# ============================================================
 echo "=== 11. Config with special characters ==="
-# ============================================================
 "$DB" "$TMPDIR/t11.db" <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
@@ -206,9 +181,7 @@ check "name with apostrophe" "O'Brien" "$result"
 result=$("$DB" "$TMPDIR/t11.db" "SELECT email FROM dolt_log LIMIT 1;")
 check "email with plus" "user+tag@example.com" "$result"
 
-# ============================================================
 echo "=== 12. Multiple commits in one session ==="
-# ============================================================
 "$DB" "$TMPDIR/t12.db" <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_config('user.name', 'Batch Author');
@@ -230,9 +203,7 @@ check "all 3 commits same author" "1" "$result"
 result=$("$DB" "$TMPDIR/t12.db" "SELECT committer FROM dolt_log LIMIT 1;")
 check "batch author name correct" "Batch Author" "$result"
 
-# ============================================================
 echo "=== 13. Config change mid-session ==="
-# ============================================================
 "$DB" "$TMPDIR/t13.db" <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 SELECT dolt_config('user.name', 'Author A');
@@ -251,9 +222,7 @@ check "first commit by A" "Author A" "$result"
 result=$("$DB" "$TMPDIR/t13.db" "SELECT committer FROM dolt_log WHERE message='by B';")
 check "second commit by B" "Author B" "$result"
 
-# ============================================================
 echo "=== 14. -A flag with config ==="
-# ============================================================
 "$DB" "$TMPDIR/t14.db" <<'SQL'
 CREATE TABLE t(id INTEGER PRIMARY KEY);
 INSERT INTO t VALUES(1);
@@ -265,16 +234,13 @@ SQL
 result=$("$DB" "$TMPDIR/t14.db" "SELECT committer FROM dolt_log LIMIT 1;")
 check "-A commit uses config" "Quick Author" "$result"
 
-# ============================================================
 echo "=== 15. Error: extra config args ==="
-# ============================================================
 result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.name', 'Alice', 'Extra');" 2>&1)
 check "extra config args error" "1" "$(echo "$result" | grep -c 'too many positional arguments to dolt_config')"
 
 result=$("$DB" "$TMPDIR/t1.db" "SELECT dolt_config('user.name');")
 check "extra config args preserve session value" "doltlite" "$result"
 
-# ============================================================
 echo ""
 echo "======================================="
 echo "Results: $pass passed, $fail failed"
