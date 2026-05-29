@@ -449,6 +449,9 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
       m.zDest = aPositional[1];
       {
         const char *zDefault = chunkStoreGetDefaultBranch(cs);
+        /* Resolve "was the default?" before the mutate: doltliteMutateRefs
+        ** reloads persisted refs, freeing the buffer zDefault points into. */
+        int srcWasDefault = zDefault && strcmp(m.zSrc, zDefault)==0;
         renamingCurrent = strcmp(m.zSrc, doltliteGetSessionBranch(db))==0;
         rc = doltliteMutateRefs(db, mutateBranchMove, &m);
         if( rc!=SQLITE_OK ){
@@ -459,7 +462,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
         if( renamingCurrent ){
           doltliteSetSessionBranch(db, m.zDest);
         }
-        if( zDefault && strcmp(m.zSrc, zDefault)==0 ){
+        if( srcWasDefault ){
           chunkStoreSetDefaultBranch(cs, m.zDest);
           (void)chunkStoreSerializeRefs(cs);
           (void)chunkStoreCommit(cs);
