@@ -4486,6 +4486,13 @@ static void doltliteRebaseInteractiveStart(
     goto fail;
   }
   bWorkingBranchCreated = 1;
+  /* Persist the working branch now. The sub-ops below (checkout, plan table)
+  ** each reload persisted refs at their lock — the VC fresh-read that closes
+  ** the concurrency window — which would discard this still-in-memory branch.
+  ** Committing it makes the reload re-read it instead. */
+  rc = chunkStoreSerializeRefs(cs);
+  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+  if( rc!=SQLITE_OK ) goto fail;
   rc = doltliteCheckoutBranchForRebase(db, zWorking);
   if( rc!=SQLITE_OK ) goto fail;
 
