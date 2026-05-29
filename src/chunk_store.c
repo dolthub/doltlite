@@ -1511,6 +1511,24 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged){
   return SQLITE_OK;
 }
 
+int chunkStoreForceRefresh(ChunkStore *cs){
+  int rc;
+  int wasPinned;
+  if( cs->isMemory ) return SQLITE_OK;
+  /* Only the outermost lock holder reloads; a reentrant (inner) holder runs
+  ** under the outer scope's already-current view, so a multi-step VC op that
+  ** holds the lock across sub-operations keeps the in-memory state it builds. */
+  if( cs->lockDepth != 1 ) return SQLITE_OK;
+  /* Reload even under a pinned snapshot — the VC write needs the true on-disk
+  ** branch tips. Unpin around it (the heuristic refresh path suppresses reloads
+  ** while pinned), then restore the pin. */
+  wasPinned = cs->snapshotPinned;
+  cs->snapshotPinned = 0;
+  rc = csReloadFromDiskPreservingLocalRefs(cs);
+  cs->snapshotPinned = wasPinned;
+  return rc;
+}
+
 static int csReloadFromDisk(ChunkStore *cs){
   ChunkStore tmp;
   ChunkStoreReloadState saved;

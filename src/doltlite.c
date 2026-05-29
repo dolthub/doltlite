@@ -171,15 +171,14 @@ static int doltliteRefreshAndConfirmHead(
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( cs->snapshotPinned ){
-    int changed = 0;
-    cs->snapshotPinned = 0;
-    rc = chunkStoreRefreshIfChanged(cs, &changed);
-    cs->snapshotPinned = 1;
-    if( rc!=SQLITE_OK ){
-      chunkStoreUnlock(cs);
-      return rc;
-    }
+  /* Reload persisted refs so this CAS compares against the true on-disk branch
+  ** tip. The lock-time change heuristic can miss a peer commit (WAL reuse
+  ** leaves the file size unchanged), and a stale tip would let a fast-forward
+  ** clobber the peer's advance. */
+  rc = chunkStoreForceRefresh(cs);
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    return rc;
   }
 
   zBranch = doltliteGetSessionBranch(db);
@@ -428,15 +427,15 @@ int doltliteMutateRefs(sqlite3 *db, DoltliteRefsMutation xMutate, void *pArg){
 
   rc = chunkStoreLockAndRefresh(cs);
   if( rc!=SQLITE_OK ) return rc;
-  if( cs->snapshotPinned ){
-    int changed = 0;
-    cs->snapshotPinned = 0;
-    rc = chunkStoreRefreshIfChanged(cs, &changed);
-    cs->snapshotPinned = 1;
-    if( rc!=SQLITE_OK ){
-      chunkStoreUnlock(cs);
-      return rc;
-    }
+
+  /* xMutate edits the in-memory refs and serializeRefs rewrites the whole refs
+  ** blob, so a stale view would drop a peer's concurrent ref change (e.g. a
+  ** branch delete clobbering main's just-merged advance). Reload persisted
+  ** refs first rather than trusting the lock-time change heuristic. */
+  rc = chunkStoreForceRefresh(cs);
+  if( rc!=SQLITE_OK ){
+    chunkStoreUnlock(cs);
+    return rc;
   }
 
   rc = xMutate(db, cs, pArg);
