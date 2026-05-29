@@ -10,6 +10,7 @@
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
 typedef struct SchemaEntry SchemaEntry;
+typedef struct DoltliteTxnState DoltliteTxnState;
 
 typedef enum DoltliteVcTxnMode DoltliteVcTxnMode;
 enum DoltliteVcTxnMode {
@@ -29,6 +30,18 @@ struct TableEntry {
   ProllyHash appendSeekRoot;
   char *zName;
   void *pPending;
+};
+
+struct DoltliteTxnState {
+  ProllyHash refsHash;
+  char *zSessionBranch;
+  ProllyHash sessionHead;
+  ProllyHash sessionStaged;
+  ProllyHash sessionMergeCommit;
+  ProllyHash sessionConflictsCatalog;
+  ProllyHash sessionConstraintViolationsCatalog;
+  ProllyHash sessionCatalogHash;
+  u8 sessionIsMerging;
 };
 
 static SQLITE_INLINE struct TableEntry *doltliteFindTableByNumber(
@@ -143,6 +156,9 @@ int doltliteGetWorkingTableState(sqlite3 *db, const char *zTable,
                                  ProllyHash *pRoot, u8 *pFlags,
                                  ProllyHash *pSchemaHash);
 int doltliteHasUncommittedChanges(sqlite3 *db);
+void doltliteTxnStateClear(DoltliteTxnState *p);
+int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p);
+int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p);
 
 int doltliteResolveRef(sqlite3 *db, const char *zRef, ProllyHash *pCommit);
 

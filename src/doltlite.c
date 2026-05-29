@@ -89,25 +89,12 @@ int doltliteFlushCatalogToHash(sqlite3 *db, ProllyHash *pHash);
 
 int doltliteMaterializeDefaultColumns(sqlite3 *db);
 
-typedef struct DoltliteTxnState DoltliteTxnState;
-struct DoltliteTxnState {
-  ProllyHash refsHash;
-  char *zSessionBranch;
-  ProllyHash sessionHead;
-  ProllyHash sessionStaged;
-  ProllyHash sessionMergeCommit;
-  ProllyHash sessionConflictsCatalog;
-  ProllyHash sessionConstraintViolationsCatalog;
-  ProllyHash sessionCatalogHash;
-  u8 sessionIsMerging;
-};
-
-static void doltliteTxnStateClear(DoltliteTxnState *p){
+void doltliteTxnStateClear(DoltliteTxnState *p){
   sqlite3_free(p->zSessionBranch);
   memset(p, 0, sizeof(*p));
 }
 
-static int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
+int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc;
 
@@ -136,7 +123,7 @@ static int doltliteSaveTxnState(sqlite3 *db, DoltliteTxnState *p){
   return rc;
 }
 
-static int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
+int doltliteRestoreTxnState(sqlite3 *db, DoltliteTxnState *p){
   ChunkStore *cs = doltliteGetChunkStore(db);
   int rc;
 
