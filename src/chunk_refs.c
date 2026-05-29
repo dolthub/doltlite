@@ -42,16 +42,8 @@ i64 refsTableGetSequence(const RefsTable *rt, const char *zTableName){
   return 0;
 }
 
-const char *refsTableGetDefaultBranchName(const RefsTable *rt){
-  return rt->zDefaultBranch;
-}
-
 const ProllyHash *refsTableGetHash(const RefsTable *rt){
   return &rt->refsHash;
-}
-
-const ProllyHash *refsTableGetCommittedHash(const RefsTable *rt){
-  return &rt->committedRefsHash;
 }
 
 int refsTableBranchCount(const RefsTable *rt){

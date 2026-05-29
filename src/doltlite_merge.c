@@ -2532,7 +2532,6 @@ int doltliteMergeCatalogs(
   Pgno iNextAnc = 2, iNextOurs = 2, iNextTheirs = 2;
   struct TableEntry *aMerged = 0;
   int nMerged = 0;
-  int nMergedAlloc = 0;
   Pgno iNextMerged;
   int rc;
   int totalConflicts = 0;
@@ -2544,7 +2543,6 @@ int doltliteMergeCatalogs(
 
   MergeConflictTable *aConflictTables = 0;
   int nConflictTables = 0;
-  (void)nMergedAlloc;
 
   rc = loadMergeCatalogs(db, ancestor, ours, theirs,
                          &aAnc, &nAnc, &iNextAnc,
