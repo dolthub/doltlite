@@ -1519,6 +1519,16 @@ static int csReloadFromDisk(ChunkStore *cs){
                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
   if( rc!=SQLITE_OK ) return rc;
 
+  /* chunkStoreOpen falls back to a read-only handle when the read-write open
+  ** fails transiently (e.g. an OOM-faulted open). Adopting that would wedge a
+  ** writable store read-only and make every later commit return
+  ** SQLITE_READONLY. Don't downgrade: fail so the caller retries (which
+  ** reopens read-write) and leave the current writable store untouched. */
+  if( tmp.readOnly && !cs->readOnly ){
+    chunkStoreClose(&tmp);
+    return SQLITE_BUSY;
+  }
+
   csCaptureReloadState(cs, &saved);
   csAdoptOpenedStoreState(cs, &tmp);
 
