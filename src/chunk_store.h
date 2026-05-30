@@ -213,4 +213,10 @@ const char *chunkStoreFilename(ChunkStore *cs);
 
 int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged);
 
+/* Reload persisted refs from disk for a VC write op, bypassing the file-size/
+** HAS_MOVED change heuristic (which can miss a peer commit when the WAL is
+** reused, leaving a stale branch tip). Reloads only at the outermost lock
+** acquisition; caller holds the graph lock. */
+int chunkStoreForceRefresh(ChunkStore *cs);
+
 #endif
