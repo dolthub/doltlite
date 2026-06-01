@@ -264,9 +264,9 @@ int csReplayWal(ChunkStore *cs){
           break;
         }
 
-        cs->index.nChunks = (int)CS_READ_U32(m + 28);
+        cs->index.nChunks = (int)CS_READ_U32(m + CS_MANIFEST_CHUNK_COUNT_OFF);
 
-        memcpy(cs->refs.refsHash.data, m + 104, PROLLY_HASH_SIZE);
+        memcpy(cs->refs.refsHash.data, m + CS_MANIFEST_REFS_HASH_OFF, PROLLY_HASH_SIZE);
       }
       pos = recPos + 1 + CHUNK_MANIFEST_SIZE;
       nRootedPending = cs->staging.nPending;

@@ -15,6 +15,12 @@ struct DoltliteRemote {
   void (*xClose)(DoltliteRemote*);
 };
 
+static inline int doltliteRemotePersistRefs(ChunkStore *cs){
+  int rc = chunkStoreSerializeRefs(cs);
+  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
+  return rc;
+}
+
 int doltliteSyncChunks(
   DoltliteRemote *pSrc,
   DoltliteRemote *pDst,

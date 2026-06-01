@@ -71,7 +71,6 @@ extern int doltliteTagRegister(sqlite3 *db);
 extern int doltliteGcRegister(sqlite3 *db);
 extern int doltliteRegisterDiffTables(sqlite3 *db);
 extern int doltliteAncestorRegister(sqlite3 *db);
-extern int doltliteAtRegister(sqlite3 *db);
 extern int doltliteRegisterAtTables(sqlite3 *db);
 extern int doltliteRegisterHistoryTables(sqlite3 *db);
 extern int doltliteRegisterBlameTables(sqlite3 *db);
@@ -84,8 +83,6 @@ extern int doltliteFindAncestor(sqlite3 *db, const ProllyHash *h1,
 
 extern const char *doltliteNextTableForSchema(sqlite3 *db, int *pIdx, Pgno *piTable);
 extern void doltliteSetTableSchemaHash(sqlite3 *db, Pgno iTable, const ProllyHash *pH);
-
-int doltliteMaterializeDefaultColumns(sqlite3 *db);
 
 void doltliteTxnStateClear(DoltliteTxnState *p){
   sqlite3_free(p->zSessionBranch);
@@ -1900,7 +1897,6 @@ static void doltliteCommitFunc(
   {
     ProllyHash parentHash;
     char *zParsedName = 0, *zParsedEmail = 0;
-    char *zTrimmedMessage = 0;
     doltliteGetSessionHead(db, &parentHash);
 
     if( amend ){
@@ -1971,7 +1967,6 @@ static void doltliteCommitFunc(
 
     rc = doltliteCreateAndStoreCommitWithTime(db, &parentHash, &catalogHash,
         zMessage, zParsedName, zParsedEmail, 0, 0, explicitTimestamp, &commitHash);
-    sqlite3_free(zTrimmedMessage);
     sqlite3_free(zParsedName);
     sqlite3_free(zParsedEmail);
     if( rc!=SQLITE_OK ){
@@ -3145,11 +3140,13 @@ static int applyMergedCatalogAndCommit(
   char *zMergeErr = 0;
   int graphLocked = 0;
   int bPreferOurMaster;
+  const char *zOpLabel;
   int rc;
 
   memset(&savedState, 0, sizeof(savedState));
   if( hexBuf ) hexBuf[0] = '\0';
   bPreferOurMaster = (sqlite3_strnicmp(zMessage, "Revert", 6)==0);
+  zOpLabel = bPreferOurMaster ? "Revert" : "Cherry-pick";
 
   rc = doltliteEnsureWriteTxnAndSavepoints(db);
   if( rc!=SQLITE_OK ) return rc;
@@ -3247,9 +3244,7 @@ static int applyMergedCatalogAndCommit(
           "constraint violations, transaction rolled back.", -1);
         break;
       case DOLTLITE_VC_TXN_PLAIN:
-        rc = doltliteReportConstraintViolations(db, context,
-                                 sqlite3_strnicmp(zMessage, "Revert", 6)==0
-                                   ? "Revert" : "Cherry-pick");
+        rc = doltliteReportConstraintViolations(db, context, zOpLabel);
         if( rc!=SQLITE_OK ) goto apply_rollback;
         rc = doltliteVcSealActiveSavepoints(db);
         if( rc!=SQLITE_OK ) goto apply_rollback;
@@ -3283,9 +3278,7 @@ static int applyMergedCatalogAndCommit(
       if( rc!=SQLITE_OK ) return rc;
       return SQLITE_OK;
     case DOLTLITE_VC_TXN_PLAIN:
-      rc = doltliteReportConflicts(db, context, *pnConflicts,
-                                   sqlite3_strnicmp(zMessage, "Revert", 6)==0
-                                     ? "Revert" : "Cherry-pick");
+      rc = doltliteReportConflicts(db, context, *pnConflicts, zOpLabel);
       if( rc!=SQLITE_OK ) goto apply_rollback;
       rc = doltliteVcSealActiveSavepoints(db);
       if( rc!=SQLITE_OK ) goto apply_rollback;
@@ -3298,8 +3291,7 @@ static int applyMergedCatalogAndCommit(
         char msg[256];
         sqlite3_snprintf(sizeof(msg), msg,
           "%s has %d conflict(s). Resolve and then commit with dolt_commit.",
-          sqlite3_strnicmp(zMessage, "Revert", 6)==0 ? "Revert" : "Cherry-pick",
-          *pnConflicts);
+          zOpLabel, *pnConflicts);
         sqlite3_result_error(context, msg, -1);
       }
       return SQLITE_OK;
@@ -5020,7 +5012,7 @@ void doltliteRegister(sqlite3 *db){
   if( doltliteGcRegister(db)!=SQLITE_OK ) return;
   if( doltliteRegisterDiffTables(db)!=SQLITE_OK ) return;
   if( doltliteAncestorRegister(db)!=SQLITE_OK ) return;
-  if( doltliteAtRegister(db)!=SQLITE_OK ) return;
+  if( doltliteRegisterAtTables(db)!=SQLITE_OK ) return;
   if( doltliteRegisterHistoryTables(db)!=SQLITE_OK ) return;
   if( doltliteRegisterBlameTables(db)!=SQLITE_OK ) return;
   if( doltliteSchemaDiffRegister(db)!=SQLITE_OK ) return;

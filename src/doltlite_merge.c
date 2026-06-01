@@ -21,14 +21,6 @@ typedef struct ConflictTableInfo ConflictTableInfo;
 extern int doltliteSerializeConflicts(ChunkStore *cs, ConflictTableInfo *aTables,
                                        int nTables, ProllyHash *pHash);
 
-static struct TableEntry *findTableEntry(
-  struct TableEntry *aEntries,
-  int nEntries,
-  Pgno iTable
-){
-  return doltliteFindTableByNumber(aEntries, nEntries, iTable);
-}
-
 typedef struct MergeIndexInfo MergeIndexInfo;
 struct MergeIndexInfo {
   Pgno iTable;
@@ -807,14 +799,6 @@ merge_err:
   return rc;
 }
 
-static struct TableEntry *findTableByName(
-  struct TableEntry *aEntries,
-  int nEntries,
-  const char *zName
-){
-  return doltliteFindTableByName(aEntries, nEntries, zName);
-}
-
 typedef struct ParsedColumn ParsedColumn;
 struct ParsedColumn {
   char *zName;
@@ -1359,7 +1343,7 @@ static struct TableEntry *findCatalogEntryBySchemaObject(
     if( strcmp(aSchema[i].zType ? aSchema[i].zType : "", zType ? zType : "")!=0 ) continue;
     if( strcmp(aSchema[i].zName ? aSchema[i].zName : "", zName ? zName : "")!=0 ) continue;
     if( strcmp(aSchema[i].zTblName ? aSchema[i].zTblName : "", zTblName ? zTblName : "")!=0 ) continue;
-    return findTableEntry(aCat, nCat, aSchema[i].iRootpage);
+    return doltliteFindTableByNumber(aCat, nCat, aSchema[i].iRootpage);
   }
   return 0;
 }
@@ -1929,13 +1913,13 @@ static int mergeCatalogPass1(
             pOurSe->zType, pOurSe->zName, pOurSe->zTblName);
         goto do_merge_entry;
       }
-      ancEntry = findTableEntry(aAnc, nAnc, aOurs[i].iTable);
-      theirsEntry = findTableEntry(aTheirs, nTheirs, aOurs[i].iTable);
+      ancEntry = doltliteFindTableByNumber(aAnc, nAnc, aOurs[i].iTable);
+      theirsEntry = doltliteFindTableByNumber(aTheirs, nTheirs, aOurs[i].iTable);
       goto do_merge_entry;
     }
 
-    ancEntry = findTableByName(aAnc, nAnc, zName);
-    theirsEntry = findTableByName(aTheirs, nTheirs, zName);
+    ancEntry = doltliteFindTableByName(aAnc, nAnc, zName);
+    theirsEntry = doltliteFindTableByName(aTheirs, nTheirs, zName);
 
 do_merge_entry:
 
@@ -2072,7 +2056,7 @@ do_merge_entry:
                       if( pIdx->idxType==SQLITE_IDXTYPE_PRIMARYKEY ){
                         continue;
                       }
-                      oursIdx = findTableEntry(aOurs, nOurs, pIdx->tnum);
+                      oursIdx = doltliteFindTableByNumber(aOurs, nOurs, pIdx->tnum);
                       if( oursIdx ){
                         MergeIndexInfo *mi = &aIdxInfo[nIdxInfo];
                         mi->iTable = pIdx->tnum;
@@ -2176,8 +2160,8 @@ post_merge_table_rows:;
   }
 
   if( iTable1Idx >= 0 ){
-    struct TableEntry *ancEntry = findTableEntry(aAnc, nAnc, 1);
-    struct TableEntry *theirsEntry = findTableEntry(aTheirs, nTheirs, 1);
+    struct TableEntry *ancEntry = doltliteFindTableByNumber(aAnc, nAnc, 1);
+    struct TableEntry *theirsEntry = doltliteFindTableByNumber(aTheirs, nTheirs, 1);
     int hasSchemaActions = (ppSchemaActions && pnSchemaActions && *pnSchemaActions > 0);
     int bPreferOurMasterHere = bPreferOurMaster
         && replayDropsDisjointSchemaObject(aAncSchema, nAncSchema,
@@ -2349,7 +2333,7 @@ static int mergeCatalogPass2(
         continue;
       }
 
-      if( !findTableEntry(aOurs, nOurs, aTheirs[i].iTable) ){
+      if( !doltliteFindTableByNumber(aOurs, nOurs, aTheirs[i].iTable) ){
         struct TableEntry newEntry = aTheirs[i];
         int j, conflict = 0;
         Pgno oldPg = newEntry.iTable;
@@ -2377,8 +2361,8 @@ static int mergeCatalogPass2(
         if( newEntry.iTable >= *piNextMerged ) *piNextMerged = newEntry.iTable + 1;
         aMerged[(*pnMerged)++] = newEntry;
       }else if( bDisjointSchemaChanges ){
-        struct TableEntry *oursIdx = findTableEntry(aOurs, nOurs, aTheirs[i].iTable);
-        struct TableEntry *ancIdx = findTableEntry(aAnc, nAnc, aTheirs[i].iTable);
+        struct TableEntry *oursIdx = doltliteFindTableByNumber(aOurs, nOurs, aTheirs[i].iTable);
+        struct TableEntry *ancIdx = doltliteFindTableByNumber(aAnc, nAnc, aTheirs[i].iTable);
         if( oursIdx && !ancIdx
          && (prollyHashCompare(&oursIdx->root, &aTheirs[i].root)!=0
              || prollyHashCompare(&oursIdx->schemaHash, &aTheirs[i].schemaHash)!=0) ){
@@ -2401,11 +2385,11 @@ static int mergeCatalogPass2(
       continue;
     }
 
-    oursEntry = findTableByName(aOurs, nOurs, zName);
+    oursEntry = doltliteFindTableByName(aOurs, nOurs, zName);
     if( oursEntry ) continue;
 
     {
-      struct TableEntry *ancEntry = findTableByName(aAnc, nAnc, zName);
+      struct TableEntry *ancEntry = doltliteFindTableByName(aAnc, nAnc, zName);
       if( !ancEntry ){
 
         struct TableEntry newEntry = aTheirs[i];

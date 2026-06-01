@@ -26,7 +26,6 @@ struct DoltliteLogCursor {
   int qHead, qTail, qAlloc;
   ProllyHashSet visited;
   int visitedInit;
-  ProllyHash curHash;
   char zHex[PROLLY_HASH_SIZE*2+1];
   DoltliteCommit curCommit;
   int hasRow;
@@ -124,7 +123,6 @@ static int logAdvance(DoltliteLogCursor *pCur, sqlite3 *db){
       return rc;
     }
 
-    pCur->curHash = cur;
     doltliteHashToHex(&cur, pCur->zHex);
     pCur->hasRow = 1;
 
