@@ -4128,6 +4128,10 @@ int sqlite3BtreeOpen(
   return SQLITE_OK;
 }
 
+int sqlite3BtreeUsesOrig(Btree *p){
+  return p && p->pOps==&origBtreeVtOps;
+}
+
 static int prollyBtreeClose(Btree *p){
   BtShared *pBt;
 
@@ -8449,6 +8453,7 @@ static void doltiteEngineFunc(
 ChunkStore *doltliteGetChunkStore(sqlite3 *db){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
     Btree *pBt = db->aDb[0].pBt;
+    if( sqlite3BtreeUsesOrig(pBt) ) return 0;
     return &pBt->pBt->store;
   }
   return 0;
@@ -8456,9 +8461,15 @@ ChunkStore *doltliteGetChunkStore(sqlite3 *db){
 
 BtShared *doltliteGetBtShared(sqlite3 *db){
   if( db && db->nDb>0 && db->aDb[0].pBt ){
+    if( sqlite3BtreeUsesOrig(db->aDb[0].pBt) ) return 0;
     return db->aDb[0].pBt->pBt;
   }
   return 0;
+}
+
+int doltliteIsStockSqliteDb(sqlite3 *db){
+  return db && db->nDb>0 && db->aDb[0].pBt
+      && sqlite3BtreeUsesOrig(db->aDb[0].pBt);
 }
 
 void doltliteInvalidateWorkingState(sqlite3 *db){

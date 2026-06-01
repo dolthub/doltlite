@@ -268,6 +268,7 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
   UnpackedRecord *pUnKey,
   int *pRes
 );
+int sqlite3BtreeUsesOrig(Btree*);
 #endif
 int sqlite3BtreeCursorHasMoved(BtCursor*);
 int sqlite3BtreeCursorRestore(BtCursor*, int*);

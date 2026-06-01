@@ -2740,6 +2740,8 @@ void sqlite3EndTable(
   **   - Views: no storage.
   **   - Internal sqlite_* tables: created by sqlite for AUTOINCREMENT
   **     bookkeeping etc. and don't have user PKs.
+  **   - Stock SQLite btrees: their on-disk rowid table layout must be
+  **     replayed exactly.
   **
   ** Runs during sqlite_master replay (db->init.busy) as well as
   ** user-issued CREATE TABLE, because the stored CREATE TABLE statement
@@ -2749,6 +2751,9 @@ void sqlite3EndTable(
   ** doltlite refuses to open databases written by older binaries that
   ** don't enforce this storage model. */
   if( iDb!=1
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+   && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
+#endif
    && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
    && IsOrdinaryTable(p)
    && sqlite3StrNICmp(p->zName, "sqlite_", 7)!=0

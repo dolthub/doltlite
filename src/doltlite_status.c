@@ -528,7 +528,14 @@ static int statusFilter(sqlite3_vtab_cursor *pCursor,
 
   statusFreeRows(pCur);
   pCur->iRow = 0;
-  if( !cs ) return SQLITE_OK;
+  if( !cs ){
+    if( doltliteIsStockSqliteDb(db) ){
+      pCursor->pVtab->zErrMsg = sqlite3_mprintf("%s",
+          doltliteVcUnavailableMessage(db));
+      return pCursor->pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+    }
+    return SQLITE_OK;
+  }
 
   rc = doltliteGetHeadCatalogHash(db, &headCatHash);
   if( rc != SQLITE_OK ) goto status_done;

@@ -215,6 +215,7 @@ static SQLITE_INLINE int doltliteFindTableRootByName(
 
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 BtShared *doltliteGetBtShared(sqlite3 *db);
+int doltliteIsStockSqliteDb(sqlite3 *db);
 void doltliteInvalidateWorkingState(sqlite3 *db);
 ProllyCache *doltliteGetCache(sqlite3 *db);
 int doltliteLoadCatalog(sqlite3 *db, const ProllyHash *catHash,
@@ -402,6 +403,13 @@ static SQLITE_INLINE int doltliteAppendQuotedIdent(sqlite3_str *pStr,
                                                    const char *zName){
   sqlite3_str_appendf(pStr, "\"%w\"", zName ? zName : "");
   return sqlite3_str_errcode(pStr);
+}
+
+static SQLITE_INLINE const char *doltliteVcUnavailableMessage(sqlite3 *db){
+  if( doltliteIsStockSqliteDb(db) ){
+    return "dolt version-control features are not available on stock SQLite databases";
+  }
+  return "no database open";
 }
 
 static SQLITE_INLINE int doltliteGrowArrayImpl(
