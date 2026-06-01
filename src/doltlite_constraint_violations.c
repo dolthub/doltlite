@@ -641,39 +641,17 @@ static int cvrColumn(sqlite3_vtab_cursor *cur, sqlite3_context *ctx, int col){
 }
 
 static sqlite3_int64 cvrViolationRowid(const ConstraintViolationRow *r){
-  u64 h = 1469598103934665603ULL;
-  int i;
-  if( r->nKey>0 && r->pKey ){
-    for(i=0; i<r->nKey; i++){
-      h ^= (u64)r->pKey[i];
-      h *= 1099511628211ULL;
-    }
-  }
-  h *= 1099511628211ULL;
-  {
-    u64 k = (u64)r->intKey;
-    for(i=0; i<8; i++){
-      h ^= (k >> (i*8)) & 0xff;
-      h *= 1099511628211ULL;
-    }
-  }
-  h *= 1099511628211ULL;
-  if( r->nVal>0 && r->pVal ){
-    for(i=0; i<r->nVal; i++){
-      h ^= (u64)r->pVal[i];
-      h *= 1099511628211ULL;
-    }
-  }
-  h *= 1099511628211ULL;
+  u64 h = DOLTLITE_FNV1A_OFFSET;
+  h = doltliteFnv1aBytes(h, r->pKey, r->nKey);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aI64(h, r->intKey);
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aBytes(h, r->pVal, r->nVal);
+  h = doltliteFnv1aSep(h);
   h ^= (u64)r->violationType;
-  h *= 1099511628211ULL;
-  h *= 1099511628211ULL;
-  if( r->zInfo ){
-    for(i=0; r->zInfo[i]; i++){
-      h ^= (u64)(u8)r->zInfo[i];
-      h *= 1099511628211ULL;
-    }
-  }
+  h *= DOLTLITE_FNV1A_PRIME;
+  h = doltliteFnv1aSep(h);
+  h = doltliteFnv1aStr(h, r->zInfo);
   return (sqlite3_int64)(h & 0x7fffffffffffffffULL);
 }
 

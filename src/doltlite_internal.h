@@ -19,6 +19,39 @@ enum DoltliteVcTxnMode {
   DOLTLITE_VC_TXN_NESTED_SAVEPOINT = 2
 };
 
+/* FNV-1a row-fingerprint helpers shared by the conflicts and constraint-
+** violation vtab rowid functions: fold each field with doltliteFnv1aBytes/
+** I64/Str, calling doltliteFnv1aSep between fields. */
+#define DOLTLITE_FNV1A_OFFSET 1469598103934665603ULL
+#define DOLTLITE_FNV1A_PRIME  1099511628211ULL
+
+static SQLITE_INLINE u64 doltliteFnv1aBytes(u64 h, const u8 *p, int n){
+  int i;
+  if( p ){
+    for(i=0; i<n; i++){ h ^= (u64)p[i]; h *= DOLTLITE_FNV1A_PRIME; }
+  }
+  return h;
+}
+
+static SQLITE_INLINE u64 doltliteFnv1aI64(u64 h, i64 v){
+  u64 k = (u64)v;
+  int i;
+  for(i=0; i<8; i++){ h ^= (k >> (i*8)) & 0xff; h *= DOLTLITE_FNV1A_PRIME; }
+  return h;
+}
+
+static SQLITE_INLINE u64 doltliteFnv1aStr(u64 h, const char *z){
+  if( z ){
+    int i;
+    for(i=0; z[i]; i++){ h ^= (u64)(u8)z[i]; h *= DOLTLITE_FNV1A_PRIME; }
+  }
+  return h;
+}
+
+static SQLITE_INLINE u64 doltliteFnv1aSep(u64 h){
+  return h * DOLTLITE_FNV1A_PRIME;
+}
+
 struct TableEntry {
   Pgno iTable;
   ProllyHash root;
