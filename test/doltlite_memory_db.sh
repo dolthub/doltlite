@@ -1,9 +1,5 @@
 #!/bin/bash
-DOLTLITE=./doltlite
-PASS=0; FAIL=0; ERRORS=""
-run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
-run_test_lastline() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1 | tail -1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
-run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if echo "$r"|grep -qE "$p"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r"; fi; }
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== DoltLite :memory: routing tests ==="
 echo ""
@@ -26,9 +22,9 @@ run_test_lastline "memory_supports_dolt_checkout_isolates_branches" \
 echo "CREATE TABLE t(id INTEGER PRIMARY KEY); INSERT INTO t VALUES(99);" | $DOLTLITE :memory: > /dev/null 2>&1
 R=$(echo "SELECT count(*) FROM t;" | $DOLTLITE :memory: 2>&1)
 if echo "$R" | grep -q "no such table"; then
-  PASS=$((PASS+1))
+  dltest_pass
 else
-  FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: memory_opens_are_independent\n  expected: 'no such table'\n  got:      $R"
+  dltest_fail "memory_opens_are_independent" "  expected: 'no such table'\n  got:      $R"
 fi
 
 # :memory: doesn't write to disk. Run in scratch dir, verify empty.
@@ -41,9 +37,9 @@ echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT); INSERT INTO t VALUES(1,'a'
 ARTIFACTS=$(ls -A $SCRATCH 2>&1)
 cd $ORIG
 if [ -z "$ARTIFACTS" ]; then
-  PASS=$((PASS+1))
+  dltest_pass
 else
-  FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: memory_creates_no_disk_artifacts\n  expected: empty scratch dir\n  got:      $ARTIFACTS"
+  dltest_fail "memory_creates_no_disk_artifacts" "  expected: empty scratch dir\n  got:      $ARTIFACTS"
 fi
 rm -rf $SCRATCH
 
@@ -57,6 +53,4 @@ run_test_lastline "main_and_attached_isolated" \
   "ATTACH ':memory:' AS aux; CREATE TABLE main.t(id INTEGER); INSERT INTO main.t VALUES(1); SELECT count(*) FROM aux.sqlite_master WHERE name='t';" \
   "0" ":memory:"
 
-echo ""
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
+dltest_finish
