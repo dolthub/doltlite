@@ -4128,6 +4128,10 @@ int sqlite3BtreeOpen(
   return SQLITE_OK;
 }
 
+int sqlite3BtreeUsesOrig(Btree *p){
+  return p && p->pOps==&origBtreeVtOps;
+}
+
 static int prollyBtreeClose(Btree *p){
   BtShared *pBt;
 

@@ -86,6 +86,12 @@ want_eq "R4_select_via_pre_existing_index" \
 want_eq "R5_sqlite_master_visible" \
   "$(dl_last "SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_v';" "$DB")" "1"
 
+DB=$TMP/r6.db
+seed_stock "$DB" "CREATE TABLE accounts(username VARCHAR NOT NULL PRIMARY KEY, email TEXT, balance INTEGER, status TEXT); INSERT INTO accounts VALUES('alice','alice@example.com',100,'active'),('bob','bob@example.com',250,'frozen'),('carol','carol@example.com',50,'active');"
+want_eq "R6_non_integer_pk_reads_payload_columns" \
+  "$(dl_last "SELECT group_concat(username||':'||email||':'||balance||':'||status, ',') FROM accounts ORDER BY username;" "$DB")" \
+  "alice:alice@example.com:100:active,bob:bob@example.com:250:frozen,carol:carol@example.com:50:active"
+
 # ============================================================
 # Autocommit writes
 # ============================================================
