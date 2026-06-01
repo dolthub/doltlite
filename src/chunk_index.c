@@ -301,7 +301,7 @@ int csReadIndex(ChunkStore *cs){
   return SQLITE_OK;
 }
 
-static int csIndexEntryCmp(const void *a, const void *b){
+int csIndexEntryCmp(const void *a, const void *b){
   const ChunkIndexEntry *ea = (const ChunkIndexEntry *)a;
   const ChunkIndexEntry *eb = (const ChunkIndexEntry *)b;
   return prollyHashCompare(&ea->hash, &eb->hash);

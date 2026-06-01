@@ -532,6 +532,55 @@ static int hashofDbInCatalog(
   return SQLITE_OK;
 }
 
+/* Resolve a ref-spec argument to its commit's catalog hash. On NULL/empty input
+** or any resolve/load failure it sets the SQL result (null or an error prefixed
+** with zFn) and returns 1, meaning the caller should return immediately. On
+** success returns 0 with *pCatHash set. */
+static int hashofResolveRefCatalog(
+  sqlite3_context *ctx,
+  sqlite3 *db,
+  sqlite3_value *pRefArg,
+  const char *zFn,
+  ProllyHash *pCatHash
+){
+  const char *zRef;
+  ProllyHash commitHash;
+  DoltliteCommit commit;
+  char zErr[64];
+  int rc;
+
+  if( sqlite3_value_type(pRefArg)==SQLITE_NULL ){
+    sqlite3_result_null(ctx);
+    return 1;
+  }
+  zRef = (const char*)sqlite3_value_text(pRefArg);
+  if( !zRef ){
+    sqlite3_result_null(ctx);
+    return 1;
+  }
+  rc = doltliteResolveRef(db, zRef, &commitHash);
+  if( rc==SQLITE_NOTFOUND ){
+    sqlite3_snprintf(sizeof(zErr), zErr, "%s: invalid ref spec", zFn);
+    sqlite3_result_error(ctx, zErr, -1);
+    return 1;
+  }
+  if( rc!=SQLITE_OK ){
+    sqlite3_snprintf(sizeof(zErr), zErr, "%s: invalid ancestor spec", zFn);
+    sqlite3_result_error(ctx, zErr, -1);
+    return 1;
+  }
+  memset(&commit, 0, sizeof(commit));
+  rc = doltliteLoadCommit(db, &commitHash, &commit);
+  if( rc!=SQLITE_OK ){
+    sqlite3_snprintf(sizeof(zErr), zErr, "%s: commit load failed", zFn);
+    sqlite3_result_error(ctx, zErr, -1);
+    return 1;
+  }
+  *pCatHash = commit.catalogHash;
+  doltliteCommitClear(&commit);
+  return 0;
+}
+
 static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   sqlite3 *db;
   const char *zTable;
@@ -556,40 +605,12 @@ static void doltliteHashofTableFunc(sqlite3_context *ctx, int argc, sqlite3_valu
 
   if( argc==1 ){
     rc = doltliteFlushCatalogToHash(db, &catHash);
+    if( rc!=SQLITE_OK ){
+      sqlite3_result_error(ctx, "dolt_hashof_table: catalog flush failed", -1);
+      return;
+    }
   }else{
-    const char *zRef;
-    ProllyHash commitHash;
-    DoltliteCommit commit;
-    if( sqlite3_value_type(argv[1])==SQLITE_NULL ){
-      sqlite3_result_null(ctx);
-      return;
-    }
-    zRef = (const char*)sqlite3_value_text(argv[1]);
-    if( !zRef ){
-      sqlite3_result_null(ctx);
-      return;
-    }
-    rc = doltliteResolveRef(db, zRef, &commitHash);
-    if( rc==SQLITE_NOTFOUND ){
-      sqlite3_result_error(ctx, "dolt_hashof_table: invalid ref spec", -1);
-      return;
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_table: invalid ancestor spec", -1);
-      return;
-    }
-    memset(&commit, 0, sizeof(commit));
-    rc = doltliteLoadCommit(db, &commitHash, &commit);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_table: commit load failed", -1);
-      return;
-    }
-    catHash = commit.catalogHash;
-    doltliteCommitClear(&commit);
-  }
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error(ctx, "dolt_hashof_table: catalog flush failed", -1);
-    return;
+    if( hashofResolveRefCatalog(ctx, db, argv[1], "dolt_hashof_table", &catHash) ) return;
   }
 
   rc = hashofTableInCatalog(db, &catHash, zTable, hex);
@@ -623,35 +644,7 @@ static void doltliteHashofDbFunc(sqlite3_context *ctx, int argc, sqlite3_value *
       return;
     }
   }else{
-    const char *zRef;
-    ProllyHash commitHash;
-    DoltliteCommit commit;
-    if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
-      sqlite3_result_null(ctx);
-      return;
-    }
-    zRef = (const char*)sqlite3_value_text(argv[0]);
-    if( !zRef ){
-      sqlite3_result_null(ctx);
-      return;
-    }
-    rc = doltliteResolveRef(db, zRef, &commitHash);
-    if( rc==SQLITE_NOTFOUND ){
-      sqlite3_result_error(ctx, "dolt_hashof_db: invalid ref spec", -1);
-      return;
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_db: invalid ancestor spec", -1);
-      return;
-    }
-    memset(&commit, 0, sizeof(commit));
-    rc = doltliteLoadCommit(db, &commitHash, &commit);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_db: commit load failed", -1);
-      return;
-    }
-    catHash = commit.catalogHash;
-    doltliteCommitClear(&commit);
+    if( hashofResolveRefCatalog(ctx, db, argv[0], "dolt_hashof_db", &catHash) ) return;
   }
 
   rc = hashofDbInCatalog(db, &catHash, hex);
@@ -689,35 +682,7 @@ static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_va
       }
     }
   }else{
-    const char *zRef;
-    ProllyHash commitHash;
-    DoltliteCommit commit;
-    if( sqlite3_value_type(argv[0])==SQLITE_NULL ){
-      sqlite3_result_null(ctx);
-      return;
-    }
-    zRef = (const char*)sqlite3_value_text(argv[0]);
-    if( !zRef ){
-      sqlite3_result_null(ctx);
-      return;
-    }
-    rc = doltliteResolveRef(db, zRef, &commitHash);
-    if( rc==SQLITE_NOTFOUND ){
-      sqlite3_result_error(ctx, "dolt_hashof_catalog: invalid ref spec", -1);
-      return;
-    }
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_catalog: invalid ancestor spec", -1);
-      return;
-    }
-    memset(&commit, 0, sizeof(commit));
-    rc = doltliteLoadCommit(db, &commitHash, &commit);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_catalog: commit load failed", -1);
-      return;
-    }
-    catHash = commit.catalogHash;
-    doltliteCommitClear(&commit);
+    if( hashofResolveRefCatalog(ctx, db, argv[0], "dolt_hashof_catalog", &catHash) ) return;
   }
 
   doltliteHashToHex(&catHash, hex);
