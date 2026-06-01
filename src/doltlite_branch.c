@@ -549,22 +549,8 @@ static int checkoutLoadAndApply(
     doltliteCommitClear(&commit);
   }
 
-  {
-    ProllyHash wsCatHash, wsCommitHash;
-    memset(&wsCatHash, 0, sizeof(wsCatHash));
-    memset(&wsCommitHash, 0, sizeof(wsCommitHash));
-    if( chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCatHash, &wsCommitHash)==SQLITE_OK
-     && !prollyHashIsEmpty(&wsCommitHash)
-     && memcmp(wsCommitHash.data, pCommitHash->data, PROLLY_HASH_SIZE)==0
-     && memcmp(wsCatHash.data, committedCatHash.data, PROLLY_HASH_SIZE)!=0 ){
-
-      memcpy(pCatHash, &wsCatHash, sizeof(ProllyHash));
-      rc = doltliteSwitchCatalog(db, pCatHash);
-      return rc;
-    }
-  }
-
-  memcpy(pCatHash, &committedCatHash, sizeof(ProllyHash));
+  doltliteResolveBranchEffectiveCatalog(cs, zBranch, pCommitHash,
+                                        &committedCatHash, pCatHash);
   rc = doltliteSwitchCatalog(db, pCatHash);
   return rc;
 }

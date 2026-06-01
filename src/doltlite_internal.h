@@ -6,6 +6,7 @@
 #include "prolly_hash.h"
 #include "chunk_store.h"
 #include <time.h>
+#include <ctype.h>
 
 typedef struct BtShared BtShared;
 typedef struct ProllyCache ProllyCache;
@@ -206,6 +207,46 @@ static SQLITE_INLINE int doltliteVtabConnectSimple(
   memset(pVtab, 0, nByte);
   *ppVtab = pVtab;
   return SQLITE_OK;
+}
+
+/* Effective catalog hash for a branch ref: the committed catalog unless the
+** branch has an uncommitted working-set catalog recorded against this exact
+** commit, in which case that working catalog wins. */
+static SQLITE_INLINE void doltliteResolveBranchEffectiveCatalog(
+  ChunkStore *cs,
+  const char *zBranch,
+  const ProllyHash *pBranchCommit,
+  const ProllyHash *pCommittedCatHash,
+  ProllyHash *pCatHash
+){
+  ProllyHash wsCatHash, wsCommitHash;
+  memset(&wsCatHash, 0, sizeof(wsCatHash));
+  memset(&wsCommitHash, 0, sizeof(wsCommitHash));
+  if( chunkStoreReadBranchWorkingCatalog(cs, zBranch, &wsCatHash, &wsCommitHash)==SQLITE_OK
+   && !prollyHashIsEmpty(&wsCommitHash)
+   && memcmp(wsCommitHash.data, pBranchCommit->data, PROLLY_HASH_SIZE)==0
+   && memcmp(wsCatHash.data, pCommittedCatHash->data, PROLLY_HASH_SIZE)!=0 ){
+    memcpy(pCatHash, &wsCatHash, sizeof(ProllyHash));
+  }else{
+    memcpy(pCatHash, pCommittedCatHash, sizeof(ProllyHash));
+  }
+}
+
+/* True if a trimmed CREATE TABLE body segment is a table-level constraint
+** (PRIMARY KEY / UNIQUE / CHECK / FOREIGN KEY / CONSTRAINT) rather than a
+** column definition. s/len delimit the already-trimmed segment. */
+static SQLITE_INLINE int doltliteSegmentIsTableConstraint(const char *s, int len){
+  if( len>=11 && sqlite3_strnicmp(s, "PRIMARY KEY", 11)==0
+      && (len==11 || !isalnum((unsigned char)s[11])) ) return 1;
+  if( len>=6 && sqlite3_strnicmp(s, "UNIQUE", 6)==0
+      && (len==6 || s[6]=='(' || isspace((unsigned char)s[6])) ) return 1;
+  if( len>=5 && sqlite3_strnicmp(s, "CHECK", 5)==0
+      && (len==5 || s[5]=='(' || isspace((unsigned char)s[5])) ) return 1;
+  if( len>=11 && sqlite3_strnicmp(s, "FOREIGN KEY", 11)==0
+      && (len==11 || !isalnum((unsigned char)s[11])) ) return 1;
+  if( len>=10 && sqlite3_strnicmp(s, "CONSTRAINT", 10)==0
+      && (len==10 || isspace((unsigned char)s[10])) ) return 1;
+  return 0;
 }
 
 static SQLITE_INLINE int doltliteAppendQuotedColumnList(
