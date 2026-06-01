@@ -185,7 +185,14 @@ static int doltliteLogFilter(
   }
 
   cs = doltliteGetChunkStore(pVtab->db);
-  if( !cs ) return SQLITE_OK;
+  if( !cs ){
+    if( doltliteIsStockSqliteDb(pVtab->db) ){
+      pCursor->pVtab->zErrMsg = sqlite3_mprintf("%s",
+          doltliteVcUnavailableMessage(pVtab->db));
+      return pCursor->pVtab->zErrMsg ? SQLITE_ERROR : SQLITE_NOMEM;
+    }
+    return SQLITE_OK;
+  }
 
   if( useStart ){
     head = startHash;

@@ -304,7 +304,7 @@ static void doltBranchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv)
   int hadSavepoint = db->pSavepoint!=0;
   int i, rc;
 
-  if( !cs ){ branchError(ctx, hadSavepoint, "no database"); return; }
+  if( !cs ){ branchError(ctx, hadSavepoint, doltliteVcUnavailableMessage(db)); return; }
   if( argc<1 ){ branchError(ctx, hadSavepoint, "dolt_branch requires arguments"); return; }
 
   for(i=0; i<argc; i++){
@@ -748,7 +748,7 @@ static void doltConnectBranchFunc(
   (void)argc;
   memset(&m, 0, sizeof(m));
   if( !cs ){
-    sqlite3_result_error(ctx, "no database open", -1);
+    sqlite3_result_error(ctx, doltliteVcUnavailableMessage(db), -1);
     return;
   }
   zBranch = (const char*)sqlite3_value_text(argv[0]);
@@ -1103,7 +1103,7 @@ static void doltCheckoutFunc(sqlite3_context *ctx, int argc, sqlite3_value **arg
   int hadExplicitTxn = !db->autoCommit;
   int rc;
 
-  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "no database", -1); return; }
+  if( !cs ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, doltliteVcUnavailableMessage(db), -1); return; }
   if( argc<1 ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "branch name required", -1); return; }
   zBranch = (const char*)sqlite3_value_text(argv[0]);
   if( !zBranch ){ (void)doltliteVcSealSavepointError(db); sqlite3_result_error(ctx, "branch name required", -1); return; }

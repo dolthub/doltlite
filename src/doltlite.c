@@ -1403,7 +1403,7 @@ static void doltliteAddFunc(
   int opRc = SQLITE_OK;
 
   if( !cs ){
-    sqlite3_result_error(context, "no database open", -1);
+    sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     goto add_cleanup;
   }
   if( argc==0 ){
@@ -1480,7 +1480,7 @@ static void doltliteCommitFunc(
   int i;
 
   if( !cs ){
-    sqlite3_result_error(context, "no database open", -1);
+    sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     return;
   }
 
@@ -2376,7 +2376,7 @@ static void doltliteResetFunc(
   int bSucceeded = 0;
 
   if( !cs ){
-    sqlite3_result_error(context, "no database open", -1);
+    sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
     goto reset_cleanup;
   }
 
@@ -2660,7 +2660,7 @@ static void doltliteMergeFunc(
   memset(&ancCommit, 0, sizeof(ancCommit));
   memset(&savedState, 0, sizeof(savedState));
 
-  if( !cs ){ sqlite3_result_error(context, "no database", -1); return; }
+  if( !cs ){ sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1); return; }
   if( argc<1 ){ sqlite3_result_error(context, "usage: dolt_merge('branch')", -1); return; }
 
   for(i=0; i<argc; i++){
