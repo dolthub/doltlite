@@ -45,36 +45,19 @@ static void freeViolationTables(ConstraintViolationTable *a, int n){
 static void removeViolationRow(ConstraintViolationTable *pTable, int iRow){
   if( !pTable || iRow<0 || iRow>=pTable->nRows ) return;
   freeViolationRow(&pTable->aRows[iRow]);
-  if( iRow < pTable->nRows - 1 ){
-    memmove(&pTable->aRows[iRow], &pTable->aRows[iRow+1],
-            (pTable->nRows - iRow - 1) * sizeof(ConstraintViolationRow));
-  }
-  pTable->nRows--;
-  if( pTable->aRows ){
-    memset(&pTable->aRows[pTable->nRows], 0, sizeof(ConstraintViolationRow));
-  }
+  doltliteArrayRemoveAt(pTable->aRows, &pTable->nRows, iRow,
+                        (int)sizeof(ConstraintViolationRow));
 }
 
 static void removeViolationTable(ConstraintViolationTable *a, int *pn, int iTable){
-  int n;
-  if( !a || !pn ) return;
-  n = *pn;
-  if( iTable<0 || iTable>=n ) return;
+  int j;
+  if( !a || !pn || iTable<0 || iTable>=*pn ) return;
   sqlite3_free(a[iTable].zName);
-  {
-    int j;
-    for(j=0; j<a[iTable].nRows; j++){
-      freeViolationRow(&a[iTable].aRows[j]);
-    }
+  for(j=0; j<a[iTable].nRows; j++){
+    freeViolationRow(&a[iTable].aRows[j]);
   }
   sqlite3_free(a[iTable].aRows);
-  memset(&a[iTable], 0, sizeof(a[iTable]));
-  if( iTable < n - 1 ){
-    memmove(&a[iTable], &a[iTable+1],
-            (n - iTable - 1) * sizeof(ConstraintViolationTable));
-  }
-  (*pn)--;
-  memset(&a[*pn], 0, sizeof(a[*pn]));
+  doltliteArrayRemoveAt(a, pn, iTable, (int)sizeof(ConstraintViolationTable));
 }
 
 static ConstraintViolationTable *findOrCreateViolationTable(
