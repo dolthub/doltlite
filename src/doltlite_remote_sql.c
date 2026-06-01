@@ -98,6 +98,24 @@ static int remoteSqlOpenNamedRemote(
   return SQLITE_OK;
 }
 
+/* Report the NOTFOUND/CANTOPEN result of remoteSqlOpenNamedRemote and return 1
+** if rc was such an open failure (caller should return); 0 otherwise. Pass the
+** saved txn state to clear it (pull path), or 0 when there is none. */
+static int remoteSqlReportOpenError(
+  sqlite3_context *ctx,
+  sqlite3 *db,
+  int rc,
+  DoltliteTxnState *pSaved
+){
+  if( rc!=SQLITE_NOTFOUND && rc!=SQLITE_CANTOPEN ) return 0;
+  (void)doltliteVcSealSavepointError(db);
+  if( pSaved ) doltliteTxnStateClear(pSaved);
+  sqlite3_result_error(ctx,
+    rc==SQLITE_NOTFOUND ? "remote not found"
+      : "failed to open remote (URL must start with file:// or http://)", -1);
+  return 1;
+}
+
 static int remoteSqlLoadCommit(
   ChunkStore *cs,
   const ProllyHash *pCommitHash,
@@ -271,16 +289,7 @@ static void doltPushFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
-  if( rc==SQLITE_NOTFOUND ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "remote not found", -1);
-    return;
-  }
-  if( rc==SQLITE_CANTOPEN ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
-    return;
-  }
+  if( remoteSqlReportOpenError(ctx, db, rc, 0) ) return;
 
   rc = doltlitePush(cs, pRemote, zBranch, bForce);
   pRemote->xClose(pRemote);
@@ -385,16 +394,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
-  if( rc==SQLITE_NOTFOUND ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "remote not found", -1);
-    return;
-  }
-  if( rc==SQLITE_CANTOPEN ){
-    (void)doltliteVcSealSavepointError(db);
-    sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
-    return;
-  }
+  if( remoteSqlReportOpenError(ctx, db, rc, 0) ) return;
 
   if( argc>=2 && sqlite3_value_type(argv[1])!=SQLITE_NULL ){
 
@@ -435,7 +435,7 @@ static void doltFetchFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
       if( !pBrRemote ){
         doltliteFreeStringArray(azNames, nNames);
         (void)doltliteVcSealSavepointError(db);
-        sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
+        sqlite3_result_error(ctx, "failed to open remote (URL must start with file:// or http://)", -1);
         return;
       }
       rc = doltliteFetch(cs, pBrRemote, zRemoteName, azNames[i]);
@@ -494,18 +494,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   rc = remoteSqlOpenNamedRemote(cs, zRemoteName, &zUrl, &pRemote);
-  if( rc==SQLITE_NOTFOUND ){
-    (void)doltliteVcSealSavepointError(db);
-    doltliteTxnStateClear(&savedState);
-    sqlite3_result_error(ctx, "remote not found", -1);
-    return;
-  }
-  if( rc==SQLITE_CANTOPEN ){
-    (void)doltliteVcSealSavepointError(db);
-    doltliteTxnStateClear(&savedState);
-    sqlite3_result_error(ctx, "failed to open remote (URL must start with file://)", -1);
-    return;
-  }
+  if( remoteSqlReportOpenError(ctx, db, rc, &savedState) ) return;
 
   rc = doltliteFetch(cs, pRemote, zRemoteName, zBranch);
   pRemote->xClose(pRemote);
@@ -661,7 +650,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   pRemote = openRemoteByUrl(chunkFileGetVfs(&cs->file), zUrl);
   if( !pRemote ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, SQLITE_ERROR,
-                              "failed to open remote (URL must start with file://)");
+                              "failed to open remote (URL must start with file:// or http://)");
     return;
   }
 

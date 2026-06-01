@@ -220,10 +220,7 @@ static int gcAppendMarkedChunk(
     *pnBufAlloc = (int)newAlloc;
   }
 
-  (*ppBuf)[*pnBuf]   = (u8)(nChunkData);
-  (*ppBuf)[*pnBuf+1] = (u8)(nChunkData>>8);
-  (*ppBuf)[*pnBuf+2] = (u8)(nChunkData>>16);
-  (*ppBuf)[*pnBuf+3] = (u8)(nChunkData>>24);
+  CS_WRITE_U32(*ppBuf + *pnBuf, nChunkData);
 
   memcpy(&aNewIndex[*pnNewIndex].hash, pHash, sizeof(ProllyHash));
   aNewIndex[*pnNewIndex].offset = dataOffset + *pnBuf;
@@ -245,7 +242,7 @@ static int gcBuildCompactedData(
   ChunkIndexEntry **ppNewIndex,
   int *pnNewIndex
 ){
-  int i, j;
+  int i;
   int kept = 0;
   ChunkIndexEntry *aNewIndex = 0;
   int nNewIndex = 0;
@@ -319,15 +316,7 @@ static int gcBuildCompactedData(
     }
   }
 
-  for(i=1; i<nNewIndex; i++){
-    ChunkIndexEntry tmp = aNewIndex[i];
-    j = i-1;
-    while( j>=0 && memcmp(aNewIndex[j].hash.data, tmp.hash.data, PROLLY_HASH_SIZE)>0 ){
-      aNewIndex[j+1] = aNewIndex[j];
-      j--;
-    }
-    aNewIndex[j+1] = tmp;
-  }
+  qsort(aNewIndex, nNewIndex, sizeof(aNewIndex[0]), csIndexEntryCmp);
 
   *ppNewData = buf;
   *pnNewData = nBuf;
@@ -471,19 +460,9 @@ static int gcRewriteFile(
     u8 *p = indexBuf + i * CHUNK_INDEX_ENTRY_SIZE;
     memcpy(p, pNewIndex[i].hash.data, PROLLY_HASH_SIZE);
     p += PROLLY_HASH_SIZE;
-    {
-      i64 off = pNewIndex[i].offset;
-      p[0] = (u8)off; p[1] = (u8)(off>>8);
-      p[2] = (u8)(off>>16); p[3] = (u8)(off>>24);
-      p[4] = (u8)(off>>32); p[5] = (u8)(off>>40);
-      p[6] = (u8)(off>>48); p[7] = (u8)(off>>56);
-    }
+    CS_WRITE_I64(p, pNewIndex[i].offset);
     p += 8;
-    {
-      u32 sz = (u32)pNewIndex[i].size;
-      p[0] = (u8)sz; p[1] = (u8)(sz>>8);
-      p[2] = (u8)(sz>>16); p[3] = (u8)(sz>>24);
-    }
+    CS_WRITE_U32(p, (u32)pNewIndex[i].size);
   }
 
   manifestCs = *cs;

@@ -499,13 +499,10 @@ static int dstConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   DstVtab *v; int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
-  rc = sqlite3_declare_vtab(db, dstSchema);
+  rc = doltliteVtabConnectSimple(db, dstSchema, sizeof(*v), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
-  v = sqlite3_malloc(sizeof(*v));
-  if( !v ) return SQLITE_NOMEM;
-  memset(v, 0, sizeof(*v));
+  v = (DstVtab*)*ppVtab;
   v->db = db;
-  *ppVtab = &v->base;
   return SQLITE_OK;
 }
 
@@ -792,13 +789,10 @@ static int dssConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   DssVtab *v; int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
-  rc = sqlite3_declare_vtab(db, dssSchema);
+  rc = doltliteVtabConnectSimple(db, dssSchema, sizeof(*v), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
-  v = sqlite3_malloc(sizeof(*v));
-  if( !v ) return SQLITE_NOMEM;
-  memset(v, 0, sizeof(*v));
+  v = (DssVtab*)*ppVtab;
   v->db = db;
-  *ppVtab = &v->base;
   return SQLITE_OK;
 }
 

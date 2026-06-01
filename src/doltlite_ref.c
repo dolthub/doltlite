@@ -86,30 +86,6 @@ static int doltliteResolveBaseRef(
   return SQLITE_NOTFOUND;
 }
 
-static int doltliteWalkFirstParent(
-  sqlite3 *db,
-  ProllyHash *pCommit,
-  int n
-){
-  int i;
-  for(i=0; i<n; i++){
-    DoltliteCommit commit;
-    const ProllyHash *pParent;
-    int rc;
-    memset(&commit, 0, sizeof(commit));
-    rc = doltliteLoadCommit(db, pCommit, &commit);
-    if( rc!=SQLITE_OK ) return rc;
-    pParent = doltliteCommitParentHash(&commit, 0);
-    if( !pParent ){
-      doltliteCommitClear(&commit);
-      return SQLITE_NOTFOUND;
-    }
-    memcpy(pCommit, pParent, sizeof(ProllyHash));
-    doltliteCommitClear(&commit);
-  }
-  return SQLITE_OK;
-}
-
 static int doltliteSelectParent(
   sqlite3 *db,
   ProllyHash *pCommit,
@@ -129,6 +105,19 @@ static int doltliteSelectParent(
   }
   memcpy(pCommit, pParent, sizeof(ProllyHash));
   doltliteCommitClear(&commit);
+  return SQLITE_OK;
+}
+
+static int doltliteWalkFirstParent(
+  sqlite3 *db,
+  ProllyHash *pCommit,
+  int n
+){
+  int i;
+  for(i=0; i<n; i++){
+    int rc = doltliteSelectParent(db, pCommit, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
   return SQLITE_OK;
 }
 

@@ -190,6 +190,24 @@ static SQLITE_INLINE int doltliteVtabOpenCursor(
   return SQLITE_OK;
 }
 
+/* Declare a fixed-schema vtab and allocate its zeroed instance. The caller
+** owns any per-vtab fields (e.g. ->db) after this returns SQLITE_OK. */
+static SQLITE_INLINE int doltliteVtabConnectSimple(
+  sqlite3 *db,
+  const char *zSchema,
+  int nByte,
+  sqlite3_vtab **ppVtab
+){
+  sqlite3_vtab *pVtab;
+  int rc = sqlite3_declare_vtab(db, zSchema);
+  if( rc!=SQLITE_OK ) return rc;
+  pVtab = sqlite3_malloc(nByte);
+  if( !pVtab ) return SQLITE_NOMEM;
+  memset(pVtab, 0, nByte);
+  *ppVtab = pVtab;
+  return SQLITE_OK;
+}
+
 static SQLITE_INLINE int doltliteAppendQuotedColumnList(
   sqlite3_str *pStr,
   char *const *azName,

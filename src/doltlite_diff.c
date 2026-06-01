@@ -427,13 +427,10 @@ static int diffConnect(sqlite3 *db, void *pAux, int argc,
   DoltliteDiffVtab *pVtab;
   int rc;
   (void)pAux; (void)argc; (void)argv; (void)pzErr;
-  rc = sqlite3_declare_vtab(db, diffSchema);
+  rc = doltliteVtabConnectSimple(db, diffSchema, sizeof(*pVtab), ppVtab);
   if( rc!=SQLITE_OK ) return rc;
-  pVtab = sqlite3_malloc(sizeof(*pVtab));
-  if( !pVtab ) return SQLITE_NOMEM;
-  memset(pVtab, 0, sizeof(*pVtab));
+  pVtab = (DoltliteDiffVtab*)*ppVtab;
   pVtab->db = db;
-  *ppVtab = &pVtab->base;
   return SQLITE_OK;
 }
 
