@@ -98,12 +98,6 @@ static int remoteSqlOpenNamedRemote(
   return SQLITE_OK;
 }
 
-static int remoteSqlPersistRefs(ChunkStore *cs){
-  int rc = chunkStoreSerializeRefs(cs);
-  if( rc==SQLITE_OK ) rc = chunkStoreCommit(cs);
-  return rc;
-}
-
 static int remoteSqlLoadCommit(
   ChunkStore *cs,
   const ProllyHash *pCommitHash,
@@ -583,7 +577,7 @@ static void doltPullFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  rc = remoteSqlPersistRefs(cs);
+  rc = doltliteRemotePersistRefs(cs);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
     return;
@@ -687,17 +681,6 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
   }
 
   {
-    u8 *refsData = 0; int nRefsData = 0;
-    ProllyHash refsHash;
-    memcpy(&refsHash, refsTableGetHash(&cs->refs), sizeof(ProllyHash));
-    if( !prollyHashIsEmpty(&refsHash) ){
-      rc = chunkStoreGet(cs, &refsHash, &refsData, &nRefsData);
-      (void)refsData;
-      sqlite3_free(refsData);
-    }
-  }
-
-  {
     const char *zDefault = chunkStoreGetDefaultBranch(cs);
     ProllyHash branchCommit;
     int nBr;
@@ -731,7 +714,7 @@ static void doltCloneFunc(sqlite3_context *ctx, int argc, sqlite3_value **argv){
     }
   }
 
-  rc = remoteSqlPersistRefs(cs);
+  rc = doltliteRemotePersistRefs(cs);
   if( rc!=SQLITE_OK ){
     remoteSqlRestoreAndReport(ctx, db, cs, &savedState, rc, 0);
     return;

@@ -23,7 +23,6 @@ struct CommitAncestorsCursor {
   int qHead, qTail, qAlloc;
   ProllyHashSet visited;
   int visitedInit;
-  ProllyHash curHash;
   char zCurHex[PROLLY_HASH_SIZE*2+1];
   DoltliteCommit curCommit;
   int curParents;
@@ -119,7 +118,6 @@ static int caLoadNextCommit(CommitAncestorsCursor *pCur, sqlite3 *db){
     rc = doltliteLoadCommit(db, &cur, &pCur->curCommit);
     if( rc!=SQLITE_OK ) return rc;
 
-    pCur->curHash = cur;
     doltliteHashToHex(&cur, pCur->zCurHex);
     pCur->hasRow = 1;
     pCur->curParents = doltliteCommitParentCount(&pCur->curCommit);

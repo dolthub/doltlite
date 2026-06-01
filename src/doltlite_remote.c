@@ -369,15 +369,9 @@ static int fsSetRefsIf(
   return rc;
 }
 
-static int remoteStorePersistRefs(ChunkStore *pStore){
-  int rc = chunkStoreSerializeRefs(pStore);
-  if( rc==SQLITE_OK ) rc = chunkStoreCommit(pStore);
-  return rc;
-}
-
 static int fsCommit(DoltliteRemote *pRemote){
   FsRemote *p = (FsRemote*)pRemote;
-  int rc = remoteStorePersistRefs(&p->store);
+  int rc = doltliteRemotePersistRefs(&p->store);
   if( p->lockedForCas ){
     chunkStoreUnlock(&p->store);
     p->lockedForCas = 0;
@@ -779,7 +773,7 @@ int doltliteFetch(
   rc = chunkStoreUpdateTracking(pLocal, zRemoteName, zBranch, &remoteCommit);
   if( rc!=SQLITE_OK ) return rc;
 
-  return remoteStorePersistRefs(pLocal);
+  return doltliteRemotePersistRefs(pLocal);
 }
 
 int doltliteClone(ChunkStore *pLocal, DoltliteRemote *pRemote){

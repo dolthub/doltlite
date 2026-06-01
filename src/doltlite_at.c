@@ -313,8 +313,4 @@ int doltliteRegisterAtTables(sqlite3 *db){
   return doltliteForEachUserTable(db, "dolt_at_", &atModule);
 }
 
-int doltliteAtRegister(sqlite3 *db){
-  return doltliteRegisterAtTables(db);
-}
-
 #endif

@@ -1379,7 +1379,7 @@ static int brColumn(sqlite3_vtab_cursor *c, sqlite3_context *ctx, int col){
       sqlite3_result_text(ctx, br->zName, -1, SQLITE_TRANSIENT);
       return SQLITE_OK;
     case 1: {
-      char h[41];
+      char h[PROLLY_HASH_SIZE*2+1];
       doltliteHashToHex(&br->commitHash, h);
       sqlite3_result_text(ctx, h, -1, SQLITE_TRANSIENT);
       return SQLITE_OK;
