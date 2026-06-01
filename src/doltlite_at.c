@@ -208,30 +208,19 @@ static int atFilter(sqlite3_vtab_cursor *cur,
 
   {
     ProllyHash branchCommit;
+    ProllyHash effCatHash;
     int isBranch = (chunkStoreFindBranch(cs,zRef,&branchCommit)==SQLITE_OK
                     && !prollyHashIsEmpty(&branchCommit));
     if( isBranch ){
-      ProllyHash wsCatHash, wsCommitHash;
-      memset(&wsCatHash,0,sizeof(wsCatHash));
-      memset(&wsCommitHash,0,sizeof(wsCommitHash));
-      if( chunkStoreReadBranchWorkingCatalog(cs,zRef,&wsCatHash,&wsCommitHash)==SQLITE_OK
-       && !prollyHashIsEmpty(&wsCommitHash)
-       && memcmp(wsCommitHash.data,branchCommit.data,PROLLY_HASH_SIZE)==0
-       && memcmp(wsCatHash.data,commit.catalogHash.data,PROLLY_HASH_SIZE)!=0 ){
-
-        rc=doltliteLoadCatalog(db,&wsCatHash,&aTables,&nTables,0);
-        doltliteCommitClear(&commit);
-        if(rc!=SQLITE_OK) return rc;
-        goto at_find_root;
-      }
+      doltliteResolveBranchEffectiveCatalog(cs, zRef, &branchCommit,
+                                            &commit.catalogHash, &effCatHash);
+    }else{
+      memcpy(&effCatHash, &commit.catalogHash, sizeof(ProllyHash));
     }
+    rc=doltliteLoadCatalog(db,&effCatHash,&aTables,&nTables,0);
   }
-
-  rc=doltliteLoadCatalog(db,&commit.catalogHash,&aTables,&nTables,0);
   doltliteCommitClear(&commit);
   if(rc!=SQLITE_OK) return rc;
-
-at_find_root:
 
   rc=doltliteFindTableRootByName(aTables,nTables,v->zTableName,&tableRoot,&flags);
   doltliteFreeCatalog(aTables,nTables);

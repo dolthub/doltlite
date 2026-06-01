@@ -902,27 +902,7 @@ static int parseColumns(
       len = (int)(e - s);
       if( len > 0 ){
 
-        int isConstraint = 0;
-        {
-          const char *t = s;
-
-          if( len>=11 && sqlite3_strnicmp(t, "PRIMARY KEY", 11)==0
-              && (len==11 || !isalnum((unsigned char)t[11])) ){
-            isConstraint = 1;
-          }else if( len>=6 && sqlite3_strnicmp(t, "UNIQUE", 6)==0
-              && (len==6 || t[6]=='(' || isspace((unsigned char)t[6])) ){
-            isConstraint = 1;
-          }else if( len>=5 && sqlite3_strnicmp(t, "CHECK", 5)==0
-              && (len==5 || t[5]=='(' || isspace((unsigned char)t[5])) ){
-            isConstraint = 1;
-          }else if( len>=11 && sqlite3_strnicmp(t, "FOREIGN KEY", 11)==0
-              && (len==11 || !isalnum((unsigned char)t[11])) ){
-            isConstraint = 1;
-          }else if( len>=10 && sqlite3_strnicmp(t, "CONSTRAINT", 10)==0
-              && (len==10 || isspace((unsigned char)t[10])) ){
-            isConstraint = 1;
-          }
-        }
+        int isConstraint = doltliteSegmentIsTableConstraint(s, len);
 
         if( !isConstraint ){
 

@@ -291,22 +291,7 @@ int migrateSchemaRowData(
               if( e > s ){
                 int segLen = (int)(e - s);
 
-                if( segLen>=11 && sqlite3_strnicmp(s, "PRIMARY KEY", 11)==0
-                    && (segLen==11 || !isalnum((unsigned char)s[11])) ){
-                  isConstraint = 1;
-                }else if( segLen>=6 && sqlite3_strnicmp(s, "UNIQUE", 6)==0
-                    && (segLen==6 || s[6]=='(' || isspace((unsigned char)s[6])) ){
-                  isConstraint = 1;
-                }else if( segLen>=5 && sqlite3_strnicmp(s, "CHECK", 5)==0
-                    && (segLen==5 || s[5]=='(' || isspace((unsigned char)s[5])) ){
-                  isConstraint = 1;
-                }else if( segLen>=11 && sqlite3_strnicmp(s, "FOREIGN KEY", 11)==0
-                    && (segLen==11 || !isalnum((unsigned char)s[11])) ){
-                  isConstraint = 1;
-                }else if( segLen>=10 && sqlite3_strnicmp(s, "CONSTRAINT", 10)==0
-                    && (segLen==10 || isspace((unsigned char)s[10])) ){
-                  isConstraint = 1;
-                }
+                isConstraint = doltliteSegmentIsTableConstraint(s, segLen);
 
                 if( !isConstraint ){
 
