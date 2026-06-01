@@ -113,7 +113,8 @@ static int serializeViolations(
 ){
   int sz = 4 + 2;
   int i, j, rc;
-  u8 *buf, *p;
+  u8 *buf;
+  DlByteWriter w;
 
   for(i=0; i<nTables; i++){
     int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
@@ -131,51 +132,30 @@ static int serializeViolations(
 
   buf = sqlite3_malloc(sz);
   if( !buf ) return SQLITE_NOMEM;
-  p = buf;
+  w.p = buf;
 
-  p[0] = DCV_MAGIC0;
-  p[1] = DCV_MAGIC1;
-  p[2] = DCV_MAGIC2;
-  p[3] = DCV_VERSION;
-  p += 4;
-  p[0] = (u8)nTables; p[1] = (u8)(nTables>>8); p += 2;
+  dlWriteU8(&w, DCV_MAGIC0);
+  dlWriteU8(&w, DCV_MAGIC1);
+  dlWriteU8(&w, DCV_MAGIC2);
+  dlWriteU8(&w, DCV_VERSION);
+  dlWriteU16(&w, nTables);
 
   for(i=0; i<nTables; i++){
     int nl = aTables[i].zName ? (int)strlen(aTables[i].zName) : 0;
-    int nr = aTables[i].nRows;
-    p[0] = (u8)nl; p[1] = (u8)(nl>>8); p += 2;
-    if( nl>0 ){ memcpy(p, aTables[i].zName, nl); p += nl; }
-    p[0]=(u8)nr; p[1]=(u8)(nr>>8); p[2]=(u8)(nr>>16); p[3]=(u8)(nr>>24); p += 4;
-    for(j=0; j<nr; j++){
+    dlWriteU16Name(&w, aTables[i].zName, nl);
+    dlWriteU32(&w, aTables[i].nRows);
+    for(j=0; j<aTables[i].nRows; j++){
       ConstraintViolationRow *r = &aTables[i].aRows[j];
       int ni = r->zInfo ? (int)strlen(r->zInfo) : 0;
-
-      *p++ = (u8)r->violationType;
-
-      p[0]=(u8)r->nKey; p[1]=(u8)(r->nKey>>8);
-      p[2]=(u8)(r->nKey>>16); p[3]=(u8)(r->nKey>>24); p+=4;
-      if( r->nKey>0 ){ memcpy(p, r->pKey, r->nKey); p += r->nKey; }
-
-      {
-        u64 k = (u64)r->intKey;
-        p[0]=(u8)k;      p[1]=(u8)(k>>8);
-        p[2]=(u8)(k>>16); p[3]=(u8)(k>>24);
-        p[4]=(u8)(k>>32); p[5]=(u8)(k>>40);
-        p[6]=(u8)(k>>48); p[7]=(u8)(k>>56);
-        p += 8;
-      }
-
-      p[0]=(u8)r->nVal; p[1]=(u8)(r->nVal>>8);
-      p[2]=(u8)(r->nVal>>16); p[3]=(u8)(r->nVal>>24); p+=4;
-      if( r->nVal>0 ){ memcpy(p, r->pVal, r->nVal); p += r->nVal; }
-
-      p[0]=(u8)ni; p[1]=(u8)(ni>>8);
-      p[2]=(u8)(ni>>16); p[3]=(u8)(ni>>24); p+=4;
-      if( ni>0 ){ memcpy(p, r->zInfo, ni); p += ni; }
+      dlWriteU8(&w, (u8)r->violationType);
+      dlWriteU32Blob(&w, r->pKey, r->nKey);
+      dlWriteI64(&w, r->intKey);
+      dlWriteU32Blob(&w, r->pVal, r->nVal);
+      dlWriteU32Blob(&w, (const u8*)r->zInfo, ni);
     }
   }
 
-  rc = chunkStorePut(cs, buf, (int)(p-buf), pHash);
+  rc = chunkStorePut(cs, buf, (int)(w.p-buf), pHash);
   sqlite3_free(buf);
   return rc;
 }
@@ -187,7 +167,7 @@ static int loadAllViolations(
 ){
   ProllyHash hash;
   u8 *data = 0; int nData = 0;
-  const u8 *p;
+  DlByteReader rd;
   int nTables, i, j, rc;
   ConstraintViolationTable *aTables;
 
@@ -201,16 +181,15 @@ static int loadAllViolations(
   if( rc!=SQLITE_OK ) return rc;
   if( nData<(4+2) ){ sqlite3_free(data); return SQLITE_CORRUPT; }
 
-  p = data;
-  if( p[0]!=DCV_MAGIC0
-   || p[1]!=DCV_MAGIC1
-   || p[2]!=DCV_MAGIC2
-   || p[3]!=DCV_VERSION ){
+  dlReaderInit(&rd, data, nData);
+  if( dlReadU8(&rd)!=DCV_MAGIC0
+   || dlReadU8(&rd)!=DCV_MAGIC1
+   || dlReadU8(&rd)!=DCV_MAGIC2
+   || dlReadU8(&rd)!=DCV_VERSION ){
     sqlite3_free(data);
     return SQLITE_CORRUPT;
   }
-  p += 4;
-  nTables = p[0] | (p[1]<<8); p += 2;
+  nTables = dlReadU16(&rd);
   if( nTables<0 ){ sqlite3_free(data); return SQLITE_CORRUPT; }
 
   aTables = sqlite3_malloc(nTables ? nTables * (int)sizeof(*aTables) : 1);
@@ -218,21 +197,15 @@ static int loadAllViolations(
   memset(aTables, 0, nTables ? nTables * (int)sizeof(*aTables) : 1);
 
   for(i=0; i<nTables; i++){
-    int nl, nr;
-    if( p+2 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
-    nl = p[0] | (p[1]<<8); p += 2;
-    if( nl<0 || (size_t)nl > (size_t)(data+nData - p) ){ rc = SQLITE_CORRUPT; goto fail; }
-    aTables[i].zName = sqlite3_malloc(nl+1);
-    if( !aTables[i].zName ){ rc = SQLITE_NOMEM; goto fail; }
-    memcpy(aTables[i].zName, p, nl); aTables[i].zName[nl] = 0;
-    p += nl;
-    if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
-    nr = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
-    if( nr<0 ){ rc = SQLITE_CORRUPT; goto fail; }
+    int nr;
+    rc = dlReadU16Name(&rd, &aTables[i].zName);
+    if( rc!=SQLITE_OK ) goto fail;
+    nr = dlReadU32(&rd);
+    if( rd.err || nr<0 ){ rc = SQLITE_CORRUPT; goto fail; }
     /* Reject impossible counts up front: every row needs at least one byte, so
     ** nr can't exceed the bytes remaining. sqlite3_malloc64 below avoids 32-bit
     ** overflow on the row-array allocation. */
-    if( (sqlite3_uint64)nr > (sqlite3_uint64)(data+nData - p) ){
+    if( (sqlite3_uint64)nr > (sqlite3_uint64)(rd.end - rd.p) ){
       rc = SQLITE_CORRUPT; goto fail;
     }
     aTables[i].nRows = nr;
@@ -242,46 +215,18 @@ static int loadAllViolations(
 
     for(j=0; j<nr; j++){
       ConstraintViolationRow *r = &aTables[i].aRows[j];
-      int kvl, vvl, nil_;
-      if( p+1 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
-      r->violationType = *p++;
-      if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
-      kvl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
-      if( kvl<0 || (size_t)kvl > (size_t)(data+nData - p) ){ rc = SQLITE_CORRUPT; goto fail; }
-      if( kvl>0 ){
-        rc = dupBytes(p, kvl, &r->pKey);
-        if( rc!=SQLITE_OK ) goto fail;
-        r->nKey = kvl;
-      }
-      p += kvl;
-      if( p+8 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
-      r->intKey = (i64)((u64)p[0] | ((u64)p[1]<<8) | ((u64)p[2]<<16) |
-                        ((u64)p[3]<<24) | ((u64)p[4]<<32) | ((u64)p[5]<<40) |
-                        ((u64)p[6]<<48) | ((u64)p[7]<<56));
-      p += 8;
-      if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
-      vvl = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
-      if( vvl<0 || (size_t)vvl > (size_t)(data+nData - p) ){ rc = SQLITE_CORRUPT; goto fail; }
-      if( vvl>0 ){
-        rc = dupBytes(p, vvl, &r->pVal);
-        if( rc!=SQLITE_OK ) goto fail;
-        r->nVal = vvl;
-      }
-      p += vvl;
-      if( p+4 > data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
-      nil_ = p[0]|(p[1]<<8)|(p[2]<<16)|(p[3]<<24); p+=4;
-      if( nil_<0 || (size_t)nil_ > (size_t)(data+nData - p) ){ rc = SQLITE_CORRUPT; goto fail; }
-      if( nil_>0 ){
-        r->zInfo = sqlite3_malloc(nil_+1);
-        if( !r->zInfo ){ rc = SQLITE_NOMEM; goto fail; }
-        memcpy(r->zInfo, p, nil_);
-        r->zInfo[nil_] = 0;
-        p += nil_;
-      }
+      r->violationType = dlReadU8(&rd);
+      rc = dlReadU32Blob(&rd, &r->pKey, &r->nKey);
+      if( rc!=SQLITE_OK ) goto fail;
+      r->intKey = dlReadI64(&rd);
+      rc = dlReadU32Blob(&rd, &r->pVal, &r->nVal);
+      if( rc!=SQLITE_OK ) goto fail;
+      rc = dlReadU32Str(&rd, &r->zInfo);
+      if( rc!=SQLITE_OK ) goto fail;
     }
   }
 
-  if( p != data+nData ){ rc = SQLITE_CORRUPT; goto fail; }
+  if( rd.err || rd.p != rd.end ){ rc = SQLITE_CORRUPT; goto fail; }
 
   *ppTables = aTables;
   *pnTables = nTables;

@@ -213,6 +213,105 @@ static SQLITE_INLINE int doltliteFindTableRootByName(
   return SQLITE_NOTFOUND;
 }
 
+/* Little-endian read/write cursors for the hand-rolled conflicts and
+** constraint-violation on-disk codecs. The reader is sticky: any short read
+** sets ->err and yields 0, so a group of fields can be read then checked once.
+** Blob/name/string readers also return SQLITE_CORRUPT (bad length) or
+** SQLITE_NOMEM directly. */
+typedef struct DlByteReader { const u8 *p; const u8 *end; int err; } DlByteReader;
+
+static SQLITE_INLINE void dlReaderInit(DlByteReader *r, const u8 *data, int n){
+  r->p = data; r->end = data + n; r->err = 0;
+}
+static SQLITE_INLINE u8 dlReadU8(DlByteReader *r){
+  if( r->err || r->p+1 > r->end ){ r->err = 1; return 0; }
+  return *r->p++;
+}
+static SQLITE_INLINE int dlReadU16(DlByteReader *r){
+  if( r->err || r->p+2 > r->end ){ r->err = 1; return 0; }
+  { int v = r->p[0] | (r->p[1]<<8); r->p += 2; return v; }
+}
+static SQLITE_INLINE int dlReadU32(DlByteReader *r){
+  if( r->err || r->p+4 > r->end ){ r->err = 1; return 0; }
+  { int v = r->p[0] | (r->p[1]<<8) | (r->p[2]<<16) | (r->p[3]<<24);
+    r->p += 4; return v; }
+}
+static SQLITE_INLINE i64 dlReadI64(DlByteReader *r){
+  if( r->err || r->p+8 > r->end ){ r->err = 1; return 0; }
+  { i64 v = (i64)((u64)r->p[0] | ((u64)r->p[1]<<8) | ((u64)r->p[2]<<16)
+                | ((u64)r->p[3]<<24) | ((u64)r->p[4]<<32) | ((u64)r->p[5]<<40)
+                | ((u64)r->p[6]<<48) | ((u64)r->p[7]<<56));
+    r->p += 8; return v; }
+}
+/* u32-length-prefixed raw value blob; empty -> (*pp=0,*pn=0). */
+static SQLITE_INLINE int dlReadU32Blob(DlByteReader *r, u8 **pp, int *pn){
+  int n = dlReadU32(r);
+  *pp = 0; *pn = 0;
+  if( r->err ) return SQLITE_CORRUPT;
+  if( n<0 || (size_t)n > (size_t)(r->end - r->p) ){ r->err = 1; return SQLITE_CORRUPT; }
+  if( n>0 ){
+    *pp = sqlite3_malloc(n);
+    if( !*pp ) return SQLITE_NOMEM;
+    memcpy(*pp, r->p, n);
+    *pn = n;
+  }
+  r->p += n;
+  return SQLITE_OK;
+}
+/* u16-length-prefixed name -> fresh nul-terminated string (empty -> ""). */
+static SQLITE_INLINE int dlReadU16Name(DlByteReader *r, char **pz){
+  int n = dlReadU16(r);
+  *pz = 0;
+  if( r->err ) return SQLITE_CORRUPT;
+  if( n<0 || (size_t)n > (size_t)(r->end - r->p) ){ r->err = 1; return SQLITE_CORRUPT; }
+  *pz = sqlite3_malloc(n+1);
+  if( !*pz ) return SQLITE_NOMEM;
+  memcpy(*pz, r->p, n);
+  (*pz)[n] = 0;
+  r->p += n;
+  return SQLITE_OK;
+}
+/* u32-length-prefixed string -> fresh nul-terminated string; empty -> NULL. */
+static SQLITE_INLINE int dlReadU32Str(DlByteReader *r, char **pz){
+  int n = dlReadU32(r);
+  *pz = 0;
+  if( r->err ) return SQLITE_CORRUPT;
+  if( n<0 || (size_t)n > (size_t)(r->end - r->p) ){ r->err = 1; return SQLITE_CORRUPT; }
+  if( n>0 ){
+    *pz = sqlite3_malloc(n+1);
+    if( !*pz ) return SQLITE_NOMEM;
+    memcpy(*pz, r->p, n);
+    (*pz)[n] = 0;
+    r->p += n;
+  }
+  return SQLITE_OK;
+}
+
+typedef struct DlByteWriter { u8 *p; } DlByteWriter;
+static SQLITE_INLINE void dlWriteU8(DlByteWriter *w, u8 v){ *w->p++ = v; }
+static SQLITE_INLINE void dlWriteU16(DlByteWriter *w, int v){
+  w->p[0]=(u8)v; w->p[1]=(u8)(v>>8); w->p+=2;
+}
+static SQLITE_INLINE void dlWriteU32(DlByteWriter *w, int v){
+  w->p[0]=(u8)v; w->p[1]=(u8)(v>>8); w->p[2]=(u8)(v>>16); w->p[3]=(u8)(v>>24);
+  w->p+=4;
+}
+static SQLITE_INLINE void dlWriteI64(DlByteWriter *w, i64 v){
+  u64 k = (u64)v; int i;
+  for(i=0; i<8; i++) w->p[i] = (u8)(k >> (i*8));
+  w->p += 8;
+}
+static SQLITE_INLINE void dlWriteU32Blob(DlByteWriter *w, const u8 *p, int n){
+  dlWriteU32(w, n);
+  if( n>0 ) memcpy(w->p, p, n);
+  w->p += n;
+}
+static SQLITE_INLINE void dlWriteU16Name(DlByteWriter *w, const char *z, int n){
+  dlWriteU16(w, n);
+  if( n>0 ) memcpy(w->p, z, n);
+  w->p += n;
+}
+
 ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 BtShared *doltliteGetBtShared(sqlite3 *db);
 void doltliteInvalidateWorkingState(sqlite3 *db);
