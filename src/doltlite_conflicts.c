@@ -35,36 +35,19 @@ static void freeConflictRow(struct ConflictRow *pRow){
 static void removeConflictRow(ConflictTableInfo *pTable, int iRow){
   if( !pTable || iRow<0 || iRow>=pTable->nConflicts ) return;
   freeConflictRow(&pTable->aRows[iRow]);
-  if( iRow < pTable->nConflicts - 1 ){
-    memmove(&pTable->aRows[iRow], &pTable->aRows[iRow+1],
-            (pTable->nConflicts - iRow - 1) * sizeof(struct ConflictRow));
-  }
-  pTable->nConflicts--;
-  if( pTable->aRows ){
-    memset(&pTable->aRows[pTable->nConflicts], 0, sizeof(struct ConflictRow));
-  }
+  doltliteArrayRemoveAt(pTable->aRows, &pTable->nConflicts, iRow,
+                        (int)sizeof(struct ConflictRow));
 }
 
 static void removeConflictTable(ConflictTableInfo *aTables, int *pnTables, int iTable){
-  int nTables;
-  if( !aTables || !pnTables ) return;
-  nTables = *pnTables;
-  if( iTable<0 || iTable>=nTables ) return;
+  int j;
+  if( !aTables || !pnTables || iTable<0 || iTable>=*pnTables ) return;
   sqlite3_free(aTables[iTable].zName);
-  {
-    int j;
-    for(j=0; j<aTables[iTable].nConflicts; j++){
-      freeConflictRow(&aTables[iTable].aRows[j]);
-    }
+  for(j=0; j<aTables[iTable].nConflicts; j++){
+    freeConflictRow(&aTables[iTable].aRows[j]);
   }
   sqlite3_free(aTables[iTable].aRows);
-  memset(&aTables[iTable], 0, sizeof(aTables[iTable]));
-  if( iTable < nTables - 1 ){
-    memmove(&aTables[iTable], &aTables[iTable+1],
-            (nTables - iTable - 1) * sizeof(ConflictTableInfo));
-  }
-  (*pnTables)--;
-  memset(&aTables[*pnTables], 0, sizeof(aTables[*pnTables]));
+  doltliteArrayRemoveAt(aTables, pnTables, iTable, (int)sizeof(ConflictTableInfo));
 }
 
 #define DOLTLITE_CONFLICTS_MAGIC0 'D'
