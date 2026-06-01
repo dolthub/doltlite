@@ -1,8 +1,5 @@
 #!/bin/bash
-DOLTLITE=./doltlite
-PASS=0; FAIL=0; ERRORS=""
-run_test() { local n="$1" s="$2" e="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if [ "$r" = "$e" ]; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi; }
-run_test_match() { local n="$1" s="$2" p="$3" d="$4"; local r=$(echo "$s"|perl -e 'alarm(10);exec @ARGV' $DOLTLITE "$d" 2>&1); if echo "$r"|grep -qE "$p"; then PASS=$((PASS+1)); else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  pattern: $p\n  got:     $r"; fi; }
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== Doltlite Branch Tests (Per-Session) ==="
 echo ""
@@ -171,6 +168,4 @@ run_test "branch_from_second_parent_ref_persists_across_reopen" "SELECT count(*)
 run_test "branch_from_second_parent_hash_persists_across_reopen" "SELECT count(*) FROM t;" "2" "$DB13/from_hash"
 
 rm -f "$DB" "$DB2" "$DB2B" "$DB3" "$DB4" "$DB5" "$DB6" "$DB7" "$DB8" "$DB9" "$DB10" "$DB11" "$DB12" "$DB13"
-echo ""
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
+dltest_finish
