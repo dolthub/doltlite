@@ -1324,14 +1324,21 @@ static void freeSchemaCatalogRows(SchemaCatalogRow *aRows, int nRows){
   sqlite3_free(aRows);
 }
 
+/* Reload order must place each object after everything it references: tables,
+** then their indexes, then views, then triggers (which fire on tables/views). */
+static int schemaTypeRank(const char *zType){
+  if( strcmp(zType, "table")==0 ) return 0;
+  if( strcmp(zType, "index")==0 ) return 1;
+  if( strcmp(zType, "view")==0 )  return 2;
+  return 3;
+}
+
 static int schemaCatalogRowCmp(const void *a, const void *b){
   const SchemaCatalogRow *ra = (const SchemaCatalogRow*)a;
   const SchemaCatalogRow *rb = (const SchemaCatalogRow*)b;
   const char *za = ra->zType ? ra->zType : "";
   const char *zb = rb->zType ? rb->zType : "";
-  int raRank = strcmp(za, "table")==0 ? 0 : strcmp(za, "index")==0 ? 1 : 2;
-  int rbRank = strcmp(zb, "table")==0 ? 0 : strcmp(zb, "index")==0 ? 1 : 2;
-  int c = raRank - rbRank;
+  int c = schemaTypeRank(za) - schemaTypeRank(zb);
   if( c ) return c;
   c = strcmp(ra->zTblName ? ra->zTblName : "", rb->zTblName ? rb->zTblName : "");
   if( c ) return c;
