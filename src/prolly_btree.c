@@ -48,6 +48,8 @@ int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
 char *doltliteResolveTableNumber(sqlite3 *db, Pgno iTable);
 struct TableEntry;
 typedef struct SchemaEntry SchemaEntry;
+#ifndef DOLTLITE_SCHEMAENTRY_DEFINED
+#define DOLTLITE_SCHEMAENTRY_DEFINED
 struct SchemaEntry {
   char *zName;
   char *zTblName;
@@ -55,6 +57,7 @@ struct SchemaEntry {
   char *zType;
   Pgno iRootpage;
 };
+#endif
 int doltliteSerializeCatalogEntriesWithFallbackSchema(
   sqlite3 *db,
   struct TableEntry *aTables,
@@ -118,6 +121,8 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
 
 #define PROLLY_MAX_RECORD_SIZE ((sqlite3_int64)(1024*1024*1024))
 
+#ifndef DOLTLITE_TABLEENTRY_DEFINED
+#define DOLTLITE_TABLEENTRY_DEFINED
 struct TableEntry {
   Pgno iTable;
   ProllyHash root;
@@ -132,6 +137,7 @@ struct TableEntry {
   char *zName;
   ProllyMutMap *pPending;
 };
+#endif
 
 typedef struct Catalog Catalog;
 struct Catalog {
@@ -8402,6 +8408,11 @@ int sqlite3BtreeCursorInfo(BtCursor *pCur, int *aResult, int upCnt){
   return SQLITE_OK;
 }
 
+/* In the amalgamation, testfixture also links test_btree.c which defines this
+** same SQLITE_TEST-only debug helper; skip ours there to avoid a duplicate
+** symbol (the non-amalgamation build never compiles this — libdoltlite.a is
+** built without SQLITE_TEST). */
+#ifndef SQLITE_AMALGAMATION
 void sqlite3BtreeCursorList(Btree *p){
 #ifndef SQLITE_OMIT_TRACE
   BtCursor *pCur;
@@ -8433,6 +8444,7 @@ void sqlite3BtreeCursorList(Btree *p){
   (void)p;
 #endif
 }
+#endif /* !SQLITE_AMALGAMATION */
 #endif
 
 static void doltiteEngineFunc(

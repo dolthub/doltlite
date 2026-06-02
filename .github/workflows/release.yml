@@ -60,7 +60,10 @@ jobs:
         ./configure
         make sqlite3.c sqlite3.h sqlite3ext.h
         make -C ext/wasm dist
-        # sqlite3.c/h IS the doltlite amalgamation (built with DOLTLITE_PROLLY=1)
+        # With DOLTLITE_PROLLY=1 (the default), mksqlite3c.tcl --doltlite weaves
+        # the prolly storage engine and the version-control layer into sqlite3.c,
+        # so this amalgamation is genuinely doltlite (dolt_commit/branch/merge,
+        # dolt_diff, etc.) rather than stock SQLite.
 
     - name: Package amalgamation
       run: |

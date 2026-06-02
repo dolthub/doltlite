@@ -120,7 +120,10 @@ jobs:
         # Replace bundled SQLite amalgamation with doltlite's
         cp $GITHUB_WORKSPACE/build/sqlite3.c sqlite3.c
         cp $GITHUB_WORKSPACE/build/sqlite3.h sqlite3.h
-        gcc -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=0 \
+        # doltlite's amalgamation has the prolly storage engine baked in, which
+        # needs a threadsafe build (THREADSAFE=0 turns btree-mutex entry points
+        # into no-op macros the engine's orig/shim split can't reconcile).
+        gcc -g -O2 -DSQLITE_NO_SYNC=1 -DSQLITE_THREADSAFE=1 \
           -DSQLITE_OMIT_LOAD_EXTENSION -c sqlite3.c
         gcc -g -O2 -o sqllogictest-doltlite sqllogictest.c md5.o sqlite3.o -lpthread -lm -lz -lodbc
 
