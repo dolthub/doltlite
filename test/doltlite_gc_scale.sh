@@ -1,13 +1,6 @@
 #!/bin/bash
-DOLTLITE=./doltlite
-PASS=0; FAIL=0; ERRORS=""
-
-run_test() {
-  local n="$1" s="$2" e="$3" d="$4"
-  local r=$(echo "$s" | perl -e 'alarm(60);exec @ARGV' $DOLTLITE "$d" 2>&1)
-  if [ "$r" = "$e" ]; then PASS=$((PASS+1))
-  else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $n\n  expected: $e\n  got:      $r"; fi
-}
+DLTEST_TIMEOUT=60
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== GC Tests at Scale ==="
 echo ""
@@ -130,10 +123,4 @@ fi
 
 rm -f "$DB1" "$DB2" "$DB3" "$DB4"
 
-echo ""
-echo "Results: $PASS passed, $FAIL failed"
-if [ $FAIL -gt 0 ]; then
-  echo -e "$ERRORS"
-  exit 1
-fi
-echo "All tests passed!"
+dltest_finish

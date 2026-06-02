@@ -1,22 +1,5 @@
 #!/bin/bash
-DOLTLITE=./doltlite
-PASS=0
-FAIL=0
-ERRORS=""
-
-run_test() {
-  local name="$1" sql="$2" expected="$3" db="$4"
-  local result=$(echo "$sql" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$db" 2>&1)
-  if [ "$result" = "$expected" ]; then PASS=$((PASS+1))
-  else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $name\n  expected: $expected\n  got:      $result"; fi
-}
-
-run_test_match() {
-  local name="$1" sql="$2" pattern="$3" db="$4"
-  local result=$(echo "$sql" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$db" 2>&1)
-  if echo "$result" | grep -qE "$pattern"; then PASS=$((PASS+1))
-  else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: $name\n  pattern: $pattern\n  got:     $result"; fi
-}
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== Doltlite Diff Across ALTER TABLE Tests ==="
 echo ""
@@ -142,6 +125,4 @@ run_test_match "diff_after_merge_works" \
 
 rm -f "$DB1" "$DB2" "$DB3" "$DB4" "$DB5"
 
-echo ""
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ $FAIL -gt 0 ]; then echo -e "$ERRORS"; exit 1; fi
+dltest_finish

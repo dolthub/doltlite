@@ -1,33 +1,9 @@
 #!/bin/bash
-DOLTLITE=./doltlite
-PASS=0; FAIL=0; ERRORS=""
+DLTEST_TIMEOUT=30
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== Doltlite dolt_* vtab constraint pushdown ==="
 echo ""
-
-run_test() {
-  local n="$1" sql="$2" expected="$3" db="$4"
-  local r
-  r=$(echo "$sql" | perl -e 'alarm(30);exec @ARGV' $DOLTLITE "$db" 2>&1)
-  if [ "$r" = "$expected" ]; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $n\n  expected: $expected\n  got:      $r"
-  fi
-}
-
-run_test_match() {
-  local n="$1" sql="$2" pat="$3" db="$4"
-  local r
-  r=$(echo "$sql" | perl -e 'alarm(30);exec @ARGV' $DOLTLITE "$db" 2>&1)
-  if echo "$r" | grep -qE "$pat"; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $n\n  pattern: $pat\n  got:     $r"
-  fi
-}
 
 time_ms() {
   local start end
@@ -185,9 +161,4 @@ run_test "nonint_history_filter_correct" \
 
 rm -f "$DB2"
 
-echo ""
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ $FAIL -gt 0 ]; then
-  echo -e "$ERRORS"
-  exit 1
-fi
+dltest_finish
