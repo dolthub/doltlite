@@ -32,4 +32,4 @@ fuzz3         # randomized fuzz; slow/times out under the harness
 e_createtable # aborts under doltlite; triage (#1119)
 e_update      # aborts under doltlite; triage (#1119)
 pragma        # aborts under doltlite; triage (#1119)
-shared        # shared-cache test; aborts under doltlite; triage (#1119)
+shared        # shared-cache semantics unsupported under doltlite; setup aborts
