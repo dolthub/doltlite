@@ -3791,19 +3791,6 @@ shared3 shared3-3.1
 shared3 shared3-3.2
 shared3 shared3-3.3
 shared3 shared3-3.4
-table table-15.1
-table table-15.2
-table table-16.1
-table table-16.2
-table table-16.3
-table table-16.4
-table table-16.5
-table table-16.6
-table table-16.7
-table table-17.1
-table table-18.1
-table table-18.2
-table table-19.1
 tempdb tempdb-2.2
 tempdb tempdb-2.3
 tkt-2d1a5c67d tkt-2d1a5c67d-3.6
@@ -3990,7 +3977,6 @@ tkt-4dd95f6943 tkt-4dd95f6943-2.8.8
 tkt-4dd95f6943 tkt-4dd95f6943-3.3
 tkt-f3e5abed55 tkt-f3e5abed55-1.4
 tkt-f3e5abed55 tkt-f3e5abed55-1.5
-tkt-f3e5abed55 tkt-f3e5abed55-2.1
 tkt-f3e5abed55 tkt-f3e5abed55-2.3
 tkt-f3e5abed55 tkt-f3e5abed55-2.4
 tkt-f3e5abed55 tkt-f3e5abed55-2.5
