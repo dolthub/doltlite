@@ -30,4 +30,4 @@ fkey2    # aborts under fkey2-2.x (raw-format / pre-existing doltlite divergence
 # Additional crash/timeout files from the full capture (issue #1119):
 crash8        # crash-recovery simulation; incompatible with prolly format / times out
 fuzz3         # randomized fuzz; slow/times out under the harness
-shared        # shared-cache test; aborts under doltlite; triage (#1119)
+shared        # shared-cache semantics unsupported under doltlite; setup aborts

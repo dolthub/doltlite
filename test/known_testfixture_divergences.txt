@@ -944,8 +944,6 @@ selectA selectA-3.8
 selectA selectA-3.80
 selectA selectA-3.81
 selectA selectA-3.9
-trans trans-6.26
-trans trans-6.36
 trans trans-9.10.5-2112
 trans trans-9.12.5-2544
 trans trans-9.14.5-3089
