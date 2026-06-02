@@ -3541,6 +3541,27 @@ static int restoreTablesFromSavepoint(
       }
       pBtree->cat.a[idx].pendingFlushSeekEdits =
           pState->aTables[k].pendingFlushSeekEdits;
+      if( apPending[k]==0 ){
+        /* A table dropped after this savepoint has no live mutmap, and
+        ** rollbackMutMapsToSavepoint only visits the current catalog so it
+        ** never saw it. Recover its pre-drop edits from the savepoint pending
+        ** snapshot so rows created before the drop survive ROLLBACK TO. */
+        int iThis = (int)(pState - pBtree->aSavepointTables);
+        int iSp = -1, iSnap = -1;
+        ProllyMutMap *pSnap = findPendingSnapshot(
+            pBtree, iThis, pState->aTables[k].iTable, &iSp, &iSnap);
+        if( pSnap ){
+          pBtree->aSavepointTables[iSp].aPendingSnapshot[iSnap].pPending = 0;
+          rc = prollyMutMapRollbackToSavepoint(pSnap, iThis + 1);
+          if( rc!=SQLITE_OK ){
+            prollyMutMapFree(pSnap);
+            sqlite3_free(pSnap);
+            sqlite3_free(apPending);
+            return rc;
+          }
+          apPending[k] = pSnap;
+        }
+      }
       pBtree->cat.a[idx].pPending = apPending[k];
     }
   }
@@ -5502,6 +5523,27 @@ static int prollyBtreeDropTable(Btree *p, int iTable, int *piMoved){
   }
 
   invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
+
+  /* Hand the dropped table's pending edits to any open savepoint that captured
+  ** it (the path flushPendingForTable/clearTable use), so ROLLBACK TO can
+  ** restore a table created and dropped within the same transaction. Otherwise
+  ** catRemove frees the map outright and the pre-drop rows are lost. */
+  {
+    int rc = syncBtreeSavepoints(p);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  {
+    struct TableEntry *pTE = findTable(p, (Pgno)iTable);
+    if( pTE && pTE->pPending ){
+      ProllyMutMap *pFlushMap = 0;
+      int captured = 0;
+      int rc = snapshotPendingForFlush(p, (Pgno)iTable,
+                                       (ProllyMutMap**)&pTE->pPending,
+                                       &pFlushMap, &captured);
+      if( rc!=SQLITE_OK ) return rc;
+    }
+  }
+
   /* Clear any cursor aliases of the dropped table's pending mutmap before
   ** catRemove frees it; otherwise rollback (prollyBtreeRollback) would
   ** later iterate live cursors and dereference a freed map. */
