@@ -324,6 +324,12 @@ proc copy_file {filename} {
       }
     }
     if {[regexp {^\s*#\s*include\s+["<]([^">]+)[">]} $line all hdr]} {
+      # A doltlite source may include a registered header by a relative path
+      # (e.g. "../ext/blake3/blake3.h"); normalize to the basename so it inlines.
+      if {![info exists available_hdr($hdr)]
+          && [info exists available_hdr([file tail $hdr])]} {
+        set hdr [file tail $hdr]
+      }
       if {[info exists available_hdr($hdr)]} {
         if {$available_hdr($hdr)} {
           set available_hdr($hdr) 0
@@ -714,6 +720,12 @@ foreach file $flist {
     # for the rest of the (unconditional) prolly engine. Emitting it here makes
     # those definitions visible in every configuration.
     section_comment "doltlite: chunk store / prolly headers (unconditional)"
+    # The prolly/chunk/doltlite sources use INT_MAX, fixed-width ints, etc. and
+    # rely on their own #include <limits.h>/<stdint.h>. copy_file dedups system
+    # headers too, and the stock tree's first (conditional) <limits.h> can be
+    # compiled out, leaving INT_MAX undefined. Emit them unconditionally here.
+    puts $out "#include <limits.h>"
+    puts $out "#include <stdint.h>"
     copy_file $srcdir/chunk_store.h
   }
 }
