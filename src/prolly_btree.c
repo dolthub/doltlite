@@ -6603,7 +6603,20 @@ static int findMatchingMutMapEntry(
     }
     cmpLen = pEntry->nKey < nSortKey ? pEntry->nKey : nSortKey;
     prefixCmp = memcmp(pEntry->pKey, pSortKey, cmpLen);
-    if( prefixCmp>0 || (prefixCmp==0 && pEntry->nKey < nSortKey) ){
+    if( prefixCmp>0 && pIdxKey->default_rc<0 ){
+      if( pEntry->op==PROLLY_EDIT_INSERT ){
+        pMatch = pEntry;
+        cmp = 1;
+      }else{
+        lo++;
+        continue;
+      }
+      break;
+    }
+    if( prefixCmp>0 ){
+      break;
+    }
+    if( prefixCmp==0 && pEntry->nKey < nSortKey ){
       break;
     }
     if( nRec==0 ){
@@ -6939,20 +6952,35 @@ static int prollyBtCursorIndexMoveto(
     }
     }
 
-      if( mutFound && (!treeFound || treeCmp!=0) ){
-      if( mutFromCursorMap ){
-        setCursorToMutMapEntryPhys(
-            pCur, (int)(mutE - pCur->pMutMap->aEntries));
-      }else{
-        rc = cacheCursorPayloadCopy(pCur, mutKey, mutNKey);
-        if( rc!=SQLITE_OK ){
-          return rc;
+    if( mutFound ){
+      int useMut = !treeFound;
+      if( treeFound ){
+        const u8 *pTreeKey = 0;
+        int nTreeKey = 0;
+        int nCmp;
+        int cmp;
+        prollyCursorKey(&pCur->pCur, &pTreeKey, &nTreeKey);
+        nCmp = nTreeKey < mutE->nKey ? nTreeKey : mutE->nKey;
+        cmp = memcmp(pTreeKey, mutE->pKey, nCmp);
+        if( cmp>0 || (cmp==0 && nTreeKey>mutE->nKey) ){
+          useMut = 1;
         }
-        pCur->eState = CURSOR_VALID;
       }
-      *pRes = mutCmp;
-      pIdxKey->eqSeen = 1;
-      return SQLITE_OK;
+      if( useMut ){
+        if( mutFromCursorMap ){
+          setCursorToMutMapEntryPhys(
+              pCur, (int)(mutE - pCur->pMutMap->aEntries));
+        }else{
+          rc = cacheCursorPayloadCopy(pCur, mutKey, mutNKey);
+          if( rc!=SQLITE_OK ){
+            return rc;
+          }
+          pCur->eState = CURSOR_VALID;
+        }
+        *pRes = mutCmp;
+        pIdxKey->eqSeen = 1;
+        return SQLITE_OK;
+      }
     }
     if( treeFound ){
       *pRes = treeCmp;
