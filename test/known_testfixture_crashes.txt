@@ -18,18 +18,16 @@
 #   which doltlite's prolly format has no equivalent for — a format divergence
 #   rather than a bug.
 #
-# triggerC's use-after-free is fixed and it now produces a summary (its
-# divergences are in the divergence file). alter's stack overflow is fixed; it
-# no longer crashes but still stops before the summary on unsupported cross-db
-# (ATTACHed) DDL, which returns SQLITE_NOTFOUND / "unknown operation".
-alter    # cross-db (ATTACHed) DDL is unsupported and errors out before the summary
+# Cross-db (ATTACHed) writes now work (a freshly attached db gets its default
+# branch created on first persist), so e_createtable and e_update complete and
+# moved to the divergence file. alter gets much further but still stops before
+# the summary on attached-db ALTER TABLE RENAME, whose schema reload can't
+# resolve the renamed table ("malformed database schema (i3) - no such table:
+# aux.<t2>") — a separate attached-db reload bug.
+alter    # attached-db ALTER RENAME: schema reload can't resolve the renamed table
 capi3    # aborts on set_file_format (raw stock page format; doltlite uses prolly)
 fkey2    # aborts under fkey2-2.x (raw-format / pre-existing doltlite divergence)
 # Additional crash/timeout files from the full capture (issue #1119):
-crash         # crash-recovery simulation; incompatible with prolly format / times out
 crash8        # crash-recovery simulation; incompatible with prolly format / times out
 fuzz3         # randomized fuzz; slow/times out under the harness
-e_createtable # aborts under doltlite; triage (#1119)
-e_update      # aborts under doltlite; triage (#1119)
-pragma        # aborts under doltlite; triage (#1119)
 shared        # shared-cache semantics unsupported under doltlite; setup aborts
