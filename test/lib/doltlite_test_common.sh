@@ -5,11 +5,17 @@ PASS="${PASS:-0}"
 FAIL="${FAIL:-0}"
 ERRORS="${ERRORS:-}"
 DLTEST_TIMEOUT="${DLTEST_TIMEOUT:-10}"
+DLTEST_STRIP_CR="${DLTEST_STRIP_CR:-0}"
+DLTEST_MATCH_FLAGS="${DLTEST_MATCH_FLAGS:-}"
 
 dltest_run_sql() {
   local sql="$1"
   local db="$2"
-  echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" "$DOLTLITE" "$db" 2>&1
+  if [ "$DLTEST_STRIP_CR" = "1" ]; then
+    echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" "$DOLTLITE" "$db" 2>&1 | tr -d '\r'
+  else
+    echo "$sql" | perl -e "alarm($DLTEST_TIMEOUT);exec @ARGV" "$DOLTLITE" "$db" 2>&1
+  fi
 }
 
 dltest_pass() {
@@ -58,7 +64,7 @@ run_test_match() {
   local db="$4"
   local result
   result=$(dltest_run_sql "$sql" "$db")
-  if echo "$result" | grep -qE "$pattern"; then
+  if echo "$result" | grep -qE${DLTEST_MATCH_FLAGS} -- "$pattern"; then
     dltest_pass
   else
     dltest_fail "$name" "  pattern: $pattern\n  got:     $result"
