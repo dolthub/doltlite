@@ -19,6 +19,9 @@
 # the object-build suites: run_doltlite_tests.sh and the C regression suite.)
 # Before the amalgamation became real doltlite it was stock SQLite, so this
 # comparison used to be stock-vs-stock and trivially matched.
+#
+# Narrowing these differences (and tightening this gate into a per-category
+# baseline) is tracked in https://github.com/dolthub/doltlite/issues/1118.
 
 set -euo pipefail
 
