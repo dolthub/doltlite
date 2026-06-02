@@ -514,9 +514,16 @@ datetest 13.37 {date('2023-04-31')} {2023-05-01}
 # on mailing list on 2008-06-12.
 #
 # Put a floating point number in the database so that we can manipulate
-# raw bits using the hexio interface.
+# raw bits using the hexio interface. This block assumes SQLite btree page
+# layout and is not meaningful for doltlite's prolly storage format.
 #
-if {0==[sqlite3 -has-codec]} {
+set date14_uses_prolly 0
+if {![catch {db one {SELECT doltlite_engine()}} date14_engine]} {
+  set date14_uses_prolly [expr {$date14_engine eq "prolly"}]
+}
+if {0==[sqlite3 -has-codec] && $date14_uses_prolly} {
+  omit_test date-14 {raw SQLite btree page-format test}
+} elseif {0==[sqlite3 -has-codec]} {
   do_test date-14.1 {
     execsql {
       PRAGMA auto_vacuum=OFF;
