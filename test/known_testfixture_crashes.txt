@@ -14,12 +14,15 @@
 # reproduce in the OBJECT build too (USE_AMALGAMATION=0), i.e. they are
 # pre-existing doltlite issues, investigated and tracked in issue #1119:
 #
-#   alter / triggerC are genuine robustness BUGS (SIGSEGV) — they should error
-#   cleanly, not crash. capi3 / fkey2 abort on raw stock on-disk-format tests
-#   (set_file_format/hexio), which doltlite's prolly format has no equivalent
-#   for — a format divergence rather than a bug.
-alter    # SIGSEGV (stack overflow): cross-db DDL on an ATTACHed db -> issue #1120
-triggerC # SIGSEGV: DROP TRIGGER during an active SELECT cursor -> issue #1121
+#   capi3 / fkey2 abort on raw stock on-disk-format tests (set_file_format/hexio),
+#   which doltlite's prolly format has no equivalent for — a format divergence
+#   rather than a bug.
+#
+# triggerC's use-after-free is fixed and it now produces a summary (its
+# divergences are in the divergence file). alter's stack overflow is fixed; it
+# no longer crashes but still stops before the summary on unsupported cross-db
+# (ATTACHed) DDL, which returns SQLITE_NOTFOUND / "unknown operation".
+alter    # cross-db (ATTACHed) DDL is unsupported and errors out before the summary
 capi3    # aborts on set_file_format (raw stock page format; doltlite uses prolly)
 fkey2    # aborts under fkey2-2.x (raw-format / pre-existing doltlite divergence)
 # Additional crash/timeout files from the full capture (issue #1119):

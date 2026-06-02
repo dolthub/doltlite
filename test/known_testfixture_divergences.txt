@@ -126,6 +126,7 @@ triggerC triggerC-2.1.2
 triggerC triggerC-2.1.3
 triggerC triggerC-2.1.4
 triggerC triggerC-2.1.6
+triggerC triggerC-12.2  # DROP TRIGGER mid-scan aborts the cursor rather than crashing
 
 # ── window1 ──
 window1 window1-10.7  # rowid-order vs PK-order on unordered SELECT
