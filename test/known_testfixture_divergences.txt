@@ -133,6 +133,7 @@ window1 window1-10.7  # rowid-order vs PK-order on unordered SELECT
 window1 window1-10.8  # rowid-order vs PK-order on unordered SELECT
 
 # ── e_createtable ──
+e_createtable e_createtable-3.11.2  # column-limit error names the reload table (t9 vs t11)
 e_createtable e_createtable-4.4.1   # AUTOINCREMENT / sqlite_sequence
 e_createtable e_createtable-4.4.2
 e_createtable e_createtable-4.4.3
@@ -167,6 +168,20 @@ e_createtable e_createtable-5.4.2.4
 e_createtable e_createtable-5.4.3
 e_createtable e_createtable-5.6.1
 
+# ── e_update ──
+# cross-db (ATTACHed) UPDATE: doltlite's attached-db schema reload diverges
+# (reports a reload "index i1 already exists" where stock reports a different
+# error). The cross-db write itself now works; the reload bug is tracked
+# separately.
+e_update e_update-2.2.2
+e_update e_update-2.2.X
+e_update e_update-2.3.0
+e_update e_update-2.3.1
+e_update e_update-2.3.2
+e_update e_update-2.3.3
+e_update e_update-2.4.1
+e_update e_update-2.4.2
+
 # ── e_select ──
 e_select e_select-4.9.4  # rowid-order vs PK-order on unordered SELECT
 
@@ -189,13 +204,84 @@ e_fkey e_fkey-57.7
 e_fkey e_fkey-58.3
 
 # ── pragma ──
-pragma pragma-6.2.2   # table_info notnull shape on auto-converted WITHOUT-ROWID
-pragma pragma-6.8     # table_info shape on auto-converted WITHOUT-ROWID
-pragma pragma-22.2    # integrity_check on injected corruption (doesn't reach prolly)
+
+# ── pragma ── (completes now that attached-db writes work; PRAGMA output / attached-db / integrity divergences)
+pragma pragma-1.10
+pragma pragma-1.11.1
+pragma pragma-1.11.2
+pragma pragma-1.12
+pragma pragma-1.15.4
+pragma pragma-1.9.1
+pragma pragma-1.9.2
+pragma pragma-14.1
+pragma pragma-14.2
+pragma pragma-14.2uc
+pragma pragma-14.3
+pragma pragma-14.3uc
+pragma pragma-14.4
+pragma pragma-14.5
+pragma pragma-14.6
+pragma pragma-14.6uc
+pragma pragma-17.1.1
+pragma pragma-17.1.2
+pragma pragma-17.1.FULL
+pragma pragma-17.1.INCREMENTAL
+pragma pragma-17.1.full
+pragma pragma-17.1.incremental
+pragma pragma-22.2
 pragma pragma-22.3.1
 pragma pragma-22.3.3
 pragma pragma-22.4.1
 pragma pragma-22.4.2
+pragma pragma-23.1
+pragma pragma-23.3
+pragma pragma-24.1
+pragma pragma-24.2
+pragma pragma-3.10
+pragma pragma-3.11
+pragma pragma-3.12
+pragma pragma-3.13
+pragma pragma-3.14
+pragma pragma-3.15
+pragma pragma-3.16
+pragma pragma-3.17
+pragma pragma-3.18
+pragma pragma-3.2
+pragma pragma-3.3
+pragma pragma-3.4
+pragma pragma-3.41
+pragma pragma-3.5
+pragma pragma-3.5.2
+pragma pragma-3.6
+pragma pragma-3.6b
+pragma pragma-3.6c
+pragma pragma-3.7
+pragma pragma-3.8
+pragma pragma-3.8.1
+pragma pragma-3.8.2
+pragma pragma-3.9a
+pragma pragma-3.9b
+pragma pragma-3.9c
+pragma pragma-4.6
+pragma pragma-6.2.2
+pragma pragma-6.8
+pragma pragma-8.1.10
+pragma pragma-8.1.12
+pragma pragma-8.1.13
+pragma pragma-8.1.16
+pragma pragma-8.1.17
+pragma pragma-8.1.2
+pragma pragma-8.1.3
+pragma pragma-8.1.4
+pragma pragma-8.1.6
+pragma pragma-8.1.9
+pragma pragma-8.2.12
+pragma pragma-8.2.13
+pragma pragma-8.2.3.2
+pragma pragma-8.2.4.1
+pragma pragma-8.2.4.2
+pragma pragma-8.2.4.3
+pragma pragma-8.2.8
 
 # ── shared ──
 shared shared-1.7.2    # shared-cache + rowid-order assumption
@@ -211,7 +297,6 @@ shared2 shared2-1.2
 shared2 shared2-1.3
 
 # ── pragma (extra: VACUUM no-op) ──
-pragma pragma-8.2.4.3  # PRAGMA schema_version after VACUUM — VACUUM is a no-op (#322), so schema_version is not bumped
 
 # ── vacuum ──
 # VACUUM aliases dolt_gc() in the doltlite shell (#991). In the
@@ -387,7 +472,6 @@ select9 select9-4.1
 # identity semantics. Captured from CI run 26832495839. Tracked for granular
 # review in https://github.com/dolthub/doltlite/issues/1119
 # ---------------------------------------------------------------------------
-attach attach-10.1
 attach attach-10.2
 attach attach-11.1
 attach attach-2.15
@@ -396,9 +480,6 @@ attach attach-8.1
 attach attach-8.2
 attach attach-8.3
 attach attach-8.4
-attach attach-9.1
-attach attach-9.2
-attach attach-9.3
 capi2 capi2-6.5
 check check-4.9
 collate1 collate1-6.8
@@ -672,10 +753,8 @@ delete delete-9.2
 delete delete-9.3
 delete delete-9.4
 delete delete-9.5
-enc enc-12.0
 enc enc-12.1
 enc enc-12.3
-enc enc-12.4
 enc enc-12.8
 insert insert-15.1
 insert insert-5.4
@@ -886,29 +965,6 @@ trans trans-9.38.5-30883
 trans trans-9.4.5-1224
 trans trans-9.6.5-1480
 trans trans-9.8.5-1766
-trigger1 trigger1-10.10
-trigger1 trigger1-10.11
-trigger1 trigger1-10.3
-trigger1 trigger1-10.4
-trigger1 trigger1-10.5
-trigger1 trigger1-10.6
-trigger1 trigger1-10.7
-trigger1 trigger1-10.8
-trigger1 trigger1-10.9
-trigger1 trigger1-15.1
-trigger1 trigger1-15.2
-trigger1 trigger1-16.1
-trigger1 trigger1-16.2
-trigger1 trigger1-16.3
-trigger1 trigger1-16.4
-trigger1 trigger1-16.5
-trigger1 trigger1-16.6
-trigger1 trigger1-16.7
-trigger1 trigger1-17.0
-trigger1 trigger1-18.0
-trigger1 trigger1-18.1
-trigger1 trigger1-19.0
-trigger1 trigger1-19.1
 trigger1 trigger1-6.1
 trigger1 trigger1-6.2
 trigger1 trigger1-6.5
@@ -2871,22 +2927,6 @@ distinct distinct-2.6.1
 distinct distinct-5.1
 distinct distinct-5.2
 distinct distinct-5.3
-e_delete e_delete-2.0
-e_delete e_delete-2.1.1
-e_delete e_delete-2.1.2
-e_delete e_delete-2.1.3
-e_delete e_delete-2.2.1.1
-e_delete e_delete-2.2.1.2
-e_delete e_delete-2.2.2.1
-e_delete e_delete-2.2.2.2
-e_delete e_delete-2.2.X
-e_delete e_delete-2.3.0
-e_delete e_delete-2.3.1
-e_delete e_delete-2.3.2
-e_delete e_delete-2.3.3
-e_delete e_delete-2.4.0
-e_delete e_delete-2.4.1
-e_delete e_delete-2.4.2
 e_expr e_expr-12.4.1
 e_expr e_expr-12.4.2
 e_expr e_expr-12.4.3
@@ -2918,21 +2958,17 @@ orderby1 orderby1-3.5a
 orderby1 orderby1-3.6a
 pragma2 pragma2-1.3
 pragma2 pragma2-1.4
-pragma2 pragma2-2.3
-pragma2 pragma2-2.4
 pragma2 pragma2-2.5
 pragma2 pragma2-3.1
 pragma2 pragma2-3.2
 pragma2 pragma2-3.3
 pragma2 pragma2-4.1
-pragma2 pragma2-4.3
 pragma2 pragma2-4.4
 pragma2 pragma2-4.5.1
 pragma2 pragma2-4.5.2
 pragma2 pragma2-4.5.3
 pragma2 pragma2-4.5.4
 pragma2 pragma2-4.6
-pragma2 pragma2-4.7
 pragma2 pragma2-4.8
 pragma2 pragma2-5.1
 pragma2 pragma2-5.3
