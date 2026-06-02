@@ -68,6 +68,7 @@ alter alter-1.2  # ALTER TABLE rowid-preservation semantics
 alter alter-1.5  # ALTER TABLE rowid-preservation semantics
 alter alter-1.6  # ALTER TABLE rowid-preservation semantics
 alter alter-1.7  # ALTER TABLE rowid-preservation semantics
+alter alter-6.6  # sqlite_master oid lookup after reopen; canonical schema row order
 
 # ── in ──
 in in-19.40  # IN clause path that hits NOT NULL via rowid lookup
@@ -173,14 +174,6 @@ e_createtable e_createtable-5.6.1
 # (reports a reload "index i1 already exists" where stock reports a different
 # error). The cross-db write itself now works; the reload bug is tracked
 # separately.
-e_update e_update-2.2.2
-e_update e_update-2.2.X
-e_update e_update-2.3.0
-e_update e_update-2.3.1
-e_update e_update-2.3.2
-e_update e_update-2.3.3
-e_update e_update-2.4.1
-e_update e_update-2.4.2
 
 # ── e_select ──
 e_select e_select-4.9.4  # rowid-order vs PK-order on unordered SELECT

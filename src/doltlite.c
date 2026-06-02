@@ -368,6 +368,7 @@ int doltliteMaterializeDefaultColumns(sqlite3 *db){
 int doltliteLoadLiveSchemaSql(
   sqlite3 *db,
   const char *zType,
+  const char *zDb,
   const char *zName,
   const char *zTblName,
   char **pzSql
@@ -381,15 +382,15 @@ int doltliteLoadLiveSchemaSql(
 
   if( zTblName && zTblName[0] ){
     zQuery = sqlite3_mprintf(
-      "SELECT sql FROM main.sqlite_master "
+      "SELECT sql FROM \"%w\".sqlite_master "
       "WHERE type=%Q AND name=%Q AND tbl_name=%Q",
-      zType, zName, zTblName
+      zDb ? zDb : "main", zType, zName, zTblName
     );
   }else{
     zQuery = sqlite3_mprintf(
-      "SELECT sql FROM main.sqlite_master "
+      "SELECT sql FROM \"%w\".sqlite_master "
       "WHERE type=%Q AND name=%Q",
-      zType, zName
+      zDb ? zDb : "main", zType, zName
     );
   }
   if( !zQuery ) return SQLITE_NOMEM;
