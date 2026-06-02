@@ -69,6 +69,13 @@ static SQLITE_INLINE void doltliteArrayRemoveAt(void *aBase, int *pn,
   memset(a + (size_t)(n-1)*elemSize, 0, elemSize);
 }
 
+/* Catalog entry. This layout is shared with prolly_btree.c (which owns the
+** catalog load/serialize routines); both definitions are guarded so a single
+** translation unit (the amalgamation) emits it once. The version-control code
+** here uses only the leading fields; the prolly engine uses the rest. */
+typedef struct ProllyMutMap ProllyMutMap;
+#ifndef DOLTLITE_TABLEENTRY_DEFINED
+#define DOLTLITE_TABLEENTRY_DEFINED
 struct TableEntry {
   Pgno iTable;
   ProllyHash root;
@@ -78,9 +85,12 @@ struct TableEntry {
   u8 appendSeekFloorValid;
   i64 appendSeekFloor;
   ProllyHash appendSeekRoot;
+  u8 tableRootKnown;
+  u8 isTableRoot;
   char *zName;
-  void *pPending;
+  ProllyMutMap *pPending;
 };
+#endif
 
 struct DoltliteTxnState {
   ProllyHash refsHash;
@@ -514,6 +524,8 @@ void doltliteSetAuthorName(sqlite3 *db, const char *zName);
 const char *doltliteGetAuthorEmail(sqlite3 *db);
 void doltliteSetAuthorEmail(sqlite3 *db, const char *zEmail);
 
+#ifndef DOLTLITE_SCHEMAENTRY_DEFINED
+#define DOLTLITE_SCHEMAENTRY_DEFINED
 struct SchemaEntry {
   char *zName;
   char *zTblName;
@@ -521,6 +533,7 @@ struct SchemaEntry {
   char *zType;
   Pgno iRootpage;
 };
+#endif
 
 int loadSchemaFromCatalog(sqlite3 *db, ChunkStore *cs, ProllyCache *pCache,
                           const ProllyHash *pCatHash,

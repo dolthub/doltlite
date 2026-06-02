@@ -210,7 +210,7 @@ struct RowMergeCtx {
   int nIndexes;
   int nConflicts;
 
-  struct ConflictRow {
+  struct MergeConflictRow {
     i64 intKey;
     u8 *pKey; int nKey;
     u8 *pBaseVal; int nBaseVal;
@@ -614,7 +614,7 @@ static int rowMergeCallback(void *pCtx, const ThreeWayChange *pChange){
                                 ctx->nConflicts + 1, 16);
       if( rc!=SQLITE_OK ) return rc;
       {
-        struct ConflictRow *cr = &ctx->aConflicts[ctx->nConflicts];
+        struct MergeConflictRow *cr = &ctx->aConflicts[ctx->nConflicts];
         memset(cr, 0, sizeof(*cr));
         cr->intKey = pChange->intKey;
         if( pChange->pKey && pChange->nKey>0 ){
@@ -717,7 +717,7 @@ static int mergeTableRows(
   u8 flags,
   ProllyHash *pMergedRoot,
   int *pnConflicts,
-  struct ConflictRow **ppConflicts,
+  struct MergeConflictRow **ppConflicts,
   MergeIndexInfo *aIndexes,
   int nIndexes
 ){
@@ -1180,10 +1180,10 @@ typedef struct MergeConflictTable MergeConflictTable;
 struct MergeConflictTable {
   char *zName;
   int nConflicts;
-  struct ConflictRow *aRows;
+  struct MergeConflictRow *aRows;
 };
 
-static void freeConflictRows(struct ConflictRow *aRows, int nRows){
+static void freeConflictRows(struct MergeConflictRow *aRows, int nRows){
   int i;
   for(i=0; i<nRows; i++){
     sqlite3_free(aRows[i].pKey);
@@ -1205,7 +1205,7 @@ static int appendConflictTable(
   int *pnConflictTables,
   const char *zName,
   int nConflicts,
-  struct ConflictRow *aConflictRows
+  struct MergeConflictRow *aConflictRows
 ){
   MergeConflictTable *aNew;
   aNew = sqlite3_realloc(*ppConflictTables,
@@ -1444,7 +1444,7 @@ static Pgno remapSchemaRootpage(
   return iRootpage;
 }
 
-static u8 *buildSchemaCatalogRecord(
+static u8 *mergeBuildSchemaCatalogRecord(
   const char *zType,
   const char *zName,
   const char *zTblName,
@@ -1534,7 +1534,7 @@ static int appendMergedSchemaCatalogRecord(
   int rc;
 
   if( !pSe || !pSe->zName || !pSe->zType ) return SQLITE_OK;
-  pRec = buildSchemaCatalogRecord(pSe->zType, pSe->zName,
+  pRec = mergeBuildSchemaCatalogRecord(pSe->zType, pSe->zName,
                                   pSe->zTblName ? pSe->zTblName : pSe->zName,
                                   (i64)iRootpage, pSe->zSql, &nRec);
   if( !pRec ) return SQLITE_NOMEM;
@@ -2011,7 +2011,7 @@ do_merge_entry:
 
             ProllyHash mergedTableRoot;
             int nConflicts = 0;
-            struct ConflictRow *aConflictRows = 0;
+            struct MergeConflictRow *aConflictRows = 0;
 
             MergeIndexInfo *aIdxInfo = 0;
             int nIdxInfo = 0;
@@ -2177,7 +2177,7 @@ post_merge_table_rows:;
 
         ProllyHash mergedTableRoot;
         int nConflicts = 0;
-        struct ConflictRow *aConflictRows = 0;
+        struct MergeConflictRow *aConflictRows = 0;
         int theirSchemaChanged2 = prollyHashCompare(
             &theirsEntry->schemaHash, &ancEntry->schemaHash)!=0;
 
@@ -2398,7 +2398,7 @@ static int mergeCatalogPass2(
   return SQLITE_OK;
 }
 
-static void freeConflictTables(
+static void mergeFreeConflictTables(
   MergeConflictTable *aConflictTables,
   int nConflictTables
 ){
@@ -2565,7 +2565,7 @@ merge_cleanup:
   freeSchemaEntries(aAncSchema, nAncSchema);
   freeSchemaEntries(aOursSchema, nOursSchema);
   freeSchemaEntries(aTheirsSchema, nTheirsSchema);
-  freeConflictTables(aConflictTables, nConflictTables);
+  mergeFreeConflictTables(aConflictTables, nConflictTables);
   doltliteFreeCatalog(aAnc, nAnc);
   doltliteFreeCatalog(aOurs, nOurs);
   doltliteFreeCatalog(aTheirs, nTheirs);

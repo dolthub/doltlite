@@ -16,8 +16,8 @@ struct DbpageVtab {
   sqlite3 *db;
 };
 
-typedef struct DbpageCursor DbpageCursor;
-struct DbpageCursor {
+typedef struct DlDbpageCursor DlDbpageCursor;
+struct DlDbpageCursor {
   sqlite3_vtab_cursor base;
   int iRow;
   int hasRow;
@@ -103,7 +103,7 @@ static void synthesizeHeader(sqlite3 *db, unsigned char *aPage){
 static const char *zDbpageSchema =
   "CREATE TABLE x(pgno INTEGER PRIMARY KEY, data BLOB, schema HIDDEN)";
 
-static int dbpageConnect(sqlite3 *db, void *pAux, int argc,
+static int dlDbpageConnect(sqlite3 *db, void *pAux, int argc,
     const char *const*argv, sqlite3_vtab **ppVtab, char **pzErr){
   DbpageVtab *pVtab;
   int rc;
@@ -118,12 +118,12 @@ static int dbpageConnect(sqlite3 *db, void *pAux, int argc,
   return SQLITE_OK;
 }
 
-static int dbpageDisconnect(sqlite3_vtab *pVtab){
+static int dlDbpageDisconnect(sqlite3_vtab *pVtab){
   sqlite3_free(pVtab);
   return SQLITE_OK;
 }
 
-static int dbpageBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
+static int dlDbpageBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   int i, idxNum = 0, nArg = 0;
   int iPgno = -1, iSchema = -1;
   (void)pVtab;
@@ -155,8 +155,8 @@ static int dbpageBestIndex(sqlite3_vtab *pVtab, sqlite3_index_info *pInfo){
   return SQLITE_OK;
 }
 
-static int dbpageOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
-  DbpageCursor *pCur;
+static int dlDbpageOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
+  DlDbpageCursor *pCur;
   (void)pVtab;
   pCur = sqlite3_malloc(sizeof(*pCur));
   if( !pCur ) return SQLITE_NOMEM;
@@ -165,14 +165,14 @@ static int dbpageOpen(sqlite3_vtab *pVtab, sqlite3_vtab_cursor **ppCursor){
   return SQLITE_OK;
 }
 
-static int dbpageClose(sqlite3_vtab_cursor *pCursor){
+static int dlDbpageClose(sqlite3_vtab_cursor *pCursor){
   sqlite3_free(pCursor);
   return SQLITE_OK;
 }
 
-static int dbpageFilter(sqlite3_vtab_cursor *pCursor,
+static int dlDbpageFilter(sqlite3_vtab_cursor *pCursor,
     int idxNum, const char *idxStr, int argc, sqlite3_value **argv){
-  DbpageCursor *pCur = (DbpageCursor*)pCursor;
+  DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
   DbpageVtab *pVtab = (DbpageVtab*)pCursor->pVtab;
   int iArg = 0;
   (void)idxStr; (void)argc;
@@ -200,20 +200,20 @@ static int dbpageFilter(sqlite3_vtab_cursor *pCursor,
   return SQLITE_OK;
 }
 
-static int dbpageNext(sqlite3_vtab_cursor *pCursor){
-  DbpageCursor *pCur = (DbpageCursor*)pCursor;
+static int dlDbpageNext(sqlite3_vtab_cursor *pCursor){
+  DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
   pCur->iRow++;
   return SQLITE_OK;
 }
 
-static int dbpageEof(sqlite3_vtab_cursor *pCursor){
-  DbpageCursor *pCur = (DbpageCursor*)pCursor;
+static int dlDbpageEof(sqlite3_vtab_cursor *pCursor){
+  DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
   return !pCur->hasRow || pCur->iRow>=1;
 }
 
-static int dbpageColumn(sqlite3_vtab_cursor *pCursor,
+static int dlDbpageColumn(sqlite3_vtab_cursor *pCursor,
     sqlite3_context *ctx, int iCol){
-  DbpageCursor *pCur = (DbpageCursor*)pCursor;
+  DlDbpageCursor *pCur = (DlDbpageCursor*)pCursor;
   switch( iCol ){
     case 0:
       sqlite3_result_int64(ctx, 1);
@@ -230,16 +230,16 @@ static int dbpageColumn(sqlite3_vtab_cursor *pCursor,
   return SQLITE_OK;
 }
 
-static int dbpageRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
+static int dlDbpageRowid(sqlite3_vtab_cursor *pCursor, sqlite3_int64 *pRowid){
   *pRowid = 1;
   (void)pCursor;
   return SQLITE_OK;
 }
 
 static sqlite3_module doltliteDbpageModule = {
-  0, 0, dbpageConnect, dbpageBestIndex, dbpageDisconnect, 0,
-  dbpageOpen, dbpageClose, dbpageFilter, dbpageNext, dbpageEof,
-  dbpageColumn, dbpageRowid,
+  0, 0, dlDbpageConnect, dlDbpageBestIndex, dlDbpageDisconnect, 0,
+  dlDbpageOpen, dlDbpageClose, dlDbpageFilter, dlDbpageNext, dlDbpageEof,
+  dlDbpageColumn, dlDbpageRowid,
   0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
 

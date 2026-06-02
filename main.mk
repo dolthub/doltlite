@@ -596,6 +596,39 @@ ifeq ($(DOLTLITE_PROLLY),1)
   # Also compile original btree/pager/wal with renamed symbols for ATTACH
   LIBOBJS0 += btree_orig.o pager_orig.o wal_orig.o btmutex_orig.o backup_orig.o btree_orig_api.o
   OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY=1 -DDOLTLITE_VERSION='"$(DOLTLITE_VERSION)"'
+  # Generate a real doltlite amalgamation (prolly engine + VC layer woven in).
+  AMALGAMATION_GEN_FLAGS += --doltlite
+  # Source headers and the portable BLAKE3 sources that aren't in $(SRC) but the
+  # amalgamation must inline; copied into tsrc by the .target_source rule.
+  DOLTLITE_EXTRA_TSRC = \
+    $(TOP)/src/record_codec.h $(TOP)/src/prolly_encoding.h $(TOP)/src/prolly_record.h \
+    $(TOP)/src/prolly_check.h $(TOP)/src/prolly_chunk_walk.h $(TOP)/src/prolly_hashset.h \
+    $(TOP)/src/chunk_file.h $(TOP)/src/chunk_index.h $(TOP)/src/chunk_refs.h \
+    $(TOP)/src/chunk_staging.h $(TOP)/src/chunk_wal.h \
+    $(TOP)/src/doltlite_ancestor.h $(TOP)/src/doltlite_chunk_walk.h \
+    $(TOP)/src/doltlite_commit.h $(TOP)/src/doltlite_constraint_violations.h \
+    $(TOP)/src/doltlite_ignore.h $(TOP)/src/doltlite_internal.h \
+    $(TOP)/src/doltlite_record.h $(TOP)/src/doltlite_remote.h $(TOP)/src/doltlite_remotesrv.h \
+    $(TOP)/src/btree_orig_prefix.h $(TOP)/src/btree_orig_api.h $(TOP)/src/btree_orig_api.c \
+    $(TOP)/ext/blake3/blake3.c $(TOP)/ext/blake3/blake3_portable.c \
+    $(TOP)/ext/blake3/blake3_dispatch.c $(TOP)/ext/blake3/blake3.h \
+    $(TOP)/ext/blake3/blake3_impl.h \
+    $(TOP)/src/prolly_hashset.c $(TOP)/src/prolly_check.c \
+    $(TOP)/src/chunk_wal.c $(TOP)/src/chunk_refs.c $(TOP)/src/chunk_index.c \
+    $(TOP)/src/chunk_staging.c $(TOP)/src/chunk_file.c \
+    $(TOP)/src/doltlite.c $(TOP)/src/doltlite_commit.c $(TOP)/src/doltlite_ref.c \
+    $(TOP)/src/doltlite_log.c $(TOP)/src/doltlite_commit_ancestors.c \
+    $(TOP)/src/doltlite_status.c $(TOP)/src/doltlite_diff.c $(TOP)/src/doltlite_diff_table.c \
+    $(TOP)/src/doltlite_branch.c $(TOP)/src/doltlite_tag.c $(TOP)/src/doltlite_ancestor.c \
+    $(TOP)/src/doltlite_merge.c $(TOP)/src/doltlite_schema_merge.c \
+    $(TOP)/src/doltlite_conflicts.c $(TOP)/src/doltlite_gc.c $(TOP)/src/doltlite_chunk_walk.c \
+    $(TOP)/src/doltlite_history.c $(TOP)/src/doltlite_at.c $(TOP)/src/doltlite_blame.c \
+    $(TOP)/src/doltlite_schema_diff.c $(TOP)/src/doltlite_schemas.c \
+    $(TOP)/src/doltlite_diff_stat.c $(TOP)/src/doltlite_record.c $(TOP)/src/doltlite_ignore.c \
+    $(TOP)/src/doltlite_hashof.c $(TOP)/src/doltlite_constraint_violations.c \
+    $(TOP)/src/doltlite_merge_constraints.c $(TOP)/src/doltlite_dbpage.c \
+    $(TOP)/src/doltlite_remote.c $(TOP)/src/doltlite_remote_sql.c \
+    $(TOP)/src/doltlite_http_remote.c $(TOP)/src/doltlite_remotesrv.c
   ifeq ($(DOLTLITE_PROLLY_CHECK),1)
     OPT_FEATURE_FLAGS += -DDOLTLITE_PROLLY_CHECK=1
   endif
@@ -1198,6 +1231,7 @@ T.link.tcl = $(T.tcl.env.source); $(T.link)
 	rm -rf tsrc
 	mkdir tsrc
 	cp -f $(SRC) tsrc
+	$(if $(DOLTLITE_EXTRA_TSRC),cp -f $(DOLTLITE_EXTRA_TSRC) tsrc)
 	rm -f tsrc/sqlite.h.in tsrc/parse.y
 	$(B.tclsh) $(TOP)/tool/vdbe-compress.tcl $(OPTS) <tsrc/vdbe.c >vdbe.new
 	mv -f vdbe.new tsrc/vdbe.c

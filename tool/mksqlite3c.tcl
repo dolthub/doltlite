@@ -41,6 +41,9 @@ set addstatic 1
 set linemacros 0
 set useapicall 0
 set enable_recover 0
+set doltlite 0
+set skipstructs 0
+set skipfns [list]
 set srcdir tsrc
 set extrasrc [list]
 
@@ -48,6 +51,8 @@ for {set i 0} {$i<[llength $argv]} {incr i} {
   set x [lindex $argv $i]
   if {[regexp {^-?-enable-recover$} $x]} {
     set enable_recover 1
+  } elseif {[regexp {^-?-doltlite$} $x]} {
+    set doltlite 1
   } elseif {[regexp {^-?-nostatic$} $x]} {
     set addstatic 0
   } elseif {[regexp {^-?-linemacros(?:=([01]))?$} $x ma ulm]} {
@@ -207,6 +212,24 @@ set available_hdr(sqliteInt.h) 0
 set available_hdr(os_common.h) 0
 set available_hdr(sqlite3session.h) 0
 
+# doltlite: register the prolly/chunk/doltlite local headers so copy_file
+# inlines (and dedups) them instead of emitting raw #include lines.
+if {$doltlite} {
+  foreach hdr {
+    blake3.h blake3_impl.h btree_orig_api.h pager_shim.h record_codec.h sortkey.h
+    chunk_file.h chunk_index.h chunk_refs.h chunk_staging.h chunk_store.h chunk_wal.h
+    prolly_cache.h prolly_check.h prolly_chunk_walk.h prolly_chunker.h prolly_cursor.h
+    prolly_diff.h prolly_encoding.h prolly_hash.h prolly_hashset.h prolly_mutate.h
+    prolly_mutmap.h prolly_node.h prolly_record.h prolly_three_way_diff.h
+    prolly_three_way_merge.h prolly_xxhash.h
+    doltlite_ancestor.h doltlite_chunk_walk.h doltlite_commit.h
+    doltlite_constraint_violations.h doltlite_ignore.h doltlite_internal.h
+    doltlite_record.h doltlite_remote.h doltlite_remotesrv.h
+  } {
+    set available_hdr($hdr) 1
+  }
+}
+
 # These headers should be copied into the amalgamation without modifying any
 # of their function declarations or definitions.
 set varonly_hdr(sqlite3.h) 1
@@ -244,7 +267,7 @@ proc section_comment {text} {
 #
 proc copy_file {filename} {
   global seen_hdr available_hdr varonly_hdr cdecllist out
-  global addstatic linemacros useapicall srcdir
+  global addstatic linemacros useapicall srcdir skipstructs skipfns
   set ln 0
   set tail [file tail $filename]
   section_comment "Begin file $tail"
@@ -259,6 +282,33 @@ proc copy_file {filename} {
   while {![eof $in]} {
     set line [string trimright [gets $in]]
     incr ln
+    # doltlite: when re-inlining a header for the orig-prefixed storage block,
+    # skip top-level aggregate definitions (struct/union/enum {...};) — they are
+    # already defined by the earlier unprefixed inline and would redefine here.
+    # Function prototypes/typedefs/macros are kept (prototypes get orig_-renamed).
+    if {$skipstructs && [regexp {^(struct|union|enum)[ \t][^;]*\{} $line]} {
+      set depth [expr {[regexp -all {\{} $line] - [regexp -all {\}} $line]}]
+      while {$depth>0 && ![eof $in]} {
+        set sl [string trimright [gets $in]]
+        incr depth [expr {[regexp -all {\{} $sl] - [regexp -all {\}} $sl]}]
+      }
+      continue
+    }
+    # doltlite: skip declarations of the named functions (e.g. doltlite-added
+    # btree API not part of the orig engine) when re-inlining a header; consume
+    # any multi-line prototype through its terminating ';'.
+    if {[llength $skipfns]} {
+      set hit 0
+      foreach fn $skipfns {
+        if {[string first $fn $line]>=0} {set hit 1; break}
+      }
+      if {$hit} {
+        while {![string match {*;*} $line] && ![eof $in]} {
+          set line [string trimright [gets $in]]
+        }
+        continue
+      }
+    }
     if {[regexp {^\s*#\s*include\s+["<]([^">]+)[">]} $line all hdr]} {
       if {[info exists available_hdr($hdr)]} {
         if {$available_hdr($hdr)} {
@@ -372,6 +422,127 @@ proc copy_file_verbatim {filename} {
     puts $out $line
   }
   section_comment "End of EXTRA_SRC $tail"
+}
+
+# doltlite: emit the stock storage engine (pager/wal/btmutex/btree/backup) with
+# its external symbols renamed to orig_* so it can coexist in one translation
+# unit with prolly_btree.c/pager_shim.c (which export the unprefixed
+# sqlite3Btree*/sqlite3Pager* entry points). Mirrors the separate-compilation
+# btree_orig.o/pager_orig.o/... objects (main.mk), where btree_orig_prefix.h is
+# force-included. The orig bodies need prefixed prototypes, so pager.h/wal.h/
+# btree.h are re-inlined here with the rename active (struct/enum defs skipped —
+# they were already emitted unprefixed earlier via sqliteInt.h).
+proc emit_doltlite_storage_block {} {
+  global out srcdir available_hdr skipstructs skipfns
+  section_comment "doltlite: BEGIN orig_* storage engine block"
+  # Names that the prefix header renames but which are *active no-op macros* in
+  # the release build (NDEBUG, no SQLITE_TEST) — defined by btree.h/pager.h.
+  # Renaming + later #undef of these would strip the no-op macro that core code
+  # (outside this block) still needs, so leave them untouched.
+  set skiprename {disable_simulated_io_errors enable_simulated_io_errors
+                  sqlite3BtreeSeekCount}
+  # Open the rename scope: the external renames from btree_orig_prefix.h, the
+  # three btree type tags that prolly_btree.c redefines with a different layout,
+  # and the two file-local statics that collide with prolly_btree.c.
+  set prefixnames [list]
+  set pin [open $srcdir/btree_orig_prefix.h rb]
+  while {![eof $pin]} {
+    set line [string trimright [gets $pin]]
+    if {[regexp {^\s*#\s*define\s+(\S+)\s+orig_} $line all nm]} {
+      if {[lsearch -exact $skiprename $nm]>=0} continue
+      lappend prefixnames $nm
+    }
+    puts $out $line
+  }
+  close $pin
+  foreach nm {Btree BtShared BtCursor sqlite3SharedCacheList
+              saveAllCursors saveCursorPosition} {
+    puts $out "#define $nm orig_$nm"
+    lappend prefixnames $nm
+  }
+  # The stock backup.c is NOT included in the amalgamation: it is the one orig
+  # source that reaches into struct Db.pBt expecting the stock Btree layout,
+  # which can't coexist with prolly's struct Db in a single translation unit.
+  # Backup of doltlite-format databases goes through pager_shim.c's own
+  # implementation; backup of ATTACH'd stock databases (which would need the
+  # orig engine) is unsupported in the single-file build. Provide the orig_
+  # backup symbols the orig pager/btree and pager_shim.c reference as stubs.
+  puts $out "SQLITE_PRIVATE void orig_sqlite3BackupRestart(sqlite3_backup *p){ (void)p; }"
+  puts $out "SQLITE_PRIVATE void orig_sqlite3BackupUpdate(sqlite3_backup *p, Pgno x, const u8 *y){ (void)p; (void)x; (void)y; }"
+  puts $out "sqlite3_backup *orig_sqlite3_backup_init(sqlite3 *d, const char *zd, sqlite3 *s, const char *zs){ (void)d; (void)zd; (void)s; (void)zs; return 0; }"
+  # Re-inline the prefixed prototypes the orig bodies need. These headers were
+  # already inlined unprefixed earlier (via sqliteInt.h), so #undef their include
+  # guards to force re-processing; the rename macros above turn the re-emitted
+  # prototypes into orig_*. Aggregate definitions are skipped (already defined).
+  set skipstructs 1
+  # doltlite-added btree API (implemented unprefixed in prolly_btree.c) must not
+  # be re-declared with the orig_Btree type inside this block.
+  set skipfns {sqlite3BtreeUsesOrig sqlite3BtreeProllyCachedIndexKeyCompare}
+  foreach {h guard} {pager.h SQLITE_PAGER_H wal.h SQLITE_WAL_H btree.h SQLITE_BTREE_H} {
+    puts $out "#undef $guard"
+    set available_hdr($h) 1
+    copy_file $srcdir/$h
+    set available_hdr($h) 0
+  }
+  set skipfns [list]
+  set skipstructs 0
+  # The orig storage bodies plus the orig_* bridge (btree_orig_api.c, which also
+  # relies on the prefix + stock btreeInt.h structs and exports the unprefixed
+  # origBtree* wrappers that prolly_btree.c calls).
+  foreach f {pager.c wal.c btmutex.c btree.c btree_orig_api.c} {
+    copy_file $srcdir/$f
+  }
+  # btree.c defines restoreCursorPosition() as an internal function-like macro
+  # that would otherwise leak past this block and mangle prolly_btree.c's
+  # same-named function.
+  lappend prefixnames restoreCursorPosition
+  # Close the rename scope so later files bind the unprefixed names.
+  foreach nm $prefixnames {
+    puts $out "#undef $nm"
+  }
+  section_comment "doltlite: END orig_* storage engine block"
+}
+
+# doltlite: emit the prolly storage engine + version-control layer, in the
+# dependency order used by PROLLY_OBJS in main.mk. prolly_btree.c/pager_shim.c
+# define the unprefixed sqlite3Btree*/sqlite3Pager* entry points and call the
+# orig_* engine emitted above for ATTACH'd stock databases.
+proc emit_doltlite_engine_block {} {
+  global out srcdir
+  section_comment "doltlite: BEGIN prolly engine + version-control layer"
+  # blake3: a single-TU amalgamation cannot pass the per-file -m{sse,avx} flags
+  # the SIMD sources need, so force the portable backend (the object/release
+  # builds keep SIMD). NEON is left disabled (BLAKE3_USE_NEON unset).
+  foreach m {BLAKE3_NO_SSE2 BLAKE3_NO_SSE41 BLAKE3_NO_AVX2 BLAKE3_NO_AVX512} {
+    puts $out "#ifndef $m"
+    puts $out "#define $m 1"
+    puts $out "#endif"
+  }
+  # Also force-disable the ARM NEON backend (autodetected on by default on
+  # aarch64); its blake3_neon.c is not part of the single-file build.
+  puts $out "#ifndef BLAKE3_USE_NEON"
+  puts $out "#define BLAKE3_USE_NEON 0"
+  puts $out "#endif"
+  foreach f {
+    prolly_hash.c prolly_xxhash.c blake3.c blake3_portable.c blake3_dispatch.c
+    prolly_hashset.c prolly_node.c prolly_cache.c
+    chunk_store.c chunk_wal.c chunk_refs.c chunk_index.c chunk_staging.c chunk_file.c
+    prolly_cursor.c prolly_mutmap.c prolly_chunker.c prolly_mutate.c prolly_check.c
+    prolly_diff.c prolly_three_way_diff.c prolly_three_way_merge.c
+    prolly_btree.c pager_shim.c sortkey.c
+    doltlite.c doltlite_commit.c doltlite_ref.c doltlite_log.c
+    doltlite_commit_ancestors.c doltlite_status.c doltlite_diff.c doltlite_diff_table.c
+    doltlite_branch.c doltlite_tag.c doltlite_ancestor.c doltlite_merge.c
+    doltlite_schema_merge.c doltlite_conflicts.c doltlite_gc.c doltlite_chunk_walk.c
+    doltlite_history.c doltlite_at.c doltlite_blame.c doltlite_schema_diff.c
+    doltlite_schemas.c doltlite_diff_stat.c doltlite_record.c doltlite_ignore.c
+    doltlite_hashof.c doltlite_constraint_violations.c doltlite_merge_constraints.c
+    doltlite_dbpage.c doltlite_remote.c doltlite_remote_sql.c doltlite_http_remote.c
+    doltlite_remotesrv.c
+  } {
+    copy_file $srcdir/$f
+  }
+  section_comment "doltlite: END prolly engine + version-control layer"
 }
 
 # Process the source files.  Process files containing commonly
@@ -500,7 +671,16 @@ if {$enable_recover} {
   lappend flist sqlite3recover.c dbdata.c
 }
 foreach file $flist {
+  if {$doltlite && [lsearch -exact {pager.c wal.c btmutex.c btree.c backup.c} $file]>=0} {
+    # The stock storage engine is replaced by the prolly engine. Emit the
+    # orig_*-renamed copy once, at the slot of the first storage file.
+    if {$file eq "pager.c"} { emit_doltlite_storage_block }
+    continue
+  }
   copy_file $srcdir/$file
+}
+if {$doltlite} {
+  emit_doltlite_engine_block
 }
 foreach file $extrasrc {
   copy_file_verbatim $file
