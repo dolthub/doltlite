@@ -8408,6 +8408,11 @@ int sqlite3BtreeCursorInfo(BtCursor *pCur, int *aResult, int upCnt){
   return SQLITE_OK;
 }
 
+/* In the amalgamation, testfixture also links test_btree.c which defines this
+** same SQLITE_TEST-only debug helper; skip ours there to avoid a duplicate
+** symbol (the non-amalgamation build never compiles this — libdoltlite.a is
+** built without SQLITE_TEST). */
+#ifndef SQLITE_AMALGAMATION
 void sqlite3BtreeCursorList(Btree *p){
 #ifndef SQLITE_OMIT_TRACE
   BtCursor *pCur;
@@ -8439,6 +8444,7 @@ void sqlite3BtreeCursorList(Btree *p){
   (void)p;
 #endif
 }
+#endif /* !SQLITE_AMALGAMATION */
 #endif
 
 static void doltiteEngineFunc(
