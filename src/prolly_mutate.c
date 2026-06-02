@@ -1418,6 +1418,9 @@ int prollyMutateFlush(ProllyMutator *pMut){
         sqlite3_free(zErr);
         abort();
       }
+      if( crc!=SQLITE_OK ){
+        rc = crc;
+      }
       sqlite3_free(zErr);
     }
   }
