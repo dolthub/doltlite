@@ -618,13 +618,19 @@ WASM_CUSTOM_INSTANTIATE = 1
 # appended to $(b.c-pp.target.flags).
 #
 bin.c-pp = ./c-pp
+# NB: $(dir.top)/sqlite3.c is the doltlite amalgamation (DOLTLITE_PROLLY baked
+# in), so the prolly storage engine is always compiled here. It needs WAL,
+# THREADSAFE, the btree shared-cache mutex API, and zlib/pthreads — hence no
+# OMIT_WAL/OMIT_SHARED_CACHE/THREADSAFE=0 and the added -lz -lpthread. c-pp only
+# uses sqlite3 to run its preprocessing, so these flags don't affect its output.
 $(bin.c-pp): libcmpp.c $(sqlite3.c) $(MAKEFILE)
 	$(CC) -O0 -o $@ libcmpp.c $(dir.top)/sqlite3.c -I$(dir.top) \
+		-I$(dir.top)/src -I$(dir.top)/ext/blake3 \
 		-DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_UTF16 \
-		-DSQLITE_OMIT_SHARED_CACHE -DSQLITE_OMIT_WAL -DSQLITE_THREADSAFE=0 \
+		-DSQLITE_THREADSAFE=1 \
 		-DSQLITE_TEMP_STORE=3 \
 		'-DCMPP_DEFAULT_DELIM="//#"' -DCMPP_MAIN -DCMPP_OMIT_D_MODULE \
-		-DCMPP_OMIT_D_PIPE -lm
+		-DCMPP_OMIT_D_PIPE -lz -lpthread -lm
 DISTCLEAN_FILES += $(bin.c-pp)
 b.c-pp.target.flags ?=
 ifeq (1,$(SQLITE_C_IS_SEE))

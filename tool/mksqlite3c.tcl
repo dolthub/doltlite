@@ -152,6 +152,20 @@ if {$addstatic} {
 # define SQLITE_PRIVATE static
 #endif}
 }
+if {$doltlite} {
+  # This amalgamation has the prolly storage engine and version-control layer
+  # woven in; the btree orig/shim split it relies on only makes sense with
+  # DOLTLITE_PROLLY defined. Bake it in so the single file is self-contained and
+  # consumers that compile sqlite3.c without -DDOLTLITE_PROLLY still build it as
+  # doltlite rather than a half-wired stock SQLite.
+  puts $out \
+{#ifndef DOLTLITE_PROLLY
+# define DOLTLITE_PROLLY 1
+#endif
+#ifndef DOLTLITE_VERSION
+# define DOLTLITE_VERSION "doltlite-amalgamation"
+#endif}
+}
 
 # Examine the parse.c file.  If it contains lines of the form:
 #
@@ -216,7 +230,7 @@ set available_hdr(sqlite3session.h) 0
 # inlines (and dedups) them instead of emitting raw #include lines.
 if {$doltlite} {
   foreach hdr {
-    blake3.h blake3_impl.h btree_orig_api.h pager_shim.h record_codec.h sortkey.h
+    blake3.h blake3_impl.h btree_orig_api.h btree_orig_prefix.h pager_shim.h record_codec.h sortkey.h
     chunk_file.h chunk_index.h chunk_refs.h chunk_staging.h chunk_store.h chunk_wal.h
     prolly_cache.h prolly_check.h prolly_chunk_walk.h prolly_chunker.h prolly_cursor.h
     prolly_diff.h prolly_encoding.h prolly_hash.h prolly_hashset.h prolly_mutate.h
@@ -460,6 +474,15 @@ proc emit_doltlite_storage_block {} {
     puts $out "#define $nm orig_$nm"
     lappend prefixnames $nm
   }
+  # disable/enable_simulated_io_errors are no-op macros in the release build
+  # (so renaming them there would strip the macro), but real functions under
+  # SQLITE_TEST that the stock pager.c defines — and pager_shim.c defines the
+  # unprefixed versions for the prolly pager. Rename the orig copies to orig_
+  # only under SQLITE_TEST so the two don't collide.
+  puts $out "#ifdef SQLITE_TEST"
+  puts $out "#define disable_simulated_io_errors orig_disable_simulated_io_errors"
+  puts $out "#define enable_simulated_io_errors orig_enable_simulated_io_errors"
+  puts $out "#endif"
   # The stock backup.c is NOT included in the amalgamation: it is the one orig
   # source that reaches into struct Db.pBt expecting the stock Btree layout,
   # which can't coexist with prolly's struct Db in a single translation unit.
@@ -500,6 +523,10 @@ proc emit_doltlite_storage_block {} {
   foreach nm $prefixnames {
     puts $out "#undef $nm"
   }
+  puts $out "#ifdef SQLITE_TEST"
+  puts $out "#undef disable_simulated_io_errors"
+  puts $out "#undef enable_simulated_io_errors"
+  puts $out "#endif"
   section_comment "doltlite: END orig_* storage engine block"
 }
 
@@ -678,6 +705,17 @@ foreach file $flist {
     continue
   }
   copy_file $srcdir/$file
+  if {$doltlite && $file eq "sqliteInt.h"} {
+    # Force-inline chunk_store.h (and its nested prolly_hash.h / chunk_*.h)
+    # unconditionally and early. Core code (vdbe.c) includes it under
+    # `#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)`; if that were the
+    # first occurrence, copy_file would consume the header inside a block that
+    # SQLITE_TEST builds compile out, leaving PROLLY_HASH_SIZE et al. undefined
+    # for the rest of the (unconditional) prolly engine. Emitting it here makes
+    # those definitions visible in every configuration.
+    section_comment "doltlite: chunk store / prolly headers (unconditional)"
+    copy_file $srcdir/chunk_store.h
+  }
 }
 if {$doltlite} {
   emit_doltlite_engine_block
