@@ -2927,10 +2927,6 @@ distinct distinct-2.6.1
 distinct distinct-5.1
 distinct distinct-5.2
 distinct distinct-5.3
-e_expr e_expr-12.4.1
-e_expr e_expr-12.4.2
-e_expr e_expr-12.4.3
-e_expr e_expr-12.4.4
 e_expr e_expr-27.4.4
 e_expr e_expr-27.4.5
 e_expr e_expr-27.4.6
