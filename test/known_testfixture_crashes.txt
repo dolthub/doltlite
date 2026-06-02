@@ -18,7 +18,7 @@
 #   cleanly, not crash. capi3 / fkey2 abort on raw stock on-disk-format tests
 #   (set_file_format/hexio), which doltlite's prolly format has no equivalent
 #   for — a format divergence rather than a bug.
-alter    # SIGSEGV: cross-database DDL on an ATTACHed db -> "unknown operation (12)"
-triggerC # SIGSEGV: DROP TRIGGER during an active SELECT cursor (schema change mid-scan)
+alter    # SIGSEGV (stack overflow): cross-db DDL on an ATTACHed db -> issue #1120
+triggerC # SIGSEGV: DROP TRIGGER during an active SELECT cursor -> issue #1121
 capi3    # aborts on set_file_format (raw stock page format; doltlite uses prolly)
 fkey2    # aborts under fkey2-2.x (raw-format / pre-existing doltlite divergence)
