@@ -1,38 +1,5 @@
 #!/bin/bash
-DOLTLITE=./doltlite
-PASS=0
-FAIL=0
-ERRORS=""
-
-run_test() {
-  local name="$1"
-  local sql="$2"
-  local expected="$3"
-  local db="$4"
-  local result
-  result=$(echo "$sql" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$db" 2>&1)
-  if [ "$result" = "$expected" ]; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $name\n  expected: $expected\n  got:      $result"
-  fi
-}
-
-run_test_match() {
-  local name="$1"
-  local sql="$2"
-  local pattern="$3"
-  local db="$4"
-  local result
-  result=$(echo "$sql" | perl -e 'alarm(10); exec @ARGV' $DOLTLITE "$db" 2>&1)
-  if echo "$result" | grep -qE "$pattern"; then
-    PASS=$((PASS+1))
-  else
-    FAIL=$((FAIL+1))
-    ERRORS="$ERRORS\nFAIL: $name\n  pattern: $pattern\n  got:     $result"
-  fi
-}
+. "$(dirname "$0")/lib/doltlite_test_common.sh"
 
 echo "=== Doltlite Staging Workflow Tests ==="
 echo ""
@@ -217,9 +184,4 @@ run_test "status_clean_composite_pk_schema" \
 
 rm -f "$DB" "$DB2" "$DB3" "$DB4" "$DB5" "$DB6" "$DB6B" "$DB7" "$DB8" "$DB9"
 
-echo ""
-echo "Results: $PASS passed, $FAIL failed out of $((PASS+FAIL)) tests"
-if [ $FAIL -gt 0 ]; then
-  echo -e "$ERRORS"
-  exit 1
-fi
+dltest_finish
