@@ -9,9 +9,16 @@
 # commit 5cd33a12a (removed obsolete DOLTLITE_PROLLY UPDATE codegen
 # branches; see issue #361).
 
-# Surfaced by the real-doltlite amalgamation (PR #1116); see issue #1119.
-capi3    # sqlite3_backup API: the amalgamation stubs backup (stock backup.c
-         # can't be woven into the single TU), so capi3's backup tests crash.
-alter    # ALTER under the C-API test harness; triage pending (#1119)
-fkey2    # foreign-key C-API test harness; triage pending (#1119)
-triggerC # recursive-trigger C-API test harness; triage pending (#1119)
+# Surfaced (not caused) by PR #1116: core-tests was built from the stock
+# amalgamation before, so real doltlite was never exercised here. All four
+# reproduce in the OBJECT build too (USE_AMALGAMATION=0), i.e. they are
+# pre-existing doltlite issues, investigated and tracked in issue #1119:
+#
+#   alter / triggerC are genuine robustness BUGS (SIGSEGV) — they should error
+#   cleanly, not crash. capi3 / fkey2 abort on raw stock on-disk-format tests
+#   (set_file_format/hexio), which doltlite's prolly format has no equivalent
+#   for — a format divergence rather than a bug.
+alter    # SIGSEGV: cross-database DDL on an ATTACHed db -> "unknown operation (12)"
+triggerC # SIGSEGV: DROP TRIGGER during an active SELECT cursor (schema change mid-scan)
+capi3    # aborts on set_file_format (raw stock page format; doltlite uses prolly)
+fkey2    # aborts under fkey2-2.x (raw-format / pre-existing doltlite divergence)
