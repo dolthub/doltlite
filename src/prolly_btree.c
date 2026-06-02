@@ -181,6 +181,7 @@ struct BtShared {
   u32 pageSize;
   u32 iWorkingStateVersion;
   int nRef;
+  u8 inCatalogSerialize;
 };
 
 struct BtreeOps {
@@ -4980,6 +4981,11 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
   ProllyHash catHash;
   (void)bCleanup;
 
+  /* Catalog serialization runs a SELECT whose finalize re-enters
+  ** commit/rollback; that nested call is read-only, so no-op it instead of
+  ** recursing into a stack overflow. */
+  if( pBt->inCatalogSerialize ) return SQLITE_OK;
+
   if( p->inTrans==TRANS_WRITE ){
     rc = flushAllPending(p, pBt, 0);
     if( rc!=SQLITE_OK ){
@@ -4990,7 +4996,9 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
     }
 
     {
+      pBt->inCatalogSerialize = 1;
       rc = serializeCatalogForCommit(p, &catData, &nCatData);
+      pBt->inCatalogSerialize = 0;
       if( rc==SQLITE_OK ){
         rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
       }
@@ -5165,6 +5173,8 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   int rc = SQLITE_OK;
   (void)writeOnly;
 
+  if( pBt->inCatalogSerialize ) return SQLITE_OK;
+
   if( p->inTrans==TRANS_WRITE ){
     assert( pBt->store.isMemory || pBt->store.graphLockFd >= 0 );
     assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
@@ -5193,7 +5203,9 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       int bMatchesDisk = 0;
       const char *zBr = p->zBranch ? p->zBranch : "main";
 
+      pBt->inCatalogSerialize = 1;
       rc = serializeCatalog(p, &catData, &nCatData);
+      pBt->inCatalogSerialize = 0;
       if( rc!=SQLITE_OK ){
         chunkStoreUnlock(&pBt->store);
         pBt->store.snapshotPinned = 0;
@@ -6107,6 +6119,12 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
     return SQLITE_DONE;
   }
 
+  /* Faulted mid-scan: cached nodes are already released, so return the stored
+  ** error instead of advancing into freed memory. */
+  if( pCur->eState==CURSOR_FAULT ){
+    return pCur->skipNext;
+  }
+
   if( pCur->eState==CURSOR_REQUIRESEEK ){
     rc = restoreCursorPosition(pCur, 0);
     if( rc!=SQLITE_OK ) return rc;
@@ -6224,6 +6242,10 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags){
 
   if( pCur->eState==CURSOR_INVALID ){
     return SQLITE_DONE;
+  }
+
+  if( pCur->eState==CURSOR_FAULT ){
+    return pCur->skipNext;
   }
 
   if( pCur->eState==CURSOR_REQUIRESEEK ){
