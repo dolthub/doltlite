@@ -449,8 +449,11 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: |
         cd build
+        # crash.test is omitted: its crash-injection failure set is
+        # nondeterministic run-to-run under doltlite, so it can't be gated
+        # per-test (tracked with the other nondeterministic files in #1132).
         bash ../test/run_testfixture.sh "Crash recovery" 180 \
-          crash crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM
+          crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM
 
     - name: SQLite fuzz tests
       if: matrix.platform == 'ubuntu'
