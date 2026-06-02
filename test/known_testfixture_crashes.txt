@@ -19,12 +19,8 @@
 #   rather than a bug.
 #
 # Cross-db (ATTACHed) writes now work (a freshly attached db gets its default
-# branch created on first persist), so e_createtable and e_update complete and
-# moved to the divergence file. alter gets much further but still stops before
-# the summary on attached-db ALTER TABLE RENAME, whose schema reload can't
-# resolve the renamed table ("malformed database schema (i3) - no such table:
-# aux.<t2>") — a separate attached-db reload bug.
-alter    # attached-db ALTER RENAME: schema reload can't resolve the renamed table
+# branch created on first persist), so e_createtable, e_update, and alter
+# complete and moved to the divergence file.
 capi3    # aborts on set_file_format (raw stock page format; doltlite uses prolly)
 fkey2    # aborts under fkey2-2.x (raw-format / pre-existing doltlite divergence)
 # Additional crash/timeout files from the full capture (issue #1119):

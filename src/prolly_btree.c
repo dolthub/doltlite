@@ -42,6 +42,7 @@ static void registerDoltiteFunctions(sqlite3 *db);
 void doltliteGetSessionHead(sqlite3 *db, ProllyHash *pHead);
 char *doltliteCanonicalizeSchemaSql(const char *zSql, const char *zName);
 int doltliteLoadLiveSchemaSql(sqlite3 *db, const char *zType,
+                              const char *zDb,
                               const char *zName, const char *zTblName,
                               char **pzSql);
 int doltliteResolveTableName(sqlite3 *db, const char *zTable, Pgno *piTable);
@@ -423,6 +424,23 @@ static inline void removeTable(Btree *p, Pgno iTable){
 }
 static inline void btreeFreeCatalogTables(Btree *p){
   catFree(&p->cat);
+}
+
+static int btreeSchemaIndex(Btree *pBtree){
+  sqlite3 *db;
+  int i;
+  if( !pBtree || !(db = pBtree->db) ) return -1;
+  for(i=0; i<db->nDb; i++){
+    if( db->aDb[i].pBt==pBtree ) return i;
+  }
+  return -1;
+}
+
+static const char *btreeSchemaName(Btree *pBtree){
+  sqlite3 *db = pBtree ? pBtree->db : 0;
+  int iDb = btreeSchemaIndex(pBtree);
+  if( !db || iDb<0 || iDb>=db->nDb ) return "main";
+  return db->aDb[iDb].zDbSName ? db->aDb[iDb].zDbSName : "main";
 }
 static void btreeClearCatalogCache(Btree *p){
   sqlite3_free(p->pCatalogCache);
@@ -1171,7 +1189,13 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
   HashElem *k;
   CatalogEntryMeta *aMeta = 0;
   int nMeta = 0, nAlloc = 0, rc = SQLITE_OK, i;
-  if( !pBtree || !(db = pBtree->db) || db->nDb<=0 || !(pSchema = db->aDb[0].pSchema) ){
+  if( !pBtree || !(db = pBtree->db) || db->nDb<=0 ){
+    *ppMeta = 0;
+    *pnMeta = 0;
+    return SQLITE_OK;
+  }
+  i = btreeSchemaIndex(pBtree);
+  if( i<0 || i>=db->nDb || !(pSchema = db->aDb[i].pSchema) ){
     *ppMeta = 0;
     *pnMeta = 0;
     return SQLITE_OK;
@@ -1614,6 +1638,7 @@ static void filterSchemaCatalogRows(
 
 static int appendMissingSchemaCatalogRows(
   sqlite3 *db,
+  const char *zDb,
   SchemaCatalogRow **paRows,
   int *pnRows,
   CatalogEntryMeta *aMeta,
@@ -1696,7 +1721,7 @@ static int appendMissingSchemaCatalogRows(
       sqlite3_free(aRows);
       return SQLITE_NOMEM;
     }
-    rc = doltliteLoadLiveSchemaSql(db, pRow->zType, pRow->zName,
+    rc = doltliteLoadLiveSchemaSql(db, pRow->zType, zDb, pRow->zName,
                                    pRow->zTblName, &pRow->zSql);
     if( rc!=SQLITE_OK ){
       freeSchemaCatalogRows(aRows, nRows+1);
@@ -1819,7 +1844,8 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
     return rc;
   }
   filterSchemaCatalogRows(aRows, &nRows, aTables, nTables);
-  rc = appendMissingSchemaCatalogRows(db, &aRows, &nRows, aMeta, nMeta,
+  rc = appendMissingSchemaCatalogRows(db, btreeSchemaName(pBtree),
+                                      &aRows, &nRows, aMeta, nMeta,
                                       aTables, nTables);
   if( rc==SQLITE_OK ){
     rc = appendFallbackSchemaCatalogRows(&aRows, &nRows, aTables, nTables,
@@ -2195,7 +2221,8 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
   }
-  rc = appendMissingSchemaCatalogRows(pBtree->db, &aRows, &nRows, aMeta, nMeta,
+  rc = appendMissingSchemaCatalogRows(pBtree->db, btreeSchemaName(pBtree),
+                                      &aRows, &nRows, aMeta, nMeta,
                                       pBtree->cat.a, pBtree->cat.n);
   if( rc!=SQLITE_OK ){
     freeCatalogEntryMeta(aMeta, nMeta);
