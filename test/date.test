@@ -518,6 +518,12 @@ datetest 13.37 {date('2023-04-31')} {2023-05-01}
 #
 if {0==[sqlite3 -has-codec]} {
   do_test date-14.1 {
+    db close
+    forcedelete test.db
+    forcedelete test.db-journal
+    forcedelete test.db-wal
+    sqlite3 db file:test.db?doltlite_storage=sqlite -uri 1 -translatefilename 0
+    set ::DB [sqlite3_connection_pointer db]
     execsql {
       PRAGMA auto_vacuum=OFF;
       PRAGMA page_size = 1024;
@@ -543,6 +549,7 @@ if {0==[sqlite3 -has-codec]} {
       expr {$date eq "2008-06-12 00:00:00" || $date eq "2008-06-11 23:59:59"}
     } {1}
   }
+  reset_db
 }
 
 # Verify that multiple calls to date functions with 'now' return the

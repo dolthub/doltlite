@@ -3903,10 +3903,16 @@ int sqlite3BtreeOpen(
   Btree *p = 0;
   BtShared *pBt = 0;
   int rc = SQLITE_OK;
+  const char *zStorage = sqlite3_uri_parameter(zFilename, "doltlite_storage");
+  int useOrig = zStorage!=0
+    && (sqlite3StrICmp(zStorage, "sqlite")==0
+        || sqlite3StrICmp(zStorage, "stock")==0
+        || sqlite3StrICmp(zStorage, "orig")==0);
 
   *ppBtree = 0;
 
-  if( !zFilename || zFilename[0]=='\0'
+  if( useOrig
+   || !zFilename || zFilename[0]=='\0'
    || (strcmp(zFilename, ":memory:")==0 && db->aDb[0].pBt!=0)
    || (flags & BTREE_SINGLE)
    || (vfsFlags & SQLITE_OPEN_TEMP_DB)
