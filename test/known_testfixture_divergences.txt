@@ -242,7 +242,6 @@ pragma pragma-3.18
 pragma pragma-3.2
 pragma pragma-3.3
 pragma pragma-3.4
-pragma pragma-3.41
 pragma pragma-3.5
 pragma pragma-3.5.2
 pragma pragma-3.6
@@ -2839,7 +2838,6 @@ crash6 crash6-3.8.2
 crash6 crash6-3.8.3
 crash6 crash6-3.9.2
 crash6 crash6-3.9.3
-distinct distinct-2.6.1
 e_expr e_expr-27.4.4
 e_expr e_expr-27.4.5
 e_expr e_expr-27.4.6
