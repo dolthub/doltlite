@@ -262,12 +262,15 @@ int sqlite3BtreeIndexMoveto(
   UnpackedRecord *pUnKey,
   int *pRes
 );
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#if defined(DOLTLITE_PROLLY)
 int sqlite3BtreeProllyCachedIndexKeyCompare(
   BtCursor*,
   UnpackedRecord *pUnKey,
   int *pRes
 );
+int sqlite3BtreeProllyIndexRowid(BtCursor*, i64*);
+#endif
+#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
 int sqlite3BtreeUsesOrig(Btree*);
 #endif
 int sqlite3BtreeCursorHasMoved(BtCursor*);
