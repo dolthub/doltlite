@@ -35,6 +35,11 @@ shift 2
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DIVERGENCE_FILE="${DIVERGENCE_FILE:-$SCRIPT_DIR/known_testfixture_divergences.txt}"
 CRASH_FILE="${CRASH_FILE:-$SCRIPT_DIR/known_testfixture_crashes.txt}"
+# Flake list ($FLAKE_FILE): tests that pass on some runs and fail on others.
+# Each entry is "<file> <test-name-prefix>"; a flaky test (and any subtest
+# under that prefix) is ignored in BOTH directions — never an unexpected
+# failure, never a now-fixed divergence — regardless of its result this run.
+FLAKE_FILE="${FLAKE_FILE:-$SCRIPT_DIR/known_testfixture_flakes.txt}"
 
 # Use `timeout` if available (Linux/CI); fall back to running directly
 # (macOS dev box doesn't ship coreutils' timeout by default)
@@ -91,6 +96,44 @@ is_in_set() {
   printf '%s\n' "$haystack" | grep -Fxq -- "$needle"
 }
 
+# Print the flaky test-name prefixes for a given file (one per line)
+flaky_for() {
+  local file="$1"
+  [ -f "$FLAKE_FILE" ] || return 0
+  awk -v f="$file" '
+    {
+      sub(/#.*/, "")
+      gsub(/^[ \t]+|[ \t]+$/, "")
+      if ($0 == "") next
+      if ($1 == f) print $2
+    }
+  ' "$FLAKE_FILE"
+}
+
+# is_flaky <name> <newline-separated-prefixes> → 0 if name equals a prefix or
+# is a subtest under it (prefix followed by "."), so "select9-2.1.6" covers
+# select9-2.1.6.limit=*.offset=* and its .flipped variants.
+is_flaky() {
+  local needle="$1" prefixes="$2" p
+  while IFS= read -r p; do
+    [ -z "$p" ] && continue
+    [ "$needle" = "$p" ] && return 0
+    case "$needle" in "$p".*) return 0 ;; esac
+  done <<< "$prefixes"
+  return 1
+}
+
+# Drop flaky entries from a newline-separated set of test names
+drop_flaky() {
+  local set="$1" prefixes="$2" name out=""
+  [ -z "$prefixes" ] && { printf '%s' "$set"; return; }
+  while IFS= read -r name; do
+    [ -z "$name" ] && continue
+    is_flaky "$name" "$prefixes" || out="$out$name"$'\n'
+  done <<< "$set"
+  printf '%s' "$out" | grep -v '^$' || true
+}
+
 count_lines() {
   if [ -z "$1" ]; then
     echo 0
@@ -136,6 +179,13 @@ for test in "$@"; do
   actual=""
   if [ -n "$fail_line" ]; then
     actual=$(echo "$fail_line" | sed 's/^!Failures on these tests://' | tr ' ' '\n' | grep -v '^$' || true)
+  fi
+
+  # Drop flaky tests from both sides so they never trip the gate either way.
+  flaky="$(flaky_for "$test")"
+  if [ -n "$flaky" ]; then
+    actual="$(drop_flaky "$actual" "$flaky")"
+    expected="$(drop_flaky "$expected" "$flaky")"
   fi
 
   unexpected=""
