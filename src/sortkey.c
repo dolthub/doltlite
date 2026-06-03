@@ -64,6 +64,17 @@ static int collFromKeyInfo(const KeyInfo *pKeyInfo, int iCol){
   return SORTKEY_COLL_BINARY;
 }
 
+static int descFromKeyInfo(const KeyInfo *pKeyInfo, int iCol){
+  if( !pKeyInfo || !pKeyInfo->aSortFlags ) return 0;
+  if( iCol < 0 || iCol >= pKeyInfo->nAllField ) return 0;
+  return (pKeyInfo->aSortFlags[iCol] & KEYINFO_ORDER_DESC)!=0;
+}
+
+static void invertSortKeyBytes(u8 *p, int n){
+  int i;
+  for(i=0; i<n; i++) p[i] = (u8)~p[i];
+}
+
 static u32 collTextLen(int coll, const u8 *pData, u32 nData){
   if( coll==SORTKEY_COLL_RTRIM ){
     while( nData > 0 && pData[nData - 1] == 0x20 ) nData--;
@@ -286,6 +297,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
 
     if( pOut ){
       u8 tag = serialTypeTag(serialType);
+      int fieldStart = outPos;
       switch( tag ){
         case SORTKEY_NULL:
           pOut[outPos++] = SORTKEY_NULL;
@@ -302,6 +314,9 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
         default:
           pOut[outPos++] = SORTKEY_NULL;
           break;
+      }
+      if( descFromKeyInfo(pKeyInfo, nField) ){
+        invertSortKeyBytes(pOut + fieldStart, outPos - fieldStart);
       }
     }else{
       sqlite3_int64 nFieldSize =
@@ -344,6 +359,7 @@ static int sortKeyFromSingleBinaryFieldFast(
   u8 *pOut;
 
   if( nKeyField>1 || nRec<=0 ) return SQLITE_NOTFOUND;
+  if( descFromKeyInfo(pKeyInfo, 0) ) return SQLITE_NOTFOUND;
   hdrOff = skGetVarint32(pRec, &hdrSize);
   if( hdrSize > (u32)nRec ) return SQLITE_CORRUPT;
   if( hdrOff>=hdrSize ) return SQLITE_NOTFOUND;
@@ -491,6 +507,7 @@ static int sortKeyEncodeMemArray(
     coll = collFromKeyInfo(pKeyInfo, i);
     if( pOut ){
       u8 tag = serialTypeTag(serialType);
+      int fieldStart = outPos;
       switch( tag ){
         case SORTKEY_NULL:
           pOut[outPos++] = SORTKEY_NULL;
@@ -507,6 +524,9 @@ static int sortKeyEncodeMemArray(
         default:
           pOut[outPos++] = SORTKEY_NULL;
           break;
+      }
+      if( descFromKeyInfo(pKeyInfo, i) ){
+        invertSortKeyBytes(pOut + fieldStart, outPos - fieldStart);
       }
     }else{
       sqlite3_int64 nFieldSize =
@@ -538,6 +558,7 @@ static int sortKeyFromSingleBinaryMemFast(
   u8 *pOut;
 
   if( !aMem || nMem!=1 || nKeyField!=0 ) return SQLITE_NOTFOUND;
+  if( descFromKeyInfo(pKeyInfo, 0) ) return SQLITE_NOTFOUND;
 
   pMem = &aMem[0];
   flags = pMem->flags;
@@ -1137,6 +1158,92 @@ int recordFromSortKeyBuffer(
 
   *pnOut = nTotal;
   return SQLITE_OK;
+}
+
+static int sortKeyHasDescFields(const KeyInfo *pKeyInfo){
+  int i;
+  if( !pKeyInfo || !pKeyInfo->aSortFlags ) return 0;
+  for(i=0; i<pKeyInfo->nAllField; i++){
+    if( pKeyInfo->aSortFlags[i] & KEYINFO_ORDER_DESC ) return 1;
+  }
+  return 0;
+}
+
+int recordFromSortKeyBufferColl(
+  const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo,
+  u8 **ppBuf, int *pnAlloc, int *pnOut
+){
+  u8 *pNorm = 0;
+  int nNormAlloc = 0;
+  int pos = 0;
+  int nField = 0;
+  int rc;
+
+  if( !sortKeyHasDescFields(pKeyInfo) ){
+    return recordFromSortKeyBuffer(pSortKey, nSortKey, ppBuf, pnAlloc, pnOut);
+  }
+  if( nSortKey<0 ) return SQLITE_CORRUPT;
+  if( nSortKey>0 ){
+    pNorm = sqlite3_malloc(nSortKey);
+    if( !pNorm ) return SQLITE_NOMEM;
+    nNormAlloc = nSortKey;
+  }
+
+  while( pos<nSortKey ){
+    int desc = descFromKeyInfo(pKeyInfo, nField);
+    u8 tag = desc ? (u8)~pSortKey[pos] : pSortKey[pos];
+    pNorm[pos] = tag;
+
+    if( tag==SORTKEY_NULL ){
+      pos++;
+    }else if( tag==SORTKEY_NUM ){
+      u8 aNum[18];
+      int nAvail = nSortKey - pos;
+      int nNum;
+      int i;
+      int nProbe = nAvail<18 ? nAvail : 18;
+      for(i=0; i<nProbe; i++){
+        aNum[i] = desc ? (u8)~pSortKey[pos+i] : pSortKey[pos+i];
+      }
+      nNum = numericSortKeyLen(aNum, nAvail);
+      if( nNum==0 || nNum>nAvail ){
+        sqlite3_free(pNorm);
+        return SQLITE_CORRUPT;
+      }
+      for(i=0; i<nNum; i++){
+        pNorm[pos+i] = desc ? (u8)~pSortKey[pos+i] : pSortKey[pos+i];
+      }
+      pos += nNum;
+    }else if( tag==SORTKEY_TEXT || tag==SORTKEY_BLOB ){
+      pos++;
+      while( pos<nSortKey ){
+        u8 b = desc ? (u8)~pSortKey[pos] : pSortKey[pos];
+        pNorm[pos++] = b;
+        if( b==0x00 ){
+          u8 b2;
+          if( pos>=nSortKey ){
+            sqlite3_free(pNorm);
+            return SQLITE_CORRUPT;
+          }
+          b2 = desc ? (u8)~pSortKey[pos] : pSortKey[pos];
+          pNorm[pos++] = b2;
+          if( b2==0x00 ) break;
+          if( b2!=0x01 ){
+            sqlite3_free(pNorm);
+            return SQLITE_CORRUPT;
+          }
+        }
+      }
+    }else{
+      sqlite3_free(pNorm);
+      return SQLITE_CORRUPT;
+    }
+    nField++;
+  }
+
+  rc = recordFromSortKeyBuffer(pNorm, nSortKey, ppBuf, pnAlloc, pnOut);
+  if( nNormAlloc ) sqlite3_free(pNorm);
+  return rc;
 }
 
 int recordFromSortKey(const u8 *pSortKey, int nSortKey, u8 **ppOut, int *pnOut){

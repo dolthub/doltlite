@@ -2454,8 +2454,8 @@ static int cacheCursorPayloadReconstructed(
   BtCursor *pCur, const u8 *pSortKey, int nSortKey
 ){
   int nRec = 0;
-  int rc = recordFromSortKeyBuffer(
-      pSortKey, nSortKey,
+  int rc = recordFromSortKeyBufferColl(
+      pSortKey, nSortKey, pCur->pKeyInfo,
       &pCur->pReconPayload, &pCur->nReconPayloadAlloc, &nRec);
   if( rc!=SQLITE_OK ) return rc;
   CLEAR_CACHED_PAYLOAD(pCur);
@@ -6655,7 +6655,8 @@ static int findMatchingMutMapEntry(
       break;
     }
     if( nRec==0 ){
-      rc = recordFromSortKeyBuffer(pEntry->pKey, pEntry->nKey,
+      rc = recordFromSortKeyBufferColl(pEntry->pKey, pEntry->nKey,
+                                    pKeyInfo,
                                     &pRecBuf, &nRecBufAlloc, &nRec);
       if( rc!=SQLITE_OK ) break;
       pRec = pRecBuf;
@@ -6849,8 +6850,9 @@ static int prollyBtCursorIndexMoveto(
                     const u8 *pVal2; int nVal2;
                     prollyNodeValue(&pLeaf->node, i, &pVal2, &nVal2);
                     if( nVal2==0 ){
-                      rc = recordFromSortKeyBuffer(
-                          pSK, nSK, &pRecBuf, &nRecBufAlloc, &nVal2);
+                      rc = recordFromSortKeyBufferColl(
+                          pSK, nSK, pCur->pKeyInfo,
+                          &pRecBuf, &nRecBufAlloc, &nVal2);
                       if( rc!=SQLITE_OK ) break;
                       pVal2 = pRecBuf;
                     }
@@ -6883,8 +6885,8 @@ static int prollyBtCursorIndexMoveto(
           }
           prollyNodeValue(&pLeaf->node, i, &pVal, &nVal);
           if( nVal==0 ){
-            rc = recordFromSortKeyBuffer(
-                pSK, nSK, &pRecBuf, &nRecBufAlloc, &nVal);
+            rc = recordFromSortKeyBufferColl(
+                pSK, nSK, pCur->pKeyInfo, &pRecBuf, &nRecBufAlloc, &nVal);
             if( rc!=SQLITE_OK ) break;
             pVal = pRecBuf;
           }
@@ -6971,8 +6973,8 @@ static int prollyBtCursorIndexMoveto(
         if( mutFromCursorMap && nMutVal==0 ){
           mutFound = 1;
         }else if( nMutVal==0 ){
-          rc = recordFromSortKeyBuffer(
-              mutE->pKey, mutE->nKey,
+          rc = recordFromSortKeyBufferColl(
+              mutE->pKey, mutE->nKey, pCur->pKeyInfo,
               &pCur->pMovetoRec, &pCur->nMovetoRecAlloc, &nMutVal);
           if( rc!=SQLITE_OK ) return rc;
           pMutVal = pCur->pMovetoRec;
@@ -7176,7 +7178,8 @@ int sqlite3BtreeProllyIndexRowid(BtCursor *pCur, i64 *pRowid){
     return SQLITE_NOTFOUND;
   }
 
-  rc = recordFromSortKeyBuffer(pKey, nKey, &pRec, &nRecAlloc, &nRec);
+  rc = recordFromSortKeyBufferColl(
+      pKey, nKey, pCur->pKeyInfo, &pRec, &nRecAlloc, &nRec);
   if( rc!=SQLITE_OK ){
     sqlite3_free(pRec);
     return rc;

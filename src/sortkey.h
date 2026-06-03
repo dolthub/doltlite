@@ -53,5 +53,9 @@ int recordFromSortKeyBuffer(
   const u8 *pSortKey, int nSortKey,
   u8 **ppBuf, int *pnAlloc, int *pnOut
 );
+int recordFromSortKeyBufferColl(
+  const u8 *pSortKey, int nSortKey, const KeyInfo *pKeyInfo,
+  u8 **ppBuf, int *pnAlloc, int *pnOut
+);
 
 #endif
