@@ -7412,6 +7412,9 @@ static int prollyBtCursorInsert(
   const u8 *pInsertedPayload = 0;
   int nInsertedPayload = 0;
   u8 *pIntKeyBuf = 0;
+  u8 aLocalSortKey[128];
+  const u8 *pSortKey = 0;
+  int nSortKey = 0;
   (void)seekResult;
 
   if( flags & BTREE_PREFORMAT ){
@@ -7479,13 +7482,10 @@ static int prollyBtCursorInsert(
     }
   } else {
 
-    int nSortKey = 0;
     int nKeyField = 0;
     int splitKey = 0;
     int storePayload = 0;
     int isIndex = 0;
-    u8 aLocalSortKey[128];
-    const u8 *pSortKey = 0;
     if( pCur->pKeyInfo ){
       struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
       isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
@@ -7546,21 +7546,28 @@ static int prollyBtCursorInsert(
         pCur->mmActive = 0;
         pCur->flushSeekEdits = 0;
       } else if( (flags & BTREE_SAVEPOSITION) && !pCur->curIntKey ){
+        ProllyMutMapEntry *pEntry = 0;
         sqlite3_free(pIntKeyBuf);
         CLEAR_CACHED_PAYLOAD(pCur);
         if( prollyCursorIsValid(&pCur->pCur) ){
           int trc = prollyCursorNext(&pCur->pCur);
-          if( trc==SQLITE_OK
-           && pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-            pCur->eState = CURSOR_SKIPNEXT;
-            pCur->skipNext = 1;
-          } else {
-            pCur->eState = CURSOR_INVALID;
-          }
-        } else {
-          pCur->eState = CURSOR_INVALID;
+          if( trc!=SQLITE_OK ) return trc;
         }
-        pCur->mmActive = 0;
+        rc = prollyMutMapFindRc(pCur->pMutMap, pSortKey, nSortKey, 0, &pEntry);
+        if( rc!=SQLITE_OK ) return rc;
+        if( pEntry ){
+          pCur->mmIdx = prollyMutMapOrderIndexFromEntry(pCur->pMutMap, pEntry);
+          pCur->mmPhysIdx = -1;
+          pCur->mmActive = 1;
+          pCur->mmPhysActive = 0;
+          pCur->mergeSrc = MERGE_SRC_MUT;
+          pCur->eState = CURSOR_VALID;
+        }else{
+          pCur->mmActive = 0;
+          pCur->eState = pCur->pCur.eState==PROLLY_CURSOR_VALID
+                       ? CURSOR_SKIPNEXT : CURSOR_INVALID;
+          pCur->skipNext = pCur->eState==CURSOR_SKIPNEXT ? 1 : 0;
+        }
         pCur->flushSeekEdits = 0;
       } else {
         sqlite3_free(pIntKeyBuf);

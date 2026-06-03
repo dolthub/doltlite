@@ -908,8 +908,6 @@ trigger1 trigger1-6.1
 trigger1 trigger1-6.2
 trigger1 trigger1-6.5
 trigger1 trigger1-6.6
-trigger2 trigger2-2.11-before
-trigger2 trigger2-2.12-after
 update update-20.20
 update update-20.30
 where where-1.1.1
