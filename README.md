@@ -929,11 +929,16 @@ catch memory and undefined-behavior bugs before they reach master.
 
 doltlite runs the full [sqllogictest](https://www.sqlite.org/sqllogictest/)
 corpus — the same 5.7M-statement set SQLite uses — against **real doltlite**,
-comparing every result to stock SQLite as the reference. doltlite passes the
-large majority; a minority diverge on its intentional semantics (rowid
-assignment/ordering, page/pragma behavior). CI gates on the overall pass rate
-staying **≥90% of stock SQLite's**, not on per-test parity; the granular
-divergence triage is tracked in #1118. Run `bash test/run_sqllogictest.sh`
+comparing every result to stock SQLite as the reference. Of the ~622 corpus
+files, doltlite matches stock exactly on ~610; the remainder diverge on a small
+set of query records tracked per-assertion in
+`test/known_sqllogictest_divergences.txt`. CI gates **bidirectionally**, like
+the Tcl suite: every doltlite divergence must be listed, and every listed entry
+must still diverge — so a regression in any clean file fails the job, and a
+divergence that gets fixed forces its list entry to be removed. The corpus is
+pinned to a fixed Fossil check-in and the runner is patched
+(`test/patch_sqllogictest.pl`) to emit a per-query divergence marker. Run
+`bash test/run_sqllogictest.sh <doltlite-runner> <stock-runner> <corpus-dir>`
 locally (requires Fossil for the upstream corpus).
 
 ### Concurrent Branch Tests
