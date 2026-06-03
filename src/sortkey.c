@@ -717,7 +717,7 @@ static SQLITE_INLINE void decodeNumericSortKeyToRecord(
 
   {
     i64 iv = (i64)d;
-    if( (double)iv == d && d >= -9.22e18 && d <= 9.22e18 ){
+    if( d >= -9223372036854775808.0 && d < 9223372036854775808.0 && (double)iv == d ){
       intSerialType(iv, pType, pLen);
       writeIntBE(pOut, iv, (int)*pLen);
     }else{

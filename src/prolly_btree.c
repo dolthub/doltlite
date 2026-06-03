@@ -6527,7 +6527,12 @@ static int prollyBtCursorTableMoveto(
     rootIsEmpty = prollyHashIsEmpty(&pCur->pCur.root);
   }
   if( rootIsEmpty ){
-    *pRes = 1;
+    /* Empty table: match stock SQLite, which returns res<0 with the cursor
+    ** invalid. The VDBE seek opcodes rely on this — SeekGE/GT advance and hit
+    ** EOF, SeekLE/LT fall through to the sqlite3BtreeEof() check — so all four
+    ** correctly find no rows. Returning +1 here made SeekGE/GT skip the
+    ** advance and materialize the invalid cursor as a phantom NULL row. */
+    *pRes = -1;
     pCur->eState = CURSOR_INVALID;
     return SQLITE_OK;
   }
