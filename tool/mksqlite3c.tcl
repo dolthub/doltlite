@@ -506,7 +506,11 @@ proc emit_doltlite_storage_block {} {
   set skipstructs 1
   # doltlite-added btree API (implemented unprefixed in prolly_btree.c) must not
   # be re-declared with the orig_Btree type inside this block.
-  set skipfns {sqlite3BtreeUsesOrig sqlite3BtreeProllyCachedIndexKeyCompare}
+  set skipfns {
+    sqlite3BtreeUsesOrig
+    sqlite3BtreeProllyCachedIndexKeyCompare
+    sqlite3BtreeProllyIndexRowid
+  }
   foreach {h guard} {pager.h SQLITE_PAGER_H wal.h SQLITE_WAL_H btree.h SQLITE_BTREE_H} {
     puts $out "#undef $guard"
     set available_hdr($h) 1

@@ -5158,7 +5158,8 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
         chunkStoreRollback(&pBt->store);
         chunkStoreUnlock(&pBt->store);
         pBt->store.snapshotPinned = 0;
-        return rc2;
+        /* Preserve the original commit error; restore failure is secondary. */
+        return rc;
       }
       {
         BtCursor *pC;
@@ -7116,25 +7117,15 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
     return SQLITE_OK;
   }
 
-  if( unpackedRecordCanUseIntSortKey(pCur, pIdxKey, (int)pIdxKey->nField) ){
-    u8 aSortKey[64];
-    u8 *pSortKey = aSortKey;
+  {
+    u8 *pSortKey = 0;
     int nSortKey = 0;
-    int nSortKeyAlloc = (int)sizeof(aSortKey);
+    int nSortKeyAlloc = 0;
     int rc;
-    if( pIdxKey->nField * 18 > (int)sizeof(aSortKey) ){
-      nSortKeyAlloc = (int)pIdxKey->nField * 18;
-      pSortKey = (u8*)sqlite3_malloc64((sqlite3_uint64)nSortKeyAlloc);
-      if( !pSortKey ) return SQLITE_NOMEM;
-    }
-    {
-      u8 *pBuf = pSortKey;
-      rc = sortKeyFromUnpackedIntRecordBuffer(
-          pIdxKey, (int)pIdxKey->nField, &pBuf, &nSortKeyAlloc, &nSortKey);
-      assert( pBuf==pSortKey );
-    }
+    rc = sortKeyFromUnpackedForCount(
+        pCur, pIdxKey, &pSortKey, &nSortKeyAlloc, &nSortKey);
     if( rc!=SQLITE_OK ){
-      if( pSortKey!=aSortKey ) sqlite3_free(pSortKey);
+      sqlite3_free(pSortKey);
       return rc;
     }
     nCmp = nKey < nSortKey ? nKey : nSortKey;
@@ -7149,11 +7140,82 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
       pIdxKey->eqSeen = 1;
       *pRes = pIdxKey->default_rc;
     }
-    if( pSortKey!=aSortKey ) sqlite3_free(pSortKey);
+    sqlite3_free(pSortKey);
     return SQLITE_OK;
   }
+}
 
-  return SQLITE_NOTFOUND;
+int sqlite3BtreeProllyIndexRowid(BtCursor *pCur, i64 *pRowid){
+  const u8 *pKey = 0;
+  int nKey = 0;
+  u8 *pRec = 0;
+  int nRecAlloc = 0;
+  int nRec = 0;
+  int rc;
+  u32 szHdr;
+  u32 typeRowid;
+  u32 lenRowid;
+  Mem v;
+
+  if( !pCur || pCur->pCurOps!=&prollyCursorOps || pCur->curIntKey ){
+    return SQLITE_NOTFOUND;
+  }
+  if( pCur->eState!=CURSOR_VALID ){
+    return SQLITE_NOTFOUND;
+  }
+
+  if( pCur->mmActive
+   && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH) ){
+    ProllyMutMapEntry *e = currentMutMapEntry(pCur);
+    if( !e ) return SQLITE_NOTFOUND;
+    pKey = e->pKey;
+    nKey = e->nKey;
+  }else if( prollyCursorIsValid(&pCur->pCur) ){
+    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+  }else{
+    return SQLITE_NOTFOUND;
+  }
+
+  rc = recordFromSortKeyBuffer(pKey, nKey, &pRec, &nRecAlloc, &nRec);
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(pRec);
+    return rc;
+  }
+
+  getVarint32NR(pRec, szHdr);
+  testcase( szHdr==3 );
+  testcase( szHdr==(u32)nRec );
+  testcase( szHdr>0x7fffffff );
+  if( unlikely(szHdr<3 || szHdr>(u32)nRec) ){
+    goto prolly_idx_rowid_corruption;
+  }
+
+  getVarint32NR(&pRec[szHdr-1], typeRowid);
+  testcase( typeRowid==1 );
+  testcase( typeRowid==2 );
+  testcase( typeRowid==3 );
+  testcase( typeRowid==4 );
+  testcase( typeRowid==5 );
+  testcase( typeRowid==6 );
+  testcase( typeRowid==8 );
+  testcase( typeRowid==9 );
+  if( unlikely(typeRowid<1 || typeRowid>9 || typeRowid==7) ){
+    goto prolly_idx_rowid_corruption;
+  }
+  lenRowid = prollySerialTypeLen(typeRowid);
+  testcase( (u32)nRec==szHdr+lenRowid );
+  if( unlikely((u32)nRec<szHdr+lenRowid) ){
+    goto prolly_idx_rowid_corruption;
+  }
+
+  sqlite3VdbeSerialGet(&pRec[nRec-lenRowid], typeRowid, &v);
+  *pRowid = v.u.i;
+  sqlite3_free(pRec);
+  return SQLITE_OK;
+
+prolly_idx_rowid_corruption:
+  sqlite3_free(pRec);
+  return SQLITE_CORRUPT_BKPT;
 }
 
 static i64 prollyBtCursorIntegerKey(BtCursor *pCur){
