@@ -746,9 +746,9 @@ delete delete-9.2
 delete delete-9.3
 delete delete-9.4
 delete delete-9.5
-enc enc-12.1
-enc enc-12.3
-enc enc-12.8
+enc enc-12.1  # doltlite-format ignores non-UTF-8 database encodings
+enc enc-12.3  # doltlite-format ignores non-UTF-8 database encodings
+enc enc-12.8  # doltlite-format ignores non-UTF-8 database encodings
 insert insert-15.1
 insert insert-5.4
 intpkey intpkey-3.2
@@ -1083,27 +1083,27 @@ crash6 crash6-3.8.3
 crash6 crash6-3.9.2
 crash6 crash6-3.9.3
 distinct distinct-2.6.1
-e_expr e_expr-27.4.4
-e_expr e_expr-27.4.5
-e_expr e_expr-27.4.6
-e_expr e_expr-27.4.7
-e_expr e_expr-27.4.8
-e_expr e_expr-27.4.9
-e_expr e_expr-28.1.3
-e_expr e_expr-28.1.4
-e_expr e_expr-29.1.5
-e_expr e_expr-29.1.6
-e_expr e_expr-29.1.7
-e_expr e_expr-29.1.8
-e_expr e_expr-30.1.5
-e_expr e_expr-30.1.6
-e_expr e_expr-30.1.7
-e_expr e_expr-30.1.8
-e_expr e_expr-33.1.1
-e_expr e_expr-33.1.3
-e_expr e_expr-33.1.4
-enc4 enc4-2.1
-enc4 enc4-3.1
+e_expr e_expr-27.4.4  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-27.4.5  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-27.4.6  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-27.4.7  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-27.4.8  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-27.4.9  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-28.1.3  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-28.1.4  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-29.1.5  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-29.1.6  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-29.1.7  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-29.1.8  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-30.1.5  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-30.1.6  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-30.1.7  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-30.1.8  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-33.1.1  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-33.1.3  # doltlite-format ignores non-UTF-8 database encodings
+e_expr e_expr-33.1.4  # doltlite-format ignores non-UTF-8 database encodings
+enc4 enc4-2.1  # doltlite-format ignores non-UTF-8 database encodings
+enc4 enc4-3.1  # doltlite-format ignores non-UTF-8 database encodings
 pragma2 pragma2-1.3
 pragma2 pragma2-1.4
 pragma2 pragma2-2.5

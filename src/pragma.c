@@ -2279,6 +2279,12 @@ void sqlite3Pragma(
         for(pEnc=&encnames[0]; pEnc->zName; pEnc++){
           if( 0==sqlite3StrICmp(zRight, pEnc->zName) ){
             u8 enc = pEnc->enc ? pEnc->enc : SQLITE_UTF16NATIVE;
+#ifdef DOLTLITE_PROLLY
+            if( enc!=SQLITE_UTF8 ){
+              /* Doltlite-format databases store SQL text as UTF-8. */
+              break;
+            }
+#endif
             SCHEMA_ENC(db) = enc;
             sqlite3SetTextEncoding(db, enc);
             break;
