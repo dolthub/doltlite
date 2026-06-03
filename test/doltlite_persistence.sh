@@ -25,6 +25,25 @@ else FAIL=$((FAIL+1)); ERRORS="$ERRORS\nFAIL: single_file\n  expected: 1 file\n 
 rm -f "$DB"
 
 echo ""
+echo "--- Symlink path persistence ---"
+
+BASE=/tmp/test_persist_symlink_$$; rm -rf "$BASE"; mkdir -p "$BASE/real" "$BASE/link"
+DB="$BASE/real/test.db"
+LINK="$BASE/link/test.db"
+echo "CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES(1,'via-real');
+SELECT dolt_commit('-A','-m','init');" | $DOLTLITE "$DB" > /dev/null 2>&1
+ln -s ../real/test.db "$LINK"
+
+run_test "symlink_read_count" "SELECT count(*) FROM t;" "1" "$LINK"
+run_test "symlink_read_log" "SELECT count(*) FROM dolt_log;" "2" "$LINK"
+run_test_lastline "symlink_write_commit" "INSERT INTO t VALUES(2,'via-link'); SELECT dolt_commit('-A','-m','link write'); SELECT count(*) FROM t;" "2" "$LINK"
+run_test "symlink_real_path_sees_write" "SELECT v FROM t WHERE id=2;" "via-link" "$DB"
+run_test_match "symlink_real_path_sees_commit" "SELECT message FROM dolt_log LIMIT 1;" "link write" "$DB"
+
+rm -rf "$BASE"
+
+echo ""
 echo "--- Multiple commits ---"
 
 DB=/tmp/test_persist_multi_$$.db; rm -f "$DB"
