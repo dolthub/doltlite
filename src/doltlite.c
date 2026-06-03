@@ -5029,12 +5029,6 @@ void doltliteRegister(sqlite3 *db){
     if( doltliteConstraintViolationsRegister(db)!=SQLITE_OK ) return;
   }
 
-  {
-    extern int doltliteDbpageRegister(sqlite3*);
-    extern int doltliteDbpageInstallAutoExt(void);
-    doltliteDbpageRegister(db);
-    doltliteDbpageInstallAutoExt();
-  }
   doltliteMaybeSeedRepo(db);
 }
 

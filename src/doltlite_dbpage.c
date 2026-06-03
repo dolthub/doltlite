@@ -247,17 +247,4 @@ int doltliteDbpageRegister(sqlite3 *db){
   return sqlite3_create_module(db, "sqlite_dbpage", &doltliteDbpageModule, 0);
 }
 
-static int doltliteDbpageExtInit(
-  sqlite3 *db,
-  char **pzErrMsg,
-  const sqlite3_api_routines *pApi
-){
-  (void)pzErrMsg; (void)pApi;
-  return doltliteDbpageRegister(db);
-}
-
-int doltliteDbpageInstallAutoExt(void){
-  return sqlite3_auto_extension((void(*)(void))doltliteDbpageExtInit);
-}
-
 #endif

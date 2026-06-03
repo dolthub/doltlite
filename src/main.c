@@ -50,6 +50,9 @@ int sqlite3StmtVtabInit(sqlite3*);
 #ifdef SQLITE_EXTRA_AUTOEXT
 int SQLITE_EXTRA_AUTOEXT(sqlite3*);
 #endif
+#if defined(DOLTLITE_PROLLY) && defined(SQLITE_ENABLE_DBPAGE_VTAB)
+int doltliteDbpageRegister(sqlite3*);
+#endif
 /*
 ** An array of pointers to extension initializer functions for
 ** built-in extensions.
@@ -68,7 +71,13 @@ static int (*const sqlite3BuiltinExtensions[])(sqlite3*) = {
   sqlite3RtreeInit,
 #endif
 #ifdef SQLITE_ENABLE_DBPAGE_VTAB
+#ifdef DOLTLITE_PROLLY
+  /* doltlite ships its own sqlite_dbpage; register it here so it wins
+  ** without a process-global auto-extension that outlives sqlite3_close. */
+  doltliteDbpageRegister,
+#else
   sqlite3DbpageRegister,
+#endif
 #endif
 #ifdef SQLITE_ENABLE_DBSTAT_VTAB
   sqlite3DbstatRegister,
