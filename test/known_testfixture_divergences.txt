@@ -944,8 +944,6 @@ trigger1 trigger1-6.1
 trigger1 trigger1-6.2
 trigger1 trigger1-6.5
 trigger1 trigger1-6.6
-update update-20.20
-update update-20.30
 where where-1.1.1
 where where-25.1
 where where-25.2
