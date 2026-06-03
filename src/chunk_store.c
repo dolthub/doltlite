@@ -134,6 +134,40 @@ static int csOpenFile(
   return rc;
 }
 
+static int csCanonicalFilename(
+  sqlite3_vfs *pVfs,
+  const char *zFilename,
+  char **pzOut
+){
+  int nPath;
+  int rc;
+  char *zFull;
+  int n;
+
+  *pzOut = 0;
+  assert( pVfs!=0 );
+
+  nPath = pVfs->mxPathname + 1;
+  zFull = (char*)sqlite3_malloc(nPath);
+  if( !zFull ) return SQLITE_NOMEM;
+
+  rc = sqlite3OsFullPathname(pVfs, zFilename, nPath, zFull);
+  if( rc==SQLITE_OK_SYMLINK ){
+    *pzOut = zFull;
+    return SQLITE_OK;
+  }
+  sqlite3_free(zFull);
+  if( rc!=SQLITE_OK ){
+    return rc;
+  }
+
+  n = (int)strlen(zFilename);
+  *pzOut = (char*)sqlite3_malloc(n + 1);
+  if( !*pzOut ) return SQLITE_NOMEM;
+  memcpy(*pzOut, zFilename, n + 1);
+  return SQLITE_OK;
+}
+
 static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   sqlite3_int64 sizeNow = -1;
   int rc = SQLITE_OK;
@@ -257,9 +291,12 @@ int chunkStoreOpen(
 ){
   int rc;
   int exists = 0;
-  int n;
 
   memset(cs, 0, sizeof(*cs));
+  if( !pVfs ){
+    pVfs = sqlite3_vfs_find(0);
+    if( !pVfs ) return SQLITE_CANTOPEN;
+  }
   cs->file.pVfs = pVfs;
   CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   cs->pLockMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
@@ -278,10 +315,8 @@ int chunkStoreOpen(
     return SQLITE_OK;
   }
 
-  n = (int)strlen(zFilename);
-  cs->file.zFilename = (char *)sqlite3_malloc(n + 1);
-  if( cs->file.zFilename == 0 ) return SQLITE_NOMEM;
-  memcpy(cs->file.zFilename, zFilename, n + 1);
+  rc = csCanonicalFilename(pVfs, zFilename, &cs->file.zFilename);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = sqlite3OsAccess(pVfs, cs->file.zFilename, SQLITE_ACCESS_EXISTS, &exists);
   if( rc != SQLITE_OK ){
