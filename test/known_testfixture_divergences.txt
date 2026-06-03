@@ -753,7 +753,6 @@ insert insert-15.1
 insert insert-5.4
 intpkey intpkey-3.2
 intpkey intpkey-3.6
-join join-4.9
 like like-11.3
 like like-11.5
 like like-11.6
@@ -876,7 +875,6 @@ savepoint savepoint-7.3.2
 savepoint savepoint-7.4.1
 savepoint savepoint-7.5.1
 savepoint savepoint-7.5.2
-select1 select1-14.1
 select2 select2-3.3
 selectA selectA-3.1
 selectA selectA-3.1.1
@@ -949,7 +947,6 @@ trigger1 trigger1-6.6
 update update-20.20
 update update-20.30
 where where-1.1.1
-where where-24-3.4
 where where-25.1
 where where-25.2
 where where-25.5
