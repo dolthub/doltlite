@@ -1,140 +1,162 @@
 #!/bin/bash
 #
-# run_sqllogictest.sh — Run the full sqllogictest suite using the C runner binary.
+# run_sqllogictest.sh — Run the sqllogictest suite and gate on a per-assertion
+# known-divergence allow-list (mirrors run_testfixture.sh).
 #
-# Usage: bash run_sqllogictest.sh <doltlite-runner> <stock-runner> <test-dir>
+# Usage: bash run_sqllogictest.sh <doltlite-runner> <stock-runner> <test-dir> [divergence-file]
 #
 #   doltlite-runner: sqllogictest binary linked against doltlite's amalgamation
 #   stock-runner:    sqllogictest binary linked against stock SQLite (reference)
-#   test-dir:        root of sqllogictest test/ directory (from the fossil repo)
+#   test-dir:        root of the sqllogictest test/ directory (Fossil corpus)
+#   divergence-file: known-divergence allow-list (default: known_sqllogictest_divergences.txt)
 #
-# Runs every .test file found recursively under test-dir through both runners
-# in --verify mode, comparing pass/fail counts.
+# Both runners MUST be built from a sqllogictest.c patched with
+# test/patch_sqllogictest.pl, which makes the runner emit one
+#   !DIVERGE <query-start-line>
+# token per query record whose verify result differs from the file's expected
+# output. For each test file we take doltlite's divergent query lines, subtract
+# any the stock reference also flags (so corpus/SQLite-version quirks don't count
+# against doltlite), and compare the remainder to the allow-list:
 #
-# doltlite's prolly storage format legitimately differs from stock SQLite on a
-# minority of these tests (rowid assignment/ordering, page/pragma semantics), so
-# per-test result mismatches vs stock are EXPECTED and are not treated as
-# failures. The job gates only on a catastrophic drop in the overall pass rate,
-# which would indicate a real regression. (Functional correctness is covered by
-# the object-build suites: run_doltlite_tests.sh and the C regression suite.)
-# Before the amalgamation became real doltlite it was stock SQLite, so this
-# comparison used to be stock-vs-stock and trivially matched.
+#   (1) every doltlite divergence must be listed (else: unexpected -> regression)
+#   (2) every listed entry must still diverge (else: fixed -> remove from list)
 #
-# Narrowing these differences (and tightening this gate into a per-category
-# baseline) is tracked in https://github.com/dolthub/doltlite/issues/1118.
+# doltlite's prolly format legitimately differs from stock on a small set of
+# assertions; those are the allow-list. Any divergence outside it fails the job.
+# (Functional correctness is also covered by the object-build suites.)
 
-set -euo pipefail
+set -uo pipefail
 
-DOLTLITE_RUNNER="$1"
-STOCK_RUNNER="$2"
-TESTDIR="$3"
+DOLTLITE_RUNNER="${1:?Usage: run_sqllogictest.sh <doltlite-runner> <stock-runner> <test-dir> [divergence-file]}"
+STOCK_RUNNER="${2:?Missing stock runner}"
+TESTDIR="${3:?Missing test dir}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DIVERGENCE_FILE="${4:-$SCRIPT_DIR/known_sqllogictest_divergences.txt}"
 
-# Find ALL .test files recursively
+PER_FILE_TIMEOUT=300
+
+# Print the expected divergent query-line numbers for a file (one per line).
+expected_for() {
+  local rel="$1"
+  [ -f "$DIVERGENCE_FILE" ] || return 0
+  awk -v f="$rel" '
+    { sub(/#.*/, ""); gsub(/^[ \t]+|[ \t]+$/, "")
+      if ($0 == "") next
+      if ($1 == f) print $2 }
+  ' "$DIVERGENCE_FILE"
+}
+
+# Print every file path referenced by the allow-list (one per line, unique).
+listed_files() {
+  [ -f "$DIVERGENCE_FILE" ] || return 0
+  awk '{ sub(/#.*/, ""); gsub(/^[ \t]+|[ \t]+$/, ""); if ($0=="") next; print $1 }' "$DIVERGENCE_FILE" | sort -u
+}
+
+# !DIVERGE query lines emitted by <runner> on <file>. Sorted with LC_ALL=C so
+# the lists feed `comm` consistently (comm compares lexically, not numerically).
+tokens() {
+  timeout "$PER_FILE_TIMEOUT" "$1" --verify "$2" 2>&1 \
+    | grep -oE '!DIVERGE [0-9]+' | awk '{print $2}' | LC_ALL=C sort -u
+}
+
 mapfile -t TEST_FILES < <(find "$TESTDIR" -name '*.test' -type f | sort)
-
 if [ ${#TEST_FILES[@]} -eq 0 ]; then
   echo "ERROR: No .test files found under $TESTDIR"
   exit 1
 fi
 
 echo "============================================"
-echo "SQL Logic Test: doltlite vs stock SQLite"
+echo "SQL Logic Test: per-assertion divergence gate"
 echo "============================================"
-echo "Test directory: $TESTDIR"
-echo "Test files found: ${#TEST_FILES[@]}"
+echo "Test directory:  $TESTDIR"
+echo "Test files:      ${#TEST_FILES[@]}"
+echo "Divergence list: $DIVERGENCE_FILE ($(grep -cvE '^[[:space:]]*(#|$)' "$DIVERGENCE_FILE" 2>/dev/null || echo 0) entries)"
 echo ""
 
-# Per-file timeout (seconds). Most files finish in seconds; a few large ones
-# (e.g. random/expr/*.test) can take minutes.
-PER_FILE_TIMEOUT=300
-
-dl_total_pass=0 dl_total_fail=0 dl_total_errors=0
-sq_total_pass=0 sq_total_fail=0 sq_total_errors=0
 n_files=0
+n_div_files=0
+total_div=0
+total_unexpected=0
+total_fixed=0
+total_crash=0
+unexpected_lines=""
+fixed_lines=""
+crash_lines=""
 
-# Parse "N errors out of M tests" from sqllogictest output.
-# Sets: _errors _tests
-parse_result() {
-  local output="$1" rc="$2"
-  _errors=0 _tests=0
-  if [[ "$output" =~ ([0-9]+)\ errors\ out\ of\ ([0-9]+)\ tests ]]; then
-    _errors="${BASH_REMATCH[1]}"
-    _tests="${BASH_REMATCH[2]}"
-  fi
-  # rc=124 means timeout killed it
-  if [ "$rc" -eq 124 ]; then
-    _errors=-1 _tests=-1
-  fi
-}
+seen_file_list=""
 
 for f in "${TEST_FILES[@]}"; do
-  fname="${f#$TESTDIR/}"
+  rel="${f#"$TESTDIR"/}"
   n_files=$((n_files + 1))
+  seen_file_list="$seen_file_list$rel"$'\n'
 
-  # Run stock SQLite (reference)
-  sq_out=$(timeout "$PER_FILE_TIMEOUT" "$STOCK_RUNNER" --verify "$f" 2>&1) && sq_rc=0 || sq_rc=$?
-  parse_result "$sq_out" "$sq_rc"
-  sq_e=$_errors sq_t=$_tests
-
-  # Run doltlite
   dl_out=$(timeout "$PER_FILE_TIMEOUT" "$DOLTLITE_RUNNER" --verify "$f" 2>&1) && dl_rc=0 || dl_rc=$?
-  parse_result "$dl_out" "$dl_rc"
-  dl_e=$_errors dl_t=$_tests
-
-  # Format output
-  if [ "$sq_e" -eq -1 ] 2>/dev/null; then
-    sq_display="TIMEOUT"
-    sq_total_errors=$((sq_total_errors + 1))
-  elif [ "$sq_t" -eq 0 ] && [ "$sq_rc" -ne 0 ]; then
-    sq_display="ERROR"
-    sq_total_errors=$((sq_total_errors + 1))
-  else
-    sq_p=$((sq_t - sq_e))
-    sq_display="$sq_p/$sq_t"
-    sq_total_pass=$((sq_total_pass + sq_p))
-    sq_total_fail=$((sq_total_fail + sq_e))
+  if [ "$dl_rc" -eq 124 ] || ! echo "$dl_out" | grep -q 'errors out of'; then
+    echo "CRASH/TIMEOUT: $rel (doltlite rc=$dl_rc)"
+    total_crash=$((total_crash + 1))
+    crash_lines="$crash_lines"$'\n'"  $rel (rc=$dl_rc)"
+    continue
   fi
+  dl=$(echo "$dl_out" | grep -oE '!DIVERGE [0-9]+' | awk '{print $2}' | LC_ALL=C sort -u)
+  st=$(tokens "$STOCK_RUNNER" "$f")
 
-  if [ "$dl_e" -eq -1 ] 2>/dev/null; then
-    dl_display="TIMEOUT"
-    dl_total_errors=$((dl_total_errors + 1))
-  elif [ "$dl_t" -eq 0 ] && [ "$dl_rc" -ne 0 ]; then
-    dl_display="ERROR"
-    dl_total_errors=$((dl_total_errors + 1))
+  # doltlite-only divergences (exclude assertions the stock reference also flags)
+  divg=$(comm -23 <(printf '%s\n' "$dl" | grep -v '^$') <(printf '%s\n' "$st" | grep -v '^$'))
+  exp=$(expected_for "$rel" | LC_ALL=C sort -u)
+
+  [ -z "$divg" ] && [ -z "$exp" ] && continue
+
+  unexpected=$(comm -23 <(printf '%s\n' "$divg" | grep -v '^$') <(printf '%s\n' "$exp" | grep -v '^$'))
+  fixed=$(comm -13 <(printf '%s\n' "$divg" | grep -v '^$') <(printf '%s\n' "$exp" | grep -v '^$'))
+
+  n_div=$(printf '%s\n' "$divg" | grep -c .)
+  n_unexp=$(printf '%s\n' "$unexpected" | grep -c .)
+  n_fix=$(printf '%s\n' "$fixed" | grep -c .)
+  total_div=$((total_div + n_div))
+  [ "$n_div" -gt 0 ] && n_div_files=$((n_div_files + 1))
+
+  if [ "$n_unexp" -eq 0 ] && [ "$n_fix" -eq 0 ]; then
+    [ "$n_div" -gt 0 ] && echo "OK: $rel ($n_div known divergences)"
   else
-    dl_p=$((dl_t - dl_e))
-    dl_display="$dl_p/$dl_t"
-    dl_total_pass=$((dl_total_pass + dl_p))
-    dl_total_fail=$((dl_total_fail + dl_e))
+    if [ "$n_unexp" -gt 0 ]; then
+      echo "FAIL: $rel — unexpected divergences (not in list):"
+      printf '%s\n' "$unexpected" | grep . | sed 's/^/    line /'
+      total_unexpected=$((total_unexpected + n_unexp))
+      while IFS= read -r ln; do [ -n "$ln" ] && unexpected_lines="$unexpected_lines"$'\n'"  $rel $ln"; done <<< "$unexpected"
+    fi
+    if [ "$n_fix" -gt 0 ]; then
+      echo "FIXED: $rel — listed entries that no longer diverge (remove from list):"
+      printf '%s\n' "$fixed" | grep . | sed 's/^/    line /'
+      total_fixed=$((total_fixed + n_fix))
+      while IFS= read -r ln; do [ -n "$ln" ] && fixed_lines="$fixed_lines"$'\n'"  $rel $ln"; done <<< "$fixed"
+    fi
   fi
-
-  printf "[%d/%d] %-55s  stock: %10s  doltlite: %10s\n" \
-    "$n_files" "${#TEST_FILES[@]}" "$fname" "$sq_display" "$dl_display"
 done
+
+# Allow-list entries pointing at files that no longer exist in the corpus.
+while IFS= read -r lf; do
+  [ -z "$lf" ] && continue
+  if ! printf '%s' "$seen_file_list" | grep -Fxq -- "$lf"; then
+    echo "STALE: $lf is in the divergence list but not present in the corpus"
+    n=$(expected_for "$lf" | grep -c .)
+    total_fixed=$((total_fixed + n))
+    fixed_lines="$fixed_lines"$'\n'"  $lf (file missing, $n entries)"
+  fi
+done < <(listed_files)
 
 echo ""
 echo "============================================"
-echo "Totals ($n_files files)"
-echo "  stock SQLite: $sq_total_pass passed, $sq_total_fail failed, $sq_total_errors errors/timeouts"
-echo "  doltlite:     $dl_total_pass passed, $dl_total_fail failed, $dl_total_errors errors/timeouts"
-if [ "$sq_total_pass" -gt 0 ]; then
-  pct=$((dl_total_pass * 100 / sq_total_pass))
-  echo "  doltlite pass rate: ${pct}% of stock SQLite"
+echo "  files:                  $n_files"
+echo "  files with divergences: $n_div_files"
+echo "  known divergences:      $total_div"
+if [ "$total_unexpected" -gt 0 ] || [ "$total_crash" -gt 0 ] || [ "$total_fixed" -gt 0 ]; then
+  [ "$total_unexpected" -gt 0 ] && { echo "  UNEXPECTED divergences:  $total_unexpected$unexpected_lines"; }
+  [ "$total_crash" -gt 0 ]      && { echo "  crashes/timeouts:        $total_crash$crash_lines"; }
+  [ "$total_fixed" -gt 0 ]      && { echo "  list entries to remove:  $total_fixed$fixed_lines"; }
+  echo "============================================"
+  echo "::error::sqllogictest divergence gate failed (unexpected=$total_unexpected, crashes=$total_crash, to-remove=$total_fixed)"
+  exit 1
 fi
 echo "============================================"
-
-# Per-test result mismatches vs stock are expected for doltlite's prolly format.
-# Gate only on a catastrophic regression in the overall pass rate relative to
-# stock SQLite; lesser differences are reported above for visibility.
-PASS_RATE_FLOOR=90
-if [ "$sq_total_pass" -gt 0 ]; then
-  pct=$((dl_total_pass * 100 / sq_total_pass))
-  if [ "$pct" -lt "$PASS_RATE_FLOOR" ]; then
-    echo ""
-    echo "FAILED: doltlite pass rate ${pct}% is below the ${PASS_RATE_FLOOR}% floor of stock SQLite"
-    echo "(a drop this large indicates a real regression, not expected format differences)"
-    exit 1
-  fi
-  echo ""
-  echo "OK: doltlite pass rate ${pct}% (>= ${PASS_RATE_FLOOR}% floor); per-test differences vs stock are expected."
-fi
+echo "OK: all doltlite divergences are accounted for in the allow-list."
+exit 0

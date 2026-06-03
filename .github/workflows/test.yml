@@ -103,7 +103,13 @@ jobs:
       run: |
         fossil clone https://www.sqlite.org/sqllogictest/ /tmp/sqllogictest.fossil
         mkdir -p /tmp/sqllogictest && cd /tmp/sqllogictest
-        fossil open /tmp/sqllogictest.fossil
+        # Pin to a fixed check-in so query-record line numbers (the keys of the
+        # per-assertion divergence list) stay stable across runs.
+        fossil open /tmp/sqllogictest.fossil db57eba95d7c412bb413da5480c8be24109a8faf
+        # Make the runner emit a "!DIVERGE <query-line>" token per divergent
+        # query record (both runners are built from this patched source).
+        perl "$GITHUB_WORKSPACE/test/patch_sqllogictest.pl" < src/sqllogictest.c > src/sqllogictest.c.patched
+        mv src/sqllogictest.c.patched src/sqllogictest.c
 
     - name: Build stock sqllogictest C runner (reference)
       run: |
