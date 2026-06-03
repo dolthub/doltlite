@@ -64,6 +64,7 @@ TESTS=(
   doltlite_savepoint.sh
   doltlite_rollback_durability.sh
   doltlite_delete_or.sh
+  doltlite_nocase_index.sh
   doltlite_schema_merge.sh
   doltlite_branch_gc_stress.sh
 

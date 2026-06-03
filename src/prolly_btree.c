@@ -477,6 +477,20 @@ static int serializeUnpackedRecordBuffer(
 );
 static u32 btreeSerialType(Mem *pMem, u32 *pLen);
 
+static int keyInfoHasLossyCollation(const KeyInfo *pKeyInfo){
+  int i;
+  if( !pKeyInfo ) return 0;
+  for(i=0; i<pKeyInfo->nAllField; i++){
+    const CollSeq *pColl = pKeyInfo->aColl[i];
+    if( !pColl || !pColl->zName ) continue;
+    if( sqlite3StrICmp(pColl->zName, "NOCASE")==0
+     || sqlite3StrICmp(pColl->zName, "RTRIM")==0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static SQLITE_INLINE void cursorCurrentTreeValue(
   BtCursor *pCur,
   const u8 **ppData,
@@ -7468,17 +7482,20 @@ static int prollyBtCursorInsert(
     int nSortKey = 0;
     int nKeyField = 0;
     int splitKey = 0;
+    int storePayload = 0;
     int isIndex = 0;
     u8 aLocalSortKey[128];
     const u8 *pSortKey = 0;
+    if( pCur->pKeyInfo ){
+      struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+      isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
+      storePayload = keyInfoHasLossyCollation(pCur->pKeyInfo);
+    }
     if( pCur->pKeyInfo
      && pCur->pKeyInfo->nKeyField < pCur->pKeyInfo->nAllField ){
       nKeyField = (int)pCur->pKeyInfo->nKeyField;
       splitKey = 1;
-      {
-        struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
-        isIndex = (pTE && !tableEntryIsTableRoot(pCur->pBtree, pTE));
-      }
+      storePayload = 1;
     }
     rc = sortKeyFromIntRecordLocal(
         pCur, (const u8*)pPayload->pKey, (int)pPayload->nKey,
@@ -7495,7 +7512,7 @@ static int prollyBtCursorInsert(
       pSortKey = pCur->pSeekSortKey;
     }
     if( rc==SQLITE_OK ){
-      if( splitKey ){
+      if( storePayload ){
         rc = prollyMutMapInsert(pCur->pMutMap,
                                  pSortKey, nSortKey, 0,
                                  (const u8*)pPayload->pKey, (int)pPayload->nKey);
