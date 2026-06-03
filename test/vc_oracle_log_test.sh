@@ -55,6 +55,111 @@ oracle() {
   vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
 }
 
+normalize_commit_relations() {
+  tr -d '"\r' | awk -F'|' '
+    function sym(h) {
+      if (!(h in seen)) { n++; seen[h] = "H" n }
+      return seen[h]
+    }
+    function is_hash(s) {
+      return s ~ /^[0-9a-f]{40}$/ || s ~ /^[0-9a-v]{32}$/
+    }
+    {
+      for (i=1; i<=NF; i++) {
+        if (is_hash($i)) $i = sym($i)
+      }
+      out = $1
+      for (i=2; i<=NF; i++) out = out "|" $i
+      print out
+    }
+  '
+}
+
+oracle_commit_relations() {
+  local name="$1" dl_sql="$2" dt_sql="$3"
+  local dir="$TMPROOT/${name}_rel"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_out
+  dl_out=$(
+    printf ".headers off\n.mode list\n%s\n" "$dl_sql" \
+      | "$DOLTLITE" "$dir/dl/db" 2>"$dir/dl.err" \
+      | grep -E '^(C[0-9]+|H[0-9]+|L[0-9]+|LOG)[|]' \
+      | normalize_commit_relations
+  )
+
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    printf '%s\n' "$dt_sql" \
+      | "$DOLT" sql -c -r csv 2>"$dir/dt.err" \
+      | tr -d '"\r' \
+      | awk '
+          function is_dolt_hash(s) { return s ~ /^[0-9a-v]{32}$/ }
+          /^hash$/ { want_commit=1; next }
+          want_commit && is_dolt_hash($0) {
+            c++; print "C" c "|" $0; want_commit=0; next
+          }
+          want_commit {
+            c++; print "C" c "|0"; want_commit=0
+          }
+          /^(H[0-9]+|L[0-9]+|LOG)\|/ { print }
+        ' \
+      | normalize_commit_relations
+  )
+
+  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
+}
+
+oracle_commit_error_poststate() {
+  local name="$1" dl_setup="$2" dl_call="$3" dl_query="$4" dt_setup="$5" dt_call="$6" dt_query="$7"
+  local dir="$TMPROOT/${name}_errstate"
+  mkdir -p "$dir/dl" "$dir/dt"
+
+  local dl_rc
+  printf ".headers off\n.mode list\n%s\n%s\n" "$dl_setup" "$dl_call" \
+    | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
+  dl_rc=$?
+  local dl_out
+  dl_out=$(
+    printf ".headers off\n.mode list\n%s\n" "$dl_query" \
+      | "$DOLTLITE" "$dir/dl/db" 2>>"$dir/dl.err" \
+      | grep -E '^(H|L|LOG)[|]' \
+      | normalize_commit_relations
+  )
+
+  local dt_rc
+  (
+    cd "$dir/dt" || exit 1
+    vc_oracle_init_repo
+    printf '%s\n%s\n' "$dt_setup" "$dt_call" \
+      | "$DOLT" sql -r csv >"$dir/dt.out" 2>"$dir/dt.err"
+  )
+  dt_rc=$?
+  local dt_out
+  dt_out=$(
+    cd "$dir/dt" || exit 1
+    printf '%s\n' "$dt_query" \
+      | "$DOLT" sql -c -r csv 2>>"$dir/dt.err" \
+      | tr -d '"\r' \
+      | grep -E '^(H|L|LOG)[|]' \
+      | normalize_commit_relations
+  )
+
+  if [ "$dl_rc" -ne 0 ] && [ "$dt_rc" -ne 0 ] && [ "$dl_out" = "$dt_out" ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+    FAILED_NAMES="$FAILED_NAMES $name"
+    echo "  FAIL: $name"
+    echo "    doltlite rc: $dl_rc"
+    echo "    dolt rc:     $dt_rc"
+    echo "    doltlite:"; echo "$dl_out" | sed 's/^/      /'
+    echo "    dolt:";     echo "$dt_out" | sed 's/^/      /'
+  fi
+}
+
 echo "=== Version Control Oracle Tests: dolt_log ==="
 echo ""
 
@@ -94,6 +199,70 @@ SELECT dolt_add('t');
 SELECT dolt_commit('-m', 'seed');
 INSERT INTO t VALUES (2, 20);
 SELECT dolt_commit('-a', '-m', 'second');
+"
+
+echo "--- no-diff commit return/head/log consistency ---"
+
+oracle_commit_relations "allow_empty_second_commit_advances_head" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT 'C1|' || dolt_commit('-A', '-m', 'first');
+SELECT 'H1|' || dolt_hashof('HEAD');
+SELECT 'L1|' || count(*) FROM dolt_log;
+SELECT 'C2|' || dolt_commit('--allow-empty', '-m', 'second');
+SELECT 'H2|' || dolt_hashof('HEAD');
+SELECT 'L2|' || count(*) FROM dolt_log;
+SELECT 'LOG|' || commit_hash || '|' || message FROM dolt_log;
+" "
+CREATE TABLE t(id int primary key, v text);
+INSERT INTO t VALUES (1, 'a');
+CALL dolt_commit('-A', '-m', 'first');
+SELECT concat('H1|', dolt_hashof('HEAD'));
+SELECT concat('L1|', count(*)) FROM dolt_log;
+CALL dolt_commit('--allow-empty', '-m', 'second');
+SELECT concat('H2|', dolt_hashof('HEAD'));
+SELECT concat('L2|', count(*)) FROM dolt_log;
+SELECT concat('LOG|', commit_hash, '|', message) FROM dolt_log ORDER BY commit_order DESC;
+"
+
+oracle_commit_relations "skip_empty_second_commit_returns_zero_without_advancing" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT 'C1|' || dolt_commit('-A', '-m', 'first');
+SELECT 'H1|' || dolt_hashof('HEAD');
+SELECT 'L1|' || count(*) FROM dolt_log;
+SELECT 'C2|' || dolt_commit('--skip-empty', '-m', 'second');
+SELECT 'H2|' || dolt_hashof('HEAD');
+SELECT 'L2|' || count(*) FROM dolt_log;
+SELECT 'LOG|' || commit_hash || '|' || message FROM dolt_log;
+" "
+CREATE TABLE t(id int primary key, v text);
+INSERT INTO t VALUES (1, 'a');
+CALL dolt_commit('-A', '-m', 'first');
+SELECT concat('H1|', dolt_hashof('HEAD'));
+SELECT concat('L1|', count(*)) FROM dolt_log;
+CALL dolt_commit('--skip-empty', '-m', 'second');
+SELECT concat('H2|', dolt_hashof('HEAD'));
+SELECT concat('L2|', count(*)) FROM dolt_log;
+SELECT concat('LOG|', commit_hash, '|', message) FROM dolt_log ORDER BY commit_order DESC;
+"
+
+oracle_commit_error_poststate "clean_second_commit_errors_without_advancing" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);
+INSERT INTO t VALUES (1, 'a');
+SELECT dolt_commit('-A', '-m', 'first');
+" "SELECT dolt_commit('-A', '-m', 'second');" "
+SELECT 'H|' || dolt_hashof('HEAD');
+SELECT 'L|' || count(*) FROM dolt_log;
+SELECT 'LOG|' || commit_hash || '|' || message FROM dolt_log;
+" "
+CREATE TABLE t(id int primary key, v text);
+INSERT INTO t VALUES (1, 'a');
+CALL dolt_commit('-A', '-m', 'first');
+" "CALL dolt_commit('-A', '-m', 'second');" "
+SELECT concat('H|', dolt_hashof('HEAD'));
+SELECT concat('L|', count(*)) FROM dolt_log;
+SELECT concat('LOG|', commit_hash, '|', message) FROM dolt_log ORDER BY commit_order DESC;
 "
 
 oracle "message_with_special_chars" "
