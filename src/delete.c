@@ -278,6 +278,15 @@ Expr *sqlite3LimitWhere(
 #endif /* defined(SQLITE_ENABLE_UPDATE_DELETE_LIMIT) */
        /*      && !defined(SQLITE_OMIT_SUBQUERY) */
 
+#ifdef DOLTLITE_PROLLY
+static int doltliteExprContainsOr(const Expr *pExpr){
+  if( pExpr==0 ) return 0;
+  if( pExpr->op==TK_OR ) return 1;
+  return doltliteExprContainsOr(pExpr->pLeft)
+      || doltliteExprContainsOr(pExpr->pRight);
+}
+#endif
+
 /*
 ** Generate code for a DELETE FROM statement.
 **
@@ -495,6 +504,12 @@ void sqlite3DeleteFrom(
   {
     u16 wcf = WHERE_ONEPASS_DESIRED|WHERE_DUPLICATES_OK;
     if( sNC.ncFlags & NC_Subquery ) bComplex = 1;
+#ifdef DOLTLITE_PROLLY
+    /* A one-pass multi-index OR DELETE can update prolly pending maps for
+    ** indexes that later OR arms are still scanning. Use the two-pass rowset
+    ** path so row discovery completes before table and index mutation. */
+    if( doltliteExprContainsOr(pWhere) ) bComplex = 1;
+#endif
     wcf |= (bComplex ? 0 : WHERE_ONEPASS_MULTIROW);
     if( HasRowid(pTab) ){
       /* For a rowid table, initialize the RowSet to an empty set */
