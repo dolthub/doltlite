@@ -857,10 +857,26 @@ All numbers below have automated assertions in CI (`test/doltlite_perf.sh` and `
 
 ### SQLite Tcl Test Suite
 
-87,000+ upstream SQLite test cases pass with 0 correctness failures.
-Build `testfixture` and run `bash test/run_testfixture.sh` (CI runs the
-full sweep on every PR; see `.github/workflows/test.yml` for the
-invocation).
+`testfixture` is built from real doltlite (the prolly + version-control engine,
+not stock SQLite) and runs the upstream SQLite TCL suite — 87,000+ cases, the
+large majority passing unchanged. The remaining results are **documented,
+intentional divergences**, gated per-test so nothing slips silently:
+
+- `test/known_testfixture_divergences.txt` — ~3,500 cases across ~60 files that
+  diverge by design: mostly doltlite's **rowid / primary-key identity**
+  semantics (rows are keyed by PK, not SQLite's allocation-order rowid) and
+  tests that **poke the raw SQLite on-disk page format** (doltlite stores the
+  content-addressed prolly format), plus custom-collation indexes, VACUUM as a
+  no-op, and crash-recovery simulations.
+- `test/known_testfixture_crashes.txt` — a few files that abort or time out
+  before a summary line (raw-format aborts, crash-recovery sims, shared cache).
+- `test/known_testfixture_flakes.txt` — tests nondeterministic only on the CI
+  runner (currently one, `select9-2.1.6`; see #1132).
+
+`test/run_testfixture.sh` enforces these lists **bidirectionally** — every
+actual failure must be listed and every listed entry must still fail — so the
+lists stay honest. CI runs the full sweep on every PR
+(`.github/workflows/build-test.yml`).
 
 ### Doltlite Shell Tests
 
@@ -911,11 +927,14 @@ catch memory and undefined-behavior bugs before they reach master.
 
 ### SQL Logic Test Suite
 
-100% pass on the [sqllogictest](https://www.sqlite.org/sqllogictest/) suite
-— the same 5.7M-statement corpus SQLite itself uses — verified against
-stock SQLite as the reference. CI runs the full suite on every PR; run
-`bash test/run_sqllogictest.sh` locally (requires Fossil for the upstream
-corpus).
+doltlite runs the full [sqllogictest](https://www.sqlite.org/sqllogictest/)
+corpus — the same 5.7M-statement set SQLite uses — against **real doltlite**,
+comparing every result to stock SQLite as the reference. doltlite passes the
+large majority; a minority diverge on its intentional semantics (rowid
+assignment/ordering, page/pragma behavior). CI gates on the overall pass rate
+staying **≥90% of stock SQLite's**, not on per-test parity; the granular
+divergence triage is tracked in #1118. Run `bash test/run_sqllogictest.sh`
+locally (requires Fossil for the upstream corpus).
 
 ### Concurrent Branch Tests
 
