@@ -744,7 +744,6 @@ delete delete-8.1
 delete delete-8.3
 delete delete-8.5
 delete delete-9.2
-delete delete-9.3
 enc enc-12.1  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.3  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.8  # doltlite-format ignores non-UTF-8 database encodings
