@@ -422,6 +422,12 @@ collate3 collate3-3.12
 collate3 collate3-3.13
 collate3 collate3-3.14
 collate3 collate3-4.6
+
+# collate4 defines a custom TEXT collation. DoltLite rejects indexes that
+# depend on custom collations because persisted prolly sort keys can only
+# support built-in BINARY, NOCASE, and RTRIM comparisons. These failures are
+# either direct rejection of those indexes or downstream plan/search-count
+# checks that assume the rejected index exists.
 collate4 collate4-1.1.0
 collate4 collate4-1.1.4
 collate4 collate4-1.1.5
@@ -474,8 +480,8 @@ attach attach-8.3
 attach attach-8.4
 capi2 capi2-6.5
 check check-4.9
-collate4 collate4-2.1.2
-collate4 collate4-3.4
+collate4 collate4-2.1.2  # sqlite_search_count plan metric; rows match
+collate4 collate4-3.4    # full-file cascade after unsupported custom-collation index DDL
 date date-14.1
 date date-14.2.0
 date date-14.2.1
