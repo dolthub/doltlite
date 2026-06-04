@@ -5834,7 +5834,7 @@ static int prollyBtreeCursor(
     **      shape to materialize tables they're importing from another
     **      branch, opening read cursors before doltlite's catalog has
     **      formally registered them. Synthesize for these. */
-    if( iTable < p->cat.iNextTable ){
+    if( iTable!=1 && iTable < p->cat.iNextTable ){
       sqlite3_log(SQLITE_CORRUPT,
         "doltlite: cursor open on iTable=%u not in catalog "
         "(iNextTable=%u, %s requested); rejecting as CORRUPT. "
@@ -5844,6 +5844,8 @@ static int prollyBtreeCursor(
         pKeyInfo ? "BLOBKEY" : "INTKEY");
       return SQLITE_CORRUPT_PGNO(iTable);
     }
+    /* The schema root (page 1) is never a dropped user table; an absent
+    ** entry just means an empty schema, so synthesize rather than reject. */
     {
       u8 flags = pKeyInfo ? BTREE_BLOBKEY : BTREE_INTKEY;
       pTE = addTable(p, iTable, flags);
