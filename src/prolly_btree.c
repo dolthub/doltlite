@@ -2916,7 +2916,7 @@ static int saveCursorPosition(BtCursor *pCur){
     return SQLITE_OK;
   }
   if( pCur->isPinned ){
-    return SQLITE_OK;
+    return SQLITE_CONSTRAINT_PINNED;
   }
 
   CLEAR_CACHED_PAYLOAD(pCur);
