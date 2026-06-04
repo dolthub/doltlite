@@ -94,7 +94,7 @@
 #endif
 
 static int csOpenFile(sqlite3_vfs *pVfs, const char *zPath,
-                      sqlite3_file **ppFile, int flags);
+                      sqlite3_file **ppFile, int flags, int *pOutFlags);
 static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize);
 static int csRestoreCommittedRefsState(ChunkStore *cs);
 static int csReadManifest(ChunkStore *cs);
@@ -126,11 +126,13 @@ static int csOpenFile(
   sqlite3_vfs *pVfs,
   const char *zPath,
   sqlite3_file **ppFile,
-  int flags
+  int flags,
+  int *pOutFlags
 ){
   int rc;
   int outFlags = 0;
   rc = sqlite3OsOpenMalloc(pVfs, zPath, ppFile, flags, &outFlags);
+  if( pOutFlags ) *pOutFlags = outFlags;
   return rc;
 }
 
@@ -186,7 +188,7 @@ static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
   csCloseFile(cs->file.pFile);
   cs->file.pFile = 0;
   rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile,
-                  SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB);
+                  SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_MAIN_DB, 0);
   if( rc!=SQLITE_OK ) return rc;
 
   rc = sqlite3OsTruncate(cs->file.pFile, origFileSize);
@@ -334,15 +336,22 @@ int chunkStoreOpen(
 
   if( exists ){
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
-    rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags);
+    int outFlags = 0;
+    rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, &outFlags);
     if( rc != SQLITE_OK ){
       openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
-      rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags);
+      rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
       if( rc != SQLITE_OK ){
         sqlite3_free(cs->file.zFilename);
         cs->file.zFilename = 0;
         return rc;
       }
+      cs->readOnly = 1;
+    }else if( outFlags & SQLITE_OPEN_READONLY ){
+      /* The VFS opened a read-only file: a read-write open silently downgrades
+      ** to read-only and returns OK with READONLY in the out-flags. Mark the
+      ** store read-only so writes fail with SQLITE_READONLY rather than later
+      ** hitting a failed write-lock and reporting SQLITE_BUSY. */
       cs->readOnly = 1;
     }
 
@@ -1060,7 +1069,7 @@ static int csCommitToFile(ChunkStore *cs){
   if( cs->file.pFile == 0 ){
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
                   | SQLITE_OPEN_MAIN_DB;
-    rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile, openFlags);
+    rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
     if( rc != SQLITE_OK ) return SQLITE_CANTOPEN;
   }
 
