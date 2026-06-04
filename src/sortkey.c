@@ -634,6 +634,29 @@ int sortKeyFromMemPrefixCollBuffer(
   return SQLITE_OK;
 }
 
+int sortKeyRecordNeedsPayload(const u8 *pRec, int nRec, int nKeyField){
+  u32 hdrSize;
+  u32 hdrOff;
+  int nField = 0;
+
+  if( nRec <= 0 ) return 0;
+
+  hdrOff = skGetVarint32(pRec, &hdrSize);
+  if( hdrSize > (u32)nRec ) return 0;
+
+  while( hdrOff < hdrSize ){
+    u32 serialType;
+
+    if( nKeyField > 0 && nField >= nKeyField ) break;
+
+    hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
+    if( serialType==7 ) return 1;
+    nField++;
+  }
+
+  return 0;
+}
+
 int sortKeyFromRecordPrefixColl(
   const u8 *pRec, int nRec, int nKeyField, const KeyInfo *pKeyInfo,
   u8 **ppOut, int *pnOut
