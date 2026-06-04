@@ -7635,7 +7635,13 @@ static int flushIfNeeded(BtCursor *pCur){
     prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
                      &pTE->root, pTE->flags);
   }
-  pCur->eState = CURSOR_INVALID;
+  /* A cursor saved by saveAllCursors (e.g. another statement scanning this
+  ** table while we flush a DELETE/UPDATE) keeps its REQUIRESEEK state: it has a
+  ** saved key and must reseek against the new root on next access. Clobbering it
+  ** to INVALID here dropped the saved position, ending the other scan early. */
+  if( pCur->eState!=CURSOR_REQUIRESEEK ){
+    pCur->eState = CURSOR_INVALID;
+  }
   return SQLITE_OK;
 }
 
