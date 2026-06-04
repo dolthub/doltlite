@@ -3040,7 +3040,8 @@ static int restoreCursorPosition(BtCursor *pCur, int *pDifferentRow){
       pCur->eState = CURSOR_VALID;
       if( pDifferentRow ) *pDifferentRow = 0;
     } else if( pCur->pCur.eState==PROLLY_CURSOR_VALID ){
-      pCur->eState = CURSOR_VALID;
+      pCur->skipNext = res;
+      pCur->eState = CURSOR_SKIPNEXT;
       if( pDifferentRow ) *pDifferentRow = 1;
     } else {
       pCur->eState = CURSOR_INVALID;
