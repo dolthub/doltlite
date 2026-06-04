@@ -26,6 +26,8 @@ int sortKeyFromMemPrefixCollBuffer(
   u8 **ppBuf, int *pnAlloc, int *pnOut
 );
 
+int sortKeyRecordNeedsPayload(const u8 *pRec, int nRec, int nKeyField);
+
 int sortKeyFromInt64(i64 v, u8 *pOut, int *pnOut);
 
 static inline int sortKeyInt64FitsExact(i64 v){

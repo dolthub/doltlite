@@ -7678,6 +7678,15 @@ static int prollyBtCursorInsert(
       splitKey = 1;
       storePayload = 1;
     }
+    /* Numeric sort keys normalize INTEGER and integral REAL values for
+    ** comparison. Keep the original record when reconstruction must preserve
+    ** a REAL serial type for result rows or covering-index reads. */
+    if( !storePayload
+     && sortKeyRecordNeedsPayload(
+          (const u8*)pPayload->pKey, (int)pPayload->nKey,
+          isIndex ? 0 : (splitKey ? nKeyField : 0)) ){
+      storePayload = 1;
+    }
     rc = sortKeyFromIntRecordLocal(
         pCur, (const u8*)pPayload->pKey, (int)pPayload->nKey,
         isIndex ? 0 : (splitKey ? nKeyField : 0),
