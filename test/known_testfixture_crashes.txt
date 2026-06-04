@@ -5,14 +5,13 @@
 #
 # Format: <test_file>  # reason
 #
-# Currently empty — trigger2 used to be here but was fixed by
-# commit 5cd33a12a (removed obsolete DOLTLITE_PROLLY UPDATE codegen
-# branches; see issue #361).
+# trigger2 used to be here but was fixed by commit 5cd33a12a
+# (removed obsolete DOLTLITE_PROLLY UPDATE codegen branches; see issue #361).
 
-# Surfaced (not caused) by PR #1116: core-tests was built from the stock
-# amalgamation before, so real doltlite was never exercised here. All four
-# reproduce in the OBJECT build too (USE_AMALGAMATION=0), i.e. they are
-# pre-existing doltlite issues, investigated and tracked in issue #1119:
+# Surfaced (not caused) by PR #1116: core-tests used to be built from the stock
+# amalgamation, so real doltlite was not exercised here. These reproduce in the
+# OBJECT build too (USE_AMALGAMATION=0), i.e. they are pre-existing doltlite
+# issues, investigated and tracked in issue #1119:
 #
 #   capi3 / fkey2 abort on raw stock on-disk-format tests (set_file_format/hexio),
 #   which doltlite's prolly format has no equivalent for — a format divergence
@@ -25,5 +24,5 @@ capi3    # aborts on set_file_format (raw stock page format; doltlite uses proll
 fkey2    # aborts under fkey2-2.x (raw-format / pre-existing doltlite divergence)
 # Additional crash/timeout files from the full capture (issue #1119):
 crash8        # crash-recovery simulation; incompatible with prolly format / times out
-fuzz3         # randomized fuzz; slow/times out under the harness
+fuzz3         # raw byte-corruption fuzz mutates test.db offsets; prolly storage aborts after restore/checksum
 shared        # shared-cache semantics unsupported under doltlite; setup aborts
