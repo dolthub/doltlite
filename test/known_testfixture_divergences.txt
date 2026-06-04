@@ -739,8 +739,6 @@ delete delete-8.3
 delete delete-8.5
 delete delete-9.2
 delete delete-9.3
-delete delete-9.4
-delete delete-9.5
 enc enc-12.1  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.3  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.8  # doltlite-format ignores non-UTF-8 database encodings
@@ -797,7 +795,6 @@ minmax3 minmax3-4.4
 minmax3 minmax3-4.5
 minmax3 minmax3-4.6
 quote quote-2.5
-rowid rowid-13.1
 rowid rowid-4.5
 savepoint savepoint-10.1.1
 savepoint savepoint-10.1.2
