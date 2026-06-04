@@ -491,6 +491,27 @@ static int keyInfoHasLossyCollation(const KeyInfo *pKeyInfo){
   return 0;
 }
 
+static int keyInfoHasUnsupportedCollation(
+  const KeyInfo *pKeyInfo,
+  int nField
+){
+  int i;
+  if( !pKeyInfo ) return 0;
+  if( nField<=0 || nField>pKeyInfo->nAllField ){
+    nField = pKeyInfo->nAllField;
+  }
+  for(i=0; i<nField; i++){
+    const CollSeq *pColl = pKeyInfo->aColl[i];
+    if( !pColl || !pColl->zName ) continue;
+    if( sqlite3StrICmp(pColl->zName, "BINARY")!=0
+     && sqlite3StrICmp(pColl->zName, "NOCASE")!=0
+     && sqlite3StrICmp(pColl->zName, "RTRIM")!=0 ){
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static SQLITE_INLINE void cursorCurrentTreeValue(
   BtCursor *pCur,
   const u8 **ppData,
@@ -6700,6 +6721,106 @@ static int findMatchingMutMapEntry(
   return rc;
 }
 
+static int scanMutMapForCustomCollation(
+  BtCursor *pCur,
+  ProllyMutMap *pMap,
+  UnpackedRecord *pIdxKey,
+  ProllyMutMapEntry **ppMatch,
+  int *pCmp
+){
+  int i;
+  int rc = SQLITE_OK;
+  u8 *pRecBuf = 0;
+  int nRecBufAlloc = 0;
+
+  *ppMatch = 0;
+  *pCmp = 0;
+  if( !pMap || prollyMutMapIsEmpty(pMap) || pMap->isIntKey ){
+    return SQLITE_OK;
+  }
+
+  for(i=0; i<pMap->nEntries; i++){
+    ProllyMutMapEntry *pEntry = &pMap->aEntries[i];
+    const u8 *pRec = pEntry->pVal;
+    int nRec = pEntry->nVal;
+    int cmp;
+
+    if( pEntry->op!=PROLLY_EDIT_INSERT ){
+      continue;
+    }
+    if( nRec==0 ){
+      rc = recordFromSortKeyBufferColl(pEntry->pKey, pEntry->nKey,
+                                    pCur->pKeyInfo,
+                                    &pRecBuf, &nRecBufAlloc, &nRec);
+      if( rc!=SQLITE_OK ) break;
+      pRec = pRecBuf;
+    }
+    pIdxKey->eqSeen = 0;
+    cmp = sqlite3VdbeRecordCompare(nRec, pRec, pIdxKey);
+    if( cmp==0 || pIdxKey->eqSeen ){
+      *ppMatch = pEntry;
+      *pCmp = cmp;
+      break;
+    }
+  }
+
+  sqlite3_free(pRecBuf);
+  return rc;
+}
+
+static int scanTreeForCustomCollation(
+  BtCursor *pCur,
+  UnpackedRecord *pIdxKey,
+  int *pFound,
+  int *pCmp
+){
+  int rc;
+  int res = 0;
+  u8 *pRecBuf = pCur->pMovetoRec;
+  int nRecBufAlloc = pCur->nMovetoRecAlloc;
+
+  *pFound = 0;
+  *pCmp = 0;
+  rc = prollyCursorFirst(&pCur->pCur, &res);
+  while( rc==SQLITE_OK && res==0 && prollyCursorIsValid(&pCur->pCur) ){
+    const u8 *pKey = 0;
+    int nKey = 0;
+    const u8 *pRec = 0;
+    int nRec = 0;
+    int cmp;
+    int isDeleted = 0;
+
+    prollyCursorKey(&pCur->pCur, &pKey, &nKey);
+    if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+      ProllyMutMapEntry *pEntry = 0;
+      rc = prollyMutMapFindRc(pCur->pMutMap, pKey, nKey, 0, &pEntry);
+      if( rc!=SQLITE_OK ) break;
+      if( pEntry && pEntry->op==PROLLY_EDIT_DELETE ) isDeleted = 1;
+    }
+    if( !isDeleted ){
+      prollyCursorValue(&pCur->pCur, &pRec, &nRec);
+      if( nRec==0 ){
+        rc = recordFromSortKeyBufferColl(pKey, nKey, pCur->pKeyInfo,
+                                         &pRecBuf, &nRecBufAlloc, &nRec);
+        if( rc!=SQLITE_OK ) break;
+        pRec = pRecBuf;
+      }
+      pIdxKey->eqSeen = 0;
+      cmp = sqlite3VdbeRecordCompare(nRec, pRec, pIdxKey);
+      if( cmp==0 || pIdxKey->eqSeen ){
+        *pFound = 1;
+        *pCmp = cmp;
+        break;
+      }
+    }
+    rc = prollyCursorNext(&pCur->pCur);
+  }
+
+  pCur->pMovetoRec = pRecBuf;
+  pCur->nMovetoRecAlloc = nRecBufAlloc;
+  return rc;
+}
+
 static int prollyBtCursorIndexMoveto(
   BtCursor *pCur,
   UnpackedRecord *pIdxKey,
@@ -6764,6 +6885,60 @@ static int prollyBtCursorIndexMoveto(
      && nSeekKeyField == pCur->pKeyInfo->nKeyField ){
       if( pCur->isTableRoot ){
         exactMutMapKey = 1;
+      }
+    }
+
+    if( pCur->pKeyInfo
+     && (exactMutMapKey || pIdxKey->nField >= pCur->pKeyInfo->nAllField)
+     && keyInfoHasUnsupportedCollation(
+          pCur->pKeyInfo,
+          nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField) ){
+      struct TableEntry *pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
+      ProllyMutMap *pPending = pTE ? (ProllyMutMap*)pTE->pPending : 0;
+      ProllyMutMapEntry *pEntry = 0;
+      int cmp = 0;
+      int treeFound = 0;
+
+      rc = scanMutMapForCustomCollation(
+          pCur, (ProllyMutMap*)pCur->pMutMap, pIdxKey, &pEntry, &cmp);
+      if( rc!=SQLITE_OK ) return rc;
+      if( pEntry ){
+        setCursorToMutMapEntryPhys(
+            pCur, (int)(pEntry - pCur->pMutMap->aEntries));
+        *pRes = cmp;
+        pIdxKey->eqSeen = 1;
+        return SQLITE_OK;
+      }
+
+      if( pPending && pPending!=pCur->pMutMap ){
+        rc = scanMutMapForCustomCollation(
+            pCur, pPending, pIdxKey, &pEntry, &cmp);
+        if( rc!=SQLITE_OK ) return rc;
+        if( pEntry ){
+          const u8 *pVal = pEntry->pVal;
+          int nVal = pEntry->nVal;
+          if( nVal==0 ){
+            rc = cacheCursorPayloadReconstructed(
+                pCur, pEntry->pKey, pEntry->nKey);
+          }else{
+            rc = cacheCursorPayloadCopy(pCur, pVal, nVal);
+          }
+          if( rc!=SQLITE_OK ) return rc;
+          pCur->eState = CURSOR_VALID;
+          *pRes = cmp;
+          pIdxKey->eqSeen = 1;
+          return SQLITE_OK;
+        }
+      }
+
+      rc = scanTreeForCustomCollation(pCur, pIdxKey, &treeFound, &cmp);
+      if( rc!=SQLITE_OK ) return rc;
+      if( treeFound ){
+        pCur->eState = CURSOR_VALID;
+        cacheCurrentTreeStoredPayloadNonIntKey(pCur);
+        *pRes = cmp;
+        pIdxKey->eqSeen = 1;
+        return SQLITE_OK;
       }
     }
 
