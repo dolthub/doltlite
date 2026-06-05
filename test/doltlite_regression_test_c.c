@@ -4544,6 +4544,46 @@ static void run_savepoint_same_name_shadowing_index_reopen(void){
   removeDbFiles(dbpath);
 }
 
+static void run_mutmap_rollback_stale_order(void){
+  sqlite3 *db = 0;
+  char dbpath[256];
+  char *err = 0;
+  int rc;
+
+  printf("=== Mutmap Rollback Stale Order Test ===\n\n");
+  make_dbpath(dbpath, sizeof(dbpath), "test_mutmap_rollback_stale_order");
+  removeDbFiles(dbpath);
+
+  check("open_db_for_mutmap_stale_order", open_db(dbpath, &db)==SQLITE_OK);
+  check("fk_on_for_mutmap_stale_order", execSql(db, "PRAGMA foreign_keys=ON;")==SQLITE_OK);
+  check("setup_for_mutmap_stale_order", execSql(db,
+    "CREATE TABLE node(nodeid PRIMARY KEY, "
+    "  parent REFERENCES node DEFERRABLE INITIALLY DEFERRED);"
+    "CREATE TABLE leaf(cellid PRIMARY KEY, "
+    "  parent REFERENCES node DEFERRABLE INITIALLY DEFERRED);"
+    "INSERT INTO node VALUES(1,NULL),(2,NULL);")==SQLITE_OK);
+  check("prior_txn_delete_for_mutmap_stale_order", execSql(db,
+    "BEGIN; DELETE FROM node WHERE nodeid=1; COMMIT;")==SQLITE_OK);
+  check("begin_trigger_txn_for_mutmap_stale_order", execSql(db, "BEGIN;")==SQLITE_OK);
+  check("delete_all_for_mutmap_stale_order", execSql(db,
+    "DELETE FROM leaf; DELETE FROM node;")==SQLITE_OK);
+  check("insert_leaf_for_mutmap_stale_order", execSql(db,
+    "INSERT INTO leaf VALUES(91,1),(92,2),(93,1);")==SQLITE_OK);
+  /* The 3rd row dups nodeid=1 -> UNIQUE violation aborts the statement. Its
+  ** partial inserts must roll back without leaving node's mutmap order index
+  ** pointing at a freed entry slot (which read back as "malformed"). */
+  rc = sqlite3_exec(db, "INSERT INTO node SELECT parent,3 FROM leaf;", 0, 0, &err);
+  sqlite3_free(err); err = 0;
+  check("failed_insert_aborts_for_mutmap_stale_order", rc!=SQLITE_OK);
+  check("node_readable_and_empty_after_failed_insert",
+    strcmp(queryScalarText(db, "SELECT count(*) FROM node"), "0")==0);
+  check("integrity_ok_after_failed_insert",
+    strcmp(queryScalarText(db, "PRAGMA integrity_check"), "ok")==0);
+  check("rollback_trigger_txn_for_mutmap_stale_order", execSql(db, "ROLLBACK;")==SQLITE_OK);
+
+  sqlite3_close(db);
+}
+
 static void run_savepoint_schema_rollback_reopen(void){
   sqlite3 *db = 0;
   char dbpath[256];
@@ -7612,6 +7652,7 @@ static const RegressionCase aCases[] = {
   { "savepoint_flush_snapshot_multi_table_rollback_reopen", "Savepoint Flush Snapshot Multi Table Rollback Reopen Test", run_savepoint_flush_snapshot_multi_table_rollback_reopen },
   { "savepoint_same_name_shadowing_index_reopen", "Savepoint Same Name Shadowing Index Reopen Test", run_savepoint_same_name_shadowing_index_reopen },
   { "savepoint_schema_rollback_reopen", "Savepoint Schema Rollback Reopen Test", run_savepoint_schema_rollback_reopen },
+  { "mutmap_rollback_stale_order", "Mutmap Rollback Stale Order Test", run_mutmap_rollback_stale_order },
   { "savepoint_trigger_rollback_reopen", "Savepoint Trigger Rollback Reopen Test", run_savepoint_trigger_rollback_reopen },
   { "begin_release_then_outer_rollback_reopen", "Begin Release Then Outer Rollback Reopen Test", run_begin_release_then_outer_rollback_reopen },
   { "savepoint_failed_commit_schema_rollback_reopen", "Savepoint Failed Commit Schema Rollback Reopen Test", run_savepoint_failed_commit_schema_rollback_reopen },

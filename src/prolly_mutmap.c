@@ -138,7 +138,12 @@ static int mutmapSortOrder(ProllyMutMap *mm){
   OrderPair *aux = 0;
   int needBytes;
   int i;
-  if( n <= 1 ) return SQLITE_OK;
+  if( n <= 1 ){
+    /* A single live entry is always packed at physical slot 0; reset aOrder so
+    ** a stale index left by a prior compaction can't point at a removed slot. */
+    if( n == 1 ) mm->aOrder[0] = 0;
+    return SQLITE_OK;
+  }
   needBytes = (int)(mm->nAlloc * sizeof(OrderPair));
   if( n >= MUTMAP_RADIX_SORT_MIN ){
     if( mm->nAlloc > 0x7fffffff / (int)(2 * sizeof(OrderPair)) ){
