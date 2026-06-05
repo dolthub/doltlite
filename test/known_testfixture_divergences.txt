@@ -190,23 +190,10 @@ e_fkey e_fkey-45.2
 e_fkey e_fkey-45.3
 e_fkey e_fkey-45.4
 e_fkey e_fkey-45.5
-# e_fkey-51 orders parent rows by rowid after creating parent(x PRIMARY KEY).
-# DoltLite stores that non-INTEGER-PK table as WITHOUT ROWID, so rowid is not
-# addressable; the FK SET DEFAULT actions are not the divergent part.
 e_fkey e_fkey-51.2
 e_fkey e_fkey-51.3
-# e_fkey-52.6 updates part of a composite PRIMARY KEY(a,b) to NULL. Stock rowid
-# tables allow NULLs in non-INTEGER primary keys; DoltLite's PK-keyed
-# WITHOUT ROWID storage makes both PK columns NOT NULL.
 e_fkey e_fkey-52.6
-# Trigger body references old.rowid on p(a,b,PRIMARY KEY(a,b)); no visible rowid
-# exists after DoltLite's WITHOUT ROWID conversion.
 e_fkey e_fkey-57.7
-# Not an independent DROP TABLE/FK bug. e_fkey-57.7 fails first because its
-# trigger body references old.rowid on a DoltLite auto-converted WITHOUT ROWID
-# table; the skipped ROLLBACK leaves a transaction open, so e_fkey-58.3's BEGIN
-# reports "cannot start a transaction within a transaction" before DROP TABLE
-# runs. See closed issue #1174 for the isolation notes.
 e_fkey e_fkey-58.3
 
 # ── pragma ──
@@ -309,7 +296,7 @@ shared2 shared2-1.3
 # VACUUM there is a runtime-detected no-op. Either way, page-layout
 # side effects that stock SQLite VACUUM produces don't apply to
 # prolly storage. 6 of 47 tests still verify those side effects.
-vacuum vacuum-5.1    # INT PRIMARY KEY NULL rejected before VACUUM; same PK/rowid divergence as intpkey
+vacuum vacuum-5.1    # post-VACUUM NOT NULL constraint propagation (no-op never re-runs constraints)
 vacuum vacuum-7.6    # post-VACUUM page count assertion
 
 # ── vacuum2 ──
@@ -491,8 +478,14 @@ attach attach-8.1
 attach attach-8.2
 attach attach-8.3
 attach attach-8.4
-capi2 capi2-6.5
-check check-4.9  # CHECK error text whitespace normalization only; same expression
+capi2 capi2-6.5  # 2nd-connection write expects "database is locked"; doltlite has no pager write-lock
+# CHECK-constraint error text echoes the schema expression. doltlite regenerates
+# CREATE TABLE/INDEX SQL from its structural catalog on schema reload, collapsing
+# the original whitespace, so the multi-line CHECK error diverges from stock's
+# verbatim source. check-4.6 (same error string) passes because it runs before the
+# reload that check-4.8's integrity_check/ignore_check_constraints forces. Rows and
+# enforcement are correct; this is schema-text fidelity only. Tracked: #1200.
+check check-4.9
 collate4 collate4-2.1.2  # sqlite_search_count plan metric; rows match
 collate4 collate4-3.4    # full-file cascade after unsupported custom-collation index DDL
 # date-14 writes raw IEEE754 bytes directly into SQLite page offsets with
@@ -759,16 +752,15 @@ date date-14.2.99
 enc enc-12.1  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.3  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.8  # doltlite-format ignores non-UTF-8 database encodings
-insert insert-5.4  # rootpage number for sqlite_master/test1; raw page-layout metadata
-intpkey intpkey-3.2
-intpkey intpkey-3.6
-# minmax/minmax2 return the same min()/max() row as stock. The only divergence
-# is sqlite_search_count (expected 1, got 2) for a planner metric assertion.
+insert insert-5.4  # asserts sqlite_master.rootpage page number; meaningless under prolly storage
+intpkey intpkey-3.2  # sqlite_search_count metric; row (5|hello|world) matches stock
+intpkey intpkey-3.6  # sqlite_search_count metric; row (5|hello|world) matches stock
+# minmax/minmax2/minmax3: all assert sqlite_search_count (the internal btree
+# seek counter) or, in minmax3, also poke the file format via hexio_write. The
+# min()/max() query results match stock exactly; only the seek-count metric (and
+# raw page bytes) differ — doltlite's prolly engine drives different VDBE probes.
 minmax minmax-1.6
 minmax2 minmax2-1.6
-# minmax3 starts by hexio-writing the SQLite file-format version byte at offset
-# 44, then reopens test.db. DoltLite has no SQLite page header/file-format byte
-# at that offset, so the first reopen reports malformed and the rest cascade.
 minmax3 minmax3-1.0
 minmax3 minmax3-1.1.1
 minmax3 minmax3-1.1.2
@@ -815,8 +807,8 @@ minmax3 minmax3-4.3
 minmax3 minmax3-4.4
 minmax3 minmax3-4.5
 minmax3 minmax3-4.6
-quote quote-2.5
-rowid rowid-4.5
+quote quote-2.5  # DQS: doltlite keeps SQLITE_DQS=3 default (main.mk); oracle built DQS=0, so double-quoted-string DDL is accepted vs rejected
+rowid rowid-4.5  # sqlite_search_count metric; joined row result (4) matches stock
 # savepoint: the core SAVEPOINT/ROLLBACK semantics now pass. Remaining
 # failures are stock pager/file-format behavior that DoltLite intentionally
 # does not emulate, plus downstream labels reached after those divergences.
@@ -894,7 +886,12 @@ savepoint savepoint-15.2.3
 # Isolated savepoint-17.1 passes. In the full file it observes state left by
 # the earlier lock-divergent multi-client blocks.
 savepoint savepoint-17.1
-select2 select2-3.3
+select2 select2-3.3  # sqlite_search_count metric; SELECT f1 WHERE f2==2000 returns 1000 on both
+# trans-9.*: the ".5" labels assert sqlite_fullsync_count/sqlite_sync_count > 0 —
+# SQLite-pager fsync instrumentation that doltlite's prolly backend never drives
+# (counters stay 0); ".6" asserts journal_mode=delete vs doltlite's wal. The actual
+# rollback-integrity tests (.1/.2: signature unchanged after BEGIN;DELETE;INSERT;ROLLBACK)
+# were reproduced and pass byte-identically — committed state is correctly restored.
 trans trans-9.10.5-2112
 trans trans-9.12.5-2544
 trans trans-9.14.5-3089
@@ -914,11 +911,20 @@ trans trans-9.38.5-30883
 trans trans-9.4.5-1224
 trans trans-9.6.5-1480
 trans trans-9.8.5-1766
+# trigger1-6.*: assert the unordered scan order of sqlite_master rows. After
+# DROP TABLE t1 leaves a rowid gap, doltlite compacts schema rowids (t2,v1) while
+# stock keeps original rowids (v1,t2), so the rows come back in a different order.
+# Row contents and all trigger side-effects (RAISE(ABORT) blocks the delete, data
+# intact) are identical to stock — rowid-order artifact only.
 trigger1 trigger1-6.1
 trigger1 trigger1-6.2
 trigger1 trigger1-6.5
 trigger1 trigger1-6.6
-where where-1.1.1
+where where-1.1.1  # sqlite_search_count metric; SELECT x,y,w WHERE w=10 returns 3|121|10 on both
+# where-25.* inject btree corruption via PRAGMA writable_schema (rewrite a rootpage
+# number) and expect "database disk image is malformed"/"corrupt database". doltlite's
+# CTLD/prolly format has no such btree page graph to corrupt; on an uncorrupted db the
+# 25.x row/upsert semantics match stock exactly.
 where where-25.1
 where where-25.2
 where where-25.5
@@ -1072,6 +1078,10 @@ e_expr e_expr-33.1.3  # doltlite-format ignores non-UTF-8 database encodings
 e_expr e_expr-33.1.4  # doltlite-format ignores non-UTF-8 database encodings
 enc4 enc4-2.1  # doltlite-format ignores non-UTF-8 database encodings
 enc4 enc4-3.1  # doltlite-format ignores non-UTF-8 database encodings
+# pragma2-*: assert pager-internal metrics — freelist_count, cache_spill,
+# cache_size, lock_status. Prolly storage has no SQLite freelist pages or pager
+# locks, so these read 0/empty/different. PRAGMA cache_size=N still echoes N; the
+# underlying DROP/UPDATE row outcomes match stock.
 pragma2 pragma2-1.3
 pragma2 pragma2-1.4
 pragma2 pragma2-2.5
@@ -1089,15 +1099,29 @@ pragma2 pragma2-4.8
 pragma2 pragma2-5.1
 pragma2 pragma2-5.3
 shared2 shared2-3.2
+# shared3-*: shared-cache cache_size cross-connection visibility (2.4), pager
+# exclusive-lock "database is locked" on cache spill (2.8), and auto_vacuum=2 +
+# incremental_vacuum which doltlite rejects (3.1/3.3). Row outcomes (DELETE counts,
+# master visibility) match stock; divergences are pager-lock / shared-cache /
+# auto_vacuum artifacts.
 shared3 shared3-2.4
 shared3 shared3-2.8
 shared3 shared3-3.1
 shared3 shared3-3.2
 shared3 shared3-3.3
 shared3 shared3-3.4
+# tempdb-2.2/2.3 assert sqlite_open_file_count (number of OS journal/subjournal
+# handles). doltlite opens no SQLite journal files. The statement-journal rollback
+# behavior the block exercises (UNIQUE violation rolls back, tables intact) matches stock.
 tempdb tempdb-2.2
 tempdb tempdb-2.3
+# tkt-2d1a5c67d-3.6: WAL-checkpoint/recovery test driven by ~99 open incrblob
+# handles + raw test.db-wal file copy; computed value ('xyz') matches stock.
 tkt-2d1a5c67d tkt-2d1a5c67d-3.6
+# tkt-f3e5abed55-*: multi-database (ATTACH) commit / master-journal locking ticket.
+# Every assertion needs two on-disk connections + a testvfs snapshot: 1.4/2.3 expect
+# "database is locked" (doltlite has no pager write-lock), 1.5/2.4/2.5 ride on that
+# locked state. The single-connection row data (1|2 3|4 1|2 3|4) matches stock.
 tkt-f3e5abed55 tkt-f3e5abed55-1.4
 tkt-f3e5abed55 tkt-f3e5abed55-1.5
 tkt-f3e5abed55 tkt-f3e5abed55-2.3
