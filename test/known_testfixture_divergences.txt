@@ -190,10 +190,23 @@ e_fkey e_fkey-45.2
 e_fkey e_fkey-45.3
 e_fkey e_fkey-45.4
 e_fkey e_fkey-45.5
+# e_fkey-51 orders parent rows by rowid after creating parent(x PRIMARY KEY).
+# DoltLite stores that non-INTEGER-PK table as WITHOUT ROWID, so rowid is not
+# addressable; the FK SET DEFAULT actions are not the divergent part.
 e_fkey e_fkey-51.2
 e_fkey e_fkey-51.3
+# e_fkey-52.6 updates part of a composite PRIMARY KEY(a,b) to NULL. Stock rowid
+# tables allow NULLs in non-INTEGER primary keys; DoltLite's PK-keyed
+# WITHOUT ROWID storage makes both PK columns NOT NULL.
 e_fkey e_fkey-52.6
+# Trigger body references old.rowid on p(a,b,PRIMARY KEY(a,b)); no visible rowid
+# exists after DoltLite's WITHOUT ROWID conversion.
 e_fkey e_fkey-57.7
+# Not an independent DROP TABLE/FK bug. e_fkey-57.7 fails first because its
+# trigger body references old.rowid on a DoltLite auto-converted WITHOUT ROWID
+# table; the skipped ROLLBACK leaves a transaction open, so e_fkey-58.3's BEGIN
+# reports "cannot start a transaction within a transaction" before DROP TABLE
+# runs. See closed issue #1174 for the isolation notes.
 e_fkey e_fkey-58.3
 
 # ── pragma ──
@@ -296,7 +309,7 @@ shared2 shared2-1.3
 # VACUUM there is a runtime-detected no-op. Either way, page-layout
 # side effects that stock SQLite VACUUM produces don't apply to
 # prolly storage. 6 of 47 tests still verify those side effects.
-vacuum vacuum-5.1    # post-VACUUM NOT NULL constraint propagation (no-op never re-runs constraints)
+vacuum vacuum-5.1    # INT PRIMARY KEY NULL rejected before VACUUM; same PK/rowid divergence as intpkey
 vacuum vacuum-7.6    # post-VACUUM page count assertion
 
 # ── vacuum2 ──
@@ -479,7 +492,7 @@ attach attach-8.2
 attach attach-8.3
 attach attach-8.4
 capi2 capi2-6.5
-check check-4.9
+check check-4.9  # CHECK error text whitespace normalization only; same expression
 collate4 collate4-2.1.2  # sqlite_search_count plan metric; rows match
 collate4 collate4-3.4    # full-file cascade after unsupported custom-collation index DDL
 # date-14 writes raw IEEE754 bytes directly into SQLite page offsets with
@@ -746,11 +759,16 @@ date date-14.2.99
 enc enc-12.1  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.3  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.8  # doltlite-format ignores non-UTF-8 database encodings
-insert insert-5.4
+insert insert-5.4  # rootpage number for sqlite_master/test1; raw page-layout metadata
 intpkey intpkey-3.2
 intpkey intpkey-3.6
+# minmax/minmax2 return the same min()/max() row as stock. The only divergence
+# is sqlite_search_count (expected 1, got 2) for a planner metric assertion.
 minmax minmax-1.6
 minmax2 minmax2-1.6
+# minmax3 starts by hexio-writing the SQLite file-format version byte at offset
+# 44, then reopens test.db. DoltLite has no SQLite page header/file-format byte
+# at that offset, so the first reopen reports malformed and the rest cascade.
 minmax3 minmax3-1.0
 minmax3 minmax3-1.1.1
 minmax3 minmax3-1.1.2
