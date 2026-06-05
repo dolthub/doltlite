@@ -80,6 +80,29 @@ SELECT id, length(b) FROM t;
 "
 done
 
+# ─── BLOB values as secondary index keys ──────────────────────────
+echo "--- BLOB secondary index keys ---"
+
+oracle "large_blob_index_key" "
+CREATE TABLE t(id INT PRIMARY KEY, b BLOB);
+CREATE INDEX i1 ON t(b);
+INSERT INTO t VALUES(1, zeroblob(33000));
+INSERT INTO t VALUES(2, zeroblob(34000));
+INSERT INTO t VALUES(3, zeroblob(35000));
+SELECT id, length(b) FROM t INDEXED BY i1 ORDER BY b, id;
+"
+
+oracle "replace_select_large_blob_index_key" "
+CREATE TABLE t1(a INTEGER PRIMARY KEY, b BLOB);
+CREATE INDEX i1 ON t1(b);
+CREATE TABLE t2(a, b);
+INSERT INTO t2 VALUES(4, randomblob(31000));
+INSERT INTO t2 VALUES(4, randomblob(32000));
+INSERT INTO t2 VALUES(4, randomblob(33000));
+REPLACE INTO t1 SELECT a, b FROM t2;
+SELECT a, length(b) FROM t1;
+"
+
 # ─── TEXT round-trip at varying sizes ──────────────────────────────
 echo "--- TEXT length round-trip ---"
 

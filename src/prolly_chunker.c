@@ -176,7 +176,10 @@ static int addToLevel(ProllyChunker *ch, int level,
   thisSize = PROLLY_NODE_ENTRY_BYTES(level, nKey, nVal);
   pLevel->nBytes += thisSize;
 
-  if( pLevel->nBytes >= PROLLY_CHUNK_MIN ){
+  /* A single entry may be larger than the target chunk size. It cannot be
+  ** split, and flushing it immediately would propagate the same oversized
+  ** separator key up every level until SQLITE_FULL. */
+  if( pLevel->nItems>1 && pLevel->nBytes >= PROLLY_CHUNK_MIN ){
     int atBoundary;
     if( pLevel->nBytes >= PROLLY_CHUNK_MAX ){
       atBoundary = 1;

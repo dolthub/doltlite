@@ -746,7 +746,6 @@ date date-14.2.99
 enc enc-12.1  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.3  # doltlite-format ignores non-UTF-8 database encodings
 enc enc-12.8  # doltlite-format ignores non-UTF-8 database encodings
-insert insert-15.1
 insert insert-5.4
 intpkey intpkey-3.2
 intpkey intpkey-3.6
