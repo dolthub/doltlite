@@ -2750,6 +2750,7 @@ LDFLAGS.libdoltlite.soname = $(if $(filter .so,$(T.dll)),-Wl$(libdoltlite.comma)
 libdoltlite$(T.dll):	$(LIBOBJS0)
 	$(T.link.shared) -o $@ $(LIBOBJS0) $(LDFLAGS.libsqlite3) \
 		$(LDFLAGS.libdoltlite.os-specific) $(LDFLAGS.libdoltlite.soname)
+	$(if $(filter .so,$(T.dll)),ln -sf libdoltlite$(T.dll) libdoltlite$(T.dll).0)
 
 doltlite-lib: libdoltlite$(T.lib) libdoltlite$(T.dll) doltlite.h
 all: doltlite-lib
