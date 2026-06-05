@@ -21,7 +21,6 @@
 # branch created on first persist), so e_createtable, e_update, and alter
 # complete and moved to the divergence file.
 capi3    # aborts on set_file_format (raw stock page format; doltlite uses prolly)
-fkey2    # aborts under fkey2-2.x (raw-format / pre-existing doltlite divergence)
 # Additional crash/timeout files from the full capture (issue #1119):
 crash8        # crash-recovery simulation; incompatible with prolly format / times out
 fuzz3         # raw byte-corruption fuzz mutates test.db offsets; prolly storage aborts after restore/checksum
