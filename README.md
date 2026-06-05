@@ -858,25 +858,45 @@ All numbers below have automated assertions in CI (`test/doltlite_perf.sh` and `
 ### SQLite Tcl Test Suite
 
 `testfixture` is built from real doltlite (the prolly + version-control engine,
-not stock SQLite) and runs the upstream SQLite TCL suite — 87,000+ cases, the
-large majority passing unchanged. The remaining results are **documented,
-intentional divergences**, gated per-test so nothing slips silently:
+not stock SQLite) and runs the upstream SQLite TCL suite. This matters: before
+the amalgamation build was fixed, parts of this job compared stock SQLite
+against stock SQLite and could not expose doltlite storage-engine failures.
 
-- `test/known_testfixture_divergences.txt` — ~3,500 cases across ~60 files that
-  diverge by design: mostly doltlite's **rowid / primary-key identity**
-  semantics (rows are keyed by PK, not SQLite's allocation-order rowid) and
-  tests that **poke the raw SQLite on-disk page format** (doltlite stores the
-  content-addressed prolly format), plus custom-collation indexes, VACUUM as a
-  no-op, and crash-recovery simulations.
-- `test/known_testfixture_crashes.txt` — a few files that abort or time out
-  before a summary line (raw-format aborts, crash-recovery sims, shared cache).
-- `test/known_testfixture_flakes.txt` — tests nondeterministic only on the CI
-  runner (currently one, `select9-2.1.6`; see #1132).
+The current TCL state is tracked by two allowlists:
 
-`test/run_testfixture.sh` enforces these lists **bidirectionally** — every
-actual failure must be listed and every listed entry must still fail — so the
-lists stay honest. CI runs the full sweep on every PR
-(`.github/workflows/build-test.yml`).
+- `test/known_testfixture_divergences.txt` — per-test-name divergences. As of
+  the current audit it contains 930 entries. The dominant classes are
+  doltlite's **rowid / primary-key identity** semantics (non-INTEGER primary
+  key tables are stored as PK-keyed WITHOUT ROWID tables), tests that inspect
+  or mutate the raw SQLite page format (`hexio_write`, file-format bytes,
+  rootpage/page-count assertions), unsupported non-UTF-8 database encodings,
+  custom-collation indexes, pager-lock-status expectations, VACUUM/page-layout
+  behavior, planner counters such as `sqlite_search_count`, and a small number
+  of diagnostic text differences such as canonicalized CHECK constraint text.
+- `test/known_testfixture_crashes.txt` — file-level crash/timeout divergences.
+  It currently has 5 entries for raw stock page-format tests, crash-recovery
+  simulations that do not map to prolly storage, and unsupported shared-cache
+  semantics.
+
+`test/run_testfixture.sh` enforces these lists **bidirectionally**: every actual
+failure must be listed, and every listed entry must still fail. That catches
+both new regressions and stale allowlist entries. The list is still treated as
+an audit backlog rather than proof of correctness — suspicious entries should
+either get a reproducible GitHub issue or a precise comment in the allowlist
+explaining why the divergence is intentional. CI runs the sweep on every PR in
+`.github/workflows/build-test.yml`.
+
+To rerun the full known-divergence gate locally:
+
+```bash
+cd build
+awk 'BEGIN{n=0} /^[[:space:]]*#/ || /^[[:space:]]*$/ {next} {print $1}' \
+  ../test/known_testfixture_divergences.txt \
+  ../test/known_testfixture_crashes.txt | sort -u > /tmp/doltlite-known-tests.txt
+DIVERGENCE_FILE=$PWD/../test/known_testfixture_divergences.txt \
+CRASH_FILE=$PWD/../test/known_testfixture_crashes.txt \
+  bash ../test/run_testfixture.sh known-audit 120 $(cat /tmp/doltlite-known-tests.txt)
+```
 
 ### Doltlite Shell Tests
 
