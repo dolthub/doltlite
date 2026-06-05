@@ -59,6 +59,8 @@ jobs:
         source "$EMSDK/emsdk_env.sh"
         ./configure
         make sqlite3.c sqlite3.h sqlite3ext.h
+        DOLTLITE_CHECK_CLI=0 DOLTLITE_CHECK_STATIC=0 DOLTLITE_CHECK_SHARED=0 \
+          bash test/assert_doltlite_artifacts.sh .
         make -C ext/wasm dist
         # With DOLTLITE_PROLLY=1 (the default), mksqlite3c.tcl --doltlite weaves
         # the prolly storage engine and the version-control layer into sqlite3.c,
@@ -225,6 +227,7 @@ jobs:
         cp src/doltlite_remotesrv.h "${DIR}/doltlite_remotesrv.h" 2>/dev/null || true
         cp build/libdoltlite${{ matrix.static_ext }} "${DIR}/" 2>/dev/null || true
         cp build/libdoltlite${{ matrix.lib_ext }} "${DIR}/" 2>/dev/null || true
+        cp -P build/libdoltlite.so.0 "${DIR}/" 2>/dev/null || true
         if command -v zip >/dev/null 2>&1; then
           zip -r "${DIR}.zip" "${DIR}"
         else
@@ -344,9 +347,15 @@ jobs:
         # On workflow_dispatch (no tag), just assert the call returns
         # *something* non-empty rather than asserting an exact value.
         VERSION_OUT=$(doltlite :memory: 'SELECT dolt_version();')
+        ENGINE_OUT=$(doltlite :memory: 'SELECT doltlite_engine();')
         echo "dolt_version() => ${VERSION_OUT}"
+        echo "doltlite_engine() => ${ENGINE_OUT}"
         if [ -z "${VERSION_OUT}" ]; then
           echo "dolt_version() returned empty"
+          exit 1
+        fi
+        if [ "${ENGINE_OUT}" != "prolly" ]; then
+          echo "doltlite_engine() returned ${ENGINE_OUT}, expected prolly"
           exit 1
         fi
         if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ -n "${GITHUB_REF_NAME}" ]; then
@@ -365,6 +374,23 @@ jobs:
         # is mis-linked or a virtual table is missing, this fails fast.
         doltlite :memory: 'SELECT 1;'
         doltlite :memory: 'CREATE TABLE t(x INT); INSERT INTO t VALUES (1),(2); SELECT count(*) FROM t;'
+        cat >/tmp/doltlite-installed-probe.c <<'EOF'
+        #include <doltlite.h>
+        #include <stdio.h>
+        int main(void){
+          sqlite3 *db = 0;
+          sqlite3_stmt *st = 0;
+          if( sqlite3_open(":memory:", &db)!=SQLITE_OK ) return 1;
+          if( sqlite3_prepare_v2(db, "SELECT doltlite_engine()", -1, &st, 0)!=SQLITE_OK ) return 2;
+          if( sqlite3_step(st)!=SQLITE_ROW ) return 3;
+          printf("%s\n", sqlite3_column_text(st, 0));
+          sqlite3_finalize(st);
+          sqlite3_close(db);
+          return 0;
+        }
+        EOF
+        cc /tmp/doltlite-installed-probe.c -ldoltlite -lz -lpthread -lm -o /tmp/doltlite-installed-probe
+        test "$(/tmp/doltlite-installed-probe)" = "prolly"
 
   # ── Run benchmarks ────────────────────────────────────────
   benchmark:

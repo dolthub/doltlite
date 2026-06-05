@@ -158,6 +158,7 @@ jobs:
         make DOLTLITE_PROLLY_CHECK=1 doltlite
         make DOLTLITE_PROLLY_CHECK=1 doltlite-lib
         make DOLTLITE_PROLLY_CHECK=1 testfixture
+        DOLTLITE_CHECK_AMALGAMATION=0 bash ../test/assert_doltlite_artifacts.sh .
         # doltlite_parity.sh compares against the package-built stock
         # SQLite CLI instead of whatever sqlite3 the runner image provides.
         make DOLTLITE_PROLLY=0 sqlite3
@@ -170,6 +171,7 @@ jobs:
       run: |
         cd build
         make -j$(nproc) DOLTLITE_PROLLY_CHECK=1 doltlite.exe doltlite-lib
+        DOLTLITE_CHECK_AMALGAMATION=0 DOLTLITE_CHECK_SHARED=0 bash ../test/assert_doltlite_artifacts.sh .
         cp -f "$(command -v sqlite3)" sqlite3
 
     - name: Lint
