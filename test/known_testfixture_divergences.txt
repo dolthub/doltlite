@@ -799,12 +799,40 @@ minmax3 minmax3-4.5
 minmax3 minmax3-4.6
 quote quote-2.5
 rowid rowid-4.5
+# savepoint: the core SAVEPOINT/ROLLBACK semantics now pass. Remaining
+# failures are stock pager/file-format behavior that DoltLite intentionally
+# does not emulate, plus downstream labels reached after those divergences.
+#
+# PRAGMA lock_status expects stock rollback-journal RESERVED locks. DoltLite's
+# prolly storage does not expose those pager locks, so writes stay "unlocked".
+savepoint savepoint-3.2
+savepoint savepoint-3.3
+savepoint savepoint-3.4
+
+# Second connection read locks do not block DoltLite savepoint release the way
+# stock rollback-journal pager locks do; savepoint-5.4.4 is the follow-on after
+# RELEASE succeeds instead of returning "database is locked".
+savepoint savepoint-5.4.3
+savepoint savepoint-5.4.4
+
+# auto_vacuum / incremental_vacuum are unsupported on DoltLite-format
+# databases. Later labels in these blocks cascade from setup that stock SQLite
+# completes by growing/shrinking page files.
+savepoint savepoint-6.1
+savepoint savepoint-6.3
+savepoint savepoint-7.1
+savepoint savepoint-7.2.1
+savepoint savepoint-7.3.1
+savepoint savepoint-7.3.2
+savepoint savepoint-7.4.1
+savepoint savepoint-7.5.1
+savepoint savepoint-7.5.2
+
+# ATTACH + savepoint data operations pass independently, but this block runs
+# after the unsupported auto_vacuum setup above leaves the expected tables
+# absent. The lock_status assertions also expect stock pager lock states for
+# attached page files.
 savepoint savepoint-10.2.1
-savepoint savepoint-10.2.10
-savepoint savepoint-10.2.11
-savepoint savepoint-10.2.12
-savepoint savepoint-10.2.13
-savepoint savepoint-10.2.14
 savepoint savepoint-10.2.2
 savepoint savepoint-10.2.3
 savepoint savepoint-10.2.4
@@ -813,9 +841,23 @@ savepoint savepoint-10.2.6
 savepoint savepoint-10.2.7
 savepoint savepoint-10.2.8
 savepoint savepoint-10.2.9
+savepoint savepoint-10.2.10
+savepoint savepoint-10.2.11
+savepoint savepoint-10.2.12
+savepoint savepoint-10.2.13
+savepoint savepoint-10.2.14
+
+# auto_vacuum=full is unsupported; the remaining failure in this block is a
+# stock page-file size assertion after wal_checkpoint.
 savepoint savepoint-11.1
 savepoint savepoint-11.8
+
+# journal_mode=off is not configurable for DoltLite-format databases.
 savepoint savepoint-13.1
+
+# Multi-client tests that assert stock rollback-journal lock failures.
+# DoltLite lets the write/release complete, so the following rollback/transaction
+# labels see different savepoint state.
 savepoint savepoint-14.1.2
 savepoint savepoint-14.1.3
 savepoint savepoint-14.1.4
@@ -830,21 +872,10 @@ savepoint savepoint-15.1.2
 savepoint savepoint-15.1.3
 savepoint savepoint-15.2.2
 savepoint savepoint-15.2.3
+
+# Isolated savepoint-17.1 passes. In the full file it observes state left by
+# the earlier lock-divergent multi-client blocks.
 savepoint savepoint-17.1
-savepoint savepoint-3.2
-savepoint savepoint-3.3
-savepoint savepoint-3.4
-savepoint savepoint-5.4.3
-savepoint savepoint-5.4.4
-savepoint savepoint-6.1
-savepoint savepoint-6.3
-savepoint savepoint-7.1
-savepoint savepoint-7.2.1
-savepoint savepoint-7.3.1
-savepoint savepoint-7.3.2
-savepoint savepoint-7.4.1
-savepoint savepoint-7.5.1
-savepoint savepoint-7.5.2
 select2 select2-3.3
 trans trans-9.10.5-2112
 trans trans-9.12.5-2544
