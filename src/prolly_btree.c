@@ -2913,7 +2913,18 @@ static int ensureMutMap(BtCursor *pCur){
   if( !pTE ) return SQLITE_INTERNAL;
 
   if( pTE->pPending ){
-    pCur->pMutMap = (ProllyMutMap*)pTE->pPending;
+    ProllyMutMap *pExisting = (ProllyMutMap*)pTE->pPending;
+    /* Keep an empty pending map's savepoint level in step with the btree's
+    ** current depth. A savepoint release can drop the depth without rewriting
+    ** a map that had no live entries to commit, leaving currentSavepointLevel
+    ** stale; a later edit would then be stamped at a released level and undone
+    ** by an unrelated statement's rollback. */
+    if( pCur->pBtree
+     && prollyMutMapIsEmpty(pExisting)
+     && pExisting->currentSavepointLevel != pCur->pBtree->nSavepoint ){
+      pExisting->currentSavepointLevel = pCur->pBtree->nSavepoint;
+    }
+    pCur->pMutMap = pExisting;
     return SQLITE_OK;
   }
 
