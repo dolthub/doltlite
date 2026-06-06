@@ -12,7 +12,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
   if (size > (size_t)0x7fffffff) return 0;
 
   memset(&cs, 0, sizeof(cs));
-  cs.graphLockFd = -1;
+  cs.pGraphLockFile = 0;
 
   (void)csDeserializeRefs(&cs, data, (int)size);
 
