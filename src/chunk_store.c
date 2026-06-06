@@ -15,7 +15,16 @@ static int csFileLockHeld(sqlite3_file *pFile){
 }
 
 static char *csLockPath(const char *path){
-  return sqlite3_mprintf("%s-lock", path);
+  const char *zBase = strrchr(path, '/');
+  int nDir = 0;
+
+  if( zBase ){
+    nDir = (int)(zBase - path) + 1;
+    zBase++;
+  }else{
+    zBase = path;
+  }
+  return sqlite3_mprintf("%.*s.%s-lock", nDir, path, zBase);
 }
 
 static int csFileLock(sqlite3_vfs *pVfs, const char *path,
