@@ -36,17 +36,17 @@ static int csFileLock(sqlite3_vfs *pVfs, const char *path,
   int rc;
 
   *ppFile = 0;
-  if( !zLock ) return -1;
+  if( !zLock ) return SQLITE_NOMEM;
   rc = sqlite3OsOpenMalloc(pVfs, zLock, &pFile, flags, 0);
   sqlite3_free(zLock);
-  if( rc!=SQLITE_OK ) return -1;
+  if( rc!=SQLITE_OK ) return rc;
   rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
   if( rc!=SQLITE_OK ){
     sqlite3OsCloseFree(pFile);
-    return -1;
+    return rc;
   }
   *ppFile = pFile;
-  return 0;
+  return SQLITE_OK;
 }
 
 static void csFileUnlock(sqlite3_file *pFile){
@@ -1061,15 +1061,14 @@ static int csCommitToFile(ChunkStore *cs){
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
                   | SQLITE_OPEN_MAIN_DB;
     rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
-    if( rc != SQLITE_OK ) return SQLITE_CANTOPEN;
+    if( rc != SQLITE_OK ) return rc==SQLITE_NOMEM ? rc : SQLITE_CANTOPEN;
   }
 
   if( lockHeld ){
     lockFd = CS_FILE_LOCK_INIT;
   }else{
-    if( csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd) != 0 ){
-      return SQLITE_BUSY;
-    }
+    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd);
+    if( rc!=SQLITE_OK ) return rc;
   }
 
   if( lockHeld && hadFile ){
@@ -1440,9 +1439,10 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return SQLITE_ERROR;
   }
-  if( csFileLockNB(cs->file.pVfs, cs->file.zFilename, &CS_GRAPH_LOCK(cs)) != 0 ){
+  rc = csFileLockNB(cs->file.pVfs, cs->file.zFilename, &CS_GRAPH_LOCK(cs));
+  if( rc!=SQLITE_OK ){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
-    return SQLITE_BUSY;
+    return rc;
   }
   rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
