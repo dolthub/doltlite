@@ -673,9 +673,12 @@ static int failOpen(sqlite3_vfs *pVfs, const char *zName, sqlite3_file *pFile,
   int rc;
   int nName = zName ? (int)strlen(zName) : 0;
   int isGcTmp = nName>=7 && strcmp(zName+nName-7, "-gc-tmp")==0;
+  int isDoltLiteLock = nName>=5 && strcmp(zName+nName-5, "-lock")==0;
 
   memset(p, 0, sizeof(*p));
-  if( gFailOpenMainOnce>0 && !isGcTmp && (flags & SQLITE_OPEN_MAIN_DB)!=0 ){
+  if( gFailOpenMainOnce>0 && !isGcTmp && !isDoltLiteLock
+   && (flags & SQLITE_OPEN_MAIN_DB)!=0
+  ){
     gFailOpenMainOnce--;
     gFailHits++;
     return SQLITE_CANTOPEN;

@@ -5286,7 +5286,7 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   if( pBt->inCatalogSerialize ) return SQLITE_OK;
 
   if( p->inTrans==TRANS_WRITE ){
-    assert( pBt->store.isMemory || pBt->store.graphLockFd >= 0 );
+    assert( pBt->store.isMemory || pBt->store.pGraphLockFile!=0 );
     assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
     /* Cursor pending-edit maps alias the catalog's per-table pPending maps,
     ** which restoreFromCommitted() is about to free. Clear and detach the
@@ -5424,7 +5424,7 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
   const char *zBr = p->zBranch ? p->zBranch : "main";
   int rc;
 
-  assert( pBt->store.isMemory || pBt->store.graphLockFd >= 0 );
+  assert( pBt->store.isMemory || pBt->store.pGraphLockFile!=0 );
   assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
 
   rc = serializeCatalog(p, &catData, &nCatData);

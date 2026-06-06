@@ -1016,8 +1016,8 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     sqlite3_free(pTmp);
     pTmp = 0;
   }
-  if( rc == SQLITE_OK && rename(zTmpFile, p->zDestFile)!=0 ){
-    rc = SQLITE_IOERR_WRITE;
+  if( rc == SQLITE_OK ){
+    rc = sqlite3OsReplaceFile(p->pDestVfs, zTmpFile, p->zDestFile);
   }
 
 backup_step_done:

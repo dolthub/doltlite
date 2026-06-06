@@ -9,89 +9,61 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
-#include <fcntl.h>
-#include <sys/stat.h>
 
-#ifdef _WIN32
-  static int csFileLockHeld(sqlite3_file *pFile){
-    return pFile!=0;
+static int csFileLockHeld(sqlite3_file *pFile){
+  return pFile!=0;
+}
+
+static char *csLockPath(const char *path){
+  const char *zBase = strrchr(path, '/');
+  int nDir = 0;
+
+  if( zBase ){
+    nDir = (int)(zBase - path) + 1;
+    zBase++;
+  }else{
+    zBase = path;
   }
-  static char *csLockPath(const char *path){
-    return sqlite3_mprintf("%s-lock", path);
+  return sqlite3_mprintf("%.*s.%s-lock", nDir, path, zBase);
+}
+
+static int csFileLock(sqlite3_vfs *pVfs, const char *path,
+                      sqlite3_file **ppFile){
+  char *zLock = csLockPath(path);
+  sqlite3_file *pFile = 0;
+  int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+            | SQLITE_OPEN_MAIN_DB;
+  int rc;
+
+  *ppFile = 0;
+  if( !zLock ) return SQLITE_NOMEM;
+  rc = sqlite3OsOpenMalloc(pVfs, zLock, &pFile, flags, 0);
+  sqlite3_free(zLock);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
+  if( rc!=SQLITE_OK ){
+    sqlite3OsCloseFree(pFile);
+    return rc;
   }
-  static int csFileLock(sqlite3_vfs *pVfs, const char *path,
+  *ppFile = pFile;
+  return SQLITE_OK;
+}
+
+static void csFileUnlock(sqlite3_file *pFile){
+  if( pFile ){
+    sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
+    sqlite3OsCloseFree(pFile);
+  }
+}
+
+static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
                         sqlite3_file **ppFile){
-    char *zLock = csLockPath(path);
-    sqlite3_file *pFile = 0;
-    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
-              | SQLITE_OPEN_MAIN_DB;
-    int rc;
+  return csFileLock(pVfs, path, ppFile);
+}
 
-    *ppFile = 0;
-    if( !zLock ) return -1;
-    rc = sqlite3OsOpenMalloc(pVfs, zLock, &pFile, flags, 0);
-    sqlite3_free(zLock);
-    if( rc!=SQLITE_OK ) return -1;
-    rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
-    if( rc!=SQLITE_OK ){
-      sqlite3OsCloseFree(pFile);
-      return -1;
-    }
-    *ppFile = pFile;
-    return 0;
-  }
-  static void csFileUnlock(sqlite3_file *pFile){
-    if( pFile ){
-      sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
-      sqlite3OsCloseFree(pFile);
-    }
-  }
-  static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
-                          sqlite3_file **ppFile){
-    return csFileLock(pVfs, path, ppFile);
-  }
-#else
-# include <unistd.h>
-# include <sys/file.h>
-  static int csFileLockHeld(int fd){
-    return fd>=0;
-  }
-  static int csFileLock(sqlite3_vfs *pVfs, const char *path, int *pFd){
-    int fd = open(path, O_RDWR | O_CREAT, 0644);
-    (void)pVfs;
-    if( fd < 0 ) return -1;
-    if( flock(fd, LOCK_EX) != 0 ){
-      close(fd);
-      return -1;
-    }
-    *pFd = fd;
-    return 0;
-  }
-  static void csFileUnlock(int fd){
-    if( fd >= 0 ) close(fd);
-  }
-  static int csFileLockNB(sqlite3_vfs *pVfs, const char *path, int *pFd){
-    int fd = open(path, O_RDWR | O_CREAT, 0644);
-    (void)pVfs;
-    if( fd < 0 ) return -1;
-    if( flock(fd, LOCK_EX | LOCK_NB) != 0 ){
-      close(fd);
-      return -1;
-    }
-    *pFd = fd;
-    return 0;
-  }
-#endif
-
-#ifdef _WIN32
-  typedef sqlite3_file *CsFileLock;
+typedef sqlite3_file *CsFileLock;
 # define CS_FILE_LOCK_INIT 0
 # define CS_GRAPH_LOCK(cs) ((cs)->pGraphLockFile)
-#else
-  typedef int CsFileLock;
-# define CS_FILE_LOCK_INIT -1
-# define CS_GRAPH_LOCK(cs) ((cs)->graphLockFd)
-#endif
 
 static int csOpenFile(sqlite3_vfs *pVfs, const char *zPath,
                       sqlite3_file **ppFile, int flags, int *pOutFlags);
@@ -133,6 +105,19 @@ static int csOpenFile(
   int outFlags = 0;
   rc = sqlite3OsOpenMalloc(pVfs, zPath, ppFile, flags, &outFlags);
   if( pOutFlags ) *pOutFlags = outFlags;
+  return rc;
+}
+
+static int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize){
+  sqlite3_file *pFile = 0;
+  int flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
+  int rc;
+
+  *pSize = 0;
+  rc = csOpenFile(pVfs, zPath, &pFile, flags, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3OsFileSize(pFile, pSize);
+  sqlite3OsCloseFree(pFile);
   return rc;
 }
 
@@ -328,8 +313,14 @@ int chunkStoreOpen(
   }
 
   if( exists ){
-    struct stat mainStat;
-    if( stat(cs->file.zFilename, &mainStat)==0 && mainStat.st_size==0 ){
+    i64 mainSize = 0;
+    rc = csFileSizeByName(pVfs, cs->file.zFilename, &mainSize);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(cs->file.zFilename);
+      cs->file.zFilename = 0;
+      return rc;
+    }
+    if( mainSize==0 ){
       exists = 0;
     }
   }
@@ -1070,15 +1061,14 @@ static int csCommitToFile(ChunkStore *cs){
     int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
                   | SQLITE_OPEN_MAIN_DB;
     rc = csOpenFile(cs->file.pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
-    if( rc != SQLITE_OK ) return SQLITE_CANTOPEN;
+    if( rc != SQLITE_OK ) return rc==SQLITE_NOMEM ? rc : SQLITE_CANTOPEN;
   }
 
   if( lockHeld ){
     lockFd = CS_FILE_LOCK_INIT;
   }else{
-    if( csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd) != 0 ){
-      return SQLITE_BUSY;
-    }
+    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd);
+    if( rc!=SQLITE_OK ) return rc;
   }
 
   if( lockHeld && hadFile ){
@@ -1449,9 +1439,10 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return SQLITE_ERROR;
   }
-  if( csFileLockNB(cs->file.pVfs, cs->file.zFilename, &CS_GRAPH_LOCK(cs)) != 0 ){
+  rc = csFileLockNB(cs->file.pVfs, cs->file.zFilename, &CS_GRAPH_LOCK(cs));
+  if( rc!=SQLITE_OK ){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
-    return SQLITE_BUSY;
+    return rc;
   }
   rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
@@ -1496,13 +1487,11 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
                          SQLITE_ACCESS_EXISTS, &exists);
     if( rc!=SQLITE_OK ) return rc;
     if( exists ){
-      struct stat mainStat;
-      if( stat(cs->file.zFilename, &mainStat)==0 ){
-        if( mainStat.st_size > 0 ){
-          *pChanged = 1;
-        }
-      }else{
-        return SQLITE_IOERR;
+      i64 mainSize = 0;
+      rc = csFileSizeByName(cs->file.pVfs, cs->file.zFilename, &mainSize);
+      if( rc!=SQLITE_OK ) return rc;
+      if( mainSize > 0 ){
+        *pChanged = 1;
       }
     }
     return SQLITE_OK;

@@ -307,6 +307,7 @@ all:	lint doltlite$(T.exe)
 
 lint:
 	@bash $(TOP)/test/lint_layers.sh $(TOP)/src
+	@bash $(TOP)/test/lint_no_raw_os_fileio.sh $(TOP)/src
 
 ########################################################################
 ########################################################################
@@ -2647,6 +2648,7 @@ DOLTLITE_C_TESTS = \
 	corruption_test$(T.exe) \
 	three_way_diff_test$(T.exe) \
 	sequence_reload_test$(T.exe) \
+	chunk_store_fork_lock_test$(T.exe) \
 	oom_dolt_fault_test$(T.exe)
 
 ancestor_test$(T.exe): $(TOP)/test/ancestor_test.c libdoltlite$(T.lib)
@@ -2683,6 +2685,10 @@ multi_process_gc_test$(T.exe): $(TOP)/test/multi_process_gc_test.c libdoltlite$(
 
 sequence_reload_test$(T.exe): $(TOP)/test/sequence_reload_test.c libdoltlite$(T.lib)
 	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/sequence_reload_test.c \
+		libdoltlite$(T.lib) -lz -lpthread -lm
+
+chunk_store_fork_lock_test$(T.exe): $(TOP)/test/chunk_store_fork_lock_test.c libdoltlite$(T.lib)
+	$(T.link) -I. -I$(TOP)/src -o $@ $(TOP)/test/chunk_store_fork_lock_test.c \
 		libdoltlite$(T.lib) -lz -lpthread -lm
 
 invariant_test$(T.exe): $(TOP)/test/invariant_test.c libdoltlite$(T.lib)

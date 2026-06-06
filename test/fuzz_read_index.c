@@ -45,7 +45,7 @@ int LLVMFuzzerTestOneInput(const uint8_t *data, size_t size) {
     cs.file.pFile = pFile;
     cs.file.zFilename = sqlite3_mprintf("%s", path);
     cs.file.pVfs = pVfs;
-    cs.graphLockFd = -1;
+    cs.pGraphLockFile = 0;
     cs.index.iIndexOffset = 0;
     cs.index.nIndexSize = (i64)size;
     cs.index.nChunks = 1;

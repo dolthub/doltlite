@@ -27,6 +27,7 @@ GATING=(
   cross_branch_test
   corruption_test
   sequence_reload_test
+  chunk_store_fork_lock_test
 )
 
 run_one() {
