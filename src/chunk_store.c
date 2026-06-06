@@ -9,89 +9,53 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
-#include <fcntl.h>
 #include <sys/stat.h>
 
-#ifdef _WIN32
-  static int csFileLockHeld(sqlite3_file *pFile){
-    return pFile!=0;
+static int csFileLockHeld(sqlite3_file *pFile){
+  return pFile!=0;
+}
+
+static char *csLockPath(const char *path){
+  return sqlite3_mprintf("%s-lock", path);
+}
+
+static int csFileLock(sqlite3_vfs *pVfs, const char *path,
+                      sqlite3_file **ppFile){
+  char *zLock = csLockPath(path);
+  sqlite3_file *pFile = 0;
+  int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+            | SQLITE_OPEN_MAIN_DB;
+  int rc;
+
+  *ppFile = 0;
+  if( !zLock ) return -1;
+  rc = sqlite3OsOpenMalloc(pVfs, zLock, &pFile, flags, 0);
+  sqlite3_free(zLock);
+  if( rc!=SQLITE_OK ) return -1;
+  rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
+  if( rc!=SQLITE_OK ){
+    sqlite3OsCloseFree(pFile);
+    return -1;
   }
-  static char *csLockPath(const char *path){
-    return sqlite3_mprintf("%s-lock", path);
+  *ppFile = pFile;
+  return 0;
+}
+
+static void csFileUnlock(sqlite3_file *pFile){
+  if( pFile ){
+    sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
+    sqlite3OsCloseFree(pFile);
   }
-  static int csFileLock(sqlite3_vfs *pVfs, const char *path,
+}
+
+static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
                         sqlite3_file **ppFile){
-    char *zLock = csLockPath(path);
-    sqlite3_file *pFile = 0;
-    int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
-              | SQLITE_OPEN_MAIN_DB;
-    int rc;
+  return csFileLock(pVfs, path, ppFile);
+}
 
-    *ppFile = 0;
-    if( !zLock ) return -1;
-    rc = sqlite3OsOpenMalloc(pVfs, zLock, &pFile, flags, 0);
-    sqlite3_free(zLock);
-    if( rc!=SQLITE_OK ) return -1;
-    rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
-    if( rc!=SQLITE_OK ){
-      sqlite3OsCloseFree(pFile);
-      return -1;
-    }
-    *ppFile = pFile;
-    return 0;
-  }
-  static void csFileUnlock(sqlite3_file *pFile){
-    if( pFile ){
-      sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
-      sqlite3OsCloseFree(pFile);
-    }
-  }
-  static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
-                          sqlite3_file **ppFile){
-    return csFileLock(pVfs, path, ppFile);
-  }
-#else
-# include <unistd.h>
-# include <sys/file.h>
-  static int csFileLockHeld(int fd){
-    return fd>=0;
-  }
-  static int csFileLock(sqlite3_vfs *pVfs, const char *path, int *pFd){
-    int fd = open(path, O_RDWR | O_CREAT, 0644);
-    (void)pVfs;
-    if( fd < 0 ) return -1;
-    if( flock(fd, LOCK_EX) != 0 ){
-      close(fd);
-      return -1;
-    }
-    *pFd = fd;
-    return 0;
-  }
-  static void csFileUnlock(int fd){
-    if( fd >= 0 ) close(fd);
-  }
-  static int csFileLockNB(sqlite3_vfs *pVfs, const char *path, int *pFd){
-    int fd = open(path, O_RDWR | O_CREAT, 0644);
-    (void)pVfs;
-    if( fd < 0 ) return -1;
-    if( flock(fd, LOCK_EX | LOCK_NB) != 0 ){
-      close(fd);
-      return -1;
-    }
-    *pFd = fd;
-    return 0;
-  }
-#endif
-
-#ifdef _WIN32
-  typedef sqlite3_file *CsFileLock;
+typedef sqlite3_file *CsFileLock;
 # define CS_FILE_LOCK_INIT 0
 # define CS_GRAPH_LOCK(cs) ((cs)->pGraphLockFile)
-#else
-  typedef int CsFileLock;
-# define CS_FILE_LOCK_INIT -1
-# define CS_GRAPH_LOCK(cs) ((cs)->graphLockFd)
-#endif
 
 static int csOpenFile(sqlite3_vfs *pVfs, const char *zPath,
                       sqlite3_file **ppFile, int flags, int *pOutFlags);
