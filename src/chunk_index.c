@@ -8,7 +8,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
-#include <sys/stat.h>
 
 void chunkIndexGetEntries(const ChunkIndex *idx, int *pn, const ChunkIndexEntry **par){
   *pn = idx->nIndex;
@@ -33,106 +32,11 @@ void chunkIndexReplaceEntries(ChunkIndex *idx, ChunkIndexEntry *aNew, int nNew){
   idx->aIndexMmapSize = 0;
 }
 
-#if CHUNK_STORE_LE_PACKING
-#  if defined(_WIN32)
-#    include <windows.h>
-static int csMapIndex(const char *zPath, i64 offset, i64 nBytes,
-                      void **ppMapBase, i64 *pnMapSize,
-                      const u8 **ppData){
-  HANDLE hFile = CreateFileA(zPath, GENERIC_READ, FILE_SHARE_READ,
-                              NULL, OPEN_EXISTING,
-                              FILE_ATTRIBUTE_NORMAL, NULL);
-  HANDLE hMap;
-  void *pMap;
-  SYSTEM_INFO si;
-  i64 alignOffset, alignPad, mapSize;
-
-  if( hFile==INVALID_HANDLE_VALUE ) return SQLITE_CANTOPEN;
-
-  GetSystemInfo(&si);
-  alignOffset = (offset / si.dwAllocationGranularity)
-              * si.dwAllocationGranularity;
-  alignPad = offset - alignOffset;
-  mapSize = nBytes + alignPad;
-
-  hMap = CreateFileMappingA(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-  CloseHandle(hFile);
-  if( hMap==NULL ) return SQLITE_IOERR;
-
-  pMap = MapViewOfFile(hMap, FILE_MAP_READ,
-                        (DWORD)(alignOffset >> 32),
-                        (DWORD)(alignOffset & 0xFFFFFFFF),
-                        (SIZE_T)mapSize);
-  CloseHandle(hMap);
-  if( pMap==NULL ) return SQLITE_IOERR;
-
-  *ppMapBase = pMap;
-  *pnMapSize = mapSize;
-  *ppData = (const u8 *)pMap + alignPad;
-  return SQLITE_OK;
-}
-
-static void csUnmapIndex(void *pMapBase, i64 nMapSize){
-  (void)nMapSize;
-  if( pMapBase ) UnmapViewOfFile(pMapBase);
-}
-#  else
-#    include <sys/mman.h>
-#    include <fcntl.h>
-#    include <unistd.h>
-static int csMapIndex(const char *zPath, i64 offset, i64 nBytes,
-                      void **ppMapBase, i64 *pnMapSize,
-                      const u8 **ppData){
-  int fd;
-  long pageSize;
-  i64 alignOffset, alignPad, mapSize;
-  void *pMap;
-
-  fd = open(zPath, O_RDONLY);
-  if( fd < 0 ) return SQLITE_CANTOPEN;
-
-  pageSize = sysconf(_SC_PAGESIZE);
-  if( pageSize <= 0 ) pageSize = 4096;
-
-  alignOffset = (offset / pageSize) * pageSize;
-  alignPad = offset - alignOffset;
-  mapSize = nBytes + alignPad;
-
-  pMap = mmap(NULL, (size_t)mapSize, PROT_READ, MAP_PRIVATE, fd,
-              (off_t)alignOffset);
-  close(fd);
-  if( pMap == MAP_FAILED ) return SQLITE_IOERR;
-
-  *ppMapBase = pMap;
-  *pnMapSize = mapSize;
-  *ppData = (const u8 *)pMap + alignPad;
-  return SQLITE_OK;
-}
-
-static void csUnmapIndex(void *pMapBase, i64 nMapSize){
-  if( pMapBase ) munmap(pMapBase, (size_t)nMapSize);
-}
-#  endif
-#else
-static int csMapIndex(const char *zPath, i64 offset, i64 nBytes,
-                      void **ppMapBase, i64 *pnMapSize,
-                      const u8 **ppData){
-  (void)zPath; (void)offset; (void)nBytes;
-  (void)ppMapBase; (void)pnMapSize; (void)ppData;
-  return SQLITE_NOTFOUND;
-}
-static void csUnmapIndex(void *pMapBase, i64 nMapSize){
-  (void)pMapBase; (void)nMapSize;
-}
-#endif
-
 void csReleaseIndexBuf(ChunkIndexEntry *aIndex,
                        void *mmapBase, i64 mmapSize){
-  if( mmapBase ){
-    csUnmapIndex(mmapBase, mmapSize);
-  }else{
-    sqlite3_free(aIndex);
-  }
+  (void)mmapBase;
+  (void)mmapSize;
+  sqlite3_free(aIndex);
 }
 
 int csSearchIndex(
@@ -191,9 +95,6 @@ int csReadIndex(ChunkStore *cs){
   int nEntries;
   u8 *aBuf;
   int i;
-  void *pMapBase = 0;
-  i64 nMapSize = 0;
-  const u8 *pMapData = 0;
   i64 fileSize = 0;
 
   if( cs->index.nIndexSize == 0 ){
@@ -211,7 +112,13 @@ int csReadIndex(ChunkStore *cs){
   if( nEntries64 > INT_MAX ){
     return SQLITE_TOOBIG;
   }
+  if( cs->index.nIndexSize > INT_MAX ){
+    return SQLITE_TOOBIG;
+  }
   nEntries = (int)nEntries64;
+  if( nEntries > INT_MAX/(int)sizeof(ChunkIndexEntry) ){
+    return SQLITE_TOOBIG;
+  }
   /* nChunks includes WAL chunks; only compacted entries are in this index. */
   if( nEntries > cs->index.nChunks ){
     return SQLITE_CORRUPT;
@@ -220,34 +127,13 @@ int csReadIndex(ChunkStore *cs){
   if( cs->index.iIndexOffset < 0 || cs->index.nIndexSize < 0 ){
     return SQLITE_CORRUPT;
   }
-  if( cs->file.pFile ){
-    rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
-    if( rc != SQLITE_OK ) return rc;
-  }else if( cs->file.zFilename ){
-    struct stat st;
-    if( stat(cs->file.zFilename, &st) != 0 ) return SQLITE_IOERR;
-    fileSize = (i64)st.st_size;
-  }
+  if( cs->file.pFile==0 ) return SQLITE_IOERR;
+  rc = sqlite3OsFileSize(cs->file.pFile, &fileSize);
+  if( rc != SQLITE_OK ) return rc;
   if( fileSize > 0
    && (cs->index.iIndexOffset > fileSize
        || cs->index.nIndexSize > fileSize - cs->index.iIndexOffset) ){
     return SQLITE_CORRUPT;
-  }
-
-  if( cs->file.zFilename
-   && csMapIndex(cs->file.zFilename, cs->index.iIndexOffset, cs->index.nIndexSize,
-                  &pMapBase, &nMapSize, &pMapData) == SQLITE_OK ){
-    rc = csValidateIndexEntries((const ChunkIndexEntry*)pMapData, nEntries,
-                                cs->index.iIndexOffset);
-    if( rc!=SQLITE_OK ){
-      csUnmapIndex(pMapBase, nMapSize);
-      return rc;
-    }
-    cs->index.aIndex = (ChunkIndexEntry *)pMapData;
-    cs->index.nIndex = nEntries;
-    cs->index.aIndexMmapBase = pMapBase;
-    cs->index.aIndexMmapSize = nMapSize;
-    return SQLITE_OK;
   }
 
   cs->index.aIndex = (ChunkIndexEntry *)sqlite3_malloc(

@@ -9,7 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
-#include <sys/stat.h>
 
 static int csFileLockHeld(sqlite3_file *pFile){
   return pFile!=0;
@@ -97,6 +96,19 @@ static int csOpenFile(
   int outFlags = 0;
   rc = sqlite3OsOpenMalloc(pVfs, zPath, ppFile, flags, &outFlags);
   if( pOutFlags ) *pOutFlags = outFlags;
+  return rc;
+}
+
+static int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize){
+  sqlite3_file *pFile = 0;
+  int flags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
+  int rc;
+
+  *pSize = 0;
+  rc = csOpenFile(pVfs, zPath, &pFile, flags, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = sqlite3OsFileSize(pFile, pSize);
+  sqlite3OsCloseFree(pFile);
   return rc;
 }
 
@@ -292,8 +304,14 @@ int chunkStoreOpen(
   }
 
   if( exists ){
-    struct stat mainStat;
-    if( stat(cs->file.zFilename, &mainStat)==0 && mainStat.st_size==0 ){
+    i64 mainSize = 0;
+    rc = csFileSizeByName(pVfs, cs->file.zFilename, &mainSize);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(cs->file.zFilename);
+      cs->file.zFilename = 0;
+      return rc;
+    }
+    if( mainSize==0 ){
       exists = 0;
     }
   }
@@ -1460,13 +1478,11 @@ static int csDetectExternalChanges(ChunkStore *cs, int *pChanged){
                          SQLITE_ACCESS_EXISTS, &exists);
     if( rc!=SQLITE_OK ) return rc;
     if( exists ){
-      struct stat mainStat;
-      if( stat(cs->file.zFilename, &mainStat)==0 ){
-        if( mainStat.st_size > 0 ){
-          *pChanged = 1;
-        }
-      }else{
-        return SQLITE_IOERR;
+      i64 mainSize = 0;
+      rc = csFileSizeByName(cs->file.pVfs, cs->file.zFilename, &mainSize);
+      if( rc!=SQLITE_OK ) return rc;
+      if( mainSize > 0 ){
+        *pChanged = 1;
       }
     }
     return SQLITE_OK;
