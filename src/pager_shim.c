@@ -915,7 +915,14 @@ sqlite3_backup *sqlite3_backup_init(sqlite3 *pDest, const char *zDestDb,
   p->pDestDb = pDest;
   p->pVfs = chunkFileGetVfs(&srcCs->file);
   p->pDestVfs = chunkFileGetVfs(&destCs->file);
-  p->zSrcFile = sqlite3_mprintf("%s", chunkFileGetFilename(&srcCs->file));
+  /* zSrcFile is opened with SQLITE_OPEN_MAIN_DB below, so it needs the VFS's
+  ** double-nul terminator (a plain "%s" copy keeps only the first nul). */
+  p->zSrcFile = 0;
+  if( chunkStoreDupFilenameDoubleNul(chunkFileGetFilename(&srcCs->file),
+                                     &p->zSrcFile)!=SQLITE_OK ){
+    sqlite3_free(p);
+    return 0;
+  }
   p->zDestFile = sqlite3_mprintf("%s", chunkFileGetFilename(&destCs->file));
   if( !p->zSrcFile || !p->zDestFile ){
     sqlite3_free(p->zSrcFile);
@@ -975,10 +982,16 @@ int sqlite3_backup_step(sqlite3_backup *pBackup, int nPage){
     goto backup_step_done;
   }
 
-  zTmpFile = sqlite3_mprintf("%s-backup-%p", p->zDestFile, (void*)p);
-  if( !zTmpFile ){
-    rc = SQLITE_NOMEM;
-    goto backup_step_done;
+  {
+    /* Opened with SQLITE_OPEN_MAIN_DB below; needs the VFS double-nul name. */
+    char *zTmpRaw = sqlite3_mprintf("%s-backup-%p", p->zDestFile, (void*)p);
+    if( !zTmpRaw ){
+      rc = SQLITE_NOMEM;
+      goto backup_step_done;
+    }
+    rc = chunkStoreDupFilenameDoubleNul(zTmpRaw, &zTmpFile);
+    sqlite3_free(zTmpRaw);
+    if( rc!=SQLITE_OK ) goto backup_step_done;
   }
   (void)sqlite3OsDelete(p->pDestVfs, zTmpFile, 0);
 

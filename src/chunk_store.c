@@ -29,14 +29,20 @@ static char *csLockPath(const char *path){
 
 static int csFileLock(sqlite3_vfs *pVfs, const char *path,
                       sqlite3_file **ppFile){
-  char *zLock = csLockPath(path);
+  char *zRaw = csLockPath(path);
+  char *zLock = 0;
   sqlite3_file *pFile = 0;
   int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
             | SQLITE_OPEN_MAIN_DB;
   int rc;
 
   *ppFile = 0;
-  if( !zLock ) return SQLITE_NOMEM;
+  if( !zRaw ) return SQLITE_NOMEM;
+  /* Opened with SQLITE_OPEN_MAIN_DB, so the name must carry the VFS's
+  ** double-nul terminator (csLockPath returns a singly-terminated string). */
+  rc = chunkStoreDupFilenameDoubleNul(zRaw, &zLock);
+  sqlite3_free(zRaw);
+  if( rc!=SQLITE_OK ) return rc;
   rc = sqlite3OsOpenMalloc(pVfs, zLock, &pFile, flags, 0);
   sqlite3_free(zLock);
   if( rc!=SQLITE_OK ) return rc;
@@ -121,6 +127,19 @@ static int csFileSizeByName(sqlite3_vfs *pVfs, const char *zPath, i64 *pSize){
   return rc;
 }
 
+/* See chunk_store.h. Terminates with two nuls for the VFS xOpen() main-db
+** filename contract. */
+int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut){
+  int n = (int)strlen(z);
+  char *p = (char*)sqlite3_malloc(n + 2);
+  if( !p ) return SQLITE_NOMEM;
+  memcpy(p, z, n);
+  p[n] = '\0';
+  p[n + 1] = '\0';
+  *pzOut = p;
+  return SQLITE_OK;
+}
+
 static int csCanonicalFilename(
   sqlite3_vfs *pVfs,
   const char *zFilename,
@@ -129,7 +148,6 @@ static int csCanonicalFilename(
   int nPath;
   int rc;
   char *zFull;
-  int n;
 
   *pzOut = 0;
   assert( pVfs!=0 );
@@ -140,19 +158,16 @@ static int csCanonicalFilename(
 
   rc = sqlite3OsFullPathname(pVfs, zFilename, nPath, zFull);
   if( rc==SQLITE_OK_SYMLINK ){
-    *pzOut = zFull;
-    return SQLITE_OK;
+    rc = chunkStoreDupFilenameDoubleNul(zFull, pzOut);
+    sqlite3_free(zFull);
+    return rc;
   }
   sqlite3_free(zFull);
   if( rc!=SQLITE_OK ){
     return rc;
   }
 
-  n = (int)strlen(zFilename);
-  *pzOut = (char*)sqlite3_malloc(n + 1);
-  if( !*pzOut ) return SQLITE_NOMEM;
-  memcpy(*pzOut, zFilename, n + 1);
-  return SQLITE_OK;
+  return chunkStoreDupFilenameDoubleNul(zFilename, pzOut);
 }
 
 static int csRollbackFailedAppend(ChunkStore *cs, i64 origFileSize){
