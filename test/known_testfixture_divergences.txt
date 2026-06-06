@@ -1137,3 +1137,20 @@ vacuum2 vacuum2-4.2
 vacuum2 vacuum2-4.4
 vacuum2 vacuum2-4.5
 vacuum2 vacuum2-4.7
+
+# capi3 — C-API behaviors that diverge from stock sqlite at the error-code,
+# open-timing, locking, and catalog level (not row data). Recovered into the
+# gated suite after the capi3-7.x raw file-format block was gated out and the
+# prollyBtreeRollback use-after-free was fixed.
+capi3 capi3-3.3    # bogus-path open: doltlite defers the open error (SQLITE_OK) vs stock SQLITE_CANTOPEN
+capi3 capi3-3.4    # same: errmsg "not an error" vs "unable to open database file"
+capi3 capi3-4.3    # bogus-path open16: deferred open error vs SQLITE_CANTOPEN
+capi3 capi3-4.4    # same (utf16 errmsg)
+capi3 capi3-8.3    # writable_schema sqlite_master corruption undetected: prolly catalog isn't the raw sqlite_master row store
+capi3 capi3-8.5    # same: injected bogus sqlite_master row doesn't malform the prolly catalog
+capi3 capi3-11.3.4 # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
+capi3 capi3-11.5   # finalize after COMMIT-during-active-read: SQLITE_ABORT vs SQLITE_ERROR
+capi3 capi3-11.10  # step after ROLLBACK-during-active-read: cursor faulted (SQLITE_ERROR) vs stock auto-reset+rerun (SQLITE_ROW)
+capi3 capi3-11.11  # same statement, next step: SQLITE_ERROR vs SQLITE_DONE
+capi3 capi3-11.12  # same: SQLITE_ERROR vs SQLITE_ROW
+capi3 capi3-11.13  # finalize of the faulted statement: SQLITE_ERROR vs SQLITE_OK
