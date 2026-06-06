@@ -16,7 +16,7 @@
 #include "sqliteInt.h"
 #if SQLITE_OS_WIN
 # include "os_win.h"
-#else
+#elif !defined(SQLITE_WASM)
 # include <fcntl.h>
 # include <unistd.h>
 #endif
@@ -301,6 +301,56 @@ int sqlite3OsReplaceFile(sqlite3_vfs *pVfs, const char *zTmp, const char *zDest)
   sqlite3_free(zDestFull);
   sqlite3_free(zTmpW);
   sqlite3_free(zDestW);
+  return rc;
+#elif defined(SQLITE_WASM)
+  sqlite3_file *pIn = 0;
+  sqlite3_file *pOut = 0;
+  u8 *aBuf = 0;
+  i64 nByte = 0;
+  i64 iOff = 0;
+  int rc;
+
+  rc = sqlite3OsOpenMalloc(pVfs, zTmp, &pIn,
+                           SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB, 0);
+  if( rc!=SQLITE_OK ) goto wasm_replace_done;
+  rc = sqlite3OsFileSize(pIn, &nByte);
+  if( rc!=SQLITE_OK ) goto wasm_replace_done;
+
+  (void)sqlite3OsDelete(pVfs, zDest, 0);
+  rc = sqlite3OsOpenMalloc(pVfs, zDest, &pOut,
+                           SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
+                         | SQLITE_OPEN_EXCLUSIVE | SQLITE_OPEN_MAIN_DB, 0);
+  if( rc!=SQLITE_OK ) goto wasm_replace_done;
+
+  aBuf = sqlite3_malloc(65536);
+  if( aBuf==0 ){
+    rc = SQLITE_NOMEM;
+    goto wasm_replace_done;
+  }
+  while( iOff<nByte ){
+    int nCopy = (nByte - iOff) > 65536 ? 65536 : (int)(nByte - iOff);
+    rc = sqlite3OsRead(pIn, aBuf, nCopy, iOff);
+    if( rc!=SQLITE_OK ) break;
+    rc = sqlite3OsWrite(pOut, aBuf, nCopy, iOff);
+    if( rc!=SQLITE_OK ) break;
+    iOff += nCopy;
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsTruncate(pOut, nByte);
+  }
+  if( rc==SQLITE_OK ){
+    rc = sqlite3OsSync(pOut, SQLITE_SYNC_NORMAL);
+  }
+
+wasm_replace_done:
+  sqlite3_free(aBuf);
+  if( pIn ) sqlite3OsCloseFree(pIn);
+  if( pOut ) sqlite3OsCloseFree(pOut);
+  if( rc==SQLITE_OK ){
+    (void)sqlite3OsDelete(pVfs, zTmp, 0);
+  }else{
+    (void)sqlite3OsDelete(pVfs, zDest, 0);
+  }
   return rc;
 #else
   int rc = SQLITE_OK;
