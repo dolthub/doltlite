@@ -5288,17 +5288,28 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   if( p->inTrans==TRANS_WRITE ){
     assert( pBt->store.isMemory || pBt->store.graphLockFd >= 0 );
     assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
+    /* Cursor pending-edit maps alias the catalog's per-table pPending maps,
+    ** which restoreFromCommitted() is about to free. Clear and detach the
+    ** aliases first; touching them after the catalog is freed is a UAF. */
+    {
+      BtCursor *pC;
+      for(pC = pBt->pCursor; pC; pC = pC->pNext){
+        if( pC->pBtree==p && pC->pMutMap ){
+          prollyMutMapClear(pC->pMutMap);
+          pC->pMutMap = 0;
+          pC->mmActive = 0;
+          pC->mmPhysActive = 0;
+          pC->deferredTreeSeek = 0;
+          pC->mmIdx = -1;
+          pC->mmPhysIdx = -1;
+        }
+      }
+    }
     rc = restoreFromCommitted(p);
     if( rc!=SQLITE_OK ){
       chunkStoreUnlock(&pBt->store);
       pBt->store.snapshotPinned = 0;
       return rc;
-    }
-    {
-      BtCursor *pC;
-      for(pC = pBt->pCursor; pC; pC = pC->pNext){
-        if( pC->pBtree==p && pC->pMutMap ) prollyMutMapClear(pC->pMutMap);
-      }
     }
     invalidateCursors(pBt, 0, tripCode ? tripCode : SQLITE_ABORT);
     invalidateSchema(p);

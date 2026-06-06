@@ -13,14 +13,21 @@
 # OBJECT build too (USE_AMALGAMATION=0), i.e. they are pre-existing doltlite
 # issues, investigated and tracked in issue #1119:
 #
-#   capi3 / fkey2 abort on raw stock on-disk-format tests (set_file_format/hexio),
+#   fkey2 aborts on raw stock on-disk-format tests (set_file_format/hexio),
 #   which doltlite's prolly format has no equivalent for — a format divergence
 #   rather than a bug.
 #
 # Cross-db (ATTACHed) writes now work (a freshly attached db gets its default
 # branch created on first persist), so e_createtable, e_update, and alter
 # complete and moved to the divergence file.
-capi3    # aborts on set_file_format (raw stock page format; doltlite uses prolly)
+#
+# capi3 was here too. Its raw file-format block (capi3-7.x) pokes the sqlite
+# page header, which lands inside prolly's checksummed manifest; it is now
+# gated out with `ifcapable {!doltlite}`. Running past that abort exposed a
+# use-after-free in prollyBtreeRollback (cursor pending-map aliases were
+# cleared after restoreFromCommitted had already freed them), now fixed. capi3
+# reaches its summary line; its remaining C-API divergences are recorded in
+# the divergence file.
 # Additional crash/timeout files from the full capture (issue #1119):
 crash8        # crash-recovery simulation; incompatible with prolly format / times out
 fuzz3         # raw byte-corruption fuzz mutates test.db offsets; prolly storage aborts after restore/checksum
