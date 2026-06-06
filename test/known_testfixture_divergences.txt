@@ -1110,11 +1110,6 @@ shared3 shared3-3.1
 shared3 shared3-3.2
 shared3 shared3-3.3
 shared3 shared3-3.4
-# tempdb-2.2/2.3 assert sqlite_open_file_count (number of OS journal/subjournal
-# handles). doltlite opens no SQLite journal files. The statement-journal rollback
-# behavior the block exercises (UNIQUE violation rolls back, tables intact) matches stock.
-tempdb tempdb-2.2
-tempdb tempdb-2.3
 # tkt-2d1a5c67d-3.6: WAL-checkpoint/recovery test driven by ~99 open incrblob
 # handles + raw test.db-wal file copy; computed value ('xyz') matches stock.
 tkt-2d1a5c67d tkt-2d1a5c67d-3.6
