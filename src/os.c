@@ -16,7 +16,7 @@
 #include "sqliteInt.h"
 #if SQLITE_OS_WIN
 # include "os_win.h"
-#elif !defined(SQLITE_WASM)
+#elif !defined(SQLITE_WASM) && !defined(__EMSCRIPTEN__)
 # include <fcntl.h>
 # include <unistd.h>
 #endif
@@ -302,7 +302,7 @@ int sqlite3OsReplaceFile(sqlite3_vfs *pVfs, const char *zTmp, const char *zDest)
   sqlite3_free(zTmpW);
   sqlite3_free(zDestW);
   return rc;
-#elif defined(SQLITE_WASM)
+#elif defined(SQLITE_WASM) || defined(__EMSCRIPTEN__)
   sqlite3_file *pIn = 0;
   sqlite3_file *pOut = 0;
   u8 *aBuf = 0;
