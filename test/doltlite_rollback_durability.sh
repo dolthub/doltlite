@@ -14,7 +14,12 @@ TMP=$(mktemp -d)
 trap "rm -rf $TMP" EXIT
 PASS=0; FAIL=0; ERRORS=""
 
-file_size() { stat -f %z "$1" 2>/dev/null || stat -c %s "$1"; }
+file_size() {
+  case "$(uname -s)" in
+    Darwin|FreeBSD) stat -f %z "$1" ;;
+    *) stat -c %s "$1" ;;
+  esac
+}
 file_sha()  { shasum -a 256 "$1" | awk '{print $1}'; }
 
 stable_rollback() {

@@ -158,7 +158,8 @@ gcc -o myapp myapp.c -I/path/to/build -L/path/to/build -ldoltlite -lpthread -lz
 The API is the standard [SQLite C API](https://sqlite.org/cintro.html) —
 `sqlite3_open`, `sqlite3_exec`, `sqlite3_prepare_v2`, etc. Dolt features are
 called as SQL functions (`dolt_commit`, `dolt_branch`, `dolt_merge`, ...) and
-virtual tables (`dolt_log`, `dolt_diff_<table>`, `dolt_history_<table>`, ...).
+virtual tables (`dolt_log`, `dolt_diff_<table>`, `dolt_workspace_<table>`,
+`dolt_history_<table>`, ...).
 
 ### Quickstart Examples
 
@@ -280,6 +281,26 @@ SELECT * FROM dolt_status;
 -- users      | 1      | modified
 -- orders     | 0      | new table
 ```
+
+#### Workspace Tables
+
+`dolt_workspace_<table>` exposes row-level working/staged changes and lets
+you stage or unstage individual edits by updating `staged`:
+
+```sql
+SELECT id, staged, diff_type, to_id, to_rating, to_confidence,
+       from_rating, from_confidence
+  FROM dolt_workspace_ratings;
+
+UPDATE dolt_workspace_ratings
+   SET staged = TRUE
+ WHERE to_confidence > from_confidence;
+
+SELECT dolt_commit('-m', 'accept higher-confidence edits');
+```
+
+`DELETE FROM dolt_workspace_<table>` and row-level staging on tables with
+secondary indexes are not implemented yet.
 
 #### Ignoring Tables (`dolt_ignore`)
 
@@ -911,6 +932,7 @@ bash ../test/run_doltlite_tests.sh
 bash ../test/doltlite_parity.sh          # SQLite compatibility (119 tests)
 bash ../test/doltlite_commit.sh          # Commits and log
 bash ../test/doltlite_staging.sh         # Add, status, staging
+bash ../test/doltlite_workspace.sh       # Workspace tables and partial row staging
 bash ../test/doltlite_branch.sh          # Branching and checkout
 bash ../test/doltlite_merge.sh           # Three-way merge
 bash ../test/doltlite_attach_sqlite.sh   # ATTACH standard SQLite databases
@@ -919,12 +941,14 @@ bash ../test/doltlite_attach_sqlite.sh   # ATTACH standard SQLite databases
 ### Differential Oracle Tests
 
 Doltlite ships a suite of differential oracle tests that run the same SQL
-through doltlite and stock sqlite3 and compare results byte-for-byte. Each
+through doltlite and stock sqlite3, or through doltlite and Dolt for
+version-control behavior, and compare results byte-for-byte. Each
 script is focused on a SQL feature surface — savepoints, foreign keys,
 UPSERT, generated columns, WITHOUT ROWID, large BLOBs at chunk boundaries,
 ATTACH cross-engine queries, TEMP tables, triggers, dot-commands, FTS5 —
-and scenarios are written to hit storage-layer edge cases. The oracles
-drove most of the correctness fixes in recent releases.
+workspace staging, and version-control operations — and scenarios are written
+to hit storage-layer edge cases. The oracles drove most of the correctness
+fixes in recent releases.
 
 ```bash
 cd build
@@ -939,6 +963,7 @@ bash ../test/oracle_attach_test.sh ./doltlite ./sqlite3
 bash ../test/oracle_temp_tables_test.sh ./doltlite ./sqlite3
 bash ../test/oracle_triggers_test.sh ./doltlite ./sqlite3
 bash ../test/oracle_fts5_test.sh ./doltlite ./sqlite3
+bash ../test/vc_oracle_workspace_test.sh ./doltlite dolt
 ```
 
 A separate CI job builds the same suite with

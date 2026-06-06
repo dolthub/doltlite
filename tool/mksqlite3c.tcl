@@ -569,6 +569,7 @@ proc emit_doltlite_engine_block {} {
     prolly_btree.c pager_shim.c sortkey.c
     doltlite.c doltlite_commit.c doltlite_ref.c doltlite_log.c
     doltlite_commit_ancestors.c doltlite_status.c doltlite_diff.c doltlite_diff_table.c
+    doltlite_workspace.c
     doltlite_branch.c doltlite_tag.c doltlite_ancestor.c doltlite_merge.c
     doltlite_schema_merge.c doltlite_conflicts.c doltlite_gc.c doltlite_chunk_walk.c
     doltlite_history.c doltlite_at.c doltlite_blame.c doltlite_schema_diff.c
