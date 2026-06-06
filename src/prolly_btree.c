@@ -5289,13 +5289,15 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     assert( pBt->store.isMemory || pBt->store.pGraphLockFile!=0 );
     assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
     /* Cursor pending-edit maps alias the catalog's per-table pPending maps,
-    ** which restoreFromCommitted() is about to free. Clear and detach the
-    ** aliases first; touching them after the catalog is freed is a UAF. */
+    ** which restoreFromCommitted() (via catFree) frees. Detach the aliases so
+    ** nothing dereferences them afterwards. We only null them here — do NOT
+    ** clear the maps: catFree owns that, and a prior savepoint rollback may
+    ** already have freed the map this cursor points at, so clearing it would
+    ** be a use-after-free. ensureMutMap re-aliases from the catalog on reuse. */
     {
       BtCursor *pC;
       for(pC = pBt->pCursor; pC; pC = pC->pNext){
         if( pC->pBtree==p && pC->pMutMap ){
-          prollyMutMapClear(pC->pMutMap);
           pC->pMutMap = 0;
           pC->mmActive = 0;
           pC->mmPhysActive = 0;
