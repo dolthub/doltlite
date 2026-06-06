@@ -542,6 +542,7 @@ jobs:
           fts3ad fts3ae fts3af fts3ag fts3ah fts3aj fts3ak fts3al \
           fts3am fts3atoken fts3atoken2 fts3auto fts3aux1 fts3aux2 fts3b fts3c \
           fts3comp1 fts3corrupt fts3corrupt3 fts3corrupt5 fts3corrupt6 fts3d fts3defer fts3drop \
+          fts3fault fts3fault2 \
           fts3dropmod fts3e fts3expr fts3expr2 fts3expr3 fts3expr4 fts3expr5 fts3f \
           fts3first fts3integrity fts3join fts3matchinfo fts3matchinfo2 fts3misc fts3near fts3offsets \
           fts3prefix fts3prefix2 fts3query fts3rank fts3snippet2 fts3sort fts3tok_err fts3tok1 \
