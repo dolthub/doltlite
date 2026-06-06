@@ -538,7 +538,7 @@ jobs:
           decimal delete3 delete4 e_blobbytes e_droptrigger e_dropview e_resolve emptytable \
           eqp eqp2 errofst1 eval exec exists existsexpr existsexpr2 \
           expr2 exprfault expridx1 filectrl filter1 filter2 filterfault fkey3 \
-          fkey4 fkey6 fkey7 fkey8 fts-9fd058691 fts3aa fts3ab fts3ac \
+          fkey4 fkey6 fkey7 fkey8 fordelete fts-9fd058691 fts3aa fts3ab fts3ac \
           fts3ad fts3ae fts3af fts3ag fts3ah fts3aj fts3ak fts3al \
           fts3am fts3atoken fts3atoken2 fts3auto fts3aux1 fts3aux2 fts3b fts3c \
           fts3comp1 fts3corrupt fts3corrupt3 fts3corrupt5 fts3corrupt6 fts3d fts3defer fts3drop \
