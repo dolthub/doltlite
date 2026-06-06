@@ -399,10 +399,19 @@ static int gcRewriteFile(
   csSerializeManifest(&manifestCs, manifest);
 
   if( chunkFileGetFilename(&cs->file) && strcmp(chunkFileGetFilename(&cs->file), ":memory:")!=0 ){
-    char *zTmp = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
-    if( !zTmp ){
+    char *zRaw = sqlite3_mprintf("%s-gc-tmp", chunkFileGetFilename(&cs->file));
+    char *zTmp = 0;
+    if( !zRaw ){
       sqlite3_free(indexBuf);
       return SQLITE_NOMEM;
+    }
+    /* Opened with SQLITE_OPEN_MAIN_DB below, so the name needs the VFS's
+    ** double-nul terminator. */
+    rc = chunkStoreDupFilenameDoubleNul(zRaw, &zTmp);
+    sqlite3_free(zRaw);
+    if( rc!=SQLITE_OK ){
+      sqlite3_free(indexBuf);
+      return rc;
     }
 
     {

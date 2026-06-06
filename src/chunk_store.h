@@ -215,4 +215,10 @@ int chunkStoreRefreshIfChanged(ChunkStore *cs, int *pChanged);
 ** acquisition; caller holds the graph lock. */
 int chunkStoreForceRefresh(ChunkStore *cs);
 
+/* Duplicate z into a fresh buffer terminated by TWO '\0' bytes, as required
+** for any filename handed to a VFS xOpen() with SQLITE_OPEN_MAIN_DB (the
+** empty URI-parameter terminator; sqlite3_uri_parameter and test VFSes scan
+** past the first nul). Returns SQLITE_OK or SQLITE_NOMEM. */
+int chunkStoreDupFilenameDoubleNul(const char *z, char **pzOut);
+
 #endif

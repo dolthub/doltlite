@@ -569,7 +569,7 @@ jobs:
           selectH session shared4 sharedB shell1 shell2 shell3 shell4 \
           shell5 shell6 shell7 shell8 shell9 shellA shellB skipscan3 \
           skipscan5 skipscan6 snapshot snapshot_fault snapshot_up snapshot2 snapshot3 snapshot4 \
-          sort2 sorterref speed4p spellfix spellfix2 spellfix3 spellfix4 sqldiff1 \
+          sort2 sort5 sorterref speed4p spellfix spellfix2 spellfix3 spellfix4 sqldiff1 \
           sqllog starschema1 stmtrand stmtvtab1 strict1 subquery2 subselect subtype1 \
           swarmvtab2 swarmvtab3 swarmvtabfault symlink2 tabfunc01 tableapi tableopts tempdb2 \
           temptable3 temptrigger timediff1 tkt-02a8e81d44 tkt-18458b1a tkt-26ff0c2d1e tkt-2a5629202f tkt-2d1a5c67d \
