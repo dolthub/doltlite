@@ -3,10 +3,8 @@
 # DoltLite storage should route filesystem access through SQLite's VFS layer.
 # This lint keeps raw OS file calls out of DoltLite-owned production code.
 #
-# Allowlisted exceptions are either:
-#   - socket/pipe descriptors, not database files;
-#   - the os_kv.c VFS implementation itself;
-#   - atomic rename / directory fsync gaps not represented by sqlite3_vfs.
+# Allowlisted exceptions are either socket/pipe descriptors, not database
+# files, or the os_kv.c VFS implementation itself.
 
 set -u
 
@@ -39,11 +37,8 @@ raw_matches \
   | grep -Ev '^src/doltlite_remotesrv\.c:[0-9]+:.*\b(read|close)[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_http_remote\.c:[0-9]+:.*\b(read|close)[[:space:]]*\(' \
   | grep -Ev '^src/doltlite_remote\.c:[0-9]+:.*\bwrite[[:space:]]*\(' \
-  | grep -Ev '^src/doltlite_gc\.c:[0-9]+:.*\b(rename|open|fsync|close)[[:space:]]*\(' \
-  | grep -Ev '^src/pager_shim\.c:[0-9]+:.*\brename[[:space:]]*\(' \
   | grep -Ev '^src/os_kv\.c:[0-9]+:.*\b(fopen|fclose|fread|unlink|access|stat)[[:space:]]*\(' \
-  | grep -Ev '^src/(doltlite_remotesrv|doltlite_http_remote|doltlite_remote|doltlite_gc|os_kv)\.c:[0-9]+:#include <unistd\.h>' \
-  | grep -Ev '^src/doltlite_gc\.c:[0-9]+:#include <fcntl\.h>' \
+  | grep -Ev '^src/(doltlite_remotesrv|doltlite_http_remote|doltlite_remote|os_kv)\.c:[0-9]+:#include <unistd\.h>' \
   | grep -Ev '^src/os_kv\.c:[0-9]+:#include <sys/stat\.h>' \
   > "$TMPFILE"
 
