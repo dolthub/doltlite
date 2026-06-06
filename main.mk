@@ -579,7 +579,7 @@ PROLLY_OBJS = prolly_hash.o prolly_xxhash.o blake3.o blake3_portable.o blake3_di
               chunk_store.o chunk_wal.o chunk_refs.o chunk_index.o chunk_staging.o chunk_file.o prolly_cursor.o prolly_mutmap.o prolly_chunker.o \
               prolly_mutate.o prolly_check.o prolly_diff.o prolly_three_way_diff.o prolly_three_way_merge.o prolly_btree.o pager_shim.o sortkey.o \
               doltlite.o doltlite_commit.o doltlite_ref.o doltlite_log.o doltlite_commit_ancestors.o doltlite_status.o \
-              doltlite_diff.o doltlite_diff_table.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_schema_merge.o doltlite_conflicts.o \
+              doltlite_diff.o doltlite_diff_table.o doltlite_workspace.o doltlite_branch.o doltlite_tag.o doltlite_ancestor.o doltlite_merge.o doltlite_schema_merge.o doltlite_conflicts.o \
               doltlite_gc.o doltlite_chunk_walk.o doltlite_history.o doltlite_at.o doltlite_blame.o doltlite_schema_diff.o doltlite_schemas.o doltlite_diff_stat.o doltlite_record.o \
               doltlite_ignore.o doltlite_hashof.o \
               doltlite_constraint_violations.o \
@@ -619,7 +619,7 @@ ifeq ($(DOLTLITE_PROLLY),1)
     $(TOP)/src/chunk_staging.c $(TOP)/src/chunk_file.c \
     $(TOP)/src/doltlite.c $(TOP)/src/doltlite_commit.c $(TOP)/src/doltlite_ref.c \
     $(TOP)/src/doltlite_log.c $(TOP)/src/doltlite_commit_ancestors.c \
-    $(TOP)/src/doltlite_status.c $(TOP)/src/doltlite_diff.c $(TOP)/src/doltlite_diff_table.c \
+    $(TOP)/src/doltlite_status.c $(TOP)/src/doltlite_diff.c $(TOP)/src/doltlite_diff_table.c $(TOP)/src/doltlite_workspace.c \
     $(TOP)/src/doltlite_branch.c $(TOP)/src/doltlite_tag.c $(TOP)/src/doltlite_ancestor.c \
     $(TOP)/src/doltlite_merge.c $(TOP)/src/doltlite_schema_merge.c \
     $(TOP)/src/doltlite_conflicts.c $(TOP)/src/doltlite_gc.c $(TOP)/src/doltlite_chunk_walk.c \
@@ -1528,6 +1528,9 @@ doltlite_chunk_walk.o:	$(TOP)/src/doltlite_chunk_walk.c $(DEPS_OBJ_COMMON)
 
 doltlite_diff_table.o:	$(TOP)/src/doltlite_diff_table.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_diff_table.c
+
+doltlite_workspace.o:	$(TOP)/src/doltlite_workspace.c $(DEPS_OBJ_COMMON)
+	$(T.cc.sqlite) -c $(TOP)/src/doltlite_workspace.c
 
 doltlite_history.o:	$(TOP)/src/doltlite_history.c $(DEPS_OBJ_COMMON)
 	$(T.cc.sqlite) -c $(TOP)/src/doltlite_history.c

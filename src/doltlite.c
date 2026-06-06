@@ -70,6 +70,7 @@ extern int doltliteRegisterConflictTables(sqlite3 *db);
 extern int doltliteTagRegister(sqlite3 *db);
 extern int doltliteGcRegister(sqlite3 *db);
 extern int doltliteRegisterDiffTables(sqlite3 *db);
+extern int doltliteRegisterWorkspaceTables(sqlite3 *db);
 extern int doltliteAncestorRegister(sqlite3 *db);
 extern int doltliteRegisterAtTables(sqlite3 *db);
 extern int doltliteRegisterHistoryTables(sqlite3 *db);
@@ -2021,6 +2022,11 @@ static void doltliteCommitFunc(
   doltliteHashToHex(&commitHash, hexBuf);
 
   rc = doltliteRegisterDiffTables(db);
+  if( rc!=SQLITE_OK ){
+    sqlite3_result_error_code(context, rc);
+    return;
+  }
+  rc = doltliteRegisterWorkspaceTables(db);
   if( rc!=SQLITE_OK ){
     sqlite3_result_error_code(context, rc);
     return;
@@ -5012,6 +5018,7 @@ void doltliteRegister(sqlite3 *db){
   if( doltliteConflictsRegister(db)!=SQLITE_OK ) return;
   if( doltliteGcRegister(db)!=SQLITE_OK ) return;
   if( doltliteRegisterDiffTables(db)!=SQLITE_OK ) return;
+  if( doltliteRegisterWorkspaceTables(db)!=SQLITE_OK ) return;
   if( doltliteAncestorRegister(db)!=SQLITE_OK ) return;
   if( doltliteRegisterAtTables(db)!=SQLITE_OK ) return;
   if( doltliteRegisterHistoryTables(db)!=SQLITE_OK ) return;

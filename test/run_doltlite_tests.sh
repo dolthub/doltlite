@@ -31,6 +31,7 @@ TESTS=(
   # Versioning features
   doltlite_commit.sh
   doltlite_staging.sh
+  doltlite_workspace.sh
   doltlite_diff.sh
   doltlite_reset.sh
   doltlite_branch.sh
