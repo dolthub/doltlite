@@ -3103,6 +3103,10 @@ op_column_restart:
       assert( sqlite3BtreeCursorIsValid(pCrsr) );
       pC->payloadSize = sqlite3BtreePayloadSize(pCrsr);
       pC->aRow = sqlite3BtreePayloadFetch(pCrsr, &pC->szRow);
+      if( pC->aRow==0 ){
+        if( db->mallocFailed ) goto no_mem;
+        goto op_column_corrupt;
+      }
       assert( pC->szRow<=pC->payloadSize );
       assert( pC->szRow<=65536 );  /* Maximum page size is 64KiB */
     }

@@ -465,7 +465,7 @@ static void invalidateSchema(Btree *pBtree);
 static int flushMutMap(BtCursor *pCur);
 static void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
                                         Pgno iTable, ProllyMutMap *pNewMap);
-static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
+static int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
 static int flushIfNeeded(BtCursor *pCur);
 static int flushAllPending(Btree *pBtree, BtShared *pBt, Pgno iTable);
 static int applyMutMapToTableRoot(BtShared *pBt, struct TableEntry *pTE, ProllyMutMap *pMap);
@@ -7471,12 +7471,32 @@ i64 sqlite3BtreeIntegerKey(BtCursor *pCur){
   return pCur->pCurOps->xIntegerKey(pCur);
 }
 
-static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
+static int cursorPayloadFault(
+  BtCursor *pCur,
+  int rc,
+  const u8 **ppData,
+  int *pnData
+){
+  sqlite3 *db = pCur && pCur->pBtree ? pCur->pBtree->db : 0;
+  /* PayloadSize and PayloadFetch may both reconstruct payloads. Surface OOM
+  ** through db->mallocFailed so a size/fetch mismatch cannot masquerade as
+  ** a malformed record. */
+  if( rc==SQLITE_NOMEM && db ){
+    sqlite3OomFault(db);
+  }
+  *ppData = 0;
+  *pnData = 0;
+  return rc;
+}
+
+static int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
+  *ppData = 0;
+  *pnData = 0;
 
   if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
     *ppData = pCur->pCachedPayload;
     *pnData = pCur->nCachedPayload;
-    return;
+    return SQLITE_OK;
   }
 
   if( pCur->mmActive
@@ -7497,24 +7517,16 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
         *ppData = e->pVal;
         *pnData = e->nVal;
       }else{
-        int rcRecon = cacheCursorPayloadReconstructed(pCur, e->pKey, e->nKey);
-        if( rcRecon==SQLITE_OK ){
+        int rc = cacheCursorPayloadReconstructed(pCur, e->pKey, e->nKey);
+        if( rc==SQLITE_OK ){
           *ppData = pCur->pCachedPayload;
           *pnData = pCur->nCachedPayload;
         }else{
-          /* Reconstruction failed under OOM. PayloadSize and PayloadFetch each
-          ** call this; if one fails and a later (transient-OOM) call succeeds,
-          ** OP_Column sees size 0 vs a non-empty row and reports a false
-          ** "malformed". Record the OOM so the read aborts as SQLITE_NOMEM. */
-          if( rcRecon==SQLITE_NOMEM && pCur->pBtree && pCur->pBtree->db ){
-            sqlite3OomFault(pCur->pBtree->db);
-          }
-          *ppData = 0;
-          *pnData = 0;
+          return cursorPayloadFault(pCur, rc, ppData, pnData);
         }
       }
     }
-    return;
+    return SQLITE_OK;
   }
 
   if( pCur->curIntKey ){
@@ -7537,25 +7549,18 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
       *ppData = pVal;
       *pnData = nVal;
     }else{
-      const u8 *pKey; int nKey;
+      const u8 *pKey; int nKey; int rc;
       prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-      {
-        int rcRecon = cacheCursorPayloadReconstructed(pCur, pKey, nKey);
-        if( rcRecon==SQLITE_OK ){
-          *ppData = pCur->pCachedPayload;
-          *pnData = pCur->nCachedPayload;
-        }else{
-          /* See note above: surface reconstruction OOM as SQLITE_NOMEM so a
-          ** size/fetch mismatch can't masquerade as a corrupt record. */
-          if( rcRecon==SQLITE_NOMEM && pCur->pBtree && pCur->pBtree->db ){
-            sqlite3OomFault(pCur->pBtree->db);
-          }
-          *ppData = pVal;
-          *pnData = 0;
-        }
+      rc = cacheCursorPayloadReconstructed(pCur, pKey, nKey);
+      if( rc==SQLITE_OK ){
+        *ppData = pCur->pCachedPayload;
+        *pnData = pCur->nCachedPayload;
+      }else{
+        return cursorPayloadFault(pCur, rc, ppData, pnData);
       }
     }
   }
+  return SQLITE_OK;
 }
 
 static u32 prollyBtCursorPayloadSize(BtCursor *pCur){
@@ -7565,7 +7570,9 @@ static u32 prollyBtCursorPayloadSize(BtCursor *pCur){
   if( pCur->pCachedPayload && pCur->nCachedPayload > 0 ){
     return (u32)pCur->nCachedPayload;
   }
-  getCursorPayload(pCur, &pData, &nData);
+  if( getCursorPayload(pCur, &pData, &nData)!=SQLITE_OK ){
+    return 0;
+  }
   return (u32)nData;
 }
 u32 sqlite3BtreePayloadSize(BtCursor *pCur){
@@ -7578,9 +7585,13 @@ u32 sqlite3BtreePayloadSize(BtCursor *pCur){
 static int prollyBtCursorPayload(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   const u8 *pData;
   int nData;
+  int rc;
 
   assert( pCur->eState==CURSOR_VALID );
-  getCursorPayload(pCur, &pData, &nData);
+  rc = getCursorPayload(pCur, &pData, &nData);
+  if( rc!=SQLITE_OK ){
+    return rc;
+  }
 
   if( (i64)offset + (i64)amt > (i64)nData ){
     return SQLITE_CORRUPT_BKPT;
@@ -7603,7 +7614,10 @@ static const void *prollyBtCursorPayloadFetch(BtCursor *pCur, u32 *pAmt){
     if( pAmt ) *pAmt = (u32)pCur->nCachedPayload;
     return (const void*)pCur->pCachedPayload;
   }
-  getCursorPayload(pCur, &pData, &nData);
+  if( getCursorPayload(pCur, &pData, &nData)!=SQLITE_OK ){
+    if( pAmt ) *pAmt = 0;
+    return 0;
+  }
 
   if( pAmt ) *pAmt = (u32)nData;
   return (const void*)pData;
@@ -8189,7 +8203,10 @@ static int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
     ** prollyCursorValue() on pSrc->pCur NULL-derefs in prollyNodeValue. */
     const u8 *pVal;
     int nVal;
-    getCursorPayload(pSrc, &pVal, &nVal);
+    rc = getCursorPayload(pSrc, &pVal, &nVal);
+    if( rc!=SQLITE_OK ){
+      return rc;
+    }
     payload.nKey = iKey;
     payload.pData = pVal;
     payload.nData = nVal;
@@ -8795,12 +8812,16 @@ int sqlite3BtreeCheckpoint(Btree *p, int eMode, int *pnLog, int *pnCkpt){
 static int prollyBtCursorPayloadChecked(BtCursor *pCur, u32 offset, u32 amt, void *pBuf){
   const u8 *pVal;
   int nVal;
+  int rc;
 
   if( pCur->eState!=CURSOR_VALID ){
     return SQLITE_ABORT;
   }
 
-  getCursorPayload(pCur, &pVal, &nVal);
+  rc = getCursorPayload(pCur, &pVal, &nVal);
+  if( rc!=SQLITE_OK ){
+    return rc;
+  }
 
   if( (i64)offset + (i64)amt > (i64)nVal ){
     return SQLITE_CORRUPT_BKPT;

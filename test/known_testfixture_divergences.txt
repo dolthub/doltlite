@@ -1175,6 +1175,23 @@ fkey_malloc fkey_malloc-7.transient.202  # rowid-range DELETE
 fkey_malloc fkey_malloc-7.transient.523  # rowid-range DELETE
 fkey_malloc fkey_malloc-7.transient.524  # rowid-range DELETE
 fkey_malloc fkey_malloc-7.transient.525  # rowid-range DELETE
+
+# cffault — sqlite3_db_cacheflush fault tests scan updated rows without an
+# ORDER BY. SQLite observes rowid/insertion order; DoltLite observes user-PK
+# order from prolly storage, so the injected-fault iteration sees a different
+# row order/visible row set. Recovered into the gate once #1223 stopped OOM
+# payload reconstruction from returning a NULL payload pointer.
+cffault cffault-2.1-cantopen-persistent.1  # cacheflush fault during unordered scan
+cffault cffault-2.1-cantopen-transient.1   # cacheflush fault during unordered scan
+cffault cffault-2.1-full.1                 # cacheflush fault during unordered scan
+cffault cffault-2.1-ioerr-persistent.1     # cacheflush fault during unordered scan
+cffault cffault-2.1-ioerr-transient.1      # cacheflush fault during unordered scan
+cffault cffault-2.1-oom-persistent.31      # cacheflush fault during unordered scan
+cffault cffault-2.1-oom-transient.28       # cacheflush fault during unordered scan
+cffault cffault-2.1-oom-transient.31       # cacheflush fault during unordered scan
+cffault cffault-2.1-shmerr-persistent.1    # cacheflush fault during unordered scan
+cffault cffault-2.1-shmerr-transient.1     # cacheflush fault during unordered scan
+cffault cffault-2.4-oom-transient.22       # cacheflush/release-memory unordered scan
 # vacuum5 — VACUUM file-size / page-count metrics; doltlite has no SQLite page
 # format so the byte/page counts differ (the data is correct). Recovered into
 # the gate once the cross-backend TransferRow SEGV was fixed.

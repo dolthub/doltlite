@@ -535,7 +535,7 @@ jobs:
           collate5 collate6 collate7 collate8 collateA collateB colname columncount \
           conflict2 contrib01 corrupt3 cost countofview coveridxscan csv01 ctime \
           cursorhint cursorhint2 dataversion1 date2 date3 date4 date5 dbdata \
-          decimal delete3 delete4 e_blobbytes e_droptrigger e_dropview e_resolve emptytable \
+          cffault decimal delete3 delete4 e_blobbytes e_droptrigger e_dropview e_resolve emptytable \
           eqp eqp2 errofst1 eval exec exists existsexpr existsexpr2 \
           expr2 exprfault expridx1 filectrl filter1 filter2 filterfault fkey3 \
           fkey4 fkey6 fkey7 fkey8 fkey_malloc fordelete fts-9fd058691 fts3aa fts3ab fts3ac \
