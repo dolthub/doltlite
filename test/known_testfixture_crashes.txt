@@ -57,3 +57,10 @@ e_walckpt     # WAL checkpoint semantics; reaches summary then UAFs in test_vfs 
 # empty/undersized blob (vtable schema-reload visibility), accumulating into a
 # hang. History-dependent; not per-test gateable. Tracked in #1119.
 rtree         # rtree vtable schema-reload visibility; times out
+
+# memdb1 exercises the sqlite3_serialize()/sqlite3_deserialize() page-image API,
+# which is unsupported on prolly storage (no stock page image). sqlite3_serialize
+# now returns NULL cleanly instead of crashing (#1225), but the file then aborts
+# on the first `db deserialize` (line 52) before the summary. doltlite exports via
+# a VFS backup (sqlite3_js_db_export under DOLTLITE_PROLLY), not this API.
+memdb1        # sqlite3_serialize/deserialize page-image API unsupported on prolly storage
