@@ -64,3 +64,16 @@ rtree         # rtree vtable schema-reload visibility; times out
 # on the first `db deserialize` (line 52) before the summary. doltlite exports via
 # a VFS backup (sqlite3_js_db_export under DOLTLITE_PROLLY), not this API.
 memdb1        # sqlite3_serialize/deserialize page-image API unsupported on prolly storage
+
+# createtab and incrcorrupt UAF on a freed sqlite3_stmt, but the root cause is
+# an intentional divergence, not a lifecycle bug. doltlite deliberately errors
+# on PRAGMA auto_vacuum / incremental_vacuum ("auto_vacuum is not supported on
+# doltlite-format databases"). That makes a sqlite3_prepare fail, so the test's
+# Tcl stmt variable is never reassigned and keeps a stale pointer to a statement
+# whose connection was already closed (freed via sqlite3LeaveMutexAndCloseZombie);
+# the next sqlite3_column_int / sqlite3_finalize on that freed pointer is the UAF.
+# It is undetectable defensively (a freed stmt pointer looks valid) and is a test
+# footgun exposed by the intentional PRAGMA divergence, like alter2/walro.
+# (createtab additionally diverges on read-cursor-abort-across-DDL; see triggerC-12.2.)
+createtab     # PRAGMA auto_vacuum errors (intentional) -> failed prepare -> stale stmt var -> UAF
+incrcorrupt   # PRAGMA auto_vacuum/incremental_vacuum errors (intentional) -> stale stmt var -> UAF
