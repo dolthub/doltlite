@@ -1158,3 +1158,20 @@ fordelete fordelete-1.1  # sqlite_autoindex naming: "t1" vs "sqlite_autoindex_t1
 fordelete fordelete-1.2  # sqlite_autoindex naming
 fordelete fordelete-1.3  # sqlite_autoindex naming
 fordelete fordelete-1.4  # sqlite_autoindex naming
+
+# fkey_malloc — DELETE ... WHERE rowid uses the rowid column, which doltlite's
+# WITHOUT-ROWID tables don't expose, so these assertions diverge ("no such
+# column: rowid" / different affected-row count). Recovered into the gate after
+# the OOM crashes (#1212/#1216) were fixed; fault-iteration numbers are
+# deterministic on the CI build.
+fkey_malloc fkey_malloc-6.transient.33   # DELETE WHERE rowid: no such column rowid
+fkey_malloc fkey_malloc-6.transient.34   # DELETE WHERE rowid
+fkey_malloc fkey_malloc-6.transient.35   # DELETE WHERE rowid
+fkey_malloc fkey_malloc-6.transient.69   # DELETE WHERE rowid
+fkey_malloc fkey_malloc-6.persistent.69  # DELETE WHERE rowid
+fkey_malloc fkey_malloc-7.transient.200  # DELETE FROM t1 WHERE rowid>1: WITHOUT-ROWID row set differs
+fkey_malloc fkey_malloc-7.transient.201  # rowid-range DELETE
+fkey_malloc fkey_malloc-7.transient.202  # rowid-range DELETE
+fkey_malloc fkey_malloc-7.transient.523  # rowid-range DELETE
+fkey_malloc fkey_malloc-7.transient.524  # rowid-range DELETE
+fkey_malloc fkey_malloc-7.transient.525  # rowid-range DELETE
