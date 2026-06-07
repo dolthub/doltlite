@@ -8271,7 +8271,41 @@ int sqlite3BtreeTripAllCursors(Btree *p, int errCode, int writeOnly){
   }
   return SQLITE_OK;
 }
+/* Backend-agnostic row transfer for when pSrc and pDest use different cursor
+** backends (e.g. VACUUM copying a prolly table into a stock-btree temp db).
+** Each backend's xTransferRow fast path assumes the other cursor is the same
+** type and reaches into pOrigCursor / pCur directly, which is a NULL deref
+** across backends. Copy via the public payload accessors instead. */
+static int btreeGenericTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
+  int rc;
+  BtreePayload x;
+  u32 nPayload;
+  u8 *pBuf;
+
+  nPayload = sqlite3BtreePayloadSize(pSrc);
+  pBuf = (u8*)sqlite3_malloc(nPayload>0 ? (int)nPayload : 1);
+  if( pBuf==0 ) return SQLITE_NOMEM;
+  rc = sqlite3BtreePayload(pSrc, 0, nPayload, pBuf);
+  if( rc!=SQLITE_OK ){ sqlite3_free(pBuf); return rc; }
+
+  memset(&x, 0, sizeof(x));
+  if( pDest->curIntKey ){
+    x.nKey = iKey;
+    x.pData = pBuf;
+    x.nData = (int)nPayload;
+  }else{
+    x.pKey = pBuf;
+    x.nKey = (int)nPayload;
+  }
+  rc = sqlite3BtreeInsert(pDest, &x, 0, 0);
+  sqlite3_free(pBuf);
+  return rc;
+}
+
 int sqlite3BtreeTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
+  if( pDest->pCurOps != pSrc->pCurOps ){
+    return btreeGenericTransferRow(pDest, pSrc, iKey);
+  }
   return pDest->pCurOps->xTransferRow(pDest, pSrc, iKey);
 }
 
