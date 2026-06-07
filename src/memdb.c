@@ -789,6 +789,17 @@ unsigned char *sqlite3_serialize(
   }
   pBt = db->aDb[iDb].pBt;
   if( pBt==0 ) return 0;
+#ifdef DOLTLITE_PROLLY
+  /* doltlite stores prolly trees, not a stock page image. Its chunk-store
+  ** pager shim answers every sqlite3PagerGet() with SQLITE_OK and a NULL page,
+  ** so the page dump below would memcpy() from a NULL pointer. There is no page
+  ** image to serialize, so report the operation as unsupported (NULL) rather
+  ** than crashing or returning a zero-filled buffer. */
+  {
+    extern int pagerShimIsShim(const Pager*);
+    if( pagerShimIsShim(sqlite3BtreePager(pBt)) ) return 0;
+  }
+#endif
   szPage = sqlite3BtreeGetPageSize(pBt);
   zSql = sqlite3_mprintf("PRAGMA \"%w\".page_count", zSchema);
   rc = zSql ? sqlite3_prepare_v2(db, zSql, -1, &pStmt, 0) : SQLITE_NOMEM;
