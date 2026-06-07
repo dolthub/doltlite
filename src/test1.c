@@ -117,6 +117,16 @@ int getDbPointer(Tcl_Interp *interp, const char *zA, sqlite3 **ppDb){
     *ppDb = p->db;
   }else{
     *ppDb = (sqlite3*)sqlite3TestTextToPtr(zA);
+#ifdef DOLTLITE_PROLLY
+    /* doltlite validates the chunk-store manifest at open time, so a file with
+    ** deliberately-corrupted header bytes (set_file_format, shm permissions)
+    ** fails sqlite3_open and the Tcl connection command is never created. A
+    ** later "sqlite3_errcode db" then reaches this branch with a bare command
+    ** name, which sqlite3TestTextToPtr parses as a sub-page bogus pointer
+    ** (e.g. "db" -> 0xdb). Treat any NULL-page value as NULL so the error APIs
+    ** return cleanly rather than dereferencing a wild pointer. */
+    if( (uptr)(*ppDb) < 4096 ) *ppDb = 0;
+#endif
   }
   return TCL_OK;
 }

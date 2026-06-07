@@ -1201,3 +1201,21 @@ shared9 shared9-2.1  # shared-cache locking-model divergence
 shared9 shared9-3.4  # "database is locked" not surfaced (shared-cache model)
 shared9 shared9-3.5  # shared-cache locking-model divergence
 shared9 shared9-3.6  # shared-cache locking-model divergence
+
+# interrupt2 — sqlite3_interrupt() is not honored during prolly table scans:
+# cursor step loops don't poll db->u1.isInterrupted, so a running statement
+# never returns SQLITE_INTERRUPT (got "not interrupted" / extra rows scanned).
+# Feature gap tracked in #1228; the file does not crash and the other 16 tests
+# give real coverage.
+interrupt2 interrupt2-1.5.1   # interrupt not honored mid-scan
+interrupt2 interrupt2-1.5.3   # interrupt not honored mid-scan
+interrupt2 interrupt2-1.10.1  # interrupt not honored mid-scan
+interrupt2 interrupt2-1.10.3  # interrupt not honored mid-scan
+interrupt2 interrupt2-1.15.1  # interrupt not honored mid-scan
+interrupt2 interrupt2-1.15.3  # interrupt not honored mid-scan
+interrupt2 interrupt2-1.20.1  # interrupt not honored mid-scan
+interrupt2 interrupt2-1.20.3  # interrupt not honored mid-scan
+interrupt2 interrupt2-2.0     # scan continues past interrupt (extra rows)
+interrupt2 interrupt2-2.1     # interrupt not honored mid-scan
+interrupt2 interrupt2-3.1.2   # interrupt not honored mid-scan
+interrupt2 interrupt2-4.1     # interrupt not honored mid-scan

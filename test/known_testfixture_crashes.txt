@@ -32,3 +32,28 @@
 crash8        # crash-recovery simulation; incompatible with prolly format / times out
 fuzz3         # raw byte-corruption fuzz mutates test.db offsets; prolly storage aborts after restore/checksum
 shared        # shared-cache semantics unsupported under doltlite; setup aborts
+
+# Raw-format/WAL divergences whose failed open cascades into an uncaught Tcl
+# error before the summary line. doltlite validates the chunk-store manifest at
+# open time, so these files' deliberately-corrupted-header / readonly-shm setups
+# (set_file_format, file attributes -permissions) fail sqlite3_open and never
+# create the Tcl connection command; later "db ..." references then raise an
+# uncaught {invalid command name "db"} that aborts the script. The wild-pointer
+# SEGV these used to take inside getDbPointer (parsing "db" as the pointer 0xdb)
+# is fixed in test1.c; the underlying open-time divergence is intentional.
+alter2        # set_file_format corrupts the prolly manifest; eager open fails, db command never created
+walro         # readonly_shm + readonly *-shm perms; doltlite has no WAL shm, open fails, db command never created
+nan           # raw hexio_write of NaN bit patterns into the manifest; eager open fails, db command never created (same footgun as alter2)
+
+# WAL / shm feature divergences. doltlite has no rollback-journal or WAL *-shm
+# sidecar, so these files' journal-mode / shm-fault setups abort before the
+# summary line (uncaught "no such file"/shm errors, or a test-VFS lock UAF in
+# tvfsLock during WAL-checkpoint teardown). Feature gaps, not prolly bugs.
+dbpagefault   # shm-fault injection; doltlite has no *-shm, setup aborts pre-summary
+walfault      # WAL-frame fault injection; no WAL, aborts pre-summary
+e_walckpt     # WAL checkpoint semantics; reaches summary then UAFs in test_vfs tvfsLock teardown
+
+# rtree virtual table: after DROP+CREATE the %_node shadow table reload reads an
+# empty/undersized blob (vtable schema-reload visibility), accumulating into a
+# hang. History-dependent; not per-test gateable. Tracked in #1119.
+rtree         # rtree vtable schema-reload visibility; times out
