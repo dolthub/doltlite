@@ -435,6 +435,14 @@ static int ensureOrder(ProllyMutMap *mm){
   return SQLITE_OK;
 }
 
+/* Materialize the sorted iteration order now, propagating an allocation
+** failure. The void iterator-init helpers call ensureOrder() internally and
+** discard its return code, so a caller that must not iterate a stale order
+** under OOM (e.g. a tree build) calls this first and bails on error. */
+int prollyMutMapEnsureOrder(ProllyMutMap *mm){
+  return ensureOrder(mm);
+}
+
 static int rankEntryWithoutOrder(ProllyMutMap *mm, int phys){
   ProllyMutMapEntry *target = &mm->aEntries[phys];
   int rank = 0;
