@@ -68,6 +68,7 @@ int doltliteSerializeCatalogEntriesWithFallbackSchema(
   u8 **ppOut,
   int *pnOut
 );
+int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
 
 #ifndef TRANS_NONE
 #define TRANS_NONE  0
@@ -2811,7 +2812,17 @@ static void setCursorToMutMapMissingEntryPhys(BtCursor *pCur, int physIdx){
   }
 }
 
+static int prollyCursorCheckInterrupt(BtCursor *pCur){
+  sqlite3 *db = pCur && pCur->pBtree ? pCur->pBtree->db : 0;
+  if( db && AtomicLoad(&db->u1.isInterrupted) ){
+    return SQLITE_INTERRUPT;
+  }
+  return SQLITE_OK;
+}
+
 static int advanceTreeCursor(BtCursor *pCur, int dir){
+  int rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   if( dir>0 ){
     return prollyCursorNext(&pCur->pCur);
   }else{
@@ -6093,6 +6104,8 @@ static int mergeScan(BtCursor *pCur, int dir, int *pRes){
     int mutOk  = (pCur->mmIdx >= 0 && pCur->mmIdx < pCur->pMutMap->nEntries);
     ProllyMutMapEntry *e;
     int cmp;
+    int rc = prollyCursorCheckInterrupt(pCur);
+    if( rc!=SQLITE_OK ) return rc;
 
     if( !treeOk && !mutOk ){
       if( pRes ){ *pRes = 1; return SQLITE_OK; }
@@ -6149,6 +6162,8 @@ static int materializeDeferredTreeSeek(BtCursor *pCur, int dir){
   if( !pCur->deferredTreeSeek ) return SQLITE_OK;
   pCur->deferredTreeSeek = 0;
   refreshCursorRoot(pCur);
+  rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   rc = prollyCursorSeekInt(&pCur->pCur, pCur->cachedIntKey, &res);
   if( rc!=SQLITE_OK ) return rc;
   if( res==0 ){
@@ -6240,6 +6255,8 @@ static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
   refreshCursorRoot(pCur);
+  rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   rc = prollyCursorFirst(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
   clearMergeCursorState(pCur);
@@ -6264,6 +6281,8 @@ static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
   refreshCursorRoot(pCur);
+  rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
   clearMergeCursorState(pCur);
@@ -6291,6 +6310,9 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
   int rc;
   (void)flags;
   CLEAR_CACHED_PAYLOAD(pCur);
+
+  rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
 
   if( pCur->eState==CURSOR_INVALID ){
     return SQLITE_DONE;
@@ -6416,6 +6438,9 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags){
   int rc;
   (void)flags;
   CLEAR_CACHED_PAYLOAD(pCur);
+
+  rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
 
   if( pCur->eState==CURSOR_INVALID ){
     return SQLITE_DONE;
@@ -6848,6 +6873,8 @@ static int scanTreeForCustomCollation(
     int cmp;
     int isDeleted = 0;
 
+    rc = prollyCursorCheckInterrupt(pCur);
+    if( rc!=SQLITE_OK ) break;
     prollyCursorKey(&pCur->pCur, &pKey, &nKey);
     if( pCur->pMutMap && !prollyMutMapIsEmpty(pCur->pMutMap) ){
       ProllyMutMapEntry *pEntry = 0;
@@ -8824,10 +8851,17 @@ int sqlite3BtreeIsInBackup(Btree *p){
 
 #ifndef SQLITE_OMIT_WAL
 int sqlite3BtreeCheckpoint(Btree *p, int eMode, int *pnLog, int *pnCkpt){
-  (void)p; (void)eMode;
+  if( !p ) return SQLITE_OK;
+  if( p->pOrigBtree ){
+    return origBtreeCheckpoint(p->pOrigBtree, eMode, pnLog, pnCkpt);
+  }
   if( pnLog ) *pnLog = 0;
   if( pnCkpt ) *pnCkpt = 0;
-  return SQLITE_OK;
+  if( p->db && AtomicLoad(&p->db->u1.isInterrupted) ){
+    return SQLITE_INTERRUPT;
+  }
+  return sqlite3PagerCheckpoint(sqlite3BtreePager(p), p->db,
+                                eMode, pnLog, pnCkpt);
 }
 #endif
 
