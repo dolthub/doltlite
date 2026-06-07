@@ -111,6 +111,12 @@ struct ProllyMutMapIter {
   int idx;
 };
 
+/* Compute the sorted iteration order up front, returning SQLITE_NOMEM on
+** allocation failure. IterFirst/IterLast/IterSeek compute it lazily and
+** discard the error, so callers that must not iterate a stale order on OOM
+** (e.g. a tree build) should call this first and bail on failure. */
+int prollyMutMapEnsureOrder(ProllyMutMap *mm);
+
 void prollyMutMapIterFirst(ProllyMutMapIter *it, ProllyMutMap *mm);
 
 void prollyMutMapIterNext(ProllyMutMapIter *it);

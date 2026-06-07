@@ -1358,6 +1358,13 @@ int prollyMutateFlush(ProllyMutator *pMut){
     return SQLITE_OK;
   }
 
+  /* Materialize the edit sort order before any strategy iterates it. The
+  ** iterator helpers compute it lazily and discard an allocation failure; an
+  ** OOM there would leave a stale order and a strategy (e.g. buildFromEdits)
+  ** would emit keys out of order, corrupting the tree. Fail cleanly instead. */
+  rc = prollyMutMapEnsureOrder(pMut->pEdits);
+  if( rc!=SQLITE_OK ) return rc;
+
   if( prollyHashIsEmpty(&pMut->oldRoot) ){
     rc = buildFromEdits(pMut);
   }else{
