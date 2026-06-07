@@ -1236,3 +1236,85 @@ interrupt2 interrupt2-2.0     # scan continues past interrupt (extra rows)
 interrupt2 interrupt2-2.1     # interrupt not honored mid-scan
 interrupt2 interrupt2-3.1.2   # interrupt not honored mid-scan
 interrupt2 interrupt2-4.1     # interrupt not honored mid-scan
+
+# jrnlmode — DoltLite-format databases do not expose SQLite's rollback-journal
+# mode switching semantics; PRAGMA journal_mode either remains fixed or returns
+# "journal_mode is not configurable on doltlite-format databases". The xfer
+# crash from #1226 is fixed on current master; enabling the whole file keeps
+# jrnlmode-5.11 covered while documenting the remaining feature divergence.
+jrnlmode jrnlmode-1.0  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.1  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.2  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.4a  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.4b  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.5  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.6  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.7  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.7.1  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.7.2  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.8  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.9  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.10  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.11  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.12  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.13  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.14  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.15  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.16  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-1.99  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-2.1  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-2.2  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-2.3  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-2.4  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-2.5  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-3.2  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-4.1  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-4.2  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-4.3  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-4.4  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.1  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.3  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.4.1  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.4.2  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.5  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.6  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.7  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.8  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.10  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.11  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.12  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.13  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.14  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.15  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.16  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.17  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.18  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.19  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.20  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.21  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-5.22  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-6.1  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-6.2  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-6.3  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-6.4  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-6.5  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-6.7  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-6.9  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-7.1  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-7.2  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.5  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.6  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.7  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.8  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.13  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.14  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.15  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.16  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.17  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.21  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.23  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.24  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.28  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-8.30  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-9.1  # journal_mode unsupported on doltlite-format databases
+jrnlmode jrnlmode-9.2  # journal_mode unsupported on doltlite-format databases
