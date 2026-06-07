@@ -8177,24 +8177,33 @@ int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
 
 static int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   int rc;
-  const u8 *pVal;
-  int nVal;
   BtreePayload payload;
 
   assert( pSrc->eState==CURSOR_VALID );
 
-  prollyCursorValue(&pSrc->pCur, &pVal, &nVal);
-
   memset(&payload, 0, sizeof(payload));
 
   if( pDest->curIntKey ){
+    /* Read the source value through getCursorPayload (mutmap-aware): a row that
+    ** lives in the source's pending mutmap has no tree node, so a bare
+    ** prollyCursorValue() on pSrc->pCur NULL-derefs in prollyNodeValue. */
+    const u8 *pVal;
+    int nVal;
+    getCursorPayload(pSrc, &pVal, &nVal);
     payload.nKey = iKey;
     payload.pData = pVal;
     payload.nData = nVal;
   } else {
     const u8 *pKey;
     int nKey;
-    prollyCursorKey(&pSrc->pCur, &pKey, &nKey);
+    if( pSrc->mmActive
+     && (pSrc->mergeSrc==MERGE_SRC_MUT || pSrc->mergeSrc==MERGE_SRC_BOTH) ){
+      ProllyMutMapEntry *pEntry = currentMutMapEntry(pSrc);
+      pKey = pEntry->pKey;
+      nKey = pEntry->nKey;
+    }else{
+      prollyCursorKey(&pSrc->pCur, &pKey, &nKey);
+    }
     payload.pKey = pKey;
     payload.nKey = nKey;
   }

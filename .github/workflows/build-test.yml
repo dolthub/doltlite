@@ -477,7 +477,7 @@ jobs:
           orderby1 orderby2 orderby3 orderby4 \
           pragma pragma2 printf2 \
           schema schema2 schema3 schema4 \
-          shared shared2 shared3 \
+          shared shared2 shared3 shared9 \
           speed1 substr table tempdb \
           vacuum vacuum2 vacuum5 autoinc interrupt \
           tkt-38cb5df375 tkt-9a8b09f8e6 tkt-99378177930f87bd \
