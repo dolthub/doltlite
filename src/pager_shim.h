@@ -37,6 +37,9 @@ void pagerShimDestroy(PagerShim *pShim);
 ** even when the underlying cs->pFile is replaced. */
 void pagerShimSetStore(PagerShim *pShim, struct ChunkStore *pStore);
 
+/* True when pPager is a chunk-store pager shim (vs a real SQLite pager). */
+int pagerShimIsShim(const Pager *pPager);
+
 sqlite3_file *sqlite3PagerFile(Pager*);
 
 const char *sqlite3PagerFilename(const Pager*, int);
