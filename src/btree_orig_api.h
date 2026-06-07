@@ -32,6 +32,7 @@ int origBtreeCommit(void *p);
 int origBtreeRollback(void *p, int tripCode, int writeOnly);
 int origBtreeBeginStmt(void *p, int iStatement);
 int origBtreeSavepoint(void *p, int op, int iSavepoint);
+int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
 int origBtreeTxnState(void *p);
 int origBtreeCreateTable(void *p, Pgno *piTable, int flags);
 int origBtreeDropTable(void *p, int iTable, int *piMoved);

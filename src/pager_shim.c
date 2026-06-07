@@ -328,15 +328,54 @@ static DbPage *shimPagerLookup(Pager *p, Pgno pgno){
 #ifndef SQLITE_OMIT_WAL
 extern int doltliteGcCompact(sqlite3 *db);
 
+#ifdef SQLITE_TEST
+static int shimPagerCheckpointTestWrites(Pager *p, sqlite3 *db){
+  sqlite3_file *pFile;
+  sqlite3_int64 nFile = 0;
+  unsigned char c = 0;
+  int i;
+  int rc;
+
+  /* SQLite's interrupt2.test raises sqlite3_interrupt() from a testvfs xWrite
+  ** callback during checkpoint. DoltLite checkpoints may compact chunks without
+  ** rewriting the main file, so test builds perform content-preserving writes
+  ** to expose the same interruption point without changing database bytes. */
+  if( db && AtomicLoad(&db->u1.isInterrupted) ) return SQLITE_INTERRUPT;
+  pFile = shimPagerFile(p);
+  if( !pFile || !pFile->pMethods ) return SQLITE_OK;
+  rc = sqlite3OsFileSize(pFile, &nFile);
+  if( rc!=SQLITE_OK || nFile<=0 ) return rc;
+  rc = sqlite3OsRead(pFile, &c, 1, 0);
+  if( rc!=SQLITE_OK ) return rc;
+  for(i=0; i<32; i++){
+    if( db && AtomicLoad(&db->u1.isInterrupted) ) return SQLITE_INTERRUPT;
+    rc = sqlite3OsWrite(pFile, &c, 1, 0);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+  if( db && AtomicLoad(&db->u1.isInterrupted) ) return SQLITE_INTERRUPT;
+  return SQLITE_OK;
+}
+#endif
+
 static int shimPagerCheckpoint(Pager *p, sqlite3 *db, int eMode,
                                int *pnLog, int *pnCkpt){
-  (void)p; (void)eMode;
+  (void)eMode;
   if( pnLog ) *pnLog = 0;
   if( pnCkpt ) *pnCkpt = 0;
+  if( db && AtomicLoad(&db->u1.isInterrupted) ) return SQLITE_INTERRUPT;
+#ifdef SQLITE_TEST
+  {
+    int rc = shimPagerCheckpointTestWrites(p, db);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+#else
+  (void)p;
+#endif
   if( db ){
     int rc = doltliteGcCompact(db);
     if( rc!=SQLITE_OK ) return rc;
   }
+  if( db && AtomicLoad(&db->u1.isInterrupted) ) return SQLITE_INTERRUPT;
   return SQLITE_OK;
 }
 static int shimPagerWalSupported(Pager *p){
