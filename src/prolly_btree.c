@@ -7497,10 +7497,18 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
         *ppData = e->pVal;
         *pnData = e->nVal;
       }else{
-        if( cacheCursorPayloadReconstructed(pCur, e->pKey, e->nKey)==SQLITE_OK ){
+        int rcRecon = cacheCursorPayloadReconstructed(pCur, e->pKey, e->nKey);
+        if( rcRecon==SQLITE_OK ){
           *ppData = pCur->pCachedPayload;
           *pnData = pCur->nCachedPayload;
         }else{
+          /* Reconstruction failed under OOM. PayloadSize and PayloadFetch each
+          ** call this; if one fails and a later (transient-OOM) call succeeds,
+          ** OP_Column sees size 0 vs a non-empty row and reports a false
+          ** "malformed". Record the OOM so the read aborts as SQLITE_NOMEM. */
+          if( rcRecon==SQLITE_NOMEM && pCur->pBtree && pCur->pBtree->db ){
+            sqlite3OomFault(pCur->pBtree->db);
+          }
           *ppData = 0;
           *pnData = 0;
         }
@@ -7531,12 +7539,20 @@ static void getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
     }else{
       const u8 *pKey; int nKey;
       prollyCursorKey(&pCur->pCur, &pKey, &nKey);
-      if( cacheCursorPayloadReconstructed(pCur, pKey, nKey)==SQLITE_OK ){
-        *ppData = pCur->pCachedPayload;
-        *pnData = pCur->nCachedPayload;
-      }else{
-        *ppData = pVal;
-        *pnData = 0;
+      {
+        int rcRecon = cacheCursorPayloadReconstructed(pCur, pKey, nKey);
+        if( rcRecon==SQLITE_OK ){
+          *ppData = pCur->pCachedPayload;
+          *pnData = pCur->nCachedPayload;
+        }else{
+          /* See note above: surface reconstruction OOM as SQLITE_NOMEM so a
+          ** size/fetch mismatch can't masquerade as a corrupt record. */
+          if( rcRecon==SQLITE_NOMEM && pCur->pBtree && pCur->pBtree->db ){
+            sqlite3OomFault(pCur->pBtree->db);
+          }
+          *ppData = pVal;
+          *pnData = 0;
+        }
       }
     }
   }
