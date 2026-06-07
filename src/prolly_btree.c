@@ -2263,6 +2263,30 @@ static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
     freeCatalogEntryMeta(aMeta, nMeta);
     return rc;
   }
+
+  /* Drop degenerate rows whose type field is NULL. loadSchemaCatalogRows()
+  ** returns a row for every master-root record, and schemaCatalogTextField()
+  ** hands back a NULL string for a record field stored as SQL NULL (serial
+  ** type 0). Such a row carries no table/index/view/trigger and would crash
+  ** the strcmp() classification below; schemaCatalogRowWanted() already
+  ** filters them on other read paths. They appear after an OOM-interrupted
+  ** schema build leaves empty records in the master root — skipping them here
+  ** also keeps them out of the rebuilt root, so the schema self-heals. */
+  {
+    int nKept = 0;
+    for(i=0; i<nRows; i++){
+      if( aRows[i].zType==0 ){
+        sqlite3_free(aRows[i].zName);
+        sqlite3_free(aRows[i].zTblName);
+        sqlite3_free(aRows[i].zSql);
+        continue;
+      }
+      if( nKept!=i ) aRows[nKept] = aRows[i];
+      nKept++;
+    }
+    nRows = nKept;
+  }
+
   if( nRows<=0 ){
     freeSchemaCatalogRows(aRows, nRows);
     freeCatalogEntryMeta(aMeta, nMeta);
