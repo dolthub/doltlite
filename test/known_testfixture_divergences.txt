@@ -1192,3 +1192,12 @@ autoinc autoinc-12.2  # writable_schema corruption undetected
 autoinc autoinc-12.3  # writable_schema corruption undetected
 autoinc autoinc-12.4  # writable_schema corruption undetected
 autoinc autoinc-12.5  # writable_schema corruption undetected
+
+# shared9 — shared-cache locking model differs (doltlite doesn't surface the
+# "database is locked" shared-cache contention these assertions expect). Same
+# intentional locking-model category as the other shared* entries. Recovered
+# into the gate once the mutmap-source TransferRow SEGV was fixed.
+shared9 shared9-2.1  # shared-cache locking-model divergence
+shared9 shared9-3.4  # "database is locked" not surfaced (shared-cache model)
+shared9 shared9-3.5  # shared-cache locking-model divergence
+shared9 shared9-3.6  # shared-cache locking-model divergence
