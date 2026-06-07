@@ -560,7 +560,7 @@ jobs:
           mallocJ mallocL mallocM manydb mem5 memsubsys2 merge1 minmax4 misc2 \
           rowvaluefault \
           misc3 misc6 misuse mmap2 mmapfault multiplex3 mutex2 normalize \
-          notify1 notify2 notify3 notnull2 nulls1 numindex1 offset1 orderby5 \
+          notify1 notify2 notify3 notnull2 notnullfault nulls1 numindex1 offset1 orderby5 \
           orderby6 orderby7 orderby8 orderby9 orderbyA orderbyB ovfl pageropt \
           parser1 pcache pragma5 pragmafault prefixes progress ptrchng pushdown \
           qrf01 qrf02 qrf03 qrf05 qrf06 queryonly quickcheck quota-glob \
@@ -600,6 +600,6 @@ jobs:
           where6 where8 where9 whereA whereB whereC whereE whereH \
           whereI whereJ whereK wherelfault wherelimit wherelimit2 wherelimit3 whereM \
           whereN window4 window5 window7 window8 window9 windowA windowB \
-          windowD windowerr windowpushd with1 with2 with3 with4 with5 \
+          windowD windowerr windowfault windowpushd with1 with2 with3 with4 with5 \
           with6 withM without_rowid2 without_rowid3 without_rowid4 without_rowid6 zeroblobfault zipfile \
           zipfile2 zipfilefault

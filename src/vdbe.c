@@ -4782,10 +4782,13 @@ case OP_OpenDup: {           /* ncycle */
   pOrig->noReuse = 1;
   rc = sqlite3BtreeCursor(pCx->ub.pBtx, pCx->pgnoRoot, BTREE_WRCSR,
                           pCx->pKeyInfo, pCx->uc.pCursor);
-  /* The sqlite3BtreeCursor() routine can only fail for the first cursor
-  ** opened for a database.  Since there is already an open cursor when this
-  ** opcode is run, the sqlite3BtreeCursor() cannot fail */
-  assert( rc==SQLITE_OK );
+  /* Stock SQLite asserts this open cannot fail: a second cursor on an
+  ** already-open btree needs no allocation. doltlite's cursor open DOES
+  ** allocate (catalog entry + prolly cursor state), so under OOM it can
+  ** return SQLITE_NOMEM. Propagate it instead of running on an unopened
+  ** cursor (left zeroed by sqlite3BtreeCursorZero), which a later
+  ** OP_NewRowid/OP_Last would dereference via the prolly cursor ops. */
+  if( rc ) goto abort_due_to_error;
   break;
 }
 
