@@ -1145,8 +1145,8 @@ capi3 capi3-8.3    # writable_schema sqlite_master corruption undetected: prolly
 capi3 capi3-8.5    # same: injected bogus sqlite_master row doesn't malform the prolly catalog
 capi3 capi3-11.3.4 # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
 capi3 capi3-11.5   # finalize after COMMIT-during-active-read: SQLITE_ABORT vs SQLITE_ERROR
-capi3 capi3-11.10  # step after ROLLBACK-during-active-read: cursor faulted (SQLITE_ERROR) vs stock auto-reset+rerun (SQLITE_ROW)
-capi3 capi3-11.11  # same statement, next step: SQLITE_ERROR vs SQLITE_DONE
+# capi3-11.10/11.11 (step after ROLLBACK-during-active-read) now pass: the read
+# cursor survives a writeOnly ROLLBACK and re-seeks instead of faulting (#1240).
 capi3 capi3-11.12  # same: SQLITE_ERROR vs SQLITE_ROW
 capi3 capi3-11.13  # finalize of the faulted statement: SQLITE_ERROR vs SQLITE_OK
 
