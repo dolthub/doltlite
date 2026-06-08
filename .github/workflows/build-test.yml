@@ -602,7 +602,8 @@ jobs:
           whereI whereJ whereK wherelfault wherelimit wherelimit2 wherelimit3 whereM \
           whereN window4 window5 window7 window8 window9 windowA windowB \
           windowD windowerr windowfault windowpushd with1 with2 with3 with4 with5 \
-          with6 withM without_rowid2 without_rowid3 without_rowid4 without_rowid6 zeroblobfault zipfile \
+          with6 withM without_rowid2 without_rowid3 without_rowid4 without_rowid5 without_rowid6 \
+          update2 whereF window6 zeroblobfault zipfile \
           zipfile2 zipfilefault \
           altermalloc2 closure01 fpconv1 fts3an fts3snippet fuzzer2 indexfault joinD json106 \
           mallocA mmap4 percentile savepoint4 sort3 sort4 sortfault speed1p speed2 speed4 \
