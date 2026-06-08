@@ -354,10 +354,22 @@ int chunkStoreOpen(
   }
 
   if( exists ){
-    int openFlags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_MAIN_DB;
+    /* Honor a caller-requested read-only open (SQLITE_OPEN_READONLY, e.g. the
+    ** sqlite3_open_v2 READONLY flag or a file:...?mode=ro URI). Without this we
+    ** always opened read-write and only fell back to read-only when the OS
+    ** denied write access, so a read-only connection on a writable file
+    ** silently accepted writes (#1275). */
+    int wantReadOnly = (flags & SQLITE_OPEN_READONLY)!=0;
+    int openFlags = (wantReadOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE)
+                  | SQLITE_OPEN_MAIN_DB;
     int outFlags = 0;
     rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, &outFlags);
     if( rc != SQLITE_OK ){
+      if( wantReadOnly ){
+        sqlite3_free(cs->file.zFilename);
+        cs->file.zFilename = 0;
+        return rc;
+      }
       openFlags = SQLITE_OPEN_READONLY | SQLITE_OPEN_MAIN_DB;
       rc = csOpenFile(pVfs, cs->file.zFilename, &cs->file.pFile, openFlags, 0);
       if( rc != SQLITE_OK ){
@@ -366,11 +378,10 @@ int chunkStoreOpen(
         return rc;
       }
       cs->readOnly = 1;
-    }else if( outFlags & SQLITE_OPEN_READONLY ){
-      /* The VFS opened a read-only file: a read-write open silently downgrades
-      ** to read-only and returns OK with READONLY in the out-flags. Mark the
-      ** store read-only so writes fail with SQLITE_READONLY rather than later
-      ** hitting a failed write-lock and reporting SQLITE_BUSY. */
+    }else if( wantReadOnly || (outFlags & SQLITE_OPEN_READONLY) ){
+      /* Either the caller asked for read-only, or a read-write open silently
+      ** downgraded to read-only (VFS returned READONLY in the out-flags). Mark
+      ** the store read-only so writes fail with SQLITE_READONLY. */
       cs->readOnly = 1;
     }
 
