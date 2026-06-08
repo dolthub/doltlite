@@ -39,15 +39,71 @@ SELECT dolt_commit('-A','-m','seed');
 UPDATE t SET v=2;
 " "$IDX_DB" >/dev/null
 
-if "$DOLTLITE" "$IDX_DB" "UPDATE dolt_workspace_t SET staged=TRUE;" >/tmp/doltlite_ws_idx.out 2>/tmp/doltlite_ws_idx.err; then
-  dltest_fail "workspace_indexed_table_rejected" "expected indexed table staging to fail"
-else
+# Staging individual rows on indexed tables is supported (#1276): the staged
+# secondary index must stay consistent with the staged data. Here row 1 is
+# modified v=1 -> v=2 in the working set; staging it must move the index entry
+# from v=1 to v=2.
+if "$DOLTLITE" "$IDX_DB" "UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=1;" \
+     >/tmp/doltlite_ws_idx.out 2>/tmp/doltlite_ws_idx.err; then
   dltest_pass
+else
+  dltest_fail "workspace_indexed_table_staged" "$(cat /tmp/doltlite_ws_idx.err)"
 fi
-if ! grep -q "indexed tables is not yet supported" /tmp/doltlite_ws_idx.err; then
-  dltest_fail "workspace_indexed_table_error_message" "$(cat /tmp/doltlite_ws_idx.err)"
-else
+
+# Commit the staged row and confirm the committed index is consistent with the
+# committed data: integrity_check passes, the index finds the new value (v=2)
+# and not the stale one (v=1).
+"$DOLTLITE" "$IDX_DB" "SELECT dolt_commit('-m','stage indexed row');" >/dev/null 2>&1
+idx_integ=$("$DOLTLITE" "$IDX_DB" "PRAGMA integrity_check;" 2>&1)
+if [ "$idx_integ" = "ok" ]; then
   dltest_pass
+else
+  dltest_fail "workspace_indexed_integrity_check" "$idx_integ"
+fi
+
+# Prove the secondary index exists and has not drifted from the data: the
+# index-served lookup (WHERE v=N, which EXPLAIN shows uses idx_t_v) must agree
+# with a forced full scan (+v=N defeats the index). New value found both ways,
+# old value gone both ways.
+idx_new=$("$DOLTLITE" "$IDX_DB" "SELECT id FROM t WHERE v=2;" 2>&1)
+scan_new=$("$DOLTLITE" "$IDX_DB" "SELECT id FROM t WHERE +v=2;" 2>&1)
+idx_old=$("$DOLTLITE" "$IDX_DB" "SELECT id FROM t WHERE v=1;" 2>&1)
+scan_old=$("$DOLTLITE" "$IDX_DB" "SELECT id FROM t WHERE +v=1;" 2>&1)
+if [ "$idx_new" = "1" ] && [ "$idx_new" = "$scan_new" ] \
+   && [ -z "$idx_old" ] && [ -z "$scan_old" ]; then
+  dltest_pass
+else
+  dltest_fail "workspace_indexed_query" \
+    "idx_new=[$idx_new] scan_new=[$scan_new] idx_old=[$idx_old] scan_old=[$scan_old]"
+fi
+
+# NOCASE index (validated here rather than the vc oracle, since Dolt has no
+# NOCASE collation): staging a single row must build the same normalized
+# secondary-index key the native write path does, so integrity_check passes and
+# a case-insensitive index lookup finds it.
+NC_DB=/tmp/doltlite_workspace_nocase_$$.db
+rm -rf "$NC_DB"
+trap 'rm -rf "$DB"; rm -rf "$IDX_DB"; rm -rf "$NC_DB"' EXIT
+dltest_run_sql "
+CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT COLLATE NOCASE);
+CREATE INDEX idx_t_v ON t(v);
+INSERT INTO t VALUES(1,'Abc'),(2,'Def');
+SELECT dolt_commit('-A','-m','seed');
+INSERT INTO t VALUES(3,'GHI');
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=3;
+SELECT dolt_commit('-m','stage nocase row');
+" "$NC_DB" >/dev/null
+nc_integ=$("$DOLTLITE" "$NC_DB" "PRAGMA integrity_check;" 2>&1)
+if [ "$nc_integ" = "ok" ]; then
+  dltest_pass
+else
+  dltest_fail "workspace_indexed_nocase_integrity" "$nc_integ"
+fi
+nc_ci=$("$DOLTLITE" "$NC_DB" "SELECT id FROM t WHERE v='ghi';" 2>&1)
+if [ "$nc_ci" = "3" ]; then
+  dltest_pass
+else
+  dltest_fail "workspace_indexed_nocase_query" "ci=[$nc_ci]"
 fi
 
 dltest_finish
