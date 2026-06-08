@@ -1486,3 +1486,118 @@ like3 like3-8.utf16be.8.2  # doltlite ignores non-UTF-8 encodings (#1164)
 # utf8 (#1164). The numeric CAST behavior is correct.
 numcast numcast-utf16le.0  # doltlite ignores non-UTF-8 encodings (#1164)
 numcast numcast-utf16be.0  # doltlite ignores non-UTF-8 encodings (#1164)
+
+# dbpage — the sqlite_dbpage vtable exposes raw SQLite page images and lets
+# tests poke page bytes (corruption injection, page counts). DoltLite stores a
+# content-addressed chunk store, not SQLite pages, so reads return only the
+# header stub, page-byte writes are rejected, and dbpage-injected corruption is
+# not seen by integrity_check. Raw-page-format divergence.
+dbpage dbpage-110  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-120  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-130  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-140  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-150  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-160  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-170  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-200  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-210  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-220  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-230  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-240  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-241  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-250  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-260  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-400  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-500  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-510  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-520  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-620  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-630  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-640  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-710  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-810  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-820  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+
+# pagesize — PRAGMA page_size is fixed at 4096 on the chunk store and cannot be
+# reconfigured; tests asserting 512/1024/2048/8192 see 4096 (or a chunk-store
+# value). Page-format pragma divergence.
+pagesize pagesize-1.1  # page_size not configurable on the chunk store
+pagesize pagesize-1.3  # page_size not configurable on the chunk store
+pagesize pagesize-1.4  # page_size not configurable on the chunk store
+pagesize pagesize-1.8  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.2  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.3  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.6  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.10  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.2  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.3  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.6  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.10  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.3  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.2  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.3  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.6  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.10  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.30  # page_size not configurable on the chunk store
+pagesize pagesize-3.1  # page_size not configurable on the chunk store
+pagesize pagesize-3.3  # page_size not configurable on the chunk store
+
+# securedel — PRAGMA secure_delete is a no-op: there is no page freelist to zero
+# (content-addressed chunks, freed on GC). The pragma reads back 0 and the raw
+# byte scans differ. The DELETE itself is correct.
+securedel securedel-1.1  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.4  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.5  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.6  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.7  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.8  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-2.1  # secure_delete pragma no-op: no page freelist to zero
+
+# reclaims old chunks), so the freed-byte scans find old data. Not applicable to
+# the chunk store.
+
+# reservebytes — the per-page reserved-bytes header field does not exist in the
+# chunk store; reads return 00. Page-format divergence.
+reservebytes reservebytes-1.3.5  # no per-page reserved-bytes field in the chunk store
+reservebytes reservebytes-1.4.1  # no per-page reserved-bytes field in the chunk store
+reservebytes reservebytes-1.4.4  # no per-page reserved-bytes field in the chunk store
+
+# shrink — sqlite3_db_release_memory / PRAGMA shrink_memory free the SQLite pager
+# page cache; DoltLite's prolly storage has no equivalent large page cache to
+# release, so the heap-drop assertion fails. Data is intact.
+shrink shrink-1.1  # no SQLite pager page-cache to release (memory model differs)
+shrink shrink-1.2  # no SQLite pager page-cache to release (memory model differs)
+shrink shrink-1.3  # no SQLite pager page-cache to release (memory model differs)
+
+# format4 — reads the page_size from the SQLite file header (offset 16). The
+# chunk store is not a SQLite file, so those offsets are not the format field
+# and read garbage. Raw file-format divergence.
+format4 format4-1.1  # raw page_size read from SQLite file header; chunk store is not a SQLite file
+format4 format4-1.2  # raw page_size read from SQLite file header; chunk store is not a SQLite file
+format4 format4-1.3  # raw page_size read from SQLite file header; chunk store is not a SQLite file
+
+# stat — the dbstat vtable reports per-page b-tree statistics (cells, payload,
+# page numbers). The chunk store has no SQLite pages, so dbstat returns no rows.
+# Page-statistics vtable not applicable.
+stat stat-0.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-1.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-1.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-1.3  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-2.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-2.1agg  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-2.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-3.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-3.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-4.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-5.20  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.1.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.1.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.1.3  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.1.4  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2.3  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2.4  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
