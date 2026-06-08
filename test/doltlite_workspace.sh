@@ -39,15 +39,34 @@ SELECT dolt_commit('-A','-m','seed');
 UPDATE t SET v=2;
 " "$IDX_DB" >/dev/null
 
-if "$DOLTLITE" "$IDX_DB" "UPDATE dolt_workspace_t SET staged=TRUE;" >/tmp/doltlite_ws_idx.out 2>/tmp/doltlite_ws_idx.err; then
-  dltest_fail "workspace_indexed_table_rejected" "expected indexed table staging to fail"
-else
+# Staging individual rows on indexed tables is supported (#1276): the staged
+# secondary index must stay consistent with the staged data. Here row 1 is
+# modified v=1 -> v=2 in the working set; staging it must move the index entry
+# from v=1 to v=2.
+if "$DOLTLITE" "$IDX_DB" "UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=1;" \
+     >/tmp/doltlite_ws_idx.out 2>/tmp/doltlite_ws_idx.err; then
   dltest_pass
+else
+  dltest_fail "workspace_indexed_table_staged" "$(cat /tmp/doltlite_ws_idx.err)"
 fi
-if ! grep -q "indexed tables is not yet supported" /tmp/doltlite_ws_idx.err; then
-  dltest_fail "workspace_indexed_table_error_message" "$(cat /tmp/doltlite_ws_idx.err)"
-else
+
+# Commit the staged row and confirm the committed index is consistent with the
+# committed data: integrity_check passes, the index finds the new value (v=2)
+# and not the stale one (v=1).
+"$DOLTLITE" "$IDX_DB" "SELECT dolt_commit('-m','stage indexed row');" >/dev/null 2>&1
+idx_integ=$("$DOLTLITE" "$IDX_DB" "PRAGMA integrity_check;" 2>&1)
+if [ "$idx_integ" = "ok" ]; then
   dltest_pass
+else
+  dltest_fail "workspace_indexed_integrity_check" "$idx_integ"
+fi
+
+idx_new=$("$DOLTLITE" "$IDX_DB" "SELECT id FROM t WHERE v=2;" 2>&1)
+idx_old=$("$DOLTLITE" "$IDX_DB" "SELECT id FROM t WHERE v=1;" 2>&1)
+if [ "$idx_new" = "1" ] && [ -z "$idx_old" ]; then
+  dltest_pass
+else
+  dltest_fail "workspace_indexed_query" "new=[$idx_new] old=[$idx_old]"
 fi
 
 dltest_finish
