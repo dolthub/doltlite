@@ -5846,6 +5846,59 @@ static int restoreFromCommitted(Btree *p){
   return SQLITE_OK;
 }
 
+static int zStringEqual(const char *zA, const char *zB){
+  if( zA==0 || zA[0]==0 ) zA = 0;
+  if( zB==0 || zB[0]==0 ) zB = 0;
+  if( zA==0 || zB==0 ) return zA==zB;
+  return strcmp(zA, zB)==0;
+}
+
+static int rolledBackSessionMatchesDisk(Btree *p, BtShared *pBt, int *pbMatch){
+  ProllyHash workingCat;
+  ProllyHash workingCommit;
+  ProllyHash staged;
+  ProllyHash mergeCommit;
+  ProllyHash conflicts;
+  ProllyHash preRebaseCat;
+  ProllyHash rebaseOnto;
+  ProllyHash constraintViolations;
+  char *zRebaseOrigBranch = 0;
+  char *zRebaseReturnBranch = 0;
+  u8 isMerging = 0;
+  u8 isRebasing = 0;
+  const char *zBr = p->zBranch ? p->zBranch : "main";
+  int rc;
+
+  *pbMatch = 0;
+  rc = btreeLoadWorkingSetBlob(&pBt->store, zBr, &workingCat,
+                               &workingCommit, &staged, &isMerging,
+                               &mergeCommit, &conflicts, &isRebasing,
+                               &preRebaseCat, &rebaseOnto,
+                               &zRebaseOrigBranch, &zRebaseReturnBranch,
+                               &constraintViolations);
+  if( rc==SQLITE_NOTFOUND ) return SQLITE_OK;
+  if( rc!=SQLITE_OK ) return rc;
+
+  *pbMatch =
+      prollyHashCompare(&workingCat, &p->committedCatalogHash)==0
+   && prollyHashCompare(&workingCommit, &p->headCommit)==0
+   && prollyHashCompare(&staged, &p->stagedCatalog)==0
+   && isMerging==p->isMerging
+   && prollyHashCompare(&mergeCommit, &p->mergeCommitHash)==0
+   && prollyHashCompare(&conflicts, &p->conflictsCatalogHash)==0
+   && isRebasing==p->isRebasing
+   && prollyHashCompare(&preRebaseCat, &p->preRebaseWorkingCat)==0
+   && prollyHashCompare(&rebaseOnto, &p->rebaseOntoCommit)==0
+   && zStringEqual(zRebaseOrigBranch, p->zRebaseOrigBranch)
+   && zStringEqual(zRebaseReturnBranch, p->zRebaseReturnBranch)
+   && prollyHashCompare(&constraintViolations,
+                        &p->constraintViolationsHash)==0;
+
+  sqlite3_free(zRebaseOrigBranch);
+  sqlite3_free(zRebaseReturnBranch);
+  return SQLITE_OK;
+}
+
 static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
@@ -5903,6 +5956,16 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     invalidateSchema(p);
     chunkStoreRollback(&pBt->store);
+    {
+      int bMatchesDisk = 0;
+      rc = rolledBackSessionMatchesDisk(p, pBt, &bMatchesDisk);
+      if( rc!=SQLITE_OK ){
+        chunkStoreUnlock(&pBt->store);
+        pBt->store.snapshotPinned = 0;
+        return rc;
+      }
+      if( bMatchesDisk ) goto rollback_done;
+    }
     rc = persistRolledBackSessionState(p, pBt);
     if( rc!=SQLITE_OK ){
       rc = persistRolledBackSessionState(p, pBt);
@@ -5916,6 +5979,7 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     invalidateCursors(pBt, 0, tripCode ? tripCode : SQLITE_ABORT);
   }
 
+rollback_done:
   p->inTrans = TRANS_NONE;
   p->inTransaction = TRANS_NONE;
   btreeDiscardAllSavepoints(p);
