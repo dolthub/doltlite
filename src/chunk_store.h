@@ -133,6 +133,7 @@ struct ChunkStore {
   u8 isMemory;
   u8 snapshotPinned;
   sqlite3_file *pGraphLockFile;
+  char *pGraphLockName;        /* owned name kept alive for pGraphLockFile (xOpen contract) */
   sqlite3_mutex *pLockMutex;
   int lockDepth;
 };
