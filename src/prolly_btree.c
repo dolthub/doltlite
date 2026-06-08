@@ -3630,15 +3630,17 @@ static int findPendingSnapshotIndex(
   return -1;
 }
 
-static ProllyMutMap *findPendingSnapshot(Btree *pBtree, int iFromSavepoint,
-                                          Pgno iTable, int *piSavepoint,
-                                          int *piSnapshot){
+static ProllyMutMap *findPendingSnapshotEx(Btree *pBtree, int iFromSavepoint,
+                                           Pgno iTable, int bIncludeStatement,
+                                           int *piSavepoint,
+                                           int *piSnapshot){
   int i;
   if( piSavepoint ) *piSavepoint = -1;
   if( piSnapshot ) *piSnapshot = -1;
   for(i=iFromSavepoint; i<pBtree->nSavepoint; i++){
     struct SavepointTableState *pState = &pBtree->aSavepointTables[i];
     int j;
+    if( pState->bStatement && !bIncludeStatement ) continue;
     if( !pState->aPendingSnapshot ) continue;
     j = findPendingSnapshotIndex(pState, iTable);
     if( j >= 0 ){
@@ -3648,6 +3650,13 @@ static ProllyMutMap *findPendingSnapshot(Btree *pBtree, int iFromSavepoint,
     }
   }
   return 0;
+}
+
+static ProllyMutMap *findPendingSnapshot(Btree *pBtree, int iFromSavepoint,
+                                          Pgno iTable, int *piSavepoint,
+                                          int *piSnapshot){
+  return findPendingSnapshotEx(pBtree, iFromSavepoint, iTable, 1,
+                               piSavepoint, piSnapshot);
 }
 
 static int allocEmptyPendingLike(ProllyMutMap *pSrc, ProllyMutMap **ppOut){
@@ -3772,9 +3781,9 @@ static int rollbackMutMapsToSavepoint(Btree *pBtree, int level,
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     int iSavepoint = -1;
     int iSnapshot = -1;
-    ProllyMutMap *pSnap = findPendingSnapshot(pBtree, iFromSavepoint,
-                                               pTE->iTable,
-                                               &iSavepoint, &iSnapshot);
+    ProllyMutMap *pSnap = findPendingSnapshotEx(pBtree, iFromSavepoint,
+                                                pTE->iTable, 0,
+                                                &iSavepoint, &iSnapshot);
     if( pSnap ){
       if( pMap ){
         prollyMutMapFree(pMap);
