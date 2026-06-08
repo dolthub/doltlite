@@ -6940,6 +6940,19 @@ static int prollyBtCursorIndexMoveto(
     if( pCur->pKeyInfo && pIdxKey->nField < pCur->pKeyInfo->nAllField ){
       nSeekKeyField = (int)pIdxKey->nField;
     }
+    /* A table-root (WITHOUT ROWID / PK) tree is keyed by the PK columns only;
+    ** the non-PK columns live in the row value. A range seek (default_rc!=0)
+    ** whose probe extends past the PK — e.g. a SeekGE that appends a sentinel
+    ** field for ORDER BY positioning — must seek on the PK prefix. Otherwise
+    ** the longer probe sort key sorts past the shorter tree keys and lands
+    ** beyond the target row, so the move-to scan starts too late and returns
+    ** the wrong (or no) row (in7-2.1: IN(...) ORDER BY <non-PK> NULLS LAST). */
+    if( pCur->isTableRoot && pCur->pKeyInfo
+     && pIdxKey->default_rc != 0
+     && pIdxKey->nField > pCur->pKeyInfo->nKeyField
+     && (nSeekKeyField==0 || nSeekKeyField > pCur->pKeyInfo->nKeyField) ){
+      nSeekKeyField = pCur->pKeyInfo->nKeyField;
+    }
     if( unpackedRecordCanUseIntSortKey(
             pCur, pIdxKey,
             nSeekKeyField>0 ? nSeekKeyField : (int)pIdxKey->nField) ){
