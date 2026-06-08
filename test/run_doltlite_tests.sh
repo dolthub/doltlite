@@ -118,6 +118,14 @@ failed=""
 cd "$BUILD_DIR"
 
 for t in "${TESTS[@]}"; do
+  if [ "$t" = "doltlite_perf.sh" ] \
+    && [ "${GITHUB_ACTIONS:-}" = "true" ] \
+    && [ "${DOLTLITE_RUN_PERF_IN_FEATURE_TESTS:-0}" != "1" ]; then
+    echo ""
+    echo "━━━ $t ━━━"
+    echo "SKIP: doltlite_perf.sh is covered by benchmark CI; set DOLTLITE_RUN_PERF_IN_FEATURE_TESTS=1 to force it here."
+    continue
+  fi
   echo ""
   echo "━━━ $t ━━━"
   if bash "$SCRIPT_DIR/$t"; then
