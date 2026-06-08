@@ -4444,17 +4444,10 @@ case OP_Transaction: {
       p->usesStmtJournal = 1;
 #endif
 
-#ifdef DOLTLITE_PROLLY
-      rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
-      if( rc==SQLITE_OK ){
-        rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
-      }
-#else
       rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
       if( rc==SQLITE_OK ){
         rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
       }
-#endif
 #ifdef DOLTLITE_PROLLY
       if( rc!=SQLITE_OK && p->iStatement>0 ){
         int rcSave = rc;
@@ -9233,6 +9226,7 @@ case OP_VUpdate: {
     db->nStatement++;
     p->iStatement = db->nSavepoint + db->nStatement;
     p->usesStmtJournal = 1;
+    rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
     for(iDb=0; rc==SQLITE_OK && iDb<db->nDb; iDb++){
       Btree *pBt = db->aDb[iDb].pBt;
       if( pBt ){
@@ -9243,9 +9237,6 @@ case OP_VUpdate: {
       if( rc==SQLITE_OK && pBt && sqlite3BtreeTxnState(pBt)==SQLITE_TXN_WRITE ){
         rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
       }
-    }
-    if( rc==SQLITE_OK ){
-      rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
     }
     p->nStmtDefCons = db->nDeferredCons;
     p->nStmtDefImmCons = db->nDeferredImmCons;

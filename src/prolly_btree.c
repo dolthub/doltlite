@@ -2375,14 +2375,6 @@ static int restoreCatalogRootsFromData(
     pTE = findTable(pBtree, iTable);
     if( !pTE ) return SQLITE_NOTFOUND;
 
-    if( pTE->pPending ){
-      ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
-      prollyMutMapFree(pMap);
-      sqlite3_free(pMap);
-      pTE->pPending = 0;
-      refreshCursorMutMapAliases(pBtree, pBtree->pBt, iTable, 0);
-    }
-    pTE->pendingFlushSeekEdits = 0;
     pTE->flags = flags;
     memcpy(pTE->root.data, q, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
