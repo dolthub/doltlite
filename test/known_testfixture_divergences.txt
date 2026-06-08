@@ -1336,3 +1336,33 @@ descidx3 descidx3-1.1  # hexio read of SQLite file-format version byte (chunk st
 # AUTOINCREMENT table round-trips the keyword through DROP COLUMN, never reuses
 # a deleted max rowid, and maintains sqlite_sequence. Raw-schema-edit divergence.
 alterdropcol alterdropcol-8.2  # AUTOINCREMENT injected via writable_schema UPDATE; structural catalog ignores raw sqlite_schema edits
+
+# altertab3 — altertab3-31.1 asserts `PRAGMA page_count` is unchanged across an
+# `ALTER TABLE DROP COLUMN` (stock's metadata-only drop). DoltLite stores a
+# chunk store, not SQLite pages, so page_count is not a stable per-table page
+# metric and differs. Raw page-format pragma; the drop itself is correct
+# (altertab3-31.2 reads the surviving column back as 5.0).
+altertab3 altertab3-31.1  # PRAGMA page_count across DROP COLUMN; chunk store has no SQLite page count
+
+# index5 — index5-1.3 records the on-disk page WRITE ORDER during CREATE INDEX
+# via a custom test VFS (forward/backward/non-contiguous page offsets) and
+# asserts a mostly-sequential pattern. DoltLite's chunk store writes
+# content-addressed chunks, not sequential btree pages, so the write-offset
+# pattern does not apply. Raw storage-layout divergence; the index is built
+# correctly (index5-1.2 passes).
+index5 index5-1.3  # page write-order via test VFS; chunk store is not page-sequential
+
+# limit2 — limit2-110.3 compares sqlite_search_count between an indexed and an
+# unindexed ORDER BY ... LIMIT, asserting the indexed plan scans <2% as many
+# rows. sqlite_search_count is an internal scan-count metric DoltLite's prolly
+# cursor does not increment the same way; the query RESULTS are correct
+# (limit2-110.1/110.2 pass). Internal-counter divergence.
+limit2 limit2-110.3  # sqlite_search_count scan-count metric; prolly cursor counts differently
+
+# notnull — notnull-6.5 (do_uses_op_next_test) checks whether the plan for
+# `SELECT * FROM t5 WHERE a IS ?` uses OP_Next, expecting yes for t5(a PRIMARY
+# KEY). DoltLite treats a non-integer PRIMARY KEY as WITHOUT ROWID (#1176), so
+# the PK is unique-and-NOT-NULL and the planner uses a single seek (no OP_Next),
+# matching t8 (explicit WITHOUT ROWID, expects 0). Verified row semantics are
+# correct; only the plan differs. WITHOUT-ROWID-PK plan divergence (#1176).
+notnull notnull-6.5  # plan uses a seek not OP_Next: non-integer PK is WITHOUT ROWID (#1176)
