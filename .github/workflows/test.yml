@@ -188,3 +188,130 @@ jobs:
           bash "$f" ./doltlite ./sqlite3 || exit 1
         done
       timeout-minutes: 10
+
+  sqlite-regression:
+    name: sqlite-regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y tcl-dev build-essential zlib1g-dev
+
+    - name: Configure
+      run: |
+        mkdir -p build && cd build
+        TCL_CONFIG=$(find /usr -path '/usr/share/miniconda/*' -prune -o -name tclConfig.sh -print 2>/dev/null | head -1)
+        if [ -n "$TCL_CONFIG" ]; then
+          ../configure --with-tcl=$(dirname $TCL_CONFIG)
+        else
+          ../configure
+        fi
+
+    - name: Build testfixture
+      run: |
+        cd build
+        make DOLTLITE_PROLLY_CHECK=1 testfixture
+
+    # Inherited upstream SQLite .test files that pass clean (or only with
+    # already-recorded divergences) against doltlite. Swept and gated under
+    # issue #1208 so they stop being silently un-run. Files that diverge,
+    # crash, or hang are tracked there for triage. Nondeterministic-class
+    # files (multi-threaded thread*, crash/fault-injection walcrash*/
+    # writecrash/wal*fault) are intentionally excluded — same rationale as
+    # the crash.test exclusion above; they flake run-to-run.
+    - name: SQLite regression tests
+      run: |
+        cd build
+        bash ../test/run_testfixture.sh "SQLite regression" 300 \
+          8_3_names aggerror aggfault alterauth alterauth2 alterdropcol alterdropcol2 altertab3 alterlegacy altermalloc3 autoindex1 \
+          index5 limit2 notnull \
+          alterqf altertab2 altertrig amatch1 analyze3 analyze4 analyze5 analyze6 \
+          analyze7 analyze8 analyze9 analyzeC analyzeD analyzeE analyzeF analyzeG \
+          analyzer1 atof1 atof2 atomic atomic2 attach4 auth2 auth3 \
+          autoanalyze1 autoindex2 autoindex4 avfs backcompat badutf2 basexx1 bestindex1 \
+          bestindex2 bestindex3 bestindex5 bestindex6 bestindex7 bestindex8 bestindex9 bestindexA \
+          bestindexB bestindexC bestindexD bestindexE bestindexF bigmmap bigrow bind \
+          bind2 bindxfer bitvec blob bloom1 boundary4 btree01 btree02 \
+          capi3d capi3e carray01 carray02 carrayfault changes2 cksumvfs close \
+          collate5 collate6 collate7 collate8 collateA collateB colname columncount \
+          conflict2 contrib01 corrupt3 cost countofview coveridxscan csv01 ctime \
+          cursorhint cursorhint2 dataversion1 date2 date3 date4 date5 dbdata \
+          cffault decimal default descidx3 delete3 delete4 e_blobbytes e_droptrigger e_dropview e_resolve emptytable \
+          eqp eqp2 errmsg errofst1 eval exec exists existsexpr existsexpr2 \
+          expr2 exprfault expridx1 filectrl filter1 filter2 filterfault fkey3 \
+          fkey4 fkey6 fkey7 fkey8 fkey_malloc fordelete fts-9fd058691 fts3aa fts3ab fts3ac \
+          fts3ad fts3ae fts3af fts3ag fts3ah fts3aj fts3ak fts3al \
+          fts3am fts3atoken fts3atoken2 fts3auto fts3aux1 fts3aux2 fts3b fts3c \
+          fts3comp1 fts3corrupt fts3corrupt3 fts3corrupt5 fts3corrupt6 fts3d fts3defer fts3drop \
+          fts3fault fts3fault2 \
+          fts3dropmod fts3e fts3expr fts3expr2 fts3expr3 fts3expr4 fts3expr5 fts3f \
+          fts3first fts3integrity fts3join fts3malloc fts3matchinfo fts3matchinfo2 fts3misc fts3near fts3offsets \
+          fts3prefix fts3prefix2 fts3query fts3rank fts3snippet2 fts3sort fts3tok_err fts3tok1 \
+          fts3varint fts4docid fts4incr fts4intck1 fts4lastrowid fts4merge3 fts4min fts4noti \
+          fts4record fts4rename fts4umlaut fts4unicode fts4upfrom func4 func5 func6 \
+          func7 func8 func9 fuzz_malloc fuzz-oss1 fuzzer1 fuzzerfault gcfault \
+          having hidden hook hook2 ieee754 imposter1 incrblob4 index2 \
+          index4 index6 index7 index8 index9 indexA indexexpr1 indexexpr2 \
+          indexexpr3 init insert2 insert3 insert4 insert5 insertfault instr \
+          instrfault intreal ioerr5 ioerr6 istrue join2 join3 join4 join5 \
+          join6 join7 join8 join9 joinA joinB joinC joinE joinF \
+          joinH joinI jrnlmode json107 json108 json109 json501 json502 jsonb01 \
+          keyword1 lastinsert laststmtchanges literal literal2 loadext loadext2 lock6 \
+          lookaside malloc4 malloc5 malloc7 malloc8 malloc9 mallocB mallocE \
+          mallocJ mallocL mallocM manydb mem5 memsubsys2 merge1 minmax4 misc2 \
+          main misc1 misc5 gencol1 \
+          rowvaluefault \
+          misc3 misc6 misc8 misuse mmap2 mmapfault multiplex3 mutex2 normalize \
+          notify1 notify2 notify3 notnull2 notnullfault nulls1 numindex1 offset1 orderby5 \
+          orderby6 orderby7 orderby8 orderby9 orderbyA orderbyB ovfl pageropt \
+          parser1 pcache pragma5 pragmafault prefixes progress ptrchng pushdown \
+          qrf01 qrf02 qrf03 qrf05 qrf06 queryonly quickcheck quota-glob \
+          quota2 rbu recover regexp1 regexp2 resolver01 returning1 round1 \
+          rowhash rowvalue rowvalue2 rowvalue3 rowvalue4 rowvalue5 rowvalue6 rowvalue7 \
+          rowvalue8 rowvalueA rowvaluevtab savepoint2 savepoint5 scanstatus scanstatus2 schema5 \
+          schemafault seekscan1 select8 selectC selectD selectE selectF selectG \
+          selectH session shared4 sharedB shell1 shell2 shell3 shell4 \
+          shell5 shell6 shell7 shell8 shell9 shellA shellB skipscan3 \
+          skipscan5 skipscan6 snapshot snapshot_fault snapshot_up snapshot2 snapshot3 snapshot4 \
+          sort2 sort5 sorterref speed4p spellfix spellfix2 spellfix3 spellfix4 sqldiff1 \
+          sqllog starschema1 stmtrand stmtvtab1 strict1 subquery2 subselect subtype1 \
+          swarmvtab2 swarmvtab3 swarmvtabfault symlink2 tabfunc01 tableapi tableopts tempdb2 \
+          temptable3 temptrigger timediff1 tkt-02a8e81d44 tkt-18458b1a tkt-26ff0c2d1e tkt-2a5629202f tkt-2d1a5c67d \
+          tkt-2ea2425d34 tkt-31338dca7e tkt-313723c356 tkt-385a5b56b9 tkt-38cb5df375 tkt-3998683a16 tkt-3fe897352e tkt-4a03edc4c8 \
+          tkt-4c86b126f2 tkt-4dd95f6943 tkt-4ef7e3cfca tkt-54844eea3f tkt-6bfb98dfc0 tkt-752e1646fc tkt-78e04e52ea tkt-7a31705a7e6 \
+          tkt-7bbfb7d442 tkt-80ba201079 tkt-80e031a00f tkt-8454a207b9 tkt-868145d012 tkt-8c63ff0ec tkt-91e2e8ba6f tkt-99378177930f87bd \
+          tkt-9a8b09f8e6 tkt-9f2eb3abac tkt-a7b7803e tkt-a7debbe0 tkt-a8a0d2996a tkt-b1d3a2e531 tkt-b351d95f9 tkt-b75a9ca6b0 \
+          tkt-ba7cbfaedc tkt-bd484a090c tkt-bdc6bbbb38 tkt-c48d99d690 tkt-cbd054fa6b tkt-d11f09d36e tkt-d635236375 tkt-d82e3f3721 \
+          tkt-f3e5abed55 tkt-f67b41381a tkt-f777251dc7a tkt-f7b4edec tkt-f973c7ac31 tkt-fa7bf5ec tkt-fc7bd6358f tkt1435 \
+          tkt1443 tkt1444 tkt1449 tkt1473 tkt1501 tkt1514 tkt1536 tkt1537 \
+          tkt1644 tkt1873 tkt2141 tkt2192 tkt2213 tkt2251 tkt2285 tkt2339 \
+          tkt2391 tkt2450 tkt2640 tkt2643 tkt2767 tkt2817 tkt2822 tkt2832 \
+          tkt2927 tkt2942 tkt3093 tkt3201 tkt3292 tkt3298 tkt3334 tkt3346 \
+          tkt3357 tkt3419 tkt3442 tkt3461 tkt3493 tkt3508 tkt3522 tkt3527 \
+          tkt3541 tkt3554 tkt3581 tkt35xx tkt3630 tkt3731 tkt3757 tkt3773 \
+          tkt3791 tkt3793 tkt3824 tkt3832 tkt3838 tkt3841 tkt3879 tkt3911 \
+          tkt3922 tkt3929 tkt3935 tkt3992 tkt3997 tokenize tpch01 trace2 \
+          trace3 trans3 transitive1 trigger3 trigger4 trigger5 trigger6 trigger8 \
+          trigger9 triggerD triggerF triggerG triggerupfrom types3 unhex unionall2 \
+          unionallfault unionvtab unionvtabfault unique unique2 unordered upfrom1 upfrom2 \
+          upfrom3 upfrom4 upfromfault upsert1 upsert2 upsert3 upsert4 upsert5 uri2 \
+          values valuesfault varint view2 view3 vtab_alter vtab3 vtab5 \
+          vtab6 vtab7 vtab8 vtab9 vtabA vtabB vtabC vtabD \
+          vtabdistinct vtabE vtabF vtabI vtabJ vtabK vtabL vtabrhs1 \
+          wal8 walblock walsetlk_snapshot walsetlk2 walsetlk3 where2 where3 where5 \
+          where6 where8 where9 whereA whereB whereC whereE whereH \
+          whereI whereJ whereK wherelfault wherelimit wherelimit2 wherelimit3 whereM \
+          whereN window4 window5 window7 window8 window9 windowA windowB \
+          windowD windowerr windowfault windowpushd with1 with2 with3 with4 with5 \
+          with6 withM without_rowid2 without_rowid3 without_rowid4 without_rowid5 without_rowid6 \
+          update2 whereF window6 zeroblobfault zipfile \
+          zipfile2 zipfilefault \
+          altermalloc2 closure01 fpconv1 fts3an fts3snippet fuzzer2 indexfault joinD json106 \
+          mallocA mmap4 percentile savepoint4 sort3 sort4 sortfault speed1p speed2 speed4 \
+          stmt tempfault vacuummem wherefault \
+          dbpage pagesize securedel securedel2 reservebytes shrink format4 stat \
+          io sync sync2 multiplex4
