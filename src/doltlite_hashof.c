@@ -668,22 +668,24 @@ static void doltliteHashofCatalogFunc(sqlite3_context *ctx, int argc, sqlite3_va
   db = sqlite3_context_db_handle(ctx);
 
   if( argc==0 ){
-    rc = doltliteFlushCatalogToHash(db, &catHash);
-    if( rc!=SQLITE_OK ){
-      sqlite3_result_error(ctx, "dolt_hashof_catalog: catalog flush failed", -1);
-      return;
+    if( doltliteHasUncommittedChanges(db) ){
+      rc = doltliteFlushCatalogToHash(db, &catHash);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(ctx, "dolt_hashof_catalog: catalog flush failed", -1);
+        return;
+      }
+    }else{
+      rc = doltliteGetPersistedWorkingCatalogHash(db, &catHash);
+      if( rc!=SQLITE_OK ){
+        sqlite3_result_error(ctx, "dolt_hashof_catalog: persisted catalog read failed", -1);
+        return;
+      }
     }
   }else{
     if( hashofResolveRefCatalog(ctx, db, argv[0], "dolt_hashof_catalog", &catHash) ) return;
   }
 
-  /* Report logical catalog identity. Raw catalog roots can differ after
-  ** equivalent DDL histories because stored root numbers are physical. */
-  rc = hashofDbInCatalog(db, &catHash, hex);
-  if( rc!=SQLITE_OK ){
-    sqlite3_result_error(ctx, "dolt_hashof_catalog: catalog hash failed", -1);
-    return;
-  }
+  doltliteHashToHex(&catHash, hex);
   sqlite3_result_text(ctx, hex, PROLLY_HASH_SIZE*2, SQLITE_TRANSIENT);
 }
 

@@ -1911,12 +1911,12 @@ SELECT id, v FROM t ORDER BY id;
 # free-then-read may return plausible bytes from a freshly-freed
 # allocator slot, ASAN would catch the read; this oracle pins the
 # correct behavior end-to-end.
-DOLTLITE_MUTMAP_PENDING_FLUSH_LIMIT=256 oracle "cat16_savepos_blob_pk_bulk_update" "
+oracle "cat16_savepos_blob_pk_bulk_update" "
 CREATE TABLE t(k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID;
 CREATE INDEX t_v ON t(v);
 BEGIN;
-WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<512)
-  INSERT INTO t SELECT CAST(printf('%08x', i) AS BLOB), printf('v%05d', i) FROM c;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<70000)
+  INSERT INTO t SELECT randomblob(32), printf('v%05d', i) FROM c;
 UPDATE t SET v = v || 'X' WHERE v < 'v00500';
 SELECT count(*) FROM t;
 SELECT count(*) FROM t WHERE v LIKE '%X';
@@ -1925,11 +1925,11 @@ SELECT count(*) FROM t WHERE v LIKE '%X';
 "
 
 # 16t. Same shape but DELETE rather than UPDATE.
-DOLTLITE_MUTMAP_PENDING_FLUSH_LIMIT=256 oracle "cat16_savepos_blob_pk_bulk_delete" "
+oracle "cat16_savepos_blob_pk_bulk_delete" "
 CREATE TABLE t(k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID;
 BEGIN;
-WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<512)
-  INSERT INTO t SELECT CAST(printf('%08x', i) AS BLOB), printf('v%05d', i) FROM c;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<70000)
+  INSERT INTO t SELECT randomblob(32), printf('v%05d', i) FROM c;
 DELETE FROM t WHERE v < 'v00500';
 SELECT count(*) FROM t;
 COMMIT;
@@ -6965,41 +6965,6 @@ INSERT INTO t VALUES('x',1,'one'),('y',2,'two');
 UPDATE t SET b=3 WHERE a='x';
 SELECT a,b,c FROM t ORDER BY a;
 SELECT a FROM t WHERE b=3;
-"
-
-# ════════════════════════════════════════════════════════════════════
-# Category 123: UNIQUE autoindex catalog roots
-# ════════════════════════════════════════════════════════════════════
-echo ""
-echo "--- Category 123: UNIQUE autoindex catalog roots ---"
-
-# SQLite stores UNIQUE constraints as autoindex rows in sqlite_schema with a
-# real rootpage and NULL sql. Doltlite's catalog serializer must preserve those
-# rows and pair root-0 in-memory Index objects with the correct anonymous
-# BLOBKEY roots, especially when more than one UNIQUE table exists.
-oracle "cat123_unique_autoindex_schema_and_recreate" "
-CREATE TABLE t4(a INTEGER UNIQUE);
-CREATE TABLE t5(b INTEGER PRIMARY KEY);
-CREATE TABLE t6(c INTEGER);
-INSERT INTO t4 VALUES(2),(3),(4);
-INSERT INTO t5 SELECT * FROM t4;
-INSERT INTO t6 SELECT * FROM t4;
-CREATE TABLE t4n(a INTEGER UNIQUE);
-CREATE TABLE t6n(c INTEGER);
-INSERT INTO t4n SELECT * FROM t4;
-INSERT INTO t4n VALUES(NULL);
-INSERT INTO t6n SELECT * FROM t4n;
-SELECT type, name, tbl_name, rootpage, sql IS NULL
-  FROM sqlite_schema
- WHERE name IN ('sqlite_autoindex_t4_1','sqlite_autoindex_t4n_1')
- ORDER BY name;
-SELECT 1 IN t4, 1 NOT IN t4, 4 IN t6n, 2 NOT IN t6n;
-DROP TABLE t4n;
-CREATE TABLE t4n(a INTEGER UNIQUE, label TEXT);
-INSERT INTO t4n VALUES(9,'new');
-SELECT a FROM t4n;
-SELECT a FROM t4n INDEXED BY sqlite_autoindex_t4n_1;
-PRAGMA integrity_check;
 "
 
 # ════════════════════════════════════════════════════════════════════

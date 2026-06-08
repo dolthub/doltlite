@@ -940,9 +940,6 @@ int chunkStoreGet(
     i64 off = e->offset;
     int sz = e->size;
     u8 *pCopy = (u8 *)sqlite3_malloc(sz);
-    if( off < 0 || off + 4 + sz > cs->staging.nWriteBuf ){
-      return SQLITE_CORRUPT;
-    }
     if( pCopy == 0 ) return SQLITE_NOMEM;
 
     memcpy(pCopy, cs->staging.pWriteBuf + off + 4, sz);
@@ -1032,17 +1029,12 @@ int chunkStorePut(
   if( pHash ) memcpy(pHash, &h, sizeof(ProllyHash));
 
   {
-    u8 *pExisting = 0;
-    int nExisting = 0;
-    rc = chunkStoreGet(cs, &h, &pExisting, &nExisting);
-    if( rc==SQLITE_OK ){
-      sqlite3_free(pExisting);
+    int bHas = 0;
+    int hasRc = chunkStoreHas(cs, &h, &bHas);
+    if( hasRc==SQLITE_OK && bHas ){
       return SQLITE_OK;
     }
-    sqlite3_free(pExisting);
-    if( rc!=SQLITE_NOTFOUND && rc!=SQLITE_CORRUPT ){
-      return rc;
-    }
+    if( hasRc!=SQLITE_OK ) return hasRc;
   }
 
   rc = csGrowPending(cs);
