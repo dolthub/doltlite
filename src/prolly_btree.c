@@ -1308,6 +1308,53 @@ static int addCatalogEntryMeta(
   return SQLITE_OK;
 }
 
+static int catalogEntryMetaHasPgno(CatalogEntryMeta *aMeta, int nMeta, Pgno iTable){
+  int i;
+  for(i=0; i<nMeta; i++){
+    if( aMeta[i].iTable==iTable ) return 1;
+  }
+  return 0;
+}
+
+/* SQLite keeps constraint autoindexes at root 0 in memory. Doltlite stores the
+** backing index in an anonymous BLOBKEY root, usually allocated between the
+** owning table root and the next table root. */
+static Pgno findAnonymousIndexRoot(
+  Btree *pBtree,
+  CatalogEntryMeta *aMeta,
+  int nMeta,
+  Pgno iTable
+){
+  int i;
+  Pgno iLimit = 0;
+  if( !pBtree || !pBtree->cat.a ) return 0;
+
+  for(i=0; i<pBtree->cat.n; i++){
+    struct TableEntry *pCand = &pBtree->cat.a[i];
+    if( pCand->iTable<=iTable ) continue;
+    if( !tableEntryIsTableRoot(pBtree, pCand) ) continue;
+    if( iLimit==0 || pCand->iTable<iLimit ) iLimit = pCand->iTable;
+  }
+  for(i=0; i<pBtree->cat.n; i++){
+    struct TableEntry *pCand = &pBtree->cat.a[i];
+    if( pCand->iTable<=iTable ) continue;
+    if( iLimit!=0 && pCand->iTable>=iLimit ) continue;
+    if( (pCand->flags & BTREE_BLOBKEY)==0 ) continue;
+    if( tableEntryIsTableRoot(pBtree, pCand) ) continue;
+    if( catalogEntryMetaHasPgno(aMeta, nMeta, pCand->iTable) ) continue;
+    return pCand->iTable;
+  }
+  for(i=0; i<pBtree->cat.n; i++){
+    struct TableEntry *pCand = &pBtree->cat.a[i];
+    if( pCand->iTable<=1 ) continue;
+    if( (pCand->flags & BTREE_BLOBKEY)==0 ) continue;
+    if( tableEntryIsTableRoot(pBtree, pCand) ) continue;
+    if( catalogEntryMetaHasPgno(aMeta, nMeta, pCand->iTable) ) continue;
+    return pCand->iTable;
+  }
+  return 0;
+}
+
 static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, int *pnMeta){
   sqlite3 *db;
   Schema *pSchema;
@@ -1358,6 +1405,9 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
         }
       }
       if( iIndexTable==0 ) iIndexTable = pIdx->tnum;
+      if( iIndexTable<=1 ){
+        iIndexTable = findAnonymousIndexRoot(pBtree, aMeta, nMeta, iTable);
+      }
       if( iIndexTable<=1 ) continue;
       if( iIndexTable==iTable && (pTab->tabFlags & TF_Shadow)==0 ) continue;
       rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, iIndexTable, "index",

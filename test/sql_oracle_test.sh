@@ -6968,6 +6968,41 @@ SELECT a FROM t WHERE b=3;
 "
 
 # ════════════════════════════════════════════════════════════════════
+# Category 123: UNIQUE autoindex catalog roots
+# ════════════════════════════════════════════════════════════════════
+echo ""
+echo "--- Category 123: UNIQUE autoindex catalog roots ---"
+
+# SQLite stores UNIQUE constraints as autoindex rows in sqlite_schema with a
+# real rootpage and NULL sql. Doltlite's catalog serializer must preserve those
+# rows and pair root-0 in-memory Index objects with the correct anonymous
+# BLOBKEY roots, especially when more than one UNIQUE table exists.
+oracle "cat123_unique_autoindex_schema_and_recreate" "
+CREATE TABLE t4(a INTEGER UNIQUE);
+CREATE TABLE t5(b INTEGER PRIMARY KEY);
+CREATE TABLE t6(c INTEGER);
+INSERT INTO t4 VALUES(2),(3),(4);
+INSERT INTO t5 SELECT * FROM t4;
+INSERT INTO t6 SELECT * FROM t4;
+CREATE TABLE t4n(a INTEGER UNIQUE);
+CREATE TABLE t6n(c INTEGER);
+INSERT INTO t4n SELECT * FROM t4;
+INSERT INTO t4n VALUES(NULL);
+INSERT INTO t6n SELECT * FROM t4n;
+SELECT type, name, tbl_name, rootpage, sql IS NULL
+  FROM sqlite_schema
+ WHERE name IN ('sqlite_autoindex_t4_1','sqlite_autoindex_t4n_1')
+ ORDER BY name;
+SELECT 1 IN t4, 1 NOT IN t4, 4 IN t6n, 2 NOT IN t6n;
+DROP TABLE t4n;
+CREATE TABLE t4n(a INTEGER UNIQUE, label TEXT);
+INSERT INTO t4n VALUES(9,'new');
+SELECT a FROM t4n;
+SELECT a FROM t4n INDEXED BY sqlite_autoindex_t4n_1;
+PRAGMA integrity_check;
+"
+
+# ════════════════════════════════════════════════════════════════════
 echo ""
 echo "================================"
 echo "Results: $pass passed, $fail failed"
