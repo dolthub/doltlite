@@ -472,7 +472,7 @@ jobs:
           aggnested aggorderby \
           affinity2 affinity3 \
           between distinct distinctagg \
-          e_createtable e_delete e_insert e_select e_update e_fkey \
+          e_createtable e_delete e_insert e_select e_update e_fkey e_changes e_totalchanges \
           func2 func3 hexlit icu intarray \
           orderby1 orderby2 orderby3 orderby4 \
           pragma pragma2 printf2 \

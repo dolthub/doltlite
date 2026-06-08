@@ -5726,19 +5726,32 @@ static int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
     return SQLITE_OK;
   }
 
-  if( pnChange ){
-    int rc = countTreeEntries(p, (Pgno)iTable, pnChange);
-    if( rc!=SQLITE_OK ) return rc;
-  }
-
-  /* Save, don't abort, cursors on this table: the truncate optimization
-  ** (DELETE with no WHERE) can fire while another statement scans the table,
-  ** and that scan must restore against the now-empty tree and continue
-  ** rather than fail with SQLITE_ABORT. */
+  /* Save, don't abort, cursors on this table before mutating it: the truncate
+  ** optimization (DELETE with no WHERE) can fire while another statement scans
+  ** the table, and that scan must restore against the now-empty tree and
+  ** continue rather than fail with SQLITE_ABORT. */
   {
     int rc = saveAllCursors(p, pBt, (Pgno)iTable, 0);
     if( rc!=SQLITE_OK ) return rc;
   }
+  {
+    int rc = syncBtreeSavepoints(p);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
+  if( pnChange ){
+    /* The change count must include rows that exist only as pending,
+    ** same-transaction mutations not yet in the committed root — e.g. a
+    ** whole-table DELETE inside a trigger that just populated the table.
+    ** Merge pending into the root first (mirroring the SELECT count(*) path,
+    ** flushPendingForTable + countTreeEntries) so the count is exact; the
+    ** truncate below then clears the merged root. */
+    int rc = flushPendingForTable(p, pBt, pTE, 1);
+    if( rc!=SQLITE_OK ) return rc;
+    rc = countTreeEntries(p, (Pgno)iTable, pnChange);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   /* TRUNCATE: discard any pending mutations for this table. Without this,
   ** merging the now-empty tree with stale pending inserts would resurrect
   ** rows the caller asked to remove. Inside a savepoint that captured
@@ -5746,11 +5759,8 @@ static int prollyBtreeClearTable(Btree *p, int iTable, i64 *pnChange){
   ** flushPendingForTable uses) so ROLLBACK TO can restore pre-savepoint
   ** pending edits. Outside any savepoint, free the map outright. Either
   ** way the cursor aliases must be updated since saving the cursors
-  ** leaves pCur->pMutMap untouched. */
-  {
-    int rc = syncBtreeSavepoints(p);
-    if( rc!=SQLITE_OK ) return rc;
-  }
+  ** leaves pCur->pMutMap untouched. (After a counted flush above the pending
+  ** map is already empty; this still releases it cleanly.) */
   if( pTE->pPending ){
     ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
     ProllyMutMap *pFlushMap = pMap;
