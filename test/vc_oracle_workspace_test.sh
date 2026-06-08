@@ -374,6 +374,125 @@ SELECT dolt_commit('-m','composite_delete_subset');
 SELECT CONCAT('R|WORKING_DIFF|', from_a, '|', from_b, '|', from_v, '|', diff_type)
   FROM dolt_diff_m('HEAD', 'WORKING') ORDER BY from_a,from_b;"
 
+# ---------------------------------------------------------------------------
+# Indexed-table single-row staging (#1276): the staged secondary index must
+# stay consistent with the staged data. Each test stages a subset of rows on a
+# table with a secondary index, commits, and checks the committed diff AND an
+# index-served query (point lookup / ORDER BY / range) against the Dolt oracle
+# -- a stale or wrong staged index would diverge from Dolt.
+# ---------------------------------------------------------------------------
+IDX="
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT, confidence INT);
+CREATE INDEX iv ON t(v);
+INSERT INTO t VALUES(1,10,0),(2,20,0),(3,30,0),(4,40,0);
+SELECT dolt_commit('-A','-m','seed');
+"
+
+oracle "idx_stage_modified_one" "$IDX
+UPDATE t SET v=120 WHERE id=2;
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=2;
+SELECT dolt_commit('-m','mod2');
+" "SELECT CONCAT('R|C|', to_id, '|', to_v, '|', diff_type)
+  FROM dolt_diff_t('HEAD~1','HEAD') ORDER BY to_id;
+SELECT CONCAT('R|IDX|', id, '|', v) FROM t WHERE v=120 ORDER BY id;
+SELECT CONCAT('R|OLD|', id) FROM t WHERE v=20 ORDER BY id;"
+
+oracle "idx_stage_added_one" "$IDX
+INSERT INTO t VALUES(5,50,1),(6,60,-1);
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=5;
+SELECT dolt_commit('-m','add5');
+" "SELECT CONCAT('R|C|', to_id, '|', to_v, '|', diff_type)
+  FROM dolt_diff_t('HEAD~1','HEAD') ORDER BY to_id;
+SELECT CONCAT('R|IDX|', id, '|', v) FROM t WHERE v=50 ORDER BY id;"
+
+oracle "idx_stage_deleted_one" "$IDX
+DELETE FROM t WHERE id=3;
+UPDATE dolt_workspace_t SET staged=TRUE WHERE from_id=3;
+SELECT dolt_commit('-m','del3');
+" "SELECT CONCAT('R|C|', IFNULL(from_id,''), '|', diff_type)
+  FROM dolt_diff_t('HEAD~1','HEAD') ORDER BY from_id;
+SELECT CONCAT('R|IDX|', id) FROM t WHERE v=30 ORDER BY id;"
+
+oracle "idx_modify_indexed_col_moves_entry" "$IDX
+UPDATE t SET v=999 WHERE id=1;
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=1;
+SELECT dolt_commit('-m','mv1');
+DELETE FROM t WHERE id IN (2,3,4);
+" "SELECT CONCAT('R|NEW|', id, '|', v) FROM t WHERE v=999 ORDER BY id;
+SELECT CONCAT('R|GONE|', id) FROM t WHERE v=10 ORDER BY id;"
+
+oracle "idx_stage_subset_orderby_index" "$IDX
+UPDATE t SET v=v+1000 WHERE id IN (1,3);
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id IN (1,3);
+SELECT dolt_commit('-m','subset');
+" "SELECT CONCAT('R|ORD|', id, '|', v) FROM t ORDER BY v, id;"
+
+oracle "idx_stage_then_unstage" "$IDX
+UPDATE t SET v=777 WHERE id=2;
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=2;
+UPDATE dolt_workspace_t SET staged=FALSE WHERE to_id=2;
+" "SELECT CONCAT('R|W|', staged, '|', diff_type, '|', to_id, '|', to_v)
+  FROM dolt_workspace_t ORDER BY to_id;
+SELECT CONCAT('R|IDX|', id, '|', v) FROM t WHERE v=777 ORDER BY id;"
+
+oracle "idx_unique_stage_insert" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, b TEXT);
+CREATE UNIQUE INDEX uab ON t(a,b);
+INSERT INTO t VALUES(1,'p','q'),(2,'r','s');
+SELECT dolt_commit('-A','-m','seed');
+INSERT INTO t VALUES(3,'x','y');
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=3;
+SELECT dolt_commit('-m','add3');
+" "SELECT CONCAT('R|C|', to_id, '|', to_a, '|', to_b)
+  FROM dolt_diff_t('HEAD~1','HEAD') ORDER BY to_id;
+SELECT CONCAT('R|IDX|', id) FROM t WHERE a='x' AND b='y';"
+
+oracle "idx_multicol_stage_modify" "
+CREATE TABLE t(id INTEGER PRIMARY KEY, a TEXT, b TEXT);
+CREATE INDEX iab ON t(a,b);
+INSERT INTO t VALUES(1,'p','q'),(2,'r','s');
+SELECT dolt_commit('-A','-m','seed');
+UPDATE t SET b='Z' WHERE id=1;
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=1;
+SELECT dolt_commit('-m','mod1');
+DELETE FROM t WHERE id=2;
+" "SELECT CONCAT('R|NEW|', id, '|', b) FROM t WHERE a='p' AND b='Z' ORDER BY id;
+SELECT CONCAT('R|GONE|', id) FROM t WHERE a='p' AND b='q' ORDER BY id;"
+
+oracle "idx_ignore_present_stage_indexed" "
+INSERT INTO dolt_ignore VALUES('gen_%', 1);
+CREATE TABLE t(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX iv ON t(v);
+INSERT INTO t VALUES(1,10),(2,20);
+SELECT dolt_commit('-A','-m','seed');
+CREATE TABLE gen_tmp(id INTEGER PRIMARY KEY, x INT);
+INSERT INTO gen_tmp VALUES(1,1);
+UPDATE t SET v=200 WHERE id=1;
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id=1;
+SELECT dolt_commit('-m','stage t only');
+" "SELECT CONCAT('R|C|', to_id, '|', to_v) FROM dolt_diff_t('HEAD~1','HEAD') ORDER BY to_id;
+SELECT CONCAT('R|IDX|', id, '|', v) FROM t WHERE v=200 ORDER BY id;"
+
+oracle "idx_ignore_addall_skips_ignored_indexed" "
+INSERT INTO dolt_ignore VALUES('tmp_%', 1);
+CREATE TABLE keep(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX kv ON keep(v);
+CREATE TABLE tmp_idx(id INTEGER PRIMARY KEY, v INT);
+CREATE INDEX tv ON tmp_idx(v);
+INSERT INTO keep VALUES(1,10),(2,20);
+INSERT INTO tmp_idx VALUES(1,99);
+SELECT dolt_commit('-A','-m','seed');
+" "SELECT CONCAT('R|KEEP|', to_id, '|', to_v) FROM dolt_diff_keep('HEAD~1','HEAD') ORDER BY to_id;
+SELECT CONCAT('R|IDX|', id, '|', v) FROM keep WHERE v=20 ORDER BY id;"
+
+oracle "idx_range_query_after_stage" "$IDX
+UPDATE t SET v=15 WHERE id=1;
+UPDATE t SET v=25 WHERE id=2;
+UPDATE dolt_workspace_t SET staged=TRUE WHERE to_id IN (1,2);
+SELECT dolt_commit('-m','range');
+" "SELECT CONCAT('R|RNG|', id, '|', v) FROM t WHERE v BETWEEN 15 AND 30 ORDER BY v, id;"
+
+
 echo ""
 echo "=== Results: $pass passed, $fail failed ==="
 if [ $fail -gt 0 ]; then
