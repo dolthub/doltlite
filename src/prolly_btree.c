@@ -1734,7 +1734,9 @@ static int loadSchemaCatalogRows(
       aRows[nRows].zName = zName;
       aRows[nRows].zTblName = zTblName;
       aRows[nRows].zSql = zSql;
-      aRows[nRows].bPreserve = 1;
+      aRows[nRows].bPreserve = !(zType
+          && (strcmp(zType, "table")==0 || strcmp(zType, "index")==0)
+          && zSql && zSql[0]);
       nRows++;
     }
     rc = prollyCursorNext(&cur);
@@ -6382,6 +6384,20 @@ static int prollyBtreeCursor(
   pCur->pCurOps = &prollyCursorOps;
 
   pTE = findTable(p, iTable);
+  /* SQLite reparses rowid-table UNIQUE constraints as root 0 autoindexes.
+  ** Bind that shape to doltlite's hidden BLOBKEY catalog entry. */
+  if( !pTE && iTable==0 && pKeyInfo ){
+    int i;
+    for(i=0; i<p->cat.n; i++){
+      struct TableEntry *pCand = &p->cat.a[i];
+      if( pCand->iTable<=1 ) continue;
+      if( (pCand->flags & BTREE_BLOBKEY)==0 ) continue;
+      if( tableEntryIsTableRoot(p, pCand) ) continue;
+      pTE = pCand;
+      pCur->pgnoRoot = pTE->iTable;
+      break;
+    }
+  }
   if( pTE && iTable!=1 && iTable==p->cat.iNextTable
    && pTE->zName==0 && prollyHashIsEmpty(&pTE->root) ){
     /* OOM rollback can leave cached bytecode pointing at a now-stale root
