@@ -71,6 +71,7 @@ int origBtreeCursor(void *p, Pgno iTable, int wrFlag,
   return orig_sqlite3BtreeCursor(B(p), iTable, wrFlag, pKeyInfo, C(pCur));
 }
 int origBtreeCloseCursor(void *pCur){ return orig_sqlite3BtreeCloseCursor(C(pCur)); }
+void origBtreeClearCursor(void *pCur){ orig_sqlite3BtreeClearCursor(C(pCur)); }
 int origBtreeCursorIsLastOnSingle(void *pCur){
   BtCursor *c = C(pCur);
   BtShared *pBt;

@@ -10318,8 +10318,12 @@ static int origCursorTransferRowVt(BtCursor *pDest, BtCursor *pSrc, i64 iKey){
   return origBtreeTransferRow(pDest->pOrigCursor, pSrc->pOrigCursor, iKey);
 }
 static void origCursorClearCursorVt(BtCursor *pCur){
-  (void)pCur;
-
+  /* Must invalidate the underlying stock cursor. OP_NullRow calls this to
+  ** null-extend a LEFT JOIN; if the orig (ephemeral/automatic-index) cursor
+  ** keeps its live position, the following OP_Next walks the index instead of
+  ** terminating, emitting spurious matched rows (join5-3.2: a NULL join key
+  ** that should match nothing returns extra rows). */
+  origBtreeClearCursor(pCur->pOrigCursor);
 }
 static int origCursorCountVt(sqlite3 *db, BtCursor *pCur, i64 *pnEntry){
   return origBtreeCount(db, pCur->pOrigCursor, pnEntry);
