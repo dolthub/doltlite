@@ -1325,3 +1325,14 @@ jrnlmode jrnlmode-9.2  # journal_mode unsupported on doltlite-format databases
 # expected 4. Raw on-disk-format divergence; the descending-index behavior the
 # file actually exercises (descidx3-2.x..) is correct.
 descidx3 descidx3-1.1  # hexio read of SQLite file-format version byte (chunk store has no such field)
+
+# alterdropcol — alterdropcol-8.2 expects AUTOINCREMENT in the regenerated DDL,
+# but test 8.0 injects AUTOINCREMENT via a raw `PRAGMA writable_schema=1;
+# UPDATE sqlite_schema SET sql='...AUTOINCREMENT...'` edit on a table that was
+# CREATEd without it. DoltLite regenerates DDL from its structural catalog and
+# ignores raw sqlite_schema text edits (same intentional class as #1241 /
+# capi3-8.3/8.5), so the catalog never recorded AUTOINCREMENT and the rewritten
+# DDL omits it. AUTOINCREMENT itself is fully honored: a normally-created
+# AUTOINCREMENT table round-trips the keyword through DROP COLUMN, never reuses
+# a deleted max rowid, and maintains sqlite_sequence. Raw-schema-edit divergence.
+alterdropcol alterdropcol-8.2  # AUTOINCREMENT injected via writable_schema UPDATE; structural catalog ignores raw sqlite_schema edits
