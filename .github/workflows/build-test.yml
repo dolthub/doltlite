@@ -442,7 +442,7 @@ jobs:
       run: |
         cd build
         bash ../test/run_testfixture.sh "Large tests" 180 \
-          func e_expr printf date randexpr1 enc4 \
+          func e_expr printf date randexpr1 enc4 enc2 enc3 like3 numcast \
           boundary1 boundary2 boundary3 select9
 
     - name: SQLite crash recovery tests
