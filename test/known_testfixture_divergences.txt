@@ -1150,6 +1150,15 @@ capi3 capi3-11.5   # finalize after COMMIT-during-active-read: SQLITE_ABORT vs S
 capi3 capi3-11.12  # same: SQLITE_ERROR vs SQLITE_ROW
 capi3 capi3-11.13  # finalize of the faulted statement: SQLITE_ERROR vs SQLITE_OK
 
+# default — writable_schema edit to a column DEFAULT is not honored. The test
+# does PRAGMA writable_schema=ON; UPDATE sqlite_master SET sql='...DEFAULT(:xyz)'
+# to rewrite b's default to an (invalid) bind parameter; stock then yields NULL
+# on insert, doltlite keeps the original DEFAULT 99. doltlite's schema is the
+# structural catalog (regenerated), not the raw sqlite_master.sql text, so the
+# injected edit has no effect -- same intentional class as capi3-8.3/8.5. Normal
+# DEFAULT handling (default-1.x/2.x/3.x/4.0/4.2-4.x) is correct.
+default default-4.1  # writable_schema sqlite_master.sql DEFAULT edit not honored (structural catalog)
+
 # fordelete — doltlite doesn't materialize named sqlite_autoindex_* rows for
 # WITHOUT-ROWID/implicit unique indexes, so PRAGMA index_list reports just the
 # table; the FOR-DELETE behavior under test is otherwise correct. (Recovered
