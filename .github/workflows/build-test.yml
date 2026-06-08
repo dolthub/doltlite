@@ -552,7 +552,7 @@ jobs:
           having hidden hook hook2 ieee754 imposter1 incrblob4 index2 \
           index4 index6 index7 index8 index9 indexA indexexpr1 indexexpr2 \
           indexexpr3 init insert2 insert3 insert4 insert5 insertfault instr \
-          instrfault intreal ioerr5 ioerr6 istrue join2 join3 join4 \
+          instrfault intreal ioerr5 ioerr6 istrue join2 join3 join4 join5 \
           join6 join7 join8 join9 joinA joinC joinE joinF \
           joinH joinI jrnlmode json107 json108 json109 json501 json502 jsonb01 \
           keyword1 lastinsert laststmtchanges literal literal2 loadext loadext2 lock6 \
