@@ -3283,6 +3283,12 @@ static SQLITE_NOINLINE int vdbeCloseStatement(Vdbe *p, int eOp){
   return rc;
 }
 int sqlite3VdbeCloseStatement(Vdbe *p, int eOp){
+#ifdef DOLTLITE_PROLLY
+  if( eOp==SAVEPOINT_ROLLBACK && p->iStatement && p->db->nStatement==0 ){
+    int nStatement = p->iStatement - p->db->nSavepoint;
+    p->db->nStatement = nStatement>0 ? nStatement : 1;
+  }
+#endif
   if( p->db->nStatement && p->iStatement ){
     return vdbeCloseStatement(p, eOp);
   }

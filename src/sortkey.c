@@ -8,6 +8,10 @@
 
 static int skGetVarint32(const u8 *p, u32 *pVal){
   u32 a;
+  if( !p ){
+    if( pVal ) *pVal = 0;
+    return 0;
+  }
   a = *p;
   if( !(a & 0x80) ){
     *pVal = a;
@@ -274,9 +278,10 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
   sqlite3_int64 outSize = 0;
   int nField = 0;
 
-  if( nRec <= 0 ) return -1;
+  if( !pRec || nRec <= 0 ) return -1;
 
   hdrOff = skGetVarint32(pRec, &hdrSize);
+  if( hdrOff<=0 ) return -1;
   if( hdrSize > (u32)nRec ) return -1;
   dataOff = hdrSize;
 
@@ -288,7 +293,11 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
 
     if( nMaxFields > 0 && nField >= nMaxFields ) break;
 
-    hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
+    {
+      int nVar = skGetVarint32(pRec + hdrOff, &serialType);
+      if( nVar<=0 ) return -1;
+      hdrOff += nVar;
+    }
     fieldLen = serialTypeLen(serialType);
 
     if( fieldLen > (u32)nRec - dataOff ) return -1;
@@ -358,12 +367,17 @@ static int sortKeyFromSingleBinaryFieldFast(
   int nAlloc;
   u8 *pOut;
 
-  if( nKeyField>1 || nRec<=0 ) return SQLITE_NOTFOUND;
+  if( !pRec || nKeyField>1 || nRec<=0 ) return SQLITE_NOTFOUND;
   if( descFromKeyInfo(pKeyInfo, 0) ) return SQLITE_NOTFOUND;
   hdrOff = skGetVarint32(pRec, &hdrSize);
+  if( hdrOff<=0 ) return SQLITE_CORRUPT;
   if( hdrSize > (u32)nRec ) return SQLITE_CORRUPT;
   if( hdrOff>=hdrSize ) return SQLITE_NOTFOUND;
-  hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
+  {
+    int nVar = skGetVarint32(pRec + hdrOff, &serialType);
+    if( nVar<=0 ) return SQLITE_CORRUPT;
+    hdrOff += nVar;
+  }
   if( nKeyField<=0 && hdrOff<hdrSize ) return SQLITE_NOTFOUND;
 
   fieldLen = serialTypeLen(serialType);
@@ -393,6 +407,7 @@ static int sortKeyFromSingleBinaryFieldFast(
   }
 
   pOut = *ppBuf;
+  if( !pOut ) return SQLITE_NOMEM;
   pOut[0] = tag;
   if( fieldLen>0 ) memcpy(pOut + 1, pRec + dataOff, fieldLen);
   pOut[1 + fieldLen] = 0x00;
@@ -627,6 +642,7 @@ int sortKeyFromMemPrefixCollBuffer(
     *pnAlloc = nAlloc;
   }
 
+  if( !*ppBuf ) return SQLITE_NOMEM;
   if( nSize != sortKeyEncodeMemArray(aMem, nMem, nKeyField, pKeyInfo, *ppBuf) ){
     return SQLITE_CORRUPT;
   }
@@ -639,9 +655,10 @@ int sortKeyRecordNeedsPayload(const u8 *pRec, int nRec, int nKeyField){
   u32 hdrOff;
   int nField = 0;
 
-  if( nRec <= 0 ) return 0;
+  if( !pRec || nRec <= 0 ) return 0;
 
   hdrOff = skGetVarint32(pRec, &hdrSize);
+  if( hdrOff<=0 ) return 0;
   if( hdrSize > (u32)nRec ) return 0;
 
   while( hdrOff < hdrSize ){
@@ -649,7 +666,11 @@ int sortKeyRecordNeedsPayload(const u8 *pRec, int nRec, int nKeyField){
 
     if( nKeyField > 0 && nField >= nKeyField ) break;
 
-    hdrOff += skGetVarint32(pRec + hdrOff, &serialType);
+    {
+      int nVar = skGetVarint32(pRec + hdrOff, &serialType);
+      if( nVar<=0 ) return 0;
+      hdrOff += nVar;
+    }
     if( serialType==7 ) return 1;
     nField++;
   }
@@ -1021,6 +1042,7 @@ int recordFromSortKeyBuffer(
 
   *pnOut = 0;
 
+  if( !pSortKey && nSortKey>0 ) return SQLITE_CORRUPT;
   if( nSortKey <= 0 ){
     if( *pnAlloc < 1 ){
       u8 *pNew = (u8*)sqlite3_realloc(*ppBuf, 1);
@@ -1202,6 +1224,7 @@ int recordFromSortKeyBufferColl(
   int nField = 0;
   int rc;
 
+  if( !pSortKey && nSortKey>0 ) return SQLITE_CORRUPT;
   if( !sortKeyHasDescFields(pKeyInfo) ){
     return recordFromSortKeyBuffer(pSortKey, nSortKey, ppBuf, pnAlloc, pnOut);
   }
