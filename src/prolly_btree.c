@@ -5316,23 +5316,43 @@ static int restoreFromCommitted(Btree *p){
 static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
-  (void)writeOnly;
 
   if( pBt->inCatalogSerialize ) return SQLITE_OK;
 
   if( p->inTrans==TRANS_WRITE ){
     assert( pBt->store.isMemory || pBt->store.pGraphLockFile!=0 );
     assert( pBt->store.isMemory || pBt->store.lockDepth > 0 );
-    /* Cursor pending-edit maps alias the catalog's per-table pPending maps,
-    ** which restoreFromCommitted() (via catFree) frees. Detach the aliases so
-    ** nothing dereferences them afterwards. We only null them here — do NOT
-    ** clear the maps: catFree owns that, and a prior savepoint rollback may
-    ** already have freed the map this cursor points at, so clearing it would
-    ** be a use-after-free. ensureMutMap re-aliases from the catalog on reuse. */
+    /* Trip cursors for the rollback. A read-only cursor survives a writeOnly
+    ** rollback (schema unchanged): save its position so it re-seeks the
+    ** restored tree on next access, matching stock sqlite3BtreeTripAllCursors.
+    ** Otherwise a ROLLBACK issued mid-SELECT (e.g. from a user function) would
+    ** wrongly abort the read with SQLITE_ABORT_ROLLBACK (misc8-1.4). Write
+    ** cursors, and every cursor when the rollback changes the schema, are
+    ** faulted.
+    **
+    ** Either way detach the cursor's pending-edit map alias before
+    ** restoreFromCommitted() (via catFree) frees it. Detach AFTER
+    ** saveCursorPosition(), which copies out the key it needs first. We only
+    ** null the alias — catFree owns the map, and a prior savepoint rollback may
+    ** already have freed the one this cursor points at, so clearing it would be
+    ** a use-after-free (the #1207/#1213 fix). ensureMutMap re-aliases on reuse. */
     {
       BtCursor *pC;
+      int tc = tripCode ? tripCode : SQLITE_ABORT;
       for(pC = pBt->pCursor; pC; pC = pC->pNext){
-        if( pC->pBtree==p && pC->pMutMap ){
+        if( pC->pBtree!=p ) continue;
+        if( writeOnly
+         && (pC->curFlags & BTCF_WriteFlag)==0
+         && (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
+         && saveCursorPosition(pC)==SQLITE_OK ){
+          /* read cursor saved -> CURSOR_REQUIRESEEK; survives the rollback */
+        }else{
+          pC->eState = CURSOR_FAULT;
+          pC->skipNext = tc;
+          pC->mmActive = 0;
+          prollyCursorReleaseAll(&pC->pCur);
+        }
+        if( pC->pMutMap ){
           pC->pMutMap = 0;
           pC->mmActive = 0;
           pC->mmPhysActive = 0;
@@ -5348,7 +5368,6 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       pBt->store.snapshotPinned = 0;
       return rc;
     }
-    invalidateCursors(pBt, 0, tripCode ? tripCode : SQLITE_ABORT);
     invalidateSchema(p);
     chunkStoreRollback(&pBt->store);
     {
