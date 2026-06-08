@@ -1415,3 +1415,74 @@ misc1 misc1-14.2b  # no rollback-journal file: doltlite has no -journal
 # content"). Generated-column behavior itself is correct (the other 174 tests pass).
 gencol1 gencol1-15.10  # db deserialize (page-image API) unsupported (#1225)
 gencol1 gencol1-15.20  # db deserialize (page-image API) unsupported (#1225)
+
+# enc2 — UTF-16 encoding tests (#1164). DoltLite is locked to UTF-8: it ignores
+# PRAGMA encoding=utf16le/be and reports UTF-8, so tests that read back the
+# connection encoding (directly, via a custom collation/function result, or a
+# CAST of UTF-16 bytes) diverge. The collation/function/row data itself is
+# correct. A few are unordered SELECTs returning PK-order not insertion order
+# (rowid-order class); the multiset is identical.
+enc2 enc2-1.3  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-1.7  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-1.8  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-2.3  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-2.7  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-2.8  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-3.3  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-3.7  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-3.8  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-2.0.1  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-2.0.2  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-2.0.3  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-2.0.4  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-2.10  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.0.1  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.0.2  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.0.3  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.0.4  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.10  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-4.3  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.5  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.6  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.9  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.10  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.13  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-6.4  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-6.8  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-7.2  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-9.2  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-9.4  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-9.5  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+
+# enc3 — UTF-16 encoding (#1164). PRAGMA encoding ignored (UTF-8); 2.2/2.3 CAST a
+# UTF-16le byte blob to text: stock reads UTF-16 ('abcde'), doltlite reads UTF-8
+# (NUL-truncated). Stored bytes intact; encoding-only.
+enc3 enc3-1.1  # doltlite ignores non-UTF-8 encodings (#1164)
+enc3 enc3-2.1  # doltlite ignores non-UTF-8 encodings (#1164)
+enc3 enc3-2.2  # doltlite ignores non-UTF-8 encodings (#1164)
+enc3 enc3-2.3  # doltlite ignores non-UTF-8 encodings (#1164)
+enc3 enc3-3.2  # doltlite ignores non-UTF-8 encodings (#1164)
+
+# like3 — the like3-8.* subtests assert the connection encoding is UTF-16le/be
+# after PRAGMA encoding; doltlite reports UTF-8 (#1164). LIKE behavior is correct.
+like3 like3-8.utf16le.1.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.2.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.3.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.4.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.5.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.6.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.7.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.8.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.1.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.2.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.3.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.4.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.5.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.6.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.7.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.8.2  # doltlite ignores non-UTF-8 encodings (#1164)
+
+# numcast — numcast-utf16{le,be}.0 assert the connection encoding; doltlite reports
+# utf8 (#1164). The numeric CAST behavior is correct.
+numcast numcast-utf16le.0  # doltlite ignores non-UTF-8 encodings (#1164)
+numcast numcast-utf16be.0  # doltlite ignores non-UTF-8 encodings (#1164)
