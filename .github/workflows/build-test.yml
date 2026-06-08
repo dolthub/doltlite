@@ -428,7 +428,7 @@ jobs:
           trans where expr attach \
           coalesce conflict cse date join subquery view \
           between cast check limit null quote rowid sort types \
-          types2 in in2 in3 in4 in5 in6 like like2 \
+          types2 in in2 in3 in4 in5 in6 in7 like like2 \
           minmax minmax2 minmax3 select5 select6 select7 \
           selectA selectB distinctagg enc count capi2 capi3 \
           collate1 collate2 collate3 collate4 \
