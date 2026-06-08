@@ -3618,6 +3618,15 @@ int sqlite3VdbeReset(Vdbe *p){
     }else{
       db->errCode = p->rc;
     }
+#ifdef DOLTLITE_PROLLY
+  }else if( p->expired && p->rc!=SQLITE_OK ){
+    /* An expired statement (a same-connection schema change occurred before it
+    ** ran) never advanced pc, so the transfer above is skipped. Record its rc
+    ** (e.g. SQLITE_SCHEMA) on the db handle so sqlite3_errcode()/errmsg()
+    ** reflect the schema error after finalize/reset rather than reporting the
+    ** stale code from a prior step (#1268). */
+    db->errCode = p->rc;
+#endif
   }
 
   /* Reset register contents and reclaim error message memory.
