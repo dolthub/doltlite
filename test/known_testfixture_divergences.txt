@@ -1318,3 +1318,10 @@ jrnlmode jrnlmode-8.28  # journal_mode unsupported on doltlite-format databases
 jrnlmode jrnlmode-8.30  # journal_mode unsupported on doltlite-format databases
 jrnlmode jrnlmode-9.1  # journal_mode unsupported on doltlite-format databases
 jrnlmode jrnlmode-9.2  # journal_mode unsupported on doltlite-format databases
+
+# descidx3 — descidx3-1.1 reads the SQLite file-format version byte via
+# get_file_format (hexio_read test.db offset 44). DoltLite stores a chunk store,
+# not a SQLite file, so that offset is not the format field and reads 0 vs the
+# expected 4. Raw on-disk-format divergence; the descending-index behavior the
+# file actually exercises (descidx3-2.x..) is correct.
+descidx3 descidx3-1.1  # hexio read of SQLite file-format version byte (chunk store has no such field)
