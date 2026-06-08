@@ -1734,9 +1734,7 @@ static int loadSchemaCatalogRows(
       aRows[nRows].zName = zName;
       aRows[nRows].zTblName = zTblName;
       aRows[nRows].zSql = zSql;
-      aRows[nRows].bPreserve = !(zType
-          && (strcmp(zType, "table")==0 || strcmp(zType, "index")==0)
-          && zSql && zSql[0]);
+      aRows[nRows].bPreserve = 1;
       nRows++;
     }
     rc = prollyCursorNext(&cur);
@@ -2091,8 +2089,7 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
       ProllyHash h;
       const char *zRecordSql = aRows[i].zSql;
       Pgno iRecordPg = aRows[i].newPg;
-      if( !aRows[i].bPreserve
-       && (strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0)
+      if( (strcmp(aRows[i].zType, "table")==0 || strcmp(aRows[i].zType, "index")==0)
        && aRows[i].zSql!=0 && aRows[i].zSql[0]!=0 ){
         char *zCanon = doltliteCanonicalizeSchemaSql(aRows[i].zSql, aRows[i].zName);
         if( !zCanon ){
@@ -2102,7 +2099,9 @@ static int doltliteSerializeCatalogEntriesForBtreeImpl(
           return SQLITE_NOMEM;
         }
         prollyHashCompute((const u8*)zCanon, (int)strlen(zCanon), &h);
-        zRecordSql = zCanon;
+        if( !aRows[i].bPreserve ){
+          zRecordSql = zCanon;
+        }
         pRec = buildSchemaCatalogRecord(aRows[i].zType, aRows[i].zName,
                                         aRows[i].zTblName, iRecordPg,
                                         zRecordSql, &nRec);
