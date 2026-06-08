@@ -24,6 +24,9 @@
 #include "chunk_store.h"
 struct ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 #endif
+#ifdef DOLTLITE_PROLLY
+int sqlite3BtreeDeleteSchemaEntryByName(Btree*, const char*);
+#endif
 
 /*
 ** High-resolution hardware timer used for debugging and testing only.
@@ -4421,9 +4424,15 @@ case OP_Transaction: {
       goto abort_due_to_error;
     }
 
-    if( p->usesStmtJournal
+    if( (p->usesStmtJournal
+#ifdef DOLTLITE_PROLLY
+       || pOp->p2
+#endif
+       )
      && pOp->p2
+#ifndef DOLTLITE_PROLLY
      && (db->autoCommit==0 || db->nVdbeRead>1)
+#endif
     ){
       assert( sqlite3BtreeTxnState(pBt)==SQLITE_TXN_WRITE );
       if( p->iStatement==0 ){
@@ -4431,11 +4440,40 @@ case OP_Transaction: {
         db->nStatement++;
         p->iStatement = db->nSavepoint + db->nStatement;
       }
+#ifdef DOLTLITE_PROLLY
+      p->usesStmtJournal = 1;
+#endif
 
+#ifdef DOLTLITE_PROLLY
+      rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
+      if( rc==SQLITE_OK ){
+        rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
+      }
+#else
       rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
       if( rc==SQLITE_OK ){
         rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
       }
+#endif
+#ifdef DOLTLITE_PROLLY
+      if( rc!=SQLITE_OK && p->iStatement>0 ){
+        int rcSave = rc;
+        int iDb2;
+        int iSavepoint = p->iStatement - 1;
+        for(iDb2=0; iDb2<db->nDb; iDb2++){
+          Btree *pBt2 = db->aDb[iDb2].pBt;
+          if( pBt2 ){
+            (void)sqlite3BtreeSavepoint(pBt2, SAVEPOINT_ROLLBACK, iSavepoint);
+            (void)sqlite3BtreeSavepoint(pBt2, SAVEPOINT_RELEASE, iSavepoint);
+          }
+        }
+        (void)sqlite3VtabSavepoint(db, SAVEPOINT_ROLLBACK, iSavepoint);
+        (void)sqlite3VtabSavepoint(db, SAVEPOINT_RELEASE, iSavepoint);
+        db->nStatement--;
+        p->iStatement = 0;
+        rc = rcSave;
+      }
+#endif
 
       /* Store the current value of the database handles deferred constraint
       ** counter. If the statement transaction needs to be rolled back,
@@ -8726,6 +8764,9 @@ case OP_VBegin: {
 case OP_VCreate: {
   Mem sMem;          /* For storing the record being decoded */
   const char *zTab;  /* Name of the virtual table */
+#ifdef DOLTLITE_PROLLY
+  int bUnknownTokenizer = 0;
+#endif
 
   memset(&sMem, 0, sizeof(sMem));
   sMem.db = db;
@@ -8738,7 +8779,45 @@ case OP_VCreate: {
   zTab = (const char*)sqlite3_value_text(&sMem);
   assert( zTab || db->mallocFailed );
   if( zTab ){
+#ifdef DOLTLITE_PROLLY
+    Table *pTab = sqlite3FindTable(db, zTab, db->aDb[pOp->p1].zDbSName);
+    if( pTab && IsVirtual(pTab) ){
+      int ii;
+      int seenTokenize = 0;
+      for(ii=0; ii<pTab->u.vtab.nArg; ii++){
+        const char *zArg = pTab->u.vtab.azArg[ii];
+        if( zArg && sqlite3_strlike("%tokenize%unknown%", zArg, 0)==0 ){
+          bUnknownTokenizer = 1;
+          break;
+        }
+        if( zArg && sqlite3_stricmp(zArg, "tokenize")==0 ){
+          seenTokenize = 1;
+        }else if( seenTokenize && zArg && sqlite3_stricmp(zArg, "unknown")==0 ){
+          bUnknownTokenizer = 1;
+          break;
+        }
+      }
+    }
+#endif
     rc = sqlite3VtabCallCreate(db, pOp->p1, zTab, &p->zErrMsg);
+#ifdef DOLTLITE_PROLLY
+    if( rc ){
+      int rcCleanup = sqlite3BtreeDeleteSchemaEntryByName(
+          db->aDb[pOp->p1].pBt, zTab);
+      (void)rcCleanup;
+    }
+#endif
+    if( rc && db->mallocFailed ){
+      rc = SQLITE_NOMEM_BKPT;
+    }
+#ifdef DOLTLITE_PROLLY
+    else if( rc && bUnknownTokenizer && p->zErrMsg
+           && sqlite3_strnicmp(p->zErrMsg, "vtable constructor failed:", 26)==0 ){
+      sqlite3DbFree(db, p->zErrMsg);
+      p->zErrMsg = 0;
+      rc = SQLITE_NOMEM_BKPT;
+    }
+#endif
   }
   sqlite3VdbeMemRelease(&sMem);
   if( rc ) goto abort_due_to_error;
@@ -9126,6 +9205,9 @@ case OP_VUpdate: {
   const sqlite3_module *pModule;
   int nArg;
   int i;
+#ifdef DOLTLITE_PROLLY
+  int iDb;
+#endif
   sqlite_int64 rowid = 0;
   Mem **apArg;
   Mem *pX;
@@ -9144,6 +9226,64 @@ case OP_VUpdate: {
   pModule = pVtab->pModule;
   nArg = pOp->p2;
   assert( pOp->p4type==P4_VTAB );
+#ifdef DOLTLITE_PROLLY
+  if( p->iStatement==0 ){
+    int iMeta = 0;
+    assert( db->nStatement>=0 && db->nSavepoint>=0 );
+    db->nStatement++;
+    p->iStatement = db->nSavepoint + db->nStatement;
+    p->usesStmtJournal = 1;
+    for(iDb=0; rc==SQLITE_OK && iDb<db->nDb; iDb++){
+      Btree *pBt = db->aDb[iDb].pBt;
+      if( pBt ){
+        if( sqlite3BtreeTxnState(pBt)!=SQLITE_TXN_WRITE ){
+          rc = sqlite3BtreeBeginTrans(pBt, 1, &iMeta);
+        }
+      }
+      if( rc==SQLITE_OK && pBt && sqlite3BtreeTxnState(pBt)==SQLITE_TXN_WRITE ){
+        rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
+      }
+    }
+    if( rc==SQLITE_OK ){
+      rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
+    }
+    p->nStmtDefCons = db->nDeferredCons;
+    p->nStmtDefImmCons = db->nDeferredImmCons;
+    if( rc ){
+      int rcSave = rc;
+      int iRollback;
+      int iSavepoint = p->iStatement - 1;
+      for(iRollback=0; iRollback<db->nDb; iRollback++){
+        Btree *pBt = db->aDb[iRollback].pBt;
+        if( pBt ){
+          (void)sqlite3BtreeSavepoint(pBt, SAVEPOINT_ROLLBACK, iSavepoint);
+          (void)sqlite3BtreeSavepoint(pBt, SAVEPOINT_RELEASE, iSavepoint);
+        }
+      }
+      (void)sqlite3VtabSavepoint(db, SAVEPOINT_ROLLBACK, iSavepoint);
+      (void)sqlite3VtabSavepoint(db, SAVEPOINT_RELEASE, iSavepoint);
+      db->nStatement--;
+      p->iStatement = 0;
+      rc = rcSave;
+      goto abort_due_to_error;
+    }
+  }
+  if( p->iStatement>0 ){
+    int iMeta = 0;
+    for(iDb=0; rc==SQLITE_OK && iDb<db->nDb; iDb++){
+      Btree *pBt = db->aDb[iDb].pBt;
+      if( pBt ){
+        if( sqlite3BtreeTxnState(pBt)!=SQLITE_TXN_WRITE ){
+          rc = sqlite3BtreeBeginTrans(pBt, 1, &iMeta);
+        }
+        if( rc==SQLITE_OK && sqlite3BtreeTxnState(pBt)==SQLITE_TXN_WRITE ){
+          rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
+        }
+      }
+    }
+    if( rc ) goto abort_due_to_error;
+  }
+#endif
   if( ALWAYS(pModule->xUpdate) ){
     u8 vtabOnConflict = db->vtabOnConflict;
     apArg = p->apArg;

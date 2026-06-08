@@ -307,6 +307,10 @@ struct Btree {
     SavepointPendingSnapshot *aPendingSnapshot;
     int nPendingSnapshot;
     int nPendingSnapshotAlloc;
+    int nChunkPending;
+    int nChunkRecent;
+    i64 nChunkWriteBuf;
+    i64 nChunkCommittedWriteBuf;
     int nTables;
     Pgno iNextTable;
     Pgno iLargestRootPage;
@@ -468,10 +472,14 @@ static void refreshCursorMutMapAliases(Btree *pBtree, BtShared *pBt,
                                         Pgno iTable, ProllyMutMap *pNewMap);
 static int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData);
 static int flushIfNeeded(BtCursor *pCur);
+static int advanceTreeCursor(BtCursor *pCur, int dir);
+static int prollyBtCursorNext(BtCursor *pCur, int flags);
+static int prollyBtCursorPrevious(BtCursor *pCur, int flags);
 static int flushAllPending(Btree *pBtree, BtShared *pBt, Pgno iTable);
 static int applyMutMapToTableRoot(BtShared *pBt, struct TableEntry *pTE, ProllyMutMap *pMap);
 static int flushPendingForTable(Btree *pBtree, BtShared *pBt,
                                 struct TableEntry *pTE, int clearInPlace);
+static int persistRolledBackSessionState(Btree *p, BtShared *pBt);
 static int cacheCursorPayloadCopy(BtCursor *pCur, const u8 *pData, int nData);
 static int serializeUnpackedRecordBuffer(
   UnpackedRecord *pRec, u8 **ppBuf, int *pnAlloc, int *pnOut
@@ -561,6 +569,48 @@ static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   }
 }
 
+static int cursorOnDegenerateSchemaRow(BtCursor *pCur, int *pIsDegenerate){
+  const u8 *pVal;
+  int nVal;
+  int rc;
+  DoltliteRecordInfo ri;
+  *pIsDegenerate = 0;
+  if( pCur->pgnoRoot!=1 || !pCur->curIntKey ) return SQLITE_OK;
+  if( pCur->eState!=CURSOR_VALID ) return SQLITE_OK;
+  rc = getCursorPayload(pCur, &pVal, &nVal);
+  if( rc!=SQLITE_OK ) return rc;
+  if( !pVal || nVal<=0 ){
+    *pIsDegenerate = 1;
+    return SQLITE_OK;
+  }
+  if( doltliteParseRecordStrict(pVal, nVal, &ri)!=SQLITE_OK ){
+    return SQLITE_OK;
+  }
+  if( ri.nField<2 || ri.aType[0]==0 || ri.aType[1]==0 ){
+    *pIsDegenerate = 1;
+  }
+  return SQLITE_OK;
+}
+
+static int skipDegenerateSchemaRows(BtCursor *pCur, int dir, int *pRes){
+  int rc = SQLITE_OK;
+  int isDegenerate = 0;
+  if( pRes ) *pRes = 0;
+  while( pCur->eState==CURSOR_VALID ){
+    rc = cursorOnDegenerateSchemaRow(pCur, &isDegenerate);
+    if( rc!=SQLITE_OK || !isDegenerate ) break;
+    CLEAR_CACHED_PAYLOAD(pCur);
+    rc = dir>=0 ? prollyBtCursorNext(pCur, 0) : prollyBtCursorPrevious(pCur, 0);
+    if( rc!=SQLITE_OK && rc!=SQLITE_DONE ) break;
+    if( pCur->eState==CURSOR_INVALID ){
+      if( pRes ) *pRes = 1;
+      rc = SQLITE_OK;
+      break;
+    }
+  }
+  return rc;
+}
+
 static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
   const u8 *pVal; int nVal;
   ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
@@ -591,6 +641,8 @@ static int pushSavepoint(Btree *pBtree, int bStatement);
 static void btreeDiscardAllSavepoints(Btree *pBtree);
 static int findTableIndexInArray(struct TableEntry *aTables, int nTables, Pgno iTable);
 static int findSavepointTableIndexInArray(SavepointTableEntry *aTables, int nTables, Pgno iTable);
+static int appendPendingSnapshot(struct SavepointTableState *pState,
+                                 Pgno iTable, ProllyMutMap *pPending);
 static int snapshotPendingForFlush(Btree *pBtree, Pgno iTable, ProllyMutMap **ppPending,
                                    ProllyMutMap **ppFlushMap, int *pCaptured);
 static int restoreFromCommitted(Btree *p);
@@ -1100,6 +1152,20 @@ static void catFree(Catalog *cat){
   cat->nAlloc = 0;
 }
 
+static void catClearKeepAllocation(Catalog *cat){
+  int k;
+  for(k=0; k<cat->n; k++){
+    sqlite3_free(cat->a[k].zName);
+    if( cat->a[k].pPending ){
+      ProllyMutMap *pMap = (ProllyMutMap*)cat->a[k].pPending;
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      cat->a[k].pPending = 0;
+    }
+  }
+  cat->n = 0;
+}
+
 static void invalidateSchema(Btree *pBtree){
   if( pBtree->pSchema && pBtree->xFreeSchema ){
     pBtree->xFreeSchema(pBtree->pSchema);
@@ -1113,6 +1179,11 @@ static void invalidateCursors(BtShared *pBt, Pgno iTable, int errCode){
       p->eState = CURSOR_FAULT;
       p->skipNext = errCode;
       p->mmActive = 0;
+      p->pMutMap = 0;
+      p->mmPhysActive = 0;
+      p->deferredTreeSeek = 0;
+      p->mmIdx = -1;
+      p->mmPhysIdx = -1;
 
       prollyCursorReleaseAll(&p->pCur);
     }
@@ -1194,7 +1265,16 @@ static int addCatalogEntryMeta(
 ){
   CatalogEntryMeta *aMeta = *paMeta;
   CatalogEntryMeta *pNew;
-  if( findCatalogEntryMetaByPgno(aMeta, *pnMeta, iTable) ) return SQLITE_OK;
+  int i;
+  for(i=0; i<*pnMeta; i++){
+    if( aMeta[i].iTable==iTable
+     && aMeta[i].zType && zType && strcmp(aMeta[i].zType, zType)==0
+     && aMeta[i].zName && zName && strcmp(aMeta[i].zName, zName)==0
+     && aMeta[i].zTblName && zTblName
+     && strcmp(aMeta[i].zTblName, zTblName)==0 ){
+      return SQLITE_OK;
+    }
+  }
   if( *pnMeta>=*pnAlloc ){
     i64 nNew = *pnAlloc ? (i64)*pnAlloc * 2 : (i64)16;
     if( nNew > (i64)0x7fffffff/(i64)sizeof(CatalogEntryMeta) ){
@@ -1270,7 +1350,7 @@ static int buildLiveCatalogEntryMeta(Btree *pBtree, CatalogEntryMeta **ppMeta, i
       }
       if( iIndexTable==0 ) iIndexTable = pIdx->tnum;
       if( iIndexTable<=1 ) continue;
-      if( iIndexTable==iTable ) continue;
+      if( iIndexTable==iTable && (pTab->tabFlags & TF_Shadow)==0 ) continue;
       rc = addCatalogEntryMeta(&aMeta, &nMeta, &nAlloc, iIndexTable, "index",
                                pIdx->zName, pTab->zName);
       if( rc!=SQLITE_OK ) goto done;
@@ -1321,6 +1401,23 @@ static int schemaCatalogHasPgno(SchemaCatalogRow *aRows, int nRows, Pgno iTable)
   int i;
   for(i=0; i<nRows; i++){
     if( aRows[i].oldPg==iTable ) return 1;
+  }
+  return 0;
+}
+
+static int schemaCatalogHasName(
+  SchemaCatalogRow *aRows,
+  int nRows,
+  const char *zType,
+  const char *zName
+){
+  int i;
+  if( !zType || !zName ) return 0;
+  for(i=0; i<nRows; i++){
+    if( aRows[i].zType && strcmp(aRows[i].zType, zType)==0
+     && aRows[i].zName && strcmp(aRows[i].zName, zName)==0 ){
+      return 1;
+    }
   }
   return 0;
 }
@@ -1695,8 +1792,14 @@ static int appendMissingSchemaCatalogRows(
   for(i=0; i<nMeta; i++){
     SchemaCatalogRow *pRow;
     int wanted = 0;
-    if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable) ) continue;
     if( !aMeta[i].zType || !aMeta[i].zName || !aMeta[i].zTblName ) continue;
+    if( schemaCatalogHasName(aRows, nRows, aMeta[i].zType, aMeta[i].zName) ){
+      continue;
+    }
+    if( schemaCatalogHasPgno(aRows, nRows, aMeta[i].iTable)
+     && strcmp(aMeta[i].zType, "index")!=0 ){
+      continue;
+    }
     if( strcmp(aMeta[i].zType, "table")!=0 && strcmp(aMeta[i].zType, "index")!=0 ){
       continue;
     }
@@ -2236,6 +2339,80 @@ static int serializeCatalogForCommit(Btree *pBtree, u8 **ppOut, int *pnOut){
   return serializeCatalog(pBtree, ppOut, pnOut);
 }
 
+static int restoreCatalogRootsFromData(
+  Btree *pBtree,
+  const u8 *data,
+  int nData
+){
+  const u8 *pEntries;
+  const u8 *q;
+  int nTables = 0;
+  int iFormat = 0;
+  int i, nRestored = 0;
+
+  if( pBtree->bSchemaChangedTxn ) return SQLITE_NOTFOUND;
+  if( !catalogParseHeaderEx(data, nData, &iFormat, &nTables, &pEntries)
+   || nTables!=pBtree->cat.n ){
+    return SQLITE_NOTFOUND;
+  }
+
+  q = pEntries;
+  for(i=0; i<nTables; i++){
+    Pgno iTable;
+    u8 flags;
+    struct TableEntry *pTE;
+    int nSkip;
+
+    if( q + CAT_ENTRY_ITABLE_SIZE + CAT_ENTRY_FLAGS_SIZE
+        + PROLLY_HASH_SIZE + PROLLY_HASH_SIZE > data + nData ){
+      return SQLITE_NOTFOUND;
+    }
+
+    iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
+    q += CAT_ENTRY_ITABLE_SIZE;
+    flags = *q++;
+
+    pTE = findTable(pBtree, iTable);
+    if( !pTE ) return SQLITE_NOTFOUND;
+
+    if( pTE->pPending ){
+      ProllyMutMap *pMap = (ProllyMutMap*)pTE->pPending;
+      prollyMutMapFree(pMap);
+      sqlite3_free(pMap);
+      pTE->pPending = 0;
+      refreshCursorMutMapAliases(pBtree, pBtree->pBt, iTable, 0);
+    }
+    pTE->pendingFlushSeekEdits = 0;
+    pTE->flags = flags;
+    memcpy(pTE->root.data, q, PROLLY_HASH_SIZE);
+    q += PROLLY_HASH_SIZE;
+    memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
+    q += PROLLY_HASH_SIZE;
+    nRestored++;
+
+    if( iFormat==CATALOG_FORMAT_V4 ){
+      int nType, nName, nTbl;
+      if( q + 6 > data + nData ) return SQLITE_NOTFOUND;
+      nType = q[0] | (q[1]<<8);
+      nName = q[2] | (q[3]<<8);
+      nTbl = q[4] | (q[5]<<8);
+      q += 6;
+      nSkip = nType + nName + nTbl;
+    }else{
+      if( q + 2 > data + nData ) return SQLITE_NOTFOUND;
+      nSkip = q[0] | (q[1]<<8);
+      q += 2;
+    }
+    if( nSkip<0 || q + nSkip > data + nData ) return SQLITE_NOTFOUND;
+    q += nSkip;
+  }
+
+  if( q!=data+nData || nRestored!=pBtree->cat.n ){
+    return SQLITE_NOTFOUND;
+  }
+  return SQLITE_OK;
+}
+
 static int buildRuntimeMasterRoot(Btree *pBtree, ProllyHash *pMasterRoot){
   SchemaCatalogRow *aRows = 0;
   SchemaCatalogRow *aCanon = 0;
@@ -2378,6 +2555,8 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
   const u8 *q = data;
   int nTables, i;
   int iFormat = 0;
+  Catalog catNew;
+  u32 aMetaNew[SQLITE_N_BTREE_META];
 
   {
     const u8 *pEntries;
@@ -2387,8 +2566,10 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     q = pEntries;
   }
 
-  btreeFreeCatalogTables(pBtree);
-  initDefaultMeta(pBtree);
+  memset(&catNew, 0, sizeof(catNew));
+  memset(aMetaNew, 0, sizeof(aMetaNew));
+  aMetaNew[BTREE_FILE_FORMAT] = 4;
+  aMetaNew[BTREE_TEXT_ENCODING] = SQLITE_UTF8;
 
   {
     ProllyHash h;
@@ -2398,7 +2579,7 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
                | ((u32)h.data[1] << 8)
                | ((u32)h.data[2] << 16)
                | ((u32)h.data[3] << 24);
-    pBtree->aMeta[BTREE_SCHEMA_VERSION] = schemaHash | 1;
+    aMetaNew[BTREE_SCHEMA_VERSION] = schemaHash | 1;
   }
 
   for(i=0; i<nTables; i++){
@@ -2407,13 +2588,17 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     struct TableEntry *pTE;
     int nLen;
     if( q+4+1+PROLLY_HASH_SIZE+PROLLY_HASH_SIZE > data+nData ){
+      catFree(&catNew);
       return SQLITE_CORRUPT;
     }
     iTable = (Pgno)(q[0] | (q[1]<<8) | (q[2]<<16) | (q[3]<<24));
     q += 4;
     flags = *q++;
-    pTE = addTable(pBtree, iTable, flags);
-    if( !pTE ) return SQLITE_NOMEM;
+    pTE = catAdd(&catNew, iTable, flags);
+    if( !pTE ){
+      catFree(&catNew);
+      return SQLITE_NOMEM;
+    }
     memcpy(pTE->root.data, q, PROLLY_HASH_SIZE);
     q += PROLLY_HASH_SIZE;
     memcpy(pTE->schemaHash.data, q, PROLLY_HASH_SIZE);
@@ -2421,11 +2606,17 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     if( iFormat==CATALOG_FORMAT_V4 ){
       int nType, nName, nTbl;
       const u8 *pType, *pName, *pTbl;
-      if( q+6 > data+nData ) return SQLITE_CORRUPT;
+      if( q+6 > data+nData ){
+        catFree(&catNew);
+        return SQLITE_CORRUPT;
+      }
       nType = q[0] | (q[1]<<8); q += 2;
       nName = q[0] | (q[1]<<8); q += 2;
       nTbl = q[0] | (q[1]<<8); q += 2;
-      if( q+nType+nName+nTbl > data+nData ) return SQLITE_CORRUPT;
+      if( q+nType+nName+nTbl > data+nData ){
+        catFree(&catNew);
+        return SQLITE_CORRUPT;
+      }
       pType = q; q += nType;
       pName = q; q += nName;
       pTbl = q; q += nTbl;
@@ -2434,20 +2625,30 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
       if( nType==5 && memcmp(pType, "table", 5)==0 && nName>0 ){
         pTE->isTableRoot = 1;
         pTE->zName = sqlite3_malloc(nName+1);
-        if( !pTE->zName ) return SQLITE_NOMEM;
+        if( !pTE->zName ){
+          catFree(&catNew);
+          return SQLITE_NOMEM;
+        }
         memcpy(pTE->zName, pName, nName);
         pTE->zName[nName] = 0;
       }
     }else{
-      if( q+2 > data+nData ) return SQLITE_CORRUPT;
+      if( q+2 > data+nData ){
+        catFree(&catNew);
+        return SQLITE_CORRUPT;
+      }
       nLen = q[0] | (q[1]<<8); q += 2;
-      if( q+nLen > data+nData ) return SQLITE_CORRUPT;
+      if( q+nLen > data+nData ){
+        catFree(&catNew);
+        return SQLITE_CORRUPT;
+      }
       if( nLen>0 ){
         pTE->zName = sqlite3_malloc(nLen+1);
         if( pTE->zName ){
           memcpy(pTE->zName, q, nLen);
           pTE->zName[nLen] = 0;
         }else{
+          catFree(&catNew);
           return SQLITE_NOMEM;
         }
       }
@@ -2455,21 +2656,28 @@ static int deserializeCatalog(Btree *pBtree, const u8 *data, int nData){
     }
   }
 
-  if( q!=data+nData ) return SQLITE_CORRUPT;
+  if( q!=data+nData ){
+    catFree(&catNew);
+    return SQLITE_CORRUPT;
+  }
 
   {
     Pgno maxPage = 0;
     Pgno maxCatalogTable = 0;
-    for(i=0; i<pBtree->cat.n; i++){
-      if( pBtree->cat.a[i].iTable > maxCatalogTable ){
-        maxCatalogTable = pBtree->cat.a[i].iTable;
+    for(i=0; i<catNew.n; i++){
+      if( catNew.a[i].iTable > maxCatalogTable ){
+        maxCatalogTable = catNew.a[i].iTable;
       }
     }
     maxPage = maxCatalogTable;
-    pBtree->aMeta[BTREE_LARGEST_ROOT_PAGE] = maxPage;
+    aMetaNew[BTREE_LARGEST_ROOT_PAGE] = maxPage;
 
-    pBtree->cat.iNextTable = maxCatalogTable + 1;
+    catNew.iNextTable = maxCatalogTable + 1;
   }
+
+  btreeFreeCatalogTables(pBtree);
+  pBtree->cat = catNew;
+  memcpy(pBtree->aMeta, aMetaNew, sizeof(aMetaNew));
 
   return SQLITE_OK;
 }
@@ -2491,6 +2699,15 @@ static int applyMutMapToTableRoot(
 
   rc = prollyMutateFlush(&mut);
   if( rc!=SQLITE_OK ) return rc;
+
+  if( !prollyHashIsEmpty(&mut.newRoot) ){
+    ProllyCursor cur;
+    int empty = 0;
+    prollyCursorInit(&cur, &pBt->store, &pBt->cache, &mut.newRoot, pTE->flags);
+    rc = prollyCursorFirst(&cur, &empty);
+    prollyCursorClose(&cur);
+    if( rc!=SQLITE_OK ) return rc;
+  }
 
   pTE->root = mut.newRoot;
   return SQLITE_OK;
@@ -3167,17 +3384,17 @@ static int captureSavepointCatalogSnapshot(
     pDst->pendingFlushSeekEdits = pSrc->pendingFlushSeekEdits;
     pDst->tableRootKnown = pSrc->tableRootKnown;
     pDst->isTableRoot = pSrc->isTableRoot;
-    if( pSrc->zName ){
-      pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
-      if( !pDst->zName ){
+      if( pSrc->zName ){
+        pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
+        if( !pDst->zName ){
         int j;
         for(j=0; j<=i; j++){
           sqlite3_free(aSnapshot[j].zName);
         }
         sqlite3_free(aSnapshot);
-        return SQLITE_NOMEM;
+          return SQLITE_NOMEM;
+        }
       }
-    }
   }
 
   pState->aCatalogSnapshot = aSnapshot;
@@ -3199,6 +3416,11 @@ static void captureSavepointSessionState(
   pState->isRebasing = pBtree->isRebasing;
   pState->preRebaseWorkingCat = pBtree->preRebaseWorkingCat;
   pState->rebaseOntoCommit = pBtree->rebaseOntoCommit;
+  pState->nChunkPending = pBtree->pBt->store.staging.nPending;
+  pState->nChunkRecent = pBtree->pBt->store.staging.nRecent;
+  pState->nChunkWriteBuf = pBtree->pBt->store.staging.nWriteBuf;
+  pState->nChunkCommittedWriteBuf =
+      pBtree->pBt->store.staging.nCommittedWriteBuf;
   sqlite3_free(pState->zRebaseOrigBranch);
   pState->zRebaseOrigBranch = pBtree->zRebaseOrigBranch
       ? sqlite3_mprintf("%s", pBtree->zRebaseOrigBranch) : 0;
@@ -3220,6 +3442,22 @@ static void restoreSavepointSessionState(
   pBtree->isRebasing = pState->isRebasing;
   pBtree->preRebaseWorkingCat = pState->preRebaseWorkingCat;
   pBtree->rebaseOntoCommit = pState->rebaseOntoCommit;
+  if( pState->nChunkPending <= pBtree->pBt->store.staging.nPending ){
+    pBtree->pBt->store.staging.nPending = pState->nChunkPending;
+    csPendHTReset(&pBtree->pBt->store);
+  }
+  if( pState->nChunkRecent <= pBtree->pBt->store.staging.nRecent ){
+    pBtree->pBt->store.staging.nRecent = pState->nChunkRecent;
+    csRecentHTClear(&pBtree->pBt->store);
+  }
+  if( pState->nChunkWriteBuf <= pBtree->pBt->store.staging.nWriteBuf ){
+    pBtree->pBt->store.staging.nWriteBuf = pState->nChunkWriteBuf;
+  }
+  if( pState->nChunkCommittedWriteBuf
+       <= pBtree->pBt->store.staging.nCommittedWriteBuf ){
+    pBtree->pBt->store.staging.nCommittedWriteBuf =
+        pState->nChunkCommittedWriteBuf;
+  }
   sqlite3_free(pBtree->zRebaseOrigBranch);
   pBtree->zRebaseOrigBranch = pState->zRebaseOrigBranch
       ? sqlite3_mprintf("%s", pState->zRebaseOrigBranch) : 0;
@@ -3256,8 +3494,19 @@ static int captureSavepointTables(
   if( !pState->aTables ) return SQLITE_NOMEM;
   for(k=0; k<pBtree->cat.n; k++){
     pState->aTables[k].iTable = pBtree->cat.a[k].iTable;
-    pState->aTables[k].pendingFlushSeekEdits =
-        pBtree->cat.a[k].pendingFlushSeekEdits;
+      pState->aTables[k].pendingFlushSeekEdits =
+          pBtree->cat.a[k].pendingFlushSeekEdits;
+    if( bStatement && pBtree->cat.a[k].pPending ){
+      ProllyMutMap *pCopy = 0;
+      rc = prollyMutMapClone(&pCopy, (ProllyMutMap*)pBtree->cat.a[k].pPending);
+      if( rc!=SQLITE_OK ) return rc;
+      rc = appendPendingSnapshot(pState, pBtree->cat.a[k].iTable, pCopy);
+      if( rc!=SQLITE_OK ){
+        prollyMutMapFree(pCopy);
+        sqlite3_free(pCopy);
+        return rc;
+      }
+    }
   }
   pState->nTables = pBtree->cat.n;
   return SQLITE_OK;
@@ -3539,23 +3788,30 @@ static int restoreTablesFromSavepoint(
   Btree *pBtree,
   struct SavepointTableState *pState
 ){
+  ProllyMutMap *aPendingInline[64];
   ProllyMutMap **apPending = 0;
+  int apPendingHeap = 0;
   int k;
   int rc;
   struct TableEntry *aCurrent = pBtree->cat.a;
   int nCurrent = pBtree->cat.n;
 
   if( pState->nTables>0 ){
-    apPending = sqlite3_malloc64(
-        pState->nTables * sizeof(ProllyMutMap*));
-    if( !apPending ) return SQLITE_NOMEM;
+    if( pState->nTables <= (int)(sizeof(aPendingInline)/sizeof(aPendingInline[0])) ){
+      apPending = aPendingInline;
+    }else{
+      apPending = sqlite3_malloc64(
+          pState->nTables * sizeof(ProllyMutMap*));
+      if( !apPending ) return SQLITE_NOMEM;
+      apPendingHeap = 1;
+    }
     memset(apPending, 0, pState->nTables * sizeof(ProllyMutMap*));
 
     if( pBtree->cat.nAlloc < pState->nTables ){
       struct TableEntry *aNew = sqlite3_realloc(
           pBtree->cat.a, pState->nTables * (int)sizeof(struct TableEntry));
       if( !aNew ){
-        sqlite3_free(apPending);
+        if( apPendingHeap ) sqlite3_free(apPending);
         return SQLITE_NOMEM;
       }
       pBtree->cat.a = aNew;
@@ -3582,16 +3838,16 @@ static int restoreTablesFromSavepoint(
 
   if( prollyHashIsEmpty(&pState->catalogHash) ){
     if( pState->bCatalogSnapshot ){
-      btreeFreeCatalogTables(pBtree);
+      catClearKeepAllocation(&pBtree->cat);
       initDefaultMeta(pBtree);
       if( pState->nTables>0 ){
         if( pBtree->cat.nAlloc < pState->nTables ){
           struct TableEntry *aNew = sqlite3_realloc(
               pBtree->cat.a, pState->nTables * (int)sizeof(struct TableEntry));
           if( !aNew ){
-            sqlite3_free(apPending);
-            return SQLITE_NOMEM;
-          }
+              if( apPendingHeap ) sqlite3_free(apPending);
+              return SQLITE_NOMEM;
+            }
           pBtree->cat.a = aNew;
           pBtree->cat.nAlloc = pState->nTables;
         }
@@ -3607,20 +3863,15 @@ static int restoreTablesFromSavepoint(
           pDst->tableRootKnown = pSrc->tableRootKnown;
           pDst->isTableRoot = pSrc->isTableRoot;
           if( pSrc->zName ){
-            pDst->zName = sqlite3_mprintf("%s", pSrc->zName);
-            if( !pDst->zName ){
-              sqlite3_free(apPending);
-              btreeFreeCatalogTables(pBtree);
-              initDefaultMeta(pBtree);
-              return SQLITE_NOMEM;
-            }
+            pDst->zName = pSrc->zName;
+            pSrc->zName = 0;
           }
         }
       }
       pBtree->cat.n = pState->nTables;
       pBtree->cat.iNextTable = pState->iNextTable;
     }else{
-      btreeFreeCatalogTables(pBtree);
+      catClearKeepAllocation(&pBtree->cat);
       initDefaultMeta(pBtree);
       pBtree->cat.iNextTable = 2;
     }
@@ -3629,13 +3880,13 @@ static int restoreTablesFromSavepoint(
     int nCatData = 0;
     rc = chunkStoreGet(&pBtree->pBt->store, &pState->catalogHash, &catData, &nCatData);
     if( rc!=SQLITE_OK ){
-      sqlite3_free(apPending);
-      return rc;
-    }
+        if( apPendingHeap ) sqlite3_free(apPending);
+        return rc;
+      }
     rc = deserializeCatalog(pBtree, catData, nCatData);
     sqlite3_free(catData);
     if( rc!=SQLITE_OK ){
-      sqlite3_free(apPending);
+      if( apPendingHeap ) sqlite3_free(apPending);
       return rc;
     }
   }
@@ -3645,7 +3896,7 @@ static int restoreTablesFromSavepoint(
       int idx = findTableIndexInArray(
           pBtree->cat.a, pBtree->cat.n, pState->aTables[k].iTable);
       if( idx < 0 ){
-        sqlite3_free(apPending);
+        if( apPendingHeap ) sqlite3_free(apPending);
         return SQLITE_CORRUPT;
       }
       pBtree->cat.a[idx].pendingFlushSeekEdits =
@@ -3665,7 +3916,7 @@ static int restoreTablesFromSavepoint(
           if( rc!=SQLITE_OK ){
             prollyMutMapFree(pSnap);
             sqlite3_free(pSnap);
-            sqlite3_free(apPending);
+            if( apPendingHeap ) sqlite3_free(apPending);
             return rc;
           }
           apPending[k] = pSnap;
@@ -3676,7 +3927,7 @@ static int restoreTablesFromSavepoint(
   }
 
   pBtree->cat.iNextTable = pState->iNextTable;
-  sqlite3_free(apPending);
+  if( apPendingHeap ) sqlite3_free(apPending);
   return SQLITE_OK;
 }
 
@@ -3705,6 +3956,10 @@ static int pushSavepoint(Btree *pBtree, int bStatement){
   pState->aPendingSnapshot = 0;
   pState->nPendingSnapshot = 0;
   pState->nPendingSnapshotAlloc = 0;
+  pState->nChunkPending = 0;
+  pState->nChunkRecent = 0;
+  pState->nChunkWriteBuf = 0;
+  pState->nChunkCommittedWriteBuf = 0;
   pState->bStatement = (u8)bStatement;
   pState->bTablesCaptured = 0;
   pState->nTables = 0;
@@ -3715,7 +3970,7 @@ static int pushSavepoint(Btree *pBtree, int bStatement){
   pState->zRebaseOrigBranch = 0;
   pState->zRebaseReturnBranch = 0;
   captureSavepointSessionState(pBtree, pState);
-  if( !bStatement ){
+  {
     int rc = captureSavepointTables(pBtree, pState, bStatement);
     if( rc!=SQLITE_OK ) return rc;
   }
@@ -5295,6 +5550,15 @@ static int restoreFromCommitted(Btree *p){
     btreeFreeCatalogTables(p);
     initDefaultMeta(p);
     p->cat.iNextTable = 2;
+  }else if( p->pCatalogCache
+         && p->nCatalogCache>0
+         && prollyHashCompare(&p->catalogCacheHash,
+                              &p->committedCatalogHash)==0 ){
+    int rc = restoreCatalogRootsFromData(p, p->pCatalogCache, p->nCatalogCache);
+    if( rc==SQLITE_NOTFOUND ){
+      rc = deserializeCatalog(p, p->pCatalogCache, p->nCatalogCache);
+    }
+    if( rc!=SQLITE_OK ) return rc;
   }else{
     u8 *catData = 0;
     int nCatData = 0;
@@ -5343,77 +5607,29 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
       }
     }
     rc = restoreFromCommitted(p);
-    if( rc!=SQLITE_OK ){
-      chunkStoreUnlock(&pBt->store);
-      pBt->store.snapshotPinned = 0;
-      return rc;
-    }
     invalidateCursors(pBt, 0, tripCode ? tripCode : SQLITE_ABORT);
     invalidateSchema(p);
     chunkStoreRollback(&pBt->store);
-    {
-      u8 *catData = 0;
-      int nCatData = 0;
-      ProllyHash catHash;
-      ProllyHash wsHashWouldBe;
-      ProllyHash wsHashOnDisk;
-      u8 wsBuf[WS_TOTAL_SIZE];
-      int bMatchesDisk = 0;
-      const char *zBr = p->zBranch ? p->zBranch : "main";
-
-      pBt->inCatalogSerialize = 1;
-      rc = serializeCatalog(p, &catData, &nCatData);
-      pBt->inCatalogSerialize = 0;
-      if( rc!=SQLITE_OK ){
+    if( rc!=SQLITE_OK ){
+      int rcRestore = restoreFromCommitted(p);
+      if( rcRestore!=SQLITE_OK ){
+        rc = rcRestore;
         chunkStoreUnlock(&pBt->store);
         pBt->store.snapshotPinned = 0;
         return rc;
       }
-      prollyHashCompute(catData, nCatData, &catHash);
-
-      btreeFillWorkingSetBlob(wsBuf, &catHash, &p->headCommit,
-                              &p->stagedCatalog, p->isMerging,
-                              &p->mergeCommitHash, &p->conflictsCatalogHash,
-                              p->isRebasing, &p->preRebaseWorkingCat,
-                              &p->rebaseOntoCommit,
-                              p->zRebaseOrigBranch, p->zRebaseReturnBranch,
-                              &p->constraintViolationsHash);
-      prollyHashCompute(wsBuf, WS_TOTAL_SIZE, &wsHashWouldBe);
-
-      if( chunkStoreGetBranchWorkingSet(&pBt->store, zBr, &wsHashOnDisk)
-          ==SQLITE_OK
-       && prollyHashCompare(&wsHashWouldBe, &wsHashOnDisk)==0 ){
-        bMatchesDisk = 1;
-      }
-
-      if( !bMatchesDisk ){
-        rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
-        if( rc==SQLITE_OK ){
-          rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
-                                        &p->headCommit, &p->stagedCatalog,
-                                        p->isMerging, &p->mergeCommitHash,
-                                        &p->conflictsCatalogHash,
-                                        p->isRebasing,
-                                        &p->preRebaseWorkingCat,
-                                        &p->rebaseOntoCommit,
-                                        p->zRebaseOrigBranch,
-                                        p->zRebaseReturnBranch,
-                                        &p->constraintViolationsHash);
-        }
-        if( rc==SQLITE_OK ){
-          rc = chunkStoreSerializeRefs(&pBt->store);
-        }
-        if( rc==SQLITE_OK ){
-          rc = chunkStoreCommit(&pBt->store);
-        }
-      }
-      sqlite3_free(catData);
+    }
+    rc = persistRolledBackSessionState(p, pBt);
+    if( rc!=SQLITE_OK ){
+      rc = persistRolledBackSessionState(p, pBt);
       if( rc!=SQLITE_OK ){
         chunkStoreUnlock(&pBt->store);
         pBt->store.snapshotPinned = 0;
         return rc;
       }
     }
+  }else if( p->inTrans==TRANS_READ ){
+    invalidateCursors(pBt, 0, tripCode ? tripCode : SQLITE_ABORT);
   }
 
   p->inTrans = TRANS_NONE;
@@ -5469,7 +5685,10 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
     rc = chunkStorePut(&pBt->store, catData, nCatData, &catHash);
   }
   sqlite3_free(catData);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    chunkStoreRollback(&pBt->store);
+    return rc;
+  }
   rc = btreeStoreWorkingSetBlob(&pBt->store, zBr, &catHash,
                                 &p->headCommit, &p->stagedCatalog,
                                 p->isMerging, &p->mergeCommitHash,
@@ -5480,10 +5699,20 @@ static int persistRolledBackSessionState(Btree *p, BtShared *pBt){
                                 p->zRebaseOrigBranch,
                                 p->zRebaseReturnBranch,
                                 &p->constraintViolationsHash);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    chunkStoreRollback(&pBt->store);
+    return rc;
+  }
   rc = chunkStoreSerializeRefs(&pBt->store);
-  if( rc!=SQLITE_OK ) return rc;
-  return chunkStoreCommit(&pBt->store);
+  if( rc!=SQLITE_OK ){
+    chunkStoreRollback(&pBt->store);
+    return rc;
+  }
+  rc = chunkStoreCommit(&pBt->store);
+  if( rc!=SQLITE_OK ){
+    chunkStoreRollback(&pBt->store);
+  }
+  return rc;
 }
 
 static void btreeDiscardAllSavepoints(Btree *p){
@@ -5509,10 +5738,14 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
   int j;
   int rc = rollbackMutMapsToSavepoint(p, iSavepoint + 1, iSavepoint);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    return rc;
+  }
   if( pState->aTables ){
     rc = restoreTablesFromSavepoint(p, pState);
-    if( rc!=SQLITE_OK ) return rc;
+    if( rc!=SQLITE_OK ){
+      return rc;
+    }
   }
   restoreSavepointSessionState(p, pState);
   freeSavepointTables(pState);
@@ -5572,7 +5805,7 @@ static int prollyBtreeSavepoint(Btree *p, int op, int iSavepoint){
      && p->aSavepointTables ){
       return rollbackNamedSavepoint(p, pBt, iSavepoint);
     } else if( iSavepoint>=0 && iSavepoint>=p->nSavepoint ){
-      return rollbackCommittedState(p, pBt);
+      return SQLITE_OK;
     } else if( iSavepoint<0 ){
       return rollbackAllSavepoints(p, pBt);
     }
@@ -6244,6 +6477,19 @@ static int mergeFirst(BtCursor *pCur, int *pRes){
   return mergeScan(pCur, 1, pRes);
 }
 
+static int flushPendingIndexForSeek(BtCursor *pCur){
+  if( pCur
+   && !pCur->curIntKey
+   && pCur->pKeyInfo
+   && pCur->pMutMap
+   && !prollyMutMapIsEmpty(pCur->pMutMap) ){
+    int rc = flushMutMap(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+    refreshCursorRoot(pCur);
+  }
+  return SQLITE_OK;
+}
+
 static int mergeLast(BtCursor *pCur, int *pRes){
   pCur->mmIdx = pCur->pMutMap->nEntries - 1;
   pCur->mergeSrc = MERGE_SRC_TREE;
@@ -6269,6 +6515,9 @@ static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   }
   pCur->eState = (*pRes==0) ? CURSOR_VALID : CURSOR_INVALID;
   pCur->curFlags &= ~BTCF_AtLast;
+  if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
+    rc = skipDegenerateSchemaRows(pCur, 1, pRes);
+  }
   return rc;
 }
 int sqlite3BtreeFirst(BtCursor *pCur, int *pRes){
@@ -6282,6 +6531,8 @@ static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   CLEAR_CACHED_SEEK_KEY(pCur);
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);
+  if( rc!=SQLITE_OK ) return rc;
+  rc = flushPendingIndexForSeek(pCur);
   if( rc!=SQLITE_OK ) return rc;
   rc = prollyCursorLast(&pCur->pCur, pRes);
   if( rc!=SQLITE_OK ) return rc;
@@ -6298,6 +6549,9 @@ static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
     pCur->curFlags |= BTCF_AtLast;
   } else {
     pCur->eState = CURSOR_INVALID;
+  }
+  if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
+    rc = skipDegenerateSchemaRows(pCur, -1, pRes);
   }
   return rc;
 }
@@ -6424,6 +6678,9 @@ static int prollyBtCursorNext(BtCursor *pCur, int flags){
     }
   }
   pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
+  if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
+    rc = skipDegenerateSchemaRows(pCur, 1, 0);
+  }
   return rc;
 }
 int sqlite3BtreeNext(BtCursor *pCur, int flags){
@@ -6525,6 +6782,9 @@ static int prollyBtCursorPrevious(BtCursor *pCur, int flags){
     }
   }
   pCur->curFlags &= ~(BTCF_AtLast|BTCF_ValidNKey);
+  if( rc==SQLITE_OK && pCur->eState==CURSOR_VALID ){
+    rc = skipDegenerateSchemaRows(pCur, -1, 0);
+  }
   return rc;
 }
 int sqlite3BtreePrevious(BtCursor *pCur, int flags){
@@ -6922,6 +7182,8 @@ static int prollyBtCursorIndexMoveto(
   CLEAR_CACHED_SEEK_KEY(pCur);
 
   refreshCursorRoot(pCur);
+  rc = flushPendingIndexForSeek(pCur);
+  if( rc!=SQLITE_OK ) return rc;
 
   {
     int treeFound = 0, mutFound = 0;
@@ -7722,10 +7984,8 @@ static int prollyBtCursorInsert(
   rc = syncSavepoints(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( pCur->pgnoRoot==1 ){
-    rc = ensureStatementSavepointsCaptured(pCur->pBtree);
-    if( rc!=SQLITE_OK ) return rc;
-  }
+  rc = ensureStatementSavepointsCaptured(pCur->pBtree);
+  if( rc!=SQLITE_OK ) return rc;
 
   rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
   if( rc!=SQLITE_OK ) return rc;
@@ -8112,10 +8372,8 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   rc = syncSavepoints(pCur);
   if( rc!=SQLITE_OK ) goto delete_cleanup;
 
-  if( pCur->pgnoRoot==1 ){
-    rc = ensureStatementSavepointsCaptured(pCur->pBtree);
-    if( rc!=SQLITE_OK ) goto delete_cleanup;
-  }
+  rc = ensureStatementSavepointsCaptured(pCur->pBtree);
+  if( rc!=SQLITE_OK ) goto delete_cleanup;
 
   rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
   if( rc!=SQLITE_OK ) goto delete_cleanup;
@@ -8238,6 +8496,74 @@ delete_cleanup:
 int sqlite3BtreeDelete(BtCursor *pCur, u8 flags){
   if( !pCur ) return SQLITE_OK;
   return pCur->pCurOps->xDelete(pCur, flags);
+}
+
+int sqlite3BtreeDeleteSchemaEntryByName(Btree *p, const char *zName){
+  BtCursor cur;
+  int rc;
+  int res = 0;
+
+  if( !p || !zName || !zName[0] ) return SQLITE_OK;
+  if( p->pOps!=&prollyBtreeOps ) return SQLITE_OK;
+  if( p->inTrans!=TRANS_WRITE ) return SQLITE_OK;
+
+  memset(&cur, 0, sizeof(cur));
+  rc = sqlite3BtreeCursor(p, 1, BTREE_WRCSR, 0, &cur);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = sqlite3BtreeFirst(&cur, &res);
+  while( rc==SQLITE_OK && res==0 ){
+    u32 nPayload = sqlite3BtreePayloadSize(&cur);
+    u8 *pPayload = 0;
+    if( nPayload>0 ){
+      pPayload = sqlite3_malloc(nPayload);
+      if( !pPayload ){
+        rc = SQLITE_NOMEM;
+        break;
+      }
+      rc = sqlite3BtreePayload(&cur, 0, nPayload, pPayload);
+      if( rc==SQLITE_OK ){
+        DoltliteRecordInfo ri;
+        char *zType = 0;
+        char *zRowName = 0;
+        int shouldDelete = 0;
+        doltliteParseRecord(pPayload, (int)nPayload, &ri);
+        if( ri.nField>=5 ){
+          rc = schemaCatalogTextField(pPayload, (int)nPayload, &ri, 0, &zType);
+          if( rc==SQLITE_OK ){
+            rc = schemaCatalogTextField(
+                pPayload, (int)nPayload, &ri, 1, &zRowName);
+          }
+          shouldDelete = rc==SQLITE_OK
+              && zType && strcmp(zType, "table")==0
+              && zRowName && strcmp(zRowName, zName)==0;
+          sqlite3_free(zType);
+          sqlite3_free(zRowName);
+          if( shouldDelete ){
+            rc = sqlite3BtreeDelete(&cur, 0);
+            sqlite3_free(pPayload);
+            if( rc!=SQLITE_OK ) break;
+            rc = sqlite3BtreeFirst(&cur, &res);
+            continue;
+          }
+        }
+      }
+      sqlite3_free(pPayload);
+    }
+    if( rc!=SQLITE_OK ) break;
+    rc = sqlite3BtreeNext(&cur, 0);
+    if( rc==SQLITE_DONE ){
+      rc = SQLITE_OK;
+      break;
+    }
+    res = sqlite3BtreeEof(&cur);
+  }
+
+  {
+    int rcClose = sqlite3BtreeCloseCursor(&cur);
+    if( rc==SQLITE_OK ) rc = rcClose;
+  }
+  return rc;
 }
 
 static int prollyBtCursorTransferRow(BtCursor *pDest, BtCursor *pSrc, i64 iKey){

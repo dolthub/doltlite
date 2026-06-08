@@ -297,6 +297,15 @@ static int replaceEntryValue(ProllyMutMapEntry *e, const u8 *pVal, int nVal){
   return SQLITE_OK;
 }
 
+static void restoreEntryValueFromUndo(ProllyMutMapEntry *e, ProllyMutMapUndoRec *rec){
+  sqlite3_free(e->pVal);
+  e->pVal = rec->prevVal;
+  e->nVal = rec->nPrevVal;
+  e->nValAlloc = rec->nPrevVal;
+  rec->prevVal = 0;
+  rec->nPrevVal = 0;
+}
+
 static int bsearch_key(ProllyMutMap *mm,
                        const u8 *pKey, int nKey,
                        int *pFound){
@@ -353,6 +362,28 @@ static int rebuildHash(ProllyMutMap *mm){
     mm->aHash[slot] = i + 1;
   }
   return SQLITE_OK;
+}
+
+static void rebuildHashNoAlloc(ProllyMutMap *mm){
+  int i;
+  int nHash = MUTMAP_MIN_HASH;
+  while( nHash < (mm->nEntries > 0 ? mm->nEntries * 2 : 1) ) nHash *= 2;
+  if( nHash > mm->nHashAlloc ){
+    sqlite3_free(mm->aHash);
+    mm->aHash = 0;
+    mm->nHashAlloc = 0;
+    return;
+  }
+  memset(mm->aHash, 0, mm->nHashAlloc * sizeof(int));
+  for(i=0; i<mm->nEntries; i++){
+    u32 h = mm->aEntries[i].keyHash;
+    int mask = mm->nHashAlloc - 1;
+    int slot = (int)(h & (u32)mask);
+    while( mm->aHash[slot] != 0 ){
+      slot = (slot + 1) & mask;
+    }
+    mm->aHash[slot] = i + 1;
+  }
 }
 
 static int ensureHashForInsert(ProllyMutMap *mm){
@@ -763,8 +794,7 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
       ProllyMutMapEntry *e = &mm->aEntries[idx];
       e->op = rec->prevOp;
       e->bornAt = encodeLevel(mm, rec->prevBornAt);
-      rc = replaceEntryValue(e, rec->prevVal, rec->nPrevVal);
-      if( rc!=SQLITE_OK ) return rc;
+      restoreEntryValueFromUndo(e, rec);
     }
     sqlite3_free(rec->prevVal);
     rec->prevVal = 0;
@@ -773,11 +803,16 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
 
   {
     int oldN = mm->nEntries;
+    int aMapInline[128];
     int *aMap = 0;
     int newN = 0;
     if( oldN > 0 ){
-      aMap = sqlite3_malloc(oldN * sizeof(int));
-      if( !aMap ) return SQLITE_NOMEM;
+      if( oldN <= (int)(sizeof(aMapInline)/sizeof(aMapInline[0])) ){
+        aMap = aMapInline;
+      }else{
+        if( !mm->aPos || mm->nAlloc<oldN ) return SQLITE_CORRUPT_BKPT;
+        aMap = mm->aPos;
+      }
     }
     for(i=0; i<oldN; i++){
       if( decodeLevel(mm, mm->aEntries[i].bornAt) >= level ){
@@ -802,6 +837,9 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
           }
         }
         mm->nEntries = out;
+        for(j=0; j<mm->nUndo; j++){
+          mm->aUndo[j].entryIdx = aMap[mm->aUndo[j].entryIdx];
+        }
         for(j=0; j<mm->nEntries; j++){
           mm->aPos[mm->aOrder[j]] = j;
         }
@@ -811,17 +849,15 @@ int prollyMutMapRollbackToSavepoint(ProllyMutMap *mm, int level){
         mm->orderDirty = 1;
         mm->posDirty = 1;
         mm->appendSorted = 0;
-      }
-      for(j=0; j<mm->nUndo; j++){
-        mm->aUndo[j].entryIdx = aMap[mm->aUndo[j].entryIdx];
+        for(j=0; j<mm->nUndo; j++){
+          mm->aUndo[j].entryIdx = aMap[mm->aUndo[j].entryIdx];
+        }
       }
     }
-    sqlite3_free(aMap);
   }
 
   if( !mm->keepSorted ){
-    int rc = rebuildHash(mm);
-    if( rc!=SQLITE_OK ) return rc;
+    rebuildHashNoAlloc(mm);
   }
 
   mm->generation++;
