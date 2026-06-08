@@ -1808,11 +1808,13 @@ static int schemaCatalogRowWanted(
   int i;
   if( !pRow ) return 0;
   if( !pRow->zType ) return 0;
-  if( pRow->bPreserve ) return 1;
   if( schemaCatalogRowIsVirtualTable(pRow) ) return 1;
   if( strcmp(pRow->zType, "table")!=0 && strcmp(pRow->zType, "index")!=0 ){
     return 1;
   }
+  /* Preserve keeps original schema SQL text for surviving objects. It must not
+  ** keep table/index schema rows whose backing catalog entries were removed by
+  ** merge/revert. */
   for(i=0; i<nTables; i++){
     if( aTables[i].iTable==pRow->oldPg ) return 1;
   }
@@ -1898,8 +1900,7 @@ static int appendMissingSchemaCatalogRows(
           break;
         }
       }else if( strcmp(aMeta[i].zType, "index")==0 ){
-        if( strcmp(aTables[j].zName, aMeta[i].zName)==0
-         || strcmp(aTables[j].zName, aMeta[i].zTblName)==0 ){
+        if( strcmp(aTables[j].zName, aMeta[i].zName)==0 ){
           wanted = 1;
           break;
         }

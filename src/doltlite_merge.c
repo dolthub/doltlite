@@ -1286,7 +1286,7 @@ static int replayDropsDisjointSchemaObject(
   for(i=0; i<nAncSchema; i++){
     const char *zType = aAncSchema[i].zType;
     if( !zType ) continue;
-    if( strcmp(zType, "table")!=0 && strcmp(zType, "index")!=0 ) continue;
+    if( strcmp(zType, "table")!=0 ) continue;
     if( !hasSchemaObject(aTheirsSchema, nTheirsSchema,
                          aAncSchema[i].zType,
                          aAncSchema[i].zName,
@@ -2170,7 +2170,8 @@ post_merge_table_rows:;
       if( oursChanged && theirsChanged && hasSchemaActions ){
 
         aMerged[(*pnMerged)++] = aOurs[iTable1Idx];
-      }else if( oursChanged && theirsChanged && bDisjointSchemaChanges ){
+      }else if( oursChanged && theirsChanged && bDisjointSchemaChanges
+             && !bPreferOurMaster ){
 
         aMerged[(*pnMerged)++] = aOurs[iTable1Idx];
       }else if( oursChanged && theirsChanged ){
