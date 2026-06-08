@@ -593,7 +593,7 @@ jobs:
           trace3 trans3 transitive1 trigger3 trigger4 trigger5 trigger6 trigger8 \
           trigger9 triggerD triggerF triggerG triggerupfrom types3 unhex unionall2 \
           unionallfault unionvtab unionvtabfault unique unique2 unordered upfrom1 upfrom2 \
-          upfrom3 upfrom4 upfromfault upsert2 upsert3 upsert4 upsert5 uri2 \
+          upfrom3 upfrom4 upfromfault upsert1 upsert2 upsert3 upsert4 upsert5 uri2 \
           values valuesfault varint view2 view3 vtab_alter vtab3 vtab5 \
           vtab6 vtab7 vtab8 vtab9 vtabA vtabB vtabC vtabD \
           vtabdistinct vtabE vtabF vtabI vtabJ vtabK vtabL vtabrhs1 \
