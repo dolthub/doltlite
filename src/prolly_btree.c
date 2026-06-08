@@ -22,6 +22,7 @@
 
 #include <string.h>
 #include <assert.h>
+#include <stdlib.h>
 
 #define SERIAL_TYPE_NULL      0
 #define SERIAL_TYPE_INT8      1
@@ -700,9 +701,22 @@ static int btreeDeleteImmediate(BtCursor *pCur);
 
 #define PROLLY_MUTMAP_PENDING_FLUSH_LIMIT 65536
 
+static int mutMapPendingFlushLimit(void){
+  static int limit = 0;
+  if( limit==0 ){
+    const char *z = getenv("DOLTLITE_MUTMAP_PENDING_FLUSH_LIMIT");
+    if( z && z[0] ){
+      int v = atoi(z);
+      if( v>0 ) limit = v;
+    }
+    if( limit==0 ) limit = PROLLY_MUTMAP_PENDING_FLUSH_LIMIT;
+  }
+  return limit;
+}
+
 static int mutMapShouldDrain(BtCursor *pCur){
   return pCur && pCur->pMutMap
-      && prollyMutMapCount(pCur->pMutMap) >= PROLLY_MUTMAP_PENDING_FLUSH_LIMIT;
+      && prollyMutMapCount(pCur->pMutMap) >= mutMapPendingFlushLimit();
 }
 
 static int prollyBtreeClose(Btree*);

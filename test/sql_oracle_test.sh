@@ -1911,12 +1911,12 @@ SELECT id, v FROM t ORDER BY id;
 # free-then-read may return plausible bytes from a freshly-freed
 # allocator slot, ASAN would catch the read; this oracle pins the
 # correct behavior end-to-end.
-oracle "cat16_savepos_blob_pk_bulk_update" "
+DOLTLITE_MUTMAP_PENDING_FLUSH_LIMIT=256 oracle "cat16_savepos_blob_pk_bulk_update" "
 CREATE TABLE t(k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID;
 CREATE INDEX t_v ON t(v);
 BEGIN;
-WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<70000)
-  INSERT INTO t SELECT randomblob(32), printf('v%05d', i) FROM c;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<512)
+  INSERT INTO t SELECT CAST(printf('%08x', i) AS BLOB), printf('v%05d', i) FROM c;
 UPDATE t SET v = v || 'X' WHERE v < 'v00500';
 SELECT count(*) FROM t;
 SELECT count(*) FROM t WHERE v LIKE '%X';
@@ -1925,11 +1925,11 @@ SELECT count(*) FROM t WHERE v LIKE '%X';
 "
 
 # 16t. Same shape but DELETE rather than UPDATE.
-oracle "cat16_savepos_blob_pk_bulk_delete" "
+DOLTLITE_MUTMAP_PENDING_FLUSH_LIMIT=256 oracle "cat16_savepos_blob_pk_bulk_delete" "
 CREATE TABLE t(k BLOB PRIMARY KEY, v TEXT) WITHOUT ROWID;
 BEGIN;
-WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<70000)
-  INSERT INTO t SELECT randomblob(32), printf('v%05d', i) FROM c;
+WITH RECURSIVE c(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM c WHERE i<512)
+  INSERT INTO t SELECT CAST(printf('%08x', i) AS BLOB), printf('v%05d', i) FROM c;
 DELETE FROM t WHERE v < 'v00500';
 SELECT count(*) FROM t;
 COMMIT;
