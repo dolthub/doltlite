@@ -1366,3 +1366,296 @@ limit2 limit2-110.3  # sqlite_search_count scan-count metric; prolly cursor coun
 # matching t8 (explicit WITHOUT ROWID, expects 0). Verified row semantics are
 # correct; only the plan differs. WITHOUT-ROWID-PK plan divergence (#1176).
 notnull notnull-6.5  # plan uses a seek not OP_Next: non-integer PK is WITHOUT ROWID (#1176)
+
+# update2 — update2-2.3 runs `UPDATE t3 SET c=1 WHERE rowid=?` on
+# t3(a PRIMARY KEY,b,c). DoltLite stores a non-integer PRIMARY KEY as WITHOUT
+# ROWID (#1176), so there is no rowid column → "no such column: rowid". The
+# non-rowid UPDATE (2.2, WHERE b=?) passes. WITHOUT-ROWID-PK divergence.
+update2 update2-2.3  # explicit rowid on a non-integer-PK (WITHOUT ROWID) table (#1176)
+
+# whereF — whereF-4.0 runs `EXPLAIN QUERY PLAN SELECT rowid FROM t4 ...` where
+# t4 has PRIMARY KEY(a,b,c) (composite → WITHOUT ROWID, #1176), so rowid does
+# not exist. WITHOUT-ROWID-PK divergence.
+whereF whereF-4.0  # explicit rowid on a composite-PK (WITHOUT ROWID) table (#1176)
+
+# without_rowid5 — the file contrasts a normal (rowid) table against a WITHOUT
+# ROWID one. -1.1 selects rowid/_rowid_/oid from t1(a PRIMARY KEY,b,c) expecting
+# the rowid alias to exist, but DoltLite stores a non-integer PK as WITHOUT ROWID
+# (#1176) → no rowid. -5.5 expects a NULL insert into the PK to succeed, but a
+# WITHOUT-ROWID PK is implicitly NOT NULL. Both are the #1176 surface.
+without_rowid5 without_rowid5-1.1  # rowid alias absent: non-integer PK is WITHOUT ROWID (#1176)
+without_rowid5 without_rowid5-5.5  # WITHOUT-ROWID PK is implicitly NOT NULL (#1176)
+
+# window6 — window6-3.1 creates an index using a user-defined collation
+# (`CREATE INDEX window ON x1(x COLLATE window)`). DoltLite does not support
+# indexes with a custom collation (same class as collate3/collate4). Feature gap.
+window6 window6-3.1  # index with user-defined collation unsupported
+
+# main — main-2.0 writes garbage ("hi!") to test.db then expects sqlite3_open to
+# SUCCEED (stock opens lazily, defers validation). DoltLite validates the chunk
+# store manifest eagerly at open, so a non-chunk-store file fails to open with a
+# disk I/O error. Eager-open-validation divergence.
+main main-2.0  # eager chunk-store validation at open; stock opens lazily
+
+# misc5 — misc5-4.1 writes "This is not really a database" to test.db then
+# expects "file is not a database" on first access. DoltLite's eager chunk-store
+# open reports "disk I/O error" for the unparseable file instead. Not-a-database
+# detection message differs (no SQLite header to inspect).
+misc5 misc5-4.1  # not-a-database open error message differs (chunk store, not a SQLite file)
+
+# misc1 — misc1-14.2b expects test.db-journal to exist during an open write
+# transaction. DoltLite uses a chunk store, not a rollback journal, so no
+# -journal file is ever created (file exists -> 0 vs expected 1). 14.1/14.2a
+# (journal absent) pass. Rollback-journal feature divergence.
+misc1 misc1-14.2b  # no rollback-journal file: doltlite has no -journal
+
+# gencol1 — gencol1-15.10/15.20 use `db deserialize [decode_hexdb ...]` to load a
+# raw SQLite page image. DoltLite does not support the page-image deserialize API
+# (prolly feature gap, #1225); the deserialize fails ("unable to set MEMDB
+# content"). Generated-column behavior itself is correct (the other 174 tests pass).
+gencol1 gencol1-15.10  # db deserialize (page-image API) unsupported (#1225)
+gencol1 gencol1-15.20  # db deserialize (page-image API) unsupported (#1225)
+
+# enc2 — UTF-16 encoding tests (#1164). DoltLite is locked to UTF-8: it ignores
+# PRAGMA encoding=utf16le/be and reports UTF-8, so tests that read back the
+# connection encoding (directly, via a custom collation/function result, or a
+# CAST of UTF-16 bytes) diverge. The collation/function/row data itself is
+# correct. A few are unordered SELECTs returning PK-order not insertion order
+# (rowid-order class); the multiset is identical.
+enc2 enc2-1.3  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-1.7  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-1.8  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-2.3  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-2.7  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-2.8  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-3.3  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-3.7  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-3.8  # unordered SELECT: PK-order vs insertion order (multiset equal)
+enc2 enc2-2.0.1  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-2.0.2  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-2.0.3  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-2.0.4  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-2.10  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.0.1  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.0.2  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.0.3  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.0.4  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-3.10  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-4.3  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.5  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.6  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.9  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.10  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-5.13  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-6.4  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-6.8  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-7.2  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-9.2  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-9.4  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+enc2 enc2-9.5  # reports UTF-8: doltlite ignores non-UTF-8 encodings (#1164)
+
+# enc3 — UTF-16 encoding (#1164). PRAGMA encoding ignored (UTF-8); 2.2/2.3 CAST a
+# UTF-16le byte blob to text: stock reads UTF-16 ('abcde'), doltlite reads UTF-8
+# (NUL-truncated). Stored bytes intact; encoding-only.
+enc3 enc3-1.1  # doltlite ignores non-UTF-8 encodings (#1164)
+enc3 enc3-2.1  # doltlite ignores non-UTF-8 encodings (#1164)
+enc3 enc3-2.2  # doltlite ignores non-UTF-8 encodings (#1164)
+enc3 enc3-2.3  # doltlite ignores non-UTF-8 encodings (#1164)
+enc3 enc3-3.2  # doltlite ignores non-UTF-8 encodings (#1164)
+
+# like3 — the like3-8.* subtests assert the connection encoding is UTF-16le/be
+# after PRAGMA encoding; doltlite reports UTF-8 (#1164). LIKE behavior is correct.
+like3 like3-8.utf16le.1.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.2.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.3.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.4.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.5.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.6.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.7.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16le.8.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.1.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.2.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.3.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.4.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.5.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.6.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.7.2  # doltlite ignores non-UTF-8 encodings (#1164)
+like3 like3-8.utf16be.8.2  # doltlite ignores non-UTF-8 encodings (#1164)
+
+# numcast — numcast-utf16{le,be}.0 assert the connection encoding; doltlite reports
+# utf8 (#1164). The numeric CAST behavior is correct.
+numcast numcast-utf16le.0  # doltlite ignores non-UTF-8 encodings (#1164)
+numcast numcast-utf16be.0  # doltlite ignores non-UTF-8 encodings (#1164)
+
+# dbpage — the sqlite_dbpage vtable exposes raw SQLite page images and lets
+# tests poke page bytes (corruption injection, page counts). DoltLite stores a
+# content-addressed chunk store, not SQLite pages, so reads return only the
+# header stub, page-byte writes are rejected, and dbpage-injected corruption is
+# not seen by integrity_check. Raw-page-format divergence.
+dbpage dbpage-110  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-120  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-130  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-140  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-150  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-160  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-170  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-200  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-210  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-220  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-230  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-240  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-241  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-250  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-260  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-400  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-500  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-510  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-520  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-620  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-630  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-640  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-710  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-810  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+dbpage dbpage-820  # sqlite_dbpage raw page access; chunk store has no SQLite pages
+
+# pagesize — PRAGMA page_size is fixed at 4096 on the chunk store and cannot be
+# reconfigured; tests asserting 512/1024/2048/8192 see 4096 (or a chunk-store
+# value). Page-format pragma divergence.
+pagesize pagesize-1.1  # page_size not configurable on the chunk store
+pagesize pagesize-1.3  # page_size not configurable on the chunk store
+pagesize pagesize-1.4  # page_size not configurable on the chunk store
+pagesize pagesize-1.8  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.2  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.3  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.6  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.10  # page_size not configurable on the chunk store
+pagesize pagesize-2.512.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.2  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.3  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.6  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.10  # page_size not configurable on the chunk store
+pagesize pagesize-2.2048.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.3  # page_size not configurable on the chunk store
+pagesize pagesize-2.4096.30  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.2  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.3  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.6  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.10  # page_size not configurable on the chunk store
+pagesize pagesize-2.8192.30  # page_size not configurable on the chunk store
+pagesize pagesize-3.1  # page_size not configurable on the chunk store
+pagesize pagesize-3.3  # page_size not configurable on the chunk store
+
+# securedel — PRAGMA secure_delete is a no-op: there is no page freelist to zero
+# (content-addressed chunks, freed on GC). The pragma reads back 0 and the raw
+# byte scans differ. The DELETE itself is correct.
+securedel securedel-1.1  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.4  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.5  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.6  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.7  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-1.8  # secure_delete pragma no-op: no page freelist to zero
+securedel securedel-2.1  # secure_delete pragma no-op: no page freelist to zero
+
+# securedel2 — freed space is not zeroed in place (content-addressed store; GC
+# reclaims old chunks), so the freed-byte scans find old data. Not applicable to
+# the chunk store.
+securedel2 securedel2-1.4.1  # freed space not zeroed in place (content-addressed; GC reclaims)
+securedel2 securedel2-1.4.3  # freed space not zeroed in place (content-addressed; GC reclaims)
+securedel2 securedel2-1.5.2  # freed space not zeroed in place (content-addressed; GC reclaims)
+securedel2 securedel2-1.6.2  # freed space not zeroed in place (content-addressed; GC reclaims)
+
+# reclaims old chunks), so the freed-byte scans find old data. Not applicable to
+# the chunk store.
+
+# reservebytes — the per-page reserved-bytes header field does not exist in the
+# chunk store; reads return 00. Page-format divergence.
+reservebytes reservebytes-1.3.5  # no per-page reserved-bytes field in the chunk store
+reservebytes reservebytes-1.4.1  # no per-page reserved-bytes field in the chunk store
+reservebytes reservebytes-1.4.4  # no per-page reserved-bytes field in the chunk store
+
+# shrink — sqlite3_db_release_memory / PRAGMA shrink_memory free the SQLite pager
+# page cache; DoltLite's prolly storage has no equivalent large page cache to
+# release, so the heap-drop assertion fails. Data is intact.
+shrink shrink-1.1  # no SQLite pager page-cache to release (memory model differs)
+shrink shrink-1.2  # no SQLite pager page-cache to release (memory model differs)
+shrink shrink-1.3  # no SQLite pager page-cache to release (memory model differs)
+
+# format4 — reads the page_size from the SQLite file header (offset 16). The
+# chunk store is not a SQLite file, so those offsets are not the format field
+# and read garbage. Raw file-format divergence.
+format4 format4-1.1  # raw page_size read from SQLite file header; chunk store is not a SQLite file
+format4 format4-1.2  # raw page_size read from SQLite file header; chunk store is not a SQLite file
+format4 format4-1.3  # raw page_size read from SQLite file header; chunk store is not a SQLite file
+
+# stat — the dbstat vtable reports per-page b-tree statistics (cells, payload,
+# page numbers). The chunk store has no SQLite pages, so dbstat returns no rows.
+# Page-statistics vtable not applicable.
+stat stat-0.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-1.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-1.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-1.3  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-2.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-2.1agg  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-2.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-3.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-3.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-4.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-5.20  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.1.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.1.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.1.3  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.1.4  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2.1  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2.3  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+stat stat-7.2.4  # dbstat vtable (per-page b-tree stats) empty; no SQLite pages
+# io — counts VFS write/sync operations and checks on-disk file size via a test
+# VFS. DoltLite's chunk store batches I/O differently and its file layout is not
+# SQLite-page-sized, so the operation counts and file sizes differ. I/O-model
+# divergence; data is correct.
+io io-1.1  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-1.2  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-1.3  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-1.4  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-1.5  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-3.1  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-3.2  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-3.3  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-4.1  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-4.2.1  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-4.2.2  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-4.2.3  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-4.3.1  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-4.3.3  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-4.3.4  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-5.1  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-5.2  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-5.3  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-5.4  # VFS I/O op-count / file-size; chunk store has a different I/O model
+io io-5.5  # VFS I/O op-count / file-size; chunk store has a different I/O model
+
+# sync — asserts the number of fsync calls (sqlite_sync_count). DoltLite syncs the
+# chunk store differently, so the count differs. Internal I/O-counter divergence.
+sync sync-1.1  # fsync count differs: chunk store I/O model
+sync sync-1.2  # fsync count differs: chunk store I/O model
+sync sync-1.3  # fsync count differs: chunk store I/O model
+sync sync-1.4  # fsync count differs: chunk store I/O model
+
+# sync2 — fsync-count variants (sqlite_sync_count under different journal/sync
+# settings). Same internal I/O-counter divergence as sync.
+sync2 sync2-1.1  # fsync count differs: chunk store I/O model
+sync2 sync2-1.2.3  # fsync count differs: chunk store I/O model
+sync2 sync2-1.3.3  # fsync count differs: chunk store I/O model
+sync2 sync2-1.4.3  # fsync count differs: chunk store I/O model
+sync2 sync2-1.6  # fsync count differs: chunk store I/O model
+sync2 sync2-1.8.3  # fsync count differs: chunk store I/O model
+sync2 sync2-1.9  # fsync count differs: chunk store I/O model
+sync2 sync2-1.10.3  # fsync count differs: chunk store I/O model
+
+# multiplex4 — the multiplex VFS splits a database across numbered files
+# (name.001, ...). DoltLite uses its own chunk store, not the multiplex VFS, so
+# only the single file exists and the multiplex pragma is off. VFS not applicable.
+multiplex4 multiplex4-1.0  # multiplex VFS not used by doltlite
+multiplex4 multiplex4-1.2  # multiplex VFS not used by doltlite
+multiplex4 multiplex4-1.10  # multiplex VFS not used by doltlite
+multiplex4 multiplex4-1.11  # multiplex VFS not used by doltlite

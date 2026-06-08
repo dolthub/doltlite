@@ -12,6 +12,13 @@ SQLITE3=${SQLITE3:-./sqlite3}
 BENCH_TIMER_SQLITE=${BENCH_TIMER_SQLITE:-./bench_timer_sqlite}
 BENCH_TIMER_DOLTLITE=${BENCH_TIMER_DOLTLITE:-./bench_timer_doltlite}
 SQLITE_AUTOCOMMIT_PRAGMAS=${SQLITE_AUTOCOMMIT_PRAGMAS:-"PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;"}
+# For file-backed runs, give stock SQLite a page cache that matches DoltLite's
+# in-process chunk cache (PROLLY_DEFAULT_CACHE_SIZE = 16384 entries). A positive
+# cache_size is a page count, so 16384 pages mirrors 16384 chunks. Without this,
+# SQLite's ~2MB default cache thrashes on working sets that fit in DoltLite's,
+# skewing the file-backed comparison toward DoltLite for cache-size reasons
+# rather than B-tree vs Prolly Tree reasons.
+SQLITE_FILE_CACHE_PRAGMA=${SQLITE_FILE_CACHE_PRAGMA:-"PRAGMA cache_size=16384;"}
 ROWS=${BENCH_ROWS:-100000}
 SEED=42
 TMPDIR=$(mktemp -d)
@@ -374,9 +381,14 @@ run_bench() {
     rm -f "$db"
   fi
   local bench_sql_file="$sql_file"
-  if [ "$engine" = "sqlite" ] && [ -n "${SQLITE_BENCH_PRAGMAS:-}" ]; then
+  local sqlite_pragmas="${SQLITE_BENCH_PRAGMAS:-}"
+  # Match SQLite's page cache to DoltLite's chunk cache on file-backed runs only.
+  if [ "$engine" = "sqlite" ] && [ "$db_template" != ":memory:" ]; then
+    sqlite_pragmas="$SQLITE_FILE_CACHE_PRAGMA $sqlite_pragmas"
+  fi
+  if [ "$engine" = "sqlite" ] && [ -n "$sqlite_pragmas" ]; then
     bench_sql_file="$TMPDIR/pragma_${engine}_${RANDOM}_$$.sql"
-    printf "%s\n" "$SQLITE_BENCH_PRAGMAS" > "$bench_sql_file"
+    printf "%s\n" "$sqlite_pragmas" > "$bench_sql_file"
     cat "$sql_file" >> "$bench_sql_file"
   fi
   local timer=""

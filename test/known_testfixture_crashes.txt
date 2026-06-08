@@ -77,3 +77,4 @@ memdb1        # sqlite3_serialize/deserialize page-image API unsupported on prol
 # (createtab additionally diverges on read-cursor-abort-across-DDL; see triggerC-12.2.)
 createtab     # PRAGMA auto_vacuum errors (intentional) -> failed prepare -> stale stmt var -> UAF
 incrcorrupt   # PRAGMA auto_vacuum/incremental_vacuum errors (intentional) -> stale stmt var -> UAF
+

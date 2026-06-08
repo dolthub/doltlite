@@ -787,6 +787,17 @@ static int sqlite3Step(Vdbe *p){
           ** value.
           */
           rc = sqlite3VdbeTransferError(p);
+#ifdef DOLTLITE_PROLLY
+        }else{
+          /* Legacy sqlite3_prepare (v1): record the error on the db handle so
+          ** sqlite3_errcode()/sqlite3_errmsg() reflect it. DoltLite marks the
+          ** statement expired on a same-connection schema change, taking this
+          ** path; stock instead reaches the error through OP_Transaction's
+          ** cookie check (which sets db->errCode at end_of_step, skipped here
+          ** by the goto). Without this, errmsg() returns "not an error" even
+          ** though step returned SQLITE_ERROR (#1268). */
+          sqlite3Error(db, rc);
+#endif
         }
         goto end_of_step;
       }

@@ -442,7 +442,7 @@ jobs:
       run: |
         cd build
         bash ../test/run_testfixture.sh "Large tests" 180 \
-          func e_expr printf date randexpr1 enc4 \
+          func e_expr printf date randexpr1 enc4 enc2 enc3 like3 numcast \
           boundary1 boundary2 boundary3 select9
 
     - name: SQLite crash recovery tests
@@ -472,7 +472,7 @@ jobs:
           aggnested aggorderby \
           affinity2 affinity3 \
           between distinct distinctagg \
-          e_createtable e_delete e_insert e_select e_update e_fkey \
+          e_createtable e_delete e_insert e_select e_update e_fkey e_changes e_totalchanges \
           func2 func3 hexlit icu intarray \
           orderby1 orderby2 orderby3 orderby4 \
           pragma pragma2 printf2 \
@@ -485,8 +485,8 @@ jobs:
           tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
           tkt-f3e5abed55
 
-  inherited-testfixture:
-    name: inherited-testfixture
+  sqlite-regression:
+    name: sqlite-regression
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -519,10 +519,10 @@ jobs:
     # files (multi-threaded thread*, crash/fault-injection walcrash*/
     # writecrash/wal*fault) are intentionally excluded — same rationale as
     # the crash.test exclusion above; they flake run-to-run.
-    - name: SQLite inherited tests
+    - name: SQLite regression tests
       run: |
         cd build
-        bash ../test/run_testfixture.sh "Inherited tests" 90 \
+        bash ../test/run_testfixture.sh "SQLite regression" 300 \
           8_3_names aggerror aggfault alterauth alterauth2 alterdropcol alterdropcol2 altertab3 alterlegacy altermalloc3 autoindex1 \
           index5 limit2 notnull \
           alterqf altertab2 altertrig amatch1 analyze3 analyze4 analyze5 analyze6 \
@@ -537,7 +537,7 @@ jobs:
           conflict2 contrib01 corrupt3 cost countofview coveridxscan csv01 ctime \
           cursorhint cursorhint2 dataversion1 date2 date3 date4 date5 dbdata \
           cffault decimal default descidx3 delete3 delete4 e_blobbytes e_droptrigger e_dropview e_resolve emptytable \
-          eqp eqp2 errofst1 eval exec exists existsexpr existsexpr2 \
+          eqp eqp2 errmsg errofst1 eval exec exists existsexpr existsexpr2 \
           expr2 exprfault expridx1 filectrl filter1 filter2 filterfault fkey3 \
           fkey4 fkey6 fkey7 fkey8 fkey_malloc fordelete fts-9fd058691 fts3aa fts3ab fts3ac \
           fts3ad fts3ae fts3af fts3ag fts3ah fts3aj fts3ak fts3al \
@@ -559,6 +559,7 @@ jobs:
           keyword1 lastinsert laststmtchanges literal literal2 loadext loadext2 lock6 \
           lookaside malloc4 malloc5 malloc7 malloc8 malloc9 mallocB mallocE \
           mallocJ mallocL mallocM manydb mem5 memsubsys2 merge1 minmax4 misc2 \
+          main misc1 misc5 gencol1 \
           rowvaluefault \
           misc3 misc6 misc8 misuse mmap2 mmapfault multiplex3 mutex2 normalize \
           notify1 notify2 notify3 notnull2 notnullfault nulls1 numindex1 offset1 orderby5 \
@@ -593,7 +594,7 @@ jobs:
           trace3 trans3 transitive1 trigger3 trigger4 trigger5 trigger6 trigger8 \
           trigger9 triggerD triggerF triggerG triggerupfrom types3 unhex unionall2 \
           unionallfault unionvtab unionvtabfault unique unique2 unordered upfrom1 upfrom2 \
-          upfrom3 upfrom4 upfromfault upsert2 upsert3 upsert4 upsert5 uri2 \
+          upfrom3 upfrom4 upfromfault upsert1 upsert2 upsert3 upsert4 upsert5 uri2 \
           values valuesfault varint view2 view3 vtab_alter vtab3 vtab5 \
           vtab6 vtab7 vtab8 vtab9 vtabA vtabB vtabC vtabD \
           vtabdistinct vtabE vtabF vtabI vtabJ vtabK vtabL vtabrhs1 \
@@ -602,8 +603,11 @@ jobs:
           whereI whereJ whereK wherelfault wherelimit wherelimit2 wherelimit3 whereM \
           whereN window4 window5 window7 window8 window9 windowA windowB \
           windowD windowerr windowfault windowpushd with1 with2 with3 with4 with5 \
-          with6 withM without_rowid2 without_rowid3 without_rowid4 without_rowid6 zeroblobfault zipfile \
+          with6 withM without_rowid2 without_rowid3 without_rowid4 without_rowid5 without_rowid6 \
+          update2 whereF window6 zeroblobfault zipfile \
           zipfile2 zipfilefault \
           altermalloc2 closure01 fpconv1 fts3an fts3snippet fuzzer2 indexfault joinD json106 \
           mallocA mmap4 percentile savepoint4 sort3 sort4 sortfault speed1p speed2 speed4 \
-          stmt tempfault vacuummem wherefault
+          stmt tempfault vacuummem wherefault \
+          dbpage pagesize securedel securedel2 reservebytes shrink format4 stat \
+          io sync sync2 multiplex4

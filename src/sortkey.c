@@ -457,7 +457,15 @@ static int sortKeyMemSerialType(Mem *pMem, u32 *pSerialType, u32 *pLen){
     return SQLITE_OK;
   }
   if( flags & MEM_IntReal ){
-    return SQLITE_NOTFOUND;
+    /* An integer-valued real (e.g. an integer coerced into a REAL column by
+    ** affinity): the value lives in u.i. Encode it via its integer serial
+    ** type — encodeNumeric normalizes integer serial types to the same IEEE
+    ** bytes as serialType 7, so this produces a key identical to a true real
+    ** of the same magnitude. Bailing here (SQLITE_NOTFOUND) instead let two
+    ** identical integer-valued reals build mismatched index keys, so UNIQUE
+    ** conflicts went undetected and duplicates were stored (#1267). */
+    intSerialType(pMem->u.i, pSerialType, pLen);
+    return SQLITE_OK;
   }
   if( flags & MEM_Int ){
     intSerialType(pMem->u.i, pSerialType, pLen);
