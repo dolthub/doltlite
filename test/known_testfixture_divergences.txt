@@ -1145,10 +1145,19 @@ capi3 capi3-8.3    # writable_schema sqlite_master corruption undetected: prolly
 capi3 capi3-8.5    # same: injected bogus sqlite_master row doesn't malform the prolly catalog
 capi3 capi3-11.3.4 # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
 capi3 capi3-11.5   # finalize after COMMIT-during-active-read: SQLITE_ABORT vs SQLITE_ERROR
-capi3 capi3-11.10  # step after ROLLBACK-during-active-read: cursor faulted (SQLITE_ERROR) vs stock auto-reset+rerun (SQLITE_ROW)
-capi3 capi3-11.11  # same statement, next step: SQLITE_ERROR vs SQLITE_DONE
+# capi3-11.10/11.11 (step after ROLLBACK-during-active-read) now pass: the read
+# cursor survives a writeOnly ROLLBACK and re-seeks instead of faulting (#1240).
 capi3 capi3-11.12  # same: SQLITE_ERROR vs SQLITE_ROW
 capi3 capi3-11.13  # finalize of the faulted statement: SQLITE_ERROR vs SQLITE_OK
+
+# default — writable_schema edit to a column DEFAULT is not honored. The test
+# does PRAGMA writable_schema=ON; UPDATE sqlite_master SET sql='...DEFAULT(:xyz)'
+# to rewrite b's default to an (invalid) bind parameter; stock then yields NULL
+# on insert, doltlite keeps the original DEFAULT 99. doltlite's schema is the
+# structural catalog (regenerated), not the raw sqlite_master.sql text, so the
+# injected edit has no effect -- same intentional class as capi3-8.3/8.5. Normal
+# DEFAULT handling (default-1.x/2.x/3.x/4.0/4.2-4.x) is correct.
+default default-4.1  # writable_schema sqlite_master.sql DEFAULT edit not honored (structural catalog)
 
 # fordelete — doltlite doesn't materialize named sqlite_autoindex_* rows for
 # WITHOUT-ROWID/implicit unique indexes, so PRAGMA index_list reports just the
@@ -1309,3 +1318,51 @@ jrnlmode jrnlmode-8.28  # journal_mode unsupported on doltlite-format databases
 jrnlmode jrnlmode-8.30  # journal_mode unsupported on doltlite-format databases
 jrnlmode jrnlmode-9.1  # journal_mode unsupported on doltlite-format databases
 jrnlmode jrnlmode-9.2  # journal_mode unsupported on doltlite-format databases
+
+# descidx3 — descidx3-1.1 reads the SQLite file-format version byte via
+# get_file_format (hexio_read test.db offset 44). DoltLite stores a chunk store,
+# not a SQLite file, so that offset is not the format field and reads 0 vs the
+# expected 4. Raw on-disk-format divergence; the descending-index behavior the
+# file actually exercises (descidx3-2.x..) is correct.
+descidx3 descidx3-1.1  # hexio read of SQLite file-format version byte (chunk store has no such field)
+
+# alterdropcol — alterdropcol-8.2 expects AUTOINCREMENT in the regenerated DDL,
+# but test 8.0 injects AUTOINCREMENT via a raw `PRAGMA writable_schema=1;
+# UPDATE sqlite_schema SET sql='...AUTOINCREMENT...'` edit on a table that was
+# CREATEd without it. DoltLite regenerates DDL from its structural catalog and
+# ignores raw sqlite_schema text edits (same intentional class as #1241 /
+# capi3-8.3/8.5), so the catalog never recorded AUTOINCREMENT and the rewritten
+# DDL omits it. AUTOINCREMENT itself is fully honored: a normally-created
+# AUTOINCREMENT table round-trips the keyword through DROP COLUMN, never reuses
+# a deleted max rowid, and maintains sqlite_sequence. Raw-schema-edit divergence.
+alterdropcol alterdropcol-8.2  # AUTOINCREMENT injected via writable_schema UPDATE; structural catalog ignores raw sqlite_schema edits
+
+# altertab3 — altertab3-31.1 asserts `PRAGMA page_count` is unchanged across an
+# `ALTER TABLE DROP COLUMN` (stock's metadata-only drop). DoltLite stores a
+# chunk store, not SQLite pages, so page_count is not a stable per-table page
+# metric and differs. Raw page-format pragma; the drop itself is correct
+# (altertab3-31.2 reads the surviving column back as 5.0).
+altertab3 altertab3-31.1  # PRAGMA page_count across DROP COLUMN; chunk store has no SQLite page count
+
+# index5 — index5-1.3 records the on-disk page WRITE ORDER during CREATE INDEX
+# via a custom test VFS (forward/backward/non-contiguous page offsets) and
+# asserts a mostly-sequential pattern. DoltLite's chunk store writes
+# content-addressed chunks, not sequential btree pages, so the write-offset
+# pattern does not apply. Raw storage-layout divergence; the index is built
+# correctly (index5-1.2 passes).
+index5 index5-1.3  # page write-order via test VFS; chunk store is not page-sequential
+
+# limit2 — limit2-110.3 compares sqlite_search_count between an indexed and an
+# unindexed ORDER BY ... LIMIT, asserting the indexed plan scans <2% as many
+# rows. sqlite_search_count is an internal scan-count metric DoltLite's prolly
+# cursor does not increment the same way; the query RESULTS are correct
+# (limit2-110.1/110.2 pass). Internal-counter divergence.
+limit2 limit2-110.3  # sqlite_search_count scan-count metric; prolly cursor counts differently
+
+# notnull — notnull-6.5 (do_uses_op_next_test) checks whether the plan for
+# `SELECT * FROM t5 WHERE a IS ?` uses OP_Next, expecting yes for t5(a PRIMARY
+# KEY). DoltLite treats a non-integer PRIMARY KEY as WITHOUT ROWID (#1176), so
+# the PK is unique-and-NOT-NULL and the planner uses a single seek (no OP_Next),
+# matching t8 (explicit WITHOUT ROWID, expects 0). Verified row semantics are
+# correct; only the plan differs. WITHOUT-ROWID-PK plan divergence (#1176).
+notnull notnull-6.5  # plan uses a seek not OP_Next: non-integer PK is WITHOUT ROWID (#1176)

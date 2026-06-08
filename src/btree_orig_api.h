@@ -45,6 +45,7 @@ Schema *origBtreeSchema(void *p, int nBytes, void(*xFree)(void*));
 int origBtreeCursor(void *p, Pgno iTable, int wrFlag,
                     struct KeyInfo *pKeyInfo, void *pCur);
 int origBtreeCloseCursor(void *pCur);
+void origBtreeClearCursor(void *pCur);
 int origBtreeCursorHasMoved(void *pCur);
 int origBtreeCursorRestore(void *pCur, int *pDifferentRow);
 int origBtreeFirst(void *pCur, int *pRes);

@@ -28,7 +28,7 @@ static char *csLockPath(const char *path){
 }
 
 static int csFileLock(sqlite3_vfs *pVfs, const char *path,
-                      sqlite3_file **ppFile){
+                      sqlite3_file **ppFile, char **pzName){
   char *zRaw = csLockPath(path);
   char *zLock = 0;
   sqlite3_file *pFile = 0;
@@ -37,6 +37,7 @@ static int csFileLock(sqlite3_vfs *pVfs, const char *path,
   int rc;
 
   *ppFile = 0;
+  *pzName = 0;
   if( !zRaw ) return SQLITE_NOMEM;
   /* Opened with SQLITE_OPEN_MAIN_DB, so the name must carry the VFS's
   ** double-nul terminator (csLockPath returns a singly-terminated string). */
@@ -44,27 +45,38 @@ static int csFileLock(sqlite3_vfs *pVfs, const char *path,
   sqlite3_free(zRaw);
   if( rc!=SQLITE_OK ) return rc;
   rc = sqlite3OsOpenMalloc(pVfs, zLock, &pFile, flags, 0);
-  sqlite3_free(zLock);
-  if( rc!=SQLITE_OK ) return rc;
+  if( rc!=SQLITE_OK ){
+    sqlite3_free(zLock);
+    return rc;
+  }
   rc = sqlite3OsLock(pFile, SQLITE_LOCK_EXCLUSIVE);
   if( rc!=SQLITE_OK ){
     sqlite3OsCloseFree(pFile);
+    sqlite3_free(zLock);
     return rc;
   }
   *ppFile = pFile;
+  /* The unix VFS aliases unixFile.zPath to this buffer (it does not copy),
+  ** and SQLite's xOpen contract requires the name to stay valid until close.
+  ** Hand ownership to the caller, which frees it via csFileUnlock. */
+  *pzName = zLock;
   return SQLITE_OK;
 }
 
-static void csFileUnlock(sqlite3_file *pFile){
+static void csFileUnlock(sqlite3_file *pFile, char **pzName){
   if( pFile ){
     sqlite3OsUnlock(pFile, SQLITE_LOCK_NONE);
     sqlite3OsCloseFree(pFile);
   }
+  if( pzName ){
+    sqlite3_free(*pzName);
+    *pzName = 0;
+  }
 }
 
 static int csFileLockNB(sqlite3_vfs *pVfs, const char *path,
-                        sqlite3_file **ppFile){
-  return csFileLock(pVfs, path, ppFile);
+                        sqlite3_file **ppFile, char **pzName){
+  return csFileLock(pVfs, path, ppFile, pzName);
 }
 
 typedef sqlite3_file *CsFileLock;
@@ -301,6 +313,7 @@ int chunkStoreOpen(
   }
   cs->file.pVfs = pVfs;
   CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
+  cs->pGraphLockName = 0;
   cs->pLockMutex = sqlite3_mutex_alloc(SQLITE_MUTEX_RECURSIVE);
   cs->lockDepth = 0;
 
@@ -1069,6 +1082,7 @@ static int csCommitToFile(ChunkStore *cs){
   i64 origFileSize = 0;
   i64 writeOff = 0;
   CsFileLock lockFd = CS_FILE_LOCK_INIT;
+  char *lockName = 0;
   int hadFile = (cs->file.pFile != 0);
   int lockHeld = csFileLockHeld(CS_GRAPH_LOCK(cs));
   i64 newWalSize = cs->wal.nWalData;
@@ -1090,7 +1104,7 @@ static int csCommitToFile(ChunkStore *cs){
   if( lockHeld ){
     lockFd = CS_FILE_LOCK_INIT;
   }else{
-    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd);
+    rc = csFileLock(cs->file.pVfs, cs->file.zFilename, &lockFd, &lockName);
     if( rc!=SQLITE_OK ) return rc;
   }
 
@@ -1312,7 +1326,7 @@ static int csCommitToFile(ChunkStore *cs){
   cs->file.iFileSize = writeOff;
 
 commit_done:
-  csFileUnlock(lockFd);
+  csFileUnlock(lockFd, &lockName);
 
   if( rc != SQLITE_OK ){
     if( cs->file.pFile && writeOff > origFileSize ){
@@ -1462,14 +1476,14 @@ int chunkStoreLockAndRefreshChanged(ChunkStore *cs, int *pChanged){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return SQLITE_ERROR;
   }
-  rc = csFileLockNB(cs->file.pVfs, cs->file.zFilename, &CS_GRAPH_LOCK(cs));
+  rc = csFileLockNB(cs->file.pVfs, cs->file.zFilename, &CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
   if( rc!=SQLITE_OK ){
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return rc;
   }
   rc = chunkStoreRefreshIfChanged(cs, &changed);
   if( rc!=SQLITE_OK ){
-    csFileUnlock(CS_GRAPH_LOCK(cs));
+    csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
     CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
     return rc;
@@ -1487,12 +1501,12 @@ void chunkStoreUnlock(ChunkStore *cs){
   if( cs->lockDepth > 0 ){
     cs->lockDepth--;
     if( cs->lockDepth == 0 && csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
-      csFileUnlock(CS_GRAPH_LOCK(cs));
+      csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
       CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
     }
     if( cs->pLockMutex ) sqlite3_mutex_leave(cs->pLockMutex);
   }else if( csFileLockHeld(CS_GRAPH_LOCK(cs)) ){
-    csFileUnlock(CS_GRAPH_LOCK(cs));
+    csFileUnlock(CS_GRAPH_LOCK(cs), &cs->pGraphLockName);
     CS_GRAPH_LOCK(cs) = CS_FILE_LOCK_INIT;
   }
 }
