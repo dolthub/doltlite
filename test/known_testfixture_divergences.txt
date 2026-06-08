@@ -1366,3 +1366,27 @@ limit2 limit2-110.3  # sqlite_search_count scan-count metric; prolly cursor coun
 # matching t8 (explicit WITHOUT ROWID, expects 0). Verified row semantics are
 # correct; only the plan differs. WITHOUT-ROWID-PK plan divergence (#1176).
 notnull notnull-6.5  # plan uses a seek not OP_Next: non-integer PK is WITHOUT ROWID (#1176)
+
+# update2 — update2-2.3 runs `UPDATE t3 SET c=1 WHERE rowid=?` on
+# t3(a PRIMARY KEY,b,c). DoltLite stores a non-integer PRIMARY KEY as WITHOUT
+# ROWID (#1176), so there is no rowid column → "no such column: rowid". The
+# non-rowid UPDATE (2.2, WHERE b=?) passes. WITHOUT-ROWID-PK divergence.
+update2 update2-2.3  # explicit rowid on a non-integer-PK (WITHOUT ROWID) table (#1176)
+
+# whereF — whereF-4.0 runs `EXPLAIN QUERY PLAN SELECT rowid FROM t4 ...` where
+# t4 has PRIMARY KEY(a,b,c) (composite → WITHOUT ROWID, #1176), so rowid does
+# not exist. WITHOUT-ROWID-PK divergence.
+whereF whereF-4.0  # explicit rowid on a composite-PK (WITHOUT ROWID) table (#1176)
+
+# without_rowid5 — the file contrasts a normal (rowid) table against a WITHOUT
+# ROWID one. -1.1 selects rowid/_rowid_/oid from t1(a PRIMARY KEY,b,c) expecting
+# the rowid alias to exist, but DoltLite stores a non-integer PK as WITHOUT ROWID
+# (#1176) → no rowid. -5.5 expects a NULL insert into the PK to succeed, but a
+# WITHOUT-ROWID PK is implicitly NOT NULL. Both are the #1176 surface.
+without_rowid5 without_rowid5-1.1  # rowid alias absent: non-integer PK is WITHOUT ROWID (#1176)
+without_rowid5 without_rowid5-5.5  # WITHOUT-ROWID PK is implicitly NOT NULL (#1176)
+
+# window6 — window6-3.1 creates an index using a user-defined collation
+# (`CREATE INDEX window ON x1(x COLLATE window)`). DoltLite does not support
+# indexes with a custom collation (same class as collate3/collate4). Feature gap.
+window6 window6-3.1  # index with user-defined collation unsupported
