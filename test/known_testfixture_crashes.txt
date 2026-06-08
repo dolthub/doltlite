@@ -78,11 +78,3 @@ memdb1        # sqlite3_serialize/deserialize page-image API unsupported on prol
 createtab     # PRAGMA auto_vacuum errors (intentional) -> failed prepare -> stale stmt var -> UAF
 incrcorrupt   # PRAGMA auto_vacuum/incremental_vacuum errors (intentional) -> stale stmt var -> UAF
 
-# securedel2 exercises secure_delete over large data with repeated freed-space
-# byte scans. It completes (4 known divergences) in a plain build, but under the
-# CI DOLTLITE_PROLLY_CHECK build every prolly mutation is validated, so it runs
-# past the per-file timeout and never prints a summary line. secure_delete is an
-# intentional no-op on the chunk store anyway (no page freelist to zero; GC
-# reclaims old chunks), so its divergences carry no real-bug risk. Documented as
-# a timeout rather than gated.
-securedel2    # times out under DOLTLITE_PROLLY_CHECK (secure_delete byte-scan over large data); secure_delete is an intentional no-op

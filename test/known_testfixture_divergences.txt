@@ -1556,6 +1556,14 @@ securedel securedel-1.7  # secure_delete pragma no-op: no page freelist to zero
 securedel securedel-1.8  # secure_delete pragma no-op: no page freelist to zero
 securedel securedel-2.1  # secure_delete pragma no-op: no page freelist to zero
 
+# securedel2 — freed space is not zeroed in place (content-addressed store; GC
+# reclaims old chunks), so the freed-byte scans find old data. Not applicable to
+# the chunk store.
+securedel2 securedel2-1.4.1  # freed space not zeroed in place (content-addressed; GC reclaims)
+securedel2 securedel2-1.4.3  # freed space not zeroed in place (content-addressed; GC reclaims)
+securedel2 securedel2-1.5.2  # freed space not zeroed in place (content-addressed; GC reclaims)
+securedel2 securedel2-1.6.2  # freed space not zeroed in place (content-addressed; GC reclaims)
+
 # reclaims old chunks), so the freed-byte scans find old data. Not applicable to
 # the chunk store.
 

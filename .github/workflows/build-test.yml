@@ -485,8 +485,8 @@ jobs:
           tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
           tkt-f3e5abed55
 
-  inherited-testfixture:
-    name: inherited-testfixture
+  sqlite-regression:
+    name: sqlite-regression
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -519,10 +519,10 @@ jobs:
     # files (multi-threaded thread*, crash/fault-injection walcrash*/
     # writecrash/wal*fault) are intentionally excluded — same rationale as
     # the crash.test exclusion above; they flake run-to-run.
-    - name: SQLite inherited tests
+    - name: SQLite regression tests
       run: |
         cd build
-        bash ../test/run_testfixture.sh "Inherited tests" 90 \
+        bash ../test/run_testfixture.sh "SQLite regression" 300 \
           8_3_names aggerror aggfault alterauth alterauth2 alterdropcol alterdropcol2 altertab3 alterlegacy altermalloc3 autoindex1 \
           index5 limit2 notnull \
           alterqf altertab2 altertrig amatch1 analyze3 analyze4 analyze5 analyze6 \
@@ -609,5 +609,5 @@ jobs:
           altermalloc2 closure01 fpconv1 fts3an fts3snippet fuzzer2 indexfault joinD json106 \
           mallocA mmap4 percentile savepoint4 sort3 sort4 sortfault speed1p speed2 speed4 \
           stmt tempfault vacuummem wherefault \
-          dbpage pagesize securedel reservebytes shrink format4 stat \
+          dbpage pagesize securedel securedel2 reservebytes shrink format4 stat \
           io sync sync2 multiplex4
