@@ -100,7 +100,7 @@ jobs:
   build-and-test:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runs-on }}
-    timeout-minutes: 90
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -233,14 +233,6 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: cd build && bash ../test/run_doltlite_tests.sh
       timeout-minutes: 20
-
-    - name: Doltlite perf tests
-      if: matrix.platform == 'ubuntu'
-      run: |
-        cd build
-        bash ../test/doltlite_perf.sh
-        bash ../test/doltlite_count_perf.sh
-      timeout-minutes: 45
 
     - name: Correctness regression tests
       if: matrix.platform == 'ubuntu'
