@@ -4444,7 +4444,11 @@ case OP_Transaction: {
       p->usesStmtJournal = 1;
 #endif
 
-      rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
+      if( db->nVtabSavepoint==0 ){
+        rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
+      }else{
+        rc = SQLITE_OK;
+      }
       if( rc==SQLITE_OK ){
         rc = sqlite3BtreeBeginStmt(pBt, p->iStatement);
       }
@@ -4460,8 +4464,10 @@ case OP_Transaction: {
             (void)sqlite3BtreeSavepoint(pBt2, SAVEPOINT_RELEASE, iSavepoint);
           }
         }
-        (void)sqlite3VtabSavepoint(db, SAVEPOINT_ROLLBACK, iSavepoint);
-        (void)sqlite3VtabSavepoint(db, SAVEPOINT_RELEASE, iSavepoint);
+        if( db->nVtabSavepoint==0 ){
+          (void)sqlite3VtabSavepoint(db, SAVEPOINT_ROLLBACK, iSavepoint);
+          (void)sqlite3VtabSavepoint(db, SAVEPOINT_RELEASE, iSavepoint);
+        }
         db->nStatement--;
         p->iStatement = 0;
         rc = rcSave;
@@ -9226,7 +9232,11 @@ case OP_VUpdate: {
     db->nStatement++;
     p->iStatement = db->nSavepoint + db->nStatement;
     p->usesStmtJournal = 1;
-    rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
+    if( db->nVtabSavepoint==0 ){
+      rc = sqlite3VtabSavepoint(db, SAVEPOINT_BEGIN, p->iStatement-1);
+    }else{
+      rc = SQLITE_OK;
+    }
     for(iDb=0; rc==SQLITE_OK && iDb<db->nDb; iDb++){
       Btree *pBt = db->aDb[iDb].pBt;
       if( pBt ){
@@ -9251,8 +9261,10 @@ case OP_VUpdate: {
           (void)sqlite3BtreeSavepoint(pBt, SAVEPOINT_RELEASE, iSavepoint);
         }
       }
-      (void)sqlite3VtabSavepoint(db, SAVEPOINT_ROLLBACK, iSavepoint);
-      (void)sqlite3VtabSavepoint(db, SAVEPOINT_RELEASE, iSavepoint);
+      if( db->nVtabSavepoint==0 ){
+        (void)sqlite3VtabSavepoint(db, SAVEPOINT_ROLLBACK, iSavepoint);
+        (void)sqlite3VtabSavepoint(db, SAVEPOINT_RELEASE, iSavepoint);
+      }
       db->nStatement--;
       p->iStatement = 0;
       rc = rcSave;
