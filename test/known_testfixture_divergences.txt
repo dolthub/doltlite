@@ -307,7 +307,6 @@ vacuum2 vacuum2-4.1   # post-VACUUM auto_vacuum mode change
 vacuum2 vacuum2-5.2   # "cannot VACUUM - SQL statements in progress" error path
 vacuum2 vacuum2-5.3   # error path
 vacuum2 vacuum2-5.4   # error path
-vacuum2 vacuum2-6.3   # post-VACUUM page count
 
 # ── crash7 ──
 # crash7 verifies crash recovery during VACUUM. Since VACUUM is a no-op
@@ -1117,9 +1116,7 @@ tkt-f3e5abed55 tkt-f3e5abed55-2.5
 vacuum vacuum-7.1
 vacuum vacuum-7.5
 vacuum2 vacuum2-2.1
-vacuum2 vacuum2-3.17
 vacuum2 vacuum2-3.3
-vacuum2 vacuum2-3.7
 vacuum2 vacuum2-4.2
 vacuum2 vacuum2-4.4
 vacuum2 vacuum2-4.5
