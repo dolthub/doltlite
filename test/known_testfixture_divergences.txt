@@ -127,7 +127,6 @@ triggerC triggerC-2.1.2
 triggerC triggerC-2.1.3
 triggerC triggerC-2.1.4
 triggerC triggerC-2.1.6
-triggerC triggerC-12.2  # DROP TRIGGER mid-scan aborts the cursor rather than crashing
 
 # ── window1 ──
 window1 window1-10.7  # rowid-order vs PK-order on unordered SELECT
@@ -1144,11 +1143,12 @@ capi3 capi3-4.4    # same (utf16 errmsg)
 capi3 capi3-8.3    # writable_schema sqlite_master corruption undetected: prolly catalog isn't the raw sqlite_master row store
 capi3 capi3-8.5    # same: injected bogus sqlite_master row doesn't malform the prolly catalog
 capi3 capi3-11.3.4 # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
-capi3 capi3-11.5   # finalize after COMMIT-during-active-read: SQLITE_ABORT vs SQLITE_ERROR
-# capi3-11.10/11.11 (step after ROLLBACK-during-active-read) now pass: the read
-# cursor survives a writeOnly ROLLBACK and re-seeks instead of faulting (#1240).
-capi3 capi3-11.12  # same: SQLITE_ERROR vs SQLITE_ROW
-capi3 capi3-11.13  # finalize of the faulted statement: SQLITE_ERROR vs SQLITE_OK
+# capi3-11.4/11.5 (step/finalize after COMMIT-during-active-read) now pass: the
+# scan survives the commit flush and re-seeks. capi3-11.10/11.11 (step after
+# ROLLBACK-during-active-read) pass since the read cursor survives a writeOnly
+# ROLLBACK.
+capi3 capi3-11.12  # step after ROLLBACK-during-active-read: SQLITE_ERROR vs SQLITE_ROW
+capi3 capi3-11.13  # finalize of that statement: SQLITE_SCHEMA vs SQLITE_OK
 
 # default — writable_schema edit to a column DEFAULT is not honored. The test
 # does PRAGMA writable_schema=ON; UPDATE sqlite_master SET sql='...DEFAULT(:xyz)'

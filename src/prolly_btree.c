@@ -3049,7 +3049,11 @@ static int saveCursorPosition(BtCursor *pCur){
 
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  if( !prollyCursorIsValid(&pCur->pCur) ){
+  /* A map-sourced row's key comes from the mutmap below; the tree cursor may
+  ** legitimately be unpositioned (all rows still pending). */
+  if( !prollyCursorIsValid(&pCur->pCur)
+   && !(pCur->mmActive
+        && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH)) ){
     if( pCur->curIntKey && (pCur->curFlags & BTCF_ValidNKey) ){
 
       pCur->nKey = pCur->cachedIntKey;
@@ -5259,6 +5263,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       p->committedConstraintViolationsHash = p->constraintViolationsHash;
       btreeMarkWorkingStateChanged(p);
       if( bReloadSchema ){
+        BtCursor *pC;
         rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
         if( rc!=SQLITE_OK ){
           sqlite3_free(catData);
@@ -5266,7 +5271,31 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           pBt->store.snapshotPinned = 0;
           return rc;
         }
-        invalidateCursors(pBt, 0, SQLITE_ABORT);
+        /* A statement can still be mid-scan here (a callback ran DDL in
+        ** autocommit — tkt3080). Save this handle's cursors so it survives
+        ** the catalog reload; fault only what can't be saved. The reload
+        ** frees the pending maps, so detach aliases either way. */
+        for(pC = pBt->pCursor; pC; pC = pC->pNext){
+          if( pC->pBtree==p ){
+            if( (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
+             && saveCursorPosition(pC)!=SQLITE_OK ){
+              pC->eState = CURSOR_FAULT;
+              pC->skipNext = SQLITE_ABORT;
+              prollyCursorReleaseAll(&pC->pCur);
+            }
+            pC->pMutMap = 0;
+            pC->mmActive = 0;
+            pC->mmPhysActive = 0;
+            pC->deferredTreeSeek = 0;
+            pC->mmIdx = -1;
+            pC->mmPhysIdx = -1;
+          }else{
+            pC->eState = CURSOR_FAULT;
+            pC->skipNext = SQLITE_ABORT;
+            pC->mmActive = 0;
+            prollyCursorReleaseAll(&pC->pCur);
+          }
+        }
         rc = deserializeCatalog(p, catData, nCatData);
         if( rc!=SQLITE_OK ){
           sqlite3_free(catData);
@@ -5278,9 +5307,20 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           struct TableEntry *pMaster = findTable(p, 1);
           if( pMaster ) pMaster->root = runtimeMasterRoot;
         }
+        /* A saved cursor whose table vanished in the reload would re-seek a
+        ** stale root; fault it. */
+        for(pC = pBt->pCursor; pC; pC = pC->pNext){
+          if( pC->pBtree==p && pC->eState==CURSOR_REQUIRESEEK
+           && findTable(p, pC->pgnoRoot)==0 ){
+            pC->eState = CURSOR_FAULT;
+            pC->skipNext = SQLITE_ABORT;
+          }
+        }
         invalidateSchema(p);
         if( p->db ){
-          sqlite3ExpirePreparedStatements(p->db, 0);
+          /* Advisory expiry: hard expiry (iCode 0) makes OP_OpenRead abort a
+          ** statement still running across this commit (tkt-c694113d5). */
+          sqlite3ExpirePreparedStatements(p->db, 1);
           sqlite3ResetAllSchemasOfConnection(p->db);
         }
       }
@@ -8103,6 +8143,16 @@ static int flushIfNeeded(BtCursor *pCur){
     }
   }
 
+  /* Save the initiating cursor too — it can belong to a statement that is
+  ** still running (a callback issued COMMIT, capi3-11.4); dropping it to
+  ** INVALID below ended that scan. Before flushMutMap: a map-sourced row's
+  ** key is read out of the map being flushed. */
+  if( !pCur->isPinned
+   && (pCur->eState==CURSOR_VALID || pCur->eState==CURSOR_SKIPNEXT) ){
+    rc = saveCursorPosition(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -8112,6 +8162,10 @@ static int flushIfNeeded(BtCursor *pCur){
     prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
                      &pTE->root, pTE->flags);
   }
+  /* The flush emptied the map; a saved cursor restoring with a stale
+  ** mmActive/mmIdx would consult it at a dead index. */
+  refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
+                             pTE ? (ProllyMutMap*)pTE->pPending : 0);
   /* A cursor saved by saveAllCursors (e.g. another statement scanning this
   ** table while we flush a DELETE/UPDATE) keeps its REQUIRESEEK state: it has a
   ** saved key and must reseek against the new root on next access. Clobbering it
