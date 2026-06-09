@@ -5426,18 +5426,6 @@ static int restoreFromCommitted(Btree *p){
   p->mergeCommitHash = p->committedMergeCommitHash;
   p->conflictsCatalogHash = p->committedConflictsCatalogHash;
   p->constraintViolationsHash = p->committedConstraintViolationsHash;
-  {
-    ProllyHash runtimeMasterRoot;
-    struct TableEntry *pMaster;
-    u8 bOldFilter = p->bFilterSchemaPlaceholders;
-    int rc;
-    p->bFilterSchemaPlaceholders = 1;
-    rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
-    p->bFilterSchemaPlaceholders = bOldFilter;
-    if( rc!=SQLITE_OK ) return rc;
-    pMaster = findTable(p, 1);
-    if( pMaster ) pMaster->root = runtimeMasterRoot;
-  }
   return SQLITE_OK;
 }
 

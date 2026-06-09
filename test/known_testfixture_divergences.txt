@@ -921,13 +921,6 @@ trigger1 trigger1-6.2
 trigger1 trigger1-6.5
 trigger1 trigger1-6.6
 where where-1.1.1  # sqlite_search_count metric; SELECT x,y,w WHERE w=10 returns 3|121|10 on both
-# where-25.* inject btree corruption via PRAGMA writable_schema (rewrite a rootpage
-# number) and expect "database disk image is malformed"/"corrupt database". doltlite's
-# CTLD/prolly format has no such btree page graph to corrupt; on an uncorrupted db the
-# 25.x row/upsert semantics match stock exactly.
-where where-25.1
-where where-25.2
-where where-25.5
 
 # --- Large/Additional/Crash-recovery divergences (full local capture via the
 # object testfixture; PR #1116 / issue #1119). Same classes: raw stock on-disk
@@ -1142,7 +1135,6 @@ capi3 capi3-3.4    # same: errmsg "not an error" vs "unable to open database fil
 capi3 capi3-4.3    # bogus-path open16: deferred open error vs SQLITE_CANTOPEN
 capi3 capi3-4.4    # same (utf16 errmsg)
 capi3 capi3-8.3    # writable_schema sqlite_master corruption undetected: prolly catalog isn't the raw sqlite_master row store
-capi3 capi3-8.5    # same: injected bogus sqlite_master row doesn't malform the prolly catalog
 capi3 capi3-11.3.4 # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
 capi3 capi3-11.5   # finalize after COMMIT-during-active-read: SQLITE_ABORT vs SQLITE_ERROR
 # capi3-11.10/11.11 (step after ROLLBACK-during-active-read) now pass: the read
