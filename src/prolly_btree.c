@@ -1760,31 +1760,6 @@ static void filterSchemaCatalogRows(
   *pnRows = nOut;
 }
 
-static int schemaCatalogHasName(
-  SchemaCatalogRow *aRows,
-  int nRows,
-  const char *zName
-){
-  int i;
-  if( !zName ) return 0;
-  for(i=0; i<nRows; i++){
-    if( aRows[i].zName && strcmp(aRows[i].zName, zName)==0 ) return 1;
-  }
-  return 0;
-}
-
-static int schemaCatalogTableNeedsSegdirAutoindex(SchemaCatalogRow *pRow){
-  int nName, nSuffix;
-  const char *zSuffix = "_segdir";
-  if( !pRow || !pRow->zType || !pRow->zName || !pRow->zSql ) return 0;
-  if( strcmp(pRow->zType, "table")!=0 ) return 0;
-  nName = (int)strlen(pRow->zName);
-  nSuffix = (int)strlen(zSuffix);
-  if( nName<=nSuffix ) return 0;
-  if( sqlite3StrICmp(&pRow->zName[nName-nSuffix], zSuffix)!=0 ) return 0;
-  return strstr(pRow->zSql, "PRIMARY KEY(")!=0;
-}
-
 static int appendMissingSchemaCatalogRows(
   sqlite3 *db,
   const char *zDb,
@@ -1876,68 +1851,6 @@ static int appendMissingSchemaCatalogRows(
     if( rc!=SQLITE_OK ){
       freeSchemaCatalogRows(aRows, nRows+1);
       return rc;
-    }
-    nRows++;
-  }
-
-  /* FTS3/4 segdir shadow tables are ordinary rowid tables with an implied
-  ** composite-PK autoindex. OOM during virtual-table creation can leave the
-  ** autoindex root allocated but its sqlite_schema row absent from the master
-  ** root snapshot used for catalog canonicalization. Preserve SQLite's catalog
-  ** shape by reconstructing that internal row from the unclaimed root. */
-  for(i=0; i<nRows; i++){
-    SchemaCatalogRow *pTabRow = &aRows[i];
-    char *zIdxName;
-    Pgno iRoot = 0;
-    if( !schemaCatalogTableNeedsSegdirAutoindex(pTabRow) ) continue;
-    zIdxName = sqlite3_mprintf("sqlite_autoindex_%s_1", pTabRow->zName);
-    if( !zIdxName ){
-      freeSchemaCatalogRows(aRows, nRows);
-      return SQLITE_NOMEM;
-    }
-    if( schemaCatalogHasName(aRows, nRows, zIdxName) ){
-      sqlite3_free(zIdxName);
-      continue;
-    }
-    for(j=0; j<nTables; j++){
-      if( aTables[j].iTable<=1 ) continue;
-      if( schemaCatalogHasPgno(aRows, nRows, aTables[j].iTable) ) continue;
-      iRoot = aTables[j].iTable;
-      break;
-    }
-    if( iRoot==0 ){
-      sqlite3_free(zIdxName);
-      continue;
-    }
-    if( nRows>=nAlloc ){
-      i64 nNew = nAlloc ? (i64)nAlloc * 2 : (i64)16;
-      SchemaCatalogRow *aNew;
-      if( nNew > (i64)0x7fffffff/(i64)sizeof(SchemaCatalogRow) ){
-        sqlite3_free(zIdxName);
-        freeSchemaCatalogRows(aRows, nRows);
-        return SQLITE_NOMEM;
-      }
-      aNew = sqlite3_realloc(aRows,
-                             (int)(nNew * (i64)sizeof(SchemaCatalogRow)));
-      if( !aNew ){
-        sqlite3_free(zIdxName);
-        freeSchemaCatalogRows(aRows, nRows);
-        return SQLITE_NOMEM;
-      }
-      aRows = aNew;
-      pTabRow = &aRows[i];
-      nAlloc = (int)nNew;
-    }
-    memset(&aRows[nRows], 0, sizeof(SchemaCatalogRow));
-    aRows[nRows].iRowid = iNextRowid++;
-    aRows[nRows].oldPg = iRoot;
-    aRows[nRows].zType = sqlite3_mprintf("index");
-    aRows[nRows].zName = zIdxName;
-    aRows[nRows].zTblName = sqlite3_mprintf("%s", pTabRow->zName);
-    aRows[nRows].zSql = 0;
-    if( !aRows[nRows].zType || !aRows[nRows].zTblName ){
-      freeSchemaCatalogRows(aRows, nRows+1);
-      return SQLITE_NOMEM;
     }
     nRows++;
   }

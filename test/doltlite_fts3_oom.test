@@ -109,7 +109,7 @@ do_test doltlite_fts3_oom-2.1 {
 } {}
 
 foreach {tn iFail sql okres} {
-  1 90 {SELECT count(*) FROM sqlite_master} {0 5}
+  1 90 {SELECT count(*) FROM sqlite_master} {0 4}
   2 92 {SELECT * FROM ft WHERE docid = 1} {0 {one neung}}
 } {
   do_test doltlite_fts3_oom-2.2.$tn {
