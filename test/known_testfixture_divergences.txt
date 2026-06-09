@@ -1705,12 +1705,12 @@ tkt3457 tkt3457-1.5  # no rollback-journal file to back up
 
 # tkt2332 — unordered SELECT returns PK-order rows instead of rowid/insertion order;
 # the multiset is identical (random-data ordering test). rowid-order divergence.
-tkt2332 tkt2332-10000.3  # PK-order vs insertion order (multiset equal)
-tkt2332 tkt2332-10000.5  # PK-order vs insertion order (multiset equal)
-tkt2332 tkt2332-100000.3  # PK-order vs insertion order (multiset equal)
-tkt2332 tkt2332-100000.5  # PK-order vs insertion order (multiset equal)
-tkt2332 tkt2332-1000000.3  # PK-order vs insertion order (multiset equal)
-tkt2332 tkt2332-1000000.5  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332.10000.3  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332.10000.5  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332.100000.3  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332.100000.5  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332.1000000.3  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332.1000000.5  # PK-order vs insertion order (multiset equal)
 
 # tkt3810 — a TEMP TRIGGER whose base table is dropped becomes an orphan in stock
 # (still listed in temp.sqlite_master). DoltLite cascades the trigger drop with
