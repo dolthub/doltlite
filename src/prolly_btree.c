@@ -117,6 +117,11 @@ int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
   (pCur)->nSeekKeyField = 0; \
 }while(0)
 
+#define CLEAR_CACHED_COMPARE_KEY(pCur) do{ \
+  (pCur)->nCompareSortKey = 0; \
+  (pCur)->nCompareKeyField = 0; \
+}while(0)
+
 #define PROLLY_DEFAULT_CACHE_SIZE 16384
 
 #define PROLLY_DEFAULT_PAGE_SIZE 4096
@@ -385,6 +390,10 @@ struct BtCursor {
   int nSeekSortKeyAlloc;
   int nSeekSortKey;
   int nSeekKeyField;
+  u8 *pCompareSortKey;
+  int nCompareSortKeyAlloc;
+  int nCompareSortKey;
+  int nCompareKeyField;
   u8 *pMovetoRec;
   int nMovetoRecAlloc;
   i64 cachedIntKey;
@@ -615,13 +624,11 @@ static int skipDegenerateSchemaRows(BtCursor *pCur, int dir, int *pRes){
 
 static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
   const u8 *pVal; int nVal;
-  ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
   cursorCurrentTreeValue(pCur, &pVal, &nVal);
   if( nVal > 0 ){
     pCur->pCachedPayload = (u8*)pVal;
     pCur->nCachedPayload = nVal;
     pCur->cachedPayloadOwned = 0;
-    pCur->pCachedFrom = prollyCacheGet(pCur->pCur.pCache, &pLeaf->hash);
   }
 }
 
@@ -3099,7 +3106,11 @@ static int saveCursorPosition(BtCursor *pCur){
 
   CLEAR_CACHED_PAYLOAD(pCur);
 
-  if( !prollyCursorIsValid(&pCur->pCur) ){
+  /* A map-sourced row's key comes from the mutmap below; the tree cursor may
+  ** legitimately be unpositioned (all rows still pending). */
+  if( !prollyCursorIsValid(&pCur->pCur)
+   && !(pCur->mmActive
+        && (pCur->mergeSrc==MERGE_SRC_MUT || pCur->mergeSrc==MERGE_SRC_BOTH)) ){
     if( pCur->curIntKey && (pCur->curFlags & BTCF_ValidNKey) ){
 
       pCur->nKey = pCur->cachedIntKey;
@@ -5315,6 +5326,7 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
       p->committedConstraintViolationsHash = p->constraintViolationsHash;
       btreeMarkWorkingStateChanged(p);
       if( bReloadSchema ){
+        BtCursor *pC;
         rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
         if( rc!=SQLITE_OK ){
           sqlite3_free(catData);
@@ -5322,7 +5334,31 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           pBt->store.snapshotPinned = 0;
           return rc;
         }
-        invalidateCursors(pBt, 0, SQLITE_ABORT);
+        /* A statement can still be mid-scan here (a callback ran DDL in
+        ** autocommit — tkt3080). Save this handle's cursors so it survives
+        ** the catalog reload; fault only what can't be saved. The reload
+        ** frees the pending maps, so detach aliases either way. */
+        for(pC = pBt->pCursor; pC; pC = pC->pNext){
+          if( pC->pBtree==p ){
+            if( (pC->eState==CURSOR_VALID || pC->eState==CURSOR_SKIPNEXT)
+             && saveCursorPosition(pC)!=SQLITE_OK ){
+              pC->eState = CURSOR_FAULT;
+              pC->skipNext = SQLITE_ABORT;
+              prollyCursorReleaseAll(&pC->pCur);
+            }
+            pC->pMutMap = 0;
+            pC->mmActive = 0;
+            pC->mmPhysActive = 0;
+            pC->deferredTreeSeek = 0;
+            pC->mmIdx = -1;
+            pC->mmPhysIdx = -1;
+          }else{
+            pC->eState = CURSOR_FAULT;
+            pC->skipNext = SQLITE_ABORT;
+            pC->mmActive = 0;
+            prollyCursorReleaseAll(&pC->pCur);
+          }
+        }
         rc = deserializeCatalog(p, catData, nCatData);
         if( rc!=SQLITE_OK ){
           sqlite3_free(catData);
@@ -5334,7 +5370,22 @@ static int prollyBtreeCommitPhaseTwo(Btree *p, int bCleanup){
           struct TableEntry *pMaster = findTable(p, 1);
           if( pMaster ) pMaster->root = runtimeMasterRoot;
         }
-        resetConnectionSchema(p);
+        /* A saved cursor whose table vanished in the reload would re-seek a
+        ** stale root; fault it. */
+        for(pC = pBt->pCursor; pC; pC = pC->pNext){
+          if( pC->pBtree==p && pC->eState==CURSOR_REQUIRESEEK
+           && findTable(p, pC->pgnoRoot)==0 ){
+            pC->eState = CURSOR_FAULT;
+            pC->skipNext = SQLITE_ABORT;
+          }
+        }
+        invalidateSchema(p);
+        if( p->db ){
+          /* Advisory expiry: hard expiry (iCode 0) makes OP_OpenRead abort a
+          ** statement still running across this commit (tkt-c694113d5). */
+          sqlite3ExpirePreparedStatements(p->db, 1);
+          sqlite3ResetAllSchemasOfConnection(p->db);
+        }
       }
       p->inTrans = TRANS_NONE;
       p->inTransaction = TRANS_NONE;
@@ -6177,6 +6228,11 @@ static int prollyBtCursorCloseCursor(BtCursor *pCur){
     pCur->pSeekSortKey = 0;
     pCur->nSeekSortKeyAlloc = 0;
   }
+  if( pCur->pCompareSortKey ){
+    sqlite3_free(pCur->pCompareSortKey);
+    pCur->pCompareSortKey = 0;
+    pCur->nCompareSortKeyAlloc = 0;
+  }
   if( pCur->pMovetoRec ){
     sqlite3_free(pCur->pMovetoRec);
     pCur->pMovetoRec = 0;
@@ -6437,6 +6493,7 @@ static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
+  CLEAR_CACHED_COMPARE_KEY(pCur);
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
@@ -6466,6 +6523,7 @@ static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
+  CLEAR_CACHED_COMPARE_KEY(pCur);
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
@@ -6769,6 +6827,7 @@ static int prollyBtCursorTableMoveto(
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
+  CLEAR_CACHED_COMPARE_KEY(pCur);
 
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   canUseAppendSeekFloor = pCur->pBtree
@@ -7115,6 +7174,7 @@ static int prollyBtCursorIndexMoveto(
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
+  CLEAR_CACHED_COMPARE_KEY(pCur);
 
   refreshCursorRoot(pCur);
 
@@ -7607,30 +7667,44 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
   }
 
   {
-    u8 *pSortKey = 0;
-    int nSortKey = 0;
-    int nSortKeyAlloc = 0;
     int rc;
-    rc = sortKeyFromUnpackedForCount(
-        pCur, pIdxKey, &pSortKey, &nSortKeyAlloc, &nSortKey);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(pSortKey);
-      return rc;
+    if( pCur->nCompareSortKey<=0
+     || pCur->nCompareKeyField!=(int)pIdxKey->nField ){
+      rc = sortKeyFromUnpackedForCount(
+          pCur, pIdxKey, &pCur->pCompareSortKey,
+          &pCur->nCompareSortKeyAlloc, &pCur->nCompareSortKey);
+      if( rc!=SQLITE_OK ){
+        CLEAR_CACHED_COMPARE_KEY(pCur);
+        return rc;
+      }
+      pCur->nCompareKeyField = (int)pIdxKey->nField;
     }
-    nCmp = nKey < nSortKey ? nKey : nSortKey;
-    cmp = memcmp(pKey, pSortKey, nCmp);
+    nCmp = nKey < pCur->nCompareSortKey ? nKey : pCur->nCompareSortKey;
+    cmp = memcmp(pKey, pCur->pCompareSortKey, nCmp);
     if( cmp<0 ){
       *pRes = -1;
     }else if( cmp>0 ){
       *pRes = 1;
-    }else if( nKey < nSortKey ){
+    }else if( nKey < pCur->nCompareSortKey ){
       *pRes = -1;
     }else{
       pIdxKey->eqSeen = 1;
       *pRes = pIdxKey->default_rc;
     }
-    sqlite3_free(pSortKey);
     return SQLITE_OK;
+  }
+}
+
+/* Drop the cached packed compare key. The cache (pCompareSortKey, keyed on
+** nField) is only valid while the comparison target is unchanged. Moveto /
+** First / Last clear it, but OP_SeekScan reaches the next seek target by
+** stepping the cursor and jumping past the OP_SeekGE — bypassing Moveto — so
+** the following OP_IdxGT/GE would otherwise reuse the previous target's key
+** (same nField, different value), e.g. `b IN (2,3)` (in4-13.0). OP_SeekScan
+** calls this to invalidate the cache before processing a new target. */
+void sqlite3BtreeProllyClearCompareKey(BtCursor *pCur){
+  if( pCur ){
+    CLEAR_CACHED_COMPARE_KEY(pCur);
   }
 }
 
@@ -7798,13 +7872,11 @@ static int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   }else{
 
     const u8 *pVal; int nVal;
-    ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
     cursorCurrentTreeValue(pCur, &pVal, &nVal);
     if( nVal > 0 ){
       pCur->pCachedPayload = (u8*)pVal;
       pCur->nCachedPayload = nVal;
       pCur->cachedPayloadOwned = 0;
-      pCur->pCachedFrom = prollyCacheGet(pCur->pCur.pCache, &pLeaf->hash);
       *ppData = pVal;
       *pnData = nVal;
     }else{
@@ -8153,6 +8225,16 @@ static int flushIfNeeded(BtCursor *pCur){
     }
   }
 
+  /* Save the initiating cursor too — it can belong to a statement that is
+  ** still running (a callback issued COMMIT, capi3-11.4); dropping it to
+  ** INVALID below ended that scan. Before flushMutMap: a map-sourced row's
+  ** key is read out of the map being flushed. */
+  if( !pCur->isPinned
+   && (pCur->eState==CURSOR_VALID || pCur->eState==CURSOR_SKIPNEXT) ){
+    rc = saveCursorPosition(pCur);
+    if( rc!=SQLITE_OK ) return rc;
+  }
+
   rc = flushMutMap(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
@@ -8162,6 +8244,10 @@ static int flushIfNeeded(BtCursor *pCur){
     prollyCursorInit(&pCur->pCur, &pCur->pBt->store, &pCur->pBt->cache,
                      &pTE->root, pTE->flags);
   }
+  /* The flush emptied the map; a saved cursor restoring with a stale
+  ** mmActive/mmIdx would consult it at a dead index. */
+  refreshCursorMutMapAliases(pCur->pBtree, pCur->pBt, pCur->pgnoRoot,
+                             pTE ? (ProllyMutMap*)pTE->pPending : 0);
   /* A cursor saved by saveAllCursors (e.g. another statement scanning this
   ** table while we flush a DELETE/UPDATE) keeps its REQUIRESEEK state: it has a
   ** saved key and must reseek against the new root on next access. Clobbering it

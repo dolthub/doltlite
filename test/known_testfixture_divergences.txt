@@ -127,7 +127,6 @@ triggerC triggerC-2.1.2
 triggerC triggerC-2.1.3
 triggerC triggerC-2.1.4
 triggerC triggerC-2.1.6
-triggerC triggerC-12.2  # DROP TRIGGER mid-scan aborts the cursor rather than crashing
 
 # ── window1 ──
 window1 window1-10.7  # rowid-order vs PK-order on unordered SELECT
@@ -1136,11 +1135,12 @@ capi3 capi3-4.3    # bogus-path open16: deferred open error vs SQLITE_CANTOPEN
 capi3 capi3-4.4    # same (utf16 errmsg)
 capi3 capi3-8.3    # writable_schema sqlite_master corruption undetected: prolly catalog isn't the raw sqlite_master row store
 capi3 capi3-11.3.4 # PRAGMA lock_status reports doltlite's locking model ("main unlocked" vs "main shared")
-capi3 capi3-11.5   # finalize after COMMIT-during-active-read: SQLITE_ABORT vs SQLITE_ERROR
-# capi3-11.10/11.11 (step after ROLLBACK-during-active-read) now pass: the read
-# cursor survives a writeOnly ROLLBACK and re-seeks instead of faulting (#1240).
-capi3 capi3-11.12  # same: SQLITE_ERROR vs SQLITE_ROW
-capi3 capi3-11.13  # finalize of the faulted statement: SQLITE_ERROR vs SQLITE_OK
+# capi3-11.4/11.5 (step/finalize after COMMIT-during-active-read) now pass: the
+# scan survives the commit flush and re-seeks. capi3-11.10/11.11 (step after
+# ROLLBACK-during-active-read) pass since the read cursor survives a writeOnly
+# ROLLBACK.
+capi3 capi3-11.12  # step after ROLLBACK-during-active-read: SQLITE_ERROR vs SQLITE_ROW
+capi3 capi3-11.13  # finalize of that statement: SQLITE_SCHEMA vs SQLITE_OK
 
 # fordelete — doltlite doesn't materialize named sqlite_autoindex_* rows for
 # WITHOUT-ROWID/implicit unique indexes, so PRAGMA index_list reports just the
@@ -1759,3 +1759,12 @@ whereL whereL-110    # EQP plan shape; results equivalent
 whereL whereL-120    # EQP plan shape; results equivalent
 whereL whereL-121    # EQP plan shape; results equivalent
 whereL whereL-122    # EQP plan shape; results equivalent
+
+# tkt-3a77c9714e-3.0 — `CREATE TABLE t1(i INT PRIMARY KEY, a, b)` then
+# `INSERT INTO t1 VALUES(NULL,...)`. Stock treats `INT PRIMARY KEY` (not the
+# `INTEGER PRIMARY KEY` rowid alias) as an ordinary PK on a rowid table, where
+# a NULL PK is allowed. DoltLite stores non-INTEGER / composite PK tables
+# WITHOUT ROWID (#1176), so the PK is NOT NULL and the NULL insert is rejected
+# with "NOT NULL constraint failed: t1.i". Same storage-model class as
+# without_rowid1-7.x and where4-5.2.
+tkt-3a77c9714e tkt-3a77c9714e-3.0  # INT PRIMARY KEY stored WITHOUT ROWID (#1176); NULL PK rejected
