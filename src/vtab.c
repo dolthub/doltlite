@@ -797,7 +797,6 @@ int sqlite3VtabCallCreate(sqlite3 *db, int iDb, const char *zTab, char **pzErr){
     rc = growVTrans(db);
     if( rc==SQLITE_OK ){
       addToVTrans(db, sqlite3GetVTable(db, pTab));
-      sqlite3BtreeMarkMasterRootChanged(db->aDb[iDb].pBt);
     }
   }
 
@@ -953,7 +952,6 @@ int sqlite3VtabCallDestroy(sqlite3 *db, int iDb, const char *zTab){
       p->pVtab = 0;
       pTab->u.vtab.p = 0;
       sqlite3VtabUnlock(p);
-      sqlite3BtreeMarkMasterRootChanged(db->aDb[iDb].pBt);
     }
     sqlite3DeleteTable(db, pTab);
   }
