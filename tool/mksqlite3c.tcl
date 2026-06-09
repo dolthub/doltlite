@@ -510,6 +510,7 @@ proc emit_doltlite_storage_block {} {
     sqlite3BtreeUsesOrig
     sqlite3BtreeProllyCachedIndexKeyCompare
     sqlite3BtreeProllyIndexRowid
+    sqlite3BtreeProllyClearCompareKey
   }
   foreach {h guard} {pager.h SQLITE_PAGER_H wal.h SQLITE_WAL_H btree.h SQLITE_BTREE_H} {
     puts $out "#undef $guard"

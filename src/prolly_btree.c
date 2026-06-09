@@ -117,6 +117,11 @@ int origBtreeCheckpoint(void *p, int eMode, int *pnLog, int *pnCkpt);
   (pCur)->nSeekKeyField = 0; \
 }while(0)
 
+#define CLEAR_CACHED_COMPARE_KEY(pCur) do{ \
+  (pCur)->nCompareSortKey = 0; \
+  (pCur)->nCompareKeyField = 0; \
+}while(0)
+
 #define PROLLY_DEFAULT_CACHE_SIZE 16384
 
 #define PROLLY_DEFAULT_PAGE_SIZE 4096
@@ -381,6 +386,10 @@ struct BtCursor {
   int nSeekSortKeyAlloc;
   int nSeekSortKey;
   int nSeekKeyField;
+  u8 *pCompareSortKey;
+  int nCompareSortKeyAlloc;
+  int nCompareSortKey;
+  int nCompareKeyField;
   u8 *pMovetoRec;
   int nMovetoRecAlloc;
   i64 cachedIntKey;
@@ -599,13 +608,11 @@ static int skipDegenerateSchemaRows(BtCursor *pCur, int dir, int *pRes){
 
 static void cacheCurrentTreeStoredPayloadNonIntKey(BtCursor *pCur){
   const u8 *pVal; int nVal;
-  ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
   cursorCurrentTreeValue(pCur, &pVal, &nVal);
   if( nVal > 0 ){
     pCur->pCachedPayload = (u8*)pVal;
     pCur->nCachedPayload = nVal;
     pCur->cachedPayloadOwned = 0;
-    pCur->pCachedFrom = prollyCacheGet(pCur->pCur.pCache, &pLeaf->hash);
   }
 }
 
@@ -6102,6 +6109,11 @@ static int prollyBtCursorCloseCursor(BtCursor *pCur){
     pCur->pSeekSortKey = 0;
     pCur->nSeekSortKeyAlloc = 0;
   }
+  if( pCur->pCompareSortKey ){
+    sqlite3_free(pCur->pCompareSortKey);
+    pCur->pCompareSortKey = 0;
+    pCur->nCompareSortKeyAlloc = 0;
+  }
   if( pCur->pMovetoRec ){
     sqlite3_free(pCur->pMovetoRec);
     pCur->pMovetoRec = 0;
@@ -6362,6 +6374,7 @@ static int prollyBtCursorFirst(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
+  CLEAR_CACHED_COMPARE_KEY(pCur);
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
@@ -6391,6 +6404,7 @@ static int prollyBtCursorLast(BtCursor *pCur, int *pRes){
   int rc;
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
+  CLEAR_CACHED_COMPARE_KEY(pCur);
   refreshCursorRoot(pCur);
   rc = prollyCursorCheckInterrupt(pCur);
   if( rc!=SQLITE_OK ) return rc;
@@ -6694,6 +6708,7 @@ static int prollyBtCursorTableMoveto(
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
+  CLEAR_CACHED_COMPARE_KEY(pCur);
 
   pTE = findTable(pCur->pBtree, pCur->pgnoRoot);
   canUseAppendSeekFloor = pCur->pBtree
@@ -7040,6 +7055,7 @@ static int prollyBtCursorIndexMoveto(
   clearMergeCursorState(pCur);
   CLEAR_CACHED_PAYLOAD(pCur);
   CLEAR_CACHED_SEEK_KEY(pCur);
+  CLEAR_CACHED_COMPARE_KEY(pCur);
 
   refreshCursorRoot(pCur);
 
@@ -7532,30 +7548,44 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
   }
 
   {
-    u8 *pSortKey = 0;
-    int nSortKey = 0;
-    int nSortKeyAlloc = 0;
     int rc;
-    rc = sortKeyFromUnpackedForCount(
-        pCur, pIdxKey, &pSortKey, &nSortKeyAlloc, &nSortKey);
-    if( rc!=SQLITE_OK ){
-      sqlite3_free(pSortKey);
-      return rc;
+    if( pCur->nCompareSortKey<=0
+     || pCur->nCompareKeyField!=(int)pIdxKey->nField ){
+      rc = sortKeyFromUnpackedForCount(
+          pCur, pIdxKey, &pCur->pCompareSortKey,
+          &pCur->nCompareSortKeyAlloc, &pCur->nCompareSortKey);
+      if( rc!=SQLITE_OK ){
+        CLEAR_CACHED_COMPARE_KEY(pCur);
+        return rc;
+      }
+      pCur->nCompareKeyField = (int)pIdxKey->nField;
     }
-    nCmp = nKey < nSortKey ? nKey : nSortKey;
-    cmp = memcmp(pKey, pSortKey, nCmp);
+    nCmp = nKey < pCur->nCompareSortKey ? nKey : pCur->nCompareSortKey;
+    cmp = memcmp(pKey, pCur->pCompareSortKey, nCmp);
     if( cmp<0 ){
       *pRes = -1;
     }else if( cmp>0 ){
       *pRes = 1;
-    }else if( nKey < nSortKey ){
+    }else if( nKey < pCur->nCompareSortKey ){
       *pRes = -1;
     }else{
       pIdxKey->eqSeen = 1;
       *pRes = pIdxKey->default_rc;
     }
-    sqlite3_free(pSortKey);
     return SQLITE_OK;
+  }
+}
+
+/* Drop the cached packed compare key. The cache (pCompareSortKey, keyed on
+** nField) is only valid while the comparison target is unchanged. Moveto /
+** First / Last clear it, but OP_SeekScan reaches the next seek target by
+** stepping the cursor and jumping past the OP_SeekGE — bypassing Moveto — so
+** the following OP_IdxGT/GE would otherwise reuse the previous target's key
+** (same nField, different value), e.g. `b IN (2,3)` (in4-13.0). OP_SeekScan
+** calls this to invalidate the cache before processing a new target. */
+void sqlite3BtreeProllyClearCompareKey(BtCursor *pCur){
+  if( pCur ){
+    CLEAR_CACHED_COMPARE_KEY(pCur);
   }
 }
 
@@ -7723,13 +7753,11 @@ static int getCursorPayload(BtCursor *pCur, const u8 **ppData, int *pnData){
   }else{
 
     const u8 *pVal; int nVal;
-    ProllyCacheEntry *pLeaf = pCur->pCur.aLevel[pCur->pCur.iLevel].pEntry;
     cursorCurrentTreeValue(pCur, &pVal, &nVal);
     if( nVal > 0 ){
       pCur->pCachedPayload = (u8*)pVal;
       pCur->nCachedPayload = nVal;
       pCur->cachedPayloadOwned = 0;
-      pCur->pCachedFrom = prollyCacheGet(pCur->pCur.pCache, &pLeaf->hash);
       *ppData = pVal;
       *pnData = nVal;
     }else{
