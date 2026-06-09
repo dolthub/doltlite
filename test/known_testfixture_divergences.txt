@@ -1722,3 +1722,32 @@ tkt3810 tkt3810-4  # orphan temp-trigger dropped with its table (catalog cascade
 # intentionally unsupported on doltlite-format databases.
 tkt3761 tkt3761-1.1  # auto_vacuum unsupported
 tkt3762 tkt3762-1.1  # auto_vacuum unsupported
+
+# where4 / whereD / whereG / whereL — query-planner and storage-model
+# divergences; in every case the result rows are correct, only a plan metric,
+# plan shape, or rowid availability differs:
+#   * where4-5.2/5.3: `SELECT rowid FROM t4` where t4 has a composite PRIMARY
+#     KEY. DoltLite stores composite/non-integer-PK tables WITHOUT ROWID
+#     (#1176), so `rowid` is not a column -> "no such column: rowid" (same
+#     class as without_rowid1-7.x).
+#   * whereD-3.4.*: assert sqlite_search_count (internal btree-step metric).
+#     The query results match; only the step count differs under prolly.
+#   * whereG-3.*: EXPLAIN QUERY PLAN shape. DoltLite's planner satisfies the
+#     `b.b1=?` lookup via the PRIMARY KEY rather than secondary index b_1 — a
+#     valid equivalent plan; the query returns the same rows.
+#   * whereL-110/120/121/122: EXPLAIN QUERY PLAN shape (constant-propagation
+#     join order); plan text differs, results are equivalent.
+where4 where4-5.2   # SELECT rowid on composite-PK (WITHOUT ROWID) table: no such column rowid
+where4 where4-5.3   # SELECT rowid on composite-PK (WITHOUT ROWID) table: no such column rowid
+whereD whereD-3.4.1  # sqlite_search_count plan metric; rows match
+whereD whereD-3.4.2  # sqlite_search_count plan metric; rows match
+whereD whereD-3.4.3  # sqlite_search_count plan metric; rows match
+whereD whereD-3.4.4  # sqlite_search_count plan metric; rows match
+whereG whereG-3.1    # EQP: PRIMARY KEY lookup vs secondary index b_1 (equivalent plan)
+whereG whereG-3.2    # EQP: PRIMARY KEY lookup vs secondary index b_1 (equivalent plan)
+whereG whereG-3.3    # EQP: PRIMARY KEY lookup vs secondary index b_1 (equivalent plan)
+whereG whereG-3.4    # EQP: PRIMARY KEY lookup vs secondary index b_1 (equivalent plan)
+whereL whereL-110    # EQP plan shape; results equivalent
+whereL whereL-120    # EQP plan shape; results equivalent
+whereL whereL-121    # EQP plan shape; results equivalent
+whereL whereL-122    # EQP plan shape; results equivalent
