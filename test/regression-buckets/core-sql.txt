@@ -88,6 +88,8 @@ e_expr
 e_resolve
 e_select
 e_select2
+e_wal
+e_walhook
 emptytable
 enc
 enc2
@@ -249,6 +251,7 @@ regexp2
 resolver01
 returning1
 round1
+rowallock
 rowhash
 rowid
 rowvalue
@@ -336,6 +339,7 @@ substr
 subtype1
 swarmvtab2
 swarmvtab3
+syscall
 tabfunc01
 timediff1
 tokenize
