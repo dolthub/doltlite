@@ -2777,7 +2777,7 @@ static int sortKeyFromIntRecordLocal(
   int outPos = 0;
 
   *pnOut = 0;
-  if( nRec<=0 ) return SQLITE_NOTFOUND;
+  if( !pRec || nRec<=0 ) return SQLITE_NOTFOUND;
   hdrOff = prollyGetVarint32(pRec, &hdrSize);
   if( hdrSize > (u32)nRec ) return SQLITE_CORRUPT;
   dataOff = hdrSize;
