@@ -576,6 +576,17 @@ static SQLITE_INLINE void cacheCurrentTreePayloadIfIntKey(BtCursor *pCur){
   }
 }
 
+static int isDegenerateSchemaPayload(const u8 *pVal, int nVal){
+  return nVal==6
+      && pVal
+      && pVal[0]==6
+      && pVal[1]==0
+      && pVal[2]==0
+      && pVal[3]==0
+      && pVal[4]==0
+      && pVal[5]==0;
+}
+
 static int cursorOnDegenerateSchemaRow(BtCursor *pCur, int *pIsDegenerate){
   const u8 *pVal;
   int nVal;
@@ -590,14 +601,7 @@ static int cursorOnDegenerateSchemaRow(BtCursor *pCur, int *pIsDegenerate){
     return SQLITE_OK;
   }
   if( pCur->pBtree->bFilterSchemaPlaceholders
-   && nVal==6
-   && pVal[0]==6
-   && pVal[1]==0
-   && pVal[2]==0
-   && pVal[3]==0
-   && pVal[4]==0
-   && pVal[5]==0
-  ){
+   && isDegenerateSchemaPayload(pVal, nVal) ){
     *pIsDegenerate = 1;
   }
   return SQLITE_OK;
@@ -5505,6 +5509,10 @@ static int restoreFromCommitted(Btree *p){
 static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
   BtShared *pBt = p->pBt;
   int rc = SQLITE_OK;
+  int bAutocommitOomRollback = writeOnly
+      && p->db
+      && p->db->autoCommit
+      && p->db->mallocFailed;
 
   if( pBt->inCatalogSerialize ) return SQLITE_OK;
 
@@ -5559,7 +5567,12 @@ static int prollyBtreeRollback(Btree *p, int tripCode, int writeOnly){
     }
     resetConnectionSchema(p);
     chunkStoreRollback(&pBt->store);
-    {
+    if( bAutocommitOomRollback ){
+      p->bFilterSchemaPlaceholders = 1;
+    }
+    /* Autocommit OOM rollback restores in-memory state only. Persisting the
+    ** restored catalog here can make a failed DDL attempt the new baseline. */
+    if( !bAutocommitOomRollback ){
       u8 *catData = 0;
       int nCatData = 0;
       ProllyHash catHash;
@@ -5742,7 +5755,7 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
 
   rc = rollbackMutMapsToSavepoint(p, iSavepoint + 1, iSavepoint);
   if( rc!=SQLITE_OK ) return rc;
-  if( pState->aTables ){
+  if( pState->bTablesCaptured ){
     rc = restoreTablesFromSavepoint(p, pState);
     if( rc!=SQLITE_OK ) return rc;
   }
