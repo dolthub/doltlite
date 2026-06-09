@@ -10351,6 +10351,15 @@ int doltliteSeedSessionHashes(
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->preRebaseWorkingCat);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->rebaseOntoCommit);
     if( rc==SQLITE_OK ) rc = xPush(pCtx, &pBt->constraintViolationsHash);
+    /* The live catalog's roots: table 1 can be the runtime master-root view,
+    ** which is intentionally absent from the persisted catalog — without this
+    ** a GC collects it while the open session still reads through it. */
+    {
+      int k;
+      for(k=0; rc==SQLITE_OK && k<pBt->cat.n; k++){
+        rc = xPush(pCtx, &pBt->cat.a[k].root);
+      }
+    }
   }
   return rc;
 }

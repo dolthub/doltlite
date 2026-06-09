@@ -307,7 +307,6 @@ vacuum2 vacuum2-4.1   # post-VACUUM auto_vacuum mode change
 vacuum2 vacuum2-5.2   # "cannot VACUUM - SQL statements in progress" error path
 vacuum2 vacuum2-5.3   # error path
 vacuum2 vacuum2-5.4   # error path
-vacuum2 vacuum2-6.3   # post-VACUUM page count
 
 # ── crash7 ──
 # crash7 verifies crash recovery during VACUUM. Since VACUUM is a no-op
@@ -1117,9 +1116,7 @@ tkt-f3e5abed55 tkt-f3e5abed55-2.5
 vacuum vacuum-7.1
 vacuum vacuum-7.5
 vacuum2 vacuum2-2.1
-vacuum2 vacuum2-3.17
 vacuum2 vacuum2-3.3
-vacuum2 vacuum2-3.7
 vacuum2 vacuum2-4.2
 vacuum2 vacuum2-4.4
 vacuum2 vacuum2-4.5
@@ -1769,6 +1766,12 @@ whereL whereL-122    # EQP plan shape; results equivalent
 # without_rowid1-7.x and where4-5.2.
 tkt-3a77c9714e tkt-3a77c9714e-3.0  # INT PRIMARY KEY stored WITHOUT ROWID (#1176); NULL PK rejected
 
+# without_rowid1-7.x — t70a(a INT CHECK(rowid!=33), b TEXT PRIMARY KEY): stock
+# keeps it a rowid table so the CHECK can reference rowid; doltlite stores
+# non-INTEGER-PK tables WITHOUT ROWID, where rowid is not a column. 7.1's
+# CREATE fails resolving the CHECK; 7.2 cascades (no such table).
+without_rowid1 without_rowid1-7.1  # CHECK(rowid) on implicit WITHOUT ROWID table
+without_rowid1 without_rowid1-7.2  # cascade: t70a was never created
 # rowvalue9 — section 1 INSERTs into / SELECTs `rowid` on a1, which has a
 # composite PRIMARY KEY(a, b) and is therefore stored WITHOUT ROWID (#1176):
 # "table a1 has no column named rowid". Row-value semantics themselves are

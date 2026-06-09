@@ -1891,6 +1891,11 @@ void sqlite3Pragma(
             char *zErr;
             a1 = sqlite3VdbeAddOp4Int(v, OP_IdxGT, iDataCur, 0,r2,pPk->nKeyCol);
             VdbeCoverage(v);
+#if defined(DOLTLITE_PROLLY)
+            /* r2 is reloaded from each row; the prolly compare-key cache
+            ** must not reuse the previous iteration's probe. */
+            sqlite3VdbeChangeP5(v, 1);
+#endif
             sqlite3VdbeAddOp1(v, OP_IsNull, r2); VdbeCoverage(v);
             zErr = sqlite3MPrintf(db,
                    "row not in PRIMARY KEY order for %s",

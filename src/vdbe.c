@@ -7254,6 +7254,12 @@ case OP_IdxGE:  {       /* jump, ncycle */
     pCur = pC->uc.pCursor;
     assert( sqlite3BtreeCursorIsValid(pCur) );
 #if defined(DOLTLITE_PROLLY)
+    /* p5: the bound registers are rewritten between executions with no
+    ** intervening seek (integrity_check reloads them from each row), so the
+    ** cached compare key would be stale. */
+    if( pOp->p5 ){
+      sqlite3BtreeProllyClearCompareKey(pCur);
+    }
     rc = sqlite3BtreeProllyCachedIndexKeyCompare(pCur, &r, &res);
     if( rc==SQLITE_NOTFOUND ){
       rc = SQLITE_OK;
