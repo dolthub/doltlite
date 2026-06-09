@@ -29,10 +29,44 @@ do_execsql_test doltlite_fts3_oom-1.0 {
   CREATE VIRTUAL TABLE ft4 USING fts3(`a`, 'fred''s column');
 } {}
 
+proc doltlite_fts3_schema_counts {} {
+  for {set i 0} {$i<2} {incr i} {
+    set res [catchsql {
+      SELECT
+        (SELECT count(*) FROM sqlite_schema WHERE name='ft5'),
+        (SELECT count(*) FROM sqlite_schema
+          WHERE name IN ('ft1','ft2','ft3','ft4'))
+    }]
+    if {$res!="1 {out of memory}"} { return $res }
+  }
+  return $res
+}
+
+do_test doltlite_fts3_oom-1.1 {
+  set bad ok
+  for {set iFail 1} {$iFail<=222 && $bad=="ok"} {incr iFail} {
+    sqlite3_memdebug_fail $iFail -repeat 1
+    set res [catchsql {
+      CREATE VIRTUAL TABLE ft5 USING fts3(a, b, tokenize unknown)
+    }]
+    sqlite3_memdebug_fail -1
+    set counts [doltlite_fts3_schema_counts]
+    set rc [lindex $res 0]
+    set msg [lindex $res 1]
+    if {$rc!=1
+     || ($msg!="out of memory" && $msg!="unknown tokenizer: unknown")
+     || $counts!="0 {0 4}"
+    } {
+      set bad [list $iFail $res $counts]
+    }
+  }
+  set bad
+} {ok}
+
 foreach iFail {240 241 242 243 244 245 246 247 248 249 250 251 252 253 254
                255 256 257 258 259 260 261 262 263 264 265 266 267 268 269
                270} {
-  do_test doltlite_fts3_oom-1.1.$iFail {
+  do_test doltlite_fts3_oom-1.2.$iFail {
     sqlite3_memdebug_fail $iFail -repeat 1
     set res [catchsql {
       CREATE VIRTUAL TABLE ft5 USING fts3(a, b, tokenize unknown)
