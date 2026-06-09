@@ -199,5 +199,56 @@ do_test doltlite_fts3_oom-3.3 {
   set bad
 } {ok}
 
+do_test doltlite_fts3_oom-3.4 {
+  forcedelete test4.db
+  sqlite3 db4 test4.db
+  sqlite3_db_config_lookaside db4 0 0 0
+
+  db4 eval "SELECT * FROM sqlite_master" V break
+  set cksumsql "SELECT md5sum([join [concat rowid $V(*)] ,]) FROM sqlite_master"
+  set cksum1 [db4 one $cksumsql]
+
+  set bad ok
+  set created 0
+  for {set iFail 1} {$iFail<=100 && $bad=="ok"} {incr iFail} {
+    sqlite3_memdebug_fail $iFail -repeat 100000
+    set res [catchsql {
+      CREATE VIRTUAL TABLE ft1 USING fts3(a, b)
+    } db4]
+    set nFail [sqlite3_memdebug_fail -1 -benigncnt nBenign]
+    set q2 [catch {db4 one $cksumsql} cksum2]
+    set schema [catchsql {
+      SELECT rowid,type,name,tbl_name,rootpage,sql
+        FROM sqlite_master ORDER BY rowid
+    } db4]
+    if {$nFail==0} {
+      if {$res!="0 {}"} {
+        set bad [list $iFail $res $nFail]
+      }
+      set created 1
+      break
+    }
+    if {$res!="1 {out of memory}"
+     || $q2
+     || $cksum1 ne $cksum2
+     || $schema!="0 {}"
+    } {
+      set bad [list $iFail $res $nFail $q2 $cksum1 $cksum2 $schema]
+    }
+  }
+  if {$bad=="ok" && !$created} {
+    set res [catchsql {
+      CREATE VIRTUAL TABLE ft1 USING fts3(a, b)
+    } db4]
+    if {$res!="0 {}"} {
+      set bad [list final $res]
+    }
+  }
+  set drop [catchsql {DROP TABLE ft1} db4]
+  catch {db4 close}
+  forcedelete test4.db
+  list $bad $drop
+} {ok {0 {}}}
+
 sqlite3_memdebug_fail -1
 finish_test
