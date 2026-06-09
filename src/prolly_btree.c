@@ -5526,8 +5526,21 @@ static int rollbackAllSavepoints(Btree *p, BtShared *pBt){
 
 static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
   struct SavepointTableState *pState = &p->aSavepointTables[iSavepoint];
+  BtCursor *pC;
   int j;
-  int rc = rollbackMutMapsToSavepoint(p, iSavepoint + 1, iSavepoint);
+  int rc;
+
+  /* Save every cursor's position before unwinding the savepoint, mirroring
+  ** stock sqlite3BtreeSavepoint's saveAllCursors() call. A statement-savepoint
+  ** rollback (a nested statement that failed) must leave the *parent*
+  ** statement's cursors usable so the outer statement can continue. Hard-
+  ** faulting all cursors here aborts the parent and discards rows it already
+  ** inserted (tkt3718). Saved cursors become CURSOR_REQUIRESEEK and re-seek the
+  ** restored tree on next access. */
+  rc = saveAllCursors(p, pBt, 0, 0);
+  if( rc!=SQLITE_OK ) return rc;
+
+  rc = rollbackMutMapsToSavepoint(p, iSavepoint + 1, iSavepoint);
   if( rc!=SQLITE_OK ) return rc;
   if( pState->aTables ){
     rc = restoreTablesFromSavepoint(p, pState);
@@ -5539,7 +5552,19 @@ static int rollbackNamedSavepoint(Btree *p, BtShared *pBt, int iSavepoint){
     freeSavepointTables(&p->aSavepointTables[j]);
   }
   p->nSavepoint = iSavepoint;
-  invalidateCursors(pBt, 0, SQLITE_ABORT);
+
+  /* The rollback may have freed or replaced pending-edit maps; detach every
+  ** cursor's now-stale map alias. Saved cursors re-seek; a cursor that could
+  ** not be saved (already invalid/faulted) is left as-is. */
+  for(pC=pBt->pCursor; pC; pC=pC->pNext){
+    if( pC->pBtree!=p ) continue;
+    pC->pMutMap = 0;
+    pC->mmActive = 0;
+    pC->mmPhysActive = 0;
+    pC->deferredTreeSeek = 0;
+    pC->mmIdx = -1;
+    pC->mmPhysIdx = -1;
+  }
   invalidateSchema(p);
   return SQLITE_OK;
 }

@@ -293,7 +293,7 @@ jobs:
           tkt2391 tkt2450 tkt2640 tkt2643 tkt2767 tkt2817 tkt2822 tkt2832 \
           tkt2927 tkt2942 tkt3093 tkt3201 tkt3292 tkt3298 tkt3334 tkt3346 \
           tkt3357 tkt3419 tkt3442 tkt3461 tkt3493 tkt3508 tkt3522 tkt3527 \
-          tkt3541 tkt3554 tkt3581 tkt35xx tkt3630 tkt3731 tkt3757 tkt3773 \
+          tkt3541 tkt3554 tkt3581 tkt35xx tkt3630 tkt3718 tkt3731 tkt3757 tkt3773 \
           tkt3791 tkt3793 tkt3824 tkt3832 tkt3838 tkt3841 tkt3879 tkt3911 \
           tkt3922 tkt3929 tkt3935 tkt3992 tkt3997 tokenize tpch01 trace2 \
           trace3 trans3 transitive1 trigger3 trigger4 trigger5 trigger6 trigger8 \
