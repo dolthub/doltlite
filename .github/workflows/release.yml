@@ -141,6 +141,14 @@ jobs:
             ext: ""
             lib_ext: ".dylib"
             static_ext: ".a"
+          # macos-13 is the last Intel (x86_64) GitHub-hosted runner;
+          # macos-14+/macos-latest are Apple Silicon (arm64). Build the Intel
+          # Mac artifact here so x86_64 macOS users get a prebuilt binary.
+          - os: macos-13
+            target: osx-x64
+            ext: ""
+            lib_ext: ".dylib"
+            static_ext: ".a"
           - os: windows-latest
             target: win-x64
             ext: ".exe"
