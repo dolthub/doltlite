@@ -230,7 +230,7 @@ jobs:
           8_3_names aggerror aggfault alter3 alter4 altercol altercons altercons2 alterauth alterauth2 alterdropcol alterdropcol2 altertab3 alterlegacy altermalloc3 autoindex1 \
           index5 limit2 notnull \
           attach2 attach3 autoindex3 autoindex5 pragma6 rowvalue9 skipscan1 skipscan2 \
-          temptable temptable2 windowC windowE without_rowid7 without_rowid1 \
+          temptable temptable2 windowC windowE without_rowid7 zeroblob without_rowid1 \
           alterqf altertab2 altertrig amatch1 analyze3 analyze4 analyze5 analyze6 \
           analyze7 analyze8 analyze9 analyzeC analyzeD analyzeE analyzeF analyzeG \
           analyzer1 atof1 atof2 atomic atomic2 attach4 auth2 auth3 \
