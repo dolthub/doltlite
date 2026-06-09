@@ -141,11 +141,17 @@ jobs:
             ext: ""
             lib_ext: ".dylib"
             static_ext: ".a"
-          # macos-13 is the last Intel (x86_64) GitHub-hosted runner;
-          # macos-14+/macos-latest are Apple Silicon (arm64). Build the Intel
-          # Mac artifact here so x86_64 macOS users get a prebuilt binary.
-          - os: macos-13
+          # Intel Mac (x86_64) artifact, cross-compiled on the Apple Silicon
+          # runner via `-arch x86_64`. We don't use a macos-13 Intel runner:
+          # those are scarce and queue unreliably, and a stuck osx-x64 leg
+          # blocks the whole release (the release job needs the full matrix).
+          # The build cleanly separates host tools (lemon/mkkeywordhash/jimsh,
+          # built with bare $(B.cc), stay native arm64 and runnable) from the
+          # target objects/link (take -arch x86_64 via CFLAGS/LDFLAGS), and the
+          # SDK's libz is universal so `-lz` resolves the x86_64 slice.
+          - os: macos-latest
             target: osx-x64
+            cross_arch: "-arch x86_64"
             ext: ""
             lib_ext: ".dylib"
             static_ext: ".a"
@@ -170,10 +176,26 @@ jobs:
 
     - name: Configure and build (Unix)
       if: runner.os != 'Windows'
+      env:
+        # Empty for native targets; "-arch x86_64" for the cross-compiled
+        # Intel Mac build (see the osx-x64 matrix entry).
+        CROSS_ARCH: ${{ matrix.cross_arch }}
       run: |
         mkdir -p build && cd build
         ../configure
-        make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-remotesrv doltlite-lib
+        if [ -n "$CROSS_ARCH" ]; then
+          # Cross-compile the *target* compiler with the arch flag while pinning
+          # B.cc (build-host tools: lemon, mkkeywordhash, jimsh) to the native
+          # cc so they run on this arm64 runner. Overriding CC rather than
+          # CFLAGS preserves configure's -O2/-dynamic/-DNDEBUG flags, and the
+          # link inherits the arch via $(CC). The macOS SDK's libz is universal
+          # so -lz resolves the x86_64 slice.
+          make -j$(sysctl -n hw.ncpu) \
+            CC="cc $CROSS_ARCH" B.cc="cc" \
+            doltlite doltlite-remotesrv doltlite-lib
+        else
+          make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu) doltlite doltlite-remotesrv doltlite-lib
+        fi
 
     - name: Build (Windows / MSYS2)
       if: runner.os == 'Windows'
