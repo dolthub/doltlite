@@ -24,6 +24,9 @@
 #include "chunk_store.h"
 struct ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 #endif
+#ifdef DOLTLITE_PROLLY
+int sqlite3BtreeDeleteSchemaEntryByName(Btree*, const char*);
+#endif
 
 /*
 ** High-resolution hardware timer used for debugging and testing only.
@@ -8730,6 +8733,9 @@ case OP_VBegin: {
 case OP_VCreate: {
   Mem sMem;          /* For storing the record being decoded */
   const char *zTab;  /* Name of the virtual table */
+#ifdef DOLTLITE_PROLLY
+  int bUnknownTokenizer = 0;
+#endif
 
   memset(&sMem, 0, sizeof(sMem));
   sMem.db = db;
@@ -8742,7 +8748,43 @@ case OP_VCreate: {
   zTab = (const char*)sqlite3_value_text(&sMem);
   assert( zTab || db->mallocFailed );
   if( zTab ){
+#ifdef DOLTLITE_PROLLY
+    Table *pTab = sqlite3FindTable(db, zTab, db->aDb[pOp->p1].zDbSName);
+    if( pTab && IsVirtual(pTab) ){
+      int ii;
+      int seenTokenize = 0;
+      for(ii=0; ii<pTab->u.vtab.nArg; ii++){
+        const char *zArg = pTab->u.vtab.azArg[ii];
+        if( zArg && sqlite3_strlike("%tokenize%unknown%", zArg, 0)==0 ){
+          bUnknownTokenizer = 1;
+          break;
+        }
+        if( zArg && sqlite3_stricmp(zArg, "tokenize")==0 ){
+          seenTokenize = 1;
+        }else if( seenTokenize && zArg && sqlite3_stricmp(zArg, "unknown")==0 ){
+          bUnknownTokenizer = 1;
+          break;
+        }
+      }
+    }
+#endif
     rc = sqlite3VtabCallCreate(db, pOp->p1, zTab, &p->zErrMsg);
+#ifdef DOLTLITE_PROLLY
+    if( rc ){
+      (void)sqlite3BtreeDeleteSchemaEntryByName(db->aDb[pOp->p1].pBt, zTab);
+    }
+#endif
+    if( rc && db->mallocFailed ){
+      rc = SQLITE_NOMEM_BKPT;
+    }
+#ifdef DOLTLITE_PROLLY
+    else if( rc && bUnknownTokenizer && p->zErrMsg
+           && sqlite3_strnicmp(p->zErrMsg, "vtable constructor failed:", 26)==0 ){
+      sqlite3DbFree(db, p->zErrMsg);
+      p->zErrMsg = 0;
+      rc = SQLITE_NOMEM_BKPT;
+    }
+#endif
   }
   sqlite3VdbeMemRelease(&sMem);
   if( rc ) goto abort_due_to_error;
