@@ -3306,6 +3306,7 @@ static int captureSavepointCatalogSnapshot(
 
   pState->aCatalogSnapshot = aSnapshot;
   pState->bCatalogSnapshot = 1;
+  pState->nTables = n;
   return SQLITE_OK;
 }
 
@@ -3362,6 +3363,14 @@ static int captureSavepointTables(
   u8 *catData = 0;
   int nCatData = 0;
   if( pState->bTablesCaptured ) return SQLITE_OK;
+  if( pState->aCatalogSnapshot ){
+    for(k=0; k<pState->nTables; k++){
+      sqlite3_free(pState->aCatalogSnapshot[k].zName);
+    }
+    sqlite3_free(pState->aCatalogSnapshot);
+    pState->aCatalogSnapshot = 0;
+    pState->bCatalogSnapshot = 0;
+  }
   memset(&pState->catalogHash, 0, sizeof(pState->catalogHash));
   if( bStatement ){
     rc = captureSavepointCatalogSnapshot(pBtree, pState);
@@ -3373,17 +3382,30 @@ static int captureSavepointTables(
     sqlite3_free(catData);
     if( rc!=SQLITE_OK ) return rc;
   }
-  pState->bTablesCaptured = 1;
-  if( pBtree->cat.n<=0 ) return SQLITE_OK;
+  if( pBtree->cat.n<=0 ){
+    pState->bTablesCaptured = 1;
+    return SQLITE_OK;
+  }
   pState->aTables = sqlite3_malloc(
       pBtree->cat.n * (int)sizeof(SavepointTableEntry));
-  if( !pState->aTables ) return SQLITE_NOMEM;
+  if( !pState->aTables ){
+    if( pState->aCatalogSnapshot ){
+      for(k=0; k<pBtree->cat.n; k++){
+        sqlite3_free(pState->aCatalogSnapshot[k].zName);
+      }
+      sqlite3_free(pState->aCatalogSnapshot);
+      pState->aCatalogSnapshot = 0;
+      pState->bCatalogSnapshot = 0;
+    }
+    return SQLITE_NOMEM;
+  }
   for(k=0; k<pBtree->cat.n; k++){
     pState->aTables[k].iTable = pBtree->cat.a[k].iTable;
     pState->aTables[k].pendingFlushSeekEdits =
         pBtree->cat.a[k].pendingFlushSeekEdits;
   }
   pState->nTables = pBtree->cat.n;
+  pState->bTablesCaptured = 1;
   return SQLITE_OK;
 }
 
@@ -8016,6 +8038,7 @@ static int prollyBtCursorInsert(
   if( pCur->pgnoRoot==1 ){
     rc = ensureStatementSavepointsCaptured(pCur->pBtree);
     if( rc!=SQLITE_OK ) return rc;
+    pCur->pBtree->bMasterRootChangedTxn = 1;
   }
 
   rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
@@ -8202,9 +8225,6 @@ static int prollyBtCursorInsert(
     if( rc==SQLITE_OK ) pCur->eState = CURSOR_VALID;
   }
 
-  if( rc==SQLITE_OK && pCur->pgnoRoot==1 ){
-    pCur->pBtree->bMasterRootChangedTxn = 1;
-  }
   return rc;
 }
 
@@ -8423,6 +8443,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   if( pCur->pgnoRoot==1 ){
     rc = ensureStatementSavepointsCaptured(pCur->pBtree);
     if( rc!=SQLITE_OK ) goto delete_cleanup;
+    pCur->pBtree->bMasterRootChangedTxn = 1;
   }
 
   rc = saveAllCursors(pCur->pBtree, pCur->pBt, pCur->pgnoRoot, pCur);
@@ -8540,9 +8561,6 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   rc = SQLITE_OK;
 
 delete_cleanup:
-  if( rc==SQLITE_OK && pCur->pgnoRoot==1 && hasSavedKey ){
-    pCur->pBtree->bMasterRootChangedTxn = 1;
-  }
   if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
   return rc;
 }
