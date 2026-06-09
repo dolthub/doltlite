@@ -567,20 +567,12 @@ static int cursorOnDegenerateSchemaRow(BtCursor *pCur, int *pIsDegenerate){
   const u8 *pVal;
   int nVal;
   int rc;
-  DoltliteRecordInfo ri;
   *pIsDegenerate = 0;
   if( pCur->pgnoRoot!=1 || !pCur->curIntKey ) return SQLITE_OK;
   if( pCur->eState!=CURSOR_VALID ) return SQLITE_OK;
   rc = getCursorPayload(pCur, &pVal, &nVal);
   if( rc!=SQLITE_OK ) return rc;
   if( !pVal || nVal<=0 ){
-    *pIsDegenerate = 1;
-    return SQLITE_OK;
-  }
-  if( doltliteParseRecordStrict(pVal, nVal, &ri)!=SQLITE_OK ){
-    return SQLITE_OK;
-  }
-  if( ri.nField<2 || ri.aType[0]==0 || ri.aType[1]==0 ){
     *pIsDegenerate = 1;
   }
   return SQLITE_OK;
@@ -1683,6 +1675,17 @@ static int schemaCatalogRowWanted(
   if( pRow->zType && strcmp(pRow->zType, "table")==0 && pRow->zName ){
     for(i=0; i<nTables; i++){
       if( aTables[i].zName && strcmp(aTables[i].zName, pRow->zName)==0 ){
+        return 1;
+      }
+    }
+  }
+  if( pRow->zType && strcmp(pRow->zType, "index")==0 ){
+    for(i=0; i<nTables; i++){
+      if( !aTables[i].zName ) continue;
+      if( pRow->zName && strcmp(aTables[i].zName, pRow->zName)==0 ){
+        return 1;
+      }
+      if( pRow->zTblName && strcmp(aTables[i].zName, pRow->zTblName)==0 ){
         return 1;
       }
     }
@@ -5676,7 +5679,6 @@ static int prollyBtreeCreateTable(Btree *p, Pgno *piTable, int flags){
 
   iTable = p->cat.iNextTable;
   p->cat.iNextTable++;
-  p->bSchemaChangedTxn = 1;
 
   if( iTable > p->aMeta[BTREE_LARGEST_ROOT_PAGE] ){
     p->aMeta[BTREE_LARGEST_ROOT_PAGE] = iTable;
@@ -5717,7 +5719,6 @@ static int prollyBtreeDropTable(Btree *p, int iTable, int *piMoved){
   }
 
   invalidateCursors(pBt, (Pgno)iTable, SQLITE_ABORT);
-  p->bSchemaChangedTxn = 1;
 
   /* Hand the dropped table's pending edits to any open savepoint that captured
   ** it (the path flushPendingForTable/clearTable use), so ROLLBACK TO can
@@ -7822,7 +7823,7 @@ static int prollyBtCursorInsert(
   rc = syncSavepoints(pCur);
   if( rc!=SQLITE_OK ) return rc;
 
-  if( pCur->pgnoRoot==1 || pCur->pBtree->bSchemaChangedTxn ){
+  if( pCur->pgnoRoot==1 ){
     rc = ensureStatementSavepointsCaptured(pCur->pBtree);
     if( rc!=SQLITE_OK ) return rc;
   }
@@ -8212,7 +8213,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
   rc = syncSavepoints(pCur);
   if( rc!=SQLITE_OK ) goto delete_cleanup;
 
-  if( pCur->pgnoRoot==1 || pCur->pBtree->bSchemaChangedTxn ){
+  if( pCur->pgnoRoot==1 ){
     rc = ensureStatementSavepointsCaptured(pCur->pBtree);
     if( rc!=SQLITE_OK ) goto delete_cleanup;
   }

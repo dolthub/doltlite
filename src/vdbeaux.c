@@ -3417,9 +3417,6 @@ int sqlite3VdbeHalt(Vdbe *p){
     if( !sqlite3VtabInSync(db)
      && db->autoCommit
      && db->nVdbeWrite==(p->readOnly==0)
-#ifdef DOLTLITE_PROLLY
-     && eStatementOp==0
-#endif
     ){
       if( p->rc==SQLITE_OK || (p->errorAction==OE_Fail && !isSpecialError) ){
         rc = sqlite3VdbeCheckFkDeferred(p);
@@ -3437,12 +3434,6 @@ int sqlite3VdbeHalt(Vdbe *p){
           ** or hit an 'OR FAIL' constraint and there are no deferred foreign
           ** key constraints to hold up the transaction. This means a commit
           ** is required. */
-#ifdef DOLTLITE_PROLLY
-          if( p->iStatement ){
-            rc = sqlite3VdbeCloseStatement(p, SAVEPOINT_RELEASE);
-          }
-          if( rc==SQLITE_OK )
-#endif
           rc = vdbeCommit(db, p);
         }
         if( rc==SQLITE_BUSY && p->readOnly ){
