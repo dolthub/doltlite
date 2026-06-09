@@ -1,3 +1,8 @@
+#if defined(__GNUC__)
+/* Vendored blake3 uses C99 mid-block declarations; keep its style. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
+#endif
 /* SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception OR CC0-1.0
 **
 ** Vendored verbatim from https://github.com/BLAKE3-team/BLAKE3 (1.8.5).
@@ -341,3 +346,6 @@ size_t blake3_simd_degree(void) {
 #endif
   return 1;
 }
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
