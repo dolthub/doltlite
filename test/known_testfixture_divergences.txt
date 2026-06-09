@@ -1768,3 +1768,101 @@ whereL whereL-122    # EQP plan shape; results equivalent
 # with "NOT NULL constraint failed: t1.i". Same storage-model class as
 # without_rowid1-7.x and where4-5.2.
 tkt-3a77c9714e tkt-3a77c9714e-3.0  # INT PRIMARY KEY stored WITHOUT ROWID (#1176); NULL PK rejected
+
+# rowvalue9 — section 1 INSERTs into / SELECTs `rowid` on a1, which has a
+# composite PRIMARY KEY(a, b) and is therefore stored WITHOUT ROWID (#1176):
+# "table a1 has no column named rowid". Row-value semantics themselves are
+# correct (sections 2+ pass).
+rowvalue9 rowvalue9-1.0.1  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.0.2  # cascade of 1.0.1 setup
+rowvalue9 rowvalue9-1.1.1  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.1.2  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.2.3  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.2.4  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.3.1  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.3.2  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.4.1  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.4.2  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.5.1  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.5.2  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.5.3  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.6.1  # rowid on composite-PK (WITHOUT ROWID) table
+rowvalue9 rowvalue9-1.6.2  # rowid on composite-PK (WITHOUT ROWID) table
+
+# without_rowid7-2.4 — t3 has PRIMARY KEY(a COLLATE nocase, a) without the
+# WITHOUT ROWID keyword; stock keeps it a rowid table so index_info(t3) is
+# empty, doltlite stores it WITHOUT ROWID (#1176) so the PK index info shows.
+without_rowid7 without_rowid7-2.4  # index_info on implicit WITHOUT ROWID table
+
+# skipscan1 / skipscan2 — EQP plan-shape (PRIMARY KEY vs sqlite_autoindex
+# naming under WITHOUT ROWID storage; skip-scan plan choice), plus the
+# section-6 t1(c1..c4, PRIMARY KEY(c4,c3)) NULL-into-PK rejection (#1176).
+# Row results match wherever the query runs.
+skipscan1 skipscan1-2.2eqp  # EQP: PRIMARY KEY vs sqlite_autoindex name
+skipscan1 skipscan1-3.1     # NULL into PK column of implicit WITHOUT ROWID table (#1176)
+skipscan1 skipscan1-3.2     # cascade of 3.1 (rows missing from failed insert)
+skipscan2 skipscan2-1.5eqp  # EQP: skip-scan plan choice differs
+
+# autoindex3 / autoindex5 — EXPLAIN QUERY PLAN shape for automatic-index
+# choices; results equivalent.
+autoindex3 autoindex3-310  # EQP plan shape
+autoindex5 autoindex5-1.1  # EQP plan shape
+
+# pragma6-1.0 — `db deserialize` page-image API unsupported on prolly (#1225).
+pragma6 pragma6-1.0  # db deserialize (page-image API) unsupported
+
+# windowC-2.0/2.1 — PRAGMA encoding=UTF16le/be ignored, locked to UTF-8
+# (#1164); randstr text read back as UTF-8 bytes.
+windowC windowC-2.0  # PRAGMA encoding=UTF16 ignored (#1164)
+windowC windowC-2.1  # PRAGMA encoding=UTF16 ignored (#1164)
+
+# windowE — CREATE INDEX with a tcl-registered custom collation is explicitly
+# rejected ("doltlite does not support indexes with custom collation");
+# 1.3's result then matches what stock produces WITHOUT that index (verified
+# against stock sqlite3 with the same no-index setup), i.e. pure cascade.
+windowE windowE-1.0  # custom-collation index explicitly rejected
+windowE windowE-1.3  # cascade: matches stock's no-index result exactly
+
+# attach2 — section 4 asserts stock's file-locking model across two
+# connections (PRAGMA lock_status states, "database is locked" errors).
+# doltlite has its own chunk-store locking and supports concurrent writers,
+# so lock states read unlocked and the blocked operations succeed. 2.4
+# expects an encoding-mismatch ATTACH error that cannot fire when every
+# database is UTF-8 (#1164).
+attach2 attach2-2.4     # ATTACH encoding-mismatch check unfirable under UTF-8-only (#1164)
+attach2 attach2-4.2.1   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.3.1   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.4     # write not blocked: doltlite supports concurrent writers
+attach2 attach2-4.4.1   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.5.1   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.5.2   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.6.1.1 # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.6.1.2 # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.6.2.1 # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.6.2.2 # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.7.1   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.7.2   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.8     # write not blocked: doltlite supports concurrent writers
+attach2 attach2-4.8.1   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.8.2   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.9.1   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.9.2   # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.10    # write not blocked: doltlite supports concurrent writers
+attach2 attach2-4.10.1  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.10.2  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.11.2  # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.12    # PRAGMA lock_status: doltlite locking model
+attach2 attach2-4.15    # PRAGMA lock_status: doltlite locking model
+
+# attach3-11.x — ATTACH of a path in a nonexistent directory: stock fails at
+# open, doltlite defers (no file is created; the first write properly errors
+# "unable to open database file" — verified). 11.1 cascades: the name from
+# 11.0's successful ATTACH is still in use.
+attach3 attach3-11.0  # deferred open: ATTACH succeeds, write errors later (verified)
+attach3 attach3-11.1  # cascade: aux name still attached after 11.0
+
+# temptable2 section 8 — page_count is a chunk-store metric, not SQLite
+# pages; backup_init needs the page-image backup API, unsupported on prolly.
+temptable2 temptable2-8.1  # PRAGMA page_count: chunk store has no SQLite page count
+temptable2 temptable2-8.3  # sqlite3_backup_init: page-image backup unsupported on prolly
+temptable2 temptable2-8.6  # sqlite3_backup_init: page-image backup unsupported on prolly

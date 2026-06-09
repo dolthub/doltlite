@@ -90,3 +90,4 @@ tkt-5e10420e8d # auto_vacuum unsupported -> setup aborts -> cascade
 tkt2565        # auto_vacuum unsupported -> setup aborts (pre-summary)
 tkt-5d863f876e # journal_mode unsupported -> setup aborts -> cascade
 tkt-fc62af4523 # journal_mode unsupported -> setup aborts -> cascade
+savepoint6     # auto_vacuum unsupported -> uncaught setup error aborts pre-summary
