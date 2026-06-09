@@ -1,3 +1,8 @@
+#if defined(__GNUC__)
+/* Vendored blake3 uses C99 mid-block declarations; keep its style. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
+#endif
 /* SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception OR CC0-1.0
 **
 ** Vendored verbatim from https://github.com/BLAKE3-team/BLAKE3 (1.8.5).
@@ -160,3 +165,6 @@ void blake3_hash_many_portable(const uint8_t *const *inputs, size_t num_inputs,
     out = &out[BLAKE3_OUT_LEN];
   }
 }
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
