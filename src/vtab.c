@@ -797,8 +797,17 @@ int sqlite3VtabCallCreate(sqlite3 *db, int iDb, const char *zTab, char **pzErr){
     rc = growVTrans(db);
     if( rc==SQLITE_OK ){
       addToVTrans(db, sqlite3GetVTable(db, pTab));
+#ifdef DOLTLITE_PROLLY
+      sqlite3BtreeMarkMasterRootChanged(db->aDb[iDb].pBt);
+#endif
     }
   }
+#ifdef DOLTLITE_PROLLY
+  else if( rc!=SQLITE_OK ){
+    sqlite3BtreeMarkMasterRootChanged(db->aDb[iDb].pBt);
+    sqlite3ResetOneSchema(db, iDb);
+  }
+#endif
 
   return rc;
 }
@@ -952,6 +961,9 @@ int sqlite3VtabCallDestroy(sqlite3 *db, int iDb, const char *zTab){
       p->pVtab = 0;
       pTab->u.vtab.p = 0;
       sqlite3VtabUnlock(p);
+#ifdef DOLTLITE_PROLLY
+      sqlite3BtreeMarkMasterRootChanged(db->aDb[iDb].pBt);
+#endif
     }
     sqlite3DeleteTable(db, pTab);
   }

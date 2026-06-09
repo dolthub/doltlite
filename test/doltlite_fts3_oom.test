@@ -120,5 +120,49 @@ foreach {tn iFail sql okres} {
   } {1}
 }
 
+do_test doltlite_fts3_oom-3.1 {
+  set bad ok
+  for {set iFail 1} {$iFail<=340 && $bad=="ok"} {incr iFail} {
+    sqlite3_memdebug_fail $iFail -repeat 1
+    set res [catchsql {
+      CREATE VIRTUAL TABLE ft_bad USING fts3(a, b, tokenize unknown)
+    }]
+    sqlite3_memdebug_fail -1
+    set q [catch {db eval {SELECT name FROM sqlite_master ORDER BY name}} rows]
+    set rc [lindex $res 0]
+    set msg [lindex $res 1]
+    if {$q
+     || $rc!=1
+     || ($msg!="out of memory" && $msg!="unknown tokenizer: unknown")
+    } {
+      set bad [list $iFail $res $q $rows]
+    }
+  }
+  set bad
+} {ok}
+
+do_test doltlite_fts3_oom-3.2 {
+  forcedelete test2.db
+  sqlite3 db2 test2.db
+  sqlite3_db_config_lookaside db2 0 0 0
+
+  db2 eval "SELECT * FROM sqlite_master" V break
+  set cksumsql "SELECT md5sum([join [concat rowid $V(*)] ,]) FROM sqlite_master"
+  set cksum1 [db2 one $cksumsql]
+
+  sqlite3_memdebug_fail 74 -repeat 100000
+  set res [catchsql {
+    CREATE VIRTUAL TABLE ft_oom USING fts3(a, b)
+  } db2]
+  set nFail [sqlite3_memdebug_fail -1 -benigncnt nBenign]
+  set q2 [catch {db2 one $cksumsql} cksum2]
+  catch {db2 close}
+  forcedelete test2.db
+
+  list [expr {$res=="1 {out of memory}" && $nFail>0}] \
+       $q2 \
+       [expr {!$q2 && $cksum1 eq $cksum2}]
+} {1 0 1}
+
 sqlite3_memdebug_fail -1
 finish_test
