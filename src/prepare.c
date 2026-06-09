@@ -416,6 +416,14 @@ int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg, u32 mFlags){
     pDb = &db->aDb[iDb];
   }else
   if( rc==SQLITE_OK || ((db->flags&SQLITE_NoSchemaError) && rc!=SQLITE_NOMEM)){
+#ifdef DOLTLITE_PROLLY
+    if( pDb->pBt
+     && sqlite3FindTable(db, zSchemaTabName, pDb->zDbSName)==0
+    ){
+      rc = SQLITE_SCHEMA;
+      goto initone_error_out;
+    }
+#endif
     /* Hack: If the SQLITE_NoSchemaError flag is set, then consider
     ** the schema loaded, even if errors (other than OOM) occurred. In
     ** this situation the current sqlite3_prepare() operation will fail,

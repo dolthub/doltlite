@@ -802,6 +802,11 @@ int sqlite3VtabCallCreate(sqlite3 *db, int iDb, const char *zTab, char **pzErr){
 #endif
     }
   }
+#ifdef DOLTLITE_PROLLY
+  else if( rc!=SQLITE_OK ){
+    sqlite3ResetOneSchema(db, iDb);
+  }
+#endif
 
   return rc;
 }
