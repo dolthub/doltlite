@@ -280,7 +280,7 @@ jobs:
           sort2 sort5 sorterref speed4p spellfix spellfix2 spellfix3 spellfix4 sqldiff1 \
           sqllog starschema1 stmtrand stmtvtab1 strict1 subquery2 subselect subtype1 \
           swarmvtab2 swarmvtab3 swarmvtabfault symlink2 tabfunc01 tableapi tableopts tempdb2 \
-          temptable3 temptrigger timediff1 tkt-02a8e81d44 tkt-18458b1a tkt-26ff0c2d1e tkt-2a5629202f tkt-2d1a5c67d \
+          temptable3 temptrigger timediff1 tkt-02a8e81d44 tkt-18458b1a tkt-26ff0c2d1e tkt-2a5629202f tkt-2d1a5c67d tkt-3a77c9714e \
           tkt-2ea2425d34 tkt-31338dca7e tkt-313723c356 tkt-385a5b56b9 tkt-38cb5df375 tkt-3998683a16 tkt-3fe897352e tkt-4a03edc4c8 \
           tkt-4c86b126f2 tkt-4dd95f6943 tkt-4ef7e3cfca tkt-54844eea3f tkt-6bfb98dfc0 tkt-752e1646fc tkt-78e04e52ea tkt-7a31705a7e6 \
           tkt-7bbfb7d442 tkt-80ba201079 tkt-80e031a00f tkt-8454a207b9 tkt-868145d012 tkt-8c63ff0ec tkt-91e2e8ba6f tkt-99378177930f87bd \
