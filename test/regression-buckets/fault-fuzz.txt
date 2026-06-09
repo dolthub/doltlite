@@ -14,11 +14,11 @@ fts3fault
 fts3fault2
 fts3tok_err
 fuzz
+fuzz_malloc
 fuzz-oss1
 fuzz2
 fuzz3
 fuzz4
-fuzz_malloc
 fuzzer1
 fuzzer2
 fuzzerfault
@@ -49,6 +49,7 @@ mallocM
 mmapfault
 notnullfault
 oserror
+pagerfault3
 pragmafault
 rollbackfault
 rowvaluefault
