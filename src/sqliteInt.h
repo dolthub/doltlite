@@ -5695,7 +5695,9 @@ int sqlite3ReadOnlyShadowTables(sqlite3 *db);
 int sqlite3VtabEponymousTableInit(Parse*,Module*);
 void sqlite3VtabEponymousTableClear(sqlite3*,Module*);
 void sqlite3VtabMakeWritable(Parse*,Table*);
+#ifdef DOLTLITE_PROLLY
 void sqlite3BtreeMarkMasterRootChanged(Btree*);
+#endif
 void sqlite3VtabBeginParse(Parse*, Token*, Token*, Token*, int);
 void sqlite3VtabFinishParse(Parse*, Token*);
 void sqlite3VtabArgInit(Parse*);
