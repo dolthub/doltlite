@@ -29,11 +29,11 @@ esac
 
 TARGET="${PLATFORM}-${PKG_ARCH}"
 
-# The release matrix currently builds linux-x64, osx-arm64, and win-x64.
-# Other combinations don't have release artifacts; fall back to building
-# from source.
+# The release matrix builds linux-x64, linux-arm64, osx-arm64, osx-x64, and
+# win-x64. Other combinations don't have release artifacts; fall back to
+# building from source.
 case "$TARGET" in
-  linux-x64|linux-arm64|osx-arm64) ;;
+  linux-x64|linux-arm64|osx-arm64|osx-x64) ;;
   *)
     echo "doltlite: no prebuilt binary for ${TARGET}." >&2
     echo "Build from source — see https://github.com/dolthub/doltlite#building" >&2
