@@ -316,4 +316,22 @@ jobs:
           mallocA mmap4 percentile savepoint4 sort3 sort4 sortfault speed1p speed2 speed4 \
           stmt tempfault vacuummem wherefault \
           dbpage pagesize securedel securedel2 reservebytes shrink format4 stat \
-          io sync sync2 multiplex4
+          io sync sync2 multiplex4 \
+          insert select1 select2 select3 select4 delete update trans \
+          where expr attach coalesce conflict cse date join \
+          subquery view between cast check limit null quote \
+          rowid sort types types2 in in2 in3 in4 \
+          in5 in6 in7 like like2 minmax minmax2 minmax3 \
+          select5 select6 select7 selectA selectB distinctagg enc count \
+          capi2 capi3 collate1 collate2 collate3 collate4 index intpkey \
+          alter auth savepoint fkey1 fkey2 fkey5 trigger1 trigger2 \
+          triggerA triggerB triggerC func e_expr printf randexpr1 enc4 \
+          enc2 enc3 like3 numcast boundary1 boundary2 boundary3 select9 \
+          crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM \
+          fuzz fuzz2 fuzz3 fuzz4 window1 window2 window3 json101 \
+          json102 json103 json104 json105 aggnested aggorderby affinity2 affinity3 \
+          distinct e_createtable e_delete e_insert e_select e_update e_fkey e_changes \
+          e_totalchanges func2 func3 hexlit icu intarray orderby1 orderby2 \
+          orderby3 orderby4 pragma pragma2 printf2 schema schema2 schema3 \
+          schema4 shared shared2 shared3 shared9 speed1 substr table \
+          tempdb vacuum vacuum2 vacuum5 autoinc interrupt interrupt2 doltlite_fts3_oom
