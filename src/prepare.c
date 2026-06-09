@@ -255,6 +255,14 @@ int sqlite3InitOne(sqlite3 *db, int iDb, char **pzErrMsg, u32 mFlags){
   initData.nInitRow = 0;
   initData.mxPage = 0;
   sqlite3InitCallback(&initData, 5, (char **)azArg, 0);
+#ifdef DOLTLITE_PROLLY
+  if( initData.rc==SQLITE_OK
+   && sqlite3FindTable(db, zSchemaTabName, db->aDb[iDb].zDbSName)==0
+  ){
+    sqlite3OomFault(db);
+    initData.rc = SQLITE_NOMEM_BKPT;
+  }
+#endif
   db->mDbFlags &= mask;
   if( initData.rc ){
     rc = initData.rc;
