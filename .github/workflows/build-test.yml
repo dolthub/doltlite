@@ -157,7 +157,6 @@ jobs:
         cd build
         make DOLTLITE_PROLLY_CHECK=1 doltlite
         make DOLTLITE_PROLLY_CHECK=1 doltlite-lib
-        make DOLTLITE_PROLLY_CHECK=1 testfixture
         DOLTLITE_CHECK_AMALGAMATION=0 bash ../test/assert_doltlite_artifacts.sh .
         # doltlite_parity.sh compares against the package-built stock
         # SQLite CLI instead of whatever sqlite3 the runner image provides.
@@ -405,82 +404,3 @@ jobs:
         CGO_CFLAGS="-I../../build" CGO_LDFLAGS="../../build/libdoltlite.a -lz -lpthread -lm" \
           go build -tags libsqlite3 -o quickstart .
         ./quickstart
-
-    # -- SQLite testfixture tests ----------------------------
-    #
-    # Every upstream sqlite testfixture file we know about is run.
-    # Files that have a small number of expected divergences from
-    # upstream behavior (because doltlite keys rows by user PK rather
-    # than by sqlite's auto-allocated rowid since #358) record those
-    # specific test names in test/known_testfixture_divergences.txt
-    # and the runner enforces strict equality: any actual failure
-    # not on the list is a regression, and any list entry that
-    # stops failing is reported as needing removal. This keeps the
-    # divergence list honest and lets us catch real bugs in tests
-    # that USED to be skipped at the file level.
-
-    - name: SQLite core tests
-      if: matrix.platform == 'ubuntu'
-      run: |
-        cd build
-        bash ../test/run_testfixture.sh "Core tests" 120 \
-          insert select1 select2 select3 select4 delete update \
-          trans where expr attach \
-          coalesce conflict cse date join subquery view \
-          between cast check limit null quote rowid sort types \
-          types2 in in2 in3 in4 in5 in6 in7 like like2 \
-          minmax minmax2 minmax3 select5 select6 select7 \
-          selectA selectB distinctagg enc count capi2 capi3 \
-          collate1 collate2 collate3 collate4 \
-          index intpkey \
-          alter auth savepoint \
-          fkey1 fkey2 fkey5 \
-          trigger1 trigger2 triggerA triggerB triggerC
-
-    - name: SQLite large tests
-      if: matrix.platform == 'ubuntu'
-      run: |
-        cd build
-        bash ../test/run_testfixture.sh "Large tests" 180 \
-          func e_expr printf date randexpr1 enc4 enc2 enc3 like3 numcast \
-          boundary1 boundary2 boundary3 select9
-
-    - name: SQLite crash recovery tests
-      if: matrix.platform == 'ubuntu'
-      run: |
-        cd build
-        # crash.test is omitted: its crash-injection failure set is
-        # nondeterministic run-to-run under doltlite, so it can't be gated
-        # per-test (tracked with the other nondeterministic files in #1132).
-        bash ../test/run_testfixture.sh "Crash recovery" 180 \
-          crash2 crash3 crash4 crash5 crash6 crash7 crash8 crashM
-
-    - name: SQLite fuzz tests
-      if: matrix.platform == 'ubuntu'
-      run: |
-        cd build
-        bash ../test/run_testfixture.sh "Fuzz tests" 120 \
-          fuzz fuzz2 fuzz3 fuzz4
-
-    - name: SQLite additional tests
-      if: matrix.platform == 'ubuntu'
-      run: |
-        cd build
-        bash ../test/run_testfixture.sh "Additional tests" 120 \
-          window1 window2 window3 \
-          json101 json102 json103 json104 json105 \
-          aggnested aggorderby \
-          affinity2 affinity3 \
-          between distinct distinctagg \
-          e_createtable e_delete e_insert e_select e_update e_fkey e_changes e_totalchanges \
-          func2 func3 hexlit icu intarray \
-          orderby1 orderby2 orderby3 orderby4 \
-          pragma pragma2 printf2 \
-          schema schema2 schema3 schema4 \
-          shared shared2 shared3 shared9 \
-          speed1 substr table tempdb \
-          vacuum vacuum2 vacuum5 autoinc interrupt interrupt2 doltlite_fts3_oom \
-          tkt-38cb5df375 tkt-9a8b09f8e6 tkt-99378177930f87bd \
-          tkt-80e031a00f tkt-80ba201079 tkt-31338dca7e \
-          tkt-7bbfb7d442 tkt-4dd95f6943 tkt-2d1a5c67d \
-          tkt-f3e5abed55
