@@ -1337,6 +1337,33 @@ descidx3 descidx3-1.1  # hexio read of SQLite file-format version byte (chunk st
 # a deleted max rowid, and maintains sqlite_sequence. Raw-schema-edit divergence.
 alterdropcol alterdropcol-8.2  # AUTOINCREMENT injected via writable_schema UPDATE; structural catalog ignores raw sqlite_schema edits
 
+# alter3 / alter4 — two raw-format divergence classes, neither involving the
+# ALTER itself (the rewritten columns and data round-trip correctly):
+#   * PRAGMA [aux.]schema_version: DoltLite derives schema_version from the
+#     catalog content hash (prolly_btree.c sets aMeta[BTREE_SCHEMA_VERSION] =
+#     schemaHash|1), not stock's small incrementing file-header cookie, so a
+#     `PRAGMA schema_version=N` set value is not preserved and reads back a
+#     large hash-derived integer instead of N/N+1.
+#   * get_file_format: reads the SQLite file-format version byte (header
+#     offset 44). The chunk store is not a SQLite file, so that field reads 0
+#     vs the expected 1/3 (same class as descidx3-1.1).
+alter3 alter3-3.3  # get_file_format byte (chunk store has no SQLite header)
+alter3 alter3-3.4  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
+alter3 alter3-4.3  # get_file_format byte (chunk store has no SQLite header)
+alter3 alter3-4.4  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
+alter3 alter3-5.4  # PRAGMA aux.schema_version is catalog-hash-derived, not stock cookie
+alter3 alter3-5.5  # get_file_format byte, main+aux (chunk store has no SQLite header)
+alter3 alter3-5.8  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
+alter3 alter3-7.1  # get_file_format byte after VACUUM (chunk store has no SQLite header)
+alter3 alter3-7.2  # get_file_format byte after ALTER ADD (chunk store has no SQLite header)
+alter3 alter3-7.3  # get_file_format byte after ALTER ADD (chunk store has no SQLite header)
+alter3 alter3-7.4  # get_file_format byte after ALTER ADD (chunk store has no SQLite header)
+alter3 alter3-7.5  # get_file_format byte after VACUUM (chunk store has no SQLite header)
+alter4 alter4-3.4  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
+alter4 alter4-4.4  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
+alter4 alter4-5.4  # PRAGMA aux.schema_version is catalog-hash-derived, not stock cookie
+alter4 alter4-5.8  # PRAGMA schema_version is catalog-hash-derived, not stock cookie
+
 # altertab3 — altertab3-31.1 asserts `PRAGMA page_count` is unchanged across an
 # `ALTER TABLE DROP COLUMN` (stock's metadata-only drop). DoltLite stores a
 # chunk store, not SQLite pages, so page_count is not a stable per-table page

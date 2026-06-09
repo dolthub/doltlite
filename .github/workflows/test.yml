@@ -227,7 +227,7 @@ jobs:
       run: |
         cd build
         bash ../test/run_testfixture.sh "SQLite regression" 300 \
-          8_3_names aggerror aggfault alterauth alterauth2 alterdropcol alterdropcol2 altertab3 alterlegacy altermalloc3 autoindex1 \
+          8_3_names aggerror aggfault alter3 alter4 alterauth alterauth2 alterdropcol alterdropcol2 altertab3 alterlegacy altermalloc3 autoindex1 \
           index5 limit2 notnull \
           alterqf altertab2 altertrig amatch1 analyze3 analyze4 analyze5 analyze6 \
           analyze7 analyze8 analyze9 analyzeC analyzeD analyzeE analyzeF analyzeG \
