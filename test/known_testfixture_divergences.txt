@@ -1876,3 +1876,64 @@ temptable2 temptable2-8.6  # sqlite3_backup_init: page-image backup unsupported 
 # round-trip all match stock).
 zeroblob zeroblob-1.1.1  # sqlite3_max_blobsize allocation metric (zeroblob materialized)
 zeroblob zeroblob-1.1.2  # memory-highwater bound assumes lazy zeroblob
+
+# echo-vtab cluster — the echo test module (src/test8.c) reads its backing
+# table via "SELECT rowid, * FROM <real-table>". Any echo vtab over a table
+# with a non-INTEGER PRIMARY KEY (stored WITHOUT ROWID, #1176 surface) fails
+# that internal query ("SQL logic error" / "vtable constructor failed"), and
+# the files' later assertions cascade off the poisoned setup. The vtab layer
+# itself is fine: echo over rowid tables passes throughout these files.
+tkt3871 tkt3871-1.1  # echo over PK table: internal SELECT rowid fails (WITHOUT ROWID)
+tkt3871 tkt3871-1.2  # cascade: echo vtab e unusable
+tkt3871 tkt3871-1.3  # cascade: echo vtab e unusable
+tkt3871 tkt3871-1.4  # cascade: echo vtab e unusable
+tkt3871 tkt3871-1.5  # cascade: echo vtab e unusable
+tkt3121 vtabD-1.2    # echo over r2(col PRIMARY KEY): internal SELECT rowid fails
+
+# vtab2-5.3 — UTF-16 + hex-encoded names: PRAGMA encoding ignored (#1164) so
+# the %C8/%C9 byte names decode differently and the "already exists" malformed
+# -schema reparse path never fires; the injected row reparses as a plain
+# missing module instead.
+vtab2 vtab2-5.3  # encoding-dependent corruption-injection error text (#1164)
+
+# vtab4 — treal(a PRIMARY KEY) is WITHOUT ROWID, so every echo read/write of
+# it hits the module's internal rowid query; 1.2's extra leading xConnect is
+# doltlite's post-DDL schema reload reconnecting the vtab. Everything after
+# 1.3 cascades (half-applied echo writes, empty callback logs, the real
+# UNIQUE message where stock saw "unknown error").
+vtab4 vtab4-1.2  # extra xConnect: schema reload reconnects the vtab
+vtab4 vtab4-1.3  # echo internal SELECT rowid fails (WITHOUT ROWID)
+vtab4 vtab4-1.4  # cascade
+vtab4 vtab4-2.1  # cascade
+vtab4 vtab4-2.2  # cascade
+vtab4 vtab4-2.3  # cascade
+vtab4 vtab4-2.4  # cascade
+vtab4 vtab4-2.5  # cascade
+vtab4 vtab4-2.6  # cascade
+vtab4 vtab4-2.7  # cascade
+vtab4 vtab4-3.1  # cascade: real UNIQUE message vs stock "unknown error"
+vtab4 vtab4-3.2  # cascade
+vtab4 vtab4-3.3  # cascade
+
+# vtabH-1.1 — extra leading xConnect (schema reload reconnects the vtab);
+# the xBestIndex/xFilter content matches stock.
+vtabH vtabH-1.1  # extra xConnect: schema reload reconnects the vtab
+
+# vtab_err — OOM fault injection over the echo module: doltlite's allocation
+# pattern shifts which fault points surface, so a handful of the 1927
+# injected runs settle differently. No leaks or crashes (file completes).
+vtab_err vtab_err-1.3.3              # OOM-recovery count differs under fault injection
+vtab_err vtab_err-2.transient.580    # fault-point shift
+vtab_err vtab_err-2.transient.714    # fault-point shift
+vtab_err vtab_err-2.transient.737    # fault-point shift
+vtab_err vtab_err-2.transient.738    # fault-point shift
+vtab_err vtab_err-2.persistent.737   # fault-point shift
+vtab_err vtab_err-2.persistent.738   # fault-point shift
+vtab_err vtab_err-3-oom-transient.437  # fault-point shift
+vtab_err vtab_err-3-oom-transient.438  # fault-point shift
+
+# vtabdrop-2.2/2.3 — sqlite_master enumeration omits the sqlite_autoindex_*
+# row for the fts shadow table's UNIQUE (the recorded no-autoindex-row class;
+# UNIQUE itself is enforced).
+vtabdrop vtabdrop-2.2  # no sqlite_autoindex row in sqlite_master enumeration
+vtabdrop vtabdrop-2.3  # no sqlite_autoindex row in sqlite_master enumeration
