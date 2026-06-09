@@ -1821,3 +1821,12 @@ whereL whereL-110    # EQP plan shape; results equivalent
 whereL whereL-120    # EQP plan shape; results equivalent
 whereL whereL-121    # EQP plan shape; results equivalent
 whereL whereL-122    # EQP plan shape; results equivalent
+
+# tkt-3a77c9714e-3.0 — `CREATE TABLE t1(i INT PRIMARY KEY, a, b)` then
+# `INSERT INTO t1 VALUES(NULL,...)`. Stock treats `INT PRIMARY KEY` (not the
+# `INTEGER PRIMARY KEY` rowid alias) as an ordinary PK on a rowid table, where
+# a NULL PK is allowed. DoltLite stores non-INTEGER / composite PK tables
+# WITHOUT ROWID (#1176), so the PK is NOT NULL and the NULL insert is rejected
+# with "NOT NULL constraint failed: t1.i". Same storage-model class as
+# without_rowid1-7.x and where4-5.2.
+tkt-3a77c9714e tkt-3a77c9714e-3.0  # INT PRIMARY KEY stored WITHOUT ROWID (#1176); NULL PK rejected
