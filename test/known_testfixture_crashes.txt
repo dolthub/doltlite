@@ -78,3 +78,15 @@ memdb1        # sqlite3_serialize/deserialize page-image API unsupported on prol
 createtab     # PRAGMA auto_vacuum errors (intentional) -> failed prepare -> stale stmt var -> UAF
 incrcorrupt   # PRAGMA auto_vacuum/incremental_vacuum errors (intentional) -> stale stmt var -> UAF
 
+# These tkt-* files set PRAGMA auto_vacuum or journal_mode in their setup, which
+# DoltLite intentionally rejects ("not supported on doltlite-format databases").
+# That aborts the setup before the schema is created, so every later subtest
+# fails with "no such table ..." -- a cascade of one intentional feature-gap, not
+# hundreds of independent divergences. Documented here rather than recording the
+# whole cascade in the divergence list.
+tkt1667        # auto_vacuum unsupported -> setup aborts -> cascade
+tkt-9d68c883   # auto_vacuum unsupported -> setup aborts -> cascade
+tkt-5e10420e8d # auto_vacuum unsupported -> setup aborts -> cascade
+tkt2565        # auto_vacuum unsupported -> setup aborts (pre-summary)
+tkt-5d863f876e # journal_mode unsupported -> setup aborts -> cascade
+tkt-fc62af4523 # journal_mode unsupported -> setup aborts -> cascade

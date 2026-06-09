@@ -1659,3 +1659,66 @@ multiplex4 multiplex4-1.0  # multiplex VFS not used by doltlite
 multiplex4 multiplex4-1.2  # multiplex VFS not used by doltlite
 multiplex4 multiplex4-1.10  # multiplex VFS not used by doltlite
 multiplex4 multiplex4-1.11  # multiplex VFS not used by doltlite
+
+# tkt1567 — explicit rowid reference on a non-integer-PK (WITHOUT ROWID) table.
+tkt1567 tkt1567-1.3  # explicit rowid on a WITHOUT-ROWID table (#1176)
+tkt1567 tkt1567-1.4  # explicit rowid on a WITHOUT-ROWID table (#1176)
+
+# tkt1512 / tkt2920 — read page_size from the SQLite file header and simulate a
+# full disk; the chunk store is not a SQLite file and has no page-based size or
+# disk-full path. Raw page-format divergence.
+tkt1512 tkt1512-1.2  # raw page_size from SQLite file header
+tkt1512 tkt1512-1.3  # raw page_size from SQLite file header
+tkt1512 tkt1512-1.4  # raw page_size from SQLite file header
+tkt2920 tkt2920-1.1  # page_size / disk-full simulation; chunk store has neither
+tkt2920 tkt2920-1.3  # page_size / disk-full simulation; chunk store has neither
+tkt2920 tkt2920-1.5  # page_size / disk-full simulation; chunk store has neither
+tkt2920 tkt2920-1.9  # page_size / disk-full simulation; chunk store has neither
+
+# tkt2409 / tkt2854 / tkt4018 — depend on the SQLite SHARED/RESERVED locking and
+# rollback-journal model (table/schema locked, cross-process lock visibility).
+# DoltLite uses chunk-store locking, so the lock errors and cross-process states
+# differ. Locking-model divergence.
+tkt2409 tkt2409-2.2  # locking-model divergence
+tkt2409 tkt2409-2.3  # locking-model divergence
+tkt2854 tkt2854-1.3  # locking-model divergence
+tkt2854 tkt2854-1.7  # locking-model divergence
+tkt2854 tkt2854-1.8  # locking-model divergence
+tkt2854 tkt2854-1.9  # locking-model divergence
+tkt2854 tkt2854-1.10  # locking-model divergence
+tkt2854 tkt2854-1.11  # locking-model divergence
+tkt2854 tkt2854-1.12  # locking-model divergence
+tkt2854 tkt2854-1.13  # locking-model divergence
+tkt2854 tkt2854-1.14  # locking-model divergence
+tkt2854 tkt2854-1.16  # locking-model divergence
+tkt2854 tkt2854-1.20  # locking-model divergence
+tkt4018 tkt4018-1.3  # locking-model divergence (shared-lock / cross-process visibility)
+tkt4018 tkt4018-2.2  # locking-model divergence (shared-lock / cross-process visibility)
+
+# tkt3457 — backs up via the rollback journal file (test.db-journal); DoltLite has
+# no rollback journal. No -journal file to copy.
+tkt3457 tkt3457-1.1  # no rollback-journal file to back up
+tkt3457 tkt3457-1.2  # no rollback-journal file to back up
+tkt3457 tkt3457-1.3  # no rollback-journal file to back up
+tkt3457 tkt3457-1.4  # no rollback-journal file to back up
+tkt3457 tkt3457-1.5  # no rollback-journal file to back up
+
+# tkt2332 — unordered SELECT returns PK-order rows instead of rowid/insertion order;
+# the multiset is identical (random-data ordering test). rowid-order divergence.
+tkt2332 tkt2332-10000.3  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332-10000.5  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332-100000.3  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332-100000.5  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332-1000000.3  # PK-order vs insertion order (multiset equal)
+tkt2332 tkt2332-1000000.5  # PK-order vs insertion order (multiset equal)
+
+# tkt3810 — a TEMP TRIGGER whose base table is dropped becomes an orphan in stock
+# (still listed in temp.sqlite_master). DoltLite cascades the trigger drop with
+# the table, so the orphan is gone. Schema-catalog cascade divergence.
+tkt3810 tkt3810-3  # orphan temp-trigger dropped with its table (catalog cascade)
+tkt3810 tkt3810-4  # orphan temp-trigger dropped with its table (catalog cascade)
+
+# tkt3761 / tkt3762 — single PRAGMA auto_vacuum assertion; auto_vacuum is
+# intentionally unsupported on doltlite-format databases.
+tkt3761 tkt3761-1.1  # auto_vacuum unsupported
+tkt3762 tkt3762-1.1  # auto_vacuum unsupported
