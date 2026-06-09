@@ -155,14 +155,21 @@ jobs:
       if: matrix.platform == 'ubuntu'
       run: |
         cd build
-        make DOLTLITE_PROLLY_CHECK=1 doltlite
-        make DOLTLITE_PROLLY_CHECK=1 doltlite-lib
+        set -o pipefail
+        {
+          make DOLTLITE_PROLLY_CHECK=1 doltlite
+          make DOLTLITE_PROLLY_CHECK=1 doltlite-lib
+          # doltlite_parity.sh compares against the package-built stock
+          # SQLite CLI instead of whatever sqlite3 the runner image provides.
+          make DOLTLITE_PROLLY=0 sqlite3
+          # Stock SQLite lib for concurrent_branch_test
+          make libsqlite3.a USE_AMALGAMATION=0
+        } 2>&1 | tee build.log
         DOLTLITE_CHECK_AMALGAMATION=0 bash ../test/assert_doltlite_artifacts.sh .
-        # doltlite_parity.sh compares against the package-built stock
-        # SQLite CLI instead of whatever sqlite3 the runner image provides.
-        make DOLTLITE_PROLLY=0 sqlite3
-        # Stock SQLite lib for concurrent_branch_test
-        make libsqlite3.a USE_AMALGAMATION=0
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in the build (see above); the build must be warning-free"
+          exit 1
+        fi
 
     - name: Build Windows
       if: matrix.platform == 'windows'
