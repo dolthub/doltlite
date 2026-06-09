@@ -24,10 +24,6 @@
 #include "chunk_store.h"
 struct ChunkStore *doltliteGetChunkStore(sqlite3 *db);
 #endif
-#ifdef DOLTLITE_PROLLY
-int sqlite3BtreeDeleteSchemaEntryByName(Btree*, const char*);
-#endif
-
 /*
 ** High-resolution hardware timer used for debugging and testing only.
 */
@@ -8784,7 +8780,11 @@ case OP_VCreate: {
     rc = sqlite3VtabCallCreate(db, pOp->p1, zTab, &p->zErrMsg);
 #ifdef DOLTLITE_PROLLY
     if( rc ){
-      (void)sqlite3BtreeDeleteSchemaEntryByName(db->aDb[pOp->p1].pBt, zTab);
+      if( !db->mallocFailed ){
+        (void)sqlite3BtreeRollback(db->aDb[pOp->p1].pBt, SQLITE_OK, 0);
+      }
+      assert( resetSchemaOnFault==0 || resetSchemaOnFault==pOp->p1+1 );
+      resetSchemaOnFault = pOp->p1+1;
     }
 #endif
     if( rc && db->mallocFailed ){

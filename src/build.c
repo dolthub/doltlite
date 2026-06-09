@@ -2758,6 +2758,8 @@ void sqlite3EndTable(
   **   - Views: no storage.
   **   - Internal sqlite_* tables: created by sqlite for AUTOINCREMENT
   **     bookkeeping etc. and don't have user PKs.
+  **   - Shadow tables: their virtual-table modules own their physical
+  **     schema and may depend on the exact rowid/index layout.
   **   - Stock SQLite btrees: their on-disk rowid table layout must be
   **     replayed exactly.
   **
@@ -2768,18 +2770,23 @@ void sqlite3EndTable(
   ** on-disk storage stays BLOBKEY. Re-conversion is safe because
   ** doltlite refuses to open databases written by older binaries that
   ** don't enforce this storage model. */
+#if defined(DOLTLITE_PROLLY)
   if( iDb!=1
-#if defined(DOLTLITE_PROLLY) && !defined(SQLITE_TEST)
+#if !defined(SQLITE_TEST)
    && !sqlite3BtreeUsesOrig(db->aDb[iDb].pBt)
 #endif
    && pParse->eParseMode!=PARSE_MODE_DECLARE_VTAB
+   && pParse->nested==0
    && IsOrdinaryTable(p)
    && sqlite3StrNICmp(p->zName, "sqlite_", 7)!=0
+   && (p->tabFlags & TF_Shadow)==0
+   && sqlite3ShadowTableName(db, p->zName)==0
    && (p->tabFlags & TF_HasPrimaryKey)!=0
    && p->iPKey<0
    && (tabOpts & TF_WithoutRowid)==0 ){
     tabOpts |= TF_WithoutRowid;
   }
+#endif
 
   /* Doltlite: dolt_ignore is a user-created system table whose
   ** schema is load-bearing — dolt_add / dolt_status run
