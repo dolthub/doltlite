@@ -559,9 +559,13 @@ LIBOBJS0 = alter.o analyze.o attach.o auth.o \
 # architecture. We probe via $(CC) (not $(B.cc)) because the wasm
 # cross-compile path overrides only CC on the make command line, while
 # B.cc stays bound to the host's cc from the autoconf-generated
-# Makefile.
+# Makefile. Pass $(CFLAGS) into the probe too: an Apple-clang macOS
+# cross-build keeps CC but selects the target arch via `-arch x86_64`
+# in CFLAGS, and `cc -arch x86_64 -dumpmachine` reports the x86_64
+# triple — without the flag the probe would report the host's arm64
+# and wrongly pick blake3_neon.o.
 #
-BLAKE3_TARGET_TRIPLE := $(shell $(CC) -dumpmachine 2>/dev/null)
+BLAKE3_TARGET_TRIPLE := $(shell $(CC) $(CFLAGS) -dumpmachine 2>/dev/null)
 ifneq (,$(findstring wasm,$(BLAKE3_TARGET_TRIPLE))$(findstring emscripten,$(BLAKE3_TARGET_TRIPLE)))
   # emcc/wasm32: SIMD intrinsics need -msimd128, which we don't want
   # to require. Stick to portable; dispatch.c compiles down to direct
