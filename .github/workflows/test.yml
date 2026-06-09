@@ -235,6 +235,10 @@ jobs:
           8_3_names aggerror aggfault alter3 alter4 altercol altercons altercons2 alterauth alterauth2 alterdropcol alterdropcol2 altertab3 alterlegacy altermalloc3 autoindex1 \
           index5 limit2 notnull \
           corrupt5 corruptM rollback2 rollbackfault \
+          autovacuum2 backup5 bigfile busy corrupt7 corruptA corruptD corruptG corruptH corruptJ \
+          incrblob3 incrblobfault journal1 lock lock2 lock3 lock7 mallocD mallocF mallocK \
+          memdb memjournal mmapcorrupt mmapwarm oserror pager3 rdonly shared7 sharedlock unixexcl \
+          vacuum4 vacuum6 wal64k wal9 walprotocol2 walrestart walseh1 walshared \
           savepoint7 \
           tkt3871 tkt3121 vtab2 vtab4 vtabH vtab_err vtabdrop \
           attach2 attach3 autoindex3 autoindex5 pragma6 rowvalue9 skipscan1 skipscan2 \
