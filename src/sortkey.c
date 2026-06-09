@@ -274,7 +274,7 @@ static int sortKeyEncode(const u8 *pRec, int nRec, u8 *pOut, int nMaxFields,
   sqlite3_int64 outSize = 0;
   int nField = 0;
 
-  if( nRec <= 0 ) return -1;
+  if( !pRec || nRec <= 0 ) return -1;
 
   hdrOff = skGetVarint32(pRec, &hdrSize);
   if( hdrSize > (u32)nRec ) return -1;
@@ -358,7 +358,7 @@ static int sortKeyFromSingleBinaryFieldFast(
   int nAlloc;
   u8 *pOut;
 
-  if( nKeyField>1 || nRec<=0 ) return SQLITE_NOTFOUND;
+  if( !pRec || nKeyField>1 || nRec<=0 ) return SQLITE_NOTFOUND;
   if( descFromKeyInfo(pKeyInfo, 0) ) return SQLITE_NOTFOUND;
   hdrOff = skGetVarint32(pRec, &hdrSize);
   if( hdrSize > (u32)nRec ) return SQLITE_CORRUPT;
@@ -647,7 +647,7 @@ int sortKeyRecordNeedsPayload(const u8 *pRec, int nRec, int nKeyField){
   u32 hdrOff;
   int nField = 0;
 
-  if( nRec <= 0 ) return 0;
+  if( !pRec || nRec <= 0 ) return 0;
 
   hdrOff = skGetVarint32(pRec, &hdrSize);
   if( hdrSize > (u32)nRec ) return 0;
