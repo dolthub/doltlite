@@ -1830,3 +1830,10 @@ whereL whereL-122    # EQP plan shape; results equivalent
 # with "NOT NULL constraint failed: t1.i". Same storage-model class as
 # without_rowid1-7.x and where4-5.2.
 tkt-3a77c9714e tkt-3a77c9714e-3.0  # INT PRIMARY KEY stored WITHOUT ROWID (#1176); NULL PK rejected
+
+# without_rowid1-7.x — t70a(a INT CHECK(rowid!=33), b TEXT PRIMARY KEY): stock
+# keeps it a rowid table so the CHECK can reference rowid; doltlite stores
+# non-INTEGER-PK tables WITHOUT ROWID, where rowid is not a column. 7.1's
+# CREATE fails resolving the CHECK; 7.2 cascades (no such table).
+without_rowid1 without_rowid1-7.1  # CHECK(rowid) on implicit WITHOUT ROWID table
+without_rowid1 without_rowid1-7.2  # cascade: t70a was never created
