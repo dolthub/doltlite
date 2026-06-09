@@ -1,6 +1,8 @@
 aggfault
 altermalloc2
 altermalloc3
+autovacuum_ioerr2
+backup_malloc
 carrayfault
 cffault
 default
@@ -25,6 +27,7 @@ incrblobfault
 indexfault
 insertfault
 instrfault
+ioerr3
 ioerr5
 ioerr6
 malloc4
@@ -37,6 +40,9 @@ mallocB
 mallocD
 mallocE
 mallocF
+mallocG
+mallocH
+mallocI
 mallocJ
 mallocK
 mallocL
@@ -48,6 +54,7 @@ pragmafault
 rollbackfault
 rowvaluefault
 schemafault
+shared_err
 snapshot_fault
 sortfault
 swarmvtabfault
