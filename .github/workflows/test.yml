@@ -214,7 +214,12 @@ jobs:
     - name: Build testfixture
       run: |
         cd build
-        make DOLTLITE_PROLLY_CHECK=1 testfixture
+        set -o pipefail
+        make DOLTLITE_PROLLY_CHECK=1 testfixture 2>&1 | tee build.log
+        if grep -E "warning:" build.log; then
+          echo "::error::compiler warnings in the build (see above); the build must be warning-free"
+          exit 1
+        fi
 
     # Inherited upstream SQLite .test files that pass clean (or only with
     # already-recorded divergences) against doltlite. Swept and gated under

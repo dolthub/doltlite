@@ -31,6 +31,10 @@ enum blake3_flags {
 
 // This C implementation tries to support recent versions of GCC, Clang, and
 // MSVC.
+#ifdef INLINE
+/* tcl.h defines an empty INLINE; blake3 needs its own. */
+#undef INLINE
+#endif
 #if defined(_MSC_VER)
 #define INLINE static __forceinline
 #else

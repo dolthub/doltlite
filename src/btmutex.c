@@ -189,7 +189,7 @@ static void SQLITE_NOINLINE btreeEnterAll(sqlite3 *db){
   Btree *p;
   assert( sqlite3_mutex_held(db->mutex) );
   for(i=0; i<db->nDb; i++){
-    p = db->aDb[i].pBt;
+    p = (void*)db->aDb[i].pBt;
     if( p && p->sharable ){
       sqlite3BtreeEnter(p);
       skipOk = 0;
@@ -205,7 +205,7 @@ static void SQLITE_NOINLINE btreeLeaveAll(sqlite3 *db){
   Btree *p;
   assert( sqlite3_mutex_held(db->mutex) );
   for(i=0; i<db->nDb; i++){
-    p = db->aDb[i].pBt;
+    p = (void*)db->aDb[i].pBt;
     if( p ) sqlite3BtreeLeave(p);
   }
 }
@@ -227,7 +227,7 @@ int sqlite3BtreeHoldsAllMutexes(sqlite3 *db){
   }
   for(i=0; i<db->nDb; i++){
     Btree *p;
-    p = db->aDb[i].pBt;
+    p = (void*)db->aDb[i].pBt;
     if( p && p->sharable &&
          (p->wantToLock==0 || !sqlite3_mutex_held(p->pBt->mutex)) ){
       return 0;
@@ -280,7 +280,7 @@ void sqlite3BtreeEnter(Btree *p){
 void sqlite3BtreeEnterAll(sqlite3 *db){
   int i;
   for(i=0; i<db->nDb; i++){
-    Btree *p = db->aDb[i].pBt;
+    Btree *p = (void*)db->aDb[i].pBt;
     if( p ){
       p->pBt->db = p->db;
     }
