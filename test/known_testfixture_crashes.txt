@@ -91,3 +91,4 @@ tkt2565        # auto_vacuum unsupported -> setup aborts (pre-summary)
 tkt-5d863f876e # journal_mode unsupported -> setup aborts -> cascade
 tkt-fc62af4523 # journal_mode unsupported -> setup aborts -> cascade
 savepoint6     # auto_vacuum unsupported -> uncaught setup error aborts pre-summary
+vtab1          # echo constructor over a PK (WITHOUT ROWID) table fails at vtab1-5.x; uncaught -> aborts pre-summary
