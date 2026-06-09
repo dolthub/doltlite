@@ -7576,6 +7576,19 @@ int sqlite3BtreeProllyCachedIndexKeyCompare(
   }
 }
 
+/* Drop the cached packed compare key. The cache (pCompareSortKey, keyed on
+** nField) is only valid while the comparison target is unchanged. Moveto /
+** First / Last clear it, but OP_SeekScan reaches the next seek target by
+** stepping the cursor and jumping past the OP_SeekGE — bypassing Moveto — so
+** the following OP_IdxGT/GE would otherwise reuse the previous target's key
+** (same nField, different value), e.g. `b IN (2,3)` (in4-13.0). OP_SeekScan
+** calls this to invalidate the cache before processing a new target. */
+void sqlite3BtreeProllyClearCompareKey(BtCursor *pCur){
+  if( pCur ){
+    CLEAR_CACHED_COMPARE_KEY(pCur);
+  }
+}
+
 int sqlite3BtreeProllyIndexRowid(BtCursor *pCur, i64 *pRowid){
   const u8 *pKey = 0;
   int nKey = 0;

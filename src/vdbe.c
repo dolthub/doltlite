@@ -5477,6 +5477,13 @@ case OP_SeekScan: {          /* ncycle */
   }
   nStep = pOp->p1;
   assert( nStep>=1 );
+#if defined(DOLTLITE_PROLLY)
+  /* SeekScan reaches a new seek target by stepping and may jump past the
+  ** following OP_SeekGE, bypassing the Moveto that clears the cursor's cached
+  ** compare key. Invalidate it here so the subsequent OP_IdxGT/GE repacks the
+  ** current target rather than reusing the previous one (in4-13.0). */
+  sqlite3BtreeProllyClearCompareKey(pC->uc.pCursor);
+#endif
   r.pKeyInfo = pC->pKeyInfo;
   r.nField = (u16)pOp[1].p4.i;
   r.default_rc = 0;
