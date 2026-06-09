@@ -1371,6 +1371,49 @@ alter4 alter4-5.8  # PRAGMA schema_version is catalog-hash-derived, not stock co
 # (altertab3-31.2 reads the surviving column back as 5.0).
 altertab3 altertab3-31.1  # PRAGMA page_count across DROP COLUMN; chunk store has no SQLite page count
 
+# altercol — three divergence classes, none in the ALTER rename itself:
+#   * 11.1: order of rows returned from sqlite_schema. DoltLite returns catalog
+#     entries in its own order (virtual table e1 before base table x1); stock
+#     returns creation order. Unordered SELECT, multiset-equal.
+#   * 13.2.* and 14.1/14.2: tests 13.1.4-13.1.8 deliberately corrupt the schema
+#     via `PRAGMA writable_schema=ON; DELETE FROM sqlite_master WHERE
+#     name='x1i'`. DoltLite's index lives in its structural catalog, not in the
+#     sqlite_master text, so the raw DELETE removes the master row but not the
+#     catalog index — leaving an orphan that DoltLite reports as "malformed
+#     database schema (x1i) - orphan index" on the next schema op, where stock
+#     (whose schema IS sqlite_master) simply dropped it. Every later op in the
+#     same db (the trigger creates 13.2.*.1, the rename-column probes 14.1/14.2)
+#     hits the poisoned schema. writable_schema-corruption boundary; no
+#     reset_db until line 674.
+altercol altercol-11.1      # sqlite_schema row order (multiset equal)
+altercol altercol-13.2.1.1  # poisoned by 13.1.8 writable_schema DELETE (orphan index x1i)
+altercol altercol-13.2.1.2  # orphan index x1i after writable_schema DELETE (structural catalog desync)
+altercol altercol-13.2.2.1  # poisoned by 13.1.8 writable_schema DELETE (orphan index x1i)
+altercol altercol-13.2.2.2  # orphan index x1i after writable_schema DELETE (structural catalog desync)
+altercol altercol-13.2.3.1  # poisoned by 13.1.8 writable_schema DELETE (orphan index x1i)
+altercol altercol-13.2.3.2  # orphan index x1i after writable_schema DELETE (structural catalog desync)
+altercol altercol-13.2.4.1  # poisoned by 13.1.8 writable_schema DELETE (orphan index x1i)
+altercol altercol-13.2.4.2  # orphan index x1i after writable_schema DELETE (structural catalog desync)
+altercol altercol-14.1      # poisoned by 13.1.8 writable_schema DELETE (orphan index x1i)
+altercol altercol-14.2      # poisoned by 13.1.8 writable_schema DELETE (orphan index x1i)
+
+# altercons / altercons2 — DDL text divergences after ALTER, never wrong data:
+#   * altercons 3.7.2/3.8.2: DoltLite leaves a trailing space in the rewritten
+#     CREATE TABLE text after DROP COLUMN ("... PRIMARY KEY) " vs "...)").
+#   * altercons 6.4.1: DoltLite normalizes "CHECK (expr)" to "CHECK(expr)" in
+#     stored DDL.
+#   * altercons2 1.1.3/1.5.3/1.6.3: test 1.*.1 corrupts the schema with
+#     `PRAGMA writable_schema=1; UPDATE sqlite_schema SET sql=<partial>`.
+#     DoltLite regenerates DDL from its structural catalog and ignores the raw
+#     sqlite_schema text edit (same class as alterdropcol-8.2), so 1.*.3 reads
+#     back the original CREATE TABLE rather than the injected partial text.
+altercons altercons-3.7.2   # trailing space in rewritten DDL after DROP COLUMN
+altercons altercons-3.8.2   # trailing space in rewritten DDL after DROP COLUMN
+altercons altercons-6.4.1   # DDL normalizes "CHECK (" to "CHECK("
+altercons2 altercons2-1.1.3  # writable_schema raw sql edit ignored; structural catalog regenerates DDL
+altercons2 altercons2-1.5.3  # writable_schema raw sql edit ignored; structural catalog regenerates DDL
+altercons2 altercons2-1.6.3  # writable_schema raw sql edit ignored; structural catalog regenerates DDL
+
 # index5 — index5-1.3 records the on-disk page WRITE ORDER during CREATE INDEX
 # via a custom test VFS (forward/backward/non-contiguous page offsets) and
 # asserts a mostly-sequential pattern. DoltLite's chunk store writes
