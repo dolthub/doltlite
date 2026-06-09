@@ -227,7 +227,7 @@ jobs:
       run: |
         cd build
         bash ../test/run_testfixture.sh "SQLite regression" 300 \
-          8_3_names aggerror aggfault alterauth alterauth2 alterdropcol alterdropcol2 altertab3 alterlegacy altermalloc3 autoindex1 \
+          8_3_names aggerror aggfault alter3 alter4 alterauth alterauth2 alterdropcol alterdropcol2 altertab3 alterlegacy altermalloc3 autoindex1 \
           index5 limit2 notnull \
           alterqf altertab2 altertrig amatch1 analyze3 analyze4 analyze5 analyze6 \
           analyze7 analyze8 analyze9 analyzeC analyzeD analyzeE analyzeF analyzeG \
@@ -289,11 +289,12 @@ jobs:
           tkt-f3e5abed55 tkt-f67b41381a tkt-f777251dc7a tkt-f7b4edec tkt-f973c7ac31 tkt-fa7bf5ec tkt-fc7bd6358f tkt1435 \
           tkt1443 tkt1444 tkt1449 tkt1473 tkt1501 tkt1514 tkt1536 tkt1537 \
           e_select2 tkt-5ee23731f tkt2820 tkt3424 \
+          tkt1512 tkt1567 tkt2332 tkt2409 tkt2854 tkt2920 tkt3457 tkt3761 tkt3762 tkt3810 tkt4018 \
           tkt1644 tkt1873 tkt2141 tkt2192 tkt2213 tkt2251 tkt2285 tkt2339 \
           tkt2391 tkt2450 tkt2640 tkt2643 tkt2767 tkt2817 tkt2822 tkt2832 \
           tkt2927 tkt2942 tkt3093 tkt3201 tkt3292 tkt3298 tkt3334 tkt3346 \
           tkt3357 tkt3419 tkt3442 tkt3461 tkt3493 tkt3508 tkt3522 tkt3527 \
-          tkt3541 tkt3554 tkt3581 tkt35xx tkt3630 tkt3731 tkt3757 tkt3773 \
+          tkt3541 tkt3554 tkt3581 tkt35xx tkt3630 tkt3718 tkt3731 tkt3757 tkt3773 \
           tkt3791 tkt3793 tkt3824 tkt3832 tkt3838 tkt3841 tkt3879 tkt3911 \
           tkt3922 tkt3929 tkt3935 tkt3992 tkt3997 tokenize tpch01 trace2 \
           trace3 trans3 transitive1 trigger3 trigger4 trigger5 trigger6 trigger8 \
