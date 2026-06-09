@@ -1457,6 +1457,10 @@ static int schemaCatalogRowIsVirtualTable(const SchemaCatalogRow *pRow){
   return sqlite3_strnicmp(zSql, "CREATE VIRTUAL TABLE ", 21)==0;
 }
 
+static int schemaNameIsInternalAutoindex(const char *zName){
+  return zName && strncmp(zName, "sqlite_autoindex_", 17)==0;
+}
+
 typedef struct SchemaFieldValue SchemaFieldValue;
 struct SchemaFieldValue {
   int eType;
@@ -1685,7 +1689,9 @@ static int schemaCatalogRowWanted(
       if( pRow->zName && strcmp(aTables[i].zName, pRow->zName)==0 ){
         return 1;
       }
-      if( pRow->zTblName && strcmp(aTables[i].zName, pRow->zTblName)==0 ){
+      if( schemaNameIsInternalAutoindex(pRow->zName)
+       && pRow->zTblName
+       && strcmp(aTables[i].zName, pRow->zTblName)==0 ){
         return 1;
       }
     }
@@ -1760,7 +1766,8 @@ static int appendMissingSchemaCatalogRows(
         }
       }else if( strcmp(aMeta[i].zType, "index")==0 ){
         if( strcmp(aTables[j].zName, aMeta[i].zName)==0
-         || strcmp(aTables[j].zName, aMeta[i].zTblName)==0 ){
+         || (schemaNameIsInternalAutoindex(aMeta[i].zName)
+             && strcmp(aTables[j].zName, aMeta[i].zTblName)==0) ){
           wanted = 1;
           break;
         }
