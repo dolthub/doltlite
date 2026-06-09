@@ -5633,9 +5633,20 @@ int sqlite3BtreeBeginStmt(Btree *p, int iStatement){
 }
 
 static int rollbackCommittedState(Btree *p, BtShared *pBt){
+  BtCursor *pC;
   int rc = restoreFromCommitted(p);
   if( rc!=SQLITE_OK ) return rc;
-  invalidateCursors(pBt, 0, SQLITE_ABORT);
+  /* Like invalidateCursors, but keep the code of an existing fault:
+  ** OP_Savepoint's cursor trip already stamped SQLITE_ABORT_ROLLBACK and
+  ** clobbering it to SQLITE_ABORT misreported the abort (savepoint7-2.2). */
+  for(pC=pBt->pCursor; pC; pC=pC->pNext){
+    if( pC->eState!=CURSOR_FAULT ){
+      pC->eState = CURSOR_FAULT;
+      pC->skipNext = SQLITE_ABORT;
+    }
+    pC->mmActive = 0;
+    prollyCursorReleaseAll(&pC->pCur);
+  }
   resetConnectionSchema(p);
   return SQLITE_OK;
 }
