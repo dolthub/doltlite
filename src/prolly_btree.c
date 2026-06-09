@@ -5426,11 +5426,14 @@ static int restoreFromCommitted(Btree *p){
   p->mergeCommitHash = p->committedMergeCommitHash;
   p->conflictsCatalogHash = p->committedConflictsCatalogHash;
   p->constraintViolationsHash = p->committedConstraintViolationsHash;
-  p->bFilterSchemaPlaceholders = 1;
   {
     ProllyHash runtimeMasterRoot;
     struct TableEntry *pMaster;
-    int rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
+    u8 bOldFilter = p->bFilterSchemaPlaceholders;
+    int rc;
+    p->bFilterSchemaPlaceholders = 1;
+    rc = buildRuntimeMasterRoot(p, &runtimeMasterRoot);
+    p->bFilterSchemaPlaceholders = bOldFilter;
     if( rc!=SQLITE_OK ) return rc;
     pMaster = findTable(p, 1);
     if( pMaster ) pMaster->root = runtimeMasterRoot;
@@ -8453,7 +8456,7 @@ static int prollyBtCursorDelete(BtCursor *pCur, u8 flags){
 
 delete_cleanup:
   if( rc==SQLITE_OK && pCur->pgnoRoot==1 && hasSavedKey ){
-    pCur->pBtree->bMasterRootChangedTxn = 0;
+    pCur->pBtree->bMasterRootChangedTxn = 1;
   }
   if( savedDelKeyOwned ) sqlite3_free(pSavedDelKey);
   return rc;
