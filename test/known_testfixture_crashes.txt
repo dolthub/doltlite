@@ -92,3 +92,46 @@ tkt-5d863f876e # journal_mode unsupported -> setup aborts -> cascade
 tkt-fc62af4523 # journal_mode unsupported -> setup aborts -> cascade
 savepoint6     # auto_vacuum unsupported -> uncaught setup error aborts pre-summary
 vtab1          # echo constructor over a PK (WITHOUT ROWID) table fails at vtab1-5.x; uncaught -> aborts pre-summary
+
+# ── feature-gap sweep wave 1 (#1208): files whose setup aborts pre-summary on
+# an intentional rejection or a stock-only artifact. Reasons captured from a
+# per-file non-root run.
+autovacuum       # auto_vacuum unsupported -> uncaught setup error
+corrupt2         # auto_vacuum unsupported -> uncaught setup error
+e_vacuum         # auto_vacuum unsupported -> uncaught setup error
+incrvacuum       # auto_vacuum unsupported -> uncaught setup error
+incrvacuum3      # auto_vacuum unsupported -> uncaught setup error
+incrvacuum_ioerr # auto_vacuum unsupported -> uncaught setup error
+ioerr4           # auto_vacuum unsupported -> uncaught setup error
+mallocC          # auto_vacuum unsupported -> uncaught setup error
+mmap1            # auto_vacuum unsupported -> uncaught setup error
+vacuum3          # auto_vacuum unsupported -> uncaught setup error
+pager2           # journal_mode not configurable -> uncaught setup error
+pagerfault       # journal_mode not configurable -> uncaught setup error
+pagerfault2      # journal_mode not configurable -> uncaught setup error
+wal6             # journal_mode not configurable -> uncaught setup error
+walnoshm         # journal_mode not configurable -> uncaught setup error
+wal              # reads test.db-wal: doltlite has no -wal sidecar
+wal2             # wal helper reads ::filename of the -wal sidecar
+walbak           # reads test.db-wal: no -wal sidecar
+walcksum         # copies test.db-wal: no -wal sidecar
+waloverwrite     # copies test.db-wal: no -wal sidecar
+walslow          # copies test.db-wal: no -wal sidecar
+walvfs           # reads test.db-wal: no -wal sidecar
+lock5            # copies test.db-journal: no rollback-journal sidecar
+rollback         # copies test.db-journal: no rollback-journal sidecar
+bigfile2         # corruption injection: chunk store reports malformed, file aborts
+corrupt          # corruption injection: chunk store reports malformed, file aborts
+corrupt4         # corruption injection: "file is not a database" aborts the file
+corruptC         # corruption-injection cascade: setup table never created
+corruptI         # corruption injection: chunk store reports malformed, file aborts
+multiplex2       # multiplex VFS on chunk store: disk I/O error aborts setup
+incrblob         # incrblob API on a PK (WITHOUT ROWID) table: "cannot open table without rowid"
+pager1           # journal/txn-model cascade: "cannot commit - no transaction is active"
+backup           # sqlite3_backup_init: page-image backup unsupported
+mallocAll        # failed open -> "db" command never created (test-harness footgun)
+walthread        # multi-threaded WAL stress: nondeterministic class (same as thread*)
+win32heap        # windows-only: silent platform return, no summary line
+win32lock        # windows-only: silent platform return, no summary line
+win32longpath    # windows-only: silent platform return, no summary line
+win32nolock      # windows-only: silent platform return, no summary line
